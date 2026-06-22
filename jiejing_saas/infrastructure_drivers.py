@@ -57,7 +57,9 @@ def build_postgres_driver_status(settings: SaaSSettings) -> dict[str, Any]:
         runtime_cutover_blockers.append("missing_database_url")
     if not dependency["available"]:
         runtime_cutover_blockers.append("missing_psycopg_dependency")
-    if live_check_requested and live_check.get("status") != "ok":
+    if not live_check_requested:
+        runtime_cutover_blockers.append("postgres_live_check_not_requested")
+    elif live_check.get("status") != "ok":
         runtime_cutover_blockers.append("postgres_live_check_failed")
     return {
         "key": "postgres",
@@ -118,7 +120,9 @@ def build_redis_driver_status(settings: SaaSSettings) -> dict[str, Any]:
         runtime_cutover_blockers.append("missing_queue_url")
     if not dependency["available"]:
         runtime_cutover_blockers.append("missing_redis_dependency")
-    if live_check_requested and live_check.get("status") != "ok":
+    if not live_check_requested:
+        runtime_cutover_blockers.append("redis_live_check_not_requested")
+    elif live_check.get("status") != "ok":
         runtime_cutover_blockers.append("redis_live_check_failed")
     runtime = redis_runtime_status(settings)
     return {
