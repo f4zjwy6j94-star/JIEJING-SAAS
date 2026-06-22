@@ -1,0 +1,85 @@
+name: Jiejing Staging Manual Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_mode:
+        description: "preflight_only, dry_run, or apply"
+        required: true
+        default: "dry_run"
+        type: choice
+        options:
+          - preflight_only
+          - dry_run
+          - apply
+      confirm_staging_deploy:
+        description: "Type: deploy app.jiejing.shop staging"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jiejing-staging-manual-deploy
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Preflight guardrails
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      JIEJING_SAAS_SESSION_SECRET: ci-session-secret-not-real-change-me-32
+      JIEJING_SAAS_ENV: local_dev
+      JIEJING_ENABLE_REAL_PLATFORM_WRITES: "0"
+      JIEJING_QUEUE_PROVIDER: local_worker
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.saas.txt
+
+      - name: Secret scan
+        run: python tools/jiejing_secret_scan.py
+
+      - name: Frontend syntax
+        run: node --check app.js
+
+      - name: Deployment automation guardrails
+        run: python tools/test_jiejing_github_actions_deploy_guardrails.py
+
+      - name: Precloud gate
+        run: python tools/jiejing_precloud_deployment_gate.py
+
+  staging-runner:
+    name: Tencent staging runner
+    needs: preflight
+    if: >-
+      ${{
+        github.ref == 'refs/heads/main' &&
+        inputs.deploy_mode != 'preflight_only' &&
+        inputs.confirm_staging_deploy == 'deploy app.jiejing.shop staging'
+      }}
+    runs-on: [self-hosted, jiejing-staging]
+    timeout-minutes: 45
+    env:
+      JIEJING_STAGING_DEPLOY_CONFIRM: ${{ inputs.confirm_staging_deploy }}
+      JIEJING_DEPLOY_DRY_RUN: ${{ inputs.deploy_mode == 'apply' && '0' || '1' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Server-side staging deploy
+        run: bash deploy/github-actions/jiejing-staging-deploy.sh

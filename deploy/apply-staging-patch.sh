@@ -20,6 +20,8 @@ FILES=(
   "Dockerfile.saas"
   "requirements.saas.txt"
   "deploy/apply-staging-patch.sh"
+  "deploy/github-actions/jiejing-staging-deploy.sh"
+  "deploy/github-actions/jiejing-staging-rollback.sh"
   "deploy/apply-cloudflare-origin-ufw.sh"
   "deploy/docker-compose.public-staging.yml"
   "deploy/docker-compose.public-https-staging.yml"
@@ -43,6 +45,7 @@ FILES=(
   "docs/JIEJING_PUBLIC_WAF_ANTI_SCRAPE_RUNBOOK_20260618.md"
   "docs/JIEJING_NO_CHARGE_BILLING_REHEARSAL_20260618.md"
   "docs/JIEJING_PRELAUNCH_INTERNAL_HARDENING_RUNBOOK_20260620.md"
+  "docs/JIEJING_GITHUB_SELF_HOSTED_RUNNER_DEPLOY_RUNBOOK_20260622.md"
   "docs/JIEJING_GITHUB_CI_STATUS_20260617.md"
   "docs/JIEJING_FRONTEND_SPLIT_STATUS_20260617.md"
   "docs/JIEJING_NEW_EBAY_ACCOUNT_LOW_RISK_RUNBOOK_20260617.md"
@@ -131,6 +134,7 @@ FILES=(
   "tools/jiejing_c_class_production_gate.py"
   "tools/test_jiejing_deploy_channel_doctor.py"
   "tools/test_jiejing_staging_deploy_channel_contract.py"
+  "tools/test_jiejing_github_actions_deploy_guardrails.py"
   "tools/jiejing_precloud_deployment_gate.py"
   "tools/test_jiejing_current_state_guard.py"
   "tools/test_jiejing_configure_tencent_runtime_env.py"
@@ -298,6 +302,7 @@ python3 -m py_compile \
   tools/jiejing_c_class_production_gate.py \
   tools/test_jiejing_deploy_channel_doctor.py \
   tools/test_jiejing_staging_deploy_channel_contract.py \
+  tools/test_jiejing_github_actions_deploy_guardrails.py \
   tools/jiejing_precloud_deployment_gate.py \
   tools/test_jiejing_current_state_guard.py \
   tools/test_jiejing_configure_tencent_runtime_env.py \

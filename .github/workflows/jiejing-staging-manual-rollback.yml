@@ -1,0 +1,46 @@
+name: Jiejing Staging Manual Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      backup_name:
+        description: "Backup directory name under /opt/jiejing-staging/github-action-backups"
+        required: true
+        type: string
+      dry_run:
+        description: "Validate rollback without restoring files"
+        required: true
+        default: true
+        type: boolean
+      confirm_staging_rollback:
+        description: "Type: rollback app.jiejing.shop staging"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jiejing-staging-manual-rollback
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    name: Tencent staging rollback
+    if: >-
+      ${{
+        github.ref == 'refs/heads/main' &&
+        inputs.confirm_staging_rollback == 'rollback app.jiejing.shop staging'
+      }}
+    runs-on: [self-hosted, jiejing-staging]
+    timeout-minutes: 30
+    env:
+      JIEJING_STAGING_ROLLBACK_CONFIRM: ${{ inputs.confirm_staging_rollback }}
+      JIEJING_STAGING_ROLLBACK_BACKUP: ${{ inputs.backup_name }}
+      JIEJING_ROLLBACK_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Server-side staging rollback
+        run: bash deploy/github-actions/jiejing-staging-rollback.sh
