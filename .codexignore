@@ -19,4 +19,6 @@ test-results/
 *.7z
 *.rar
 *.sql
+!jiejing_saas/migrations/
+!jiejing_saas/migrations/*.sql
 *.dump
