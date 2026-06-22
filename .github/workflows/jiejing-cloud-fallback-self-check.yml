@@ -1,0 +1,55 @@
+name: Jiejing Cloud Fallback Self Check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jiejing-cloud-fallback-self-check
+  cancel-in-progress: false
+
+jobs:
+  self-check:
+    name: Cloud fallback repository self-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      JIEJING_SAAS_ENV: local_dev
+      JIEJING_ENABLE_REAL_PLATFORM_WRITES: "0"
+      JIEJING_QUEUE_PROVIDER: local_worker
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.saas.txt
+
+      - name: Secret scan
+        run: python tools/jiejing_secret_scan.py
+
+      - name: Frontend syntax check
+        run: node --check app.js
+
+      - name: Cloud fallback guardrails
+        run: python tools/test_jiejing_local_first_cloud_fallback_guardrails.py
+
+      - name: GitHub deploy guardrails
+        run: python tools/test_jiejing_github_actions_deploy_guardrails.py
+
+      - name: Runner doctor guardrails
+        run: python tools/test_jiejing_github_runner_doctor_guardrails.py
+
+      - name: Runner maintenance guardrails
+        run: python tools/test_jiejing_github_runner_maintenance_guardrails.py

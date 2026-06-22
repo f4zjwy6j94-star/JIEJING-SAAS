@@ -19,6 +19,14 @@ These instructions apply to the whole repository. They exist so local Codex, Cod
 - If an edge/WAF blocks script-like probes, retry with a normal browser User-Agent before declaring the app down.
 - Never claim formal paid public launch readiness unless readiness evidence says `production_ready=true` and `can_accept_real_customers=true`.
 
+## Local-First And Cloud Fallback
+
+- Local Windows Codex is the primary operating mode.
+- Codex Cloud is a fallback route for times when the local computer cannot be used.
+- Use `Jiejing Cloud Fallback Self Check` before trusting a phone-only cloud session for JIEJING work.
+- Do not treat Codex Cloud as having local-only files, browser login state, or local secrets.
+- Cloud fallback may edit GitHub code and run safe checks, but real deploy apply, eBay OAuth, Stripe live cutover, and secret-bearing operations still require explicit operator approval.
+
 ## Hard Safety Rules
 
 - Do not run or repeat eBay OAuth unless the user explicitly says to start with a new eBay account.
@@ -56,6 +64,7 @@ For GitHub runner/deployment automation changes, also run:
 python tools/test_jiejing_github_actions_deploy_guardrails.py
 python tools/test_jiejing_github_runner_doctor_guardrails.py
 python tools/test_jiejing_staging_patch_apply_contract.py
+python tools/test_jiejing_local_first_cloud_fallback_guardrails.py
 ```
 
 For UI changes, run the relevant contract tests and browser smoke checks. Use the JIEJING design system and keep merchant-facing pages simple.

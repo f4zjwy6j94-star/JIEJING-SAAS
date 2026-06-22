@@ -53,6 +53,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("github_actions_deploy_guardrails", [sys.executable, "tools/test_jiejing_github_actions_deploy_guardrails.py"]),
     ("github_runner_doctor_guardrails", [sys.executable, "tools/test_jiejing_github_runner_doctor_guardrails.py"]),
     ("github_runner_maintenance_guardrails", [sys.executable, "tools/test_jiejing_github_runner_maintenance_guardrails.py"]),
+    ("local_first_cloud_fallback_guardrails", [sys.executable, "tools/test_jiejing_local_first_cloud_fallback_guardrails.py"]),
     ("jiejing_owned_credential_chain", [sys.executable, "tools/jiejing_ebay_jiejing_credential_chain_smoke.py"]),
     ("productization_stage_gate", [sys.executable, "tools/jiejing_productization_stage_gate.py"]),
 ]

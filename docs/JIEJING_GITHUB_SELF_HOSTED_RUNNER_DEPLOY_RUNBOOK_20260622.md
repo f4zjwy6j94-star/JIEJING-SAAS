@@ -8,6 +8,7 @@ This runbook explains how JIEJING can move from "local computer pushes to Tencen
 
 - GitHub private repo is the source of truth for code.
 - Codex Cloud can read the GitHub repo, edit code, run checks, and open diffs without your Windows computer staying on.
+- Local Windows Codex remains the primary operating mode; Codex Cloud is a fallback route when the local computer cannot be used.
 - Tencent Cloud keeps the real running app, runtime env files, Vault/KMS boundary, database files, and Docker volumes.
 - A GitHub self-hosted runner on Tencent Cloud is the bridge from GitHub to the server.
 - The runner must only deploy after a manual workflow dispatch and a typed confirmation sentence.
@@ -101,6 +102,17 @@ As of 2026-06-22, the Tencent Cloud self-hosted runner path has been installed a
   - It does not touch the running app, backups, private env files, databases, Docker volumes, Vault material, eBay OAuth state, or billing/provider secrets.
   - Dry-run prints `ARCHIVE_APPLIED=0`.
   - Apply mode first writes and verifies a `.tar.gz` archive, then removes the unpacked release candidate.
+
+- `docs/JIEJING_LOCAL_FIRST_CLOUD_FALLBACK_RUNBOOK_20260622.md`
+  - Defines local Windows Codex as the normal route and Codex Cloud as the backup route.
+  - Explains what phone-only Codex Cloud fallback may do and must not do.
+  - Keeps eBay OAuth, Stripe live cutover, deploy apply, and secret-bearing operations behind explicit operator approval.
+
+- `.github/workflows/jiejing-cloud-fallback-self-check.yml`
+  - Manual workflow only.
+  - Runs on GitHub-hosted Linux with read-only repository permission.
+  - Checks secret scan, frontend syntax, local-first fallback guardrails, deploy guardrails, doctor guardrails, and maintenance guardrails.
+  - Does not deploy, run eBay OAuth, touch billing, or write server state.
 
 ## One-time Tencent Cloud setup
 
