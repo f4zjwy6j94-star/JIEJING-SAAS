@@ -35,6 +35,8 @@ def main() -> int:
         "sudo -n true",
         "rsync_missing",
         "DISK_USED_PERCENT=",
+        "JIEJING_RUNNER_DOCTOR_PUBLIC_HEALTH_URL",
+        "PUBLIC_HEALTH=",
         "JIEJING_RUNNER_DOCTOR_STATUS=",
         "JIEJING_RUNNER_DOCTOR_BLOCKERS",
         "SECRET_EXPOSED=false",
@@ -49,6 +51,8 @@ def main() -> int:
     required_runbook = [
         "Jiejing Staging Runner Doctor",
         "JIEJING_RUNNER_DOCTOR_STATUS=ready",
+        "PUBLIC_HEALTH=ready",
+        "local_health_unreachable",
         "docker_cli_missing",
         "sudo_noninteractive_unavailable",
         "disk_usage_at_or_above_90_percent",

@@ -20,6 +20,29 @@ This runbook explains how JIEJING can move from "local computer pushes to Tencen
 - It does not delete Docker volumes or database files.
 - It does not make JIEJING formally paid-public-launch ready.
 
+## Current installation state
+
+As of 2026-06-22, the Tencent Cloud self-hosted runner path has been installed and validated for dry-run only.
+
+- Runner directory: `/opt/actions-runner-jiejing`
+- Runner service: `actions.runner.f4zjwy6j94-star-JIEJING-SAAS.jiejing-staging-VM-0-15-ubuntu.service`
+- Runner label: `jiejing-staging`
+- Staging deploy roots:
+  - `/opt/jiejing-staging/app`
+  - `/opt/jiejing-staging/github-action-releases`
+  - `/opt/jiejing-staging/github-action-backups`
+- Latest validated dry-run: GitHub run `27935130643`, SHA `09fbba4791a98fc660afc81b556e3492f08ba878`
+- Dry-run proof:
+  - `JIEJING_STAGING_DEPLOY_DRY_RUN=1`
+  - `PATCH_APPLIED=0`
+  - No running app files, databases, Docker volumes, or Vault/env files were changed.
+- Public health after install:
+  - `https://app.jiejing.shop/health`: HTTP 200
+  - `https://app.jiejing.shop/health/deep`: HTTP 200
+  - `https://app.jiejing.shop/readiness/product-saas`: HTTP 200
+  - `beta_ready=true`, `production_ready=false`, `can_accept_real_customers=false`
+- Disk note: `/` was about 88 percent used after runner install and dry-run release creation. Treat 90 percent as a cleanup warning and 95 percent as a hard blocker.
+
 ## Files added for this path
 
 - `AGENTS.md`
@@ -59,6 +82,8 @@ This runbook explains how JIEJING can move from "local computer pushes to Tencen
 - `deploy/github-actions/jiejing-runner-doctor.sh`
   - Read-only server-side runner check.
   - Prints `JIEJING_RUNNER_DOCTOR_STATUS=ready` when the host is ready for deploy dry-run.
+  - Prints `PUBLIC_HEALTH=ready` when the formal staging domain answers `/health`.
+  - `local_health_unreachable` is a warning when localhost health is not reachable from the runner host; compare it with public health before treating staging as broken.
   - Common blockers include `docker_cli_missing`, `sudo_noninteractive_unavailable`, `app_dir_missing`, and `disk_usage_at_or_above_95_percent`.
   - Disk usage at or above 90 percent reports `disk_usage_at_or_above_90_percent` as a warning so we can clean up before it becomes a hard failure.
 
@@ -115,6 +140,7 @@ If `sudo -n true` fails, do not weaken the whole server. Add only the minimum no
    ```text
    JIEJING_RUNNER_DOCTOR_STATUS=ready
    JIEJING_RUNNER_DOCTOR_BLOCKERS=none
+   PUBLIC_HEALTH=ready
    SECRET_EXPOSED=false
    ```
 
@@ -205,6 +231,6 @@ If `sudo -n true` fails, do not weaken the whole server. Add only the minimum no
 
 ## Current remaining external blockers
 
-- The Tencent Cloud self-hosted runner is not installed yet.
+- Apply-mode staging deploy has not been run through GitHub Actions yet. Keep using dry-run until an explicit apply window is chosen.
 - Formal paid launch still needs production managed Postgres/Redis, Vault/KMS, monitoring, backups, domain/billing cutover, Stripe live provider, and new eBay account validation.
 - Current state remains beta/public-staging oriented, not paid commercial launch.

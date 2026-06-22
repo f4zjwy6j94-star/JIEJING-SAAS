@@ -10,6 +10,7 @@ DEPLOY_ROOT="${JIEJING_STAGING_DEPLOY_ROOT:-/opt/jiejing-staging}"
 BACKUP_ROOT="${JIEJING_STAGING_BACKUP_ROOT:-$DEPLOY_ROOT/github-action-backups}"
 RELEASE_ROOT="${JIEJING_STAGING_RELEASE_ROOT:-$DEPLOY_ROOT/github-action-releases}"
 HEALTH_URL="${JIEJING_RUNNER_DOCTOR_HEALTH_URL:-http://127.0.0.1:8788/health}"
+PUBLIC_HEALTH_URL="${JIEJING_RUNNER_DOCTOR_PUBLIC_HEALTH_URL:-https://app.jiejing.shop/health}"
 DISK_WARN_PERCENT="${JIEJING_RUNNER_DOCTOR_DISK_WARN_PERCENT:-90}"
 DISK_BLOCK_PERCENT="${JIEJING_RUNNER_DOCTOR_DISK_BLOCK_PERCENT:-95}"
 
@@ -115,6 +116,15 @@ if command -v curl >/dev/null 2>&1; then
   else
     echo "LOCAL_HEALTH=blocked"
     add_warning "local_health_unreachable"
+  fi
+
+  if [[ -n "$PUBLIC_HEALTH_URL" ]]; then
+    if curl -fsS --max-time 12 "$PUBLIC_HEALTH_URL" >/tmp/jiejing-runner-doctor-public-health.json 2>/tmp/jiejing-runner-doctor-public-health.err; then
+      echo "PUBLIC_HEALTH=ready"
+    else
+      echo "PUBLIC_HEALTH=blocked"
+      add_warning "public_health_unreachable"
+    fi
   fi
 fi
 
