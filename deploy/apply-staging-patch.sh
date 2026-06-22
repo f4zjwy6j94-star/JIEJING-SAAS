@@ -20,6 +20,7 @@ FILES=(
   "Dockerfile.saas"
   "requirements.saas.txt"
   "deploy/apply-staging-patch.sh"
+  "deploy/github-actions/jiejing-runner-doctor.sh"
   "deploy/github-actions/jiejing-staging-deploy.sh"
   "deploy/github-actions/jiejing-staging-rollback.sh"
   "deploy/apply-cloudflare-origin-ufw.sh"
@@ -135,6 +136,7 @@ FILES=(
   "tools/test_jiejing_deploy_channel_doctor.py"
   "tools/test_jiejing_staging_deploy_channel_contract.py"
   "tools/test_jiejing_github_actions_deploy_guardrails.py"
+  "tools/test_jiejing_github_runner_doctor_guardrails.py"
   "tools/jiejing_precloud_deployment_gate.py"
   "tools/test_jiejing_current_state_guard.py"
   "tools/test_jiejing_configure_tencent_runtime_env.py"
@@ -303,6 +305,7 @@ python3 -m py_compile \
   tools/test_jiejing_deploy_channel_doctor.py \
   tools/test_jiejing_staging_deploy_channel_contract.py \
   tools/test_jiejing_github_actions_deploy_guardrails.py \
+  tools/test_jiejing_github_runner_doctor_guardrails.py \
   tools/jiejing_precloud_deployment_gate.py \
   tools/test_jiejing_current_state_guard.py \
   tools/test_jiejing_configure_tencent_runtime_env.py \

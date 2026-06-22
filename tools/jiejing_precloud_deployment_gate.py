@@ -50,6 +50,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("staging_deploy_channel_contract", [sys.executable, "tools/test_jiejing_staging_deploy_channel_contract.py"]),
     ("staging_patch_apply_contract", [sys.executable, "tools/test_jiejing_staging_patch_apply_contract.py"]),
     ("github_actions_deploy_guardrails", [sys.executable, "tools/test_jiejing_github_actions_deploy_guardrails.py"]),
+    ("github_runner_doctor_guardrails", [sys.executable, "tools/test_jiejing_github_runner_doctor_guardrails.py"]),
     ("jiejing_owned_credential_chain", [sys.executable, "tools/jiejing_ebay_jiejing_credential_chain_smoke.py"]),
     ("productization_stage_gate", [sys.executable, "tools/jiejing_productization_stage_gate.py"]),
 ]

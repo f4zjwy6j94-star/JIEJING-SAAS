@@ -44,6 +44,18 @@ This runbook explains how JIEJING can move from "local computer pushes to Tencen
   - Dry-run validates the selected backup.
   - Apply mode backs up current app again before restore.
 
+- `.github/workflows/jiejing-staging-runner-doctor.yml`
+  - Manual workflow only.
+  - Runs on the Tencent Cloud self-hosted runner after it is installed.
+  - Does not deploy or restart anything.
+  - Reports whether Docker, sudo, app path, deploy path, local health, and disk space are ready.
+
+- `deploy/github-actions/jiejing-runner-doctor.sh`
+  - Read-only server-side runner check.
+  - Prints `JIEJING_RUNNER_DOCTOR_STATUS=ready` when the host is ready for deploy dry-run.
+  - Common blockers include `docker_cli_missing`, `sudo_noninteractive_unavailable`, `app_dir_missing`, and `disk_usage_at_or_above_95_percent`.
+  - Disk usage at or above 90 percent reports `disk_usage_at_or_above_90_percent` as a warning so we can clean up before it becomes a hard failure.
+
 ## One-time Tencent Cloud setup
 
 Do this only after you are ready to let GitHub Actions deploy to staging.
@@ -90,6 +102,23 @@ Do this only after you are ready to let GitHub Actions deploy to staging.
 
 If `sudo -n true` fails, do not weaken the whole server. Add only the minimum no-password sudo rules needed by the existing staging deploy script, then test again.
 
+9. After the runner appears online, open GitHub Actions > `Jiejing Staging Runner Doctor` and run it once.
+
+   A healthy result should include:
+
+   ```text
+   JIEJING_RUNNER_DOCTOR_STATUS=ready
+   JIEJING_RUNNER_DOCTOR_BLOCKERS=none
+   SECRET_EXPOSED=false
+   ```
+
+   If it reports blockers, fix those before running staging deploy dry-run. For example:
+
+   - `docker_cli_missing`: Docker is not visible to the runner user.
+   - `sudo_noninteractive_unavailable`: the runner cannot run the existing deploy script without an interactive password prompt.
+   - `deploy_root_not_writable_by_runner`: `/opt/jiejing-staging` ownership or permissions need adjustment.
+   - `disk_usage_at_or_above_95_percent`: stop and clean/expand disk before deploying.
+
 ## Safe deploy flow
 
 1. Push code to `main`.
@@ -98,14 +127,16 @@ If `sudo -n true` fails, do not weaken the whole server. Add only the minimum no
 
 3. Open GitHub Actions > `Jiejing Staging Manual Deploy`.
 
-4. First run:
+4. If this is the first deploy attempt after installing the runner, run `Jiejing Staging Runner Doctor` first.
+
+5. First deploy run:
 
    ```text
    deploy_mode: dry_run
    confirm_staging_deploy: deploy app.jiejing.shop staging
    ```
 
-5. Check output. Dry-run should show:
+6. Check output. Dry-run should show:
 
    ```text
    JIEJING_STAGING_DEPLOY_DRY_RUN=1
@@ -114,14 +145,14 @@ If `sudo -n true` fails, do not weaken the whole server. Add only the minimum no
    BACKUP_DIR_WOULD_BE=...
    ```
 
-6. Only if dry-run succeeds, run apply:
+7. Only if dry-run succeeds, run apply:
 
    ```text
    deploy_mode: apply
    confirm_staging_deploy: deploy app.jiejing.shop staging
    ```
 
-7. After apply, verify:
+8. After apply, verify:
 
    ```bash
    curl -fsS https://app.jiejing.shop/health

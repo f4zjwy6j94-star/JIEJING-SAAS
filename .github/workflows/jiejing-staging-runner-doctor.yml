@@ -1,0 +1,23 @@
+name: Jiejing Staging Runner Doctor
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jiejing-staging-runner-doctor
+  cancel-in-progress: false
+
+jobs:
+  runner-doctor:
+    name: Tencent staging runner doctor
+    runs-on: [self-hosted, jiejing-staging]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Runner readiness doctor
+        run: bash deploy/github-actions/jiejing-runner-doctor.sh
