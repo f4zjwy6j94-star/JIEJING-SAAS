@@ -42,6 +42,7 @@ As of 2026-06-22, the Tencent Cloud self-hosted runner path has been installed a
   - `https://app.jiejing.shop/readiness/product-saas`: HTTP 200
   - `beta_ready=true`, `production_ready=false`, `can_accept_real_customers=false`
 - Disk note: `/` was about 88 percent used after runner install and dry-run release creation. Treat 90 percent as a cleanup warning and 95 percent as a hard blocker.
+- Runner maintenance note: use `Jiejing Staging Runner Maintenance` in dry-run mode before archive/apply. It does not touch the running app, backups, private env files, databases, Docker volumes, Vault material, eBay OAuth state, or billing/provider secrets.
 
 ## Files added for this path
 
@@ -86,6 +87,20 @@ As of 2026-06-22, the Tencent Cloud self-hosted runner path has been installed a
   - `local_health_unreachable` is a warning when localhost health is not reachable from the runner host; compare it with public health before treating staging as broken.
   - Common blockers include `docker_cli_missing`, `sudo_noninteractive_unavailable`, `app_dir_missing`, and `disk_usage_at_or_above_95_percent`.
   - Disk usage at or above 90 percent reports `disk_usage_at_or_above_90_percent` as a warning so we can clean up before it becomes a hard failure.
+
+- `.github/workflows/jiejing-staging-runner-maintenance.yml`
+  - Manual workflow only.
+  - Runs on the Tencent Cloud self-hosted runner.
+  - Defaults to dry-run.
+  - Requires the exact confirmation phrase `cleanup app.jiejing.shop runner`.
+  - Archives old release candidates only after the newest unpacked candidates are kept.
+
+- `deploy/github-actions/jiejing-runner-maintenance.sh`
+  - Maintains only `/opt/jiejing-staging/github-action-releases`.
+  - Archives to `/opt/jiejing-staging/github-action-release-archives`.
+  - It does not touch the running app, backups, private env files, databases, Docker volumes, Vault material, eBay OAuth state, or billing/provider secrets.
+  - Dry-run prints `ARCHIVE_APPLIED=0`.
+  - Apply mode first writes and verifies a `.tar.gz` archive, then removes the unpacked release candidate.
 
 ## One-time Tencent Cloud setup
 
@@ -219,6 +234,50 @@ If `sudo -n true` fails, do not weaken the whole server. Add only the minimum no
    ```
 
 5. Verify health endpoints again.
+
+## Runner maintenance flow
+
+Use this when dry-runs or deploy attempts have created many release candidate folders and disk usage is approaching the 90 percent warning threshold.
+
+1. Open GitHub Actions > `Jiejing Staging Runner Maintenance`.
+
+2. First run dry-run:
+
+   ```text
+   dry_run: true
+   keep_latest: 5
+   archive_after_days: 7
+   confirm_runner_maintenance: cleanup app.jiejing.shop runner
+   ```
+
+3. Check output. Dry-run should show:
+
+   ```text
+   JIEJING_RUNNER_MAINTENANCE_DRY_RUN=1
+   ARCHIVE_CANDIDATE_COUNT=...
+   ARCHIVE_APPLIED=0
+   SECRET_EXPOSED=false
+   ```
+
+4. Only if the candidates are old release directories under `/opt/jiejing-staging/github-action-releases/github-*`, run apply:
+
+   ```text
+   dry_run: false
+   keep_latest: 5
+   archive_after_days: 7
+   confirm_runner_maintenance: cleanup app.jiejing.shop runner
+   ```
+
+5. Apply mode should show:
+
+   ```text
+   ARCHIVED_RELEASE=...
+   ARCHIVE_FILE=/opt/jiejing-staging/github-action-release-archives/....tar.gz
+   ARCHIVE_APPLIED=1
+   SECRET_EXPOSED=false
+   ```
+
+6. Run `Jiejing Staging Runner Doctor` again. If disk remains above 90 percent, inspect archive sizes and decide whether to download/delete old archives manually. Do not delete backups or private state.
 
 ## Why this preserves a retreat path
 

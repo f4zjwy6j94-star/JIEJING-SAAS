@@ -1,0 +1,53 @@
+name: Jiejing Staging Runner Maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Keep true first. False archives old release candidates."
+        required: true
+        default: true
+        type: boolean
+      keep_latest:
+        description: "Number of newest release candidates to keep unpacked"
+        required: true
+        default: "5"
+        type: string
+      archive_after_days:
+        description: "Archive candidates older than this many days after keep_latest"
+        required: true
+        default: "7"
+        type: string
+      confirm_runner_maintenance:
+        description: "Type: cleanup app.jiejing.shop runner"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jiejing-staging-runner-maintenance
+  cancel-in-progress: false
+
+jobs:
+  runner-maintenance:
+    name: Tencent staging runner maintenance
+    if: >-
+      ${{
+        github.ref == 'refs/heads/main' &&
+        inputs.confirm_runner_maintenance == 'cleanup app.jiejing.shop runner'
+      }}
+    runs-on: [self-hosted, jiejing-staging]
+    timeout-minutes: 15
+    env:
+      JIEJING_RUNNER_MAINTENANCE_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+      JIEJING_RUNNER_MAINTENANCE_KEEP_LATEST: ${{ inputs.keep_latest }}
+      JIEJING_RUNNER_MAINTENANCE_ARCHIVE_AFTER_DAYS: ${{ inputs.archive_after_days }}
+      JIEJING_RUNNER_MAINTENANCE_CONFIRM: ${{ inputs.confirm_runner_maintenance }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Runner release maintenance
+        run: bash deploy/github-actions/jiejing-runner-maintenance.sh
