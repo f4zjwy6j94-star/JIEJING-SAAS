@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900" role="img" aria-label="Cat litter scoop holder product preview">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fbfbf8"/>
+      <stop offset="1" stop-color="#e7eee9"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="900" fill="url(#bg)"/>
+  <rect x="160" y="145" width="880" height="585" rx="34" fill="#ffffff" stroke="#dae5de"/>
+  <ellipse cx="610" cy="675" rx="310" ry="45" fill="#10231e" opacity=".08"/>
+  <g transform="translate(385 215)">
+    <rect x="94" y="110" width="250" height="360" rx="44" fill="#f3f7f3" stroke="#18352d" stroke-width="10"/>
+    <rect x="145" y="170" width="150" height="210" rx="26" fill="#cfe3db" stroke="#0b7c6f" stroke-width="8"/>
+    <path d="M220 70c92 0 168 73 168 162" fill="none" stroke="#94b7ad" stroke-width="28" stroke-linecap="round"/>
+    <path d="M394 96c30 12 49 40 49 74v260c0 36-29 65-65 65h-44" fill="none" stroke="#0b7c6f" stroke-width="34" stroke-linecap="round"/>
+    <g fill="#18352d">
+      <circle cx="185" cy="237" r="10"/>
+      <circle cx="221" cy="237" r="10"/>
+      <circle cx="257" cy="237" r="10"/>
+      <circle cx="203" cy="275" r="10"/>
+      <circle cx="239" cy="275" r="10"/>
+      <circle cx="221" cy="313" r="10"/>
+    </g>
+  </g>
+  <text x="215" y="118" font-family="Arial, sans-serif" font-size="38" font-weight="700" fill="#10231e">Pet cleaning holder</text>
+  <text x="215" y="765" font-family="Arial, sans-serif" font-size="28" fill="#607067">Holder only or with scoop must be confirmed</text>
+</svg>

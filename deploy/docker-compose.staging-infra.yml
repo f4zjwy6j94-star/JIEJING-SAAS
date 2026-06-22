@@ -1,0 +1,119 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${JIEJING_POSTGRES_DB:-jiejing}
+      POSTGRES_USER: ${JIEJING_POSTGRES_USER:-jiejing}
+      POSTGRES_PASSWORD: ${JIEJING_POSTGRES_PASSWORD:-replace-password}
+    volumes:
+      - jiejing_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - jiejing_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  jiejing-db-migrate:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ./jiejing-saas.infra.env
+    volumes:
+      - ../jiejing_saas/migrations:/migrations:ro
+    command:
+      - sh
+      - -lc
+      - |
+        pg_isready -h postgres -U "$${JIEJING_POSTGRES_USER:-jiejing}" -d "$${JIEJING_POSTGRES_DB:-jiejing}"
+        psql "$${JIEJING_DATABASE_URL}" -v ON_ERROR_STOP=1 -f /migrations/001_initial_schema_postgres.sql
+    restart: "no"
+
+  jiejing-saas:
+    build:
+      context: ..
+      dockerfile: Dockerfile.saas
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      jiejing-db-migrate:
+        condition: service_completed_successfully
+    env_file:
+      - ./jiejing-saas.infra.env
+    expose:
+      - "8788"
+    volumes:
+      - jiejing_saas_runtime_data:/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8788/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  jiejing-worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile.saas
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      jiejing-db-migrate:
+        condition: service_completed_successfully
+    env_file:
+      - ./jiejing-saas.infra.env
+    volumes:
+      - jiejing_saas_runtime_data:/data
+    command:
+      - python
+      - tools/jiejing_worker_cli.py
+      - --db
+      - /data/saas.sqlite
+      - --runtime-db
+      - /data/runtime.sqlite
+      - --output-root
+      - /data/output
+      - run-loop
+      - --idle-sleep
+      - "10"
+    restart: unless-stopped
+
+  jiejing-frontend:
+    image: nginx:1.27-alpine
+    depends_on:
+      jiejing-saas:
+        condition: service_healthy
+    ports:
+      - "${JIEJING_PUBLIC_HTTP_PORT:-8080}:80"
+    volumes:
+      - ../index.html:/usr/share/nginx/html/index.html:ro
+      - ../robots.txt:/usr/share/nginx/html/robots.txt:ro
+      - ../app.js:/usr/share/nginx/html/app.js:ro
+      - ../styles.css:/usr/share/nginx/html/styles.css:ro
+      - ../favicon.ico:/usr/share/nginx/html/favicon.ico:ro
+      - ../assets:/usr/share/nginx/html/assets:ro
+      - ./nginx.public-staging.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+
+volumes:
+  jiejing_postgres_data:
+  jiejing_redis_data:
+  jiejing_saas_runtime_data:

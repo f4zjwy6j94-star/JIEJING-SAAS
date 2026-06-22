@@ -1,0 +1,29 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Jiejing app icon">
+  <defs>
+    <linearGradient id="icon-bg" x1="82" y1="54" x2="426" y2="462" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#071210"/>
+      <stop offset="0.54" stop-color="#0B2F2B"/>
+      <stop offset="1" stop-color="#08766E"/>
+    </linearGradient>
+    <linearGradient id="icon-path" x1="138" y1="136" x2="382" y2="394" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFDF5"/>
+      <stop offset="0.62" stop-color="#BDE8DF"/>
+      <stop offset="1" stop-color="#59C7BA"/>
+    </linearGradient>
+    <filter id="icon-shadow" x="72" y="88" width="372" height="368" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#001A16" flood-opacity="0.34"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#icon-bg)"/>
+  <rect x="34" y="34" width="444" height="444" rx="90" fill="none" stroke="#FFFDF5" stroke-opacity="0.1" stroke-width="4"/>
+  <path d="M138 150H292C343 150 384 191 384 242V362" stroke="#FFFDF5" stroke-opacity="0.2" stroke-width="34" stroke-linecap="round"/>
+  <g filter="url(#icon-shadow)">
+    <path d="M142 154H282C329 154 367 192 367 239V354" stroke="url(#icon-path)" stroke-width="30" stroke-linecap="round"/>
+    <path d="M142 256H314" stroke="#FFFDF5" stroke-width="30" stroke-linecap="round"/>
+    <path d="M210 154V318C210 351 237 378 270 378H366" stroke="#FFFDF5" stroke-width="30" stroke-linecap="round"/>
+    <path d="M326 334L370 378L326 422" stroke="#59C7BA" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <circle cx="142" cy="154" r="13" fill="#FFFDF5"/>
+  <circle cx="142" cy="256" r="13" fill="#FFFDF5"/>
+  <circle cx="366" cy="378" r="11" fill="#FFFDF5"/>
+</svg>

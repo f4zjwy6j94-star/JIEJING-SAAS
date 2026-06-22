@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>捷境 · 最早版本合并查看</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #fffefa;
+        --bg: #f4f7f5;
+        --ink: #111d18;
+        --muted: #687a71;
+        --line: #dce7df;
+        --teal: #08766e;
+        --teal-soft: #e2f3ef;
+        --shadow: 0 18px 46px rgba(17, 29, 24, 0.09);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background:
+          linear-gradient(126deg, rgba(226, 243, 239, 0.9), rgba(255, 254, 250, 0) 34%),
+          linear-gradient(238deg, rgba(255, 242, 220, 0.65), rgba(255, 254, 250, 0) 40%),
+          var(--paper);
+        color: var(--ink);
+        font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+      }
+
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 14px 22px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 254, 250, 0.92);
+        backdrop-filter: blur(16px);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .mark {
+        display: grid;
+        width: 40px;
+        height: 40px;
+        place-items: center;
+        border-radius: 8px;
+        background: var(--ink);
+        color: var(--paper);
+        font-weight: 900;
+      }
+
+      h1,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 18px;
+        line-height: 1.2;
+      }
+
+      .brand p {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      button,
+      a {
+        font: inherit;
+      }
+
+      button {
+        min-height: 38px;
+        padding: 0 13px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--paper);
+        color: var(--ink);
+        cursor: pointer;
+        font-weight: 800;
+      }
+
+      button.is-active,
+      button:hover {
+        border-color: rgba(8, 118, 110, 0.32);
+        background: var(--teal-soft);
+        color: #064f49;
+      }
+
+      main {
+        padding: 18px;
+      }
+
+      .viewer {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--paper);
+        box-shadow: var(--shadow);
+      }
+
+      .viewer-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line);
+        background: #f8fbf8;
+      }
+
+      .viewer-top strong {
+        font-size: 14px;
+      }
+
+      .viewer-top a {
+        color: var(--teal);
+        font-size: 13px;
+        font-weight: 800;
+        text-decoration: none;
+      }
+
+      iframe {
+        display: block;
+        width: 100%;
+        height: calc(100vh - 128px);
+        border: 0;
+        background: white;
+      }
+
+      @media (max-width: 780px) {
+        header {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .tabs {
+          width: 100%;
+        }
+
+        button {
+          flex: 1;
+        }
+
+        iframe {
+          height: calc(100vh - 184px);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <span class="mark">J</span>
+        <div>
+          <h1>捷境最早版本 · 合并查看</h1>
+          <p>同一个入口里切换早期实验版、旧主页备份和旧 AI 工作舱备份</p>
+        </div>
+      </div>
+      <nav class="tabs" aria-label="版本切换">
+        <button class="is-active" type="button" data-page="file:///C:/Users/57249/Documents/Codex/2026-04-29/hermes-agents/software-demo/design-lab.html">最早实验版</button>
+        <button type="button" data-page="file:///C:/Users/57249/Documents/Codex/2026-04-29/hermes-agents/patch_work/20260505_recovery/design-huashu_CURRENT_20260504_232009.html">旧主页备份</button>
+        <button type="button" data-page="file:///C:/Users/57249/Documents/Codex/2026-04-29/hermes-agents/patch_work/20260505_recovery/index_CURRENT_20260504_195211.html">旧 AI 工作舱</button>
+      </nav>
+    </header>
+
+    <main>
+      <section class="viewer">
+        <div class="viewer-top">
+          <strong id="viewerTitle">最早实验版</strong>
+          <a id="openStandalone" href="file:///C:/Users/57249/Documents/Codex/2026-04-29/hermes-agents/software-demo/design-lab.html" target="_blank" rel="noopener">单独打开</a>
+        </div>
+        <iframe id="versionFrame" title="版本预览" src="file:///C:/Users/57249/Documents/Codex/2026-04-29/hermes-agents/software-demo/design-lab.html"></iframe>
+      </section>
+    </main>
+
+    <script>
+      const frame = document.querySelector("#versionFrame");
+      const title = document.querySelector("#viewerTitle");
+      const openStandalone = document.querySelector("#openStandalone");
+
+      document.querySelector(".tabs").addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-page]");
+        if (!button) return;
+        document
+          .querySelectorAll(".tabs button")
+          .forEach((item) => item.classList.toggle("is-active", item === button));
+        frame.src = button.dataset.page;
+        openStandalone.href = button.dataset.page;
+        title.textContent = button.textContent.trim();
+      });
+    </script>
+  </body>
+</html>

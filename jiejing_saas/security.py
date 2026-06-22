@@ -1,0 +1,104 @@
+"""Small security helpers for the local SaaS backend MVP.
+
+The production version should use a managed identity provider, short-lived
+tokens, MFA options, and a managed secret store. This file gives the local
+test backend a real password hash and signed session boundary without adding
+third-party dependencies.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import time
+from dataclasses import dataclass
+from typing import Any
+
+
+PBKDF2_ITERATIONS = 260_000
+
+
+def hash_password(password: str) -> tuple[str, str]:
+    if not password or len(password) < 8:
+        raise ValueError("password must be at least 8 characters")
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("ascii"), PBKDF2_ITERATIONS)
+    return salt, digest.hex()
+
+
+def verify_password(password: str, salt: str, password_hash: str) -> bool:
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("ascii"), PBKDF2_ITERATIONS)
+    return hmac.compare_digest(digest.hex(), password_hash)
+
+
+@dataclass(slots=True)
+class SessionPayload:
+    user_id: str
+    company_id: str
+    email: str
+    exp: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"user_id": self.user_id, "company_id": self.company_id, "email": self.email, "exp": self.exp}
+
+
+def _session_ttl_from_env() -> int:
+    raw = str(os.environ.get("JIEJING_SAAS_SESSION_TTL_SECONDS") or "").strip()
+    if raw:
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    return 60 * 60 * 24 * 7
+
+
+class SessionManager:
+    def __init__(self, secret: str | None = None, ttl_seconds: int | None = None) -> None:
+        self.secret = (secret or os.environ.get("JIEJING_SAAS_SESSION_SECRET") or "local-dev-session-secret-change-me").encode(
+            "utf-8"
+        )
+        self.ttl_seconds = ttl_seconds if ttl_seconds is not None else _session_ttl_from_env()
+
+    def create_token(self, *, user_id: str, company_id: str, email: str) -> str:
+        payload = SessionPayload(
+            user_id=user_id,
+            company_id=company_id,
+            email=email,
+            exp=int(time.time()) + self.ttl_seconds,
+        )
+        payload_b64 = _b64(json.dumps(payload.to_dict(), ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        signature = _b64(hmac.new(self.secret, payload_b64.encode("ascii"), hashlib.sha256).digest())
+        return f"{payload_b64}.{signature}"
+
+    def verify_token(self, token: str) -> dict[str, Any]:
+        try:
+            payload_b64, signature = token.split(".", 1)
+        except ValueError as exc:
+            raise ValueError("invalid bearer token") from exc
+        expected = _b64(hmac.new(self.secret, payload_b64.encode("ascii"), hashlib.sha256).digest())
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError("invalid bearer token signature")
+        try:
+            payload = json.loads(base64.urlsafe_b64decode(_pad(payload_b64)).decode("utf-8"))
+        except Exception as exc:  # pragma: no cover - defensive parsing boundary
+            raise ValueError("invalid bearer token payload") from exc
+        if int(payload.get("exp") or 0) < int(time.time()):
+            raise ValueError("bearer token expired")
+        required = {"user_id", "company_id", "email"}
+        if not required.issubset(payload):
+            raise ValueError("bearer token missing identity fields")
+        return payload
+
+
+def _b64(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _pad(value: str) -> bytes:
+    return (value + "=" * (-len(value) % 4)).encode("ascii")

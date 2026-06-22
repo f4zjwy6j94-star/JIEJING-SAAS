@@ -1,0 +1,1299 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>捷境 · Quiet Impact UI</title>
+    <style>
+      :root {
+        --ink: #111a16;
+        --ink-soft: #2b3731;
+        --muted: #697a71;
+        --quiet: #9aa8a1;
+        --paper: #fffefa;
+        --wash: #f6f8f5;
+        --line: #dce6df;
+        --teal: #08776e;
+        --teal-deep: #064f49;
+        --teal-soft: #dff2ee;
+        --amber: #b8842d;
+        --amber-soft: #fff1d6;
+        --red-soft: #fae6e1;
+        --red: #a74638;
+        --shadow: 0 26px 90px rgba(17, 26, 22, 0.1);
+        --shadow-soft: 0 14px 40px rgba(17, 26, 22, 0.06);
+        --mx: 50vw;
+        --my: 50vh;
+        --radius: 8px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        overflow-x: hidden;
+        background:
+          linear-gradient(90deg, rgba(8, 119, 110, 0.045) 1px, transparent 1px),
+          linear-gradient(rgba(8, 119, 110, 0.035) 1px, transparent 1px),
+          var(--paper);
+        background-size: 96px 96px;
+        color: var(--ink);
+        font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+        letter-spacing: 0;
+      }
+
+      body::before,
+      body::after {
+        content: "";
+        position: fixed;
+        z-index: 50;
+        pointer-events: none;
+        opacity: 0.22;
+      }
+
+      body::before {
+        top: var(--my);
+        right: 0;
+        left: 0;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(8, 119, 110, 0.46), transparent);
+      }
+
+      body::after {
+        top: 0;
+        bottom: 0;
+        left: var(--mx);
+        width: 1px;
+        background: linear-gradient(180deg, transparent, rgba(8, 119, 110, 0.34), transparent);
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .topnav {
+        position: fixed;
+        z-index: 60;
+        top: 18px;
+        right: 18px;
+        left: 18px;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 18px;
+        align-items: center;
+        padding: 10px;
+        border: 1px solid rgba(220, 230, 223, 0.92);
+        border-radius: var(--radius);
+        background: rgba(255, 254, 250, 0.82);
+        box-shadow: var(--shadow-soft);
+        backdrop-filter: blur(18px);
+      }
+
+      .brand {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .mark {
+        display: grid;
+        width: 40px;
+        height: 40px;
+        place-items: center;
+        border-radius: var(--radius);
+        background: var(--ink);
+        color: #fffefa;
+        font-weight: 900;
+      }
+
+      .brand strong,
+      .brand span {
+        display: block;
+      }
+
+      .brand span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .navlinks {
+        display: flex;
+        justify-content: center;
+        gap: 8px;
+      }
+
+      .navlinks a {
+        min-height: 38px;
+        padding: 10px 12px;
+        border-radius: var(--radius);
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .navlinks a:hover {
+        background: var(--teal-soft);
+        color: var(--teal-deep);
+      }
+
+      .button,
+      .button-ghost,
+      .button-text {
+        display: inline-flex;
+        min-height: 44px;
+        align-items: center;
+        justify-content: center;
+        border-radius: var(--radius);
+        font-weight: 900;
+        transition:
+          transform 0.22s ease,
+          border-color 0.22s ease,
+          background 0.22s ease,
+          box-shadow 0.22s ease;
+      }
+
+      .button {
+        padding: 0 18px;
+        border: 1px solid var(--teal-deep);
+        background: var(--teal);
+        color: #fff;
+        box-shadow: 0 18px 44px rgba(8, 119, 110, 0.2);
+      }
+
+      .button-ghost {
+        padding: 0 18px;
+        border: 1px solid var(--line);
+        background: rgba(255, 254, 250, 0.86);
+        color: var(--ink);
+      }
+
+      .button-text {
+        min-height: 36px;
+        border: 0;
+        background: transparent;
+        color: var(--teal);
+      }
+
+      .button:hover,
+      .button-ghost:hover {
+        transform: translateY(-2px);
+      }
+
+      .hero {
+        display: grid;
+        min-height: 100vh;
+        align-items: center;
+        padding: 128px 30px 72px;
+      }
+
+      .hero-inner {
+        display: grid;
+        width: min(1360px, 100%);
+        margin: 0 auto;
+        grid-template-columns: minmax(0, 0.92fr) minmax(420px, 0.68fr);
+        gap: 44px;
+        align-items: center;
+      }
+
+      .eyebrow {
+        margin: 0 0 14px;
+        color: var(--teal);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        max-width: 920px;
+        margin-bottom: 24px;
+        font-size: clamp(66px, 8vw, 134px);
+        font-weight: 900;
+        line-height: 0.9;
+        letter-spacing: 0;
+        text-wrap: balance;
+      }
+
+      .lead {
+        max-width: 760px;
+        margin-bottom: 28px;
+        color: var(--ink-soft);
+        font-size: clamp(17px, 1.5vw, 22px);
+        line-height: 1.72;
+      }
+
+      .actions,
+      .button-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .lens {
+        position: relative;
+        min-height: 600px;
+        overflow: hidden;
+        border: 1px solid rgba(220, 230, 223, 0.96);
+        border-radius: var(--radius);
+        background: rgba(255, 254, 250, 0.78);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(22px);
+      }
+
+      .lens::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(90deg, rgba(8, 119, 110, 0.04) 1px, transparent 1px),
+          linear-gradient(rgba(8, 119, 110, 0.04) 1px, transparent 1px);
+        background-size: 58px 58px;
+        mask-image: linear-gradient(180deg, #000, transparent 78%);
+      }
+
+      #systemCanvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        opacity: 0.9;
+      }
+
+      .lens-copy {
+        position: absolute;
+        right: 22px;
+        bottom: 22px;
+        left: 22px;
+        z-index: 2;
+        display: grid;
+        gap: 12px;
+      }
+
+      .lens-title {
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: rgba(255, 254, 250, 0.86);
+        box-shadow: var(--shadow-soft);
+      }
+
+      .lens-title strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 28px;
+      }
+
+      .lens-title p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .lens-metrics {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .metric {
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: rgba(255, 254, 250, 0.88);
+      }
+
+      .metric span,
+      .metric strong {
+        display: block;
+      }
+
+      .metric span {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .metric strong {
+        margin-top: 8px;
+        font-size: 28px;
+      }
+
+      .section {
+        width: min(1360px, calc(100% - 60px));
+        margin: 0 auto;
+        padding: 94px 0 0;
+      }
+
+      .section-head {
+        display: grid;
+        grid-template-columns: minmax(0, 0.78fr) minmax(320px, 0.42fr);
+        gap: 34px;
+        align-items: end;
+        margin-bottom: 28px;
+      }
+
+      h2 {
+        margin-bottom: 0;
+        font-size: clamp(42px, 5.4vw, 86px);
+        line-height: 0.98;
+        letter-spacing: 0;
+        text-wrap: balance;
+      }
+
+      .section-head p,
+      .section-note {
+        margin: 0;
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1.75;
+      }
+
+      .panel,
+      .hover-card {
+        border: 1px solid rgba(220, 230, 223, 0.94);
+        border-radius: var(--radius);
+        background: rgba(255, 254, 250, 0.84);
+        box-shadow: var(--shadow-soft);
+        backdrop-filter: blur(16px);
+      }
+
+      .hover-card {
+        position: relative;
+        overflow: hidden;
+        transition:
+          transform 0.22s ease,
+          border-color 0.22s ease,
+          box-shadow 0.22s ease;
+      }
+
+      .hover-card::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(90deg, transparent, rgba(8, 119, 110, 0.09), transparent);
+        transform: translateX(calc(var(--card-x, 50%) - 140%));
+        opacity: 0;
+        transition: opacity 0.2s ease;
+      }
+
+      .hover-card:hover {
+        transform: translateY(-5px);
+        border-color: rgba(8, 119, 110, 0.32);
+        box-shadow: var(--shadow);
+      }
+
+      .hover-card:hover::before {
+        opacity: 1;
+      }
+
+      .path-stage {
+        display: grid;
+        grid-template-columns: 260px minmax(0, 1fr);
+        min-height: 520px;
+        overflow: hidden;
+      }
+
+      .path-tabs {
+        display: grid;
+        gap: 8px;
+        align-content: start;
+        padding: 18px;
+        border-right: 1px solid var(--line);
+      }
+
+      .path-tab {
+        display: grid;
+        min-height: 84px;
+        gap: 6px;
+        padding: 14px;
+        border: 1px solid transparent;
+        border-radius: var(--radius);
+        background: transparent;
+        color: var(--muted);
+        text-align: left;
+      }
+
+      .path-tab strong {
+        color: var(--ink);
+        font-size: 18px;
+      }
+
+      .path-tab span {
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .path-tab.is-active {
+        border-color: rgba(8, 119, 110, 0.32);
+        background: var(--teal-soft);
+        color: var(--teal-deep);
+      }
+
+      .path-body {
+        display: grid;
+        grid-template-columns: minmax(0, 0.9fr) minmax(320px, 0.56fr);
+        gap: 18px;
+        padding: 26px;
+      }
+
+      .path-story {
+        display: grid;
+        align-content: end;
+        min-height: 468px;
+        padding: 26px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: rgba(255, 254, 250, 0.72);
+      }
+
+      .path-story h3 {
+        margin: 0 0 18px;
+        font-size: clamp(38px, 4.8vw, 72px);
+        line-height: 1.02;
+      }
+
+      .path-story p {
+        margin: 0 0 22px;
+        color: var(--ink-soft);
+        font-size: 17px;
+        line-height: 1.72;
+      }
+
+      .step-list,
+      .work-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .step,
+      .work {
+        display: grid;
+        grid-template-columns: 44px minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        min-height: 88px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: rgba(255, 254, 250, 0.9);
+      }
+
+      .index {
+        display: grid;
+        width: 38px;
+        height: 38px;
+        place-items: center;
+        border-radius: var(--radius);
+        background: var(--ink);
+        color: #fffefa;
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .step strong,
+      .step span,
+      .work strong,
+      .work span {
+        display: block;
+      }
+
+      .step span,
+      .work span {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .pill {
+        display: inline-flex;
+        min-height: 28px;
+        align-items: center;
+        justify-content: center;
+        padding: 0 10px;
+        border-radius: 999px;
+        background: var(--wash);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 900;
+        white-space: nowrap;
+      }
+
+      .pill.green {
+        background: var(--teal-soft);
+        color: var(--teal-deep);
+      }
+
+      .pill.amber {
+        background: var(--amber-soft);
+        color: #8d631e;
+      }
+
+      .pill.red {
+        background: var(--red-soft);
+        color: var(--red);
+      }
+
+      .director-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 0.98fr) minmax(360px, 0.55fr);
+        gap: 16px;
+      }
+
+      .director {
+        padding: 22px;
+      }
+
+      .panel-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+
+      .panel-top h3 {
+        margin: 0;
+        font-size: 30px;
+      }
+
+      .director-body {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(240px, 0.42fr);
+        gap: 14px;
+      }
+
+      .chat {
+        min-height: 410px;
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--paper);
+      }
+
+      .bubble {
+        max-width: 88%;
+        margin-bottom: 12px;
+        padding: 14px 16px;
+        border-radius: var(--radius);
+        background: #edf2ef;
+        color: var(--ink-soft);
+        line-height: 1.62;
+      }
+
+      .bubble.ai {
+        margin-left: auto;
+        background: var(--teal-soft);
+      }
+
+      .task-input {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      .task-input input {
+        min-width: 0;
+        min-height: 46px;
+        padding: 0 14px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: #fff;
+        color: var(--ink);
+      }
+
+      .work {
+        grid-template-columns: minmax(0, 1fr) auto;
+      }
+
+      .score-stack {
+        display: grid;
+        gap: 12px;
+      }
+
+      .score {
+        min-height: 178px;
+        padding: 18px;
+      }
+
+      .score span,
+      .score strong,
+      .score small {
+        display: block;
+      }
+
+      .score strong {
+        margin: 12px 0 8px;
+        font-size: 48px;
+        line-height: 1;
+      }
+
+      .score small {
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .card-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .platform-grid {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .info-card,
+      .price-card,
+      .platform-card {
+        min-height: 232px;
+        padding: 18px;
+      }
+
+      .platform-card {
+        min-height: 186px;
+      }
+
+      .info-card strong,
+      .price-card strong,
+      .platform-card strong {
+        display: block;
+        margin: 26px 0 12px;
+        font-size: 24px;
+        line-height: 1.22;
+      }
+
+      .info-card p,
+      .price-card p,
+      .platform-card p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .info-card small {
+        display: block;
+        margin-top: 24px;
+        color: var(--quiet);
+        line-height: 1.5;
+      }
+
+      .price-card {
+        min-height: 288px;
+      }
+
+      .price-card.featured {
+        border-color: rgba(8, 119, 110, 0.38);
+        background: linear-gradient(180deg, rgba(223, 242, 238, 0.82), rgba(255, 254, 250, 0.9));
+      }
+
+      .price {
+        margin: 24px 0 12px;
+        font-size: 40px;
+        font-weight: 900;
+      }
+
+      .closing {
+        padding-bottom: 110px;
+      }
+
+      .closing-panel {
+        display: grid;
+        grid-template-columns: minmax(0, 0.8fr) auto;
+        gap: 24px;
+        align-items: center;
+        padding: 36px;
+      }
+
+      .closing-panel h2 {
+        font-size: clamp(36px, 5vw, 78px);
+      }
+
+      .mobile-dock {
+        display: none;
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(18px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .hero-copy,
+      .lens,
+      .section {
+        animation: rise 0.8s ease both;
+      }
+
+      @media (max-width: 1120px) {
+        .topnav {
+          grid-template-columns: auto 1fr;
+        }
+
+        .navlinks {
+          display: none;
+        }
+
+        .hero-inner,
+        .section-head,
+        .path-stage,
+        .path-body,
+        .director-grid,
+        .director-body,
+        .closing-panel {
+          grid-template-columns: 1fr;
+        }
+
+        .path-tabs {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .card-grid,
+        .platform-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 720px) {
+        body {
+          background-size: 64px 64px;
+        }
+
+        body::before,
+        body::after {
+          display: none;
+        }
+
+        .topnav {
+          top: 8px;
+          right: 8px;
+          left: 8px;
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .brand > span:not(.mark),
+        .topnav .button-ghost {
+          display: none;
+        }
+
+        .hero {
+          min-height: 100vh;
+          padding: 98px 12px 46px;
+        }
+
+        h1 {
+          font-size: clamp(46px, 16vw, 66px);
+          line-height: 0.98;
+        }
+
+        .lead {
+          font-size: 15px;
+        }
+
+        .lens {
+          min-height: 370px;
+        }
+
+        #systemCanvas {
+          opacity: 0.28;
+        }
+
+        .lens-copy {
+          right: 12px;
+          bottom: 12px;
+          left: 12px;
+        }
+
+        .lens-title strong {
+          font-size: 22px;
+        }
+
+        .lens-metrics {
+          grid-template-columns: 1fr;
+        }
+
+        .section {
+          width: calc(100% - 20px);
+          padding-top: 72px;
+        }
+
+        h2 {
+          font-size: clamp(34px, 12vw, 52px);
+        }
+
+        .path-tabs,
+        .card-grid,
+        .platform-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .path-body,
+        .director,
+        .closing-panel {
+          padding: 14px;
+        }
+
+        .path-story {
+          min-height: 360px;
+          padding: 18px;
+        }
+
+        .path-story h3 {
+          font-size: clamp(34px, 10vw, 46px);
+        }
+
+        .step {
+          grid-template-columns: 42px minmax(0, 1fr);
+        }
+
+        .step .pill {
+          grid-column: 2;
+          justify-self: start;
+        }
+
+        .task-input {
+          grid-template-columns: 1fr;
+        }
+
+        .mobile-dock {
+          position: fixed;
+          z-index: 70;
+          right: 10px;
+          bottom: 10px;
+          left: 10px;
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+          padding: 8px;
+          border: 1px solid var(--line);
+          border-radius: var(--radius);
+          background: rgba(255, 254, 250, 0.9);
+          backdrop-filter: blur(18px);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation: none !important;
+          scroll-behavior: auto !important;
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="topnav" aria-label="捷境导航">
+      <a class="brand" href="#top">
+        <span class="mark">捷</span>
+        <span>
+          <strong>捷境</strong>
+          <span>AI Commerce Operating System</span>
+        </span>
+      </a>
+      <div class="navlinks">
+        <a href="#paths">卖家路径</a>
+        <a href="#director">AI CEO</a>
+        <a href="#fees">费用授权</a>
+        <a href="#platforms">平台入口</a>
+        <a href="#pricing">订阅</a>
+      </div>
+      <a class="button-ghost" href="index.html?v=20260504-ai-ceo-copy">返回当前 Demo</a>
+    </nav>
+
+    <header class="hero" id="top">
+      <div class="hero-inner">
+        <section class="hero-copy">
+          <p class="eyebrow">捷境 / 一个 AI CEO 协同后台电商岗位</p>
+          <h1>一个 AI CEO，接住整套 eBay 重复流程。</h1>
+          <p class="lead">捷境把 eBay 的流程拆成 SOP：商品资料、商品图视频、描述参数、刊登草稿、广告只读、店铺订阅、客服售后、收发货和财务统计。老板只对 AI CEO 说目标，后台岗位协同执行，结果再回流给 CEO 复盘和人工确认。</p>
+          <div class="actions">
+            <a class="button" href="#paths">选择我的卖家路径</a>
+            <a class="button-ghost" href="#director">查看 AI CEO</a>
+            <a class="button-text" href="#fees">eBay 费用怎么管</a>
+          </div>
+        </section>
+        <aside class="lens hover-card" aria-label="捷境岗位流镜头">
+          <canvas id="systemCanvas" aria-hidden="true"></canvas>
+          <div class="lens-copy">
+            <div class="lens-title">
+              <strong>商家只对接 CEO，后台岗位按 SOP 跑。</strong>
+              <p>市场、Listing、素材、广告、客服、履约、财务、风控在后台执行；确认中心只留下需要老板判断的动作。</p>
+            </div>
+            <div class="lens-metrics">
+              <article class="metric"><span>资料准备度</span><strong>72</strong></article>
+              <article class="metric"><span>真实利润</span><strong>18.6%</strong></article>
+              <article class="metric"><span>待确认</span><strong>6</strong></article>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </header>
+
+    <main>
+      <section class="section" id="paths">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">注册后不是直接进控制台</p>
+            <h2>先判断卖家是谁，再给不同路线。</h2>
+          </div>
+          <p>小白、已开店、已有订单、多店铺的商家需要不同引导。捷境先把人工要做的地方讲清楚，再让 AI CEO 接项目。</p>
+        </div>
+        <div class="panel path-stage">
+          <div class="path-tabs">
+            <button class="path-tab is-active" data-path="newbie"><strong>小白</strong><span>从 0 到第一条可审核 Listing</span></button>
+            <button class="path-tab" data-path="opened"><strong>已开店</strong><span>先接入，再整理自动化队列</span></button>
+            <button class="path-tab" data-path="orders"><strong>已有订单</strong><span>订单、客服、履约和利润集中处理</span></button>
+            <button class="path-tab" data-path="multi"><strong>多店铺</strong><span>先建规则、权限和费用口径</span></button>
+          </div>
+          <div class="path-body">
+            <article class="path-story hover-card">
+              <p class="eyebrow" id="pathEyebrow">小白路径</p>
+              <h3 id="pathTitle">不让新手一次面对所有平台设置。</h3>
+              <p id="pathBody">先走 eBay 开店资料、Seller Hub、API 授权、履约方式、素材、客服口吻、费用授权和 AI 权限。没走完可以保存退出，先看控制台示例。</p>
+              <div class="button-row">
+                <button class="button" type="button">开始这条路径</button>
+                <button class="button-ghost" type="button">保存退出看示例</button>
+              </div>
+            </article>
+            <div class="step-list" id="pathSteps"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="director">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">主要 AI 通道</p>
+            <h2>用户只面对 AI CEO，不管理一堆 agent。</h2>
+          </div>
+          <p>后台岗位要透明，但不能把复杂性甩给商家。商家看到的是 AI CEO 如何拆解、岗位查了哪里、哪些结果需要人确认。</p>
+        </div>
+        <div class="director-grid">
+          <section class="panel director hover-card">
+            <div class="panel-top">
+              <div>
+                <p class="eyebrow">AI CEO 工作台</p>
+                <h3>一句话布置，多岗位执行，再回流复盘。</h3>
+              </div>
+              <span class="pill green">在线 · Mock</span>
+            </div>
+            <div class="director-body">
+              <div>
+                <div class="chat">
+                  <div class="bubble">老板：调研 3 个商品，利润低于 15% 或平台风险高的都先停下来让我看。</div>
+                  <div class="bubble ai">AI CEO：已拆给市场、Listing、素材、广告、客服、履约、财务和风控。财务会加入 eBay 成交费、刊登费、广告费和店铺订阅分摊。</div>
+                  <div class="bubble">老板：如果要创建广告呢？</div>
+                  <div class="bubble ai">AI CEO：广告只读可以授权；创建广告、调预算、暂停广告会进入确认中心，不会自动扣费。</div>
+                </div>
+                <form class="task-input">
+                  <input value="继续整理首饰盒和竹制收纳盒，先给我资料准备度" aria-label="任务输入" />
+                  <button class="button-ghost" type="button">语音布置</button>
+                  <button class="button" type="button">发送</button>
+                </form>
+              </div>
+              <div class="work-list">
+                <article class="work hover-card"><div><strong>市场经理</strong><span>抓取价格带、关键词、竞品结构和资料准备度。</span></div><span class="pill green">完成</span></article>
+                <article class="work hover-card"><div><strong>素材经理</strong><span>生成主图、细节图、场景图和视频脚本需求。</span></div><span class="pill amber">待审</span></article>
+                <article class="work hover-card"><div><strong>财务经理</strong><span>计算真实利润，含订阅费分摊与广告预留。</span></div><span class="pill green">完成</span></article>
+                <article class="work hover-card"><div><strong>风控经理</strong><span>扫描 VeRO、禁售、素材版权和履约承诺。</span></div><span class="pill amber">待审</span></article>
+              </div>
+            </div>
+          </section>
+          <aside class="score-stack">
+            <article class="score panel hover-card"><span class="pill green">资料准备度</span><strong>72</strong><small>需求稳定，但同质化中等，需要素材差异和利润复核。</small></article>
+            <article class="score panel hover-card"><span class="pill amber">真实利润</span><strong>18.6%</strong><small>已含 eBay fee Mock、广告预留、订阅分摊和退货风险。</small></article>
+            <article class="score panel hover-card"><span class="pill red">确认中心</span><strong>6</strong><small>发布、素材、物流承诺、费用账单授权、广告预算变更都等待人工。</small></article>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section" id="fees">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">eBay 平台知识进入底层规则</p>
+            <h2>利润不能只算货源和运费。</h2>
+          </div>
+          <p>Store 订阅费、刊登费、成交费、广告流量费、退货风险都会吃掉利润。捷境要替商家记住这些规则，并把敏感授权说清楚。</p>
+        </div>
+        <div class="card-grid">
+          <article class="info-card hover-card"><span class="pill amber">Account API</span><strong>Store 订阅状态</strong><p>读取套餐、周期和店铺订阅状态，用来判断订阅是否划算。</p><small>不替商家开通或取消订阅。</small></article>
+          <article class="info-card hover-card"><span class="pill amber">Finances API</span><strong>费用账单只读</strong><p>读取成交费、刊登费、订阅费、广告费，进入真实利润复盘。</p><small>财务数据敏感，必须单独授权。</small></article>
+          <article class="info-card hover-card"><span class="pill amber">Marketing API</span><strong>广告表现只读</strong><p>读取广告花费、点击、转化和 ROAS，判断是否继续投放。</p><small>创建广告和调预算另走确认。</small></article>
+          <article class="info-card hover-card"><span class="pill red">确认中心</span><strong>广告执行暂停</strong><p>创建广告、调预算、暂停广告、改价、发布都不会自动执行。</p><small>AI 出建议，老板做决定。</small></article>
+        </div>
+      </section>
+
+      <section class="section" id="platforms">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">多平台入口</p>
+            <h2>先深做 eBay，再扩到其他平台。</h2>
+          </div>
+          <p>捷境不是只做一个平台，但现在必须先把 eBay 的规则、费用、授权和确认边界吃透。</p>
+        </div>
+        <div class="platform-grid">
+          <article class="platform-card hover-card"><span class="pill green">当前主适配</span><strong>eBay</strong><p>开店向导、Listing、订单客服、费用广告、确认中心。</p></article>
+          <article class="platform-card hover-card"><span class="pill amber">预留</span><strong>Amazon</strong><p>商品、订单、FBA、广告数据和权限边界。</p></article>
+          <article class="platform-card hover-card"><span class="pill amber">预留</span><strong>淘宝 / 天猫</strong><p>商品、订单、客服、物流和流程整理。</p></article>
+          <article class="platform-card hover-card"><span class="pill">货源</span><strong>1688</strong><p>采购价、供应商、素材授权和代发履约。</p></article>
+          <article class="platform-card hover-card"><span class="pill">独立站</span><strong>Shopify</strong><p>商品、订单、客户、库存和多渠道复盘。</p></article>
+          <article class="platform-card hover-card"><span class="pill">规划</span><strong>AliExpress</strong><p>跨境商品、订单、履约和风险协同。</p></article>
+        </div>
+      </section>
+
+      <section class="section" id="pricing">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">订阅版本</p>
+            <h2>先免费体验，再按复杂度升级。</h2>
+          </div>
+          <p>价格仍为 Demo 占位，上线前需要结合 eBay API、模型、客服、广告数据和陪跑成本重新核算。</p>
+        </div>
+        <div class="card-grid">
+          <article class="price-card hover-card"><span class="pill">基础免费版</span><div class="price">¥0</div><p>完整向导、Mock 工作流、基础自动化规则和演示报告。</p></article>
+          <article class="price-card featured hover-card"><span class="pill green">建议起步</span><div class="price">¥99/月</div><p>单店铺真实流程、费用只读、Listing 草稿、确认中心。</p></article>
+          <article class="price-card hover-card"><span class="pill">高级付费版</span><div class="price">¥299/月</div><p>多项目、多店铺、广告只读、团队权限和完整工作记录。</p></article>
+          <article class="price-card hover-card"><span class="pill amber">自定义服务版</span><div class="price">定制</div><p>多平台接入、历史数据迁移、培训、深度陪跑和专属模板。</p></article>
+        </div>
+      </section>
+
+      <section class="section closing">
+        <div class="panel closing-panel hover-card">
+          <div>
+            <p class="eyebrow">主理人视角</p>
+            <h2>捷境不是替人盲干，是把人从重复岗位里解放出来。</h2>
+            <p class="section-note">AI 负责跑流程、留证据、提建议；商家负责审核方向、确认风险、决定边界。</p>
+          </div>
+          <a class="button" href="#top">回到首屏</a>
+        </div>
+      </section>
+    </main>
+
+    <div class="mobile-dock">
+      <a class="button-ghost" href="#paths">选择路径</a>
+      <a class="button" href="#director">看工作台</a>
+    </div>
+
+    <script>
+      const pathData = {
+        newbie: {
+          eyebrow: "小白路径",
+          title: "不让新手一次面对所有平台设置。",
+          body:
+            "先走 eBay 开店资料、Seller Hub、API 授权、履约方式、素材、客服口吻、费用授权和 AI 权限。没走完可以保存退出，先看控制台示例。",
+          steps: [
+            ["01", "开店资料清单", "邮箱、身份/企业资料、收款、退货地址。", "人工"],
+            ["02", "eBay API 准备", "先解释授权范围，默认只读，不发布。", "向导"],
+            ["03", "费用与广告授权", "订阅费、广告费、成交费进入真实利润。", "确认"],
+            ["04", "第一条 Listing", "标题、描述、图片视频、利润、风控。", "草稿"],
+          ],
+        },
+        opened: {
+          eyebrow: "已开店路径",
+          title: "先接入店铺，再整理重复流程。",
+          body:
+            "已开店商家最怕乱改。捷境先读取或导入店铺现状，按 Listing、费用、广告、履约、客服和账号风险生成自动化队列。",
+          steps: [
+            ["01", "导入店铺现状", "授权读取或手动导入基础数据。", "只读"],
+            ["02", "Listing 整理", "标题、图片、价格、Item specifics。", "整理"],
+            ["03", "利润复盘", "成交费、广告费、订阅分摊和退货风险。", "财务"],
+            ["04", "任务队列", "先整理重复资料，高风险动作进确认中心。", "排队"],
+          ],
+        },
+        orders: {
+          eyebrow: "已有订单路径",
+          title: "把客服、物流、退款和利润集中处理。",
+          body:
+            "已有订单后，核心是减少重复人工，让退款、差评、物流承诺和低利润订单自动进入确认中心。",
+          steps: [
+            ["01", "订单/客服读取", "普通问题生成草稿，高风险暂停。", "协同"],
+            ["02", "物流窗口", "订单状态、tracking、承诺时效并排看。", "履约"],
+            ["03", "退款风险", "退款、补偿、纠纷默认人工确认。", "风控"],
+            ["04", "每日复盘", "订单利润、广告花费、售后成本申汇报。", "PDF"],
+          ],
+        },
+        multi: {
+          eyebrow: "多店铺路径",
+          title: "先管规则、权限和费用口径，再谈自动化。",
+          body:
+            "多店铺不是复制一个店，而是把店铺规则、品类规则、团队权限、广告预算和费用分摊拆清楚。",
+          steps: [
+            ["01", "店铺结构", "US / UK / AU 或多平台店铺逐一建档。", "结构"],
+            ["02", "规则模板", "不同店铺可有不同利润、履约和权限。", "设置"],
+            ["03", "团队权限", "谁能发布、退款、改价、投广告。", "权限"],
+            ["04", "老板总览", "跨店铺任务、费用、风险和 PDF 汇报。", "总览"],
+          ],
+        },
+      };
+
+      const root = document.documentElement;
+      const tabs = document.querySelectorAll(".path-tab");
+      const pathEyebrow = document.querySelector("#pathEyebrow");
+      const pathTitle = document.querySelector("#pathTitle");
+      const pathBody = document.querySelector("#pathBody");
+      const pathSteps = document.querySelector("#pathSteps");
+
+      function renderPath(key) {
+        const data = pathData[key];
+        pathEyebrow.textContent = data.eyebrow;
+        pathTitle.textContent = data.title;
+        pathBody.textContent = data.body;
+        pathSteps.innerHTML = data.steps
+          .map(
+            ([index, title, detail, label]) => `
+              <article class="step hover-card">
+                <span class="index">${index}</span>
+                <div>
+                  <strong>${title}</strong>
+                  <span>${detail}</span>
+                </div>
+                <span class="pill ${label === "确认" || label === "权限" ? "amber" : "green"}">${label}</span>
+              </article>
+            `,
+          )
+          .join("");
+        bindHoverCards();
+      }
+
+      tabs.forEach((tab) => {
+        tab.addEventListener("click", () => {
+          tabs.forEach((item) => item.classList.toggle("is-active", item === tab));
+          renderPath(tab.dataset.path);
+        });
+      });
+
+      function bindHoverCards() {
+        document.querySelectorAll(".hover-card").forEach((card) => {
+          card.addEventListener("pointermove", (event) => {
+            const rect = card.getBoundingClientRect();
+            const x = ((event.clientX - rect.left) / rect.width) * 100;
+            card.style.setProperty("--card-x", `${x}%`);
+          });
+        });
+      }
+
+      window.addEventListener("pointermove", (event) => {
+        root.style.setProperty("--mx", `${event.clientX}px`);
+        root.style.setProperty("--my", `${event.clientY}px`);
+      });
+
+      renderPath("newbie");
+      bindHoverCards();
+
+      const canvas = document.querySelector("#systemCanvas");
+      const context = canvas.getContext("2d");
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+      const labels = ["市场", "Listing", "素材", "财务", "履约", "客服", "风控", "确认"];
+      let nodes = [];
+      let frame;
+
+      function resizeCanvas() {
+        const ratio = Math.min(window.devicePixelRatio || 1, 2);
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = Math.floor(rect.width * ratio);
+        canvas.height = Math.floor(rect.height * ratio);
+        context.setTransform(ratio, 0, 0, ratio, 0, 0);
+        nodes = labels.map((label, index) => ({
+          label,
+          x: rect.width * (0.18 + (index % 2) * 0.48),
+          y: rect.height * (0.14 + index * 0.088),
+          phase: index * 0.7,
+        }));
+      }
+
+      function roundedRect(x, y, w, h, r) {
+        context.beginPath();
+        context.moveTo(x + r, y);
+        context.lineTo(x + w - r, y);
+        context.quadraticCurveTo(x + w, y, x + w, y + r);
+        context.lineTo(x + w, y + h - r);
+        context.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        context.lineTo(x + r, y + h);
+        context.quadraticCurveTo(x, y + h, x, y + h - r);
+        context.lineTo(x, y + r);
+        context.quadraticCurveTo(x, y, x + r, y);
+        context.closePath();
+      }
+
+      function draw(time = 0) {
+        const rect = canvas.getBoundingClientRect();
+        context.clearRect(0, 0, rect.width, rect.height);
+
+        context.lineWidth = 1;
+        for (let i = 0; i < nodes.length - 1; i += 1) {
+          const a = nodes[i];
+          const b = nodes[i + 1];
+          const pulse = reducedMotion.matches ? 0.35 : Math.sin(time / 1000 + i) * 0.2 + 0.42;
+          context.strokeStyle = `rgba(8, 119, 110, ${pulse})`;
+          context.beginPath();
+          context.moveTo(a.x, a.y);
+          context.bezierCurveTo(a.x + 80, a.y + 20, b.x - 80, b.y - 20, b.x, b.y);
+          context.stroke();
+        }
+
+        nodes.forEach((node, index) => {
+          const drift = reducedMotion.matches ? 0 : Math.sin(time / 1100 + node.phase) * 2.8;
+          const x = node.x;
+          const y = node.y + drift;
+          context.fillStyle = "rgba(255, 254, 250, 0.86)";
+          context.strokeStyle = index === nodes.length - 1 ? "rgba(184, 132, 45, 0.68)" : "rgba(8, 119, 110, 0.36)";
+          roundedRect(x - 54, y - 22, 108, 44, 8);
+          context.fill();
+          context.stroke();
+          context.fillStyle = index === nodes.length - 1 ? "#8d631e" : "#08776e";
+          context.font = "900 13px Microsoft YaHei, sans-serif";
+          context.textAlign = "center";
+          context.fillText(node.label, x, y + 5);
+        });
+
+        if (!reducedMotion.matches) {
+          frame = requestAnimationFrame(draw);
+        }
+      }
+
+      window.addEventListener("resize", () => {
+        cancelAnimationFrame(frame);
+        resizeCanvas();
+        draw();
+      });
+
+      resizeCanvas();
+      draw();
+    </script>
+  </body>
+</html>

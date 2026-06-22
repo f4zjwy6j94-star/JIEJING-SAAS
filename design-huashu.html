@@ -1,0 +1,5301 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>捷境 · eBay AI CEO 自动化工作台</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23050605'/%3E%3Ctext x='12' y='43' font-family='Arial Black,Arial,sans-serif' font-size='29' font-weight='900' fill='%23fffefa'%3EJJ%3C/text%3E%3Crect x='15' y='48' width='34' height='4' rx='2' fill='%23fffefa'/%3E%3Crect x='1.5' y='1.5' width='61' height='61' rx='13' fill='none' stroke='%23242722' stroke-width='3'/%3E%3C/svg%3E" />
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #fffefa;
+        --wash: #f5f8f5;
+        --wash-2: #eef5f1;
+        --ink: #111d18;
+        --ink-soft: #2c3a34;
+        --muted: #687a71;
+        --quiet: #8fa098;
+        --line: #dce7df;
+        --teal: #08766e;
+        --teal-deep: #064f49;
+        --teal-soft: #e2f3ef;
+        --mint-wash: #edf8f4;
+        --blue-soft: #e9f0fb;
+        --amber: #b98228;
+        --amber-soft: #fff1d7;
+        --rose-soft: #f9e9e4;
+        --red: #a74738;
+        --red-soft: #fae8e3;
+        --shadow: 0 24px 70px rgba(17, 29, 24, 0.1);
+        --shadow-soft: 0 14px 34px rgba(17, 29, 24, 0.07);
+        --radius: 8px;
+        --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+        --pageProgress: 0;
+        --wave: 0;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        max-width: 100%;
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        overflow-x: hidden;
+        background:
+          linear-gradient(126deg, rgba(226, 243, 239, 0.96) 0%, rgba(255, 254, 250, 0) 34%),
+          linear-gradient(238deg, rgba(255, 241, 215, 0.78) 0%, rgba(255, 254, 250, 0) 38%),
+          linear-gradient(180deg, rgba(233, 240, 251, 0.82) 0%, rgba(255, 254, 250, 0) 32%),
+          linear-gradient(90deg, rgba(8, 118, 110, 0.045) 1px, transparent 1px),
+          linear-gradient(rgba(8, 118, 110, 0.035) 1px, transparent 1px),
+          var(--paper);
+        background-size: 112px 112px;
+        color: var(--ink);
+        font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+        letter-spacing: 0;
+      }
+
+      img,
+      video,
+      canvas,
+      svg {
+        max-width: 100%;
+      }
+
+      img,
+      video {
+        height: auto;
+      }
+
+      .hero > *,
+      .section > *,
+      .panel,
+      .card,
+      .path-card,
+      .price-card,
+      .flow-tab,
+      .rank-row,
+      .work-card,
+      .asset-card,
+      .step-modal-panel,
+      .entry-modal-panel {
+        min-width: 0;
+      }
+
+      :where(h1, h2, h3, p, strong, small, span, li, a, button) {
+        overflow-wrap: anywhere;
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        z-index: 0;
+        inset: 0;
+        pointer-events: none;
+        background:
+          radial-gradient(circle 520px at 18% 24%, rgba(8, 118, 110, 0.12), transparent 58%),
+          radial-gradient(circle 620px at 82% 18%, rgba(185, 130, 40, 0.08), transparent 62%);
+        opacity: 0.72;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .scroll-progress {
+        position: fixed;
+        z-index: 90;
+        top: 0;
+        right: 0;
+        left: 0;
+        height: 3px;
+        background: transparent;
+        pointer-events: none;
+      }
+
+      .scroll-progress span {
+        display: block;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(90deg, var(--teal), var(--amber));
+        transform: scaleX(var(--pageProgress));
+        transform-origin: left center;
+      }
+
+      .cursor-glow {
+        position: fixed;
+        z-index: 1;
+        top: 0;
+        left: 0;
+        width: 360px;
+        height: 360px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(8, 118, 110, 0.13), rgba(185, 130, 40, 0.055) 38%, transparent 68%);
+        pointer-events: none;
+        transform: translate3d(calc(50vw - 180px), calc(28vh - 180px), 0);
+        will-change: transform;
+      }
+
+      .topbar {
+        position: sticky;
+        z-index: 60;
+        top: 0;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 20px;
+        align-items: center;
+        padding: 14px min(4vw, 48px);
+        border-bottom: 1px solid rgba(220, 231, 223, 0.82);
+        background: rgba(255, 254, 250, 0.88);
+        backdrop-filter: blur(18px);
+      }
+
+      .brand {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .mark {
+        display: grid;
+        width: 42px;
+        height: 42px;
+        place-items: center;
+        border: 1px solid var(--ink);
+        border-radius: var(--radius);
+        background: var(--ink);
+        color: var(--paper);
+        font-weight: 900;
+      }
+
+      .jj-logo-mark {
+        position: relative;
+        display: grid;
+        flex: 0 0 auto;
+        width: 46px;
+        height: 46px;
+        place-items: center;
+        overflow: hidden;
+        border: 1px solid rgba(5, 6, 5, 0.92);
+        border-radius: 10px;
+        background: #050605;
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.13),
+          0 14px 26px rgba(7, 9, 8, 0.2);
+      }
+
+      .jj-logo-mark::before,
+      .jj-logo-mark::after,
+      .jj-logo-mark i,
+      .jj-logo-mark b {
+        position: absolute;
+        content: "";
+        display: block;
+      }
+
+      .jj-logo-mark::before {
+        content: "J";
+        left: 8px;
+        top: 3px;
+        display: grid;
+        place-items: center;
+        color: #ffffff;
+        font-family: "Arial Black", Arial, sans-serif;
+        font-size: 32px;
+        font-weight: 900;
+        line-height: 1;
+      }
+
+      .jj-logo-mark::after {
+        content: "J";
+        left: 21px;
+        top: 3px;
+        color: transparent;
+        font-family: "Arial Black", Arial, sans-serif;
+        font-size: 32px;
+        font-weight: 900;
+        line-height: 1;
+        -webkit-text-stroke: 1.25px #ffffff;
+        text-stroke: 1.25px #ffffff;
+      }
+
+      .jj-logo-mark i {
+        left: 8px;
+        right: 8px;
+        bottom: 8px;
+        height: 2px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.9);
+      }
+
+      .jj-logo-mark b {
+        left: 8px;
+        top: 8px;
+        width: 7px;
+        height: 7px;
+        border: 2px solid rgba(255, 255, 255, 0.95);
+        border-radius: 2px;
+      }
+
+      .brand strong,
+      .brand span {
+        display: block;
+      }
+
+      .brand span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .brand .jj-logo-mark {
+        display: grid;
+        color: transparent;
+        font-size: 0;
+      }
+
+      .brand .jj-logo-copy {
+        color: var(--ink);
+        font-size: 14px;
+      }
+
+      .brand .jj-logo-copy em {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 11px;
+        font-style: normal;
+        font-weight: 800;
+        letter-spacing: 0.05em;
+      }
+
+      .navlinks {
+        display: flex;
+        justify-content: center;
+        gap: 4px;
+      }
+
+      .topbar > .button {
+        white-space: nowrap;
+      }
+
+      .navlinks a,
+      .button,
+      .button-ghost,
+      .button-text {
+        display: inline-flex;
+        min-height: 42px;
+        align-items: center;
+        justify-content: center;
+        border-radius: var(--radius);
+        font-weight: 900;
+        transition:
+          transform 0.22s var(--ease),
+          border-color 0.22s var(--ease),
+          background 0.22s var(--ease),
+          box-shadow 0.22s var(--ease),
+          color 0.22s var(--ease);
+      }
+
+      .navlinks a {
+        padding: 10px 12px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .navlinks a:hover,
+      .button-text:hover {
+        background: var(--teal-soft);
+        color: var(--teal-deep);
+      }
+
+      .button,
+      .button-ghost {
+        padding: 0 18px;
+        border: 1px solid var(--ink);
+      }
+
+      .button {
+        background: var(--ink);
+        color: var(--paper);
+        box-shadow: 0 14px 30px rgba(17, 29, 24, 0.16);
+      }
+
+      .button:hover,
+      .button-ghost:hover {
+        transform: translateY(-2px);
+      }
+
+      .button:active,
+      .button-ghost:active,
+      .button-text:active {
+        transform: translateY(0) scale(0.98);
+      }
+
+      .button-ghost {
+        background: rgba(255, 254, 250, 0.78);
+        color: var(--ink);
+      }
+
+      .button-text {
+        padding: 0 10px;
+        border: 0;
+        background: transparent;
+        color: var(--teal-deep);
+      }
+
+      .hero,
+      .section {
+        width: min(1400px, calc(100% - 56px));
+        margin: 0 auto;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 0.82fr) minmax(460px, 0.68fr);
+        gap: 44px;
+        align-items: center;
+        min-height: calc(100vh - 72px);
+        padding: 70px 0 42px;
+      }
+
+      .hero > section,
+      .hero > aside,
+      .section,
+      .footer {
+        position: relative;
+        z-index: 2;
+      }
+
+      .eyebrow {
+        margin: 0 0 14px;
+        color: var(--teal);
+        font-size: 12px;
+        font-weight: 900;
+        letter-spacing: 0;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        max-width: 760px;
+        margin-bottom: 26px;
+        font-size: clamp(46px, 5.8vw, 86px);
+        font-weight: 900;
+        line-height: 1.03;
+        letter-spacing: 0;
+        text-wrap: balance;
+      }
+
+      .lead {
+        max-width: 760px;
+        margin-bottom: 30px;
+        color: var(--ink-soft);
+        font-size: clamp(17px, 1.35vw, 21px);
+        line-height: 1.75;
+        text-wrap: pretty;
+      }
+
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 28px;
+      }
+
+      .proof-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .pill {
+        display: inline-flex;
+        min-height: 30px;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 6px 10px;
+        background: rgba(255, 254, 250, 0.78);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .pill.green {
+        border-color: rgba(8, 118, 110, 0.24);
+        background: var(--teal-soft);
+        color: var(--teal-deep);
+      }
+
+      .pill.amber {
+        border-color: rgba(185, 130, 40, 0.24);
+        background: var(--amber-soft);
+        color: #7a5518;
+      }
+
+      .pill.red {
+        border-color: rgba(167, 71, 56, 0.2);
+        background: var(--red-soft);
+        color: var(--red);
+      }
+
+      .command-room {
+        position: relative;
+        min-height: 660px;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background:
+          linear-gradient(145deg, rgba(255, 254, 250, 0.92), rgba(226, 243, 239, 0.78) 42%, rgba(255, 241, 215, 0.58)),
+          linear-gradient(90deg, rgba(8, 118, 110, 0.06) 1px, transparent 1px),
+          linear-gradient(rgba(8, 118, 110, 0.05) 1px, transparent 1px),
+          var(--paper);
+        background-size: auto, 48px 48px, 48px 48px;
+        box-shadow: var(--shadow);
+        transform: translateY(calc(var(--pageProgress) * -10px));
+      }
+
+      .command-room::before {
+        content: "";
+        position: absolute;
+        inset: 18px;
+        border: 1px solid rgba(8, 118, 110, 0.12);
+        border-radius: var(--radius);
+        pointer-events: none;
+      }
+
+      .command-room::after,
+      .panel::after,
+      .path-card::after,
+      .price-card::after,
+      .flow-tab::after,
+      .role-node::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        background: radial-gradient(circle 220px at var(--sx, 50%) var(--sy, 50%), rgba(255, 255, 255, 0.42), transparent 56%);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.22s var(--ease);
+        will-change: opacity;
+      }
+
+      .command-room:hover::after,
+      .panel:hover::after,
+      .path-card:hover::after,
+      .price-card:hover::after,
+      .flow-tab:hover::after,
+      .role-node:hover::after {
+        opacity: 1;
+      }
+
+      .signal-canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        opacity: 0.78;
+        pointer-events: none;
+      }
+
+      .ceo-core {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        display: grid;
+        width: 190px;
+        min-height: 190px;
+        place-items: center;
+        padding: 26px;
+        border: 1px solid rgba(17, 29, 24, 0.18);
+        border-radius: 50%;
+        background: var(--ink);
+        color: var(--paper);
+        text-align: center;
+        transform: translate(-50%, -50%);
+        box-shadow: 0 28px 80px rgba(17, 29, 24, 0.24);
+        transition: transform 0.28s var(--ease);
+      }
+
+      .command-room:hover .ceo-core {
+        transform: translate(-50%, -50%) scale(1.035);
+      }
+
+      .ceo-core strong,
+      .ceo-core span {
+        display: block;
+      }
+
+      .ceo-core strong {
+        font-size: 32px;
+        line-height: 1;
+      }
+
+      .ceo-core span {
+        margin-top: 10px;
+        color: rgba(255, 254, 250, 0.72);
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 1.6;
+      }
+
+      .role-node {
+        position: absolute;
+        width: 160px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: rgba(255, 254, 250, 0.9);
+        box-shadow: var(--shadow-soft);
+        overflow: hidden;
+        transition:
+          transform 0.28s var(--ease),
+          border-color 0.28s var(--ease),
+          background 0.28s var(--ease);
+      }
+
+      .role-node:hover {
+        border-color: rgba(8, 118, 110, 0.38);
+        background: #ffffff;
+        transform: translateY(-4px);
+      }
+
+      .role-node strong,
+      .role-node span {
+        display: block;
+      }
+
+      .role-node strong {
+        margin-bottom: 6px;
+        font-size: 15px;
+      }
+
+      .role-node span {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .node-market {
+        top: 50px;
+        left: 46px;
+      }
+
+      .node-listing {
+        top: 42px;
+        right: 58px;
+      }
+
+      .node-media {
+        top: 230px;
+        left: 30px;
+      }
+
+      .node-ads {
+        top: 230px;
+        right: 30px;
+      }
+
+      .node-service {
+        bottom: 60px;
+        left: 66px;
+      }
+
+      .node-finance {
+        right: 62px;
+        bottom: 60px;
+      }
+
+      .flow-line {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      .flow-line path {
+        fill: none;
+        stroke: rgba(8, 118, 110, 0.25);
+        stroke-width: 1.4;
+        stroke-dasharray: 7 9;
+        animation: dashMove 12s linear infinite;
+      }
+
+      .section {
+        padding: 94px 0 0;
+      }
+
+      main {
+        display: flex;
+        flex-direction: column;
+      }
+
+      #workspace {
+        order: 2;
+      }
+
+      #paths {
+        order: 3;
+      }
+
+      #merchant-guide {
+        order: 4;
+      }
+
+      body.is-onboarding-mode {
+        min-height: 100vh;
+        overflow-x: hidden;
+        background:
+          linear-gradient(140deg, rgba(226, 243, 239, 0.86), rgba(255, 254, 250, 0.98) 42%, rgba(255, 241, 215, 0.5)),
+          #f8fbf8;
+      }
+
+      body.is-auth-mode {
+        min-height: 100vh;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at 14% 16%, rgba(15, 166, 151, 0.13), transparent 34%),
+          linear-gradient(140deg, rgba(248, 251, 248, 0.98), rgba(255, 254, 250, 0.98) 46%, rgba(255, 241, 215, 0.54)),
+          #f8fbf8;
+      }
+
+      body.is-onboarding-mode .topbar,
+      body.is-onboarding-mode .hero,
+      body.is-onboarding-mode main > section:not(#merchant-guide),
+      body.is-onboarding-mode .footer,
+      body.is-onboarding-mode .page-progress,
+      body.is-onboarding-mode .scroll-progress,
+      body.is-onboarding-mode .cursor-glow {
+        display: none;
+      }
+
+      body.is-auth-mode > .topbar,
+      body.is-auth-mode > main,
+      body.is-auth-mode > .footer,
+      body.is-auth-mode > .page-progress,
+      body.is-auth-mode > .scroll-progress,
+      body.is-auth-mode > .cursor-glow {
+        display: none;
+      }
+
+      body.is-onboarding-mode main {
+        display: block;
+        min-height: 100vh;
+      }
+
+      body.is-onboarding-mode #merchant-guide {
+        width: min(1280px, calc(100% - 40px));
+        min-height: 100vh;
+        margin: 0 auto;
+        padding: 24px 0 36px;
+      }
+
+      .guide-app-topbar {
+        display: none;
+      }
+
+      body.is-onboarding-mode .guide-app-topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        margin-bottom: 18px;
+        border: 1px solid rgba(220, 231, 223, 0.94);
+        border-radius: var(--radius);
+        padding: 14px 16px;
+        background: rgba(255, 254, 250, 0.92);
+        box-shadow: 0 16px 38px rgba(17, 29, 24, 0.08);
+      }
+
+      .guide-app-identity {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .guide-app-copy strong,
+      .guide-app-copy small {
+        display: block;
+      }
+
+      .guide-app-copy strong {
+        font-size: 15px;
+        line-height: 1.2;
+      }
+
+      .guide-app-copy small {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      #pricing {
+        order: 5;
+      }
+
+      #logic {
+        order: 1;
+      }
+
+      .commerce-band {
+        width: min(1400px, calc(100% - 56px));
+        margin: 0 auto;
+        border: 1px solid rgba(220, 231, 223, 0.92);
+        border-radius: var(--radius);
+        padding: 24px;
+        background:
+          linear-gradient(90deg, rgba(226, 243, 239, 0.92), rgba(255, 254, 250, 0.88) 40%, rgba(255, 241, 215, 0.7)),
+          rgba(255, 254, 250, 0.92);
+        box-shadow: var(--shadow-soft);
+      }
+
+      .commerce-top {
+        display: grid;
+        grid-template-columns: minmax(0, 0.72fr) minmax(320px, 0.42fr);
+        gap: 18px;
+        align-items: end;
+        margin-bottom: 18px;
+      }
+
+      .commerce-top h2 {
+        font-size: clamp(32px, 4vw, 62px);
+      }
+
+      .commerce-rail {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .signal-card {
+        position: relative;
+        min-height: 142px;
+        overflow: hidden;
+        border: 1px solid rgba(220, 231, 223, 0.94);
+        border-radius: var(--radius);
+        padding: 16px;
+        background: rgba(255, 254, 250, 0.86);
+        transition:
+          transform 0.24s var(--ease),
+          border-color 0.24s var(--ease),
+          background 0.24s var(--ease);
+      }
+
+      .signal-card:hover {
+        border-color: rgba(8, 118, 110, 0.34);
+        background: #ffffff;
+        transform: translateY(-5px);
+      }
+
+      .signal-card span,
+      .signal-card strong,
+      .signal-card small {
+        display: block;
+      }
+
+      .signal-card span {
+        color: var(--teal);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .signal-card strong {
+        margin-top: 22px;
+        font-size: 18px;
+      }
+
+      .signal-card small {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .signal-card::before {
+        content: "";
+        position: absolute;
+        right: 14px;
+        bottom: 14px;
+        left: 14px;
+        height: 24px;
+        background:
+          linear-gradient(90deg, rgba(8, 118, 110, 0.12), rgba(185, 130, 40, 0.16)),
+          repeating-linear-gradient(90deg, transparent 0 10px, rgba(8, 118, 110, 0.22) 10px 12px);
+        clip-path: polygon(0 58%, 10% 38%, 20% 70%, 32% 24%, 44% 64%, 56% 34%, 68% 68%, 80% 28%, 92% 55%, 100% 40%, 100% 100%, 0 100%);
+        opacity: calc(0.32 + var(--wave) * 0.52);
+        transform: scaleY(calc(0.85 + var(--wave) * 0.28));
+        transform-origin: bottom center;
+      }
+
+      .operating-stack {
+        display: grid;
+        grid-template-columns: minmax(320px, 0.58fr) minmax(0, 1fr);
+        gap: 14px;
+        margin-bottom: 18px;
+      }
+
+      .stack-lead {
+        display: grid;
+        align-content: start;
+        gap: 16px;
+        padding: 28px;
+        background:
+          linear-gradient(135deg, rgba(237, 248, 244, 0.88), transparent 58%),
+          rgba(255, 254, 250, 0.94);
+      }
+
+      .stack-lead h3 {
+        margin: 0;
+        font-size: clamp(28px, 3.4vw, 50px);
+        line-height: 1.04;
+      }
+
+      .stack-lead p {
+        margin: 0;
+        color: var(--ink-soft);
+        line-height: 1.78;
+      }
+
+      .stack-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .stack-card {
+        min-height: 178px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 16px;
+        background: rgba(255, 254, 250, 0.88);
+        box-shadow: 0 12px 28px rgba(17, 29, 24, 0.045);
+      }
+
+      .stack-card span,
+      .stack-card strong,
+      .stack-card p {
+        display: block;
+      }
+
+      .stack-card span {
+        color: var(--teal);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .stack-card strong {
+        margin-top: 18px;
+        font-size: 19px;
+      }
+
+      .stack-card p {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.62;
+      }
+
+      .source-strip {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 12px;
+        border: 1px solid rgba(220, 231, 223, 0.9);
+        border-radius: var(--radius);
+        background: rgba(255, 254, 250, 0.74);
+      }
+
+      .source-strip span {
+        display: inline-flex;
+        min-height: 32px;
+        align-items: center;
+        border: 1px solid rgba(8, 118, 110, 0.12);
+        border-radius: 999px;
+        padding: 0 12px;
+        background: #ffffff;
+        color: var(--teal-deep);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .china-stack {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: minmax(280px, 0.45fr) minmax(0, 1fr);
+        gap: 12px;
+        border: 1px solid rgba(220, 231, 223, 0.92);
+        border-radius: var(--radius);
+        padding: 16px;
+        background:
+          linear-gradient(135deg, rgba(255, 242, 220, 0.66), rgba(255, 254, 250, 0.76) 45%, rgba(237, 248, 244, 0.82)),
+          rgba(255, 254, 250, 0.9);
+      }
+
+      .china-stack-head {
+        display: grid;
+        align-content: center;
+        gap: 10px;
+      }
+
+      .china-stack-head h3 {
+        margin: 0;
+        font-size: clamp(24px, 3vw, 42px);
+        line-height: 1.06;
+      }
+
+      .china-stack-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .section-head {
+        display: grid;
+        grid-template-columns: minmax(0, 0.9fr) minmax(280px, 0.38fr);
+        gap: 28px;
+        align-items: end;
+        margin-bottom: 26px;
+      }
+
+      h2 {
+        margin-bottom: 0;
+        font-size: clamp(38px, 5.4vw, 78px);
+        font-weight: 900;
+        line-height: 0.98;
+        letter-spacing: 0;
+        text-wrap: balance;
+      }
+
+      .section-note {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.75;
+      }
+
+      .panel,
+      .card,
+      .flow-step,
+      .path-card,
+      .price-card {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: rgba(255, 254, 250, 0.9);
+        box-shadow: var(--shadow-soft);
+        position: relative;
+        overflow: hidden;
+      }
+
+      .flow-stage {
+        display: grid;
+        grid-template-columns: 330px minmax(0, 1fr);
+        gap: 16px;
+      }
+
+      .flow-tabs {
+        display: grid;
+        gap: 10px;
+      }
+
+      .flow-tab {
+        position: relative;
+        overflow: hidden;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+        min-height: 76px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 14px;
+        background: rgba(255, 254, 250, 0.72);
+        color: var(--ink);
+        font: inherit;
+        text-align: left;
+        transition:
+          transform 0.22s var(--ease),
+          background 0.22s var(--ease),
+          border-color 0.22s var(--ease);
+      }
+
+      .flow-tab:hover,
+      .flow-tab.is-active {
+        border-color: rgba(8, 118, 110, 0.36);
+        background: var(--teal-soft);
+        transform: translateX(4px);
+      }
+
+      .flow-tab em {
+        display: grid;
+        width: 38px;
+        height: 38px;
+        place-items: center;
+        border-radius: 50%;
+        background: var(--paper);
+        color: var(--teal-deep);
+        font-style: normal;
+        font-weight: 900;
+      }
+
+      .flow-tab strong,
+      .flow-tab span {
+        display: block;
+      }
+
+      .flow-tab span {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .flow-detail {
+        min-height: 338px;
+        padding: 30px;
+        background:
+          linear-gradient(135deg, rgba(226, 243, 239, 0.82), transparent 54%),
+          rgba(255, 254, 250, 0.92);
+      }
+
+      .flow-detail h3 {
+        margin-bottom: 14px;
+        font-size: clamp(30px, 4vw, 54px);
+        line-height: 1;
+      }
+
+      .flow-detail p {
+        max-width: 800px;
+        color: var(--ink-soft);
+        font-size: 18px;
+        line-height: 1.75;
+      }
+
+      .role-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 24px;
+      }
+
+      .role-list span {
+        display: inline-flex;
+        min-height: 34px;
+        align-items: center;
+        border: 1px solid rgba(8, 118, 110, 0.16);
+        border-radius: 999px;
+        padding: 8px 12px;
+        background: #ffffff;
+        color: var(--teal-deep);
+        font-size: 13px;
+        font-weight: 900;
+      }
+
+      .path-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .path-card {
+        position: relative;
+        min-height: 210px;
+        overflow: hidden;
+        padding: 20px;
+        text-align: left;
+        transition:
+          transform 0.24s var(--ease),
+          border-color 0.24s var(--ease),
+          background 0.24s var(--ease);
+      }
+
+      .path-card:hover,
+      .path-card.is-active {
+        border-color: rgba(8, 118, 110, 0.4);
+        background: #ffffff;
+        transform: translateY(-5px);
+      }
+
+      .path-card strong {
+        display: block;
+        margin: 12px 0 8px;
+        font-size: 24px;
+      }
+
+      .path-card p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.65;
+      }
+
+      .path-detail {
+        display: grid;
+        grid-template-columns: minmax(0, 0.84fr) minmax(300px, 0.46fr);
+        gap: 14px;
+        margin-top: 14px;
+      }
+
+      .path-copy {
+        padding: 28px;
+      }
+
+      .path-copy h3 {
+        margin-bottom: 12px;
+        font-size: 42px;
+        line-height: 1.05;
+      }
+
+      .path-copy p {
+        color: var(--ink-soft);
+        line-height: 1.78;
+      }
+
+      .checklist {
+        display: grid;
+        gap: 8px;
+        padding: 22px;
+      }
+
+      .check-row {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        min-height: 48px;
+        border-bottom: 1px solid var(--line);
+        color: var(--ink-soft);
+        font-size: 14px;
+      }
+
+      .check-row:last-child {
+        border-bottom: 0;
+      }
+
+      .merchant-guide-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 0.72fr) minmax(300px, 0.34fr);
+        gap: 14px;
+      }
+
+      .guide-panel {
+        padding: 24px;
+      }
+
+      .guide-panel h3 {
+        max-width: 780px;
+        margin-bottom: 10px;
+        font-size: clamp(28px, 3.2vw, 42px);
+        line-height: 1.12;
+      }
+
+      .guide-panel p {
+        color: var(--ink-soft);
+        line-height: 1.72;
+      }
+
+      .guide-phase-strip {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        gap: 8px;
+        margin: -8px 0 18px;
+      }
+
+      .guide-phase {
+        position: relative;
+        display: grid;
+        min-height: 62px;
+        align-content: center;
+        gap: 5px;
+        border: 1px solid rgba(220, 231, 223, 0.92);
+        border-radius: 8px;
+        padding: 10px 12px;
+        background: rgba(255, 254, 250, 0.76);
+        color: var(--muted);
+      }
+
+      .guide-phase span,
+      .guide-phase strong {
+        display: block;
+      }
+
+      .guide-phase span {
+        font-size: 11px;
+        font-weight: 900;
+      }
+
+      .guide-phase strong {
+        color: var(--ink-soft);
+        font-size: 13px;
+        line-height: 1.25;
+      }
+
+      .guide-phase.is-active {
+        border-color: rgba(8, 118, 110, 0.42);
+        background:
+          linear-gradient(180deg, rgba(237, 248, 244, 0.9), rgba(255, 254, 250, 0.98)),
+          #ffffff;
+        color: var(--teal-deep);
+        box-shadow: 0 12px 28px rgba(17, 29, 24, 0.06);
+      }
+
+      .guide-phase.is-done {
+        color: var(--teal);
+      }
+
+      .guide-phase.is-done::after {
+        content: "";
+        position: absolute;
+        top: 11px;
+        right: 11px;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--teal);
+      }
+
+      .guide-current-default {
+        display: grid;
+        gap: 6px;
+        margin-top: 16px;
+        border: 1px solid rgba(8, 118, 110, 0.2);
+        border-radius: 8px;
+        padding: 14px 16px;
+        background:
+          linear-gradient(90deg, rgba(237, 248, 244, 0.9), rgba(255, 254, 250, 0.96)),
+          #fffefa;
+      }
+
+      .guide-current-default span,
+      .guide-current-default strong,
+      .guide-current-default small {
+        display: block;
+      }
+
+      .guide-current-default span {
+        color: var(--teal-deep);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .guide-current-default strong {
+        font-size: 17px;
+        line-height: 1.35;
+      }
+
+      .guide-current-default small {
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .guide-step-notes {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 18px;
+      }
+
+      .guide-step-note {
+        min-height: 132px;
+        border: 1px solid rgba(220, 231, 223, 0.94);
+        border-radius: 8px;
+        padding: 15px;
+        background:
+          linear-gradient(180deg, rgba(255, 254, 250, 0.96), rgba(247, 251, 248, 0.96)),
+          #fffefa;
+      }
+
+      .guide-step-note span,
+      .guide-step-note strong,
+      .guide-step-note small {
+        display: block;
+      }
+
+      .guide-step-note span {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .guide-step-note strong {
+        margin-top: 6px;
+        font-size: 16px;
+      }
+
+      .guide-step-note small {
+        margin-top: 5px;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .guide-choice-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 20px;
+      }
+
+      .guide-choice {
+        position: relative;
+        display: grid;
+        grid-template-rows: auto auto 1fr;
+        min-height: 146px;
+        overflow: hidden;
+        border: 1px solid rgba(220, 231, 223, 0.96);
+        border-radius: 8px;
+        padding: 16px 74px 16px 18px;
+        background:
+          linear-gradient(180deg, rgba(255, 254, 250, 0.98), rgba(248, 251, 248, 0.98)),
+          #fffefa;
+        color: var(--ink);
+        text-align: left;
+        transition:
+          transform 0.2s var(--ease),
+          border-color 0.2s var(--ease),
+          background 0.2s var(--ease),
+          box-shadow 0.2s var(--ease);
+      }
+
+      .guide-choice:hover,
+      .guide-choice.is-active {
+        transform: translateY(-1px);
+        border-color: rgba(8, 118, 110, 0.42);
+        background:
+          linear-gradient(180deg, rgba(237, 248, 244, 0.78), rgba(255, 254, 250, 0.98)),
+          #ffffff;
+        box-shadow: 0 14px 30px rgba(17, 29, 24, 0.07);
+      }
+
+      .guide-choice::before {
+        content: "";
+        position: absolute;
+        inset: 14px auto 14px 0;
+        width: 3px;
+        border-radius: 999px;
+        background: transparent;
+      }
+
+      .guide-choice.is-active::before {
+        background: var(--teal);
+      }
+
+      .guide-choice strong,
+      .guide-choice span,
+      .guide-choice small,
+      .guide-choice em {
+        display: block;
+      }
+
+      .guide-choice .pill {
+        justify-self: start;
+      }
+
+      .guide-choice em {
+        position: absolute;
+        top: 14px;
+        right: 14px;
+        border: 1px solid rgba(8, 118, 110, 0.16);
+        border-radius: 999px;
+        padding: 5px 8px;
+        background: rgba(255, 254, 250, 0.86);
+        color: var(--muted);
+        font-size: 11px;
+        font-style: normal;
+        font-weight: 900;
+      }
+
+      .guide-choice.is-active em {
+        border-color: rgba(8, 118, 110, 0.28);
+        background: var(--teal);
+        color: #fffefa;
+      }
+
+      .guide-choice strong {
+        margin: 10px 0 8px;
+        font-size: 18px;
+        line-height: 1.35;
+      }
+
+      .guide-choice small {
+        color: var(--muted);
+        line-height: 1.58;
+      }
+
+      .guide-summary {
+        display: grid;
+        gap: 10px;
+        padding: 22px;
+      }
+
+      .guide-default-route {
+        border: 1px solid rgba(8, 118, 110, 0.18);
+        border-radius: 8px;
+        padding: 15px;
+        background:
+          linear-gradient(180deg, rgba(255, 254, 250, 0.98), rgba(237, 248, 244, 0.78)),
+          #ffffff;
+      }
+
+      .guide-default-route strong,
+      .guide-default-route span,
+      .guide-default-route small {
+        display: block;
+      }
+
+      .guide-default-route > strong {
+        color: var(--teal-deep);
+        font-size: 15px;
+      }
+
+      .guide-default-route > span {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .guide-default-route ul {
+        display: grid;
+        gap: 7px;
+        margin: 12px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .guide-default-route li {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 8px;
+        align-items: start;
+        color: var(--ink-soft);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .guide-default-route li::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        margin-top: 5px;
+        border-radius: 50%;
+        background: var(--teal);
+      }
+
+      .guide-summary-row {
+        width: 100%;
+        border: 1px solid rgba(220, 231, 223, 0.92);
+        border-radius: var(--radius);
+        padding: 14px;
+        background: rgba(255, 254, 250, 0.86);
+        color: var(--ink);
+        text-align: left;
+        cursor: pointer;
+        transition:
+          border-color 0.18s ease,
+          background 0.18s ease,
+          transform 0.18s ease;
+      }
+
+      .guide-summary-row:hover,
+      .guide-summary-row.is-active {
+        border-color: rgba(8, 118, 110, 0.36);
+        background: rgba(237, 248, 244, 0.9);
+        transform: translateY(-1px);
+      }
+
+      .guide-summary-row.is-boundary {
+        border-color: rgba(8, 118, 110, 0.28);
+        box-shadow: inset 3px 0 0 rgba(8, 118, 110, 0.5);
+      }
+
+      .guide-summary-row span,
+      .guide-summary-row strong,
+      .guide-summary-row small {
+        display: block;
+      }
+
+      .guide-summary-row span {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .guide-summary-row strong {
+        margin-top: 6px;
+        font-size: 17px;
+        line-height: 1.35;
+      }
+
+      .guide-summary-row small {
+        margin-top: 5px;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .guide-summary-row em {
+        display: inline-block;
+        margin-top: 8px;
+        color: var(--teal-deep);
+        font-style: normal;
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .guide-summary-next {
+        border: 1px solid rgba(8, 118, 110, 0.18);
+        border-radius: 8px;
+        padding: 15px;
+        background:
+          linear-gradient(180deg, rgba(237, 248, 244, 0.92), rgba(255, 254, 250, 0.96)),
+          #fffefa;
+      }
+
+      .guide-summary-next strong,
+      .guide-summary-next span {
+        display: block;
+      }
+
+      .guide-summary-next strong {
+        color: var(--teal-deep);
+        font-size: 15px;
+      }
+
+      .guide-summary-next span {
+        margin-top: 7px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .dashboard-slice {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 14px;
+      }
+
+      .chat-panel {
+        display: grid;
+        gap: 12px;
+        padding: 22px;
+      }
+
+      .bubble {
+        max-width: 780px;
+        margin-left: auto;
+        border-radius: var(--radius);
+        padding: 16px;
+        background: var(--wash);
+        color: var(--ink-soft);
+        line-height: 1.65;
+        transition:
+          transform 0.22s var(--ease),
+          background 0.22s var(--ease);
+      }
+
+      .bubble:hover {
+        transform: translateY(-2px);
+      }
+
+      .bubble.ai {
+        margin-right: auto;
+        margin-left: 0;
+        background: var(--teal-soft);
+        color: var(--teal-deep);
+      }
+
+      .chat-attachment {
+        display: grid;
+        gap: 8px;
+        margin: 12px 0 0;
+        overflow: hidden;
+        border: 1px solid rgba(220, 231, 223, 0.95);
+        border-radius: 8px;
+        background: rgba(255, 254, 250, 0.9);
+      }
+
+      .chat-attachment img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 4 / 3;
+        object-fit: cover;
+      }
+
+      .chat-attachment figcaption {
+        padding: 0 11px 10px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .permission-strip {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        border: 1px solid rgba(8, 118, 110, 0.18);
+        border-radius: var(--radius);
+        padding: 14px;
+        background:
+          linear-gradient(90deg, rgba(226, 243, 239, 0.88), rgba(255, 254, 250, 0.86)),
+          #ffffff;
+      }
+
+      .permission-strip strong,
+      .permission-strip span {
+        display: block;
+      }
+
+      .permission-strip span {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .report-card {
+        display: grid;
+        gap: 14px;
+        border: 1px solid rgba(220, 231, 223, 0.96);
+        border-radius: var(--radius);
+        padding: 16px;
+        background: rgba(255, 254, 250, 0.82);
+      }
+
+      .report-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: start;
+      }
+
+      .report-head strong,
+      .report-head span {
+        display: block;
+      }
+
+      .report-head strong {
+        font-size: 20px;
+      }
+
+      .report-head span {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .product-rank {
+        display: grid;
+        gap: 8px;
+      }
+
+      .rank-row {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto auto;
+        gap: 10px;
+        align-items: center;
+        min-height: 46px;
+        border: 1px solid rgba(220, 231, 223, 0.84);
+        border-radius: var(--radius);
+        padding: 10px;
+        background: rgba(255, 255, 255, 0.72);
+      }
+
+      .rank-row.is-picked {
+        border-color: rgba(8, 118, 110, 0.34);
+        background: var(--teal-soft);
+      }
+
+      .rank-row em {
+        color: var(--teal-deep);
+        font-style: normal;
+        font-weight: 900;
+      }
+
+      .rank-row strong,
+      .rank-row small {
+        display: block;
+      }
+
+      .rank-row small {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .score-pill {
+        display: inline-flex;
+        min-height: 28px;
+        align-items: center;
+        border: 1px solid rgba(8, 118, 110, 0.16);
+        border-radius: 999px;
+        padding: 4px 9px;
+        background: rgba(255, 254, 250, 0.86);
+        color: var(--teal-deep);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .asset-board {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .asset-card {
+        position: relative;
+        min-height: 126px;
+        overflow: hidden;
+        border: 1px solid rgba(220, 231, 223, 0.92);
+        border-radius: var(--radius);
+        padding: 12px;
+        background:
+          linear-gradient(145deg, rgba(255, 254, 250, 0.92), rgba(226, 243, 239, 0.72)),
+          #ffffff;
+      }
+
+      .asset-card.has-image {
+        display: grid;
+        min-height: 230px;
+        padding: 0;
+        background: #ffffff;
+      }
+
+      .asset-card.has-image::before {
+        display: none;
+      }
+
+      .asset-card img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 4 / 3;
+        object-fit: cover;
+        background: var(--wash);
+      }
+
+      .asset-card.detail-card img {
+        object-position: center top;
+      }
+
+      .asset-copy {
+        position: relative;
+        display: grid;
+        gap: 6px;
+        padding: 12px;
+      }
+
+      .asset-card::before {
+        content: "";
+        position: absolute;
+        right: 12px;
+        bottom: 12px;
+        width: 54px;
+        height: 54px;
+        border: 1px solid rgba(8, 118, 110, 0.18);
+        border-radius: 50%;
+        background: rgba(8, 118, 110, 0.08);
+      }
+
+      .asset-card strong,
+      .asset-card span {
+        position: relative;
+        display: block;
+      }
+
+      .asset-card span {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .video-strip {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 6px;
+        border: 1px solid rgba(220, 231, 223, 0.92);
+        border-radius: var(--radius);
+        padding: 10px;
+        background: #ffffff;
+      }
+
+      .video-strip span {
+        display: grid;
+        min-height: 58px;
+        place-items: center;
+        border-radius: 6px;
+        background: linear-gradient(145deg, rgba(17, 29, 24, 0.9), rgba(8, 118, 110, 0.72));
+        color: var(--paper);
+        font-size: 12px;
+        font-weight: 900;
+        text-align: center;
+      }
+
+      .video-preview-card {
+        position: relative;
+        display: grid;
+        grid-template-columns: minmax(220px, 0.58fr) minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+        overflow: hidden;
+        border: 1px solid rgba(220, 231, 223, 0.92);
+        border-radius: var(--radius);
+        padding: 10px;
+        background: #ffffff;
+      }
+
+      .video-thumb {
+        position: relative;
+        overflow: hidden;
+        border-radius: 8px;
+        background: var(--wash);
+      }
+
+      .video-thumb img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        object-fit: cover;
+      }
+
+      .video-play {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        background: radial-gradient(circle, rgba(17, 29, 24, 0.14), rgba(17, 29, 24, 0.08) 42%, transparent 66%);
+      }
+
+      .video-play::before {
+        content: "";
+        width: 54px;
+        height: 54px;
+        border-radius: 50%;
+        background: rgba(255, 254, 250, 0.9);
+        box-shadow: 0 12px 28px rgba(17, 29, 24, 0.18);
+      }
+
+      .video-play::after {
+        content: "";
+        position: absolute;
+        width: 0;
+        height: 0;
+        margin-left: 5px;
+        border-top: 12px solid transparent;
+        border-bottom: 12px solid transparent;
+        border-left: 18px solid var(--teal-deep);
+      }
+
+      .video-copy strong,
+      .video-copy span {
+        display: block;
+      }
+
+      .video-copy span {
+        margin-top: 7px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .task-input textarea {
+        min-height: 78px;
+        min-width: 0;
+        resize: vertical;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 12px 14px;
+        background: #ffffff;
+        color: var(--ink);
+        line-height: 1.55;
+      }
+
+      .task-input {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .task-input input {
+        min-height: 46px;
+        min-width: 0;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 0 14px;
+        background: #ffffff;
+        color: var(--ink);
+      }
+
+      .demo-response {
+        display: none;
+        margin-top: 12px;
+        border: 1px solid rgba(8, 118, 110, 0.2);
+        border-radius: var(--radius);
+        padding: 14px;
+        background:
+          linear-gradient(135deg, rgba(232, 246, 241, 0.92), rgba(255, 255, 255, 0.96)),
+          #ffffff;
+        box-shadow: 0 18px 44px rgba(17, 29, 24, 0.08);
+      }
+
+      .demo-response.is-visible {
+        display: block;
+        animation: noticeIn 0.28s var(--ease) both;
+      }
+
+      .demo-response-head {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .demo-response strong,
+      .demo-response span {
+        display: block;
+      }
+
+      .demo-response-head strong {
+        font-size: 15px;
+      }
+
+      .demo-response-head span {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .demo-confirm-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .demo-confirm-grid article {
+        min-height: 94px;
+        border: 1px solid rgba(220, 231, 223, 0.92);
+        border-radius: 8px;
+        padding: 12px;
+        background: #ffffff;
+      }
+
+      .demo-confirm-grid small {
+        display: block;
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .demo-generated-line {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 12px;
+      }
+
+      .work-stack {
+        display: grid;
+        gap: 10px;
+        align-content: start;
+        position: sticky;
+        top: 92px;
+        max-height: calc(100vh - 112px);
+        overflow: auto;
+        padding-right: 2px;
+      }
+
+      .work-card {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: start;
+        min-height: 108px;
+        padding: 16px;
+      }
+
+      .work-card .pill {
+        justify-self: end;
+      }
+
+      .work-card strong,
+      .work-card span {
+        display: block;
+      }
+
+      .work-card span {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .work-card.is-high {
+        border-color: rgba(8, 118, 110, 0.32);
+        background:
+          linear-gradient(120deg, rgba(226, 243, 239, 0.86), rgba(255, 254, 250, 0.92)),
+          #ffffff;
+      }
+
+      .pricing-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .price-card {
+        position: relative;
+        min-height: 220px;
+        overflow: hidden;
+        padding: 22px;
+        color: var(--ink);
+        text-align: left;
+        transition:
+          transform 0.24s var(--ease),
+          border-color 0.24s var(--ease),
+          background 0.24s var(--ease);
+      }
+
+      .price-card:hover,
+      .price-card.is-active {
+        border-color: rgba(8, 118, 110, 0.34);
+        background: #ffffff;
+        transform: translateY(-5px);
+      }
+
+      .price-card.featured {
+        border-color: rgba(8, 118, 110, 0.34);
+        background: #ffffff;
+      }
+
+      .price {
+        margin: 18px 0 12px;
+        font-size: 44px;
+        font-weight: 900;
+      }
+
+      .price-card p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .pricing-detail {
+        display: grid;
+        grid-template-columns: minmax(0, 0.72fr) minmax(260px, 0.38fr) auto;
+        gap: 16px;
+        align-items: center;
+        margin-top: 14px;
+        padding: 22px;
+      }
+
+      .pricing-detail h3,
+      .pricing-detail p {
+        margin-bottom: 0;
+      }
+
+      .pricing-detail h3 {
+        margin-bottom: 8px;
+        font-size: 28px;
+      }
+
+      .pricing-detail p {
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .pricing-detail ul {
+        display: grid;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        color: var(--ink-soft);
+        list-style: none;
+        font-size: 14px;
+        line-height: 1.55;
+      }
+
+      .pricing-detail li::before {
+        content: "✓ ";
+        color: var(--teal);
+        font-weight: 900;
+      }
+
+      .notice-card {
+        display: none;
+        margin-top: 16px;
+        border: 1px solid rgba(8, 118, 110, 0.2);
+        border-radius: var(--radius);
+        padding: 14px;
+        background: var(--teal-soft);
+        color: var(--teal-deep);
+        font-size: 14px;
+        font-weight: 800;
+        line-height: 1.65;
+      }
+
+      .notice-card.is-visible {
+        display: block;
+        animation: noticeIn 0.26s var(--ease) both;
+      }
+
+      .toast {
+        position: fixed;
+        right: 18px;
+        bottom: 18px;
+        z-index: 80;
+        max-width: min(420px, calc(100vw - 36px));
+        border: 1px solid rgba(8, 118, 110, 0.26);
+        border-radius: var(--radius);
+        padding: 14px 16px;
+        background: rgba(255, 254, 250, 0.94);
+        box-shadow: var(--shadow);
+        color: var(--ink-soft);
+        font-size: 14px;
+        font-weight: 800;
+        line-height: 1.6;
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(10px);
+        transition:
+          opacity 0.24s var(--ease),
+          transform 0.24s var(--ease);
+      }
+
+      .toast.is-visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .step-modal {
+        position: fixed;
+        z-index: 100;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 20px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.14s ease;
+      }
+
+      .step-modal.is-open {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      .step-modal-backdrop {
+        position: absolute;
+        inset: 0;
+        background: rgba(17, 29, 24, 0.34);
+      }
+
+      body.is-auth-mode .step-modal {
+        padding: 24px;
+        background:
+          radial-gradient(circle at 82% 20%, rgba(220, 162, 69, 0.13), transparent 32%),
+          radial-gradient(circle at 16% 82%, rgba(15, 166, 151, 0.11), transparent 36%),
+          linear-gradient(150deg, rgba(248, 251, 248, 0.98), rgba(255, 254, 250, 0.98));
+      }
+
+      body.is-auth-mode .step-modal-backdrop {
+        background: transparent;
+      }
+
+      .step-modal-panel {
+        position: relative;
+        z-index: 1;
+        width: min(920px, 100%);
+        overflow: hidden;
+        border: 1px solid rgba(220, 231, 223, 0.96);
+        border-radius: var(--radius);
+        padding: 28px;
+        background:
+          linear-gradient(135deg, rgba(226, 243, 239, 0.98), rgba(255, 254, 250, 0.96) 48%, rgba(255, 241, 215, 0.72)),
+          var(--paper);
+        box-shadow: var(--shadow);
+        transform: translateY(12px) scale(0.98);
+        transition: transform 0.16s var(--ease);
+        will-change: transform;
+        contain: layout paint;
+      }
+
+      .step-modal.is-open .step-modal-panel {
+        transform: translateY(0) scale(1);
+      }
+
+      .step-modal-panel h3 {
+        margin-bottom: 12px;
+        font-size: clamp(28px, 4vw, 48px);
+        line-height: 1.05;
+      }
+
+      .step-modal-panel p {
+        color: var(--ink-soft);
+        line-height: 1.7;
+      }
+
+      .entry-modal-panel {
+        width: min(780px, calc(100vw - 32px));
+        max-width: 780px;
+        padding: 0;
+        background: var(--paper);
+        box-shadow: 0 30px 90px rgba(17, 29, 24, 0.18);
+      }
+
+      body.is-auth-mode .entry-modal-panel {
+        width: min(1040px, calc(100vw - 48px));
+        max-width: 1040px;
+        max-height: calc(100vh - 48px);
+        overflow: auto;
+        box-shadow: 0 34px 88px rgba(17, 29, 24, 0.13);
+      }
+
+      .entry-auth-shell {
+        display: grid;
+        grid-template-columns: minmax(230px, 0.82fr) minmax(0, 1.18fr);
+        min-height: 456px;
+      }
+
+      body.is-auth-mode .entry-auth-shell {
+        grid-template-columns: minmax(280px, 0.88fr) minmax(0, 1.12fr);
+        min-height: min(660px, calc(100vh - 48px));
+      }
+
+      .entry-auth-brief {
+        display: grid;
+        align-content: space-between;
+        gap: 22px;
+        padding: 26px;
+        background:
+          linear-gradient(180deg, rgba(23, 33, 28, 0.96), rgba(12, 18, 15, 0.98)),
+          #111813;
+        color: #fffefa;
+      }
+
+      .entry-auth-brand {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .entry-auth-brand .jj-logo-mark {
+        width: 46px;
+        height: 46px;
+        border-color: rgba(255, 254, 250, 0.22);
+        box-shadow: 0 14px 28px rgba(0, 0, 0, 0.28);
+      }
+
+      .entry-auth-brand .jj-logo-mark::before {
+        color: #ffffff;
+      }
+
+      .entry-auth-brand .jj-logo-mark::after {
+        color: transparent;
+        background: transparent;
+        -webkit-text-stroke-color: #ffffff;
+        text-stroke-color: #ffffff;
+      }
+
+      .entry-auth-brand strong,
+      .entry-auth-brand small {
+        display: block;
+      }
+
+      .entry-auth-brand strong {
+        font-size: 19px;
+        line-height: 1.1;
+      }
+
+      .entry-auth-brand small {
+        margin-top: 3px;
+        color: rgba(255, 254, 250, 0.62);
+        font-size: 12px;
+        letter-spacing: 0;
+      }
+
+      .entry-auth-route {
+        display: grid;
+        gap: 10px;
+      }
+
+      .entry-auth-route span {
+        min-height: 38px;
+        padding: 10px 12px;
+        border: 1px solid rgba(255, 254, 250, 0.12);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.06);
+        color: rgba(255, 254, 250, 0.88);
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .entry-auth-brief p {
+        margin: 0;
+        color: rgba(255, 254, 250, 0.62);
+        font-size: 12px;
+        line-height: 1.7;
+      }
+
+      .entry-auth-main {
+        display: grid;
+        align-content: center;
+        padding: 34px 34px 30px;
+        background:
+          linear-gradient(180deg, rgba(255, 254, 250, 0.98), rgba(248, 251, 248, 0.98)),
+          var(--paper);
+      }
+
+      .entry-auth-main h3 {
+        max-width: 420px;
+        margin: 7px 0 10px;
+        font-size: clamp(28px, 4vw, 38px);
+        line-height: 1.12;
+        letter-spacing: 0;
+      }
+
+      .entry-auth-main > p:not(.eyebrow) {
+        max-width: 440px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.75;
+      }
+
+      .entry-login-form {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        margin: 24px 0 12px;
+      }
+
+      .qr-login-button {
+        position: absolute;
+        z-index: 3;
+        top: 16px;
+        right: 58px;
+        display: inline-flex;
+        gap: 7px;
+        align-items: center;
+        min-height: 36px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0 12px;
+        background: rgba(255, 255, 255, 0.86);
+        color: var(--ink);
+        font: inherit;
+        font-size: 12px;
+        font-weight: 900;
+        cursor: pointer;
+      }
+
+      .qr-dot-grid {
+        width: 13px;
+        height: 13px;
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 3px;
+      }
+
+      .qr-dot-grid::before,
+      .qr-dot-grid::after {
+        content: "";
+      }
+
+      .qr-dot-grid,
+      .qr-dot-grid::before,
+      .qr-dot-grid::after {
+        background:
+          linear-gradient(#111813 0 0) 0 0 / 5px 5px no-repeat,
+          linear-gradient(#111813 0 0) 8px 0 / 5px 5px no-repeat,
+          linear-gradient(#111813 0 0) 0 8px / 5px 5px no-repeat,
+          linear-gradient(#111813 0 0) 8px 8px / 5px 5px no-repeat;
+      }
+
+      .login-choice {
+        display: grid;
+        align-content: center;
+        justify-items: start;
+        min-height: 82px;
+        padding: 14px 16px;
+        text-align: left;
+        font-size: 17px;
+      }
+
+      .login-choice span,
+      .login-choice small {
+        display: block;
+      }
+
+      .login-choice span {
+        font-weight: 900;
+      }
+
+      .login-choice small {
+        margin-top: 5px;
+        color: rgba(255, 254, 250, 0.68);
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.4;
+      }
+
+      .login-choice.button-ghost small {
+        color: var(--muted);
+      }
+
+      .entry-auth-footnote {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .entry-auth-footnote span {
+        min-height: 26px;
+        padding: 5px 9px;
+        border: 1px solid rgba(8, 118, 110, 0.14);
+        border-radius: 999px;
+        background: #f3faf7;
+        color: var(--teal);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .entry-field {
+        display: grid;
+        gap: 7px;
+      }
+
+      .entry-field span {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .entry-field input {
+        width: 100%;
+        min-height: 48px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 0 14px;
+        background: #ffffff;
+        color: var(--ink);
+        font: inherit;
+      }
+
+      .entry-field input:focus {
+        outline: none;
+        border-color: rgba(8, 118, 110, 0.42);
+        box-shadow: 0 0 0 4px rgba(8, 118, 110, 0.08);
+      }
+
+      .entry-login-actions {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .entry-stage-note {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .entry-mode-area[hidden],
+      .entry-login-form[hidden] {
+        display: none;
+      }
+
+      .entry-stage-title {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 22px;
+      }
+
+      .entry-stage-title strong {
+        font-size: 16px;
+      }
+
+      .entry-mode-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin: 14px 0 0;
+      }
+
+      .entry-mode-card {
+        display: grid;
+        gap: 7px;
+        min-height: 132px;
+        padding: 16px;
+        border: 1px solid rgba(220, 231, 223, 0.92);
+        border-radius: var(--radius);
+        background: rgba(255, 254, 250, 0.88);
+        color: var(--ink);
+        cursor: pointer;
+        font: inherit;
+        text-align: left;
+        transition:
+          transform 0.22s var(--ease),
+          border-color 0.22s var(--ease),
+          background 0.22s var(--ease),
+          box-shadow 0.22s var(--ease);
+      }
+
+      .entry-mode-card:hover,
+      .entry-mode-card.is-active {
+        border-color: rgba(8, 118, 110, 0.42);
+        background: #ffffff;
+        transform: translateY(-3px);
+        box-shadow: 0 14px 30px rgba(17, 29, 24, 0.08);
+      }
+
+      .entry-mode-card strong {
+        display: block;
+        margin-top: 2px;
+        font-size: 19px;
+      }
+
+      .entry-mode-card small {
+        display: block;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .step-list {
+        display: grid;
+        gap: 8px;
+        margin: 20px 0;
+      }
+
+      .step-list article {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 10px;
+        align-items: center;
+        border: 1px solid rgba(220, 231, 223, 0.92);
+        border-radius: var(--radius);
+        padding: 12px;
+        background: rgba(255, 254, 250, 0.76);
+      }
+
+      .step-list span {
+        display: grid;
+        width: 34px;
+        height: 34px;
+        place-items: center;
+        border-radius: 50%;
+        background: var(--teal-soft);
+        color: var(--teal-deep);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .step-list strong {
+        display: block;
+      }
+
+      .step-list small {
+        display: block;
+        margin-top: 3px;
+        color: var(--muted);
+        line-height: 1.4;
+      }
+
+      .modal-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .modal-close {
+        position: absolute;
+        top: 14px;
+        right: 14px;
+        display: grid;
+        width: 36px;
+        height: 36px;
+        place-items: center;
+        border: 1px solid var(--line);
+        border-radius: 50%;
+        background: rgba(255, 254, 250, 0.82);
+        color: var(--ink);
+        font-weight: 900;
+      }
+
+      .reveal {
+        opacity: 0;
+        transform: translateY(18px);
+        transition:
+          opacity 0.58s var(--ease),
+          transform 0.58s var(--ease);
+      }
+
+      .reveal.is-visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .reveal:target {
+        opacity: 1;
+        transform: translateY(0);
+        transition: none;
+      }
+
+      .footer {
+        width: min(1400px, calc(100% - 56px));
+        margin: 0 auto;
+        padding: 80px 0 38px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      @keyframes dashMove {
+        to {
+          stroke-dashoffset: -140;
+        }
+      }
+
+      @media (max-width: 1120px) {
+        .topbar {
+          grid-template-columns: auto minmax(0, 1fr) auto;
+        }
+
+        .navlinks {
+          display: none;
+        }
+
+        .hero,
+        .section-head,
+        .flow-stage,
+        .path-detail,
+        .merchant-guide-grid,
+        .guide-phase-strip,
+        .guide-step-notes,
+        .dashboard-slice,
+        .operating-stack,
+        .china-stack {
+          grid-template-columns: 1fr;
+        }
+
+        .hero {
+          min-height: auto;
+        }
+
+        .entry-auth-shell {
+          grid-template-columns: 1fr;
+        }
+
+        .entry-auth-brief {
+          min-height: 220px;
+        }
+
+        .command-room {
+          min-height: 560px;
+        }
+
+        .path-grid,
+        .pricing-grid,
+        .commerce-rail,
+        .stack-grid,
+        .china-stack-grid,
+        .api-connector-grid,
+        .api-safety-list {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .commerce-top {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 680px) {
+        .topbar,
+        .hero,
+        .section,
+        .footer {
+          width: auto;
+        }
+
+        .reveal {
+          opacity: 1;
+          transform: none;
+          transition: none;
+        }
+
+        .topbar {
+          padding: 12px 14px;
+          gap: 10px;
+          grid-template-columns: minmax(0, 1fr) auto;
+        }
+
+        .brand {
+          gap: 9px;
+        }
+
+        .brand .jj-logo-mark {
+          width: 38px;
+          height: 38px;
+          border-radius: 10px;
+        }
+
+        .brand .jj-logo-mark::before {
+          font-size: 28px;
+        }
+
+        .brand .jj-logo-copy strong {
+          font-size: 14px;
+          line-height: 1.1;
+        }
+
+        .brand .jj-logo-copy em {
+          font-size: 10px;
+        }
+
+        .topbar > .button {
+          min-height: 38px;
+          padding: 0 12px;
+          font-size: 13px;
+        }
+
+        .hero,
+        .section,
+        .footer {
+          margin-right: 16px;
+          margin-left: 16px;
+        }
+
+        .hero {
+          gap: 22px;
+          padding-top: 42px;
+        }
+
+        .hero-actions {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 8px;
+          margin-bottom: 20px;
+        }
+
+        .hero-actions .button,
+        .hero-actions .button-ghost,
+        .hero-actions .button-text {
+          width: 100%;
+        }
+
+        .proof-row {
+          gap: 6px;
+        }
+
+        .pill,
+        .score-pill {
+          min-height: 28px;
+          padding: 5px 9px;
+          font-size: 11px;
+        }
+
+        h1 {
+          font-size: 34px;
+          line-height: 1.1;
+          margin-bottom: 18px;
+        }
+
+        h2 {
+          font-size: 30px;
+          line-height: 1.08;
+        }
+
+        .section-head {
+          gap: 12px;
+          margin-bottom: 18px;
+        }
+
+        .lead,
+        .flow-detail p {
+          font-size: 15px;
+          line-height: 1.65;
+        }
+
+        .section-note {
+          font-size: 14px;
+          line-height: 1.65;
+        }
+
+        .command-room {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+          min-height: 0;
+          overflow: visible;
+          padding: 14px;
+          transform: none;
+        }
+
+        .ceo-core {
+          position: relative;
+          top: auto;
+          left: auto;
+          grid-column: 1 / -1;
+          width: 100%;
+          min-height: 0;
+          padding: 18px;
+          border-radius: var(--radius);
+          transform: none;
+        }
+
+        .command-room:hover .ceo-core {
+          transform: none;
+        }
+
+        .ceo-core strong {
+          font-size: 25px;
+        }
+
+        .role-node {
+          position: relative;
+          inset: auto;
+          width: auto;
+          min-height: 108px;
+          padding: 12px;
+          transform: none;
+        }
+
+        .role-node:hover {
+          transform: none;
+        }
+
+        body.is-auth-mode {
+          overflow: auto;
+        }
+
+        .step-modal {
+          padding: 12px;
+        }
+
+        body.is-auth-mode .step-modal {
+          position: absolute;
+          min-height: 100vh;
+          padding: 12px;
+        }
+
+        .entry-modal-panel {
+          width: min(100%, 520px);
+          max-height: calc(100vh - 24px);
+          overflow: auto;
+        }
+
+        body.is-auth-mode .entry-modal-panel {
+          width: 100%;
+          max-height: none;
+        }
+
+        body.is-auth-mode .entry-auth-shell {
+          min-height: 0;
+        }
+
+        .entry-auth-brief,
+        .entry-auth-main {
+          padding: 22px;
+        }
+
+        .qr-login-button {
+          right: 56px;
+          background: #fffefa;
+        }
+
+        .node-market,
+        .node-media,
+        .node-service {
+          left: auto;
+        }
+
+        .node-listing,
+        .node-ads,
+        .node-finance {
+          right: auto;
+        }
+
+        .node-market,
+        .node-listing {
+          top: auto;
+        }
+
+        .node-media,
+        .node-ads {
+          top: auto;
+        }
+
+        .node-service,
+        .node-finance {
+          bottom: auto;
+        }
+
+        .signal-canvas,
+        .flow-line {
+          display: none;
+        }
+
+        .path-grid,
+        .pricing-grid,
+        .commerce-rail,
+        .stack-grid,
+        .china-stack-grid,
+        .entry-mode-grid,
+        .entry-login-form,
+        .guide-choice-grid,
+        .asset-board,
+        .demo-confirm-grid,
+        .video-preview-card,
+        .video-strip,
+        .commerce-top,
+        .pricing-detail,
+        .task-input {
+          grid-template-columns: 1fr;
+        }
+
+        .guide-phase-strip {
+          display: flex;
+          overflow-x: auto;
+          gap: 8px;
+          padding-bottom: 4px;
+          scroll-snap-type: x proximity;
+        }
+
+        .guide-phase {
+          flex: 0 0 144px;
+          scroll-snap-align: start;
+        }
+
+        .path-card {
+          min-height: 0;
+          padding: 18px;
+        }
+
+        .path-card strong {
+          font-size: 22px;
+        }
+
+        .dashboard-slice {
+          gap: 12px;
+        }
+
+        .chat-panel {
+          padding: 16px;
+        }
+
+        .permission-strip {
+          grid-template-columns: 1fr;
+        }
+
+        .bubble {
+          max-width: 100%;
+          margin-left: 0;
+          padding: 14px;
+          font-size: 14px;
+          line-height: 1.7;
+        }
+
+        .report-card {
+          padding: 14px;
+        }
+
+        .report-head {
+          grid-template-columns: 1fr;
+          gap: 10px;
+        }
+
+        .work-stack {
+          position: static;
+          max-height: none;
+          overflow: visible;
+          padding-right: 0;
+        }
+
+        .work-card,
+        .check-row {
+          grid-template-columns: 1fr;
+        }
+
+        .work-card .pill,
+        .check-row .pill {
+          justify-self: start;
+        }
+
+        .rank-row {
+          grid-template-columns: auto minmax(0, 1fr);
+          align-items: start;
+        }
+
+        .rank-row .score-pill {
+          grid-column: 2;
+          justify-self: start;
+        }
+
+        .commerce-band {
+          width: calc(100% - 32px);
+          margin-right: auto;
+          margin-left: auto;
+          padding: 16px;
+        }
+
+        .signal-card {
+          min-height: 0;
+        }
+
+        .stack-lead,
+        .path-copy,
+        .flow-detail,
+        .guide-panel,
+        .guide-summary,
+        .pricing-detail {
+          padding: 18px;
+        }
+
+        .flow-detail,
+        .stack-card,
+        .price-card,
+        .guide-step-note,
+        .guide-choice,
+        .asset-card.has-image,
+        .work-card {
+          min-height: 0;
+        }
+
+        .flow-tab {
+          min-height: 0;
+          padding: 12px;
+        }
+
+        .path-copy h3 {
+          font-size: 28px;
+        }
+
+        .guide-choice {
+          padding: 14px;
+        }
+
+        .guide-choice em {
+          position: static;
+          justify-self: start;
+          margin-top: 6px;
+        }
+
+        .task-input .button,
+        .task-input .button-ghost,
+        .entry-login-actions .button,
+        .entry-login-actions .button-ghost {
+          width: 100%;
+        }
+
+        .asset-copy {
+          padding: 10px;
+        }
+
+        .video-strip {
+          grid-template-columns: repeat(5, minmax(44px, 1fr));
+          overflow-x: auto;
+        }
+
+        .video-strip span {
+          min-height: 46px;
+          padding: 6px 4px;
+          font-size: 11px;
+        }
+
+        .cursor-glow {
+          display: none;
+        }
+
+        .modal-actions .button,
+        .modal-actions .button-ghost {
+          width: 100%;
+        }
+
+        body.is-onboarding-mode #merchant-guide {
+          width: calc(100% - 24px);
+          padding: 12px 0 24px;
+        }
+
+        body.is-onboarding-mode .guide-app-topbar {
+          align-items: flex-start;
+          flex-wrap: wrap;
+          gap: 10px;
+          padding: 12px;
+        }
+
+        .guide-app-identity {
+          flex-wrap: wrap;
+        }
+      }
+
+      @media (max-width: 420px) {
+        .topbar {
+          padding: 10px;
+        }
+
+        .hero,
+        .section,
+        .footer {
+          margin-right: 10px;
+          margin-left: 10px;
+        }
+
+        h1 {
+          font-size: 31px;
+        }
+
+        h2 {
+          font-size: 27px;
+        }
+
+        .command-room,
+        .path-grid,
+        .pricing-grid,
+        .commerce-rail,
+        .stack-grid,
+        .china-stack-grid,
+        .api-connector-grid,
+        .api-safety-list {
+          grid-template-columns: 1fr;
+        }
+
+        .commerce-band {
+          width: calc(100% - 20px);
+        }
+
+        .entry-auth-brief,
+        .entry-auth-main,
+        .step-modal-panel {
+          padding: 18px;
+        }
+
+        .price {
+          font-size: 36px;
+        }
+      }
+
+      @keyframes noticeIn {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="scroll-progress" aria-hidden="true"><span></span></div>
+    <div class="cursor-glow" id="cursorGlow" aria-hidden="true"></div>
+    <nav class="topbar">
+      <a class="brand" href="#top" aria-label="捷境首页">
+        <span class="jj-logo-mark" aria-hidden="true"><i></i><b></b></span>
+        <span class="jj-logo-copy">
+          <strong>捷境</strong>
+          <em>JIEJING</em>
+        </span>
+      </a>
+      <div class="navlinks" aria-label="页面导航">
+        <a href="#logic">自动化链路</a>
+        <a href="#workspace">AI CEO</a>
+        <a href="#paths">商家起点</a>
+        <a href="#pricing">订阅</a>
+      </div>
+      <button class="button" type="button" id="topLogin">登录 / 注册</button>
+    </nav>
+
+    <header class="hero" id="top">
+      <section>
+        <p class="eyebrow">捷境 Jiejing / eBay 自动化工作台</p>
+        <h1>让 eBay 经营少一点重复，多一点自动推进。</h1>
+        <p class="lead">
+          捷境先把 eBay 做深：开店资料、Seller Hub、Listing、素材、订单、客服、物流、费用和退货，统一交给一个 AI CEO 入口整理。AI 负责预填、生成草稿和推进队列；发布、改价、退款、广告预算和平台授权，仍由商家确认。
+        </p>
+        <div class="hero-actions">
+          <button class="button" type="button" id="heroLogin">登录进入体验</button>
+          <a class="button-ghost" href="#workspace">看工作台示例</a>
+          <a class="button-text" href="#paths">了解商家起点</a>
+        </div>
+        <div class="proof-row" aria-label="产品信任边界">
+          <span class="pill green">一个 AI CEO 入口</span>
+          <span class="pill">eBay 优先</span>
+          <span class="pill">资料自动整理</span>
+          <span class="pill">Listing/素材草稿</span>
+          <span class="pill">订单/客服草稿</span>
+          <span class="pill">关键动作先确认</span>
+          <span class="pill amber">完整体验路径</span>
+        </div>
+      </section>
+
+      <aside class="command-room" aria-label="AI CEO 调度工作模块">
+        <canvas class="signal-canvas" id="signalCanvas" aria-hidden="true"></canvas>
+        <svg class="flow-line" viewBox="0 0 640 660" aria-hidden="true">
+          <path d="M320 330 C210 170 160 135 120 110" />
+          <path d="M320 330 C430 170 480 135 520 110" />
+          <path d="M320 330 C170 330 140 310 110 300" />
+          <path d="M320 330 C470 330 500 310 530 300" />
+          <path d="M320 330 C210 500 170 520 130 560" />
+          <path d="M320 330 C430 500 470 520 510 560" />
+        </svg>
+        <div class="ceo-core">
+          <div>
+            <strong>AI CEO</strong>
+            <span>接目标 · 排队列 · 留记录 · 等确认</span>
+          </div>
+        </div>
+        <article class="role-node node-market">
+          <strong>市场与货源</strong>
+          <span>查需求、竞品、价格带、退货风险和供货可行性。</span>
+        </article>
+        <article class="role-node node-listing">
+          <strong>Listing 草稿</strong>
+          <span>生成标题、描述、商品参数、类目和上架资料。</span>
+        </article>
+        <article class="role-node node-media">
+          <strong>素材工坊</strong>
+          <span>规划主图、场景图、详情页和商品视频脚本。</span>
+        </article>
+        <article class="role-node node-ads">
+          <strong>广告费用</strong>
+          <span>只读费用和表现，预算变更先确认。</span>
+        </article>
+        <article class="role-node node-service">
+          <strong>客服物流</strong>
+          <span>客服草稿、售后、tracking 和时效风险。</span>
+        </article>
+        <article class="role-node node-finance">
+          <strong>财务风控</strong>
+          <span>把成交费、广告费、订阅费、物流和退款预留算清楚。</span>
+        </article>
+      </aside>
+    </header>
+
+    <section class="commerce-band reveal" aria-label="捷境自动化链路总览">
+      <div class="commerce-top">
+        <div>
+          <p class="eyebrow">eBay 自动化链路</p>
+          <h2>把分散在后台里的动作，整理成一条可确认的流程。</h2>
+        </div>
+        <p class="section-note">
+          商家真正耗时间的是来回找入口、补字段、核费用、追物流、回消息。捷境把这些动作整理成任务队列：能自动做草稿的先做，缺资料的直接提问，涉及资金、刊登、广告、退款和买家消息发送的动作进入确认中心。
+        </p>
+      </div>
+      <div class="commerce-rail">
+        <article class="signal-card">
+          <span>01</span>
+          <strong>资料接入与货源整理</strong>
+          <small>货源图、店铺数据、价格带、供应商信息、退货风险。</small>
+        </article>
+        <article class="signal-card">
+          <span>02</span>
+          <strong>素材与视频</strong>
+          <small>主图、详情页、短视频脚本和实物一致性审核。</small>
+        </article>
+        <article class="signal-card">
+          <span>03</span>
+          <strong>Listing 草稿</strong>
+          <small>标题、描述、商品参数、类目、价格和政策。</small>
+        </article>
+        <article class="signal-card">
+          <span>04</span>
+          <strong>广告与费用只读</strong>
+          <small>只读表现、费用口径、预算变更先确认。</small>
+        </article>
+        <article class="signal-card">
+          <span>05</span>
+          <strong>订单与履约</strong>
+          <small>订单、tracking、handling time、退货和客服草稿。</small>
+        </article>
+        <article class="signal-card">
+          <span>06</span>
+          <strong>费用与过程报告</strong>
+          <small>成交费、订阅费、广告费、利润风险和过程记录。</small>
+        </article>
+      </div>
+    </section>
+
+    <main>
+      <section class="section reveal" id="logic">
+        <div class="section-head">
+          <div>
+          <p class="eyebrow">自动化系统</p>
+            <h2>商家看到的是进度、依据和下一步。</h2>
+          </div>
+          <p class="section-note">
+            AI CEO 接收目标后，工作模块会把任务做细：资料整理、草稿生成、费用核算、素材规划、客服物流和风险检查。界面只给商家看结果、依据、缺口和确认按钮。
+          </p>
+        </div>
+
+        <div class="operating-stack" aria-label="捷境 eBay 自动化系统架构">
+          <article class="panel stack-lead">
+            <p class="eyebrow">Cross-border Commerce OS</p>
+            <h3>不是聊天生成一段话，而是把 eBay 日常动作变成可复用流程。</h3>
+            <p>
+              一个入口接收任务，一个队列推进步骤：资料进来后，系统先归档和补缺，再生成素材、Listing、费用、客服和履约草稿；需要人判断的地方回到确认中心。当前只围绕 eBay 做深，先把开店、刊登、订单、退货、费用和账号表现这条链路跑顺。
+            </p>
+          </article>
+          <div class="stack-grid">
+            <article class="stack-card">
+              <span>01</span>
+              <strong>资料与货源整理</strong>
+              <p>把货源图、店铺数据、竞品样本、价格带、供应商信息和退货风险放在一起整理。</p>
+            </article>
+            <article class="stack-card">
+              <span>02</span>
+              <strong>商品内容工厂</strong>
+              <p>一张实拍图先过真实性和授权检查，再生成主图、详情页、多语言素材和视频草稿。</p>
+            </article>
+            <article class="stack-card">
+              <span>03</span>
+              <strong>刊登与本地化</strong>
+              <p>标题、商品参数、类目、业务政策、语言版本和平台差异统一进入草稿。</p>
+            </article>
+            <article class="stack-card">
+              <span>04</span>
+              <strong>履约与客服</strong>
+              <p>物流方式、handling time、tracking、客服口吻和退款风险先由 AI 预填，承诺必须确认。</p>
+            </article>
+            <article class="stack-card">
+              <span>05</span>
+              <strong>费用与利润风险</strong>
+              <p>成交费、订阅费、广告费、汇率、物流和退货预留一起进入费用整理和利润风险提醒。</p>
+            </article>
+            <article class="stack-card">
+              <span>06</span>
+              <strong>权限与确认中心</strong>
+              <p>OAuth、只读数据、发布、改价、退款、广告预算全部留下过程记录和确认边界。</p>
+            </article>
+          </div>
+          <div class="source-strip" aria-label="借鉴能力到捷境落地">
+            <span>AI 自动化入口</span>
+            <span>eBay 开店</span>
+            <span>商品素材</span>
+            <span>Listing 字段</span>
+            <span>业务政策</span>
+            <span>订单履约</span>
+            <span>退货退款</span>
+            <span>费用复盘</span>
+            <span>确认中心</span>
+          </div>
+          <section class="china-stack" aria-label="当前演示边界">
+            <div class="china-stack-head">
+          <p class="eyebrow">当前体验链路</p>
+          <h3>从起步向导到 AI CEO 工作台，先把一条 eBay 日常链路跑完整。</h3>
+            </div>
+            <div class="china-stack-grid">
+              <article class="stack-card">
+                <span>可体验</span>
+                <strong>eBay 起步向导</strong>
+                <p>登录后按四种商家身份进入向导，小白会走 eBay 注册资料、Seller Hub、只读授权、履约方式、利润底线和 AI 权限边界。</p>
+              </article>
+              <article class="stack-card">
+                <span>可体验</span>
+                <strong>第一条商品草稿</strong>
+                <p>从货源图或实拍图出发，生成标题、详情、商品参数、主图、场景图、详情页和口播脚本，发布前进入确认中心。</p>
+              </article>
+              <article class="stack-card">
+                <span>可体验</span>
+                <strong>客服与物流工作台</strong>
+                <p>订单列表、订单搜索、买家消息、tracking、延迟发货和退款风险先用体验数据跑通；授权接入后切换到店铺数据。</p>
+              </article>
+              <article class="stack-card">
+                <span>后续扩展</span>
+                <strong>货源库、子账号和真实投放</strong>
+                <p>供应商数据库、广告投放、子账号权限、自动发布、退款和扣费会放到后端、权限、日志和确认中心成熟后再开放。</p>
+              </article>
+            </div>
+          </section>
+        </div>
+
+        <div class="flow-stage">
+          <div class="flow-tabs" aria-label="工作流步骤">
+            <button class="flow-tab is-active" type="button" data-flow="goal">
+              <em>01</em>
+              <span><strong>AI CEO 接流程</strong><span>文字或语音布置任务。</span></span>
+            </button>
+            <button class="flow-tab" type="button" data-flow="sop">
+              <em>02</em>
+              <span><strong>拆成 eBay SOP</strong><span>把重复流程拆成可执行步骤。</span></span>
+            </button>
+            <button class="flow-tab" type="button" data-flow="roles">
+              <em>03</em>
+              <span><strong>AI 在后台处理</strong><span>结果整理好再给你看。</span></span>
+            </button>
+            <button class="flow-tab" type="button" data-flow="review">
+              <em>04</em>
+              <span><strong>回流确认中心</strong><span>商家只处理关键确认。</span></span>
+            </button>
+          </div>
+          <article class="panel flow-detail" aria-live="polite">
+            <p class="eyebrow" id="flowEyebrow">01 / AI CEO 接流程</p>
+            <h3 id="flowTitle">你不用先懂 eBay 后台，把想做的事告诉 AI CEO 就行。</h3>
+            <p id="flowBody">
+              小白可以说“带我从开店到第一条 Listing”，老店可以说“把我的 eBay 店接进来，先把商品、订单、客服和费用整理成自动化队列”。AI CEO 先把流程翻译成任务，再判断权限、费用、风险和人工确认点。
+            </p>
+            <div class="role-list" id="flowRoles">
+              <span>卖家阶段</span>
+              <span>平台权限</span>
+              <span>利润底线</span>
+              <span>人工确认</span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section reveal" id="paths">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">商家起点</p>
+            <h2>不同阶段，先省掉不同的重复流程。</h2>
+          </div>
+          <p class="section-note">
+            主页只让商家看懂自己属于哪类阶段。模拟状态下，登录或注册后先选择身份，再进入对应身份向导；eBay 资料、履约方式、权限边界和自动化边界在向导里先接住，完成后才进入 AI CEO 工作舱。
+          </p>
+        </div>
+        <div class="path-grid" aria-label="商家起点">
+          <button class="path-card is-active" type="button" data-path="newbie">
+            <span class="pill green">从 0 开始</span>
+            <strong>小白起步</strong>
+            <p>先把 eBay 注册、Seller Hub、只读授权、履约和第一条 Listing 走通。</p>
+          </button>
+          <button class="path-card" type="button" data-path="opened">
+            <span class="pill">先接入</span>
+            <strong>已有店铺接入</strong>
+            <p>先把 Seller Hub、Listing、订单、费用和业务政策接进捷境，再生成自动化任务队列。</p>
+          </button>
+          <button class="path-card" type="button" data-path="orders">
+            <span class="pill amber">提效率</span>
+            <strong>已有订单处理</strong>
+            <p>把订单、客服、tracking、退款风险和低利润订单集中送到确认中心。</p>
+          </button>
+          <button class="path-card" type="button" data-path="multi">
+            <span class="pill">管规则</span>
+            <strong>多店铺管理</strong>
+            <p>先建立店铺结构、团队权限、费用口径和跨店铺自动化规则。</p>
+          </button>
+        </div>
+        <div class="path-detail">
+          <article class="panel path-copy" aria-live="polite">
+            <p class="eyebrow" id="pathEyebrow">小白起步</p>
+            <h3 id="pathTitle">先看懂阶段，再进入对应向导。</h3>
+            <p id="pathBody">
+              小白先走 eBay 开店和第一条 Listing；已有店铺商家先接入店铺并减少重复操作；已有订单商家先自动化客服、物流和费用整理；多店铺商家先定权限和费用口径。
+            </p>
+            <div class="role-list" aria-label="登录后的承接流程">
+              <span>注册 / 登录</span>
+              <span>选择商家身份</span>
+              <span>完成身份向导</span>
+              <span>确认关键动作</span>
+            </div>
+          </article>
+          <aside class="panel checklist" id="pathChecklist" aria-label="路径步骤"></aside>
+        </div>
+      </section>
+
+      <section class="section reveal" id="merchant-guide" hidden>
+        <div class="guide-app-topbar">
+          <div class="guide-app-identity">
+            <a class="brand" href="#top" aria-label="捷境 Jiejing">
+              <span class="jj-logo-mark" aria-hidden="true"></span>
+              <span class="brand-copy"><strong>捷境</strong><small>Jiejing AI CEO</small></span>
+            </a>
+            <span class="pill green">登录后向导</span>
+          </div>
+          <button class="button-text" type="button" id="guideExitToHome">返回官网</button>
+        </div>
+        <div class="section-head">
+          <div>
+            <p class="eyebrow" id="merchantGuideEyebrow">身份专属向导</p>
+            <h2 id="merchantGuideTitle">先让 AI 知道边界，后面工作流才会稳。</h2>
+          </div>
+          <p class="section-note" id="merchantGuideNote">
+            这一步只在登录并选完身份后出现。系统会按 eBay 实际经营顺序给出推荐路线：先接账号/API 和业务边界，再整理货源履约、Listing 素材、费用利润、客服售后和确认权限；暂时不想授权的接口，后面也能在设置里补接。
+          </p>
+        </div>
+        <div class="guide-phase-strip" id="guidePhaseStrip" aria-label="向导流程阶段"></div>
+        <div class="merchant-guide-grid">
+          <section class="panel guide-panel">
+            <p class="eyebrow" id="guideStepLabel">第 1/5 步</p>
+            <h3 id="guideTitle">你准备用哪种履约方式？</h3>
+            <p id="guideBody">履约方式会影响承诺时效、运费、退货、利润和账号风险。新手不确定时，先选最接近当前能力的方案，后面可以在设置里修改。</p>
+            <article class="guide-current-default" id="guideCurrentDefault" aria-label="系统推荐默认选项"></article>
+            <div class="guide-step-notes" id="guideStepNotes" aria-label="当前步骤说明"></div>
+            <div class="guide-choice-grid" id="guideChoices" aria-label="自动化边界选项"></div>
+            <div class="hero-actions">
+              <button class="button-ghost" type="button" id="guideBack">上一步</button>
+              <button class="button" type="button" id="guideNext">下一步</button>
+              <button class="button-text" type="button" id="guideSkipToWorkspace">保存并进入工作舱</button>
+            </div>
+          </section>
+          <aside class="panel guide-summary">
+            <p class="eyebrow">向导步骤 · 可点击跳转</p>
+            <article class="guide-default-route" id="guideDefaultRoute" aria-label="推荐默认路线"></article>
+            <div id="guideSummary"></div>
+            <article class="guide-summary-next">
+              <strong>完成向导后进入工作舱</strong>
+              <span>AI CEO 会按这些边界推进当前主线。跳过的 eBay、货源、费用和物流接口，后面在「设置与账户」继续补接。</span>
+            </article>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section reveal" id="workspace">
+        <div class="section-head">
+          <div>
+          <p class="eyebrow">AI CEO 工作台演示</p>
+          <h2>你说目标，AI CEO 把它变成可推进的 eBay 任务队列。</h2>
+        </div>
+        <p class="section-note">
+          这里是公开页演示图，不是登录后的完整后台。它展示 AI CEO 如何把一个 eBay 流程拆成资料整理、素材草稿、费用核算、履约风险和确认中心；正式进入工作舱仍要先登录、选身份、走向导。
+        </p>
+        </div>
+        <div class="dashboard-slice">
+          <section class="panel chat-panel">
+            <div class="permission-strip">
+              <div>
+                <strong id="workspaceScopeTitle">当前可执行范围：调研、供货判断、素材草稿</strong>
+                <span id="workspaceScopeBody">AI 可以先生成方案和过程记录；发布、广告、扣费、退款和平台授权默认暂停，进入确认中心。</span>
+              </div>
+              <span class="pill green" id="workspaceModePill">确认后执行</span>
+            </div>
+            <div class="bubble">我：我想先找一批适合跨境代发的小件产品。你从 Amazon 热门趋势里筛 10 个候选品，重点看退货率低、售后少、1688 供货稳定、体积重量适合从国内发货，最后按优先级给我结论。</div>
+            <div class="bubble ai">
+              AI CEO：收到。我会先看 Amazon 热度与评论痛点，再排除高退货类目，复核 1688 供货密度、发货体积和 eBay 可刊登风险。以下为体验数据，不代表真实实时抓取。
+            </div>
+            <article class="report-card">
+              <div class="report-head">
+                <div>
+                  <strong>跨平台候选品初筛结果</strong>
+                  <span>优先避开尺码纠纷、电子故障、易碎运输和高售后品类；更偏轻小件、标准化、1688 供货稳定、适合国内发货的产品。</span>
+                </div>
+                <span class="pill amber">体验数据</span>
+              </div>
+              <div class="product-rank">
+                <div class="rank-row is-picked">
+                  <em>#1</em>
+                  <div><strong>旅行压缩收纳袋套装</strong><small>轻小、非易碎、无尺码；需要确认采购价、包装尺寸、是否可用供应商图片。</small></div>
+                  <span class="score-pill">低退货</span>
+                  <span class="score-pill">优先</span>
+                </div>
+                <div class="rank-row">
+                  <em>#2</em>
+                  <div><strong>桌面线缆收纳盒</strong><small>需求稳定、包装体积可控，但同质化较高，需要靠素材和组合规格做差异。</small></div>
+                  <span class="score-pill">稳定</span>
+                  <span class="score-pill">备选</span>
+                </div>
+                <div class="rank-row">
+                  <em>#3</em>
+                  <div><strong>抽屉分隔收纳板</strong><small>低破损、低技术售后，适合多规格组合。</small></div>
+                  <span class="score-pill">低风险</span>
+                  <span class="score-pill">备选</span>
+                </div>
+                <div class="rank-row">
+                  <em>4-10</em>
+                  <div><strong>门后挂钩、厨房量勺、行李箱分装瓶、硅胶防溅垫等</strong><small>已进入候选池，下一步等待采购价、包装重量、橙联费用和利润安全线复核。</small></div>
+                  <span class="score-pill">待复核</span>
+                  <span class="score-pill">7 个</span>
+                </div>
+              </div>
+            </article>
+            <div class="bubble">
+              我：先定旅行压缩收纳袋这条线。我去 1688 找货源图，你拿到图后不要直接照搬供应商素材，先做授权和合规检查，再重做成我们自己的产品图，并给我一个 10 秒短视频方案。
+              <figure class="chat-attachment">
+                <img src="assets/travel-compression-source.png" alt="旅行压缩收纳袋货源图" loading="lazy" />
+                <figcaption>已上传：旅行压缩收纳袋货源图。先做授权、实物一致性、体积重量和 eBay 可刊登性检查。</figcaption>
+              </figure>
+            </div>
+            <div class="bubble ai">
+              AI CEO：可以。上传货源图后，我会先确认图片授权、实物一致性和平台禁词，再生成白底主图、场景图、卖点图和 10 秒视频分镜。发布、广告预算和最终售价会暂停在确认中心等你确认。
+            </div>
+            <article class="report-card">
+              <div class="report-head">
+                <div>
+                  <strong>素材生成汇报：旅行压缩收纳袋套装</strong>
+                  <span>已生成更适合上架展示的主图、场景图、卖点细节图、详情页图和 10 秒短视频分镜。下一步只推进到草稿，不自动发布；供应商授权、实物一致性、售价和广告预算仍需商家确认。</span>
+                </div>
+                <span class="pill green">Ready for Review</span>
+              </div>
+              <div class="asset-board">
+                <article class="asset-card has-image">
+                  <img src="assets/travel-compression-main-v2.png" alt="旅行压缩收纳袋高转化白底主图" loading="lazy" />
+                  <div class="asset-copy">
+                    <strong>高转化主图</strong>
+                    <span>完整套装铺开，强调件数、颜色和收纳价值。</span>
+                  </div>
+                </article>
+                <article class="asset-card has-image">
+                  <img src="assets/travel-compression-scene-v2.png" alt="旅行压缩收纳袋旅行场景图" loading="lazy" />
+                  <div class="asset-copy">
+                    <strong>旅行场景图</strong>
+                    <span>打开行李箱直接看到省空间和出行秩序。</span>
+                  </div>
+                </article>
+                <article class="asset-card has-image">
+                  <img src="assets/travel-compression-feature-v2.png" alt="旅行压缩收纳袋卖点细节图" loading="lazy" />
+                  <div class="asset-copy">
+                    <strong>卖点细节图</strong>
+                    <span>材质、拉链、网面和手柄细节更有质感。</span>
+                  </div>
+                </article>
+                <article class="asset-card has-image detail-card">
+                  <img src="assets/travel-compression-detail-v2.png" alt="旅行压缩收纳袋详情页图" loading="lazy" />
+                  <div class="asset-copy">
+                    <strong>详情页图</strong>
+                    <span>把套装、装箱、细节和清单组合成详情页视觉。</span>
+                  </div>
+                </article>
+              </div>
+              <div class="video-preview-card">
+                <div class="video-thumb">
+                  <img src="assets/travel-compression-video-cover.png" alt="旅行压缩收纳袋短视频封面" loading="lazy" />
+                  <span class="video-play" aria-hidden="true"></span>
+                </div>
+                <div class="video-copy">
+                  <strong>10 秒短视频封面</strong>
+                  <span>先用封面图展示视频方向：痛点、压缩、分类、装箱和卖点收口。正式发布前仍需确认素材来源和实物一致性。</span>
+                </div>
+              </div>
+              <div class="video-strip" aria-label="10 秒视频分镜">
+                <span>0-2s<br />痛点</span>
+                <span>2-4s<br />压缩</span>
+                <span>4-6s<br />分类</span>
+                <span>6-8s<br />装箱</span>
+                <span>8-10s<br />卖点收口</span>
+              </div>
+            </article>
+            <form class="task-input" id="ceoDemoForm">
+              <textarea id="ceoDemoInput" aria-label="任务输入">我已经找到 1688 货源图。请先检查授权、实物一致性和平台合规，再生成 6 张产品图、10 秒短视频分镜，并列出发布前必须由我确认的事项。</textarea>
+              <button class="button-ghost" type="button" id="voiceDemo">语音布置</button>
+              <button class="button" type="submit">发送</button>
+            </form>
+            <div class="demo-response" id="ceoDemoResponse" aria-live="polite"></div>
+          </section>
+          <aside class="work-stack">
+            <article class="panel work-card is-high">
+              <div><strong>货源判断模块</strong><span>根据商家给的图片、链接和采购信息，整理适合 eBay 的判断依据。</span></div>
+              <span class="pill green">完成</span>
+            </article>
+            <article class="panel work-card is-high">
+              <div><strong>采购信息模块</strong><span>检查采购价、包装重量、发货方式、退换风险和供应商图片授权。</span></div>
+              <span class="pill green">完成</span>
+            </article>
+            <article class="panel work-card is-high">
+              <div><strong>素材生成模块</strong><span>根据货源图生成自有产品图、卖点图和 10 秒视频分镜。</span></div>
+              <span class="pill amber" id="assetStatus">等上传图</span>
+            </article>
+            <article class="panel work-card">
+              <div><strong>风控与确认中心</strong><span>供应商授权、素材一致性、平台禁售词、发布和广告预算仍需商家确认。</span></div>
+              <span class="pill red" id="riskStatus">需确认</span>
+            </article>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section reveal" id="pricing">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">订阅</p>
+            <h2>先免费用起来，再按店铺数量和自动化深度升级。</h2>
+          </div>
+          <p class="section-note">
+            注册送 1 个月单店铺版体验。价格仍为演示占位，正式上线前会结合模型、平台接口、存储和支持成本重新核算。
+          </p>
+        </div>
+        <div class="pricing-grid">
+          <button class="price-card" type="button" data-plan="free">
+            <span class="pill">免费版</span>
+            <div class="price">¥0</div>
+            <p>基础功能可用：AI CEO 基础对话、通用流程模板、手动资料导入和基础工作记录。</p>
+          </button>
+          <button class="price-card featured is-active" type="button" data-plan="single">
+            <span class="pill green">注册送 1 个月</span>
+            <div class="price">¥99/月</div>
+            <p>适合 1 个 eBay 店铺，跑完整选品、上架、素材、客服物流和确认流程。</p>
+          </button>
+          <button class="price-card" type="button" data-plan="multi">
+            <span class="pill">多店铺版</span>
+            <div class="price">¥199/月</div>
+            <p>适合多个 eBay 店铺或多条商品线，流程模板按店铺复制、调整和复用。</p>
+          </button>
+          <button class="price-card" type="button" data-plan="pro">
+            <span class="pill">高级付费版</span>
+            <div class="price">¥299/月</div>
+            <p>适合更深自动化、更多流程模板、更细权限规则和更高处理额度。</p>
+          </button>
+        </div>
+        <aside class="panel pricing-detail" aria-live="polite">
+          <div>
+            <p class="eyebrow">当前订阅建议</p>
+            <h3 id="planTitle">单店铺版</h3>
+            <p id="planDesc">注册送 1 个月单店铺版体验。适合 1 个 eBay 店铺正式使用，把选品、Listing、素材、客服物流和费用整理放进 AI CEO 工作台。</p>
+          </div>
+          <ul id="planList"></ul>
+          <button class="button" type="button" id="choosePlan">登录后选择方案</button>
+        </aside>
+      </section>
+    </main>
+
+    <footer class="footer">
+      捷境演示页 · 当前用于体验产品流程，正式接入会经过后端、授权、权限、日志和确认中心。
+    </footer>
+
+    <div class="step-modal" id="nextStepModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="nextStepTitle">
+      <div class="step-modal-backdrop" data-close-modal></div>
+      <section class="step-modal-panel entry-modal-panel">
+        <button class="modal-close" type="button" data-close-modal aria-label="关闭">×</button>
+        <button class="qr-login-button" type="button" id="entryQrLogin" aria-label="扫码登录">
+          <span class="qr-dot-grid" aria-hidden="true"></span>
+          <span>扫码</span>
+        </button>
+        <div class="entry-auth-shell">
+          <aside class="entry-auth-brief" aria-label="登录后流程">
+            <div class="entry-auth-brand">
+              <span class="jj-logo-mark" aria-hidden="true"><i></i><b></b></span>
+              <div>
+                <strong>捷境</strong>
+                <small>JIEJING AI CEO</small>
+              </div>
+            </div>
+            <div class="entry-auth-route">
+              <span>01 登录或注册</span>
+              <span>02 选择商家身份</span>
+              <span>03 完成身份向导</span>
+              <span>04 进入工作舱</span>
+            </div>
+            <p>当前用体验数据进入完整流程；正式版会在这里完成账号、店铺和平台授权。</p>
+          </aside>
+          <main class="entry-auth-main">
+            <p class="eyebrow" id="nextStepEyebrow">登录 / 注册</p>
+            <h3 id="nextStepTitle">登录捷境，选择商家身份。</h3>
+            <p id="nextStepBody">当前为演示状态，点击登录或注册后直接进入身份选择。</p>
+            <form class="entry-login-form" id="entryLoginForm">
+              <button class="button login-choice" type="button" id="entryLoginSubmit">
+                <span>登录</span>
+                <small>已有账号，直接进入身份选择</small>
+              </button>
+              <button class="button-ghost login-choice" type="button" id="entryRegisterSubmit">
+                <span>注册</span>
+                <small>新商家创建体验账号</small>
+              </button>
+            </form>
+            <div class="entry-auth-footnote">
+              <span>模拟状态</span>
+              <span>先完成身份向导，再进入 AI CEO 工作舱</span>
+            </div>
+            <div class="entry-mode-area" id="entryModeArea" hidden>
+              <div class="entry-stage-title">
+                <strong>选择你的商家身份</strong>
+                <span class="pill green" id="entryAccountPill">已登录</span>
+              </div>
+              <div class="entry-mode-grid" id="entryModeGrid" aria-label="身份选择"></div>
+            </div>
+          </main>
+        </div>
+      </section>
+    </div>
+
+    <div class="toast" id="toast" aria-live="polite"></div>
+
+    <script>
+      const JIEJING_DEMO_VERSION = "20260510-ebay-policy-v1";
+
+      (function routeOfficialEntryToApp() {
+        const params = new URLSearchParams(window.location.search);
+        const start = params.get("start");
+        if (start !== "app" && start !== "onboarding") return;
+        const target = new URL("./index.html", window.location.href);
+        params.forEach((value, key) => target.searchParams.set(key, value));
+        target.searchParams.set("source", params.get("source") || "huashu");
+        target.searchParams.set("v", JIEJING_DEMO_VERSION);
+        window.location.replace(target.toString());
+      })();
+
+      const flowData = {
+        goal: {
+          eyebrow: "01 / AI CEO 接流程",
+          title: "你不用先懂 eBay 后台，把想做的事告诉 AI CEO 就行。",
+          body:
+            "小白可以说“带我从开店到第一条 Listing”，老店可以说“把我的 eBay 店接进来，先把商品、订单、客服和费用整理成自动化队列”。AI CEO 先把流程翻译成任务，再判断权限、费用、风险和人工确认点。",
+          roles: ["卖家阶段", "平台权限", "利润底线", "人工确认"],
+        },
+        sop: {
+          eyebrow: "02 / 拆成 eBay SOP",
+          title: "把 eBay 重复流程拆成 AI 能执行的步骤。",
+          body:
+            "市场调研选品、商品图、商品视频、描述详情、商品参数、上架刊登、投流广告、店铺订阅、客服售后、收发货和财务统计，都拆成有输入和输出的 SOP。",
+          roles: ["调研选品", "图视频", "描述参数", "刊登广告", "客服售后", "财务复盘"],
+        },
+        roles: {
+          eyebrow: "03 / AI 在后台处理",
+          title: "AI CEO 先把资料、草稿、费用和风险整理好。",
+          body:
+            "商家不用同时跟很多窗口聊天。AI CEO 会在后台完成调研、上架草稿、素材方案、费用估算、客服物流和风险检查，然后把结果、依据和需要你确认的地方放到同一个页面。",
+          roles: ["调研结果", "上架草稿", "素材方案", "费用估算", "客服物流", "风险检查"],
+        },
+        review: {
+          eyebrow: "04 / 回流确认中心",
+          title: "结果回到确认中心，商家只判关键动作。",
+          body:
+            "AI CEO 把模块结果汇总成确认卡、依据汇报和自动化规则更新。发布、广告预算、退款、改价、时效承诺、平台授权都默认暂停，等商家确认。",
+          roles: ["确认中心", "依据汇报", "自动化规则", "风险边界"],
+        },
+      };
+
+      const pathData = {
+        newbie: {
+          eyebrow: "小白起步",
+          title: "先带新手把第一件商品跑通。",
+          body:
+            "登录后进入小白专属向导，把 eBay 开店资料、Seller Hub、授权准备、履约方式、素材来源和第一条商品闭环拆成一步步确认。体验流程会用倒流香炉跑一遍。",
+          steps: [
+            ["01", "eBay 账号与 Seller Hub", "官方入口"],
+            ["02", "只读授权 / 手动兜底", "安全接入"],
+            ["03", "业务政策与履约", "保守模板"],
+            ["04", "货源、素材、Listing 草稿", "AI 起稿"],
+            ["05", "利润、客服、权限边界", "确认后推进"],
+          ],
+        },
+        opened: {
+          eyebrow: "已有店铺接入",
+          title: "先把店铺接进捷境，再把重复流程自动化。",
+          body:
+            "登录后先用只读授权或手动导入接入店铺现状，把 Listing、费用、广告、履约、客服和账号风险整理成可追踪任务。重点是让商家省掉重复流程，把关键动作送确认中心。",
+          steps: [
+            ["01", "eBay 店铺 API 只读接入", "只读/手动"],
+            ["02", "业务政策与 Listing 归档", "规则映射"],
+            ["03", "费用、广告、退货口径", "只读核算"],
+            ["04", "客服/售后与任务队列", "自动或草稿"],
+            ["05", "设置待办与确认边界", "商家确认"],
+          ],
+        },
+        orders: {
+          eyebrow: "已有订单处理",
+          title: "把客服、物流、退款和利润集中处理。",
+          body:
+            "登录后先整理订单、客服、物流和售后规则。普通问题生成客服草稿，高风险售后、物流承诺、退款补偿和低利润订单进入确认中心。",
+          steps: [
+            ["01", "订单/消息/退货只读", "草稿优先"],
+            ["02", "商品客服知识包", "先学习"],
+            ["03", "物流与 tracking 队列", "并排处理"],
+            ["04", "退款、补发、利润风险", "人工确认"],
+            ["05", "每日待处理清单", "工作记录"],
+          ],
+        },
+        multi: {
+          eyebrow: "多店铺管理",
+          title: "先管规则、权限和费用口径，再谈自动化。",
+          body:
+            "登录后先建立店铺结构、团队权限、费用分摊和跨店规则。多店铺不是复制一个店，而是把例外和确认边界拆清楚。",
+          steps: [
+            ["01", "店铺地图与逐店授权", "数据隔离"],
+            ["02", "规则继承与例外", "逐店配置"],
+            ["03", "货源/履约/仓库映射", "不串店"],
+            ["04", "批量草稿与团队权限", "确认人"],
+            ["05", "客服售后与跨店监控", "跨店复盘"],
+          ],
+        },
+      };
+
+      const planData = {
+        free: {
+          title: "免费版",
+          desc: "适合刚开始整理 eBay 流程的商家。免费版不是纯演示，可以用基础功能把一条商品线从资料整理跑到确认清单。",
+          items: [
+            "AI CEO 基础对话和商家身份向导",
+            "通用 eBay 流程模板，可隐藏不需要的步骤",
+            "手动录入货源图、采购价、物流方式和确认事项",
+            "基础工作记录和确认清单，适合先跑通一条商品线",
+            "不含真实平台写入、多店铺协同、批量铺货和高级规则",
+          ],
+        },
+        single: {
+          title: "单店铺版",
+          desc: "注册送 1 个月单店铺版体验。适合 1 个 eBay 店铺正式使用，把选品、Listing、素材、客服物流和费用整理放进 AI CEO 工作台。",
+          items: [
+            "1 个 eBay 店铺工作台",
+            "完整选品/上架项目流、素材工坊和客服物流基础流程",
+            "可为这个店铺添加、删除、调整通用流程模板步骤",
+            "支持确认中心、工作记录、来源记录和按需 PDF 汇报",
+            "可保存一次确认规则，后续普通小事按默认规则走",
+          ],
+        },
+        multi: {
+          title: "多店铺版",
+          desc: "适合同时管理多个 eBay 店铺或多条商品线，把流程模板按店铺复制、调整和复用。",
+          items: [
+            "多店铺/多项目工作台",
+            "店铺维度的流程模板、确认规则、履约方式和利润底线",
+            "铺货工厂基础队列，按店铺拆分商品、订单、客服和物流",
+            "模板可以跨店复制，也可以为不同店铺保留例外规则",
+            "可添加、删除和调整模板步骤，但不能超出已开发模块",
+          ],
+        },
+        pro: {
+          title: "高级付费版",
+          desc: "适合需要更高自动化深度、更多流程模板、更细权限规则和更高处理额度的成熟卖家。",
+          items: [
+            "更高额度的选品、素材、Listing 和工作记录",
+            "高级流程模板：批量铺货、售后处理、费用复盘、权限分层",
+            "更细的确认规则：按金额、店铺、品类和动作类型设置",
+            "可扩展货源/物流接口配置入口和更完整的来源记录",
+            "仍不开放越权执行；资金、刊登、退款、广告和买家消息仍需确认",
+          ],
+        },
+      };
+
+      const guideData = {
+        newbie: {
+          eyebrow: "小白起步向导",
+          title: "从官方注册和只读授权开始，让 AI CEO 先把基础资料接住。",
+          note: "API 可以先理解成平台给软件用的官方安全通道，不是把账号密码交给捷境。小白不需要研究 API、OAuth、Seller Hub 和后台字段；捷境先带你完成官方注册/授权，能读的数据自动预填。暂时不想授权，也可以先用截图、表格、链接和图片跑流程，后面再到设置里补接。",
+          answers: {
+            ebayStage: "还没注册 eBay 卖家账号",
+            ebayApi: "捷境带我连接 eBay 官方授权",
+            businessPolicy: "先用保守业务政策模板",
+            sourceApi: "先接 1688 货源读取",
+            fulfillment: "供应商直发履约",
+            material: "只提供商品方向，AI 生成首版素材",
+            firstListing: "生成完整 Listing 草稿包",
+            profitFloor: "先按保守利润底线",
+            serviceBoundary: "客服先出草稿，高风险停住",
+            aiPermission: "核心经营动作由我确认",
+          },
+          steps: [
+            {
+              key: "ebayStage",
+              label: "第 1/7 步",
+              title: "先帮你走到 eBay 官方卖家入口",
+              body: "如果你还没开店，捷境先给你官方注册入口和资料清单；注册完回来继续，不让你重新找步骤。",
+              ai: "AI 会把身份资料、收款、地址、Seller Hub 和业务政策拆成下一步清单。",
+              human: "你只需要在官方页面完成注册，捷境不要求你的 eBay 密码。",
+              save: "看不懂页面时，正式版应提供截图式引导和返回检查。",
+              options: [
+                ["还没注册 eBay 卖家账号", "先打开官方开店页，准备邮箱、身份/企业资料、收款和地址。", "从 0 开始"],
+                ["账号已注册，但 Seller Hub 不熟", "捷境下一步带你整理业务政策、退货、物流和费用口径。", "继续设置"],
+                ["已能进入 Seller Hub", "适合马上做只读授权，让 AI 预填资料。", "推荐"],
+                ["已经有店铺订阅", "把订阅费、刊登费、广告费纳入利润核算。", "费用复核"],
+              ],
+            },
+            {
+              key: "ebayApi",
+              label: "第 2/7 步",
+              title: "连接 eBay 官方通道，先只读资料",
+              body: "API 就像 eBay 给软件开的官方安全门。正式版会打开 eBay 官方授权页，只读读取店铺、Listing、订单、费用和广告表现，用来少填表、少复制；如果你刚了解捷境、暂时不想授权，也可以先跳过。",
+              ai: "AI 根据授权数据预填物流、退货、费用、Listing 字段和客服边界。",
+              human: "你只确认官方授权；发布、退款、改价、广告和客服发送不会自动执行。",
+              save: "授权失败时，先用截图、CSV、表格或演示数据兜底。",
+              options: [
+                ["捷境带我连接 eBay 官方授权", "打开官方授权页，先只读读取店铺上下文。", "推荐"],
+                ["我不会操作，系统一步步带", "用截图提示和大按钮引导，不让你理解 OAuth。", "小白友好"],
+                ["暂不连接，先用截图/表格", "刚了解捷境或 API 暂时接不上，也能先跑第一条商品流程。", "兜底"],
+                ["已有开发者配置", "适合技术团队接 Key、OAuth 和 Sell APIs。", "进阶"],
+              ],
+            },
+            {
+              key: "businessPolicy",
+              label: "第 3 步",
+              title: "先把付款、发货和退货政策定住",
+              body: "eBay 上架不是只填标题图片，还要有付款、履约和退货等业务政策。小白阶段先用保守模板，不承诺做不到的时效，不写不确定的退货口径。",
+              ai: "AI 会把付款方式、handling time、item location、shipping policy、return policy 先整理成模板草稿。",
+              human: "你确认真实发货地、处理时间、退货地址和不确定项；看不懂的先用保守默认。",
+              save: "正式版会在设置里保留业务政策入口，后续可按商品线调整。",
+              options: [
+                ["先用保守业务政策模板", "发货时效、退货和地址先按真实能力保守填写。", "推荐"],
+                ["我已有 eBay 店铺政策", "后续只读读取物流、支付、退货规则后映射到捷境。", "已开店"],
+                ["先不设置，发布前再确认", "可继续走素材和 Listing 草稿，但最终发布前必须补齐。", "兜底"],
+                ["按品类准备多个模板", "不同商品线使用不同 handling time、退货和物流模板。", "进阶"],
+              ],
+            },
+            {
+              key: "sourceApi",
+              label: "第 3/7 步",
+              title: "货源平台能接就先读数据，接不上也能继续",
+              body: "如果你长期从 1688 或其他货源平台采购，捷境优先读取商品、价格、规格、库存和供应商信息，用来筛货、测成本、补 Listing 字段。暂时不授权时，用链接、图片和表格也能先跑流程；读取数据不等于自动下单付款。",
+              ai: "AI 会整理货源价格、规格、库存、发货地、供应商稳定性和图片素材缺口。",
+              human: "你只确认是否授权读取；真实采购、付款、收货地址、直发买家或中转发货，都按规则停下来确认。",
+              save: "跳过也可以继续，货源接口会在设置里的「货源与履约接口」保留补接入口；API key、token 和支付信息不能放网页前端。",
+              options: [
+                ["连接 1688 货源读取", "读取价格、规格、库存、供应商和发货地，减少手填。", "推荐"],
+                ["暂不接接口，先用链接/图片", "刚了解捷境时可先用链接、图片、表格和采购价跑流程。", "兜底"],
+                ["采购单先生成，付款前确认", "AI 可以整理采购单和地址信息，真实下单付款仍停在确认点。", "安全"],
+                ["预留其他货源/物流接口", "橙联、海外仓、供应商 ERP 或表格导入，后续统一接到设置。", "开放"],
+              ],
+            },
+            {
+              key: "fulfillment",
+              label: "第 4/7 步",
+              title: "履约方式按真实能力建立",
+              body: "发货方式会影响售价、时效、退货和账号表现。捷境先按保守口径计算，避免页面承诺超过真实履约能力。",
+              ai: "AI 会按履约方式重算时效、运费、退货和利润安全线。",
+              human: "你只选当前最接近的发货方式。",
+              save: "不确定就先选保守方案，后面在设置里改。",
+              options: [
+                ["供应商直发履约", "轻启动，不先压库存；时效和退货风险会按保守口径计算。", "推荐起步"],
+                ["国内中转履约", "先完成验品、打包或贴标，再交给橙联、SpeedPAK 等跨境物流。", "可控"],
+                ["自有仓库发货", "由商家自主管库存和打单，重点核对物流成本、库存压力和处理时效。", "控制更强"],
+                ["海外仓/混合履约", "不同商品走不同规则，后面需要品类级设置。", "进阶"],
+              ],
+            },
+            {
+              key: "material",
+              label: "第 5/7 步",
+              title: "第一版素材从哪里开始？",
+              body: "素材可以来自实拍、货源图，也可以只给商品方向，由 AI 先完成调研、视觉定位、主图、详情页和场景图草稿。",
+              ai: "AI 会先判断素材来源、实物一致性和平台风险，再生成图文和视频方案。",
+              human: "你只需要选择当前能提供什么素材。",
+              save: "没有图片也可以先进入 AI 生成方向。",
+              options: [
+                ["只提供商品方向，AI 生成首版素材", "从品类调研到主图、场景图、详情页和口播脚本先出一版。", "AI 起稿"],
+                ["上传实拍图", "可信度更高，可直接做白底图、卖点图、尺寸图和视频分镜。", "推荐"],
+                ["上传货源图", "先做合规和实物一致性检查，再重做成适合 eBay 的产品图。", "常见"],
+                ["暂时没有素材", "AI 先列拍摄清单、素材要求和视觉方向，不直接上架。", "先规划"],
+              ],
+            },
+            {
+              key: "firstListing",
+              label: "第 6 步",
+              title: "第一条 Listing 草稿包要包含什么？",
+              body: "小白最容易漏字段。捷境不只写标题，还要把类目、标题、商品参数、主图/副图、视频需求、描述、价格、库存、包裹重量尺寸和业务政策引用整理成一包。",
+              ai: "AI 会按 eBay 上架字段生成完整草稿包，并标出缺少的采购价、重量、尺寸、UPC/MPN、材质和禁用承诺。",
+              human: "你确认真实参数和最终发布；不清楚的字段会被列成待补问题。",
+              save: "草稿包进入工作舱后，可以继续生成图片、详情页和视频。",
+              options: [
+                ["生成完整 Listing 草稿包", "标题、类目、参数、图片需求、描述、价格和业务政策一次整理。", "推荐"],
+                ["先只生成标题和五点卖点", "适合还没拿到完整规格时先看方向。", "轻量"],
+                ["先做类目和参数缺口", "不写营销文案，先把 eBay 必填字段摸清。", "稳妥"],
+                ["先做批量模板", "为后续同类商品批量铺货准备通用字段模板。", "进阶"],
+              ],
+            },
+            {
+              key: "profitFloor",
+              label: "第 7 步",
+              title: "先把利润安全线算清楚",
+              body: "第一件商品不要只看采购价。eBay 费用、物流、包装、退货预留、广告预算和店铺订阅分摊，都要先有一个保守口径。",
+              ai: "AI 会用采购价、重量尺寸、物流方式和售价草稿，先给出保守利润判断和缺口问题。",
+              human: "你确认采购价、包裹重量、尺寸、目标售价和是否预留广告预算。",
+              save: "利润安全线会带到后续选品、上架和广告建议里。",
+              options: [
+                ["先按保守利润底线", "费用没有填全时不建议发布，只给草稿和缺口。", "推荐"],
+                ["先不投广告", "新手先跑通履约和 Listing，不把广告预算算得太激进。", "稳妥"],
+                ["预留退货/补偿成本", "易退货或易破损商品先留售后成本。", "风控"],
+                ["按多 SKU 估算", "同款不同规格、颜色或套装分别算售价和成本。", "进阶"],
+              ],
+            },
+            {
+              key: "serviceBoundary",
+              label: "第 6/7 步",
+              title: "客服和售后 AI 到哪一步停住？",
+              body: "小白阶段也要提前定客服边界。AI 可以先学习商品档案、物流方式、退货政策和不能承诺的话，生成 FAQ、回复草稿和低风险自动回复规则；涉及退款、补偿、差评、纠纷、地址修改或明确到货承诺时必须停住。",
+              ai: "AI 会在上架前先学习产品、物流和退货边界，普通问题先给草稿，低风险问题可按规则处理。",
+              human: "你确认哪些回复只出草稿，哪些标准问题以后可以自动接待。",
+              save: "客服规则后面可以在设置里按店铺、商品、关键词和金额继续收紧。",
+              options: [
+                ["客服先出草稿，高风险停住", "所有回复先由你发出；退款、补偿、差评、纠纷和明确承诺仍进确认中心。", "推荐"],
+                ["AI 接待标准问题，高风险停住", "物流查询、尺码参数、库存咨询等标准问题可自动接待；售后和承诺转确认。", "省事"],
+                ["售后全部人工确认", "退货、退款、补发、差评和争议全部由人判断。", "稳妥"],
+                ["暂不开客服自动化", "先只做 Listing、素材和费用，客服规则后面再补。", "稍后"],
+              ],
+            },
+            {
+              key: "aiPermission",
+              label: "第 7/7 步",
+              title: "关键经营动作由商家确认",
+              body: "为了省事，资料整理、草稿、素材和记录自动推进；资金相关、刊登发布、退款补偿、广告投放、买家消息发送或明确承诺，必须由商家确认。",
+              ai: "AI 会继续做调研、草稿、素材方案和风险提示，不因常规事项反复打断你。",
+              human: "你只处理会影响真实经营结果的关键动作。",
+              save: "后续可以在设置里按金额、店铺、品类细分。",
+              options: [
+                ["核心经营动作由我确认", "资金、刊登、退款、广告和买家消息发送都停到你确认。", "推荐"],
+                ["全部只生成草稿", "最保守：客服也只写草稿，不自动发送。", "保守"],
+                ["常规事项自动归档", "普通记录、素材方向、资料缺口不打断；关键动作仍即时确认。", "省心"],
+                ["按金额和店铺细分", "高级版再按金额、品类、店铺和团队角色设置。", "进阶"],
+              ],
+            },
+          ],
+        },
+        opened: {
+          eyebrow: "已有店铺接入向导",
+          title: "把现有 eBay 店安全接进捷境，先省掉重复整理。",
+          note: "已有店铺不重走开店教学，重点是把重复整理、核算、草稿和提醒接进工作台。第一步是用官方只读授权/API 或样本导入，把 Seller Hub、Listing、订单、费用、广告和业务政策接进来；真实发布、改价、广告、退款和客服发送仍由商家确认。",
+          answers: {
+            importScope: "连接 eBay 店铺 API（只读）",
+            policyMap: "读取并映射业务政策",
+            diagnosis: ["Listing 资料整理", "费用与利润口径", "订单客服队列", "履约和账号风险"],
+            profitAudit: ["平台成交/刊登费用", "店铺订阅分摊", "广告消耗与转化", "退货/补偿预留"],
+            actionQueue: "先出自动化队列",
+            listingAction: "先做 Listing 优化草稿",
+            serviceBoundary: "AI 接待标准问题，高风险停住",
+            settingBacklog: "跳过项进入设置待办",
+            aiPermission: "只生成建议和草稿",
+          },
+          steps: [
+            {
+              key: "importScope",
+              label: "第 1/6 步",
+              title: "连接 eBay 店铺 API，先只读不写入",
+              body: "已有店铺不重走开店教学，第一步建议连接 eBay 官方店铺 API，并先采用只读授权。捷境不需要 eBay 密码；只读接入用于读取店铺资料、Listing、订单、费用、广告和业务政策，后续才能把重复流程接进来。",
+              ai: "AI 会按授权范围整理商品、订单、费用、客服和业务政策，先形成可检查的工作底座。",
+              human: "你决定先授权哪些数据；发布、退款、改价、广告和客服发送仍不会自动执行。",
+              save: "暂不授权也能先用样本数据体验，设置页会保留 eBay 店铺 API 补接入口。",
+              options: [
+                ["连接 eBay 店铺 API（只读）", "通过 eBay 官方授权读取 Listing、订单、费用和广告表现，不做写入。", "推荐"],
+                ["暂不授权，先导入店铺样本", "先用商品、售价、费用和订单样本建立自动化底座。", "兜底"],
+                ["先只接 Listing 与费用", "适合先做商品资料整理、利润口径和刊登优化。", "聚焦"],
+                ["先只接订单与客服", "适合先处理消息、物流异常、售后和重复回复。", "售后"],
+              ],
+            },
+            {
+              key: "policyMap",
+              label: "第 2 步",
+              title: "先把店铺业务政策映射进来",
+              body: "已有店铺通常已经有 payment、shipping、return 等业务政策。捷境要先读取或手动录入这些政策，才能判断 Listing、客服回复、物流承诺和退货边界是否一致。",
+              ai: "AI 会整理付款、履约、退货、handling time、item location 和例外规则，形成店铺规则底座。",
+              human: "你确认哪些政策真实可用，哪些只是历史模板或需要停用。",
+              save: "无法读取时，可以先手动录入常用政策；设置页保留后续补接入口。",
+              options: [
+                ["读取并映射业务政策", "把 eBay 店铺现有政策接进捷境，后续草稿引用现有模板。", "推荐"],
+                ["先手动录入常用政策", "暂不授权时，先录入常用发货、退货和收款口径。", "兜底"],
+                ["只检查时效和退货", "先抓最影响客服和差评的两类规则。", "风控"],
+                ["按品类建立例外", "不同品类可以用不同退货、发货和处理时间。", "进阶"],
+              ],
+            },
+            {
+              key: "diagnosis",
+              label: "第 2/6 步",
+              title: "接入后先自动化哪些重复流程？",
+              body: "这一步是多选。读取 Listing 不是为了替你乱改商品，而是把标题、类目、价格、库存、图片、业务政策、订单和费用串起来，后面才能少复制、少翻后台、少重复算账。",
+              ai: "AI 会把所选流程整理成资料底座、草稿队列和需要确认的动作。",
+              human: "默认建议全选；正式使用时也可以先从最想省事的一块开始。",
+              save: "这些流程可以在工作台设置里继续增减。",
+              multi: true,
+              options: [
+                ["Listing 资料整理", "标题、类目、主图、参数、价格、库存和业务政策先统一整理。", "必要"],
+                ["费用与利润口径", "把成交费、物流、广告、退货预留和售价放到同一口径里看。", "必要"],
+                ["订单客服队列", "按订单状态、物流异常、买家消息和售后风险组织处理顺序。", "省事"],
+                ["履约和账号风险", "关注退货、差评、物流承诺、政策缺口和高风险刊登动作。", "风控"],
+              ],
+            },
+            {
+              key: "profitAudit",
+              label: "第 3/6 步",
+              title: "费用口径要一起纳入哪些成本？",
+              body: "这一步也是多选，不是四选一。已有店铺最容易在重复核算里漏掉平台成交费、订阅分摊、广告消耗和退货预留，默认建议把核心成本都纳入。",
+              ai: "AI 会把费用口径整理成可复用规则，用来提醒亏损风险、定价缺口和广告失控。",
+              human: "你确认哪些成本进入核算；后续可以按店铺、品类和商品再细分。",
+              save: "费用口径会进入利润复盘和选品/上架判断。",
+              multi: true,
+              options: [
+                ["平台成交/刊登费用", "成交费、刊登费、成交佣金等平台基础费用。", "必要"],
+                ["店铺订阅分摊", "把店铺月费按商品、订单或周期分摊，避免低估成本。", "必要"],
+                ["广告消耗与转化", "广告花费、点击成本、转化结果和预算变化纳入利润判断。", "控投流"],
+                ["退货/补偿预留", "给易退货、易破损或售后成本高的品类设置预留。", "风控"],
+              ],
+            },
+            {
+              key: "actionQueue",
+              label: "第 4/6 步",
+              title: "第一批自动化任务怎么排？",
+              body: "捷境先把能省事的工作排出来，不直接替你乱改店铺。你可以先从资料整理、费用核算、客服草稿或 Listing 优化里选一批推进。",
+              ai: "AI 会按风险、紧急度和省事程度生成任务队列、草稿、来源记录和确认项。",
+              human: "你只决定先处理哪批任务；真正影响店铺的动作仍停到确认中心。",
+              save: "任务会进入 AI CEO 工作舱，后面可以按商品、店铺或品类继续筛。",
+              options: [
+                ["先出自动化队列", "按风险和省事程度排序，先处理最能减少重复操作的事项。", "推荐"],
+                ["先生成 Listing 草稿", "标题、主图方向、参数和详情先出草稿，不直接发布。", "提效"],
+                ["先出店铺整理报告", "不生成执行草稿，只给来源、缺口和结论。", "保守"],
+                ["按品类分组推进", "相同品类统一规则，减少重复调整。", "进阶"],
+              ],
+            },
+            {
+              key: "listingAction",
+              label: "第 5 步",
+              title: "已有 Listing 先怎么优化？",
+              body: "已有店铺不是重新上架所有商品，而是先把标题、主图、商品参数、价格、库存、描述和业务政策引用整理成草稿。真正改动前必须确认。",
+              ai: "AI 会把 Listing 分成：信息缺失、图片需要重做、价格需复核、政策不一致、暂不建议动。",
+              human: "你决定先优化哪批商品；真实改价、改库存和重新发布仍停住。",
+              save: "优化草稿会回到工作舱，适合后续批量处理。",
+              options: [
+                ["先做 Listing 优化草稿", "只出标题、图片、参数和描述建议，不写回店铺。", "推荐"],
+                ["先补商品参数", "优先补材质、颜色、尺寸、类型等平台字段。", "基础"],
+                ["先重做素材包", "主图、场景图、详情页和视频先生成候选。", "素材"],
+                ["先筛暂不建议动的商品", "销量稳定或风险高的 Listing 先不碰。", "稳妥"],
+              ],
+            },
+            {
+              key: "serviceBoundary",
+              label: "第 5/6 步",
+              title: "客服和售后 AI 到哪一步停住？",
+              body: "已有店铺接入后，客服不是最后才配置。AI 要先读取商品档案、业务政策、物流/退货边界，再决定哪些买家消息能自动接待，哪些必须转人工确认。",
+              ai: "AI 会把商品、订单、tracking、退货政策和客服历史整理成回复边界，低风险问题自动或半自动处理。",
+              human: "你确认客服发送权限；退款、补偿、差评、纠纷、地址修改和明确承诺不自动执行。",
+              save: "客服边界后面可以按店铺、品类、金额和关键词继续细分。",
+              options: [
+                ["AI 接待标准问题，高风险停住", "物流查询、参数咨询、库存咨询可按规则处理；售后、承诺和金钱相关转确认。", "推荐省事"],
+                ["客服只出草稿", "所有回复都由人发出，适合刚接入店铺时先观察。", "保守"],
+                ["售后全部人工确认", "退款、补发、差评、争议和纠纷全部确认。", "稳妥"],
+                ["按商品/店铺细分", "成熟后再按不同商品线、店铺和关键词设置自动回复边界。", "进阶"],
+              ],
+            },
+            {
+              key: "settingBacklog",
+              label: "第 8 步",
+              title: "这次跳过的接口和规则放到哪里？",
+              body: "已有店铺接入不一定一次配完。暂时不信任、不知道怎么接、或资料不齐的部分，都应该进入设置待办，后续再补，不要让商家重新找入口。",
+              ai: "AI 会把未接的 API、未补的费用字段、未定的物流/退货规则和未确认的客服权限放入设置清单。",
+              human: "你只确认哪些现在跳过，哪些必须在发布或执行前补齐。",
+              save: "设置与账户会显示 eBay API、货源接口、物流接口、费用口径和客服权限待办。",
+              options: [
+                ["跳过项进入设置待办", "授权、货源、物流、费用、客服权限都保留补接入口。", "推荐"],
+                ["发布前必须补齐", "缺店铺业务政策、重量、退货或授权时不进入发布。", "风控"],
+                ["先只保留手动流程", "接口不接也能用表格、截图、链接继续跑。", "保守"],
+                ["按店铺分待办", "多店或多项目时，每个店有自己的缺口清单。", "进阶"],
+              ],
+            },
+            {
+              key: "aiPermission",
+              label: "第 6/6 步",
+              title: "哪些动作可以自动，哪些必须停住？",
+              body: "已有店铺更要保护账号和历史数据。资料整理、草稿、素材任务和报告可以自动推进；涉及真实店铺写入、钱、广告、退款、客服发送或明确承诺的动作必须停住。",
+              ai: "AI 会把低风险事项自动归档，把高风险动作送到确认中心。",
+              human: "你确认哪些动作只出草稿，哪些允许进入自动化队列。",
+              save: "权限可随时收紧，也可后续按店铺、品类和金额细分。",
+              options: [
+                ["只生成建议和草稿", "不改店铺，只准备依据和草稿。", "推荐"],
+                ["低风险资料可整理", "整理标题建议、参数缺口和图片任务。", "可提效"],
+                ["发布前必须确认", "所有刊登变更都等你确认。", "默认边界"],
+                ["全部关键动作确认", "广告、退款、改价、授权、订阅都等你判断。", "最保守"],
+              ],
+            },
+          ],
+        },
+        orders: {
+          eyebrow: "已有订单处理向导",
+          title: "先把订单处理规则定清楚，再让 AI 分担重复工作。",
+          note: "已有订单也建议优先接 eBay 订单/消息/退货只读授权，这样才能真正少查后台；暂时不信任时，可以先导入最近 7/30 天订单样本。",
+          answers: {
+            serviceQueue: "只读读取订单与消息",
+            messageLearning: "先学习商品档案和客服口径",
+            logistics: "按 tracking 异常优先",
+            dispatchRule: "先处理待发货和异常件",
+            refundRule: "退款必须人工确认",
+            profitFloor: "低利润订单提醒",
+            dailyOps: "每天先看待处理清单",
+            aiPermission: "AI 全客服接待，高风险停住",
+          },
+          steps: [
+            {
+              key: "serviceQueue",
+              label: "第 1/5 步",
+              title: "订单和消息数据怎么接入？",
+              body: "已有订单阶段建议先只读读取订单、买家消息、tracking 和退货请求；如果暂时不想授权，先导入样本也能体验。",
+              ai: "AI 会把订单、客服、物流和售后风险合并成队列。",
+              human: "你只确认读取方式；退款、补偿、客服发送不自动执行。",
+              save: "跳过授权后，设置页会保留补接入口。",
+              options: [
+                ["只读读取订单与消息", "读取订单、tracking、买家消息和退货请求，不做退款或发送。", "推荐"],
+                ["暂不连接，导入订单样本", "先导入最近 7/30 天订单、物流和消息截图。", "兜底"],
+                ["只看物流异常", "先把 tracking 缺失、延迟和派送失败整理出来。", "聚焦"],
+                ["只做摘要和建议", "AI 不生成发送动作，只做整理。", "保守"],
+              ],
+            },
+            {
+              key: "messageLearning",
+              label: "第 2 步",
+              title: "客服先学习哪些资料？",
+              body: "AI 客服不能空着接买家。已有订单阶段要先学习商品档案、Listing 描述、发货政策、退货政策、常见问题和不能承诺的话，再开始生成回复或自动接待。",
+              ai: "AI 会把商品参数、订单状态、tracking、退货政策和历史话术整理成客服知识包。",
+              human: "你确认哪些话术能用，哪些承诺不能说，哪些商品需要人工接管。",
+              save: "知识包会随商品和政策更新，避免客服答非所问。",
+              options: [
+                ["先学习商品档案和客服口径", "每个商品先有参数、卖点、物流、退货和禁用承诺。", "推荐"],
+                ["先学习历史客服记录", "从已有消息里提炼常见问题和回复风格。", "省事"],
+                ["先按商品分知识包", "不同商品使用不同 FAQ 和售后边界。", "稳妥"],
+                ["暂不自动客服，只做摘要", "AI 只整理买家消息，不生成发送内容。", "保守"],
+              ],
+            },
+            {
+              key: "logistics",
+              label: "第 2/5 步",
+              title: "物流异常怎么排序？",
+              body: "tracking、承诺时效和买家催单要并排看。",
+              ai: "AI 会按异常严重度排队。",
+              human: "你决定优先处理口径。",
+              save: "后续可按店铺调整。",
+              options: [
+                ["按 tracking 异常优先", "长时间未更新、派送失败、退回先处理。", "推荐"],
+                ["按买家催单优先", "先处理已发消息的订单。", "体验"],
+                ["按承诺时效优先", "快到承诺时效的订单提前提醒。", "风控"],
+                ["按订单金额优先", "高客单订单先人工确认。", "高客单"],
+              ],
+            },
+            {
+              key: "dispatchRule",
+              label: "第 4 步",
+              title: "发货和 tracking 怎么接到一起？",
+              body: "有订单后，客服、物流和利润不能分开看。捷境需要把待发货、已发货、tracking 异常、买家催单和承诺时效并排组织。",
+              ai: "AI 会把待发货、未上传 tracking、物流长时间未更新、派送失败和买家催单放进同一个处理队列。",
+              human: "你确认是否允许 AI 准备物流回复、采购单、补发建议或异常升级。",
+              save: "真实采购、补发、退款和地址变更仍进入确认中心。",
+              options: [
+                ["先处理待发货和异常件", "把未发货、未上传 tracking、派送失败和催单排在前面。", "推荐"],
+                ["先生成采购/发货待办", "AI 整理采购单、物流方式和待上传 tracking，不自动付款。", "省事"],
+                ["只做物流客服草稿", "先给买家消息草稿，不执行补发或退款。", "保守"],
+                ["按履约方式拆队列", "自有仓、供应商直发、国内中转、海外仓分别处理。", "进阶"],
+              ],
+            },
+            {
+              key: "refundRule",
+              label: "第 3/5 步",
+              title: "退款和补偿怎么卡住？",
+              body: "退款、补发、赔付都属于高风险动作。",
+              ai: "AI 会给建议和依据，不直接退款。",
+              human: "你设置确认边界。",
+              save: "默认全部进确认中心。",
+              options: [
+                ["退款必须人工确认", "所有退款先进入确认中心。", "默认"],
+                ["补发必须人工确认", "AI 可准备话术和物流建议。", "风控"],
+                ["小额补偿也确认", "优惠券、部分退款也不自动发。", "保守"],
+                ["只做风险标记", "AI 不写处理建议，只标风险。", "最保守"],
+              ],
+            },
+            {
+              key: "profitFloor",
+              label: "第 4/5 步",
+              title: "订单利润低到什么程度要提醒？",
+              body: "有订单不等于有利润，需要把费用和售后风险纳入。",
+              ai: "AI 会标记低利润和亏损风险订单。",
+              human: "你设利润底线。",
+              save: "底线会影响后续选品和广告建议。",
+              options: [
+                ["低利润订单提醒", "低于安全线先提醒，不自动改价。", "推荐"],
+                ["亏损订单标红", "把广告费、物流和退货预留算进去。", "风控"],
+                ["按品类设底线", "不同品类用不同利润底线。", "进阶"],
+                ["暂不设底线", "只看客服和物流效率。", "稍后"],
+              ],
+            },
+            {
+              key: "dailyOps",
+              label: "第 7 步",
+              title: "每天打开工作台先看什么？",
+              body: "已有订单商家最需要省掉重复巡检。捷境每天先显示需要商家判断的事项，而不是让你从订单、消息、物流、退货和利润页面来回翻。",
+              ai: "AI 会把未处理消息、异常物流、售后请求、低利润订单和高风险承诺整理成当天清单。",
+              human: "你只处理真正需要判断的事项；普通分类、草稿和记录自动完成。",
+              save: "这个清单后面会同步到 AI 工作记录和确认中心。",
+              options: [
+                ["每天先看待处理清单", "先看需要确认的订单、消息、售后和异常物流。", "推荐"],
+                ["先看客服消息", "客服压力大时优先处理买家消息。", "客服"],
+                ["先看物流异常", "发货和 tracking 压力大时先处理物流。", "物流"],
+                ["先看亏损/低利润订单", "费用压力大时优先处理利润风险。", "财务"],
+              ],
+            },
+            {
+              key: "aiPermission",
+              label: "第 5/5 步",
+              title: "客服和售后 AI 到哪一步停住？",
+              body: "有订单阶段可以做客服自动化，但不能把所有买家消息都无边界自动发送。普通查询可以按模板自动处理，涉及退款、补偿、差评、纠纷、地址修改或明确到货承诺时必须停住。",
+              ai: "AI 会先给买家消息分级：低风险自动发送、需要你确认、必须人工接管。",
+              human: "你决定哪些消息可以自动发，哪些必须进入确认中心。",
+              save: "低风险自动发送可以后续按店铺、金额、品类和关键词继续收紧。",
+              options: [
+                ["AI 全客服接待，高风险停住", "所有买家消息先由 AI 接待；物流查询、尺码参数、库存咨询等标准问题可自动回复，退款、补偿、差评、纠纷和明确承诺转确认。", "推荐省事"],
+                ["客服只出草稿", "所有回复都由人发出，适合刚开始不想放开客服发送权限。", "保守"],
+                ["售后必须确认", "退款、补发、差评、争议全部确认。", "默认边界"],
+                ["全部关键动作确认", "客服、售后、退款、广告都等你判断。", "最保守"],
+              ],
+            },
+          ],
+        },
+        multi: {
+          eyebrow: "多店铺自动化向导",
+          title: "先统一规则口径，再谈跨店协同。",
+          note: "多店铺也建议逐店接官方只读授权/API，但必须一店一授权、一店一权限；暂时不信任时，先用表格建立店铺地图，后面再逐店补接。",
+          answers: {
+            storeMap: "逐店只读授权",
+            storeApiMap: "一店一授权，不串数据",
+            ruleInheritance: "先统一基础规则",
+            sourceMap: "货源和履约按店铺映射",
+            bulkFactory: "先小批量铺货草稿",
+            teamPermission: "商家负责人确认高风险动作",
+            costSplit: "费用按店铺分摊",
+            monitoring: "跨店异常优先提醒",
+            aiPermission: "跨店动作必须确认",
+          },
+          steps: [
+            {
+              key: "storeMap",
+              label: "第 1/5 步",
+              title: "多店铺先怎么授权和建档？",
+              body: "多店铺不能把所有数据混在一起。建议逐店只读授权；暂时不信任时，先用表格建店铺地图，后面再补接。",
+              ai: "AI 会生成店铺结构表、授权状态和差异点。",
+              human: "你确认先管理哪些店，哪些先不接。",
+              save: "跳过授权后，设置页会保留逐店补接入口。",
+              options: [
+                ["逐店只读授权", "每个 eBay 店单独授权，订单、费用、客服不串店。", "推荐"],
+                ["暂不连接，先表格建档", "每个店铺独立记录品类、履约和费用。", "兜底"],
+                ["按品类建档", "同品类跨店铺复用部分规则。", "品类"],
+                ["按 eBay 店铺建档", "当前只围绕 eBay 店铺、站点和团队权限做结构。", "扩展"],
+              ],
+            },
+            {
+              key: "storeApiMap",
+              label: "第 2 步",
+              title: "每个店铺的数据边界怎么隔离？",
+              body: "多店铺最重要的是不能串店、串订单、串费用。正式版应做到一店一授权、一店一套规则、一店一套日志，AI 只能拿到当前任务需要的数据。",
+              ai: "AI 会按店铺生成授权状态、可读数据范围、不可执行动作和缺口清单。",
+              human: "你确认每个店铺是否授权、哪些数据可读、哪些店铺先不接。",
+              save: "没有授权的店铺只保留手动导入，不参与自动队列。",
+              options: [
+                ["一店一授权，不串数据", "每个 eBay 店铺独立授权、独立规则、独立记录。", "推荐"],
+                ["先接主店，其他店占位", "先让主店跑通，再逐店复制流程。", "稳妥"],
+                ["按账号角色限制查看", "团队成员只看自己负责的店铺和任务。", "权限"],
+                ["暂时全部手动建档", "不用 API，先用表格建立店铺地图。", "兜底"],
+              ],
+            },
+            {
+              key: "ruleInheritance",
+              label: "第 2/5 步",
+              title: "规则是统一还是逐店例外？",
+              body: "多店铺最怕规则混乱，先定继承关系。",
+              ai: "AI 会把通用规则和例外规则分开。",
+              human: "你决定哪些规则能共用。",
+              save: "例外可后续逐店补。",
+              options: [
+                ["先统一基础规则", "客服口吻、确认边界、费用口径先统一。", "推荐"],
+                ["履约逐店设置", "不同仓库和发货地按店铺拆开。", "履约"],
+                ["品类逐店设置", "不同店铺品类不同，Listing 规则分开。", "品类"],
+                ["全部逐店设置", "最稳，但配置成本更高。", "保守"],
+              ],
+            },
+            {
+              key: "sourceMap",
+              label: "第 4 步",
+              title: "货源、仓库和物流怎么按店铺映射？",
+              body: "多店铺如果货源、仓库和物流混在一起，客服、利润和退货都会乱。捷境要把每个店铺的货源接口、履约方式、发货地、退货地址和 tracking 规则拆清楚。",
+              ai: "AI 会把 1688/供应商、国内中转、自有仓、海外仓、物流模板和退货地址映射到店铺和商品线。",
+              human: "你确认哪些店铺走同一货源，哪些店铺必须分开履约。",
+              save: "真实下单、付款、改地址和补发仍进入确认中心或按默认规则停住。",
+              options: [
+                ["货源和履约按店铺映射", "每个店铺绑定自己的货源、物流和退货口径。", "推荐"],
+                ["同货源跨店复用", "同一供应商可复用，但订单、费用和客服仍分店记录。", "省事"],
+                ["按仓库拆发货规则", "国内中转、自有仓、海外仓分开处理。", "履约"],
+                ["先只导入表格", "接口未接前，用表格维持采购价、重量、时效和库存。", "兜底"],
+              ],
+            },
+            {
+              key: "bulkFactory",
+              label: "第 5 步",
+              title: "批量铺货先开到什么程度？",
+              body: "多店铺可以做铺货工厂，但不能一上来无限自动发布。正确做法是先小批量生成草稿、分店检查字段、统一素材标准，再把发布动作送确认中心。",
+              ai: "AI 会把选品、货源、素材、Listing 草稿、利润、履约和风险拆成批量队列。",
+              human: "你决定一次生成多少草稿、哪些店铺先试、哪些字段必须人工复核。",
+              save: "发布、改价、广告和库存写入仍按店铺权限确认。",
+              options: [
+                ["先小批量铺货草稿", "先生成少量 Listing 草稿和素材包，不直接发布。", "推荐"],
+                ["先做模板，不生成商品", "先沉淀标题、描述、图片、视频和参数模板。", "稳妥"],
+                ["按店铺分批测试", "先跑一个店或一个品类，再复制到其他店。", "测试"],
+                ["高级批量队列", "按商品、店铺、利润、安全线和风险自动排队。", "进阶"],
+              ],
+            },
+            {
+              key: "teamPermission",
+              label: "第 3/5 步",
+              title: "团队里谁能确认关键动作？",
+              body: "跨店铺管理必须把权限说清楚。",
+              ai: "AI 会按角色生成确认流。",
+              human: "你设置谁能确认发布、广告和退款。",
+              save: "未设置前默认商家负责人确认。",
+              options: [
+                ["商家负责人确认高风险动作", "发布、广告、退款、订阅都等负责人。", "默认"],
+                ["低风险资料自动归档", "资料整理、草稿记录和缺口标记自动归档，不让负责人逐项点确认。", "省事"],
+                ["客服确认回复草稿", "客服只确认消息，不碰退款。", "客服"],
+                ["财务确认费用变更", "广告预算、订阅和费用口径给财务确认。", "财务"],
+              ],
+            },
+            {
+              key: "costSplit",
+              label: "第 4/5 步",
+              title: "跨店费用怎么分摊？",
+              body: "多店铺利润必须把广告费、订阅费和工具费拆清楚。",
+              ai: "AI 会按你选的口径做复盘。",
+              human: "你确认费用归属规则。",
+              save: "费用口径会进入财务复盘。",
+              options: [
+                ["费用按店铺分摊", "每家店独立看广告费、订阅费和利润。", "推荐"],
+                ["费用按品类分摊", "适合多店卖相同品类。", "品类"],
+                ["广告按项目分摊", "不同推广项目单独算投入产出。", "投流"],
+                ["先只看总账", "快速看总利润，后续再拆。", "快速"],
+              ],
+            },
+            {
+              key: "monitoring",
+              label: "第 8 步",
+              title: "跨店每天先提醒哪些异常？",
+              body: "多店铺不是把页面做大，而是把异常提前聚合。每天先看物流异常、客服风险、低利润、广告失控、授权失效和发布待确认。",
+              ai: "AI 会跨店汇总异常，但每条异常仍回到对应店铺、订单、Listing 和确认人。",
+              human: "你确认哪些异常需要第一时间提醒，哪些只进入日报。",
+              save: "跨店总览会成为工作舱默认入口，不替代单店明细。",
+              options: [
+                ["跨店异常优先提醒", "物流、客服、亏损、广告、授权和发布待确认优先展示。", "推荐"],
+                ["先看客服和售后", "多店消息压力大时优先聚合买家问题。", "客服"],
+                ["先看利润和广告", "先抓亏损品、广告花费和费用异常。", "财务"],
+                ["只生成日报", "不打断，只每天生成跨店摘要。", "保守"],
+              ],
+            },
+            {
+              key: "aiPermission",
+              label: "第 5/5 步",
+              title: "客服和售后 AI 到哪一步停住？",
+              body: "多店铺可以配置客服自动发送，但必须逐店授权、逐店口径、逐店留记录。不能把一个店铺的客服规则直接套到所有店，尤其不能自动处理退款、补偿、差评、纠纷和明确承诺。",
+              ai: "AI 会按店铺、站点、消息类型和风险等级决定：自动发送、进入确认中心或人工接管。",
+              human: "你确认哪些店铺允许低风险客服自动发送，哪些店铺只能出草稿。",
+              save: "权限可逐店调整，也可按关键词、金额、订单状态继续收紧。",
+              options: [
+                ["跨店动作必须确认", "任何跨店规则变更都进确认中心。", "推荐"],
+                ["单店 AI 全客服接待，高风险停住", "每个已授权店铺都可由 AI 先接待买家消息；标准问题自动回复，退款、补偿、差评、纠纷和明确承诺转确认。", "自动客服"],
+                ["广告预算必须确认", "投流相关动作全部暂停。", "风控"],
+                ["全部关键动作确认", "发布、广告、退款、改价、订阅都等你判断。", "最保守"],
+              ],
+            },
+          ],
+        },
+      };
+
+      let guideAnswers = { ...guideData.newbie.answers };
+
+      let activePath = "newbie";
+      let activePlan = "single";
+      let activeGuideStep = 0;
+      let entryLoggedIn = false;
+      let hasEnteredGuide = false;
+      let wheelPulse = 0;
+      let pageProgressValue = 0;
+      let cursorFrame = 0;
+      let cursorX = window.innerWidth / 2;
+      let cursorY = window.innerHeight * 0.28;
+      const root = document.documentElement;
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+      const cursorGlow = document.querySelector("#cursorGlow");
+      const merchantGuideSection = document.querySelector("#merchant-guide");
+      if (merchantGuideSection) {
+        merchantGuideSection.hidden = true;
+      }
+
+      function revealMerchantGuide() {
+        if (!merchantGuideSection) return;
+        merchantGuideSection.hidden = false;
+        merchantGuideSection.classList.add("is-visible");
+      }
+
+      function enterOnboardingMode() {
+        revealMerchantGuide();
+        document.body.classList.remove("is-auth-mode");
+        document.body.classList.add("is-onboarding-mode");
+        window.scrollTo({ top: 0 });
+      }
+
+      function exitOnboardingMode() {
+        document.body.classList.remove("is-onboarding-mode");
+        document.body.classList.remove("is-auth-mode");
+        if (merchantGuideSection) merchantGuideSection.hidden = true;
+        hasEnteredGuide = false;
+        syncWorkspaceContext();
+        window.setTimeout(() => scrollToSection("#paths"), 20);
+      }
+
+      function updatePageProgress() {
+        const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+        pageProgressValue = Math.min(1, Math.max(0, window.scrollY / maxScroll));
+        root.style.setProperty("--pageProgress", pageProgressValue.toFixed(4));
+      }
+
+      function updateMouseVars(event) {
+        cursorX = event.clientX;
+        cursorY = event.clientY;
+        if (cursorFrame || !cursorGlow) return;
+        cursorFrame = window.requestAnimationFrame(() => {
+          cursorFrame = 0;
+          cursorGlow.style.transform = `translate3d(${cursorX - 180}px, ${cursorY - 180}px, 0)`;
+        });
+      }
+
+      function bindSurfaceLight() {
+        document.querySelectorAll(".command-room, .panel, .path-card, .price-card, .flow-tab, .role-node").forEach((surface) => {
+          let lightFrame = 0;
+          let lastEvent = null;
+          surface.addEventListener("pointermove", (event) => {
+            lastEvent = event;
+            if (lightFrame) return;
+            lightFrame = window.requestAnimationFrame(() => {
+              lightFrame = 0;
+              if (!lastEvent) return;
+              const rect = surface.getBoundingClientRect();
+              surface.style.setProperty("--sx", `${lastEvent.clientX - rect.left}px`);
+              surface.style.setProperty("--sy", `${lastEvent.clientY - rect.top}px`);
+            });
+          });
+        });
+      }
+
+      function setupReveal() {
+        if (!("IntersectionObserver" in window)) {
+          document.querySelectorAll(".reveal").forEach((el) => el.classList.add("is-visible"));
+          return;
+        }
+        const observer = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              if (entry.isIntersecting) entry.target.classList.add("is-visible");
+            });
+          },
+          { threshold: 0.16 },
+        );
+        document.querySelectorAll(".reveal").forEach((el) => observer.observe(el));
+      }
+
+      function setupSignalCanvas() {
+        const canvas = document.querySelector("#signalCanvas");
+        if (!canvas) return;
+        const context = canvas.getContext("2d");
+        let width = 0;
+        let height = 0;
+        let tick = 0;
+
+        function resize() {
+          const rect = canvas.getBoundingClientRect();
+          const ratio = Math.min(window.devicePixelRatio || 1, 2);
+          width = Math.max(1, Math.floor(rect.width));
+          height = Math.max(1, Math.floor(rect.height));
+          canvas.width = Math.floor(width * ratio);
+          canvas.height = Math.floor(height * ratio);
+          context.setTransform(ratio, 0, 0, ratio, 0, 0);
+        }
+
+        function draw() {
+          context.clearRect(0, 0, width, height);
+          const pulse = wheelPulse;
+          tick += reducedMotion.matches ? 0 : 0.012 + pulse * 0.018;
+
+          for (let lane = 0; lane < 6; lane += 1) {
+            const yBase = height * (0.2 + lane * 0.115);
+            const amp = 10 + lane * 1.6 + pulse * 28;
+            context.beginPath();
+            for (let x = 0; x <= width; x += 18) {
+              const y =
+                yBase +
+                Math.sin(x * 0.012 + tick * (1.2 + lane * 0.12) + lane) * amp +
+                Math.cos(x * 0.006 + pageProgressValue * 8 + lane) * (5 + pulse * 8);
+              if (x === 0) context.moveTo(x, y);
+              else context.lineTo(x, y);
+            }
+            context.strokeStyle = lane % 2 ? "rgba(185,130,40,0.18)" : "rgba(8,118,110,0.2)";
+            context.lineWidth = lane === 3 ? 1.7 : 1;
+            context.stroke();
+          }
+
+          wheelPulse *= 0.92;
+          window.requestAnimationFrame(draw);
+        }
+
+        resize();
+        window.addEventListener("resize", resize);
+        window.requestAnimationFrame(draw);
+      }
+
+      function setFlow(key) {
+        const data = flowData[key] || flowData.goal;
+        document.querySelectorAll(".flow-tab").forEach((button) => {
+          button.classList.toggle("is-active", button.dataset.flow === key);
+        });
+        document.querySelector("#flowEyebrow").textContent = data.eyebrow;
+        document.querySelector("#flowTitle").textContent = data.title;
+        document.querySelector("#flowBody").textContent = data.body;
+        document.querySelector("#flowRoles").innerHTML = data.roles.map((role) => `<span>${role}</span>`).join("");
+      }
+
+      function updateGuideHeader() {
+        const header = guideData[activePath] || guideData.newbie;
+        const eyebrow = document.querySelector("#merchantGuideEyebrow");
+        const title = document.querySelector("#merchantGuideTitle");
+        const note = document.querySelector("#merchantGuideNote");
+        if (eyebrow) eyebrow.textContent = header.eyebrow;
+        if (title) title.textContent = header.title;
+        if (note) note.textContent = header.note;
+      }
+
+      function setPath(key) {
+        const data = pathData[key] || pathData.newbie;
+        activePath = key;
+        guideAnswers = { ...((guideData[key] || guideData.newbie).answers) };
+        document.querySelectorAll(".path-card").forEach((button) => {
+          button.classList.toggle("is-active", button.dataset.path === key);
+        });
+        document.querySelector("#pathEyebrow").textContent = data.eyebrow;
+        document.querySelector("#pathTitle").textContent = data.title;
+        document.querySelector("#pathBody").textContent = data.body;
+        document.querySelector("#pathChecklist").innerHTML = data.steps
+          .map(
+            ([index, title, status]) => `
+              <div class="check-row">
+                <span class="pill">${index}</span>
+                <strong>${title}</strong>
+                <span class="pill green">${status}</span>
+              </div>
+            `,
+          )
+          .join("");
+        updateGuideHeader();
+        renderEntryModal();
+        activeGuideStep = 0;
+        renderGuide();
+      }
+
+      function setPlan(key) {
+        const data = planData[key] || planData.single;
+        activePlan = planData[key] ? key : "single";
+        document.querySelectorAll(".price-card").forEach((button) => {
+          button.classList.toggle("is-active", button.dataset.plan === activePlan);
+        });
+        document.querySelector("#planTitle").textContent = data.title;
+        document.querySelector("#planDesc").textContent = data.desc;
+        document.querySelector("#planList").innerHTML = data.items.map((item) => `<li>${item}</li>`).join("");
+        renderEntryModal();
+      }
+
+      function showNotice(message) {
+        const notice = document.querySelector("#pathNotice");
+        if (!notice) return;
+        notice.textContent = message;
+        notice.classList.add("is-visible");
+      }
+
+      function showToast(message) {
+        const toast = document.querySelector("#toast");
+        toast.textContent = message;
+        toast.classList.add("is-visible");
+        window.clearTimeout(showToast.timer);
+        showToast.timer = window.setTimeout(() => toast.classList.remove("is-visible"), 2600);
+      }
+
+      function showEntryLogin() {
+        const form = document.querySelector("#entryLoginForm");
+        const area = document.querySelector("#entryModeArea");
+        if (form) form.hidden = false;
+        if (area) area.hidden = true;
+        document.querySelector("#nextStepEyebrow").textContent = "登录 / 注册";
+        document.querySelector("#nextStepTitle").textContent = "进入捷境体验。";
+        document.querySelector("#nextStepBody").textContent = "登录或注册后先选择商家身份，再进入对应向导。完成向导后，系统才会切到 AI CEO 工作舱。";
+        window.setTimeout(() => document.querySelector("#entryLoginSubmit")?.focus(), 0);
+      }
+
+      function showEntryModes() {
+        const form = document.querySelector("#entryLoginForm");
+        const area = document.querySelector("#entryModeArea");
+        if (form) form.hidden = true;
+        if (area) area.hidden = false;
+        document.querySelector("#nextStepEyebrow").textContent = "商家身份";
+        document.querySelector("#nextStepTitle").textContent = "选择你的商家身份。";
+        document.querySelector("#nextStepBody").textContent = "不同身份会进入不同向导：小白开店、已有店铺接入、订单售后接管、多店铺规则治理。向导完成后再进入工作舱。";
+        document.querySelector("#entryAccountPill").textContent = "已进入体验";
+        renderEntryModal();
+        window.setTimeout(() => document.querySelector("#entryModeGrid button")?.focus(), 0);
+      }
+
+      function continueAfterLogin() {
+        entryLoggedIn = true;
+        showEntryModes();
+        showToast("请选择当前商家身份。");
+      }
+
+      function formatGuideAnswer(value) {
+        if (Array.isArray(value)) return value.length ? value.join("、") : "待确认";
+        return value || "待确认";
+      }
+
+      function isGuideChoiceActive(step, title) {
+        const current = guideAnswers[step.key];
+        if (step.multi) return Array.isArray(current) && current.includes(title);
+        return current === title;
+      }
+
+      const guidePhases = [
+        { key: "account", label: "账号/API" },
+        { key: "policy", label: "业务政策" },
+        { key: "source", label: "货源履约" },
+        { key: "listing", label: "Listing素材" },
+        { key: "profit", label: "费用利润" },
+        { key: "service", label: "客服售后" },
+        { key: "permission", label: "权限确认" },
+      ];
+
+      function guidePhaseForStep(step) {
+        const key = `${step.key || ""} ${step.title || ""}`;
+        if (/Stage|Api|import|storeMap|storeApi/i.test(key)) return "account";
+        if (/policy|业务政策|付款|退货/i.test(key)) return "policy";
+        if (/source|fulfillment|dispatch|物流|履约|货源|仓库/i.test(key)) return "source";
+        if (/listing|material|bulk|商品|素材|刊登/i.test(key)) return "listing";
+        if (/profit|cost|fee|费用|利润|广告/i.test(key)) return "profit";
+        if (/service|message|refund|order|daily|monitoring|客服|售后|订单/i.test(key)) return "service";
+        return "permission";
+      }
+
+      function guideImpactText(step) {
+        const phase = guidePhaseForStep(step);
+        return {
+          account: "影响能否自动读取店铺、Listing、订单和费用，决定后面少填多少资料。",
+          policy: "影响发货承诺、退货口径和上架模板，先保守才不容易写错。",
+          source: "影响采购价、库存、发货地、时效和退货路径，后面利润和客服都要用。",
+          listing: "影响标题、类目、参数、图片、视频和详情页，决定草稿能不能直接进入确认。",
+          profit: "影响售价、广告预算、退货预留和是否值得继续推进。",
+          service: "影响买家消息、催单、退货、补发和售后承诺能自动到哪一步。",
+          permission: "影响哪些动作自动归档，哪些必须停到确认中心。",
+        }[phase];
+      }
+
+      function guideRecommendedOption(step) {
+        return step.options.find((option) => option[2]?.includes("推荐")) || step.options[0];
+      }
+
+      function renderGuidePhases(steps, activeIndex) {
+        const activePhase = guidePhaseForStep(steps[activeIndex] || steps[0]);
+        const completedPhases = new Set(steps.slice(0, activeIndex).map(guidePhaseForStep));
+        const strip = document.querySelector("#guidePhaseStrip");
+        if (!strip) return;
+        strip.innerHTML = guidePhases
+          .map((phase, index) => {
+            const isActive = phase.key === activePhase;
+            const isDone = completedPhases.has(phase.key);
+            return `
+              <span class="guide-phase ${isActive ? "is-active" : ""} ${isDone ? "is-done" : ""}">
+                <span>${String(index + 1).padStart(2, "0")}</span>
+                <strong>${phase.label}</strong>
+              </span>
+            `;
+          })
+          .join("");
+      }
+
+      function renderGuideDefaultRoute(guide, steps) {
+        const route = document.querySelector("#guideDefaultRoute");
+        if (!route) return;
+        const items = steps
+          .map((step) => [guidePhaseForStep(step), formatGuideAnswer(guide.answers[step.key])])
+          .filter(([, value]) => value && value !== "待确认")
+          .slice(0, 6);
+        route.innerHTML = `
+          <strong>系统推荐默认路线</strong>
+          <span>先按这个路线走，小白不用逐项纠结；懂的商家可以逐步改细。</span>
+          <ul>
+            ${items.map(([phase, value]) => `<li><span>${guidePhases.find((item) => item.key === phase)?.label || "当前步骤"}：${escapeHtml(value)}</span></li>`).join("")}
+          </ul>
+        `;
+      }
+
+      function syncWorkspaceContext() {
+        const title = document.querySelector("#workspaceScopeTitle");
+        const body = document.querySelector("#workspaceScopeBody");
+        const pill = document.querySelector("#workspaceModePill");
+        if (!title || !body || !pill) return;
+        if (!hasEnteredGuide) {
+          title.textContent = "当前可执行范围：调研、供货判断、素材草稿";
+          body.textContent = "AI 可以先生成方案和过程记录；发布、广告、扣费、退款和平台授权默认暂停，进入确认中心。";
+          pill.textContent = "确认后执行";
+          return;
+        }
+        const path = pathData[activePath] || pathData.newbie;
+        const guide = guideData[activePath] || guideData.newbie;
+        const permission = formatGuideAnswer(guideAnswers.aiPermission || guideAnswers.refundRule || guideAnswers.teamPermission || "关键动作确认");
+        const savedRules = Object.values(guideAnswers).filter(Boolean).slice(0, 3).map(formatGuideAnswer).join(" / ");
+        title.textContent = `当前身份：${path.eyebrow}｜${permission}`;
+        body.textContent = `已接入「${guide.eyebrow}」：${savedRules}。AI CEO 会按这套规则接目标并拆任务、交结果；发布、广告、退款、扣费和平台授权仍进确认中心。`;
+        pill.textContent = "向导已接入";
+      }
+
+      function appStageForPath(key) {
+        return {
+          newbie: "newbie",
+          opened: "store_opened",
+          orders: "has_orders",
+          multi: "multi_store",
+        }[key] || "newbie";
+      }
+
+      function openLoggedInExperience(key) {
+        const target = new URL("./index.html", window.location.href);
+        target.searchParams.set("source", "huashu");
+        target.searchParams.set("start", "app");
+        target.searchParams.set("view", "cockpit");
+        target.searchParams.set("stage", appStageForPath(key));
+        target.searchParams.set("plan", activePlan);
+        target.searchParams.set("project", "backflow-incense");
+        target.searchParams.set("onboarded", "1");
+        target.searchParams.set("v", JIEJING_DEMO_VERSION);
+        window.location.href = target.toString();
+      }
+
+      function finishGuideAndOpenWorkspace() {
+        syncWorkspaceContext();
+        showToast("向导选择已保存，正在进入 AI CEO 工作舱。");
+        openLoggedInExperience(activePath);
+      }
+
+      function renderEntryModal() {
+        const grid = document.querySelector("#entryModeGrid");
+        if (!grid) return;
+        grid.innerHTML = Object.entries(pathData)
+          .map(([key, data]) => {
+            const active = key === activePath ? "is-active" : "";
+            const pillClass = key === "newbie" ? "green" : key === "orders" ? "amber" : "";
+            const pillLabel =
+              key === "newbie" ? "推荐起步" : key === "opened" ? "已开店" : key === "orders" ? "已有订单" : "多店铺";
+            return `
+              <button class="entry-mode-card ${active}" type="button" data-entry-path="${key}">
+                <span class="pill ${pillClass}">${pillLabel}</span>
+                <strong>${data.eyebrow}</strong>
+                <small>${data.title}</small>
+              </button>
+            `;
+          })
+          .join("");
+      }
+
+      function openNextStepModal(mode = "path") {
+        const modal = document.querySelector("#nextStepModal");
+        document.body.classList.remove("is-onboarding-mode");
+        document.body.classList.add("is-auth-mode");
+        renderEntryModal();
+        if (entryLoggedIn) showEntryModes();
+        else showEntryLogin();
+        if (mode === "plan" && !entryLoggedIn) {
+          document.querySelector("#nextStepBody").textContent = "订阅方案已保存。先登录，再选择商家身份进入对应向导。";
+        }
+        modal.classList.add("is-open");
+        modal.setAttribute("aria-hidden", "false");
+      }
+
+      function closeNextStepModal() {
+        const modal = document.querySelector("#nextStepModal");
+        modal.classList.remove("is-open");
+        modal.setAttribute("aria-hidden", "true");
+        document.body.classList.remove("is-auth-mode");
+      }
+
+      function scrollToSection(selector) {
+        const target = document.querySelector(selector);
+        if (!target) return;
+        const top = target.getBoundingClientRect().top + window.pageYOffset - 76;
+        window.scrollTo({ top, behavior: "smooth" });
+      }
+
+      function beginMode(key) {
+        setPath(key);
+        closeNextStepModal();
+        const data = pathData[key] || pathData.newbie;
+        hasEnteredGuide = true;
+        activeGuideStep = 0;
+        renderGuide();
+        syncWorkspaceContext();
+        enterOnboardingMode();
+        showToast(`已进入「${data.eyebrow}」专属向导。这里是登录后的独立向导，完成后再进入 AI CEO 工作舱。`);
+      }
+
+      function renderGuide() {
+        updateGuideHeader();
+        const guide = guideData[activePath] || guideData.newbie;
+        const steps = guide.steps;
+        const step = steps[activeGuideStep] || steps[0];
+        const recommended = guideRecommendedOption(step);
+        renderGuidePhases(steps, activeGuideStep);
+        renderGuideDefaultRoute(guide, steps);
+        const currentStepLabel = `第 ${activeGuideStep + 1}/${steps.length} 步`;
+        document.querySelector("#guideStepLabel").textContent = step.multi ? `${currentStepLabel} · 可多选` : currentStepLabel;
+        document.querySelector("#guideTitle").textContent = step.title;
+        document.querySelector("#guideBody").textContent = step.body;
+        document.querySelector("#guideCurrentDefault").innerHTML = `
+          <span>本步骤推荐默认</span>
+          <strong>${escapeHtml(recommended[0])}</strong>
+          <small>${escapeHtml(recommended[1])}</small>
+        `;
+        document.querySelector("#guideStepNotes").innerHTML = `
+          <article class="guide-step-note">
+            <span>为什么问这个</span>
+            <strong>${guideImpactText(step)}</strong>
+          </article>
+          <article class="guide-step-note">
+            <span>AI 会做什么</span>
+            <strong>${step.ai}</strong>
+          </article>
+          <article class="guide-step-note">
+            <span>你要做什么</span>
+            <strong>${step.human}</strong>
+          </article>
+          <article class="guide-step-note">
+            <span>可先保存</span>
+            <strong>${step.save}</strong>
+          </article>
+        `;
+        document.querySelector("#guideChoices").innerHTML = step.options
+          .map(
+            ([title, body, tag]) => `
+              <button class="guide-choice ${step.multi ? "is-multi" : ""} ${isGuideChoiceActive(step, title) ? "is-active" : ""}" type="button" data-guide-key="${step.key}" data-guide-value="${title}" aria-pressed="${isGuideChoiceActive(step, title)}">
+                <span class="pill ${tag.includes("推荐") ? "green" : ""}">${tag}</span>
+                <em>${isGuideChoiceActive(step, title) ? "已选" : step.multi ? "可多选" : "单选"}</em>
+                <strong>${title}</strong>
+                <small>${body}</small>
+              </button>
+            `,
+          )
+          .join("");
+        document.querySelector("#guideNext").textContent = activeGuideStep === steps.length - 1 ? "完成向导，进入 AI CEO 工作舱" : "下一步";
+        document.querySelector("#guideBack").disabled = activeGuideStep === 0;
+        document.querySelector("#guideSummary").innerHTML = steps
+          .map(
+            (item, index) => `
+              <button class="guide-summary-row ${index === activeGuideStep ? "is-active" : ""} ${item.title.includes("客服和售后") ? "is-boundary" : ""}" type="button" data-guide-step="${index}" aria-current="${index === activeGuideStep ? "step" : "false"}">
+                <span>第 ${index + 1}/${steps.length} 步${item.multi ? " · 可多选" : ""}</span>
+                <strong>${escapeHtml(item.title)}</strong>
+                <small>${escapeHtml(formatGuideAnswer(guideAnswers[item.key]))}</small>
+                ${item.title.includes("客服和售后") ? "<em>客服/售后边界</em>" : ""}
+              </button>
+            `,
+          )
+          .join("");
+      }
+
+      function escapeHtml(value) {
+        return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+      }
+
+      function completeDemoCommand() {
+        const input = document.querySelector("#ceoDemoInput");
+        const response = document.querySelector("#ceoDemoResponse");
+        const request = input.value.trim() || "生成 6 张产品图、10 秒视频，并列出发布前确认项。";
+        document.querySelector("#assetStatus").className = "pill green";
+        document.querySelector("#assetStatus").textContent = "已生成";
+        document.querySelector("#riskStatus").className = "pill amber";
+        document.querySelector("#riskStatus").textContent = "待确认";
+        response.innerHTML = `
+          <div class="demo-response-head">
+            <div>
+              <strong>AI CEO 已接收任务并生成演示汇报</strong>
+              <span>我布置：${escapeHtml(request)}</span>
+            </div>
+              <span class="pill green">演示结果</span>
+          </div>
+          <div class="demo-confirm-grid">
+            <article>
+              <strong>6 张产品图任务包</strong>
+              <small>白底主图、行李箱场景图、容量对比图、材质细节图、卖点图、包装清单图。正式版会先做图片授权和平台合规检查。</small>
+            </article>
+            <article>
+              <strong>10 秒视频分镜</strong>
+              <small>0-2s 痛点，2-4s 压缩动作，4-6s 分类装箱，6-8s 旅行箱对比，8-10s 卖点和 CTA 收口。</small>
+            </article>
+            <article>
+              <strong>发布前确认</strong>
+              <small>供应商授权、实物一致性、禁售词、运费时效、广告预算、最终售价和刊登分类，都进入确认中心。</small>
+            </article>
+          </div>
+          <div class="demo-generated-line">
+            <span class="pill">PDF 汇报已准备</span>
+            <span class="pill">Listing 草稿待生成</span>
+            <span class="pill amber">发布动作暂停</span>
+            <span class="pill amber">广告扣费暂停</span>
+          </div>
+        `;
+        response.classList.add("is-visible");
+        showToast("AI CEO 已生成素材任务包和人工确认清单。");
+      }
+
+      document.querySelectorAll(".flow-tab").forEach((button) => {
+        button.addEventListener("click", () => setFlow(button.dataset.flow));
+      });
+
+      document.querySelectorAll(".path-card").forEach((button) => {
+        button.addEventListener("click", () => setPath(button.dataset.path));
+      });
+
+      document.querySelectorAll(".price-card").forEach((button) => {
+        button.addEventListener("click", () => setPlan(button.dataset.plan));
+      });
+
+      document.querySelector("#topLogin").addEventListener("click", () => {
+        showToast("登录或注册后，先选择身份并完成向导。");
+        openNextStepModal("path");
+      });
+
+      document.querySelector("#heroLogin")?.addEventListener("click", () => {
+        showToast("登录或注册后，先选择身份并完成向导。");
+        openNextStepModal("path");
+      });
+
+      document.querySelector("#startPath")?.addEventListener("click", () => {
+        showToast("登录或注册后，先选择身份并完成向导。");
+        openNextStepModal("path");
+      });
+
+      document.querySelector("#savePath")?.addEventListener("click", () => {
+        const data = pathData[activePath] || pathData.newbie;
+        showNotice(`已先保存「${data.eyebrow}」。登录后会进入对应身份向导，完成向导后再进入 AI CEO 工作舱。`);
+        scrollToSection("#workspace");
+      });
+
+      document.querySelector("#choosePlan").addEventListener("click", () => {
+        const data = planData[activePlan] || planData.single;
+        showToast(`已选择「${data.title}」。登录后选身份，先完成向导。`);
+        openNextStepModal("plan");
+      });
+
+      document.querySelector("#entryLoginForm").addEventListener("submit", (event) => {
+        event.preventDefault();
+        continueAfterLogin();
+      });
+
+      document.querySelector("#entryLoginSubmit").addEventListener("click", continueAfterLogin);
+      document.querySelector("#entryRegisterSubmit").addEventListener("click", continueAfterLogin);
+      document.querySelector("#entryQrLogin").addEventListener("click", () => {
+        showToast("已模拟微信 / 支付宝扫码登录。请选择身份进入向导。");
+        continueAfterLogin();
+      });
+
+      document.querySelector("#entryModeGrid").addEventListener("click", (event) => {
+        const choice = event.target.closest(".entry-mode-card");
+        if (!choice) return;
+        beginMode(choice.dataset.entryPath);
+      });
+
+      document.querySelector("#guideChoices").addEventListener("click", (event) => {
+        const choice = event.target.closest(".guide-choice");
+        if (!choice) return;
+        const guide = guideData[activePath] || guideData.newbie;
+        const step = guide.steps.find((item) => item.key === choice.dataset.guideKey) || guide.steps[activeGuideStep];
+        if (step?.multi) {
+          const current = Array.isArray(guideAnswers[step.key]) ? guideAnswers[step.key] : [];
+          const exists = current.includes(choice.dataset.guideValue);
+          guideAnswers[step.key] = exists ? current.filter((item) => item !== choice.dataset.guideValue) : [...current, choice.dataset.guideValue];
+          showToast(`已更新：${formatGuideAnswer(guideAnswers[step.key])}`);
+        } else {
+          guideAnswers[choice.dataset.guideKey] = choice.dataset.guideValue;
+          showToast(`已保存：${choice.dataset.guideValue}`);
+        }
+        renderGuide();
+        syncWorkspaceContext();
+      });
+
+      document.querySelector("#guideSummary").addEventListener("click", (event) => {
+        const row = event.target.closest("[data-guide-step]");
+        if (!row) return;
+        const steps = (guideData[activePath] || guideData.newbie).steps;
+        const nextStep = Number(row.dataset.guideStep);
+        if (!Number.isInteger(nextStep) || nextStep < 0 || nextStep >= steps.length) return;
+        activeGuideStep = nextStep;
+        renderGuide();
+      });
+
+      document.querySelector("#guideBack").addEventListener("click", () => {
+        activeGuideStep = Math.max(0, activeGuideStep - 1);
+        renderGuide();
+      });
+
+      document.querySelector("#guideNext").addEventListener("click", () => {
+        const steps = (guideData[activePath] || guideData.newbie).steps;
+        if (activeGuideStep >= steps.length - 1) {
+          finishGuideAndOpenWorkspace();
+          return;
+        }
+        activeGuideStep += 1;
+        renderGuide();
+      });
+
+      document.querySelector("#guideSkipToWorkspace").addEventListener("click", () => {
+        finishGuideAndOpenWorkspace();
+      });
+
+      document.querySelector("#guideExitToHome")?.addEventListener("click", () => {
+        exitOnboardingMode();
+        showToast("已返回官网预览。登录后的向导选择已保留在本次体验里。");
+      });
+
+      document.querySelectorAll("[data-close-modal]").forEach((button) => {
+        button.addEventListener("click", closeNextStepModal);
+      });
+
+      document.querySelector("#voiceDemo").addEventListener("click", () => {
+        const input = document.querySelector("#ceoDemoInput");
+        input.value = "语音识别：我已经找到 1688 货源图。请先检查图片授权、实物一致性和平台合规，再生成 6 张产品图、10 秒短视频分镜，并把发布、售价、广告预算这些必须由我确认的事项列出来。";
+        input.focus();
+        showToast("已模拟语音转文字，可以直接发送。");
+      });
+
+      document.querySelector("#ceoDemoForm").addEventListener("submit", (event) => {
+        event.preventDefault();
+        completeDemoCommand();
+      });
+
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeNextStepModal();
+      });
+
+      window.addEventListener("pointermove", updateMouseVars, { passive: true });
+      window.addEventListener(
+        "scroll",
+        () => {
+          updatePageProgress();
+          wheelPulse = Math.min(1, wheelPulse + 0.025);
+        },
+        { passive: true },
+      );
+      window.addEventListener(
+        "wheel",
+        () => {
+          wheelPulse = Math.min(1, wheelPulse + 0.18);
+          root.style.setProperty("--wave", wheelPulse.toFixed(3));
+          window.clearTimeout(window.__waveReset);
+          window.__waveReset = window.setTimeout(() => root.style.setProperty("--wave", "0.12"), 220);
+        },
+        { passive: true },
+      );
+
+      setPath("newbie");
+      setPlan("single");
+      renderGuide();
+      updatePageProgress();
+      bindSurfaceLight();
+      setupReveal();
+      setupSignalCanvas();
+    </script>
+  </body>
+</html>

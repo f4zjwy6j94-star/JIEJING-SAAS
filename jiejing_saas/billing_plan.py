@@ -1,0 +1,1041 @@
+"""Billing, plan, and quota readiness contract for Jiejing SaaS."""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime, timezone
+from typing import Any
+
+from .config import SaaSSettings
+from .billing_checkout import STRIPE_API_VERSION, build_billing_checkout_contract
+from .billing_webhook import TEST_BILLING_PROVIDERS, build_billing_provider_contract, billing_plan_ids
+from .repository import SaaSRepository
+
+
+PLAN_CATALOG = [
+    {
+        "key": "starter",
+        "label": "Starter",
+        "intended_user": "single eBay seller validating the AI CEO workflow",
+        "monthly_task_quota": 100,
+        "connected_store_quota": 1,
+        "provider_job_quota": 300,
+        "includes_real_platform_writes": False,
+    },
+    {
+        "key": "operator",
+        "label": "Operator",
+        "intended_user": "active seller with repeated listing and reporting work",
+        "monthly_task_quota": 500,
+        "connected_store_quota": 3,
+        "provider_job_quota": 1500,
+        "includes_real_platform_writes": False,
+    },
+    {
+        "key": "team",
+        "label": "Team",
+        "intended_user": "multi-store or small team requiring permissions and audit",
+        "monthly_task_quota": 2000,
+        "connected_store_quota": 10,
+        "provider_job_quota": 6000,
+        "includes_real_platform_writes": False,
+    },
+]
+
+
+QUOTA_ACTION_UNITS = {
+    "connected_store": "connected_store_quota",
+    "ai_ceo_task": "monthly_task_quota",
+    "official_ebay_sync": "provider_job_quota",
+    "provider_job": "provider_job_quota",
+    "model_report_assist": "provider_job_quota",
+    "media_generation_request": "provider_job_quota",
+}
+STRIPE_CURRENT_API_VERSION = "2026-05-27.dahlia"
+STRIPE_GO_LIVE_DOCS = [
+    "https://docs.stripe.com/get-started/checklist/go-live",
+    "https://docs.stripe.com/billing/testing",
+    "https://docs.stripe.com/customer-management/integrate-customer-portal",
+    "https://docs.stripe.com/api/versioning",
+]
+
+
+def build_billing_plan(settings: SaaSSettings, repository: SaaSRepository) -> dict[str, Any]:
+    counts = repository.system_counts()
+    provider = os.environ.get("JIEJING_BILLING_PROVIDER", "").strip().lower()
+    provider_contract = build_billing_provider_contract()
+    checkout_contract = build_billing_checkout_contract()
+    webhook_configured = bool(provider_contract.get("webhook_configured")) or _env_bool("JIEJING_BILLING_WEBHOOK_CONFIGURED")
+    plans_published = _env_bool("JIEJING_BILLING_PLANS_PUBLISHED")
+    quota_enforcement_enabled = _env_bool("JIEJING_QUOTA_ENFORCEMENT_ENABLED")
+    provider = _canonical_provider(provider)
+    allowed_provider = provider in {"stripe", "paddle", "lemon_squeezy", "manual_seed"} or provider in TEST_BILLING_PROVIDERS
+    external_provider = provider in {"stripe", "paddle", "lemon_squeezy"}
+    test_provider = provider in TEST_BILLING_PROVIDERS
+    manual_seed_provider = provider == "manual_seed"
+    blockers: list[str] = []
+    if not allowed_provider:
+        blockers.append("billing_provider_not_selected")
+    if not plans_published:
+        blockers.append("billing_plans_not_published")
+    if external_provider and not webhook_configured:
+        blockers.append("billing_webhook_not_configured")
+    if external_provider and not provider_contract.get("api_key_configured"):
+        blockers.append(f"{provider}_api_key_not_configured")
+    if external_provider and provider_contract.get("missing_plan_ids"):
+        blockers.append("billing_plan_ids_missing")
+    if external_provider and provider != "stripe":
+        blockers.append("billing_checkout_adapter_not_implemented_for_provider")
+    if provider == "stripe" and not checkout_contract.get("checkout_sessions", {}).get("ready"):
+        blockers.append("stripe_checkout_not_ready")
+    if provider == "stripe" and not checkout_contract.get("customer_portal", {}).get("ready"):
+        blockers.append("stripe_customer_portal_not_ready")
+    if test_provider and not checkout_contract.get("checkout_sessions", {}).get("ready"):
+        blockers.append("billing_test_checkout_not_ready")
+    if test_provider and not checkout_contract.get("customer_portal", {}).get("ready"):
+        blockers.append("billing_test_customer_portal_not_ready")
+    if not quota_enforcement_enabled:
+        blockers.append("quota_enforcement_not_enabled")
+    paid_launch_blockers = list(blockers)
+    if manual_seed_provider:
+        paid_launch_blockers.append("external_paid_subscription_provider_not_configured")
+    if test_provider:
+        paid_launch_blockers.append("test_billing_provider_not_allowed_for_paid_launch")
+    live_cutover_matrix = _build_billing_live_cutover_matrix(
+        provider=provider,
+        provider_contract=provider_contract,
+        checkout_contract=checkout_contract,
+        plans_published=plans_published,
+        quota_enforcement_enabled=quota_enforcement_enabled,
+    )
+    live_cutover_ready_count = sum(1 for item in live_cutover_matrix if item["status"] == "ready")
+    live_cutover_blocked = [item for item in live_cutover_matrix if item["status"] != "ready"]
+
+    return {
+        "contract_version": "2026-05-18-billing-quota-boundary",
+        "environment": settings.environment,
+        "billing_ready_for_private_beta": settings.is_production_like and not blockers,
+        "billing_ready_for_paid_launch": settings.is_production_like and external_provider and not paid_launch_blockers,
+        "provider": {
+            "selected": provider or "not_selected",
+            "allowed_external_providers": ["stripe", "paddle", "lemon_squeezy"],
+            "allowed_test_providers": sorted(TEST_BILLING_PROVIDERS),
+            "manual_seed_allowed_for_private_beta": True,
+            "test_provider_allowed_for_private_beta": True,
+            "external_paid_provider_configured": external_provider,
+            "test_billing_provider_configured": test_provider,
+            "payment_flow_test_mode": test_provider,
+            "webhook_configured": webhook_configured,
+            "signed_webhook_contract": provider_contract,
+            "checkout_portal_contract": checkout_contract,
+            "calls_external_payment_api": bool(provider_contract.get("calls_external_payment_api")),
+            "can_run_without_payment_provider_account": bool(provider_contract.get("can_run_without_payment_provider_account")),
+            "triggers_real_charge": False,
+            "charge_now_allowed": False,
+            "raw_payment_secret_exposed": False,
+        },
+        "plan_catalog": _plan_catalog_with_provider_ids(),
+        "quota_contract": {
+            "enabled": quota_enforcement_enabled,
+            "metered_units": [
+                "connected_store",
+                "ai_ceo_task",
+                "provider_job",
+                "official_ebay_sync",
+                "model_report_assist",
+                "media_generation_request",
+            ],
+            "hard_stop_on_quota_exhaustion": quota_enforcement_enabled,
+            "merchant_visible_usage_required": True,
+            "cost_control_required_before_live_media_or_large_model_batches": True,
+        },
+        "billing_live_cutover_matrix": live_cutover_matrix,
+        "billing_live_cutover_summary": {
+            "contract_version": "2026-06-18-stripe-billing-live-cutover",
+            "ready_count": live_cutover_ready_count,
+            "total_count": len(live_cutover_matrix),
+            "blocked_count": len(live_cutover_blocked),
+            "next_step": live_cutover_blocked[0]["key"] if live_cutover_blocked else "",
+            "ready_for_owner_approval": not live_cutover_blocked,
+            "charge_now_allowed": False,
+            "frontend_gets_payment_secret": False,
+            "secret_exposed": False,
+        },
+        "billing_test_rehearsal_summary": _build_billing_test_rehearsal_summary(
+            provider=provider,
+            test_provider=test_provider,
+            provider_contract=provider_contract,
+            checkout_contract=checkout_contract,
+            plans_published=plans_published,
+            quota_enforcement_enabled=quota_enforcement_enabled,
+        ),
+        "subscription_quota_shutdown_closure": _build_subscription_quota_shutdown_closure(
+            provider=provider,
+            test_provider=test_provider,
+            provider_contract=provider_contract,
+            checkout_contract=checkout_contract,
+            quota_enforcement_enabled=quota_enforcement_enabled,
+        ),
+        "current_usage_shape": {
+            "users": counts.get("users", 0),
+            "companies": counts.get("companies", 0),
+            "stores": counts.get("stores", 0),
+            "tasks": counts.get("tasks", 0),
+            "queue_jobs": counts.get("queue_jobs", 0),
+            "reports": counts.get("reports", 0),
+            "platform_data_packets": counts.get("platform_data_packets", 0),
+        },
+        "confirmation_boundary": {
+            "billing_changes_need_owner_or_admin": True,
+            "real_platform_writes_not_included_in_any_current_plan": True,
+            "refunds_and_payment_disputes_need_human_operator": True,
+        },
+        "blockers": blockers,
+        "paid_launch_blockers": paid_launch_blockers,
+        "next_actions": _next_actions(blockers),
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+
+
+def _build_billing_test_rehearsal_summary(
+    *,
+    provider: str,
+    test_provider: bool,
+    provider_contract: dict[str, Any],
+    checkout_contract: dict[str, Any],
+    plans_published: bool,
+    quota_enforcement_enabled: bool,
+) -> dict[str, Any]:
+    checkout_sessions = checkout_contract.get("checkout_sessions") if isinstance(checkout_contract.get("checkout_sessions"), dict) else {}
+    customer_portal = checkout_contract.get("customer_portal") if isinstance(checkout_contract.get("customer_portal"), dict) else {}
+    event_types = set(provider_contract.get("webhook_event_types") or [])
+    required_events = {
+        "test.customer.subscription.updated",
+        "test.invoice.paid",
+        "test.invoice.payment_failed",
+        "test.customer.subscription.deleted",
+    }
+    steps = [
+        {
+            "key": "test_provider_selected",
+            "status": "ready" if test_provider else "blocked",
+            "evidence_summary": _compact_billing_evidence(provider=provider or "not_selected", no_stripe_account_required=test_provider),
+            "next_action": "Set JIEJING_BILLING_PROVIDER=stripe_test_mock for no-charge billing rehearsal.",
+        },
+        {
+            "key": "test_plan_catalog_available",
+            "status": "ready" if plans_published and not provider_contract.get("missing_plan_ids") else "blocked",
+            "evidence_summary": _compact_billing_evidence(plans_published=plans_published, missing_plan_ids=provider_contract.get("missing_plan_ids") or []),
+            "next_action": "Publish Starter/Operator/Team plan catalog for the rehearsal provider.",
+        },
+        {
+            "key": "test_checkout_and_portal_contract",
+            "status": "ready" if checkout_sessions.get("ready") and customer_portal.get("ready") else "blocked",
+            "evidence_summary": _compact_billing_evidence(
+                checkout_ready=bool(checkout_sessions.get("ready")),
+                portal_ready=bool(customer_portal.get("ready")),
+                calls_stripe_api=bool(checkout_sessions.get("calls_stripe_api")),
+                creates_real_checkout_session=bool(checkout_sessions.get("creates_real_checkout_session")),
+            ),
+            "next_action": "Configure stable success, cancel and portal return URLs.",
+        },
+        {
+            "key": "test_subscription_lifecycle_events",
+            "status": "ready" if required_events.issubset(event_types) else "blocked",
+            "evidence_summary": _compact_billing_evidence(required_events_present=required_events.issubset(event_types)),
+            "next_action": "Use POST /billing/test-event to rehearse activate, invoice_paid, payment_failed and cancel states.",
+        },
+        {
+            "key": "quota_hard_stop_rehearsal",
+            "status": "ready" if quota_enforcement_enabled else "blocked",
+            "evidence_summary": _compact_billing_evidence(quota_enabled=quota_enforcement_enabled),
+            "next_action": "Enable quota enforcement so payment failure and cancellation stop metered work.",
+        },
+    ]
+    ready_count = sum(1 for item in steps if item["status"] == "ready")
+    blocked = [item for item in steps if item["status"] != "ready"]
+    return {
+        "contract_version": "2026-06-18-no-charge-billing-rehearsal",
+        "provider": provider or "not_selected",
+        "ready": test_provider and not blocked,
+        "ready_count": ready_count,
+        "total_count": len(steps),
+        "blocked_count": len(blocked),
+        "next_step": blocked[0]["key"] if blocked else "",
+        "steps": [
+            {
+                **item,
+                "severity": "info" if item["status"] == "ready" else "blocker",
+                "external_resource_required": False,
+                "creates_real_checkout_session": False,
+                "calls_stripe_api": False,
+                "triggers_real_charge": False,
+                "charge_now_allowed": False,
+                "frontend_gets_payment_secret": False,
+                "secret_exposed": False,
+            }
+            for item in steps
+        ],
+        "paid_launch_ready": False,
+        "public_charging_allowed": False,
+        "external_resource_required": False,
+        "creates_real_checkout_session": False,
+        "calls_stripe_api": False,
+        "triggers_real_charge": False,
+        "charge_now_allowed": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def _build_subscription_quota_shutdown_closure(
+    *,
+    provider: str,
+    test_provider: bool,
+    provider_contract: dict[str, Any],
+    checkout_contract: dict[str, Any],
+    quota_enforcement_enabled: bool,
+) -> dict[str, Any]:
+    """Describe the billing lifecycle drill that prevents unpaid usage."""
+
+    event_types = set(provider_contract.get("webhook_event_types") or [])
+    customer_portal = checkout_contract.get("customer_portal") if isinstance(checkout_contract.get("customer_portal"), dict) else {}
+    live_lifecycle_flags = {
+        "portal": _env_bool("JIEJING_STRIPE_CUSTOMER_PORTAL_TESTED"),
+        "cancel": _env_bool("JIEJING_STRIPE_SUBSCRIPTION_CANCEL_TESTED"),
+        "invoice_paid": _env_bool("JIEJING_STRIPE_INVOICE_PAID_TESTED"),
+        "payment_failed": _env_bool("JIEJING_STRIPE_PAYMENT_FAILURE_TESTED"),
+    }
+    if test_provider:
+        required_events = {
+            "test.customer.subscription.updated",
+            "test.invoice.paid",
+            "test.invoice.payment_failed",
+            "test.customer.subscription.deleted",
+        }
+        lifecycle_events_ready = required_events.issubset(event_types)
+        portal_changes_ready = bool(customer_portal.get("ready"))
+        invoice_paid_ready = "test.invoice.paid" in event_types
+        payment_failed_ready = "test.invoice.payment_failed" in event_types
+        cancel_ready = "test.customer.subscription.deleted" in event_types
+        external_resource_required = False
+    else:
+        required_events = {
+            "customer.subscription.created",
+            "customer.subscription.updated",
+            "customer.subscription.deleted",
+            "invoice.paid",
+            "invoice.payment_failed",
+        }
+        lifecycle_events_ready = required_events.issubset(event_types) and bool(provider_contract.get("webhook_configured"))
+        portal_changes_ready = bool(customer_portal.get("ready")) and live_lifecycle_flags["portal"]
+        invoice_paid_ready = "invoice.paid" in event_types and live_lifecycle_flags["invoice_paid"]
+        payment_failed_ready = "invoice.payment_failed" in event_types and live_lifecycle_flags["payment_failed"]
+        cancel_ready = "customer.subscription.deleted" in event_types and live_lifecycle_flags["cancel"]
+        external_resource_required = provider in {"stripe", "paddle", "lemon_squeezy"}
+    steps = [
+        _billing_shutdown_step(
+            "subscription_activation_grants_entitlement",
+            "Activation writes a subscription record and grants entitlement",
+            lifecycle_events_ready,
+            evidence_summary=_compact_billing_evidence(
+                provider=provider or "not_selected",
+                required_events_present=lifecycle_events_ready,
+                signed_webhook=bool(provider_contract.get("webhook_configured")),
+            ),
+            next_action="Rehearse subscription created or updated through signed webhook/test event before enabling paid launch.",
+            external_resource_required=external_resource_required,
+        ),
+        _billing_shutdown_step(
+            "invoice_paid_keeps_quota_open",
+            "Invoice paid keeps entitlement and quota open",
+            invoice_paid_ready,
+            evidence_summary=_compact_billing_evidence(
+                invoice_paid_event_present=invoice_paid_ready,
+                live_invoice_paid_tested=live_lifecycle_flags["invoice_paid"],
+                test_provider=test_provider,
+            ),
+            next_action="Run invoice paid rehearsal and confirm the merchant plan remains active.",
+            external_resource_required=external_resource_required,
+        ),
+        _billing_shutdown_step(
+            "payment_failed_disables_entitlement",
+            "Payment failure disables entitlement",
+            payment_failed_ready and quota_enforcement_enabled,
+            evidence_summary=_compact_billing_evidence(
+                payment_failed_event_present=payment_failed_ready,
+                quota_enabled=quota_enforcement_enabled,
+                live_payment_failure_tested=live_lifecycle_flags["payment_failed"],
+                test_provider=test_provider,
+            ),
+            next_action="Run payment_failed rehearsal and confirm metered AI CEO work returns billing_subscription_not_active.",
+            external_resource_required=external_resource_required,
+            owner_approval_required=True,
+        ),
+        _billing_shutdown_step(
+            "subscription_cancel_disables_entitlement",
+            "Cancellation disables entitlement",
+            cancel_ready and quota_enforcement_enabled,
+            evidence_summary=_compact_billing_evidence(
+                cancel_event_present=cancel_ready,
+                quota_enabled=quota_enforcement_enabled,
+                live_cancel_tested=live_lifecycle_flags["cancel"],
+                test_provider=test_provider,
+            ),
+            next_action="Run cancel/delete rehearsal and confirm usage stays visible but new metered work is blocked.",
+            external_resource_required=external_resource_required,
+            owner_approval_required=True,
+        ),
+        _billing_shutdown_step(
+            "quota_guardrail_blocks_metered_work",
+            "Quota guardrail blocks unpaid or exhausted metered work",
+            quota_enforcement_enabled,
+            evidence_summary=_compact_billing_evidence(
+                quota_enabled=quota_enforcement_enabled,
+                hard_stop_on_inactive_subscription=True,
+                covered_units="/".join(sorted(QUOTA_ACTION_UNITS)),
+            ),
+            next_action="Keep quota enforcement enabled for AI CEO tasks, provider jobs and connected-store limits.",
+            external_resource_required=False,
+        ),
+        _billing_shutdown_step(
+            "customer_portal_changes_audited",
+            "Customer Portal changes remain inside provider and audit boundary",
+            portal_changes_ready,
+            evidence_summary=_compact_billing_evidence(
+                portal_ready=bool(customer_portal.get("ready")),
+                live_portal_tested=live_lifecycle_flags["portal"],
+                frontend_gets_payment_secret=False,
+            ),
+            next_action="Verify portal plan changes, cancel and provider-side payment updates never expose payment or provider secrets to frontend.",
+            external_resource_required=external_resource_required,
+        ),
+        _billing_shutdown_step(
+            "provider_cutover_no_real_charge_safety",
+            "Provider cutover drill is no-charge until owner approval",
+            True,
+            evidence_summary=_compact_billing_evidence(
+                creates_checkout_session=False,
+                calls_stripe_api=False,
+                triggers_real_charge=False,
+                frontend_gets_payment_secret=False,
+            ),
+            next_action="Use the rehearsal flow first; only switch to live Checkout after live provider env, webhook and owner approval are present.",
+            external_resource_required=False,
+        ),
+    ]
+    ready_count = sum(1 for item in steps if item["status"] == "ready")
+    blocked = [item for item in steps if item["status"] != "ready"]
+    next_step = blocked[0]["key"] if blocked else ""
+    return {
+        "contract_version": "2026-06-20-subscription-quota-shutdown-closure",
+        "provider": provider or "not_selected",
+        "mode": "no_charge_test_provider" if test_provider else "live_provider_rehearsal",
+        "ready": not blocked,
+        "ready_for_no_charge_rehearsal": test_provider and not blocked,
+        "ready_for_live_cutover": provider == "stripe" and not test_provider and not blocked,
+        "ready_count": ready_count,
+        "total_count": len(steps),
+        "blocked_count": len(blocked),
+        "next_step": next_step,
+        "operator_summary": {
+            "status": "ready" if not blocked else "blocked",
+            "ready_text": f"{ready_count}/{len(steps)} subscription shutdown controls ready",
+            "blocked_text": f"{len(blocked)} billing shutdown controls still need evidence",
+            "next_action": blocked[0]["next_action"] if blocked else "Keep no-charge failed-payment, cancellation and quota shutdown rehearsal evidence current.",
+            "secret_exposed": False,
+        },
+        "steps": steps,
+        "covered_actions": sorted(QUOTA_ACTION_UNITS),
+        "shutdown_guards": {
+            "covered_action_count": len(QUOTA_ACTION_UNITS),
+            "hard_stop_on_inactive_subscription": quota_enforcement_enabled,
+            "payment_failure_blocks_metered_work": quota_enforcement_enabled and payment_failed_ready,
+            "cancellation_blocks_metered_work": quota_enforcement_enabled and cancel_ready,
+            "usage_remains_visible_after_shutdown": True,
+            "owner_approval_required_for_reenable": True,
+            "secret_exposed": False,
+        },
+        "payment_failure_blocks_metered_work": quota_enforcement_enabled and payment_failed_ready,
+        "cancellation_blocks_metered_work": quota_enforcement_enabled and cancel_ready,
+        "public_charging_allowed": False,
+        "creates_checkout_session": False,
+        "calls_stripe_api": False,
+        "triggers_real_charge": False,
+        "charge_now_allowed": False,
+        "frontend_gets_payment_secret": False,
+        "frontend_gets_api_key": False,
+        "secret_exposed": False,
+    }
+
+
+def _billing_shutdown_step(
+    key: str,
+    title: str,
+    ready: bool,
+    *,
+    evidence_summary: str,
+    next_action: str,
+    external_resource_required: bool,
+    owner_approval_required: bool = False,
+) -> dict[str, Any]:
+    return {
+        "key": key,
+        "title": title,
+        "status": "ready" if ready else "blocked",
+        "severity": "info" if ready else "blocker",
+        "evidence_summary": evidence_summary,
+        "next_action": next_action,
+        "external_resource_required": external_resource_required,
+        "owner_approval_required": owner_approval_required,
+        "creates_checkout_session": False,
+        "calls_stripe_api": False,
+        "triggers_real_charge": False,
+        "charge_now_allowed": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def _build_billing_live_cutover_matrix(
+    *,
+    provider: str,
+    provider_contract: dict[str, Any],
+    checkout_contract: dict[str, Any],
+    plans_published: bool,
+    quota_enforcement_enabled: bool,
+) -> list[dict[str, Any]]:
+    checkout_sessions = checkout_contract.get("checkout_sessions") if isinstance(checkout_contract.get("checkout_sessions"), dict) else {}
+    customer_portal = checkout_contract.get("customer_portal") if isinstance(checkout_contract.get("customer_portal"), dict) else {}
+    urls = checkout_contract.get("urls") if isinstance(checkout_contract.get("urls"), dict) else {}
+    plan_ids = provider_contract.get("plan_ids") if isinstance(provider_contract.get("plan_ids"), dict) else {}
+    event_types = set(provider_contract.get("webhook_event_types") or [])
+    required_stripe_events = {
+        "checkout.session.completed",
+        "customer.subscription.created",
+        "customer.subscription.updated",
+        "customer.subscription.deleted",
+        "invoice.paid",
+        "invoice.payment_failed",
+    }
+    live_object_flags = [
+        "JIEJING_STRIPE_LIVE_PRODUCTS_VERIFIED",
+        "JIEJING_STRIPE_LIVE_PRICES_VERIFIED",
+        "JIEJING_STRIPE_NO_TEST_OBJECTS_IN_LIVE_CONFIG",
+    ]
+    webhook_resilience_flags = [
+        "JIEJING_STRIPE_WEBHOOK_DUPLICATE_TESTED",
+        "JIEJING_STRIPE_WEBHOOK_DELAYED_TESTED",
+        "JIEJING_STRIPE_WEBHOOK_OUT_OF_ORDER_TESTED",
+    ]
+    billing_lifecycle_flags = [
+        "JIEJING_STRIPE_CUSTOMER_PORTAL_TESTED",
+        "JIEJING_STRIPE_SUBSCRIPTION_CANCEL_TESTED",
+        "JIEJING_STRIPE_INVOICE_PAID_TESTED",
+        "JIEJING_STRIPE_PAYMENT_FAILURE_TESTED",
+    ]
+    return [
+        _billing_live_cutover_step(
+            "stripe_live_provider_selected",
+            "Stripe live provider and backend secret boundary",
+            provider == "stripe" and bool(provider_contract.get("external_provider_configured")) and bool(provider_contract.get("api_key_configured")),
+            owner="platform_ops",
+            category="provider",
+            evidence_summary=_compact_billing_evidence(
+                provider=provider or "not_selected",
+                api_key_configured=bool(provider_contract.get("api_key_configured")),
+                frontend_gets_payment_secret=False,
+            ),
+            next_action="Select Stripe as the live subscription provider and keep API keys inside backend environment or Vault only.",
+            environment_keys=["JIEJING_BILLING_PROVIDER", "JIEJING_STRIPE_SECRET_KEY"],
+            verification=["/billing/plans", "/billing/checkout-contract", "tools/test_jiejing_stripe_checkout_portal.py"],
+            docs=[STRIPE_GO_LIVE_DOCS[0], STRIPE_GO_LIVE_DOCS[3]],
+        ),
+        _billing_live_cutover_step(
+            "stripe_live_price_catalog",
+            "Live product and Price catalog",
+            plans_published and all(bool(plan_ids.get(key)) for key in ("starter", "operator", "team")) and all(_env_bool(name) for name in live_object_flags),
+            owner="commercial_ops",
+            category="price_catalog",
+            evidence_summary=_compact_billing_evidence(
+                plans_published=plans_published,
+                starter_price=bool(plan_ids.get("starter")),
+                operator_price=bool(plan_ids.get("operator")),
+                team_price=bool(plan_ids.get("team")),
+                live_objects_verified=all(_env_bool(name) for name in live_object_flags),
+            ),
+            next_action="Publish live Starter/Operator/Team Price IDs and verify they are not sandbox/test objects before public charging.",
+            environment_keys=[
+                "JIEJING_BILLING_PLANS_PUBLISHED",
+                "JIEJING_STRIPE_PRICE_STARTER_ID",
+                "JIEJING_STRIPE_PRICE_OPERATOR_ID",
+                "JIEJING_STRIPE_PRICE_TEAM_ID",
+                *live_object_flags,
+            ],
+            verification=["/billing/plans", "Stripe live Products and Prices"],
+            docs=[STRIPE_GO_LIVE_DOCS[0]],
+        ),
+        _billing_live_cutover_step(
+            "stripe_subscription_checkout_contract",
+            "Subscription Checkout contract",
+            bool(checkout_sessions.get("ready"))
+            and checkout_sessions.get("mode") == "subscription"
+            and checkout_sessions.get("uses_price_ids") is True
+            and urls.get("success_url_configured") is True
+            and urls.get("cancel_url_configured") is True
+            and urls.get("request_override_must_match_configured_url") is True,
+            owner="platform_ops",
+            category="checkout",
+            evidence_summary=_compact_billing_evidence(
+                checkout_ready=bool(checkout_sessions.get("ready")),
+                mode=checkout_sessions.get("mode") or "missing",
+                uses_price_ids=checkout_sessions.get("uses_price_ids") is True,
+                success_url=urls.get("success_url_configured") is True,
+                cancel_url=urls.get("cancel_url_configured") is True,
+                overrides_locked_to_configured_url=urls.get("request_override_must_match_configured_url") is True,
+            ),
+            next_action="Use Stripe Checkout Sessions in subscription mode with live Price IDs, success/cancel URLs and company metadata.",
+            environment_keys=["JIEJING_BILLING_SUCCESS_URL", "JIEJING_BILLING_CANCEL_URL"],
+            verification=["/billing/checkout-contract", "tools/test_jiejing_stripe_checkout_portal.py"],
+            docs=[STRIPE_GO_LIVE_DOCS[1]],
+        ),
+        _billing_live_cutover_step(
+            "stripe_customer_portal_contract",
+            "Customer Portal contract",
+            bool(customer_portal.get("ready"))
+            and urls.get("portal_return_url_configured") is True
+            and urls.get("request_override_must_match_configured_url") is True,
+            owner="platform_ops",
+            category="portal",
+            evidence_summary=_compact_billing_evidence(
+                portal_ready=bool(customer_portal.get("ready")),
+                portal_return_url=urls.get("portal_return_url_configured") is True,
+                overrides_locked_to_configured_url=urls.get("request_override_must_match_configured_url") is True,
+            ),
+            next_action="Verify Customer Portal can manage subscription changes, payment method updates and cancellation without exposing payment secrets.",
+            environment_keys=["JIEJING_BILLING_PORTAL_RETURN_URL"],
+            verification=["/billing/customer-portal", "tools/test_jiejing_stripe_checkout_portal.py"],
+            docs=[STRIPE_GO_LIVE_DOCS[2]],
+        ),
+        _billing_live_cutover_step(
+            "stripe_signed_webhook_contract",
+            "Signed webhook endpoint contract",
+            bool(provider_contract.get("webhook_configured")) and required_stripe_events.issubset(event_types),
+            owner="platform_ops",
+            category="webhook",
+            evidence_summary=_compact_billing_evidence(
+                webhook_configured=bool(provider_contract.get("webhook_configured")),
+                required_events_present=required_stripe_events.issubset(event_types),
+            ),
+            next_action="Register the live Stripe webhook endpoint with subscription, invoice paid and payment-failure events; verify every event with signature checking.",
+            environment_keys=["JIEJING_STRIPE_WEBHOOK_SECRET", "JIEJING_BILLING_WEBHOOK_URL"],
+            verification=["/billing/webhook", "tools/test_jiejing_billing_provider_webhook.py"],
+            docs=[STRIPE_GO_LIVE_DOCS[0], STRIPE_GO_LIVE_DOCS[1]],
+        ),
+        _billing_live_cutover_step(
+            "stripe_api_webhook_version_alignment",
+            "API and webhook version alignment",
+            STRIPE_API_VERSION == STRIPE_CURRENT_API_VERSION
+            and checkout_contract.get("stripe_api_version") == STRIPE_CURRENT_API_VERSION
+            and _env_bool("JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"),
+            owner="platform_ops",
+            category="versioning",
+            evidence_summary=_compact_billing_evidence(
+                request_api_version=checkout_contract.get("stripe_api_version") or "missing",
+                expected_api_version=STRIPE_CURRENT_API_VERSION,
+                webhook_endpoint_version_verified=_env_bool("JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"),
+            ),
+            next_action="Keep backend Stripe-Version and live webhook endpoint API version aligned to the reviewed Stripe version.",
+            environment_keys=["JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"],
+            verification=["/billing/checkout-contract", "Stripe webhook endpoint metadata"],
+            docs=[STRIPE_GO_LIVE_DOCS[0], STRIPE_GO_LIVE_DOCS[3]],
+        ),
+        _billing_live_cutover_step(
+            "stripe_webhook_failure_paths",
+            "Webhook delayed, duplicate and out-of-order failure paths",
+            bool(provider_contract.get("webhook_configured")) and all(_env_bool(name) for name in webhook_resilience_flags),
+            owner="platform_ops",
+            category="resilience",
+            evidence_summary=_compact_billing_evidence(
+                signed_webhook=bool(provider_contract.get("webhook_configured")),
+                duplicate_tested=_env_bool("JIEJING_STRIPE_WEBHOOK_DUPLICATE_TESTED"),
+                delayed_tested=_env_bool("JIEJING_STRIPE_WEBHOOK_DELAYED_TESTED"),
+                out_of_order_tested=_env_bool("JIEJING_STRIPE_WEBHOOK_OUT_OF_ORDER_TESTED"),
+            ),
+            next_action="Prove webhook handling is idempotent and resilient to delayed, duplicate and out-of-order delivery before charging real merchants.",
+            environment_keys=webhook_resilience_flags,
+            verification=["tools/test_jiejing_billing_provider_webhook.py", "tools/test_jiejing_billing_webhook_subscription_state.py"],
+            docs=[STRIPE_GO_LIVE_DOCS[0], STRIPE_GO_LIVE_DOCS[1]],
+        ),
+        _billing_live_cutover_step(
+            "stripe_entitlement_quota_lifecycle",
+            "Entitlement, quota and payment-failure lifecycle",
+            quota_enforcement_enabled and all(_env_bool(name) for name in billing_lifecycle_flags),
+            owner="platform_ops",
+            category="entitlement",
+            evidence_summary=_compact_billing_evidence(
+                quota_enabled=quota_enforcement_enabled,
+                portal_tested=_env_bool("JIEJING_STRIPE_CUSTOMER_PORTAL_TESTED"),
+                cancel_tested=_env_bool("JIEJING_STRIPE_SUBSCRIPTION_CANCEL_TESTED"),
+                invoice_paid_tested=_env_bool("JIEJING_STRIPE_INVOICE_PAID_TESTED"),
+                payment_failure_tested=_env_bool("JIEJING_STRIPE_PAYMENT_FAILURE_TESTED"),
+            ),
+            next_action="Verify invoice paid provisioning, cancellation, payment failure, portal changes and hard-stop quota behavior before owner approval.",
+            environment_keys=["JIEJING_QUOTA_ENFORCEMENT_ENABLED", *billing_lifecycle_flags],
+            verification=["/billing/usage", "tools/test_jiejing_billing_webhook_subscription_state.py", "tools/test_jiejing_billing_quota_guardrail.py"],
+            docs=[STRIPE_GO_LIVE_DOCS[1], STRIPE_GO_LIVE_DOCS[2]],
+            owner_approval_required=True,
+        ),
+    ]
+
+
+def _billing_live_cutover_step(
+    key: str,
+    title: str,
+    ready: bool,
+    *,
+    owner: str,
+    category: str,
+    evidence_summary: str,
+    next_action: str,
+    environment_keys: list[str],
+    verification: list[str],
+    docs: list[str],
+    owner_approval_required: bool = False,
+) -> dict[str, Any]:
+    return {
+        "key": key,
+        "title": title,
+        "status": "ready" if ready else "blocked",
+        "severity": "info" if ready else "blocker",
+        "owner": owner,
+        "category": category,
+        "evidence_summary": evidence_summary,
+        "next_action": next_action,
+        "environment_keys": environment_keys,
+        "verification": verification,
+        "docs": docs,
+        "owner_approval_required": owner_approval_required,
+        "external_resource_required": True,
+        "triggers_real_charge": False,
+        "charge_now_allowed": False,
+        "frontend_gets_payment_secret": False,
+        "raw_payment_secret_exposed": False,
+        "secret_exposed": False,
+    }
+
+
+def _compact_billing_evidence(**values: Any) -> str:
+    return "; ".join(f"{key}={value}" for key, value in values.items())
+
+
+def build_billing_usage(settings: SaaSSettings, repository: SaaSRepository, *, company_id: str) -> dict[str, Any]:
+    """Return merchant-visible usage and quota status without payment secrets."""
+
+    subscription = repository.get_billing_subscription(company_id=company_id)
+    provider = _provider()
+    entitlement_active = _entitlement_active(provider=provider, subscription=subscription)
+    plan_key = _selected_plan_key(subscription=subscription, entitlement_active=entitlement_active)
+    plan = _plan_by_key(plan_key)
+    usage = _company_usage(repository, company_id=company_id)
+    quota_status = _quota_status(plan=plan, usage=usage)
+    public_subscription = _public_subscription(subscription=subscription, provider=provider, entitlement_active=entitlement_active)
+    return {
+        "contract_version": "2026-05-19-billing-usage-quota",
+        "environment": settings.environment,
+        "company_id": company_id,
+        "plan": {
+            "key": plan["key"],
+            "label": plan["label"],
+            "source": _plan_source(provider=provider, subscription=subscription),
+            "provider_plan_id": plan.get("provider_plan_id") or "",
+            "includes_real_platform_writes": False,
+        },
+        "subscription": public_subscription,
+        "quota_enforcement_enabled": _env_bool("JIEJING_QUOTA_ENFORCEMENT_ENABLED"),
+        "usage": usage,
+        "quota_status": quota_status,
+        "blocked_units": [item["unit"] for item in quota_status if item["would_block_next_unit"]],
+        "subscription_quota_shutdown_state": _build_subscription_quota_shutdown_state(
+            subscription=public_subscription,
+            quota_enforcement_enabled=_env_bool("JIEJING_QUOTA_ENFORCEMENT_ENABLED"),
+            blocked_units=[item["unit"] for item in quota_status if item["would_block_next_unit"]],
+        ),
+        "merchant_visible": True,
+        "frontend_gets_payment_secret": False,
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+
+
+def _build_subscription_quota_shutdown_state(
+    *,
+    subscription: dict[str, Any],
+    quota_enforcement_enabled: bool,
+    blocked_units: list[str],
+) -> dict[str, Any]:
+    entitlement_active = bool(subscription.get("entitlement_active"))
+    payment_attention_required = bool(subscription.get("payment_attention_required"))
+    inactive_paid_subscription = quota_enforcement_enabled and not entitlement_active
+    return {
+        "contract_version": "2026-06-20-merchant-billing-shutdown-state",
+        "subscription_status": subscription.get("status") or "subscription_missing",
+        "entitlement_active": entitlement_active,
+        "payment_attention_required": payment_attention_required,
+        "quota_enforcement_enabled": quota_enforcement_enabled,
+        "blocks_metered_work_when_inactive": inactive_paid_subscription,
+        "block_reason": subscription.get("block_reason") or ("billing_subscription_not_active" if inactive_paid_subscription else ""),
+        "blocked_units": blocked_units,
+        "blocked_units_count": len(blocked_units),
+        "merchant_visible": True,
+        "creates_checkout_session": False,
+        "calls_stripe_api": False,
+        "triggers_real_charge": False,
+        "charge_now_allowed": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def evaluate_quota_action(
+    settings: SaaSSettings,
+    repository: SaaSRepository,
+    *,
+    company_id: str,
+    action_unit: str,
+    requested_units: int = 1,
+) -> dict[str, Any]:
+    """Evaluate whether a merchant action can proceed under the current plan."""
+
+    usage_report = build_billing_usage(settings, repository, company_id=company_id)
+    quota_key = QUOTA_ACTION_UNITS.get(action_unit)
+    enforcement_enabled = bool(usage_report.get("quota_enforcement_enabled"))
+    blocked = False
+    reason = ""
+    subscription = usage_report.get("subscription") if isinstance(usage_report.get("subscription"), dict) else {}
+    if enforcement_enabled and subscription.get("entitlement_active") is False:
+        blocked = True
+        reason = str(subscription.get("block_reason") or "billing_subscription_not_active")
+    elif enforcement_enabled and quota_key:
+        plan = _plan_by_key(str((usage_report.get("plan") or {}).get("key") or "starter"))
+        usage = usage_report.get("usage") if isinstance(usage_report.get("usage"), dict) else {}
+        current = int(usage.get(_usage_key_for_quota(quota_key)) or 0)
+        limit = int(plan.get(quota_key) or 0)
+        blocked = limit > 0 and current + max(1, int(requested_units)) > limit
+        if blocked:
+            reason = f"{action_unit} would exceed {quota_key}"
+    elif enforcement_enabled and not quota_key:
+        reason = "unmetered_action_allowed"
+    else:
+        reason = "quota_enforcement_disabled"
+    return {
+        "action_unit": action_unit,
+        "requested_units": max(1, int(requested_units)),
+        "allowed": not blocked,
+        "blocked": blocked,
+        "reason": reason or "within_quota",
+        "usage": usage_report,
+        "merchant_visible": True,
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+
+
+def _company_usage(repository: SaaSRepository, *, company_id: str) -> dict[str, Any]:
+    stores = repository.list_stores(company_id=company_id)
+    tasks = repository.list_tasks(company_id=company_id)
+    queue_jobs = repository.list_queue_jobs(company_id=company_id, limit=10000)
+    reports = repository.list_reports(company_id=company_id)
+    month_prefix = datetime.now(timezone.utc).strftime("%Y-%m")
+    monthly_tasks = [item for item in tasks if str(item.get("created_at") or "").startswith(month_prefix)]
+    provider_tasks = [
+        item
+        for item in monthly_tasks
+        if str(item.get("task_type") or "") in {"provider_job", "ebay_read_only_sync", "ebay_read_only_live_plan", "model_value_rehearsal"}
+    ]
+    model_reports = [
+        item
+        for item in reports
+        if str(item.get("created_at") or "").startswith(month_prefix)
+        and str(item.get("report_type") or "") in {"market.report", "listing.package", "market.data_packet", "product.listing"}
+    ]
+    return {
+        "period": month_prefix,
+        "connected_store_count": len(stores),
+        "monthly_task_count": len(monthly_tasks),
+        "monthly_provider_job_count": len(provider_tasks),
+        "monthly_model_report_assist_count": len(model_reports),
+        "queue_job_count_sampled": len(queue_jobs),
+        "secret_exposed": False,
+    }
+
+
+def _quota_status(*, plan: dict[str, Any], usage: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = [
+        ("connected_store", "connected_store_count", "connected_store_quota"),
+        ("ai_ceo_task", "monthly_task_count", "monthly_task_quota"),
+        ("provider_job", "monthly_provider_job_count", "provider_job_quota"),
+        ("model_report_assist", "monthly_model_report_assist_count", "provider_job_quota"),
+    ]
+    status = []
+    for unit, usage_key, quota_key in rows:
+        used = int(usage.get(usage_key) or 0)
+        limit = int(plan.get(quota_key) or 0)
+        remaining = max(0, limit - used) if limit > 0 else 0
+        status.append(
+            {
+                "unit": unit,
+                "used": used,
+                "limit": limit,
+                "remaining": remaining,
+                "would_block_next_unit": limit > 0 and remaining <= 0,
+            }
+        )
+    return status
+
+
+def _usage_key_for_quota(quota_key: str) -> str:
+    return {
+        "connected_store_quota": "connected_store_count",
+        "monthly_task_quota": "monthly_task_count",
+        "provider_job_quota": "monthly_provider_job_count",
+    }.get(quota_key, "")
+
+
+def _plan_catalog_with_provider_ids() -> list[dict[str, Any]]:
+    provider_plan_ids = billing_plan_ids()
+    enriched = []
+    for plan in PLAN_CATALOG:
+        enriched.append({**plan, "provider_plan_id": provider_plan_ids.get(plan["key"], "")})
+    return enriched
+
+
+def _selected_plan_key(*, subscription: dict[str, Any] | None = None, entitlement_active: bool = False) -> str:
+    if entitlement_active and subscription:
+        value = str(subscription.get("plan_key") or "").strip().lower()
+        if value in {item["key"] for item in PLAN_CATALOG}:
+            return value
+    value = os.environ.get("JIEJING_DEFAULT_PLAN_KEY", "starter").strip().lower() or "starter"
+    return value if value in {item["key"] for item in PLAN_CATALOG} else "starter"
+
+
+def _plan_by_key(plan_key: str) -> dict[str, Any]:
+    plans = {item["key"]: item for item in _plan_catalog_with_provider_ids()}
+    return plans.get(plan_key) or plans["starter"]
+
+
+def _provider() -> str:
+    raw = os.environ.get("JIEJING_BILLING_PROVIDER", "").strip().lower().replace("-", "_")
+    return _canonical_provider(raw)
+
+
+def _canonical_provider(raw: str) -> str:
+    text = str(raw or "").strip().lower().replace("-", "_")
+    aliases = {
+        "lemonsqueezy": "lemon_squeezy",
+        "lemon_squeezy": "lemon_squeezy",
+        "stripe_mock": "stripe_test_mock",
+        "stripe_test": "stripe_test_mock",
+        "test_stripe": "stripe_test_mock",
+        "mock_stripe": "stripe_test_mock",
+        "mock_billing": "stripe_test_mock",
+    }
+    return aliases.get(text, text)
+
+
+def _entitlement_active(*, provider: str, subscription: dict[str, Any] | None) -> bool:
+    if provider == "manual_seed":
+        return True
+    if provider not in {"stripe", "paddle", "lemon_squeezy"} and provider not in TEST_BILLING_PROVIDERS:
+        return False
+    return bool(subscription and subscription.get("entitlement_active") and not subscription.get("payment_attention_required"))
+
+
+def _plan_source(*, provider: str, subscription: dict[str, Any] | None) -> str:
+    if provider == "manual_seed":
+        return "env_default_private_beta"
+    if provider in TEST_BILLING_PROVIDERS:
+        return "test_billing_provider_subscription" if subscription else "test_billing_subscription_missing"
+    return "provider_subscription" if subscription else "provider_subscription_missing"
+
+
+def _public_subscription(*, subscription: dict[str, Any] | None, provider: str, entitlement_active: bool) -> dict[str, Any]:
+    if provider == "manual_seed":
+        return {
+            "provider": "manual_seed",
+            "status": "private_beta_manual_seed",
+            "entitlement_active": True,
+            "payment_attention_required": False,
+            "block_reason": "",
+            "frontend_gets_payment_secret": False,
+            "secret_exposed": False,
+        }
+    if provider in TEST_BILLING_PROVIDERS and not subscription:
+        return {
+            "provider": provider,
+            "status": "test_subscription_missing",
+            "entitlement_active": False,
+            "payment_attention_required": False,
+            "block_reason": "billing_test_subscription_not_rehearsed",
+            "test_mode": True,
+            "creates_real_charge": False,
+            "frontend_gets_payment_secret": False,
+            "secret_exposed": False,
+        }
+    if not subscription:
+        return {
+            "provider": provider or "not_selected",
+            "status": "subscription_missing",
+            "entitlement_active": False,
+            "payment_attention_required": False,
+            "block_reason": "billing_subscription_not_found",
+            "frontend_gets_payment_secret": False,
+            "secret_exposed": False,
+        }
+    status = str(subscription.get("status") or "unknown")
+    return {
+        "provider": subscription.get("provider") or provider,
+        "status": status,
+        "plan_key": subscription.get("plan_key") or "unknown",
+        "provider_customer_id_present": bool(subscription.get("provider_customer_id")),
+        "provider_subscription_id_present": bool(subscription.get("provider_subscription_id")),
+        "provider_plan_id_present": bool(subscription.get("provider_plan_id")),
+        "entitlement_active": bool(entitlement_active),
+        "payment_attention_required": bool(subscription.get("payment_attention_required")),
+        "updated_at": subscription.get("updated_at"),
+        "block_reason": "" if entitlement_active else "billing_subscription_not_active",
+        "test_mode": provider in TEST_BILLING_PROVIDERS or subscription.get("provider") in TEST_BILLING_PROVIDERS,
+        "creates_real_charge": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def _next_actions(blockers: list[str]) -> list[str]:
+    if not blockers:
+        return ["monitor_plan_usage_and_provider_costs_before_public_launch"]
+    actions = []
+    if "billing_provider_not_selected" in blockers:
+        actions.append("choose_external_subscription_provider_or_manual_seed_beta")
+    if "billing_plans_not_published" in blockers:
+        actions.append("publish_starter_operator_team_plan_ids")
+    if "billing_webhook_not_configured" in blockers:
+        actions.append("configure_signed_billing_webhook_before_paid_launch")
+    if "stripe_checkout_not_ready" in blockers:
+        actions.append("configure_stripe_checkout_success_cancel_urls_and_price_ids")
+    if "stripe_customer_portal_not_ready" in blockers:
+        actions.append("configure_stripe_customer_portal_return_url")
+    if "billing_checkout_adapter_not_implemented_for_provider" in blockers:
+        actions.append("use_stripe_first_or_implement_selected_provider_checkout_adapter")
+    if "billing_test_checkout_not_ready" in blockers:
+        actions.append("configure_stable_success_cancel_urls_for_no_charge_billing_rehearsal")
+    if "billing_test_customer_portal_not_ready" in blockers:
+        actions.append("configure_stable_portal_return_url_for_no_charge_billing_rehearsal")
+    if "quota_enforcement_not_enabled" in blockers:
+        actions.append("enable_quota_enforcement_for_tasks_provider_jobs_and_model_calls")
+    return actions
+
+
+def _env_bool(name: str) -> bool:
+    return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}

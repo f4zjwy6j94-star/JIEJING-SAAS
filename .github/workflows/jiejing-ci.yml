@@ -1,0 +1,71 @@
+name: Jiejing CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "codex/**"
+
+permissions:
+  contents: read
+
+jobs:
+  guardrails:
+    name: Secret scan and regression gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      JIEJING_SAAS_SESSION_SECRET: ci-session-secret-not-real-change-me-32
+      JIEJING_SAAS_ENV: local_dev
+      JIEJING_ENABLE_REAL_PLATFORM_WRITES: "0"
+      JIEJING_QUEUE_PROVIDER: local_worker
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.saas.txt
+
+      - name: Secret scan
+        run: python tools/jiejing_secret_scan.py
+
+      - name: Python compile
+        run: >
+          python -m py_compile
+          jiejing_saas/ai_ceo_chat.py
+          jiejing_saas/api_server.py
+          jiejing_saas/readiness.py
+          jiejing_saas/operational_health.py
+          jiejing_saas/repository.py
+          jiejing_saas/infrastructure_drivers.py
+
+      - name: Frontend syntax
+        run: node --check app.js
+
+      - name: Backend queue and health regressions
+        run: |
+          python tools/test_jiejing_operational_health_readiness.py
+          python tools/test_jiejing_queue_recovery_heartbeat.py
+          python tools/test_jiejing_postgres_durable_queue_adapter.py
+          python tools/test_jiejing_managed_infra_readiness_cutover.py
+          python tools/test_jiejing_infrastructure_drivers.py
+          python tools/test_jiejing_stripe_checkout_portal.py
+          python tools/test_jiejing_new_ebay_account_low_risk_runbook.py
+
+      - name: Frontend contract regressions
+        run: |
+          python tools/test_jiejing_frontend_staging_config.py
+          python tools/test_jiejing_session_restore_and_ebay_ops_ui.py
+          python tools/test_jiejing_saas_clean_settings_and_listing_ui.py
+          python tools/test_jiejing_frontend_settings_module_split.py

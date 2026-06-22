@@ -1,0 +1,37 @@
+services:
+  jiejing-saas:
+    build:
+      context: ..
+      dockerfile: Dockerfile.saas
+    env_file:
+      - ./jiejing-saas.env.example
+    ports:
+      - "8788:8788"
+    volumes:
+      - jiejing_data:/data
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: jiejing
+      POSTGRES_USER: jiejing
+      POSTGRES_PASSWORD: replace-password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  jiejing_data:
+  postgres_data:
+  redis_data:

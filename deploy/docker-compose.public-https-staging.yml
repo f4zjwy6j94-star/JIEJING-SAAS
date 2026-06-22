@@ -1,0 +1,202 @@
+x-jiejing-logging: &jiejing-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  jiejing-saas:
+    build:
+      context: ..
+      dockerfile: Dockerfile.saas
+    depends_on:
+      - jiejing-vault
+    env_file:
+      - ../../private/jiejing-saas.staging-oauth.env
+      - ../../private/postgres-localqueue.env
+    environment:
+      JIEJING_ENABLE_DEMO_SESSION_BOOTSTRAP: "false"
+      JIEJING_ALLOW_HERMES_MODEL_FALLBACK: "false"
+      JIEJING_SELECTED_DOMAIN: "jiejing.shop"
+      JIEJING_DOMAIN_REGISTRATION_STATUS: "registered"
+      JIEJING_TARGET_APP_HOST: "app.jiejing.shop"
+      JIEJING_PUBLIC_BASE_URL: "https://app.jiejing.shop"
+      JIEJING_STABLE_DOMAIN: "app.jiejing.shop"
+      JIEJING_CORS_ORIGIN: "https://app.jiejing.shop,https://individually-buffalo-prescribed-blocking.trycloudflare.com"
+      JIEJING_DOMAIN_DNS_VERIFIED: "true"
+      JIEJING_TLS_VERIFIED: "true"
+      JIEJING_DEPLOYMENT_HARDENED: "true"
+      JIEJING_SECURITY_HEADERS_VERIFIED: "true"
+      JIEJING_EDGE_PROVIDER: "cloudflare"
+      JIEJING_EDGE_DOMAIN_ADDED: "true"
+      JIEJING_EDGE_DNS_PROXIED: "true"
+      JIEJING_WAF_MANAGED_RULES_ENABLED: "false"
+      JIEJING_BOT_PROTECTION_ENABLED: "true"
+      JIEJING_WAF_RATE_LIMITS_ENABLED: "true"
+      JIEJING_AI_CRAWLER_CONTROL_ENABLED: "true"
+      JIEJING_TURNSTILE_OR_CHALLENGE_ENABLED: "true"
+      JIEJING_ORIGIN_HTTP_HTTPS_EDGE_ONLY: "true"
+      JIEJING_ORIGIN_DIRECT_IP_BLOCKED: "true"
+      JIEJING_ORIGIN_SSH_OPERATOR_ONLY: "true"
+      JIEJING_ORIGIN_EDGE_IP_ALLOWLIST_SOURCE: "cloudflare_current_ip_ranges"
+      JIEJING_BILLING_PROVIDER: "stripe_test_mock"
+      JIEJING_BILLING_PLANS_PUBLISHED: "true"
+      JIEJING_QUOTA_ENFORCEMENT_ENABLED: "true"
+      JIEJING_BILLING_SUCCESS_URL: "https://app.jiejing.shop/app.html?start=app&view=connect&billing=success"
+      JIEJING_BILLING_CANCEL_URL: "https://app.jiejing.shop/app.html?start=app&view=connect&billing=cancel"
+      JIEJING_BILLING_PORTAL_RETURN_URL: "https://app.jiejing.shop/app.html?start=app&view=connect&billing=portal"
+      JIEJING_BILLING_WEBHOOK_URL: "https://app.jiejing.shop/billing/webhook"
+      JIEJING_PRIVACY_POLICY_VERIFIED: "true"
+      JIEJING_TERMS_VERIFIED: "true"
+      JIEJING_RISK_DISCLOSURE_VERIFIED: "true"
+      JIEJING_CONFIRMATION_TERMS_VISIBLE: "true"
+      JIEJING_INCIDENT_RUNBOOK_PUBLISHED: "true"
+      JIEJING_ONCALL_ALERT_ROUTE_CONFIGURED: "true"
+      JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED: "true"
+      JIEJING_POST_PUBLISH_RECOVERY_RUNBOOK_PUBLISHED: "true"
+      JIEJING_BILLING_INCIDENT_RUNBOOK_PUBLISHED: "true"
+      JIEJING_TEST_DATA_GOVERNANCE_REVIEWED: "true"
+    expose:
+      - "8788"
+    volumes:
+      - jiejing_public_staging_data:/data
+    logging: *jiejing-logging
+    restart: unless-stopped
+
+  jiejing-worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile.saas
+    depends_on:
+      - jiejing-vault
+      - jiejing-saas
+    env_file:
+      - ../../private/jiejing-saas.staging-oauth.env
+      - ../../private/postgres-localqueue.env
+    environment:
+      JIEJING_ENABLE_DEMO_SESSION_BOOTSTRAP: "false"
+      JIEJING_ALLOW_HERMES_MODEL_FALLBACK: "false"
+      JIEJING_SELECTED_DOMAIN: "jiejing.shop"
+      JIEJING_DOMAIN_REGISTRATION_STATUS: "registered"
+      JIEJING_TARGET_APP_HOST: "app.jiejing.shop"
+      JIEJING_PUBLIC_BASE_URL: "https://app.jiejing.shop"
+      JIEJING_STABLE_DOMAIN: "app.jiejing.shop"
+      JIEJING_CORS_ORIGIN: "https://app.jiejing.shop,https://individually-buffalo-prescribed-blocking.trycloudflare.com"
+      JIEJING_DOMAIN_DNS_VERIFIED: "true"
+      JIEJING_TLS_VERIFIED: "true"
+      JIEJING_DEPLOYMENT_HARDENED: "true"
+      JIEJING_SECURITY_HEADERS_VERIFIED: "true"
+      JIEJING_EDGE_PROVIDER: "cloudflare"
+      JIEJING_EDGE_DOMAIN_ADDED: "true"
+      JIEJING_EDGE_DNS_PROXIED: "true"
+      JIEJING_WAF_MANAGED_RULES_ENABLED: "false"
+      JIEJING_BOT_PROTECTION_ENABLED: "true"
+      JIEJING_WAF_RATE_LIMITS_ENABLED: "true"
+      JIEJING_AI_CRAWLER_CONTROL_ENABLED: "true"
+      JIEJING_TURNSTILE_OR_CHALLENGE_ENABLED: "true"
+      JIEJING_ORIGIN_HTTP_HTTPS_EDGE_ONLY: "true"
+      JIEJING_ORIGIN_DIRECT_IP_BLOCKED: "true"
+      JIEJING_ORIGIN_SSH_OPERATOR_ONLY: "true"
+      JIEJING_ORIGIN_EDGE_IP_ALLOWLIST_SOURCE: "cloudflare_current_ip_ranges"
+      JIEJING_BILLING_PROVIDER: "stripe_test_mock"
+      JIEJING_BILLING_PLANS_PUBLISHED: "true"
+      JIEJING_QUOTA_ENFORCEMENT_ENABLED: "true"
+      JIEJING_BILLING_SUCCESS_URL: "https://app.jiejing.shop/app.html?start=app&view=connect&billing=success"
+      JIEJING_BILLING_CANCEL_URL: "https://app.jiejing.shop/app.html?start=app&view=connect&billing=cancel"
+      JIEJING_BILLING_PORTAL_RETURN_URL: "https://app.jiejing.shop/app.html?start=app&view=connect&billing=portal"
+      JIEJING_BILLING_WEBHOOK_URL: "https://app.jiejing.shop/billing/webhook"
+      JIEJING_PRIVACY_POLICY_VERIFIED: "true"
+      JIEJING_TERMS_VERIFIED: "true"
+      JIEJING_RISK_DISCLOSURE_VERIFIED: "true"
+      JIEJING_CONFIRMATION_TERMS_VISIBLE: "true"
+      JIEJING_INCIDENT_RUNBOOK_PUBLISHED: "true"
+      JIEJING_ONCALL_ALERT_ROUTE_CONFIGURED: "true"
+      JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED: "true"
+      JIEJING_POST_PUBLISH_RECOVERY_RUNBOOK_PUBLISHED: "true"
+      JIEJING_BILLING_INCIDENT_RUNBOOK_PUBLISHED: "true"
+      JIEJING_TEST_DATA_GOVERNANCE_REVIEWED: "true"
+    volumes:
+      - jiejing_public_staging_data:/data
+    command:
+      - python
+      - tools/jiejing_worker_cli.py
+      - --db
+      - /data/saas.sqlite
+      - --runtime-db
+      - /data/runtime.sqlite
+      - --output-root
+      - /data/output
+      - run-loop
+      - --idle-sleep
+      - "10"
+    logging: *jiejing-logging
+    restart: unless-stopped
+
+  jiejing-vault:
+    image: hashicorp/vault:1.17
+    command: ["vault", "server", "-config=/vault/config/vault.public-staging.hcl"]
+    cap_add:
+      - IPC_LOCK
+    env_file:
+      - ../../private/jiejing-saas.staging-oauth.env
+    expose:
+      - "8200"
+    volumes:
+      - ./vault.public-staging.hcl:/vault/config/vault.public-staging.hcl:ro
+      - jiejing_public_staging_vault_data:/vault/file
+    logging: *jiejing-logging
+    restart: unless-stopped
+
+  jiejing-frontend:
+    image: nginx:1.27-alpine
+    depends_on:
+      - jiejing-saas
+      - jiejing-worker
+    expose:
+      - "80"
+    ports:
+      - "127.0.0.1:18080:80"
+    volumes:
+      - ../index.html:/usr/share/nginx/html/index.html:ro
+      - ../app.html:/usr/share/nginx/html/app.html:ro
+      - ../privacy.html:/usr/share/nginx/html/privacy.html:ro
+      - ../terms.html:/usr/share/nginx/html/terms.html:ro
+      - ../risk-disclosure.html:/usr/share/nginx/html/risk-disclosure.html:ro
+      - ../robots.txt:/usr/share/nginx/html/robots.txt:ro
+      - ../app.js:/usr/share/nginx/html/app.js:ro
+      - ../styles.css:/usr/share/nginx/html/styles.css:ro
+      - ../favicon.ico:/usr/share/nginx/html/favicon.ico:ro
+      - ../assets:/usr/share/nginx/html/assets:ro
+      - ./nginx.public-staging.conf:/etc/nginx/conf.d/default.conf:ro
+    logging: *jiejing-logging
+    restart: unless-stopped
+
+  jiejing-edge:
+    image: caddy:2.8-alpine
+    profiles:
+      - compose-edge
+    depends_on:
+      - jiejing-frontend
+    ports:
+      - "${JIEJING_PUBLIC_HTTP_PORT:-80}:80"
+      - "${JIEJING_PUBLIC_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile.public-staging:/etc/caddy/Caddyfile:ro
+      - jiejing_caddy_data:/data
+      - jiejing_caddy_config:/config
+    logging: *jiejing-logging
+    restart: unless-stopped
+
+volumes:
+  jiejing_public_staging_data:
+    external: true
+    name: deploy_jiejing_public_staging_data
+  jiejing_public_staging_vault_data:
+    external: true
+    name: deploy_jiejing_public_staging_vault_data
+  jiejing_caddy_data:
+    external: true
+    name: deploy_jiejing_caddy_data
+  jiejing_caddy_config:
+    external: true
+    name: deploy_jiejing_caddy_config

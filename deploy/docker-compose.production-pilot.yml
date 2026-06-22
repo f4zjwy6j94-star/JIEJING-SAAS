@@ -1,0 +1,49 @@
+services:
+  jiejing-saas:
+    build:
+      context: ..
+      dockerfile: Dockerfile.saas
+    env_file:
+      - ./jiejing-saas.production.env
+    expose:
+      - "8788"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8788/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  jiejing-frontend:
+    image: nginx:1.27-alpine
+    depends_on:
+      - jiejing-saas
+    expose:
+      - "80"
+    volumes:
+      - ../index.html:/usr/share/nginx/html/index.html:ro
+      - ../robots.txt:/usr/share/nginx/html/robots.txt:ro
+      - ../app.js:/usr/share/nginx/html/app.js:ro
+      - ../styles.css:/usr/share/nginx/html/styles.css:ro
+      - ../favicon.ico:/usr/share/nginx/html/favicon.ico:ro
+      - ../assets:/usr/share/nginx/html/assets:ro
+      - ./nginx.public-staging.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8-alpine
+    depends_on:
+      - jiejing-frontend
+      - jiejing-saas
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile.production:/etc/caddy/Caddyfile:ro
+      - jiejing_caddy_data:/data
+      - jiejing_caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  jiejing_caddy_data:
+  jiejing_caddy_config:

@@ -1,0 +1,27 @@
+{
+  email {$JIEJING_TLS_EMAIL}
+}
+
+{$JIEJING_EDGE_DOMAIN} {
+  encode zstd gzip
+
+  header {
+    X-Frame-Options "DENY"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=()"
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
+  }
+
+  reverse_proxy https://{$JIEJING_EDGE_UPSTREAM_HOST} {
+    header_up Host {$JIEJING_EDGE_UPSTREAM_HOST}
+    header_up X-Forwarded-Host {host}
+    header_up X-Forwarded-Proto {scheme}
+    header_up X-Forwarded-For {remote_host}
+
+    transport http {
+      tls_server_name {$JIEJING_EDGE_UPSTREAM_HOST}
+    }
+  }
+}

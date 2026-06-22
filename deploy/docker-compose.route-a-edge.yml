@@ -1,0 +1,17 @@
+services:
+  jiejing-route-a-edge:
+    image: caddy:2.8-alpine
+    env_file:
+      - ./jiejing-route-a-edge.env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile.route-a-edge:/etc/caddy/Caddyfile:ro
+      - jiejing_route_a_caddy_data:/data
+      - jiejing_route_a_caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  jiejing_route_a_caddy_data:
+  jiejing_route_a_caddy_config:

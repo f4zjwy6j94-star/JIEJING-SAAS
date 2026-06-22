@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jiejing.local/schemas/jiejing-task-result.schema.json",
+  "title": "JiejingTaskResult",
+  "type": "object",
+  "required": [
+    "task_id",
+    "task_type",
+    "task_version",
+    "status",
+    "executor",
+    "summary",
+    "report",
+    "source_records",
+    "missing_inputs",
+    "risk_flags",
+    "confirmation_items",
+    "next_tasks",
+    "artifacts",
+    "audit"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_type": {
+      "type": "string"
+    },
+    "task_version": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "success",
+        "partial_success",
+        "blocked_missing_input",
+        "blocked_permission",
+        "failed_timeout",
+        "failed_tool",
+        "failed_policy",
+        "blocked_confirmation_required",
+        "cancelled"
+      ]
+    },
+    "executor": {
+      "type": "string"
+    },
+    "executor_version": {
+      "type": "string"
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "finished_at": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "report": {
+      "type": "object"
+    },
+    "source_records": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["source_id", "source_type", "title", "confidence", "used_for"],
+        "properties": {
+          "source_id": {
+            "type": "string"
+          },
+          "source_type": {
+            "type": "string",
+            "enum": [
+              "official_api",
+              "official_page",
+              "public_page",
+              "merchant_provided",
+              "manual_input",
+              "screenshot_or_video",
+              "tool_estimate",
+              "ai_inference",
+              "restricted_unavailable",
+              "hermes_closed_loop_sample"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": ["string", "null"]
+          },
+          "captured_at": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["high", "medium", "low", "unknown"]
+          },
+          "used_for": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "missing_inputs": {
+      "type": "array"
+    },
+    "risk_flags": {
+      "type": "array"
+    },
+    "confirmation_items": {
+      "type": "array"
+    },
+    "next_tasks": {
+      "type": "array"
+    },
+    "artifacts": {
+      "type": "array"
+    },
+    "audit": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true
+}

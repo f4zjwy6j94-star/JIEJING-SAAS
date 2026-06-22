@@ -1,0 +1,41 @@
+jiejing.shop {
+	redir https://app.jiejing.shop{uri} 308
+}
+
+app.jiejing.shop {
+	encode zstd gzip
+
+	header {
+		X-Jiejing-Edge "route-a-hk-systemd"
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=()"
+		X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
+	}
+
+	@blockedInternalPath {
+		path /.git* /.github* /deploy* /tools* /docs* /tests* /jiejing_saas* /jiejing_runtime* /schemas* /output* /private*
+	}
+	handle @blockedInternalPath {
+		respond "Not found" 404
+	}
+
+	@blockedInternalFile {
+		path_regexp blockedInternalFile .*\.(env|pem|key|sqlite|db|py|pyc|md|ya?ml|toml|ini|log|bak|zip|tar|gz|ps1|sh|conf)$
+	}
+	handle @blockedInternalFile {
+		respond "Not found" 404
+	}
+
+	handle /robots.txt {
+		root * /opt/jiejing-staging/app
+		header Content-Type "text/plain; charset=utf-8"
+		header Cache-Control "no-store"
+		file_server
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:18080
+	}
+}

@@ -1,0 +1,14 @@
+output/
+artifacts/
+screenshots/
+test-results/
+**/__pycache__/
+*.sqlite
+*.db
+*.png
+*.webp
+*.jpg
+*.jpeg
+*.webm
+*.mp4
+*.wav

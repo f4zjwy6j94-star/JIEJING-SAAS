@@ -1,0 +1,394 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Apply a whitelisted Jiejing SaaS staging patch after it has been uploaded and
+# extracted on the server. This script does not touch data volumes or secrets.
+
+APP_DIR="${JIEJING_APP_DIR:-/opt/jiejing-staging/app}"
+PATCH_DIR="${1:-}"
+
+if [[ -z "$PATCH_DIR" ]]; then
+  echo "Usage: bash deploy/apply-staging-patch.sh /path/to/extracted/patch" >&2
+  exit 2
+fi
+
+cd "$APP_DIR"
+PATCH_DIR="$(cd "$PATCH_DIR" && pwd)"
+BACKUP_DIR="$APP_DIR/output/staging-patch-backups/$(date +%Y%m%d-%H%M%S)"
+
+FILES=(
+  "Dockerfile.saas"
+  "requirements.saas.txt"
+  "deploy/apply-staging-patch.sh"
+  "deploy/apply-cloudflare-origin-ufw.sh"
+  "deploy/docker-compose.public-staging.yml"
+  "deploy/docker-compose.public-https-staging.yml"
+  "deploy/docker-compose.staging-infra.yml"
+  "deploy/nginx.public-staging.conf"
+  "deploy/Caddyfile.public-staging"
+  "deploy/Caddyfile.public-staging.systemd"
+  "deploy/Caddyfile.route-a-edge"
+  "deploy/Caddyfile.production"
+  "deploy/jiejing-saas.env.example"
+  "deploy/jiejing-route-a-edge.env.example"
+  "deploy/jiejing-saas.infra.env.example"
+  "deploy/jiejing-saas.tencent-managed.env.example"
+  "deploy/tencentcloud-install-jiejing-ssh-key.sh"
+  "docs/JIEJING_INDEPENDENT_SAAS_DEPLOYMENT_RUNBOOK.md"
+  "docs/JIEJING_COMMERCIAL_LAUNCH_RUNBOOK_20260526.md"
+  "docs/JIEJING_DOMAIN_PENDING_PURCHASE_PREP_20260618.md"
+  "docs/JIEJING_EDGE_WAF_ORIGIN_CALLBACK_PREP_20260618.md"
+  "docs/JIEJING_ORIGIN_LOCK_STATUS_20260618.md"
+  "docs/JIEJING_STAGING_DISK_CLEANUP_20260619.md"
+  "docs/JIEJING_PUBLIC_WAF_ANTI_SCRAPE_RUNBOOK_20260618.md"
+  "docs/JIEJING_NO_CHARGE_BILLING_REHEARSAL_20260618.md"
+  "docs/JIEJING_PRELAUNCH_INTERNAL_HARDENING_RUNBOOK_20260620.md"
+  "docs/JIEJING_GITHUB_CI_STATUS_20260617.md"
+  "docs/JIEJING_FRONTEND_SPLIT_STATUS_20260617.md"
+  "docs/JIEJING_NEW_EBAY_ACCOUNT_LOW_RISK_RUNBOOK_20260617.md"
+  "docs/superpowers/specs/2026-06-19-jiejing-first-order-loop-design.md"
+  "docs/superpowers/specs/2026-06-19-jiejing-publish-preflight-resolution-design.md"
+  "favicon.ico"
+  "index.html"
+  "app.html"
+  "privacy.html"
+  "terms.html"
+  "risk-disclosure.html"
+  "robots.txt"
+  "app.js"
+  "styles.css"
+  "assets/jiejing-app-icon.svg"
+  "assets/jiejing-logo-lockup.svg"
+  "assets/jiejing-logo-mark.svg"
+  "assets/jiejing-settings-panels.js"
+  "jiejing_saas/account_health.py"
+  "jiejing_saas/backup_plan.py"
+  "jiejing_saas/billing_checkout.py"
+  "jiejing_saas/billing_domain_cutover_rehearsal.py"
+  "jiejing_saas/billing_plan.py"
+  "jiejing_saas/billing_test_provider.py"
+  "jiejing_saas/billing_webhook.py"
+  "jiejing_saas/ai_ceo_chat.py"
+  "jiejing_saas/commercial_launch_gate.py"
+  "jiejing_saas/controlled_bridges.py"
+  "jiejing_saas/domain_readiness.py"
+  "jiejing_saas/edge_cutover_preflight.py"
+  "jiejing_saas/database_adapter.py"
+  "jiejing_saas/queue_adapter.py"
+  "jiejing_saas/queue_plan.py"
+  "jiejing_saas/repository.py"
+  "jiejing_saas/infrastructure_drivers.py"
+  "jiejing_saas/operational_health.py"
+  "jiejing_saas/owner_launch_control.py"
+  "jiejing_saas/paid_launch_approval_packet.py"
+  "jiejing_saas/post_publish_cockpit.py"
+  "jiejing_saas/model_value_gate.py"
+  "jiejing_saas/model_value_rehearsal.py"
+  "jiejing_saas/monitoring.py"
+  "jiejing_saas/vault_secret_resolver.py"
+  "jiejing_saas/vault_adapter.py"
+  "jiejing_saas/postgres_repository_runtime.py"
+  "jiejing_saas/redis_queue_runtime.py"
+  "jiejing_saas/ebay_data_packet.py"
+  "jiejing_saas/worker.py"
+  "jiejing_saas/api_server.py"
+  "jiejing_saas/security.py"
+  "jiejing_saas/readiness.py"
+  "jiejing_saas/config.py"
+  "jiejing_saas/ebay_credential_preflight.py"
+  "jiejing_saas/ebay_http_client.py"
+  "jiejing_saas/ebay_token_refresh_adapter.py"
+  "jiejing_saas/ebay_read_normalizers.py"
+  "jiejing_saas/ebay_live_read_adapter.py"
+  "jiejing_saas/ebay_oauth.py"
+  "jiejing_saas/ebay_oauth_callback.py"
+  "jiejing_saas/ebay_write_adapter.py"
+  "jiejing_saas/migrations/001_initial_schema_postgres.sql"
+  "jiejing_runtime/execution_preflight.py"
+  "jiejing_runtime/agent_team.py"
+  "jiejing_runtime/model_clients.py"
+  "jiejing_runtime/owned_agents.py"
+  "jiejing_runtime/policies.py"
+  "jiejing_runtime/adapters.py"
+  "tools/jiejing_sqlite_to_postgres_rehearsal.py"
+  "tools/jiejing_cost_saver_snapshot.py"
+  "tools/jiejing_infra_cutover_rehearsal.py"
+  "tools/jiejing_worker_cli.py"
+  "tools/test_jiejing_sqlite_to_postgres_rehearsal.py"
+  "tools/test_jiejing_cost_saver_snapshot.py"
+  "tools/test_jiejing_infra_cutover_rehearsal.py"
+  "tools/test_jiejing_worker_cli_contract.py"
+  "tools/jiejing_infrastructure_stage_gate.py"
+  "tools/jiejing_deploy_channel_doctor.py"
+  "tools/jiejing_deploy_frontend_staging_with_key.ps1"
+  "tools/jiejing_prepare_stable_deploy_key.ps1"
+  "tools/jiejing_prepare_public_staging_bundle.py"
+  "tools/jiejing_staging_deploy.py"
+  "tools/jiejing_current_state_guard.py"
+  "tools/jiejing_configure_tencent_runtime_env.py"
+  "tools/jiejing_a_class_unattended_gate.py"
+  "tools/jiejing_b_class_production_gate.py"
+  "tools/jiejing_c_class_production_gate.py"
+  "tools/test_jiejing_deploy_channel_doctor.py"
+  "tools/test_jiejing_staging_deploy_channel_contract.py"
+  "tools/jiejing_precloud_deployment_gate.py"
+  "tools/test_jiejing_current_state_guard.py"
+  "tools/test_jiejing_configure_tencent_runtime_env.py"
+  "tools/test_jiejing_frontend_staging_config.py"
+  "tools/test_jiejing_saas_p0_security_guardrails.py"
+  "tools/test_jiejing_runtime_knowledge.py"
+  "tools/test_jiejing_runtime_mvp.py"
+  "tools/test_jiejing_staging_ebay_oauth_flow_tool.py"
+  "tools/test_jiejing_ebay_live_read_http_client.py"
+  "tools/test_jiejing_agent_model_assist.py"
+  "tools/test_jiejing_model_value_rehearsal.py"
+  "tools/test_jiejing_billing_provider_webhook.py"
+  "tools/test_jiejing_billing_test_provider.py"
+  "tools/test_jiejing_billing_domain_cutover_rehearsal.py"
+  "tools/test_jiejing_billing_webhook_subscription_state.py"
+  "tools/test_jiejing_ebay_vault_token_refresh_adapter.py"
+  "tools/test_jiejing_domain_launch_gate.py"
+  "tools/test_jiejing_monitoring_runbook_gate.py"
+  "tools/test_jiejing_chinese_report_source.py"
+  "tools/test_jiejing_merchant_byok_model_and_memory.py"
+  "tools/test_jiejing_ebay_refresh_secret_readiness.py"
+  "tools/test_jiejing_infrastructure_drivers.py"
+  "tools/test_jiejing_postgres_durable_queue_adapter.py"
+  "tools/test_jiejing_controlled_bridges.py"
+  "tools/test_jiejing_postgres_repository_cutover.py"
+  "tools/test_jiejing_redis_worker_cutover.py"
+  "tools/test_jiejing_vault_secret_resolver.py"
+  "tools/test_jiejing_tencent_cloud_integrations.py"
+  "tools/test_jiejing_managed_infra_readiness_cutover.py"
+  "tools/test_jiejing_saas_backend_mvp.py"
+  "tools/test_jiejing_ebay_write_adapter.py"
+  "tools/test_jiejing_publish_cleanup_plan.py"
+  "tools/test_jiejing_post_publish_cockpit.py"
+  "tools/jiejing_productization_stage_gate.py"
+  "tools/jiejing_secret_scan.py"
+  "tools/jiejing_new_ebay_account_low_risk_check.py"
+  "tools/jiejing_paid_launch_approval_packet.py"
+  "tools/jiejing_domain_pending_purchase_preflight.py"
+  "tools/jiejing_registered_domain_cutover_status.py"
+  "tools/jiejing_edge_cutover_preflight.py"
+  "tools/test_jiejing_staging_patch_apply_contract.py"
+  "tools/test_jiejing_saas_ai_ceo_chat_model_boundary.py"
+  "tools/test_jiejing_operational_health_readiness.py"
+  "tools/test_jiejing_stripe_checkout_portal.py"
+  "tools/test_jiejing_queue_recovery_heartbeat.py"
+  "tools/test_jiejing_account_health_incident_mode.py"
+  "tools/test_jiejing_frontend_settings_module_split.py"
+  "tools/test_jiejing_new_ebay_account_low_risk_runbook.py"
+  "tools/test_jiejing_paid_launch_approval_packet.py"
+  "tools/test_jiejing_domain_pending_purchase_preflight.py"
+  "tools/test_jiejing_registered_domain_cutover_status.py"
+  "tools/test_jiejing_edge_cutover_preflight.py"
+  "tools/test_jiejing_expensive_api_rate_limit.py"
+  "tools/test_jiejing_public_anti_scrape_hardening.py"
+  "tools/test_jiejing_public_security_status_ui.py"
+  "tools/test_jiejing_saas_readable_decision_service_settings_ui.py"
+  "tools/test_jiejing_first_order_launch_loop_ui.py"
+  "tools/test_jiejing_publish_preflight_resolution_ui.py"
+  "tools/test_jiejing_owner_launch_control.py"
+  "tools/test_jiejing_owner_launch_control_access.py"
+  "tools/test_jiejing_owner_launch_control_ui.py"
+  "tools/codex_jiejing_owner_launch_control_smoke.js"
+  "tools/codex_jiejing_all_modules_clean_smoke.js"
+  "tools/codex_jiejing_paid_cutover_decision_smoke.js"
+)
+
+PUBLIC_ASSET_RETIREMENTS=(
+  "assets/demo-cable-organizer.svg"
+  "assets/demo-candle-set.svg"
+  "assets/demo-jewelry-case.svg"
+)
+
+for rel in "${FILES[@]}"; do
+  if [[ "$rel" == *".."* || "$rel" = /* ]]; then
+    echo "Refusing unsafe path: $rel" >&2
+    exit 3
+  fi
+  if [[ ! -f "$PATCH_DIR/$rel" ]]; then
+    echo "Patch is missing required file: $rel" >&2
+    exit 4
+  fi
+done
+
+mkdir -p "$BACKUP_DIR"
+for rel in "${FILES[@]}"; do
+  mkdir -p "$BACKUP_DIR/$(dirname "$rel")"
+  if [[ -f "$APP_DIR/$rel" ]]; then
+    cp "$APP_DIR/$rel" "$BACKUP_DIR/$rel"
+  fi
+  install -D -m 0644 "$PATCH_DIR/$rel" "$APP_DIR/$rel"
+done
+for rel in "${PUBLIC_ASSET_RETIREMENTS[@]}"; do
+  if [[ "$rel" == *".."* || "$rel" = /* ]]; then
+    echo "Refusing unsafe retired asset path: $rel" >&2
+    exit 5
+  fi
+  rm -f "$APP_DIR/$rel"
+done
+
+python3 -m py_compile \
+  jiejing_saas/database_adapter.py \
+  jiejing_saas/account_health.py \
+  jiejing_saas/backup_plan.py \
+  jiejing_saas/billing_checkout.py \
+  jiejing_saas/billing_domain_cutover_rehearsal.py \
+  jiejing_saas/billing_plan.py \
+  jiejing_saas/billing_test_provider.py \
+  jiejing_saas/billing_webhook.py \
+  jiejing_saas/ai_ceo_chat.py \
+  jiejing_saas/commercial_launch_gate.py \
+  jiejing_saas/controlled_bridges.py \
+  jiejing_saas/domain_readiness.py \
+  jiejing_saas/edge_cutover_preflight.py \
+  jiejing_saas/queue_adapter.py \
+  jiejing_saas/queue_plan.py \
+  jiejing_saas/repository.py \
+  jiejing_saas/monitoring.py \
+  jiejing_saas/vault_secret_resolver.py \
+  jiejing_saas/vault_adapter.py \
+  jiejing_saas/infrastructure_drivers.py \
+  jiejing_saas/operational_health.py \
+  jiejing_saas/owner_launch_control.py \
+  jiejing_saas/paid_launch_approval_packet.py \
+  jiejing_saas/post_publish_cockpit.py \
+  jiejing_saas/model_value_gate.py \
+  jiejing_saas/model_value_rehearsal.py \
+  jiejing_saas/postgres_repository_runtime.py \
+  jiejing_saas/redis_queue_runtime.py \
+  jiejing_saas/ebay_data_packet.py \
+  jiejing_saas/worker.py \
+  jiejing_saas/api_server.py \
+  jiejing_saas/security.py \
+  jiejing_saas/readiness.py \
+  jiejing_saas/config.py \
+  jiejing_saas/ebay_credential_preflight.py \
+  jiejing_saas/ebay_http_client.py \
+  jiejing_saas/ebay_token_refresh_adapter.py \
+  jiejing_saas/ebay_read_normalizers.py \
+  jiejing_saas/ebay_live_read_adapter.py \
+  jiejing_saas/ebay_oauth.py \
+  jiejing_saas/ebay_oauth_callback.py \
+  jiejing_saas/ebay_write_adapter.py \
+  jiejing_runtime/execution_preflight.py \
+  jiejing_runtime/agent_team.py \
+  jiejing_runtime/model_clients.py \
+  jiejing_runtime/owned_agents.py \
+  jiejing_runtime/policies.py \
+  jiejing_runtime/adapters.py \
+  tools/jiejing_sqlite_to_postgres_rehearsal.py \
+  tools/jiejing_cost_saver_snapshot.py \
+  tools/jiejing_infra_cutover_rehearsal.py \
+  tools/jiejing_worker_cli.py \
+  tools/test_jiejing_sqlite_to_postgres_rehearsal.py \
+  tools/test_jiejing_cost_saver_snapshot.py \
+  tools/test_jiejing_infra_cutover_rehearsal.py \
+  tools/test_jiejing_worker_cli_contract.py \
+  tools/jiejing_infrastructure_stage_gate.py \
+  tools/jiejing_deploy_channel_doctor.py \
+  tools/jiejing_prepare_public_staging_bundle.py \
+  tools/jiejing_staging_deploy.py \
+  tools/jiejing_current_state_guard.py \
+  tools/jiejing_configure_tencent_runtime_env.py \
+  tools/jiejing_a_class_unattended_gate.py \
+  tools/jiejing_b_class_production_gate.py \
+  tools/jiejing_c_class_production_gate.py \
+  tools/test_jiejing_deploy_channel_doctor.py \
+  tools/test_jiejing_staging_deploy_channel_contract.py \
+  tools/jiejing_precloud_deployment_gate.py \
+  tools/test_jiejing_current_state_guard.py \
+  tools/test_jiejing_configure_tencent_runtime_env.py \
+  tools/test_jiejing_frontend_staging_config.py \
+  tools/test_jiejing_saas_p0_security_guardrails.py \
+  tools/test_jiejing_runtime_knowledge.py \
+  tools/test_jiejing_runtime_mvp.py \
+  tools/test_jiejing_staging_ebay_oauth_flow_tool.py \
+  tools/test_jiejing_ebay_live_read_http_client.py \
+  tools/test_jiejing_agent_model_assist.py \
+  tools/test_jiejing_model_value_rehearsal.py \
+  tools/test_jiejing_billing_provider_webhook.py \
+  tools/test_jiejing_billing_test_provider.py \
+  tools/test_jiejing_billing_webhook_subscription_state.py \
+  tools/test_jiejing_ebay_vault_token_refresh_adapter.py \
+  tools/test_jiejing_domain_launch_gate.py \
+  tools/test_jiejing_monitoring_runbook_gate.py \
+  tools/test_jiejing_chinese_report_source.py \
+  tools/test_jiejing_merchant_byok_model_and_memory.py \
+  tools/test_jiejing_ebay_refresh_secret_readiness.py \
+  tools/test_jiejing_infrastructure_drivers.py \
+  tools/test_jiejing_postgres_durable_queue_adapter.py \
+  tools/test_jiejing_controlled_bridges.py \
+  tools/test_jiejing_postgres_repository_cutover.py \
+  tools/test_jiejing_redis_worker_cutover.py \
+  tools/test_jiejing_vault_secret_resolver.py \
+  tools/test_jiejing_tencent_cloud_integrations.py \
+  tools/test_jiejing_managed_infra_readiness_cutover.py \
+  tools/test_jiejing_saas_backend_mvp.py \
+  tools/test_jiejing_ebay_write_adapter.py \
+  tools/test_jiejing_publish_cleanup_plan.py \
+  tools/jiejing_productization_stage_gate.py \
+  tools/jiejing_secret_scan.py \
+  tools/jiejing_new_ebay_account_low_risk_check.py \
+  tools/jiejing_paid_launch_approval_packet.py \
+  tools/jiejing_domain_pending_purchase_preflight.py \
+  tools/jiejing_registered_domain_cutover_status.py \
+  tools/jiejing_edge_cutover_preflight.py \
+  tools/test_jiejing_staging_patch_apply_contract.py \
+  tools/test_jiejing_saas_ai_ceo_chat_model_boundary.py \
+  tools/test_jiejing_operational_health_readiness.py \
+  tools/test_jiejing_stripe_checkout_portal.py \
+  tools/test_jiejing_queue_recovery_heartbeat.py \
+  tools/test_jiejing_account_health_incident_mode.py \
+  tools/test_jiejing_frontend_settings_module_split.py \
+  tools/test_jiejing_new_ebay_account_low_risk_runbook.py \
+  tools/test_jiejing_paid_launch_approval_packet.py \
+  tools/test_jiejing_domain_pending_purchase_preflight.py \
+  tools/test_jiejing_registered_domain_cutover_status.py \
+  tools/test_jiejing_edge_cutover_preflight.py \
+  tools/test_jiejing_expensive_api_rate_limit.py \
+  tools/test_jiejing_public_anti_scrape_hardening.py \
+  tools/test_jiejing_public_security_status_ui.py \
+  tools/test_jiejing_saas_readable_decision_service_settings_ui.py \
+  tools/test_jiejing_first_order_launch_loop_ui.py \
+  tools/test_jiejing_publish_preflight_resolution_ui.py \
+  tools/test_jiejing_owner_launch_control.py \
+  tools/test_jiejing_owner_launch_control_access.py \
+  tools/test_jiejing_owner_launch_control_ui.py
+
+COMPOSE_FILE="deploy/docker-compose.public-https-staging.yml"
+if [[ ! -f "$COMPOSE_FILE" ]]; then
+  COMPOSE_FILE="deploy/docker-compose.public-staging.yml"
+fi
+COMPOSE_ARGS=(-f "$COMPOSE_FILE")
+COST_SAVER_OVERRIDE="${JIEJING_COST_SAVER_COMPOSE_OVERRIDE:-$APP_DIR/../private/docker-compose.cost-saver-local.yml}"
+if [[ "${JIEJING_USE_COST_SAVER_OVERRIDE:-false}" == "true" && -f "$COST_SAVER_OVERRIDE" ]]; then
+  COMPOSE_ARGS+=(-f "$COST_SAVER_OVERRIDE")
+fi
+
+docker compose "${COMPOSE_ARGS[@]}" build --no-cache jiejing-saas jiejing-worker
+docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps jiejing-saas
+docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps jiejing-worker
+docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps --force-recreate jiejing-frontend
+if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy; then
+  sudo -n install -m 0644 deploy/Caddyfile.public-staging.systemd /etc/caddy/Caddyfile
+  if command -v caddy >/dev/null 2>&1; then
+    sudo -n caddy validate --config /etc/caddy/Caddyfile
+  fi
+  sudo -n systemctl reload caddy
+else
+  docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps --force-recreate jiejing-edge
+fi
+
+sleep 3
+docker compose "${COMPOSE_ARGS[@]}" exec -T jiejing-saas \
+  python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8788/health', timeout=10).read().decode())" \
+  >/tmp/jiejing-health.json
+
+echo "PATCH_APPLIED=1"
+echo "BACKUP_DIR=$BACKUP_DIR"
+echo "COMPOSE_FILE=$COMPOSE_FILE"
+echo "COMPOSE_FILES=${COMPOSE_ARGS[*]}"
+cat /tmp/jiejing-health.json

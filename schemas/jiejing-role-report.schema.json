@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jiejing.local/schemas/jiejing-role-report.schema.json",
+  "title": "JiejingRoleReport",
+  "type": "object",
+  "required": [
+    "merchant_readable_summary",
+    "required_sections",
+    "sections",
+    "limits"
+  ],
+  "properties": {
+    "merchant_readable_summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "required_sections": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "sections": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["string", "number", "boolean", "object", "array"]
+      }
+    },
+    "limits": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "merchant_profile": {
+      "type": "object"
+    },
+    "report_contract": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true
+}

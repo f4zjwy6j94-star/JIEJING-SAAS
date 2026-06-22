@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jiejing.local/schemas/jiejing-task.schema.json",
+  "title": "JiejingTask",
+  "type": "object",
+  "required": [
+    "task_id",
+    "task_type",
+    "task_version",
+    "user_id",
+    "company_id",
+    "store_id",
+    "platform",
+    "stage",
+    "input",
+    "timeout_seconds",
+    "retry_policy"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_type": {
+      "type": "string",
+      "enum": [
+        "ceo.intake",
+        "market.data_packet",
+        "market.report",
+        "source.match",
+        "listing.package",
+        "asset.brief",
+        "customer.learn_product",
+        "finance.review",
+        "confirmation.package",
+        "ceo.final_report",
+        "owner.review"
+      ]
+    },
+    "task_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "user_id": {
+      "type": "string"
+    },
+    "company_id": {
+      "type": "string"
+    },
+    "store_id": {
+      "type": "string"
+    },
+    "platform": {
+      "type": "string",
+      "enum": ["ebay", "1688", "shopify", "amazon", "manual_import", "demo"]
+    },
+    "stage": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "parent_task_id": {
+      "type": ["string", "null"]
+    },
+    "input": {
+      "type": "object"
+    },
+    "context": {
+      "type": "object"
+    },
+    "source_policy": {
+      "type": "object"
+    },
+    "risk_policy": {
+      "type": "object"
+    },
+    "output_contract": {
+      "type": "object"
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1800
+    },
+    "retry_policy": {
+      "type": "object",
+      "required": ["max_retries", "split_on_timeout"],
+      "properties": {
+        "max_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "split_on_timeout": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

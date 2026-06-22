@@ -1,0 +1,3214 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="jiejing-saas-api-base" content="" />
+    <meta name="jiejing-runtime-api-base" content="" />
+    <meta name="jiejing-saas-operator-bootstrap" content="" />
+    <title>捷境 · AI CEO eBay SaaS</title>
+    <script>
+      (function bootJiejingAppEntry() {
+        var params = new URLSearchParams(window.location.search);
+        var shouldStartApp = params.get("start") === "app" || params.get("onboarded") === "1";
+        if (!shouldStartApp) return;
+        document.documentElement.classList.add("app-direct-start");
+        try {
+          var host = window.location.hostname;
+          var isPublic = window.location.protocol !== "file:" && host !== "localhost" && host !== "127.0.0.1" && host !== "::1";
+          if (isPublic) document.documentElement.classList.add("saas-public-direct-start");
+          var sessionHint = localStorage.getItem("jiejing_saas_backend_session_hint") === "1";
+          try {
+            localStorage.removeItem("jiejing_saas_backend_token");
+            sessionStorage.removeItem("jiejing_saas_backend_token");
+          } catch (error) {}
+          if (isPublic && !sessionHint) {
+            var loginUrl = new URL("./index.html", window.location.href);
+            loginUrl.searchParams.set("reason", "login_required");
+            loginUrl.hash = "ai-ceo-workbench";
+            window.location.replace(loginUrl.toString());
+          }
+        } catch (error) {
+          // The full app boot will handle blocked storage without showing an interstitial card.
+        }
+      })();
+    </script>
+    <style>
+      #appBootLoading {
+        display: none !important;
+      }
+
+      html.app-direct-start #entryShell,
+      html.app-direct-start #siteShell,
+      html.app-direct-start #onboardingShell {
+        display: none !important;
+      }
+
+      html.saas-public-direct-start #view-cockpit > .cockpit-grid {
+        display: none !important;
+      }
+
+      html.saas-public-direct-start #view-cockpit::before {
+        content: "正在读取真实工作台";
+        display: block;
+        margin: 32px;
+        padding: 24px;
+        border: 1px solid #c6ddd5;
+        border-radius: 8px;
+        color: #10231f;
+        background: #fffefa;
+      }
+    </style>
+    <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260619-brand-icon-v1" type="image/svg+xml" />
+    <link rel="preload" as="image" href="./assets/backflow-incense-generated-main.webp" />
+    <link rel="preload" as="image" href="./assets/backflow-incense-generated-scene.webp" />
+    <link rel="preload" as="image" href="./assets/backflow-incense-generated-detail.webp" />
+    <link rel="preload" as="image" href="./assets/backflow-incense-video-cover.webp" />
+    <link rel="stylesheet" href="./styles.css?v=20260622-listing-form-prefill-groups-v15" />
+    <style id="jiejing-cockpit-layout-guard">
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+        align-items: start;
+        justify-content: center;
+        width: min(100%, 1080px);
+        height: auto;
+        min-height: calc(100vh - 44px);
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-cockpit-main {
+        display: grid;
+        gap: 12px;
+        min-width: 0;
+        width: 100%;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-cockpit-status,
+      body.saas-public-mvp[data-view="cockpit"] .saas-first-order-loop {
+        display: none !important;
+      }
+
+      body.saas-public-mvp:not([data-view="connect"]) #globalLoopWorkbench,
+      body.saas-public-mvp:not([data-view="connect"]) #appShell .topbar-actions .store-switch,
+      body.saas-public-mvp:not([data-view="connect"]) #appShell .topbar-actions #connectionPill,
+      body.saas-public-mvp[data-view="cockpit"] #appShell .topbar,
+      body.saas-public-mvp[data-view="cockpit"] #appShell .module-flow-hint {
+        display: none !important;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-layout,
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread,
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer-dock,
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer,
+      body.saas-public-mvp[data-view="cockpit"] .saas-first-order-loop {
+        min-width: 0;
+        max-width: 100%;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-layout,
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread,
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread .chat-log,
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chat-stream,
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chat-stream:not(:empty),
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer-dock {
+        width: 100%;
+        max-width: none;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer {
+        display: grid;
+        grid-template-columns: minmax(180px, 1fr) auto;
+        width: 100%;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer input {
+        width: 100%;
+        min-width: 0;
+      }
+
+      @media (max-width: 1120px) {
+        body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-boot-loading" id="appBootLoading" hidden></div>
+    <div class="entry-shell" id="entryShell">
+      <section class="entry-panel is-active" data-entry-panel="intro">
+        <header class="entry-nav">
+          <div class="brand site-brand">
+            <span class="brand-mark" aria-hidden="true"></span>
+            <div>
+              <strong>捷境</strong>
+              <span>JIEJING · AI CEO eBay</span>
+            </div>
+          </div>
+          <button class="text-link" id="entryDirect">跳过介绍</button>
+        </header>
+        <main class="entry-story">
+          <section class="entry-hero-grid">
+            <div class="entry-main">
+              <div class="brand-showcase-lockup" aria-label="捷境 JIEJING logo">
+                <span class="brand-mark" aria-hidden="true"></span>
+                <div>
+                  <strong>捷境</strong>
+                  <span>JIEJING</span>
+                </div>
+              </div>
+              <p class="eyebrow">eBay-first AI CEO 工作台</p>
+              <h1>捷境</h1>
+              <p>
+                捷境是给 eBay 卖家的 AI CEO 自动化工作台：商家只给 AI CEO 下文字指令，系统把市场调研、批量选品、IP 防侵权、Listing、素材工坊、客服订单、财务统计和决策中心串成一条可审计闭环。
+              </p>
+              <div class="entry-proof" aria-label="捷境工作方式">
+                <span>不虚构客户</span>
+                <span>不自动越权</span>
+                <span>关键动作人工确认</span>
+              </div>
+              <div class="entry-actions">
+                <button class="primary-action" id="entryNext">选择身份，开始自动化</button>
+                <button class="secondary-action" id="entryStoryDirect">浏览产品页</button>
+              </div>
+            </div>
+            <aside class="entry-product-visual" aria-label="捷境产品预览">
+              <div class="audit-board entry-audit-board">
+                <div class="audit-board-header">
+                  <div>
+                    <span>第一条商品自动化板</span>
+                    <strong>“旅行压缩收纳袋这条线能不能跑通？”</strong>
+                  </div>
+        <em>只读验证中</em>
+                </div>
+                <div class="audit-board-grid">
+                  <article>
+                    <span>数据来源</span>
+                    <strong>eBay 只读同步 / 标准数据包 / 来源记录</strong>
+                    <p>真实授权后优先使用官方 API 数据；缺口才进入人工补充或公开来源标注。</p>
+                  </article>
+                  <article>
+                    <span>AI CEO 输出</span>
+                    <strong>市场报告、Listing 草稿、素材包、费用和风险</strong>
+                    <p>每一步都说明依据、缺口、置信度和需要商家确认的边界。</p>
+                  </article>
+                  <article>
+                    <span>人工确认</span>
+                    <strong>发布 / 退款 / 承诺 / 授权</strong>
+                    <p>高风险动作默认暂停，不替商家直接执行。</p>
+                  </article>
+                </div>
+                <div class="audit-trace">
+                  <span>资料：市场、批量、IP 和 Listing 先整理</span>
+                  <span>素材：流程导入或外部来源图生成草稿</span>
+                  <span>确认：发布、付款、退款、广告和承诺不自动执行</span>
+                </div>
+              </div>
+            </aside>
+          </section>
+
+          <section class="entry-story-block">
+            <p class="eyebrow">为什么要做捷境</p>
+            <h2>不要一开始做“大而全”，先把 eBay 商家的经营闭环跑顺。</h2>
+            <p>
+            eBay 不是上传一个商品就结束，而是一条重复链：调研选品、IP 风险、商品资料、图片视频、标题参数、业务政策、费用、物流、退货和客服承诺。捷境先把官方只读数据、商家补充资料和 AI CEO 工作记录汇总到同一条可审计链路里，让商家看得懂、补得上、确认得了。
+            </p>
+          </section>
+
+          <section class="entry-logic">
+            <div>
+              <p class="eyebrow">底层逻辑</p>
+            <h2>一个入口，只推进当前流程的下一步。</h2>
+            </div>
+            <div class="entry-logic-grid">
+              <article>
+                <span>01</span>
+                <strong>AI CEO 接指令</strong>
+                <p>商家只需要用文字说目标。捷境先拆任务、记来源、分配市场、Listing、批量、素材、客服、财务和决策岗位。</p>
+              </article>
+              <article>
+                <span>02</span>
+                <strong>市场 / 批量 / IP</strong>
+                <p>市场调研、批量候选、IP 防侵权、货源图、价格带、供应商信息和退货风险先按真实来源推进。</p>
+              </article>
+              <article>
+                <span>03</span>
+                <strong>Listing / 素材 / 决策复盘</strong>
+            <p>Listing、素材工坊、客服学习、财务统计和确认结果回传 AI CEO；发布、广告、退款、物流承诺和授权由商家确认。</p>
+              </article>
+            </div>
+          </section>
+        </main>
+      </section>
+
+      <section class="entry-panel entry-panel-route" data-entry-panel="route" aria-hidden="true">
+        <header class="entry-nav">
+          <div class="brand site-brand">
+            <span class="brand-mark" aria-hidden="true"></span>
+            <div>
+              <strong>捷境</strong>
+              <span>JIEJING · 先选路径</span>
+            </div>
+          </div>
+          <button class="text-link" id="entryBack">返回</button>
+        </header>
+        <main class="entry-route-main">
+          <div class="entry-route-copy">
+            <p class="eyebrow">第二步</p>
+            <h2>你现在最像哪一种卖家？</h2>
+            <p>先点一个类型，看清楚这类商家的完整流程；确认后再注册/登录继续。</p>
+          </div>
+          <div class="entry-route-layout">
+            <div class="entry-choice-grid" id="entryChoiceGrid" aria-label="卖家路径选择"></div>
+            <aside class="entry-route-preview" aria-live="polite">
+              <p class="eyebrow">下一步</p>
+              <h3 id="entryPreviewTitle">点击左侧选项</h3>
+              <p id="entryPreviewCopy">先看这类商家的完整流程，再决定是否注册继续。</p>
+            </aside>
+          </div>
+        </main>
+      </section>
+
+      <section class="entry-panel entry-panel-flow" data-entry-panel="flow" aria-hidden="true">
+        <header class="entry-nav">
+          <div class="brand site-brand">
+            <span class="brand-mark" aria-hidden="true"></span>
+            <div>
+              <strong>捷境</strong>
+              <span>JIEJING · 路径说明</span>
+            </div>
+          </div>
+          <button class="text-link" id="entryFlowBack">返回上一步</button>
+        </header>
+        <main class="entry-flow-main">
+          <div class="entry-flow-copy">
+            <p class="eyebrow" id="entryFlowEyebrow">卖家路径</p>
+            <h2 id="entryFlowTitle">小白，还没开店</h2>
+            <p id="entryFlowIntro"></p>
+          </div>
+          <div class="entry-flow-steps" id="entryFlowSteps"></div>
+          <div class="entry-flow-actions">
+            <button class="secondary-action" id="entryFlowBackBottom">返回上一步</button>
+            <button class="primary-action" id="entryFlowStart">开始</button>
+          </div>
+        </main>
+      </section>
+    </div>
+
+    <div class="site-shell is-hidden" id="siteShell">
+      <header class="site-nav">
+        <div class="brand site-brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div>
+            <strong>捷境</strong>
+            <span>JIEJING · AI CEO eBay</span>
+          </div>
+        </div>
+        <nav class="site-links" aria-label="官网导航">
+          <button class="text-link" data-scroll="intro">产品</button>
+          <button class="text-link" data-scroll="preselect">流程</button>
+          <button class="text-link" data-scroll="plans">订阅</button>
+          <button class="secondary-action" data-open-auth="login">登录</button>
+          <button class="primary-action" data-open-auth="register">注册体验</button>
+        </nav>
+      </header>
+
+      <section class="hero" id="intro">
+        <div class="hero-inner">
+          <div class="hero-copy">
+            <p class="eyebrow">eBay 从 0 到第一条可确认 Listing</p>
+            <h1>先把一个商品跑通，再让 AI CEO 托管重复动作。</h1>
+            <p class="hero-subtitle">
+              捷境当前只做 eBay。商家先给 AI CEO 下文字指令，系统再把任务分配给市场调研、批量选品、IP 防侵权、Listing、素材工坊、客服订单、财务履约和决策中心；所有来源、缺口、确认和复盘都会回流到 AI CEO。
+            </p>
+            <div class="hero-actions">
+              <button class="primary-action" id="heroStart">从我的身份开始</button>
+              <button class="secondary-action" id="previewProduct">登录后看完整工作台</button>
+            </div>
+            <div class="hero-route-strip" aria-label="捷境体验路径">
+              <span>介绍页</span>
+              <i></i>
+              <span>登录 / 注册</span>
+              <i></i>
+              <span>AI CEO 指令</span>
+              <i></i>
+              <span>岗位执行</span>
+              <i></i>
+              <span>决策复盘</span>
+            </div>
+            <div class="hero-command-card" id="heroCommandCard">
+              <div>
+                <span>主线体验只围绕一句话</span>
+              <strong id="heroCommandText">“帮我选一款适合 eBay 的商品，做 IP 筛查、Listing、素材和确认清单。”</strong>
+              </div>
+              <div class="hero-command-pills" id="heroCommandPills" aria-label="选择经营指令">
+                <button class="is-active" type="button" data-command="newbie">小白闭环</button>
+                <button type="button" data-command="listing">上架草稿</button>
+                <button type="button" data-command="orders">订单售后</button>
+              </div>
+            </div>
+            <div class="trust-row" aria-label="产品信任点">
+              <span>当前只做 eBay</span>
+              <span>真实写入走确认中心</span>
+              <span>高风险动作才确认</span>
+            </div>
+          </div>
+          <aside class="hero-showcase audit-showcase" aria-label="捷境可信过程展示">
+            <div class="audit-board">
+              <div class="audit-board-header">
+                <div>
+                  <span>当前主线项目</span>
+                  <strong>旅行压缩收纳袋 · 从选品到可确认 Listing</strong>
+                </div>
+                <em>只读验证中</em>
+              </div>
+              <div class="audit-score-row">
+                <article>
+                  <span>自动化准备度</span>
+                  <strong>72</strong>
+                  <p>先看资料缺口、费用和退货风险。</p>
+                </article>
+                <article>
+                  <span>利润安全线</span>
+                  <strong>18.6%</strong>
+                  <p>高于 15%，仍需确认运费。</p>
+                </article>
+                <article>
+                  <span>风险等级</span>
+                  <strong>中</strong>
+                  <p>材质、尺寸、香粒和烟雾效果待核对。</p>
+                </article>
+              </div>
+              <div class="audit-checklist">
+                <div>
+                  <span>01</span>
+                  <p>AI CEO 先拆分市场调研、批量候选、IP 风险、货源资料和确认边界。</p>
+                </div>
+                <div>
+                  <span>02</span>
+                  <p>产品经理生成标题、描述、商品参数、类目、价格、政策和字段完整度。</p>
+                </div>
+                <div>
+                  <span>03</span>
+                  <p>素材工坊从流程导入或外部来源图生成主图、详情页、短视频脚本和一致性审核。</p>
+                </div>
+                <div>
+                  <span>04</span>
+                  <p>客服学习、财务统计和高风险动作推入决策中心，再回流 AI CEO 复盘。</p>
+                </div>
+              </div>
+              <div class="audit-confirm-card">
+                <span>需要人工确认</span>
+                  <strong>是否确认发布前价格、库存、授权、物流承诺和广告预算？</strong>
+                  <p>AI 可以继续生成草稿和报告，但不会替商家发布、付款、退款、改价或承诺买家。</p>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="landing-section product-spine-section" id="mainline">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">产品主线</p>
+            <h2>商家只给 AI CEO 下指令，捷境把 eBay 经营拆成岗位任务。</h2>
+            <p class="section-note">从一个商品目标开始，AI CEO 先记录来源和缺口，再推进市场、批量、IP 风险、Listing、素材、客服、利润和发布体检；真实高风险动作先停在决策中心，执行结果再回流复盘。</p>
+          </div>
+          <span class="pill green">一个闭环</span>
+        </div>
+        <div class="spine-steps">
+          <article>
+            <span>01</span>
+            <strong>AI CEO 接指令</strong>
+            <p>商家输入商品、链接、订单问题或经营目标；AI CEO 先记录来源、拆任务、判定缺口和确认边界。</p>
+          </article>
+          <article>
+            <span>02</span>
+            <strong>市场 / 批量 / IP</strong>
+            <p>市场调研销量和价格带，批量候选先质检，IP 防侵权筛掉品牌词、Logo、角色图案和同款外观风险。</p>
+          </article>
+          <article>
+            <span>03</span>
+            <strong>Listing 资料</strong>
+            <p>产品经理整理标题、描述、参数、类目、价格、库存、政策、包装、利润底线和发布前字段缺口。</p>
+          </article>
+          <article>
+            <span>04</span>
+            <strong>素材工坊</strong>
+            <p>保留流程导入和外部独立生成，产出主图、详情页、短视频脚本、授权检查和实物一致性审核。</p>
+          </article>
+          <article>
+            <span>05</span>
+            <strong>客服 / 订单 / 财务</strong>
+            <p>客服学习商品和订单事实；财务回传成交费、订阅费、广告费、物流、退货预留和利润风险。</p>
+          </article>
+          <article>
+            <span>06</span>
+            <strong>决策中心与复盘</strong>
+            <p>发布、付款、退款、广告、改价、库存、政策和敏感客服承诺先确认；结果回流 AI CEO 记忆和审计。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="landing-section credibility-strip" id="credibility">
+        <article>
+          <span>为什么可信</span>
+          <strong>先把过程讲清楚，再谈结果。</strong>
+          <p>捷境现阶段不堆模板式背书，而是把每一步怎么判断、哪些信息还缺、哪些动作需要商家确认直接展示出来。</p>
+        </article>
+        <article>
+          <span>我们怎么证明</span>
+              <strong>每次任务都留下过程记录。</strong>
+          <p>后台工作模块必须说明数据来源、输出结论、风险原因和失败处理，商家看到过程再判断。</p>
+        </article>
+        <article>
+          <span>边界在哪里</span>
+          <strong>授权、发布、退款、承诺不自动越权。</strong>
+          <p>平台 API、店铺数据和敏感动作都需要商家授权或确认；未授权前显示待连接状态，授权后读取官方只读数据。</p>
+        </article>
+      </section>
+
+      <section class="landing-section story-section" id="product-story">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">产品怎么省事</p>
+            <h2>AI CEO 不替商家乱点按钮，而是把任务分给岗位并留下依据。</h2>
+          </div>
+        </div>
+        <div class="story-grid">
+          <article>
+            <div class="story-visual mini-dashboard">
+              <span>Market</span>
+              <strong>调研 3 个商品</strong>
+              <div class="visual-bar"><i style="width: 72%"></i></div>
+              <div class="visual-bar"><i style="width: 48%"></i></div>
+              <div class="visual-bar"><i style="width: 18%"></i></div>
+            </div>
+            <h3>先由 AI CEO 接文字指令</h3>
+            <p>你说想处理什么商品、链接、订单或店铺目标，AI CEO 先拆成市场、批量、IP、Listing、素材、客服、财务和确认任务。</p>
+          </article>
+          <article>
+            <div class="story-visual flow-visual">
+              <span>触发</span>
+              <span>条件</span>
+              <span>动作</span>
+            </div>
+            <h3>再分给后台岗位执行</h3>
+          <p>市场调研、批量选品、IP 防侵权、Listing 资料、流程导入素材、外部独立生成、客服学习和财务履约分别产出草稿、依据和风险。</p>
+          </article>
+          <article>
+            <div class="story-visual confirm-visual">
+              <span>需确认</span>
+              <strong>物流承诺 / 发布 / 退款</strong>
+            <button class="secondary-action" id="landingEvidencePreview" type="button">登录后查看过程记录</button>
+            </div>
+            <h3>最后回到决策中心和复盘</h3>
+            <p>高风险动作不会自动写入 eBay。AI CEO 把岗位结果、费用统计、客服学习、确认结果和失败原因汇总成复盘报告。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="landing-section workflow-showcase" id="workflow-story">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">交互式工作流</p>
+            <h2>从一句商家指令，到一条可审计的 eBay 经营闭环。</h2>
+          <p class="section-note">商家看到的是干净的 AI CEO 入口；背后自动整理来源、调研市场、筛查 IP、生产 Listing 和素材、学习客服订单、统计财务，最后都回到决策中心和 AI CEO 复盘。</p>
+          </div>
+        </div>
+        <div class="workflow-proof-grid">
+          <article>
+            <span>01 · AI CEO 指令</span>
+            <strong>“帮我找一个可做的品，并推进到 Listing 和素材草稿。”</strong>
+            <p>商家用文字下达目标。AI CEO 先转成岗位任务、来源记录、缺口清单和确认边界。</p>
+          </article>
+          <article>
+            <span>02 · 调研选品与 IP</span>
+            <strong>市场调研、批量候选和防侵权筛查先判断能不能做。</strong>
+                <p>销量、价格带、供应商、退货风险、Logo、品牌词和外观风险都有来源记录。</p>
+          </article>
+          <article>
+            <span>03 · Listing 与素材</span>
+            <strong>产品经理做刊登资料，素材工坊做图做视频。</strong>
+                <p>素材支持流程导入和外部独立生成，正式发布前仍核对授权、实物一致性和平台禁词。</p>
+          </article>
+          <article>
+            <span>04 · 客服财务与决策</span>
+              <strong>客服学习、财务统计和确认结果回流 AI CEO。</strong>
+            <p>真实发布、付款、退款、广告、改价、库存、政策和敏感客服承诺都先进决策中心。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="landing-section platform-section" id="platforms">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">eBay 自动化入口</p>
+            <h2>当前只做深 eBay，把一个卖家的真实路径先跑顺。</h2>
+            <p class="section-note">不是堆很多入口，而是先把 Seller Hub、商品、店铺业务政策、订单、退货、费用和账号表现做成一条清楚的自动化链路。</p>
+          </div>
+          <span class="pill neutral">v0.1 eBay first</span>
+        </div>
+        <div class="platform-logo-grid" id="landingPlatformGrid">
+          <article>
+            <span>Seller Hub</span>
+            <strong>店铺数据入口</strong>
+            <p>看店铺状态、商品表现、订单处理和账号表现。</p>
+          </article>
+          <article>
+            <span>Listing</span>
+            <strong>刊登草稿</strong>
+            <p>标题、描述、商品参数、类目、图片和价格先出草稿。</p>
+          </article>
+          <article>
+            <span>Policies</span>
+            <strong>业务政策</strong>
+            <p>付款、发货、退货和 handling time 不乱承诺。</p>
+          </article>
+          <article>
+            <span>Orders</span>
+            <strong>订单履约</strong>
+            <p>Tracking、延迟发货、客服回复和售后风险集中处理。</p>
+          </article>
+          <article>
+            <span>Fees</span>
+            <strong>费用复盘</strong>
+            <p>成交费、广告费、店铺订阅、物流和退款预留一起算。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="landing-section preselect-section" id="preselect">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">第一步</p>
+            <h2>先选你的卖家状态</h2>
+          </div>
+          <button class="secondary-action" id="skipToApp">登录后进入向导</button>
+        </div>
+        <div class="preselect-layout">
+          <div class="preselect-grid" id="preselectGrid" aria-label="卖家状态预选"></div>
+          <aside class="preselect-preview" aria-live="polite">
+            <p class="eyebrow">注册后进入</p>
+            <h3 id="preselectTitle">自动化边界向导</h3>
+            <p id="preselectCopy" class="section-note"></p>
+            <ol class="next-path" id="preselectSteps"></ol>
+            <div class="button-row">
+              <button class="primary-action" id="startSelectedPath">按这个路径开始</button>
+              <button class="secondary-action" id="changeLater">注册后再改</button>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="landing-section pricing-section" id="plans">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">订阅</p>
+            <h2>先免费用起来，再按店铺数量和自动化深度升级。</h2>
+          <p class="section-note">早期试用期注册送 1 个月单店铺版体验。后续按店铺数量、自动化深度和服务支持分层，付费前会明确展示包含能力和费用。</p>
+          </div>
+          <button class="primary-action" id="openPlans">查看订阅方案</button>
+        </div>
+        <div class="pricing-layout">
+          <div class="pricing-grid" id="pricingGrid" aria-label="订阅方案选择">
+            <article class="plan-card" data-plan-choice="free">
+              <span>免费版</span>
+              <strong>¥0</strong>
+              <p>基础功能可用，适合先跑通一条商品线。</p>
+            </article>
+            <article class="plan-card is-featured is-selected" data-plan-choice="single">
+              <span>单店铺版</span>
+              <strong>¥99/月</strong>
+              <p>注册送 1 个月，适合 1 个 eBay 店铺正式使用。</p>
+            </article>
+            <article class="plan-card" data-plan-choice="multi">
+              <span>多店铺版</span>
+              <strong>¥199/月</strong>
+              <p>适合多店铺、多项目和跨店流程复用。</p>
+            </article>
+            <article class="plan-card" data-plan-choice="pro">
+              <span>高级付费版</span>
+              <strong>¥299/月</strong>
+              <p>适合更深自动化、更细权限和更高额度。</p>
+            </article>
+          </div>
+          <aside class="pricing-detail" id="pricingDetail" aria-live="polite">
+            <p class="eyebrow">当前选择</p>
+            <h3 id="pricingDetailTitle">单店铺版</h3>
+            <strong id="pricingDetailPrice">¥99/月</strong>
+        <p id="pricingDetailDesc">注册送 1 个月单店铺版体验。适合 1 个 eBay 店铺正式使用，把选品、Listing、素材、客服物流和费用整理放进 AI CEO 工作台。</p>
+            <ul id="pricingDetailList"></ul>
+            <div class="button-row">
+              <button class="primary-action" id="pricingStart">登录后选择方案</button>
+              <button class="secondary-action" id="pricingCompare">打开完整对比</button>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </div>
+
+    <div class="onboarding-shell is-hidden" id="onboardingShell">
+      <header class="onboarding-nav">
+        <div class="brand site-brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div>
+            <strong>捷境</strong>
+            <span>JIEJING · eBay 自动化向导</span>
+          </div>
+        </div>
+        <div class="onboarding-nav-actions">
+          <button class="secondary-action" id="onboardingReturnSite">返回产品页</button>
+          <button class="primary-action" id="onboardingExit">完成向导后进入工作舱</button>
+        </div>
+      </header>
+
+      <main class="onboarding-main">
+        <section class="onboarding-guide">
+          <div class="onboarding-heading">
+            <div>
+              <p class="eyebrow" id="onboardingEyebrow">小白向导</p>
+              <h1 id="onboardingTitle">先把官方授权接上，再让 AI CEO 少问少填</h1>
+              <p id="onboardingSubtitle">
+                API 可以先理解成平台给软件用的官方安全通道，不是把账号密码交给捷境。这不是填表考试：捷境会按你的身份，优先带你走 eBay 官方授权和必要接口；暂时不想授权时，也能先用截图、表格、链接和图片跑流程。
+              </p>
+            </div>
+            <span class="pill green" id="onboardingStepLabel">第 1/12 步</span>
+          </div>
+
+          <div class="wizard-progress onboarding-progress">
+            <span id="onboardingProgressBar"></span>
+          </div>
+
+          <div class="onboarding-card" id="onboardingCard"></div>
+          <div id="onboardingManualActions" class="manual-action-box"></div>
+          <div class="button-row onboarding-actions">
+            <button class="secondary-action" id="onboardingBack">返回</button>
+            <button class="secondary-action" id="onboardingSkip">我不确定，先用 AI 建议</button>
+            <button class="primary-action" id="onboardingNext">下一步</button>
+          </div>
+        </section>
+
+        <aside class="onboarding-preview">
+          <p class="eyebrow">保存中的自动化边界</p>
+            <h2>你确认的每一步，都会影响第一条商品怎么推进</h2>
+          <div class="dna-summary" id="onboardingSummary"></div>
+          <div class="onboarding-note">
+            <strong>向导只问会影响真实店铺动作的事</strong>
+            <span>缺资料时 AI CEO 会标出来；能先判断的地方会继续推进。资金相关、刊登发布、退款补偿、广告投放、买家消息发送或明确承诺，必须由你确认。</span>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <div class="app-shell is-hidden" id="appShell">
+      <aside class="sidebar" aria-label="主导航">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div>
+            <strong>捷境</strong>
+                <span>JIEJING · AI CEO eBay</span>
+          </div>
+        </div>
+
+        <nav class="nav-list" id="navList">
+          <button class="nav-item is-active" data-view="cockpit">
+            <span class="nav-icon">⌂</span>
+            <span>AI CEO</span>
+          </button>
+          <button class="nav-item" data-view="product">
+            <span class="nav-icon">▤</span>
+            <span>Listing</span>
+          </button>
+          <button class="nav-item" data-view="bulk">
+            <span class="nav-icon">▥</span>
+            <span>批量铺货</span>
+          </button>
+          <button class="nav-item" data-view="media">
+            <span class="nav-icon">▧</span>
+            <span>素材工坊</span>
+          </button>
+          <button class="nav-item" data-view="confirm">
+            <span class="nav-icon">✓</span>
+            <span>决策中心</span>
+          </button>
+          <button class="nav-item" data-view="service">
+            <span class="nav-icon">✎</span>
+            <span>客服与订单</span>
+          </button>
+          <button class="nav-item" data-view="connect">
+            <span class="nav-icon">◌</span>
+            <span>设置</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <span class="status-dot"></span>
+          <span>产品模式 · 真实状态</span>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow" id="storeEyebrow">northvalesource · eBay US · 待同步</p>
+            <h1 id="pageTitle">AI CEO 工作台</h1>
+            <p class="module-flow-hint" id="moduleFlowHint">当前主线：AI CEO 指令 → 市场/批量/IP → Listing/素材 → 客服/财务 → 决策中心 → 复盘。</p>
+          </div>
+          <div class="topbar-actions">
+            <label class="store-switch">
+              eBay 授权账号
+              <select id="storeSwitch"></select>
+            </label>
+            <span class="pill neutral" id="connectionPill">eBay 待授权</span>
+            <div class="account-menu" id="accountMenu">
+              <button class="account-menu-trigger" id="accountMenuTrigger" type="button" aria-haspopup="true" aria-expanded="false">
+                <span class="account-avatar" id="accountAvatar">捷</span>
+                <span class="account-menu-copy">
+                  <strong id="accountMenuName">未登录</strong>
+                  <small id="accountMenuMeta">登录后读取账号空间</small>
+                </span>
+                <span class="account-menu-chevron" aria-hidden="true">⌄</span>
+              </button>
+              <div class="account-menu-popover" id="accountMenuPopover" hidden></div>
+            </div>
+            <button class="icon-button" id="stateToggle" title="切换页面状态">◐</button>
+            <button class="primary-action" id="startListing">产品刊登</button>
+          </div>
+        </header>
+
+        <section class="global-flow-bar" aria-label="当前自动化主线">
+          <div class="global-loop-workbench" id="globalLoopWorkbench" aria-label="真实闭环任务板"></div>
+        </section>
+
+        <section class="view is-active" id="view-cockpit" data-title="AI CEO">
+          <div class="cockpit-grid cockpit-v2 cockpit-minimal-home">
+            <section class="mission-strip cockpit-command-center" aria-label="AI CEO 今日经营总览">
+              <div class="mission-copy cockpit-command-copy">
+                <p class="eyebrow">今日主线</p>
+                <h2>商家给 AI CEO 下指令，捷境按岗位推进</h2>
+                <p>上传图片、链接或输入文字目标后，AI CEO 先拆任务，再推进市场调研、批量选品、IP 防侵权、Listing、素材、客服学习、财务统计和复盘；涉及发布、付款、退款、广告预算和买家承诺时，再交给你确认。</p>
+                <div class="mission-progress" aria-label="当前项目进度">
+                  <span class="is-done">AI CEO 指令</span>
+                  <span class="is-done">市场/IP</span>
+                  <span class="is-current">Listing/素材</span>
+                  <span>客服/财务</span>
+                  <span>确认复盘</span>
+                </div>
+                <div class="cockpit-command-actions">
+                  <button class="primary-action" type="button" data-ceo-action="open-optimization">进入产品刊登</button>
+                  <button class="secondary-action" type="button" data-ceo-action="open-service">让 AI 处理客服</button>
+                  <button class="secondary-action" type="button" data-ceo-action="connect-store">先连接账号</button>
+                </div>
+              </div>
+              <div class="cockpit-status-board" aria-label="经营状态">
+                <article class="cockpit-status-tile is-attention">
+                  <span>待我确认</span>
+                  <strong id="pendingCount">3</strong>
+                  <small>只保留关键风险动作</small>
+                </article>
+                <article class="cockpit-status-tile">
+                  <span>进行中项目</span>
+                  <strong id="taskProgress">3</strong>
+                  <small>选品 / 上架 / 素材</small>
+                </article>
+                <article class="cockpit-status-tile">
+                  <span>利润底线</span>
+                  <strong id="profitMetric">15%</strong>
+                  <small>低于底线先暂停</small>
+                </article>
+                <article class="cockpit-status-tile">
+                  <span>自动化边界</span>
+                  <strong id="permissionMetric">核心确认</strong>
+                  <small id="permissionMetricNote">常规推进</small>
+                </article>
+              </div>
+            </section>
+
+            <section class="newbie-command-panel" aria-label="新手常用入口">
+              <div class="newbie-command-head">
+                <p class="eyebrow">快速开始</p>
+                <h2>先选一个最想省掉的操作</h2>
+                <p>系统会按 eBay 顺序展开流程，不需要你先研究后台菜单。</p>
+              </div>
+              <article>
+                <span>我有一张商品图</span>
+                <strong>从商品图做到 eBay 草稿</strong>
+                <p>AI 先判断能不能做，再生成标题、图片、详情页、利润和确认项。</p>
+                <button class="primary-action" type="button" data-ceo-action="open-optimization">开始产品刊登</button>
+              </article>
+              <article>
+                <span>我想批量找品</span>
+                <strong>从 eBay 机会开始铺货</strong>
+                <p>AI 先找潜力品，再按你选择的货源渠道匹配供应链，确认后才进刊登。</p>
+                <button class="secondary-action" type="button" data-ceo-action="open-bulk">进入批量铺货</button>
+              </article>
+              <article>
+                <span>我不想手动回消息</span>
+                <strong>客服默认 AI 自动接待</strong>
+                <p>普通问题自动回复；退款、补偿、差评和明确承诺停下来让你接管。</p>
+                <button class="secondary-action" type="button" data-ceo-action="open-service">看自动客服</button>
+              </article>
+              <article>
+                <span>我不知道哪里要我点头</span>
+                <strong>只看真正需要确认的事</strong>
+                <p>发布、付款、退款、广告、客服承诺这些才需要你判断。</p>
+                <button class="secondary-action" type="button" data-ceo-action="confirm-info">看待我确认</button>
+              </article>
+            </section>
+
+            <section class="ceo-priority-panel cockpit-queue-panel" aria-label="今日经营队列">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">AI CEO 今日判断</p>
+                  <h2>今天只给你看 3 个重点</h2>
+                  <p class="section-note">其他流程在后台继续跑。你只处理会影响下一步、或者需要你点头的事。</p>
+                </div>
+                <span class="pill amber">今日主线</span>
+              </div>
+              <div class="ceo-priority-grid">
+                <article class="ceo-priority-card is-urgent">
+                  <span>1 · 先补关键资料</span>
+                  <strong>尺寸、包装重量、材质、是否含香粒</strong>
+                  <p>这些会影响 eBay 字段、运费、利润和退货。AI 不能猜，必须让你确认一次。</p>
+                  <button class="primary-action" type="button" data-ceo-action="confirm-info">去确认资料</button>
+                </article>
+                <article class="ceo-priority-card">
+                  <span>2 · 再看素材草稿</span>
+                  <strong>产品图、详情页、短视频脚本先预览</strong>
+                  <p>先看是否符合真实商品；不满意就改图和脚本，不急着发布。</p>
+                  <button class="secondary-action" type="button" data-ceo-action="open-media">看素材工坊</button>
+                </article>
+                <article class="ceo-priority-card">
+                  <span>3 · 最后决定测试发布</span>
+                  <strong>确认发布边界，不急着铺货</strong>
+                  <p>发布、改价、广告预算和店铺政策会进确认中心；确认一次后同类默认走规则。</p>
+                  <button class="secondary-action" type="button" data-ceo-action="confirm-info">去确认中心</button>
+                </article>
+              </div>
+            </section>
+
+            <section class="global-command-panel cockpit-project-panel" aria-label="当前项目推进">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">当前项目推进</p>
+                  <h2>倒流香炉现在卡在哪</h2>
+                  <p class="section-note">把商品从货源图推进到 eBay 上架草稿。资料不清楚时停在确认中心，其他整理工作继续自动走。</p>
+                </div>
+                <button class="secondary-action compact-action" type="button" data-ceo-action="open-optimization">打开项目</button>
+              </div>
+              <div class="mission-board cockpit-readiness-board">
+                <article>
+                  <span>已完成</span>
+                  <strong>市场和素材方向</strong>
+                  <p>已识别关键词、主图方向、场景图、详情页和短视频脚本需求。</p>
+                </article>
+                <article>
+                  <span>正在做</span>
+                  <strong>Listing 草稿 + 利润测算</strong>
+                  <p>标题、描述、商品参数、费用和物流承诺正在合并。</p>
+                </article>
+                <article>
+                  <span>需要你补</span>
+                  <strong>尺寸、重量、材质、是否含香粒</strong>
+                  <p>这些信息会影响运费、利润、退货、平台字段和买家预期，AI 不能乱填。</p>
+                </article>
+                <article>
+                  <span>下一站</span>
+                  <strong>确认中心</strong>
+                  <p>只把资金相关、发布、退款、广告和买家承诺交给你确认。</p>
+                </article>
+              </div>
+            </section>
+
+            <section class="ceo-panel cockpit-chat-panel">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">主要入口</p>
+                  <h2>AI CEO</h2>
+                </div>
+                <span class="pill green">在线</span>
+              </div>
+              <div class="chat-log" id="ceoChat">
+          <article class="message user">
+            <span>我</span>
+            <p>我刚看到一款倒流香炉，感觉画面感挺强，想先试试看。我的货源一般从 1688 找，再走供应商发货或中转履约。你先帮我看看，这个品放到 eBay 上有没有必要继续做。</p>
+          </article>
+          <article class="message ai">
+            <span>AI CEO</span>
+            <p>可以。我们先把“倒流香炉”当成一个候选品来跑，不急着上架。我会先判断 eBay 上有没有需求、价格带是否合理、竞品怎么展示、差评集中在哪里，再看 1688 供货和海外履约有没有明显风险。</p>
+          </article>
+          <article class="message ai">
+            <span>AI CEO</span>
+            <p>我会按“先调研、再看货源、再出素材”的顺序推进。第一步先看 eBay 搜索词、价格带、竞品主图、评论痛点和合规风险；如果你已经在 1688 找到相近货源图，可以继续发给我，我再生成主图、详情页、场景图和 Listing 草稿。</p>
+          </article>
+          <article class="message user">
+            <span>我</span>
+            <p>我找到了一张接近的 1688 货源图。你先按这张图重做主图、详情页和场景图，顺便把尺寸、重量、材质、是否配香粒这些要问供应商的问题列出来。</p>
+          </article>
+          <article class="message user message-media-only">
+            <span>我</span>
+            <figure class="message-attachment">
+              <a class="message-attachment-preview" href="assets/backflow-incense-burner-hero.webp" target="_blank" rel="noopener" title="点击查看原图">
+                <img src="assets/backflow-incense-burner-hero.webp" alt="倒流香炉原图" loading="lazy" />
+              </a>
+              <figcaption>
+                <strong>货源图附件</strong>
+                <small>点击查看原图</small>
+              </figcaption>
+            </figure>
+          </article>
+          <article class="message ai">
+            <span>AI CEO</span>
+            <p>收到。我会把它推进成一个发布前项目：先生成白底主图、茶室/家居场景图、详情页长图和视频脚本；同时把尺寸、重量、材质、香粒说明、采购价和发货方式留作确认项。没有确认前，不会进入发布或采购。</p>
+          </article>
+              </div>
+              <form class="chat-compose" id="ceoForm">
+                <input id="ceoInput" type="text" placeholder="输入你要交给 AI CEO 处理的商品、链接或订单问题" />
+                <button type="submit" class="primary-action">发送</button>
+              </form>
+              <div class="ceo-home-boundary" aria-label="AI CEO 自动化边界">
+                <article>
+                  <span>AI 先自动做</span>
+                  <strong>调研、草稿、图片视频、利润和履约检查</strong>
+                </article>
+                <article>
+                  <span>你来确认</span>
+                  <strong>发布、付款、退款、广告预算和买家承诺</strong>
+                </article>
+              </div>
+            </section>
+
+            <section class="execution-panel cockpit-execution-panel cockpit-work-record-panel cockpit-asset-panel">
+              <div class="role-report-dock" aria-label="后台岗位工作记录">
+                <nav class="role-report-tabs" aria-label="切换工作记录">
+                  <button class="role-report-tab" type="button" data-role-report="market" aria-selected="false">
+                    <span>市场</span>
+                    <strong>判断</strong>
+                  </button>
+                  <button class="role-report-tab is-active" type="button" data-role-report="listing" aria-selected="true">
+                    <span>产品经理</span>
+                    <strong>刊登</strong>
+                  </button>
+                </nav>
+                <div class="role-report-stage">
+              <article class="market-work-report role-report-panel" data-role-panel="market" aria-label="市场经理工作记录">
+                <div class="market-report-head">
+                  <div>
+                    <p class="eyebrow">市场经理工作记录</p>
+                    <h3>倒流香炉 eBay 市场快报</h3>
+                    <span>当前估算口径 · 接入 eBay 店铺、Listing 和成交数据后自动重算</span>
+                  </div>
+                  <span class="pill amber">可小单验证</span>
+                </div>
+
+                <div class="market-decision-band" aria-label="综合机会判断">
+                  <article class="market-score-card">
+                    <span>综合机会分</span>
+                    <strong>72<small>/100</small></strong>
+                    <p>有视觉卖点，但同款竞争多，先测素材点击和真实利润。</p>
+                  </article>
+                  <div class="market-score-bars">
+                    <span><b>需求匹配</b><em><i style="width: 76%"></i></em><small>76</small></span>
+                    <span><b>素材差异</b><em><i style="width: 82%"></i></em><small>82</small></span>
+                    <span><b>利润空间</b><em><i style="width: 61%"></i></em><small>61</small></span>
+                    <span><b>履约风险</b><em><i style="width: 48%"></i></em><small>中</small></span>
+                  </div>
+                  <div class="market-now-next">
+                    <span>现在先做</span>
+                    <strong>补货源资料 + 出 3 套素材方向</strong>
+                    <p>尺寸、重量、材质、采购价确认前，不进入发布和采购。</p>
+                  </div>
+                </div>
+
+                <div class="market-queue-strip" aria-label="AI 后续推进队列">
+                  <article>
+                    <span>01</span>
+                    <strong>补供应商资料</strong>
+                    <small>尺寸、重量、材质、采购价、包装</small>
+                  </article>
+                  <article>
+                    <span>02</span>
+                    <strong>素材模块出图</strong>
+                    <small>主图、场景图、详情页和视频封面</small>
+                  </article>
+                  <article>
+                    <span>03</span>
+                    <strong>利润与履约测算</strong>
+                    <small>采购、运费、平台费、退货预留</small>
+                  </article>
+                </div>
+
+                <section class="market-detail-toggle market-detail-static" aria-label="市场数据细节">
+                  <div class="market-detail-head">
+                    <span>查看市场数据细节</span>
+                    <small>买家画像、关键词、价格带、竞品痛点</small>
+                  </div>
+                  <div class="market-detail-body">
+                    <div class="market-metric-row" aria-label="核心市场指标">
+                      <article>
+                        <span>目标价格带</span>
+                        <strong>US $15.99-29.99</strong>
+                        <small>高于低价杂货，低于礼品套装</small>
+                      </article>
+                      <article>
+                        <span>竞品密度</span>
+                        <strong>中高</strong>
+                        <small>同款多，素材质量决定点击</small>
+                      </article>
+                      <article>
+                        <span>首批策略</span>
+                        <strong>1 款 3 素材方向</strong>
+                        <small>先测图，不急着铺量</small>
+                      </article>
+                      <article>
+                        <span>继续条件</span>
+                        <strong>利润 ≥ US $6</strong>
+                        <small>扣除采购、运费、平台费后</small>
+                      </article>
+                    </div>
+
+                    <div class="market-persona-strip" aria-label="买家画像">
+                      <article>
+                        <span>买家画像 A</span>
+                        <strong>家居氛围买家</strong>
+                        <p>想买桌面摆件、茶室/书房装饰、冥想角落小物，最在意图片是否有氛围。</p>
+                      </article>
+                      <article>
+                        <span>买家画像 B</span>
+                        <strong>礼品场景买家</strong>
+                        <p>节日、乔迁、禅意礼品需求，关注包装、尺寸、是否含香粒和到手完整度。</p>
+                      </article>
+                    </div>
+
+                    <div class="market-data-block">
+                      <div>
+                        <strong>搜索方向</strong>
+                        <div class="market-keywords">
+                          <span>backflow incense burner</span>
+                          <span>waterfall incense burner</span>
+                          <span>zen home decor</span>
+                          <span>incense holder</span>
+                          <span>ceramic incense burner</span>
+                        </div>
+                      </div>
+                      <div>
+                        <strong>价格带判断</strong>
+                        <div class="market-price-ladder">
+                          <span><em style="width: 26%"></em><b>$9.99-14.99</b><small>低价走量，质量预期低</small></span>
+                          <span><em style="width: 58%"></em><b>$15.99-24.99</b><small>主测试带，适合单品</small></span>
+                          <span><em style="width: 38%"></em><b>$25.99-39.99</b><small>套装/礼品包装才支撑</small></span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="market-report-grid">
+                      <article>
+                        <span>竞品痛点</span>
+                        <strong>烟雾效果、尺寸偏小、易碎、是否含香粒</strong>
+                        <p>详情页必须提前讲清楚效果、实物尺寸、材质、包装和是否附带香粒，减少售后争议。</p>
+                      </article>
+                      <article>
+                        <span>差异化机会</span>
+                        <strong>不要只卖“香炉”，要卖使用场景</strong>
+                        <p>主图保真，副图做茶室、书桌、礼品包装和尺寸对比，用素材把低价同款拉开。</p>
+                      </article>
+                      <article>
+                        <span>资料缺口</span>
+                        <strong>尺寸、重量、材质、采购价、包装、香粒安全说明</strong>
+                        <p>这些字段会影响运费、利润、退货和买家预期，必须向供应商确认后再写进 Listing。</p>
+                      </article>
+                    </div>
+                  </div>
+                </section>
+                <div class="market-report-next">
+                  <strong>市场经理结论</strong>
+                  <p>可以进入小批测试，但不建议直接铺货。AI 会先把供应商资料缺口列清楚，再把货源图送到素材模块，等真实规格补齐后再进入 Listing 草稿和利润测算。</p>
+                </div>
+              </article>
+              <article class="listing-work-report role-report-panel is-active" data-role-panel="listing" aria-label="产品经理刊登工作单">
+                <div class="listing-report-head">
+                  <div>
+                    <p class="eyebrow">产品经理工作记录</p>
+                    <h3>倒流香炉 eBay 刊登工作单</h3>
+                    <span>受控草稿 · 接入真实店铺、类目和政策数据后自动校验字段</span>
+                  </div>
+                  <span class="pill amber">资料待补齐</span>
+                </div>
+
+                <div class="listing-readiness-band" aria-label="刊登准备度">
+                  <article class="listing-readiness-score">
+                    <span>刊登准备度</span>
+                    <strong>68<small>/100</small></strong>
+                    <p>标题、图片方向和描述结构已成型；尺寸、重量、材质、包装和是否含香粒需要确认。</p>
+                  </article>
+                  <div class="listing-stage-stack">
+                    <span class="is-done"><b>01</b><strong>接收市场结论</strong><small>可进入小单测试，不建议直接铺量</small></span>
+                    <span class="is-current"><b>02</b><strong>生成刊登草稿</strong><small>标题、类目、规格、描述、图片顺序</small></span>
+                    <span><b>03</b><strong>送确认中心</strong><small>发布、价格、库存和承诺由商家确认</small></span>
+                  </div>
+                </div>
+
+                <section class="listing-section-card" aria-label="eBay 刊登字段">
+                  <div class="listing-section-title">
+                    <span>01</span>
+                    <div>
+                      <strong>eBay 刊登字段</strong>
+                      <p>产品经理先把能写的字段整理成草稿，真实发布前再按 eBay 类目和店铺政策校验。</p>
+                    </div>
+                  </div>
+                  <div class="listing-field-grid">
+                    <article><span>Title</span><strong>Oriental Backflow Incense Burner Zen Waterfall Smoke Holder Home Decor Gift</strong><small>控制在 80 字符内，先放核心词和场景词。</small></article>
+                    <article><span>Category</span><strong>Home Decor / Incense Holders</strong><small>正式版用 eBay 类目接口校验 Category ID。</small></article>
+                    <article><span>Format / Condition</span><strong>Fixed Price · New</strong><small>一口价新品，发布前确认库存和店铺政策。</small></article>
+                    <article><span>Price / Quantity</span><strong>US $22.99 · 首批 20</strong><small>价格要等利润测算和运费确认后再锁定。</small></article>
+                  </div>
+                </section>
+
+                <section class="listing-section-card" aria-label="图片和视频任务">
+                  <div class="listing-section-title">
+                    <span>02</span>
+                    <div>
+                      <strong>图片与视频任务</strong>
+                      <p>不是只出好看的图，而是按 eBay 轮播、详情页和短视频需要安排素材。</p>
+                    </div>
+                  </div>
+                  <div class="listing-media-layout">
+                    <div class="listing-picture-order" aria-label="图片顺序">
+                      <article><b>1</b><strong>白底主图</strong><small>真实商品为主，背景干净，不能改变器型。</small></article>
+                      <article><b>2</b><strong>茶室场景图</strong><small>突出家居、书桌、禅意摆件的使用场景。</small></article>
+                      <article><b>3</b><strong>烟雾效果图</strong><small>展示倒流效果，但不能夸大实际烟量。</small></article>
+                      <article><b>4</b><strong>尺寸图</strong><small>等供应商确认长宽高和包装尺寸后生成。</small></article>
+                      <article><b>5</b><strong>细节图</strong><small>鸟枝、纹理、底座、香粒托盘和材质质感。</small></article>
+                      <article><b>6</b><strong>包装清单</strong><small>是否含香粒、是否含托盘、是否含防碎包装。</small></article>
+                    </div>
+                    <div class="listing-video-card">
+                      <div class="listing-video-thumb">
+                        <img src="assets/ai-generated-incense-presenter.png" alt="倒流香炉短视频封面" loading="lazy" />
+                        <span class="video-play" aria-hidden="true"></span>
+                      </div>
+                      <strong>15-30 秒产品短视频脚本</strong>
+                      <p>开头 3 秒展示烟雾下流效果，中段切细节和摆放场景，结尾提示适合家居装饰和礼品场景。脚本、字幕和封面先生成草稿，不自动发布。</p>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="listing-section-card" aria-label="描述与规格">
+                  <div class="listing-section-title">
+                    <span>03</span>
+                    <div>
+                      <strong>描述、规格和客服档案</strong>
+                      <p>产品经理写 Listing 时，也要把产品档案同步给客服，后面买家咨询才能接得住。</p>
+                    </div>
+                  </div>
+                  <div class="listing-spec-grid">
+                    <article><span>商品参数</span><strong>Brand / Type / Material / Color / MPN / UPC</strong><p>这些是 eBay 刊登会用到的商品参数。品牌可先用 Unbranded；UPC、MPN、材质和颜色按供应商确认填写。</p></article>
+                    <article><span>Description</span><strong>卖点 + 参数 + 使用提醒 + FAQ</strong><p>强调装饰、礼品、桌面氛围；删除医疗、助眠、宗教功效等容易出问题的表达。</p></article>
+                    <article><span>客服档案</span><strong>买前问题、售后问题、易碎与是否含香粒</strong><p>上架前把尺寸、包装、使用方式、破损处理和退换货边界同步给客服。</p></article>
+                  </div>
+                </section>
+
+                <div class="listing-blocker-card">
+                  <strong>现在卡住的不是 AI 能不能写，而是真实资料还没齐</strong>
+                  <p>需要向供应商确认：长宽高、裸重、包装重量、材质、颜色差异、是否含香粒、是否有防碎包装、发货地、采购价和售后补发规则。补齐后才进入利润测算和发布确认。</p>
+                </div>
+              </article>
+                </div>
+              </div>
+            </section>
+
+          </div>
+        </section>
+
+        <section class="view" id="view-product" data-title="Listing">
+          <section class="panel full product-manager-module" aria-label="产品经理刊登模块">
+            <div class="product-manager-nav" aria-label="产品经理工作项">
+              <button class="product-manager-tab is-active" type="button" data-product-jump="queue" aria-selected="true">
+                <span>刊登队列</span>
+                <strong>12 个商品</strong>
+              </button>
+              <button class="product-manager-tab" type="button" data-product-jump="report" aria-selected="false">
+                <span>产品经理</span>
+                <strong>刊登报告</strong>
+              </button>
+              <button class="product-manager-tab" type="button" data-product-jump="listing" aria-selected="false">
+                <span>eBay 字段</span>
+                <strong>资料映射</strong>
+              </button>
+              <button class="product-manager-tab" type="button" data-product-jump="blocker" aria-selected="false">
+                <span>待补资料</span>
+                <strong>供应商确认</strong>
+              </button>
+            </div>
+
+            <div class="product-manager-board">
+              <header class="product-manager-header">
+                <div>
+                  <p class="eyebrow">产品经理刊登模块</p>
+                  <h2>产品刊登中枢：同时管理多个 eBay 草稿，不是一件一件手填</h2>
+                  <p class="section-note">十几个商品同时开始时，先进入刊登队列。AI CEO 把市场筛选、上架字段、素材包、政策套用、缺口问询和确认中心串成一条线；当前页面展示的是队列中选中的倒流香炉。</p>
+                </div>
+                <span class="pill amber">12 个商品 · 工作批次</span>
+              </header>
+
+              <section class="product-batch-dashboard" data-product-section="queue" aria-label="产品刊登队列">
+                <div class="product-batch-head">
+                  <div>
+                    <p class="eyebrow">刊登队列</p>
+                    <h3>已调研商品进入刊登队列，逐个生成 eBay 草稿</h3>
+                    <span>这里展示已经通过前置判断的测试商品。产品经理负责把标题、类目、商品参数、价格库存、素材需求和店铺政策整理成发布前草稿。</span>
+                  </div>
+                </div>
+                <div class="product-queue-metrics" aria-label="刊登队列概览">
+                  <article><span>队列商品</span><strong>12</strong><p>先生成草稿，不直接发布</p></article>
+                  <article><span>可继续推进</span><strong>5</strong><p>字段和素材基本齐</p></article>
+                  <article><span>待补资料</span><strong>4</strong><p>重量、尺寸、材质、发货地</p></article>
+                  <article><span>先拦住</span><strong>3</strong><p>侵权、利润、履约风险</p></article>
+                </div>
+                <div class="product-queue-layout">
+                  <article class="product-queue-list-card">
+                    <div class="product-card-title">
+                      <span>当前批次</span>
+                      <strong>建议先做 5 个测试草稿</strong>
+                    </div>
+                    <div class="product-queue-list" aria-label="商品刊登队列">
+                      <button class="product-queue-row is-active" type="button" data-product-row-jump="report">
+                        <img src="assets/backflow-incense-generated-main.webp" alt="">
+                        <span><b>倒流香炉</b><small>Listing 草稿中 · 素材已生成</small></span>
+                        <em>68</em>
+                      </button>
+                      <button class="product-queue-row" type="button" data-product-row-jump="queue">
+                        <img src="assets/travel-compression-main-v2.png" alt="">
+                        <span><b>旅行压缩收纳袋</b><small>市场通过 · 等待标题和规格</small></span>
+                        <em>74</em>
+                      </button>
+                      <button class="product-queue-row" type="button" data-product-row-jump="queue">
+                        <span class="queue-text-thumb">J</span>
+                        <span><b>便携首饰盒</b><small>低风险 · 可生成素材方向</small></span>
+                        <em>71</em>
+                      </button>
+                      <button class="product-queue-row is-waiting" type="button" data-product-row-jump="blocker">
+                        <span class="queue-text-thumb">C</span>
+                        <span><b>香薰蜡烛套装</b><small>先补易碎包装和重量</small></span>
+                        <em>待补</em>
+                      </button>
+                      <button class="product-queue-row is-blocked" type="button" data-product-row-jump="queue">
+                        <span class="queue-text-thumb">B</span>
+                        <span><b>品牌风格挂件</b><small>疑似侵权词，暂不生成</small></span>
+                        <em>拦截</em>
+                      </button>
+                    </div>
+                  </article>
+                  <aside class="product-transfer-card">
+                    <div class="product-card-title">
+                      <span>当前选中</span>
+                      <strong>倒流香炉</strong>
+                    </div>
+                    <div class="product-transfer-list">
+                      <article><span>市场结论</span><strong>建议小批量测试</strong><p>视觉卖点明确，但尺寸、重量、材质和是否含香粒要先补齐。</p></article>
+                      <article><span>刊登骨架</span><strong>Fixed Price · New</strong><p>类目、商品参数、价格库存和三类业务政策会在发布前校验。</p></article>
+                      <article><span>素材状态</span><strong>主图和详情页已有草稿</strong><p>素材深度编辑放在素材工坊，产品刊登只看是否可用于 Listing。</p></article>
+                      <article><span>下一步</span><strong>补资料后送确认中心</strong><p>发布、改价、库存和政策不自动执行。</p></article>
+                    </div>
+                  </aside>
+                </div>
+              </section>
+
+              <section class="product-ebay-report" data-product-section="report" aria-label="产品经理刊登报告">
+                <div class="product-report-head">
+                  <div>
+                    <p class="eyebrow">产品经理工作记录</p>
+                    <h3>倒流香炉 eBay 刊登资料报告</h3>
+                    <span>当前口径 · 接入 eBay 类目、业务政策和店铺授权后自动重算</span>
+                  </div>
+                  <span class="pill amber">可生成草稿 · 不自动发布</span>
+                </div>
+                <div class="product-report-summary">
+                  <article>
+                    <span>刊登准备度</span>
+                    <strong>68<small>/100</small></strong>
+                    <p>可进入 Listing 草稿，但尺寸、重量、材质、包装、是否含香粒和类目 specifics 还要补齐。</p>
+                  </article>
+                  <article>
+                    <span>模板结论</span>
+                    <strong>固定骨架 + 类目动态字段</strong>
+                    <p>固定骨架负责价格、库存、政策和描述；类目动态字段负责 Brand、Type、Material、Color、MPN、UPC 等 specifics。</p>
+                  </article>
+                  <article>
+                    <span>自动化边界</span>
+                    <strong>AI 生成草稿，发布前确认</strong>
+                    <p>发布、改价、改库存、业务政策、采购付款和买家承诺不自动越过商家。</p>
+                  </article>
+                </div>
+                <div class="product-filled-listing" aria-label="eBay 已填写刊登草稿">
+                  <div class="product-filled-head">
+                    <div>
+                      <p class="eyebrow">eBay 已填写刊登草稿</p>
+                      <strong>倒流香炉 · Fixed Price 单品刊登</strong>
+                      <span>这些是 AI 已经替商家写好的上架资料；带“待确认”的字段不会直接发布。</span>
+                    </div>
+                    <span class="pill amber">发布前需确认</span>
+                  </div>
+                  <div class="product-title-box">
+                    <article>
+                      <span>主标题 Title</span>
+                      <strong>Backflow Incense Burner Waterfall Smoke Holder Zen Home Decor Gift</strong>
+                      <small>66 / 80 字符 · 放核心关键词，不用全大写，不写夸大功效。</small>
+                    </article>
+                    <article class="is-paid-option">
+                      <span>副标题 Subtitle</span>
+                      <strong>Zen waterfall smoke decor gift, cones not included</strong>
+                      <small>50 / 55 字符 · 可选付费升级项，默认关闭；只有商家确认愿意承担费用才启用。</small>
+                    </article>
+                  </div>
+                  <div class="product-form-grid">
+                    <article><span>SKU</span><strong>JJ-BFI-001</strong><small>内部追踪编号</small></article>
+                    <article><span>Marketplace</span><strong>eBay US</strong><small>目标站点</small></article>
+                    <article><span>eBay 类目</span><strong>Home Decor / Incense Burners</strong><small>类目编号待 eBay 正式校验</small></article>
+                    <article><span>Condition</span><strong>New</strong><small>新品，需确认供应商是否全新包装</small></article>
+                    <article><span>Format</span><strong>Fixed Price</strong><small>一口价，不走拍卖</small></article>
+                    <article><span>Listing duration</span><strong>Good Til Cancelled</strong><small>固定价常用口径，按店铺规则确认</small></article>
+                    <article><span>Price</span><strong>US $22.99</strong><small>待利润测算后确认</small></article>
+                    <article><span>Quantity</span><strong>20</strong><small>先小单测试，不直接铺量</small></article>
+                  </div>
+                  <div class="product-specifics-table" aria-label="商品参数 已填写草稿">
+                    <div><span>Brand</span><strong>Unbranded</strong><small>无品牌时使用，若供应商有品牌需授权</small></div>
+                    <div><span>Type</span><strong>Backflow Incense Burner</strong><small>类目字段，待 aspects 校验</small></div>
+                    <div><span>Material</span><strong>Ceramic / Resin style finish</strong><small>材质必须向供应商确认，当前为草稿</small></div>
+                    <div><span>Color</span><strong>Bronze / Brown</strong><small>按实物色差确认</small></div>
+                    <div><span>Style</span><strong>Zen / Oriental-inspired Home Decor</strong><small>避免宗教功效承诺</small></div>
+                    <div><span>Room</span><strong>Living Room, Study, Office</strong><small>场景词用于买家理解</small></div>
+                    <div><span>MPN</span><strong>Does Not Apply</strong><small>无厂家编号时使用</small></div>
+                    <div><span>UPC</span><strong>Does Not Apply</strong><small>无 UPC 时使用，需按类目规则校验</small></div>
+                    <div><span>Included</span><strong>Incense burner only</strong><small>是否含香粒必须确认，当前默认不含</small></div>
+                    <div><span>Features</span><strong>Waterfall smoke effect, decorative holder</strong><small>只描述效果，不写疗愈/净化/助眠</small></div>
+                  </div>
+                  <div class="product-description-draft">
+                    <span>Description HTML 草稿</span>
+                    <p><b>Overview:</b> Add a calm decorative accent to a tea table, study, office, or living room with this backflow incense burner. The raised holder and basin-style base are designed for backflow incense cones and a waterfall-style smoke effect.</p>
+                    <p><b>Highlights:</b> decorative home accent; suitable for desk, shelf, tea room, and gift scenes; works with backflow incense cones; compact display size; easy to place and clean.</p>
+                    <p><b>Package note:</b> Incense cones are not included unless confirmed by the supplier. Size, weight, material, package dimensions, and color may need final confirmation before publishing.</p>
+                  </div>
+                  <div class="product-policy-grid">
+                    <article><span>Picture 1-12</span><strong>主图、茶室场景、家居场景、烟雾效果、尺寸图、细节图、包装清单</strong><small>素材在下方板块预览</small></article>
+                    <article><span>Video</span><strong>15-30 秒产品展示 / 短视频草稿</strong><small>脚本和授权发布前确认</small></article>
+                    <article><span>Package weight</span><strong>650 g</strong><small>估算值，待实测</small></article>
+                    <article><span>Package dimensions</span><strong>26 × 20 × 14 cm</strong><small>估算值，待供应商确认</small></article>
+                    <article><span>Handling time</span><strong>3 business days</strong><small>按实际履约方式确认</small></article>
+                    <article><span>Item location</span><strong>China / route pending</strong><small>发货地会影响物流模板、运费和买家承诺</small></article>
+                    <article><span>Merchant location key</span><strong>CN_WAREHOUSE_01</strong><small>待校验字段，真实发布前由店铺库存地址生成</small></article>
+                    <article><span>店铺政策</span><strong>物流 / 支付 / 退货默认模板</strong><small>已读取店铺默认规则；商品页只检查本品差异</small></article>
+                  </div>
+                  <div class="product-business-policy-panel" aria-label="eBay 三个业务政策确认">
+                    <div class="product-business-policy-head">
+                      <div>
+                        <span>店铺级规则 · 商品级套用</span>
+                        <strong>eBay 三个业务政策先建默认模板，本次刊登只处理差异</strong>
+                        <p>物流、支付、退款不是每个商品都重新填写。第一次接入店铺时先读取或建立默认模板；以后刊登商品时，AI CEO 只提示这件商品因为发货地、重量、风险或售后边界需要调整的地方。</p>
+                      </div>
+                      <small>受控状态 · 店铺默认政策已读取，真实写回仍需确认</small>
+                    </div>
+                    <div class="policy-stage-rail" aria-label="业务政策设置阶段">
+                      <article>
+                        <span>01</span>
+                        <strong>身份向导</strong>
+                        <p>接 eBay 店铺后读取现有物流、支付、退货默认规则；没有模板时，先帮商家建立草稿默认值。</p>
+                      </article>
+                      <article>
+                        <span>02</span>
+                        <strong>账户与设置</strong>
+                        <p>长期维护默认物流、支付、退货模板。以后同类商品直接套用，不让新手反复填。</p>
+                      </article>
+                      <article>
+                        <span>03</span>
+                        <strong>商品刊登</strong>
+                        <p>产品经理只检查本商品差异：重量、发货地、处理时间、退货地址和特殊风险。</p>
+                      </article>
+                      <article>
+                        <span>04</span>
+                        <strong>确认中心</strong>
+                        <p>发布、改政策、改运费、改退货边界都要确认；确认后才执行或保存为默认规则。</p>
+                      </article>
+                    </div>
+                    <div class="policy-apply-board">
+                      <div class="policy-current-list">
+                        <article>
+                          <span>Fulfillment policy</span>
+                          <strong>国际标准物流 · 3 个工作日处理</strong>
+                          <p>套用店铺默认物流模板；本商品只等真实重量、发货地、tracking 规则确认。</p>
+                          <em>影响：运费、预计送达时间、可寄送地区</em>
+                        </article>
+                        <article>
+                          <span>Payment policy</span>
+                          <strong>eBay Managed Payments · 固定价建议立即付款</strong>
+                          <p>优先套用默认支付模板；不在商品页让商家重新选收款方式。</p>
+                          <em>影响：买家付款方式、是否立即付款、收款合规</em>
+                        </article>
+                        <article>
+                          <span>Return policy</span>
+                          <strong>30 天退货草稿 · 按原因区分责任</strong>
+                          <p>买家后悔退货、破损、未收到、与描述不符分开处理，退款动作不自动执行。</p>
+                          <em>影响：退货期、退货地址、谁承担退货运费</em>
+                        </article>
+                      </div>
+                      <aside class="policy-product-delta">
+                        <span>本次倒流香炉需要商家补的不是政策全文</span>
+                        <strong>只补 4 个会改变政策结果的点</strong>
+                        <ul>
+                          <li><b>发货路线</b><small>供应商代发、先入仓、中转或橙联，会决定 item location 和物流模板。</small></li>
+                          <li><b>包装重量</b><small>当前 650 g 是估算，真实重量会改运费和利润。</small></li>
+                          <li><b>处理时间</b><small>供应商备货慢就不能承诺 1 天处理。</small></li>
+                          <li><b>退货地址</b><small>退回国内、海外仓、供应商或不接收部分场景，要提前定规则。</small></li>
+                        </ul>
+                        <p>确认后可保存为“同类小件默认模板”，以后香炉、摆件、家居装饰类商品自动套用。</p>
+                      </aside>
+                    </div>
+                  </div>
+                </div>
+                <div class="product-report-map" aria-label="eBay 刊登资料映射">
+                  <article>
+                    <span>基础刊登信息</span>
+                    <strong>SKU / Marketplace / Category ID / Merchant Location</strong>
+                    <p>SKU 用于内部追踪；marketplaceId 固定目标站点；categoryId 需要按 eBay 类目接口校验；item location 决定发货地展示和政策匹配。</p>
+                    <em>状态：类目 ID 待真实接口校验</em>
+                  </article>
+                  <article>
+                    <span>商品信息</span>
+                    <strong>Title / Condition / 商品参数 / Product identifiers / Description</strong>
+                    <p>标题、状态、描述可先出草稿；Brand、Type、Material、Color、MPN、UPC 等 specifics 需要按类目动态补齐。</p>
+                    <em>状态：材质、UPC/MPN 待确认</em>
+                  </article>
+                  <article>
+                    <span>价格库存</span>
+                    <strong>Format / Price / Quantity / Variations</strong>
+                    <p>倒流香炉先按 Fixed Price 单品草稿；若后续有颜色、尺寸、套装，需要转成变体刊登。</p>
+                    <em>状态：价格等利润测算后确认</em>
+                  </article>
+                  <article>
+                    <span>图片与视频</span>
+                    <strong>Pictures / Video / Detail image / Picture order</strong>
+                    <p>主图、场景图、尺寸图、细节图、详情页、视频封面和短视频脚本回写到 Listing 素材包，发布前核对真实商品一致性。</p>
+                    <em>状态：素材已生成草稿</em>
+                  </article>
+                  <article>
+                    <span>物流与政策</span>
+                    <strong>Package weight / Dimensions / Fulfillment / Payment / Return policy</strong>
+                    <p>重量尺寸会影响运费和利润；物流、支付、退货三类业务政策由店铺默认模板承接，商品页只检查发货地、处理时间、退货地址和特殊风险。</p>
+                    <em>状态：店铺默认政策已读取；真实改政策仍需确认</em>
+                  </article>
+                  <article>
+                    <span>发布前拦截</span>
+                    <strong>Risk words / Category specifics / Policy conflicts / Confirmation</strong>
+                    <p>医疗、助眠、净化、宗教功效等高风险表达删除；缺失必要 specifics 或政策冲突时不推进到发布。</p>
+                    <em>状态：进入确认中心前再检查</em>
+                  </article>
+                </div>
+                <div class="product-report-conclusion">
+                  <strong>产品经理结论</strong>
+                  <p>当前可以自动生成 eBay 草稿和素材包，但不能进入真实发布。下一步先补供应商资料，再由财务履约测算利润，最后把价格、库存、发布和物流承诺送到确认中心。</p>
+                </div>
+              </section>
+
+              <div class="product-manager-grid">
+                <article class="product-readiness-card">
+                  <span>刊登准备度</span>
+                  <strong>68<small>/100</small></strong>
+                  <p>标题、描述结构和素材方向已可预览；尺寸、重量、材质、包装、是否含香粒还需要供应商确认。</p>
+                </article>
+
+                <article class="product-listing-card" data-product-section="listing">
+                  <div class="product-card-title">
+                    <span>01</span>
+                    <strong>eBay 刊登字段草稿</strong>
+                  </div>
+                  <div class="product-field-list">
+                    <p><b>Title</b><span>Oriental Backflow Incense Burner Zen Waterfall Smoke Holder Home Decor Gift</span></p>
+                    <p><b>Category</b><span>Home Decor / Incense Holders，正式版用 eBay 类目接口校验 ID。</span></p>
+                    <p><b>Format</b><span>Fixed Price · New，库存和价格等利润测算后再确认。</span></p>
+                    <p><b>商品参数</b><span>Brand、Type、Material、Color、MPN、UPC 按供应商资料补齐。</span></p>
+                  </div>
+                </article>
+
+                <article class="product-media-card" data-product-section="media">
+                  <div class="product-card-title">
+                    <span>02</span>
+                    <strong>素材工坊已独立</strong>
+                  </div>
+                  <div class="product-media-strip">
+                    <figure>
+                      <img src="assets/backflow-incense-generated-main.webp" alt="倒流香炉白底主图草稿" loading="lazy" />
+                      <figcaption>白底主图</figcaption>
+                    </figure>
+                    <figure>
+                      <img src="assets/backflow-incense-generated-scene.webp" alt="倒流香炉茶室场景图草稿" loading="lazy" />
+                      <figcaption>茶室场景</figcaption>
+                    </figure>
+                    <figure>
+                      <img src="assets/backflow-incense-generated-detail.webp" alt="倒流香炉详情页草稿" loading="lazy" />
+                      <figcaption>详情页</figcaption>
+                    </figure>
+                    <figure class="product-video-figure">
+                      <img src="assets/ai-generated-incense-presenter.png" alt="倒流香炉短视频封面草稿" loading="lazy" />
+                      <span class="video-play" aria-hidden="true"></span>
+                      <figcaption>短视频脚本</figcaption>
+                    </figure>
+                  </div>
+                  <div class="product-picture-order">
+                    <span>图片顺序</span>
+                    <p>1 白底主图 · 2 场景图 · 3 烟雾效果 · 4 尺寸图 · 5 细节图 · 6 包装清单</p>
+                  </div>
+                  <div class="media-canvas-grid product-listing-media-grid" aria-label="产品刊登素材模板">
+                    <article class="media-canvas-card main-shot" data-asset-preview="main" role="button" tabindex="0">
+                      <div class="asset-preview asset-preview-photo real-main-shot" aria-hidden="true">
+                        <img src="assets/backflow-incense-generated-main.webp" alt="">
+                        <em>AI 新生成</em>
+                      </div>
+                      <span>主图</span>
+                      <strong>白底主图候选</strong>
+                      <p>用于 eBay 第一张图，保留真实器型、材质和比例，不能把商品改成不存在的款式。</p>
+                      <button class="asset-open-button" type="button">查看主图</button>
+                    </article>
+                    <article class="media-canvas-card" data-asset-preview="scene" role="button" tabindex="0">
+                      <div class="asset-preview asset-preview-photo" aria-hidden="true">
+                        <img src="assets/backflow-incense-generated-scene.webp" alt="">
+                      </div>
+                      <span>场景图</span>
+                      <strong>茶室氛围图</strong>
+                      <p>用于轮播和详情页，展示摆放场景，不替代真实规格信息。</p>
+                      <button class="asset-open-button" type="button">查看茶室图</button>
+                    </article>
+                    <article class="media-canvas-card" data-asset-preview="sceneHome" role="button" tabindex="0">
+                      <div class="asset-preview asset-preview-photo" aria-hidden="true">
+                        <img src="assets/ai-generated-incense-scene.png" alt="">
+                      </div>
+                      <span>场景图</span>
+                      <strong>家居书桌图</strong>
+                      <p>补充家居和礼品场景，适合做 Listing 副图。</p>
+                      <button class="asset-open-button" type="button">查看家居图</button>
+                    </article>
+                    <article class="media-canvas-card" data-asset-preview="closeup" role="button" tabindex="0">
+                      <div class="asset-preview asset-preview-photo smoke-thumb" aria-hidden="true">
+                        <img src="assets/ai-generated-incense-detail-closeup.png" alt="">
+                      </div>
+                      <span>细节图</span>
+                      <strong>鸟枝 / 纹理 / 底座</strong>
+                      <p>展示材质和工艺细节，辅助买家理解实物。</p>
+                      <button class="asset-open-button" type="button">查看细节图</button>
+                    </article>
+                    <article class="media-canvas-card" data-asset-preview="size" role="button" tabindex="0">
+                      <div class="asset-preview asset-preview-photo size-thumb" aria-hidden="true">
+                        <img src="assets/ai-generated-incense-size-chart.png" alt="">
+                      </div>
+                      <span>尺寸图</span>
+                      <strong>待填真实尺寸</strong>
+                      <p>尺寸图模板已生成，长宽高、重量和包装尺寸等供应商确认后再填。</p>
+                      <button class="asset-open-button" type="button">查看尺寸图</button>
+                    </article>
+                    <article class="media-canvas-card" data-asset-preview="detail" role="button" tabindex="0">
+                      <div class="asset-preview asset-preview-photo detail-thumb" aria-hidden="true">
+                        <img src="assets/backflow-incense-generated-detail.webp" alt="">
+                      </div>
+                      <span>详情页</span>
+                      <strong>卖点长图草稿</strong>
+                      <p>包含主视觉、场景、细节、参数和确认项，发布前核对真实资料。</p>
+                      <button class="asset-open-button" type="button">查看详情页</button>
+                    </article>
+                    <article class="media-canvas-card video-card" data-asset-preview="video" role="button" tabindex="0">
+                      <div class="asset-preview asset-preview-photo video-thumb" aria-hidden="true">
+                        <img src="assets/ai-generated-incense-presenter.png" alt="">
+                        <em>脚本</em>
+                      </div>
+                      <span>视频</span>
+                      <strong>产品短视频脚本草稿</strong>
+                      <p>包含封面、镜头顺序、字幕和卖点脚本；发布前检查授权和夸大宣传风险。</p>
+                      <button class="asset-open-button" type="button">播放视频草稿</button>
+                    </article>
+                  </div>
+                </article>
+
+                <article class="product-copy-card">
+                  <div class="product-card-title">
+                    <span>03</span>
+                    <strong>描述、视频脚本和客服档案</strong>
+                  </div>
+                  <div class="product-copy-grid">
+                    <p><b>Description</b><span>卖点、参数、使用提醒、FAQ，避免医疗、助眠、宗教功效等高风险表达。</span></p>
+                    <p><b>Video Script</b><span>开头展示烟雾下流，中段切细节与摆放场景，结尾回到家居装饰和礼品场景。</span></p>
+                    <p><b>客服档案</b><span>把尺寸、包装、是否含香粒、破损处理、退换货边界同步给客服。</span></p>
+                  </div>
+                </article>
+
+                <article class="product-blocker-card" data-product-section="blocker">
+                  <div class="product-card-title">
+                    <span>04</span>
+                    <strong>现在必须向供应商确认</strong>
+                  </div>
+                  <p>长宽高、裸重、包装重量、材质、颜色差异、是否含香粒、是否有防碎包装、发货地、采购价和售后补发规则。补齐后才进入利润测算和发布确认。</p>
+                </article>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="view-dna" data-title="保守默认规则">
+          <div class="split-layout">
+            <section class="panel guide-panel">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">连接账号 / 保守默认规则</p>
+                  <h2>修改或新增自动化规则</h2>
+                  <p class="section-note">这里不是日常控制台入口。规则只在履约、利润、客服口吻、AI 权限、店铺阶段变化时回来修改。</p>
+                </div>
+                <span class="pill green" id="wizardStepLabel">第 1/10 步</span>
+              </div>
+
+              <div class="wizard-progress">
+                <span id="wizardProgressBar"></span>
+              </div>
+
+              <div class="wizard-card large" id="wizardCard"></div>
+              <div id="wizardManualActions" class="manual-action-box"></div>
+              <div class="button-row guide-actions">
+                <button class="secondary-action" id="wizardBack">返回</button>
+                <button class="secondary-action" id="wizardSkip">我不确定，先用AI建议</button>
+                <button class="primary-action" id="wizardNext">下一步</button>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">实时生成</p>
+                  <h2>当前规则预览</h2>
+                </div>
+                <button class="secondary-action" id="resetDna">重新调整规则</button>
+              </div>
+              <div class="dna-summary" id="dnaSummary"></div>
+              <div class="rules-tabs">
+                <button class="tab-button is-active" data-rule="profit">利润</button>
+                <button class="tab-button" data-rule="risk">风险</button>
+                <button class="tab-button" data-rule="service">客服</button>
+                <button class="tab-button" data-rule="permission">权限</button>
+              </div>
+              <div class="rule-output" id="ruleOutput"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="view-workflow" data-title="AI 工作流">
+          <section class="panel full workflow-showcase-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">单品流程</p>
+                <h2 id="workflowTitle">AI CEO 接目标，后台岗位按 eBay 顺序推进</h2>
+                <p class="section-note" id="workflowNote">你给 AI CEO 一张商品图、一个链接或一句想法，它会先判断能不能做，再调度市场、上架资料、素材、财务履约、客服学习和确认中心。</p>
+              </div>
+              <div class="workflow-title-actions">
+                <span class="pill green">商家路线</span>
+                <span class="pill amber" id="workflowStatus">等待确认</span>
+              </div>
+            </div>
+            <div class="workflow-agent-map" aria-label="AI CEO 岗位调度链路">
+              <article class="workflow-agent-command">
+                <span>AI CEO 接单</span>
+                <strong>先把一句话目标拆成可执行任务</strong>
+                <p>商家不用先懂 eBay 后台。AI CEO 判断该调哪些岗位、哪些能自动做、哪些必须停下来确认。</p>
+              </article>
+              <div class="workflow-agent-lane" aria-label="后台岗位链路">
+                <article class="is-active">
+                  <span>01</span>
+                  <strong>市场经理</strong>
+                  <p>判断能不能做</p>
+                </article>
+                <article class="is-active">
+                  <span>02</span>
+                  <strong>产品经理</strong>
+                  <p>Listing 资料包</p>
+                </article>
+                <article class="is-current">
+                  <span>03</span>
+                  <strong>素材经理</strong>
+                  <p>图片 / 视频 / 详情页</p>
+                </article>
+                <article>
+                  <span>04</span>
+                  <strong>财务履约</strong>
+                  <p>利润、物流、风险</p>
+                </article>
+                <article>
+                  <span>05</span>
+                  <strong>客服经理</strong>
+                  <p>商品档案和回复边界</p>
+                </article>
+              </div>
+              <article class="workflow-agent-confirm">
+                <span>确认闸口</span>
+                <strong>钱、发布、退款、广告、买家承诺</strong>
+                <p>这些动作不自动越过你。确认一次后，同类动作可以按默认规则少打扰。</p>
+              </article>
+            </div>
+            <div class="workflow-command-strip workflow-product-command-strip" aria-label="当前经营队列概览">
+              <article>
+                <span>AI CEO 当前调度</span>
+                <strong id="workflowQueueState">等待 AI CEO 判断下一步</strong>
+                <p>先讲清当前主线，不让你同时处理一堆后台入口。</p>
+              </article>
+              <article>
+                <span>后台可自动推进</span>
+                <strong id="workflowAutomationLevel">草稿模式</strong>
+                <p>调研、草稿、图片、利润、履约检查和客服学习先往前走。</p>
+              </article>
+              <article>
+                <span>数据接入状态</span>
+                <strong id="workflowApiState">eBay 只读同步状态</strong>
+                <p>只读取授权店铺数据；发布、改价、付款、退款和广告预算不会自动写入。</p>
+              </article>
+              <article>
+                <span>人工只管边界</span>
+                <strong id="workflowConfirmNeed">发布与关键资料</strong>
+                <p>发布、付款、退款、广告和买家承诺仍停住。</p>
+              </article>
+            </div>
+            <div class="workflow-permission-strip newbie-path-strip" aria-label="一件商品的真实顺序">
+              <article>
+                <span>01</span>
+                <strong>先判断能不能做</strong>
+                <p>市场、竞品、价格带和风险先看清楚。</p>
+              </article>
+              <article>
+                <span>02</span>
+                <strong>再生成上架草稿</strong>
+                <p>标题、类目、参数、描述和 FAQ 先出草稿。</p>
+              </article>
+              <article>
+                <span>03</span>
+                <strong>做图和视频</strong>
+                <p>主图、场景图、详情页、脚本和视频预览。</p>
+              </article>
+              <article>
+                <span>04</span>
+                <strong>算清利润和物流</strong>
+                <p>采购价、运费、平台费、退货和发货承诺。</p>
+              </article>
+              <article>
+                <span>05</span>
+                <strong>最后让你点头</strong>
+                <p>真实发布、付款、广告和退款前才问你。</p>
+              </article>
+            </div>
+            <div class="workflow-ops-layout workflow-product-layout">
+              <aside class="workflow-project-rail" aria-label="项目池">
+                <div class="workflow-panel-head">
+                  <div>
+                    <p class="eyebrow">商品项目</p>
+                    <h3>选择一个项目，继续推进到确认中心</h3>
+                  </div>
+                  <span class="pill neutral">4 个项目</span>
+                </div>
+                <div class="project-grid workflow-project-grid" id="projectGrid"></div>
+              </aside>
+              <section class="workflow-stage-panel" aria-label="项目推进板">
+                <div class="workflow-panel-head">
+                  <div>
+                    <p class="eyebrow">AI 正在做</p>
+                    <h3 id="workflowStageTitle">按 eBay 真实顺序推进</h3>
+                  </div>
+                  <span class="pill green">受控推进</span>
+                </div>
+                <div class="workflow-stage-board" id="workflowStageBoard"></div>
+              </section>
+              <aside class="workflow-ceo-panel" aria-label="AI CEO 当前建议">
+                <div class="workflow-panel-head">
+                  <div>
+                    <p class="eyebrow">你下一步只做这件事</p>
+                    <h3 id="workflowNextTitle">先确认当前卡点</h3>
+                  </div>
+                  <span class="pill amber" id="workflowNextRisk">需判断</span>
+                </div>
+                <p id="workflowNextCopy">AI CEO 会把低风险草稿继续推进，只把影响发布、资金、退款、广告、授权和买家承诺的动作送到确认中心。</p>
+                <div class="workflow-ceo-checklist" id="workflowCeoChecklist"></div>
+                <div class="workflow-boundary-box">
+                  <span>执行边界</span>
+                  <strong>草稿和报告可推进，真实写入不越界。</strong>
+                  <p id="workflowBoundaryCopy">当前真实平台写入关闭；高风险动作进入确认中心。</p>
+                </div>
+                <div class="button-row">
+                  <button class="primary-action" type="button" id="workflowPrimaryAction">处理当前卡点</button>
+                  <button class="secondary-action" type="button" data-open-view="activity">查看 AI 工作汇报</button>
+                </div>
+              </aside>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="view-media" data-title="素材工坊" data-media-mode="flow">
+          <section class="panel full media-studio-shell">
+            <section class="media-studio-panel" aria-label="商品素材与视频工作流">
+              <div class="section-heading media-heading">
+                <div>
+                  <p class="eyebrow">素材工坊</p>
+                  <h2>把商品草稿转成可评审的视觉素材包</h2>
+                  <p class="section-note">素材工坊分两条线：走完市场报告和产品刊登草稿的商品，会自动进入素材工坊；没有经过流程的临时货源图，则从独立素材单拖入处理，只生成素材草稿，不默认代表市场结论。</p>
+                </div>
+                <div class="media-heading-actions">
+                  <span class="pill green">素材生成 · 发布前确认</span>
+                </div>
+              </div>
+
+              <div class="media-pipeline" aria-label="素材工坊流程">
+                <article>
+                  <span>1 任务来源</span>
+                  <strong>流程导入 / 独立上传</strong>
+                  <p>已走完市场和刊登流程的商品自动导入；临时图片只做独立素材处理。</p>
+                </article>
+                <article>
+                  <span>2 输出标准</span>
+                  <strong>平台、尺寸、张数、用途</strong>
+                  <p>以 eBay 素材规范为主，同时预留 Amazon、Shopify 和独立站尺寸。</p>
+                </article>
+                <article>
+                  <span>3 视觉产出</span>
+                  <strong>主图、详情页、场景图、视频</strong>
+                  <p>图片、详情页和视频脚本同步生成，规格缺口单独标注。</p>
+                </article>
+                <article>
+                  <span>4 回写与归档</span>
+                  <strong>回写 Listing 或保留草稿</strong>
+                  <p>流程导入的素材回写产品刊登；独立上传的素材先保留为草稿。</p>
+                </article>
+              </div>
+
+              <div class="media-channel-board" aria-label="素材来源通道">
+                <button class="media-channel-card is-active" type="button" data-media-channel="flow">
+                  <span>渠道 A</span>
+                  <strong>流程导入</strong>
+                  <p>市场报告和产品刊登草稿完成后，商品自动进入素材工坊。</p>
+                  <small>正式商品流程</small>
+                </button>
+                <button class="media-channel-card" type="button" data-media-channel="independent">
+                  <span>渠道 B</span>
+                  <strong>独立上传</strong>
+                  <p>临时 1688 货源图单独处理，只生成素材草稿。</p>
+                  <small>单次素材处理</small>
+                </button>
+              </div>
+
+              <section class="media-bulk-bridge" aria-label="批量铺货接口">
+                <div>
+                  <p class="eyebrow">批量铺货接口</p>
+                  <h3>一批商品先去批量铺货筛选，通过后再进入流程导入线</h3>
+                  <p>批量铺货不会和独立上传混在一起。它先按客单价、售后、大小件、易碎、带电、资料完整度筛出候选品；商家同意后，再把通过的商品送到产品刊登和素材工坊。</p>
+                </div>
+                <button class="secondary-action" type="button" data-open-view="bulk">打开批量铺货</button>
+              </section>
+
+              <section class="media-project-switcher media-flow-channel" aria-label="流程导入商品项目切换">
+                <div class="media-project-head">
+                  <div>
+                    <p class="eyebrow">流程导入的商品草稿</p>
+                    <h3>市场报告和产品刊登草稿完成后，自动进入这里</h3>
+                    <p>这些商品已经走过市场经理报告和产品经理刊登草稿，素材工坊会直接读取标题、类目、卖点、图片需求和待补资料，不需要商家重新上传一遍。</p>
+                  </div>
+                  <span class="pill green" id="mediaProjectPill">5 个已导入草稿</span>
+                </div>
+                <div class="media-flow-status" aria-label="流程导入说明">
+                  <article><span>市场报告</span><strong>已判断</strong><p>需求、价格带、竞品痛点和可测方向已进入素材需求。</p></article>
+                  <article><span>产品刊登</span><strong>已成稿</strong><p>标题、类目、商品参数、政策和图片顺序已形成草稿。</p></article>
+                  <article><span>素材工坊</span><strong>自动接收</strong><p>按产品经理图片需求生成，不把独立上传和正式流程混在一起。</p></article>
+                </div>
+                <div class="media-project-tabs">
+                  <button class="media-project-tab is-active" type="button" data-media-draft="incense" data-media-draft-title="倒流香炉" data-media-draft-note="主图、茶室场景、尺寸图、详情页、英语短视频脚本" data-media-draft-gap="尺寸、重量、材质、是否含香粒" data-media-draft-status="市场判断已完成 · Listing 草稿待素材">
+                    <span>01</span><strong>倒流香炉</strong><small>家居香薰摆件</small><em>流程导入</em>
+                  </button>
+                  <button class="media-project-tab" type="button" data-media-draft="compression" data-media-draft-title="旅行压缩收纳袋" data-media-draft-note="套装主图、容量对比、行李箱场景、详情页" data-media-draft-gap="容量、套装数量、材质厚度" data-media-draft-status="市场判断已完成 · 素材方向待定">
+                    <span>02</span><strong>旅行压缩袋</strong><small>收纳旅行用品</small><em>流程导入</em>
+                  </button>
+                  <button class="media-project-tab" type="button" data-media-draft="jewelry" data-media-draft-title="便携首饰盒" data-media-draft-note="开合细节、内部结构、旅行场景、礼品图" data-media-draft-gap="尺寸、内部分区、材质" data-media-draft-status="差异化方向已定 · 需要细节图">
+                    <span>03</span><strong>首饰收纳盒</strong><small>旅行礼品场景</small><em>流程导入</em>
+                  </button>
+                  <button class="media-project-tab" type="button" data-media-draft="candle" data-media-draft-title="香薰蜡烛套装" data-media-draft-note="套装主图、香型视觉、家居氛围、使用提醒" data-media-draft-gap="香型、克重、燃烧时长、物流限制" data-media-draft-status="风控待确认 · 先做草稿">
+                    <span>04</span><strong>香薰蜡烛</strong><small>礼品套装</small><em>流程导入</em>
+                  </button>
+                  <button class="media-project-tab" type="button" data-media-draft="cable" data-media-draft-title="桌面理线夹" data-media-draft-note="白底套装、安装步骤、桌面场景、尺寸图" data-media-draft-gap="胶面、线径、数量、适用桌面" data-media-draft-status="可快速出图 · 待补规格">
+                    <span>05</span><strong>桌面理线夹</strong><small>办公整理</small><em>流程导入</em>
+                  </button>
+                </div>
+              </section>
+
+              <section class="media-independent-channel" aria-label="独立上传素材单">
+                <div class="media-independent-head">
+                  <div>
+                    <p class="eyebrow">独立上传</p>
+                    <h3>没有经过市场报告和刊登草稿的图片，在这里单独处理</h3>
+                    <p>这条线只做素材草稿，不默认代表这个品值得卖，也不会自动进入产品刊登。需要正式销售时，再转入市场报告和产品刊登流程。</p>
+                  </div>
+                  <span class="pill amber">临时素材</span>
+                </div>
+                <section class="media-drop-panel" id="mediaNewTaskDropPanel" tabindex="0" aria-label="独立上传素材拖拽区">
+                  <input class="media-file-input" id="mediaSourceFileInput" type="file" accept="image/*,.webp,.png,.jpg,.jpeg" hidden>
+                  <div class="media-drop-copy">
+                    <span>独立上传</span>
+                    <strong>未经过流程的 1688 货源图，拖到这里单独处理</strong>
+                    <p>这类图片不会默认进入市场结论或刊登草稿；系统只按你选择的图片要求生成素材草稿，后续需要时再转成正式商品项目。</p>
+                  </div>
+                  <div class="media-drop-path">
+                    <span>本机路径</span>
+                    <strong id="mediaLocalPath">等待拖入桌面图片</strong>
+                    <p id="mediaLocalPathNote">支持 WEBP / PNG / JPG；正式发布前仍需核对素材授权、实物一致性和平台规则。</p>
+                  </div>
+                  <div class="media-drop-actions">
+                    <button class="secondary-action" id="mediaBrowseFileButton" type="button">选择本机图片</button>
+                    <small id="mediaDropHint">也可以直接从桌面拖入</small>
+                  </div>
+                </section>
+              </section>
+
+              <div class="media-workbench">
+                <section class="media-preview-stage" aria-label="素材输出预览">
+                  <div class="media-preview-top">
+                    <div>
+                      <p class="eyebrow">本次素材包</p>
+                      <h3 id="mediaPreviewTitle">当前商品草稿素材包</h3>
+                      <p id="mediaPreviewNote">适用于已进入产品刊登的商品。系统会读取市场报告、刊登字段和待补资料，按产品经理的图片需求生成主图、场景图、详情页和视频脚本。</p>
+                    </div>
+                    <span class="pill amber" id="mediaRouteStatus">流程接入</span>
+                  </div>
+
+                  <div class="media-source-card">
+                    <div class="media-upload-box">
+                      <img class="media-input-thumb" src="assets/backflow-incense-burner-hero.webp" alt="">
+                      <span id="mediaSourceLabel">任务来源</span>
+                      <strong id="mediaSourceTitle">流程导入：倒流香炉商品草稿</strong>
+                      <p id="mediaSourceNote">流程导入：素材工坊读取官方数据包、Listing 资料包、来源记录和待补资料清单；没有真实资料时只显示缺口和下一步。</p>
+                    </div>
+                    <div class="media-source-facts">
+                      <span id="mediaFactLabel">待生成素材</span>
+                      <strong id="mediaFactTitle">5 个测试草稿 · 当前选中倒流香炉</strong>
+                      <p id="mediaFactNote">素材先作为草稿生成，不触发真实发布；尺寸、重量、材质、包装和发货口径缺失时会停在待补资料。</p>
+                    </div>
+                  </div>
+
+                  <div class="media-queue-board" aria-label="当前商品素材生产单">
+                    <div class="media-queue-head">
+                      <div>
+                        <span>当前素材生产单</span>
+                        <strong id="mediaProductionTitle">倒流香炉：主图、详情页与视频脚本</strong>
+                      </div>
+                      <small id="mediaProductionStatus">市场判断已完成 · Listing 草稿待素材</small>
+                    </div>
+                    <div class="media-production-grid">
+                      <article><span>要生成</span><strong id="mediaProductionNeed">主图、茶室场景、尺寸图、详情页、英语短视频脚本</strong></article>
+                      <article><span>待补资料</span><strong id="mediaProductionGap">尺寸、重量、材质、是否含香粒</strong></article>
+                      <article><span>去向</span><strong id="mediaProductionTarget">通过后回写产品刊登草稿</strong></article>
+                    </div>
+                  </div>
+
+                  <div class="media-run-status" id="mediaRunStatus" aria-live="polite">
+                    <span>当前状态</span>
+                    <strong>等待选择规格后生成</strong>
+                    <p>已有商品草稿会读取市场判断、刊登字段和待补资料；新建素材单会先处理本机货源图，后续可转入正式商品项目。</p>
+                  </div>
+
+                  <div class="media-canvas-grid">
+                    <article class="media-canvas-card main-shot" data-asset-preview="main" role="button" tabindex="0">
+                      <div class="asset-preview asset-preview-photo real-main-shot" aria-hidden="true">
+                        <img src="assets/backflow-incense-generated-main.webp" alt="">
+                        <em>AI 新生成</em>
+                      </div>
+                      <span>主图</span>
+                      <strong>主图候选图</strong>
+                      <p>生成白底产品主图候选，用于 Listing 首图评审。</p>
+                      <button class="asset-open-button" type="button">查看生成图</button>
+                    </article>
+                    <article class="media-canvas-card" data-asset-preview="scene" role="button" tabindex="0">
+                      <div class="asset-preview asset-preview-photo" aria-hidden="true">
+                        <img src="assets/backflow-incense-generated-scene.webp" alt="">
+                      </div>
+                      <span>场景图</span>
+                      <strong>茶室氛围图</strong>
+                      <p>生成家居陈列场景，用于展示商品摆放氛围。</p>
+                      <button class="asset-open-button" type="button">查看茶室图</button>
+                    </article>
+                    <article class="media-canvas-card" data-asset-preview="sceneHome" role="button" tabindex="0">
+                      <div class="asset-preview asset-preview-photo" aria-hidden="true">
+                        <img src="assets/ai-generated-incense-scene.png" alt="">
+                      </div>
+                      <span>场景图</span>
+                      <strong>家居书桌图</strong>
+                      <p>补充明亮场景图，适合 Listing 轮播和详情页中段。</p>
+                      <button class="asset-open-button" type="button">查看家居图</button>
+                    </article>
+                    <article class="media-canvas-card" data-asset-preview="closeup" role="button" tabindex="0">
+                      <div class="asset-preview asset-preview-photo smoke-thumb" aria-hidden="true">
+                        <img src="assets/ai-generated-incense-detail-closeup.png" alt="">
+                      </div>
+                      <span>细节图</span>
+                      <strong>鸟枝 / 花纹 / 底座</strong>
+                      <p>展示纹理、结构和承托位置，辅助买家判断细节。</p>
+                      <button class="asset-open-button" type="button">查看细节图</button>
+                    </article>
+                    <article class="media-canvas-card" data-asset-preview="size" role="button" tabindex="0">
+                      <div class="asset-preview asset-preview-photo size-thumb" aria-hidden="true">
+                        <img src="assets/ai-generated-incense-size-chart.png" alt="">
+                      </div>
+                      <span>尺寸图</span>
+                      <strong>待填真实尺寸</strong>
+                      <p>生成尺寸说明版式，真实长宽高和重量需实测后填写。</p>
+                      <button class="asset-open-button" type="button">查看尺寸图</button>
+                    </article>
+                    <article class="media-canvas-card" data-asset-preview="detail" role="button" tabindex="0">
+                      <div class="asset-preview asset-preview-photo detail-thumb" aria-hidden="true">
+                        <img src="assets/backflow-incense-generated-detail.webp" alt="">
+                      </div>
+                      <span>详情页</span>
+                      <strong>卖点长图</strong>
+                      <p>生成详情页长图草稿，整合主视觉、卖点、细节和注意事项。</p>
+                      <button class="asset-open-button" type="button">查看详情页</button>
+                    </article>
+                    <article class="media-canvas-card video-card" data-asset-preview="video" role="button" tabindex="0">
+                      <div class="asset-preview asset-preview-photo video-thumb" aria-hidden="true">
+                        <img src="assets/ai-generated-incense-presenter.png" alt="">
+                        <em>脚本</em>
+                      </div>
+                      <span>视频</span>
+                      <strong>产品短视频脚本</strong>
+                      <p>生成短视频草稿，包含封面、镜头顺序、字幕和卖点节奏。</p>
+                      <button class="asset-open-button" type="button">查看视频脚本</button>
+                    </article>
+                  </div>
+
+                  <div class="media-sync-strip">
+                    <span>回写到 Listing</span>
+                    <strong>图片排序、标题卖点、详情页图、视频脚本和确认事项</strong>
+                    <p>通过审核的素材进入 Listing 草稿；尺寸、重量、香粒说明、授权、夸大宣传和发布动作进入确认中心。</p>
+                  </div>
+                </section>
+
+                <aside class="media-decision-panel" aria-label="素材生成设置">
+                  <div class="media-settings-head">
+                    <div>
+                      <p class="eyebrow">生成设置</p>
+                      <h3>按平台标准出图</h3>
+                    </div>
+                    <span class="pill amber">草稿模式</span>
+                  </div>
+                  <p class="media-settings-summary" id="mediaDecisionSummary">当前是流程导入素材单：市场报告和产品刊登草稿已完成，按图片要求生成后回写产品刊登；独立上传不会自动进入正式商品流程。</p>
+                  <div class="media-setting-status" aria-label="当前素材生成状态">
+                    <article>
+                      <span>来源</span>
+                      <strong id="mediaEntryStatus">流程导入</strong>
+                      <p id="mediaEntryNote">流程导入，读取市场报告和产品刊登草稿。</p>
+                    </article>
+                    <article>
+                      <span>输出</span>
+                      <strong id="mediaOutputStatus">6 张图 + 视频脚本</strong>
+                      <p id="mediaOutputNote">图片、详情页、视频脚本一起回写。</p>
+                    </article>
+                  </div>
+                  <div class="media-setting-status media-provider-boundary" aria-label="素材用量边界">
+                    <article>
+                      <span>AI CEO 文本</span>
+                      <strong>对话和经营报告</strong>
+                      <p>负责对话、报告、Listing 文案和确认清单；商家不需要在素材工坊里管理模型细节。</p>
+                    </article>
+                    <article>
+                      <span>图片与视频</span>
+                      <strong>生成素材结果</strong>
+                      <p>主图、详情页图、视频封面和视频任务生成后直接回到素材工坊预览和复核。</p>
+                    </article>
+                  </div>
+                  <div class="media-template-board" aria-label="素材包模板">
+                    <div class="media-template-head">
+                      <div>
+                        <span>素材包模板</span>
+                        <strong>先选用途，再细调图片要求</strong>
+                      </div>
+                      <small id="mediaTemplateHint">流程导入会优先按产品经理图片需求生成；独立上传按商家选择生成。</small>
+                    </div>
+                    <div class="media-template-grid">
+                      <button class="media-template-card is-active" type="button" data-media-template="standard" data-template-size="平台推荐自动匹配" data-template-count="6 张" data-template-type="完整素材包：主图 + 场景图 + 详情页 + 尺寸图" data-template-scene="按商品用途自动选择" data-template-video="15 秒产品展示视频" data-template-note="适合 eBay 标准刊登，一次生成主图、场景图、详情页和尺寸说明。">
+                        <span>标准</span><strong>eBay 刊登包</strong><small>主图 / 场景 / 详情 / 尺寸</small>
+                      </button>
+                      <button class="media-template-card" type="button" data-media-template="main" data-template-size="eBay 主图 1600×1600" data-template-count="4 张" data-template-type="只做 eBay 主图：白底 / 干净背景 / 主体清晰" data-template-scene="白底或浅灰背景" data-template-video="不生成视频" data-template-note="适合快速修主图，优先保证主体清楚、背景干净、不过度加字。">
+                        <span>主图</span><strong>主图优化</strong><small>白底 / 干净背景</small>
+                      </button>
+                      <button class="media-template-card" type="button" data-media-template="scene" data-template-size="方图 1200×1200" data-template-count="8 张" data-template-type="只做场景图：家居 / 户外 / 使用场景" data-template-scene="家居/礼品/使用场景" data-template-video="15 秒产品展示视频" data-template-note="适合做购买欲，围绕买家使用场景生成多张候选图。">
+                        <span>场景</span><strong>场景种草</strong><small>家居 / 礼品 / 使用场景</small>
+                      </button>
+                      <button class="media-template-card" type="button" data-media-template="detail" data-template-size="详情页长图 1200×1800" data-template-count="6 张" data-template-type="只做详情页：卖点长图 + 参数图 + FAQ 图" data-template-scene="详情页说明版式" data-template-video="不生成视频" data-template-note="适合补详情页，把卖点、参数、尺寸和买家疑问做成说明图。">
+                        <span>详情</span><strong>详情页说明</strong><small>卖点 / 参数 / FAQ</small>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="media-control-grid" aria-label="素材生成设置">
+                    <label>
+                      <span>购物平台</span>
+                      <select id="mediaPlatformSelect">
+                        <option selected>eBay US Listing</option>
+                        <option>Amazon Listing 预设</option>
+                        <option>Shopify 商品页预设</option>
+                        <option>TikTok Shop 短视频预设</option>
+                        <option>通用独立站素材包</option>
+                      </select>
+                      <small>当前以 eBay 为主，其他平台只做预留规格</small>
+                    </label>
+                    <label>
+                      <span>图片尺寸</span>
+                      <select id="mediaSizeSelect">
+                        <option selected>平台推荐自动匹配</option>
+                        <option>eBay 主图 1600×1600</option>
+                        <option>高清方图 2000×2000</option>
+                        <option>方图 1200×1200</option>
+                        <option>4:5 商品图 1200×1500</option>
+                        <option>16:9 横版场景 1600×900</option>
+                        <option>9:16 视频封面 1080×1920</option>
+                        <option>详情页长图 1200×1800</option>
+                        <option>视频封面 1080×1920</option>
+                      </select>
+                      <small>主图、详情页、封面分别生成，不混在一张图里</small>
+                    </label>
+                    <label>
+                      <span>生成张数</span>
+                      <select id="mediaCountSelect">
+                        <option>1 张</option>
+                        <option>3 张</option>
+                        <option>4 张</option>
+                        <option selected>6 张</option>
+                        <option>8 张</option>
+                        <option>12 张</option>
+                      </select>
+                      <small>多张候选用于人工挑选，不直接发布</small>
+                    </label>
+                    <label>
+                      <span>图片要求</span>
+                      <select id="mediaTypeSelect">
+                        <option selected>完整素材包：主图 + 场景图 + 详情页 + 尺寸图</option>
+                        <option>只做 eBay 主图：白底 / 干净背景 / 主体清晰</option>
+                        <option>只做场景图：家居 / 户外 / 使用场景</option>
+                        <option>只做详情页：卖点长图 + 参数图 + FAQ 图</option>
+                        <option>只做尺寸包装图：尺寸、重量、包装、配件说明</option>
+                        <option>视频素材包：封面 + 字幕脚本 + 分镜</option>
+                      </select>
+                      <small>流程导入按产品经理需求生成；独立上传按这里选择的图片要求生成</small>
+                    </label>
+                    <label>
+                      <span>场景方向</span>
+                      <select id="mediaSceneSelect">
+                        <option selected>按商品用途自动选择</option>
+                        <option>白底或浅灰背景</option>
+                        <option>家居/礼品/使用场景</option>
+                        <option>茶室/东方审美场景</option>
+                        <option>办公桌/收纳整理场景</option>
+                        <option>户外/旅行/行李箱场景</option>
+                        <option>详情页说明版式</option>
+                      </select>
+                      <small>场景图、详情页和视频封面会按这里的方向生成</small>
+                    </label>
+                    <label>
+                      <span>实物保真</span>
+                      <select id="mediaFidelitySelect">
+                        <option selected>严格保留实物结构</option>
+                        <option>轻微美化光影和背景</option>
+                        <option>创意场景但不改变商品主体</option>
+                      </select>
+                      <small>正式刊登前必须核对实物、颜色、材质和尺寸</small>
+                    </label>
+                    <label>
+                      <span>文字规则</span>
+                      <select id="mediaTextRuleSelect">
+                        <option selected>eBay 相册图不加营销文字</option>
+                        <option>详情页允许英文卖点文字</option>
+                        <option>只生成无文字图片</option>
+                        <option>中英文详情页各一版</option>
+                      </select>
+                      <small>eBay 主图和相册图优先保持干净，详情页图再承接文字</small>
+                    </label>
+                    <label>
+                      <span>视频规格</span>
+                      <select id="mediaVideoPresetSelect">
+                        <option>不生成视频</option>
+                        <option>10 秒产品展示视频</option>
+                        <option selected>15 秒产品展示视频</option>
+                        <option>30 秒产品短视频脚本</option>
+                      </select>
+                      <small>视频封面、字幕脚本和分镜会进入素材记录</small>
+                    </label>
+                    <label>
+                      <span>脚本语言</span>
+                      <select id="mediaVoiceSelect">
+                        <option selected>英语脚本</option>
+                        <option>西语脚本</option>
+                        <option>德语脚本</option>
+                        <option>只生成中文脚本</option>
+                      </select>
+                      <small>脚本和字幕会单独审核</small>
+                    </label>
+                  </div>
+                  <div class="media-gap-card media-settings-alert">
+                    <span>发布前必须补齐</span>
+                    <strong id="mediaGapTitle">尺寸、包装重量、材质、是否含香粒</strong>
+                    <p id="mediaGapNote">这些信息不补齐，AI CEO 只能继续生成草稿，不能推进到真实发布或自动刊登。</p>
+                  </div>
+                  <div class="media-guardrail-list" aria-label="发布前确认边界">
+                    <article><span>01</span><p>颜色、材质、尺寸、重量必须和真实商品一致。</p></article>
+                    <article><span>02</span><p>AI 生成图可以先做草稿，正式使用前要核对原图来源和实物一致性。</p></article>
+                    <article><span>03</span><p>功效、材质、容量、套装数量、适配范围不能夸大。</p></article>
+                    <article><span>04</span><p>售价、发布、广告、退款和买家消息发送仍按确认规则处理。</p></article>
+                  </div>
+                  <div class="button-row media-settings-actions">
+                    <button class="secondary-action" id="mediaGenerateImagesDraft" type="button">按当前设置生成</button>
+                    <button class="secondary-action" id="mediaScriptDraft" type="button">生成脚本与分镜</button>
+                    <button class="primary-action" id="mediaConfirmDraft" type="button">回写产品刊登</button>
+                  </div>
+                </aside>
+              </div>
+            </section>
+          </section>
+        </section>
+
+        <section class="view" id="view-bulk" data-title="批量铺货">
+          <section class="panel full bulk-factory-hero bulk-clean-board">
+            <div class="bulk-hero-grid">
+              <div>
+                <p class="eyebrow">批量铺货 · 批量前质检</p>
+                <h2>先筛机会和货源，再分批生成草稿</h2>
+                <p class="section-note">适合已有店铺或多店铺商家。这里保留原来的批量流程：机会发现、货源匹配、分组质检、素材/Listing 草稿、抽检、分批确认；没有真实批次时只显示缺口和下一步。</p>
+              </div>
+              <div class="bulk-hero-summary" aria-label="批量铺货概要">
+                <article><span>官方资源</span><strong id="bulkImportedCount">0</strong><small>类 eBay 只读数据</small></article>
+                <article><span>来源记录</span><strong id="bulkTestCount">0</strong><small>条商家货源资料</small></article>
+                <article><span>候选草稿</span><strong id="bulkMissingCount">0</strong><small>等待前置质检</small></article>
+                <article><span>确认中心</span><strong id="bulkBlockedCount">0</strong><small>条高风险动作</small></article>
+              </div>
+            </div>
+            <div class="bulk-proof-note">当前版本按真实账号状态显示官方数据包、来源记录、字段缺口和确认边界；不会用旧商品占位冒充真实批次。</div>
+
+            <div class="bulk-pipeline" id="bulkPipeline" aria-label="批量铺货流程">
+              <span data-bulk-stage="import">设边界</span>
+              <span data-bulk-stage="clean">找机会</span>
+              <span data-bulk-stage="score">配货源</span>
+              <span data-bulk-stage="draft">分三类</span>
+              <span data-bulk-stage="risk">送草稿</span>
+              <span data-bulk-stage="test">确认发布</span>
+              <span data-bulk-stage="review">复盘扩量</span>
+            </div>
+
+            <div class="bulk-decision-workbench">
+              <section class="bulk-control-column" aria-label="批量铺货条件">
+                <section class="bulk-sequence" aria-label="批量铺货顺序流程">
+                  <article class="bulk-control-card bulk-sequence-card">
+                    <div class="bulk-step-number">01</div>
+                    <div class="bulk-sequence-body">
+                      <span>本轮数量</span>
+                      <strong>先决定看多少个候选品</strong>
+                      <p>建议先看 10 个，确认流程顺了再扩大到 20 个或更多。</p>
+                      <div class="bulk-count-row" id="bulkCountChoices" aria-label="候选品数量"></div>
+                    </div>
+                  </article>
+
+                  <article class="bulk-control-card bulk-sequence-card">
+                    <div class="bulk-step-number">02</div>
+                    <div class="bulk-sequence-body">
+                      <span>货源方式</span>
+                      <strong>告诉 AI 去哪里找货</strong>
+                      <p>默认从 1688 找相近货源；已有货源线索时，也可以直接贴链接或拖入图片。</p>
+                      <div class="bulk-source-choice-grid">
+                        <button class="is-active" type="button" data-bulk-action="source-1688"><strong>1688 找货</strong><span>AI 按 eBay 机会词匹配相近货源</span></button>
+                        <button type="button" data-bulk-action="source-manual"><strong>手动链接/图片</strong><span>已有线索先交给 AI 判断</span></button>
+                      </div>
+                    </div>
+                  </article>
+
+                  <section class="bulk-boundary-panel bulk-sequence-card" aria-label="铺货边界">
+                    <div class="bulk-step-number">03</div>
+                    <div class="bulk-sequence-body">
+                      <div class="bulk-boundary-head">
+                        <div>
+                          <span>铺货边界</span>
+                          <strong>先把不想碰的风险说清楚</strong>
+                          <p>这里不是马上发布商品，而是告诉 AI CEO 什么样的货可以进入候选清单。先选本轮打法，再按利润、履约、售后和合规继续筛。</p>
+                        </div>
+                      </div>
+                      <div class="bulk-guardrail-strip" aria-label="批量铺货默认底线">
+                        <article><span>先拦风险</span><strong>侵权、禁限售、资料缺失不直接发布</strong></article>
+                        <article><span>先测小批</span><strong>看曝光、点击、询单、利润和售后</strong></article>
+                        <article><span>确认边界</span><strong>发布、付款、广告预算必须确认</strong></article>
+                      </div>
+                      <div class="bulk-preference-grid" id="bulkPreferenceGrid"></div>
+                    </div>
+                  </section>
+                </section>
+
+                <section class="bulk-generate-strip" aria-label="生成候选清单">
+                  <div>
+                    <span>准备生成</span>
+                    <strong>按当前条件生成候选清单</strong>
+                    <p>只进入预览，不会自动发布、付款、改价或开广告。</p>
+                  </div>
+                  <button class="primary-action" type="button" data-bulk-action="generate-candidates">生成候选清单</button>
+                </section>
+              </section>
+
+              <section class="bulk-result-panel">
+                <div class="bulk-boundary-head">
+                  <div>
+                    <p class="eyebrow">实时结果</p>
+                    <h3 id="bulkPreviewTitle">批次还在评分阶段</h3>
+                    <p id="bulkPreviewText">适合测试的商品会生成 eBay 草稿；缺资料的商品先问你补什么；高风险商品直接拦住，不浪费发布额度。</p>
+                  </div>
+                </div>
+                <ul class="bulk-preview-list" id="bulkPreviewList">
+                  <li>官方 eBay packet：先确认数据来源和可用资源。</li>
+                  <li>商家货源记录：先补采购价、重量、尺寸、库存、发货地和图片授权。</li>
+                  <li>发布前质检：类目、利润、IP、素材和店铺政策不通过时直接拦下。</li>
+                </ul>
+                <div class="bulk-candidate-preview" id="bulkCandidatePreview"></div>
+                <div class="bulk-feedback" id="bulkFeedback" aria-live="polite">
+                  当前是工作批次。先按顺序设置本轮条件，再生成候选清单。
+                </div>
+              </section>
+            </div>
+
+            <section class="bulk-bottom-strip" aria-label="批量铺货交接规则">
+              <article>
+                <span>同意后系统做什么</span>
+                <strong>生成素材任务和刊登草稿</strong>
+                <p>你点上方同意后，候选品会进入素材工坊和产品刊登；货源图只作参考，平台图和详情页重新生成。</p>
+              </article>
+              <article>
+                <span>哪些动作会停下来</span>
+                <strong>发布、采购付款、广告预算仍进确认中心</strong>
+                <p>同类批次规则可以保存，但写入 eBay、付款采购、改价库存和广告预算不会自动执行。</p>
+              </article>
+              <div class="batch-action-grid">
+                <button class="secondary-action" type="button" data-bulk-action="report">查看批次汇报</button>
+                <button class="secondary-action" type="button" data-bulk-action="confirm-center">打开确认中心</button>
+              </div>
+            </section>
+          </section>
+        </section>
+
+        <section class="view" id="view-activity" data-title="AI 汇报">
+          <section class="panel full">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">AI 汇报中心</p>
+                <h2>每个商品、每个批次，都沉淀成可追溯的经营档案</h2>
+                <p class="section-note">首页的市场判断、产品刊登、素材工坊、批量铺货和客服处理都会回到这里。商家不用看后台岗位，只看结论、依据、缺口、下一步和需要确认的边界。</p>
+              </div>
+              <div class="topbar-actions">
+                <span class="pill neutral" id="activityProjectPill">当前项目</span>
+                <button class="primary-action" id="exportAllPdf">导出本项目汇报</button>
+              </div>
+            </div>
+
+            <section class="task-split-status-board" id="taskSplitStatusBoard" aria-label="AI CEO 工作进度"></section>
+
+            <section class="readiness-score-board" id="readinessScoreBoard" aria-label="AI CEO 经营价值核对"></section>
+
+            <section class="activity-command-board" aria-label="AI 汇报总览">
+              <article class="activity-command-main">
+                <span>汇报链路</span>
+                <strong>从市场判断到发布前确认，所有关键输出集中阅读</strong>
+                <p>左侧选择商品或批次，再按流程看报告；右侧直接预览完整文字。PDF 只是留档动作，不是查看报告的入口。</p>
+              </article>
+              <article>
+                <span>当前项目汇报</span>
+                <strong id="activityTotalCount">0</strong>
+                <p>市场、刊登、素材、风控、客服等输出</p>
+              </article>
+              <article>
+                <span>已完成</span>
+                <strong id="activityDoneCount">0</strong>
+                <p>可继续交给下一步流程</p>
+              </article>
+              <article>
+                <span>待确认/补资料</span>
+                <strong id="activityBlockedCount">0</strong>
+                <p>会流向确认中心或待补资料</p>
+              </article>
+            </section>
+
+            <section class="activity-archive-card" id="activityArchiveCard" aria-label="当前项目档案"></section>
+
+            <section class="activity-flow-strip" aria-label="AI 汇报来源">
+              <article><span>01</span><strong>首页</strong><p>市场经理报告、机会判断、批量入口。</p></article>
+              <article><span>02</span><strong>产品刊登</strong><p>eBay 字段、政策、价格、待补资料。</p></article>
+              <article><span>03</span><strong>素材工坊</strong><p>主图、场景图、详情页、视频脚本。</p></article>
+              <article><span>04</span><strong>批量铺货</strong><p>候选分流、草稿接力、拦截原因。</p></article>
+              <article><span>05</span><strong>确认/客服</strong><p>高风险动作、客服边界和处理记录。</p></article>
+            </section>
+
+            <div class="activity-feedback" id="activityFeedback" aria-live="polite">
+              点击任意一条汇报，右边会直接预览完整文字；不用先生成 PDF。
+            </div>
+            <div class="activity-workspace">
+              <aside class="activity-left-rail" aria-label="AI 汇报筛选">
+                <section class="activity-project-panel">
+                  <div class="activity-panel-head">
+                    <span>商品 / 批次</span>
+                    <strong>先选要看的经营对象</strong>
+                  </div>
+                  <div class="project-grid compact" id="activityProjectGrid"></div>
+                </section>
+                <section class="activity-filter-panel">
+                  <div class="activity-panel-head">
+                    <span>流程筛选</span>
+                    <strong>按工作流看报告</strong>
+                  </div>
+                  <div class="activity-role-filters" id="activityRoleFilters" role="tablist" aria-label="AI 汇报流程筛选"></div>
+                </section>
+                <section class="activity-list-panel">
+                  <div class="activity-panel-head">
+                    <span>汇报列表</span>
+                    <strong id="activityListTitle">全部汇报</strong>
+                  </div>
+                  <div class="activity-list" id="activityList"></div>
+                </section>
+              </aside>
+              <aside class="activity-preview-panel" aria-label="工作记录预览">
+                <div class="activity-preview-head">
+                  <div>
+                    <p class="eyebrow" id="activityPreviewRole">AI 汇报预览</p>
+                    <h3 id="activityPreviewTitle">选择一条 AI 汇报</h3>
+                  </div>
+                  <span class="pill neutral" id="activityPreviewStatus">预览</span>
+                </div>
+                <div class="activity-preview-section">
+                  <span>做了什么</span>
+                  <p id="activityPreviewAction">点击左侧任意一条工作记录，这里会直接显示完整报告文字，不必先生成 PDF。</p>
+                </div>
+                <div class="activity-preview-section">
+                  <span>数据来源</span>
+                  <ul id="activityPreviewSources"></ul>
+                </div>
+                <div class="activity-preview-section">
+                  <span>输出结论</span>
+                  <p id="activityPreviewResult">依据确认后，可以继续处理，也可以按需导出 PDF 留档。</p>
+                </div>
+                <div class="activity-preview-section activity-handoff-panel" id="activityHandoffPanel">
+                  <span>流程接力</span>
+                  <div class="activity-handoff-route" id="activityHandoffRoute"></div>
+                  <p id="activityHandoffCopy">选择左侧汇报后，这里会显示它从哪个模块来、下一步应该送到哪里。</p>
+                  <div class="activity-handoff-actions" id="activityHandoffActions"></div>
+                </div>
+                <div class="activity-report-preview" id="activityPreviewReport"></div>
+                <div class="button-row activity-preview-actions">
+                  <button class="secondary-action" id="exportPreviewPdf" type="button">导出PDF（可选）</button>
+                </div>
+              </aside>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="view-confirm" data-title="决策中心">
+          <section class="panel full">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">待我确认</p>
+                <h2>现在只做一个选择</h2>
+                <p class="section-note">系统已经给出推荐方案。你点“按推荐继续”后，AI 继续做草稿、素材和报告；碰到发布、付款、退款、广告和客服承诺时再问你。</p>
+              </div>
+              <div class="segmented" id="confirmFilters">
+                <button class="segment is-active" data-filter="immediate">现在要我决定</button>
+                <button class="segment" data-filter="all">高级细节</button>
+              </div>
+            </div>
+            <div class="confirm-step-line" aria-label="当前确认进度">
+              <span>市场判断完成</span>
+              <span>产品刊登草稿中</span>
+              <span class="is-current">当前：确认安全边界</span>
+              <span>下一步：补资料 / 看素材</span>
+            </div>
+            <section class="confirm-decision-hero" aria-label="确认中心说明">
+              <div class="confirm-decision-copy">
+                <span>倒流香炉当前卡点</span>
+                <strong>先允许 AI 继续做草稿，但不要让它真实发布或花钱。</strong>
+                <p>现在不是决定“卖不卖”，而是先设一条安全边界：AI 可以继续整理倒流香炉的资料、素材和 Listing 草稿；真实发布、采购付款、退款、广告和客服承诺必须先问你。</p>
+                <div class="confirm-product-gap">
+                  <span>发布前还缺</span>
+                  <strong>尺寸、包装重量、材质、是否含香粒</strong>
+                  <p>这些会影响运费、退货、标题参数和买家预期，不能让 AI 乱填。</p>
+                </div>
+              </div>
+              <div class="confirm-safe-action">
+                <span>推荐动作</span>
+                <strong>按推荐继续</strong>
+                <p>中间主按钮才是真正动作。点完后会保存安全边界，并出现“回产品刊登继续”。</p>
+              </div>
+            </section>
+            <section class="confirm-current-decision" id="confirmCurrentDecision" aria-label="当前只需要确认的一件事"></section>
+            <div class="confirm-simple-grid confirm-rule-guide">
+              <article>
+                <span>保存后自动做</span>
+                <strong>调研、草稿、素材、普通记录</strong>
+                <p>这些不影响真实账号和资金，不用反复问你。</p>
+              </article>
+              <article>
+                <span>仍然会问你</span>
+                <strong>发布、付款、退款、广告、客服承诺</strong>
+                <p>这些会影响钱、账号表现或买家预期，需要你点头。</p>
+              </article>
+              <article>
+                <span>下一步去哪里</span>
+                <strong>回产品刊登继续</strong>
+                <p>边界保存后，继续补资料、看素材和准备 Listing 草稿。</p>
+              </article>
+            </div>
+            <div class="confirm-grid" id="confirmGrid"></div>
+          </section>
+        </section>
+
+        <section class="view" id="view-service" data-title="客服与订单">
+          <section class="panel full service-hero-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">自动客服</p>
+                <h2>普通问题 AI 自动回，麻烦问题你接管</h2>
+                <p class="section-note">默认让 AI 先接待买家：物流查询、材质尺寸、使用方式这些普通问题可自动回复；退款、补偿、差评、纠纷、地址修改和明确到货承诺会停下来让你接管。</p>
+              </div>
+              <span class="pill green" id="autoServiceMode">AI 自动接待中</span>
+            </div>
+            <div class="service-kpi-grid" id="serviceKpiGrid">
+              <article><span>待回复</span><strong>3</strong><p>其中 2 条涉及承诺边界</p></article>
+              <article><span>物流异常</span><strong>4</strong><p>催发货、派送失败、长时间未更新</p></article>
+              <article><span>自动回复</span><strong>2</strong><p>tracking 更新、已妥投说明</p></article>
+              <article><span>自动停住</span><strong>退款 / 重发</strong><p>交给人工接管</p></article>
+            </div>
+          </section>
+
+          <section class="panel full service-knowledge-panel" id="serviceKnowledgePanel" aria-label="客服商品档案"></section>
+
+          <div class="service-layout service-command-center">
+            <section class="panel service-queue-panel">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">买家消息</p>
+                  <h2>AI 已经先分好类</h2>
+                </div>
+                <span class="pill red">2 条需确认</span>
+              </div>
+              <div class="service-filter-row" aria-label="客服队列筛选">
+                <button class="is-active" type="button" data-service-filter="all">全部</button>
+                <button type="button" data-service-filter="pending">待回复</button>
+                <button type="button" data-service-filter="logistics">物流异常</button>
+                <button type="button" data-service-filter="refund">退款风险</button>
+              </div>
+              <div class="conversation-list" id="conversationList"></div>
+            </section>
+
+            <section class="panel service-thread-panel">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">自动回复 / 人工接管</p>
+                  <h2 id="conversationTitle">物流延迟咨询</h2>
+                </div>
+                <span class="pill amber" id="conversationRisk">需确认</span>
+              </div>
+              <div class="handoff-bar">
+                <span class="pill green" id="handoffMode">AI 自动接待中</span>
+              <p>普通问题自动回复；遇到退款、补偿、重发、差评、纠纷和明确到货承诺，AI 自动停住并让你接管。</p>
+              </div>
+              <div class="buyer-thread" id="buyerThread"></div>
+              <label class="reply-editor">
+                <span>AI 回复草稿</span>
+                <textarea id="replyDraft" rows="6"></textarea>
+              </label>
+              <div class="button-row">
+                <button class="secondary-action" id="takeoverReply">我来接管</button>
+                <button class="secondary-action" id="rewriteReply">换一种口吻</button>
+                <button class="primary-action" id="approveReply">允许 AI 发送这条</button>
+              </div>
+            </section>
+
+            <section class="panel logistics-panel service-inspector-panel">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">订单 / 物流窗口</p>
+                  <h2>按订单号、买家或 tracking 找</h2>
+                </div>
+                <span class="pill neutral">占位</span>
+              </div>
+              <div class="logistics-tools">
+                <label class="order-search-field">
+                  <span>搜索订单</span>
+                  <input id="orderSearch" type="search" placeholder="订单号、买家、状态或 tracking" autocomplete="off" />
+                </label>
+                <button class="secondary-action compact-action" id="clearOrderSearch" type="button">清除</button>
+              </div>
+              <p class="logistics-search-meta" id="logisticsSearchMeta">显示全部订单</p>
+              <div class="active-order-card" id="activeOrderSummary"></div>
+              <div class="logistics-list" id="logisticsList"></div>
+            </section>
+          </div>
+
+          <section class="panel full service-ai-record-panel">
+            <div>
+              <p class="eyebrow">后台 AI 正在跟进</p>
+              <h2>客服、物流和退款风险放在一张图里看</h2>
+            </div>
+            <div class="service-agent-grid" id="serviceAgentGrid">
+              <article><span>客服草稿</span><strong>起草回复</strong><p>按店铺口吻写英文草稿，避免多承诺。</p></article>
+              <article><span>物流核对</span><strong>核对 tracking</strong><p>把待发货、揽收、派送失败和长时间未更新拆开。</p></article>
+              <article><span>退款风险</span><strong>拦住高风险动作</strong><p>退款、重发、补偿和明确到货日送确认中心。</p></article>
+            </div>
+            <p class="service-action-feedback" id="serviceActionFeedback">等待客服动作，允许发送或接管后会写入 AI 汇报。</p>
+          </section>
+        </section>
+
+        <section class="view" id="view-connect" data-title="设置">
+          <section class="panel full settings-rule-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">连接账号</p>
+                <h2>新手只需要知道：接得越多，AI 少问你越多</h2>
+                <p class="section-note">这里放 eBay、1688、物流、费用这些连接入口。看不懂可以先跳过，用图片、链接、表格继续体验；等信任后再连接官方授权。</p>
+              </div>
+              <span class="pill green">已保存</span>
+            </div>
+            <div class="settings-rule-grid">
+              <article>
+                <span>eBay 店铺</span>
+                <strong>连接后少复制 Listing、订单和费用</strong>
+                <p>建议先只读授权。AI 能自动读取资料，但不会自动发布、退款或投广告。</p>
+              </article>
+              <article>
+                <span>1688 / 货源</span>
+                <strong>连接后少抄价格、规格和库存</strong>
+                <p>确定长期从货源平台采购时再接；暂时不接也可以用链接和图片。</p>
+              </article>
+              <article>
+                <span>自动化规则</span>
+                <strong>不知道怎么选就用保守默认</strong>
+                <p>发布、付款、退款、广告和客服承诺永远先停住；普通草稿自动做。</p>
+              </article>
+            </div>
+            <section class="connection-state-board" id="connectionStateBoard" aria-label="账号连接状态总览"></section>
+            <div class="button-row">
+              <button class="primary-action" id="openRuleSettings">查看保守默认规则</button>
+              <button class="secondary-action" id="addRuleTemplate">我看不懂，给我解释</button>
+            </div>
+          </section>
+          <section class="panel full source-intake-panel" aria-label="货源资料填写方式">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">货源资料怎么进来</p>
+                <h2>不接 1688 API 也能继续；接了以后只是少填很多资料</h2>
+                <p class="section-note">货源资料有三种入口：AI 按市场结论去 1688 找候选、商家手动填链接和成本、授权接口读取。AI 可以自动筛选和生成建议，但真实下单、付款、地址写入和发货不会默认自动执行。</p>
+              </div>
+              <span class="pill amber">下单付款需确认</span>
+            </div>
+            <div class="source-intake-mode-grid">
+              <button class="source-intake-mode is-active" type="button" data-source-intake="ai_search">
+                <span>推荐</span>
+                <strong>AI 帮我找货源</strong>
+                <p>商家选中商品机会后，AI 去 1688 匹配相近货源，按综合评分给出候选。</p>
+              </button>
+              <button class="source-intake-mode" type="button" data-source-intake="manual">
+                <span>无需授权</span>
+                <strong>我手动填资料</strong>
+                <p>贴 1688 链接、上传图片、填采购价和重量，不接 API 也能跑刊登流程。</p>
+              </button>
+              <button class="source-intake-mode" type="button" data-source-intake="api">
+                <span>省事</span>
+                <strong>绑定货源接口</strong>
+                <p>长期采购再接 API，自动读取价格、库存、规格、发货地和供应商信息。</p>
+              </button>
+            </div>
+            <div class="source-intake-workspace">
+              <article class="source-ai-sourcing" data-source-panel="ai_search">
+                <div>
+                  <p class="eyebrow">AI 找货源时怎么判断</p>
+                  <h3>不是只找最低价，而是找“更适合 eBay 测试”的货源</h3>
+                </div>
+                <div class="source-score-grid">
+                  <span><b>价格</b>低于目标利润线</span>
+                  <span><b>供应商</b>经营稳定、响应快</span>
+                  <span><b>规格</b>尺寸重量说得清</span>
+                  <span><b>履约</b>小件轻货、发货地清楚</span>
+                  <span><b>素材</b>有可参考图但重新出图</span>
+                  <span><b>风险</b>避开品牌、带电、易碎争议</span>
+                </div>
+                <div class="source-candidate-list">
+                  <article>
+                    <span>候选 A · 综合更稳</span>
+                    <strong>价格 ¥7.80 起 · 1 件可发 · 浙江发货</strong>
+                    <p>适合先测。规格较完整，但需要确认重量、包装尺寸和是否可无票据代发。</p>
+                  </article>
+                  <article>
+                    <span>候选 B · 价格更低</span>
+                    <strong>价格 ¥6.30 起 · 发货地待核</strong>
+                    <p>不直接推荐第一批，原因是商品图重复度高、规格表缺重量，客服响应待验证。</p>
+                  </article>
+                </div>
+                <div class="source-panel-actions">
+                  <button class="primary-action" type="button" data-source-action="run_ai_search">开始找货源</button>
+                  <button class="secondary-action" type="button" data-source-action="send_source_to_product">确认候选 A，送去刊登</button>
+                </div>
+              </article>
+              <article class="source-manual-form" data-source-panel="manual">
+                <div>
+                  <p class="eyebrow">手动资料单</p>
+                  <h3>没有 API 时，就按这张表补齐</h3>
+                  <p>新手不用懂接口，把能看到的信息填进来；缺的字段会进入待补资料，不影响先做市场报告和素材草稿。</p>
+                </div>
+                <div class="source-form-grid">
+                  <label><span>货源链接</span><input type="text" data-source-manual-field="source_link" value="https://detail.1688.com/offer/..." aria-label="货源链接"></label>
+                  <label><span>采购价</span><input type="text" data-source-manual-field="purchase_price" value="¥6.80 - ¥9.20" aria-label="采购价"></label>
+                  <label><span>最小起订量</span><input type="text" data-source-manual-field="moq" value="1 件可发" aria-label="最小起订量"></label>
+                  <label><span>发货地</span><input type="text" data-source-manual-field="source_location" value="浙江 / 广东待确认" aria-label="发货地"></label>
+                  <label><span>包裹重量</span><input type="text" data-source-manual-field="package_weight" value="待供应商确认" aria-label="包裹重量"></label>
+                  <label><span>包装尺寸</span><input type="text" data-source-manual-field="package_dimensions" value="待供应商确认" aria-label="包装尺寸"></label>
+                  <label><span>材质/规格</span><input type="text" data-source-manual-field="material" value="按商品页和供应商回复确认" aria-label="材质规格"></label>
+                  <label><span>是否支持代发</span><select data-source-manual-field="dropship_rule" aria-label="是否支持代发"><option>待确认</option><option>支持</option><option>不支持</option></select></label>
+                </div>
+                <div class="source-upload-strip">
+                  <strong>拖入货源图 / 报价单 / 供应商截图</strong>
+                  <span>当前版本只记录路径和预览；正式版会写入货源档案。</span>
+                </div>
+                <div class="source-panel-actions">
+                  <button class="primary-action" type="button" data-source-action="save_manual_source">保存手动资料</button>
+                  <button class="secondary-action" type="button" data-source-action="open_media_upload">上传货源图做素材</button>
+                </div>
+              </article>
+              <article class="source-api-binding-card" data-source-panel="api">
+                <div>
+                  <p class="eyebrow">货源接口通道</p>
+                  <h3>接口只负责“读资料”，不是直接替商家付款下单</h3>
+                  <p>长期从 1688 或固定货源采购时，再绑定接口。正式版先做只读读取，采购执行仍然由确认中心接住。</p>
+                </div>
+                <div class="source-api-boundary-grid">
+                  <article>
+                    <span>可自动</span>
+                    <strong>读取货源资料</strong>
+                    <p>商品、价格、规格、库存、供应商、发货地和图片。</p>
+                  </article>
+                  <article>
+                    <span>要确认</span>
+                    <strong>下单、付款、地址</strong>
+                    <p>生成采购单可以自动；付款和地址写入不能默认执行。</p>
+                  </article>
+                  <article>
+                    <span>接不上</span>
+                    <strong>仍可手动继续</strong>
+                    <p>复制链接、上传图片、导入表格，先跑市场和刊登流程。</p>
+                  </article>
+                </div>
+                <div class="source-api-step-list">
+                  <article><span>1</span><strong>申请/授权</strong><p>商家在官方页面授权读取能力，密钥不进前端。</p></article>
+                  <article><span>2</span><strong>读取并归档</strong><p>AI 把规格、价格、库存和供应商资料写入货源档案。</p></article>
+                  <article><span>3</span><strong>确认采购边界</strong><p>先选择直发、国内中转，或只生成采购单。</p></article>
+                </div>
+                <div class="source-panel-actions">
+                  <button class="primary-action" type="button" data-source-action="open_source_api_modal">查看接口接入说明</button>
+                  <button class="secondary-action" type="button" data-source-action="open_source_order_rules">设置采购确认边界</button>
+                </div>
+              </article>
+            </div>
+            <p class="source-intake-feedback" id="sourceIntakeFeedback">当前建议：先让 AI 根据市场报告找 1688 候选，再由你确认供应商；确认后才生成采购单和刊登资料。</p>
+          </section>
+          <section class="panel full connector-followup-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">待连接接口</p>
+                <h2>向导里先跳过的授权，后面都能在这里补接</h2>
+                <p class="section-note">四种身份都建议优先接官方只读授权，因为这样最省事；但刚了解捷境、不想马上授权的商家，可以先用截图、表格、链接和图片跑流程。等愿意连接时，从这里继续打开官方入口。</p>
+              </div>
+              <span class="pill green">可稍后补接</span>
+            </div>
+            <div class="connector-followup-grid">
+              <article class="connector-action-card">
+                <span>eBay 官方授权</span>
+                <strong>读取店铺、Listing、订单、费用和广告表现</strong>
+                <p>只读读取用于预填和整理，不会自动发布、退款、投广告或发送客服消息。</p>
+                <button class="secondary-action" type="button" data-manual="ebay_oauth">打开授权说明</button>
+              </article>
+              <article class="connector-action-card">
+                <span>1688 / 货源接口</span>
+                <strong>读取商品、价格、规格、库存和供应商信息</strong>
+                <p>确定长期从货源平台采购时再绑定；暂不信任时可先用链接、图片和表格。</p>
+                <button class="secondary-action" type="button" data-manual="source_api_binding">配置货源入口</button>
+              </article>
+              <article class="connector-action-card">
+                <span>采购与履约规则</span>
+                <strong>发买家、发自己家、只生成采购单，先分清</strong>
+                <p>真实下单、付款、地址写入和发货动作都按确认规则执行。</p>
+                <button class="secondary-action" type="button" data-manual="source_order_rules">设置采购规则</button>
+              </article>
+              <article class="connector-action-card">
+                <span>费用 / 广告只读</span>
+                <strong>把订阅费、成交费、广告费纳入利润</strong>
+                <p>读取费用和执行广告分开；广告预算、投放和调价不会自动执行。</p>
+                <button class="secondary-action" type="button" data-manual="fee_authorization">查看费用授权</button>
+              </article>
+            </div>
+          </section>
+          <section class="panel full market-source-health-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">数据源状态中心</p>
+                <h2>市场报告先看数据从哪里来，再决定能不能继续自动化</h2>
+                <p class="section-note">eBay 官方接口、搜索引擎、公开网页、货源链接、图片和表格要分开记录。能读取就写入报告；被登录、验证码、403 或授权限制挡住时，系统要直接提示缺口，而不是假装已经查完。</p>
+              </div>
+              <button class="secondary-action" type="button" data-manual="data_source_health">查看数据源规则</button>
+            </div>
+            <div class="market-source-health-grid" id="marketSourceHealthGrid"></div>
+            <div class="market-source-fallback">
+              <div>
+                <span>报告可信度怎么来</span>
+                <strong id="marketSourceHealthSummary">等待数据源自检。</strong>
+              </div>
+              <div class="market-source-fallback-grid" id="marketSourceFallbackGrid"></div>
+            </div>
+          </section>
+          <section class="panel full ebay-policy-orchestration-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">eBay 发布前控制台</p>
+                <h2>店铺订阅、三类业务政策和发布权限，不再散落在 Seller Hub 里</h2>
+                <p class="section-note">正式版会先读取 eBay 账号订阅、物流政策、支付政策、退款政策和类目规则；AI 只做整理和建议，商家确认后才保存为默认规则，真正写回 eBay 必须再次确认。</p>
+              </div>
+              <span class="pill amber">正式接入前预演</span>
+            </div>
+            <div class="ebay-policy-orchestration" id="ebayPolicyOrchestration"></div>
+          </section>
+          <section class="panel full settings-rule-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">货源与履约接口</p>
+                <h2>确定从 1688 代发，再绑定采购接口</h2>
+                <p class="section-note">不确定货源时，先用 1688 链接、图片、表格和采购价手动跑流程。确定长期从 1688 或其他货源平台采购后，再在这里绑定接口；筛品、生成草稿可以自动，下单、付款、地址写入和真实发货必须按确认规则走。</p>
+              </div>
+              <span class="pill amber">预留入口</span>
+            </div>
+            <div class="settings-rule-grid">
+              <article>
+                <span>1688 货源 API</span>
+                <strong>读商品、价格、规格、库存和供应商信息</strong>
+                <p>用于批量筛选适合 eBay 的商品，不等于自动采购。没有授权时仍支持链接、图片和表格导入。</p>
+              </article>
+              <article>
+                <span>采购下单规则</span>
+                <strong>下单、付款、收货地址必须分层确认</strong>
+                <p>可以按你的模式设置：直发买家、国内中转履约，或只生成采购单。涉及付款和地址写入的动作不能默认放开。</p>
+              </article>
+              <article>
+                <span>可扩展接口</span>
+                <strong>橙联、海外仓、供应商 ERP、表格导入</strong>
+                <p>统一成采购价、包裹重量、发货地、tracking、退货地址和授权状态，供 AI CEO 判断履约风险。</p>
+              </article>
+            </div>
+            <div class="button-row">
+              <button class="primary-action" id="openSourceApiBinding" type="button">配置货源 API</button>
+              <button class="secondary-action" id="open1688OrderRules" type="button">设置采购确认规则</button>
+            </div>
+          </section>
+          <section class="panel full launch-gap-panel" aria-label="商家工作台能力说明">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">商家工作台能力说明</p>
+                <h2>捷境会把哪些事交给 AI CEO，哪些事留给你确认</h2>
+                <p class="section-note">商家不需要看底层工程清单。这里直接说明：系统读到了什么、AI CEO 能产出什么、哪里会停下来问你，避免把占位流程误当成真实经营结果。</p>
+              </div>
+              <span class="pill green" id="launchGapPill">商家可见边界</span>
+            </div>
+            <div class="launch-gap-board" id="launchGapBoard"></div>
+          </section>
+
+          <section class="panel full ebay-fee-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">eBay 费用与广告授权中心</p>
+                <h2>订阅费、广告费和平台费用必须进入真实利润</h2>
+                <p class="section-note">eBay 的 Store 订阅、刊登/成交费用、广告流量费会改变净利润。捷境默认只读费用数据，不替商家开订阅、不自动投广告、不自动调预算。</p>
+              </div>
+              <button class="secondary-action" id="openFeeAuthorization">查看授权说明</button>
+            </div>
+            <div class="fee-formula-card">
+              <span>利润口径</span>
+              <strong id="ebayProfitFormula"></strong>
+            </div>
+            <div class="ebay-fee-grid" id="ebayFeeGrid"></div>
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="eyebrow">授权分层</p>
+                <h2>读取费用和执行广告要分开授权</h2>
+              </div>
+              <span class="pill amber">敏感权限</span>
+            </div>
+            <div class="authorization-grid" id="ebayAuthorizationGrid"></div>
+          </section>
+          <section class="panel full">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">eBay 连接矩阵</p>
+                <h2>把 eBay 店铺数据接进同一个自动化工作台</h2>
+                <p class="section-note">v0.1 先把入口、授权边界和可接能力讲清楚；真实授权需要走 eBay 官方 API 和商家授权。</p>
+              </div>
+              <span class="pill neutral">eBay 当前主适配</span>
+            </div>
+            <div class="platform-connector-grid" id="platformConnectorGrid"></div>
+          </section>
+          <div class="split-layout connect-detail-layout">
+            <section class="panel">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">不用天天点，但必须可查</p>
+                  <h2>当前主适配：eBay API 状态</h2>
+                  <p class="section-note">连接状态建议放在设置/店铺页，同时在顶部显示一个简短状态，避免占用日常主工作流。</p>
+                </div>
+                <span class="pill">账号已恢复 · 发布前再预检</span>
+              </div>
+              <div class="status-list" id="connectStatus"></div>
+            </section>
+            <section class="panel">
+              <div class="section-heading">
+                <h2>多店铺统一数据模型</h2>
+              <span class="pill neutral">数据模型</span>
+              </div>
+              <pre class="json-preview" id="dataModelPreview"></pre>
+            </section>
+          </div>
+        </section>
+
+        <section class="empty-state" id="emptyState" hidden>
+          <strong>暂无数据</strong>
+          <span>当前视图没有待处理项目。</span>
+        </section>
+
+        <section class="loading-state" id="loadingState" hidden>
+          <div class="loader"></div>
+          <span>正在让 AI CEO汇总后台结果</span>
+        </section>
+
+        <section class="error-state" id="errorState" hidden>
+          <strong>连接暂时不可用</strong>
+              <span>连接暂时不可用；系统会显示失败原因和下一步处理建议。</span>
+          <button class="secondary-action" id="recoverState">返回正常状态</button>
+        </section>
+      </main>
+    </div>
+
+    <div class="modal-backdrop" id="authModal" hidden>
+      <section class="modal auth-modal saas-auth-modal-shell" role="dialog" aria-modal="true" aria-labelledby="authTitle" data-saas-login-card>
+        <button class="icon-button modal-close" data-close-modal title="关闭">×</button>
+        <button class="qr-auth-button" id="authQrLogin" type="button" data-saas-action="qr-login-placeholder" aria-label="扫码登录">
+          <span class="qr-dot-grid" aria-hidden="true"></span>
+          <span>扫码</span>
+        </button>
+        <div class="auth-modal-head">
+          <div class="auth-brand-lockup">
+            <span class="brand-mark" aria-hidden="true"></span>
+            <div>
+              <strong>捷境</strong>
+              <small>AI CEO eBay</small>
+            </div>
+          </div>
+          <p class="eyebrow" id="authMode">注册体验</p>
+          <h2 id="authTitle">建立你的捷境账号</h2>
+          <p class="auth-note" id="authPathNote">登录或注册后进入身份向导；店铺授权、同步和确认记录都会进入后端。</p>
+        </div>
+        <div class="auth-step-strip" aria-label="登录后流程">
+          <span>登录 / 注册</span>
+          <span>选择身份</span>
+          <span>完成向导</span>
+          <span>进入工作舱</span>
+        </div>
+        <div class="saas-auth-form-grid">
+          <label>
+            <span>捷境账号</span>
+            <input data-saas-login-email type="email" inputmode="email" autocomplete="username" placeholder="you@example.com" />
+          </label>
+          <label>
+            <span>密码</span>
+            <input data-saas-login-password type="password" autocomplete="current-password" placeholder="输入账号密码" />
+          </label>
+        </div>
+        <select id="authStage" hidden>
+          <option value="newbie">小白，还没开店</option>
+          <option value="store_opened">已有店铺</option>
+          <option value="has_orders">已有订单</option>
+          <option value="multi_store">多店铺</option>
+        </select>
+        <div class="auth-action-grid">
+          <button class="secondary-action auth-action-card" id="authSkip" type="button" data-saas-action="login-session">
+            <span>登录</span>
+            <small>已有账号，继续上次店铺与向导进度</small>
+          </button>
+          <button class="primary-action auth-action-card" id="authStart" type="button" data-saas-action="register-session">
+            <span>注册</span>
+            <small>新商家创建账号，进入身份向导</small>
+          </button>
+        </div>
+        <p class="saas-auth-footnote">登录只需要捷境账号和密码；eBay 授权账号、模型 key 和经营数据包会在登录后按账号自动读取。</p>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="plansModal" hidden>
+      <section class="modal wide" role="dialog" aria-modal="true" aria-labelledby="plansTitle">
+        <button class="icon-button modal-close" data-close-modal title="关闭">×</button>
+        <p class="eyebrow">订阅方案</p>
+        <h2 id="plansTitle">按商家的业务阶段和自动化深度选择</h2>
+        <div class="modal-pricing-layout">
+          <div class="pricing-grid modal-plans" id="modalPricingGrid">
+            <article class="plan-card" data-plan-choice="free">
+              <span>免费版</span>
+              <strong>¥0</strong>
+              <p>基础功能可用，先跑通一条商品线。</p>
+            </article>
+            <article class="plan-card is-featured is-selected" data-plan-choice="single">
+              <span>单店铺版</span>
+              <strong>¥99/月</strong>
+              <p>注册送 1 个月，1 个 eBay 店铺完整经营流程。</p>
+            </article>
+            <article class="plan-card" data-plan-choice="multi">
+              <span>多店铺版</span>
+              <strong>¥199/月</strong>
+              <p>多店铺/多项目工作台，跨店复用流程模板。</p>
+            </article>
+            <article class="plan-card" data-plan-choice="pro">
+              <span>高级付费版</span>
+              <strong>¥299/月</strong>
+              <p>更高额度、更细权限和更深自动化。</p>
+            </article>
+          </div>
+          <aside class="pricing-detail modal-pricing-detail" id="modalPricingDetail" aria-live="polite">
+            <p class="eyebrow">方案详情</p>
+            <h3 id="modalPricingTitle">单店铺版</h3>
+            <strong id="modalPricingPrice">¥99/月</strong>
+            <p id="modalPricingDesc"></p>
+            <ul id="modalPricingList"></ul>
+          </aside>
+        </div>
+        <div class="button-row">
+          <button class="secondary-action" data-close-modal>稍后再看</button>
+          <button class="primary-action" id="modalPlanStart">登录后选择方案</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="workflow-feedback-shell" id="workflowFeedbackShell" hidden>
+      <button class="workflow-feedback-toggle" id="workflowFeedbackToggle" type="button" data-workflow-feedback-open aria-controls="workflowFeedbackDrawer" aria-expanded="false">意见</button>
+      <aside class="workflow-feedback-drawer" id="workflowFeedbackDrawer" aria-label="反馈给 JIEJING 团队" hidden>
+        <header class="workflow-feedback-head">
+          <div>
+            <span id="workflowFeedbackModule">当前流程</span>
+            <strong>反馈给 JIEJING 团队</strong>
+          </div>
+          <button class="icon-button" type="button" data-workflow-feedback-close aria-label="关闭意见箱">×</button>
+        </header>
+        <div class="workflow-feedback-context" id="workflowFeedbackContext"></div>
+        <div class="workflow-feedback-reasons" id="workflowFeedbackReasons" aria-label="意见类型"></div>
+        <label class="workflow-feedback-note">
+          <span>补充一句</span>
+          <textarea id="workflowFeedbackText" rows="4" placeholder="例如：素材工坊缺少外部图片导入提示；Listing 价格解释不够清楚。"></textarea>
+        </label>
+        <p class="workflow-feedback-status" id="workflowFeedbackStatus">只记录产品/流程改进意见和上下文编号，不保存 token、key 或平台凭证，不影响店铺执行。</p>
+        <div class="workflow-feedback-actions">
+          <button class="secondary-action compact-action" type="button" data-workflow-feedback-close>取消</button>
+          <button class="primary-action compact-action" type="button" data-workflow-feedback-submit>提交给 JIEJING 团队</button>
+        </div>
+      </aside>
+    </div>
+
+    <div class="modal-backdrop" id="evidenceModal" hidden>
+      <section class="modal wide" role="dialog" aria-modal="true" aria-labelledby="evidenceTitle">
+        <button class="icon-button modal-close" data-close-modal title="关闭">×</button>
+        <p class="eyebrow" id="evidenceRole">AI 汇报</p>
+        <h2 id="evidenceTitle">工作汇报</h2>
+          <p class="evidence-modal-note">这里先给你看完整汇报和来源记录。PDF 只是可选留档，不是每次查看都必须生成。</p>
+        <div class="evidence-grid">
+          <article>
+            <strong>做了什么</strong>
+            <p id="evidenceAction"></p>
+          </article>
+          <article>
+            <strong>数据来源</strong>
+            <ul id="evidenceSources"></ul>
+          </article>
+          <article>
+            <strong>输出结论</strong>
+            <p id="evidenceResult"></p>
+          </article>
+        </div>
+        <div class="activity-report-preview evidence-report-preview" id="evidenceReport"></div>
+        <div class="button-row">
+          <button class="secondary-action" id="printEvidenceReport">导出PDF（可选）</button>
+          <button class="primary-action" data-close-modal>知道了</button>
+        </div>
+      </section>
+    </div>
+    <div class="modal-backdrop" id="manualModal" hidden>
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="manualTitle">
+        <button class="icon-button modal-close" data-close-modal title="关闭">×</button>
+        <p class="eyebrow" id="manualRole">需要人工操作</p>
+        <h2 id="manualTitle">操作说明</h2>
+        <p class="auth-note" id="manualIntro"></p>
+        <ul class="manual-checklist" id="manualChecklist"></ul>
+        <div class="manual-action-links" id="manualActionLinks"></div>
+        <div class="button-row">
+          <button class="secondary-action" data-close-modal>返回向导</button>
+          <button class="primary-action" data-close-modal>我知道了</button>
+        </div>
+      </section>
+    </div>
+    <div class="modal-backdrop" id="assetModal" hidden>
+      <section class="modal wide asset-modal" role="dialog" aria-modal="true" aria-labelledby="assetModalTitle">
+        <button class="icon-button modal-close" data-close-modal title="关闭">×</button>
+        <p class="eyebrow" id="assetModalRole">倒流香炉生成结果</p>
+        <h2 id="assetModalTitle">生成预览</h2>
+        <p class="auth-note" id="assetModalIntro"></p>
+        <div class="asset-modal-layout">
+          <div class="asset-modal-visual" id="assetModalVisual"></div>
+          <aside class="asset-modal-detail">
+            <strong id="assetModalMeta">发布前检查</strong>
+            <ul id="assetModalChecklist"></ul>
+            <div class="asset-modal-script" id="assetModalScript"></div>
+          </aside>
+        </div>
+        <div class="button-row">
+          <button class="secondary-action" data-close-modal>继续调整</button>
+          <button class="primary-action" id="assetSendConfirm">送确认中心</button>
+        </div>
+      </section>
+    </div>
+    <div class="action-toast" id="actionToast" role="status" aria-live="polite" hidden></div>
+    <script>
+      (function openAppFromCompletedGuide() {
+        const params = new URLSearchParams(window.location.search);
+        const shouldOpenApp = params.get("start") === "app" || params.get("onboarded") === "1";
+        if (!shouldOpenApp) return;
+
+        const showApp = () => {
+          if (document.documentElement.classList.contains("app-direct-start")) return;
+          const allowedViews = new Set(["cockpit", "workflow", "product", "media", "bulk", "activity", "confirm", "service", "connect"]);
+          const requestedView = params.get("view") || "cockpit";
+          const safeView = allowedViews.has(requestedView) ? requestedView : "cockpit";
+          document.querySelector("#entryShell")?.classList.add("is-hidden");
+          document.querySelector("#siteShell")?.classList.add("is-hidden");
+          document.querySelector("#onboardingShell")?.classList.add("is-hidden");
+          document.querySelector("#appShell")?.classList.remove("is-hidden");
+          document.body.classList.remove("site-locked");
+          document.querySelectorAll(".view").forEach((view) => {
+            view.classList.toggle("is-active", view.id === `view-${safeView}`);
+          });
+          document.querySelectorAll(".nav-item").forEach((item) => {
+            item.classList.toggle("is-active", item.dataset.view === (safeView === "dna" ? "connect" : safeView));
+          });
+          const title = document.querySelector(`#view-${safeView}`)?.dataset.title || "首页";
+          const pageTitle = document.querySelector("#pageTitle");
+          if (pageTitle) pageTitle.textContent = title === "首页" ? "AI CEO 工作台" : title;
+        };
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", showApp, { once: true });
+        } else {
+          showApp();
+        }
+      })();
+    </script>
+    <script src="./assets/jiejing-settings-panels.js?v=20260620-prelaunch-deferred-v1"></script>
+    <script src="./app.js?v=20260622-listing-form-prefill-groups-v15"></script>
+  </body>
+</html>

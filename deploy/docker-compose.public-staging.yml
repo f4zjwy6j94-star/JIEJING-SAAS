@@ -1,0 +1,78 @@
+services:
+  jiejing-saas:
+    build:
+      context: ..
+      dockerfile: Dockerfile.saas
+    depends_on:
+      - jiejing-vault
+    env_file:
+      - ../../private/jiejing-saas.staging-oauth.env
+    expose:
+      - "8788"
+    volumes:
+      - jiejing_public_staging_data:/data
+    restart: unless-stopped
+
+  jiejing-worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile.saas
+    depends_on:
+      - jiejing-vault
+      - jiejing-saas
+    env_file:
+      - ../../private/jiejing-saas.staging-oauth.env
+    volumes:
+      - jiejing_public_staging_data:/data
+    command:
+      - python
+      - tools/jiejing_worker_cli.py
+      - --db
+      - /data/saas.sqlite
+      - --runtime-db
+      - /data/runtime.sqlite
+      - --output-root
+      - /data/output
+      - run-loop
+      - --idle-sleep
+      - "10"
+    restart: unless-stopped
+
+  jiejing-vault:
+    image: hashicorp/vault:1.17
+    command: ["vault", "server", "-config=/vault/config/vault.public-staging.hcl"]
+    cap_add:
+      - IPC_LOCK
+    env_file:
+      - ../../private/jiejing-saas.staging-oauth.env
+    expose:
+      - "8200"
+    volumes:
+      - ./vault.public-staging.hcl:/vault/config/vault.public-staging.hcl:ro
+      - jiejing_public_staging_vault_data:/vault/file
+    restart: unless-stopped
+
+  jiejing-frontend:
+    image: nginx:1.27-alpine
+    depends_on:
+      - jiejing-saas
+      - jiejing-worker
+    ports:
+      - "${JIEJING_PUBLIC_HTTP_PORT:-8080}:80"
+    volumes:
+      - ../index.html:/usr/share/nginx/html/index.html:ro
+      - ../app.html:/usr/share/nginx/html/app.html:ro
+      - ../privacy.html:/usr/share/nginx/html/privacy.html:ro
+      - ../terms.html:/usr/share/nginx/html/terms.html:ro
+      - ../risk-disclosure.html:/usr/share/nginx/html/risk-disclosure.html:ro
+      - ../robots.txt:/usr/share/nginx/html/robots.txt:ro
+      - ../app.js:/usr/share/nginx/html/app.js:ro
+      - ../styles.css:/usr/share/nginx/html/styles.css:ro
+      - ../favicon.ico:/usr/share/nginx/html/favicon.ico:ro
+      - ../assets:/usr/share/nginx/html/assets:ro
+      - ./nginx.public-staging.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+
+volumes:
+  jiejing_public_staging_data:
+  jiejing_public_staging_vault_data:

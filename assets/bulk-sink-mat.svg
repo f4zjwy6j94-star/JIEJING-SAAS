@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900" role="img" aria-label="Silicone sink drying mat product preview">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f7faf6"/>
+      <stop offset="1" stop-color="#e8f1ec"/>
+    </linearGradient>
+    <linearGradient id="mat" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#d9ebe4"/>
+      <stop offset="1" stop-color="#7aa99d"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="900" fill="url(#bg)"/>
+  <rect x="170" y="160" width="860" height="560" rx="34" fill="#ffffff" stroke="#d7e4dc"/>
+  <ellipse cx="600" cy="676" rx="360" ry="48" fill="#10231e" opacity=".08"/>
+  <g transform="translate(260 245)">
+    <rect x="0" y="120" width="680" height="310" rx="28" fill="url(#mat)" stroke="#315f55" stroke-width="8"/>
+    <g stroke="#eef8f3" stroke-width="18" stroke-linecap="round" opacity=".92">
+      <path d="M58 170h562"/>
+      <path d="M58 230h562"/>
+      <path d="M58 290h562"/>
+      <path d="M58 350h562"/>
+    </g>
+    <path d="M90 124c45-72 170-90 268-50 92 38 211 26 286-20v114H90z" fill="#ffffff" opacity=".42"/>
+    <circle cx="160" cy="48" r="32" fill="#0b7c6f"/>
+    <circle cx="252" cy="62" r="24" fill="#92c9bd"/>
+    <circle cx="332" cy="44" r="18" fill="#315f55"/>
+  </g>
+  <g fill="#10231e">
+    <text x="220" y="120" font-family="Arial, sans-serif" font-size="38" font-weight="700">Kitchen drying mat</text>
+    <text x="220" y="760" font-family="Arial, sans-serif" font-size="28" fill="#607067">Main image draft · size and material pending</text>
+  </g>
+</svg>
