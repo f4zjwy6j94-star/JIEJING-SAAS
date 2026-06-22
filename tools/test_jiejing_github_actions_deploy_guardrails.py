@@ -53,6 +53,8 @@ def main() -> int:
         "python tools/test_jiejing_github_actions_deploy_guardrails.py",
         "python tools/jiejing_precloud_deployment_gate.py",
         "runs-on: [self-hosted, jiejing-staging]",
+        "Set up Node for frontend syntax check",
+        "node-version: \"20\"",
         "JIEJING_DEPLOY_DRY_RUN",
         "bash deploy/github-actions/jiejing-staging-deploy.sh",
     ]

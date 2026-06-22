@@ -81,5 +81,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Node for frontend syntax check
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Server-side staging deploy
         run: bash deploy/github-actions/jiejing-staging-deploy.sh

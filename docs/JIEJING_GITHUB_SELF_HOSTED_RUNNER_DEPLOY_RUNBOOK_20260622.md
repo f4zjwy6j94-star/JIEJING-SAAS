@@ -31,6 +31,7 @@ This runbook explains how JIEJING can move from "local computer pushes to Tencen
   - Manual workflow only.
   - Runs secret scan, frontend syntax check, deploy guardrail test, and precloud gate.
   - Uses the self-hosted runner only for `dry_run` or `apply`.
+  - Prepares Node on the self-hosted runner before the server-side frontend syntax check, so the server does not need a global Node install.
   - Defaults to `dry_run`.
 
 - `.github/workflows/jiejing-staging-manual-rollback.yml`
