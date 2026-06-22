@@ -22,6 +22,11 @@ This runbook explains how JIEJING can move from "local computer pushes to Tencen
 
 ## Files added for this path
 
+- `AGENTS.md`
+  - Repository-level project instructions for local Codex, Codex Cloud, and GitHub-driven agents.
+  - Preserves the JIEJING eBay-first product boundary, no-repeat-OAuth rule, no-secret rule, and no-destructive-deploy rule.
+  - Included in public staging bundles and the whitelisted staging patch path so cloud work keeps the same operating rules.
+
 - `.github/workflows/jiejing-staging-manual-deploy.yml`
   - Manual workflow only.
   - Runs secret scan, frontend syntax check, deploy guardrail test, and precloud gate.

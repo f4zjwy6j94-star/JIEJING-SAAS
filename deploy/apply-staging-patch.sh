@@ -17,6 +17,7 @@ PATCH_DIR="$(cd "$PATCH_DIR" && pwd)"
 BACKUP_DIR="$APP_DIR/output/staging-patch-backups/$(date +%Y%m%d-%H%M%S)"
 
 FILES=(
+  "AGENTS.md"
   "Dockerfile.saas"
   "requirements.saas.txt"
   "deploy/apply-staging-patch.sh"
@@ -135,6 +136,7 @@ FILES=(
   "tools/jiejing_c_class_production_gate.py"
   "tools/test_jiejing_deploy_channel_doctor.py"
   "tools/test_jiejing_staging_deploy_channel_contract.py"
+  "tools/test_jiejing_agents_md_guardrails.py"
   "tools/test_jiejing_github_actions_deploy_guardrails.py"
   "tools/test_jiejing_github_runner_doctor_guardrails.py"
   "tools/jiejing_precloud_deployment_gate.py"
@@ -304,6 +306,7 @@ python3 -m py_compile \
   tools/jiejing_c_class_production_gate.py \
   tools/test_jiejing_deploy_channel_doctor.py \
   tools/test_jiejing_staging_deploy_channel_contract.py \
+  tools/test_jiejing_agents_md_guardrails.py \
   tools/test_jiejing_github_actions_deploy_guardrails.py \
   tools/test_jiejing_github_runner_doctor_guardrails.py \
   tools/jiejing_precloud_deployment_gate.py \

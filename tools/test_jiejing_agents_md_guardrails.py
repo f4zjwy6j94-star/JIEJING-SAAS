@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Validate repository-level Codex/agent instructions preserve JIEJING boundaries."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+AGENTS = ROOT / "AGENTS.md"
+RUNBOOK = ROOT / "docs" / "JIEJING_GITHUB_SELF_HOSTED_RUNNER_DEPLOY_RUNBOOK_20260622.md"
+PREPARE_BUNDLE = ROOT / "tools" / "jiejing_prepare_public_staging_bundle.py"
+PATCH_SCRIPT = ROOT / "deploy" / "apply-staging-patch.sh"
+
+
+def fail(message: str) -> int:
+    print(f"FAIL {message}")
+    return 1
+
+
+def main() -> int:
+    if not AGENTS.exists():
+        return fail("AGENTS.md missing")
+    text = AGENTS.read_text(encoding="utf-8")
+    runbook = RUNBOOK.read_text(encoding="utf-8") if RUNBOOK.exists() else ""
+    prepare_bundle = PREPARE_BUNDLE.read_text(encoding="utf-8") if PREPARE_BUNDLE.exists() else ""
+    patch_script = PATCH_SCRIPT.read_text(encoding="utf-8") if PATCH_SCRIPT.exists() else ""
+
+    required = [
+        "JIEJING is an eBay-first AI CEO SaaS",
+        "Do not reframe it as a generic ERP",
+        "https://app.jiejing.shop/health",
+        "https://app.jiejing.shop/health/deep",
+        "https://app.jiejing.shop/readiness/product-saas",
+        "Do not run or repeat eBay OAuth",
+        "The old eBay account is frozen",
+        "Do not run Stripe live payment cutover",
+        "Do not read, print, commit, or write secrets",
+        "Never use `git credential fill`",
+        "Run `Jiejing Staging Runner Doctor`",
+        "Run `Jiejing Staging Manual Deploy` in `dry_run` first",
+        "Use `Jiejing Staging Manual Rollback` dry-run",
+        "Do not use `docker compose down -v`",
+        "python tools/jiejing_secret_scan.py",
+        "node --check app.js",
+        "python tools/jiejing_precloud_deployment_gate.py",
+        "ready_for_paid_commercial_launch=false",
+    ]
+    missing = [marker for marker in required if marker not in text]
+    if missing:
+        return fail("AGENTS.md missing markers: " + ",".join(missing))
+
+    integration_missing = []
+    for marker, content, label in [
+        ("AGENTS.md", runbook, "runbook"),
+        ('"AGENTS.md"', prepare_bundle, "bundle"),
+        ('"AGENTS.md"', patch_script, "patch_script"),
+    ]:
+        if marker not in content:
+            integration_missing.append(label)
+    if integration_missing:
+        return fail("AGENTS.md not wired into: " + ",".join(integration_missing))
+
+    forbidden = [
+        "JIEJING_EBAY_REFRESH_TOKEN=",
+        "STRIPE_SECRET_KEY=",
+        "OPENAI_API_KEY=",
+        "sk-",
+        "ghp_",
+        "github_pat_",
+        "docker compose down -v\n",
+        "docker volume rm\n",
+        "git reset --hard\n",
+    ]
+    present = [marker for marker in forbidden if marker in text]
+    if present:
+        return fail("AGENTS.md contains forbidden marker: " + ",".join(present))
+
+    print("PASS jiejing_agents_md_guardrails")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

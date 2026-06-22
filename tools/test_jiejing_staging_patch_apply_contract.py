@@ -19,6 +19,7 @@ def main() -> int:
     text = SCRIPT.read_text(encoding="utf-8") if SCRIPT.exists() else ""
     required = [
         "FILES=(",
+        "AGENTS.md",
         "Dockerfile.saas",
         "requirements.saas.txt",
         "deploy/github-actions/jiejing-runner-doctor.sh",
@@ -109,6 +110,7 @@ def main() -> int:
         "tools/jiejing_prepare_public_staging_bundle.py",
         "tools/jiejing_staging_deploy.py",
         "tools/test_jiejing_staging_deploy_channel_contract.py",
+        "tools/test_jiejing_agents_md_guardrails.py",
         "tools/test_jiejing_github_actions_deploy_guardrails.py",
         "tools/test_jiejing_github_runner_doctor_guardrails.py",
         "tools/jiejing_paid_launch_approval_packet.py",

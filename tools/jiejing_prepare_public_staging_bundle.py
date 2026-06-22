@@ -18,6 +18,7 @@ OUT = ROOT / "output" / "jiejing-public-staging-bundle"
 INCLUDE_ROOT_FILES = [
     ".dockerignore",
     ".gitignore",
+    "AGENTS.md",
     "Dockerfile.saas",
     "README.md",
     "requirements.saas.txt",
