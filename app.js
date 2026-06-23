@@ -11700,6 +11700,10 @@ function syncMediaRequirementSummary() {
   const config = readMediaGenerationConfig();
   setText("#mediaOutputStatus", `${config.count} · ${config.template}`);
   setText("#mediaOutputNote", `${config.platform} / ${config.size} / ${config.scene}`);
+  setText("#mediaChoiceType", config.template);
+  setText("#mediaChoiceCount", `${config.count} · ${config.size}`);
+  setText("#mediaChoiceScene", config.scene);
+  setText("#mediaAdvancedSummary", `${config.platform} · ${config.textRule} · ${config.videoPreset}`);
   setText(
     "#mediaDecisionSummary",
     `当前任务：${config.entryLabel}，素材包「${config.template}」，生成 ${config.count}。场景：${config.scene}。生成结果只作为草稿预览，通过后再回写 Listing。`,

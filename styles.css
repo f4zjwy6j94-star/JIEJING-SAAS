@@ -10898,6 +10898,92 @@ textarea:focus {
   gap: 8px;
 }
 
+.media-choice-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.media-choice-summary article {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(8, 118, 110, 0.14);
+  border-radius: 8px;
+  background: rgba(237, 248, 244, 0.78);
+}
+
+.media-choice-summary span {
+  color: var(--jiejing-teal);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.media-choice-summary strong {
+  overflow: hidden;
+  color: var(--jiejing-ink);
+  font-size: 12px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-advanced-settings {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(198, 215, 205, 0.82);
+  border-radius: 8px;
+  background: rgba(255, 254, 250, 0.86);
+}
+
+.media-advanced-settings summary {
+  display: grid;
+  grid-template-columns: minmax(76px, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 10px 12px;
+  color: var(--jiejing-ink);
+  cursor: pointer;
+  list-style: none;
+}
+
+.media-advanced-settings summary::-webkit-details-marker {
+  display: none;
+}
+
+.media-advanced-settings summary::after {
+  content: "展开";
+  justify-self: end;
+  padding: 5px 8px;
+  border: 1px solid rgba(8, 118, 110, 0.16);
+  border-radius: 8px;
+  background: rgba(237, 248, 244, 0.82);
+  color: var(--jiejing-teal);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.media-advanced-settings[open] summary::after {
+  content: "收起";
+}
+
+.media-advanced-settings summary span {
+  color: var(--jiejing-teal);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.media-advanced-settings summary strong {
+  overflow: hidden;
+  color: var(--jiejing-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .media-template-card {
   display: grid;
   gap: 5px;
@@ -10936,6 +11022,7 @@ textarea:focus {
 .media-control-grid {
   grid-template-columns: 1fr;
   gap: 8px;
+  padding: 0 10px 10px;
 }
 
 .media-control-grid label {
@@ -10975,6 +11062,7 @@ textarea:focus {
 .media-guardrail-list {
   display: grid;
   gap: 7px;
+  padding: 0 10px 10px;
 }
 
 .media-guardrail-list article {
@@ -11028,8 +11116,17 @@ textarea:focus {
 
   .media-setting-status,
   .media-settings-actions,
+  .media-choice-summary,
   .media-template-grid {
     grid-template-columns: 1fr;
+  }
+
+  .media-advanced-settings summary {
+    grid-template-columns: 1fr;
+  }
+
+  .media-advanced-settings summary::after {
+    justify-self: start;
   }
 
   .media-template-head {

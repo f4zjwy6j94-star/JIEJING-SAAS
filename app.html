@@ -2115,6 +2115,25 @@
                       </button>
                     </div>
                   </div>
+                  <div class="media-choice-summary" aria-label="当前素材包摘要">
+                    <article>
+                      <span>素材包</span>
+                      <strong id="mediaChoiceType">eBay 刊登包</strong>
+                    </article>
+                    <article>
+                      <span>输出</span>
+                      <strong id="mediaChoiceCount">6 张 · 平台推荐自动匹配</strong>
+                    </article>
+                    <article>
+                      <span>场景</span>
+                      <strong id="mediaChoiceScene">按商品用途自动选择</strong>
+                    </article>
+                  </div>
+                  <details class="media-advanced-settings">
+                    <summary>
+                      <span>细节参数</span>
+                      <strong id="mediaAdvancedSummary">eBay US Listing · 默认安全规则</strong>
+                    </summary>
                   <div class="media-control-grid" aria-label="素材生成设置">
                     <label>
                       <span>购物平台</span>
@@ -2219,16 +2238,17 @@
                       <small>脚本和字幕会单独审核</small>
                     </label>
                   </div>
-                  <div class="media-gap-card media-settings-alert">
-                    <span>发布前必须补齐</span>
-                    <strong id="mediaGapTitle">尺寸、包装重量、材质、是否含香粒</strong>
-                    <p id="mediaGapNote">这些信息不补齐，AI CEO 只能继续生成草稿，不能推进到真实发布或自动刊登。</p>
-                  </div>
                   <div class="media-guardrail-list" aria-label="发布前确认边界">
                     <article><span>01</span><p>颜色、材质、尺寸、重量必须和真实商品一致。</p></article>
                     <article><span>02</span><p>AI 生成图可以先做草稿，正式使用前要核对原图来源和实物一致性。</p></article>
                     <article><span>03</span><p>功效、材质、容量、套装数量、适配范围不能夸大。</p></article>
                     <article><span>04</span><p>售价、发布、广告、退款和买家消息发送仍按确认规则处理。</p></article>
+                  </div>
+                  </details>
+                  <div class="media-gap-card media-settings-alert">
+                    <span>发布前必须补齐</span>
+                    <strong id="mediaGapTitle">尺寸、包装重量、材质、是否含香粒</strong>
+                    <p id="mediaGapNote">这些信息不补齐，AI CEO 只能继续生成草稿，不能推进到真实发布或自动刊登。</p>
                   </div>
                   <div class="button-row media-settings-actions">
                     <button class="secondary-action" id="mediaGenerateImagesDraft" type="button">按当前设置生成</button>
