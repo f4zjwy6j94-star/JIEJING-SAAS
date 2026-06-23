@@ -353,6 +353,9 @@ async function main() {
           has_incident_mode_copy: text.includes("事故模式") && text.includes("真实发布"),
           has_settings_shell: Boolean(document.querySelector(".saas-settings-clean-shell")),
           settings_tab_count: document.querySelectorAll("[data-saas-settings-tab]").length,
+          has_settings_home_hub: sectionHas(".saas-settings-home-hub"),
+          settings_home_status_count: sectionCount(".saas-settings-home-status article"),
+          has_settings_simple_copy: text.includes("日常卖货不用进设置") && text.includes("什么时候需要打开设置"),
           has_media_tabs: Boolean(document.querySelector("#mediaProjectTabs, .media-project-tabs, [data-media-project-tab]")),
           has_media_simple_headline: text.includes("把商品图变成可用素材包"),
           has_media_simple_flow:
@@ -449,6 +452,10 @@ async function main() {
   if (product.has_direct_publish_button) failures.push("product daily Listing surface exposes a direct publish button");
   const connect = moduleChecks.find((item) => item.view === "connect") || {};
   if (!connect.has_settings_shell || connect.settings_tab_count !== 7) failures.push("settings clean shell/tabs missing");
+  if (!connect.has_settings_home_hub || connect.settings_home_status_count < 4) {
+    failures.push("settings compact hub/status missing");
+  }
+  if (!connect.has_settings_simple_copy) failures.push("settings simple usage copy missing");
   const media = moduleChecks.find((item) => item.view === "media") || {};
   if (!media.has_media_tabs) failures.push("media tabs missing");
   if (!media.has_media_simple_headline || !media.has_media_simple_flow) failures.push("media simple workflow surface missing");

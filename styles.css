@@ -37102,6 +37102,12 @@ body.saas-public-mvp .saas-settings-simple-map {
   padding: 16px;
 }
 
+body.saas-public-mvp .saas-settings-home-hub {
+  border: 1px solid rgba(15, 45, 40, 0.1);
+  border-radius: 10px;
+  background: #fbfdfc;
+}
+
 body.saas-public-mvp .saas-settings-simple-map-head {
   display: grid;
   gap: 4px;
@@ -37109,7 +37115,7 @@ body.saas-public-mvp .saas-settings-simple-map-head {
 
 body.saas-public-mvp .saas-settings-map-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 8px;
 }
 
@@ -37117,7 +37123,7 @@ body.saas-public-mvp .saas-settings-map-grid button {
   display: grid;
   gap: 7px;
   min-width: 0;
-  min-height: 126px;
+  min-height: 96px;
   padding: 14px;
   border: 1px solid rgba(15, 45, 40, 0.1);
   border-radius: 8px;
@@ -37138,8 +37144,8 @@ body.saas-public-mvp .saas-settings-map-grid button:focus-visible {
 body.saas-public-mvp .saas-settings-map-grid span {
   display: inline-grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 22px;
   border-radius: 999px;
   background: #0b5e55;
   color: #ffffff;
@@ -37149,7 +37155,7 @@ body.saas-public-mvp .saas-settings-map-grid span {
 
 body.saas-public-mvp .saas-settings-map-grid strong {
   color: #13231f;
-  font-size: 17px;
+  font-size: 16px;
   line-height: 1.25;
 }
 
@@ -37157,6 +37163,44 @@ body.saas-public-mvp .saas-settings-map-grid small {
   color: #64746f;
   font-size: 12px;
   line-height: 1.45;
+}
+
+body.saas-public-mvp .saas-settings-home-status {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+body.saas-public-mvp .saas-settings-home-status article {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(15, 45, 40, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+body.saas-public-mvp .saas-settings-home-status span {
+  display: block;
+  color: #08766e;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+body.saas-public-mvp .saas-settings-home-status strong {
+  display: block;
+  margin-top: 5px;
+  color: #13231f;
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+body.saas-public-mvp .saas-settings-home-status small {
+  display: block;
+  margin-top: 5px;
+  color: #64746f;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 body.saas-public-mvp .saas-settings-where-to-go {

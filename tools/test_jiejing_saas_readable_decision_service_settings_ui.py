@@ -38,14 +38,16 @@ def main() -> None:
     service_scope = function_scope(app_js, "renderSaasServiceCenter")
     settings_scope = (
         function_scope(app_js, "renderSaasSettingsReadableMap")
+        + function_scope(app_js, "renderSaasSettingsGeneralPanel")
         + function_scope(app_js, "renderSaasSettingsCleanLayout")
+        + function_scope(app_js, "saasSettingsTabDefinitions")
         + function_scope(app_js, "renderSaasCoreModuleDiagnosticsPanel")
         + function_scope(app_js, "renderSaasQueueHealthPanel")
     )
 
     for marker in [
         "这里只看 AI CEO 已经产出的经营报告",
-        "授权、数据包、模型连接、发布复盘和后台排查已经归到设置",
+        "授权、来源、模型连接和发布复盘已经归到设置",
         "排查细节在设置",
         "saas-activity-simple-list",
         "没有报告时，页面保持干净空状态",
@@ -53,38 +55,40 @@ def main() -> None:
         require(activity_scope, marker, "AI CEO report center simplified surface")
 
     for marker in [
-        "只处理会影响真实经营的决定",
-        "没有要确认的事，这页就保持安静",
-        "普通报告、资料整理和低风险草稿",
-        "真实发布、付款、退款、改价、库存、广告、政策和敏感客服承诺",
-        "排查证据、发布复盘、后台预检和历史重复合并都在设置里看",
+        "只确认会影响钱、账号和买家的动作",
+        "没有高风险动作时，这里保持安静",
+        "AI 可以继续整理草稿、素材和报告",
+        "发布、付款、退款、广告和客服承诺必须等你点头",
+        "这里只让你决定三件事",
     ]:
         require(confirm_scope, marker, "decision center simplified surface")
 
     for marker in [
-        "三件事：订单、档案、回复",
+        "三件事：消息、订单、回复",
         "订单 / 消息",
         "回复草稿",
         "需要你确认",
-        "还没有官方订单或消息",
+        "还没有真实订单或消息",
         "退款、补偿、重发、地址修改、明确到货日和敏感承诺必须进决策中心",
         "下一步",
-        "去设置同步 eBay",
+        "连接 eBay 店铺",
     ]:
         require(service_scope, marker, "service and orders simplified surface")
 
     for marker in [
-        "设置只管 6 件事",
-        "账号与 eBay 授权",
-        "数据包与来源",
-        "AI 连接",
-        "工作流排查",
-        "团队权限与规则",
-        "上线门禁",
-        "核心模块排查",
-        "复杂状态归到设置，工作台只保留经营动作",
-        "我想做什么，应该去哪",
-        "日常卖货不用在这里找功能",
+        "日常卖货不用进设置",
+        "账号店铺",
+        "店铺数据",
+        "AI 设置",
+        "流程复盘",
+        "权限规则",
+        "上线准备",
+        "什么时候需要打开设置",
+        "设置首页不让商家读技术排查",
+        "账号健康和事故处理",
+        "来源记录和可信度",
+        "Listing 和发布体检",
+        "运行可靠性",
         "data-saas-settings-map-tab",
         "生产队列",
         "worker heartbeat",
@@ -136,7 +140,6 @@ def main() -> None:
                 "saas-real-service-layout",
                 "客服学习来源",
                 "客服消息入口",
-                "eBay 店铺",
                 "订单 packet",
             ],
         ),

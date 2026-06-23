@@ -28566,10 +28566,10 @@ async function copySaasEbayCallbackUrl() {
       document.execCommand("copy");
       textarea.remove();
     }
-    showActionToast("已复制 eBay callback 地址。");
+    showActionToast("已复制 eBay 回调地址。");
   } catch (error) {
     console.warn("copySaasEbayCallbackUrl failed", error);
-    showActionToast("复制失败，请手动复制设置页里的 callback 地址。");
+    showActionToast("复制失败，请手动复制设置页里的回调地址。");
   }
 }
 
@@ -28900,10 +28900,10 @@ function renderSaasSettingsStatusCards(ctx = saasMerchantWorkbenchContext()) {
     ["登录", state.saasConnected ? "已恢复" : "未登录", state.saasConnected ? saasAccountDisplayName() : "账号密码登录"],
     ["eBay", saasStoreStatusLabel(connectionStatus || "not_connected"), saasStoreDisplayName(ctx.store, ctx.connection)],
     ["账号健康", accountHealth.label || "状态未知", accountHealth.summary || "同步 eBay 账号快照后显示封禁、受限、付款冻结和额度风险"],
-    ["packet", ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal}` : "待同步", ctx.latestPacket?.packet_id || ctx.sourceLabel],
+    ["店铺数据", ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal} 已读取` : "待读取", ctx.hasPacket ? "商品、订单、政策、费用等来源可追溯" : "连接 eBay 后读取店铺资料"],
     ["AI", modelReady ? "已连接" : "待保存", "页面不显示原始凭证"],
-    ["确认", String(pendingCount), "发布、付款、退款、广告、客服承诺"],
-    ["写入", saasRealPlatformWriteLabel(), realWritesEnabled ? "开启但仍走确认中心" : "当前只读/交接"],
+    ["待确认", String(pendingCount), "发布、付款、退款、广告、客服承诺"],
+    ["高风险动作", saasRealPlatformWriteLabel(), realWritesEnabled ? "开启但仍走决策中心" : "当前只读/交接"],
   ];
   return `
     <div class="saas-settings-status-list">
@@ -28927,9 +28927,9 @@ function renderSaasSettingsGeneralPanel(ctx = saasMerchantWorkbenchContext()) {
     <section class="saas-settings-card">
       <div class="saas-settings-card-head">
         <div>
-          <span>常规</span>
-          <strong>只保留日常需要知道的状态</strong>
-          <p>授权、模型、packet 和确认边界集中放在设置里；AI CEO、Listing、批量、素材和客服页面只显示各自工作内容。</p>
+          <span>当前状态</span>
+          <strong>只看能不能继续经营</strong>
+          <p>设置首页不让商家读技术排查。这里只显示登录、店铺、AI、数据和高风险确认是否可用；真正做事仍回到工作台。</p>
         </div>
         <button class="secondary-action" type="button" data-saas-action="refresh" ${state.saasLoading ? "disabled" : ""}>刷新</button>
       </div>
@@ -28948,7 +28948,7 @@ function renderSaasSettingsAccountPanel(ctx = saasMerchantWorkbenchContext(), op
       <div class="saas-settings-card-head">
         <div>
           <span>账号</span>
-          <strong>登录会话、eBay 授权和 callback</strong>
+          <strong>登录、eBay 授权和正式回调地址</strong>
           <p>前端只保存登录会话；eBay token 和 AI 连接凭证都留在后端密钥边界，不回显到浏览器。</p>
         </div>
       </div>
@@ -28972,11 +28972,11 @@ function renderSaasSettingsAccountPanel(ctx = saasMerchantWorkbenchContext(), op
         </article>
         <article>
           <div>
-            <span>eBay callback</span>
-            <strong>当前域名回调地址</strong>
+            <span>eBay 回调地址</span>
+            <strong>当前正式域名</strong>
             <code>${escapeHtml(expectedCallbackUrl)}</code>
           </div>
-          <button class="secondary-action compact-action" type="button" data-saas-action="copy-ebay-callback-url">复制 callback</button>
+          <button class="secondary-action compact-action" type="button" data-saas-action="copy-ebay-callback-url">复制回调地址</button>
         </article>
       </div>
     </section>
@@ -28990,15 +28990,15 @@ function renderSaasSettingsDataPanel(ctx = saasMerchantWorkbenchContext()) {
       <div class="saas-settings-card-head">
         <div>
           <span>数据</span>
-          <strong>官方数据包、来源记录和同步缺口</strong>
-          <p>这里只看数据来源是否可用；缺数据就显示缺口，不用旧商品填充。</p>
+          <strong>店铺数据、来源记录和同步缺口</strong>
+          <p>这里只有数据来源是否可用；缺数据就显示缺口，不用旧商品填充。</p>
         </div>
         <button class="secondary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !state.saasConnected ? "disabled" : ""}>更新 eBay 数据</button>
       </div>
       <div class="saas-settings-status-list">
         <article>
-          <span>数据包</span>
-          <strong>${escapeHtml(ctx.latestPacket?.packet_id || "待生成")}</strong>
+          <span>店铺数据</span>
+          <strong>${ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal} 已读取` : "等待读取"}</strong>
           <small>${escapeHtml(ctx.sourceLabel)} · ${ctx.presentCount}/${ctx.coverageTotal}</small>
         </article>
         <article>
@@ -29027,11 +29027,10 @@ function renderSaasSettingsDataPanel(ctx = saasMerchantWorkbenchContext()) {
                   `,
                 )
                 .join("")
-            : `<article><span>官方资源</span><strong>等待同步</strong><small>完成 eBay 授权后同步标准数据包。</small></article>`
+            : `<article><span>官方资源</span><strong>等待同步</strong><small>完成 eBay 授权后同步店铺资料。</small></article>`
         }
       </div>
     </section>
-    ${renderSaasSourceRecordCollectorPanel(ctx)}
   `;
 }
 
@@ -30259,37 +30258,60 @@ function renderSaasCoreModuleDiagnosticsPanel(ctx = saasMerchantWorkbenchContext
 }
 
 function renderSaasSettingsReadableMap(activeTabId = "general") {
+  const ctx = saasMerchantWorkbenchContext();
+  const activeSecret = saasActiveModelSecretRef();
+  const modelReady = Boolean(state.saasModelSettings?.configured || activeSecret?.secret_ref || isSaasModelConfigured());
+  const connectionStatus = ctx.connection?.status || ctx.store?.connection_status || ctx.store?.status || "";
+  const launchGate = state.saasCommercialLaunchGate || {};
+  const statusCards = [
+    ["店铺", isSaasAuthorizedConnectionStatus(connectionStatus) ? "已连接" : "未连接", ctx.connection ? saasStoreDisplayName(ctx.store, ctx.connection) : "需要时再连接 eBay"],
+    ["数据", ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal}` : "待读取", ctx.hasPacket ? "店铺资料可用" : "连接后读取商品、订单、政策和费用"],
+    ["AI", modelReady ? "可用" : "待设置", modelReady ? "凭证留在后端" : "保存后只显示可用状态"],
+    ["上线", launchGate.paid_commercial_launch_ready ? "可收费" : "未开放", launchGate.paid_commercial_launch_ready ? "正式收费门禁已通过" : "当前仍是内测/受控阶段"],
+  ];
   const items = [
-    ["account", "账号与 eBay 授权", "登录、店铺连接、授权地址、只读/发布权限都在这里看。"],
-    ["data", "店铺数据与来源", "eBay 读取到的商品、订单、政策、费用是否齐全。"],
-    ["model", "AI 连接", "AI 是否可用、报告是否生成、素材用量和成本集中在这里。"],
-    ["workflow", "工作流复盘", "模块状态、发布复盘、客服来源和上线体检集中在这里。"],
-    ["governance", "团队权限与规则", "谁能确认发布/退款/广告，哪些商家规则可长期记忆。"],
-    ["launch", "上线门禁", "计费、备份、监控、真实写入和生产发布前检查。"],
+    ["general", "总览", "现在能不能继续用"],
+    ["account", "账号店铺", "登录、eBay 连接、账号健康"],
+    ["data", "店铺数据", "商品、订单、政策、费用"],
+    ["model", "AI 设置", "模型连接、素材成本"],
+    ["workflow", "流程复盘", "出问题或上线前再看"],
+    ["governance", "权限规则", "确认权限、长期规则"],
+    ["launch", "上线准备", "收费、域名、安全、备份"],
   ];
   const routes = [
-    ["连接 eBay", "账号"],
-    ["看 eBay 数据是否完整", "数据"],
-    ["检查 AI 连接", "模型"],
-    ["发布体检和复盘", "工作流"],
-    ["谁能批准高风险动作", "权限"],
-    ["付费上线和备份", "上线"],
+    ["日常卖货", "回工作台"],
+    ["连接或断开店铺", "账号店铺"],
+    ["AI 不回复或素材异常", "AI 设置"],
+    ["准备公开收费上线", "上线准备"],
   ];
   return `
-    <section class="saas-settings-simple-map" aria-label="设置地图">
+    <section class="saas-settings-simple-map saas-settings-home-hub" aria-label="设置地图">
       <div class="saas-settings-simple-map-head">
         <div>
           <span>设置地图</span>
           <strong>日常卖货不用进设置</strong>
-          <p>设置只处理连接店铺、看数据、管 AI、管权限、查工作流和上线准备。真正的经营动作仍在 AI CEO、Listing、批量铺货、素材工坊、客服订单和决策中心里完成。</p>
+          <p>设置只处理连接、数据、AI、权限和上线准备。真正的经营动作仍在 AI CEO、Listing、批量铺货、素材工坊、客服订单和决策中心完成。</p>
         </div>
+      </div>
+      <div class="saas-settings-home-status" aria-label="当前设置状态">
+        ${statusCards
+          .map(
+            ([label, value, detail]) => `
+              <article>
+                <span>${escapeHtml(label)}</span>
+                <strong>${escapeHtml(value)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
       </div>
       <div class="saas-settings-map-grid">
         ${items
           .map(
             ([id, title, detail], index) => `
               <button class="${id === activeTabId ? "is-active" : ""}" type="button" data-saas-settings-map-tab="${escapeHtml(id)}">
-                <span>${index + 1}</span>
+                <span>${String(index + 1).padStart(2, "0")}</span>
                 <strong>${escapeHtml(title)}</strong>
                 <small>${escapeHtml(detail)}</small>
               </button>
@@ -30297,8 +30319,8 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
           )
           .join("")}
       </div>
-      <div class="saas-settings-where-to-go">
-        <strong>我想做什么，应该去哪</strong>
+      <div class="saas-settings-where-to-go saas-settings-home-rules">
+        <strong>什么时候需要打开设置</strong>
         <div>
           ${routes
             .map(
@@ -30382,67 +30404,149 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
   return [
     {
       id: "general",
-      label: "常规",
-      detail: "现在能不能跑",
-      title: "常规：现在能不能跑",
-      panels: [renderSaasSettingsGeneralPanel(ctx)],
+      label: "总览",
+      detail: "当前状态",
+      title: "设置总览",
+      panels: [
+        renderSaasSettingsSectionGroup({
+          title: "当前状态详情",
+          detail: "需要看登录、店铺、AI、数据和高风险动作时再展开。",
+          badge: "可选",
+          panels: [renderSaasSettingsGeneralPanel(ctx)],
+        }),
+      ],
     },
     {
       id: "account",
-      label: "账号",
+      label: "账号店铺",
       detail: "登录 / eBay",
-      title: "账号：登录与 eBay 授权",
-      panels: [renderSaasSettingsAccountPanel(ctx, options), renderSaasNewEbayAccountOnboardingPanel(), renderSaasAccountHealthPanel(), renderSaasIncidentModeOpsPanel()],
+      title: "账号店铺",
+      panels: [
+        renderSaasSettingsAccountPanel(ctx, options),
+        renderSaasSettingsSectionGroup({
+          title: "账号健康和事故处理",
+          detail: "封禁、受限、付款冻结和真实写入暂停只在需要排查时展开。",
+          badge: "出问题再看",
+          panels: [renderSaasNewEbayAccountOnboardingPanel(), renderSaasAccountHealthPanel(), renderSaasIncidentModeOpsPanel()],
+        }),
+      ],
     },
     {
       id: "data",
       label: "数据",
-      detail: "数据包与来源",
-      title: "数据：官方数据包与来源记录",
-      panels: [renderSaasSettingsDataPanel(ctx), renderSaasSourceCredibilityPanel(ctx)],
+      detail: "店铺资料",
+      title: "店铺数据",
+      panels: [
+        renderSaasSettingsDataPanel(ctx),
+        renderSaasSettingsSectionGroup({
+          title: "来源记录和可信度",
+          detail: "只有需要追溯报告来源或排查缺口时再展开。",
+          badge: "追溯",
+          panels: [renderSaasSourceRecordCollectorPanel(ctx), renderSaasSourceCredibilityPanel(ctx)],
+        }),
+      ],
     },
     {
       id: "model",
-      label: "模型",
+      label: "AI",
       detail: "AI 连接",
-      title: "模型：AI 连接、素材生成和成本",
-      panels: [renderSaasMerchantModelProviderPanel(ctx), renderSaasCostAndRunLedgerPanel()],
+      title: "AI 设置",
+      panels: [
+        renderSaasMerchantModelProviderPanel(ctx),
+        renderSaasSettingsSectionGroup({
+          title: "用量和成本",
+          detail: "模型、素材和任务成本用于复盘，不放在日常工作台。",
+          badge: "复盘",
+          panels: [renderSaasCostAndRunLedgerPanel()],
+        }),
+      ],
     },
     {
       id: "workflow",
-      label: "工作流",
+      label: "流程",
       detail: "体检 / 复盘",
-      title: "工作流：体检、复盘和技能包",
+      title: "流程复盘",
       panels: [
         renderSaasCoreModuleDiagnosticsPanel(ctx),
-        renderSaasListingStoreSyncOverview(ctx),
-        renderSaasListingSyncedProductsPanel(ctx),
-        renderSaasListingIpReadinessPanel(ctx),
-        renderSaasPublishHealthReportPanel(ctx, saasPreTestCheckRows(ctx, null), { compact: true }),
-        renderSaasSevenStepLaunchGuidePanel(ctx, { compact: true }),
-        renderSaasPostPublishCockpitPanel({ showWhenEmpty: true }),
-        renderSaasPublishFlowReviewPanel(),
-        renderSaasPublishCommandSummaryPanel(),
-        renderSaasLatestPublishResultPanel(),
-        renderSaasMerchantSetupGuidePanel(ctx),
-        renderSaasOperatingWorkbenchPanel(ctx),
-        renderSaasMerchantWorkflowTemplatePanel(ctx),
-        renderSaasEbaySkillPackCenter(ctx),
+        renderSaasSettingsSectionGroup({
+          title: "Listing 和发布体检",
+          detail: "发布前红黄绿、Listing 来源和真实商品资料复盘集中在这里。",
+          badge: "发布前",
+          panels: [
+            renderSaasListingStoreSyncOverview(ctx),
+            renderSaasListingSyncedProductsPanel(ctx),
+            renderSaasListingIpReadinessPanel(ctx),
+            renderSaasPublishHealthReportPanel(ctx, saasPreTestCheckRows(ctx, null), { compact: true }),
+            renderSaasSevenStepLaunchGuidePanel(ctx, { compact: true }),
+          ],
+        }),
+        renderSaasSettingsSectionGroup({
+          title: "发布后复盘",
+          detail: "只有发布后要查记录、结果或命令摘要时再打开。",
+          badge: "复盘",
+          panels: [
+            renderSaasPostPublishCockpitPanel({ showWhenEmpty: true }),
+            renderSaasPublishFlowReviewPanel(),
+            renderSaasPublishCommandSummaryPanel(),
+            renderSaasLatestPublishResultPanel(),
+          ],
+        }),
+        renderSaasSettingsSectionGroup({
+          title: "高级流程能力",
+          detail: "商家路径、流程模板和 eBay 能力包属于配置，不干扰核心工作流。",
+          badge: "高级",
+          panels: [renderSaasMerchantSetupGuidePanel(ctx), renderSaasOperatingWorkbenchPanel(ctx), renderSaasMerchantWorkflowTemplatePanel(ctx), renderSaasEbaySkillPackCenter(ctx)],
+        }),
       ],
     },
     {
       id: "governance",
-      label: "权限",
+      label: "权限规则",
       detail: "团队 / 记忆",
-      title: "权限：团队、IP 与记忆规则",
-      panels: [renderSaasMerchantPermissionPanel(), renderSaasMerchantIpRiskPanel(), renderSaasMerchantMemoryPanel()],
+      title: "权限和规则",
+      panels: [
+        renderSaasMerchantPermissionPanel(),
+        renderSaasSettingsSectionGroup({
+          title: "风险、记忆和长期规则",
+          detail: "IP 风险、商家规则和经营记忆不放到日常任务页。",
+          badge: "治理",
+          panels: [renderSaasMerchantIpRiskPanel(), renderSaasMerchantMemoryPanel()],
+        }),
+      ],
     },
     {
       id: "launch",
       label: "上线",
       detail: "收费 / 备份",
-      title: "上线：收费、备份和生产门禁",
-      panels: [renderSaasOwnerLaunchControlPanel(), renderSaasSettingsSecurityPanel(ctx, options), renderSaasPublicSecurityStatusPanel(), renderSaasEdgeCutoverReadinessPanel(), renderSaasPublishHealthReportPanel(ctx, saasPreTestCheckRows(ctx, null), { compact: true }), renderSaasMerchantBillingGuardrailPanel(ctx), renderSaasBillingProviderPanel(), renderSaasQueueHealthPanel(), renderSaasCommercialLaunchGatePanel(), renderSaasMerchantProviderHubPanel(ctx)],
+      title: "上线准备",
+      panels: [
+        renderSaasOwnerLaunchControlPanel(),
+        renderSaasSettingsSectionGroup({
+          title: "收费和额度",
+          detail: "订阅、额度、欠费停用和正式 provider 切换集中在这里。",
+          badge: "收费",
+          open: true,
+          panels: [renderSaasMerchantBillingGuardrailPanel(ctx), renderSaasBillingProviderPanel()],
+        }),
+        renderSaasSettingsSectionGroup({
+          title: "域名和公网安全",
+          detail: "WAF、Bot、限流、稳定域名和回调域名只给上线前检查使用。",
+          badge: "安全",
+          panels: [renderSaasSettingsSecurityPanel(ctx, options), renderSaasPublicSecurityStatusPanel(), renderSaasEdgeCutoverReadinessPanel()],
+        }),
+        renderSaasSettingsSectionGroup({
+          title: "运行可靠性",
+          detail: "队列、备份、生产门禁和 provider 状态属于上线检查，不给普通工作流增加负担。",
+          badge: "运行",
+          panels: [renderSaasQueueHealthPanel(), renderSaasCommercialLaunchGatePanel(), renderSaasMerchantProviderHubPanel(ctx)],
+        }),
+        renderSaasSettingsSectionGroup({
+          title: "发布前体检",
+          detail: "上线前需要完整红黄绿报告时再打开。",
+          badge: "体检",
+          panels: [renderSaasPublishHealthReportPanel(ctx, saasPreTestCheckRows(ctx, null), { compact: true })],
+        }),
+      ],
     },
   ];
 }
@@ -30472,7 +30576,7 @@ function renderSaasSettingsCleanLayout(ctx = saasMerchantWorkbenchContext(), opt
         <header>
           <p class="eyebrow">设置</p>
           <h2>${escapeHtml(activeTab.title)}</h2>
-          <p>设置只处理连接、安全、来源、AI、权限和上线门禁。AI CEO、Listing、批量铺货、素材工坊、客服与订单页面只保留业务动作。</p>
+          <p>设置只处理连接、安全、来源、AI、权限和上线准备。日常经营仍回到 AI CEO、Listing、批量铺货、素材工坊、客服订单和决策中心。</p>
         </header>
         ${renderSaasSettingsReadableMap(activeTab.id)}
         <div class="saas-settings-clean-panels">

@@ -155,9 +155,12 @@ def main() -> None:
     require(app_js, "这里只让你决定三件事：同意、稍后、或者回去补资料。", "rendered decision center simple action copy")
     require(app_js, "刷新待办", "rendered decision center non-technical refresh copy")
     require(app_js, "日常卖货不用进设置", "settings map daily-use boundary")
-    require(app_js, "eBay 读取到的商品、订单、政策、费用是否齐全。", "settings data map merchant-facing copy")
-    require(app_js, "日常使用不用看；出问题、上线前检查或复盘时再打开。", "settings diagnostics merchant-facing boundary")
-    require(app_js, "AI 连接、素材生成和成本", "merchant-friendly model settings title")
+    require(app_js, "设置首页不让商家读技术排查", "settings home low-learning-cost copy")
+    require(app_js, "商品、订单、政策、费用等来源可追溯", "settings status merchant-facing data copy")
+    require(app_js, "店铺数据、来源记录和同步缺口", "settings data panel merchant-facing title")
+    require(app_js, "什么时候需要打开设置", "settings usage-rule section")
+    require(app_js, "出问题或上线前再看", "settings workflow compact boundary")
+    require(app_js, "AI 设置", "merchant-friendly model settings title")
     require(app_js, "function saasIsEnglishHeavyMerchantText", "legacy English report display guard")
     require(app_js, "旧记录的英文摘要已隐藏", "legacy English report summary hidden")
     require(app_js, "function saasWorkbenchFormatReportSectionValue", "report detail Chinese display guard")
@@ -241,6 +244,18 @@ def main() -> None:
     ]:
         if internal_marker in settings_map_body:
             raise AssertionError(f"Settings map should use merchant-facing wording: {internal_marker}")
+    settings_def_start = app_js.index("function saasSettingsTabDefinitions")
+    settings_def_end = app_js.index("function renderSaasSettingsCleanLayout", settings_def_start)
+    settings_def_body = app_js[settings_def_start:settings_def_end]
+    for required_marker in [
+        "账号健康和事故处理",
+        "来源记录和可信度",
+        "Listing 和发布体检",
+        "发布后复盘",
+        "域名和公网安全",
+        "运行可靠性",
+    ]:
+        require(settings_def_body, required_marker, "settings complex sections are grouped")
     draft_start = app_js.index("function renderSaasListingDraftEditor")
     draft_end = app_js.index("function renderSaasListingGapAndRiskPanel", draft_start)
     draft_body = app_js[draft_start:draft_end]
@@ -407,6 +422,8 @@ def main() -> None:
     require(styles, "body.saas-public-mvp #appShell .main > .topbar", "topbar suppression")
     require(styles, "body.saas-public-mvp #appShell .global-flow-bar", "global flow suppression")
     require(styles, "body.saas-public-mvp .saas-settings-clean-shell", "clean settings styling")
+    require(styles, "body.saas-public-mvp .saas-settings-home-hub", "settings home hub styling")
+    require(styles, "body.saas-public-mvp .saas-settings-home-status", "settings compact status styling")
     require(styles, "body.saas-public-mvp .saas-listing-simple-products", "simple listing products styling")
     require(styles, "body.saas-public-mvp .saas-listing-composer", "Listing Composer styling")
     require(styles, "body.saas-public-mvp .saas-listing-v2-status-bar", "Listing status bar styling")
