@@ -115,8 +115,12 @@ const state = {
   saasWorkflowFeedbackDraft: "",
   saasWorkflowFeedbackContextOverride: null,
   saasListingComposerInput: "",
+  saasListingCeoHandoff: null,
   saasListingComposerDraft: null,
   saasListingSourceMode: "",
+  saasListingBackendWorkflow: null,
+  saasListingBackendWorkflowStatus: "",
+  saasListingBackendWorkflowError: "",
   saasSettingsTab: "general",
   runtimeConnected: false,
   runtimeLoading: false,
@@ -5449,80 +5453,127 @@ function syncBulkSaasStatusCounters() {
   const sourceRecordCount = Array.isArray(state.saasSourceRecords) ? state.saasSourceRecords.length : 0;
   const pendingConfirmations = Array.isArray(ctx.pendingConfirmations) ? ctx.pendingConfirmations.length : 0;
   const draftCount = Number(state.bulkApprovedCount || state.batchPreviewCount || 0);
-  setText("#bulkImportedCount", String(ctx.presentCount || 0));
+  const candidateCountLabel = state.batchCandidateCount === 50 ? "50+" : String(state.batchCandidateCount || 10);
+  setText("#bulkImportedCount", candidateCountLabel);
   setText("#bulkTestCount", String(sourceRecordCount));
   setText("#bulkMissingCount", String(draftCount));
   setText("#bulkBlockedCount", String(pendingConfirmations));
   const note = document.querySelector("#view-bulk .bulk-proof-note");
   if (note) {
-    const packetLabel = ctx.latestPacket?.packet_id || "等待官方数据包";
-    note.textContent = ctx.hasPacket
-      ? `当前读取 ${packetLabel}，已识别 ${ctx.presentCount || 0}/${ctx.coverageTotal || 0} 类官方只读资源；批量铺货只做前置质检和草稿接力，真实发布、采购、改价和广告仍进确认中心。`
-      : "当前还没有官方 eBay 数据包；本页只保留批量前质检流程和缺口面板，不会用旧演示商品冒充真实批次。";
+    note.textContent =
+      "这里只做一件事：先筛一小批，再把能继续的候选送去草稿。发布、付款、改价、库存和广告都不会自动执行。";
   }
 }
 
 function renderSaasBulkCandidatePreview() {
-  const ctx = safeBulkSaasContext();
   const sourceRecordCount = Array.isArray(state.saasSourceRecords) ? state.saasSourceRecords.length : 0;
-  const pendingConfirmations = Array.isArray(ctx?.pendingConfirmations) ? ctx.pendingConfirmations.length : 0;
-  const packetLabel = ctx?.latestPacket?.packet_id || "等待官方数据包";
-  const resourceLabel = ctx?.hasPacket ? `${ctx.presentCount || 0}/${ctx.coverageTotal || 0} 类资源` : "等待同步";
-  const previewCountLabel = state.batchPreviewCount ? (state.batchPreviewCount === 50 ? "50+" : String(state.batchPreviewCount)) : "未创建";
-  const cards = [
-    ["官方数据包", resourceLabel, ctx?.hasPacket ? packetLabel : "先连接并同步 eBay 店铺、Listing、订单、费用、政策和类目字段。", "test"],
-    ["货源记录", `${sourceRecordCount} 条`, sourceRecordCount ? "会合并采购价、重量、尺寸、库存、发货地和图片授权。" : "还没有商家货源记录；可先在设置/来源记录里补 1688 链接或供应商资料。", "info"],
-    ["字段完整度", ctx?.missingKeys?.length ? `缺 ${ctx.missingKeys.length} 项` : "待质检", ctx?.missingKeys?.length ? "缺口不会直接进入真实发布，会先回到待补资料。" : "候选生成后会检查 description、condition、price、quantity、重量、尺寸、材质和发货地。", "info"],
-    ["确认中心", `${pendingConfirmations} 条待确认`, "真实发布、采购付款、改价、库存、广告和敏感客服承诺必须由商家确认。", "blocked"],
+  const previewCount = Number(state.batchPreviewCount || 0);
+  const countLabel = previewCount ? (previewCount === 50 ? "50+" : String(previewCount)) : (state.batchCandidateCount === 50 ? "50+" : String(state.batchCandidateCount || 10));
+  const sourceHint = sourceRecordCount
+    ? `已接收 ${sourceRecordCount} 条来源记录，会优先用于批量分组。`
+    : "还没有真实货源记录时，只建立批量框架；不会用旧演示商品冒充真实批次。";
+
+  if (!previewCount) {
+    return `
+      <div class="bulk-candidate-head bulk-candidate-decision-head">
+        <div>
+          <span>批量铺货</span>
+          <strong>先小批量筛，不一键乱铺</strong>
+          <p>左侧只选数量和边界。AI CEO 会把候选分成三类：建议先测、需要补资料、暂时不做；同意后才送去 Listing 和素材工坊。</p>
+        </div>
+        <div class="bulk-candidate-actions">
+          <button class="primary-action" type="button" data-bulk-action="generate-candidates">生成候选分组</button>
+        </div>
+      </div>
+      <div class="bulk-saas-roadmap" aria-label="批量铺货顺序">
+        <article>
+          <span>01</span>
+          <strong>定边界</strong>
+          <p>先选数量、利润底线、履约方式和风险偏好。</p>
+        </article>
+        <article>
+          <span>02</span>
+          <strong>分三类</strong>
+          <p>可先测、要补资料、暂时不做，商家不用翻长表。</p>
+        </article>
+        <article>
+          <span>03</span>
+          <strong>送草稿</strong>
+          <p>只生成 Listing 与素材草稿；发布、付款、广告仍要确认。</p>
+        </article>
+      </div>
+      <div class="bulk-decision-dock">
+        <div>
+          <span>当前批次</span>
+          <strong>准备筛 ${escapeHtml(countLabel)} 个候选方向</strong>
+          <p>${escapeHtml(sourceHint)} 本页只看去留、补资料和下一步草稿，不让商家处理连接配置。</p>
+        </div>
+        <button class="secondary-action" type="button" data-bulk-action="report">查看批量汇报</button>
+      </div>
+    `;
+  }
+
+  const lanes = [
+    {
+      type: "test",
+      title: "建议先测",
+      value: "生成草稿",
+      points: ["轻小件优先", "利润过底线", "售后风险低"],
+      note: "进入 Listing 和素材工坊，先做小批量草稿。",
+    },
+    {
+      type: "info",
+      title: "需要补资料",
+      value: "先问清楚",
+      points: ["尺寸重量", "材质包装", "图片授权"],
+      note: "资料补齐后再判断，不让缺口直接进发布包。",
+    },
+    {
+      type: "blocked",
+      title: "暂时不做",
+      value: "先拦住",
+      points: ["IP 疑点", "利润过薄", "物流争议"],
+      note: "不浪费素材额度，也不把高风险商品带进店铺。",
+    },
   ];
+
   return `
-    ${renderSaasCeoModuleHandoffPanel("bulk", ctx)}
     <div class="bulk-candidate-head bulk-candidate-decision-head">
       <div>
-        <span>真实账号批量质检</span>
-        <strong>${state.batchPreviewCount ? `${previewCountLabel} 个候选槽位已创建` : "等待建立真实批量候选"}</strong>
-        <p>这里恢复原来的批量铺货模块，但默认只展示真实账号状态、来源缺口和质检步骤；不会拿旧演示商品池冒充你的店铺数据。</p>
+        <span>候选分组</span>
+        <strong>${escapeHtml(countLabel)} 个候选方向已按经营边界分组</strong>
+        <p>商家先看三类结论：能试、要补、先不做。确认继续后，系统只生成草稿和素材任务，不执行真实发布。</p>
       </div>
       <div class="bulk-candidate-actions">
-        <button class="secondary-action" type="button" data-bulk-action="generate-candidates">建立质检槽位</button>
+        <button class="secondary-action" type="button" data-bulk-action="generate-candidates">重新分组</button>
         <button class="secondary-action" type="button" data-bulk-action="report">查看汇报</button>
       </div>
     </div>
     <div class="bulk-decision-groups">
-      <section class="bulk-decision-group is-test">
-        <div class="bulk-decision-group-head">
-          <span>批量前置检查</span>
-          <strong>${ctx?.hasPacket ? "已具备数据包" : "等待数据包"}</strong>
-        </div>
-        <p>先确认数据来源、字段完整度、类目、利润、图片授权和供应商资料，再决定是否分批生成草稿。</p>
-        <div class="bulk-decision-list">
-          ${cards
-            .map(
-              ([title, value, detail, type]) => `
-                <article class="bulk-decision-card is-${escapeHtml(type)}">
-                  <div class="bulk-decision-card-top">
-                    <div>
-                      <span>${escapeHtml(title)}</span>
-                      <strong>${escapeHtml(value)}</strong>
-                    </div>
-                    <em>${escapeHtml(type === "test" ? "OK" : type === "blocked" ? "!" : "?")}</em>
-                  </div>
-                  <p>${escapeHtml(detail)}</p>
-                  <small>来源会写入 AI CEO 汇报和确认中心。</small>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-      </section>
+      ${lanes
+        .map(
+          (lane) => `
+            <section class="bulk-decision-group is-${escapeHtml(lane.type)}">
+              <div class="bulk-decision-group-head">
+                <span>${escapeHtml(lane.title)}</span>
+                <strong>${escapeHtml(lane.value)}</strong>
+              </div>
+              <div class="bulk-saas-lane-list">
+                ${lane.points.map((point) => `<em>${escapeHtml(point)}</em>`).join("")}
+              </div>
+              <p>${escapeHtml(lane.note)}</p>
+            </section>
+          `,
+        )
+        .join("")}
     </div>
     <div class="bulk-decision-dock">
       <div>
-        <span>下一步</span>
-        <strong>先补来源记录和字段缺口，再分批送 Listing 工厂和素材工坊</strong>
-        <p>批量铺货不是一键乱发。它的作用是把可测、待补资料、暂时拦下三类先分清楚，再把高风险动作集中到确认中心。</p>
+        <span>本批决策</span>
+        <strong>同意后，只送 Listing 与素材草稿</strong>
+        <p>${escapeHtml(sourceHint)} 真实发布、采购付款、改价、库存、退款、广告和敏感客服承诺仍必须进确认中心。</p>
       </div>
-      <button class="primary-action" type="button" data-bulk-action="confirm-center">打开确认中心</button>
+      <button class="primary-action" type="button" data-bulk-action="accept-candidates">同意，送去素材和刊登</button>
     </div>
   `;
 }
@@ -6327,24 +6378,12 @@ function saasMediaReportRows(ctx = saasMerchantWorkbenchContext()) {
     seen.add(key);
     return true;
   });
-  if (uniqueReports.length) return uniqueReports;
-  if (!ctx.hasPacket) return [];
-  return [
-    {
-      report_id: `packet-${ctx.latestPacket?.packet_id || "latest"}`,
-      report_type: "standard.data_packet",
-      title: "官方数据包待生成素材 brief",
-      created_at: ctx.lastSync,
-      report: {
-        summary: `${ctx.latestPacket?.packet_id || "最新数据包"} 已有 ${ctx.presentCount}/${ctx.coverageTotal} 类官方只读资源，等待 Listing Package 或商家来源图。`,
-      },
-    },
-  ];
+  return uniqueReports;
 }
 
 function saasMediaReportSummary(record = null, ctx = saasMerchantWorkbenchContext()) {
-  if (!record) return ctx.hasPacket ? "等待 Listing Package、素材 brief 或商家来源图。" : "等待官方 eBay 数据包。";
-  return saasReportSummary(record) || record.report?.summary || "后端报告已写回素材工坊。";
+  if (!record) return "等待商品草稿、图片需求或商家来源图。";
+  return saasReportSummary(record) || record.report?.summary || "素材任务已写回素材工坊。";
 }
 
 function renderSaasMediaCanvasGrid(ctx = saasMerchantWorkbenchContext(), record = null) {
@@ -6412,9 +6451,9 @@ function renderSaasMediaGeneratedAssetsPanel(ctx = saasMerchantWorkbenchContext(
         <div>
           <span>当前素材结果</span>
           <strong>${escapeHtml(productName)} 的生成图片和视频素材都在这里</strong>
-          <p>商家只需要看到可用素材、用途和审核状态。主图、场景图、详情页图、视频封面和脚本先在素材工坊预览；正式发布前仍要做实物一致性、图片授权、IP/VeRO 和发布体检。</p>
+          <p>商家只需要看三件事：这张图用在哪里、能不能用、还缺什么。主图、场景图、详情页图、视频封面和脚本先在这里预览；正式发布前仍要核对实物一致性、图片授权和侵权风险。</p>
         </div>
-        <em>${hasManifestReport ? "素材清单已回写" : "待发布前复核"}</em>
+        <em>${hasManifestReport ? "素材已整理" : "待发布前复核"}</em>
       </div>
       <div class="saas-generated-assets-grid">
         ${assets
@@ -6446,9 +6485,9 @@ function syncSaasMediaProjectDraft(button) {
     .querySelectorAll(".media-project-tab")
     .forEach((item) => item.classList.toggle("is-active", item === button));
   const title = button.dataset.mediaDraftTitle || "素材任务";
-  const note = button.dataset.mediaDraftNote || "等待素材 brief";
-  const gap = button.dataset.mediaDraftGap || (ctx.missingKeys.length ? ctx.missingKeys.join("、") : "等待 Listing Package 或商家来源图");
-  const status = button.dataset.mediaDraftStatus || (ctx.hasPacket ? "数据包可用" : "等待数据包");
+  const note = button.dataset.mediaDraftNote || "等待图片需求";
+  const gap = button.dataset.mediaDraftGap || (ctx.missingKeys.length ? ctx.missingKeys.join("、") : "等待素材来源图或商品规格");
+  const status = button.dataset.mediaDraftStatus || "等待素材草稿";
   const sourceImg = document.querySelector(".media-input-thumb");
   if (sourceImg) {
     sourceImg.removeAttribute("src");
@@ -6461,27 +6500,35 @@ function syncSaasMediaProjectDraft(button) {
   setText("#mediaProductionStatus", status);
   setText("#mediaProductionNeed", note);
   setText("#mediaProductionGap", gap);
-  setText("#mediaSourceLabel", ctx.official ? "官方数据包" : "流程导入");
-  setText("#mediaSourceTitle", ctx.latestPacket?.packet_id || "等待官方数据包");
-  setText("#mediaSourceNote", ctx.hasPacket ? `${ctx.sourceLabel} · ${ctx.presentCount}/${ctx.coverageTotal} 类资源。素材工坊只读官方数据包、报告和来源记录，不接触 token。` : "没有真实数据时不展示旧商品图；先完成 eBay 只读数据包或上传来源图。");
-  setText("#mediaFactLabel", "来源记录");
-  setText("#mediaFactTitle", `${ctx.reports.length} 份报告 · ${ctx.confirmations.length} 条确认记录`);
-  setText("#mediaFactNote", "流程导入只接收后端 reports、Listing Package、asset brief 或批量质检通过后的草稿。");
+  setText("#mediaSourceLabel", "任务来源");
+  setText("#mediaSourceTitle", title || "等待商品草稿");
+  setText("#mediaSourceNote", "素材工坊只接商品草稿、图片需求或商家上传图；缺真实货源图或规格时停在待补资料。");
+  setText("#mediaFactLabel", "本次要做");
+  setText("#mediaFactTitle", note || "主图、场景图、详情页和视频脚本");
+  setText("#mediaFactNote", "生成后先在本页预览，通过后回写 Listing 草稿；真实发布、广告和承诺仍要确认。");
   setText("#mediaPreviewTitle", title);
   setText("#mediaPreviewNote", note);
   setText("#mediaRouteStatus", "流程导入");
   setText("#mediaEntryStatus", "流程导入");
-  setText("#mediaEntryNote", "读取官方数据包、Listing Package 和来源记录；不再用旧演示商品填充真实工作台。");
-  setText("#mediaRunStatus strong", ctx.hasPacket ? "等待素材生成" : "等待数据包或来源图");
-  setText("#mediaRunStatus p", ctx.hasPacket ? "可以基于现有官方数据包和报告生成素材草稿，真实发布仍进决策中心。" : "也可以切到独立上传，先处理一张来源图。");
-  setText("#mediaLocalPath", "流程导入不需要本机路径");
-  setText("#mediaLocalPathNote", "如果是外部独立生成素材，请切换到独立上传后选择本机图片。");
+  setText("#mediaEntryNote", "接收商品草稿和图片需求，商家只需要看结果和待补项。");
+  setText("#mediaRunStatus strong", title ? "等待素材生成" : "等待商品草稿或来源图");
+  setText("#mediaRunStatus p", title ? "可以生成本轮素材草稿，生成后先预览再回写 Listing。" : "也可以切到独立上传，先处理一张来源图。");
+  setText("#mediaLocalPath", "当前使用商品草稿");
+  setText("#mediaLocalPathNote", "如果要处理一张新的货源图，切到独立上传后选择图片。");
   const config = readMediaGenerationConfig({ entry: "project" });
   setText(
     "#mediaDecisionSummary",
-    `当前是流程导入素材单：${note}；缺口：${gap}。生成结果只作为素材草稿，发布、采购付款、改价、库存、广告和敏感客服承诺仍进入决策中心。`,
+    `当前商品：${title}。本轮生成：${note}。待补资料：${gap}。系统只产出素材草稿，不会自动发布、投广告或替商家承诺。`,
   );
   renderMediaQualityBoard(config);
+}
+
+function saasMediaTaskLabel(report = {}) {
+  const type = String(report.report_type || "");
+  if (type.includes("listing") || type.includes("product")) return "Listing 草稿";
+  if (type.includes("asset") || type.includes("media")) return "图片需求";
+  if (type.includes("market")) return "市场结论";
+  return saasReportTypeLabel(type) || "商品草稿";
 }
 
 function renderSaasMediaStudioStatus() {
@@ -6490,19 +6537,14 @@ function renderSaasMediaStudioStatus() {
   const tabs = document.querySelector("#view-media .media-project-tabs");
   if (!tabs) return;
   let handoff = document.querySelector("#view-media .saas-ceo-module-handoff");
-  if (!handoff) {
-    const flowStatusAnchor = document.querySelector("#view-media .media-flow-status");
-    (flowStatusAnchor || tabs).insertAdjacentHTML("beforebegin", renderSaasCeoModuleHandoffPanel("media", ctx));
-  } else {
-    handoff.outerHTML = renderSaasCeoModuleHandoffPanel("media", ctx);
-  }
-  setText("#mediaProjectPill", reports.length ? `${reports.length} 条真实导入` : "等待流程导入");
+  if (handoff) handoff.remove();
+  setText("#mediaProjectPill", reports.length ? `${reports.length} 个素材任务` : "等待商品草稿");
   const flowStatus = document.querySelector("#view-media .media-flow-status");
   if (flowStatus) {
     flowStatus.innerHTML = `
-      <article><span>官方数据包</span><strong>${ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal}` : "等待"}</strong><p>${escapeHtml(ctx.latestPacket?.packet_id || "先读取 eBay 只读资源。")}</p></article>
-      <article><span>Listing Package</span><strong>${latestSaasReportByTypes(["listing.package", "product.listing"]) ? "已写回" : "等待"}</strong><p>素材工坊优先读取后端报告，不用旧商品样例补空白。</p></article>
-      <article><span>决策中心</span><strong>${ctx.pendingConfirmations.length}</strong><p>授权、发布、付款、改价、广告和客服承诺仍要确认。</p></article>
+      <article><span>来源</span><strong>${reports.length ? "已接商品" : "等待商品"}</strong><p>${reports.length ? "从 Listing、批量铺货或 AI CEO 工作记录接入。" : "先从 AI CEO 或 Listing 生成商品草稿，也可以独立上传图片。"}</p></article>
+      <article><span>需求</span><strong>${reports.length ? "可出素材" : "待补输入"}</strong><p>主图、场景图、详情页和视频脚本按商品用途生成。</p></article>
+      <article><span>去向</span><strong>回写 Listing</strong><p>生成结果先预览，通过后回到刊登草稿，不直接发布。</p></article>
     `;
   }
   let generatedAssetsPanel = document.querySelector("#view-media .saas-media-generated-assets");
@@ -6519,12 +6561,12 @@ function renderSaasMediaStudioStatus() {
             data-media-report-id="${escapeHtml(report.report_id || "")}"
             data-media-report-type="${escapeHtml(report.report_type || "")}"
             data-media-draft="saas-${escapeHtml(report.report_id || index)}"
-            data-media-draft-title="${escapeHtml(saasTitleWithProduct(report.title || saasReportTypeLabel(report.report_type), saasProductLabelForRecord(report)))}"
+            data-media-draft-title="${escapeHtml(saasTitleWithProduct(report.title || saasMediaTaskLabel(report), saasProductLabelForRecord(report)))}"
             data-media-draft-note="${escapeHtml(saasMediaReportSummary(report, ctx))}"
             data-media-draft-gap="${escapeHtml(ctx.missingKeys.length ? ctx.missingKeys.join("、") : "等待素材授权、实物一致性和发布前确认")}"
-            data-media-draft-status="${escapeHtml(saasReportTypeLabel(report.report_type))}">
+            data-media-draft-status="${escapeHtml(saasMediaTaskLabel(report))}">
             <span>${String(index + 1).padStart(2, "0")}</span>
-            <strong>${escapeHtml(saasReportTypeLabel(report.report_type))}</strong>
+            <strong>${escapeHtml(saasMediaTaskLabel(report))}</strong>
             <small>${escapeHtml(saasTimestampLabel(report.created_at || ""))}</small>
             <em>流程导入</em>
           </button>
@@ -6534,13 +6576,13 @@ function renderSaasMediaStudioStatus() {
       <button class="media-project-tab is-active" type="button"
         data-media-saas-real="1"
         data-media-draft="saas-waiting"
-        data-media-draft-title="等待流程导入"
-        data-media-draft-note="先生成 Listing Package、asset brief，或从批量铺货质检通过后进入素材工坊。"
-        data-media-draft-gap="${escapeHtml(ctx.hasPacket ? "等待 Listing Package 或商家来源图" : "缺官方数据包")}"
-        data-media-draft-status="${escapeHtml(ctx.hasPacket ? "数据包可用" : "等待数据包")}">
+        data-media-draft-title="等待商品草稿"
+        data-media-draft-note="先从 AI CEO、Listing 或批量铺货接入商品；也可以切到独立上传处理一张货源图。"
+        data-media-draft-gap="等待素材来源图或商品规格"
+        data-media-draft-status="等待输入">
         <span>01</span>
-        <strong>等待 Listing Package</strong>
-        <small>${escapeHtml(ctx.latestPacket?.packet_id || "没有真实数据不填旧商品")}</small>
+        <strong>等待商品草稿</strong>
+        <small>没有输入时不填旧样例</small>
         <em>流程导入</em>
       </button>
     `;
@@ -8957,16 +8999,46 @@ function renderSaasPublishTextareaField(label, name, options = {}) {
 }
 
 function renderSaasPublishFormGroup(title, copy, fields = [], options = {}) {
+  const stepLabel = options.step ? `<em class="saas-publish-form-step">${escapeHtml(options.step)}</em>` : "";
   return `
     <section class="saas-publish-form-group ${options.tone ? `is-${escapeHtml(options.tone)}` : ""}" aria-label="${escapeHtml(title)}">
       <div class="saas-publish-form-group-head">
-        <span>${escapeHtml(title)}</span>
+        <div>
+          ${stepLabel}
+          <span>${escapeHtml(title)}</span>
+        </div>
         <small>${escapeHtml(copy)}</small>
       </div>
       <div class="saas-publish-form-fields">
         ${fields.join("")}
       </div>
     </section>
+  `;
+}
+
+function renderSaasPublishReadinessStrip(formValues = {}) {
+  const groups = [
+    ["基础资料", [formValues.product || formValues.title, formValues.sku || formValues.title, formValues.condition]],
+    ["价格利润", [formValues.price, formValues.procurement_cost || formValues.net_profit, formValues.shipping_cost || formValues.gross_margin_percent]],
+    ["素材描述", [formValues.image_urls, formValues.description_html || formValues.selling_points]],
+    ["平台参数", [formValues.category_id || formValues.category_leaf, formValues.item_specifics, formValues.merchant_location_key]],
+    ["物流履约", [formValues.quantity, formValues.item_location, formValues.package_weight_g || formValues.package_length_cm]],
+  ];
+  return `
+    <div class="saas-publish-readiness-strip" aria-label="上架资料完成度">
+      ${groups.map(([label, checks]) => {
+        const done = checks.filter(Boolean).length;
+        const total = checks.length;
+        const tone = done >= total ? "green" : done > 0 ? "amber" : "neutral";
+        return `
+          <article class="is-${tone}">
+            <span>${escapeHtml(label)}</span>
+            <strong>${done}/${total}</strong>
+            <small>${done >= total ? "已有线索" : "待补全"}</small>
+          </article>
+        `;
+      }).join("")}
+    </div>
   `;
 }
 
@@ -8979,21 +9051,22 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
     <section class="saas-publish-intake-panel" aria-label="新商品发布确认单">
       <div class="saas-publish-intake-head">
         <div>
-          <span>新商品发布确认单</span>
-          <strong>只创建确认项和发布体检，不会绕过决策中心直接发布</strong>
-          <p>本次从这里录入全新商品。表单不会填旧演示品；缺图、缺类目、缺利润或缺政策会在发布体检报告里直接拦住。</p>
+          <span>上架资料</span>
+          <strong>把草稿变成可体检的发布包</strong>
+          <p>按顺序补齐基础、价格利润、素材描述、平台参数和物流履约；检测不会真实发布，生成确认单后仍进决策中心。</p>
         </div>
         <div class="saas-publish-intake-actions">
-          <button class="secondary-action" type="button" data-saas-action="run-pretest-check">检测当前表单</button>
+          <button class="secondary-action" type="button" data-saas-action="run-pretest-check">检测当前资料</button>
           <button class="primary-action" type="button" data-saas-action="create-publish-confirmation" ${disabled ? "disabled" : ""}>生成发布确认单</button>
         </div>
       </div>
       ${includeGuide ? renderSaasPublishPreflightGuide(ctx) : ""}
-      <section class="saas-publish-raw-form-details" aria-label="完整字段表">
+      <section class="saas-publish-raw-form-details" aria-label="上架资料补全清单">
         <div class="saas-publish-raw-form-head">
-          <span>完整字段表</span>
-          <small>草稿会先自动带入；商家只补缺口，SKU、价格、图片、物流、利润和 item specifics 直接在这里改。</small>
+          <span>上架资料补全清单</span>
+          <small>草稿会先自动带入。先补买家能看到和会影响利润的内容，再补 eBay 类目、item specifics 和履约信息。</small>
         </div>
+        ${renderSaasPublishReadinessStrip(formValues)}
       <form id="saasPublishIntakeForm" class="saas-publish-intake-form">
         ${renderSaasPublishFormGroup("基础信息", "商品目标、SKU、标题和状态。草稿有标题时会自动带入。", [
           renderSaasPublishInputField("商品目标", "product", { value: formValues.product, placeholder: "例如：全新未接触过的硅胶柜门防撞垫" }),
@@ -9008,18 +9081,7 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
               </select>
             </label>
           `,
-        ], { tone: "core" })}
-        ${renderSaasPublishFormGroup("平台参数", "类目、库存位置和 item specifics，决定 eBay 是否接受刊登。", [
-          renderSaasPublishInputField("类目 ID", "category_id", { value: formValues.category_id, placeholder: "eBay leaf category id" }),
-          renderSaasPublishInputField("类目名", "category_leaf", { value: formValues.category_leaf, placeholder: "用于类目相关性体检" }),
-          renderSaasPublishInputField("库存位置 key", "merchant_location_key", { value: formValues.merchant_location_key, placeholder: "从官方数据包 / eBay location 读取" }),
-          renderSaasPublishTextareaField("Item specifics", "item_specifics", {
-            value: formValues.item_specifics,
-            rows: 4,
-            placeholder: "Brand: Unbranded\nType: Door Bumper\nMaterial: Silicone",
-            wide: true,
-          }),
-        ])}
+        ], { tone: "core", step: "01" })}
         ${renderSaasPublishFormGroup("价格利润", "价格、成本、平台费和预留，决定是否值得发布。", [
           renderSaasPublishInputField("价格", "price", { value: formValues.price, type: "number", placeholder: "12.99", extra: 'step="0.01" min="0"' }),
           renderSaasPublishInputField("币种", "currency", { value: formValues.currency || "USD" }),
@@ -9031,16 +9093,7 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
           renderSaasPublishInputField("汇率", "exchange_rate", { value: formValues.exchange_rate, type: "number", placeholder: "如 7.20", extra: 'step="0.0001" min="0"' }),
           renderSaasPublishInputField("净利润", "net_profit", { value: formValues.net_profit, type: "number", extra: 'step="0.01"' }),
           renderSaasPublishInputField("毛利率 %", "gross_margin_percent", { value: formValues.gross_margin_percent, type: "number", extra: 'step="0.1"' }),
-        ])}
-        ${renderSaasPublishFormGroup("物流履约", "库存、发货地、重量和包装尺寸，影响物流承诺和退货风险。", [
-          renderSaasPublishInputField("库存", "quantity", { value: formValues.quantity || "1", type: "number", extra: 'min="1"' }),
-          renderSaasPublishInputField("发货地", "item_location", { value: formValues.item_location, placeholder: "US / CN / ..." }),
-          renderSaasPublishInputField("重量 g", "package_weight_g", { value: formValues.package_weight_g, type: "number", placeholder: "120", extra: 'min="0"' }),
-          renderSaasPublishInputField("长 cm", "package_length_cm", { value: formValues.package_length_cm, type: "number", extra: 'step="0.1" min="0"' }),
-          renderSaasPublishInputField("宽 cm", "package_width_cm", { value: formValues.package_width_cm, type: "number", extra: 'step="0.1" min="0"' }),
-          renderSaasPublishInputField("高 cm", "package_height_cm", { value: formValues.package_height_cm, type: "number", extra: 'step="0.1" min="0"' }),
-          renderSaasPublishInputField("材质", "material", { value: formValues.material, placeholder: "Silicone / Plastic / ..." }),
-        ])}
+        ], { step: "02" })}
         ${renderSaasPublishFormGroup("素材描述", "图片和描述直接影响买家理解，也会被发布体检检查。", [
           renderSaasPublishTextareaField("图片 URL", "image_urls", {
             value: formValues.image_urls,
@@ -9054,7 +9107,27 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
             placeholder: "可以写纯文本或 HTML；后端会保留 offer 描述，并把 inventory product description 转成纯文本",
             wide: true,
           }),
-        ])}
+        ], { step: "03" })}
+        ${renderSaasPublishFormGroup("平台参数", "类目、库存位置和 item specifics，决定 eBay 是否接受刊登。", [
+          renderSaasPublishInputField("类目 ID", "category_id", { value: formValues.category_id, placeholder: "eBay leaf category id" }),
+          renderSaasPublishInputField("类目名", "category_leaf", { value: formValues.category_leaf, placeholder: "用于类目相关性体检" }),
+          renderSaasPublishInputField("库存位置 key", "merchant_location_key", { value: formValues.merchant_location_key, placeholder: "从官方数据包 / eBay location 读取" }),
+          renderSaasPublishTextareaField("Item specifics", "item_specifics", {
+            value: formValues.item_specifics,
+            rows: 4,
+            placeholder: "Brand: Unbranded\nType: Door Bumper\nMaterial: Silicone",
+            wide: true,
+          }),
+        ], { step: "04" })}
+        ${renderSaasPublishFormGroup("物流履约", "库存、发货地、重量和包装尺寸，影响物流承诺和退货风险。", [
+          renderSaasPublishInputField("库存", "quantity", { value: formValues.quantity || "1", type: "number", extra: 'min="1"' }),
+          renderSaasPublishInputField("发货地", "item_location", { value: formValues.item_location, placeholder: "US / CN / ..." }),
+          renderSaasPublishInputField("重量 g", "package_weight_g", { value: formValues.package_weight_g, type: "number", placeholder: "120", extra: 'min="0"' }),
+          renderSaasPublishInputField("长 cm", "package_length_cm", { value: formValues.package_length_cm, type: "number", extra: 'step="0.1" min="0"' }),
+          renderSaasPublishInputField("宽 cm", "package_width_cm", { value: formValues.package_width_cm, type: "number", extra: 'step="0.1" min="0"' }),
+          renderSaasPublishInputField("高 cm", "package_height_cm", { value: formValues.package_height_cm, type: "number", extra: 'step="0.1" min="0"' }),
+          renderSaasPublishInputField("材质", "material", { value: formValues.material, placeholder: "Silicone / Plastic / ..." }),
+        ], { step: "05" })}
       </form>
       </section>
       ${renderSaasPublishPretestResultSlot(ctx)}
@@ -9132,6 +9205,12 @@ function saasListingComposerDraftFromText(text = "") {
   };
 }
 
+function saasListingMerchantSourceLabel(reportType = "") {
+  if (reportType === "listing.package") return "上架草稿";
+  if (reportType === "market.report") return "市场结论";
+  return saasReportTypeLabel(reportType);
+}
+
 function saasListingDraftFromReport(record = null, sourceType = "ai_report") {
   if (!record) return null;
   const product = publicRuntimeText(saasProductLabelForRecord(record) || record.title || "AI CEO 推荐商品").slice(0, 90);
@@ -9141,7 +9220,7 @@ function saasListingDraftFromReport(record = null, sourceType = "ai_report") {
     .slice(0, 5)
     .map(([key, value]) => `${runtimeSectionTitle(key)}：${saasWorkbenchFormatReportSectionValue(key, value, record)}`)
     .join("\n");
-  const sourceLabel = record.report_type === "listing.package" ? "Listing Package" : record.report_type === "market.report" ? "AI CEO 市场调研报告" : saasReportTypeLabel(record.report_type);
+  const sourceLabel = saasListingMerchantSourceLabel(record.report_type);
   const baseText = [product, summary, sectionText].filter(Boolean).join("\n");
   const draft = saasListingComposerDraftFromText(baseText);
   return {
@@ -9156,18 +9235,18 @@ function saasListingDraftFromReport(record = null, sourceType = "ai_report") {
     reasons: [
       `来源：${sourceLabel}`,
       record.report_id || record.task_id ? `报告编号：${record.report_id || record.task_id}` : "报告已进入工作记录",
-      record.report_type === "listing.package" ? "已有刊登包，可继续发布体检" : "可基于市场调研继续生成刊登草稿",
+      record.report_type === "listing.package" ? "已有上架草稿，可以继续发布体检" : "可基于市场结论继续生成上架草稿",
     ],
     fields: {
       ...draft.fields,
       title: product,
-      selling_points: draft.fields?.selling_points || "等待 Listing Package 返回卖点；可先补商品资料。",
+      selling_points: draft.fields?.selling_points || "等待 AI 整理卖点；可先补商品资料。",
       description: summary || sectionText || "等待 AI CEO 报告正文。",
       category: "待发布体检确认",
     },
     gaps: [
       ...(draft.gaps || []),
-      record.report_type === "market.report" ? "需要生成或确认 Listing Package" : "",
+      record.report_type === "market.report" ? "需要生成或确认上架草稿" : "",
       "真实发布前仍需 SKU、图片 URL、类目、利润和账号健康体检",
     ].filter(Boolean),
     risks: [
@@ -9229,13 +9308,13 @@ function saasListingOpportunityFromDraft(draft = null, marketReport = null, list
   }
   if (sourceReport) {
     return {
-      source: sourceReport.report_type === "listing.package" ? "Listing Package" : "AI CEO 市场调研报告",
+      source: saasListingMerchantSourceLabel(sourceReport.report_type),
       sourceId: sourceReport.report_id || sourceReport.task_id || "",
       product: saasProductLabelForRecord(sourceReport) || sourceReport.title || "等待选择商品",
       score: sourceReport.report_type === "listing.package" ? 82 : 76,
       summary: saasReportSummary(sourceReport),
       reasons: ["已有 AI CEO 工作记录", "可以导入为商品机会", "字段不足时继续显示待补"],
-      gaps: sourceReport.report_type === "listing.package" ? ["进入发布体检"] : ["需要生成 Listing Package"],
+      gaps: sourceReport.report_type === "listing.package" ? ["进入发布体检"] : ["需要生成上架草稿"],
       risks: ["报告不等于发布许可", "真实发布仍需确认中心"],
     };
   }
@@ -9258,8 +9337,8 @@ function renderSaasListingSourceCards({ marketReport, listingReport, syncedRows 
     {
       key: "ai_report",
       title: "从 AI CEO 推荐商品导入",
-      copy: hasAiReport ? "已有市场报告或 Listing Package，可以作为上架草稿依据。" : "先在 AI CEO 里发起选品/市场调研，报告会回到这里。",
-      status: hasAiReport ? "可导入" : "等待报告",
+      copy: hasAiReport ? "已有市场结论或上架草稿，可以作为上架依据。" : "先在 AI CEO 里发起选品/市场调研，结论会回到这里。",
+      status: hasAiReport ? "可导入结论" : "等待结论",
       tone: hasAiReport ? "green" : "neutral",
       action: "listing-source-ai-report",
       actionLabel: hasAiReport ? "导入报告" : "去 AI CEO",
@@ -9314,7 +9393,7 @@ function renderSaasListingStatusBar({
   const hasInput = Boolean((state.saasListingComposerInput || "").trim());
   const hasSource = Boolean(draft || hasInput || reportsReady);
   const hasDraft = Boolean(draft);
-  const currentState = hasDraft ? "Listing 草稿可编辑" : hasSource ? "商品资料已接入" : "等待商品资料";
+  const currentState = hasDraft ? "上架项目已生成" : hasSource ? "商品资料已接入" : "等待商品资料";
   const items = [
     {
       title: "商品资料",
@@ -9322,22 +9401,22 @@ function renderSaasListingStatusBar({
       state: hasSource ? "done" : "active",
     },
     {
+      title: "市场结论",
+      value: draft || reportsReady ? "可查看" : "待生成",
+      state: draft || reportsReady ? "done" : hasSource ? "active" : "wait",
+    },
+    {
       title: "Listing 草稿",
       value: hasDraft ? "可编辑" : "待生成",
       state: hasDraft ? "done" : hasSource ? "active" : "wait",
     },
     {
-      title: "发布资料",
+      title: "素材/利润",
       value: hasDraft ? "可补字段" : "等待草稿",
       state: hasDraft ? "active" : "wait",
     },
     {
-      title: "发布体检",
-      value: hasDraft ? "待检测" : "等待资料",
-      state: hasDraft ? "active" : "wait",
-    },
-    {
-      title: "确认发布",
+      title: "发布确认",
       value: confirmationCount ? `${confirmationCount} 个确认项` : "待确认",
       state: confirmationCount ? "done" : hasDraft ? "active" : "wait",
     },
@@ -9371,14 +9450,13 @@ function renderSaasListingOpportunityPanel(opportunity = {}) {
   const tone = score >= 80 ? "green" : score >= 60 ? "amber" : "neutral";
   const reasons = Array.isArray(opportunity.reasons) ? opportunity.reasons.slice(0, 3) : [];
   return `
-    <article class="saas-listing-v2-opportunity is-${escapeHtml(tone)}" aria-label="当前商品机会">
+    <article class="saas-listing-v2-opportunity is-${escapeHtml(tone)}" aria-label="市场结论">
       <div class="saas-listing-v2-opportunity-main">
-        <span>当前商品机会</span>
+        <span>市场结论</span>
         <strong>${escapeHtml(opportunity.product || "还没有选定商品")}</strong>
         <p>${escapeHtml(opportunity.summary || "选择来源后，JIEJING 会把它整理成可编辑 Listing 草稿。")}</p>
         <div class="saas-listing-v2-source-row">
           <em>来源：${escapeHtml(opportunity.source || "等待来源")}</em>
-          ${opportunity.sourceId ? `<em>证据：${escapeHtml(opportunity.sourceId)}</em>` : ""}
         </div>
       </div>
       <div class="saas-listing-v2-score">
@@ -9397,16 +9475,21 @@ function renderSaasListingDraftField(label, field, value = "", options = {}) {
   const tag = options.multiline ? "textarea" : "input";
   const rows = options.rows || 3;
   const placeholder = options.placeholder || "";
+  const className = [
+    "saas-listing-v2-field",
+    options.wide ? "is-wide" : "",
+    options.compact ? "is-compact" : "",
+  ].filter(Boolean).join(" ");
   if (tag === "textarea") {
     return `
-      <label class="saas-listing-v2-field ${options.wide ? "is-wide" : ""}">
+      <label class="${className}">
         <span>${escapeHtml(label)}</span>
         <textarea data-saas-listing-draft-field="${escapeHtml(field)}" rows="${rows}" placeholder="${escapeHtml(placeholder)}">${escapeHtml(value || "")}</textarea>
       </label>
     `;
   }
   return `
-    <label class="saas-listing-v2-field ${options.wide ? "is-wide" : ""}">
+    <label class="${className}">
       <span>${escapeHtml(label)}</span>
       <input data-saas-listing-draft-field="${escapeHtml(field)}" type="text" value="${escapeHtml(value || "")}" placeholder="${escapeHtml(placeholder)}" />
     </label>
@@ -9415,34 +9498,42 @@ function renderSaasListingDraftField(label, field, value = "", options = {}) {
 
 function renderSaasListingDraftEditor(draft = state.saasListingComposerDraft) {
   if (!draft) {
-    return `
-      <article class="saas-listing-v2-empty-draft" aria-label="等待 Listing 草稿">
-        <span>Listing 草稿</span>
-        <strong>先选择来源，或直接粘贴商品资料</strong>
-        <p>AI CEO 调研报告、商家输入资料、eBay 同步商品都可以进入这里。没有资料时不展示旧 demo 商品。</p>
-      </article>
-    `;
+    return "";
   }
   const fields = draft.fields || {};
   return `
     <section class="saas-listing-v2-draft-editor" aria-label="Listing 草稿编辑器">
       <div class="saas-listing-v2-draft-head">
         <div>
-          <span>Listing 草稿编辑器</span>
+          <span>Listing 草稿</span>
           <strong>${escapeHtml(draft.title || "新商品 Listing 草稿")}</strong>
-          <p>这里是草稿，不会写入 eBay。你可以先改标题、卖点、描述和参数，再送发布体检。</p>
+          <p>先改买家最先看到的标题、卖点和描述；参数线索在右侧补齐，真实发布仍要进确认中心。</p>
         </div>
-        <span class="pill green">local draft</span>
+        <span class="pill green">草稿</span>
       </div>
-      <div class="saas-listing-v2-editor-grid">
-        ${renderSaasListingDraftField("eBay 标题", "title", fields.title || draft.title, { wide: true, placeholder: "80 字以内，避免品牌词和夸大承诺" })}
-        ${renderSaasListingDraftField("五点卖点", "selling_points", fields.selling_points || "", { multiline: true, rows: 5, placeholder: "每行一个卖点", wide: true })}
-        ${renderSaasListingDraftField("商品描述", "description", fields.description || draft.summary || "", { multiline: true, rows: 6, wide: true })}
-        ${renderSaasListingDraftField("Item specifics", "item_specifics", fields.item_specifics || "", { multiline: true, rows: 4 })}
-        ${renderSaasListingDraftField("类目建议", "category", fields.category || "待发布体检确认")}
-        ${renderSaasListingDraftField("价格 / 成本线索", "price", fields.price || "")}
-        ${renderSaasListingDraftField("图片 / 素材需求", "images", fields.images || "", { multiline: true, rows: 4 })}
-        ${renderSaasListingDraftField("物流 / 重量 / 尺寸", "logistics", fields.logistics || "", { multiline: true, rows: 4 })}
+      <div class="saas-listing-v2-draft-layout">
+        <div class="saas-listing-v2-draft-primary" aria-label="Listing 主文案">
+          <div class="saas-listing-v2-draft-section-head">
+            <span>主文案</span>
+            <strong>影响点击和转化的内容</strong>
+          </div>
+          ${renderSaasListingDraftField("eBay 标题", "title", fields.title || draft.title, { wide: true, placeholder: "80 字以内，避免品牌词和夸大承诺" })}
+          ${renderSaasListingDraftField("五点卖点", "selling_points", fields.selling_points || "", { multiline: true, rows: 5, placeholder: "每行一个卖点", wide: true })}
+          ${renderSaasListingDraftField("商品描述", "description", fields.description || draft.summary || "", { multiline: true, rows: 7, wide: true })}
+        </div>
+        <aside class="saas-listing-v2-draft-side" aria-label="Listing 辅助参数">
+          <div class="saas-listing-v2-draft-section-head">
+            <span>辅助参数</span>
+            <strong>发布体检会继续校验</strong>
+          </div>
+          <div class="saas-listing-v2-draft-side-grid">
+            ${renderSaasListingDraftField("价格 / 成本线索", "price", fields.price || "", { compact: true })}
+            ${renderSaasListingDraftField("类目建议", "category", fields.category || "待发布体检确认", { compact: true })}
+            ${renderSaasListingDraftField("Item specifics", "item_specifics", fields.item_specifics || "", { multiline: true, rows: 4, compact: true })}
+            ${renderSaasListingDraftField("图片 / 素材需求", "images", fields.images || "", { multiline: true, rows: 4, compact: true })}
+            ${renderSaasListingDraftField("物流 / 重量 / 尺寸", "logistics", fields.logistics || "", { multiline: true, rows: 4, compact: true })}
+          </div>
+        </aside>
       </div>
     </section>
   `;
@@ -9451,8 +9542,14 @@ function renderSaasListingDraftEditor(draft = state.saasListingComposerDraft) {
 function renderSaasListingGapAndRiskPanel(draft = state.saasListingComposerDraft, opportunity = {}) {
   const gaps = (draft?.gaps || opportunity.gaps || []).slice(0, 6);
   const risks = (draft?.risks || opportunity.risks || []).slice(0, 6);
+  const signals = (draft?.bullets || opportunity.reasons || []).slice(0, 4);
   return `
     <aside class="saas-listing-v2-risk-panel" aria-label="发布前缺口和风险">
+      <article class="is-green">
+        <span>素材/利润</span>
+        <strong>先判断是否值得继续</strong>
+        <ul>${(signals.length ? signals : ["补图片、价格、成本和物流后再做发布体检"]).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+      </article>
       <article class="${gaps.length ? "is-amber" : "is-green"}">
         <span>资料缺口</span>
         <strong>${gaps.length ? `${gaps.length} 项待补` : "资料线索较完整"}</strong>
@@ -9467,6 +9564,75 @@ function renderSaasListingGapAndRiskPanel(draft = state.saasListingComposerDraft
   `;
 }
 
+function renderSaasListingWorkflowProofPanel({
+  draft = state.saasListingComposerDraft,
+  marketReport = null,
+  listingReport = null,
+  pendingConfirmations = [],
+} = {}) {
+  const workflow = state.saasListingBackendWorkflow || {};
+  const status = state.saasListingBackendWorkflowStatus || workflow.status || "";
+  const error = state.saasListingBackendWorkflowError || "";
+  if (!status && !error && !workflow.task_id) return "";
+  const taskId = workflow.task_id || state.saasLastWorkflowTaskId || "";
+  const taskReports = (state.saasReports || []).filter((record) => taskId && record.task_id === taskId);
+  const taskConfirmations = (state.saasConfirmations || []).filter((record) => taskId && record.task_id === taskId);
+  const reportCount = Number(workflow.saved?.reports || taskReports.length || 0);
+  const confirmationCount = Number(workflow.saved?.confirmations || taskConfirmations.length || pendingConfirmations.length || 0);
+  const hasMarket = Boolean(marketReport || taskReports.some((record) => ["market.report", "market.data_packet"].includes(record.report_type || "")));
+  const hasListing = Boolean(draft || listingReport || taskReports.some((record) => ["listing.package", "product.listing"].includes(record.report_type || "")));
+  const hasAssetProfit = Boolean(
+    draft ||
+      taskReports.some((record) =>
+        ["asset.brief", "media.asset_brief", "finance.review", "profit.review", "listing.package"].includes(record.report_type || ""),
+      ),
+  );
+  const isRunning = status === "running";
+  const isFailed = status === "failed" || Boolean(error);
+  const title = isRunning ? "正在生成经营链路" : isFailed ? "经营链路没有完成" : "经营链路已生成";
+  const copy = isRunning
+    ? "JIEJING 正在按顺序整理市场结论、Listing 草稿、素材/利润和发布确认。"
+    : isFailed
+      ? "当前没有写入真实平台。保留页面资料后可以重试。"
+      : "市场结论、Listing 草稿和确认项会写回当前账号空间；真实发布仍由决策中心放行。";
+  const rows = [
+    ["市场结论", hasMarket || reportCount > 0, hasMarket ? "已生成" : "整理中"],
+    ["Listing 草稿", hasListing, hasListing ? "可编辑" : "等待草稿"],
+    ["素材/利润", hasAssetProfit, hasAssetProfit ? "可继续补齐" : "等待草稿"],
+    ["发布确认", confirmationCount > 0, confirmationCount ? `${confirmationCount} 个确认项` : "待生成"],
+  ];
+  return `
+    <section class="saas-listing-workflow-proof is-${isFailed ? "failed" : isRunning ? "running" : "done"}" aria-label="Listing 经营链路结果">
+      <div class="saas-listing-workflow-proof-head">
+        <div>
+          <span>经营链路</span>
+          <strong>${escapeHtml(title)}</strong>
+          <p>${escapeHtml(copy)}</p>
+          ${error ? `<small>${escapeHtml(error)}</small>` : ""}
+        </div>
+        <em>${escapeHtml(reportCount || confirmationCount ? `${reportCount} 份报告 / ${confirmationCount} 个确认项` : isRunning ? "处理中" : "等待结果")}</em>
+      </div>
+      <div class="saas-listing-workflow-proof-grid">
+        ${rows
+          .map(
+            ([label, ready, value], index) => `
+              <article class="${ready ? "is-done" : isRunning ? "is-running" : "is-wait"}">
+                <span>${String(index + 1).padStart(2, "0")}</span>
+                <strong>${escapeHtml(label)}</strong>
+                <small>${escapeHtml(value)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-listing-workflow-proof-actions">
+        <button class="secondary-action compact-action" type="button" data-saas-action="open-activity" ${reportCount ? "" : "disabled"}>查看报告</button>
+        <button class="secondary-action compact-action" type="button" data-saas-action="open-confirm" ${confirmationCount ? "" : "disabled"}>查看确认项</button>
+      </div>
+    </section>
+  `;
+}
+
 function renderSaasListingComposerWorkspace({
   listingReport,
   marketReport,
@@ -9478,9 +9644,11 @@ function renderSaasListingComposerWorkspace({
   const reportsReady = Boolean(marketReport || listingReport || hasLiveListing);
   const confirmationCount = pendingConfirmations.length;
   const inputValue = state.saasListingComposerInput || "";
+  const ceoHandoff = state.saasListingCeoHandoff || null;
   const draft = state.saasListingComposerDraft;
   const opportunity = saasListingOpportunityFromDraft(draft, marketReport, listingReport);
-  const statusLabel = draft ? "草稿可编辑" : reportsReady ? "可导入报告" : "等待商品来源";
+  const statusLabel = draft ? "上架项目已生成" : reportsReady ? "可导入结论" : "开始录入";
+  const showOpportunity = Boolean(draft || reportsReady);
   const inputChips = [
     ["商品链接", "商品链接："],
     ["图片说明", "图片说明："],
@@ -9493,51 +9661,63 @@ function renderSaasListingComposerWorkspace({
     <section class="saas-listing-minimal-workbench saas-listing-composer saas-listing-v2-workbench" aria-label="Listing v2 上架工作台">
       <div class="saas-listing-composer-head saas-listing-v2-head">
         <div>
-          <p class="eyebrow">JIEJING Listing Workbench</p>
-          <h2>把商品机会变成可体检的 eBay Listing 草稿</h2>
-          <p>Listing 可以承接 AI CEO 市场调研，也可以直接从货源资料或已同步商品开始。授权、数据包和后台证据统一归到设置，这里只保留刊登资料和发布前检查。</p>
+          <p class="eyebrow">JIEJING Listing</p>
+          <h2>商品上架项目台</h2>
+          <p>先把商品资料放进来。JIEJING 会按市场结论、Listing 草稿、素材/利润和发布确认的顺序往下展开；店铺连接和授权配置在设置里。</p>
         </div>
         <span class="pill ${draft || reportsReady ? "green" : "neutral"}">${escapeHtml(statusLabel)}</span>
       </div>
 
-      ${renderSaasListingStatusBar({ draft, reportsReady, confirmationCount })}
-
-      <div class="saas-listing-v2-main-grid">
-        <div class="saas-listing-v2-left">
-          <section class="saas-listing-input-panel" aria-label="商品资料入口">
-            <div class="saas-listing-input-head">
-              <div>
-                <span>商品资料入口</span>
-                <strong>把你手上的资料直接放进来</strong>
-                <p>链接、图片说明、价格成本、规格和物流信息都可以混在一起，JIEJING 会整理成 Listing 草稿。</p>
-              </div>
-              <em>不用先整理格式</em>
+      <div class="saas-listing-cplus-stack">
+        ${
+          ceoHandoff
+            ? `<section class="saas-listing-ai-handoff" aria-label="AI CEO 已带入目标">
+                <div>
+                  <span>来自 AI CEO</span>
+                  <strong>${escapeHtml(ceoHandoff.title || "AI CEO 指令")}</strong>
+                  <p>${escapeHtml(ceoHandoff.text || "AI CEO 已把目标带到 Listing。")}</p>
+                </div>
+                <button class="secondary-action compact-action" type="button" data-saas-action="listing-compose-draft">先看草稿</button>
+              </section>`
+            : ""
+        }
+        <section class="saas-listing-input-panel" aria-label="商品资料入口">
+          <div class="saas-listing-input-head">
+            <div>
+              <span>商品资料入口</span>
+              <strong>把你手上的资料直接放进来</strong>
+              <p>链接、图片说明、价格成本、规格和物流信息可以混在一起。页面先保持简单，生成后才展开市场结论和 Listing 草稿。</p>
             </div>
-            <label class="saas-listing-composer-input saas-listing-v2-input">
-              <span>商品资料</span>
-              <textarea id="saasListingComposerInput" rows="6" placeholder="粘贴商品链接、商品名、采购价/售价、材质、尺寸重量、发货地、图片说明和主卖点。可以混在一起写。">${escapeHtml(inputValue)}</textarea>
-            </label>
-            <div class="saas-listing-input-chips" aria-label="可补充的资料类型">
-              ${inputChips
-                .map(
-                  ([label, value]) =>
-                    `<button type="button" data-saas-listing-input-chip="${escapeHtml(value)}">${escapeHtml(label)}</button>`,
-                )
-                .join("")}
-            </div>
-          </section>
-          <div class="saas-listing-composer-actions">
-            <button class="primary-action" type="button" data-saas-action="listing-compose-draft">生成 Listing 草稿</button>
-            <button class="secondary-action" type="button" data-saas-action="focus-publish-intake">完善上架资料</button>
-            <button class="secondary-action" type="button" data-saas-action="run-pretest-check">发布前体检</button>
+            <em>不用先整理格式</em>
           </div>
-          ${renderSaasListingDraftEditor(draft)}
+          <label class="saas-listing-composer-input saas-listing-v2-input">
+            <span>商品资料</span>
+            <textarea id="saasListingComposerInput" rows="6" placeholder="例如：1688 链接、商品名、采购价、建议售价、材质、尺寸重量、发货地、图片说明和主卖点。可以混在一起写。">${escapeHtml(inputValue)}</textarea>
+          </label>
+          <div class="saas-listing-input-chips" aria-label="可补充的资料类型">
+            ${inputChips
+              .map(
+                ([label, value]) =>
+                  `<button type="button" data-saas-listing-input-chip="${escapeHtml(value)}">${escapeHtml(label)}</button>`,
+              )
+              .join("")}
+          </div>
+        </section>
+        <div class="saas-listing-composer-actions">
+          <button class="primary-action" type="button" data-saas-action="listing-start-backend-workflow" ${state.saasLoading ? "disabled" : ""}>生成经营链路</button>
+          <button class="secondary-action" type="button" data-saas-action="listing-compose-draft" ${state.saasLoading ? "disabled" : ""}>先看草稿</button>
+          <button class="secondary-action" type="button" data-saas-action="listing-source-ai-report">导入 AI CEO 调研</button>
         </div>
+        <div class="saas-listing-source-kicker">
+          <span>也可以从这些来源开始</span>
+        </div>
+        ${renderSaasListingSourceCards({ marketReport, listingReport, syncedRows })}
+        ${renderSaasListingStatusBar({ draft, reportsReady, confirmationCount })}
+        ${renderSaasListingWorkflowProofPanel({ draft, marketReport, listingReport, pendingConfirmations })}
+        ${showOpportunity ? renderSaasListingOpportunityPanel(opportunity) : ""}
+        ${renderSaasListingDraftEditor(draft)}
         ${draft ? renderSaasListingGapAndRiskPanel(draft, opportunity) : ""}
       </div>
-
-      ${draft || reportsReady ? renderSaasListingOpportunityPanel(opportunity) : ""}
-      ${renderSaasListingSourceCards({ marketReport, listingReport, syncedRows })}
     </section>
   `;
 }
@@ -9565,7 +9745,7 @@ function renderSaasListingMinimalWorkspace({
         <div>
           <p class="eyebrow">JIEJING Listing</p>
           <h2>把商品资料变成可确认的 eBay Listing 草稿</h2>
-          <p>这里默认只保留一条主线：给商品资料、生成 Listing 草稿、发布前检查、送去确认。授权、数据包和内部排查统一归到设置。</p>
+          <p>这里默认只保留一条主线：给商品资料、生成 Listing 草稿、发布前检查、送去确认。账号连接、授权和内部排查统一归到设置。</p>
         </div>
         <span class="pill ${reportsReady ? "green" : packetReady ? "amber" : "neutral"}">${escapeHtml(reportLabel)}</span>
       </div>
@@ -9574,12 +9754,12 @@ function renderSaasListingMinimalWorkspace({
         <article class="${packetReady ? "is-green" : "is-amber"}">
           <span>01</span>
           <strong>商品资料</strong>
-          <p>${packetReady ? "已读取到当前账号的数据包；也可以继续补全新品资料。" : "先提供新品标题、SKU、图片、类目、价格、库存、重量和来源。"}</p>
+          <p>${packetReady ? "已读取到当前账号的基础资料；也可以继续补全新品资料。" : "先提供新品标题、SKU、图片、类目、价格、库存、重量和来源。"}</p>
         </article>
         <article class="${reportsReady ? "is-green" : packetReady && modelReady ? "is-amber" : "is-waiting"}">
           <span>02</span>
           <strong>Listing 草稿</strong>
-          <p>${reportsReady ? "Market Report / Listing Package 已进入报告记录。" : "AI 生成标题、描述、商品参数、素材需求和利润口径。"}</p>
+          <p>${reportsReady ? "市场结论和上架草稿已进入工作记录。" : "AI 生成标题、描述、商品参数、素材需求和利润口径。"}</p>
         </article>
         <article class="${confirmationCount ? "is-amber" : "is-waiting"}">
           <span>03</span>
@@ -9613,6 +9793,7 @@ function renderSaasProductListingCenter(view) {
   const resourceRows = saasEbayPacketResourceRows(ctx.packetBody);
   const liveTypes = new Set((state.saasModelValueGate?.evidence || {}).live_model_report_types || []);
   const hasLiveListing = liveTypes.has("listing.package") || Boolean(listingReport);
+  const showPublishFlow = Boolean(state.saasListingComposerDraft || hasLiveListing);
   const canRunModel = state.saasConnected && ctx.hasPacket && isSaasModelConfigured();
   const primaryAction = !state.saasConnected
     ? ["refresh", "读取登录状态", "secondary-action"]
@@ -9651,14 +9832,16 @@ function renderSaasProductListingCenter(view) {
 
       ${renderSaasListingComposerWorkspace({ listingReport, marketReport, pendingConfirmations, hasLiveListing, ctx })}
 
+      ${showPublishFlow ? `
       <section class="saas-listing-publish-flow" aria-label="Listing 发布资料补全">
         <div class="saas-listing-publish-flow-head">
-          <span>发布资料补全</span>
-          <strong>先补完整字段，再做发布体检</strong>
-          <p>SKU、图片、价格、物流、类目、利润和政策在这里补齐；更多账号和后台状态已经归到设置。</p>
+          <span>上架资料补全</span>
+          <strong>把草稿变成可体检的发布包</strong>
+          <p>按基础、价格利润、素材描述、平台参数和物流履约往下补；店铺连接和账号配置已经归到设置。</p>
         </div>
         ${renderSaasPublishConfirmationIntakePanel(ctx, { includeGuide: false })}
       </section>
+      ` : ""}
 
       <div class="saas-listing-composer-boundary">
         <span>当前页面只生成草稿、体检结果和确认单。真实发布、改价、库存、广告、退款、政策和敏感客服承诺仍然进入决策中心。</span>
@@ -11503,7 +11686,7 @@ function syncMediaRequirementSummary() {
   setText("#mediaOutputNote", `${config.platform} / ${config.size} / ${config.scene}`);
   setText(
     "#mediaDecisionSummary",
-    `当前任务：${config.entryLabel}使用「${config.template}」，生成 ${config.count}，图片要求为「${config.type}」，场景为「${config.scene}」，${config.fidelity}；${config.textRule}；视频规格为「${config.videoPreset}」。生成结果会回到素材工坊预览，费用和用量在设置页查看。`,
+    `当前任务：${config.entryLabel}，素材包「${config.template}」，生成 ${config.count}。场景：${config.scene}。生成结果只作为草稿预览，通过后再回写 Listing。`,
   );
   renderMediaQualityBoard(config);
   return config;
@@ -11515,7 +11698,7 @@ function ensureMediaQualityBoard() {
     const runStatus = document.querySelector("#mediaRunStatus");
     runStatus?.insertAdjacentHTML(
       "afterend",
-      '<section class="media-quality-board" id="mediaQualityBoard" aria-label="素材状态拆分"></section>',
+      '<section class="media-quality-board" id="mediaQualityBoard" aria-label="素材进度"></section>',
     );
     board = document.querySelector("#mediaQualityBoard");
   }
@@ -11567,9 +11750,9 @@ function renderMediaQualityBoard(config = readMediaGenerationConfig()) {
   board.innerHTML = `
     <div class="media-quality-head">
       <div>
-        <span>素材状态拆分</span>
-        <strong>不要把“任务包已生成”和“图片可正式发布”混在一起</strong>
-        <p>素材工坊负责把图、详情页和视频做出来；能不能用于真实 eBay Listing，还要看实物一致性、授权、类目字段和确认中心。</p>
+        <span>素材进度</span>
+        <strong>先看草稿，再决定是否回写 Listing</strong>
+        <p>素材工坊只负责生成和预览。正式使用前还要核对实物一致性、图片授权、类目字段和发布确认。</p>
       </div>
       <em>${escapeHtml(config.platform)} · ${escapeHtml(config.count)}</em>
     </div>
@@ -11653,7 +11836,7 @@ function syncMediaStudioGenerated(sourceText = "商品图", options = {}) {
   setText("#mediaRouteStatus", "已生成草稿");
   setText(
     "#mediaDecisionSummary",
-    `当前任务：${config.entryLabel}使用「${config.template}」，生成 ${config.count}，图片要求为「${config.type}」，场景为「${config.scene}」，${config.fidelity}；${config.textRule}；视频规格为「${config.videoPreset}」。生成结果会回到素材工坊预览，费用和用量在设置页查看。`,
+    `当前任务：${config.entryLabel}，素材包「${config.template}」，生成 ${config.count}。场景：${config.scene}。生成结果只作为草稿预览，通过后再回写 Listing。`,
   );
   setText("#mediaEntryStatus", config.entryLabel);
   setText(
@@ -13723,7 +13906,7 @@ function saasSevenStepLaunchItems(ctx = saasMerchantWorkbenchContext()) {
     {
       label: "05",
       title: "素材资产",
-      result: mediaReady ? "素材 brief 或资产清单已生成" : "等待主图 / 详情图 / 视频脚本",
+      result: mediaReady ? "图片需求或素材清单已生成" : "等待主图 / 详情图 / 视频脚本",
       next: mediaReady ? "进入发布体检。" : "素材工坊只显示可发布资产、授权状态和实物一致性，不解释内部模型 provider。",
       done: mediaReady,
       view: "media",
@@ -14235,7 +14418,7 @@ function saasCurrentAccountSummary() {
   const role = state.saasTeamMember?.role || (hasAccountSession ? "owner" : "未登录");
   const modelStatus = isSaasModelConfigured() ? "AI 连接已可用" : "AI 连接待保存";
   const writeStatus =
-    state.saasEbayWriteAdapter?.real_platform_writes_enabled === true ? "真实写入已开启" : "真实写入未开启";
+    state.saasEbayWriteAdapter?.real_platform_writes_enabled === true ? "真实动作已开启" : "当前不做真实动作";
   return {
     displayName,
     email,
@@ -15256,7 +15439,7 @@ function renderSaasAiCeoOutputPanel() {
         <article>
           <span>待确认</span>
           <strong>${pendingConfirmations.length}</strong>
-          <small>${escapeHtml(isSaasRealPlatformWritesEnabled() ? "真实写入已开，仍必须确认" : "真实写入未开启")}</small>
+          <small>${escapeHtml(isSaasRealPlatformWritesEnabled() ? "真实动作先确认" : "当前不做真实动作")}</small>
         </article>
         <article>
           <span>eBay 资源</span>
@@ -15322,7 +15505,7 @@ function renderSaasAiCeoOutputPanel() {
         <aside class="saas-ai-confirm-list" aria-label="AI CEO 待确认项">
           <div class="saas-ai-list-title">
             <strong>确认中心待办</strong>
-            <small>${escapeHtml(isSaasRealPlatformWritesEnabled() ? "真实写入已开启；批准后仍先跑发布体检和后端执行边界" : "批准后也只进入受控交接，当前不写入真实 eBay")}</small>
+            <small>${escapeHtml(isSaasRealPlatformWritesEnabled() ? "真实动作已开启；批准后仍先做发布体检和安全确认" : "批准后也只进入受控交接，当前不操作真实 eBay")}</small>
           </div>
           ${
             confirmations.length
@@ -16114,14 +16297,14 @@ function renderSaasConfirmPanel() {
       </div>
       <div class="saas-page-next-action">
         <b>${allPendingCount ? `${allPendingCount} 个待确认` : "当前无待确认"}</b>
-        <small>${realWritesEnabled ? "真实写入已开，仍需确认" : "受控交接"}</small>
+        <small>${realWritesEnabled ? "真实动作先确认" : "受控交接"}</small>
       </div>
     </section>
     <div class="runtime-confirm-head saas-confirm-simple-head">
       <div>
         <span class="pill ${state.saasConnected ? "green" : "neutral"}">确认中心</span>
         <strong>${cards.length ? `${escapeHtml(productLabel)} 有需要确认的动作` : "还没有确认项"}</strong>
-        <p>排查证据、发布复盘、后台预检和历史重复合并都在设置里看；这里让商家快速决定“同意、稍后、或回去补资料”。</p>
+        <p>详细记录、发布复盘、上线检查和历史重复合并都在设置里看；这里让商家快速决定“同意、稍后、或回去补资料”。</p>
       </div>
       <button class="secondary-action" type="button" data-saas-action="refresh">刷新确认中心</button>
     </div>
@@ -16134,7 +16317,7 @@ function renderSaasConfirmPanel() {
       <article>
         <span>已批准</span>
         <strong>${approved.length}</strong>
-        <small>${realWritesEnabled ? "仍受执行边界约束" : "只记录受控交接"}</small>
+        <small>${realWritesEnabled ? "仍按安全规则执行" : "只记录安全交接"}</small>
       </article>
       <article>
         <span>阻塞/拒绝</span>
@@ -16228,7 +16411,7 @@ function renderSaasLoginCard(options = {}) {
           </div>
           <p class="eyebrow">登录 / 注册</p>
           <h2>建立你的捷境账号</h2>
-          <p class="auth-note">登录或注册后进入身份向导；店铺授权、同步、AI 连接和确认记录都会进入后端。</p>
+        <p class="auth-note">登录或注册后进入身份向导；店铺授权、同步、AI 连接和确认记录都会进入系统记录。</p>
         </div>
         <div class="auth-step-strip" aria-label="登录后流程">
           <span>登录 / 注册</span>
@@ -16264,12 +16447,12 @@ function renderSaasLoginCard(options = {}) {
             <small>新商家创建账号，进入身份向导</small>
           </button>
         </div>
-        <p class="saas-auth-footnote">当前扫码登录是正式接入预留；测试先使用账号密码。后端只保存会话和安全引用，不把原始凭证返回前端。</p>
+        <p class="saas-auth-footnote">当前扫码登录是正式接入预留；测试先使用账号密码。系统只保存会话和安全引用，不把原始凭证返回浏览器。</p>
       </section>
     `;
   }
   return `
-    <div class="saas-login-card ${compact ? "is-compact" : ""}" data-saas-login-card aria-label="SaaS 后端登录">
+    <div class="saas-login-card ${compact ? "is-compact" : ""}" data-saas-login-card aria-label="JIEJING 登录">
       <label>
         <span>捷境账号</span>
         <input data-saas-login-email type="email" inputmode="email" autocomplete="username" placeholder="you@example.com" />
@@ -16852,7 +17035,7 @@ function buildSaasCeoCommand(text, ctx = saasMerchantWorkbenchContext()) {
     view: "product",
     key: "product",
     label: "Listing",
-    note: "生成市场报告、eBay Listing Package、价格/政策/字段缺口。",
+      note: "生成市场结论、eBay Listing 草稿、价格/政策/字段缺口。",
     status: routeStatus,
   });
   if (["media", "listing", "bulk", "confirm"].includes(intent)) {
@@ -16918,7 +17101,7 @@ function renderSaasCeoCommandConsole(ctx = saasMerchantWorkbenchContext(), comma
         <div class="saas-ceo-command-empty">
           <span>等待指令</span>
           <strong>输入商品、链接、图片、订单问题或经营目标后，AI CEO 会先接单再分发任务。</strong>
-          <p>可用路径：市场调研/批量选品/IP 防侵权 → Listing Package → 素材工坊 → 客服学习 → 财务履约 → 决策中心 → AI CEO 复盘。</p>
+          <p>可用路径：市场调研/批量选品/IP 防侵权 → Listing 草稿 → 素材工坊 → 客服学习 → 财务履约 → 决策中心 → AI CEO 复盘。</p>
         </div>
         <article>
           <span>AI 先自动做</span>
@@ -16935,7 +17118,7 @@ function renderSaasCeoCommandConsole(ctx = saasMerchantWorkbenchContext(), comma
   const steps = [
     ["来源记录", "记录指令和输入"],
     ["市场 / 批量 / IP", "判断机会、候选和侵权风险"],
-    ["Listing Package", "生成 eBay 刊登资料"],
+    ["Listing 草稿", "生成 eBay 刊登资料"],
     ["素材工坊", "流程导入或外部生成"],
     ["客服与财务", "学习口径并回传费用"],
     ["决策中心", "高风险确认"],
@@ -16999,11 +17182,11 @@ function saasCeoModuleHandoffCopy(view = "product") {
     {
       product: {
         label: "Listing",
-        next: "生成或查看 Market Report、Listing Package、字段缺口、价格/政策和确认项。",
+        next: "生成或查看市场结论、Listing 草稿、字段缺口、价格/政策和确认项。",
       },
       media: {
         label: "素材工坊",
-        next: "接收 Listing Package、素材 brief、来源图或批量质检通过的草稿，生成主图、详情页和视频需求。",
+        next: "接收 Listing 草稿、图片需求、来源图或批量筛选通过的草稿，生成主图、详情页和视频需求。",
       },
       confirm: {
         label: "决策中心",
@@ -17334,6 +17517,7 @@ function handleSaasCeoCommandSubmit(text) {
     if (consoleNode) consoleNode.outerHTML = renderSaasCeoCommandConsole(ctx, instantCommand || command);
     return instantCommand || command;
   }
+  const handedToListing = syncSaasCeoCommandToListing(command);
   addCeoMessage(text, "正在查找并整理答案...", {
     assistantId: pendingMessageId,
     pending: true,
@@ -17359,6 +17543,7 @@ function handleSaasCeoCommandSubmit(text) {
       state.saasLastCeoCommand = newestSaasCeoCommand(mergedCommand, state.saasLastCeoCommand);
       persistSaasLastCeoCommand(state.saasLastCeoCommand);
       recordSaasCeoCommandSourceRecord(state.saasLastCeoCommand);
+      syncSaasCeoCommandToListing(mergedCommand);
     }
     updateCeoAssistantMessage(pendingMessageId, answer, chat?.status || "", chat?.model_client || null, sourceRecords);
     updateSaasAiCeoLatestReply({
@@ -17386,7 +17571,7 @@ function handleSaasCeoCommandSubmit(text) {
   if (consoleNode) {
     consoleNode.outerHTML = renderSaasCeoCommandConsole(ctx, command);
   }
-  showActionToast("AI CEO 已收到。");
+  showActionToast(handedToListing ? "AI CEO 已收到，Listing 已接住这个目标。" : "AI CEO 已收到。");
   return command;
 }
 
@@ -21062,7 +21247,7 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
     if (execution.status === "blocked_platform_error") {
       showActionToast("eBay 返回平台错误，已记录到确认中心；先核对平台状态再决定是否重试。");
     } else {
-      showActionToast(state.saasEbayWriteAdapter?.real_platform_writes_enabled === true ? "确认已提交：后端已按发布前校验执行受控 eBay 写入。" : "确认已进入执行服务：真实写入未开启时只记录受控交接。");
+      showActionToast(state.saasEbayWriteAdapter?.real_platform_writes_enabled === true ? "确认已提交：已按发布前校验执行受控 eBay 动作。" : "确认已进入执行服务：当前不操作真实 eBay，只记录受控交接。");
     }
   } catch (error) {
     state.saasError = `SaaS 确认执行失败：${error.message}`;
@@ -21702,6 +21887,173 @@ function handleSaasListingSourceSyncedProduct() {
   return true;
 }
 
+function shouldSaasCeoOfferListingHandoff(command = null) {
+  const current = normalizeSaasCeoCommand(command);
+  if (!current) return false;
+  const text = String(current.text || "");
+  if (!text.trim()) return false;
+  if (current.intent === "service") return false;
+  const hasProductSignal = /eBay|ebay|Listing|listing|商品|产品|货源|选品|SKU|1688|上架草稿|刊登|标题|描述|价格|素材|主图|利润|类目|item/i.test(text);
+  const hasMarketListingSignal =
+    /调研|市场|竞品|热销/i.test(text) &&
+    /eBay|ebay|Listing|listing|商品|产品|货源|选品|SKU|1688|上架草稿|刊登|标题|描述|价格|素材|主图|利润|类目|item/i.test(text);
+  const hasListingSignal = hasProductSignal || hasMarketListingSignal;
+  if (!hasListingSignal) return false;
+  const asksDirectHighRiskWrite = /真实发布|立即发布|直接发布|马上发布|帮我发布|直接上架|改价|改库存|付款|采购付款|退款|广告预算|修改政策|客服承诺/i.test(text);
+  const asksForSafePrep = /草稿|调研|生成|整理|建议|检查|体检|预览|分析|筛选|评估|看看|帮我找|帮我做/i.test(text);
+  return !asksDirectHighRiskWrite || asksForSafePrep;
+}
+
+function syncSaasCeoCommandToListing(command = null) {
+  const current = normalizeSaasCeoCommand(command);
+  if (!shouldSaasCeoOfferListingHandoff(current)) return false;
+  const safeText = sanitizeSaasCeoCommandSourceText(current.text || "").slice(0, 520);
+  const listingPrompt = sanitizeSaasWorkflowFeedbackText(
+    [
+      safeText,
+      "",
+      "请按市场结论 → Listing 草稿 → 素材/利润 → 发布确认的顺序整理；不要触发真实 eBay 写入。",
+    ].join("\n"),
+    1200,
+  );
+  state.saasListingComposerInput = listingPrompt;
+  state.saasListingSourceMode = "ai_ceo_handoff";
+  state.saasListingCeoHandoff = {
+    id: current.id,
+    title: current.title || "AI CEO 指令",
+    text: safeText,
+    created_at: current.created_at || new Date().toISOString(),
+  };
+  return true;
+}
+
+function sanitizeSaasListingWorkflowField(value = "", limit = 800) {
+  return sanitizeSaasCeoCommandSourceText(sanitizeSaasWorkflowFeedbackText(value || "", limit));
+}
+
+function buildSaasListingBackendWorkflowPayload(store = {}, text = "", draft = state.saasListingComposerDraft) {
+  const fields = draft?.fields || {};
+  const product = sanitizeSaasListingWorkflowField(draft?.product || draft?.title || text.split(/\r?\n/).find(Boolean) || "新品 Listing 项目", 120);
+  const safeText = sanitizeSaasListingWorkflowField(text || draft?.summary || product, 1200);
+  const safeFields = Object.fromEntries(
+    Object.entries(fields)
+      .slice(0, 12)
+      .map(([key, value]) => [key, sanitizeSaasListingWorkflowField(value, key === "description" || key === "selling_points" ? 1400 : 800)]),
+  );
+  return {
+    store_id: store.store_id,
+    product,
+    title: `Listing 经营链路：${product.slice(0, 80)}`,
+    stage: state.dna?.merchantStage || "store_opened",
+    source_mode: "listing_composer",
+    adapter: "jiejing-local",
+    run_mode: "inline",
+    attach_latest_platform_data_packet: true,
+    attach_public_search_market_signal: true,
+    merchant_profile: buildRuntimeMerchantProfile(),
+    merchant_goal:
+      "Create the JIEJING Listing workflow loop from merchant intake to market conclusion, listing draft, asset and profit review, and confirmation center. Do not perform any real platform write.",
+    market_probe_inputs: {
+      product_context: product,
+      source_type: "listing_composer",
+      note: "Listing page requested a controlled workflow. Runtime receives sanitized merchant facts and must keep real platform writes disabled.",
+    },
+    listing_intake: {
+      source: "listing_composer",
+      raw_text: safeText,
+      draft_title: sanitizeSaasListingWorkflowField(draft?.title || product, 120),
+      source_type: sanitizeSaasListingWorkflowField(draft?.source_type || state.saasListingSourceMode || "merchant_input", 80),
+      fields: safeFields,
+      no_real_platform_write: true,
+      real_platform_writes_enabled: false,
+      requires_confirmation_center: true,
+    },
+  };
+}
+
+async function startSaasListingBackendWorkflow() {
+  if (!requireSaasProtectedSessionForAction()) return false;
+  const text = captureSaasListingComposerInput();
+  captureSaasListingDraftEditor();
+  if (!state.saasListingComposerDraft && text.trim()) {
+    state.saasListingComposerDraft = saasListingComposerDraftFromText(text);
+    state.saasListingSourceMode = "merchant_input";
+  }
+  if (!state.saasListingComposerDraft && !text.trim()) {
+    document.querySelector("#saasListingComposerInput")?.focus();
+    showActionToast("先输入商品资料，再生成经营链路。");
+    return false;
+  }
+  state.saasLoading = true;
+  state.saasListingBackendWorkflowStatus = "running";
+  state.saasListingBackendWorkflowError = "";
+  renderProductListingCenter();
+  try {
+    const store = activeSaasStore() || (await ensureSaasDemoStoreAndConnection());
+    if (!store?.store_id) throw new Error("当前没有可用店铺上下文。");
+    const payload = await saasFetch("/tasks/product-workflow", {
+      method: "POST",
+      body: JSON.stringify(buildSaasListingBackendWorkflowPayload(store, text, state.saasListingComposerDraft)),
+    });
+    if (payload.worker_result?.status === "failed") {
+      throw new Error(payload.worker_result.error || "Listing workflow worker failed");
+    }
+    const taskId = payload.task?.task_id || "";
+    state.saasListingBackendWorkflow = {
+      status: "completed",
+      task_id: taskId,
+      queue_job_id: payload.queue_job?.job_id || "",
+      saved: payload.saved || payload.worker_result?.saved || { reports: 0, confirmations: 0 },
+      real_platform_writes_enabled: payload.real_platform_writes_enabled === true,
+      completed_at: new Date().toISOString(),
+    };
+    state.saasListingBackendWorkflowStatus = "completed";
+    state.saasLastWorkflowTaskId = taskId || state.saasLastWorkflowTaskId;
+    if (payload.public_search_market_handoff) state.saasLastPublicSearchHandoff = payload.public_search_market_handoff;
+    if (payload.worker_result) applySaasWorkerPayload(payload.worker_result);
+    await refreshSaasState({ silent: true, refreshLaunchGate: false });
+    const generatedListingReport = (state.saasReports || []).find(
+      (record) => record.task_id === taskId && ["listing.package", "product.listing"].includes(record.report_type || ""),
+    );
+    if (generatedListingReport) {
+      state.saasListingComposerDraft = saasListingDraftFromReport(generatedListingReport, "ai_report");
+      state.saasListingSourceMode = "ai_report";
+    }
+    state.saasListingBackendWorkflow = {
+      ...state.saasListingBackendWorkflow,
+      saved: {
+        reports: (state.saasReports || []).filter((record) => record.task_id === taskId).length || state.saasListingBackendWorkflow.saved?.reports || 0,
+        confirmations:
+          (state.saasConfirmations || []).filter((record) => record.task_id === taskId).length ||
+          state.saasListingBackendWorkflow.saved?.confirmations ||
+          0,
+      },
+    };
+    renderProductListingCenter();
+    window.requestAnimationFrame(() => {
+      document.querySelector(".saas-listing-workflow-proof")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+    showActionToast("Listing 经营链路已生成：报告和确认项已写回当前账号空间，没有真实发布。");
+    return true;
+  } catch (error) {
+    state.saasListingBackendWorkflowStatus = "failed";
+    state.saasListingBackendWorkflowError = publicRuntimeText(error.message || error).slice(0, 180);
+    state.saasListingBackendWorkflow = {
+      status: "failed",
+      task_id: state.saasLastWorkflowTaskId || "",
+      saved: { reports: 0, confirmations: 0 },
+      real_platform_writes_enabled: false,
+      completed_at: new Date().toISOString(),
+    };
+    renderProductListingCenter();
+    showActionToast("Listing 经营链路没有完成；没有写入 eBay。");
+    return false;
+  } finally {
+    state.saasLoading = false;
+    renderSaasBackendPanel();
+  }
+}
+
 function focusSaasPublishIntakeForm() {
   captureSaasListingComposerInput();
   captureSaasListingDraftEditor();
@@ -21889,6 +22241,7 @@ function handleSaasAction(button) {
     "merchant-feedback-useful",
     "merchant-feedback-not-useful",
     "merchant-feedback-remember-rule",
+    "listing-start-backend-workflow",
     "create-publish-confirmation",
     "approve-first",
     "approve-confirmation",
@@ -21899,6 +22252,10 @@ function handleSaasAction(button) {
   if (protectedActions.has(action) && !requireSaasProtectedSessionForAction()) return;
   if (action === "run-workflow") {
     createSaasProductWorkflowFromBackend();
+    return;
+  }
+  if (action === "listing-start-backend-workflow") {
+    startSaasListingBackendWorkflow();
     return;
   }
   if (action === "create-publish-confirmation") {
@@ -23813,7 +24170,7 @@ function renderSaasWorkflowCenter() {
       <div class="section-heading">
         <div>
           <p class="eyebrow">AI 工作流 · 真实状态</p>
-          <h2>AI CEO 接目标，后台岗位按 eBay 顺序推进</h2>
+          <h2>AI CEO 接目标，按 eBay 顺序推进</h2>
           <p class="section-note">商家给 AI CEO 下指令后，AI CEO 先判断是直接回答、eBay 经营任务、实时数据缺口还是高风险确认，再按市场调研、批量选品、IP 防侵权、Listing、素材、发布体检、费用利润、客服学习、决策中心和发布后复盘推进。</p>
         </div>
         <div class="workflow-title-actions">
@@ -23821,16 +24178,16 @@ function renderSaasWorkflowCenter() {
           <span class="pill neutral">配置状态在设置</span>
         </div>
       </div>
-      <div class="workflow-agent-map" aria-label="AI CEO 岗位调度链路">
+      <div class="workflow-agent-map" aria-label="AI CEO 经营环节链路">
         <article class="workflow-agent-command">
           <span>AI CEO 接单</span>
           <strong>每条指令都有目标、计划、来源、风险、确认动作、执行结果和复盘</strong>
           <p>普通咨询直接答；eBay 经营问题转工作流；实时行情或新闻在未接数据源时明确提示缺口；发布、改价、库存、退款、广告和敏感承诺必须停到决策中心。</p>
         </article>
-        <div class="workflow-agent-lane" aria-label="后台岗位链路">
+        <div class="workflow-agent-lane" aria-label="经营环节链路">
           <article class="${ctx.hasPacket ? "is-active" : "is-current"}"><span>01</span><strong>市场 / IP</strong><p>调研选品、防侵权</p></article>
           <article><span>02</span><strong>批量铺货</strong><p>候选质检、字段缺口</p></article>
-          <article class="${reports.length ? "is-active" : "is-current"}"><span>03</span><strong>Listing</strong><p>Market Report + Package</p></article>
+          <article class="${reports.length ? "is-active" : "is-current"}"><span>03</span><strong>Listing</strong><p>市场结论 + 草稿</p></article>
           <article><span>04</span><strong>素材工坊</strong><p>流程导入 / 外部生成</p></article>
           <article><span>05</span><strong>发布体检</strong><p>字段、政策、额度、合规</p></article>
           <article><span>06</span><strong>费用利润</strong><p>贡献毛利、费用风险</p></article>
@@ -23847,7 +24204,7 @@ function renderSaasWorkflowCenter() {
       <div class="workflow-command-strip workflow-product-command-strip" aria-label="当前经营队列概览">
         <article><span>当前商品任务</span><strong>${escapeHtml(latestTaskLabel)}</strong><p>${escapeHtml(latestTaskStatus)}；报告、确认项和商家记忆都按这条任务留痕。</p></article>
         <article><span>AI CEO 当前调度</span><strong>${escapeHtml(next.title)}</strong><p>${escapeHtml(next.body)}</p></article>
-        <article><span>后台可自动推进</span><strong>${escapeHtml(reportStatusLabel)}</strong><p>调研、草稿、素材任务、利润检查和客服学习可以留痕推进。</p></article>
+        <article><span>可自动推进</span><strong>${escapeHtml(reportStatusLabel)}</strong><p>调研、草稿、素材任务、利润检查和客服学习可以留痕推进。</p></article>
         <article><span>数据接入状态</span><strong>${escapeHtml(resourceStatusLabel)}</strong><p>${escapeHtml(ctx.sourceLabel)}；缺口不拿样例数据填充。</p></article>
         <article><span>人工只管边界</span><strong>${escapeHtml(pendingStatusLabel)}</strong><p>发布、资金、退款、广告和敏感承诺仍停住。</p></article>
       </div>
@@ -24420,7 +24777,7 @@ function renderSaasCockpitRealWorkbench() {
   const starterPrompts = [
     ["跑一轮 Listing", "基于当前官方数据包，跑一轮市场报告、Listing Package、素材需求、利润履约和确认项。"],
     ["批量前质检", "检查当前候选商品是否适合批量铺货，列出数据缺口、IP 风险、价格和库存确认项。"],
-    ["素材工坊", "把当前 Listing 草稿转成素材 brief，拆出主图、详情页、短视频脚本和实物一致性审核。"],
+    ["素材工坊", "把当前 Listing 草稿转成图片需求，拆出主图、详情页、短视频脚本和实物一致性审核。"],
     ["今天先做什么", "根据 eBay 授权、数据包、AI 连接、报告和待确认项，告诉我今天最该处理的 3 件事。"],
   ];
   const statusPills = [
@@ -24656,34 +25013,34 @@ const bulkStageOrder = ["import", "clean", "score", "draft", "risk", "test", "re
 
 const bulkStageCopy = {
   import: {
-    title: "AI 先调研 eBay 市场机会",
-    text: "这一步不是让商家先准备货源，而是由 AI CEO 从 eBay 搜索需求、价格带、竞品差评、履约难度和合规风险里找可测试品类。",
-    list: ["找 eBay 搜索需求和价格带", "拆竞品标题、主图、差评和可切入空间", "先排除禁限售、侵权疑点和明显难履约品类"],
+    title: "先决定本轮看多少个候选",
+    text: "批量铺货先从小批量开始。数量越小，越容易看清流程、成本和售后风险。",
+    list: ["建议先看 10 个候选方向", "流程顺了再扩大到 20 个或更多", "不因为数量多就自动发布"],
   },
   clean: {
-    title: "按商家选择的渠道匹配货源",
-    text: "演示默认选择 1688；如果商家已经看到其他货源，也可以直接贴链接或上传图片。AI 会记录采购价、规格、库存、发货地、重量、供应商和货源图。",
-    list: ["按 eBay 机会词匹配货源", "记录采购价、规格、库存、发货地和供应商", "货源图保存后送素材工坊重新生成"],
+    title: "先决定货源从哪里来",
+    text: "可以让 AI 先按方向找货，也可以把你已有的货源链接或图片交给 AI 判断。",
+    list: ["1688 找货：适合还没有明确货源时", "手动链接/图片：适合已有供应商线索时", "货源图只作参考，正式素材会重新生成"],
   },
   score: {
-    title: "正在综合评分：市场机会 × 货源可行性",
-    text: "AI 会把 eBay 潜力、货源成本、物流履约、资料完整度、素材可重做程度和合规风险放在一起评分。",
-    list: ["读取官方 eBay packet：店铺、Listing、订单、费用、政策和类目字段先做来源标记", "合并商家货源记录：采购价、重量、尺寸、库存、发货地和图片授权先补齐", "缺字段、错类目、低利润或 IP 疑点不会进入发布确认"],
+    title: "正在分组：建议先测 / 需要补资料 / 暂时不做",
+    text: "AI 会把市场机会、供货条件、利润、物流、售后和合规风险合在一起判断。",
+    list: ["建议先测：进入 Listing 与素材草稿", "需要补资料：先问清尺寸、重量、材质和图片授权", "暂时不做：IP 疑点、利润过薄或履约争议先拦住"],
   },
   draft: {
-    title: "通过质检的机会进入素材和刊登草稿",
-    text: "通过筛选的商品会把货源图送到素材工坊重新生成主图、场景图、详情页和视频脚本，同时在产品刊登里生成标题、类目、规格和描述。",
-    list: ["素材工坊：重做 eBay 可用图片和视频脚本", "Listing 工厂：生成标题、类目、商品参数和描述", "缺重量、尺寸、材质、发货地或净利润的商品不会进入上传确认"],
+    title: "同意后生成素材任务和刊登草稿",
+    text: "通过的候选只进入草稿链路：素材工坊做图和脚本，Listing 页面整理标题、参数、描述和价格口径。",
+    list: ["素材工坊：重做主图、场景图、详情页和视频脚本", "Listing：生成标题、参数、描述和待补资料", "草稿不等于发布，仍然要你确认"],
   },
   risk: {
-    title: "发布前正在做风险校验",
-    text: "图片授权、侵权词、材质夸大、发货地、物流承诺和成本口径会在这里拦一次，避免批量把风险带进店铺。",
-    list: ["货源图只作参考，默认重做素材并记录来源", "类目、尺寸、重量、包装、材质缺失：不进入真实发布", "价格、库存、店铺政策、采购付款和真实上传：进确认中心"],
+    title: "这些动作会停下来让你确认",
+    text: "草稿可以继续推进，但会影响资金、店铺和买家的动作不会自动做。",
+    list: ["真实发布、付款采购、退款和广告预算必须确认", "改价、改库存、店铺政策和敏感客服承诺必须确认", "不确定时默认保守处理"],
   },
   test: {
-    title: "等待你确认上传 eBay",
-    text: "这一步只确认首批测试商品。确认价格、库存、物流政策、退货政策和发布范围后，正式版才会调用 eBay 执行上传。",
-    list: ["确认测试数量", "确认售价、库存和三大业务政策", "确认后续复盘指标"],
+    title: "等待你确认是否进入首批测试",
+    text: "这一步只决定是否继续准备首批商品。没有你的确认，不会执行真实发布或付款。",
+    list: ["确认测试数量", "确认售价、库存和物流退货口径", "确认后续复盘指标"],
   },
   review: {
     title: "试卖后再决定扩量",
@@ -24927,7 +25284,7 @@ function handleBulkAction(action, item = "") {
     state.batchPreviewCount = state.batchCandidateCount;
     renderBulkFactory();
     if (isSaasPublicMvpMode()) {
-      setBulkFeedback(`已建立 ${state.batchPreviewCount === 50 ? "50+" : state.batchPreviewCount} 个批量前质检槽位。下一步补来源记录、字段完整度、类目和利润口径；真实发布仍必须进确认中心。`);
+      setBulkFeedback(`已生成 ${state.batchPreviewCount === 50 ? "50+" : state.batchPreviewCount} 个候选分组。先看建议先测、需要补资料和暂时不做；同意后只送 Listing 与素材草稿。`);
       return;
     }
     setBulkFeedback(`已生成 ${state.batchPreviewCount === 50 ? "50+" : state.batchPreviewCount} 个 eBay 机会与货源匹配预览。商家同意后再进入素材工坊和产品刊登。`);
@@ -26149,7 +26506,7 @@ function workflowStageRole(title) {
   if (/费用|利润|财务/.test(title)) return "财务风控";
   if (/客服|售后|消息/.test(title)) return "客服经理";
   if (/确认|发布|权限/.test(title)) return "AI CEO 收口";
-  return "后台岗位";
+  return "工作环节";
 }
 
 function workflowRiskClass(value) {
@@ -26273,7 +26630,7 @@ function renderSaasActivityCenter(view) {
         <div>
           <p class="eyebrow">AI CEO 汇报</p>
           <h2>这里只看 AI CEO 已经产出的经营报告</h2>
-          <p class="section-note">授权、数据包、模型连接、发布复盘和后台排查已经归到设置。汇报页只保留 Market Report、Listing Package、确认记录和可继续的经营动作。</p>
+          <p class="section-note">授权、来源、模型连接和发布复盘已经归到设置。汇报页只保留市场结论、Listing 草稿、确认记录和可继续的经营动作。</p>
         </div>
         <span class="pill ${reports.length ? "green" : "amber"}">${reports.length ? `${reports.length} 条报告` : "等待报告"}</span>
       </header>
@@ -26628,43 +26985,43 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
   const hasOfficialOrders = ctx.presentKeys.includes("orders_and_fulfillment") && opsSnapshot.orderCount > 0;
   const hasListings = ctx.presentKeys.includes("inventory_and_offers") && opsSnapshot.listingCount > 0;
   const serviceNextAction = !ctx.connection
-    ? "先去设置确认 eBay 授权和只读同步"
+    ? "先去设置连接 eBay，之后才会出现真实订单和消息"
     : hasOfficialOrders
-      ? "用真实订单生成客服事实表和回复草稿"
-      : "等待官方订单 / 消息数据，不展示样本买家";
+      ? "先处理需要回复的买家消息"
+      : "暂无真实订单或消息";
   view.innerHTML = `
-    <section class="panel full saas-real-service-center" aria-label="客服与物流真实状态">
+      <section class="panel full saas-real-service-center" aria-label="客服与订单工作台">
       <header class="product-manager-header saas-real-listing-header">
         <div>
           <p class="eyebrow">客服与订单</p>
-          <h2>只处理订单、商品档案和回复草稿</h2>
-          <p class="section-note">授权状态、订单同步、资料来源和后台排查已经归到设置。这里不展示样本买家，不堆系统证据，只保留客服要处理的真实动作。</p>
+          <h2>买家消息先整理，关键承诺你确认</h2>
+          <p class="section-note">这里按三件事排好：买家问什么、订单到哪、回复怎么说；退款、补偿、重发、地址修改和明确到货日会停下来让你接管。</p>
         </div>
-        <span class="pill ${ctx.official && hasOfficialOrders ? "green" : "amber"}">${ctx.official && hasOfficialOrders ? "官方数据可用" : "等待官方同步"}</span>
+        <span class="pill ${ctx.official && hasOfficialOrders ? "green" : "amber"}">${ctx.official && hasOfficialOrders ? "可处理" : "等真实订单"}</span>
       </header>
 
       <section class="saas-readable-page-head saas-service-readable-head" aria-label="客服与订单说明">
         <div>
           <span>客服与订单</span>
-          <strong>三件事：订单、档案、回复</strong>
-          <p>能从订单和商品档案回答的，AI 先起草；涉及退款、补偿、重发、地址修改、明确到货日和敏感承诺，直接停到决策中心。</p>
+          <strong>三件事：消息、订单、回复</strong>
+          <p>能从订单和商品档案回答的，AI 先起草；涉及钱、补偿、重发、地址修改、明确到货日和敏感承诺，直接停到决策中心。</p>
         </div>
         <div class="saas-page-next-action">
           <b>${escapeHtml(serviceNextAction)}</b>
-          <small>排查细节在设置</small>
+          <small>没有真实订单时保持空白</small>
         </div>
       </section>
 
       <div class="saas-service-lane-grid" aria-label="客服与订单三件事">
         <article class="${hasOfficialOrders ? "is-green" : "is-amber"}">
           <span>1</span>
-          <strong>真实订单</strong>
-          <p>${hasOfficialOrders ? `${escapeHtml(saasCompactValue(opsSnapshot.orderLabel))} · ${escapeHtml(saasCompactValue(opsSnapshot.fulfillment, "履约状态待读取"))}` : "只显示官方订单、tracking、退货请求和消息；没有官方数据就保持空状态。"}</p>
+          <strong>买家消息</strong>
+          <p>${hasOfficialOrders ? `${escapeHtml(saasCompactValue(opsSnapshot.orderLabel))} · 先处理待回复和异常消息` : "没有真实消息时保持空状态，不显示虚构买家。"}</p>
         </article>
         <article class="${hasListings ? "is-green" : "is-amber"}">
           <span>2</span>
-          <strong>商品档案</strong>
-          <p>客服只能引用 Listing Package、官方数据包、来源记录和商家规则，不能把模型猜测说成事实。</p>
+          <strong>订单状态</strong>
+          <p>${hasOfficialOrders ? escapeHtml(saasCompactValue(opsSnapshot.fulfillment, "按订单状态核对 tracking、发货和退货")) : "等真实订单、tracking 和退货状态后再处理，不让 AI 猜物流。"}</p>
         </article>
         <article class="${pendingServiceConfirmations.length ? "is-amber" : "is-green"}">
           <span>3</span>
@@ -26676,13 +27033,13 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
       <section class="saas-service-simple-workspace" aria-label="客服与订单工作区">
         <article class="${hasOfficialOrders ? "is-green" : "is-empty"}">
           <span>订单 / 消息</span>
-          <strong>${hasOfficialOrders ? "可以生成客服事实表" : "还没有官方订单或消息"}</strong>
-          <p>${hasOfficialOrders ? `${escapeHtml(saasCompactValue(opsSnapshot.orderLabel))} · ${escapeHtml(saasCompactValue(opsSnapshot.fulfillment, "履约状态待读取"))}` : "没有真实数据时，客服页保持空状态，不用演示订单冒充真实经营。"}</p>
+          <strong>${hasOfficialOrders ? "可以开始处理" : "还没有真实订单或消息"}</strong>
+          <p>${hasOfficialOrders ? `${escapeHtml(saasCompactValue(opsSnapshot.orderLabel))} · ${escapeHtml(saasCompactValue(opsSnapshot.fulfillment, "按订单状态核对"))}` : "没有真实数据时，客服页保持空状态，不显示虚构订单。"}</p>
         </article>
         <article class="${hasListings ? "is-green" : "is-amber"}">
           <span>回复草稿</span>
           <strong>${hasListings ? "可按商品档案起草" : "等待 Listing 商品档案"}</strong>
-          <p>客服只能引用 Listing Package、官方数据包、来源记录和商家规则；不能把模型猜测说成事实。</p>
+          <p>只引用商品档案、订单状态和你保存的商家规则；不能把 AI 猜测说成事实。</p>
         </article>
         <article class="${pendingServiceConfirmations.length ? "is-amber" : "is-green"}">
           <span>需要你确认</span>
@@ -26694,7 +27051,7 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
       <div class="saas-service-action-strip">
         <strong>下一步</strong>
         <div>
-          <button class="secondary-action" type="button" data-global-flow-view="connect">去设置同步 eBay</button>
+          <button class="secondary-action" type="button" data-global-flow-view="connect">连接店铺</button>
           <button class="secondary-action" type="button" data-global-flow-view="product">看 Listing 商品档案</button>
           <button class="primary-action" type="button" data-global-flow-view="confirm">去决策中心</button>
         </div>
@@ -29823,7 +30180,7 @@ function renderSaasCoreModuleDiagnosticsPanel(ctx = saasMerchantWorkbenchContext
     {
       label: "决策中心",
       title: pendingConfirmations.length ? `${pendingConfirmations.length} 个待确认` : "当前安静",
-      detail: "决策中心只显示真实经营动作；发布命令摘要、复盘和后台证据转到设置。",
+      detail: "决策中心只显示真实经营动作；发布命令摘要、复盘和系统记录转到设置。",
       tone: pendingConfirmations.length ? "amber" : "green",
     },
     {

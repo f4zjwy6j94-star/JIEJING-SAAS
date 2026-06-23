@@ -3,6 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_JS = ROOT / "app.js"
+APP_HTML = ROOT / "app.html"
 STYLES = ROOT / "styles.css"
 
 
@@ -13,6 +14,7 @@ def require(text: str, needle: str, label: str) -> None:
 
 def main() -> None:
     app_js = APP_JS.read_text(encoding="utf-8")
+    app_html = APP_HTML.read_text(encoding="utf-8")
     styles = STYLES.read_text(encoding="utf-8")
 
     require(app_js, "saasSettingsTab", "settings tab state")
@@ -20,10 +22,46 @@ def main() -> None:
     require(app_js, "data-saas-settings-tab", "settings tab navigation")
     require(app_js, "renderSaasSettingsCleanLayout(ctx", "settings render path")
 
+    require(app_js, "function renderSaasBulkCandidatePreview", "SaaS bulk simplified candidate preview")
+    require(app_js, "先小批量筛，不一键乱铺", "bulk low-learning-cost headline")
+    require(app_js, "生成候选分组", "bulk simple grouping action")
+    require(app_js, "建议先测", "bulk test lane")
+    require(app_js, "需要补资料", "bulk missing-info lane")
+    require(app_js, "暂时不做", "bulk blocked lane")
+    require(app_js, "这里只做一件事：先筛一小批", "bulk simple one-job copy")
+    require(app_js, "bulk-saas-roadmap", "bulk simple roadmap markup")
+    require(app_js, "bulk-saas-lane-list", "bulk grouped lane markup")
+    require(app_html, "先小批量筛，不一键乱铺", "bulk shell simple headline")
+    require(app_html, "本轮数量", "bulk shell merchant count metric")
+    require(app_html, "来源资料", "bulk shell source metric")
+    require(app_html, "已分组", "bulk shell grouped metric")
+    require(app_html, "这里只做一件事：先筛一小批", "bulk shell simple one-job copy")
+    require(app_html, "结果预览", "bulk result preview title")
+    require(app_html, "等待生成候选分组", "bulk result preview empty heading")
+
+    require(app_html, "把商品图变成可用素材包", "media simple headline")
+    require(app_html, "选来源、选素材包、看预览、回写 Listing 草稿", "media simple workflow copy")
+    require(app_html, "商品草稿 / 上传图片", "media source choice")
+    require(app_html, "选择要做图的商品", "media draft selector copy")
+    require(app_html, "先选要做什么图", "media package selection copy")
+    require(app_js, "function saasMediaTaskLabel", "media merchant-facing task labels")
+    require(app_js, "等待商品草稿", "media waiting state copy")
+    require(app_js, "素材工坊只接商品草稿、图片需求或商家上传图", "media source boundary copy")
+    require(app_js, "商家只需要看三件事：这张图用在哪里、能不能用、还缺什么", "media result readability copy")
+    require(app_js, "先看草稿，再决定是否回写 Listing", "media quality board simple copy")
+    require(app_js, "aria-label=\"素材进度\"", "media progress aria label")
+
     require(app_js, "function saasListingSyncedProductRows", "eBay synced product extraction")
     require(app_js, "function renderSaasListingSyncedProductsPanel", "eBay synced product panel")
     require(app_js, "saas-listing-simple-head", "simple listing header")
     require(app_js, "function renderSaasListingComposerWorkspace", "Listing Composer workspace")
+    require(app_js, "saasListingCeoHandoff", "AI CEO to Listing handoff state")
+    require(app_js, "function shouldSaasCeoOfferListingHandoff", "AI CEO Listing handoff intent guard")
+    require(app_js, "function syncSaasCeoCommandToListing", "AI CEO Listing handoff sync")
+    require(app_js, "AI CEO 已收到，Listing 已接住这个目标。", "AI CEO Listing handoff toast")
+    require(app_js, "请按市场结论 → Listing 草稿 → 素材/利润 → 发布确认的顺序整理；不要触发真实 eBay 写入。", "safe Listing handoff prompt")
+    require(app_js, "来自 AI CEO", "Listing handoff merchant label")
+    require(app_js, 'state.saasListingSourceMode = "ai_ceo_handoff"', "AI CEO handoff source mode")
     require(app_js, "function saasListingComposerDraftFromText", "Listing Composer local draft builder")
     require(app_js, 'String(priceMatch[1] || priceMatch[0] || "").trim()', "Listing price parser fallback without capture group")
     require(app_js, "function saasListingDraftFromReport", "AI CEO report import into Listing")
@@ -31,41 +69,66 @@ def main() -> None:
     require(app_js, "function renderSaasListingSourceCards", "Listing three source entry cards")
     require(app_js, "function renderSaasListingStatusBar", "Listing compact status bar")
     require(app_js, "function renderSaasListingDraftEditor", "Listing editable draft editor")
+    require(app_js, "function renderSaasListingWorkflowProofPanel", "Listing workflow loop result panel")
     require(app_js, "function handleSaasListingComposeDraft", "Listing Composer action handler")
+    require(app_js, "function startSaasListingBackendWorkflow", "Listing backend workflow action handler")
+    require(app_js, "function buildSaasListingBackendWorkflowPayload", "Listing backend workflow payload builder")
     require(app_js, "function handleSaasListingSourceAiReport", "Listing AI report source action")
     require(app_js, 'if (action === "listing-compose-draft")', "Listing Composer event wiring")
+    require(app_js, 'if (action === "listing-start-backend-workflow")', "Listing backend workflow event wiring")
     require(app_js, 'if (action === "listing-source-ai-report")', "Listing AI report source event wiring")
+    require(app_js, 'data-saas-action="listing-start-backend-workflow"', "Listing backend workflow primary action")
+    require(app_js, 'saasFetch("/tasks/product-workflow"', "Listing workflow calls product workflow backend")
+    require(app_js, 'run_mode: "inline"', "Listing workflow runs inline safe backend loop")
+    require(app_js, 'source_mode: "listing_composer"', "Listing workflow source mode")
+    require(app_js, "listing_intake", "Listing workflow persists sanitized intake")
+    require(app_js, "no_real_platform_write: true", "Listing workflow cannot be a platform write")
+    require(app_js, "real_platform_writes_enabled: false", "Listing workflow explicitly disables real writes")
     require(app_js, "saas-listing-input-panel", "Listing simple input panel")
     require(app_js, "商品资料入口", "Listing input entry label")
     require(app_js, "把你手上的资料直接放进来", "Listing low-learning-cost input headline")
     require(app_js, "data-saas-listing-input-chip", "Listing input quick chips")
     require(app_js, 'event.target.closest("[data-saas-listing-input-chip]")', "Listing input chip event wiring")
     require(app_js, 'draft ? renderSaasListingGapAndRiskPanel(draft, opportunity) : ""', "Listing risk cards hidden until a draft exists")
-    require(app_js, "draft || reportsReady ? renderSaasListingOpportunityPanel(opportunity) : \"\"", "Listing opportunity card hidden until a real source exists")
+    require(app_js, "showOpportunity ? renderSaasListingOpportunityPanel(opportunity) : \"\"", "Listing opportunity card hidden until a real source exists")
     require(app_js, "saas-listing-v2-workbench", "Listing v2 first screen")
     require(app_js, "saas-listing-v2-status-bar", "Listing v2 compact status bar")
+    require(app_js, "saas-listing-workflow-proof", "Listing workflow loop result styling hook")
+    require(app_js, "经营链路已生成", "Listing workflow loop completed copy")
+    require(app_js, "真实发布仍由决策中心放行", "Listing workflow confirmation boundary copy")
     require(app_js, "Listing 刊登状态", "Listing status aria label")
-    require(app_js, 'title: "发布资料"', "Listing status includes publish data step")
+    require(app_js, 'title: "市场结论"', "Listing status includes market conclusion step")
+    require(app_js, 'title: "素材/利润"', "Listing status includes asset/profit step")
     require(app_js, 'value: hasDraft ? "可补字段" : "等待草稿"', "Listing publish data status value")
     require(app_js, "saas-listing-v2-source-grid", "Listing v2 source selector")
     require(app_js, "saas-listing-v2-draft-editor", "Listing v2 draft editor")
+    require(app_js, "saas-listing-v2-draft-layout", "Listing draft editor split layout")
+    require(app_js, "saas-listing-v2-draft-primary", "Listing draft primary copy column")
+    require(app_js, "saas-listing-v2-draft-side", "Listing draft compact parameter column")
+    require(app_js, "saas-listing-v2-draft-side-grid", "Listing draft side field grid")
+    require(app_js, "options.compact ? \"is-compact\" : \"\"", "Listing compact field styling hook")
     require(app_js, "data-saas-listing-draft-field", "Listing draft field persistence")
     require(app_js, "function localQaForcesSaasPublicMvpMode", "local-only public SaaS QA switch")
     require(app_js, 'qaMode === "public-saas" || qaMode === "listing-v2-workbench"', "local QA listing route")
     require(app_js, "saas-listing-publish-flow", "Listing direct publish check flow")
-    require(app_js, "更多账号和后台状态已经归到设置", "Listing internal evidence moved to settings copy")
+    require(app_js, "const showPublishFlow = Boolean(state.saasListingComposerDraft || hasLiveListing)", "Listing publish form hidden until draft or listing package")
+    require(app_js, "${showPublishFlow ? `", "Listing publish form is gated after a draft exists")
+    require(app_js, "店铺连接和账号配置已经归到设置", "Listing internal evidence moved to settings copy")
     require(app_js, "function renderSaasPublishConfirmationIntakePanel", "new product publish confirmation intake")
     require(app_js, "function saasPublishIntakePrefillValues", "Listing draft to publish form prefill")
     require(app_js, "function renderSaasPublishInputField", "publish form input helper")
     require(app_js, "function renderSaasPublishTextareaField", "publish form textarea helper")
     require(app_js, "function renderSaasPublishFormGroup", "publish form business grouping")
+    require(app_js, "function renderSaasPublishReadinessStrip", "publish form completion strip")
     require(app_js, "function renderSaasPublishPreflightGuide", "merchant publish preflight guide")
     require(app_js, "function renderSaasPublishPretestResultSlot", "Listing pretest result slot")
     require(app_js, "saas-listing-pretest-result", "Listing pretest result slot markup")
     require(app_js, "saas-publish-guide-panel", "publish guide panel")
-    require(app_js, '<section class="saas-publish-raw-form-details" aria-label="完整字段表">', "expanded full publish form")
+    require(app_js, '<section class="saas-publish-raw-form-details" aria-label="上架资料补全清单">', "expanded publish completion form")
     require(app_js, "saas-publish-raw-form-head", "expanded full publish form head")
+    require(app_js, "saas-publish-readiness-strip", "publish completion strip markup")
     require(app_js, "草稿会先自动带入", "draft auto-prefill copy")
+    require(app_js, "把草稿变成可体检的发布包", "Listing publish completion product copy")
     require(app_js, "基础信息", "publish form base group")
     require(app_js, "平台参数", "publish form platform group")
     require(app_js, "价格利润", "publish form finance group")
@@ -75,10 +138,12 @@ def main() -> None:
     require(app_js, "parseSaasKeyValueLines(itemSpecifics)", "item specifics prefill parser")
     require(app_js, "const evidenceText = [logisticsText, clean].filter(Boolean).join", "full merchant input logistics prefill source")
     require(app_js, 'clean.match(/https?:\\/\\/[^\\s,，；;]+/gi)', "image URL prefill from merchant input")
-    require(app_js, "发布资料补全", "Listing publish data completion step")
-    require(app_js, "先补完整字段，再做发布体检", "Listing ordered publish flow copy")
-    require(app_js, "Market Report", "market report remains on Listing page")
-    require(app_js, "Listing Package", "listing package remains on Listing page")
+    require(app_js, "上架资料补全", "Listing publish data completion step")
+    require(app_js, "按基础、价格利润、素材描述、平台参数和物流履约往下补", "Listing ordered publish flow copy")
+    require(app_js, "function saasListingMerchantSourceLabel", "Listing merchant-facing source label helper")
+    require(app_js, "已有市场结论或上架草稿，可以作为上架依据", "Listing report import uses merchant-facing copy")
+    require(app_js, "店铺连接和授权配置在设置里", "Listing settings boundary copy")
+    require(app_js, '<span class="pill green">草稿</span>', "Listing draft pill uses merchant-facing label")
     require(app_js, "const productLabel = saasWorkflowProductLabel(latestTask) || saasModelValueProductLabel", "model value product label is defined before request")
     require(app_js, "function saasModelValueFailureMessage", "precise model value failure toast")
     require(app_js, "模型服务返回错误，可能是模型名不被接受", "merchant-facing model failure reason")
@@ -95,9 +160,10 @@ def main() -> None:
     active_listing_body = listing_body[:disabled_internal_index] if disabled_internal_index >= 0 else listing_body
     publish_intake_index = listing_body.index("renderSaasPublishConfirmationIntakePanel(ctx")
     minimal_index = listing_body.index("renderSaasListingComposerWorkspace")
+    show_publish_flow_index = listing_body.index("const showPublishFlow = Boolean")
     publish_flow_index = listing_body.index("saas-listing-publish-flow")
     boundary_index = listing_body.index("saas-listing-composer-boundary")
-    if not (minimal_index < publish_flow_index < publish_intake_index < boundary_index):
+    if not (show_publish_flow_index < minimal_index < publish_flow_index < publish_intake_index < boundary_index):
         raise AssertionError("Listing daily surface must flow from composer to publish data completion to final confirmation boundary")
     composer_start = app_js.index("function renderSaasListingComposerWorkspace")
     composer_end = app_js.index("function renderSaasListingMinimalWorkspace", composer_start)
@@ -106,23 +172,80 @@ def main() -> None:
     source_cards_index = composer_body.index("renderSaasListingSourceCards")
     if not input_panel_index < source_cards_index:
         raise AssertionError("Listing source alternatives must stay below the primary product input")
+    status_index = composer_body.index("renderSaasListingStatusBar")
+    workflow_index = composer_body.index("renderSaasListingWorkflowProofPanel")
+    opportunity_index = composer_body.index("renderSaasListingOpportunityPanel")
+    draft_editor_index = composer_body.index("renderSaasListingDraftEditor")
+    gap_index = composer_body.index("renderSaasListingGapAndRiskPanel")
+    if not (source_cards_index < status_index < workflow_index < opportunity_index < draft_editor_index < gap_index):
+        raise AssertionError("Listing C+ surface must flow from source selection to market conclusion to draft to asset/profit gaps")
+    for internal_marker in [
+        "Listing Package",
+        "Market Report",
+        "数据包",
+        "后台证据",
+        "local draft",
+        "可导入报告",
+        "极简开始",
+    ]:
+        if internal_marker in composer_body:
+            raise AssertionError(f"Listing daily composer should not show internal/debug copy: {internal_marker}")
+    for internal_marker in [
+        "后台岗位",
+        "后台入口",
+        "后台结果",
+        "后台菜单",
+        "后台工作模块",
+        "后台可自动推进",
+        "AI CEO汇总后台",
+        "AI CEO 汇总后台",
+    ]:
+        if internal_marker in app_js + app_html:
+            raise AssertionError(f"Core SaaS copy should not expose old internal workflow wording: {internal_marker}")
+    draft_start = app_js.index("function renderSaasListingDraftEditor")
+    draft_end = app_js.index("function renderSaasListingGapAndRiskPanel", draft_start)
+    draft_body = app_js[draft_start:draft_end]
+    primary_index = draft_body.index("saas-listing-v2-draft-primary")
+    title_index = draft_body.index('"eBay 标题"')
+    points_index = draft_body.index('"五点卖点"')
+    description_index = draft_body.index('"商品描述"')
+    side_index = draft_body.index("saas-listing-v2-draft-side")
+    price_index = draft_body.index('"价格 / 成本线索"')
+    category_index = draft_body.index('"类目建议"')
+    item_specifics_index = draft_body.index('"Item specifics"')
+    images_index = draft_body.index('"图片 / 素材需求"')
+    logistics_index = draft_body.index('"物流 / 重量 / 尺寸"')
+    if not (
+        primary_index
+        < title_index
+        < points_index
+        < description_index
+        < side_index
+        < price_index
+        < category_index
+        < item_specifics_index
+        < images_index
+        < logistics_index
+    ):
+        raise AssertionError("Listing draft editor must prioritize buyer-facing copy before compact platform parameters")
     intake_start = app_js.index("function renderSaasPublishConfirmationIntakePanel")
     intake_end = app_js.index("function saasListingComposerDraftFromText", intake_start)
     intake_body = app_js[intake_start:intake_end]
     full_form_index = intake_body.index("saas-publish-raw-form-details")
-    base_group_index = intake_body.index("基础信息")
-    platform_group_index = intake_body.index("平台参数")
-    finance_group_index = intake_body.index("价格利润")
-    fulfillment_group_index = intake_body.index("物流履约")
-    asset_group_index = intake_body.index("素材描述")
+    form_start = intake_body.index('<form id="saasPublishIntakeForm"')
+    base_group_index = intake_body.index("基础信息", form_start)
+    platform_group_index = intake_body.index("平台参数", form_start)
+    finance_group_index = intake_body.index("价格利润", form_start)
+    fulfillment_group_index = intake_body.index("物流履约", form_start)
+    asset_group_index = intake_body.index("素材描述", form_start)
     pretest_index = intake_body.index("renderSaasPublishPretestResultSlot")
     if not (
         full_form_index
         < base_group_index
-        < platform_group_index
         < finance_group_index
-        < fulfillment_group_index
         < asset_group_index
+        < platform_group_index
+        < fulfillment_group_index
         < pretest_index
     ):
         raise AssertionError("Listing publish flow must show grouped publish fields in business order before pretest results")
@@ -139,6 +262,109 @@ def main() -> None:
         if internal_marker in active_listing_body:
             raise AssertionError(f"Listing daily surface should not render internal evidence drawer: {internal_marker}")
 
+    bulk_start = app_js.index("function renderSaasBulkCandidatePreview")
+    bulk_end = app_js.index("function renderBulkCandidatePreview", bulk_start)
+    bulk_body = app_js[bulk_start:bulk_end]
+    for internal_marker in [
+        "renderSaasCeoModuleHandoffPanel(\"bulk\"",
+        "真实账号批量质检",
+        "官方数据包",
+        "字段完整度",
+        "批量前置检查",
+        "质检槽位",
+        "等待数据包",
+        "账号、数据包、来源缺口和上线状态放在设置里",
+        "后台检查清单",
+        "后台状态",
+        "Listing Package 和素材工坊",
+    ]:
+        if internal_marker in bulk_body:
+            raise AssertionError(f"Bulk daily surface should not show internal evidence/debug copy: {internal_marker}")
+    bulk_html_start = app_html.index('<section class="view" id="view-bulk"')
+    bulk_html_end = app_html.index('<section class="view" id="view-activity"', bulk_html_start)
+    bulk_html = app_html[bulk_html_start:bulk_html_end]
+    for internal_marker in [
+        "批量铺货 · 批量前质检",
+        "官方资源",
+        "类 eBay 只读数据",
+        "等待前置质检",
+        "官方 eBay packet",
+        "发布前质检",
+        "真实账号状态显示官方数据包",
+        "账号、数据包、来源缺口和上线状态放在设置里",
+    ]:
+        if internal_marker in bulk_html:
+            raise AssertionError(f"Bulk HTML shell should not show internal evidence/debug copy: {internal_marker}")
+    bulk_stage_start = app_js.index("const bulkStageCopy")
+    bulk_stage_end = app_js.index("function updateBulkPreview", bulk_stage_start)
+    bulk_stage_body = app_js[bulk_stage_start:bulk_stage_end]
+    for internal_marker in [
+        "官方 eBay packet",
+        "字段完整度",
+        "通过质检",
+        "发布前正在做风险校验",
+    ]:
+        if internal_marker in bulk_stage_body:
+            raise AssertionError(f"Bulk stage copy should not show internal evidence/debug copy: {internal_marker}")
+
+    media_html_start = app_html.index('<section class="view" id="view-media"')
+    media_html_end = app_html.index('<section class="view" id="view-bulk"', media_html_start)
+    media_html = app_html[media_html_start:media_html_end]
+    media_dynamic_start = app_js.index("function syncSaasMediaProjectDraft")
+    media_dynamic_end = app_js.index("function renderMediaProjectTabs", media_dynamic_start)
+    media_dynamic_body = app_js[media_dynamic_start:media_dynamic_end]
+    for internal_marker in [
+        "官方数据包",
+        "Listing Package",
+        "数据包可用",
+        "等待数据包",
+        "确认记录",
+        "费用和用量",
+        "素材状态拆分",
+        "provider",
+        "素材 brief",
+        "后台证据",
+        "后台状态",
+        "素材清单已回写",
+        "流程导入不需要本机路径",
+    ]:
+        if internal_marker in media_html:
+            raise AssertionError(f"Media daily HTML should not show internal evidence/provider copy: {internal_marker}")
+        if internal_marker in media_dynamic_body:
+            raise AssertionError(f"Media daily dynamic copy should not show internal evidence/provider copy: {internal_marker}")
+
+    service_html_start = app_html.index('<section class="view" id="view-service"')
+    service_html_end = app_html.index('<section class="view" id="view-connect"', service_html_start)
+    service_html = app_html[service_html_start:service_html_end]
+    service_dynamic_start = app_js.index("function renderSaasServiceCenter")
+    service_dynamic_end = app_js.index("function renderConversations", service_dynamic_start)
+    service_dynamic_body = app_js[service_dynamic_start:service_dynamic_end]
+    for expected in [
+        "买家消息先整理，关键承诺你确认",
+        "买家问什么、订单到哪、回复怎么说",
+        "消息、订单、回复",
+        "没有真实订单时保持空白",
+        "暂无真实订单或消息",
+    ]:
+        require(service_html + service_dynamic_body, expected, f"Service simple daily copy: {expected}")
+    for internal_marker in [
+        "官方数据包",
+        "Listing Package",
+        "等待官方订单",
+        "等待官方同步",
+        "官方数据可用",
+        "客服事实表",
+        "Provider Hub",
+        "provider",
+        "后台排查",
+        "连接和排查在设置",
+        "去设置同步 eBay",
+    ]:
+        if internal_marker in service_html:
+            raise AssertionError(f"Service daily HTML should not show internal evidence/provider copy: {internal_marker}")
+        if internal_marker in service_dynamic_body:
+            raise AssertionError(f"Service daily dynamic copy should not show internal evidence/provider copy: {internal_marker}")
+
     require(styles, "body.saas-public-mvp #appShell .main > .topbar", "topbar suppression")
     require(styles, "body.saas-public-mvp #appShell .global-flow-bar", "global flow suppression")
     require(styles, "body.saas-public-mvp .saas-settings-clean-shell", "clean settings styling")
@@ -146,23 +372,38 @@ def main() -> None:
     require(styles, "body.saas-public-mvp .saas-listing-composer", "Listing Composer styling")
     require(styles, "body.saas-public-mvp .saas-listing-v2-status-bar", "Listing status bar styling")
     require(styles, "body.saas-public-mvp .saas-listing-v2-status-items", "Listing status items styling")
+    require(styles, "body.saas-public-mvp .saas-listing-workflow-proof", "Listing workflow loop result styling")
+    require(styles, "body.saas-public-mvp .saas-listing-workflow-proof-grid", "Listing workflow loop grid styling")
     require(styles, "grid-template-columns: repeat(5, minmax(0, 1fr));", "Listing five-step status grid")
     require(styles, "body.saas-public-mvp .saas-listing-v2-source-grid", "Listing v2 source styling")
     require(styles, "body.saas-public-mvp .saas-listing-v2-draft-editor", "Listing v2 editor styling")
+    require(styles, "body.saas-public-mvp .saas-listing-v2-draft-layout", "Listing draft split layout styling")
+    require(styles, "body.saas-public-mvp .saas-listing-v2-draft-primary", "Listing draft primary column styling")
+    require(styles, "body.saas-public-mvp .saas-listing-v2-draft-side", "Listing draft side column styling")
+    require(styles, "body.saas-public-mvp .saas-listing-v2-field.is-compact", "Listing compact draft fields styling")
     require(styles, "body.saas-public-mvp .saas-listing-v2-risk-panel", "Listing v2 risk styling")
     require(styles, "body.saas-public-mvp .saas-listing-publish-flow", "Listing direct publish flow styling")
     require(styles, "body.saas-public-mvp .saas-listing-input-panel", "Listing simple input panel styling")
+    require(styles, "body.saas-public-mvp .saas-listing-ai-handoff", "AI CEO to Listing handoff styling")
     require(styles, "body.saas-public-mvp .saas-listing-input-chips button", "Listing input chip styling")
     require(styles, "body.saas-public-mvp .saas-listing-composer-input textarea", "Listing Composer main textarea styling")
+    require(styles, "body.saas-public-mvp .workflow-feedback-shell", "mobile feedback entry controlled separately")
+    require(styles, "body.saas-public-mvp .workflow-feedback-drawer", "mobile feedback drawer avoids bottom navigation")
+    require(styles, "display: none;", "mobile feedback toggle hidden to avoid blocking navigation")
+    require(styles, "bottom: calc(70px + env(safe-area-inset-bottom, 0px));", "feedback drawer remains bottom-safe if opened")
     require(styles, ".saas-publish-guide-panel", "publish guide styling")
     require(styles, ".saas-publish-guide-grid", "publish guide grid styling")
     require(styles, ".saas-publish-raw-form-details", "publish raw form expanded panel styling")
     require(styles, ".saas-publish-raw-form-head", "publish raw form expanded head styling")
+    require(styles, ".saas-publish-readiness-strip", "publish completion strip styling")
     require(styles, ".saas-publish-form-group", "publish form group styling")
     require(styles, ".saas-publish-form-fields", "publish form fields grid styling")
     require(styles, ".saas-publish-form-group-head", "publish form group heading styling")
+    require(styles, ".saas-publish-form-step", "publish form step badge styling")
     require(styles, ".saas-listing-pretest-result", "publish pretest result slot styling")
     require(styles, ".saas-listing-pretest-empty", "publish pretest empty state styling")
+    require(styles, ".bulk-saas-roadmap", "bulk simple roadmap styling")
+    require(styles, ".bulk-saas-lane-list", "bulk lane list styling")
     require(styles, "body.saas-public-mvp[data-view=\"product\"] .saas-real-listing-header", "old Listing header hidden on daily surface")
     require(styles, "body.saas-public-mvp .saas-ceo-module-handoff", "handoff suppression")
 

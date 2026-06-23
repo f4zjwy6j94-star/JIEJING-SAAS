@@ -280,7 +280,11 @@ async function main() {
   await page.waitForLoadState("networkidle", { timeout: 45000 }).catch(() => {});
   await waitForWorkbenchReady(page, "view-cockpit");
   await waitForVisibleCeoComposer(page);
-  await page.locator('#view-cockpit.is-active #ceoInput').fill("UI smoke composer check", { timeout: 15000 });
+  await page
+    .locator("#view-cockpit.is-active #ceoInput")
+    .fill("帮我调研 eBay 热销收纳小商品，并先整理 Listing 草稿", { timeout: 15000 });
+  await page.locator("#view-cockpit.is-active #ceoForm").evaluate((form) => form.requestSubmit());
+  await page.waitForTimeout(1200);
 
   const modules = [
     ["cockpit", "view-cockpit"],
@@ -321,6 +325,21 @@ async function main() {
           handoff_style: styleOf(".saas-ceo-module-handoff"),
           has_listing_simple_head: Boolean(document.querySelector(".saas-listing-simple-head")),
           has_listing_products: Boolean(document.querySelector(".saas-listing-simple-products")),
+          has_listing_cplus_stack: sectionHas(".saas-listing-cplus-stack"),
+          has_listing_input_panel: sectionHas(".saas-listing-input-panel"),
+          has_listing_source_grid: sectionHas(".saas-listing-v2-source-grid"),
+          has_listing_status_rail: sectionHas(".saas-listing-v2-status-bar"),
+          has_listing_workflow_action: sectionHas('[data-saas-action="listing-start-backend-workflow"]') && text.includes("生成经营链路"),
+          has_listing_ai_handoff: sectionHas(".saas-listing-ai-handoff") && text.includes("来自 AI CEO"),
+          has_listing_ai_handoff_input: String(section?.querySelector("#saasListingComposerInput")?.value || "").includes("不要触发真实 eBay 写入"),
+          has_listing_market_stage: text.includes("市场结论"),
+          has_listing_draft_stage: text.includes("Listing 草稿"),
+          has_listing_asset_profit_stage: text.includes("素材/利润"),
+          has_listing_publish_confirmation_stage: text.includes("发布确认"),
+          has_listing_internal_copy: /Listing Package|Market Report|数据包|后台证据|后台排查|local draft|可导入报告|极简开始/.test(text),
+          has_direct_publish_button: Array.from(section?.querySelectorAll("button") || []).some((button) =>
+            /直接发布|立即发布/.test(button.innerText || ""),
+          ),
           has_publish_health_report: sectionHas(".saas-publish-health-report"),
           has_publish_health_report_title: text.includes("发布体检红黄绿报告"),
           publish_health_color_count: sectionCount(
@@ -335,7 +354,20 @@ async function main() {
           has_settings_shell: Boolean(document.querySelector(".saas-settings-clean-shell")),
           settings_tab_count: document.querySelectorAll("[data-saas-settings-tab]").length,
           has_media_tabs: Boolean(document.querySelector("#mediaProjectTabs, .media-project-tabs, [data-media-project-tab]")),
-          has_bulk_quality: Boolean(document.querySelector("#view-bulk .bulk-quality, #view-bulk .saas-bulk-quality, #view-bulk [data-saas-action]")),
+          has_media_simple_headline: text.includes("把商品图变成可用素材包"),
+          has_media_simple_flow:
+            text.includes("选来源") &&
+            text.includes("选素材包") &&
+            text.includes("看预览") &&
+            text.includes("回写 Listing"),
+          has_media_internal_copy: /官方数据包|Listing Package|数据包可用|等待数据包|确认记录|费用和用量|素材状态拆分|Provider Hub|素材 Provider|素材 brief|后台证据|后台状态|素材清单已回写|流程导入不需要本机路径/.test(text),
+          has_bulk_simple_headline: text.includes("先小批量筛，不一键乱铺"),
+          has_bulk_roadmap: sectionHas(".bulk-saas-roadmap"),
+          has_bulk_grouping_copy: text.includes("建议先测") && text.includes("需要补资料") && text.includes("暂时不做"),
+          has_bulk_internal_copy: /真实账号批量质检|官方数据包|字段完整度|质检槽位|等待数据包/.test(text),
+          has_service_simple_headline: text.includes("三件事：消息、订单、回复"),
+          has_service_simple_flow: text.includes("消息、订单、回复") && text.includes("没有真实订单时保持空白"),
+          has_service_internal_copy: /官方数据包|Listing Package|等待官方订单|等待官方同步|官方数据可用|客服事实表|Provider Hub|provider|后台排查|后台状态|连接和排查在设置|去设置同步 eBay/.test(text),
           has_chat_reply: Boolean(document.querySelector("#view-cockpit #ceoChat .message.ai")),
           has_chat_stream: Boolean(document.querySelector("#view-cockpit #ceoChat")),
           has_ceo_composer_visible: (() => {
@@ -402,17 +434,30 @@ async function main() {
     if (check.has_login_overlay) failures.push(`${check.view} login overlay visible`);
   }
   const product = moduleChecks.find((item) => item.view === "product") || {};
-  if (!product.has_listing_simple_head || !product.has_listing_products) failures.push("product simple listing surface missing");
-  if (!product.has_publish_health_report || !product.has_publish_health_report_title) failures.push("product publish health report missing");
-  if (Number(product.publish_health_color_count || 0) < 3) failures.push("product publish health red/yellow/green summary missing");
-  if (Number(product.publish_health_source_count || 0) < 4) failures.push("product publish health evidence sources missing");
-  if (!product.has_backend_preflight_panel || !product.has_backend_preflight_waiting_copy) failures.push("product backend preflight evidence panel missing");
-  if (Number(product.backend_preflight_action_count || 0) < 2) failures.push("product backend preflight actions missing");
-  if (!product.has_incident_mode_ops || !product.has_incident_mode_copy) failures.push("product account health incident mode ops missing");
+  if (!product.has_listing_cplus_stack || !product.has_listing_input_panel) failures.push("product C+ listing input surface missing");
+  if (!product.has_listing_ai_handoff || !product.has_listing_ai_handoff_input) failures.push("product AI CEO to Listing handoff missing");
+  if (!product.has_listing_source_grid || !product.has_listing_status_rail) failures.push("product C+ listing source/status rail missing");
+  if (!product.has_listing_workflow_action) failures.push("product C+ listing backend workflow action missing");
+  if (!product.has_listing_market_stage || !product.has_listing_draft_stage) failures.push("product C+ market-to-draft flow missing");
+  if (!product.has_listing_asset_profit_stage || !product.has_listing_publish_confirmation_stage) {
+    failures.push("product C+ asset/profit or publish confirmation stage missing");
+  }
+  if (product.has_listing_internal_copy) failures.push("product daily Listing surface exposes internal report/debug copy");
+  if (product.has_direct_publish_button) failures.push("product daily Listing surface exposes a direct publish button");
   const connect = moduleChecks.find((item) => item.view === "connect") || {};
   if (!connect.has_settings_shell || connect.settings_tab_count !== 7) failures.push("settings clean shell/tabs missing");
   const media = moduleChecks.find((item) => item.view === "media") || {};
   if (!media.has_media_tabs) failures.push("media tabs missing");
+  if (!media.has_media_simple_headline || !media.has_media_simple_flow) failures.push("media simple workflow surface missing");
+  if (media.has_media_internal_copy) failures.push("media daily surface exposes internal evidence/provider copy");
+  const bulk = moduleChecks.find((item) => item.view === "bulk") || {};
+  if (!bulk.has_bulk_simple_headline || !bulk.has_bulk_roadmap || !bulk.has_bulk_grouping_copy) {
+    failures.push("bulk simple grouping surface missing");
+  }
+  if (bulk.has_bulk_internal_copy) failures.push("bulk daily surface exposes internal evidence/debug copy");
+  const service = moduleChecks.find((item) => item.view === "service") || {};
+  if (!service.has_service_simple_headline || !service.has_service_simple_flow) failures.push("service simple workflow surface missing");
+  if (service.has_service_internal_copy) failures.push("service daily surface exposes internal evidence/provider copy");
   const cockpit = moduleChecks.find((item) => item.view === "cockpit") || {};
   if (!cockpit.has_chat_stream || !cockpit.has_ceo_composer_visible || !cockpit.chat_before_form) {
     failures.push("AI CEO chat stream/composer missing or wrong order");
