@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   color-scheme: light;
   --bg: #f5f7f8;
   --surface: #ffffff;
@@ -28696,6 +28696,100 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-message-body .saas-ai-ceo
   }
 }
 
+/* 2026-06-24 AI CEO minimal routing final lock: this must stay at file end. */
+body.saas-public-mvp[data-view="cockpit"] #view-cockpit.is-active {
+  align-items: center !important;
+  padding: 24px !important;
+  background: #ffffff !important;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
+  width: min(100%, 920px) !important;
+  min-height: calc(100vh - 56px) !important;
+  align-items: center !important;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-layout,
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread {
+  width: min(100%, 820px) !important;
+  max-width: 820px !important;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread-intro {
+  width: min(100%, 720px) !important;
+  max-width: 720px !important;
+  margin: 0 auto 18px !important;
+  text-align: center !important;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread-intro h2 {
+  font-size: 34px !important;
+  font-weight: 620 !important;
+  line-height: 1.18 !important;
+  letter-spacing: 0 !important;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread-intro p:not(.eyebrow) {
+  max-width: 520px !important;
+  margin: 10px auto 0 !important;
+  font-size: 14px !important;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-starter-prompts {
+  display: none !important;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer-dock,
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chat-stream,
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chat-stream:not(:empty),
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-route-task-slot {
+  width: min(100%, 760px) !important;
+  max-width: 760px !important;
+  margin-right: auto !important;
+  margin-left: auto !important;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer {
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  min-height: 64px !important;
+  padding: 8px 8px 8px 16px !important;
+  border-radius: 8px !important;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card {
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  align-items: center !important;
+  padding: 12px !important;
+  border-radius: 8px !important;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card > div,
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-main {
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+@media (max-width: 700px) {
+  body.saas-public-mvp[data-view="cockpit"] #view-cockpit.is-active {
+    padding: 16px 12px !important;
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread-intro h2 {
+    font-size: 28px !important;
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer,
+  body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer .primary-action,
+  body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card .primary-action {
+    width: 100% !important;
+  }
+}
+
 /* 2026-06-21 minimal Listing: keep daily work simple, move system proof into details. */
 body.saas-public-mvp[data-view="product"] .saas-real-listing-header,
 body.saas-public-mvp[data-view="product"] .saas-ceo-module-handoff {
@@ -38217,5 +38311,181 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-message-body .saas-ai-ceo
 
   body.saas-public-mvp[data-view="cockpit"] #view-cockpit.is-active {
     padding: 38px 26px 28px !important;
+  }
+}
+
+/* 2026-06-24 AI CEO minimal routing v2: keep the first screen as a plain conversation entry. */
+body.saas-public-mvp[data-view="cockpit"] #view-cockpit.is-active {
+  align-items: center;
+  padding: 24px;
+  background: #ffffff;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
+  width: min(100%, 920px);
+  min-height: calc(100vh - 56px);
+  align-items: center;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-layout,
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread {
+  width: min(100%, 820px);
+  max-width: 820px;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread-intro {
+  width: min(100%, 720px);
+  max-width: 720px;
+  margin: 0 auto 18px;
+  padding: 0;
+  text-align: center;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread-intro .eyebrow {
+  display: block !important;
+  margin: 0 0 8px;
+  color: #08766e;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread-intro h2 {
+  margin: 0;
+  color: #111814;
+  font-size: 34px;
+  font-weight: 620;
+  line-height: 1.18;
+  letter-spacing: 0;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread-intro p:not(.eyebrow) {
+  display: block !important;
+  max-width: 520px;
+  margin: 10px auto 0;
+  color: #66736e;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-starter-prompts {
+  display: none !important;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer-dock,
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chat-stream,
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chat-stream:not(:empty),
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-route-task-slot {
+  width: min(100%, 760px);
+  max-width: 760px;
+  margin-right: auto;
+  margin-left: auto;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer-dock {
+  margin-top: 0;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer {
+  min-height: 64px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 8px 8px 8px 16px;
+  border: 1px solid rgba(17, 24, 20, 0.16);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(17, 24, 20, 0.1);
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer input {
+  min-height: 46px;
+  color: #111814;
+  font-size: 16px;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer .primary-action {
+  min-width: 76px;
+  min-height: 46px;
+  border-radius: 8px;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-route-task-slot {
+  margin-top: 12px;
+  margin-bottom: 14px;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(184, 209, 197, 0.78);
+  border-radius: 8px;
+  background: #f9fbfa;
+  box-shadow: none;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card > div,
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-main {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card span {
+  display: block;
+  margin: 0 0 4px;
+  color: #08766e;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card strong {
+  display: block;
+  color: #111814;
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card p {
+  margin: 4px 0 0;
+  color: #5f6d67;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card .primary-action {
+  min-width: 104px;
+  min-height: 42px;
+  border-radius: 8px;
+}
+
+@media (max-width: 700px) {
+  body.saas-public-mvp[data-view="cockpit"] #view-cockpit.is-active {
+    padding: 16px 12px;
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
+    min-height: calc(100vh - 32px);
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread-intro h2 {
+    font-size: 28px;
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread-intro p:not(.eyebrow) {
+    font-size: 13px;
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer,
+  body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer .primary-action,
+  body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card .primary-action {
+    width: 100%;
   }
 }

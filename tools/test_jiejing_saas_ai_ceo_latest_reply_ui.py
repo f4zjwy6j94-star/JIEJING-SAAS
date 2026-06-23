@@ -34,9 +34,10 @@ def main() -> int:
         "function updateCeoAssistantMessage(messageId, text, status = \"\", model = null, sourceRecords = [])",
         "updateCeoAssistantMessage(pendingMessageId, answer, chat?.status || \"\", chat?.model_client || null, sourceRecords)",
         "直接说，我来处理",
-        "普通问题直接回答；eBay 经营任务会拆成工作流",
-        "需要最新信息会联网查来源",
-        "问问题，或发商品/链接/图片",
+        "普通问题直接答；经营任务我带到对应模块；真实动作先确认。",
+        "直接输入问题、商品、链接、图片或订单情况",
+        "AI CEO 下一步",
+        "继续 Listing",
         "function renderSaasAiCeoSourceRecordsMarkup",
         "function renderSaasAiCeoWorkDetailMarkup",
         "function shouldShowSaasAiCeoWorkDetail",
@@ -78,6 +79,8 @@ def main() -> int:
         "min-height: 64px;",
         "overflow-y: auto",
         "min-height: 0;",
+        "2026-06-24 AI CEO minimal routing v2",
+        ".saas-ceo-routing-main",
     ]
     for needle in required_css:
         if needle not in css:

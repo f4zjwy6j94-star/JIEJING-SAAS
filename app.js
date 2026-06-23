@@ -17268,21 +17268,16 @@ function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
     route.view === "confirm"
       ? "去决策中心"
       : route.view === "product"
-        ? "去 Listing"
+        ? "继续 Listing"
         : route.view === "bulk"
-          ? "去小批量实验台"
-          : `去${route.label || "推荐模块"}`;
+          ? "继续小批量实验台"
+          : `继续${route.label || "推荐模块"}`;
   return `
     <section class="saas-ceo-routing-task-card ${current.high_risk ? "is-risk" : ""}" aria-label="AI CEO 下一步任务卡">
-      <div>
-        <span>我理解你的目标</span>
-        <strong>${escapeHtml(saasCeoTaskGoalLabel(current))}</strong>
-        <p>${escapeHtml(current.text)}</p>
-      </div>
-      <div>
-        <span>建议去</span>
+      <div class="saas-ceo-routing-main">
+        <span>AI CEO 下一步</span>
         <strong>${escapeHtml(route.label || "推荐模块")}</strong>
-        <p>${escapeHtml(saasCeoTaskNextCopy(route, current))}</p>
+        <p>${escapeHtml(saasCeoTaskGoalLabel(current))}。${escapeHtml(saasCeoTaskNextCopy(route, current))}</p>
       </div>
       <button class="primary-action compact-action" type="button" data-global-flow-view="${escapeHtml(route.view)}" data-global-flow-key="${escapeHtml(route.key || route.view)}">
         ${escapeHtml(buttonLabel)}
@@ -24964,22 +24959,13 @@ function renderSaasCockpitRealWorkbench() {
             <div class="saas-ai-ceo-thread-intro ${hasVisibleCeoChat ? "is-compact" : "is-empty"}">
               <p class="eyebrow">JIEJING AI CEO</p>
               <h2>${hasVisibleCeoChat ? "AI CEO" : "直接说，我来处理"}</h2>
-              <p>${hasVisibleCeoChat ? "继续当前对话。" : "普通问题直接回答；eBay 经营任务会拆成工作流；需要最新信息会联网查来源；真实动作先进决策中心。"}</p>
+              <p>${hasVisibleCeoChat ? "继续当前对话。" : "普通问题直接答；经营任务我带到对应模块；真实动作先确认。"}</p>
             </div>
             <div class="chat-log saas-ai-ceo-chat-stream" id="ceoChat" aria-live="polite">${visibleCommandChat}</div>
             <div class="saas-ceo-route-task-slot" id="saasCeoRouteTaskSlot">${renderSaasCeoRoutingTaskCard(visibleCommand)}</div>
             <div class="saas-ai-ceo-composer-dock">
-              <div class="saas-ai-ceo-starter-prompts" aria-label="AI CEO 常用入口">
-                ${starterPrompts
-                  .map(
-                    ([label, prompt]) => `
-                      <button type="button" data-ceo-prompt="${escapeHtml(prompt)}">${escapeHtml(label)}</button>
-                    `,
-                  )
-                  .join("")}
-              </div>
               <form class="chat-compose saas-ai-ceo-composer" id="ceoForm">
-                <input id="ceoInput" type="text" placeholder="问问题，或发商品/链接/图片" autocomplete="off" />
+                <input id="ceoInput" type="text" placeholder="直接输入问题、商品、链接、图片或订单情况" autocomplete="off" />
                 <button type="submit" class="primary-action" aria-label="发送给 AI CEO">发送</button>
               </form>
             </div>

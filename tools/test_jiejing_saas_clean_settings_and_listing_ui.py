@@ -62,9 +62,10 @@ def main() -> None:
     require(app_js, "function syncSaasCeoCommandToListing", "AI CEO Listing handoff sync")
     require(app_js, 'return "general_chat"', "AI CEO ordinary consultation route")
     require(app_js, "function renderSaasCeoRoutingTaskCard", "AI CEO lightweight routing task card")
-    require(app_js, "我理解你的目标", "AI CEO task card goal copy")
-    require(app_js, "建议去", "AI CEO task card module recommendation copy")
-    require(app_js, "去小批量实验台", "AI CEO task card bulk next button")
+    require(app_js, "AI CEO 下一步", "AI CEO compact task card heading")
+    require(app_js, "saas-ceo-routing-main", "AI CEO compact task card layout")
+    require(app_js, "继续小批量实验台", "AI CEO compact task card bulk next button")
+    require(app_js, "直接输入问题、商品、链接、图片或订单情况", "AI CEO low-learning-cost composer placeholder")
     require(app_js, "current.intent !== \"listing\"", "AI CEO prevents non-Listing intents from being hijacked by Listing")
     require(app_js, "AI CEO 已收到，Listing 已接住这个目标。", "AI CEO Listing handoff toast")
     require(app_js, "请按市场结论 → Listing 草稿 → 素材/利润 → 发布确认的顺序整理；不要触发真实 eBay 写入。", "safe Listing handoff prompt")
@@ -488,6 +489,7 @@ def main() -> None:
     require(styles, ".bulk-saas-lane-list", "bulk lane list styling")
     require(styles, "body.saas-public-mvp[data-view=\"product\"] .saas-real-listing-header", "old Listing header hidden on daily surface")
     require(styles, "body.saas-public-mvp .saas-ceo-module-handoff", "handoff suppression")
+    require(styles, "2026-06-24 AI CEO minimal routing v2", "AI CEO minimal routing final override")
 
     forbidden_merchant_copy = [
         "上架主线",

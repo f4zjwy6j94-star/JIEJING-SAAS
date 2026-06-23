@@ -399,12 +399,16 @@ async function main() {
           has_ceo_route_task_card: Boolean(document.querySelector("#view-cockpit .saas-ceo-routing-task-card")),
           ceo_route_task_target: document.querySelector("#view-cockpit .saas-ceo-routing-task-card [data-global-flow-view]")?.getAttribute("data-global-flow-view") || "",
           ceo_route_task_copy:
-            text.includes("我理解你的目标") &&
-            text.includes("建议去") &&
-            text.includes("去 Listing"),
+            text.includes("AI CEO 下一步") &&
+            text.includes("Listing") &&
+            text.includes("继续 Listing"),
           ceo_route_task_internal_copy: /packet|provider|preflight|数据包|后台|排查/i.test(
             document.querySelector("#view-cockpit .saas-ceo-routing-task-card")?.innerText || "",
           ),
+          ceo_starter_prompts_visible: (() => {
+            const prompts = document.querySelector("#view-cockpit .saas-ai-ceo-starter-prompts");
+            return Boolean(prompts && getComputedStyle(prompts).display !== "none");
+          })(),
           has_ceo_composer_visible: (() => {
             const input = document.querySelector("#view-cockpit #ceoInput");
             const form = document.querySelector("#view-cockpit #ceoForm");
@@ -554,6 +558,9 @@ async function main() {
   }
   if (!cockpit.has_ceo_route_task_card || !cockpit.ceo_route_task_copy) {
     failures.push("AI CEO routing task card copy missing");
+  }
+  if (cockpit.ceo_starter_prompts_visible) {
+    failures.push("AI CEO first screen still exposes starter prompt buttons");
   }
   if (cockpit.has_collapsed_history) failures.push("AI CEO conversation is still hidden behind a collapsed history section");
 
