@@ -5399,30 +5399,46 @@ function renderCeoBatchPreview() {
 }
 
 function renderBulkPreferenceButtons() {
-  return batchPreferenceGroups
-    .map(
-      (group) => `
-        <section class="bulk-pref-group">
-          <div class="bulk-pref-group-head">
+  const activeByGroup = (titles = []) =>
+    batchPreferenceGroups
+      .filter((group) => titles.includes(group.title))
+      .flatMap((group) => group.items.filter(([key]) => state.batchSourcingPrefs.includes(key)).map(([key, label, note]) => [key, label, note, group.title]));
+  const groups = [
+    {
+      title: "经营取向",
+      summary: "稳妥试水，先看轻小件和资料清楚的品。",
+      items: activeByGroup(["经营取向", "利润"]),
+    },
+    {
+      title: "风险底线",
+      summary: "侵权、禁限售、资料缺失和高售后先拦住。",
+      items: activeByGroup(["售后", "合规"]),
+    },
+    {
+      title: "履约资料",
+      summary: "供应、时效、尺寸、重量和图片授权要能说清。",
+      items: activeByGroup(["履约", "资料"]),
+    },
+  ];
+  return groups
+    .map((group) => {
+      const tags = group.items.slice(0, 4);
+      return `
+        <section class="bulk-pref-summary-card">
+          <div class="bulk-pref-summary-head">
             <strong>${escapeHtml(group.title)}</strong>
-            <span>${escapeHtml(group.note)}</span>
+            <span>${escapeHtml(group.summary)}</span>
           </div>
-          <div class="bulk-pref-options">
-            ${group.items
-              .map(([key, label, note]) => {
-                const active = state.batchSourcingPrefs.includes(key);
-                return `
-                  <button class="${active ? "is-active" : ""}" type="button" data-bulk-pref="${escapeHtml(key)}" aria-pressed="${active}">
-                    <strong>${escapeHtml(label)}</strong>
-                    <span>${escapeHtml(note)}</span>
-                  </button>
-                `;
-              })
-              .join("")}
+          <div class="bulk-pref-summary-tags">
+            ${
+              tags.length
+                ? tags.map(([key, label]) => `<button type="button" data-bulk-pref="${escapeHtml(key)}">${escapeHtml(label)}</button>`).join("")
+                : "<em>按默认底线筛选</em>"
+            }
           </div>
         </section>
-      `,
-    )
+      `;
+    })
     .join("");
 }
 
@@ -26989,6 +27005,21 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
     : hasOfficialOrders
       ? "先处理需要回复的买家消息"
       : "暂无真实订单或消息";
+  const serviceActionButtons = (() => {
+    if (!ctx.connection) {
+      return '<button class="primary-action" type="button" data-global-flow-view="connect">连接 eBay 店铺</button>';
+    }
+    if (pendingServiceConfirmations.length) {
+      return '<button class="primary-action" type="button" data-global-flow-view="confirm">处理需要确认的回复</button>';
+    }
+    if (!hasListings) {
+      return '<button class="secondary-action" type="button" data-global-flow-view="product">先补 Listing 商品档案</button>';
+    }
+    if (!hasOfficialOrders) {
+      return '<span class="saas-service-waiting-note">等真实订单或买家消息进来，这里再开始起草回复。</span>';
+    }
+    return '<button class="primary-action" type="button" data-global-flow-view="confirm">查看需要确认的回复</button>';
+  })();
   view.innerHTML = `
       <section class="panel full saas-real-service-center" aria-label="客服与订单工作台">
       <header class="product-manager-header saas-real-listing-header">
@@ -27051,9 +27082,7 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
       <div class="saas-service-action-strip">
         <strong>下一步</strong>
         <div>
-          <button class="secondary-action" type="button" data-global-flow-view="connect">连接店铺</button>
-          <button class="secondary-action" type="button" data-global-flow-view="product">看 Listing 商品档案</button>
-          <button class="primary-action" type="button" data-global-flow-view="confirm">去决策中心</button>
+          ${serviceActionButtons}
         </div>
       </div>
     </section>
