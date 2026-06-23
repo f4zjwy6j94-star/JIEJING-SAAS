@@ -285,6 +285,26 @@ async function main() {
     .fill("帮我调研 eBay 热销收纳小商品，并先整理 Listing 草稿", { timeout: 15000 });
   await page.locator("#view-cockpit.is-active #ceoForm").evaluate((form) => form.requestSubmit());
   await page.waitForTimeout(1200);
+  const ceoRouteTask = await page.evaluate(() => {
+    const card = document.querySelector("#view-cockpit .saas-ceo-routing-task-card");
+    const button = card?.querySelector("[data-global-flow-view]");
+    return {
+      visible: Boolean(card && card.offsetParent !== null),
+      text: card?.innerText || "",
+      target: button?.getAttribute("data-global-flow-view") || "",
+      button: button?.innerText || "",
+      has_internal_copy: /packet|provider|preflight|数据包|后台|排查/i.test(card?.innerText || ""),
+    };
+  });
+  if (ceoRouteTask.visible) {
+    await page.locator('#view-cockpit .saas-ceo-routing-task-card [data-global-flow-view="product"]').click();
+    await waitForWorkbenchReady(page, "view-product");
+    await page.waitForTimeout(500);
+    ceoRouteTask.clicked_product_route = await page.evaluate(() => document.body?.dataset?.view === "product");
+    await page.locator('.nav-item[data-view="cockpit"]').click();
+    await waitForWorkbenchReady(page, "view-cockpit");
+    await page.waitForTimeout(400);
+  }
 
   const modules = [
     ["cockpit", "view-cockpit"],
@@ -376,6 +396,15 @@ async function main() {
           has_confirm_internal_copy: /高级细节|上线检查|后台|运维|preflight|packet|provider/.test(text),
           has_chat_reply: Boolean(document.querySelector("#view-cockpit #ceoChat .message.ai")),
           has_chat_stream: Boolean(document.querySelector("#view-cockpit #ceoChat")),
+          has_ceo_route_task_card: Boolean(document.querySelector("#view-cockpit .saas-ceo-routing-task-card")),
+          ceo_route_task_target: document.querySelector("#view-cockpit .saas-ceo-routing-task-card [data-global-flow-view]")?.getAttribute("data-global-flow-view") || "",
+          ceo_route_task_copy:
+            text.includes("我理解你的目标") &&
+            text.includes("建议去") &&
+            text.includes("去 Listing"),
+          ceo_route_task_internal_copy: /packet|provider|preflight|数据包|后台|排查/i.test(
+            document.querySelector("#view-cockpit .saas-ceo-routing-task-card")?.innerText || "",
+          ),
           has_ceo_composer_visible: (() => {
             const input = document.querySelector("#view-cockpit #ceoInput");
             const form = document.querySelector("#view-cockpit #ceoForm");
@@ -456,6 +485,7 @@ async function main() {
     badResponses,
     screenshotFailures,
     navCount: await page.locator(".nav-item").count(),
+    ceoRouteTask,
     moduleChecks,
   };
   fs.writeFileSync(path.join(outDir, "result.json"), JSON.stringify(result, null, 2));
@@ -515,6 +545,15 @@ async function main() {
   const cockpit = moduleChecks.find((item) => item.view === "cockpit") || {};
   if (!cockpit.has_chat_stream || !cockpit.has_ceo_composer_visible || !cockpit.chat_before_form) {
     failures.push("AI CEO chat stream/composer missing or wrong order");
+  }
+  if (!ceoRouteTask.visible || ceoRouteTask.target !== "product" || !ceoRouteTask.clicked_product_route) {
+    failures.push("AI CEO lightweight routing task card did not route to Listing");
+  }
+  if (ceoRouteTask.has_internal_copy || cockpit.ceo_route_task_internal_copy) {
+    failures.push("AI CEO routing task card exposes internal packet/provider/preflight copy");
+  }
+  if (!cockpit.has_ceo_route_task_card || !cockpit.ceo_route_task_copy) {
+    failures.push("AI CEO routing task card copy missing");
   }
   if (cockpit.has_collapsed_history) failures.push("AI CEO conversation is still hidden behind a collapsed history section");
 

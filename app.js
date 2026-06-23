@@ -5477,7 +5477,7 @@ function syncBulkSaasStatusCounters() {
   const note = document.querySelector("#view-bulk .bulk-proof-note");
   if (note) {
     note.textContent =
-      "这里只做一件事：先筛一小批，再把能继续的候选送去草稿。发布、付款、改价、库存和广告都不会自动执行。";
+      "这里只有一个目标：用最小批次看清机会和风险。发布、付款、改价、库存和广告都不会自动执行。";
   }
 }
 
@@ -5493,19 +5493,19 @@ function renderSaasBulkCandidatePreview() {
     return `
       <div class="bulk-candidate-head bulk-candidate-decision-head">
         <div>
-          <span>批量铺货</span>
+          <span>小批量实验台</span>
           <strong>先小批量筛，不一键乱铺</strong>
-          <p>左侧只选数量和边界。AI CEO 会把候选分成三类：建议先测、需要补资料、暂时不做；同意后才送去 Listing 和素材工坊。</p>
+          <p>左侧只选数量、货源和边界，用最小批次看清机会和风险。AI CEO 会把候选分成三类：建议先测、需要补资料、暂时不做；同意后才送去 Listing 和素材工坊。</p>
         </div>
         <div class="bulk-candidate-actions">
-          <button class="primary-action" type="button" data-bulk-action="generate-candidates">生成候选分组</button>
+          <button class="primary-action" type="button" data-bulk-action="generate-candidates">生成三类候选</button>
         </div>
       </div>
       <div class="bulk-saas-roadmap" aria-label="批量铺货顺序">
         <article>
           <span>01</span>
-          <strong>定边界</strong>
-          <p>先选数量、利润底线、履约方式和风险偏好。</p>
+          <strong>选数量 / 货源 / 边界</strong>
+          <p>先确定这轮看多少个、从哪里找货、哪些风险不碰。</p>
         </article>
         <article>
           <span>02</span>
@@ -5522,7 +5522,7 @@ function renderSaasBulkCandidatePreview() {
         <div>
           <span>当前批次</span>
           <strong>准备筛 ${escapeHtml(countLabel)} 个候选方向</strong>
-          <p>${escapeHtml(sourceHint)} 本页只看去留、补资料和下一步草稿，不让商家处理连接配置。</p>
+          <p>${escapeHtml(sourceHint)} 本页只看去留、补资料和下一步草稿，不让商家处理后台配置。</p>
         </div>
         <button class="secondary-action" type="button" data-bulk-action="report">查看批量汇报</button>
       </div>
@@ -17002,11 +17002,15 @@ function persistSaasLastCeoCommand(command = state.saasLastCeoCommand) {
 function saasCeoCommandIntent(text = "") {
   const raw = String(text || "");
   const has = (pattern) => pattern.test(raw);
-  if (has(/批量|铺货|选品|候选|机会|多款|多品|清单|列表/)) return "bulk";
-  if (has(/素材|主图|图片|视频|详情|详情页|1688|货源图|场景图|字幕|脚本|封面/)) return "media";
-  if (has(/客服|订单|物流|退货|退款|买家|消息|纠纷|售后|履约/)) return "service";
-  if (has(/确认|发布|上架|改价|库存|付款|采购|广告|预算|政策|承诺/)) return "confirm";
-  return "listing";
+  if (!raw.trim()) return "general_chat";
+  if (has(/确认|真实发布|立即发布|直接发布|马上发布|改价|库存|付款|采购|广告|预算|政策|承诺|退款|补偿|重发/)) return "confirm";
+  if (has(/批量|铺货|选品|候选|机会|多款|多品|清单|列表|找品|热销前|前五|前10|top\s*\d+/i)) return "bulk";
+  if (has(/素材|主图|图片|视频|详情|详情页|货源图|场景图|字幕|脚本|封面|抠图|改图|生成图/)) return "media";
+  if (has(/客服|订单|物流|退货|买家|消息|纠纷|售后|履约|tracking|评价|差评/)) return "service";
+  if (has(/eBay|ebay|Listing|listing|商品|产品|货源|SKU|1688|上架草稿|刊登|标题|描述|价格|利润|类目|item|市场|调研|竞品|热销/i)) {
+    return "listing";
+  }
+  return "general_chat";
 }
 
 function isSaasCeoHighRiskCommand(text = "") {
@@ -17033,6 +17037,29 @@ function buildSaasCeoCommand(text, ctx = saasMerchantWorkbenchContext()) {
   const authReady = isSaasAuthorizedConnectionStatus(ctx.connection?.status || store?.status || "");
   const packetReady = Boolean(ctx.hasPacket);
   const ready = authReady && packetReady && modelReady;
+  if (intent === "general_chat") {
+    return normalizeSaasCeoCommand({
+      id: `ceo-command-${Date.now().toString(16)}-${Math.abs(hashString(cleanText)).toString(16)}`,
+      text: cleanText,
+      title: "普通咨询",
+      summary: "我会先直接回答。普通聊天不会写入长期经营记忆，也不会进入 eBay 工作流。",
+      intent,
+      status: "chat",
+      status_label: "直接回答",
+      created_at: new Date().toISOString(),
+      store_id: store?.store_id || "",
+      packet_id: packetId,
+      source_label: ctx.sourceLabel || "",
+      route: "general_chat",
+      route_label: "直接回答",
+      memory_policy: "transient_no_long_term_memory",
+      long_term_memory: false,
+      writes_merchant_rule: false,
+      decision_center_required: false,
+      high_risk: false,
+      routes: [],
+    });
+  }
   const statusLabel = ready
     ? "可接单"
     : !authReady
@@ -17041,50 +17068,51 @@ function buildSaasCeoCommand(text, ctx = saasMerchantWorkbenchContext()) {
         ? "等待官方数据包"
         : "等待 AI 连接状态恢复";
   const routeStatus = ready ? "可开始" : statusLabel;
-  const routes = [];
-  if (intent === "bulk") {
-    routes.push({
+  const routeByIntent = {
+    listing: {
+      view: "product",
+      key: "product",
+      label: "Listing",
+      note: "整理市场结论、eBay Listing 草稿、价格、政策和字段缺口。",
+    },
+    bulk: {
       view: "bulk",
       key: "bulk",
       label: "批量铺货",
-      note: "把候选清单先做批量前质检、来源记录、字段完整度和确认边界。",
-      status: routeStatus,
-    });
-  }
-  routes.push({
-    view: "product",
-    key: "product",
-    label: "Listing",
-      note: "生成市场结论、eBay Listing 草稿、价格/政策/字段缺口。",
-    status: routeStatus,
-  });
-  if (["media", "listing", "bulk", "confirm"].includes(intent)) {
-    routes.push({
+      note: "进入小批量实验台：选数量、选货源、设边界，再分三类候选。",
+    },
+    media: {
       view: "media",
       key: "media",
       label: "素材工坊",
-      note: "接收流程导入或外部独立生成素材，沉淀主图、详情页和视频需求。",
-      status: routeStatus,
-    });
-  }
-  if (["service", "confirm"].includes(intent)) {
-    routes.push({
+      note: "生成或整理主图、详情页、场景图、视频脚本和素材需求。",
+    },
+    service: {
       view: "service",
       key: "service",
       label: "客服与订单",
-      note: "整理买家消息、订单履约和可自动草拟的普通回复。",
-      status: routeStatus,
+      note: "整理买家消息、订单、物流、售后和可草拟回复。",
+    },
+    confirm: {
+      view: "confirm",
+      key: "confirm",
+      label: "决策中心",
+      note: "真实发布、付款、退款、广告、库存、政策和敏感客服承诺必须人工确认。",
+    },
+  };
+  const primaryRoute = highRisk ? routeByIntent.confirm : routeByIntent[intent] || routeByIntent.listing;
+  const routes = [
+    {
+      ...primaryRoute,
+      status: highRisk ? "需要确认" : routeStatus,
+    },
+  ];
+  if (highRisk && primaryRoute.view !== "confirm") {
+    routes.push({
+      ...routeByIntent.confirm,
+      status: "需要确认",
     });
   }
-  routes.push({
-    view: "confirm",
-    key: "confirm",
-    label: "决策中心",
-    note: highRisk
-      ? "真实发布、付款、退款、广告、库存、政策和敏感客服承诺必须人工确认。"
-      : "后续只要触及真实写入或高风险承诺，就在这里停住确认。",
-    status: highRisk ? "需要确认" : "边界待命",
-  });
   if (!ready) {
     routes.push({
       view: "connect",
@@ -17195,6 +17223,77 @@ function renderSaasCeoCommandConsole(ctx = saasMerchantWorkbenchContext(), comma
       </div>
     </div>
   `;
+}
+
+function primarySaasCeoRoute(command = state.saasLastCeoCommand) {
+  const current = normalizeSaasCeoCommand(command);
+  if (!current || current.intent === "general_chat") return null;
+  return (current.routes || []).find((route) => route.view !== "connect") || current.routes?.[0] || null;
+}
+
+function saasCeoTaskGoalLabel(command = state.saasLastCeoCommand) {
+  const current = normalizeSaasCeoCommand(command);
+  const intent = current?.intent || "";
+  return (
+    {
+      listing: "你想整理一个商品或 Listing 项目",
+      bulk: "你想先小批量筛一批候选商品",
+      media: "你想处理图片、视频或详情页素材",
+      service: "你想处理订单、物流、买家消息或售后",
+      confirm: "你提到了会影响钱、账号或买家的动作",
+    }[intent] || "你想推进一个 eBay 经营任务"
+  );
+}
+
+function saasCeoTaskNextCopy(route = null, command = state.saasLastCeoCommand) {
+  const current = normalizeSaasCeoCommand(command);
+  if (!route) return "我先直接回答，不进入经营工作流。";
+  if (current?.high_risk || route.view === "confirm") return "先到决策中心确认边界，未确认前不执行真实动作。";
+  return (
+    {
+      product: "去 Listing 继续整理市场结论、草稿、素材/利润和发布确认。",
+      bulk: "去小批量实验台，先选数量、货源和边界，再看三类候选。",
+      media: "去素材工坊整理主图、详情页、场景图和视频脚本。",
+      service: "去客服与订单处理消息、订单、物流和售后草稿。",
+      connect: "去设置补齐连接状态，业务执行仍回到对应模块。",
+    }[route.view] || "进入推荐模块继续处理。"
+  );
+}
+
+function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
+  const current = normalizeSaasCeoCommand(command);
+  const route = primarySaasCeoRoute(current);
+  if (!current || !route) return "";
+  const buttonLabel =
+    route.view === "confirm"
+      ? "去决策中心"
+      : route.view === "product"
+        ? "去 Listing"
+        : route.view === "bulk"
+          ? "去小批量实验台"
+          : `去${route.label || "推荐模块"}`;
+  return `
+    <section class="saas-ceo-routing-task-card ${current.high_risk ? "is-risk" : ""}" aria-label="AI CEO 下一步任务卡">
+      <div>
+        <span>我理解你的目标</span>
+        <strong>${escapeHtml(saasCeoTaskGoalLabel(current))}</strong>
+        <p>${escapeHtml(current.text)}</p>
+      </div>
+      <div>
+        <span>建议去</span>
+        <strong>${escapeHtml(route.label || "推荐模块")}</strong>
+        <p>${escapeHtml(saasCeoTaskNextCopy(route, current))}</p>
+      </div>
+      <button class="primary-action compact-action" type="button" data-global-flow-view="${escapeHtml(route.view)}" data-global-flow-key="${escapeHtml(route.key || route.view)}">
+        ${escapeHtml(buttonLabel)}
+      </button>
+    </section>
+  `;
+}
+
+function refreshSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
+  const slot = document.querySelector("#saasCeoRouteTaskSlot");
+  if (slot) slot.innerHTML = renderSaasCeoRoutingTaskCard(command);
 }
 
 function saasCeoModuleHandoffCopy(view = "product") {
@@ -17487,6 +17586,7 @@ async function hydrateSaasCeoCommandFromBackend(storeId = activeSaasStore()?.sto
       const latestCtx = saasMerchantWorkbenchContext();
       const consoleNode = document.querySelector("#view-cockpit .saas-ceo-command-console, #view-cockpit .ceo-home-boundary");
       if (consoleNode) consoleNode.outerHTML = renderSaasCeoCommandConsole(latestCtx, command);
+      refreshSaasCeoRoutingTaskCard(command);
     }
     return command;
   } catch (error) {
@@ -17535,6 +17635,7 @@ function handleSaasCeoCommandSubmit(text) {
     }
     const consoleNode = document.querySelector("#view-cockpit .saas-ceo-command-console, #view-cockpit .ceo-home-boundary");
     if (consoleNode) consoleNode.outerHTML = renderSaasCeoCommandConsole(ctx, instantCommand || command);
+    refreshSaasCeoRoutingTaskCard(instantCommand || command);
     return instantCommand || command;
   }
   const handedToListing = syncSaasCeoCommandToListing(command);
@@ -17585,12 +17686,14 @@ function handleSaasCeoCommandSubmit(text) {
     const latestCtx = saasMerchantWorkbenchContext();
     const consoleNode = document.querySelector("#view-cockpit .saas-ceo-command-console, #view-cockpit .ceo-home-boundary");
     if (consoleNode) consoleNode.outerHTML = renderSaasCeoCommandConsole(latestCtx, mergedCommand);
+    refreshSaasCeoRoutingTaskCard(mergedCommand);
     return mergedCommand;
   });
   const consoleNode = document.querySelector("#view-cockpit .saas-ceo-command-console, #view-cockpit .ceo-home-boundary");
   if (consoleNode) {
     consoleNode.outerHTML = renderSaasCeoCommandConsole(ctx, command);
   }
+  refreshSaasCeoRoutingTaskCard(command);
   showActionToast(handedToListing ? "AI CEO 已收到，Listing 已接住这个目标。" : "AI CEO 已收到。");
   return command;
 }
@@ -21910,6 +22013,7 @@ function handleSaasListingSourceSyncedProduct() {
 function shouldSaasCeoOfferListingHandoff(command = null) {
   const current = normalizeSaasCeoCommand(command);
   if (!current) return false;
+  if (current.intent !== "listing") return false;
   const text = String(current.text || "");
   if (!text.trim()) return false;
   if (current.intent === "service") return false;
@@ -24863,6 +24967,7 @@ function renderSaasCockpitRealWorkbench() {
               <p>${hasVisibleCeoChat ? "继续当前对话。" : "普通问题直接回答；eBay 经营任务会拆成工作流；需要最新信息会联网查来源；真实动作先进决策中心。"}</p>
             </div>
             <div class="chat-log saas-ai-ceo-chat-stream" id="ceoChat" aria-live="polite">${visibleCommandChat}</div>
+            <div class="saas-ceo-route-task-slot" id="saasCeoRouteTaskSlot">${renderSaasCeoRoutingTaskCard(visibleCommand)}</div>
             <div class="saas-ai-ceo-composer-dock">
               <div class="saas-ai-ceo-starter-prompts" aria-label="AI CEO 常用入口">
                 ${starterPrompts

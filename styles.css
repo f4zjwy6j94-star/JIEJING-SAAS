@@ -34868,6 +34868,75 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chat-stream:not(:empty) {
   padding: 0;
 }
 
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-route-task-slot {
+  width: min(100%, 760px);
+  margin: 12px auto 18px;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+  padding: 10px;
+  border: 1px solid rgba(190, 211, 202, 0.82);
+  border-radius: 8px;
+  background: #f8fbfa;
+  box-shadow: 0 16px 36px rgba(17, 24, 20, 0.07);
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card.is-risk {
+  border-color: rgba(225, 171, 92, 0.72);
+  background: #fffaf0;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card > div {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(190, 211, 202, 0.55);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card span {
+  display: block;
+  margin-bottom: 4px;
+  color: #0f766e;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card strong {
+  display: block;
+  color: #111814;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card p {
+  margin: 4px 0 0;
+  color: #5d6963;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card .primary-action {
+  align-self: center;
+  min-width: 118px;
+  min-height: 44px;
+  border-radius: 8px;
+}
+
+@media (max-width: 700px) {
+  body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card .primary-action {
+    width: 100%;
+  }
+}
+
 body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-latest-reply[hidden],
 body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-history[hidden] {
   display: none !important;

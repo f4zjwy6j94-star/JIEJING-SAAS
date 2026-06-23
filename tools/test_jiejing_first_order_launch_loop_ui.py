@@ -53,7 +53,7 @@ def main() -> int:
         if marker not in styles:
             return fail(f"styles.css missing first-order loop marker: {marker}")
 
-    if "20260623-settings-five-clean-v5" not in app_html:
+    if "20260623-ai-ceo-routing-v1" not in app_html:
         return fail("app.html should bust app.js/styles.css cache after minimal AI CEO simplification")
 
     cockpit_start = app_js.index("function renderSaasCockpitRealWorkbench")
