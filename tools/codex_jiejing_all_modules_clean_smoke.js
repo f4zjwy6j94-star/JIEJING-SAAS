@@ -415,6 +415,10 @@ async function main() {
         const section = document.getElementById("view-connect");
         return Boolean(section?.querySelector(".saas-settings-subpage-strip"));
       });
+      check.settings_model_has_model_panel = await page.evaluate(() => {
+        const section = document.getElementById("view-connect");
+        return Boolean(section?.innerText?.includes("AI 连接与素材生成"));
+      });
       await page
         .screenshot({ path: path.join(outDir, "connect-model.png"), fullPage: true, timeout: 15000 })
         .catch((error) => screenshotFailures.push({ view: "connect-model", error: String(error.message || error).slice(0, 300) }));
@@ -474,7 +478,8 @@ async function main() {
   }
   if (!connect.has_settings_simple_copy) failures.push("settings simple usage copy missing");
   if (connect.settings_model_has_home_hub) failures.push("settings child page repeats overview map");
-  if (!connect.settings_model_has_subpage_strip) failures.push("settings child page intro missing");
+  if (connect.settings_model_has_subpage_strip) failures.push("settings child page still shows redundant intro/map");
+  if (!connect.settings_model_has_model_panel) failures.push("settings child page content missing");
   const media = moduleChecks.find((item) => item.view === "media") || {};
   if (!media.has_media_tabs) failures.push("media tabs missing");
   if (!media.has_media_simple_headline || !media.has_media_simple_flow) failures.push("media simple workflow surface missing");

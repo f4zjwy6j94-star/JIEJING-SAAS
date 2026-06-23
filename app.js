@@ -30334,21 +30334,6 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
   `;
 }
 
-function renderSaasSettingsSubpageIntro(tab) {
-  const title = tab?.title || "设置";
-  const intro = tab?.intro || "这里只有当前设置项，复杂排查不在普通子页里展开。";
-  return `
-    <section class="saas-settings-subpage-strip" aria-label="当前设置页说明">
-      <div>
-        <span>当前页</span>
-        <strong>${escapeHtml(title)}</strong>
-        <small>${escapeHtml(intro)}</small>
-      </div>
-      <button class="secondary-action compact-action" type="button" data-saas-settings-tab="general">返回设置总览</button>
-    </section>
-  `;
-}
-
 function renderSaasMerchantSecurityBoundaryPanel() {
   const rows = [
     ["平台凭证", "不在浏览器显示", "eBay token、模型 key、支付密钥只在后端密钥边界处理。"],
@@ -30622,7 +30607,7 @@ function renderSaasSettingsCleanLayout(ctx = saasMerchantWorkbenchContext(), opt
           <h2>${escapeHtml(activeTab.title)}</h2>
           <p>${escapeHtml(activeTab.intro || "设置只处理连接、安全、来源、AI、权限和订阅安全。日常经营仍回到工作台。")}</p>
         </header>
-        ${isOverview ? renderSaasSettingsReadableMap(activeTab.id) : renderSaasSettingsSubpageIntro(activeTab)}
+        ${isOverview ? renderSaasSettingsReadableMap(activeTab.id) : ""}
         <div class="saas-settings-clean-panels">
           ${activeTab.panels.filter(Boolean).join("")}
         </div>

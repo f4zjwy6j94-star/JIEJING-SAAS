@@ -38,7 +38,6 @@ def main() -> None:
     service_scope = function_scope(app_js, "renderSaasServiceCenter")
     settings_scope = (
         function_scope(app_js, "renderSaasSettingsReadableMap")
-        + function_scope(app_js, "renderSaasSettingsSubpageIntro")
         + function_scope(app_js, "renderSaasSettingsGeneralPanel")
         + function_scope(app_js, "renderSaasMerchantSecurityBoundaryPanel")
         + function_scope(app_js, "renderSaasSettingsCleanLayout")
@@ -93,7 +92,6 @@ def main() -> None:
         "主理人上线排查",
         "运行可靠性",
         "data-saas-settings-map-tab",
-        'data-saas-settings-tab="general"',
         "生产队列",
         "worker heartbeat",
         "dead_letter",

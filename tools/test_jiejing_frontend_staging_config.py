@@ -26,7 +26,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260623-settings-merchant-v3"
+    frontend_asset_version = "20260623-settings-child-clean-v4"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -66,6 +66,7 @@ def main() -> int:
         "20260621-listing-ordered-flow-v14",
         "20260622-listing-form-prefill-groups-v15",
         "20260623-settings-simplified-v2",
+        "20260623-settings-merchant-v3",
     ]:
         if stale_asset_version in index_html + app_html:
             return fail(f"frontend entry files still reference stale asset version: {stale_asset_version}")

@@ -261,7 +261,7 @@ def main() -> None:
     settings_layout_end = app_js.index("function renderSaasConnectCenter", settings_layout_start)
     settings_layout_body = app_js[settings_layout_start:settings_layout_end]
     require(settings_layout_body, 'activeTab.id === "general"', "settings overview-only map guard")
-    require(settings_layout_body, "renderSaasSettingsSubpageIntro(activeTab)", "settings child intro")
+    require(settings_layout_body, 'isOverview ? renderSaasSettingsReadableMap(activeTab.id) : ""', "settings child pages skip redundant map")
     draft_start = app_js.index("function renderSaasListingDraftEditor")
     draft_end = app_js.index("function renderSaasListingGapAndRiskPanel", draft_start)
     draft_body = app_js[draft_start:draft_end]
