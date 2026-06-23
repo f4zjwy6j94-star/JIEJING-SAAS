@@ -29034,6 +29034,188 @@ function renderSaasSettingsDataPanel(ctx = saasMerchantWorkbenchContext()) {
   `;
 }
 
+function renderSaasSettingsFocusPanel({ eyebrow = "本页重点", title = "", detail = "", rows = [], actions = "" } = {}) {
+  return `
+    <section class="saas-settings-card saas-settings-focus-panel">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>${escapeHtml(eyebrow)}</span>
+          <strong>${escapeHtml(title)}</strong>
+          <p>${escapeHtml(detail)}</p>
+        </div>
+      </div>
+      <div class="saas-settings-status-list">
+        ${rows
+          .map(
+            (row) => `
+              <article class="is-${escapeHtml(row.tone || "green")}">
+                <span>${escapeHtml(row.label || "")}</span>
+                <strong>${escapeHtml(row.title || "")}</strong>
+                <small>${escapeHtml(row.detail || "")}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      ${actions ? `<div class="saas-settings-focus-actions">${actions}</div>` : ""}
+    </section>
+  `;
+}
+
+function renderSaasSettingsAccountFocusPanel(ctx = saasMerchantWorkbenchContext()) {
+  const health = saasAccountHealthSnapshot();
+  const connectionStatus = ctx.connection?.status || ctx.store?.connection_status || ctx.store?.status || "not_connected";
+  const incidentMode = Boolean(health.incident_mode);
+  return renderSaasSettingsFocusPanel({
+    eyebrow: "账号边界",
+    title: "账号异常先暂停真实动作，不影响查看资料",
+    detail: "普通商家只需要看账号是否能继续经营。封禁、受限、付款冻结这类事故会先停发布、改价、退款、广告和敏感承诺。",
+    rows: [
+      {
+        label: "eBay 连接",
+        title: saasStoreStatusLabel(connectionStatus),
+        detail: saasStoreDisplayName(ctx.store, ctx.connection),
+        tone: isSaasAuthorizedConnectionStatus(connectionStatus) ? "green" : "amber",
+      },
+      {
+        label: "账号健康",
+        title: health.label || "等待店铺快照",
+        detail: health.summary || "同步官方只读资料后显示账号是否正常、受限或冻结。",
+        tone: incidentMode ? "red" : "amber",
+      },
+      {
+        label: "真实动作",
+        title: incidentMode ? "已暂停" : "先确认",
+        detail: "真实发布、退款、广告、政策和敏感客服承诺必须进决策中心。",
+        tone: incidentMode ? "red" : "green",
+      },
+    ],
+    actions: `<button class="secondary-action compact-action" type="button" data-global-flow-view="confirm">查看决策中心</button>`,
+  });
+}
+
+function renderSaasSettingsModelFocusPanel(ctx = saasMerchantWorkbenchContext()) {
+  const ledger = saasCostLedgerSummary();
+  return renderSaasSettingsFocusPanel({
+    eyebrow: "AI 边界",
+    title: "AI 对话、Listing 文案和素材生成分开看",
+    detail: "这里不让商家读 provider 细节。只说明 AI 是否可用、素材在哪里生成、费用口径怎么分。",
+    rows: [
+      {
+        label: "文本 AI",
+        title: ledger.configured ? ledger.providerLabel : "待保存",
+        detail: ledger.configured ? `${ledger.model || "默认模型"} / 凭证留在后端` : "用于 AI CEO、报告、Listing 文案和确认清单。",
+        tone: ledger.configured ? "green" : "amber",
+      },
+      {
+        label: "素材",
+        title: "素材工坊",
+        detail: "图片、详情页图、视频封面和视频脚本在素材工坊处理。",
+        tone: "green",
+      },
+      {
+        label: "费用",
+        title: "文本和素材分账",
+        detail: "当前先显示估算口径；正式计费后由后端用量账本接管。",
+        tone: "amber",
+      },
+    ],
+  });
+}
+
+function renderSaasSettingsDataFocusPanel(ctx = saasMerchantWorkbenchContext()) {
+  const records = saasCollectedSourceRecords(ctx);
+  return renderSaasSettingsFocusPanel({
+    eyebrow: "数据边界",
+    title: "读到什么就用什么，缺什么就显示缺口",
+    detail: "店铺数据只认官方只读资料、商家补充资料和有留痕的公开来源；不会用旧商品或旧素材冒充真实测试。",
+    rows: [
+      {
+        label: "官方资料",
+        title: ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal} 已读取` : "待读取",
+        detail: ctx.hasPacket ? "商品、订单、政策、费用等来源可追溯。" : "连接 eBay 后读取官方只读资料。",
+        tone: ctx.hasPacket ? "green" : "amber",
+      },
+      {
+        label: "来源记录",
+        title: `${records.length} 条`,
+        detail: "供应商、竞品、公开网页和报告引用都要留来源。",
+        tone: records.length ? "green" : "amber",
+      },
+      {
+        label: "缺口",
+        title: ctx.missingKeys.length ? `${ctx.missingKeys.length} 项` : "无核心缺口",
+        detail: ctx.missingKeys.join(" / ") || "缺口清楚后再进入报告或 Listing 判断。",
+        tone: ctx.missingKeys.length ? "amber" : "green",
+      },
+    ],
+    actions: `<button class="secondary-action compact-action" type="button" data-saas-action="copy-source-records">复制来源快照</button>`,
+  });
+}
+
+function renderSaasSettingsGovernanceFocusPanel() {
+  const currentRole = state.saasTeamMember?.role || "owner";
+  const memories = Array.isArray(state.saasMerchantMemory) ? state.saasMerchantMemory : [];
+  return renderSaasSettingsFocusPanel({
+    eyebrow: "权限边界",
+    title: "谁能点头，比谁能看见更重要",
+    detail: "团队设置只服务确认中心。AI 可以起草和整理，但发布、退款、广告预算、采购付款和敏感客服承诺必须由有权限的人确认。",
+    rows: [
+      {
+        label: "当前角色",
+        title: saasMerchantRoleRows().find((role) => role.role === currentRole)?.label || currentRole,
+        detail: "默认 owner 可以管理确认边界，其他岗位按权限矩阵执行。",
+        tone: "green",
+      },
+      {
+        label: "高风险动作",
+        title: "进决策中心",
+        detail: "没有权限的人只能查看或补资料，不能越权执行。",
+        tone: "green",
+      },
+      {
+        label: "经营记忆",
+        title: `${memories.length} 条`,
+        detail: "只有商家明确要求记住的规则才进入长期经营记忆。",
+        tone: memories.length ? "green" : "amber",
+      },
+    ],
+  });
+}
+
+function renderSaasSettingsBillingFocusPanel(ctx = saasMerchantWorkbenchContext()) {
+  const billing = saasMerchantBillingGuardrailState();
+  return renderSaasSettingsFocusPanel({
+    eyebrow: "订阅与安全",
+    title: "欠费或超量只停高成本任务，不删除经营资料",
+    detail: "这里给商家看套餐、额度和安全边界。真实收款、支付密钥、Webhook 和上线排查只在后端或主理人高级区处理。",
+    rows: [
+      {
+        label: "当前权益",
+        title: billing.entitlementActive ? "可用" : billing.label,
+        detail: billing.note,
+        tone: billing.tone,
+      },
+      {
+        label: "高成本任务",
+        title: billing.blocksNow ? "已暂停" : "受额度保护",
+        detail: "AI CEO 联网、模型、素材和 provider job 可按权益停用。",
+        tone: billing.blocksNow ? "red" : "green",
+      },
+      {
+        label: "数据保护",
+        title: "不会删除",
+        detail: "历史报告、确认记录、审计证据和账号设置继续可读。",
+        tone: "green",
+      },
+    ],
+    actions: `
+      <button class="secondary-action compact-action" type="button" data-saas-action="refresh">刷新用量</button>
+      <button class="secondary-action compact-action" type="button" data-global-flow-view="confirm">查看确认中心</button>
+    `,
+  });
+}
+
 function renderSaasQueueHealthPanel() {
   const health = state.saasQueueHealth && typeof state.saasQueueHealth === "object" ? state.saasQueueHealth : {};
   const counts = health.counts && typeof health.counts === "object" ? health.counts : {};
@@ -30457,12 +30639,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       intro: "这里只处理登录、eBay 连接、回调地址和账号健康。",
       panels: [
         renderSaasSettingsAccountPanel(ctx, options),
-        renderSaasSettingsSectionGroup({
-          title: "账号健康和事故处理",
-          detail: "封禁、受限、付款冻结和真实写入暂停只在需要排查时展开。",
-          badge: "出问题再看",
-          panels: [renderSaasNewEbayAccountOnboardingPanel(), renderSaasAccountHealthPanel(), renderSaasIncidentModeOpsPanel()],
-        }),
+        renderSaasSettingsAccountFocusPanel(ctx),
       ],
     },
     {
@@ -30473,12 +30650,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       intro: "这里只看 AI 是否可用、素材生成入口和费用口径。",
       panels: [
         renderSaasMerchantModelProviderPanel(ctx),
-        renderSaasSettingsSectionGroup({
-          title: "用量和成本",
-          detail: "模型、素材和任务成本用于复盘，不放在日常工作台。",
-          badge: "复盘",
-          panels: [renderSaasCostAndRunLedgerPanel()],
-        }),
+        renderSaasSettingsModelFocusPanel(ctx),
       ],
     },
     {
@@ -30489,12 +30661,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       intro: "这里只看商品、订单、政策、费用等经营数据是否读到。",
       panels: [
         renderSaasSettingsDataPanel(ctx),
-        renderSaasSettingsSectionGroup({
-          title: "来源记录和可信度",
-          detail: "只有需要追溯报告来源或排查缺口时再展开。",
-          badge: "追溯",
-          panels: [renderSaasSourceRecordCollectorPanel(ctx), renderSaasSourceCredibilityPanel(ctx)],
-        }),
+        renderSaasSettingsDataFocusPanel(ctx),
       ],
     },
     {
@@ -30505,12 +30672,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       intro: "这里只看谁能确认发布、退款、广告、采购付款和敏感客服承诺。",
       panels: [
         renderSaasMerchantPermissionPanel(),
-        renderSaasSettingsSectionGroup({
-          title: "风险、记忆和长期规则",
-          detail: "IP 风险、商家规则和经营记忆不放到日常任务页。",
-          badge: "治理",
-          panels: [renderSaasMerchantIpRiskPanel(), renderSaasMerchantMemoryPanel()],
-        }),
+        renderSaasSettingsGovernanceFocusPanel(),
       ],
     },
     {
@@ -30520,13 +30682,8 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       title: "订阅与安全",
       intro: "这里只解释套餐、额度、欠费停用和账号安全边界，不展示上线排查细节。",
       panels: [
-        renderSaasMerchantBillingGuardrailPanel(ctx),
-        renderSaasSettingsSectionGroup({
-          title: "隐私和安全边界",
-          detail: "平台凭证、eBay token、模型 key 不在浏览器回显；真实高风险动作进决策中心。",
-          badge: "安全",
-          panels: [renderSaasMerchantSecurityBoundaryPanel()],
-        }),
+        renderSaasSettingsBillingFocusPanel(ctx),
+        renderSaasMerchantSecurityBoundaryPanel(),
       ],
     },
   ];

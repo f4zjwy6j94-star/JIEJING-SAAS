@@ -37272,6 +37272,27 @@ body.saas-public-mvp .saas-settings-row-list article {
   padding: 12px;
 }
 
+body.saas-public-mvp .saas-settings-status-list article.is-green,
+body.saas-public-mvp .saas-settings-resource-list article.is-green,
+body.saas-public-mvp .saas-settings-row-list article.is-green {
+  border-color: rgba(8, 118, 110, 0.18);
+  background: #f6fbf9;
+}
+
+body.saas-public-mvp .saas-settings-status-list article.is-amber,
+body.saas-public-mvp .saas-settings-resource-list article.is-amber,
+body.saas-public-mvp .saas-settings-row-list article.is-amber {
+  border-color: rgba(214, 142, 43, 0.26);
+  background: #fffaf1;
+}
+
+body.saas-public-mvp .saas-settings-status-list article.is-red,
+body.saas-public-mvp .saas-settings-resource-list article.is-red,
+body.saas-public-mvp .saas-settings-row-list article.is-red {
+  border-color: rgba(194, 65, 45, 0.24);
+  background: #fff6f2;
+}
+
 body.saas-public-mvp .saas-settings-status-list span,
 body.saas-public-mvp .saas-settings-resource-list span,
 body.saas-public-mvp .saas-settings-row-list span {
@@ -37314,6 +37335,18 @@ body.saas-public-mvp .saas-settings-row-list article {
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
+}
+
+body.saas-public-mvp .saas-settings-focus-panel {
+  border: 1px solid rgba(15, 45, 40, 0.1);
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+body.saas-public-mvp .saas-settings-focus-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 body.saas-public-mvp .saas-merchant-billing-guardrail {

@@ -248,15 +248,27 @@ def main() -> None:
     settings_def_end = app_js.index("function renderSaasSettingsCleanLayout", settings_def_start)
     settings_def_body = app_js[settings_def_start:settings_def_end]
     for required_marker in [
-        "账号健康和事故处理",
-        "来源记录和可信度",
+        "renderSaasSettingsAccountFocusPanel(ctx)",
+        "renderSaasSettingsModelFocusPanel(ctx)",
+        "renderSaasSettingsDataFocusPanel(ctx)",
+        "renderSaasSettingsGovernanceFocusPanel()",
+        "renderSaasSettingsBillingFocusPanel(ctx)",
         "主理人高级区",
         "正式收费和公网安全",
         "运行可靠性",
         "主理人上线排查",
-        "隐私和安全边界",
+        "renderSaasMerchantSecurityBoundaryPanel()",
     ]:
-        require(settings_def_body, required_marker, "settings complex sections are grouped")
+        require(settings_def_body, required_marker, "settings ordinary tabs stay focused while owner area keeps advanced controls")
+    ordinary_settings_body = settings_def_body[: settings_def_body.index("if (saasOwnerLaunchCanView())")]
+    for redundant_marker in [
+        "账号健康和事故处理",
+        "来源记录和可信度",
+        "用量和成本",
+        "风险、记忆和长期规则",
+    ]:
+        if redundant_marker in ordinary_settings_body:
+            raise AssertionError(f"Ordinary settings tabs should not use folded diagnostic groups: {redundant_marker}")
     settings_layout_start = app_js.index("function renderSaasSettingsCleanLayout")
     settings_layout_end = app_js.index("function renderSaasConnectCenter", settings_layout_start)
     settings_layout_body = app_js[settings_layout_start:settings_layout_end]

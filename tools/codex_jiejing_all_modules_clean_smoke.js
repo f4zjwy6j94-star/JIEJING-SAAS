@@ -405,20 +405,34 @@ async function main() {
       { id, view },
     );
     if (view === "connect" && (await page.locator('.saas-settings-clean-nav [data-saas-settings-tab="model"]').count())) {
-      await page.locator('.saas-settings-clean-nav [data-saas-settings-tab="model"]').click();
-      await page.waitForTimeout(400);
-      check.settings_model_has_home_hub = await page.evaluate(() => {
-        const section = document.getElementById("view-connect");
-        return Boolean(section?.querySelector(".saas-settings-home-hub"));
-      });
-      check.settings_model_has_subpage_strip = await page.evaluate(() => {
-        const section = document.getElementById("view-connect");
-        return Boolean(section?.querySelector(".saas-settings-subpage-strip"));
-      });
-      check.settings_model_has_model_panel = await page.evaluate(() => {
-        const section = document.getElementById("view-connect");
-        return Boolean(section?.innerText?.includes("AI 连接与素材生成"));
-      });
+      const settingsChildTabs = ["account", "model", "data", "governance", "billing"];
+      const settingsChildAudit = [];
+      for (const tabId of settingsChildTabs) {
+        await page.locator(`.saas-settings-clean-nav [data-saas-settings-tab="${tabId}"]`).click();
+        await page.waitForTimeout(220);
+        settingsChildAudit.push(
+          await page.evaluate((id) => {
+            const section = document.getElementById("view-connect");
+            const text = section?.innerText || "";
+            return {
+              id,
+              has_home_hub: Boolean(section?.querySelector(".saas-settings-home-hub")),
+              has_section_group: Boolean(section?.querySelector(".saas-settings-section-group")),
+              has_focus_panel: Boolean(section?.querySelector(".saas-settings-focus-panel")),
+              has_subpage_strip: Boolean(section?.querySelector(".saas-settings-subpage-strip")),
+              preview: text.trim().slice(0, 180),
+            };
+          }, tabId),
+        );
+      }
+      check.settings_child_audit = settingsChildAudit;
+      check.settings_children_are_focused = settingsChildAudit.every(
+        (item) => item.has_focus_panel && !item.has_home_hub && !item.has_section_group && !item.has_subpage_strip,
+      );
+      const modelAudit = settingsChildAudit.find((item) => item.id === "model") || {};
+      check.settings_model_has_home_hub = modelAudit.has_home_hub || false;
+      check.settings_model_has_subpage_strip = modelAudit.has_subpage_strip || false;
+      check.settings_model_has_model_panel = String(modelAudit.preview || "").includes("AI 连接与素材生成");
       await page
         .screenshot({ path: path.join(outDir, "connect-model.png"), fullPage: true, timeout: 15000 })
         .catch((error) => screenshotFailures.push({ view: "connect-model", error: String(error.message || error).slice(0, 300) }));
@@ -477,6 +491,7 @@ async function main() {
     failures.push("settings compact hub/status missing");
   }
   if (!connect.has_settings_simple_copy) failures.push("settings simple usage copy missing");
+  if (!connect.settings_children_are_focused) failures.push("ordinary settings child tabs are not focused");
   if (connect.settings_model_has_home_hub) failures.push("settings child page repeats overview map");
   if (connect.settings_model_has_subpage_strip) failures.push("settings child page still shows redundant intro/map");
   if (!connect.settings_model_has_model_panel) failures.push("settings child page content missing");

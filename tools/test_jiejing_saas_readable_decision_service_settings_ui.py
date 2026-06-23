@@ -39,6 +39,12 @@ def main() -> None:
     settings_scope = (
         function_scope(app_js, "renderSaasSettingsReadableMap")
         + function_scope(app_js, "renderSaasSettingsGeneralPanel")
+        + function_scope(app_js, "renderSaasSettingsFocusPanel")
+        + function_scope(app_js, "renderSaasSettingsAccountFocusPanel")
+        + function_scope(app_js, "renderSaasSettingsModelFocusPanel")
+        + function_scope(app_js, "renderSaasSettingsDataFocusPanel")
+        + function_scope(app_js, "renderSaasSettingsGovernanceFocusPanel")
+        + function_scope(app_js, "renderSaasSettingsBillingFocusPanel")
         + function_scope(app_js, "renderSaasMerchantSecurityBoundaryPanel")
         + function_scope(app_js, "renderSaasSettingsCleanLayout")
         + function_scope(app_js, "saasSettingsTabDefinitions")
@@ -85,8 +91,10 @@ def main() -> None:
         "订阅与安全",
         "什么时候需要打开设置",
         "设置首页不让商家读技术排查",
-        "账号健康和事故处理",
-        "来源记录和可信度",
+        "账号边界",
+        "AI 边界",
+        "数据边界",
+        "权限边界",
         "主理人高级区",
         "隐私和安全边界",
         "主理人上线排查",
