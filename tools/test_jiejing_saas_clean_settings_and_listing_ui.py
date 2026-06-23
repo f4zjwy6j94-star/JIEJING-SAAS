@@ -154,13 +154,13 @@ def main() -> None:
     require(app_js, "只确认会影响钱、账号和买家的动作", "rendered decision center low-learning-cost headline")
     require(app_js, "这里只让你决定三件事：同意、稍后、或者回去补资料。", "rendered decision center simple action copy")
     require(app_js, "刷新待办", "rendered decision center non-technical refresh copy")
-    require(app_js, "日常卖货不用进设置", "settings map daily-use boundary")
-    require(app_js, "设置首页不让商家读技术排查", "settings home low-learning-cost copy")
+    require(app_js, "普通商家只看 5 个入口", "settings map merchant entrance boundary")
+    require(app_js, "上线排查、WAF、队列、发布体检等复杂内容只放在主理人高级区", "settings home low-learning-cost copy")
     require(app_js, "商品、订单、政策、费用等来源可追溯", "settings status merchant-facing data copy")
     require(app_js, "店铺数据、来源记录和同步缺口", "settings data panel merchant-facing title")
     require(app_js, "什么时候需要打开设置", "settings usage-rule section")
-    require(app_js, "出问题或上线前再看", "settings workflow compact boundary")
-    require(app_js, "AI 设置", "merchant-friendly model settings title")
+    require(app_js, "主理人高级区", "settings workflow compact boundary")
+    require(app_js, "AI 与素材", "merchant-friendly model settings title")
     require(app_js, "function saasIsEnglishHeavyMerchantText", "legacy English report display guard")
     require(app_js, "旧记录的英文摘要已隐藏", "legacy English report summary hidden")
     require(app_js, "function saasWorkbenchFormatReportSectionValue", "report detail Chinese display guard")
@@ -250,12 +250,18 @@ def main() -> None:
     for required_marker in [
         "账号健康和事故处理",
         "来源记录和可信度",
-        "Listing 和发布体检",
-        "发布后复盘",
-        "域名和公网安全",
+        "主理人高级区",
+        "正式收费和公网安全",
         "运行可靠性",
+        "主理人上线排查",
+        "隐私和安全边界",
     ]:
         require(settings_def_body, required_marker, "settings complex sections are grouped")
+    settings_layout_start = app_js.index("function renderSaasSettingsCleanLayout")
+    settings_layout_end = app_js.index("function renderSaasConnectCenter", settings_layout_start)
+    settings_layout_body = app_js[settings_layout_start:settings_layout_end]
+    require(settings_layout_body, 'activeTab.id === "general"', "settings overview-only map guard")
+    require(settings_layout_body, "renderSaasSettingsSubpageIntro(activeTab)", "settings child intro")
     draft_start = app_js.index("function renderSaasListingDraftEditor")
     draft_end = app_js.index("function renderSaasListingGapAndRiskPanel", draft_start)
     draft_body = app_js[draft_start:draft_end]

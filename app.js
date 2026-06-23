@@ -30262,35 +30262,34 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
   const activeSecret = saasActiveModelSecretRef();
   const modelReady = Boolean(state.saasModelSettings?.configured || activeSecret?.secret_ref || isSaasModelConfigured());
   const connectionStatus = ctx.connection?.status || ctx.store?.connection_status || ctx.store?.status || "";
-  const launchGate = state.saasCommercialLaunchGate || {};
+  const billing = saasMerchantBillingGuardrailState();
   const statusCards = [
     ["店铺", isSaasAuthorizedConnectionStatus(connectionStatus) ? "已连接" : "未连接", ctx.connection ? saasStoreDisplayName(ctx.store, ctx.connection) : "需要时再连接 eBay"],
     ["数据", ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal}` : "待读取", ctx.hasPacket ? "店铺资料可用" : "连接后读取商品、订单、政策和费用"],
     ["AI", modelReady ? "可用" : "待设置", modelReady ? "凭证留在后端" : "保存后只显示可用状态"],
-    ["上线", launchGate.paid_commercial_launch_ready ? "可收费" : "未开放", launchGate.paid_commercial_launch_ready ? "正式收费门禁已通过" : "当前仍是内测/受控阶段"],
+    ["订阅", billing.entitlementActive ? "可用" : "待开通", billing.entitlementActive ? "当前权益有效" : "内测阶段不会真实扣费"],
   ];
   const items = [
-    ["general", "总览", "现在能不能继续用"],
-    ["account", "账号店铺", "登录、eBay 连接、账号健康"],
-    ["data", "店铺数据", "商品、订单、政策、费用"],
-    ["model", "AI 设置", "模型连接、素材成本"],
-    ["workflow", "流程复盘", "出问题或上线前再看"],
-    ["governance", "权限规则", "确认权限、长期规则"],
-    ["launch", "上线准备", "收费、域名、安全、备份"],
+    ["account", "账号与店铺", "登录、eBay 连接、账号健康"],
+    ["model", "AI 与素材", "模型连接、素材额度、成本口径"],
+    ["data", "店铺数据", "商品、订单、政策、费用来源"],
+    ["governance", "团队权限", "谁能确认发布、退款、广告"],
+    ["billing", "订阅与安全", "套餐、额度、隐私和安全"],
   ];
   const routes = [
     ["日常卖货", "回工作台"],
-    ["连接或断开店铺", "账号店铺"],
-    ["AI 不回复或素材异常", "AI 设置"],
-    ["准备公开收费上线", "上线准备"],
+    ["连接或断开店铺", "账号与店铺"],
+    ["AI 不回复或素材异常", "AI 与素材"],
+    ["查订单/政策来源", "店铺数据"],
+    ["额度、套餐、安全", "订阅与安全"],
   ];
   return `
     <section class="saas-settings-simple-map saas-settings-home-hub" aria-label="设置地图">
       <div class="saas-settings-simple-map-head">
         <div>
           <span>设置地图</span>
-          <strong>日常卖货不用进设置</strong>
-          <p>设置只处理连接、数据、AI、权限和上线准备。真正的经营动作仍在 AI CEO、Listing、批量铺货、素材工坊、客服订单和决策中心完成。</p>
+          <strong>普通商家只看 5 个入口</strong>
+          <p>设置只处理账号、AI、数据、权限、订阅和安全。上线排查、WAF、队列、发布体检等复杂内容只放在主理人高级区。</p>
         </div>
       </div>
       <div class="saas-settings-home-status" aria-label="当前设置状态">
@@ -30330,6 +30329,54 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
             )
             .join("")}
         </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderSaasSettingsSubpageIntro(tab) {
+  const title = tab?.title || "设置";
+  const intro = tab?.intro || "这里只有当前设置项，复杂排查不在普通子页里展开。";
+  return `
+    <section class="saas-settings-subpage-strip" aria-label="当前设置页说明">
+      <div>
+        <span>当前页</span>
+        <strong>${escapeHtml(title)}</strong>
+        <small>${escapeHtml(intro)}</small>
+      </div>
+      <button class="secondary-action compact-action" type="button" data-saas-settings-tab="general">返回设置总览</button>
+    </section>
+  `;
+}
+
+function renderSaasMerchantSecurityBoundaryPanel() {
+  const rows = [
+    ["平台凭证", "不在浏览器显示", "eBay token、模型 key、支付密钥只在后端密钥边界处理。"],
+    ["真实动作", "先到决策中心", "发布、退款、广告、采购付款和敏感客服承诺都必须人工确认。"],
+    ["欠费/超量", "只停高成本任务", "历史报告、确认记录、审计证据和账号设置不会被删除。"],
+    ["公开访问", "先过防护入口", "域名、WAF、Bot 和限流由平台侧处理，不要求商家理解技术细节。"],
+  ];
+  return `
+    <section class="saas-settings-card saas-merchant-security-boundary" aria-label="商家隐私和安全边界">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>隐私与安全</span>
+          <strong>普通商家只需要知道边界</strong>
+          <p>这里不展示 token、key、client secret 或内部部署项。捷境只告诉商家哪些数据被保护、哪些动作不会自动执行。</p>
+        </div>
+      </div>
+      <div class="saas-settings-status-list">
+        ${rows
+          .map(
+            ([label, title, detail]) => `
+              <article class="is-green">
+                <span>${escapeHtml(label)}</span>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
       </div>
     </section>
   `;
@@ -30401,12 +30448,13 @@ function renderSaasBillingProviderPanel() {
 }
 
 function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), options = {}) {
-  return [
+  const tabs = [
     {
       id: "general",
       label: "总览",
       detail: "当前状态",
       title: "设置总览",
+      intro: "只看状态灯和五个设置入口；日常经营回工作台完成。",
       panels: [
         renderSaasSettingsSectionGroup({
           title: "当前状态详情",
@@ -30418,9 +30466,10 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
     },
     {
       id: "account",
-      label: "账号店铺",
+      label: "账号与店铺",
       detail: "登录 / eBay",
-      title: "账号店铺",
+      title: "账号与店铺",
+      intro: "这里只处理登录、eBay 连接、回调地址和账号健康。",
       panels: [
         renderSaasSettingsAccountPanel(ctx, options),
         renderSaasSettingsSectionGroup({
@@ -30432,25 +30481,11 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       ],
     },
     {
-      id: "data",
-      label: "数据",
-      detail: "店铺资料",
-      title: "店铺数据",
-      panels: [
-        renderSaasSettingsDataPanel(ctx),
-        renderSaasSettingsSectionGroup({
-          title: "来源记录和可信度",
-          detail: "只有需要追溯报告来源或排查缺口时再展开。",
-          badge: "追溯",
-          panels: [renderSaasSourceRecordCollectorPanel(ctx), renderSaasSourceCredibilityPanel(ctx)],
-        }),
-      ],
-    },
-    {
       id: "model",
-      label: "AI",
-      detail: "AI 连接",
-      title: "AI 设置",
+      label: "AI 与素材",
+      detail: "模型 / 素材",
+      title: "AI 与素材",
+      intro: "这里只看 AI 是否可用、素材生成入口和费用口径。",
       panels: [
         renderSaasMerchantModelProviderPanel(ctx),
         renderSaasSettingsSectionGroup({
@@ -30462,48 +30497,27 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       ],
     },
     {
-      id: "workflow",
-      label: "流程",
-      detail: "体检 / 复盘",
-      title: "流程复盘",
+      id: "data",
+      label: "店铺数据",
+      detail: "来源 / 缺口",
+      title: "店铺数据",
+      intro: "这里只看商品、订单、政策、费用等经营数据是否读到。",
       panels: [
-        renderSaasCoreModuleDiagnosticsPanel(ctx),
+        renderSaasSettingsDataPanel(ctx),
         renderSaasSettingsSectionGroup({
-          title: "Listing 和发布体检",
-          detail: "发布前红黄绿、Listing 来源和真实商品资料复盘集中在这里。",
-          badge: "发布前",
-          panels: [
-            renderSaasListingStoreSyncOverview(ctx),
-            renderSaasListingSyncedProductsPanel(ctx),
-            renderSaasListingIpReadinessPanel(ctx),
-            renderSaasPublishHealthReportPanel(ctx, saasPreTestCheckRows(ctx, null), { compact: true }),
-            renderSaasSevenStepLaunchGuidePanel(ctx, { compact: true }),
-          ],
-        }),
-        renderSaasSettingsSectionGroup({
-          title: "发布后复盘",
-          detail: "只有发布后要查记录、结果或命令摘要时再打开。",
-          badge: "复盘",
-          panels: [
-            renderSaasPostPublishCockpitPanel({ showWhenEmpty: true }),
-            renderSaasPublishFlowReviewPanel(),
-            renderSaasPublishCommandSummaryPanel(),
-            renderSaasLatestPublishResultPanel(),
-          ],
-        }),
-        renderSaasSettingsSectionGroup({
-          title: "高级流程能力",
-          detail: "商家路径、流程模板和 eBay 能力包属于配置，不干扰核心工作流。",
-          badge: "高级",
-          panels: [renderSaasMerchantSetupGuidePanel(ctx), renderSaasOperatingWorkbenchPanel(ctx), renderSaasMerchantWorkflowTemplatePanel(ctx), renderSaasEbaySkillPackCenter(ctx)],
+          title: "来源记录和可信度",
+          detail: "只有需要追溯报告来源或排查缺口时再展开。",
+          badge: "追溯",
+          panels: [renderSaasSourceRecordCollectorPanel(ctx), renderSaasSourceCredibilityPanel(ctx)],
         }),
       ],
     },
     {
       id: "governance",
-      label: "权限规则",
+      label: "团队权限",
       detail: "团队 / 记忆",
-      title: "权限和规则",
+      title: "团队权限",
+      intro: "这里只看谁能确认发布、退款、广告、采购付款和敏感客服承诺。",
       panels: [
         renderSaasMerchantPermissionPanel(),
         renderSaasSettingsSectionGroup({
@@ -30515,24 +30529,37 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       ],
     },
     {
-      id: "launch",
-      label: "上线",
-      detail: "收费 / 备份",
-      title: "上线准备",
+      id: "billing",
+      label: "订阅与安全",
+      detail: "套餐 / 安全",
+      title: "订阅与安全",
+      intro: "这里只解释套餐、额度、欠费停用和账号安全边界，不展示上线排查细节。",
+      panels: [
+        renderSaasMerchantBillingGuardrailPanel(ctx),
+        renderSaasSettingsSectionGroup({
+          title: "隐私和安全边界",
+          detail: "平台凭证、eBay token、模型 key 不在浏览器回显；真实高风险动作进决策中心。",
+          badge: "安全",
+          panels: [renderSaasMerchantSecurityBoundaryPanel()],
+        }),
+      ],
+    },
+  ];
+  if (saasOwnerLaunchCanView()) {
+    tabs.push({
+      id: "owner_ops",
+      label: "主理人高级",
+      detail: "上线 / 运行",
+      title: "主理人高级区",
+      intro: "只给内部管理员看，用于上线、WAF、队列、发布体检和生产门禁排查。",
       panels: [
         renderSaasOwnerLaunchControlPanel(),
         renderSaasSettingsSectionGroup({
-          title: "收费和额度",
-          detail: "订阅、额度、欠费停用和正式 provider 切换集中在这里。",
-          badge: "收费",
+          title: "正式收费和公网安全",
+          detail: "Stripe live、WAF、Bot、限流、稳定域名和回调域名只给上线前检查使用。",
+          badge: "内部",
           open: true,
-          panels: [renderSaasMerchantBillingGuardrailPanel(ctx), renderSaasBillingProviderPanel()],
-        }),
-        renderSaasSettingsSectionGroup({
-          title: "域名和公网安全",
-          detail: "WAF、Bot、限流、稳定域名和回调域名只给上线前检查使用。",
-          badge: "安全",
-          panels: [renderSaasSettingsSecurityPanel(ctx, options), renderSaasPublicSecurityStatusPanel(), renderSaasEdgeCutoverReadinessPanel()],
+          panels: [renderSaasBillingProviderPanel(), renderSaasSettingsSecurityPanel(ctx, options), renderSaasPublicSecurityStatusPanel(), renderSaasEdgeCutoverReadinessPanel()],
         }),
         renderSaasSettingsSectionGroup({
           title: "运行可靠性",
@@ -30541,20 +30568,37 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
           panels: [renderSaasQueueHealthPanel(), renderSaasCommercialLaunchGatePanel(), renderSaasMerchantProviderHubPanel(ctx)],
         }),
         renderSaasSettingsSectionGroup({
-          title: "发布前体检",
-          detail: "上线前需要完整红黄绿报告时再打开。",
-          badge: "体检",
-          panels: [renderSaasPublishHealthReportPanel(ctx, saasPreTestCheckRows(ctx, null), { compact: true })],
+          title: "主理人上线排查",
+          detail: "流程诊断、Listing 发布体检和发布后复盘集中在这里，不进入普通商家设置。",
+          badge: "排查",
+          panels: [
+            renderSaasCoreModuleDiagnosticsPanel(ctx),
+            renderSaasListingStoreSyncOverview(ctx),
+            renderSaasListingSyncedProductsPanel(ctx),
+            renderSaasListingIpReadinessPanel(ctx),
+            renderSaasPublishHealthReportPanel(ctx, saasPreTestCheckRows(ctx, null), { compact: true }),
+            renderSaasSevenStepLaunchGuidePanel(ctx, { compact: true }),
+            renderSaasPostPublishCockpitPanel({ showWhenEmpty: true }),
+            renderSaasPublishFlowReviewPanel(),
+            renderSaasPublishCommandSummaryPanel(),
+            renderSaasLatestPublishResultPanel(),
+            renderSaasMerchantSetupGuidePanel(ctx),
+            renderSaasOperatingWorkbenchPanel(ctx),
+            renderSaasMerchantWorkflowTemplatePanel(ctx),
+            renderSaasEbaySkillPackCenter(ctx),
+          ],
         }),
       ],
-    },
-  ];
+    });
+  }
+  return tabs;
 }
 
 function renderSaasSettingsCleanLayout(ctx = saasMerchantWorkbenchContext(), options = {}) {
   const tabs = saasSettingsTabDefinitions(ctx, options);
   const activeTab = tabs.find((tab) => tab.id === state.saasSettingsTab) || tabs[0];
   state.saasSettingsTab = activeTab.id;
+  const isOverview = activeTab.id === "general";
   return `
     <section class="panel full saas-settings-clean-shell" aria-label="设置">
       <aside class="saas-settings-clean-nav" aria-label="设置分类">
@@ -30576,9 +30620,9 @@ function renderSaasSettingsCleanLayout(ctx = saasMerchantWorkbenchContext(), opt
         <header>
           <p class="eyebrow">设置</p>
           <h2>${escapeHtml(activeTab.title)}</h2>
-          <p>设置只处理连接、安全、来源、AI、权限和上线准备。日常经营仍回到 AI CEO、Listing、批量铺货、素材工坊、客服订单和决策中心。</p>
+          <p>${escapeHtml(activeTab.intro || "设置只处理连接、安全、来源、AI、权限和订阅安全。日常经营仍回到工作台。")}</p>
         </header>
-        ${renderSaasSettingsReadableMap(activeTab.id)}
+        ${isOverview ? renderSaasSettingsReadableMap(activeTab.id) : renderSaasSettingsSubpageIntro(activeTab)}
         <div class="saas-settings-clean-panels">
           ${activeTab.panels.filter(Boolean).join("")}
         </div>

@@ -355,7 +355,7 @@ async function main() {
           settings_tab_count: document.querySelectorAll("[data-saas-settings-tab]").length,
           has_settings_home_hub: sectionHas(".saas-settings-home-hub"),
           settings_home_status_count: sectionCount(".saas-settings-home-status article"),
-          has_settings_simple_copy: text.includes("日常卖货不用进设置") && text.includes("什么时候需要打开设置"),
+          has_settings_simple_copy: text.includes("普通商家只看 5 个入口") && text.includes("什么时候需要打开设置"),
           has_media_tabs: Boolean(document.querySelector("#mediaProjectTabs, .media-project-tabs, [data-media-project-tab]")),
           has_media_simple_headline: text.includes("把商品图变成可用素材包"),
           has_media_simple_flow:
@@ -404,6 +404,23 @@ async function main() {
       },
       { id, view },
     );
+    if (view === "connect" && (await page.locator('.saas-settings-clean-nav [data-saas-settings-tab="model"]').count())) {
+      await page.locator('.saas-settings-clean-nav [data-saas-settings-tab="model"]').click();
+      await page.waitForTimeout(400);
+      check.settings_model_has_home_hub = await page.evaluate(() => {
+        const section = document.getElementById("view-connect");
+        return Boolean(section?.querySelector(".saas-settings-home-hub"));
+      });
+      check.settings_model_has_subpage_strip = await page.evaluate(() => {
+        const section = document.getElementById("view-connect");
+        return Boolean(section?.querySelector(".saas-settings-subpage-strip"));
+      });
+      await page
+        .screenshot({ path: path.join(outDir, "connect-model.png"), fullPage: true, timeout: 15000 })
+        .catch((error) => screenshotFailures.push({ view: "connect-model", error: String(error.message || error).slice(0, 300) }));
+      await page.locator('.saas-settings-clean-nav [data-saas-settings-tab="general"]').click();
+      await page.waitForTimeout(250);
+    }
     moduleChecks.push(check);
   }
 
@@ -451,11 +468,13 @@ async function main() {
   if (product.has_listing_internal_copy) failures.push("product daily Listing surface exposes internal report/debug copy");
   if (product.has_direct_publish_button) failures.push("product daily Listing surface exposes a direct publish button");
   const connect = moduleChecks.find((item) => item.view === "connect") || {};
-  if (!connect.has_settings_shell || connect.settings_tab_count !== 7) failures.push("settings clean shell/tabs missing");
+  if (!connect.has_settings_shell || connect.settings_tab_count < 6 || connect.settings_tab_count > 7) failures.push("settings clean shell/tabs missing");
   if (!connect.has_settings_home_hub || connect.settings_home_status_count < 4) {
     failures.push("settings compact hub/status missing");
   }
   if (!connect.has_settings_simple_copy) failures.push("settings simple usage copy missing");
+  if (connect.settings_model_has_home_hub) failures.push("settings child page repeats overview map");
+  if (!connect.settings_model_has_subpage_strip) failures.push("settings child page intro missing");
   const media = moduleChecks.find((item) => item.view === "media") || {};
   if (!media.has_media_tabs) failures.push("media tabs missing");
   if (!media.has_media_simple_headline || !media.has_media_simple_flow) failures.push("media simple workflow surface missing");

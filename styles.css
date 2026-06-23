@@ -36995,7 +36995,7 @@ body.saas-public-mvp .saas-listing-empty-state {
 
 body.saas-public-mvp .saas-settings-clean-shell {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: 236px minmax(0, 1fr);
   min-height: calc(100vh - 40px);
   padding: 0;
   overflow: hidden;
@@ -37064,7 +37064,7 @@ body.saas-public-mvp .saas-settings-clean-nav small {
 body.saas-public-mvp .saas-settings-clean-content {
   display: grid;
   align-content: start;
-  gap: 22px;
+  gap: 18px;
   padding: 56px min(7vw, 72px);
   overflow: auto;
 }
@@ -37201,6 +37201,42 @@ body.saas-public-mvp .saas-settings-home-status small {
   font-size: 12px;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-settings-subpage-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  max-width: 1120px;
+  padding: 12px 14px;
+  border: 1px solid rgba(15, 45, 40, 0.1);
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+body.saas-public-mvp .saas-settings-subpage-strip div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-settings-subpage-strip span {
+  color: #08766e;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+body.saas-public-mvp .saas-settings-subpage-strip strong {
+  color: #14231f;
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+body.saas-public-mvp .saas-settings-subpage-strip small {
+  color: #657670;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 body.saas-public-mvp .saas-settings-where-to-go {
@@ -37677,6 +37713,11 @@ body.saas-public-mvp .saas-edge-required-urls em {
 
   body.saas-public-mvp .saas-settings-clean-content {
     padding: 24px;
+  }
+
+  body.saas-public-mvp .saas-settings-subpage-strip {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   body.saas-public-mvp .saas-readable-page-head {

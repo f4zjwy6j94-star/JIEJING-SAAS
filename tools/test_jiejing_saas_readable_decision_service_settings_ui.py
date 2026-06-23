@@ -38,7 +38,9 @@ def main() -> None:
     service_scope = function_scope(app_js, "renderSaasServiceCenter")
     settings_scope = (
         function_scope(app_js, "renderSaasSettingsReadableMap")
+        + function_scope(app_js, "renderSaasSettingsSubpageIntro")
         + function_scope(app_js, "renderSaasSettingsGeneralPanel")
+        + function_scope(app_js, "renderSaasMerchantSecurityBoundaryPanel")
         + function_scope(app_js, "renderSaasSettingsCleanLayout")
         + function_scope(app_js, "saasSettingsTabDefinitions")
         + function_scope(app_js, "renderSaasCoreModuleDiagnosticsPanel")
@@ -76,20 +78,22 @@ def main() -> None:
         require(service_scope, marker, "service and orders simplified surface")
 
     for marker in [
-        "日常卖货不用进设置",
-        "账号店铺",
+        "普通商家只看 5 个入口",
+        "账号与店铺",
         "店铺数据",
-        "AI 设置",
-        "流程复盘",
-        "权限规则",
-        "上线准备",
+        "AI 与素材",
+        "团队权限",
+        "订阅与安全",
         "什么时候需要打开设置",
         "设置首页不让商家读技术排查",
         "账号健康和事故处理",
         "来源记录和可信度",
-        "Listing 和发布体检",
+        "主理人高级区",
+        "隐私和安全边界",
+        "主理人上线排查",
         "运行可靠性",
         "data-saas-settings-map-tab",
+        'data-saas-settings-tab="general"',
         "生产队列",
         "worker heartbeat",
         "dead_letter",

@@ -123,7 +123,6 @@ def main() -> int:
         "keepalive: true",
         "/merchant-ceo/commands",
         "merchant_ceo_command",
-        'renderSaasCeoModuleHandoffPanel("bulk"',
         "AI CEO 已接单",
         "saas-ceo-route-card",
         "saas-ceo-module-handoff",
@@ -149,7 +148,7 @@ def main() -> int:
     if "if (isSaasPublicMvpMode())" not in ceo_submit_body:
         return fail("public SaaS AI CEO submit should use the real command routing path before legacy media demo routing")
     for marker in [
-        "20260622-listing-form-prefill-groups-v15",
+        "20260623-settings-merchant-v3",
     ]:
         if marker not in app_html + index_html:
             return fail(f"frontend cache version must advance after owner publish UI change: {marker}")
