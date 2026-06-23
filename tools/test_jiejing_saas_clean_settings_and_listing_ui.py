@@ -148,6 +148,15 @@ def main() -> None:
     require(app_js, "function saasModelValueFailureMessage", "precise model value failure toast")
     require(app_js, "模型服务返回错误，可能是模型名不被接受", "merchant-facing model failure reason")
     require(app_js, "设置地图", "settings readable map")
+    require(app_html, "只确认会影响钱、账号和买家的动作", "decision center low-learning-cost headline")
+    require(app_html, "没有高风险动作时，这里保持安静", "decision center quiet empty-state promise")
+    require(app_html, "全部待办", "decision center non-technical secondary filter")
+    require(app_js, "只确认会影响钱、账号和买家的动作", "rendered decision center low-learning-cost headline")
+    require(app_js, "这里只让你决定三件事：同意、稍后、或者回去补资料。", "rendered decision center simple action copy")
+    require(app_js, "刷新待办", "rendered decision center non-technical refresh copy")
+    require(app_js, "日常卖货不用进设置", "settings map daily-use boundary")
+    require(app_js, "eBay 读取到的商品、订单、政策、费用是否齐全。", "settings data map merchant-facing copy")
+    require(app_js, "日常使用不用看；出问题、上线前检查或复盘时再打开。", "settings diagnostics merchant-facing boundary")
     require(app_js, "AI 连接、素材生成和成本", "merchant-friendly model settings title")
     require(app_js, "function saasIsEnglishHeavyMerchantText", "legacy English report display guard")
     require(app_js, "旧记录的英文摘要已隐藏", "legacy English report summary hidden")
@@ -202,6 +211,36 @@ def main() -> None:
     ]:
         if internal_marker in app_js + app_html:
             raise AssertionError(f"Core SaaS copy should not expose old internal workflow wording: {internal_marker}")
+    confirm_start = app_html.index('id="view-confirm"')
+    confirm_end = app_html.index('id="view-service"', confirm_start)
+    confirm_body = app_html[confirm_start:confirm_end]
+    rendered_confirm_start = app_js.index("function renderSaasConfirmPanel")
+    rendered_confirm_end = app_js.index("function saasRealBackendBindingStatus", rendered_confirm_start)
+    rendered_confirm_body = app_js[rendered_confirm_start:rendered_confirm_end]
+    for internal_marker in [
+        "高级细节",
+        "上线检查",
+        "后台",
+        "运维",
+        "preflight",
+        "packet",
+        "provider",
+    ]:
+        if internal_marker in confirm_body:
+            raise AssertionError(f"Decision center should remain a simple confirmation surface: {internal_marker}")
+        if internal_marker in rendered_confirm_body:
+            raise AssertionError(f"Rendered decision center should remain a simple confirmation surface: {internal_marker}")
+    settings_map_start = app_js.index("function renderSaasSettingsReadableMap")
+    settings_map_end = app_js.index("function renderSaasBillingProviderPanel", settings_map_start)
+    settings_map_body = app_js[settings_map_start:settings_map_end]
+    for internal_marker in [
+        "packet",
+        "callback",
+        "Provider Hub",
+        "settings-only",
+    ]:
+        if internal_marker in settings_map_body:
+            raise AssertionError(f"Settings map should use merchant-facing wording: {internal_marker}")
     draft_start = app_js.index("function renderSaasListingDraftEditor")
     draft_end = app_js.index("function renderSaasListingGapAndRiskPanel", draft_start)
     draft_body = app_js[draft_start:draft_end]

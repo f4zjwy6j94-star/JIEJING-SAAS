@@ -16312,8 +16312,8 @@ function renderSaasConfirmPanel() {
     <section class="saas-readable-page-head saas-confirm-readable-head" aria-label="决策中心说明">
       <div>
         <span>决策中心</span>
-        <strong>只处理会影响真实经营的决定</strong>
-        <p>没有要确认的事，这页就保持安静。普通报告、资料整理和低风险草稿不再挤进来；真实发布、付款、退款、改价、库存、广告、政策和敏感客服承诺才会停在这里。</p>
+        <strong>只确认会影响钱、账号和买家的动作</strong>
+        <p>没有高风险动作时，这里保持安静。AI 可以继续整理草稿、素材和报告；发布、付款、退款、广告和客服承诺必须等你点头。</p>
       </div>
       <div class="saas-page-next-action">
         <b>${allPendingCount ? `${allPendingCount} 个待确认` : "当前无待确认"}</b>
@@ -16324,9 +16324,9 @@ function renderSaasConfirmPanel() {
       <div>
         <span class="pill ${state.saasConnected ? "green" : "neutral"}">确认中心</span>
         <strong>${cards.length ? `${escapeHtml(productLabel)} 有需要确认的动作` : "还没有确认项"}</strong>
-        <p>详细记录、发布复盘、上线检查和历史重复合并都在设置里看；这里让商家快速决定“同意、稍后、或回去补资料”。</p>
+        <p>这里只让你决定三件事：同意、稍后、或者回去补资料。其他记录和复盘都放在设置里，不打扰当前任务。</p>
       </div>
-      <button class="secondary-action" type="button" data-saas-action="refresh">刷新确认中心</button>
+      <button class="secondary-action" type="button" data-saas-action="refresh">刷新待办</button>
     </div>
     <div class="saas-confirm-summary saas-confirm-simple-summary">
       <article>
@@ -30201,13 +30201,13 @@ function renderSaasCoreModuleDiagnosticsPanel(ctx = saasMerchantWorkbenchContext
     {
       label: "AI CEO 汇报",
       title: reports.length ? `${reports.length} 条报告` : "等待真实报告",
-      detail: "核心页只展示报告；packet、AI 连接和真实写入状态在设置里排查。",
+      detail: "AI CEO 页面只放对话和结论；连接状态、模型状态和安全边界在设置里看。",
       tone: reports.length ? "green" : "amber",
     },
     {
       label: "Listing",
-      title: ctx.hasPacket ? "可接官方数据包" : "等待数据包",
-      detail: `${ctx.presentCount}/${ctx.coverageTotal} 类资源；同步商品、账号证据和历史报告不再挤进 Listing 主流程。`,
+      title: ctx.hasPacket ? "店铺资料可用" : "等待店铺资料",
+      detail: `${ctx.presentCount}/${ctx.coverageTotal} 类资料；商品、政策、订单和历史报告放在这里核对，不挤进 Listing 主流程。`,
       tone: ctx.hasPacket ? "green" : "amber",
     },
     {
@@ -30219,13 +30219,15 @@ function renderSaasCoreModuleDiagnosticsPanel(ctx = saasMerchantWorkbenchContext
     {
       label: "客服与订单",
       title: hasOfficialOrders ? "订单数据可用" : "等待订单 / 消息",
-      detail: `listing=${Boolean(hasListings)} / policies=${Boolean(hasPolicies)} / service_memory=${serviceMemories.length}`,
+      detail: hasOfficialOrders
+        ? "已有订单和消息来源，可以辅助起草回复。退款、重发、补偿和明确到货承诺仍要确认。"
+        : `商品资料${hasListings ? "已接入" : "待接入"}，店铺政策${hasPolicies ? "已接入" : "待接入"}，客服记忆 ${serviceMemories.length} 条。`,
       tone: hasOfficialOrders ? "green" : "amber",
     },
     {
       label: "发布复盘",
       title: publishResult.status || state.saasLastPublishRecovery?.status || "等待真实发布结果",
-      detail: "发布后驾驶舱、恢复核对、清理计划和测试数据治理只在设置/上线排查里看。",
+      detail: "发布后的结果、恢复核对、清理计划和测试数据治理都在设置里看，不打扰日常工作流。",
       tone: publishResult.status ? "green" : "amber",
     },
   ];
@@ -30233,11 +30235,11 @@ function renderSaasCoreModuleDiagnosticsPanel(ctx = saasMerchantWorkbenchContext
     <section class="saas-merchant-evidence-panel saas-core-module-diagnostics-panel" aria-label="核心模块排查">
       <div class="saas-merchant-path-head">
         <div>
-          <span>核心模块排查</span>
+          <span>工作流状态</span>
           <strong>复杂状态归到设置，工作台只保留经营动作</strong>
-          <p>这里承接从 AI 汇报、Listing、决策中心、客服与订单移出的排查信息。普通商家日常不需要理解这些细节；出问题、上线前检查或主理人复盘时再看。</p>
+          <p>这里承接从 AI CEO、Listing、决策中心、客服与订单移出的状态信息。日常使用不用看；出问题、上线前检查或复盘时再打开。</p>
         </div>
-        <em>settings-only</em>
+        <em>设置里查看</em>
       </div>
       <div class="saas-core-module-diagnostics-grid">
         ${rows
@@ -30258,18 +30260,18 @@ function renderSaasCoreModuleDiagnosticsPanel(ctx = saasMerchantWorkbenchContext
 
 function renderSaasSettingsReadableMap(activeTabId = "general") {
   const items = [
-    ["account", "账号与 eBay 授权", "登录、店铺连接、callback、只读/发布授权都在这里看。"],
-    ["data", "数据包与来源", "packet、官方资源、来源可信度和同步缺口集中在这里。"],
-    ["model", "AI 连接", "对话、报告、素材分账和用量成本集中在这里。"],
-    ["workflow", "工作流排查", "模块状态、发布复盘、客服来源和体检证据集中在这里。"],
+    ["account", "账号与 eBay 授权", "登录、店铺连接、授权地址、只读/发布权限都在这里看。"],
+    ["data", "店铺数据与来源", "eBay 读取到的商品、订单、政策、费用是否齐全。"],
+    ["model", "AI 连接", "AI 是否可用、报告是否生成、素材用量和成本集中在这里。"],
+    ["workflow", "工作流复盘", "模块状态、发布复盘、客服来源和上线体检集中在这里。"],
     ["governance", "团队权限与规则", "谁能确认发布/退款/广告，哪些商家规则可长期记忆。"],
     ["launch", "上线门禁", "计费、备份、监控、真实写入和生产发布前检查。"],
   ];
   const routes = [
     ["连接 eBay", "账号"],
-    ["看 packet 是否完整", "数据"],
+    ["看 eBay 数据是否完整", "数据"],
     ["检查 AI 连接", "模型"],
-    ["发布体检、复盘和技能包", "工作流"],
+    ["发布体检和复盘", "工作流"],
     ["谁能批准高风险动作", "权限"],
     ["付费上线和备份", "上线"],
   ];
@@ -30278,8 +30280,8 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
       <div class="saas-settings-simple-map-head">
         <div>
           <span>设置地图</span>
-          <strong>设置只管 6 件事</strong>
-          <p>日常卖货不用在这里找功能；出问题、连接店铺、看数据、管 AI、管权限或上线前检查时才来设置。</p>
+          <strong>日常卖货不用进设置</strong>
+          <p>设置只处理连接店铺、看数据、管 AI、管权限、查工作流和上线准备。真正的经营动作仍在 AI CEO、Listing、批量铺货、素材工坊、客服订单和决策中心里完成。</p>
         </div>
       </div>
       <div class="saas-settings-map-grid">

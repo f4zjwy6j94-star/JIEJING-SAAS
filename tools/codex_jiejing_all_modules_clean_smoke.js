@@ -368,6 +368,9 @@ async function main() {
           has_service_simple_headline: text.includes("三件事：消息、订单、回复"),
           has_service_simple_flow: text.includes("消息、订单、回复") && text.includes("没有真实订单时保持空白"),
           has_service_internal_copy: /官方数据包|Listing Package|等待官方订单|等待官方同步|官方数据可用|客服事实表|Provider Hub|provider|后台排查|后台状态|连接和排查在设置|去设置同步 eBay/.test(text),
+          has_confirm_simple_headline: text.includes("只确认会影响钱、账号和买家的动作"),
+          has_confirm_simple_action_copy: text.includes("这里只让你决定三件事"),
+          has_confirm_internal_copy: /高级细节|上线检查|后台|运维|preflight|packet|provider/.test(text),
           has_chat_reply: Boolean(document.querySelector("#view-cockpit #ceoChat .message.ai")),
           has_chat_stream: Boolean(document.querySelector("#view-cockpit #ceoChat")),
           has_ceo_composer_visible: (() => {
@@ -458,6 +461,11 @@ async function main() {
   const service = moduleChecks.find((item) => item.view === "service") || {};
   if (!service.has_service_simple_headline || !service.has_service_simple_flow) failures.push("service simple workflow surface missing");
   if (service.has_service_internal_copy) failures.push("service daily surface exposes internal evidence/provider copy");
+  const confirm = moduleChecks.find((item) => item.view === "confirm") || {};
+  if (!confirm.has_confirm_simple_headline || !confirm.has_confirm_simple_action_copy) {
+    failures.push("confirm simple decision surface missing");
+  }
+  if (confirm.has_confirm_internal_copy) failures.push("confirm surface exposes internal/debug copy");
   const cockpit = moduleChecks.find((item) => item.view === "cockpit") || {};
   if (!cockpit.has_chat_stream || !cockpit.has_ceo_composer_visible || !cockpit.chat_before_form) {
     failures.push("AI CEO chat stream/composer missing or wrong order");
