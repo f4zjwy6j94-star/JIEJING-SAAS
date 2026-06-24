@@ -38615,6 +38615,16 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer-dock {
   margin-top: 0;
 }
 
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-input-hint {
+  display: block !important;
+  max-width: 640px;
+  margin: 10px auto 0;
+  color: #76847e;
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: center;
+}
+
 body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer {
   min-height: 64px;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -38738,6 +38748,11 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card .primary-a
 
   body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread-intro p:not(.eyebrow) {
     font-size: 13px;
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-input-hint {
+    max-width: 320px;
+    font-size: 11px;
   }
 
   body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer,

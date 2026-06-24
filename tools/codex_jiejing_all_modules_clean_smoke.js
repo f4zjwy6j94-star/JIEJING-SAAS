@@ -314,6 +314,28 @@ async function main() {
   await waitForWorkbenchReady(page, "view-cockpit");
   await waitForVisibleCeoComposer(page);
   await page
+    .screenshot({ path: path.join(outDir, "cockpit-first-run.png"), fullPage: true, timeout: 15000 })
+    .catch((error) => screenshotFailures.push({ view: "cockpit-first-run", error: String(error.message || error).slice(0, 300) }));
+  const ceoFirstRunEntry = await page.evaluate(() => {
+    const root = document.querySelector("#view-cockpit.is-active");
+    const text = root?.innerText || "";
+    const placeholder = root?.querySelector("#ceoInput")?.getAttribute("placeholder") || "";
+    const starterPrompts = root?.querySelector(".saas-ai-ceo-starter-prompts");
+    const routeCard = root?.querySelector(".saas-ceo-routing-task-card");
+    return {
+      has_one_sentence_title: text.includes("一句话交给 AI CEO"),
+      has_plain_chat_copy: text.includes("问问题直接答") && text.includes("真实发布、付款、退款和广告先问你"),
+      has_input_example: placeholder.includes("帮我调研这个商品") && placeholder.includes("Listing 草稿"),
+      has_plain_chat_hint:
+        text.includes("也可以直接问普通问题") && text.includes("自动进入 Listing、批量、素材、客服或决策中心"),
+      has_starter_prompts: Boolean(starterPrompts && getComputedStyle(starterPrompts).display !== "none"),
+      has_route_card: Boolean(routeCard && routeCard.offsetParent !== null),
+      exposes_internal_copy: /packet|provider|preflight|数据包|后台|排查/i.test(text),
+      placeholder,
+      preview: text.trim().slice(0, 240),
+    };
+  });
+  await page
     .locator("#view-cockpit.is-active #ceoInput")
     .fill("帮我调研 eBay 热销收纳小商品，并先整理 Listing 草稿", { timeout: 15000 });
   await page.locator("#view-cockpit.is-active #ceoForm").evaluate((form) => form.requestSubmit());
@@ -603,6 +625,7 @@ async function main() {
     badResponses,
     screenshotFailures,
     navCount: await page.locator(".nav-item").count(),
+    ceoFirstRunEntry,
     ceoRouteTask,
     ceoRouteScenarios,
     ceoPlainConsultation,
@@ -673,6 +696,20 @@ async function main() {
   const cockpit = moduleChecks.find((item) => item.view === "cockpit") || {};
   if (!cockpit.has_chat_stream || !cockpit.has_ceo_composer_visible || !cockpit.chat_before_form) {
     failures.push("AI CEO chat stream/composer missing or wrong order");
+  }
+  if (
+    !ceoFirstRunEntry.has_one_sentence_title ||
+    !ceoFirstRunEntry.has_plain_chat_copy ||
+    !ceoFirstRunEntry.has_input_example ||
+    !ceoFirstRunEntry.has_plain_chat_hint
+  ) {
+    failures.push("AI CEO first-run entry is not a low-learning-cost one-sentence composer");
+  }
+  if (ceoFirstRunEntry.has_starter_prompts || ceoFirstRunEntry.has_route_card) {
+    failures.push("AI CEO first-run entry still exposes starter prompts or a route card before user intent");
+  }
+  if (ceoFirstRunEntry.exposes_internal_copy) {
+    failures.push("AI CEO first-run entry exposes internal/debug copy");
   }
   if (!ceoRouteTask.visible || ceoRouteTask.target !== "product" || !ceoRouteTask.clicked_product_route) {
     failures.push("AI CEO lightweight routing task card did not route to Listing");

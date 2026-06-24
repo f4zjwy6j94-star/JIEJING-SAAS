@@ -25144,16 +25144,21 @@ function renderSaasCockpitRealWorkbench() {
           <section class="ceo-panel cockpit-chat-panel saas-ai-ceo-chat saas-ai-ceo-thread" aria-label="AI CEO 对话窗口">
             <div class="saas-ai-ceo-thread-intro ${hasVisibleCeoChat ? "is-compact" : "is-empty"}">
               <p class="eyebrow">JIEJING AI CEO</p>
-              <h2>${hasVisibleCeoChat ? "AI CEO" : "直接说，我来处理"}</h2>
-              <p>${hasVisibleCeoChat ? "继续当前对话。" : "普通问题直接答；经营任务我带到对应模块；真实动作先确认。"}</p>
+              <h2>${hasVisibleCeoChat ? "AI CEO" : "一句话交给 AI CEO"}</h2>
+              <p>${hasVisibleCeoChat ? "继续当前对话。" : "问问题直接答；说商品、链接、图片或订单，我会自动带到对应流程；真实发布、付款、退款和广告先问你。"}</p>
             </div>
             <div class="chat-log saas-ai-ceo-chat-stream" id="ceoChat" aria-live="polite">${visibleCommandChat}</div>
             <div class="saas-ceo-route-task-slot" id="saasCeoRouteTaskSlot">${renderSaasCeoRoutingTaskCard(visibleCommand)}</div>
             <div class="saas-ai-ceo-composer-dock">
               <form class="chat-compose saas-ai-ceo-composer" id="ceoForm">
-                <input id="ceoInput" type="text" placeholder="直接输入问题、商品、链接、图片或订单情况" autocomplete="off" />
+                <input id="ceoInput" type="text" placeholder="比如：帮我调研这个商品，整理 Listing 草稿" autocomplete="off" />
                 <button type="submit" class="primary-action" aria-label="发送给 AI CEO">发送</button>
               </form>
+              ${
+                hasVisibleCeoChat
+                  ? ""
+                  : `<p class="saas-ai-ceo-input-hint">也可以直接问普通问题。遇到 eBay 经营任务时，JIEJING 会自动进入 Listing、批量、素材、客服或决策中心。</p>`
+              }
             </div>
           </section>
         </div>
