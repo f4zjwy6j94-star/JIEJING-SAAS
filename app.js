@@ -5518,6 +5518,26 @@ function renderSaasBulkCandidatePreview() {
           <p>只生成 Listing 与素材草稿；发布、付款、广告仍要确认。</p>
         </article>
       </div>
+      ${renderSaasFirstRunAssuranceStrip(
+        [
+          {
+            label: "不会乱铺",
+            title: "先分组，再决定",
+            copy: "这里只做可测、补资料、暂不做三类判断。",
+          },
+          {
+            label: "不用长表",
+            title: "商家只看结论",
+            copy: "候选明细和后台证据收在报告里。",
+          },
+          {
+            label: "不直接执行",
+            title: "发布、付款和广告都停住",
+            copy: "同意后也只是送草稿和素材任务。",
+          },
+        ],
+        "bulk-first-run-strip",
+      )}
       <div class="bulk-decision-dock">
         <div>
           <span>当前批次</span>
@@ -6547,6 +6567,40 @@ function saasMediaTaskLabel(report = {}) {
   return saasReportTypeLabel(type) || "商品草稿";
 }
 
+function ensureSaasMediaFirstRunStrip() {
+  const view = document.querySelector("#view-media");
+  if (!view) return null;
+  const mediaFirstRunHtml = renderSaasFirstRunAssuranceStrip(
+    [
+      {
+        label: "可以空着",
+        title: "先等商品草稿",
+        copy: "没有商品或来源图时，不展示旧样例。",
+      },
+      {
+        label: "缺图会停住",
+        title: "先补素材来源",
+        copy: "图片授权、规格和实物一致性不清楚就不回写。",
+      },
+      {
+        label: "不直接发布",
+        title: "只产出素材草稿",
+        copy: "广告、发布和买家承诺仍然要确认。",
+      },
+    ],
+    "saas-media-first-run-strip",
+  );
+  const existing = view.querySelector(".saas-media-first-run-strip");
+  if (existing) {
+    existing.outerHTML = mediaFirstRunHtml;
+    return view.querySelector(".saas-media-first-run-strip");
+  }
+  const anchor = view.querySelector(".media-flow-status") || view.querySelector(".media-pipeline") || view.querySelector(".media-project-tabs");
+  if (!anchor) return null;
+  anchor.insertAdjacentHTML("afterend", mediaFirstRunHtml);
+  return view.querySelector(".saas-media-first-run-strip");
+}
+
 function renderSaasMediaStudioStatus() {
   const ctx = saasMerchantWorkbenchContext();
   const reports = saasMediaReportRows(ctx);
@@ -6563,11 +6617,12 @@ function renderSaasMediaStudioStatus() {
       <article><span>去向</span><strong>回写 Listing</strong><p>生成结果先预览，通过后回到刊登草稿，不直接发布。</p></article>
     `;
   }
+  const mediaFirstRunStrip = ensureSaasMediaFirstRunStrip();
   let generatedAssetsPanel = document.querySelector("#view-media .saas-media-generated-assets");
   if (generatedAssetsPanel) {
     generatedAssetsPanel.outerHTML = renderSaasMediaGeneratedAssetsPanel(ctx);
   } else {
-    (flowStatus || tabs).insertAdjacentHTML("afterend", renderSaasMediaGeneratedAssetsPanel(ctx));
+    (mediaFirstRunStrip || flowStatus || tabs).insertAdjacentHTML("afterend", renderSaasMediaGeneratedAssetsPanel(ctx));
   }
   tabs.innerHTML = reports.length
     ? reports
@@ -6604,6 +6659,7 @@ function renderSaasMediaStudioStatus() {
     `;
   const activeTab = tabs.querySelector(".media-project-tab.is-active") || tabs.querySelector(".media-project-tab");
   if (activeTab) syncSaasMediaProjectDraft(activeTab);
+  ensureSaasMediaFirstRunStrip();
 }
 
 function renderMediaProjectTabs() {
@@ -9346,6 +9402,27 @@ function saasListingOpportunityFromDraft(draft = null, marketReport = null, list
   };
 }
 
+function renderSaasFirstRunAssuranceStrip(items = [], extraClass = "") {
+  const normalized = (Array.isArray(items) ? items : []).filter(Boolean).slice(0, 4);
+  if (!normalized.length) return "";
+  const className = ["saas-first-run-strip", extraClass].filter(Boolean).join(" ");
+  return `
+    <div class="${escapeHtml(className)}" aria-label="开始前说明">
+      ${normalized
+        .map(
+          (item) => `
+            <article class="is-${escapeHtml(item.tone || "neutral")}">
+              <span>${escapeHtml(item.label || "")}</span>
+              <strong>${escapeHtml(item.title || "")}</strong>
+              <p>${escapeHtml(item.copy || "")}</p>
+            </article>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
 function renderSaasListingSourceCards({ marketReport, listingReport, syncedRows = [] } = {}) {
   const hasAiReport = Boolean(marketReport || listingReport);
   const sourceMode = state.saasListingComposerDraft?.source_type || state.saasListingSourceMode || "";
@@ -9718,6 +9795,23 @@ function renderSaasListingComposerWorkspace({
               )
               .join("")}
           </div>
+          ${renderSaasFirstRunAssuranceStrip([
+            {
+              label: "不用完整",
+              title: "先把线索放进来",
+              copy: "链接、图片说明、价格成本或规格不完整也可以开始。",
+            },
+            {
+              label: "缺口会停住",
+              title: "不把猜测写进 Listing",
+              copy: "缺尺寸、图片授权、物流或利润线索时先提醒你补。",
+            },
+            {
+              label: "不直接发布",
+              title: "只生成草稿和体检",
+              copy: "发布、改价、库存、广告和退款仍进决策中心。",
+            },
+          ])}
         </section>
         <div class="saas-listing-composer-actions">
           <button class="primary-action" type="button" data-saas-action="listing-start-backend-workflow" ${state.saasLoading ? "disabled" : ""}>生成经营链路</button>
@@ -24538,7 +24632,10 @@ function setView(nextView, options = {}) {
   if (!isSaasPublicMvpMode() || nextView === "cockpit") renderCockpitExperience();
   if (nextView === "workflow") renderWorkflow();
   if (nextView === "product") renderProductListingCenter();
-  if (nextView === "media") renderMediaProjectTabs();
+  if (nextView === "media") {
+    renderMediaProjectTabs();
+    ensureSaasMediaFirstRunStrip();
+  }
   if (nextView === "bulk") renderBulkFactory();
   if (nextView === "activity") renderActivities();
   if (nextView === "confirm") renderConfirmations();
@@ -27155,6 +27252,27 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
           <p>普通问题可先起草；退款、补偿、重发、地址修改、明确到货日和敏感承诺必须进决策中心。</p>
         </article>
       </div>
+
+      ${renderSaasFirstRunAssuranceStrip(
+        [
+          {
+            label: "没有订单不造假",
+            title: "等真实消息进来",
+            copy: "客服页不显示虚构买家、虚构订单或虚构物流。",
+          },
+          {
+            label: "先按档案回复",
+            title: "只引用已知事实",
+            copy: "商品档案、订单状态和商家规则是回复依据。",
+          },
+          {
+            label: "承诺会停住",
+            title: "敏感回复进决策中心",
+            copy: "退款、补偿、重发、地址修改和明确到货日都要确认。",
+          },
+        ],
+        "saas-service-first-run-strip",
+      )}
 
       <section class="saas-service-simple-workspace" aria-label="客服与订单工作区">
         <article class="${hasOfficialOrders ? "is-green" : "is-empty"}">
@@ -33045,6 +33163,7 @@ function init() {
   renderWorkflow();
   renderProductListingCenter();
   renderBulkFactory();
+  ensureSaasMediaFirstRunStrip();
   renderActivities();
   renderSaasBackendPanel();
   renderConfirmations();

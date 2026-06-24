@@ -24233,6 +24233,7 @@ textarea:focus-visible {
   .ceo-command-actions,
   .bulk-preference-head,
   .bulk-guardrail-strip,
+  .bulk-first-run-strip,
   .bulk-pref-group,
   .bulk-pref-options,
   .bulk-candidate-head,
@@ -29128,6 +29129,65 @@ body.saas-public-mvp .saas-listing-input-chips button:focus-visible {
   background: #eef8f5;
   transform: translateY(-1px);
   outline: none;
+}
+
+body.saas-public-mvp .saas-first-run-strip,
+.bulk-first-run-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-first-run-strip article,
+.bulk-first-run-strip article {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(15, 45, 40, 0.1);
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+body.saas-public-mvp .saas-first-run-strip article.is-green,
+.bulk-first-run-strip article.is-green {
+  border-color: rgba(8, 118, 110, 0.22);
+  background: #eef9f5;
+}
+
+body.saas-public-mvp .saas-first-run-strip article.is-amber,
+.bulk-first-run-strip article.is-amber {
+  border-color: rgba(214, 142, 43, 0.26);
+  background: #fff8ed;
+}
+
+body.saas-public-mvp .saas-first-run-strip span,
+.bulk-first-run-strip span {
+  color: #08766e;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+body.saas-public-mvp .saas-first-run-strip strong,
+.bulk-first-run-strip strong {
+  color: #11221e;
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+body.saas-public-mvp .saas-first-run-strip p,
+.bulk-first-run-strip p {
+  margin: 0;
+  color: #5c6f6a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+body.saas-public-mvp .saas-media-first-run-strip,
+body.saas-public-mvp .saas-service-first-run-strip {
+  margin: 0;
 }
 
 body.saas-public-mvp .saas-listing-composer-actions {
@@ -34248,6 +34308,10 @@ body.saas-public-mvp .saas-real-cockpit-shell .saas-merchant-evidence-panel {
 
   body.saas-public-mvp .saas-ceo-module-handoff,
   body.saas-public-mvp .saas-ceo-module-meta {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.saas-public-mvp .saas-first-run-strip {
     grid-template-columns: minmax(0, 1fr);
   }
 

@@ -349,6 +349,8 @@ async function main() {
           has_listing_input_panel: sectionHas(".saas-listing-input-panel"),
           has_listing_source_grid: sectionHas(".saas-listing-v2-source-grid"),
           has_listing_status_rail: sectionHas(".saas-listing-v2-status-bar"),
+          has_listing_first_run_strip:
+            sectionHas(".saas-first-run-strip") && text.includes("不用完整") && text.includes("缺口会停住"),
           has_listing_workflow_action: sectionHas('[data-saas-action="listing-start-backend-workflow"]') && text.includes("生成经营链路"),
           has_listing_ai_handoff: sectionHas(".saas-listing-ai-handoff") && text.includes("来自 AI CEO"),
           has_listing_ai_handoff_input: String(section?.querySelector("#saasListingComposerInput")?.value || "").includes("不要触发真实 eBay 写入"),
@@ -383,13 +385,20 @@ async function main() {
             text.includes("选素材包") &&
             text.includes("看预览") &&
             text.includes("回写 Listing"),
+          has_media_first_run_strip: Array.from(section?.querySelectorAll(".saas-media-first-run-strip, .saas-first-run-strip") || []).some((node) => {
+            const nodeText = node.innerText || "";
+            return nodeText.includes("可以空着") && nodeText.includes("不直接发布");
+          }),
           has_media_internal_copy: /官方数据包|Listing Package|数据包可用|等待数据包|确认记录|费用和用量|素材状态拆分|Provider Hub|素材 Provider|素材 brief|后台证据|后台状态|素材清单已回写|流程导入不需要本机路径/.test(text),
           has_bulk_simple_headline: text.includes("先小批量筛，不一键乱铺"),
           has_bulk_roadmap: sectionHas(".bulk-saas-roadmap"),
           has_bulk_grouping_copy: text.includes("建议先测") && text.includes("需要补资料") && text.includes("暂时不做"),
+          has_bulk_first_run_strip: sectionHas(".bulk-first-run-strip") && text.includes("不会乱铺") && text.includes("不直接执行"),
           has_bulk_internal_copy: /真实账号批量质检|官方数据包|字段完整度|质检槽位|等待数据包/.test(text),
           has_service_simple_headline: text.includes("三件事：消息、订单、回复"),
           has_service_simple_flow: text.includes("消息、订单、回复") && text.includes("没有真实订单时保持空白"),
+          has_service_first_run_strip:
+            sectionHas(".saas-service-first-run-strip") && text.includes("没有订单不造假") && text.includes("只引用已知事实"),
           has_service_internal_copy: /官方数据包|Listing Package|等待官方订单|等待官方同步|官方数据可用|客服事实表|Provider Hub|provider|后台排查|后台状态|连接和排查在设置|去设置同步 eBay/.test(text),
           has_confirm_simple_headline: text.includes("只让你处理真正要拍板的事"),
           has_confirm_simple_action_copy: text.includes("这里只做三种选择"),
@@ -512,6 +521,7 @@ async function main() {
   if (!product.has_listing_cplus_stack || !product.has_listing_input_panel) failures.push("product C+ listing input surface missing");
   if (!product.has_listing_ai_handoff || !product.has_listing_ai_handoff_input) failures.push("product AI CEO to Listing handoff missing");
   if (!product.has_listing_source_grid || !product.has_listing_status_rail) failures.push("product C+ listing source/status rail missing");
+  if (!product.has_listing_first_run_strip) failures.push("product first-run assurance strip missing");
   if (!product.has_listing_workflow_action) failures.push("product C+ listing backend workflow action missing");
   if (!product.has_listing_market_stage || !product.has_listing_draft_stage) failures.push("product C+ market-to-draft flow missing");
   if (!product.has_listing_asset_profit_stage || !product.has_listing_publish_confirmation_stage) {
@@ -532,14 +542,17 @@ async function main() {
   const media = moduleChecks.find((item) => item.view === "media") || {};
   if (!media.has_media_tabs) failures.push("media tabs missing");
   if (!media.has_media_simple_headline || !media.has_media_simple_flow) failures.push("media simple workflow surface missing");
+  if (!media.has_media_first_run_strip) failures.push("media first-run assurance strip missing");
   if (media.has_media_internal_copy) failures.push("media daily surface exposes internal evidence/provider copy");
   const bulk = moduleChecks.find((item) => item.view === "bulk") || {};
   if (!bulk.has_bulk_simple_headline || !bulk.has_bulk_roadmap || !bulk.has_bulk_grouping_copy) {
     failures.push("bulk simple grouping surface missing");
   }
+  if (!bulk.has_bulk_first_run_strip) failures.push("bulk first-run assurance strip missing");
   if (bulk.has_bulk_internal_copy) failures.push("bulk daily surface exposes internal evidence/debug copy");
   const service = moduleChecks.find((item) => item.view === "service") || {};
   if (!service.has_service_simple_headline || !service.has_service_simple_flow) failures.push("service simple workflow surface missing");
+  if (!service.has_service_first_run_strip) failures.push("service first-run assurance strip missing");
   if (service.has_service_internal_copy) failures.push("service daily surface exposes internal evidence/provider copy");
   const confirm = moduleChecks.find((item) => item.view === "confirm") || {};
   if (!confirm.has_confirm_simple_headline || !confirm.has_confirm_simple_action_copy) {
