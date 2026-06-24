@@ -2021,14 +2021,14 @@ const wizard = [
     ],
   },
   {
-    title: "连接 eBay 官方授权，不让小白手填后台数据",
-    reason: "API 可以先理解成“平台给软件用的官方安全通道”，不是把账号密码交给捷境。小白起步也应该尽早接官方授权：先只读读取店铺、Listing、订单、费用和广告表现，用来预填资料、减少手工复制；真实发布、退款、改价、广告和客服发送仍然关闭。",
+    title: "连接 eBay 官方授权，减少手工搬运后台数据",
+    reason: "API 可以理解成平台提供给软件使用的官方安全通道，不是把账号密码交给捷境。起步阶段建议先接官方只读授权：读取店铺、Listing、订单、费用和广告表现，用来预填资料、减少手工复制；真实发布、退款、改价、广告和客服发送仍然关闭。",
     field: "ebayApiMode",
     options: [
       ["oauth_ready", "推荐：捷境带我连接 eBay", "打开 eBay 官方授权页，像网页登录一样确认；只读读取店铺上下文，不会发布、退款、改价或投广告"],
-      ["guided_later", "我不会操作，系统一步步带", "用大按钮、截图提示和回到捷境的检查清单，不让小白研究 OAuth"],
+      ["guided_later", "稍后按引导连接", "用大按钮、截图提示和回到捷境的检查清单完成授权"],
       ["manual_first", "暂不连接，先用截图/表格", "刚了解捷境、不想马上授权，或 API 暂时接不上时，先上传 Seller Hub 截图、CSV 或订单样本继续跑流程"],
-      ["developer_ready", "我有开发者配置", "适合技术团队接应用 Key、OAuth 和 Sell APIs"],
+      ["developer_ready", "我已有应用配置", "适合技术团队接应用 Key、OAuth 和 Sell APIs"],
     ],
   },
   {
@@ -2079,7 +2079,7 @@ const wizard = [
     reason: "风险偏好决定 AI 是多给草稿，还是多停在确认中心。新手默认更保守。",
     field: "riskLevel",
     options: [
-      ["conservative", "保守", "多提醒、多确认，适合新店和小白"],
+      ["conservative", "保守", "多提醒、多确认，适合新店和新手商家"],
       ["balanced", "均衡", "低风险推进，高风险确认"],
       ["aggressive", "激进", "更快推进，但需要你有经验并承担判断"],
     ],
@@ -2205,7 +2205,7 @@ const stageWizardFields = {
 const onboardingTaskMeta = {
   merchantStage: {
     task: "先告诉 AI CEO：你现在是哪类 eBay 卖家。",
-    ai: "按身份选择不同路线，不让小白走老手流程，也不让老店重走开店流程。",
+    ai: "按当前阶段选择不同路线，新手商家不需要走老店流程，成熟店铺也不需要重走开店流程。",
     human: "你只需要选最像自己的状态。",
   },
   ebaySetup: {
@@ -2236,7 +2236,7 @@ const onboardingTaskMeta = {
   profitFloor: {
     task: "设定最低利润提醒线。",
     ai: "低于这条线时，选品、广告和 Listing 发布都会先停下来。",
-    human: "小白建议先用 15%，避免看起来有订单但实际亏钱。",
+    human: "新手商家建议先用 15%，避免看起来有订单但实际亏钱。",
   },
   riskLevel: {
     task: "决定 AI CEO 多激进还是多保守。",
@@ -2451,7 +2451,7 @@ const listingProjects = [
     status: "素材生成中",
     progress: 46,
     risk: "中风险",
-    brief: "小白样例：从一张商品/货源图开始，生成平台素材包、详情页草稿和短视频脚本，再进确认中心。",
+    brief: "新店样例：从一张商品/货源图开始，生成平台素材包、详情页草稿和短视频脚本，再进确认中心。",
     steps: [
       ["项目状态", "素材工坊正在准备图片包和短视频脚本，尺寸、重量、材质、香粒安全说明和发布动作进入确认中心", "current"],
     ],
@@ -3060,7 +3060,7 @@ const backflowProductReport = {
             "公开 eBay 类目页显示同类商品在 Home Fragrances；正式发布前用 eBay 类目接口 复核。",
           ],
           ["Condition", "New", "可用", "新品类默认 New；如样品/瑕疵/二手必须改。"],
-          ["Format", "Fixed Price", "可用", "小白路径默认一口价，不做拍卖。"],
+          ["Format", "Fixed Price", "可用", "新店路径默认一口价，不做拍卖。"],
           ["Price", "US$24.90 / US$34.90 / US$44.90", "待 AI CEO/商家确认", "沿用市场判断定价，需按真实重量重算利润。"],
           ["Quantity", "50", "可用", "初始默认 50，真实库存或代发能力不足时降低。"],
           [
@@ -3489,7 +3489,7 @@ const activities = [
       "eBay 类目参考：Home Fragrances · 20552（正式版由 eBay 类目接口 复核）",
       "关键词：backflow incense burner / waterfall incense burner / zen home decor",
       "素材生成输出：白底主图、场景图、尺寸图、详情页和短视频脚本需求",
-      "店铺规则：小白起步、资料自动推进、核心经营动作确认",
+      "店铺规则：新店起步、资料自动推进、核心经营动作确认",
       "店铺默认模板：物流、付款、退货三类规则",
     ],
     result:
@@ -3512,7 +3512,7 @@ const activities = [
       "eBay Item Description / Item Location / Picture 政策",
       "上架资料包：Title、Category、Specs、Pictures、Video、Policies",
       "素材草稿：白底图、烟雾效果图、场景图、详情页和短视频脚本",
-      "商家规则：小白默认保守，发布、改价、承诺和退款进入确认中心",
+      "商家规则：新店默认保守，发布、改价、承诺和退款进入确认中心",
     ],
     result:
       "暂不建议直接发布。允许继续做草稿和素材预览，但必须先清零 6 条红线：实测尺寸/重量、图片授权、材质颜色、是否含香粒、真实发货地、功效词和 店铺业务政策 模板。",
@@ -3643,7 +3643,7 @@ const confirmations = [
     reason: "AI 生成的烟雾效果图、家居场景图和短视频脚本会影响买家判断，必须确认材质、颜色、尺寸和倒流效果没有偏差。",
     evidence: "已生成：白底主图、茶室场景图、家居场景图、细节图、尺寸图、详情页长图和英语短视频脚本；尺寸、重量和是否含香粒仍缺失。",
     suggestion: "先通过“继续做草稿”，但不要用于正式发布；等真实尺寸、颜色、材质、香粒说明和烟雾效果来源确认后再作为正式素材。",
-    defaultAction: "小白默认：继续生成草稿，不发布。",
+    defaultAction: "默认继续生成草稿，不发布。",
   },
   {
     id: "incense_missing_info",
@@ -3651,9 +3651,9 @@ const confirmations = [
     risk: "high",
     label: "高风险",
     reason: "尺寸、重量、材质、是否含香粒和发货方式会影响 Listing 字段、运费、履约承诺和退货风险，AI 不能替商家乱填。",
-    evidence: "AI 建议：小白先用保守履约；缺失单件尺寸、包装重量、包装尺寸、香粒是否随附、退货地址。",
+    evidence: "AI 建议：新店先用保守履约；缺失单件尺寸、包装重量、包装尺寸、香粒是否随附、退货地址。",
     suggestion: "先不要发布。补齐尺寸、包装重量、供货价、发货地、是否含香粒和退货地址后，再让 AI 重新算利润和运费。",
-    defaultAction: "小白默认：先补资料。",
+    defaultAction: "默认先补资料。",
   },
   {
     id: "publish_listing",
@@ -3663,7 +3663,7 @@ const confirmations = [
     reason: "真实发布会影响 eBay 账号，v0.1 仅允许模拟。",
     evidence: "利润 18.6%；风控未发现禁售词；账号已恢复为可继续验证状态。",
     suggestion: "只允许模拟发布预览，不要触发真实刊登；真实发布前仍要复核账号额度、费用、素材真实性和店铺政策。",
-    defaultAction: "小白默认：只看预览。",
+    defaultAction: "默认只预览，不触发真实刊登。",
   },
   {
     id: "media_assets",
@@ -3673,7 +3673,7 @@ const confirmations = [
     reason: "图片和视频会直接影响转化，也可能触发版权、夸大宣传或实物不符风险。",
     evidence: "主图1张、场景图3张、细节图1张、尺寸图1张、详情页长图1张；短视频脚本和分镜待审核。",
     suggestion: "先通过素材方向，要求 AI 标注“效果预览”，并删除无法证明的疗愈、净化、助眠、宗教功效等卖点。",
-    defaultAction: "小白默认：通过方向，保留审核。",
+    defaultAction: "默认通过方向，保留审核。",
   },
   {
     id: "shipping_promise",
@@ -3683,7 +3683,7 @@ const confirmations = [
     reason: "供应商代发稳定性不完全可控，时效承诺过短会伤害店铺表现。",
     evidence: "供应链建议 5-7 天；保守规则要求人工确认。",
     suggestion: "不要承诺 5 天，先用 7-10 天保守 handling time，等供应商连续履约稳定后再缩短。",
-    defaultAction: "小白默认：选保守时效。",
+    defaultAction: "默认选保守时效。",
   },
   {
     id: "ai_permission",
@@ -3693,7 +3693,7 @@ const confirmations = [
     reason: "客服会影响差评、纠纷、退款和到货承诺，不能让 AI 直接替你发出去。",
     evidence: "当前默认：AI 可以写草稿和整理上下文；客服发送、退款、补偿、差评处理和明确到货承诺都要你确认。",
     suggestion: "保持“AI 写草稿，你点发送”。普通问题可以快速确认，退款、补偿、差评和时效承诺必须看清楚再发。",
-    defaultAction: "小白默认：客服消息确认后发送。",
+    defaultAction: "默认客服消息确认后发送。",
   },
   {
     id: "fees_readonly",
@@ -3703,7 +3703,7 @@ const confirmations = [
     reason: "财务费用属于敏感数据，但不读取就无法准确计算订阅费、广告费和真实利润。",
     evidence: "仅读取 Account / Finances 数据；不修改订阅、不创建广告、不扣费。",
     suggestion: "如果准备真实店铺接入，建议只读授权费用数据；如果只是体验，可以先手动填写成本。",
-    defaultAction: "小白默认：先手动，准备好再只读授权。",
+    defaultAction: "默认先手动，准备好再只读授权。",
   },
   {
     id: "ad_budget_change",
@@ -3713,7 +3713,7 @@ const confirmations = [
     reason: "广告会产生真实费用，AI 只能生成建议；创建广告、调预算、暂停广告必须由你确认。",
     evidence: "当前模式为只读广告表现；Promoted Listings 动作未授权。",
     suggestion: "暂不开启广告执行权限。先让 AI 生成广告建议和预算上限，实际创建和调预算由商家确认。",
-    defaultAction: "小白默认：只读，不投放。",
+    defaultAction: "默认只读，不投放。",
   },
 ];
 
@@ -4012,7 +4012,7 @@ const ebayFeeKnowledge = [
   {
     title: "退款和退货预留",
     code: "return_reserve",
-    detail: "退货、退款、纠纷和补偿会吞掉利润，尤其是小白和跨境履约阶段。",
+    detail: "退货、退款、纠纷和补偿会吞掉利润，尤其是新店和跨境履约阶段。",
     handling: "按自动化规则加入风险预留，不让 AI 用过于乐观的利润推动上架。",
   },
 ];
@@ -4057,7 +4057,7 @@ const ebayPolicyOrchestration = [
     code: "05",
     title: "退款政策 Return",
     status: "发布必需",
-    body: "读取或确认 退货政策编号（系统内部保存），包含是否接受退货、退货期限、退货运费责任等。跨境小白默认保守，避免做超出能力的售后承诺。",
+    body: "读取或确认 退货政策编号（系统保存），包含是否接受退货、退货期限、退货运费责任等。跨境新店默认保守，避免做超出能力的售后承诺。",
     handoff: "客服会同步学习这条边界；退款、补偿、重发仍然人工接管。",
   },
   {
@@ -4103,7 +4103,7 @@ const landingProfiles = [
   {
     value: "newbie",
     tag: "从 0 到可确认上架",
-    title: "小白，还没开店",
+    title: "新手商家，还没开店",
     detail: "先选身份和边界，再用一张货源图跑通第一条 eBay Listing 草稿。",
     entry: "从 eBay 开店和第一件商品开始",
     steps: ["准备 eBay 开店资料", "上传货源图/实拍图", "生成 Listing、素材和利润判断"],
@@ -4235,7 +4235,7 @@ const manualActionDetails = {
   },
   ebay_oauth: {
     title: "连接 eBay 官方授权",
-    intro: "小白也应该尽早接 API，但不能让小白研究 OAuth。正式版会由捷境生成 eBay 官方授权链接，商家只需要登录 eBay、确认授权范围，再回到捷境继续。发布、退款、改价、广告执行和客服发送仍然关闭。",
+    intro: "新手商家也可以尽早接 API，但不需要研究 OAuth。正式版会由捷境生成 eBay 官方授权链接，商家只需要登录 eBay、确认授权范围，再回到捷境继续。发布、退款、改价、广告执行和客服发送仍然关闭。",
     items: [
       "推荐先授权读取店铺、Listing、订单、费用和广告表现，让 AI 少问你、少让你复制粘贴。",
       "授权页必须来自 eBay 官方；捷境不要求你提供 eBay 密码。",
@@ -4258,7 +4258,7 @@ const manualActionDetails = {
   },
   fulfillment_setup: {
     title: "AI 预填履约方案",
-    intro: "履约影响 handling time、利润、退货和账号表现。小白不用凭空选，AI CEO 会根据货源、店铺地区和目标市场先给保守建议。",
+    intro: "履约影响 handling time、利润、退货和账号表现。新店不用凭空选择，AI CEO 会根据货源、店铺地区和目标市场先给保守建议。",
     items: [
       "如果是供应商代发，AI 默认用保守发货时效和更谨慎的退货承诺。",
       "如果你能自发货或有海外仓，只需要确认仓库、处理时间和退货地址。",
@@ -4409,7 +4409,7 @@ const manualActionDetails = {
   },
   rule_template: {
     title: "添加规则模板",
-    intro: "这不是让小白自己写自动化，而是把多店铺、团队阶段的自动化边界交给 AI 结构化执行。",
+    intro: "这不是让商家自己写自动化，而是把多店铺、团队阶段的自动化边界交给 AI 结构化执行。",
     items: [
       "店铺规则：不同店铺可设置不同利润底线、履约方式和授权范围。",
       "品类规则：不同品类可设置素材要求、禁售风险、尺码/规格检查项。",
@@ -4421,10 +4421,10 @@ const manualActionDetails = {
 
 const sellerFlowDetails = {
   newbie: {
-    eyebrow: "小白起步",
+    eyebrow: "新店起步",
     title: "从 0 到第一条可确认 Listing",
     intro: "目标不是让新手研究一堆 eBay 表单或 API 术语，而是先完成官方注册，再由捷境带你连接 eBay 官方授权；能读取的数据自动预填，读不到的地方再问几个简单问题。",
-    startLabel: "开始小白起步",
+    startLabel: "开始新店起步",
     steps: [
       { title: "注册/登录捷境", ai: "保存你的阶段、计划和后续向导进度。", human: "人工：填写邮箱，确认自己当前是起步卖家。" },
       { title: "跳转 eBay 官方注册", ai: "给你开店资料清单和官方入口，完成后回到捷境继续。", human: "人工：在 eBay 官方页面完成卖家账号注册。", manualKey: "ebay_account" },
@@ -4500,12 +4500,12 @@ const cockpitProfiles = {
     ],
     priority: {
       eyebrow: "AI CEO 今日判断",
-      title: "今天只看 3 个动作",
-      note: "首页只保留会影响推进的动作。普通整理、草稿和汇报在后台继续走。",
+      title: "今天优先处理 3 个动作",
+      note: "首页保留会影响推进的动作。普通整理、草稿和汇报会继续生成。",
       pill: "今日主线",
       cards: [
         ["1 · 先做产品刊登", "倒流香炉从图片做到草稿", "AI 会先判断、写草稿、做素材、算利润；你只补不能乱猜的真实资料。", "进入产品刊登", "open-optimization", "primary-action", true],
-        ["2 · 再看 AI 汇报", "直接看结论，不看过程堆料", "市场、素材、Listing、利润和风险会整理成汇报，不需要先导出 PDF。", "看 AI 汇报", "open-baseline", "secondary-action", false],
+        ["2 · 再看 AI 汇报", "直接看结论和依据", "市场、素材、Listing、利润和风险会整理成汇报，不需要先导出 PDF。", "看 AI 汇报", "open-baseline", "secondary-action", false],
         ["3 · 只确认关键动作", "发布、付款、退款、广告、客服承诺", "这些才需要你点头；其他草稿和整理让 AI 自动推进。", "看待我确认", "confirm-info", "secondary-action", false],
       ],
     },
@@ -4575,7 +4575,7 @@ const cockpitProfiles = {
       ["确认中心", ""],
     ],
     board: [
-      ["先接什么", "订单、买家消息、tracking", "把客服和物流状态合并，不让商家在多个后台里来回找。"],
+      ["先接什么", "订单、买家消息、tracking", "把客服和物流状态合并，减少在多个后台之间来回查找。"],
       ["先看什么", "待发货和异常件", "先处理会影响账号表现、退款和差评的订单。"],
       ["AI 能做", "草稿回复和风险排序", "普通咨询出草稿；退款、补偿、重发和承诺变更进确认中心。"],
       ["你来确认", "退款、赔付、重发、承诺", "这些动作影响钱和账号，不让 AI 自动决定。"],
@@ -4583,7 +4583,7 @@ const cockpitProfiles = {
     priority: {
       eyebrow: "AI CEO 订单建议",
       title: "先让 AI 接住客服和物流",
-      note: "普通问题自动回复；高风险售后停住。你只看会影响账号表现和钱的事。",
+      note: "普通问题可先生成回复；高风险售后会停住，优先处理影响账号表现和资金的事项。",
       pill: "订单优先",
       cards: [
         ["1 · 开启自动客服", "普通问题先让 AI 接待", "物流查询、尺寸材质、已妥投说明可以自动处理。", "看自动客服", "open-service", "primary-action", true],
@@ -5534,7 +5534,7 @@ function renderSaasBulkCandidatePreview() {
         <div>
           <span>当前批次</span>
           <strong>准备筛 ${escapeHtml(countLabel)} 个候选方向</strong>
-          <p>${escapeHtml(sourceHint)} 本页只看结论和下一步草稿，不让商家处理复杂设置。</p>
+          <p>${escapeHtml(sourceHint)} 先给出结论和下一步草稿，复杂连接和边界设置会集中到设置页。</p>
         </div>
         <button class="secondary-action" type="button" data-bulk-action="report">查看批量汇报</button>
       </div>
@@ -5554,7 +5554,7 @@ function renderSaasBulkCandidatePreview() {
       title: "需要补资料",
       value: "先问清楚",
       points: ["尺寸重量", "材质包装", "图片授权"],
-      note: "资料补齐后再判断，不让缺口直接进发布包。",
+      note: "资料补齐后再判断，缺口不会进入发布包。",
     },
     {
       type: "blocked",
@@ -5570,7 +5570,7 @@ function renderSaasBulkCandidatePreview() {
       <div>
         <span>候选结论</span>
         <strong>${escapeHtml(countLabel)} 个候选方向已按经营边界分组</strong>
-        <p>只看三类结果：能试、要补、先不做。确认继续后，只生成草稿和素材任务。</p>
+        <p>结果分成三类：能试、要补、先不做。确认继续后，只生成草稿和素材任务。</p>
       </div>
       <div class="bulk-candidate-actions">
         <button class="secondary-action" type="button" data-bulk-action="generate-candidates">重新分组</button>
@@ -5680,7 +5680,7 @@ function renderBulkCandidatePreview() {
       <div>
         <span>候选清单已生成</span>
         <strong>${countLabel} 个机会已完成第一轮判断，先展示代表品</strong>
-        <p>AI 先把候选分流，不让商家在几十个商品里硬看。建议先测的商品会进入产品刊登和素材工坊；资料不够的先问供应商；风险高的直接拦住。</p>
+        <p>AI 先把候选商品分流。建议先测的商品会进入产品刊登和素材工坊；资料不够的先问供应商；风险高的直接拦住。</p>
       </div>
       <div class="bulk-candidate-actions">
         <button class="secondary-action" type="button" data-bulk-action="generate-candidates">重新生成</button>
@@ -6062,7 +6062,7 @@ function renderCockpitMarketBoard() {
       <div>
         <p class="eyebrow">多品市场报告</p>
         <h2>多个商品同时调研时，在首页切换看结论</h2>
-        <p class="section-note">单品深挖看完整报告；批量筛选只看总览、分组和该推进的商品，不让商家翻几十份长报告。</p>
+        <p class="section-note">单品深挖看完整报告；批量筛选展示总览、分组和该推进的商品，减少反复翻报告的成本。</p>
       </div>
       <span class="pill green">${marketDrafts.length} 个候选品 · 当前 ${selectedIndex}/${marketDrafts.length}</span>
     </div>
@@ -6538,7 +6538,7 @@ function syncSaasMediaProjectDraft(button) {
   setText("#mediaPreviewNote", note);
   setText("#mediaRouteStatus", "流程导入");
   setText("#mediaEntryStatus", "流程导入");
-  setText("#mediaEntryNote", "接收商品草稿和图片需求，只看结果和待补项。");
+  setText("#mediaEntryNote", "接收商品草稿和图片需求，展示结果、预览和待补项。");
   setText("#mediaRunStatus strong", title ? "等待素材生成" : "等待商品草稿或来源图");
   setText("#mediaRunStatus p", title ? "可以生成本轮素材草稿，生成后先预览再回写 Listing。" : "也可以切到独立上传，先处理一张来源图。");
   setText("#mediaLocalPath", "当前使用商品草稿");
@@ -6546,7 +6546,7 @@ function syncSaasMediaProjectDraft(button) {
   const config = readMediaGenerationConfig({ entry: "project" });
   setText(
     "#mediaDecisionSummary",
-    `当前商品：${title}。本轮生成：${note}。待补资料：${gap}。只产出素材草稿，不会自动发布、投广告或替商家承诺。`,
+    `当前商品：${title}。本轮生成：${note}。待补资料：${gap}。只产出素材草稿，不会自动发布、投广告或替你承诺。`,
   );
   renderMediaQualityBoard(config);
 }
@@ -6806,7 +6806,7 @@ function publishGateForDraft(draft) {
     blockers.push("eBay 类目参数还没校验：系统需要确认商品放在哪个类目，并返回这个类目必填哪些参数");
   }
   if (!ebayPoliciesReadyForDraft(draft)) {
-    blockers.push("店铺默认物流、支付、退货规则还没读取或确认：连接账号后系统会自动套用，不让商家每个商品重复填写");
+    blockers.push("店铺默认物流、支付、退货规则还没读取或确认：连接账号后系统会优先套用已确认模板，减少重复填写");
   }
   const reportLevel = blockers.length ? "数据增强报告" : "发布前报告";
   const sourceHealth = missing.length
@@ -6834,7 +6834,7 @@ function publishActionHint(draft) {
   const status = publishFlowStatusForDraft(draft);
   if (status === "published") return `已生成受控 itemId：${state.publishFlow.simulatedItemId || "LOCAL-ITEM"}`;
   if (status === "pending") return "已生成发布确认单，等待你在确认中心点头。";
-  if (status === "blocked") return "发布锁已打开：先补供应商资料、类目字段和店铺政策，或切到内部教程模式继续走闭环。";
+  if (status === "blocked") return "发布暂未满足条件：先补供应商资料、类目字段和店铺政策，再继续生成确认单。";
   const gate = publishGateForDraft(draft);
   if (gate.locked) return `${gate.reportLevel}：可以看草稿，但真实发布前还要补 ${gate.blockers.length} 类资料。`;
   return "发布动作从这里发起：先生成确认单，再到确认中心点头。";
@@ -8628,7 +8628,7 @@ function saasPreTestNextAction(ctx = saasMerchantWorkbenchContext()) {
   const hasReports = Boolean(latestSaasReportByTypes(["market.report", "market.data_packet"]) && latestSaasReportByTypes(["listing.package", "product.listing"]));
   if (!state.saasConnected) return { action: "refresh", label: "先读取登录状态", detail: "登录后读取店铺、packet、报告和确认中心。" };
   if (!ctx.hasPacket) return { action: "sync-ebay-readonly", label: "同步 eBay 店铺数据", detail: "只读同步，不重复 OAuth，不触碰真实写入。" };
-  if (!isSaasModelConfigured()) return { action: "open-activity", label: "检查 AI 连接状态", detail: "不要求重填 key，只看后端密钥边界状态。" };
+  if (!isSaasModelConfigured()) return { action: "open-activity", label: "检查 AI 连接状态", detail: "查看 AI 连接是否可用；不会在前端要求输入密钥。" };
   if (!hasReports) return { action: "run-model-value-rehearsal", label: "生成 Market Report + Listing Package", detail: "生成中文报告和刊登资料，再进入发布体检。" };
   return { action: "focus-publish-intake", label: "开始一次全新商品发布测试", detail: "录入全新商品，先查重和体检，再送决策中心。" };
 }
@@ -8826,7 +8826,7 @@ function renderSaasFirstOrderLaunchLoopPanel(ctx = saasMerchantWorkbenchContext(
       <div class="saas-first-order-head">
         <div>
           <span>首单经营闭环</span>
-          <strong>从第一个商品到发布后复盘，不让商家在功能堆里迷路</strong>
+          <strong>从第一个商品到发布后复盘，保持一条清晰主线</strong>
           <p>AI CEO 可以正常对话；遇到 eBay 经营任务时，必须走官方数据、刊登包、发布体检、确认中心和复盘链路。这里不触发 OAuth、不扣款、不直接写 eBay。</p>
         </div>
         <div class="saas-first-order-next">
@@ -9847,7 +9847,7 @@ function renderSaasListingMinimalWorkspace({
         <div>
           <p class="eyebrow">JIEJING Listing</p>
           <h2>把商品资料变成可确认的 eBay Listing 草稿</h2>
-          <p>这里默认只保留一条主线：给商品资料、生成 Listing 草稿、发布前检查、送去确认。账号连接、授权和内部排查统一归到设置。</p>
+          <p>这里默认只保留一条主线：给商品资料、生成 Listing 草稿、发布前检查、送去确认。账号连接、授权和安全状态统一归到设置。</p>
         </div>
         <span class="pill ${reportsReady ? "green" : packetReady ? "amber" : "neutral"}">${escapeHtml(reportLabel)}</span>
       </div>
@@ -10040,7 +10040,7 @@ function renderSaasProductListingCenter(view) {
           <div>
             <span class="pill ${ctx.hasPacket ? "green" : "amber"}">${ctx.hasPacket ? "数据包可用" : "等待数据包"}</span>
             <strong>eBay 官方资源进入 Listing 工厂</strong>
-            <p>Listing 工厂只看标准数据包和来源记录；缺口会停住，不用本地商品样例补空白。</p>
+            <p>Listing 会引用标准数据包和来源记录；资料缺口会明确提示，不会用本地样例补空白。</p>
           </div>
           <button class="secondary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !state.saasConnected ? "disabled" : ""}>更新 eBay 数据</button>
         </div>
@@ -10230,14 +10230,14 @@ function renderProductListingCenter() {
         <article><span>市场结论</span><strong>${escapeHtml(draft.conclusion)}</strong><p>${escapeHtml(draft.report[0][1])}</p></article>
         <article><span>刊登骨架</span><strong>${escapeHtml(draft.format)} · ${escapeHtml(draft.condition)}</strong><p>${escapeHtml(draft.category)} · ${escapeHtml(draft.categoryId)}</p></article>
         <article><span>素材状态</span><strong>${escapeHtml(draft.mediaPlan.map((item) => item[2]).join(" / "))}</strong><p>素材会回写到 Listing 和素材工坊，不在此处做深度编辑。</p></article>
-        <article><span>下一步</span><strong>${escapeHtml(draft.next)}</strong><p>缺口统一进入待补资料和确认中心，不让商家反复找字段。</p></article>
+        <article><span>下一步</span><strong>${escapeHtml(draft.next)}</strong><p>缺口统一进入待补资料和确认中心，减少反复查找字段。</p></article>
       </div>
       ${
         state.bulkApprovedCount
           ? `<div class="product-bulk-handoff">
               <span>来自批量铺货</span>
               <strong>${state.bulkApprovedCount === 50 ? "50+" : state.bulkApprovedCount} 个候选品已送入产品经理队列</strong>
-              <p>系统会按当前偏好先生成刊登草稿和素材需求；商家确认后，再进入素材工坊出图、视频和详情页。</p>
+              <p>系统会按当前偏好先生成刊登草稿和素材需求；确认后，再进入素材工坊出图、视频和详情页。</p>
             </div>`
           : ""
       }
@@ -10273,7 +10273,7 @@ function renderProductListingCenter() {
       <article>
         <span>下一步</span>
         <strong>${escapeHtml(draft.next)}</strong>
-        <p>商家只看缺口和关键决策，不需要理解 eBay 后台所有字段。</p>
+        <p>页面会提炼缺口和关键决策，不需要逐项理解 eBay 后台所有字段。</p>
       </article>
     `;
   }
@@ -10314,7 +10314,7 @@ function renderProductListingCenter() {
         </article>
       </div>
       <div class="product-form-grid">
-        <article><span>SKU</span><strong>${escapeHtml(draft.sku)}</strong><small>内部追踪编号</small></article>
+        <article><span>SKU</span><strong>${escapeHtml(draft.sku)}</strong><small>商品追踪编号</small></article>
         <article><span>Marketplace</span><strong>${escapeHtml(draft.marketplaceId)}</strong><small>${escapeHtml(draft.market)}</small></article>
         <article><span>Category</span><strong>${escapeHtml(draft.category)}</strong><small>${escapeHtml(draft.categoryId)}</small></article>
         <article><span>Condition</span><strong>${escapeHtml(draft.condition)}</strong><small>默认新品，需确认供应商是否全新包装</small></article>
@@ -10753,7 +10753,7 @@ function submitPublishConfirmation(draft = activeListingDraft()) {
 function completeSimulatedPublish() {
   const draft = getPublishDraft();
   if (state.publishFlow.status === "blocked") {
-    showActionToast("当前仍有发布前缺口。先补资料，或切到内部教程模式继续跑闭环。");
+    showActionToast("当前仍有发布前缺口。请先补资料，再继续发布确认。");
     renderConfirmations();
     return;
   }
@@ -10856,8 +10856,8 @@ function continuePublishWithDemoFacts() {
   renderConfirmations();
   renderProductListingCenter();
   renderGlobalFlowBar();
-  addAiMessage(`已用内部教程资料补齐「${draft.titleCn}」的尺寸、重量、类目和店铺政策样例。下一步可以确认模拟发布；正式版不会允许这样代替真实供应商资料。`);
-  showActionToast("内部教程资料已补齐：现在可以确认模拟发布。");
+  addAiMessage(`已用教程资料补齐「${draft.titleCn}」的尺寸、重量、类目和店铺政策样例。下一步可以确认模拟发布；正式版不会允许这样代替真实供应商资料。`);
+  showActionToast("教程资料已补齐：现在可以确认模拟发布。");
 }
 
 async function syncProductReadinessToRuntime(draft, facts) {
@@ -11496,7 +11496,7 @@ function renderPublishConfirmationCard(draft = getPublishDraft()) {
           <button class="primary-action" type="button" data-action="open-product-readiness">回产品刊登补资料</button>
           ${
             shouldShowLegacyDemoControls()
-              ? `<button class="secondary-action" type="button" data-action="demo-fill-publish">内部教程模式继续</button>`
+              ? `<button class="secondary-action" type="button" data-action="demo-fill-publish">教程模式继续</button>`
               : `<button class="secondary-action" type="button" data-action="open-source-manual">补真实货源资料</button>`
           }
           <button class="secondary-action" type="button" data-action="open-connect">去连接账号/货源资料</button>
@@ -14013,7 +14013,7 @@ function saasSevenStepLaunchItems(ctx = saasMerchantWorkbenchContext()) {
       label: "05",
       title: "素材资产",
       result: mediaReady ? "图片需求或素材清单已生成" : "等待主图 / 详情图 / 视频脚本",
-      next: mediaReady ? "进入发布体检。" : "素材工坊只显示可发布资产、授权状态和实物一致性，不解释内部模型 provider。",
+      next: mediaReady ? "进入发布体检。" : "素材工坊会展示可发布资产、授权状态和实物一致性。",
       done: mediaReady,
       view: "media",
       actionLabel: "看素材",
@@ -14328,7 +14328,7 @@ function renderSaasCockpitLiveStrip() {
         <span><b>${reportCount}</b> 报告</span>
         <span><b>${pendingConfirmations}</b> 待确认</span>
       </div>
-      <small>最后同步 ${escapeHtml(saasTimestampLabel(lastSync))} · ${escapeHtml(saasMerchantSourceLabel(sourceMode))} · AI CEO 只看清洗后的经营数据，不直接碰店铺密钥。</small>
+      <small>最后同步 ${escapeHtml(saasTimestampLabel(lastSync))} · ${escapeHtml(saasMerchantSourceLabel(sourceMode))} · AI CEO 只使用已清洗的经营数据，不接触店铺密钥。</small>
     </article>
   `;
 }
@@ -18410,7 +18410,7 @@ function renderSaasMerchantExecutiveCockpit(ctx = saasMerchantWorkbenchContext()
         <aside class="saas-cockpit-risk-queue" aria-label="风险队列">
           <div class="saas-cockpit-section-title">
             <strong>当前风险队列</strong>
-            <small>这里给主理人看优先级，不向普通用户承诺防封号或正式上线。</small>
+            <small>按影响范围和紧急程度排序；高风险动作会先停住。</small>
           </div>
           ${risks
             .map(
@@ -18866,7 +18866,7 @@ function saasOperatingWorkbenchRows(ctx = saasMerchantWorkbenchContext()) {
     {
       label: "新手 7 步发布引导",
       title: "连接 eBay → 同步店铺 → 输入商品 → 生成报告 → 素材 → 发布体检 → 决策中心发布",
-      detail: "每一步都有输入区、按钮、结果区和下一步提示；红项不通过就不让商家猜原因。",
+      detail: "每一步都有输入区、按钮、结果区和下一步提示；红项不通过会说明原因。",
       ready: ctx.hasPacket,
       view: "product",
       action: "开始新品试跑",
@@ -19426,8 +19426,8 @@ function renderSaasMerchantProviderHubPanel(ctx = saasMerchantWorkbenchContext()
       <div class="saas-merchant-path-head">
         <div>
           <span>外部能力</span>
-          <strong>只接捷境主链路需要的能力，不做复杂应用市场</strong>
-          <p>模型、素材、搜索、货源、物流和客服都服务 eBay 经营闭环；商家只看任务状态、来源和结果。</p>
+          <strong>只接 eBay 经营主链路需要的能力</strong>
+          <p>模型、素材、搜索、货源、物流和客服都服务 eBay 经营闭环；页面展示任务状态、来源和结果。</p>
         </div>
         <em>${ctx.hasPacket ? "数据包已就绪" : "等待数据包"}</em>
       </div>
@@ -19725,7 +19725,7 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
         <div>
           <span>AI 连接与素材生成</span>
           <strong>${modelConfigured ? "文本模型已配置，素材生成独立入库" : "先保存商家自己的 AI 连接凭证"}</strong>
-          <p>AI CEO 对话、Market Report 和 Listing Package 走文本模型；图片、详情页图、视频封面和视频任务会进入素材工坊资产清单。两条账本分开，商家只看结果和费用口径。</p>
+          <p>AI CEO 对话、Market Report 和 Listing Package 走文本模型；图片、详情页图、视频封面和视频任务会进入素材工坊资产清单。文本和素材任务分开记录用量。</p>
         </div>
       </div>
       <div class="saas-merchant-evidence-grid">
@@ -22458,6 +22458,12 @@ function handleSaasAction(button) {
     refreshSaasState();
     return;
   }
+  if (action === "open-public-home") {
+    closeAccountMenu();
+    revealSite("intro");
+    showActionToast("已返回捷境官网主页，当前登录会话会保留。");
+    return;
+  }
   if (action === "refresh-owner-launch-control") {
     refreshSaasOwnerLaunchControl();
     return;
@@ -23090,7 +23096,7 @@ function renderTaskSplitStatusBoard(project = getActiveProject()) {
       <div>
         <span>AI CEO 工作进度</span>
         <strong>把一件商品拆成 10 段可追溯工作</strong>
-        <p>商家不用管理内部岗位，只看每段结果、缺口和下一步。某一段超时或缺资料时，只停住这一段，不让商家误以为系统还在正常推进。</p>
+        <p>系统会把复杂任务拆成可追溯步骤。某一段超时或缺资料时，只暂停这一段，并提示下一步处理方式。</p>
       </div>
       <em>${finished}/${items.length} 已完成</em>
     </div>
@@ -23240,8 +23246,8 @@ function renderReadinessScoreBoard() {
     <div class="readiness-head">
       <div>
         <span>AI CEO 经营价值核对</span>
-        <strong>这页只看商家能用的经营结果</strong>
-        <p>这里不展示内部工程进度，只说明数据是否可信、AI CEO 产出了什么、哪些动作需要你确认、下一步该做什么。</p>
+        <strong>这里汇总可继续使用的经营结果</strong>
+        <p>页面会说明数据是否可信、AI CEO 产出了什么、哪些动作需要你确认、下一步该做什么。</p>
       </div>
       <em>${average}%</em>
     </div>
@@ -25912,12 +25918,12 @@ function renderCurrentDecisionGuide(cards = [], hiddenCoreCount = 0, hiddenAutoC
     tone = "red";
     body = "发布前缺供应商真实资料、类目字段或店铺规则映射。AI 可以继续整理草稿和素材，但不能把未知内容写进真实 eBay Listing。";
     next = shouldShowLegacyDemoControls()
-      ? "内部教程资料只能跑通模拟闭环；真实发布前仍要补齐尺寸、重量、材质、发货地和店铺三类业务规则。"
+      ? "教程资料只能跑通模拟闭环；真实发布前仍要补齐尺寸、重量、材质、发货地和店铺三类业务规则。"
       : "当前按真实 SaaS 处理：先补齐尺寸、重量、材质、发货地和店铺三类业务规则，再由确认中心生成受控交接。";
     actions = [
       ["open-source-manual", "补真实资料", "primary"],
       shouldShowLegacyDemoControls()
-        ? ["demo-fill-publish", "内部教程模式继续", "secondary"]
+        ? ["demo-fill-publish", "教程模式继续", "secondary"]
         : ["open-product-readiness", "查看真实缺口", "secondary"],
       ["open-policy-settings", "看店铺规则", "secondary"],
     ];
@@ -26039,7 +26045,7 @@ function renderConfirmBoundaryMap(cards = [], hiddenCoreCount = 0, hiddenAutoCou
     {
       label: "已阻断",
       title: publishStatus === "blocked" ? `${draft.titleCn} 缺资料，不能发布` : "资料不齐或风险过线就停住",
-      body: publishStatus === "blocked" ? "可以在内部教程模式跑闭环；真实发布必须补齐。" : "类目、政策、物流报价、利润或素材真实性不过关时不进入执行。",
+      body: publishStatus === "blocked" ? "可以在教程模式跑闭环；真实发布必须补齐资料。" : "类目、政策、物流报价、利润或素材真实性不过关时不进入执行。",
       tone: publishStatus === "blocked" ? "red" : "neutral",
     },
   ];
@@ -26077,7 +26083,7 @@ function simpleRiskLabel(itemOrRisk) {
 }
 
 function cleanDefaultAction(action) {
-  return (action || "先按保守方案继续。").replace(/^小白默认：/, "");
+  return (action || "先按保守方案继续。").replace(/^小白默认：/, "").replace(/^默认：/, "");
 }
 
 function permissionModeDetail(value = state.dna.permissionLevel) {
@@ -26293,7 +26299,7 @@ function onboardingSaveCopy(field) {
     }[state.dna.merchantStage] || "先确认当前店铺基础，再决定下一步。";
   }
   return {
-    merchantStage: "避免选错路线：小白不看老店接入，老店不重走开店教学。",
+    merchantStage: "避免选错路线：新手商家不看老店接入，成熟店铺不重走开店教学。",
     ebayApiMode: "优先连接官方只读授权，AI 预填和整理；暂不连接时先用截图/表格兜底，后面可在设置里补接。",
     feeInsightMode: "把订阅费、成交费、广告费、物流和退款预留放进费用整理。",
     sourceApiMode: "货源平台能接官方接口就先只读读取；暂不连接时用链接、图片、表格兜底，后面可在设置里补接。",
@@ -26935,8 +26941,8 @@ function renderSaasActivityCenter(view) {
       <header class="product-manager-header saas-real-listing-header">
         <div>
           <p class="eyebrow">AI CEO 汇报</p>
-          <h2>这里只看 AI CEO 已经产出的经营报告</h2>
-          <p class="section-note">授权、来源、模型连接和发布复盘已经归到设置。汇报页只保留市场结论、Listing 草稿、确认记录和可继续的经营动作。</p>
+          <h2>AI CEO 已经产出的经营报告</h2>
+          <p class="section-note">授权、来源、模型连接和发布复盘已经归到设置。汇报页保留市场结论、Listing 草稿、确认记录和可继续的经营动作。</p>
         </div>
         <span class="pill ${reports.length ? "green" : "amber"}">${reports.length ? `${reports.length} 条报告` : "等待报告"}</span>
       </header>
@@ -26949,7 +26955,7 @@ function renderSaasActivityCenter(view) {
         </div>
         <div class="saas-page-next-action">
           <b>${pendingConfirmations.length ? `${pendingConfirmations.length} 个确认项` : canGenerateReport ? "可以生成报告" : "去设置补连接"}</b>
-          <small>排查细节在设置</small>
+          <small>连接和来源在设置</small>
         </div>
       </section>
 
@@ -27609,11 +27615,11 @@ function renderEbayPolicyOrchestration() {
       <article>
         <span>保存到哪里</span>
         <strong>先保存为捷境店铺默认规则，再按授权决定是否写回 eBay</strong>
-        <p>小白最省心的方式是：捷境先读取 eBay 已有政策，AI 生成保守建议，商家确认后保存为捷境默认模板。正式写回 eBay 的 create/update policy 必须等商家给写入授权，并在确认中心再次点头。</p>
+        <p>新店最省心的方式是：捷境先读取 eBay 已有政策，AI 生成保守建议，商家确认后保存为捷境默认模板。正式写回 eBay 的 create/update policy 必须等商家给写入授权，并在确认中心再次点头。</p>
       </article>
       <article>
         <span>发布时怎么用</span>
-        <strong>产品刊登引用店铺默认政策，不让商家每个商品重复填</strong>
+        <strong>产品刊登引用店铺默认政策，减少重复填写</strong>
         <p>Listing 草稿只套用已读取或已确认的物流、支付、退货模板。商品差异只调整处理时间、发货地、重量、尺寸、易碎包装和售后说明。</p>
       </article>
       <article>
@@ -29234,9 +29240,9 @@ function renderSaasSettingsGeneralPanel(ctx = saasMerchantWorkbenchContext()) {
     <section class="saas-settings-card">
       <div class="saas-settings-card-head">
         <div>
-          <span>当前状态</span>
-          <strong>只看能不能继续经营</strong>
-          <p>设置首页不让商家读技术排查。这里只显示登录、店铺、AI、数据和高风险确认是否可用；真正做事仍回到工作台。</p>
+          <span>经营状态</span>
+          <strong>当前工作台是否准备好</strong>
+          <p>这里汇总账号、店铺、AI、数据和确认边界。商品刊登、素材、客服和决策动作仍在对应工作台完成。</p>
         </div>
         <button class="secondary-action" type="button" data-saas-action="refresh" ${state.saasLoading ? "disabled" : ""}>刷新</button>
       </div>
@@ -29290,6 +29296,88 @@ function renderSaasSettingsAccountPanel(ctx = saasMerchantWorkbenchContext(), op
   `;
 }
 
+function renderSaasSettingsAccountAccessPanel() {
+  const summary = saasCurrentAccountSummary();
+  return `
+    <section class="saas-settings-card saas-account-access-panel">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>捷境账号</span>
+          <strong>登录账号与工作空间</strong>
+          <p>管理当前捷境账号。切换账号只会进入另一个工作空间，已保存的报告、确认记录和店铺设置不会被删除。</p>
+        </div>
+      </div>
+      <div class="saas-settings-row-list">
+        <article>
+          <div>
+            <span>当前账号</span>
+            <strong>${escapeHtml(summary.displayName)}</strong>
+            <small>${escapeHtml(summary.email || "未登录")}</small>
+          </div>
+          <button class="secondary-action compact-action" type="button" data-account-action="switch-account">切换账号</button>
+          <button class="secondary-action compact-action" type="button" data-account-action="logout" ${summary.connected ? "" : "disabled"}>退出登录</button>
+        </article>
+      </div>
+    </section>
+  `;
+}
+
+function renderSaasSettingsPlatformPanel(ctx = saasMerchantWorkbenchContext()) {
+  const connectionStatus = ctx.connection?.status || ctx.store?.connection_status || ctx.store?.status || "not_connected";
+  const platforms = [
+    {
+      name: "eBay",
+      title: "当前主平台",
+      detail: isSaasAuthorizedConnectionStatus(connectionStatus)
+        ? "已按 eBay 工作流推进：店铺数据、Listing、素材、客服、费用和确认边界都以 eBay 为主。"
+        : "JIEJING 当前优先服务 eBay。连接后会同步店铺、商品、订单、政策和费用等经营资料。",
+      tone: isSaasAuthorizedConnectionStatus(connectionStatus) ? "green" : "amber",
+    },
+    {
+      name: "Amazon",
+      title: "后续预留",
+      detail: "暂未开放连接。后续会按同一套经营逻辑接入。",
+      tone: "neutral",
+    },
+    {
+      name: "TikTok Shop",
+      title: "后续预留",
+      detail: "适合内容电商和短视频素材链路，当前暂未开放连接。",
+      tone: "neutral",
+    },
+    {
+      name: "Temu / Shopify",
+      title: "后续预留",
+      detail: "当前暂未开放连接，也不会同步这些平台的数据。",
+      tone: "neutral",
+    },
+  ];
+  return `
+    <section class="saas-settings-card saas-platform-roadmap-panel">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>经营平台</span>
+          <strong>当前以 eBay 为主，其他平台暂不开放</strong>
+          <p>JIEJING 先把 eBay 经营闭环做深。其他平台会在条件成熟后逐步开放。</p>
+        </div>
+      </div>
+      <div class="saas-settings-status-list">
+        ${platforms
+          .map(
+            (platform) => `
+              <article class="is-${escapeHtml(platform.tone)}">
+                <span>${escapeHtml(platform.name)}</span>
+                <strong>${escapeHtml(platform.title)}</strong>
+                <small>${escapeHtml(platform.detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderSaasSettingsDataPanel(ctx = saasMerchantWorkbenchContext()) {
   const resourceRows = saasEbayPacketResourceRows(ctx.packetBody);
   return `
@@ -29298,7 +29386,7 @@ function renderSaasSettingsDataPanel(ctx = saasMerchantWorkbenchContext()) {
         <div>
           <span>数据</span>
           <strong>店铺数据、来源记录和同步缺口</strong>
-          <p>这里只有数据来源是否可用；缺数据就显示缺口，不用旧商品填充。</p>
+          <p>显示经营资料的同步情况和待补信息。缺少资料时会明确提示，不会用旧商品或旧素材代替。</p>
         </div>
         <button class="secondary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !state.saasConnected ? "disabled" : ""}>更新 eBay 数据</button>
       </div>
@@ -29376,7 +29464,7 @@ function renderSaasSettingsAccountFocusPanel(ctx = saasMerchantWorkbenchContext(
   return renderSaasSettingsFocusPanel({
     eyebrow: "账号边界",
     title: "账号异常先暂停真实动作，不影响查看资料",
-    detail: "普通商家只需要看账号是否能继续经营。封禁、受限、付款冻结这类事故会先停发布、改价、退款、广告和敏感承诺。",
+    detail: "账号封禁、受限、付款冻结等异常会先暂停发布、改价、退款、广告和敏感承诺；资料查看和复盘仍可继续。",
     rows: [
       {
         label: "eBay 连接",
@@ -29406,7 +29494,7 @@ function renderSaasSettingsModelFocusPanel(ctx = saasMerchantWorkbenchContext())
   return renderSaasSettingsFocusPanel({
     eyebrow: "AI 边界",
     title: "AI 对话、Listing 文案和素材生成分开看",
-    detail: "这里不让商家读技术细节。只说明 AI 是否可用、素材在哪里生成、费用口径怎么分。",
+    detail: "查看 AI 是否可用、素材在哪里生成，以及文本和素材任务的费用口径。",
     rows: [
       {
         label: "文本 AI",
@@ -29495,7 +29583,7 @@ function renderSaasSettingsBillingFocusPanel(ctx = saasMerchantWorkbenchContext(
   return renderSaasSettingsFocusPanel({
     eyebrow: "订阅与安全",
     title: "欠费或超量只停高成本任务，不删除经营资料",
-    detail: "这里给商家看套餐、额度和安全边界。收款接入、支付密钥和上线检查由平台侧处理，不放到日常工作流里。",
+    detail: "查看套餐权益、额度状态和安全边界。收款配置、支付密钥和上线检查不会出现在日常工作流里。",
     rows: [
       {
         label: "当前权益",
@@ -30766,19 +30854,19 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
     ["billing", "订阅与安全", "套餐、额度、隐私和安全"],
   ];
   const routes = [
-    ["日常卖货", "回工作台"],
+    ["继续处理商品", "回工作台"],
     ["连接或断开店铺", "账号与店铺"],
     ["AI 不回复或素材异常", "AI 与素材"],
     ["查订单/政策来源", "店铺数据"],
     ["额度、套餐、安全", "订阅与安全"],
   ];
   return `
-    <section class="saas-settings-simple-map saas-settings-home-hub" aria-label="设置地图">
+    <section class="saas-settings-simple-map saas-settings-home-hub" aria-label="设置总览">
       <div class="saas-settings-simple-map-head">
         <div>
-          <span>设置地图</span>
-          <strong>普通商家只看 5 个入口</strong>
-          <p>设置只处理账号、AI、数据、权限、订阅和安全。复杂的上线、运行和公网防护检查由平台侧处理，日常经营不用看。</p>
+          <span>设置总览</span>
+          <strong>账号、AI、数据、权限和订阅集中管理</strong>
+          <p>这里处理连接、权限、订阅和安全边界。商品刊登、素材、客服和确认动作继续在工作台完成。</p>
         </div>
       </div>
       <div class="saas-settings-home-status" aria-label="当前设置状态">
@@ -30808,7 +30896,7 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
           .join("")}
       </div>
       <div class="saas-settings-where-to-go saas-settings-home-rules">
-        <strong>什么时候需要打开设置</strong>
+        <strong>常见情况</strong>
         <div>
           ${routes
             .map(
@@ -30826,14 +30914,14 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
 function saasSettingsOneGlanceRows(activeTabId = "general") {
   const rowsByTab = {
     general: [
-      ["状态灯", "只看能不能继续", "店铺、数据、AI、订阅和确认边界一眼扫完。"],
-      ["五个入口", "账号 / AI / 数据 / 权限 / 订阅", "不知道去哪，就从这里进入对应设置。"],
-      ["日常经营", "回工作台完成", "设置只管连接和边界，不承接日常经营流程。"],
+      ["经营状态", "确认当前工作台是否准备好", "账号、店铺数据、AI、订阅和确认边界集中显示。"],
+      ["设置入口", "账号 / AI / 数据 / 权限 / 订阅", "需要补授权、模型、数据或套餐时，从对应入口进入。"],
+      ["继续工作", "回到工作台处理任务", "商品刊登、素材、客服和确认动作仍在对应模块完成。"],
     ],
     account: [
-      ["账号状态", "先看能不能继续经营", "登录、eBay 连接和账号健康放在同一页。"],
-      ["连接入口", "只读授权和回调地址", "复制正式回调地址，不在前端保存 eBay token。"],
-      ["事故边界", "异常先停真实动作", "封禁、受限、付款冻结会先停发布、退款、广告和承诺。"],
+      ["登录账号", "管理当前捷境账号", "可切换账号或退出登录，不影响已保存的经营记录。"],
+      ["平台连接", "eBay 授权和回调地址", "连接状态、回调地址和账号健康放在同一页。"],
+      ["风险保护", "账号异常先暂停高风险动作", "封禁、受限、付款冻结会先停发布、退款、广告和承诺。"],
     ],
     model: [
       ["文本 AI", "对话、报告、Listing 文案", "AI CEO 和 Listing 草稿走文本模型。"],
@@ -30851,7 +30939,7 @@ function saasSettingsOneGlanceRows(activeTabId = "general") {
       ["越权停住", "没权限只补资料", "高风险动作没有权限就停到决策中心。"],
     ],
     billing: [
-      ["套餐权益", "先看当前能不能用", "内测阶段不做真实扣费承诺。"],
+      ["套餐权益", "查看当前可用范围", "内测阶段不做真实扣费承诺。"],
       ["额度停用", "只停高成本任务", "联网、模型、素材等高成本任务按权益停用。"],
       ["数据保护", "历史资料不删除", "报告、确认、审计证据和账号设置继续可读。"],
     ],
@@ -30867,10 +30955,10 @@ function saasSettingsOneGlanceRows(activeTabId = "general") {
 function renderSaasSettingsOneGlanceStrip(activeTabId = "general") {
   const rows = saasSettingsOneGlanceRows(activeTabId);
   return `
-    <section class="saas-settings-one-glance" aria-label="本页只看三件事">
+    <section class="saas-settings-one-glance" aria-label="本页重点">
       <div class="saas-settings-one-glance-head">
-        <span>本页只看三件事</span>
-        <strong>先理解状态，再决定要不要操作</strong>
+        <span>本页重点</span>
+        <strong>先看状态，再处理需要补齐的项目</strong>
       </div>
       <div class="saas-settings-one-glance-grid">
         ${rows
@@ -30901,8 +30989,8 @@ function renderSaasMerchantSecurityBoundaryPanel() {
       <div class="saas-settings-card-head">
         <div>
           <span>隐私与安全</span>
-          <strong>普通商家只需要知道边界</strong>
-          <p>这里不展示 token、key、client secret 或内部部署项。捷境只告诉商家哪些数据被保护、哪些动作不会自动执行。</p>
+          <strong>敏感凭证不进入浏览器</strong>
+          <p>页面只显示可用状态，不展示 token、key、client secret 或内部部署项；高风险经营动作不会自动执行。</p>
         </div>
       </div>
       <div class="saas-settings-status-list">
@@ -30994,11 +31082,11 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       label: "总览",
       detail: "当前状态",
       title: "设置总览",
-      intro: "只看状态灯和五个设置入口；日常经营回工作台完成。",
+      intro: "查看当前状态和常用设置入口；商品处理继续回到工作台完成。",
       panels: [
         renderSaasSettingsSectionGroup({
           title: "当前状态详情",
-          detail: "需要看登录、店铺、AI、数据和高风险动作时再展开。",
+          detail: "查看登录、店铺、AI、数据和高风险动作的当前状态。",
           badge: "可选",
           panels: [renderSaasSettingsGeneralPanel(ctx)],
         }),
@@ -31009,8 +31097,10 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       label: "账号与店铺",
       detail: "登录 / eBay",
       title: "账号与店铺",
-      intro: "这里只处理登录、eBay 连接、回调地址和账号健康。",
+      intro: "管理捷境登录账号、eBay 连接、回调地址和账号健康。",
       panels: [
+        renderSaasSettingsAccountAccessPanel(),
+        renderSaasSettingsPlatformPanel(ctx),
         renderSaasSettingsAccountFocusPanel(ctx),
         renderSaasSettingsAccountPanel(ctx, options),
       ],
@@ -31020,7 +31110,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       label: "AI 与素材",
       detail: "模型 / 素材",
       title: "AI 与素材",
-      intro: "这里只看 AI 是否可用、素材生成入口和费用口径。",
+      intro: "管理 AI 可用状态、素材生成入口和费用口径。",
       panels: [
         renderSaasSettingsModelFocusPanel(ctx),
         renderSaasMerchantModelProviderPanel(ctx),
@@ -31031,7 +31121,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       label: "店铺数据",
       detail: "来源 / 缺口",
       title: "店铺数据",
-      intro: "这里只看商品、订单、政策、费用等经营数据是否读到。",
+      intro: "查看商品、订单、政策、费用等经营数据的同步状态。",
       panels: [
         renderSaasSettingsDataFocusPanel(ctx),
         renderSaasSettingsDataPanel(ctx),
@@ -31042,7 +31132,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       label: "团队权限",
       detail: "团队 / 记忆",
       title: "团队权限",
-      intro: "这里只看谁能确认发布、退款、广告、采购付款和敏感客服承诺。",
+      intro: "设置发布、退款、广告、采购付款和敏感客服承诺的确认权限。",
       panels: [
         renderSaasSettingsGovernanceFocusPanel(),
         renderSaasMerchantPermissionPanel(),
@@ -31053,7 +31143,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       label: "订阅与安全",
       detail: "套餐 / 安全",
       title: "订阅与安全",
-      intro: "这里只解释套餐、额度、欠费停用和账号安全边界，不展示平台运行细节。",
+      intro: "查看套餐、额度、欠费停用和账号安全边界。",
       panels: [
         renderSaasSettingsBillingFocusPanel(ctx),
         renderSaasMerchantSecurityBoundaryPanel(),
@@ -31315,6 +31405,9 @@ function renderConnect() {
     renderSaasConnectCenter(document.querySelector("#view-connect"));
     return;
   }
+  const connectStatusEl = document.querySelector("#connectStatus");
+  const dataModelPreviewEl = document.querySelector("#dataModelPreview");
+  if (!connectStatusEl || !dataModelPreviewEl) return;
   renderConnectionStateBoard();
   renderPlatformConnectors();
   renderMarketSourceHealth();
@@ -31342,7 +31435,7 @@ function renderConnect() {
       productizeJiejingProductCopy(status).includes("待") ? "amber" : "neutral",
     ]),
   ];
-  document.querySelector("#connectStatus").innerHTML = statusRows
+  connectStatusEl.innerHTML = statusRows
     .map(
       ([name, status, detail, tone]) => `
         <article class="status-row">
@@ -31355,7 +31448,7 @@ function renderConnect() {
       `,
     )
     .join("");
-  document.querySelector("#dataModelPreview").textContent = JSON.stringify(productDataModelSnapshot(), null, 2);
+  dataModelPreviewEl.textContent = JSON.stringify(productDataModelSnapshot(), null, 2);
   scheduleJiejingProductModeCopy();
 }
 
@@ -31399,7 +31492,7 @@ function ebayApiText(value) {
     guided_later: "引导授权",
     manual_first: "截图兜底",
     oauth_ready: "官方授权",
-    developer_ready: "开发者配置",
+    developer_ready: "应用配置",
     mock_first: "先演示",
   }[value];
 }
@@ -31434,7 +31527,7 @@ function permissionText(value) {
 
 function stageText(value) {
   return {
-    newbie: "小白",
+    newbie: "新店",
     store_opened: "已有店铺",
     has_orders: "已有订单",
     multi_store: "多店铺",
@@ -32028,6 +32121,12 @@ function bindEvents() {
 
   document.addEventListener("click", (event) => {
     if (!event.target.closest("#accountMenu")) closeAccountMenu();
+    const accountActionButton = event.target.closest("[data-account-action]");
+    if (accountActionButton && !accountActionButton.closest("#accountMenuPopover")) {
+      event.preventDefault();
+      handleAccountMenuAction(accountActionButton);
+      return;
+    }
     const workflowFeedbackButton = event.target.closest(
       "[data-workflow-feedback-open], [data-workflow-feedback-close], [data-workflow-feedback-reason], [data-workflow-feedback-submit]",
     );

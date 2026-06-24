@@ -64,7 +64,7 @@
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-scene.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-detail.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-video-cover.webp" />
-    <link rel="stylesheet" href="./styles.css?v=20260624-mobile-first-screen-v1" />
+    <link rel="stylesheet" href="./styles.css?v=20260625-home-settings-v1" />
     <style id="jiejing-cockpit-layout-guard">
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
         display: grid !important;
@@ -284,7 +284,7 @@
         <main class="entry-flow-main">
           <div class="entry-flow-copy">
             <p class="eyebrow" id="entryFlowEyebrow">卖家路径</p>
-            <h2 id="entryFlowTitle">小白，还没开店</h2>
+            <h2 id="entryFlowTitle">新手商家，还没开店</h2>
             <p id="entryFlowIntro"></p>
           </div>
           <div class="entry-flow-steps" id="entryFlowSteps"></div>
@@ -343,7 +343,7 @@
               <strong id="heroCommandText">“帮我选一款适合 eBay 的商品，做 IP 筛查、Listing、素材和确认清单。”</strong>
               </div>
               <div class="hero-command-pills" id="heroCommandPills" aria-label="选择经营指令">
-                <button class="is-active" type="button" data-command="newbie">小白闭环</button>
+                <button class="is-active" type="button" data-command="newbie">新店闭环</button>
                 <button type="button" data-command="listing">上架草稿</button>
                 <button type="button" data-command="orders">订单售后</button>
               </div>
@@ -668,7 +668,7 @@
         <section class="onboarding-guide">
           <div class="onboarding-heading">
             <div>
-              <p class="eyebrow" id="onboardingEyebrow">小白向导</p>
+              <p class="eyebrow" id="onboardingEyebrow">新店向导</p>
               <h1 id="onboardingTitle">先把官方授权接上，再让 AI CEO 少问少填</h1>
               <p id="onboardingSubtitle">
                 API 可以先理解成平台给软件用的官方安全通道，不是把账号密码交给捷境。这不是填表考试：捷境会按你的身份，优先带你走 eBay 官方授权和必要接口；暂时不想授权时，也能先用截图、表格、链接和图片跑流程。
@@ -704,13 +704,13 @@
 
     <div class="app-shell is-hidden" id="appShell">
       <aside class="sidebar" aria-label="主导航">
-        <div class="brand">
+        <button class="brand app-home-link" type="button" data-saas-action="open-public-home" aria-label="返回捷境官网主页">
           <span class="brand-mark" aria-hidden="true"></span>
           <div>
             <strong>捷境</strong>
                 <span>JIEJING · AI CEO eBay</span>
           </div>
-        </div>
+        </button>
 
         <nav class="nav-list" id="navList">
           <button class="nav-item is-active" data-view="cockpit" data-mobile-label="AI">
@@ -852,7 +852,7 @@
               </article>
               <article>
                 <span>我不知道哪里要我点头</span>
-                <strong>只看真正需要确认的事</strong>
+                <strong>真正需要确认的事会被单独拎出来</strong>
                 <p>发布、付款、退款、广告、客服承诺这些才需要你判断。</p>
                 <button class="secondary-action" type="button" data-ceo-action="confirm-info">看待我确认</button>
               </article>
@@ -1308,7 +1308,7 @@
                     <div class="product-transfer-list">
                       <article><span>市场结论</span><strong>建议小批量测试</strong><p>视觉卖点明确，但尺寸、重量、材质和是否含香粒要先补齐。</p></article>
                       <article><span>刊登骨架</span><strong>Fixed Price · New</strong><p>类目、商品参数、价格库存和三类业务政策会在发布前校验。</p></article>
-                      <article><span>素材状态</span><strong>主图和详情页已有草稿</strong><p>素材深度编辑放在素材工坊，产品刊登只看是否可用于 Listing。</p></article>
+                      <article><span>素材状态</span><strong>主图和详情页已有草稿</strong><p>素材深度编辑放在素材工坊，产品刊登页展示是否可用于 Listing。</p></article>
                       <article><span>下一步</span><strong>补资料后送确认中心</strong><p>发布、改价、库存和政策不自动执行。</p></article>
                     </div>
                   </aside>
@@ -1363,7 +1363,7 @@
                     </article>
                   </div>
                   <div class="product-form-grid">
-                    <article><span>SKU</span><strong>JJ-BFI-001</strong><small>内部追踪编号</small></article>
+                    <article><span>SKU</span><strong>JJ-BFI-001</strong><small>商品追踪编号</small></article>
                     <article><span>Marketplace</span><strong>eBay US</strong><small>目标站点</small></article>
                     <article><span>eBay 类目</span><strong>Home Decor / Incense Burners</strong><small>类目编号待 eBay 正式校验</small></article>
                     <article><span>Condition</span><strong>New</strong><small>新品，需确认供应商是否全新包装</small></article>
@@ -1470,7 +1470,7 @@
                   <article>
                     <span>基础刊登信息</span>
                     <strong>SKU / Marketplace / Category ID / Merchant Location</strong>
-                    <p>SKU 用于内部追踪；marketplaceId 固定目标站点；categoryId 需要按 eBay 类目接口校验；item location 决定发货地展示和政策匹配。</p>
+                    <p>SKU 用于商品追踪；marketplaceId 固定目标站点；categoryId 需要按 eBay 类目接口校验；item location 决定发货地展示和政策匹配。</p>
                     <em>状态：类目 ID 待真实接口校验</em>
                   </article>
                   <article>
@@ -2365,7 +2365,7 @@
                   <div>
                     <p class="eyebrow">结果预览</p>
                     <h3 id="bulkPreviewTitle">等待生成三类候选</h3>
-                    <p id="bulkPreviewText">这里不看长表，只看三类结果：建议先测、需要补资料、暂时不做。</p>
+                    <p id="bulkPreviewText">系统会把候选品分成三类：建议先测、需要补资料、暂时不做。</p>
                   </div>
                 </div>
                 <ul class="bulk-preview-list" id="bulkPreviewList">
@@ -2382,7 +2382,7 @@
                     </article>
                     <article>
                       <span>不用长表</span>
-                      <strong>商家只看结论</strong>
+                      <strong>先给结论，再看依据</strong>
                       <p>候选明细和判断依据收在报告里。</p>
                     </article>
                     <article>
@@ -2423,7 +2423,7 @@
               <div>
                 <p class="eyebrow">AI 汇报中心</p>
                 <h2>每个商品、每个批次，都沉淀成可追溯的经营档案</h2>
-                <p class="section-note">首页的市场判断、产品刊登、素材工坊、批量铺货和客服处理都会回到这里。商家不用看内部环节，只看结论、依据、缺口、下一步和需要确认的边界。</p>
+                <p class="section-note">首页的市场判断、产品刊登、素材工坊、批量铺货和客服处理都会回到这里。页面会展示结论、依据、缺口、下一步和需要确认的边界。</p>
               </div>
               <div class="topbar-actions">
                 <span class="pill neutral" id="activityProjectPill">当前项目</span>
@@ -2551,7 +2551,7 @@
             </div>
             <section class="saas-confirm-action-model" aria-label="决策中心处理边界">
               <article>
-                <span>现在只看</span>
+                <span>当前重点</span>
                 <strong>待你点头的事</strong>
                 <p>没有需要判断的动作时，这里保持空白，不占用日常经营注意力。</p>
               </article>
@@ -3071,7 +3071,7 @@
           </label>
         </div>
         <select id="authStage" hidden>
-          <option value="newbie">小白，还没开店</option>
+          <option value="newbie">新手商家，还没开店</option>
           <option value="store_opened">已有店铺</option>
           <option value="has_orders">已有订单</option>
           <option value="multi_store">多店铺</option>
@@ -3254,6 +3254,6 @@
       })();
     </script>
     <script src="./assets/jiejing-settings-panels.js?v=20260620-prelaunch-deferred-v1"></script>
-    <script src="./app.js?v=20260624-ceo-chat-v3"></script>
+    <script src="./app.js?v=20260625-home-settings-v1"></script>
   </body>
 </html>

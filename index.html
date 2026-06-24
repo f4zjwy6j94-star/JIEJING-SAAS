@@ -4,9 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="prefetch" href="./app.html?start=app&view=cockpit" as="document" />
-    <link rel="prefetch" href="./app.js?v=20260624-ceo-chat-v3" as="script" />
+    <link rel="prefetch" href="./app.js?v=20260625-home-settings-v1" as="script" />
     <link rel="prefetch" href="./assets/jiejing-settings-panels.js?v=20260620-owner-launch-control-v5" as="script" />
-    <link rel="prefetch" href="./styles.css?v=20260624-mobile-first-screen-v1" as="style" />
+    <link rel="prefetch" href="./styles.css?v=20260625-home-settings-v1" as="style" />
     <title>捷境 · eBay AI CEO 自动化工作台</title>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260619-brand-icon-v1" type="image/svg+xml" />
     <style>
@@ -373,8 +373,8 @@
         grid-template-columns: minmax(0, 0.82fr) minmax(460px, 0.68fr);
         gap: 44px;
         align-items: center;
-        min-height: calc(100vh - 72px);
-        padding: 70px 0 42px;
+        min-height: min(760px, calc(100vh - 72px));
+        padding: 46px 0 32px;
       }
 
       .hero > section,
@@ -3286,14 +3286,14 @@
 
         .hero {
           gap: 22px;
-          padding-top: 42px;
+          padding-top: 28px;
         }
 
         .hero-actions {
           display: grid;
-          grid-template-columns: 1fr;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
           gap: 8px;
-          margin-bottom: 20px;
+          margin-bottom: 14px;
         }
 
         .hero-actions .button,
@@ -3302,8 +3302,37 @@
           width: 100%;
         }
 
+        .hero-actions .button {
+          grid-column: 1 / -1;
+        }
+
+        .hero-actions .button-text {
+          display: inline-flex;
+          min-height: 42px;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid rgba(8, 118, 110, 0.16);
+          border-radius: var(--radius-sm);
+          background: rgba(255, 254, 250, 0.68);
+        }
+
         .proof-row {
+          flex-wrap: nowrap;
           gap: 6px;
+          margin: 0 -16px;
+          padding: 0 16px 4px;
+          overflow-x: auto;
+          scrollbar-width: none;
+          scroll-snap-type: x proximity;
+        }
+
+        .proof-row::-webkit-scrollbar {
+          display: none;
+        }
+
+        .proof-row .pill {
+          flex: 0 0 auto;
+          scroll-snap-align: start;
         }
 
         .pill,
@@ -3314,9 +3343,9 @@
         }
 
         h1 {
-          font-size: 34px;
-          line-height: 1.1;
-          margin-bottom: 18px;
+          font-size: 31px;
+          line-height: 1.08;
+          margin-bottom: 12px;
         }
 
         h2 {
@@ -3332,7 +3361,7 @@
         .lead,
         .flow-detail p {
           font-size: 15px;
-          line-height: 1.65;
+          line-height: 1.58;
         }
 
         .section-note {
@@ -3341,56 +3370,92 @@
         }
 
         .command-room {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 10px;
-          min-height: 0;
-          overflow: visible;
-          padding: 14px;
+          display: block;
+          min-height: 350px;
+          overflow: hidden;
+          padding: 12px;
           transform: none;
         }
 
         .ceo-core {
-          position: relative;
-          top: auto;
-          left: auto;
-          grid-column: 1 / -1;
-          width: 100%;
-          min-height: 0;
-          padding: 18px;
-          border-radius: var(--radius);
-          transform: none;
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          z-index: 2;
+          width: 126px;
+          min-height: 126px;
+          padding: 16px;
+          border-radius: 50%;
+          transform: translate(-50%, -50%);
         }
 
         .command-room:hover .ceo-core {
-          transform: none;
+          transform: translate(-50%, -50%);
         }
 
         .ceo-core strong {
-          font-size: 25px;
+          font-size: 23px;
+        }
+
+        .ceo-core span {
+          margin-top: 7px;
+          font-size: 10px;
+          line-height: 1.45;
         }
 
         .hero-ops-board {
-          position: relative;
-          bottom: auto;
+          position: absolute;
+          right: 50%;
+          bottom: 14px;
           left: auto;
-          grid-column: 1 / -1;
-          grid-template-columns: 1fr;
-          width: 100%;
-          transform: none;
+          z-index: 3;
+          width: min(188px, calc(100% - 112px));
+          transform: translateX(50%);
+        }
+
+        .hero-ops-board article {
+          padding: 6px 8px;
+        }
+
+        .hero-ops-board span {
+          width: 24px;
+          height: 24px;
+          border-radius: 7px;
+          font-size: 10px;
+        }
+
+        .hero-ops-board strong {
+          font-size: 11px;
+        }
+
+        .hero-ops-board small {
+          font-size: 10px;
         }
 
         .role-node {
-          position: relative;
-          inset: auto;
-          width: auto;
-          min-height: 108px;
-          padding: 12px;
+          position: absolute;
+          width: min(132px, calc(50% - 20px));
+          min-height: 74px;
+          padding: 9px 10px;
           transform: none;
         }
 
         .role-node:hover {
           transform: none;
+        }
+
+        .role-node strong {
+          margin-bottom: 4px;
+          font-size: 12px;
+        }
+
+        .role-node span {
+          display: -webkit-box;
+          overflow: hidden;
+          font-size: 10px;
+          line-height: 1.38;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 2;
         }
 
         body.is-auth-mode {
@@ -3454,9 +3519,29 @@
           top: auto;
         }
 
+        .node-market {
+          top: 12px;
+          left: 12px;
+        }
+
+        .node-listing {
+          top: 12px;
+          right: 12px;
+        }
+
+        .node-media {
+          top: 130px;
+          left: 10px;
+        }
+
+        .node-ads {
+          top: 130px;
+          right: 10px;
+        }
+
         .node-service,
         .node-finance {
-          bottom: auto;
+          display: none;
         }
 
         .signal-canvas,
@@ -3679,7 +3764,7 @@
         }
 
         h1 {
-          font-size: 31px;
+          font-size: 29px;
         }
 
         h2 {
@@ -3695,6 +3780,29 @@
         .api-connector-grid,
         .api-safety-list {
           grid-template-columns: 1fr;
+        }
+
+        .command-room {
+          min-height: 334px;
+          display: block;
+        }
+
+        .role-node {
+          width: min(122px, calc(50% - 14px));
+        }
+
+        .node-market,
+        .node-media {
+          left: 10px;
+        }
+
+        .node-listing,
+        .node-ads {
+          right: 10px;
+        }
+
+        .hero-ops-board {
+          width: min(178px, calc(100% - 104px));
         }
 
         .commerce-band {
@@ -4543,8 +4651,8 @@
         const assets = [
           ["prefetch", "./app.html?start=app&view=workflow", "document"],
           ["preload", "./assets/jiejing-settings-panels.js?v=20260620-owner-launch-control-v5", "script"],
-          ["preload", "./app.js?v=20260624-ceo-chat-v3", "script"],
-          ["preload", "./styles.css?v=20260624-mobile-first-screen-v1", "style"],
+          ["preload", "./app.js?v=20260625-home-settings-v1", "script"],
+          ["preload", "./styles.css?v=20260625-home-settings-v1", "style"],
         ];
         assets.forEach(([rel, href, as]) => {
           if (document.querySelector(`link[href="${href}"]`)) return;
