@@ -67,6 +67,11 @@ def main() -> None:
         "AI 继续整理草稿、素材和报告",
         "发布、付款、退款、广告和客服承诺必须等你点头",
         "这里只做三种选择",
+        "saas-confirm-action-model",
+        "saas-confirm-card-decision",
+        "saas-confirm-safety-detail",
+        "你没点头前不会执行",
+        "为什么停住",
     ]:
         require(confirm_scope, marker, "decision center simplified surface")
 

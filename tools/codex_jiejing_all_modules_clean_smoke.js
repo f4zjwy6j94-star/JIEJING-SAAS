@@ -379,7 +379,7 @@ async function main() {
           settings_home_status_count: sectionCount(".saas-settings-home-status article"),
           has_settings_simple_copy: text.includes("普通商家只看 5 个入口") && text.includes("什么时候需要打开设置"),
           has_media_tabs: Boolean(document.querySelector("#mediaProjectTabs, .media-project-tabs, [data-media-project-tab]")),
-          has_media_simple_headline: text.includes("素材包看板"),
+          has_media_simple_headline: text.includes("把商品图变成可用素材包"),
           has_media_simple_flow:
             text.includes("来源") &&
             text.includes("成品") &&
@@ -390,7 +390,7 @@ async function main() {
             return nodeText.includes("输入") && nodeText.includes("只回写草稿");
           }),
           has_media_internal_copy: /官方数据包|Listing Package|数据包可用|等待数据包|确认记录|费用和用量|素材状态拆分|Provider Hub|素材 Provider|素材 brief|后台证据|后台状态|素材清单已回写|流程导入不需要本机路径/.test(text),
-          has_bulk_simple_headline: text.includes("小批量试卖池"),
+          has_bulk_simple_headline: text.includes("先小批量筛，不一键乱铺"),
           has_bulk_roadmap: sectionHas(".bulk-output-snapshot"),
           has_bulk_grouping_copy: text.includes("能试") && text.includes("要补") && text.includes("先不做"),
           has_bulk_first_run_strip: sectionHas(".bulk-output-snapshot") && text.includes("真实发布") && text.includes("决策中心"),
@@ -402,6 +402,11 @@ async function main() {
           has_service_internal_copy: /官方数据包|Listing Package|等待官方订单|等待官方同步|官方数据可用|客服事实表|Provider Hub|provider|后台排查|后台状态|连接和排查在设置|去设置同步 eBay/.test(text),
           has_confirm_simple_headline: text.includes("只让你处理真正要拍板的事"),
           has_confirm_simple_action_copy: text.includes("这里只做三种选择"),
+          has_confirm_decision_v2:
+            sectionHas(".saas-confirm-action-model") &&
+            text.includes("你没点头前不会执行") &&
+            (sectionHas(".runtime-confirm-empty") ||
+              (sectionHas(".saas-confirm-card-decision") && sectionHas(".saas-confirm-safety-detail"))),
           has_confirm_internal_copy: /高级细节|上线检查|后台|运维|preflight|packet|provider/.test(text),
           has_chat_reply: Boolean(document.querySelector("#view-cockpit #ceoChat .message.ai")),
           has_chat_stream: Boolean(document.querySelector("#view-cockpit #ceoChat")),
@@ -558,6 +563,7 @@ async function main() {
   if (!confirm.has_confirm_simple_headline || !confirm.has_confirm_simple_action_copy) {
     failures.push("confirm simple decision surface missing");
   }
+  if (!confirm.has_confirm_decision_v2) failures.push("confirm decision v2 lightweight approval model missing");
   if (confirm.has_confirm_internal_copy) failures.push("confirm surface exposes internal/debug copy");
   const cockpit = moduleChecks.find((item) => item.view === "cockpit") || {};
   if (!cockpit.has_chat_stream || !cockpit.has_ceo_composer_visible || !cockpit.chat_before_form) {

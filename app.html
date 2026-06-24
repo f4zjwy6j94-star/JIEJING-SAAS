@@ -64,7 +64,7 @@
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-scene.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-detail.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-video-cover.webp" />
-    <link rel="stylesheet" href="./styles.css?v=20260624-bulk-media-v1" />
+    <link rel="stylesheet" href="./styles.css?v=20260624-confirm-v2" />
     <style id="jiejing-cockpit-layout-guard">
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
         display: grid !important;
@@ -1848,8 +1848,8 @@
               <div class="section-heading media-heading">
                 <div>
                   <p class="eyebrow">素材工坊</p>
-                  <h2>素材包看板</h2>
-                  <p class="section-note">看来源、看成品、看待补项。通过的图片和视频脚本只回写 Listing 草稿，真实发布、广告和承诺仍要确认。</p>
+                  <h2>把商品图变成可用素材包</h2>
+                  <p class="section-note">选来源、选素材包、看预览、回写 Listing 草稿。通过的图片和视频脚本只回写 Listing 草稿，真实发布、广告和承诺仍要确认。</p>
                 </div>
                 <div class="media-heading-actions">
                   <span class="pill green">素材草稿 · 回写 Listing</span>
@@ -1859,7 +1859,7 @@
               <div class="media-pipeline" aria-label="素材工坊流程">
                 <article>
                   <span>来源</span>
-                  <strong>商品草稿 / 单张图片</strong>
+                  <strong>商品草稿 / 上传图片</strong>
                   <p>已有草稿继续做图；临时图片只做素材单。</p>
                 </article>
                 <article>
@@ -1982,7 +1982,7 @@
                   <div class="media-source-card">
                     <div class="media-upload-box">
                       <img class="media-input-thumb" src="assets/backflow-incense-burner-hero.webp" alt="">
-                      <span id="mediaSourceLabel">任务来源</span>
+                      <span id="mediaSourceLabel">选择要做图的商品</span>
                       <strong id="mediaSourceTitle">流程导入：倒流香炉商品草稿</strong>
                       <p id="mediaSourceNote">素材工坊读取商品草稿和图片需求；缺真实货源图或规格时停在待补资料。</p>
                     </div>
@@ -2093,7 +2093,7 @@
                   <div class="media-settings-head">
                     <div>
                       <p class="eyebrow">生成设置</p>
-                    <h3>选素材包</h3>
+                    <h3>先选要做什么图</h3>
                     </div>
                     <span class="pill amber">草稿模式</span>
                   </div>
@@ -2284,8 +2284,8 @@
             <div class="bulk-hero-grid">
               <div>
                 <p class="eyebrow">小批量实验台</p>
-                  <h2>小批量试卖池</h2>
-                <p class="section-note">先筛一小批候选，看清能试、要补、先不做。通过后只生成 Listing 和素材草稿，不直接铺货上架。</p>
+                <h2>先小批量筛，不一键乱铺</h2>
+                <p class="section-note">用最小批次看清机会和风险。先筛一小批候选，看清能试、要补、先不做。通过后只生成 Listing 和素材草稿，不直接铺货上架。</p>
               </div>
               <div class="bulk-hero-summary" aria-label="批量铺货概要">
                 <article><span>本轮数量</span><strong id="bulkImportedCount">10</strong><small>准备筛选</small></article>
@@ -2364,7 +2364,7 @@
                 <div class="bulk-boundary-head">
                   <div>
                     <p class="eyebrow">结果预览</p>
-                    <h3 id="bulkPreviewTitle">等待生成候选结论</h3>
+                    <h3 id="bulkPreviewTitle">等待生成三类候选</h3>
                     <p id="bulkPreviewText">这里不看长表，只看三类结果：建议先测、需要补资料、暂时不做。</p>
                   </div>
                 </div>
@@ -2383,7 +2383,7 @@
                     <article>
                       <span>不用长表</span>
                       <strong>商家只看结论</strong>
-                      <p>候选明细和后台证据收在报告里。</p>
+                      <p>候选明细和判断依据收在报告里。</p>
                     </article>
                     <article>
                       <span>不直接执行</span>
@@ -2549,6 +2549,23 @@
               <span class="is-current">当前：先继续草稿</span>
               <span>下一步：回到任务</span>
             </div>
+            <section class="saas-confirm-action-model" aria-label="决策中心处理边界">
+              <article>
+                <span>现在只看</span>
+                <strong>待你点头的事</strong>
+                <p>没有需要判断的动作时，这里保持空白，不占用日常经营注意力。</p>
+              </article>
+              <article>
+                <span>AI 继续</span>
+                <strong>草稿、素材、普通记录</strong>
+                <p>这些不会影响账号、资金或买家承诺，AI 可以先整理。</p>
+              </article>
+              <article>
+                <span>必须确认</span>
+                <strong>发布、付款、退款、广告、客服承诺</strong>
+                <p>这些动作会先停住。你没点头前不会执行。</p>
+              </article>
+            </section>
             <section class="confirm-decision-hero" aria-label="确认中心说明">
               <div class="confirm-decision-copy">
                 <span>当前待确认</span>
@@ -3237,6 +3254,6 @@
       })();
     </script>
     <script src="./assets/jiejing-settings-panels.js?v=20260620-prelaunch-deferred-v1"></script>
-    <script src="./app.js?v=20260624-bulk-media-v1"></script>
+    <script src="./app.js?v=20260624-confirm-v2"></script>
   </body>
 </html>

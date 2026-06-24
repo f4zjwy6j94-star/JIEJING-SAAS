@@ -5493,15 +5493,15 @@ function renderSaasBulkCandidatePreview() {
     return `
       <div class="bulk-candidate-head bulk-candidate-decision-head">
         <div>
-          <span>小批量试卖池</span>
-          <strong>先分清能试、要补、先不做</strong>
-          <p>本轮只看候选去留。通过后生成 Listing 和素材草稿；真实发布、付款、广告和承诺仍在决策中心停住。</p>
+          <span>小批量实验台</span>
+          <strong>先小批量筛，不一键乱铺</strong>
+          <p>用最小批次看清机会和风险。先分清能试、要补、先不做；通过后只生成 Listing 和素材草稿，真实发布、付款、广告和承诺仍在决策中心停住。</p>
         </div>
         <div class="bulk-candidate-actions">
           <button class="primary-action" type="button" data-bulk-action="generate-candidates">生成三类候选</button>
         </div>
       </div>
-      <div class="bulk-output-snapshot" aria-label="批量铺货当前设置">
+      <div class="bulk-output-snapshot bulk-saas-roadmap" aria-label="批量铺货当前设置">
         <article>
           <span>本轮</span>
           <strong>${escapeHtml(countLabel)} 个候选</strong>
@@ -5518,11 +5518,23 @@ function renderSaasBulkCandidatePreview() {
           <p>能试、要补、先不做。</p>
         </article>
       </div>
+      <div class="saas-first-run-strip bulk-first-run-strip" aria-label="批量铺货开始前说明">
+        <article>
+          <span>不会乱铺</span>
+          <strong>先分组，再决定</strong>
+          <p>这里只做可测、补资料、暂不做三类判断。</p>
+        </article>
+        <article>
+          <span>不直接执行</span>
+          <strong>真实发布仍去决策中心</strong>
+          <p>发布、付款、广告和客服承诺不会自动执行。</p>
+        </article>
+      </div>
       <div class="bulk-decision-dock">
         <div>
           <span>当前批次</span>
           <strong>准备筛 ${escapeHtml(countLabel)} 个候选方向</strong>
-          <p>${escapeHtml(sourceHint)} 本页只看结论和下一步草稿，不让商家处理后台配置。</p>
+          <p>${escapeHtml(sourceHint)} 本页只看结论和下一步草稿，不让商家处理复杂设置。</p>
         </div>
         <button class="secondary-action" type="button" data-bulk-action="report">查看批量汇报</button>
       </div>
@@ -6467,7 +6479,7 @@ function renderSaasMediaGeneratedAssetsPanel(ctx = saasMerchantWorkbenchContext(
         <div>
           <span>素材结果</span>
           <strong>${escapeHtml(productName)} 的图片和视频脚本</strong>
-          <p>先看用途、可用性和待补项。通过后回写 Listing 草稿；正式发布前仍要核对实物一致性、图片授权和侵权风险。</p>
+          <p>商家只需要看三件事：这张图用在哪里、能不能用、还缺什么。通过后回写 Listing 草稿；正式发布前仍要核对实物一致性、图片授权和侵权风险。</p>
         </div>
         <em>${hasManifestReport ? "素材已整理" : "待发布前复核"}</em>
       </div>
@@ -6555,7 +6567,7 @@ function ensureSaasMediaFirstRunStrip() {
       {
         label: "输入",
         title: "商品草稿或来源图",
-        copy: "没有真实输入时不冒充旧样例。",
+        copy: "没有商品或来源图时，不展示旧样例。",
       },
       {
         label: "审核",
@@ -6633,7 +6645,7 @@ function renderSaasMediaStudioStatus() {
         data-media-draft-status="等待输入">
         <span>01</span>
         <strong>等待商品草稿</strong>
-        <small>没有输入时不填旧样例</small>
+        <small>没有商品或来源图时，不展示旧样例</small>
         <em>流程导入</em>
       </button>
     `;
@@ -16419,6 +16431,23 @@ function renderSaasConfirmPanel() {
         <small>保留记录，不继续执行</small>
       </article>
     </div>
+    <section class="saas-confirm-action-model" aria-label="决策中心处理边界">
+      <article>
+        <span>现在只看</span>
+        <strong>待你点头的事</strong>
+        <p>没有需要判断的动作时，这里保持空白，不占用日常经营注意力。</p>
+      </article>
+      <article>
+        <span>AI 继续</span>
+        <strong>草稿、素材、普通记录</strong>
+        <p>这些不会影响账号、资金或买家承诺，AI 可以先整理。</p>
+      </article>
+      <article>
+        <span>必须确认</span>
+        <strong>发布、付款、退款、广告、客服承诺</strong>
+        <p>这些动作会先停住。你没点头前不会执行。</p>
+      </article>
+    </section>
     ${
       visible.length
         ? `<div class="runtime-confirm-grid saas-confirm-grid">
@@ -16439,7 +16468,15 @@ function renderSaasConfirmPanel() {
                       <small>${card.high_risk ? "重要动作" : "普通确认"}</small>
                       <small>${escapeHtml(saasTimestampLabel(card.created_at))}</small>
                     </div>
-                    ${saasWorkbenchApprovalBriefMarkup(card)}
+                    <div class="saas-confirm-card-decision">
+                      <span>你要判断</span>
+                      <strong>${card.high_risk ? "是否允许这次高风险动作" : "是否按建议继续"}</strong>
+                      <p>不同意就先停住；缺资料就回去补资料。你没点头前不会执行。</p>
+                    </div>
+                    <details class="saas-confirm-safety-detail">
+                      <summary>为什么停住</summary>
+                      ${saasWorkbenchApprovalBriefMarkup(card)}
+                    </details>
                     <details class="confirm-detail">
                       <summary>查看依据</summary>
                       <p>${escapeHtml(publicRuntimeText(saasWorkbenchConfirmationSource(card)))}</p>
@@ -16459,7 +16496,7 @@ function renderSaasConfirmPanel() {
               })
               .join("")}
           </div>`
-        : `<article class="runtime-confirm-empty"><strong>暂无确认项</strong><p>运行 AI CEO 工作流后，发布、采购付款、改价、政策编辑和敏感客服承诺会在这里形成确认记录。</p></article>`
+        : `<article class="runtime-confirm-empty"><strong>现在没有需要你拍板的事</strong><p>AI 可以继续整理草稿、素材和报告；一旦涉及发布、付款、退款、广告或客服承诺，会回到这里。</p></article>`
     }
   `;
 }

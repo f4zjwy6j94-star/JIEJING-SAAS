@@ -14899,6 +14899,44 @@ body.saas-mvp-login-required #globalLoopWorkbench.is-saas-mvp {
   line-height: 1.4;
 }
 
+.saas-confirm-action-model {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.saas-confirm-action-model article {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(198, 215, 205, 0.78);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.saas-confirm-action-model span,
+.saas-confirm-card-decision span {
+  color: var(--jiejing-teal);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.3;
+}
+
+.saas-confirm-action-model strong {
+  color: var(--jiejing-ink);
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.saas-confirm-action-model p {
+  margin: 0;
+  color: var(--jiejing-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .saas-publish-review-panel {
   gap: 12px;
 }
@@ -15009,6 +15047,49 @@ body.saas-mvp-login-required #globalLoopWorkbench.is-saas-mvp {
   border: 1px solid rgba(198, 215, 205, 0.76);
   border-radius: 999px;
   background: rgba(249, 252, 249, 0.82);
+}
+
+.saas-confirm-card-decision {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(0, 125, 93, 0.18);
+  border-radius: 8px;
+  background: rgba(239, 248, 244, 0.76);
+}
+
+.saas-confirm-card-decision strong {
+  color: var(--jiejing-ink);
+  font-size: 15px;
+  line-height: 1.28;
+}
+
+.saas-confirm-card-decision p {
+  margin: 0;
+  color: var(--jiejing-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.saas-confirm-safety-detail {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 4px;
+}
+
+.saas-confirm-safety-detail summary {
+  width: max-content;
+  max-width: 100%;
+  cursor: pointer;
+  color: var(--jiejing-teal);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.saas-confirm-safety-detail[open] summary {
+  margin-bottom: 8px;
 }
 
 .saas-confirm-approval-brief {
@@ -15759,6 +15840,7 @@ body.saas-mvp-login-required #globalLoopWorkbench.is-saas-mvp {
   .saas-executive-pulse-grid,
   .saas-ai-output-metrics,
   .saas-confirm-summary,
+  .saas-confirm-action-model,
   .saas-live-grid,
   .saas-live-resource-grid,
   .saas-live-route-grid,
@@ -15872,6 +15954,7 @@ body.saas-mvp-login-required #globalLoopWorkbench.is-saas-mvp {
   .saas-cockpit-lane-grid,
   .saas-ai-output-metrics,
   .saas-confirm-summary,
+  .saas-confirm-action-model,
   .saas-cockpit-live-metrics,
   .saas-live-grid,
   .saas-live-resource-grid,

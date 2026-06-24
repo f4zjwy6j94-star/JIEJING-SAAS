@@ -149,7 +149,7 @@ def main() -> int:
     if "if (isSaasPublicMvpMode())" not in ceo_submit_body:
         return fail("public SaaS AI CEO submit should use the real command routing path before legacy media demo routing")
     for marker in [
-        "20260624-bulk-media-v1",
+        "20260624-confirm-v2",
     ]:
         if marker not in app_html + index_html:
             return fail(f"frontend cache version must advance after owner publish UI change: {marker}")
