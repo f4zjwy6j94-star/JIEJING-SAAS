@@ -379,21 +379,21 @@ async function main() {
           settings_home_status_count: sectionCount(".saas-settings-home-status article"),
           has_settings_simple_copy: text.includes("普通商家只看 5 个入口") && text.includes("什么时候需要打开设置"),
           has_media_tabs: Boolean(document.querySelector("#mediaProjectTabs, .media-project-tabs, [data-media-project-tab]")),
-          has_media_simple_headline: text.includes("把商品图变成可用素材包"),
+          has_media_simple_headline: text.includes("素材包看板"),
           has_media_simple_flow:
-            text.includes("选来源") &&
-            text.includes("选素材包") &&
-            text.includes("看预览") &&
+            text.includes("来源") &&
+            text.includes("成品") &&
+            text.includes("审核") &&
             text.includes("回写 Listing"),
           has_media_first_run_strip: Array.from(section?.querySelectorAll(".saas-media-first-run-strip, .saas-first-run-strip") || []).some((node) => {
             const nodeText = node.innerText || "";
-            return nodeText.includes("可以空着") && nodeText.includes("不直接发布");
+            return nodeText.includes("输入") && nodeText.includes("只回写草稿");
           }),
           has_media_internal_copy: /官方数据包|Listing Package|数据包可用|等待数据包|确认记录|费用和用量|素材状态拆分|Provider Hub|素材 Provider|素材 brief|后台证据|后台状态|素材清单已回写|流程导入不需要本机路径/.test(text),
-          has_bulk_simple_headline: text.includes("先小批量筛，不一键乱铺"),
-          has_bulk_roadmap: sectionHas(".bulk-saas-roadmap"),
-          has_bulk_grouping_copy: text.includes("建议先测") && text.includes("需要补资料") && text.includes("暂时不做"),
-          has_bulk_first_run_strip: sectionHas(".bulk-first-run-strip") && text.includes("不会乱铺") && text.includes("不直接执行"),
+          has_bulk_simple_headline: text.includes("小批量试卖池"),
+          has_bulk_roadmap: sectionHas(".bulk-output-snapshot"),
+          has_bulk_grouping_copy: text.includes("能试") && text.includes("要补") && text.includes("先不做"),
+          has_bulk_first_run_strip: sectionHas(".bulk-output-snapshot") && text.includes("真实发布") && text.includes("决策中心"),
           has_bulk_internal_copy: /真实账号批量质检|官方数据包|字段完整度|质检槽位|等待数据包/.test(text),
           has_service_simple_headline: text.includes("三件事：消息、订单、回复"),
           has_service_simple_flow: text.includes("消息、订单、回复") && text.includes("没有真实订单时保持空白"),

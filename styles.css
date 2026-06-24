@@ -38667,3 +38667,263 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card .primary-a
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* 2026-06-24 bulk/media low-learning-cost polish. */
+body.saas-public-mvp #view-media .media-studio-panel,
+body.saas-public-mvp #view-bulk .bulk-clean-board {
+  gap: 14px;
+}
+
+body.saas-public-mvp #view-media .media-heading h2,
+body.saas-public-mvp #view-bulk .bulk-hero-grid h2 {
+  font-size: clamp(26px, 2.5vw, 36px);
+  line-height: 1.04;
+}
+
+body.saas-public-mvp #view-media .media-heading .section-note,
+body.saas-public-mvp #view-bulk .bulk-hero-grid .section-note {
+  max-width: 780px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+body.saas-public-mvp #view-media .media-pipeline,
+body.saas-public-mvp #view-media .saas-media-first-run-strip {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+body.saas-public-mvp #view-media .media-pipeline article,
+body.saas-public-mvp #view-media .saas-media-first-run-strip article {
+  min-height: 82px;
+  padding: 12px;
+}
+
+body.saas-public-mvp #view-media .media-pipeline p,
+body.saas-public-mvp #view-media .saas-media-first-run-strip p,
+body.saas-public-mvp #view-media .media-channel-card p,
+body.saas-public-mvp #view-media .media-project-head p,
+body.saas-public-mvp #view-media .media-preview-top p,
+body.saas-public-mvp #view-media .media-run-status p,
+body.saas-public-mvp #view-media .media-sync-strip p {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+body.saas-public-mvp #view-media .media-channel-board {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+body.saas-public-mvp #view-media .media-channel-card {
+  min-height: 92px;
+  padding: 13px;
+}
+
+body.saas-public-mvp #view-media .media-project-switcher {
+  padding: 14px;
+}
+
+body.saas-public-mvp #view-media .media-project-tab {
+  min-height: 84px;
+  padding: 11px;
+}
+
+body.saas-public-mvp #view-media .saas-media-generated-assets {
+  margin: 0;
+  padding: 14px;
+  border-radius: 8px;
+}
+
+body.saas-public-mvp #view-media .saas-generated-assets-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+body.saas-public-mvp #view-media .saas-generated-assets-grid article {
+  min-height: 124px;
+}
+
+body.saas-public-mvp #view-media .saas-generated-assets-grid img {
+  aspect-ratio: 4 / 3;
+  max-height: 118px;
+}
+
+body.saas-public-mvp #view-media .media-workbench {
+  grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.8fr);
+  gap: 14px;
+}
+
+body.saas-public-mvp #view-media .media-preview-stage,
+body.saas-public-mvp #view-media .media-decision-panel {
+  padding: 15px;
+}
+
+body.saas-public-mvp #view-media .media-source-card {
+  grid-template-columns: minmax(180px, 0.58fr) minmax(0, 1fr);
+}
+
+body.saas-public-mvp #view-media .media-canvas-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+body.saas-public-mvp #view-media .media-canvas-card,
+body.saas-public-mvp #view-media .media-canvas-card.main-shot,
+body.saas-public-mvp #view-media .media-canvas-card.video-card {
+  min-height: 280px;
+}
+
+body.saas-public-mvp #view-bulk .bulk-hero-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.62fr);
+  gap: 14px;
+}
+
+body.saas-public-mvp #view-bulk .bulk-proof-note {
+  margin-top: -2px;
+}
+
+body.saas-public-mvp #view-bulk .bulk-pipeline {
+  margin: 0;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+body.saas-public-mvp #view-bulk .bulk-pipeline span {
+  min-height: 36px;
+  padding: 8px;
+  font-size: 12px;
+}
+
+body.saas-public-mvp #view-bulk .bulk-decision-workbench {
+  gap: 10px;
+}
+
+body.saas-public-mvp #view-bulk .bulk-decision-workbench .bulk-sequence {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+body.saas-public-mvp #view-bulk .bulk-sequence-card,
+body.saas-public-mvp #view-bulk .bulk-boundary-panel,
+body.saas-public-mvp #view-bulk .bulk-generate-strip,
+body.saas-public-mvp #view-bulk .bulk-result-panel,
+body.saas-public-mvp #view-bulk .bulk-bottom-strip {
+  border-radius: 8px;
+}
+
+body.saas-public-mvp #view-bulk .bulk-sequence-card {
+  min-height: 0;
+}
+
+body.saas-public-mvp #view-bulk .bulk-step-number {
+  width: 32px;
+  height: 32px;
+  font-size: 11px;
+}
+
+body.saas-public-mvp #view-bulk .bulk-sequence-body > strong,
+body.saas-public-mvp #view-bulk .bulk-boundary-head strong {
+  font-size: 15px;
+}
+
+body.saas-public-mvp #view-bulk .bulk-sequence-body > p,
+body.saas-public-mvp #view-bulk .bulk-boundary-head p:not(.eyebrow),
+body.saas-public-mvp #view-bulk .bulk-control-card > p,
+body.saas-public-mvp #view-bulk .bulk-bottom-strip p {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+body.saas-public-mvp #view-bulk .bulk-boundary-panel .bulk-preference-grid,
+body.saas-public-mvp #view-bulk .bulk-decision-workbench .bulk-boundary-panel .bulk-preference-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+body.saas-public-mvp #view-bulk .bulk-pref-summary-card {
+  padding: 10px;
+}
+
+body.saas-public-mvp #view-bulk .bulk-pref-summary-head span {
+  display: none;
+}
+
+body.saas-public-mvp #view-bulk .bulk-output-snapshot {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+body.saas-public-mvp #view-bulk .bulk-output-snapshot article {
+  min-height: 94px;
+  padding: 12px;
+  border: 1px solid rgba(198, 215, 205, 0.84);
+  border-radius: 8px;
+  background: rgba(255, 254, 250, 0.95);
+}
+
+body.saas-public-mvp #view-bulk .bulk-output-snapshot span,
+body.saas-public-mvp #view-bulk .bulk-output-snapshot strong,
+body.saas-public-mvp #view-bulk .bulk-output-snapshot p {
+  display: block;
+}
+
+body.saas-public-mvp #view-bulk .bulk-output-snapshot span {
+  color: var(--jiejing-teal);
+  font-size: 11px;
+  font-weight: 950;
+}
+
+body.saas-public-mvp #view-bulk .bulk-output-snapshot strong {
+  margin-top: 6px;
+  color: var(--jiejing-ink);
+  font-size: 15px;
+  line-height: 1.28;
+}
+
+body.saas-public-mvp #view-bulk .bulk-output-snapshot p {
+  margin: 5px 0 0;
+  color: var(--jiejing-muted);
+  font-size: 12px;
+  line-height: 1.42;
+}
+
+@media (max-width: 1180px) {
+  body.saas-public-mvp #view-media .media-workbench,
+  body.saas-public-mvp #view-bulk .bulk-hero-grid,
+  body.saas-public-mvp #view-bulk .bulk-decision-workbench .bulk-sequence {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.saas-public-mvp #view-media .saas-generated-assets-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  body.saas-public-mvp #view-media .media-pipeline,
+  body.saas-public-mvp #view-media .saas-media-first-run-strip,
+  body.saas-public-mvp #view-media .media-channel-board,
+  body.saas-public-mvp #view-media .saas-generated-assets-grid,
+  body.saas-public-mvp #view-media .media-canvas-grid,
+  body.saas-public-mvp #view-bulk .bulk-hero-summary,
+  body.saas-public-mvp #view-bulk .bulk-pipeline,
+  body.saas-public-mvp #view-bulk .bulk-output-snapshot,
+  body.saas-public-mvp #view-bulk .bulk-boundary-panel .bulk-preference-grid,
+  body.saas-public-mvp #view-bulk .bulk-decision-workbench .bulk-boundary-panel .bulk-preference-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.saas-public-mvp #view-media .media-source-card,
+  body.saas-public-mvp #view-bulk .bulk-generate-strip,
+  body.saas-public-mvp #view-bulk .bulk-decision-dock,
+  body.saas-public-mvp #view-bulk .bulk-bottom-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-generate-strip .primary-action,
+  body.saas-public-mvp #view-bulk .bulk-decision-dock .primary-action,
+  body.saas-public-mvp #view-bulk .bulk-decision-dock .secondary-action {
+    width: 100%;
+    min-width: 0;
+  }
+}

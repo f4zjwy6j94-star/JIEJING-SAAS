@@ -5477,7 +5477,7 @@ function syncBulkSaasStatusCounters() {
   const note = document.querySelector("#view-bulk .bulk-proof-note");
   if (note) {
     note.textContent =
-      "这里只有一个目标：用最小批次看清机会和风险。发布、付款、改价、库存和广告都不会自动执行。";
+      "批量铺货只负责筛选和草稿。发布、采购付款、改价、库存、退款和广告不会自动执行。";
   }
 }
 
@@ -5493,56 +5493,36 @@ function renderSaasBulkCandidatePreview() {
     return `
       <div class="bulk-candidate-head bulk-candidate-decision-head">
         <div>
-          <span>小批量实验台</span>
-          <strong>先小批量筛，不一键乱铺</strong>
-          <p>左侧只选数量、货源和边界，用最小批次看清机会和风险。AI CEO 会把候选分成三类：建议先测、需要补资料、暂时不做；同意后才送去 Listing 和素材工坊。</p>
+          <span>小批量试卖池</span>
+          <strong>先分清能试、要补、先不做</strong>
+          <p>本轮只看候选去留。通过后生成 Listing 和素材草稿；真实发布、付款、广告和承诺仍在决策中心停住。</p>
         </div>
         <div class="bulk-candidate-actions">
           <button class="primary-action" type="button" data-bulk-action="generate-candidates">生成三类候选</button>
         </div>
       </div>
-      <div class="bulk-saas-roadmap" aria-label="批量铺货顺序">
+      <div class="bulk-output-snapshot" aria-label="批量铺货当前设置">
         <article>
-          <span>01</span>
-          <strong>选数量 / 货源 / 边界</strong>
-          <p>先确定这轮看多少个、从哪里找货、哪些风险不碰。</p>
+          <span>本轮</span>
+          <strong>${escapeHtml(countLabel)} 个候选</strong>
+          <p>够判断方向，跑顺再扩大。</p>
         </article>
         <article>
-          <span>02</span>
-          <strong>分三类</strong>
-          <p>可先测、要补资料、暂时不做，商家不用翻长表。</p>
+          <span>货源</span>
+          <strong>${sourceRecordCount ? `${escapeHtml(String(sourceRecordCount))} 条来源` : "AI 找货 / 手动补充"}</strong>
+          <p>不使用旧演示商品冒充真实批次。</p>
         </article>
         <article>
-          <span>03</span>
-          <strong>送草稿</strong>
-          <p>只生成 Listing 与素材草稿；发布、付款、广告仍要确认。</p>
+          <span>输出</span>
+          <strong>三类结论</strong>
+          <p>能试、要补、先不做。</p>
         </article>
       </div>
-      ${renderSaasFirstRunAssuranceStrip(
-        [
-          {
-            label: "不会乱铺",
-            title: "先分组，再决定",
-            copy: "这里只做可测、补资料、暂不做三类判断。",
-          },
-          {
-            label: "不用长表",
-            title: "商家只看结论",
-            copy: "候选明细和后台证据收在报告里。",
-          },
-          {
-            label: "不直接执行",
-            title: "发布、付款和广告都停住",
-            copy: "同意后也只是送草稿和素材任务。",
-          },
-        ],
-        "bulk-first-run-strip",
-      )}
       <div class="bulk-decision-dock">
         <div>
           <span>当前批次</span>
           <strong>准备筛 ${escapeHtml(countLabel)} 个候选方向</strong>
-          <p>${escapeHtml(sourceHint)} 本页只看去留、补资料和下一步草稿，不让商家处理复杂配置。</p>
+          <p>${escapeHtml(sourceHint)} 本页只看结论和下一步草稿，不让商家处理后台配置。</p>
         </div>
         <button class="secondary-action" type="button" data-bulk-action="report">查看批量汇报</button>
       </div>
@@ -5576,9 +5556,9 @@ function renderSaasBulkCandidatePreview() {
   return `
     <div class="bulk-candidate-head bulk-candidate-decision-head">
       <div>
-        <span>候选分组</span>
+        <span>候选结论</span>
         <strong>${escapeHtml(countLabel)} 个候选方向已按经营边界分组</strong>
-        <p>商家先看三类结论：能试、要补、先不做。确认继续后，系统只生成草稿和素材任务，不执行真实发布。</p>
+        <p>只看三类结果：能试、要补、先不做。确认继续后，只生成草稿和素材任务。</p>
       </div>
       <div class="bulk-candidate-actions">
         <button class="secondary-action" type="button" data-bulk-action="generate-candidates">重新分组</button>
@@ -6485,9 +6465,9 @@ function renderSaasMediaGeneratedAssetsPanel(ctx = saasMerchantWorkbenchContext(
     <section class="saas-media-generated-assets" aria-label="素材工坊生成结果">
       <div class="media-quality-head">
         <div>
-          <span>当前素材结果</span>
-          <strong>${escapeHtml(productName)} 的生成图片和视频素材都在这里</strong>
-          <p>商家只需要看三件事：这张图用在哪里、能不能用、还缺什么。主图、场景图、详情页图、视频封面和脚本先在这里预览；正式发布前仍要核对实物一致性、图片授权和侵权风险。</p>
+          <span>素材结果</span>
+          <strong>${escapeHtml(productName)} 的图片和视频脚本</strong>
+          <p>先看用途、可用性和待补项。通过后回写 Listing 草稿；正式发布前仍要核对实物一致性、图片授权和侵权风险。</p>
         </div>
         <em>${hasManifestReport ? "素材已整理" : "待发布前复核"}</em>
       </div>
@@ -6538,15 +6518,15 @@ function syncSaasMediaProjectDraft(button) {
   setText("#mediaProductionGap", gap);
   setText("#mediaSourceLabel", "任务来源");
   setText("#mediaSourceTitle", title || "等待商品草稿");
-  setText("#mediaSourceNote", "素材工坊只接商品草稿、图片需求或商家上传图；缺真实货源图或规格时停在待补资料。");
-  setText("#mediaFactLabel", "本次要做");
+  setText("#mediaSourceNote", "素材工坊只接商品草稿、图片需求或商家上传图；缺真实图片或规格时停在待补资料。");
+  setText("#mediaFactLabel", "产出");
   setText("#mediaFactTitle", note || "主图、场景图、详情页和视频脚本");
-  setText("#mediaFactNote", "生成后先在本页预览，通过后回写 Listing 草稿；真实发布、广告和承诺仍要确认。");
+  setText("#mediaFactNote", "生成后先预览，通过后回写 Listing 草稿；真实发布、广告和承诺仍要确认。");
   setText("#mediaPreviewTitle", title);
   setText("#mediaPreviewNote", note);
   setText("#mediaRouteStatus", "流程导入");
   setText("#mediaEntryStatus", "流程导入");
-  setText("#mediaEntryNote", "接收商品草稿和图片需求，商家只需要看结果和待补项。");
+  setText("#mediaEntryNote", "接收商品草稿和图片需求，只看结果和待补项。");
   setText("#mediaRunStatus strong", title ? "等待素材生成" : "等待商品草稿或来源图");
   setText("#mediaRunStatus p", title ? "可以生成本轮素材草稿，生成后先预览再回写 Listing。" : "也可以切到独立上传，先处理一张来源图。");
   setText("#mediaLocalPath", "当前使用商品草稿");
@@ -6554,7 +6534,7 @@ function syncSaasMediaProjectDraft(button) {
   const config = readMediaGenerationConfig({ entry: "project" });
   setText(
     "#mediaDecisionSummary",
-    `当前商品：${title}。本轮生成：${note}。待补资料：${gap}。系统只产出素材草稿，不会自动发布、投广告或替商家承诺。`,
+    `当前商品：${title}。本轮生成：${note}。待补资料：${gap}。只产出素材草稿，不会自动发布、投广告或替商家承诺。`,
   );
   renderMediaQualityBoard(config);
 }
@@ -6573,19 +6553,19 @@ function ensureSaasMediaFirstRunStrip() {
   const mediaFirstRunHtml = renderSaasFirstRunAssuranceStrip(
     [
       {
-        label: "可以空着",
-        title: "先等商品草稿",
-        copy: "没有商品或来源图时，不展示旧样例。",
+        label: "输入",
+        title: "商品草稿或来源图",
+        copy: "没有真实输入时不冒充旧样例。",
       },
       {
-        label: "缺图会停住",
-        title: "先补素材来源",
-        copy: "图片授权、规格和实物一致性不清楚就不回写。",
+        label: "审核",
+        title: "授权和实物一致",
+        copy: "不清楚就停在待补资料。",
       },
       {
-        label: "不直接发布",
-        title: "只产出素材草稿",
-        copy: "广告、发布和买家承诺仍然要确认。",
+        label: "去向",
+        title: "只回写草稿",
+        copy: "发布、广告和承诺仍要确认。",
       },
     ],
     "saas-media-first-run-strip",
@@ -6613,8 +6593,8 @@ function renderSaasMediaStudioStatus() {
   if (flowStatus) {
     flowStatus.innerHTML = `
       <article><span>来源</span><strong>${reports.length ? "已接商品" : "等待商品"}</strong><p>${reports.length ? "从 Listing、批量铺货或 AI CEO 工作记录接入。" : "先从 AI CEO 或 Listing 生成商品草稿，也可以独立上传图片。"}</p></article>
-      <article><span>需求</span><strong>${reports.length ? "可出素材" : "待补输入"}</strong><p>主图、场景图、详情页和视频脚本按商品用途生成。</p></article>
-      <article><span>去向</span><strong>回写 Listing</strong><p>生成结果先预览，通过后回到刊登草稿，不直接发布。</p></article>
+      <article><span>产出</span><strong>${reports.length ? "可出素材" : "待补输入"}</strong><p>主图、场景图、详情页和视频脚本按商品用途生成。</p></article>
+      <article><span>去向</span><strong>回写 Listing</strong><p>结果先预览，通过后回到刊登草稿，不直接发布。</p></article>
     `;
   }
   const mediaFirstRunStrip = ensureSaasMediaFirstRunStrip();
