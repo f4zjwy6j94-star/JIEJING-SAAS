@@ -144,6 +144,39 @@ async function waitForVisibleCeoComposer(page) {
   );
 }
 
+async function waitForCeoRouteTaskTarget(page, target) {
+  await page
+    .waitForFunction(
+      (expectedTarget) => {
+        const card = document.querySelector("#view-cockpit .saas-ceo-routing-task-card");
+        const button = card?.querySelector("[data-global-flow-view]");
+        const pending = document.querySelector("#view-cockpit #ceoChat .message.ai.is-pending");
+        return Boolean(card && card.offsetParent !== null && button?.getAttribute("data-global-flow-view") === expectedTarget && !pending);
+      },
+      target,
+      { timeout: 12000 },
+    )
+    .catch(() => {});
+  await page.waitForTimeout(250);
+}
+
+async function waitForCeoPlainConsultationSettled(page) {
+  await page
+    .waitForFunction(
+      () => {
+        const messages = Array.from(document.querySelectorAll("#view-cockpit #ceoChat .message.ai"));
+        const lastAi = messages[messages.length - 1] || null;
+        const card = document.querySelector("#view-cockpit .saas-ceo-routing-task-card");
+        const pending = document.querySelector("#view-cockpit #ceoChat .message.ai.is-pending");
+        return Boolean(lastAi?.getAttribute("data-status") === "local_clock_answered" && !(card && card.offsetParent !== null) && !pending);
+      },
+      null,
+      { timeout: 12000 },
+    )
+    .catch(() => {});
+  await page.waitForTimeout(250);
+}
+
 function localStaticPath(requestUrl) {
   if (!localStaticRoot) return "";
   const url = new URL(requestUrl);
@@ -284,7 +317,7 @@ async function main() {
     .locator("#view-cockpit.is-active #ceoInput")
     .fill("帮我调研 eBay 热销收纳小商品，并先整理 Listing 草稿", { timeout: 15000 });
   await page.locator("#view-cockpit.is-active #ceoForm").evaluate((form) => form.requestSubmit());
-  await page.waitForTimeout(1200);
+  await waitForCeoRouteTaskTarget(page, "product");
   const ceoRouteTask = await page.evaluate(() => {
     const card = document.querySelector("#view-cockpit .saas-ceo-routing-task-card");
     const button = card?.querySelector("[data-global-flow-view]");
@@ -293,6 +326,11 @@ async function main() {
       text: card?.innerText || "",
       target: button?.getAttribute("data-global-flow-view") || "",
       button: button?.innerText || "",
+      has_why_rows: document.querySelectorAll("#view-cockpit .saas-ceo-routing-why article").length === 3,
+      has_simple_copy:
+        (card?.innerText || "").includes("我理解") &&
+        (card?.innerText || "").includes("推荐去") &&
+        (card?.innerText || "").includes("安全边界"),
       has_internal_copy: /packet|provider|preflight|数据包|后台|排查/i.test(card?.innerText || ""),
     };
   });
@@ -316,7 +354,7 @@ async function main() {
   for (const scenario of routeScenarioDefs) {
     await page.locator("#view-cockpit.is-active #ceoInput").fill(scenario.text, { timeout: 15000 });
     await page.locator("#view-cockpit.is-active #ceoForm").evaluate((form) => form.requestSubmit());
-    await page.waitForTimeout(800);
+    await waitForCeoRouteTaskTarget(page, scenario.target);
     ceoRouteScenarios.push(
       await page.evaluate((scenario) => {
         const card = document.querySelector("#view-cockpit .saas-ceo-routing-task-card");
@@ -335,6 +373,24 @@ async function main() {
       }, scenario),
     );
   }
+
+  await page.locator("#view-cockpit.is-active #ceoInput").fill("今天几号", { timeout: 15000 });
+  await page.locator("#view-cockpit.is-active #ceoForm").evaluate((form) => form.requestSubmit());
+  await waitForCeoPlainConsultationSettled(page);
+  const ceoPlainConsultation = await page.evaluate(() => {
+    const messages = Array.from(document.querySelectorAll("#view-cockpit #ceoChat .message.ai"));
+    const lastAi = messages[messages.length - 1] || null;
+    const lastText = lastAi?.innerText || "";
+    const card = document.querySelector("#view-cockpit .saas-ceo-routing-task-card");
+    return {
+      has_answer: lastText.trim().length > 12,
+      has_route_task_card: Boolean(card && card.offsetParent !== null),
+      has_last_work_detail: Boolean(lastAi?.querySelector(".saas-ai-ceo-work-detail")),
+      last_status: lastAi?.getAttribute("data-status") || "",
+      last_text: lastText.slice(0, 240),
+      exposes_internal_copy: /packet|provider|preflight|数据包|后台|排查|工作详情|来源记录/i.test(lastText),
+    };
+  });
 
   const modules = [
     ["cockpit", "view-cockpit"],
@@ -549,6 +605,7 @@ async function main() {
     navCount: await page.locator(".nav-item").count(),
     ceoRouteTask,
     ceoRouteScenarios,
+    ceoPlainConsultation,
     moduleChecks,
   };
   fs.writeFileSync(path.join(outDir, "result.json"), JSON.stringify(result, null, 2));
@@ -623,7 +680,7 @@ async function main() {
   if (ceoRouteTask.has_internal_copy || cockpit.ceo_route_task_internal_copy) {
     failures.push("AI CEO routing task card exposes internal packet/provider/preflight copy");
   }
-  if (!cockpit.has_ceo_route_task_card || !cockpit.ceo_route_task_copy) {
+  if (!ceoRouteTask.has_why_rows || !ceoRouteTask.has_simple_copy) {
     failures.push("AI CEO routing task card copy missing");
   }
   for (const scenario of ceoRouteScenarios) {
@@ -634,6 +691,10 @@ async function main() {
       failures.push(`AI CEO route scenario ${scenario.label} exposes internal copy`);
     }
   }
+  if (!ceoPlainConsultation.has_answer) failures.push("AI CEO plain consultation did not render an answer");
+  if (ceoPlainConsultation.has_route_task_card) failures.push("AI CEO plain consultation still shows a routing task card");
+  if (ceoPlainConsultation.has_last_work_detail) failures.push("AI CEO plain consultation still shows work details");
+  if (ceoPlainConsultation.exposes_internal_copy) failures.push("AI CEO plain consultation exposes internal/debug copy");
   if (cockpit.ceo_starter_prompts_visible) {
     failures.push("AI CEO first screen still exposes starter prompt buttons");
   }

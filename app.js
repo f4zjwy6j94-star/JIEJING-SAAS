@@ -17522,6 +17522,7 @@ function renderSaasCeoModuleHandoffPanel(view = "product", ctx = saasMerchantWor
 function shouldShowSaasAiCeoWorkDetail(turn = {}) {
   const latest = normalizeSaasAiCeoLatestTurn(turn);
   if (!latest || latest.pending) return false;
+  if (isSaasAiCeoPlainConsultationTurn(latest)) return false;
   const route = String(latest.route || "");
   const status = String(latest.status || "");
   const sourceCount = normalizeSaasAiCeoSourceRecords(latest.source_records || []).length;
@@ -17532,6 +17533,21 @@ function shouldShowSaasAiCeoWorkDetail(turn = {}) {
       latest.writes_merchant_rule ||
       ["ebay_workflow", "external_realtime", "confirmation_required", "merchant_rule_memory"].includes(route) ||
       ["realtime_search_answered", "realtime_search_answered_without_model", "external_data_source_required"].includes(status),
+  );
+}
+
+function isSaasAiCeoPlainConsultationTurn(turn = {}) {
+  const latest = normalizeSaasAiCeoLatestTurn(turn);
+  if (!latest || latest.pending) return false;
+  const route = String(latest.route || "general_chat");
+  const status = String(latest.status || "");
+  const realtimeStatuses = ["realtime_search_answered", "realtime_search_answered_without_model", "external_data_source_required"];
+  return Boolean(
+    route === "general_chat" &&
+      !realtimeStatuses.includes(status) &&
+      !latest.decision_center_required &&
+      !latest.long_term_memory &&
+      !latest.writes_merchant_rule,
   );
 }
 
@@ -17566,6 +17582,7 @@ function sanitizeSaasCeoCommandSourceText(text = "") {
 function recordSaasCeoCommandSourceRecord(command = state.saasLastCeoCommand) {
   const current = normalizeSaasCeoCommand(command);
   if (!current) return false;
+  if (!shouldRecordSaasCeoCommandSourceRecord(current)) return false;
   const safeText = sanitizeSaasCeoCommandSourceText(current.text);
   const record = normalizeSaasSourceRecord(
     {
@@ -17584,6 +17601,20 @@ function recordSaasCeoCommandSourceRecord(command = state.saasLastCeoCommand) {
   state.saasSourceRecords = [record, ...existing.filter((item) => item.id !== record.id)].slice(0, 60);
   persistSaasSourceRecords();
   return true;
+}
+
+function shouldRecordSaasCeoCommandSourceRecord(command = state.saasLastCeoCommand) {
+  const current = normalizeSaasCeoCommand(command);
+  if (!current) return false;
+  const route = String(current.route || "general_chat");
+  const hasBusinessRoute = (current.routes || []).some((item) => item && item.view && item.view !== "connect");
+  return Boolean(
+    route !== "general_chat" ||
+      hasBusinessRoute ||
+      current.decision_center_required ||
+      current.long_term_memory ||
+      current.writes_merchant_rule,
+  );
 }
 
 function newestSaasCeoCommand(...commands) {
