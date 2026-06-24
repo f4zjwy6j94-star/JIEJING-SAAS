@@ -39259,3 +39259,219 @@ body.saas-public-mvp #view-bulk .bulk-output-snapshot p {
     white-space: nowrap;
   }
 }
+
+/* 2026-06-24 mobile first-screen polish: keep workflows complete, make the first view scannable. */
+@media (max-width: 760px) {
+  body.saas-public-mvp #appShell .view.is-active {
+    padding-bottom: calc(112px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  body.saas-public-mvp .saas-listing-composer {
+    gap: 12px;
+    padding: 16px;
+  }
+
+  body.saas-public-mvp .saas-listing-composer-head {
+    gap: 10px;
+  }
+
+  body.saas-public-mvp .saas-listing-composer-head > div,
+  body.saas-public-mvp .saas-listing-input-head > div {
+    gap: 5px;
+  }
+
+  body.saas-public-mvp .saas-listing-composer-head h2 {
+    font-size: clamp(27px, 9vw, 34px);
+    line-height: 1.02;
+  }
+
+  body.saas-public-mvp .saas-listing-composer-head p:not(.eyebrow),
+  body.saas-public-mvp .saas-listing-input-head p {
+    font-size: 13px;
+    line-height: 1.52;
+  }
+
+  body.saas-public-mvp .saas-listing-input-panel {
+    gap: 12px;
+    padding: 14px;
+  }
+
+  body.saas-public-mvp .saas-listing-input-head strong {
+    font-size: 19px;
+  }
+
+  body.saas-public-mvp .saas-listing-input-head em {
+    min-height: 28px;
+    padding: 5px 9px;
+  }
+
+  body.saas-public-mvp .saas-listing-composer-input textarea {
+    min-height: 136px;
+    padding: 12px;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+
+  body.saas-public-mvp .saas-listing-input-chips {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  body.saas-public-mvp .saas-listing-input-chips button {
+    width: 100%;
+    min-height: 32px;
+    padding: 6px 7px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-hero-grid,
+  body.saas-public-mvp #view-media .media-studio-panel {
+    gap: 12px;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-hero-grid h2,
+  body.saas-public-mvp #view-media .media-heading h2 {
+    font-size: clamp(25px, 8vw, 32px);
+    line-height: 1.04;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-hero-grid .section-note,
+  body.saas-public-mvp #view-media .media-heading .section-note {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-hero-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 7px;
+    padding: 8px;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-hero-summary article {
+    min-height: 66px;
+    padding: 9px;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-hero-summary span,
+  body.saas-public-mvp #view-bulk .bulk-hero-summary small {
+    font-size: 11px;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-hero-summary strong {
+    font-size: 24px;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-proof-note {
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-pipeline {
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    gap: 5px;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-pipeline span {
+    min-height: 32px;
+    padding: 7px 3px;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-sequence-card {
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 10px;
+    padding: 12px;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-sequence-card .bulk-step-number,
+  body.saas-public-mvp #view-bulk .bulk-step-number {
+    width: 30px;
+    height: 30px;
+    font-size: 10px;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-sequence-body {
+    gap: 8px;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-sequence-body > strong,
+  body.saas-public-mvp #view-bulk .bulk-boundary-head strong {
+    font-size: 15px;
+    line-height: 1.25;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-sequence-body > p,
+  body.saas-public-mvp #view-bulk .bulk-boundary-head p:not(.eyebrow) {
+    font-size: 12px;
+    line-height: 1.42;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-clean-board .bulk-source-choice-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-clean-board .bulk-source-choice-grid button {
+    min-height: 70px;
+    padding: 10px;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-clean-board .bulk-source-choice-grid strong {
+    font-size: 13px;
+  }
+
+  body.saas-public-mvp #view-bulk .bulk-clean-board .bulk-source-choice-grid span {
+    margin-top: 5px;
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  body.saas-public-mvp #view-media .media-pipeline,
+  body.saas-public-mvp #view-media .saas-media-first-run-strip,
+  body.saas-public-mvp #view-media .media-channel-board {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px;
+  }
+
+  body.saas-public-mvp #view-media .media-pipeline article,
+  body.saas-public-mvp #view-media .saas-media-first-run-strip article,
+  body.saas-public-mvp #view-media .media-channel-card {
+    min-height: 78px;
+    padding: 10px;
+  }
+
+  body.saas-public-mvp #view-media .media-pipeline span,
+  body.saas-public-mvp #view-media .saas-media-first-run-strip span,
+  body.saas-public-mvp #view-media .media-channel-card span {
+    font-size: 11px;
+  }
+
+  body.saas-public-mvp #view-media .media-pipeline strong,
+  body.saas-public-mvp #view-media .saas-media-first-run-strip strong,
+  body.saas-public-mvp #view-media .media-channel-card strong {
+    font-size: 14px;
+    line-height: 1.22;
+  }
+
+  body.saas-public-mvp #view-media .media-pipeline p,
+  body.saas-public-mvp #view-media .saas-media-first-run-strip p,
+  body.saas-public-mvp #view-media .media-channel-card p {
+    margin-top: 5px;
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  body.saas-public-mvp #view-media .media-project-switcher,
+  body.saas-public-mvp #view-media .media-preview-stage,
+  body.saas-public-mvp #view-media .media-decision-panel {
+    padding: 13px;
+  }
+
+  body.saas-public-mvp #view-connect .settings-shell,
+  body.saas-public-mvp #view-connect .settings-panel {
+    gap: 12px;
+  }
+}
