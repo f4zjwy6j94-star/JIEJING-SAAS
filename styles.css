@@ -38686,6 +38686,37 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card p {
   line-height: 1.5;
 }
 
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-why {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 9px;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-why article {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(15, 45, 40, 0.08);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-why span {
+  margin: 0;
+  color: #08766e;
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-why strong {
+  color: #1b2b25;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card .primary-action {
   min-width: 104px;
   min-height: 42px;
@@ -38711,6 +38742,10 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card .primary-a
 
   body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer,
   body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-why {
     grid-template-columns: minmax(0, 1fr);
   }
 

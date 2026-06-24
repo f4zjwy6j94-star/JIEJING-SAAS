@@ -38,6 +38,14 @@ def main() -> int:
         "直接输入问题、商品、链接、图片或订单情况",
         "AI CEO 下一步",
         "继续 Listing",
+        "function saasCeoRouteSimpleReason",
+        "function saasCeoRoutingWhyRows",
+        "AI CEO 路由依据",
+        "我理解",
+        "推荐去",
+        "安全边界",
+        "只整理草稿，真实动作仍确认",
+        "先确认，未点头不执行",
         "function renderSaasAiCeoSourceRecordsMarkup",
         "function renderSaasAiCeoWorkDetailMarkup",
         "function shouldShowSaasAiCeoWorkDetail",
@@ -81,6 +89,7 @@ def main() -> int:
         "min-height: 0;",
         "2026-06-24 AI CEO minimal routing v2",
         ".saas-ceo-routing-main",
+        ".saas-ceo-routing-why",
     ]
     for needle in required_css:
         if needle not in css:

@@ -306,6 +306,36 @@ async function main() {
     await page.waitForTimeout(400);
   }
 
+  const routeScenarioDefs = [
+    { label: "bulk", text: "帮我批量筛 10 个 eBay 热销小商品", target: "bulk" },
+    { label: "media", text: "帮我把这张货源图生成主图和详情页", target: "media" },
+    { label: "service", text: "帮我整理买家消息和订单物流回复草稿", target: "service" },
+    { label: "confirm", text: "帮我直接发布并开广告预算", target: "confirm" },
+  ];
+  const ceoRouteScenarios = [];
+  for (const scenario of routeScenarioDefs) {
+    await page.locator("#view-cockpit.is-active #ceoInput").fill(scenario.text, { timeout: 15000 });
+    await page.locator("#view-cockpit.is-active #ceoForm").evaluate((form) => form.requestSubmit());
+    await page.waitForTimeout(800);
+    ceoRouteScenarios.push(
+      await page.evaluate((scenario) => {
+        const card = document.querySelector("#view-cockpit .saas-ceo-routing-task-card");
+        const button = card?.querySelector("[data-global-flow-view]");
+        const text = card?.innerText || "";
+        return {
+          label: scenario.label,
+          expected: scenario.target,
+          visible: Boolean(card && card.offsetParent !== null),
+          target: button?.getAttribute("data-global-flow-view") || "",
+          has_why_rows: document.querySelectorAll("#view-cockpit .saas-ceo-routing-why article").length === 3,
+          has_simple_copy: text.includes("我理解") && text.includes("推荐去") && text.includes("安全边界"),
+          has_internal_copy: /packet|provider|preflight|数据包|后台|排查/i.test(text),
+          text: text.slice(0, 240),
+        };
+      }, scenario),
+    );
+  }
+
   const modules = [
     ["cockpit", "view-cockpit"],
     ["product", "view-product"],
@@ -416,8 +446,9 @@ async function main() {
           ceo_route_task_target: document.querySelector("#view-cockpit .saas-ceo-routing-task-card [data-global-flow-view]")?.getAttribute("data-global-flow-view") || "",
           ceo_route_task_copy:
             text.includes("AI CEO 下一步") &&
-            text.includes("Listing") &&
-            text.includes("继续 Listing"),
+            text.includes("我理解") &&
+            text.includes("推荐去") &&
+            text.includes("安全边界"),
           ceo_route_task_internal_copy: /packet|provider|preflight|数据包|后台|排查/i.test(
             document.querySelector("#view-cockpit .saas-ceo-routing-task-card")?.innerText || "",
           ),
@@ -517,6 +548,7 @@ async function main() {
     screenshotFailures,
     navCount: await page.locator(".nav-item").count(),
     ceoRouteTask,
+    ceoRouteScenarios,
     moduleChecks,
   };
   fs.writeFileSync(path.join(outDir, "result.json"), JSON.stringify(result, null, 2));
@@ -593,6 +625,14 @@ async function main() {
   }
   if (!cockpit.has_ceo_route_task_card || !cockpit.ceo_route_task_copy) {
     failures.push("AI CEO routing task card copy missing");
+  }
+  for (const scenario of ceoRouteScenarios) {
+    if (!scenario.visible || scenario.target !== scenario.expected || !scenario.has_why_rows || !scenario.has_simple_copy) {
+      failures.push(`AI CEO route scenario ${scenario.label} failed`);
+    }
+    if (scenario.has_internal_copy) {
+      failures.push(`AI CEO route scenario ${scenario.label} exposes internal copy`);
+    }
   }
   if (cockpit.ceo_starter_prompts_visible) {
     failures.push("AI CEO first screen still exposes starter prompt buttons");

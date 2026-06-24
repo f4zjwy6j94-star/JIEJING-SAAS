@@ -17371,10 +17371,39 @@ function saasCeoTaskNextCopy(route = null, command = state.saasLastCeoCommand) {
   );
 }
 
+function saasCeoRouteSimpleReason(route = null) {
+  return (
+    {
+      product: "整理刊登资料",
+      bulk: "先小批量验证",
+      media: "处理图片视频",
+      service: "处理消息订单",
+      confirm: "确认高风险动作",
+      connect: "补连接状态",
+    }[route?.view] || "继续当前任务"
+  );
+}
+
+function saasCeoRoutingWhyRows(route = null, command = state.saasLastCeoCommand) {
+  const current = normalizeSaasCeoCommand(command);
+  if (!route || !current) return [];
+  return [
+    ["我理解", saasCeoTaskGoalLabel(current)],
+    ["推荐去", `${route.label || "推荐模块"} · ${saasCeoRouteSimpleReason(route)}`],
+    [
+      "安全边界",
+      current.high_risk || route.view === "confirm"
+        ? "先确认，未点头不执行"
+        : "只整理草稿，真实动作仍确认",
+    ],
+  ];
+}
+
 function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
   const current = normalizeSaasCeoCommand(command);
   const route = primarySaasCeoRoute(current);
   if (!current || !route) return "";
+  const whyRows = saasCeoRoutingWhyRows(route, current);
   const buttonLabel =
     route.view === "confirm"
       ? "去决策中心"
@@ -17389,6 +17418,18 @@ function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
         <span>AI CEO 下一步</span>
         <strong>${escapeHtml(route.label || "推荐模块")}</strong>
         <p>${escapeHtml(saasCeoTaskGoalLabel(current))}。${escapeHtml(saasCeoTaskNextCopy(route, current))}</p>
+        <div class="saas-ceo-routing-why" aria-label="AI CEO 路由依据">
+          ${whyRows
+            .map(
+              ([label, value]) => `
+                <article>
+                  <span>${escapeHtml(label)}</span>
+                  <strong>${escapeHtml(value)}</strong>
+                </article>
+              `,
+            )
+            .join("")}
+        </div>
       </div>
       <button class="primary-action compact-action" type="button" data-global-flow-view="${escapeHtml(route.view)}" data-global-flow-key="${escapeHtml(route.key || route.view)}">
         ${escapeHtml(buttonLabel)}
