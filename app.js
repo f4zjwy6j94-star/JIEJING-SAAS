@@ -30742,6 +30742,72 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
   `;
 }
 
+function saasSettingsOneGlanceRows(activeTabId = "general") {
+  const rowsByTab = {
+    general: [
+      ["状态灯", "只看能不能继续", "店铺、数据、AI、订阅和确认边界一眼扫完。"],
+      ["五个入口", "账号 / AI / 数据 / 权限 / 订阅", "不知道去哪，就从这里进入对应设置。"],
+      ["日常经营", "回工作台完成", "设置只管连接和边界，不承接日常经营流程。"],
+    ],
+    account: [
+      ["账号状态", "先看能不能继续经营", "登录、eBay 连接和账号健康放在同一页。"],
+      ["连接入口", "只读授权和回调地址", "复制正式回调地址，不在前端保存 eBay token。"],
+      ["事故边界", "异常先停真实动作", "封禁、受限、付款冻结会先停发布、退款、广告和承诺。"],
+    ],
+    model: [
+      ["文本 AI", "对话、报告、Listing 文案", "AI CEO 和 Listing 草稿走文本模型。"],
+      ["素材工坊", "图片和视频脚本分开看", "素材生成回到素材工坊，不混在账号设置里。"],
+      ["凭证安全", "保存后不回显", "模型 key 只进后端密钥边界，页面只显示可用状态。"],
+    ],
+    data: [
+      ["官方只读", "商品、订单、政策、费用", "读到什么用什么，缺口会明确显示。"],
+      ["来源记录", "公开来源和商家补充", "报告和 Listing 判断都要能追溯来源。"],
+      ["不造假", "不用旧商品旧素材冒充", "没有真实数据时保持缺口，不填旧 demo。"],
+    ],
+    governance: [
+      ["谁能点头", "发布、退款、广告、采购付款", "确认中心按岗位权限放行，不让所有人共用老板权限。"],
+      ["经营记忆", "明确说记住才长期保存", "普通聊天不进长期经营记忆。"],
+      ["越权停住", "没权限只补资料", "高风险动作没有权限就停到决策中心。"],
+    ],
+    billing: [
+      ["套餐权益", "先看当前能不能用", "内测阶段不做真实扣费承诺。"],
+      ["额度停用", "只停高成本任务", "联网、模型、素材等高成本任务按权益停用。"],
+      ["数据保护", "历史资料不删除", "报告、确认、审计证据和账号设置继续可读。"],
+    ],
+    owner_ops: [
+      ["内部可见", "只给主理人管理员", "普通商家不会看到上线、WAF、队列和门禁排查。"],
+      ["上线检查", "域名、WAF、Billing、队列", "正式上线前在这里集中排查。"],
+      ["不干扰商家", "高级项不进工作流", "经营页继续保持简单。"],
+    ],
+  };
+  return rowsByTab[activeTabId] || rowsByTab.general;
+}
+
+function renderSaasSettingsOneGlanceStrip(activeTabId = "general") {
+  const rows = saasSettingsOneGlanceRows(activeTabId);
+  return `
+    <section class="saas-settings-one-glance" aria-label="本页只看三件事">
+      <div class="saas-settings-one-glance-head">
+        <span>本页只看三件事</span>
+        <strong>先理解状态，再决定要不要操作</strong>
+      </div>
+      <div class="saas-settings-one-glance-grid">
+        ${rows
+          .map(
+            ([label, title, detail], index) => `
+              <article>
+                <span>${String(index + 1).padStart(2, "0")} · ${escapeHtml(label)}</span>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderSaasMerchantSecurityBoundaryPanel() {
   const rows = [
     ["平台凭证", "不在浏览器显示", "eBay token、模型 key、支付密钥只在后端密钥边界处理。"],
@@ -30864,8 +30930,8 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       title: "账号与店铺",
       intro: "这里只处理登录、eBay 连接、回调地址和账号健康。",
       panels: [
-        renderSaasSettingsAccountPanel(ctx, options),
         renderSaasSettingsAccountFocusPanel(ctx),
+        renderSaasSettingsAccountPanel(ctx, options),
       ],
     },
     {
@@ -30875,8 +30941,8 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       title: "AI 与素材",
       intro: "这里只看 AI 是否可用、素材生成入口和费用口径。",
       panels: [
-        renderSaasMerchantModelProviderPanel(ctx),
         renderSaasSettingsModelFocusPanel(ctx),
+        renderSaasMerchantModelProviderPanel(ctx),
       ],
     },
     {
@@ -30886,8 +30952,8 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       title: "店铺数据",
       intro: "这里只看商品、订单、政策、费用等经营数据是否读到。",
       panels: [
-        renderSaasSettingsDataPanel(ctx),
         renderSaasSettingsDataFocusPanel(ctx),
+        renderSaasSettingsDataPanel(ctx),
       ],
     },
     {
@@ -30897,8 +30963,8 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       title: "团队权限",
       intro: "这里只看谁能确认发布、退款、广告、采购付款和敏感客服承诺。",
       panels: [
-        renderSaasMerchantPermissionPanel(),
         renderSaasSettingsGovernanceFocusPanel(),
+        renderSaasMerchantPermissionPanel(),
       ],
     },
     {
@@ -30990,6 +31056,7 @@ function renderSaasSettingsCleanLayout(ctx = saasMerchantWorkbenchContext(), opt
           <h2>${escapeHtml(activeTab.title)}</h2>
           <p>${escapeHtml(activeTab.intro || "设置只处理连接、安全、来源、AI、权限和订阅安全。日常经营仍回到工作台。")}</p>
         </header>
+        ${renderSaasSettingsOneGlanceStrip(activeTab.id)}
         ${isOverview ? renderSaasSettingsReadableMap(activeTab.id) : ""}
         <div class="saas-settings-clean-panels">
           ${activeTab.panels.filter(Boolean).join("")}

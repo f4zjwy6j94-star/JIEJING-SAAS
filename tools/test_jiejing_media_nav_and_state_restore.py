@@ -57,7 +57,7 @@ def main() -> int:
         'data-media-saas-real="1"',
         "素材结果",
         "图片和视频脚本",
-        "先看用途、可用性和待补项",
+        "商家只需要看三件事：这张图用在哪里、能不能用、还缺什么",
         "saas-media-generated-assets",
         "saas-generated-assets-grid",
         'data-asset-preview="${escapeHtml(card.key)}"',
@@ -149,7 +149,7 @@ def main() -> int:
     if "if (isSaasPublicMvpMode())" not in ceo_submit_body:
         return fail("public SaaS AI CEO submit should use the real command routing path before legacy media demo routing")
     for marker in [
-        "20260624-confirm-v2",
+        "20260624-settings-v1",
     ]:
         if marker not in app_html + index_html:
             return fail(f"frontend cache version must advance after owner publish UI change: {marker}")

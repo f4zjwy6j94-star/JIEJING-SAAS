@@ -268,6 +268,18 @@ def main() -> None:
     ]:
         if internal_marker in settings_map_body:
             raise AssertionError(f"Settings map should use merchant-facing wording: {internal_marker}")
+    one_glance_start = app_js.index("function saasSettingsOneGlanceRows")
+    one_glance_end = app_js.index("function renderSaasBillingProviderPanel", one_glance_start)
+    one_glance_body = app_js[one_glance_start:one_glance_end]
+    for required_marker in [
+        "function renderSaasSettingsOneGlanceStrip",
+        "saas-settings-one-glance",
+        "本页只看三件事",
+        "先理解状态，再决定要不要操作",
+        "普通聊天不进长期经营记忆",
+        "只给主理人管理员",
+    ]:
+        require(one_glance_body, required_marker, "settings child pages have one-glance merchant summary")
     settings_def_start = app_js.index("function saasSettingsTabDefinitions")
     settings_def_end = app_js.index("function renderSaasSettingsCleanLayout", settings_def_start)
     settings_def_body = app_js[settings_def_start:settings_def_end]
@@ -298,6 +310,7 @@ def main() -> None:
     settings_layout_body = app_js[settings_layout_start:settings_layout_end]
     require(settings_layout_body, 'activeTab.id === "general"', "settings overview-only map guard")
     require(settings_layout_body, 'isOverview ? renderSaasSettingsReadableMap(activeTab.id) : ""', "settings child pages skip redundant map")
+    require(settings_layout_body, "renderSaasSettingsOneGlanceStrip(activeTab.id)", "settings child pages render one-glance summary")
     draft_start = app_js.index("function renderSaasListingDraftEditor")
     draft_end = app_js.index("function renderSaasListingGapAndRiskPanel", draft_start)
     draft_body = app_js[draft_start:draft_end]

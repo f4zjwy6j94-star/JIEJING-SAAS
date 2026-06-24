@@ -46,6 +46,8 @@ def main() -> None:
         + function_scope(app_js, "renderSaasSettingsGovernanceFocusPanel")
         + function_scope(app_js, "renderSaasSettingsBillingFocusPanel")
         + function_scope(app_js, "renderSaasMerchantSecurityBoundaryPanel")
+        + function_scope(app_js, "saasSettingsOneGlanceRows")
+        + function_scope(app_js, "renderSaasSettingsOneGlanceStrip")
         + function_scope(app_js, "renderSaasSettingsCleanLayout")
         + function_scope(app_js, "saasSettingsTabDefinitions")
         + function_scope(app_js, "renderSaasCoreModuleDiagnosticsPanel")
@@ -113,6 +115,14 @@ def main() -> None:
         "worker heartbeat",
         "dead_letter",
         "stale_running_count",
+        "本页只看三件事",
+        "先理解状态，再决定要不要操作",
+        "凭证安全",
+        "保存后不回显",
+        "不造假",
+        "不用旧商品旧素材冒充",
+        "普通聊天不进长期经营记忆",
+        "只给主理人管理员",
     ]:
         require(settings_scope, marker, "settings readable map")
 
@@ -125,6 +135,7 @@ def main() -> None:
         "saas-core-module-diagnostics-grid",
         "saas-settings-simple-map",
         "saas-settings-where-to-go",
+        "saas-settings-one-glance",
     ]:
         require(styles, style_marker, "readable page styling")
 

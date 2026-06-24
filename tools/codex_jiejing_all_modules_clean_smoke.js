@@ -378,6 +378,8 @@ async function main() {
           has_settings_home_hub: sectionHas(".saas-settings-home-hub"),
           settings_home_status_count: sectionCount(".saas-settings-home-status article"),
           has_settings_simple_copy: text.includes("普通商家只看 5 个入口") && text.includes("什么时候需要打开设置"),
+          has_settings_one_glance: sectionHas(".saas-settings-one-glance") && text.includes("本页只看三件事"),
+          settings_one_glance_count: sectionCount(".saas-settings-one-glance-grid article"),
           has_media_tabs: Boolean(document.querySelector("#mediaProjectTabs, .media-project-tabs, [data-media-project-tab]")),
           has_media_simple_headline: text.includes("把商品图变成可用素材包"),
           has_media_simple_flow:
@@ -467,6 +469,10 @@ async function main() {
               has_section_group: Boolean(section?.querySelector(".saas-settings-section-group")),
               has_focus_panel: Boolean(section?.querySelector(".saas-settings-focus-panel")),
               has_subpage_strip: Boolean(section?.querySelector(".saas-settings-subpage-strip")),
+              has_one_glance: Boolean(section?.querySelector(".saas-settings-one-glance")),
+              one_glance_count: section?.querySelectorAll(".saas-settings-one-glance-grid article").length || 0,
+              has_one_glance_copy: text.includes("本页只看三件事") && text.includes("先理解状态"),
+              has_model_provider_panel: Boolean(section?.querySelector(".saas-model-provider-panel")),
               preview: text.trim().slice(0, 180),
             };
           }, tabId),
@@ -474,12 +480,19 @@ async function main() {
       }
       check.settings_child_audit = settingsChildAudit;
       check.settings_children_are_focused = settingsChildAudit.every(
-        (item) => item.has_focus_panel && !item.has_home_hub && !item.has_section_group && !item.has_subpage_strip,
+        (item) =>
+          item.has_focus_panel &&
+          item.has_one_glance &&
+          item.one_glance_count === 3 &&
+          item.has_one_glance_copy &&
+          !item.has_home_hub &&
+          !item.has_section_group &&
+          !item.has_subpage_strip,
       );
       const modelAudit = settingsChildAudit.find((item) => item.id === "model") || {};
       check.settings_model_has_home_hub = modelAudit.has_home_hub || false;
       check.settings_model_has_subpage_strip = modelAudit.has_subpage_strip || false;
-      check.settings_model_has_model_panel = String(modelAudit.preview || "").includes("AI 连接与素材生成");
+      check.settings_model_has_model_panel = modelAudit.has_model_provider_panel || false;
       await page
         .screenshot({ path: path.join(outDir, "connect-model.png"), fullPage: true, timeout: 15000 })
         .catch((error) => screenshotFailures.push({ view: "connect-model", error: String(error.message || error).slice(0, 300) }));
@@ -540,6 +553,9 @@ async function main() {
     failures.push("settings compact hub/status missing");
   }
   if (!connect.has_settings_simple_copy) failures.push("settings simple usage copy missing");
+  if (!connect.has_settings_one_glance || connect.settings_one_glance_count < 3) {
+    failures.push("settings one-glance summary missing");
+  }
   if (!connect.settings_children_are_focused) failures.push("ordinary settings child tabs are not focused");
   if (connect.settings_model_has_home_hub) failures.push("settings child page repeats overview map");
   if (connect.settings_model_has_subpage_strip) failures.push("settings child page still shows redundant intro/map");

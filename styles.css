@@ -37405,6 +37405,76 @@ body.saas-public-mvp .saas-settings-clean-panels {
   max-width: 1120px;
 }
 
+body.saas-public-mvp .saas-settings-one-glance {
+  display: grid;
+  gap: 10px;
+  max-width: 1120px;
+  padding: 14px;
+  border: 1px solid rgba(8, 118, 110, 0.14);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffffff 0%, #f6fbf9 100%);
+}
+
+body.saas-public-mvp .saas-settings-one-glance-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-settings-one-glance-head span {
+  color: #08766e;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+body.saas-public-mvp .saas-settings-one-glance-head strong {
+  min-width: 0;
+  color: #14231f;
+  font-size: 15px;
+  line-height: 1.25;
+  text-align: right;
+}
+
+body.saas-public-mvp .saas-settings-one-glance-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+body.saas-public-mvp .saas-settings-one-glance-grid article {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  min-height: 92px;
+  padding: 12px;
+  border: 1px solid rgba(15, 45, 40, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+body.saas-public-mvp .saas-settings-one-glance-grid span {
+  color: #08766e;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.25;
+}
+
+body.saas-public-mvp .saas-settings-one-glance-grid strong {
+  color: #14231f;
+  font-size: 16px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-settings-one-glance-grid small {
+  color: #62756f;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 body.saas-public-mvp .saas-settings-simple-map {
   display: grid;
   gap: 12px;
@@ -38020,6 +38090,19 @@ body.saas-public-mvp .saas-edge-required-urls em {
 
   body.saas-public-mvp .saas-settings-clean-content {
     padding: 24px;
+  }
+
+  body.saas-public-mvp .saas-settings-one-glance-head {
+    display: grid;
+    align-items: start;
+  }
+
+  body.saas-public-mvp .saas-settings-one-glance-head strong {
+    text-align: left;
+  }
+
+  body.saas-public-mvp .saas-settings-one-glance-grid {
+    grid-template-columns: 1fr;
   }
 
   body.saas-public-mvp .saas-readable-page-head {
