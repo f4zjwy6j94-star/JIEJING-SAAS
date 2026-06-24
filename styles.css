@@ -38658,11 +38658,11 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
-  padding: 12px;
+  padding: 14px;
   border: 1px solid rgba(184, 209, 197, 0.78);
   border-radius: 8px;
-  background: #f9fbfa;
-  box-shadow: none;
+  background: #ffffff;
+  box-shadow: 0 14px 34px rgba(22, 50, 44, 0.08);
 }
 
 body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card > div,
@@ -38697,20 +38697,22 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card p {
 }
 
 body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-why {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
-  margin-top: 9px;
+  margin-top: 10px;
 }
 
 body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-why article {
-  display: grid;
-  gap: 2px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
   min-width: 0;
-  padding: 7px 8px;
-  border: 1px solid rgba(15, 45, 40, 0.08);
-  border-radius: 8px;
-  background: #ffffff;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid rgba(11, 133, 121, 0.16);
+  border-radius: 999px;
+  background: #f3faf7;
 }
 
 body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-why span {
@@ -38718,12 +38720,14 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-why span {
   color: #08766e;
   font-size: 10px;
   line-height: 1.2;
+  white-space: nowrap;
 }
 
 body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-why strong {
+  min-width: 0;
   color: #1b2b25;
-  font-size: 12px;
-  line-height: 1.35;
+  font-size: 11px;
+  line-height: 1.25;
   overflow-wrap: anywhere;
 }
 
@@ -38761,7 +38765,14 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card .primary-a
   }
 
   body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-why {
+    display: grid;
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-why article {
+    display: grid;
+    gap: 2px;
+    border-radius: 8px;
   }
 
   body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer .primary-action,

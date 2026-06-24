@@ -38,11 +38,12 @@ def main() -> int:
         "比如：帮我调研这个商品，整理 Listing 草稿",
         "也可以直接问普通问题。",
         "自动进入 Listing、批量、素材、客服或决策中心",
-        "AI CEO 下一步",
+        "AI CEO 已接住",
+        "先去决策中心确认",
         "继续 Listing",
         "function saasCeoRouteSimpleReason",
         "function saasCeoRoutingWhyRows",
-        "AI CEO 路由依据",
+        "AI CEO 路由确认",
         "我理解",
         "推荐去",
         "安全边界",
@@ -104,6 +105,7 @@ def main() -> int:
         ".saas-ai-ceo-input-hint",
         ".saas-ceo-routing-main",
         ".saas-ceo-routing-why",
+        "box-shadow: 0 14px 34px rgba(22, 50, 44, 0.08)",
     ]
     for needle in required_css:
         if needle not in css:

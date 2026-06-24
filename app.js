@@ -17412,13 +17412,17 @@ function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
         : route.view === "bulk"
           ? "继续小批量实验台"
           : `继续${route.label || "推荐模块"}`;
+  const handoffTitle =
+    route.view === "confirm"
+      ? "先去决策中心确认"
+      : `去 ${route.label || "推荐模块"} 继续`;
   return `
     <section class="saas-ceo-routing-task-card ${current.high_risk ? "is-risk" : ""}" aria-label="AI CEO 下一步任务卡">
       <div class="saas-ceo-routing-main">
-        <span>AI CEO 下一步</span>
-        <strong>${escapeHtml(route.label || "推荐模块")}</strong>
+        <span>AI CEO 已接住</span>
+        <strong>${escapeHtml(handoffTitle)}</strong>
         <p>${escapeHtml(saasCeoTaskGoalLabel(current))}。${escapeHtml(saasCeoTaskNextCopy(route, current))}</p>
-        <div class="saas-ceo-routing-why" aria-label="AI CEO 路由依据">
+        <div class="saas-ceo-routing-why" aria-label="AI CEO 路由确认">
           ${whyRows
             .map(
               ([label, value]) => `
@@ -17816,7 +17820,7 @@ function handleSaasCeoCommandSubmit(text) {
     refreshSaasCeoRoutingTaskCard(instantCommand || command);
     return instantCommand || command;
   }
-  const handedToListing = syncSaasCeoCommandToListing(command);
+  syncSaasCeoCommandToListing(command);
   addCeoMessage(text, "正在查找并整理答案...", {
     assistantId: pendingMessageId,
     pending: true,
@@ -17872,7 +17876,7 @@ function handleSaasCeoCommandSubmit(text) {
     consoleNode.outerHTML = renderSaasCeoCommandConsole(ctx, command);
   }
   refreshSaasCeoRoutingTaskCard(command);
-  showActionToast(handedToListing ? "AI CEO 已收到，Listing 已接住这个目标。" : "AI CEO 已收到。");
+  // The message stream and route card already confirm receipt; avoid covering the mobile handoff card.
   return command;
 }
 

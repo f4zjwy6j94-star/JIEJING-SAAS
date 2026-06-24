@@ -340,6 +340,9 @@ async function main() {
     .fill("帮我调研 eBay 热销收纳小商品，并先整理 Listing 草稿", { timeout: 15000 });
   await page.locator("#view-cockpit.is-active #ceoForm").evaluate((form) => form.requestSubmit());
   await waitForCeoRouteTaskTarget(page, "product");
+  await page
+    .screenshot({ path: path.join(outDir, "cockpit-route-card.png"), fullPage: true, timeout: 15000 })
+    .catch((error) => screenshotFailures.push({ view: "cockpit-route-card", error: String(error.message || error).slice(0, 300) }));
   const ceoRouteTask = await page.evaluate(() => {
     const card = document.querySelector("#view-cockpit .saas-ceo-routing-task-card");
     const button = card?.querySelector("[data-global-flow-view]");
@@ -523,7 +526,7 @@ async function main() {
           has_ceo_route_task_card: Boolean(document.querySelector("#view-cockpit .saas-ceo-routing-task-card")),
           ceo_route_task_target: document.querySelector("#view-cockpit .saas-ceo-routing-task-card [data-global-flow-view]")?.getAttribute("data-global-flow-view") || "",
           ceo_route_task_copy:
-            text.includes("AI CEO 下一步") &&
+            text.includes("AI CEO 已接住") &&
             text.includes("我理解") &&
             text.includes("推荐去") &&
             text.includes("安全边界"),
