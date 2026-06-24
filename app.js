@@ -5522,7 +5522,7 @@ function renderSaasBulkCandidatePreview() {
         <div>
           <span>当前批次</span>
           <strong>准备筛 ${escapeHtml(countLabel)} 个候选方向</strong>
-          <p>${escapeHtml(sourceHint)} 本页只看去留、补资料和下一步草稿，不让商家处理后台配置。</p>
+          <p>${escapeHtml(sourceHint)} 本页只看去留、补资料和下一步草稿，不让商家处理复杂配置。</p>
         </div>
         <button class="secondary-action" type="button" data-bulk-action="report">查看批量汇报</button>
       </div>
@@ -5587,7 +5587,7 @@ function renderSaasBulkCandidatePreview() {
       <div>
         <span>本批决策</span>
         <strong>同意后，只送 Listing 与素材草稿</strong>
-        <p>${escapeHtml(sourceHint)} 真实发布、采购付款、改价、库存、退款、广告和敏感客服承诺仍必须进确认中心。</p>
+        <p>${escapeHtml(sourceHint)} 发布、采购付款、改价、库存、退款、广告和敏感客服承诺仍必须由你确认。</p>
       </div>
       <button class="primary-action" type="button" data-bulk-action="accept-candidates">同意，送去素材和刊登</button>
     </div>
@@ -16312,8 +16312,8 @@ function renderSaasConfirmPanel() {
     <section class="saas-readable-page-head saas-confirm-readable-head" aria-label="决策中心说明">
       <div>
         <span>决策中心</span>
-        <strong>只确认会影响钱、账号和买家的动作</strong>
-        <p>没有高风险动作时，这里保持安静。AI 可以继续整理草稿、素材和报告；发布、付款、退款、广告和客服承诺必须等你点头。</p>
+        <strong>只让你处理真正要拍板的事</strong>
+        <p>没有重要动作时，这里保持安静。AI 继续整理草稿、素材和报告；发布、付款、退款、广告和客服承诺必须等你点头。</p>
       </div>
       <div class="saas-page-next-action">
         <b>${allPendingCount ? `${allPendingCount} 个待确认` : "当前无待确认"}</b>
@@ -16322,9 +16322,9 @@ function renderSaasConfirmPanel() {
     </section>
     <div class="runtime-confirm-head saas-confirm-simple-head">
       <div>
-        <span class="pill ${state.saasConnected ? "green" : "neutral"}">确认中心</span>
-        <strong>${cards.length ? `${escapeHtml(productLabel)} 有需要确认的动作` : "还没有确认项"}</strong>
-        <p>这里只让你决定三件事：同意、稍后、或者回去补资料。其他记录和复盘都放在设置里，不打扰当前任务。</p>
+        <span class="pill ${state.saasConnected ? "green" : "neutral"}">决策中心</span>
+        <strong>${cards.length ? `${escapeHtml(productLabel)} 有需要确认的动作` : "还没有要你处理的事"}</strong>
+        <p>这里只做三种选择：同意、稍后、回去补资料。其他记录和复盘放在设置里，不打扰当前任务。</p>
       </div>
       <button class="secondary-action" type="button" data-saas-action="refresh">刷新待办</button>
     </div>
@@ -16362,7 +16362,7 @@ function renderSaasConfirmPanel() {
                     <p>${escapeHtml(saasWorkbenchConfirmationReason(card))}</p>
                     <div class="saas-confirm-meta">
                       <small>${escapeHtml(saasWorkbenchDefaultActionLabel(card.default_action))}</small>
-                      <small>${card.high_risk ? "高风险动作" : "普通确认"}</small>
+                      <small>${card.high_risk ? "重要动作" : "普通确认"}</small>
                       <small>${escapeHtml(saasTimestampLabel(card.created_at))}</small>
                     </div>
                     ${saasWorkbenchApprovalBriefMarkup(card)}
@@ -29190,7 +29190,7 @@ function renderSaasSettingsModelFocusPanel(ctx = saasMerchantWorkbenchContext())
   return renderSaasSettingsFocusPanel({
     eyebrow: "AI 边界",
     title: "AI 对话、Listing 文案和素材生成分开看",
-    detail: "这里不让商家读 provider 细节。只说明 AI 是否可用、素材在哪里生成、费用口径怎么分。",
+    detail: "这里不让商家读技术细节。只说明 AI 是否可用、素材在哪里生成、费用口径怎么分。",
     rows: [
       {
         label: "文本 AI",
@@ -29279,7 +29279,7 @@ function renderSaasSettingsBillingFocusPanel(ctx = saasMerchantWorkbenchContext(
   return renderSaasSettingsFocusPanel({
     eyebrow: "订阅与安全",
     title: "欠费或超量只停高成本任务，不删除经营资料",
-    detail: "这里给商家看套餐、额度和安全边界。真实收款、支付密钥、Webhook 和上线排查只在后端或主理人高级区处理。",
+    detail: "这里给商家看套餐、额度和安全边界。收款接入、支付密钥和上线检查由平台侧处理，不放到日常工作流里。",
     rows: [
       {
         label: "当前权益",
@@ -29288,9 +29288,9 @@ function renderSaasSettingsBillingFocusPanel(ctx = saasMerchantWorkbenchContext(
         tone: billing.tone,
       },
       {
-        label: "高成本任务",
+        label: "耗费额度的任务",
         title: billing.blocksNow ? "已暂停" : "受额度保护",
-        detail: "AI CEO 联网、模型、素材和 provider job 可按权益停用。",
+        detail: "AI CEO 联网、模型和素材生成会按套餐权益停用。",
         tone: billing.blocksNow ? "red" : "green",
       },
       {
@@ -30562,7 +30562,7 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
         <div>
           <span>设置地图</span>
           <strong>普通商家只看 5 个入口</strong>
-          <p>设置只处理账号、AI、数据、权限、订阅和安全。上线排查、WAF、队列、发布体检等复杂内容只放在主理人高级区。</p>
+          <p>设置只处理账号、AI、数据、权限、订阅和安全。复杂的上线、运行和公网防护检查由平台侧处理，日常经营不用看。</p>
         </div>
       </div>
       <div class="saas-settings-home-status" aria-label="当前设置状态">
@@ -30612,7 +30612,7 @@ function renderSaasMerchantSecurityBoundaryPanel() {
     ["平台凭证", "不在浏览器显示", "eBay token、模型 key、支付密钥只在后端密钥边界处理。"],
     ["真实动作", "先到决策中心", "发布、退款、广告、采购付款和敏感客服承诺都必须人工确认。"],
     ["欠费/超量", "只停高成本任务", "历史报告、确认记录、审计证据和账号设置不会被删除。"],
-    ["公开访问", "先过防护入口", "域名、WAF、Bot 和限流由平台侧处理，不要求商家理解技术细节。"],
+    ["公开访问", "先过防护入口", "异常访问、刷接口和高成本请求由平台侧防护，不要求商家理解技术细节。"],
   ];
   return `
     <section class="saas-settings-card saas-merchant-security-boundary" aria-label="商家隐私和安全边界">
@@ -30771,7 +30771,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       label: "订阅与安全",
       detail: "套餐 / 安全",
       title: "订阅与安全",
-      intro: "这里只解释套餐、额度、欠费停用和账号安全边界，不展示上线排查细节。",
+      intro: "这里只解释套餐、额度、欠费停用和账号安全边界，不展示平台运行细节。",
       panels: [
         renderSaasSettingsBillingFocusPanel(ctx),
         renderSaasMerchantSecurityBoundaryPanel(),

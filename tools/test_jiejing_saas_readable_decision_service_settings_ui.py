@@ -62,11 +62,11 @@ def main() -> None:
         require(activity_scope, marker, "AI CEO report center simplified surface")
 
     for marker in [
-        "只确认会影响钱、账号和买家的动作",
-        "没有高风险动作时，这里保持安静",
-        "AI 可以继续整理草稿、素材和报告",
+        "只让你处理真正要拍板的事",
+        "没有重要动作时，这里保持安静",
+        "AI 继续整理草稿、素材和报告",
         "发布、付款、退款、广告和客服承诺必须等你点头",
-        "这里只让你决定三件事",
+        "这里只做三种选择",
     ]:
         require(confirm_scope, marker, "decision center simplified surface")
 

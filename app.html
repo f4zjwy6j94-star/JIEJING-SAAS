@@ -64,7 +64,7 @@
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-scene.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-detail.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-video-cover.webp" />
-    <link rel="stylesheet" href="./styles.css?v=20260624-ai-ceo-minimal-v2" />
+    <link rel="stylesheet" href="./styles.css?v=20260624-clean-core-workflows-v1" />
     <style id="jiejing-cockpit-layout-guard">
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
         display: grid !important;
@@ -2273,7 +2273,7 @@
                 <article><span>本轮数量</span><strong id="bulkImportedCount">10</strong><small>准备筛选</small></article>
                 <article><span>来源资料</span><strong id="bulkTestCount">0</strong><small>条可用货源</small></article>
                 <article><span>已分组</span><strong id="bulkMissingCount">0</strong><small>候选方向</small></article>
-                <article><span>待确认</span><strong id="bulkBlockedCount">0</strong><small>高风险动作</small></article>
+                <article><span>待确认</span><strong id="bulkBlockedCount">0</strong><small>需确认动作</small></article>
               </div>
             </div>
             <div class="bulk-proof-note">这里只有一个目标：用最小批次看清机会和风险。发布、付款、改价、库存和广告都不会自动执行。</div>
@@ -2370,12 +2370,12 @@
               </article>
               <article>
                 <span>哪些动作会停下来</span>
-                <strong>发布、采购付款、广告预算仍进确认中心</strong>
+                <strong>发布、采购付款、广告预算仍进决策中心</strong>
                 <p>同类批次规则可以保存，但写入 eBay、付款采购、改价库存和广告预算不会自动执行。</p>
               </article>
               <div class="batch-action-grid">
                 <button class="secondary-action" type="button" data-bulk-action="report">查看批次汇报</button>
-                <button class="secondary-action" type="button" data-bulk-action="confirm-center">打开确认中心</button>
+                <button class="secondary-action" type="button" data-bulk-action="confirm-center">打开决策中心</button>
               </div>
             </section>
           </section>
@@ -2499,8 +2499,8 @@
             <div class="section-heading">
               <div>
                 <p class="eyebrow">待我确认</p>
-                <h2>只确认会影响钱、账号和买家的动作</h2>
-                <p class="section-note">没有高风险动作时，这里保持安静。AI 可以继续整理草稿、素材和报告；发布、付款、退款、广告和客服承诺必须等你点头。</p>
+                <h2>只让你处理真正要拍板的事</h2>
+                <p class="section-note">没有重要动作时，这里保持安静。AI 继续整理草稿、素材和报告；发布、付款、退款、广告和客服承诺必须等你点头。</p>
               </div>
               <div class="segmented" id="confirmFilters">
                 <button class="segment is-active" data-filter="immediate">现在要我决定</button>
@@ -3201,6 +3201,6 @@
       })();
     </script>
     <script src="./assets/jiejing-settings-panels.js?v=20260620-prelaunch-deferred-v1"></script>
-    <script src="./app.js?v=20260624-ai-ceo-minimal-v2"></script>
+    <script src="./app.js?v=20260624-clean-core-workflows-v1"></script>
   </body>
 </html>
