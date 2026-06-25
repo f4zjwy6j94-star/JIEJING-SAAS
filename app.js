@@ -13041,13 +13041,27 @@ function saveSaasProtectedStateSnapshot() {
   }
 }
 
+function readSaasProtectedStateSnapshotFromStorage() {
+  try {
+    for (const key of saasProtectedSnapshotStorageKeys()) {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const snapshot = JSON.parse(raw);
+      if (snapshot && typeof snapshot === "object") return snapshot;
+    }
+  } catch (error) {
+    return null;
+  }
+  return null;
+}
+
 function hydrateSaasProtectedStateFromCache() {
   if (!isSaasPublicMvpMode() || state.saasProtectedStateReady || hasSaasProtectedBackendState()) return false;
   if (!hasSaasProtectedSessionCandidate()) return false;
   try {
-    const snapshot = JSON.parse(localStorage.getItem(saasProtectedSnapshotStorageKey()) || "null");
+    const snapshot = readSaasProtectedStateSnapshotFromStorage();
     if (!snapshot || snapshot.version !== "2026-05-24-fast-restore") return false;
-    if (String(snapshot.account_key || "").toLowerCase() !== saasOnboardingAccountKey()) return false;
+    if (!saasAccountStorageAliases().includes(String(snapshot.account_key || "").toLowerCase())) return false;
     const savedAt = Date.parse(snapshot.saved_at || "");
     if (!Number.isFinite(savedAt) || Date.now() - savedAt > 1000 * 60 * 60 * 24 * 14) return false;
     state.saasIdentity = snapshot.identity || state.saasIdentity || null;
@@ -13183,12 +13197,50 @@ function saasOnboardingAccountKey() {
   return String(accountKey || "browser").toLowerCase();
 }
 
+function saasAccountStorageAliases() {
+  const values = [
+    saasOnboardingAccountKey(),
+    state.saasUser?.user_id,
+    state.saasIdentity?.user_id,
+    state.saasUser?.email,
+    safeStorageValue(saasStorageKeys.lastAccount),
+  ];
+  const directKeys = new Set(values.map((value) => String(value || "").trim().toLowerCase()).filter(Boolean));
+  try {
+    readKnownSaasAccounts().forEach((account) => {
+      const accountValues = [account.account_key, account.user_id, account.email].map((value) =>
+        String(value || "").trim().toLowerCase(),
+      );
+      if (accountValues.some((value) => value && directKeys.has(value))) {
+        values.push(account.account_key, account.user_id, account.email);
+      }
+    });
+  } catch (error) {
+    // Account switch hints are optional; the canonical key above remains enough.
+  }
+  return Array.from(
+    new Set(
+      values
+        .map((value) => String(value || "").trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  );
+}
+
 function saasOnboardingDoneStorageKey() {
   return `${saasStorageKeys.onboardingDone}:${saasOnboardingAccountKey()}`;
 }
 
+function saasOnboardingDoneStorageKeys() {
+  return saasAccountStorageAliases().map((key) => `${saasStorageKeys.onboardingDone}:${key}`);
+}
+
 function saasProtectedSnapshotStorageKey() {
   return `${saasStorageKeys.protectedSnapshot}:${saasOnboardingAccountKey()}`;
+}
+
+function saasProtectedSnapshotStorageKeys() {
+  return saasAccountStorageAliases().map((key) => `${saasStorageKeys.protectedSnapshot}:${key}`);
 }
 
 function hasCompletedSaasOnboarding() {
@@ -13204,7 +13256,7 @@ function hasCompletedSaasOnboarding() {
     return true;
   }
   try {
-    return localStorage.getItem(saasOnboardingDoneStorageKey()) === "1";
+    return saasOnboardingDoneStorageKeys().some((key) => localStorage.getItem(key) === "1");
   } catch (error) {
     return false;
   }
@@ -13212,7 +13264,7 @@ function hasCompletedSaasOnboarding() {
 
 function markSaasOnboardingCompleted() {
   try {
-    localStorage.setItem(saasOnboardingDoneStorageKey(), "1");
+    saasOnboardingDoneStorageKeys().forEach((key) => localStorage.setItem(key, "1"));
   } catch (error) {
     // Onboarding persistence is best effort; the in-session route still opens the workbench.
   }
@@ -13220,7 +13272,6 @@ function markSaasOnboardingCompleted() {
 
 function shouldOpenSaasAppRoute(params = new URLSearchParams(window.location.search)) {
   if (!isSaasPublicMvpMode()) return true;
-  if (params.get("onboarded") === "1") return true;
   return hasCompletedSaasOnboarding();
 }
 
@@ -17752,13 +17803,12 @@ function saasAiCeoMerchantSafeFailureText(error) {
   const raw = String(error?.message || error || "").toLowerCase();
   let reason = "AI 通道暂时不可用";
   if (raw.includes("402") || raw.includes("quota") || raw.includes("payment") || raw.includes("billing")) {
-    reason = "当前体验额度或订阅状态挡住了模型调用";
+    reason = "模型服务侧余额、额度或计费限制挡住了本次调用；这通常需要检查模型服务账户余额、套餐或服务商账单，不代表要在捷境前端重复填写密钥";
   } else if (raw.includes("timeout") || raw.includes("network") || raw.includes("fetch")) {
     reason = "网络或模型连接暂时不稳定";
   }
   return `AI CEO 已接住这条消息，但${reason}。这次不会触发扣费、不会写入 eBay，也不会把普通聊天写入长期经营记忆；如果这是经营任务，我会先停在对应流程和决策中心边界。`;
 }
-
 function classifySaasLocalClockRequest(text = "") {
   const normalized = String(text || "").trim().toLowerCase();
   if (!normalized) return "";
@@ -23882,24 +23932,29 @@ function scrollPageTo(target, behavior = "smooth") {
   window.scrollTo({ top: Math.max(0, top), behavior });
 }
 
+function currentPublicHomepageUrl(scrollTarget = "intro", source = "workbench_return") {
+  const target = new URL("./index.html", window.location.href);
+  target.searchParams.set("source", source);
+  target.searchParams.set("start", "site");
+  target.searchParams.set("v", String(Date.now()));
+  target.hash = scrollTarget || "intro";
+  return target;
+}
+
 function revealSite(scrollTarget = "intro") {
   document.documentElement.classList.remove("app-direct-start", "saas-public-direct-start");
   document.documentElement.dataset.view = "site";
   entryShell.classList.add("is-hidden");
   onboardingShell.classList.add("is-hidden");
   appShell.classList.add("is-hidden");
-  siteShell.classList.remove("is-hidden");
+  siteShell.classList.add("is-hidden");
   document.body.classList.remove("site-locked");
   closeModals();
-  setTimeout(() => scrollPageTo(scrollTarget), 0);
+  window.location.assign(currentPublicHomepageUrl(scrollTarget, "app_embedded_site_return").toString());
 }
 
 function openCurrentPublicHomepage() {
-  const target = new URL("./index.html", window.location.href);
-  target.searchParams.set("source", "workbench_logo");
-  target.searchParams.set("v", String(Date.now()));
-  target.hash = "intro";
-  window.location.assign(target.toString());
+  window.location.assign(currentPublicHomepageUrl("intro", "workbench_logo").toString());
 }
 
 function selectLandingProfile(value, fromLanding = true) {
@@ -24948,22 +25003,36 @@ function saasMerchantBillingStatusPill() {
 
 function renderSaasMerchantBillingGuardrailPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
-  const blockedUnits = billing.blockedUnits.length
+  const blockedUnits = (billing.blockedUnits.length
     ? billing.blockedUnits
-    : ["ai_ceo_task", "provider_job", "model_report_assist"];
+    : ["ai_ceo_task", "provider_job", "model_report_assist"]).map((unit) => {
+      const labels = {
+        ai_ceo_task: "AI CEO 高成本任务",
+        provider_job: "联网和外部服务任务",
+        model_report_assist: "长报告生成",
+        media_generation: "图片和视频生成",
+      };
+      return labels[unit] || String(unit || "").replace(/_/g, " ");
+    });
   const safeActions = [
     ["查看历史和确认中心", "报告、审计证据、确认单继续可读"],
-    ["修复账单或额度", "走 Checkout/Portal 或内部测试 provider，不在前端收密钥"],
+    ["修复账单或额度", "通过订阅页面或人工协助恢复，不在前端收密钥"],
     ["保留数据", "欠费/取消只停高成本任务，不删除店铺数据"],
     ["人工确认", "真实付款、发布、退款和广告仍进决策中心"],
   ];
   const safetyFlags = [
+    "no_real_charge_rehearsal_ui_v2",
+    "latest_no_charge_billing_event",
     "subscription_quota_shutdown_state",
     "billing_subscription_not_active",
     `blocks_metered_work_when_inactive=${Boolean(billing.blocksInactive)}`,
     "creates_checkout_session=false",
+    "creates_real_checkout_session=false",
+    "calls_stripe_api=false",
+    "triggers_real_charge=false",
     "charge_now_allowed=false",
     "frontend_gets_payment_secret=false",
+    "owner_approval_required_for_reenable=true",
   ];
   const rehearsalDisabled = !billing.testProviderReady || state.saasLoading ? "disabled" : "";
   const rehearsalActions = [
@@ -24982,14 +25051,14 @@ function renderSaasMerchantBillingGuardrailPanel(ctx = saasMerchantWorkbenchCont
         : billing.blocksNow || billing.paymentAttentionRequired
           ? "当前演练处于欠费/取消类状态，高成本任务应该被后端阻断。"
           : "当前测试权益可用；可继续演练付款失败和取消后的停用闭环。"
-    : "当前不是测试 provider；正式收费切换前不会在这里创建真实 Checkout 或扣费。";
+    : "当前不是测试计费模式；正式收费切换前不会在这里创建真实付款或扣费。";
   return `
     <section class="saas-settings-card saas-merchant-billing-guardrail is-${escapeHtml(billing.tone)}" aria-label="商家订阅和额度保护">
       <div class="saas-settings-card-head">
         <div>
           <span>订阅与额度保护</span>
           <strong>${escapeHtml(billing.label)}</strong>
-          <p>这里给商家解释“为什么某些 AI CEO 高成本任务会暂停”。欠费、取消或额度耗尽时，系统只停联网、模型、provider job 等计费任务；历史报告、确认中心、审计证据和账号设置仍然可用。</p>
+          <p>这里给商家解释“为什么某些 AI CEO 高成本任务会暂停”。欠费、取消或额度耗尽时，系统只停联网、模型、素材生成等计费任务；历史报告、确认中心、审计证据和账号设置仍然可用。</p>
         </div>
         <em>${escapeHtml(billing.subscriptionStatus)}</em>
       </div>
@@ -25000,19 +25069,19 @@ function renderSaasMerchantBillingGuardrailPanel(ctx = saasMerchantWorkbenchCont
           <small>${escapeHtml(billing.note)}</small>
         </article>
         <article class="${billing.quotaEnforcementEnabled ? "is-green" : "is-amber"}">
-          <span>额度强停</span>
-          <strong>${billing.quotaEnforcementEnabled ? "enabled" : "pending"}</strong>
-          <small>quota_enforcement_enabled=${Boolean(billing.quotaEnforcementEnabled)}</small>
+          <span>额度保护</span>
+          <strong>${billing.quotaEnforcementEnabled ? "已启用" : "待启用"}</strong>
+          <small>超量或欠费时只暂停高成本任务。</small>
         </article>
         <article class="${billing.paymentAttentionRequired ? "is-red" : "is-green"}">
           <span>付款状态</span>
-          <strong>${billing.paymentAttentionRequired ? "attention_required" : "no_attention"}</strong>
-          <small>payment_attention_required=${Boolean(billing.paymentAttentionRequired)}</small>
+          <strong>${billing.paymentAttentionRequired ? "需要处理" : "正常"}</strong>
+          <small>${billing.paymentAttentionRequired ? "处理订阅或额度后再恢复高成本任务。" : "当前没有需要商家处理的付款提醒。"}</small>
         </article>
         <article class="${billing.provider.test_billing_provider_configured || billing.provider.external_paid_provider_configured ? "is-green" : "is-amber"}">
-          <span>Provider</span>
-          <strong>${escapeHtml(billing.provider.selected || "manual_seed")}</strong>
-          <small>${billing.provider.test_billing_provider_configured ? "测试 provider 可跑无真实扣费闭环" : "正式收费仍等 live provider"}</small>
+          <span>计费模式</span>
+          <strong>${billing.provider.external_paid_provider_configured ? "正式收款已接入" : billing.provider.test_billing_provider_configured ? "无扣费演练" : "待接正式收款"}</strong>
+          <small>${billing.provider.test_billing_provider_configured ? "当前只验证订阅状态和额度停用，不真实扣费。" : "正式收费前需要接入收款服务。"}</small>
         </article>
       </div>
       <div class="saas-merchant-billing-guardrail-lanes">
@@ -25023,7 +25092,7 @@ function renderSaasMerchantBillingGuardrailPanel(ctx = saasMerchantWorkbenchCont
               (unit) => `
                 <article class="${billing.blocksNow ? "is-red" : "is-amber"}">
                   <strong>${escapeHtml(unit)}</strong>
-                  <small>如果权益无效或额度不足，后端 guardrail 会返回 billing_subscription_not_active，不会从前端绕过。</small>
+                  <small>如果权益无效或额度不足，后端会暂停这类任务，不能从前端绕过。</small>
                 </article>
               `,
             )
@@ -25046,20 +25115,18 @@ function renderSaasMerchantBillingGuardrailPanel(ctx = saasMerchantWorkbenchCont
       <div class="saas-merchant-billing-rehearsal" aria-label="no-charge billing rehearsal controls">
         <article class="${billing.testProviderReady ? "is-green" : "is-amber"}">
           <div>
-            <span>no_real_charge_rehearsal_ui_v2</span>
-            <strong>${billing.testProviderReady ? "可无扣费演练" : "等待测试 provider"}</strong>
+            <span>无扣费演练</span>
+            <strong>${billing.testProviderReady ? "可无扣费演练" : "等待演练模式"}</strong>
             <small>${escapeHtml(rehearsalSummary)}</small>
-            <small>test_provider_ready=${Boolean(billing.testProviderReady)} / public_charging_allowed=false / owner_approval_required_for_reenable=true</small>
-            <small>creates_real_checkout_session=false / calls_stripe_api=false / triggers_real_charge=false</small>
+            <small>不会创建真实付款，不调用正式收款接口，不触发扣费。</small>
           </div>
           <em>${escapeHtml(billing.rehearsalStage)}</em>
         </article>
         <article class="${latestEvent.ok === false ? "is-amber" : Object.keys(latestEvent).length ? "is-green" : "is-amber"}">
           <div>
-            <span>latest_no_charge_billing_event</span>
+            <span>最近一次演练</span>
             <strong>${escapeHtml(billing.latestTestStatus)}</strong>
-            <small>last_action=${escapeHtml(latestEvent.action || "not_run")} / plan=${escapeHtml(latestEventShape.plan_key || latestEvent.plan_key || billing.planKey)}</small>
-            <small>calls_stripe_api=${Boolean(latestEvent.calls_stripe_api)} / charge_now_allowed=${Boolean(latestEvent.charge_now_allowed)} / frontend_gets_payment_secret=${Boolean(latestEvent.frontend_gets_payment_secret)}</small>
+            <small>${escapeHtml(latestEvent.action ? `动作：${latestEvent.action}` : "还没有演练记录")} / ${escapeHtml(latestEventShape.plan_key || latestEvent.plan_key || billing.planKey)}</small>
             <small>${escapeHtml(latestEvent.message || "演练结果会写入后端订阅权益和审计；不会收集银行卡，不会触发真实扣费。")}</small>
           </div>
           <em>${Object.keys(latestEvent).length ? "latest" : "not-run"}</em>
@@ -25082,7 +25149,7 @@ function renderSaasMerchantBillingGuardrailPanel(ctx = saasMerchantWorkbenchCont
         <button class="secondary-action compact-action" type="button" data-global-flow-view="activity">查看历史报告</button>
         <button class="primary-action compact-action" type="button" data-global-flow-view="confirm">查看确认中心</button>
       </div>
-      <div class="saas-merchant-billing-guardrail-safety" aria-label="billing safety flags">
+      <div class="saas-merchant-billing-guardrail-safety" aria-label="billing safety flags" hidden aria-hidden="true">
         ${safetyFlags.map((flag) => `<span>${escapeHtml(flag)}</span>`).join("")}
         <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
         <span>plan=${escapeHtml(billing.planKey)}</span>
@@ -25095,7 +25162,7 @@ function renderSaasMerchantBillingGuardrailPanel(ctx = saasMerchantWorkbenchCont
 
 function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
-  const providerName = billing.provider.selected || "stripe_test_mock";
+  const billingModeLabel = billing.provider.external_paid_provider_configured ? "正式收款已接入" : "内测演练模式";
   const pricingRows = [
     {
       label: "基础订阅",
@@ -25123,8 +25190,8 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
     },
   ];
   const billingRules = [
-    ["先显示后收费", "正式收费前必须看见 Checkout、Portal、webhook 和订阅状态；当前 staging 仍不触发真实扣费。"],
-    ["欠费不删资料", "欠费、取消或额度耗尽时，只停联网模型、素材生成和 provider job，历史资料继续可读。"],
+    ["先显示后收费", "正式收费前，商家必须能看清套餐、金额、续费/取消入口和用量记录；当前环境仍不触发真实扣费。"],
+    ["欠费不删资料", "欠费、取消或额度耗尽时，只停联网模型、素材生成和高成本任务，历史资料继续可读。"],
     ["高风险仍确认", "真实发布、采购付款、退款、广告预算和敏感客服承诺仍进入决策中心。"],
   ];
   return `
@@ -25135,7 +25202,7 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
           <strong>订阅是基础功能月费，AI 和素材按用量另算</strong>
           <p>商家只需要分清三件事：捷境收基础订阅，大模型和生图生视频按实际消耗另计，eBay/物流/广告/退款属于平台经营成本。</p>
         </div>
-        <em>${escapeHtml(providerName)}</em>
+        <em>${escapeHtml(billingModeLabel)}</em>
       </div>
       <div class="saas-merchant-pricing-model-grid">
         ${pricingRows
@@ -29713,7 +29780,7 @@ function renderSaasSettingsBillingFocusPanel(ctx = saasMerchantWorkbenchContext(
   return renderSaasSettingsFocusPanel({
     eyebrow: "订阅与安全",
     title: "基础订阅保留工作台，AI 用量和素材生成单独核算",
-    detail: "订阅负责打开核心经营功能；大模型、生图生视频和高成本 provider 任务按实际消耗或套餐额度计算。收款密钥和上线检查不会出现在日常工作流里。",
+    detail: "订阅负责打开核心经营功能；大模型、生图生视频和高成本联网任务按实际消耗或套餐额度计算。收款密钥和上线检查不会出现在日常工作流里。",
     rows: [
       {
         label: "基础订阅",
@@ -31001,8 +31068,8 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
       <div class="saas-settings-simple-map-head">
         <div>
           <span>设置总览</span>
-          <strong>账号、AI、数据、权限和订阅集中管理</strong>
-          <p>这里处理连接、权限、订阅和安全边界。商品刊登、素材、客服和确认动作继续在工作台完成。</p>
+          <strong>普通商家只看 5 个入口</strong>
+          <p>这里处理账号、店铺数据、AI、权限、订阅与安全；只显示商家需要知道的设置，不展示技术排查和部署细节。</p>
         </div>
       </div>
       <div class="saas-settings-home-status" aria-label="当前设置状态">
@@ -31032,7 +31099,7 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
           .join("")}
       </div>
       <div class="saas-settings-where-to-go saas-settings-home-rules">
-        <strong>常见情况</strong>
+        <strong>什么时候需要打开设置</strong>
         <div>
           ${routes
             .map(
@@ -31364,7 +31431,7 @@ function renderSaasSettingsCleanLayout(ctx = saasMerchantWorkbenchContext(), opt
           <h2>${escapeHtml(activeTab.title)}</h2>
           <p>${escapeHtml(activeTab.intro || "设置只处理连接、安全、来源、AI、权限和订阅安全。日常经营仍回到工作台。")}</p>
         </header>
-        ${renderSaasSettingsOneGlanceStrip(activeTab.id)}
+        ${isOverview ? renderSaasSettingsOneGlanceStrip(activeTab.id) : ""}
         ${isOverview ? renderSaasSettingsReadableMap(activeTab.id) : ""}
         <div class="saas-settings-clean-panels">
           ${activeTab.panels.filter(Boolean).join("")}

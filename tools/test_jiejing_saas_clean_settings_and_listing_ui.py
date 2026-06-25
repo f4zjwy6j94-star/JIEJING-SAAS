@@ -194,11 +194,12 @@ def main() -> None:
     require(app_js, "saas-confirm-card-decision", "rendered decision card frontloads merchant choice")
     require(app_js, "saas-confirm-safety-detail", "rendered decision card folds backend evidence")
     require(app_js, "为什么停住", "rendered decision card keeps evidence behind plain-language disclosure")
-    require(app_js, "账号、AI、数据、权限和订阅集中管理", "settings map merchant entrance boundary")
-    require(app_js, "这里处理连接、权限、订阅和安全边界。商品刊登、素材、客服和确认动作继续在工作台完成。", "settings home low-learning-cost copy")
+    require(app_js, "普通商家只看 5 个入口", "settings map merchant entrance boundary")
+    require(app_js, "这里处理账号、店铺数据、AI、权限、订阅与安全", "settings home low-learning-cost copy")
+    require(app_js, "不展示技术排查和部署细节", "settings home hides technical diagnostics")
     require(app_js, "商品、订单、政策、费用等来源可追溯", "settings status merchant-facing data copy")
     require(app_js, "店铺数据、来源记录和同步缺口", "settings data panel merchant-facing title")
-    require(app_js, "常见情况", "settings usage-rule section")
+    require(app_js, "什么时候需要打开设置", "settings usage-rule section")
     require(app_js, "主理人高级区", "settings workflow compact boundary")
     require(app_js, "AI 与素材", "merchant-friendly model settings title")
     require(app_js, "function saasIsEnglishHeavyMerchantText", "legacy English report display guard")
@@ -327,12 +328,15 @@ def main() -> None:
     settings_layout_body = app_js[settings_layout_start:settings_layout_end]
     require(settings_layout_body, 'activeTab.id === "general"', "settings overview-only map guard")
     require(settings_layout_body, 'isOverview ? renderSaasSettingsReadableMap(activeTab.id) : ""', "settings child pages skip redundant map")
-    require(settings_layout_body, "renderSaasSettingsOneGlanceStrip(activeTab.id)", "settings child pages render one-glance summary")
+    require(settings_layout_body, 'isOverview ? renderSaasSettingsOneGlanceStrip(activeTab.id) : ""', "settings one-glance summary stays overview-only")
     for billing_model_marker in [
         "基础订阅保留工作台",
         "AI 用量和素材生成单独核算",
         "基础订阅不包含无限模型",
         "eBay 费用、广告费、物流和退款不是捷境代扣",
+        "高成本联网任务",
+        "正式收费前，商家必须能看清套餐、金额、续费/取消入口和用量记录",
+        "等待演练模式",
         "openCurrentPublicHomepage",
     ]:
         require(app_js + index_html + app_html + styles, billing_model_marker, "settings billing model and homepage return copy")

@@ -55,11 +55,11 @@ def main() -> None:
     )
 
     for marker in [
-        "这里只看 AI CEO 已经产出的经营报告",
+        "AI CEO 已经产出的经营报告",
         "授权、来源、模型连接和发布复盘已经归到设置",
-        "排查细节在设置",
+        "汇报页保留市场结论",
         "saas-activity-simple-list",
-        "没有报告时，页面保持干净空状态",
+        "没有报告时不展示旧演示记录",
     ]:
         require(activity_scope, marker, "AI CEO report center simplified surface")
 
@@ -101,7 +101,8 @@ def main() -> None:
         "团队权限",
         "订阅与安全",
         "什么时候需要打开设置",
-        "设置首页不让商家读技术排查",
+        "只显示商家需要知道的设置",
+        "不展示技术排查和部署细节",
         "账号边界",
         "AI 边界",
         "数据边界",
@@ -115,8 +116,6 @@ def main() -> None:
         "worker heartbeat",
         "dead_letter",
         "stale_running_count",
-        "本页只看三件事",
-        "先理解状态，再决定要不要操作",
         "凭证安全",
         "保存后不回显",
         "不造假",

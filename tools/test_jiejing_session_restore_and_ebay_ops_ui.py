@@ -66,6 +66,10 @@ def main() -> int:
         return fail("app shell must not accept localStorage bearer tokens in public staging")
     if "sessionStorage.getItem(\"jiejing_saas_backend_token\")" in app_html:
         return fail("app shell must not accept sessionStorage bearer tokens in public staging")
+    if "explicitOnboarded ||" in app_html:
+        return fail("app shell must not let onboarded=1 bypass account-scoped onboarding completion")
+    if "params.get(\"onboarded\") === \"1\") return true" in app_js:
+        return fail("app route guard must not let onboarded=1 bypass account-scoped onboarding completion")
 
     for marker in [
         "localStorage.setItem(\"jiejing_saas_backend_session_hint\", \"1\")",

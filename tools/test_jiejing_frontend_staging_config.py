@@ -26,7 +26,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260625-onboarding-refresh-v1"
+    frontend_asset_version = "20260625-account-scope-v1"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -78,11 +78,14 @@ def main() -> int:
         "20260624-settings-v1",
         "20260624-ceo-route-v2",
         "20260625-home-settings-v1",
+        "20260510-ebay-policy-v1",
     ]:
         if stale_asset_version in index_html + app_html:
             return fail(f"frontend entry files still reference stale asset version: {stale_asset_version}")
     if 'document.documentElement.classList.remove("app-direct-start", "saas-public-direct-start")' not in app_js:
         return fail("returning from the workbench logo to the homepage must clear direct-start shell classes")
+    if 'const JIEJING_SITE_VERSION = "20260625-account-scope-v1"' not in index_html:
+        return fail("public homepage must expose the current JIEJING site version marker")
     if 'background: url("./assets/jiejing-app-icon.svg?v=20260619-brand-icon-v1") center / contain no-repeat;' not in styles_css:
         return fail("public SaaS brand mark must use the JIEJING app icon instead of a black fallback block")
     for forbidden_brand in [
@@ -152,11 +155,18 @@ def main() -> int:
     ]:
         if mounted_page not in compose_https:
             return fail(f"public HTTPS staging frontend must serve legal page: {mounted_page}")
-    if "jiejing-privacy.html" not in deploy_script:
-        return fail("frontend deploy script must sync privacy.html with other static frontend assets")
-    for deploy_page in ["jiejing-terms.html", "jiejing-risk-disclosure.html"]:
+    for deploy_page in ["privacy.html", "terms.html", "risk-disclosure.html"]:
         if deploy_page not in deploy_script:
-            return fail(f"frontend deploy script must sync legal page: {deploy_page}")
+            return fail(f"frontend deploy archive must sync legal page: {deploy_page}")
+    for deploy_archive_marker in [
+        '"tar"',
+        "$patchArchive",
+        "$remoteArchive",
+        "tar -xzf",
+        "install -m 0644",
+    ]:
+        if deploy_archive_marker not in deploy_script:
+            return fail(f"frontend deploy script must use the atomic archive deploy path: {deploy_archive_marker}")
     for marker in [
         'JIEJING_INCIDENT_RUNBOOK_PUBLISHED: "true"',
         'JIEJING_ONCALL_ALERT_ROUTE_CONFIGURED: "true"',
@@ -379,13 +389,31 @@ def main() -> int:
         if billing_guardrail_marker not in app_js + app_html + styles_css:
             return fail(f"missing merchant billing guardrail marker: {billing_guardrail_marker}")
     for homepage_return_marker in [
+        "function currentPublicHomepageUrl",
         "function openCurrentPublicHomepage",
         'new URL("./index.html", window.location.href)',
-        'target.searchParams.set("source", "workbench_logo")',
-        'target.hash = "intro"',
+        'target.searchParams.set("source", source)',
+        'target.searchParams.set("start", "site")',
+        'currentPublicHomepageUrl("intro", "workbench_logo")',
+        '"app_embedded_site_return"',
+        'target.hash = scrollTarget || "intro"',
     ]:
         if homepage_return_marker not in app_js:
             return fail(f"workbench logo should return to current public homepage: {homepage_return_marker}")
+    reveal_start = app_js.index("function revealSite")
+    reveal_end = app_js.index("function openCurrentPublicHomepage", reveal_start)
+    reveal_body = app_js[reveal_start:reveal_end]
+    if 'siteShell.classList.remove("is-hidden")' in reveal_body:
+        return fail("embedded app.html homepage shell must not be exposed; return to index.html instead")
+    if "currentPublicHomepageUrl(scrollTarget, \"app_embedded_site_return\")" not in reveal_body:
+        return fail("embedded app homepage returns must delegate to the current public index.html")
+    for app_entry_marker in [
+        'publicHomeUrl.searchParams.set("source", "legacy_app_entry")',
+        'publicHomeUrl.searchParams.set("start", "site")',
+        "window.location.replace(publicHomeUrl.toString())",
+    ]:
+        if app_entry_marker not in app_html:
+            return fail(f"legacy app.html marketing entry must redirect to current public homepage: {app_entry_marker}")
     refresh_start = app_js.index("async function refreshSaasState")
     refresh_end = app_js.index("async function refreshSaasPublicReadiness", refresh_start)
     refresh_body = app_js[refresh_start:refresh_end]

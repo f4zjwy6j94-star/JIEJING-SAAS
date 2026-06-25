@@ -11,15 +11,21 @@
       (function bootJiejingAppEntry() {
         var params = new URLSearchParams(window.location.search);
         var shouldStartApp = params.get("start") === "app" || params.get("onboarded") === "1";
-        if (!shouldStartApp) return;
+        if (!shouldStartApp) {
+          try {
+            var publicHomeUrl = new URL("./index.html", window.location.href);
+            publicHomeUrl.searchParams.set("source", "legacy_app_entry");
+            publicHomeUrl.searchParams.set("start", "site");
+            window.location.replace(publicHomeUrl.toString());
+          } catch (error) {}
+          return;
+        }
         try {
           var host = window.location.hostname;
           var isPublic = window.location.protocol !== "file:" && host !== "localhost" && host !== "127.0.0.1" && host !== "::1";
-          var explicitOnboarded = params.get("onboarded") === "1";
           var sessionHint = localStorage.getItem("jiejing_saas_backend_session_hint") === "1";
           var lastAccount = String(localStorage.getItem("jiejing_saas_last_account") || "").trim().toLowerCase();
           var onboardingDone =
-            explicitOnboarded ||
             (lastAccount && localStorage.getItem("jiejing_saas_onboarding_done:" + lastAccount) === "1") ||
             localStorage.getItem("jiejing_saas_onboarding_done:browser") === "1";
           if (!isPublic || onboardingDone) document.documentElement.classList.add("app-direct-start");
@@ -70,7 +76,7 @@
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-scene.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-detail.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-video-cover.webp" />
-    <link rel="stylesheet" href="./styles.css?v=20260625-onboarding-refresh-v1" />
+    <link rel="stylesheet" href="./styles.css?v=20260625-account-scope-v1" />
     <style id="jiejing-cockpit-layout-guard">
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
         display: grid !important;
@@ -3230,10 +3236,8 @@
         const params = new URLSearchParams(window.location.search);
         const shouldOpenApp = params.get("start") === "app" || params.get("onboarded") === "1";
         if (!shouldOpenApp) return;
-        const explicitOnboarded = params.get("onboarded") === "1";
         const lastAccount = String(localStorage.getItem("jiejing_saas_last_account") || "").trim().toLowerCase();
         const onboardingDone =
-          explicitOnboarded ||
           (lastAccount && localStorage.getItem(`jiejing_saas_onboarding_done:${lastAccount}`) === "1") ||
           localStorage.getItem("jiejing_saas_onboarding_done:browser") === "1";
         if (params.get("start") === "app" && !onboardingDone) return;
@@ -3267,6 +3271,6 @@
       })();
     </script>
     <script src="./assets/jiejing-settings-panels.js?v=20260620-prelaunch-deferred-v1"></script>
-    <script src="./app.js?v=20260625-onboarding-refresh-v1"></script>
+    <script src="./app.js?v=20260625-account-scope-v1"></script>
   </body>
 </html>

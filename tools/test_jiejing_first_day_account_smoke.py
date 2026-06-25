@@ -16,7 +16,8 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "output" / "jiejing-first-day-account-smoke" / "test"
+RUN_ID = f"{os.getpid()}-{int(time.time() * 1000)}"
+OUT = ROOT / "output" / "jiejing-first-day-account-smoke" / RUN_ID
 SAAS_DB = OUT / "saas-first-day.sqlite"
 RUNTIME_DB = OUT / "runtime-first-day.sqlite"
 
@@ -69,19 +70,35 @@ def check_static_first_day_contracts() -> int:
     index_html = (ROOT / "index.html").read_text(encoding="utf-8")
     api_server = (ROOT / "jiejing_saas" / "api_server.py").read_text(encoding="utf-8")
     ai_ceo_chat = (ROOT / "jiejing_saas" / "ai_ceo_chat.py").read_text(encoding="utf-8")
+    first_user_browser_smoke = (ROOT / "tools" / "codex_jiejing_first_user_browser_smoke.js").read_text(encoding="utf-8")
 
     required_markers = [
         (index_html, "function hasEntryOnboardingCompleted", "homepage must know whether onboarding is complete"),
+        (index_html, "lastEntryAuthAccountAliases", "homepage must keep user_id/email aliases for one merchant account"),
+        (index_html, "function entryOnboardingDoneKeys", "homepage onboarding completion must be written for account aliases"),
+        (index_html, "entryOnboardingDoneKeys(accountKey).forEach", "completed guide must persist all account aliases"),
+        (index_html, "lastEntryAuthAccount = accountKey || emailKey", "entry login should prefer backend user_id as canonical account key"),
         (index_html, "openLoggedInExperience(activePath, { onboarded: true })", "completed onboarding must be explicit"),
         (app_js, "function shouldOpenSaasAppRoute", "app route must not bypass onboarding"),
         (app_js, "start === \"app\" && !shouldOpenSaasAppRoute(params)", "direct app route must be guarded"),
+        (app_js, "function saasAccountStorageAliases", "workbench must scope local state to the current account aliases"),
+        (app_js, "function saasOnboardingDoneStorageKeys", "workbench onboarding must check account aliases"),
+        (app_js, "saasOnboardingDoneStorageKeys().some", "workbench must not rely on a single stale onboarding key"),
+        (app_js, "function saasProtectedSnapshotStorageKeys", "protected snapshot cache must support account aliases"),
         (app_js, "function saasProtectedSnapshotStorageKey", "protected snapshots must be account-scoped"),
         (app_js, "function hydrateSaasCeoAccountScopedLocalState", "AI CEO chat state must hydrate per account"),
         (app_js, "function saasAiCeoMerchantSafeFailureText", "frontend model failures must be merchant-safe"),
+        (app_js, "模型服务侧余额、额度或计费限制挡住了本次调用", "frontend 402 model failure copy should be clear"),
+        (app_js, "不代表要在捷境前端重复填写密钥", "frontend 402 model failure should not ask for repeated key setup"),
         (api_server, "\"billing_trial\": billing_trial", "registration must expose no-charge trial status"),
         (api_server, "triggers_real_charge\": False", "trial fallback must explicitly avoid real charge"),
         (ai_ceo_chat, "def _classify_model_failure", "backend model failures must be classified safely"),
         (ai_ceo_chat, "def _model_unavailable_fallback_answer", "backend model failures must use safe copy"),
+        (first_user_browser_smoke, "onboarded_query_did_not_bypass_onboarding", "browser smoke must prove old onboarded links cannot skip onboarding"),
+        (first_user_browser_smoke, "account_b_did_not_show_account_a_chat", "browser smoke must prove account B cannot see account A chat residue"),
+        (first_user_browser_smoke, "model_402_copy_is_merchant_safe", "browser smoke must prove model quota copy is merchant-safe"),
+        (first_user_browser_smoke, "workbench_logo_returns_to_current_index", "browser smoke must prove logo returns to the current homepage"),
+        (first_user_browser_smoke, "no_ebay_oauth_triggered", "browser smoke must explicitly avoid eBay OAuth"),
     ]
     for body, marker, label in required_markers:
         if marker not in body:

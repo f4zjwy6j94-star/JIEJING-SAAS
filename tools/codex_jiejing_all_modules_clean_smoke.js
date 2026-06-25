@@ -489,7 +489,7 @@ async function main() {
           has_settings_home_hub: sectionHas(".saas-settings-home-hub"),
           settings_home_status_count: sectionCount(".saas-settings-home-status article"),
           has_settings_simple_copy: text.includes("普通商家只看 5 个入口") && text.includes("什么时候需要打开设置"),
-          has_settings_one_glance: sectionHas(".saas-settings-one-glance") && text.includes("本页只看三件事"),
+          has_settings_one_glance: sectionHas(".saas-settings-one-glance") && text.includes("本页重点"),
           settings_one_glance_count: sectionCount(".saas-settings-one-glance-grid article"),
           has_media_tabs: Boolean(document.querySelector("#mediaProjectTabs, .media-project-tabs, [data-media-project-tab]")),
           has_media_simple_headline: text.includes("把商品图变成可用素材包"),
@@ -594,9 +594,9 @@ async function main() {
       check.settings_children_are_focused = settingsChildAudit.every(
         (item) =>
           item.has_focus_panel &&
-          item.has_one_glance &&
-          item.one_glance_count === 3 &&
-          item.has_one_glance_copy &&
+          !item.has_one_glance &&
+          item.one_glance_count === 0 &&
+          !item.has_one_glance_copy &&
           !item.has_home_hub &&
           !item.has_section_group &&
           !item.has_subpage_strip,
