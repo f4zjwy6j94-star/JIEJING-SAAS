@@ -307,6 +307,7 @@ def main() -> None:
         "renderSaasSettingsGovernanceFocusPanel()",
         "renderSaasSettingsBillingFocusPanel(ctx)",
         "renderSaasMerchantPricingModelPanel(ctx)",
+        "renderSaasMerchantBillingCurrentStatusPanel(ctx)",
         "主理人高级区",
         "正式收费和公网安全",
         "运行可靠性",
@@ -337,6 +338,11 @@ def main() -> None:
         "高成本联网任务",
         "正式收费前，商家必须能看清套餐、金额、续费/取消入口和用量记录",
         "等待演练模式",
+        "当前计费状态",
+        "先看能不能继续用，再看哪些费用另算",
+        "内测演练，不真实扣费",
+        "merchant_visible_billing_status_v1",
+        "frontend_gets_payment_secret=false",
         "openCurrentPublicHomepage",
     ]:
         require(app_js + index_html + app_html + styles, billing_model_marker, "settings billing model and homepage return copy")

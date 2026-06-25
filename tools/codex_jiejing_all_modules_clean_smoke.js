@@ -575,6 +575,7 @@ async function main() {
           await page.evaluate((id) => {
             const section = document.getElementById("view-connect");
             const text = section?.innerText || "";
+            const rawText = section?.textContent || "";
             return {
               id,
               has_home_hub: Boolean(section?.querySelector(".saas-settings-home-hub")),
@@ -585,6 +586,11 @@ async function main() {
               one_glance_count: section?.querySelectorAll(".saas-settings-one-glance-grid article").length || 0,
               has_one_glance_copy: text.includes("本页只看三件事") && text.includes("先理解状态"),
               has_model_provider_panel: Boolean(section?.querySelector(".saas-model-provider-panel")),
+              has_billing_current_panel:
+                Boolean(section?.querySelector(".saas-merchant-billing-current")) &&
+                rawText.includes("merchant_visible_billing_status_v1") &&
+                rawText.includes("triggers_real_charge=false") &&
+                rawText.includes("frontend_gets_payment_secret=false"),
               preview: text.trim().slice(0, 180),
             };
           }, tabId),
@@ -602,9 +608,11 @@ async function main() {
           !item.has_subpage_strip,
       );
       const modelAudit = settingsChildAudit.find((item) => item.id === "model") || {};
+      const billingAudit = settingsChildAudit.find((item) => item.id === "billing") || {};
       check.settings_model_has_home_hub = modelAudit.has_home_hub || false;
       check.settings_model_has_subpage_strip = modelAudit.has_subpage_strip || false;
       check.settings_model_has_model_panel = modelAudit.has_model_provider_panel || false;
+      check.settings_billing_has_current_status = billingAudit.has_billing_current_panel || false;
       await page
         .screenshot({ path: path.join(outDir, "connect-model.png"), fullPage: true, timeout: 15000 })
         .catch((error) => screenshotFailures.push({ view: "connect-model", error: String(error.message || error).slice(0, 300) }));
@@ -675,6 +683,7 @@ async function main() {
   if (connect.settings_model_has_home_hub) failures.push("settings child page repeats overview map");
   if (connect.settings_model_has_subpage_strip) failures.push("settings child page still shows redundant intro/map");
   if (!connect.settings_model_has_model_panel) failures.push("settings child page content missing");
+  if (!connect.settings_billing_has_current_status) failures.push("settings billing current merchant status missing");
   const media = moduleChecks.find((item) => item.view === "media") || {};
   if (!media.has_media_tabs) failures.push("media tabs missing");
   if (!media.has_media_simple_headline || !media.has_media_simple_flow) failures.push("media simple workflow surface missing");

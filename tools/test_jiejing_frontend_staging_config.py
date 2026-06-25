@@ -26,7 +26,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260625-account-scope-v1"
+    frontend_asset_version = "20260625-billing-current-v1"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -84,7 +84,7 @@ def main() -> int:
             return fail(f"frontend entry files still reference stale asset version: {stale_asset_version}")
     if 'document.documentElement.classList.remove("app-direct-start", "saas-public-direct-start")' not in app_js:
         return fail("returning from the workbench logo to the homepage must clear direct-start shell classes")
-    if 'const JIEJING_SITE_VERSION = "20260625-account-scope-v1"' not in index_html:
+    if f'const JIEJING_SITE_VERSION = "{frontend_asset_version}"' not in index_html:
         return fail("public homepage must expose the current JIEJING site version marker")
     if 'background: url("./assets/jiejing-app-icon.svg?v=20260619-brand-icon-v1") center / contain no-repeat;' not in styles_css:
         return fail("public SaaS brand mark must use the JIEJING app icon instead of a black fallback block")
@@ -357,6 +357,12 @@ def main() -> int:
         "大模型用量",
         "生图 / 生视频",
         "eBay 费用、广告费、物流和退款不是捷境代扣",
+        "function renderSaasMerchantBillingCurrentStatusPanel",
+        "saas-merchant-billing-current",
+        "当前计费状态",
+        "先看能不能继续用，再看哪些费用另算",
+        "不真实扣费",
+        "merchant_visible_billing_status_v1",
         "renderSaasMerchantBillingGuardrailPanel",
         "saasMerchantBillingGuardrailState",
         "saasMerchantBillingStatusPill",

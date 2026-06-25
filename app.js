@@ -25001,6 +25001,94 @@ function saasMerchantBillingStatusPill() {
   };
 }
 
+function renderSaasMerchantBillingCurrentStatusPanel(ctx = saasMerchantWorkbenchContext()) {
+  const billing = saasMerchantBillingGuardrailState();
+  const hasExternalProvider = Boolean(billing.provider.external_paid_provider_configured);
+  const isTestMode = Boolean(billing.provider.test_billing_provider_configured);
+  const statusRows = [
+    {
+      label: "当前模式",
+      title: hasExternalProvider ? "正式收款已接入" : isTestMode ? "内测演练，不真实扣费" : "等待正式收款",
+      detail: hasExternalProvider
+        ? "订阅开通、续费、取消和付款失败由后端账单状态判断。"
+        : isTestMode
+          ? "现在只验证订阅状态和额度停用，不创建真实付款。"
+          : "上线收费前还要接正式收款服务；当前不会向商家扣费。",
+      tone: hasExternalProvider || isTestMode ? "green" : "amber",
+    },
+    {
+      label: "基础订阅",
+      title: "¥99/月起",
+      detail: "覆盖 AI CEO、Listing、批量铺货、素材工坊、客服订单、设置和基础工作记录。",
+      tone: "green",
+    },
+    {
+      label: "AI / 素材用量",
+      title: billing.blocksNow ? "高成本任务暂停" : billing.entitlementActive ? "额度受保护" : "按用量另算",
+      detail: "文本模型、联网报告、长任务、生图和视频生成按套餐额度或实际消耗核算。",
+      tone: billing.blocksNow ? "red" : billing.entitlementActive ? "green" : "amber",
+    },
+    {
+      label: "续费 / 取消",
+      title: hasExternalProvider ? "订阅页处理" : "正式上线后开放",
+      detail: hasExternalProvider ? "商家通过订阅页自助管理，前端不接触支付密钥。" : "内测阶段只展示口径和演练状态，不收银行卡或支付信息。",
+      tone: hasExternalProvider ? "green" : "amber",
+    },
+  ];
+  const explainRows = [
+    ["不删资料", "欠费、取消或额度耗尽时，只暂停联网模型、素材生成和高成本任务；历史报告、确认记录和审计证据继续可读。"],
+    ["不代扣平台费", "eBay 成交费、广告费、物流、退款和店铺订阅属于经营成本，捷境只帮你算进利润和风险。"],
+    ["不露密钥", "支付密钥、模型 key、eBay token 和 client secret 都留在后端密钥边界，不在浏览器展示。"],
+  ];
+  return `
+    <section class="saas-settings-card saas-merchant-billing-current" aria-label="当前计费状态">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>当前计费状态</span>
+          <strong>先看能不能继续用，再看哪些费用另算</strong>
+          <p>这张卡只给商家看结果：当前是否会扣费、基础订阅包含什么、AI 和素材为什么会单独核算，以及欠费后哪些东西还能看。</p>
+        </div>
+        <em>${escapeHtml(billing.entitlementActive ? "权益可用" : hasExternalProvider ? "待订阅" : "不真实扣费")}</em>
+      </div>
+      <div class="saas-merchant-billing-current-grid">
+        ${statusRows
+          .map(
+            (row) => `
+              <article class="is-${escapeHtml(row.tone)}">
+                <span>${escapeHtml(row.label)}</span>
+                <strong>${escapeHtml(row.title)}</strong>
+                <small>${escapeHtml(row.detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-merchant-billing-current-rules">
+        ${explainRows
+          .map(
+            ([title, detail]) => `
+              <article>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-merchant-billing-current-actions">
+        <button class="secondary-action compact-action" type="button" data-saas-action="refresh">刷新用量</button>
+        <button class="secondary-action compact-action" type="button" data-global-flow-view="confirm">查看确认中心</button>
+      </div>
+      <div class="saas-merchant-billing-current-safety" hidden aria-hidden="true">
+        <span>merchant_visible_billing_status_v1</span>
+        <span>triggers_real_charge=false</span>
+        <span>frontend_gets_payment_secret=false</span>
+        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
+      </div>
+    </section>
+  `;
+}
+
 function renderSaasMerchantBillingGuardrailPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
   const blockedUnits = (billing.blockedUnits.length
@@ -31349,6 +31437,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       intro: "查看基础订阅、AI 用量、素材生成、欠费停用和账号安全边界。",
       panels: [
         renderSaasMerchantPricingModelPanel(ctx),
+        renderSaasMerchantBillingCurrentStatusPanel(ctx),
         renderSaasSettingsBillingFocusPanel(ctx),
         renderSaasMerchantSecurityBoundaryPanel(),
       ],
