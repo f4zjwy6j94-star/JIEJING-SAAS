@@ -26,7 +26,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260625-ai-recovery-v1"
+    frontend_asset_version = "20260625-billing-clarity-v2"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -353,7 +353,11 @@ def main() -> int:
         "function renderSaasMerchantPricingModelPanel",
         "saas-merchant-pricing-model",
         "订阅是基础功能月费，AI 和素材按用量另算",
+        "subscription_ai_media_platform_v1",
+        "saas-merchant-pricing-split",
+        "用量计费路线",
         "¥99/月是基础订阅",
+        "不包含无限模型",
         "大模型用量",
         "生图 / 生视频",
         "eBay 费用、广告费、物流和退款不是捷境代扣",

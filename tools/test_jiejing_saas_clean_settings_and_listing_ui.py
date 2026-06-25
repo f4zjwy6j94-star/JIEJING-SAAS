@@ -333,6 +333,9 @@ def main() -> None:
     for billing_model_marker in [
         "基础订阅保留工作台",
         "AI 用量和素材生成单独核算",
+        "subscription_ai_media_platform_v1",
+        "saas-merchant-pricing-split",
+        "用量计费路线",
         "基础订阅不包含无限模型",
         "eBay 费用、广告费、物流和退款不是捷境代扣",
         "高成本联网任务",

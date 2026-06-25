@@ -37832,6 +37832,124 @@ body.saas-public-mvp .saas-merchant-pricing-model .saas-settings-card-head em {
   overflow-wrap: anywhere;
 }
 
+body.saas-public-mvp .saas-merchant-pricing-split {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-merchant-pricing-split article {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 9px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(8, 118, 110, 0.16);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+body.saas-public-mvp .saas-merchant-pricing-split article > span {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #edf8f5;
+  color: #08766e;
+  font-size: 11px;
+  font-weight: 950;
+  line-height: 1;
+}
+
+body.saas-public-mvp .saas-merchant-pricing-split article > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-merchant-pricing-split strong {
+  color: #12231f;
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-merchant-pricing-split b {
+  color: #08766e;
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-merchant-pricing-split small {
+  color: #5d716b;
+  font-size: 11px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-merchant-pricing-route-head {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(8, 118, 110, 0.14);
+  border-radius: 8px;
+  background: #fbfefc;
+}
+
+body.saas-public-mvp .saas-merchant-pricing-route-head span {
+  color: #08766e;
+  font-size: 12px;
+  font-weight: 950;
+  letter-spacing: 0;
+}
+
+body.saas-public-mvp .saas-merchant-pricing-route-head strong {
+  color: #1d332c;
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-merchant-pricing-route {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-merchant-pricing-route article {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(15, 45, 40, 0.1);
+  border-radius: 8px;
+  background: #f8fcfa;
+}
+
+body.saas-public-mvp .saas-merchant-pricing-route span {
+  color: #08766e;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+body.saas-public-mvp .saas-merchant-pricing-route strong {
+  color: #1d332c;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
 body.saas-public-mvp .saas-merchant-pricing-model-grid,
 body.saas-public-mvp .saas-merchant-pricing-model-rules {
   display: grid;
@@ -38233,6 +38351,11 @@ body.saas-public-mvp .saas-merchant-billing-guardrail-safety span {
 }
 
 @media (max-width: 760px) {
+  body.saas-public-mvp .saas-merchant-pricing-split,
+  body.saas-public-mvp .saas-merchant-pricing-route {
+    grid-template-columns: 1fr;
+  }
+
   body.saas-public-mvp .saas-merchant-billing-guardrail-lanes {
     grid-template-columns: 1fr;
   }

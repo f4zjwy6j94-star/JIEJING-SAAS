@@ -25283,6 +25283,17 @@ function renderSaasMerchantBillingGuardrailPanel(ctx = saasMerchantWorkbenchCont
 function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
   const billingModeLabel = billing.provider.external_paid_provider_configured ? "正式收款已接入" : "内测演练模式";
+  const splitRows = [
+    ["01", "基础订阅", "¥99/月是基础订阅", "打开工作台、AI CEO、Listing、批量、素材工坊、客服订单和基础记录。"],
+    ["02", "AI 文本用量", "不包含无限模型", "普通问答、Listing 文案、联网总结和长报告按模型套餐、token 或服务商账单核算。"],
+    ["03", "图片 / 视频", "素材任务另算", "主图、场景图、详情图、视频封面和视频生成按张、秒、任务或供应商账单核算。"],
+    ["04", "平台经营成本", "捷境不代扣", "eBay 成交费、广告费、物流、退款和店铺订阅只进入利润测算与确认中心。"],
+  ];
+  const usageRouteRows = [
+    ["先看订阅", billing.entitlementActive ? "基础权益可用" : "内测阶段不真实扣费"],
+    ["再看用量", billing.blocksNow ? "高成本任务已暂停" : "AI 和素材按额度保护"],
+    ["最后确认", "发布、付款、退款、广告仍进决策中心"],
+  ];
   const pricingRows = [
     {
       label: "基础订阅",
@@ -25320,9 +25331,41 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
         <div>
           <span>计费模型</span>
           <strong>订阅是基础功能月费，AI 和素材按用量另算</strong>
-          <p>商家只需要分清三件事：捷境收基础订阅，大模型和生图生视频按实际消耗另计，eBay/物流/广告/退款属于平台经营成本。</p>
+          <p>商家只需要分清四件事：¥99/月是基础订阅，不包含无限模型；大模型、生图生视频按实际消耗另计；eBay、物流、广告和退款属于平台经营成本。</p>
         </div>
         <em>${escapeHtml(billingModeLabel)}</em>
+      </div>
+      <div class="saas-merchant-pricing-split" data-billing-split="subscription_ai_media_platform_v1">
+        ${splitRows
+          .map(
+            ([index, title, value, detail]) => `
+              <article>
+                <span>${escapeHtml(index)}</span>
+                <div>
+                  <strong>${escapeHtml(title)}</strong>
+                  <b>${escapeHtml(value)}</b>
+                  <small>${escapeHtml(detail)}</small>
+                </div>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-merchant-pricing-route-head">
+        <span>用量计费路线</span>
+        <strong>先确认基础订阅，再看 AI / 素材用量，最后把发布、付款、退款和广告交给决策中心。</strong>
+      </div>
+      <div class="saas-merchant-pricing-route" aria-label="用量计费路线">
+        ${usageRouteRows
+          .map(
+            ([label, detail]) => `
+              <article>
+                <span>${escapeHtml(label)}</span>
+                <strong>${escapeHtml(detail)}</strong>
+              </article>
+            `,
+          )
+          .join("")}
       </div>
       <div class="saas-merchant-pricing-model-grid">
         ${pricingRows

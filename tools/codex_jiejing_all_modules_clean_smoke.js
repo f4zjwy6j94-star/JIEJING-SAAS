@@ -612,6 +612,14 @@ async function main() {
                 rawText.includes("merchant_visible_billing_status_v1") &&
                 rawText.includes("triggers_real_charge=false") &&
                 rawText.includes("frontend_gets_payment_secret=false"),
+              has_billing_pricing_split:
+                Boolean(
+                  section?.querySelector(
+                    '.saas-merchant-pricing-split[data-billing-split="subscription_ai_media_platform_v1"]',
+                  ),
+                ) &&
+                text.includes("¥99/月是基础订阅") &&
+                text.includes("用量计费路线"),
               preview: text.trim().slice(0, 180),
             };
           }, tabId),
@@ -634,6 +642,7 @@ async function main() {
       check.settings_model_has_subpage_strip = modelAudit.has_subpage_strip || false;
       check.settings_model_has_model_panel = modelAudit.has_model_provider_panel || false;
       check.settings_billing_has_current_status = billingAudit.has_billing_current_panel || false;
+      check.settings_billing_has_pricing_split = billingAudit.has_billing_pricing_split || false;
       await page
         .screenshot({ path: path.join(outDir, "connect-model.png"), fullPage: true, timeout: 15000 })
         .catch((error) => screenshotFailures.push({ view: "connect-model", error: String(error.message || error).slice(0, 300) }));
@@ -706,6 +715,7 @@ async function main() {
   if (connect.settings_model_has_subpage_strip) failures.push("settings child page still shows redundant intro/map");
   if (!connect.settings_model_has_model_panel) failures.push("settings child page content missing");
   if (!connect.settings_billing_has_current_status) failures.push("settings billing current merchant status missing");
+  if (!connect.settings_billing_has_pricing_split) failures.push("settings billing pricing split missing");
   const media = moduleChecks.find((item) => item.view === "media") || {};
   if (!media.has_media_tabs) failures.push("media tabs missing");
   if (!media.has_media_simple_headline || !media.has_media_simple_flow) failures.push("media simple workflow surface missing");
