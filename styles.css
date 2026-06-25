@@ -35387,6 +35387,52 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-recovery-hint button {
   white-space: nowrap;
 }
 
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-pending-status {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 10px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(193, 126, 31, 0.2);
+  border-radius: 8px;
+  background: #fffaf0;
+  color: #243a33;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-pending-status span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  height: auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(193, 126, 31, 0.12);
+  color: #7a4a11;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-pending-status strong {
+  min-width: 0;
+  color: #1d332c;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.35;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-pending-status small {
+  grid-column: 2;
+  margin: 0;
+  color: #66746e;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
 @media (max-width: 640px) {
   body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-recovery-hint {
     align-items: flex-start;
@@ -35395,6 +35441,14 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-recovery-hint button {
 
   body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-recovery-hint button {
     width: 100%;
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-pending-status {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-pending-status small {
+    grid-column: auto;
   }
 }
 

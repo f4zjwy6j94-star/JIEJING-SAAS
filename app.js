@@ -17701,6 +17701,40 @@ function renderSaasAiCeoRecoveryHintMarkup(turn = {}) {
   `;
 }
 
+function renderSaasAiCeoPendingStatusMarkup(turn = {}) {
+  const latest = normalizeSaasAiCeoLatestTurn(turn);
+  if (!latest || !latest.pending) return "";
+  const delayed = latest.status === "model_response_delayed";
+  const route = String(latest.route || "");
+  const target = route === "general_chat" ? "直接回答" : "判断去哪个模块";
+  return `
+    <div class="saas-ai-ceo-pending-status" data-ai-ceo-pending-status="merchant_clear_pending_v2">
+      <span>${delayed ? "响应较慢" : "正在处理"}</span>
+      <strong>${delayed ? "目标已保留，可以继续补充资料" : `我正在${target}`}</strong>
+      <small>真实发布、付款、退款、广告、授权和敏感客服承诺不会自动执行。</small>
+    </div>
+  `;
+}
+
+function scheduleSaasAiCeoPendingWatchdog(messageId, command = state.saasLastCeoCommand) {
+  if (!messageId || typeof window === "undefined") return;
+  window.setTimeout(() => {
+    const node = document.getElementById(messageId);
+    if (!node || !node.classList.contains("is-pending")) return;
+    const latest = normalizeSaasAiCeoLatestTurn({
+      ...(state.saasAiCeoLatestTurn || {}),
+      assistant_id: messageId,
+      assistant_text: "这次响应比平时慢。我已经保留你的目标，可以继续补充资料；真实发布、付款、退款、广告、授权和敏感客服承诺不会自动执行。",
+      status: "model_response_delayed",
+      route: command?.route || state.saasAiCeoLatestTurn?.route || "",
+      route_label: command?.route_label || state.saasAiCeoLatestTurn?.route_label || "",
+      memory_policy: command?.memory_policy || state.saasAiCeoLatestTurn?.memory_policy || "transient_no_long_term_memory",
+      pending: true,
+    });
+    updateCeoAssistantPendingMessage(messageId, latest);
+  }, 16000);
+}
+
 function sanitizeSaasCeoCommandSourceText(text = "") {
   return publicRuntimeText(text || "")
     .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, "[model_key_redacted]")
@@ -17971,52 +18005,70 @@ function handleSaasCeoCommandSubmit(text) {
     assistantId: pendingMessageId,
     pending: true,
   });
-  state.saasLastCeoCommandPersistPromise = requestSaasAiCeoChat(command).then((payload) => {
-    const chat = payload?.ai_ceo_chat && typeof payload.ai_ceo_chat === "object" ? payload.ai_ceo_chat : null;
-    const answer = publicRuntimeText(chat?.answer || "AI CEO 暂时没有返回可展示内容。");
-    const sourceRecords = normalizeSaasAiCeoSourceRecords(chat?.source_records || chat?.realtime_search?.source_records || []);
-    const backendCommand = backendSaasCeoCommandFromPayload(payload || {});
-    const mergedCommand = normalizeSaasCeoCommand({
-      ...(backendCommand || command),
-      ai_reply: answer,
-      ai_reply_status: chat?.status || "unknown",
-      ai_reply_model: chat?.model_client || null,
-      route: chat?.route || backendCommand?.route || command.route || "general_chat",
-      route_label: chat?.route_label || backendCommand?.route_label || command.route_label || "",
-      memory_policy: chat?.memory_policy || backendCommand?.memory_policy || command.memory_policy || "transient_no_long_term_memory",
-      long_term_memory: Boolean(chat?.long_term_memory || backendCommand?.long_term_memory || command.long_term_memory),
-      writes_merchant_rule: Boolean(chat?.writes_merchant_rule || backendCommand?.writes_merchant_rule || command.writes_merchant_rule),
-      decision_center_required: Boolean(chat?.decision_center_required || backendCommand?.decision_center_required || command.decision_center_required),
+  scheduleSaasAiCeoPendingWatchdog(pendingMessageId, command);
+  state.saasLastCeoCommandPersistPromise = requestSaasAiCeoChat(command)
+    .then((payload) => {
+      const chat = payload?.ai_ceo_chat && typeof payload.ai_ceo_chat === "object" ? payload.ai_ceo_chat : null;
+      const answer = publicRuntimeText(chat?.answer || "AI CEO 暂时没有返回可展示内容。");
+      const sourceRecords = normalizeSaasAiCeoSourceRecords(chat?.source_records || chat?.realtime_search?.source_records || []);
+      const backendCommand = backendSaasCeoCommandFromPayload(payload || {});
+      const mergedCommand = normalizeSaasCeoCommand({
+        ...(backendCommand || command),
+        ai_reply: answer,
+        ai_reply_status: chat?.status || "unknown",
+        ai_reply_model: chat?.model_client || null,
+        route: chat?.route || backendCommand?.route || command.route || "general_chat",
+        route_label: chat?.route_label || backendCommand?.route_label || command.route_label || "",
+        memory_policy: chat?.memory_policy || backendCommand?.memory_policy || command.memory_policy || "transient_no_long_term_memory",
+        long_term_memory: Boolean(chat?.long_term_memory || backendCommand?.long_term_memory || command.long_term_memory),
+        writes_merchant_rule: Boolean(chat?.writes_merchant_rule || backendCommand?.writes_merchant_rule || command.writes_merchant_rule),
+        decision_center_required: Boolean(chat?.decision_center_required || backendCommand?.decision_center_required || command.decision_center_required),
+      });
+      if (mergedCommand) {
+        state.saasLastCeoCommand = newestSaasCeoCommand(mergedCommand, state.saasLastCeoCommand);
+        persistSaasLastCeoCommand(state.saasLastCeoCommand);
+        recordSaasCeoCommandSourceRecord(state.saasLastCeoCommand);
+        syncSaasCeoCommandToListing(mergedCommand);
+      }
+      updateCeoAssistantMessage(pendingMessageId, answer, chat?.status || "", chat?.model_client || null, sourceRecords);
+      updateSaasAiCeoLatestReply({
+        ...(state.saasAiCeoLatestTurn || {}),
+        assistant_id: pendingMessageId,
+        assistant_text: answer,
+        status: chat?.status || "",
+        model: chat?.model_client || state.saasAiCeoLatestTurn?.model || null,
+        route: chat?.route || mergedCommand?.route || "general_chat",
+        route_label: chat?.route_label || mergedCommand?.route_label || "",
+        memory_policy: chat?.memory_policy || mergedCommand?.memory_policy || "transient_no_long_term_memory",
+        long_term_memory: Boolean(chat?.long_term_memory || mergedCommand?.long_term_memory),
+        writes_merchant_rule: Boolean(chat?.writes_merchant_rule || mergedCommand?.writes_merchant_rule),
+        decision_center_required: Boolean(chat?.decision_center_required || mergedCommand?.decision_center_required),
+        source_records: sourceRecords,
+        pending: false,
+      });
+      if (!mergedCommand || state.view !== "cockpit") return mergedCommand;
+      const latestCtx = saasMerchantWorkbenchContext();
+      const consoleNode = document.querySelector("#view-cockpit .saas-ceo-command-console, #view-cockpit .ceo-home-boundary");
+      if (consoleNode) consoleNode.outerHTML = renderSaasCeoCommandConsole(latestCtx, mergedCommand);
+      refreshSaasCeoRoutingTaskCard(mergedCommand);
+      return mergedCommand;
+    })
+    .catch(() => {
+      const safeText = "AI CEO 连接暂时没有完成。我已经保留这次目标，可以稍后重试或补充资料；真实发布、付款、退款、广告、授权和敏感客服承诺不会自动执行。";
+      const latest = normalizeSaasAiCeoLatestTurn({
+        ...(state.saasAiCeoLatestTurn || {}),
+        assistant_id: pendingMessageId,
+        assistant_text: safeText,
+        status: "model_call_failed",
+        route: command.route || state.saasAiCeoLatestTurn?.route || "general_chat",
+        route_label: command.route_label || state.saasAiCeoLatestTurn?.route_label || "",
+        memory_policy: command.memory_policy || state.saasAiCeoLatestTurn?.memory_policy || "transient_no_long_term_memory",
+        pending: false,
+      });
+      updateCeoAssistantMessage(pendingMessageId, safeText, "model_call_failed", latest?.model || null, []);
+      if (latest) updateSaasAiCeoLatestReply(latest);
+      return null;
     });
-    if (mergedCommand) {
-      state.saasLastCeoCommand = newestSaasCeoCommand(mergedCommand, state.saasLastCeoCommand);
-      persistSaasLastCeoCommand(state.saasLastCeoCommand);
-      recordSaasCeoCommandSourceRecord(state.saasLastCeoCommand);
-      syncSaasCeoCommandToListing(mergedCommand);
-    }
-    updateCeoAssistantMessage(pendingMessageId, answer, chat?.status || "", chat?.model_client || null, sourceRecords);
-    updateSaasAiCeoLatestReply({
-      ...(state.saasAiCeoLatestTurn || {}),
-      assistant_id: pendingMessageId,
-      assistant_text: answer,
-      status: chat?.status || "",
-      model: chat?.model_client || state.saasAiCeoLatestTurn?.model || null,
-      route: chat?.route || mergedCommand?.route || "general_chat",
-      route_label: chat?.route_label || mergedCommand?.route_label || "",
-      memory_policy: chat?.memory_policy || mergedCommand?.memory_policy || "transient_no_long_term_memory",
-      long_term_memory: Boolean(chat?.long_term_memory || mergedCommand?.long_term_memory),
-      writes_merchant_rule: Boolean(chat?.writes_merchant_rule || mergedCommand?.writes_merchant_rule),
-      decision_center_required: Boolean(chat?.decision_center_required || mergedCommand?.decision_center_required),
-      source_records: sourceRecords,
-      pending: false,
-    });
-    if (!mergedCommand || state.view !== "cockpit") return mergedCommand;
-    const latestCtx = saasMerchantWorkbenchContext();
-    const consoleNode = document.querySelector("#view-cockpit .saas-ceo-command-console, #view-cockpit .ceo-home-boundary");
-    if (consoleNode) consoleNode.outerHTML = renderSaasCeoCommandConsole(latestCtx, mergedCommand);
-    refreshSaasCeoRoutingTaskCard(mergedCommand);
-    return mergedCommand;
-  });
   const consoleNode = document.querySelector("#view-cockpit .saas-ceo-command-console, #view-cockpit .ceo-home-boundary");
   if (consoleNode) {
     consoleNode.outerHTML = renderSaasCeoCommandConsole(ctx, command);
@@ -32134,6 +32186,7 @@ function renderSaasAiCeoThreadMarkup(fallbackTurn = null) {
 }
 
 function saasAiCeoTurnStatusLabel(latest = {}) {
+  if (latest.pending && latest.status === "model_response_delayed") return "响应较慢";
   if (latest.pending) return "正在处理";
   if (latest.status === "capability_status_answered") return "连接状态";
   if (latest.status === "realtime_search_answered" || latest.status === "realtime_search_answered_without_model") return "实时搜索";
@@ -32243,6 +32296,7 @@ function renderSaasAiCeoChatTurnMarkup(turn = {}) {
       <div class="saas-ai-ceo-message-body">
         ${showStatusLabel ? `<small>${escapeHtml(statusLabel)}</small>` : ""}
         <p>${escapeHtml(assistantText)}</p>
+        ${renderSaasAiCeoPendingStatusMarkup(latest)}
         ${renderSaasAiCeoRecoveryHintMarkup(latest)}
         ${renderSaasAiCeoWorkDetailMarkup(latest)}
       </div>
@@ -32263,6 +32317,7 @@ function renderSaasAiCeoLatestReplyMarkup(turn = state.saasAiCeoLatestTurn) {
         <div>
           <small>${escapeHtml(statusLabel)}</small>
           <p>${escapeHtml(assistantText)}</p>
+          ${renderSaasAiCeoPendingStatusMarkup(latest)}
           ${renderSaasAiCeoRecoveryHintMarkup(latest)}
           ${renderSaasAiCeoWorkDetailMarkup(latest)}
         </div>
@@ -32368,6 +32423,7 @@ function updateCeoAssistantMessage(messageId, text, status = "", model = null, s
   node.querySelector(".saas-ai-ceo-source-list")?.remove();
   node.querySelector(".saas-ai-ceo-operating-brief")?.remove();
   node.querySelector(".saas-ai-ceo-recovery-hint")?.remove();
+  node.querySelector(".saas-ai-ceo-pending-status")?.remove();
   const updatedTurn = normalizeSaasAiCeoLatestTurn({
     ...(latest || {}),
     assistant_text: safeText,
@@ -32394,6 +32450,25 @@ function updateCeoAssistantMessage(messageId, text, status = "", model = null, s
       source_records: sources,
       pending: false,
     });
+  }
+  if (chat) chat.scrollTop = chat.scrollHeight;
+}
+
+function updateCeoAssistantPendingMessage(messageId, turn = {}) {
+  const chat = document.querySelector("#ceoChat");
+  const node = messageId ? document.getElementById(messageId) : null;
+  if (!node || !node.classList.contains("is-pending")) return;
+  const latest = normalizeSaasAiCeoLatestTurn(turn);
+  if (!latest) return;
+  node.dataset.status = latest.status || "pending";
+  const body = node.querySelector("p");
+  if (body) body.textContent = productizeJiejingProductCopy(latest.assistant_text || "我还在处理这次请求。");
+  node.querySelector(".saas-ai-ceo-pending-status")?.remove();
+  if (body) body.insertAdjacentHTML("afterend", renderSaasAiCeoPendingStatusMarkup(latest));
+  const meta = node.querySelector(".saas-ai-ceo-message-body > small");
+  if (meta) meta.textContent = saasAiCeoTurnStatusLabel(latest);
+  if (!state.saasAiCeoLatestTurn || state.saasAiCeoLatestTurn.assistant_id === messageId) {
+    updateSaasAiCeoLatestReply(latest);
   }
   if (chat) chat.scrollTop = chat.scrollHeight;
 }

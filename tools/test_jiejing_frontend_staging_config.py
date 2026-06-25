@@ -26,7 +26,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260625-first-day-v3"
+    frontend_asset_version = "20260625-ai-ceo-pending-v4"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -79,6 +79,7 @@ def main() -> int:
         "20260624-ceo-route-v2",
         "20260625-home-settings-v1",
         "20260625-billing-clarity-v2",
+        "20260625-first-day-v3",
         "20260510-ebay-policy-v1",
     ]:
         if stale_asset_version in index_html + app_html:
@@ -121,6 +122,16 @@ def main() -> int:
     ]:
         if first_day_marker not in app_js + app_html + styles_css:
             return fail(f"first-day login/onboarding/AI CEO path marker missing: {first_day_marker}")
+    for ai_ceo_pending_marker in [
+        "merchant_clear_pending_v2",
+        "function scheduleSaasAiCeoPendingWatchdog",
+        "function updateCeoAssistantPendingMessage",
+        "model_response_delayed",
+        "真实发布、付款、退款、广告、授权和敏感客服承诺不会自动执行",
+        ".saas-ai-ceo-pending-status",
+    ]:
+        if ai_ceo_pending_marker not in app_js + styles_css:
+            return fail(f"AI CEO merchant-safe pending marker missing: {ai_ceo_pending_marker}")
     for expected_interaction_marker in [
         "--tilt-x",
         "--core-drift-x",

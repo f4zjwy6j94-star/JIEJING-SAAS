@@ -359,7 +359,7 @@ async function main() {
   await page
     .locator("#view-cockpit.is-active #ceoInput")
     .fill("帮我调研 eBay 热销收纳小商品，并先整理 Listing 草稿", { timeout: 15000 });
-  await page.locator("#view-cockpit.is-active #ceoForm").evaluate((form) => form.requestSubmit());
+  await page.locator('#view-cockpit.is-active #ceoForm button[type="submit"]').click();
   await waitForCeoRouteTaskTarget(page, "product");
   await page
     .screenshot({ path: path.join(outDir, "cockpit-route-card.png"), fullPage: true, timeout: 15000 })
@@ -399,7 +399,7 @@ async function main() {
   const ceoRouteScenarios = [];
   for (const scenario of routeScenarioDefs) {
     await page.locator("#view-cockpit.is-active #ceoInput").fill(scenario.text, { timeout: 15000 });
-    await page.locator("#view-cockpit.is-active #ceoForm").evaluate((form) => form.requestSubmit());
+    await page.locator('#view-cockpit.is-active #ceoForm button[type="submit"]').click();
     await waitForCeoRouteTaskTarget(page, scenario.target);
     ceoRouteScenarios.push(
       await page.evaluate((scenario) => {
@@ -421,7 +421,7 @@ async function main() {
   }
 
   await page.locator("#view-cockpit.is-active #ceoInput").fill("今天几号", { timeout: 15000 });
-  await page.locator("#view-cockpit.is-active #ceoForm").evaluate((form) => form.requestSubmit());
+  await page.locator('#view-cockpit.is-active #ceoForm button[type="submit"]').click();
   await waitForCeoPlainConsultationSettled(page);
   const ceoPlainConsultation = await page.evaluate(() => {
     const messages = Array.from(document.querySelectorAll("#view-cockpit #ceoChat .message.ai"));

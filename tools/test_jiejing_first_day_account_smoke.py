@@ -95,6 +95,8 @@ def check_static_first_day_contracts() -> int:
         (app_js, "AI 用量或服务商账单挡住了本次回复", "frontend model quota failure copy should be clear"),
         (app_js, "不用在前台重复粘贴凭证", "frontend model failure should not ask for repeated credential setup"),
         (app_js, "merchant_safe_ai_recovery_v1", "frontend model recovery hint should be lightweight and actionable"),
+        (app_js, "function scheduleSaasAiCeoPendingWatchdog", "AI CEO slow replies must remain merchant-safe"),
+        (app_js, "merchant_clear_pending_v2", "AI CEO pending state must use merchant-readable copy"),
         (api_server, "\"billing_trial\": billing_trial", "registration must expose no-charge trial status"),
         (api_server, "triggers_real_charge\": False", "trial fallback must explicitly avoid real charge"),
         (ai_ceo_chat, "def _classify_model_failure", "backend model failures must be classified safely"),
