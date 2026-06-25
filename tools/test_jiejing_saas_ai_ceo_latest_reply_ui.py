@@ -146,6 +146,9 @@ def main() -> int:
         "box-shadow: 0 14px 34px rgba(22, 50, 44, 0.08)",
         ".saas-ai-ceo-first-run-handoff",
         ".saas-ai-ceo-first-run-actions",
+        "2026-06-26 mobile AI CEO handoff polish",
+        ".saas-ai-ceo-thread .message.ai > span",
+        ".saas-ai-ceo-thread .message.ai .saas-ai-ceo-pending-status span",
         "border-radius: 999px;",
     ]
     for needle in required_css:

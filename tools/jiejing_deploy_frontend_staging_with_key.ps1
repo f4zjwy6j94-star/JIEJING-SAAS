@@ -62,7 +62,7 @@ rm -rf "`$tmp_dir"
 rm -f "$remoteArchive"
 echo DEPLOY_FRONTEND_STATUS=ok
 echo DEPLOY_BACKUP_DIR="`$backup_dir"
-echo DEPLOY_FRONTEND_VERSION=20260626-ai-ceo-module-goal-v5
+echo DEPLOY_FRONTEND_VERSION=20260626-mobile-ai-ceo-polish-v6
 "@
 
 $archiveArgs = @("-czf", $patchArchive, "app.js", "styles.css", "index.html", "app.html", "privacy.html", "terms.html", "risk-disclosure.html", "deploy/nginx.public-staging.conf")

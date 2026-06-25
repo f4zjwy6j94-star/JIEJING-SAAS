@@ -601,6 +601,18 @@ async function main() {
               Node.DOCUMENT_POSITION_FOLLOWING,
           has_collapsed_history: Boolean(document.querySelector("#saasAiCeoHistory, #view-cockpit summary")),
           has_login_overlay: Boolean(document.querySelector(".auth-shell, .saas-login-modal, [data-auth-view]")),
+          ceo_pending_chip_is_not_avatar: (() => {
+            const chip = document.querySelector("#view-cockpit .saas-ai-ceo-pending-status span");
+            if (!chip) return true;
+            const style = getComputedStyle(chip);
+            const rect = chip.getBoundingClientRect();
+            return (
+              rect.width > 34 &&
+              rect.height < 30 &&
+              style.backgroundColor !== "rgb(16, 28, 23)" &&
+              style.color !== "rgb(255, 255, 255)"
+            );
+          })(),
           preview: text.trim().slice(0, 240),
         };
       },
@@ -821,6 +833,9 @@ async function main() {
     failures.push("AI CEO first screen still exposes starter prompt buttons");
   }
   if (cockpit.has_collapsed_history) failures.push("AI CEO conversation is still hidden behind a collapsed history section");
+  if (!cockpit.ceo_pending_chip_is_not_avatar) {
+    failures.push("AI CEO pending status chip is inheriting avatar styling on small screens");
+  }
 
   if (failures.length) {
     console.error(JSON.stringify({ ok: false, failures, result }, null, 2));

@@ -39455,6 +39455,61 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card .primary-a
   }
 }
 
+/* 2026-06-26 mobile AI CEO handoff polish: nested status chips must not inherit the avatar block. */
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread .message.ai > span {
+  flex: 0 0 auto;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread .message.ai .saas-ai-ceo-pending-status span,
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread .message.ai .saas-ai-ceo-recovery-hint span {
+  width: auto;
+  height: auto;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(193, 126, 31, 0.12);
+  color: #7a4a11;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread .message.ai .saas-ai-ceo-pending-status,
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread .message.ai .saas-ai-ceo-recovery-hint {
+  max-width: 100%;
+}
+
+@media (max-width: 700px) {
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread .message.ai {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 10px 0;
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread .message.ai > span {
+    width: auto;
+    height: auto;
+    justify-self: start;
+    padding: 5px 8px;
+    border: 1px solid rgba(8, 118, 110, 0.16);
+    border-radius: 999px;
+    background: #eef8f4;
+    color: #075f58;
+    font-size: 10px;
+    line-height: 1;
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-message-body small {
+    margin-bottom: 6px;
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-pending-status {
+    margin-top: 10px;
+    padding: 11px;
+  }
+}
+
 /* 2026-06-24 tablet workbench shell: use a bottom nav so the workflow keeps full width. */
 @media (min-width: 701px) and (max-width: 1100px) {
   body.saas-public-mvp #appShell:not(.is-hidden) {

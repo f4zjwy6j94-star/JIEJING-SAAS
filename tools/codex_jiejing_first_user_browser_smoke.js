@@ -402,7 +402,7 @@ async function main() {
     return (
       url.pathname.endsWith("/index.html") &&
       url.searchParams.get("start") === "site" &&
-      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260626-ai-ceo-module-goal-v5"')
+      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260626-mobile-ai-ceo-polish-v6"')
     );
   });
   await accountBPage.screenshot({ path: path.join(outDir, "workbench-logo-homepage-return.png"), fullPage: true }).catch(() => {});
@@ -417,7 +417,9 @@ async function main() {
       first_day_path_strip_present: firstDayPathStripPresent,
       account_a_shows_own_chat: accountAShowsOwnChat,
       account_b_did_not_show_account_a_chat: accountBDidNotShowAccountAChat,
+      model_402_route_intercepted: model402RouteInterceptCount > 0,
       model_failure_path_observed: modelFailurePathObserved,
+      model_402_copy_is_merchant_safe: model402CopyIsMerchantSafe,
       model_failure_copy_is_merchant_safe: modelFailureCopyIsMerchantSafe,
       workbench_logo_returns_to_current_index: workbenchLogoReturnsToCurrentIndex,
       no_real_platform_writes_triggered: true,
