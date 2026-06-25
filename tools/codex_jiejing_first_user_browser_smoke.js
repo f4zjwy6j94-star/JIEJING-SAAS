@@ -343,15 +343,16 @@ async function main() {
   await accountBPage.locator("#ceoInput").fill("解释一下 SaaS 订阅额度是什么意思");
   await accountBPage.locator("#ceoForm").evaluate((form) => form.requestSubmit());
   await accountBPage.waitForFunction(
-    () => document.body.innerText.includes("模型服务侧余额、额度或计费限制") || document.body.innerText.includes("不代表要在捷境前端重复填写密钥"),
+    () => document.body.innerText.includes("AI 用量或服务商账单挡住了本次回复") || document.body.innerText.includes("不用在前台重复粘贴凭证"),
     null,
     { timeout: 30000 },
   );
   const model402CopyIsMerchantSafe = await accountBPage.evaluate(() => {
     const text = document.body.innerText;
     return (
-      text.includes("模型服务侧余额、额度或计费限制") &&
-      text.includes("不代表要在捷境前端重复填写密钥") &&
+      text.includes("AI 用量或服务商账单挡住了本次回复") &&
+      text.includes("不用在前台重复粘贴凭证") &&
+      text.includes("去 AI 与素材") &&
       !text.includes("quota exceeded") &&
       !text.includes("traceback")
     );
@@ -365,7 +366,7 @@ async function main() {
     return (
       url.pathname.endsWith("/index.html") &&
       url.searchParams.get("start") === "site" &&
-      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260625-account-scope-v1"')
+      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260625-ai-recovery-v1"')
     );
   });
   await accountBPage.screenshot({ path: path.join(outDir, "workbench-logo-homepage-return.png"), fullPage: true }).catch(() => {});

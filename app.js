@@ -11368,6 +11368,7 @@ function handleGlobalFlowNavigation(button) {
     pulseFlowTarget("#view-cockpit .cockpit-market-panel", { message: messages.market });
     return;
   }
+  if (key === "model") state.saasSettingsTab = "model";
   setView(view, { preserveFlowKey: Boolean(key) });
   if (key === "source") pulseFlowTarget("#view-connect .source-intake-panel", { message: messages.source });
   else if (key === "product" || key === "finance") pulseFlowTarget("#view-product", { message: messages[key] });
@@ -17655,6 +17656,27 @@ function renderSaasAiCeoWorkDetailMarkup(turn = {}) {
   `;
 }
 
+function shouldShowSaasAiCeoRecoveryHint(turn = {}) {
+  const latest = normalizeSaasAiCeoLatestTurn(turn);
+  if (!latest || latest.pending) return false;
+  const status = String(latest.status || "");
+  return ["blocked_before_model_chat", "blocked_missing_model_config", "model_call_failed"].includes(status);
+}
+
+function renderSaasAiCeoRecoveryHintMarkup(turn = {}) {
+  const latest = normalizeSaasAiCeoLatestTurn(turn);
+  if (!latest || !shouldShowSaasAiCeoRecoveryHint(latest)) return "";
+  const text = String(latest.assistant_text || "");
+  const isUsageBlock = /用量|额度|余额|账单|套餐|计费/.test(text);
+  return `
+    <div class="saas-ai-ceo-recovery-hint" data-ai-ceo-recovery-hint="merchant_safe_ai_recovery_v1">
+      <span>${isUsageBlock ? "用量提示" : "连接提示"}</span>
+      <strong>${isUsageBlock ? "先看 AI 连接和用量状态" : "先看 AI 连接状态"}</strong>
+      <button class="secondary-action compact-action" type="button" data-global-flow-view="connect" data-global-flow-key="model">去 AI 与素材</button>
+    </div>
+  `;
+}
+
 function sanitizeSaasCeoCommandSourceText(text = "") {
   return publicRuntimeText(text || "")
     .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, "[model_key_redacted]")
@@ -17801,13 +17823,23 @@ async function requestSaasAiCeoChat(command = state.saasLastCeoCommand) {
 
 function saasAiCeoMerchantSafeFailureText(error) {
   const raw = String(error?.message || error || "").toLowerCase();
-  let reason = "AI 通道暂时不可用";
-  if (raw.includes("402") || raw.includes("quota") || raw.includes("payment") || raw.includes("billing")) {
-    reason = "模型服务侧余额、额度或计费限制挡住了本次调用；这通常需要检查模型服务账户余额、套餐或服务商账单，不代表要在捷境前端重复填写密钥";
+  let title = "AI 连接暂时不可用";
+  let reason = "这次没有拿到可展示回复。";
+  let next = "你可以稍后重试，或到设置里的 AI 与素材查看连接状态。";
+  if (raw.includes("402") || raw.includes("quota") || raw.includes("payment") || raw.includes("billing") || raw.includes("balance") || raw.includes("credit")) {
+    title = "AI 用量或服务商账单挡住了本次回复";
+    reason = "这通常是模型服务账户余额、套餐、额度或账单限制导致。";
+    next = "先到设置里的 AI 与素材查看连接状态；不用在前台重复粘贴凭证，除非服务商明确拒绝认证。";
+  } else if (raw.includes("401") || raw.includes("403") || raw.includes("unauthorized") || raw.includes("forbidden") || raw.includes("invalid")) {
+    title = "AI 服务商拒绝了这次连接";
+    reason = "可能是模型服务权限、模型名称或账户状态需要复核。";
+    next = "到设置里的 AI 与素材查看当前 AI 连接；凭证仍只在后端安全边界处理。";
   } else if (raw.includes("timeout") || raw.includes("network") || raw.includes("fetch")) {
-    reason = "网络或模型连接暂时不稳定";
+    title = "AI 连接超时";
+    reason = "网络或模型服务临时不稳定。";
+    next = "可以直接重试；如果是 Listing、发布、退款、广告等经营任务，我会继续保持确认边界。";
   }
-  return `AI CEO 已接住这条消息，但${reason}。这次不会触发扣费、不会写入 eBay，也不会把普通聊天写入长期经营记忆；如果这是经营任务，我会先停在对应流程和决策中心边界。`;
+  return `${title}。${reason} ${next} 本次不会扣捷境费用、不会写入 eBay，也不会把普通聊天写入长期经营记忆。`;
 }
 function classifySaasLocalClockRequest(text = "") {
   const normalized = String(text || "").trim().toLowerCase();
@@ -32050,7 +32082,7 @@ function saasAiCeoTurnStatusLabel(latest = {}) {
   if (latest.status === "blocked_missing_store_context") return "等待店铺上下文";
   if (latest.status === "blocked_missing_model_config") return "等待 AI 连接";
   if (latest.status === "blocked_missing_packet") return "等待官方数据包";
-  if (latest.status === "model_call_failed") return "暂时不可用";
+  if (latest.status === "model_call_failed") return "AI 连接待恢复";
   return "AI CEO";
 }
 
@@ -32143,6 +32175,7 @@ function renderSaasAiCeoChatTurnMarkup(turn = {}) {
       <div class="saas-ai-ceo-message-body">
         ${showStatusLabel ? `<small>${escapeHtml(statusLabel)}</small>` : ""}
         <p>${escapeHtml(assistantText)}</p>
+        ${renderSaasAiCeoRecoveryHintMarkup(latest)}
         ${renderSaasAiCeoWorkDetailMarkup(latest)}
       </div>
     </article>
@@ -32162,6 +32195,7 @@ function renderSaasAiCeoLatestReplyMarkup(turn = state.saasAiCeoLatestTurn) {
         <div>
           <small>${escapeHtml(statusLabel)}</small>
           <p>${escapeHtml(assistantText)}</p>
+          ${renderSaasAiCeoRecoveryHintMarkup(latest)}
           ${renderSaasAiCeoWorkDetailMarkup(latest)}
         </div>
       </article>
@@ -32265,6 +32299,7 @@ function updateCeoAssistantMessage(messageId, text, status = "", model = null, s
   node.querySelector(".saas-ai-ceo-work-detail")?.remove();
   node.querySelector(".saas-ai-ceo-source-list")?.remove();
   node.querySelector(".saas-ai-ceo-operating-brief")?.remove();
+  node.querySelector(".saas-ai-ceo-recovery-hint")?.remove();
   const updatedTurn = normalizeSaasAiCeoLatestTurn({
     ...(latest || {}),
     assistant_text: safeText,
@@ -32273,7 +32308,9 @@ function updateCeoAssistantMessage(messageId, text, status = "", model = null, s
     source_records: sources,
     pending: false,
   });
-  if (body && updatedTurn) body.insertAdjacentHTML("afterend", renderSaasAiCeoWorkDetailMarkup(updatedTurn));
+  if (body && updatedTurn) {
+    body.insertAdjacentHTML("afterend", renderSaasAiCeoRecoveryHintMarkup(updatedTurn) + renderSaasAiCeoWorkDetailMarkup(updatedTurn));
+  }
   const meta = node.querySelector(".saas-ai-ceo-message-body > small");
   if (meta) {
     const statusLabel = saasAiCeoTurnStatusLabel(updatedTurn || {});

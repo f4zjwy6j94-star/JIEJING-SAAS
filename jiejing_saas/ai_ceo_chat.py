@@ -1328,12 +1328,12 @@ def _classify_model_failure(exc: Exception) -> tuple[str, str]:
     raw = str(exc or "")
     lowered = raw.lower()
     if "402" in lowered or any(item in lowered for item in ("quota", "balance", "billing", "payment", "credit", "insufficient")):
-        return "model_quota_or_billing_limited", "模型服务返回余额、额度或计费限制。"
+        return "model_quota_or_billing_limited", "AI 用量、余额、套餐或服务商账单限制挡住了本次回复。"
     if any(item in lowered for item in ("timeout", "timed out", "connection", "network", "temporarily unavailable")):
-        return "model_network_or_timeout", "模型连接暂时不稳定。"
+        return "model_network_or_timeout", "AI 连接暂时不稳定或超时。"
     if "401" in lowered or "403" in lowered or any(item in lowered for item in ("unauthorized", "forbidden", "invalid api key")):
-        return "model_auth_or_permission_error", "模型连接权限暂时不可用。"
-    return "model_provider_error", "模型服务暂时没有返回可展示内容。"
+        return "model_auth_or_permission_error", "AI 服务商拒绝了这次连接，需要在设置里复核账户、权限或模型名称。"
+    return "model_provider_error", "AI 服务这次没有返回可展示内容。"
 
 
 def _model_unavailable_fallback_answer(route_meta: dict[str, Any], reason: str) -> str:
@@ -1347,8 +1347,9 @@ def _model_unavailable_fallback_answer(route_meta: dict[str, Any], reason: str) 
     else:
         next_step = "你可以继续追问普通问题；普通聊天默认不会进入长期经营记忆。"
     return (
-        f"AI CEO 已接住这条消息，但当前 AI 通道暂时不可用：{reason}"
-        "这次没有触发扣费，没有写入 eBay，也没有用固定话术冒充真实模型结果。"
+        f"{reason}"
+        "可以到设置里的 AI 与素材查看连接状态；不用在前台重复粘贴凭证，凭证仍只在后端安全边界处理。"
+        "本次不会扣捷境费用、不会写入 eBay，也不会把普通聊天写入长期经营记忆。"
         f"{next_step}"
     )
 
