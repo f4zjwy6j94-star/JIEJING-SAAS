@@ -26,7 +26,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260625-billing-clarity-v2"
+    frontend_asset_version = "20260625-first-day-v3"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -78,6 +78,7 @@ def main() -> int:
         "20260624-settings-v1",
         "20260624-ceo-route-v2",
         "20260625-home-settings-v1",
+        "20260625-billing-clarity-v2",
         "20260510-ebay-policy-v1",
     ]:
         if stale_asset_version in index_html + app_html:
@@ -111,6 +112,15 @@ def main() -> int:
     ]:
         if expected_runtime_brand not in app_js:
             return fail(f"runtime UI missing uppercase JIEJING brand guard: {expected_runtime_brand}")
+    for first_day_marker in [
+        "login_onboarding_ai_ceo_v3",
+        "saas-first-day-path-strip",
+        'data-first-day-path="login_onboarding_ai_ceo_v3"',
+        "刷新不会跳过向导",
+        "一句话交给 AI CEO",
+    ]:
+        if first_day_marker not in app_js + app_html + styles_css:
+            return fail(f"first-day login/onboarding/AI CEO path marker missing: {first_day_marker}")
     for expected_interaction_marker in [
         "--tilt-x",
         "--core-drift-x",

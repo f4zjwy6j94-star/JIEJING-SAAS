@@ -283,6 +283,15 @@ async function main() {
     const app = document.querySelector("#appShell");
     return Boolean(onboarding && !onboarding.classList.contains("is-hidden") && app?.classList.contains("is-hidden"));
   });
+  const firstDayPathStripPresent = await noStorePage.evaluate(() => {
+    const html = document.documentElement.outerHTML;
+    return Boolean(
+      document.querySelector(".saas-first-day-path-strip") &&
+        html.includes("login_onboarding_ai_ceo_v3") &&
+        html.includes("刷新不会跳过向导") &&
+        html.includes("一句话交给 AI CEO"),
+    );
+  });
   await noStorePage.screenshot({ path: path.join(outDir, "onboarded-query-guard.png"), fullPage: true }).catch(() => {});
   await noStoreContext.close();
 
@@ -317,13 +326,15 @@ async function main() {
       includeStore: true,
     }),
   );
-  await accountBContext.route(`${base}/stores/**/merchant-ceo/chat**`, (route) =>
-    route.fulfill({
+  let model402RouteInterceptCount = 0;
+  await accountBContext.route("**/stores/**/merchant-ceo/chat**", (route) => {
+    model402RouteInterceptCount += 1;
+    return route.fulfill({
       status: 402,
       contentType: "application/json; charset=utf-8",
       body: JSON.stringify({ error: "model quota exceeded", detail: "quota or billing limit" }),
-    }),
-  );
+    });
+  });
   const accountBPage = await accountBContext.newPage();
   accountBPage.on("pageerror", (error) => pageErrors.push(String(error.message || error).slice(0, 400)));
   accountBPage.on("requestfailed", recordRequestFailure);
@@ -341,7 +352,7 @@ async function main() {
   const accountBDidNotShowAccountAChat = await accountBPage.evaluate((sentinel) => !document.body.innerText.includes(sentinel), accountASentinel);
 
   await accountBPage.locator("#ceoInput").fill("解释一下 SaaS 订阅额度是什么意思");
-  await accountBPage.locator("#ceoForm").evaluate((form) => form.requestSubmit());
+  await accountBPage.locator('#ceoForm button[type="submit"]').click();
   await accountBPage.waitForFunction(
     () => document.body.innerText.includes("AI 用量或服务商账单挡住了本次回复") || document.body.innerText.includes("不用在前台重复粘贴凭证"),
     null,
@@ -366,7 +377,7 @@ async function main() {
     return (
       url.pathname.endsWith("/index.html") &&
       url.searchParams.get("start") === "site" &&
-      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260625-billing-clarity-v2"')
+      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260625-first-day-v3"')
     );
   });
   await accountBPage.screenshot({ path: path.join(outDir, "workbench-logo-homepage-return.png"), fullPage: true }).catch(() => {});
@@ -378,8 +389,10 @@ async function main() {
     outDir,
     checks: {
       onboarded_query_did_not_bypass_onboarding: onboardedQueryDidNotBypassOnboarding,
+      first_day_path_strip_present: firstDayPathStripPresent,
       account_a_shows_own_chat: accountAShowsOwnChat,
       account_b_did_not_show_account_a_chat: accountBDidNotShowAccountAChat,
+      model_402_route_intercepted: model402RouteInterceptCount > 0,
       model_402_copy_is_merchant_safe: model402CopyIsMerchantSafe,
       workbench_logo_returns_to_current_index: workbenchLogoReturnsToCurrentIndex,
       no_real_platform_writes_triggered: true,

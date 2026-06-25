@@ -16603,6 +16603,28 @@ function saasRealBackendBindingStatus() {
   };
 }
 
+function renderSaasFirstDayPathStrip() {
+  return `
+    <div class="saas-first-day-path-strip" data-first-day-path="login_onboarding_ai_ceo_v3" aria-label="JIEJING 首日路径">
+      <article>
+        <span>01</span>
+        <strong>先建捷境账号</strong>
+        <small>登录或注册，只保存会话和安全引用。</small>
+      </article>
+      <article>
+        <span>02</span>
+        <strong>完成身份向导</strong>
+        <small>刷新不会跳过向导；完成后才进入工作台。</small>
+      </article>
+      <article>
+        <span>03</span>
+        <strong>一句话交给 AI CEO</strong>
+        <small>商品、链接、订单问题都会先由 AI CEO 判断去哪个模块。</small>
+      </article>
+    </div>
+  `;
+}
+
 function renderSaasLoginCard(options = {}) {
   const { compact = false } = options;
   const includeCompany = false;
@@ -16631,6 +16653,7 @@ function renderSaasLoginCard(options = {}) {
           <span>配置连接</span>
           <span>进入工作舱</span>
         </div>
+        ${renderSaasFirstDayPathStrip()}
         <div class="saas-auth-form-grid">
           <label>
             <span>捷境账号</span>
@@ -16681,6 +16704,7 @@ function renderSaasLoginCard(options = {}) {
             </label>`
           : ""
       }
+      ${renderSaasFirstDayPathStrip()}
       <div class="saas-login-actions">
         <button class="secondary-action" type="button" data-saas-action="login-session" ${state.saasLoading ? "disabled" : ""}>登录进入工作台</button>
         <button class="primary-action" type="button" data-saas-action="register-session" ${state.saasLoading ? "disabled" : ""}>注册并进入工作台</button>
@@ -20389,6 +20413,7 @@ function renderSaasMerchantWorkbenchPanel() {
               <p>${hasSessionCandidate ? "系统正在校验会话并读取店铺、eBay 授权、模型设置、AI CEO 报告和确认中心。" : "工作舱只显示真实商家状态。未登录时会回到首页登录弹窗，不在工作舱里展示注册卡片。"}</p>
             </div>
           </div>
+          ${renderSaasFirstDayPathStrip()}
         </div>
       `;
     }
