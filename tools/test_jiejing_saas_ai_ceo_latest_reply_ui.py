@@ -28,7 +28,8 @@ def main() -> int:
         "function hydrateSaasCeoAccountScopedLocalState",
         "function clearStoredSaasStoreContext",
         "localStorage.setItem(saasProtectedSnapshotStorageKey()",
-        "localStorage.getItem(saasProtectedSnapshotStorageKey()",
+        "for (const key of saasProtectedSnapshotStorageKeys())",
+        "const raw = localStorage.getItem(key)",
         "localStorage.removeItem(saasProtectedSnapshotStorageKey())",
         "AI CEO 已接住这条消息，但",
         "不会触发扣费、不会写入 eBay",
@@ -91,6 +92,12 @@ def main() -> int:
         "正在处理...",
         "这是一条旧消息：当时没有保存可展示回复。",
         "external_data_source_required",
+        "function renderSaasAiCeoFirstRunHandoff",
+        "first_run_ai_ceo_handoff_v1",
+        'data-does-not-trigger-real-write="true"',
+        "直接说经营目标，不用先找功能",
+        "点一句只会填入输入框",
+        "我还没接 eBay，先用资料跑草稿",
     ]
     for needle in required_app:
         if needle not in app:
@@ -115,6 +122,9 @@ def main() -> int:
         ".saas-ceo-routing-main",
         ".saas-ceo-routing-why",
         "box-shadow: 0 14px 34px rgba(22, 50, 44, 0.08)",
+        ".saas-ai-ceo-first-run-handoff",
+        ".saas-ai-ceo-first-run-actions",
+        "border-radius: 999px;",
     ]
     for needle in required_css:
         if needle not in css:

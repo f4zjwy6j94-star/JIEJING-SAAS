@@ -25427,6 +25427,7 @@ function renderSaasCockpitRealWorkbench() {
       : null);
   const visibleCommandChat = renderSaasAiCeoThreadMarkup(latestCeoTurn);
   const hasVisibleCeoChat = Boolean(visibleCommandChat.trim());
+  const firstRunHandoff = hasVisibleCeoChat ? "" : renderSaasAiCeoFirstRunHandoff();
   cockpit.dataset.title = "AI CEO";
   const pageTitleNode = document.querySelector("#pageTitle");
   const moduleHintNode = document.querySelector("#moduleFlowHint");
@@ -25442,6 +25443,7 @@ function renderSaasCockpitRealWorkbench() {
               <h2>${hasVisibleCeoChat ? "AI CEO" : "一句话交给 AI CEO"}</h2>
               <p>${hasVisibleCeoChat ? "继续当前对话。" : "问问题直接答；说商品、链接、图片或订单，我会自动带到对应流程；真实发布、付款、退款和广告先问你。"}</p>
             </div>
+            ${firstRunHandoff}
             <div class="chat-log saas-ai-ceo-chat-stream" id="ceoChat" aria-live="polite">${visibleCommandChat}</div>
             <div class="saas-ceo-route-task-slot" id="saasCeoRouteTaskSlot">${renderSaasCeoRoutingTaskCard(visibleCommand)}</div>
             <div class="saas-ai-ceo-composer-dock">
@@ -25462,6 +25464,28 @@ function renderSaasCockpitRealWorkbench() {
   `;
   bindCeoForm(cockpit);
   return true;
+}
+
+function renderSaasAiCeoFirstRunHandoff() {
+  const prompts = [
+    "帮我从一个商品做 Listing",
+    "帮我先筛 10 个小商品",
+    "我还没接 eBay，先用资料跑草稿",
+  ];
+  return `
+    <section class="saas-ai-ceo-first-run-handoff" data-ai-ceo-first-run-handoff="first_run_ai_ceo_handoff_v1" data-does-not-trigger-real-write="true" aria-label="AI CEO 开口建议">
+      <div class="saas-ai-ceo-first-run-copy">
+        <span>可以这样开始</span>
+        <strong>直接说经营目标，不用先找功能</strong>
+        <p>点一句只会填入输入框；你确认发送后，AI CEO 再判断去 Listing、批量、素材、客服或决策中心。</p>
+      </div>
+      <div class="saas-ai-ceo-first-run-actions" aria-label="常用开口">
+        ${prompts
+          .map((prompt) => `<button type="button" data-ceo-prompt="${escapeHtml(prompt)}">${escapeHtml(prompt)}</button>`)
+          .join("")}
+      </div>
+    </section>
+  `;
 }
 
 function renderCockpitExperience(force = false) {

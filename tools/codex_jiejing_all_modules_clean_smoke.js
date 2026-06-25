@@ -322,17 +322,38 @@ async function main() {
     const placeholder = root?.querySelector("#ceoInput")?.getAttribute("placeholder") || "";
     const starterPrompts = root?.querySelector(".saas-ai-ceo-starter-prompts");
     const routeCard = root?.querySelector(".saas-ceo-routing-task-card");
+    const handoff = root?.querySelector(".saas-ai-ceo-first-run-handoff");
     return {
       has_one_sentence_title: text.includes("一句话交给 AI CEO"),
       has_plain_chat_copy: text.includes("问问题直接答") && text.includes("真实发布、付款、退款和广告先问你"),
       has_input_example: placeholder.includes("帮我调研这个商品") && placeholder.includes("Listing 草稿"),
       has_plain_chat_hint:
         text.includes("也可以直接问普通问题") && text.includes("自动进入 Listing、批量、素材、客服或决策中心"),
+      has_first_run_handoff: Boolean(handoff && handoff.offsetParent !== null),
+      has_first_run_handoff_marker: handoff?.getAttribute("data-ai-ceo-first-run-handoff") === "first_run_ai_ceo_handoff_v1",
+      handoff_does_not_trigger_real_write: handoff?.getAttribute("data-does-not-trigger-real-write") === "true",
+      has_first_run_handoff_copy:
+        text.includes("直接说经营目标，不用先找功能") &&
+        text.includes("点一句只会填入输入框") &&
+        text.includes("我还没接 eBay，先用资料跑草稿"),
+      first_run_handoff_action_count: root?.querySelectorAll(".saas-ai-ceo-first-run-actions [data-ceo-prompt]").length || 0,
       has_starter_prompts: Boolean(starterPrompts && getComputedStyle(starterPrompts).display !== "none"),
       has_route_card: Boolean(routeCard && routeCard.offsetParent !== null),
       exposes_internal_copy: /packet|provider|preflight|数据包|后台|排查/i.test(text),
       placeholder,
       preview: text.trim().slice(0, 240),
+    };
+  });
+  const ceoFirstRunPrefill = await page.evaluate(() => {
+    const input = document.querySelector("#view-cockpit.is-active #ceoInput");
+    const button = document.querySelector("#view-cockpit.is-active .saas-ai-ceo-first-run-actions [data-ceo-prompt]");
+    if (!input || !button) return { ok: false, reason: "missing_input_or_prompt" };
+    button.click();
+    return {
+      ok: input.value === button.getAttribute("data-ceo-prompt"),
+      value: input.value,
+      still_no_route_card: !document.querySelector("#view-cockpit .saas-ceo-routing-task-card"),
+      still_no_chat_message: !document.querySelector("#view-cockpit #ceoChat .message"),
     };
   });
   await page
@@ -637,6 +658,7 @@ async function main() {
     screenshotFailures,
     navCount: await page.locator(".nav-item").count(),
     ceoFirstRunEntry,
+    ceoFirstRunPrefill,
     ceoRouteTask,
     ceoRouteScenarios,
     ceoPlainConsultation,
@@ -713,9 +735,17 @@ async function main() {
     !ceoFirstRunEntry.has_one_sentence_title ||
     !ceoFirstRunEntry.has_plain_chat_copy ||
     !ceoFirstRunEntry.has_input_example ||
-    !ceoFirstRunEntry.has_plain_chat_hint
+    !ceoFirstRunEntry.has_plain_chat_hint ||
+    !ceoFirstRunEntry.has_first_run_handoff ||
+    !ceoFirstRunEntry.has_first_run_handoff_marker ||
+    !ceoFirstRunEntry.handoff_does_not_trigger_real_write ||
+    !ceoFirstRunEntry.has_first_run_handoff_copy ||
+    ceoFirstRunEntry.first_run_handoff_action_count < 3
   ) {
     failures.push("AI CEO first-run entry is not a low-learning-cost one-sentence composer");
+  }
+  if (!ceoFirstRunPrefill.ok || !ceoFirstRunPrefill.still_no_route_card || !ceoFirstRunPrefill.still_no_chat_message) {
+    failures.push("AI CEO first-run handoff prompts must only prefill the composer");
   }
   if (ceoFirstRunEntry.has_starter_prompts || ceoFirstRunEntry.has_route_card) {
     failures.push("AI CEO first-run entry still exposes starter prompts or a route card before user intent");
