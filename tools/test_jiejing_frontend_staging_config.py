@@ -26,7 +26,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260625-ai-ceo-pending-v4"
+    frontend_asset_version = "20260626-ai-ceo-module-goal-v5"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -80,6 +80,7 @@ def main() -> int:
         "20260625-home-settings-v1",
         "20260625-billing-clarity-v2",
         "20260625-first-day-v3",
+        "20260625-ai-ceo-pending-v4",
         "20260510-ebay-policy-v1",
     ]:
         if stale_asset_version in index_html + app_html:
@@ -263,6 +264,11 @@ def main() -> int:
         "renderSaasEbaySyncStatusPanel",
         "renderSaasAiCeoOutputPanel",
         "renderSaasConfirmPanel",
+        "function renderSaasModuleAiGoalStrip",
+        "function renderSaasModuleAiGoalStripIntoView",
+        'data-ai-ceo-module-goal-strip="ai_ceo_module_goal_v1"',
+        "小批量实验目标已带入",
+        "高风险动作已拦住",
         "saasRealBackendBindingStatus",
         "真实 API 来源",
         "saasWorkbenchReportDetailMarkup",

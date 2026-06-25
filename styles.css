@@ -29250,6 +29250,86 @@ body.saas-public-mvp .saas-listing-ai-handoff p {
   line-height: 1.55;
 }
 
+body.saas-public-mvp .saas-module-ai-goal-strip {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.9fr) minmax(0, 1.4fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin: 0 0 14px;
+  padding: 13px 14px;
+  border: 1px solid rgba(8, 118, 110, 0.14);
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(241, 250, 247, 0.98), rgba(255, 255, 255, 0.98));
+  box-shadow: 0 12px 28px rgba(20, 48, 43, 0.06);
+}
+
+body.saas-public-mvp .saas-module-ai-goal-main,
+body.saas-public-mvp .saas-module-ai-goal-steps article {
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-module-ai-goal-main span,
+body.saas-public-mvp .saas-module-ai-goal-steps span {
+  display: block;
+  margin: 0 0 4px;
+  color: #08766e;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+body.saas-public-mvp .saas-module-ai-goal-main strong {
+  display: block;
+  color: #0d1b18;
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+body.saas-public-mvp .saas-module-ai-goal-main p {
+  margin: 4px 0 0;
+  color: #5c6f68;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+body.saas-public-mvp .saas-module-ai-goal-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+body.saas-public-mvp .saas-module-ai-goal-steps article {
+  min-height: 62px;
+  padding: 9px 10px;
+  border: 1px solid rgba(8, 118, 110, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.74);
+}
+
+body.saas-public-mvp .saas-module-ai-goal-steps strong {
+  display: block;
+  color: #24423a;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+body.saas-public-mvp .saas-module-ai-goal-strip .compact-action {
+  min-height: 38px;
+  white-space: nowrap;
+}
+
+@media (max-width: 820px) {
+  body.saas-public-mvp .saas-module-ai-goal-strip,
+  body.saas-public-mvp .saas-module-ai-goal-steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.saas-public-mvp .saas-module-ai-goal-strip .compact-action {
+    width: 100%;
+    white-space: normal;
+  }
+}
+
 body.saas-public-mvp .saas-listing-input-chips {
   display: flex;
   flex-wrap: wrap;

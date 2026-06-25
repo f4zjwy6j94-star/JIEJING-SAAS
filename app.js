@@ -6603,6 +6603,7 @@ function renderSaasMediaStudioStatus() {
   if (!tabs) return;
   let handoff = document.querySelector("#view-media .saas-ceo-module-handoff");
   if (handoff) handoff.remove();
+  renderSaasModuleAiGoalStripIntoView("media", { anchorSelector: ".media-flow-status, .media-project-tabs" });
   setText("#mediaProjectPill", reports.length ? `${reports.length} 个素材任务` : "等待商品草稿");
   const flowStatus = document.querySelector("#view-media .media-flow-status");
   if (flowStatus) {
@@ -16487,6 +16488,7 @@ function renderSaasConfirmPanel() {
         <small>${realWritesEnabled ? "真实动作先确认" : "受控交接"}</small>
       </div>
     </section>
+    ${renderSaasModuleAiGoalStrip("confirm")}
     <div class="runtime-confirm-head saas-confirm-simple-head">
       <div>
         <span class="pill ${state.saasConnected ? "green" : "neutral"}">决策中心</span>
@@ -17626,6 +17628,99 @@ function renderSaasCeoModuleHandoffPanel(view = "product", ctx = saasMerchantWor
       </div>
     </section>
   `;
+}
+
+function saasCeoModuleGoalView(command = state.saasLastCeoCommand) {
+  const current = normalizeSaasCeoCommand(command);
+  if (!current || current.intent === "general_chat") return "";
+  const route = primarySaasCeoRoute(current);
+  if (current.high_risk || current.intent === "confirm" || route?.view === "confirm") return "confirm";
+  return route?.view || "";
+}
+
+function shouldShowSaasCeoModuleGoalStrip(view = "product", command = state.saasLastCeoCommand) {
+  const targetView = saasCeoModuleGoalView(command);
+  if (!targetView || view === "product") return false;
+  return targetView === view;
+}
+
+function saasCeoModuleGoalCopy(view = "product", command = state.saasLastCeoCommand) {
+  const current = normalizeSaasCeoCommand(command);
+  const base = {
+    bulk: {
+      title: "小批量实验目标已带入",
+      next: "先选数量、货源和边界，再把能试的候选送到 Listing 和素材。",
+      boundary: "不自动发布、不采购付款；需要你确认的动作会停到决策中心。",
+    },
+    media: {
+      title: "素材目标已带入",
+      next: "先整理商品草稿和来源图，再生成主图、详情页、场景图和视频脚本。",
+      boundary: "素材只回写草稿；真实发布、承诺和平台写入仍要确认。",
+    },
+    service: {
+      title: "客服订单目标已带入",
+      next: "先看消息、订单和回复边界，再起草可用回复。",
+      boundary: "退款、补偿、重发、地址修改和明确承诺会停到决策中心。",
+    },
+    confirm: {
+      title: "高风险动作已拦住",
+      next: "这里只处理需要你点头的动作；未确认前不执行。",
+      boundary: "发布、付款、退款、广告、改价、库存和敏感客服承诺必须由你确认。",
+    },
+  }[view] || {
+    title: "AI CEO 目标已带入",
+    next: "继续处理当前模块的下一步。",
+    boundary: "真实动作仍按确认中心边界执行。",
+  };
+  return {
+    ...base,
+    goal: saasCeoTaskGoalLabel(current),
+    commandText: publicRuntimeText(current?.text || "").slice(0, 180),
+  };
+}
+
+function renderSaasModuleAiGoalStrip(view = "product", command = state.saasLastCeoCommand) {
+  if (!shouldShowSaasCeoModuleGoalStrip(view, command)) return "";
+  const copy = saasCeoModuleGoalCopy(view, command);
+  return `
+    <section class="saas-module-ai-goal-strip" data-ai-ceo-module-goal-strip="ai_ceo_module_goal_v1" data-ai-ceo-module-view="${escapeHtml(view)}" aria-label="AI CEO 已带入目标">
+      <div class="saas-module-ai-goal-main">
+        <span>来自 AI CEO</span>
+        <strong>${escapeHtml(copy.title)}</strong>
+        <p>${escapeHtml(copy.commandText || copy.goal)}</p>
+      </div>
+      <div class="saas-module-ai-goal-steps" aria-label="目标、下一步和边界">
+        <article>
+          <span>目标</span>
+          <strong>${escapeHtml(copy.goal)}</strong>
+        </article>
+        <article>
+          <span>下一步</span>
+          <strong>${escapeHtml(copy.next)}</strong>
+        </article>
+        <article>
+          <span>边界</span>
+          <strong>${escapeHtml(copy.boundary)}</strong>
+        </article>
+      </div>
+      <button class="secondary-action compact-action" type="button" data-global-flow-view="cockpit" data-global-flow-key="goal">回 AI CEO 修改目标</button>
+    </section>
+  `;
+}
+
+function renderSaasModuleAiGoalStripIntoView(view = "product", options = {}) {
+  const shell = document.querySelector(`#view-${view}`);
+  if (!shell) return null;
+  shell.querySelectorAll(".saas-module-ai-goal-strip").forEach((node) => node.remove());
+  const html = renderSaasModuleAiGoalStrip(view);
+  if (!html) return null;
+  const anchor = options.anchorSelector ? shell.querySelector(options.anchorSelector) : shell.firstElementChild;
+  if (anchor) {
+    anchor.insertAdjacentHTML(options.position === "after" ? "afterend" : "beforebegin", html);
+  } else {
+    shell.insertAdjacentHTML("afterbegin", html);
+  }
+  return shell.querySelector(".saas-module-ai-goal-strip");
 }
 
 function shouldShowSaasAiCeoWorkDetail(turn = {}) {
@@ -25844,6 +25939,7 @@ function renderBulkFactory() {
   restorePreservedViewMarkup("bulk", "#bulkPreferenceGrid");
   updateBulkPipeline();
   updateBulkPreview();
+  renderSaasModuleAiGoalStripIntoView("bulk", { anchorSelector: ".bulk-decision-workbench, .bulk-output-snapshot, #bulkPreferenceGrid" });
   const prefGrid = document.querySelector("#bulkPreferenceGrid");
   if (prefGrid) prefGrid.innerHTML = renderBulkPreferenceButtons();
   const countRow = document.querySelector("#bulkCountChoices");
@@ -27799,6 +27895,7 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
           <small>没有真实订单时保持空白</small>
         </div>
       </section>
+      ${renderSaasModuleAiGoalStrip("service")}
 
       <div class="saas-service-lane-grid" aria-label="客服与订单三件事">
         <article class="${hasOfficialOrders ? "is-green" : "is-amber"}">

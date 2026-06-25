@@ -401,23 +401,43 @@ async function main() {
     await page.locator("#view-cockpit.is-active #ceoInput").fill(scenario.text, { timeout: 15000 });
     await page.locator('#view-cockpit.is-active #ceoForm button[type="submit"]').click();
     await waitForCeoRouteTaskTarget(page, scenario.target);
-    ceoRouteScenarios.push(
-      await page.evaluate((scenario) => {
-        const card = document.querySelector("#view-cockpit .saas-ceo-routing-task-card");
-        const button = card?.querySelector("[data-global-flow-view]");
-        const text = card?.innerText || "";
-        return {
-          label: scenario.label,
-          expected: scenario.target,
-          visible: Boolean(card && card.offsetParent !== null),
-          target: button?.getAttribute("data-global-flow-view") || "",
-          has_why_rows: document.querySelectorAll("#view-cockpit .saas-ceo-routing-why article").length === 3,
-          has_simple_copy: text.includes("我理解") && text.includes("推荐去") && text.includes("安全边界"),
-          has_internal_copy: /packet|provider|preflight|数据包|后台|排查/i.test(text),
-          text: text.slice(0, 240),
-        };
-      }, scenario),
-    );
+    const scenarioResult = await page.evaluate((scenario) => {
+      const card = document.querySelector("#view-cockpit .saas-ceo-routing-task-card");
+      const button = card?.querySelector("[data-global-flow-view]");
+      const text = card?.innerText || "";
+      return {
+        label: scenario.label,
+        expected: scenario.target,
+        visible: Boolean(card && card.offsetParent !== null),
+        target: button?.getAttribute("data-global-flow-view") || "",
+        has_why_rows: document.querySelectorAll("#view-cockpit .saas-ceo-routing-why article").length === 3,
+        has_simple_copy: text.includes("我理解") && text.includes("推荐去") && text.includes("安全边界"),
+        has_internal_copy: /packet|provider|preflight|数据包|后台|排查/i.test(text),
+        text: text.slice(0, 240),
+      };
+    }, scenario);
+    await page.locator(`#view-cockpit .saas-ceo-routing-task-card [data-global-flow-view="${scenario.target}"]`).click();
+    await waitForWorkbenchReady(page, `view-${scenario.target}`);
+    await page.waitForTimeout(500);
+    scenarioResult.module_goal = await page.evaluate((scenario) => {
+      const section = document.getElementById(`view-${scenario.target}`);
+      const strip = section?.querySelector(".saas-module-ai-goal-strip");
+      const text = strip?.innerText || "";
+      return {
+        visible: Boolean(strip && strip.offsetParent !== null),
+        marker: strip?.getAttribute("data-ai-ceo-module-goal-strip") || "",
+        view: strip?.getAttribute("data-ai-ceo-module-view") || "",
+        has_goal_step: text.includes("目标"),
+        has_next_step: text.includes("下一步"),
+        has_boundary_step: text.includes("边界"),
+        has_internal_copy: /packet|provider|preflight|数据包|后台|排查/i.test(text),
+        text: text.slice(0, 240),
+      };
+    }, scenario);
+    ceoRouteScenarios.push(scenarioResult);
+    await page.locator('.nav-item[data-view="cockpit"]').click();
+    await waitForWorkbenchReady(page, "view-cockpit");
+    await page.waitForTimeout(400);
   }
 
   await page.locator("#view-cockpit.is-active #ceoInput").fill("今天几号", { timeout: 15000 });
@@ -778,6 +798,19 @@ async function main() {
     }
     if (scenario.has_internal_copy) {
       failures.push(`AI CEO route scenario ${scenario.label} exposes internal copy`);
+    }
+    if (
+      !scenario.module_goal?.visible ||
+      scenario.module_goal?.marker !== "ai_ceo_module_goal_v1" ||
+      scenario.module_goal?.view !== scenario.expected ||
+      !scenario.module_goal?.has_goal_step ||
+      !scenario.module_goal?.has_next_step ||
+      !scenario.module_goal?.has_boundary_step
+    ) {
+      failures.push(`AI CEO route scenario ${scenario.label} did not hand goal to target module`);
+    }
+    if (scenario.module_goal?.has_internal_copy) {
+      failures.push(`AI CEO module goal strip ${scenario.label} exposes internal copy`);
     }
   }
   if (!ceoPlainConsultation.has_answer) failures.push("AI CEO plain consultation did not render an answer");

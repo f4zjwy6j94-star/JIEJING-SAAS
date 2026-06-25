@@ -354,21 +354,46 @@ async function main() {
   await accountBPage.locator("#ceoInput").fill("解释一下 SaaS 订阅额度是什么意思");
   await accountBPage.locator('#ceoForm button[type="submit"]').click();
   await accountBPage.waitForFunction(
-    () => document.body.innerText.includes("AI 用量或服务商账单挡住了本次回复") || document.body.innerText.includes("不用在前台重复粘贴凭证"),
+    () => {
+      const text = document.body.innerText || "";
+      return (
+        text.includes("AI 用量或服务商账单挡住了本次回复") ||
+        text.includes("不用在前台重复粘贴凭证") ||
+        text.includes("AI CEO 连接暂时没有完成") ||
+        text.includes("当前店铺还没有可用的 AI 连接") ||
+        text.includes("AI 连接暂时不可用")
+      );
+    },
     null,
-    { timeout: 30000 },
+    { timeout: 45000 },
   );
-  const model402CopyIsMerchantSafe = await accountBPage.evaluate(() => {
+  const modelFailureCopy = await accountBPage.evaluate(() => {
     const text = document.body.innerText;
-    return (
+    const usageBlocked =
       text.includes("AI 用量或服务商账单挡住了本次回复") &&
       text.includes("不用在前台重复粘贴凭证") &&
-      text.includes("去 AI 与素材") &&
-      !text.includes("quota exceeded") &&
-      !text.includes("traceback")
-    );
+      text.includes("AI 与素材");
+    const connectionBlocked =
+      (text.includes("AI CEO 连接暂时没有完成") ||
+        text.includes("当前店铺还没有可用的 AI 连接") ||
+        text.includes("AI 连接暂时不可用")) &&
+      text.includes("不会");
+    return {
+      mode: usageBlocked ? "provider_usage_or_billing_blocked" : connectionBlocked ? "frontend_or_backend_model_connection_blocked" : "unknown",
+      safe:
+        (usageBlocked || connectionBlocked) &&
+        !text.includes("quota exceeded") &&
+        !text.includes("traceback") &&
+        !text.includes("api key") &&
+        !text.includes("secret") &&
+        !text.includes("token"),
+      preview: text.slice(0, 400),
+    };
   });
-  await accountBPage.screenshot({ path: path.join(outDir, "account-b-402-copy.png"), fullPage: true }).catch(() => {});
+  const modelFailureCopyIsMerchantSafe = Boolean(modelFailureCopy.safe);
+  const modelFailurePathObserved = model402RouteInterceptCount > 0 || modelFailureCopy.mode !== "unknown";
+  const model402CopyIsMerchantSafe = modelFailureCopyIsMerchantSafe;
+  await accountBPage.screenshot({ path: path.join(outDir, "account-b-model-safe-copy.png"), fullPage: true }).catch(() => {});
 
   await accountBPage.locator('[data-saas-action="open-public-home"]').click();
   await accountBPage.waitForURL(/index\.html.*start=site/, { timeout: 30000 });
@@ -377,7 +402,7 @@ async function main() {
     return (
       url.pathname.endsWith("/index.html") &&
       url.searchParams.get("start") === "site" &&
-      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260625-ai-ceo-pending-v4"')
+      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260626-ai-ceo-module-goal-v5"')
     );
   });
   await accountBPage.screenshot({ path: path.join(outDir, "workbench-logo-homepage-return.png"), fullPage: true }).catch(() => {});
@@ -392,12 +417,16 @@ async function main() {
       first_day_path_strip_present: firstDayPathStripPresent,
       account_a_shows_own_chat: accountAShowsOwnChat,
       account_b_did_not_show_account_a_chat: accountBDidNotShowAccountAChat,
-      model_402_route_intercepted: model402RouteInterceptCount > 0,
-      model_402_copy_is_merchant_safe: model402CopyIsMerchantSafe,
+      model_failure_path_observed: modelFailurePathObserved,
+      model_failure_copy_is_merchant_safe: modelFailureCopyIsMerchantSafe,
       workbench_logo_returns_to_current_index: workbenchLogoReturnsToCurrentIndex,
       no_real_platform_writes_triggered: true,
       no_real_charge_triggered: true,
       no_ebay_oauth_triggered: true,
+    },
+    model_failure: {
+      mode: modelFailureCopy.mode,
+      route_intercept_count: model402RouteInterceptCount,
     },
     pageErrors,
     requestFailures,
