@@ -4144,7 +4144,7 @@ const planDetails = {
   free: {
     title: "免费版",
     price: "¥0",
-    desc: "适合刚开始整理 eBay 流程的商家。免费版不是纯演示，可以用基础功能把一条商品线从资料整理跑到确认清单。",
+    desc: "适合刚开始整理 eBay 流程的商家。免费版用于体验基础工作台和手动流程，不触发真实收费。",
     cta: "登录后选择方案",
     items: [
       "AI CEO 基础对话和商家身份向导",
@@ -4157,20 +4157,21 @@ const planDetails = {
   single: {
     title: "单店铺版",
     price: "¥99/月",
-    desc: "注册送 1 个月单店铺版体验。适合 1 个 eBay 店铺正式使用，把选品、Listing、素材、客服物流和费用整理放进 AI CEO 工作台。",
+    desc: "注册送 1 个月单店铺版体验。¥99/月是基础订阅，覆盖 1 个 eBay 店铺的 AI CEO、Listing、素材工坊、客服订单和确认中心；大模型、生图生视频等高成本用量另算。",
     cta: "登录后选择方案",
     items: [
       "1 个 eBay 店铺工作台",
       "完整单品流程、素材工坊和自动客服基础流程",
       "可为这个店铺添加、删除、调整通用流程模板步骤",
       "支持确认中心、工作记录、来源记录和按需 PDF 汇报",
+      "基础订阅不包含无限模型、生图生视频或 eBay 平台经营费用",
       "可保存一次确认规则，后续普通小事按默认规则走",
     ],
   },
   multi: {
     title: "多店铺版",
     price: "¥199/月",
-    desc: "适合同时管理多个 eBay 店铺或多条商品线，把流程模板按店铺复制、调整和复用。",
+    desc: "适合同时管理多个 eBay 店铺或多条商品线，把流程模板按店铺复制、调整和复用；AI 与素材高成本用量仍按实际消耗或额度另算。",
     cta: "登录后选择方案",
     items: [
       "多店铺/多项目工作台",
@@ -4178,12 +4179,13 @@ const planDetails = {
       "批量铺货基础队列，按市场机会、货源渠道、店铺、订单、客服和物流拆分",
       "模板可以跨店复制，也可以为不同店铺保留例外规则",
       "可添加、删除和调整模板步骤，但不能超出已开发模块",
+      "平台广告费、成交费、物流和退款不是捷境代扣",
     ],
   },
   pro: {
     title: "高级付费版",
     price: "¥299/月",
-    desc: "适合需要更高自动化深度、更多流程模板、更细权限规则和更高处理额度的成熟卖家。",
+    desc: "适合需要更高自动化深度、更多流程模板、更细权限规则和更高处理额度的成熟卖家；基础订阅和 AI/素材用量分开核算。",
     cta: "登录后选择方案",
     items: [
       "更高额度的选品、素材、Listing 和工作记录",
@@ -4191,6 +4193,7 @@ const planDetails = {
       "更细的确认规则：按金额、店铺、品类和动作类型设置",
       "可扩展货源/物流接口配置入口和更完整的来源记录",
       "仍不开放越权执行；资金、刊登、退款、广告和买家消息仍需确认",
+      "大模型、生图生视频和供应商账单会在用量页单独展示",
     ],
   },
 };
@@ -22497,8 +22500,7 @@ function handleSaasAction(button) {
   }
   if (action === "open-public-home") {
     closeAccountMenu();
-    revealSite("intro");
-    showActionToast("已返回捷境官网主页，当前登录会话会保留。");
+    openCurrentPublicHomepage();
     return;
   }
   if (action === "refresh-owner-launch-control") {
@@ -23892,6 +23894,14 @@ function revealSite(scrollTarget = "intro") {
   setTimeout(() => scrollPageTo(scrollTarget), 0);
 }
 
+function openCurrentPublicHomepage() {
+  const target = new URL("./index.html", window.location.href);
+  target.searchParams.set("source", "workbench_logo");
+  target.searchParams.set("v", String(Date.now()));
+  target.hash = "intro";
+  window.location.assign(target.toString());
+}
+
 function selectLandingProfile(value, fromLanding = true) {
   state.dna.merchantStage = value;
   state.preselectedFromLanding = fromLanding;
@@ -25078,6 +25088,79 @@ function renderSaasMerchantBillingGuardrailPanel(ctx = saasMerchantWorkbenchCont
         <span>plan=${escapeHtml(billing.planKey)}</span>
         <span>checkout_ready=${Boolean(billing.checkoutSessions.ready)}</span>
         <span>portal_ready=${Boolean(billing.portal.ready)}</span>
+      </div>
+    </section>
+  `;
+}
+
+function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext()) {
+  const billing = saasMerchantBillingGuardrailState();
+  const providerName = billing.provider.selected || "stripe_test_mock";
+  const pricingRows = [
+    {
+      label: "基础订阅",
+      title: "¥99/月起",
+      detail: "打开 AI CEO、Listing、批量铺货、素材工坊、客服订单、设置和基础工作记录。它是软件使用费，不是无限 AI 成本包。",
+      tone: "green",
+    },
+    {
+      label: "大模型用量",
+      title: "按实际消耗另计",
+      detail: "DeepSeek、OpenAI 或商家 BYOK 的文本、联网总结、长报告和高上下文任务按 token、次数或套餐额度核算。",
+      tone: "amber",
+    },
+    {
+      label: "生图 / 生视频",
+      title: "按素材任务另计",
+      detail: "主图、场景图、详情图、短视频脚本或生成任务按张、秒、任务或供应商账单核算，默认不静默开高成本生成。",
+      tone: "amber",
+    },
+    {
+      label: "平台经营成本",
+      title: "不是捷境代扣",
+      detail: "eBay 费用、广告费、物流和退款不是捷境代扣；捷境只把它们纳入利润测算、报告和确认中心。",
+      tone: "green",
+    },
+  ];
+  const billingRules = [
+    ["先显示后收费", "正式收费前必须看见 Checkout、Portal、webhook 和订阅状态；当前 staging 仍不触发真实扣费。"],
+    ["欠费不删资料", "欠费、取消或额度耗尽时，只停联网模型、素材生成和 provider job，历史资料继续可读。"],
+    ["高风险仍确认", "真实发布、采购付款、退款、广告预算和敏感客服承诺仍进入决策中心。"],
+  ];
+  return `
+    <section class="saas-settings-card saas-merchant-pricing-model" aria-label="捷境订阅和用量计费说明">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>计费模型</span>
+          <strong>订阅是基础功能月费，AI 和素材按用量另算</strong>
+          <p>商家只需要分清三件事：捷境收基础订阅，大模型和生图生视频按实际消耗另计，eBay/物流/广告/退款属于平台经营成本。</p>
+        </div>
+        <em>${escapeHtml(providerName)}</em>
+      </div>
+      <div class="saas-merchant-pricing-model-grid">
+        ${pricingRows
+          .map(
+            (row) => `
+              <article class="is-${escapeHtml(row.tone)}">
+                <span>${escapeHtml(row.label)}</span>
+                <strong>${escapeHtml(row.title)}</strong>
+                <small>${escapeHtml(row.detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-merchant-pricing-model-rules">
+        ${billingRules
+          .map(
+            ([title, detail]) => `
+              <article>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
       </div>
     </section>
   `;
@@ -29629,20 +29712,26 @@ function renderSaasSettingsBillingFocusPanel(ctx = saasMerchantWorkbenchContext(
   const billing = saasMerchantBillingGuardrailState();
   return renderSaasSettingsFocusPanel({
     eyebrow: "订阅与安全",
-    title: "欠费或超量只停高成本任务，不删除经营资料",
-    detail: "查看套餐权益、额度状态和安全边界。收款配置、支付密钥和上线检查不会出现在日常工作流里。",
+    title: "基础订阅保留工作台，AI 用量和素材生成单独核算",
+    detail: "订阅负责打开核心经营功能；大模型、生图生视频和高成本 provider 任务按实际消耗或套餐额度计算。收款密钥和上线检查不会出现在日常工作流里。",
     rows: [
       {
-        label: "当前权益",
-        title: billing.entitlementActive ? "可用" : billing.label,
-        detail: billing.note,
+        label: "基础订阅",
+        title: "¥99/月起",
+        detail: "覆盖 AI CEO、Listing、批量铺货、素材工坊、客服订单和基础工作记录。",
+        tone: "green",
+      },
+      {
+        label: "AI 与素材用量",
+        title: billing.blocksNow ? "已暂停" : "受额度保护",
+        detail: "模型调用、联网报告、生图生视频和长任务按实际消耗或套餐额度核算。",
         tone: billing.tone,
       },
       {
-        label: "耗费额度的任务",
-        title: billing.blocksNow ? "已暂停" : "受额度保护",
-        detail: "AI CEO 联网、模型和素材生成会按套餐权益停用。",
-        tone: billing.blocksNow ? "red" : "green",
+        label: "平台费用",
+        title: "不由捷境代扣",
+        detail: "eBay 成交费、广告费、物流和退款只进入利润测算与确认中心。",
+        tone: "green",
       },
       {
         label: "数据保护",
@@ -31190,8 +31279,9 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       label: "订阅与安全",
       detail: "套餐 / 安全",
       title: "订阅与安全",
-      intro: "查看套餐、额度、欠费停用和账号安全边界。",
+      intro: "查看基础订阅、AI 用量、素材生成、欠费停用和账号安全边界。",
       panels: [
+        renderSaasMerchantPricingModelPanel(ctx),
         renderSaasSettingsBillingFocusPanel(ctx),
         renderSaasMerchantSecurityBoundaryPanel(),
       ],

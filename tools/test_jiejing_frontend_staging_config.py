@@ -340,6 +340,13 @@ def main() -> int:
         if onboarding_control_marker not in app_js + app_html + styles_css:
             return fail(f"missing onboarding control-room marker: {onboarding_control_marker}")
     for billing_guardrail_marker in [
+        "function renderSaasMerchantPricingModelPanel",
+        "saas-merchant-pricing-model",
+        "订阅是基础功能月费，AI 和素材按用量另算",
+        "¥99/月是基础订阅",
+        "大模型用量",
+        "生图 / 生视频",
+        "eBay 费用、广告费、物流和退款不是捷境代扣",
         "renderSaasMerchantBillingGuardrailPanel",
         "saasMerchantBillingGuardrailState",
         "saasMerchantBillingStatusPill",
@@ -371,6 +378,14 @@ def main() -> int:
     ]:
         if billing_guardrail_marker not in app_js + app_html + styles_css:
             return fail(f"missing merchant billing guardrail marker: {billing_guardrail_marker}")
+    for homepage_return_marker in [
+        "function openCurrentPublicHomepage",
+        'new URL("./index.html", window.location.href)',
+        'target.searchParams.set("source", "workbench_logo")',
+        'target.hash = "intro"',
+    ]:
+        if homepage_return_marker not in app_js:
+            return fail(f"workbench logo should return to current public homepage: {homepage_return_marker}")
     refresh_start = app_js.index("async function refreshSaasState")
     refresh_end = app_js.index("async function refreshSaasPublicReadiness", refresh_start)
     refresh_body = app_js[refresh_start:refresh_end]

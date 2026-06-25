@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP_JS = ROOT / "app.js"
 APP_HTML = ROOT / "app.html"
+INDEX_HTML = ROOT / "index.html"
 STYLES = ROOT / "styles.css"
 
 
@@ -15,6 +16,7 @@ def require(text: str, needle: str, label: str) -> None:
 def main() -> None:
     app_js = APP_JS.read_text(encoding="utf-8")
     app_html = APP_HTML.read_text(encoding="utf-8")
+    index_html = INDEX_HTML.read_text(encoding="utf-8")
     styles = STYLES.read_text(encoding="utf-8")
 
     require(app_js, "saasSettingsTab", "settings tab state")
@@ -180,7 +182,7 @@ def main() -> None:
     require(app_js, "const productLabel = saasWorkflowProductLabel(latestTask) || saasModelValueProductLabel", "model value product label is defined before request")
     require(app_js, "function saasModelValueFailureMessage", "precise model value failure toast")
     require(app_js, "模型服务返回错误，可能是模型名不被接受", "merchant-facing model failure reason")
-    require(app_js, "设置地图", "settings readable map")
+    require(app_js, "设置总览", "settings readable overview")
     require(app_html, "只让你处理真正要拍板的事", "decision center low-learning-cost headline")
     require(app_html, "没有重要动作时，这里保持安静", "decision center quiet empty-state promise")
     require(app_html, "全部待办", "decision center non-technical secondary filter")
@@ -192,11 +194,11 @@ def main() -> None:
     require(app_js, "saas-confirm-card-decision", "rendered decision card frontloads merchant choice")
     require(app_js, "saas-confirm-safety-detail", "rendered decision card folds backend evidence")
     require(app_js, "为什么停住", "rendered decision card keeps evidence behind plain-language disclosure")
-    require(app_js, "普通商家只看 5 个入口", "settings map merchant entrance boundary")
-    require(app_js, "复杂的上线、运行和公网防护检查由平台侧处理，日常经营不用看", "settings home low-learning-cost copy")
+    require(app_js, "账号、AI、数据、权限和订阅集中管理", "settings map merchant entrance boundary")
+    require(app_js, "这里处理连接、权限、订阅和安全边界。商品刊登、素材、客服和确认动作继续在工作台完成。", "settings home low-learning-cost copy")
     require(app_js, "商品、订单、政策、费用等来源可追溯", "settings status merchant-facing data copy")
     require(app_js, "店铺数据、来源记录和同步缺口", "settings data panel merchant-facing title")
-    require(app_js, "什么时候需要打开设置", "settings usage-rule section")
+    require(app_js, "常见情况", "settings usage-rule section")
     require(app_js, "主理人高级区", "settings workflow compact boundary")
     require(app_js, "AI 与素材", "merchant-friendly model settings title")
     require(app_js, "function saasIsEnglishHeavyMerchantText", "legacy English report display guard")
@@ -288,8 +290,8 @@ def main() -> None:
     for required_marker in [
         "function renderSaasSettingsOneGlanceStrip",
         "saas-settings-one-glance",
-        "本页只看三件事",
-        "先理解状态，再决定要不要操作",
+        "本页重点",
+        "先看状态，再处理需要补齐的项目",
         "普通聊天不进长期经营记忆",
         "只给主理人管理员",
     ]:
@@ -303,6 +305,7 @@ def main() -> None:
         "renderSaasSettingsDataFocusPanel(ctx)",
         "renderSaasSettingsGovernanceFocusPanel()",
         "renderSaasSettingsBillingFocusPanel(ctx)",
+        "renderSaasMerchantPricingModelPanel(ctx)",
         "主理人高级区",
         "正式收费和公网安全",
         "运行可靠性",
@@ -325,6 +328,14 @@ def main() -> None:
     require(settings_layout_body, 'activeTab.id === "general"', "settings overview-only map guard")
     require(settings_layout_body, 'isOverview ? renderSaasSettingsReadableMap(activeTab.id) : ""', "settings child pages skip redundant map")
     require(settings_layout_body, "renderSaasSettingsOneGlanceStrip(activeTab.id)", "settings child pages render one-glance summary")
+    for billing_model_marker in [
+        "基础订阅保留工作台",
+        "AI 用量和素材生成单独核算",
+        "基础订阅不包含无限模型",
+        "eBay 费用、广告费、物流和退款不是捷境代扣",
+        "openCurrentPublicHomepage",
+    ]:
+        require(app_js + index_html + app_html + styles, billing_model_marker, "settings billing model and homepage return copy")
     draft_start = app_js.index("function renderSaasListingDraftEditor")
     draft_end = app_js.index("function renderSaasListingGapAndRiskPanel", draft_start)
     draft_body = app_js[draft_start:draft_end]

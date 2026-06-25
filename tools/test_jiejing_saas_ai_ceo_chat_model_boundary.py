@@ -297,8 +297,8 @@ def main() -> int:
         if chat.get("memory_policy") != "transient_no_long_term_memory" or chat.get("long_term_memory") is not False:
             return fail(f"normal date question must not enter long-term merchant memory: {chat}")
         model_client = chat.get("model_client", {})
-        if model_client.get("provider_key") != "deepseek" or model_client.get("model") != "deepseek-chat":
-            return fail(f"AI CEO chat should expose sanitized provider/model metadata, got {model_client}")
+        if model_client.get("provider_key") != "fast_route" or model_client.get("secret_exposed") is not False:
+            return fail(f"local clock answer should use the no-secret fast route, got {model_client}")
         if "2026年5月25日" not in str(chat.get("answer") or ""):
             return fail("AI CEO clock answer should use the supplied client date context")
         if FakeModelHandler.calls:

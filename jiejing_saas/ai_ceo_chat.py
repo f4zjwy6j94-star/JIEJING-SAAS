@@ -258,6 +258,22 @@ def run_ai_ceo_fast_turn(
     realtime_kind = _classify_external_realtime_request(safe_message)
     route = _classify_ai_ceo_route(safe_message, realtime_kind=realtime_kind)
     route_meta = ai_ceo_route_metadata(safe_message, route=route, realtime_kind=realtime_kind)
+    local_clock_kind = _classify_local_clock_request(safe_message)
+    if local_clock_kind:
+        return {
+            "status": "local_clock_answered",
+            "answer": _local_clock_answer(
+                kind=local_clock_kind,
+                client_now=client_now,
+                client_timezone=client_timezone,
+            ),
+            "context": context,
+            "model_client": model_context,
+            **route_meta,
+            "frontend_gets_model_api_key": False,
+            "runtime_gets_raw_ebay_token": False,
+            "secret_exposed": False,
+        }
     if not realtime_kind:
         return None
     realtime_search = _run_realtime_search(kind=realtime_kind, message=safe_message)
