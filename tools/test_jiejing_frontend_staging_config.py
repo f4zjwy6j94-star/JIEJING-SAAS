@@ -26,7 +26,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260625-home-settings-v1"
+    frontend_asset_version = "20260625-onboarding-refresh-v1"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -77,9 +77,14 @@ def main() -> int:
         "20260624-confirm-v2",
         "20260624-settings-v1",
         "20260624-ceo-route-v2",
+        "20260625-home-settings-v1",
     ]:
         if stale_asset_version in index_html + app_html:
             return fail(f"frontend entry files still reference stale asset version: {stale_asset_version}")
+    if 'document.documentElement.classList.remove("app-direct-start", "saas-public-direct-start")' not in app_js:
+        return fail("returning from the workbench logo to the homepage must clear direct-start shell classes")
+    if 'background: url("./assets/jiejing-app-icon.svg?v=20260619-brand-icon-v1") center / contain no-repeat;' not in styles_css:
+        return fail("public SaaS brand mark must use the JIEJING app icon instead of a black fallback block")
     for forbidden_brand in [
         "捷境 Jiejing",
         "Jiejing / 捷境",

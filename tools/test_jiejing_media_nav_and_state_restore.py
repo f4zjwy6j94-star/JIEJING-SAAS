@@ -101,11 +101,13 @@ def main() -> int:
         return fail("registration should derive a placeholder company name without asking in the login form")
     for marker in [
         "markEntryOnboardingCompleted()",
+        "function hasEntryOnboardingCompleted",
         'activePath = "opened"',
-        "openLoggedInExperience(activePath)",
+        "openLoggedInExperience(activePath, { onboarded: true })",
+        'if (hasEntryOnboardingCompleted())',
     ]:
         if marker not in index_html:
-            return fail(f"login restore must reopen the workbench without repeating onboarding: {marker}")
+            return fail(f"login restore must respect completed onboarding before reopening workbench: {marker}")
 
     for marker in [
         "saasLastCeoCommand",
@@ -149,7 +151,7 @@ def main() -> int:
     if "if (isSaasPublicMvpMode())" not in ceo_submit_body:
         return fail("public SaaS AI CEO submit should use the real command routing path before legacy media demo routing")
     for marker in [
-        "20260625-home-settings-v1",
+        "20260625-onboarding-refresh-v1",
     ]:
         if marker not in app_html + index_html:
             return fail(f"frontend cache version must advance after owner publish UI change: {marker}")

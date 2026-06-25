@@ -12866,6 +12866,14 @@ function saveSaasSessionToStorage(storeId = "") {
   renderAccountMenu();
 }
 
+function clearStoredSaasStoreContext() {
+  try {
+    localStorage.removeItem(saasStorageKeys.storeId);
+  } catch (error) {
+    // Store context is a no-secret convenience cache.
+  }
+}
+
 function shouldPersistSaasBearerTokenForDev() {
   return !isSaasPublicMvpMode();
 }
@@ -13024,7 +13032,7 @@ function buildSaasProtectedStateSnapshot() {
 function saveSaasProtectedStateSnapshot() {
   if (!isSaasPublicMvpMode() || !hasSaasProtectedBackendState()) return;
   try {
-    localStorage.setItem(saasStorageKeys.protectedSnapshot, JSON.stringify(buildSaasProtectedStateSnapshot()));
+    localStorage.setItem(saasProtectedSnapshotStorageKey(), JSON.stringify(buildSaasProtectedStateSnapshot()));
   } catch (error) {
     // Snapshot is an optional no-secret fast-restore cache. The live backend remains the source of truth.
   }
@@ -13034,8 +13042,9 @@ function hydrateSaasProtectedStateFromCache() {
   if (!isSaasPublicMvpMode() || state.saasProtectedStateReady || hasSaasProtectedBackendState()) return false;
   if (!hasSaasProtectedSessionCandidate()) return false;
   try {
-    const snapshot = JSON.parse(localStorage.getItem(saasStorageKeys.protectedSnapshot) || "null");
+    const snapshot = JSON.parse(localStorage.getItem(saasProtectedSnapshotStorageKey()) || "null");
     if (!snapshot || snapshot.version !== "2026-05-24-fast-restore") return false;
+    if (String(snapshot.account_key || "").toLowerCase() !== saasOnboardingAccountKey()) return false;
     const savedAt = Date.parse(snapshot.saved_at || "");
     if (!Number.isFinite(savedAt) || Date.now() - savedAt > 1000 * 60 * 60 * 24 * 14) return false;
     state.saasIdentity = snapshot.identity || state.saasIdentity || null;
@@ -13080,10 +13089,15 @@ function clearSaasSessionFromStorage() {
     sessionStorage.removeItem(saasStorageKeys.token);
     localStorage.removeItem(saasStorageKeys.sessionHint);
     localStorage.removeItem(saasStorageKeys.token);
+    localStorage.removeItem(saasProtectedSnapshotStorageKey());
     localStorage.removeItem(saasStorageKeys.protectedSnapshot);
+    clearStoredSaasStoreContext();
   } catch (error) {
     // Storage can be disabled in local file mode; clearing in-memory state is enough.
   }
+  state.saasLastCeoCommand = null;
+  state.saasAiCeoThread = [];
+  state.saasAiCeoLatestTurn = null;
   renderAccountMenu();
 }
 
@@ -13148,6 +13162,8 @@ function rememberSaasAuthAccount(session = {}, fallbackEmail = "") {
       return !sameKey && !sameEmail;
     });
     writeKnownSaasAccounts([record, ...accounts]);
+    clearStoredSaasStoreContext();
+    hydrateSaasCeoAccountScopedLocalState();
   } catch (error) {
     // Account memory is optional; login still works without browser storage.
   }
@@ -13166,6 +13182,10 @@ function saasOnboardingAccountKey() {
 
 function saasOnboardingDoneStorageKey() {
   return `${saasStorageKeys.onboardingDone}:${saasOnboardingAccountKey()}`;
+}
+
+function saasProtectedSnapshotStorageKey() {
+  return `${saasStorageKeys.protectedSnapshot}:${saasOnboardingAccountKey()}`;
 }
 
 function hasCompletedSaasOnboarding() {
@@ -13193,6 +13213,12 @@ function markSaasOnboardingCompleted() {
   } catch (error) {
     // Onboarding persistence is best effort; the in-session route still opens the workbench.
   }
+}
+
+function shouldOpenSaasAppRoute(params = new URLSearchParams(window.location.search)) {
+  if (!isSaasPublicMvpMode()) return true;
+  if (params.get("onboarded") === "1") return true;
+  return hasCompletedSaasOnboarding();
 }
 
 function hasSaasProtectedSessionCandidate() {
@@ -17713,10 +17739,21 @@ async function requestSaasAiCeoChat(command = state.saasLastCeoCommand) {
     return {
       ai_ceo_chat: {
         status: "model_call_failed",
-        answer: `AI CEO 暂时没有返回结果：${publicRuntimeText(error.message || error)}。`,
+        answer: saasAiCeoMerchantSafeFailureText(error),
       },
     };
   }
+}
+
+function saasAiCeoMerchantSafeFailureText(error) {
+  const raw = String(error?.message || error || "").toLowerCase();
+  let reason = "AI 通道暂时不可用";
+  if (raw.includes("402") || raw.includes("quota") || raw.includes("payment") || raw.includes("billing")) {
+    reason = "当前体验额度或订阅状态挡住了模型调用";
+  } else if (raw.includes("timeout") || raw.includes("network") || raw.includes("fetch")) {
+    reason = "网络或模型连接暂时不稳定";
+  }
+  return `AI CEO 已接住这条消息，但${reason}。这次不会触发扣费、不会写入 eBay，也不会把普通聊天写入长期经营记忆；如果这是经营任务，我会先停在对应流程和决策中心边界。`;
 }
 
 function classifySaasLocalClockRequest(text = "") {
@@ -23844,6 +23881,8 @@ function scrollPageTo(target, behavior = "smooth") {
 }
 
 function revealSite(scrollTarget = "intro") {
+  document.documentElement.classList.remove("app-direct-start", "saas-public-direct-start");
+  document.documentElement.dataset.view = "site";
   entryShell.classList.add("is-hidden");
   onboardingShell.classList.add("is-hidden");
   appShell.classList.add("is-hidden");
@@ -23886,6 +23925,14 @@ function applyStartupShellVisibility() {
     start === "app" ||
     params.get("onboarded") === "1";
   if (!shouldOpenApp) return false;
+  if (isSaasPublicMvpMode() && start === "app" && !shouldOpenSaasAppRoute(params)) {
+    entryShell.classList.add("is-hidden");
+    siteShell.classList.add("is-hidden");
+    appShell.classList.add("is-hidden");
+    onboardingShell.classList.remove("is-hidden");
+    document.body.classList.remove("site-locked");
+    return true;
+  }
   const safeView = normalizeSaasProtectedView(params.get("view") || "cockpit");
   entryShell.classList.add("is-hidden");
   siteShell.classList.add("is-hidden");
@@ -31669,6 +31716,19 @@ function persistSaasAiCeoThread() {
   }
 }
 
+function hydrateSaasCeoAccountScopedLocalState() {
+  state.saasLastCeoCommand = loadSaasLastCeoCommand();
+  state.saasAiCeoThread = loadSaasAiCeoThread();
+  state.saasAiCeoLatestTurn = state.saasAiCeoThread.length
+    ? state.saasAiCeoThread[state.saasAiCeoThread.length - 1]
+    : null;
+  return {
+    scope: saasCeoCommandStorageScope(),
+    turns: state.saasAiCeoThread.length,
+    has_command: Boolean(state.saasLastCeoCommand),
+  };
+}
+
 function upsertSaasAiCeoThreadTurn(turn = {}) {
   const latest = normalizeSaasAiCeoLatestTurn(turn);
   if (!latest || !shouldKeepSaasAiCeoThreadTurn(latest)) return null;
@@ -33496,6 +33556,12 @@ function applyStartupRoute() {
 
   if (start === "app" || onboarded) {
     if (isSaasPublicMvpMode()) {
+      if (start === "app" && !shouldOpenSaasAppRoute(params)) {
+        state.wizardStep = 0;
+        renderOnboarding();
+        openOnboarding();
+        return;
+      }
       openApp(normalizeSaasProtectedView(params.get("view") || "cockpit"));
       return;
     }

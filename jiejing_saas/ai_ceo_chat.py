@@ -176,11 +176,14 @@ def run_ai_ceo_chat(
     try:
         result = model_client.generate_text(system_prompt=system_prompt, user_prompt=user_prompt, temperature=0.2)
     except Exception as exc:  # pragma: no cover - provider dependent
+        failure_code, failure_reason = _classify_model_failure(exc)
         return {
             "status": "model_call_failed",
-            "blocked_by": ["model_provider_error"],
-            "answer": f"AI CEO 暂时没有返回结果：{_safe_error(exc)}。没有使用固定话术代替真实结果。",
+            "blocked_by": [failure_code],
+            "answer": _model_unavailable_fallback_answer(route_meta, failure_reason),
             "context": context,
+            "model_client": model_context,
+            "provider_error_type": failure_code,
             **route_meta,
             "frontend_gets_model_api_key": False,
             "runtime_gets_raw_ebay_token": False,
@@ -192,7 +195,7 @@ def run_ai_ceo_chat(
         return {
             "status": "model_call_failed",
             "blocked_by": ["empty_model_answer"],
-            "answer": "AI CEO 暂时没有返回可展示内容。没有使用固定话术代替真实结果。",
+            "answer": _model_unavailable_fallback_answer(route_meta, "模型服务这次没有返回可展示内容。"),
             "context": context,
             "model_client": _public_model_context(result, model_client, model_resolution),
             **route_meta,
@@ -1303,6 +1306,35 @@ def _public_model_client(result: dict[str, Any] | None, model_client: Any) -> di
         "model": _safe_text(result.get("model") or getattr(model_client, "model", ""), limit=120),
         "configured": bool(result.get("model_configured", True)),
     }
+
+
+def _classify_model_failure(exc: Exception) -> tuple[str, str]:
+    raw = str(exc or "")
+    lowered = raw.lower()
+    if "402" in lowered or any(item in lowered for item in ("quota", "balance", "billing", "payment", "credit", "insufficient")):
+        return "model_quota_or_billing_limited", "模型服务返回余额、额度或计费限制。"
+    if any(item in lowered for item in ("timeout", "timed out", "connection", "network", "temporarily unavailable")):
+        return "model_network_or_timeout", "模型连接暂时不稳定。"
+    if "401" in lowered or "403" in lowered or any(item in lowered for item in ("unauthorized", "forbidden", "invalid api key")):
+        return "model_auth_or_permission_error", "模型连接权限暂时不可用。"
+    return "model_provider_error", "模型服务暂时没有返回可展示内容。"
+
+
+def _model_unavailable_fallback_answer(route_meta: dict[str, Any], reason: str) -> str:
+    route = str((route_meta or {}).get("route") or "")
+    if route == AI_CEO_ROUTE_CONFIRMATION:
+        next_step = "如果这条指令涉及发布、改价、库存、退款、广告或承诺，我会先停在决策中心，等你确认后才允许继续。"
+    elif route == AI_CEO_ROUTE_EBAY_WORKFLOW:
+        next_step = "如果这是 eBay 经营任务，我会先把它分到 Listing、批量铺货、素材工坊、客服订单或决策中心，不会直接执行真实动作。"
+    elif route == AI_CEO_ROUTE_EXTERNAL_REALTIME:
+        next_step = "如果问题需要实时数据，我会要求有来源和时间戳，不能用旧知识硬答。"
+    else:
+        next_step = "你可以继续追问普通问题；普通聊天默认不会进入长期经营记忆。"
+    return (
+        f"AI CEO 已接住这条消息，但当前 AI 通道暂时不可用：{reason}"
+        "这次没有触发扣费，没有写入 eBay，也没有用固定话术冒充真实模型结果。"
+        f"{next_step}"
+    )
 
 
 def _public_model_context(

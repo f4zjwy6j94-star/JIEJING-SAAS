@@ -4,9 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="prefetch" href="./app.html?start=app&view=cockpit" as="document" />
-    <link rel="prefetch" href="./app.js?v=20260625-home-settings-v1" as="script" />
+    <link rel="prefetch" href="./app.js?v=20260625-onboarding-refresh-v1" as="script" />
     <link rel="prefetch" href="./assets/jiejing-settings-panels.js?v=20260620-owner-launch-control-v5" as="script" />
-    <link rel="prefetch" href="./styles.css?v=20260625-home-settings-v1" as="style" />
+    <link rel="prefetch" href="./styles.css?v=20260625-onboarding-refresh-v1" as="style" />
     <title>捷境 · eBay AI CEO 自动化工作台</title>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260619-brand-icon-v1" type="image/svg+xml" />
     <style>
@@ -4651,8 +4651,8 @@
         const assets = [
           ["prefetch", "./app.html?start=app&view=workflow", "document"],
           ["preload", "./assets/jiejing-settings-panels.js?v=20260620-owner-launch-control-v5", "script"],
-          ["preload", "./app.js?v=20260625-home-settings-v1", "script"],
-          ["preload", "./styles.css?v=20260625-home-settings-v1", "style"],
+          ["preload", "./app.js?v=20260625-onboarding-refresh-v1", "script"],
+          ["preload", "./styles.css?v=20260625-onboarding-refresh-v1", "style"],
         ];
         assets.forEach(([rel, href, as]) => {
           if (document.querySelector(`link[href="${href}"]`)) return;
@@ -5869,12 +5869,17 @@
       function continueAfterLogin(mode = "login", email = "") {
         entryLoggedIn = true;
         if (mode === "login") {
-          const savedPath = savedEntryOnboardingPath(email || lastEntryAuthAccount);
+          const accountKey = email || lastEntryAuthAccount;
+          const savedPath = savedEntryOnboardingPath(accountKey);
           if (savedPath && pathData[savedPath]) activePath = savedPath;
-          if (!savedPath) activePath = "opened";
-          markEntryOnboardingCompleted();
-          showToast("已登录。正在打开 AI CEO 工作台。");
-          openLoggedInExperience(activePath);
+          if (hasEntryOnboardingCompleted(accountKey)) {
+            if (!savedPath) activePath = "opened";
+            showToast("已登录。正在打开 AI CEO 工作台。");
+            openLoggedInExperience(activePath, { onboarded: true });
+            return;
+          }
+          showEntryModes();
+          showToast("已登录。请先完成商家身份向导。");
           return;
         }
         showEntryModes();
@@ -5994,11 +5999,12 @@
         }[key] || "newbie";
       }
 
-      function openLoggedInExperience(key) {
+      function openLoggedInExperience(key, options = {}) {
         const target = new URL("./app.html", window.location.href);
         target.searchParams.set("start", "app");
         target.searchParams.set("view", "cockpit");
         target.searchParams.set("stage", appStageForPath(key));
+        if (options.onboarded) target.searchParams.set("onboarded", "1");
         target.searchParams.set("v", String(Date.now()));
         window.location.replace(target.toString());
       }
@@ -6009,7 +6015,14 @@
 
       function openWorkbenchOrAuth() {
         if (hasEntrySaasSessionCandidate()) {
-          openLoggedInExperience(savedEntryOnboardingPath() || activePath || "opened");
+          const savedPath = savedEntryOnboardingPath();
+          if (hasEntryOnboardingCompleted()) {
+            openLoggedInExperience(savedPath || activePath || "opened", { onboarded: true });
+            return;
+          }
+          entryLoggedIn = true;
+          openNextStepModal("path");
+          showToast("请先完成商家身份向导，再进入工作舱。");
           return;
         }
         openNextStepModal("path");
@@ -6020,7 +6033,7 @@
         warmWorkspaceAssets();
         markEntryOnboardingCompleted();
         showToast("向导选择已保存，正在进入 AI CEO 工作舱。");
-        openLoggedInExperience(activePath);
+        openLoggedInExperience(activePath, { onboarded: true });
       }
 
       function renderEntryModal() {

@@ -31082,10 +31082,10 @@ body.saas-public-mvp .brand-mark {
   width: 42px;
   height: 42px;
   border-color: rgba(8, 118, 110, 0.18);
-  background:
-    linear-gradient(145deg, #0a1714, #123c37),
-    #0a1714;
-  color: #ffffff;
+  background: url("./assets/jiejing-app-icon.svg?v=20260619-brand-icon-v1") center / contain no-repeat;
+  color: transparent;
+  font-size: 0;
+  line-height: 0;
   box-shadow: 0 16px 30px rgba(8, 118, 110, 0.18);
 }
 

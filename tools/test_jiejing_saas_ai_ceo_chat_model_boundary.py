@@ -161,6 +161,8 @@ def main() -> int:
     env["JIEJING_VAULT_LOCAL_SECRET_RESOLVER_ENABLED"] = "1"
     env["JIEJING_VAULT_LOCAL_SECRET_STORE_PATH"] = str(OUT / "local-model-secrets.json")
     env["JIEJING_ENABLE_HERMES_WSL_SECRET_LOOKUP"] = "0"
+    env["JIEJING_BILLING_PROVIDER"] = "stripe_test_mock"
+    env["JIEJING_QUOTA_ENFORCEMENT_ENABLED"] = "1"
     env["JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED"] = "1"
     env["JIEJING_AI_CEO_REALTIME_MODEL_SYNTHESIS_ENABLED"] = "1"
     env["TAVILY_API_KEY"] = "unit-test-search-credential-placeholder"
@@ -200,6 +202,11 @@ def main() -> int:
         token = str(auth.get("token") or "")
         if not token:
             return fail("registration should return a bearer token")
+        billing_trial = auth.get("billing_trial") if isinstance(auth.get("billing_trial"), dict) else {}
+        if billing_trial.get("ok") is not True:
+            return fail(f"registration should seed no-charge beta entitlement under stripe_test_mock: {billing_trial}")
+        if billing_trial.get("triggers_real_charge") is not False or billing_trial.get("calls_stripe_api") is not False:
+            return fail(f"registration trial must not call Stripe or trigger a real charge: {billing_trial}")
 
         store = post_json(
             f"{base_url}/stores",

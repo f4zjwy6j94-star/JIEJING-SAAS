@@ -24,6 +24,15 @@ def main() -> int:
         "saasAiCeoLatestTurn",
         "saasAiCeoThread",
         "ceoThread: \"jiejing_saas_ceo_thread\"",
+        "function saasProtectedSnapshotStorageKey",
+        "function hydrateSaasCeoAccountScopedLocalState",
+        "function clearStoredSaasStoreContext",
+        "localStorage.setItem(saasProtectedSnapshotStorageKey()",
+        "localStorage.getItem(saasProtectedSnapshotStorageKey()",
+        "localStorage.removeItem(saasProtectedSnapshotStorageKey())",
+        "AI CEO 已接住这条消息，但",
+        "不会触发扣费、不会写入 eBay",
+        "function saasAiCeoMerchantSafeFailureText",
         "function renderSaasAiCeoLatestReplyMarkup",
         'id="ceoChat"',
         "updateSaasAiCeoLatestReply({",
@@ -128,6 +137,7 @@ def main() -> int:
         "后端模型已返回",
         "当前新消息会重新调用后端模型",
         "后端模型请求失败",
+        "AI CEO 暂时没有返回结果：${publicRuntimeText",
         "状态：${latest.status}",
     ]
     for needle in forbidden_chat_copy:

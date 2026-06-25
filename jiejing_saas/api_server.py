@@ -906,6 +906,24 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     company_id=user["default_company_id"],
                     email=user["email"],
                 )
+                try:
+                    billing_trial = apply_test_billing_event(
+                        self.repository,
+                        company_id=user["default_company_id"],
+                        user_id=user["user_id"],
+                        plan_key=str(body.get("plan_key") or "starter"),
+                        action="activate",
+                    )
+                except Exception as exc:  # pragma: no cover - defensive onboarding guardrail
+                    billing_trial = {
+                        "ok": False,
+                        "status": "billing_trial_activation_skipped",
+                        "reason": str(exc.__class__.__name__),
+                        "creates_real_checkout_session": False,
+                        "calls_stripe_api": False,
+                        "triggers_real_charge": False,
+                        "secret_exposed": False,
+                    }
             except sqlite_unique_error() as exc:
                 self._send_error(HTTPStatus.CONFLICT, "email already registered")
                 return
@@ -913,7 +931,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
                 return
             self._send_json(
-                {"token": token, **record, "secret_exposed": False},
+                {"token": token, **record, "billing_trial": billing_trial, "secret_exposed": False},
                 status=HTTPStatus.CREATED,
                 headers=[("set-cookie", self._session_cookie_header(token))],
             )
