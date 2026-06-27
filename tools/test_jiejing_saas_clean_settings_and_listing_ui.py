@@ -345,6 +345,11 @@ def main() -> None:
         "先看能不能继续用，再看哪些费用另算",
         "内测演练，不真实扣费",
         "merchant_visible_billing_status_v1",
+        "merchant_subscription_shutdown_closure_v2",
+        "billing_never_deletes_audit_records",
+        "billing_blocks_metered_work_only",
+        "no_repeat_oauth_for_billing_recovery",
+        "no_model_key_reentry_for_billing_recovery",
         "frontend_gets_payment_secret=false",
         "openCurrentPublicHomepage",
     ]:

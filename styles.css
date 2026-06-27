@@ -38309,6 +38309,100 @@ body.saas-public-mvp .saas-merchant-billing-current-actions {
   margin-top: 10px;
 }
 
+body.saas-public-mvp .saas-merchant-billing-continuity {
+  border-color: rgba(8, 118, 110, 0.16);
+  background: linear-gradient(180deg, #ffffff 0%, #f7fcfa 100%);
+}
+
+body.saas-public-mvp .saas-merchant-billing-continuity .saas-settings-card-head {
+  align-items: flex-start;
+}
+
+body.saas-public-mvp .saas-merchant-billing-continuity .saas-settings-card-head em {
+  align-self: flex-start;
+  max-width: min(100%, 220px);
+  padding: 7px 9px;
+  border: 1px solid rgba(8, 118, 110, 0.18);
+  border-radius: 8px;
+  background: #edf8f5;
+  color: #08766e;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-merchant-billing-continuity-flow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-merchant-billing-continuity-flow article {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(15, 45, 40, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+body.saas-public-mvp .saas-merchant-billing-continuity-flow article.is-green {
+  border-color: rgba(8, 118, 110, 0.2);
+  background: #f2fbf8;
+}
+
+body.saas-public-mvp .saas-merchant-billing-continuity-flow article.is-amber {
+  border-color: rgba(214, 142, 43, 0.25);
+  background: #fffaf1;
+}
+
+body.saas-public-mvp .saas-merchant-billing-continuity-flow article.is-red {
+  border-color: rgba(194, 65, 45, 0.24);
+  background: #fff6f2;
+}
+
+body.saas-public-mvp .saas-merchant-billing-continuity-flow span {
+  width: fit-content;
+  padding: 4px 7px;
+  border-radius: 8px;
+  background: rgba(8, 118, 110, 0.1);
+  color: #08766e;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+body.saas-public-mvp .saas-merchant-billing-continuity-flow strong,
+body.saas-public-mvp .saas-merchant-billing-continuity-note strong {
+  color: #12231f;
+  font-size: 14px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-merchant-billing-continuity-flow small,
+body.saas-public-mvp .saas-merchant-billing-continuity-note p {
+  margin: 0;
+  color: #5d716b;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-merchant-billing-continuity-note {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid rgba(8, 118, 110, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
 body.saas-public-mvp .saas-merchant-billing-guardrail {
   border-color: rgba(8, 118, 110, 0.18);
   background: linear-gradient(180deg, #ffffff 0%, #f8fcfa 100%);

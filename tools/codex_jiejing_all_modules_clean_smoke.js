@@ -652,6 +652,18 @@ async function main() {
                 ) &&
                 text.includes("¥99/月是基础订阅") &&
                 text.includes("用量计费路线"),
+              has_billing_continuity:
+                Boolean(
+                  section?.querySelector(
+                    '.saas-merchant-billing-continuity[data-billing-continuity="merchant_subscription_shutdown_closure_v2"]',
+                  ),
+                ) &&
+                rawText.includes("billing_never_deletes_audit_records") &&
+                rawText.includes("billing_blocks_metered_work_only") &&
+                rawText.includes("no_repeat_oauth_for_billing_recovery") &&
+                rawText.includes("no_model_key_reentry_for_billing_recovery") &&
+                rawText.includes("triggers_real_charge=false") &&
+                rawText.includes("frontend_gets_payment_secret=false"),
               preview: text.trim().slice(0, 180),
             };
           }, tabId),
@@ -675,6 +687,7 @@ async function main() {
       check.settings_model_has_model_panel = modelAudit.has_model_provider_panel || false;
       check.settings_billing_has_current_status = billingAudit.has_billing_current_panel || false;
       check.settings_billing_has_pricing_split = billingAudit.has_billing_pricing_split || false;
+      check.settings_billing_has_continuity = billingAudit.has_billing_continuity || false;
       await page
         .screenshot({ path: path.join(outDir, "connect-model.png"), fullPage: true, timeout: 15000 })
         .catch((error) => screenshotFailures.push({ view: "connect-model", error: String(error.message || error).slice(0, 300) }));
@@ -748,6 +761,7 @@ async function main() {
   if (!connect.settings_model_has_model_panel) failures.push("settings child page content missing");
   if (!connect.settings_billing_has_current_status) failures.push("settings billing current merchant status missing");
   if (!connect.settings_billing_has_pricing_split) failures.push("settings billing pricing split missing");
+  if (!connect.settings_billing_has_continuity) failures.push("settings billing continuity closure missing");
   const media = moduleChecks.find((item) => item.view === "media") || {};
   if (!media.has_media_tabs) failures.push("media tabs missing");
   if (!media.has_media_simple_headline || !media.has_media_simple_flow) failures.push("media simple workflow surface missing");

@@ -25389,6 +25389,80 @@ function renderSaasMerchantBillingCurrentStatusPanel(ctx = saasMerchantWorkbench
   `;
 }
 
+function renderSaasMerchantBillingContinuityPanel(ctx = saasMerchantWorkbenchContext()) {
+  const billing = saasMerchantBillingGuardrailState();
+  const status = billing.blocksNow
+    ? "高成本任务已暂停"
+    : billing.entitlementActive
+      ? "订阅权益可用"
+      : "等待正式开通";
+  const flow = [
+    {
+      step: "01",
+      title: "订阅正常",
+      detail: "AI CEO、Listing、批量铺货、素材工坊、客服与订单保持可用。",
+      tone: "green",
+    },
+    {
+      step: "02",
+      title: "欠费 / 取消 / 额度用尽",
+      detail: "暂停联网模型、长报告、素材生成和其他高成本任务，避免继续产生费用。",
+      tone: billing.blocksNow ? "red" : "amber",
+    },
+    {
+      step: "03",
+      title: "资料继续保留",
+      detail: "历史报告、确认中心、审计证据、店铺资料和规则仍可查看，不因欠费删除。",
+      tone: "green",
+    },
+    {
+      step: "04",
+      title: "恢复使用",
+      detail: "完成续费或人工恢复后刷新用量即可继续，不要求重复 eBay OAuth 或重填模型 key。",
+      tone: "green",
+    },
+  ];
+  return `
+    <section class="saas-settings-card saas-merchant-billing-continuity" data-billing-continuity="merchant_subscription_shutdown_closure_v2" aria-label="续费和停用闭环">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>续费和停用闭环</span>
+          <strong>只停高成本执行，不删除经营资料</strong>
+          <p>这张卡解释订阅、额度和欠费后的真实结果：平台会先保护成本和风险，但不会把商家的经营证据、历史草稿和确认记录清空。</p>
+        </div>
+        <em>${escapeHtml(status)}</em>
+      </div>
+      <div class="saas-merchant-billing-continuity-flow">
+        ${flow
+          .map(
+            (item) => `
+              <article class="is-${escapeHtml(item.tone)}">
+                <span>${escapeHtml(item.step)}</span>
+                <strong>${escapeHtml(item.title)}</strong>
+                <small>${escapeHtml(item.detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-merchant-billing-continuity-note">
+        <strong>商家能理解的一句话</strong>
+        <p>基础订阅管工作台；AI、联网和素材生成按用量另算。停用时先停会继续花钱的执行能力，经营资料和审计记录保留。</p>
+      </div>
+      <div class="saas-merchant-billing-continuity-safety" hidden aria-hidden="true">
+        <span>merchant_subscription_shutdown_closure_v2</span>
+        <span>billing_never_deletes_audit_records</span>
+        <span>billing_blocks_metered_work_only</span>
+        <span>no_repeat_oauth_for_billing_recovery</span>
+        <span>no_model_key_reentry_for_billing_recovery</span>
+        <span>triggers_real_charge=false</span>
+        <span>frontend_gets_payment_secret=false</span>
+        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
+      </div>
+    </section>
+  `;
+}
+
 function renderSaasMerchantBillingGuardrailPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
   const blockedUnits = (billing.blockedUnits.length
@@ -31807,6 +31881,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       panels: [
         renderSaasMerchantPricingModelPanel(ctx),
         renderSaasMerchantBillingCurrentStatusPanel(ctx),
+        renderSaasMerchantBillingContinuityPanel(ctx),
         renderSaasSettingsBillingFocusPanel(ctx),
         renderSaasMerchantSecurityBoundaryPanel(),
       ],
