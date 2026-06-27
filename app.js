@@ -18374,7 +18374,97 @@ async function copySaasSourceRecordsSnapshot() {
   }
 }
 
+function saasReadinessServiceIncident(readiness = state.saasReadiness || {}) {
+  if (!readiness || typeof readiness !== "object") return null;
+  const items = Array.isArray(readiness.items) ? readiness.items : [];
+  const databaseItem = items.find((item) => {
+    const key = String(item?.key || "");
+    const status = String(item?.status || "");
+    return key === "database_reachability" || status.includes("database_unavailable");
+  });
+  const degraded =
+    readiness.degraded === true ||
+    readiness.status === "degraded" ||
+    readiness.degraded_reason === "database_unavailable" ||
+    Boolean(databaseItem);
+  if (!degraded) return null;
+  return {
+    item: databaseItem || null,
+    blockerCount: Math.max(1, Number(readiness.blocker_count || 0)),
+    reason: readiness.degraded_reason || databaseItem?.status || "service_unavailable",
+  };
+}
+
+function saasReadinessMerchantStatus(readiness = state.saasReadiness || {}) {
+  const incident = saasReadinessServiceIncident(readiness);
+  if (incident) {
+    return {
+      incident,
+      tone: "red",
+      label: "系统维护",
+      title: "平台连接正在恢复",
+      detail: "店铺数据、AI 报告和确认中心暂时不能保证完整刷新。已经保存的数据不会被清空；发布、付款、退款、广告和改价仍然保持停止。",
+      next: "稍后刷新状态；不要重复 eBay 授权，也不要重新填写模型密钥。",
+    };
+  }
+  if (readiness.production_ready === true && readiness.can_accept_real_customers === true) {
+    return {
+      tone: "green",
+      label: "正式可用",
+      title: "正式上线门槛已通过",
+      detail: "真实发布、付款、退款、广告和敏感客服承诺仍会进入确认中心。",
+      next: "继续按确认中心处理高风险动作。",
+    };
+  }
+  if (readiness.beta_ready === true) {
+    return {
+      tone: "amber",
+      label: "内测可用",
+      title: "可以继续内测，还不能公开收费上线",
+      detail: "工作台可继续验证，但正式收款、新 eBay 账号验证和生产级外部配置还未完成。",
+      next: "继续打磨工作流；正式收费前先完成外部配置和无真实扣费演练。",
+    };
+  }
+  return {
+    tone: "amber",
+    label: "待完成",
+    title: "上线条件还没完全满足",
+    detail: `${Number(readiness.blocker_count || 0)} 个阻断，${Number(readiness.warning_count || 0)} 个提醒。`,
+    next: "先处理红项，再继续正式上线演练。",
+  };
+}
+
+function renderSaasReadinessIncidentStrip(readiness = state.saasReadiness || {}) {
+  const status = saasReadinessMerchantStatus(readiness);
+  if (!status.incident) return "";
+  return `
+    <div class="saas-readiness-strip saas-service-incident-strip" data-saas-readiness-incident="database">
+      <article class="is-red">
+        <span>${escapeHtml(status.label)}</span>
+        <strong>${escapeHtml(status.title)}</strong>
+        <small>${escapeHtml(status.detail)}</small>
+      </article>
+      <article>
+        <span>下一步</span>
+        <strong>先恢复连接</strong>
+        <small>${escapeHtml(status.next)}</small>
+      </article>
+    </div>
+  `;
+}
+
 function saasMerchantNextAction(ctx = saasMerchantWorkbenchContext()) {
+  const readinessStatus = saasReadinessMerchantStatus(state.saasReadiness || {});
+  if (readinessStatus.incident) {
+    return {
+      tone: readinessStatus.tone,
+      label: readinessStatus.label,
+      title: readinessStatus.title,
+      body: readinessStatus.detail,
+      primaryAction: "refresh",
+      primaryLabel: "刷新状态",
+    };
+  }
   if (hasSaasAccountReadInProgress()) {
     return {
       tone: "green",
@@ -18447,10 +18537,15 @@ function saasMerchantNextAction(ctx = saasMerchantWorkbenchContext()) {
 
 function saasCockpitLaunchGateSummary() {
   const readiness = state.saasReadiness || {};
-  const billing = readiness.provider_status?.billing || state.saasBillingPlan || {};
-  const evidence = readiness.product_evidence || {};
-  const provider = billing.provider || state.saasBillingCheckout?.provider || "waiting";
-  const refreshProof = Number(evidence.ebay_token_refresh_success_count || 0);
+  const readinessStatus = saasReadinessMerchantStatus(readiness);
+  if (readinessStatus.incident) {
+    return {
+      tone: readinessStatus.tone,
+      label: readinessStatus.label,
+      title: readinessStatus.title,
+      detail: readinessStatus.detail,
+    };
+  }
   if (readiness.production_ready === true && readiness.can_accept_real_customers === true) {
     return {
       tone: "green",
@@ -18462,16 +18557,16 @@ function saasCockpitLaunchGateSummary() {
   if (readiness.beta_ready === true) {
     return {
       tone: "amber",
-      label: "Beta 可用",
-      title: "还不是公开收费上线",
-      detail: `billing=${provider} / eBay refresh proof=${refreshProof} / customers=${Boolean(readiness.can_accept_real_customers)}`,
+      label: readinessStatus.label,
+      title: readinessStatus.title,
+      detail: readinessStatus.detail,
     };
   }
   return {
-    tone: "red",
-    label: "上线阻断",
-    title: "基础 readiness 未通过",
-    detail: `warnings=${Number(readiness.warning_count || 0)} / blockers=${Number(readiness.blocker_count || 0)}`,
+    tone: readinessStatus.tone,
+    label: readinessStatus.label,
+    title: readinessStatus.title,
+    detail: readinessStatus.detail,
   };
 }
 
@@ -20718,6 +20813,7 @@ function renderSaasWorkbenchTruthPanel() {
           ? ""
           : renderSaasLoginCard({ compact: true })
       }
+      ${renderSaasReadinessIncidentStrip(readiness)}
       <div class="saas-workbench-truth-grid">
         <article>
           <span>店铺授权</span>

@@ -402,7 +402,7 @@ async function main() {
     return (
       url.pathname.endsWith("/index.html") &&
       url.searchParams.get("start") === "site" &&
-      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260626-mobile-ai-ceo-polish-v6"')
+      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260627-readiness-incident-v7"')
     );
   });
   await accountBPage.screenshot({ path: path.join(outDir, "workbench-logo-homepage-return.png"), fullPage: true }).catch(() => {});

@@ -29,6 +29,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("frontend_js_syntax", ["node", "--check", "app.js"]),
     ("current_state_guard", [sys.executable, "tools/test_jiejing_current_state_guard.py"]),
     ("frontend_staging_config", [sys.executable, "tools/test_jiejing_frontend_staging_config.py"]),
+    ("readiness_incident_ui", [sys.executable, "tools/test_jiejing_readiness_incident_ui.py"]),
     ("first_day_account_smoke", [sys.executable, "tools/test_jiejing_first_day_account_smoke.py"]),
     ("oauth_staging_deploy_contract", [sys.executable, "tools/test_jiejing_oauth_staging_deploy_contract.py"]),
     ("public_staging_proxy_contract", [sys.executable, "tools/test_jiejing_public_staging_proxy_contract.py"]),
