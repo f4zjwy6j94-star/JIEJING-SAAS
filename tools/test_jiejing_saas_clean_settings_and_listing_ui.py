@@ -85,6 +85,7 @@ def main() -> None:
     require(styles, ".saas-ceo-routing-why", "AI CEO route card three-row styling")
     require(app_js, "继续小批量实验台", "AI CEO compact task card bulk next button")
     require(app_js, "一句话交给 AI CEO", "AI CEO low-learning-cost empty title")
+    require(app_js, "first_day_ai_ceo_path_v2", "AI CEO first-day path marker")
     require(app_js, "比如：帮我调研这个商品，整理 Listing 草稿", "AI CEO low-learning-cost composer example")
     require(app_js, "也可以直接问普通问题。", "AI CEO low-learning-cost plain chat hint")
     require(app_js, "current.intent !== \"listing\"", "AI CEO prevents non-Listing intents from being hijacked by Listing")

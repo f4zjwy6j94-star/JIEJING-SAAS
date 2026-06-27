@@ -323,6 +323,7 @@ async function main() {
     const starterPrompts = root?.querySelector(".saas-ai-ceo-starter-prompts");
     const routeCard = root?.querySelector(".saas-ceo-routing-task-card");
     const handoff = root?.querySelector(".saas-ai-ceo-first-run-handoff");
+    const firstDayPath = root?.querySelector('.saas-ai-ceo-first-day-path[data-ai-ceo-first-day-path="first_day_ai_ceo_path_v2"]');
     return {
       has_one_sentence_title: text.includes("一句话交给 AI CEO"),
       has_plain_chat_copy: text.includes("问问题直接答") && text.includes("真实发布、付款、退款和广告先问你"),
@@ -332,6 +333,9 @@ async function main() {
       has_first_run_handoff: Boolean(handoff && handoff.offsetParent !== null),
       has_first_run_handoff_marker: handoff?.getAttribute("data-ai-ceo-first-run-handoff") === "first_run_ai_ceo_handoff_v1",
       handoff_does_not_trigger_real_write: handoff?.getAttribute("data-does-not-trigger-real-write") === "true",
+      has_first_day_path: Boolean(firstDayPath && firstDayPath.offsetParent !== null),
+      first_day_path_step_count: firstDayPath?.querySelectorAll("article").length || 0,
+      has_first_day_path_copy: text.includes("说目标") && text.includes("看判断") && text.includes("再确认"),
       has_first_run_handoff_copy:
         text.includes("直接说经营目标，不用先找功能") &&
         text.includes("点一句只会填入输入框") &&
@@ -795,6 +799,9 @@ async function main() {
     !ceoFirstRunEntry.has_first_run_handoff ||
     !ceoFirstRunEntry.has_first_run_handoff_marker ||
     !ceoFirstRunEntry.handoff_does_not_trigger_real_write ||
+    !ceoFirstRunEntry.has_first_day_path ||
+    ceoFirstRunEntry.first_day_path_step_count !== 3 ||
+    !ceoFirstRunEntry.has_first_day_path_copy ||
     !ceoFirstRunEntry.has_first_run_handoff_copy ||
     ceoFirstRunEntry.first_run_handoff_action_count < 3
   ) {

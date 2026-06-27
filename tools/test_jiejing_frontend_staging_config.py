@@ -26,7 +26,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260627-billing-continuity-v8"
+    frontend_asset_version = "20260627-ai-ceo-first-day-v9"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",

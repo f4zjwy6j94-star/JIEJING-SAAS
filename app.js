@@ -25889,12 +25889,30 @@ function renderSaasAiCeoFirstRunHandoff() {
     "帮我先筛 10 个小商品",
     "我还没接 eBay，先用资料跑草稿",
   ];
+  const firstDaySteps = [
+    ["01", "说目标", "像聊天一样说商品、图片、订单或普通问题。"],
+    ["02", "看判断", "JIEJING 会告诉你该去 Listing、批量、素材、客服还是决策中心。"],
+    ["03", "再确认", "发布、付款、退款、广告和敏感承诺必须等你点头。"],
+  ];
   return `
     <section class="saas-ai-ceo-first-run-handoff" data-ai-ceo-first-run-handoff="first_run_ai_ceo_handoff_v1" data-does-not-trigger-real-write="true" aria-label="AI CEO 开口建议">
       <div class="saas-ai-ceo-first-run-copy">
         <span>可以这样开始</span>
         <strong>直接说经营目标，不用先找功能</strong>
         <p>点一句只会填入输入框；你确认发送后，AI CEO 再判断去 Listing、批量、素材、客服或决策中心。</p>
+      </div>
+      <div class="saas-ai-ceo-first-day-path" data-ai-ceo-first-day-path="first_day_ai_ceo_path_v2" aria-label="AI CEO 首日三步">
+        ${firstDaySteps
+          .map(
+            ([step, title, detail]) => `
+              <article>
+                <span>${escapeHtml(step)}</span>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
       </div>
       <div class="saas-ai-ceo-first-run-actions" aria-label="常用开口">
         ${prompts

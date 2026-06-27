@@ -39345,6 +39345,50 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-first-run-copy p {
   line-height: 1.5;
 }
 
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-first-day-path {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-first-day-path article {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(8, 118, 110, 0.12);
+  border-radius: 8px;
+  background: rgba(247, 251, 248, 0.9);
+  text-align: left;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-first-day-path span {
+  width: fit-content;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(8, 118, 110, 0.1);
+  color: #08766e;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-first-day-path strong {
+  color: #14241f;
+  font-size: 13px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-first-day-path small {
+  color: #5f706b;
+  font-size: 11px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
 body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-first-run-actions {
   display: flex;
   flex-wrap: wrap;
@@ -39515,6 +39559,14 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card .primary-a
   body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-first-run-copy p {
     max-width: 300px;
     font-size: 11px;
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-first-day-path {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-first-day-path article {
+    padding: 9px;
   }
 
   body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-first-run-actions {
