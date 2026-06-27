@@ -35,6 +35,18 @@ ALERT_CONTRACTS = [
         "source": "queue_jobs",
     },
     {
+        "key": "database_endpoint_or_dns_unreachable",
+        "label": "Managed database endpoint or DNS unreachable",
+        "severity": "critical",
+        "source": "operational_health.database_live_probe",
+    },
+    {
+        "key": "cloud_billing_or_resource_suspension",
+        "label": "Cloud billing arrears or managed resource suspension",
+        "severity": "critical",
+        "source": "cloud_account.billing_and_resource_status",
+    },
+    {
         "key": "confirmation_backlog",
         "label": "Merchant confirmation backlog",
         "severity": "warning",
@@ -100,10 +112,11 @@ def build_monitoring_status(settings: SaaSSettings, repository: SaaSRepository) 
         "alert_contracts": ALERT_CONTRACTS,
         "incident_runbooks": runbook,
         "external_monitoring_targets": [
-            "Tencent CLS log topic for safe backend access and audit signals",
-            "Prometheus/Grafana or cloud metrics for latency and queue depth",
-            "Cloud alert for OAuth/Vault/eBay sync failures",
-            "Backup and restore drill alerts for managed database",
+        "Tencent CLS log topic for safe backend access and audit signals",
+        "Prometheus/Grafana or cloud metrics for latency and queue depth",
+        "Cloud alert for OAuth/Vault/eBay sync failures",
+        "Cloud billing balance and managed database endpoint availability alerts",
+        "Backup and restore drill alerts for managed database",
         ],
         "current_blockers": blockers,
         "real_platform_writes_enabled": False,
@@ -145,6 +158,8 @@ def _runbook_status() -> dict[str, Any]:
         "backup_restore_drill_runbook_published": _env_bool("JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED"),
         "post_publish_recovery_runbook_published": _env_bool("JIEJING_POST_PUBLISH_RECOVERY_RUNBOOK_PUBLISHED"),
         "billing_incident_runbook_published": _env_bool("JIEJING_BILLING_INCIDENT_RUNBOOK_PUBLISHED"),
+        "cloud_billing_incident_runbook_published": _env_bool("JIEJING_CLOUD_BILLING_INCIDENT_RUNBOOK_PUBLISHED"),
+        "database_endpoint_incident_runbook_published": _env_bool("JIEJING_DATABASE_ENDPOINT_INCIDENT_RUNBOOK_PUBLISHED"),
     }
     blockers = [key for key, ready in required.items() if not ready]
     return {
@@ -156,6 +171,8 @@ def _runbook_status() -> dict[str, Any]:
             "eBay read-only packet failure",
             "real publish failure or ambiguous 502",
             "billing webhook failure or payment dispute",
+            "cloud billing arrears or managed resource suspension",
+            "managed database endpoint, DNS, or connectivity failure",
             "backup failure or restore drill overdue",
             "model provider failure or runaway cost",
         ],

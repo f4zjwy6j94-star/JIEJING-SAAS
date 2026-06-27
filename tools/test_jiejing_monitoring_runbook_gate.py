@@ -32,6 +32,8 @@ ENV_KEYS = (
     "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED",
     "JIEJING_POST_PUBLISH_RECOVERY_RUNBOOK_PUBLISHED",
     "JIEJING_BILLING_INCIDENT_RUNBOOK_PUBLISHED",
+    "JIEJING_CLOUD_BILLING_INCIDENT_RUNBOOK_PUBLISHED",
+    "JIEJING_DATABASE_ENDPOINT_INCIDENT_RUNBOOK_PUBLISHED",
 )
 
 
@@ -75,15 +77,27 @@ def main() -> int:
                 "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED": "true",
                 "JIEJING_POST_PUBLISH_RECOVERY_RUNBOOK_PUBLISHED": "true",
                 "JIEJING_BILLING_INCIDENT_RUNBOOK_PUBLISHED": "true",
+                "JIEJING_CLOUD_BILLING_INCIDENT_RUNBOOK_PUBLISHED": "true",
+                "JIEJING_DATABASE_ENDPOINT_INCIDENT_RUNBOOK_PUBLISHED": "true",
             }
         )
         ready = build_monitoring_status(settings, repo)
         if ready.get("production_monitoring_ready") is not True:
             return fail(f"monitoring should be ready with CLS and runbook evidence: {ready.get('current_blockers')}")
         alert_keys = {item.get("key") for item in ready.get("alert_contracts", []) if isinstance(item, dict)}
-        for key in {"billing_webhook_failure", "platform_write_failure", "backup_restore_drill_overdue"}:
+        for key in {
+            "billing_webhook_failure",
+            "platform_write_failure",
+            "backup_restore_drill_overdue",
+            "cloud_billing_or_resource_suspension",
+            "database_endpoint_or_dns_unreachable",
+        }:
             if key not in alert_keys:
                 return fail(f"missing paid-launch alert contract: {key}")
+        runbook_dump = json.dumps(ready.get("incident_runbooks", {}), ensure_ascii=False)
+        for required in ("cloud billing arrears", "managed database endpoint"):
+            if required not in runbook_dump:
+                return fail(f"runbook coverage should mention {required}: {runbook_dump}")
         dumped = json.dumps(ready, ensure_ascii=False)
         for forbidden in ("access_token", "refresh_token", "client_secret", "password"):
             if forbidden in dumped:

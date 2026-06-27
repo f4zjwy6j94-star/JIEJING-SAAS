@@ -24,6 +24,8 @@ Required published runbooks:
 - Vault/KMS secret resolution failure.
 - eBay read-only packet or queue sync failure.
 - Queue backlog or stuck job.
+- Cloud billing arrears, resource suspension, or managed database endpoint/DNS
+  failure.
 - Confirmation center backlog.
 - Platform write failure or ambiguous marketplace result.
 - Billing webhook failure, payment failure, or dispute.
@@ -41,6 +43,28 @@ Alert route:
 - During private beta, the alert route can be an owner-operated channel.
 - Before public paid launch, connect Tencent CLS, Grafana/Prometheus, Sentry, or
   an equivalent provider and record live probe evidence.
+- Before public paid launch, configure cloud account balance/resource suspension
+  alerts and managed database endpoint availability alerts. A provider bill,
+  frozen resource, expired endpoint, or DNS failure must page the owner before
+  merchants see degraded readiness.
+
+## Cloud Billing Or Database Endpoint Incident
+
+Use this flow when `/health/deep` or `/readiness/product-saas` reports database
+unavailable, the worker restarts, or the managed database hostname stops
+resolving.
+
+1. Check Tencent Cloud billing balance, arrears status, and the managed
+   PostgreSQL instance state.
+2. Do not repeat eBay OAuth, do not ask merchants to re-enter model keys, and do
+   not switch to a different database as a shortcut.
+3. Restore the cloud account/resource first, then verify the database hostname
+   resolves from both the CVM host and the SaaS container.
+4. Verify `https://app.jiejing.shop/health`, `/health/deep`, and
+   `/readiness/product-saas`.
+5. Verify the worker is stable and queue health is ready.
+6. Run the no-real-write browser smoke and precloud gate before reporting beta
+   readiness restored.
 
 ## Public Security Evidence
 

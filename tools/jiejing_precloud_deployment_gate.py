@@ -35,6 +35,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("public_staging_proxy_contract", [sys.executable, "tools/test_jiejing_public_staging_proxy_contract.py"]),
     ("staging_oauth_operator_flow_tool", [sys.executable, "tools/test_jiejing_staging_ebay_oauth_flow_tool.py"]),
     ("p0_security_guardrails", [sys.executable, "tools/test_jiejing_saas_p0_security_guardrails.py"]),
+    ("monitoring_runbook_gate", [sys.executable, "tools/test_jiejing_monitoring_runbook_gate.py"]),
     ("oauth_callback_vault", [sys.executable, "tools/test_jiejing_ebay_oauth_callback_vault.py"]),
     ("vault_secret_resolver", [sys.executable, "tools/test_jiejing_vault_secret_resolver.py"]),
     ("ebay_credential_preflight", [sys.executable, "tools/test_jiejing_ebay_credential_preflight.py"]),
