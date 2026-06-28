@@ -58,6 +58,9 @@ def main() -> int:
     for marker in [
         "var sessionHint = localStorage.getItem(\"jiejing_saas_backend_session_hint\") === \"1\"",
         "isPublic && !sessionHint",
+        "var browserOnboardingDone = !isPublic && localStorage.getItem(\"jiejing_saas_onboarding_done:browser\") === \"1\"",
+        "const browserOnboardingDone = !isPublic && localStorage.getItem(\"jiejing_saas_onboarding_done:browser\") === \"1\"",
+        "if (!onboardingDone) return;",
     ]:
         if marker not in app_html:
             return fail(f"app shell should restore persistent merchant session before redirect: {marker}")
@@ -70,6 +73,14 @@ def main() -> int:
         return fail("app shell must not let onboarded=1 bypass account-scoped onboarding completion")
     if "params.get(\"onboarded\") === \"1\") return true" in app_js:
         return fail("app route guard must not let onboarded=1 bypass account-scoped onboarding completion")
+
+    for marker in [
+        "!(isSaasPublicMvpMode() && key === `${saasStorageKeys.onboardingDone}:browser`)",
+        "if (isSaasPublicMvpMode() && !shouldOpenSaasAppRoute(params))",
+        "if (!shouldOpenSaasAppRoute(params))",
+    ]:
+        if marker not in app_js:
+            return fail(f"frontend should not let browser-level onboarding state bypass public account onboarding: {marker}")
 
     for marker in [
         "localStorage.setItem(\"jiejing_saas_backend_session_hint\", \"1\")",

@@ -25,9 +25,9 @@
           var isPublic = window.location.protocol !== "file:" && host !== "localhost" && host !== "127.0.0.1" && host !== "::1";
           var sessionHint = localStorage.getItem("jiejing_saas_backend_session_hint") === "1";
           var lastAccount = String(localStorage.getItem("jiejing_saas_last_account") || "").trim().toLowerCase();
-          var onboardingDone =
-            (lastAccount && localStorage.getItem("jiejing_saas_onboarding_done:" + lastAccount) === "1") ||
-            localStorage.getItem("jiejing_saas_onboarding_done:browser") === "1";
+          var accountOnboardingDone = lastAccount && localStorage.getItem("jiejing_saas_onboarding_done:" + lastAccount) === "1";
+          var browserOnboardingDone = !isPublic && localStorage.getItem("jiejing_saas_onboarding_done:browser") === "1";
+          var onboardingDone = accountOnboardingDone || browserOnboardingDone;
           if (!isPublic || onboardingDone) document.documentElement.classList.add("app-direct-start");
           if (isPublic && onboardingDone) document.documentElement.classList.add("saas-public-direct-start");
           try {
@@ -3253,11 +3253,13 @@
         const params = new URLSearchParams(window.location.search);
         const shouldOpenApp = params.get("start") === "app" || params.get("onboarded") === "1";
         if (!shouldOpenApp) return;
+        const host = window.location.hostname;
+        const isPublic = window.location.protocol !== "file:" && host !== "localhost" && host !== "127.0.0.1" && host !== "::1";
         const lastAccount = String(localStorage.getItem("jiejing_saas_last_account") || "").trim().toLowerCase();
-        const onboardingDone =
-          (lastAccount && localStorage.getItem(`jiejing_saas_onboarding_done:${lastAccount}`) === "1") ||
-          localStorage.getItem("jiejing_saas_onboarding_done:browser") === "1";
-        if (params.get("start") === "app" && !onboardingDone) return;
+        const accountOnboardingDone = lastAccount && localStorage.getItem(`jiejing_saas_onboarding_done:${lastAccount}`) === "1";
+        const browserOnboardingDone = !isPublic && localStorage.getItem("jiejing_saas_onboarding_done:browser") === "1";
+        const onboardingDone = accountOnboardingDone || browserOnboardingDone;
+        if (!onboardingDone) return;
 
         const showApp = () => {
           if (document.documentElement.classList.contains("app-direct-start")) return;
@@ -3288,6 +3290,6 @@
       })();
     </script>
     <script src="./assets/jiejing-settings-panels.js?v=20260620-prelaunch-deferred-v1"></script>
-    <script src="./app.js?v=20260628-service-order-clarity-v14"></script>
+    <script src="./app.js?v=20260628-account-onboarding-guard-v1"></script>
   </body>
 </html>

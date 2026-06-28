@@ -13261,7 +13261,9 @@ function hasCompletedSaasOnboarding() {
     return true;
   }
   try {
-    return saasOnboardingDoneStorageKeys().some((key) => localStorage.getItem(key) === "1");
+    return saasOnboardingDoneStorageKeys()
+      .filter((key) => !(isSaasPublicMvpMode() && key === `${saasStorageKeys.onboardingDone}:browser`))
+      .some((key) => localStorage.getItem(key) === "1");
   } catch (error) {
     return false;
   }
@@ -21391,7 +21393,9 @@ async function refreshSaasState(options = {}) {
       Promise.resolve(corePermissions),
       Promise.resolve(coreStores),
       Promise.resolve(coreConnections),
-      optionalSaasFetchFast(`/security/staging-gate?store_id=${encodeURIComponent(store.store_id)}`, { staging_security_gate: null }),
+      saasOwnerLaunchCanView()
+        ? optionalSaasFetchFast(`/security/staging-gate?store_id=${encodeURIComponent(store.store_id)}`, { staging_security_gate: null }, 10000)
+        : Promise.resolve({ staging_security_gate: null, skipped: "platform_internal_admin_only" }),
       saasOwnerLaunchCanView()
         ? optionalSaasFetchFast("/owner/launch-control", { owner_launch_control: state.saasOwnerLaunchControl || null }, 15000)
         : Promise.resolve({ owner_launch_control: null, skipped: "owner_admin_only" }),
@@ -24327,7 +24331,7 @@ function applyStartupShellVisibility() {
     start === "app" ||
     params.get("onboarded") === "1";
   if (!shouldOpenApp) return false;
-  if (isSaasPublicMvpMode() && start === "app" && !shouldOpenSaasAppRoute(params)) {
+  if (isSaasPublicMvpMode() && !shouldOpenSaasAppRoute(params)) {
     entryShell.classList.add("is-hidden");
     siteShell.classList.add("is-hidden");
     appShell.classList.add("is-hidden");
@@ -34411,7 +34415,7 @@ function applyStartupRoute() {
 
   if (start === "app" || onboarded) {
     if (isSaasPublicMvpMode()) {
-      if (start === "app" && !shouldOpenSaasAppRoute(params)) {
+      if (!shouldOpenSaasAppRoute(params)) {
         state.wizardStep = 0;
         renderOnboarding();
         openOnboarding();
