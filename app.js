@@ -3404,7 +3404,7 @@ const activities = [
       summary: [
         ["任务颗粒", "10 段小任务"],
         ["超时处理", "重试 / 拆小 / 降级报告"],
-        ["数据口径", "先数据包，后报告"],
+        ["数据口径", "先资料，后报告"],
         ["发布闸口", "红黄绿状态"],
       ],
       boards: [
@@ -5761,7 +5761,7 @@ function renderCeoCommandSummary(draft = activeCockpitMarketDraft()) {
         <article>
           <span>${state.saasConnected ? "真实工作台" : "未登录预览"}</span>
           <strong>${escapeHtml(draft.status || "可推进")}</strong>
-          <p>${state.saasConnected ? "已登录状态下以 eBay 同步、标准数据包、AI CEO 报告和确认中心为准。" : "这里仅用于说明商品任务怎么推进；登录并同步店铺后，会用真实 eBay 数据包和商家货源资料重新计算。"}</p>
+          <p>${state.saasConnected ? "已登录状态下以 eBay 同步、店铺资料、AI CEO 报告和确认中心为准。" : "这里仅用于说明商品任务怎么推进；登录并同步店铺后，会用真实 eBay 店铺资料和商家货源资料重新计算。"}</p>
         </article>
       </div>
       <div class="ceo-command-actions">
@@ -6308,7 +6308,7 @@ function bindRestoredMediaStudioEvents() {
       showActionToast(
         mode === "independent"
           ? "已切换到独立上传：只生成本次素材草稿，不自动进入正式 Listing。"
-          : "已切换到流程导入：只处理已有 packet、报告或 Listing Package 的素材任务。",
+          : "已切换到流程导入：只处理已有店铺资料、报告或 Listing 草稿的素材任务。",
       );
     });
   });
@@ -7433,7 +7433,7 @@ function renderSaasListingFactoryReportCard(record = null, fallbackTitle = "") {
       <article class="saas-listing-report-card is-empty">
         <span>等待输出</span>
         <strong>${escapeHtml(fallbackTitle)}</strong>
-        <p>还没有从后端读取到这类报告。保存 AI 连接并基于官方 eBay 数据包运行后，这里只显示真实报告，不显示本地样例商品。</p>
+        <p>还没有生成这类报告。保存 AI 连接并读取当前店铺资料后，这里只显示真实报告，不显示本地样例商品。</p>
       </article>
     `;
   }
@@ -7615,7 +7615,7 @@ function renderSaasListingStoreSyncOverview(ctx = saasMerchantWorkbenchContext()
         <div>
           <span>eBay 店铺同步</span>
           <strong>${escapeHtml(storeName)}</strong>
-          <p>防侵权筛查只基于 eBay 官方数据包、新发布表单和商家来源记录。缺标题、品牌、图片、类目或 offer 时，捷境只给缺口，不冒充全店扫描。</p>
+          <p>防侵权筛查只基于当前店铺资料、新发布表单和商家来源记录。缺标题、品牌、图片、类目或 offer 时，捷境只给缺口，不冒充全店扫描。</p>
         </div>
         <button class="primary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !state.saasConnected ? "disabled" : ""}>同步 eBay 商品</button>
       </div>
@@ -7631,8 +7631,8 @@ function renderSaasListingStoreSyncOverview(ctx = saasMerchantWorkbenchContext()
           <small>${inventory.hasDetail ? "已拿到可展示商品明细" : "如果只有数量没有标题/图片，IP 筛查会显示资料缺口"}</small>
         </article>
         <article class="${ctx.hasPacket ? "is-green" : "is-amber"}">
-          <span>官方数据包</span>
-          <strong>${escapeHtml(ctx.latestPacket?.packet_id || "等待同步")}</strong>
+          <span>店铺资料</span>
+          <strong>${escapeHtml(ctx.hasPacket ? "已读取" : "等待同步")}</strong>
           <small>${escapeHtml(ctx.sourceLabel)} · ${ctx.presentCount}/${ctx.coverageTotal} 类资源</small>
         </article>
         <article class="${ipReady && !coverageGaps.length ? "is-green" : "is-amber"}">
@@ -7666,8 +7666,8 @@ function renderSaasListingSyncedProductsPanel(ctx = saasMerchantWorkbenchContext
       <div class="saas-listing-simple-section-head">
         <div>
           <span>eBay 同步商品</span>
-          <strong>${rows.length ? `${rows.length} 条商品/offer 从官方数据包读取` : "等待 eBay 商品同步"}</strong>
-          <p>${inventory.hasDetail ? "这里只显示当前授权账号从 eBay 官方数据包读到的商品，不用历史样例补空白。" : "如果 eBay 当前只返回数量摘要，还需要继续同步商品标题、描述、图片和 item specifics，才能做完整 IP/VeRO 筛查。"}</p>
+          <strong>${rows.length ? `${rows.length} 条商品/offer 从当前店铺读取` : "等待 eBay 商品同步"}</strong>
+          <p>${inventory.hasDetail ? "这里只显示当前授权账号读到的商品，不用历史样例补空白。" : "如果 eBay 当前只返回数量摘要，还需要继续同步商品标题、描述、图片和 item specifics，才能做完整 IP/VeRO 筛查。"}</p>
         </div>
         <button class="secondary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !state.saasConnected ? "disabled" : ""}>更新 eBay 数据</button>
       </div>
@@ -7692,7 +7692,7 @@ function renderSaasListingSyncedProductsPanel(ctx = saasMerchantWorkbenchContext
             </div>`
           : `<article class="saas-listing-empty-state">
               <strong>还没有读到 eBay 商品列表</strong>
-              <p>先在设置里确认 eBay 授权和官方数据包；同步后这里显示 SKU、itemId、价格、库存和状态。没有商品明细时，IP/VeRO 只能对新发布表单做预检，不能声称已扫全店。</p>
+              <p>先在设置里确认 eBay 授权和店铺资料同步；同步后这里显示 SKU、itemId、价格、库存和状态。没有商品明细时，IP/VeRO 只能对新发布表单做预检，不能声称已扫全店。</p>
             </article>`
       }
     </section>
@@ -7720,7 +7720,7 @@ function renderSaasListingIpReadinessPanel(ctx = saasMerchantWorkbenchContext())
         <article class="${coverageGaps.length ? "is-amber" : "is-green"}">
           <span>体检状态</span>
           <strong>${escapeHtml(saasIpRiskStatusLabel(status))}</strong>
-          <small>${escapeHtml(screening.source_packet_id || ctx.latestPacket?.packet_id || "等待官方数据包")}</small>
+          <small>${escapeHtml(screening.source_packet_id ? "来源可追溯" : ctx.hasPacket ? "店铺资料已读取" : "等待店铺资料")}</small>
         </article>
         <article class="${riskItems.length ? "is-amber" : "is-green"}">
           <span>风险命中</span>
@@ -7904,10 +7904,10 @@ function saasPreTestCheckRows(ctx = saasMerchantWorkbenchContext(), payload = nu
   const hasReports = Boolean(latestSaasReportByTypes(["market.report", "market.data_packet"]) || latestSaasReportByTypes(["listing.package", "product.listing"]));
   return [
     {
-      label: "1 店铺连接和官方数据包",
-      status: hasPacket ? "已就绪" : state.saasConnected ? "缺官方数据包" : "未登录",
+      label: "1 店铺连接和店铺资料",
+      status: hasPacket ? "已就绪" : state.saasConnected ? "缺店铺资料" : "未登录",
       tone: hasPacket ? "green" : "red",
-      summary: hasPacket ? `packet ${ctx.latestPacket?.packet_id || "ready"}，店铺和资源来源可追溯。` : "先登录并读取 eBay 官方数据包，不能用旧样例补空白。",
+      summary: hasPacket ? "店铺资料已就绪，商品和资源来源可追溯。" : "先登录并读取 eBay 店铺资料，不能用旧样例补空白。",
     },
     {
       label: "2 账号健康和事故模式",
@@ -8715,13 +8715,13 @@ function saasFirstOrderLaunchRows(ctx = saasMerchantWorkbenchContext()) {
     {
       key: "official_packet",
       label: "01",
-      title: "官方数据先接上",
+      title: "店铺资料先接上",
       status: ctx.hasPacket ? "ready" : "blocked",
       tone: ctx.hasPacket ? "green" : "amber",
-      metric: ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal}` : "waiting",
+      metric: ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal}` : "待同步",
       detail: ctx.hasPacket
-        ? `来源 ${ctx.latestPacket?.packet_id || ctx.sourceLabel}，AI CEO 可以读取标准数据包，不接触 token。`
-        : "先读取 eBay 只读数据包；没有官方 packet 时，只能做表单草稿，不能进入真实发布判断。",
+        ? "当前店铺资料已读取，AI CEO 可以使用整理后的资料，不接触 token。"
+        : "先同步 eBay 店铺资料；没有店铺资料时，只能做表单草稿，不能进入真实发布判断。",
       action: ctx.hasPacket ? "open-activity" : "sync-ebay-readonly",
       actionLabel: ctx.hasPacket ? "看来源记录" : "同步 eBay",
       disabled: state.saasLoading || (!ctx.hasPacket && !activeSaasStore()),
@@ -8735,8 +8735,8 @@ function saasFirstOrderLaunchRows(ctx = saasMerchantWorkbenchContext()) {
       metric: marketReport && listingReport ? "ready" : "pending",
       detail:
         marketReport && listingReport
-          ? "Market Report 和 Listing Package 已有后端记录，可以进入发布体检。"
-          : "先把商家目标、官方数据包和 AI 连接变成可审计报告；普通聊天不写入长期经营记忆。",
+          ? "Market Report 和 Listing Package 已有工作记录，可以进入发布体检。"
+          : "先把商家目标、店铺资料和 AI 连接变成可审计报告；普通聊天不写入长期经营记忆。",
       action: "run-model-value-rehearsal",
       actionLabel: marketReport && listingReport ? "重新生成" : "生成报告",
       disabled: state.saasLoading || !ctx.hasPacket || !isSaasModelConfigured(),
@@ -8764,7 +8764,7 @@ function saasFirstOrderLaunchRows(ctx = saasMerchantWorkbenchContext()) {
         ? "红项直接阻断真实发布；先按修复按钮补来源、类目、图片、利润、政策或账号健康。"
         : greenCount
           ? "绿项只代表可以送确认中心复核，不代表 AI 可以自动发布。"
-          : "创建发布确认单后，后端 preflight 会回填每条阻断项、来源和修复动作。",
+          : "创建发布确认单后，系统会回填每条阻断项、来源和修复动作。",
       action: redCount ? "focus-publish-intake" : "create-publish-confirmation",
       actionLabel: redCount ? "修红项" : "创建体检",
       disabled: state.saasLoading || !ctx.hasPacket,
@@ -8778,7 +8778,7 @@ function saasFirstOrderLaunchRows(ctx = saasMerchantWorkbenchContext()) {
       metric: confirmation?.confirmation_id || "required",
       detail: confirmation
         ? "确认单已创建。真实发布、改价、库存、退款、广告、政策和敏感客服承诺仍必须由商家确认。"
-        : "没有确认单就没有发布入口；这一步是 AI CEO 和真实 eBay 写入之间的硬门禁。",
+        : "没有确认单就没有发布入口；这一步是 AI CEO 和平台发布之间的硬门禁。",
       action: "open-confirm",
       actionLabel: "打开确认中心",
       disabled: !confirmation,
@@ -8924,9 +8924,9 @@ function renderSaasPublishPreflightGuide(ctx = saasMerchantWorkbenchContext()) {
     },
     {
       tone: ctx.hasPacket ? "green" : "amber",
-      label: "账号数据",
-      title: ctx.hasPacket ? "已有官方数据包" : "等待 eBay 只读数据包",
-      detail: ctx.hasPacket ? "可结合账号政策、库存位置和费用数据做更真实的体检。" : "没有官方数据包时只能做资料层体检，不能冒充真实发布验证。",
+      label: "店铺资料",
+      title: ctx.hasPacket ? "已有店铺资料" : "等待 eBay 店铺资料",
+      detail: ctx.hasPacket ? "可结合账号政策、库存位置和费用数据做更真实的体检。" : "没有店铺资料时只能做资料层体检，不能冒充真实发布验证。",
     },
   ];
   const doneCount = cards.filter((card) => card.tone === "green").length;
@@ -9179,7 +9179,7 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
         ${renderSaasPublishFormGroup("平台参数", "类目、库存位置和 item specifics，决定 eBay 是否接受刊登。", [
           renderSaasPublishInputField("类目 ID", "category_id", { value: formValues.category_id, placeholder: "eBay leaf category id" }),
           renderSaasPublishInputField("类目名", "category_leaf", { value: formValues.category_leaf, placeholder: "用于类目相关性体检" }),
-          renderSaasPublishInputField("库存位置 key", "merchant_location_key", { value: formValues.merchant_location_key, placeholder: "从官方数据包 / eBay location 读取" }),
+          renderSaasPublishInputField("库存位置 key", "merchant_location_key", { value: formValues.merchant_location_key, placeholder: "从店铺资料 / eBay location 读取" }),
           renderSaasPublishTextareaField("Item specifics", "item_specifics", {
             value: formValues.item_specifics,
             rows: 4,
@@ -9911,16 +9911,16 @@ function renderSaasProductListingCenter(view) {
   const nextTitle = !state.saasConnected
     ? "先登录捷境账号"
     : !ctx.hasPacket
-      ? "先读取官方 eBay 数据包"
+      ? "先读取 eBay 店铺资料"
       : !isSaasModelConfigured()
         ? "先保存商家自己的 AI 连接"
         : hasLiveListing
           ? "查看真实 Listing Package 并送确认中心复核"
-          : "基于官方数据包生成真实 Listing Package";
+          : "基于店铺资料生成真实 Listing Package";
   const nextCopy = !state.saasConnected
-    ? "当前页面不会创建匿名会话。登录后按账号空间读取店铺、数据包、报告和确认中心。"
+    ? "当前页面不会创建匿名会话。登录后按账号空间读取店铺资料、报告和确认中心。"
     : !ctx.hasPacket
-      ? "Listing 工厂只接收后端标准数据包，不再用本地样例商品填充页面。"
+      ? "Listing 工厂只接收当前账号的店铺资料，不再用本地样例商品填充页面。"
     : !isSaasModelConfigured()
       ? "AI 连接凭证只进入后端密钥边界；前端和执行层不拿原始凭证。"
       : "生成结果会写回报告、商家记忆和确认中心；真实发布、改价、库存、退款、广告和政策仍必须先过决策中心。";
@@ -9930,8 +9930,8 @@ function renderSaasProductListingCenter(view) {
       <header class="product-manager-header saas-real-listing-header">
         <div>
           <p class="eyebrow">Listing 工厂 · 真实状态</p>
-          <h2>这里只显示你的账号、官方 eBay 数据包和模型生成结果</h2>
-          <p class="section-note">旧样例商品不会进入真实工作台。没有官方数据包或模型输出时，页面直接显示缺口和下一步，不用虚构草稿、价格、库存或商品图。</p>
+          <h2>这里只显示你的账号、店铺资料和模型生成结果</h2>
+          <p class="section-note">旧样例商品不会进入真实工作台。没有店铺资料或模型输出时，页面直接显示缺口和下一步，不用虚构草稿、价格、库存或商品图。</p>
         </div>
         <span class="pill ${ctx.official ? "green" : "amber"}">${ctx.official ? "官方 API 数据" : "等待官方数据"}</span>
       </header>
@@ -9984,7 +9984,7 @@ function renderSaasProductListingCenter(view) {
       <details class="saas-listing-nested-details">
         <summary>
           <span>账号与数据证据</span>
-          <small>授权、数据包、资源覆盖和模型证明，按需查看</small>
+          <small>授权、店铺资料、资源覆盖和模型证明，按需查看</small>
         </summary>
         <div class="saas-listing-nested-body">
 
@@ -10017,8 +10017,8 @@ function renderSaasProductListingCenter(view) {
             <small>${escapeHtml(saasStoreStatusLabel(activeConnection?.status || activeStore?.status || "not_connected"))} · ${escapeHtml(activeStore?.marketplace || "EBAY_US")}</small>
           </article>
           <article class="${ctx.hasPacket ? "is-green" : "is-amber"}">
-            <span>标准数据包</span>
-            <strong>${escapeHtml(ctx.latestPacket?.packet_id || "等待生成")}</strong>
+            <span>店铺资料</span>
+            <strong>${escapeHtml(ctx.hasPacket ? "已读取" : "等待读取")}</strong>
             <small>${escapeHtml(ctx.sourceLabel)} · ${ctx.presentCount}/${ctx.coverageTotal} 类资源</small>
           </article>
           <article class="${hasLiveListing ? "is-green" : "is-amber"}">
@@ -10042,9 +10042,9 @@ function renderSaasProductListingCenter(view) {
       <section class="saas-sync-status-panel">
         <div class="saas-sync-status-head">
           <div>
-            <span class="pill ${ctx.hasPacket ? "green" : "amber"}">${ctx.hasPacket ? "数据包可用" : "等待数据包"}</span>
-            <strong>eBay 官方资源进入 Listing 工厂</strong>
-            <p>Listing 会引用标准数据包和来源记录；资料缺口会明确提示，不会用本地样例补空白。</p>
+            <span class="pill ${ctx.hasPacket ? "green" : "amber"}">${ctx.hasPacket ? "店铺资料可用" : "等待店铺资料"}</span>
+            <strong>eBay 店铺资料进入 Listing 工厂</strong>
+            <p>Listing 会引用店铺资料和来源记录；资料缺口会明确提示，不会用本地样例补空白。</p>
           </div>
           <button class="secondary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !state.saasConnected ? "disabled" : ""}>更新 eBay 数据</button>
         </div>
@@ -10066,7 +10066,7 @@ function renderSaasProductListingCenter(view) {
                           <span>${escapeHtml(row.label)}</span>
                           <strong>${escapeHtml(row.status === "present" ? "已读取" : row.status || "等待")}</strong>
                         </div>
-                        <small>${escapeHtml(row.summary || row.detail || "标准数据包资源")}</small>
+                        <small>${escapeHtml(row.summary || row.detail || "店铺资料资源")}</small>
                       </article>
                     `,
                   )
@@ -10090,7 +10090,7 @@ function renderSaasProductListingCenter(view) {
         <div>
           <span>Listing</span>
           <strong>市场报告、刊登资料、eBay 同步商品</strong>
-          <p>这个页面只放产品刊登相关结果。授权、AI 连接、官方数据包和权限配置已经归到设置里。</p>
+          <p>这个页面只放产品刊登相关结果。授权、AI 连接、店铺资料和权限配置已经归到设置里。</p>
         </div>
         <button class="primary-action" type="button" data-saas-action="run-model-value-rehearsal" ${state.saasLoading || !canRunModel ? "disabled" : ""}>生成报告和刊登资料</button>
       </section>
@@ -10109,7 +10109,7 @@ function renderSaasProductListingCenter(view) {
           <div>
             <span>下一步</span>
             <strong>生成结果后只进入报告、记忆和确认中心</strong>
-            <p>如果报告质量不够，继续改 AI 连接、提示词和标准数据包映射；不要用旧样例商品假装已经可发布。</p>
+            <p>如果报告质量不够，继续改 AI 连接、提示词和店铺资料映射；不要用旧样例商品假装已经可发布。</p>
           </div>
         </div>
         <div class="runtime-bridge-actions saas-merchant-primary-actions">
@@ -11165,7 +11165,7 @@ function renderLoopHealthCards() {
   const gate = currentGateSummary();
   const cards = [
     ["任务拆分", "已拆成 10 段", "岗位不再一次吃完整链路，超时会重试、拆小或停在当前段。", "green"],
-    ["数据来源", "先数据包后报告", "eBay、搜索、公开页面、货源资料分别标状态，失败不假装成功。", "green"],
+    ["数据来源", "先资料后报告", "eBay、搜索、公开页面、货源资料分别标状态，失败不假装成功。", "green"],
     ["发布闸口", `${gate.label} · ${gate.title}`, gate.body, gate.tone],
     ["客服学习", "发布前先吃档案", "商品参数、FAQ、物流承诺和退货边界先同步给客服，再处理买家消息。", "green"],
   ];
@@ -11438,7 +11438,7 @@ function renderLaunchGapBoard() {
   if (!board) return;
   const rows = [
     ["eBay 店铺数据", "只读同步", "先读取店铺、Listing、订单、费用、业务政策和类目字段，让 AI CEO 用真实经营数据判断。", "green"],
-    ["经营数据包", "可追溯", "每条数据都会标记来源：官方 API、商家补充、公开来源或缺口，不用假资料补齐。", "green"],
+    ["经营资料", "可追溯", "每条资料都会标记来源：官方 API、商家补充、公开来源或缺口，不用假资料补齐。", "green"],
     ["AI CEO 输出", "报告化", "把市场判断、刊登建议、素材任务、客服学习和财务复核写成可展开的工作记录。", "green"],
     ["确认中心", "人工把关", "发布、改价、广告、退款、付款和买家强承诺必须由商家确认，不会默认自动执行。", "amber"],
     ["资料缺口", "清楚提示", "尺寸、重量、材质、货源、包装、发货地和售后边界缺失时，会停在待补资料。", "amber"],
@@ -12344,7 +12344,7 @@ function runtimeTaskRole(taskType = "") {
 function runtimeTaskTitle(taskType = "") {
   return {
     "ceo.intake": "AI CEO 接目标并拆任务",
-    "market.data_packet": "市场数据包整理",
+    "market.data_packet": "市场资料整理",
     "market.report": "市场经理报告",
     "source.match": "货源事实与履约匹配",
     "listing.package": "产品经理刊登资料包",
@@ -13986,7 +13986,7 @@ function renderSaasEbayOperationsSnapshotPanel(ctx = saasMerchantWorkbenchContex
         <div>
           <span>eBay 真实货架 / 订单</span>
           <strong>授权后要看见店铺里的基本经营对象</strong>
-          <p>这里从官方标准数据包读取 Listing、库存、订单、履约、费用和政策摘要；不展示买家隐私，也不编造样本订单。</p>
+          <p>这里从 eBay 只读店铺资料读取 Listing、库存、订单、履约、费用和政策摘要；不展示买家隐私，也不编造样本订单。</p>
         </div>
         <em>${ctx.official ? "官方 API" : "等待官方数据"}</em>
       </div>
@@ -14017,8 +14017,8 @@ function renderSaasEbayOperationsSnapshotPanel(ctx = saasMerchantWorkbenchContex
           <small>${escapeHtml(snapshot.financeLabel || snapshot.policyLabel || "同步 finances 和业务政策后显示基础摘要")}</small>
         </article>
         <article class="${packetId ? "is-green" : "is-amber"}">
-          <span>官方 packet</span>
-          <strong>${escapeHtml(packetId || "等待生成")}</strong>
+          <span>店铺资料</span>
+          <strong>${escapeHtml(packetId ? "已读取" : "等待读取")}</strong>
           <small>${escapeHtml(ctx.sourceLabel)} · ${ctx.presentCount}/${ctx.coverageTotal} 类资源</small>
         </article>
         <article class="${lastSync ? "is-green" : "is-amber"}">
@@ -14062,7 +14062,7 @@ function saasSevenStepLaunchItems(ctx = saasMerchantWorkbenchContext()) {
       label: "01",
       title: "连接 eBay",
       result: connectionReady ? `${storeName} · ${saasStoreStatusLabel(ctx.connection?.status || store?.status)}` : "等待店铺授权",
-      next: connectionReady ? "继续同步官方数据包。" : "到设置页检查 eBay 只读授权；不要重复 OAuth，先看现有状态。",
+      next: connectionReady ? "继续同步店铺资料。" : "到设置页检查 eBay 只读授权；不要重复 OAuth，先看现有状态。",
       done: connectionReady,
       view: "connect",
       actionLabel: "看账号",
@@ -14070,7 +14070,7 @@ function saasSevenStepLaunchItems(ctx = saasMerchantWorkbenchContext()) {
     {
       label: "02",
       title: "同步店铺",
-      result: packetReady ? `${ctx.presentCount}/${ctx.coverageTotal} 类资源 · ${ctx.latestPacket?.packet_id || "数据包就绪"}` : "等待官方数据包",
+      result: packetReady ? `${ctx.presentCount}/${ctx.coverageTotal} 类资源 · 店铺资料已读取` : "等待店铺资料",
       next: packetReady ? "可以输入全新商品。" : "只读同步店铺、Listing、订单、费用、政策和类目字段。",
       done: packetReady,
       saasAction: "sync-ebay-readonly",
@@ -14811,7 +14811,7 @@ function saasModelBlockedReasonText(value = "") {
     model_provider_not_configured: "当前没有可用的 AI 连接配置。",
     model_live_calls_disabled: "当前环境关闭了实时模型调用。",
     sanitized_platform_data_packet_missing: "当前店铺没有可用于报告的官方脱敏数据包。",
-    platform_data_packet_not_ready_for_runtime: "官方数据包还没有准备到可生成报告的状态。",
+    platform_data_packet_not_ready_for_runtime: "店铺资料还没有准备到可生成报告的状态。",
     live_model_rehearsal_not_requested: "本次请求没有打开模型验证开关。",
     external_realtime_data_source_not_connected: "当前没有接实时行情、新闻或联网搜索数据源。",
   };
@@ -14931,14 +14931,14 @@ function renderSaasEbaySyncStatusPanel() {
         <div>
           <span class="pill ${saasEbaySyncStatusTone(overall)}">${escapeHtml(saasEbaySyncStatusText(overall))}</span>
           <strong>eBay 只读同步状态</strong>
-          <p>同步只读取店铺、政策、Listing、订单、费用和类目字段。所有 token 留在后端，AI CEO 只接收标准数据包。</p>
+          <p>同步只读取店铺、政策、Listing、订单、费用和类目字段。所有 token 留在后端，AI CEO 只接收整理后的店铺资料。</p>
         </div>
         <button class="secondary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !activeSaasStore() ? "disabled" : ""}>重新同步</button>
       </div>
       <div class="saas-sync-status-metrics">
         <article><span>资源覆盖</span><strong>${present}/${rows.length}</strong><small>${blocked ? `${blocked} 项需处理` : "6 类核心资源"}</small></article>
         <article><span>来源</span><strong>${official ? "官方 API" : "待官方 API"}</strong><small>${escapeHtml(saasMerchantSourceLabel(packetBody.source_label || latestPacket?.source_mode || "waiting"))}</small></article>
-        <article><span>最后同步</span><strong>${escapeHtml(saasTimestampLabel(lastSync))}</strong><small>${escapeHtml(latestPacket?.packet_id || "等待标准数据包")}</small></article>
+        <article><span>最后同步</span><strong>${escapeHtml(saasTimestampLabel(lastSync))}</strong><small>${escapeHtml(latestPacket?.packet_id ? "店铺资料已读取" : "等待店铺资料")}</small></article>
         <article><span>新鲜度 / 路由</span><strong>${escapeHtml(freshness.status || "等待快照")}</strong><small>${routeFailureCount ? `${routeFailureCount} 条路由需复查` : "路由健康"} / ${Number(freshness.official_request_count || latestSync.live_read_result?.request_count || 0)} 次只读请求</small></article>
       </div>
       <div class="saas-sync-resource-grid">
@@ -14995,7 +14995,7 @@ function renderSaasLiveSnapshotPanel() {
         <div>
           <span class="pill ${hasOfficialPacket ? "green" : "amber"}">${hasOfficialPacket ? "官方 API 已同步" : "等待真实同步"}</span>
           <h3>捷境真实 SaaS 闭环</h3>
-          <p>店铺授权、eBay 只读同步、标准数据包、AI CEO 报告和确认中心都从后端读取真实状态。</p>
+          <p>店铺授权、eBay 只读同步、店铺资料、AI CEO 报告和确认中心都从后端读取真实状态。</p>
         </div>
         <button class="secondary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !store ? "disabled" : ""}>同步 eBay</button>
       </div>
@@ -15011,8 +15011,8 @@ function renderSaasLiveSnapshotPanel() {
           <small>${escapeHtml(saasTimestampLabel(lastSync))} · ${requestCount || "-"} 次官方只读请求</small>
         </article>
         <article>
-          <span>标准数据包</span>
-          <strong>${escapeHtml(latestPacket?.packet_id || "未生成")}</strong>
+          <span>店铺资料</span>
+          <strong>${escapeHtml(latestPacket?.packet_id ? "已读取" : "未读取")}</strong>
           <small>${escapeHtml(sourceMode)} · 可用 ${present.length} 项，缺口 ${missing.length} 项</small>
         </article>
         <article>
@@ -15037,7 +15037,7 @@ function renderSaasLiveSnapshotPanel() {
                 )
                 .join("")}
             </div>`
-          : `<div class="saas-live-empty">还没有标准数据包。先完成 eBay 只读授权并点击“同步 eBay”。</div>`
+          : `<div class="saas-live-empty">还没有店铺资料。先完成 eBay 只读授权并点击“同步 eBay”。</div>`
       }
       ${
         routeRows.length
@@ -15600,10 +15600,10 @@ function renderSaasAiCeoOutputPanel() {
         <div class="saas-ai-output-head">
           <div>
             <span>AI CEO 真实工作台输出</span>
-            <strong>${hasPacket ? "标准数据包已就绪，等待运行 AI CEO 工作流" : "等待 eBay 只读数据进入标准数据包"}</strong>
+            <strong>${hasPacket ? "店铺资料已就绪，等待运行 AI CEO 工作流" : "等待 eBay 只读资料进入工作台"}</strong>
             <p>${
               hasPacket
-                ? `后端已生成 ${escapeHtml(latestPacket?.packet_id || "最新数据包")}，包含 ${present.length} 类 eBay 官方只读资源。下一步运行 AI CEO 工作流，市场报告、刊登建议、素材任务、客服学习、财务复核和确认项会写回 SaaS 后端。`
+                ? `后端已读取店铺资料，包含 ${present.length} 类 eBay 官方只读资源。下一步运行 AI CEO 工作流，市场报告、刊登建议、素材任务、客服学习、财务复核和确认项会写回 SaaS 后端。`
                 : "先完成 eBay 只读同步，工作台会用后端真实数据展示报告、证据、风险和确认边界。"
             }</p>
           </div>
@@ -15619,7 +15619,7 @@ function renderSaasAiCeoOutputPanel() {
         <div>
           <span>AI CEO 真实工作台输出</span>
           <strong>官方只读数据已进入报告、任务和确认中心</strong>
-          <p>这里读取捷境后端 reports / confirmations。AI CEO 只接收清洗后的标准数据包，不接触 eBay token；发布、改价、付款、政策和敏感客服承诺仍停在确认中心。</p>
+          <p>这里读取捷境后端 reports / confirmations。AI CEO 只接收整理后的店铺资料，不接触 eBay token；发布、改价、付款、政策和敏感客服承诺仍停在确认中心。</p>
         </div>
         <button class="primary-action" type="button" data-saas-action="run-workflow" ${state.saasLoading ? "disabled" : ""}>重新生成 AI CEO 报告</button>
       </div>
@@ -15640,8 +15640,8 @@ function renderSaasAiCeoOutputPanel() {
           <small>${escapeHtml(isOfficial ? "官方 API 只读" : sourceMode)}</small>
         </article>
         <article>
-          <span>标准数据包</span>
-          <strong>${escapeHtml(latestPacket?.packet_id || "待生成")}</strong>
+          <span>店铺资料</span>
+          <strong>${escapeHtml(latestPacket?.packet_id ? "已读取" : "待读取")}</strong>
           <small>${escapeHtml(sourceMode)} / 缺口 ${missing.length}</small>
         </article>
         <article>
@@ -17288,7 +17288,7 @@ function buildSaasCeoCommand(text, ctx = saasMerchantWorkbenchContext()) {
     : !authReady
       ? "等待 eBay 授权状态恢复"
       : !packetReady
-        ? "等待官方数据包"
+        ? "等待店铺资料"
         : "等待 AI 连接状态恢复";
   const routeStatus = ready ? "可开始" : statusLabel;
   const routeByIntent = {
@@ -17610,14 +17610,14 @@ function renderSaasCeoModuleHandoffPanel(view = "product", ctx = saasMerchantWor
         <div>
           <span>AI CEO 指令来源</span>
           <strong>${escapeHtml(copy.label)} 等待 AI CEO 分发任务</strong>
-          <p>回到 AI CEO 输入商品、链接、图片、订单问题或经营目标后，这里会显示指令、官方数据包、来源记录和下一步。</p>
+          <p>回到 AI CEO 输入商品、链接、图片、订单问题或经营目标后，这里会显示目标、店铺资料来源和下一步。</p>
         </div>
         <button class="secondary-action compact-action" type="button" data-global-flow-view="cockpit" data-global-flow-key="goal">回到 AI CEO</button>
       </section>
     `;
   }
   const route = current.routes.find((item) => item.view === view) || current.routes[0] || {};
-  const packetLabel = current.packet_id || ctx.latestPacket?.packet_id || "等待 packet";
+  const storeDataLabel = current.source_label || ctx.sourceLabel || (ctx.hasPacket ? "店铺资料已读取" : "等待店铺资料");
   const routeLabels = current.routes.map((item) => item.label).join("、");
   return `
     <section class="saas-ceo-module-handoff" aria-label="AI CEO 指令来源">
@@ -17628,9 +17628,9 @@ function renderSaasCeoModuleHandoffPanel(view = "product", ctx = saasMerchantWor
       </div>
       <div class="saas-ceo-module-meta">
         <article>
-          <span>官方数据包</span>
-          <strong>${escapeHtml(packetLabel)}</strong>
-          <small>${escapeHtml(current.source_label || ctx.sourceLabel || "等待来源记录")}</small>
+          <span>店铺资料</span>
+          <strong>${escapeHtml(storeDataLabel)}</strong>
+          <small>${escapeHtml(ctx.hasPacket ? "来源可追溯" : "连接 eBay 或补充商品资料后继续")}</small>
         </article>
         <article>
           <span>本模块下一步</span>
@@ -18319,7 +18319,7 @@ function saasCollectedSourceRecords(ctx = saasMerchantWorkbenchContext()) {
 
 function sourceRecordTypeLabel(type = "") {
   const normalized = String(type || "").toLowerCase();
-  if (normalized.includes("official") || normalized.includes("packet")) return "官方数据包";
+  if (normalized.includes("official") || normalized.includes("packet")) return "官方资料";
   if (normalized.includes("public") || normalized.includes("web") || normalized.includes("search")) return "公开网页";
   if (normalized.includes("merchant") || normalized.includes("manual")) return "商家补充";
   if (normalized.includes("report")) return "AI 报告引用";
@@ -18536,7 +18536,7 @@ function saasMerchantNextAction(ctx = saasMerchantWorkbenchContext()) {
     return {
       tone: "amber",
       label: "同步数据",
-      title: "把店铺、Listing、订单、费用和政策同步成经营数据包",
+      title: "把店铺、Listing、订单、费用和政策同步成经营资料",
       body: "AI CEO 先基于官方只读数据工作，缺资料会清楚标出来，不拿占位内容冒充真实结果。",
       primaryAction: "sync-ebay-readonly",
       primaryLabel: "同步 eBay 数据",
@@ -18695,7 +18695,7 @@ function saasCockpitWorkstreamLanes(ctx = saasMerchantWorkbenchContext()) {
     },
     {
       step: "02",
-      title: "标准数据包",
+      title: "店铺资料",
       status: packetReady ? "ready" : "waiting",
       detail: packetReady ? `${ctx.presentCount}/${ctx.coverageTotal || 6} 类资源` : "等待 eBay 只读同步",
       action: "sync-ebay-readonly",
@@ -18853,10 +18853,10 @@ function renderSaasMerchantExecutiveCockpit(ctx = saasMerchantWorkbenchContext()
         </aside>
       </div>
       <div class="saas-executive-evidence-rail" aria-label="证据链摘要">
-        <span><b>packet</b>${escapeHtml(ctx.latestPacket?.packet_id || state.saasReadiness?.product_evidence?.latest_ebay_packet_id || "waiting")}</span>
-        <span><b>report</b>${escapeHtml(latestReport?.report_id || latestReport?.task_id || `${ctx.reports.length} records`)}</span>
-        <span><b>source_records</b>${sourceRecordCount}</span>
-        <span><b>secret</b>frontend_never_gets_token</span>
+        <span><b>店铺资料</b>${escapeHtml(ctx.hasPacket ? "已读取" : "待连接")}</span>
+        <span><b>报告</b>${escapeHtml(ctx.reports.length ? `${ctx.reports.length} 份` : "等待生成")}</span>
+        <span><b>来源记录</b>${sourceRecordCount}</span>
+        <span><b>凭证安全</b>不在浏览器显示</span>
       </div>
     </section>
   `;
@@ -18886,11 +18886,11 @@ function renderSaasMerchantOperatingPath(ctx = saasMerchantWorkbenchContext()) {
       done: syncReady,
     },
     {
-      label: "3. 标准数据包",
-      title: packetReady ? "数据包已写回工作台" : "等待生成数据包",
+      label: "3. 店铺资料",
+      title: packetReady ? "店铺资料已写回工作台" : "等待读取店铺资料",
       detail: packetReady
-        ? `${ctx.latestPacket?.packet_id || "最新数据包"} / 缺口 ${ctx.missingKeys.length}`
-        : "AI CEO 只读取清洗后的标准数据包，不直接读取平台凭证。",
+        ? `${ctx.presentCount}/${ctx.coverageTotal} 类资料 / 缺口 ${ctx.missingKeys.length}`
+        : "AI CEO 只读取整理后的店铺资料，不直接读取平台凭证。",
       done: packetReady,
     },
     {
@@ -18916,8 +18916,8 @@ function renderSaasMerchantOperatingPath(ctx = saasMerchantWorkbenchContext()) {
       <div class="saas-merchant-path-head">
         <div>
           <span>商家主路径</span>
-          <strong>从 eBay 官方数据到 AI CEO 经营结果</strong>
-          <p>工作台按真实授权、真实同步、标准数据包、AI CEO 报告和确认中心逐步推进。</p>
+          <strong>从 eBay 店铺资料到 AI CEO 经营结果</strong>
+          <p>工作台按真实授权、真实同步、店铺资料、AI CEO 报告和确认中心逐步推进。</p>
         </div>
       </div>
       <div class="saas-merchant-path-grid">
@@ -18987,8 +18987,8 @@ function saasMerchantSetupGuideItems(ctx = saasMerchantWorkbenchContext()) {
     },
     {
       label: "03",
-      title: "形成官方数据包",
-      detail: ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal} 类资源 / ${ctx.latestPacket?.packet_id || "最新 packet"}` : "等待同步店铺、Listing、订单、费用、政策和类目字段",
+      title: "读取店铺资料",
+      detail: ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal} 类资料已读取` : "等待同步店铺、Listing、订单、费用、政策和类目字段",
       done: ctx.hasPacket,
       action: "同步数据",
       view: "connect",
@@ -19004,7 +19004,7 @@ function saasMerchantSetupGuideItems(ctx = saasMerchantWorkbenchContext()) {
     {
       label: "05",
       title: "生成 Market Report + Listing Package",
-      detail: liveTypes.has("market.report") && liveTypes.has("listing.package") ? "模型价值验证已完成" : "还需要基于官方数据包跑一次真实 AI 输出",
+      detail: liveTypes.has("market.report") && liveTypes.has("listing.package") ? "模型价值验证已完成" : "还需要基于店铺资料跑一次真实 AI 输出",
       done: liveTypes.has("market.report") && liveTypes.has("listing.package"),
       action: "AI CEO 汇报",
       view: "activity",
@@ -19031,7 +19031,7 @@ function renderSaasMerchantSetupGuidePanel(ctx = saasMerchantWorkbenchContext())
         <div>
           <span>Setup Guide</span>
           <strong>把新商家从首页带到可工作的 AI CEO 工作台</strong>
-          <p>借鉴 Shopify 的启动清单，但内容只服务捷境：eBay 只读数据、标准数据包、AI 连接、AI CEO 报告和确认中心。</p>
+          <p>借鉴 Shopify 的启动清单，但内容只服务捷境：eBay 店铺资料、AI 连接、AI CEO 报告和确认中心。</p>
         </div>
         <em>${doneCount}/${items.length} · ${percent}%</em>
       </div>
@@ -19108,7 +19108,7 @@ function saasMerchantWorkflowTemplateRoles(ctx = saasMerchantWorkbenchContext())
       role: "ceo",
       label: "AI CEO",
       duty: "接收商家目标并自动分流：直接回答、eBay 经营任务、实时数据缺口或等待确认。",
-      reads: "商家目标、店铺阶段、标准数据包摘要、明确写入的商家规则",
+      reads: "商家目标、店铺阶段、店铺资料摘要、明确写入的商家规则",
       stop: "不会把普通闲聊写入长期记忆；发布、付款、退款、广告、政策修改和敏感买家承诺必须停住",
       required: state.saasConnected,
       enabled: true,
@@ -19118,7 +19118,7 @@ function saasMerchantWorkflowTemplateRoles(ctx = saasMerchantWorkbenchContext())
     {
       role: "market-manager",
       label: "市场 / 选品 / IP",
-      duty: "基于 eBay 官方数据包、来源记录和商家目标生成中文 Market Report、批量候选和 IP/VeRO 风险。",
+      duty: "基于 eBay 店铺资料、来源记录和商家目标生成中文 Market Report、批量候选和 IP/VeRO 风险。",
       reads: "eBay 只读数据包、公开来源记录、历史报告",
       stop: "不能把公开网页信号说成平台真实销量，不能用旧商品记录填补新品缺口",
       required: packetReady,
@@ -19243,8 +19243,8 @@ function renderSaasMerchantWorkflowTemplatePanel(ctx = saasMerchantWorkbenchCont
       <div class="saas-merchant-evidence-grid">
         <article class="${ctx.hasPacket ? "is-green" : "is-amber"}">
           <span>输入</span>
-          <strong>${ctx.hasPacket ? "官方数据包" : "等待 eBay 数据包"}</strong>
-          <small>岗位只吃标准数据包和来源记录，不碰 eBay token。</small>
+          <strong>${ctx.hasPacket ? "店铺资料" : "等待 eBay 店铺资料"}</strong>
+          <small>岗位只读取整理后的店铺资料和来源记录，不碰 eBay token。</small>
         </article>
         <article class="${isSaasModelConfigured() ? "is-green" : "is-amber"}">
           <span>AI 连接</span>
@@ -19380,7 +19380,7 @@ function saasEbaySkillPackRows(ctx = saasMerchantWorkbenchContext()) {
       key: "newbie_launch_guide",
       label: "新手 7 步发布引导",
       title: "从连接店铺到确认发布",
-      reads: "eBay 授权、标准数据包、商品表单、报告、素材、发布体检和确认中心",
+      reads: "eBay 授权、店铺资料、商品表单、报告、素材、发布体检和确认中心",
       output: "每一步的输入、生成按钮、结果区、缺口和下一步",
       ready: ctx.hasPacket,
       view: "product",
@@ -19500,7 +19500,7 @@ function saasEbaySkillPackRows(ctx = saasMerchantWorkbenchContext()) {
       key: "trusted_source_ui",
       label: "可信来源",
       title: "每条建议旁边显示来源类型",
-      reads: "eBay 官方数据包、历史订单、财务记录、公开搜索、模型推理和人工输入",
+      reads: "eBay 店铺资料、历史订单、财务记录、公开搜索、模型推理和人工输入",
       output: "来源标签、可信度、缺口和下一步",
       ready: ctx.hasPacket || sourceRecords.length > 0,
       view: "activity",
@@ -19539,7 +19539,7 @@ function renderSaasEbaySkillPackCenter(ctx = saasMerchantWorkbenchContext()) {
         <div>
           <span>eBay 技能包中心</span>
           <strong>不是泛自动化市场，只放 eBay 经营技能包</strong>
-          <p>技能包围绕捷境主链路：官方数据包、来源记录、Market Report、Listing Package、发布体检、发布后驾驶舱、客服边界和确认中心。商家不需要管理一堆底层执行器。</p>
+          <p>技能包围绕捷境主链路：店铺资料、来源记录、Market Report、Listing Package、发布体检、发布后驾驶舱、客服边界和确认中心。商家不需要管理一堆底层执行器。</p>
         </div>
         <em>${readyCount}/${rows.length} ready</em>
       </div>
@@ -19573,7 +19573,7 @@ function saasSourceCredibilityRows(ctx = saasMerchantWorkbenchContext()) {
   const modelCount = (state.saasReports || []).length;
   return [
     {
-      label: "eBay 官方数据包",
+      label: "eBay 店铺资料",
       count: officialCount || (ctx.official ? 1 : 0),
       title: ctx.official ? "最高可信" : "等待官方数据",
       detail: "店铺、Listing、订单、费用、政策和类目字段以官方只读数据包为准。",
@@ -19667,7 +19667,7 @@ function renderSaasSourceCredibilityPanel(ctx = saasMerchantWorkbenchContext()) 
                   `,
                 )
                 .join("")
-            : `<article class="is-amber"><div><span>等待报告</span><strong>先生成 Market Report + Listing Package</strong></div><p>没有报告时不展示虚构结论。</p><small>下一步：官方数据包 + AI 连接。</small></article>`
+            : `<article class="is-amber"><div><span>等待报告</span><strong>先生成 Market Report + Listing Package</strong></div><p>没有报告时不展示虚构结论。</p><small>下一步：店铺资料 + AI 连接。</small></article>`
         }
       </div>
     </section>
@@ -19696,9 +19696,9 @@ function renderSaasSourceRecordCollectorPanel(ctx = saasMerchantWorkbenchContext
           <small>手动保存的链接、供应商页、竞品页或资料页。</small>
         </article>
         <article class="${officialCount ? "is-green" : "is-amber"}">
-          <span>官方数据包</span>
+          <span>店铺资料</span>
           <strong>${officialCount}</strong>
-          <small>来自标准数据包的来源记录优先级最高。</small>
+          <small>来自店铺资料的来源记录优先级最高。</small>
         </article>
         <article class="${reportCount ? "is-green" : "is-amber"}">
           <span>报告引用</span>
@@ -19750,7 +19750,7 @@ function renderSaasSourceRecordCollectorPanel(ctx = saasMerchantWorkbenchContext
                   `,
                 )
                 .join("")
-            : `<article class="is-amber"><span>等待来源</span><strong>还没有来源记录</strong><small>先完成官方数据包，或手动保存供应商/竞品/公开网页来源。</small></article>`
+            : `<article class="is-amber"><span>等待来源</span><strong>还没有来源记录</strong><small>先完成店铺资料同步，或手动保存供应商/竞品/公开网页来源。</small></article>`
         }
       </div>
       <div class="runtime-bridge-actions saas-merchant-primary-actions">
@@ -19854,7 +19854,7 @@ function renderSaasMerchantProviderHubPanel(ctx = saasMerchantWorkbenchContext()
           <strong>只接 eBay 经营主链路需要的能力</strong>
           <p>模型、素材、搜索、货源、物流和客服都服务 eBay 经营闭环；页面展示任务状态、来源和结果。</p>
         </div>
-        <em>${ctx.hasPacket ? "数据包已就绪" : "等待数据包"}</em>
+        <em>${ctx.hasPacket ? "店铺资料已就绪" : "等待店铺资料"}</em>
       </div>
       <div class="saas-provider-hub-grid">
         ${providerItems
@@ -19989,13 +19989,13 @@ function renderSaasMerchantEvidencePanel(ctx = saasMerchantWorkbenchContext()) {
       key,
       label: saasEbayResourceLabel(key),
       status,
-      detail: row?.detail || row?.summary || (status === "present" ? "官方数据包资源已可用" : "等待数据包证据"),
+      detail: row?.detail || row?.summary || (status === "present" ? "店铺资料资源已可用" : "等待店铺资料证据"),
     };
   });
   const packetId =
     ctx.latestPacket?.packet_id ||
     (state.saasReadiness?.product_evidence || {}).latest_ebay_packet_id ||
-    "等待标准数据包";
+    "等待店铺资料";
   const liveTypes = new Set(modelEvidence.live_model_report_types || []);
   const modelBlockers = Array.isArray(modelGate.blockers) ? modelGate.blockers : [];
   const backupBlockers = Array.isArray(backupPlan.blockers) ? backupPlan.blockers : [];
@@ -20005,7 +20005,7 @@ function renderSaasMerchantEvidencePanel(ctx = saasMerchantWorkbenchContext()) {
       <div class="saas-merchant-path-head">
         <div>
           <span>真实证据</span>
-          <strong>官方数据包、模型价值和生产边界</strong>
+          <strong>店铺资料、模型价值和生产边界</strong>
           <p>这里展示当前工作台能证明什么，以及还不能对外收费承诺什么。</p>
         </div>
       </div>
@@ -20018,7 +20018,7 @@ function renderSaasMerchantEvidencePanel(ctx = saasMerchantWorkbenchContext()) {
         <article class="${ctx.hasPacket ? "is-green" : "is-amber"}">
           <span>packet_id</span>
           <strong>${escapeHtml(packetId)}</strong>
-          <small>Runtime / Agents 只读标准数据包，不接触 token。</small>
+          <small>Runtime / Agents 只读整理后的店铺资料，不接触 token。</small>
         </article>
         <article class="${liveTypes.has("market.report") ? "is-green" : "is-amber"}">
           <span>Market Report</span>
@@ -20167,7 +20167,7 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
         <article class="${liveTypes.has("market.report") ? "is-green" : "is-amber"}">
           <span>Market Report</span>
           <strong>${liveTypes.has("market.report") ? "已验证" : "待验证"}</strong>
-          <small>只读 eBay 官方数据包，不触碰 token。</small>
+          <small>只读 eBay 店铺资料，不触碰 token。</small>
         </article>
         <article class="${liveTypes.has("listing.package") ? "is-green" : "is-amber"}">
           <span>Listing Package</span>
@@ -20436,7 +20436,7 @@ function renderSaasMerchantIpRiskPanel() {
       <div class="saas-merchant-path-head">
         <div>
           <span>IP / Logo / 品牌词体检</span>
-          <strong>先用 eBay 官方标准数据包筛一遍侵权疑点</strong>
+          <strong>先用 eBay 店铺资料筛一遍侵权疑点</strong>
           <p>这一版读取已同步的标题、描述、类目字段、item specifics 和图片 URL/文件名；真实 Logo 图像识别和商标库核验后续再接入。</p>
         </div>
       </div>
@@ -20444,7 +20444,7 @@ function renderSaasMerchantIpRiskPanel() {
         <article class="${tone}">
           <span>体检状态</span>
           <strong>${escapeHtml(statusLabel)}</strong>
-          <small>${escapeHtml(screening.source_packet_id || "等待官方数据包")}</small>
+          <small>${escapeHtml(screening.source_packet_id ? "来源可追溯" : "等待店铺资料")}</small>
         </article>
         <article class="${riskItems.length ? "is-amber" : "is-green"}">
           <span>风险命中</span>
@@ -20507,7 +20507,7 @@ function saasIpRiskStatusLabel(status = "") {
       blocked_missing_listing_content: "资料不足",
       ready_with_coverage_gaps: "可用但有缺口",
       ready_no_hits: "未命中风险词",
-      blocked_missing_packet: "等待数据包",
+      blocked_missing_packet: "等待店铺资料",
       waiting_for_screening: "等待体检",
       waiting_for_product_data: "等待商品资料",
       waiting: "等待体检",
@@ -20529,7 +20529,7 @@ function renderSaasMerchantDataCoveragePanel(ctx = saasMerchantWorkbenchContext(
       </div>
       <div class="saas-sync-status-metrics">
         <article><span>覆盖</span><strong>${ctx.presentCount}/${ctx.coverageTotal}</strong><small>${escapeHtml(ctx.sourceLabel)}</small></article>
-        <article><span>最近同步</span><strong>${escapeHtml(saasTimestampLabel(ctx.lastSync))}</strong><small>${escapeHtml(ctx.latestPacket?.packet_id || "等待数据包")}</small></article>
+        <article><span>最近同步</span><strong>${escapeHtml(saasTimestampLabel(ctx.lastSync))}</strong><small>${escapeHtml(ctx.latestPacket?.packet_id ? "店铺资料已读取" : "等待店铺资料")}</small></article>
         <article><span>AI 可用</span><strong>${ctx.hasPacket ? "可分析" : "待同步"}</strong><small>AI CEO 只接收清洗后的经营数据</small></article>
       </div>
       <div class="saas-sync-resource-grid">
@@ -20588,7 +20588,7 @@ function renderSaasMerchantAiValuePanel(ctx = saasMerchantWorkbenchContext()) {
         <article><span>报告</span><strong>${ctx.reports.length}</strong><small>市场、刊登、素材、客服、财务</small></article>
         <article><span>待确认</span><strong>${ctx.pendingConfirmations.length}</strong><small>发布、付款、退款、广告、承诺</small></article>
         <article><span>经营环节</span><strong>${ctx.stageCoverage.doneCount}/${ctx.stageCoverage.totalCount}</strong><small>AI CEO 主流程覆盖</small></article>
-        <article><span>数据来源</span><strong>${escapeHtml(ctx.sourceLabel)}</strong><small>${escapeHtml(ctx.latestPacket?.packet_id || "等待数据包")}</small></article>
+        <article><span>数据来源</span><strong>${escapeHtml(ctx.sourceLabel)}</strong><small>${escapeHtml(ctx.latestPacket?.packet_id ? "店铺资料已读取" : "等待店铺资料")}</small></article>
       </div>
       ${renderSaasMerchantAiValueMap(ctx)}
       <div class="saas-ai-stage-strip" aria-label="AI CEO 工作流阶段">
@@ -20830,8 +20830,8 @@ function renderSaasWorkbenchTruthPanel() {
       : "已登录，等待完整结果返回"
     : "先登录，再读取真实工作台结果";
   const statusCopy = state.saasConnected
-    ? "首页、同步面板、标准数据包、AI CEO 报告和确认中心会以捷境后端返回结果为准；AI CEO 只拿清洗后的标准数据包。"
-    : "当前页面不会自动创建匿名账号。登录或注册后，前端会读取店铺、eBay 只读同步、标准数据包、AI CEO 报告和确认中心；公开 readiness 只展示无密钥证据。";
+    ? "首页、同步面板、店铺资料、AI CEO 报告和确认中心会以捷境后端返回结果为准；AI CEO 只拿整理后的店铺资料。"
+    : "当前页面不会自动创建匿名账号。登录或注册后，前端会读取店铺、eBay 只读同步、店铺资料、AI CEO 报告和确认中心；公开 readiness 只展示无密钥证据。";
   return `
     <article class="saas-workbench-truth-panel ${state.saasConnected ? "is-connected" : "needs-login"}">
       <div class="saas-workbench-truth-head">
@@ -20858,7 +20858,7 @@ function renderSaasWorkbenchTruthPanel() {
           <small>${escapeHtml(state.saasConnected ? displayName : "登录后读取店铺和连接状态")}</small>
         </article>
         <article class="${official ? "is-green" : "is-amber"}">
-          <span>标准数据包</span>
+          <span>店铺资料</span>
           <strong>${escapeHtml(packetId)}</strong>
           <small>${escapeHtml(sourceMode)} · ${present.length} 类资源，${missing.length} 个缺口</small>
         </article>
@@ -21101,7 +21101,7 @@ function renderSaasBackendPanel() {
       latestDataPacket
         ? `<div class="saas-readiness-strip">
             <article>
-              <span>最新 eBay 数据包</span>
+              <span>最新 eBay 店铺资料</span>
               <strong>${escapeHtml(latestDataPacket.status || latestPacketBody.status || "cached")}</strong>
               <small>${escapeHtml(latestDataPacket.packet_id || "")} · ${escapeHtml(latestPacketSource)} · Runtime 只读取清洗后的数据。</small>
             </article>
@@ -21729,12 +21729,12 @@ function applySaasDataPacketsToActivities() {
     const sourceLabel = packet.source_label || record.source_mode || "sanitized_packet";
     upsertRuntimeActivity(`saas-data-packet-${packetId}`, {
       role: "eBay 只读数据包",
-      title: `eBay 标准数据包：${record.packet_id || "latest"}`,
+      title: `eBay 店铺资料：${record.packet_id ? "已读取" : "latest"}`,
       action: publicRuntimeText(
-        `SaaS 后端已缓存清洗后的 eBay 数据包，来源：${sourceLabel}；可用资源 ${present.length} 个，缺口 ${missing.length} 个。`,
+        `SaaS 后端已缓存整理后的 eBay 店铺资料，来源：${sourceLabel}；可用资源 ${present.length} 个，缺口 ${missing.length} 个。`,
       ),
-      sources: ["捷境后端工作记录", "标准数据包", sourceLabel],
-      result: publicRuntimeText("AI CEO 只读取标准化数据包，不接触 token、原始响应或 eBay 写入能力。"),
+      sources: ["捷境后端工作记录", "店铺资料", sourceLabel],
+      result: publicRuntimeText("AI CEO 只读取整理后的店铺资料，不接触 token、原始响应或 eBay 写入能力。"),
       status: packet.ready_for_runtime ? "可交接" : "待补齐",
       confidence: sourceLabel === "official_api" ? "High" : "Medium",
     });
@@ -21785,7 +21785,7 @@ function saasCeoWorkflowProductInput() {
   if (text) return text;
   const reportProduct = saasProductLabelForRecord(latestSaasReportByTypes(["listing.package", "market.report"]));
   if (reportProduct && !/backflow|incense|demo|sample/i.test(reportProduct)) return reportProduct;
-  return "官方 eBay 数据包未指定新品；请先补全新的商品事实，再创建发布确认单";
+  return "eBay 店铺资料未指定新品；请先补全新的商品事实，再创建发布确认单";
 }
 
 async function createSaasProductWorkflowFromBackend(options = {}) {
@@ -21799,7 +21799,7 @@ async function createSaasProductWorkflowFromBackend(options = {}) {
     started_at: state.saasEbaySyncStartedAt,
     live_read_result: {},
     data_packet: null,
-    merchant_next_step: "后端正在读取 eBay 官方只读数据并生成标准数据包。",
+    merchant_next_step: "后端正在读取 eBay 官方只读数据并整理店铺资料。",
   };
   renderSaasBackendPanel();
   renderGlobalLoopWorkbench();
@@ -22221,7 +22221,7 @@ async function planSaasEbayReadOnlyOAuth() {
     } catch (error) {
       state.saasError = `eBay 只读诊断刷新失败：${error.message}`;
     }
-    showActionToast("eBay 只读授权已经完成；不会再次生成授权链接。下一步直接同步或查看标准数据包。");
+    showActionToast("eBay 只读授权已经完成；不会再次生成授权链接。下一步直接同步或查看店铺资料。");
     renderSaasBackendPanel();
     return;
   }
@@ -22450,7 +22450,7 @@ async function runSaasModelValueRehearsalFromWorkbench() {
         model_secret_ref: secretReady ? activeSecret?.secret_ref || "" : "",
         packet_id: latestPacket?.packet_id || "",
         product: productLabel,
-        merchant_goal: "用商家自己的 AI 连接，基于官方只读 eBay 数据包生成商家可读的中文 Market Report 和 Listing Package 价值证明；没有来源的事实写待补资料。",
+        merchant_goal: "用商家自己的 AI 连接，基于官方只读 eBay 店铺资料生成商家可读的中文 Market Report 和 Listing Package 价值证明；没有来源的事实写待补资料。",
       }),
     });
     state.saasLastModelValueRehearsal = payload.model_value_rehearsal || null;
@@ -22520,9 +22520,9 @@ function saasModelValueProductLabel(packetRecord = null, store = null, connectio
   }
   const storeLabel = saasStoreDisplayName(store, connection);
   if (storeLabel && storeLabel !== "等待 eBay 授权") {
-    return "官方 eBay 数据包还没有指定 SKU；请先分析店铺级刊登准备度和缺失商品资料";
+    return "eBay 店铺资料还没有指定 SKU；请先分析店铺级刊登准备度和缺失商品资料";
   }
-  return "官方 eBay 数据包还没有指定 SKU";
+  return "eBay 店铺资料还没有指定 SKU";
 }
 
 function captureSaasListingComposerInput() {
@@ -24707,9 +24707,9 @@ function saasWorkflowStageRows(ctx = saasMerchantWorkbenchContext()) {
       title: "市场调研、批量选品与 IP 防侵权",
       role: "市场 / 批量 / IP",
       status: marketReady ? "done" : packetReady && modelReady ? "current" : "wait",
-      summary: marketReady ? "Market Report 已写回" : "等待官方数据包和 AI 连接",
-      output: marketReady ? "已生成中文市场判断、价格带、候选池、IP/VeRO 疑点和风险结论。" : "没有官方数据包或来源资料前不生成假市场结论。",
-      missing: packetReady ? (modelReady ? "等待 AI 输出，不显示英文报告。" : "AI 连接状态到设置里处理。") : "数据包状态到设置里处理。",
+      summary: marketReady ? "Market Report 已写回" : "等待店铺资料和 AI 连接",
+      output: marketReady ? "已生成中文市场判断、价格带、候选池、IP/VeRO 疑点和风险结论。" : "没有店铺资料或来源资料前不生成假市场结论。",
+      missing: packetReady ? (modelReady ? "等待 AI 输出，不显示英文报告。" : "AI 连接状态到设置里处理。") : "店铺资料状态到设置里处理。",
       next: marketReady ? "交给 Listing 工厂生成 Listing Package，并把批量候选送前质检。" : "先补齐真实来源或运行中文 Market Report。",
     },
     {
@@ -24893,7 +24893,7 @@ function saasWorkflowCapabilityCardsMarkup(ctx = saasMerchantWorkbenchContext())
       key: "trusted-source",
       label: "可信来源 UI",
       status: ctx.hasPacket ? "来源可见" : "等待来源",
-      detail: "每个建议标明来自 eBay 官方数据包、历史订单、财务记录、公开搜索、模型推理还是人工输入。",
+      detail: "每个建议标明来自 eBay 店铺资料、历史订单、财务记录、公开搜索、模型推理还是人工输入。",
     },
   ];
   return cards
@@ -25017,7 +25017,7 @@ function renderSaasWorkflowCenter() {
           <article class="saas-workflow-capability-card">
             <span>05 · 可信来源 UI</span>
             <strong>每个建议都显示来源类型</strong>
-            <p>标明来自 eBay 官方数据包、历史订单、财务记录、公开搜索、模型推理还是人工输入，缺口和下一步直接展示给商家。</p>
+            <p>标明来自 eBay 店铺资料、历史订单、财务记录、公开搜索、模型推理还是人工输入，缺口和下一步直接展示给商家。</p>
           </article>
         </div>
       </section>
@@ -25078,7 +25078,7 @@ function renderSaasWorkflowCenter() {
           <div class="workflow-boundary-box">
             <span>执行边界</span>
             <strong>草稿和报告可推进，真实写入不越界。</strong>
-            <p>真实发布、付款、退款、广告、改价、库存、政策和敏感客服承诺必须进入决策中心；配置、授权、packet 和模型状态统一到设置页查看。</p>
+            <p>真实发布、付款、退款、广告、改价、库存、政策和敏感客服承诺必须进入决策中心；配置、授权、店铺资料和模型状态统一到设置页查看。</p>
           </div>
           <div class="button-row">
             <button class="primary-action" type="button" id="workflowPrimaryAction" data-global-flow-view="connect">处理当前卡点</button>
@@ -25097,9 +25097,9 @@ function renderSaasInactiveViewPlaceholder(viewId = "") {
   const labels = {
     cockpit: ["AI CEO", "对话入口、真实账号状态和下一步会在打开本页时读取。"],
     workflow: ["AI CEO", "岗位链路已归入 AI CEO 对话入口。"],
-    product: ["Listing", "这里只接收官方数据包和模型输出，不用旧商品内容填空。"],
+    product: ["Listing", "这里只接收店铺资料和模型输出，不用旧商品内容填空。"],
     media: ["素材工坊", "素材任务等待 Listing Package 和商家来源记录。"],
-    bulk: ["批量铺货", "批量机会等待真实数据包和来源记录。"],
+    bulk: ["批量铺货", "批量机会等待真实店铺资料和来源记录。"],
     activity: ["AI CEO", "报告记录已归入 AI CEO 和对应业务模块。"],
     confirm: ["决策中心", "确认中心只承接高风险动作，不展示历史商品流程。"],
     service: ["客服与订单", "客服草稿等待当前账号商品档案和物流边界。"],
@@ -25143,9 +25143,9 @@ function renderSaasProtectedStateLoadingView(viewId = "") {
         <div>
           <p class="eyebrow">真实 SaaS 状态</p>
           <h2>${escapeHtml(title)}</h2>
-          <p class="section-note">登录状态已恢复，正在读取后端工作上下文。授权、数据包和模型配置状态统一放在设置里；当前模块只显示任务、结果、缺口和确认边界。</p>
+          <p class="section-note">登录状态已恢复，正在读取当前账号资料。授权、店铺资料和模型配置状态统一放在设置里；当前模块只显示任务、结果、缺口和确认边界。</p>
         </div>
-        <span class="pill amber">reading backend</span>
+        <span class="pill amber">读取中</span>
       </div>
     </section>
   `;
@@ -25881,7 +25881,7 @@ function renderSaasCeoCockpitStatusStrip(statusPills, ctx) {
       </div>
       <div class="saas-ai-ceo-evidence-ticker" aria-label="当前证据链">
         <span>证据链</span>
-        <strong>${escapeHtml(ctx.hasPacket ? "官方数据包已归档" : "等待官方数据包")}</strong>
+        <strong>${escapeHtml(ctx.hasPacket ? "店铺资料已读取" : "等待店铺资料")}</strong>
         <small>${escapeHtml(packetAge || "发布、改价、退款、广告和敏感客服承诺仍进决策中心")}</small>
       </div>
     </section>
@@ -25914,7 +25914,7 @@ function renderSaasCockpitRealWorkbench() {
   const rawAuthStatus = String(rawConnectionStatus).toLowerCase();
   const authorizationReady = /authorized|connected|active|ready/.test(rawAuthStatus);
   const starterPrompts = [
-    ["跑一轮 Listing", "基于当前官方数据包，跑一轮市场报告、Listing Package、素材需求、利润履约和确认项。"],
+    ["跑一轮 Listing", "基于当前店铺资料，跑一轮市场报告、Listing Package、素材需求、利润履约和确认项。"],
     ["批量前质检", "检查当前候选商品是否适合批量铺货，列出数据缺口、IP 风险、价格和库存确认项。"],
     ["素材工坊", "把当前 Listing 草稿转成图片需求，拆出主图、详情页、短视频脚本和实物一致性审核。"],
     ["今天先做什么", "根据 eBay 连接、店铺资料、AI 状态、报告和待确认项，告诉我今天最该处理的 3 件事。"],
@@ -26825,7 +26825,7 @@ function renderCurrentDecisionGuide(cards = [], hiddenCoreCount = 0, hiddenAutoC
     ];
     if (!shouldShowLegacyDemoControls()) {
       title = "保留的旧演示发布记录不作为真实经营结果";
-      body = "真实 SaaS 工作台以 eBay 官方只读同步、标准数据包、AI CEO 报告和确认中心记录为准。旧本地模拟结果只作为历史前端流程记录。";
+      body = "真实 SaaS 工作台以 eBay 官方只读同步、店铺资料、AI CEO 报告和确认中心记录为准。旧本地模拟结果只作为历史前端流程记录。";
       next = "下一步看 AI CEO 真实报告或重新同步 eBay，确认中心不会把模拟结果当作真实发布。";
     }
   } else if (unsaved.length === 0 && cards.length > 0) {
@@ -28878,7 +28878,7 @@ function saasFoundationStatusRows(ctx = saasMerchantWorkbenchContext()) {
   const readiness = state.saasReadiness || {};
   const backupPlan = state.saasBackupPlan || {};
   const databasePlan = state.saasDatabasePlan || {};
-  const packetTitle = ctx.hasPacket ? "标准数据包可用" : "等待官方数据包";
+  const packetTitle = ctx.hasPacket ? "店铺资料可用" : "等待店铺资料";
   const launchBlockers = Array.isArray(launchGate.blockers) ? launchGate.blockers : [];
   const backupBlockers = Array.isArray(backupPlan.blockers) ? backupPlan.blockers : [];
   return [
@@ -28909,7 +28909,7 @@ function saasFoundationStatusRows(ctx = saasMerchantWorkbenchContext()) {
     },
     {
       key: "packet",
-      label: "官方数据包",
+      label: "店铺资料",
       title: packetTitle,
       detail: `${ctx.presentCount}/${ctx.coverageTotal} 类资源 / ${ctx.sourceLabel}`,
       done: Boolean(ctx.hasPacket),
@@ -28948,7 +28948,7 @@ function saasFoundationStatusRows(ctx = saasMerchantWorkbenchContext()) {
       key: "security",
       label: "安全边界",
       title: `真实写入${saasRealPlatformWriteLabel()}`,
-      detail: `${saasRealPlatformWriteDetail()} 测试会话关闭、密钥边界、租户隔离、标准数据包边界保留。`,
+      detail: `${saasRealPlatformWriteDetail()} 测试会话关闭、密钥边界、租户隔离、店铺资料边界保留。`,
       done: true,
       caution: isSaasRealPlatformWritesEnabled(),
       actionLabel: "复制当前状态",
@@ -29777,7 +29777,7 @@ function renderSaasSettingsControlRoom(ctx = saasMerchantWorkbenchContext(), opt
       tone: isSaasAuthorizedConnectionStatus(connectionStatus) ? "is-green" : "is-amber",
     },
     {
-      label: "官方数据包",
+      label: "店铺资料",
       value: ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal}` : "待同步",
       detail: packetId || ctx.sourceLabel,
       tone: ctx.hasPacket && ctx.missingKeys.length === 0 ? "is-green" : "is-amber",
@@ -29813,7 +29813,7 @@ function renderSaasSettingsControlRoom(ctx = saasMerchantWorkbenchContext(), opt
         <div>
           <span>设置总览</span>
           <strong>先看真实状态，再进入高级配置</strong>
-          <p>这里集中显示登录恢复、eBay 授权、官方数据包、AI 连接、确认中心和上线门禁。没有真实数据时显示缺口，不用旧模拟商品填工作台。</p>
+          <p>这里集中显示登录恢复、eBay 授权、店铺资料、AI 连接、确认中心和上线门禁。没有真实数据时显示缺口，不用旧模拟商品填工作台。</p>
         </div>
         <div class="saas-settings-control-actions">
           <button class="secondary-action" type="button" data-saas-action="refresh" ${state.saasLoading ? "disabled" : ""}>刷新状态</button>
@@ -30285,7 +30285,7 @@ function renderSaasSettingsDataPanel(ctx = saasMerchantWorkbenchContext()) {
                     <article>
                       <span>${escapeHtml(row.label)}</span>
                       <strong>${escapeHtml(row.status === "present" ? "已读取" : row.status || "等待")}</strong>
-                    <small>${escapeHtml(row.summary || row.detail || "标准数据包资源")}</small>
+                    <small>${escapeHtml(row.summary || row.detail || "店铺资料资源")}</small>
                     </article>
                   `,
                 )
@@ -32162,7 +32162,7 @@ function renderSaasConnectCenter(view) {
                 <div>
                   <span>eBay 授权状态已恢复</span>
                   <strong>${escapeHtml(saasStoreStatusLabel(ebayConnectionStatus))}，不需要重新打开授权链接</strong>
-                  <small>捷境会继续使用后端托管凭证和官方数据包；前端不会保存或回显 eBay token。</small>
+                  <small>捷境会继续使用后端托管凭证和店铺资料；前端不会保存或回显 eBay token。</small>
                   <div class="saas-oauth-callback-note">
                     <span>当前 eBay Developer callback</span>
                     <code>${escapeHtml(expectedCallbackUrl)}</code>
@@ -32208,7 +32208,7 @@ function renderSaasConnectCenter(view) {
             <small>${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</small>
           </article>
           <article class="${ctx.official ? "is-green" : "is-amber"}">
-            <span>标准数据包</span>
+            <span>店铺资料</span>
             <strong>${ctx.presentCount}/${ctx.coverageTotal}</strong>
             <small>${escapeHtml(ctx.sourceLabel)}</small>
           </article>
@@ -32229,7 +32229,7 @@ function renderSaasConnectCenter(view) {
         ${renderSaasSettingsControlRoom(ctx, { ebayAuthorized, ebayPublishAuthorized, securityGateReady })}
         ${renderSaasSettingsSectionGroup({
           title: "日常状态",
-          detail: "登录、eBay 授权、官方数据包、AI 连接和确认中心放在第一屏。",
+          detail: "登录、eBay 授权、店铺资料、AI 连接和确认中心放在第一屏。",
           badge: "核心",
           open: true,
           panels: [renderSaasOperatingSystemPanel(ctx), renderSaasMerchantSetupGuidePanel(ctx)],
@@ -32300,7 +32300,7 @@ function renderConnect() {
     securityGateReady ? "受控测试可跑" : securityGate.status ? "门禁未过" : "等待检查",
     securityGateReady
       ? `账号隔离、密钥边界、真实写入状态可见、模拟数据清理已过当前测试门禁；${saasRealPlatformWriteDetail()} 这仍不等于生产级 SaaS 安全。`
-      : `${Number(securityGate.blocker_count || 0)} 个阻断，${Number(securityGate.warning_count || 0)} 个提醒；保存 AI 连接和读取官方数据包后会刷新。`,
+      : `${Number(securityGate.blocker_count || 0)} 个阻断，${Number(securityGate.warning_count || 0)} 个提醒；保存 AI 连接和读取店铺资料后会刷新。`,
     securityGateReady ? "green" : securityGate.status === "blocked" ? "red" : "amber",
   ];
   const statusRows = [
@@ -32611,7 +32611,7 @@ function saasAiCeoTurnStatusLabel(latest = {}) {
   if (latest.status === "blocked_before_model_chat") return "AI 连接待恢复";
   if (latest.status === "blocked_missing_store_context") return "等待店铺上下文";
   if (latest.status === "blocked_missing_model_config") return "等待 AI 连接";
-  if (latest.status === "blocked_missing_packet") return "等待官方数据包";
+  if (latest.status === "blocked_missing_packet") return "等待店铺资料";
   if (latest.status === "model_call_failed") return "AI 连接待恢复";
   return "AI CEO";
 }
@@ -32655,7 +32655,7 @@ function saasAiCeoTurnOperatingRows(latest = {}) {
   const sourceText = sourceCount
     ? `公开来源 ${sourceCount} 条`
     : route === "ebay_workflow" || route === "confirmation_required"
-      ? "eBay 官方数据包 / 来源记录 / 模型推理"
+      ? "eBay 店铺资料 / 来源记录 / 模型推理"
       : route === "external_realtime"
         ? "等待实时来源返回"
         : "当前对话 / 模型推理";

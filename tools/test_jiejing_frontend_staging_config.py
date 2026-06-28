@@ -26,7 +26,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260628-account-onboarding-guard-v3"
+    frontend_asset_version = "20260628-account-onboarding-guard-v5"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -293,7 +293,7 @@ def main() -> int:
         "saas-executive-cockpit",
         "saas-cockpit-risk-queue",
         "saas-executive-evidence-rail",
-        "frontend_never_gets_token",
+        "<b>凭证安全</b>不在浏览器显示",
         "function saasBackendPublishImpact",
         "function saasBackendPublishDecisionGate",
         "function renderSaasPublishCommandSummaryPanel",

@@ -4,9 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="prefetch" href="./app.html?start=app&view=cockpit" as="document" />
-    <link rel="prefetch" href="./app.js?v=20260628-account-onboarding-guard-v3" as="script" />
+    <link rel="prefetch" href="./app.js?v=20260628-account-onboarding-guard-v5" as="script" />
     <link rel="prefetch" href="./assets/jiejing-settings-panels.js?v=20260620-owner-launch-control-v5" as="script" />
-    <link rel="prefetch" href="./styles.css?v=20260628-account-onboarding-guard-v3" as="style" />
+    <link rel="prefetch" href="./styles.css?v=20260628-account-onboarding-guard-v5" as="style" />
     <title>捷境 · eBay AI CEO 自动化工作台</title>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260619-brand-icon-v1" type="image/svg+xml" />
     <style>
@@ -3924,7 +3924,7 @@
           <article>
             <span>02</span>
             <strong>证据归档</strong>
-            <small>数据包、报告、审计</small>
+            <small>资料、报告、审计</small>
           </article>
           <article>
             <span>03</span>
@@ -3979,7 +3979,7 @@
         <article class="signal-card">
           <span>02</span>
           <strong>市场调研、批量选品与 IP 筛查</strong>
-          <small>市场岗读取 eBay 官方数据包、货源图、竞品样本、价格带、供应商信息和退货风险；批量候选先过利润、履约、侵权和资料完整度筛查。</small>
+          <small>市场岗读取 eBay 店铺资料、货源图、竞品样本、价格带、供应商信息和退货风险；批量候选先过利润、履约、侵权和资料完整度筛查。</small>
           <em>输出：Market Report、候选池、IP 疑点、可继续/需补充判断。</em>
         </article>
         <article class="signal-card">
@@ -4093,7 +4093,7 @@
               <article class="stack-card">
                 <span>可体验</span>
                 <strong>市场调研 + Listing</strong>
-                <p>从货源、链接或官方数据包出发，生成市场报告、IP 风险、标题、详情、参数、类目、价格和业务政策草稿。</p>
+                <p>从货源、链接或店铺资料出发，生成市场报告、IP 风险、标题、详情、参数、类目、价格和业务政策草稿。</p>
               </article>
               <article class="stack-card">
                 <span>可体验</span>
@@ -4248,7 +4248,7 @@
             <h2>AI CEO 接收商家目标，按来源记录和确认边界推进。</h2>
           </div>
           <p class="section-note">
-            AI CEO 工作台读取 eBay 官方只读数据包、商家来源记录和 AI 连接状态，生成报告、Listing、素材任务和确认项；真实发布、付款、退款、广告、改价、库存、政策和敏感客服承诺必须由商家确认。
+            AI CEO 工作台读取 eBay 店铺资料、商家来源记录和 AI 连接状态，生成报告、Listing、素材任务和确认项；真实发布、付款、退款、广告、改价、库存、政策和敏感客服承诺必须由商家确认。
           </p>
         </div>
 
@@ -4257,7 +4257,7 @@
             <div class="permission-strip">
               <div>
                 <strong id="workspaceScopeTitle">当前可执行范围：市场调研、Listing 草稿、素材 brief、客服事实表、经营报告</strong>
-                <span id="workspaceScopeBody">AI CEO 只读取清洗后的标准数据包和来源记录；发布、付款、退款、广告、改价、库存、政策和敏感买家承诺默认进入决策中心。</span>
+                <span id="workspaceScopeBody">AI CEO 只读取整理后的店铺资料和来源记录；发布、付款、退款、广告、改价、库存、政策和敏感买家承诺默认进入决策中心。</span>
               </div>
               <span class="pill green" id="workspaceModePill">真实 SaaS 边界</span>
             </div>
@@ -4274,7 +4274,7 @@
 
             <div class="ceo-saas-flow" aria-label="AI CEO 工作闭环">
               <article><span>1</span><strong>接收指令</strong><small>商家只说目标，系统记录来源和账号空间。</small></article>
-              <article><span>2</span><strong>读取证据</strong><small>eBay 官方数据包、来源记录、商家记忆、AI 连接状态。</small></article>
+              <article><span>2</span><strong>读取证据</strong><small>eBay 店铺资料、来源记录、商家记忆、AI 连接状态。</small></article>
               <article><span>3</span><strong>分发模块</strong><small>Listing、批量、素材、客服订单和财务履约。</small></article>
               <article><span>4</span><strong>等待确认</strong><small>高风险动作停在决策中心，不自动越权。</small></article>
               <article><span>5</span><strong>回流审计</strong><small>报告、来源、确认、执行结果和记忆回写。</small></article>
@@ -4324,7 +4324,7 @@
               <article class="ceo-saas-evidence">
                 <span>eBay-first</span>
                 <strong>先把 eBay 做深</strong>
-                <small>店铺、Listing、订单、费用、政策、类目和履约先形成标准数据包。</small>
+                <small>店铺、Listing、订单、费用、政策、类目和履约先整理成可用资料。</small>
               </article>
               <article class="ceo-saas-evidence">
                 <span>AI 连接</span>
@@ -4334,7 +4334,7 @@
               <article class="ceo-saas-evidence">
                 <span>来源记录</span>
                 <strong>每个结论都有依据</strong>
-                <small>官方数据包、商家资料、公开来源、模型推理必须区分。</small>
+                <small>官方资料、商家补充、公开来源、模型推理必须区分。</small>
               </article>
               <article class="ceo-saas-evidence ceo-saas-boundary">
                 <span>确认中心</span>
@@ -4344,7 +4344,7 @@
             </div>
             <article class="panel ceo-saas-evidence">
               <span>登录后看到什么</span>
-              <strong>真实账号状态、数据包覆盖、报告、确认项、AI 连接和审计</strong>
+              <strong>真实账号状态、资料覆盖、报告、确认项、AI 连接和审计</strong>
               <small>如果没有真实数据，工作台显示缺口和下一步，不用无来源商品填满页面。</small>
               <div class="hero-actions">
                 <button class="button" type="button" id="workspaceLogin">登录进入工作台</button>
@@ -4636,7 +4636,7 @@
     <div class="toast" id="toast" aria-live="polite"></div>
 
     <script>
-      const JIEJING_SITE_VERSION = "20260628-account-onboarding-guard-v3";
+      const JIEJING_SITE_VERSION = "20260628-account-onboarding-guard-v5";
 
       (function routeOfficialEntryToApp() {
         const params = new URLSearchParams(window.location.search);
@@ -4651,8 +4651,8 @@
         const assets = [
           ["prefetch", "./app.html?start=app&view=workflow", "document"],
           ["preload", "./assets/jiejing-settings-panels.js?v=20260620-owner-launch-control-v5", "script"],
-          ["preload", "./app.js?v=20260628-account-onboarding-guard-v3", "script"],
-          ["preload", "./styles.css?v=20260628-account-onboarding-guard-v3", "style"],
+          ["preload", "./app.js?v=20260628-account-onboarding-guard-v5", "script"],
+          ["preload", "./styles.css?v=20260628-account-onboarding-guard-v5", "style"],
         ];
         assets.forEach(([rel, href, as]) => {
           if (document.querySelector(`link[href="${href}"]`)) return;
@@ -4676,7 +4676,7 @@
           eyebrow: "02 / 市场调研、批量选品与 IP 防侵权",
           title: "先判断商品能不能做，再判断能不能批量做。",
           body:
-            "市场岗读取 eBay 官方数据包、货源图、竞品、价格带、供应商信息和退货风险；批量铺货先过字段完整度、利润、履约、IP、图片授权和平台禁词筛查。没有真实数据就显示缺口，不用旧样例补位。",
+            "市场岗读取 eBay 店铺资料、货源图、竞品、价格带、供应商信息和退货风险；批量铺货先过字段完整度、利润、履约、IP、图片授权和平台禁词筛查。没有真实数据就显示缺口，不用旧样例补位。",
           roles: ["Market Report", "批量候选池", "IP 疑点", "资料缺口", "利润履约", "下一步"],
         },
         roles: {

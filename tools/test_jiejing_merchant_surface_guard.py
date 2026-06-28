@@ -134,6 +134,47 @@ def main() -> int:
         if marker not in cockpit_scope:
             return fail(f"renderSaasCockpitRealWorkbench missing merchant-readable cockpit copy: {marker}")
 
+    executive_scope = function_scope(app_js, "renderSaasMerchantExecutiveCockpit")
+    for marker in ["<b>packet</b>", "<b>source_records</b>", "<b>secret</b>", "frontend_never_gets_token"]:
+        if marker in executive_scope:
+            return fail(f"renderSaasMerchantExecutiveCockpit still exposes technical evidence marker: {marker}")
+    for marker in ["<b>店铺资料</b>", "<b>来源记录</b>", "<b>凭证安全</b>不在浏览器显示"]:
+        if marker not in executive_scope:
+            return fail(f"renderSaasMerchantExecutiveCockpit missing merchant-facing evidence rail: {marker}")
+
+    operating_path_scope = function_scope(app_js, "renderSaasMerchantOperatingPath")
+    for marker in ["标准数据包", "数据包已写回工作台", "等待生成数据包", "最新数据包", "最新 packet"]:
+        if marker in operating_path_scope:
+            return fail(f"renderSaasMerchantOperatingPath still exposes data-packet wording: {marker}")
+    for marker in ["3. 店铺资料", "从 eBay 店铺资料到 AI CEO 经营结果", "AI CEO 只读取整理后的店铺资料"]:
+        if marker not in operating_path_scope:
+            return fail(f"renderSaasMerchantOperatingPath missing merchant-facing store-data wording: {marker}")
+
+    handoff_scope = function_scope(app_js, "renderSaasCeoModuleHandoffPanel")
+    for marker in ["等待 packet", "官方数据包", "指令、官方数据包"]:
+        if marker in handoff_scope:
+            return fail(f"renderSaasCeoModuleHandoffPanel still exposes module handoff internals: {marker}")
+    for marker in ["店铺资料来源", "店铺资料", "连接 eBay 或补充商品资料后继续"]:
+        if marker not in handoff_scope:
+            return fail(f"renderSaasCeoModuleHandoffPanel missing simple handoff wording: {marker}")
+
+    workflow_scope = function_scope(app_js, "saasWorkflowStageRows") + function_scope(app_js, "renderSaasWorkflowCenter")
+    for marker in ["配置、授权、packet", "数据包状态到设置里处理", "等待官方数据包和 AI 连接"]:
+        if marker in workflow_scope:
+            return fail(f"workflow surface still exposes technical data-packet wording: {marker}")
+    for marker in ["配置、授权、店铺资料和模型状态统一到设置页查看", "店铺资料状态到设置里处理", "等待店铺资料和 AI 连接"]:
+        if marker not in workflow_scope:
+            return fail(f"workflow surface missing merchant-facing data wording: {marker}")
+
+    listing_scope = function_scope(app_js, "renderSaasProductListingCenter")
+    listing_active = listing_scope.split("${false ? `", 1)[0]
+    for marker in ["官方 eBay 数据包", "官方数据包", "标准数据包", "后端标准数据包"]:
+        if marker in listing_active:
+            return fail(f"active Listing surface still exposes data-packet wording: {marker}")
+    for marker in ["这里只显示你的账号、店铺资料和模型生成结果", "先读取 eBay 店铺资料", "Listing 工厂只接收当前账号的店铺资料"]:
+        if marker not in listing_active:
+            return fail(f"active Listing surface missing merchant-facing store-data wording: {marker}")
+
     for required_guard in [
         "function normalizeSaasProtectedView",
         "function hasCompletedSaasOnboarding",
@@ -150,7 +191,7 @@ def main() -> int:
         "AI CEO 经营输出",
         "确认中心",
         "发布、付款、退款、改价或承诺买家",
-        "AI CEO 只接收标准数据包",
+        "AI CEO 只读取整理后的店铺资料",
     ]:
         if required not in app_js:
             return fail(f"merchant workbench is missing required product copy: {required}")
