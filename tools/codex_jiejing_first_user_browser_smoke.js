@@ -429,7 +429,9 @@ async function main() {
         text.includes("不用在前台重复粘贴凭证") ||
         text.includes("AI CEO 连接暂时没有完成") ||
         text.includes("当前店铺还没有可用的 AI 连接") ||
-        text.includes("AI 连接暂时不可用")
+        text.includes("AI 连接暂时不可用") ||
+        text.includes("还没有可用店铺上下文") ||
+        text.includes("没有受保护登录会话")
       );
     },
     null,
@@ -444,8 +446,10 @@ async function main() {
     const connectionBlocked =
       (text.includes("AI CEO 连接暂时没有完成") ||
         text.includes("当前店铺还没有可用的 AI 连接") ||
-        text.includes("AI 连接暂时不可用")) &&
-      text.includes("不会");
+        text.includes("AI 连接暂时不可用") ||
+        text.includes("还没有可用店铺上下文") ||
+        text.includes("没有受保护登录会话")) &&
+      (text.includes("设置") || text.includes("AI 与素材") || text.includes("连接状态"));
     return {
       mode: usageBlocked ? "provider_usage_or_billing_blocked" : connectionBlocked ? "frontend_or_backend_model_connection_blocked" : "unknown",
       safe:
