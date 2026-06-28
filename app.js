@@ -25432,6 +25432,81 @@ function renderSaasMerchantBillingCurrentStatusPanel(ctx = saasMerchantWorkbench
   `;
 }
 
+function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchContext()) {
+  const billing = saasMerchantBillingGuardrailState();
+  const hasExternalProvider = Boolean(billing.provider.external_paid_provider_configured);
+  const isTestMode = Boolean(billing.provider.test_billing_provider_configured);
+  const stageLabel = hasExternalProvider ? "正式收款已接入" : isTestMode ? "内测演练，不真实扣费" : "等待正式收款";
+  const stageDetail = hasExternalProvider
+    ? "订阅、续费、取消和付款失败由后端账单状态判断，前端不接触支付密钥。"
+    : "当前只验证套餐、额度和停用规则；不会创建真实付款，不会扣银行卡。";
+  const rows = [
+    {
+      label: "现在",
+      title: stageLabel,
+      detail: stageDetail,
+      tone: hasExternalProvider ? "green" : "amber",
+    },
+    {
+      label: "基础订阅",
+      title: "¥99/月是软件功能费",
+      detail: "打开 AI CEO、Listing、批量铺货、素材工坊、客服订单、设置和基础工作记录。",
+      tone: "green",
+    },
+    {
+      label: "另算用量",
+      title: "AI 模型和素材生成单独看",
+      detail: "文本模型、联网长报告、生图和生视频按套餐额度或实际消耗核算，不默认无限量。",
+      tone: "amber",
+    },
+    {
+      label: "不代扣",
+      title: "eBay / 广告 / 物流费用不走捷境",
+      detail: "平台成交费、广告费、物流、退款和店铺订阅只进入利润测算与确认中心。",
+      tone: "green",
+    },
+  ];
+  return `
+    <section class="saas-settings-card saas-merchant-billing-plain-summary" data-billing-summary="merchant_billing_plain_summary_v1" aria-label="订阅和用量总览">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>订阅和用量总览</span>
+          <strong>先分清月费、用量费和平台成本</strong>
+          <p>这页只回答商家最关心的三件事：现在会不会扣费，¥99/月包含什么，AI/素材和 eBay 经营成本为什么另算。</p>
+        </div>
+        <em>${escapeHtml(stageLabel)}</em>
+      </div>
+      <div class="saas-merchant-billing-plain-grid">
+        ${rows
+          .map(
+            (row) => `
+              <article class="is-${escapeHtml(row.tone)}">
+                <span>${escapeHtml(row.label)}</span>
+                <strong>${escapeHtml(row.title)}</strong>
+                <small>${escapeHtml(row.detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-merchant-billing-plain-note">
+        <strong>停用规则</strong>
+        <p>订阅取消、欠费或额度用尽时，只停会继续产生费用的模型、联网和素材生成；历史报告、确认记录、审计证据和账号设置继续保留。</p>
+      </div>
+      <div class="saas-merchant-billing-plain-safety" hidden aria-hidden="true">
+        <span>merchant_billing_plain_summary_v1</span>
+        <span>billing_now_no_real_charge=${!hasExternalProvider}</span>
+        <span>base_subscription_is_feature_fee=true</span>
+        <span>ai_media_usage_is_separate=true</span>
+        <span>platform_cost_not_collected_by_jiejing=true</span>
+        <span>triggers_real_charge=false</span>
+        <span>frontend_gets_payment_secret=false</span>
+        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
+      </div>
+    </section>
+  `;
+}
+
 function renderSaasMerchantBillingContinuityPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
   const status = billing.blocksNow
@@ -31734,9 +31809,9 @@ function saasSettingsOneGlanceRows(activeTabId = "general") {
       ["越权停住", "没权限只补资料", "高风险动作没有权限就停到决策中心。"],
     ],
     billing: [
-      ["套餐权益", "查看当前可用范围", "内测阶段不做真实扣费承诺。"],
-      ["额度停用", "只停高成本任务", "联网、模型、素材等高成本任务按权益停用。"],
-      ["数据保护", "历史资料不删除", "报告、确认、审计证据和账号设置继续可读。"],
+      ["当前阶段", "内测演练，不真实扣费", "正式收费前会先接正式 provider、订阅页和签名 webhook。"],
+      ["基础订阅", "¥99/月打开工作台", "AI CEO、Listing、批量、素材工坊和客服订单是基础功能。"],
+      ["高成本用量", "AI / 素材另算", "欠费或超量只停模型、联网、素材生成等高成本任务。"],
     ],
     owner_ops: [
       ["内部可见", "只给主理人管理员", "普通商家不会看到上线、WAF、队列和门禁排查。"],
@@ -31940,6 +32015,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       title: "订阅与安全",
       intro: "查看基础订阅、AI 用量、素材生成、欠费停用和账号安全边界。",
       panels: [
+        renderSaasMerchantBillingPlainSummaryPanel(ctx),
         renderSaasMerchantPricingModelPanel(ctx),
         renderSaasMerchantBillingCurrentStatusPanel(ctx),
         renderSaasMerchantBillingContinuityPanel(ctx),

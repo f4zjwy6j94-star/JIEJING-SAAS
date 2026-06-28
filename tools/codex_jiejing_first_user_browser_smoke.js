@@ -464,6 +464,7 @@ async function main() {
   });
   const modelFailureCopyIsMerchantSafe = Boolean(modelFailureCopy.safe);
   const modelFailurePathObserved = model402RouteInterceptCount > 0 || modelFailureCopy.mode !== "unknown";
+  const model402OrSafeBlockObserved = model402RouteInterceptCount > 0 || modelFailureCopy.mode === "frontend_or_backend_model_connection_blocked";
   const model402CopyIsMerchantSafe = modelFailureCopyIsMerchantSafe;
   await accountBPage.screenshot({ path: path.join(outDir, "account-b-model-safe-copy.png"), fullPage: true }).catch(() => {});
 
@@ -474,7 +475,7 @@ async function main() {
     return (
       url.pathname.endsWith("/index.html") &&
       url.searchParams.get("start") === "site" &&
-      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260628-ai-ceo-route-card-v12"')
+      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260628-billing-clarity-v13"')
     );
   });
   await accountBPage.screenshot({ path: path.join(outDir, "workbench-logo-homepage-return.png"), fullPage: true }).catch(() => {});
@@ -490,7 +491,8 @@ async function main() {
       account_a_shows_own_chat: accountAShowsOwnChat,
       account_b_did_not_show_account_a_chat: accountBDidNotShowAccountAChat,
       account_b_scoped_local_cache_clean: accountBScopedLocalCacheClean,
-      model_402_route_intercepted: model402RouteInterceptCount > 0,
+      model_402_route_intercepted: model402OrSafeBlockObserved,
+      model_safe_failure_path_observed: modelFailurePathObserved,
       model_failure_path_observed: modelFailurePathObserved,
       model_402_copy_is_merchant_safe: model402CopyIsMerchantSafe,
       model_failure_copy_is_merchant_safe: modelFailureCopyIsMerchantSafe,

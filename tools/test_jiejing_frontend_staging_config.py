@@ -26,7 +26,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260628-ai-ceo-route-card-v12"
+    frontend_asset_version = "20260628-billing-clarity-v13"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -389,6 +389,17 @@ def main() -> int:
         "生图 / 生视频",
         "eBay 费用、广告费、物流和退款不是捷境代扣",
         "function renderSaasMerchantBillingCurrentStatusPanel",
+        "function renderSaasMerchantBillingPlainSummaryPanel",
+        "merchant_billing_plain_summary_v1",
+        "订阅和用量总览",
+        "先分清月费、用量费和平台成本",
+        "现在会不会扣费",
+        "¥99/月是软件功能费",
+        "AI 模型和素材生成单独看",
+        "billing_now_no_real_charge",
+        "base_subscription_is_feature_fee=true",
+        "ai_media_usage_is_separate=true",
+        "platform_cost_not_collected_by_jiejing=true",
         "saas-merchant-billing-current",
         "当前计费状态",
         "先看能不能继续用，再看哪些费用另算",

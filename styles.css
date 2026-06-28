@@ -38233,6 +38233,87 @@ body.saas-public-mvp .saas-merchant-pricing-model-rules small {
   overflow-wrap: anywhere;
 }
 
+body.saas-public-mvp .saas-merchant-billing-plain-summary {
+  border-color: rgba(8, 118, 110, 0.18);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fcfa 100%);
+}
+
+body.saas-public-mvp .saas-merchant-billing-plain-summary .saas-settings-card-head {
+  align-items: flex-start;
+}
+
+body.saas-public-mvp .saas-merchant-billing-plain-summary .saas-settings-card-head em {
+  align-self: flex-start;
+  max-width: min(100%, 240px);
+  padding: 7px 9px;
+  border: 1px solid rgba(8, 118, 110, 0.18);
+  border-radius: 8px;
+  background: #edf8f5;
+  color: #08766e;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-merchant-billing-plain-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-merchant-billing-plain-grid article,
+body.saas-public-mvp .saas-merchant-billing-plain-note {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(15, 45, 40, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+body.saas-public-mvp .saas-merchant-billing-plain-grid article.is-green {
+  border-color: rgba(8, 118, 110, 0.2);
+  background: #f2fbf8;
+}
+
+body.saas-public-mvp .saas-merchant-billing-plain-grid article.is-amber {
+  border-color: rgba(214, 142, 43, 0.25);
+  background: #fffaf1;
+}
+
+body.saas-public-mvp .saas-merchant-billing-plain-grid span {
+  color: #08766e;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+body.saas-public-mvp .saas-merchant-billing-plain-grid strong,
+body.saas-public-mvp .saas-merchant-billing-plain-note strong {
+  color: #12231f;
+  font-size: 14px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-merchant-billing-plain-grid small,
+body.saas-public-mvp .saas-merchant-billing-plain-note p {
+  margin: 0;
+  color: #5d716b;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-merchant-billing-plain-note {
+  margin-top: 8px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
 body.saas-public-mvp .saas-merchant-billing-current {
   border-color: rgba(8, 118, 110, 0.18);
   background: #ffffff;
@@ -38668,7 +38749,8 @@ body.saas-public-mvp .saas-merchant-billing-guardrail-safety span {
 
 @media (max-width: 760px) {
   body.saas-public-mvp .saas-merchant-pricing-split,
-  body.saas-public-mvp .saas-merchant-pricing-route {
+  body.saas-public-mvp .saas-merchant-pricing-route,
+  body.saas-public-mvp .saas-merchant-billing-plain-grid {
     grid-template-columns: 1fr;
   }
 
