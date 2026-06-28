@@ -45,6 +45,15 @@ def main() -> int:
         "node --check app.js",
         "python tools/jiejing_precloud_deployment_gate.py",
         "ready_for_paid_commercial_launch=false",
+        "Professional Prompt Auto-Trigger",
+        "docs/JIEJING_PROFESSIONAL_PROMPT_PLAYBOOK_20260628.md",
+        "Trigger the relevant prompts autonomously",
+        "AI CEO Routing Review",
+        "Listing Expert Review",
+        "Billing And Pricing Review",
+        "Tenant Isolation Audit",
+        "Reliability And Launch Readiness Review",
+        "do not grant permission to bypass confirmation gates",
     ]
     missing = [marker for marker in required if marker not in text]
     if missing:

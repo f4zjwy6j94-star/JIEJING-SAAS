@@ -69,6 +69,20 @@ python tools/test_jiejing_local_first_cloud_fallback_guardrails.py
 
 For UI changes, run the relevant contract tests and browser smoke checks. Use the JIEJING design system and keep merchant-facing pages simple.
 
+## Professional Prompt Auto-Trigger
+
+- Use `docs/JIEJING_PROFESSIONAL_PROMPT_PLAYBOOK_20260628.md` as the internal professional-prompt library for JIEJING work.
+- Trigger the relevant prompts autonomously; do not wait for the operator to name them every time.
+- For product or prioritization work, apply Product Owner Review and Reality Checker.
+- For AI CEO behavior, apply AI CEO Routing Review, Beginner UX Walkthrough, and Reality Checker.
+- For workflow UI, onboarding, homepage, settings, or pricing UI, apply Beginner UX Walkthrough, UI Design Polish, and the JIEJING design system.
+- For Listing and bulk-listing work, apply Listing Expert Review, Beginner UX Walkthrough, Security Threat Model, and Reality Checker.
+- For billing, subscription, quota, Stripe, or payment-provider work, apply Billing And Pricing Review, Security Threat Model, and Reliability And Launch Readiness Review.
+- For account isolation, chat history, reports, stores, orders, or tenant data, apply Tenant Isolation Audit and Security Threat Model.
+- For customer messages, returns, refunds, disputes, policy language, or order handling, apply Customer Support And Order Reply Review and require confirmation-center review when risk is present.
+- For deployment, readiness, domain, WAF, queue, worker, database, backups, monitoring, or launch claims, apply Reliability And Launch Readiness Review and Reality Checker.
+- These prompts are advisory review tools only. They do not grant permission to bypass confirmation gates, secret boundaries, tenant isolation, live-payment controls, or readiness evidence.
+
 ## Git And Handoff
 
 - Keep commits scoped and explain whether a change is code-only, staging-only, or production-adjacent.
