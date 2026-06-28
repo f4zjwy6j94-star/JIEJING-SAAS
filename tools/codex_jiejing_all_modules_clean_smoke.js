@@ -323,6 +323,7 @@ async function main() {
     const starterPrompts = root?.querySelector(".saas-ai-ceo-starter-prompts");
     const routeCard = root?.querySelector(".saas-ceo-routing-task-card");
     const handoff = root?.querySelector(".saas-ai-ceo-first-run-handoff");
+    const oneTaskFocus = root?.querySelector('.saas-ai-ceo-one-task-focus[data-ai-ceo-one-task-focus="first_day_one_task_focus_v1"]');
     const firstDayPath = root?.querySelector('.saas-ai-ceo-first-day-path[data-ai-ceo-first-day-path="first_day_ai_ceo_path_v2"]');
     return {
       has_one_sentence_title: text.includes("一句话交给 AI CEO"),
@@ -336,6 +337,14 @@ async function main() {
       has_first_day_path: Boolean(firstDayPath && firstDayPath.offsetParent !== null),
       first_day_path_step_count: firstDayPath?.querySelectorAll("article").length || 0,
       has_first_day_path_copy: text.includes("说目标") && text.includes("看判断") && text.includes("再确认"),
+      has_one_task_focus: Boolean(oneTaskFocus && oneTaskFocus.offsetParent !== null),
+      one_task_focus_card_count: oneTaskFocus?.querySelectorAll("article").length || 0,
+      has_one_task_focus_copy:
+        text.includes("现在只做一件事") &&
+        text.includes("把手上的商品、链接、图片或订单问题发给 AI CEO") &&
+        text.includes("有商品想上架") &&
+        text.includes("只有图片或链接") &&
+        text.includes("不知道下一步"),
       has_first_run_handoff_copy:
         text.includes("直接说经营目标，不用先找功能") &&
         text.includes("点一句只会填入输入框") &&
@@ -817,6 +826,9 @@ async function main() {
     !ceoFirstRunEntry.has_first_day_path ||
     ceoFirstRunEntry.first_day_path_step_count !== 3 ||
     !ceoFirstRunEntry.has_first_day_path_copy ||
+    !ceoFirstRunEntry.has_one_task_focus ||
+    ceoFirstRunEntry.one_task_focus_card_count !== 3 ||
+    !ceoFirstRunEntry.has_one_task_focus_copy ||
     !ceoFirstRunEntry.has_first_run_handoff_copy ||
     ceoFirstRunEntry.first_run_handoff_action_count < 3
   ) {

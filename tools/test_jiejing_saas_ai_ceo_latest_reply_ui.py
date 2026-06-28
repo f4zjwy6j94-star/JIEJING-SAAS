@@ -123,6 +123,12 @@ def main() -> int:
         "直接说经营目标，不用先找功能",
         "点一句只会填入输入框",
         "我还没接 eBay，先用资料跑草稿",
+        "first_day_one_task_focus_v1",
+        "现在只做一件事",
+        "把手上的商品、链接、图片或订单问题发给 AI CEO",
+        "有商品想上架",
+        "只有图片或链接",
+        "不知道下一步",
     ]
     for needle in required_app:
         if needle not in app:
@@ -147,6 +153,8 @@ def main() -> int:
         "min-height: 0;",
         "2026-06-24 AI CEO minimal routing v2",
         ".saas-ai-ceo-input-hint",
+        ".saas-ai-ceo-one-task-focus",
+        ".saas-ai-ceo-one-task-grid",
         ".saas-ceo-routing-main",
         ".saas-ceo-routing-why",
         ".saas-module-ai-goal-strip",

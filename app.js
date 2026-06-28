@@ -26016,12 +26016,35 @@ function renderSaasAiCeoFirstRunHandoff() {
     ["02", "看判断", "JIEJING 会告诉你该去 Listing、批量、素材、客服还是决策中心。"],
     ["03", "再确认", "发布、付款、退款、广告和敏感承诺必须等你点头。"],
   ];
+  const focusOptions = [
+    ["有商品想上架", "先把标题、卖点、图片或链接发进来，生成 Listing 草稿。"],
+    ["只有图片或链接", "先整理资料，再决定要不要进入 Listing 或素材工坊。"],
+    ["不知道下一步", "直接说现状，AI CEO 会判断该去哪个模块。"],
+  ];
   return `
     <section class="saas-ai-ceo-first-run-handoff" data-ai-ceo-first-run-handoff="first_run_ai_ceo_handoff_v1" data-does-not-trigger-real-write="true" aria-label="AI CEO 开口建议">
       <div class="saas-ai-ceo-first-run-copy">
         <span>可以这样开始</span>
         <strong>直接说经营目标，不用先找功能</strong>
         <p>点一句只会填入输入框；你确认发送后，AI CEO 再判断去 Listing、批量、素材、客服或决策中心。</p>
+      </div>
+      <div class="saas-ai-ceo-one-task-focus" data-ai-ceo-one-task-focus="first_day_one_task_focus_v1" aria-label="首日聚焦">
+        <div class="saas-ai-ceo-one-task-head">
+          <span>现在只做一件事</span>
+          <strong>把手上的商品、链接、图片或订单问题发给 AI CEO</strong>
+        </div>
+        <div class="saas-ai-ceo-one-task-grid">
+          ${focusOptions
+            .map(
+              ([title, detail]) => `
+                <article>
+                  <strong>${escapeHtml(title)}</strong>
+                  <small>${escapeHtml(detail)}</small>
+                </article>
+              `,
+            )
+            .join("")}
+        </div>
       </div>
       <div class="saas-ai-ceo-first-day-path" data-ai-ceo-first-day-path="first_day_ai_ceo_path_v2" aria-label="AI CEO 首日三步">
         ${firstDaySteps
