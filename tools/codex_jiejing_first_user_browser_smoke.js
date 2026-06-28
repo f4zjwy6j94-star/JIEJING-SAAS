@@ -148,7 +148,19 @@ function accountRecord(account) {
   };
 }
 
-function storageForAccount(account, { allAccounts = [], previous = {}, onboardingDone = false, includeStore = true, threadPayload = null } = {}) {
+function storageForAccount(
+  account,
+  {
+    allAccounts = [],
+    previous = {},
+    onboardingDone = false,
+    includeStore = true,
+    threadPayload = null,
+    sourceRecordsPayload = null,
+    merchantFeedbackPayload = null,
+    ceoCommandPayload = null,
+  } = {},
+) {
   const storage = { ...previous };
   const accountKey = String(account.userId || account.email || "browser").toLowerCase();
   const storeId = includeStore && account.store ? account.store.store_id : "";
@@ -161,6 +173,9 @@ function storageForAccount(account, { allAccounts = [], previous = {}, onboardin
   else delete storage.jiejing_saas_backend_store_id;
   if (onboardingDone) storage[`jiejing_saas_onboarding_done:${accountKey}`] = "1";
   if (threadPayload) storage.jiejing_saas_ceo_thread = JSON.stringify(threadPayload);
+  if (sourceRecordsPayload) storage.jiejing_saas_source_records = JSON.stringify(sourceRecordsPayload);
+  if (merchantFeedbackPayload) storage.jiejing_saas_merchant_feedback = JSON.stringify(merchantFeedbackPayload);
+  if (ceoCommandPayload) storage.jiejing_saas_ceo_command = JSON.stringify(ceoCommandPayload);
   return storage;
 }
 
@@ -225,6 +240,9 @@ async function main() {
   const accountA = await registerAccount("a", { createStore: true });
   const accountB = await registerAccount("b", { createStore: true });
   const accountASentinel = `ACCOUNT_A_PRIVATE_CHAT_SENTINEL_${Date.now()}`;
+  const accountASourceSentinel = `ACCOUNT_A_PRIVATE_SOURCE_SENTINEL_${Date.now()}`;
+  const accountAFeedbackSentinel = `ACCOUNT_A_PRIVATE_FEEDBACK_SENTINEL_${Date.now()}`;
+  const accountACommandSentinel = `ACCOUNT_A_PRIVATE_COMMAND_SENTINEL_${Date.now()}`;
   const threadPayload = {
     [scopeFor(accountA)]: [
       {
@@ -235,6 +253,41 @@ async function main() {
         created_at: new Date().toISOString(),
       },
     ],
+  };
+  const sourceRecordsPayload = {
+    [scopeFor(accountA)]: [
+      {
+        id: "account-a-source-only",
+        title: accountASourceSentinel,
+        snippet: "Account A source cache must not hydrate into Account B.",
+        source_type: "local_tenant_cache_smoke",
+      },
+    ],
+  };
+  const merchantFeedbackPayload = {
+    [scopeFor(accountA)]: [
+      {
+        id: "account-a-feedback-only",
+        feedback_type: "workflow_issue",
+        report_id: "account-a-private-report",
+        rule_text: accountAFeedbackSentinel,
+        created_at: new Date().toISOString(),
+      },
+    ],
+  };
+  const ceoCommandPayload = {
+    [scopeFor(accountA)]: {
+      id: "account-a-command-only",
+      text: accountACommandSentinel,
+      title: "Account A private command",
+      summary: "Account A command cache must not hydrate into Account B.",
+      intent: "general_chat",
+      status: "chat",
+      route: "general_chat",
+      created_at: new Date().toISOString(),
+      store_id: accountA.store?.store_id || "",
+      routes: [],
+    },
   };
 
   const browser = await chromium.launch({ channel: browserChannel, headless: true, timeout: 60000 });
@@ -303,6 +356,9 @@ async function main() {
       onboardingDone: true,
       includeStore: true,
       threadPayload,
+      sourceRecordsPayload,
+      merchantFeedbackPayload,
+      ceoCommandPayload,
     }),
   );
   const accountAPage = await accountAContext.newPage();
@@ -350,6 +406,18 @@ async function main() {
   });
   await waitForAppReady(accountBPage);
   const accountBDidNotShowAccountAChat = await accountBPage.evaluate((sentinel) => !document.body.innerText.includes(sentinel), accountASentinel);
+  const accountBScopedLocalCacheClean = await accountBPage.evaluate(
+    (sentinels) => {
+      const sourceRecords = typeof window.loadSaasSourceRecords === "function" ? window.loadSaasSourceRecords() : [];
+      const feedback = typeof window.loadSaasMerchantFeedback === "function" ? window.loadSaasMerchantFeedback() : [];
+      const command = typeof window.loadSaasLastCeoCommand === "function" ? window.loadSaasLastCeoCommand() : null;
+      const thread = typeof window.loadSaasAiCeoThread === "function" ? window.loadSaasAiCeoThread() : [];
+      const visibleText = document.body.innerText || "";
+      const serialized = JSON.stringify({ sourceRecords, feedback, command, thread, visibleText });
+      return sentinels.every((sentinel) => !serialized.includes(sentinel));
+    },
+    [accountASentinel, accountASourceSentinel, accountAFeedbackSentinel, accountACommandSentinel],
+  );
 
   await accountBPage.locator("#ceoInput").fill("解释一下 SaaS 订阅额度是什么意思");
   await accountBPage.locator('#ceoForm button[type="submit"]').click();
@@ -417,6 +485,7 @@ async function main() {
       first_day_path_strip_present: firstDayPathStripPresent,
       account_a_shows_own_chat: accountAShowsOwnChat,
       account_b_did_not_show_account_a_chat: accountBDidNotShowAccountAChat,
+      account_b_scoped_local_cache_clean: accountBScopedLocalCacheClean,
       model_402_route_intercepted: model402RouteInterceptCount > 0,
       model_failure_path_observed: modelFailurePathObserved,
       model_402_copy_is_merchant_safe: model402CopyIsMerchantSafe,

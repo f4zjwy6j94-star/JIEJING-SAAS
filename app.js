@@ -25341,6 +25341,12 @@ function renderSaasMerchantBillingCurrentStatusPanel(ctx = saasMerchantWorkbench
       tone: billing.blocksNow ? "red" : billing.entitlementActive ? "green" : "amber",
     },
     {
+      label: "平台经营成本",
+      title: "不由捷境代扣",
+      detail: "eBay、物流、广告和退款由商家平台账户结算；捷境只放进利润和风险测算。",
+      tone: "green",
+    },
+    {
       label: "续费 / 取消",
       title: hasExternalProvider ? "订阅页处理" : "正式上线后开放",
       detail: hasExternalProvider ? "商家通过订阅页自助管理，前端不接触支付密钥。" : "内测阶段只展示口径和演练状态，不收银行卡或支付信息。",
@@ -25358,7 +25364,7 @@ function renderSaasMerchantBillingCurrentStatusPanel(ctx = saasMerchantWorkbench
         <div>
           <span>当前计费状态</span>
           <strong>先看能不能继续用，再看哪些费用另算</strong>
-          <p>这张卡只给商家看结果：当前是否会扣费、基础订阅包含什么、AI 和素材为什么会单独核算，以及欠费后哪些东西还能看。</p>
+          <p>费用四分法：当前是否真实扣费、基础订阅包含什么、AI/素材为什么另算、eBay/物流/广告/退款是否由商家自己结算，以及欠费后哪些东西还能看。</p>
         </div>
         <em>${escapeHtml(billing.entitlementActive ? "权益可用" : hasExternalProvider ? "待订阅" : "不真实扣费")}</em>
       </div>

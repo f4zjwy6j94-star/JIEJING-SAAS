@@ -104,6 +104,7 @@ def check_static_first_day_contracts() -> int:
         (first_user_browser_smoke, "onboarded_query_did_not_bypass_onboarding", "browser smoke must prove old onboarded links cannot skip onboarding"),
         (first_user_browser_smoke, "first_day_path_strip_present", "browser smoke must prove first-day path is present in the shipped workbench asset"),
         (first_user_browser_smoke, "account_b_did_not_show_account_a_chat", "browser smoke must prove account B cannot see account A chat residue"),
+        (first_user_browser_smoke, "account_b_scoped_local_cache_clean", "browser smoke must prove account B cannot read account A local cache"),
         (first_user_browser_smoke, "model_402_route_intercepted", "browser smoke must intercept model 402 without calling a real model"),
         (first_user_browser_smoke, "model_402_copy_is_merchant_safe", "browser smoke must prove model quota copy is merchant-safe"),
         (first_user_browser_smoke, "workbench_logo_returns_to_current_index", "browser smoke must prove logo returns to the current homepage"),
