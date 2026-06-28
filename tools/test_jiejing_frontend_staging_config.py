@@ -26,7 +26,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260628-service-order-clarity-v14"
+    frontend_asset_version = "20260628-account-onboarding-guard-v2"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -89,6 +89,9 @@ def main() -> int:
         return fail("returning from the workbench logo to the homepage must clear direct-start shell classes")
     if f'const JIEJING_SITE_VERSION = "{frontend_asset_version}"' not in index_html:
         return fail("public homepage must expose the current JIEJING site version marker")
+    deploy_script = (ROOT / "tools" / "jiejing_deploy_frontend_staging_with_key.ps1").read_text(encoding="utf-8")
+    if "Unable to derive frontend asset version from app.html" not in deploy_script or "DEPLOY_FRONTEND_VERSION=$frontendVersion" not in deploy_script:
+        return fail("frontend deploy script must derive DEPLOY_FRONTEND_VERSION from app.html")
     if 'background: url("./assets/jiejing-app-icon.svg?v=20260619-brand-icon-v1") center / contain no-repeat;' not in styles_css:
         return fail("public SaaS brand mark must use the JIEJING app icon instead of a black fallback block")
     for forbidden_brand in [

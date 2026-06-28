@@ -20,6 +20,11 @@ $target = "$User@$Server"
 $stamp = Get-Date -Format "yyyyMMddHHmmss"
 $patchArchive = Join-Path $root "output\jiejing-frontend-patch-$stamp.tgz"
 $remoteArchive = "/tmp/jiejing-frontend-patch-$stamp.tgz"
+$appHtml = Get-Content -LiteralPath (Join-Path $root "app.html") -Raw -Encoding UTF8
+if ($appHtml -notmatch 'app\.js\?v=([^"''>]+)') {
+  throw "Unable to derive frontend asset version from app.html"
+}
+$frontendVersion = $Matches[1]
 
 function Invoke-NativeChecked {
   param(
@@ -62,7 +67,7 @@ rm -rf "`$tmp_dir"
 rm -f "$remoteArchive"
 echo DEPLOY_FRONTEND_STATUS=ok
 echo DEPLOY_BACKUP_DIR="`$backup_dir"
-echo DEPLOY_FRONTEND_VERSION=20260628-service-order-clarity-v14
+echo DEPLOY_FRONTEND_VERSION=$frontendVersion
 "@
 
 $archiveArgs = @("-czf", $patchArchive, "app.js", "styles.css", "index.html", "app.html", "privacy.html", "terms.html", "risk-disclosure.html", "deploy/nginx.public-staging.conf")
