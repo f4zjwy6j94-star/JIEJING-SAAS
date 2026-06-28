@@ -376,11 +376,16 @@ async function main() {
       text: card?.innerText || "",
       target: button?.getAttribute("data-global-flow-view") || "",
       button: button?.innerText || "",
+      has_v2_marker: card?.getAttribute("data-ai-ceo-route-task-card") === "ai_ceo_route_task_card_v2",
       has_why_rows: document.querySelectorAll("#view-cockpit .saas-ceo-routing-why article").length === 3,
       has_simple_copy:
         (card?.innerText || "").includes("我理解") &&
         (card?.innerText || "").includes("推荐去") &&
         (card?.innerText || "").includes("安全边界"),
+      has_next_step_copy:
+        (card?.innerText || "").includes("下一步建议") &&
+        (card?.innerText || "").includes("不会自动执行真实动作") &&
+        (card?.innerText || "").includes("点按钮后只打开对应工作台继续整理"),
       has_internal_copy: /packet|provider|preflight|数据包|后台|排查/i.test(card?.innerText || ""),
     };
   });
@@ -414,8 +419,15 @@ async function main() {
         expected: scenario.target,
         visible: Boolean(card && card.offsetParent !== null),
         target: button?.getAttribute("data-global-flow-view") || "",
+        has_v2_marker: card?.getAttribute("data-ai-ceo-route-task-card") === "ai_ceo_route_task_card_v2",
         has_why_rows: document.querySelectorAll("#view-cockpit .saas-ceo-routing-why article").length === 3,
         has_simple_copy: text.includes("我理解") && text.includes("推荐去") && text.includes("安全边界"),
+        has_next_step_copy:
+          text.includes("下一步建议") &&
+          text.includes("不会自动执行真实动作") &&
+          (scenario.target === "confirm"
+            ? text.includes("点按钮后只进入决策中心")
+            : text.includes("点按钮后只打开对应工作台继续整理")),
         has_internal_copy: /packet|provider|preflight|数据包|后台|排查/i.test(text),
         text: text.slice(0, 240),
       };
@@ -822,11 +834,18 @@ async function main() {
   if (ceoRouteTask.has_internal_copy || cockpit.ceo_route_task_internal_copy) {
     failures.push("AI CEO routing task card exposes internal packet/provider/preflight copy");
   }
-  if (!ceoRouteTask.has_why_rows || !ceoRouteTask.has_simple_copy) {
+  if (!ceoRouteTask.has_v2_marker || !ceoRouteTask.has_why_rows || !ceoRouteTask.has_simple_copy || !ceoRouteTask.has_next_step_copy) {
     failures.push("AI CEO routing task card copy missing");
   }
   for (const scenario of ceoRouteScenarios) {
-    if (!scenario.visible || scenario.target !== scenario.expected || !scenario.has_why_rows || !scenario.has_simple_copy) {
+    if (
+      !scenario.visible ||
+      scenario.target !== scenario.expected ||
+      !scenario.has_v2_marker ||
+      !scenario.has_why_rows ||
+      !scenario.has_simple_copy ||
+      !scenario.has_next_step_copy
+    ) {
       failures.push(`AI CEO route scenario ${scenario.label} failed`);
     }
     if (scenario.has_internal_copy) {

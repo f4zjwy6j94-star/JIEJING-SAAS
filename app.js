@@ -17494,16 +17494,24 @@ function saasCeoRouteSimpleReason(route = null) {
 function saasCeoRoutingWhyRows(route = null, command = state.saasLastCeoCommand) {
   const current = normalizeSaasCeoCommand(command);
   if (!route || !current) return [];
+  const boundaryCopy =
+    current.high_risk || route.view === "confirm"
+      ? "先确认，未点头不执行"
+      : "只整理草稿，真实动作仍确认";
   return [
     ["我理解", saasCeoTaskGoalLabel(current)],
     ["推荐去", `${route.label || "推荐模块"} · ${saasCeoRouteSimpleReason(route)}`],
-    [
-      "安全边界",
-      current.high_risk || route.view === "confirm"
-        ? "先确认，未点头不执行"
-        : "只整理草稿，真实动作仍确认",
-    ],
+    ["安全边界", boundaryCopy],
   ];
+}
+
+function saasCeoRoutingNextLine(route = null, command = state.saasLastCeoCommand) {
+  const current = normalizeSaasCeoCommand(command);
+  if (!route || !current) return "";
+  if (current.high_risk || route.view === "confirm") {
+    return "点按钮后只进入决策中心；你确认前，不会发布、付款、退款、投广告或承诺买家。";
+  }
+  return "点按钮后只打开对应工作台继续整理；发布、付款、退款、广告和敏感承诺仍要你确认。";
 }
 
 function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
@@ -17524,11 +17532,14 @@ function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
       ? "先去决策中心确认"
       : `去 ${route.label || "推荐模块"} 继续`;
   return `
-    <section class="saas-ceo-routing-task-card ${current.high_risk ? "is-risk" : ""}" aria-label="AI CEO 下一步任务卡">
+    <section class="saas-ceo-routing-task-card ${current.high_risk ? "is-risk" : ""}" data-ai-ceo-route-task-card="ai_ceo_route_task_card_v2" aria-label="AI CEO 下一步任务卡">
       <div class="saas-ceo-routing-main">
-        <span>AI CEO 已接住</span>
+        <div class="saas-ceo-routing-kicker">
+          <span>AI CEO 已接住</span>
+          <small>下一步建议 · 不会自动执行真实动作</small>
+        </div>
         <strong>${escapeHtml(handoffTitle)}</strong>
-        <p>${escapeHtml(saasCeoTaskGoalLabel(current))}。${escapeHtml(saasCeoTaskNextCopy(route, current))}</p>
+        <p class="saas-ceo-routing-summary">我理解你想：${escapeHtml(saasCeoTaskGoalLabel(current))}。${escapeHtml(saasCeoTaskNextCopy(route, current))}</p>
         <div class="saas-ceo-routing-why" aria-label="AI CEO 路由确认">
           ${whyRows
             .map(
@@ -17541,6 +17552,7 @@ function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
             )
             .join("")}
         </div>
+        <p class="saas-ceo-routing-nextline">${escapeHtml(saasCeoRoutingNextLine(route, current))}</p>
       </div>
       <button class="primary-action compact-action" type="button" data-global-flow-view="${escapeHtml(route.view)}" data-global-flow-key="${escapeHtml(route.key || route.view)}">
         ${escapeHtml(buttonLabel)}
