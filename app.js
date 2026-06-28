@@ -11356,6 +11356,7 @@ function handleGlobalFlowNavigation(button) {
     finance: "已打开利润履约：利润、费用和时效会跟刊登草稿一起核算。",
     service: "已打开客服物流：普通回复和物流整理可先起草，高风险承诺仍进确认中心。",
     confirm: "已打开确认中心：发布、付款、退款和广告等高风险动作在这里确认。",
+    account: "已打开设置：先恢复登录、店铺和 eBay 连接状态。",
     model: "已打开设置：AI 连接、商家记忆、来源和上线状态都在这里。",
     audit: "已打开 AI CEO 汇报：查看报告、来源、确认记录和长期记忆的回写。",
   };
@@ -11369,6 +11370,7 @@ function handleGlobalFlowNavigation(button) {
     pulseFlowTarget("#view-cockpit .cockpit-market-panel", { message: messages.market });
     return;
   }
+  if (key === "account") state.saasSettingsTab = "account";
   if (key === "model") state.saasSettingsTab = "model";
   setView(view, { preserveFlowKey: Boolean(key) });
   if (key === "source") pulseFlowTarget("#view-connect .source-intake-panel", { message: messages.source });
@@ -11377,6 +11379,7 @@ function handleGlobalFlowNavigation(button) {
   else if (key === "confirm") pulseFlowTarget("#view-confirm", { message: messages.confirm });
   else if (key === "bulk") pulseFlowTarget("#view-bulk", { message: messages.bulk });
   else if (key === "service") pulseFlowTarget("#view-service", { message: messages.service });
+  else if (key === "account") pulseFlowTarget("#view-connect", { message: messages.account });
   else if (key === "model") pulseFlowTarget("#view-connect", { message: messages.model });
   else if (key === "audit") pulseFlowTarget("#view-activity", { message: messages.audit });
   else showActionToast(messages[key] || "已打开对应流程。");
@@ -17799,11 +17802,31 @@ function renderSaasAiCeoRecoveryHintMarkup(turn = {}) {
   if (!latest || !shouldShowSaasAiCeoRecoveryHint(latest)) return "";
   const text = String(latest.assistant_text || "");
   const isUsageBlock = /用量|额度|余额|账单|套餐|计费/.test(text);
+  const isAccountBlock = /登录|会话|店铺上下文|店铺状态|没有可用店铺|受保护/.test(text);
+  const label = isUsageBlock ? "用量提示" : isAccountBlock ? "店铺状态" : "连接提示";
+  const title = isUsageBlock
+    ? "AI 已收到，但模型额度需要先恢复"
+    : isAccountBlock
+      ? "AI 已收到，但需要先恢复店铺状态"
+      : "AI 已收到，但 AI 连接需要先恢复";
+  const detail = isUsageBlock
+    ? "先去设置看 AI 与素材的连接和用量；不用在这里重复粘贴密钥。"
+    : isAccountBlock
+      ? "先刷新登录和店铺资料；如果仍没有店铺，就到设置连接 eBay 或导入资料。"
+      : "先去设置查看模型连接；凭证仍只在后端安全边界处理。";
+  const primaryKey = isAccountBlock ? "account" : "model";
+  const primaryLabel = isAccountBlock ? "去账号与店铺" : "去 AI 与素材";
   return `
     <div class="saas-ai-ceo-recovery-hint" data-ai-ceo-recovery-hint="merchant_safe_ai_recovery_v1">
-      <span>${isUsageBlock ? "用量提示" : "连接提示"}</span>
-      <strong>${isUsageBlock ? "先看 AI 连接和用量状态" : "先看 AI 连接状态"}</strong>
-      <button class="secondary-action compact-action" type="button" data-global-flow-view="connect" data-global-flow-key="model">去 AI 与素材</button>
+      <span>${escapeHtml(label)}</span>
+      <div>
+        <strong>${escapeHtml(title)}</strong>
+        <small>${escapeHtml(detail)}</small>
+      </div>
+      <div class="saas-ai-ceo-recovery-actions">
+        <button class="secondary-action compact-action" type="button" data-saas-action="refresh">刷新状态</button>
+        <button class="primary-action compact-action" type="button" data-global-flow-view="connect" data-global-flow-key="${escapeHtml(primaryKey)}">${escapeHtml(primaryLabel)}</button>
+      </div>
     </div>
   `;
 }

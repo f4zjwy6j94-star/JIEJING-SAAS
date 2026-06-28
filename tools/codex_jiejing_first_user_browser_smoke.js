@@ -474,7 +474,7 @@ async function main() {
     return (
       url.pathname.endsWith("/index.html") &&
       url.searchParams.get("start") === "site" &&
-      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260628-ai-ceo-route-card-v11"')
+      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260628-ai-ceo-route-card-v12"')
     );
   });
   await accountBPage.screenshot({ path: path.join(outDir, "workbench-logo-homepage-return.png"), fullPage: true }).catch(() => {});

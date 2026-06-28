@@ -35424,11 +35424,12 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-latest-answer p {
 }
 
 body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-recovery-hint {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   margin-top: 12px;
-  padding: 10px;
+  padding: 10px 12px;
   border: 1px solid rgba(193, 126, 31, 0.2);
   border-radius: 8px;
   background: #fffaf0;
@@ -35453,15 +35454,30 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-recovery-hint span {
 
 body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-recovery-hint strong {
   min-width: 0;
-  flex: 1 1 auto;
+  display: block;
   color: #1d332c;
   font-size: 13px;
   font-weight: 900;
   line-height: 1.35;
 }
 
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-recovery-hint small {
+  display: block;
+  margin-top: 3px;
+  color: #66746e;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-recovery-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-recovery-hint button {
-  flex: 0 0 auto;
   min-height: 34px;
   padding: 0 12px;
   white-space: nowrap;
@@ -35516,6 +35532,11 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-pending-status small {
 @media (max-width: 640px) {
   body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-recovery-hint {
     align-items: flex-start;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-recovery-actions {
+    width: 100%;
     flex-direction: column;
   }
 
