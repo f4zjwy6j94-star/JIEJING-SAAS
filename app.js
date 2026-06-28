@@ -28160,10 +28160,10 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
   const hasOfficialOrders = ctx.presentKeys.includes("orders_and_fulfillment") && opsSnapshot.orderCount > 0;
   const hasListings = ctx.presentKeys.includes("inventory_and_offers") && opsSnapshot.listingCount > 0;
   const serviceNextAction = !ctx.connection
-    ? "先去设置连接 eBay，之后才会出现真实订单和消息"
+    ? "连接店铺后自动接收订单与买家消息"
     : hasOfficialOrders
-      ? "先处理需要回复的买家消息"
-      : "暂无真实订单或消息";
+      ? "先看需要回复或物流异常的订单"
+      : "当前没有待处理订单";
   const serviceActionButtons = (() => {
     if (!ctx.connection) {
       return '<button class="primary-action" type="button" data-global-flow-view="connect">连接 eBay 店铺</button>';
@@ -28175,30 +28175,30 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
       return '<button class="secondary-action" type="button" data-global-flow-view="product">先补 Listing 商品档案</button>';
     }
     if (!hasOfficialOrders) {
-      return '<span class="saas-service-waiting-note">等真实订单或买家消息进来，这里再开始起草回复。</span>';
+      return '<span class="saas-service-waiting-note">当前没有待处理订单，页面保持安静。</span>';
     }
     return '<button class="primary-action" type="button" data-global-flow-view="confirm">查看需要确认的回复</button>';
   })();
   view.innerHTML = `
-      <section class="panel full saas-real-service-center" aria-label="客服与订单工作台">
+      <section class="panel full saas-real-service-center" data-saas-service-daily-workbench="service_order_plain_workbench_v2" aria-label="客服与订单工作台">
       <header class="product-manager-header saas-real-listing-header">
         <div>
           <p class="eyebrow">客服与订单</p>
-          <h2>买家消息先整理，关键承诺你确认</h2>
-          <p class="section-note">这里按三件事排好：买家问什么、订单到哪、回复怎么说；退款、补偿、重发、地址修改和明确到货日会停下来让你接管。</p>
+          <h2>今日客服与订单</h2>
+          <p class="section-note">买家消息、订单状态和回复草稿集中处理；退款、补偿、重发、地址修改和明确到货日会进入决策中心。</p>
         </div>
         <span class="pill ${ctx.official && hasOfficialOrders ? "green" : "amber"}">${ctx.official && hasOfficialOrders ? "可处理" : "等真实订单"}</span>
       </header>
 
       <section class="saas-readable-page-head saas-service-readable-head" aria-label="客服与订单说明">
         <div>
-          <span>客服与订单</span>
-          <strong>三件事：消息、订单、回复</strong>
-          <p>能从订单和商品档案回答的，AI 先起草；涉及钱、补偿、重发、地址修改、明确到货日和敏感承诺，直接停到决策中心。</p>
+          <span>今日处理台</span>
+          <strong>客服、物流和售后放在一页</strong>
+          <p>能从商品档案和订单状态回答的，AI 先整理成草稿；涉及钱、重发、地址修改、明确到货日和敏感承诺，直接停到决策中心。</p>
         </div>
         <div class="saas-page-next-action">
           <b>${escapeHtml(serviceNextAction)}</b>
-          <small>没有真实订单时保持空白</small>
+          <small>没有真实订单时不显示虚构买家</small>
         </div>
       </section>
       ${renderSaasModuleAiGoalStrip("service")}
@@ -28207,7 +28207,7 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
         <article class="${hasOfficialOrders ? "is-green" : "is-amber"}">
           <span>1</span>
           <strong>买家消息</strong>
-          <p>${hasOfficialOrders ? `${escapeHtml(saasCompactValue(opsSnapshot.orderLabel))} · 先处理待回复和异常消息` : "没有真实消息时保持空状态，不显示虚构买家。"}</p>
+          <p>${hasOfficialOrders ? `${escapeHtml(saasCompactValue(opsSnapshot.orderLabel))} · 待回复、催单、售前问题优先整理` : "没有真实消息时保持空状态，不显示虚构买家。"}</p>
         </article>
         <article class="${hasListings ? "is-green" : "is-amber"}">
           <span>2</span>
@@ -28217,24 +28217,24 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
         <article class="${pendingServiceConfirmations.length ? "is-amber" : "is-green"}">
           <span>3</span>
           <strong>回复边界</strong>
-          <p>普通问题可先起草；退款、补偿、重发、地址修改、明确到货日和敏感承诺必须进决策中心。</p>
+          <p>普通问题可先起草；退款、补偿、重发、地址修改、明确到货日和敏感承诺进决策中心。</p>
         </article>
       </div>
 
       ${renderSaasFirstRunAssuranceStrip(
         [
           {
-            label: "没有订单不造假",
-            title: "等真实消息进来",
+            label: "不造假",
+            title: "没有订单就保持安静",
             copy: "客服页不显示虚构买家、虚构订单或虚构物流。",
           },
           {
-            label: "先按档案回复",
+            label: "按事实回复",
             title: "只引用已知事实",
             copy: "商品档案、订单状态和商家规则是回复依据。",
           },
           {
-            label: "承诺会停住",
+            label: "承诺停住",
             title: "敏感回复进决策中心",
             copy: "退款、补偿、重发、地址修改和明确到货日都要确认。",
           },
@@ -28244,8 +28244,8 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
 
       <section class="saas-service-simple-workspace" aria-label="客服与订单工作区">
         <article class="${hasOfficialOrders ? "is-green" : "is-empty"}">
-          <span>订单 / 消息</span>
-          <strong>${hasOfficialOrders ? "可以开始处理" : "还没有真实订单或消息"}</strong>
+          <span>订单与消息</span>
+          <strong>${hasOfficialOrders ? "可以开始处理" : "当前没有待处理内容"}</strong>
           <p>${hasOfficialOrders ? `${escapeHtml(saasCompactValue(opsSnapshot.orderLabel))} · ${escapeHtml(saasCompactValue(opsSnapshot.fulfillment, "按订单状态核对"))}` : "没有真实数据时，客服页保持空状态，不显示虚构订单。"}</p>
         </article>
         <article class="${hasListings ? "is-green" : "is-amber"}">
@@ -28254,14 +28254,14 @@ function renderSaasServiceCenter(view = document.querySelector("#view-service"))
           <p>只引用商品档案、订单状态和你保存的商家规则；不能把 AI 猜测说成事实。</p>
         </article>
         <article class="${pendingServiceConfirmations.length ? "is-amber" : "is-green"}">
-          <span>需要你确认</span>
+          <span>确认事项</span>
           <strong>${pendingServiceConfirmations.length}</strong>
           <p>退款、补偿、重发、地址修改、明确到货日和敏感承诺会进入决策中心。</p>
         </article>
       </section>
 
       <div class="saas-service-action-strip">
-        <strong>下一步</strong>
+        <strong>当前重点</strong>
         <div>
           ${serviceActionButtons}
         </div>

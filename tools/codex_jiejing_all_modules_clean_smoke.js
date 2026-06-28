@@ -5,7 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const { chromium } = require("../output/codex-playwright-deps/node_modules/playwright-core");
 
-const base = process.env.JIEJING_TEST_BASE || "https://individually-buffalo-prescribed-blocking.trycloudflare.com";
+const base = process.env.JIEJING_TEST_BASE || "https://app.jiejing.shop";
 const browserChannel = process.env.JIEJING_PLAYWRIGHT_CHANNEL || "chrome";
 const localStaticRoot = process.env.JIEJING_LOCAL_STATIC_ROOT ? path.resolve(process.env.JIEJING_LOCAL_STATIC_ROOT) : "";
 const viewportWidth = Number(process.env.JIEJING_SMOKE_VIEWPORT_WIDTH || 1440);
@@ -565,10 +565,13 @@ async function main() {
           has_bulk_grouping_copy: text.includes("能试") && text.includes("要补") && text.includes("先不做"),
           has_bulk_first_run_strip: sectionHas(".bulk-output-snapshot") && text.includes("真实发布") && text.includes("决策中心"),
           has_bulk_internal_copy: /真实账号批量质检|官方数据包|字段完整度|质检槽位|等待数据包/.test(text),
-          has_service_simple_headline: text.includes("三件事：消息、订单、回复"),
-          has_service_simple_flow: text.includes("消息、订单、回复") && text.includes("没有真实订单时保持空白"),
+          has_service_simple_headline: text.includes("客服、物流和售后放在一页"),
+          has_service_simple_flow:
+            text.includes("今日处理台") &&
+            text.includes("当前没有待处理订单") &&
+            text.includes("没有真实订单时不显示虚构买家"),
           has_service_first_run_strip:
-            sectionHas(".saas-service-first-run-strip") && text.includes("没有订单不造假") && text.includes("只引用已知事实"),
+            sectionHas(".saas-service-first-run-strip") && text.includes("没有订单就保持安静") && text.includes("只引用已知事实"),
           has_service_internal_copy: /官方数据包|Listing Package|等待官方订单|等待官方同步|官方数据可用|客服事实表|Provider Hub|provider|后台排查|后台状态|连接和排查在设置|去设置同步 eBay/.test(text),
           has_confirm_simple_headline: text.includes("只让你处理真正要拍板的事"),
           has_confirm_simple_action_copy: text.includes("这里只做三种选择"),

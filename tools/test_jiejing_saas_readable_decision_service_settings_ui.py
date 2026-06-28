@@ -78,17 +78,19 @@ def main() -> None:
         require(confirm_scope, marker, "decision center simplified surface")
 
     for marker in [
-        "三件事：消息、订单、回复",
-        "订单 / 消息",
+        "service_order_plain_workbench_v2",
+        "今日客服与订单",
+        "客服、物流和售后放在一页",
+        "订单与消息",
         "回复草稿",
-        "需要你确认",
-        "还没有真实订单或消息",
-        "没有订单不造假",
-        "等真实消息进来",
+        "确认事项",
+        "当前没有待处理内容",
+        "不造假",
+        "没有订单就保持安静",
         "只引用已知事实",
-        "承诺会停住",
-        "退款、补偿、重发、地址修改、明确到货日和敏感承诺必须进决策中心",
-        "下一步",
+        "承诺停住",
+        "退款、补偿、重发、地址修改、明确到货日和敏感承诺进决策中心",
+        "当前重点",
         "连接 eBay 店铺",
     ]:
         require(service_scope, marker, "service and orders simplified surface")

@@ -76,7 +76,7 @@
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-scene.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-detail.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-video-cover.webp" />
-    <link rel="stylesheet" href="./styles.css?v=20260628-billing-clarity-v13" />
+    <link rel="stylesheet" href="./styles.css?v=20260628-service-order-clarity-v14" />
     <style id="jiejing-cockpit-layout-guard">
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
         display: grid !important;
@@ -2622,13 +2622,13 @@
             <div class="section-heading">
               <div>
                 <p class="eyebrow">客服与订单</p>
-                <h2>买家消息先整理，关键承诺你确认</h2>
-                <p class="section-note">这里按三件事排好：买家问什么、订单到哪、回复怎么说；退款、补偿、重发、地址修改和明确到货日会停下来让你接管。</p>
+                <h2>今日客服与订单</h2>
+                <p class="section-note">买家消息、订单状态和回复草稿集中处理；退款、补偿、重发、地址修改和明确到货日会进入决策中心。</p>
               </div>
               <span class="pill green" id="autoServiceMode">AI 自动接待中</span>
             </div>
             <div class="service-kpi-grid" id="serviceKpiGrid">
-              <article><span>待处理</span><strong>3</strong><p>先看需要回复的买家消息</p></article>
+              <article><span>待处理</span><strong>3</strong><p>买家消息、催单和售后优先整理</p></article>
               <article><span>订单状态</span><strong>4</strong><p>待发货、派送失败、长时间未更新</p></article>
               <article><span>可先回复</span><strong>2</strong><p>tracking 更新、已妥投说明</p></article>
               <article><span>需接管</span><strong>退款 / 重发</strong><p>影响钱和承诺的先停住</p></article>
@@ -2658,14 +2658,14 @@
             <section class="panel service-thread-panel">
               <div class="section-heading">
                 <div>
-                  <p class="eyebrow">回复草稿 / 人工接管</p>
+                  <p class="eyebrow">回复草稿</p>
                   <h2 id="conversationTitle">物流延迟咨询</h2>
                 </div>
                 <span class="pill amber" id="conversationRisk">需确认</span>
               </div>
               <div class="handoff-bar">
                 <span class="pill green" id="handoffMode">AI 自动接待中</span>
-              <p>普通问题先起草回复；遇到退款、补偿、重发、差评、纠纷和明确到货承诺，自动停住并让你接管。</p>
+               <p>普通问题先起草回复；遇到退款、补偿、重发、差评、纠纷和明确到货承诺，自动停到决策中心。</p>
               </div>
               <div class="buyer-thread" id="buyerThread"></div>
               <label class="reply-editor">
@@ -2685,7 +2685,7 @@
                   <p class="eyebrow">订单状态</p>
                   <h2>按订单号、买家或 tracking 找</h2>
                 </div>
-                <span class="pill neutral">占位</span>
+                 <span class="pill neutral">实时</span>
               </div>
               <div class="logistics-tools">
                 <label class="order-search-field">
@@ -2702,8 +2702,8 @@
 
           <section class="panel full service-ai-record-panel">
             <div>
-              <p class="eyebrow">当前处理顺序</p>
-              <h2>先消息，再订单，再回复边界</h2>
+              <p class="eyebrow">客服处理台</p>
+              <h2>消息、订单、回复边界</h2>
             </div>
             <div class="service-agent-grid" id="serviceAgentGrid">
               <article><span>买家消息</span><strong>先分优先级</strong><p>把普通问题和需要接管的问题分开。</p></article>
@@ -3288,6 +3288,6 @@
       })();
     </script>
     <script src="./assets/jiejing-settings-panels.js?v=20260620-prelaunch-deferred-v1"></script>
-    <script src="./app.js?v=20260628-billing-clarity-v13"></script>
+    <script src="./app.js?v=20260628-service-order-clarity-v14"></script>
   </body>
 </html>

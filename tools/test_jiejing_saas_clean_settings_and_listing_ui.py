@@ -516,11 +516,12 @@ def main() -> None:
     service_dynamic_end = app_js.index("function renderConversations", service_dynamic_start)
     service_dynamic_body = app_js[service_dynamic_start:service_dynamic_end]
     for expected in [
-        "买家消息先整理，关键承诺你确认",
-        "买家问什么、订单到哪、回复怎么说",
-        "消息、订单、回复",
-        "没有真实订单时保持空白",
-        "暂无真实订单或消息",
+        "service_order_plain_workbench_v2",
+        "今日客服与订单",
+        "客服、物流和售后放在一页",
+        "没有真实订单时不显示虚构买家",
+        "当前没有待处理订单",
+        "当前没有待处理内容",
     ]:
         require(service_html + service_dynamic_body, expected, f"Service simple daily copy: {expected}")
     for internal_marker in [
