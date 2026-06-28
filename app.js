@@ -25906,7 +25906,7 @@ function renderSaasCockpitRealWorkbench() {
   const authStatus = rawConnectionStatus
     ? saasStoreStatusLabel(rawConnectionStatus)
     : loadingProtectedState
-      ? "后台读取中"
+      ? "读取账号状态中"
       : saasStoreStatusLabel(rawConnectionStatus);
   const packetSummary = ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal}` : loadingProtectedState ? "读取中" : "待同步";
   const modelSummary = modelConfigured ? "已保存" : loadingProtectedState ? "读取中" : "待保存";
@@ -25917,7 +25917,7 @@ function renderSaasCockpitRealWorkbench() {
     ["跑一轮 Listing", "基于当前官方数据包，跑一轮市场报告、Listing Package、素材需求、利润履约和确认项。"],
     ["批量前质检", "检查当前候选商品是否适合批量铺货，列出数据缺口、IP 风险、价格和库存确认项。"],
     ["素材工坊", "把当前 Listing 草稿转成图片需求，拆出主图、详情页、短视频脚本和实物一致性审核。"],
-    ["今天先做什么", "根据 eBay 授权、数据包、AI 连接、报告和待确认项，告诉我今天最该处理的 3 件事。"],
+    ["今天先做什么", "根据 eBay 连接、店铺资料、AI 状态、报告和待确认项，告诉我今天最该处理的 3 件事。"],
   ];
   const statusPills = [
     {
@@ -25927,7 +25927,7 @@ function renderSaasCockpitRealWorkbench() {
       tone: authorizationReady ? "green" : "amber",
     },
     {
-      label: "packet",
+      label: "数据",
       value: packetSummary,
       note: packetId || ctx.sourceLabel,
       tone: ctx.hasPacket ? "green" : "amber",
@@ -25935,7 +25935,7 @@ function renderSaasCockpitRealWorkbench() {
     {
       label: "AI",
       value: modelSummary,
-      note: "后端密钥边界",
+      note: "凭证安全",
       tone: modelConfigured ? "green" : "amber",
     },
     {
@@ -25971,7 +25971,7 @@ function renderSaasCockpitRealWorkbench() {
   const pageTitleNode = document.querySelector("#pageTitle");
   const moduleHintNode = document.querySelector("#moduleFlowHint");
   if (pageTitleNode) pageTitleNode.textContent = "AI CEO";
-  if (moduleHintNode) moduleHintNode.textContent = "像聊天一样说出目标；连接、数据包、模型和上线状态集中到设置页。";
+  if (moduleHintNode) moduleHintNode.textContent = "像聊天一样说出目标；连接、店铺资料、AI 和订阅状态集中到设置页。";
   cockpit.innerHTML = `
     <section class="saas-real-cockpit-shell saas-ai-ceo-workbench saas-ai-ceo-chatgpt-shell" aria-label="AI CEO 对话工作台">
       <div class="saas-ai-ceo-cockpit-main">

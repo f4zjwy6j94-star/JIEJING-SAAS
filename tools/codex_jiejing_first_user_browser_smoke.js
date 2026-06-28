@@ -475,7 +475,7 @@ async function main() {
     return (
       url.pathname.endsWith("/index.html") &&
       url.searchParams.get("start") === "site" &&
-      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260628-account-onboarding-guard-v2"')
+      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260628-account-onboarding-guard-v3"')
     );
   });
   await accountBPage.screenshot({ path: path.join(outDir, "workbench-logo-homepage-return.png"), fullPage: true }).catch(() => {});

@@ -127,9 +127,12 @@ def main() -> int:
                     return fail(f"{function_name} leaks legacy listing sample into real SaaS workbench: {marker}")
 
     cockpit_scope = function_scope(app_js, "renderSaasCockpitRealWorkbench")
-    for marker in ["倒流香炉", "Backflow Incense", "5 个候选品", "1688 货源图"]:
+    for marker in ["倒流香炉", "Backflow Incense", "5 个候选品", "1688 货源图", "后台读取中", 'label: "packet"', "连接、数据包、模型和上线状态集中到设置页"]:
         if marker in cockpit_scope:
             return fail(f"renderSaasCockpitRealWorkbench leaks legacy cockpit sample into real SaaS workbench: {marker}")
+    for marker in ["读取账号状态中", "根据 eBay 连接、店铺资料、AI 状态、报告和待确认项", 'label: "数据"', "凭证安全", "连接、店铺资料、AI 和订阅状态集中到设置页"]:
+        if marker not in cockpit_scope:
+            return fail(f"renderSaasCockpitRealWorkbench missing merchant-readable cockpit copy: {marker}")
 
     for required_guard in [
         "function normalizeSaasProtectedView",
