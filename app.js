@@ -21369,7 +21369,9 @@ async function refreshSaasState(options = {}) {
       Promise.resolve(coreStores),
       Promise.resolve(coreConnections),
       optionalSaasFetchFast(`/security/staging-gate?store_id=${encodeURIComponent(store.store_id)}`, { staging_security_gate: null }),
-      optionalSaasFetchFast("/owner/launch-control", { owner_launch_control: state.saasOwnerLaunchControl || null }, 15000),
+      saasOwnerLaunchCanView()
+        ? optionalSaasFetchFast("/owner/launch-control", { owner_launch_control: state.saasOwnerLaunchControl || null }, 15000)
+        : Promise.resolve({ owner_launch_control: null, skipped: "owner_admin_only" }),
       optionalSaasFetchFast(`/secret-refs?store_id=${encodeURIComponent(store.store_id)}`, { secret_refs: [] }),
       optionalSaasFetchFast("/vault/status", { vault: null }),
       optionalSaasFetchFast("/vault/adapters", { vault_adapters: null }),

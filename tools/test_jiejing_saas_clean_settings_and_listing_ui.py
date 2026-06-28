@@ -336,6 +336,8 @@ def main() -> None:
     require(settings_layout_body, 'activeTab.id === "general"', "settings overview-only map guard")
     require(settings_layout_body, 'isOverview ? renderSaasSettingsReadableMap(activeTab.id) : ""', "settings child pages skip redundant map")
     require(settings_layout_body, 'isOverview ? renderSaasSettingsOneGlanceStrip(activeTab.id) : ""', "settings one-glance summary stays overview-only")
+    require(app_js, 'saasOwnerLaunchCanView()\n        ? optionalSaasFetchFast("/owner/launch-control"', "owner launch control should not be fetched for ordinary merchants")
+    require(app_js, 'Promise.resolve({ owner_launch_control: null, skipped: "owner_admin_only" })', "owner launch control public-page quiet skip")
     for billing_model_marker in [
         "基础订阅保留工作台",
         "AI 用量和素材生成单独核算",
