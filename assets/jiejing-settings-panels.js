@@ -165,8 +165,8 @@
         <div class="saas-settings-card-head">
           <div>
             <span>公网安全状态</span>
-            <strong>platform internal admin only · anti-scrape and edge evidence</strong>
-            <p>这是主理人内部面板，不给普通商家当功能展示。目标是看清哪些路径被 noindex、哪些接口限流、哪些高成本 API 受保护、Cloudflare 免费规则是否有证据，以及源站是否还能被绕过。</p>
+            <strong>平台内部安全审计 · 防爬、限流和边缘证据</strong>
+            <p>这个区域只对平台管理员开放，用来核对 noindex、接口限流、高成本 API 保护、Cloudflare 免费规则证据和源站直连风险。普通商家不会看到这些工程排查项。</p>
           </div>
         </div>
         <div class="saas-settings-status-list">

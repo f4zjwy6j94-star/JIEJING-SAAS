@@ -69,6 +69,13 @@ python tools/test_jiejing_local_first_cloud_fallback_guardrails.py
 
 For UI changes, run the relevant contract tests and browser smoke checks. Use the JIEJING design system and keep merchant-facing pages simple.
 
+## Proactive Principal Audit
+
+- Do not wait for the operator to ask for an audit after meaningful product, UI, billing, security, deployment, or workflow changes.
+- After each important change, review JIEJING from these owner lenses: SaaS product fit, beginner merchant UX, billing clarity, tenant isolation, security/trust, eBay operating correctness, reliability/readiness, and merchant-facing copy quality.
+- Treat this audit as part of the work, not as an optional follow-up. If a finding is low-risk and directly fixable, fix it in the same pass; if it needs external accounts, live billing, new eBay credentials, or paid infrastructure, report it as a blocker without inventing readiness.
+- Keep the audit conservative: no eBay OAuth, no live Stripe cutover, no real platform write, no secret read/print, and no destructive deploy action unless explicitly approved.
+
 ## Professional Prompt Auto-Trigger
 
 - Use `docs/JIEJING_PROFESSIONAL_PROMPT_PLAYBOOK_20260628.md` as the internal professional-prompt library for JIEJING work.

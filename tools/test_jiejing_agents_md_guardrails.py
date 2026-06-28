@@ -45,6 +45,11 @@ def main() -> int:
         "node --check app.js",
         "python tools/jiejing_precloud_deployment_gate.py",
         "ready_for_paid_commercial_launch=false",
+        "Proactive Principal Audit",
+        "Do not wait for the operator to ask for an audit",
+        "SaaS product fit",
+        "beginner merchant UX",
+        "merchant-facing copy quality",
         "Professional Prompt Auto-Trigger",
         "docs/JIEJING_PROFESSIONAL_PROMPT_PLAYBOOK_20260628.md",
         "Trigger the relevant prompts autonomously",
@@ -80,6 +85,7 @@ def main() -> int:
         "docker compose down -v\n",
         "docker volume rm\n",
         "git reset --hard\n",
+        "这是主理人内部面板",
     ]
     present = [marker for marker in forbidden if marker in text]
     if present:
