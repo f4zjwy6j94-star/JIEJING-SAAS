@@ -26,7 +26,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260629-onboarding-guard-v1"
+    frontend_asset_version = "20260629-onboarding-lite-v1"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -82,6 +82,7 @@ def main() -> int:
         "20260625-first-day-v3",
         "20260625-ai-ceo-pending-v4",
         "20260629-home-intents-v1",
+        "20260629-onboarding-guard-v1",
         "20260510-ebay-policy-v1",
     ]:
         if stale_asset_version in index_html + app_html:
@@ -375,6 +376,12 @@ def main() -> int:
     if "真实工作流以你的 eBay 只读数据和商家资料为准" not in index_html:
         return fail("homepage onboarding copy should point real testing at merchant eBay read-only data")
     for onboarding_control_marker in [
+        "onboardingDeferredSettingsFields",
+        "onboarding-lite-path",
+        "onboarding-lite-safety",
+        "设置里可继续补接",
+        "不需要一次配置完所有平台接口",
+        "发布、改价、退款、广告预算、采购付款和买家承诺都会进入确认中心",
         "onboardingLaunchMapMarkup",
         "onboardingControlStripMarkup",
         "onboardingChoiceContextMarkup",
@@ -388,10 +395,12 @@ def main() -> int:
         "官方只读优先",
         "可跳过授权继续",
         "确认中心兜底",
-        "首单上线检查",
+        "首日安全边界",
     ]:
         if onboarding_control_marker not in app_js + app_html + styles_css:
             return fail(f"missing onboarding control-room marker: {onboarding_control_marker}")
+    if '"sourceApiMode",\n    "fulfillmentMode",' in app_js or '"returnPolicy",\n    "feeInsightMode",' in app_js:
+        return fail("public first-day onboarding must keep advanced connection details in Settings instead of the main route")
     for billing_guardrail_marker in [
         "function renderSaasMerchantPricingModelPanel",
         "saas-merchant-pricing-model",

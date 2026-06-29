@@ -76,7 +76,7 @@
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-scene.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-detail.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-video-cover.webp" />
-    <link rel="stylesheet" href="./styles.css?v=20260629-onboarding-guard-v1" />
+    <link rel="stylesheet" href="./styles.css?v=20260629-onboarding-lite-v1" />
     <style id="jiejing-cockpit-layout-guard">
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
         display: grid !important;
@@ -667,12 +667,12 @@
           <span class="brand-mark" aria-hidden="true"></span>
           <div>
             <strong>捷境</strong>
-            <span>JIEJING · eBay 自动化向导</span>
+            <span>JIEJING · eBay 首日向导</span>
           </div>
         </div>
         <div class="onboarding-nav-actions">
           <button class="secondary-action" id="onboardingReturnSite">返回产品页</button>
-          <button class="primary-action" id="onboardingExit">完成向导后进入工作舱</button>
+          <button class="primary-action" id="onboardingExit">进入 AI CEO 工作舱</button>
         </div>
       </header>
 
@@ -681,12 +681,12 @@
           <div class="onboarding-heading">
             <div>
               <p class="eyebrow" id="onboardingEyebrow">新店向导</p>
-              <h1 id="onboardingTitle">先把官方授权接上，再让 AI CEO 少问少填</h1>
+              <h1 id="onboardingTitle">先选经营边界，再把一句话交给 AI CEO</h1>
               <p id="onboardingSubtitle">
-                API 可以先理解成平台给软件用的官方安全通道，不是把账号密码交给捷境。这不是填表考试：捷境会按你的身份，优先带你走 eBay 官方授权和必要接口；暂时不想授权时，也能先用截图、表格、链接和图片跑流程。
+                不需要一次配置完所有平台接口。先确认你现在的店铺阶段、履约方式、利润底线和哪些动作必须由你拍板；eBay 授权、货源、费用、素材和退货政策以后都能在设置里继续补接。
               </p>
             </div>
-            <span class="pill green" id="onboardingStepLabel">第 1/12 步</span>
+            <span class="pill green" id="onboardingStepLabel">第 1/6 步</span>
           </div>
 
           <div class="wizard-progress onboarding-progress">
@@ -704,11 +704,11 @@
 
         <aside class="onboarding-preview">
           <p class="eyebrow">保存中的自动化边界</p>
-            <h2>你确认的每一步，都会影响第一条商品怎么推进</h2>
+            <h2>先让 AI CEO 知道哪些能推进，哪些必须停住</h2>
           <div class="dna-summary" id="onboardingSummary"></div>
           <div class="onboarding-note">
             <strong>向导只问会影响真实店铺动作的事</strong>
-            <span>缺资料时 AI CEO 会标出来；能先判断的地方会继续推进。资金相关、刊登发布、退款补偿、广告投放、买家消息发送或明确承诺，必须由你确认。</span>
+            <span>首日只保存最关键的经营边界。复杂连接都放进设置；资金相关、刊登发布、退款补偿、广告投放、买家消息发送或明确承诺，必须由你确认。</span>
           </div>
         </aside>
       </main>
@@ -3290,6 +3290,6 @@
       })();
     </script>
     <script src="./assets/jiejing-settings-panels.js?v=20260620-prelaunch-deferred-v1"></script>
-    <script src="./app.js?v=20260629-onboarding-guard-v1"></script>
+    <script src="./app.js?v=20260629-onboarding-lite-v1"></script>
   </body>
 </html>

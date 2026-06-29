@@ -2151,39 +2151,24 @@ const stageWizardFields = {
   newbie: [
     "merchantStage",
     "ebaySetup",
-    "ebayApiMode",
-    "sourceApiMode",
     "fulfillmentMode",
-    "returnPolicy",
-    "feeInsightMode",
     "profitFloor",
-    "mediaMode",
     "permissionLevel",
     "finish",
   ],
   store_opened: [
     "merchantStage",
     "ebaySetup",
-    "ebayApiMode",
-    "feeInsightMode",
     "fulfillmentMode",
-    "sourceApiMode",
-    "returnPolicy",
     "profitFloor",
-    "mediaMode",
     "permissionLevel",
     "finish",
   ],
   has_orders: [
     "merchantStage",
     "ebaySetup",
-    "ebayApiMode",
     "fulfillmentMode",
-    "sourceApiMode",
     "tone",
-    "returnPolicy",
-    "feeInsightMode",
-    "profitFloor",
     "permissionLevel",
     "finish",
   ],
@@ -2192,15 +2177,17 @@ const stageWizardFields = {
     "ebaySetup",
     "ebayApiMode",
     "permissionLevel",
-    "feeInsightMode",
-    "fulfillmentMode",
-    "sourceApiMode",
-    "returnPolicy",
-    "profitFloor",
-    "watchMetric",
     "finish",
   ],
 };
+
+const onboardingDeferredSettingsFields = [
+  "sourceApiMode",
+  "feeInsightMode",
+  "returnPolicy",
+  "mediaMode",
+  "watchMetric",
+];
 
 const onboardingTaskMeta = {
   merchantStage: {
@@ -27408,6 +27395,41 @@ function onboardingLaunchReadinessMarkup() {
     .join("");
 }
 
+function onboardingLightSafetyMarkup() {
+  const rows = [
+    ["不会直接发布", "Listing、改价、库存、广告和退款都要进确认中心。"],
+    ["不用一次接完", "eBay、货源、费用和素材连接可以以后在设置里补。"],
+    ["先能开始用", "完成这几步后，直接把目标交给 AI CEO。"],
+  ];
+  return rows
+    .map(
+      ([title, detail]) => `
+        <article>
+          <strong>${escapeHtml(title)}</strong>
+          <p>${escapeHtml(detail)}</p>
+        </article>
+      `,
+    )
+    .join("");
+}
+
+function onboardingDeferredSettingsMarkup() {
+  const rows = onboardingDeferredSettingsFields
+    .map((field) => [onboardingPhaseLabel(field), onboardingValueText(field)])
+    .filter(([, value]) => value);
+  return rows
+    .slice(0, 5)
+    .map(
+      ([label, value]) => `
+        <article>
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+        </article>
+      `,
+    )
+    .join("");
+}
+
 function renderWizard() {
   clampWizardStep();
   const current = getWizardStep();
@@ -27452,44 +27474,27 @@ function renderOnboarding() {
   const exitButton = document.querySelector("#onboardingExit");
   if (exitButton) {
     const isLastStep = state.wizardStep >= total - 1;
-    exitButton.textContent = isLastStep ? "进入 AI CEO 工作舱" : "完成向导后进入工作舱";
+    exitButton.textContent = isLastStep ? "进入 AI CEO 工作舱" : "继续完成首日边界";
     exitButton.disabled = !isLastStep;
   }
   document.querySelector("#onboardingCard").innerHTML = `
-    <div class="onboarding-launch-map" aria-label="首单上线路线图">
-      ${onboardingLaunchMapMarkup()}
-    </div>
-    <div class="onboarding-control-strip" aria-label="向导安全边界">
-      ${onboardingControlStripMarkup()}
-    </div>
-    <div class="onboarding-path-rail" aria-label="当前向导路线">
+    <div class="onboarding-path-rail onboarding-lite-path" aria-label="当前向导路线">
       ${onboardingPathRailMarkup()}
     </div>
-    <div class="task-step-banner">
+    <div class="task-step-banner onboarding-lite-banner">
       <span>${onboardingPhaseLabel(current.field)}</span>
       <strong>${taskMeta.task}</strong>
     </div>
     ${onboardingChoiceContextMarkup(current, taskMeta)}
-    <div class="task-help-grid">
-      <article>
-        <span>AI CEO 会做</span>
-        <p>${taskMeta.ai}</p>
-      </article>
-      <article>
-        <span>你只要判断</span>
-        <p>${taskMeta.human}</p>
-      </article>
-      <article>
-        <span>为什么现在问</span>
-        <p>${onboardingSaveCopy(current.field)}</p>
-      </article>
+    <div class="onboarding-lite-safety" aria-label="首日安全边界">
+      ${onboardingLightSafetyMarkup()}
     </div>
     <div class="onboarding-decision-head">
       <div>
         <span class="eyebrow">当前决策</span>
         <h3>${current.title}</h3>
       </div>
-      <small>默认优先选推荐项；不确定也可以先用保守建议继续。</small>
+      <small>不确定就先用推荐项，后面可在设置里改。</small>
     </div>
     <p class="onboarding-reason">${current.reason}</p>
     <div class="wizard-options">
@@ -27594,20 +27599,13 @@ function renderOnboardingSummary() {
   const completed = activeWizard.slice(0, state.wizardStep + 1);
   const nextStep = getWizardStep(state.wizardStep + 1);
   summary.innerHTML = `
-    <div class="onboarding-summary-metrics" aria-label="向导准备度">
-      ${onboardingSummaryMetricsMarkup(activeWizard, completed)}
-    </div>
     <article class="onboarding-route-summary">
       <span>当前路线</span>
       <strong>${profile.title}</strong>
       <p>${onboardingRouteDescription()}</p>
     </article>
-    <div class="onboarding-summary-launch">
-      <span>首单上线检查</span>
-      ${onboardingLaunchReadinessMarkup()}
-    </div>
     <div class="onboarding-saved-list">
-      <span>已经形成的自动化边界</span>
+      <span>已保存</span>
       ${completed
         .map(
           (step) => `
@@ -27624,10 +27622,14 @@ function renderOnboardingSummary() {
       <strong>${nextStep ? onboardingPhaseLabel(nextStep.field) : "进入 AI CEO 工作舱"}</strong>
       <p>${nextStep ? nextStep.title : "AI CEO 会按已保存边界推进第一条商品或店铺接入整理。"}</p>
     </article>
+    <div class="onboarding-settings-deferred" aria-label="设置里可继续补接">
+      <span>设置里可继续补接</span>
+      ${onboardingDeferredSettingsMarkup()}
+    </div>
     <article class="onboarding-next-summary">
-      <span>后续补接入口</span>
-      <strong>连接账号</strong>
-      <p>现在不想授权也能继续体验；eBay 只读授权、1688 货源、费用广告和履约接口后面都在这里继续配置。</p>
+      <span>安全边界</span>
+      <strong>你没确认前不会真实执行</strong>
+      <p>发布、改价、退款、广告预算、采购付款和买家承诺都会进入确认中心。</p>
     </article>
   `;
 }
