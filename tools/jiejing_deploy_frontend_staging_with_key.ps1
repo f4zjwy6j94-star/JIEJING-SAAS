@@ -19,7 +19,9 @@ if (-not (Test-Path -LiteralPath $KeyPath)) {
 $target = "$User@$Server"
 $stamp = Get-Date -Format "yyyyMMddHHmmss"
 $patchArchive = Join-Path $root "output\jiejing-frontend-patch-$stamp.tgz"
+$remoteScriptPath = Join-Path $root "output\jiejing-frontend-remote-$stamp.sh"
 $remoteArchive = "/tmp/jiejing-frontend-patch-$stamp.tgz"
+$remoteScriptArchive = "/tmp/jiejing-frontend-remote-$stamp.sh"
 $appHtml = Get-Content -LiteralPath (Join-Path $root "app.html") -Raw -Encoding UTF8
 if ($appHtml -notmatch 'app\.js\?v=([^"''>]+)') {
   throw "Unable to derive frontend asset version from app.html"
@@ -64,7 +66,7 @@ install -D -m 0644 "`$tmp_dir/deploy/nginx.public-staging.conf" deploy/nginx.pub
 python3 tools/jiejing_productization_stage_gate.py >/tmp/jiejing-stage-gate-$stamp.json
 sudo -n docker compose -f deploy/docker-compose.public-https-staging.yml -p deploy up -d --no-deps --force-recreate jiejing-frontend
 rm -rf "`$tmp_dir"
-rm -f "$remoteArchive"
+rm -f "$remoteArchive" "$remoteScriptArchive"
 echo DEPLOY_FRONTEND_STATUS=ok
 echo DEPLOY_BACKUP_DIR="`$backup_dir"
 echo DEPLOY_FRONTEND_VERSION=$frontendVersion
@@ -72,12 +74,15 @@ echo DEPLOY_FRONTEND_VERSION=$frontendVersion
 
 $archiveArgs = @("-czf", $patchArchive, "app.js", "styles.css", "index.html", "app.html", "privacy.html", "terms.html", "risk-disclosure.html", "deploy/nginx.public-staging.conf")
 Invoke-NativeChecked "tar" $archiveArgs
+$remoteScriptForSsh = $remoteScript.TrimStart([char]0xFEFF) -replace "`r", ""
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($remoteScriptPath, $remoteScriptForSsh, $utf8NoBom)
 $scpBaseArgs = @("-O", "-i", $KeyPath, "-P", [string]$Port, "-o", "BatchMode=yes", "-o", "ConnectTimeout=15")
 Invoke-NativeChecked "scp" ($scpBaseArgs + @($patchArchive, "${target}:$remoteArchive"))
-$sshArgs = @("-i", $KeyPath, "-p", [string]$Port, "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", $target, "bash -s")
-$remoteScriptForSsh = $remoteScript.TrimStart([char]0xFEFF) -replace "`r", ""
-$remoteScriptForSsh | & ssh @sshArgs
+Invoke-NativeChecked "scp" ($scpBaseArgs + @($remoteScriptPath, "${target}:$remoteScriptArchive"))
+$sshArgs = @("-i", $KeyPath, "-p", [string]$Port, "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", $target, "bash $remoteScriptArchive")
+& ssh @sshArgs
 if ($LASTEXITCODE -ne 0) {
   throw "ssh failed with exit code $LASTEXITCODE"
 }
-
+Remove-Item -LiteralPath $remoteScriptPath -ErrorAction SilentlyContinue
