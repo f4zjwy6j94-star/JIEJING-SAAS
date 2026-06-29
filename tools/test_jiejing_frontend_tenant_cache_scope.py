@@ -53,6 +53,16 @@ def main() -> int:
     ]:
         require(source_account_key, marker, "stable account cache key")
 
+    account_cache_gate = function_body(app_js, "shouldReadSaasAccountScopedLocalCache")
+    for marker in [
+        "state.saasProtectedStateFromCache",
+        "state.saasUser?.user_id",
+        "state.saasIdentity?.user_id",
+        "state.saasCompany?.company_id",
+        "safeStorageValue(saasStorageKeys.lastAccount)",
+    ]:
+        require(account_cache_gate, marker, "confirmed-account cache gate")
+
     source_scope = function_body(app_js, "saasSourceRecordStorageScope")
     require(source_scope, "saasSourceRecordAccountKey()", "source record account-scoped key")
     require(source_scope, "saasSourceRecordStoreKey()", "source record store-scoped key")
@@ -76,18 +86,22 @@ def main() -> int:
             "localStorage.setItem(saasStorageKeys.merchantFeedback",
         ],
         "loadSaasLastCeoCommand": [
+            "shouldReadSaasAccountScopedLocalCache()",
             "localStorage.getItem(saasStorageKeys.ceoCommand)",
             "payload[saasCeoCommandStorageScope()]",
         ],
         "persistSaasLastCeoCommand": [
+            "shouldReadSaasAccountScopedLocalCache()",
             "payload[saasCeoCommandStorageScope()]",
             "localStorage.setItem(saasStorageKeys.ceoCommand",
         ],
         "loadSaasAiCeoThread": [
+            "shouldReadSaasAccountScopedLocalCache()",
             "localStorage.getItem(saasStorageKeys.ceoThread)",
             "payload[saasCeoCommandStorageScope()]",
         ],
         "persistSaasAiCeoThread": [
+            "shouldReadSaasAccountScopedLocalCache()",
             "payload[saasCeoCommandStorageScope()]",
             "localStorage.setItem(saasStorageKeys.ceoThread",
         ],
@@ -107,8 +121,27 @@ def main() -> int:
             reject(body, forbidden, f"{name} global fallback")
 
     hydrate_body = function_body(app_js, "hydrateSaasCeoAccountScopedLocalState")
-    for marker in ["loadSaasLastCeoCommand()", "loadSaasAiCeoThread()", "saasCeoCommandStorageScope()"]:
+    for marker in ["loadSaasLastCeoCommand()", "loadSaasAiCeoThread()", "syncSaasAiCeoLatestTurnFromThread()", "saasCeoCommandStorageScope()"]:
         require(hydrate_body, marker, "AI CEO account-scoped hydration")
+
+    latest_sync_body = function_body(app_js, "syncSaasAiCeoLatestTurnFromThread")
+    for marker in ["state.saasAiCeoLatestTurn", "turns[turns.length - 1]", "shouldKeepSaasAiCeoThreadTurn"]:
+        require(latest_sync_body, marker, "AI CEO latest turn sync")
+
+    snapshot_body = function_body(app_js, "hydrateSaasProtectedStateFromCache")
+    for marker in ["state.saasLastCeoCommand = null", "state.saasAiCeoThread = []", "state.saasAiCeoLatestTurn = null"]:
+        require(snapshot_body, marker, "cached snapshot must not prehydrate AI CEO chat")
+
+    require(
+        app_js,
+        """state.saasDataPackets = coreDataPackets.data_packets || [];
+    state.saasExecutionResults = coreExecutions.execution_results || [];
+    state.saasProtectedStateFromCache = false;
+    state.saasProtectedStateCachedAt = "";
+    state.saasLastCeoCommand = newestSaasCeoCommand(backendSaasCeoCommandFromPayload(coreCeoCommandMemory), loadSaasLastCeoCommand());
+    state.saasAiCeoThread = loadSaasAiCeoThread();""",
+        "release cached-state protection after backend account confirmation and before AI CEO hydration",
+    )
 
     remember_body = function_body(app_js, "rememberSaasAuthAccount")
     require(remember_body, "hydrateSaasCeoAccountScopedLocalState()", "rehydrate after account switch")

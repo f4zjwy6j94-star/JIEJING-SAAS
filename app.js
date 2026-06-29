@@ -13091,7 +13091,9 @@ function hydrateSaasProtectedStateFromCache() {
     state.saasCommercialLaunchGate = snapshot.commercial_launch_gate || state.saasCommercialLaunchGate || null;
     state.saasPostPublishCockpit = snapshot.post_publish_cockpit || state.saasPostPublishCockpit || null;
     state.saasAccountHealth = snapshot.account_health || state.saasAccountHealth || null;
-    state.saasLastCeoCommand = newestSaasCeoCommand(snapshot.last_ceo_command, loadSaasLastCeoCommand());
+    state.saasLastCeoCommand = null;
+    state.saasAiCeoThread = [];
+    state.saasAiCeoLatestTurn = null;
     state.saasConnected = Boolean(snapshot.connected || state.saasToken || hasSaasPersistentSessionHint());
     state.saasProtectedStateReady = true;
     state.saasProtectedStateFromCache = true;
@@ -17161,6 +17163,19 @@ function saasCeoCommandStorageScope() {
   return `${saasSourceRecordAccountKey()}::${saasSourceRecordStoreKey()}`;
 }
 
+function shouldReadSaasAccountScopedLocalCache() {
+  if (!isSaasPublicMvpMode()) return true;
+  if (state.saasProtectedStateFromCache) return false;
+  return Boolean(
+    state.saasUser?.user_id ||
+      state.saasIdentity?.user_id ||
+      state.saasUser?.email ||
+      state.saasIdentity?.email ||
+      state.saasCompany?.company_id ||
+      safeStorageValue(saasStorageKeys.lastAccount),
+  );
+}
+
 function normalizeSaasCeoCommand(command = null) {
   if (!command || typeof command !== "object") return null;
   const text = publicRuntimeText(command.text || "");
@@ -17201,6 +17216,7 @@ function normalizeSaasCeoCommand(command = null) {
 }
 
 function loadSaasLastCeoCommand() {
+  if (!shouldReadSaasAccountScopedLocalCache()) return null;
   try {
     const payload = JSON.parse(localStorage.getItem(saasStorageKeys.ceoCommand) || "{}");
     return normalizeSaasCeoCommand(payload[saasCeoCommandStorageScope()]);
@@ -17210,6 +17226,7 @@ function loadSaasLastCeoCommand() {
 }
 
 function persistSaasLastCeoCommand(command = state.saasLastCeoCommand) {
+  if (!shouldReadSaasAccountScopedLocalCache()) return false;
   const normalized = normalizeSaasCeoCommand(command);
   if (!normalized) return false;
   try {
@@ -18031,6 +18048,30 @@ function saasAiCeoMerchantSafeFailureText(error) {
   }
   return `${title}。${reason} ${next} 本次不会扣捷境费用、不会写入 eBay，也不会把普通聊天写入长期经营记忆。`;
 }
+
+function saasAiCeoProductizedAnswerText(text = "", status = "") {
+  const safeText = productizeJiejingProductCopy(text || "AI CEO 暂时没有返回可展示内容。");
+  const raw = `${status || ""} ${safeText}`.toLowerCase();
+  if (
+    raw.includes("402") ||
+    raw.includes("quota") ||
+    raw.includes("billing") ||
+    raw.includes("payment") ||
+    raw.includes("balance") ||
+    raw.includes("credit") ||
+    raw.includes("余额") ||
+    raw.includes("额度") ||
+    raw.includes("计费") ||
+    raw.includes("账单")
+  ) {
+    return saasAiCeoMerchantSafeFailureText({ status: 402, message: safeText });
+  }
+  if (raw.includes("捷境后端接口") || raw.includes("traceback") || raw.includes("api key") || raw.includes("secret") || raw.includes("token")) {
+    return saasAiCeoMerchantSafeFailureText({ message: safeText });
+  }
+  return safeText;
+}
+
 function classifySaasLocalClockRequest(text = "") {
   const normalized = String(text || "").trim().toLowerCase();
   if (!normalized) return "";
@@ -18141,7 +18182,7 @@ function handleSaasCeoCommandSubmit(text) {
   state.saasLastCeoCommandPersistPromise = requestSaasAiCeoChat(command)
     .then((payload) => {
       const chat = payload?.ai_ceo_chat && typeof payload.ai_ceo_chat === "object" ? payload.ai_ceo_chat : null;
-      const answer = publicRuntimeText(chat?.answer || "AI CEO 暂时没有返回可展示内容。");
+      const answer = saasAiCeoProductizedAnswerText(chat?.answer || "", chat?.status || "");
       const sourceRecords = normalizeSaasAiCeoSourceRecords(chat?.source_records || chat?.realtime_search?.source_records || []);
       const backendCommand = backendSaasCeoCommandFromPayload(payload || {});
       const mergedCommand = normalizeSaasCeoCommand({
@@ -21324,15 +21365,16 @@ async function refreshSaasState(options = {}) {
     state.saasModelSettings = coreModelSettings.model_settings || null;
     state.saasDataPackets = coreDataPackets.data_packets || [];
     state.saasExecutionResults = coreExecutions.execution_results || [];
+    state.saasProtectedStateFromCache = false;
+    state.saasProtectedStateCachedAt = "";
     state.saasLastCeoCommand = newestSaasCeoCommand(backendSaasCeoCommandFromPayload(coreCeoCommandMemory), loadSaasLastCeoCommand());
     state.saasAiCeoThread = loadSaasAiCeoThread();
+    syncSaasAiCeoLatestTurnFromThread();
     if (state.saasLastCeoCommand) {
       persistSaasLastCeoCommand(state.saasLastCeoCommand);
       recordSaasCeoCommandSourceRecord(state.saasLastCeoCommand);
     }
     state.saasProtectedStateReady = true;
-    state.saasProtectedStateFromCache = false;
-    state.saasProtectedStateCachedAt = "";
     saveSaasProtectedStateSnapshot();
     state.saasLoading = false;
     renderSaasBackendPanel();
@@ -21475,6 +21517,7 @@ async function refreshSaasState(options = {}) {
     state.saasMerchantFeedback = loadSaasMerchantFeedback();
     state.saasLastCeoCommand = newestSaasCeoCommand(backendSaasCeoCommandFromPayload(ceoCommandMemory), loadSaasLastCeoCommand());
     state.saasAiCeoThread = loadSaasAiCeoThread();
+    syncSaasAiCeoLatestTurnFromThread();
     if (state.saasLastCeoCommand) {
       persistSaasLastCeoCommand(state.saasLastCeoCommand);
       recordSaasCeoCommandSourceRecord(state.saasLastCeoCommand);
@@ -25954,6 +25997,10 @@ function renderSaasCockpitRealWorkbench() {
   const visibleCommandReply = visibleCommand
     ? visibleCommand.ai_reply || "这是一条旧消息：当时没有保存可展示回复。你可以继续在当前对话里追问。"
     : "";
+  if (shouldReadSaasAccountScopedLocalCache() && (!Array.isArray(state.saasAiCeoThread) || !state.saasAiCeoThread.length)) {
+    state.saasAiCeoThread = loadSaasAiCeoThread();
+    syncSaasAiCeoLatestTurnFromThread();
+  }
   const latestCeoTurn =
     normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn) ||
     (visibleCommand
@@ -32547,6 +32594,7 @@ function shouldKeepSaasAiCeoThreadTurn(turn = {}) {
 }
 
 function loadSaasAiCeoThread() {
+  if (!shouldReadSaasAccountScopedLocalCache()) return [];
   try {
     const payload = JSON.parse(localStorage.getItem(saasStorageKeys.ceoThread) || "{}");
     const turns = Array.isArray(payload[saasCeoCommandStorageScope()]) ? payload[saasCeoCommandStorageScope()] : [];
@@ -32556,7 +32604,16 @@ function loadSaasAiCeoThread() {
   }
 }
 
+function syncSaasAiCeoLatestTurnFromThread() {
+  const turns = Array.isArray(state.saasAiCeoThread)
+    ? state.saasAiCeoThread.map(normalizeSaasAiCeoLatestTurn).filter(shouldKeepSaasAiCeoThreadTurn)
+    : [];
+  state.saasAiCeoLatestTurn = turns.length ? turns[turns.length - 1] : null;
+  return state.saasAiCeoLatestTurn;
+}
+
 function persistSaasAiCeoThread() {
+  if (!shouldReadSaasAccountScopedLocalCache()) return false;
   try {
     const payload = JSON.parse(localStorage.getItem(saasStorageKeys.ceoThread) || "{}");
     payload[saasCeoCommandStorageScope()] = (state.saasAiCeoThread || [])
@@ -32573,9 +32630,7 @@ function persistSaasAiCeoThread() {
 function hydrateSaasCeoAccountScopedLocalState() {
   state.saasLastCeoCommand = loadSaasLastCeoCommand();
   state.saasAiCeoThread = loadSaasAiCeoThread();
-  state.saasAiCeoLatestTurn = state.saasAiCeoThread.length
-    ? state.saasAiCeoThread[state.saasAiCeoThread.length - 1]
-    : null;
+  syncSaasAiCeoLatestTurnFromThread();
   return {
     scope: saasCeoCommandStorageScope(),
     turns: state.saasAiCeoThread.length,
@@ -32832,7 +32887,7 @@ function addCeoMessage(text, aiText, options = {}) {
 function updateCeoAssistantMessage(messageId, text, status = "", model = null, sourceRecords = []) {
   const chat = document.querySelector("#ceoChat");
   const node = messageId ? document.getElementById(messageId) : null;
-  const safeText = productizeJiejingProductCopy(text || "AI CEO 暂时没有返回可展示内容。");
+  const safeText = saasAiCeoProductizedAnswerText(text || "AI CEO 暂时没有返回可展示内容。", status);
   const sources = normalizeSaasAiCeoSourceRecords(sourceRecords);
   const latest = normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn);
   if (!node) {
@@ -34347,6 +34402,7 @@ function init() {
   loadSaasSessionFromStorage();
   state.saasLastCeoCommand = loadSaasLastCeoCommand();
   state.saasAiCeoThread = loadSaasAiCeoThread();
+  syncSaasAiCeoLatestTurnFromThread();
   if (redirectUnauthenticatedAppStart()) return;
   syncSaasPublicMvpMode();
   if (hasSaasProtectedSessionCandidate()) {
