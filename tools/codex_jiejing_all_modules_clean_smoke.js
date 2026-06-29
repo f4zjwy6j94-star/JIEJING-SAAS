@@ -338,7 +338,8 @@ async function main() {
       first_day_path_step_count: firstDayPath?.querySelectorAll("article").length || 0,
       has_first_day_path_copy: text.includes("说目标") && text.includes("看判断") && text.includes("再确认"),
       has_one_task_focus: Boolean(oneTaskFocus && oneTaskFocus.offsetParent !== null),
-      one_task_focus_card_count: oneTaskFocus?.querySelectorAll("article").length || 0,
+      one_task_focus_card_count: oneTaskFocus?.querySelectorAll(".saas-ai-ceo-one-task-option").length || 0,
+      one_task_focus_prompt_count: oneTaskFocus?.querySelectorAll(".saas-ai-ceo-one-task-option[data-ceo-prompt]").length || 0,
       has_one_task_focus_copy:
         text.includes("现在只做一件事") &&
         text.includes("把手上的商品、链接、图片或订单问题发给 AI CEO") &&
@@ -361,6 +362,19 @@ async function main() {
     const input = document.querySelector("#view-cockpit.is-active #ceoInput");
     const button = document.querySelector("#view-cockpit.is-active .saas-ai-ceo-first-run-actions [data-ceo-prompt]");
     if (!input || !button) return { ok: false, reason: "missing_input_or_prompt" };
+    button.click();
+    return {
+      ok: input.value === button.getAttribute("data-ceo-prompt"),
+      value: input.value,
+      still_no_route_card: !document.querySelector("#view-cockpit .saas-ceo-routing-task-card"),
+      still_no_chat_message: !document.querySelector("#view-cockpit #ceoChat .message"),
+    };
+  });
+  const ceoFirstRunFocusPrefill = await page.evaluate(() => {
+    const input = document.querySelector("#view-cockpit.is-active #ceoInput");
+    const button = document.querySelector("#view-cockpit.is-active .saas-ai-ceo-one-task-option[data-ceo-prompt]");
+    if (!input || !button) return { ok: false, reason: "missing_input_or_focus_prompt" };
+    input.value = "";
     button.click();
     return {
       ok: input.value === button.getAttribute("data-ceo-prompt"),
@@ -828,6 +842,7 @@ async function main() {
     !ceoFirstRunEntry.has_first_day_path_copy ||
     !ceoFirstRunEntry.has_one_task_focus ||
     ceoFirstRunEntry.one_task_focus_card_count !== 3 ||
+    ceoFirstRunEntry.one_task_focus_prompt_count !== 3 ||
     !ceoFirstRunEntry.has_one_task_focus_copy ||
     !ceoFirstRunEntry.has_first_run_handoff_copy ||
     ceoFirstRunEntry.first_run_handoff_action_count < 3
@@ -836,6 +851,9 @@ async function main() {
   }
   if (!ceoFirstRunPrefill.ok || !ceoFirstRunPrefill.still_no_route_card || !ceoFirstRunPrefill.still_no_chat_message) {
     failures.push("AI CEO first-run handoff prompts must only prefill the composer");
+  }
+  if (!ceoFirstRunFocusPrefill.ok || !ceoFirstRunFocusPrefill.still_no_route_card || !ceoFirstRunFocusPrefill.still_no_chat_message) {
+    failures.push("AI CEO first-run focus cards must only prefill the composer");
   }
   if (ceoFirstRunEntry.has_starter_prompts || ceoFirstRunEntry.has_route_card) {
     failures.push("AI CEO first-run entry still exposes starter prompts or a route card before user intent");

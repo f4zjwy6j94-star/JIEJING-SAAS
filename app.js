@@ -26017,9 +26017,9 @@ function renderSaasAiCeoFirstRunHandoff() {
     ["03", "再确认", "发布、付款、退款、广告和敏感承诺必须等你点头。"],
   ];
   const focusOptions = [
-    ["有商品想上架", "先把标题、卖点、图片或链接发进来，生成 Listing 草稿。"],
-    ["只有图片或链接", "先整理资料，再决定要不要进入 Listing 或素材工坊。"],
-    ["不知道下一步", "直接说现状，AI CEO 会判断该去哪个模块。"],
+    ["有商品想上架", "先把标题、卖点、图片或链接发进来，生成 Listing 草稿。", "帮我从一个商品做 Listing"],
+    ["只有图片或链接", "先整理资料，再决定要不要进入 Listing 或素材工坊。", "我只有图片或链接，先帮我整理商品资料"],
+    ["不知道下一步", "直接说现状，AI CEO 会判断该去哪个模块。", "我不知道下一步该做什么，帮我判断"],
   ];
   return `
     <section class="saas-ai-ceo-first-run-handoff" data-ai-ceo-first-run-handoff="first_run_ai_ceo_handoff_v1" data-does-not-trigger-real-write="true" aria-label="AI CEO 开口建议">
@@ -26036,11 +26036,11 @@ function renderSaasAiCeoFirstRunHandoff() {
         <div class="saas-ai-ceo-one-task-grid">
           ${focusOptions
             .map(
-              ([title, detail]) => `
-                <article>
+              ([title, detail, prompt]) => `
+                <button type="button" class="saas-ai-ceo-one-task-option" data-ceo-prompt="${escapeHtml(prompt)}">
                   <strong>${escapeHtml(title)}</strong>
                   <small>${escapeHtml(detail)}</small>
-                </article>
+                </button>
               `,
             )
             .join("")}

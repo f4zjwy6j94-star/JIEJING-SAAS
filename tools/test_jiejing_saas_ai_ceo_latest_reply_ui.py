@@ -129,6 +129,10 @@ def main() -> int:
         "有商品想上架",
         "只有图片或链接",
         "不知道下一步",
+        "saas-ai-ceo-one-task-option",
+        'data-ceo-prompt="${escapeHtml(prompt)}"',
+        "我只有图片或链接，先帮我整理商品资料",
+        "我不知道下一步该做什么，帮我判断",
     ]
     for needle in required_app:
         if needle not in app:
@@ -155,6 +159,7 @@ def main() -> int:
         ".saas-ai-ceo-input-hint",
         ".saas-ai-ceo-one-task-focus",
         ".saas-ai-ceo-one-task-grid",
+        ".saas-ai-ceo-one-task-option",
         ".saas-ceo-routing-main",
         ".saas-ceo-routing-why",
         ".saas-module-ai-goal-strip",

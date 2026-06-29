@@ -39484,26 +39484,37 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-one-task-grid {
   gap: 8px;
 }
 
-body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-one-task-grid article {
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-one-task-option {
+  appearance: none;
   display: grid;
   align-content: start;
   gap: 5px;
   min-width: 0;
+  width: 100%;
   padding: 10px;
   border: 1px solid rgba(8, 118, 110, 0.12);
   border-radius: 8px;
   background: #ffffff;
+  color: inherit;
   text-align: left;
+  cursor: pointer;
 }
 
-body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-one-task-grid strong {
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-one-task-option:hover,
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-one-task-option:focus-visible {
+  border-color: rgba(8, 118, 110, 0.32);
+  background: #f3faf7;
+  outline: none;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-one-task-option strong {
   color: #14241f;
   font-size: 13px;
   line-height: 1.25;
   overflow-wrap: anywhere;
 }
 
-body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-one-task-grid small {
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-one-task-option small {
   color: #5f706b;
   font-size: 11px;
   line-height: 1.42;
@@ -39774,7 +39785,7 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ceo-routing-task-card .primary-a
     grid-template-columns: minmax(0, 1fr);
   }
 
-  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-one-task-grid article {
+  body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-one-task-option {
     padding: 9px;
   }
 
