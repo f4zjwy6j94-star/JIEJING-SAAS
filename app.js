@@ -13252,6 +13252,7 @@ function saasProtectedSnapshotStorageKeys() {
 
 function hasCompletedSaasOnboarding() {
   if (
+    !isSaasPublicMvpMode() &&
     state.saasConnected &&
     ((state.saasStores || []).length ||
       (state.saasConnections || []).length ||
@@ -13262,6 +13263,7 @@ function hasCompletedSaasOnboarding() {
   ) {
     return true;
   }
+  // Public SaaS first-day guidance must be account-scoped; backend data must not bypass onboarding.
   try {
     return saasOnboardingDoneStorageKeys()
       .filter((key) => !(isSaasPublicMvpMode() && key === `${saasStorageKeys.onboardingDone}:browser`))

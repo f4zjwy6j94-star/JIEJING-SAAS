@@ -78,6 +78,8 @@ def main() -> int:
         "!(isSaasPublicMvpMode() && key === `${saasStorageKeys.onboardingDone}:browser`)",
         "if (isSaasPublicMvpMode() && !shouldOpenSaasAppRoute(params))",
         "if (!shouldOpenSaasAppRoute(params))",
+        "!isSaasPublicMvpMode() &&\n    state.saasConnected",
+        "backend data must not bypass onboarding",
     ]:
         if marker not in app_js:
             return fail(f"frontend should not let browser-level onboarding state bypass public account onboarding: {marker}")
