@@ -4,9 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="prefetch" href="./app.html?start=app&view=cockpit" as="document" />
-    <link rel="prefetch" href="./app.js?v=20260629-settings-tabs-v1" as="script" />
+    <link rel="prefetch" href="./app.js?v=20260629-home-intents-v1" as="script" />
     <link rel="prefetch" href="./assets/jiejing-settings-panels.js?v=20260620-owner-launch-control-v5" as="script" />
-    <link rel="prefetch" href="./styles.css?v=20260629-settings-tabs-v1" as="style" />
+    <link rel="prefetch" href="./styles.css?v=20260629-home-intents-v1" as="style" />
     <title>捷境 · eBay AI CEO 自动化工作台</title>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260619-brand-icon-v1" type="image/svg+xml" />
     <style>
@@ -433,6 +433,71 @@
         gap: 8px;
       }
 
+      .hero-intent-strip {
+        display: grid;
+        max-width: 760px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 18px;
+      }
+
+      .hero-intent-card {
+        position: relative;
+        min-width: 0;
+        border: 1px solid rgba(198, 215, 205, 0.92);
+        border-radius: 8px;
+        padding: 13px 13px 12px;
+        background: rgba(255, 254, 250, 0.86);
+        color: var(--ink);
+        text-align: left;
+        box-shadow: 0 16px 36px rgba(17, 29, 24, 0.07);
+        cursor: pointer;
+        overflow: hidden;
+        transition:
+          transform 0.2s var(--ease),
+          border-color 0.2s var(--ease),
+          background 0.2s var(--ease),
+          box-shadow 0.2s var(--ease);
+      }
+
+      .hero-intent-card:hover,
+      .hero-intent-card:focus-visible,
+      .hero-intent-card.is-active {
+        border-color: rgba(8, 118, 110, 0.36);
+        background: #ffffff;
+        box-shadow: 0 20px 44px rgba(17, 29, 24, 0.1);
+        transform: translateY(-2px);
+      }
+
+      .hero-intent-card span,
+      .hero-intent-card strong,
+      .hero-intent-card small {
+        position: relative;
+        z-index: 1;
+        display: block;
+        min-width: 0;
+      }
+
+      .hero-intent-card span {
+        margin-bottom: 8px;
+        color: var(--teal-deep);
+        font-size: 11px;
+        font-weight: 900;
+      }
+
+      .hero-intent-card strong {
+        font-size: 14px;
+        line-height: 1.3;
+      }
+
+      .hero-intent-card small {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 760;
+        line-height: 1.45;
+      }
+
       .pill {
         display: inline-flex;
         min-height: 30px;
@@ -731,6 +796,17 @@
         font-weight: 760;
       }
 
+      .hero-ops-board article.is-active {
+        border-color: rgba(8, 118, 110, 0.34);
+        background: #ffffff;
+        box-shadow: 0 18px 38px rgba(17, 29, 24, 0.12);
+      }
+
+      .hero-ops-board article.is-active span {
+        background: var(--ink);
+        color: var(--paper);
+      }
+
       @media (max-width: 1536px) {
         .hero {
           grid-template-columns: minmax(0, 1fr) minmax(420px, 0.82fr);
@@ -817,6 +893,22 @@
         .hero-ops-board span {
           width: 26px;
           height: 26px;
+        }
+      }
+
+      @media (max-width: 960px) {
+        .hero-intent-strip {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 640px) {
+        .hero-intent-strip {
+          grid-template-columns: 1fr;
+        }
+
+        .hero-intent-card {
+          padding: 12px;
         }
       }
 
@@ -3319,8 +3411,9 @@
         .proof-row {
           flex-wrap: nowrap;
           gap: 6px;
-          margin: 0 -16px;
-          padding: 0 16px 4px;
+          max-width: 100%;
+          margin: 0;
+          padding: 0 2px 4px;
           overflow-x: auto;
           scrollbar-width: none;
           scroll-snap-type: x proximity;
@@ -3897,6 +3990,23 @@
           <span class="pill">关键动作先确认</span>
           <span class="pill amber">完整体验路径</span>
         </div>
+        <div class="hero-intent-strip" data-home-intent-strip="homepage_ai_ceo_intents_v1" aria-label="从一个经营目标开始">
+          <button class="hero-intent-card is-active" type="button" data-home-intent="listing">
+            <span>01 · 找商品</span>
+            <strong>帮我判断一个商品能不能做</strong>
+            <small>先出市场结论，再进入 Listing 和素材草稿。</small>
+          </button>
+          <button class="hero-intent-card" type="button" data-home-intent="bulk">
+            <span>02 · 小批量</span>
+            <strong>帮我筛一批候选商品</strong>
+            <small>先分成建议测试、补资料、暂不做。</small>
+          </button>
+          <button class="hero-intent-card" type="button" data-home-intent="service">
+            <span>03 · 订单客服</span>
+            <strong>帮我处理订单和买家消息</strong>
+            <small>普通回复先起草，退款补偿进确认中心。</small>
+          </button>
+        </div>
       </section>
 
       <aside class="command-room" aria-label="AI CEO 调度工作模块">
@@ -3916,17 +4026,17 @@
           </div>
         </div>
         <div class="hero-ops-board" aria-label="AI CEO 运营证据链">
-          <article>
+          <article class="is-active" data-home-proof="goal">
             <span>01</span>
             <strong>接收目标</strong>
             <small>一句话进入经营流</small>
           </article>
-          <article>
+          <article data-home-proof="route">
             <span>02</span>
             <strong>证据归档</strong>
             <small>资料、报告、审计</small>
           </article>
-          <article>
+          <article data-home-proof="confirm">
             <span>03</span>
             <strong>确认执行</strong>
             <small>高风险动作先停住</small>
@@ -4636,7 +4746,7 @@
     <div class="toast" id="toast" aria-live="polite"></div>
 
     <script>
-      const JIEJING_SITE_VERSION = "20260629-settings-tabs-v1";
+      const JIEJING_SITE_VERSION = "20260629-home-intents-v1";
 
       (function routeOfficialEntryToApp() {
         const params = new URLSearchParams(window.location.search);
@@ -4651,8 +4761,8 @@
         const assets = [
           ["prefetch", "./app.html?start=app&view=workflow", "document"],
           ["preload", "./assets/jiejing-settings-panels.js?v=20260620-owner-launch-control-v5", "script"],
-          ["preload", "./app.js?v=20260629-settings-tabs-v1", "script"],
-          ["preload", "./styles.css?v=20260629-settings-tabs-v1", "style"],
+          ["preload", "./app.js?v=20260629-home-intents-v1", "script"],
+          ["preload", "./styles.css?v=20260629-home-intents-v1", "style"],
         ];
         assets.forEach(([rel, href, as]) => {
           if (document.querySelector(`link[href="${href}"]`)) return;
@@ -5476,7 +5586,7 @@
       }
 
       function bindSurfaceLight() {
-        document.querySelectorAll(".command-room, .panel, .path-card, .price-card, .flow-tab, .role-node, .hero-ops-board article").forEach((surface) => {
+        document.querySelectorAll(".command-room, .panel, .path-card, .price-card, .flow-tab, .role-node, .hero-intent-card, .hero-ops-board article").forEach((surface) => {
           let lightFrame = 0;
           let lastEvent = null;
           surface.addEventListener("pointermove", (event) => {
@@ -5583,6 +5693,48 @@
         document.querySelector("#flowTitle").textContent = data.title;
         document.querySelector("#flowBody").textContent = data.body;
         document.querySelector("#flowRoles").innerHTML = data.roles.map((role) => `<span>${role}</span>`).join("");
+      }
+
+      const homeIntentData = {
+        listing: [
+          ["01", "理解目标", "先判断商品机会"],
+          ["02", "推荐模块", "进入 Listing 项目台"],
+          ["03", "确认边界", "发布前进决策中心"],
+        ],
+        bulk: [
+          ["01", "理解目标", "筛一小批候选"],
+          ["02", "推荐模块", "进入小批量实验台"],
+          ["03", "确认边界", "只出草稿不铺货"],
+        ],
+        service: [
+          ["01", "理解目标", "处理订单和消息"],
+          ["02", "推荐模块", "进入客服与订单"],
+          ["03", "确认边界", "退款补偿先确认"],
+        ],
+      };
+
+      function setHomeIntent(key = "listing") {
+        const cards = homeIntentData[key] || homeIntentData.listing;
+        document.querySelectorAll("[data-home-intent]").forEach((button) => {
+          button.classList.toggle("is-active", button.dataset.homeIntent === key);
+        });
+        document.querySelectorAll("[data-home-proof]").forEach((article, index) => {
+          const item = cards[index] || cards[0];
+          article.classList.toggle("is-active", index === 1);
+          const badge = article.querySelector("span");
+          const title = article.querySelector("strong");
+          const note = article.querySelector("small");
+          if (badge) badge.textContent = item[0];
+          if (title) title.textContent = item[1];
+          if (note) note.textContent = item[2];
+        });
+      }
+
+      function setupHomeIntentStrip() {
+        document.querySelectorAll("[data-home-intent]").forEach((button) => {
+          button.addEventListener("click", () => setHomeIntent(button.dataset.homeIntent || "listing"));
+        });
+        setHomeIntent("listing");
       }
 
       function updateGuideHeader() {
@@ -6396,6 +6548,7 @@
       setPlan("single");
       renderGuide();
       updatePageProgress();
+      setupHomeIntentStrip();
       bindSurfaceLight();
       setupReveal();
       setupSignalCanvas();

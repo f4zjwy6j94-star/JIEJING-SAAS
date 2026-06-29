@@ -26,7 +26,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260629-settings-tabs-v1"
+    frontend_asset_version = "20260629-home-intents-v1"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -89,6 +89,18 @@ def main() -> int:
         return fail("returning from the workbench logo to the homepage must clear direct-start shell classes")
     if f'const JIEJING_SITE_VERSION = "{frontend_asset_version}"' not in index_html:
         return fail("public homepage must expose the current JIEJING site version marker")
+    for homepage_intent_marker in [
+        'data-home-intent-strip="homepage_ai_ceo_intents_v1"',
+        'data-home-intent="listing"',
+        'data-home-intent="bulk"',
+        'data-home-intent="service"',
+        'data-home-proof="goal"',
+        "function setHomeIntent",
+        "function setupHomeIntentStrip",
+        "setupHomeIntentStrip();",
+    ]:
+        if homepage_intent_marker not in index_html:
+            return fail(f"public homepage AI CEO intent entry missing marker: {homepage_intent_marker}")
     deploy_script = (ROOT / "tools" / "jiejing_deploy_frontend_staging_with_key.ps1").read_text(encoding="utf-8")
     if "Unable to derive frontend asset version from app.html" not in deploy_script or "DEPLOY_FRONTEND_VERSION=$frontendVersion" not in deploy_script:
         return fail("frontend deploy script must derive DEPLOY_FRONTEND_VERSION from app.html")
