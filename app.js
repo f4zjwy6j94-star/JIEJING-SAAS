@@ -32045,7 +32045,6 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       panels: [
         renderSaasSettingsAccountAccessPanel(),
         renderSaasSettingsPlatformPanel(ctx),
-        renderSaasSettingsAccountFocusPanel(ctx),
         renderSaasSettingsAccountPanel(ctx, options),
       ],
     },
@@ -32056,7 +32055,6 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       title: "AI 与素材",
       intro: "管理 AI 可用状态、素材生成入口和费用口径。",
       panels: [
-        renderSaasSettingsModelFocusPanel(ctx),
         renderSaasMerchantModelProviderPanel(ctx),
       ],
     },
@@ -32067,7 +32065,6 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       title: "店铺数据",
       intro: "查看商品、订单、政策、费用等经营数据的同步状态。",
       panels: [
-        renderSaasSettingsDataFocusPanel(ctx),
         renderSaasSettingsDataPanel(ctx),
       ],
     },
@@ -32078,7 +32075,6 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       title: "团队权限",
       intro: "设置发布、退款、广告、采购付款和敏感客服承诺的确认权限。",
       panels: [
-        renderSaasSettingsGovernanceFocusPanel(),
         renderSaasMerchantPermissionPanel(),
       ],
     },
@@ -32091,9 +32087,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       panels: [
         renderSaasMerchantBillingPlainSummaryPanel(ctx),
         renderSaasMerchantPricingModelPanel(ctx),
-        renderSaasMerchantBillingCurrentStatusPanel(ctx),
         renderSaasMerchantBillingContinuityPanel(ctx),
-        renderSaasSettingsBillingFocusPanel(ctx),
         renderSaasMerchantSecurityBoundaryPanel(),
       ],
     },

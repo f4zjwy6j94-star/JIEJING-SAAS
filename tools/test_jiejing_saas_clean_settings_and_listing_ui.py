@@ -307,13 +307,15 @@ def main() -> None:
     settings_def_end = app_js.index("function renderSaasSettingsCleanLayout", settings_def_start)
     settings_def_body = app_js[settings_def_start:settings_def_end]
     for required_marker in [
-        "renderSaasSettingsAccountFocusPanel(ctx)",
-        "renderSaasSettingsModelFocusPanel(ctx)",
-        "renderSaasSettingsDataFocusPanel(ctx)",
-        "renderSaasSettingsGovernanceFocusPanel()",
-        "renderSaasSettingsBillingFocusPanel(ctx)",
+        "renderSaasSettingsAccountAccessPanel()",
+        "renderSaasSettingsPlatformPanel(ctx)",
+        "renderSaasSettingsAccountPanel(ctx, options)",
+        "renderSaasMerchantModelProviderPanel(ctx)",
+        "renderSaasSettingsDataPanel(ctx)",
+        "renderSaasMerchantPermissionPanel()",
+        "renderSaasMerchantBillingPlainSummaryPanel(ctx)",
         "renderSaasMerchantPricingModelPanel(ctx)",
-        "renderSaasMerchantBillingCurrentStatusPanel(ctx)",
+        "renderSaasMerchantBillingContinuityPanel(ctx)",
         "主理人高级区",
         "正式收费和公网安全",
         "运行可靠性",
@@ -323,6 +325,12 @@ def main() -> None:
         require(settings_def_body, required_marker, "settings ordinary tabs stay focused while owner area keeps advanced controls")
     ordinary_settings_body = settings_def_body[: settings_def_body.index("if (saasOwnerLaunchCanView())")]
     for redundant_marker in [
+        "renderSaasSettingsAccountFocusPanel(ctx)",
+        "renderSaasSettingsModelFocusPanel(ctx)",
+        "renderSaasSettingsDataFocusPanel(ctx)",
+        "renderSaasSettingsGovernanceFocusPanel()",
+        "renderSaasSettingsBillingFocusPanel(ctx)",
+        "renderSaasMerchantBillingCurrentStatusPanel(ctx)",
         "账号健康和事故处理",
         "来源记录和可信度",
         "用量和成本",

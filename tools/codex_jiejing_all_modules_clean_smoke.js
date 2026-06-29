@@ -686,6 +686,10 @@ async function main() {
                 rawText.includes("merchant_visible_billing_status_v1") &&
                 rawText.includes("triggers_real_charge=false") &&
                 rawText.includes("frontend_gets_payment_secret=false"),
+              has_billing_plain_summary:
+                Boolean(section?.querySelector(".saas-merchant-billing-plain-summary")) &&
+                rawText.includes("merchant_billing_plain_summary_v1") &&
+                text.includes("先分清月费、用量费和平台成本"),
               has_billing_pricing_split:
                 Boolean(
                   section?.querySelector(
@@ -714,7 +718,7 @@ async function main() {
       check.settings_child_audit = settingsChildAudit;
       check.settings_children_are_focused = settingsChildAudit.every(
         (item) =>
-          item.has_focus_panel &&
+          !item.has_focus_panel &&
           !item.has_one_glance &&
           item.one_glance_count === 0 &&
           !item.has_one_glance_copy &&
@@ -728,6 +732,7 @@ async function main() {
       check.settings_model_has_subpage_strip = modelAudit.has_subpage_strip || false;
       check.settings_model_has_model_panel = modelAudit.has_model_provider_panel || false;
       check.settings_billing_has_current_status = billingAudit.has_billing_current_panel || false;
+      check.settings_billing_has_plain_summary = billingAudit.has_billing_plain_summary || false;
       check.settings_billing_has_pricing_split = billingAudit.has_billing_pricing_split || false;
       check.settings_billing_has_continuity = billingAudit.has_billing_continuity || false;
       await page
@@ -797,11 +802,12 @@ async function main() {
   if (!connect.has_settings_one_glance || connect.settings_one_glance_count < 3) {
     failures.push("settings one-glance summary missing");
   }
-  if (!connect.settings_children_are_focused) failures.push("ordinary settings child tabs are not focused");
+  if (!connect.settings_children_are_focused) failures.push("ordinary settings child tabs still contain redundant summary/map panels");
   if (connect.settings_model_has_home_hub) failures.push("settings child page repeats overview map");
   if (connect.settings_model_has_subpage_strip) failures.push("settings child page still shows redundant intro/map");
   if (!connect.settings_model_has_model_panel) failures.push("settings child page content missing");
-  if (!connect.settings_billing_has_current_status) failures.push("settings billing current merchant status missing");
+  if (connect.settings_billing_has_current_status) failures.push("settings billing tab still shows duplicate current status panel");
+  if (!connect.settings_billing_has_plain_summary) failures.push("settings billing plain summary missing");
   if (!connect.settings_billing_has_pricing_split) failures.push("settings billing pricing split missing");
   if (!connect.settings_billing_has_continuity) failures.push("settings billing continuity closure missing");
   const media = moduleChecks.find((item) => item.view === "media") || {};
