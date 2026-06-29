@@ -17525,11 +17525,24 @@ function saasCeoRoutingNextLine(route = null, command = state.saasLastCeoCommand
   return "点按钮后只打开对应工作台继续整理；发布、付款、退款、广告和敏感承诺仍要你确认。";
 }
 
+function saasCeoFirstDayClosureRows(route = null, command = state.saasLastCeoCommand) {
+  const current = normalizeSaasCeoCommand(command);
+  if (!route || !current) return [];
+  const target = route.view === "confirm" ? "决策中心" : route.label || "推荐模块";
+  return [
+    ["01", "先说目标", "一句话、图片、链接或订单问题都可以。"],
+    ["02", "系统判断", `AI CEO 判断这是咨询、Listing、批量、素材、客服还是高风险动作。`],
+    ["03", "去推荐模块", `本次建议进入：${target}。`],
+    ["04", "回设置补连接", "eBay、模型、素材额度和订阅只在需要时再补。"],
+  ];
+}
+
 function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
   const current = normalizeSaasCeoCommand(command);
   const route = primarySaasCeoRoute(current);
   if (!current || !route) return "";
   const whyRows = saasCeoRoutingWhyRows(route, current);
+  const closureRows = saasCeoFirstDayClosureRows(route, current);
   const buttonLabel =
     route.view === "confirm"
       ? "去决策中心"
@@ -17564,6 +17577,22 @@ function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
             .join("")}
         </div>
         <p class="saas-ceo-routing-nextline">${escapeHtml(saasCeoRoutingNextLine(route, current))}</p>
+        <div class="saas-ceo-route-closure" data-ai-ceo-first-day-closure="first_day_ai_ceo_closure_v1" aria-label="AI CEO 首日闭环">
+          <span>首日闭环</span>
+          <div>
+            ${closureRows
+              .map(
+                ([step, title, detail]) => `
+                  <article>
+                    <b>${escapeHtml(step)}</b>
+                    <strong>${escapeHtml(title)}</strong>
+                    <small>${escapeHtml(detail)}</small>
+                  </article>
+                `,
+              )
+              .join("")}
+          </div>
+        </div>
       </div>
       <button class="primary-action compact-action" type="button" data-global-flow-view="${escapeHtml(route.view)}" data-global-flow-key="${escapeHtml(route.key || route.view)}">
         ${escapeHtml(buttonLabel)}
@@ -25502,6 +25531,11 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
       tone: "green",
     },
   ];
+  const clarityRows = [
+    ["月费", "月费只买工作台", "AI CEO、Listing、批量铺货、素材工坊、客服订单、确认中心和设置。"],
+    ["用量", "用量只管高成本 AI 与素材", "文本模型、联网报告、生图生视频和长任务按额度或消耗核算。"],
+    ["平台成本", "平台费用不由捷境收取", "eBay 成交费、广告费、物流、退款和店铺订阅仍由商家平台账户承担。"],
+  ];
   return `
     <section class="saas-settings-card saas-merchant-billing-plain-summary" data-billing-summary="merchant_billing_plain_summary_v1" aria-label="订阅和用量总览">
       <div class="saas-settings-card-head">
@@ -25525,6 +25559,19 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
           )
           .join("")}
       </div>
+      <div class="saas-merchant-billing-clarity" data-billing-clarity="subscription_metering_clarity_v2" aria-label="月费、用量和平台成本">
+        ${clarityRows
+          .map(
+            ([label, title, detail]) => `
+              <article>
+                <span>${escapeHtml(label)}</span>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
       <div class="saas-merchant-billing-plain-note">
         <strong>停用规则</strong>
         <p>订阅取消、欠费或额度用尽时，只停会继续产生费用的模型、联网和素材生成；历史报告、确认记录、审计证据和账号设置继续保留。</p>
@@ -25535,6 +25582,7 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
         <span>base_subscription_is_feature_fee=true</span>
         <span>ai_media_usage_is_separate=true</span>
         <span>platform_cost_not_collected_by_jiejing=true</span>
+        <span>subscription_metering_clarity_v2</span>
         <span>triggers_real_charge=false</span>
         <span>frontend_gets_payment_secret=false</span>
         <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
@@ -26048,9 +26096,10 @@ function renderSaasAiCeoFirstRunHandoff() {
     "我还没接 eBay，先用资料跑草稿",
   ];
   const firstDaySteps = [
-    ["01", "说目标", "像聊天一样说商品、图片、订单或普通问题。"],
+    ["01", "先说目标", "像聊天一样说商品、图片、订单或普通问题。"],
     ["02", "看判断", "JIEJING 会告诉你该去 Listing、批量、素材、客服还是决策中心。"],
-    ["03", "再确认", "发布、付款、退款、广告和敏感承诺必须等你点头。"],
+    ["03", "进模块", "系统只打开下一步需要的工作台，不把后台排查塞给你。"],
+    ["04", "再确认", "发布、付款、退款、广告和敏感承诺必须等你点头。"],
   ];
   const focusOptions = [
     ["有商品想上架", "先把标题、卖点、图片或链接发进来，生成 Listing 草稿。", "帮我从一个商品做 Listing"],
@@ -26061,8 +26110,8 @@ function renderSaasAiCeoFirstRunHandoff() {
     <section class="saas-ai-ceo-first-run-handoff" data-ai-ceo-first-run-handoff="first_run_ai_ceo_handoff_v1" data-does-not-trigger-real-write="true" aria-label="AI CEO 开口建议">
       <div class="saas-ai-ceo-first-run-copy">
         <span>可以这样开始</span>
-        <strong>直接说经营目标，不用先找功能</strong>
-        <p>点一句只会填入输入框；你确认发送后，AI CEO 再判断去 Listing、批量、素材、客服或决策中心。</p>
+        <strong>首日只做一条主线：先说目标，再看 AI CEO 带你去哪</strong>
+        <p>点一句只会填入输入框；你确认发送后，AI CEO 再判断去 Listing、批量、素材、客服或决策中心。连接和计费问题以后回设置补。</p>
       </div>
       <div class="saas-ai-ceo-one-task-focus" data-ai-ceo-one-task-focus="first_day_one_task_focus_v1" aria-label="首日聚焦">
         <div class="saas-ai-ceo-one-task-head">

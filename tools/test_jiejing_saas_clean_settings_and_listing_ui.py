@@ -88,6 +88,13 @@ def main() -> None:
     require(app_js, "推荐去", "AI CEO route card recommended module row")
     require(app_js, "安全边界", "AI CEO route card safety row")
     require(styles, ".saas-ceo-routing-why", "AI CEO route card three-row styling")
+    require(app_js, "function saasCeoFirstDayClosureRows", "AI CEO first-day closure helper")
+    require(app_js, "first_day_ai_ceo_closure_v1", "AI CEO first-day closure marker")
+    require(app_js, "首日闭环", "AI CEO first-day closure copy")
+    require(app_js, "先说目标", "AI CEO first-day starts with one goal")
+    require(app_js, "去推荐模块", "AI CEO first-day route handoff")
+    require(app_js, "回设置补连接", "AI CEO first-day settings continuation")
+    require(styles, ".saas-ceo-route-closure", "AI CEO first-day closure styling")
     require(app_js, "继续小批量实验台", "AI CEO compact task card bulk next button")
     require(app_js, "一句话交给 AI CEO", "AI CEO low-learning-cost empty title")
     require(app_js, "first_day_ai_ceo_path_v2", "AI CEO first-day path marker")
@@ -364,6 +371,10 @@ def main() -> None:
         "¥99/月是软件功能费",
         "AI 模型和素材生成单独看",
         "merchant_billing_plain_summary_v1",
+        "subscription_metering_clarity_v2",
+        "月费只买工作台",
+        "用量只管高成本 AI 与素材",
+        "平台费用不由捷境收取",
         "billing_now_no_real_charge",
         "base_subscription_is_feature_fee=true",
         "ai_media_usage_is_separate=true",
