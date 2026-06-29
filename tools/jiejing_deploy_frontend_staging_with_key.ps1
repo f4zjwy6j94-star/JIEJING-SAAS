@@ -75,7 +75,8 @@ Invoke-NativeChecked "tar" $archiveArgs
 $scpBaseArgs = @("-O", "-i", $KeyPath, "-P", [string]$Port, "-o", "BatchMode=yes", "-o", "ConnectTimeout=15")
 Invoke-NativeChecked "scp" ($scpBaseArgs + @($patchArchive, "${target}:$remoteArchive"))
 $sshArgs = @("-i", $KeyPath, "-p", [string]$Port, "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", $target, "bash -s")
-($remoteScript -replace "`r", "") | & ssh @sshArgs
+$remoteScriptForSsh = $remoteScript.TrimStart([char]0xFEFF) -replace "`r", ""
+$remoteScriptForSsh | & ssh @sshArgs
 if ($LASTEXITCODE -ne 0) {
   throw "ssh failed with exit code $LASTEXITCODE"
 }
