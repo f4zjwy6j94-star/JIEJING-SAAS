@@ -1399,6 +1399,39 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+const jiejingTrustedHtmlBlockedPattern = /<script\b|<\/script|on[a-z]+\s*=|href\s*=\s*["']?\s*javascript:|src\s*=\s*["']?\s*javascript:/i;
+
+function trustedJiejingHtml(html, source = "unspecified") {
+  const value = String(html ?? "");
+  const label = String(source || "unspecified");
+  if (jiejingTrustedHtmlBlockedPattern.test(value)) {
+    throw new Error(`Blocked unsafe JIEJING HTML write: ${label}`);
+  }
+  return Object.freeze({ __jiejingTrustedHtml: true, html: value, source: label });
+}
+
+function jiejingTrustedHtmlString(trustedHtml) {
+  if (!trustedHtml || trustedHtml.__jiejingTrustedHtml !== true) {
+    throw new Error("JIEJING HTML writes must use trustedJiejingHtml(source).");
+  }
+  return trustedHtml.html;
+}
+
+function setJiejingTrustedHtml(target, trustedHtml) {
+  if (!target) return;
+  target.innerHTML = jiejingTrustedHtmlString(trustedHtml);
+}
+
+function insertJiejingTrustedHtml(target, position, trustedHtml) {
+  if (!target) return;
+  target.insertAdjacentHTML(position, jiejingTrustedHtmlString(trustedHtml));
+}
+
+function replaceJiejingTrustedHtml(target, trustedHtml) {
+  if (!target) return;
+  target.outerHTML = jiejingTrustedHtmlString(trustedHtml);
+}
+
 const listingDraftCatalog = [
   {
     id: "incense",
@@ -9914,7 +9947,9 @@ function renderSaasProductListingCenter(view) {
       ? "AI 连接凭证只进入后端密钥边界；前端和执行层不拿原始凭证。"
       : "生成结果会写回报告、商家记忆和确认中心；真实发布、改价、库存、退款、广告和政策仍必须先过决策中心。";
 
-  view.innerHTML = `
+  setJiejingTrustedHtml(
+    view,
+    trustedJiejingHtml(`
     <section class="panel full product-manager-module saas-real-listing-factory" aria-label="真实 Listing 工厂">
       <header class="product-manager-header saas-real-listing-header">
         <div>
@@ -10115,7 +10150,8 @@ function renderSaasProductListingCenter(view) {
       </details>
       ` : ""}
     </section>
-  `;
+  `, "listing.product_center"),
+  );
 }
 
 function renderProductListingCenter() {
@@ -17601,7 +17637,7 @@ function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
 
 function refreshSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
   const slot = document.querySelector("#saasCeoRouteTaskSlot");
-  if (slot) slot.innerHTML = renderSaasCeoRoutingTaskCard(command);
+  setJiejingTrustedHtml(slot, trustedJiejingHtml(renderSaasCeoRoutingTaskCard(command), "ai_ceo.route_task_card"));
 }
 
 function saasCeoModuleHandoffCopy(view = "product") {
@@ -18136,7 +18172,7 @@ async function hydrateSaasCeoCommandFromBackend(storeId = activeSaasStore()?.sto
     if (command && state.view === "cockpit") {
       const latestCtx = saasMerchantWorkbenchContext();
       const consoleNode = document.querySelector("#view-cockpit .saas-ceo-command-console, #view-cockpit .ceo-home-boundary");
-      if (consoleNode) consoleNode.outerHTML = renderSaasCeoCommandConsole(latestCtx, command);
+      replaceJiejingTrustedHtml(consoleNode, trustedJiejingHtml(renderSaasCeoCommandConsole(latestCtx, command), "ai_ceo.command_console.hydrate"));
       refreshSaasCeoRoutingTaskCard(command);
     }
     return command;
@@ -18185,7 +18221,7 @@ function handleSaasCeoCommandSubmit(text) {
       state.saasLastCeoCommandPersistPromise = persistSaasCeoCommandToBackend(instantCommand);
     }
     const consoleNode = document.querySelector("#view-cockpit .saas-ceo-command-console, #view-cockpit .ceo-home-boundary");
-    if (consoleNode) consoleNode.outerHTML = renderSaasCeoCommandConsole(ctx, instantCommand || command);
+    replaceJiejingTrustedHtml(consoleNode, trustedJiejingHtml(renderSaasCeoCommandConsole(ctx, instantCommand || command), "ai_ceo.command_console.instant"));
     refreshSaasCeoRoutingTaskCard(instantCommand || command);
     return instantCommand || command;
   }
@@ -18238,7 +18274,7 @@ function handleSaasCeoCommandSubmit(text) {
       if (!mergedCommand || state.view !== "cockpit") return mergedCommand;
       const latestCtx = saasMerchantWorkbenchContext();
       const consoleNode = document.querySelector("#view-cockpit .saas-ceo-command-console, #view-cockpit .ceo-home-boundary");
-      if (consoleNode) consoleNode.outerHTML = renderSaasCeoCommandConsole(latestCtx, mergedCommand);
+      replaceJiejingTrustedHtml(consoleNode, trustedJiejingHtml(renderSaasCeoCommandConsole(latestCtx, mergedCommand), "ai_ceo.command_console.backend"));
       refreshSaasCeoRoutingTaskCard(mergedCommand);
       return mergedCommand;
     })
@@ -18260,7 +18296,7 @@ function handleSaasCeoCommandSubmit(text) {
     });
   const consoleNode = document.querySelector("#view-cockpit .saas-ceo-command-console, #view-cockpit .ceo-home-boundary");
   if (consoleNode) {
-    consoleNode.outerHTML = renderSaasCeoCommandConsole(ctx, command);
+    replaceJiejingTrustedHtml(consoleNode, trustedJiejingHtml(renderSaasCeoCommandConsole(ctx, command), "ai_ceo.command_console.pending"));
   }
   refreshSaasCeoRoutingTaskCard(command);
   // The message stream and route card already confirm receipt; avoid covering the mobile handoff card.
@@ -32542,7 +32578,10 @@ function renderSaasConnectCenter(view) {
   const ebayAuthorized = isSaasAuthorizedConnectionStatus(ebayConnectionStatus);
   const ebayPublishAuthorized = String(ebayConnectionStatus || "").toLowerCase() === "publish_authorized";
   const realWritesEnabled = isSaasRealPlatformWritesEnabled();
-  view.innerHTML = renderSaasSettingsCleanLayout(ctx, { ebayAuthorized, ebayPublishAuthorized, securityGateReady });
+  setJiejingTrustedHtml(
+    view,
+    trustedJiejingHtml(renderSaasSettingsCleanLayout(ctx, { ebayAuthorized, ebayPublishAuthorized, securityGateReady }), "settings.clean_layout"),
+  );
   return;
   view.innerHTML = `
     <section class="panel full product-manager-module saas-real-settings-center" aria-label="真实账号和安全设置">
@@ -32725,7 +32764,10 @@ function renderConnect() {
       productizeJiejingProductCopy(status).includes("待") ? "amber" : "neutral",
     ]),
   ];
-  connectStatusEl.innerHTML = statusRows
+  setJiejingTrustedHtml(
+    connectStatusEl,
+    trustedJiejingHtml(
+      statusRows
     .map(
       ([name, status, detail, tone]) => `
         <article class="status-row">
@@ -32737,7 +32779,10 @@ function renderConnect() {
         </article>
       `,
     )
-    .join("");
+        .join(""),
+      "settings.legacy_connect_status",
+    ),
+  );
   dataModelPreviewEl.textContent = JSON.stringify(productDataModelSnapshot(), null, 2);
   scheduleJiejingProductModeCopy();
 }
@@ -33162,7 +33207,7 @@ function updateSaasAiCeoLatestReply(turn = {}) {
   upsertSaasAiCeoThreadTurn(latest);
   const panel = document.querySelector("#saasAiCeoLatestReply");
   if (panel) {
-    panel.innerHTML = renderSaasAiCeoLatestReplyMarkup(latest);
+    setJiejingTrustedHtml(panel, trustedJiejingHtml(renderSaasAiCeoLatestReplyMarkup(latest), "ai_ceo.latest_reply"));
     panel.hidden = false;
   }
   const chat = document.querySelector("#ceoChat");
@@ -33177,7 +33222,11 @@ function revealSaasAiCeoHistory() {
 function addAiMessage(text) {
   const chat = document.querySelector("#ceoChat");
   if (!chat) return;
-  chat.insertAdjacentHTML("beforeend", renderSaasAiCeoChatTurnMarkup({ assistant_text: productizeJiejingProductCopy(text) }));
+  insertJiejingTrustedHtml(
+    chat,
+    "beforeend",
+    trustedJiejingHtml(renderSaasAiCeoChatTurnMarkup({ assistant_text: productizeJiejingProductCopy(text) }), "ai_ceo.chat_turn.assistant_only"),
+  );
   chat.scrollTop = chat.scrollHeight;
 }
 
@@ -33190,23 +33239,27 @@ function addCeoMessage(text, aiText, options = {}) {
     (isSaasPublicMvpMode()
       ? "正在处理..."
       : `收到。我会把这件商品推进到可确认上架：先判断市场和风险，再生成 Listing 草稿、素材包、利润履约测算和确认事项。${permissionModeDetail().hint} 当前为演示环境，不会写入 eBay。`);
-  chat.insertAdjacentHTML(
+  insertJiejingTrustedHtml(
+    chat,
     "beforeend",
-    renderSaasAiCeoChatTurnMarkup({
-      user_text: text,
-      assistant_text: reply,
-      assistant_id: assistantId,
-      pending: Boolean(options.pending),
-      status: options.pending ? "pending" : options.status || "",
-      model: options.model || null,
-      route: options.route || "",
-      route_label: options.route_label || "",
-      memory_policy: options.memory_policy || "",
-      long_term_memory: Boolean(options.long_term_memory),
-      writes_merchant_rule: Boolean(options.writes_merchant_rule),
-      decision_center_required: Boolean(options.decision_center_required),
-      source_records: options.source_records || [],
-    }),
+    trustedJiejingHtml(
+      renderSaasAiCeoChatTurnMarkup({
+        user_text: text,
+        assistant_text: reply,
+        assistant_id: assistantId,
+        pending: Boolean(options.pending),
+        status: options.pending ? "pending" : options.status || "",
+        model: options.model || null,
+        route: options.route || "",
+        route_label: options.route_label || "",
+        memory_policy: options.memory_policy || "",
+        long_term_memory: Boolean(options.long_term_memory),
+        writes_merchant_rule: Boolean(options.writes_merchant_rule),
+        decision_center_required: Boolean(options.decision_center_required),
+        source_records: options.source_records || [],
+      }),
+      "ai_ceo.chat_turn.user_and_assistant",
+    ),
   );
   updateSaasAiCeoLatestReply({
     user_text: text,
@@ -33262,7 +33315,11 @@ function updateCeoAssistantMessage(messageId, text, status = "", model = null, s
     pending: false,
   });
   if (body && updatedTurn) {
-    body.insertAdjacentHTML("afterend", renderSaasAiCeoRecoveryHintMarkup(updatedTurn) + renderSaasAiCeoWorkDetailMarkup(updatedTurn));
+    insertJiejingTrustedHtml(
+      body,
+      "afterend",
+      trustedJiejingHtml(renderSaasAiCeoRecoveryHintMarkup(updatedTurn) + renderSaasAiCeoWorkDetailMarkup(updatedTurn), "ai_ceo.chat_turn.recovery_and_detail"),
+    );
   }
   const meta = node.querySelector(".saas-ai-ceo-message-body > small");
   if (meta) {
@@ -33293,7 +33350,7 @@ function updateCeoAssistantPendingMessage(messageId, turn = {}) {
   const body = node.querySelector("p");
   if (body) body.textContent = productizeJiejingProductCopy(latest.assistant_text || "我还在处理这次请求。");
   node.querySelector(".saas-ai-ceo-pending-status")?.remove();
-  if (body) body.insertAdjacentHTML("afterend", renderSaasAiCeoPendingStatusMarkup(latest));
+  insertJiejingTrustedHtml(body, "afterend", trustedJiejingHtml(renderSaasAiCeoPendingStatusMarkup(latest), "ai_ceo.chat_turn.pending_status"));
   const meta = node.querySelector(".saas-ai-ceo-message-body > small");
   if (meta) meta.textContent = saasAiCeoTurnStatusLabel(latest);
   if (!state.saasAiCeoLatestTurn || state.saasAiCeoLatestTurn.assistant_id === messageId) {

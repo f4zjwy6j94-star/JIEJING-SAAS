@@ -21,6 +21,18 @@ def main() -> int:
     css = CSS.read_text(encoding="utf-8")
 
     required_app = [
+        "const jiejingTrustedHtmlBlockedPattern = /<script\\b",
+        "function trustedJiejingHtml",
+        "function setJiejingTrustedHtml",
+        "function insertJiejingTrustedHtml",
+        "function replaceJiejingTrustedHtml",
+        'trustedJiejingHtml(renderSaasCeoRoutingTaskCard(command), "ai_ceo.route_task_card")',
+        'trustedJiejingHtml(renderSaasAiCeoLatestReplyMarkup(latest), "ai_ceo.latest_reply")',
+        "replaceJiejingTrustedHtml(consoleNode, trustedJiejingHtml(renderSaasCeoCommandConsole",
+        'trustedJiejingHtml(renderSaasAiCeoChatTurnMarkup({ assistant_text: productizeJiejingProductCopy(text) }), "ai_ceo.chat_turn.assistant_only")',
+        '"ai_ceo.chat_turn.user_and_assistant"',
+        '"ai_ceo.chat_turn.recovery_and_detail"',
+        '"ai_ceo.chat_turn.pending_status"',
         "saasAiCeoLatestTurn",
         "saasAiCeoThread",
         "ceoThread: \"jiejing_saas_ceo_thread\"",
@@ -204,6 +216,19 @@ def main() -> int:
     for needle in forbidden_chat_copy:
         if needle in app:
             return fail(f"AI CEO chat must not expose implementation copy: {needle}")
+
+    ai_ceo_safe_write_start = app.index("function refreshSaasCeoRoutingTaskCard")
+    ai_ceo_safe_write_end = app.index("function isMediaGenerationRequest", ai_ceo_safe_write_start)
+    ai_ceo_safe_write_body = app[ai_ceo_safe_write_start:ai_ceo_safe_write_end]
+    for forbidden_sink in [
+        "slot.innerHTML = renderSaasCeoRoutingTaskCard",
+        "consoleNode.outerHTML = renderSaasCeoCommandConsole",
+        "panel.innerHTML = renderSaasAiCeoLatestReplyMarkup",
+        "chat.insertAdjacentHTML(",
+        "body.insertAdjacentHTML(\"afterend\", renderSaasAiCeo",
+    ]:
+        if forbidden_sink in ai_ceo_safe_write_body:
+            return fail(f"AI CEO dynamic markup must use trusted JIEJING HTML sinks: {forbidden_sink}")
 
     print("PASS jiejing_saas_ai_ceo_latest_reply_ui")
     return 0

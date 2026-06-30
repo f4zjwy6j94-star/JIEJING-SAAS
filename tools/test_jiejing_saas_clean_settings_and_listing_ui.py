@@ -23,6 +23,13 @@ def main() -> None:
     require(app_js, "function renderSaasSettingsCleanLayout", "clean settings layout")
     require(app_js, "data-saas-settings-tab", "settings tab navigation")
     require(app_js, "renderSaasSettingsCleanLayout(ctx", "settings render path")
+    require(app_js, "function trustedJiejingHtml", "trusted HTML sink guard")
+    require(app_js, "function setJiejingTrustedHtml", "trusted HTML set sink")
+    require(app_js, "function insertJiejingTrustedHtml", "trusted HTML insert sink")
+    require(app_js, "function replaceJiejingTrustedHtml", "trusted HTML replace sink")
+    require(app_js, '"listing.product_center"', "Listing daily surface trusted sink label")
+    require(app_js, '"settings.clean_layout"', "settings trusted sink label")
+    require(app_js, '"settings.legacy_connect_status"', "legacy settings status trusted sink label")
 
     require(app_js, "function renderSaasBulkCandidatePreview", "SaaS bulk simplified candidate preview")
     require(app_js, "先小批量筛，不一键乱铺", "bulk low-learning-cost headline")
@@ -222,6 +229,10 @@ def main() -> None:
     listing_start = app_js.index("function renderSaasProductListingCenter")
     listing_end = app_js.index("function renderProductListingCenter", listing_start)
     listing_body = app_js[listing_start:listing_end]
+    require(listing_body, "setJiejingTrustedHtml(", "Listing daily surface uses trusted HTML sink")
+    require(listing_body, 'trustedJiejingHtml(`', "Listing daily surface wraps generated markup")
+    if "view.innerHTML =" in listing_body:
+        raise AssertionError("Listing daily surface must not write generated markup with raw view.innerHTML")
     disabled_internal_index = listing_body.find("${false ? `")
     active_listing_body = listing_body[:disabled_internal_index] if disabled_internal_index >= 0 else listing_body
     publish_intake_index = listing_body.index("renderSaasPublishConfirmationIntakePanel(ctx")
@@ -378,6 +389,21 @@ def main() -> None:
     require(settings_layout_body, 'activeTab.id === "general"', "settings overview-only map guard")
     require(settings_layout_body, 'isOverview ? renderSaasSettingsReadableMap(activeTab.id) : ""', "settings child pages skip redundant map")
     require(settings_layout_body, 'isOverview ? renderSaasSettingsOneGlanceStrip(activeTab.id) : ""', "settings one-glance summary stays overview-only")
+    settings_connect_start = app_js.index("function renderSaasConnectCenter")
+    settings_connect_end = app_js.index("function renderConnect", settings_connect_start)
+    settings_connect_body = app_js[settings_connect_start:settings_connect_end]
+    settings_trusted_sink_index = settings_connect_body.index("setJiejingTrustedHtml(")
+    executed_settings_connect_body = settings_connect_body[: settings_connect_body.index("return;", settings_trusted_sink_index)]
+    require(executed_settings_connect_body, "setJiejingTrustedHtml(", "settings active render path uses trusted HTML sink")
+    require(executed_settings_connect_body, '"settings.clean_layout"', "settings active render path trusted label")
+    if "view.innerHTML =" in executed_settings_connect_body:
+        raise AssertionError("Settings active render path must not use raw view.innerHTML")
+    render_connect_start = app_js.index("function renderConnect")
+    render_connect_end = app_js.index("function riskText", render_connect_start)
+    render_connect_body = app_js[render_connect_start:render_connect_end]
+    require(render_connect_body, '"settings.legacy_connect_status"', "settings legacy status trusted label")
+    if "connectStatusEl.innerHTML" in render_connect_body:
+        raise AssertionError("Settings legacy connection status must not use raw innerHTML")
     require(app_js, 'saasOwnerLaunchCanView()\n        ? optionalSaasFetchFast("/owner/launch-control"', "owner launch control should not be fetched for ordinary merchants")
     require(app_js, 'Promise.resolve({ owner_launch_control: null, skipped: "owner_admin_only" })', "owner launch control public-page quiet skip")
     require(app_js, 'saasOwnerLaunchCanView()\n        ? optionalSaasFetchFast(`/security/staging-gate?store_id=${encodeURIComponent(store.store_id)}`', "staging security gate should not be fetched for ordinary merchants")
