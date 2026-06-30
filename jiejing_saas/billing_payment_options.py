@@ -30,15 +30,18 @@ def build_mainland_payment_strategy(settings: SaaSSettings) -> dict[str, Any]:
     mainland_icp_ready = _env_bool("JIEJING_MAINLAND_PAYMENT_ICP_READY")
     domestic_lanes = _domestic_lanes(domestic_provider)
     selected_lane = next((lane for lane in domestic_lanes if lane["selected"]), None)
+    mainland_first = target_region in {"mainland_china", "china_mainland", "cn"}
     ready_lane = next((lane for lane in domestic_lanes if lane["status"] == "ready"), None)
     domestic_provider_ready = ready_lane is not None
+    subject_alignment_ready = mainland_icp_ready if mainland_first else True
     paid_launch_ready = (
-        domestic_provider_ready
+        merchant_entity_ready
+        and subject_alignment_ready
+        and domestic_provider_ready
         and domestic_adapter_enabled
         and domestic_webhook_configured
         and domestic_live_cutover_approved
     )
-    mainland_first = target_region in {"mainland_china", "china_mainland", "cn"}
 
     return {
         "contract_version": MAINLAND_PAYMENT_CONTRACT_VERSION,
@@ -92,6 +95,13 @@ def build_mainland_payment_strategy(settings: SaaSSettings) -> dict[str, Any]:
             "reason": "regulated payment channels normally require merchant onboarding, settlement identity, risk review, and webhook/order-query credentials",
             "current_hk_hosting_note": "hong_kong_or_overseas_hosting_is_fine_for_private_beta_but_mainland_web_payment_review_may_require_icp_and_subject_consistency",
         },
+        "merchant_entity_readiness": _merchant_entity_readiness(
+            merchant_entity_ready=merchant_entity_ready,
+            mainland_icp_ready=mainland_icp_ready,
+            domestic_provider_ready=domestic_provider_ready,
+            domestic_webhook_configured=domestic_webhook_configured,
+            manual_qr_enabled=manual_qr_enabled,
+        ),
         "domain_and_icp_plan": _domain_and_icp_plan(
             merchant_entity_ready=merchant_entity_ready,
             mainland_icp_ready=mainland_icp_ready,
@@ -252,6 +262,72 @@ def _settlement_lanes() -> list[dict[str, Any]]:
     ]
 
 
+def _merchant_entity_readiness(
+    *,
+    merchant_entity_ready: bool,
+    mainland_icp_ready: bool,
+    domestic_provider_ready: bool,
+    domestic_webhook_configured: bool,
+    manual_qr_enabled: bool,
+) -> dict[str, Any]:
+    """Return public-safe readiness for the user's entity/payment onboarding path."""
+
+    checklist = [
+        {
+            "key": "business_license",
+            "label": "Individual business or company license",
+            "status": "ready" if merchant_entity_ready else "in_progress",
+            "why": "formal WeChat, Alipay, UnionPay, or acquirer onboarding needs a real settlement subject",
+        },
+        {
+            "key": "operator_identity_and_bank",
+            "label": "Operator identity and settlement bank account",
+            "status": "ready" if merchant_entity_ready else "blocked",
+            "why": "provider KYC, payout, and dispute handling must map to the same operator or entity",
+        },
+        {
+            "key": "service_docs_and_contact",
+            "label": "Service agreement, privacy policy, and customer contact",
+            "status": "designed",
+            "why": "payment product review needs a clear service page, refund path, and support contact",
+        },
+        {
+            "key": "domain_subject_alignment",
+            "label": "Domain, ICP if required, and payment subject alignment",
+            "status": "ready" if mainland_icp_ready else "blocked",
+            "why": "mainland payment review may check that website, callback domain, and merchant subject are consistent",
+        },
+        {
+            "key": "signed_callback_and_order_query",
+            "label": "Signed callback and order query credentials",
+            "status": "ready" if domestic_webhook_configured and domestic_provider_ready else "blocked",
+            "why": "Jiejing can only auto-grant quota from signed provider evidence, not from a static personal QR image",
+        },
+    ]
+    return {
+        "contract_version": "2026-06-30-merchant-entity-payment-readiness",
+        "current_stage": "private_beta_manual_reconciliation" if manual_qr_enabled else "entity_and_provider_preparation",
+        "recommended_entity_path": "individual_business_first_then_company_if_scale_requires",
+        "merchant_entity_ready": merchant_entity_ready,
+        "mainland_icp_or_subject_alignment_ready": mainland_icp_ready,
+        "domestic_provider_ready_for_rehearsal": domestic_provider_ready,
+        "signed_webhook_configured": domestic_webhook_configured,
+        "personal_qr_scope": "private_beta_manual_reconciliation_only",
+        "can_auto_grant_paid_entitlement": domestic_provider_ready and domestic_webhook_configured,
+        "checklist": checklist,
+        "next_external_steps": [
+            "finish_individual_business_registration_or_company_setup",
+            "apply_wechat_alipay_unionpay_or_acquirer_merchant_account",
+            "prepare_reviewed_domain_service_pages_and_callback_urls",
+            "store_provider_credentials_only_in_backend_vault_or_env",
+            "run_no_real_charge_rehearsal_before_owner_live_cutover",
+        ],
+        "triggers_real_charge": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
 def _formal_collection_architecture(
     *,
     merchant_entity_ready: bool,
@@ -277,7 +353,7 @@ def _formal_collection_architecture(
             "label": "Domain, ICP, and merchant subject alignment",
             "status": "ready" if mainland_icp_ready else "blocked",
             "owner": "operator",
-            "reason": "mainland web payment review commonly checks ICP and merchant subject consistency or authorization",
+            "reason": "mainland web payment review commonly checks ICP and merchant subject consistency or consent proof",
         },
         {
             "key": "create_order",

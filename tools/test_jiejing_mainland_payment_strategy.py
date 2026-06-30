@@ -76,6 +76,25 @@ def main() -> int:
             return fail(f"mainland company path should not conflict with the current HK route when planned: {domain_plan}")
         if domain_plan.get("current_hk_route_icp_required") is not False:
             return fail("current HK/overseas route should not claim a mainland ICP filing is already required")
+        entity = strategy.get("merchant_entity_readiness") or {}
+        if entity.get("contract_version") != "2026-06-30-merchant-entity-payment-readiness":
+            return fail(f"merchant entity readiness contract missing: {entity}")
+        if entity.get("recommended_entity_path") != "individual_business_first_then_company_if_scale_requires":
+            return fail(f"merchant entity path should prefer individual business first: {entity}")
+        if entity.get("merchant_entity_ready") is not False:
+            return fail(f"merchant entity should start as not ready: {entity}")
+        checklist = {item.get("key"): item for item in entity.get("checklist", []) if isinstance(item, dict)}
+        for key in {
+            "business_license",
+            "operator_identity_and_bank",
+            "service_docs_and_contact",
+            "domain_subject_alignment",
+            "signed_callback_and_order_query",
+        }:
+            if key not in checklist:
+                return fail(f"merchant entity checklist missing: {key}")
+        if entity.get("can_auto_grant_paid_entitlement") is not False:
+            return fail("formal entitlement automation must require provider + signed callback evidence")
         if "payment_merchant_entity_not_ready" not in strategy.get("paid_launch_blockers", []):
             return fail("formal paid launch should be blocked until merchant entity is ready")
         if "mainland_payment_icp_subject_not_ready" not in strategy.get("paid_launch_blockers", []):
@@ -95,6 +114,25 @@ def main() -> int:
             return fail(f"alipay lane should be rehearsal-ready when refs are configured: {rehearsal_strategy}")
         if rehearsal_strategy.get("paid_launch_ready") is not False:
             return fail("provider refs alone must not make paid launch ready")
+        os.environ["JIEJING_DOMESTIC_PAYMENT_ADAPTER_ENABLED"] = "1"
+        os.environ["JIEJING_DOMESTIC_PAYMENT_WEBHOOK_CONFIGURED"] = "1"
+        os.environ["JIEJING_DOMESTIC_PAYMENT_LIVE_CUTOVER_APPROVED"] = "1"
+        provider_without_entity = build_mainland_payment_strategy(settings)
+        if provider_without_entity.get("paid_launch_ready") is not False:
+            return fail("domestic provider + webhook + cutover cannot be paid-launch ready without merchant entity")
+        if "payment_merchant_entity_not_ready" not in provider_without_entity.get("paid_launch_blockers", []):
+            return fail(f"provider-ready fixture should still block on merchant entity: {provider_without_entity}")
+
+        os.environ["JIEJING_PAYMENT_MERCHANT_ENTITY_READY"] = "1"
+        os.environ["JIEJING_MAINLAND_PAYMENT_ICP_READY"] = "1"
+        full_formal_strategy = build_mainland_payment_strategy(settings)
+        if full_formal_strategy.get("paid_launch_ready") is not True:
+            return fail(f"full formal fixture should satisfy paid launch strategy: {full_formal_strategy.get('paid_launch_blockers')}")
+        if full_formal_strategy.get("charge_now_allowed") is not False or full_formal_strategy.get("triggers_real_charge") is not False:
+            return fail("strategy readiness is not permission to charge during the test")
+        full_entity = full_formal_strategy.get("merchant_entity_readiness") or {}
+        if full_entity.get("merchant_entity_ready") is not True or full_entity.get("mainland_icp_or_subject_alignment_ready") is not True:
+            return fail(f"full formal fixture should surface entity readiness: {full_entity}")
 
         print("PASS jiejing_mainland_payment_strategy")
         return 0

@@ -351,6 +351,10 @@ def main() -> None:
         "worldfirst_payoneer_settlement_not_checkout",
         "formal_payment_collection_architecture_v1",
         "mainland_domain_icp_plan_v1",
+        "merchant_entity_payment_readiness_v1",
+        "individual_business_first_then_company_if_scale_requires",
+        "formal_payment_requires_merchant_entity_and_subject_alignment",
+        "personal_qr_private_beta_manual_reconciliation_only",
         "personal_alipay_qr_private_beta_manual_reconciliation_only",
         "formal_payment_requires_merchant_order_signed_callback_and_quota_audit",
         "manual_beta_payment_order_v1",
@@ -359,6 +363,11 @@ def main() -> None:
         "manual_beta_confirmation_grants_30d_starter",
     ]:
         require(app_js, required_marker, "mainland payment public safety markers")
+    for required_style_marker in [
+        ".saas-mainland-payment-entity",
+        "grid-template-columns: minmax(230px, 1.45fr) repeat(5, minmax(0, 1fr))",
+    ]:
+        require(styles, required_style_marker, "mainland payment entity readiness layout")
     for removed_marker in [
         "/auth/qr-login/status",
         "qr-login-placeholder",

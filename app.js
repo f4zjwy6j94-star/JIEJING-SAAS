@@ -25741,9 +25741,12 @@ function renderSaasMainlandPaymentStrategyPanel() {
   ];
   const formal = payment.strategy.formal_collection_architecture || {};
   const domainPlan = payment.strategy.domain_and_icp_plan || {};
+  const entity = payment.strategy.merchant_entity_readiness || {};
   const formalSteps = Array.isArray(formal.steps) ? formal.steps : [];
   const visibleFormalSteps = formalSteps.slice(0, 4);
   const formalStepTone = (status) => (status === "ready" ? "green" : status === "designed" ? "amber" : "red");
+  const entityChecklist = Array.isArray(entity.checklist) ? entity.checklist : [];
+  const entityTone = (status) => (status === "ready" ? "green" : status === "designed" || status === "in_progress" ? "amber" : "red");
   const domainRows = [
     ["现在", "香港/海外入口继续用于内测和全球访问", "这不是“香港备案”。香港或海外服务器本身通常不走中国内地 ICP 备案。"],
     ["以后", "大陆公司或个体户做正式商户主体", "正式接微信、支付宝、云闪付时，再让支付主体、域名/子域名、回调地址和备案材料保持一致。"],
@@ -25816,10 +25819,33 @@ function renderSaasMainlandPaymentStrategyPanel() {
           )
           .join("")}
       </div>
+      <div class="saas-mainland-payment-entity" data-payment-entity-readiness="merchant_entity_payment_readiness_v1" aria-label="主体和商户资料准备">
+        <div>
+          <span>主体资料</span>
+          <strong>个体工商户是当前最轻的正式收款准备路径</strong>
+          <small>先把营业执照、经营者实名、结算银行卡、服务协议/隐私政策、客服电话和支付回调域名准备齐；真正自动开通套餐，仍必须等正式商户号和签名回调接入。</small>
+        </div>
+        ${entityChecklist
+          .slice(0, 5)
+          .map(
+            (item) => `
+              <article class="is-${escapeHtml(entityTone(item.status))}">
+                <span>${escapeHtml(item.label || item.key || "资料")}</span>
+                <strong>${escapeHtml(item.status === "ready" ? "已具备" : item.status === "in_progress" ? "办理中" : item.status === "designed" ? "已设计" : "待补齐")}</strong>
+                <small>${escapeHtml(item.why || "")}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
       <div class="saas-mainland-payment-safety" hidden aria-hidden="true">
         <span>mainland_payment_strategy_v1</span>
         <span>formal_payment_collection_architecture_v1</span>
         <span>mainland_domain_icp_plan_v1</span>
+        <span>merchant_entity_payment_readiness_v1</span>
+        <span>individual_business_first_then_company_if_scale_requires</span>
+        <span>formal_payment_requires_merchant_entity_and_subject_alignment</span>
+        <span>personal_qr_private_beta_manual_reconciliation_only</span>
         <span>domestic_wallets_primary_for_mainland_users</span>
         <span>stripe_paypal_cross_border_fallback</span>
         <span>worldfirst_payoneer_settlement_not_checkout</span>
