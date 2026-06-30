@@ -15,6 +15,12 @@
   }
 
   reverse_proxy https://{$JIEJING_EDGE_UPSTREAM_HOST} {
+    header_down -X-Frame-Options
+    header_down -X-Content-Type-Options
+    header_down -Referrer-Policy
+    header_down -Permissions-Policy
+    header_down -X-Robots-Tag
+
     header_up Host {$JIEJING_EDGE_UPSTREAM_HOST}
     header_up X-Forwarded-Host {host}
     header_up X-Forwarded-Proto {scheme}

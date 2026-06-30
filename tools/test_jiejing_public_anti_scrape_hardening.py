@@ -27,6 +27,13 @@ ORIGIN_UFW = ROOT / "deploy" / "apply-cloudflare-origin-ufw.sh"
 
 
 NOINDEX = "noindex, nofollow, noarchive, nosnippet, noimageindex"
+DEDUP_HEADERS = [
+    "X-Frame-Options",
+    "X-Content-Type-Options",
+    "Referrer-Policy",
+    "Permissions-Policy",
+    "X-Robots-Tag",
+]
 
 
 def fail(message: str) -> int:
@@ -71,6 +78,10 @@ def main() -> int:
         content = _read(path)
         if "X-Robots-Tag" not in content or NOINDEX not in content:
             return fail(f"{path.name} should add the no-index anti-scrape header")
+        if "reverse_proxy" in content:
+            for header in DEDUP_HEADERS:
+                if f"header_down -{header}" not in content:
+                    return fail(f"{path.name} should strip upstream duplicate header before edge emits {header}")
         if path.name in {"Caddyfile.public-staging", "Caddyfile.public-staging.systemd", "Caddyfile.production"}:
             for marker in [
                 "blockedInternalPath",

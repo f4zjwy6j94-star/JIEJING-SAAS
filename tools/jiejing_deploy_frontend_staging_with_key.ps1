@@ -44,7 +44,7 @@ set -euo pipefail
 cd "$RemoteApp"
 backup_dir="output/deploy-backups/$stamp"
 mkdir -p "`$backup_dir/deploy"
-for path in app.js styles.css index.html app.html privacy.html terms.html risk-disclosure.html favicon.ico assets/jiejing-app-icon.svg assets/jiejing-logo-lockup.svg assets/jiejing-logo-mark.svg deploy/nginx.public-staging.conf; do
+for path in app.js styles.css index.html app.html privacy.html terms.html risk-disclosure.html favicon.ico assets/jiejing-app-icon.svg assets/jiejing-logo-lockup.svg assets/jiejing-logo-mark.svg deploy/nginx.public-staging.conf deploy/Caddyfile.public-staging.systemd; do
   if [ -f "$path" ]; then
     mkdir -p "`$backup_dir/`$(dirname "`$path")"
     cp "$path" "`$backup_dir/$path"
@@ -67,6 +67,16 @@ install -D -m 0644 "`$tmp_dir/assets/jiejing-app-icon.svg" assets/jiejing-app-ic
 install -D -m 0644 "`$tmp_dir/assets/jiejing-logo-lockup.svg" assets/jiejing-logo-lockup.svg
 install -D -m 0644 "`$tmp_dir/assets/jiejing-logo-mark.svg" assets/jiejing-logo-mark.svg
 install -D -m 0644 "`$tmp_dir/deploy/nginx.public-staging.conf" deploy/nginx.public-staging.conf
+install -D -m 0644 "`$tmp_dir/deploy/Caddyfile.public-staging.systemd" deploy/Caddyfile.public-staging.systemd
+if command -v caddy >/dev/null 2>&1; then
+  caddy validate --config deploy/Caddyfile.public-staging.systemd
+fi
+if command -v systemctl >/dev/null 2>&1 && sudo -n test -d /etc/caddy; then
+  sudo -n install -m 0644 deploy/Caddyfile.public-staging.systemd /etc/caddy/Caddyfile
+  if sudo -n systemctl is-active --quiet caddy; then
+    sudo -n systemctl reload caddy
+  fi
+fi
 python3 tools/jiejing_productization_stage_gate.py >/tmp/jiejing-stage-gate-$stamp.json
 sudo -n docker compose -f deploy/docker-compose.public-https-staging.yml -p deploy up -d --no-deps --force-recreate jiejing-frontend
 rm -rf "`$tmp_dir"
@@ -76,7 +86,7 @@ echo DEPLOY_BACKUP_DIR="`$backup_dir"
 echo DEPLOY_FRONTEND_VERSION=$frontendVersion
 "@
 
-$archiveArgs = @("-czf", $patchArchive, "app.js", "styles.css", "index.html", "app.html", "privacy.html", "terms.html", "risk-disclosure.html", "favicon.ico", "assets/jiejing-app-icon.svg", "assets/jiejing-logo-lockup.svg", "assets/jiejing-logo-mark.svg", "deploy/nginx.public-staging.conf")
+$archiveArgs = @("-czf", $patchArchive, "app.js", "styles.css", "index.html", "app.html", "privacy.html", "terms.html", "risk-disclosure.html", "favicon.ico", "assets/jiejing-app-icon.svg", "assets/jiejing-logo-lockup.svg", "assets/jiejing-logo-mark.svg", "deploy/nginx.public-staging.conf", "deploy/Caddyfile.public-staging.systemd")
 Invoke-NativeChecked "tar" $archiveArgs
 $remoteScriptForSsh = $remoteScript.TrimStart([char]0xFEFF) -replace "`r", ""
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)

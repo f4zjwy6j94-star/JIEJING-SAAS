@@ -27,7 +27,13 @@ http://jiejing.43-129-205-244.sslip.io {
         respond "Not found" 404
     }
 
-    reverse_proxy jiejing-frontend:80
+    reverse_proxy jiejing-frontend:80 {
+        header_down -X-Frame-Options
+        header_down -X-Content-Type-Options
+        header_down -Referrer-Policy
+        header_down -Permissions-Policy
+        header_down -X-Robots-Tag
+    }
 }
 
 jiejing.shop,
@@ -57,5 +63,11 @@ jiejing.43-129-205-244.sslip.io {
         respond "Not found" 404
     }
 
-    reverse_proxy jiejing-frontend:80
+    reverse_proxy jiejing-frontend:80 {
+        header_down -X-Frame-Options
+        header_down -X-Content-Type-Options
+        header_down -Referrer-Policy
+        header_down -Permissions-Policy
+        header_down -X-Robots-Tag
+    }
 }
