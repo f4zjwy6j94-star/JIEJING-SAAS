@@ -15,6 +15,7 @@ from .config import SaaSSettings
 
 MAINLAND_PAYMENT_CONTRACT_VERSION = "2026-06-29-mainland-payment-strategy"
 FORMAL_PAYMENT_ARCHITECTURE_VERSION = "2026-06-29-formal-payment-collection-architecture"
+MERCHANT_APPLICATION_PACKET_VERSION = "2026-07-01-merchant-payment-application-packet"
 
 
 def build_mainland_payment_strategy(settings: SaaSSettings) -> dict[str, Any]:
@@ -102,6 +103,13 @@ def build_mainland_payment_strategy(settings: SaaSSettings) -> dict[str, Any]:
             domestic_webhook_configured=domestic_webhook_configured,
             manual_qr_enabled=manual_qr_enabled,
         ),
+        "merchant_application_packet": _merchant_application_packet(
+            settings=settings,
+            merchant_entity_ready=merchant_entity_ready,
+            mainland_icp_ready=mainland_icp_ready,
+            domestic_provider_ready=domestic_provider_ready,
+            domestic_webhook_configured=domestic_webhook_configured,
+        ),
         "domain_and_icp_plan": _domain_and_icp_plan(
             merchant_entity_ready=merchant_entity_ready,
             mainland_icp_ready=mainland_icp_ready,
@@ -119,6 +127,103 @@ def build_mainland_payment_strategy(settings: SaaSSettings) -> dict[str, Any]:
             merchant_entity_ready=merchant_entity_ready,
             mainland_icp_ready=mainland_icp_ready,
         ),
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def _merchant_application_packet(
+    *,
+    settings: SaaSSettings,
+    merchant_entity_ready: bool,
+    mainland_icp_ready: bool,
+    domestic_provider_ready: bool,
+    domestic_webhook_configured: bool,
+) -> dict[str, Any]:
+    """Return a public-safe checklist for formal merchant payment review."""
+
+    public_app_url = _env("JIEJING_PUBLIC_APP_URL", "https://app.jiejing.shop").rstrip("/")
+    service_docs_ready = _env_bool("JIEJING_PAYMENT_REVIEW_SERVICE_DOCS_READY", True)
+    pricing_terms_ready = _env_bool("JIEJING_PAYMENT_REVIEW_PRICING_TERMS_READY", True)
+    support_contact_ready = _env_bool("JIEJING_PAYMENT_REVIEW_SUPPORT_CONTACT_READY", False)
+    refund_policy_ready = _env_bool("JIEJING_PAYMENT_REVIEW_REFUND_POLICY_READY", True)
+    callback_url_ready = _env_bool("JIEJING_PAYMENT_REVIEW_CALLBACK_URL_READY", bool(public_app_url))
+    checklist = [
+        {
+            "key": "merchant_subject",
+            "label": "个体工商户或公司主体",
+            "status": "ready" if merchant_entity_ready else "blocked",
+            "review_use": "用于微信、支付宝、云闪付或聚合收单的商户实名和结算主体审核",
+        },
+        {
+            "key": "operator_and_settlement",
+            "label": "经营者实名和结算账户",
+            "status": "ready" if merchant_entity_ready else "blocked",
+            "review_use": "用于 KYC、打款、退款、争议和对账，不在捷境前端保存证件或银行卡明文",
+        },
+        {
+            "key": "service_privacy_refund_pages",
+            "label": "服务协议、隐私和退款说明",
+            "status": "ready" if service_docs_ready and refund_policy_ready else "in_progress",
+            "review_use": "支付机构审核会看产品卖什么、怎么退款、用户数据如何处理",
+        },
+        {
+            "key": "pricing_and_subscription_terms",
+            "label": "价格、订阅和额度规则",
+            "status": "ready" if pricing_terms_ready else "in_progress",
+            "review_use": "说明基础订阅、大模型用量、素材生成费用和欠费停用边界",
+        },
+        {
+            "key": "support_contact",
+            "label": "客服和投诉入口",
+            "status": "ready" if support_contact_ready else "in_progress",
+            "review_use": "支付审核和真实用户都需要找到售后、退款和争议处理入口",
+        },
+        {
+            "key": "reviewed_domain_and_callbacks",
+            "label": "正式域名和回调地址",
+            "status": "ready" if callback_url_ready and mainland_icp_ready else "designed",
+            "review_use": "商户平台需要填写支付成功、取消、异步通知和查单相关地址",
+        },
+        {
+            "key": "signed_callback_and_order_query",
+            "label": "签名回调和主动查单",
+            "status": "ready" if domestic_provider_ready and domestic_webhook_configured else "blocked",
+            "review_use": "只有后端验证过的支付证据才能自动发放套餐和额度",
+        },
+    ]
+    return {
+        "contract_version": MERCHANT_APPLICATION_PACKET_VERSION,
+        "current_stage": "merchant_entity_and_provider_review_preparation",
+        "public_app_url": public_app_url,
+        "recommended_packet_use": "use_after_individual_business_or_company_registration_before_formal_payment_provider_application",
+        "review_urls": {
+            "terms": f"{public_app_url}/terms.html",
+            "privacy": f"{public_app_url}/privacy.html",
+            "risk_disclosure": f"{public_app_url}/risk-disclosure.html",
+            "pricing": public_app_url,
+        },
+        "provider_callback_urls": {
+            "success_url": f"{public_app_url}/billing/success",
+            "cancel_url": f"{public_app_url}/billing/cancel",
+            "webhook_url": f"{public_app_url}/billing/webhook",
+        },
+        "checklist": checklist,
+        "must_stay_backend_only": [
+            "merchant_private_keys",
+            "api_v3_keys",
+            "webhook_secrets",
+            "provider_cert_private_material",
+            "operator_identity_files",
+            "settlement_bank_account_details",
+        ],
+        "does_not_collect_identity_files_in_frontend": True,
+        "requires_owner_supplied_real_docs": True,
+        "can_submit_provider_application": merchant_entity_ready and service_docs_ready and pricing_terms_ready and refund_policy_ready,
+        "can_auto_grant_paid_entitlement": domestic_provider_ready and domestic_webhook_configured,
+        "settings_storage_db_path_configured": bool(settings.db_path),
         "charge_now_allowed": False,
         "triggers_real_charge": False,
         "frontend_gets_payment_secret": False,

@@ -78,6 +78,23 @@ When the owner later opens a mainland company or individual business entity, the
 
 This adds operational steps, but it is manageable. The risky path would be mixing a personal static QR, an unreviewed website, and automatic subscription activation while claiming paid public launch readiness.
 
+## Formal Merchant Payment Application Packet
+
+Before JIEJING can use WeChat Pay, Alipay, UnionPay/Cloud QuickPass, LianLian, Airwallex, or another licensed acquirer as the automated paid SaaS collection rail, the owner needs a review packet that is consistent with the registered subject and public website.
+
+The current product surfaces this packet in Settings as a public-safe readiness checklist. It is for preparation only; it does not upload identity files, store settlement bank details, expose provider secrets, or trigger a real charge.
+
+The packet covers:
+
+- merchant subject: individual business or company license;
+- operator KYC and settlement account readiness;
+- service agreement, privacy policy, risk/refund explanation, and customer support contact;
+- pricing, subscription, quota, and overdue shutdown rules;
+- reviewed app domain and payment callback URLs such as `https://app.jiejing.shop/billing/webhook`;
+- backend-only signed webhook and active order-query proof before automatic entitlement activation.
+
+This keeps the beta path simple while preserving the formal target: merchant order creation, signed provider evidence, subscription/quota update, invoice/audit record, and owner-approved live cutover.
+
 ## External Items The Owner Must Provide Later
 
 - Merchant entity information and payment provider approval.

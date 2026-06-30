@@ -352,6 +352,10 @@ def main() -> None:
         "formal_payment_collection_architecture_v1",
         "mainland_domain_icp_plan_v1",
         "merchant_entity_payment_readiness_v1",
+        "merchant_payment_application_packet_v1",
+        "formal_payment_application_requires_service_privacy_refund_support",
+        "payment_review_documents_no_identity_files_in_frontend",
+        "payment_callback_url_review_ready_marker",
         "individual_business_first_then_company_if_scale_requires",
         "formal_payment_requires_merchant_entity_and_subject_alignment",
         "personal_qr_private_beta_manual_reconciliation_only",
@@ -366,6 +370,8 @@ def main() -> None:
     for required_style_marker in [
         ".saas-mainland-payment-entity",
         "grid-template-columns: minmax(230px, 1.45fr) repeat(5, minmax(0, 1fr))",
+        ".saas-mainland-payment-application",
+        "grid-template-columns: minmax(230px, 1.35fr) repeat(3, minmax(0, 1fr))",
     ]:
         require(styles, required_style_marker, "mainland payment entity readiness layout")
     for removed_marker in [

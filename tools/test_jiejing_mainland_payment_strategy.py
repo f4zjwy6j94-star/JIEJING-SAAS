@@ -95,6 +95,31 @@ def main() -> int:
                 return fail(f"merchant entity checklist missing: {key}")
         if entity.get("can_auto_grant_paid_entitlement") is not False:
             return fail("formal entitlement automation must require provider + signed callback evidence")
+        application_packet = strategy.get("merchant_application_packet") or {}
+        if application_packet.get("contract_version") != "2026-07-01-merchant-payment-application-packet":
+            return fail(f"merchant payment application packet missing: {application_packet}")
+        if application_packet.get("does_not_collect_identity_files_in_frontend") is not True:
+            return fail("merchant application packet must not collect identity files in the frontend")
+        if application_packet.get("can_auto_grant_paid_entitlement") is not False:
+            return fail("merchant application packet must not auto-grant entitlement before signed provider evidence")
+        packet_checklist = {item.get("key"): item for item in application_packet.get("checklist", []) if isinstance(item, dict)}
+        for key in {
+            "merchant_subject",
+            "operator_and_settlement",
+            "service_privacy_refund_pages",
+            "pricing_and_subscription_terms",
+            "support_contact",
+            "reviewed_domain_and_callbacks",
+            "signed_callback_and_order_query",
+        }:
+            if key not in packet_checklist:
+                return fail(f"merchant application packet missing checklist item: {key}")
+        callback_urls = application_packet.get("provider_callback_urls") or {}
+        if callback_urls.get("webhook_url") != "https://app.jiejing.shop/billing/webhook":
+            return fail(f"merchant application packet should expose reviewed callback URL without secrets: {callback_urls}")
+        if application_packet.get("charge_now_allowed") is not False or application_packet.get("triggers_real_charge") is not False:
+            return fail("merchant application packet must not be charge-capable")
+        _assert_no_identity_or_bank_material(application_packet)
         if "payment_merchant_entity_not_ready" not in strategy.get("paid_launch_blockers", []):
             return fail("formal paid launch should be blocked until merchant entity is ready")
         if "mainland_payment_icp_subject_not_ready" not in strategy.get("paid_launch_blockers", []):
@@ -146,6 +171,21 @@ def _assert_no_secret_material(payload: object) -> None:
     leaked = [item for item in forbidden if item in text]
     if leaked:
         raise AssertionError(f"secret-like material leaked in public payment payload: {leaked}")
+
+
+def _assert_no_identity_or_bank_material(payload: object) -> None:
+    text = json.dumps(payload, ensure_ascii=False, sort_keys=True).lower()
+    forbidden = [
+        "id_card_number",
+        "identity_number",
+        "bank_account_number",
+        "settlement_card_number",
+        "身份证号码",
+        "银行卡号",
+    ]
+    leaked = [item for item in forbidden if item in text]
+    if leaked:
+        raise AssertionError(f"identity or bank material leaked in public application packet: {leaked}")
 
 
 def _set_env() -> dict[str, str | None]:

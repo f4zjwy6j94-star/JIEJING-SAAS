@@ -25742,11 +25742,14 @@ function renderSaasMainlandPaymentStrategyPanel() {
   const formal = payment.strategy.formal_collection_architecture || {};
   const domainPlan = payment.strategy.domain_and_icp_plan || {};
   const entity = payment.strategy.merchant_entity_readiness || {};
+  const applicationPacket = payment.strategy.merchant_application_packet || {};
   const formalSteps = Array.isArray(formal.steps) ? formal.steps : [];
   const visibleFormalSteps = formalSteps.slice(0, 4);
   const formalStepTone = (status) => (status === "ready" ? "green" : status === "designed" ? "amber" : "red");
   const entityChecklist = Array.isArray(entity.checklist) ? entity.checklist : [];
   const entityTone = (status) => (status === "ready" ? "green" : status === "designed" || status === "in_progress" ? "amber" : "red");
+  const applicationChecklist = Array.isArray(applicationPacket.checklist) ? applicationPacket.checklist : [];
+  const applicationTone = (status) => (status === "ready" ? "green" : status === "designed" || status === "in_progress" ? "amber" : "red");
   const domainRows = [
     ["现在", "香港/海外入口继续用于内测和全球访问", "这不是“香港备案”。香港或海外服务器本身通常不走中国内地 ICP 备案。"],
     ["以后", "大陆公司或个体户做正式商户主体", "正式接微信、支付宝、云闪付时，再让支付主体、域名/子域名、回调地址和备案材料保持一致。"],
@@ -25838,11 +25841,34 @@ function renderSaasMainlandPaymentStrategyPanel() {
           )
           .join("")}
       </div>
+      <div class="saas-mainland-payment-application" data-payment-application-packet="merchant_payment_application_packet_v1" aria-label="正式商户支付申请资料包">
+        <div>
+          <span>申请资料包</span>
+          <strong>办完个体户后，用这份材料去申请正式支付</strong>
+          <small>这里帮你整理微信、支付宝、云闪付或聚合收单常见审核材料。捷境只展示准备状态，不在前端保存证件、银行卡、商户密钥或回调密钥。</small>
+        </div>
+        ${applicationChecklist
+          .slice(0, 6)
+          .map(
+            (item) => `
+              <article class="is-${escapeHtml(applicationTone(item.status))}">
+                <span>${escapeHtml(item.label || item.key || "资料")}</span>
+                <strong>${escapeHtml(item.status === "ready" ? "已具备" : item.status === "in_progress" ? "准备中" : item.status === "designed" ? "已规划" : "待补齐")}</strong>
+                <small>${escapeHtml(item.review_use || "")}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
       <div class="saas-mainland-payment-safety" hidden aria-hidden="true">
         <span>mainland_payment_strategy_v1</span>
         <span>formal_payment_collection_architecture_v1</span>
         <span>mainland_domain_icp_plan_v1</span>
         <span>merchant_entity_payment_readiness_v1</span>
+        <span>merchant_payment_application_packet_v1</span>
+        <span>formal_payment_application_requires_service_privacy_refund_support</span>
+        <span>payment_review_documents_no_identity_files_in_frontend</span>
+        <span>payment_callback_url_review_ready_marker</span>
         <span>individual_business_first_then_company_if_scale_requires</span>
         <span>formal_payment_requires_merchant_entity_and_subject_alignment</span>
         <span>personal_qr_private_beta_manual_reconciliation_only</span>
