@@ -63,7 +63,9 @@ const state = {
   saasBillingPlan: null,
   saasBillingUsage: null,
   saasBillingCheckout: null,
+  saasPaymentOptions: null,
   saasBillingTestEvent: null,
+  saasManualBetaPaymentOrders: [],
   saasBillingDomainCutoverRehearsal: null,
   saasPaidLaunchApprovalPacket: null,
   saasOwnerLaunchControl: null,
@@ -16629,10 +16631,6 @@ function renderSaasLoginCard(options = {}) {
   if (!compact) {
     return `
       <section class="modal auth-modal saas-auth-modal-shell" data-saas-login-card aria-label="捷境登录注册">
-        <button class="qr-auth-button" type="button" data-saas-action="qr-login-placeholder" aria-label="扫码登录">
-          <span class="qr-dot-grid" aria-hidden="true"></span>
-          <span>扫码</span>
-        </button>
         <div class="auth-modal-head">
           <div class="auth-brand-lockup">
             <span class="brand-mark">J</span>
@@ -16680,7 +16678,7 @@ function renderSaasLoginCard(options = {}) {
             <small>新商家创建账号，进入身份向导</small>
           </button>
         </div>
-        <p class="saas-auth-footnote">当前扫码登录是正式接入预留；测试先使用账号密码。系统只保存会话和安全引用，不把原始凭证返回浏览器。</p>
+        <p class="saas-auth-footnote">当前只开放邮箱账号登录。第三方扫码登录不作为本阶段入口，系统只保存会话和安全引用，不把原始凭证返回浏览器。</p>
       </section>
     `;
   }
@@ -21418,6 +21416,8 @@ async function refreshSaasState(options = {}) {
       billingPlan,
       billingUsage,
       billingCheckout,
+      paymentOptions,
+      manualBetaPaymentOrders,
       billingDomainCutoverRehearsal,
       edgeCutoverPreflight,
       paidLaunchApprovalPacket,
@@ -21470,6 +21470,8 @@ async function refreshSaasState(options = {}) {
       optionalSaasFetchFast("/billing/plans", { billing_plan: null }),
       optionalSaasFetchFast("/billing/usage", { billing_usage: null }),
       optionalSaasFetchFast("/billing/checkout-contract", { billing_checkout: null }),
+      optionalSaasFetchFast("/billing/payment-options", { payment_options: null }),
+      optionalSaasFetchFast("/billing/manual-beta/orders", { manual_beta_payment_orders: [] }),
       optionalSaasFetchFast("/commercial/billing-domain-cutover-rehearsal", { billing_domain_cutover_rehearsal: null }, 15000),
       optionalSaasFetchFast("/domain/edge-cutover-preflight", { edge_cutover_preflight: state.saasEdgeCutoverPreflight || null }, 15000),
       optionalSaasFetchFast("/commercial/paid-launch-approval-packet", { paid_launch_approval_packet: null }, 20000),
@@ -21560,6 +21562,8 @@ async function refreshSaasState(options = {}) {
     state.saasBillingPlan = billingPlan.billing_plan || null;
     state.saasBillingUsage = billingUsage.billing_usage || null;
     state.saasBillingCheckout = billingCheckout.billing_checkout || null;
+    state.saasPaymentOptions = paymentOptions.payment_options || billingPlan.billing_plan?.payment_strategy || null;
+    state.saasManualBetaPaymentOrders = manualBetaPaymentOrders.manual_beta_payment_orders || [];
     state.saasBillingDomainCutoverRehearsal = billingDomainCutoverRehearsal.billing_domain_cutover_rehearsal || null;
     state.saasEdgeCutoverPreflight = edgeCutoverPreflight.edge_cutover_preflight || state.saasEdgeCutoverPreflight || null;
     state.saasPaidLaunchApprovalPacket = paidLaunchApprovalPacket.paid_launch_approval_packet || null;
@@ -22932,6 +22936,55 @@ async function runSaasBillingTestEvent(button) {
   }
 }
 
+async function runSaasManualBetaCreateOrder(button) {
+  const planKey = String(button?.dataset?.manualBetaPlanKey || "starter").trim().toLowerCase();
+  state.saasLoading = true;
+  renderSaasBackendPanel();
+  try {
+    const payload = await saasFetch("/billing/manual-beta/orders", {
+      method: "POST",
+      body: JSON.stringify({ plan_key: planKey }),
+    });
+    const order = payload.manual_beta_payment_order || {};
+    state.saasManualBetaPaymentOrders = [order, ...(state.saasManualBetaPaymentOrders || []).filter((item) => item?.order_id !== order.order_id)];
+    await refreshSaasState({ silent: true, refreshLaunchGate: false });
+    showActionToast("内测付款单已生成：付款时只需要备注付款编号，后台确认后开通 30 天基础权限。");
+  } catch (error) {
+    showActionToast(`内测付款单生成失败：${String(error.message || error)}`);
+  } finally {
+    state.saasLoading = false;
+    renderSaasBackendPanel();
+  }
+}
+
+async function runSaasManualBetaConfirmOrder(button) {
+  const orderId = String(button?.dataset?.manualBetaOrderId || "").trim();
+  if (!orderId) {
+    showActionToast("没有可确认的内测付款单。");
+    return;
+  }
+  state.saasLoading = true;
+  renderSaasBackendPanel();
+  try {
+    const payload = await saasFetch(`/billing/manual-beta/orders/${encodeURIComponent(orderId)}/confirm`, {
+      method: "POST",
+      body: JSON.stringify({ received_amount_cny: 99 }),
+    });
+    const confirmation = payload.manual_beta_payment_confirmation || {};
+    await refreshSaasState({ silent: true, refreshLaunchGate: false });
+    showActionToast(
+      confirmation.status === "manual_beta_payment_already_confirmed"
+        ? "这张内测付款单已经确认过，权益状态已刷新。"
+        : "已确认收款：基础内测权限已通过后端订阅状态开通 30 天。",
+    );
+  } catch (error) {
+    showActionToast(`确认内测收款失败：${String(error.message || error)}`);
+  } finally {
+    state.saasLoading = false;
+    renderSaasBackendPanel();
+  }
+}
+
 function handleSaasAction(button) {
   const action = button.dataset.saasAction;
   if (action === "login-session") {
@@ -22940,10 +22993,6 @@ function handleSaasAction(button) {
   }
   if (action === "register-session") {
     registerSaasBackendSession(button);
-    return;
-  }
-  if (action === "qr-login-placeholder") {
-    showActionToast("扫码登录入口已保留，正式接入微信/企业微信前先用账号密码注册或登录。");
     return;
   }
   if (action === "refresh") {
@@ -23051,6 +23100,8 @@ function handleSaasAction(button) {
     "recover-publish",
     "create-cleanup-plan",
     "billing-test-event",
+    "manual-beta-create-order",
+    "manual-beta-confirm-order",
   ]);
   if (protectedActions.has(action) && !requireSaasProtectedSessionForAction()) return;
   if (action === "run-workflow") {
@@ -23195,6 +23246,15 @@ function handleSaasAction(button) {
   }
   if (action === "billing-test-event") {
     runSaasBillingTestEvent(button);
+    return;
+  }
+  if (action === "manual-beta-create-order") {
+    runSaasManualBetaCreateOrder(button);
+    return;
+  }
+  if (action === "manual-beta-confirm-order") {
+    runSaasManualBetaConfirmOrder(button);
+    return;
   }
 }
 
@@ -24412,6 +24472,7 @@ function applyStartupShellVisibility() {
 }
 
 function openOnboarding() {
+  document.documentElement.classList.remove("app-direct-start", "saas-public-direct-start");
   entryShell.classList.add("is-hidden");
   siteShell.classList.add("is-hidden");
   appShell.classList.add("is-hidden");
@@ -25586,6 +25647,238 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
         <span>triggers_real_charge=false</span>
         <span>frontend_gets_payment_secret=false</span>
         <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
+      </div>
+    </section>
+  `;
+}
+
+function saasMainlandPaymentStrategyState() {
+  const strategy = state.saasPaymentOptions || state.saasBillingPlan?.payment_strategy || {};
+  const lanes = Array.isArray(strategy.domestic_payment_lanes) ? strategy.domestic_payment_lanes : [];
+  const selected = lanes.find((lane) => lane.selected) || null;
+  const blockers = Array.isArray(strategy.paid_launch_blockers) ? strategy.paid_launch_blockers : [];
+  return {
+    strategy,
+    lanes,
+    selected,
+    blockers,
+    paidLaunchReady: strategy.paid_launch_ready === true,
+    manualQrPrivateOnly: strategy.manual_qr_collection?.private_beta_only !== false,
+    targetRegion: strategy.target_customer_region || "mainland_china",
+  };
+}
+
+function renderSaasMainlandPaymentStrategyPanel() {
+  const payment = saasMainlandPaymentStrategyState();
+  const stageLabel = payment.paidLaunchReady ? "大陆正式收款可演练" : "先选大陆收款通道";
+  const selectedLabel = payment.selected?.label || "还未选择正式通道";
+  const routeCards = [
+    {
+      label: "优先",
+      title: "微信 / 支付宝 / 云闪付",
+      detail: "面向中国大陆商家和用户时，这些才是低学习成本的主收款入口。正式版要通过官方商户号或持牌聚合收单接入。",
+      tone: "green",
+    },
+    {
+      label: "可选",
+      title: "连连支付 / 空中云汇",
+      detail: "适合作为聚合收单或跨境结算候选，前提是商户 KYC、SaaS 场景审核、API 和签名回调都通过。",
+      tone: "green",
+    },
+    {
+      label: "补充",
+      title: "Stripe / PayPal",
+      detail: "更适合海外银行卡、海外客户或全球订阅，不应作为大陆内测用户的唯一入口。",
+      tone: "amber",
+    },
+    {
+      label: "不做正式入口",
+      title: "个人收款码（仅内测）",
+      detail: "只能小范围私测人工对账；没有签名 webhook、自动续费、欠费停用、退款和发票审计闭环。",
+      tone: "red",
+    },
+  ];
+  const plainRows = [
+    ["现在该做什么", selectedLabel, payment.blockers.length ? `阻断：${payment.blockers.slice(0, 3).join(" / ")}` : "等待正式通道 no-real-charge 演练。"],
+    ["为什么不用个人收款码正式上线", "SaaS 要自动识别谁付了哪个套餐", "只扫个人码会变成人工记账，后期用户多了会丢账、错账、无法自动停用额度。"],
+    ["万里汇 / 派安盈定位", "更像收款结汇和平台回款账户", "可用于 eBay/Amazon 等平台资金回收，不是捷境官网订阅 checkout 的主入口。"],
+  ];
+  const formal = payment.strategy.formal_collection_architecture || {};
+  const domainPlan = payment.strategy.domain_and_icp_plan || {};
+  const formalSteps = Array.isArray(formal.steps) ? formal.steps : [];
+  const visibleFormalSteps = formalSteps.slice(0, 4);
+  const formalStepTone = (status) => (status === "ready" ? "green" : status === "designed" ? "amber" : "red");
+  const domainRows = [
+    ["现在", "香港/海外入口继续用于内测和全球访问", "这不是“香港备案”。香港或海外服务器本身通常不走中国内地 ICP 备案。"],
+    ["以后", "大陆公司或个体户做正式商户主体", "正式接微信、支付宝、云闪付时，再让支付主体、域名/子域名、回调地址和备案材料保持一致。"],
+    ["不冲突", "只是多一步主体和域名规划", "建议保留 app.jiejing.shop，后续准备 cn.jiejing.shop 或 pay.jiejing.shop 给大陆正式支付审核。"],
+  ];
+  return `
+    <section class="saas-settings-card saas-mainland-payment-strategy" data-payment-strategy="mainland_payment_strategy_v1" aria-label="大陆用户收款策略">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>大陆收款方式</span>
+          <strong>大陆用户优先用微信、支付宝、云闪付或聚合收单</strong>
+          <p>Stripe 仍可保留给海外银行卡和全球客户，但捷境当前面向大陆用户时，正式收费主路应走国内商家更熟悉、对账更稳定的支付通道。</p>
+        </div>
+        <em>${escapeHtml(stageLabel)}</em>
+      </div>
+      <div class="saas-mainland-payment-routes">
+        ${routeCards
+          .map(
+            (item) => `
+              <article class="is-${escapeHtml(item.tone)}">
+                <span>${escapeHtml(item.label)}</span>
+                <strong>${escapeHtml(item.title)}</strong>
+                <small>${escapeHtml(item.detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-mainland-payment-plain">
+        ${plainRows
+          .map(
+            ([label, title, detail]) => `
+              <article>
+                <span>${escapeHtml(label)}</span>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-mainland-payment-formal" data-payment-architecture="formal_payment_collection_architecture_v1" aria-label="正式收款架构">
+        <div>
+          <span>正式上架架构</span>
+          <strong>个人支付宝收款码只做内测，正式收款走商户订单和签名回调</strong>
+          <small>捷境会先生成内部订单，再交给微信/支付宝/云闪付或聚合收单；支付成功必须由后端签名回调或主动查单确认，然后才更新订阅、额度、发票和审计。</small>
+        </div>
+        ${visibleFormalSteps
+          .map(
+            (step) => `
+              <article class="is-${escapeHtml(formalStepTone(step.status))}">
+                <span>${escapeHtml(step.label || step.key || "步骤")}</span>
+                <strong>${escapeHtml(step.status === "ready" ? "已具备" : step.status === "designed" ? "已设计" : "待补齐")}</strong>
+                <small>${escapeHtml(step.reason || "")}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-mainland-payment-domain" data-payment-domain-icp="mainland_domain_icp_plan_v1" aria-label="域名、备案和主体计划">
+        ${domainRows
+          .map(
+            ([label, title, detail]) => `
+              <article>
+                <span>${escapeHtml(label)}</span>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-mainland-payment-safety" hidden aria-hidden="true">
+        <span>mainland_payment_strategy_v1</span>
+        <span>formal_payment_collection_architecture_v1</span>
+        <span>mainland_domain_icp_plan_v1</span>
+        <span>domestic_wallets_primary_for_mainland_users</span>
+        <span>stripe_paypal_cross_border_fallback</span>
+        <span>worldfirst_payoneer_settlement_not_checkout</span>
+        <span>manual_qr_not_paid_launch_ready</span>
+        <span>personal_alipay_qr_private_beta_manual_reconciliation_only</span>
+        <span>formal_payment_requires_merchant_order_signed_callback_and_quota_audit</span>
+        <span>future_mainland_company_conflict=${Boolean(domainPlan.future_mainland_company_conflict)}</span>
+        <span>triggers_real_charge=false</span>
+        <span>frontend_gets_payment_secret=false</span>
+        <span>secret_exposed=false</span>
+      </div>
+    </section>
+  `;
+}
+
+function renderSaasManualBetaPaymentOrderPanel() {
+  const orders = Array.isArray(state.saasManualBetaPaymentOrders) ? state.saasManualBetaPaymentOrders : [];
+  const latestPending = orders.find((item) => item?.status === "pending_manual_payment_confirmation") || null;
+  const latestOrder = latestPending || orders[0] || null;
+  const canConfirm = saasOwnerLaunchCanView();
+  const orderRows = orders.slice(0, 3);
+  const statusLabel = latestPending ? "等待确认收款" : latestOrder?.status === "confirmed_manual_receipt" ? "已确认内测权限" : "可生成付款单";
+  const orderSummary = latestOrder
+    ? [
+        ["金额", `¥${latestOrder.amount_cny || 99}`, `${latestOrder.duration_days || 30} 天基础内测权限`],
+        ["付款备注", latestOrder.payment_note || "生成后显示", "付款时复制这个编号，便于后台对账"],
+        ["状态", statusLabel, latestOrder.active_until ? `可用至 ${String(latestOrder.active_until).slice(0, 10)}` : "后台确认后开通"],
+      ]
+    : [
+        ["金额", "¥99", "30 天基础内测权限"],
+        ["付款备注", "生成后显示", "付款时复制这个编号，便于后台对账"],
+        ["状态", "待生成", "生成付款单不会触发真实扣款"],
+      ];
+  return `
+    <section class="saas-settings-card saas-manual-beta-payment" data-manual-beta-payment="manual_beta_payment_order_v1" aria-label="个人码内测付款单">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>个人码内测付款单</span>
+          <strong>先用 99 元 / 30 天把测试期订阅闭环跑通</strong>
+          <p>这只适合小范围内测：商家生成付款单，付款时备注编号；后台确认已收款后，系统再开通基础内测权限并写审计。</p>
+        </div>
+        <em>${escapeHtml(statusLabel)}</em>
+      </div>
+      <div class="saas-manual-beta-payment-grid">
+        ${orderSummary
+          .map(
+            ([label, title, detail]) => `
+              <article>
+                <span>${escapeHtml(label)}</span>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-manual-beta-payment-actions">
+        <button class="primary-action compact-action" type="button" data-saas-action="manual-beta-create-order" data-manual-beta-plan-key="starter" ${state.saasLoading ? "disabled" : ""}>生成 99 元内测付款单</button>
+        ${
+          canConfirm && latestPending
+            ? `<button class="secondary-action compact-action" type="button" data-saas-action="manual-beta-confirm-order" data-manual-beta-order-id="${escapeHtml(latestPending.order_id || "")}" ${state.saasLoading ? "disabled" : ""}>确认已收款并开通</button>`
+            : ""
+        }
+      </div>
+      <div class="saas-manual-beta-payment-orders">
+        ${
+          orderRows.length
+            ? orderRows
+                .map(
+                  (order) => `
+                    <article class="${order.status === "confirmed_manual_receipt" ? "is-green" : "is-amber"}">
+                      <span>${escapeHtml(order.status === "confirmed_manual_receipt" ? "已确认" : "待确认")}</span>
+                      <strong>${escapeHtml(order.payment_note || order.order_id || "内测付款单")}</strong>
+                      <small>${escapeHtml(order.status === "confirmed_manual_receipt" ? `基础权限已开通至 ${String(order.active_until || "").slice(0, 10) || "30 天后"}` : "付款后等待后台人工确认，不会自动扣费。")}</small>
+                    </article>
+                  `,
+                )
+                .join("")
+            : `<article class="is-amber"><span>还没有付款单</span><strong>先生成一张内测付款单</strong><small>付款二维码不写入代码仓库，后续只从后端安全配置读取。</small></article>`
+        }
+      </div>
+      <div class="saas-manual-beta-payment-note">
+        <strong>边界说明</strong>
+        <p>个人收款码阶段不能自动识别到账，也不能做自动续费、欠费回调、退款和发票闭环；正式上线仍要接微信/支付宝/云闪付商户支付或聚合收单。</p>
+      </div>
+      <div class="saas-manual-beta-payment-safety" hidden aria-hidden="true">
+        <span>manual_beta_payment_order_v1</span>
+        <span>manual_beta_alipay_qr_not_in_repo</span>
+        <span>manual_beta_owner_confirm_required</span>
+        <span>manual_beta_confirmation_grants_30d_starter</span>
+        <span>personal_alipay_qr_private_beta_manual_reconciliation_only</span>
+        <span>can_be_paid_public_launch_provider=false</span>
+        <span>triggers_real_charge=false</span>
+        <span>frontend_gets_payment_secret=false</span>
+        <span>secret_exposed=false</span>
       </div>
     </section>
   `;
@@ -32139,6 +32432,8 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       intro: "查看基础订阅、AI 用量、素材生成、欠费停用和账号安全边界。",
       panels: [
         renderSaasMerchantBillingPlainSummaryPanel(ctx),
+        renderSaasMainlandPaymentStrategyPanel(),
+        renderSaasManualBetaPaymentOrderPanel(),
         renderSaasMerchantPricingModelPanel(ctx),
         renderSaasMerchantBillingContinuityPanel(ctx),
         renderSaasMerchantSecurityBoundaryPanel(),
@@ -33311,7 +33606,6 @@ function bindEvents() {
   };
   document.querySelector("#authSkip").addEventListener("click", startAuthFlow);
   document.querySelector("#authStart").addEventListener("click", startAuthFlow);
-  document.querySelector("#authQrLogin")?.addEventListener("click", startAuthFlow);
 
   document.querySelector("#onboardingReturnSite").addEventListener("click", () => revealSite("preselect"));
   document.querySelector("#onboardingExit").addEventListener("click", () => {

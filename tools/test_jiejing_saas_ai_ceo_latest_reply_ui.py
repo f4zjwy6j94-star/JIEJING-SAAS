@@ -124,7 +124,7 @@ def main() -> int:
         "first_run_ai_ceo_handoff_v1",
         "first_day_ai_ceo_path_v2",
         'data-does-not-trigger-real-write="true"',
-        "直接说经营目标，不用先找功能",
+        "首日只做一条主线：先说目标，再看 AI CEO 带你去哪",
         "点一句只会填入输入框",
         "我还没接 eBay，先用资料跑草稿",
         "first_day_one_task_focus_v1",

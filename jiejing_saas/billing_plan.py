@@ -8,7 +8,8 @@ from typing import Any
 
 from .config import SaaSSettings
 from .billing_checkout import STRIPE_API_VERSION, build_billing_checkout_contract
-from .billing_webhook import TEST_BILLING_PROVIDERS, build_billing_provider_contract, billing_plan_ids
+from .billing_payment_options import build_mainland_payment_strategy
+from .billing_webhook import PRIVATE_BETA_BILLING_PROVIDERS, TEST_BILLING_PROVIDERS, build_billing_provider_contract, billing_plan_ids
 from .repository import SaaSRepository
 
 
@@ -65,14 +66,16 @@ def build_billing_plan(settings: SaaSSettings, repository: SaaSRepository) -> di
     provider = os.environ.get("JIEJING_BILLING_PROVIDER", "").strip().lower()
     provider_contract = build_billing_provider_contract()
     checkout_contract = build_billing_checkout_contract()
+    payment_strategy = build_mainland_payment_strategy(settings)
     webhook_configured = bool(provider_contract.get("webhook_configured")) or _env_bool("JIEJING_BILLING_WEBHOOK_CONFIGURED")
     plans_published = _env_bool("JIEJING_BILLING_PLANS_PUBLISHED")
     quota_enforcement_enabled = _env_bool("JIEJING_QUOTA_ENFORCEMENT_ENABLED")
     provider = _canonical_provider(provider)
-    allowed_provider = provider in {"stripe", "paddle", "lemon_squeezy", "manual_seed"} or provider in TEST_BILLING_PROVIDERS
+    allowed_provider = provider in {"stripe", "paddle", "lemon_squeezy", "manual_seed"} or provider in TEST_BILLING_PROVIDERS or provider in PRIVATE_BETA_BILLING_PROVIDERS
     external_provider = provider in {"stripe", "paddle", "lemon_squeezy"}
     test_provider = provider in TEST_BILLING_PROVIDERS
     manual_seed_provider = provider == "manual_seed"
+    private_beta_provider = provider in PRIVATE_BETA_BILLING_PROVIDERS
     blockers: list[str] = []
     if not allowed_provider:
         blockers.append("billing_provider_not_selected")
@@ -97,7 +100,7 @@ def build_billing_plan(settings: SaaSSettings, repository: SaaSRepository) -> di
     if not quota_enforcement_enabled:
         blockers.append("quota_enforcement_not_enabled")
     paid_launch_blockers = list(blockers)
-    if manual_seed_provider:
+    if manual_seed_provider or private_beta_provider:
         paid_launch_blockers.append("external_paid_subscription_provider_not_configured")
     if test_provider:
         paid_launch_blockers.append("test_billing_provider_not_allowed_for_paid_launch")
@@ -119,11 +122,16 @@ def build_billing_plan(settings: SaaSSettings, repository: SaaSRepository) -> di
         "provider": {
             "selected": provider or "not_selected",
             "allowed_external_providers": ["stripe", "paddle", "lemon_squeezy"],
+            "recommended_mainland_provider_order": payment_strategy["recommended_provider_order"],
+            "mainland_payment_strategy_contract": payment_strategy["contract_version"],
             "allowed_test_providers": sorted(TEST_BILLING_PROVIDERS),
+            "allowed_private_beta_providers": sorted(PRIVATE_BETA_BILLING_PROVIDERS),
             "manual_seed_allowed_for_private_beta": True,
+            "manual_beta_allowed_for_private_beta": True,
             "test_provider_allowed_for_private_beta": True,
             "external_paid_provider_configured": external_provider,
             "test_billing_provider_configured": test_provider,
+            "manual_beta_private_provider_configured": private_beta_provider,
             "payment_flow_test_mode": test_provider,
             "webhook_configured": webhook_configured,
             "signed_webhook_contract": provider_contract,
@@ -134,6 +142,7 @@ def build_billing_plan(settings: SaaSSettings, repository: SaaSRepository) -> di
             "charge_now_allowed": False,
             "raw_payment_secret_exposed": False,
         },
+        "payment_strategy": payment_strategy,
         "plan_catalog": _plan_catalog_with_provider_ids(),
         "quota_contract": {
             "enabled": quota_enforcement_enabled,
@@ -940,6 +949,9 @@ def _canonical_provider(raw: str) -> str:
         "test_stripe": "stripe_test_mock",
         "mock_stripe": "stripe_test_mock",
         "mock_billing": "stripe_test_mock",
+        "manual": "manual_beta",
+        "manual_qr": "manual_beta",
+        "manual_beta": "manual_beta",
     }
     return aliases.get(text, text)
 
@@ -947,7 +959,7 @@ def _canonical_provider(raw: str) -> str:
 def _entitlement_active(*, provider: str, subscription: dict[str, Any] | None) -> bool:
     if provider == "manual_seed":
         return True
-    if provider not in {"stripe", "paddle", "lemon_squeezy"} and provider not in TEST_BILLING_PROVIDERS:
+    if provider not in {"stripe", "paddle", "lemon_squeezy"} and provider not in TEST_BILLING_PROVIDERS and provider not in PRIVATE_BETA_BILLING_PROVIDERS:
         return False
     return bool(subscription and subscription.get("entitlement_active") and not subscription.get("payment_attention_required"))
 
@@ -955,6 +967,8 @@ def _entitlement_active(*, provider: str, subscription: dict[str, Any] | None) -
 def _plan_source(*, provider: str, subscription: dict[str, Any] | None) -> str:
     if provider == "manual_seed":
         return "env_default_private_beta"
+    if provider in PRIVATE_BETA_BILLING_PROVIDERS:
+        return "manual_beta_confirmed_payment" if subscription else "manual_beta_payment_missing"
     if provider in TEST_BILLING_PROVIDERS:
         return "test_billing_provider_subscription" if subscription else "test_billing_subscription_missing"
     return "provider_subscription" if subscription else "provider_subscription_missing"
@@ -983,6 +997,19 @@ def _public_subscription(*, subscription: dict[str, Any] | None, provider: str, 
             "frontend_gets_payment_secret": False,
             "secret_exposed": False,
         }
+    if provider in PRIVATE_BETA_BILLING_PROVIDERS and not subscription:
+        return {
+            "provider": provider,
+            "status": "manual_beta_payment_missing",
+            "entitlement_active": False,
+            "payment_attention_required": False,
+            "block_reason": "manual_beta_payment_not_confirmed",
+            "manual_reconciliation_required": True,
+            "private_beta_only": True,
+            "creates_real_charge": False,
+            "frontend_gets_payment_secret": False,
+            "secret_exposed": False,
+        }
     if not subscription:
         return {
             "provider": provider or "not_selected",
@@ -994,6 +1021,7 @@ def _public_subscription(*, subscription: dict[str, Any] | None, provider: str, 
             "secret_exposed": False,
         }
     status = str(subscription.get("status") or "unknown")
+    subscription_json = subscription.get("subscription") if isinstance(subscription.get("subscription"), dict) else {}
     return {
         "provider": subscription.get("provider") or provider,
         "status": status,
@@ -1004,6 +1032,9 @@ def _public_subscription(*, subscription: dict[str, Any] | None, provider: str, 
         "entitlement_active": bool(entitlement_active),
         "payment_attention_required": bool(subscription.get("payment_attention_required")),
         "updated_at": subscription.get("updated_at"),
+        "active_until": subscription_json.get("active_until") or "",
+        "manual_reconciliation_required": bool(subscription_json.get("manual_reconciliation_required")),
+        "private_beta_only": bool(subscription_json.get("private_beta_only")),
         "block_reason": "" if entitlement_active else "billing_subscription_not_active",
         "test_mode": provider in TEST_BILLING_PROVIDERS or subscription.get("provider") in TEST_BILLING_PROVIDERS,
         "creates_real_charge": False,

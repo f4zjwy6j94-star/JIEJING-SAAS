@@ -8,7 +8,7 @@
     <link rel="prefetch" href="./assets/jiejing-settings-panels.js?v=20260620-owner-launch-control-v5" as="script" />
     <link rel="prefetch" href="./styles.css?v=20260629-first-run-closure-v1" as="style" />
     <title>捷境 · eBay AI CEO 自动化工作台</title>
-    <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260619-brand-icon-v1" type="image/svg+xml" />
+    <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
     <style>
       :root {
         color-scheme: light;
@@ -195,9 +195,9 @@
         height: 46px;
         place-items: center;
         overflow: hidden;
-        border: 1px solid rgba(5, 6, 5, 0.92);
+        border: 1px solid rgba(8, 118, 110, 0.18);
         border-radius: 10px;
-        background: #050605;
+        background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / contain no-repeat;
         box-shadow:
           inset 0 0 0 1px rgba(255, 255, 255, 0.13),
           0 14px 26px rgba(7, 9, 8, 0.2);
@@ -213,47 +213,21 @@
       }
 
       .jj-logo-mark::before {
-        content: "J";
-        left: 8px;
-        top: 3px;
-        display: grid;
-        place-items: center;
-        color: #ffffff;
-        font-family: "Arial Black", Arial, sans-serif;
-        font-size: 32px;
-        font-weight: 900;
-        line-height: 1;
+        content: "";
+        display: none;
       }
 
       .jj-logo-mark::after {
-        content: "J";
-        left: 21px;
-        top: 3px;
-        color: transparent;
-        font-family: "Arial Black", Arial, sans-serif;
-        font-size: 32px;
-        font-weight: 900;
-        line-height: 1;
-        -webkit-text-stroke: 1.25px #ffffff;
-        text-stroke: 1.25px #ffffff;
+        content: "";
+        display: none;
       }
 
       .jj-logo-mark i {
-        left: 8px;
-        right: 8px;
-        bottom: 8px;
-        height: 2px;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.9);
+        display: none;
       }
 
       .jj-logo-mark b {
-        left: 8px;
-        top: 8px;
-        width: 7px;
-        height: 7px;
-        border: 2px solid rgba(255, 255, 255, 0.95);
-        border-radius: 2px;
+        display: none;
       }
 
       .brand strong,
@@ -2922,49 +2896,6 @@
         grid-column: 1 / -1;
       }
 
-      .qr-login-button {
-        position: absolute;
-        z-index: 3;
-        top: 16px;
-        right: 58px;
-        display: inline-flex;
-        gap: 7px;
-        align-items: center;
-        min-height: 36px;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 0 12px;
-        background: rgba(255, 255, 255, 0.86);
-        color: var(--ink);
-        font: inherit;
-        font-size: 12px;
-        font-weight: 900;
-        cursor: pointer;
-      }
-
-      .qr-dot-grid {
-        width: 13px;
-        height: 13px;
-        display: grid;
-        grid-template-columns: repeat(2, 1fr);
-        gap: 3px;
-      }
-
-      .qr-dot-grid::before,
-      .qr-dot-grid::after {
-        content: "";
-      }
-
-      .qr-dot-grid,
-      .qr-dot-grid::before,
-      .qr-dot-grid::after {
-        background:
-          linear-gradient(#111813 0 0) 0 0 / 5px 5px no-repeat,
-          linear-gradient(#111813 0 0) 8px 0 / 5px 5px no-repeat,
-          linear-gradient(#111813 0 0) 0 8px / 5px 5px no-repeat,
-          linear-gradient(#111813 0 0) 8px 8px / 5px 5px no-repeat;
-      }
-
       .login-choice {
         display: grid;
         align-content: center;
@@ -3585,11 +3516,6 @@
           padding: 22px;
         }
 
-        .qr-login-button {
-          right: 56px;
-          background: #fffefa;
-        }
-
         .node-market,
         .node-media,
         .node-service {
@@ -3927,7 +3853,7 @@
 
       .jj-logo-mark {
         border: 0 !important;
-        background: url("./assets/jiejing-app-icon.svg?v=20260619-brand-icon-v1") center / contain no-repeat !important;
+        background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / contain no-repeat !important;
         box-shadow:
           0 16px 34px rgba(8, 118, 110, 0.18),
           0 1px 0 rgba(255, 255, 255, 0.82) inset !important;
@@ -4681,10 +4607,6 @@
       <div class="step-modal-backdrop" data-close-modal></div>
       <section class="step-modal-panel entry-modal-panel">
         <button class="modal-close" type="button" data-close-modal aria-label="关闭">×</button>
-        <button class="qr-login-button" type="button" id="entryQrLogin" onclick="showEntryQrPending()" aria-label="扫码登录">
-          <span class="qr-dot-grid" aria-hidden="true"></span>
-          <span>扫码</span>
-        </button>
         <div class="entry-auth-shell">
           <aside class="entry-auth-brief" aria-label="登录后流程">
             <div class="entry-auth-brand">
@@ -5972,9 +5894,30 @@
         return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
       }
 
-      function showEntryQrPending() {
-        setEntryAuthStatus("扫码登录入口已保留，正式接入前先用邮箱和密码登录或注册。", "info");
-        showToast("扫码登录入口已保留，正式接入前先用登录或注册进入向导。");
+      function entrySaasApiBase() {
+        const sources = [
+          new URLSearchParams(window.location.search).get("saasApiBase") || "",
+          document.querySelector('meta[name="jiejing-saas-api-base"]')?.content || "",
+          localStorage.getItem("jiejing_saas_api_base") || "",
+          window.location.origin,
+        ];
+        for (const source of sources) {
+          const value = String(source || "").trim().replace(/\/+$/, "");
+          if (!value) continue;
+          try {
+            const url = new URL(value, window.location.origin);
+            if (url.protocol !== "http:" && url.protocol !== "https:") continue;
+            if (url.search || url.hash) continue;
+            return url.origin + url.pathname.replace(/\/+$/, "");
+          } catch (error) {
+            // Try the next configured source.
+          }
+        }
+        return window.location.origin;
+      }
+
+      function entrySaasApiUrl(path) {
+        return `${entrySaasApiBase()}${path.startsWith("/") ? path : `/${path}`}`;
       }
 
       async function submitEntryAuth(mode) {
@@ -5999,9 +5942,10 @@
           window.__jiejingEntryAuthPending = true;
           setEntryAuthPending(true, mode);
           setEntryAuthStatus(mode === "register" ? "正在创建捷境账号..." : "正在登录捷境账号...", "info");
-          const response = await fetch(endpoint, {
+          const response = await fetch(entrySaasApiUrl(endpoint), {
             method: "POST",
             headers: { "content-type": "application/json" },
+            credentials: "include",
             body: JSON.stringify(payload),
           });
           const data = await response.json().catch(() => ({}));
@@ -6451,8 +6395,6 @@
 
       document.querySelector("#entryLoginSubmit").addEventListener("click", () => submitEntryAuth("login"));
       document.querySelector("#entryRegisterSubmit").addEventListener("click", () => submitEntryAuth("register"));
-      document.querySelector("#entryQrLogin").addEventListener("click", showEntryQrPending);
-
       document.querySelector("#entryModeGrid").addEventListener("click", (event) => {
         const choice = event.target.closest(".entry-mode-card");
         if (!choice) return;
@@ -6554,5 +6496,6 @@
       setupSignalCanvas();
       openAuthModalFromUrl();
     </script>
-  </body>
+  <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"8ceaac5cf3dd4fa491331c0faf56768c","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
 </html>

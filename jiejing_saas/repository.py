@@ -3114,6 +3114,16 @@ class SaaSRepository:
                     },
                     "secret_exposed": False,
                 }
+                for safe_subscription_key in (
+                    "manual_payment_order_id",
+                    "amount_cny",
+                    "duration_days",
+                    "active_until",
+                    "manual_reconciliation_required",
+                    "private_beta_only",
+                ):
+                    if safe_subscription_key in event:
+                        subscription_record["subscription"][safe_subscription_key] = event.get(safe_subscription_key)
                 conn.execute(
                     """
                     insert or replace into billing_subscriptions (

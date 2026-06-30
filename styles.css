@@ -906,7 +906,7 @@ button {
 
 .site-brand .brand-mark {
   border-color: rgba(255, 255, 255, 0.18);
-  background: #050605;
+  background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / contain no-repeat;
   color: #ffffff;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.13);
 }
@@ -1703,7 +1703,7 @@ button {
   border-color: #0f766e;
   background: #0f766e;
   color: #fff;
-  box-shadow: 0 16px 30px rgba(8, 118, 110, 0.18);
+  box-shadow: 0 16px 30px rgba(17, 21, 19, 0.14);
 }
 
 .source-intake-mode.is-active span,
@@ -3228,9 +3228,9 @@ button {
   place-items: center;
   width: 40px;
   height: 40px;
-  border: 1px solid rgba(5, 6, 5, 0.92);
+  border: 1px solid rgba(8, 118, 110, 0.18);
   border-radius: 8px;
-  background: #050605;
+  background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / contain no-repeat;
   color: #ffffff;
   font-family: "Arial Black", Arial, sans-serif;
   font-weight: 900;
@@ -4957,8 +4957,8 @@ label {
 .brand-mark {
   width: 46px;
   height: 46px;
-  border-color: rgba(5, 6, 5, 0.92);
-  background: #050605;
+  border-color: rgba(17, 21, 19, 0.12);
+  background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / contain no-repeat;
   color: #ffffff;
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.13),
@@ -6054,8 +6054,8 @@ textarea:focus {
   position: relative;
   isolation: isolate;
   overflow: hidden;
-  border-color: rgba(5, 6, 5, 0.92);
-  background: #050605;
+  border-color: rgba(17, 21, 19, 0.12);
+  background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / contain no-repeat;
   color: transparent;
   font-size: 0;
   box-shadow:
@@ -6069,17 +6069,7 @@ textarea:focus {
 .sidebar .brand-mark::before,
 .brand-showcase-lockup .brand-mark::before {
   content: "";
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  color: #ffffff;
-  font-family: "Arial Black", Arial, sans-serif;
-  font-size: 26px;
-  font-weight: 900;
-  letter-spacing: 0;
-  line-height: 1;
-  transform: translateX(-2px);
+  display: none;
 }
 
 .brand .brand-mark::after,
@@ -6088,14 +6078,7 @@ textarea:focus {
 .sidebar .brand-mark::after,
 .brand-showcase-lockup .brand-mark::after {
   content: "";
-  position: absolute;
-  left: 24%;
-  right: 24%;
-  bottom: 18%;
-  height: 2px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: none;
+  display: none;
 }
 
 .brand-showcase-lockup {
@@ -9618,9 +9601,9 @@ textarea:focus {
   isolation: isolate;
   flex: 0 0 auto;
   overflow: hidden;
-  border: 1px solid rgba(5, 6, 5, 0.92);
+  border: 1px solid rgba(8, 118, 110, 0.18);
   border-radius: 10px;
-  background: #050605;
+  background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / contain no-repeat;
   color: transparent;
   font-size: 0;
   line-height: 0;
@@ -30774,9 +30757,9 @@ body.saas-public-mvp[data-view="cockpit"] .saas-first-order-proof-strip article 
   overflow: hidden;
   border: 0;
   border-radius: 10px;
-  background: url("./assets/jiejing-app-icon.svg?v=20260619-brand-icon-v1") center / contain no-repeat;
+  background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / contain no-repeat;
   box-shadow:
-    0 16px 34px rgba(8, 118, 110, 0.18),
+    0 16px 34px rgba(17, 21, 19, 0.14),
     0 1px 0 rgba(255, 255, 255, 0.8) inset;
   color: transparent;
   font-size: 0;
@@ -30806,7 +30789,7 @@ body.saas-public-mvp[data-view="cockpit"] .saas-first-order-proof-strip article 
   height: 72px;
   border-radius: 17px;
   box-shadow:
-    0 26px 56px rgba(8, 118, 110, 0.22),
+    0 26px 56px rgba(17, 21, 19, 0.16),
     0 1px 0 rgba(255, 255, 255, 0.82) inset;
 }
 
@@ -31303,12 +31286,12 @@ body.saas-public-mvp .app-home-link span {
 body.saas-public-mvp .brand-mark {
   width: 42px;
   height: 42px;
-  border-color: rgba(8, 118, 110, 0.18);
-  background: url("./assets/jiejing-app-icon.svg?v=20260619-brand-icon-v1") center / contain no-repeat;
+  border-color: rgba(17, 21, 19, 0.12);
+  background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / contain no-repeat;
   color: transparent;
   font-size: 0;
   line-height: 0;
-  box-shadow: 0 16px 30px rgba(8, 118, 110, 0.18);
+  box-shadow: 0 16px 30px rgba(17, 21, 19, 0.14);
 }
 
 body.saas-public-mvp .brand strong {
@@ -38405,6 +38388,234 @@ body.saas-public-mvp .saas-merchant-billing-plain-note {
   background: rgba(255, 255, 255, 0.78);
 }
 
+body.saas-public-mvp .saas-mainland-payment-strategy {
+  border-color: rgba(8, 118, 110, 0.16);
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbf9 100%);
+}
+
+body.saas-public-mvp .saas-mainland-payment-strategy .saas-settings-card-head {
+  align-items: flex-start;
+}
+
+body.saas-public-mvp .saas-mainland-payment-strategy .saas-settings-card-head em {
+  align-self: flex-start;
+  max-width: min(100%, 230px);
+  padding: 7px 9px;
+  border: 1px solid rgba(214, 142, 43, 0.24);
+  border-radius: 8px;
+  background: #fff8e9;
+  color: #8a5b12;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-mainland-payment-routes,
+body.saas-public-mvp .saas-mainland-payment-plain,
+body.saas-public-mvp .saas-mainland-payment-formal,
+body.saas-public-mvp .saas-mainland-payment-domain {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-mainland-payment-plain,
+body.saas-public-mvp .saas-mainland-payment-domain {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
+body.saas-public-mvp .saas-mainland-payment-formal {
+  grid-template-columns: minmax(220px, 1.4fr) repeat(4, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
+body.saas-public-mvp .saas-mainland-payment-routes article,
+body.saas-public-mvp .saas-mainland-payment-plain article,
+body.saas-public-mvp .saas-mainland-payment-formal > div,
+body.saas-public-mvp .saas-mainland-payment-formal article,
+body.saas-public-mvp .saas-mainland-payment-domain article {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(15, 45, 40, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+body.saas-public-mvp .saas-mainland-payment-routes article.is-green {
+  border-color: rgba(8, 118, 110, 0.2);
+  background: #f2fbf8;
+}
+
+body.saas-public-mvp .saas-mainland-payment-routes article.is-amber {
+  border-color: rgba(214, 142, 43, 0.25);
+  background: #fffaf1;
+}
+
+body.saas-public-mvp .saas-mainland-payment-routes article.is-red {
+  border-color: rgba(183, 71, 71, 0.18);
+  background: #fff7f5;
+}
+
+body.saas-public-mvp .saas-mainland-payment-formal article.is-green {
+  border-color: rgba(8, 118, 110, 0.2);
+  background: #f2fbf8;
+}
+
+body.saas-public-mvp .saas-mainland-payment-formal article.is-amber {
+  border-color: rgba(214, 142, 43, 0.25);
+  background: #fffaf1;
+}
+
+body.saas-public-mvp .saas-mainland-payment-formal article.is-red {
+  border-color: rgba(183, 71, 71, 0.18);
+  background: #fff7f5;
+}
+
+body.saas-public-mvp .saas-mainland-payment-routes span,
+body.saas-public-mvp .saas-mainland-payment-plain span,
+body.saas-public-mvp .saas-mainland-payment-formal span,
+body.saas-public-mvp .saas-mainland-payment-domain span {
+  color: #08766e;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+body.saas-public-mvp .saas-mainland-payment-routes strong,
+body.saas-public-mvp .saas-mainland-payment-plain strong,
+body.saas-public-mvp .saas-mainland-payment-formal strong,
+body.saas-public-mvp .saas-mainland-payment-domain strong {
+  color: #12231f;
+  font-size: 14px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-mainland-payment-routes small,
+body.saas-public-mvp .saas-mainland-payment-plain small,
+body.saas-public-mvp .saas-mainland-payment-formal small,
+body.saas-public-mvp .saas-mainland-payment-domain small {
+  margin: 0;
+  color: #5d716b;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-manual-beta-payment {
+  border-color: rgba(8, 118, 110, 0.18);
+  background: linear-gradient(180deg, #ffffff 0%, #f4faf8 100%);
+}
+
+body.saas-public-mvp .saas-manual-beta-payment .saas-settings-card-head {
+  align-items: flex-start;
+}
+
+body.saas-public-mvp .saas-manual-beta-payment .saas-settings-card-head em {
+  align-self: flex-start;
+  max-width: min(100%, 220px);
+  padding: 7px 9px;
+  border: 1px solid rgba(8, 118, 110, 0.18);
+  border-radius: 8px;
+  background: #eefaf6;
+  color: #08766e;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-manual-beta-payment-grid,
+body.saas-public-mvp .saas-manual-beta-payment-orders {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-manual-beta-payment-orders {
+  margin-top: 8px;
+}
+
+body.saas-public-mvp .saas-manual-beta-payment-grid article,
+body.saas-public-mvp .saas-manual-beta-payment-orders article,
+body.saas-public-mvp .saas-manual-beta-payment-note {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(15, 45, 40, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+body.saas-public-mvp .saas-manual-beta-payment-orders article.is-green {
+  border-color: rgba(8, 118, 110, 0.2);
+  background: #f2fbf8;
+}
+
+body.saas-public-mvp .saas-manual-beta-payment-orders article.is-amber {
+  border-color: rgba(214, 142, 43, 0.22);
+  background: #fffaf1;
+}
+
+body.saas-public-mvp .saas-manual-beta-payment-grid span,
+body.saas-public-mvp .saas-manual-beta-payment-orders span {
+  color: #08766e;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+body.saas-public-mvp .saas-manual-beta-payment-grid strong,
+body.saas-public-mvp .saas-manual-beta-payment-orders strong,
+body.saas-public-mvp .saas-manual-beta-payment-note strong {
+  color: #12231f;
+  font-size: 14px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-manual-beta-payment-grid small,
+body.saas-public-mvp .saas-manual-beta-payment-orders small,
+body.saas-public-mvp .saas-manual-beta-payment-note p {
+  margin: 0;
+  color: #5d716b;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-manual-beta-payment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+body.saas-public-mvp .saas-manual-beta-payment-note {
+  margin-top: 8px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+body.saas-public-mvp .saas-auth-qr-status {
+  margin: 0 0 10px;
+  padding: 9px 10px;
+  border: 1px solid rgba(8, 118, 110, 0.14);
+  border-radius: 8px;
+  background: #f6fbf9;
+  color: #5d716b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 body.saas-public-mvp .saas-merchant-billing-current {
   border-color: rgba(8, 118, 110, 0.18);
   background: #ffffff;
@@ -38842,7 +39053,13 @@ body.saas-public-mvp .saas-merchant-billing-guardrail-safety span {
   body.saas-public-mvp .saas-merchant-pricing-split,
   body.saas-public-mvp .saas-merchant-pricing-route,
   body.saas-public-mvp .saas-merchant-billing-clarity,
-  body.saas-public-mvp .saas-merchant-billing-plain-grid {
+  body.saas-public-mvp .saas-merchant-billing-plain-grid,
+  body.saas-public-mvp .saas-mainland-payment-routes,
+  body.saas-public-mvp .saas-mainland-payment-plain,
+  body.saas-public-mvp .saas-mainland-payment-formal,
+  body.saas-public-mvp .saas-mainland-payment-domain,
+  body.saas-public-mvp .saas-manual-beta-payment-grid,
+  body.saas-public-mvp .saas-manual-beta-payment-orders {
     grid-template-columns: 1fr;
   }
 

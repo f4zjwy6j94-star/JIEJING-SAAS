@@ -107,7 +107,15 @@ def main() -> int:
     deploy_script = (ROOT / "tools" / "jiejing_deploy_frontend_staging_with_key.ps1").read_text(encoding="utf-8")
     if "Unable to derive frontend asset version from app.html" not in deploy_script or "DEPLOY_FRONTEND_VERSION=$frontendVersion" not in deploy_script:
         return fail("frontend deploy script must derive DEPLOY_FRONTEND_VERSION from app.html")
-    if 'background: url("./assets/jiejing-app-icon.svg?v=20260619-brand-icon-v1") center / contain no-repeat;' not in styles_css:
+    for deploy_asset in [
+        "favicon.ico",
+        "assets/jiejing-app-icon.svg",
+        "assets/jiejing-logo-lockup.svg",
+        "assets/jiejing-logo-mark.svg",
+    ]:
+        if deploy_asset not in deploy_script:
+            return fail(f"frontend deploy script must ship brand asset: {deploy_asset}")
+    if 'background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / contain no-repeat;' not in styles_css:
         return fail("public SaaS brand mark must use the JIEJING app icon instead of a black fallback block")
     for forbidden_brand in [
         "捷境 Jiejing",

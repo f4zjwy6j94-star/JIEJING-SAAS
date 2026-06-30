@@ -19,6 +19,7 @@ RUN python -m py_compile \
     tools/jiejing_worker_cli.py \
     jiejing_saas/api_server.py \
     jiejing_saas/backup_plan.py \
+    jiejing_saas/billing_payment_options.py \
     jiejing_saas/billing_plan.py \
     jiejing_saas/commercial_launch_gate.py \
     jiejing_saas/ebay_data_packet.py \

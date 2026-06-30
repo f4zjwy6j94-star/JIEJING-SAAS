@@ -27,6 +27,8 @@ from .backup_plan import build_backup_plan
 from .billing_plan import build_billing_plan, build_billing_usage, evaluate_quota_action
 from .billing_checkout import build_billing_checkout_contract, create_stripe_checkout_session, create_stripe_customer_portal_session
 from .billing_domain_cutover_rehearsal import build_billing_domain_cutover_rehearsal
+from .billing_manual_beta import create_manual_beta_payment_order, confirm_manual_beta_payment_order, list_manual_beta_payment_orders
+from .billing_payment_options import build_mainland_payment_strategy
 from .billing_test_provider import apply_test_billing_event
 from .billing_webhook import handle_billing_webhook
 from .commercial_launch_gate import build_commercial_launch_gate
@@ -114,6 +116,7 @@ EXPENSIVE_API_RATE_LIMIT_PREFIXES = (
     "confirmations",
     "execution-results",
     "audit-logs",
+    "billing/manual-beta",
     "provider-job-contracts",
     "post-publish",
     "owner/",
@@ -336,6 +339,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._send_json({"platform_registry": registry_summary()})
             return
 
+        if path.startswith("auth/qr-login"):
+            self._send_error(HTTPStatus.NOT_FOUND, "QR login is not an active Jiejing login path")
+            return
+
         if len(parts) == 2 and parts[0] == "platforms":
             platform = get_platform_definition(parts[1])
             if not platform:
@@ -473,6 +480,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._send_json({"billing_plan": build_billing_plan(self.settings, self.repository)})
             return
 
+        if path == "billing/payment-options":
+            self._send_json({"payment_options": build_mainland_payment_strategy(self.settings)})
+            return
+
         if path == "billing/checkout-contract":
             self._send_json({"billing_checkout": build_billing_checkout_contract()})
             return
@@ -483,6 +494,29 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         if path == "billing/usage":
             self._send_json({"billing_usage": build_billing_usage(self.settings, self.repository, company_id=identity["company_id"])})
+            return
+
+        if path == "billing/manual-beta/orders":
+            self._send_json(
+                {
+                    "manual_beta_payment_orders": list_manual_beta_payment_orders(
+                        self.repository,
+                        company_id=identity["company_id"],
+                        limit=_query_limit(query, default=20, maximum=100) or 20,
+                    ),
+                    "manual_beta_payment_flow": {
+                        "private_beta_only": True,
+                        "amount_cny": 99,
+                        "duration_days": 30,
+                        "plan_key": "starter",
+                        "manual_reconciliation_required": True,
+                        "qr_code_in_repository": False,
+                        "triggers_real_charge": False,
+                        "frontend_gets_payment_secret": False,
+                        "secret_exposed": False,
+                    },
+                }
+            )
             return
 
         if path == "model/value-gate":
@@ -837,6 +871,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         path = parsed.path.strip("/")
         parts = [unquote(part) for part in path.split("/")] if path else []
 
+        if path.startswith("auth/qr-login"):
+            self._send_error(HTTPStatus.NOT_FOUND, "QR login is not an active Jiejing login path")
+            return
+
         if path == "auth/demo-session":
             if not self._demo_session_bootstrap_allowed():
                 self._send_error(
@@ -1076,6 +1114,45 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             self._send_json(
                 {"billing_test_event": result},
+                status=HTTPStatus.OK if result.get("ok") else HTTPStatus(int(result.get("http_status") or 400)),
+            )
+            return
+
+        if path == "billing/manual-beta/orders":
+            if not self._require_permission(identity, "manage_billing"):
+                return
+            body = self._read_json_body()
+            result = create_manual_beta_payment_order(
+                self.repository,
+                company_id=identity["company_id"],
+                user_id=identity["user_id"],
+                plan_key=str(body.get("plan_key") or "starter"),
+            )
+            self._send_json(
+                {"manual_beta_payment_order": result},
+                status=HTTPStatus.CREATED if result.get("ok") else HTTPStatus(int(result.get("http_status") or 400)),
+            )
+            return
+
+        if len(parts) == 4 and parts[0] == "billing" and parts[1] == "manual-beta" and parts[2] == "orders" and parts[3].endswith("confirm"):
+            self._send_error(HTTPStatus.NOT_FOUND, "manual beta confirmation route is /billing/manual-beta/orders/{order_id}/confirm")
+            return
+
+        if len(parts) == 5 and parts[0] == "billing" and parts[1] == "manual-beta" and parts[2] == "orders" and parts[4] == "confirm":
+            if not self._require_permission(identity, "manage_billing"):
+                return
+            body = self._read_json_body()
+            result = confirm_manual_beta_payment_order(
+                self.repository,
+                company_id=identity["company_id"],
+                user_id=identity["user_id"],
+                order_id=parts[3],
+                internal_admin=self._is_platform_internal_admin(identity),
+                received_amount_cny=body.get("received_amount_cny") or 0,
+                payment_reference=str(body.get("payment_reference") or ""),
+            )
+            self._send_json(
+                {"manual_beta_payment_confirmation": result},
                 status=HTTPStatus.OK if result.get("ok") else HTTPStatus(int(result.get("http_status") or 400)),
             )
             return
@@ -3500,7 +3577,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             ("execution-results", "execution audit and recovery evidence", ["GET /execution-results"]),
             ("audit-logs", "tenant audit trail", ["GET /audit-logs"]),
             ("post-publish", "post-publish cockpit evidence and cleanup boundary", ["GET /post-publish/cockpit"]),
-            ("billing", "checkout, portal and billing test events", ["POST /billing/checkout-session", "POST /billing/test-event"]),
+            (
+                "billing",
+                "checkout, portal, billing test events and manual beta payment orders",
+                ["POST /billing/checkout-session", "POST /billing/test-event", "POST /billing/manual-beta/orders"],
+            ),
             ("owner", "platform-internal-admin-only launch-control evidence", ["GET /owner/launch-control", "GET /security/rate-limit/status"]),
         ]
         return [

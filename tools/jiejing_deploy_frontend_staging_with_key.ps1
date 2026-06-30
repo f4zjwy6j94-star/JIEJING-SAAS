@@ -44,7 +44,7 @@ set -euo pipefail
 cd "$RemoteApp"
 backup_dir="output/deploy-backups/$stamp"
 mkdir -p "`$backup_dir/deploy"
-for path in app.js styles.css index.html app.html privacy.html terms.html risk-disclosure.html deploy/nginx.public-staging.conf; do
+for path in app.js styles.css index.html app.html privacy.html terms.html risk-disclosure.html favicon.ico assets/jiejing-app-icon.svg assets/jiejing-logo-lockup.svg assets/jiejing-logo-mark.svg deploy/nginx.public-staging.conf; do
   if [ -f "$path" ]; then
     mkdir -p "`$backup_dir/`$(dirname "`$path")"
     cp "$path" "`$backup_dir/$path"
@@ -62,6 +62,10 @@ install -m 0644 "`$tmp_dir/app.html" app.html
 install -m 0644 "`$tmp_dir/privacy.html" privacy.html
 install -m 0644 "`$tmp_dir/terms.html" terms.html
 install -m 0644 "`$tmp_dir/risk-disclosure.html" risk-disclosure.html
+install -m 0644 "`$tmp_dir/favicon.ico" favicon.ico
+install -D -m 0644 "`$tmp_dir/assets/jiejing-app-icon.svg" assets/jiejing-app-icon.svg
+install -D -m 0644 "`$tmp_dir/assets/jiejing-logo-lockup.svg" assets/jiejing-logo-lockup.svg
+install -D -m 0644 "`$tmp_dir/assets/jiejing-logo-mark.svg" assets/jiejing-logo-mark.svg
 install -D -m 0644 "`$tmp_dir/deploy/nginx.public-staging.conf" deploy/nginx.public-staging.conf
 python3 tools/jiejing_productization_stage_gate.py >/tmp/jiejing-stage-gate-$stamp.json
 sudo -n docker compose -f deploy/docker-compose.public-https-staging.yml -p deploy up -d --no-deps --force-recreate jiejing-frontend
@@ -72,7 +76,7 @@ echo DEPLOY_BACKUP_DIR="`$backup_dir"
 echo DEPLOY_FRONTEND_VERSION=$frontendVersion
 "@
 
-$archiveArgs = @("-czf", $patchArchive, "app.js", "styles.css", "index.html", "app.html", "privacy.html", "terms.html", "risk-disclosure.html", "deploy/nginx.public-staging.conf")
+$archiveArgs = @("-czf", $patchArchive, "app.js", "styles.css", "index.html", "app.html", "privacy.html", "terms.html", "risk-disclosure.html", "favicon.ico", "assets/jiejing-app-icon.svg", "assets/jiejing-logo-lockup.svg", "assets/jiejing-logo-mark.svg", "deploy/nginx.public-staging.conf")
 Invoke-NativeChecked "tar" $archiveArgs
 $remoteScriptForSsh = $remoteScript.TrimStart([char]0xFEFF) -replace "`r", ""
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)

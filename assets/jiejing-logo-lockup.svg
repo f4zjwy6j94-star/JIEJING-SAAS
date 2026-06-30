@@ -1,26 +1,22 @@
-<svg width="392" height="104" viewBox="0 0 392 104" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Jiejing logo">
+<svg width="392" height="104" viewBox="0 0 392 104" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Jeway JIEJING logo">
   <defs>
-    <linearGradient id="lockup-bg" x1="18" y1="8" x2="92" y2="98" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#071210"/>
-      <stop offset="0.55" stop-color="#0B2F2B"/>
-      <stop offset="1" stop-color="#08766E"/>
-    </linearGradient>
-    <linearGradient id="lockup-path" x1="32" y1="30" x2="78" y2="78" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FFFDF5"/>
-      <stop offset="0.62" stop-color="#BDE8DF"/>
-      <stop offset="1" stop-color="#59C7BA"/>
+    <filter id="tile-shadow" x="0" y="2" width="110" height="110" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="4" stdDeviation="4.5" flood-color="#111513" flood-opacity="0.14"/>
+    </filter>
+    <linearGradient id="gold" x1="66.8" y1="22.4" x2="73.2" y2="30.4" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E5B149"/>
+      <stop offset="1" stop-color="#C48A23"/>
     </linearGradient>
   </defs>
-  <rect x="4" y="4" width="96" height="96" rx="22" fill="url(#lockup-bg)"/>
-  <rect x="10" y="10" width="84" height="84" rx="18" fill="none" stroke="#FFFDF5" stroke-opacity="0.13" stroke-width="1.5"/>
-  <path d="M29 31H58C68 31 76 39 76 49V74" stroke="#FFFDF5" stroke-opacity="0.2" stroke-width="7" stroke-linecap="round"/>
-  <path d="M30 32H56C66 32 74 40 74 50V72" stroke="url(#lockup-path)" stroke-width="6" stroke-linecap="round"/>
-  <path d="M30 52H64" stroke="#FFFDF5" stroke-width="6" stroke-linecap="round"/>
-  <path d="M44 32V65C44 72 50 78 57 78H73" stroke="#FFFDF5" stroke-width="6" stroke-linecap="round"/>
-  <path d="M65 69L74 78L65 87" stroke="#59C7BA" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="30" cy="32" r="2.7" fill="#FFFDF5"/>
-  <circle cx="30" cy="52" r="2.7" fill="#FFFDF5"/>
-  <circle cx="73" cy="78" r="2.3" fill="#FFFDF5"/>
-  <text x="124" y="49" fill="#071210" font-family="Microsoft YaHei, PingFang SC, Segoe UI, sans-serif" font-size="36" font-weight="900" letter-spacing="0">Jiejing</text>
-  <text x="126" y="78" fill="#46524C" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="900" letter-spacing="2.4">AI CEO EBAY WORKBENCH</text>
+  <rect x="4" y="4" width="96" height="96" rx="22" fill="#F7F8F6"/>
+  <g filter="url(#tile-shadow)">
+    <rect x="11.9" y="11.9" width="80.3" height="80.3" rx="16.1" fill="#FAFAF8"/>
+    <rect x="12.1" y="12.1" width="79.9" height="79.9" rx="15.9" stroke="#E9EBE7" stroke-width="0.4"/>
+  </g>
+  <path d="M30 65.25C32.44 48.75 42.94 38.25 62.34 26.44C51.56 32.81 49.13 47.06 66.38 63.28C52.97 57.09 43.03 58.97 30 65.25Z" fill="#181A19"/>
+  <path d="M43.31 62.91C46.22 51.19 51.38 41.63 60.47 32.81C53.16 43.13 51.38 51.94 56.25 62.25C51.75 60.66 48.19 61.22 43.31 62.91Z" fill="#FAFAF8"/>
+  <circle cx="65.25" cy="24.94" r="3.38" fill="url(#gold)"/>
+  <circle cx="64.16" cy="23.76" r="0.8" fill="#F7D783" fill-opacity="0.9"/>
+  <text x="124" y="49" fill="#111513" font-family="Microsoft YaHei, PingFang SC, Segoe UI, sans-serif" font-size="36" font-weight="900" letter-spacing="0">JEWAY</text>
+  <text x="126" y="78" fill="#5A605C" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="900" letter-spacing="2.2">JIEJING AI CEO EBAY</text>
 </svg>

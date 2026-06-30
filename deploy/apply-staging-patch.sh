@@ -46,6 +46,7 @@ FILES=(
   "docs/JIEJING_STAGING_DISK_CLEANUP_20260619.md"
   "docs/JIEJING_PUBLIC_WAF_ANTI_SCRAPE_RUNBOOK_20260618.md"
   "docs/JIEJING_NO_CHARGE_BILLING_REHEARSAL_20260618.md"
+  "docs/JIEJING_MAINLAND_PAYMENT_COLLECTION_PLAN_20260629.md"
   "docs/JIEJING_PRELAUNCH_INTERNAL_HARDENING_RUNBOOK_20260620.md"
   "docs/JIEJING_GITHUB_SELF_HOSTED_RUNNER_DEPLOY_RUNBOOK_20260622.md"
   "docs/JIEJING_GITHUB_CI_STATUS_20260617.md"
@@ -70,6 +71,8 @@ FILES=(
   "jiejing_saas/backup_plan.py"
   "jiejing_saas/billing_checkout.py"
   "jiejing_saas/billing_domain_cutover_rehearsal.py"
+  "jiejing_saas/billing_manual_beta.py"
+  "jiejing_saas/billing_payment_options.py"
   "jiejing_saas/billing_plan.py"
   "jiejing_saas/billing_test_provider.py"
   "jiejing_saas/billing_webhook.py"
@@ -154,6 +157,8 @@ FILES=(
   "tools/test_jiejing_billing_test_provider.py"
   "tools/test_jiejing_billing_domain_cutover_rehearsal.py"
   "tools/test_jiejing_billing_webhook_subscription_state.py"
+  "tools/test_jiejing_mainland_payment_strategy.py"
+  "tools/test_jiejing_manual_beta_payment_flow.py"
   "tools/test_jiejing_ebay_vault_token_refresh_adapter.py"
   "tools/test_jiejing_domain_launch_gate.py"
   "tools/test_jiejing_monitoring_runbook_gate.py"
@@ -244,6 +249,8 @@ python3 -m py_compile \
   jiejing_saas/backup_plan.py \
   jiejing_saas/billing_checkout.py \
   jiejing_saas/billing_domain_cutover_rehearsal.py \
+  jiejing_saas/billing_manual_beta.py \
+  jiejing_saas/billing_payment_options.py \
   jiejing_saas/billing_plan.py \
   jiejing_saas/billing_test_provider.py \
   jiejing_saas/billing_webhook.py \
@@ -323,6 +330,8 @@ python3 -m py_compile \
   tools/test_jiejing_billing_provider_webhook.py \
   tools/test_jiejing_billing_test_provider.py \
   tools/test_jiejing_billing_webhook_subscription_state.py \
+  tools/test_jiejing_mainland_payment_strategy.py \
+  tools/test_jiejing_manual_beta_payment_flow.py \
   tools/test_jiejing_ebay_vault_token_refresh_adapter.py \
   tools/test_jiejing_domain_launch_gate.py \
   tools/test_jiejing_monitoring_runbook_gate.py \

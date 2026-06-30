@@ -321,6 +321,8 @@ def main() -> None:
         "renderSaasSettingsDataPanel(ctx)",
         "renderSaasMerchantPermissionPanel()",
         "renderSaasMerchantBillingPlainSummaryPanel(ctx)",
+        "renderSaasMainlandPaymentStrategyPanel()",
+        "renderSaasManualBetaPaymentOrderPanel()",
         "renderSaasMerchantPricingModelPanel(ctx)",
         "renderSaasMerchantBillingContinuityPanel(ctx)",
         "主理人高级区",
@@ -330,6 +332,31 @@ def main() -> None:
         "renderSaasMerchantSecurityBoundaryPanel()",
     ]:
         require(settings_def_body, required_marker, "settings ordinary tabs stay focused while owner area keeps advanced controls")
+    for required_marker in [
+        "mainland_payment_strategy_v1",
+        "manual_qr_not_paid_launch_ready",
+        "domestic_wallets_primary_for_mainland_users",
+        "stripe_paypal_cross_border_fallback",
+        "worldfirst_payoneer_settlement_not_checkout",
+        "formal_payment_collection_architecture_v1",
+        "mainland_domain_icp_plan_v1",
+        "personal_alipay_qr_private_beta_manual_reconciliation_only",
+        "formal_payment_requires_merchant_order_signed_callback_and_quota_audit",
+        "manual_beta_payment_order_v1",
+        "manual_beta_alipay_qr_not_in_repo",
+        "manual_beta_owner_confirm_required",
+        "manual_beta_confirmation_grants_30d_starter",
+    ]:
+        require(app_js, required_marker, "mainland payment public safety markers")
+    for removed_marker in [
+        "/auth/qr-login/status",
+        "qr-login-placeholder",
+        "qr_login_boundary_v1",
+        "authQrLogin",
+        "entryQrLogin",
+    ]:
+        if removed_marker in app_js or removed_marker in index_html:
+            raise AssertionError(f"QR login should not be exposed in the current login path: {removed_marker}")
     ordinary_settings_body = settings_def_body[: settings_def_body.index("if (saasOwnerLaunchCanView())")]
     for redundant_marker in [
         "renderSaasSettingsAccountFocusPanel(ctx)",

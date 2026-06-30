@@ -17,20 +17,22 @@ from typing import Any, Mapping
 
 SUPPORTED_BILLING_PROVIDERS = {"stripe", "paddle", "lemon_squeezy"}
 TEST_BILLING_PROVIDERS = {"stripe_test_mock"}
+PRIVATE_BETA_BILLING_PROVIDERS = {"manual_beta"}
 
 
 def build_billing_provider_contract() -> dict[str, Any]:
     provider = _provider()
     external_provider = provider in SUPPORTED_BILLING_PROVIDERS
     test_provider = provider in TEST_BILLING_PROVIDERS
+    private_beta_provider = provider in PRIVATE_BETA_BILLING_PROVIDERS
     plan_ids = billing_plan_ids()
     webhook_secret_configured = bool(_webhook_secret(provider)) if external_provider else False
     api_key_configured = bool(_api_key(provider)) if external_provider else False
     webhook_endpoint_configured = bool(os.environ.get("JIEJING_BILLING_WEBHOOK_URL", "").strip())
-    webhook_configured = webhook_secret_configured and webhook_endpoint_configured if external_provider else test_provider
+    webhook_configured = webhook_secret_configured and webhook_endpoint_configured if external_provider else test_provider or private_beta_provider
     missing_plan_ids = [key for key, value in plan_ids.items() if not value]
     blockers: list[str] = []
-    if not external_provider and not test_provider:
+    if not external_provider and not test_provider and not private_beta_provider:
         blockers.append("external_paid_subscription_provider_not_configured")
     if external_provider and not api_key_configured:
         blockers.append(f"{provider}_api_key_not_configured")
@@ -43,11 +45,13 @@ def build_billing_provider_contract() -> dict[str, Any]:
     return {
         "contract_version": "2026-05-26-signed-billing-provider",
         "provider": provider or "not_selected",
-        "provider_mode": "external_paid" if external_provider else "test_mock" if test_provider else "not_selected",
+        "provider_mode": "external_paid" if external_provider else "test_mock" if test_provider else "private_beta_manual" if private_beta_provider else "not_selected",
         "supported_external_providers": sorted(SUPPORTED_BILLING_PROVIDERS),
         "supported_test_providers": sorted(TEST_BILLING_PROVIDERS),
+        "supported_private_beta_providers": sorted(PRIVATE_BETA_BILLING_PROVIDERS),
         "external_provider_configured": external_provider,
         "test_provider_configured": test_provider,
+        "private_beta_provider_configured": private_beta_provider,
         "test_provider_ready": test_provider and not missing_plan_ids,
         "api_key_configured": api_key_configured,
         "api_key_required": external_provider,
@@ -59,7 +63,7 @@ def build_billing_provider_contract() -> dict[str, Any]:
         "missing_plan_ids": missing_plan_ids,
         "paid_provider_ready": external_provider and api_key_configured and webhook_configured and not missing_plan_ids,
         "calls_external_payment_api": external_provider,
-        "can_run_without_payment_provider_account": test_provider,
+        "can_run_without_payment_provider_account": test_provider or private_beta_provider,
         "triggers_real_charge": False,
         "charge_now_allowed": False,
         "webhook_event_types": webhook_event_types(provider),
@@ -72,6 +76,12 @@ def build_billing_provider_contract() -> dict[str, Any]:
 
 def billing_plan_ids() -> dict[str, str]:
     provider = _provider()
+    if provider in PRIVATE_BETA_BILLING_PROVIDERS:
+        return {
+            "starter": "manual_beta_99_cny_30d",
+            "operator": "manual_beta_operator_not_available",
+            "team": "manual_beta_team_not_available",
+        }
     if provider in TEST_BILLING_PROVIDERS:
         return {
             "starter": _first_env("JIEJING_STRIPE_TEST_MOCK_PRICE_STARTER_ID", "JIEJING_BILLING_PLAN_STARTER_ID") or "mock_price_starter",
@@ -143,6 +153,8 @@ def webhook_event_types(provider: str | None = None) -> list[str]:
             "test.invoice.payment_failed",
             "test.customer.subscription.deleted",
         ]
+    if selected in PRIVATE_BETA_BILLING_PROVIDERS:
+        return ["manual_beta.payment_confirmed"]
     return []
 
 
@@ -150,6 +162,8 @@ def handle_billing_webhook(*, raw_body: bytes, headers: Mapping[str, str]) -> di
     provider = _provider()
     if provider in TEST_BILLING_PROVIDERS:
         return _blocked("billing_test_provider_public_webhook_disabled", http_status=400)
+    if provider in PRIVATE_BETA_BILLING_PROVIDERS:
+        return _blocked("manual_beta_public_webhook_disabled", http_status=400)
     if provider not in SUPPORTED_BILLING_PROVIDERS:
         return _blocked("billing_provider_not_selected", http_status=400)
     secret = _webhook_secret(provider)
@@ -393,6 +407,9 @@ def _provider() -> str:
         "test_stripe": "stripe_test_mock",
         "mock_stripe": "stripe_test_mock",
         "mock_billing": "stripe_test_mock",
+        "manual": "manual_beta",
+        "manual_qr": "manual_beta",
+        "manual_beta": "manual_beta",
     }
     return aliases.get(raw, raw)
 

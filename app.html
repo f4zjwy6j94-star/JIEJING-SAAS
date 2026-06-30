@@ -71,7 +71,7 @@
         background: #fffefa;
       }
     </style>
-    <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260619-brand-icon-v1" type="image/svg+xml" />
+    <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-main.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-scene.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-detail.webp" />
@@ -3050,10 +3050,6 @@
     <div class="modal-backdrop" id="authModal" hidden>
       <section class="modal auth-modal saas-auth-modal-shell" role="dialog" aria-modal="true" aria-labelledby="authTitle" data-saas-login-card>
         <button class="icon-button modal-close" data-close-modal title="关闭">×</button>
-        <button class="qr-auth-button" id="authQrLogin" type="button" data-saas-action="qr-login-placeholder" aria-label="扫码登录">
-          <span class="qr-dot-grid" aria-hidden="true"></span>
-          <span>扫码</span>
-        </button>
         <div class="auth-modal-head">
           <div class="auth-brand-lockup">
             <span class="brand-mark" aria-hidden="true"></span>
@@ -3262,7 +3258,6 @@
         if (!onboardingDone) return;
 
         const showApp = () => {
-          if (document.documentElement.classList.contains("app-direct-start")) return;
           const allowedViews = new Set(["cockpit", "workflow", "product", "media", "bulk", "activity", "confirm", "service", "connect"]);
           const requestedView = params.get("view") || "cockpit";
           const safeView = allowedViews.has(requestedView) ? requestedView : "cockpit";
@@ -3291,5 +3286,6 @@
     </script>
     <script src="./assets/jiejing-settings-panels.js?v=20260620-prelaunch-deferred-v1"></script>
     <script src="./app.js?v=20260629-first-run-closure-v1"></script>
-  </body>
+  <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"8ceaac5cf3dd4fa491331c0faf56768c","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
 </html>
