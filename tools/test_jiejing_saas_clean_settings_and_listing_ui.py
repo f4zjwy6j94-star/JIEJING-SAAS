@@ -338,6 +338,7 @@ def main() -> None:
         "renderSaasBillingTransitionPathPanel(ctx)",
         "renderSaasBillingProviderRehearsalPanel(ctx)",
         "renderSaasBillingPaidLaunchBlockersPanel(ctx)",
+        "renderSaasMerchantBillingCustomerTrustPanel(ctx)",
         "renderSaasMainlandPaymentStrategyPanel()",
         "renderSaasManualBetaPaymentOrderPanel()",
         "renderSaasMerchantPricingModelPanel(ctx)",
@@ -525,6 +526,13 @@ def main() -> None:
         "payment_failed_cancel_blocks_metered_work",
         "quota_shutdown_keeps_history_visible",
         "browser_cannot_grant_or_restore_entitlement",
+        "merchant_billing_customer_trust_packet_v1",
+        "checkout_hosted_by_payment_provider",
+        "customer_can_cancel_or_update_payment_in_portal",
+        "invoice_receipt_requires_live_provider",
+        "tax_invoice_policy_pending_until_merchant_entity",
+        "billing_support_refund_links_visible",
+        "entitlement_recovery_does_not_repeat_ebay_oauth",
         "正式支付接入前演练",
         "先证明后端查单 / 签名回调，再允许订阅和额度生效",
         "data-saas-action=\"billing-provider-rehearsal\"",
@@ -757,6 +765,9 @@ def main() -> None:
         ".saas-merchant-billing-incident-runbook",
         ".saas-merchant-billing-incident-grid",
         ".saas-merchant-billing-incident-note",
+        ".saas-merchant-billing-trust-packet",
+        ".saas-merchant-billing-trust-grid",
+        ".saas-merchant-billing-trust-note",
     ]:
         require(styles, incident_style_marker, "billing incident runbook styling")
 

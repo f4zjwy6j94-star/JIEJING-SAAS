@@ -192,6 +192,16 @@ def build_billing_plan(settings: SaaSSettings, repository: SaaSRepository) -> di
             checkout_contract=checkout_contract,
             quota_enforcement_enabled=quota_enforcement_enabled,
         ),
+        "customer_billing_trust_packet": _build_customer_billing_trust_packet(
+            provider=provider,
+            external_provider=external_provider,
+            test_provider=test_provider,
+            provider_contract=provider_contract,
+            checkout_contract=checkout_contract,
+            payment_strategy=payment_strategy,
+            plans_published=plans_published,
+            quota_enforcement_enabled=quota_enforcement_enabled,
+        ),
         "current_usage_shape": {
             "users": counts.get("users", 0),
             "companies": counts.get("companies", 0),
@@ -607,6 +617,145 @@ def _billing_incident_card(
         "signed_webhook_required": signed_webhook_required,
         "frontend_action_allowed": frontend_action_allowed,
         "confirmation_center_required": confirmation_center_required,
+        "creates_checkout_session": False,
+        "calls_stripe_api": False,
+        "triggers_real_charge": False,
+        "charge_now_allowed": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def _build_customer_billing_trust_packet(
+    *,
+    provider: str,
+    external_provider: bool,
+    test_provider: bool,
+    provider_contract: dict[str, Any],
+    checkout_contract: dict[str, Any],
+    payment_strategy: dict[str, Any],
+    plans_published: bool,
+    quota_enforcement_enabled: bool,
+) -> dict[str, Any]:
+    """Merchant-facing billing promises required before public paid launch."""
+
+    checkout_sessions = checkout_contract.get("checkout_sessions") if isinstance(checkout_contract.get("checkout_sessions"), dict) else {}
+    customer_portal = checkout_contract.get("customer_portal") if isinstance(checkout_contract.get("customer_portal"), dict) else {}
+    urls = checkout_contract.get("urls") if isinstance(checkout_contract.get("urls"), dict) else {}
+    merchant_packet = payment_strategy.get("merchant_application_packet") if isinstance(payment_strategy.get("merchant_application_packet"), dict) else {}
+    review_urls = merchant_packet.get("review_urls") if isinstance(merchant_packet.get("review_urls"), dict) else {}
+    customer_brief = merchant_packet.get("customer_review_brief") if isinstance(merchant_packet.get("customer_review_brief"), dict) else {}
+    refund_support = customer_brief.get("refund_and_support") if isinstance(customer_brief.get("refund_and_support"), dict) else {}
+    signed_webhook_ready = bool(provider_contract.get("webhook_configured"))
+    links_ready = bool(review_urls.get("terms") and review_urls.get("privacy") and review_urls.get("refund_policy") and review_urls.get("support"))
+    portal_ready = bool(customer_portal.get("ready")) and bool(urls.get("portal_return_url_configured"))
+    checkout_ready = bool(checkout_sessions.get("ready")) and checkout_sessions.get("mode") == "subscription" and checkout_sessions.get("uses_price_ids") is True
+    cards = [
+        _customer_billing_trust_card(
+            "price_and_renewal_terms",
+            "Plan price and renewal terms",
+            plans_published,
+            merchant_promise="Merchant sees the plan, billing period, quota boundary, cancellation path and usage-cost boundary before payment.",
+            evidence="plan_catalog + merchant billing summary + public terms/refund policy",
+            next_action="Publish live Price IDs and keep subscription/usage/platform-cost boundaries visible before any public charge.",
+        ),
+        _customer_billing_trust_card(
+            "hosted_checkout_payment_boundary",
+            "Hosted subscription checkout",
+            checkout_ready,
+            merchant_promise="Initial subscription payment is hosted by the payment provider; Jiejing frontend never handles card data or provider secrets.",
+            evidence="Checkout Sessions mode=subscription, configured success/cancel URLs, company metadata and Price IDs.",
+            next_action="Use provider-hosted subscription Checkout with stable-domain return URLs.",
+        ),
+        _customer_billing_trust_card(
+            "self_service_cancel_portal",
+            "Self-service billing portal",
+            portal_ready,
+            merchant_promise="Merchant can update payment method, manage plan and cancel through Customer Portal after provider-side proof.",
+            evidence="Customer Portal return URL is configured and request override is locked to backend config.",
+            next_action="Verify Customer Portal plan change and cancellation events through signed webhook before paid launch.",
+        ),
+        _customer_billing_trust_card(
+            "invoice_receipt_tax_path",
+            "Receipt, invoice and tax path",
+            external_provider and plans_published and signed_webhook_ready,
+            merchant_promise="Receipt/invoice/tax questions have a support path and remain linked to provider order, subscription and audit evidence.",
+            evidence="merchant payment application packet + signed webhook/order-query proof + support/refund public pages.",
+            next_action="Finalize merchant entity, settlement identity and tax invoice policy outside the frontend before public paid launch.",
+            owner_approval_required=True,
+        ),
+        _customer_billing_trust_card(
+            "refund_support_public_entry",
+            "Refund and support entry",
+            links_ready,
+            merchant_promise="Merchant can find terms, privacy, refund policy, support and risk disclosure before paying.",
+            evidence="public legal/support URLs are present in the payment-review packet.",
+            next_action="Keep public support contact current and route refund/dispute handling through provider dashboard plus audit.",
+            owner_approval_required=refund_support.get("support_contact_status") != "ready",
+        ),
+        _customer_billing_trust_card(
+            "entitlement_recovery_boundary",
+            "Entitlement recovery boundary",
+            quota_enforcement_enabled,
+            merchant_promise="Payment failure, cancellation, refund or dispute only blocks new metered work; history remains visible and recovery does not repeat eBay OAuth.",
+            evidence="billing incident runbook + subscription/quota shutdown closure.",
+            next_action="Keep no-charge lifecycle rehearsal current for payment failed, cancel, refund and dispute events.",
+        ),
+    ]
+    ready_count = sum(1 for item in cards if item["status"] == "ready")
+    return {
+        "contract_version": "2026-07-01-customer-billing-trust-packet-v1",
+        "provider": provider or "not_selected",
+        "mode": "test_provider_rehearsal" if test_provider else "live_provider_customer_trust",
+        "cards": cards,
+        "ready_count": ready_count,
+        "total_count": len(cards),
+        "blocked_count": len(cards) - ready_count,
+        "next_step": next((item["key"] for item in cards if item["status"] != "ready"), ""),
+        "review_urls": {
+            "terms": str(review_urls.get("terms") or ""),
+            "privacy": str(review_urls.get("privacy") or ""),
+            "refund_policy": str(review_urls.get("refund_policy") or ""),
+            "support": str(review_urls.get("support") or ""),
+            "risk_disclosure": str(review_urls.get("risk_disclosure") or ""),
+        },
+        "checkout_is_hosted_by_provider": True,
+        "customer_can_cancel_in_portal": portal_ready,
+        "invoice_receipt_requires_live_provider": True,
+        "tax_invoice_policy_requires_merchant_entity": True,
+        "support_refund_links_visible": links_ready,
+        "entitlement_recovery_does_not_repeat_ebay_oauth": True,
+        "ready_for_paid_customer_display": external_provider and ready_count == len(cards),
+        "public_charging_allowed": False,
+        "creates_checkout_session": False,
+        "calls_stripe_api": False,
+        "triggers_real_charge": False,
+        "charge_now_allowed": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def _customer_billing_trust_card(
+    key: str,
+    title: str,
+    ready: bool,
+    *,
+    merchant_promise: str,
+    evidence: str,
+    next_action: str,
+    owner_approval_required: bool = False,
+) -> dict[str, Any]:
+    return {
+        "key": key,
+        "title": title,
+        "status": "ready" if ready else "blocked",
+        "severity": "info" if ready else "blocker",
+        "merchant_promise": merchant_promise,
+        "evidence": evidence,
+        "next_action": next_action,
+        "owner_approval_required": owner_approval_required,
+        "frontend_action_allowed": False,
         "creates_checkout_session": False,
         "calls_stripe_api": False,
         "triggers_real_charge": False,

@@ -242,6 +242,48 @@ def main() -> int:
                 return fail(f"billing incident frontend action should stay disabled: {key}")
             if item.get("triggers_real_charge") is not False or item.get("charge_now_allowed") is not False:
                 return fail(f"billing incident card must not trigger charges: {key}")
+        trust_packet = plan.get("customer_billing_trust_packet") if isinstance(plan.get("customer_billing_trust_packet"), dict) else {}
+        trust_cards = {item.get("key"): item for item in trust_packet.get("cards", []) if isinstance(item, dict)}
+        expected_trust_cards = {
+            "price_and_renewal_terms",
+            "hosted_checkout_payment_boundary",
+            "self_service_cancel_portal",
+            "invoice_receipt_tax_path",
+            "refund_support_public_entry",
+            "entitlement_recovery_boundary",
+        }
+        if expected_trust_cards - set(trust_cards):
+            return fail(f"customer billing trust packet missing cards: {expected_trust_cards - set(trust_cards)}")
+        if trust_packet.get("checkout_is_hosted_by_provider") is not True:
+            return fail(f"customer billing trust packet should require hosted checkout: {trust_packet}")
+        if trust_packet.get("customer_can_cancel_in_portal") is not True:
+            return fail(f"customer billing trust packet should prove Customer Portal cancellation path: {trust_packet}")
+        if trust_packet.get("invoice_receipt_requires_live_provider") is not True:
+            return fail(f"invoice/receipt path should require live provider evidence: {trust_packet}")
+        if trust_packet.get("support_refund_links_visible") is not True:
+            return fail(f"customer billing trust packet should expose support/refund links: {trust_packet}")
+        if trust_packet.get("entitlement_recovery_does_not_repeat_ebay_oauth") is not True:
+            return fail("billing recovery must not repeat eBay OAuth")
+        if trust_packet.get("ready_for_paid_customer_display") is not True:
+            return fail(f"Stripe fixture should make customer billing trust packet display-ready: {trust_packet}")
+        for flag in (
+            "public_charging_allowed",
+            "creates_checkout_session",
+            "calls_stripe_api",
+            "triggers_real_charge",
+            "charge_now_allowed",
+            "frontend_gets_payment_secret",
+            "secret_exposed",
+        ):
+            if trust_packet.get(flag) is not False:
+                return fail(f"customer billing trust packet must not enable charge path directly: {flag}={trust_packet.get(flag)}")
+        for key, item in trust_cards.items():
+            if item.get("frontend_action_allowed") is not False:
+                return fail(f"customer billing trust card frontend action should stay disabled: {key}")
+            if item.get("triggers_real_charge") is not False or item.get("charge_now_allowed") is not False:
+                return fail(f"customer billing trust card must not trigger charges: {key}")
+            if item.get("frontend_gets_payment_secret") is not False or item.get("secret_exposed") is not False:
+                return fail(f"customer billing trust card must not expose payment secrets: {key}")
         guards = shutdown_closure.get("shutdown_guards") if isinstance(shutdown_closure.get("shutdown_guards"), dict) else {}
         if guards.get("payment_failure_blocks_metered_work") is not True or guards.get("cancellation_blocks_metered_work") is not True:
             return fail(f"Stripe fixture should prove shutdown guards: {guards}")

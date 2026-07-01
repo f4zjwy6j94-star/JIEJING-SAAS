@@ -39329,6 +39329,100 @@ body.saas-public-mvp .saas-merchant-billing-incident-note {
   background: rgba(255, 255, 255, 0.8);
 }
 
+body.saas-public-mvp .saas-merchant-billing-trust-packet {
+  border-color: rgba(8, 118, 110, 0.18);
+  background: linear-gradient(180deg, #ffffff 0%, #f4fbf8 100%);
+}
+
+body.saas-public-mvp .saas-merchant-billing-trust-packet .saas-settings-card-head {
+  align-items: flex-start;
+}
+
+body.saas-public-mvp .saas-merchant-billing-trust-packet .saas-settings-card-head em {
+  align-self: flex-start;
+  max-width: min(100%, 228px);
+  padding: 7px 9px;
+  border: 1px solid rgba(8, 118, 110, 0.2);
+  border-radius: 8px;
+  background: #eefaf6;
+  color: #08766e;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-merchant-billing-trust-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-merchant-billing-trust-grid article {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(15, 45, 40, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+body.saas-public-mvp .saas-merchant-billing-trust-grid article.is-green {
+  border-color: rgba(8, 118, 110, 0.2);
+  background: #f2fbf8;
+}
+
+body.saas-public-mvp .saas-merchant-billing-trust-grid article.is-amber {
+  border-color: rgba(214, 142, 43, 0.25);
+  background: #fffaf1;
+}
+
+body.saas-public-mvp .saas-merchant-billing-trust-grid article.is-red {
+  border-color: rgba(194, 65, 45, 0.22);
+  background: #fff7f4;
+}
+
+body.saas-public-mvp .saas-merchant-billing-trust-grid span {
+  width: fit-content;
+  padding: 4px 7px;
+  border-radius: 8px;
+  background: rgba(8, 118, 110, 0.09);
+  color: #08766e;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+body.saas-public-mvp .saas-merchant-billing-trust-grid strong,
+body.saas-public-mvp .saas-merchant-billing-trust-note strong {
+  color: #12231f;
+  font-size: 14px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-merchant-billing-trust-grid small,
+body.saas-public-mvp .saas-merchant-billing-trust-note p {
+  margin: 0;
+  color: #5d716b;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-merchant-billing-trust-note {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid rgba(8, 118, 110, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
 body.saas-public-mvp .saas-merchant-billing-guardrail {
   border-color: rgba(8, 118, 110, 0.18);
   background: linear-gradient(180deg, #ffffff 0%, #f8fcfa 100%);

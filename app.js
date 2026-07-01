@@ -25485,6 +25485,7 @@ function saasMerchantBillingGuardrailState() {
   const provider = plan.provider && typeof plan.provider === "object" ? plan.provider : {};
   const quota = plan.quota_contract && typeof plan.quota_contract === "object" ? plan.quota_contract : {};
   const incidentRunbook = plan.billing_incident_runbook && typeof plan.billing_incident_runbook === "object" ? plan.billing_incident_runbook : {};
+  const customerTrustPacket = plan.customer_billing_trust_packet && typeof plan.customer_billing_trust_packet === "object" ? plan.customer_billing_trust_packet : {};
   const checkoutSessions = checkout.checkout_sessions && typeof checkout.checkout_sessions === "object" ? checkout.checkout_sessions : {};
   const portal = checkout.customer_portal && typeof checkout.customer_portal === "object" ? checkout.customer_portal : {};
   const latestTestEvent = state.saasBillingTestEvent && typeof state.saasBillingTestEvent === "object" ? state.saasBillingTestEvent : {};
@@ -25531,6 +25532,7 @@ function saasMerchantBillingGuardrailState() {
     provider,
     quota,
     incidentRunbook,
+    customerTrustPacket,
     checkoutSessions,
     portal,
     latestTestEvent,
@@ -26693,6 +26695,110 @@ function renderSaasMerchantBillingIncidentRunbookPanel(ctx = saasMerchantWorkben
         <span>triggers_real_charge=false</span>
         <span>frontend_gets_payment_secret=false</span>
         <span>repeat_ebay_oauth_allowed=false</span>
+        <span>secret_exposed=false</span>
+        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
+      </div>
+    </section>
+  `;
+}
+
+function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbenchContext()) {
+  const billing = saasMerchantBillingGuardrailState();
+  const packet = billing.customerTrustPacket && typeof billing.customerTrustPacket === "object" ? billing.customerTrustPacket : {};
+  const cards = Array.isArray(packet.cards) ? packet.cards.filter(Boolean) : [];
+  const fallbackCards = [
+    {
+      key: "price_and_renewal_terms",
+      status: "blocked",
+      merchant_promise: "商家付款前必须看到套餐价格、周期、额度边界、取消路径和用量另算边界。",
+      next_action: "发布正式商户 Price ID 和公开套餐说明。",
+    },
+    {
+      key: "hosted_checkout_payment_boundary",
+      status: "blocked",
+      merchant_promise: "首笔订阅支付必须在支付 provider 托管页完成，捷境前端不接触卡号或支付密钥。",
+      next_action: "完成 provider-hosted Checkout 和稳定域名回跳。",
+    },
+    {
+      key: "self_service_cancel_portal",
+      status: "blocked",
+      merchant_promise: "商家能在 Customer Portal 修改付款方式、管理套餐和取消订阅。",
+      next_action: "用签名 webhook 验证 Portal 变更后再发放或停用权益。",
+    },
+    {
+      key: "invoice_receipt_tax_path",
+      status: "blocked",
+      merchant_promise: "收据、发票和税务问题要能关联 provider 订单、订阅和审计证据。",
+      next_action: "确定商户主体、结算身份和税务发票口径。",
+    },
+    {
+      key: "refund_support_public_entry",
+      status: "ready",
+      merchant_promise: "付款前可见服务条款、隐私、退款政策、客服入口和风险披露。",
+      next_action: "保持公开客服入口可达，并把退款/争议留在 provider 后台处理。",
+    },
+    {
+      key: "entitlement_recovery_boundary",
+      status: "blocked",
+      merchant_promise: "欠费、取消、退款或争议只暂停新高成本任务，历史资料保留，恢复不重复 eBay OAuth。",
+      next_action: "保持欠费、取消、退款和争议的 no-charge 生命周期演练。",
+    },
+  ];
+  const visibleCards = cards.length ? cards : fallbackCards;
+  const readyText = `${Number(packet.ready_count || 0)}/${Number(packet.total_count || visibleCards.length)} ready`;
+  const status = packet.ready_for_paid_customer_display ? "可进入付费展示评审" : "仍是上线前说明";
+  const copy = {
+    price_and_renewal_terms: ["价格与续费", "付款前展示套餐价格、周期、取消路径、额度边界和 AI/素材用量另算说明。"],
+    hosted_checkout_payment_boundary: ["托管支付边界", "订阅 Checkout 由支付 provider 托管；捷境浏览器不保存卡号、不生成真实扣费。"],
+    self_service_cancel_portal: ["自助订阅门户", "商家在 Customer Portal 管理付款方式、套餐和取消；权益变化等签名 webhook。"],
+    invoice_receipt_tax_path: ["收据 / 发票 / 税务", "发票和税务口径依赖正式商户主体、provider 订单和后端审计。"],
+    refund_support_public_entry: ["退款与客服入口", "付款前可见条款、隐私、退款政策、客服入口和风险披露。"],
+    entitlement_recovery_boundary: ["权益恢复边界", "欠费、取消、退款或争议只停新高成本任务，历史资料保留，不重复 eBay OAuth。"],
+  };
+  return `
+    <section class="saas-settings-card saas-merchant-billing-trust-packet" data-billing-trust-packet="merchant_billing_customer_trust_packet_v1" aria-label="付费前客户信任说明">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>付费前客户信任说明</span>
+          <strong>商家在付款前要看清楚价格、续费、取消、发票、退款和权益恢复边界</strong>
+          <p>这张卡把“个人码内测”过渡到“正式商户支付”时必须对客户讲清楚的内容集中到一个地方：可以展示套餐价值，但不能让前端创建 Checkout、扣款、接触支付密钥或绕过后端权益判断。</p>
+        </div>
+        <em>${escapeHtml(`${status} · ${readyText}`)}</em>
+      </div>
+      <div class="saas-merchant-billing-trust-grid">
+        ${visibleCards
+          .map((item) => {
+            const [title, detail] = copy[item.key] || [item.title || item.key || "支付说明", item.merchant_promise || ""];
+            const tone = item.status === "ready" ? "green" : item.owner_approval_required ? "amber" : "red";
+            return `
+              <article class="is-${escapeHtml(tone)}">
+                <span>${escapeHtml(item.status || "blocked")}</span>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail || item.merchant_promise || "")}</small>
+                <small>${escapeHtml(item.next_action || "等待正式商户支付证据和主理人确认。")}</small>
+              </article>
+            `;
+          })
+          .join("")}
+      </div>
+      <div class="saas-merchant-billing-trust-note">
+        <strong>当前边界</strong>
+        <p>这只是付费前说明和后端契约展示，不会发起真实 Checkout，不会调用 Stripe API，不会扣款，也不会把支付密钥、卡号或 provider secret 交给浏览器。正式收费仍要等商户主体、Price ID、Customer Portal、签名 webhook、发票/税务和客服证据全部闭合。</p>
+      </div>
+      <div class="saas-merchant-billing-trust-safety" hidden aria-hidden="true">
+        <span>merchant_billing_customer_trust_packet_v1</span>
+        <span>checkout_hosted_by_payment_provider</span>
+        <span>customer_can_cancel_or_update_payment_in_portal</span>
+        <span>invoice_receipt_requires_live_provider</span>
+        <span>tax_invoice_policy_pending_until_merchant_entity</span>
+        <span>billing_support_refund_links_visible</span>
+        <span>entitlement_recovery_does_not_repeat_ebay_oauth</span>
+        <span>ready_for_paid_customer_display=${escapeHtml(String(Boolean(packet.ready_for_paid_customer_display)))}</span>
+        <span>charge_now_allowed=false</span>
+        <span>triggers_real_charge=false</span>
+        <span>creates_checkout_session=false</span>
+        <span>calls_stripe_api=false</span>
+        <span>frontend_gets_payment_secret=false</span>
         <span>secret_exposed=false</span>
         <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
       </div>
@@ -33177,6 +33283,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
         renderSaasBillingTransitionPathPanel(ctx),
         renderSaasBillingProviderRehearsalPanel(ctx),
         renderSaasBillingPaidLaunchBlockersPanel(ctx),
+        renderSaasMerchantBillingCustomerTrustPanel(ctx),
         renderSaasMainlandPaymentStrategyPanel(),
         renderSaasManualBetaPaymentOrderPanel(),
         renderSaasMerchantPricingModelPanel(ctx),
