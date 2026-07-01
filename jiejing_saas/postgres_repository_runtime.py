@@ -21,6 +21,7 @@ JSON_COLUMNS = {
     "invite_json",
     "item_json",
     "job_json",
+    "media_job_json",
     "metadata_json",
     "output_json",
     "packet_json",

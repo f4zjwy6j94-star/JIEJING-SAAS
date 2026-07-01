@@ -213,6 +213,24 @@ class SaaSRepository:
                   job_json text not null
                 );
 
+                create table if not exists media_asset_jobs (
+                  media_job_id text primary key,
+                  company_id text not null,
+                  store_id text not null,
+                  task_id text not null,
+                  queue_job_id text,
+                  provider_job_key text not null,
+                  status text not null,
+                  idempotency_key text not null,
+                  retry_count integer not null,
+                  error_reason text,
+                  created_by text not null,
+                  created_at text not null,
+                  updated_at text not null,
+                  media_job_json text not null,
+                  unique (company_id, idempotency_key)
+                );
+
                 create table if not exists worker_runtime_heartbeats (
                   worker_id text primary key,
                   status text not null,
@@ -380,6 +398,12 @@ class SaaSRepository:
                 migration_id="20260617_worker_runtime_heartbeats",
                 checksum="jiejing-worker-runtime-heartbeats-v20260617",
                 summary="Adds durable worker heartbeat records for deep operational health.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260701_media_asset_jobs",
+                checksum="jiejing-media-asset-jobs-v20260701",
+                summary="Adds provider-neutral media asset job records with idempotency, review and cost gate state.",
             )
 
     def _initialize_postgres(self) -> None:
@@ -1411,6 +1435,250 @@ class SaaSRepository:
                 (status, attempts, updated_at, json.dumps(job_json, ensure_ascii=False), job_id, company_id),
             )
         return self.get_queue_job(job_id=job_id, company_id=company_id) or {}
+
+    def create_media_asset_job(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        task_id: str,
+        user_id: str,
+        provider_job_key: str,
+        idempotency_key: str,
+        job_spec: dict[str, Any],
+        queue_job_id: str | None = None,
+        status: str = "pending",
+    ) -> dict[str, Any]:
+        self.initialize()
+        clean_key = _safe_idempotency_key(idempotency_key)
+        existing = self.get_media_asset_job_by_idempotency(company_id=company_id, idempotency_key=clean_key)
+        if existing:
+            return existing
+        created_at = now_iso()
+        media_job_id = _id("media_job")
+        payload = _redact_secret_like(
+            {
+                "media_job_id": media_job_id,
+                "job_spec": job_spec,
+                "state_history": [
+                    {
+                        "status": status,
+                        "created_at": created_at,
+                        "message": "Media asset job accepted inside Jiejing task protocol. No live media provider was called.",
+                    }
+                ],
+                "lifecycle": [
+                    "pending",
+                    "queued",
+                    "running",
+                    "provider_returned",
+                    "validation_failed",
+                    "waiting_review",
+                    "approved_for_listing",
+                    "needs_rework",
+                ],
+                "live_provider_called": False,
+                "spend_now_allowed": False,
+                "frontend_gets_media_api_key": False,
+                "runtime_gets_raw_secret": False,
+                "secret_exposed": False,
+            }
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into media_asset_jobs (
+                  media_job_id, company_id, store_id, task_id, queue_job_id, provider_job_key,
+                  status, idempotency_key, retry_count, error_reason, created_by, created_at,
+                  updated_at, media_job_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    media_job_id,
+                    company_id,
+                    store_id,
+                    task_id,
+                    queue_job_id or None,
+                    provider_job_key,
+                    status,
+                    clean_key,
+                    0,
+                    "",
+                    user_id,
+                    created_at,
+                    created_at,
+                    json.dumps(payload, ensure_ascii=False, default=json_default),
+                ),
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                user_id=user_id,
+                actor_type="system",
+                action_type="media.asset_job.created",
+                target_type="media_asset_job",
+                target_id=media_job_id,
+                summary="Provider-neutral media asset job record created without live media provider calls.",
+                details={
+                    "task_id": task_id,
+                    "queue_job_id": queue_job_id or "",
+                    "provider_job_key": provider_job_key,
+                    "status": status,
+                    "idempotency_key": clean_key,
+                    "live_provider_called": False,
+                    "spend_now_allowed": False,
+                    "secret_exposed": False,
+                },
+            )
+        return self.get_media_asset_job(company_id=company_id, media_job_id=media_job_id) or {}
+
+    def update_media_asset_job(
+        self,
+        *,
+        company_id: str,
+        media_job_id: str,
+        status: str,
+        queue_job_id: str | None = None,
+        provider_output: dict[str, Any] | None = None,
+        error_reason: str | None = None,
+        retry_delta: int = 0,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        updated_at = now_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                "select * from media_asset_jobs where media_job_id = ? and company_id = ?",
+                (media_job_id, company_id),
+            ).fetchone()
+            if not row:
+                raise KeyError("media asset job not found")
+            payload = _load_json_field(row["media_job_json"])
+            if not isinstance(payload, dict):
+                payload = {}
+            provider_packet = provider_output.get("output_packet") if isinstance(provider_output, dict) and isinstance(provider_output.get("output_packet"), dict) else {}
+            if provider_packet:
+                payload["asset_manifest"] = provider_packet.get("asset_manifest") if isinstance(provider_packet.get("asset_manifest"), list) else []
+                payload["asset_manifest_validation"] = provider_packet.get("asset_manifest_validation") if isinstance(provider_packet.get("asset_manifest_validation"), dict) else {}
+                payload["asset_review"] = provider_packet.get("asset_review") if isinstance(provider_packet.get("asset_review"), dict) else {}
+                payload["cost_guard"] = provider_packet.get("cost_guard") if isinstance(provider_packet.get("cost_guard"), dict) else {}
+                payload["production_gate"] = provider_packet.get("production_gate") if isinstance(provider_packet.get("production_gate"), dict) else {}
+                payload["merchant_visible_states"] = provider_packet.get("merchant_visible_states") if isinstance(provider_packet.get("merchant_visible_states"), list) else []
+                payload["media_router"] = provider_packet.get("media_router") if isinstance(provider_packet.get("media_router"), dict) else {}
+                validation_status = str(payload.get("asset_manifest_validation", {}).get("status") or "")
+                if validation_status and validation_status != "manifest_ready" and status == "waiting_review":
+                    status = "validation_failed"
+                    error_reason = error_reason or "asset_manifest_validation_failed"
+            if isinstance(provider_output, dict):
+                safety = provider_output.get("safety") if isinstance(provider_output.get("safety"), dict) else {}
+                payload["provider_job_status"] = provider_output.get("status")
+                payload["live_provider_called"] = bool(safety.get("live_provider_called"))
+                payload["raw_secret_read"] = bool(safety.get("raw_secret_read"))
+                payload["raw_provider_response_stored"] = bool(safety.get("raw_provider_response_stored"))
+                payload["secret_exposed"] = False
+            if details:
+                payload.setdefault("details", []).append(_redact_secret_like({"created_at": updated_at, **details}))
+            payload.setdefault("state_history", []).append(
+                _redact_secret_like(
+                    {
+                        "status": status,
+                        "created_at": updated_at,
+                        "queue_job_id": queue_job_id or row["queue_job_id"] or "",
+                        "error_reason": error_reason or "",
+                    }
+                )
+            )
+            payload["secret_exposed"] = False
+            retry_count = int(row["retry_count"]) + int(retry_delta or 0)
+            conn.execute(
+                """
+                update media_asset_jobs
+                set status = ?, queue_job_id = ?, retry_count = ?, error_reason = ?, updated_at = ?, media_job_json = ?
+                where media_job_id = ? and company_id = ?
+                """,
+                (
+                    status,
+                    queue_job_id or row["queue_job_id"] or None,
+                    retry_count,
+                    (error_reason or "")[:500],
+                    updated_at,
+                    json.dumps(_redact_secret_like(payload), ensure_ascii=False, default=json_default),
+                    media_job_id,
+                    company_id,
+                ),
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=row["store_id"],
+                user_id=row["created_by"],
+                actor_type="system",
+                action_type="media.asset_job.status_updated",
+                target_type="media_asset_job",
+                target_id=media_job_id,
+                summary="Media asset job status updated inside the provider-neutral asset pipeline.",
+                details={
+                    "task_id": row["task_id"],
+                    "queue_job_id": queue_job_id or row["queue_job_id"] or "",
+                    "provider_job_key": row["provider_job_key"],
+                    "status": status,
+                    "error_reason": error_reason or "",
+                    "live_provider_called": bool(payload.get("live_provider_called")),
+                    "spend_now_allowed": bool((payload.get("cost_guard") or {}).get("spend_now_allowed")) if isinstance(payload.get("cost_guard"), dict) else False,
+                    "secret_exposed": False,
+                },
+            )
+        return self.get_media_asset_job(company_id=company_id, media_job_id=media_job_id) or {}
+
+    def get_media_asset_job(self, *, company_id: str, media_job_id: str) -> dict[str, Any] | None:
+        self.initialize()
+        with self._connect() as conn:
+            row = conn.execute(
+                "select * from media_asset_jobs where company_id = ? and media_job_id = ?",
+                (company_id, media_job_id),
+            ).fetchone()
+        return self._media_asset_job_row_to_dict(row) if row else None
+
+    def get_media_asset_job_by_idempotency(self, *, company_id: str, idempotency_key: str) -> dict[str, Any] | None:
+        self.initialize()
+        clean_key = _safe_idempotency_key(idempotency_key)
+        with self._connect() as conn:
+            row = conn.execute(
+                "select * from media_asset_jobs where company_id = ? and idempotency_key = ?",
+                (company_id, clean_key),
+            ).fetchone()
+        return self._media_asset_job_row_to_dict(row) if row else None
+
+    def list_media_asset_jobs(
+        self,
+        *,
+        company_id: str,
+        store_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        self.initialize()
+        params: list[Any] = [company_id]
+        where = "company_id = ?"
+        if store_id:
+            where += " and store_id = ?"
+            params.append(store_id)
+        if status:
+            where += " and status = ?"
+            params.append(status)
+        params.append(max(1, min(int(limit), 200)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                select * from media_asset_jobs
+                where {where}
+                order by updated_at desc
+                limit ?
+                """,
+                tuple(params),
+            ).fetchall()
+        return [self._media_asset_job_row_to_dict(row) for row in rows]
 
     def heartbeat_queue_job(self, *, job_id: str, company_id: str, worker_id: str, lease_seconds: int = 900) -> dict[str, Any]:
         self.initialize()
@@ -3598,6 +3866,10 @@ class SaaSRepository:
               on queue_jobs(company_id, status, updated_at);
             create index if not exists idx_queue_jobs_task_status
               on queue_jobs(task_id, status);
+            create index if not exists idx_media_asset_jobs_company_store_status
+              on media_asset_jobs(company_id, store_id, status, updated_at);
+            create index if not exists idx_media_asset_jobs_task_queue
+              on media_asset_jobs(task_id, queue_job_id);
             create index if not exists idx_worker_runtime_heartbeats_updated
               on worker_runtime_heartbeats(heartbeat_at);
             create index if not exists idx_task_steps_company_task_order
@@ -3956,6 +4228,36 @@ class SaaSRepository:
             "job": _load_json_field(row["job_json"]),
         }
 
+    def _media_asset_job_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        payload = _load_json_field(row["media_job_json"])
+        if not isinstance(payload, dict):
+            payload = {}
+        return {
+            "media_job_id": row["media_job_id"],
+            "company_id": row["company_id"],
+            "store_id": row["store_id"],
+            "task_id": row["task_id"],
+            "queue_job_id": row["queue_job_id"] or "",
+            "provider_job_key": row["provider_job_key"],
+            "status": row["status"],
+            "idempotency_key": row["idempotency_key"],
+            "retry_count": row["retry_count"],
+            "error_reason": row["error_reason"] or "",
+            "created_by": row["created_by"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "job": _redact_secret_like(payload),
+            "asset_manifest": payload.get("asset_manifest") if isinstance(payload.get("asset_manifest"), list) else [],
+            "asset_manifest_validation": payload.get("asset_manifest_validation") if isinstance(payload.get("asset_manifest_validation"), dict) else {},
+            "asset_review": payload.get("asset_review") if isinstance(payload.get("asset_review"), dict) else {},
+            "cost_guard": payload.get("cost_guard") if isinstance(payload.get("cost_guard"), dict) else {},
+            "production_gate": payload.get("production_gate") if isinstance(payload.get("production_gate"), dict) else {},
+            "merchant_visible_states": payload.get("merchant_visible_states") if isinstance(payload.get("merchant_visible_states"), list) else [],
+            "live_provider_called": bool(payload.get("live_provider_called")),
+            "spend_now_allowed": bool((payload.get("cost_guard") or {}).get("spend_now_allowed")) if isinstance(payload.get("cost_guard"), dict) else False,
+            "secret_exposed": False,
+        }
+
     def _report_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
             "report_id": row["report_id"],
@@ -4238,6 +4540,14 @@ def _parse_iso_datetime(value: str) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _safe_idempotency_key(value: Any) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"[^A-Za-z0-9._:-]+", "-", text)[:160].strip("-._:")
+    if text:
+        return text
+    return f"media-{hashlib.sha256(now_iso().encode('utf-8')).hexdigest()[:24]}"
 
 
 SAFE_SECRET_FLAG_KEYS = {

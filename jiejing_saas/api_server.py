@@ -113,6 +113,7 @@ EXPENSIVE_API_RATE_LIMIT_PREFIXES = (
     "merchant-memory",
     "merchant-ceo-commands",
     "queue-jobs",
+    "media-asset-jobs",
     "workers/",
     "confirmations",
     "execution-results",
@@ -128,6 +129,7 @@ EXPENSIVE_API_RATE_LIMIT_EXACT_PATHS = {
     "billing/test-event",
 }
 SESSION_COOKIE_NAME = "jiejing_saas_session"
+MEDIA_PROVIDER_JOB_KEYS = {"media.asset_generation", "media.fal_asset_generation"}
 
 
 class RequestBodyError(ValueError):
@@ -168,6 +170,19 @@ def _positive_int_env(name: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return value if value > 0 else default
+
+
+def _media_asset_idempotency_key(*, store_id: str, provider_job_key: str, inputs: dict[str, Any], supplied: Any = None) -> str:
+    supplied_text = str(supplied or "").strip()
+    if supplied_text:
+        return supplied_text[:160]
+    fingerprint_payload = {
+        "store_id": store_id,
+        "provider_job_key": provider_job_key,
+        "inputs": _redact_secret_like(inputs),
+    }
+    fingerprint = hashlib.sha256(json.dumps(fingerprint_payload, ensure_ascii=False, sort_keys=True, default=json_default).encode("utf-8")).hexdigest()[:24]
+    return f"media:{store_id}:{fingerprint}"
 
 
 class SaaSBackendServer:
@@ -773,6 +788,31 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._send_json({"queue_jobs": self.repository.list_queue_jobs(company_id=identity["company_id"], status=status, limit=limit)})
             return
 
+        if path == "media-asset-jobs":
+            store_id = query.get("store_id", [None])[0]
+            status = query.get("status", [None])[0]
+            limit = _query_limit(query, default=100, maximum=200) or 100
+            self._send_json(
+                {
+                    "media_asset_jobs": self.repository.list_media_asset_jobs(
+                        company_id=identity["company_id"],
+                        store_id=store_id,
+                        status=status,
+                        limit=limit,
+                    ),
+                    "secret_exposed": False,
+                }
+            )
+            return
+
+        if len(parts) == 2 and parts[0] == "media-asset-jobs":
+            media_job = self.repository.get_media_asset_job(company_id=identity["company_id"], media_job_id=parts[1])
+            if not media_job:
+                self._send_error(HTTPStatus.NOT_FOUND, "media asset job not found")
+                return
+            self._send_json({"media_asset_job": media_job, "secret_exposed": False})
+            return
+
         if path == "queue/health":
             stale_after = _query_limit(query, default=900, maximum=86400) or 900
             self._send_json({"queue_health": self.repository.queue_health_summary(company_id=identity["company_id"], stale_after_seconds=stale_after)})
@@ -801,6 +841,27 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 return
             steps = self.repository.list_task_steps(company_id=identity["company_id"], task_id=parts[1])
             self._send_json({"provider_job_plan": build_provider_workflow_plan(task=task, steps=steps)})
+            return
+
+        if len(parts) == 3 and parts[0] == "stores" and parts[2] == "media-asset-jobs":
+            store_id = parts[1]
+            store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
+            if not store:
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            status = query.get("status", [None])[0]
+            limit = _query_limit(query, default=100, maximum=200) or 100
+            self._send_json(
+                {
+                    "media_asset_jobs": self.repository.list_media_asset_jobs(
+                        company_id=identity["company_id"],
+                        store_id=store_id,
+                        status=status,
+                        limit=limit,
+                    ),
+                    "secret_exposed": False,
+                }
+            )
             return
 
         if len(parts) == 3 and parts[0] == "tasks" and parts[2] == "secret-grant-plan":
@@ -2236,6 +2297,44 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not contract:
                 self._send_error(HTTPStatus.NOT_FOUND, "provider job contract not found")
                 return
+            raw_inputs = body.get("inputs") if isinstance(body.get("inputs"), dict) else {}
+            safe_inputs = _redact_secret_like(raw_inputs)
+            is_media_provider_job = provider_job_key in MEDIA_PROVIDER_JOB_KEYS
+            media_idempotency_key = ""
+            if is_media_provider_job:
+                media_idempotency_key = _media_asset_idempotency_key(
+                    store_id=store_id,
+                    provider_job_key=provider_job_key,
+                    inputs=safe_inputs,
+                    supplied=body.get("idempotency_key"),
+                )
+                existing_media_job = self.repository.get_media_asset_job_by_idempotency(
+                    company_id=identity["company_id"],
+                    idempotency_key=media_idempotency_key,
+                )
+                if existing_media_job:
+                    existing_task = self.repository.get_task(company_id=identity["company_id"], task_id=existing_media_job["task_id"])
+                    existing_queue = None
+                    if existing_media_job.get("queue_job_id"):
+                        existing_queue = self.repository.get_queue_job(
+                            job_id=existing_media_job["queue_job_id"],
+                            company_id=identity["company_id"],
+                        )
+                    self._send_json(
+                        {
+                            "task": existing_task,
+                            "queue_job": existing_queue,
+                            "provider_job_contract": contract,
+                            "worker_result": None,
+                            "provider_job": (existing_task or {}).get("output") if isinstance((existing_task or {}).get("output"), dict) else None,
+                            "media_asset_job": existing_media_job,
+                            "idempotent_replay": True,
+                            "real_platform_writes_enabled": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.ACCEPTED,
+                    )
+                    return
             task = self.repository.create_task(
                 company_id=identity["company_id"],
                 store_id=store_id,
@@ -2246,11 +2345,32 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "provider_job_key": provider_job_key,
                     "provider_family": contract.get("provider_family"),
                     "store_id": store_id,
-                    "inputs": _redact_secret_like(body.get("inputs") if isinstance(body.get("inputs"), dict) else {}),
+                    "inputs": safe_inputs,
                     "contract_version": catalog.get("contract_version"),
+                    "media_asset_idempotency_key": media_idempotency_key,
                     "real_platform_writes_enabled": False,
                 },
             )
+            media_asset_job = None
+            if is_media_provider_job:
+                media_asset_job = self.repository.create_media_asset_job(
+                    company_id=identity["company_id"],
+                    store_id=store_id,
+                    task_id=task["task_id"],
+                    user_id=identity["user_id"],
+                    provider_job_key=provider_job_key,
+                    idempotency_key=media_idempotency_key,
+                    job_spec={
+                        "provider_job_key": provider_job_key,
+                        "contract_version": catalog.get("contract_version"),
+                        "inputs": safe_inputs,
+                        "merchant_visible_provider_name": False,
+                        "live_media_provider_call_allowed": False,
+                        "spend_now_allowed": False,
+                        "secret_exposed": False,
+                    },
+                    status="pending",
+                )
             max_attempts = int(contract.get("max_attempts") or 1)
             job = self.repository.create_queue_job(
                 company_id=identity["company_id"],
@@ -2262,19 +2382,41 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "provider_family": contract.get("provider_family"),
                     "queue": contract.get("queue"),
                     "contract": contract,
-                    "inputs": _redact_secret_like(body.get("inputs") if isinstance(body.get("inputs"), dict) else {}),
+                    "inputs": safe_inputs,
                     "secret_ref": str(body.get("secret_ref") or ""),
+                    "media_job_id": media_asset_job.get("media_job_id") if media_asset_job else "",
+                    "idempotency_key": media_idempotency_key,
                     "run_mode": body.get("run_mode") or "queued",
                     "live_provider_called": False,
                     "real_platform_writes_enabled": False,
                 },
             )
+            if media_asset_job:
+                media_asset_job = self.repository.update_media_asset_job(
+                    company_id=identity["company_id"],
+                    media_job_id=media_asset_job["media_job_id"],
+                    status="queued",
+                    queue_job_id=job["job_id"],
+                    details={
+                        "message": "Media asset job linked to SaaS queue job.",
+                        "queue": contract.get("queue"),
+                        "live_provider_called": False,
+                        "spend_now_allowed": False,
+                        "secret_exposed": False,
+                    },
+                )
             worker_result = None
             run_mode = str(body.get("run_mode") or "queued")
             if run_mode in {"inline", "enqueue_and_wait", "local_worker_now"}:
                 worker_result = self.queue_worker.run_next(company_id=identity["company_id"], job_id=job["job_id"])
                 task = worker_result.get("task") or self.repository.get_task(company_id=identity["company_id"], task_id=task["task_id"]) or task
                 job = worker_result.get("queue_job") or self.repository.get_queue_job(job_id=job["job_id"], company_id=identity["company_id"]) or job
+                media_asset_job = worker_result.get("media_asset_job") if isinstance(worker_result, dict) else media_asset_job
+                if not media_asset_job and is_media_provider_job:
+                    media_asset_job = self.repository.get_media_asset_job_by_idempotency(
+                        company_id=identity["company_id"],
+                        idempotency_key=media_idempotency_key,
+                    )
             self._send_json(
                 {
                     "task": task,
@@ -2282,6 +2424,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "provider_job_contract": contract,
                     "worker_result": worker_result,
                     "provider_job": worker_result.get("provider_job") if isinstance(worker_result, dict) else None,
+                    "media_asset_job": media_asset_job,
+                    "idempotent_replay": False,
                     "real_platform_writes_enabled": False,
                     "secret_exposed": False,
                 },

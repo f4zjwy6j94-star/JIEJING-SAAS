@@ -364,6 +364,7 @@ class LocalQueueWorker:
             status="running",
             audit_summary="Local worker started provider job contract dry-run.",
         )
+        media_asset_job = self._mark_media_asset_job_running(task=task, job=job, job_body=job_body)
         provider_output = self.provider_job_runner.run(
             company_id=task["company_id"],
             store_id=task["store_id"],
@@ -375,6 +376,13 @@ class LocalQueueWorker:
         safety = provider_output.get("safety") if isinstance(provider_output.get("safety"), dict) else {}
         live_provider_called = bool(safety.get("live_provider_called"))
         raw_secret_read = bool(safety.get("raw_secret_read"))
+        media_asset_job = self._complete_media_asset_job(
+            task=task,
+            job=job,
+            job_body=job_body,
+            provider_output=provider_output,
+            current=media_asset_job,
+        )
         action_type = "provider_job.live_read.completed" if live_provider_called else "provider_job.dry_run.completed"
         audit_summary = (
             "Provider job live read completed through a backend adapter. No raw provider response or secret was persisted."
@@ -400,6 +408,8 @@ class LocalQueueWorker:
                 "missing_inputs": provider_output.get("missing_inputs", []),
                 "live_provider_called": live_provider_called,
                 "raw_secret_read": raw_secret_read,
+                "media_asset_job_id": media_asset_job.get("media_job_id") if media_asset_job else "",
+                "media_asset_job_status": media_asset_job.get("status") if media_asset_job else "",
                 "secret_exposed": False,
             },
         )
@@ -420,6 +430,8 @@ class LocalQueueWorker:
                 "live_provider_called": live_provider_called,
                 "raw_secret_read": raw_secret_read,
                 "raw_provider_response_stored": False,
+                "media_asset_job_id": media_asset_job.get("media_job_id") if media_asset_job else "",
+                "media_asset_job_status": media_asset_job.get("status") if media_asset_job else "",
                 "secret_exposed": False,
             },
         )
@@ -429,7 +441,82 @@ class LocalQueueWorker:
             "queue_job": completed_job,
             "steps": [],
             "runtime": None,
-            "saved": {"reports": 0, "confirmations": 0, "provider_jobs": 1},
+            "saved": {"reports": 0, "confirmations": 0, "provider_jobs": 1, "media_asset_jobs": 1 if media_asset_job else 0},
             "provider_job": provider_output,
+            "media_asset_job": media_asset_job,
             "real_platform_writes_enabled": False,
         }
+
+    def _mark_media_asset_job_running(
+        self,
+        *,
+        task: dict[str, Any],
+        job: dict[str, Any],
+        job_body: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if str(job_body.get("provider_job_key") or "") not in {"media.asset_generation", "media.fal_asset_generation"}:
+            return None
+        media_job_id = str(job_body.get("media_job_id") or "").strip()
+        if not media_job_id:
+            return None
+        try:
+            return self.repository.update_media_asset_job(
+                company_id=task["company_id"],
+                media_job_id=media_job_id,
+                status="running",
+                queue_job_id=job["job_id"],
+                details={
+                    "message": "Local worker started provider-neutral media asset pipeline.",
+                    "provider_job_key": job_body.get("provider_job_key"),
+                    "live_provider_called": False,
+                    "secret_exposed": False,
+                },
+            )
+        except Exception:
+            return None
+
+    def _complete_media_asset_job(
+        self,
+        *,
+        task: dict[str, Any],
+        job: dict[str, Any],
+        job_body: dict[str, Any],
+        provider_output: dict[str, Any],
+        current: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if str(provider_output.get("provider_job_key") or job_body.get("provider_job_key") or "") not in {"media.asset_generation", "media.fal_asset_generation"}:
+            return current
+        media_job_id = str(job_body.get("media_job_id") or (current or {}).get("media_job_id") or "").strip()
+        if not media_job_id:
+            return current
+        output_packet = provider_output.get("output_packet") if isinstance(provider_output.get("output_packet"), dict) else {}
+        validation = output_packet.get("asset_manifest_validation") if isinstance(output_packet.get("asset_manifest_validation"), dict) else {}
+        missing_inputs = provider_output.get("missing_inputs") if isinstance(provider_output.get("missing_inputs"), list) else []
+        if missing_inputs:
+            status = "needs_rework"
+            error_reason = "missing_inputs:" + ",".join(str(item) for item in missing_inputs[:8])
+        elif validation.get("status") != "manifest_ready":
+            status = "validation_failed"
+            error_reason = "asset_manifest_validation_failed"
+        else:
+            status = "waiting_review"
+            error_reason = ""
+        try:
+            return self.repository.update_media_asset_job(
+                company_id=task["company_id"],
+                media_job_id=media_job_id,
+                status=status,
+                queue_job_id=job["job_id"],
+                provider_output=provider_output,
+                error_reason=error_reason,
+                details={
+                    "message": "Provider-neutral media asset pipeline completed without live media provider spend.",
+                    "provider_job_key": provider_output.get("provider_job_key"),
+                    "listing_use_status": output_packet.get("asset_review", {}).get("listing_use_status") if isinstance(output_packet.get("asset_review"), dict) else "",
+                    "live_provider_called": False,
+                    "spend_now_allowed": False,
+                    "secret_exposed": False,
+                },
+            )
+        except Exception:
+            return current

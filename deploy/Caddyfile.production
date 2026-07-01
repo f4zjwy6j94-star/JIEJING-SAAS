@@ -27,7 +27,7 @@ app.example.com {
     respond "Not found" 404
   }
 
-  @api path /health /readiness/* /auth/* /me /owner/* /stores* /connections* /secret-refs* /vault/* /database/* /domain/* /queue/* /backup/* /monitoring/* /billing/* /model/* /commercial/* /post-publish/* /provider-job-contracts /independence/* /ebay-read-only/* /ebay-write/* /oauth/* /tasks* /queue-jobs* /reports* /confirmations* /execution-results* /audit-logs*
+  @api path /health /readiness/* /auth/* /me /owner/* /stores* /connections* /secret-refs* /vault/* /database/* /domain/* /queue/* /backup/* /monitoring/* /billing/* /model/* /commercial/* /post-publish/* /provider-job-contracts /independence/* /ebay-read-only/* /ebay-write/* /oauth/* /tasks* /queue-jobs* /media-asset-jobs* /reports* /confirmations* /execution-results* /audit-logs*
   reverse_proxy @api jiejing-saas:8788 {
     header_down -X-Frame-Options
     header_down -X-Content-Type-Options

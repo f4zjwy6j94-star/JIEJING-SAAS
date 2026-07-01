@@ -142,6 +142,24 @@ create table if not exists queue_jobs (
   job_json jsonb not null
 );
 
+create table if not exists media_asset_jobs (
+  media_job_id text primary key,
+  company_id text not null references companies(company_id),
+  store_id text not null references stores(store_id),
+  task_id text not null references tasks(task_id),
+  queue_job_id text references queue_jobs(job_id),
+  provider_job_key text not null,
+  status text not null,
+  idempotency_key text not null,
+  retry_count integer not null,
+  error_reason text,
+  created_by text not null references users(user_id),
+  created_at timestamptz not null,
+  updated_at timestamptz not null,
+  media_job_json jsonb not null,
+  unique (company_id, idempotency_key)
+);
+
 create table if not exists worker_runtime_heartbeats (
   worker_id text primary key,
   status text not null,
@@ -293,6 +311,8 @@ create index if not exists idx_platform_data_packets_company_store_platform_crea
 create index if not exists idx_tasks_company_store_status_updated on tasks(company_id, store_id, status, updated_at);
 create index if not exists idx_queue_jobs_company_status_updated on queue_jobs(company_id, status, updated_at);
 create index if not exists idx_queue_jobs_task_status on queue_jobs(task_id, status);
+create index if not exists idx_media_asset_jobs_company_store_status on media_asset_jobs(company_id, store_id, status, updated_at);
+create index if not exists idx_media_asset_jobs_task_queue on media_asset_jobs(task_id, queue_job_id);
 create index if not exists idx_worker_runtime_heartbeats_updated on worker_runtime_heartbeats(heartbeat_at);
 create index if not exists idx_task_steps_company_task_order on task_steps(company_id, task_id, step_order);
 create index if not exists idx_reports_task_type_created on reports(task_id, report_type, created_at);
@@ -331,6 +351,14 @@ values (
   '20260617_worker_runtime_heartbeats',
   'jiejing-worker-runtime-heartbeats-v20260617',
   'Adds durable worker heartbeat records for deep operational health.'
+)
+on conflict (migration_id) do nothing;
+
+insert into schema_migrations (migration_id, checksum, summary)
+values (
+  '20260701_media_asset_jobs',
+  'jiejing-media-asset-jobs-v20260701',
+  'Adds provider-neutral media asset job records with idempotency, review and cost gate state.'
 )
 on conflict (migration_id) do nothing;
 

@@ -143,6 +143,7 @@ def main() -> int:
         "tools/test_jiejing_owner_launch_control_ui.py",
         "tools/test_jiejing_media_capability_router.py",
         "tools/test_jiejing_media_asset_pipeline.py",
+        "tools/test_jiejing_media_asset_jobs.py",
         "tools/test_jiejing_platform_authorization_strategy.py",
         "tools/test_jiejing_provider_job_contracts.py",
         "tools/test_jiejing_agent_provider_plan.py",

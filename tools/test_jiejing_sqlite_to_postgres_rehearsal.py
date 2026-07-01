@@ -112,10 +112,27 @@ def main() -> int:
         title="Migration rehearsal AI CEO task",
         input_data={"source": "standard_data_packet", "secret_exposed": False},
     )
-    repo.create_queue_job(
+    queue_job = repo.create_queue_job(
         company_id=company["company_id"],
         task_id=task["task_id"],
         job_data={"kind": "runtime_workflow", "source": "standard_data_packet"},
+    )
+    repo.create_media_asset_job(
+        company_id=company["company_id"],
+        store_id=store["store_id"],
+        task_id=task["task_id"],
+        queue_job_id=queue_job["job_id"],
+        user_id=user["user_id"],
+        provider_job_key="media.asset_generation",
+        idempotency_key="migration-media-job-001",
+        job_spec={
+            "provider_job_key": "media.asset_generation",
+            "inputs": {"product": "migration rehearsal product"},
+            "live_media_provider_call_allowed": False,
+            "spend_now_allowed": False,
+            "secret_exposed": False,
+        },
+        status="queued",
     )
     repo.create_task_steps(
         task=task,
@@ -188,7 +205,7 @@ def main() -> int:
         return fail("rehearsal summary should be ready for isolated import")
     if summary.get("secret_exposed") is not False or summary.get("raw_rows_printed") is not False:
         return fail("summary must not expose raw row values or secrets")
-    for table in ("companies", "users", "stores", "platform_data_packets", "tasks", "reports", "confirmations", "execution_results", "audit_logs"):
+    for table in ("companies", "users", "stores", "platform_data_packets", "tasks", "queue_jobs", "media_asset_jobs", "reports", "confirmations", "execution_results", "audit_logs"):
         if summary.get("table_counts", {}).get(table, 0) < 1:
             return fail(f"expected exported rows for {table}")
     if "\"packet_json\"" not in sql or "::jsonb" not in sql:
@@ -199,6 +216,8 @@ def main() -> int:
         return fail("companies must be inserted before users for foreign keys")
     if not _appears_before(sql, 'insert into "stores"', 'insert into "tasks"'):
         return fail("stores must be inserted before tasks for foreign keys")
+    if not _appears_before(sql, 'insert into "queue_jobs"', 'insert into "media_asset_jobs"'):
+        return fail("queue jobs must be inserted before media asset jobs for foreign keys")
     if not _appears_before(sql, 'insert into "confirmations"', 'insert into "execution_results"'):
         return fail("confirmations must be inserted before execution results")
     if "local-test-password" in sql:

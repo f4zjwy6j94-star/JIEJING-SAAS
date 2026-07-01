@@ -209,6 +209,7 @@ FILES=(
   "tools/test_jiejing_account_health_incident_mode.py"
   "tools/test_jiejing_frontend_settings_module_split.py"
   "tools/test_jiejing_media_asset_pipeline.py"
+  "tools/test_jiejing_media_asset_jobs.py"
   "tools/test_jiejing_media_capability_router.py"
   "tools/test_jiejing_platform_authorization_strategy.py"
   "tools/test_jiejing_provider_job_contracts.py"
@@ -402,6 +403,7 @@ python3 -m py_compile \
   tools/test_jiejing_account_health_incident_mode.py \
   tools/test_jiejing_frontend_settings_module_split.py \
   tools/test_jiejing_media_asset_pipeline.py \
+  tools/test_jiejing_media_asset_jobs.py \
   tools/test_jiejing_media_capability_router.py \
   tools/test_jiejing_platform_authorization_strategy.py \
   tools/test_jiejing_provider_job_contracts.py \

@@ -48,6 +48,7 @@ def main() -> int:
         "/commercial",
         "/ebay-read-only",
         "/data-packets",
+        "/media-asset-jobs",
         "/confirmations",
         "/workers",
     ]:
