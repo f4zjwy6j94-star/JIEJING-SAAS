@@ -31,7 +31,7 @@ STEP_PROVIDER_JOBS = {
     "market.report": ["model.role_report_assist"],
     "source.match": ["sourcing.1688_availability"],
     "listing.package": ["ebay.read_only_snapshot", "model.role_report_assist"],
-    "asset.brief": ["media.fal_asset_generation"],
+    "asset.brief": ["media.asset_generation"],
     "customer.learn_product": ["ebay.read_only_snapshot", "model.role_report_assist"],
     "finance.review": ["logistics.orange_connex_quote", "model.role_report_assist"],
     "confirmation.package": ["logistics.orange_connex_quote"],

@@ -32,6 +32,7 @@ def main() -> int:
         "ebay.read_only_snapshot",
         "sourcing.1688_availability",
         "logistics.orange_connex_quote",
+        "media.asset_generation",
         "media.fal_asset_generation",
         "model.role_report_assist",
     }
@@ -51,6 +52,17 @@ def main() -> int:
             return fail(f"contract lacks output/source shape: {item.get('key')}")
         if int(item.get("timeout_seconds") or 0) <= 0 or int(item.get("max_attempts") or 0) <= 0:
             return fail(f"contract lacks timeout/retry: {item.get('key')}")
+        if item.get("key") == "media.asset_generation":
+            if item.get("output_packet") != "asset_manifest":
+                return fail("media asset router must output AssetManifest")
+            if "creative_job_spec" not in item.get("required_inputs", []):
+                return fail("media asset router must require CreativeJobSpec")
+            for marker in {"publish_asset_before_manifest_review", "treat_text_brief_as_generated_asset"}:
+                if marker not in item.get("blocked_actions", []):
+                    return fail(f"media asset router missing blocked action: {marker}")
+        if item.get("key") == "media.fal_asset_generation":
+            if "treat_fal_as_product_identity" not in item.get("blocked_actions", []):
+                return fail("legacy FAL alias must not become product identity")
 
     api_result = validate_runtime_api()
     if api_result:

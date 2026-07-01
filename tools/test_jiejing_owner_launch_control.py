@@ -712,6 +712,18 @@ def main() -> int:
     for key in {"backend_refresh_success_proof_missing", "merchant_willingness_to_pay_and_unit_economics_unproven"}:
         if key not in top_risks:
             return fail(f"expert feasibility review should surface top risk: {key}")
+    operating_model = feasibility.get("operating_model_review") if isinstance(feasibility.get("operating_model_review"), dict) else {}
+    operating_evidence = operating_model.get("evidence") if isinstance(operating_model.get("evidence"), dict) else {}
+    if operating_model.get("status") != "private_beta_operating_model_ready_paid_launch_still_blocked":
+        return fail("expert feasibility review should expose the operating model review")
+    if operating_evidence.get("manual_import_is_valid_beta_lane") is not True:
+        return fail("operating model should keep manual/import as valid beta fallback")
+    if operating_evidence.get("read_only_before_write") is not True or operating_evidence.get("writes_require_confirmation_center") is not True:
+        return fail("operating model should enforce read-only before write and confirmation-gated writes")
+    if operating_evidence.get("asset_manifest_required") is not True or operating_evidence.get("brief_is_not_generated_media") is not True:
+        return fail("operating model should require AssetManifest review before listing use")
+    if "let_merchant_model_choice_bypass_asset_manifest" not in operating_model.get("must_not_do", []):
+        return fail("operating model should block merchant model choice bypassing AssetManifest")
     feasibility_safety = feasibility.get("safety") if isinstance(feasibility.get("safety"), dict) else {}
     for marker in (
         "public_charging_allowed",

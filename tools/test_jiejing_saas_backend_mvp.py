@@ -135,6 +135,20 @@ def main() -> int:
                 return fail(f"platform registry missing {required_platform}")
         if registry.get("guardrails", {}).get("all_writes_confirmation_gated") is not True:
             return fail("platform registry must keep all writes confirmation-gated")
+        authorization_strategy = registry.get("authorization_strategy") if isinstance(registry.get("authorization_strategy"), dict) else {}
+        authorization_rules = authorization_strategy.get("operating_rules") if isinstance(authorization_strategy.get("operating_rules"), dict) else {}
+        if authorization_strategy.get("product_positioning") != "eBay-first AI CEO SaaS":
+            return fail("platform authorization strategy must keep Jiejing eBay-first")
+        if authorization_rules.get("manual_import_is_a_valid_beta_lane") is not True:
+            return fail("platform strategy must preserve manual/import beta fallback")
+        if authorization_rules.get("read_only_before_write") is not True or authorization_rules.get("writes_require_confirmation_center") is not True:
+            return fail("platform strategy must require read-only before write and confirmation-gated writes")
+        amazon_lane = next(
+            (item for item in authorization_strategy.get("lanes", []) if isinstance(item, dict) and item.get("key") == "amazon_sp_api"),
+            {},
+        )
+        if amazon_lane.get("current_role") != "future_reserved_not_p0":
+            return fail("Amazon SP-API should be reserved and not a P0 blocker")
         ebay_platform = fetch_json(f"{base_url}/platforms/ebay").get("platform", {})
         if ebay_platform.get("priority") != "current_primary":
             return fail("eBay should remain the current primary platform")
@@ -913,8 +927,8 @@ def main() -> int:
             return fail("market data packet step should declare its public-search provider job")
         if "sourcing.1688_availability" not in provider_steps.get("source.match", []):
             return fail("source matching step should declare its sourcing provider job")
-        if "media.fal_asset_generation" not in provider_steps.get("asset.brief", []):
-            return fail("asset brief step should declare its media provider job")
+        if "media.asset_generation" not in provider_steps.get("asset.brief", []):
+            return fail("asset brief step should declare its provider-neutral media provider job")
         if workflow.get("queue_job", {}).get("status") != "queued":
             return fail("workflow creation should enqueue a job before worker execution")
         if workflow.get("runtime") is not None:
@@ -923,7 +937,7 @@ def main() -> int:
         if provider_plan.get("provider_step_count", 0) < 8:
             return fail("provider job plan should expand workflow steps into provider work units")
         provider_job_keys = {item.get("provider_job_key") for item in provider_plan.get("provider_steps", [])}
-        for required_provider_job in {"public_search.market_research", "ebay.read_only_snapshot", "sourcing.1688_availability", "media.fal_asset_generation", "logistics.orange_connex_quote", "model.role_report_assist"}:
+        for required_provider_job in {"public_search.market_research", "ebay.read_only_snapshot", "sourcing.1688_availability", "media.asset_generation", "logistics.orange_connex_quote", "model.role_report_assist"}:
             if required_provider_job not in provider_job_keys:
                 return fail(f"provider job plan missing {required_provider_job}")
         if provider_plan.get("secret_exposed") is not False or provider_plan.get("real_platform_writes_enabled") is not False:

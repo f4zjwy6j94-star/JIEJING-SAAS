@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from jiejing_runtime.media_capability_router import build_media_capability_router
 from jiejing_runtime.provider_job_contracts import build_provider_job_contract_catalog
 
 
@@ -158,12 +159,21 @@ def _derive_provider_inputs(
             "package_dimensions_cm": package_dimensions,
             "service_hint": task_input.get("service_hint") or "SpeedPAK Economy",
         }
-    if contract_key == "media.fal_asset_generation":
+    if contract_key in {"media.asset_generation", "media.fal_asset_generation"}:
+        router = build_media_capability_router(
+            preferred_model_provider=str(task_input.get("model_provider") or task_input.get("ai_model_provider") or ""),
+            media_provider=str(task_input.get("media_provider") or ""),
+            image_provider_configured=False,
+            video_provider_configured=False,
+            voice_provider_configured=False,
+        )
         return {
+            "creative_job_spec": router.get("creative_job_spec"),
             "product_facts": {
                 "product": product,
                 "supplier_facts": supplier_facts,
                 "listing_context": market_probe,
+                "forbidden_claims": router.get("creative_job_spec", {}).get("blocked_claims", []),
             },
             "image_count": task_input.get("image_count") or 6,
             "image_sizes": task_input.get("image_sizes") or ["1:1", "4:5", "16:9"],

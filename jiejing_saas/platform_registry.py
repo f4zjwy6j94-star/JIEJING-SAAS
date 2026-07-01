@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .platform_authorization_strategy import build_platform_authorization_strategy
+
 
 COMMON_SECRET_BOUNDARY = {
     "frontend": "never_collect_or_store_raw_secrets",
@@ -270,6 +272,7 @@ def registry_summary() -> dict[str, Any]:
         "current_primary": "ebay",
         "platform_count": len(definitions),
         "platforms": definitions,
+        "authorization_strategy": build_platform_authorization_strategy(),
         "guardrails": {
             "public_product_focus": "eBay-first AI CEO operations workbench",
             "other_platforms": "reserved_as_future_sales_sourcing_or_reference_connectors",

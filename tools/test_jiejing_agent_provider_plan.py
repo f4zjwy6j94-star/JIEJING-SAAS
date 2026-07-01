@@ -50,8 +50,8 @@ def main() -> int:
         return fail("listing package should require eBay metadata and model report provider jobs")
     asset = next((item for item in plan.get("planned_tasks", []) if item.get("task_type") == "asset.brief"), {})
     asset_keys = {job.get("provider_job_key") for job in asset.get("provider_jobs", [])}
-    if "media.fal_asset_generation" not in asset_keys:
-        return fail("asset brief should require the media provider job")
+    if "media.asset_generation" not in asset_keys:
+        return fail("asset brief should require the provider-neutral media asset job")
     print("PASS jiejing_agent_provider_plan")
     return 0
 

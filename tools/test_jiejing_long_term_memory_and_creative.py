@@ -79,6 +79,17 @@ def main() -> int:
             return fail(f"creative capability missing {key}")
     if creative.get("must_not_copy_closed_product_internals") is not True:
         return fail("creative profile should forbid copying closed product internals")
+    router = creative.get("media_capability_router") if isinstance(creative.get("media_capability_router"), dict) else {}
+    if router.get("router_version") != "2026-07-01-media-capability-router-v1":
+        return fail("creative profile should expose the media capability router")
+    if router.get("asset_contract", {}).get("all_generated_or_uploaded_assets_must_return_manifest") is not True:
+        return fail("media assets must return through AssetManifest")
+    if router.get("asset_contract", {}).get("brief_is_not_generated_media") is not True:
+        return fail("creative brief must not be treated as generated media")
+    if router.get("routing_decision", {}).get("uses_single_asset_manifest") is not True:
+        return fail("media routing should use one asset manifest contract")
+    if router.get("safety", {}).get("calls_image_provider") is not False or router.get("safety", {}).get("calls_video_provider") is not False:
+        return fail("creative capability profile must remain read-only")
 
     tool_names = {item.get("name") for item in ToolRegistry().list_tools()}
     for name in {"runtime.long_term_memory", "asset.open_design_workflow", "asset.image_generation_provider", "asset.video_generation_provider"}:

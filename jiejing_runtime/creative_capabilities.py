@@ -12,6 +12,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from .media_capability_router import build_media_capability_router
 from .media_generation import MediaGenerationAdapter
 
 
@@ -42,6 +43,13 @@ class CreativeCapabilityProfile:
         self.fal_status = MediaGenerationAdapter().provider_status("fal")
 
     def to_dict(self) -> dict[str, Any]:
+        media_router = build_media_capability_router(
+            preferred_model_provider=os.environ.get("JIEJING_MODEL_PROVIDER") or os.environ.get("JIEJING_MODEL_API_STYLE") or "",
+            media_provider=os.environ.get("JIEJING_MEDIA_GENERATION_PROVIDER") or self.image_provider or self.video_provider or "",
+            image_provider_configured=bool(self.image_provider or self.fal_status.get("configured")),
+            video_provider_configured=bool(self.video_provider or self.fal_status.get("configured")),
+            voice_provider_configured=bool(self.voice_provider),
+        )
         capabilities = [
             CreativeCapability(
                 key="open_design_method",
@@ -113,8 +121,9 @@ class CreativeCapabilityProfile:
             "provider_status": {
                 "fal": self.fal_status,
             },
+            "media_capability_router": media_router,
             "capabilities": [item.to_dict() for item in capabilities],
             "can_match_claude_or_open_design_style_workflows": True,
             "must_not_copy_closed_product_internals": True,
-            "next_engineering_step": "Bind image/video/voice providers behind the asset manifest contract, then let Asset Agent request real media files.",
+            "next_engineering_step": "Route all image, video, voice, uploaded, and model-assisted assets through media.asset_generation and AssetManifest review.",
         }

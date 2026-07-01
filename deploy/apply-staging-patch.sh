@@ -92,8 +92,12 @@ FILES=(
   "jiejing_saas/operational_health.py"
   "jiejing_saas/owner_launch_control.py"
   "jiejing_saas/feasibility_review.py"
+  "jiejing_saas/platform_authorization_strategy.py"
+  "jiejing_saas/platform_registry.py"
   "jiejing_saas/paid_launch_approval_packet.py"
   "jiejing_saas/post_publish_cockpit.py"
+  "jiejing_saas/provider_job_runner.py"
+  "jiejing_saas/provider_workflow_plan.py"
   "jiejing_saas/model_value_gate.py"
   "jiejing_saas/model_value_rehearsal.py"
   "jiejing_saas/monitoring.py"
@@ -115,12 +119,19 @@ FILES=(
   "jiejing_saas/ebay_oauth.py"
   "jiejing_saas/ebay_oauth_callback.py"
   "jiejing_saas/ebay_write_adapter.py"
+  "jiejing_saas/workflow_plan.py"
   "jiejing_saas/migrations/001_initial_schema_postgres.sql"
   "jiejing_runtime/execution_preflight.py"
+  "jiejing_runtime/__init__.py"
+  "jiejing_runtime/agent_provider_plan.py"
   "jiejing_runtime/agent_team.py"
+  "jiejing_runtime/creative_capabilities.py"
+  "jiejing_runtime/media_capability_router.py"
   "jiejing_runtime/model_clients.py"
   "jiejing_runtime/owned_agents.py"
   "jiejing_runtime/policies.py"
+  "jiejing_runtime/provider_job_contracts.py"
+  "jiejing_runtime/replacement_readiness.py"
   "jiejing_runtime/adapters.py"
   "tools/jiejing_sqlite_to_postgres_rehearsal.py"
   "tools/jiejing_cost_saver_snapshot.py"
@@ -196,6 +207,12 @@ FILES=(
   "tools/test_jiejing_queue_recovery_heartbeat.py"
   "tools/test_jiejing_account_health_incident_mode.py"
   "tools/test_jiejing_frontend_settings_module_split.py"
+  "tools/test_jiejing_media_capability_router.py"
+  "tools/test_jiejing_platform_authorization_strategy.py"
+  "tools/test_jiejing_provider_job_contracts.py"
+  "tools/test_jiejing_agent_provider_plan.py"
+  "tools/test_jiejing_saas_provider_jobs.py"
+  "tools/test_jiejing_long_term_memory_and_creative.py"
   "tools/test_jiejing_new_ebay_account_low_risk_runbook.py"
   "tools/test_jiejing_paid_launch_approval_packet.py"
   "tools/test_jiejing_domain_pending_purchase_preflight.py"
@@ -274,8 +291,13 @@ python3 -m py_compile \
   jiejing_saas/infrastructure_drivers.py \
   jiejing_saas/operational_health.py \
   jiejing_saas/owner_launch_control.py \
+  jiejing_saas/feasibility_review.py \
+  jiejing_saas/platform_authorization_strategy.py \
+  jiejing_saas/platform_registry.py \
   jiejing_saas/paid_launch_approval_packet.py \
   jiejing_saas/post_publish_cockpit.py \
+  jiejing_saas/provider_job_runner.py \
+  jiejing_saas/provider_workflow_plan.py \
   jiejing_saas/model_value_gate.py \
   jiejing_saas/model_value_rehearsal.py \
   jiejing_saas/postgres_repository_runtime.py \
@@ -294,11 +316,18 @@ python3 -m py_compile \
   jiejing_saas/ebay_oauth.py \
   jiejing_saas/ebay_oauth_callback.py \
   jiejing_saas/ebay_write_adapter.py \
+  jiejing_saas/workflow_plan.py \
   jiejing_runtime/execution_preflight.py \
+  jiejing_runtime/__init__.py \
+  jiejing_runtime/agent_provider_plan.py \
   jiejing_runtime/agent_team.py \
+  jiejing_runtime/creative_capabilities.py \
+  jiejing_runtime/media_capability_router.py \
   jiejing_runtime/model_clients.py \
   jiejing_runtime/owned_agents.py \
   jiejing_runtime/policies.py \
+  jiejing_runtime/provider_job_contracts.py \
+  jiejing_runtime/replacement_readiness.py \
   jiejing_runtime/adapters.py \
   tools/jiejing_sqlite_to_postgres_rehearsal.py \
   tools/jiejing_cost_saver_snapshot.py \
@@ -369,6 +398,12 @@ python3 -m py_compile \
   tools/test_jiejing_queue_recovery_heartbeat.py \
   tools/test_jiejing_account_health_incident_mode.py \
   tools/test_jiejing_frontend_settings_module_split.py \
+  tools/test_jiejing_media_capability_router.py \
+  tools/test_jiejing_platform_authorization_strategy.py \
+  tools/test_jiejing_provider_job_contracts.py \
+  tools/test_jiejing_agent_provider_plan.py \
+  tools/test_jiejing_saas_provider_jobs.py \
+  tools/test_jiejing_long_term_memory_and_creative.py \
   tools/test_jiejing_new_ebay_account_low_risk_runbook.py \
   tools/test_jiejing_paid_launch_approval_packet.py \
   tools/test_jiejing_domain_pending_purchase_preflight.py \

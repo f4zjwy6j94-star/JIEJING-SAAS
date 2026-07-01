@@ -41,6 +41,7 @@ from .ebay_listing_metadata import EbayListingMetadataAdapter, EbayListingMetada
 from .ebay_credentials import EbayCredentialResolver
 from .ebay_provider_status import EbayProviderStatus
 from .media_generation import MediaGenerationAdapter, MediaGenerationConfig
+from .media_capability_router import build_media_capability_router
 from .tool_orchestrator import JiejingToolOrchestrator
 from .shadow_compare import RuntimeComparisonScorer
 from .listing_package import ListingPackageValidator
@@ -115,6 +116,7 @@ __all__ = [
     "EbayProviderStatus",
     "MediaGenerationAdapter",
     "MediaGenerationConfig",
+    "build_media_capability_router",
     "JiejingToolOrchestrator",
     "RuntimeComparisonScorer",
     "ListingPackageValidator",

@@ -137,10 +137,10 @@ def build_replacement_readiness(repo: RuntimeRepositoryView | None = None) -> di
             key="media_generation_pipeline",
             label="图片视频生成流水线",
             max_score=8,
-            score=4 if _truthy(providers.get("media_fal", {}).get("configured")) else 2 if "media.fal_asset_generation" in provider_job_keys else 1,
+            score=4 if _truthy(providers.get("media_fal", {}).get("configured")) else 2 if "media.asset_generation" in provider_job_keys else 1,
             status="provider_configured" if _truthy(providers.get("media_fal", {}).get("configured")) else "contract_only",
             evidence=[
-                f"FAL configured={providers.get('media_fal', {}).get('configured')}",
+                f"media router contract={'media.asset_generation' in provider_job_keys} / legacy FAL configured={providers.get('media_fal', {}).get('configured')}",
                 "素材 Agent 可以接收 manifest；媒体生成已有队列作业合同，并把素材结果写回报告正文。",
             ],
             remaining=["还要做真实生成队列、费用控制、失败重试、版权/肖像/商品事实校验、视频质量验收。"],

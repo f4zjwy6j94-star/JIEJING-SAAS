@@ -222,7 +222,7 @@ def _provider_job_runner_item() -> ReadinessItem:
         "ebay.read_only_snapshot",
         "sourcing.1688_availability",
         "logistics.orange_connex_quote",
-        "media.fal_asset_generation",
+        "media.asset_generation",
         "model.role_report_assist",
     }
     if not required.issubset(keys):

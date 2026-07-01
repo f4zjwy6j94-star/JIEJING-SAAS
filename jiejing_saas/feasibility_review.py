@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from jiejing_runtime.media_capability_router import build_media_capability_router
+
+from .platform_authorization_strategy import build_platform_authorization_strategy
+
 
 FEASIBILITY_REVIEW_VERSION = "2026-07-01-expert-feasibility-review-v1"
 
@@ -44,6 +48,8 @@ def build_feasibility_review(
     paid_launch_ready = bool(launch_gate.get("paid_commercial_launch_ready"))
     refresh_success_count = _as_int(evidence.get("ebay_token_refresh_success_count"))
     official_packet_ready = _official_packet_ready(evidence)
+    authorization_strategy = build_platform_authorization_strategy()
+    media_router = build_media_capability_router(preferred_model_provider="deepseek")
     expert_reviews = [
         _expert_review(
             "product_market_fit",
@@ -192,12 +198,17 @@ def build_feasibility_review(
             "next_step": top_risks[0] if top_risks else "owner_final_approval",
         },
         "expert_reviews": expert_reviews,
+        "operating_model_review": _operating_model_review(
+            authorization_strategy=authorization_strategy,
+            media_router=media_router,
+        ),
         "top_risks": top_risks,
         "next_7_day_actions": [
             "Keep public staging smoke, secret scan and readiness evidence current after every change.",
             "Close live merchant payment evidence before any public charging copy or switch.",
             "Wait for a clean new eBay account before any new OAuth or real listing smoke.",
             "Use live model value rehearsal on sanitized official packets to justify paid plan positioning.",
+            "Route all image and video work through media.asset_generation, then AssetManifest review.",
         ],
         "safety": _safety_flags(),
         **_safety_flags(),
@@ -255,6 +266,46 @@ def _safety_flags() -> dict[str, bool]:
         "exports_raw_secret": False,
         "exports_database": False,
         "secret_exposed": False,
+    }
+
+
+def _operating_model_review(
+    *,
+    authorization_strategy: dict[str, Any],
+    media_router: dict[str, Any],
+) -> dict[str, Any]:
+    media_asset_contract = media_router.get("asset_contract") if isinstance(media_router.get("asset_contract"), dict) else {}
+    authorization_rules = (
+        authorization_strategy.get("operating_rules") if isinstance(authorization_strategy.get("operating_rules"), dict) else {}
+    )
+    return {
+        "key": "jiejing_operating_model",
+        "status": "private_beta_operating_model_ready_paid_launch_still_blocked",
+        "plain_language": {
+            "secret_boundary": "Browser, Agent, and Runtime receive work packets and secret_refs; raw eBay, model, media, and payment secrets stay behind backend Vault/env/provider adapters.",
+            "platform_api_strategy": "Future marketplace API approval delays do not collapse Jiejing. eBay stays first; other platforms start with manual import/export or read-only lanes, then graduate one adapter at a time.",
+            "media_strategy": "Merchant models act as the brain. Image, video, voice, upload, and external providers are drivers. Every output must become an AssetManifest before Listing use.",
+        },
+        "evidence": {
+            "authorization_strategy_version": authorization_strategy.get("strategy_version"),
+            "manual_import_is_valid_beta_lane": authorization_rules.get("manual_import_is_a_valid_beta_lane") is True,
+            "read_only_before_write": authorization_rules.get("read_only_before_write") is True,
+            "writes_require_confirmation_center": authorization_rules.get("writes_require_confirmation_center") is True,
+            "media_router_version": media_router.get("router_version"),
+            "deepseek_text_only_fallback_encoded": media_router.get("selected_model_provider") == "deepseek",
+            "asset_manifest_required": media_asset_contract.get("all_generated_or_uploaded_assets_must_return_manifest") is True,
+            "brief_is_not_generated_media": media_asset_contract.get("brief_is_not_generated_media") is True,
+        },
+        "must_not_do": _dedupe(
+            list(authorization_strategy.get("blocked_actions") or [])
+            + [
+                "let_merchant_model_choice_bypass_asset_manifest",
+                "treat_fal_or_any_media_driver_as_product_identity",
+                "claim_image_or_video_generated_without_manifest",
+            ]
+        ),
+        "secret_exposed": False,
+        **_safety_flags(),
     }
 
 

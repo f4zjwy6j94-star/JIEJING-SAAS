@@ -77,7 +77,7 @@ def main() -> int:
 
         catalog = fetch_json(f"{base_url}/provider-job-contracts", token=token).get("provider_job_contracts", {})
         keys = {item.get("key") for item in catalog.get("contracts", [])}
-        if "sourcing.1688_availability" not in keys or "media.fal_asset_generation" not in keys:
+        if "sourcing.1688_availability" not in keys or "media.asset_generation" not in keys or "media.fal_asset_generation" not in keys:
             return fail("SaaS backend should expose provider job contracts")
         if catalog.get("secret_exposed") is not False:
             return fail("provider catalog must not expose secrets")
@@ -121,6 +121,40 @@ def main() -> int:
         audit = fetch_json(f"{base_url}/audit-logs?limit=80", token=token).get("audit_logs", [])
         if not any(item.get("action_type") == "provider_job.dry_run.completed" for item in audit):
             return fail("provider dry-run should write an audit record")
+
+        media = post_json(
+            f"{base_url}/stores/{store_id}/provider-jobs/queue",
+            {
+                "provider_job_key": "media.asset_generation",
+                "title": "Dry-run provider-neutral media asset generation",
+                "inputs": {
+                    "creative_job_spec": {"job_type": "eBay_listing_asset_package"},
+                    "product_facts": {"product": "stainless steel tumbler", "forbidden_claims": ["unverified_certification"]},
+                    "image_count": 2,
+                    "image_sizes": ["1:1"],
+                    "scene_types": ["white_background", "detail_page"],
+                    "video_script": "15 second product demo script",
+                },
+                "run_mode": "local_worker_now",
+            },
+            token=token,
+        )
+        media_provider = media.get("provider_job", {})
+        if media_provider.get("status") != "completed_dry_run":
+            return fail("provider-neutral media dry-run should complete")
+        media_packet = media_provider.get("output_packet", {})
+        media_router = media_packet.get("media_router") if isinstance(media_packet.get("media_router"), dict) else {}
+        if media_router.get("canonical_contract_key") != "media.asset_generation":
+            return fail("media dry-run should use the provider-neutral canonical contract")
+        manifest = media_packet.get("asset_manifest") if isinstance(media_packet.get("asset_manifest"), list) else []
+        if not manifest:
+            return fail("media dry-run should return an AssetManifest")
+        for item in manifest:
+            if item.get("listing_use_status") != "not_ready_for_listing_until_review":
+                return fail("media assets must wait for listing review")
+            for key in ("url_or_file_path", "dimensions_or_duration", "source_provider_or_upload", "commercial_use_status", "fact_review_status"):
+                if key not in item:
+                    return fail(f"media manifest missing field: {key}")
 
         blocked = post_json(
             f"{base_url}/stores/{store_id}/provider-jobs/queue",
