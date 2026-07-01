@@ -67,6 +67,16 @@ def main() -> int:
         applied = repo.apply_billing_webhook_event(event=accepted["event"])
         if applied.get("status") != "applied":
             return fail(f"active webhook should apply to company subscription: {applied}")
+        duplicate = repo.apply_billing_webhook_event(event=accepted["event"])
+        if duplicate.get("status") != "applied_duplicate_ignored" or duplicate.get("duplicate_event") is not True:
+            return fail(f"duplicate webhook should be idempotently ignored: {duplicate}")
+        applied_audits = [
+            item
+            for item in repo.list_audit_logs(company_id=company_id, limit=20)
+            if item.get("action_type") == "billing.webhook.applied"
+        ]
+        if len(applied_audits) != 1:
+            return fail(f"duplicate webhook must not write a second entitlement audit: {applied_audits}")
         subscription = repo.get_billing_subscription(company_id=company_id)
         if not subscription or subscription.get("plan_key") != "operator" or subscription.get("entitlement_active") is not True:
             return fail(f"operator subscription should be active: {subscription}")
@@ -95,10 +105,61 @@ def main() -> int:
         if quota.get("allowed") is not False or quota.get("reason") != "billing_subscription_not_active":
             return fail(f"quota should hard-stop inactive paid subscription: {quota}")
 
+        unsupported_fixture = repo.create_user_with_company(
+            email="billing-webhook-unsupported@example.com",
+            password="local-test-password",
+            company_name="Billing Webhook Unsupported Merchant",
+        )
+        unsupported_company_id = unsupported_fixture["company"]["company_id"]
+        unsupported_event = _stripe_subscription_event(
+            event_id="evt_unsupported_customer_source",
+            event_type="customer.source.updated",
+            company_id=unsupported_company_id,
+            subscription_id="sub_unsupported_unit",
+            customer_id="cus_unsupported_unit",
+            status="active",
+            price_id="price_starter_unit",
+        )
+        unsupported = handle_billing_webhook(raw_body=unsupported_event, headers=_stripe_headers(unsupported_event))
+        if unsupported.get("ok") is not True or unsupported.get("event", {}).get("supported_event") is not False:
+            return fail(f"unsupported signed event should normalize without entitlement support: {unsupported}")
+        unsupported_applied = repo.apply_billing_webhook_event(event=unsupported["event"])
+        if unsupported_applied.get("status") != "accepted_unmapped_unsupported_billing_event":
+            return fail(f"unsupported event must not grant entitlement: {unsupported_applied}")
+        if repo.get_billing_subscription(company_id=unsupported_company_id):
+            return fail("unsupported signed event should not create a subscription")
+
+        missing_id_fixture = repo.create_user_with_company(
+            email="billing-webhook-missing-id@example.com",
+            password="local-test-password",
+            company_name="Billing Webhook Missing Id Merchant",
+        )
+        missing_id_company_id = missing_id_fixture["company"]["company_id"]
+        missing_id_event = _stripe_subscription_event(
+            event_id="",
+            event_type="customer.subscription.updated",
+            company_id=missing_id_company_id,
+            subscription_id="sub_missing_id_unit",
+            customer_id="cus_missing_id_unit",
+            status="active",
+            price_id="price_starter_unit",
+        )
+        missing_id = handle_billing_webhook(raw_body=missing_id_event, headers=_stripe_headers(missing_id_event))
+        if missing_id.get("ok") is not True or missing_id.get("event", {}).get("event_id_present") is not False:
+            return fail(f"missing-id signed event should stay sanitized: {missing_id}")
+        missing_id_applied = repo.apply_billing_webhook_event(event=missing_id["event"])
+        if missing_id_applied.get("status") != "accepted_unmapped_billing_event_id_missing":
+            return fail(f"missing event_id must not grant entitlement: {missing_id_applied}")
+        if repo.get_billing_subscription(company_id=missing_id_company_id):
+            return fail("event without provider event_id should not create a subscription")
+
         serialized = json.dumps(
             {
                 "accepted": accepted,
                 "applied": applied,
+                "duplicate": duplicate,
+                "unsupported": unsupported_applied,
+                "missing_id": missing_id_applied,
                 "usage": usage,
                 "failed": failed,
                 "quota": quota,

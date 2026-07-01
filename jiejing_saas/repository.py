@@ -3043,6 +3043,31 @@ class SaaSRepository:
 
         now = now_iso()
         event_key = _billing_event_key(provider=provider, event_id=event_id, event_type=event_type, fallback=now)
+        status = _billing_entitlement_status(str(event.get("subscription_status") or ""), event_type=event_type)
+        plan_key = str(event.get("plan_key") or "").strip().lower() or "unknown"
+        if plan_key not in {"starter", "operator", "team", "unknown"}:
+            plan_key = "unknown"
+        if plan_key == "unknown" and existing_subscription:
+            plan_key = str(existing_subscription.get("plan_key") or "unknown")
+        if not provider_plan_id and existing_subscription:
+            provider_plan_id = str(existing_subscription.get("provider_plan_id") or "")
+        if not provider_customer_id and existing_subscription:
+            provider_customer_id = str(existing_subscription.get("provider_customer_id") or "")
+        if not provider_subscription_id and existing_subscription:
+            provider_subscription_id = str(existing_subscription.get("provider_subscription_id") or "")
+        entitlement_blockers = _billing_entitlement_apply_blockers(
+            event=event,
+            event_id=event_id,
+            event_type=event_type,
+            company_id=company_id,
+            provider_customer_id=provider_customer_id,
+            provider_subscription_id=provider_subscription_id,
+            provider_plan_id=provider_plan_id,
+            plan_key=plan_key,
+            status=status,
+            existing_subscription=existing_subscription,
+        )
+        event_status = _billing_unmapped_status(entitlement_blockers)
         event_record = _redact_secret_like(
             {
                 **event,
@@ -3051,11 +3076,11 @@ class SaaSRepository:
                 "provider_customer_id_present": bool(provider_customer_id),
                 "provider_subscription_id_present": bool(provider_subscription_id),
                 "provider_plan_id_present": bool(provider_plan_id),
+                "entitlement_apply_blockers": entitlement_blockers,
                 "raw_payload_persisted": False,
             }
         )
         subscription_record: dict[str, Any] | None = None
-        event_status = "accepted_unmapped"
         with self._connect() as conn:
             inserted_event = conn.execute(
                 """
@@ -3074,19 +3099,34 @@ class SaaSRepository:
                 ),
             ).rowcount
             duplicate_event = inserted_event == 0
-            if company_id:
-                status = _billing_entitlement_status(str(event.get("subscription_status") or ""), event_type=event_type)
-                plan_key = str(event.get("plan_key") or "").strip().lower() or "unknown"
-                if plan_key not in {"starter", "operator", "team", "unknown"}:
-                    plan_key = "unknown"
-                if plan_key == "unknown" and existing_subscription:
-                    plan_key = str(existing_subscription.get("plan_key") or "unknown")
-                if not provider_plan_id and existing_subscription:
-                    provider_plan_id = str(existing_subscription.get("provider_plan_id") or "")
-                if not provider_customer_id and existing_subscription:
-                    provider_customer_id = str(existing_subscription.get("provider_customer_id") or "")
-                if not provider_subscription_id and existing_subscription:
-                    provider_subscription_id = str(existing_subscription.get("provider_subscription_id") or "")
+            if company_id and not entitlement_blockers:
+                if duplicate_event:
+                    event_status = "applied_duplicate_ignored"
+                    subscription_record = existing_subscription
+                    conn.execute(
+                        """
+                        update billing_webhook_events
+                        set company_id = ?, status = ?, billing_event_json = ?
+                        where event_key = ?
+                        """,
+                        (
+                            company_id,
+                            event_status,
+                            json.dumps({**event_record, "status": event_status, "duplicate_event": True}, ensure_ascii=False),
+                            event_key,
+                        ),
+                    )
+                    return {
+                        "status": event_status,
+                        "event_key": event_key,
+                        "company_id": company_id or "",
+                        "subscription": subscription_record,
+                        "duplicate_event": True,
+                        "entitlement_apply_blockers": [],
+                        "raw_payload_persisted": False,
+                        "frontend_gets_payment_secret": False,
+                        "secret_exposed": False,
+                    }
                 entitlement_active = 1 if status in {"active", "trialing"} else 0
                 payment_attention_required = 1 if bool(event.get("payment_attention_required")) or status in {"past_due", "unpaid", "canceled", "expired"} else 0
                 subscription_record = {
@@ -3183,6 +3223,20 @@ class SaaSRepository:
                         "secret_exposed": False,
                     },
                 )
+            elif inserted_event:
+                conn.execute(
+                    """
+                    update billing_webhook_events
+                    set company_id = ?, status = ?, billing_event_json = ?
+                    where event_key = ?
+                    """,
+                    (
+                        company_id or None,
+                        event_status,
+                        json.dumps({**event_record, "status": event_status}, ensure_ascii=False),
+                        event_key,
+                    ),
+                )
 
         return {
             "status": event_status,
@@ -3190,6 +3244,7 @@ class SaaSRepository:
             "company_id": company_id or "",
             "subscription": subscription_record,
             "duplicate_event": bool(event_status.endswith("ignored")),
+            "entitlement_apply_blockers": entitlement_blockers,
             "raw_payload_persisted": False,
             "frontend_gets_payment_secret": False,
             "secret_exposed": False,
@@ -4483,6 +4538,45 @@ def _billing_event_key(*, provider: str, event_id: str, event_type: str, fallbac
     return f"{safe_provider}:generated:{digest}"
 
 
+def _billing_entitlement_apply_blockers(
+    *,
+    event: dict[str, Any],
+    event_id: str,
+    event_type: str,
+    company_id: str,
+    provider_customer_id: str,
+    provider_subscription_id: str,
+    provider_plan_id: str,
+    plan_key: str,
+    status: str,
+    existing_subscription: dict[str, Any] | None,
+) -> list[str]:
+    blockers: list[str] = []
+    if not company_id:
+        blockers.append("company_id_not_resolved")
+    if not event_type:
+        blockers.append("billing_event_type_missing")
+    if event.get("supported_event") is False:
+        blockers.append("unsupported_billing_event")
+    if not event_id:
+        blockers.append("billing_event_id_missing")
+    if not (provider_customer_id or provider_subscription_id):
+        blockers.append("provider_subscription_or_customer_missing")
+    supported_statuses = {"active", "trialing", "past_due", "unpaid", "canceled", "expired"}
+    if status not in supported_statuses:
+        blockers.append("subscription_status_unmapped")
+    if not existing_subscription and (plan_key == "unknown" or not provider_plan_id):
+        blockers.append("plan_key_not_resolved")
+    return blockers
+
+
+def _billing_unmapped_status(blockers: list[str]) -> str:
+    if not blockers:
+        return "accepted_for_entitlement"
+    reason = re.sub(r"[^a-z0-9_]+", "_", str(blockers[0] or "unmapped").lower()).strip("_")
+    return f"accepted_unmapped_{reason or 'unmapped'}"
+
+
 def _billing_entitlement_status(value: str, *, event_type: str) -> str:
     text = str(value or "").strip().lower()
     event = str(event_type or "").strip().lower()
@@ -4492,7 +4586,7 @@ def _billing_entitlement_status(value: str, *, event_type: str) -> str:
         return "expired"
     if "payment_failed" in event or "invoice.payment_failed" in event:
         return "past_due"
-    if "payment_succeeded" in event or "payment_success" in event or "transaction.completed" in event:
+    if "invoice.paid" in event or "payment_succeeded" in event or "payment_success" in event or "transaction.completed" in event:
         return "active"
     if text in {"active", "trialing", "trial", "paid", "on_trial"}:
         return "trialing" if text in {"trial", "on_trial"} else "active"

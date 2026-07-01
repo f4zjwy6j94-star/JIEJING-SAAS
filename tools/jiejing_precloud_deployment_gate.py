@@ -59,6 +59,9 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("local_first_cloud_fallback_guardrails", [sys.executable, "tools/test_jiejing_local_first_cloud_fallback_guardrails.py"]),
     ("mainland_payment_strategy", [sys.executable, "tools/test_jiejing_mainland_payment_strategy.py"]),
     ("manual_beta_payment_flow", [sys.executable, "tools/test_jiejing_manual_beta_payment_flow.py"]),
+    ("billing_provider_rehearsal", [sys.executable, "tools/test_jiejing_billing_provider_rehearsal.py"]),
+    ("billing_provider_webhook", [sys.executable, "tools/test_jiejing_billing_provider_webhook.py"]),
+    ("billing_webhook_subscription_state", [sys.executable, "tools/test_jiejing_billing_webhook_subscription_state.py"]),
     ("jiejing_owned_credential_chain", [sys.executable, "tools/jiejing_ebay_jiejing_credential_chain_smoke.py"]),
     ("productization_stage_gate", [sys.executable, "tools/jiejing_productization_stage_gate.py"]),
 ]

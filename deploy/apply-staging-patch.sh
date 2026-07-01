@@ -76,6 +76,7 @@ FILES=(
   "jiejing_saas/billing_manual_beta.py"
   "jiejing_saas/billing_payment_options.py"
   "jiejing_saas/billing_plan.py"
+  "jiejing_saas/billing_provider_rehearsal.py"
   "jiejing_saas/billing_test_provider.py"
   "jiejing_saas/billing_webhook.py"
   "jiejing_saas/ai_ceo_chat.py"
@@ -161,6 +162,7 @@ FILES=(
   "tools/test_jiejing_billing_webhook_subscription_state.py"
   "tools/test_jiejing_mainland_payment_strategy.py"
   "tools/test_jiejing_manual_beta_payment_flow.py"
+  "tools/test_jiejing_billing_provider_rehearsal.py"
   "tools/test_jiejing_ebay_vault_token_refresh_adapter.py"
   "tools/test_jiejing_domain_launch_gate.py"
   "tools/test_jiejing_monitoring_runbook_gate.py"
@@ -254,6 +256,7 @@ python3 -m py_compile \
   jiejing_saas/billing_manual_beta.py \
   jiejing_saas/billing_payment_options.py \
   jiejing_saas/billing_plan.py \
+  jiejing_saas/billing_provider_rehearsal.py \
   jiejing_saas/billing_test_provider.py \
   jiejing_saas/billing_webhook.py \
   jiejing_saas/ai_ceo_chat.py \

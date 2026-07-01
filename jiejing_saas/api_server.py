@@ -29,6 +29,7 @@ from .billing_checkout import build_billing_checkout_contract, create_stripe_che
 from .billing_domain_cutover_rehearsal import build_billing_domain_cutover_rehearsal
 from .billing_manual_beta import create_manual_beta_payment_order, confirm_manual_beta_payment_order, list_manual_beta_payment_orders
 from .billing_payment_options import build_mainland_payment_strategy
+from .billing_provider_rehearsal import run_billing_provider_rehearsal
 from .billing_test_provider import apply_test_billing_event
 from .billing_webhook import handle_billing_webhook
 from .commercial_launch_gate import build_commercial_launch_gate
@@ -1114,6 +1115,24 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             self._send_json(
                 {"billing_test_event": result},
+                status=HTTPStatus.OK if result.get("ok") else HTTPStatus(int(result.get("http_status") or 400)),
+            )
+            return
+
+        if path == "billing/provider-rehearsal":
+            if not self._require_permission(identity, "manage_billing"):
+                return
+            body = self._read_json_body()
+            result = run_billing_provider_rehearsal(
+                self.settings,
+                self.repository,
+                company_id=identity["company_id"],
+                user_id=identity["user_id"],
+                plan_key=str(body.get("plan_key") or "starter"),
+                action=str(body.get("action") or "activate"),
+            )
+            self._send_json(
+                {"billing_provider_rehearsal": result},
                 status=HTTPStatus.OK if result.get("ok") else HTTPStatus(int(result.get("http_status") or 400)),
             )
             return

@@ -65,6 +65,7 @@ const state = {
   saasBillingCheckout: null,
   saasPaymentOptions: null,
   saasBillingTestEvent: null,
+  saasBillingProviderRehearsal: null,
   saasManualBetaPaymentOrders: [],
   saasBillingDomainCutoverRehearsal: null,
   saasPaidLaunchApprovalPacket: null,
@@ -1399,7 +1400,7 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
-const jiejingTrustedHtmlBlockedPattern = /<script\b|<\/script|on[a-z]+\s*=|href\s*=\s*["']?\s*javascript:|src\s*=\s*["']?\s*javascript:/i;
+const jiejingTrustedHtmlBlockedPattern = /<script\b|<\/script|\bon[a-z]+\s*=|href\s*=\s*["']?\s*javascript:|src\s*=\s*["']?\s*javascript:/i;
 
 function trustedJiejingHtml(html, source = "unspecified") {
   const value = String(html ?? "");
@@ -13052,6 +13053,7 @@ function buildSaasProtectedStateSnapshot() {
     billing_plan: state.saasBillingPlan || null,
     billing_usage: state.saasBillingUsage || null,
     billing_checkout: state.saasBillingCheckout || null,
+    billing_provider_rehearsal: state.saasBillingProviderRehearsal || null,
     billing_domain_cutover_rehearsal: state.saasBillingDomainCutoverRehearsal || null,
     edge_cutover_preflight: state.saasEdgeCutoverPreflight || null,
     paid_launch_approval_packet: state.saasPaidLaunchApprovalPacket || null,
@@ -13110,6 +13112,7 @@ function hydrateSaasProtectedStateFromCache() {
     state.saasBillingPlan = snapshot.billing_plan || state.saasBillingPlan || null;
     state.saasBillingUsage = snapshot.billing_usage || state.saasBillingUsage || null;
     state.saasBillingCheckout = snapshot.billing_checkout || state.saasBillingCheckout || null;
+    state.saasBillingProviderRehearsal = snapshot.billing_provider_rehearsal || state.saasBillingProviderRehearsal || null;
     state.saasBillingDomainCutoverRehearsal = snapshot.billing_domain_cutover_rehearsal || state.saasBillingDomainCutoverRehearsal || null;
     state.saasEdgeCutoverPreflight = snapshot.edge_cutover_preflight || state.saasEdgeCutoverPreflight || null;
     state.saasPaidLaunchApprovalPacket = snapshot.paid_launch_approval_packet || state.saasPaidLaunchApprovalPacket || null;
@@ -22972,6 +22975,56 @@ async function runSaasBillingTestEvent(button) {
   }
 }
 
+async function runSaasBillingProviderRehearsal(button) {
+  const action = String(button?.dataset?.billingProviderAction || "activate").trim().toLowerCase();
+  const planKey = String(
+    button?.dataset?.billingPlanKey ||
+      state.saasBillingUsage?.subscription?.plan_key ||
+      state.saasBillingPlan?.default_plan_key ||
+      "starter",
+  )
+    .trim()
+    .toLowerCase();
+  state.saasLoading = true;
+  renderSaasConnectCenter(document.querySelector("#view-connect"));
+  try {
+    const payload = await saasFetch("/billing/provider-rehearsal", {
+      method: "POST",
+      body: JSON.stringify({ action, plan_key: planKey }),
+    });
+    const result = payload.billing_provider_rehearsal || {};
+    state.saasBillingProviderRehearsal = {
+      ...result,
+      ui_applied_at: new Date().toISOString(),
+    };
+    await refreshSaasState({ silent: true, refreshLaunchGate: false });
+    renderSaasConnectCenter(document.querySelector("#view-connect"));
+    showActionToast("正式支付演练已走完后端查单/签名证明、订阅事件和 quota 管线；没有真实扣费。");
+  } catch (error) {
+    state.saasBillingProviderRehearsal = {
+      ok: false,
+      status: "billing_provider_rehearsal_blocked",
+      action,
+      plan_key: planKey,
+      message: String(error.message || error),
+      ready_for_paid_launch: false,
+      public_charging_allowed: false,
+      creates_real_checkout_session: false,
+      calls_external_payment_api: false,
+      triggers_real_charge: false,
+      charge_now_allowed: false,
+      frontend_gets_payment_secret: false,
+      secret_exposed: false,
+      ui_applied_at: new Date().toISOString(),
+    };
+    renderSaasConnectCenter(document.querySelector("#view-connect"));
+    showActionToast("正式支付演练仍有阻塞；没有创建真实支付、没有扣费。");
+  } finally {
+    state.saasLoading = false;
+    renderSaasConnectCenter(document.querySelector("#view-connect"));
+  }
+}
+
 async function runSaasManualBetaCreateOrder(button) {
   const planKey = String(button?.dataset?.manualBetaPlanKey || "starter").trim().toLowerCase();
   state.saasLoading = true;
@@ -23136,6 +23189,7 @@ function handleSaasAction(button) {
     "recover-publish",
     "create-cleanup-plan",
     "billing-test-event",
+    "billing-provider-rehearsal",
     "manual-beta-create-order",
     "manual-beta-confirm-order",
   ]);
@@ -23282,6 +23336,10 @@ function handleSaasAction(button) {
   }
   if (action === "billing-test-event") {
     runSaasBillingTestEvent(button);
+    return;
+  }
+  if (action === "billing-provider-rehearsal") {
+    runSaasBillingProviderRehearsal(button);
     return;
   }
   if (action === "manual-beta-create-order") {
@@ -25429,6 +25487,8 @@ function saasMerchantBillingGuardrailState() {
   const checkoutSessions = checkout.checkout_sessions && typeof checkout.checkout_sessions === "object" ? checkout.checkout_sessions : {};
   const portal = checkout.customer_portal && typeof checkout.customer_portal === "object" ? checkout.customer_portal : {};
   const latestTestEvent = state.saasBillingTestEvent && typeof state.saasBillingTestEvent === "object" ? state.saasBillingTestEvent : {};
+  const providerRehearsal =
+    state.saasBillingProviderRehearsal && typeof state.saasBillingProviderRehearsal === "object" ? state.saasBillingProviderRehearsal : {};
   const blockedUnits = Array.isArray(shutdown.blocked_units) ? shutdown.blocked_units.filter(Boolean) : [];
   const planKey = subscription.plan_key || usage.plan_key || plan.current_plan?.key || plan.default_plan_key || "private_beta";
   const subscriptionStatus = shutdown.subscription_status || subscription.status || "subscription_missing";
@@ -25472,6 +25532,7 @@ function saasMerchantBillingGuardrailState() {
     checkoutSessions,
     portal,
     latestTestEvent,
+    providerRehearsal,
     latestTestStatus,
     rehearsalStage,
     testProviderReady,
@@ -25682,6 +25743,460 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
         <span>subscription_metering_clarity_v2</span>
         <span>triggers_real_charge=false</span>
         <span>frontend_gets_payment_secret=false</span>
+        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
+      </div>
+    </section>
+  `;
+}
+
+function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext()) {
+  const billing = saasMerchantBillingGuardrailState();
+  const payment = saasMainlandPaymentStrategyState();
+  const hasExternalProvider = Boolean(billing.provider.external_paid_provider_configured);
+  const manualBetaMode = Boolean(
+    billing.provider.manual_beta_private_provider_configured ||
+      billing.subscription?.provider === "manual_beta" ||
+      state.saasManualBetaPaymentOrders?.length,
+  );
+  const quotaReady = Boolean(billing.quotaEnforcementEnabled);
+  const blockers = payment.blockers.length ? payment.blockers.slice(0, 3).join(" / ") : "等待正式支付 no-real-charge 演练和主理人切换批准";
+  const pathRows = [
+    {
+      label: "现在",
+      title: "个人码只跑内测对账",
+      detail: "商家生成 99 元 / 30 天付款单；付款后由内部管理员核对备注并确认收款，才写 manual_beta 订阅和审计。",
+      tone: manualBetaMode ? "green" : "amber",
+    },
+    {
+      label: "准备",
+      title: "个体户 / 公司主体申请正式商户支付",
+      detail: "准备营业执照、结算主体、服务条款、隐私、退款、客服入口和回调域名；证件、银行卡和 provider key 不进前端。",
+      tone: payment.paidLaunchReady ? "green" : "amber",
+    },
+    {
+      label: "正式",
+      title: "商户订单 + 签名回调 / 主动查单",
+      detail: "后端创建订单并接微信、支付宝、云闪付或聚合收单；只有签名回调或查单通过后，才能自动发放套餐和额度。",
+      tone: hasExternalProvider || payment.paidLaunchReady ? "green" : "red",
+    },
+    {
+      label: "额度",
+      title: "订阅状态驱动发放和停用",
+      detail: "开通、续费、取消、付款失败和退款争议写入后端账单事件；quota 只停高成本任务，历史资料和确认记录保留。",
+      tone: quotaReady ? "green" : "amber",
+    },
+  ];
+  const grantRows = [
+    ["人工内测", "内部管理员确认", "个人码到账后人工核对付款备注；只有管理员确认按钮能写入 starter 30 天权益。"],
+    ["正式支付", "签名 provider 证据", "由商户支付 webhook 或主动查单结果回写订阅、额度、发票和审计。"],
+    ["禁止路径", "前端 / 静态二维码不能自动开通", "浏览器不保存二维码图片、支付密钥、身份证件或银行卡材料。"],
+  ];
+  const statusRows = [
+    ["当前阶段", hasExternalProvider ? "正式 provider 已接入" : manualBetaMode ? "manual_beta 内测对账" : "不真实扣费", hasExternalProvider ? "仍需完成上线前演练和主理人 live cutover，不能因配置存在就公开收费。" : "当前只允许小范围人工对账，不代表公开付费上线。"],
+    ["上线阻断", payment.paidLaunchReady ? "支付策略材料已齐" : "公开收费仍阻断", payment.paidLaunchReady ? "仍要结合整体 product readiness 和主理人确认。" : blockers],
+    ["恢复边界", "不重复 OAuth / 不重填模型 key", "订阅或额度恢复只处理账单状态，不要求商家重新授权 eBay 或重新输入模型 key。"],
+  ];
+  return `
+    <section class="saas-settings-card saas-billing-transition-path" data-billing-transition="manual_beta_to_merchant_payment_transition_v1" aria-label="内测收款到正式商户支付路径">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>订阅开通路径</span>
+          <strong>先人工对账内测，再切到正式商户支付自动发放额度</strong>
+          <p>这张卡把“个人码测试、正式支付、额度发放”拆成一条可迁移路径：现在可小范围人工核对，正式上线必须等商户支付、签名回调和额度停用闭环齐全。</p>
+        </div>
+        <em>${escapeHtml(hasExternalProvider ? "正式支付待切换" : manualBetaMode ? "人工对账内测" : "等待内测付款单")}</em>
+      </div>
+      <div class="saas-billing-transition-flow">
+        ${pathRows
+          .map(
+            (row) => `
+              <article class="is-${escapeHtml(row.tone)}">
+                <span>${escapeHtml(row.label)}</span>
+                <strong>${escapeHtml(row.title)}</strong>
+                <small>${escapeHtml(row.detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-billing-transition-grants" aria-label="权益发放依据">
+        ${grantRows
+          .map(
+            ([label, title, detail]) => `
+              <article>
+                <span>${escapeHtml(label)}</span>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-billing-transition-status" aria-label="当前上线判断">
+        ${statusRows
+          .map(
+            ([label, title, detail]) => `
+              <article>
+                <span>${escapeHtml(label)}</span>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-billing-transition-safety" hidden aria-hidden="true">
+        <span>manual_beta_to_merchant_payment_transition_v1</span>
+        <span>manual_beta_owner_confirmation_before_entitlement</span>
+        <span>formal_payment_signed_webhook_or_order_query_before_auto_entitlement</span>
+        <span>quota_grant_not_frontend_driven</span>
+        <span>static_qr_never_paid_launch_provider</span>
+        <span>no_repeat_oauth_for_billing_recovery</span>
+        <span>no_model_key_reentry_for_billing_recovery</span>
+        <span>triggers_real_charge=false</span>
+        <span>frontend_gets_payment_secret=false</span>
+        <span>secret_exposed=false</span>
+        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
+      </div>
+    </section>
+  `;
+}
+
+function renderSaasBillingProviderRehearsalPanel(ctx = saasMerchantWorkbenchContext()) {
+  const billing = saasMerchantBillingGuardrailState();
+  const summary =
+    state.saasBillingPlan?.billing_test_rehearsal_summary && typeof state.saasBillingPlan.billing_test_rehearsal_summary === "object"
+      ? state.saasBillingPlan.billing_test_rehearsal_summary
+      : {};
+  const latest = billing.providerRehearsal || {};
+  const latestCheckout = latest.checkout && typeof latest.checkout === "object" ? latest.checkout : {};
+  const latestProof = latest.provider_proof && typeof latest.provider_proof === "object" ? latest.provider_proof : {};
+  const latestEvent = latest.billing_event && typeof latest.billing_event === "object" ? latest.billing_event : {};
+  const latestQuota = latest.quota_guardrail && typeof latest.quota_guardrail === "object" ? latest.quota_guardrail : {};
+  const stepsByKey = Object.fromEntries(
+    (Array.isArray(summary.steps) ? summary.steps : [])
+      .filter((item) => item && typeof item === "object")
+      .map((item) => [String(item.key || ""), item]),
+  );
+  const stepReady = (key) => stepsByKey[key]?.status === "ready";
+  const checkoutReady = Boolean(latestCheckout.session_id_present || stepReady("test_checkout_session"));
+  const backendProofReady = Boolean(
+    latestProof.signed_webhook_or_order_query_verified ||
+      latestProof.verified ||
+      stepReady("test_provider_order_query_or_signed_webhook") ||
+      stepReady("backend_order_query_or_signed_webhook_proof"),
+  );
+  const subscriptionReady = Boolean(latestEvent.status === "billing_test_event_applied" || latest.status === "billing_provider_rehearsal_completed");
+  const quotaReady = Boolean(latestQuota.ok || billing.quotaEnforcementEnabled || stepReady("quota_shutdown_closure") || stepReady("quota_guardrail_evaluated"));
+  const resultHasRun = Boolean(Object.keys(latest).length);
+  const statusLabel = resultHasRun
+    ? latest.ok
+      ? "后端演练已完成"
+      : "后端演练仍阻塞"
+    : billing.testProviderReady
+      ? "等待演练"
+      : "等待账单状态";
+  const statusDetail = resultHasRun
+    ? latest.message ||
+      `action=${latest.action || "unknown"} / plan=${latest.plan_key || billing.planKey || "starter"} / paid_launch=${Boolean(latest.ready_for_paid_launch)}`
+    : "这不是公开收费开关；它只证明未来正式商户支付接入前，后端可以先验 provider 结果，再写订阅和 quota。";
+  const proofRows = [
+    {
+      label: "01",
+      title: "测试 provider 与套餐目录",
+      detail: billing.testProviderReady ? "当前是无扣费 test provider，可以演练订阅生命周期。" : "未进入 test provider 演练模式，不能假装可收费上线。",
+      tone: billing.testProviderReady ? "green" : "amber",
+    },
+    {
+      label: "02",
+      title: "后端查单 / 签名回调先于权益",
+      detail: backendProofReady
+        ? "已证明由后端订单查询或签名回调确认 provider 状态，浏览器不能提交权益。"
+        : "正式支付切换前必须先有后端 proof，不能由前端按钮直接发额度。",
+      tone: backendProofReady ? "green" : "amber",
+    },
+    {
+      label: "03",
+      title: "订阅事件写入审计",
+      detail: subscriptionReady ? "演练事件已落到订阅状态和审计链路。" : "等待演练 activate / invoice_paid / payment_failed / cancel。",
+      tone: subscriptionReady ? "green" : "amber",
+    },
+    {
+      label: "04",
+      title: "Quota hard-stop",
+      detail: quotaReady ? "欠费或取消会阻断高成本任务，不删除历史资料。" : "正式收费前仍要保持 quota 发放和停用证据。",
+      tone: quotaReady ? "green" : "amber",
+    },
+  ];
+  const resultRows = [
+    ["最近动作", latest.action || "not_run", latest.status || statusLabel],
+    ["证明来源", backendProofReady ? "后端 proof" : "等待后端证明", latestProof.proof_source ? "provider 结果只由后端写入" : "签名回调或主动查单通过后才发权益"],
+    ["高成本任务", latestQuota.blocked ? "已停用" : latestQuota.allowed ? "可执行" : "等待状态", latestQuota.reason || "quota 只按后端订阅状态判断"],
+  ];
+  const actions = [
+    ["activate", "开通权益", "模拟 paid/active 后恢复额度"],
+    ["invoice_paid", "续费成功", "模拟账单已付，不触发扣费"],
+    ["payment_failed", "付款失败", "验证高成本任务停用"],
+    ["cancel", "取消订阅", "验证取消后的 quota hard-stop"],
+  ];
+  const disabled = !billing.testProviderReady || state.saasLoading ? "disabled" : "";
+  return `
+    <section class="saas-settings-card saas-billing-provider-rehearsal" data-billing-provider-rehearsal="billing_provider_rehearsal_control_room_v1" aria-label="正式支付 provider 无扣费演练">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>正式支付接入前演练</span>
+          <strong>先证明后端查单 / 签名回调，再允许订阅和额度生效</strong>
+          <p>这张卡只跑无扣费 provider 演练：不创建真实 Checkout、不调用外部支付 API、不收银行卡、不触发真实扣费。它把个人码内测过渡到正式商户支付时最容易出错的“权益发放依据”放到台前。</p>
+        </div>
+        <em>${escapeHtml(statusLabel)}</em>
+      </div>
+      <div class="saas-billing-provider-rehearsal-grid">
+        ${proofRows
+          .map(
+            (row) => `
+              <article class="is-${escapeHtml(row.tone)}">
+                <span>${escapeHtml(row.label)}</span>
+                <strong>${escapeHtml(row.title)}</strong>
+                <small>${escapeHtml(row.detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-billing-provider-rehearsal-result">
+        <article class="${latest.ok ? "is-green" : resultHasRun ? "is-amber" : "is-neutral"}">
+          <span>最近一次结果</span>
+          <strong>${escapeHtml(statusLabel)}</strong>
+          <small>${escapeHtml(statusDetail)}</small>
+        </article>
+        ${resultRows
+          .map(
+            ([label, title, detail]) => `
+              <article>
+                <span>${escapeHtml(label)}</span>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-billing-provider-rehearsal-actions" aria-label="无扣费 provider 演练动作">
+        ${actions
+          .map(
+            ([action, label, detail]) => `
+              <button class="secondary-action compact-action" type="button" data-saas-action="billing-provider-rehearsal" data-billing-provider-action="${escapeHtml(action)}" data-billing-plan-key="${escapeHtml(billing.planKey || "starter")}" ${disabled}>
+                <strong>${escapeHtml(label)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </button>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-billing-provider-rehearsal-safety" hidden aria-hidden="true">
+        <span>billing_provider_rehearsal_control_room_v1</span>
+        <span>billing/provider-rehearsal</span>
+        <span>data-billing-provider-action="payment_failed"</span>
+        <span>backend_order_query_or_signed_webhook_before_entitlement</span>
+        <span>browser_cannot_grant_quota</span>
+        <span>no_real_checkout_no_external_api_no_charge</span>
+        <span>ready_for_paid_launch=false</span>
+        <span>public_charging_allowed=false</span>
+        <span>creates_real_checkout_session=false</span>
+        <span>calls_external_payment_api=false</span>
+        <span>triggers_real_charge=false</span>
+        <span>charge_now_allowed=false</span>
+        <span>frontend_gets_payment_secret=false</span>
+        <span>secret_exposed=false</span>
+        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
+      </div>
+    </section>
+  `;
+}
+
+function saasPaidLaunchBlockerCopy(key = "") {
+  const labels = {
+    billing_provider_not_selected: ["选择正式 provider", "选择 Stripe、Paddle、Lemon Squeezy 或国内商户支付通道。"],
+    billing_plans_not_published: ["发布正式套餐", "正式收费必须使用可审计的套餐和价格 ID，不能靠手填金额。"],
+    external_paid_subscription_provider_not_configured: ["接入正式商户支付", "manual/test provider 只能内测，不能作为公开收费 provider。"],
+    test_billing_provider_not_allowed_for_paid_launch: ["关闭 test provider", "stripe_test_mock 只能证明流程，不能收真实客户的钱。"],
+    billing_webhook_not_configured: ["配置签名 webhook", "订阅、续费、失败和取消必须由 provider 签名事件回写。"],
+    billing_plan_ids_missing: ["补齐 live Price ID", "公开订阅要绑定真实 Price，不使用废弃 plan object。"],
+    stripe_checkout_not_ready: ["验证 subscription Checkout", "首笔订阅支付走 Checkout Sessions mode=subscription。"],
+    stripe_customer_portal_not_ready: ["验证 Customer Portal", "升级、降级、取消、付款方式修改走自助订阅门户。"],
+    quota_enforcement_not_enabled: ["启用 quota hard-stop", "欠费、取消或超额时只能停高成本任务，不能删资料。"],
+    payment_merchant_entity_not_ready: ["准备商户主体", "正式收款需要结算主体、服务说明、客服和退款入口。"],
+    mainland_payment_icp_subject_not_ready: ["对齐域名和主体", "国内支付审核常看域名、备案和商户主体一致性。"],
+    domestic_payment_provider_not_ready: ["开通国内商户通道", "微信、支付宝、云闪付或聚合收单必须是商户通道。"],
+    domestic_payment_provider_not_selected: ["选择国内支付通道", "个人码不能作为公开收费 provider。"],
+    domestic_payment_adapter_not_enabled: ["接入后端订单适配器", "浏览器不能直接开通权益，必须后端创建订单。"],
+    domestic_signed_webhook_not_configured: ["配置签名回调/查单", "只有签名回调或主动查单通过后才发放订阅和额度。"],
+    domestic_live_cutover_not_approved: ["主理人批准 live cutover", "真实收款不能由代码部署自动打开。"],
+    manual_qr_collection_not_paid_launch_ready: ["个人码仅限内测", "个人码只可人工对账，不能自动续费、停用和发票审计。"],
+    paid_launch_owner_approval_required: ["等待主理人最终评审", "即使技术证据齐全，真实收费也必须由主理人确认后才能打开。"],
+  };
+  return labels[key] || [String(key || "unknown_blocker").replace(/_/g, " "), "保留为正式上线前阻断项，先补齐后端证据再评审。"];
+}
+
+function saasPaidCutoverMatrixCopy(item = {}) {
+  const key = String(item.key || "");
+  const labels = {
+    stripe_subscription_checkout_contract: ["订阅 Checkout", "首笔订阅支付走 Checkout Sessions mode=subscription，并绑定 live Price ID。"],
+    stripe_customer_portal_contract: ["订阅自助管理", "升级、降级、取消和付款方式修改走 Customer Portal，不让前端接触支付密钥。"],
+    stripe_signed_webhook_contract: ["签名 webhook", "订阅、invoice paid、payment failed 和取消事件必须签名验证后才能改权益。"],
+    stripe_api_webhook_version_alignment: ["API / webhook 版本", "后端 Stripe-Version 和 live webhook endpoint API version 必须一致。"],
+    stripe_webhook_failure_paths: ["webhook 异常路径", "重复、延迟、乱序事件要可幂等处理，不能重复发放额度。"],
+    stripe_entitlement_quota_lifecycle: ["权益与 quota lifecycle", "invoice paid、取消、付款失败和 portal 变更都要正确更新订阅和 hard-stop。"],
+  };
+  if (labels[key]) return labels[key];
+  return [String(item.title || item.label || key || "cutover step").replace(/_/g, " "), item.next_action || "补齐这一步证据后再评审。"];
+}
+
+function renderSaasBillingPaidLaunchBlockersPanel(ctx = saasMerchantWorkbenchContext()) {
+  const billing = saasMerchantBillingGuardrailState();
+  const payment = saasMainlandPaymentStrategyState();
+  const plan = billing.plan || {};
+  const provider = billing.provider || {};
+  const quota = billing.quota || {};
+  const summary = plan.billing_live_cutover_summary && typeof plan.billing_live_cutover_summary === "object" ? plan.billing_live_cutover_summary : {};
+  const matrix = Array.isArray(plan.billing_live_cutover_matrix) ? plan.billing_live_cutover_matrix : [];
+  const paidBlockers = Array.isArray(plan.paid_launch_blockers) ? plan.paid_launch_blockers : [];
+  const paymentBlockers = Array.isArray(payment.blockers) ? payment.blockers : [];
+  const blockers = Array.from(new Set([...paidBlockers, ...paymentBlockers].filter(Boolean)));
+  const blockedMatrix = matrix.filter((item) => item && item.status !== "ready");
+  const nextMatrix = blockedMatrix[0] || {};
+  const paidReady = Boolean(plan.billing_ready_for_paid_launch && payment.paidLaunchReady);
+  const ownerReviewReady = Boolean(summary.ready_for_owner_approval && !blockedMatrix.length && !blockers.length);
+  const phaseRows = [
+    {
+      label: "Provider",
+      title: provider.external_paid_provider_configured ? "正式 provider 已选" : "仍是内测 / 测试 provider",
+      detail: provider.external_paid_provider_configured
+        ? "继续核对 live key、正式 Price、Checkout、Portal 和 webhook。"
+        : "当前不能公开收费；正式收款必须切到商户 provider。",
+      tone: provider.external_paid_provider_configured ? "green" : "amber",
+    },
+    {
+      label: "Checkout",
+      title: billing.checkoutSessions.ready ? "subscription Checkout ready" : "Checkout 待验证",
+      detail: "首笔订阅支付走 Checkout Sessions mode=subscription，并使用 Price ID。",
+      tone: billing.checkoutSessions.ready ? "green" : "amber",
+    },
+    {
+      label: "Webhook",
+      title: provider.webhook_configured ? "签名回调已配置" : "签名回调缺失",
+      detail: "续费、付款失败、取消和退款争议必须先经过签名验证或后端查单。",
+      tone: provider.webhook_configured ? "green" : "red",
+    },
+    {
+      label: "Quota",
+      title: quota.enabled ? "hard-stop 已启用" : "额度强停未启用",
+      detail: "公开收费前必须证明欠费/取消只停高成本任务，历史资料和审计保留。",
+      tone: quota.enabled ? "green" : "amber",
+    },
+    {
+      label: "Owner",
+      title: ownerReviewReady ? "可进入主理人评审" : "继续阻塞公开收费",
+      detail: "真实收费开关只能在证据齐全后由主理人批准，不随代码部署自动开启。",
+      tone: ownerReviewReady ? "green" : "red",
+    },
+  ];
+  const matrixRows = (matrix.length ? matrix : [
+    {
+      key: "stripe_subscription_checkout_contract",
+      title: "Subscription Checkout contract",
+      status: billing.checkoutSessions.ready ? "ready" : "blocked",
+      next_action: "Use Billing APIs with Checkout Sessions mode=subscription and live Price IDs.",
+    },
+    {
+      key: "stripe_signed_webhook_contract",
+      title: "Signed webhook contract",
+      status: provider.webhook_configured ? "ready" : "blocked",
+      next_action: "Verify provider-signed subscription, invoice paid and payment failure events.",
+    },
+    {
+      key: "stripe_entitlement_quota_lifecycle",
+      title: "Entitlement and quota lifecycle",
+      status: quota.enabled ? "ready" : "blocked",
+      next_action: "Prove invoice paid, cancellation and payment failure update entitlement and quota.",
+    },
+  ]).slice(0, 6);
+  const visibleBlockers = blockers.length ? blockers.slice(0, 8) : ["paid_launch_owner_approval_required"];
+  const statusLabel = paidReady
+    ? "证据待主理人批准"
+    : ownerReviewReady
+      ? "可准备评审"
+      : "公开收费仍阻塞";
+  return `
+    <section class="saas-settings-card saas-paid-cutover-blockers" data-paid-cutover-blockers="paid_launch_cutover_blockers_control_room_v1" aria-label="公开收费 cutover 阻断项">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>公开收费 cutover 清单</span>
+          <strong>正式收款、订阅自助管理、签名回调和 quota 证据缺一不可</strong>
+          <p>这张卡把“为什么还不能公开收费”拆成可执行证据。当前可以继续做内测和 no-charge 演练，但真实客户扣费必须等 live provider、正式套餐、签名 webhook、Customer Portal、quota lifecycle 和主理人批准都齐备。</p>
+        </div>
+        <em>${escapeHtml(statusLabel)}</em>
+      </div>
+      <div class="saas-paid-cutover-phase-grid">
+        ${phaseRows
+          .map(
+            (row) => `
+              <article class="is-${escapeHtml(row.tone)}">
+                <span>${escapeHtml(row.label)}</span>
+                <strong>${escapeHtml(row.title)}</strong>
+                <small>${escapeHtml(row.detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-paid-cutover-matrix" aria-label="billing live cutover matrix">
+        ${matrixRows
+          .map((item) => {
+            const [matrixTitle, matrixDetail] = saasPaidCutoverMatrixCopy(item);
+            return `
+              <article class="${item.status === "ready" ? "is-green" : "is-amber"}">
+                <span>${escapeHtml(item.status === "ready" ? "ready" : "blocked")}</span>
+                <strong>${escapeHtml(matrixTitle)}</strong>
+                <small>${escapeHtml(matrixDetail)}</small>
+              </article>
+            `;
+          })
+          .join("")}
+      </div>
+      <div class="saas-paid-cutover-blocker-list" aria-label="paid launch blockers">
+        ${visibleBlockers
+          .map((key) => {
+            const [title, detail] = saasPaidLaunchBlockerCopy(key);
+            return `
+              <article>
+                <span>阻断项</span>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `;
+          })
+          .join("")}
+      </div>
+      <div class="saas-paid-cutover-actions">
+        <button class="secondary-action compact-action" type="button" data-saas-action="refresh">刷新账单证据</button>
+        <button class="secondary-action compact-action" type="button" data-global-flow-view="confirm">查看确认中心</button>
+      </div>
+      <div class="saas-paid-cutover-safety" hidden aria-hidden="true">
+        <span>paid_launch_cutover_blockers_control_room_v1</span>
+        <span>stripe_billing_checkout_sessions_mode_subscription</span>
+        <span>billing_uses_price_ids_not_deprecated_plan_object</span>
+        <span>customer_portal_before_self_service_subscription_management</span>
+        <span>signed_webhook_before_quota_grant</span>
+        <span>owner_live_cutover_required_before_public_charge</span>
+        <span>manual_qr_private_beta_only_not_paid_launch_provider</span>
+        <span>ready_for_paid_launch=${Boolean(paidReady)}</span>
+        <span>charge_now_allowed=false</span>
+        <span>triggers_real_charge=false</span>
+        <span>repeat_ebay_oauth_allowed=false</span>
+        <span>frontend_gets_payment_secret=false</span>
+        <span>secret_exposed=false</span>
+        <span>next_blocker=${escapeHtml(nextMatrix.key || blockers[0] || "owner_review")}</span>
         <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
       </div>
     </section>
@@ -32568,6 +33083,9 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       intro: "查看基础订阅、AI 用量、素材生成、欠费停用和账号安全边界。",
       panels: [
         renderSaasMerchantBillingPlainSummaryPanel(ctx),
+        renderSaasBillingTransitionPathPanel(ctx),
+        renderSaasBillingProviderRehearsalPanel(ctx),
+        renderSaasBillingPaidLaunchBlockersPanel(ctx),
         renderSaasMainlandPaymentStrategyPanel(),
         renderSaasManualBetaPaymentOrderPanel(),
         renderSaasMerchantPricingModelPanel(ctx),
@@ -33877,6 +34395,22 @@ function bindEvents() {
   });
 
   document.querySelector("#view-connect")?.addEventListener("click", (event) => {
+    const settingsTabButton = event.target.closest("[data-saas-settings-tab]");
+    if (settingsTabButton) {
+      event.preventDefault();
+      state.saasSettingsTab = settingsTabButton.dataset.saasSettingsTab || "general";
+      renderSaasConnectCenter(document.querySelector("#view-connect"));
+      maybeRefreshSaasOwnerLaunchControlForActiveTab();
+      return;
+    }
+    const settingsMapButton = event.target.closest("[data-saas-settings-map-tab]");
+    if (settingsMapButton) {
+      event.preventDefault();
+      state.saasSettingsTab = settingsMapButton.dataset.saasSettingsMapTab || "general";
+      renderSaasConnectCenter(document.querySelector("#view-connect"));
+      maybeRefreshSaasOwnerLaunchControlForActiveTab();
+      return;
+    }
     const sourceMode = event.target.closest("[data-source-intake]");
     if (sourceMode) {
       focusSourceIntakeMode(sourceMode.dataset.sourceIntake || "ai_search");

@@ -24,12 +24,15 @@ def main() -> None:
     require(app_js, "data-saas-settings-tab", "settings tab navigation")
     require(app_js, "renderSaasSettingsCleanLayout(ctx", "settings render path")
     require(app_js, "function trustedJiejingHtml", "trusted HTML sink guard")
+    require(app_js, r"\bon[a-z]+\s*=", "trusted HTML event handler boundary")
     require(app_js, "function setJiejingTrustedHtml", "trusted HTML set sink")
     require(app_js, "function insertJiejingTrustedHtml", "trusted HTML insert sink")
     require(app_js, "function replaceJiejingTrustedHtml", "trusted HTML replace sink")
     require(app_js, '"listing.product_center"', "Listing daily surface trusted sink label")
     require(app_js, '"settings.clean_layout"', "settings trusted sink label")
     require(app_js, '"settings.legacy_connect_status"', "legacy settings status trusted sink label")
+    if "|on[a-z]+\\s*=" in app_js:
+        raise AssertionError("trusted HTML guard must not match ordinary words ending in on")
 
     require(app_js, "function renderSaasBulkCandidatePreview", "SaaS bulk simplified candidate preview")
     require(app_js, "先小批量筛，不一键乱铺", "bulk low-learning-cost headline")
@@ -332,6 +335,9 @@ def main() -> None:
         "renderSaasSettingsDataPanel(ctx)",
         "renderSaasMerchantPermissionPanel()",
         "renderSaasMerchantBillingPlainSummaryPanel(ctx)",
+        "renderSaasBillingTransitionPathPanel(ctx)",
+        "renderSaasBillingProviderRehearsalPanel(ctx)",
+        "renderSaasBillingPaidLaunchBlockersPanel(ctx)",
         "renderSaasMainlandPaymentStrategyPanel()",
         "renderSaasManualBetaPaymentOrderPanel()",
         "renderSaasMerchantPricingModelPanel(ctx)",
@@ -370,9 +376,40 @@ def main() -> None:
         "manual_beta_alipay_qr_not_in_repo",
         "manual_beta_owner_confirm_required",
         "manual_beta_confirmation_grants_30d_starter",
+        "manual_beta_to_merchant_payment_transition_v1",
+        "manual_beta_owner_confirmation_before_entitlement",
+        "formal_payment_signed_webhook_or_order_query_before_auto_entitlement",
+        "quota_grant_not_frontend_driven",
+        "static_qr_never_paid_launch_provider",
+        "billing_provider_rehearsal_control_room_v1",
+        "billing/provider-rehearsal",
+        "backend_order_query_or_signed_webhook_before_entitlement",
+        "browser_cannot_grant_quota",
+        "no_real_checkout_no_external_api_no_charge",
+        "ready_for_paid_launch=false",
+        "public_charging_allowed=false",
+        "paid_launch_cutover_blockers_control_room_v1",
+        "stripe_billing_checkout_sessions_mode_subscription",
+        "billing_uses_price_ids_not_deprecated_plan_object",
+        "customer_portal_before_self_service_subscription_management",
+        "signed_webhook_before_quota_grant",
+        "owner_live_cutover_required_before_public_charge",
+        "manual_qr_private_beta_only_not_paid_launch_provider",
     ]:
         require(app_js, required_marker, "mainland payment public safety markers")
     for required_style_marker in [
+        ".saas-billing-transition-path",
+        ".saas-billing-transition-flow",
+        ".saas-billing-transition-grants",
+        ".saas-billing-transition-status",
+        ".saas-billing-provider-rehearsal",
+        ".saas-billing-provider-rehearsal-grid",
+        ".saas-billing-provider-rehearsal-result",
+        ".saas-billing-provider-rehearsal-actions",
+        ".saas-paid-cutover-blockers",
+        ".saas-paid-cutover-phase-grid",
+        ".saas-paid-cutover-matrix",
+        ".saas-paid-cutover-blocker-list",
         ".saas-mainland-payment-entity",
         "grid-template-columns: minmax(230px, 1.45fr) repeat(5, minmax(0, 1fr))",
         ".saas-mainland-payment-application",
@@ -455,6 +492,15 @@ def main() -> None:
         "base_subscription_is_feature_fee=true",
         "ai_media_usage_is_separate=true",
         "platform_cost_not_collected_by_jiejing=true",
+        "订阅开通路径",
+        "先人工对账内测，再切到正式商户支付自动发放额度",
+        "个人码只跑内测对账",
+        "商户订单 + 签名回调 / 主动查单",
+        "订阅状态驱动发放和停用",
+        "前端 / 静态二维码不能自动开通",
+        "manual_beta_to_merchant_payment_transition_v1",
+        "quota_grant_not_frontend_driven",
+        "static_qr_never_paid_launch_provider",
         "当前阶段",
         "内测演练，不真实扣费",
         "高成本用量",
@@ -471,6 +517,20 @@ def main() -> None:
         "billing_blocks_metered_work_only",
         "no_repeat_oauth_for_billing_recovery",
         "no_model_key_reentry_for_billing_recovery",
+        "正式支付接入前演练",
+        "先证明后端查单 / 签名回调，再允许订阅和额度生效",
+        "data-saas-action=\"billing-provider-rehearsal\"",
+        "data-billing-provider-action=\"payment_failed\"",
+        "backend_order_query_or_signed_webhook_before_entitlement",
+        "browser_cannot_grant_quota",
+        "no_real_checkout_no_external_api_no_charge",
+        "paid_launch_cutover_blockers_control_room_v1",
+        "stripe_billing_checkout_sessions_mode_subscription",
+        "billing_uses_price_ids_not_deprecated_plan_object",
+        "customer_portal_before_self_service_subscription_management",
+        "signed_webhook_before_quota_grant",
+        "owner_live_cutover_required_before_public_charge",
+        "repeat_ebay_oauth_allowed=false",
         "frontend_gets_payment_secret=false",
         "openCurrentPublicHomepage",
     ]:

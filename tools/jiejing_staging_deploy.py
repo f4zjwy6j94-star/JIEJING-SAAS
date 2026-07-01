@@ -86,7 +86,7 @@ def main() -> int:
         ]
     )
     ssh_cmd = _ssh_base(args) + [remote_script]
-    result = _run(ssh_cmd, label="apply_patch")
+    result = _run(ssh_cmd, label="apply_patch", timeout=_operation_timeout_seconds(args))
     cleanup_result = {}
     if not args.skip_remote_temp_cleanup:
         cleanup_result = _cleanup_remote_staging_tmp(args)
@@ -163,7 +163,25 @@ def _try_upload_patch_with_scp(args: argparse.Namespace, patch: Path, remote_zip
         str(patch),
         f"{target}:{remote_zip}",
     ]
-    completed = subprocess.run(command, cwd=str(ROOT), text=True, encoding="utf-8", errors="replace", capture_output=True, check=False)
+    timeout_seconds = _upload_timeout_seconds(args, patch)
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "returncode": 124,
+            "stdout_tail": _text_tail(exc.stdout, 1000),
+            "stderr_tail": f"scp_timeout_after_{timeout_seconds}s\n{_text_tail(exc.stderr, 1000)}",
+            "secret_exposed": False,
+        }
     return {
         "returncode": completed.returncode,
         "stdout_tail": completed.stdout[-1000:],
@@ -174,17 +192,35 @@ def _try_upload_patch_with_scp(args: argparse.Namespace, patch: Path, remote_zip
 
 def _upload_patch_with_ssh_stdin(args: argparse.Namespace, patch: Path, remote_zip: str) -> subprocess.CompletedProcess[str]:
     command = _ssh_base(args) + [f"cat > {shlex.quote(remote_zip)}"]
+    timeout_seconds = _upload_timeout_seconds(args, patch)
     with patch.open("rb") as stdin:
-        completed = subprocess.run(
-            command,
-            cwd=str(ROOT),
-            stdin=stdin,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=str(ROOT),
+                stdin=stdin,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise SystemExit(
+                json.dumps(
+                    {
+                        "status": "failed",
+                        "step": "ssh_stdin_patch",
+                        "returncode": 124,
+                        "stdout_tail": _text_tail(exc.stdout, 2000),
+                        "stderr_tail": f"ssh_stdin_timeout_after_{timeout_seconds}s\n{_text_tail(exc.stderr, 2000)}",
+                        "secret_exposed": False,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
     if completed.returncode != 0:
         raise SystemExit(
             json.dumps(
@@ -240,7 +276,11 @@ printf 'REMOTE_TMP_CLEANUP_DELETED=%s\\n' "$deleted"
 printf 'REMOTE_TMP_CLEANUP_BYTES_CANDIDATE=%s\\n' "$freed_candidates"
 df -hPT / /tmp
 """
-    result = _run(_ssh_base(args) + [f"bash -lc {shlex.quote(script)}"], label="remote_tmp_cleanup")
+    result = _run(
+        _ssh_base(args) + [f"bash -lc {shlex.quote(script)}"],
+        label="remote_tmp_cleanup",
+        timeout=_operation_timeout_seconds(args),
+    )
     return {
         "enabled": True,
         "keep": args.remote_temp_keep,
@@ -321,8 +361,50 @@ def _ssh_stability_option_args() -> list[str]:
     return args
 
 
-def _run(command: list[str], *, label: str) -> subprocess.CompletedProcess[str]:
-    completed = subprocess.run(command, cwd=str(ROOT), text=True, encoding="utf-8", errors="replace", capture_output=True, check=False)
+def _upload_timeout_seconds(args: argparse.Namespace, patch: Path) -> int:
+    size_mib = max(1, patch.stat().st_size // (1024 * 1024))
+    return max(args.timeout * 8, 180, size_mib * 4)
+
+
+def _operation_timeout_seconds(args: argparse.Namespace) -> int:
+    return max(args.timeout * 6, 180)
+
+
+def _text_tail(value: str | bytes | None, length: int) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")[-length:]
+    return value[-length:]
+
+
+def _run(command: list[str], *, label: str, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SystemExit(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "step": label,
+                    "returncode": 124,
+                    "stdout_tail": _text_tail(exc.stdout, 2000),
+                    "stderr_tail": f"{label}_timeout_after_{timeout}s\n{_text_tail(exc.stderr, 2000)}",
+                    "secret_exposed": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
     if completed.returncode != 0:
         raise SystemExit(
             json.dumps(

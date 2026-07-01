@@ -38388,6 +38388,350 @@ body.saas-public-mvp .saas-merchant-billing-plain-note {
   background: rgba(255, 255, 255, 0.78);
 }
 
+body.saas-public-mvp .saas-billing-transition-path {
+  border-color: rgba(8, 118, 110, 0.18);
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbf9 100%);
+}
+
+body.saas-public-mvp .saas-billing-transition-path .saas-settings-card-head {
+  align-items: flex-start;
+}
+
+body.saas-public-mvp .saas-billing-transition-path .saas-settings-card-head em {
+  align-self: flex-start;
+  max-width: min(100%, 230px);
+  padding: 7px 9px;
+  border: 1px solid rgba(8, 118, 110, 0.18);
+  border-radius: 8px;
+  background: #eefaf6;
+  color: #08766e;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-billing-transition-flow,
+body.saas-public-mvp .saas-billing-transition-grants,
+body.saas-public-mvp .saas-billing-transition-status {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-billing-transition-flow {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+body.saas-public-mvp .saas-billing-transition-grants,
+body.saas-public-mvp .saas-billing-transition-status {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
+body.saas-public-mvp .saas-billing-transition-flow article,
+body.saas-public-mvp .saas-billing-transition-grants article,
+body.saas-public-mvp .saas-billing-transition-status article {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(15, 45, 40, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+body.saas-public-mvp .saas-billing-transition-flow article.is-green {
+  border-color: rgba(8, 118, 110, 0.2);
+  background: #f2fbf8;
+}
+
+body.saas-public-mvp .saas-billing-transition-flow article.is-amber {
+  border-color: rgba(214, 142, 43, 0.25);
+  background: #fffaf1;
+}
+
+body.saas-public-mvp .saas-billing-transition-flow article.is-red {
+  border-color: rgba(194, 65, 45, 0.22);
+  background: #fff4f1;
+}
+
+body.saas-public-mvp .saas-billing-transition-flow span,
+body.saas-public-mvp .saas-billing-transition-grants span,
+body.saas-public-mvp .saas-billing-transition-status span {
+  color: #08766e;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+body.saas-public-mvp .saas-billing-transition-flow strong,
+body.saas-public-mvp .saas-billing-transition-grants strong,
+body.saas-public-mvp .saas-billing-transition-status strong {
+  color: #12231f;
+  font-size: 14px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-billing-transition-flow small,
+body.saas-public-mvp .saas-billing-transition-grants small,
+body.saas-public-mvp .saas-billing-transition-status small {
+  margin: 0;
+  color: #5d716b;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-billing-provider-rehearsal {
+  border-color: rgba(8, 118, 110, 0.18);
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbf9 100%);
+}
+
+body.saas-public-mvp .saas-billing-provider-rehearsal .saas-settings-card-head {
+  align-items: flex-start;
+}
+
+body.saas-public-mvp .saas-billing-provider-rehearsal .saas-settings-card-head em {
+  align-self: flex-start;
+  max-width: min(100%, 250px);
+  padding: 7px 9px;
+  border: 1px solid rgba(8, 118, 110, 0.18);
+  border-radius: 8px;
+  background: #eefaf6;
+  color: #08766e;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-billing-provider-rehearsal-grid,
+body.saas-public-mvp .saas-billing-provider-rehearsal-result,
+body.saas-public-mvp .saas-billing-provider-rehearsal-actions {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-billing-provider-rehearsal-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+body.saas-public-mvp .saas-billing-provider-rehearsal-result {
+  grid-template-columns: minmax(220px, 1.35fr) repeat(3, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
+body.saas-public-mvp .saas-billing-provider-rehearsal-actions {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
+body.saas-public-mvp .saas-billing-provider-rehearsal-grid article,
+body.saas-public-mvp .saas-billing-provider-rehearsal-result article {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(15, 45, 40, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+body.saas-public-mvp .saas-billing-provider-rehearsal-grid article.is-green,
+body.saas-public-mvp .saas-billing-provider-rehearsal-result article.is-green {
+  border-color: rgba(8, 118, 110, 0.22);
+  background: #f2fbf8;
+}
+
+body.saas-public-mvp .saas-billing-provider-rehearsal-grid article.is-amber,
+body.saas-public-mvp .saas-billing-provider-rehearsal-result article.is-amber {
+  border-color: rgba(214, 142, 43, 0.3);
+  background: #fff9ef;
+}
+
+body.saas-public-mvp .saas-billing-provider-rehearsal-grid article.is-neutral,
+body.saas-public-mvp .saas-billing-provider-rehearsal-result article.is-neutral {
+  background: #f8fcfa;
+}
+
+body.saas-public-mvp .saas-billing-provider-rehearsal-grid span,
+body.saas-public-mvp .saas-billing-provider-rehearsal-result span {
+  color: #08766e;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+body.saas-public-mvp .saas-billing-provider-rehearsal-grid strong,
+body.saas-public-mvp .saas-billing-provider-rehearsal-result strong {
+  color: #12231f;
+  font-size: 14px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-billing-provider-rehearsal-grid small,
+body.saas-public-mvp .saas-billing-provider-rehearsal-result small {
+  margin: 0;
+  color: #5d716b;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-billing-provider-rehearsal-actions button {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+  min-height: 74px;
+  padding: 10px;
+  text-align: left;
+  white-space: normal;
+}
+
+body.saas-public-mvp .saas-billing-provider-rehearsal-actions button strong,
+body.saas-public-mvp .saas-billing-provider-rehearsal-actions button small {
+  display: block;
+  min-width: 0;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-billing-provider-rehearsal-actions button small {
+  color: rgba(18, 35, 31, 0.72);
+  font-size: 11px;
+}
+
+body.saas-public-mvp .saas-paid-cutover-blockers {
+  border-color: rgba(15, 45, 40, 0.14);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fcfa 100%);
+}
+
+body.saas-public-mvp .saas-paid-cutover-blockers .saas-settings-card-head {
+  align-items: flex-start;
+}
+
+body.saas-public-mvp .saas-paid-cutover-blockers .saas-settings-card-head em {
+  align-self: flex-start;
+  max-width: min(100%, 245px);
+  padding: 7px 9px;
+  border: 1px solid rgba(194, 65, 45, 0.16);
+  border-radius: 8px;
+  background: #fff6f2;
+  color: #93412f;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-paid-cutover-phase-grid,
+body.saas-public-mvp .saas-paid-cutover-matrix,
+body.saas-public-mvp .saas-paid-cutover-blocker-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-paid-cutover-phase-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+body.saas-public-mvp .saas-paid-cutover-matrix {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
+body.saas-public-mvp .saas-paid-cutover-blocker-list {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
+body.saas-public-mvp .saas-paid-cutover-phase-grid article,
+body.saas-public-mvp .saas-paid-cutover-matrix article,
+body.saas-public-mvp .saas-paid-cutover-blocker-list article {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(15, 45, 40, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+body.saas-public-mvp .saas-paid-cutover-phase-grid article.is-green,
+body.saas-public-mvp .saas-paid-cutover-matrix article.is-green {
+  border-color: rgba(8, 118, 110, 0.22);
+  background: #f2fbf8;
+}
+
+body.saas-public-mvp .saas-paid-cutover-phase-grid article.is-amber,
+body.saas-public-mvp .saas-paid-cutover-matrix article.is-amber {
+  border-color: rgba(214, 142, 43, 0.3);
+  background: #fff9ef;
+}
+
+body.saas-public-mvp .saas-paid-cutover-phase-grid article.is-red {
+  border-color: rgba(194, 65, 45, 0.22);
+  background: #fff4f1;
+}
+
+body.saas-public-mvp .saas-paid-cutover-phase-grid span,
+body.saas-public-mvp .saas-paid-cutover-matrix span,
+body.saas-public-mvp .saas-paid-cutover-blocker-list span {
+  color: #08766e;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-paid-cutover-phase-grid strong,
+body.saas-public-mvp .saas-paid-cutover-matrix strong,
+body.saas-public-mvp .saas-paid-cutover-blocker-list strong {
+  color: #12231f;
+  font-size: 14px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-paid-cutover-phase-grid small,
+body.saas-public-mvp .saas-paid-cutover-matrix small,
+body.saas-public-mvp .saas-paid-cutover-blocker-list small {
+  margin: 0;
+  color: #5d716b;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-paid-cutover-blocker-list article {
+  border-color: rgba(214, 142, 43, 0.22);
+  background: #fffaf1;
+}
+
+body.saas-public-mvp .saas-paid-cutover-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+body.saas-public-mvp .saas-paid-cutover-actions .compact-action {
+  min-height: 34px;
+  padding: 7px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 body.saas-public-mvp .saas-mainland-payment-strategy {
   border-color: rgba(8, 118, 110, 0.16);
   background: linear-gradient(180deg, #ffffff 0%, #f7fbf9 100%);
@@ -39138,6 +39482,15 @@ body.saas-public-mvp .saas-merchant-billing-guardrail-safety span {
   body.saas-public-mvp .saas-merchant-pricing-route,
   body.saas-public-mvp .saas-merchant-billing-clarity,
   body.saas-public-mvp .saas-merchant-billing-plain-grid,
+  body.saas-public-mvp .saas-billing-transition-flow,
+  body.saas-public-mvp .saas-billing-transition-grants,
+  body.saas-public-mvp .saas-billing-transition-status,
+  body.saas-public-mvp .saas-billing-provider-rehearsal-grid,
+  body.saas-public-mvp .saas-billing-provider-rehearsal-result,
+  body.saas-public-mvp .saas-billing-provider-rehearsal-actions,
+  body.saas-public-mvp .saas-paid-cutover-phase-grid,
+  body.saas-public-mvp .saas-paid-cutover-matrix,
+  body.saas-public-mvp .saas-paid-cutover-blocker-list,
   body.saas-public-mvp .saas-mainland-payment-routes,
   body.saas-public-mvp .saas-mainland-payment-plain,
   body.saas-public-mvp .saas-mainland-payment-formal,
@@ -39168,7 +39521,15 @@ body.saas-public-mvp .saas-merchant-billing-guardrail-safety span {
     justify-content: stretch;
   }
 
+  body.saas-public-mvp .saas-paid-cutover-actions {
+    justify-content: stretch;
+  }
+
   body.saas-public-mvp .saas-merchant-billing-guardrail-actions .compact-action {
+    flex: 1 1 160px;
+  }
+
+  body.saas-public-mvp .saas-paid-cutover-actions .compact-action {
     flex: 1 1 160px;
   }
 }

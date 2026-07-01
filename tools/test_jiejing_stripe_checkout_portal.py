@@ -196,6 +196,21 @@ def main() -> int:
             return fail("Checkout contract step should be ready in Stripe fixture")
         if matrix["stripe_signed_webhook_contract"].get("status") != "ready":
             return fail("signed webhook step should be ready in Stripe fixture")
+        webhook_proof = (
+            matrix["stripe_webhook_failure_paths"].get("local_contract_proof")
+            if isinstance(matrix["stripe_webhook_failure_paths"].get("local_contract_proof"), dict)
+            else {}
+        )
+        for proof_key in (
+            "duplicate_event_idempotent",
+            "unsupported_event_cannot_grant_entitlement",
+            "missing_event_id_cannot_grant_entitlement",
+            "unmapped_provider_identity_cannot_grant_entitlement",
+        ):
+            if webhook_proof.get(proof_key) is not True:
+                return fail(f"webhook failure-path local contract proof missing: {proof_key}={webhook_proof.get(proof_key)}")
+        if webhook_proof.get("raw_webhook_payload_persisted") is not False:
+            return fail(f"webhook local proof must keep raw payload out of persistence: {webhook_proof}")
         shutdown_closure = (
             plan.get("subscription_quota_shutdown_closure")
             if isinstance(plan.get("subscription_quota_shutdown_closure"), dict)

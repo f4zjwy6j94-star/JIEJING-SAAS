@@ -31,6 +31,17 @@ Current safe state:
 - Manual collection remains private-beta-only.
 - Real payment credentials must enter backend Vault/env only.
 
+## Merchant-Visible Transition Path
+
+The Settings billing page should explain the transition in one continuous path:
+
+1. Manual private beta: a merchant creates a 99 CNY / 30-day starter order, pays outside JIEJING, and an internal owner/admin manually confirms receipt before entitlement is granted.
+2. Formal provider preparation: the owner prepares an individual business or company entity, public service/privacy/refund/support pages, callback domain, and backend-only provider credential storage.
+3. Formal provider cutover: the backend creates merchant payment orders through WeChat Pay, Alipay, UnionPay/Cloud QuickPass, or a licensed acquirer, then waits for signed webhook or active order-query proof.
+4. Subscription/quota lifecycle: only backend-verified payment evidence updates subscription, quota, invoice/audit records, cancellation, payment failure, and entitlement shutdown.
+
+The frontend must not auto-grant entitlement from a static QR code, store a QR image as proof, collect identity files or bank material, or expose provider secrets. This transition path is product clarity, not paid-launch readiness.
+
 ## Recommended Rollout
 
 1. Keep private beta payment manual: collect via personal WeChat/Alipay code, then manually activate subscription/quota in admin tooling.

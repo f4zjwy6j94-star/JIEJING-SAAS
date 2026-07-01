@@ -256,6 +256,16 @@ def _build_billing_test_rehearsal_summary(
             "next_action": "Use POST /billing/test-event to rehearse activate, invoice_paid, payment_failed and cancel states.",
         },
         {
+            "key": "test_provider_order_query_or_signed_webhook",
+            "status": "ready" if test_provider and required_events.issubset(event_types) else "blocked",
+            "evidence_summary": _compact_billing_evidence(
+                backend_order_query_proof=True,
+                signed_webhook_or_order_query_required=True,
+                frontend_can_grant_entitlement=False,
+            ),
+            "next_action": "Use POST /billing/provider-rehearsal to prove checkout, backend proof, entitlement and quota in one no-charge path.",
+        },
+        {
             "key": "quota_hard_stop_rehearsal",
             "status": "ready" if quota_enforcement_enabled else "blocked",
             "evidence_summary": _compact_billing_evidence(quota_enabled=quota_enforcement_enabled),
@@ -676,6 +686,14 @@ def _build_billing_live_cutover_matrix(
             environment_keys=webhook_resilience_flags,
             verification=["tools/test_jiejing_billing_provider_webhook.py", "tools/test_jiejing_billing_webhook_subscription_state.py"],
             docs=[STRIPE_GO_LIVE_DOCS[0], STRIPE_GO_LIVE_DOCS[1]],
+            local_contract_proof={
+                "duplicate_event_idempotent": True,
+                "unsupported_event_cannot_grant_entitlement": True,
+                "missing_event_id_cannot_grant_entitlement": True,
+                "unmapped_provider_identity_cannot_grant_entitlement": True,
+                "raw_webhook_payload_persisted": False,
+                "verification": "tools/test_jiejing_billing_webhook_subscription_state.py",
+            },
         ),
         _billing_live_cutover_step(
             "stripe_entitlement_quota_lifecycle",
@@ -712,6 +730,7 @@ def _billing_live_cutover_step(
     verification: list[str],
     docs: list[str],
     owner_approval_required: bool = False,
+    local_contract_proof: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "key": key,
@@ -726,6 +745,7 @@ def _billing_live_cutover_step(
         "verification": verification,
         "docs": docs,
         "owner_approval_required": owner_approval_required,
+        "local_contract_proof": local_contract_proof or {},
         "external_resource_required": True,
         "triggers_real_charge": False,
         "charge_now_allowed": False,
