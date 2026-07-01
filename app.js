@@ -44,6 +44,7 @@ const state = {
   saasOauthRequests: [],
   saasTasks: [],
   saasQueueJobs: [],
+  saasMediaAssetJobs: [],
   saasReports: [],
   saasConfirmations: [],
   saasMerchantMemory: [],
@@ -6530,6 +6531,88 @@ function renderSaasMediaGeneratedAssetsPanel(ctx = saasMerchantWorkbenchContext(
   `;
 }
 
+function saasMediaAssetJobsForDisplay(jobs = state.saasMediaAssetJobs || []) {
+  return (Array.isArray(jobs) ? jobs : [])
+    .filter((job) => job && typeof job === "object")
+    .slice(0, 8);
+}
+
+function saasMediaAssetJobStatusLabel(job = {}) {
+  const status = String(job.status || "").trim();
+  const validationStatus = String(job.asset_manifest_validation?.status || "").trim();
+  if (status === "approved_for_listing") return "可回写 Listing";
+  if (status === "waiting_review" || validationStatus === "manifest_ready") return "待人工审核";
+  if (status === "validation_failed") return "清单校验未过";
+  if (status === "needs_rework") return "需要重做";
+  if (status === "running" || status === "queued" || status === "provider_returned") return "生成处理中";
+  if (status === "pending") return "等待排队";
+  return "等待素材任务";
+}
+
+function saasMediaAssetJobOutputLabel(job = {}) {
+  const manifest = Array.isArray(job.asset_manifest) ? job.asset_manifest : [];
+  const visibleStates = Array.isArray(job.merchant_visible_states) ? job.merchant_visible_states.filter(Boolean) : [];
+  if (manifest.length) return `${manifest.length} 个素材项已形成素材清单`;
+  if (visibleStates.length) return visibleStates.slice(0, 2).join("、");
+  return "等待图片、详情页或视频脚本结果";
+}
+
+function saasMediaAssetJobNextLine(job = {}) {
+  const status = String(job.status || "").trim();
+  if (status === "approved_for_listing") return "可以进入 Listing 草稿回写，但正式发布仍要走确认中心。";
+  if (status === "waiting_review") return "先核对实物一致、图片权利和 eBay 图片规则，再决定是否回写。";
+  if (status === "validation_failed") return "素材清单缺字段或事实不一致，需要补资料后重做。";
+  if (status === "needs_rework") return "结果不可直接用于刊登，需要重新生成或人工替换。";
+  if (status === "running" || status === "queued" || status === "provider_returned") return "任务还在生成或整理，完成后会进入素材清单审核。";
+  return "先接入商品草稿、来源图和图片需求，不会用旧样例冒充真实结果。";
+}
+
+function renderSaasMediaAssetJobsPanel(ctx = saasMerchantWorkbenchContext()) {
+  const jobs = saasMediaAssetJobsForDisplay();
+  const waitingReviewCount = jobs.filter((job) => ["waiting_review", "provider_returned"].includes(String(job.status || ""))).length;
+  const approvedCount = jobs.filter((job) => String(job.status || "") === "approved_for_listing").length;
+  const blockedCount = jobs.filter((job) => ["validation_failed", "needs_rework"].includes(String(job.status || ""))).length;
+  const missingText = ctx.missingKeys.length ? ctx.missingKeys.slice(0, 4).join("、") : "实物一致性、图片权利、平台规则";
+  return `
+    <section class="saas-media-asset-jobs" aria-label="素材任务记录">
+      <div class="media-quality-head">
+        <div>
+          <span>素材任务记录</span>
+          <strong>${jobs.length ? "素材清单正在等待审核" : "等待商品草稿或来源图"}</strong>
+          <p>图片、详情页和视频脚本统一回到素材清单（AssetManifest）后再审核；没有清单就不能说已经可用于 Listing。</p>
+        </div>
+        <em>${jobs.length ? `${jobs.length} 个记录` : "未生成"}</em>
+      </div>
+      <div class="saas-media-asset-summary">
+        <article><span>待审核</span><strong>${waitingReviewCount}</strong><p>先看实物一致和权利。</p></article>
+        <article><span>可回写</span><strong>${approvedCount}</strong><p>只回写草稿，不直接发布。</p></article>
+        <article><span>需处理</span><strong>${blockedCount || "待补资料"}</strong><p>${blockedCount ? "按失败原因补资料或重做。" : escapeHtml(missingText)}</p></article>
+      </div>
+      ${
+        jobs.length
+          ? `<div class="saas-media-asset-list">
+              ${jobs
+                .map(
+                  (job) => `
+                    <article>
+                      <span>${escapeHtml(saasMediaAssetJobStatusLabel(job))}</span>
+                      <strong>${escapeHtml(saasMediaAssetJobOutputLabel(job))}</strong>
+                      <p>${escapeHtml(saasMediaAssetJobNextLine(job))}</p>
+                      <small>${escapeHtml(saasTimestampLabel(job.updated_at || job.created_at || ""))} · 不展示密钥，不自动刊登</small>
+                    </article>
+                  `,
+                )
+                .join("")}
+            </div>`
+          : `<article class="saas-media-asset-empty">
+              <strong>还没有真实素材任务记录</strong>
+              <p>先从 AI CEO、Listing 或批量铺货接入商品，也可以上传一张来源图。当前页面不会把旧测试图当成真实生成结果。</p>
+            </article>`
+      }
+    </section>
+  `;
+}
+
 function syncSaasMediaProjectDraft(button) {
   const ctx = saasMerchantWorkbenchContext();
   state.mediaTaskEntry = "project";
@@ -6642,6 +6725,13 @@ function renderSaasMediaStudioStatus() {
     generatedAssetsPanel.outerHTML = renderSaasMediaGeneratedAssetsPanel(ctx);
   } else {
     (mediaFirstRunStrip || flowStatus || tabs).insertAdjacentHTML("afterend", renderSaasMediaGeneratedAssetsPanel(ctx));
+  }
+  let assetJobsPanel = document.querySelector("#view-media .saas-media-asset-jobs");
+  if (assetJobsPanel) {
+    assetJobsPanel.outerHTML = renderSaasMediaAssetJobsPanel(ctx);
+  } else {
+    const generatedAssetsAnchor = document.querySelector("#view-media .saas-media-generated-assets");
+    (generatedAssetsAnchor || mediaFirstRunStrip || flowStatus || tabs).insertAdjacentHTML("afterend", renderSaasMediaAssetJobsPanel(ctx));
   }
   tabs.innerHTML = reports.length
     ? reports
@@ -13004,6 +13094,30 @@ function buildSaasProtectedStateSnapshot() {
         ]),
       ),
     data_packets: (state.saasDataPackets || []).slice(0, 5).map(sanitizeSaasPacketSnapshot),
+    media_asset_jobs: (state.saasMediaAssetJobs || [])
+      .slice(0, 8)
+      .map((job) =>
+        pickSaasSnapshotFields(job, [
+          "media_job_id",
+          "store_id",
+          "task_id",
+          "queue_job_id",
+          "status",
+          "retry_count",
+          "error_reason",
+          "created_at",
+          "updated_at",
+          "asset_manifest",
+          "asset_manifest_validation",
+          "asset_review",
+          "cost_guard",
+          "production_gate",
+          "merchant_visible_states",
+          "live_provider_called",
+          "spend_now_allowed",
+          "secret_exposed",
+        ]),
+      ),
     reports: (state.saasReports || [])
       .slice(0, 24)
       .map((report) =>
@@ -13105,6 +13219,7 @@ function hydrateSaasProtectedStateFromCache() {
     state.saasStores = Array.isArray(snapshot.stores) ? snapshot.stores : state.saasStores || [];
     state.saasConnections = Array.isArray(snapshot.connections) ? snapshot.connections : state.saasConnections || [];
     state.saasDataPackets = Array.isArray(snapshot.data_packets) ? snapshot.data_packets : state.saasDataPackets || [];
+    state.saasMediaAssetJobs = Array.isArray(snapshot.media_asset_jobs) ? snapshot.media_asset_jobs : state.saasMediaAssetJobs || [];
     state.saasReports = Array.isArray(snapshot.reports) ? snapshot.reports : state.saasReports || [];
     state.saasConfirmations = Array.isArray(snapshot.confirmations) ? snapshot.confirmations : state.saasConfirmations || [];
     state.saasModelValueGate = snapshot.model_value_gate || state.saasModelValueGate || null;
@@ -13285,6 +13400,7 @@ function hasCompletedSaasOnboarding() {
     ((state.saasStores || []).length ||
       (state.saasConnections || []).length ||
       (state.saasDataPackets || []).length ||
+      (state.saasMediaAssetJobs || []).length ||
       (state.saasReports || []).length ||
       (state.saasConfirmations || []).length ||
       (state.saasExecutionResults || []).length)
@@ -13327,6 +13443,7 @@ function hasSaasProtectedBackendState() {
       (state.saasStores || []).length ||
       (state.saasConnections || []).length ||
       (state.saasDataPackets || []).length ||
+      (state.saasMediaAssetJobs || []).length ||
       (state.saasReports || []).length ||
       (state.saasConfirmations || []).length ||
       (state.saasExecutionResults || []).length,
@@ -13415,6 +13532,7 @@ function resetSaasProtectedWorkbenchState() {
   state.saasTasks = [];
   state.saasTaskSteps = [];
   state.saasQueueJobs = [];
+  state.saasMediaAssetJobs = [];
   state.saasQueueHealth = null;
   state.saasReports = [];
   state.saasConfirmations = [];
@@ -21480,6 +21598,7 @@ async function refreshSaasState(options = {}) {
       oauthRequests,
       tasks,
       queueJobs,
+      mediaAssetJobs,
       queueHealth,
       reports,
       confirmations,
@@ -21546,6 +21665,7 @@ async function refreshSaasState(options = {}) {
       optionalSaasFetchFast(`/oauth/requests?store_id=${encodeURIComponent(store.store_id)}`, { oauth_requests: [] }),
       saasFetch("/tasks?limit=20"),
       optionalSaasFetchFast("/queue-jobs?limit=20", { queue_jobs: [] }),
+      optionalSaasFetchFast(`/stores/${encodeURIComponent(store.store_id)}/media-asset-jobs?limit=8`, { media_asset_jobs: [] }, 10000),
       optionalSaasFetchFast("/queue/health", { queue_health: null }),
       saasFetch("/reports?limit=24"),
       saasFetch("/confirmations?limit=40"),
@@ -21649,6 +21769,7 @@ async function refreshSaasState(options = {}) {
       (state.saasTasks || []).find((task) => task && typeof task === "object" && task.task_type === "product_workflow" && task.input?.public_search_provider_handoff)
         ?.input?.public_search_provider_handoff || state.saasLastPublicSearchHandoff;
     state.saasQueueJobs = queueJobs.queue_jobs || [];
+    state.saasMediaAssetJobs = mediaAssetJobs.media_asset_jobs || [];
     state.saasQueueHealth = queueHealth.queue_health || null;
     state.saasReports = reports.reports || [];
     state.saasConfirmations = confirmations.confirmations || [];
@@ -21744,6 +21865,7 @@ async function refreshSaasState(options = {}) {
     state.saasEbayWriteAdapter = null;
     state.saasOauthRequests = [];
     state.saasError = `工作台后端暂时不可用，或需要重新登录：${error.message}`;
+    state.saasMediaAssetJobs = [];
     if (!state.saasReadiness) {
       await refreshSaasPublicReadiness({ render: false });
     }
@@ -27239,8 +27361,7 @@ function renderSaasAiCeoFirstRunHandoff() {
   const firstDaySteps = [
     ["01", "先说目标", "像聊天一样说商品、图片、订单或普通问题。"],
     ["02", "看判断", "JIEJING 会告诉你该去 Listing、批量、素材、客服还是决策中心。"],
-    ["03", "进模块", "系统只打开下一步需要的工作台，不把后台排查塞给你。"],
-    ["04", "再确认", "发布、付款、退款、广告和敏感承诺必须等你点头。"],
+    ["03", "再确认", "发布、付款、退款、广告和敏感承诺必须等你点头。"],
   ];
   const focusOptions = [
     ["有商品想上架", "先把标题、卖点、图片或链接发进来，生成 Listing 草稿。", "帮我从一个商品做 Listing"],
@@ -27252,7 +27373,7 @@ function renderSaasAiCeoFirstRunHandoff() {
       <div class="saas-ai-ceo-first-run-copy">
         <span>可以这样开始</span>
         <strong>首日只做一条主线：先说目标，再看 AI CEO 带你去哪</strong>
-        <p>点一句只会填入输入框；你确认发送后，AI CEO 再判断去 Listing、批量、素材、客服或决策中心。连接和计费问题以后回设置补。</p>
+        <p>直接说经营目标，不用先找功能。点一句只会填入输入框；你确认发送后，AI CEO 再判断去 Listing、批量、素材、客服或决策中心。连接和计费问题以后回设置补。</p>
       </div>
       <div class="saas-ai-ceo-one-task-focus" data-ai-ceo-one-task-focus="first_day_one_task_focus_v1" aria-label="首日聚焦">
         <div class="saas-ai-ceo-one-task-head">

@@ -76,7 +76,7 @@
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-scene.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-detail.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-video-cover.webp" />
-    <link rel="stylesheet" href="./styles.css?v=20260701-expert-feasibility-review-v1" />
+    <link rel="stylesheet" href="./styles.css?v=20260701-media-asset-review-ui-v1" />
     <style id="jiejing-cockpit-layout-guard">
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
         display: grid !important;
@@ -2026,6 +2026,26 @@
                     <p>先生成可预览素材。通过后回写 Listing 草稿；真实发布、广告和承诺仍要确认。</p>
                   </div>
 
+                  <section class="saas-media-asset-jobs" aria-label="素材任务记录">
+                    <div class="media-quality-head">
+                      <div>
+                        <span>素材任务记录</span>
+                        <strong>等待商品草稿或来源图</strong>
+                        <p>图片、详情页和视频脚本统一回到素材清单（AssetManifest）后再审核；没有清单就不能说已经可用于 Listing。</p>
+                      </div>
+                      <em>未生成</em>
+                    </div>
+                    <div class="saas-media-asset-summary">
+                      <article><span>待审核</span><strong>0</strong><p>先看实物一致和权利。</p></article>
+                      <article><span>可回写</span><strong>0</strong><p>只回写草稿，不直接发布。</p></article>
+                      <article><span>需处理</span><strong>待补资料</strong><p>实物一致性、图片权利、平台规则。</p></article>
+                    </div>
+                    <article class="saas-media-asset-empty">
+                      <strong>还没有真实素材任务记录</strong>
+                      <p>先从 AI CEO、Listing 或批量铺货接入商品，也可以上传一张来源图。当前页面不会把旧测试图当成真实生成结果。</p>
+                    </article>
+                  </section>
+
                   <div class="media-canvas-grid">
                     <article class="media-canvas-card main-shot" data-asset-preview="main" role="button" tabindex="0">
                       <div class="asset-preview asset-preview-photo real-main-shot" aria-hidden="true">
@@ -3285,7 +3305,7 @@
       })();
     </script>
     <script src="./assets/jiejing-settings-panels.js?v=20260620-prelaunch-deferred-v1"></script>
-    <script src="./app.js?v=20260701-expert-feasibility-review-v1"></script>
+    <script src="./app.js?v=20260701-media-asset-review-ui-v1"></script>
   <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"8ceaac5cf3dd4fa491331c0faf56768c","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>

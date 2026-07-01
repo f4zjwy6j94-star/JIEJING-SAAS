@@ -231,13 +231,21 @@ async function main() {
     },
   ]);
   if (localStaticRoot) {
+    await context.route(`${base}/app.html**`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "text/html; charset=utf-8",
+        headers: { "cache-control": "no-store" },
+        body: appHtml,
+      }),
+    );
     await context.route(`${base}/**`, (route) => {
       const filePath = localStaticPath(route.request().url());
       if (!filePath || !fs.existsSync(filePath)) {
         route.continue();
         return;
       }
-      route.fulfill({
+      return route.fulfill({
         status: 200,
         contentType: contentTypeFor(filePath),
         headers: { "cache-control": "no-store" },
@@ -582,6 +590,11 @@ async function main() {
             const nodeText = node.innerText || "";
             return nodeText.includes("输入") && nodeText.includes("只回写草稿");
           }),
+          has_media_asset_jobs_panel:
+            sectionHas(".saas-media-asset-jobs") &&
+            text.includes("素材任务记录") &&
+            text.includes("AssetManifest") &&
+            text.includes("不会把旧测试图当成真实生成结果"),
           has_media_internal_copy: /官方数据包|Listing Package|数据包可用|等待数据包|确认记录|费用和用量|素材状态拆分|Provider Hub|素材 Provider|素材 brief|后台证据|后台状态|素材清单已回写|流程导入不需要本机路径/.test(text),
           has_bulk_simple_headline: text.includes("先小批量筛，不一键乱铺"),
           has_bulk_roadmap: sectionHas(".bulk-output-snapshot"),
@@ -814,6 +827,7 @@ async function main() {
   if (!media.has_media_tabs) failures.push("media tabs missing");
   if (!media.has_media_simple_headline || !media.has_media_simple_flow) failures.push("media simple workflow surface missing");
   if (!media.has_media_first_run_strip) failures.push("media first-run assurance strip missing");
+  if (!media.has_media_asset_jobs_panel) failures.push("media asset job manifest panel missing");
   if (media.has_media_internal_copy) failures.push("media daily surface exposes internal evidence/provider copy");
   const bulk = moduleChecks.find((item) => item.view === "bulk") || {};
   if (!bulk.has_bulk_simple_headline || !bulk.has_bulk_roadmap || !bulk.has_bulk_grouping_copy) {

@@ -28637,6 +28637,75 @@ body.saas-public-mvp #view-media .saas-media-provider-pipeline {
   line-height: 1.45;
 }
 
+.saas-media-asset-jobs {
+  display: grid;
+  gap: 12px;
+  margin: 12px 0;
+  padding: 18px;
+  border: 1px solid rgba(198, 215, 205, 0.92);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 251, 250, 0.98)),
+    #ffffff;
+  box-shadow: 0 18px 44px rgba(24, 32, 28, 0.052);
+}
+
+.saas-media-asset-summary,
+.saas-media-asset-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.saas-media-asset-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.saas-media-asset-summary article,
+.saas-media-asset-list article,
+.saas-media-asset-empty {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(198, 215, 205, 0.88);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.saas-media-asset-summary span,
+.saas-media-asset-list span {
+  color: var(--jiejing-teal);
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.saas-media-asset-summary strong,
+.saas-media-asset-list strong,
+.saas-media-asset-empty strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--jiejing-ink);
+  font-size: 15px;
+  line-height: 1.34;
+}
+
+.saas-media-asset-summary p,
+.saas-media-asset-list p,
+.saas-media-asset-empty p {
+  margin: 5px 0 0;
+  color: var(--jiejing-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.saas-media-asset-list small {
+  display: block;
+  margin-top: 9px;
+  color: #66736f;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
 /* 2026-05-26 AI CEO owner-grade chat polish */
 body.saas-public-mvp[data-view="cockpit"] #view-cockpit.is-active {
   padding: 16px 28px 20px;
@@ -41151,6 +41220,12 @@ body.saas-public-mvp #view-media .saas-media-generated-assets {
   border-radius: 8px;
 }
 
+body.saas-public-mvp #view-media .saas-media-asset-jobs {
+  margin: 0;
+  padding: 14px;
+  border-radius: 8px;
+}
+
 body.saas-public-mvp #view-media .saas-generated-assets-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
@@ -41313,6 +41388,10 @@ body.saas-public-mvp #view-bulk .bulk-output-snapshot p {
   body.saas-public-mvp #view-media .saas-generated-assets-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  body.saas-public-mvp #view-media .saas-media-asset-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 760px) {
@@ -41320,6 +41399,8 @@ body.saas-public-mvp #view-bulk .bulk-output-snapshot p {
   body.saas-public-mvp #view-media .saas-media-first-run-strip,
   body.saas-public-mvp #view-media .media-channel-board,
   body.saas-public-mvp #view-media .saas-generated-assets-grid,
+  body.saas-public-mvp #view-media .saas-media-asset-summary,
+  body.saas-public-mvp #view-media .saas-media-asset-list,
   body.saas-public-mvp #view-media .media-canvas-grid,
   body.saas-public-mvp #view-bulk .bulk-hero-summary,
   body.saas-public-mvp #view-bulk .bulk-pipeline,
