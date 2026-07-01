@@ -25743,6 +25743,7 @@ function renderSaasMainlandPaymentStrategyPanel() {
   const domainPlan = payment.strategy.domain_and_icp_plan || {};
   const entity = payment.strategy.merchant_entity_readiness || {};
   const applicationPacket = payment.strategy.merchant_application_packet || {};
+  const reviewBrief = applicationPacket.customer_review_brief || {};
   const formalSteps = Array.isArray(formal.steps) ? formal.steps : [];
   const visibleFormalSteps = formalSteps.slice(0, 4);
   const formalStepTone = (status) => (status === "ready" ? "green" : status === "designed" ? "amber" : "red");
@@ -25750,6 +25751,19 @@ function renderSaasMainlandPaymentStrategyPanel() {
   const entityTone = (status) => (status === "ready" ? "green" : status === "designed" || status === "in_progress" ? "amber" : "red");
   const applicationChecklist = Array.isArray(applicationPacket.checklist) ? applicationPacket.checklist : [];
   const applicationTone = (status) => (status === "ready" ? "green" : status === "designed" || status === "in_progress" ? "amber" : "red");
+  const reviewSupport = reviewBrief.refund_and_support || {};
+  const reviewUrls = applicationPacket.review_urls || {};
+  const reviewCards = [
+    ["服务内容", "eBay AI CEO 工作台", "AI CEO 帮商家整理市场、Listing、素材、客服草稿和确认记录；真实高风险动作仍由商家确认。"],
+    ["费用边界", "基础订阅和高成本用量分开", "eBay 成交费、广告费、物流费和退款由商家平台账户结算，不是捷境代扣。"],
+    ["退款与客服", reviewSupport.support_contact_status === "ready" ? "客服入口已准备" : "客服入口待补齐", "支付审核前需要公开客服或投诉入口；退款和争议按订单、订阅和审计证据处理。"],
+    ["数据安全", "证件和密钥不进前端", "商户私钥、证书、webhook secret、身份证件和结算账户只在后端/Vault 或外部支付平台边界处理。"],
+  ];
+  const reviewLinks = [
+    ["服务条款", reviewUrls.terms || "./terms.html"],
+    ["隐私说明", reviewUrls.privacy || "./privacy.html"],
+    ["风险披露", reviewUrls.risk_disclosure || "./risk-disclosure.html"],
+  ];
   const domainRows = [
     ["现在", "香港/海外入口继续用于内测和全球访问", "这不是“香港备案”。香港或海外服务器本身通常不走中国内地 ICP 备案。"],
     ["以后", "大陆公司或个体户做正式商户主体", "正式接微信、支付宝、云闪付时，再让支付主体、域名/子域名、回调地址和备案材料保持一致。"],
@@ -25860,6 +25874,33 @@ function renderSaasMainlandPaymentStrategyPanel() {
           )
           .join("")}
       </div>
+      <div class="saas-mainland-payment-review-brief" data-payment-review-brief="payment_review_customer_brief_v1" aria-label="支付审核说明">
+        <div>
+          <span>审核说明</span>
+          <strong>支付机构和真实商家要先看懂这几件事</strong>
+          <small>这不是新增复杂功能，而是把服务内容、收费边界、退款客服和数据安全说明集中放好，方便后续正式商户支付审核。</small>
+          <div class="saas-mainland-payment-review-links" aria-label="审核页面链接">
+            ${reviewLinks
+              .map(
+                ([label, href]) => `
+                  <a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>
+                `,
+              )
+              .join("")}
+          </div>
+        </div>
+        ${reviewCards
+          .map(
+            ([label, title, detail]) => `
+              <article>
+                <span>${escapeHtml(label)}</span>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
       <div class="saas-mainland-payment-safety" hidden aria-hidden="true">
         <span>mainland_payment_strategy_v1</span>
         <span>formal_payment_collection_architecture_v1</span>
@@ -25869,6 +25910,10 @@ function renderSaasMainlandPaymentStrategyPanel() {
         <span>formal_payment_application_requires_service_privacy_refund_support</span>
         <span>payment_review_documents_no_identity_files_in_frontend</span>
         <span>payment_callback_url_review_ready_marker</span>
+        <span>payment_review_customer_brief_v1</span>
+        <span>payment_review_terms_privacy_refund_links_visible</span>
+        <span>payment_review_support_contact_pending_until_owner_configures</span>
+        <span>base_subscription_usage_platform_fee_boundary_visible</span>
         <span>individual_business_first_then_company_if_scale_requires</span>
         <span>formal_payment_requires_merchant_entity_and_subject_alignment</span>
         <span>personal_qr_private_beta_manual_reconciliation_only</span>

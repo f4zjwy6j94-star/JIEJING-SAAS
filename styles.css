@@ -38416,7 +38416,8 @@ body.saas-public-mvp .saas-mainland-payment-plain,
 body.saas-public-mvp .saas-mainland-payment-formal,
 body.saas-public-mvp .saas-mainland-payment-domain,
 body.saas-public-mvp .saas-mainland-payment-entity,
-body.saas-public-mvp .saas-mainland-payment-application {
+body.saas-public-mvp .saas-mainland-payment-application,
+body.saas-public-mvp .saas-mainland-payment-review-brief {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
@@ -38444,6 +38445,11 @@ body.saas-public-mvp .saas-mainland-payment-application {
   margin-top: 8px;
 }
 
+body.saas-public-mvp .saas-mainland-payment-review-brief {
+  grid-template-columns: minmax(230px, 1.45fr) repeat(4, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
 body.saas-public-mvp .saas-mainland-payment-routes article,
 body.saas-public-mvp .saas-mainland-payment-plain article,
 body.saas-public-mvp .saas-mainland-payment-formal > div,
@@ -38452,7 +38458,9 @@ body.saas-public-mvp .saas-mainland-payment-domain article,
 body.saas-public-mvp .saas-mainland-payment-entity > div,
 body.saas-public-mvp .saas-mainland-payment-entity article,
 body.saas-public-mvp .saas-mainland-payment-application > div,
-body.saas-public-mvp .saas-mainland-payment-application article {
+body.saas-public-mvp .saas-mainland-payment-application article,
+body.saas-public-mvp .saas-mainland-payment-review-brief > div,
+body.saas-public-mvp .saas-mainland-payment-review-brief article {
   display: grid;
   align-content: start;
   gap: 5px;
@@ -38528,7 +38536,8 @@ body.saas-public-mvp .saas-mainland-payment-plain span,
 body.saas-public-mvp .saas-mainland-payment-formal span,
 body.saas-public-mvp .saas-mainland-payment-domain span,
 body.saas-public-mvp .saas-mainland-payment-entity span,
-body.saas-public-mvp .saas-mainland-payment-application span {
+body.saas-public-mvp .saas-mainland-payment-application span,
+body.saas-public-mvp .saas-mainland-payment-review-brief span {
   color: #08766e;
   font-size: 11px;
   font-weight: 900;
@@ -38540,7 +38549,8 @@ body.saas-public-mvp .saas-mainland-payment-plain strong,
 body.saas-public-mvp .saas-mainland-payment-formal strong,
 body.saas-public-mvp .saas-mainland-payment-domain strong,
 body.saas-public-mvp .saas-mainland-payment-entity strong,
-body.saas-public-mvp .saas-mainland-payment-application strong {
+body.saas-public-mvp .saas-mainland-payment-application strong,
+body.saas-public-mvp .saas-mainland-payment-review-brief strong {
   color: #12231f;
   font-size: 14px;
   line-height: 1.25;
@@ -38552,11 +38562,33 @@ body.saas-public-mvp .saas-mainland-payment-plain small,
 body.saas-public-mvp .saas-mainland-payment-formal small,
 body.saas-public-mvp .saas-mainland-payment-domain small,
 body.saas-public-mvp .saas-mainland-payment-entity small,
-body.saas-public-mvp .saas-mainland-payment-application small {
+body.saas-public-mvp .saas-mainland-payment-application small,
+body.saas-public-mvp .saas-mainland-payment-review-brief small {
   margin: 0;
   color: #5d716b;
   font-size: 12px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-mainland-payment-review-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+body.saas-public-mvp .saas-mainland-payment-review-links a {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid rgba(8, 118, 110, 0.16);
+  border-radius: 8px;
+  background: #eefaf6;
+  color: #08766e;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.2;
+  text-decoration: none;
   overflow-wrap: anywhere;
 }
 
@@ -39112,6 +39144,7 @@ body.saas-public-mvp .saas-merchant-billing-guardrail-safety span {
   body.saas-public-mvp .saas-mainland-payment-domain,
   body.saas-public-mvp .saas-mainland-payment-entity,
   body.saas-public-mvp .saas-mainland-payment-application,
+  body.saas-public-mvp .saas-mainland-payment-review-brief,
   body.saas-public-mvp .saas-manual-beta-payment-grid,
   body.saas-public-mvp .saas-manual-beta-payment-orders {
     grid-template-columns: 1fr;

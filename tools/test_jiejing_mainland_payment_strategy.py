@@ -102,6 +102,26 @@ def main() -> int:
             return fail("merchant application packet must not collect identity files in the frontend")
         if application_packet.get("can_auto_grant_paid_entitlement") is not False:
             return fail("merchant application packet must not auto-grant entitlement before signed provider evidence")
+        review_brief = application_packet.get("customer_review_brief") or {}
+        if review_brief.get("contract_version") != "2026-07-01-payment-review-customer-brief":
+            return fail(f"payment review customer brief missing: {review_brief}")
+        if review_brief.get("review_ready") is not False:
+            return fail("payment review should stay not ready until public support contact is configured")
+        if "public_support_contact" not in review_brief.get("missing_for_review", []):
+            return fail(f"payment review should surface missing support contact: {review_brief}")
+        support = review_brief.get("refund_and_support") or {}
+        if support.get("support_contact_status") != "pending_public_support_contact":
+            return fail(f"support contact should be visibly pending before owner config: {support}")
+        for required_scope in {"eBay-first AI CEO workbench", "confirmation_center_for_high_risk_actions"}:
+            if required_scope not in set(review_brief.get("service_scope", [])):
+                return fail(f"payment review brief missing service scope: {required_scope}")
+        for required_term in {
+            "base_subscription_is_software_feature_fee",
+            "ai_model_media_and_search_usage_can_be_separate",
+            "ebay_fees_ads_shipping_refunds_are_settled_by_merchant_platform_accounts",
+        }:
+            if required_term not in set(review_brief.get("billing_terms", [])):
+                return fail(f"payment review brief missing billing boundary: {required_term}")
         packet_checklist = {item.get("key"): item for item in application_packet.get("checklist", []) if isinstance(item, dict)}
         for key in {
             "merchant_subject",

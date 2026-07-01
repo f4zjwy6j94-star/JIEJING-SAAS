@@ -93,6 +93,14 @@ The packet covers:
 - reviewed app domain and payment callback URLs such as `https://app.jiejing.shop/billing/webhook`;
 - backend-only signed webhook and active order-query proof before automatic entitlement activation.
 
+The Settings page also keeps a short customer-facing review brief for payment and merchant review:
+
+- JIEJING sells an eBay-first AI CEO SaaS workbench, not marketplace fees or logistics.
+- Base subscription is a software feature fee; model/search/media usage can be separate.
+- eBay fees, ads, shipping, and refunds are settled by the merchant's platform or provider accounts.
+- Refunds, disputes, and complaints need a public support contact before formal review is considered ready.
+- Identity files, settlement bank details, provider certificates, API keys, and webhook secrets stay outside the frontend.
+
 This keeps the beta path simple while preserving the formal target: merchant order creation, signed provider evidence, subscription/quota update, invoice/audit record, and owner-approved live cutover.
 
 ## External Items The Owner Must Provide Later

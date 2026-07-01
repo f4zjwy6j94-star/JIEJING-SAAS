@@ -145,9 +145,10 @@ def _merchant_application_packet(
     """Return a public-safe checklist for formal merchant payment review."""
 
     public_app_url = _env("JIEJING_PUBLIC_APP_URL", "https://app.jiejing.shop").rstrip("/")
+    public_support_contact = _env("JIEJING_PUBLIC_SUPPORT_CONTACT", "")
     service_docs_ready = _env_bool("JIEJING_PAYMENT_REVIEW_SERVICE_DOCS_READY", True)
     pricing_terms_ready = _env_bool("JIEJING_PAYMENT_REVIEW_PRICING_TERMS_READY", True)
-    support_contact_ready = _env_bool("JIEJING_PAYMENT_REVIEW_SUPPORT_CONTACT_READY", False)
+    support_contact_ready = _env_bool("JIEJING_PAYMENT_REVIEW_SUPPORT_CONTACT_READY", bool(public_support_contact))
     refund_policy_ready = _env_bool("JIEJING_PAYMENT_REVIEW_REFUND_POLICY_READY", True)
     callback_url_ready = _env_bool("JIEJING_PAYMENT_REVIEW_CALLBACK_URL_READY", bool(public_app_url))
     checklist = [
@@ -210,6 +211,13 @@ def _merchant_application_packet(
             "cancel_url": f"{public_app_url}/billing/cancel",
             "webhook_url": f"{public_app_url}/billing/webhook",
         },
+        "customer_review_brief": _customer_review_brief(
+            support_contact_ready=support_contact_ready,
+            public_support_contact=public_support_contact,
+            refund_policy_ready=refund_policy_ready,
+            pricing_terms_ready=pricing_terms_ready,
+            service_docs_ready=service_docs_ready,
+        ),
         "checklist": checklist,
         "must_stay_backend_only": [
             "merchant_private_keys",
@@ -224,6 +232,59 @@ def _merchant_application_packet(
         "can_submit_provider_application": merchant_entity_ready and service_docs_ready and pricing_terms_ready and refund_policy_ready,
         "can_auto_grant_paid_entitlement": domestic_provider_ready and domestic_webhook_configured,
         "settings_storage_db_path_configured": bool(settings.db_path),
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def _customer_review_brief(
+    *,
+    support_contact_ready: bool,
+    public_support_contact: str,
+    refund_policy_ready: bool,
+    pricing_terms_ready: bool,
+    service_docs_ready: bool,
+) -> dict[str, Any]:
+    """Summarize the customer-facing policy story needed for payment review."""
+
+    missing = []
+    if not support_contact_ready:
+        missing.append("public_support_contact")
+    if not refund_policy_ready:
+        missing.append("refund_policy")
+    if not pricing_terms_ready:
+        missing.append("pricing_and_subscription_terms")
+    if not service_docs_ready:
+        missing.append("service_privacy_terms")
+    return {
+        "contract_version": "2026-07-01-payment-review-customer-brief",
+        "service_name": "JIEJING AI CEO eBay SaaS",
+        "service_scope": [
+            "eBay-first AI CEO workbench",
+            "listing_draft_and_market_report",
+            "media_brief_and_customer_service_draft",
+            "confirmation_center_for_high_risk_actions",
+        ],
+        "billing_terms": [
+            "base_subscription_is_software_feature_fee",
+            "ai_model_media_and_search_usage_can_be_separate",
+            "ebay_fees_ads_shipping_refunds_are_settled_by_merchant_platform_accounts",
+        ],
+        "refund_and_support": {
+            "support_contact_status": "ready" if support_contact_ready else "pending_public_support_contact",
+            "support_contact_public": public_support_contact if support_contact_ready else "",
+            "refund_policy_status": "ready" if refund_policy_ready else "in_progress",
+            "dispute_path": "owner_review_with_order_subscription_and_audit_evidence",
+        },
+        "data_and_action_boundary": [
+            "payment_identity_files_and_provider_secrets_do_not_enter_frontend",
+            "real_publish_refund_ad_payment_policy_and_sensitive_customer_promises_require_confirmation",
+            "verified_provider_callback_or_order_query_required_before_auto_entitlement",
+        ],
+        "missing_for_review": missing,
+        "review_ready": not missing,
         "charge_now_allowed": False,
         "triggers_real_charge": False,
         "frontend_gets_payment_secret": False,
