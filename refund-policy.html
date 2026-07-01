@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>捷境退款政策</title>
+    <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
+    <style>
+      :root { color-scheme: light; --paper:#fffefa; --surface:#fff; --wash:#f2f8f5; --ink:#111d18; --muted:#5f6e67; --line:#d9e8df; --teal:#08766e; --amber:#b7811d; }
+      * { box-sizing:border-box; }
+      body { margin:0; background:linear-gradient(180deg,#fffefa 0%,#f6fbf8 100%); color:var(--ink); font-family:"Microsoft YaHei","PingFang SC","Noto Sans SC",Arial,sans-serif; line-height:1.68; }
+      main { max-width:960px; margin:0 auto; padding:56px 24px 72px; }
+      .badge { color:var(--teal); font-weight:800; letter-spacing:.02em; margin:0 0 10px; }
+      h1 { font-size:clamp(34px,5vw,58px); line-height:1.05; margin:0 0 18px; letter-spacing:0; }
+      h2 { font-size:22px; margin:34px 0 10px; letter-spacing:0; }
+      p,li { color:var(--muted); font-size:16px; }
+      a { color:var(--teal); font-weight:800; text-decoration:none; }
+      a:hover { text-decoration:underline; }
+      .panel { border:1px solid var(--line); border-radius:8px; padding:18px; background:rgba(242,248,245,.82); }
+      .notice { border-color:#ead8a9; background:#fff8e5; }
+      .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:16px; }
+      .card { border:1px solid var(--line); border-radius:8px; padding:16px; background:var(--surface); }
+      .card strong { display:block; margin-bottom:6px; }
+      .meta { margin-top:30px; color:#7b8781; font-size:14px; }
+      @media (max-width:720px) { main { padding:42px 18px 58px; } .grid { grid-template-columns:1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="badge">JIEJING / 捷境</p>
+      <h1>退款政策</h1>
+      <p>本页面说明捷境订阅、额度和内测收款的退款处理原则。当前捷境仍处于受控 beta / 上线前演练阶段，不是正式公开收费上线状态。</p>
+
+      <section class="panel notice">
+        <strong>当前阶段</strong>
+        <p>正式商户支付开通前，个人收款码或人工收款只能用于小范围内测人工对账，不作为公开付费 SaaS 的正式收款通道。内测人工收款不会自动开通、续费、停用或退款，必须由主理人依据记录人工确认。</p>
+      </section>
+
+      <h2>1. 可退款范围</h2>
+      <div class="grid">
+        <article class="card"><strong>软件订阅</strong><p>正式支付上线后，如订单未完成服务开通、重复扣费、支付异常或套餐权益未能发放，可按订单、支付回调和审计记录申请处理。</p></article>
+        <article class="card"><strong>高成本用量</strong><p>大模型、生图、生视频、联网搜索和第三方数据源等已实际消耗的用量通常不自动退款，除非可证明由系统故障造成错误扣量。</p></article>
+      </div>
+
+      <h2>2. 不属于捷境退款范围</h2>
+      <p>eBay 成交费、广告费、店铺订阅费、物流费、采购款、买家退款、平台罚款、支付通道手续费和汇兑损益不由捷境代扣，也不由捷境统一退款。相关费用由商家在对应平台、物流商或支付机构处理。</p>
+
+      <h2>3. 争议处理路径</h2>
+      <p>退款或争议会按“订单记录 → 订阅状态 → 支付回调/查单证据 → 用量记录 → 审计日志”的顺序核对。正式支付接入后，自动化发放和退款状态必须依赖后端签名 webhook 或主动查单结果，不依据前端截图、聊天口头承诺或未验证通知直接处理。</p>
+
+      <h2>4. 客服入口</h2>
+      <p>内测阶段优先通过登录后的意见箱和主理人沟通处理；正式公开收费前会补齐公开客服邮箱、工单或支付机构要求的投诉入口。当前客服入口状态：support_contact_pending_before_paid_launch。</p>
+
+      <h2>5. 配套页面</h2>
+      <p>
+        <a href="./terms.html">服务条款</a> ·
+        <a href="./support.html">客服与反馈入口</a> ·
+        <a href="./privacy.html">隐私与数据边界说明</a> ·
+        <a href="./risk-disclosure.html">风险披露与确认中心边界</a>
+      </p>
+
+      <p class="meta">版本：payment_review_refund_policy_v1 · 更新日期：2026-07-01</p>
+    </main>
+  </body>
+</html>

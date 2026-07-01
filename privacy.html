@@ -6,85 +6,59 @@
     <title>捷境隐私与数据边界说明</title>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
     <style>
-      :root {
-        color-scheme: light;
-        --paper: #fffefa;
-        --ink: #111d18;
-        --muted: #5c6f66;
-        --line: #d8e8df;
-        --teal: #08766e;
-      }
-      body {
-        margin: 0;
-        background: var(--paper);
-        color: var(--ink);
-        font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", Arial, sans-serif;
-        line-height: 1.65;
-      }
-      main {
-        max-width: 880px;
-        margin: 0 auto;
-        padding: 56px 24px 72px;
-      }
-      h1 {
-        font-size: clamp(34px, 5vw, 56px);
-        line-height: 1.05;
-        margin: 0 0 18px;
-      }
-      h2 {
-        font-size: 22px;
-        margin: 34px 0 10px;
-      }
-      p,
-      li {
-        color: var(--muted);
-        font-size: 16px;
-      }
-      a {
-        color: var(--teal);
-        font-weight: 700;
-      }
-      .badge {
-        color: var(--teal);
-        font-weight: 800;
-        margin-bottom: 12px;
-      }
-      .panel {
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 18px;
-        background: rgba(240, 250, 245, 0.7);
-      }
+      :root { color-scheme: light; --paper:#fffefa; --surface:#fff; --wash:#f2f8f5; --ink:#111d18; --muted:#5f6e67; --line:#d9e8df; --teal:#08766e; --amber:#b7811d; }
+      * { box-sizing: border-box; }
+      body { margin:0; background:linear-gradient(180deg,#fffefa 0%,#f6fbf8 100%); color:var(--ink); font-family:"Microsoft YaHei","PingFang SC","Noto Sans SC",Arial,sans-serif; line-height:1.68; }
+      main { max-width:960px; margin:0 auto; padding:56px 24px 72px; }
+      .badge { color:var(--teal); font-weight:800; letter-spacing:.02em; margin:0 0 10px; }
+      h1 { font-size:clamp(34px,5vw,58px); line-height:1.05; margin:0 0 18px; letter-spacing:0; }
+      h2 { font-size:22px; margin:34px 0 10px; letter-spacing:0; }
+      p,li { color:var(--muted); font-size:16px; }
+      a { color:var(--teal); font-weight:800; text-decoration:none; }
+      a:hover { text-decoration:underline; }
+      .panel { border:1px solid var(--line); border-radius:8px; padding:18px; background:rgba(242,248,245,.82); }
+      .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:16px; }
+      .card { border:1px solid var(--line); border-radius:8px; padding:16px; background:var(--surface); }
+      .card strong { display:block; margin-bottom:6px; }
+      .meta { margin-top:30px; color:#7b8781; font-size:14px; }
+      @media (max-width:720px) { main { padding:42px 18px 58px; } .grid { grid-template-columns:1fr; } }
     </style>
   </head>
   <body>
     <main>
       <p class="badge">JIEJING / 捷境</p>
       <h1>隐私与数据边界说明</h1>
-      <p>捷境是面向 eBay 商家的 AI CEO 经营工作台。当前环境用于受控 beta 和上线前演练，不是正式公开收费上线状态。</p>
+      <p>捷境是面向 eBay 商家的 AI CEO 经营工作台。当前环境用于受控 beta 和上线前演练，不是正式公开收费上线状态。本页面说明哪些数据会被处理、哪些信息不能进入前端，以及 AI 和商家之间的责任边界。</p>
 
       <section class="panel">
+        <strong>核心原则</strong>
         <p>捷境只在商家授权和后端权限边界内处理经营数据。发布、改价、库存、退款、广告、采购付款、政策修改和敏感客服承诺不会由前端或 AI 直接执行，必须进入确认中心、预检和审计流程。</p>
       </section>
 
-      <h2>我们处理哪些数据</h2>
-      <p>账号、公司、店铺、授权连接状态、官方 eBay 数据包、报告、确认单、任务记录、审计记录、订阅状态和用量配额会按租户隔离保存。未登录访问不会创建长期经营记忆。</p>
+      <h2>1. 我们处理哪些数据</h2>
+      <p>账号、公司、店铺、授权连接状态、官方 eBay 数据包、报告、确认单、任务记录、审计记录、订阅状态和用量配额会按租户隔离保存。普通聊天默认不进入长期经营记忆；eBay 工作流、确认、真实执行、报告和审计证据会进入经营记忆和审计。</p>
 
-      <h2>eBay 授权和密钥</h2>
+      <h2>2. eBay 授权和密钥</h2>
       <p>eBay OAuth token、refresh token、模型 key、支付 provider secret、client secret 和 API key 只能留在后端密钥/Vault 边界，并以 secret_ref 形式参与审计。浏览器、报告、普通运行时和前端状态不接收原始密钥。</p>
 
-      <h2>数据来源标记</h2>
+      <h2>3. 支付和身份资料</h2>
+      <p>支付商户私钥、证书、webhook secret、经营者身份证件、结算账户和银行资料不进入捷境前端页面。正式支付开通后，自动发放套餐和额度必须依赖后端验证过的支付回调或主动查单结果。</p>
+
+      <h2>4. 数据来源标记</h2>
       <p>AI CEO 输出会标记来源：官方 eBay packet、商家上传资料、公开网页、商家规则或模型推理。缺失资料保持待确认，不用猜测冒充事实。</p>
 
-      <h2>安全和反爬边界</h2>
+      <h2>5. 安全和反爬边界</h2>
       <p>公网会使用 noindex、基础 WAF/Bot 控制、高成本 API 限流、源站访问控制和安全响应头降低抓取和攻击风险。这些措施提高复制和滥用成本，但不能承诺完全阻止所有竞争对手观察公开页面。</p>
 
-      <h2>配套文件</h2>
-      <p><a href="./terms.html">服务条款</a> · <a href="./risk-disclosure.html">风险披露与确认中心边界</a></p>
+      <h2>6. 配套页面</h2>
+      <p>
+        <a href="./terms.html">服务条款</a> ·
+        <a href="./refund-policy.html">退款政策</a> ·
+        <a href="./support.html">客服与反馈入口</a> ·
+        <a href="./risk-disclosure.html">风险披露与确认中心边界</a>
+      </p>
 
-      <h2>联系</h2>
-      <p>当前页面用于 app.jiejing.shop 的 eBay OAuth、内部测试和上线前合规边界说明。正式收费公开上线前会继续补充主体、收款、退款、客服和数据保留条款。</p>
+      <p class="meta">版本：payment_review_legal_pages_v1 · 更新日期：2026-07-01</p>
     </main>
-  <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"8ceaac5cf3dd4fa491331c0faf56768c","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
-</body>
+  </body>
 </html>

@@ -28,6 +28,8 @@ INCLUDE_ROOT_FILES = [
     "index.html",
     "privacy.html",
     "terms.html",
+    "refund-policy.html",
+    "support.html",
     "risk-disclosure.html",
     "robots.txt",
     "styles.css",

@@ -182,7 +182,7 @@ function localStaticPath(requestUrl) {
   const url = new URL(requestUrl);
   const pathname = decodeURIComponent(url.pathname.replace(/^\/+/, "")) || "index.html";
   const allowed =
-    ["app.html", "index.html", "app.js", "styles.css", "privacy.html"].includes(pathname) || pathname.startsWith("assets/");
+    ["app.html", "index.html", "app.js", "styles.css", "privacy.html", "terms.html", "refund-policy.html", "support.html", "risk-disclosure.html"].includes(pathname) || pathname.startsWith("assets/");
   if (!allowed) return "";
   const candidate = path.resolve(localStaticRoot, pathname);
   const relative = path.relative(localStaticRoot, candidate);

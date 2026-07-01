@@ -22,11 +22,13 @@ def main() -> int:
     styles_css = (ROOT / "styles.css").read_text(encoding="utf-8")
     privacy_html = (ROOT / "privacy.html").read_text(encoding="utf-8")
     terms_html = (ROOT / "terms.html").read_text(encoding="utf-8")
+    refund_html = (ROOT / "refund-policy.html").read_text(encoding="utf-8")
+    support_html = (ROOT / "support.html").read_text(encoding="utf-8")
     risk_html = (ROOT / "risk-disclosure.html").read_text(encoding="utf-8")
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260701-payment-review-brief-v1"
+    frontend_asset_version = "20260701-payment-legal-pages-v1"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -84,6 +86,7 @@ def main() -> int:
         "20260629-home-intents-v1",
         "20260629-onboarding-guard-v1",
         "20260629-onboarding-lite-v1",
+        "20260701-payment-review-brief-v1",
         "20260510-ebay-policy-v1",
     ]:
         if stale_asset_version in index_html + app_html:
@@ -199,11 +202,13 @@ def main() -> int:
         return fail("public HTTPS staging frontend must serve privacy.html for eBay OAuth developer configuration")
     for mounted_page in [
         "../terms.html:/usr/share/nginx/html/terms.html:ro",
+        "../refund-policy.html:/usr/share/nginx/html/refund-policy.html:ro",
+        "../support.html:/usr/share/nginx/html/support.html:ro",
         "../risk-disclosure.html:/usr/share/nginx/html/risk-disclosure.html:ro",
     ]:
         if mounted_page not in compose_https:
             return fail(f"public HTTPS staging frontend must serve legal page: {mounted_page}")
-    for deploy_page in ["privacy.html", "terms.html", "risk-disclosure.html"]:
+    for deploy_page in ["privacy.html", "terms.html", "refund-policy.html", "support.html", "risk-disclosure.html"]:
         if deploy_page not in deploy_script:
             return fail(f"frontend deploy archive must sync legal page: {deploy_page}")
     for deploy_archive_marker in [
@@ -249,9 +254,32 @@ def main() -> int:
         "当前捷境仍不是正式公开收费上线状态",
         "禁止自动执行的动作",
         "测试数据默认只标记和报告，不自动删除",
+        "基础订阅是软件功能费",
+        "eBay 费用、广告费、物流和退款不是捷境代扣",
+        "payment_review_legal_pages_v1",
     ]:
         if marker not in terms_html:
             return fail(f"terms page missing launch-boundary marker: {marker}")
+    for marker in [
+        "捷境退款政策",
+        "当前捷境仍处于受控 beta / 上线前演练阶段，不是正式公开收费上线状态",
+        "个人收款码或人工收款只能用于小范围内测人工对账",
+        "eBay 成交费、广告费、店铺订阅费、物流费、采购款、买家退款",
+        "support_contact_pending_before_paid_launch",
+        "payment_review_refund_policy_v1",
+    ]:
+        if marker not in refund_html:
+            return fail(f"refund policy page missing payment-review marker: {marker}")
+    for marker in [
+        "捷境客服与反馈入口",
+        "正式公开收费前会补齐支付机构要求的公开客服邮箱",
+        "意见箱只记录流程意见和上下文编号，不保存 token、key、平台凭证或身份证件",
+        "不会替商家直接发布商品、改价、改库存、退款、投广告",
+        "public_support_contact_required_for_payment_review",
+        "payment_review_support_entry_v1",
+    ]:
+        if marker not in support_html:
+            return fail(f"support page missing payment-review marker: {marker}")
     for marker in [
         "风险披露与确认中心边界",
         "所有高风险动作都必须由商家或授权管理员确认",

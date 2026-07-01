@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>捷境客服与反馈入口</title>
+    <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
+    <style>
+      :root { color-scheme: light; --paper:#fffefa; --surface:#fff; --wash:#f2f8f5; --ink:#111d18; --muted:#5f6e67; --line:#d9e8df; --teal:#08766e; --amber:#b7811d; }
+      * { box-sizing:border-box; }
+      body { margin:0; background:linear-gradient(180deg,#fffefa 0%,#f6fbf8 100%); color:var(--ink); font-family:"Microsoft YaHei","PingFang SC","Noto Sans SC",Arial,sans-serif; line-height:1.68; }
+      main { max-width:960px; margin:0 auto; padding:56px 24px 72px; }
+      .badge { color:var(--teal); font-weight:800; letter-spacing:.02em; margin:0 0 10px; }
+      h1 { font-size:clamp(34px,5vw,58px); line-height:1.05; margin:0 0 18px; letter-spacing:0; }
+      h2 { font-size:22px; margin:34px 0 10px; letter-spacing:0; }
+      p,li { color:var(--muted); font-size:16px; }
+      a { color:var(--teal); font-weight:800; text-decoration:none; }
+      a:hover { text-decoration:underline; }
+      .panel { border:1px solid var(--line); border-radius:8px; padding:18px; background:rgba(242,248,245,.82); }
+      .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-top:16px; }
+      .card { border:1px solid var(--line); border-radius:8px; padding:16px; background:var(--surface); }
+      .card strong { display:block; margin-bottom:6px; }
+      .button { display:inline-flex; align-items:center; justify-content:center; min-height:44px; padding:0 18px; border-radius:8px; background:#0d1c16; color:#fff; font-weight:800; margin-top:8px; }
+      .meta { margin-top:30px; color:#7b8781; font-size:14px; }
+      @media (max-width:780px) { main { padding:42px 18px 58px; } .grid { grid-template-columns:1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="badge">JIEJING / 捷境</p>
+      <h1>客服与反馈入口</h1>
+      <p>这里是捷境公开客服说明页。当前仍处于受控 beta / 上线前演练阶段，正式公开收费前会补齐支付机构要求的公开客服邮箱、工单入口或投诉处理方式。</p>
+
+      <section class="panel">
+        <strong>当前可用入口</strong>
+        <p>已登录商家可在工作台右下角“意见”入口提交流程问题、页面问题、结果不对、缺少动作或计费疑问。意见箱只记录流程意见和上下文编号，不保存 token、key、平台凭证或身份证件。</p>
+        <a class="button" href="./app.html?start=app">进入捷境工作台</a>
+      </section>
+
+      <h2>我们会处理的问题</h2>
+      <div class="grid">
+        <article class="card"><strong>产品和流程</strong><p>AI CEO、Listing、批量铺货、素材工坊、客服订单、决策中心和设置页面的使用问题。</p></article>
+        <article class="card"><strong>计费和订阅</strong><p>套餐开通、额度、人工内测收款对账、正式支付回调和退款政策相关问题。</p></article>
+        <article class="card"><strong>安全和数据</strong><p>账号隔离、数据来源、授权状态、密钥边界、审计记录和高风险确认规则。</p></article>
+      </div>
+
+      <h2>不会通过客服直接执行的事项</h2>
+      <p>客服入口不会替商家直接发布商品、改价、改库存、退款、投广告、采购付款、修改政策、授权 eBay 或承诺买家。上述动作必须回到系统内确认中心，保留证据和审计记录。</p>
+
+      <h2>正式上线前待补齐</h2>
+      <p>公开客服邮箱或工单系统、支付订单查询、退款申请表、商户主体信息、服务时间和投诉升级路径仍属于正式收费上线前待补齐项。标记：public_support_contact_required_for_payment_review。</p>
+
+      <h2>配套页面</h2>
+      <p>
+        <a href="./terms.html">服务条款</a> ·
+        <a href="./refund-policy.html">退款政策</a> ·
+        <a href="./privacy.html">隐私与数据边界说明</a> ·
+        <a href="./risk-disclosure.html">风险披露与确认中心边界</a>
+      </p>
+
+      <p class="meta">版本：payment_review_support_entry_v1 · 更新日期：2026-07-01</p>
+    </main>
+  </body>
+</html>

@@ -99,7 +99,7 @@ function localStaticPath(requestUrl) {
   const url = new URL(requestUrl);
   const pathname = decodeURIComponent(url.pathname.replace(/^\/+/, "")) || "index.html";
   const allowed =
-    ["app.html", "index.html", "app.js", "styles.css", "privacy.html", "terms.html", "risk-disclosure.html"].includes(pathname) ||
+    ["app.html", "index.html", "app.js", "styles.css", "privacy.html", "terms.html", "refund-policy.html", "support.html", "risk-disclosure.html"].includes(pathname) ||
     pathname.startsWith("assets/");
   if (!allowed) return "";
   const candidate = path.resolve(localStaticRoot, pathname);
@@ -475,7 +475,7 @@ async function main() {
     return (
       url.pathname.endsWith("/index.html") &&
       url.searchParams.get("start") === "site" &&
-      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260701-payment-review-brief-v1"')
+      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260701-payment-legal-pages-v1"')
     );
   });
   await accountBPage.screenshot({ path: path.join(outDir, "workbench-logo-homepage-return.png"), fullPage: true }).catch(() => {});

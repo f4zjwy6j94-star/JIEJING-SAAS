@@ -25762,6 +25762,8 @@ function renderSaasMainlandPaymentStrategyPanel() {
   const reviewLinks = [
     ["服务条款", reviewUrls.terms || "./terms.html"],
     ["隐私说明", reviewUrls.privacy || "./privacy.html"],
+    ["退款政策", reviewUrls.refund_policy || "./refund-policy.html"],
+    ["客服入口", reviewUrls.support || "./support.html"],
     ["风险披露", reviewUrls.risk_disclosure || "./risk-disclosure.html"],
   ];
   const domainRows = [
@@ -25912,6 +25914,7 @@ function renderSaasMainlandPaymentStrategyPanel() {
         <span>payment_callback_url_review_ready_marker</span>
         <span>payment_review_customer_brief_v1</span>
         <span>payment_review_terms_privacy_refund_links_visible</span>
+        <span>payment_review_refund_support_public_pages_visible</span>
         <span>payment_review_support_contact_pending_until_owner_configures</span>
         <span>base_subscription_usage_platform_fee_boundary_visible</span>
         <span>individual_business_first_then_company_if_scale_requires</span>

@@ -203,6 +203,8 @@ def _merchant_application_packet(
         "review_urls": {
             "terms": f"{public_app_url}/terms.html",
             "privacy": f"{public_app_url}/privacy.html",
+            "refund_policy": f"{public_app_url}/refund-policy.html",
+            "support": f"{public_app_url}/support.html",
             "risk_disclosure": f"{public_app_url}/risk-disclosure.html",
             "pricing": public_app_url,
         },

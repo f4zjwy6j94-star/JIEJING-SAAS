@@ -101,6 +101,14 @@ The Settings page also keeps a short customer-facing review brief for payment an
 - Refunds, disputes, and complaints need a public support contact before formal review is considered ready.
 - Identity files, settlement bank details, provider certificates, API keys, and webhook secrets stay outside the frontend.
 
+As of 2026-07-01, the public review pages are split into concrete URLs so a payment reviewer or early merchant can inspect the same boundaries without opening the internal Settings page:
+
+- `https://app.jiejing.shop/terms.html`
+- `https://app.jiejing.shop/privacy.html`
+- `https://app.jiejing.shop/refund-policy.html`
+- `https://app.jiejing.shop/support.html`
+- `https://app.jiejing.shop/risk-disclosure.html`
+
 This keeps the beta path simple while preserving the formal target: merchant order creation, signed provider evidence, subscription/quota update, invoice/audit record, and owner-approved live cutover.
 
 ## External Items The Owner Must Provide Later

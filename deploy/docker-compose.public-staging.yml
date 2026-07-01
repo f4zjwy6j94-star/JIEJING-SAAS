@@ -64,6 +64,8 @@ services:
       - ../app.html:/usr/share/nginx/html/app.html:ro
       - ../privacy.html:/usr/share/nginx/html/privacy.html:ro
       - ../terms.html:/usr/share/nginx/html/terms.html:ro
+      - ../refund-policy.html:/usr/share/nginx/html/refund-policy.html:ro
+      - ../support.html:/usr/share/nginx/html/support.html:ro
       - ../risk-disclosure.html:/usr/share/nginx/html/risk-disclosure.html:ro
       - ../robots.txt:/usr/share/nginx/html/robots.txt:ro
       - ../app.js:/usr/share/nginx/html/app.js:ro

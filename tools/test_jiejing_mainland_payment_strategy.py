@@ -137,6 +137,13 @@ def main() -> int:
         callback_urls = application_packet.get("provider_callback_urls") or {}
         if callback_urls.get("webhook_url") != "https://app.jiejing.shop/billing/webhook":
             return fail(f"merchant application packet should expose reviewed callback URL without secrets: {callback_urls}")
+        review_urls = application_packet.get("review_urls") or {}
+        for key, url in {
+            "refund_policy": "https://app.jiejing.shop/refund-policy.html",
+            "support": "https://app.jiejing.shop/support.html",
+        }.items():
+            if review_urls.get(key) != url:
+                return fail(f"merchant application packet missing public payment review URL {key}: {review_urls}")
         if application_packet.get("charge_now_allowed") is not False or application_packet.get("triggers_real_charge") is not False:
             return fail("merchant application packet must not be charge-capable")
         _assert_no_identity_or_bank_material(application_packet)

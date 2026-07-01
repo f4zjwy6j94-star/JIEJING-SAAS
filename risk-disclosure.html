@@ -6,33 +6,57 @@
     <title>捷境风险披露与确认中心边界</title>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
     <style>
-      body { margin: 0; background: #fffefa; color: #111d18; font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", Arial, sans-serif; line-height: 1.65; }
-      main { max-width: 880px; margin: 0 auto; padding: 56px 24px 72px; }
-      h1 { font-size: clamp(34px, 5vw, 56px); line-height: 1.05; margin: 0 0 18px; }
-      h2 { font-size: 22px; margin: 34px 0 10px; }
-      p, li { color: #5c6f66; font-size: 16px; }
-      a { color: #08766e; font-weight: 700; }
-      .panel { border: 1px solid #d8e8df; border-radius: 8px; padding: 18px; background: rgba(240, 250, 245, 0.7); }
+      :root { color-scheme: light; --paper:#fffefa; --surface:#fff; --wash:#f2f8f5; --ink:#111d18; --muted:#5f6e67; --line:#d9e8df; --teal:#08766e; --red:#b24034; --amber:#b7811d; --green:#08766e; }
+      * { box-sizing: border-box; }
+      body { margin:0; background:linear-gradient(180deg,#fffefa 0%,#f6fbf8 100%); color:var(--ink); font-family:"Microsoft YaHei","PingFang SC","Noto Sans SC",Arial,sans-serif; line-height:1.68; }
+      main { max-width:960px; margin:0 auto; padding:56px 24px 72px; }
+      .badge { color:var(--teal); font-weight:800; letter-spacing:.02em; margin:0 0 10px; }
+      h1 { font-size:clamp(34px,5vw,58px); line-height:1.05; margin:0 0 18px; letter-spacing:0; }
+      h2 { font-size:22px; margin:34px 0 10px; letter-spacing:0; }
+      p,li { color:var(--muted); font-size:16px; }
+      a { color:var(--teal); font-weight:800; text-decoration:none; }
+      a:hover { text-decoration:underline; }
+      .panel { border:1px solid var(--line); border-radius:8px; padding:18px; background:rgba(242,248,245,.82); }
+      .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-top:16px; }
+      .card { border:1px solid var(--line); border-radius:8px; padding:16px; background:var(--surface); }
+      .card strong { display:block; margin-bottom:6px; }
+      .red strong { color:var(--red); } .amber strong { color:var(--amber); } .green strong { color:var(--green); }
+      .meta { margin-top:30px; color:#7b8781; font-size:14px; }
+      @media (max-width:780px) { main { padding:42px 18px 58px; } .grid { grid-template-columns:1fr; } }
     </style>
   </head>
   <body>
     <main>
+      <p class="badge">JIEJING / 捷境</p>
       <h1>风险披露与确认中心边界</h1>
-      <p>捷境会尽量把风险前置到红黄绿体检、确认中心和审计证据里，但 AI 输出和平台接口状态都可能不完整或变化。</p>
+      <p>捷境会尽量把风险前置到红黄绿体检、确认中心和审计证据里，但 AI 输出、平台接口状态、市场表现和账号状态都可能不完整或变化。所有高风险动作都必须由商家或授权管理员确认。</p>
+
       <section class="panel">
-        <p>所有高风险动作都必须由商家或授权管理员确认。AI 可以给出建议和证据，但不能绕过确认中心直接替你承担经营判断。</p>
+        <strong>确认中心原则</strong>
+        <p>AI 可以给出建议和证据，但不能绕过确认中心直接替商家承担经营判断。确认中心必须展示动作、来源证据、风险项、回滚或清理计划、执行人、时间和审计记录。</p>
       </section>
-      <h2>红色阻断</h2>
-      <p>账号异常、疑似侵权、禁售词、类目不匹配、图片或 SKU 重复、政策缺失、利润为负、发货承诺不清、平台限额不足等，应阻断真实发布。</p>
-      <h2>黄色复核</h2>
-      <p>成本、物流时效、平台费、售后风险、素材质量、供应商事实、市场热度和政策匹配存在不确定性时，需要人工复核。</p>
-      <h2>绿色通过</h2>
-      <p>绿色只表示当前证据满足系统预检，不等于保证销量、利润、账号安全或平台长期合规。</p>
-      <h2>确认中心</h2>
-      <p>确认中心必须展示动作、来源证据、风险项、回滚或清理计划、执行人、时间和审计记录。真实写入、付款、退款、广告、政策和敏感客服承诺不能跳过。</p>
-      <h2>相关文件</h2>
-      <p><a href="./privacy.html">隐私与数据边界说明</a> · <a href="./terms.html">服务条款</a></p>
+
+      <div class="grid">
+        <article class="card red"><strong>红色阻断</strong><p>账号异常、疑似侵权、禁售词、类目不匹配、图片或 SKU 重复、政策缺失、利润为负、发货承诺不清、平台限额不足时，应阻断真实发布。</p></article>
+        <article class="card amber"><strong>黄色复核</strong><p>成本、物流时效、平台费、售后风险、素材质量、供应商事实、市场热度和政策匹配存在不确定性时，需要人工复核。</p></article>
+        <article class="card green"><strong>绿色通过</strong><p>绿色只表示当前证据满足系统预检，不等于保证销量、利润、账号安全或平台长期合规。</p></article>
+      </div>
+
+      <h2>必须确认的动作</h2>
+      <p>真实发布、改价、库存、采购付款、退款、部分退款、广告预算、政策修改、OAuth 权限变更、客服发送和明确承诺到货/赔偿/退款，都不能跳过确认中心。</p>
+
+      <h2>平台和账号风险</h2>
+      <p>eBay 账号冻结、限额、刊登失败、侵权投诉、平台政策变化、物流异常、付款争议和买家纠纷属于商家经营风险。捷境可以帮助整理证据和建议，但不能保证平台一定接受、恢复或放行。</p>
+
+      <h2>配套页面</h2>
+      <p>
+        <a href="./terms.html">服务条款</a> ·
+        <a href="./privacy.html">隐私与数据边界说明</a> ·
+        <a href="./refund-policy.html">退款政策</a> ·
+        <a href="./support.html">客服与反馈入口</a>
+      </p>
+
+      <p class="meta">版本：payment_review_legal_pages_v1 · 更新日期：2026-07-01</p>
     </main>
-  <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"8ceaac5cf3dd4fa491331c0faf56768c","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
-</body>
+  </body>
 </html>

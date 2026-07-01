@@ -59,6 +59,8 @@ FILES=(
   "app.html"
   "privacy.html"
   "terms.html"
+  "refund-policy.html"
+  "support.html"
   "risk-disclosure.html"
   "robots.txt"
   "app.js"

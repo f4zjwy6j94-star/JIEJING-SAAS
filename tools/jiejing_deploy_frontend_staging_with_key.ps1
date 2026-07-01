@@ -44,7 +44,7 @@ set -euo pipefail
 cd "$RemoteApp"
 backup_dir="output/deploy-backups/$stamp"
 mkdir -p "`$backup_dir/deploy"
-for path in app.js styles.css index.html app.html privacy.html terms.html risk-disclosure.html favicon.ico assets/jiejing-app-icon.svg assets/jiejing-logo-lockup.svg assets/jiejing-logo-mark.svg deploy/nginx.public-staging.conf deploy/Caddyfile.public-staging.systemd; do
+for path in app.js styles.css index.html app.html privacy.html terms.html refund-policy.html support.html risk-disclosure.html favicon.ico assets/jiejing-app-icon.svg assets/jiejing-logo-lockup.svg assets/jiejing-logo-mark.svg deploy/nginx.public-staging.conf deploy/Caddyfile.public-staging.systemd; do
   if [ -f "$path" ]; then
     mkdir -p "`$backup_dir/`$(dirname "`$path")"
     cp "$path" "`$backup_dir/$path"
@@ -61,6 +61,8 @@ install -m 0644 "`$tmp_dir/index.html" index.html
 install -m 0644 "`$tmp_dir/app.html" app.html
 install -m 0644 "`$tmp_dir/privacy.html" privacy.html
 install -m 0644 "`$tmp_dir/terms.html" terms.html
+install -m 0644 "`$tmp_dir/refund-policy.html" refund-policy.html
+install -m 0644 "`$tmp_dir/support.html" support.html
 install -m 0644 "`$tmp_dir/risk-disclosure.html" risk-disclosure.html
 install -m 0644 "`$tmp_dir/favicon.ico" favicon.ico
 install -D -m 0644 "`$tmp_dir/assets/jiejing-app-icon.svg" assets/jiejing-app-icon.svg
@@ -86,7 +88,7 @@ echo DEPLOY_BACKUP_DIR="`$backup_dir"
 echo DEPLOY_FRONTEND_VERSION=$frontendVersion
 "@
 
-$archiveArgs = @("-czf", $patchArchive, "app.js", "styles.css", "index.html", "app.html", "privacy.html", "terms.html", "risk-disclosure.html", "favicon.ico", "assets/jiejing-app-icon.svg", "assets/jiejing-logo-lockup.svg", "assets/jiejing-logo-mark.svg", "deploy/nginx.public-staging.conf", "deploy/Caddyfile.public-staging.systemd")
+$archiveArgs = @("-czf", $patchArchive, "app.js", "styles.css", "index.html", "app.html", "privacy.html", "terms.html", "refund-policy.html", "support.html", "risk-disclosure.html", "favicon.ico", "assets/jiejing-app-icon.svg", "assets/jiejing-logo-lockup.svg", "assets/jiejing-logo-mark.svg", "deploy/nginx.public-staging.conf", "deploy/Caddyfile.public-staging.systemd")
 Invoke-NativeChecked "tar" $archiveArgs
 $remoteScriptForSsh = $remoteScript.TrimStart([char]0xFEFF) -replace "`r", ""
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
