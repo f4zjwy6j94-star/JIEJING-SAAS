@@ -30820,13 +30820,13 @@ body.saas-public-mvp[data-view="cockpit"] .saas-first-order-proof-strip article 
   position: relative;
   display: inline-grid;
   flex: 0 0 auto;
-  width: 42px;
-  height: 42px;
+  width: 50px;
+  height: 50px;
   place-items: center;
   overflow: hidden;
   border: 0;
-  border-radius: 10px;
-  background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / contain no-repeat;
+  border-radius: 12px;
+  background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / 118% no-repeat;
   box-shadow:
     0 16px 34px rgba(17, 21, 19, 0.14),
     0 1px 0 rgba(255, 255, 255, 0.8) inset;
@@ -30866,12 +30866,12 @@ body.saas-public-mvp[data-view="cockpit"] .saas-first-order-proof-strip article 
 .onboarding-nav .brand-mark,
 .sidebar .brand-mark,
 .auth-brand-lockup .brand-mark {
-  width: 42px;
-  height: 42px;
+  width: 50px;
+  height: 50px;
 }
 
 .auth-brand-lockup .brand-mark {
-  border-radius: 10px;
+  border-radius: 12px;
 }
 
 /* 2026-06-19 SaaS workbench polish v2: calmer operator-grade shell after the brand-icon refresh. */
@@ -31353,10 +31353,10 @@ body.saas-public-mvp .app-home-link span {
 }
 
 body.saas-public-mvp .brand-mark {
-  width: 42px;
-  height: 42px;
+  width: 50px;
+  height: 50px;
   border-color: rgba(17, 21, 19, 0.12);
-  background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / contain no-repeat;
+  background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / 118% no-repeat;
   color: transparent;
   font-size: 0;
   line-height: 0;

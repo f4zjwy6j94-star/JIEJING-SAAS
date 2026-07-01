@@ -4,9 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="prefetch" href="./app.html?start=app&view=cockpit" as="document" />
-    <link rel="prefetch" href="./app.js?v=20260701-media-asset-review-ui-v1" as="script" />
+    <link rel="prefetch" href="./app.js?v=20260701-brand-logo-scale-v1" as="script" />
     <link rel="prefetch" href="./assets/jiejing-settings-panels.js?v=20260620-owner-launch-control-v5" as="script" />
-    <link rel="prefetch" href="./styles.css?v=20260701-media-asset-review-ui-v1" as="style" />
+    <link rel="prefetch" href="./styles.css?v=20260701-brand-logo-scale-v1" as="style" />
     <title>捷境 · eBay AI CEO 自动化工作台</title>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
     <style>
@@ -191,13 +191,13 @@
         position: relative;
         display: grid;
         flex: 0 0 auto;
-        width: 46px;
-        height: 46px;
+        width: 56px;
+        height: 56px;
         place-items: center;
         overflow: hidden;
         border: 1px solid rgba(8, 118, 110, 0.18);
-        border-radius: 10px;
-        background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / contain no-repeat;
+        border-radius: 12px;
+        background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / 118% no-repeat;
         box-shadow:
           inset 0 0 0 1px rgba(255, 255, 255, 0.13),
           0 14px 26px rgba(7, 9, 8, 0.2);
@@ -3268,9 +3268,9 @@
         }
 
         .brand .jj-logo-mark {
-          width: 38px;
-          height: 38px;
-          border-radius: 10px;
+          width: 46px;
+          height: 46px;
+          border-radius: 11px;
         }
 
         .brand .jj-logo-mark::before {
@@ -3853,7 +3853,7 @@
 
       .jj-logo-mark {
         border: 0 !important;
-        background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / contain no-repeat !important;
+        background: url("./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1") center / 118% no-repeat !important;
         box-shadow:
           0 16px 34px rgba(8, 118, 110, 0.18),
           0 1px 0 rgba(255, 255, 255, 0.82) inset !important;
@@ -4668,7 +4668,7 @@
     <div class="toast" id="toast" aria-live="polite"></div>
 
     <script>
-      const JIEJING_SITE_VERSION = "20260701-media-asset-review-ui-v1";
+      const JIEJING_SITE_VERSION = "20260701-brand-logo-scale-v1";
 
       (function routeOfficialEntryToApp() {
         const params = new URLSearchParams(window.location.search);
@@ -4683,8 +4683,8 @@
         const assets = [
           ["prefetch", "./app.html?start=app&view=workflow", "document"],
           ["preload", "./assets/jiejing-settings-panels.js?v=20260620-owner-launch-control-v5", "script"],
-          ["preload", "./app.js?v=20260701-media-asset-review-ui-v1", "script"],
-          ["preload", "./styles.css?v=20260701-media-asset-review-ui-v1", "style"],
+          ["preload", "./app.js?v=20260701-brand-logo-scale-v1", "script"],
+          ["preload", "./styles.css?v=20260701-brand-logo-scale-v1", "style"],
         ];
         assets.forEach(([rel, href, as]) => {
           if (document.querySelector(`link[href="${href}"]`)) return;

@@ -28,7 +28,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260701-media-asset-review-ui-v1"
+    frontend_asset_version = "20260701-brand-logo-scale-v1"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -87,6 +87,7 @@ def main() -> int:
         "20260629-onboarding-guard-v1",
         "20260629-onboarding-lite-v1",
         "20260701-payment-review-brief-v1",
+        "20260701-media-asset-review-ui-v1",
         "20260510-ebay-policy-v1",
     ]:
         if stale_asset_version in index_html + app_html:
@@ -95,6 +96,17 @@ def main() -> int:
         return fail("returning from the workbench logo to the homepage must clear direct-start shell classes")
     if f'const JIEJING_SITE_VERSION = "{frontend_asset_version}"' not in index_html:
         return fail("public homepage must expose the current JIEJING site version marker")
+    for logo_marker in [
+        "width: 56px;",
+        "height: 56px;",
+        "width: 46px;",
+        "height: 46px;",
+        'center / 118% no-repeat',
+    ]:
+        if logo_marker not in index_html:
+            return fail(f"public homepage logo must stay enlarged and centered: {logo_marker}")
+    if "width: 50px;" not in styles_css or "height: 50px;" not in styles_css or 'center / 118% no-repeat' not in styles_css:
+        return fail("SaaS brand mark must stay enlarged and centered with the JIEJING app icon")
     for homepage_intent_marker in [
         'data-home-intent-strip="homepage_ai_ceo_intents_v1"',
         'data-home-intent="listing"',
