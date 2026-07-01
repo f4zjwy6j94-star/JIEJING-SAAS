@@ -22,6 +22,7 @@ COMPOSE_FILES = [
     ROOT / "deploy" / "docker-compose.staging-infra.yml",
 ]
 BUNDLE = ROOT / "tools" / "jiejing_prepare_public_staging_bundle.py"
+PATCH_SCRIPT = ROOT / "deploy" / "apply-staging-patch.sh"
 API_SERVER = ROOT / "jiejing_saas" / "api_server.py"
 ORIGIN_UFW = ROOT / "deploy" / "apply-cloudflare-origin-ufw.sh"
 
@@ -116,8 +117,11 @@ def main() -> int:
             return fail(f"{path.name} should mount robots.txt into the public frontend")
 
     bundle = _read(BUNDLE)
-    if '"robots.txt"' not in bundle:
-        return fail("public staging bundle should include robots.txt")
+    patch_script = _read(PATCH_SCRIPT)
+    if "public_staging_patch_whitelist_v1" not in bundle or "_apply_patch_file_list" not in bundle:
+        return fail("public staging bundle should derive its file scope from the patch whitelist")
+    if '"robots.txt"' not in patch_script:
+        return fail("public staging patch whitelist should include robots.txt")
 
     api = _read(API_SERVER)
     for marker in [

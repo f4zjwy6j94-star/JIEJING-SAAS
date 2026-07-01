@@ -67,8 +67,9 @@ def main() -> int:
     integration_missing = []
     for marker, content, label in [
         ("AGENTS.md", runbook, "runbook"),
-        ('"AGENTS.md"', prepare_bundle, "bundle"),
         ('"AGENTS.md"', patch_script, "patch_script"),
+        ("public_staging_patch_whitelist_v1", prepare_bundle, "bundle_scope"),
+        ("_apply_patch_file_list", prepare_bundle, "bundle_whitelist_reader"),
     ]:
         if marker not in content:
             integration_missing.append(label)

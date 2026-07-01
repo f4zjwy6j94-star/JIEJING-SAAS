@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import time
 import zipfile
 from pathlib import Path
@@ -14,36 +15,8 @@ from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "output" / "jiejing-public-staging-bundle"
-
-INCLUDE_ROOT_FILES = [
-    ".dockerignore",
-    ".gitignore",
-    "AGENTS.md",
-    "Dockerfile.saas",
-    "README.md",
-    "requirements.saas.txt",
-    "app.js",
-    "app.html",
-    "favicon.ico",
-    "index.html",
-    "privacy.html",
-    "terms.html",
-    "refund-policy.html",
-    "support.html",
-    "risk-disclosure.html",
-    "robots.txt",
-    "styles.css",
-]
-
-INCLUDE_DIRS = [
-    "assets",
-    "deploy",
-    "docs",
-    "jiejing_runtime",
-    "jiejing_saas",
-    "schemas",
-    "tools",
-]
+APPLY_SCRIPT = ROOT / "deploy" / "apply-staging-patch.sh"
+BUNDLE_SCOPE_MARKER = "public_staging_patch_whitelist_v1"
 
 EXCLUDED_PARTS = {
     ".git",
@@ -86,6 +59,9 @@ def main() -> int:
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "file_count": len(files),
         "files": [str(path.relative_to(ROOT)).replace("\\", "/") for path in files],
+        "scope": BUNDLE_SCOPE_MARKER,
+        "scope_source": str(APPLY_SCRIPT.relative_to(ROOT)).replace("\\", "/"),
+        "full_assets_included": False,
         "secret_files_excluded": sorted(EXCLUDED_FILENAMES),
         "real_platform_writes_enabled": False,
     }
@@ -117,19 +93,33 @@ def main() -> int:
 
 def _iter_bundle_files() -> Iterable[Path]:
     seen: set[Path] = set()
-    for rel in INCLUDE_ROOT_FILES:
+    for rel in _apply_patch_file_list():
         path = ROOT / rel
+        if path in seen:
+            continue
         if path.exists() and path.is_file() and not _is_excluded(path):
             seen.add(path)
             yield path
-    for rel_dir in INCLUDE_DIRS:
-        base = ROOT / rel_dir
-        if not base.exists():
             continue
-        for path in sorted(base.rglob("*")):
-            if path.is_file() and path not in seen and not _is_excluded(path):
-                seen.add(path)
-                yield path
+        raise FileNotFoundError(f"apply patch whitelist file missing or excluded from repo: {rel}")
+
+
+def _apply_patch_file_list() -> list[str]:
+    """Use the remote apply whitelist as the bundle source of truth."""
+
+    text = APPLY_SCRIPT.read_text(encoding="utf-8")
+    match = re.search(r"^FILES=\(\n(?P<body>.*?)^\)", text, flags=re.MULTILINE | re.DOTALL)
+    if not match:
+        raise RuntimeError("unable to parse FILES whitelist from deploy/apply-staging-patch.sh")
+    files = re.findall(r'^\s+"([^"\n]+)"\s*$', match.group("body"), flags=re.MULTILINE)
+    if not files:
+        raise RuntimeError("empty FILES whitelist in deploy/apply-staging-patch.sh")
+    unsafe = [item for item in files if item.startswith("/") or ".." in Path(item).parts]
+    if unsafe:
+        raise RuntimeError("unsafe apply patch whitelist entries: " + ", ".join(unsafe))
+    if "deploy/apply-staging-patch.sh" not in files:
+        raise RuntimeError("apply patch script must include itself in the staging patch whitelist")
+    return files
 
 
 def _is_excluded(path: Path) -> bool:

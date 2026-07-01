@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "deploy" / "apply-staging-patch.sh"
+BUNDLE = ROOT / "tools" / "jiejing_prepare_public_staging_bundle.py"
 
 
 def fail(message: str) -> int:
@@ -17,6 +18,7 @@ def fail(message: str) -> int:
 
 def main() -> int:
     text = SCRIPT.read_text(encoding="utf-8") if SCRIPT.exists() else ""
+    bundle = BUNDLE.read_text(encoding="utf-8") if BUNDLE.exists() else ""
     required = [
         "FILES=(",
         "AGENTS.md",
@@ -197,6 +199,24 @@ def main() -> int:
     present = [marker for marker in forbidden if marker in text]
     if present:
         return fail("patch apply script contains forbidden destructive marker: " + ",".join(present))
+    bundle_required = [
+        "public_staging_patch_whitelist_v1",
+        'APPLY_SCRIPT = ROOT / "deploy" / "apply-staging-patch.sh"',
+        "def _apply_patch_file_list",
+        "unable to parse FILES whitelist",
+        "apply patch script must include itself",
+        '"full_assets_included": False',
+    ]
+    missing_bundle = [marker for marker in bundle_required if marker not in bundle]
+    if missing_bundle:
+        return fail("public staging bundle script missing whitelist scope markers: " + ",".join(missing_bundle))
+    for forbidden_bundle_marker in [
+        'INCLUDE_DIRS = [',
+        '"assets",',
+        'base.rglob("*")',
+    ]:
+        if forbidden_bundle_marker in bundle:
+            return fail(f"public staging bundle must not include broad directory packaging: {forbidden_bundle_marker}")
     print("PASS jiejing_staging_patch_apply_contract")
     return 0
 
