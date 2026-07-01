@@ -26329,6 +26329,234 @@ function renderSaasBillingPaidLaunchBlockersPanel(ctx = saasMerchantWorkbenchCon
   `;
 }
 
+function saasBillingDomainCutoverReviewState() {
+  const rehearsal =
+    state.saasBillingDomainCutoverRehearsal && typeof state.saasBillingDomainCutoverRehearsal === "object"
+      ? state.saasBillingDomainCutoverRehearsal
+      : {};
+  const summary = rehearsal.summary && typeof rehearsal.summary === "object" ? rehearsal.summary : {};
+  const stages = Array.isArray(rehearsal.stages) ? rehearsal.stages : [];
+  const stageByKey = Object.fromEntries(
+    stages.filter((item) => item && typeof item === "object").map((item) => [String(item.key || ""), item]),
+  );
+  const requiredUrls = rehearsal.required_urls && typeof rehearsal.required_urls === "object" ? rehearsal.required_urls : {};
+  const readyCount = Number(summary.ready_count || stages.filter((item) => item && item.status === "ready").length || 0);
+  const totalCount = Number(summary.total_count || stages.length || 0);
+  const blockedCount = Number(summary.blocked_count || stages.filter((item) => item && item.status !== "ready").length || 0);
+  const readyForOwnerApproval = Boolean(rehearsal.ready_for_owner_approval);
+  const urlShape = (value) => {
+    if (!value) return "waiting_for_stable_domain";
+    if (typeof value === "string") return value.replace(/\?.*$/, "");
+    if (typeof value !== "object") return "not_configured";
+    if (!value.configured && !value.host) return "not_configured";
+    return `${value.scheme || "no-scheme"}://${value.host || "missing"}${value.path || ""}`;
+  };
+  return {
+    rehearsal,
+    summary,
+    stages,
+    stageByKey,
+    requiredUrls,
+    readyCount,
+    totalCount,
+    blockedCount,
+    readyForOwnerApproval,
+    stableDomain: rehearsal.stable_domain || requiredUrls.stable_origin || "waiting_for_stable_domain",
+    statusLabel: readyForOwnerApproval
+      ? "可交主理人复核，不会自动收费"
+      : blockedCount
+        ? "正式支付域名证据仍未齐"
+        : "等待后端演练证据",
+    nextAction: summary.next_action || summary.next_step || "继续收集 Checkout、Portal、webhook、回滚和 smoke 证据",
+    urlShape,
+  };
+}
+
+function renderSaasBillingDomainCutoverReviewPanel(ctx = saasMerchantWorkbenchContext()) {
+  const review = saasBillingDomainCutoverReviewState();
+  const stageTone = (key) => (review.stageByKey[key]?.status === "ready" ? "green" : "amber");
+  const stageDetail = (key, fallback) => review.stageByKey[key]?.evidence_summary || fallback;
+  const stageNext = (key, fallback) => review.stageByKey[key]?.next_action || fallback;
+  const urlRows = [
+    {
+      label: "Stable domain",
+      title: review.urlShape(review.requiredUrls.stable_origin || review.stableDomain),
+      detail: "正式 Checkout、Customer Portal、webhook 和 eBay callback 都必须落在稳定 HTTPS 域名上。",
+      tone: review.stageByKey.stable_domain_dns_tls_headers?.status === "ready" ? "green" : "amber",
+    },
+    {
+      label: "Checkout",
+      title: `${review.urlShape(review.requiredUrls.stripe_success_url)} / ${review.urlShape(review.requiredUrls.stripe_cancel_url)}`,
+      detail: "成功和取消回跳只展示 URL 形状，不在浏览器创建真实 Checkout Session。",
+      tone: stageTone("stripe_checkout_return_urls_on_stable_domain"),
+    },
+    {
+      label: "Customer Portal",
+      title: review.urlShape(review.requiredUrls.stripe_portal_return_url),
+      detail: "升级、降级、取消和付款方式修改应走 provider Portal，前端不接触支付密钥。",
+      tone: stageTone("stripe_customer_portal_return_url_on_stable_domain"),
+    },
+    {
+      label: "Signed webhook",
+      title: review.urlShape(review.requiredUrls.stripe_webhook_url),
+      detail: "订阅、续费、失败付款和取消事件必须先通过签名验证，再改权益和 quota。",
+      tone: stageTone("stripe_signed_webhook_on_stable_domain"),
+    },
+    {
+      label: "eBay callback",
+      title: review.urlShape(review.requiredUrls.ebay_oauth_callback_url),
+      detail: "支付切换不能顺手重跑 eBay OAuth；callback 只用于域名一致性检查。",
+      tone: review.stageByKey.stable_domain_dns_tls_headers?.status === "ready" ? "green" : "amber",
+    },
+  ];
+  const stageRows = [
+    {
+      key: "stripe_live_provider_selected",
+      label: "Provider",
+      title: "正式商户支付 provider",
+      fallback: "仍在 manual/test 阶段，不能公开收费。",
+    },
+    {
+      key: "stripe_live_price_ids_verified",
+      label: "Plans",
+      title: "正式商品和 Price ID",
+      fallback: "需要 live 套餐、价格和无测试对象证明。",
+    },
+    {
+      key: "stripe_api_webhook_version_pinned",
+      label: "API version",
+      title: "API / webhook 版本固定",
+      fallback: "后端 API version 和 webhook endpoint version 需要记录一致。",
+    },
+    {
+      key: "stripe_webhook_resilience_rehearsed",
+      label: "Webhook chaos",
+      title: "重复、延迟、乱序事件演练",
+      fallback: "webhook 乱序不能重复发放额度，也不能漏停高成本任务。",
+    },
+    {
+      key: "subscription_state_and_quota_lifecycle_rehearsed",
+      label: "Entitlement",
+      title: "订阅状态和 quota 生命周期",
+      fallback: "invoice paid、取消、失败付款都要能驱动权益和 hard-stop。",
+    },
+    {
+      key: "cutover_rollback_audit_packet_recorded",
+      label: "Release proof",
+      title: "回滚、secret scan、readiness、browser smoke",
+      fallback: "正式切换前必须留下可回滚和可审计证据。",
+    },
+  ];
+  const evidenceRows = [
+    ["演练状态", `${review.readyCount}/${review.totalCount || "?"} ready`, review.nextAction],
+    ["Provider", review.summary.billing_provider || "not_selected", "provider secret 只允许在后端 env/Vault 边界内处理。"],
+    ["API version", review.summary.stripe_api_version || "waiting", "不要使用废弃 plan object；订阅应使用 Billing + Checkout Sessions。"],
+    [
+      "后端记录",
+      `subscriptions=${Number(review.summary.subscription_records || 0)} / webhooks=${Number(review.summary.webhook_event_records || 0)}`,
+      "只有后端证明和签名事件能发放或停止权益。",
+    ],
+  ];
+  const flags = [
+    `mode=${review.rehearsal.mode || "dry_run_no_charge"}`,
+    `public_paid_launch_allowed=${Boolean(review.rehearsal.public_paid_launch_allowed)}`,
+    `charge_now_allowed=${Boolean(review.rehearsal.charge_now_allowed)}`,
+    `creates_checkout_session=${Boolean(review.rehearsal.creates_checkout_session)}`,
+    `calls_stripe_api=${Boolean(review.rehearsal.calls_stripe_api)}`,
+    `triggers_real_charge=${Boolean(review.rehearsal.triggers_real_charge)}`,
+    `triggers_ebay_oauth=${Boolean(review.rehearsal.triggers_ebay_oauth)}`,
+    `repeat_ebay_oauth_allowed=${Boolean(review.rehearsal.repeat_ebay_oauth_allowed)}`,
+    `frontend_gets_payment_secret=${Boolean(review.rehearsal.frontend_gets_payment_secret)}`,
+    `secret_exposed=${Boolean(review.rehearsal.secret_exposed)}`,
+  ];
+  return `
+    <section class="saas-settings-card saas-billing-domain-review" data-billing-domain-cutover-review="stable_domain_checkout_portal_webhook_review_v1" aria-label="正式支付域名和回调演练">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>正式支付域名演练</span>
+          <strong>Checkout、Portal、签名 webhook、回滚证据必须先在稳定域名上对齐</strong>
+          <p>这张卡把“个人码内测”迁移到“正式商户支付”的技术证据摆清楚：现在只读检查 URL、webhook、quota 和回滚链路，不创建支付单、不调用 Stripe、不触发真实扣费，也不重跑 eBay OAuth。</p>
+        </div>
+        <em>${escapeHtml(review.statusLabel)}</em>
+      </div>
+      <div class="saas-billing-domain-url-grid" aria-label="支付域名 URL 形状">
+        ${urlRows
+          .map(
+            (row) => `
+              <article class="is-${escapeHtml(row.tone)}">
+                <span>${escapeHtml(row.label)}</span>
+                <strong>${escapeHtml(row.title)}</strong>
+                <small>${escapeHtml(row.detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-billing-domain-stage-list" aria-label="正式支付切换证据阶段">
+        ${stageRows
+          .map(
+            (row) => `
+              <article class="is-${escapeHtml(stageTone(row.key))}">
+                <span>${escapeHtml(row.label)}</span>
+                <strong>${escapeHtml(row.title)}</strong>
+                <small>${escapeHtml(stageDetail(row.key, row.fallback))}</small>
+                <small>${escapeHtml(stageNext(row.key, "补齐证据后再进入主理人复核"))}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-billing-domain-evidence" aria-label="支付切换演练摘要">
+        ${evidenceRows
+          .map(
+            ([label, title, detail]) => `
+              <article>
+                <span>${escapeHtml(label)}</span>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-billing-domain-actions">
+        <button class="secondary-action compact-action" type="button" data-saas-action="refresh">刷新支付演练证据</button>
+        <button class="secondary-action compact-action" type="button" data-global-flow-view="confirm">查看确认中心</button>
+      </div>
+      <div class="saas-billing-domain-safety" hidden aria-hidden="true">
+        <span>billing_domain_cutover_review_v1</span>
+        <span>stable_domain_checkout_portal_webhook_review_v1</span>
+        <span>billing_domain_cutover_rehearsal</span>
+        <span>payment_provider_secret_boundary=backend_env_or_vault_only</span>
+        <span>checkout_success_cancel_urls_on_stable_domain</span>
+        <span>customer_portal_return_url_on_stable_domain</span>
+        <span>signed_webhook_before_quota_grant</span>
+        <span>rollback_secret_scan_readiness_browser_smoke_required</span>
+        <span>public_paid_launch_allowed=false</span>
+        <span>charge_now_allowed=false</span>
+        <span>creates_checkout_session=false</span>
+        <span>calls_stripe_api=false</span>
+        <span>triggers_real_charge=false</span>
+        <span>triggers_ebay_oauth=false</span>
+        <span>repeat_ebay_oauth_allowed=false</span>
+        <span>frontend_gets_payment_secret=false</span>
+        <span>secret_exposed=false</span>
+        <span>public_paid_launch_allowed=${Boolean(review.rehearsal.public_paid_launch_allowed)}</span>
+        <span>charge_now_allowed=${Boolean(review.rehearsal.charge_now_allowed)}</span>
+        <span>creates_checkout_session=${Boolean(review.rehearsal.creates_checkout_session)}</span>
+        <span>calls_stripe_api=${Boolean(review.rehearsal.calls_stripe_api)}</span>
+        <span>triggers_real_charge=${Boolean(review.rehearsal.triggers_real_charge)}</span>
+        <span>triggers_ebay_oauth=${Boolean(review.rehearsal.triggers_ebay_oauth)}</span>
+        <span>repeat_ebay_oauth_allowed=${Boolean(review.rehearsal.repeat_ebay_oauth_allowed)}</span>
+        <span>frontend_gets_payment_secret=${Boolean(review.rehearsal.frontend_gets_payment_secret)}</span>
+        <span>secret_exposed=${Boolean(review.rehearsal.secret_exposed)}</span>
+        <span>${escapeHtml(flags.join(" / "))}</span>
+        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
+      </div>
+    </section>
+  `;
+}
+
 function saasMainlandPaymentStrategyState() {
   const strategy = state.saasPaymentOptions || state.saasBillingPlan?.payment_strategy || {};
   const lanes = Array.isArray(strategy.domestic_payment_lanes) ? strategy.domestic_payment_lanes : [];
@@ -33475,6 +33703,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
         renderSaasMerchantBillingPlainSummaryPanel(ctx),
         renderSaasBillingTransitionPathPanel(ctx),
         renderSaasBillingProviderRehearsalPanel(ctx),
+        renderSaasBillingDomainCutoverReviewPanel(ctx),
         renderSaasBillingPaidLaunchBlockersPanel(ctx),
         renderSaasMerchantBillingCustomerTrustPanel(ctx),
         renderSaasMainlandPaymentStrategyPanel(),

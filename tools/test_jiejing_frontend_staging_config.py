@@ -28,7 +28,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260701-brand-logo-scale-v1"
+    frontend_asset_version = "20260701-billing-domain-cutover-v1"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -507,6 +507,15 @@ def main() -> int:
         "creates_real_checkout_session=false",
         "calls_stripe_api=false",
         "triggers_real_charge=false",
+        "function renderSaasBillingDomainCutoverReviewPanel",
+        "billing_domain_cutover_review_v1",
+        "stable_domain_checkout_portal_webhook_review_v1",
+        "billing_domain_cutover_rehearsal",
+        "payment_provider_secret_boundary=backend_env_or_vault_only",
+        "checkout_success_cancel_urls_on_stable_domain",
+        "customer_portal_return_url_on_stable_domain",
+        "rollback_secret_scan_readiness_browser_smoke_required",
+        "public_paid_launch_allowed=false",
         "owner_approval_required_for_reenable=true",
         "billing_plan: state.saasBillingPlan || null",
         "state.saasBillingUsage = snapshot.billing_usage || state.saasBillingUsage || null",
