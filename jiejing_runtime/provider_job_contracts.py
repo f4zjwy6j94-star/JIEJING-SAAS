@@ -179,12 +179,18 @@ class ProviderJobContractCatalog:
                     "commercial_use_status",
                     "fact_review_status",
                     "listing_use_status",
+                    "asset_manifest_validation",
+                    "asset_review_status",
+                    "cost_guard_status",
+                    "production_gate_status",
                 ],
                 blocked_actions=[
                     "claim_unverified_product_fact",
                     "use_brand_or_person_without_rights",
                     "treat_text_brief_as_generated_asset",
                     "publish_asset_before_manifest_review",
+                    "call_live_media_provider_before_quota_gate",
+                    "hide_media_cost_from_work_record",
                 ],
             ),
             ProviderJobContract(

@@ -96,6 +96,7 @@ FILES=(
   "jiejing_saas/platform_registry.py"
   "jiejing_saas/paid_launch_approval_packet.py"
   "jiejing_saas/post_publish_cockpit.py"
+  "jiejing_saas/media_asset_pipeline.py"
   "jiejing_saas/provider_job_runner.py"
   "jiejing_saas/provider_workflow_plan.py"
   "jiejing_saas/model_value_gate.py"
@@ -207,6 +208,7 @@ FILES=(
   "tools/test_jiejing_queue_recovery_heartbeat.py"
   "tools/test_jiejing_account_health_incident_mode.py"
   "tools/test_jiejing_frontend_settings_module_split.py"
+  "tools/test_jiejing_media_asset_pipeline.py"
   "tools/test_jiejing_media_capability_router.py"
   "tools/test_jiejing_platform_authorization_strategy.py"
   "tools/test_jiejing_provider_job_contracts.py"
@@ -296,6 +298,7 @@ python3 -m py_compile \
   jiejing_saas/platform_registry.py \
   jiejing_saas/paid_launch_approval_packet.py \
   jiejing_saas/post_publish_cockpit.py \
+  jiejing_saas/media_asset_pipeline.py \
   jiejing_saas/provider_job_runner.py \
   jiejing_saas/provider_workflow_plan.py \
   jiejing_saas/model_value_gate.py \
@@ -398,6 +401,7 @@ python3 -m py_compile \
   tools/test_jiejing_queue_recovery_heartbeat.py \
   tools/test_jiejing_account_health_incident_mode.py \
   tools/test_jiejing_frontend_settings_module_split.py \
+  tools/test_jiejing_media_asset_pipeline.py \
   tools/test_jiejing_media_capability_router.py \
   tools/test_jiejing_platform_authorization_strategy.py \
   tools/test_jiejing_provider_job_contracts.py \

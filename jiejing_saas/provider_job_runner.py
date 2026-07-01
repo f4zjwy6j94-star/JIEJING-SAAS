@@ -19,6 +19,7 @@ from typing import Any, Callable
 from jiejing_runtime.provider_job_contracts import build_provider_job_contract_catalog
 
 from .config import SaaSSettings
+from .media_asset_pipeline import build_media_asset_generation_packet
 from .vault_secret_resolver import VaultSecretResolver
 
 
@@ -461,40 +462,7 @@ class ProviderJobRunner:
                 "buy_label_allowed": False,
             }
         if key in {"media.asset_generation", "media.fal_asset_generation"}:
-            image_count = int(inputs.get("image_count") or 0)
-            scene_types = inputs.get("scene_types") if isinstance(inputs.get("scene_types"), list) else []
-            creative_job_spec = inputs.get("creative_job_spec") if isinstance(inputs.get("creative_job_spec"), dict) else {}
-            return {
-                **base,
-                "media_router": {
-                    "contract_key": key,
-                    "canonical_contract_key": "media.asset_generation",
-                    "driver": "configured_media_provider",
-                    "driver_selected_later": True,
-                    "fal_is_legacy_driver_alias": key == "media.fal_asset_generation",
-                },
-                "creative_job_spec": creative_job_spec,
-                "asset_manifest": [
-                    {
-                        "asset_type": "image",
-                        "url": "dry-run://media/image-placeholder",
-                        "url_or_file_path": "dry-run://media/image-placeholder",
-                        "dimensions": inputs.get("image_sizes") or "pending",
-                        "dimensions_or_duration": inputs.get("image_sizes") or "pending",
-                        "prompt": "pending_live_media_generation",
-                        "provider": "configured_media_provider",
-                        "source_provider_or_upload": "configured_media_provider",
-                        "cost_estimate": "pending_quota_check",
-                        "commercial_use_status": "needs_review",
-                        "fact_review_status": "needs_review",
-                        "listing_use_status": "not_ready_for_listing_until_review",
-                        "review_status": "needs_human_review_before_listing",
-                    }
-                    for _ in range(max(1, min(image_count, 3)))
-                ],
-                "scene_types": scene_types,
-                "video_script_status": "received" if inputs.get("video_script") else "missing",
-            }
+            return build_media_asset_generation_packet(base=base, contract_key=key, inputs=inputs, captured_at=captured_at)
         if key == "model.role_report_assist":
             return {
                 **base,

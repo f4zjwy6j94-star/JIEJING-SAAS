@@ -146,6 +146,18 @@ def main() -> int:
         media_router = media_packet.get("media_router") if isinstance(media_packet.get("media_router"), dict) else {}
         if media_router.get("canonical_contract_key") != "media.asset_generation":
             return fail("media dry-run should use the provider-neutral canonical contract")
+        if media_packet.get("pipeline_version") != "2026-07-01-media-asset-pipeline-v1":
+            return fail("media dry-run should use the production-shape asset pipeline")
+        validation = media_packet.get("asset_manifest_validation") if isinstance(media_packet.get("asset_manifest_validation"), dict) else {}
+        if validation.get("status") != "manifest_ready":
+            return fail("media dry-run should validate the AssetManifest before review")
+        review = media_packet.get("asset_review") if isinstance(media_packet.get("asset_review"), dict) else {}
+        if review.get("listing_use_status") != "not_ready_for_listing_until_review":
+            return fail("media dry-run must not mark assets usable for listing before review")
+        if media_packet.get("production_gate", {}).get("live_media_provider_call_allowed") is not False:
+            return fail("media dry-run must block live media provider calls")
+        if media_packet.get("cost_guard", {}).get("spend_now_allowed") is not False:
+            return fail("media dry-run must block media spend")
         manifest = media_packet.get("asset_manifest") if isinstance(media_packet.get("asset_manifest"), list) else []
         if not manifest:
             return fail("media dry-run should return an AssetManifest")

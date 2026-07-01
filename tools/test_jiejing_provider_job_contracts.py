@@ -57,9 +57,15 @@ def main() -> int:
                 return fail("media asset router must output AssetManifest")
             if "creative_job_spec" not in item.get("required_inputs", []):
                 return fail("media asset router must require CreativeJobSpec")
+            for marker in {"asset_manifest_validation", "asset_review_status", "cost_guard_status", "production_gate_status"}:
+                if marker not in item.get("normalized_outputs", []):
+                    return fail(f"media asset router missing normalized output: {marker}")
             for marker in {"publish_asset_before_manifest_review", "treat_text_brief_as_generated_asset"}:
                 if marker not in item.get("blocked_actions", []):
                     return fail(f"media asset router missing blocked action: {marker}")
+            for marker in {"call_live_media_provider_before_quota_gate", "hide_media_cost_from_work_record"}:
+                if marker not in item.get("blocked_actions", []):
+                    return fail(f"media asset router missing spend/safety blocked action: {marker}")
         if item.get("key") == "media.fal_asset_generation":
             if "treat_fal_as_product_identity" not in item.get("blocked_actions", []):
                 return fail("legacy FAL alias must not become product identity")
