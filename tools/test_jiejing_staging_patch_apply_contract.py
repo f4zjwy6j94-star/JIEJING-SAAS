@@ -77,6 +77,7 @@ def main() -> int:
         "jiejing_saas/paid_launch_approval_packet.py",
         "jiejing_saas/post_publish_cockpit.py",
         "jiejing_saas/owner_launch_control.py",
+        "jiejing_saas/feasibility_review.py",
         "jiejing_saas/model_value_gate.py",
         "jiejing_saas/model_value_rehearsal.py",
         "jiejing_saas/monitoring.py",

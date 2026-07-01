@@ -36698,6 +36698,7 @@ body.saas-public-mvp .saas-owner-launch-queues .is-red {
 }
 
 body.saas-public-mvp .saas-owner-war-room,
+body.saas-public-mvp .saas-owner-feasibility-review,
 body.saas-public-mvp .saas-owner-review-packet,
 body.saas-public-mvp .saas-owner-launch-audit,
 body.saas-public-mvp .saas-owner-release-history,
@@ -36748,6 +36749,7 @@ body.saas-public-mvp .saas-owner-test-data > div:first-child strong {
 }
 
 body.saas-public-mvp .saas-owner-war-room-head small,
+body.saas-public-mvp .saas-owner-feasibility-note,
 body.saas-public-mvp .saas-owner-review-note,
 body.saas-public-mvp .saas-owner-launch-audit-note,
 body.saas-public-mvp .saas-owner-release-history-note,
@@ -36764,6 +36766,7 @@ body.saas-public-mvp .saas-owner-test-data > div:first-child p {
 }
 
 body.saas-public-mvp .saas-owner-war-room-grid,
+body.saas-public-mvp .saas-owner-feasibility-grid,
 body.saas-public-mvp .saas-owner-review-grid,
 body.saas-public-mvp .saas-owner-launch-audit-grid,
 body.saas-public-mvp .saas-owner-release-history-grid,
@@ -36780,6 +36783,7 @@ body.saas-public-mvp .saas-owner-test-data-grid {
 }
 
 body.saas-public-mvp .saas-owner-war-room-grid article,
+body.saas-public-mvp .saas-owner-feasibility-grid article,
 body.saas-public-mvp .saas-owner-review-grid article,
 body.saas-public-mvp .saas-owner-launch-audit-grid article,
 body.saas-public-mvp .saas-owner-release-history-grid article,
@@ -36799,6 +36803,11 @@ body.saas-public-mvp .saas-owner-test-data-grid article {
 }
 
 body.saas-public-mvp .saas-owner-war-room-grid article.is-green {
+  border-color: rgba(8, 118, 110, 0.22);
+  background: #eef9f5;
+}
+
+body.saas-public-mvp .saas-owner-feasibility-grid article.is-green {
   border-color: rgba(8, 118, 110, 0.22);
   background: #eef9f5;
 }
@@ -36844,6 +36853,11 @@ body.saas-public-mvp .saas-owner-war-room-grid article.is-amber {
   background: #fff8ed;
 }
 
+body.saas-public-mvp .saas-owner-feasibility-grid article.is-amber {
+  border-color: rgba(214, 142, 43, 0.28);
+  background: #fff8ed;
+}
+
 body.saas-public-mvp .saas-owner-review-grid article.is-amber {
   border-color: rgba(214, 142, 43, 0.28);
   background: #fff8ed;
@@ -36885,6 +36899,11 @@ body.saas-public-mvp .saas-owner-war-room-grid article.is-red {
   background: #fff4f1;
 }
 
+body.saas-public-mvp .saas-owner-feasibility-grid article.is-red {
+  border-color: rgba(194, 65, 45, 0.22);
+  background: #fff4f1;
+}
+
 body.saas-public-mvp .saas-owner-review-grid article.is-red {
   border-color: rgba(194, 65, 45, 0.22);
   background: #fff4f1;
@@ -36922,6 +36941,7 @@ body.saas-public-mvp .saas-owner-subscription-shutdown-grid article.is-red {
 }
 
 body.saas-public-mvp .saas-owner-war-room-grid span,
+body.saas-public-mvp .saas-owner-feasibility-grid span,
 body.saas-public-mvp .saas-owner-review-grid span,
 body.saas-public-mvp .saas-owner-launch-audit-grid span,
 body.saas-public-mvp .saas-owner-release-history-grid span,
@@ -36941,6 +36961,7 @@ body.saas-public-mvp .saas-owner-test-data-grid span {
 }
 
 body.saas-public-mvp .saas-owner-war-room-grid strong,
+body.saas-public-mvp .saas-owner-feasibility-grid strong,
 body.saas-public-mvp .saas-owner-review-grid strong,
 body.saas-public-mvp .saas-owner-launch-audit-grid strong,
 body.saas-public-mvp .saas-owner-release-history-grid strong,
@@ -36958,6 +36979,8 @@ body.saas-public-mvp .saas-owner-test-data-grid strong {
 
 body.saas-public-mvp .saas-owner-war-room-grid p,
 body.saas-public-mvp .saas-owner-war-room-grid small,
+body.saas-public-mvp .saas-owner-feasibility-grid p,
+body.saas-public-mvp .saas-owner-feasibility-grid small,
 body.saas-public-mvp .saas-owner-review-grid p,
 body.saas-public-mvp .saas-owner-review-grid small,
 body.saas-public-mvp .saas-owner-review-grid em,
@@ -37079,6 +37102,44 @@ body.saas-public-mvp .saas-owner-continuity-actions article {
   border: 1px solid rgba(15, 45, 40, 0.08);
   border-radius: 8px;
   background: #f8fcfa;
+}
+
+body.saas-public-mvp .saas-owner-feasibility-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-owner-feasibility-actions > div {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(190, 211, 202, 0.85);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+body.saas-public-mvp .saas-owner-feasibility-actions > div > span {
+  color: #08766e;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+body.saas-public-mvp .saas-owner-feasibility-actions b {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid rgba(15, 45, 40, 0.08);
+  border-radius: 8px;
+  background: #f8fcfa;
+  color: #213d36;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 body.saas-public-mvp .saas-owner-continuity-actions strong,

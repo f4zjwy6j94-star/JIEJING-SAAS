@@ -31985,6 +31985,12 @@ function renderSaasOwnerLaunchControlPanel() {
     prelaunchReport.decision_record && typeof prelaunchReport.decision_record === "object" ? prelaunchReport.decision_record : {};
   const warRoom = control.war_room && typeof control.war_room === "object" ? control.war_room : {};
   const warSections = Array.isArray(warRoom.sections) ? warRoom.sections : [];
+  const feasibility = control.feasibility_review && typeof control.feasibility_review === "object" ? control.feasibility_review : {};
+  const feasibilitySummary = feasibility.summary && typeof feasibility.summary === "object" ? feasibility.summary : {};
+  const feasibilityExperts = Array.isArray(feasibility.expert_reviews) ? feasibility.expert_reviews : [];
+  const feasibilityRisks = Array.isArray(feasibility.top_risks) ? feasibility.top_risks : [];
+  const feasibilityActions = Array.isArray(feasibility.next_7_day_actions) ? feasibility.next_7_day_actions : [];
+  const feasibilitySafety = feasibility.safety && typeof feasibility.safety === "object" ? feasibility.safety : {};
   const ops = control.operations_observability && typeof control.operations_observability === "object" ? control.operations_observability : {};
   const opsSummary = ops.summary && typeof ops.summary === "object" ? ops.summary : {};
   const opsCards = Array.isArray(ops.cards) ? ops.cards : [];
@@ -32015,6 +32021,7 @@ function renderSaasOwnerLaunchControlPanel() {
     `cutover_decision_checklist_v1=${cutoverChecklist.contract_version === "2026-06-20-cutover-decision-checklist-v1"}`,
     `final_launch_rehearsal_execution_record_v1=${finalRehearsalRecord.contract_version === "2026-06-21-final-launch-rehearsal-execution-record-v1"}`,
     `prelaunch_acceptance_report_v1=${prelaunchReport.contract_version === "2026-06-21-prelaunch-acceptance-report-v1"}`,
+    `expert_feasibility_review_v1=${feasibility.contract_version === "2026-07-01-expert-feasibility-review-v1"}`,
     control.secret_exposed ? "secret_exposed=true" : "secret_exposed=false",
   ];
   const summaryRows = [
@@ -32075,6 +32082,71 @@ function renderSaasOwnerLaunchControlPanel() {
       </div>
       <div class="saas-owner-launch-safety" aria-label="owner launch safety flags">
         ${safetyMarkers.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
+      </div>
+      <div class="saas-owner-feasibility-review" aria-label="expert feasibility review">
+        <div class="saas-owner-war-room-head">
+          <div>
+            <span>expert_feasibility_review_v1</span>
+            <strong>${escapeHtml(feasibility.status || "feasibility_pending")}</strong>
+          </div>
+          <small>${escapeHtml(`private_beta=${Boolean(feasibilitySummary.feasible_for_private_beta)} / paid_public=${Boolean(feasibilitySummary.feasible_for_paid_public_launch)} / next=${feasibilitySummary.next_step || "refresh_owner_control"}`)}</small>
+        </div>
+        <p class="saas-owner-feasibility-note">internal only · 产品/市场、支付、架构运维、安全合规和 AI 价值五个专家视角的只读核查。它只汇总证据和阻塞项，不扣款、不创建 Checkout、不跑 OAuth、不写 eBay、不导出 secret。</p>
+        <div class="saas-owner-feasibility-grid">
+          ${(feasibilityExperts.length ? feasibilityExperts : [{ label: "Feasibility review pending", status: "attention_required", verdict: "Refresh /owner/launch-control.", next_actions: ["Refresh owner launch control."] }])
+            .map((item) => {
+              const nextActions = Array.isArray(item.next_actions) ? item.next_actions.filter(Boolean) : [];
+              const blockers = Array.isArray(item.blockers) ? item.blockers.filter(Boolean) : [];
+              return `
+                <article class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
+                  <div>
+                    <span>${escapeHtml(item.label || item.key || "expert")}</span>
+                    <strong>${escapeHtml(item.status || "unknown")}</strong>
+                  </div>
+                  <p>${escapeHtml(item.verdict || "")}</p>
+                  <small>${escapeHtml((blockers[0] || nextActions[0] || "Keep evidence current.").toString())}</small>
+                </article>
+              `;
+            })
+            .join("")}
+        </div>
+        <div class="saas-owner-feasibility-actions">
+          <div>
+            <span>Top risks</span>
+            ${(feasibilityRisks.length ? feasibilityRisks : ["no_top_risk_recorded"])
+              .slice(0, 6)
+              .map((item) => `<b>${escapeHtml(item)}</b>`)
+              .join("")}
+          </div>
+          <div>
+            <span>Next 7 days</span>
+            ${(feasibilityActions.length ? feasibilityActions : ["Keep smoke verification current."])
+              .slice(0, 4)
+              .map((item) => `<b>${escapeHtml(item)}</b>`)
+              .join("")}
+          </div>
+        </div>
+        <div class="saas-owner-launch-safety" aria-label="expert feasibility review safety flags">
+          ${[
+            `customer_visible=${Boolean(feasibility.customer_visible)}`,
+            `public_charging_allowed=${Boolean(feasibilitySafety.public_charging_allowed)}`,
+            `creates_checkout_session=${Boolean(feasibilitySafety.creates_checkout_session)}`,
+            `calls_stripe_api=${Boolean(feasibilitySafety.calls_stripe_api)}`,
+            `triggers_real_charge=${Boolean(feasibilitySafety.triggers_real_charge)}`,
+            `charge_now_allowed=${Boolean(feasibilitySafety.charge_now_allowed)}`,
+            `triggers_ebay_oauth=${Boolean(feasibilitySafety.triggers_ebay_oauth)}`,
+            `repeat_ebay_oauth_allowed=${Boolean(feasibilitySafety.repeat_ebay_oauth_allowed)}`,
+            `triggers_real_platform_write=${Boolean(feasibilitySafety.triggers_real_platform_write)}`,
+            `platform_write_now_allowed=${Boolean(feasibilitySafety.platform_write_now_allowed)}`,
+            `frontend_gets_payment_secret=${Boolean(feasibilitySafety.frontend_gets_payment_secret)}`,
+            `frontend_gets_ebay_token=${Boolean(feasibilitySafety.frontend_gets_ebay_token)}`,
+            `exports_raw_secret=${Boolean(feasibilitySafety.exports_raw_secret)}`,
+            `exports_database=${Boolean(feasibilitySafety.exports_database)}`,
+            `secret_exposed=${Boolean(feasibility.secret_exposed)}`,
+          ]
+            .map((item) => `<span>${escapeHtml(item)}</span>`)
+            .join("")}
+        </div>
       </div>
       <div class="saas-owner-cutover-checklist" aria-label="owner cutover decision checklist">
         <div class="saas-owner-war-room-head">

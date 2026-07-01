@@ -688,6 +688,50 @@ def main() -> int:
         if prelaunch_report.get(marker) is not False and report_safety.get(marker) is not False:
             return fail(f"prelaunch report unsafe flag should be false: {marker}")
 
+    feasibility = packet.get("feasibility_review") if isinstance(packet.get("feasibility_review"), dict) else {}
+    if feasibility.get("contract_version") != "2026-07-01-expert-feasibility-review-v1":
+        return fail("expert feasibility review contract missing")
+    if feasibility.get("audience") != "platform_internal_admin" or feasibility.get("customer_visible") is not False:
+        return fail("expert feasibility review must stay internal")
+    feasibility_summary = feasibility.get("summary") if isinstance(feasibility.get("summary"), dict) else {}
+    if feasibility_summary.get("feasible_for_paid_public_launch") is not False:
+        return fail(f"expert feasibility review must block paid public launch: {feasibility_summary}")
+    if feasibility_summary.get("recommended_decision") != "continue_private_beta_do_not_charge_publicly":
+        return fail(f"expert feasibility review should recommend private beta only: {feasibility_summary}")
+    expert_keys = {item.get("key") for item in feasibility.get("expert_reviews", []) if isinstance(item, dict)}
+    for key in {
+        "product_market_fit",
+        "billing_subscription_revenue",
+        "architecture_operations",
+        "security_compliance",
+        "ai_value_delivery",
+    }:
+        if key not in expert_keys:
+            return fail(f"expert feasibility review missing expert card: {key}")
+    top_risks = set(feasibility.get("top_risks", []) if isinstance(feasibility.get("top_risks"), list) else [])
+    for key in {"backend_refresh_success_proof_missing", "merchant_willingness_to_pay_and_unit_economics_unproven"}:
+        if key not in top_risks:
+            return fail(f"expert feasibility review should surface top risk: {key}")
+    feasibility_safety = feasibility.get("safety") if isinstance(feasibility.get("safety"), dict) else {}
+    for marker in (
+        "public_charging_allowed",
+        "creates_checkout_session",
+        "calls_stripe_api",
+        "triggers_real_charge",
+        "charge_now_allowed",
+        "triggers_ebay_oauth",
+        "repeat_ebay_oauth_allowed",
+        "triggers_real_platform_write",
+        "platform_write_now_allowed",
+        "frontend_gets_payment_secret",
+        "frontend_gets_ebay_token",
+        "exports_raw_secret",
+        "exports_database",
+        "secret_exposed",
+    ):
+        if feasibility.get(marker) is not False and feasibility_safety.get(marker) is not False:
+            return fail(f"expert feasibility review unsafe flag should be false: {marker}")
+
     serialized = json.dumps(packet, ensure_ascii=False).lower()
     for forbidden in (
         "sk_live_unit_secret",

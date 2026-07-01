@@ -18,6 +18,7 @@ from .billing_plan import build_billing_plan, build_billing_usage
 from .commercial_launch_gate import build_commercial_launch_gate
 from .config import SaaSSettings
 from .edge_cutover_preflight import build_edge_cutover_preflight
+from .feasibility_review import build_feasibility_review
 from .monitoring import build_monitoring_status
 from .operational_health import build_operational_health
 from .paid_launch_approval_packet import build_paid_launch_approval_packet
@@ -121,6 +122,23 @@ def build_owner_launch_control(
     subscription_shutdown_control = _subscription_shutdown_control(
         billing=billing,
         billing_usage=billing_usage,
+    )
+    feasibility_review = _safe_call(
+        "feasibility_review",
+        lambda: build_feasibility_review(
+            readiness=readiness,
+            launch_gate=launch_gate,
+            billing=billing,
+            billing_cutover=billing_cutover,
+            backup=backup,
+            operational=operational,
+            edge=edge,
+            monitoring=monitoring,
+            evidence=evidence,
+            post_publish=post_publish,
+            test_data_governance=test_data_governance,
+        ),
+        {},
     )
     lanes = _lanes(
         readiness=readiness,
@@ -287,6 +305,7 @@ def build_owner_launch_control(
         "final_launch_rehearsal_execution_record": final_launch_rehearsal_execution_record,
         "prelaunch_acceptance_report": prelaunch_acceptance_report,
         "war_room": war_room,
+        "feasibility_review": feasibility_review,
         "test_data_governance": test_data_governance,
         "operations_observability": operations_observability,
         "resilience_war_room": resilience_war_room,
