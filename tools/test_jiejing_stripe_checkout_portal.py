@@ -220,6 +220,28 @@ def main() -> int:
             return fail(f"Stripe fixture should prove subscription/quota shutdown closure: {shutdown_closure}")
         if shutdown_closure.get("mode") != "live_provider_rehearsal":
             return fail(f"Stripe fixture should report live-provider rehearsal mode: {shutdown_closure}")
+        incident_runbook = plan.get("billing_incident_runbook") if isinstance(plan.get("billing_incident_runbook"), dict) else {}
+        incident_cards = {item.get("key"): item for item in incident_runbook.get("cards", []) if isinstance(item, dict)}
+        expected_incidents = {
+            "customer_portal_change",
+            "payment_failed",
+            "subscription_cancelled",
+            "refund_or_dispute",
+            "quota_hard_stop",
+        }
+        if expected_incidents - set(incident_cards):
+            return fail(f"billing incident runbook missing cards: {expected_incidents - set(incident_cards)}")
+        if incident_runbook.get("refund_dispute_supported_by_signed_webhook") is not True:
+            return fail(f"Stripe runbook should include refund/dispute signed webhook support: {incident_runbook}")
+        if incident_runbook.get("customer_portal_changes_require_signed_webhook") is not True:
+            return fail(f"Customer Portal changes must require signed webhook evidence: {incident_runbook}")
+        if incident_runbook.get("refund_or_dispute_cannot_be_frontend_executed") is not True:
+            return fail("refund/dispute must not be a frontend-executed action")
+        for key, item in incident_cards.items():
+            if item.get("frontend_action_allowed") is not False:
+                return fail(f"billing incident frontend action should stay disabled: {key}")
+            if item.get("triggers_real_charge") is not False or item.get("charge_now_allowed") is not False:
+                return fail(f"billing incident card must not trigger charges: {key}")
         guards = shutdown_closure.get("shutdown_guards") if isinstance(shutdown_closure.get("shutdown_guards"), dict) else {}
         if guards.get("payment_failure_blocks_metered_work") is not True or guards.get("cancellation_blocks_metered_work") is not True:
             return fail(f"Stripe fixture should prove shutdown guards: {guards}")

@@ -30,7 +30,14 @@ def main() -> int:
         contract = build_billing_provider_contract()
         if contract.get("paid_provider_ready") is not True:
             return fail(f"stripe contract should be ready with API key, webhook URL and plan IDs: {contract.get('blockers')}")
-        for expected_event in {"checkout.session.completed", "customer.subscription.updated", "invoice.paid", "invoice.payment_failed"}:
+        for expected_event in {
+            "checkout.session.completed",
+            "customer.subscription.updated",
+            "invoice.paid",
+            "invoice.payment_failed",
+            "charge.refunded",
+            "charge.dispute.created",
+        }:
             if expected_event not in contract.get("webhook_event_types", []):
                 return fail(f"stripe webhook contract missing event: {expected_event}")
         body = json.dumps(

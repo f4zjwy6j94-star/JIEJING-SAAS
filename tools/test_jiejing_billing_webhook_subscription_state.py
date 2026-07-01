@@ -84,6 +84,43 @@ def main() -> int:
         if usage.get("plan", {}).get("key") != "operator" or usage.get("subscription", {}).get("entitlement_active") is not True:
             return fail(f"billing usage should follow provider subscription: {usage}")
 
+        refund_event = _stripe_object_event(
+            event_id="evt_charge_refunded",
+            event_type="charge.refunded",
+            company_id=company_id,
+            customer_id="cus_state_unit",
+            status="succeeded",
+        )
+        refunded = handle_billing_webhook(raw_body=refund_event, headers=_stripe_headers(refund_event))
+        if refunded.get("ok") is not True or refunded.get("event", {}).get("payment_attention_required") is not True:
+            return fail(f"signed refund webhook should verify and require payment attention: {refunded}")
+        refunded_applied = repo.apply_billing_webhook_event(event=refunded["event"])
+        if refunded_applied.get("status") != "applied":
+            return fail(f"refund webhook should apply through existing provider ids: {refunded_applied}")
+        after_refund = repo.get_billing_subscription(company_id=company_id)
+        if not after_refund or after_refund.get("plan_key") != "operator" or after_refund.get("status") != "refunded":
+            return fail(f"refund should keep plan but mark subscription refunded: {after_refund}")
+        refund_quota = evaluate_quota_action(settings, repo, company_id=company_id, action_unit="ai_ceo_task")
+        if refund_quota.get("allowed") is not False or refund_quota.get("reason") != "billing_subscription_not_active":
+            return fail(f"refund should hard-stop metered work: {refund_quota}")
+
+        dispute_event = _stripe_object_event(
+            event_id="evt_charge_dispute_created",
+            event_type="charge.dispute.created",
+            company_id=company_id,
+            customer_id="cus_state_unit",
+            status="needs_response",
+        )
+        disputed = handle_billing_webhook(raw_body=dispute_event, headers=_stripe_headers(dispute_event))
+        if disputed.get("ok") is not True or disputed.get("event", {}).get("payment_attention_required") is not True:
+            return fail(f"signed dispute webhook should verify and require payment attention: {disputed}")
+        disputed_applied = repo.apply_billing_webhook_event(event=disputed["event"])
+        if disputed_applied.get("status") != "applied":
+            return fail(f"dispute webhook should apply through existing provider ids: {disputed_applied}")
+        after_dispute = repo.get_billing_subscription(company_id=company_id)
+        if not after_dispute or after_dispute.get("plan_key") != "operator" or after_dispute.get("status") != "disputed":
+            return fail(f"dispute should keep plan but mark subscription disputed: {after_dispute}")
+
         failed_event = json.dumps(
             {
                 "id": "evt_invoice_failed",
@@ -158,6 +195,8 @@ def main() -> int:
                 "accepted": accepted,
                 "applied": applied,
                 "duplicate": duplicate,
+                "refunded": refunded_applied,
+                "disputed": disputed_applied,
                 "unsupported": unsupported_applied,
                 "missing_id": missing_id_applied,
                 "usage": usage,
@@ -228,6 +267,31 @@ def _stripe_subscription_event(
                     "status": status,
                     "metadata": {"company_id": company_id},
                     "items": {"data": [{"price": {"id": price_id}}]},
+                }
+            },
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _stripe_object_event(
+    *,
+    event_id: str,
+    event_type: str,
+    company_id: str,
+    customer_id: str,
+    status: str,
+) -> bytes:
+    return json.dumps(
+        {
+            "id": event_id,
+            "type": event_type,
+            "data": {
+                "object": {
+                    "id": f"obj_{event_id}",
+                    "customer": customer_id,
+                    "status": status,
+                    "metadata": {"company_id": company_id},
                 }
             },
         },

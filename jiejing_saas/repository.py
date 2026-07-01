@@ -3128,7 +3128,11 @@ class SaaSRepository:
                         "secret_exposed": False,
                     }
                 entitlement_active = 1 if status in {"active", "trialing"} else 0
-                payment_attention_required = 1 if bool(event.get("payment_attention_required")) or status in {"past_due", "unpaid", "canceled", "expired"} else 0
+                payment_attention_required = (
+                    1
+                    if bool(event.get("payment_attention_required")) or status in {"past_due", "unpaid", "canceled", "expired", "refunded", "disputed"}
+                    else 0
+                )
                 subscription_record = {
                     "company_id": company_id,
                     "provider": provider,
@@ -4562,7 +4566,7 @@ def _billing_entitlement_apply_blockers(
         blockers.append("billing_event_id_missing")
     if not (provider_customer_id or provider_subscription_id):
         blockers.append("provider_subscription_or_customer_missing")
-    supported_statuses = {"active", "trialing", "past_due", "unpaid", "canceled", "expired"}
+    supported_statuses = {"active", "trialing", "past_due", "unpaid", "canceled", "expired", "refunded", "disputed"}
     if status not in supported_statuses:
         blockers.append("subscription_status_unmapped")
     if not existing_subscription and (plan_key == "unknown" or not provider_plan_id):
@@ -4584,13 +4588,19 @@ def _billing_entitlement_status(value: str, *, event_type: str) -> str:
         return "canceled"
     if "expired" in event:
         return "expired"
+    if "refunded" in event or "refund" in event:
+        return "refunded"
+    if "dispute" in event or "chargeback" in event:
+        return "disputed"
     if "payment_failed" in event or "invoice.payment_failed" in event:
         return "past_due"
     if "invoice.paid" in event or "payment_succeeded" in event or "payment_success" in event or "transaction.completed" in event:
         return "active"
     if text in {"active", "trialing", "trial", "paid", "on_trial"}:
         return "trialing" if text in {"trial", "on_trial"} else "active"
-    if text in {"past_due", "unpaid", "paused", "canceled", "cancelled", "expired", "deleted"}:
+    if text in {"past_due", "unpaid", "paused", "canceled", "cancelled", "expired", "deleted", "refunded", "disputed", "needs_response"}:
+        if text == "needs_response":
+            return "disputed"
         return "canceled" if text in {"cancelled", "deleted"} else text
     return text or "unknown"
 

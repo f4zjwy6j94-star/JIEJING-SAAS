@@ -125,6 +125,9 @@ def webhook_event_types(provider: str | None = None) -> list[str]:
             "invoice.paid",
             "invoice.payment_succeeded",
             "invoice.payment_failed",
+            "charge.refunded",
+            "charge.dispute.created",
+            "charge.dispute.closed",
         ]
     if selected == "paddle":
         return [
@@ -207,7 +210,7 @@ def normalize_billing_event(*, provider: str, event: dict[str, Any]) -> dict[str
     obj = data.get("object") if isinstance(data.get("object"), dict) else data
     if provider == "lemon_squeezy" and isinstance(data.get("attributes"), dict):
         obj = {**data.get("attributes", {}), "id": data.get("id") or event.get("id")}
-    subscription_id = str(obj.get("subscription") or obj.get("subscription_id") or obj.get("id") or "").strip()
+    subscription_id = _extract_subscription_id(provider=provider, event_type=event_type, obj=obj)
     customer_id = str(obj.get("customer") or obj.get("customer_id") or "").strip()
     status = str(obj.get("status") or "").strip()
     plan_id = _extract_plan_id(provider=provider, obj=obj)
@@ -326,6 +329,13 @@ def _extract_plan_id(*, provider: str, obj: dict[str, Any]) -> str:
     return ""
 
 
+def _extract_subscription_id(*, provider: str, event_type: str, obj: dict[str, Any]) -> str:
+    event = str(event_type or "").strip().lower()
+    if provider == "stripe" and (event.startswith("charge.") or "dispute" in event):
+        return str(obj.get("subscription") or obj.get("subscription_id") or "").strip()
+    return str(obj.get("subscription") or obj.get("subscription_id") or obj.get("id") or "").strip()
+
+
 def _extract_company_id(*, provider: str, event: dict[str, Any], obj: dict[str, Any]) -> str:
     metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
     custom_data = obj.get("custom_data") if isinstance(obj.get("custom_data"), dict) else {}
@@ -368,7 +378,17 @@ def _quota_recalculation_events(provider: str) -> set[str]:
             "test.customer.subscription.deleted",
         }
     if provider == "stripe":
-        return {"checkout.session.completed", "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "invoice.paid"}
+        return {
+            "checkout.session.completed",
+            "customer.subscription.created",
+            "customer.subscription.updated",
+            "customer.subscription.deleted",
+            "invoice.paid",
+            "invoice.payment_failed",
+            "charge.refunded",
+            "charge.dispute.created",
+            "charge.dispute.closed",
+        }
     if provider == "paddle":
         return {"subscription.created", "subscription.updated", "subscription.canceled", "transaction.completed"}
     if provider == "lemon_squeezy":
@@ -389,7 +409,7 @@ def _payment_attention_events(provider: str) -> set[str]:
     if provider in TEST_BILLING_PROVIDERS:
         return {"test.invoice.payment_failed", "test.customer.subscription.deleted"}
     if provider == "stripe":
-        return {"invoice.payment_failed", "customer.subscription.deleted"}
+        return {"invoice.payment_failed", "customer.subscription.deleted", "charge.refunded", "charge.dispute.created", "charge.dispute.closed"}
     if provider == "paddle":
         return {"transaction.payment_failed", "subscription.canceled"}
     if provider == "lemon_squeezy":

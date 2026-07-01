@@ -186,7 +186,12 @@ async function main() {
 
   await page.goto(`${base}/app.html?start=app&view=connect&smoke=${Date.now()}`, { waitUntil: "commit", timeout: 90000 });
   await page.waitForSelector(".saas-settings-clean-shell", { timeout: 60000 });
-  await page.locator('[data-saas-settings-tab="launch"]').click();
+  const ownerOpsTab = page.locator('[data-saas-settings-tab="owner_ops"]');
+  if ((await ownerOpsTab.count()) > 0) {
+    await ownerOpsTab.click();
+  } else {
+    await page.locator('[data-saas-settings-tab="billing"]').click();
+  }
   await page.waitForTimeout(3000);
   await page.screenshot({ path: path.join(outDir, "owner-launch-control-hidden-public.png"), fullPage: true, timeout: 15000 });
 

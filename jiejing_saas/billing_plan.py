@@ -185,6 +185,13 @@ def build_billing_plan(settings: SaaSSettings, repository: SaaSRepository) -> di
             checkout_contract=checkout_contract,
             quota_enforcement_enabled=quota_enforcement_enabled,
         ),
+        "billing_incident_runbook": _build_billing_incident_runbook(
+            provider=provider,
+            test_provider=test_provider,
+            provider_contract=provider_contract,
+            checkout_contract=checkout_contract,
+            quota_enforcement_enabled=quota_enforcement_enabled,
+        ),
         "current_usage_shape": {
             "users": counts.get("users", 0),
             "companies": counts.get("companies", 0),
@@ -485,6 +492,126 @@ def _build_subscription_quota_shutdown_closure(
         "charge_now_allowed": False,
         "frontend_gets_payment_secret": False,
         "frontend_gets_api_key": False,
+        "secret_exposed": False,
+    }
+
+
+def _build_billing_incident_runbook(
+    *,
+    provider: str,
+    test_provider: bool,
+    provider_contract: dict[str, Any],
+    checkout_contract: dict[str, Any],
+    quota_enforcement_enabled: bool,
+) -> dict[str, Any]:
+    """Operator-facing billing incident handling without payment secrets."""
+
+    event_types = set(provider_contract.get("webhook_event_types") or [])
+    customer_portal = checkout_contract.get("customer_portal") if isinstance(checkout_contract.get("customer_portal"), dict) else {}
+    refund_events = {"charge.refunded", "charge.dispute.created", "charge.dispute.closed"}
+    cards = [
+        _billing_incident_card(
+            "customer_portal_change",
+            "Customer Portal plan change",
+            bool(customer_portal.get("ready")),
+            trigger="merchant_self_service_portal",
+            visible_result="Provider keeps card/payment method management outside Jiejing; subscription changes return through signed webhook before quota changes.",
+            operator_action="Verify signed subscription.updated or subscription.deleted event, then review quota and audit state.",
+            signed_webhook_required=True,
+            frontend_action_allowed=False,
+        ),
+        _billing_incident_card(
+            "payment_failed",
+            "Payment failed",
+            ("invoice.payment_failed" in event_types or "test.invoice.payment_failed" in event_types) and quota_enforcement_enabled,
+            trigger="provider_signed_invoice_payment_failed",
+            visible_result="Subscription enters payment attention; metered AI CEO/provider/model work is blocked while reports and audit stay visible.",
+            operator_action="Ask merchant to update payment method or confirm manual recovery; do not request eBay OAuth or model key re-entry.",
+            signed_webhook_required=True,
+            frontend_action_allowed=False,
+        ),
+        _billing_incident_card(
+            "subscription_cancelled",
+            "Subscription cancelled",
+            ("customer.subscription.deleted" in event_types or "test.customer.subscription.deleted" in event_types) and quota_enforcement_enabled,
+            trigger="provider_signed_subscription_deleted",
+            visible_result="Entitlement turns inactive and high-cost work is hard-stopped; historical business evidence remains readable.",
+            operator_action="Let merchant restore through Customer Portal or internal admin recovery after payment proof.",
+            signed_webhook_required=True,
+            frontend_action_allowed=False,
+        ),
+        _billing_incident_card(
+            "refund_or_dispute",
+            "Refund or payment dispute",
+            test_provider or bool(refund_events.intersection(event_types)),
+            trigger="provider_signed_refund_or_dispute_webhook",
+            visible_result="Refund/dispute moves subscription into payment attention and blocks metered work until operator review.",
+            operator_action="Handle the money movement inside Stripe/provider dashboard and keep Jiejing as audit/subscription state only.",
+            signed_webhook_required=True,
+            frontend_action_allowed=False,
+            confirmation_center_required=True,
+        ),
+        _billing_incident_card(
+            "quota_hard_stop",
+            "Quota hard-stop",
+            quota_enforcement_enabled,
+            trigger="backend_quota_evaluation",
+            visible_result="Only new metered work is blocked; reports, settings, confirmation records and audit remain visible.",
+            operator_action="Review billing status, plan limits and failed/cancel/refund evidence before re-enabling.",
+            signed_webhook_required=False,
+            frontend_action_allowed=False,
+        ),
+    ]
+    ready_count = sum(1 for item in cards if item["status"] == "ready")
+    return {
+        "contract_version": "2026-07-01-billing-incident-runbook-v1",
+        "provider": provider or "not_selected",
+        "mode": "no_charge_test_provider" if test_provider else "live_provider_rehearsal",
+        "cards": cards,
+        "ready_count": ready_count,
+        "total_count": len(cards),
+        "blocked_count": len(cards) - ready_count,
+        "refund_dispute_supported_by_signed_webhook": bool(refund_events.intersection(event_types)),
+        "customer_portal_changes_require_signed_webhook": True,
+        "refund_or_dispute_cannot_be_frontend_executed": True,
+        "payment_failed_cancel_blocks_metered_work": quota_enforcement_enabled,
+        "history_and_audit_remain_visible": True,
+        "public_charging_allowed": False,
+        "triggers_real_charge": False,
+        "charge_now_allowed": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def _billing_incident_card(
+    key: str,
+    title: str,
+    ready: bool,
+    *,
+    trigger: str,
+    visible_result: str,
+    operator_action: str,
+    signed_webhook_required: bool,
+    frontend_action_allowed: bool,
+    confirmation_center_required: bool = False,
+) -> dict[str, Any]:
+    return {
+        "key": key,
+        "title": title,
+        "status": "ready" if ready else "blocked",
+        "severity": "info" if ready else "blocker",
+        "trigger": trigger,
+        "visible_result": visible_result,
+        "operator_action": operator_action,
+        "signed_webhook_required": signed_webhook_required,
+        "frontend_action_allowed": frontend_action_allowed,
+        "confirmation_center_required": confirmation_center_required,
+        "creates_checkout_session": False,
+        "calls_stripe_api": False,
+        "triggers_real_charge": False,
+        "charge_now_allowed": False,
+        "frontend_gets_payment_secret": False,
         "secret_exposed": False,
     }
 

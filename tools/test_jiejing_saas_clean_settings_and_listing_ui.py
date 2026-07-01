@@ -342,6 +342,7 @@ def main() -> None:
         "renderSaasManualBetaPaymentOrderPanel()",
         "renderSaasMerchantPricingModelPanel(ctx)",
         "renderSaasMerchantBillingContinuityPanel(ctx)",
+        "renderSaasMerchantBillingIncidentRunbookPanel(ctx)",
         "主理人高级区",
         "正式收费和公网安全",
         "运行可靠性",
@@ -517,6 +518,13 @@ def main() -> None:
         "billing_blocks_metered_work_only",
         "no_repeat_oauth_for_billing_recovery",
         "no_model_key_reentry_for_billing_recovery",
+        "merchant_billing_incident_runbook_v1",
+        "customer_portal_change_signed_webhook_required",
+        "refund_dispute_webhook_sets_payment_attention",
+        "refund_or_dispute_cannot_be_frontend_executed",
+        "payment_failed_cancel_blocks_metered_work",
+        "quota_shutdown_keeps_history_visible",
+        "browser_cannot_grant_or_restore_entitlement",
         "正式支付接入前演练",
         "先证明后端查单 / 签名回调，再允许订阅和额度生效",
         "data-saas-action=\"billing-provider-rehearsal\"",
@@ -745,6 +753,12 @@ def main() -> None:
     require(styles, "body.saas-public-mvp[data-view=\"product\"] .saas-real-listing-header", "old Listing header hidden on daily surface")
     require(styles, "body.saas-public-mvp .saas-ceo-module-handoff", "handoff suppression")
     require(styles, "2026-06-24 AI CEO minimal routing v2", "AI CEO minimal routing final override")
+    for incident_style_marker in [
+        ".saas-merchant-billing-incident-runbook",
+        ".saas-merchant-billing-incident-grid",
+        ".saas-merchant-billing-incident-note",
+    ]:
+        require(styles, incident_style_marker, "billing incident runbook styling")
 
     forbidden_merchant_copy = [
         "上架主线",

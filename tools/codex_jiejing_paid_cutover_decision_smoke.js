@@ -5,7 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const { chromium } = require("../output/codex-playwright-deps/node_modules/playwright-core");
 
-const base = process.env.JIEJING_TEST_BASE || "https://individually-buffalo-prescribed-blocking.trycloudflare.com";
+const base = process.env.JIEJING_TEST_BASE || "https://app.jiejing.shop";
 const browserChannel = process.env.JIEJING_PLAYWRIGHT_CHANNEL || "chrome";
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const outDir = path.join("output", "browser-smoke", `${stamp}-paid-cutover-decision`);
@@ -109,6 +109,7 @@ async function main() {
   if (!approvalPayload.ok) {
     throw new Error(`paid launch approval packet fetch failed: ${approvalPayload.status}`);
   }
+  const ownerPacketResponse = await api("/owner/launch-control", { token: session.token });
   const launchGate = gate.json.commercial_launch_gate || {};
   const plan = launchGate.launch_action_plan || {};
   const decision = plan.paid_launch_cutover_decision || launchGate.paid_launch_cutover_decision || {};
@@ -192,13 +193,21 @@ async function main() {
 
   await page.goto(`${base}/app.html?start=app&view=connect&smoke=${Date.now()}`, { waitUntil: "commit", timeout: 90000 });
   await page.waitForSelector(".saas-settings-clean-shell", { timeout: 60000 });
-  await page.locator('[data-saas-settings-tab="launch"]').click();
-  await page.waitForSelector(".saas-edge-cutover-readiness", { timeout: 60000 });
-  await page.waitForSelector(".saas-paid-launch-cutover-decision", { timeout: 60000 });
-  await page.waitForSelector(".saas-new-ebay-smoke-runbook", { timeout: 60000 });
-  await page.waitForSelector(".saas-billing-live-cutover-matrix", { timeout: 60000 });
-  await page.waitForSelector(".saas-billing-domain-cutover-rehearsal", { timeout: 60000 });
-  await page.waitForSelector(".saas-paid-launch-approval-packet", { timeout: 60000 });
+  const ownerOpsTab = page.locator('[data-saas-settings-tab="owner_ops"]');
+  const ownerOpsVisible = (await ownerOpsTab.count()) > 0;
+  if (ownerOpsVisible) {
+    await ownerOpsTab.click();
+    await page.waitForSelector(".saas-edge-cutover-readiness", { timeout: 60000 });
+    await page.waitForSelector(".saas-paid-launch-cutover-decision", { timeout: 60000 });
+    await page.waitForSelector(".saas-new-ebay-smoke-runbook", { timeout: 60000 });
+    await page.waitForSelector(".saas-billing-live-cutover-matrix", { timeout: 60000 });
+    await page.waitForSelector(".saas-billing-domain-cutover-rehearsal", { timeout: 60000 });
+    await page.waitForSelector(".saas-paid-launch-approval-packet", { timeout: 60000 });
+  } else {
+    await page.locator('[data-saas-settings-tab="billing"]').click();
+    await page.waitForSelector(".saas-paid-cutover-blockers", { timeout: 60000 });
+    await page.waitForSelector(".saas-merchant-billing-incident-runbook", { timeout: 60000 });
+  }
   await page.screenshot({ path: path.join(outDir, "paid-cutover-decision.png"), fullPage: true, timeout: 15000 });
 
   const ui = await page.evaluate(() => {
@@ -210,6 +219,9 @@ async function main() {
     const billing = document.querySelector(".saas-billing-live-cutover-matrix");
     const rehearsal = document.querySelector(".saas-billing-domain-cutover-rehearsal");
     const approval = document.querySelector(".saas-paid-launch-approval-packet");
+    const ownerOpsTab = document.querySelector('[data-saas-settings-tab="owner_ops"]');
+    const publicBillingCutover = document.querySelector(".saas-paid-cutover-blockers");
+    const incidentRunbook = document.querySelector(".saas-merchant-billing-incident-runbook");
     const text = launch?.innerText || decision?.innerText || "";
     const settingsText = settings?.innerText || text;
     const edgeText = edge?.innerText || settingsText;
@@ -224,6 +236,9 @@ async function main() {
       billingVisible: Boolean(billing && billing.offsetParent !== null),
       rehearsalVisible: Boolean(rehearsal && rehearsal.offsetParent !== null),
       approvalVisible: Boolean(approval && approval.offsetParent !== null),
+      ownerOpsTabVisible: Boolean(ownerOpsTab && ownerOpsTab.offsetParent !== null),
+      publicBillingCutoverVisible: Boolean(publicBillingCutover && publicBillingCutover.offsetParent !== null),
+      incidentRunbookVisible: Boolean(incidentRunbook && incidentRunbook.offsetParent !== null),
       text,
       cardCount: decision?.querySelectorAll("article").length || 0,
       hasBlockedStatus: text.includes("blocked"),
@@ -281,6 +296,8 @@ async function main() {
         ["billing", "domain", "reliability", "legal", "ebay", "release"].includes((node.textContent || "").trim()),
       ).length,
       hasLoginOverlay: Boolean(document.querySelector(".auth-shell, .saas-login-modal, [data-auth-view]")),
+      publicBillingText: publicBillingCutover?.textContent || "",
+      incidentRunbookText: incidentRunbook?.textContent || "",
     };
   });
 
@@ -343,6 +360,7 @@ async function main() {
       paid_launch_approval_triggers_real_platform_write: Boolean(approvalPacket.triggers_real_platform_write),
       paid_launch_approval_total_count: approvalSteps.length,
       paid_launch_approval_keys: approvalSteps.map((item) => item && item.key).filter(Boolean),
+      owner_launch_control_status: Number(ownerPacketResponse.status || 0),
       secret_exposed: Boolean(launchGate.secret_exposed),
     },
     ui,
@@ -380,14 +398,25 @@ async function main() {
   ]) {
     if (!result.api.new_account_smoke_keys.includes(key)) failures.push(`api new-account smoke missing ${key}`);
   }
-  if (!ui.visible || ui.cardCount < 4) failures.push("cutover decision UI missing");
-  if (!ui.hasBlockedStatus || !ui.hasNoCharge || !ui.hasNoPlatformWrite || !ui.hasRepeatOauthFalse) failures.push("cutover decision UI missing safety flags");
-  if (!ui.hasBillingNextStep) failures.push("cutover decision UI missing billing next step");
-  if (!ui.hasRunbook || ui.runbookCardCount < 1) failures.push("cutover decision UI missing runbook");
-  if (!ui.hasWebhookResilience) failures.push("cutover decision UI missing webhook resilience");
-  if (!ui.hasStableDomainOauthCors) failures.push("cutover decision UI missing stable domain oauth/cors");
-  if (!ui.smokeVisible || ui.smokeCardCount < 8) failures.push("new-account smoke UI missing");
-  if (!ui.hasNewAccountSmoke || !ui.hasCleanAccountStep || !ui.hasOauthGate || !ui.hasCleanupGate) failures.push("new-account smoke UI missing key stages");
+  if (result.api.owner_launch_control_status !== 403 && !ui.ownerOpsTabVisible) failures.push(`ordinary owner launch-control status ${result.api.owner_launch_control_status}`);
+  if (ui.ownerOpsTabVisible) {
+    if (!ui.visible || ui.cardCount < 4) failures.push("cutover decision UI missing");
+    if (!ui.hasBlockedStatus || !ui.hasNoCharge || !ui.hasNoPlatformWrite || !ui.hasRepeatOauthFalse) failures.push("cutover decision UI missing safety flags");
+    if (!ui.hasBillingNextStep) failures.push("cutover decision UI missing billing next step");
+    if (!ui.hasRunbook || ui.runbookCardCount < 1) failures.push("cutover decision UI missing runbook");
+    if (!ui.hasWebhookResilience) failures.push("cutover decision UI missing webhook resilience");
+    if (!ui.hasStableDomainOauthCors) failures.push("cutover decision UI missing stable domain oauth/cors");
+    if (!ui.smokeVisible || ui.smokeCardCount < 8) failures.push("new-account smoke UI missing");
+    if (!ui.hasNewAccountSmoke || !ui.hasCleanAccountStep || !ui.hasOauthGate || !ui.hasCleanupGate) failures.push("new-account smoke UI missing key stages");
+  } else {
+    if (ui.visible || ui.smokeVisible || ui.edgeVisible || ui.billingVisible || ui.rehearsalVisible || ui.approvalVisible) {
+      failures.push("platform-internal paid launch UI exposed to ordinary merchant");
+    }
+    if (!ui.publicBillingCutoverVisible) failures.push("ordinary billing cutover blockers UI missing");
+    if (!ui.incidentRunbookVisible) failures.push("ordinary billing incident runbook UI missing");
+    if (!ui.publicBillingText.includes("ready_for_paid_launch=false")) failures.push("ordinary billing UI missing paid launch false marker");
+    if (!ui.incidentRunbookText.includes("merchant_billing_incident_runbook_v1")) failures.push("ordinary billing UI missing incident runbook marker");
+  }
   if (result.api.billing_live_cutover_total_count !== 8) failures.push(`api billing live cutover count ${result.api.billing_live_cutover_total_count}`);
   for (const key of [
     "stripe_live_provider_selected",
@@ -401,8 +430,10 @@ async function main() {
   ]) {
     if (!result.api.billing_live_cutover_keys.includes(key)) failures.push(`api billing live cutover missing ${key}`);
   }
-  if (!ui.billingVisible || ui.billingMatrixCardCount < 8) failures.push("billing live cutover UI missing");
-  if (!ui.hasBillingMatrix || !ui.hasBillingProviderStep || !ui.hasBillingWebhookStep || !ui.hasBillingQuotaLifecycle) failures.push("billing live cutover UI missing key stages");
+  if (ui.ownerOpsTabVisible) {
+    if (!ui.billingVisible || ui.billingMatrixCardCount < 8) failures.push("billing live cutover UI missing");
+    if (!ui.hasBillingMatrix || !ui.hasBillingProviderStep || !ui.hasBillingWebhookStep || !ui.hasBillingQuotaLifecycle) failures.push("billing live cutover UI missing key stages");
+  }
   if (result.api.billing_domain_rehearsal_version !== "2026-06-18-stripe-domain-cutover-rehearsal") failures.push("api billing domain rehearsal contract missing");
   if (result.api.billing_domain_rehearsal_status !== "blocked") failures.push(`api billing domain rehearsal status ${result.api.billing_domain_rehearsal_status}`);
   if (result.api.billing_domain_rehearsal_mode !== "dry_run_no_charge") failures.push(`api billing domain rehearsal mode ${result.api.billing_domain_rehearsal_mode}`);
@@ -427,9 +458,11 @@ async function main() {
   ]) {
     if (!result.api.billing_domain_rehearsal_keys.includes(key)) failures.push(`api billing domain rehearsal missing ${key}`);
   }
-  if (!ui.rehearsalVisible || ui.rehearsalCardCount < 10) failures.push("billing domain rehearsal UI missing");
-  if (!ui.hasRehearsal || !ui.hasRehearsalCheckoutUrls || !ui.hasRehearsalSignedWebhook || !ui.hasRehearsalQuotaLifecycle) failures.push("billing domain rehearsal UI missing key stages");
-  if (!ui.hasRehearsalNoCheckoutCreated || !ui.hasRehearsalNoStripeCall || !ui.hasRehearsalNoEbayOauth || !ui.hasRehearsalNoFrontendSecret) failures.push("billing domain rehearsal UI missing safety flags");
+  if (ui.ownerOpsTabVisible) {
+    if (!ui.rehearsalVisible || ui.rehearsalCardCount < 10) failures.push("billing domain rehearsal UI missing");
+    if (!ui.hasRehearsal || !ui.hasRehearsalCheckoutUrls || !ui.hasRehearsalSignedWebhook || !ui.hasRehearsalQuotaLifecycle) failures.push("billing domain rehearsal UI missing key stages");
+    if (!ui.hasRehearsalNoCheckoutCreated || !ui.hasRehearsalNoStripeCall || !ui.hasRehearsalNoEbayOauth || !ui.hasRehearsalNoFrontendSecret) failures.push("billing domain rehearsal UI missing safety flags");
+  }
   if (result.api.edge_cutover_contract_version !== "2026-06-18-edge-waf-origin-callback-preflight") failures.push("api edge cutover contract missing");
   if (result.api.edge_cutover_status !== "blocked") failures.push(`api edge cutover status ${result.api.edge_cutover_status}`);
   if (result.api.edge_cutover_mode !== "owner_console_preflight_no_write_no_charge") failures.push(`api edge cutover mode ${result.api.edge_cutover_mode}`);
@@ -450,9 +483,11 @@ async function main() {
   ]) {
     if (!result.api.edge_cutover_stage_keys.includes(key)) failures.push(`api edge cutover missing ${key}`);
   }
-  if (!ui.edgeVisible || ui.edgeCardCount < 7) failures.push("edge cutover UI missing");
-  if (!ui.hasEdgeCutover || !ui.hasEdgeStableDomain || !ui.hasEdgeWaf || !ui.hasEdgeOriginLock || !ui.hasEdgeCallbacks) failures.push("edge cutover UI missing key stages");
-  if (!ui.hasEdgeNoCharge || !ui.hasEdgeNoCheckout || !ui.hasEdgeNoStripeCall || !ui.hasEdgeNoOauth || !ui.hasEdgeNoWrite || !ui.hasEdgeNoFrontendSecret) failures.push("edge cutover UI missing safety flags");
+  if (ui.ownerOpsTabVisible) {
+    if (!ui.edgeVisible || ui.edgeCardCount < 7) failures.push("edge cutover UI missing");
+    if (!ui.hasEdgeCutover || !ui.hasEdgeStableDomain || !ui.hasEdgeWaf || !ui.hasEdgeOriginLock || !ui.hasEdgeCallbacks) failures.push("edge cutover UI missing key stages");
+    if (!ui.hasEdgeNoCharge || !ui.hasEdgeNoCheckout || !ui.hasEdgeNoStripeCall || !ui.hasEdgeNoOauth || !ui.hasEdgeNoWrite || !ui.hasEdgeNoFrontendSecret) failures.push("edge cutover UI missing safety flags");
+  }
   if (result.api.paid_launch_approval_version !== "2026-06-18-paid-launch-approval-packet") failures.push("api paid launch approval contract missing");
   if (result.api.paid_launch_approval_status !== "blocked") failures.push(`api paid launch approval status ${result.api.paid_launch_approval_status}`);
   if (result.api.paid_launch_approval_mode !== "owner_approval_packet_no_charge_no_write") failures.push(`api paid launch approval mode ${result.api.paid_launch_approval_mode}`);
@@ -466,10 +501,12 @@ async function main() {
   for (const key of ["stable_domain_hardening", "stripe_live_cutover", "no_charge_launch_rehearsal", "new_ebay_account_low_risk_smoke"]) {
     if (!result.api.paid_launch_approval_keys.includes(key)) failures.push(`api paid launch approval missing ${key}`);
   }
-  if (!ui.approvalVisible || ui.approvalCardCount < 4) failures.push("paid launch approval UI missing");
-  if (!ui.hasApprovalPacket || !ui.hasApprovalStableDomain || !ui.hasApprovalStripeCutover || !ui.hasApprovalNoChargeRehearsal || !ui.hasApprovalNewEbaySmoke) failures.push("paid launch approval UI missing key stages");
-  if (!ui.hasApprovalExternalConfig || !ui.hasApprovalNoCharge || !ui.hasApprovalNoStripeCall || !ui.hasApprovalNoOauth || !ui.hasApprovalNoWrite) failures.push("paid launch approval UI missing safety flags");
-  if (ui.laneCount !== 6) failures.push(`cutover decision lane count ${ui.laneCount}`);
+  if (ui.ownerOpsTabVisible) {
+    if (!ui.approvalVisible || ui.approvalCardCount < 4) failures.push("paid launch approval UI missing");
+    if (!ui.hasApprovalPacket || !ui.hasApprovalStableDomain || !ui.hasApprovalStripeCutover || !ui.hasApprovalNoChargeRehearsal || !ui.hasApprovalNewEbaySmoke) failures.push("paid launch approval UI missing key stages");
+    if (!ui.hasApprovalExternalConfig || !ui.hasApprovalNoCharge || !ui.hasApprovalNoStripeCall || !ui.hasApprovalNoOauth || !ui.hasApprovalNoWrite) failures.push("paid launch approval UI missing safety flags");
+    if (ui.laneCount !== 6) failures.push(`cutover decision lane count ${ui.laneCount}`);
+  }
   if (ui.hasLoginOverlay) failures.push("login overlay visible during authenticated smoke");
 
   if (failures.length) {

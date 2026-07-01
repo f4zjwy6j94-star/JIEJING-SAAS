@@ -25484,6 +25484,7 @@ function saasMerchantBillingGuardrailState() {
       : {};
   const provider = plan.provider && typeof plan.provider === "object" ? plan.provider : {};
   const quota = plan.quota_contract && typeof plan.quota_contract === "object" ? plan.quota_contract : {};
+  const incidentRunbook = plan.billing_incident_runbook && typeof plan.billing_incident_runbook === "object" ? plan.billing_incident_runbook : {};
   const checkoutSessions = checkout.checkout_sessions && typeof checkout.checkout_sessions === "object" ? checkout.checkout_sessions : {};
   const portal = checkout.customer_portal && typeof checkout.customer_portal === "object" ? checkout.customer_portal : {};
   const latestTestEvent = state.saasBillingTestEvent && typeof state.saasBillingTestEvent === "object" ? state.saasBillingTestEvent : {};
@@ -25529,6 +25530,7 @@ function saasMerchantBillingGuardrailState() {
     shutdown,
     provider,
     quota,
+    incidentRunbook,
     checkoutSessions,
     portal,
     latestTestEvent,
@@ -26603,6 +26605,95 @@ function renderSaasMerchantBillingContinuityPanel(ctx = saasMerchantWorkbenchCon
         <span>no_model_key_reentry_for_billing_recovery</span>
         <span>triggers_real_charge=false</span>
         <span>frontend_gets_payment_secret=false</span>
+        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
+      </div>
+    </section>
+  `;
+}
+
+function renderSaasMerchantBillingIncidentRunbookPanel(ctx = saasMerchantWorkbenchContext()) {
+  const billing = saasMerchantBillingGuardrailState();
+  const runbook = billing.incidentRunbook && typeof billing.incidentRunbook === "object" ? billing.incidentRunbook : {};
+  const cards = Array.isArray(runbook.cards) ? runbook.cards.filter(Boolean) : [];
+  const fallbackCards = [
+    {
+      key: "customer_portal_change",
+      title: "Customer Portal 变更",
+      status: billing.portal.ready ? "ready" : "blocked",
+      trigger: "商家自助升级、降级、取消或修改付款方式",
+      visible_result: "必须等 provider 签名 webhook 回写后，才更新订阅和 quota。",
+      operator_action: "核对 provider 事件、账单状态和审计，不让前端保存支付资料。",
+    },
+    {
+      key: "payment_failed",
+      title: "付款失败",
+      status: billing.quotaEnforcementEnabled ? "ready" : "blocked",
+      trigger: "invoice.payment_failed / 欠费",
+      visible_result: "高成本任务 hard-stop，历史报告、确认中心和审计继续可见。",
+      operator_action: "提醒商家更新付款方式；不要求重复 eBay OAuth 或重填模型 key。",
+    },
+    {
+      key: "refund_or_dispute",
+      title: "退款 / 争议",
+      status: "blocked",
+      trigger: "provider signed refund or dispute webhook",
+      visible_result: "进入 payment attention，暂停 metered work，等待主理人/财务处理。",
+      operator_action: "真实退款和争议只在支付 provider 后台处理，捷境只记录状态和审计。",
+    },
+  ];
+  const visibleCards = cards.length ? cards : fallbackCards;
+  const readyText = `${Number(runbook.ready_count || 0)}/${Number(runbook.total_count || visibleCards.length)} ready`;
+  const status = runbook.blocked_count ? "仍需 live 证据" : "处理链路已闭合";
+  const copy = {
+    customer_portal_change: ["自助订阅变更", "Customer Portal 只负责 provider 侧变更；捷境等签名 webhook 后更新权益。"],
+    payment_failed: ["付款失败", "欠费会进入 payment attention，高成本任务暂停，历史资料不删除。"],
+    subscription_cancelled: ["订阅取消", "取消后 entitlement inactive；恢复必须走 provider 或内部管理员确认。"],
+    refund_or_dispute: ["退款 / 争议", "真实退款、拒付和争议不在前端执行，只由 provider 后台和审计记录处理。"],
+    quota_hard_stop: ["额度强停", "后端 quota 判断阻断 metered work，前端不能绕过。"],
+  };
+  return `
+    <section class="saas-settings-card saas-merchant-billing-incident-runbook" data-billing-incident-runbook="merchant_billing_incident_runbook_v1" aria-label="账单异常处理">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>账单异常处理</span>
+          <strong>Portal 变更、欠费、取消、退款和争议都要先有后端证据</strong>
+          <p>这张卡把正式收费后最容易出事故的账单状态拆清楚：商家可以自助管理订阅，但权益发放、停用、退款/争议状态必须来自签名 webhook、后端查单或主理人确认，不能由浏览器直接发放或恢复。</p>
+        </div>
+        <em>${escapeHtml(`${status} · ${readyText}`)}</em>
+      </div>
+      <div class="saas-merchant-billing-incident-grid">
+        ${visibleCards
+          .map((item) => {
+            const [title, detail] = copy[item.key] || [item.title || item.key || "账单状态", item.visible_result || ""];
+            const tone = item.status === "ready" ? "green" : item.key === "refund_or_dispute" ? "red" : "amber";
+            return `
+              <article class="is-${escapeHtml(tone)}">
+                <span>${escapeHtml(item.status || "blocked")}</span>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail || item.visible_result || "")}</small>
+                <small>${escapeHtml(item.operator_action || "等待后端证据和主理人处理。")}</small>
+              </article>
+            `;
+          })
+          .join("")}
+      </div>
+      <div class="saas-merchant-billing-incident-note">
+        <strong>运营边界</strong>
+        <p>退款、争议、付款方式和发票问题不在捷境前端执行。捷境只接收 provider 签名结果、更新订阅/quota 状态、保留审计，并把真实退款、拒付处理和付款方式管理留在支付平台后台。</p>
+      </div>
+      <div class="saas-merchant-billing-incident-safety" hidden aria-hidden="true">
+        <span>merchant_billing_incident_runbook_v1</span>
+        <span>customer_portal_change_signed_webhook_required</span>
+        <span>refund_dispute_webhook_sets_payment_attention</span>
+        <span>refund_or_dispute_cannot_be_frontend_executed</span>
+        <span>payment_failed_cancel_blocks_metered_work</span>
+        <span>quota_shutdown_keeps_history_visible</span>
+        <span>browser_cannot_grant_or_restore_entitlement</span>
+        <span>charge_now_allowed=false</span>
+        <span>triggers_real_charge=false</span>
+        <span>frontend_gets_payment_secret=false</span>
+        <span>repeat_ebay_oauth_allowed=false</span>
+        <span>secret_exposed=false</span>
         <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
       </div>
     </section>
@@ -33090,6 +33181,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
         renderSaasManualBetaPaymentOrderPanel(),
         renderSaasMerchantPricingModelPanel(ctx),
         renderSaasMerchantBillingContinuityPanel(ctx),
+        renderSaasMerchantBillingIncidentRunbookPanel(ctx),
         renderSaasMerchantSecurityBoundaryPanel(),
       ],
     },
