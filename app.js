@@ -17239,7 +17239,7 @@ function renderWorkflowFeedbackWidget() {
   if (contextNode) contextNode.innerHTML = renderWorkflowFeedbackContextChips(context);
   if (reasonsNode) reasonsNode.innerHTML = renderWorkflowFeedbackReasonButtons(context);
   if (textNode && document.activeElement !== textNode) textNode.value = state.saasWorkflowFeedbackDraft || "";
-  if (statusNode) statusNode.textContent = "只记录产品/流程改进意见和上下文编号，不保存 token、key 或平台凭证，不影响店铺执行。";
+  if (statusNode) statusNode.textContent = "只记录产品/流程改进意见和上下文编号，不保存敏感凭证或平台账号资料，不影响店铺执行。";
   return true;
 }
 
@@ -27339,7 +27339,7 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
   const billingModeLabel = billing.provider.external_paid_provider_configured ? "在线付款已接入" : "试用模式";
   const splitRows = [
     ["01", "基础订阅", "¥99/月是基础订阅", "打开工作台、AI CEO、Listing、批量、素材工坊、客服订单和基础记录。"],
-    ["02", "AI 文本用量", "不包含无限模型", "普通问答、Listing 文案、联网总结和长报告按模型套餐、token 或服务商账单核算。"],
+    ["02", "AI 文本用量", "不包含无限模型", "普通问答、Listing 文案、联网总结和长报告按套餐额度或实际用量核算。"],
     ["03", "图片 / 视频", "素材任务另算", "主图、场景图、详情图、视频封面和视频生成按张、秒、任务或供应商账单核算。"],
     ["04", "平台经营成本", "捷境不代扣", "eBay 成交费、广告费、物流、退款和店铺订阅只进入利润测算与确认中心。"],
   ];
@@ -33718,9 +33718,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       intro: "查看基础订阅、AI 用量、素材生成、欠费停用和账号安全边界。",
       panels: [
         renderSaasMerchantBillingPlainSummaryPanel(ctx),
-        renderSaasBillingTransitionPathPanel(ctx),
         renderSaasMerchantBillingCustomerTrustPanel(ctx),
-        renderSaasManualBetaPaymentOrderPanel(),
         renderSaasMerchantPricingModelPanel(ctx),
         renderSaasMerchantBillingContinuityPanel(ctx),
         renderSaasMerchantSecurityBoundaryPanel(),
@@ -33742,6 +33740,8 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
           badge: "内部",
           open: true,
           panels: [
+            renderSaasBillingTransitionPathPanel(ctx),
+            renderSaasManualBetaPaymentOrderPanel(),
             renderSaasBillingProviderPanel(),
             renderSaasBillingProviderRehearsalPanel(ctx),
             renderSaasBillingDomainCutoverReviewPanel(ctx),
