@@ -537,16 +537,19 @@ async function main() {
   if (result.api.billing_provider_evidence_repeat_ebay_oauth_allowed !== false) failures.push("api billing provider evidence register unexpectedly allows repeated eBay OAuth");
   if (result.api.billing_provider_evidence_triggers_real_platform_write !== false) failures.push("api billing provider evidence register unexpectedly triggers platform write");
   if (result.api.billing_provider_evidence_frontend_gets_payment_secret !== false) failures.push("api billing provider evidence register unexpectedly exposes payment secret");
-  if (result.api.billing_provider_evidence_total_count !== 10) failures.push(`api billing provider evidence row count ${result.api.billing_provider_evidence_total_count}`);
+  if (result.api.billing_provider_evidence_total_count !== 13) failures.push(`api billing provider evidence row count ${result.api.billing_provider_evidence_total_count}`);
   for (const key of [
     "live_provider_account",
+    "stripe_account_activation_go_live_evidence",
     "stripe_live_price_catalog",
+    "stripe_live_mode_test_object_isolation",
     "stripe_subscription_checkout_contract",
     "stripe_customer_portal_contract",
     "stripe_signed_webhook_contract",
     "stripe_api_webhook_version_alignment",
     "stripe_webhook_failure_paths",
     "stripe_entitlement_quota_lifecycle",
+    "stripe_tax_invoice_receipt_branding_evidence",
     "stable_domain_billing_callbacks",
     "cutover_rollback_audit_packet",
   ]) {

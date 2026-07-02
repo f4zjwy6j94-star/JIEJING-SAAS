@@ -68,6 +68,29 @@ def build_billing_provider_evidence_register(settings: SaaSSettings, repository:
             docs=["https://docs.stripe.com/get-started/checklist/go-live"],
             external_resource_required=True,
         ),
+        _row(
+            "stripe_account_activation_go_live_evidence",
+            "Stripe account activation and go-live checklist evidence",
+            _env_bool("JIEJING_STRIPE_ACCOUNT_ACTIVATED")
+            and _env_bool("JIEJING_STRIPE_LIVE_MODE_DASHBOARD_REVIEWED")
+            and _env_present("JIEJING_STRIPE_GO_LIVE_CHECKLIST_EVIDENCE_ID"),
+            category="provider",
+            owner="platform_ops",
+            evidence_summary=_evidence(
+                account_activated=_env_bool("JIEJING_STRIPE_ACCOUNT_ACTIVATED"),
+                live_mode_dashboard_reviewed=_env_bool("JIEJING_STRIPE_LIVE_MODE_DASHBOARD_REVIEWED"),
+                checklist_evidence_id_present=_env_present("JIEJING_STRIPE_GO_LIVE_CHECKLIST_EVIDENCE_ID"),
+                frontend_gets_payment_secret=False,
+            ),
+            environment_keys=[
+                "JIEJING_STRIPE_ACCOUNT_ACTIVATED",
+                "JIEJING_STRIPE_LIVE_MODE_DASHBOARD_REVIEWED",
+                "JIEJING_STRIPE_GO_LIVE_CHECKLIST_EVIDENCE_ID",
+            ],
+            verification=["Stripe Dashboard live-mode account checklist", "tools/jiejing_billing_provider_evidence_register.py"],
+            docs=["https://docs.stripe.com/get-started/checklist/go-live"],
+            external_resource_required=True,
+        ),
         _matrix_row(
             matrix,
             "stripe_live_price_catalog",
@@ -79,6 +102,30 @@ def build_billing_provider_evidence_register(settings: SaaSSettings, repository:
                 team=bool(plan_ids.get("team")),
                 no_test_objects=_env_bool("JIEJING_STRIPE_NO_TEST_OBJECTS_IN_LIVE_CONFIG"),
             ),
+        ),
+        _row(
+            "stripe_live_mode_test_object_isolation",
+            "Stripe live-mode and test-object isolation",
+            _env_bool("JIEJING_STRIPE_NO_TEST_OBJECTS_IN_LIVE_CONFIG")
+            and _env_bool("JIEJING_STRIPE_TEST_MODE_OBJECTS_EXCLUDED")
+            and provider.get("selected") == "stripe"
+            and provider.get("test_billing_provider_configured") is False,
+            category="provider",
+            owner="platform_ops",
+            evidence_summary=_evidence(
+                no_test_objects_in_live_config=_env_bool("JIEJING_STRIPE_NO_TEST_OBJECTS_IN_LIVE_CONFIG"),
+                test_mode_objects_excluded=_env_bool("JIEJING_STRIPE_TEST_MODE_OBJECTS_EXCLUDED"),
+                provider=provider.get("selected") or "not_selected",
+                test_provider_configured=bool(provider.get("test_billing_provider_configured")),
+            ),
+            environment_keys=[
+                "JIEJING_STRIPE_NO_TEST_OBJECTS_IN_LIVE_CONFIG",
+                "JIEJING_STRIPE_TEST_MODE_OBJECTS_EXCLUDED",
+                "JIEJING_BILLING_PROVIDER",
+            ],
+            verification=["/billing/plans", "Stripe Dashboard live-mode object review"],
+            docs=["https://docs.stripe.com/payments/checkout/build-subscriptions"],
+            external_resource_required=True,
         ),
         _matrix_row(
             matrix,
@@ -145,6 +192,32 @@ def build_billing_provider_evidence_register(settings: SaaSSettings, repository:
                 payment_failure=_env_bool("JIEJING_STRIPE_PAYMENT_FAILURE_TESTED"),
                 evidence_id_present=_env_present("JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID"),
             ),
+        ),
+        _row(
+            "stripe_tax_invoice_receipt_branding_evidence",
+            "Tax, invoice, receipt, support and branding evidence",
+            _env_bool("JIEJING_STRIPE_TAX_INVOICE_RECEIPT_REVIEWED")
+            and _env_bool("JIEJING_STRIPE_SUPPORT_CONTACT_BRANDING_REVIEWED")
+            and _env_present("JIEJING_STRIPE_TAX_INVOICE_RECEIPT_EVIDENCE_ID"),
+            category="billing_ops",
+            owner="platform_ops",
+            evidence_summary=_evidence(
+                tax_invoice_receipt_reviewed=_env_bool("JIEJING_STRIPE_TAX_INVOICE_RECEIPT_REVIEWED"),
+                support_contact_branding_reviewed=_env_bool("JIEJING_STRIPE_SUPPORT_CONTACT_BRANDING_REVIEWED"),
+                evidence_id_present=_env_present("JIEJING_STRIPE_TAX_INVOICE_RECEIPT_EVIDENCE_ID"),
+                frontend_gets_payment_secret=False,
+            ),
+            environment_keys=[
+                "JIEJING_STRIPE_TAX_INVOICE_RECEIPT_REVIEWED",
+                "JIEJING_STRIPE_SUPPORT_CONTACT_BRANDING_REVIEWED",
+                "JIEJING_STRIPE_TAX_INVOICE_RECEIPT_EVIDENCE_ID",
+            ],
+            verification=["Stripe Dashboard customer emails/receipts/branding/tax settings review"],
+            docs=[
+                "https://docs.stripe.com/customer-management/integrate-customer-portal",
+                "https://docs.stripe.com/billing/subscriptions/overview",
+            ],
+            external_resource_required=True,
         ),
         _row(
             "stable_domain_billing_callbacks",

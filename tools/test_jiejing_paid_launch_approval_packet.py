@@ -83,6 +83,17 @@ def main() -> int:
             return fail("approval packet must require webhook failure-path evidence id before paid launch")
         if "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID" not in stripe_external_keys:
             return fail("approval packet must require Customer Portal failure-path evidence id before paid launch")
+        for required_stripe_go_live_key in {
+            "JIEJING_STRIPE_ACCOUNT_ACTIVATED",
+            "JIEJING_STRIPE_LIVE_MODE_DASHBOARD_REVIEWED",
+            "JIEJING_STRIPE_GO_LIVE_CHECKLIST_EVIDENCE_ID",
+            "JIEJING_STRIPE_TEST_MODE_OBJECTS_EXCLUDED",
+            "JIEJING_STRIPE_TAX_INVOICE_RECEIPT_REVIEWED",
+            "JIEJING_STRIPE_SUPPORT_CONTACT_BRANDING_REVIEWED",
+            "JIEJING_STRIPE_TAX_INVOICE_RECEIPT_EVIDENCE_ID",
+        }:
+            if required_stripe_go_live_key not in stripe_external_keys:
+                return fail(f"approval packet must require Stripe go-live evidence key: {required_stripe_go_live_key}")
         rehearsal_external_keys = (external.get("no_charge_rehearsal_evidence_flags") or {}).get("environment_keys", [])
         if "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID" not in rehearsal_external_keys:
             return fail("approval packet must require rollback audit packet id before paid launch")
