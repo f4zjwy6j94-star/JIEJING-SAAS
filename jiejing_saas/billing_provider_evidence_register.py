@@ -27,6 +27,24 @@ REQUIRED_STRIPE_EVENTS = {
     "invoice.payment_failed",
 }
 
+REQUIRED_STATE_MACHINE_STEPS = {
+    "subscription_activation_grants_entitlement",
+    "invoice_paid_keeps_quota_open",
+    "payment_failed_disables_entitlement",
+    "subscription_cancel_disables_entitlement",
+    "quota_guardrail_blocks_metered_work",
+    "customer_portal_changes_audited",
+    "provider_cutover_no_real_charge_safety",
+}
+
+REQUIRED_INCIDENT_CARDS = {
+    "customer_portal_change",
+    "payment_failed",
+    "subscription_cancelled",
+    "refund_or_dispute",
+    "quota_hard_stop",
+}
+
 
 def build_billing_provider_evidence_register(settings: SaaSSettings, repository: SaaSRepository) -> dict[str, Any]:
     """Build the live billing provider evidence register without side effects."""
@@ -45,6 +63,30 @@ def build_billing_provider_evidence_register(settings: SaaSSettings, repository:
     matrix = _by_key(billing.get("billing_live_cutover_matrix"))
     stages = _by_key(rehearsal.get("stages"))
     approval_summary = approval_packet.get("summary") if isinstance(approval_packet.get("summary"), dict) else {}
+    shutdown_closure = (
+        billing.get("subscription_quota_shutdown_closure")
+        if isinstance(billing.get("subscription_quota_shutdown_closure"), dict)
+        else {}
+    )
+    incident_runbook = billing.get("billing_incident_runbook") if isinstance(billing.get("billing_incident_runbook"), dict) else {}
+    trust_packet = billing.get("customer_billing_trust_packet") if isinstance(billing.get("customer_billing_trust_packet"), dict) else {}
+    shutdown_steps = _by_key(shutdown_closure.get("steps"))
+    incident_cards = _by_key(incident_runbook.get("cards"))
+    state_machine_ready = (
+        bool(shutdown_closure.get("ready_for_live_cutover"))
+        and all((shutdown_steps.get(key) or {}).get("status") == "ready" for key in REQUIRED_STATE_MACHINE_STEPS)
+        and all((incident_cards.get(key) or {}).get("status") == "ready" for key in REQUIRED_INCIDENT_CARDS)
+        and bool(incident_runbook.get("customer_portal_changes_require_signed_webhook"))
+        and bool(incident_runbook.get("refund_or_dispute_cannot_be_frontend_executed"))
+        and bool(incident_runbook.get("payment_failed_cancel_blocks_metered_work"))
+        and bool(trust_packet.get("entitlement_recovery_does_not_repeat_ebay_oauth"))
+        and _env_present("JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID")
+        and _env_present("JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID")
+        and trust_packet.get("charge_now_allowed") is False
+        and trust_packet.get("frontend_gets_payment_secret") is False
+        and shutdown_closure.get("charge_now_allowed") is False
+        and shutdown_closure.get("frontend_gets_payment_secret") is False
+    )
 
     rows = [
         _row(
@@ -192,6 +234,47 @@ def build_billing_provider_evidence_register(settings: SaaSSettings, repository:
                 payment_failure=_env_bool("JIEJING_STRIPE_PAYMENT_FAILURE_TESTED"),
                 evidence_id_present=_env_present("JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID"),
             ),
+        ),
+        _row(
+            "merchant_billing_state_machine_proof",
+            "Merchant billing state machine and recovery proof",
+            state_machine_ready,
+            category="entitlement",
+            owner="platform_ops",
+            evidence_summary=_evidence(
+                shutdown_ready=bool(shutdown_closure.get("ready_for_live_cutover")),
+                shutdown_ready_count=int(shutdown_closure.get("ready_count") or 0),
+                shutdown_total_count=int(shutdown_closure.get("total_count") or 0),
+                incident_ready_count=int(incident_runbook.get("ready_count") or 0),
+                incident_total_count=int(incident_runbook.get("total_count") or 0),
+                portal_change_requires_signed_webhook=bool(incident_runbook.get("customer_portal_changes_require_signed_webhook")),
+                refund_dispute_frontend_disabled=bool(incident_runbook.get("refund_or_dispute_cannot_be_frontend_executed")),
+                recovery_avoids_ebay_oauth=bool(trust_packet.get("entitlement_recovery_does_not_repeat_ebay_oauth")),
+                webhook_failure_evidence_id_present=_env_present("JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID"),
+                portal_failure_evidence_id_present=_env_present("JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID"),
+            ),
+            environment_keys=[
+                "JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID",
+                "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID",
+                "JIEJING_STRIPE_CUSTOMER_PORTAL_TESTED",
+                "JIEJING_STRIPE_SUBSCRIPTION_CANCEL_TESTED",
+                "JIEJING_STRIPE_INVOICE_PAID_TESTED",
+                "JIEJING_STRIPE_PAYMENT_FAILURE_TESTED",
+            ],
+            verification=[
+                "tools/test_jiejing_billing_webhook_subscription_state.py",
+                "tools/test_jiejing_stripe_checkout_portal.py",
+                "/billing/usage",
+                "/billing/plans",
+            ],
+            docs=[
+                "https://docs.stripe.com/billing/subscriptions/overview",
+                "https://docs.stripe.com/billing/testing",
+                "https://docs.stripe.com/customer-management/integrate-customer-portal",
+                "https://docs.stripe.com/webhooks",
+            ],
+            external_resource_required=True,
+            next_action="Keep signed webhook, portal change, failed-payment, cancellation, refund/dispute and quota hard-stop evidence green before owner approval.",
         ),
         _row(
             "stripe_tax_invoice_receipt_branding_evidence",

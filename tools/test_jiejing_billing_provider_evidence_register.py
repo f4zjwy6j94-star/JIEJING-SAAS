@@ -33,6 +33,7 @@ EXPECTED_ROWS = {
     "stripe_api_webhook_version_alignment",
     "stripe_webhook_failure_paths",
     "stripe_entitlement_quota_lifecycle",
+    "merchant_billing_state_machine_proof",
     "stripe_tax_invoice_receipt_branding_evidence",
     "stable_domain_billing_callbacks",
     "no_charge_live_domain_rehearsal_packet",
@@ -87,6 +88,17 @@ def main() -> int:
         owner = ready.get("owner_approval") if isinstance(ready.get("owner_approval"), dict) else {}
         if owner.get("status") != "recorded" or owner.get("owner_approval_required") is not True:
             return fail(f"owner approval packet id should be recorded but still required: {owner}")
+        state_machine = rows["merchant_billing_state_machine_proof"]
+        state_machine_evidence = str(state_machine.get("evidence_summary") or "")
+        for marker in (
+            "portal_change_requires_signed_webhook=True",
+            "refund_dispute_frontend_disabled=True",
+            "recovery_avoids_ebay_oauth=True",
+        ):
+            if marker not in state_machine_evidence:
+                return fail(f"merchant billing state machine row should include evidence marker {marker}: {state_machine}")
+        if state_machine.get("external_resource_required") is not True:
+            return fail(f"merchant billing state machine proof still requires external provider evidence: {state_machine}")
         if ready.get("public_paid_launch_allowed") is not False or ready.get("charge_now_allowed") is not False:
             return fail("ready provider evidence still must not enable charging directly")
         serialized = json.dumps(ready, ensure_ascii=False).lower()
@@ -129,6 +141,17 @@ def main() -> int:
         missing_rows = {item.get("key"): item for item in missing_webhook.get("evidence_rows", []) if isinstance(item, dict)}
         if missing_rows["stripe_webhook_failure_paths"].get("status") != "blocked":
             return fail("missing webhook failure-path evidence id must block the register")
+        if missing_rows["merchant_billing_state_machine_proof"].get("status") != "blocked":
+            return fail("missing webhook failure-path evidence id must block the merchant billing state machine proof")
+        os.environ["JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID"] = "stripe_webhook_failure_path_register_unit"
+
+        os.environ.pop("JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID", None)
+        missing_portal = _build("missing-portal-evidence.sqlite")
+        missing_portal_rows = {item.get("key"): item for item in missing_portal.get("evidence_rows", []) if isinstance(item, dict)}
+        if missing_portal_rows["stripe_entitlement_quota_lifecycle"].get("status") != "blocked":
+            return fail("missing portal failure-path evidence id must block entitlement lifecycle")
+        if missing_portal_rows["merchant_billing_state_machine_proof"].get("status") != "blocked":
+            return fail("missing portal failure-path evidence id must block merchant billing state machine proof")
         print("PASS jiejing_billing_provider_evidence_register")
         return 0
     finally:
