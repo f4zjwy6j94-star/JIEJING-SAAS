@@ -39,6 +39,16 @@ EXPECTED_ROWS = {
     "no_charge_live_domain_rehearsal_packet",
     "cutover_rollback_audit_packet",
 }
+EXPECTED_DOSSIER_SECTIONS = {
+    "provider_account_and_live_mode",
+    "product_price_catalog",
+    "checkout_portal_contracts",
+    "signed_webhook_version_and_failures",
+    "entitlement_quota_and_portal_lifecycle",
+    "billing_ops_customer_trust",
+    "no_charge_rehearsal_and_rollback",
+    "owner_approval_hold",
+}
 
 
 def fail(message: str) -> int:
@@ -65,6 +75,58 @@ def main() -> int:
             return fail("manual_seed must not satisfy live provider account evidence")
         if blocked.get("calls_stripe_api") is not False or blocked.get("creates_checkout_session") is not False:
             return fail("read-only register must not call Stripe or create Checkout sessions")
+        blocked_dossier = blocked.get("provider_cutover_dossier") if isinstance(blocked.get("provider_cutover_dossier"), dict) else {}
+        if blocked_dossier.get("contract_version") != "2026-07-02-live-billing-provider-cutover-dossier-v1":
+            return fail("blocked provider cutover dossier contract missing")
+        if blocked_dossier.get("status") != "blocked" or blocked_dossier.get("ready_for_owner_review") is not False:
+            return fail(f"blocked provider cutover dossier should stay blocked: {blocked_dossier.get('summary')}")
+        if blocked_dossier.get("customer_visible") is not False or blocked_dossier.get("ordinary_merchant_visible") is not False:
+            return fail("provider cutover dossier must stay internal")
+        if blocked_dossier.get("public_paid_launch_allowed") is not False or blocked_dossier.get("charge_now_allowed") is not False:
+            return fail("provider cutover dossier must not directly allow charging")
+        blocked_dossier_summary = blocked_dossier.get("summary") if isinstance(blocked_dossier.get("summary"), dict) else {}
+        if blocked_dossier_summary.get("decision") != "keep_public_paid_launch_blocked":
+            return fail(f"blocked provider cutover dossier decision should block launch: {blocked_dossier_summary}")
+        blocked_section_keys = {item.get("key") for item in blocked_dossier.get("sections", []) if isinstance(item, dict)}
+        if blocked_section_keys != EXPECTED_DOSSIER_SECTIONS:
+            return fail(f"provider cutover dossier sections missing or unexpected: {sorted(blocked_section_keys)}")
+        blocked_activation = {item.get("key"): item for item in blocked_dossier.get("activation_sequence", []) if isinstance(item, dict)}
+        for key in {
+            "freeze_current_private_beta_boundary",
+            "verify_live_catalog_and_callbacks",
+            "prove_signed_webhook_lifecycle",
+            "review_customer_billing_trust",
+            "run_no_charge_rehearsal_and_rollback",
+            "record_owner_approval_hold",
+        }:
+            if key not in blocked_activation:
+                return fail(f"provider cutover dossier activation step missing: {key}")
+        blocked_safety = blocked_dossier.get("safety") if isinstance(blocked_dossier.get("safety"), dict) else {}
+        for marker in ("read_only", "platform_internal_admin_only", "merchant_surface_safe", "download_allowed_for_internal_admin"):
+            if blocked_safety.get(marker) is not True:
+                return fail(f"provider cutover dossier safety marker should be true: {marker}")
+        for marker in (
+            "customer_visible",
+            "ordinary_merchant_visible",
+            "exports_database",
+            "exports_raw_secret",
+            "includes_raw_tokens",
+            "includes_payment_secret",
+            "reads_env_secret_values",
+            "calls_stripe_api",
+            "creates_checkout_session",
+            "triggers_real_charge",
+            "charge_now_allowed",
+            "triggers_ebay_oauth",
+            "repeat_ebay_oauth_allowed",
+            "triggers_real_platform_write",
+            "platform_write_now_allowed",
+            "frontend_gets_payment_secret",
+            "frontend_gets_provider_secret",
+            "secret_exposed",
+        ):
+            if blocked_dossier.get(marker) is not False and blocked_safety.get(marker) is not False:
+                return fail(f"provider cutover dossier unsafe flag should be false: {marker}")
     finally:
         _restore_env(previous)
 
@@ -88,6 +150,43 @@ def main() -> int:
         owner = ready.get("owner_approval") if isinstance(ready.get("owner_approval"), dict) else {}
         if owner.get("status") != "recorded" or owner.get("owner_approval_required") is not True:
             return fail(f"owner approval packet id should be recorded but still required: {owner}")
+        ready_dossier = ready.get("provider_cutover_dossier") if isinstance(ready.get("provider_cutover_dossier"), dict) else {}
+        if ready_dossier.get("contract_version") != "2026-07-02-live-billing-provider-cutover-dossier-v1":
+            return fail("ready provider cutover dossier contract missing")
+        if ready_dossier.get("status") != "ready_for_owner_review" or ready_dossier.get("ready_for_owner_review") is not True:
+            return fail(f"ready provider cutover dossier should be ready for owner review: {ready_dossier.get('summary')}")
+        ready_dossier_summary = ready_dossier.get("summary") if isinstance(ready_dossier.get("summary"), dict) else {}
+        if ready_dossier_summary.get("decision") != "ready_for_owner_review_not_auto_launch":
+            return fail(f"ready provider cutover dossier should not auto-launch: {ready_dossier_summary}")
+        for marker in (
+            "public_paid_launch_allowed",
+            "charge_now_allowed",
+            "creates_checkout_session",
+            "calls_stripe_api",
+            "triggers_real_charge",
+            "triggers_ebay_oauth",
+            "triggers_real_platform_write",
+            "frontend_gets_payment_secret",
+            "secret_exposed",
+        ):
+            if ready_dossier_summary.get(marker) is not False:
+                return fail(f"ready provider cutover dossier summary unsafe marker should be false: {marker}")
+        ready_section_keys = {item.get("key") for item in ready_dossier.get("sections", []) if isinstance(item, dict)}
+        if ready_section_keys != EXPECTED_DOSSIER_SECTIONS:
+            return fail(f"ready provider cutover dossier sections missing or unexpected: {sorted(ready_section_keys)}")
+        for item in ready_dossier.get("activation_sequence", []):
+            if not isinstance(item, dict):
+                continue
+            if item.get("status") != "ready":
+                return fail(f"ready provider cutover activation step should be ready: {item}")
+            for flag in ("creates_checkout_session", "calls_stripe_api", "triggers_real_charge", "charge_now_allowed", "triggers_ebay_oauth", "triggers_real_platform_write"):
+                if item.get(flag) is not False:
+                    return fail(f"activation step must not trigger side effects: {item.get('key')}.{flag}")
+        if len(ready_dossier.get("forbidden_actions", [])) < 5:
+            return fail("provider cutover dossier should list forbidden actions")
+        handoff = ready_dossier.get("operator_handoff") if isinstance(ready_dossier.get("operator_handoff"), dict) else {}
+        if handoff.get("status") != "ready_for_owner_review" or handoff.get("customer_visible") is not False:
+            return fail(f"ready provider cutover handoff should stay internal and ready: {handoff}")
         state_machine = rows["merchant_billing_state_machine_proof"]
         state_machine_evidence = str(state_machine.get("evidence_summary") or "")
         for marker in (

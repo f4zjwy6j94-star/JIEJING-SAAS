@@ -405,6 +405,15 @@ def build_billing_provider_evidence_register(settings: SaaSSettings, repository:
     ]
     blocked = [row for row in rows if row.get("status") != "ready"]
     owner_packet_id = _env_text("JIEJING_PAID_LAUNCH_OWNER_APPROVAL_PACKET_ID")
+    provider_cutover_dossier = _provider_cutover_dossier(
+        settings=settings,
+        rows=rows,
+        owner_packet_id=owner_packet_id,
+        billing=billing,
+        rehearsal=rehearsal,
+        approval_packet=approval_packet,
+        selected_provider=provider.get("selected") or "not_selected",
+    )
     return {
         "contract_version": "2026-07-02-live-billing-provider-evidence-register",
         "mode": "read_only_no_charge_no_checkout",
@@ -434,6 +443,7 @@ def build_billing_provider_evidence_register(settings: SaaSSettings, repository:
             "paid_launch_approval_blocked_count": int(approval_summary.get("blocked_count") or 0),
         },
         "evidence_rows": rows,
+        "provider_cutover_dossier": provider_cutover_dossier,
         "owner_approval": {
             "status": "recorded" if owner_packet_id else "required",
             "owner_approval_required": True,
@@ -515,6 +525,329 @@ def _row(
         "frontend_gets_payment_secret": False,
         "secret_values_required_in_backend_only": any("SECRET" in key or "API_KEY" in key for key in environment_keys),
         "secret_value_returned": False,
+        "secret_exposed": False,
+    }
+
+
+def _provider_cutover_dossier(
+    *,
+    settings: SaaSSettings,
+    rows: list[dict[str, Any]],
+    owner_packet_id: str,
+    billing: dict[str, Any],
+    rehearsal: dict[str, Any],
+    approval_packet: dict[str, Any],
+    selected_provider: str,
+) -> dict[str, Any]:
+    rows_by_key = _by_key(rows)
+    sections = [
+        _dossier_section(
+            "provider_account_and_live_mode",
+            "Provider account and live-mode boundary",
+            rows_by_key,
+            [
+                "live_provider_account",
+                "stripe_account_activation_go_live_evidence",
+                "stripe_live_mode_test_object_isolation",
+            ],
+        ),
+        _dossier_section(
+            "product_price_catalog",
+            "Products, Prices and plan catalog",
+            rows_by_key,
+            ["stripe_live_price_catalog"],
+        ),
+        _dossier_section(
+            "checkout_portal_contracts",
+            "Subscription Checkout, Portal and stable callback URLs",
+            rows_by_key,
+            [
+                "stripe_subscription_checkout_contract",
+                "stripe_customer_portal_contract",
+                "stable_domain_billing_callbacks",
+            ],
+        ),
+        _dossier_section(
+            "signed_webhook_version_and_failures",
+            "Signed webhook, API version and failure paths",
+            rows_by_key,
+            [
+                "stripe_signed_webhook_contract",
+                "stripe_api_webhook_version_alignment",
+                "stripe_webhook_failure_paths",
+            ],
+        ),
+        _dossier_section(
+            "entitlement_quota_and_portal_lifecycle",
+            "Entitlement, quota, portal and failed-payment lifecycle",
+            rows_by_key,
+            [
+                "stripe_entitlement_quota_lifecycle",
+                "merchant_billing_state_machine_proof",
+            ],
+        ),
+        _dossier_section(
+            "billing_ops_customer_trust",
+            "Tax, receipt, support and customer communication evidence",
+            rows_by_key,
+            ["stripe_tax_invoice_receipt_branding_evidence"],
+        ),
+        _dossier_section(
+            "no_charge_rehearsal_and_rollback",
+            "No-charge rehearsal, secret scan, smoke and rollback evidence",
+            rows_by_key,
+            [
+                "no_charge_live_domain_rehearsal_packet",
+                "cutover_rollback_audit_packet",
+            ],
+        ),
+    ]
+    blocked_sections = [section for section in sections if section.get("status") != "ready"]
+    blocked_rows = [row for row in rows if row.get("status") != "ready"]
+    owner_approval_ready = not blocked_rows and bool(owner_packet_id)
+    owner_section = {
+        "key": "owner_approval_hold",
+        "title": "Owner approval hold",
+        "status": "ready" if owner_approval_ready else "blocked",
+        "severity": "info" if owner_approval_ready else "blocker",
+        "ready_count": 1 if owner_approval_ready else 0,
+        "total_count": 1,
+        "blocked_keys": [] if owner_approval_ready else ["JIEJING_PAID_LAUNCH_OWNER_APPROVAL_PACKET_ID"],
+        "next_action": (
+            "Owner approval evidence is recorded; keep launch disabled until the separate deploy-time flag is approved."
+            if owner_approval_ready
+            else "Attach this provider dossier to a final owner approval record before enabling any public charging."
+        ),
+        "environment_keys": ["JIEJING_PAID_LAUNCH_OWNER_APPROVAL_PACKET_ID"],
+        "source_row_keys": [],
+        "external_resource_required": False,
+        "customer_visible": False,
+        "ordinary_merchant_visible": False,
+        "secret_exposed": False,
+    }
+    sections.append(owner_section)
+    if owner_section.get("status") != "ready":
+        blocked_sections.append(owner_section)
+    ready_count = len(rows) - len(blocked_rows)
+    decision = "ready_for_owner_review_not_auto_launch" if owner_approval_ready else "keep_public_paid_launch_blocked"
+    next_step = (
+        str((blocked_sections[0] if blocked_sections else {}).get("key") or "")
+        or "owner_approval_and_deploy_flag_review"
+    )
+    return {
+        "contract_version": "2026-07-02-live-billing-provider-cutover-dossier-v1",
+        "mode": "internal_admin_read_only_no_charge_no_checkout",
+        "audience": "platform_internal_admin",
+        "environment": settings.environment,
+        "customer_visible": False,
+        "ordinary_merchant_visible": False,
+        "merchant_surface_safe": True,
+        "status": "ready_for_owner_review" if owner_approval_ready else "blocked",
+        "ready_for_owner_review": owner_approval_ready,
+        "summary": {
+            "decision": decision,
+            "selected_provider": selected_provider,
+            "ready_count": ready_count,
+            "total_count": len(rows),
+            "blocked_count": len(blocked_rows),
+            "section_count": len(sections),
+            "blocked_section_count": len(blocked_sections),
+            "blocked_keys": [str(row.get("key") or "") for row in blocked_rows],
+            "next_step": next_step,
+            "billing_plan_ready_for_paid_launch": bool(billing.get("billing_ready_for_paid_launch")),
+            "billing_domain_rehearsal_status": rehearsal.get("status") or "unknown",
+            "paid_launch_approval_packet_status": approval_packet.get("status") or "unknown",
+            "owner_approval_evidence_recorded": bool(owner_packet_id),
+            "public_paid_launch_allowed": False,
+            "charge_now_allowed": False,
+            "creates_checkout_session": False,
+            "calls_stripe_api": False,
+            "triggers_real_charge": False,
+            "triggers_ebay_oauth": False,
+            "triggers_real_platform_write": False,
+            "frontend_gets_payment_secret": False,
+            "secret_exposed": False,
+        },
+        "sections": sections,
+        "activation_sequence": _provider_activation_sequence(sections),
+        "operator_handoff": _provider_operator_handoff(blocked_rows=blocked_rows, owner_approval_ready=owner_approval_ready),
+        "forbidden_actions": [
+            "Do not create live Checkout Sessions from this dossier.",
+            "Do not enable public paid launch from this dossier alone.",
+            "Do not call Stripe APIs while building this evidence packet.",
+            "Do not expose Stripe secret keys, webhook secrets, customer IDs, payment method IDs or raw tokens to the frontend.",
+            "Do not run or repeat eBay OAuth as part of billing cutover.",
+            "Do not grant quota until signed webhook events are proven and owner approval is recorded.",
+        ],
+        "safety": _provider_cutover_dossier_safety_flags(),
+        "download_allowed_for_internal_admin": True,
+        "public_paid_launch_allowed": False,
+        "charge_now_allowed": False,
+        "creates_checkout_session": False,
+        "calls_stripe_api": False,
+        "triggers_real_charge": False,
+        "triggers_ebay_oauth": False,
+        "repeat_ebay_oauth_allowed": False,
+        "triggers_real_platform_write": False,
+        "platform_write_now_allowed": False,
+        "frontend_gets_payment_secret": False,
+        "frontend_gets_provider_secret": False,
+        "exports_raw_secret": False,
+        "includes_raw_tokens": False,
+        "secret_exposed": False,
+    }
+
+
+def _dossier_section(
+    key: str,
+    title: str,
+    rows_by_key: dict[str, dict[str, Any]],
+    source_keys: list[str],
+) -> dict[str, Any]:
+    rows = [rows_by_key.get(source_key) or {} for source_key in source_keys]
+    ready_rows = [row for row in rows if row.get("status") == "ready"]
+    blocked_rows = [row for row in rows if row.get("status") != "ready"]
+    environment_keys = sorted(
+        {
+            str(value)
+            for row in rows
+            for value in (row.get("environment_keys") if isinstance(row.get("environment_keys"), list) else [])
+            if value
+        }
+    )
+    docs = sorted(
+        {
+            str(value)
+            for row in rows
+            for value in (row.get("docs") if isinstance(row.get("docs"), list) else [])
+            if value
+        }
+    )
+    return {
+        "key": key,
+        "title": title,
+        "status": "ready" if not blocked_rows else "blocked",
+        "severity": "info" if not blocked_rows else "blocker",
+        "ready_count": len(ready_rows),
+        "total_count": len(rows),
+        "blocked_keys": [str(row.get("key") or "") for row in blocked_rows],
+        "source_row_keys": source_keys,
+        "next_action": (
+            str(blocked_rows[0].get("next_action") or "Record the required backend-only evidence before owner review.")
+            if blocked_rows
+            else "Evidence section is ready; keep the no-charge boundary until owner approval."
+        ),
+        "evidence_summary": "; ".join(
+            f"{row.get('key') or 'unknown'}={row.get('status') or 'unknown'}" for row in rows
+        )[:900],
+        "environment_keys": environment_keys,
+        "docs": docs,
+        "external_resource_required": any(bool(row.get("external_resource_required")) for row in rows),
+        "customer_visible": False,
+        "ordinary_merchant_visible": False,
+        "exports_raw_secret": False,
+        "includes_raw_tokens": False,
+        "creates_checkout_session": False,
+        "calls_stripe_api": False,
+        "triggers_real_charge": False,
+        "charge_now_allowed": False,
+        "triggers_ebay_oauth": False,
+        "repeat_ebay_oauth_allowed": False,
+        "triggers_real_platform_write": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def _provider_activation_sequence(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_key = {str(section.get("key") or ""): section for section in sections}
+    sequence = [
+        ("freeze_current_private_beta_boundary", "Freeze current private-beta billing and no-write boundary", ["provider_account_and_live_mode"]),
+        ("verify_live_catalog_and_callbacks", "Verify live plan catalog, Checkout, Portal and stable callbacks", ["product_price_catalog", "checkout_portal_contracts"]),
+        ("prove_signed_webhook_lifecycle", "Prove signed webhook version, duplicate, delayed and out-of-order lifecycle", ["signed_webhook_version_and_failures", "entitlement_quota_and_portal_lifecycle"]),
+        ("review_customer_billing_trust", "Review receipts, support contact, tax and customer billing communication", ["billing_ops_customer_trust"]),
+        ("run_no_charge_rehearsal_and_rollback", "Run no-charge live-domain rehearsal and rollback packet", ["no_charge_rehearsal_and_rollback"]),
+        ("record_owner_approval_hold", "Record owner approval and keep deploy-time charge flag separate", ["owner_approval_hold"]),
+    ]
+    output: list[dict[str, Any]] = []
+    for key, title, required_sections in sequence:
+        missing = [section_key for section_key in required_sections if (by_key.get(section_key) or {}).get("status") != "ready"]
+        output.append(
+            {
+                "key": key,
+                "title": title,
+                "status": "ready" if not missing else "blocked",
+                "blocked_sections": missing,
+                "required_sections": required_sections,
+                "creates_checkout_session": False,
+                "calls_stripe_api": False,
+                "triggers_real_charge": False,
+                "charge_now_allowed": False,
+                "triggers_ebay_oauth": False,
+                "triggers_real_platform_write": False,
+                "frontend_gets_payment_secret": False,
+                "secret_exposed": False,
+            }
+        )
+    return output
+
+
+def _provider_operator_handoff(*, blocked_rows: list[dict[str, Any]], owner_approval_ready: bool) -> dict[str, Any]:
+    external_rows = [row for row in blocked_rows if row.get("external_resource_required")]
+    internal_rows = [row for row in blocked_rows if not row.get("external_resource_required")]
+    return {
+        "status": "ready_for_owner_review" if owner_approval_ready else "blocked",
+        "external_console_actions": [_handoff_action(row, "external_console") for row in external_rows[:10]],
+        "internal_evidence_actions": [_handoff_action(row, "internal_evidence") for row in internal_rows[:10]],
+        "next_action": (
+            "Owner approval is recorded; review deploy-time feature flags separately before charging."
+            if owner_approval_ready
+            else (str(blocked_rows[0].get("next_action") or "Finish provider evidence before owner approval.") if blocked_rows else "Record owner approval evidence.")
+        ),
+        "customer_visible": False,
+        "ordinary_merchant_visible": False,
+        "secret_exposed": False,
+    }
+
+
+def _handoff_action(row: dict[str, Any], source: str) -> dict[str, Any]:
+    return {
+        "key": str(row.get("key") or source)[:140],
+        "title": str(row.get("title") or row.get("key") or source)[:220],
+        "status": str(row.get("status") or "blocked")[:80],
+        "source": source,
+        "next_action": str(row.get("next_action") or "Record required evidence.")[:720],
+        "environment_keys": [str(value)[:160] for value in (row.get("environment_keys") if isinstance(row.get("environment_keys"), list) else [])],
+        "verification": [str(value)[:220] for value in (row.get("verification") if isinstance(row.get("verification"), list) else [])],
+        "customer_visible": False,
+        "ordinary_merchant_visible": False,
+        "secret_exposed": False,
+    }
+
+
+def _provider_cutover_dossier_safety_flags() -> dict[str, bool]:
+    return {
+        "read_only": True,
+        "platform_internal_admin_only": True,
+        "customer_visible": False,
+        "ordinary_merchant_visible": False,
+        "merchant_surface_safe": True,
+        "download_allowed_for_internal_admin": True,
+        "exports_database": False,
+        "exports_raw_secret": False,
+        "includes_raw_tokens": False,
+        "includes_payment_secret": False,
+        "reads_env_secret_values": False,
+        "calls_stripe_api": False,
+        "creates_checkout_session": False,
+        "triggers_real_charge": False,
+        "charge_now_allowed": False,
+        "triggers_ebay_oauth": False,
+        "repeat_ebay_oauth_allowed": False,
+        "triggers_real_platform_write": False,
+        "platform_write_now_allowed": False,
+        "frontend_gets_payment_secret": False,
+        "frontend_gets_provider_secret": False,
         "secret_exposed": False,
     }
 

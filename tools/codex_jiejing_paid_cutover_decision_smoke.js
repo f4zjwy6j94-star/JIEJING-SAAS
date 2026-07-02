@@ -130,6 +130,16 @@ async function main() {
   const approvalSteps = Array.isArray(approvalPacket.steps) ? approvalPacket.steps : [];
   const providerRegister = providerRegisterPayload.json.billing_provider_evidence_register || {};
   const providerRegisterRows = Array.isArray(providerRegister.evidence_rows) ? providerRegister.evidence_rows : [];
+  const providerCutoverDossier =
+    providerRegister.provider_cutover_dossier && typeof providerRegister.provider_cutover_dossier === "object"
+      ? providerRegister.provider_cutover_dossier
+      : {};
+  const providerCutoverDossierSummary =
+    providerCutoverDossier.summary && typeof providerCutoverDossier.summary === "object" ? providerCutoverDossier.summary : {};
+  const providerCutoverDossierSections = Array.isArray(providerCutoverDossier.sections) ? providerCutoverDossier.sections : [];
+  const providerCutoverDossierActivation = Array.isArray(providerCutoverDossier.activation_sequence)
+    ? providerCutoverDossier.activation_sequence
+    : [];
   const appHtmlResponse = await fetch(`${base}/app.html?start=app&view=connect&smoke-source=${Date.now()}`, { cache: "no-store" });
   if (!appHtmlResponse.ok) {
     throw new Error(`app html fetch failed: ${appHtmlResponse.status}`);
@@ -412,6 +422,21 @@ async function main() {
       billing_provider_evidence_frontend_gets_payment_secret: Boolean(providerRegister.frontend_gets_payment_secret),
       billing_provider_evidence_total_count: providerRegisterRows.length,
       billing_provider_evidence_keys: providerRegisterRows.map((item) => item && item.key).filter(Boolean),
+      billing_provider_cutover_dossier_version: providerCutoverDossier.contract_version || "",
+      billing_provider_cutover_dossier_status: providerCutoverDossier.status || "",
+      billing_provider_cutover_dossier_decision: providerCutoverDossierSummary.decision || "",
+      billing_provider_cutover_dossier_ready_for_owner_review: Boolean(providerCutoverDossier.ready_for_owner_review),
+      billing_provider_cutover_dossier_public_paid_launch_allowed: Boolean(providerCutoverDossier.public_paid_launch_allowed),
+      billing_provider_cutover_dossier_charge_now_allowed: Boolean(providerCutoverDossier.charge_now_allowed),
+      billing_provider_cutover_dossier_calls_stripe_api: Boolean(providerCutoverDossier.calls_stripe_api),
+      billing_provider_cutover_dossier_creates_checkout_session: Boolean(providerCutoverDossier.creates_checkout_session),
+      billing_provider_cutover_dossier_triggers_ebay_oauth: Boolean(providerCutoverDossier.triggers_ebay_oauth),
+      billing_provider_cutover_dossier_triggers_real_platform_write: Boolean(providerCutoverDossier.triggers_real_platform_write),
+      billing_provider_cutover_dossier_frontend_gets_payment_secret: Boolean(providerCutoverDossier.frontend_gets_payment_secret),
+      billing_provider_cutover_dossier_section_count: providerCutoverDossierSections.length,
+      billing_provider_cutover_dossier_section_keys: providerCutoverDossierSections.map((item) => item && item.key).filter(Boolean),
+      billing_provider_cutover_dossier_activation_count: providerCutoverDossierActivation.length,
+      billing_provider_cutover_dossier_activation_keys: providerCutoverDossierActivation.map((item) => item && item.key).filter(Boolean),
       owner_launch_control_status: Number(ownerPacketResponse.status || 0),
       secret_exposed: Boolean(launchGate.secret_exposed),
     },
@@ -625,6 +650,41 @@ async function main() {
     "cutover_rollback_audit_packet",
   ]) {
     if (!result.api.billing_provider_evidence_keys.includes(key)) failures.push(`api billing provider evidence register missing ${key}`);
+  }
+  if (result.api.billing_provider_cutover_dossier_version !== "2026-07-02-live-billing-provider-cutover-dossier-v1") failures.push("api billing provider cutover dossier contract missing");
+  if (result.api.billing_provider_cutover_dossier_status !== "blocked") failures.push(`api billing provider cutover dossier status ${result.api.billing_provider_cutover_dossier_status}`);
+  if (result.api.billing_provider_cutover_dossier_decision !== "keep_public_paid_launch_blocked") failures.push(`api billing provider cutover dossier decision ${result.api.billing_provider_cutover_dossier_decision}`);
+  if (result.api.billing_provider_cutover_dossier_ready_for_owner_review !== false) failures.push("api billing provider cutover dossier unexpectedly ready for owner review");
+  if (result.api.billing_provider_cutover_dossier_public_paid_launch_allowed !== false) failures.push("api billing provider cutover dossier unexpectedly allows paid launch");
+  if (result.api.billing_provider_cutover_dossier_charge_now_allowed !== false) failures.push("api billing provider cutover dossier unexpectedly allows charge");
+  if (result.api.billing_provider_cutover_dossier_calls_stripe_api !== false) failures.push("api billing provider cutover dossier unexpectedly calls Stripe API");
+  if (result.api.billing_provider_cutover_dossier_creates_checkout_session !== false) failures.push("api billing provider cutover dossier unexpectedly creates Checkout Session");
+  if (result.api.billing_provider_cutover_dossier_triggers_ebay_oauth !== false) failures.push("api billing provider cutover dossier unexpectedly triggers eBay OAuth");
+  if (result.api.billing_provider_cutover_dossier_triggers_real_platform_write !== false) failures.push("api billing provider cutover dossier unexpectedly triggers platform write");
+  if (result.api.billing_provider_cutover_dossier_frontend_gets_payment_secret !== false) failures.push("api billing provider cutover dossier unexpectedly exposes payment secret");
+  if (result.api.billing_provider_cutover_dossier_section_count !== 8) failures.push(`api billing provider cutover dossier section count ${result.api.billing_provider_cutover_dossier_section_count}`);
+  for (const key of [
+    "provider_account_and_live_mode",
+    "product_price_catalog",
+    "checkout_portal_contracts",
+    "signed_webhook_version_and_failures",
+    "entitlement_quota_and_portal_lifecycle",
+    "billing_ops_customer_trust",
+    "no_charge_rehearsal_and_rollback",
+    "owner_approval_hold",
+  ]) {
+    if (!result.api.billing_provider_cutover_dossier_section_keys.includes(key)) failures.push(`api billing provider cutover dossier missing section ${key}`);
+  }
+  if (result.api.billing_provider_cutover_dossier_activation_count !== 6) failures.push(`api billing provider cutover dossier activation count ${result.api.billing_provider_cutover_dossier_activation_count}`);
+  for (const key of [
+    "freeze_current_private_beta_boundary",
+    "verify_live_catalog_and_callbacks",
+    "prove_signed_webhook_lifecycle",
+    "review_customer_billing_trust",
+    "run_no_charge_rehearsal_and_rollback",
+    "record_owner_approval_hold",
+  ]) {
+    if (!result.api.billing_provider_cutover_dossier_activation_keys.includes(key)) failures.push(`api billing provider cutover dossier missing activation ${key}`);
   }
   if (ui.hasLoginOverlay) failures.push("login overlay visible during authenticated smoke");
 
