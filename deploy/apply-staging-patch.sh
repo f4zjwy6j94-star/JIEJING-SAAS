@@ -34,6 +34,7 @@ FILES=(
   "deploy/Caddyfile.route-a-edge"
   "deploy/Caddyfile.production"
   "deploy/jiejing-saas.env.example"
+  "deploy/jiejing-saas.production.env.example"
   "deploy/jiejing-route-a-edge.env.example"
   "deploy/jiejing-saas.infra.env.example"
   "deploy/jiejing-saas.tencent-managed.env.example"

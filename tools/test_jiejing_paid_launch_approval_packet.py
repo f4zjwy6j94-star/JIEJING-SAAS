@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas.config import SaaSSettings  # noqa: E402
+from jiejing_saas.billing_plan import STRIPE_CURRENT_API_VERSION  # noqa: E402
 from jiejing_saas.paid_launch_approval_packet import build_paid_launch_approval_packet  # noqa: E402
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
 
@@ -166,6 +167,7 @@ def _set_stripe_domain_ready_env() -> dict[str, str | None]:
             "JIEJING_STRIPE_LIVE_PRODUCTS_VERIFIED": "1",
             "JIEJING_STRIPE_LIVE_PRICES_VERIFIED": "1",
             "JIEJING_STRIPE_NO_TEST_OBJECTS_IN_LIVE_CONFIG": "1",
+            "JIEJING_STRIPE_WEBHOOK_API_VERSION": STRIPE_CURRENT_API_VERSION,
             "JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED": "1",
             "JIEJING_STRIPE_WEBHOOK_DUPLICATE_TESTED": "1",
             "JIEJING_STRIPE_WEBHOOK_DELAYED_TESTED": "1",
@@ -210,6 +212,7 @@ def _keys() -> list[str]:
         "JIEJING_STRIPE_LIVE_PRODUCTS_VERIFIED",
         "JIEJING_STRIPE_LIVE_PRICES_VERIFIED",
         "JIEJING_STRIPE_NO_TEST_OBJECTS_IN_LIVE_CONFIG",
+        "JIEJING_STRIPE_WEBHOOK_API_VERSION",
         "JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED",
         "JIEJING_STRIPE_WEBHOOK_DUPLICATE_TESTED",
         "JIEJING_STRIPE_WEBHOOK_DELAYED_TESTED",

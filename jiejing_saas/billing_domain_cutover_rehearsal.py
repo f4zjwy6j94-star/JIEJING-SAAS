@@ -7,7 +7,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .billing_checkout import STRIPE_API_VERSION, build_billing_checkout_contract
-from .billing_plan import STRIPE_CURRENT_API_VERSION, build_billing_plan
+from .billing_plan import STRIPE_CURRENT_API_VERSION, build_billing_plan, stripe_webhook_api_version, stripe_webhook_api_version_aligned
 from .billing_webhook import build_billing_provider_contract
 from .config import SaaSSettings
 from .domain_readiness import build_domain_readiness
@@ -226,12 +226,18 @@ def _rehearsal_stages(
         _stage(
             "stripe_api_webhook_version_pinned",
             "Stripe API and webhook endpoint versions are pinned",
-            STRIPE_API_VERSION == STRIPE_CURRENT_API_VERSION and checkout.get("stripe_api_version") == STRIPE_CURRENT_API_VERSION and _env_bool("JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"),
+            STRIPE_API_VERSION == STRIPE_CURRENT_API_VERSION and checkout.get("stripe_api_version") == STRIPE_CURRENT_API_VERSION and stripe_webhook_api_version_aligned(),
             category="billing",
             owner="platform_ops",
-            evidence_summary=_evidence(request_api_version=checkout.get("stripe_api_version") or "missing", expected=STRIPE_CURRENT_API_VERSION, webhook_version_verified=_env_bool("JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED")),
+            evidence_summary=_evidence(
+                request_api_version=checkout.get("stripe_api_version") or "missing",
+                expected=STRIPE_CURRENT_API_VERSION,
+                recorded_webhook_api_version=stripe_webhook_api_version() or "missing",
+                webhook_version_verified=_env_bool("JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"),
+                webhook_version_aligned=stripe_webhook_api_version() == STRIPE_CURRENT_API_VERSION,
+            ),
             next_action="Pin backend Stripe-Version and record the live webhook endpoint API version metadata.",
-            environment_keys=["JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"],
+            environment_keys=["JIEJING_STRIPE_WEBHOOK_API_VERSION", "JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"],
             docs=["https://docs.stripe.com/api/versioning"],
         ),
         _stage(

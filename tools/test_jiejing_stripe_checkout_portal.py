@@ -196,6 +196,23 @@ def main() -> int:
             return fail("Checkout contract step should be ready in Stripe fixture")
         if matrix["stripe_signed_webhook_contract"].get("status") != "ready":
             return fail("signed webhook step should be ready in Stripe fixture")
+        version_step = matrix["stripe_api_webhook_version_alignment"]
+        if version_step.get("status") != "ready":
+            return fail(f"API/webhook version alignment should be ready in Stripe fixture: {version_step}")
+        if "JIEJING_STRIPE_WEBHOOK_API_VERSION" not in version_step.get("environment_keys", []):
+            return fail(f"version alignment must require the recorded webhook API version: {version_step}")
+        if "recorded_webhook_api_version=2026-06-24.dahlia" not in str(version_step.get("evidence_summary") or ""):
+            return fail(f"version alignment evidence should record the exact webhook API version: {version_step}")
+        os.environ["JIEJING_STRIPE_WEBHOOK_API_VERSION"] = "2026-05-27.dahlia"
+        mismatch_plan = build_billing_plan(settings, repository)
+        mismatch_matrix = {
+            item.get("key"): item
+            for item in mismatch_plan.get("billing_live_cutover_matrix", [])
+            if isinstance(item, dict)
+        }
+        if (mismatch_matrix.get("stripe_api_webhook_version_alignment") or {}).get("status") != "blocked":
+            return fail(f"mismatched webhook endpoint API version must block live cutover: {mismatch_matrix.get('stripe_api_webhook_version_alignment')}")
+        os.environ["JIEJING_STRIPE_WEBHOOK_API_VERSION"] = STRIPE_API_VERSION
         webhook_proof = (
             matrix["stripe_webhook_failure_paths"].get("local_contract_proof")
             if isinstance(matrix["stripe_webhook_failure_paths"].get("local_contract_proof"), dict)
@@ -333,6 +350,7 @@ def _set_env(port: int) -> dict[str, str | None]:
         "JIEJING_STRIPE_LIVE_PRODUCTS_VERIFIED",
         "JIEJING_STRIPE_LIVE_PRICES_VERIFIED",
         "JIEJING_STRIPE_NO_TEST_OBJECTS_IN_LIVE_CONFIG",
+        "JIEJING_STRIPE_WEBHOOK_API_VERSION",
         "JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED",
         "JIEJING_STRIPE_WEBHOOK_DUPLICATE_TESTED",
         "JIEJING_STRIPE_WEBHOOK_DELAYED_TESTED",
@@ -362,6 +380,7 @@ def _set_env(port: int) -> dict[str, str | None]:
             "JIEJING_STRIPE_LIVE_PRODUCTS_VERIFIED": "1",
             "JIEJING_STRIPE_LIVE_PRICES_VERIFIED": "1",
             "JIEJING_STRIPE_NO_TEST_OBJECTS_IN_LIVE_CONFIG": "1",
+            "JIEJING_STRIPE_WEBHOOK_API_VERSION": STRIPE_API_VERSION,
             "JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED": "1",
             "JIEJING_STRIPE_WEBHOOK_DUPLICATE_TESTED": "1",
             "JIEJING_STRIPE_WEBHOOK_DELAYED_TESTED": "1",

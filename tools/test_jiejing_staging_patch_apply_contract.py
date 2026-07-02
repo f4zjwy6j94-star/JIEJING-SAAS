@@ -34,6 +34,7 @@ def main() -> int:
         "deploy/nginx.public-staging.conf",
         "deploy/Caddyfile.public-staging.systemd",
         "deploy/Caddyfile.production",
+        "deploy/jiejing-saas.production.env.example",
         "deploy/jiejing-saas.infra.env.example",
         "deploy/tencentcloud-install-jiejing-ssh-key.sh",
         "docs/JIEJING_INDEPENDENT_SAAS_DEPLOYMENT_RUNBOOK.md",

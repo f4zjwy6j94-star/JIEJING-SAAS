@@ -61,6 +61,14 @@ STRIPE_GO_LIVE_DOCS = [
 ]
 
 
+def stripe_webhook_api_version() -> str:
+    return os.environ.get("JIEJING_STRIPE_WEBHOOK_API_VERSION", "").strip()
+
+
+def stripe_webhook_api_version_aligned() -> bool:
+    return _env_bool("JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED") and stripe_webhook_api_version() == STRIPE_CURRENT_API_VERSION
+
+
 def build_billing_plan(settings: SaaSSettings, repository: SaaSRepository) -> dict[str, Any]:
     counts = repository.system_counts()
     provider = os.environ.get("JIEJING_BILLING_PROVIDER", "").strip().lower()
@@ -933,16 +941,18 @@ def _build_billing_live_cutover_matrix(
             "API and webhook version alignment",
             STRIPE_API_VERSION == STRIPE_CURRENT_API_VERSION
             and checkout_contract.get("stripe_api_version") == STRIPE_CURRENT_API_VERSION
-            and _env_bool("JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"),
+            and stripe_webhook_api_version_aligned(),
             owner="platform_ops",
             category="versioning",
             evidence_summary=_compact_billing_evidence(
                 request_api_version=checkout_contract.get("stripe_api_version") or "missing",
                 expected_api_version=STRIPE_CURRENT_API_VERSION,
+                recorded_webhook_api_version=stripe_webhook_api_version() or "missing",
                 webhook_endpoint_version_verified=_env_bool("JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"),
+                webhook_endpoint_version_aligned=stripe_webhook_api_version() == STRIPE_CURRENT_API_VERSION,
             ),
             next_action="Keep backend Stripe-Version and live webhook endpoint API version aligned to the reviewed Stripe version.",
-            environment_keys=["JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"],
+            environment_keys=["JIEJING_STRIPE_WEBHOOK_API_VERSION", "JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"],
             verification=["/billing/checkout-contract", "Stripe webhook endpoint metadata"],
             docs=[STRIPE_GO_LIVE_DOCS[0], STRIPE_GO_LIVE_DOCS[3]],
         ),

@@ -6,7 +6,7 @@ import os
 from typing import Any
 
 from .backup_plan import build_backup_plan
-from .billing_plan import STRIPE_CURRENT_API_VERSION, build_billing_plan
+from .billing_plan import STRIPE_CURRENT_API_VERSION, build_billing_plan, stripe_webhook_api_version, stripe_webhook_api_version_aligned
 from .config import SaaSSettings
 from .domain_readiness import build_domain_readiness
 from .infrastructure_drivers import build_infrastructure_driver_status
@@ -1219,16 +1219,18 @@ def _build_paid_launch_cutover_checklist(
         _cutover_item(
             "stripe_api_webhook_version_alignment",
             "Stripe API and webhook version alignment",
-            checkout_contract.get("stripe_api_version") == STRIPE_CURRENT_API_VERSION and _env_bool("JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"),
+            checkout_contract.get("stripe_api_version") == STRIPE_CURRENT_API_VERSION and stripe_webhook_api_version_aligned(),
             owner="platform_ops",
             category="billing",
             next_action="Create or update the Stripe webhook endpoint with the same pinned API version and record verification; do not rely on dashboard defaults silently drifting.",
             evidence_summary=_compact_drill_evidence(
                 request_api_version=checkout_contract.get("stripe_api_version") or "missing",
                 expected_api_version=STRIPE_CURRENT_API_VERSION,
+                recorded_webhook_api_version=stripe_webhook_api_version() or "missing",
                 webhook_endpoint_version_verified=_env_bool("JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"),
+                webhook_endpoint_version_aligned=stripe_webhook_api_version() == STRIPE_CURRENT_API_VERSION,
             ),
-            environment_keys=["JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"],
+            environment_keys=["JIEJING_STRIPE_WEBHOOK_API_VERSION", "JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"],
             verification=["Stripe Workbench/webhook endpoint metadata", "tools/test_jiejing_stripe_checkout_portal.py"],
             external_resource_required=True,
             triggers_real_charge=False,
@@ -1422,9 +1424,12 @@ def _build_billing_domain_cutover_runbook(
             next_action="Pin API requests and the production webhook endpoint to the same reviewed Stripe API version; record endpoint metadata before public charging.",
             evidence_summary=_compact_drill_evidence(
                 request_api_version=checkout_contract.get("stripe_api_version") or "missing",
+                expected_api_version=STRIPE_CURRENT_API_VERSION,
+                recorded_webhook_api_version=stripe_webhook_api_version() or "missing",
                 webhook_endpoint_version_verified=_env_bool("JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"),
+                webhook_endpoint_version_aligned=stripe_webhook_api_version() == STRIPE_CURRENT_API_VERSION,
             ),
-            environment_keys=["JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"],
+            environment_keys=["JIEJING_STRIPE_WEBHOOK_API_VERSION", "JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"],
             verification=["Stripe webhook endpoint metadata", "tools/test_jiejing_stripe_checkout_portal.py"],
             docs=[stripe_docs[0], stripe_docs[2]],
             external_resource_required=True,
