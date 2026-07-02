@@ -52,7 +52,7 @@ QUOTA_ACTION_UNITS = {
     "model_report_assist": "provider_job_quota",
     "media_generation_request": "provider_job_quota",
 }
-STRIPE_CURRENT_API_VERSION = "2026-05-27.dahlia"
+STRIPE_CURRENT_API_VERSION = "2026-06-24.dahlia"
 STRIPE_GO_LIVE_DOCS = [
     "https://docs.stripe.com/get-started/checklist/go-live",
     "https://docs.stripe.com/billing/testing",

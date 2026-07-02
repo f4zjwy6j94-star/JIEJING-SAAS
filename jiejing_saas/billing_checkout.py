@@ -20,7 +20,7 @@ from .billing_webhook import TEST_BILLING_PROVIDERS, billing_plan_ids, build_bil
 from .repository import SaaSRepository
 
 
-STRIPE_API_VERSION = "2026-05-27.dahlia"
+STRIPE_API_VERSION = "2026-06-24.dahlia"
 PLAN_KEYS = {"starter", "operator", "team"}
 LOCAL_RETURN_HOSTS = {"localhost", "127.0.0.1", "::1"}
 

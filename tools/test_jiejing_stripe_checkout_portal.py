@@ -95,7 +95,7 @@ def main() -> int:
             return fail(f"checkout contract should be ready with Stripe env: {contract}")
         if contract.get("urls", {}).get("request_override_must_match_configured_url") is not True:
             return fail(f"checkout contract should lock request return URL overrides to configured URLs: {contract.get('urls')}")
-        if contract.get("stripe_api_version") != "2026-05-27.dahlia" or STRIPE_API_VERSION != "2026-05-27.dahlia":
+        if contract.get("stripe_api_version") != "2026-06-24.dahlia" or STRIPE_API_VERSION != "2026-06-24.dahlia":
             return fail(f"Stripe API version should match the current official version: {contract.get('stripe_api_version')}")
 
         checkout = create_stripe_checkout_session(

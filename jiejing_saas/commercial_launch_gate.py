@@ -6,7 +6,7 @@ import os
 from typing import Any
 
 from .backup_plan import build_backup_plan
-from .billing_plan import build_billing_plan
+from .billing_plan import STRIPE_CURRENT_API_VERSION, build_billing_plan
 from .config import SaaSSettings
 from .domain_readiness import build_domain_readiness
 from .infrastructure_drivers import build_infrastructure_driver_status
@@ -1219,12 +1219,13 @@ def _build_paid_launch_cutover_checklist(
         _cutover_item(
             "stripe_api_webhook_version_alignment",
             "Stripe API and webhook version alignment",
-            checkout_contract.get("stripe_api_version") == "2026-05-27.dahlia" and _env_bool("JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"),
+            checkout_contract.get("stripe_api_version") == STRIPE_CURRENT_API_VERSION and _env_bool("JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"),
             owner="platform_ops",
             category="billing",
             next_action="Create or update the Stripe webhook endpoint with the same pinned API version and record verification; do not rely on dashboard defaults silently drifting.",
             evidence_summary=_compact_drill_evidence(
                 request_api_version=checkout_contract.get("stripe_api_version") or "missing",
+                expected_api_version=STRIPE_CURRENT_API_VERSION,
                 webhook_endpoint_version_verified=_env_bool("JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"),
             ),
             environment_keys=["JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"],
