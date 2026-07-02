@@ -31,7 +31,7 @@ def main() -> int:
         email="merchant-owner@example.test",
         allowlist="platform-admin@example.test",
     )
-    if merchant["owner_status"] != 403 or merchant["production_status"] != 403:
+    if merchant["owner_status"] != 403 or merchant["production_status"] != 403 or merchant["ledger_status"] != 403:
         return fail(f"ordinary merchant owner should receive 403: {merchant}")
 
     platform_admin = _run_case(
@@ -40,7 +40,7 @@ def main() -> int:
         email="platform-admin@example.test",
         allowlist="platform-admin@example.test",
     )
-    if platform_admin["owner_status"] != 200 or platform_admin["production_status"] != 200:
+    if platform_admin["owner_status"] != 200 or platform_admin["production_status"] != 200 or platform_admin["ledger_status"] != 200:
         return fail(f"platform allowlisted admin should receive 200: {platform_admin}")
     packet = platform_admin["owner_body"].get("owner_launch_control") or {}
     if packet.get("audience") != "platform_internal_admin" or packet.get("customer_visible") is not False:
@@ -54,6 +54,13 @@ def main() -> int:
         return fail(f"production release gate should stay internal: {release_gate}")
     if "platform-admin@example.test" in json.dumps(release_gate, ensure_ascii=False).lower():
         return fail("production release gate must not echo internal admin emails")
+    ledger = platform_admin["ledger_body"].get("production_evidence_ledger") or {}
+    if ledger.get("contract_version") != "2026-07-02-production-evidence-ledger-v1":
+        return fail(f"platform admin production evidence ledger missing: {ledger}")
+    if ledger.get("audience") != "platform_internal_admin" or ledger.get("customer_visible") is not False:
+        return fail(f"production evidence ledger should stay internal: {ledger}")
+    if "platform-admin@example.test" in json.dumps(ledger, ensure_ascii=False).lower():
+        return fail("production evidence ledger must not echo internal admin emails")
 
     print("PASS jiejing_owner_launch_control_access")
     return 0
@@ -101,11 +108,14 @@ def _run_case(*, port: int, db_name: str, email: str, allowlist: str) -> dict[st
             raise RuntimeError(f"registration did not return token: {registered}")
         owner = _fetch_json_or_error(f"{base}/owner/launch-control", token=token)
         production = _fetch_json_or_error(f"{base}/owner/production-release-gate", token=token)
+        ledger = _fetch_json_or_error(f"{base}/owner/production-evidence-ledger", token=token)
         return {
             "owner_status": owner["status"],
             "owner_body": owner["body"],
             "production_status": production["status"],
             "production_body": production["body"],
+            "ledger_status": ledger["status"],
+            "ledger_body": ledger["body"],
         }
     finally:
         process.terminate()

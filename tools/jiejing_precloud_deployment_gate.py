@@ -62,6 +62,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("billing_provider_rehearsal", [sys.executable, "tools/test_jiejing_billing_provider_rehearsal.py"]),
     ("billing_provider_evidence_register", [sys.executable, "tools/test_jiejing_billing_provider_evidence_register.py"]),
     ("production_release_gate", [sys.executable, "tools/test_jiejing_production_release_gate.py"]),
+    ("production_evidence_ledger", [sys.executable, "tools/test_jiejing_production_evidence_ledger.py"]),
     ("owner_launch_control_access", [sys.executable, "tools/test_jiejing_owner_launch_control_access.py"]),
     ("billing_provider_webhook", [sys.executable, "tools/test_jiejing_billing_provider_webhook.py"]),
     ("billing_webhook_subscription_state", [sys.executable, "tools/test_jiejing_billing_webhook_subscription_state.py"]),
