@@ -25694,12 +25694,12 @@ function renderSaasMerchantBillingCurrentStatusPanel(ctx = saasMerchantWorkbench
   const statusRows = [
     {
       label: "当前模式",
-      title: hasExternalProvider ? "正式收款已接入" : isTestMode ? "内测演练，不真实扣费" : "等待正式收款",
+      title: hasExternalProvider ? "在线付款已接入" : isTestMode ? "试用模式，不真实扣费" : "等待在线付款开放",
       detail: hasExternalProvider
         ? "订阅开通、续费、取消和付款失败由后端账单状态判断。"
         : isTestMode
           ? "现在只验证订阅状态和额度停用，不创建真实付款。"
-          : "上线收费前还要接正式收款服务；当前不会向商家扣费。",
+          : "在线付款开放前还要补齐订阅管理；当前不会向商家扣费。",
       tone: hasExternalProvider || isTestMode ? "green" : "amber",
     },
     {
@@ -25785,10 +25785,10 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
   const billing = saasMerchantBillingGuardrailState();
   const hasExternalProvider = Boolean(billing.provider.external_paid_provider_configured);
   const isTestMode = Boolean(billing.provider.test_billing_provider_configured);
-  const stageLabel = hasExternalProvider ? "正式收款已接入" : isTestMode ? "内测演练，不真实扣费" : "等待正式收款";
+  const stageLabel = hasExternalProvider ? "在线付款可用" : isTestMode ? "试用模式，不自动扣费" : "暂未开放在线支付";
   const stageDetail = hasExternalProvider
-    ? "订阅、续费、取消和付款失败由后端账单状态判断，前端不接触支付密钥。"
-    : "当前只验证套餐、额度和停用规则；不会创建真实付款，不会扣银行卡。";
+    ? "订阅、续费、取消和付款失败会按后台账单状态处理，前端不接触支付密钥。"
+    : "当前只展示套餐、额度和停用规则；不会创建真实付款，也不会自动扣款。";
   const rows = [
     {
       label: "现在",
@@ -25877,7 +25877,6 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
 
 function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
-  const payment = saasMainlandPaymentStrategyState();
   const hasExternalProvider = Boolean(billing.provider.external_paid_provider_configured);
   const manualBetaMode = Boolean(
     billing.provider.manual_beta_private_provider_configured ||
@@ -25885,25 +25884,24 @@ function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext
       state.saasManualBetaPaymentOrders?.length,
   );
   const quotaReady = Boolean(billing.quotaEnforcementEnabled);
-  const blockers = payment.blockers.length ? payment.blockers.slice(0, 3).join(" / ") : "等待正式支付上线前检查和平台管理员确认";
   const pathRows = [
     {
       label: "现在",
-      title: "个人码只跑内测对账",
-      detail: "商家生成 99 元 / 30 天付款单；付款后由内部管理员核对备注并确认收款，才写 manual_beta 订阅和审计。",
+      title: "当前不会自动扣费",
+      detail: "页面只显示订阅状态和套餐说明；在线付款入口未开放前，不会主动向商家扣款。",
       tone: manualBetaMode ? "green" : "amber",
     },
     {
-      label: "准备",
-      title: "个体户 / 公司主体申请正式商户支付",
-      detail: "准备营业执照、结算主体、服务条款、隐私、退款、客服入口和支付后台配置；证件、银行卡和支付密钥不进前端。",
-      tone: payment.paidLaunchReady ? "green" : "amber",
+      label: "开通",
+      title: "按客服指引开通订阅",
+      detail: "付款或试用资格确认后，系统更新基础订阅和套餐额度；页面只展示结果，不展示后台处理细节。",
+      tone: manualBetaMode || hasExternalProvider ? "green" : "amber",
     },
     {
-      label: "正式",
-      title: "商户订单 + 支付平台确认",
-      detail: "系统创建订单并接微信、支付宝、云闪付或聚合收单；只有支付平台确认或后台查单通过后，才能自动发放套餐和额度。",
-      tone: hasExternalProvider || payment.paidLaunchReady ? "green" : "red",
+      label: "以后",
+      title: "在线付款会在安全支付页完成",
+      detail: "正式开放在线付款后，商家在安全付款页完成支付；捷境根据后台确认开通套餐和额度。",
+      tone: hasExternalProvider ? "green" : "amber",
     },
     {
       label: "额度",
@@ -25913,24 +25911,24 @@ function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext
     },
   ];
   const grantRows = [
-    ["人工内测", "内部管理员确认", "个人码到账后人工核对付款备注；只有管理员确认按钮能写入 starter 30 天权益。"],
-    ["正式支付", "支付平台确认", "由支付平台通知或后台查单结果回写订阅、额度、发票和审计。"],
-    ["禁止路径", "前端 / 静态二维码不能自动开通", "浏览器不保存二维码图片、支付密钥、身份证件或银行卡材料。"],
+    ["订阅开通", "后台确认后生效", "付款或试用资格确认后写入订阅状态和套餐额度。"],
+    ["用量发放", "按套餐额度更新", "AI、联网报告和素材生成只按套餐额度或实际用量消耗。"],
+    ["安全边界", "浏览器不保存支付资料", "页面不保存卡号、证件、银行卡或支付密钥。"],
   ];
   const statusRows = [
-    ["当前阶段", hasExternalProvider ? "正式商户支付已接入" : manualBetaMode ? "内测人工对账" : "不真实扣费", hasExternalProvider ? "仍需完成上线前检查和平台管理员确认，不能因配置存在就公开收费。" : "当前只允许小范围人工对账，不代表公开付费上线。"],
-    ["上线阻断", payment.paidLaunchReady ? "支付策略材料已齐" : "公开收费仍阻断", payment.paidLaunchReady ? "仍要结合整体产品状态和平台管理员确认。" : blockers],
-    ["恢复边界", "不重复 OAuth / 不重填模型 key", "订阅或额度恢复只处理账单状态，不要求商家重新授权 eBay 或重新输入模型 key。"],
+    ["当前状态", hasExternalProvider ? "在线付款已接入" : manualBetaMode ? "试用订阅可用" : "暂不自动扣费", hasExternalProvider ? "付款成功后按账单状态开通权益。" : "当前不会自动扣款，订阅开通需按页面或客服提示完成。"],
+    ["付费开放", hasExternalProvider ? "可按套餐付款" : "逐步开放", hasExternalProvider ? "商家可从订阅页进入付款流程。" : "在线付款入口开放前，页面只显示订阅说明和可用额度。"],
+    ["恢复边界", "不重复授权 / 不重填模型 key", "账单恢复只处理订阅状态，不要求商家重新连接 eBay 或重新输入模型 key。"],
   ];
   return `
-    <section class="saas-settings-card saas-billing-transition-path" data-billing-transition="manual_beta_to_merchant_payment_transition_v1" aria-label="内测收款到正式商户支付路径">
+    <section class="saas-settings-card saas-billing-transition-path" data-billing-transition="merchant_subscription_activation_path_v2" aria-label="订阅开通说明">
       <div class="saas-settings-card-head">
         <div>
-          <span>订阅开通路径</span>
-          <strong>先人工对账内测，再切到正式商户支付自动发放额度</strong>
-          <p>这张卡把“个人码测试、正式支付、额度发放”拆成一条商家能理解的路径：现在可小范围人工核对，正式上线必须等商户支付、支付平台确认和额度停用规则齐全。</p>
+          <span>订阅开通说明</span>
+          <strong>先看当前是否扣费，再看订阅和额度怎么生效</strong>
+          <p>商家只需要知道当前会不会自动扣费、如何开通套餐、额度什么时候生效。后台接入和审核材料不在这里展示。</p>
         </div>
-        <em>${escapeHtml(hasExternalProvider ? "正式支付待切换" : manualBetaMode ? "人工对账内测" : "等待内测付款单")}</em>
+        <em>${escapeHtml(hasExternalProvider ? "在线付款可用" : manualBetaMode ? "试用订阅可用" : "暂未自动扣费")}</em>
       </div>
       <div class="saas-billing-transition-flow">
         ${pathRows
@@ -26810,25 +26808,25 @@ function renderSaasManualBetaPaymentOrderPanel() {
   const latestOrder = latestPending || orders[0] || null;
   const canConfirm = saasOwnerLaunchCanView();
   const orderRows = orders.slice(0, 3);
-  const statusLabel = latestPending ? "等待确认收款" : latestOrder?.status === "confirmed_manual_receipt" ? "已确认内测权限" : "可生成付款单";
+  const statusLabel = latestPending ? "等待确认开通" : latestOrder?.status === "confirmed_manual_receipt" ? "试用订阅已开通" : "可申请开通";
   const orderSummary = latestOrder
     ? [
-        ["金额", `¥${latestOrder.amount_cny || 99}`, `${latestOrder.duration_days || 30} 天基础内测权限`],
-        ["付款备注", latestOrder.payment_note || "生成后显示", "付款时复制这个编号，便于后台对账"],
-        ["状态", statusLabel, latestOrder.active_until ? `可用至 ${String(latestOrder.active_until).slice(0, 10)}` : "后台确认后开通"],
+        ["订阅", `¥${latestOrder.amount_cny || 99} / ${latestOrder.duration_days || 30} 天`, "基础试用套餐"],
+        ["申请编号", latestOrder.payment_note || "生成后显示", "联系客服时可提供这个编号"],
+        ["状态", statusLabel, latestOrder.active_until ? `可用至 ${String(latestOrder.active_until).slice(0, 10)}` : "确认后开通"],
       ]
     : [
-        ["金额", "¥99", "30 天基础内测权限"],
-        ["付款备注", "生成后显示", "付款时复制这个编号，便于后台对账"],
-        ["状态", "待生成", "生成付款单不会触发真实扣款"],
+        ["订阅", "¥99 / 30 天", "基础试用套餐"],
+        ["申请编号", "生成后显示", "联系客服时可提供这个编号"],
+        ["状态", "待申请", "生成申请单不会自动扣款"],
       ];
   return `
-    <section class="saas-settings-card saas-manual-beta-payment" data-manual-beta-payment="manual_beta_payment_order_v1" aria-label="个人码内测付款单">
+    <section class="saas-settings-card saas-manual-beta-payment" data-manual-beta-payment="merchant_beta_subscription_request_v2" aria-label="试用订阅申请">
       <div class="saas-settings-card-head">
         <div>
-          <span>个人码内测付款单</span>
-          <strong>先用 99 元 / 30 天把测试期订阅闭环跑通</strong>
-          <p>这只适合小范围内测：商家生成付款单，付款时备注编号；后台确认已收款后，系统再开通基础内测权限并写审计。</p>
+          <span>试用订阅申请</span>
+          <strong>申请开通基础套餐，确认后显示可用期限</strong>
+          <p>在线付款入口未开放前，这里只生成订阅申请记录。确认开通后，商家会看到套餐状态、可用期限和额度变化；页面不会自动扣款。</p>
         </div>
         <em>${escapeHtml(statusLabel)}</em>
       </div>
@@ -26846,10 +26844,10 @@ function renderSaasManualBetaPaymentOrderPanel() {
           .join("")}
       </div>
       <div class="saas-manual-beta-payment-actions">
-        <button class="primary-action compact-action" type="button" data-saas-action="manual-beta-create-order" data-manual-beta-plan-key="starter" ${state.saasLoading ? "disabled" : ""}>生成 99 元内测付款单</button>
+        <button class="primary-action compact-action" type="button" data-saas-action="manual-beta-create-order" data-manual-beta-plan-key="starter" ${state.saasLoading ? "disabled" : ""}>申请开通基础试用套餐</button>
         ${
           canConfirm && latestPending
-            ? `<button class="secondary-action compact-action" type="button" data-saas-action="manual-beta-confirm-order" data-manual-beta-order-id="${escapeHtml(latestPending.order_id || "")}" ${state.saasLoading ? "disabled" : ""}>确认已收款并开通</button>`
+            ? `<button class="secondary-action compact-action" type="button" data-saas-action="manual-beta-confirm-order" data-manual-beta-order-id="${escapeHtml(latestPending.order_id || "")}" ${state.saasLoading ? "disabled" : ""}>确认开通试用订阅</button>`
             : ""
         }
       </div>
@@ -26860,19 +26858,19 @@ function renderSaasManualBetaPaymentOrderPanel() {
                 .map(
                   (order) => `
                     <article class="${order.status === "confirmed_manual_receipt" ? "is-green" : "is-amber"}">
-                      <span>${escapeHtml(order.status === "confirmed_manual_receipt" ? "已确认" : "待确认")}</span>
-                      <strong>${escapeHtml(order.payment_note || order.order_id || "内测付款单")}</strong>
-                      <small>${escapeHtml(order.status === "confirmed_manual_receipt" ? `基础权限已开通至 ${String(order.active_until || "").slice(0, 10) || "30 天后"}` : "付款后等待后台人工确认，不会自动扣费。")}</small>
+                      <span>${escapeHtml(order.status === "confirmed_manual_receipt" ? "已开通" : "待确认")}</span>
+                      <strong>${escapeHtml(order.payment_note || order.order_id || "试用订阅申请")}</strong>
+                      <small>${escapeHtml(order.status === "confirmed_manual_receipt" ? `基础套餐已开通至 ${String(order.active_until || "").slice(0, 10) || "30 天后"}` : "确认前不会自动扣费或开通权益。")}</small>
                     </article>
                   `,
                 )
                 .join("")
-            : `<article class="is-amber"><span>还没有付款单</span><strong>先生成一张内测付款单</strong><small>付款二维码不写入代码仓库，后续只从后端安全配置读取。</small></article>`
+            : `<article class="is-amber"><span>还没有申请</span><strong>先申请开通试用订阅</strong><small>申请不会自动扣费；确认后才会更新套餐和额度。</small></article>`
         }
       </div>
       <div class="saas-manual-beta-payment-note">
-        <strong>边界说明</strong>
-        <p>个人收款码阶段不能自动识别到账，也不能做自动续费、欠费回调、退款和发票闭环；正式上线仍要接微信/支付宝/云闪付商户支付或聚合收单。</p>
+        <strong>商家需要知道</strong>
+        <p>当前不会在浏览器里保存支付资料，也不会自动扣款。订阅确认后，只影响套餐权益和高成本用量额度，不会触发 eBay 发布、退款、广告或采购付款。</p>
       </div>
       <div class="saas-manual-beta-payment-safety" hidden aria-hidden="true">
         <span>manual_beta_payment_order_v1</span>
@@ -27079,7 +27077,7 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
       key: "invoice_receipt_tax_path",
       status: "blocked",
       merchant_promise: "收据、发票和税务问题要能关联订单、订阅和后台记录。",
-      next_action: "确定商户主体、结算身份和税务发票口径。",
+      next_action: "完善收据、发票和税务说明。",
     },
     {
       key: "refund_support_public_entry",
@@ -27095,13 +27093,13 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
     },
   ];
   const visibleCards = cards.length ? cards : fallbackCards;
-  const readyText = `${Number(packet.ready_count || 0)}/${Number(packet.total_count || visibleCards.length)} ready`;
-  const status = packet.ready_for_paid_customer_display ? "可进入付费展示评审" : "仍是上线前说明";
+  const readyText = `${Number(packet.ready_count || 0)}/${Number(packet.total_count || visibleCards.length)} 项已准备`;
+  const status = packet.ready_for_paid_customer_display ? "付费说明可展示" : "付费说明准备中";
   const copy = {
     price_and_renewal_terms: ["价格与续费", "付款前展示套餐价格、周期、取消路径、额度边界和 AI/素材用量另算说明。"],
     hosted_checkout_payment_boundary: ["托管支付边界", "订阅付款由支付平台托管；捷境浏览器不保存卡号、不直接扣费。"],
     self_service_cancel_portal: ["自助订阅管理", "商家在订阅管理页处理付款方式、套餐和取消；权益变化等后台确认。"],
-    invoice_receipt_tax_path: ["收据 / 发票 / 税务", "发票和税务口径依赖正式商户主体、支付订单和后台记录。"],
+    invoice_receipt_tax_path: ["收据 / 发票 / 税务", "发票和税务口径依赖正式订单、收据和后台记录。"],
     refund_support_public_entry: ["退款与客服入口", "付款前可见条款、隐私、退款政策、客服入口和风险披露。"],
     entitlement_recovery_boundary: ["权益恢复边界", "欠费、取消、退款或争议只停新高成本任务，历史资料保留，不重复 eBay OAuth。"],
   };
@@ -27111,7 +27109,7 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
         <div>
           <span>付费前客户信任说明</span>
           <strong>商家在付款前要看清楚价格、续费、取消、发票、退款和权益恢复边界</strong>
-          <p>这张卡只给商家解释付款前需要知道的事项：套餐价格、续费/取消入口、用量边界、发票税务和退款客服。内部上线检查、支付后台配置和审批证据不在商家界面展示。</p>
+          <p>这张卡只给商家解释付款前需要知道的事项：套餐价格、续费/取消入口、用量边界、发票税务和退款客服。后台处理细节不会出现在商家界面。</p>
         </div>
         <em>${escapeHtml(`${status} · ${readyText}`)}</em>
       </div>
@@ -27122,10 +27120,10 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
             const tone = item.status === "ready" ? "green" : item.owner_approval_required ? "amber" : "red";
             return `
               <article class="is-${escapeHtml(tone)}">
-                <span>${escapeHtml(item.status || "blocked")}</span>
+                <span>${escapeHtml(item.status === "ready" ? "已准备" : "准备中")}</span>
                 <strong>${escapeHtml(title)}</strong>
                 <small>${escapeHtml(detail || item.merchant_promise || "")}</small>
-                <small>${escapeHtml(item.next_action || "等待正式商户支付证据和主理人确认。")}</small>
+                <small>${escapeHtml(item.next_action || "等待后续开放。")}</small>
               </article>
             `;
           })
@@ -27133,7 +27131,7 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
       </div>
       <div class="saas-merchant-billing-trust-note">
         <strong>当前边界</strong>
-        <p>当前仍是内测说明，不会发起真实付款、不会扣款，也不会把支付密钥或卡号交给浏览器。正式收费会在支付平台托管页完成，并且要等商户主体、正式套餐、订阅管理、发票/税务和客服路径全部就绪。</p>
+        <p>当前不会自动发起付款、不会扣款，也不会把支付密钥或卡号交给浏览器。正式收费会在安全支付页完成，并且要等正式套餐、订阅管理、收据/发票和客服路径全部就绪。</p>
       </div>
       <div class="saas-merchant-billing-trust-safety" hidden aria-hidden="true">
         <span>merchant_billing_customer_trust_packet_v1</span>
@@ -27317,7 +27315,7 @@ function renderSaasMerchantBillingGuardrailPanel(ctx = saasMerchantWorkbenchCont
 
 function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
-  const billingModeLabel = billing.provider.external_paid_provider_configured ? "正式收款已接入" : "内测演练模式";
+  const billingModeLabel = billing.provider.external_paid_provider_configured ? "在线付款已接入" : "试用模式";
   const splitRows = [
     ["01", "基础订阅", "¥99/月是基础订阅", "打开工作台、AI CEO、Listing、批量、素材工坊、客服订单和基础记录。"],
     ["02", "AI 文本用量", "不包含无限模型", "普通问答、Listing 文案、联网总结和长报告按模型套餐、token 或服务商账单核算。"],
@@ -27325,7 +27323,7 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
     ["04", "平台经营成本", "捷境不代扣", "eBay 成交费、广告费、物流、退款和店铺订阅只进入利润测算与确认中心。"],
   ];
   const usageRouteRows = [
-    ["先看订阅", billing.entitlementActive ? "基础权益可用" : "内测阶段不真实扣费"],
+    ["先看订阅", billing.entitlementActive ? "基础权益可用" : "试用阶段不自动扣费"],
     ["再看用量", billing.blocksNow ? "高成本任务已暂停" : "AI 和素材按额度保护"],
     ["最后确认", "发布、付款、退款、广告仍进决策中心"],
   ];
@@ -33498,7 +33496,7 @@ function saasSettingsOneGlanceRows(activeTabId = "general") {
       ["越权停住", "没权限只补资料", "高风险动作没有权限就停到决策中心。"],
     ],
     billing: [
-      ["当前阶段", "内测演练，不真实扣费", "正式收费前会先接正式商户支付、订阅管理和后台确认。"],
+      ["当前阶段", "试用模式，不自动扣费", "在线付款开放前会先准备订阅管理、收据和后台确认。"],
       ["基础订阅", "¥99/月打开工作台", "AI CEO、Listing、批量、素材工坊和客服订单是基础功能。"],
       ["高成本用量", "AI / 素材另算", "欠费或超量只停模型、联网、素材生成等高成本任务。"],
     ],
@@ -33703,7 +33701,6 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
         renderSaasMerchantBillingPlainSummaryPanel(ctx),
         renderSaasBillingTransitionPathPanel(ctx),
         renderSaasMerchantBillingCustomerTrustPanel(ctx),
-        renderSaasMainlandPaymentStrategyPanel(),
         renderSaasManualBetaPaymentOrderPanel(),
         renderSaasMerchantPricingModelPanel(ctx),
         renderSaasMerchantBillingContinuityPanel(ctx),

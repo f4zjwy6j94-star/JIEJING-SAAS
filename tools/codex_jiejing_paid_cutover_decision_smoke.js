@@ -234,6 +234,24 @@ async function main() {
     const billingText = billing?.innerText || settingsText;
     const rehearsalText = rehearsal?.innerText || settingsText;
     const approvalText = approval?.innerText || settingsText;
+    const merchantBillingForbiddenVisible = [
+      "大陆收款方式",
+      "大陆用户",
+      "个体工商户",
+      "个体户",
+      "主体资料",
+      "聚合收单",
+      "微信",
+      "支付宝",
+      "云闪付",
+      "个人码",
+      "个人收款码",
+      "平台管理员",
+      "主理人",
+      "上线前检查",
+      "支付后台配置",
+      "正式商户支付",
+    ].some((marker) => settingsText.includes(marker));
     return {
       visible: Boolean(decision && decision.offsetParent !== null),
       launchVisible: Boolean(launch && launch.offsetParent !== null),
@@ -304,6 +322,7 @@ async function main() {
       hasLoginOverlay: Boolean(document.querySelector(".auth-shell, .saas-login-modal, [data-auth-view]")),
       publicBillingText: publicBillingCutover?.textContent || "",
       incidentRunbookText: incidentRunbook?.textContent || "",
+      merchantBillingForbiddenVisible,
     };
   });
 
@@ -445,6 +464,9 @@ async function main() {
     }
     if (ui.incidentRunbookText.includes("runbook") || ui.incidentRunbookText.includes("webhook")) {
       failures.push("ordinary billing UI exposes internal billing runbook copy");
+    }
+    if (ui.merchantBillingForbiddenVisible) {
+      failures.push("ordinary billing UI exposes founder/internal payment strategy copy");
     }
   }
   if (result.api.billing_live_cutover_total_count !== 8) failures.push(`api billing live cutover count ${result.api.billing_live_cutover_total_count}`);

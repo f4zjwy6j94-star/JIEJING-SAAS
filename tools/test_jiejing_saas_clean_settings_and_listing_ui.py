@@ -348,7 +348,6 @@ def main() -> None:
         "renderSaasBillingProviderRehearsalPanel(ctx)",
         "renderSaasBillingPaidLaunchBlockersPanel(ctx)",
         "renderSaasMerchantBillingCustomerTrustPanel(ctx)",
-        "renderSaasMainlandPaymentStrategyPanel()",
         "renderSaasManualBetaPaymentOrderPanel()",
         "renderSaasMerchantPricingModelPanel(ctx)",
         "renderSaasMerchantBillingContinuityPanel(ctx)",
@@ -360,6 +359,11 @@ def main() -> None:
         "renderSaasMerchantSecurityBoundaryPanel()",
     ]:
         require(settings_def_body, required_marker, "settings ordinary tabs stay focused while owner area keeps advanced controls")
+    for forbidden_marker in [
+        "renderSaasMainlandPaymentStrategyPanel()",
+    ]:
+        if forbidden_marker in settings_def_body:
+            raise AssertionError(f"Merchant settings must not render internal payment strategy: {forbidden_marker}")
     for required_marker in [
         "mainland_payment_strategy_v1",
         "manual_qr_not_paid_launch_ready",
@@ -519,17 +523,21 @@ def main() -> None:
         "base_subscription_is_feature_fee=true",
         "ai_media_usage_is_separate=true",
         "platform_cost_not_collected_by_jiejing=true",
-        "订阅开通路径",
-        "先人工对账内测，再切到正式商户支付自动发放额度",
-        "个人码只跑内测对账",
-        "商户订单 + 支付平台确认",
+        "订阅开通说明",
+        "先看当前是否扣费，再看订阅和额度怎么生效",
+        "当前不会自动扣费",
+        "按客服指引开通订阅",
+        "在线付款会在安全支付页完成",
         "订阅状态驱动发放和停用",
-        "前端 / 静态二维码不能自动开通",
-        "manual_beta_to_merchant_payment_transition_v1",
+        "浏览器不保存支付资料",
+        "merchant_subscription_activation_path_v2",
         "quota_grant_not_frontend_driven",
         "static_qr_never_paid_launch_provider",
+        "试用订阅申请",
+        "申请开通基础套餐，确认后显示可用期限",
+        "merchant_beta_subscription_request_v2",
         "当前阶段",
-        "内测演练，不真实扣费",
+        "试用模式，不真实扣费",
         "高成本用量",
         "等待演练模式",
         "当前计费状态",
@@ -537,7 +545,7 @@ def main() -> None:
         "费用四分法",
         "平台经营成本",
         "eBay、物流、广告和退款由商家平台账户结算",
-        "内测演练，不真实扣费",
+        "试用模式，不真实扣费",
         "merchant_visible_billing_status_v1",
         "merchant_subscription_shutdown_closure_v2",
         "billing_never_deletes_audit_records",

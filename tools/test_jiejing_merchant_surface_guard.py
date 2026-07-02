@@ -49,6 +49,45 @@ PUBLIC_VISIBLE_FORBIDDEN = [
     "tutorial",
 ]
 
+PUBLIC_LEGAL_FILES = [
+    "terms.html",
+    "privacy.html",
+    "refund-policy.html",
+    "support.html",
+    "risk-disclosure.html",
+]
+
+PUBLIC_LEGAL_VISIBLE_FORBIDDEN = [
+    "受控 beta",
+    "上线前演练",
+    "正式商户支付",
+    "正式支付",
+    "正式上线前",
+    "正式公开收费",
+    "个人收款码",
+    "个人码",
+    "主理人",
+    "webhook",
+    "provider",
+    "client secret",
+    "API key",
+    "Vault",
+    "secret_ref",
+    "WAF",
+    "Bot",
+    "支付机构要求",
+    "商户主体",
+    "主体资料",
+    "主体信息",
+    "public_support",
+    "payment_review",
+    "support_contact_pending",
+    "OAuth",
+    "审计证据",
+    "审计记录",
+    "smoke",
+]
+
 
 MERCHANT_SCOPE_FUNCTIONS = [
     "renderGlobalLoopWorkbench",
@@ -110,6 +149,12 @@ def main() -> int:
             return fail(f"public homepage visible text still feels simulated: {marker}")
         if marker in app_static_text:
             return fail(f"merchant workbench static text still feels simulated: {marker}")
+
+    for filename in PUBLIC_LEGAL_FILES:
+        legal_text = visible_text((ROOT / filename).read_text(encoding="utf-8"))
+        for marker in PUBLIC_LEGAL_VISIBLE_FORBIDDEN:
+            if marker in legal_text:
+                return fail(f"{filename} visible text exposes internal/customer-hostile marker: {marker}")
 
     if "捷境 JIEJING / eBay 自动化工作台" not in public_text:
         return fail("public homepage should lead with the merchant product positioning")

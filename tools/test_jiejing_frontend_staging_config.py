@@ -28,7 +28,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260701-billing-domain-cutover-v1"
+    frontend_asset_version = "20260702-merchant-customer-copy-v1"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -266,8 +266,8 @@ def main() -> int:
             return fail(f"prelaunch hardening runbook missing marker: {marker}")
     for marker in [
         "隐私与数据边界说明",
-        "当前环境用于受控 beta 和上线前演练，不是正式公开收费上线状态",
-        "secret_ref",
+        "当前在线付款尚未向所有商家开放",
+        "eBay 授权凭证、模型连接凭证和支付连接密钥",
         "服务条款",
         "风险披露与确认中心边界",
     ]:
@@ -275,32 +275,32 @@ def main() -> int:
             return fail(f"privacy page missing staging data-boundary marker: {marker}")
     for marker in [
         "捷境服务条款",
-        "当前捷境仍不是正式公开收费上线状态",
+        "当前在线付款尚未向所有商家开放",
         "禁止自动执行的动作",
-        "测试数据默认只标记和报告，不自动删除",
+        "试用数据默认只标记和报告，不自动删除",
         "基础订阅是软件功能费",
         "eBay 费用、广告费、物流和退款不是捷境代扣",
-        "payment_review_legal_pages_v1",
+        "更新日期：2026-07-02",
     ]:
         if marker not in terms_html:
             return fail(f"terms page missing launch-boundary marker: {marker}")
     for marker in [
         "捷境退款政策",
-        "当前捷境仍处于受控 beta / 上线前演练阶段，不是正式公开收费上线状态",
-        "个人收款码或人工收款只能用于小范围内测人工对账",
+        "当前在线付款尚未向所有商家开放",
+        "受邀试用的订阅开通需要客服或后台确认",
         "eBay 成交费、广告费、店铺订阅费、物流费、采购款、买家退款",
-        "support_contact_pending_before_paid_launch",
-        "payment_review_refund_policy_v1",
+        "后续会补充公开客服邮箱、工单和投诉升级路径",
+        "更新日期：2026-07-02",
     ]:
         if marker not in refund_html:
             return fail(f"refund policy page missing payment-review marker: {marker}")
     for marker in [
         "捷境客服与反馈入口",
-        "正式公开收费前会补齐支付机构要求的公开客服邮箱",
-        "意见箱只记录流程意见和上下文编号，不保存 token、key、平台凭证或身份证件",
+        "在线付款和公开工单入口会按实际开放状态展示",
+        "意见箱只记录流程意见和上下文编号，不保存密钥、平台凭证或身份资料",
         "不会替商家直接发布商品、改价、改库存、退款、投广告",
-        "public_support_contact_required_for_payment_review",
-        "payment_review_support_entry_v1",
+        "后续会补充的客服信息",
+        "更新日期：2026-07-02",
     ]:
         if marker not in support_html:
             return fail(f"support page missing payment-review marker: {marker}")

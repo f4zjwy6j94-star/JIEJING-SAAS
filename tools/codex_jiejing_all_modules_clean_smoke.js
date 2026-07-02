@@ -736,6 +736,24 @@ async function main() {
                 rawText.includes("triggers_real_charge=false") &&
                 rawText.includes("repeat_ebay_oauth_allowed=false") &&
                 rawText.includes("frontend_gets_payment_secret=false"),
+              has_billing_internal_customer_copy: [
+                "大陆收款方式",
+                "大陆用户",
+                "个体工商户",
+                "个体户",
+                "主体资料",
+                "聚合收单",
+                "微信",
+                "支付宝",
+                "云闪付",
+                "个人码",
+                "个人收款码",
+                "平台管理员",
+                "主理人",
+                "上线前检查",
+                "支付后台配置",
+                "正式商户支付",
+              ].some((marker) => text.includes(marker)),
               preview: text.trim().slice(0, 180),
             };
           }, tabId),
@@ -762,6 +780,7 @@ async function main() {
       check.settings_billing_has_pricing_split = billingAudit.has_billing_pricing_split || false;
       check.settings_billing_has_continuity = billingAudit.has_billing_continuity || false;
       check.settings_billing_has_internal_payment_ops = billingAudit.has_billing_internal_payment_ops || false;
+      check.settings_billing_has_internal_customer_copy = billingAudit.has_billing_internal_customer_copy || false;
       await page
         .screenshot({ path: path.join(outDir, "connect-model.png"), fullPage: true, timeout: 15000 })
         .catch((error) => screenshotFailures.push({ view: "connect-model", error: String(error.message || error).slice(0, 300) }));
@@ -838,6 +857,7 @@ async function main() {
   if (!connect.settings_billing_has_pricing_split) failures.push("settings billing pricing split missing");
   if (!connect.settings_billing_has_continuity) failures.push("settings billing continuity closure missing");
   if (connect.settings_billing_has_internal_payment_ops) failures.push("ordinary settings billing tab exposes internal payment cutover review");
+  if (connect.settings_billing_has_internal_customer_copy) failures.push("ordinary settings billing tab exposes internal/founder payment strategy copy");
   const media = moduleChecks.find((item) => item.view === "media") || {};
   if (!media.has_media_tabs) failures.push("media tabs missing");
   if (!media.has_media_simple_headline || !media.has_media_simple_flow) failures.push("media simple workflow surface missing");
