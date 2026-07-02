@@ -76,7 +76,7 @@
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-scene.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-generated-detail.webp" />
     <link rel="preload" as="image" href="./assets/backflow-incense-video-cover.webp" />
-    <link rel="stylesheet" href="./styles.css?v=20260702-merchant-credential-copy-v1" />
+    <link rel="stylesheet" href="./styles.css?v=20260702-merchant-entry-copy-v1" />
     <style id="jiejing-cockpit-layout-guard">
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
         display: grid !important;
@@ -3050,8 +3050,8 @@
         </section>
 
         <section class="empty-state" id="emptyState" hidden>
-          <strong>暂无数据</strong>
-          <span>当前视图没有待处理项目。</span>
+          <strong>这里暂时没有任务</strong>
+          <span>有真实任务、订单或确认事项后会自动出现在这里。</span>
         </section>
 
         <section class="loading-state" id="loadingState" hidden>
@@ -3060,9 +3060,9 @@
         </section>
 
         <section class="error-state" id="errorState" hidden>
-          <strong>连接暂时不可用</strong>
-              <span>连接暂时不可用；系统会显示失败原因和下一步处理建议。</span>
-          <button class="secondary-action" id="recoverState">返回正常状态</button>
+          <strong>当前状态没有读取成功</strong>
+              <span>请稍后重试，或回到设置查看连接状态；系统不会自动执行高风险动作。</span>
+          <button class="secondary-action" id="recoverState">回到工作台</button>
         </section>
       </main>
     </div>
@@ -3080,7 +3080,7 @@
           </div>
           <p class="eyebrow" id="authMode">注册体验</p>
           <h2 id="authTitle">建立你的捷境账号</h2>
-          <p class="auth-note" id="authPathNote">登录或注册后进入身份向导；店铺授权、同步和确认记录都会进入系统记录。</p>
+          <p class="auth-note" id="authPathNote">登录或注册后先选择商家身份；店铺连接、同步状态和确认记录会按账号空间保存。</p>
         </div>
         <div class="auth-step-strip" aria-label="登录后流程">
           <span>登录 / 注册</span>
@@ -3092,7 +3092,7 @@
           <article>
             <span>01</span>
             <strong>先建捷境账号</strong>
-            <small>登录或注册，只保存会话和安全引用。</small>
+            <small>登录或注册，只保存登录状态，不显示敏感凭证。</small>
           </article>
           <article>
             <span>02</span>
@@ -3131,7 +3131,7 @@
             <small>新商家创建账号，进入身份向导</small>
           </button>
         </div>
-        <p class="saas-auth-footnote">登录只需要捷境账号和密码；eBay 店铺连接、AI 连接和经营资料会在登录后按账号自动读取。</p>
+        <p class="saas-auth-footnote">登录只需要捷境账号和密码；店铺连接、AI 连接和经营资料会按账号空间显示状态，缺少资料会提示补齐。</p>
       </section>
     </div>
 
@@ -3304,8 +3304,8 @@
         }
       })();
     </script>
-    <script src="./assets/jiejing-settings-panels.js?v=20260702-merchant-credential-copy-v1"></script>
-    <script src="./app.js?v=20260702-merchant-credential-copy-v1"></script>
+    <script src="./assets/jiejing-settings-panels.js?v=20260702-merchant-entry-copy-v1"></script>
+    <script src="./app.js?v=20260702-merchant-entry-copy-v1"></script>
   <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"8ceaac5cf3dd4fa491331c0faf56768c","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>

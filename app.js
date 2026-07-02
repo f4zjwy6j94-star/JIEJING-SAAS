@@ -26036,7 +26036,7 @@ function renderSaasBillingProviderRehearsalPanel(ctx = saasMerchantWorkbenchCont
   const statusDetail = resultHasRun
     ? latest.message ||
       `action=${latest.action || "unknown"} / plan=${latest.plan_key || billing.planKey || "starter"} / paid_launch=${Boolean(latest.ready_for_paid_launch)}`
-    : "这不是公开收费开关；它只证明未来正式商户支付接入前，后端可以先验 provider 结果，再写订阅和 quota。";
+    : "这不是公开收费开关；它只证明未来正式收款接入前，服务端可以先验证支付结果，再更新订阅和额度。";
   const proofRows = [
     {
       label: "01",
@@ -26083,7 +26083,7 @@ function renderSaasBillingProviderRehearsalPanel(ctx = saasMerchantWorkbenchCont
         <div>
           <span>正式支付接入前演练</span>
           <strong>先证明后端查单 / 签名回调，再允许订阅和额度生效</strong>
-          <p>这张卡只跑无扣费 provider 演练：不创建真实 Checkout、不调用外部支付 API、不收银行卡、不触发真实扣费。它把个人码内测过渡到正式商户支付时最容易出错的“权益发放依据”放到台前。</p>
+          <p>这张卡只跑无扣费演练：不创建真实支付单、不调用外部支付 API、不收银行卡、不触发真实扣费。它把人工核对过渡到正式收款时最容易出错的“权益发放依据”放到台前。</p>
         </div>
         <em>${escapeHtml(statusLabel)}</em>
       </div>
@@ -26155,8 +26155,8 @@ function saasPaidLaunchBlockerCopy(key = "") {
   const labels = {
     billing_provider_not_selected: ["选择正式 provider", "选择 Stripe、Paddle、Lemon Squeezy 或国内商户支付通道。"],
     billing_plans_not_published: ["发布正式套餐", "正式收费必须使用可审计的套餐和价格 ID，不能靠手填金额。"],
-    external_paid_subscription_provider_not_configured: ["接入正式商户支付", "manual/test provider 只能内测，不能作为公开收费 provider。"],
-    test_billing_provider_not_allowed_for_paid_launch: ["关闭 test provider", "stripe_test_mock 只能证明流程，不能收真实客户的钱。"],
+    external_paid_subscription_provider_not_configured: ["接入正式收款通道", "手动或测试通道只能内测，不能作为公开收费入口。"],
+    test_billing_provider_not_allowed_for_paid_launch: ["关闭测试通道", "测试通道只能证明流程，不能收真实客户的钱。"],
     billing_webhook_not_configured: ["配置签名 webhook", "订阅、续费、失败和取消必须由 provider 签名事件回写。"],
     billing_plan_ids_missing: ["补齐 live Price ID", "公开订阅要绑定真实 Price，不使用废弃 plan object。"],
     stripe_checkout_not_ready: ["验证 subscription Checkout", "首笔订阅支付走 Checkout Sessions mode=subscription。"],
@@ -26164,12 +26164,12 @@ function saasPaidLaunchBlockerCopy(key = "") {
     quota_enforcement_not_enabled: ["启用 quota hard-stop", "欠费、取消或超额时只能停高成本任务，不能删资料。"],
     payment_merchant_entity_not_ready: ["准备商户主体", "正式收款需要结算主体、服务说明、客服和退款入口。"],
     mainland_payment_icp_subject_not_ready: ["对齐域名和主体", "国内支付审核常看域名、备案和商户主体一致性。"],
-    domestic_payment_provider_not_ready: ["开通国内商户通道", "微信、支付宝、云闪付或聚合收单必须是商户通道。"],
-    domestic_payment_provider_not_selected: ["选择国内支付通道", "个人码不能作为公开收费 provider。"],
+    domestic_payment_provider_not_ready: ["开通正式收款通道", "公开收费必须使用可签约、可回调、可对账的商户通道。"],
+    domestic_payment_provider_not_selected: ["选择正式收款通道", "人工收款不能作为公开收费入口。"],
     domestic_payment_adapter_not_enabled: ["接入后端订单适配器", "浏览器不能直接开通权益，必须后端创建订单。"],
     domestic_signed_webhook_not_configured: ["配置签名回调/查单", "只有签名回调或主动查单通过后才发放订阅和额度。"],
     domestic_live_cutover_not_approved: ["主理人批准 live cutover", "真实收款不能由代码部署自动打开。"],
-    manual_qr_collection_not_paid_launch_ready: ["个人码仅限内测", "个人码只可人工对账，不能自动续费、停用和发票审计。"],
+    manual_qr_collection_not_paid_launch_ready: ["人工收款仅限内测", "人工收款只可人工对账，不能自动续费、停用和发票审计。"],
     paid_launch_owner_approval_required: ["等待主理人最终评审", "即使技术证据齐全，真实收费也必须由主理人确认后才能打开。"],
   };
   return labels[key] || [String(key || "unknown_blocker").replace(/_/g, " "), "保留为正式上线前阻断项，先补齐后端证据再评审。"];
@@ -26424,7 +26424,7 @@ function renderSaasBillingDomainCutoverReviewPanel(ctx = saasMerchantWorkbenchCo
     {
       key: "stripe_live_provider_selected",
       label: "Provider",
-      title: "正式商户支付 provider",
+      title: "正式收款通道",
       fallback: "仍在 manual/test 阶段，不能公开收费。",
     },
     {
@@ -26486,7 +26486,7 @@ function renderSaasBillingDomainCutoverReviewPanel(ctx = saasMerchantWorkbenchCo
         <div>
           <span>正式支付域名演练</span>
           <strong>Checkout、Portal、签名 webhook、回滚证据必须先在稳定域名上对齐</strong>
-          <p>这张卡把“个人码内测”迁移到“正式商户支付”的技术证据摆清楚：现在只读检查 URL、webhook、quota 和回滚链路，不创建支付单、不调用 Stripe、不触发真实扣费，也不重跑 eBay OAuth。</p>
+          <p>这张卡把“人工核对”迁移到“正式收款”的证据摆清楚：现在只读检查回调地址、额度发放和回滚链路，不创建支付单、不触发真实扣费，也不重新打开 eBay 授权。</p>
         </div>
         <em>${escapeHtml(review.statusLabel)}</em>
       </div>
@@ -26586,38 +26586,38 @@ function saasMainlandPaymentStrategyState() {
 
 function renderSaasMainlandPaymentStrategyPanel() {
   const payment = saasMainlandPaymentStrategyState();
-  const stageLabel = payment.paidLaunchReady ? "大陆正式收款可演练" : "先选大陆收款通道";
+  const stageLabel = payment.paidLaunchReady ? "正式收款可演练" : "等待正式收款通道";
   const selectedLabel = payment.selected?.label || "还未选择正式通道";
   const routeCards = [
     {
       label: "优先",
-      title: "微信 / 支付宝 / 云闪付",
-      detail: "面向中国大陆商家和用户时，这些才是低学习成本的主收款入口。正式版要通过官方商户号或持牌聚合收单接入。",
+      title: "正式收款通道",
+      detail: "公开收费必须接入可签约、可回调、可对账的商户通道，付款成功后由支付平台或服务端查单确认。",
       tone: "green",
     },
     {
       label: "可选",
-      title: "连连支付 / 空中云汇",
-      detail: "适合作为聚合收单或跨境结算候选，前提是商户身份、SaaS 场景审核、接口和后台确认都通过。",
+      title: "跨境订阅通道",
+      detail: "适合海外银行卡、跨境订阅和全球客户，前提是商户身份、SaaS 场景审核、接口和服务端确认都通过。",
       tone: "green",
     },
     {
       label: "补充",
-      title: "Stripe / PayPal",
-      detail: "更适合海外银行卡、海外客户或全球订阅，不应作为大陆内测用户的唯一入口。",
+      title: "平台回款账户",
+      detail: "用于电商平台资金回收或跨境结算时要和官网订阅付款分开，不作为捷境订阅付款的唯一依据。",
       tone: "amber",
     },
     {
       label: "不做正式入口",
-      title: "个人收款码（仅内测）",
-      detail: "只能小范围私测人工对账；没有自动续费、欠费停用、退款和发票闭环。",
+      title: "人工收款",
+      detail: "只可用于小范围内测核对，不能作为公开自动订阅入口；没有自动续费、欠费停用、退款和发票闭环。",
       tone: "red",
     },
   ];
   const plainRows = [
     ["现在该做什么", selectedLabel, payment.blockers.length ? `阻断：${payment.blockers.slice(0, 3).join(" / ")}` : "等待正式通道上线前检查。"],
-    ["为什么不用个人收款码正式上线", "SaaS 要自动识别谁付了哪个套餐", "只扫个人码会变成人工记账，后期用户多了会丢账、错账、无法自动停用额度。"],
-    ["万里汇 / 派安盈定位", "更像收款结汇和平台回款账户", "可用于 eBay/Amazon 等平台资金回收，不是捷境官网订阅付款的主入口。"],
+    ["为什么不能用人工收款正式上线", "SaaS 要自动识别谁付了哪个套餐", "人工核对会导致丢账、错账、无法自动续费和无法自动停用额度。"],
+    ["平台回款账户定位", "更像收款结汇和平台资金回收账户", "可用于电商平台资金回收，不是捷境官网订阅付款的主入口。"],
   ];
   const formal = payment.strategy.formal_collection_architecture || {};
   const domainPlan = payment.strategy.domain_and_icp_plan || {};
@@ -26636,8 +26636,8 @@ function renderSaasMainlandPaymentStrategyPanel() {
   const reviewCards = [
     ["服务内容", "eBay AI CEO 工作台", "AI CEO 帮商家整理市场、Listing、素材、客服草稿和确认记录；真实高风险动作仍由商家确认。"],
     ["费用边界", "基础订阅和高成本用量分开", "eBay 成交费、广告费、物流费和退款由商家平台账户结算，不是捷境代扣。"],
-    ["退款与客服", reviewSupport.support_contact_status === "ready" ? "客服入口已准备" : "客服入口待补齐", "支付审核前需要公开客服或投诉入口；退款和争议按订单、订阅和后台记录处理。"],
-    ["数据安全", "证件和密钥不进前端", "商户私钥、证书、支付后台密钥、身份证件和结算账户只在后端或外部支付平台边界处理。"],
+    ["退款与客服", reviewSupport.support_contact_status === "ready" ? "客服入口已准备" : "客服入口待补齐", "支付审核前需要公开客服或投诉入口；退款和争议按订单、订阅和系统记录处理。"],
+    ["数据安全", "证件和密钥不进前端", "商户私钥、证书、支付平台密钥、身份证件和结算账户只在安全服务或外部支付平台边界处理。"],
   ];
   const reviewLinks = [
     ["服务条款", reviewUrls.terms || "./terms.html"],
@@ -26647,17 +26647,17 @@ function renderSaasMainlandPaymentStrategyPanel() {
     ["风险披露", reviewUrls.risk_disclosure || "./risk-disclosure.html"],
   ];
   const domainRows = [
-    ["现在", "香港/海外入口继续用于内测和全球访问", "这不是“香港备案”。香港或海外服务器本身通常不走中国内地 ICP 备案。"],
-    ["以后", "大陆公司或个体户做正式商户主体", "正式接微信、支付宝、云闪付时，再让支付主体、域名/子域名、回调地址和备案材料保持一致。"],
-    ["不冲突", "只是多一步主体和域名规划", "建议保留 app.jiejing.shop，后续准备 cn.jiejing.shop 或 pay.jiejing.shop 给大陆正式支付审核。"],
+    ["现阶段", "当前入口继续用于内测和全球访问", "这里不承诺公开收费；正式收款前要先完成商户主体、域名、回调和审核资料。"],
+    ["后续", "准备可审核的正式商户主体", "正式接入商户支付时，再让支付主体、域名/子域名、回调地址和审核材料保持一致。"],
+    ["不冲突", "只是多一步主体和域名规划", "当前域名继续服务产品体验；后续支付子域名和商户审核材料要单独对齐。"],
   ];
   return `
-    <section class="saas-settings-card saas-mainland-payment-strategy" data-payment-strategy="mainland_payment_strategy_v1" aria-label="大陆用户收款策略">
+    <section class="saas-settings-card saas-mainland-payment-strategy" data-payment-strategy="mainland_payment_strategy_v1" aria-label="正式收款接入策略">
       <div class="saas-settings-card-head">
         <div>
-          <span>大陆收款方式</span>
-          <strong>大陆用户优先用微信、支付宝、云闪付或聚合收单</strong>
-          <p>Stripe 仍可保留给海外银行卡和全球客户，但捷境当前面向大陆用户时，正式收费主路应走国内商家更熟悉、对账更稳定的支付通道。</p>
+          <span>正式收款接入</span>
+          <strong>公开收费先走可对账、可回调、可审计的商户通道</strong>
+          <p>捷境当前只适合继续内测和无扣费演练；公开收费前必须完成正式商户通道、签名通知、订单核对、退款客服和额度生命周期。</p>
         </div>
         <em>${escapeHtml(stageLabel)}</em>
       </div>
@@ -26690,8 +26690,8 @@ function renderSaasMainlandPaymentStrategyPanel() {
       <div class="saas-mainland-payment-formal" data-payment-architecture="formal_payment_collection_architecture_v1" aria-label="正式收款架构">
         <div>
           <span>正式上架架构</span>
-          <strong>个人支付宝收款码只做内测，正式收款走商户订单和支付平台确认</strong>
-          <small>捷境会先生成订单，再交给微信/支付宝/云闪付或聚合收单；支付成功必须由支付平台通知或后台查单确认，然后才更新订阅、额度、发票和后台记录。</small>
+          <strong>人工收款只做内测核对，正式收款走商户订单和支付平台确认</strong>
+          <small>捷境会先生成订单，再交给已签约支付通道；支付成功必须由支付平台通知或服务端查单确认，然后才更新订阅、额度、发票和系统记录。</small>
         </div>
         ${visibleFormalSteps
           .map(
@@ -26720,9 +26720,9 @@ function renderSaasMainlandPaymentStrategyPanel() {
       </div>
       <div class="saas-mainland-payment-entity" data-payment-entity-readiness="merchant_entity_payment_readiness_v1" aria-label="主体和商户资料准备">
         <div>
-          <span>主体资料</span>
-          <strong>个体工商户是当前最轻的正式收款准备路径</strong>
-          <small>先把营业执照、经营者实名、结算银行卡、服务协议/隐私政策、客服电话和支付回调域名准备齐；真正自动开通套餐，仍必须等正式商户号和签名回调接入。</small>
+          <span>商户资料</span>
+          <strong>正式收款需要可审核的商户主体和公开服务资料</strong>
+          <small>先把营业执照、经营者实名、结算账户、服务协议、隐私政策、客服电话和支付回调域名准备齐；真正自动开通套餐，仍必须等正式商户号和签名回调接入。</small>
         </div>
         ${entityChecklist
           .slice(0, 5)
@@ -26737,11 +26737,11 @@ function renderSaasMainlandPaymentStrategyPanel() {
           )
           .join("")}
       </div>
-      <div class="saas-mainland-payment-application" data-payment-application-packet="merchant_payment_application_packet_v1" aria-label="正式商户支付申请资料包">
+      <div class="saas-mainland-payment-application" data-payment-application-packet="merchant_payment_application_packet_v1" aria-label="正式收款申请资料包">
         <div>
           <span>申请资料包</span>
-          <strong>办完个体户后，用这份材料去申请正式支付</strong>
-          <small>这里帮你整理微信、支付宝、云闪付或聚合收单常见审核材料。捷境只展示准备状态，不在前端保存证件、银行卡、商户密钥或回调密钥。</small>
+          <strong>资料齐备后，再申请正式支付通道</strong>
+          <small>这里只整理支付机构常见审核材料。捷境只展示准备状态，不在前端保存证件、银行卡、商户密钥或回调密钥。</small>
         </div>
         ${applicationChecklist
           .slice(0, 6)
@@ -26760,7 +26760,7 @@ function renderSaasMainlandPaymentStrategyPanel() {
         <div>
           <span>审核说明</span>
           <strong>支付机构和真实商家要先看懂这几件事</strong>
-          <small>这不是新增复杂功能，而是把服务内容、收费边界、退款客服和数据安全说明集中放好，方便后续正式商户支付审核。</small>
+          <small>这不是新增复杂功能，而是把服务内容、收费边界、退款客服和数据安全说明集中放好，方便后续正式支付审核。</small>
           <div class="saas-mainland-payment-review-links" aria-label="审核页面链接">
             ${reviewLinks
               .map(

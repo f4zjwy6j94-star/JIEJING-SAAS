@@ -33,7 +33,11 @@ def main() -> None:
     require(app_js, '"settings.legacy_connect_status"', "legacy settings status trusted sink label")
     if "|on[a-z]+\\s*=" in app_js:
         raise AssertionError("trusted HTML guard must not match ordinary words ending in on")
-    require(app_html, "eBay 店铺连接、AI 连接和经营资料会在登录后按账号自动读取", "merchant-facing login credential copy")
+    require(app_html, "店铺连接、AI 连接和经营资料会按账号空间显示状态，缺少资料会提示补齐", "merchant-facing login credential copy")
+    require(app_html, "有真实任务、订单或确认事项后会自动出现在这里", "merchant-facing empty state copy")
+    require(app_html, "请稍后重试，或回到设置查看连接状态；系统不会自动执行高风险动作", "merchant-facing error state copy")
+    require(index_html, "正式接入会经过安全连接、权限、操作记录和确认中心", "merchant-facing homepage footer copy")
+    require(index_html, "未连接前不会读取店铺数据，也不会执行高风险动作", "merchant-facing homepage auth copy")
     require(app_html, "不保存敏感凭证或平台账号资料", "merchant-facing feedback privacy copy")
     require(app_js, "不保存敏感凭证或平台账号资料", "workflow feedback avoids token/key wording")
     require(app_js, "按套餐额度或实际用量核算", "billing pricing avoids token wording")
@@ -51,7 +55,7 @@ def main() -> None:
     workflow_feedback_end = app_js.index("function openSaasWorkflowFeedback", workflow_feedback_start)
     workflow_feedback_body = app_js[workflow_feedback_start:workflow_feedback_end]
     for surface_name, surface_body in [
-        ("auth shell", auth_shell_body),
+        ("app auth shell", auth_shell_body),
         ("workflow feedback shell", feedback_body),
         ("workflow feedback runtime", workflow_feedback_body),
         ("merchant pricing panel", pricing_panel_body),
@@ -59,6 +63,33 @@ def main() -> None:
         for internal_marker in ["模型 key", "token、key", "登录 token", "token 或服务商账单"]:
             if internal_marker in surface_body:
                 raise AssertionError(f"{surface_name} should use merchant-facing credential/usage wording: {internal_marker}")
+    index_auth_start = index_html.index('<div class="entry-auth-shell">')
+    index_auth_end = index_html.index('<div class="toast" id="toast"', index_auth_start)
+    index_auth_body = index_html[index_auth_start:index_auth_end]
+    app_entry_state_start = app_html.index('<section class="empty-state" id="emptyState"')
+    app_entry_state_end = app_html.index('<div class="modal-backdrop" id="authModal"', app_entry_state_start)
+    app_entry_state_body = app_html[app_entry_state_start:app_entry_state_end]
+    for surface_name, surface_body in [
+        ("homepage auth modal", index_auth_body),
+        ("app empty/error states", app_entry_state_body),
+    ]:
+        for internal_marker in [
+            "后端",
+            "API",
+            "provider",
+            "webhook",
+            "quota",
+            "个人码",
+            "个人收款码",
+            "大陆收款",
+            "个体工商户",
+            "模型 key",
+            "eBay token",
+            "Source packet",
+            "refresh success proof",
+        ]:
+            if internal_marker in surface_body:
+                raise AssertionError(f"{surface_name} should stay merchant-facing: {internal_marker}")
     for required_copy in [
         "敏感凭证只在后端安全保存",
         "不接触原始平台凭证",

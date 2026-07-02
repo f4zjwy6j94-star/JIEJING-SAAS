@@ -826,7 +826,7 @@
                 <div>
                   <span>正式商用硬化演练</span>
                   <strong>${drillReadyCount}/${drillTotalCount} ready</strong>
-                  <small>收费、稳定域名、eBay token refresh、账号健康、发布体检和最终 smoke 都要有证据；真实写入继续进入确认中心。</small>
+                  <small>收费、稳定域名、店铺连接续期、账号健康、发布体检和最终 smoke 都要有证据；真实写入继续进入确认中心。</small>
                 </div>
               </article>
               ${drills.map((item) => _renderCommercialHardeningDrill(item)).join("")}
