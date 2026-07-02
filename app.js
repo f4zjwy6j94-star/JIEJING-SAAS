@@ -17627,7 +17627,8 @@ function renderSaasCeoCommandConsole(ctx = saasMerchantWorkbenchContext(), comma
 
 function primarySaasCeoRoute(command = state.saasLastCeoCommand) {
   const current = normalizeSaasCeoCommand(command);
-  if (!current || current.intent === "general_chat") return null;
+  const hasBusinessRoute = (current?.routes || []).some((route) => route && route.view && route.view !== "connect");
+  if (!current || current.intent === "general_chat" || (current.route === "general_chat" && !hasBusinessRoute)) return null;
   return (current.routes || []).find((route) => route.view !== "connect") || current.routes?.[0] || null;
 }
 
@@ -18331,6 +18332,7 @@ function handleSaasCeoCommandSubmit(text) {
   if (localInstantAnswer) {
     const instantCommand = normalizeSaasCeoCommand({
       ...command,
+      intent: "general_chat",
       ai_reply: localInstantAnswer.answer,
       ai_reply_status: localInstantAnswer.status,
       route: localInstantAnswer.route,
@@ -18339,6 +18341,8 @@ function handleSaasCeoCommandSubmit(text) {
       long_term_memory: false,
       writes_merchant_rule: false,
       decision_center_required: false,
+      high_risk: false,
+      routes: [],
     });
     addCeoMessage(text, localInstantAnswer.answer, {
       assistantId: pendingMessageId,
@@ -18352,7 +18356,7 @@ function handleSaasCeoCommandSubmit(text) {
       decision_center_required: false,
     });
     if (instantCommand) {
-      state.saasLastCeoCommand = newestSaasCeoCommand(instantCommand, state.saasLastCeoCommand);
+      state.saasLastCeoCommand = instantCommand;
       persistSaasLastCeoCommand(state.saasLastCeoCommand);
       recordSaasCeoCommandSourceRecord(state.saasLastCeoCommand);
       state.saasLastCeoCommandPersistPromise = persistSaasCeoCommandToBackend(instantCommand);
