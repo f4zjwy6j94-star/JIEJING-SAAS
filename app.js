@@ -8152,7 +8152,7 @@ function saasBackendPublishCheckSource(check = {}, readiness = {}) {
     const trusted = sourceRecords.every((item) => item?.raw_secret_visible === false && item?.secret_exposed === false);
     return {
       label: label || "backend_preflight",
-      detail: trusted ? "backend sanitized source_records; token never shown in browser" : "backend source evidence needs review",
+      detail: trusted ? "证据已整理；敏感连接信息不会显示在页面里" : "证据来源需要复核",
     };
   }
   const key = String(check.key || "");
@@ -8619,9 +8619,9 @@ function renderSaasPublishConfirmationEvidencePanel(readiness = {}, ctx = saasMe
           <small>incident_mode=${Boolean(accountHealth.incident_mode)} / can_execute_real_writes=${Boolean(accountHealth.can_execute_real_writes)}</small>
         </article>
         <article>
-          <span>source_packet</span>
+          <span>证据包</span>
           <strong>${escapeHtml(sourcePacket)}</strong>
-          <small>secret_exposed=false / token never shown in browser</small>
+          <small>敏感连接信息不会显示在页面里</small>
         </article>
         <article class="${writesAfterApproval ? "is-amber" : "is-green"}">
           <span>platform_write_gate</span>
@@ -14966,19 +14966,19 @@ function saasModelBlockedReasonText(value = "") {
   const raw = String(value || "").trim();
   const normalized = raw.toLowerCase();
   const direct = {
-    merchant_model_api_key_not_saved: "当前店铺还没有可用的 AI 连接。请到设置页查看 AI 连接状态；系统不会要求你重复填写，除非模型服务明确拒绝。",
+    merchant_model_api_key_not_saved: "当前店铺还没有可用的 AI 连接。请到设置页查看 AI 连接状态；系统不会要求你重复填写，除非页面明确提示连接已失效。",
     model_secret_ref_not_found: "当前店铺的 AI 连接记录不可用，系统会自动尝试使用最新可用配置。",
     model_secret_ref_not_ready: "当前店铺的 AI 连接还在准备中。",
-    model_secret_resolve_blocked: "后端暂时无法读取当前店铺的 AI 连接记录。",
-    unsupported_model_provider: "当前模型服务暂不支持。",
-    model_provider_adapter_not_implemented: "当前模型服务暂未接入可调用通道。",
-    model_client_not_configured_or_live_disabled: "模型名、服务地址或调用开关当前不可用。",
-    model_provider_error: "模型服务返回错误，可能是模型名不被接受、额度不足、认证被拒绝或网络超时。",
+    model_secret_resolve_blocked: "系统暂时无法核对当前店铺的 AI 连接状态。",
+    unsupported_model_provider: "当前 AI 连接类型暂不支持。",
+    model_provider_adapter_not_implemented: "当前 AI 连接暂未开放实时调用。",
+    model_client_not_configured_or_live_disabled: "当前 AI 连接或实时调用状态不可用。",
+    model_provider_error: "AI 连接返回错误，可能是模型名、额度、账号状态或网络超时需要复核。",
     model_provider_not_configured: "当前没有可用的 AI 连接配置。",
-    model_live_calls_disabled: "当前环境关闭了实时模型调用。",
-    sanitized_platform_data_packet_missing: "当前店铺没有可用于报告的官方脱敏数据包。",
+    model_live_calls_disabled: "当前试用环境暂未开放实时 AI 调用。",
+    sanitized_platform_data_packet_missing: "当前店铺资料还没有整理到可生成报告的状态。",
     platform_data_packet_not_ready_for_runtime: "店铺资料还没有准备到可生成报告的状态。",
-    live_model_rehearsal_not_requested: "本次请求没有打开模型验证开关。",
+    live_model_rehearsal_not_requested: "本次没有进入实时 AI 校验。",
     external_realtime_data_source_not_connected: "当前没有接实时行情、新闻或联网搜索数据源。",
   };
   if (direct[normalized]) return direct[normalized];
@@ -14987,16 +14987,16 @@ function saasModelBlockedReasonText(value = "") {
     return `模型没有返回完整报告：${missing || "Market Report、Listing Package"}。`;
   }
   if (/http\s*401|unauthorized|invalid[_ -]?api[_ -]?key|authentication/i.test(raw)) {
-    return "模型服务明确拒绝认证，当前 AI 连接可能已失效或没有权限。";
+    return "AI 连接未通过本次校验，可能已失效或没有权限。";
   }
   if (/insufficient|quota|balance|billing|payment|credit/i.test(raw)) {
-    return "模型服务返回余额、额度或计费限制。";
+    return "当前 AI 额度、用量上限或账号状态需要复核。";
   }
   if (/model.*not.*found|invalid.*model|does not exist/i.test(raw)) {
-    return "模型服务不接受当前模型名。";
+    return "当前 AI 连接不接受这个模型名称。";
   }
   if (/timeout|timed out|network|econnreset|etimedout/i.test(raw)) {
-    return "模型服务网络请求超时或连接失败。";
+    return "AI 连接网络请求超时或连接失败。";
   }
   return saasIssueText(raw);
 }
@@ -15018,7 +15018,7 @@ function saasModelValueFailureMessage({ blockers = [], resolution = null, error 
     return "AI 连接已可用，但模型没有返回完整报告，请稍后重试或在设置页查看 AI 连接状态。";
   }
   const reasons = Array.from(new Set(collected.map((item) => saasModelBlockedReasonText(item)).filter(Boolean)));
-  return reasons.slice(0, 3).join(" / ") || "系统没有返回精确原因；不会要求你先重复配置，除非模型服务明确拒绝。";
+  return reasons.slice(0, 3).join(" / ") || "本次没有拿到精确原因；不会要求你先重复配置，除非页面明确提示连接已失效。";
 }
 
 function saasEbaySyncOverallStatus(latestSync = {}, latestPacket = null, packetBody = {}) {
@@ -18223,19 +18223,19 @@ function saasAiCeoMerchantSafeFailureText(error) {
   let reason = "这次没有拿到可展示回复。";
   let next = "你可以稍后重试，或到设置里的 AI 与素材查看连接状态。";
   if (raw.includes("402") || raw.includes("quota") || raw.includes("payment") || raw.includes("billing") || raw.includes("balance") || raw.includes("credit")) {
-    title = "AI 用量或服务商账单挡住了本次回复";
-    reason = "这通常是模型服务账户余额、套餐、额度或账单限制导致。";
-    next = "先到设置里的 AI 与素材查看连接状态；不用在前台重复粘贴凭证，除非服务商明确拒绝认证。";
+    title = "AI 额度或连接状态挡住了本次回复";
+    reason = "这通常是当前套餐额度、用量上限或 AI 账号状态需要复核。";
+    next = "先到设置里的 AI 与素材查看状态；不要重复填写连接信息，除非页面明确提示连接已失效。";
   } else if (raw.includes("401") || raw.includes("403") || raw.includes("unauthorized") || raw.includes("forbidden") || raw.includes("invalid")) {
-    title = "AI 服务商拒绝了这次连接";
-    reason = "可能是模型服务权限、模型名称或账户状态需要复核。";
-    next = "到设置里的 AI 与素材查看当前 AI 连接；凭证仍只在后端安全边界处理。";
+    title = "AI 连接未通过本次校验";
+    reason = "可能是连接权限、模型名称或账号状态需要复核。";
+    next = "到设置里的 AI 与素材查看当前状态；敏感连接信息仍只在安全边界内处理。";
   } else if (raw.includes("timeout") || raw.includes("network") || raw.includes("fetch")) {
     title = "AI 连接超时";
-    reason = "网络或模型服务临时不稳定。";
+    reason = "网络或 AI 连接临时不稳定。";
     next = "可以直接重试；如果是 Listing、发布、退款、广告等经营任务，我会继续保持确认边界。";
   }
-  return `${title}。${reason} ${next} 本次不会扣捷境费用、不会写入 eBay，也不会把普通聊天写入长期经营记忆。`;
+  return `${title}。${reason} ${next} 本次不会产生捷境收费、不会写入 eBay，也不会把普通聊天写入长期经营记忆。`;
 }
 
 function saasAiCeoProductizedAnswerText(text = "", status = "") {

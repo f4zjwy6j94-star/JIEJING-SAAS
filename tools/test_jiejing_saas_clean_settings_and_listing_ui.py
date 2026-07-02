@@ -41,7 +41,7 @@ def main() -> None:
     require(app_html, "不保存敏感凭证或平台账号资料", "merchant-facing feedback privacy copy")
     require(app_js, "不保存敏感凭证或平台账号资料", "workflow feedback avoids token/key wording")
     require(app_js, "按套餐额度或实际用量核算", "billing pricing avoids token wording")
-    require(index_html, "后端没有返回登录凭证", "login error uses merchant-facing credential wording")
+    require(index_html, "登录没有完成，请稍后重试；不会读取店铺资料或执行高风险动作。", "login error uses merchant-facing recovery wording")
     auth_shell_start = app_html.index('<div class="saas-auth-form-grid">')
     auth_shell_end = app_html.index('<div class="modal-backdrop" id="plansModal"', auth_shell_start)
     auth_shell_body = app_html[auth_shell_start:auth_shell_end]
@@ -75,6 +75,7 @@ def main() -> None:
     ]:
         for internal_marker in [
             "后端",
+            "登录凭证",
             "API",
             "provider",
             "webhook",
@@ -90,6 +91,12 @@ def main() -> None:
         ]:
             if internal_marker in surface_body:
                 raise AssertionError(f"{surface_name} should stay merchant-facing: {internal_marker}")
+    index_auth_script_start = index_html.index("function saveEntryAuthSession")
+    index_auth_script_end = index_html.index("function showEntryLogin", index_auth_script_start)
+    index_auth_script_body = index_html[index_auth_script_start:index_auth_script_end]
+    for internal_marker in ["后端没有返回登录凭证", "登录凭证", "HTTP 401", "provider", "quota", "模型 key"]:
+        if internal_marker in index_auth_script_body:
+            raise AssertionError(f"homepage auth script should keep failure copy merchant-facing: {internal_marker}")
     for required_copy in [
         "敏感凭证只在后端安全保存",
         "不接触原始平台凭证",
@@ -131,6 +138,28 @@ def main() -> None:
         ]:
             if internal_marker in surface_body:
                 raise AssertionError(f"{surface_name} should use merchant-facing credential wording: {internal_marker}")
+    model_failure_start = app_js.index("function saasModelBlockedReasonText")
+    model_failure_body = app_js[model_failure_start:app_js.index("function saasEbaySyncOverallStatus", model_failure_start)]
+    ai_ceo_failure_start = app_js.index("function saasAiCeoMerchantSafeFailureText")
+    ai_ceo_failure_body = app_js[ai_ceo_failure_start:app_js.index("function saasAiCeoProductizedAnswerText", ai_ceo_failure_start)]
+    combined_ai_failure_body = model_failure_body + ai_ceo_failure_body
+    for required_copy in [
+        "AI 额度或连接状态挡住了本次回复",
+        "不要重复填写连接信息，除非页面明确提示连接已失效",
+        "敏感连接信息仍只在安全边界内处理",
+    ]:
+        require(combined_ai_failure_body, required_copy, "merchant-facing AI failure copy")
+    for internal_marker in [
+        "服务商账单",
+        "在前台重复粘贴凭证",
+        "服务商明确拒绝认证",
+        "后端暂时无法读取",
+        "模型服务返回余额",
+        "模型服务不接受",
+        "模型服务网络请求",
+    ]:
+        if internal_marker in combined_ai_failure_body:
+            raise AssertionError(f"AI failure copy should not expose implementation wording: {internal_marker}")
 
     require(app_js, "function renderSaasBulkCandidatePreview", "SaaS bulk simplified candidate preview")
     require(app_js, "先小批量筛，不一键乱铺", "bulk low-learning-cost headline")
@@ -311,7 +340,7 @@ def main() -> None:
     require(app_js, '<span class="pill green">草稿</span>', "Listing draft pill uses merchant-facing label")
     require(app_js, "const productLabel = saasWorkflowProductLabel(latestTask) || saasModelValueProductLabel", "model value product label is defined before request")
     require(app_js, "function saasModelValueFailureMessage", "precise model value failure toast")
-    require(app_js, "模型服务返回错误，可能是模型名不被接受", "merchant-facing model failure reason")
+    require(app_js, "AI 连接返回错误，可能是模型名、额度、账号状态或网络超时需要复核", "merchant-facing model failure reason")
     require(app_js, "设置总览", "settings readable overview")
     require(app_html, "只让你处理真正要拍板的事", "decision center low-learning-cost headline")
     require(app_html, "没有重要动作时，这里保持安静", "decision center quiet empty-state promise")

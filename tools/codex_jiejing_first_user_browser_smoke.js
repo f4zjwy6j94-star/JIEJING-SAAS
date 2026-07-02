@@ -425,8 +425,8 @@ async function main() {
     () => {
       const text = document.body.innerText || "";
       return (
-        text.includes("AI 用量或服务商账单挡住了本次回复") ||
-        text.includes("不用在前台重复粘贴凭证") ||
+        text.includes("AI 额度或连接状态挡住了本次回复") ||
+        text.includes("不要重复填写连接信息") ||
         text.includes("AI CEO 连接暂时没有完成") ||
         text.includes("当前店铺还没有可用的 AI 连接") ||
         text.includes("AI 连接暂时不可用") ||
@@ -440,8 +440,8 @@ async function main() {
   const modelFailureCopy = await accountBPage.evaluate(() => {
     const text = document.body.innerText;
     const usageBlocked =
-      text.includes("AI 用量或服务商账单挡住了本次回复") &&
-      text.includes("不用在前台重复粘贴凭证") &&
+      text.includes("AI 额度或连接状态挡住了本次回复") &&
+      text.includes("不要重复填写连接信息") &&
       text.includes("AI 与素材");
     const connectionBlocked =
       (text.includes("AI CEO 连接暂时没有完成") ||

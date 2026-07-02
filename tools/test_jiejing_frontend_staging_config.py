@@ -28,7 +28,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260702-merchant-entry-copy-v1"
+    frontend_asset_version = "20260702-merchant-copy-safety-v1"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -88,6 +88,7 @@ def main() -> int:
         "20260629-onboarding-lite-v1",
         "20260701-payment-review-brief-v1",
         "20260701-media-asset-review-ui-v1",
+        "20260702-merchant-entry-copy-v1",
         "20260510-ebay-policy-v1",
     ]:
         if stale_asset_version in index_html + app_html:

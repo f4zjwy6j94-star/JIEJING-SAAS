@@ -35,7 +35,7 @@ def main() -> int:
         "active_bucket_summary",
         "Active high-cost buckets",
         "Origin direct access",
-        "token never shown in browser",
+        "敏感连接信息不会显示在页面里",
         "prevents_complete_copy=false",
         "makes_scraping_costly=true",
         "renderSaasPublicSecurityStatusPanel()",
