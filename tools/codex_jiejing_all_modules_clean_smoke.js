@@ -737,6 +737,33 @@ async function main() {
             ];
             const modelForbiddenVisibleMarkers =
               id === "model" ? modelForbiddenMarkers.filter((marker) => text.includes(marker)) : [];
+            const merchantSettingsForbiddenMarkers = [
+              "callback",
+              "回调地址",
+              "OAuth",
+              "token",
+              "secret_ref",
+              "Vault",
+              "provider",
+              "preflight",
+              "packet",
+              "BYOK",
+              "API key",
+              "模型 key",
+              "webhook",
+              "quota",
+              "Customer Portal",
+              "Stripe",
+              "正式商户支付",
+              "上线前检查",
+              "技术排查",
+              "后台排查",
+              "后台证据",
+              "后台状态",
+            ];
+            const merchantSettingsForbiddenVisibleMarkers = ["account", "data", "governance"].includes(id)
+              ? merchantSettingsForbiddenMarkers.filter((marker) => text.includes(marker))
+              : [];
             return {
               id,
               has_home_hub: Boolean(section?.querySelector(".saas-settings-home-hub")),
@@ -793,6 +820,8 @@ async function main() {
               billing_internal_visible_markers: billingForbiddenVisibleMarkers,
               has_model_internal_customer_copy: modelForbiddenVisibleMarkers.length > 0,
               model_internal_visible_markers: modelForbiddenVisibleMarkers,
+              has_internal_settings_customer_copy: merchantSettingsForbiddenVisibleMarkers.length > 0,
+              internal_settings_visible_markers: merchantSettingsForbiddenVisibleMarkers,
               preview: text.trim().slice(0, 180),
             };
           }, tabId),
@@ -811,6 +840,7 @@ async function main() {
       );
       const modelAudit = settingsChildAudit.find((item) => item.id === "model") || {};
       const billingAudit = settingsChildAudit.find((item) => item.id === "billing") || {};
+      const merchantSettingsInternalAudits = settingsChildAudit.filter((item) => item.has_internal_settings_customer_copy);
       check.settings_model_has_home_hub = modelAudit.has_home_hub || false;
       check.settings_model_has_subpage_strip = modelAudit.has_subpage_strip || false;
       check.settings_model_has_model_panel = modelAudit.has_model_provider_panel || false;
@@ -822,6 +852,11 @@ async function main() {
       check.settings_billing_has_continuity = billingAudit.has_billing_continuity || false;
       check.settings_billing_has_internal_payment_ops = billingAudit.has_billing_internal_payment_ops || false;
       check.settings_billing_has_internal_customer_copy = billingAudit.has_billing_internal_customer_copy || false;
+      check.settings_child_has_internal_customer_copy = merchantSettingsInternalAudits.length > 0;
+      check.settings_child_internal_visible_markers = merchantSettingsInternalAudits.map((item) => ({
+        id: item.id,
+        markers: item.internal_settings_visible_markers || [],
+      }));
       await page
         .screenshot({ path: path.join(outDir, "connect-model.png"), fullPage: true, timeout: 15000 })
         .catch((error) => screenshotFailures.push({ view: "connect-model", error: String(error.message || error).slice(0, 300) }));
@@ -894,6 +929,7 @@ async function main() {
   if (connect.settings_model_has_subpage_strip) failures.push("settings child page still shows redundant intro/map");
   if (!connect.settings_model_has_model_panel) failures.push("settings child page content missing");
   if (connect.settings_model_has_internal_customer_copy) failures.push("ordinary settings model tab exposes internal model/media copy");
+  if (connect.settings_child_has_internal_customer_copy) failures.push("ordinary settings child tab exposes internal account/data/governance copy");
   if (connect.settings_billing_has_current_status) failures.push("settings billing tab still shows duplicate current status panel");
   if (!connect.settings_billing_has_plain_summary) failures.push("settings billing plain summary missing");
   if (!connect.settings_billing_has_pricing_split) failures.push("settings billing pricing split missing");

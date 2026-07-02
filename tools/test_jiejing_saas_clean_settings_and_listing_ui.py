@@ -233,6 +233,9 @@ def main() -> None:
     require(app_js, "店铺数据、来源记录和同步缺口", "settings data panel merchant-facing title")
     require(app_js, "什么时候需要打开设置", "settings usage-rule section")
     require(app_js, "主理人高级区", "settings workflow compact boundary")
+    require(app_js, "登录、eBay 店铺连接和安全边界", "account settings uses merchant-facing connection copy")
+    require(app_js, "官方连接返回地址", "account settings avoids callback wording")
+    require(app_js, "权限围绕捷境确认中心设计", "governance settings uses Jiejing-owned permission copy")
     require(app_js, "AI 与素材", "merchant-friendly model settings title")
     require(app_js, "AI 连接已可用，素材任务进入素材工坊", "model settings uses merchant-facing AI connection copy")
     require(app_js, "生成后先审核，再决定能不能用于 Listing", "model settings explains media review before listing use")
@@ -324,6 +327,31 @@ def main() -> None:
     ]:
         if internal_marker in settings_map_body:
             raise AssertionError(f"Settings map should use merchant-facing wording: {internal_marker}")
+    account_panel_start = app_js.index("function renderSaasSettingsAccountPanel")
+    account_panel_end = app_js.index("function renderSaasSettingsAccountAccessPanel", account_panel_start)
+    account_panel_body = app_js[account_panel_start:account_panel_end]
+    for internal_marker in [
+        "正式回调地址",
+        "回调地址",
+        "eBay token",
+        "token 和 AI 连接凭证",
+        "callback",
+        "OAuth",
+        "secret_ref",
+        "Vault",
+    ]:
+        if internal_marker in account_panel_body:
+            raise AssertionError(f"Account settings panel should use merchant-facing wording: {internal_marker}")
+    permission_panel_start = app_js.index("function renderSaasMerchantPermissionPanel")
+    permission_panel_end = app_js.index("function renderSaasMerchantProviderHubPanel", permission_panel_start)
+    permission_panel_body = app_js[permission_panel_start:permission_panel_end]
+    for internal_marker in [
+        "借鉴 Shopify",
+        "把 Shopify 加进捷境",
+        "成熟的后台权限方法",
+    ]:
+        if internal_marker in permission_panel_body:
+            raise AssertionError(f"Permission settings panel should stay Jiejing-owned: {internal_marker}")
     one_glance_start = app_js.index("function saasSettingsOneGlanceRows")
     one_glance_end = app_js.index("function renderSaasBillingProviderPanel", one_glance_start)
     one_glance_body = app_js[one_glance_start:one_glance_end]

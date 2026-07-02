@@ -28,7 +28,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260702-merchant-ai-media-copy-v1"
+    frontend_asset_version = "20260702-merchant-settings-copy-v1"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -397,8 +397,8 @@ def main() -> int:
         "freshness.status",
         "route_health",
         "currentSaasEbayCallbackUrl",
-        "copy-ebay-callback-url",
-        "eBay Developer callback 必须配置为",
+        "copy-ebay-return-url",
+        "官方连接返回地址应保持一致",
     ]:
         if marker not in app_js + app_html:
             return fail(f"missing frontend staging config marker: {marker}")

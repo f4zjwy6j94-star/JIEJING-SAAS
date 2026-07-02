@@ -20002,7 +20002,7 @@ function renderSaasMerchantPermissionPanel() {
         <div>
           <span>团队权限</span>
           <strong>用岗位权限替代所有人共用老板账号</strong>
-          <p>借鉴 Shopify 的角色思路，但权限围绕捷境确认中心设计。发布、退款、广告预算、采购付款和敏感承诺只能由有权限的人确认。</p>
+          <p>权限围绕捷境确认中心设计。发布、退款、广告预算、采购付款和敏感承诺只能由有权限的人确认。</p>
         </div>
         <em>当前角色：${escapeHtml(currentRole)}</em>
       </div>
@@ -20026,7 +20026,7 @@ function renderSaasMerchantPermissionPanel() {
           )
           .join("")}
       </div>
-      <p class="saas-merchant-path-note">这不是把 Shopify 加进捷境，而是把它成熟的后台权限方法适配到捷境的 eBay 工作台和确认中心。</p>
+      <p class="saas-merchant-path-note">这里不是让团队直接操作平台后台，而是把关键经营动作先停到捷境确认中心，再按岗位权限放行。</p>
     </section>
   `;
 }
@@ -23282,7 +23282,7 @@ function handleSaasAction(button) {
     copySaasStatusSummary();
     return;
   }
-  if (action === "copy-ebay-callback-url") {
+  if (action === "copy-ebay-return-url") {
     copySaasEbayCallbackUrl();
     return;
   }
@@ -31379,10 +31379,10 @@ async function copySaasEbayCallbackUrl() {
       document.execCommand("copy");
       textarea.remove();
     }
-    showActionToast("已复制 eBay 回调地址。");
+    showActionToast("已复制 eBay 官方连接返回地址。");
   } catch (error) {
     console.warn("copySaasEbayCallbackUrl failed", error);
-    showActionToast("复制失败，请手动复制设置页里的回调地址。");
+    showActionToast("复制失败，请手动复制设置页里的官方连接返回地址。");
   }
 }
 
@@ -31752,7 +31752,6 @@ function renderSaasSettingsGeneralPanel(ctx = saasMerchantWorkbenchContext()) {
 }
 
 function renderSaasSettingsAccountPanel(ctx = saasMerchantWorkbenchContext(), options = {}) {
-  const expectedCallbackUrl = currentSaasEbayCallbackUrl();
   const ebayAuthorized = options.ebayAuthorized === true;
   const ebayPublishAuthorized = options.ebayPublishAuthorized === true;
   const hasSessionCandidate = hasSaasProtectedSessionCandidate();
@@ -31761,8 +31760,8 @@ function renderSaasSettingsAccountPanel(ctx = saasMerchantWorkbenchContext(), op
       <div class="saas-settings-card-head">
         <div>
           <span>账号</span>
-          <strong>登录、eBay 授权和正式回调地址</strong>
-          <p>前端只保存登录会话；eBay token 和 AI 连接凭证都留在后端密钥边界，不回显到浏览器。</p>
+          <strong>登录、eBay 店铺连接和安全边界</strong>
+          <p>页面只显示连接状态和可用性，不展示平台原始授权信息或 AI 连接原文。</p>
         </div>
       </div>
       <div class="saas-settings-row-list">
@@ -31776,7 +31775,7 @@ function renderSaasSettingsAccountPanel(ctx = saasMerchantWorkbenchContext(), op
         </article>
         <article>
           <div>
-            <span>eBay 授权</span>
+            <span>eBay 店铺连接</span>
             <strong>${escapeHtml(saasStoreStatusLabel(ctx.connection?.status || ctx.store?.status || "not_connected"))}</strong>
             <small>${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</small>
           </div>
@@ -31785,11 +31784,10 @@ function renderSaasSettingsAccountPanel(ctx = saasMerchantWorkbenchContext(), op
         </article>
         <article>
           <div>
-            <span>eBay 回调地址</span>
-            <strong>当前正式域名</strong>
-            <code>${escapeHtml(expectedCallbackUrl)}</code>
+            <span>官方连接返回地址</span>
+            <strong>由捷境维护</strong>
+            <small>商家一般不需要复制或配置；连接异常时按页面提示联系客服或管理员处理。</small>
           </div>
-          <button class="secondary-action compact-action" type="button" data-saas-action="copy-ebay-callback-url">复制回调地址</button>
         </article>
       </div>
     </section>
@@ -33498,7 +33496,7 @@ function saasSettingsOneGlanceRows(activeTabId = "general") {
     ],
     account: [
       ["登录账号", "管理当前捷境账号", "可切换账号或退出登录，不影响已保存的经营记录。"],
-      ["平台连接", "eBay 连接和回调地址", "连接状态、回调地址和账号健康放在同一页。"],
+      ["店铺连接", "eBay 店铺连接状态", "连接状态、账号健康和安全边界放在同一页。"],
       ["风险保护", "账号异常先暂停高风险动作", "封禁、受限、付款冻结会先停发布、退款、广告和承诺。"],
     ],
     model: [
@@ -33675,7 +33673,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       label: "账号与店铺",
       detail: "登录 / eBay",
       title: "账号与店铺",
-      intro: "管理捷境登录账号、eBay 连接、回调地址和账号健康。",
+      intro: "管理捷境登录账号、eBay 店铺连接和账号健康。",
       panels: [
         renderSaasSettingsAccountAccessPanel(),
         renderSaasSettingsPlatformPanel(ctx),
@@ -33877,10 +33875,10 @@ function renderSaasConnectCenter(view) {
                   <strong>${escapeHtml(saasStoreStatusLabel(ebayConnectionStatus))}，不需要重新打开授权链接</strong>
                   <small>捷境会继续使用后端托管凭证和店铺资料；前端不会保存或回显 eBay token。</small>
                   <div class="saas-oauth-callback-note">
-                    <span>当前 eBay Developer callback</span>
+                    <span>当前官方连接返回地址</span>
                     <code>${escapeHtml(expectedCallbackUrl)}</code>
-                    <button class="secondary-action" type="button" data-saas-action="copy-ebay-callback-url">复制 callback 地址</button>
-                    <small>仅在授权配置失效或更换域名时才需要重新检查 callback。</small>
+                    <button class="secondary-action" type="button" data-saas-action="copy-ebay-return-url">复制返回地址</button>
+                    <small>仅在连接配置失效或更换域名时才需要重新检查。</small>
                   </div>
                 </div>
               </div>`
@@ -33891,10 +33889,10 @@ function renderSaasConnectCenter(view) {
                   <strong>下一步去 eBay 登录并确认只读授权</strong>
                   <small>捷境只申请经营分析需要的只读范围；发布、改价、付款、退款和广告仍保持关闭。</small>
                   <div class="saas-oauth-callback-note">
-                    <span>eBay Developer callback 必须配置为</span>
+                    <span>官方连接返回地址应保持一致</span>
                     <code>${escapeHtml(expectedCallbackUrl)}</code>
-                    <button class="secondary-action" type="button" data-saas-action="copy-ebay-callback-url">复制 callback 地址</button>
-                    <small>如果 eBay 授权后回跳到别的 trycloudflare 域名，说明 eBay Developer 里的 RuName / Accepted Redirect URL 仍指向旧地址。</small>
+                    <button class="secondary-action" type="button" data-saas-action="copy-ebay-return-url">复制返回地址</button>
+                    <small>如果官方连接后回到其他旧域名，请联系客服协助处理连接配置。</small>
                   </div>
                 </div>
                 <a class="primary-action" href="${escapeHtml(oauthUrl)}" target="_blank" rel="noreferrer noopener">打开 eBay 官方授权</a>
