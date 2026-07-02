@@ -69,6 +69,10 @@ def stripe_webhook_api_version_aligned() -> bool:
     return _env_bool("JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED") and stripe_webhook_api_version() == STRIPE_CURRENT_API_VERSION
 
 
+def _env_text(name: str) -> str:
+    return os.environ.get(name, "").strip()
+
+
 def build_billing_plan(settings: SaaSSettings, repository: SaaSRepository) -> dict[str, Any]:
     counts = repository.system_counts()
     provider = os.environ.get("JIEJING_BILLING_PROVIDER", "").strip().lower()
@@ -832,12 +836,14 @@ def _build_billing_live_cutover_matrix(
         "JIEJING_STRIPE_WEBHOOK_DELAYED_TESTED",
         "JIEJING_STRIPE_WEBHOOK_OUT_OF_ORDER_TESTED",
     ]
+    webhook_failure_path_evidence_id = _env_text("JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID")
     billing_lifecycle_flags = [
         "JIEJING_STRIPE_CUSTOMER_PORTAL_TESTED",
         "JIEJING_STRIPE_SUBSCRIPTION_CANCEL_TESTED",
         "JIEJING_STRIPE_INVOICE_PAID_TESTED",
         "JIEJING_STRIPE_PAYMENT_FAILURE_TESTED",
     ]
+    portal_failure_path_evidence_id = _env_text("JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID")
     return [
         _billing_live_cutover_step(
             "stripe_live_provider_selected",
@@ -959,7 +965,9 @@ def _build_billing_live_cutover_matrix(
         _billing_live_cutover_step(
             "stripe_webhook_failure_paths",
             "Webhook delayed, duplicate and out-of-order failure paths",
-            bool(provider_contract.get("webhook_configured")) and all(_env_bool(name) for name in webhook_resilience_flags),
+            bool(provider_contract.get("webhook_configured"))
+            and all(_env_bool(name) for name in webhook_resilience_flags)
+            and bool(webhook_failure_path_evidence_id),
             owner="platform_ops",
             category="resilience",
             evidence_summary=_compact_billing_evidence(
@@ -967,9 +975,10 @@ def _build_billing_live_cutover_matrix(
                 duplicate_tested=_env_bool("JIEJING_STRIPE_WEBHOOK_DUPLICATE_TESTED"),
                 delayed_tested=_env_bool("JIEJING_STRIPE_WEBHOOK_DELAYED_TESTED"),
                 out_of_order_tested=_env_bool("JIEJING_STRIPE_WEBHOOK_OUT_OF_ORDER_TESTED"),
+                evidence_id_present=bool(webhook_failure_path_evidence_id),
             ),
             next_action="Prove webhook handling is idempotent and resilient to delayed, duplicate and out-of-order delivery before charging real merchants.",
-            environment_keys=webhook_resilience_flags,
+            environment_keys=[*webhook_resilience_flags, "JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID"],
             verification=["tools/test_jiejing_billing_provider_webhook.py", "tools/test_jiejing_billing_webhook_subscription_state.py"],
             docs=[STRIPE_GO_LIVE_DOCS[0], STRIPE_GO_LIVE_DOCS[1]],
             local_contract_proof={
@@ -977,6 +986,8 @@ def _build_billing_live_cutover_matrix(
                 "unsupported_event_cannot_grant_entitlement": True,
                 "missing_event_id_cannot_grant_entitlement": True,
                 "unmapped_provider_identity_cannot_grant_entitlement": True,
+                "evidence_id_required": True,
+                "evidence_id_present": bool(webhook_failure_path_evidence_id),
                 "raw_webhook_payload_persisted": False,
                 "verification": "tools/test_jiejing_billing_webhook_subscription_state.py",
             },
@@ -984,7 +995,7 @@ def _build_billing_live_cutover_matrix(
         _billing_live_cutover_step(
             "stripe_entitlement_quota_lifecycle",
             "Entitlement, quota and payment-failure lifecycle",
-            quota_enforcement_enabled and all(_env_bool(name) for name in billing_lifecycle_flags),
+            quota_enforcement_enabled and all(_env_bool(name) for name in billing_lifecycle_flags) and bool(portal_failure_path_evidence_id),
             owner="platform_ops",
             category="entitlement",
             evidence_summary=_compact_billing_evidence(
@@ -993,9 +1004,10 @@ def _build_billing_live_cutover_matrix(
                 cancel_tested=_env_bool("JIEJING_STRIPE_SUBSCRIPTION_CANCEL_TESTED"),
                 invoice_paid_tested=_env_bool("JIEJING_STRIPE_INVOICE_PAID_TESTED"),
                 payment_failure_tested=_env_bool("JIEJING_STRIPE_PAYMENT_FAILURE_TESTED"),
+                evidence_id_present=bool(portal_failure_path_evidence_id),
             ),
             next_action="Verify invoice paid provisioning, cancellation, payment failure, portal changes and hard-stop quota behavior before owner approval.",
-            environment_keys=["JIEJING_QUOTA_ENFORCEMENT_ENABLED", *billing_lifecycle_flags],
+            environment_keys=["JIEJING_QUOTA_ENFORCEMENT_ENABLED", *billing_lifecycle_flags, "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID"],
             verification=["/billing/usage", "tools/test_jiejing_billing_webhook_subscription_state.py", "tools/test_jiejing_billing_quota_guardrail.py"],
             docs=[STRIPE_GO_LIVE_DOCS[1], STRIPE_GO_LIVE_DOCS[2]],
             owner_approval_required=True,

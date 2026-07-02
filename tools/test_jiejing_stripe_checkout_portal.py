@@ -228,6 +228,18 @@ def main() -> int:
                 return fail(f"webhook failure-path local contract proof missing: {proof_key}={webhook_proof.get(proof_key)}")
         if webhook_proof.get("raw_webhook_payload_persisted") is not False:
             return fail(f"webhook local proof must keep raw payload out of persistence: {webhook_proof}")
+        if webhook_proof.get("evidence_id_required") is not True or webhook_proof.get("evidence_id_present") is not True:
+            return fail(f"webhook failure path must require an audit evidence id: {webhook_proof}")
+        os.environ.pop("JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID", None)
+        missing_webhook_evidence_plan = build_billing_plan(settings, repository)
+        missing_webhook_evidence_matrix = {
+            item.get("key"): item
+            for item in missing_webhook_evidence_plan.get("billing_live_cutover_matrix", [])
+            if isinstance(item, dict)
+        }
+        if (missing_webhook_evidence_matrix.get("stripe_webhook_failure_paths") or {}).get("status") != "blocked":
+            return fail("missing webhook failure-path evidence id must block live cutover")
+        os.environ["JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID"] = "stripe_webhook_failure_path_unit"
         shutdown_closure = (
             plan.get("subscription_quota_shutdown_closure")
             if isinstance(plan.get("subscription_quota_shutdown_closure"), dict)
@@ -237,6 +249,19 @@ def main() -> int:
             return fail(f"Stripe fixture should prove subscription/quota shutdown closure: {shutdown_closure}")
         if shutdown_closure.get("mode") != "live_provider_rehearsal":
             return fail(f"Stripe fixture should report live-provider rehearsal mode: {shutdown_closure}")
+        entitlement_step = matrix["stripe_entitlement_quota_lifecycle"]
+        if "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID" not in entitlement_step.get("environment_keys", []):
+            return fail(f"entitlement lifecycle must require the portal failure-path evidence id: {entitlement_step}")
+        os.environ.pop("JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID", None)
+        missing_portal_evidence_plan = build_billing_plan(settings, repository)
+        missing_portal_evidence_matrix = {
+            item.get("key"): item
+            for item in missing_portal_evidence_plan.get("billing_live_cutover_matrix", [])
+            if isinstance(item, dict)
+        }
+        if (missing_portal_evidence_matrix.get("stripe_entitlement_quota_lifecycle") or {}).get("status") != "blocked":
+            return fail("missing customer portal failure-path evidence id must block live cutover")
+        os.environ["JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID"] = "stripe_portal_failure_path_unit"
         incident_runbook = plan.get("billing_incident_runbook") if isinstance(plan.get("billing_incident_runbook"), dict) else {}
         incident_cards = {item.get("key"): item for item in incident_runbook.get("cards", []) if isinstance(item, dict)}
         expected_incidents = {
@@ -355,10 +380,12 @@ def _set_env(port: int) -> dict[str, str | None]:
         "JIEJING_STRIPE_WEBHOOK_DUPLICATE_TESTED",
         "JIEJING_STRIPE_WEBHOOK_DELAYED_TESTED",
         "JIEJING_STRIPE_WEBHOOK_OUT_OF_ORDER_TESTED",
+        "JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID",
         "JIEJING_STRIPE_CUSTOMER_PORTAL_TESTED",
         "JIEJING_STRIPE_SUBSCRIPTION_CANCEL_TESTED",
         "JIEJING_STRIPE_INVOICE_PAID_TESTED",
         "JIEJING_STRIPE_PAYMENT_FAILURE_TESTED",
+        "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID",
     ]
     previous = {key: os.environ.get(key) for key in keys}
     os.environ.update(
@@ -385,10 +412,12 @@ def _set_env(port: int) -> dict[str, str | None]:
             "JIEJING_STRIPE_WEBHOOK_DUPLICATE_TESTED": "1",
             "JIEJING_STRIPE_WEBHOOK_DELAYED_TESTED": "1",
             "JIEJING_STRIPE_WEBHOOK_OUT_OF_ORDER_TESTED": "1",
+            "JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID": "stripe_webhook_failure_path_unit",
             "JIEJING_STRIPE_CUSTOMER_PORTAL_TESTED": "1",
             "JIEJING_STRIPE_SUBSCRIPTION_CANCEL_TESTED": "1",
             "JIEJING_STRIPE_INVOICE_PAID_TESTED": "1",
             "JIEJING_STRIPE_PAYMENT_FAILURE_TESTED": "1",
+            "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID": "stripe_portal_failure_path_unit",
         }
     )
     return previous

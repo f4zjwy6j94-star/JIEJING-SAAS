@@ -1374,18 +1374,21 @@ def _build_billing_domain_cutover_runbook(
         "JIEJING_STRIPE_WEBHOOK_OUT_OF_ORDER_TESTED",
         "JIEJING_STRIPE_PAYMENT_FAILURE_TESTED",
     ]
+    webhook_failure_path_evidence_id = "JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID"
     portal_env = [
         "JIEJING_STRIPE_CUSTOMER_PORTAL_TESTED",
         "JIEJING_STRIPE_SUBSCRIPTION_CANCEL_TESTED",
         "JIEJING_STRIPE_INVOICE_PAID_TESTED",
         "JIEJING_STRIPE_PAYMENT_FAILURE_TESTED",
     ]
+    portal_failure_path_evidence_id = "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID"
     rollback_env = [
         "JIEJING_CUTOVER_ROLLBACK_VERIFIED",
         "JIEJING_SECRET_SCAN_PASSED",
         "JIEJING_READINESS_SNAPSHOT_RECORDED",
         "JIEJING_BROWSER_SMOKE_PASSED",
     ]
+    rollback_audit_packet_id = "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID"
     return [
         _runbook_step(
             "stripe_account_live_mode_contract",
@@ -1437,7 +1440,9 @@ def _build_billing_domain_cutover_runbook(
         _runbook_step(
             "stripe_live_webhook_resilience",
             "Stripe live webhook resilience",
-            bool(provider_contract.get("webhook_configured")) and all(_env_bool(name) for name in resilience_env),
+            bool(provider_contract.get("webhook_configured"))
+            and all(_env_bool(name) for name in resilience_env)
+            and _env_present(webhook_failure_path_evidence_id),
             owner="platform_ops",
             category="billing",
             next_action="Test signed production webhook handling for duplicate, delayed, out-of-order and payment-failure events before accepting paid customers.",
@@ -1447,8 +1452,9 @@ def _build_billing_domain_cutover_runbook(
                 delayed_tested=_env_bool("JIEJING_STRIPE_WEBHOOK_DELAYED_TESTED"),
                 out_of_order_tested=_env_bool("JIEJING_STRIPE_WEBHOOK_OUT_OF_ORDER_TESTED"),
                 payment_failure_tested=_env_bool("JIEJING_STRIPE_PAYMENT_FAILURE_TESTED"),
+                evidence_id_present=_env_present(webhook_failure_path_evidence_id),
             ),
-            environment_keys=resilience_env,
+            environment_keys=[*resilience_env, webhook_failure_path_evidence_id],
             verification=["tools/test_jiejing_billing_provider_webhook.py", "tools/test_jiejing_billing_webhook_subscription_state.py"],
             docs=[stripe_docs[1]],
             external_resource_required=True,
@@ -1456,7 +1462,9 @@ def _build_billing_domain_cutover_runbook(
         _runbook_step(
             "stripe_customer_portal_failure_paths",
             "Stripe Customer Portal and failure paths",
-            bool(customer_portal.get("ready")) and all(_env_bool(name) for name in portal_env),
+            bool(customer_portal.get("ready"))
+            and all(_env_bool(name) for name in portal_env)
+            and _env_present(portal_failure_path_evidence_id),
             owner="platform_ops",
             category="billing",
             next_action="Verify Portal self-service, cancellation, invoice paid provisioning and payment failure recovery without exposing payment secrets to the frontend.",
@@ -1466,8 +1474,9 @@ def _build_billing_domain_cutover_runbook(
                 cancel_tested=_env_bool("JIEJING_STRIPE_SUBSCRIPTION_CANCEL_TESTED"),
                 invoice_paid_tested=_env_bool("JIEJING_STRIPE_INVOICE_PAID_TESTED"),
                 payment_failure_tested=_env_bool("JIEJING_STRIPE_PAYMENT_FAILURE_TESTED"),
+                evidence_id_present=_env_present(portal_failure_path_evidence_id),
             ),
-            environment_keys=portal_env,
+            environment_keys=[*portal_env, portal_failure_path_evidence_id],
             verification=["/billing/customer-portal", "tools/test_jiejing_stripe_checkout_portal.py", "tools/test_jiejing_billing_webhook_subscription_state.py"],
             docs=[stripe_docs[1]],
             external_resource_required=True,
@@ -1523,7 +1532,9 @@ def _build_billing_domain_cutover_runbook(
         _runbook_step(
             "cutover_rollback_audit_packet",
             "Cutover rollback and audit packet",
-            (by_key.get("final_paid_launch_smoke_evidence") or {}).get("status") == "ready" and all(_env_bool(name) for name in rollback_env),
+            (by_key.get("final_paid_launch_smoke_evidence") or {}).get("status") == "ready"
+            and all(_env_bool(name) for name in rollback_env)
+            and _env_present(rollback_audit_packet_id),
             owner="release_manager",
             category="release",
             next_action="Record rollback plan, secret scan, readiness snapshots and browser smoke evidence before owner approval for paid public launch.",
@@ -1533,8 +1544,9 @@ def _build_billing_domain_cutover_runbook(
                 secret_scan=_env_bool("JIEJING_SECRET_SCAN_PASSED"),
                 readiness_snapshot=_env_bool("JIEJING_READINESS_SNAPSHOT_RECORDED"),
                 browser_smoke=_env_bool("JIEJING_BROWSER_SMOKE_PASSED"),
+                audit_packet_id_present=_env_present(rollback_audit_packet_id),
             ),
-            environment_keys=rollback_env,
+            environment_keys=[*rollback_env, rollback_audit_packet_id],
             verification=["tools/jiejing_secret_scan.py", "/health", "/health/deep", "/readiness/product-saas", "output/browser-smoke"],
             docs=[],
             external_resource_required=False,
@@ -1907,3 +1919,7 @@ def _action_evidence_summary(
 
 def _env_bool(name: str) -> bool:
     return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_present(name: str) -> bool:
+    return bool(os.environ.get(name, "").strip())

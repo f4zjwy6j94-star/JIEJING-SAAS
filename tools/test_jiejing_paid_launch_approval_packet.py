@@ -77,6 +77,15 @@ def main() -> int:
             return fail(f"stable domain should be ready in configured fixture: {steps['stable_domain_hardening']}")
         if steps["stripe_live_cutover"].get("status") != "ready":
             return fail(f"Stripe cutover should be ready in configured fixture: {steps['stripe_live_cutover']}")
+        external = {item.get("key"): item for item in readyish.get("external_configuration_needed", []) if isinstance(item, dict)}
+        stripe_external_keys = (external.get("stripe_live_products_prices_webhook") or {}).get("environment_keys", [])
+        if "JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID" not in stripe_external_keys:
+            return fail("approval packet must require webhook failure-path evidence id before paid launch")
+        if "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID" not in stripe_external_keys:
+            return fail("approval packet must require Customer Portal failure-path evidence id before paid launch")
+        rehearsal_external_keys = (external.get("no_charge_rehearsal_evidence_flags") or {}).get("environment_keys", [])
+        if "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID" not in rehearsal_external_keys:
+            return fail("approval packet must require rollback audit packet id before paid launch")
         if readyish.get("public_paid_launch_allowed") is not False or readyish.get("charge_now_allowed") is not False:
             return fail("approval packet must still require owner approval and never directly enable charging")
         serialized = json.dumps(readyish, ensure_ascii=False).lower()
@@ -172,15 +181,18 @@ def _set_stripe_domain_ready_env() -> dict[str, str | None]:
             "JIEJING_STRIPE_WEBHOOK_DUPLICATE_TESTED": "1",
             "JIEJING_STRIPE_WEBHOOK_DELAYED_TESTED": "1",
             "JIEJING_STRIPE_WEBHOOK_OUT_OF_ORDER_TESTED": "1",
+            "JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID": "stripe_webhook_failure_path_approval_unit",
             "JIEJING_STRIPE_CUSTOMER_PORTAL_TESTED": "1",
             "JIEJING_STRIPE_SUBSCRIPTION_CANCEL_TESTED": "1",
             "JIEJING_STRIPE_INVOICE_PAID_TESTED": "1",
             "JIEJING_STRIPE_PAYMENT_FAILURE_TESTED": "1",
+            "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID": "stripe_portal_failure_path_approval_unit",
             "JIEJING_STRIPE_SUBSCRIPTION_STATE_PERSISTENCE_TESTED": "1",
             "JIEJING_CUTOVER_ROLLBACK_VERIFIED": "1",
             "JIEJING_SECRET_SCAN_PASSED": "1",
             "JIEJING_READINESS_SNAPSHOT_RECORDED": "1",
             "JIEJING_BROWSER_SMOKE_PASSED": "1",
+            "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID": "rollback_audit_packet_approval_unit",
         }
     )
     return previous
@@ -217,15 +229,18 @@ def _keys() -> list[str]:
         "JIEJING_STRIPE_WEBHOOK_DUPLICATE_TESTED",
         "JIEJING_STRIPE_WEBHOOK_DELAYED_TESTED",
         "JIEJING_STRIPE_WEBHOOK_OUT_OF_ORDER_TESTED",
+        "JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID",
         "JIEJING_STRIPE_CUSTOMER_PORTAL_TESTED",
         "JIEJING_STRIPE_SUBSCRIPTION_CANCEL_TESTED",
         "JIEJING_STRIPE_INVOICE_PAID_TESTED",
         "JIEJING_STRIPE_PAYMENT_FAILURE_TESTED",
+        "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID",
         "JIEJING_STRIPE_SUBSCRIPTION_STATE_PERSISTENCE_TESTED",
         "JIEJING_CUTOVER_ROLLBACK_VERIFIED",
         "JIEJING_SECRET_SCAN_PASSED",
         "JIEJING_READINESS_SNAPSHOT_RECORDED",
         "JIEJING_BROWSER_SMOKE_PASSED",
+        "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID",
     ]
 
 

@@ -131,12 +131,15 @@ def _rehearsal_stages(
         "JIEJING_STRIPE_WEBHOOK_DELAYED_TESTED",
         "JIEJING_STRIPE_WEBHOOK_OUT_OF_ORDER_TESTED",
     ]
+    webhook_failure_path_evidence_id = _env_text("JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID")
+    portal_failure_path_evidence_id = _env_text("JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID")
     rollback_flags = [
         "JIEJING_CUTOVER_ROLLBACK_VERIFIED",
         "JIEJING_SECRET_SCAN_PASSED",
         "JIEJING_READINESS_SNAPSHOT_RECORDED",
         "JIEJING_BROWSER_SMOKE_PASSED",
     ]
+    rollback_audit_packet_id = _env_text("JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID")
     return [
         _stage(
             "stripe_live_provider_selected",
@@ -243,12 +246,19 @@ def _rehearsal_stages(
         _stage(
             "stripe_webhook_resilience_rehearsed",
             "Webhook duplicate, delayed and out-of-order handling is rehearsed",
-            bool(provider_contract.get("webhook_configured")) and all(_env_bool(name) for name in webhook_resilience_flags),
+            bool(provider_contract.get("webhook_configured"))
+            and all(_env_bool(name) for name in webhook_resilience_flags)
+            and bool(webhook_failure_path_evidence_id),
             category="billing",
             owner="platform_ops",
-            evidence_summary=_evidence(duplicate=_env_bool(webhook_resilience_flags[0]), delayed=_env_bool(webhook_resilience_flags[1]), out_of_order=_env_bool(webhook_resilience_flags[2])),
+            evidence_summary=_evidence(
+                duplicate=_env_bool(webhook_resilience_flags[0]),
+                delayed=_env_bool(webhook_resilience_flags[1]),
+                out_of_order=_env_bool(webhook_resilience_flags[2]),
+                evidence_id_present=bool(webhook_failure_path_evidence_id),
+            ),
             next_action="Run signed webhook tests for duplicate, delayed and out-of-order events before charging merchants.",
-            environment_keys=webhook_resilience_flags,
+            environment_keys=[*webhook_resilience_flags, "JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID"],
             docs=["https://docs.stripe.com/webhooks"],
         ),
         _stage(
@@ -257,24 +267,42 @@ def _rehearsal_stages(
             billing_ready
             and bool(quota.get("enabled"))
             and all(_env_bool(name) for name in lifecycle_flags)
+            and bool(portal_failure_path_evidence_id)
             and (int(counts.get("billing_subscriptions") or 0) > 0 or _env_bool("JIEJING_STRIPE_SUBSCRIPTION_STATE_PERSISTENCE_TESTED"))
             and (int(counts.get("billing_webhook_events") or 0) > 0 or _env_bool("JIEJING_STRIPE_SUBSCRIPTION_STATE_PERSISTENCE_TESTED")),
             category="entitlement",
             owner="platform_ops",
-            evidence_summary=_evidence(subscriptions=int(counts.get("billing_subscriptions") or 0), webhook_events=int(counts.get("billing_webhook_events") or 0), quota=bool(quota.get("enabled")), payment_failure=_env_bool("JIEJING_STRIPE_PAYMENT_FAILURE_TESTED")),
+            evidence_summary=_evidence(
+                subscriptions=int(counts.get("billing_subscriptions") or 0),
+                webhook_events=int(counts.get("billing_webhook_events") or 0),
+                quota=bool(quota.get("enabled")),
+                payment_failure=_env_bool("JIEJING_STRIPE_PAYMENT_FAILURE_TESTED"),
+                evidence_id_present=bool(portal_failure_path_evidence_id),
+            ),
             next_action="Verify active subscription provisioning, cancellation, invoice.paid, payment failure, and quota hard-stop behavior.",
-            environment_keys=["JIEJING_QUOTA_ENFORCEMENT_ENABLED", "JIEJING_STRIPE_SUBSCRIPTION_STATE_PERSISTENCE_TESTED", *lifecycle_flags],
+            environment_keys=[
+                "JIEJING_QUOTA_ENFORCEMENT_ENABLED",
+                "JIEJING_STRIPE_SUBSCRIPTION_STATE_PERSISTENCE_TESTED",
+                *lifecycle_flags,
+                "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID",
+            ],
             docs=["https://docs.stripe.com/customer-management/integrate-customer-portal"],
         ),
         _stage(
             "cutover_rollback_audit_packet_recorded",
             "Rollback, readiness, smoke and secret-scan evidence is recorded",
-            all(_env_bool(name) for name in rollback_flags),
+            all(_env_bool(name) for name in rollback_flags) and bool(rollback_audit_packet_id),
             category="release",
             owner="release_manager",
-            evidence_summary=_evidence(rollback=_env_bool(rollback_flags[0]), secret_scan=_env_bool(rollback_flags[1]), readiness=_env_bool(rollback_flags[2]), browser_smoke=_env_bool(rollback_flags[3])),
+            evidence_summary=_evidence(
+                rollback=_env_bool(rollback_flags[0]),
+                secret_scan=_env_bool(rollback_flags[1]),
+                readiness=_env_bool(rollback_flags[2]),
+                browser_smoke=_env_bool(rollback_flags[3]),
+                audit_packet_id_present=bool(rollback_audit_packet_id),
+            ),
             next_action="Record rollback plan, secret scan, readiness snapshots and browser smoke before owner approval.",
-            environment_keys=rollback_flags,
+            environment_keys=[*rollback_flags, "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID"],
             docs=["https://docs.stripe.com/get-started/checklist/go-live"],
             external_resource_required=False,
         ),
@@ -388,6 +416,10 @@ def _first_env(*names: str) -> str:
 
 def _env_bool(name: str) -> bool:
     return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_text(name: str) -> str:
+    return os.environ.get(name, "").strip()
 
 
 def _evidence(**values: Any) -> str:

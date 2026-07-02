@@ -280,6 +280,12 @@ def main() -> int:
             return fail("domain/OAuth runbook item must forbid repeating eBay OAuth")
         if runbook["stable_domain_oauth_cors_alignment"].get("triggers_ebay_oauth") is not False:
             return fail("domain/OAuth runbook item must not trigger eBay OAuth")
+        if "JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID" not in runbook["stripe_live_webhook_resilience"].get("environment_keys", []):
+            return fail("webhook resilience runbook must require a failure-path evidence id")
+        if "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID" not in runbook["stripe_customer_portal_failure_paths"].get("environment_keys", []):
+            return fail("Customer Portal failure-path runbook must require an evidence id")
+        if "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID" not in runbook["cutover_rollback_audit_packet"].get("environment_keys", []):
+            return fail("rollback runbook must require an audit packet id")
         lane_categories = {item.get("category") for item in decision.get("lanes", []) if isinstance(item, dict)}
         if lane_categories != {"billing", "domain", "reliability", "legal", "ebay", "release"}:
             return fail(f"cutover decision lanes missing: {lane_categories}")
@@ -405,6 +411,9 @@ def _keys() -> list[str]:
         "JIEJING_CLOUD_BILLING_INCIDENT_RUNBOOK_PUBLISHED",
         "JIEJING_DATABASE_ENDPOINT_INCIDENT_RUNBOOK_PUBLISHED",
         "JIEJING_TEST_DATA_GOVERNANCE_REVIEWED",
+        "JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID",
+        "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID",
+        "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID",
     ]
 
 
