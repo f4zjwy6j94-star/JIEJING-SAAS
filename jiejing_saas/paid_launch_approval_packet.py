@@ -101,6 +101,7 @@ def build_paid_launch_approval_packet(settings: SaaSSettings, repository: SaaSRe
             "/billing/plans",
             "/billing/checkout-contract",
             "/commercial/billing-domain-cutover-rehearsal",
+            "/commercial/billing-provider-evidence-register",
             "/commercial/launch-gate",
             "/commercial/paid-launch-approval-packet",
             "tools/jiejing_new_ebay_account_low_risk_check.py --checklist-only",

@@ -29,6 +29,7 @@ from .billing_checkout import build_billing_checkout_contract, create_stripe_che
 from .billing_domain_cutover_rehearsal import build_billing_domain_cutover_rehearsal
 from .billing_manual_beta import create_manual_beta_payment_order, confirm_manual_beta_payment_order, list_manual_beta_payment_orders
 from .billing_payment_options import build_mainland_payment_strategy
+from .billing_provider_evidence_register import build_billing_provider_evidence_register
 from .billing_provider_rehearsal import run_billing_provider_rehearsal
 from .billing_test_provider import apply_test_billing_event
 from .billing_webhook import handle_billing_webhook
@@ -506,6 +507,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         if path == "commercial/billing-domain-cutover-rehearsal":
             self._send_json({"billing_domain_cutover_rehearsal": build_billing_domain_cutover_rehearsal(self.settings, self.repository)})
+            return
+
+        if path == "commercial/billing-provider-evidence-register":
+            self._send_json({"billing_provider_evidence_register": build_billing_provider_evidence_register(self.settings, self.repository)})
             return
 
         if path == "billing/usage":
@@ -3711,7 +3716,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             (
                 "commercial",
                 "launch gates and paid cutover rehearsal",
-                ["GET /commercial/launch-gate", "GET /commercial/paid-launch-approval-packet"],
+                [
+                    "GET /commercial/launch-gate",
+                    "GET /commercial/billing-provider-evidence-register",
+                    "GET /commercial/paid-launch-approval-packet",
+                ],
             ),
             ("data-packets", "sanitized platform packet retrieval", ["GET /data-packets", "GET /data-packets/{packet_id}"]),
             (

@@ -109,6 +109,10 @@ async function main() {
   if (!approvalPayload.ok) {
     throw new Error(`paid launch approval packet fetch failed: ${approvalPayload.status}`);
   }
+  const providerRegisterPayload = await api("/commercial/billing-provider-evidence-register", { token: session.token });
+  if (!providerRegisterPayload.ok) {
+    throw new Error(`billing provider evidence register fetch failed: ${providerRegisterPayload.status}`);
+  }
   const ownerPacketResponse = await api("/owner/launch-control", { token: session.token });
   const launchGate = gate.json.commercial_launch_gate || {};
   const plan = launchGate.launch_action_plan || {};
@@ -122,6 +126,8 @@ async function main() {
   const edgeStages = Array.isArray(edgePreflight.stages) ? edgePreflight.stages : [];
   const approvalPacket = approvalPayload.json.paid_launch_approval_packet || {};
   const approvalSteps = Array.isArray(approvalPacket.steps) ? approvalPacket.steps : [];
+  const providerRegister = providerRegisterPayload.json.billing_provider_evidence_register || {};
+  const providerRegisterRows = Array.isArray(providerRegister.evidence_rows) ? providerRegister.evidence_rows : [];
   const appHtmlResponse = await fetch(`${base}/app.html?start=app&view=connect&smoke-source=${Date.now()}`, { cache: "no-store" });
   if (!appHtmlResponse.ok) {
     throw new Error(`app html fetch failed: ${appHtmlResponse.status}`);
@@ -360,6 +366,19 @@ async function main() {
       paid_launch_approval_triggers_real_platform_write: Boolean(approvalPacket.triggers_real_platform_write),
       paid_launch_approval_total_count: approvalSteps.length,
       paid_launch_approval_keys: approvalSteps.map((item) => item && item.key).filter(Boolean),
+      billing_provider_evidence_version: providerRegister.contract_version || "",
+      billing_provider_evidence_status: providerRegister.status || "",
+      billing_provider_evidence_ready_for_owner_review: Boolean(providerRegister.ready_for_owner_review),
+      billing_provider_evidence_public_paid_launch_allowed: Boolean(providerRegister.public_paid_launch_allowed),
+      billing_provider_evidence_charge_now_allowed: Boolean(providerRegister.charge_now_allowed),
+      billing_provider_evidence_calls_stripe_api: Boolean(providerRegister.calls_stripe_api),
+      billing_provider_evidence_creates_checkout_session: Boolean(providerRegister.creates_checkout_session),
+      billing_provider_evidence_triggers_ebay_oauth: Boolean(providerRegister.triggers_ebay_oauth),
+      billing_provider_evidence_repeat_ebay_oauth_allowed: Boolean(providerRegister.repeat_ebay_oauth_allowed),
+      billing_provider_evidence_triggers_real_platform_write: Boolean(providerRegister.triggers_real_platform_write),
+      billing_provider_evidence_frontend_gets_payment_secret: Boolean(providerRegister.frontend_gets_payment_secret),
+      billing_provider_evidence_total_count: providerRegisterRows.length,
+      billing_provider_evidence_keys: providerRegisterRows.map((item) => item && item.key).filter(Boolean),
       owner_launch_control_status: Number(ownerPacketResponse.status || 0),
       secret_exposed: Boolean(launchGate.secret_exposed),
     },
@@ -506,6 +525,32 @@ async function main() {
     if (!ui.hasApprovalPacket || !ui.hasApprovalStableDomain || !ui.hasApprovalStripeCutover || !ui.hasApprovalNoChargeRehearsal || !ui.hasApprovalNewEbaySmoke) failures.push("paid launch approval UI missing key stages");
     if (!ui.hasApprovalExternalConfig || !ui.hasApprovalNoCharge || !ui.hasApprovalNoStripeCall || !ui.hasApprovalNoOauth || !ui.hasApprovalNoWrite) failures.push("paid launch approval UI missing safety flags");
     if (ui.laneCount !== 6) failures.push(`cutover decision lane count ${ui.laneCount}`);
+  }
+  if (result.api.billing_provider_evidence_version !== "2026-07-02-live-billing-provider-evidence-register") failures.push("api billing provider evidence register contract missing");
+  if (result.api.billing_provider_evidence_status !== "blocked") failures.push(`api billing provider evidence register status ${result.api.billing_provider_evidence_status}`);
+  if (result.api.billing_provider_evidence_ready_for_owner_review !== false) failures.push("api billing provider evidence register unexpectedly ready for owner review");
+  if (result.api.billing_provider_evidence_public_paid_launch_allowed !== false) failures.push("api billing provider evidence register unexpectedly allows public paid launch");
+  if (result.api.billing_provider_evidence_charge_now_allowed !== false) failures.push("api billing provider evidence register unexpectedly allows charge");
+  if (result.api.billing_provider_evidence_calls_stripe_api !== false) failures.push("api billing provider evidence register unexpectedly calls Stripe API");
+  if (result.api.billing_provider_evidence_creates_checkout_session !== false) failures.push("api billing provider evidence register unexpectedly creates Checkout Session");
+  if (result.api.billing_provider_evidence_triggers_ebay_oauth !== false) failures.push("api billing provider evidence register unexpectedly triggers eBay OAuth");
+  if (result.api.billing_provider_evidence_repeat_ebay_oauth_allowed !== false) failures.push("api billing provider evidence register unexpectedly allows repeated eBay OAuth");
+  if (result.api.billing_provider_evidence_triggers_real_platform_write !== false) failures.push("api billing provider evidence register unexpectedly triggers platform write");
+  if (result.api.billing_provider_evidence_frontend_gets_payment_secret !== false) failures.push("api billing provider evidence register unexpectedly exposes payment secret");
+  if (result.api.billing_provider_evidence_total_count !== 10) failures.push(`api billing provider evidence row count ${result.api.billing_provider_evidence_total_count}`);
+  for (const key of [
+    "live_provider_account",
+    "stripe_live_price_catalog",
+    "stripe_subscription_checkout_contract",
+    "stripe_customer_portal_contract",
+    "stripe_signed_webhook_contract",
+    "stripe_api_webhook_version_alignment",
+    "stripe_webhook_failure_paths",
+    "stripe_entitlement_quota_lifecycle",
+    "stable_domain_billing_callbacks",
+    "cutover_rollback_audit_packet",
+  ]) {
+    if (!result.api.billing_provider_evidence_keys.includes(key)) failures.push(`api billing provider evidence register missing ${key}`);
   }
   if (ui.hasLoginOverlay) failures.push("login overlay visible during authenticated smoke");
 

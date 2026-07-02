@@ -857,6 +857,35 @@ def main() -> int:
                 return fail(f"commercial launch gate missing {required_launch_group}")
         if commercial_launch_gate.get("real_platform_writes_enabled") is not False or commercial_launch_gate.get("secret_exposed") is not False:
             return fail("commercial launch gate must not expose secrets or enable writes")
+        provider_register_status, _ = fetch_json_expect_error(f"{base_url}/commercial/billing-provider-evidence-register")
+        if provider_register_status != 401:
+            return fail("billing provider evidence register must require authentication")
+        provider_register = fetch_json(f"{base_url}/commercial/billing-provider-evidence-register", token=token).get("billing_provider_evidence_register", {})
+        if provider_register.get("contract_version") != "2026-07-02-live-billing-provider-evidence-register":
+            return fail("billing provider evidence register should expose the live provider evidence contract")
+        if provider_register.get("public_paid_launch_allowed") is not False or provider_register.get("charge_now_allowed") is not False:
+            return fail("billing provider evidence register must not directly allow paid launch or charging")
+        if provider_register.get("calls_stripe_api") is not False or provider_register.get("creates_checkout_session") is not False:
+            return fail("billing provider evidence register must stay read-only and avoid Checkout creation")
+        if provider_register.get("triggers_ebay_oauth") is not False or provider_register.get("repeat_ebay_oauth_allowed") is not False:
+            return fail("billing provider evidence register must not trigger or repeat eBay OAuth")
+        if provider_register.get("frontend_gets_payment_secret") is not False or provider_register.get("frontend_gets_provider_secret") is not False:
+            return fail("billing provider evidence register must not expose provider secrets to frontend")
+        provider_rows = {item.get("key") for item in provider_register.get("evidence_rows", []) if isinstance(item, dict)}
+        for required_provider_row in {
+            "live_provider_account",
+            "stripe_live_price_catalog",
+            "stripe_subscription_checkout_contract",
+            "stripe_customer_portal_contract",
+            "stripe_signed_webhook_contract",
+            "stripe_api_webhook_version_alignment",
+            "stripe_webhook_failure_paths",
+            "stripe_entitlement_quota_lifecycle",
+            "stable_domain_billing_callbacks",
+            "cutover_rollback_audit_packet",
+        }:
+            if required_provider_row not in provider_rows:
+                return fail(f"billing provider evidence register missing {required_provider_row}")
         model_value_rehearsal = post_json(
             f"{base_url}/stores/{store_id}/model/value-rehearsal",
             {

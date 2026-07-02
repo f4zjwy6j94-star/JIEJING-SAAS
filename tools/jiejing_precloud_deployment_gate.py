@@ -60,6 +60,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("mainland_payment_strategy", [sys.executable, "tools/test_jiejing_mainland_payment_strategy.py"]),
     ("manual_beta_payment_flow", [sys.executable, "tools/test_jiejing_manual_beta_payment_flow.py"]),
     ("billing_provider_rehearsal", [sys.executable, "tools/test_jiejing_billing_provider_rehearsal.py"]),
+    ("billing_provider_evidence_register", [sys.executable, "tools/test_jiejing_billing_provider_evidence_register.py"]),
     ("billing_provider_webhook", [sys.executable, "tools/test_jiejing_billing_provider_webhook.py"]),
     ("billing_webhook_subscription_state", [sys.executable, "tools/test_jiejing_billing_webhook_subscription_state.py"]),
     ("jiejing_owned_credential_chain", [sys.executable, "tools/jiejing_ebay_jiejing_credential_chain_smoke.py"]),

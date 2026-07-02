@@ -84,6 +84,7 @@ JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED=1
 JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID=<recorded duplicate/delayed/out-of-order webhook drill id>
 JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID=<recorded portal/cancel/invoice/payment-failure drill id>
 JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID=<recorded rollback/secret-scan/readiness/browser-smoke packet id>
+JIEJING_PAID_LAUNCH_OWNER_APPROVAL_PACKET_ID=<owner approval packet id after all evidence is attached>
 JIEJING_BILLING_PLANS_PUBLISHED=1
 JIEJING_QUOTA_ENFORCEMENT_ENABLED=1
 JIEJING_INCIDENT_RUNBOOK_PUBLISHED=1
