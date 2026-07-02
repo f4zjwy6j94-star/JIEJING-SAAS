@@ -20355,11 +20355,9 @@ function saasRealPlatformWriteDetail() {
 
 function saasMediaProviderBoundary() {
   return {
-    provider: "FAL",
-    imageModel: "openai/gpt-image-2",
-    videoModel: "fal-ai/wan-i2v",
-    textCostNote: "AI CEO 文本、Market Report、Listing Package 走商家自己的文本模型连接。",
-    mediaCostNote: "主图、详情页图、视频封面和视频任务走素材生成通道，单独计量。",
+    serviceLabel: "素材工坊",
+    textCostNote: "AI CEO 对话、市场报告和上架资料包走商家自己的 AI 连接。",
+    mediaCostNote: "主图、详情页图、视频封面和视频任务进入素材工坊，单独计量。",
   };
 }
 
@@ -20373,79 +20371,78 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
   const modelConfigured = isSaasModelConfigured();
   const activeProviderLabel = active?.provider_label || selectedProvider.label || activeProvider;
   const activeModelLabel = active?.model || state.saasModelSettings?.model || selectedProvider.default_model || "等待选择模型";
-  const mediaProvider = saasMediaProviderBoundary();
   return `
     <section class="saas-merchant-evidence-panel saas-model-provider-panel" aria-label="AI 连接">
       <div class="saas-merchant-path-head">
         <div>
           <span>AI 连接与素材生成</span>
-          <strong>${modelConfigured ? "文本模型已配置，素材生成独立入库" : "先保存商家自己的 AI 连接凭证"}</strong>
-          <p>AI CEO 对话、Market Report 和 Listing Package 走文本模型；图片、详情页图、视频封面和视频任务会进入素材工坊资产清单。文本和素材任务分开记录用量。</p>
+          <strong>${modelConfigured ? "AI 连接已可用，素材任务进入素材工坊" : "先保存商家的 AI 连接"}</strong>
+          <p>AI CEO 对话、市场报告和上架资料包使用文本 AI；图片、详情页图、视频封面和视频任务进入素材工坊，生成后先审核，再决定能不能用于 Listing。文本和素材任务分开记录用量。</p>
         </div>
       </div>
       <div class="saas-merchant-evidence-grid">
         <article class="${modelConfigured ? "is-green" : "is-amber"}">
-          <span>AI CEO 文本模型</span>
-          <strong>${modelConfigured ? escapeHtml(activeProviderLabel) : "待保存"}</strong>
-          <small>${modelConfigured ? `${escapeHtml(activeModelLabel)} / 已安全保存` : "用于对话、报告、Listing 文案和确认清单。"}</small>
+          <span>AI CEO 文本 AI</span>
+          <strong>${modelConfigured ? escapeHtml(activeProviderLabel) : "待连接"}</strong>
+          <small>${modelConfigured ? `${escapeHtml(activeModelLabel)} / 页面不显示原始连接信息` : "用于对话、报告、Listing 文案和确认清单。"}</small>
         </article>
         <article class="is-amber">
           <span>图片/视频素材</span>
           <strong>素材工坊资产</strong>
-          <small>主图、详情页图、视频封面和视频脚本生成后都回到素材工坊。</small>
+          <small>主图、详情页图、视频封面和视频脚本生成后进入素材审核。</small>
         </article>
         <article class="${liveTypes.has("market.report") ? "is-green" : "is-amber"}">
-          <span>Market Report</span>
+          <span>市场报告</span>
           <strong>${liveTypes.has("market.report") ? "已验证" : "待验证"}</strong>
-          <small>只读 eBay 店铺资料，不触碰 token。</small>
+          <small>只读取已同步的 eBay 店铺资料，不显示原始授权信息。</small>
         </article>
         <article class="${liveTypes.has("listing.package") ? "is-green" : "is-amber"}">
-          <span>Listing Package</span>
+          <span>上架资料包</span>
           <strong>${liveTypes.has("listing.package") ? "已验证" : "待验证"}</strong>
           <small>生成草稿和确认清单，不自动发布。</small>
         </article>
       </div>
       <div class="runtime-bridge-actions saas-model-live-actions">
-        <button class="primary-action" type="button" data-saas-action="run-model-value-rehearsal" ${state.saasLoading || !ctx.hasPacket || !modelConfigured ? "disabled" : ""}>生成 Market + Listing</button>
+        <button class="primary-action" type="button" data-saas-action="run-model-value-rehearsal" ${state.saasLoading || !ctx.hasPacket || !modelConfigured ? "disabled" : ""}>生成报告和上架资料</button>
         <button class="secondary-action" type="button" data-saas-action="refresh-merchant-memory" ${state.saasLoading || !ctx.store ? "disabled" : ""}>回填商家记忆</button>
       </div>
       <details class="saas-model-config-details" ${modelConfigured ? "" : "open"}>
         <summary>
-          <span>${modelConfigured ? "需要更改模型时打开" : "配置模型后会自动收起"}</span>
-          <strong>${modelConfigured ? "更改 AI 连接" : "保存商家 AI 连接"}</strong>
-          <small>${modelConfigured ? "更换模型服务、模型名、服务地址或重新保存凭证。" : "凭证保存后清空输入框，只留下可用状态。"}</small>
+          <span>${modelConfigured ? "需要调整 AI 连接时打开" : "保存后会自动收起"}</span>
+          <strong>${modelConfigured ? "调整 AI 连接" : "保存 AI 连接"}</strong>
+          <small>${modelConfigured ? "更换模型服务、模型名称、连接地址或重新保存连接信息。" : "保存后清空输入框，页面只显示可用状态。"}</small>
         </summary>
-        <div class="saas-merchant-resource-strip" aria-label="模型官网入口">
+        <div class="saas-merchant-resource-strip" aria-label="AI 服务官网入口">
           ${keyLinks
             .map(
               (provider) => `
                 <article class="${provider.supported_live_adapter ? "is-green" : "is-amber"}">
                   <span>${escapeHtml(provider.label)}</span>
-                  <strong>${provider.supported_live_adapter ? "可用" : "待接入"}</strong>
+                  <strong>${provider.supported_live_adapter ? "可用" : "即将开放"}</strong>
                   <small>${escapeHtml(provider.default_model || "")}</small>
-                  <button class="secondary-action" type="button" data-saas-action="open-model-provider-key" data-provider-url="${escapeHtml(provider.key_url || "")}">打开官网</button>
+                  <button class="secondary-action" type="button" data-saas-action="open-model-provider-key" data-provider-url="${escapeHtml(provider.key_url || "")}">打开服务商页面</button>
                 </article>
               `,
             )
             .join("")}
         </div>
         <div class="saas-sync-failure-box">
-          <strong>模型配置</strong>
+          <strong>AI 连接设置</strong>
           <div class="runtime-bridge-actions">
             <select id="saas-model-provider" aria-label="模型服务">
               ${providers
                 .map(
                   (provider) => `
                     <option value="${escapeHtml(provider.provider_key)}" ${provider.provider_key === activeProvider ? "selected" : ""}>
-                      ${escapeHtml(provider.label)}${provider.supported_live_adapter ? "" : " / 待接入"}
+                      ${escapeHtml(provider.label)}${provider.supported_live_adapter ? "" : " / 即将开放"}
                     </option>
                   `,
                 )
                 .join("")}
             </select>
-            <input id="saas-model-model" type="text" value="${escapeHtml(active?.model || selectedProvider.default_model || "")}" placeholder="模型名" autocomplete="off">
-            <input id="saas-model-base-url" type="text" value="${escapeHtml(active?.base_url || selectedProvider.default_base_url || "")}" placeholder="服务地址" autocomplete="off">
-            <input id="saas-model-api-key" type="password" value="" placeholder="粘贴凭证，保存后会清空" autocomplete="off">
+            <input id="saas-model-model" type="text" value="${escapeHtml(active?.model || selectedProvider.default_model || "")}" placeholder="模型名称" autocomplete="off">
+            <input id="saas-model-base-url" type="text" value="${escapeHtml(active?.base_url || selectedProvider.default_base_url || "")}" placeholder="连接地址（可选）" autocomplete="off">
+            <input id="saas-model-api-key" type="password" value="" placeholder="粘贴 AI 连接信息，保存后清空" autocomplete="off">
           </div>
           <div class="runtime-bridge-actions">
             <button class="primary-action" type="button" data-saas-action="save-model-api-key" ${state.saasLoading || !ctx.store ? "disabled" : ""}>保存 AI 连接</button>
@@ -20468,7 +20465,7 @@ function renderSaasMerchantMemoryPanel() {
         <div>
           <span>商家记忆反馈闭环</span>
           <strong>每次报告后让商家点“有用 / 没用 / 记住这个规则”</strong>
-          <p>同店铺、同类目、同供应商会复用这些反馈；这里保存经营规则和质量反馈，不保存 eBay token、AI 连接凭证、原始密钥或真实写入凭证。</p>
+          <p>同店铺、同类目、同供应商会复用这些反馈；这里只保存经营规则和质量反馈，不保存平台授权原文、AI 连接原文或真实写入信息。</p>
         </div>
         <em>${feedback.length} feedback</em>
       </div>
@@ -20476,7 +20473,7 @@ function renderSaasMerchantMemoryPanel() {
         <div>
           <span>最近报告</span>
           <strong>${escapeHtml(latestReport ? publicRuntimeText(latestReport.title || saasReportTypeLabel(latestReport.report_type)) : "等待报告")}</strong>
-          <p>${latestReport ? "给这次输出打反馈，后续同类目/同供应商会复用。" : "先生成 Market Report 或 Listing Package，再记录反馈。"}</p>
+          <p>${latestReport ? "给这次输出打反馈，后续同类目/同供应商会复用。" : "先生成市场报告或上架资料包，再记录反馈。"}</p>
         </div>
         <div class="runtime-bridge-actions">
           <button class="secondary-action" type="button" data-saas-action="merchant-feedback-useful" ${latestReport ? "" : "disabled"}>有用</button>
@@ -20590,16 +20587,16 @@ function renderSaasCostAndRunLedgerPanel() {
       <div class="saas-merchant-path-head">
         <div>
           <span>成本和运行账本</span>
-          <strong>文本 AI 和素材生成分账，费用口径要清楚</strong>
-          <p>AI CEO 文本、Market Report 和 Listing Package 走文本模型；图片、详情页图、视频封面和视频任务走素材生成通道。当前先展示前端可见估算账本，后续接后端用量计费后替换为真实计量。</p>
+          <strong>AI 对话和素材任务分开计量</strong>
+          <p>AI CEO 对话、市场报告和上架资料包走文本 AI；图片、详情页图、视频封面和视频任务走素材工坊。当前先展示试用期估算，正式计费前会以账单记录为准。</p>
         </div>
-        <em>${ledger.valueProofReady ? "value proof done" : "value proof pending"}</em>
+        <em>${ledger.valueProofReady ? "验证完成" : "等待验证"}</em>
       </div>
       <div class="saas-merchant-evidence-grid">
         <article class="${ledger.configured ? "is-green" : "is-amber"}">
           <span>文本 AI</span>
           <strong>${escapeHtml(ledger.providerLabel)}</strong>
-          <small>${escapeHtml(ledger.model || "模型名等待配置")}；用于 AI CEO、报告和 Listing 文案。</small>
+          <small>${escapeHtml(ledger.model || "模型名称等待配置")}；用于 AI CEO、报告和 Listing 文案。</small>
         </article>
         <article class="is-amber">
           <span>素材生成</span>
@@ -20612,14 +20609,14 @@ function renderSaasCostAndRunLedgerPanel() {
           <small>${ledger.jobCount} 个队列任务，${ledger.failedJobs} 个失败/取消。</small>
         </article>
         <article class="${ledger.tokenEstimate ? "is-green" : "is-amber"}">
-          <span>估算 token</span>
+          <span>估算文字用量</span>
           <strong>${ledger.tokenEstimate.toLocaleString()}</strong>
           <small>先按报告体量估算；不代表最终账单。</small>
         </article>
         <article class="${ledger.valueProofReady ? "is-green" : "is-amber"}">
           <span>价值验证</span>
           <strong>${ledger.valueProofReady ? "已完成" : "待完成"}</strong>
-          <small>${Array.from(ledger.liveTypes).join(" / ") || "等待 Market Report + Listing Package"}</small>
+          <small>${Array.from(ledger.liveTypes).map((type) => saasReportTypeLabel(type)).join(" / ") || "等待市场报告和上架资料包"}</small>
         </article>
       </div>
       <div class="saas-report-credibility-list">
@@ -20635,12 +20632,12 @@ function renderSaasCostAndRunLedgerPanel() {
                         <strong>${escapeHtml(publicRuntimeText(record.title || "AI CEO 报告"))}</strong>
                       </div>
                       <p>${escapeHtml(record.status || "saved")}</p>
-                      <small>估算 ${estimateSaasReportTokens(record).toLocaleString()} tokens · ${escapeHtml(record.created_at || "")}</small>
+                      <small>估算文字用量 ${estimateSaasReportTokens(record).toLocaleString()} · ${escapeHtml(record.created_at || "")}</small>
                     </article>
                   `,
                 )
                 .join("")
-            : `<article class="is-amber"><div><span>等待运行</span><strong>还没有可计量报告</strong></div><p>保存 AI 连接后跑一次 Market Report + Listing Package。</p><small>账本不会显示原始凭证。</small></article>`
+            : `<article class="is-amber"><div><span>等待运行</span><strong>还没有可计量报告</strong></div><p>保存 AI 连接后跑一次市场报告和上架资料包。</p><small>账本不会显示原始连接信息。</small></article>`
         }
       </div>
     </section>

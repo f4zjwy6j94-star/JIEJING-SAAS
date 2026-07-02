@@ -718,6 +718,25 @@ async function main() {
               "provider cutover",
             ];
             const billingForbiddenVisibleMarkers = billingForbiddenMarkers.filter((marker) => text.includes(marker));
+            const modelForbiddenMarkers = [
+              "provider",
+              "BYOK",
+              "token",
+              "tokens",
+              "secret_ref",
+              "live adapter",
+              "raw provider",
+              "FAL",
+              "API key",
+              "模型 key",
+              "Provider Hub",
+              "素材 Provider",
+              "base_url",
+              "webhook",
+              "quota",
+            ];
+            const modelForbiddenVisibleMarkers =
+              id === "model" ? modelForbiddenMarkers.filter((marker) => text.includes(marker)) : [];
             return {
               id,
               has_home_hub: Boolean(section?.querySelector(".saas-settings-home-hub")),
@@ -772,6 +791,8 @@ async function main() {
                 rawText.includes("frontend_gets_payment_secret=false"),
               has_billing_internal_customer_copy: billingForbiddenVisibleMarkers.length > 0,
               billing_internal_visible_markers: billingForbiddenVisibleMarkers,
+              has_model_internal_customer_copy: modelForbiddenVisibleMarkers.length > 0,
+              model_internal_visible_markers: modelForbiddenVisibleMarkers,
               preview: text.trim().slice(0, 180),
             };
           }, tabId),
@@ -793,6 +814,8 @@ async function main() {
       check.settings_model_has_home_hub = modelAudit.has_home_hub || false;
       check.settings_model_has_subpage_strip = modelAudit.has_subpage_strip || false;
       check.settings_model_has_model_panel = modelAudit.has_model_provider_panel || false;
+      check.settings_model_has_internal_customer_copy = modelAudit.has_model_internal_customer_copy || false;
+      check.settings_model_internal_visible_markers = modelAudit.model_internal_visible_markers || [];
       check.settings_billing_has_current_status = billingAudit.has_billing_current_panel || false;
       check.settings_billing_has_plain_summary = billingAudit.has_billing_plain_summary || false;
       check.settings_billing_has_pricing_split = billingAudit.has_billing_pricing_split || false;
@@ -870,6 +893,7 @@ async function main() {
   if (connect.settings_model_has_home_hub) failures.push("settings child page repeats overview map");
   if (connect.settings_model_has_subpage_strip) failures.push("settings child page still shows redundant intro/map");
   if (!connect.settings_model_has_model_panel) failures.push("settings child page content missing");
+  if (connect.settings_model_has_internal_customer_copy) failures.push("ordinary settings model tab exposes internal model/media copy");
   if (connect.settings_billing_has_current_status) failures.push("settings billing tab still shows duplicate current status panel");
   if (!connect.settings_billing_has_plain_summary) failures.push("settings billing plain summary missing");
   if (!connect.settings_billing_has_pricing_split) failures.push("settings billing pricing split missing");

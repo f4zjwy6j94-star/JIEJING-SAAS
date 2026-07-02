@@ -234,6 +234,9 @@ def main() -> None:
     require(app_js, "什么时候需要打开设置", "settings usage-rule section")
     require(app_js, "主理人高级区", "settings workflow compact boundary")
     require(app_js, "AI 与素材", "merchant-friendly model settings title")
+    require(app_js, "AI 连接已可用，素材任务进入素材工坊", "model settings uses merchant-facing AI connection copy")
+    require(app_js, "生成后先审核，再决定能不能用于 Listing", "model settings explains media review before listing use")
+    require(app_js, "估算文字用量", "model usage ledger avoids raw token wording")
     require(app_js, "function saasIsEnglishHeavyMerchantText", "legacy English report display guard")
     require(app_js, "旧记录的英文摘要已隐藏", "legacy English report summary hidden")
     require(app_js, "function saasWorkbenchFormatReportSectionValue", "report detail Chinese display guard")
@@ -865,6 +868,13 @@ def main() -> None:
         "Provider Hub",
         "素材 Provider",
         "等待保存 BYOK",
+        "不触碰 token",
+        "估算 token",
+        "tokens ·",
+        "value proof done",
+        "value proof pending",
+        "raw provider",
+        "FAL</strong>",
     ]
     listing_surface_forbidden = forbidden_merchant_copy[:7]
     engineering_forbidden = forbidden_merchant_copy[7:]
