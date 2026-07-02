@@ -200,6 +200,7 @@ FILES=(
   "tools/jiejing_productization_stage_gate.py"
   "tools/jiejing_secret_scan.py"
   "tools/jiejing_new_ebay_account_low_risk_check.py"
+  "tools/jiejing_billing_provider_evidence_register.py"
   "tools/jiejing_paid_launch_approval_packet.py"
   "tools/jiejing_domain_pending_purchase_preflight.py"
   "tools/jiejing_registered_domain_cutover_status.py"
@@ -396,6 +397,7 @@ python3 -m py_compile \
   tools/jiejing_productization_stage_gate.py \
   tools/jiejing_secret_scan.py \
   tools/jiejing_new_ebay_account_low_risk_check.py \
+  tools/jiejing_billing_provider_evidence_register.py \
   tools/jiejing_paid_launch_approval_packet.py \
   tools/jiejing_domain_pending_purchase_preflight.py \
   tools/jiejing_registered_domain_cutover_status.py \

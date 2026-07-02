@@ -17,6 +17,35 @@ from .repository import SaaSRepository
 from .vault_adapter import build_vault_adapter_contract
 
 
+NEW_EBAY_ACCOUNT_BOUNDARY_FLAGS = [
+    "JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN",
+    "JIEJING_NEW_EBAY_OLD_FROZEN_ACCOUNT_REJECTED",
+]
+NEW_EBAY_OAUTH_BOUNDARY_FLAGS = [
+    "JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED",
+    "JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED",
+]
+NEW_EBAY_FRESH_PRODUCT_FLAGS = [
+    "JIEJING_NEW_EBAY_FRESH_PRODUCT_DECLARED",
+    "JIEJING_NEW_EBAY_FRESH_SKU_DECLARED",
+    "JIEJING_NEW_EBAY_FRESH_ASSETS_DECLARED",
+    "JIEJING_NEW_EBAY_NO_OLD_LISTING_OR_REPORT_REUSE",
+    "JIEJING_NEW_EBAY_PRODUCT_DUPLICATE_GUARD_PASSED",
+]
+NEW_EBAY_PUBLISH_CONFIRMATION_FLAGS = [
+    "JIEJING_NEW_EBAY_PUBLISH_HEALTH_CONFIRMATION_READY",
+    "JIEJING_NEW_EBAY_PUBLISH_CONFIRMATION_APPROVED",
+]
+NEW_EBAY_REAL_PUBLISH_FLAGS = [
+    "JIEJING_NEW_EBAY_PUBLISH_CONFIRMATION_APPROVED",
+    "JIEJING_NEW_EBAY_ACCOUNT_REAL_PUBLISH_PASSED",
+]
+NEW_EBAY_CLEANUP_FLAGS = [
+    "JIEJING_NEW_EBAY_CLEANUP_CONFIRMATION_APPROVED",
+    "JIEJING_NEW_EBAY_TEST_CLEANUP_CONFIRMED",
+]
+
+
 def build_commercial_launch_gate(settings: SaaSSettings, repository: SaaSRepository) -> dict[str, Any]:
     readiness = build_product_readiness(settings, repository)
     evidence = readiness.get("product_evidence") if isinstance(readiness.get("product_evidence"), dict) else repository.product_readiness_evidence()
@@ -1063,30 +1092,32 @@ def _build_new_ebay_account_smoke_runbook(
         _new_account_smoke_step(
             "clean_new_account_declared",
             "Clean new eBay account boundary",
-            _env_bool("JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN"),
+            _env_all(NEW_EBAY_ACCOUNT_BOUNDARY_FLAGS),
             owner="founder_operator",
             category="account",
             next_action="Confirm the test uses a clean new eBay seller account and does not reuse the frozen old account, old listing, old SKU, old images, old report or old OAuth attempt.",
             evidence_summary=_compact_drill_evidence(
                 clean_account_confirmed=_env_bool("JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN"),
+                old_frozen_account_rejected=_env_bool("JIEJING_NEW_EBAY_OLD_FROZEN_ACCOUNT_REJECTED"),
                 old_frozen_account_reuse_allowed=False,
                 old_demo_assets_allowed=False,
             ),
-            verification=["docs/JIEJING_NEW_EBAY_ACCOUNT_LOW_RISK_RUNBOOK_20260617.md", "operator audit note"],
+            verification=["docs/JIEJING_NEW_EBAY_ACCOUNT_LOW_RISK_RUNBOOK_20260617.md", "operator audit note", *NEW_EBAY_ACCOUNT_BOUNDARY_FLAGS],
         ),
         _new_account_smoke_step(
             "new_account_oauth_authorization_gate",
             "New-account OAuth authorization gate",
-            _env_bool("JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED"),
+            _env_all(NEW_EBAY_OAUTH_BOUNDARY_FLAGS),
             owner="backend_secret_boundary",
             category="oauth",
             next_action="Only after the owner explicitly starts the clean-account test, run OAuth through the SaaS backend and store refresh capability behind Vault/KMS secret_ref.",
             evidence_summary=_compact_drill_evidence(
+                oauth_operator_approved=_env_bool("JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED"),
                 oauth_completed=_env_bool("JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED"),
                 repeat_oauth_allowed=False,
                 raw_token_visible=False,
             ),
-            verification=["/stores/{store_id}/ebay-oauth/start", "audit log", "Vault/KMS secret_ref metadata"],
+            verification=["/stores/{store_id}/ebay-oauth/start", "audit log", "Vault/KMS secret_ref metadata", *NEW_EBAY_OAUTH_BOUNDARY_FLAGS],
             triggers_ebay_oauth=False,
             repeat_oauth_allowed=False,
         ),
@@ -1107,60 +1138,68 @@ def _build_new_ebay_account_smoke_runbook(
         _new_account_smoke_step(
             "new_product_duplicate_guard",
             "New product duplicate guard",
-            _env_bool("JIEJING_NEW_EBAY_PRODUCT_DUPLICATE_GUARD_PASSED"),
+            _env_all(NEW_EBAY_FRESH_PRODUCT_FLAGS),
             owner="publishing_safety",
             category="product",
             next_action="Use only a fresh product, fresh SKU, fresh images and fresh report; reject any match against old demo listing IDs, image hashes, SKUs or report IDs.",
             evidence_summary=_compact_drill_evidence(
+                fresh_product_declared=_env_bool("JIEJING_NEW_EBAY_FRESH_PRODUCT_DECLARED"),
+                fresh_sku_declared=_env_bool("JIEJING_NEW_EBAY_FRESH_SKU_DECLARED"),
+                fresh_assets_declared=_env_bool("JIEJING_NEW_EBAY_FRESH_ASSETS_DECLARED"),
+                no_old_listing_or_report_reuse=_env_bool("JIEJING_NEW_EBAY_NO_OLD_LISTING_OR_REPORT_REUSE"),
                 duplicate_guard_passed=_env_bool("JIEJING_NEW_EBAY_PRODUCT_DUPLICATE_GUARD_PASSED"),
                 old_sku_allowed=False,
                 old_image_allowed=False,
             ),
-            verification=["publish health report", "source record", "image/SKU/report duplicate check"],
+            verification=["publish health report", "source record", "image/SKU/report duplicate check", *NEW_EBAY_FRESH_PRODUCT_FLAGS],
         ),
         _new_account_smoke_step(
             "publish_health_confirmation_gate",
             "Publish health report and confirmation gate",
-            publish_safety_ready,
+            publish_safety_ready and _env_all(NEW_EBAY_PUBLISH_CONFIRMATION_FLAGS),
             owner="publishing_safety",
             category="publish_health",
             next_action="Generate the red/yellow/green publish report; red blocks publish, yellow requires review, and real publish must enter confirmation center.",
             evidence_summary=_compact_drill_evidence(
                 publish_safety_ready=publish_safety_ready,
+                publish_health_confirmation_ready=_env_bool("JIEJING_NEW_EBAY_PUBLISH_HEALTH_CONFIRMATION_READY"),
+                publish_confirmation_approved=_env_bool("JIEJING_NEW_EBAY_PUBLISH_CONFIRMATION_APPROVED"),
                 confirmation_count=int(counts.get("confirmations") or 0),
                 red_items_block_publish=True,
             ),
-            verification=["/stores/{store_id}/publish-confirmation", "/confirmations", "/confirmations/{id}/preflight"],
+            verification=["/stores/{store_id}/publish-confirmation", "/confirmations", "/confirmations/{id}/preflight", *NEW_EBAY_PUBLISH_CONFIRMATION_FLAGS],
             confirmation_center_required=True,
         ),
         _new_account_smoke_step(
             "controlled_real_publish_probe",
             "Controlled real publish probe",
-            _env_bool("JIEJING_NEW_EBAY_ACCOUNT_REAL_PUBLISH_PASSED"),
+            _env_all(NEW_EBAY_REAL_PUBLISH_FLAGS),
             owner="founder_operator",
             category="real_publish",
             next_action="After confirmation approval, execute one low-risk real publish, then record listing ID, offer ID, SKU, platform result and audit evidence.",
             evidence_summary=_compact_drill_evidence(
+                publish_confirmation_approved=_env_bool("JIEJING_NEW_EBAY_PUBLISH_CONFIRMATION_APPROVED"),
                 real_publish_passed=_env_bool("JIEJING_NEW_EBAY_ACCOUNT_REAL_PUBLISH_PASSED"),
                 platform_write_confirmation_gated=True,
             ),
-            verification=["/confirmations/{id}/decision", "/confirmations/{id}/execute", "/execution-results"],
+            verification=["/confirmations/{id}/decision", "/confirmations/{id}/execute", "/execution-results", *NEW_EBAY_REAL_PUBLISH_FLAGS],
             confirmation_center_required=True,
             real_platform_write_step=True,
         ),
         _new_account_smoke_step(
             "post_publish_cockpit_cleanup_gate",
             "Post-publish cockpit and test cleanup gate",
-            post_publish_ready and _env_bool("JIEJING_NEW_EBAY_TEST_CLEANUP_CONFIRMED"),
+            post_publish_ready and _env_all(NEW_EBAY_CLEANUP_FLAGS),
             owner="release_manager",
             category="post_publish",
             next_action="Run 1h/24h/7d cockpit checks and create a confirmation-gated cleanup plan for any live test listing; do not silently end or delete live eBay state.",
             evidence_summary=_compact_drill_evidence(
                 post_publish_ready=post_publish_ready,
+                cleanup_confirmation_approved=_env_bool("JIEJING_NEW_EBAY_CLEANUP_CONFIRMATION_APPROVED"),
                 cleanup_confirmed=_env_bool("JIEJING_NEW_EBAY_TEST_CLEANUP_CONFIRMED"),
                 execution_results=int(counts.get("execution_results") or 0),
             ),
-            verification=["post-publish cockpit", "/confirmations/{id}/publish-cleanup-plan", "/execution-results"],
+            verification=["post-publish cockpit", "/confirmations/{id}/publish-cleanup-plan", "/execution-results", *NEW_EBAY_CLEANUP_FLAGS],
             confirmation_center_required=True,
             real_platform_write_step=True,
         ),
@@ -1919,6 +1958,10 @@ def _action_evidence_summary(
 
 def _env_bool(name: str) -> bool:
     return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_all(names: list[str]) -> bool:
+    return all(_env_bool(name) for name in names)
 
 
 def _env_present(name: str) -> bool:

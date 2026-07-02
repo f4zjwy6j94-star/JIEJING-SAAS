@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -88,6 +89,36 @@ def main() -> int:
         for forbidden in ("sk_live_unit_secret", "whsec_live_unit_secret", "authorization: bearer", "refresh_token=", "access_token=", "client_secret="):
             if forbidden in serialized:
                 return fail(f"evidence register leaked forbidden marker: {forbidden}")
+        cli_output = OUT / "cli" / "billing-provider-evidence-register.json"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "tools" / "jiejing_billing_provider_evidence_register.py"),
+                "--local-db",
+                str(OUT / "cli-register.sqlite"),
+                "--output",
+                str(cli_output),
+            ],
+            cwd=str(ROOT),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        if completed.returncode != 0:
+            return fail(f"billing provider evidence register CLI failed: {completed.stderr[-300:] or completed.stdout[-300:]}")
+        cli_payload = json.loads(cli_output.read_text(encoding="utf-8"))
+        cli_register = cli_payload.get("billing_provider_evidence_register") if isinstance(cli_payload, dict) else {}
+        if cli_register.get("contract_version") != "2026-07-02-live-billing-provider-evidence-register":
+            return fail("billing provider evidence register CLI must emit the register contract")
+        if cli_register.get("charge_now_allowed") is not False or cli_register.get("calls_stripe_api") is not False:
+            return fail("billing provider evidence register CLI must remain no-charge and read-only")
+        cli_serialized = json.dumps(cli_payload, ensure_ascii=False).lower()
+        for forbidden in ("sk_live_unit_secret", "whsec_live_unit_secret", "authorization: bearer", "refresh_token=", "access_token=", "client_secret="):
+            if forbidden in cli_serialized:
+                return fail(f"evidence register CLI leaked forbidden marker: {forbidden}")
 
         os.environ.pop("JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID", None)
         missing_webhook = _build("missing-webhook-evidence.sqlite")

@@ -207,9 +207,21 @@ def main() -> int:
         if "42.194.158.47" in active_text or "mentioned-shake-inter-critical.trycloudflare.com" in active_text:
             return fail(f"active deploy config still points at retired Guangzhou staging route: {relative_path}")
 
+    compose_public = (ROOT / "deploy/docker-compose.public-staging.yml").read_text(encoding="utf-8")
     compose_https = (ROOT / "deploy/docker-compose.public-https-staging.yml").read_text(encoding="utf-8")
     deploy_script = (ROOT / "tools/jiejing_deploy_frontend_staging_with_key.ps1").read_text(encoding="utf-8")
     prelaunch_runbook = (ROOT / "docs/JIEJING_PRELAUNCH_INTERNAL_HARDENING_RUNBOOK_20260620.md").read_text(encoding="utf-8")
+    for compose_name, compose_text in [
+        ("docker-compose.public-staging.yml", compose_public),
+        ("docker-compose.public-https-staging.yml", compose_https),
+    ]:
+        for marker in [
+            'JIEJING_ENABLE_REAL_PLATFORM_WRITES: "false"',
+            'JIEJING_EBAY_WRITE_LIVE: "false"',
+            'JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "disabled_public_staging"',
+        ]:
+            if marker not in compose_text:
+                return fail(f"public staging compose must override live write env from private env file: {compose_name} missing {marker}")
     if "../privacy.html:/usr/share/nginx/html/privacy.html:ro" not in compose_https:
         return fail("public HTTPS staging frontend must serve privacy.html for eBay OAuth developer configuration")
     for mounted_page in [

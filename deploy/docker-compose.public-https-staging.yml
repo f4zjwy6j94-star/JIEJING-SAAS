@@ -15,6 +15,9 @@ services:
       - ../../private/jiejing-saas.staging-oauth.env
       - ../../private/postgres-localqueue.env
     environment:
+      JIEJING_ENABLE_REAL_PLATFORM_WRITES: "false"
+      JIEJING_EBAY_WRITE_LIVE: "false"
+      JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "disabled_public_staging"
       JIEJING_ENABLE_DEMO_SESSION_BOOTSTRAP: "false"
       JIEJING_ALLOW_HERMES_MODEL_FALLBACK: "false"
       JIEJING_SELECTED_DOMAIN: "jiejing.shop"
@@ -74,6 +77,9 @@ services:
       - ../../private/jiejing-saas.staging-oauth.env
       - ../../private/postgres-localqueue.env
     environment:
+      JIEJING_ENABLE_REAL_PLATFORM_WRITES: "false"
+      JIEJING_EBAY_WRITE_LIVE: "false"
+      JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "disabled_public_staging"
       JIEJING_ENABLE_DEMO_SESSION_BOOTSTRAP: "false"
       JIEJING_ALLOW_HERMES_MODEL_FALLBACK: "false"
       JIEJING_SELECTED_DOMAIN: "jiejing.shop"

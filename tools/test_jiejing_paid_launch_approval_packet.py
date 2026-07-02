@@ -86,6 +86,25 @@ def main() -> int:
         rehearsal_external_keys = (external.get("no_charge_rehearsal_evidence_flags") or {}).get("environment_keys", [])
         if "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID" not in rehearsal_external_keys:
             return fail("approval packet must require rollback audit packet id before paid launch")
+        new_account_keys = set((external.get("clean_new_ebay_account_and_fresh_product") or {}).get("environment_keys", []))
+        for required_key in {
+            "JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN",
+            "JIEJING_NEW_EBAY_OLD_FROZEN_ACCOUNT_REJECTED",
+            "JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED",
+            "JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED",
+            "JIEJING_NEW_EBAY_FRESH_PRODUCT_DECLARED",
+            "JIEJING_NEW_EBAY_FRESH_SKU_DECLARED",
+            "JIEJING_NEW_EBAY_FRESH_ASSETS_DECLARED",
+            "JIEJING_NEW_EBAY_NO_OLD_LISTING_OR_REPORT_REUSE",
+            "JIEJING_NEW_EBAY_PRODUCT_DUPLICATE_GUARD_PASSED",
+            "JIEJING_NEW_EBAY_PUBLISH_HEALTH_CONFIRMATION_READY",
+            "JIEJING_NEW_EBAY_PUBLISH_CONFIRMATION_APPROVED",
+            "JIEJING_NEW_EBAY_ACCOUNT_REAL_PUBLISH_PASSED",
+            "JIEJING_NEW_EBAY_CLEANUP_CONFIRMATION_APPROVED",
+            "JIEJING_NEW_EBAY_TEST_CLEANUP_CONFIRMED",
+        }:
+            if required_key not in new_account_keys:
+                return fail(f"approval packet must require new-account evidence key: {required_key}")
         if readyish.get("public_paid_launch_allowed") is not False or readyish.get("charge_now_allowed") is not False:
             return fail("approval packet must still require owner approval and never directly enable charging")
         serialized = json.dumps(readyish, ensure_ascii=False).lower()

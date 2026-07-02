@@ -9,6 +9,7 @@ This runbook is for the next clean eBay account test. It must not reuse the froz
 - Do not publish when account health is `unknown`, `restricted`, `suspended`, `payout_hold`, or `quota_limited`.
 - Do not execute real publish, price change, inventory change, refund, ad spend, policy edit, or sensitive buyer promise outside confirmation center.
 - Do not write passwords, eBay refresh tokens, model keys, Stripe keys, or provider tokens into files.
+- Do not mark the smoke ready with one broad flag. Each account, OAuth, product, publish and cleanup boundary needs its own audit flag.
 
 ## Low-Risk Sequence
 
@@ -45,6 +46,32 @@ This runbook is for the next clean eBay account test. It must not reuse the froz
 - eBay platform result
 - audit timeline
 - cleanup confirmation and result
+
+## Evidence Flags
+
+The operator may only mark a phase ready when all flags in that phase have audit evidence. These flags are booleans or evidence IDs in backend env/Vault/audit metadata; they are not secrets.
+
+- Account boundary:
+  - `JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN`
+  - `JIEJING_NEW_EBAY_OLD_FROZEN_ACCOUNT_REJECTED`
+- OAuth boundary:
+  - `JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED`
+  - `JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED`
+- Fresh product boundary:
+  - `JIEJING_NEW_EBAY_FRESH_PRODUCT_DECLARED`
+  - `JIEJING_NEW_EBAY_FRESH_SKU_DECLARED`
+  - `JIEJING_NEW_EBAY_FRESH_ASSETS_DECLARED`
+  - `JIEJING_NEW_EBAY_NO_OLD_LISTING_OR_REPORT_REUSE`
+  - `JIEJING_NEW_EBAY_PRODUCT_DUPLICATE_GUARD_PASSED`
+- Publish confirmation:
+  - `JIEJING_NEW_EBAY_PUBLISH_HEALTH_CONFIRMATION_READY`
+  - `JIEJING_NEW_EBAY_PUBLISH_CONFIRMATION_APPROVED`
+- Controlled real publish:
+  - `JIEJING_NEW_EBAY_PUBLISH_CONFIRMATION_APPROVED`
+  - `JIEJING_NEW_EBAY_ACCOUNT_REAL_PUBLISH_PASSED`
+- Cleanup confirmation:
+  - `JIEJING_NEW_EBAY_CLEANUP_CONFIRMATION_APPROVED`
+  - `JIEJING_NEW_EBAY_TEST_CLEANUP_CONFIRMED`
 
 ## Automation Contract Keys
 

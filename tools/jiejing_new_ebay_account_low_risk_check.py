@@ -19,6 +19,33 @@ from urllib.request import Request, urlopen
 PUBLIC_ENDPOINTS = ["/health", "/readiness/product-saas"]
 AUTH_ENDPOINTS = ["/stores", "/queue/health", "/billing/usage"]
 RUNBOOK_CONTRACT_VERSION = "2026-06-18-new-ebay-account-low-risk-smoke"
+ACCOUNT_BOUNDARY_FLAGS = [
+    "JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN",
+    "JIEJING_NEW_EBAY_OLD_FROZEN_ACCOUNT_REJECTED",
+]
+OAUTH_BOUNDARY_FLAGS = [
+    "JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED",
+    "JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED",
+]
+FRESH_PRODUCT_FLAGS = [
+    "JIEJING_NEW_EBAY_FRESH_PRODUCT_DECLARED",
+    "JIEJING_NEW_EBAY_FRESH_SKU_DECLARED",
+    "JIEJING_NEW_EBAY_FRESH_ASSETS_DECLARED",
+    "JIEJING_NEW_EBAY_NO_OLD_LISTING_OR_REPORT_REUSE",
+    "JIEJING_NEW_EBAY_PRODUCT_DUPLICATE_GUARD_PASSED",
+]
+PUBLISH_CONFIRMATION_FLAGS = [
+    "JIEJING_NEW_EBAY_PUBLISH_HEALTH_CONFIRMATION_READY",
+    "JIEJING_NEW_EBAY_PUBLISH_CONFIRMATION_APPROVED",
+]
+REAL_PUBLISH_FLAGS = [
+    "JIEJING_NEW_EBAY_PUBLISH_CONFIRMATION_APPROVED",
+    "JIEJING_NEW_EBAY_ACCOUNT_REAL_PUBLISH_PASSED",
+]
+CLEANUP_FLAGS = [
+    "JIEJING_NEW_EBAY_CLEANUP_CONFIRMATION_APPROVED",
+    "JIEJING_NEW_EBAY_TEST_CLEANUP_CONFIRMED",
+]
 RUNBOOK_PHASES = [
     {
         "key": "public_preflight_ready",
@@ -32,7 +59,7 @@ RUNBOOK_PHASES = [
         "key": "clean_new_account_declared",
         "title": "Clean new eBay account boundary",
         "category": "account",
-        "required_evidence": ["operator clean-account declaration"],
+        "required_evidence": ["operator clean-account declaration", "old frozen account rejected"],
         "confirmation_center_required": False,
         "real_platform_write_step": False,
     },
@@ -40,7 +67,7 @@ RUNBOOK_PHASES = [
         "key": "new_account_oauth_authorization_gate",
         "title": "New-account OAuth authorization gate",
         "category": "oauth",
-        "required_evidence": ["backend OAuth audit entry", "Vault/KMS secret_ref metadata"],
+        "required_evidence": ["owner approval to start new-account OAuth", "backend OAuth audit entry", "Vault/KMS secret_ref metadata"],
         "confirmation_center_required": False,
         "real_platform_write_step": False,
     },
@@ -56,7 +83,7 @@ RUNBOOK_PHASES = [
         "key": "new_product_duplicate_guard",
         "title": "New product duplicate guard",
         "category": "product",
-        "required_evidence": ["fresh product", "fresh SKU", "fresh images", "duplicate guard proof"],
+        "required_evidence": ["fresh product", "fresh SKU", "fresh images", "no old listing/report reuse", "duplicate guard proof"],
         "confirmation_center_required": False,
         "real_platform_write_step": False,
     },
@@ -64,7 +91,7 @@ RUNBOOK_PHASES = [
         "key": "publish_health_confirmation_gate",
         "title": "Publish health report and confirmation gate",
         "category": "publish_health",
-        "required_evidence": ["red/yellow/green publish health report", "confirmation center preflight"],
+        "required_evidence": ["red/yellow/green publish health report", "confirmation center preflight", "owner confirmation approval"],
         "confirmation_center_required": True,
         "real_platform_write_step": False,
     },
@@ -72,7 +99,7 @@ RUNBOOK_PHASES = [
         "key": "controlled_real_publish_probe",
         "title": "Controlled real publish probe",
         "category": "real_publish",
-        "required_evidence": ["approved confirmation", "listing ID", "offer ID", "audit evidence"],
+        "required_evidence": ["approved confirmation", "listing ID", "offer ID", "fresh SKU", "audit evidence"],
         "confirmation_center_required": True,
         "real_platform_write_step": True,
     },
@@ -80,7 +107,7 @@ RUNBOOK_PHASES = [
         "key": "post_publish_cockpit_cleanup_gate",
         "title": "Post-publish cockpit and test cleanup gate",
         "category": "post_publish",
-        "required_evidence": ["1h/24h/7d cockpit", "cleanup confirmation", "execution result"],
+        "required_evidence": ["1h/24h/7d cockpit", "cleanup confirmation approval", "execution result"],
         "confirmation_center_required": True,
         "real_platform_write_step": True,
     },
@@ -232,9 +259,19 @@ def _checklist() -> dict:
         "never": [
             "reuse old frozen account",
             "reuse old listing/SKU/image/report",
+            "mark OAuth ready without owner approval for the clean new account",
+            "mark duplicate guard ready without fresh product/SKU/assets declarations",
             "bypass confirmation center",
             "print or persist tokens",
         ],
+        "required_operator_flags": {
+            "account_boundary": ACCOUNT_BOUNDARY_FLAGS,
+            "oauth_boundary": OAUTH_BOUNDARY_FLAGS,
+            "fresh_product_boundary": FRESH_PRODUCT_FLAGS,
+            "publish_confirmation": PUBLISH_CONFIRMATION_FLAGS,
+            "controlled_real_publish": REAL_PUBLISH_FLAGS,
+            "cleanup_confirmation": CLEANUP_FLAGS,
+        },
         "secret_exposed": False,
     }
 
@@ -265,16 +302,16 @@ def _phase_statuses(*, result: dict, readiness: dict, token_present: bool, store
             and _readiness_item(readiness, "queue_runtime_health").get("status") == "ready"
             and _readiness_item(readiness, "worker_runtime_health").get("status") == "ready"
         ),
-        "clean_new_account_declared": _env_bool("JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN"),
-        "new_account_oauth_authorization_gate": _env_bool("JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED"),
+        "clean_new_account_declared": _env_all(ACCOUNT_BOUNDARY_FLAGS),
+        "new_account_oauth_authorization_gate": _env_all(OAUTH_BOUNDARY_FLAGS),
         "official_packet_account_health_snapshot": official_packet_ready and account_health_ready,
-        "new_product_duplicate_guard": _env_bool("JIEJING_NEW_EBAY_PRODUCT_DUPLICATE_GUARD_PASSED"),
+        "new_product_duplicate_guard": _env_all(FRESH_PRODUCT_FLAGS),
         "publish_health_confirmation_gate": _readiness_item(readiness, "publish_safety_system").get("status") == "ready"
-        or _env_bool("JIEJING_NEW_EBAY_PUBLISH_HEALTH_CONFIRMATION_READY"),
-        "controlled_real_publish_probe": _env_bool("JIEJING_NEW_EBAY_ACCOUNT_REAL_PUBLISH_PASSED"),
+        and _env_all(PUBLISH_CONFIRMATION_FLAGS),
+        "controlled_real_publish_probe": _env_all(REAL_PUBLISH_FLAGS),
         "post_publish_cockpit_cleanup_gate": (
             _readiness_item(readiness, "post_publish_cockpit").get("status") == "ready"
-            and _env_bool("JIEJING_NEW_EBAY_TEST_CLEANUP_CONFIRMED")
+            and _env_all(CLEANUP_FLAGS)
         ),
     }
     diagnostics = {
@@ -283,23 +320,23 @@ def _phase_statuses(*, result: dict, readiness: dict, token_present: bool, store
             "beta_ready": readiness.get("beta_ready") is True,
             "blocker_count": int(readiness.get("blocker_count") or 0),
         },
-        "clean_new_account_declared": {"env_flag": "JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN"},
-        "new_account_oauth_authorization_gate": {"env_flag": "JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED"},
+        "clean_new_account_declared": {"required_flags": _flag_diagnostics(ACCOUNT_BOUNDARY_FLAGS)},
+        "new_account_oauth_authorization_gate": {"required_flags": _flag_diagnostics(OAUTH_BOUNDARY_FLAGS)},
         "official_packet_account_health_snapshot": {
             "official_packet_ready": official_packet_ready,
             "token_present": token_present,
             "store_id_present": store_id_present,
             "account_health_ready": account_health_ready,
         },
-        "new_product_duplicate_guard": {"env_flag": "JIEJING_NEW_EBAY_PRODUCT_DUPLICATE_GUARD_PASSED"},
+        "new_product_duplicate_guard": {"required_flags": _flag_diagnostics(FRESH_PRODUCT_FLAGS)},
         "publish_health_confirmation_gate": {
             "readiness_status": _readiness_item(readiness, "publish_safety_system").get("status") or "missing",
-            "env_flag": "JIEJING_NEW_EBAY_PUBLISH_HEALTH_CONFIRMATION_READY",
+            "required_flags": _flag_diagnostics(PUBLISH_CONFIRMATION_FLAGS),
         },
-        "controlled_real_publish_probe": {"env_flag": "JIEJING_NEW_EBAY_ACCOUNT_REAL_PUBLISH_PASSED"},
+        "controlled_real_publish_probe": {"required_flags": _flag_diagnostics(REAL_PUBLISH_FLAGS)},
         "post_publish_cockpit_cleanup_gate": {
             "readiness_status": _readiness_item(readiness, "post_publish_cockpit").get("status") or "missing",
-            "env_flag": "JIEJING_NEW_EBAY_TEST_CLEANUP_CONFIRMED",
+            "required_flags": _flag_diagnostics(CLEANUP_FLAGS),
         },
     }
     phases = []
@@ -361,6 +398,14 @@ def _official_packet_ready(readiness: dict) -> bool:
 
 def _env_bool(name: str) -> bool:
     return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_all(names: list[str]) -> bool:
+    return all(_env_bool(name) for name in names)
+
+
+def _flag_diagnostics(names: list[str]) -> list[dict[str, object]]:
+    return [{"name": name, "present": _env_bool(name), "secret_exposed": False} for name in names]
 
 
 if __name__ == "__main__":

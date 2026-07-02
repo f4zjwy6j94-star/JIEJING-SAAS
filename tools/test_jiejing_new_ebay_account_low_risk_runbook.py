@@ -29,6 +29,14 @@ def main() -> int:
         "Confirmation center",
         "Post-publish cockpit",
         "Test cleanup",
+        "JIEJING_NEW_EBAY_OLD_FROZEN_ACCOUNT_REJECTED",
+        "JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED",
+        "JIEJING_NEW_EBAY_FRESH_PRODUCT_DECLARED",
+        "JIEJING_NEW_EBAY_FRESH_SKU_DECLARED",
+        "JIEJING_NEW_EBAY_FRESH_ASSETS_DECLARED",
+        "JIEJING_NEW_EBAY_NO_OLD_LISTING_OR_REPORT_REUSE",
+        "JIEJING_NEW_EBAY_PUBLISH_CONFIRMATION_APPROVED",
+        "JIEJING_NEW_EBAY_CLEANUP_CONFIRMATION_APPROVED",
     ]:
         if marker not in text:
             return fail(f"runbook missing marker: {marker}")
@@ -76,6 +84,25 @@ def main() -> int:
         return fail(f"checklist phases missing or unexpected: {sorted(phases)}")
     if payload.get("phase_count") != 8:
         return fail(f"checklist phase_count should be 8: {payload.get('phase_count')}")
+    required_flags = payload.get("required_operator_flags") if isinstance(payload.get("required_operator_flags"), dict) else {}
+    expected_required_flags = {
+        "account_boundary": {"JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN", "JIEJING_NEW_EBAY_OLD_FROZEN_ACCOUNT_REJECTED"},
+        "oauth_boundary": {"JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED", "JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED"},
+        "fresh_product_boundary": {
+            "JIEJING_NEW_EBAY_FRESH_PRODUCT_DECLARED",
+            "JIEJING_NEW_EBAY_FRESH_SKU_DECLARED",
+            "JIEJING_NEW_EBAY_FRESH_ASSETS_DECLARED",
+            "JIEJING_NEW_EBAY_NO_OLD_LISTING_OR_REPORT_REUSE",
+            "JIEJING_NEW_EBAY_PRODUCT_DUPLICATE_GUARD_PASSED",
+        },
+        "publish_confirmation": {"JIEJING_NEW_EBAY_PUBLISH_HEALTH_CONFIRMATION_READY", "JIEJING_NEW_EBAY_PUBLISH_CONFIRMATION_APPROVED"},
+        "controlled_real_publish": {"JIEJING_NEW_EBAY_PUBLISH_CONFIRMATION_APPROVED", "JIEJING_NEW_EBAY_ACCOUNT_REAL_PUBLISH_PASSED"},
+        "cleanup_confirmation": {"JIEJING_NEW_EBAY_CLEANUP_CONFIRMATION_APPROVED", "JIEJING_NEW_EBAY_TEST_CLEANUP_CONFIRMED"},
+    }
+    for key, expected in expected_required_flags.items():
+        actual = set(required_flags.get(key) or [])
+        if actual != expected:
+            return fail(f"checklist required flags mismatch for {key}: {sorted(actual)}")
     for key, phase in phases.items():
         if phase.get("secret_exposed") is not False:
             return fail(f"phase must not expose secrets: {key}")
@@ -89,6 +116,11 @@ def main() -> int:
         return fail("OAuth phase must not start OAuth from checklist/checker")
     if phases["new_account_oauth_authorization_gate"].get("repeat_oauth_allowed") is not False:
         return fail("OAuth phase must forbid silent OAuth repeat")
+    if "owner approval to start new-account OAuth" not in phases["new_account_oauth_authorization_gate"].get("required_evidence", []):
+        return fail("OAuth phase must require owner approval before any new-account OAuth")
+    for evidence_marker in ["fresh product", "fresh SKU", "fresh images", "no old listing/report reuse", "duplicate guard proof"]:
+        if evidence_marker not in phases["new_product_duplicate_guard"].get("required_evidence", []):
+            return fail(f"product duplicate guard must require {evidence_marker}")
     if phases["controlled_real_publish_probe"].get("confirmation_center_required") is not True:
         return fail("real publish probe must require confirmation center")
     if phases["post_publish_cockpit_cleanup_gate"].get("confirmation_center_required") is not True:

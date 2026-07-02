@@ -135,6 +135,7 @@ def main() -> int:
         "tools/test_jiejing_agents_md_guardrails.py",
         "tools/test_jiejing_github_actions_deploy_guardrails.py",
         "tools/test_jiejing_github_runner_doctor_guardrails.py",
+        "tools/jiejing_billing_provider_evidence_register.py",
         "tools/jiejing_paid_launch_approval_packet.py",
         "tools/jiejing_domain_pending_purchase_preflight.py",
         "tools/jiejing_edge_cutover_preflight.py",
