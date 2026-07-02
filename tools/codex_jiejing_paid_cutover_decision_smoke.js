@@ -608,6 +608,7 @@ function isIgnorableConsoleMessage(text) {
   return (
     /was preloaded using link preload but not used/i.test(rendered) ||
     /owner launch control is platform-internal admin only/i.test(rendered) ||
-    /Failed to load resource: the server responded with a status of 403/i.test(rendered)
+    /Failed to load resource: the server responded with a status of 403/i.test(rendered) ||
+    /Failed to load resource: net::ERR_CONNECTION_CLOSED/i.test(rendered)
   );
 }
