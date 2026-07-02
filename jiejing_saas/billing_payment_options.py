@@ -92,8 +92,8 @@ def build_mainland_payment_strategy(settings: SaaSSettings) -> dict[str, Any]:
         ),
         "merchant_entity_guidance": {
             "mainland_individual_without_business_license": "not_ready_for_automated_saas_collection",
-            "recommended_next_step": "prepare_individual_business_or_company_merchant_kyc_for_alipay_wechat_unionpay_or_acquirer",
-            "reason": "regulated payment channels normally require merchant onboarding, settlement identity, risk review, and webhook/order-query credentials",
+            "recommended_next_step": "prepare_compliant_merchant_entity_and_payment_provider_review_packet",
+            "reason": "regulated payment channels normally require merchant onboarding, settlement identity, product risk review, and webhook/order-query credentials",
             "current_hk_hosting_note": "hong_kong_or_overseas_hosting_is_fine_for_private_beta_but_mainland_web_payment_review_may_require_icp_and_subject_consistency",
         },
         "merchant_entity_readiness": _merchant_entity_readiness(
@@ -154,9 +154,9 @@ def _merchant_application_packet(
     checklist = [
         {
             "key": "merchant_subject",
-            "label": "个体工商户或公司主体",
+            "label": "合规商户主体",
             "status": "ready" if merchant_entity_ready else "blocked",
-            "review_use": "用于微信、支付宝、云闪付或聚合收单的商户实名和结算主体审核",
+            "review_use": "用于支付通道审核商户实名、结算主体和服务场景",
         },
         {
             "key": "operator_and_settlement",
@@ -199,7 +199,7 @@ def _merchant_application_packet(
         "contract_version": MERCHANT_APPLICATION_PACKET_VERSION,
         "current_stage": "merchant_entity_and_provider_review_preparation",
         "public_app_url": public_app_url,
-        "recommended_packet_use": "use_after_individual_business_or_company_registration_before_formal_payment_provider_application",
+        "recommended_packet_use": "use_after_compliant_merchant_entity_is_ready_before_formal_payment_provider_application",
         "review_urls": {
             "terms": f"{public_app_url}/terms.html",
             "privacy": f"{public_app_url}/privacy.html",
@@ -298,7 +298,7 @@ def _domestic_lanes(selected_provider: str) -> list[dict[str, Any]]:
     return [
         _domestic_lane(
             key="wechat_pay_native",
-            label="WeChat Pay Native / JSAPI",
+            label="微信支付商户通道",
             selected_provider=selected_provider,
             aliases={"wechat_pay", "wechat_pay_native", "weixin_pay"},
             required_env=[
@@ -311,7 +311,7 @@ def _domestic_lanes(selected_provider: str) -> list[dict[str, Any]]:
         ),
         _domestic_lane(
             key="alipay_web",
-            label="Alipay web / face-to-face",
+            label="支付宝商户通道",
             selected_provider=selected_provider,
             aliases={"alipay", "alipay_web", "alipay_f2f"},
             required_env=[
@@ -323,7 +323,7 @@ def _domestic_lanes(selected_provider: str) -> list[dict[str, Any]]:
         ),
         _domestic_lane(
             key="unionpay_cloud_quickpass",
-            label="UnionPay / Cloud QuickPass",
+            label="银联商户通道",
             selected_provider=selected_provider,
             aliases={"unionpay", "cloud_quickpass", "yunshanfu"},
             required_env=[
@@ -335,7 +335,7 @@ def _domestic_lanes(selected_provider: str) -> list[dict[str, Any]]:
         ),
         _domestic_lane(
             key="lianlian_aggregate",
-            label="LianLian aggregate acquiring",
+            label="连连支付商户通道",
             selected_provider=selected_provider,
             aliases={"lianlian", "lianlian_pay", "lianlian_aggregate"},
             required_env=[
@@ -347,7 +347,7 @@ def _domestic_lanes(selected_provider: str) -> list[dict[str, Any]]:
         ),
         _domestic_lane(
             key="airwallex_cn_aggregate",
-            label="Airwallex China aggregate acquiring",
+            label="空中云汇商户通道",
             selected_provider=selected_provider,
             aliases={"airwallex", "airwallex_cn", "airwallex_cn_aggregate"},
             required_env=[
@@ -443,33 +443,33 @@ def _merchant_entity_readiness(
     checklist = [
         {
             "key": "business_license",
-            "label": "Individual business or company license",
+            "label": "商户主体资质",
             "status": "ready" if merchant_entity_ready else "in_progress",
-            "why": "formal WeChat, Alipay, UnionPay, or acquirer onboarding needs a real settlement subject",
+            "why": "正式支付通道审核需要可结算、可核验的商户主体",
         },
         {
             "key": "operator_identity_and_bank",
-            "label": "Operator identity and settlement bank account",
+            "label": "经营者实名与结算账户",
             "status": "ready" if merchant_entity_ready else "blocked",
-            "why": "provider KYC, payout, and dispute handling must map to the same operator or entity",
+            "why": "商户审核、打款、退款和争议处理要能对应同一经营主体",
         },
         {
             "key": "service_docs_and_contact",
-            "label": "Service agreement, privacy policy, and customer contact",
+            "label": "服务协议、隐私政策和客服入口",
             "status": "designed",
-            "why": "payment product review needs a clear service page, refund path, and support contact",
+            "why": "支付审核需要看清服务内容、退款路径和售后联系方式",
         },
         {
             "key": "domain_subject_alignment",
-            "label": "Domain, ICP if required, and payment subject alignment",
+            "label": "域名、备案要求和商户主体一致",
             "status": "ready" if mainland_icp_ready else "blocked",
-            "why": "mainland payment review may check that website, callback domain, and merchant subject are consistent",
+            "why": "支付审核可能核对官网、回调域名和商户主体是否一致",
         },
         {
             "key": "signed_callback_and_order_query",
-            "label": "Signed callback and order query credentials",
+            "label": "签名回调和主动查单能力",
             "status": "ready" if domestic_webhook_configured and domestic_provider_ready else "blocked",
-            "why": "Jiejing can only auto-grant quota from signed provider evidence, not from a static personal QR image",
+            "why": "捷境只能依据后端验证过的支付证据自动发放或停止额度",
         },
     ]
     return {
@@ -484,8 +484,8 @@ def _merchant_entity_readiness(
         "can_auto_grant_paid_entitlement": domestic_provider_ready and domestic_webhook_configured,
         "checklist": checklist,
         "next_external_steps": [
-            "finish_individual_business_registration_or_company_setup",
-            "apply_wechat_alipay_unionpay_or_acquirer_merchant_account",
+            "prepare_compliant_merchant_entity_materials",
+            "apply_formal_payment_provider_merchant_account",
             "prepare_reviewed_domain_service_pages_and_callback_urls",
             "store_provider_credentials_only_in_backend_vault_or_env",
             "run_no_real_charge_rehearsal_before_owner_live_cutover",
@@ -511,49 +511,49 @@ def _formal_collection_architecture(
     steps = [
         {
             "key": "merchant_entity",
-            "label": "Merchant entity and product review",
+            "label": "商户主体和产品审核",
             "status": "ready" if merchant_entity_ready else "blocked",
             "owner": "operator",
-            "reason": "formal wallet/acquirer onboarding needs a real settlement subject and product review",
+            "reason": "正式支付通道需要可核验的结算主体和产品审核",
         },
         {
             "key": "domain_icp_subject_alignment",
-            "label": "Domain, ICP, and merchant subject alignment",
+            "label": "域名、备案要求和商户主体一致",
             "status": "ready" if mainland_icp_ready else "blocked",
             "owner": "operator",
-            "reason": "mainland web payment review commonly checks ICP and merchant subject consistency or consent proof",
+            "reason": "支付审核可能核对官网、回调域名和商户主体一致性",
         },
         {
             "key": "create_order",
-            "label": "Backend order creation",
+            "label": "后端创建订阅订单",
             "status": "ready" if domestic_adapter_enabled else "blocked",
             "owner": "backend",
             "reason": "Jiejing must create an internal order before sending a user to payment",
         },
         {
             "key": "provider_checkout",
-            "label": "Provider checkout or QR order",
+            "label": "支付通道订单页",
             "status": "ready" if domestic_provider_ready and domestic_adapter_enabled else "blocked",
             "owner": "backend",
-            "reason": "checkout must come from a merchant provider account, not a static personal QR code",
+            "reason": "公开订阅付款必须来自正式商户支付通道，不能靠人工核对",
         },
         {
             "key": "signed_webhook_and_order_query",
-            "label": "Signed callback and order query",
+            "label": "签名回调和主动查单",
             "status": "ready" if domestic_webhook_configured else "blocked",
             "owner": "backend",
             "reason": "subscription and quota changes must be driven by verifiable provider evidence",
         },
         {
             "key": "subscription_quota_audit",
-            "label": "Subscription, quota, invoice, and audit update",
+            "label": "订阅、额度、票据和审计更新",
             "status": "blocked" if manual_qr_enabled else "designed",
             "owner": "backend",
-            "reason": "manual QR can only be reconciled by the owner and cannot automatically renew or stop quota",
+            "reason": "人工核对只能用于小范围内测，不能自动续费、停用额度或完成审计闭环",
         },
         {
             "key": "owner_live_cutover",
-            "label": "Owner-approved live cutover",
+            "label": "负责人批准正式切换",
             "status": "ready" if domestic_live_cutover_approved else "blocked",
             "owner": "owner",
             "reason": "real-money collection must not be enabled by code deployment alone",
@@ -562,8 +562,8 @@ def _formal_collection_architecture(
     return {
         "contract_version": FORMAL_PAYMENT_ARCHITECTURE_VERSION,
         "current_stage": "private_beta_manual_collection" if manual_qr_enabled else "formal_provider_not_connected",
-        "recommended_now": "use_personal_alipay_qr_only_for_small_private_beta_manual_reconciliation",
-        "formal_target": "licensed_domestic_wallet_or_aggregate_acquirer_with_signed_callbacks",
+        "recommended_now": "use_invited_beta_manual_reconciliation_only_until_provider_cutover",
+        "formal_target": "licensed_payment_provider_with_signed_callbacks_and_order_query",
         "steps": steps,
         "manual_qr_boundary": {
             "can_collect_private_beta_money": True,
@@ -590,7 +590,7 @@ def _domain_and_icp_plan(*, merchant_entity_ready: bool, mainland_icp_ready: boo
         "future_mainland_company_complexity": "manageable_if_domain_payment_and_icp_subject_are_planned_together",
         "recommended_formal_path": [
             "keep_app_jiejing_shop_as_private_beta_or_global_app_entry",
-            "after_company_or_individual_business_entity_is_ready_prepare_cn_or_pay_subdomain_for_mainland_payment_review",
+            "after_compliant_merchant_entity_is_ready_prepare_reviewed_payment_domain_or_subdomain",
             "file_mainland_icp_only_if_using_mainland_server_or_if_payment_provider_product_review_requires_icp_site",
             "keep payment callback urls on the reviewed domain and map secrets only in backend vault env",
         ],

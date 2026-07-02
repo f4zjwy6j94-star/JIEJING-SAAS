@@ -134,6 +134,8 @@ def main() -> int:
         }:
             if key not in packet_checklist:
                 return fail(f"merchant application packet missing checklist item: {key}")
+        if packet_checklist["merchant_subject"].get("label") != "合规商户主体":
+            return fail(f"merchant subject label should stay customer-safe: {packet_checklist['merchant_subject']}")
         callback_urls = application_packet.get("provider_callback_urls") or {}
         if callback_urls.get("webhook_url") != "https://app.jiejing.shop/billing/webhook":
             return fail(f"merchant application packet should expose reviewed callback URL without secrets: {callback_urls}")
@@ -156,6 +158,7 @@ def main() -> int:
             if settlement.get(key, {}).get("use_as_checkout_provider") is not False:
                 return fail(f"{key} should remain settlement/receivables, not primary SaaS checkout: {settlement.get(key)}")
         _assert_no_secret_material(strategy)
+        _assert_no_internal_payment_copy(strategy)
 
         os.environ["JIEJING_DOMESTIC_PAYMENT_PROVIDER"] = "alipay"
         os.environ["JIEJING_ALIPAY_APP_ID"] = "configured"
@@ -213,6 +216,25 @@ def _assert_no_identity_or_bank_material(payload: object) -> None:
     leaked = [item for item in forbidden if item in text]
     if leaked:
         raise AssertionError(f"identity or bank material leaked in public application packet: {leaked}")
+
+
+def _assert_no_internal_payment_copy(payload: object) -> None:
+    text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    forbidden = [
+        "大陆收款方式",
+        "大陆用户优先",
+        "个体工商户",
+        "个体户",
+        "主体资料",
+        "聚合收单",
+        "个人码",
+        "个人收款码",
+        "原散户",
+        "散户",
+    ]
+    leaked = [item for item in forbidden if item in text]
+    if leaked:
+        raise AssertionError(f"internal payment route copy leaked in payment strategy payload: {leaked}")
 
 
 def _set_env() -> dict[str, str | None]:
