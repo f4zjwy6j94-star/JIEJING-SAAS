@@ -258,6 +258,17 @@ def build_owner_launch_control(
         external_blockers=external_blockers,
         internal_work_queue=internal_work_queue,
     )
+    owner_paid_launch_approval_dossier = _owner_paid_launch_approval_dossier(
+        settings=settings,
+        summary=summary,
+        evidence_summary=evidence_summary,
+        billing_cutover=billing_cutover,
+        paid_packet=paid_packet,
+        launch_rehearsal_audit_packet=launch_rehearsal_audit_packet,
+        final_launch_rehearsal_execution_record=final_launch_rehearsal_execution_record,
+        external_blockers=external_blockers,
+        internal_work_queue=internal_work_queue,
+    )
     prelaunch_acceptance_report = _prelaunch_acceptance_report(
         settings=settings,
         summary=summary,
@@ -268,6 +279,7 @@ def build_owner_launch_control(
         continuity_handoff_digest=continuity_handoff_digest,
         cutover_decision_checklist=cutover_decision_checklist,
         final_launch_rehearsal_execution_record=final_launch_rehearsal_execution_record,
+        owner_paid_launch_approval_dossier=owner_paid_launch_approval_dossier,
         external_blockers=external_blockers,
         internal_work_queue=internal_work_queue,
     )
@@ -303,6 +315,7 @@ def build_owner_launch_control(
         "continuity_handoff_digest": continuity_handoff_digest,
         "cutover_decision_checklist": cutover_decision_checklist,
         "final_launch_rehearsal_execution_record": final_launch_rehearsal_execution_record,
+        "owner_paid_launch_approval_dossier": owner_paid_launch_approval_dossier,
         "prelaunch_acceptance_report": prelaunch_acceptance_report,
         "war_room": war_room,
         "feasibility_review": feasibility_review,
@@ -2252,6 +2265,321 @@ def _final_launch_rehearsal_safety_flags() -> dict[str, bool]:
     }
 
 
+def _dossier_evidence(**items: Any) -> str:
+    parts: list[str] = []
+    for key, value in items.items():
+        normalized = str(value).replace("\n", " ").replace("\r", " ")
+        parts.append(f"{key}={normalized[:180]}")
+    return "; ".join(parts)[:900]
+
+
+def _owner_paid_launch_approval_dossier(
+    *,
+    settings: SaaSSettings,
+    summary: dict[str, Any],
+    evidence_summary: dict[str, Any],
+    billing_cutover: dict[str, Any],
+    paid_packet: dict[str, Any],
+    launch_rehearsal_audit_packet: dict[str, Any],
+    final_launch_rehearsal_execution_record: dict[str, Any],
+    external_blockers: list[dict[str, Any]],
+    internal_work_queue: list[dict[str, Any]],
+) -> dict[str, Any]:
+    readiness = evidence_summary.get("readiness") if isinstance(evidence_summary.get("readiness"), dict) else {}
+    ebay = evidence_summary.get("ebay") if isinstance(evidence_summary.get("ebay"), dict) else {}
+    billing = evidence_summary.get("billing") if isinstance(evidence_summary.get("billing"), dict) else {}
+    paid_summary = paid_packet.get("summary") if isinstance(paid_packet.get("summary"), dict) else {}
+    billing_summary = billing_cutover.get("summary") if isinstance(billing_cutover.get("summary"), dict) else {}
+    no_charge_packet = (
+        billing_cutover.get("no_charge_live_domain_evidence_packet")
+        if isinstance(billing_cutover.get("no_charge_live_domain_evidence_packet"), dict)
+        else {}
+    )
+    no_charge_summary = no_charge_packet.get("summary") if isinstance(no_charge_packet.get("summary"), dict) else {}
+    no_charge_items = no_charge_packet.get("evidence_items") if isinstance(no_charge_packet.get("evidence_items"), list) else []
+    audit_summary = (
+        launch_rehearsal_audit_packet.get("summary")
+        if isinstance(launch_rehearsal_audit_packet.get("summary"), dict)
+        else {}
+    )
+    final_summary = (
+        final_launch_rehearsal_execution_record.get("summary")
+        if isinstance(final_launch_rehearsal_execution_record.get("summary"), dict)
+        else {}
+    )
+    refresh_success_count = _as_int(ebay.get("refresh_success_count") or summary.get("ebay_token_refresh_success_count"))
+    blocked_external = [item for item in external_blockers if item.get("status") != "ready"]
+    pending_internal = [item for item in internal_work_queue if item.get("status") not in {"ready", "done"}]
+    sections = [
+        _approval_dossier_section(
+            "public_readiness_truth",
+            "Public readiness truth",
+            "ready" if bool(summary.get("production_ready")) and bool(summary.get("can_accept_real_customers")) else "blocked",
+            _dossier_evidence(
+                beta_ready=bool(summary.get("beta_ready")),
+                production_ready=bool(summary.get("production_ready")),
+                can_accept_real_customers=bool(summary.get("can_accept_real_customers")),
+                warnings=_as_int(readiness.get("warning_count") or summary.get("warning_count")),
+                public_paid_launch_allowed=False,
+            ),
+            "Keep public paid launch blocked until readiness returns production_ready=true and can_accept_real_customers=true.",
+            source_endpoint="/readiness/product-saas",
+        ),
+        _approval_dossier_section(
+            "billing_provider_truth",
+            "Billing provider and subscription truth",
+            "ready" if bool(summary.get("billing_ready_for_paid_launch")) else "blocked",
+            _dossier_evidence(
+                provider=billing.get("provider") or summary.get("billing_provider") or "not_selected",
+                billing_ready_for_paid_launch=bool(summary.get("billing_ready_for_paid_launch")),
+                cutover_status=billing_cutover.get("status") or "unknown",
+                cutover_ready=f"{billing_summary.get('ready_count', 0)}/{billing_summary.get('total_count', 0)}",
+                creates_checkout_session=False,
+                charge_now_allowed=False,
+            ),
+            billing_summary.get("next_action") or "Finish live billing provider, prices, portal, signed webhook and quota lifecycle evidence before charging.",
+            source_endpoint="/commercial/billing-domain-cutover-rehearsal",
+        ),
+        _approval_dossier_section(
+            "no_charge_live_domain_evidence",
+            "No-charge live-domain evidence packet",
+            "ready" if no_charge_packet.get("status") == "ready" else "blocked",
+            _dossier_evidence(
+                packet=no_charge_packet.get("contract_version") or "missing",
+                status=no_charge_packet.get("status") or "missing",
+                ready=f"{no_charge_summary.get('ready_count', 0)}/{no_charge_summary.get('total_count', 0)}",
+                blocked=",".join([str(item) for item in no_charge_summary.get("blocked_keys") or [] if str(item)]),
+            ),
+            "Complete all no-charge live-domain smoke, webhook, readiness, secret-scan, browser-smoke and rollback evidence flags.",
+            source_endpoint="/commercial/billing-domain-cutover-rehearsal no_charge_live_domain_evidence_packet",
+            evidence_items=_approval_dossier_evidence_items(no_charge_items),
+        ),
+        _approval_dossier_section(
+            "new_ebay_account_refresh_proof",
+            "Clean new eBay account refresh proof",
+            "ready" if refresh_success_count > 0 else "blocked",
+            _dossier_evidence(
+                latest_packet=ebay.get("latest_packet_id") or summary.get("latest_official_ebay_packet_id") or "missing",
+                refresh_success=refresh_success_count,
+                old_frozen_account_reuse_allowed=False,
+                repeat_ebay_oauth_allowed=False,
+            ),
+            "Wait for a clean new eBay account and backend-only refresh proof; do not repeat OAuth on the frozen account.",
+            source_endpoint="/readiness/product-saas",
+        ),
+        _approval_dossier_section(
+            "paid_launch_packet_truth",
+            "Paid launch approval packet truth",
+            "ready" if paid_packet.get("ready_for_owner_approval") is True else "blocked",
+            _dossier_evidence(
+                packet=paid_packet.get("contract_version") or "missing",
+                status=paid_packet.get("status") or "unknown",
+                ready=f"{paid_summary.get('ready_count', 0)}/{paid_summary.get('total_count', 0)}",
+                blocked=",".join([str(item) for item in paid_summary.get("blocked_keys") or [] if str(item)]),
+                no_charge_evidence_packet_status=paid_summary.get("no_charge_evidence_packet_status") or "unknown",
+            ),
+            paid_summary.get("next_step") or "Keep the paid launch approval packet blocked until domain, billing, no-charge and new eBay account proofs are complete.",
+            source_endpoint="/commercial/paid-launch-approval-packet",
+        ),
+        _approval_dossier_section(
+            "final_rehearsal_and_rollback",
+            "Final rehearsal and rollback evidence",
+            "ready"
+            if _as_int(final_summary.get("blocked_count")) == 0 and launch_rehearsal_audit_packet.get("status") == "ready_for_owner_approval"
+            else "blocked",
+            _dossier_evidence(
+                final_status=final_launch_rehearsal_execution_record.get("status") or "unknown",
+                final_ready=f"{final_summary.get('ready_count', 0)}/{final_summary.get('step_count', 0)}",
+                final_blocked=_as_int(final_summary.get("blocked_count")),
+                audit_status=launch_rehearsal_audit_packet.get("status") or "unknown",
+                audit_blocked=_as_int(audit_summary.get("blocked_count")),
+            ),
+            "Attach final no-real-charge rehearsal, rollback pointer, secret scan, browser smoke and readiness snapshots before owner approval.",
+            source_endpoint="/owner/launch-control final_launch_rehearsal_execution_record",
+        ),
+    ]
+    blocked = [item for item in sections if item.get("status") != "ready"]
+    ready_count = len(sections) - len(blocked)
+    status = "ready_for_owner_review" if not blocked and not blocked_external and not pending_internal else "blocked"
+    next_step = (
+        str((blocked[0] if blocked else {}).get("key") or "")
+        or str((blocked_external[0] if blocked_external else {}).get("key") or "")
+        or str((pending_internal[0] if pending_internal else {}).get("key") or "")
+        or "founder_owner_approval"
+    )
+    return {
+        "contract_version": "2026-07-02-owner-paid-launch-approval-dossier-v1",
+        "audience": "platform_internal_admin",
+        "mode": "internal_admin_read_only_no_charge_no_write",
+        "environment": settings.environment,
+        "customer_visible": False,
+        "merchant_surface_safe": True,
+        "ordinary_merchant_visible": False,
+        "status": status,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "summary": {
+            "decision": "do_not_enable_paid_public_launch_yet" if blocked or blocked_external else "ready_for_founder_owner_cutover_review",
+            "ready_count": ready_count,
+            "blocked_count": len(blocked),
+            "section_count": len(sections),
+            "external_blocker_count": len(blocked_external),
+            "pending_internal_count": len(pending_internal),
+            "readiness_score_percent": int(round((ready_count / max(len(sections), 1)) * 100)),
+            "blocked_keys": [str(item.get("key") or "") for item in blocked],
+            "next_step": next_step,
+            "beta_ready": bool(summary.get("beta_ready")),
+            "production_ready": bool(summary.get("production_ready")),
+            "can_accept_real_customers": bool(summary.get("can_accept_real_customers")),
+            "billing_provider": billing.get("provider") or summary.get("billing_provider") or "not_selected",
+            "billing_ready_for_paid_launch": bool(summary.get("billing_ready_for_paid_launch")),
+            "no_charge_evidence_packet_status": no_charge_packet.get("status") or "missing",
+            "no_charge_evidence_ready_count": _as_int(no_charge_summary.get("ready_count")),
+            "no_charge_evidence_total_count": _as_int(no_charge_summary.get("total_count")),
+            "ebay_token_refresh_success_count": refresh_success_count,
+            "public_paid_launch_allowed": False,
+            "charge_now_allowed": False,
+            "platform_write_now_allowed": False,
+            "repeat_ebay_oauth_allowed": False,
+            "secret_exposed": False,
+        },
+        "sections": sections,
+        "no_charge_evidence_items": _approval_dossier_evidence_items(no_charge_items),
+        "remaining_external_blockers": [_final_rehearsal_action(item, source="external_blocker") for item in blocked_external[:8]],
+        "remaining_internal_actions": [_final_rehearsal_action(item, source="internal_work_queue") for item in (pending_internal or internal_work_queue)[:8]],
+        "proof_links": [
+            {"label": "health", "url": "https://app.jiejing.shop/health"},
+            {"label": "deep_health", "url": "https://app.jiejing.shop/health/deep"},
+            {"label": "readiness", "url": "https://app.jiejing.shop/readiness/product-saas"},
+            {"label": "billing_domain_cutover_rehearsal", "url": "/commercial/billing-domain-cutover-rehearsal"},
+            {"label": "paid_launch_approval_packet", "url": "/commercial/paid-launch-approval-packet"},
+            {"label": "owner_launch_control", "url": "/owner/launch-control"},
+        ],
+        "safety": _owner_paid_launch_approval_dossier_safety_flags(),
+        "download_allowed_for_internal_admin": True,
+        "exports_database": False,
+        "exports_raw_secret": False,
+        "includes_raw_tokens": False,
+        "includes_payment_secret": False,
+        "reads_env_secret_values": False,
+        "calls_stripe_api": False,
+        "creates_checkout_session": False,
+        "triggers_real_charge": False,
+        "charge_now_allowed": False,
+        "triggers_ebay_oauth": False,
+        "repeat_ebay_oauth_allowed": False,
+        "triggers_real_platform_write": False,
+        "platform_write_now_allowed": False,
+        "frontend_gets_secret": False,
+        "frontend_gets_payment_secret": False,
+        "frontend_gets_ebay_token": False,
+        "secret_exposed": False,
+    }
+
+
+def _approval_dossier_section(
+    key: str,
+    label: str,
+    status: str,
+    evidence: str,
+    next_action: str,
+    *,
+    source_endpoint: str,
+    evidence_items: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "key": key,
+        "label": label,
+        "status": status,
+        "tone": _tone(status),
+        "evidence_summary": str(evidence or "")[:720],
+        "next_action": str(next_action or "")[:720],
+        "source_endpoint": str(source_endpoint or "/owner/launch-control")[:220],
+        "evidence_items": evidence_items or [],
+        "customer_visible": False,
+        "ordinary_merchant_visible": False,
+        "exports_database": False,
+        "exports_raw_secret": False,
+        "includes_raw_tokens": False,
+        "includes_payment_secret": False,
+        "calls_stripe_api": False,
+        "creates_checkout_session": False,
+        "triggers_real_charge": False,
+        "charge_now_allowed": False,
+        "triggers_ebay_oauth": False,
+        "repeat_ebay_oauth_allowed": False,
+        "triggers_real_platform_write": False,
+        "platform_write_now_allowed": False,
+        "frontend_gets_secret": False,
+        "frontend_gets_payment_secret": False,
+        "frontend_gets_ebay_token": False,
+        "secret_exposed": False,
+    }
+
+
+def _approval_dossier_evidence_items(items: list[Any]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for item in items[:12]:
+        if not isinstance(item, dict):
+            continue
+        verification = item.get("verification") if isinstance(item.get("verification"), list) else []
+        output.append(
+            {
+                "key": str(item.get("key") or "")[:140],
+                "title": str(item.get("title") or item.get("label") or item.get("key") or "")[:180],
+                "status": str(item.get("status") or "unknown")[:80],
+                "severity": str(item.get("severity") or "")[:80],
+                "source": str(item.get("source") or "")[:160],
+                "evidence_summary": str(item.get("evidence_summary") or "")[:520],
+                "verification": [str(value)[:180] for value in verification[:6] if value],
+                "customer_visible": False,
+                "ordinary_merchant_visible": False,
+                "exports_raw_secret": False,
+                "includes_raw_tokens": False,
+                "includes_payment_secret": False,
+                "calls_stripe_api": False,
+                "creates_checkout_session": False,
+                "triggers_real_charge": False,
+                "charge_now_allowed": False,
+                "triggers_ebay_oauth": False,
+                "repeat_ebay_oauth_allowed": False,
+                "triggers_real_platform_write": False,
+                "platform_write_now_allowed": False,
+                "frontend_gets_payment_secret": False,
+                "frontend_gets_ebay_token": False,
+                "secret_exposed": False,
+            }
+        )
+    return output
+
+
+def _owner_paid_launch_approval_dossier_safety_flags() -> dict[str, bool]:
+    return {
+        "read_only": True,
+        "platform_internal_admin_only": True,
+        "customer_visible": False,
+        "ordinary_merchant_visible": False,
+        "merchant_surface_safe": True,
+        "download_allowed_for_internal_admin": True,
+        "exports_database": False,
+        "exports_raw_secret": False,
+        "includes_raw_tokens": False,
+        "includes_payment_secret": False,
+        "reads_env_secret_values": False,
+        "calls_stripe_api": False,
+        "creates_checkout_session": False,
+        "triggers_real_charge": False,
+        "charge_now_allowed": False,
+        "triggers_ebay_oauth": False,
+        "repeat_ebay_oauth_allowed": False,
+        "triggers_real_platform_write": False,
+        "platform_write_now_allowed": False,
+        "frontend_gets_secret": False,
+        "frontend_gets_payment_secret": False,
+        "frontend_gets_ebay_token": False,
+        "secret_exposed": False,
+    }
+
+
 def _prelaunch_acceptance_report(
     *,
     settings: SaaSSettings,
@@ -2263,6 +2591,7 @@ def _prelaunch_acceptance_report(
     continuity_handoff_digest: dict[str, Any],
     cutover_decision_checklist: dict[str, Any],
     final_launch_rehearsal_execution_record: dict[str, Any],
+    owner_paid_launch_approval_dossier: dict[str, Any],
     external_blockers: list[dict[str, Any]],
     internal_work_queue: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -2275,6 +2604,11 @@ def _prelaunch_acceptance_report(
     final_summary = (
         final_launch_rehearsal_execution_record.get("summary")
         if isinstance(final_launch_rehearsal_execution_record.get("summary"), dict)
+        else {}
+    )
+    dossier_summary = (
+        owner_paid_launch_approval_dossier.get("summary")
+        if isinstance(owner_paid_launch_approval_dossier.get("summary"), dict)
         else {}
     )
     blocked_external = [item for item in external_blockers if item.get("status") != "ready"]
@@ -2337,6 +2671,13 @@ def _prelaunch_acceptance_report(
             f"status={final_launch_rehearsal_execution_record.get('status') or 'unknown'}; ready={_as_int(final_summary.get('ready_count'))}/{_as_int(final_summary.get('step_count'))}; blocked={_as_int(final_summary.get('blocked_count'))}; attention={_as_int(final_summary.get('attention_count'))}",
             "Attach final no-real-charge rehearsal evidence after external billing and clean eBay prerequisites are complete.",
         ),
+        _prelaunch_report_item(
+            "owner_paid_launch_approval_dossier",
+            "Owner paid launch approval dossier",
+            "ready" if owner_paid_launch_approval_dossier.get("status") == "ready_for_owner_review" else "blocked",
+            f"status={owner_paid_launch_approval_dossier.get('status') or 'unknown'}; score={_as_int(dossier_summary.get('readiness_score_percent'))}%; ready={_as_int(dossier_summary.get('ready_count'))}/{_as_int(dossier_summary.get('section_count'))}; blocked={_as_int(dossier_summary.get('blocked_count'))}; no_charge={dossier_summary.get('no_charge_evidence_packet_status') or 'unknown'}",
+            "Use the internal approval dossier as the final owner decision material; keep it hidden from ordinary merchant accounts.",
+        ),
     ]
     ready_count = len([item for item in report_items if item.get("status") == "ready"])
     blocked_count = len([item for item in report_items if item.get("status") == "blocked"])
@@ -2369,6 +2710,8 @@ def _prelaunch_acceptance_report(
         "cutover_status": cutover_decision_checklist.get("status") or "unknown",
         "handoff_status": continuity_handoff_digest.get("status") or "unknown",
         "final_rehearsal_status": final_launch_rehearsal_execution_record.get("status") or "unknown",
+        "owner_paid_launch_approval_dossier_status": owner_paid_launch_approval_dossier.get("status") or "unknown",
+        "approval_dossier_blocked_count": _as_int(dossier_summary.get("blocked_count")),
         "public_paid_launch_allowed": public_paid_launch_allowed,
         "charge_now_allowed": False,
         "platform_write_now_allowed": False,

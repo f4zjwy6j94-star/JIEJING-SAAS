@@ -37511,6 +37511,154 @@ body.saas-public-mvp .saas-owner-final-rehearsal-actions article {
   background: #f8faff;
 }
 
+body.saas-public-mvp .saas-owner-paid-launch-dossier {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(15, 45, 40, 0.14);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #fbfcff 0%, #ffffff 100%);
+}
+
+body.saas-public-mvp .saas-owner-paid-launch-dossier-note {
+  margin: 0;
+  color: #52645f;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-owner-paid-launch-dossier-decision,
+body.saas-public-mvp .saas-owner-paid-launch-dossier-grid,
+body.saas-public-mvp .saas-owner-paid-launch-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-owner-paid-launch-dossier-decision article,
+body.saas-public-mvp .saas-owner-paid-launch-dossier-grid article,
+body.saas-public-mvp .saas-owner-paid-launch-evidence-grid article {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(15, 45, 40, 0.08);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+body.saas-public-mvp .saas-owner-paid-launch-dossier-decision article.is-green,
+body.saas-public-mvp .saas-owner-paid-launch-dossier-grid article.is-green,
+body.saas-public-mvp .saas-owner-paid-launch-evidence-grid article.is-green,
+body.saas-public-mvp .saas-owner-paid-launch-dossier-actions article.is-green {
+  border-color: rgba(8, 118, 110, 0.22);
+  background: #f1faf7;
+}
+
+body.saas-public-mvp .saas-owner-paid-launch-dossier-decision article.is-amber,
+body.saas-public-mvp .saas-owner-paid-launch-dossier-grid article.is-amber,
+body.saas-public-mvp .saas-owner-paid-launch-evidence-grid article.is-amber,
+body.saas-public-mvp .saas-owner-paid-launch-dossier-actions article.is-amber {
+  border-color: rgba(214, 142, 43, 0.3);
+  background: #fffaf1;
+}
+
+body.saas-public-mvp .saas-owner-paid-launch-dossier-decision article.is-red,
+body.saas-public-mvp .saas-owner-paid-launch-dossier-grid article.is-red,
+body.saas-public-mvp .saas-owner-paid-launch-evidence-grid article.is-red,
+body.saas-public-mvp .saas-owner-paid-launch-dossier-actions article.is-red {
+  border-color: rgba(194, 65, 45, 0.22);
+  background: #fff5f2;
+}
+
+body.saas-public-mvp .saas-owner-paid-launch-dossier-grid article > div {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+body.saas-public-mvp .saas-owner-paid-launch-dossier-decision span,
+body.saas-public-mvp .saas-owner-paid-launch-dossier-grid span,
+body.saas-public-mvp .saas-owner-paid-launch-evidence-grid span {
+  overflow: hidden;
+  color: #3351a6;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.saas-public-mvp .saas-owner-paid-launch-dossier-decision strong,
+body.saas-public-mvp .saas-owner-paid-launch-dossier-grid strong,
+body.saas-public-mvp .saas-owner-paid-launch-evidence-grid strong,
+body.saas-public-mvp .saas-owner-paid-launch-dossier-actions strong {
+  color: #12231f;
+  font-size: 14px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-owner-paid-launch-dossier-decision p,
+body.saas-public-mvp .saas-owner-paid-launch-dossier-grid p,
+body.saas-public-mvp .saas-owner-paid-launch-dossier-grid small,
+body.saas-public-mvp .saas-owner-paid-launch-dossier-grid em,
+body.saas-public-mvp .saas-owner-paid-launch-evidence-grid p,
+body.saas-public-mvp .saas-owner-paid-launch-evidence-grid small,
+body.saas-public-mvp .saas-owner-paid-launch-dossier-actions small {
+  margin: 0;
+  color: #52645f;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-owner-paid-launch-dossier-grid em {
+  color: #6d7b91;
+  font-style: normal;
+}
+
+body.saas-public-mvp .saas-owner-paid-launch-dossier-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-owner-paid-launch-dossier-actions > div {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(190, 199, 224, 0.85);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+body.saas-public-mvp .saas-owner-paid-launch-dossier-actions > div > span {
+  color: #3351a6;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+body.saas-public-mvp .saas-owner-paid-launch-dossier-actions article {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid rgba(15, 45, 40, 0.08);
+  border-radius: 8px;
+  background: #f8faff;
+}
+
 body.saas-public-mvp .saas-owner-prelaunch-report {
   display: grid;
   gap: 10px;

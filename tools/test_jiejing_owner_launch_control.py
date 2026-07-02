@@ -611,6 +611,78 @@ def main() -> int:
         if final_record.get(marker) is not False and final_safety.get(marker) is not False:
             return fail(f"final launch rehearsal unsafe flag should be false: {marker}")
 
+    approval_dossier = (
+        packet.get("owner_paid_launch_approval_dossier")
+        if isinstance(packet.get("owner_paid_launch_approval_dossier"), dict)
+        else {}
+    )
+    if approval_dossier.get("contract_version") != "2026-07-02-owner-paid-launch-approval-dossier-v1":
+        return fail("owner paid launch approval dossier contract missing")
+    if approval_dossier.get("audience") != "platform_internal_admin" or approval_dossier.get("customer_visible") is not False:
+        return fail("owner paid launch approval dossier must stay internal")
+    if approval_dossier.get("ordinary_merchant_visible") is not False or approval_dossier.get("merchant_surface_safe") is not True:
+        return fail("owner paid launch approval dossier must not be ordinary merchant visible")
+    if approval_dossier.get("download_allowed_for_internal_admin") is not True:
+        return fail("owner paid launch approval dossier should be downloadable only for internal admin")
+    dossier_summary = approval_dossier.get("summary") if isinstance(approval_dossier.get("summary"), dict) else {}
+    if dossier_summary.get("decision") != "do_not_enable_paid_public_launch_yet":
+        return fail(f"owner paid launch approval dossier must block paid launch: {dossier_summary}")
+    if not isinstance(dossier_summary.get("readiness_score_percent"), int):
+        return fail(f"owner paid launch approval dossier should expose integer readiness score: {dossier_summary}")
+    for marker in ("public_paid_launch_allowed", "charge_now_allowed", "platform_write_now_allowed", "repeat_ebay_oauth_allowed", "secret_exposed"):
+        if dossier_summary.get(marker) is not False:
+            return fail(f"owner paid launch approval dossier summary unsafe marker should be false: {marker}")
+    dossier_section_keys = {item.get("key") for item in approval_dossier.get("sections", []) if isinstance(item, dict)}
+    for key in {
+        "public_readiness_truth",
+        "billing_provider_truth",
+        "no_charge_live_domain_evidence",
+        "new_ebay_account_refresh_proof",
+        "paid_launch_packet_truth",
+        "final_rehearsal_and_rollback",
+    }:
+        if key not in dossier_section_keys:
+            return fail(f"owner paid launch approval dossier section missing: {key}")
+    no_charge_item_keys = {item.get("key") for item in approval_dossier.get("no_charge_evidence_items", []) if isinstance(item, dict)}
+    for key in {
+        "checkout_return_url_smoke",
+        "customer_portal_return_url_smoke",
+        "signed_webhook_smoke",
+        "subscription_quota_lifecycle_smoke",
+        "secret_scan_and_browser_smoke",
+        "rollback_audit_packet",
+        "no_charge_evidence_id_recorded",
+    }:
+        if key not in no_charge_item_keys:
+            return fail(f"owner paid launch approval dossier should include no-charge evidence item: {key}")
+    dossier_safety = approval_dossier.get("safety") if isinstance(approval_dossier.get("safety"), dict) else {}
+    for marker in ("read_only", "platform_internal_admin_only", "merchant_surface_safe", "download_allowed_for_internal_admin"):
+        if dossier_safety.get(marker) is not True:
+            return fail(f"owner paid launch approval dossier safety marker should be true: {marker}")
+    for marker in (
+        "customer_visible",
+        "ordinary_merchant_visible",
+        "exports_database",
+        "exports_raw_secret",
+        "includes_raw_tokens",
+        "includes_payment_secret",
+        "reads_env_secret_values",
+        "calls_stripe_api",
+        "creates_checkout_session",
+        "triggers_real_charge",
+        "charge_now_allowed",
+        "triggers_ebay_oauth",
+        "repeat_ebay_oauth_allowed",
+        "triggers_real_platform_write",
+        "platform_write_now_allowed",
+        "frontend_gets_secret",
+        "frontend_gets_payment_secret",
+        "frontend_gets_ebay_token",
+        "secret_exposed",
+    ):
+        if approval_dossier.get(marker) is not False and dossier_safety.get(marker) is not False:
+            return fail(f"owner paid launch approval dossier unsafe flag should be false: {marker}")
+
     prelaunch_report = (
         packet.get("prelaunch_acceptance_report")
         if isinstance(packet.get("prelaunch_acceptance_report"), dict)
@@ -640,9 +712,12 @@ def main() -> int:
         "secret_and_data_boundary",
         "release_artifact_and_rollback",
         "final_rehearsal_record",
+        "owner_paid_launch_approval_dossier",
     }:
         if key not in report_item_keys:
             return fail(f"prelaunch report item missing: {key}")
+    if report_summary.get("owner_paid_launch_approval_dossier_status") != approval_dossier.get("status"):
+        return fail(f"prelaunch report should summarize approval dossier status: {report_summary}")
     report_founder_keys = {item.get("key") for item in prelaunch_report.get("founder_required_actions", []) if isinstance(item, dict)}
     for key in {"stripe_live_products_prices_webhook", "clean_new_ebay_account"}:
         if key not in report_founder_keys:

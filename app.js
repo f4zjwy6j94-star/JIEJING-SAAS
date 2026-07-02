@@ -23334,6 +23334,8 @@ function handleSaasAction(button) {
     "download-cutover-decision-checklist",
     "copy-final-launch-rehearsal-record",
     "download-final-launch-rehearsal-record",
+    "copy-owner-paid-launch-dossier",
+    "download-owner-paid-launch-dossier",
     "copy-prelaunch-acceptance-report",
     "download-prelaunch-acceptance-report",
     "save-source-record",
@@ -23448,6 +23450,14 @@ function handleSaasAction(button) {
   }
   if (action === "download-final-launch-rehearsal-record") {
     downloadSaasFinalLaunchRehearsalRecord();
+    return;
+  }
+  if (action === "copy-owner-paid-launch-dossier") {
+    copySaasOwnerPaidLaunchDossier();
+    return;
+  }
+  if (action === "download-owner-paid-launch-dossier") {
+    downloadSaasOwnerPaidLaunchDossier();
     return;
   }
   if (action === "copy-prelaunch-acceptance-report") {
@@ -31107,6 +31117,44 @@ function buildSaasFinalLaunchRehearsalRecordDownloadPayload() {
   };
 }
 
+function buildSaasOwnerPaidLaunchDossierDownloadPayload() {
+  if (!saasOwnerLaunchCanView()) return null;
+  const control = state.saasOwnerLaunchControl && typeof state.saasOwnerLaunchControl === "object" ? state.saasOwnerLaunchControl : {};
+  const dossier =
+    control.owner_paid_launch_approval_dossier && typeof control.owner_paid_launch_approval_dossier === "object"
+      ? control.owner_paid_launch_approval_dossier
+      : null;
+  if (!dossier) return null;
+  return {
+    generated_at: new Date().toISOString(),
+    app_base_url: window.location.origin,
+    owner_paid_launch_approval_dossier: dossier,
+    boundary: {
+      platform_internal_admin_only: true,
+      customer_visible: false,
+      ordinary_merchant_visible: false,
+      merchant_surface_safe: true,
+      exports_database: false,
+      exports_raw_secret: false,
+      includes_raw_tokens: false,
+      includes_payment_secret: false,
+      reads_env_secret_values: false,
+      calls_stripe_api: false,
+      creates_checkout_session: false,
+      triggers_real_charge: false,
+      charge_now_allowed: false,
+      triggers_ebay_oauth: false,
+      repeat_ebay_oauth_allowed: false,
+      triggers_real_platform_write: false,
+      platform_write_now_allowed: false,
+      frontend_gets_secret: false,
+      frontend_gets_payment_secret: false,
+      frontend_gets_ebay_token: false,
+      secret_exposed: false,
+    },
+  };
+}
+
 function buildSaasPrelaunchAcceptanceReportDownloadPayload() {
   if (!saasOwnerLaunchCanView()) return null;
   const control = state.saasOwnerLaunchControl && typeof state.saasOwnerLaunchControl === "object" ? state.saasOwnerLaunchControl : {};
@@ -31418,6 +31466,52 @@ function downloadSaasFinalLaunchRehearsalRecord() {
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1500);
   showActionToast("Final rehearsal record downloaded. No database export, secret read, charge, OAuth or platform write was triggered.");
+}
+
+async function copySaasOwnerPaidLaunchDossier() {
+  const payload = buildSaasOwnerPaidLaunchDossierDownloadPayload();
+  if (!payload) {
+    showActionToast("Owner paid launch dossier is available only to the internal admin account.");
+    return;
+  }
+  const text = JSON.stringify(payload, null, 2);
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "readonly");
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+    showActionToast("Owner paid launch dossier copied. It is internal only and excludes secrets, tokens, payment keys, checkout, charge, OAuth and platform writes.");
+  } catch (error) {
+    console.warn("copySaasOwnerPaidLaunchDossier failed", error);
+    showActionToast("Copy failed. Use the owner paid launch dossier download instead.");
+  }
+}
+
+function downloadSaasOwnerPaidLaunchDossier() {
+  const payload = buildSaasOwnerPaidLaunchDossierDownloadPayload();
+  if (!payload) {
+    showActionToast("Owner paid launch dossier is available only to the internal admin account.");
+    return;
+  }
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `jiejing-owner-paid-launch-dossier-${Date.now()}.json`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+  showActionToast("Owner paid launch dossier downloaded. No database export, secret read, charge, OAuth or platform write was triggered.");
 }
 
 async function copySaasPrelaunchAcceptanceReport() {
@@ -32495,6 +32589,24 @@ function renderSaasOwnerLaunchControlPanel() {
   const prelaunchCodexActions = Array.isArray(prelaunchReport.codex_continue_actions) ? prelaunchReport.codex_continue_actions : [];
   const prelaunchDecision =
     prelaunchReport.decision_record && typeof prelaunchReport.decision_record === "object" ? prelaunchReport.decision_record : {};
+  const ownerPaidLaunchDossier =
+    control.owner_paid_launch_approval_dossier && typeof control.owner_paid_launch_approval_dossier === "object"
+      ? control.owner_paid_launch_approval_dossier
+      : {};
+  const ownerPaidLaunchDossierSummary =
+    ownerPaidLaunchDossier.summary && typeof ownerPaidLaunchDossier.summary === "object" ? ownerPaidLaunchDossier.summary : {};
+  const ownerPaidLaunchDossierSafety =
+    ownerPaidLaunchDossier.safety && typeof ownerPaidLaunchDossier.safety === "object" ? ownerPaidLaunchDossier.safety : {};
+  const ownerPaidLaunchDossierSections = Array.isArray(ownerPaidLaunchDossier.sections) ? ownerPaidLaunchDossier.sections : [];
+  const ownerPaidLaunchNoChargeItems = Array.isArray(ownerPaidLaunchDossier.no_charge_evidence_items)
+    ? ownerPaidLaunchDossier.no_charge_evidence_items
+    : [];
+  const ownerPaidLaunchExternalActions = Array.isArray(ownerPaidLaunchDossier.remaining_external_blockers)
+    ? ownerPaidLaunchDossier.remaining_external_blockers
+    : [];
+  const ownerPaidLaunchInternalActions = Array.isArray(ownerPaidLaunchDossier.remaining_internal_actions)
+    ? ownerPaidLaunchDossier.remaining_internal_actions
+    : [];
   const warRoom = control.war_room && typeof control.war_room === "object" ? control.war_room : {};
   const warSections = Array.isArray(warRoom.sections) ? warRoom.sections : [];
   const feasibility = control.feasibility_review && typeof control.feasibility_review === "object" ? control.feasibility_review : {};
@@ -32532,6 +32644,7 @@ function renderSaasOwnerLaunchControlPanel() {
     `continuity_handoff_v1=${handoffDigest.contract_version === "2026-06-20-owner-continuity-handoff-v1"}`,
     `cutover_decision_checklist_v1=${cutoverChecklist.contract_version === "2026-06-20-cutover-decision-checklist-v1"}`,
     `final_launch_rehearsal_execution_record_v1=${finalRehearsalRecord.contract_version === "2026-06-21-final-launch-rehearsal-execution-record-v1"}`,
+    `owner_paid_launch_approval_dossier_v1=${ownerPaidLaunchDossier.contract_version === "2026-07-02-owner-paid-launch-approval-dossier-v1"}`,
     `prelaunch_acceptance_report_v1=${prelaunchReport.contract_version === "2026-06-21-prelaunch-acceptance-report-v1"}`,
     `expert_feasibility_review_v1=${feasibility.contract_version === "2026-07-01-expert-feasibility-review-v1"}`,
     control.secret_exposed ? "secret_exposed=true" : "secret_exposed=false",
@@ -32575,6 +32688,8 @@ function renderSaasOwnerLaunchControlPanel() {
           <button class="secondary-action" type="button" data-saas-action="download-cutover-decision-checklist">Download cutover checklist</button>
           <button class="secondary-action" type="button" data-saas-action="copy-final-launch-rehearsal-record">Copy final rehearsal</button>
           <button class="secondary-action" type="button" data-saas-action="download-final-launch-rehearsal-record">Download final rehearsal</button>
+          <button class="secondary-action" type="button" data-saas-action="copy-owner-paid-launch-dossier">Copy paid launch dossier</button>
+          <button class="secondary-action" type="button" data-saas-action="download-owner-paid-launch-dossier">Download paid launch dossier</button>
           <button class="secondary-action" type="button" data-saas-action="copy-prelaunch-acceptance-report">Copy prelaunch report</button>
           <button class="secondary-action" type="button" data-saas-action="download-prelaunch-acceptance-report">Download prelaunch report</button>
           <span class="saas-owner-launch-pill ${saasOwnerLaunchToneClass(control.status)}">${escapeHtml(control.mode || "read_only")}</span>
@@ -32804,6 +32919,107 @@ function renderSaasOwnerLaunchControlPanel() {
             `frontend_gets_payment_secret=${Boolean(finalRehearsalRecord.frontend_gets_payment_secret)}`,
             `frontend_gets_ebay_token=${Boolean(finalRehearsalRecord.frontend_gets_ebay_token)}`,
             `secret_exposed=${Boolean(finalRehearsalRecord.secret_exposed)}`,
+          ]
+            .map((item) => `<span>${escapeHtml(item)}</span>`)
+            .join("")}
+        </div>
+      </div>
+      <div class="saas-owner-paid-launch-dossier" aria-label="owner paid launch approval dossier">
+        <div class="saas-owner-war-room-head">
+          <div>
+            <span>owner_paid_launch_approval_dossier_v1</span>
+            <strong>${escapeHtml(ownerPaidLaunchDossier.status || "blocked")}</strong>
+          </div>
+          <small>${escapeHtml(`score=${ownerPaidLaunchDossierSummary.readiness_score_percent ?? 0}% / ready=${ownerPaidLaunchDossierSummary.ready_count ?? 0}/${ownerPaidLaunchDossierSummary.section_count ?? 0} / blocked=${ownerPaidLaunchDossierSummary.blocked_count ?? 0}`)}</small>
+        </div>
+        <p class="saas-owner-paid-launch-dossier-note">internal admin approval material only. It combines readiness, billing provider, no-charge evidence, clean eBay refresh proof and rollback state; it stays hidden from ordinary merchant accounts and never creates Checkout, charges, OAuth or platform writes.</p>
+        <div class="saas-owner-paid-launch-dossier-decision">
+          <article class="${saasOwnerLaunchToneClass(ownerPaidLaunchDossier.status || "blocked")}">
+            <span>Decision</span>
+            <strong>${escapeHtml(ownerPaidLaunchDossierSummary.decision || "do_not_enable_paid_public_launch_yet")}</strong>
+            <p>${escapeHtml(`next=${ownerPaidLaunchDossierSummary.next_step || "keep_public_paid_launch_blocked"}`)}</p>
+          </article>
+          <article class="${ownerPaidLaunchDossierSummary.no_charge_evidence_packet_status === "ready" ? "is-green" : "is-red"}">
+            <span>No-charge evidence</span>
+            <strong>${escapeHtml(ownerPaidLaunchDossierSummary.no_charge_evidence_packet_status || "missing")}</strong>
+            <p>${escapeHtml(`ready=${ownerPaidLaunchDossierSummary.no_charge_evidence_ready_count ?? 0}/${ownerPaidLaunchDossierSummary.no_charge_evidence_total_count ?? 0}`)}</p>
+          </article>
+          <article class="${Number(ownerPaidLaunchDossierSummary.ebay_token_refresh_success_count || 0) > 0 ? "is-green" : "is-red"}">
+            <span>eBay refresh proof</span>
+            <strong>${escapeHtml(String(ownerPaidLaunchDossierSummary.ebay_token_refresh_success_count ?? 0))}</strong>
+            <p>${escapeHtml(`repeat_oauth_allowed=${Boolean(ownerPaidLaunchDossierSummary.repeat_ebay_oauth_allowed)}`)}</p>
+          </article>
+        </div>
+        <div class="saas-owner-paid-launch-dossier-grid">
+          ${(ownerPaidLaunchDossierSections.length ? ownerPaidLaunchDossierSections : [{ label: "Paid launch dossier pending", status: "attention_required", evidence_summary: "Refresh /owner/launch-control.", next_action: "Refresh owner launch control.", source_endpoint: "/owner/launch-control" }])
+            .map(
+              (item) => `
+                <article class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
+                  <div>
+                    <span>${escapeHtml(item.label || item.key || "approval_dossier_section")}</span>
+                    <strong>${escapeHtml(item.status || "unknown")}</strong>
+                  </div>
+                  <p>${escapeHtml(item.evidence_summary || "")}</p>
+                  <small>${escapeHtml(item.next_action || "")}</small>
+                  <em>${escapeHtml(item.source_endpoint || "")}</em>
+                </article>
+              `,
+            )
+            .join("")}
+        </div>
+        <div class="saas-owner-paid-launch-evidence-grid">
+          ${(ownerPaidLaunchNoChargeItems.length ? ownerPaidLaunchNoChargeItems : [{ title: "No-charge evidence pending", status: "blocked", key: "no_charge_pending", evidence_summary: "Refresh /owner/launch-control." }])
+            .map(
+              (item) => `
+                <article class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
+                  <span>${escapeHtml(item.key || "evidence")}</span>
+                  <strong>${escapeHtml(item.status || "unknown")}</strong>
+                  <p>${escapeHtml(item.title || "")}</p>
+                  <small>${escapeHtml(item.evidence_summary || "")}</small>
+                </article>
+              `,
+            )
+            .join("")}
+        </div>
+        <div class="saas-owner-paid-launch-dossier-actions">
+          <div>
+            <span>Owner external blockers</span>
+            ${(ownerPaidLaunchExternalActions.length ? ownerPaidLaunchExternalActions : [{ label: "External blockers clear", status: "ready", next_action: "Prepare owner cutover review.", source: "external_blocker" }])
+              .slice(0, 5)
+              .map((item) => `<article class="${saasOwnerLaunchToneClass(item.tone || item.status)}"><strong>${escapeHtml(item.label || item.key || "external")}</strong><small>${escapeHtml(item.next_action || item.evidence_summary || "")}</small></article>`)
+              .join("")}
+          </div>
+          <div>
+            <span>Internal evidence actions</span>
+            ${(ownerPaidLaunchInternalActions.length ? ownerPaidLaunchInternalActions : [{ label: "Internal evidence queue clear", status: "ready", next_action: "Keep no-charge smoke, secret scan and readiness evidence current.", source: "internal_work_queue" }])
+              .slice(0, 5)
+              .map((item) => `<article class="${saasOwnerLaunchToneClass(item.tone || item.status)}"><strong>${escapeHtml(item.label || item.key || "internal")}</strong><small>${escapeHtml(item.next_action || item.evidence_summary || "")}</small></article>`)
+              .join("")}
+          </div>
+        </div>
+        <div class="saas-owner-launch-safety" aria-label="owner paid launch approval dossier safety flags">
+          ${[
+            `customer_visible=${Boolean(ownerPaidLaunchDossier.customer_visible)}`,
+            `ordinary_merchant_visible=${Boolean(ownerPaidLaunchDossier.ordinary_merchant_visible || ownerPaidLaunchDossierSafety.ordinary_merchant_visible)}`,
+            `merchant_surface_safe=${Boolean(ownerPaidLaunchDossier.merchant_surface_safe || ownerPaidLaunchDossierSafety.merchant_surface_safe)}`,
+            `download_allowed_for_internal_admin=${Boolean(ownerPaidLaunchDossier.download_allowed_for_internal_admin || ownerPaidLaunchDossierSafety.download_allowed_for_internal_admin)}`,
+            `exports_database=${Boolean(ownerPaidLaunchDossier.exports_database)}`,
+            `exports_raw_secret=${Boolean(ownerPaidLaunchDossier.exports_raw_secret)}`,
+            `includes_raw_tokens=${Boolean(ownerPaidLaunchDossier.includes_raw_tokens)}`,
+            `includes_payment_secret=${Boolean(ownerPaidLaunchDossier.includes_payment_secret)}`,
+            `reads_env_secret_values=${Boolean(ownerPaidLaunchDossier.reads_env_secret_values)}`,
+            `calls_stripe_api=${Boolean(ownerPaidLaunchDossier.calls_stripe_api)}`,
+            `creates_checkout_session=${Boolean(ownerPaidLaunchDossier.creates_checkout_session)}`,
+            `triggers_real_charge=${Boolean(ownerPaidLaunchDossier.triggers_real_charge)}`,
+            `charge_now_allowed=${Boolean(ownerPaidLaunchDossier.charge_now_allowed)}`,
+            `triggers_ebay_oauth=${Boolean(ownerPaidLaunchDossier.triggers_ebay_oauth)}`,
+            `repeat_ebay_oauth_allowed=${Boolean(ownerPaidLaunchDossier.repeat_ebay_oauth_allowed)}`,
+            `triggers_real_platform_write=${Boolean(ownerPaidLaunchDossier.triggers_real_platform_write)}`,
+            `platform_write_now_allowed=${Boolean(ownerPaidLaunchDossier.platform_write_now_allowed)}`,
+            `frontend_gets_secret=${Boolean(ownerPaidLaunchDossier.frontend_gets_secret)}`,
+            `frontend_gets_payment_secret=${Boolean(ownerPaidLaunchDossier.frontend_gets_payment_secret)}`,
+            `frontend_gets_ebay_token=${Boolean(ownerPaidLaunchDossier.frontend_gets_ebay_token)}`,
+            `secret_exposed=${Boolean(ownerPaidLaunchDossier.secret_exposed)}`,
           ]
             .map((item) => `<span>${escapeHtml(item)}</span>`)
             .join("")}
