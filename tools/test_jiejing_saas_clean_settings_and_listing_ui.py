@@ -539,7 +539,8 @@ def main() -> None:
         "当前阶段",
         "试用模式，不真实扣费",
         "高成本用量",
-        "等待演练模式",
+        "操作记录和账号设置继续保留",
+        "不需要重复连接 eBay，也不需要重填 AI 连接",
         "当前计费状态",
         "先看能不能继续用，再看哪些费用另算",
         "费用四分法",
@@ -595,6 +596,37 @@ def main() -> None:
         "openCurrentPublicHomepage",
     ]:
         require(app_js + index_html + app_html + styles, billing_model_marker, "settings billing model and homepage return copy")
+    ordinary_billing_checks = [
+        ("function renderSaasMerchantBillingPlainSummaryPanel", "function renderSaasBillingTransitionPathPanel"),
+        ("function renderSaasMerchantBillingContinuityPanel", "function renderSaasMerchantBillingIncidentRunbookPanel"),
+        ("function renderSaasMerchantSecurityBoundaryPanel", "function renderSaasBillingProviderPanel"),
+    ]
+    for start_marker, end_marker in ordinary_billing_checks:
+        start = app_js.index(start_marker)
+        ordinary_billing_body = app_js[start:app_js.index(end_marker, start)]
+        for forbidden_marker in [
+            "审计证据",
+            "eBay OAuth",
+            "模型 key",
+            "等待演练模式",
+            "测试付款",
+            "provider cutover",
+            "eBay token",
+            "client secret",
+            "内部部署项",
+            "BYOK",
+        ]:
+            if forbidden_marker in ordinary_billing_body:
+                raise AssertionError(f"Ordinary merchant billing copy should not expose internal wording: {forbidden_marker}")
+    transition_start = app_js.index("function renderSaasBillingTransitionPathPanel")
+    transition_body = app_js[transition_start:app_js.index("function renderSaasBillingProviderRehearsalPanel", transition_start)]
+    for forbidden_marker in [
+        "quota 只停",
+        "不重复授权 / 不重填模型 key",
+        "后台接入和审核材料",
+    ]:
+        if forbidden_marker in transition_body:
+            raise AssertionError(f"Billing activation path should use customer-facing wording: {forbidden_marker}")
     draft_start = app_js.index("function renderSaasListingDraftEditor")
     draft_end = app_js.index("function renderSaasListingGapAndRiskPanel", draft_start)
     draft_body = app_js[draft_start:draft_end]

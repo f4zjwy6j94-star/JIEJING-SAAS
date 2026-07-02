@@ -22,7 +22,7 @@ def main() -> int:
     app_html = APP_HTML.read_text(encoding="utf-8")
     app_js = APP_JS.read_text(encoding="utf-8")
     module_js = MODULE.read_text(encoding="utf-8")
-    module_marker = "./assets/jiejing-settings-panels.js?v=20260702-merchant-home-guide-copy-v1"
+    module_marker = "./assets/jiejing-settings-panels.js?v=20260702-merchant-billing-clarity-v1"
     app_marker = "./app.js?v="
     billing_panel_start = module_js.index("function renderBillingProviderPanel")
     billing_panel_end = module_js.index("function _renderBillingTestRehearsal")
@@ -35,14 +35,15 @@ def main() -> int:
         "global.JiejingSettingsPanels",
         "renderBillingProviderPanel",
         "订阅与付款",
-        "付款入口",
-        "订阅管理",
-        "额度与用量",
+        "当前模式",
+        "续费 / 取消",
+        "AI / 素材用量",
         "欠费保护",
-        "公开收费",
-        "商家付款会走正式支付或受控内测确认",
+        "在线付款开放",
+        "订阅处理会走安全支付页或客服确认",
         "页面不展示任何支付密钥",
-        "不对普通商家展示内部上线清单",
+        "当前仅展示试用和订阅说明",
+        "merchant_billing_copy_public_safe_v1",
         "_renderBillingTestRehearsal",
         "_renderSubscriptionQuotaShutdownClosure",
         "_renderBillingDomainCutoverRehearsal",
@@ -119,6 +120,18 @@ def main() -> int:
         "Billing provider",
         "Customer Portal",
         "Webhook",
+        "provider cutover",
+        "正式商户支付",
+        "正式收款",
+        "内测订阅",
+        "公开收费入口",
+        "大陆收款",
+        "主体资料",
+        "个人收款码",
+        "测试付款",
+        "审计证据",
+        "模型 key",
+        "eBay OAuth",
         "_renderBillingTestRehearsal(",
         "_renderSubscriptionQuotaShutdownClosure(",
         "_renderBillingDomainCutoverRehearsal(",

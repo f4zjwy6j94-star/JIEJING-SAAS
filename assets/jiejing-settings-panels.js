@@ -221,59 +221,91 @@
     const portalReady = Boolean(portal.ready);
     const quotaReady = Boolean(quota.enabled);
     const shutdownReady = Boolean(shutdownClosure.ready || shutdownState.blocks_metered_work_when_inactive);
-    const paymentStage = paidReady ? "正式商户支付已准备" : privateBetaReady ? "内测订阅可用，正式收款待切换" : "暂未开放公开收费";
-    const paymentDetail = paidReady
-      ? "商家可按正式套餐开通订阅；付款、续费和订阅变更仍由后台确认后更新权益。"
+    const billingModeLabel = paidReady ? "在线付款可用" : privateBetaReady ? "受邀试用中" : "在线付款尚未开放";
+    const billingModeDetail = paidReady
+      ? "订阅开通、续费、取消和付款异常会按系统账单状态处理；浏览器不保存支付密钥。"
       : privateBetaReady
-        ? "当前适合小范围内测和人工确认，不会在前台发起真实扣费。"
-        : "公开收费入口先保持关闭，等正式支付、额度和客服流程都确认后再开放。";
+        ? "当前只支持受邀试用和人工确认，不会在前台发起真实扣费。"
+        : "当前只展示套餐、额度和停用规则；不会创建真实付款，也不会自动扣款。";
     const billingAttention = shutdownState.payment_attention_required || blockers.length > 0;
-    const blockedUnits = Array.isArray(shutdownState.blocked_units) ? shutdownState.blocked_units.slice(0, 4) : [];
+    const subscriptionStatusLabel = subscription.entitlement_active ? "权益可用" : billingAttention ? "需要处理" : "待开通";
+    const paymentStatusLabel = billingAttention ? "需要处理" : "正常";
+    const billingPauseDetail = billingAttention
+      ? "请先处理订阅或联系客服恢复；在恢复前只会暂停高成本任务。"
+      : "历史资料、确认记录和账号设置不会因为额度状态被删除。";
+    const flowRows = [
+      ["01", "先看订阅", subscription.entitlement_active ? "基础权益可用" : "基础权益待开通"],
+      ["02", "再看用量", quotaReady ? "AI、联网和素材按额度保护" : "等待额度账本接入"],
+      ["03", "异常处理", "欠费、取消或超量只暂停高成本任务"],
+      ["04", "恢复使用", "续费或客服确认后刷新用量，不需要重复连接 eBay，也不需要重填 AI 连接"],
+    ];
     return `
       <section class="saas-settings-card">
         <div class="saas-settings-card-head">
           <div>
             <span>订阅与付款</span>
-            <strong>${escape(paymentStage)}</strong>
-            <p>${escape(paymentDetail)}</p>
+            <strong>${escape(billingModeLabel)}</strong>
+            <p>${escape(billingModeDetail)}</p>
           </div>
         </div>
         <div class="saas-settings-status-list">
           <article class="${paymentReady ? "is-green" : "is-amber"}">
-            <span>付款入口</span>
-            <strong>${paymentReady ? "已配置" : "待开放"}</strong>
-            <small>${paymentReady ? "商家付款会走正式支付或受控内测确认，页面不展示任何支付密钥。" : "公开收费入口关闭时，商家只能看到订阅阶段和下一步说明。"}</small>
+            <span>当前模式</span>
+            <strong>${escape(billingModeLabel)}</strong>
+            <small>${paymentReady ? "订阅处理会走安全支付页或客服确认，页面不展示任何支付密钥。" : "在线付款开放前，商家只会看到套餐、额度和下一步说明。"}</small>
           </article>
           <article class="${portalReady ? "is-green" : "is-amber"}">
-            <span>订阅管理</span>
-            <strong>${portalReady ? "可自助处理" : "客服协助"}</strong>
-            <small>${portalReady ? "升级、降级、取消和付款方式管理会跳到支付平台处理。" : "正式自助入口未开放前，由客服和后台记录协助处理订阅变更。"}</small>
+            <span>续费 / 取消</span>
+            <strong>${portalReady ? "自助管理可用" : "客服协助"}</strong>
+            <small>${portalReady ? "升级、降级、取消和付款方式管理会在安全订阅页处理。" : "自助入口未开放前，由客服协助处理订阅变更。"}</small>
           </article>
           <article class="${quotaReady ? "is-green" : "is-amber"}">
-            <span>额度与用量</span>
-            <strong>${quotaReady ? "已启用" : "待启用"}</strong>
+            <span>AI / 素材用量</span>
+            <strong>${quotaReady ? "按额度保护" : "等待额度账本"}</strong>
             <small>店铺数、AI CEO 任务、调研、素材和模型用量会按套餐显示，欠费或超量只暂停高成本任务。</small>
           </article>
           <article class="${subscription.entitlement_active ? "is-green" : "is-amber"}">
             <span>当前权益</span>
-            <strong>${escape(subscription.status || "等待订阅")}</strong>
-            <small>${subscription.entitlement_active ? "当前公司权益有效。" : escape(subscription.block_reason || "当前还没有可用订阅。")}</small>
+            <strong>${escape(subscriptionStatusLabel)}</strong>
+            <small>${subscription.entitlement_active ? "当前公司权益有效。" : "当前还没有可用订阅；开通或恢复后会自动更新权益。"}</small>
           </article>
           <article class="${billingAttention ? "is-amber" : "is-green"}">
             <span>付款状态</span>
-            <strong>${billingAttention ? "需要关注" : "正常"}</strong>
-            <small>${billingAttention ? escape(blockedUnits.join(" / ") || blockers.slice(0, 2).join(" / ") || "部分高成本能力可能暂停") : "历史资料、审计记录和账号设置不会因为额度状态被删除。"}</small>
+            <strong>${escape(paymentStatusLabel)}</strong>
+            <small>${escape(billingPauseDetail)}</small>
           </article>
           <article class="${shutdownReady ? "is-green" : "is-amber"}">
             <span>欠费保护</span>
-            <strong>${shutdownReady ? "已闭合" : "待完善"}</strong>
+            <strong>${shutdownReady ? "已启用" : "待完善"}</strong>
             <small>付款失败或取消后，只暂停模型、联网、素材生成等高成本任务，保留商家历史数据。</small>
           </article>
           <article class="${paidReady ? "is-green" : "is-amber"}">
-            <span>公开收费</span>
+            <span>在线付款开放</span>
             <strong>${paidReady ? "可开放" : "暂不开放"}</strong>
-            <small>${paidReady ? "正式开放前仍会保留确认中心和后台记录。" : "当前可以继续内测和流程演练，不对普通商家展示内部上线清单。"}</small>
+            <small>${paidReady ? "开放后仍会保留确认中心和操作记录。" : "当前仅展示试用和订阅说明；在线付款开放前不会收取订阅费用。"}</small>
           </article>
+        </div>
+        <div class="saas-settings-row-list">
+          ${flowRows
+            .map(
+              ([step, title, detail]) => `
+                <article class="is-green">
+                  <div>
+                    <span>${escape(step)}</span>
+                    <strong>${escape(title)}</strong>
+                    <small>${escape(detail)}</small>
+                  </div>
+                </article>
+              `,
+            )
+            .join("")}
+        </div>
+        <div class="saas-settings-safety" hidden aria-hidden="true">
+          <span>merchant_billing_copy_public_safe_v1</span>
+          <span>ordinary_merchant_gets_internal_provider_copy=false</span>
+          <span>ordinary_merchant_gets_rehearsal_controls=false</span>
+          <span>triggers_real_charge=false</span>
+          <span>frontend_gets_payment_secret=false</span>
         </div>
       </section>
     `;

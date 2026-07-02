@@ -25660,7 +25660,7 @@ function saasMerchantBillingGuardrailState() {
     ? shutdown.block_reason || subscription.block_reason || "billing_subscription_not_active"
     : quotaEnforcementEnabled
       ? "订阅、额度和欠费停用由后端判断"
-      : "额度强停证据仍待 provider cutover";
+      : "额度保护仍在接入中";
   return {
     plan,
     usage,
@@ -25712,7 +25712,7 @@ function renderSaasMerchantBillingCurrentStatusPanel(ctx = saasMerchantWorkbench
       label: "当前模式",
       title: hasExternalProvider ? "在线付款已接入" : isTestMode ? "试用模式，不真实扣费" : "等待在线付款开放",
       detail: hasExternalProvider
-        ? "订阅开通、续费、取消和付款失败由后端账单状态判断。"
+        ? "订阅开通、续费、取消和付款失败由系统账单状态判断。"
         : isTestMode
           ? "现在只验证订阅状态和额度停用，不创建真实付款。"
           : "在线付款开放前还要补齐订阅管理；当前不会向商家扣费。",
@@ -25738,15 +25738,15 @@ function renderSaasMerchantBillingCurrentStatusPanel(ctx = saasMerchantWorkbench
     },
     {
       label: "续费 / 取消",
-      title: hasExternalProvider ? "订阅页处理" : "正式上线后开放",
-      detail: hasExternalProvider ? "商家通过订阅页自助管理，前端不接触支付密钥。" : "内测阶段只展示口径和演练状态，不收银行卡或支付信息。",
+      title: hasExternalProvider ? "订阅页处理" : "在线付款开放后可用",
+      detail: hasExternalProvider ? "商家通过订阅页自助管理，前端不接触支付密钥。" : "受邀试用阶段只展示说明和状态，不收银行卡或支付信息。",
       tone: hasExternalProvider ? "green" : "amber",
     },
   ];
   const explainRows = [
-    ["不删资料", "欠费、取消或额度耗尽时，只暂停联网模型、素材生成和高成本任务；历史报告、确认记录和审计证据继续可读。"],
+    ["不删资料", "欠费、取消或额度耗尽时，只暂停联网模型、素材生成和高成本任务；历史报告、确认记录和操作记录继续可读。"],
     ["不代扣平台费", "eBay 成交费、广告费、物流、退款和店铺订阅属于经营成本，捷境只帮你算进利润和风险。"],
-    ["不露密钥", "支付密钥、模型 key、eBay token 和 client secret 都留在后端密钥边界，不在浏览器展示。"],
+    ["不露密钥", "支付资料、AI 连接凭证和平台连接凭证只保存在安全密钥服务里，不在浏览器展示。"],
   ];
   return `
     <section class="saas-settings-card saas-merchant-billing-current" aria-label="当前计费状态">
@@ -25803,7 +25803,7 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
   const isTestMode = Boolean(billing.provider.test_billing_provider_configured);
   const stageLabel = hasExternalProvider ? "在线付款可用" : isTestMode ? "试用模式，不自动扣费" : "暂未开放在线支付";
   const stageDetail = hasExternalProvider
-    ? "订阅、续费、取消和付款失败会按后台账单状态处理，前端不接触支付密钥。"
+    ? "订阅、续费、取消和付款失败会按系统账单状态处理，页面不接触支付密钥。"
     : "当前只展示套餐、额度和停用规则；不会创建真实付款，也不会自动扣款。";
   const rows = [
     {
@@ -25874,7 +25874,7 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
       </div>
       <div class="saas-merchant-billing-plain-note">
         <strong>停用规则</strong>
-        <p>订阅取消、欠费或额度用尽时，只停会继续产生费用的模型、联网和素材生成；历史报告、确认记录、审计证据和账号设置继续保留。</p>
+        <p>订阅取消、欠费或额度用尽时，只停会继续产生费用的模型、联网和素材生成；历史报告、确认记录、操作记录和账号设置继续保留。</p>
       </div>
       <div class="saas-merchant-billing-plain-safety" hidden aria-hidden="true">
         <span>merchant_billing_plain_summary_v1</span>
@@ -25922,7 +25922,7 @@ function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext
     {
       label: "额度",
       title: "订阅状态驱动发放和停用",
-      detail: "开通、续费、取消、付款失败和退款争议写入后端账单事件；quota 只停高成本任务，历史资料和确认记录保留。",
+      detail: "开通、续费、取消、付款失败和退款争议按系统账单状态处理；额度只停高成本任务，历史资料和确认记录保留。",
       tone: quotaReady ? "green" : "amber",
     },
   ];
@@ -25934,7 +25934,7 @@ function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext
   const statusRows = [
     ["当前状态", hasExternalProvider ? "在线付款已接入" : manualBetaMode ? "试用订阅可用" : "暂不自动扣费", hasExternalProvider ? "付款成功后按账单状态开通权益。" : "当前不会自动扣款，订阅开通需按页面或客服提示完成。"],
     ["付费开放", hasExternalProvider ? "可按套餐付款" : "逐步开放", hasExternalProvider ? "商家可从订阅页进入付款流程。" : "在线付款入口开放前，页面只显示订阅说明和可用额度。"],
-    ["恢复边界", "不重复授权 / 不重填模型 key", "账单恢复只处理订阅状态，不要求商家重新连接 eBay 或重新输入模型 key。"],
+    ["恢复边界", "不重复连接 eBay / 不重填 AI 连接", "账单恢复只处理订阅状态，不要求商家重新连接 eBay 或重新输入 AI 连接。"],
   ];
   return `
     <section class="saas-settings-card saas-billing-transition-path" data-billing-transition="merchant_subscription_activation_path_v2" aria-label="订阅开通说明">
@@ -25942,7 +25942,7 @@ function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext
         <div>
           <span>订阅开通说明</span>
           <strong>先看当前是否扣费，再看订阅和额度怎么生效</strong>
-          <p>商家只需要知道当前会不会自动扣费、如何开通套餐、额度什么时候生效。后台接入和审核材料不在这里展示。</p>
+          <p>商家只需要知道当前会不会自动扣费、如何开通套餐、额度什么时候生效。支付接入细节不会出现在这里。</p>
         </div>
         <em>${escapeHtml(hasExternalProvider ? "在线付款可用" : manualBetaMode ? "试用订阅可用" : "暂未自动扣费")}</em>
       </div>
@@ -26926,13 +26926,13 @@ function renderSaasMerchantBillingContinuityPanel(ctx = saasMerchantWorkbenchCon
     {
       step: "03",
       title: "资料继续保留",
-      detail: "历史报告、确认中心、审计证据、店铺资料和规则仍可查看，不因欠费删除。",
+      detail: "历史报告、确认中心、操作记录、店铺资料和规则仍可查看，不因欠费删除。",
       tone: "green",
     },
     {
       step: "04",
       title: "恢复使用",
-      detail: "完成续费或人工恢复后刷新用量即可继续，不要求重复 eBay OAuth 或重填模型 key。",
+      detail: "完成续费或客服确认后刷新用量即可继续，不需要重复连接 eBay，也不需要重填 AI 连接。",
       tone: "green",
     },
   ];
@@ -26961,7 +26961,7 @@ function renderSaasMerchantBillingContinuityPanel(ctx = saasMerchantWorkbenchCon
       </div>
       <div class="saas-merchant-billing-continuity-note">
         <strong>商家能理解的一句话</strong>
-        <p>基础订阅管工作台；AI、联网和素材生成按用量另算。停用时先停会继续花钱的执行能力，经营资料和审计记录保留。</p>
+        <p>基础订阅管工作台；AI、联网和素材生成按用量另算。停用时先停会继续花钱的执行能力，经营资料和操作记录保留。</p>
       </div>
       <div class="saas-merchant-billing-continuity-safety" hidden aria-hidden="true">
         <span>merchant_subscription_shutdown_closure_v2</span>
@@ -27105,7 +27105,7 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
       key: "entitlement_recovery_boundary",
       status: "blocked",
       merchant_promise: "欠费、取消、退款或争议只暂停新高成本任务，历史资料保留，恢复不重复 eBay OAuth。",
-      next_action: "保持欠费、取消、退款和争议的 no-charge 生命周期演练。",
+      next_action: "保持欠费、取消、退款和争议的无扣费生命周期验证。",
     },
   ];
   const visibleCards = cards.length ? cards : fallbackCards;
@@ -27114,10 +27114,18 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
   const copy = {
     price_and_renewal_terms: ["价格与续费", "付款前展示套餐价格、周期、取消路径、额度边界和 AI/素材用量另算说明。"],
     hosted_checkout_payment_boundary: ["托管支付边界", "订阅付款由支付平台托管；捷境浏览器不保存卡号、不直接扣费。"],
-    self_service_cancel_portal: ["自助订阅管理", "商家在订阅管理页处理付款方式、套餐和取消；权益变化等后台确认。"],
-    invoice_receipt_tax_path: ["收据 / 发票 / 税务", "发票和税务口径依赖正式订单、收据和后台记录。"],
+    self_service_cancel_portal: ["自助订阅管理", "商家在订阅管理页处理付款方式、套餐和取消；权益变化等系统确认。"],
+    invoice_receipt_tax_path: ["收据 / 发票 / 税务", "发票和税务口径依赖正式订单、收据和系统记录。"],
     refund_support_public_entry: ["退款与客服入口", "付款前可见条款、隐私、退款政策、客服入口和风险披露。"],
-    entitlement_recovery_boundary: ["权益恢复边界", "欠费、取消、退款或争议只停新高成本任务，历史资料保留，不重复 eBay OAuth。"],
+    entitlement_recovery_boundary: ["权益恢复边界", "欠费、取消、退款或争议只停新高成本任务，历史资料保留，不需要重复连接 eBay。"],
+  };
+  const nextCopy = {
+    price_and_renewal_terms: "付款前会展示完整价格、续费和取消说明。",
+    hosted_checkout_payment_boundary: "开放后会跳转到安全支付页完成订阅付款。",
+    self_service_cancel_portal: "开放后可在订阅页处理付款方式、套餐和取消。",
+    invoice_receipt_tax_path: "开放后按订单、收据和发票规则处理。",
+    refund_support_public_entry: "保持退款政策和客服入口可见。",
+    entitlement_recovery_boundary: "恢复后刷新用量即可继续。",
   };
   return `
     <section class="saas-settings-card saas-merchant-billing-trust-packet" data-billing-trust-packet="merchant_billing_customer_trust_packet_v1" aria-label="付费前客户信任说明">
@@ -27139,7 +27147,7 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
                 <span>${escapeHtml(item.status === "ready" ? "已准备" : "准备中")}</span>
                 <strong>${escapeHtml(title)}</strong>
                 <small>${escapeHtml(detail || item.merchant_promise || "")}</small>
-                <small>${escapeHtml(item.next_action || "等待后续开放。")}</small>
+                <small>${escapeHtml(nextCopy[item.key] || "等待后续开放。")}</small>
               </article>
             `;
           })
@@ -27184,7 +27192,7 @@ function renderSaasMerchantBillingGuardrailPanel(ctx = saasMerchantWorkbenchCont
       return labels[unit] || String(unit || "").replace(/_/g, " ");
     });
   const safeActions = [
-    ["查看历史和确认中心", "报告、审计证据、确认单继续可读"],
+    ["查看历史和确认中心", "报告、操作记录、确认单继续可读"],
     ["修复账单或额度", "通过订阅页面或人工协助恢复，不在前端收密钥"],
     ["保留数据", "欠费/取消只停高成本任务，不删除店铺数据"],
     ["人工确认", "真实付款、发布、退款和广告仍进决策中心"],
@@ -27227,7 +27235,7 @@ function renderSaasMerchantBillingGuardrailPanel(ctx = saasMerchantWorkbenchCont
         <div>
           <span>订阅与额度保护</span>
           <strong>${escapeHtml(billing.label)}</strong>
-          <p>这里给商家解释“为什么某些 AI CEO 高成本任务会暂停”。欠费、取消或额度耗尽时，系统只停联网、模型、素材生成等计费任务；历史报告、确认中心、审计证据和账号设置仍然可用。</p>
+          <p>这里给商家解释“为什么某些 AI CEO 高成本任务会暂停”。欠费、取消或额度耗尽时，系统只停联网、模型、素材生成等计费任务；历史报告、确认中心、操作记录和账号设置仍然可用。</p>
         </div>
         <em>${escapeHtml(billing.subscriptionStatus)}</em>
       </div>
@@ -27353,7 +27361,7 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
     {
       label: "大模型用量",
       title: "按实际消耗另计",
-      detail: "DeepSeek、OpenAI 或商家 BYOK 的文本、联网总结、长报告和高上下文任务按 token、次数或套餐额度核算。",
+      detail: "DeepSeek、OpenAI 或商家自带 AI 连接的文本、联网总结、长报告和高上下文任务按用量、次数或套餐额度核算。",
       tone: "amber",
     },
     {
@@ -33493,13 +33501,13 @@ function saasSettingsOneGlanceRows(activeTabId = "general") {
     ],
     account: [
       ["登录账号", "管理当前捷境账号", "可切换账号或退出登录，不影响已保存的经营记录。"],
-      ["平台连接", "eBay 授权和回调地址", "连接状态、回调地址和账号健康放在同一页。"],
+      ["平台连接", "eBay 连接和回调地址", "连接状态、回调地址和账号健康放在同一页。"],
       ["风险保护", "账号异常先暂停高风险动作", "封禁、受限、付款冻结会先停发布、退款、广告和承诺。"],
     ],
     model: [
       ["文本 AI", "对话、报告、Listing 文案", "AI CEO 和 Listing 草稿走文本模型。"],
       ["素材工坊", "图片和视频脚本分开看", "素材生成回到素材工坊，不混在账号设置里。"],
-      ["凭证安全", "保存后不回显", "模型 key 只进后端密钥边界，页面只显示可用状态。"],
+      ["凭证安全", "保存后不回显", "AI 连接凭证只保存在安全密钥服务里，页面只显示可用状态。"],
     ],
     data: [
       ["官方只读", "商品、订单、政策、费用", "读到什么用什么，缺口会明确显示。"],
@@ -33512,7 +33520,7 @@ function saasSettingsOneGlanceRows(activeTabId = "general") {
       ["越权停住", "没权限只补资料", "高风险动作没有权限就停到决策中心。"],
     ],
     billing: [
-      ["当前阶段", "试用模式，不自动扣费", "在线付款开放前会先准备订阅管理、收据和后台确认。"],
+      ["当前阶段", "试用模式，不自动扣费", "在线付款开放前会先准备订阅管理、收据和系统确认。"],
       ["基础订阅", "¥99/月打开工作台", "AI CEO、Listing、批量、素材工坊和客服订单是基础功能。"],
       ["高成本用量", "AI / 素材另算", "欠费或超量只停模型、联网、素材生成等高成本任务。"],
     ],
@@ -33552,9 +33560,9 @@ function renderSaasSettingsOneGlanceStrip(activeTabId = "general") {
 
 function renderSaasMerchantSecurityBoundaryPanel() {
   const rows = [
-    ["平台凭证", "不在浏览器显示", "eBay token、模型 key、支付密钥只在后端密钥边界处理。"],
+    ["平台凭证", "不在浏览器显示", "eBay 连接、AI 连接和支付凭证只保存在安全密钥服务里。"],
     ["真实动作", "先到决策中心", "发布、退款、广告、采购付款和敏感客服承诺都必须人工确认。"],
-    ["欠费/超量", "只停高成本任务", "历史报告、确认记录、审计证据和账号设置不会被删除。"],
+    ["欠费/超量", "只停高成本任务", "历史报告、确认记录、操作记录和账号设置不会被删除。"],
     ["公开访问", "先过防护入口", "异常访问、刷接口和高成本请求由平台侧防护，不要求商家理解技术细节。"],
   ];
   return `
@@ -33563,7 +33571,7 @@ function renderSaasMerchantSecurityBoundaryPanel() {
         <div>
           <span>隐私与安全</span>
           <strong>敏感凭证不进入浏览器</strong>
-          <p>页面只显示可用状态，不展示 token、key、client secret 或内部部署项；高风险经营动作不会自动执行。</p>
+          <p>页面只显示可用状态，不展示密钥或支付凭证；高风险经营动作不会自动执行。</p>
         </div>
       </div>
       <div class="saas-settings-status-list">

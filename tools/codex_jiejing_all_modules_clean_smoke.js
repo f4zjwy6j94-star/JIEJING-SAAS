@@ -684,6 +684,40 @@ async function main() {
             const section = document.getElementById("view-connect");
             const text = section?.innerText || "";
             const rawText = section?.textContent || "";
+            const billingForbiddenMarkers = [
+              "大陆收款方式",
+              "大陆用户",
+              "个体工商户",
+              "个体户",
+              "主体资料",
+              "聚合收单",
+              "微信",
+              "支付宝",
+              "云闪付",
+              "个人码",
+              "个人收款码",
+              "平台管理员",
+              "主理人",
+              "上线前检查",
+              "支付后台配置",
+              "正式商户支付",
+              "provider",
+              "webhook",
+              "quota",
+              "Customer Portal",
+              "Stripe",
+              "测试付款",
+              "测试开通",
+              "等待演练模式",
+              "无扣费演练",
+              "审计证据",
+              "模型 key",
+              "eBay OAuth",
+              "BYOK",
+              "client secret",
+              "provider cutover",
+            ];
+            const billingForbiddenVisibleMarkers = billingForbiddenMarkers.filter((marker) => text.includes(marker));
             return {
               id,
               has_home_hub: Boolean(section?.querySelector(".saas-settings-home-hub")),
@@ -736,24 +770,8 @@ async function main() {
                 rawText.includes("triggers_real_charge=false") &&
                 rawText.includes("repeat_ebay_oauth_allowed=false") &&
                 rawText.includes("frontend_gets_payment_secret=false"),
-              has_billing_internal_customer_copy: [
-                "大陆收款方式",
-                "大陆用户",
-                "个体工商户",
-                "个体户",
-                "主体资料",
-                "聚合收单",
-                "微信",
-                "支付宝",
-                "云闪付",
-                "个人码",
-                "个人收款码",
-                "平台管理员",
-                "主理人",
-                "上线前检查",
-                "支付后台配置",
-                "正式商户支付",
-              ].some((marker) => text.includes(marker)),
+              has_billing_internal_customer_copy: billingForbiddenVisibleMarkers.length > 0,
+              billing_internal_visible_markers: billingForbiddenVisibleMarkers,
               preview: text.trim().slice(0, 180),
             };
           }, tabId),
