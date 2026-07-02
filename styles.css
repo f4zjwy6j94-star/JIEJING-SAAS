@@ -38523,6 +38523,14 @@ body.saas-public-mvp .saas-billing-transition-path {
   background: linear-gradient(180deg, #ffffff 0%, #f7fbf9 100%);
 }
 
+body.saas-public-mvp .saas-merchant-subscription-activation {
+  border-color: rgba(8, 118, 110, 0.2);
+}
+
+body.saas-public-mvp .saas-merchant-subscription-activation .saas-manual-beta-payment-actions {
+  margin-top: 10px;
+}
+
 body.saas-public-mvp .saas-billing-transition-path .saas-settings-card-head {
   align-items: flex-start;
 }

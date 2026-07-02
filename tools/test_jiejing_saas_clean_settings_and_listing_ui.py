@@ -543,7 +543,7 @@ def main() -> None:
             raise AssertionError(f"Merchant settings must not render internal payment strategy: {forbidden_marker}")
     for required_marker in [
         "mainland_payment_strategy_v1",
-        "manual_qr_not_paid_launch_ready",
+        "manual_confirmation_not_paid_launch_ready",
         "domestic_wallets_primary_for_mainland_users",
         "stripe_paypal_cross_border_fallback",
         "worldfirst_payoneer_settlement_not_checkout",
@@ -561,11 +561,11 @@ def main() -> None:
         "base_subscription_usage_platform_fee_boundary_visible",
         "individual_business_first_then_company_if_scale_requires",
         "formal_payment_requires_merchant_entity_and_subject_alignment",
-        "personal_qr_private_beta_manual_reconciliation_only",
-        "personal_alipay_qr_private_beta_manual_reconciliation_only",
+        "invited_beta_manual_confirmation_only",
+        "invited_beta_payment_reference_not_public_checkout",
         "formal_payment_requires_merchant_order_signed_callback_and_quota_audit",
         "manual_beta_payment_order_v1",
-        "manual_beta_alipay_qr_not_in_repo",
+        "manual_beta_payment_artifact_not_in_repo",
         "manual_beta_owner_confirm_required",
         "manual_beta_confirmation_grants_30d_starter",
         "manual_beta_to_merchant_payment_transition_v1",
@@ -593,7 +593,7 @@ def main() -> None:
         "customer_portal_before_self_service_subscription_management",
         "signed_webhook_before_quota_grant",
         "owner_live_cutover_required_before_public_charge",
-        "manual_qr_private_beta_only_not_paid_launch_provider",
+        "invited_beta_manual_confirmation_not_paid_launch_provider",
     ]:
         require(app_js, required_marker, "mainland payment public safety markers")
     for required_style_marker in [
@@ -676,6 +676,11 @@ def main() -> None:
     require(app_js, 'Promise.resolve({ owner_launch_control: null, skipped: "owner_admin_only" })', "owner launch control public-page quiet skip")
     require(app_js, 'saasOwnerLaunchCanView()\n        ? optionalSaasFetchFast(`/security/staging-gate?store_id=${encodeURIComponent(store.store_id)}`', "staging security gate should not be fetched for ordinary merchants")
     require(app_js, 'Promise.resolve({ staging_security_gate: null, skipped: "platform_internal_admin_only" })', "staging security gate public-page quiet skip")
+    require(app_js, 'saasOwnerLaunchCanView()\n        ? optionalSaasFetchFast("/billing/payment-options"', "payment strategy should not be fetched for ordinary merchants")
+    require(app_js, 'Promise.resolve({ payment_options: null, skipped: "owner_admin_only_payment_options" })', "payment strategy public-page quiet skip")
+    require(app_js, "function merchantSafeSaasBillingPlan", "ordinary merchant billing state sanitizer")
+    require(app_js, "delete safePlan.payment_strategy;", "ordinary merchant billing plan must drop internal payment strategy")
+    require(app_js, "state.saasBillingPlan = merchantSafeSaasBillingPlan(rawBillingPlan);", "billing plan must be sanitized before ordinary UI state")
     for billing_model_marker in [
         "基础订阅保留工作台",
         "AI 用量和素材生成单独核算",
@@ -700,6 +705,14 @@ def main() -> None:
         "base_subscription_is_feature_fee=true",
         "ai_media_usage_is_separate=true",
         "platform_cost_not_collected_by_jiejing=true",
+        "订阅开通路径",
+        "试用先提交申请，正式付款开放后走安全支付页",
+        "merchant_subscription_request_path_v1",
+        "merchant_beta_request_no_real_charge",
+        "merchant_request_requires_service_confirmation",
+        "formal_checkout_uses_hosted_payment_page",
+        "entitlement_grant_requires_billing_state",
+        "试用订阅申请已生成",
         "订阅开通说明",
         "先看当前是否扣费，再看订阅和额度怎么生效",
         "当前不会自动扣费",
@@ -1024,6 +1037,7 @@ def main() -> None:
         ".saas-merchant-billing-trust-packet",
         ".saas-merchant-billing-trust-grid",
         ".saas-merchant-billing-trust-note",
+        ".saas-merchant-subscription-activation",
     ]:
         require(styles, incident_style_marker, "billing incident runbook styling")
 

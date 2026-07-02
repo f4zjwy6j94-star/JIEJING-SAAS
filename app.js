@@ -21478,6 +21478,23 @@ async function refreshSaasEbayDiagnostics(options = {}) {
   return true;
 }
 
+function merchantSafeSaasBillingPlan(plan) {
+  if (!plan || typeof plan !== "object") return null;
+  if (saasOwnerLaunchCanView()) return plan;
+  const safePlan = { ...plan };
+  delete safePlan.payment_strategy;
+  if (safePlan.provider && typeof safePlan.provider === "object") {
+    const provider = { ...safePlan.provider };
+    delete provider.recommended_mainland_provider_order;
+    delete provider.mainland_payment_strategy_contract;
+    delete provider.allowed_private_beta_providers;
+    delete provider.manual_seed_allowed_for_private_beta;
+    delete provider.manual_beta_allowed_for_private_beta;
+    safePlan.provider = provider;
+  }
+  return safePlan;
+}
+
 async function refreshSaasState(options = {}) {
   const { silent = false, refreshLaunchGate = true } = options;
   const canFetchProtectedState = hasSaasProtectedSessionCandidate();
@@ -21641,7 +21658,9 @@ async function refreshSaasState(options = {}) {
       optionalSaasFetchFast("/billing/plans", { billing_plan: null }),
       optionalSaasFetchFast("/billing/usage", { billing_usage: null }),
       optionalSaasFetchFast("/billing/checkout-contract", { billing_checkout: null }),
-      optionalSaasFetchFast("/billing/payment-options", { payment_options: null }),
+      saasOwnerLaunchCanView()
+        ? optionalSaasFetchFast("/billing/payment-options", { payment_options: null })
+        : Promise.resolve({ payment_options: null, skipped: "owner_admin_only_payment_options" }),
       optionalSaasFetchFast("/billing/manual-beta/orders", { manual_beta_payment_orders: [] }),
       optionalSaasFetchFast("/commercial/billing-domain-cutover-rehearsal", { billing_domain_cutover_rehearsal: null }, 15000),
       optionalSaasFetchFast("/domain/edge-cutover-preflight", { edge_cutover_preflight: state.saasEdgeCutoverPreflight || null }, 15000),
@@ -21731,10 +21750,11 @@ async function refreshSaasState(options = {}) {
     state.saasDatabaseAdapters = databaseAdapters.database_adapters || null;
     state.saasDatabaseInventory = databaseInventory.database_inventory || null;
     state.saasBackupPlan = backupPlan.backup_plan || null;
-    state.saasBillingPlan = billingPlan.billing_plan || null;
+    const rawBillingPlan = billingPlan.billing_plan || null;
+    state.saasBillingPlan = merchantSafeSaasBillingPlan(rawBillingPlan);
     state.saasBillingUsage = billingUsage.billing_usage || null;
     state.saasBillingCheckout = billingCheckout.billing_checkout || null;
-    state.saasPaymentOptions = paymentOptions.payment_options || billingPlan.billing_plan?.payment_strategy || null;
+    state.saasPaymentOptions = saasOwnerLaunchCanView() ? paymentOptions.payment_options || rawBillingPlan?.payment_strategy || null : null;
     state.saasManualBetaPaymentOrders = manualBetaPaymentOrders.manual_beta_payment_orders || [];
     state.saasBillingDomainCutoverRehearsal = billingDomainCutoverRehearsal.billing_domain_cutover_rehearsal || null;
     state.saasEdgeCutoverPreflight = edgeCutoverPreflight.edge_cutover_preflight || state.saasEdgeCutoverPreflight || null;
@@ -23160,10 +23180,15 @@ async function runSaasBillingProviderRehearsal(button) {
   }
 }
 
+function renderSaasBillingActionSurfaces() {
+  renderSaasConnectCenter(document.querySelector("#view-connect"));
+  renderSaasBackendPanel();
+}
+
 async function runSaasManualBetaCreateOrder(button) {
   const planKey = String(button?.dataset?.manualBetaPlanKey || "starter").trim().toLowerCase();
   state.saasLoading = true;
-  renderSaasBackendPanel();
+  renderSaasBillingActionSurfaces();
   try {
     const payload = await saasFetch("/billing/manual-beta/orders", {
       method: "POST",
@@ -23172,12 +23197,12 @@ async function runSaasManualBetaCreateOrder(button) {
     const order = payload.manual_beta_payment_order || {};
     state.saasManualBetaPaymentOrders = [order, ...(state.saasManualBetaPaymentOrders || []).filter((item) => item?.order_id !== order.order_id)];
     await refreshSaasState({ silent: true, refreshLaunchGate: false });
-    showActionToast("内测付款单已生成：付款时只需要备注付款编号，后台确认后开通 30 天基础权限。");
+    showActionToast("试用订阅申请已生成：确认后会显示可用期限和额度状态。");
   } catch (error) {
-    showActionToast(`内测付款单生成失败：${String(error.message || error)}`);
+    showActionToast(`试用订阅申请没有提交成功：${String(error.message || error)}`);
   } finally {
     state.saasLoading = false;
-    renderSaasBackendPanel();
+    renderSaasBillingActionSurfaces();
   }
 }
 
@@ -23188,7 +23213,7 @@ async function runSaasManualBetaConfirmOrder(button) {
     return;
   }
   state.saasLoading = true;
-  renderSaasBackendPanel();
+  renderSaasBillingActionSurfaces();
   try {
     const payload = await saasFetch(`/billing/manual-beta/orders/${encodeURIComponent(orderId)}/confirm`, {
       method: "POST",
@@ -23205,7 +23230,7 @@ async function runSaasManualBetaConfirmOrder(button) {
     showActionToast(`确认内测收款失败：${String(error.message || error)}`);
   } finally {
     state.saasLoading = false;
-    renderSaasBackendPanel();
+    renderSaasBillingActionSurfaces();
   }
 }
 
@@ -25888,6 +25913,127 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
   `;
 }
 
+function renderSaasMerchantSubscriptionActivationPanel(ctx = saasMerchantWorkbenchContext()) {
+  const billing = saasMerchantBillingGuardrailState();
+  const hasExternalProvider = Boolean(billing.provider.external_paid_provider_configured);
+  const orders = Array.isArray(state.saasManualBetaPaymentOrders) ? state.saasManualBetaPaymentOrders : [];
+  const latestPending = orders.find((item) => item?.status === "pending_manual_payment_confirmation") || null;
+  const latestConfirmed = orders.find((item) => item?.status === "confirmed_manual_receipt") || null;
+  const latestOrder = latestPending || latestConfirmed || orders[0] || null;
+  const activeUntil = latestOrder?.active_until ? String(latestOrder.active_until).slice(0, 10) : "";
+  const statusLabel = billing.entitlementActive
+    ? "套餐可用"
+    : latestPending
+      ? "申请待确认"
+      : hasExternalProvider
+        ? "在线开通准备中"
+        : "可提交试用申请";
+  const actionDisabled = state.saasLoading || Boolean(latestPending) || Boolean(billing.entitlementActive) ? "disabled" : "";
+  const actionLabel = billing.entitlementActive ? "套餐已开通" : latestPending ? "已提交申请" : "申请开通基础试用套餐";
+  const pathRows = [
+    {
+      label: "现在",
+      title: billing.entitlementActive ? "基础套餐已开通" : latestPending ? "等待确认开通" : "先提交试用申请",
+      detail: billing.entitlementActive
+        ? "当前套餐权益可用；高成本任务仍按额度和用量保护。"
+        : latestPending
+          ? "申请已生成，确认后页面会显示可用期限和额度状态。"
+          : "提交申请只生成开通记录，不会自动扣款，也不会保存支付资料。",
+      tone: billing.entitlementActive ? "green" : latestPending ? "amber" : "green",
+    },
+    {
+      label: "开通",
+      title: hasExternalProvider ? "安全支付页开通" : "确认后开通",
+      detail: hasExternalProvider
+        ? "正式开放后，订阅付款会在安全支付页完成，捷境按账单结果更新权益。"
+        : "试用阶段由服务支持确认后开通基础套餐，页面只展示申请编号和状态。",
+      tone: hasExternalProvider || latestPending || billing.entitlementActive ? "green" : "amber",
+    },
+    {
+      label: "额度",
+      title: "按套餐状态生效",
+      detail: "权益生效后才发放 AI、联网报告和素材生成额度；浏览器不能自己发放或恢复额度。",
+      tone: billing.quotaEnforcementEnabled || billing.entitlementActive ? "green" : "amber",
+    },
+    {
+      label: "以后",
+      title: "在线付款逐步开放",
+      detail: "正式收费前会先展示价格、周期、续费、取消、发票、退款和客服入口。",
+      tone: hasExternalProvider ? "green" : "amber",
+    },
+  ];
+  const orderRows = latestOrder
+    ? [
+        ["申请编号", latestOrder.payment_note || latestOrder.order_id || "已生成", "联系客服时可提供这个编号。"],
+        [
+          "申请状态",
+          latestOrder.status === "confirmed_manual_receipt" ? "已确认开通" : "等待确认",
+          activeUntil ? `可用至 ${activeUntil}` : "确认后显示可用期限。",
+        ],
+        ["套餐", `¥${latestOrder.amount_cny || 99} / ${latestOrder.duration_days || 30} 天`, "基础试用套餐。"],
+      ]
+    : [
+        ["申请编号", "提交后生成", "用于识别本次试用开通申请。"],
+        ["申请状态", "尚未提交", "提交申请不会自动扣款。"],
+        ["套餐", "¥99 / 30 天", "基础试用套餐。"],
+      ];
+  return `
+    <section class="saas-settings-card saas-billing-transition-path saas-merchant-subscription-activation" data-subscription-activation="merchant_subscription_request_path_v1" aria-label="订阅开通路径">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>订阅开通路径</span>
+          <strong>试用先提交申请，正式付款开放后走安全支付页</strong>
+          <p>这里只给商家说明开通顺序：现在不会自动扣款；试用申请确认后显示可用期限和额度；正式在线付款开放后，付款在安全支付页完成。</p>
+        </div>
+        <em>${escapeHtml(statusLabel)}</em>
+      </div>
+      <div class="saas-billing-transition-flow">
+        ${pathRows
+          .map(
+            (row) => `
+              <article class="is-${escapeHtml(row.tone)}">
+                <span>${escapeHtml(row.label)}</span>
+                <strong>${escapeHtml(row.title)}</strong>
+                <small>${escapeHtml(row.detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-billing-transition-status" aria-label="试用申请状态">
+        ${orderRows
+          .map(
+            ([label, title, detail]) => `
+              <article>
+                <span>${escapeHtml(label)}</span>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-manual-beta-payment-actions">
+        <button class="primary-action compact-action" type="button" data-saas-action="manual-beta-create-order" data-manual-beta-plan-key="starter" ${actionDisabled}>${escapeHtml(actionLabel)}</button>
+        <button class="secondary-action compact-action" type="button" data-global-flow-view="activity">查看工作记录</button>
+      </div>
+      <div class="saas-billing-transition-safety" hidden aria-hidden="true">
+        <span>merchant_subscription_request_path_v1</span>
+        <span>merchant_beta_request_no_real_charge</span>
+        <span>merchant_request_requires_service_confirmation</span>
+        <span>formal_checkout_uses_hosted_payment_page</span>
+        <span>entitlement_grant_requires_billing_state</span>
+        <span>browser_cannot_grant_quota</span>
+        <span>triggers_real_charge=false</span>
+        <span>charge_now_allowed=false</span>
+        <span>frontend_gets_payment_secret=false</span>
+        <span>secret_exposed=false</span>
+        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
+      </div>
+    </section>
+  `;
+}
+
 function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
   const hasExternalProvider = Boolean(billing.provider.external_paid_provider_configured);
@@ -26326,7 +26472,7 @@ function renderSaasBillingPaidLaunchBlockersPanel(ctx = saasMerchantWorkbenchCon
         <span>customer_portal_before_self_service_subscription_management</span>
         <span>signed_webhook_before_quota_grant</span>
         <span>owner_live_cutover_required_before_public_charge</span>
-        <span>manual_qr_private_beta_only_not_paid_launch_provider</span>
+        <span>invited_beta_manual_confirmation_not_paid_launch_provider</span>
         <span>ready_for_paid_launch=${Boolean(paidReady)}</span>
         <span>charge_now_allowed=false</span>
         <span>triggers_real_charge=false</span>
@@ -26799,12 +26945,12 @@ function renderSaasMainlandPaymentStrategyPanel() {
         <span>base_subscription_usage_platform_fee_boundary_visible</span>
         <span>individual_business_first_then_company_if_scale_requires</span>
         <span>formal_payment_requires_merchant_entity_and_subject_alignment</span>
-        <span>personal_qr_private_beta_manual_reconciliation_only</span>
+        <span>invited_beta_manual_confirmation_only</span>
         <span>domestic_wallets_primary_for_mainland_users</span>
         <span>stripe_paypal_cross_border_fallback</span>
         <span>worldfirst_payoneer_settlement_not_checkout</span>
-        <span>manual_qr_not_paid_launch_ready</span>
-        <span>personal_alipay_qr_private_beta_manual_reconciliation_only</span>
+        <span>manual_confirmation_not_paid_launch_ready</span>
+        <span>invited_beta_payment_reference_not_public_checkout</span>
         <span>formal_payment_requires_merchant_order_signed_callback_and_quota_audit</span>
         <span>future_mainland_company_conflict=${Boolean(domainPlan.future_mainland_company_conflict)}</span>
         <span>triggers_real_charge=false</span>
@@ -26887,10 +27033,10 @@ function renderSaasManualBetaPaymentOrderPanel() {
       </div>
       <div class="saas-manual-beta-payment-safety" hidden aria-hidden="true">
         <span>manual_beta_payment_order_v1</span>
-        <span>manual_beta_alipay_qr_not_in_repo</span>
+        <span>manual_beta_payment_artifact_not_in_repo</span>
         <span>manual_beta_owner_confirm_required</span>
         <span>manual_beta_confirmation_grants_30d_starter</span>
-        <span>personal_alipay_qr_private_beta_manual_reconciliation_only</span>
+        <span>invited_beta_payment_reference_not_public_checkout</span>
         <span>can_be_paid_public_launch_provider=false</span>
         <span>triggers_real_charge=false</span>
         <span>frontend_gets_payment_secret=false</span>
@@ -33718,6 +33864,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       intro: "查看基础订阅、AI 用量、素材生成、欠费停用和账号安全边界。",
       panels: [
         renderSaasMerchantBillingPlainSummaryPanel(ctx),
+        renderSaasMerchantSubscriptionActivationPanel(ctx),
         renderSaasMerchantBillingCustomerTrustPanel(ctx),
         renderSaasMerchantPricingModelPanel(ctx),
         renderSaasMerchantBillingContinuityPanel(ctx),
