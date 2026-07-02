@@ -248,6 +248,54 @@ def build_billing_provider_evidence_register(settings: SaaSSettings, repository:
             external_resource_required=True,
         ),
         _row(
+            "no_charge_live_domain_rehearsal_packet",
+            "No-charge live-domain billing rehearsal packet",
+            all(
+                (stages.get(key) or {}).get("status") == "ready"
+                for key in (
+                    "stripe_checkout_return_urls_on_stable_domain",
+                    "stripe_customer_portal_return_url_on_stable_domain",
+                    "stripe_signed_webhook_on_stable_domain",
+                )
+            )
+            and _env_bool("JIEJING_NO_CHARGE_CHECKOUT_RETURN_URL_SMOKE_PASSED")
+            and _env_bool("JIEJING_NO_CHARGE_PORTAL_RETURN_URL_SMOKE_PASSED")
+            and _env_bool("JIEJING_NO_CHARGE_SIGNED_WEBHOOK_SMOKE_PASSED")
+            and _env_bool("JIEJING_NO_CHARGE_READINESS_SMOKE_PASSED")
+            and _env_present("JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID"),
+            category="release",
+            owner="release_manager",
+            evidence_summary=_evidence(
+                checkout_return=_env_bool("JIEJING_NO_CHARGE_CHECKOUT_RETURN_URL_SMOKE_PASSED"),
+                portal_return=_env_bool("JIEJING_NO_CHARGE_PORTAL_RETURN_URL_SMOKE_PASSED"),
+                signed_webhook=_env_bool("JIEJING_NO_CHARGE_SIGNED_WEBHOOK_SMOKE_PASSED"),
+                readiness=_env_bool("JIEJING_NO_CHARGE_READINESS_SMOKE_PASSED"),
+                evidence_id_present=_env_present("JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID"),
+                creates_checkout_session=False,
+                triggers_real_charge=False,
+            ),
+            environment_keys=[
+                "JIEJING_NO_CHARGE_CHECKOUT_RETURN_URL_SMOKE_PASSED",
+                "JIEJING_NO_CHARGE_PORTAL_RETURN_URL_SMOKE_PASSED",
+                "JIEJING_NO_CHARGE_SIGNED_WEBHOOK_SMOKE_PASSED",
+                "JIEJING_NO_CHARGE_READINESS_SMOKE_PASSED",
+                "JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID",
+            ],
+            verification=[
+                "/commercial/billing-domain-cutover-rehearsal",
+                "/billing/checkout-contract",
+                "/health",
+                "/health/deep",
+                "/readiness/product-saas",
+            ],
+            docs=[
+                "https://docs.stripe.com/payments/checkout/build-subscriptions",
+                "https://docs.stripe.com/customer-management/integrate-customer-portal",
+                "https://docs.stripe.com/webhooks",
+            ],
+            external_resource_required=False,
+        ),
+        _row(
             "cutover_rollback_audit_packet",
             "Rollback audit packet",
             (stages.get("cutover_rollback_audit_packet_recorded") or {}).get("status") == "ready",

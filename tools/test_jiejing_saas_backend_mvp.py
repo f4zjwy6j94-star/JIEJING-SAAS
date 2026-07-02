@@ -885,6 +885,7 @@ def main() -> int:
             "stripe_entitlement_quota_lifecycle",
             "stripe_tax_invoice_receipt_branding_evidence",
             "stable_domain_billing_callbacks",
+            "no_charge_live_domain_rehearsal_packet",
             "cutover_rollback_audit_packet",
         }:
             if required_provider_row not in provider_rows:

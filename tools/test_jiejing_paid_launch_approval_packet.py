@@ -97,6 +97,15 @@ def main() -> int:
         rehearsal_external_keys = (external.get("no_charge_rehearsal_evidence_flags") or {}).get("environment_keys", [])
         if "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID" not in rehearsal_external_keys:
             return fail("approval packet must require rollback audit packet id before paid launch")
+        for required_no_charge_key in {
+            "JIEJING_NO_CHARGE_CHECKOUT_RETURN_URL_SMOKE_PASSED",
+            "JIEJING_NO_CHARGE_PORTAL_RETURN_URL_SMOKE_PASSED",
+            "JIEJING_NO_CHARGE_SIGNED_WEBHOOK_SMOKE_PASSED",
+            "JIEJING_NO_CHARGE_READINESS_SMOKE_PASSED",
+            "JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID",
+        }:
+            if required_no_charge_key not in rehearsal_external_keys:
+                return fail(f"approval packet must require no-charge rehearsal evidence key: {required_no_charge_key}")
         new_account_keys = set((external.get("clean_new_ebay_account_and_fresh_product") or {}).get("environment_keys", []))
         for required_key in {
             "JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN",
@@ -218,6 +227,11 @@ def _set_stripe_domain_ready_env() -> dict[str, str | None]:
             "JIEJING_STRIPE_PAYMENT_FAILURE_TESTED": "1",
             "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID": "stripe_portal_failure_path_approval_unit",
             "JIEJING_STRIPE_SUBSCRIPTION_STATE_PERSISTENCE_TESTED": "1",
+            "JIEJING_NO_CHARGE_CHECKOUT_RETURN_URL_SMOKE_PASSED": "1",
+            "JIEJING_NO_CHARGE_PORTAL_RETURN_URL_SMOKE_PASSED": "1",
+            "JIEJING_NO_CHARGE_SIGNED_WEBHOOK_SMOKE_PASSED": "1",
+            "JIEJING_NO_CHARGE_READINESS_SMOKE_PASSED": "1",
+            "JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID": "no_charge_live_domain_approval_unit",
             "JIEJING_CUTOVER_ROLLBACK_VERIFIED": "1",
             "JIEJING_SECRET_SCAN_PASSED": "1",
             "JIEJING_READINESS_SNAPSHOT_RECORDED": "1",
@@ -266,6 +280,11 @@ def _keys() -> list[str]:
         "JIEJING_STRIPE_PAYMENT_FAILURE_TESTED",
         "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID",
         "JIEJING_STRIPE_SUBSCRIPTION_STATE_PERSISTENCE_TESTED",
+        "JIEJING_NO_CHARGE_CHECKOUT_RETURN_URL_SMOKE_PASSED",
+        "JIEJING_NO_CHARGE_PORTAL_RETURN_URL_SMOKE_PASSED",
+        "JIEJING_NO_CHARGE_SIGNED_WEBHOOK_SMOKE_PASSED",
+        "JIEJING_NO_CHARGE_READINESS_SMOKE_PASSED",
+        "JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID",
         "JIEJING_CUTOVER_ROLLBACK_VERIFIED",
         "JIEJING_SECRET_SCAN_PASSED",
         "JIEJING_READINESS_SNAPSHOT_RECORDED",
