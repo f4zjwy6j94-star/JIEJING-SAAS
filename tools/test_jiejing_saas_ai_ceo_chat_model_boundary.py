@@ -247,6 +247,12 @@ def main() -> int:
             return fail(f"pre-model realtime search should route as external_realtime, got {pre_model_chat.get('route')}")
         if not pre_model_chat.get("source_records"):
             return fail("pre-model realtime search should return source records")
+        if not pre_model_chat.get("work_records"):
+            return fail("pre-model realtime search should return AI CEO work records")
+        if not pre_model_chat.get("confirmation_items"):
+            return fail("pre-model realtime search should return confirmation guidance")
+        if pre_model_chat.get("source_policy", {}).get("no_source_no_latest_claim") is not True:
+            return fail("pre-model realtime search should carry no-source-no-latest-claim policy")
         if FakeModelHandler.calls:
             return fail("pre-model realtime search should not call the text model provider")
         if pre_model_realtime_response.get("model_secret_resolution", {}).get("status") != "not_required_for_fast_route":
@@ -394,6 +400,13 @@ def main() -> int:
             return fail("realtime stock question should not wait for the text model after live source records are attached")
         if not FakeSearchHandler.calls:
             return fail("realtime stock question should call the backend search provider")
+        if not realtime_chat.get("work_records"):
+            return fail("realtime stock question should return AI CEO work records")
+        if not realtime_chat.get("confirmation_items"):
+            return fail("realtime stock question should return confirmation guidance")
+        source_policy = realtime_chat.get("source_policy", {})
+        if source_policy.get("requires_source_records") is not True or source_policy.get("raw_provider_response_stored") is not False:
+            return fail(f"realtime stock question should expose safe source policy, got {source_policy}")
         if "unit-test-search-credential-placeholder" in json.dumps(realtime_response, ensure_ascii=False):
             return fail("AI CEO realtime search response must not expose search provider credential")
 

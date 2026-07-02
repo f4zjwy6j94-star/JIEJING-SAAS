@@ -8,6 +8,7 @@ a merchant-facing answer without exposing AI credentials or eBay tokens.
 from __future__ import annotations
 
 import csv
+import hashlib
 import html
 import io
 import json
@@ -112,6 +113,12 @@ def run_ai_ceo_chat(
                     "model_client": model_context,
                     "realtime_search": realtime_search,
                     "source_records": realtime_search.get("source_records") or [],
+                    **_realtime_workflow_fields(
+                        kind=realtime_kind,
+                        message=safe_message,
+                        realtime_search=realtime_search,
+                        route_meta=route_meta,
+                    ),
                     **route_meta,
                     "route_label": "实时搜索",
                     "frontend_gets_model_api_key": False,
@@ -146,6 +153,12 @@ def run_ai_ceo_chat(
                 "model_client": _public_model_context(result, model_client, model_resolution) if result else model_context,
                 "realtime_search": realtime_search,
                 "source_records": realtime_search.get("source_records") or [],
+                **_realtime_workflow_fields(
+                    kind=realtime_kind,
+                    message=safe_message,
+                    realtime_search=realtime_search,
+                    route_meta=route_meta,
+                ),
                 **route_meta,
                 "route_label": "实时搜索",
                 "frontend_gets_model_api_key": False,
@@ -159,6 +172,12 @@ def run_ai_ceo_chat(
             "context": context,
             "model_client": model_context,
             "realtime_search": realtime_search,
+            **_realtime_workflow_fields(
+                kind=realtime_kind,
+                message=safe_message,
+                realtime_search=realtime_search,
+                route_meta=route_meta,
+            ),
             **route_meta,
             "frontend_gets_model_api_key": False,
             "runtime_gets_raw_ebay_token": False,
@@ -285,6 +304,12 @@ def run_ai_ceo_fast_turn(
             "model_client": model_context,
             "realtime_search": realtime_search,
             "source_records": realtime_search.get("source_records") or [],
+            **_realtime_workflow_fields(
+                kind=realtime_kind,
+                message=safe_message,
+                realtime_search=realtime_search,
+                route_meta=route_meta,
+            ),
             **route_meta,
             "route_label": "实时搜索",
             "frontend_gets_model_api_key": False,
@@ -298,6 +323,12 @@ def run_ai_ceo_fast_turn(
         "context": context,
         "model_client": model_context,
         "realtime_search": realtime_search,
+        **_realtime_workflow_fields(
+            kind=realtime_kind,
+            message=safe_message,
+            realtime_search=realtime_search,
+            route_meta=route_meta,
+        ),
         **route_meta,
         "frontend_gets_model_api_key": False,
         "runtime_gets_raw_ebay_token": False,
@@ -714,6 +745,113 @@ def _run_realtime_search(*, kind: str, message: str) -> dict[str, Any]:
         "frontend_gets_search_api_key": False,
         "secret_exposed": False,
     }
+
+
+def _realtime_workflow_fields(
+    *,
+    kind: str,
+    message: str,
+    realtime_search: dict[str, Any],
+    route_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    handoff = _build_realtime_workflow_handoff(
+        kind=kind,
+        message=message,
+        realtime_search=realtime_search,
+        route_meta=route_meta,
+    )
+    return {
+        "workflow_handoff": handoff,
+        "work_records": handoff["work_records"],
+        "confirmation_items": handoff["confirmation_items"],
+        "source_policy": handoff["source_policy"],
+    }
+
+
+def _build_realtime_workflow_handoff(
+    *,
+    kind: str,
+    message: str,
+    realtime_search: dict[str, Any],
+    route_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    realtime_search = realtime_search if isinstance(realtime_search, dict) else {}
+    route_meta = route_meta if isinstance(route_meta, dict) else {}
+    source_records = realtime_search.get("source_records") if isinstance(realtime_search.get("source_records"), list) else []
+    captured_at = _safe_text(realtime_search.get("captured_at") or now_iso(), limit=80)
+    query = _safe_text(realtime_search.get("query") or message, limit=260)
+    source_count = len(source_records)
+    ready = realtime_search.get("status") == "ready" and source_count > 0
+    status = "ready" if ready else "blocked_missing_source"
+    safe_goal = _safe_text(message, limit=120)
+    source_ids = [
+        _workflow_handoff_id("source", item.get("title"), item.get("url"), item.get("captured_at") or captured_at)
+        for item in source_records[:5]
+        if isinstance(item, dict)
+    ]
+    work_record = {
+        "work_record_id": _workflow_handoff_id("work", kind, query, captured_at),
+        "work_record_type": "ai_ceo_realtime_source_check",
+        "title": "实时来源核验",
+        "summary": (
+            f"AI CEO 已围绕“{safe_goal}”检索公开来源，拿到 {source_count} 条可展示来源。"
+            if ready
+            else f"AI CEO 已尝试围绕“{safe_goal}”检索公开来源，但当前没有足够来源支撑实时结论。"
+        ),
+        "status": "completed" if ready else "blocked",
+        "used_for": ["ai_ceo_chat", "source_backed_answer"] if ready else ["ai_ceo_chat", "blocked_no_realtime_source"],
+        "source_record_count": source_count,
+        "source_record_ids": source_ids,
+        "captured_at": captured_at,
+        "next_step": "可以继续追问，或把这些来源带入 eBay 调研、Listing 草稿和风险复核。" if ready else "换更具体的问题重试；没有来源时不会编造最新结论。",
+        "frontend_gets_search_api_key": False,
+        "secret_exposed": False,
+    }
+    confirmation_item = {
+        "confirmation_hint_id": _workflow_handoff_id("confirmation", kind, query, captured_at),
+        "action_type": "realtime_source_review_before_execution",
+        "title": "用于真实经营动作前再确认",
+        "summary": (
+            "这次只完成公开来源核验和回答整理；如果下一步涉及发布、改价、库存、退款、广告、采购付款、政策修改或买家承诺，仍需进入确认中心。"
+        ),
+        "status": "guidance_only",
+        "is_actionable": False,
+        "requires_confirmation_center_before_execution": True,
+        "real_write_allowed_without_confirmation": False,
+        "source_record_count": source_count,
+        "secret_exposed": False,
+    }
+    source_policy = {
+        "requires_source_records": True,
+        "has_source_records": ready,
+        "no_source_no_latest_claim": True,
+        "raw_provider_response_stored": False,
+        "frontend_gets_search_api_key": False,
+        "secret_exposed": False,
+    }
+    return {
+        "status": status,
+        "workflow_kind": "ai_ceo_external_realtime_handoff",
+        "route": _safe_text(route_meta.get("route") or AI_CEO_ROUTE_EXTERNAL_REALTIME, limit=60),
+        "realtime_kind": _safe_text(kind, limit=60),
+        "query": query,
+        "captured_at": captured_at,
+        "source_record_count": source_count,
+        "work_records": [work_record],
+        "confirmation_items": [confirmation_item],
+        "source_policy": source_policy,
+        "frontend_gets_search_api_key": False,
+        "runtime_gets_raw_ebay_token": False,
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+
+
+def _workflow_handoff_id(*parts: Any) -> str:
+    raw = "|".join(_safe_text(part, limit=180) for part in parts if part is not None)
+    digest = hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()[:14]
+    prefix = re.sub(r"[^a-z0-9_]+", "_", _safe_text(parts[0] if parts else "handoff", limit=40).lower()).strip("_") or "handoff"
+    return f"{prefix}_{digest}"
 
 
 def _realtime_search_query(*, kind: str, message: str) -> str:

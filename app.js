@@ -17960,8 +17960,12 @@ function shouldShowSaasAiCeoWorkDetail(turn = {}) {
   const route = String(latest.route || "");
   const status = String(latest.status || "");
   const sourceCount = normalizeSaasAiCeoSourceRecords(latest.source_records || []).length;
+  const workCount = normalizeSaasAiCeoWorkRecords(latest.work_records || []).length;
+  const confirmationCount = normalizeSaasAiCeoConfirmationItems(latest.confirmation_items || []).length;
   return Boolean(
     sourceCount ||
+      workCount ||
+      confirmationCount ||
       latest.decision_center_required ||
       latest.long_term_memory ||
       latest.writes_merchant_rule ||
@@ -18000,6 +18004,8 @@ function renderSaasAiCeoWorkDetailMarkup(turn = {}) {
       <div class="saas-ai-ceo-work-detail-body">
         ${renderSaasAiCeoOperatingRowsMarkup(latest)}
         ${renderSaasAiCeoSourceRecordsMarkup(latest.source_records)}
+        ${renderSaasAiCeoWorkRecordsMarkup(latest.work_records)}
+        ${renderSaasAiCeoConfirmationItemsMarkup(latest.confirmation_items)}
       </div>
     </details>
   `;
@@ -18388,6 +18394,9 @@ function handleSaasCeoCommandSubmit(text) {
       const chat = payload?.ai_ceo_chat && typeof payload.ai_ceo_chat === "object" ? payload.ai_ceo_chat : null;
       const answer = saasAiCeoProductizedAnswerText(chat?.answer || "", chat?.status || "");
       const sourceRecords = normalizeSaasAiCeoSourceRecords(chat?.source_records || chat?.realtime_search?.source_records || []);
+      const workRecords = normalizeSaasAiCeoWorkRecords(chat?.work_records || chat?.workflow_handoff?.work_records || []);
+      const confirmationItems = normalizeSaasAiCeoConfirmationItems(chat?.confirmation_items || chat?.workflow_handoff?.confirmation_items || []);
+      const sourcePolicy = chat?.source_policy && typeof chat.source_policy === "object" ? chat.source_policy : chat?.workflow_handoff?.source_policy || null;
       const backendCommand = backendSaasCeoCommandFromPayload(payload || {});
       const mergedCommand = normalizeSaasCeoCommand({
         ...(backendCommand || command),
@@ -18407,7 +18416,11 @@ function handleSaasCeoCommandSubmit(text) {
         recordSaasCeoCommandSourceRecord(state.saasLastCeoCommand);
         syncSaasCeoCommandToListing(mergedCommand);
       }
-      updateCeoAssistantMessage(pendingMessageId, answer, chat?.status || "", chat?.model_client || null, sourceRecords);
+      updateCeoAssistantMessage(pendingMessageId, answer, chat?.status || "", chat?.model_client || null, sourceRecords, {
+        work_records: workRecords,
+        confirmation_items: confirmationItems,
+        source_policy: sourcePolicy,
+      });
       updateSaasAiCeoLatestReply({
         ...(state.saasAiCeoLatestTurn || {}),
         assistant_id: pendingMessageId,
@@ -18421,6 +18434,9 @@ function handleSaasCeoCommandSubmit(text) {
         writes_merchant_rule: Boolean(chat?.writes_merchant_rule || mergedCommand?.writes_merchant_rule),
         decision_center_required: Boolean(chat?.decision_center_required || mergedCommand?.decision_center_required),
         source_records: sourceRecords,
+        work_records: workRecords,
+        confirmation_items: confirmationItems,
+        source_policy: sourcePolicy,
         pending: false,
       });
       if (!mergedCommand || state.view !== "cockpit") return mergedCommand;
@@ -34599,6 +34615,9 @@ function normalizeSaasAiCeoLatestTurn(turn = {}) {
     writes_merchant_rule: Boolean(turn.writes_merchant_rule),
     decision_center_required: Boolean(turn.decision_center_required),
     source_records: normalizeSaasAiCeoSourceRecords(turn.source_records || turn.sourceRecords || []),
+    work_records: normalizeSaasAiCeoWorkRecords(turn.work_records || turn.workRecords || []),
+    confirmation_items: normalizeSaasAiCeoConfirmationItems(turn.confirmation_items || turn.confirmationItems || []),
+    source_policy: turn.source_policy && typeof turn.source_policy === "object" ? turn.source_policy : null,
     created_at: turn.created_at || new Date().toISOString(),
   };
 }
@@ -34616,6 +34635,38 @@ function normalizeSaasAiCeoSourceRecords(records = []) {
       source_type: publicRuntimeText(item.source_type || "live_public_search").slice(0, 80),
     }))
     .filter((item) => item.title || item.url || item.snippet);
+}
+
+function normalizeSaasAiCeoWorkRecords(records = []) {
+  return (Array.isArray(records) ? records : [])
+    .filter((item) => item && typeof item === "object")
+    .slice(0, 4)
+    .map((item) => ({
+      title: publicRuntimeText(item.title || "AI CEO 工作记录").slice(0, 120),
+      summary: publicRuntimeText(item.summary || item.next_step || "").slice(0, 260),
+      status: publicRuntimeText(item.status || "").slice(0, 60),
+      work_record_type: publicRuntimeText(item.work_record_type || "").slice(0, 80),
+      source_record_count: Number(item.source_record_count || 0),
+      captured_at: publicRuntimeText(item.captured_at || "").slice(0, 80),
+    }))
+    .filter((item) => item.title || item.summary);
+}
+
+function normalizeSaasAiCeoConfirmationItems(items = []) {
+  return (Array.isArray(items) ? items : [])
+    .filter((item) => item && typeof item === "object")
+    .slice(0, 4)
+    .map((item) => ({
+      title: publicRuntimeText(item.title || "确认边界").slice(0, 120),
+      summary: publicRuntimeText(item.summary || "").slice(0, 260),
+      status: publicRuntimeText(item.status || "").slice(0, 60),
+      action_type: publicRuntimeText(item.action_type || "").slice(0, 80),
+      is_actionable: Boolean(item.is_actionable),
+      requires_confirmation_center_before_execution: Boolean(item.requires_confirmation_center_before_execution || item.requires_confirmation_center),
+      real_write_allowed_without_confirmation: Boolean(item.real_write_allowed_without_confirmation),
+      source_record_count: Number(item.source_record_count || 0),
+    }))
+    .filter((item) => item.title || item.summary);
 }
 
 function shouldKeepSaasAiCeoThreadTurn(turn = {}) {
@@ -34772,10 +34823,54 @@ function renderSaasAiCeoSourceRecordsMarkup(records = []) {
   `;
 }
 
+function renderSaasAiCeoWorkRecordsMarkup(records = []) {
+  const normalized = normalizeSaasAiCeoWorkRecords(records);
+  if (!normalized.length) return "";
+  return `
+    <div class="saas-ai-ceo-work-record-list" aria-label="AI CEO 工作记录">
+      ${normalized
+        .map(
+          (record) => `
+            <article>
+              <span>${escapeHtml(record.status || "已记录")}</span>
+              <strong>${escapeHtml(record.title || "AI CEO 工作记录")}</strong>
+              ${record.summary ? `<small>${escapeHtml(record.summary)}</small>` : ""}
+              <em>${escapeHtml(record.source_record_count ? `已关联 ${record.source_record_count} 条来源` : "等待更多来源")}</em>
+            </article>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderSaasAiCeoConfirmationItemsMarkup(items = []) {
+  const normalized = normalizeSaasAiCeoConfirmationItems(items);
+  if (!normalized.length) return "";
+  return `
+    <div class="saas-ai-ceo-confirmation-guidance" aria-label="AI CEO 确认边界">
+      ${normalized
+        .map(
+          (item) => `
+            <article>
+              <span>${escapeHtml(item.is_actionable ? "待确认" : "边界提示")}</span>
+              <strong>${escapeHtml(item.title || "确认边界")}</strong>
+              ${item.summary ? `<small>${escapeHtml(item.summary)}</small>` : ""}
+              <em>${escapeHtml(item.real_write_allowed_without_confirmation ? "可继续低风险整理" : "真实动作不会绕过确认中心")}</em>
+            </article>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
 function saasAiCeoTurnOperatingRows(latest = {}) {
   const route = String(latest.route || "");
   const statusLabel = saasAiCeoTurnStatusLabel(latest);
   const sourceCount = normalizeSaasAiCeoSourceRecords(latest.source_records || []).length;
+  const workCount = normalizeSaasAiCeoWorkRecords(latest.work_records || []).length;
+  const confirmationCount = normalizeSaasAiCeoConfirmationItems(latest.confirmation_items || []).length;
   const sourceText = sourceCount
     ? `公开来源 ${sourceCount} 条`
     : route === "ebay_workflow" || route === "confirmation_required"
@@ -34793,7 +34888,8 @@ function saasAiCeoTurnOperatingRows(latest = {}) {
     ["计划", route === "ebay_workflow" ? "拆到调研、Listing、素材、利润、客服、确认和复盘" : route === "confirmation_required" ? "生成确认项，等待你批准后再执行" : route === "external_realtime" ? "先查来源，再给结论" : "先给结论，需要时转经营任务"],
     ["来源", sourceText],
     ["风险", route === "external_realtime" && !sourceCount ? "没有来源不编实时数据" : route === "confirmation_required" ? "真实发布、改价、库存、退款、广告、政策或敏感承诺必须确认" : "按来源可信度标记缺口"],
-    ["待确认动作", latest.decision_center_required || route === "confirmation_required" ? "已进入决策中心" : "当前无高风险执行"],
+    ["工作记录", workCount ? `已写入 ${workCount} 条` : "普通对话不写工作记录"],
+    ["待确认动作", latest.decision_center_required || route === "confirmation_required" ? "已进入决策中心" : confirmationCount ? "真实动作前再确认" : "当前无高风险执行"],
     ["执行结果", latest.pending ? "正在处理" : `${statusLabel} / ${memoryText}`],
   ];
 }
@@ -34919,6 +35015,9 @@ function addCeoMessage(text, aiText, options = {}) {
         writes_merchant_rule: Boolean(options.writes_merchant_rule),
         decision_center_required: Boolean(options.decision_center_required),
         source_records: options.source_records || [],
+        work_records: options.work_records || [],
+        confirmation_items: options.confirmation_items || [],
+        source_policy: options.source_policy || null,
       }),
       "ai_ceo.chat_turn.user_and_assistant",
     ),
@@ -34937,15 +35036,21 @@ function addCeoMessage(text, aiText, options = {}) {
     writes_merchant_rule: Boolean(options.writes_merchant_rule),
     decision_center_required: Boolean(options.decision_center_required),
     source_records: options.source_records || [],
+    work_records: options.work_records || [],
+    confirmation_items: options.confirmation_items || [],
+    source_policy: options.source_policy || null,
   });
   chat.scrollTop = chat.scrollHeight;
 }
 
-function updateCeoAssistantMessage(messageId, text, status = "", model = null, sourceRecords = []) {
+function updateCeoAssistantMessage(messageId, text, status = "", model = null, sourceRecords = [], workflowDetails = {}) {
   const chat = document.querySelector("#ceoChat");
   const node = messageId ? document.getElementById(messageId) : null;
   const safeText = saasAiCeoProductizedAnswerText(text || "AI CEO 暂时没有返回可展示内容。", status);
   const sources = normalizeSaasAiCeoSourceRecords(sourceRecords);
+  const workRecords = normalizeSaasAiCeoWorkRecords(workflowDetails.work_records || workflowDetails.workRecords || []);
+  const confirmationItems = normalizeSaasAiCeoConfirmationItems(workflowDetails.confirmation_items || workflowDetails.confirmationItems || []);
+  const sourcePolicy = workflowDetails.source_policy && typeof workflowDetails.source_policy === "object" ? workflowDetails.source_policy : null;
   const latest = normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn);
   if (!node) {
     addAiMessage(safeText);
@@ -34955,6 +35060,9 @@ function updateCeoAssistantMessage(messageId, text, status = "", model = null, s
       status,
       model: model || latest?.model || null,
       source_records: sources,
+      work_records: workRecords,
+      confirmation_items: confirmationItems,
+      source_policy: sourcePolicy,
       pending: false,
     });
     return;
@@ -34974,6 +35082,9 @@ function updateCeoAssistantMessage(messageId, text, status = "", model = null, s
     status,
     model: model || latest?.model || null,
     source_records: sources,
+    work_records: workRecords,
+    confirmation_items: confirmationItems,
+    source_policy: sourcePolicy,
     pending: false,
   });
   if (body && updatedTurn) {
@@ -34996,6 +35107,9 @@ function updateCeoAssistantMessage(messageId, text, status = "", model = null, s
       status,
       model: model || latest?.model || null,
       source_records: sources,
+      work_records: workRecords,
+      confirmation_items: confirmationItems,
+      source_policy: sourcePolicy,
       pending: false,
     });
   }
