@@ -59,6 +59,47 @@ def main() -> None:
         for internal_marker in ["模型 key", "token、key", "登录 token", "token 或服务商账单"]:
             if internal_marker in surface_body:
                 raise AssertionError(f"{surface_name} should use merchant-facing credential/usage wording: {internal_marker}")
+    for required_copy in [
+        "敏感凭证只在后端安全保存",
+        "不接触原始平台凭证",
+        "不包含敏感凭证、买家敏感信息或平台账号资料",
+        "店铺连接续期证明仍为 0",
+        "AI 连接信息只在后端安全保存",
+        "不保存敏感凭证、网页登录状态、买家敏感信息或平台写入资料",
+        "AI 连接信息只保存在安全密钥服务里，页面只显示可用状态",
+    ]:
+        require(app_js, required_copy, "merchant-facing credential boundary copy")
+
+    def scoped_body(start_marker: str, end_marker: str) -> str:
+        start = app_js.index(start_marker)
+        return app_js[start:app_js.index(end_marker, start)]
+
+    credential_copy_surfaces = [
+        ("eBay sync status", scoped_body("function renderSaasEbaySyncStatusPanel", "function renderSaasLiveSnapshotPanel")),
+        ("Listing entry", scoped_body("function renderSaasProductListingCenter", "function renderProductListingCenter")),
+        ("AI CEO output", scoped_body("function renderSaasAiCeoOutputPanel", "function saasLatestExecutionResult")),
+        ("merchant cockpit risk queue", scoped_body("function saasCockpitRiskQueue", "function renderSaasMerchantExecutiveCockpit")),
+        ("merchant operating path", scoped_body("function renderSaasMerchantOperatingPath", "function renderSaasMerchantSetupGuidePanel")),
+        ("merchant setup guide", scoped_body("function renderSaasMerchantSetupGuidePanel", "function saasPermissionLabel")),
+        ("merchant workflow template", scoped_body("function renderSaasMerchantWorkflowTemplatePanel", "function renderSaasSourceRecordCollectorPanel")),
+        ("source record collector", scoped_body("function renderSaasSourceRecordCollectorPanel", "function renderSaasMerchantPermissionPanel")),
+        ("model connection save toast", scoped_body("async function saveSaasModelApiKeyFromWorkbench", "async function runSaasModelValueRehearsalFromWorkbench")),
+    ]
+    for surface_name, surface_body in credential_copy_surfaces:
+        for internal_marker in [
+            "AI 连接凭证",
+            "eBay token",
+            "原始 token",
+            "不保存 token",
+            "所有 token",
+            "模型 key",
+            "token、",
+            "token 或",
+            "refresh success proof",
+            "Source packet",
+        ]:
+            if internal_marker in surface_body:
+                raise AssertionError(f"{surface_name} should use merchant-facing credential wording: {internal_marker}")
 
     require(app_js, "function renderSaasBulkCandidatePreview", "SaaS bulk simplified candidate preview")
     require(app_js, "先小批量筛，不一键乱铺", "bulk low-learning-cost headline")

@@ -8478,7 +8478,7 @@ function renderSaasBackendPublishPreflightPanel(readiness = {}, ctx = saasMercha
         <article class="is-${escapeHtml(summaryTone)}"><span>Backend status</span><strong>${escapeHtml(readiness.status || "ready")}</strong><small>${blocked ? "存在红项，禁止执行真实发布" : "无红项，但仍需商家确认"}</small></article>
         <article class="${readyForAdapter ? "is-green" : "is-amber"}"><span>Platform adapter</span><strong>${readyForAdapter ? "ready" : "blocked"}</strong><small>只有 ready 才能交给 eBay 写入适配器</small></article>
         <article class="${latestPublishConfirmation ? "is-green" : "is-red"}"><span>Confirmation</span><strong>${latestPublishConfirmation ? "created" : "required"}</strong><small>${latestPublishConfirmation?.confirmation_id || "真实执行前必须创建确认项"}</small></article>
-        <article><span>Source packet</span><strong>${escapeHtml(ctx.latestPacket?.packet_id || "waiting")}</strong><small>只展示证据标识，不展示 token 或原始密钥</small></article>
+        <article><span>资料来源</span><strong>${escapeHtml(ctx.latestPacket?.packet_id || "waiting")}</strong><small>只展示证据标识，不展示敏感凭证。</small></article>
       </div>
       ${renderSaasBackendPreflightResolutionBoard(readiness)}
       <div class="saas-backend-preflight-list">
@@ -10051,7 +10051,7 @@ function renderSaasProductListingCenter(view) {
     : !ctx.hasPacket
       ? "Listing 工厂只接收当前账号的店铺资料，不再用本地样例商品填充页面。"
     : !isSaasModelConfigured()
-      ? "AI 连接凭证只进入后端密钥边界；前端和执行层不拿原始凭证。"
+      ? "AI 连接信息只在后端安全保存；页面只显示连接状态，执行层不读取原始凭证。"
       : "生成结果会写回报告、商家记忆和确认中心；真实发布、改价、库存、退款、广告和政策仍必须先过决策中心。";
 
   setJiejingTrustedHtml(
@@ -13687,7 +13687,7 @@ async function ensureSaasDemoStoreAndConnection() {
         scopes: ["sell.inventory.readonly", "sell.account.readonly", "sell.fulfillment.readonly"],
         create_secret_ref: !isSaasPublicMvpMode() && state.saasDemoBootstrapEnabled === true,
         metadata: {
-          note: "Merchant eBay read-only workspace is pending official OAuth. No raw eBay token is stored in the front end.",
+          note: "Merchant eBay read-only workspace is pending official connection. No raw platform credential is stored in the front end.",
         },
       }),
     });
@@ -15097,7 +15097,7 @@ function renderSaasEbaySyncStatusPanel() {
         <div>
           <span class="pill ${saasEbaySyncStatusTone(overall)}">${escapeHtml(saasEbaySyncStatusText(overall))}</span>
           <strong>eBay 只读同步状态</strong>
-          <p>同步只读取店铺、政策、Listing、订单、费用和类目字段。所有 token 留在后端，AI CEO 只接收整理后的店铺资料。</p>
+          <p>同步只读取店铺、政策、Listing、订单、费用和类目字段。敏感凭证只在后端安全保存，AI CEO 只接收整理后的店铺资料。</p>
         </div>
         <button class="secondary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !activeSaasStore() ? "disabled" : ""}>重新同步</button>
       </div>
@@ -15785,7 +15785,7 @@ function renderSaasAiCeoOutputPanel() {
         <div>
           <span>AI CEO 真实工作台输出</span>
           <strong>官方只读数据已进入报告、任务和确认中心</strong>
-          <p>这里读取捷境后端 reports / confirmations。AI CEO 只接收整理后的店铺资料，不接触 eBay token；发布、改价、付款、政策和敏感客服承诺仍停在确认中心。</p>
+          <p>这里读取捷境后端 reports / confirmations。AI CEO 只接收整理后的店铺资料，不接触原始平台凭证；发布、改价、付款、政策和敏感客服承诺仍停在确认中心。</p>
         </div>
         <button class="primary-action" type="button" data-saas-action="run-workflow" ${state.saasLoading ? "disabled" : ""}>重新生成 AI CEO 报告</button>
       </div>
@@ -16591,7 +16591,7 @@ function renderSaasPublishCommandSummaryPanel() {
     {
       label: "来源 packet",
       value: sourcePacket || "waiting",
-      detail: "只显示 packet id，不显示 token 或密钥",
+      detail: "只显示资料编号，不显示敏感凭证",
       tone: sourcePacket ? "green" : "amber",
     },
     {
@@ -18635,7 +18635,7 @@ async function copySaasSourceRecordsSnapshot() {
   const text = JSON.stringify(payload, null, 2);
   try {
     await navigator.clipboard?.writeText(text);
-    showActionToast("已复制来源记录快照；不包含 token、AI 连接凭证或买家敏感信息。");
+    showActionToast("已复制来源记录快照；不包含敏感凭证、买家敏感信息或平台账号资料。");
   } catch (error) {
     showActionToast("复制失败，请从页面查看来源记录。");
   }
@@ -18998,7 +18998,7 @@ function saasCockpitRiskQueue(ctx = saasMerchantWorkbenchContext(), next = saasM
     {
       tone: launch.tone,
       title: launch.title,
-      detail: refreshProof > 0 ? launch.detail : `${launch.detail}；eBay token refresh success proof 仍为 0。`,
+      detail: refreshProof > 0 ? launch.detail : `${launch.detail}；店铺连接续期证明仍为 0。`,
       action: "open-connect",
       actionLabel: "看上线门槛",
     },
@@ -19104,7 +19104,7 @@ function renderSaasMerchantOperatingPath(ctx = saasMerchantWorkbenchContext()) {
       title: connectionReady ? "eBay 官方只读已连接" : "等待连接 eBay",
       detail: connectionReady
         ? `${saasStoreDisplayName(ctx.store, ctx.connection)} / ${saasStoreStatusLabel(ctx.connection?.status || ctx.store?.status)}`
-        : "登录后先完成官方只读授权，AI CEO 不接触原始 token。",
+        : "登录后先完成官方只读授权，AI CEO 不接触原始平台凭证。",
       done: connectionReady,
     },
     {
@@ -19226,7 +19226,7 @@ function saasMerchantSetupGuideItems(ctx = saasMerchantWorkbenchContext()) {
     {
       label: "04",
       title: "配置商家自己的模型账号",
-      detail: modelConfigured ? "AI 连接已可用" : "在设置页保存商家自己的 AI 连接凭证，保存后页面不回显",
+      detail: modelConfigured ? "AI 连接已可用" : "在设置页保存商家自己的 AI 连接信息，保存后页面只显示可用状态",
       done: modelConfigured,
       action: "模型设置",
       view: "connect",
@@ -19474,7 +19474,7 @@ function renderSaasMerchantWorkflowTemplatePanel(ctx = saasMerchantWorkbenchCont
         <article class="${ctx.hasPacket ? "is-green" : "is-amber"}">
           <span>输入</span>
           <strong>${ctx.hasPacket ? "店铺资料" : "等待 eBay 店铺资料"}</strong>
-          <small>岗位只读取整理后的店铺资料和来源记录，不碰 eBay token。</small>
+          <small>岗位只读取整理后的店铺资料和来源记录，不接触原始平台凭证。</small>
         </article>
         <article class="${isSaasModelConfigured() ? "is-green" : "is-amber"}">
           <span>AI 连接</span>
@@ -19938,7 +19938,7 @@ function renderSaasSourceRecordCollectorPanel(ctx = saasMerchantWorkbenchContext
         <article class="is-green">
           <span>安全边界</span>
           <strong>采集-only</strong>
-          <small>不保存 token、cookie、AI 连接凭证、买家敏感信息或平台写入凭证。</small>
+          <small>不保存敏感凭证、网页登录状态、买家敏感信息或平台写入资料。</small>
         </article>
       </div>
       <div class="saas-source-record-form" aria-label="新增来源记录">
@@ -21973,7 +21973,7 @@ function applySaasDataPacketsToActivities() {
         `SaaS 后端已缓存整理后的 eBay 店铺资料，来源：${sourceLabel}；可用资源 ${present.length} 个，缺口 ${missing.length} 个。`,
       ),
       sources: ["捷境后端工作记录", "店铺资料", sourceLabel],
-      result: publicRuntimeText("AI CEO 只读取整理后的店铺资料，不接触 token、原始响应或 eBay 写入能力。"),
+      result: publicRuntimeText("AI CEO 只读取整理后的店铺资料，不接触原始平台凭证、原始响应或 eBay 写入能力。"),
       status: packet.ready_for_runtime ? "可交接" : "待补齐",
       confidence: sourceLabel === "official_api" ? "High" : "Medium",
     });
@@ -22634,7 +22634,7 @@ async function saveSaasModelApiKeyFromWorkbench() {
   const keyInput = document.getElementById("saas-model-api-key");
   const apiKey = keyInput?.value?.trim() || "";
   if (!apiKey) {
-    showActionToast("先粘贴商家自己的 AI 连接凭证，再保存。");
+    showActionToast("先填写商家自己的 AI 连接信息，再保存。");
     return false;
   }
   state.saasLoading = true;
@@ -25743,7 +25743,7 @@ function renderSaasMerchantBillingCurrentStatusPanel(ctx = saasMerchantWorkbench
   const explainRows = [
     ["不删资料", "欠费、取消或额度耗尽时，只暂停联网模型、素材生成和高成本任务；历史报告、确认记录和操作记录继续可读。"],
     ["不代扣平台费", "eBay 成交费、广告费、物流、退款和店铺订阅属于经营成本，捷境只帮你算进利润和风险。"],
-    ["不露密钥", "支付资料、AI 连接凭证和平台连接凭证只保存在安全密钥服务里，不在浏览器展示。"],
+    ["不露密钥", "支付资料、AI 连接信息和平台连接资料只保存在安全密钥服务里，不在浏览器展示。"],
   ];
   return `
     <section class="saas-settings-card saas-merchant-billing-current" aria-label="当前计费状态">
@@ -26993,7 +26993,7 @@ function renderSaasMerchantBillingIncidentRunbookPanel(ctx = saasMerchantWorkben
       status: billing.quotaEnforcementEnabled ? "ready" : "blocked",
       trigger: "invoice.payment_failed / 欠费",
       visible_result: "高成本任务 hard-stop，历史报告、确认中心和审计继续可见。",
-      operator_action: "提醒商家更新付款方式；不要求重复 eBay OAuth 或重填模型 key。",
+      operator_action: "提醒商家更新付款方式；不要求重复 eBay 授权或重新填写 AI 连接信息。",
     },
     {
       key: "refund_or_dispute",
@@ -33502,7 +33502,7 @@ function saasSettingsOneGlanceRows(activeTabId = "general") {
     model: [
       ["文本 AI", "对话、报告、Listing 文案", "AI CEO 和 Listing 草稿走文本模型。"],
       ["素材工坊", "图片和视频脚本分开看", "素材生成回到素材工坊，不混在账号设置里。"],
-      ["凭证安全", "保存后不回显", "AI 连接凭证只保存在安全密钥服务里，页面只显示可用状态。"],
+      ["凭证安全", "保存后不回显", "AI 连接信息只保存在安全密钥服务里，页面只显示可用状态。"],
     ],
     data: [
       ["官方只读", "商品、订单、政策、费用", "读到什么用什么，缺口会明确显示。"],
@@ -33859,7 +33859,7 @@ function renderSaasConnectCenter(view) {
           <div>
             <span class="pill ${state.saasConnected ? "green" : "amber"}">${state.saasConnected ? "账号空间已读取" : hasSessionCandidate ? "正在读取账号" : "需要登录"}</span>
             <strong>商家账户信息按登录账号读取，店铺名等 eBay 授权后再显示</strong>
-            <p>前端只保存会话 token；eBay token 和 AI 连接凭证必须留在后端密钥边界，不回显给浏览器，也不交给执行层。</p>
+            <p>浏览器只保留登录状态；eBay 连接和 AI 连接的敏感凭证只在后端安全保存，不回显给浏览器，也不交给执行层。</p>
           </div>
           <div class="saas-workbench-truth-actions">
             <button class="secondary-action" type="button" data-saas-action="refresh" ${state.saasLoading ? "disabled" : ""}>刷新真实状态</button>
@@ -33873,7 +33873,7 @@ function renderSaasConnectCenter(view) {
                 <div>
                   <span>eBay 授权状态已恢复</span>
                   <strong>${escapeHtml(saasStoreStatusLabel(ebayConnectionStatus))}，不需要重新打开授权链接</strong>
-                  <small>捷境会继续使用后端托管凭证和店铺资料；前端不会保存或回显 eBay token。</small>
+                  <small>捷境会继续使用后端安全保存的连接状态和店铺资料；浏览器不会保存或回显平台敏感凭证。</small>
                   <div class="saas-oauth-callback-note">
                     <span>当前官方连接返回地址</span>
                     <code>${escapeHtml(expectedCallbackUrl)}</code>
