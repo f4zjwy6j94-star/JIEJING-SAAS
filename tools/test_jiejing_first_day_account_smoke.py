@@ -108,6 +108,7 @@ def check_static_first_day_contracts() -> int:
         (first_user_browser_smoke, "model_402_route_intercepted", "browser smoke must intercept model 402 without calling a real model"),
         (first_user_browser_smoke, "model_safe_failure_path_observed", "browser smoke must accept merchant-safe pre-model blocking"),
         (first_user_browser_smoke, "model_402_copy_is_merchant_safe", "browser smoke must prove model quota copy is merchant-safe"),
+        (first_user_browser_smoke, 'JIEJING_SITE_VERSION = "20260702-merchant-copy-safety-v1"', "browser smoke must check the current homepage version"),
         (first_user_browser_smoke, "workbench_logo_returns_to_current_index", "browser smoke must prove logo returns to the current homepage"),
         (first_user_browser_smoke, "no_ebay_oauth_triggered", "browser smoke must explicitly avoid eBay OAuth"),
     ]
@@ -117,6 +118,7 @@ def check_static_first_day_contracts() -> int:
     forbidden_markers = [
         "AI CEO 暂时没有返回结果：${publicRuntimeText",
         "openLoggedInExperience(activePath)",
+        "JIEJING_SITE_VERSION = \"20260701-expert-feasibility-review-v1\"",
     ]
     for marker in forbidden_markers:
         if marker in app_js + index_html:
