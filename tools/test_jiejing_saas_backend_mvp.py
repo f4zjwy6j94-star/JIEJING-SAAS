@@ -286,105 +286,26 @@ def main() -> int:
         if amazon_plan.get("connection_plan", {}).get("status") != "reserved_no_live_adapter":
             return fail("future sales channel should be reserved without a live adapter")
 
-        vault = fetch_json(f"{base_url}/vault/status", token=token)
-        if vault.get("vault", {}).get("can_store_raw_secret") is not False:
-            return fail("local MVP vault boundary should remain secret_ref only")
-        if vault.get("vault", {}).get("secret_exposed") is not False:
-            return fail("vault status must not expose secrets")
-        database_plan = fetch_json(f"{base_url}/database/plan", token=token).get("database_plan", {})
-        if database_plan.get("current_engine") != "sqlite":
-            return fail("local database plan should identify sqlite engine")
-        if "sqlite_local_database" not in database_plan.get("production_blockers", []):
-            return fail("database plan should keep local sqlite as a production blocker")
-        if database_plan.get("staging_migration_shape_ready") is not True:
-            return fail("database plan should have local migration/index shape ready")
-        migration_files = database_plan.get("migration_files", [])
-        if not any(str(item.get("path") or "").endswith("001_initial_schema_postgres.sql") for item in migration_files):
-            return fail("database plan should expose the prepared PostgreSQL migration file")
-        if database_plan.get("critical_indexes", {}).get("present_count", 0) < 12:
-            return fail("database plan should expose critical indexes")
-        if database_plan.get("secret_exposed") is not False:
-            return fail("database plan must not expose secrets")
-        database_adapters = fetch_json(f"{base_url}/database/adapters", token=token).get("database_adapters", {})
-        adapter_keys = {item.get("key") for item in database_adapters.get("available_adapters", [])}
-        if not {"sqlite-local", "postgres-managed", "mysql-managed"}.issubset(adapter_keys):
-            return fail("database adapter contract should expose local and managed adapters")
-        if database_adapters.get("runtime_rules", {}).get("frontend_never_connects_to_database") is not True:
-            return fail("database adapter contract must keep frontend away from database")
-        if database_adapters.get("secret_exposed") is not False:
-            return fail("database adapter contract must not expose secrets")
-        database_inventory = fetch_json(f"{base_url}/database/inventory", token=token).get("database_inventory", {})
-        if database_inventory.get("migration_count", 0) < 1:
-            return fail("database inventory should expose schema migration records")
-        if database_inventory.get("index_count", 0) < 12:
-            return fail("database inventory should expose database indexes")
-        if database_inventory.get("secret_exposed") is not False:
-            return fail("database inventory must not expose secrets")
-        queue_plan = fetch_json(f"{base_url}/queue/plan", token=token).get("queue_plan", {})
-        if queue_plan.get("local_queue_shape_ready") is not True:
-            return fail("queue plan should recognize local worker queue shape")
-        for expected_blocker in {"local_queue_provider", "missing_distributed_workers", "missing_dead_letter_queue", "missing_worker_heartbeat"}:
-            if expected_blocker not in queue_plan.get("production_blockers", []):
-                return fail(f"queue plan missing production blocker {expected_blocker}")
-        if queue_plan.get("high_risk_execution_rule", {}).get("execution_service_requires_approved_confirmation") is not True:
-            return fail("queue plan must preserve confirmation before execution service")
-        if queue_plan.get("secret_exposed") is not False:
-            return fail("queue plan must not expose secrets")
-        queue_adapters = fetch_json(f"{base_url}/queue/adapters", token=token).get("queue_adapters", {})
-        queue_adapter_keys = {item.get("key") for item in queue_adapters.get("available_adapters", [])}
-        if not {"local_worker", "postgres_durable", "redis_streams", "tencent_cloud_queue", "aliyun_message_queue"}.issubset(queue_adapter_keys):
-            return fail("queue adapter contract should expose local, Redis and cloud queue adapters")
-        if queue_adapters.get("worker_contract", {}).get("high_risk_actions_require_confirmation") is not True:
-            return fail("queue adapter contract must preserve confirmation gate")
-        if queue_adapters.get("secret_exposed") is not False:
-            return fail("queue adapter contract must not expose secrets")
-        controlled_bridges = fetch_json(f"{base_url}/controlled-bridges", token=token).get("controlled_bridges", {})
-        bridge_keys = {item.get("key") for item in controlled_bridges.get("bridges", [])}
-        for required_bridge in {"RuntimeBridge", "ProviderAdapter", "QueueWorkerBridge", "ConfirmationExecutionBridge", "AuditMemoryBridge"}:
-            if required_bridge not in bridge_keys:
-                return fail(f"controlled bridge contract missing {required_bridge}")
-        if controlled_bridges.get("rules", {}).get("hermes_legacy_bridge_can_be_production_dependency") is not False:
-            return fail("controlled bridge contract must mark Hermes legacy as transitional only")
-        for bridge in controlled_bridges.get("bridges", []):
-            guardrails = bridge.get("guardrails", {})
-            if guardrails.get("frontend_gets_raw_secret") is not False or guardrails.get("runtime_gets_raw_secret") is not False:
-                return fail(f"controlled bridge must not leak raw secrets: {bridge.get('key')}")
-            if guardrails.get("bypasses_confirmation_center") is not False:
-                return fail(f"controlled bridge must not bypass confirmation center: {bridge.get('key')}")
-        if controlled_bridges.get("secret_exposed") is not False:
-            return fail("controlled bridge contract must not expose secrets")
-        monitoring = fetch_json(f"{base_url}/monitoring/status", token=token).get("monitoring", {})
-        if monitoring.get("safe_access_logs", {}).get("records_authorization_header") is not False:
-            return fail("monitoring contract must not record authorization headers")
-        if "oauth_callback_failure" not in {item.get("key") for item in monitoring.get("alert_contracts", [])}:
-            return fail("monitoring contract should include OAuth failure alerts")
-        if "ebay_sync_failure" not in {item.get("key") for item in monitoring.get("alert_contracts", [])}:
-            return fail("monitoring contract should include eBay sync failure alerts")
-        if monitoring.get("signals", {}).get("audit_log_count", 0) < 1:
-            return fail("monitoring contract should expose audit log count")
-        if monitoring.get("secret_exposed") is not False:
-            return fail("monitoring contract must not expose secrets")
-        infrastructure_drivers = fetch_json(f"{base_url}/infrastructure/drivers", token=token).get("infrastructure_drivers", {})
-        if infrastructure_drivers.get("ready_for_runtime_cutover") is not False:
-            return fail("infrastructure drivers must not claim runtime cutover is complete")
-        if infrastructure_drivers.get("postgres", {}).get("migration_runner_implemented") is not True:
-            return fail("infrastructure drivers should expose Postgres migration runner")
-        if infrastructure_drivers.get("redis", {}).get("connection_probe_implemented") is not True:
-            return fail("infrastructure drivers should expose Redis connection probe")
-        if infrastructure_drivers.get("secret_exposed") is not False:
-            return fail("infrastructure drivers must not expose secrets")
-        backup_plan = fetch_json(f"{base_url}/backup/plan", token=token).get("backup_plan", {})
-        if backup_plan.get("backup_ready_for_paid_launch") is not False:
-            return fail("backup plan must not claim paid-launch readiness in local MVP")
-        if backup_plan.get("database", {}).get("minimum_policy", {}).get("point_in_time_recovery") is not True:
-            return fail("backup plan should require database PITR")
-        backup_blockers = set(backup_plan.get("blockers", []))
-        if not {"managed_postgres_not_selected", "backup_policy_not_configured"}.intersection(backup_blockers):
-            return fail("backup plan should expose managed backup blockers")
-        if backup_plan.get("vault", {}).get("raw_secret_export_allowed") is not False:
-            return fail("backup plan must forbid raw secret export")
-        if backup_plan.get("secret_exposed") is not False:
-            return fail("backup plan must not expose secrets")
+        for protected_endpoint in [
+            "vault/status",
+            "vault/adapters",
+            "vault/client-contract",
+            "vault/targets",
+            "vault/secret-resolver/status",
+            "database/plan",
+            "database/adapters",
+            "database/inventory",
+            "queue/plan",
+            "queue/adapters",
+            "controlled-bridges",
+            "monitoring/status",
+            "infrastructure/drivers",
+            "backup/plan",
+            "provider-job-contracts",
+        ]:
+            protected_status, protected_body = fetch_json_expect_error(f"{base_url}/{protected_endpoint}", token=token)
+            if protected_status != 403:
+                return fail(f"ordinary merchant must not access platform-internal endpoint {protected_endpoint}: {protected_body}")
         billing_plan = fetch_json(f"{base_url}/billing/plans", token=token).get("billing_plan", {})
         if billing_plan.get("billing_ready_for_paid_launch") is not False:
             return fail("billing plan must not claim paid-launch readiness in local MVP")
@@ -434,36 +355,6 @@ def main() -> int:
             return fail("model value gate should require market and listing proof")
         if model_value_gate.get("secret_exposed") is not False:
             return fail("model value gate must not expose secrets")
-        vault_targets = fetch_json(f"{base_url}/vault/targets", token=token)
-        target_keys = {item.get("key") for item in vault_targets.get("vault_targets", {}).get("targets", [])}
-        if not {"tencent_kms", "aliyun_kms", "vault"}.issubset(target_keys):
-            return fail("vault target registry should reserve Tencent KMS, Aliyun KMS and Vault")
-        purpose_keys = {item.get("key") for item in vault_targets.get("vault_targets", {}).get("purposes", [])}
-        if "ebay_refresh_token" not in purpose_keys or "model_api_key" not in purpose_keys:
-            return fail("vault purposes should include eBay refresh token and model API key")
-        vault_adapters = fetch_json(f"{base_url}/vault/adapters", token=token).get("vault_adapters", {})
-        vault_adapter_keys = {item.get("key") for item in vault_adapters.get("available_adapters", [])}
-        if not {"secret_ref_only", "tencent_kms", "aliyun_kms", "vault"}.issubset(vault_adapter_keys):
-            return fail("vault adapter contract should expose local, Tencent, Aliyun and Vault adapters")
-        operation_keys = {item.get("key") for item in vault_adapters.get("operations", [])}
-        if not {"create_secret_ref", "resolve_task_secret", "rotate_secret", "revoke_secret"}.issubset(operation_keys):
-            return fail("vault adapter contract should expose secret resolve, rotation and revoke operations")
-        if vault_adapters.get("rules", {}).get("frontend_gets_raw_secret") is not False:
-            return fail("vault adapter contract must keep raw secrets away from the frontend")
-        if vault_adapters.get("secret_exposed") is not False:
-            return fail("vault adapter contract must not expose secrets")
-        vault_client = fetch_json(f"{base_url}/vault/client-contract", token=token).get("vault_client", {})
-        if vault_client.get("contract_ready") is not True:
-            return fail("vault client contract should be ready for live implementation")
-        if vault_client.get("response_contract", {}).get("returns_raw_secret_to_frontend") is not False:
-            return fail("vault client contract must not return raw secret to frontend")
-        if vault_client.get("response_contract", {}).get("returns_raw_secret_to_runtime") is not False:
-            return fail("vault client contract must not return raw secret to Runtime")
-        vault_resolver = fetch_json(f"{base_url}/vault/secret-resolver/status", token=token).get("vault_secret_resolver", {})
-        if vault_resolver.get("returns_raw_secret_to_frontend") is not False or vault_resolver.get("returns_raw_secret_to_runtime") is not False:
-            return fail("vault secret resolver status must not return raw secret to frontend or Runtime")
-        if vault_resolver.get("secret_exposed") is not False:
-            return fail("vault secret resolver status must not expose secrets")
         secret_ref_plan = post_json(
             f"{base_url}/stores/{store_id}/vault/secret-ref-plan",
             {

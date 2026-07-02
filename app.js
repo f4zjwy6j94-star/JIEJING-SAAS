@@ -1256,20 +1256,20 @@ const incenseAssetImages = {
   hero: "assets/backflow-incense-burner-hero.webp",
   alt: "assets/backflow-incense-burner-alt.webp",
   generatedMain: "assets/backflow-incense-generated-main.webp",
-  generatedScene: "assets/ai-generated-incense-scene.png",
-  lifestyleHome: "assets/ai-generated-incense-scene.png",
+  generatedScene: "assets/backflow-incense-generated-scene.webp",
+  lifestyleHome: "assets/backflow-incense-generated-scene.webp",
   lifestyleTea: "assets/backflow-incense-generated-scene.webp",
-  detailCloseup: "assets/ai-generated-incense-detail-closeup.png",
-  sizeChart: "assets/ai-generated-incense-size-chart.png",
+  detailCloseup: "assets/backflow-incense-generated-detail.webp",
+  sizeChart: "assets/backflow-incense-generated-detail.webp",
   generatedDetail: "assets/backflow-incense-generated-detail.webp",
-  presenter: "assets/ai-generated-incense-presenter.png",
+  presenter: "assets/backflow-incense-video-cover.webp",
   captionScript: "",
   videoCover: "assets/backflow-incense-video-cover.webp",
   videoFile: "assets/ai-generated-incense-host-video.webm",
   videoFrames: [
-    "assets/ai-generated-incense-presenter.png",
-    "assets/ai-generated-incense-scene.png",
-    "assets/ai-generated-incense-detail-closeup.png",
+    "assets/backflow-incense-video-cover.webp",
+    "assets/backflow-incense-generated-scene.webp",
+    "assets/backflow-incense-generated-detail.webp",
     "assets/backflow-incense-generated-detail.webp",
   ],
 };
@@ -21505,6 +21505,11 @@ function merchantSafeSaasBillingPlan(plan) {
   return safePlan;
 }
 
+function saasCanViewPlatformInternalFromPermissions(payload) {
+  if (!payload || typeof payload !== "object") return false;
+  return payload.platform_internal_admin === true;
+}
+
 async function refreshSaasState(options = {}) {
   const { silent = false, refreshLaunchGate = true } = options;
   const canFetchProtectedState = hasSaasProtectedSessionCandidate();
@@ -21595,6 +21600,7 @@ async function refreshSaasState(options = {}) {
     renderStoreContext();
     setView(state.view || "cockpit", { preserveFlowKey: true });
     state.saasLastCeoCommandHydratePromise = hydrateSaasCeoCommandFromBackend(store.store_id);
+    const canViewPlatformInternal = saasCanViewPlatformInternalFromPermissions(corePermissions);
     const [
       me,
       permissions,
@@ -21651,34 +21657,34 @@ async function refreshSaasState(options = {}) {
       Promise.resolve(corePermissions),
       Promise.resolve(coreStores),
       Promise.resolve(coreConnections),
-      saasOwnerLaunchCanView()
+      canViewPlatformInternal
         ? optionalSaasFetchFast(`/security/staging-gate?store_id=${encodeURIComponent(store.store_id)}`, { staging_security_gate: null }, 10000)
         : Promise.resolve({ staging_security_gate: null, skipped: "platform_internal_admin_only" }),
-      saasOwnerLaunchCanView()
+      canViewPlatformInternal
         ? optionalSaasFetchFast("/owner/launch-control", { owner_launch_control: state.saasOwnerLaunchControl || null }, 15000)
         : Promise.resolve({ owner_launch_control: null, skipped: "owner_admin_only" }),
       optionalSaasFetchFast(`/secret-refs?store_id=${encodeURIComponent(store.store_id)}`, { secret_refs: [] }),
-      optionalSaasFetchFast("/vault/status", { vault: null }),
-      optionalSaasFetchFast("/vault/adapters", { vault_adapters: null }),
-      optionalSaasFetchFast("/vault/client-contract", { vault_client: null }),
-      optionalSaasFetchFast("/database/plan", { database_plan: null }),
-      optionalSaasFetchFast("/database/adapters", { database_adapters: null }),
-      optionalSaasFetchFast("/database/inventory", { database_inventory: null }),
-      optionalSaasFetchFast("/backup/plan", { backup_plan: null }),
+      canViewPlatformInternal ? optionalSaasFetchFast("/vault/status", { vault: null }) : Promise.resolve({ vault: null, skipped: "platform_internal_admin_only" }),
+      canViewPlatformInternal ? optionalSaasFetchFast("/vault/adapters", { vault_adapters: null }) : Promise.resolve({ vault_adapters: null, skipped: "platform_internal_admin_only" }),
+      canViewPlatformInternal ? optionalSaasFetchFast("/vault/client-contract", { vault_client: null }) : Promise.resolve({ vault_client: null, skipped: "platform_internal_admin_only" }),
+      canViewPlatformInternal ? optionalSaasFetchFast("/database/plan", { database_plan: null }) : Promise.resolve({ database_plan: null, skipped: "platform_internal_admin_only" }),
+      canViewPlatformInternal ? optionalSaasFetchFast("/database/adapters", { database_adapters: null }) : Promise.resolve({ database_adapters: null, skipped: "platform_internal_admin_only" }),
+      canViewPlatformInternal ? optionalSaasFetchFast("/database/inventory", { database_inventory: null }) : Promise.resolve({ database_inventory: null, skipped: "platform_internal_admin_only" }),
+      canViewPlatformInternal ? optionalSaasFetchFast("/backup/plan", { backup_plan: null }) : Promise.resolve({ backup_plan: null, skipped: "platform_internal_admin_only" }),
       optionalSaasFetchFast("/billing/plans", { billing_plan: null }),
       optionalSaasFetchFast("/billing/usage", { billing_usage: null }),
       optionalSaasFetchFast("/billing/checkout-contract", { billing_checkout: null }),
-      saasOwnerLaunchCanView()
+      canViewPlatformInternal
         ? optionalSaasFetchFast("/billing/payment-options", { payment_options: null })
         : Promise.resolve({ payment_options: null, skipped: "owner_admin_only_payment_options" }),
       optionalSaasFetchFast("/billing/manual-beta/orders", { manual_beta_payment_orders: [] }),
-      saasOwnerLaunchCanView()
+      canViewPlatformInternal
         ? optionalSaasFetchFast("/owner/billing-domain-cutover-rehearsal", { billing_domain_cutover_rehearsal: null }, 15000)
         : Promise.resolve({ billing_domain_cutover_rehearsal: null, skipped: "owner_admin_only_billing_cutover" }),
-      saasOwnerLaunchCanView()
+      canViewPlatformInternal
         ? optionalSaasFetchFast("/owner/edge-cutover-preflight", { edge_cutover_preflight: state.saasEdgeCutoverPreflight || null }, 15000)
         : Promise.resolve({ edge_cutover_preflight: null, skipped: "owner_admin_only_edge_cutover" }),
-      saasOwnerLaunchCanView()
+      canViewPlatformInternal
         ? optionalSaasFetchFast("/owner/paid-launch-approval-packet", { paid_launch_approval_packet: null }, 20000)
         : Promise.resolve({ paid_launch_approval_packet: null, skipped: "owner_admin_only_paid_launch_packet" }),
       optionalSaasFetchFast("/model/value-gate", { model_value_gate: null }),
@@ -21701,10 +21707,12 @@ async function refreshSaasState(options = {}) {
           secret_exposed: false,
         },
       }),
-      optionalSaasFetchFast("/queue/plan", { queue_plan: null }),
-      optionalSaasFetchFast("/queue/adapters", { queue_adapters: null }),
+      canViewPlatformInternal ? optionalSaasFetchFast("/queue/plan", { queue_plan: null }) : Promise.resolve({ queue_plan: null, skipped: "platform_internal_admin_only" }),
+      canViewPlatformInternal ? optionalSaasFetchFast("/queue/adapters", { queue_adapters: null }) : Promise.resolve({ queue_adapters: null, skipped: "platform_internal_admin_only" }),
       optionalSaasFetchFast("/health/deep", { operational_health: null }),
-      optionalSaasFetchFast("/provider-job-contracts", { provider_job_contracts: null }),
+      canViewPlatformInternal
+        ? optionalSaasFetchFast("/provider-job-contracts", { provider_job_contracts: null })
+        : Promise.resolve({ provider_job_contracts: null, skipped: "platform_internal_admin_only" }),
       optionalSaasFetchFast("/independence/status", { independence: null }),
       optionalSaasFetchFast("/ebay-read-only/field-contracts", { ebay_read_only_field_contracts: null }),
       optionalSaasFetchFast("/ebay-read-only/live-adapter/status", { ebay_live_read_adapter: null }),
@@ -21751,30 +21759,30 @@ async function refreshSaasState(options = {}) {
     }
     state.saasConnections = connections.connections || [];
     state.saasSecurityGate = securityGate.staging_security_gate || null;
-    state.saasOwnerLaunchControl = ownerLaunchControl.owner_launch_control || state.saasOwnerLaunchControl || null;
-    if (saasOwnerLaunchCanView()) {
+    state.saasOwnerLaunchControl = canViewPlatformInternal ? ownerLaunchControl.owner_launch_control || state.saasOwnerLaunchControl || null : null;
+    if (canViewPlatformInternal) {
       const rateLimitStatus = await optionalSaasFetchFast("/security/rate-limit/status", { rate_limit_status: state.saasRateLimitStatus || null }, 10000);
       state.saasRateLimitStatus = rateLimitStatus.rate_limit_status || state.saasRateLimitStatus || null;
     } else {
       state.saasRateLimitStatus = null;
     }
     state.saasSecretRefs = secretRefs.secret_refs || [];
-    state.saasVaultStatus = vault.vault || null;
-    state.saasVaultAdapters = vaultAdapters.vault_adapters || null;
-    state.saasVaultClient = vaultClient.vault_client || null;
-    state.saasDatabasePlan = databasePlan.database_plan || null;
-    state.saasDatabaseAdapters = databaseAdapters.database_adapters || null;
-    state.saasDatabaseInventory = databaseInventory.database_inventory || null;
-    state.saasBackupPlan = backupPlan.backup_plan || null;
+    state.saasVaultStatus = canViewPlatformInternal ? vault.vault || null : null;
+    state.saasVaultAdapters = canViewPlatformInternal ? vaultAdapters.vault_adapters || null : null;
+    state.saasVaultClient = canViewPlatformInternal ? vaultClient.vault_client || null : null;
+    state.saasDatabasePlan = canViewPlatformInternal ? databasePlan.database_plan || null : null;
+    state.saasDatabaseAdapters = canViewPlatformInternal ? databaseAdapters.database_adapters || null : null;
+    state.saasDatabaseInventory = canViewPlatformInternal ? databaseInventory.database_inventory || null : null;
+    state.saasBackupPlan = canViewPlatformInternal ? backupPlan.backup_plan || null : null;
     const rawBillingPlan = billingPlan.billing_plan || null;
     state.saasBillingPlan = merchantSafeSaasBillingPlan(rawBillingPlan);
     state.saasBillingUsage = billingUsage.billing_usage || null;
     state.saasBillingCheckout = billingCheckout.billing_checkout || null;
-    state.saasPaymentOptions = saasOwnerLaunchCanView() ? paymentOptions.payment_options || rawBillingPlan?.payment_strategy || null : null;
+    state.saasPaymentOptions = canViewPlatformInternal ? paymentOptions.payment_options || rawBillingPlan?.payment_strategy || null : null;
     state.saasManualBetaPaymentOrders = manualBetaPaymentOrders.manual_beta_payment_orders || [];
-    state.saasBillingDomainCutoverRehearsal = saasOwnerLaunchCanView() ? billingDomainCutoverRehearsal.billing_domain_cutover_rehearsal || null : null;
-    state.saasEdgeCutoverPreflight = saasOwnerLaunchCanView() ? edgeCutoverPreflight.edge_cutover_preflight || state.saasEdgeCutoverPreflight || null : null;
-    state.saasPaidLaunchApprovalPacket = saasOwnerLaunchCanView() ? paidLaunchApprovalPacket.paid_launch_approval_packet || null : null;
+    state.saasBillingDomainCutoverRehearsal = canViewPlatformInternal ? billingDomainCutoverRehearsal.billing_domain_cutover_rehearsal || null : null;
+    state.saasEdgeCutoverPreflight = canViewPlatformInternal ? edgeCutoverPreflight.edge_cutover_preflight || state.saasEdgeCutoverPreflight || null : null;
+    state.saasPaidLaunchApprovalPacket = canViewPlatformInternal ? paidLaunchApprovalPacket.paid_launch_approval_packet || null : null;
     state.saasModelValueGate = modelValueGate.model_value_gate || null;
     state.saasModelProviderCatalog = modelProviderCatalog.model_provider_catalog || null;
     state.saasModelSettings = modelSettings.model_settings || null;
@@ -21803,10 +21811,10 @@ async function refreshSaasState(options = {}) {
       });
       state.saasIpRiskScreening = refreshedIpRisk.ip_risk_screening || state.saasIpRiskScreening;
     }
-    state.saasQueuePlan = queuePlan.queue_plan || null;
-    state.saasQueueAdapters = queueAdapters.queue_adapters || null;
+    state.saasQueuePlan = canViewPlatformInternal ? queuePlan.queue_plan || null : null;
+    state.saasQueueAdapters = canViewPlatformInternal ? queueAdapters.queue_adapters || null : null;
     state.saasOperationalHealth = operationalHealth.operational_health || state.saasReadiness?.operational_health || null;
-    state.saasProviderJobContracts = providerJobContracts.provider_job_contracts || null;
+    state.saasProviderJobContracts = canViewPlatformInternal ? providerJobContracts.provider_job_contracts || null : null;
     state.saasIndependence = independenceStatus.independence || null;
     state.saasEbayFieldContracts = ebayFieldContracts.ebay_read_only_field_contracts || null;
     state.saasEbayLiveAdapter = ebayLiveAdapter.ebay_live_read_adapter || null;
@@ -27730,6 +27738,7 @@ function renderSaasCockpitRealWorkbench() {
           model: visibleCommand.ai_reply_model || null,
         })
       : null);
+  const visibleRoutingCommand = isSaasAiCeoPlainConsultationTurn(latestCeoTurn) ? null : visibleCommand;
   const visibleCommandChat = renderSaasAiCeoThreadMarkup(latestCeoTurn);
   const hasVisibleCeoChat = Boolean(visibleCommandChat.trim());
   const firstRunHandoff = hasVisibleCeoChat ? "" : renderSaasAiCeoFirstRunHandoff();
@@ -27750,7 +27759,7 @@ function renderSaasCockpitRealWorkbench() {
             </div>
             ${firstRunHandoff}
             <div class="chat-log saas-ai-ceo-chat-stream" id="ceoChat" aria-live="polite">${visibleCommandChat}</div>
-            <div class="saas-ceo-route-task-slot" id="saasCeoRouteTaskSlot">${renderSaasCeoRoutingTaskCard(visibleCommand)}</div>
+            <div class="saas-ceo-route-task-slot" id="saasCeoRouteTaskSlot">${renderSaasCeoRoutingTaskCard(visibleRoutingCommand)}</div>
             <div class="saas-ai-ceo-composer-dock">
               <form class="chat-compose saas-ai-ceo-composer" id="ceoForm">
                 <input id="ceoInput" type="text" placeholder="比如：帮我调研这个商品，整理 Listing 草稿" autocomplete="off" />
@@ -34848,6 +34857,9 @@ function updateSaasAiCeoLatestReply(turn = {}) {
   if (panel) {
     setJiejingTrustedHtml(panel, trustedJiejingHtml(renderSaasAiCeoLatestReplyMarkup(latest), "ai_ceo.latest_reply"));
     panel.hidden = false;
+  }
+  if (isSaasAiCeoPlainConsultationTurn(latest)) {
+    refreshSaasCeoRoutingTaskCard(null);
   }
   const chat = document.querySelector("#ceoChat");
   if (chat) chat.scrollTop = chat.scrollHeight;

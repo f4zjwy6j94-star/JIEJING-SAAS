@@ -31,6 +31,8 @@ def main() -> int:
         email="merchant-owner@example.test",
         allowlist="platform-admin@example.test",
     )
+    if merchant["permissions_body"].get("platform_internal_admin") is not False:
+        return fail(f"ordinary merchant permissions should not mark platform admin: {merchant['permissions_body']}")
     if merchant["owner_status"] != 403 or merchant["production_status"] != 403 or merchant["ledger_status"] != 403:
         return fail(f"ordinary merchant owner should receive 403: {merchant}")
     if any(status != 403 for status in merchant["protected_launch_statuses"].values()):
@@ -42,6 +44,8 @@ def main() -> int:
         email="platform-admin@example.test",
         allowlist="platform-admin@example.test",
     )
+    if platform_admin["permissions_body"].get("platform_internal_admin") is not True:
+        return fail(f"platform allowlisted admin permissions should mark platform admin: {platform_admin['permissions_body']}")
     if platform_admin["owner_status"] != 200 or platform_admin["production_status"] != 200 or platform_admin["ledger_status"] != 200:
         return fail(f"platform allowlisted admin should receive 200: {platform_admin}")
     if any(status != 200 for status in platform_admin["protected_launch_statuses"].values()):
@@ -76,6 +80,20 @@ def main() -> int:
         return fail("owner paid launch approval packet contract missing")
     if (protected_bodies.get("billing_payment_options") or {}).get("payment_options", {}).get("contract_version") != "2026-06-29-mainland-payment-strategy":
         return fail("owner billing payment options contract missing")
+    if (protected_bodies.get("vault_status") or {}).get("vault", {}).get("secret_exposed") is not False:
+        return fail("owner vault status must stay redacted")
+    if (protected_bodies.get("database_plan") or {}).get("database_plan", {}).get("plan_version") != "2026-05-15-db-migration-boundary":
+        return fail("owner database plan contract missing")
+    if (protected_bodies.get("queue_plan") or {}).get("queue_plan", {}).get("plan_version") != "2026-05-15-queue-worker-boundary":
+        return fail("owner queue plan contract missing")
+    if (protected_bodies.get("backup_plan") or {}).get("backup_plan", {}).get("contract_version") != "2026-05-18-backup-restore-boundary":
+        return fail("owner backup plan contract missing")
+    if (protected_bodies.get("monitoring_status") or {}).get("monitoring", {}).get("contract_version") != "2026-05-18-tencent-cls-monitoring-boundary":
+        return fail("owner monitoring status contract missing")
+    if (protected_bodies.get("infrastructure_drivers") or {}).get("infrastructure_drivers", {}).get("contract_version") != "2026-05-17-infrastructure-drivers":
+        return fail("owner infrastructure drivers contract missing")
+    if (protected_bodies.get("controlled_bridges") or {}).get("controlled_bridges", {}).get("contract_version") != "2026-06-12-controlled-bridges":
+        return fail("owner controlled bridges contract missing")
 
     print("PASS jiejing_owner_launch_control_access")
     return 0
@@ -121,6 +139,7 @@ def _run_case(*, port: int, db_name: str, email: str, allowlist: str) -> dict[st
         token = str(registered.get("token") or "")
         if not token:
             raise RuntimeError(f"registration did not return token: {registered}")
+        permissions = _fetch_json_or_error(f"{base}/permissions/me", token=token)
         owner = _fetch_json_or_error(f"{base}/owner/launch-control", token=token)
         production = _fetch_json_or_error(f"{base}/owner/production-release-gate", token=token)
         ledger = _fetch_json_or_error(f"{base}/owner/production-evidence-ledger", token=token)
@@ -134,11 +153,28 @@ def _run_case(*, port: int, db_name: str, email: str, allowlist: str) -> dict[st
             "legacy_domain_edge_cutover": "/domain/edge-cutover-preflight",
             "legacy_commercial_paid_launch": "/commercial/paid-launch-approval-packet",
             "billing_payment_options": "/billing/payment-options",
+            "vault_status": "/vault/status",
+            "vault_adapters": "/vault/adapters",
+            "vault_client_contract": "/vault/client-contract",
+            "vault_targets": "/vault/targets",
+            "vault_secret_resolver": "/vault/secret-resolver/status",
+            "database_plan": "/database/plan",
+            "database_adapters": "/database/adapters",
+            "database_inventory": "/database/inventory",
+            "queue_plan": "/queue/plan",
+            "queue_adapters": "/queue/adapters",
+            "controlled_bridges": "/controlled-bridges",
+            "monitoring_status": "/monitoring/status",
+            "infrastructure_drivers": "/infrastructure/drivers",
+            "backup_plan": "/backup/plan",
+            "provider_job_contracts": "/provider-job-contracts",
         }
         protected = {key: _fetch_json_or_error(f"{base}{route}", token=token) for key, route in protected_routes.items()}
         return {
             "owner_status": owner["status"],
             "owner_body": owner["body"],
+            "permissions_status": permissions["status"],
+            "permissions_body": permissions["body"],
             "production_status": production["status"],
             "production_body": production["body"],
             "ledger_status": ledger["status"],

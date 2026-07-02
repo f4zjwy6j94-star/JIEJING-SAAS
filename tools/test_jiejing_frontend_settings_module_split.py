@@ -22,7 +22,7 @@ def main() -> int:
     app_html = APP_HTML.read_text(encoding="utf-8")
     app_js = APP_JS.read_text(encoding="utf-8")
     module_js = MODULE.read_text(encoding="utf-8")
-    module_marker = "./assets/jiejing-settings-panels.js?v=20260702-merchant-subscription-request-v1"
+    module_marker = "./assets/jiejing-settings-panels.js?v=20260702-ai-ceo-route-card-v3"
     app_marker = "./app.js?v="
     billing_panel_start = module_js.index("function renderBillingProviderPanel")
     billing_panel_end = module_js.index("function _renderBillingTestRehearsal")

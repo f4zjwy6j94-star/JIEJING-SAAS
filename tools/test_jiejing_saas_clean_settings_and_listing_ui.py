@@ -672,12 +672,22 @@ def main() -> None:
     require(render_connect_body, '"settings.legacy_connect_status"', "settings legacy status trusted label")
     if "connectStatusEl.innerHTML" in render_connect_body:
         raise AssertionError("Settings legacy connection status must not use raw innerHTML")
-    require(app_js, 'saasOwnerLaunchCanView()\n        ? optionalSaasFetchFast("/owner/launch-control"', "owner launch control should not be fetched for ordinary merchants")
+    require(app_js, 'canViewPlatformInternal\n        ? optionalSaasFetchFast("/owner/launch-control"', "owner launch control should not be fetched for ordinary merchants")
     require(app_js, 'Promise.resolve({ owner_launch_control: null, skipped: "owner_admin_only" })', "owner launch control public-page quiet skip")
-    require(app_js, 'saasOwnerLaunchCanView()\n        ? optionalSaasFetchFast(`/security/staging-gate?store_id=${encodeURIComponent(store.store_id)}`', "staging security gate should not be fetched for ordinary merchants")
+    require(app_js, 'canViewPlatformInternal\n        ? optionalSaasFetchFast(`/security/staging-gate?store_id=${encodeURIComponent(store.store_id)}`', "staging security gate should not be fetched for ordinary merchants")
     require(app_js, 'Promise.resolve({ staging_security_gate: null, skipped: "platform_internal_admin_only" })', "staging security gate public-page quiet skip")
-    require(app_js, 'saasOwnerLaunchCanView()\n        ? optionalSaasFetchFast("/billing/payment-options"', "payment strategy should not be fetched for ordinary merchants")
+    require(app_js, 'canViewPlatformInternal\n        ? optionalSaasFetchFast("/billing/payment-options"', "payment strategy should not be fetched for ordinary merchants")
     require(app_js, 'Promise.resolve({ payment_options: null, skipped: "owner_admin_only_payment_options" })', "payment strategy public-page quiet skip")
+    require(app_js, "function saasCanViewPlatformInternalFromPermissions", "platform-internal fetch gate should use current permissions")
+    require(app_js, "const canViewPlatformInternal = saasCanViewPlatformInternalFromPermissions(corePermissions);", "platform-internal fetches should use current permissions gate")
+    require(app_js, "state.saasOwnerLaunchControl = canViewPlatformInternal ? ownerLaunchControl.owner_launch_control || state.saasOwnerLaunchControl || null : null;", "ordinary merchant refresh should clear stale owner launch control")
+    for protected_fetch in [
+        'canViewPlatformInternal ? optionalSaasFetchFast("/vault/status"',
+        'canViewPlatformInternal ? optionalSaasFetchFast("/database/plan"',
+        'canViewPlatformInternal ? optionalSaasFetchFast("/queue/plan"',
+        '? optionalSaasFetchFast("/provider-job-contracts"',
+    ]:
+        require(app_js, protected_fetch, f"ordinary merchants should not fetch {protected_fetch}")
     require(app_js, "function merchantSafeSaasBillingPlan", "ordinary merchant billing state sanitizer")
     require(app_js, "delete safePlan.payment_strategy;", "ordinary merchant billing plan must drop internal payment strategy")
     require(app_js, "delete safePlan.billing_live_cutover_matrix;", "ordinary merchant billing plan must drop internal live cutover matrix")

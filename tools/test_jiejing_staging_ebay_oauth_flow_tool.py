@@ -70,6 +70,8 @@ def main() -> int:
         doctor_stderr = doctor.stderr or ""
         if "DOCTOR_STATUS=blocked" not in doctor_stdout or "JIEJING_SAAS_ENV_should_be_staging" not in doctor_stdout:
             return fail("doctor should surface staging/Vault blockers before seller OAuth")
+        if "vault_status_requires_platform_internal_admin" not in doctor_stdout:
+            return fail("doctor should block seller OAuth when platform Vault evidence is not visible to the operator session")
         if PASSWORD_SENTINEL in doctor_stdout or PASSWORD_SENTINEL in doctor_stderr:
             return fail("doctor leaked the operator password")
 

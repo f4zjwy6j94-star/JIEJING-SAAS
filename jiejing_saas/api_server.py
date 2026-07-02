@@ -420,6 +420,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "role": member.get("role") if member else None,
                     "permissions": member.get("permissions", []) if member else [],
                     "roles": role_summary(),
+                    "platform_internal_admin": self._is_platform_internal_admin(identity),
                     "secret_exposed": False,
                 }
             )
@@ -502,38 +503,56 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "vault/status":
+            if not self._require_platform_internal_admin(identity, "vault status"):
+                return
             self._send_json({"vault": self.secret_store_boundary.status()})
             return
 
         if path == "database/plan":
+            if not self._require_platform_internal_admin(identity, "database plan"):
+                return
             self._send_json({"database_plan": build_database_plan(self.settings, self.repository)})
             return
 
         if path == "database/inventory":
+            if not self._require_platform_internal_admin(identity, "database inventory"):
+                return
             self._send_json({"database_inventory": self.repository.database_inventory()})
             return
 
         if path == "database/adapters":
+            if not self._require_platform_internal_admin(identity, "database adapters"):
+                return
             self._send_json({"database_adapters": build_database_adapter_contract(self.settings)})
             return
 
         if path == "queue/plan":
+            if not self._require_platform_internal_admin(identity, "queue plan"):
+                return
             self._send_json({"queue_plan": build_queue_plan(self.settings, self.repository)})
             return
 
         if path == "queue/adapters":
+            if not self._require_platform_internal_admin(identity, "queue adapters"):
+                return
             self._send_json({"queue_adapters": build_queue_adapter_contract(self.settings)})
             return
 
         if path == "monitoring/status":
+            if not self._require_platform_internal_admin(identity, "monitoring status"):
+                return
             self._send_json({"monitoring": build_monitoring_status(self.settings, self.repository)})
             return
 
         if path == "infrastructure/drivers":
+            if not self._require_platform_internal_admin(identity, "infrastructure drivers"):
+                return
             self._send_json({"infrastructure_drivers": build_infrastructure_driver_status(self.settings)})
             return
 
         if path == "backup/plan":
+            if not self._require_platform_internal_admin(identity, "backup plan"):
+                return
             self._send_json({"backup_plan": build_backup_plan(self.settings, self.repository)})
             return
 
@@ -614,26 +633,38 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "provider-job-contracts":
+            if not self._require_platform_internal_admin(identity, "provider job contracts"):
+                return
             self._send_json({"provider_job_contracts": build_provider_job_contract_catalog()})
             return
 
         if path == "controlled-bridges":
+            if not self._require_platform_internal_admin(identity, "controlled bridges"):
+                return
             self._send_json({"controlled_bridges": build_controlled_bridge_contract(self.settings, self.repository)})
             return
 
         if path == "vault/targets":
+            if not self._require_platform_internal_admin(identity, "vault targets"):
+                return
             self._send_json({"vault_targets": self.secret_store_boundary.targets()})
             return
 
         if path == "vault/adapters":
+            if not self._require_platform_internal_admin(identity, "vault adapters"):
+                return
             self._send_json({"vault_adapters": self.secret_store_boundary.adapter_contract()})
             return
 
         if path == "vault/client-contract":
+            if not self._require_platform_internal_admin(identity, "vault client contract"):
+                return
             self._send_json({"vault_client": build_vault_client_contract(self.settings)})
             return
 
         if path == "vault/secret-resolver/status":
+            if not self._require_platform_internal_admin(identity, "vault secret resolver status"):
+                return
             self._send_json({"vault_secret_resolver": build_vault_secret_resolver_status(self.settings)})
             return
 
@@ -3889,6 +3920,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         member = self.repository.get_team_member(company_id=identity["company_id"], user_id=identity["user_id"])
         role = str(member.get("role") or "").lower() if member else ""
         return role in {"owner", "admin"}
+
+    def _require_platform_internal_admin(self, identity: dict[str, Any], label: str) -> bool:
+        if self._is_platform_internal_admin(identity):
+            return True
+        self._send_error(HTTPStatus.FORBIDDEN, f"{label} is platform-internal admin only")
+        return False
 
     @staticmethod
     def _merchant_safe_billing_plan(plan: dict[str, Any]) -> dict[str, Any]:

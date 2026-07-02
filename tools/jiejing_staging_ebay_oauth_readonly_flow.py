@@ -215,8 +215,31 @@ def _doctor(args: argparse.Namespace) -> dict[str, Any]:
     health = _fetch_json(f"{base}/health")
     readiness = _fetch_json(f"{base}/readiness").get("readiness", {})
     token = _login_or_register(args)
-    vault = _fetch_json(f"{base}/vault/status", token=token).get("vault", {})
-    resolver = _fetch_json(f"{base}/vault/secret-resolver/status", token=token).get("vault_secret_resolver", {})
+    vault = _fetch_platform_internal_status(
+        url=f"{base}/vault/status",
+        token=token,
+        payload_key="vault",
+        blocked_by="vault_status_requires_platform_internal_admin",
+        fallback={
+            "status": "blocked_by_access_boundary",
+            "provider": None,
+            "enabled": False,
+            "can_store_raw_secret": False,
+            "can_resolve_task_secret": False,
+        },
+    )
+    resolver = _fetch_platform_internal_status(
+        url=f"{base}/vault/secret-resolver/status",
+        token=token,
+        payload_key="vault_secret_resolver",
+        blocked_by="vault_secret_resolver_requires_platform_internal_admin",
+        fallback={
+            "status": "blocked_by_access_boundary",
+            "provider": None,
+            "managed_client_implemented": False,
+            "live_secret_resolution_available": False,
+        },
+    )
     http_client = _fetch_json(f"{base}/ebay-read-only/http-client/status", token=token).get("ebay_http_client", {})
     live_adapter = _fetch_json(f"{base}/ebay-read-only/live-adapter/status", token=token).get("ebay_live_read_adapter", {})
     write_adapter = _fetch_json(f"{base}/ebay-write/adapter/status", token=token).get("ebay_write_adapter", {})
@@ -303,6 +326,9 @@ def _doctor_blockers(
         blockers.append("JIEJING_SAAS_ENV_should_be_staging")
     if health.get("real_platform_writes_enabled"):
         blockers.append("real_platform_writes_must_remain_disabled")
+    for item in vault.get("blocked_by") or []:
+        if item not in blockers:
+            blockers.append(str(item))
     if not vault.get("enabled") or vault.get("provider") == "secret_ref_only":
         blockers.append("managed_vault_not_enabled")
     if not vault.get("can_store_raw_secret") or not vault.get("can_resolve_task_secret"):
@@ -580,6 +606,46 @@ def _public_vault_status(value: Any) -> dict[str, Any]:
         "can_store_raw_secret": bool(vault.get("can_store_raw_secret")),
         "secret_exposed": False,
     }
+
+
+def _fetch_platform_internal_status(
+    *,
+    url: str,
+    token: str,
+    payload_key: str,
+    blocked_by: str,
+    fallback: dict[str, Any],
+) -> dict[str, Any]:
+    status_code, payload = _fetch_json_with_status(url, token=token)
+    if status_code == 200:
+        value = payload.get(payload_key)
+        result = value if isinstance(value, dict) else {}
+        result["secret_exposed"] = False
+        return result
+    if status_code == 403:
+        result = dict(fallback)
+        result["blocked_by"] = [blocked_by]
+        result["secret_exposed"] = False
+        return result
+    error = payload.get("error") or payload.get("message") or "request_failed"
+    raise RuntimeError(f"GET {url} failed with HTTP {status_code}: {str(error)[:200]}")
+
+
+def _fetch_json_with_status(url: str, token: str | None = None, timeout: int = 60) -> tuple[int, dict[str, Any]]:
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:500]
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            payload = {"error": body}
+        return exc.code, payload if isinstance(payload, dict) else {"error": body}
 
 
 def _fetch_json(url: str, token: str | None = None, timeout: int = 60) -> dict[str, Any]:

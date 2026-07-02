@@ -47,6 +47,7 @@ def main() -> int:
         "/model",
         "/commercial",
         "/ebay-read-only",
+        "/controlled-bridges",
         "/data-packets",
         "/media-asset-jobs",
         "/confirmations",
