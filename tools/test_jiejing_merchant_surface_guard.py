@@ -49,6 +49,52 @@ PUBLIC_VISIBLE_FORBIDDEN = [
     "tutorial",
 ]
 
+PUBLIC_HOMEPAGE_SOURCE_FORBIDDEN = [
+    "上线口径",
+    "真实 SaaS 上线证据",
+    "后台岗位",
+    "审计链路",
+    "回流审计",
+    "审计回传",
+    "token、AI 连接凭证",
+    "后端密钥边界",
+    "正式版应",
+    "样本数据",
+    "已有开发者配置",
+    "Key、OAuth 和 Sell APIs",
+    "接口凭证、token",
+    "官方只读授权/API",
+    "连接 eBay 店铺 API",
+    "eBay 店铺 API",
+    "按店铺分批测试",
+    "账号/API",
+    "不用 API",
+]
+
+APP_MERCHANT_ONBOARDING_SOURCE_FORBIDDEN = [
+    "API 可以理解",
+    "API 暂时",
+    "不连接财务 API",
+    "货源 API",
+    "API 术语",
+    "应用 Key",
+    "OAuth 和 Sell APIs",
+    "Key、OAuth",
+    "正式版会由捷境",
+    "正式版应该",
+    "OAuth 授权说明",
+    "eBay API 能力",
+    "演示版",
+    "演示数据",
+    "演示样本",
+    "样本导入",
+    "订单样本",
+    "接口凭证、token",
+    "审计日志",
+    "可审计",
+    "正式 SaaS",
+]
+
 PUBLIC_LEGAL_FILES = [
     "terms.html",
     "privacy.html",
@@ -133,6 +179,14 @@ def function_scope(source: str, name: str) -> str:
     return source[start:end]
 
 
+def source_between(source: str, start_marker: str, end_marker: str) -> str:
+    start = source.find(start_marker)
+    end = source.find(end_marker, start + len(start_marker))
+    if start < 0 or end < 0:
+        raise ValueError(f"missing source window: {start_marker} -> {end_marker}")
+    return source[start:end]
+
+
 def main() -> int:
     index_html = (ROOT / "index.html").read_text(encoding="utf-8")
     app_html = (ROOT / "app.html").read_text(encoding="utf-8")
@@ -149,6 +203,15 @@ def main() -> int:
             return fail(f"public homepage visible text still feels simulated: {marker}")
         if marker in app_static_text:
             return fail(f"merchant workbench static text still feels simulated: {marker}")
+
+    for marker in PUBLIC_HOMEPAGE_SOURCE_FORBIDDEN:
+        if marker in index_html:
+            return fail(f"public homepage/onboarding source exposes internal/customer-hostile marker: {marker}")
+
+    merchant_onboarding_source = source_between(app_js, "const wizard = [", "const manualModal =")
+    for marker in APP_MERCHANT_ONBOARDING_SOURCE_FORBIDDEN:
+        if marker in merchant_onboarding_source:
+            return fail(f"merchant onboarding source exposes internal/customer-hostile marker: {marker}")
 
     for filename in PUBLIC_LEGAL_FILES:
         legal_text = visible_text((ROOT / filename).read_text(encoding="utf-8"))

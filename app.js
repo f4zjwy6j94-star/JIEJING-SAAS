@@ -2059,13 +2059,13 @@ const wizard = [
   },
   {
     title: "连接 eBay 官方授权，减少手工搬运后台数据",
-    reason: "API 可以理解成平台提供给软件使用的官方安全通道，不是把账号密码交给捷境。起步阶段建议先接官方只读授权：读取店铺、Listing、订单、费用和广告表现，用来预填资料、减少手工复制；真实发布、退款、改价、广告和客服发送仍然关闭。",
+    reason: "eBay 官方连接不是把账号密码交给捷境。起步阶段建议先接官方只读授权：读取店铺、Listing、订单、费用和广告表现，用来预填资料、减少手工复制；真实发布、退款、改价、广告和客服发送仍然关闭。",
     field: "ebayApiMode",
     options: [
       ["oauth_ready", "推荐：捷境带我连接 eBay", "打开 eBay 官方授权页，像网页登录一样确认；只读读取店铺上下文，不会发布、退款、改价或投广告"],
       ["guided_later", "稍后按引导连接", "用大按钮、截图提示和回到捷境的检查清单完成授权"],
-      ["manual_first", "暂不连接，先用截图/表格", "刚了解捷境、不想马上授权，或 API 暂时接不上时，先上传 Seller Hub 截图、CSV 或订单样本继续跑流程"],
-      ["developer_ready", "我已有应用配置", "适合技术团队接应用 Key、OAuth 和 Sell APIs"],
+      ["manual_first", "暂不连接，先用截图/表格", "刚了解捷境、不想马上授权，或官方连接暂时接不上时，先上传 Seller Hub 截图、CSV 或订单资料继续跑流程"],
+      ["developer_ready", "我已有技术团队协助", "适合由技术团队协助完成官方连接和权限范围确认"],
     ],
   },
   {
@@ -2073,7 +2073,7 @@ const wizard = [
     reason: "eBay 商品的利润判断不能只看售价。平台费、店铺订阅、广告费、物流和退货预留都要算进去；捷境只做费用整理和提醒，不自动扣费、不自动投放。",
     field: "feeInsightMode",
     options: [
-      ["manual_first", "先手动填写费用", "不连接财务 API，也能先用保守值测算"],
+      ["manual_first", "先手动填写费用", "不连接费用数据，也能先用保守值测算"],
       ["fees_readonly", "只读费用和订阅状态", "读取费用用于利润复盘，不开通/取消订阅，不扣费"],
       ["ads_readonly", "只读广告表现", "读取花费、点击、转化和 ROAS，只做建议"],
       ["ads_control_confirm", "广告动作必须确认", "创建广告、调预算、暂停广告全部进入确认中心"],
@@ -2091,14 +2091,14 @@ const wizard = [
     ],
   },
   {
-    title: "货源接口先怎么接？",
-    reason: "货源 API 就是货源平台给软件读取商品、价格、规格、库存和供应商信息的官方通道。只要商家确定长期从 1688 或其他货源平台采购，就应该优先走接口或半自动导入；但不同平台 API 能力、审核和权限不同，捷境要保留截图、链接、表格兜底。真实下单、付款和地址写入属于钱和履约风险，必须确认。",
+    title: "货源连接先怎么接？",
+    reason: "货源连接用于读取商品、价格、规格、库存和供应商信息。只要商家确定长期从 1688 或其他货源平台采购，就应该优先走官方连接或半自动导入；但不同平台开放能力、审核和权限不同，捷境要保留截图、链接、表格兜底。真实下单、付款和地址写入属于钱和履约风险，必须确认。",
     field: "sourceApiMode",
     options: [
       ["api_1688_readonly", "推荐：先接 1688 货源读取", "读取商品、价格、规格、库存、供应商和发货地，辅助筛货和预填成本"],
-      ["manual_1688", "暂不接货源 API，先贴链接/传图", "刚了解捷境、不想马上绑定货源平台时，先用链接、图片、表格和采购价跑流程，后面再补接口"],
+      ["manual_1688", "暂不接货源连接，先贴链接/传图", "刚了解捷境、不想马上绑定货源平台时，先用链接、图片、表格和采购价跑流程，后面再补连接"],
       ["api_1688_order_confirm", "1688 下单必须确认", "可生成采购单；付款、地址、真实下单和发货动作进入确认中心"],
-      ["source_multi", "预留其他货源/物流接口", "橙联、海外仓、供应商 ERP、表格导入统一进货源设置"],
+      ["source_multi", "预留其他货源/物流连接", "橙联、海外仓、供应商 ERP、表格导入统一进货源设置"],
     ],
   },
   {
@@ -2133,7 +2133,7 @@ const wizard = [
   },
   {
     title: "客服和售后 AI 到哪一步停住？",
-    reason: "为了让商家省心，资料整理、草稿生成、素材方案、过程留档、API 只读读取可以自动推进；但资金相关、刊登发布、退款补偿、广告投放、买家消息发送或明确承诺，必须由商家确认。",
+    reason: "为了让商家省心，资料整理、草稿生成、素材方案、过程留档、只读资料读取可以自动推进；但资金相关、刊登发布、退款补偿、广告投放、买家消息发送或明确承诺，必须由商家确认。",
     field: "permissionLevel",
     options: [
       ["low_auto", "推荐：核心动作由我确认", "资金、刊登、退款、广告、买家消息发送或承诺需确认；资料、草稿、素材和记录自动推进"],
@@ -2253,9 +2253,9 @@ const onboardingTaskMeta = {
     human: "只确认自己真实能做到的发货时效，不为了转化乱承诺。",
   },
   sourceApiMode: {
-    task: "选择货源接口和采购执行边界。",
-    ai: "优先用接口或半自动导入读取货源；接不上时用链接、图片、表格兜底。",
-    human: "确定货源平台授权方式；真实下单、付款、地址写入和发货动作必须确认。",
+    task: "选择货源连接和采购执行边界。",
+    ai: "优先用官方连接或半自动导入读取货源；接不上时用链接、图片、表格兜底。",
+    human: "确定货源平台连接方式；真实下单、付款、地址写入和发货动作必须确认。",
   },
   profitFloor: {
     task: "设定最低利润提醒线。",
@@ -2304,10 +2304,10 @@ const stageOnboardingTaskMetaOverrides = {
     ebaySetup: {
       task: "先确认现有 eBay 店铺怎么安全接入捷境。",
       ai: "整理 Seller Hub、Listing、订单、业务政策、费用、广告和履约线索，先建立自动化底座，不凭感觉改店。",
-      human: "告诉系统能不能进入 Seller Hub，愿不愿意先做只读授权，或者先用样本导入体验。",
+      human: "告诉系统能不能进入 Seller Hub，愿不愿意先做只读授权，或者先用资料导入开始。",
     },
     ebayApiMode: {
-      task: "决定店铺数据先用只读授权还是样本导入。",
+      task: "决定店铺数据先用只读授权还是资料导入。",
       ai: "只读读取 Listing、订单、费用、广告表现和账号状态，生成资料整理、草稿、核算和待确认动作。",
       human: "只确认读取方式；标题、价格、广告、发布动作不会自动执行。",
     },
@@ -2316,7 +2316,7 @@ const stageOnboardingTaskMetaOverrides = {
     ebaySetup: {
       task: "先把订单、tracking、买家消息和退货状态读清楚。",
       ai: "按待发货、tracking 缺失、超时、退货中、消息待回复和亏损订单分队列。",
-      human: "确认能读取订单数据，或先导入最近 7/30 天订单样本。",
+      human: "确认能读取订单数据，或先导入最近 7/30 天订单资料。",
     },
     fulfillmentMode: {
       task: "确认真实发货方式和 handling time 风险。",
@@ -2347,7 +2347,7 @@ const stageWizardOverrides = {
   store_opened: {
     ebaySetup: {
       title: "先确认 eBay 店铺读取方式",
-      reason: "已有店铺商家先把店铺接进捷境，不重走开店流程。这里会确认能否进入 Seller Hub、是否已有 店铺业务政策、是否有 active listings、是否愿意做官方只读授权，或先用费用、Listing 和订单样本体验。",
+      reason: "已有店铺商家先把店铺接进捷境，不重走开店流程。这里会确认能否进入 Seller Hub、是否已有 店铺业务政策、是否有 active listings、是否愿意做官方只读授权，或先用费用、Listing 和订单资料开始。",
       options: [
         ["need_seller_account", "店铺资料不完整", "先补卖家资料、收款、地址和 Seller Hub 基础信息"],
         ["seller_account_ready", "能进 Seller Hub，但政策没理清", "优先检查付款、发货、退货和 handling time"],
@@ -2357,7 +2357,7 @@ const stageWizardOverrides = {
     },
     ebayApiMode: {
       title: "店铺数据先怎么接入？",
-      reason: "已开店阶段不建议凭感觉改，也不应该让 AI 乱动店铺。推荐先走官方只读授权，让 AI 整理 Listing、订单、费用、广告和账号状态；如果商家刚了解捷境、暂时不信任授权，也可以先手动导入样本，后面再到「连接账号」补接。",
+      reason: "已开店阶段不建议凭感觉改，也不应该让 AI 乱动店铺。推荐先走官方只读授权，让 AI 整理 Listing、订单、费用、广告和账号状态；如果商家刚了解捷境、暂时不信任授权，也可以先手动导入资料，后面再到「连接账号」补接。",
     },
     feeInsightMode: {
       title: "费用和广告先读到什么程度？",
@@ -2377,7 +2377,7 @@ const stageWizardOverrides = {
       title: "先把订单状态读清楚",
       reason: "已有订单阶段先看已付款待发货、tracking 缺失、超出 handling time、退货中和买家消息，不先做复杂营销功能。",
       options: [
-        ["need_seller_account", "只有少量订单样本", "先手动导入订单、物流和买家消息样本"],
+        ["need_seller_account", "只有少量订单资料", "先手动导入订单、物流和买家消息资料"],
         ["seller_account_ready", "能进入订单页面", "先按待发货、已发货、退货中分类"],
         ["seller_hub_ready", "能进入 Seller Hub", "适合读取订单、消息、退货请求和费用"],
         ["store_connected", "订单数据可接入", "直接生成发货、客服、退款和利润队列"],
@@ -2385,7 +2385,7 @@ const stageWizardOverrides = {
     },
     ebayApiMode: {
       title: "订单、消息和退货数据怎么读取？",
-      reason: "推荐优先只读连接订单、tracking、买家消息和退货请求，这样才能真正省掉查后台、复制订单、核对物流的重复操作；如果暂时不想授权，先导入最近 7/30 天订单样本也能体验流程。退款、补偿、客服承诺不自动执行。",
+      reason: "推荐优先只读连接订单、tracking、买家消息和退货请求，这样才能真正省掉查后台、复制订单、核对物流的重复操作；如果暂时不想授权，先导入最近 7/30 天订单资料也能跑流程。退款、补偿、客服承诺不自动执行。",
     },
     feeInsightMode: {
       title: "订单利润要算到哪一步？",
@@ -2512,7 +2512,7 @@ const listingProjects = [
     status: "待店铺授权",
     progress: 12,
     risk: "低风险",
-    brief: "适合 UK 测试店，但该店铺还未授权，当前只能用演示数据调研。",
+    brief: "适合 UK 测试店，但该店铺还未授权，当前只能用待同步资料调研。",
     steps: [
       ["项目状态", "店铺授权未完成，当前只做低置信度调研和素材草稿", "current"],
     ],
@@ -2772,7 +2772,7 @@ const workflowProjectMeta = {
       "演示中会展示批量导入、筛选、草稿、物流测算和确认边界；当前不读取真实店铺，不写入 eBay。",
     primaryView: "connect",
     primaryLabel: "去设置接口与店铺授权",
-    primaryToast: "已打开连接账号：先补 eBay 只读授权或样本导入。",
+    primaryToast: "已打开连接账号：先补 eBay 只读授权或资料导入。",
     checklist: [
       "选择 eBay 官方只读授权，或先导入样本体验。",
       "确认 UK 店铺的付款、发货、退货政策。",
@@ -2842,7 +2842,7 @@ const workflowProjectMeta = {
 const backflowMarketReport = {
   type: "market",
   label: "市场判断汇报",
-  note: "演示样本口径：公开搜索、样例竞品和平台字段模拟。真实店铺接入后会替换为可追溯数据。",
+  note: "参考资料口径：公开搜索、参考竞品和平台字段预估。真实店铺接入后会替换为可追溯数据。",
   summary: [
     ["立项判断", "谨慎继续，先做中价位家居礼品方向"],
     ["主推切口", "禅意家居摆件 + 可视化倒流烟雾效果"],
@@ -2899,7 +2899,7 @@ const backflowMarketReport = {
     {
       title: "1. 品类概述",
       body:
-        "倒流香炉属于 eBay 家居香薰/装饰摆件长尾品类，市场不是爆发型，但需求稳定；演示样本池显示相关 Listing 数量充足，成交信号集中在中低客单价区间，需求主要来自家居氛围、礼品和短视频视觉种草。",
+        "倒流香炉属于 eBay 家居香薰/装饰摆件长尾品类，市场不是爆发型，但需求稳定；参考资料池显示相关 Listing 数量充足，成交信号集中在中低客单价区间，需求主要来自家居氛围、礼品和短视频视觉种草。",
       metrics: [
         ["样本池", "1,200+ 条相关 Listing 样本"],
         ["需求强度", "中等偏上，稳定长尾"],
@@ -3643,10 +3643,10 @@ const activities = [
     projectId: "drawer-organizer",
     role: "店铺连接",
     title: "等待 UK 测试店授权",
-    action: "检查该项目所属店铺的连接状态，当前只能使用演示数据，不能读取真实店铺表现。",
+    action: "检查该项目所属店铺的连接状态，当前只能使用待同步资料，不能读取真实店铺表现。",
     sources: [
       "店铺连接状态：UK 测试店待授权",
-      "eBay OAuth 演示状态",
+      "eBay 官方授权待连接状态",
       "自动化规则：多店铺预留模式",
     ],
     result: "建议先完成店铺授权或复制 US 主店规则模板，否则只能做低置信度调研。",
@@ -3902,15 +3902,15 @@ const logisticsItems = [
 
 const apiStatus = [
   ["账号状态", "已恢复", "真实发布前仍做一次额度、费用和政策预检"],
-  ["OAuth", "演示", "UI 完整，不发起真实授权"],
-  ["店铺订阅 Account API", "演示", "用于读取 Store subscription 状态；不替商家开通或取消订阅"],
-  ["费用账单 Finances API", "待授权", "读取成交费、刊登费、订阅费、广告费，用于真实利润复盘"],
-  ["广告 Marketing API", "未开启", "默认只读广告表现；创建广告、调预算、暂停广告必须人工确认"],
-  ["店铺接入整理", "演示", "缺陷率、延迟发货率、销售额均为演示数据"],
-  ["Listing 发布", "演示", "按钮只更新本地状态，不写入 eBay"],
-  ["客服消息", "演示", "可看 AI 草稿，真实发送未开启"],
-  ["1688 货源 API", "预留", "先作为设置入口；读取货源和自动下单必须分开授权"],
-  ["SpeedPAK 报价", "演示", "10 重量段演示价卡"],
+  ["官方授权", "待连接", "UI 完整，不发起真实授权"],
+  ["店铺订阅数据", "待连接", "用于读取 Store subscription 状态；不替商家开通或取消订阅"],
+  ["费用账单数据", "待授权", "读取成交费、刊登费、订阅费、广告费，用于真实利润复盘"],
+  ["广告表现数据", "未开启", "默认只读广告表现；创建广告、调预算、暂停广告必须人工确认"],
+  ["店铺接入整理", "待同步", "缺陷率、延迟发货率、销售额均为待同步资料"],
+  ["Listing 发布", "预检", "按钮只更新本地状态，不写入 eBay"],
+  ["客服消息", "预检", "可看 AI 草稿，真实发送未开启"],
+  ["1688 货源连接", "预留", "先作为设置入口；读取货源和自动下单必须分开授权"],
+  ["SpeedPAK 报价", "预估", "10 重量段参考价卡"],
 ];
 
 const marketSourceHealth = [
@@ -3919,8 +3919,8 @@ const marketSourceHealth = [
     status: "主通道",
     tone: "green",
     route: "Browse / 类目校验 / Trading / Account / Finances",
-    detail: "用于读取类目、在售商品、订单、费用和店铺政策。正式版必须走商家本人授权，不能让商家交账号密码。",
-    fallback: "授权失败时，只能先用截图、CSV、商品链接和演示数据跑草稿；报告会降低置信度。",
+    detail: "用于读取类目、在售商品、订单、费用和店铺政策。必须走商家本人授权，不能让商家交账号密码。",
+    fallback: "授权失败时，只能先用截图、CSV、商品链接和商家导入资料跑草稿；报告会降低置信度。",
   },
   {
     name: "搜索引擎公开信息",
@@ -4095,7 +4095,7 @@ const ebayPolicyOrchestration = [
 
 const mockData = {
   merchant: "northvalesource",
-  source: "演示数据",
+  source: "待同步资料",
   activePlatform: "eBay",
   connectors: {
     ebay: "mock_ready",
@@ -4256,30 +4256,30 @@ const manualActionDetails = {
       {
         label: "查看 eBay 店铺业务政策 说明",
         url: "https://www.ebay.com/help/selling/business-policies/business-policies?id=4212",
-        note: "用于理解付款、发货、退货模板；正式版会引导你按店铺实际情况配置。",
+        note: "用于理解付款、发货、退货模板；后续会引导你按店铺实际情况配置。",
       },
     ],
   },
   ebay_oauth: {
     title: "连接 eBay 官方授权",
-    intro: "新手商家也可以尽早接 API，但不需要研究 OAuth。正式版会由捷境生成 eBay 官方授权链接，商家只需要登录 eBay、确认授权范围，再回到捷境继续。发布、退款、改价、广告执行和客服发送仍然关闭。",
+    intro: "新手商家也可以尽早连接 eBay 官方资料，但不需要研究技术授权细节。捷境会生成 eBay 官方授权链接，商家只需要登录 eBay、确认授权范围，再回到捷境继续。发布、退款、改价、广告执行和客服发送仍然关闭。",
     items: [
       "推荐先授权读取店铺、Listing、订单、费用和广告表现，让 AI 少问你、少让你复制粘贴。",
       "授权页必须来自 eBay 官方；捷境不要求你提供 eBay 密码。",
       "AI 根据读取到的资料预填物流方式、退货承诺、利润费用、Listing 字段和素材需求。",
-      "如果你看不懂页面，正式版应该提供截图式引导；如果授权失败，先用截图、CSV、表格和演示数据兜底。",
+      "如果你看不懂页面，捷境会提供清晰引导；如果授权失败，先用截图、CSV、表格和店铺资料兜底。",
       "资金相关、刊登发布、退款补偿、广告投放、买家消息发送或明确承诺，必须由商家确认。",
     ],
     actions: [
       {
-        label: "查看 eBay OAuth 授权说明",
+        label: "查看 eBay 官方授权说明",
         url: "https://developer.ebay.com/api-docs/static/oauth-tokens.html",
-        note: "正式版会由捷境生成真实 eBay 授权链接；演示版先展示权限边界。",
+        note: "捷境会生成 eBay 官方授权链接；当前页面先让你看清权限边界。",
       },
       {
-        label: "查看 eBay API 能力列表",
+        label: "查看 eBay 官方连接能力",
         url: "https://developer.ebay.com/develop/apis",
-        note: "用于确认哪些能力能通过官方接口读取或执行；执行动作仍走确认中心。",
+        note: "用于确认哪些资料能通过官方连接读取或执行；执行动作仍走确认中心。",
       },
     ],
   },
@@ -4295,7 +4295,7 @@ const manualActionDetails = {
       {
         label: "打开 eBay Shipping 设置",
         url: "https://www.ebay.com/ship/prf",
-        note: "查看发货偏好、地址和履约相关设置；演示版不会修改你的店铺。",
+        note: "查看发货偏好、地址和履约相关设置；不会修改你的店铺。",
       },
       {
         label: "打开橙联官网",
@@ -4325,24 +4325,24 @@ const manualActionDetails = {
     items: ["设置商家负责人、客服、财务能看到和确认的内容。", "资金相关、刊登发布、退款补偿、广告投放、买家消息发送或明确承诺需要更高权限。", "AI 动作需要留下工作记录和来源记录。"],
   },
   source_api_binding: {
-    title: "货源 API 绑定",
-    intro: "如果商家确定长期从 1688 或其他货源平台采购，捷境应该优先接接口或半自动导入，减少复制链接、抄价格和填规格。不同平台 API 能力、审核和权限不同，所以必须保留链接、图片、表格和截图兜底。采购下单、付款、地址写入、直发买家或国内中转履约，都必须单独确认。",
+    title: "货源连接绑定",
+    intro: "如果商家确定长期从 1688 或其他货源平台采购，捷境应该优先接官方连接或半自动导入，减少复制链接、抄价格和填规格。不同平台开放能力、审核和权限不同，所以必须保留链接、图片、表格和截图兜底。采购下单、付款、地址写入、直发买家或国内中转履约，都必须单独确认。",
     items: [
       "1688 货源读取：读取商品、价格、规格、库存、供应商、发货地和图片信息。",
-      "其他货源平台：能接官方 API 就走授权；不能接或审核未通过时，用链接、图片、表格、截图先跑流程。",
+      "其他货源平台：能接官方连接就走授权；不能接或审核未通过时，用链接、图片、表格、截图先跑流程。",
       "采购执行：生成采购单可以自动，但付款、收货地址和真实下单必须进确认中心。",
-      "密钥原则：接口凭证、token、店铺授权和支付信息只能放后端密钥管理，不能写在前端页面。",
+      "安全原则：连接资料、店铺授权和支付信息只在后台安全边界处理，不在网页前台保存或展示。",
     ],
     actions: [
       {
         label: "打开 1688 开放平台",
         url: "https://open.1688.com/",
-        note: "用于后续申请或查看 1688 API 能力；不同权限可能需要平台审核。",
+        note: "用于后续申请或查看 1688 开放能力；不同权限可能需要平台审核。",
       },
       {
         label: "打开 1688 货源站",
         url: "https://www.1688.com/",
-        note: "暂不接 API 时，可以先复制货源链接、上传图片或整理表格继续跑流程。",
+        note: "暂不连接时，可以先复制货源链接、上传图片或整理表格继续跑流程。",
       },
     ],
   },
@@ -4359,7 +4359,7 @@ const manualActionDetails = {
       {
         label: "打开 1688 采购入口",
         url: "https://www.1688.com/",
-        note: "演示版只跳转；真实下单、付款、地址写入必须确认。",
+        note: "这里只打开货源入口；真实下单、付款、地址写入必须确认。",
       },
       {
         label: "打开橙联官网",
@@ -4370,10 +4370,10 @@ const manualActionDetails = {
   },
   data_source_health: {
     title: "数据源状态自检",
-    intro: "市场报告不能先写结论再补理由。正式版会先生成数据包，再让 AI 写报告：官方 API、搜索引擎、公开网页、商家资料和演示假设分开标记；数据源受阻时直接说明原因，不编造成已经查到。",
+    intro: "市场报告不能先写结论再补理由。捷境会先整理来源，再让 AI 写报告：官方资料、搜索引擎、公开网页、商家资料和待确认假设分开标记；数据源受阻时直接说明原因，不编造成已经查到。",
     items: [
       "报告分三级：初筛报告只能决定要不要继续看；数据增强报告可以送产品经理做草稿；发布前报告才允许进入确认中心。",
-      "eBay 官方数据优先走商家本人 OAuth 授权；授权失败就降级为截图、CSV、链接和演示样本。",
+      "eBay 官方数据优先走商家本人官方授权；授权失败就降级为截图、CSV、链接和商家导入资料。",
       "搜索引擎只能读取公开网页线索，适合补充竞品、用户语言和趋势，不等于平台内部销量。",
       "公开页面读取遇到登录、验证码、403 或反爬限制时必须停住，改让商家补截图、链接或授权。",
       "1688 和货源平台可以先用链接、图片和表格跑流程；采购、付款、地址写入和真实发货仍要确认。",
@@ -4382,14 +4382,14 @@ const manualActionDetails = {
     ],
     actions: [
       {
-        label: "查看 eBay API 能力",
+        label: "查看 eBay 官方连接能力",
         url: "https://developer.ebay.com/develop/apis",
-        note: "正式版优先用官方接口读取 eBay 数据。",
+        note: "后续优先用官方连接读取 eBay 数据。",
       },
       {
         label: "查看 1688 开放平台",
         url: "https://open.1688.com/",
-        note: "用于后续评估货源 API 能力和授权方式。",
+        note: "用于后续评估货源开放能力和授权方式。",
       },
     ],
   },
@@ -4397,19 +4397,19 @@ const manualActionDetails = {
     title: "eBay 费用与广告授权",
     intro: "订阅费、刊登费、成交费、广告费、物流和退款预留都会影响真实利润。读取费用和执行广告是两种权限，不能混在一起。",
     items: [
-      "Account API 可读取店铺订阅状态，例如 Store subscription 套餐和周期。",
-      "Finances API 可读取账单活动和交易费用，例如 EBAY_STORE_SUBSCRIPTION_FEE、AD_FEE、final value fee。",
-      "Marketing API 可读取广告活动；创建广告、调预算、暂停广告必须单独确认。",
+      "店铺费用数据可读取店铺订阅状态，例如 Store subscription 套餐和周期。",
+      "账单数据可读取账单活动和交易费用，例如店铺订阅费、广告费和成交费。",
+      "广告数据可读取广告活动；创建广告、调预算、暂停广告必须单独确认。",
       "捷境不替商家开通 eBay 订阅，也不默认投放广告，只把费用纳入利润和亏损预警。",
     ],
     actions: [
       {
         label: "打开 eBay Seller Hub 费用页面",
         url: "https://www.ebay.com/sh/fin",
-        note: "用于查看费用、账单和交易数据；正式版优先只读读取。",
+        note: "用于查看费用、账单和交易数据；后续优先只读读取。",
       },
       {
-        label: "查看 eBay Marketing API",
+        label: "查看 eBay 广告能力说明",
         url: "https://developer.ebay.com/api-docs/sell/marketing/overview.html",
         note: "广告建议和广告执行要分开；投放、预算调整必须确认。",
       },
@@ -4417,13 +4417,13 @@ const manualActionDetails = {
   },
   launch_gap: {
     title: "正式发布还缺什么",
-    intro: "当前网页是可演示的前端闭环，不等于已经能把商品真实写入 eBay。正式 SaaS 要把确认中心、后端、授权、队列、执行服务和审计日志接起来，才能让 AI 做完工作后安全上架。",
+    intro: "当前网页让你先看清工作流，不等于已经能把商品真实写入 eBay。真实上架要把确认中心、后端、授权、队列、执行服务和操作记录接起来，才能让 AI 做完工作后安全上架。",
     items: [
       "后端接口：登录、店铺权限、任务保存、报告保存和确认事项都要由后端处理，前端不能直连 eBay、数据库或密钥。",
-      "官方授权：eBay 走 OAuth，先只读读取店铺、Listing、订单、费用和政策；发布权限、广告权限和退款权限单独确认。",
+      "官方授权：eBay 先只读读取店铺、Listing、订单、费用和政策；发布权限、广告权限和退款权限单独确认。",
       "任务队列：市场、货源、刊登、素材、利润、客服、确认拆成小任务，超时要显示重试或失败原因。",
       "执行服务：只有确认中心点头后，后端才调用 eBay 发布、改价、改库存、同步 tracking 或处理退款。",
-      "审计日志：每次 AI 建议、商家确认、真实执行、失败原因都要留记录，防止出错后说不清。",
+      "操作记录：每次 AI 建议、商家确认、真实执行、失败原因都要留记录，防止出错后说不清。",
       "安全边界：发布、采购付款、退款补偿、广告预算、店铺政策修改和客服强承诺永远不能默认自动执行。",
     ],
     actions: [
@@ -4450,7 +4450,7 @@ const sellerFlowDetails = {
   newbie: {
     eyebrow: "新店起步",
     title: "从 0 到第一条可确认 Listing",
-    intro: "目标不是让新手研究一堆 eBay 表单或 API 术语，而是先完成官方注册，再由捷境带你连接 eBay 官方授权；能读取的数据自动预填，读不到的地方再问几个简单问题。",
+    intro: "目标不是让新手研究一堆 eBay 表单或技术术语，而是先完成官方注册，再由捷境带你连接 eBay 官方授权；能读取的数据自动预填，读不到的地方再问几个简单问题。",
     startLabel: "开始新店起步",
     steps: [
       { title: "注册/登录捷境", ai: "保存你的阶段、计划和后续向导进度。", human: "人工：填写邮箱，确认自己当前是起步卖家。" },
@@ -4465,11 +4465,11 @@ const sellerFlowDetails = {
   store_opened: {
     eyebrow: "已有店铺接入",
     title: "先把 eBay 店接进捷境，再把重复流程自动化",
-    intro: "已有店铺商家已经有商品、政策、订单和费用上下文。先把 Seller Hub、Listing、业务政策、费用结构、订单履约和账号表现用只读授权或样本导入接进来，捷境再把重复整理、核算、草稿和确认动作拆成自动化队列。",
+    intro: "已有店铺商家已经有商品、政策、订单和费用上下文。先把 Seller Hub、Listing、业务政策、费用结构、订单履约和账号表现用只读授权或资料导入接进来，捷境再把重复整理、核算、草稿和确认动作拆成自动化队列。",
     startLabel: "开始店铺接入",
     steps: [
       { title: "确认店铺与站点", ai: "记录店铺站点、主营品类、当前流程和最想省掉的重复操作。", human: "人工：确认是 US/UK/AU 等哪个 eBay 站点，店铺是否能进入 Seller Hub。" },
-      { title: "只读读取或手动导入", ai: "优先只读读取 Listing、订单、费用、广告表现和账号状态；没有授权时先手动导入样本。", human: "人工：选择只读授权或上传/粘贴关键数据；写入动作默认关闭。", manualKey: "ebay_oauth" },
+      { title: "只读读取或手动导入", ai: "优先只读读取 Listing、订单、费用、广告表现和账号状态；没有授权时先手动导入资料。", human: "人工：选择只读授权或上传/粘贴关键数据；写入动作默认关闭。", manualKey: "ebay_oauth" },
       { title: "业务政策与履约归档", ai: "整理 payment、shipping、return policy、item location、handling time 是否和真实能力一致。", human: "人工：确认哪些发货、退货、时效承诺真实能做到。", manualKey: "seller_policies" },
       { title: "Listing 资料整理", ai: "整理标题、主图、类目、商品参数、价格、库存、变体和描述缺口。", human: "人工：标出重点款、利润款和暂时不处理的商品。" },
       { title: "费用、广告与账号表现", ai: "把店铺订阅、刊登费、成交费、广告费、退货预留和 Seller performance 风险放到同一张表，用来提醒风险。", human: "人工：确认是否读取费用和广告表现；预算调整仍需确认。", manualKey: "fee_authorization" },
@@ -4482,7 +4482,7 @@ const sellerFlowDetails = {
     intro: "已有订单阶段，最重要的是不漏发、不乱承诺、不让退款和差评吞掉利润。向导会按 eBay 订单处理逻辑，把待发货、tracking、买家消息、退货请求、纠纷和订单利润集中起来。",
     startLabel: "开始订单整理",
     steps: [
-      { title: "读取订单范围", ai: "按已付款待发货、已发货、tracking 缺失、超出 handling time、退货中分类。", human: "人工：确认读取订单权限，或先导入最近 7/30 天订单样本。", manualKey: "ebay_oauth" },
+      { title: "读取订单范围", ai: "按已付款待发货、已发货、tracking 缺失、超出 handling time、退货中分类。", human: "人工：确认读取订单权限，或先导入最近 7/30 天订单资料。", manualKey: "ebay_oauth" },
       { title: "发货与 tracking 队列", ai: "标出需要上传 tracking、可能延迟发货、地址异常和物流承诺风险。", human: "人工：确认真实发货方式、处理时间和无法按时发出的订单。", manualKey: "fulfillment_setup" },
       { title: "客服先学习产品档案", ai: "上架前先读取买家担心点、Listing 字段、物流/退货边界，生成 FAQ、回复边界和低风险自动回复模板。", human: "人工：确认缺失事实和不能承诺的话术。", manualKey: "service_tone" },
       { title: "买家消息分级", ai: "普通物流查询、尺码参数、取消请求、差评预警分开排队；已学习过的低风险问题可自动接待。", human: "人工：退款、补偿、承诺到货时间的回复必须确认。", manualKey: "service_tone" },
@@ -4556,7 +4556,7 @@ const cockpitProfiles = {
   store_opened: {
     missionEyebrow: "已有店铺首页",
     missionTitle: "先把店铺资料接进来，AI 才能少问你",
-    missionBody: "你不用重学开店。先用 eBay 只读授权或样本导入，让 AI CEO 读取 Listing、订单、费用和业务政策；它会整理重复工作，不会自动改价、发布、退款或投广告。",
+    missionBody: "你不用重学开店。先用 eBay 只读授权或资料导入，让 AI CEO 读取 Listing、订单、费用和业务政策；它会整理重复工作，不会自动改价、发布、退款或投广告。",
     progress: [
       ["确认站点", "done"],
       ["只读接入", "current"],
@@ -4584,7 +4584,7 @@ const cockpitProfiles = {
     chat: [
       ["AI CEO", "我会先把你的 eBay 店铺作为数据对象接进来。第一步确认站点、Seller Hub、业务政策、Listing、订单、费用和广告数据怎么读取。"],
       ["我", "我已经有店铺了，先把重复操作整理出来，能自动化的先做草稿。", "user"],
-      ["AI CEO", "可以。捷境会先做只读接入或样本导入，整理 Listing、费用、客服、履约和账号风险，把能省事的流程做成自动化队列。发布、改价、广告预算、退款和授权仍然要你确认。", "ai"],
+      ["AI CEO", "可以。捷境会先做只读接入或资料导入，整理 Listing、费用、客服、履约和账号风险，把能省事的流程做成自动化队列。发布、改价、广告预算、退款和授权仍然要你确认。", "ai"],
     ],
     input: "我已经有 eBay 店铺，先接入店铺并整理自动化任务队列",
     hint: "已有店铺建议先用只读接入。捷境会省掉重复整理和草稿工作；真实写入、改价、发布、广告预算和退款不会自动执行。",
@@ -4981,6 +4981,14 @@ const jiejingProductCopyReplacements = [
   [/演示资料/g, "已补资料"],
   [/演示模板/g, "默认模板"],
   [/演示推荐/g, "系统推荐"],
+  [/正式版/g, "后续版本"],
+  [/正式 SaaS/g, "真实运行"],
+  [/可审计/g, "可追溯"],
+  [/审计日志/g, "操作记录"],
+  [/官方 API/g, "官方资料"],
+  [/eBay API/g, "eBay 官方连接"],
+  [/1688 API/g, "1688 官方连接"],
+  [/货源接口/g, "货源连接"],
   [/演示审查/g, "规则审查"],
   [/演示假设/g, "待确认假设"],
   [/演示/g, "工作流"],
@@ -5029,6 +5037,14 @@ const jiejingProductCopyReplacements = [
   [/演示资料/g, "已补资料"],
   [/演示模板/g, "默认模板"],
   [/演示推荐/g, "系统推荐"],
+  [/正式版/g, "后续版本"],
+  [/正式 SaaS/g, "真实运行"],
+  [/可审计/g, "可追溯"],
+  [/审计日志/g, "操作记录"],
+  [/官方 API/g, "官方资料"],
+  [/eBay API/g, "eBay 官方连接"],
+  [/1688 API/g, "1688 官方连接"],
+  [/货源接口/g, "货源连接"],
   [/演示发布/g, "发布预检"],
   [/模拟发布/g, "发布预检"],
   [/模拟链路/g, "受控链路"],
@@ -8849,7 +8865,7 @@ function saasFirstOrderLaunchRows(ctx = saasMerchantWorkbenchContext()) {
       detail:
         marketReport && listingReport
           ? "Market Report 和 Listing Package 已有工作记录，可以进入发布体检。"
-          : "先把商家目标、店铺资料和 AI 连接变成可审计报告；普通聊天不写入长期经营记忆。",
+          : "先把商家目标、店铺资料和 AI 连接变成可追溯报告；普通聊天不写入长期经营记忆。",
       action: "run-model-value-rehearsal",
       actionLabel: marketReport && listingReport ? "重新生成" : "生成报告",
       disabled: state.saasLoading || !ctx.hasPacket || !isSaasModelConfigured(),
@@ -11465,7 +11481,7 @@ function handleGlobalFlowNavigation(button) {
   const messages = {
     goal: "接目标：在 AI CEO 对话框里输入商品、链接、图片或订单问题，系统再拆成后续任务。",
     market: "已定位市场判断：这里看商品值不值得继续测。",
-    source: "已打开货源资料：这里处理 AI 找货源、手动填写和货源接口。",
+    source: "已打开货源资料：这里处理 AI 找货源、手动填写和货源连接。",
     product: "已打开产品刊登：这里生成 eBay 刊登资料、政策引用和发布前校验。",
     media: "已打开素材工坊：这里处理主图、详情页和视频。",
     bulk: "已打开批量铺货：这里从 eBay 机会到货源匹配、筛选、分批草稿和确认边界。",
@@ -28712,7 +28728,7 @@ function onboardingPhaseLabel(field) {
     ebayApiMode: "数据接入",
     feeInsightMode: "费用利润",
     fulfillmentMode: "履约方式",
-    sourceApiMode: "货源接口",
+    sourceApiMode: "货源连接",
     profitFloor: "利润底线",
     riskLevel: "风险偏好",
     tone: "客服售后",
@@ -28746,8 +28762,8 @@ function onboardingValueText(field) {
 function onboardingRouteDescription(stage = state.dna.merchantStage) {
   return {
     newbie: "先完成卖家账号和基础政策，优先接只读授权；暂不连接时用截图、表格和图片兜底，再用一件商品跑通 Listing、素材、利润和确认中心。",
-    store_opened: "先把 eBay 店铺安全接入捷境，推荐只读读取 Listing、订单、费用、广告和业务政策；暂不授权时用样本导入，再把重复整理、草稿和确认动作自动化。",
-    has_orders: "先用只读授权或订单样本保住发货、tracking、买家消息、退款和订单利润，再做营销动作。",
+    store_opened: "先把 eBay 店铺安全接入捷境，推荐只读读取 Listing、订单、费用、广告和业务政策；暂不授权时用资料导入，再把重复整理、草稿和确认动作自动化。",
+    has_orders: "先用只读授权或订单资料保住发货、tracking、买家消息、退款和订单利润，再做营销动作。",
     multi_store: "先分清账号、站点、逐店授权、团队权限和费用口径；暂不连接时先建店铺地图，再做跨店铺总览。",
   }[stage] || "先确认身份，再生成对应自动化路线。";
 }
@@ -28765,7 +28781,7 @@ function onboardingSaveCopy(field) {
     merchantStage: "避免选错路线：新手商家不看老店接入，成熟店铺不重走开店教学。",
     ebayApiMode: "优先连接官方只读授权，AI 预填和整理；暂不连接时先用截图/表格兜底，后面可在设置里补接。",
     feeInsightMode: "把订阅费、成交费、广告费、物流和退款预留放进费用整理。",
-    sourceApiMode: "货源平台能接官方接口就先只读读取；暂不连接时用链接、图片、表格兜底，后面可在设置里补接。",
+    sourceApiMode: "货源平台能接官方连接就先只读读取；暂不连接时用链接、图片、表格兜底，后面可在设置里补接。",
     fulfillmentMode: "按真实发货能力生成保守 handling time 和履约风险提示。",
     profitFloor: "低于利润线的商品、广告和发布动作会自动停到确认中心。",
     riskLevel: "决定 AI 是多给草稿，还是更频繁停下来让你确认。",
@@ -29111,10 +29127,10 @@ function dnaSummaryMarkup() {
   return `
     <article><span>阶段</span><strong>${stageText(state.dna.merchantStage)}</strong></article>
     <article><span>eBay</span><strong>${ebaySetupText(state.dna.ebaySetup)}</strong></article>
-    <article><span>API</span><strong>${ebayApiText(state.dna.ebayApiMode)}</strong></article>
+    <article><span>店铺资料</span><strong>${ebayApiText(state.dna.ebayApiMode)}</strong></article>
     <article><span>费用/广告</span><strong>${feeInsightText(state.dna.feeInsightMode)}</strong></article>
     <article><span>履约</span><strong>${fulfillmentText(state.dna.fulfillmentMode)}</strong></article>
-    <article><span>货源接口</span><strong>${sourceApiText(state.dna.sourceApiMode)}</strong></article>
+    <article><span>货源连接</span><strong>${sourceApiText(state.dna.sourceApiMode)}</strong></article>
     <article><span>利润底线</span><strong>${state.dna.profitFloor}%</strong></article>
     <article><span>风险</span><strong>${riskShortText(state.dna.riskLevel)}</strong></article>
     <article><span>客服</span><strong>${toneText(state.dna.tone)}</strong></article>
@@ -34050,7 +34066,7 @@ function sourceApiText(value) {
     manual_1688: "链接/图片兜底",
     api_1688_readonly: "货源只读接入",
     api_1688_order_confirm: "1688 下单确认",
-    source_multi: "多货源接口",
+    source_multi: "多货源连接",
   }[value];
 }
 
@@ -34065,11 +34081,11 @@ function ebaySetupText(value) {
 
 function ebayApiText(value) {
   return {
-    guided_later: "引导授权",
+    guided_later: "引导连接",
     manual_first: "截图兜底",
-    oauth_ready: "官方授权",
-    developer_ready: "应用配置",
-    mock_first: "先演示",
+    oauth_ready: "官方连接",
+    developer_ready: "技术协助",
+    mock_first: "先看流程",
   }[value];
 }
 
