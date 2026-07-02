@@ -76,6 +76,7 @@ from .platform_registry import build_platform_connection_plan, get_platform_defi
 from .platform_data_packet_handoff import build_runtime_handoff_from_platform_packet, merge_runtime_handoff_input
 from .post_publish_cockpit import build_post_publish_cockpit
 from .permissions import has_permission, role_summary
+from .production_release_gate import build_production_release_gate
 from .postgres_repository_runtime import postgres_unique_error_classes
 from .public_search_handoff import build_public_search_market_handoff, merge_public_search_handoff_input
 from .queue_plan import build_queue_plan
@@ -443,6 +444,13 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     )
                 }
             )
+            return
+
+        if path == "owner/production-release-gate":
+            if not self._is_platform_internal_admin(identity):
+                self._send_error(HTTPStatus.FORBIDDEN, "production release gate is platform-internal admin only")
+                return
+            self._send_json({"production_release_gate": build_production_release_gate(self.settings, self.repository)})
             return
 
         if path == "team/members":
@@ -3754,7 +3762,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "checkout, portal, billing test events and manual beta payment orders",
                 ["POST /billing/checkout-session", "POST /billing/test-event", "POST /billing/manual-beta/orders"],
             ),
-            ("owner", "platform-internal-admin-only launch-control evidence", ["GET /owner/launch-control", "GET /security/rate-limit/status"]),
+            (
+                "owner",
+                "platform-internal-admin-only launch and production-release evidence",
+                ["GET /owner/launch-control", "GET /owner/production-release-gate", "GET /security/rate-limit/status"],
+            ),
         ]
         return [
             {

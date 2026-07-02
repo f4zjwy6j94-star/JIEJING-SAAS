@@ -97,6 +97,7 @@ FILES=(
   "jiejing_saas/platform_authorization_strategy.py"
   "jiejing_saas/platform_registry.py"
   "jiejing_saas/paid_launch_approval_packet.py"
+  "jiejing_saas/production_release_gate.py"
   "jiejing_saas/post_publish_cockpit.py"
   "jiejing_saas/media_asset_pipeline.py"
   "jiejing_saas/provider_job_runner.py"
@@ -202,6 +203,7 @@ FILES=(
   "tools/jiejing_new_ebay_account_low_risk_check.py"
   "tools/jiejing_billing_provider_evidence_register.py"
   "tools/jiejing_paid_launch_approval_packet.py"
+  "tools/jiejing_production_release_gate.py"
   "tools/jiejing_domain_pending_purchase_preflight.py"
   "tools/jiejing_registered_domain_cutover_status.py"
   "tools/jiejing_edge_cutover_preflight.py"
@@ -222,6 +224,7 @@ FILES=(
   "tools/test_jiejing_long_term_memory_and_creative.py"
   "tools/test_jiejing_new_ebay_account_low_risk_runbook.py"
   "tools/test_jiejing_paid_launch_approval_packet.py"
+  "tools/test_jiejing_production_release_gate.py"
   "tools/test_jiejing_domain_pending_purchase_preflight.py"
   "tools/test_jiejing_registered_domain_cutover_status.py"
   "tools/test_jiejing_edge_cutover_preflight.py"
@@ -303,6 +306,7 @@ python3 -m py_compile \
   jiejing_saas/platform_authorization_strategy.py \
   jiejing_saas/platform_registry.py \
   jiejing_saas/paid_launch_approval_packet.py \
+  jiejing_saas/production_release_gate.py \
   jiejing_saas/post_publish_cockpit.py \
   jiejing_saas/media_asset_pipeline.py \
   jiejing_saas/provider_job_runner.py \
@@ -399,6 +403,7 @@ python3 -m py_compile \
   tools/jiejing_new_ebay_account_low_risk_check.py \
   tools/jiejing_billing_provider_evidence_register.py \
   tools/jiejing_paid_launch_approval_packet.py \
+  tools/jiejing_production_release_gate.py \
   tools/jiejing_domain_pending_purchase_preflight.py \
   tools/jiejing_registered_domain_cutover_status.py \
   tools/jiejing_edge_cutover_preflight.py \
@@ -419,6 +424,7 @@ python3 -m py_compile \
   tools/test_jiejing_long_term_memory_and_creative.py \
   tools/test_jiejing_new_ebay_account_low_risk_runbook.py \
   tools/test_jiejing_paid_launch_approval_packet.py \
+  tools/test_jiejing_production_release_gate.py \
   tools/test_jiejing_domain_pending_purchase_preflight.py \
   tools/test_jiejing_registered_domain_cutover_status.py \
   tools/test_jiejing_edge_cutover_preflight.py \
