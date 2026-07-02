@@ -72,6 +72,9 @@ def main() -> int:
     previous = _set_stripe_domain_ready_env()
     try:
         readyish = _build("stripe-domain-ready.sqlite", seed_subscription=True)
+        readyish_summary = readyish.get("summary") if isinstance(readyish.get("summary"), dict) else {}
+        if readyish_summary.get("no_charge_evidence_packet_status") != "ready":
+            return fail(f"approval packet should surface ready no-charge evidence packet: {readyish_summary}")
         steps = {item.get("key"): item for item in readyish.get("steps", []) if isinstance(item, dict)}
         if steps["stable_domain_hardening"].get("status") != "ready":
             return fail(f"stable domain should be ready in configured fixture: {steps['stable_domain_hardening']}")
@@ -106,6 +109,9 @@ def main() -> int:
         }:
             if required_no_charge_key not in rehearsal_external_keys:
                 return fail(f"approval packet must require no-charge rehearsal evidence key: {required_no_charge_key}")
+        rehearsal_external_evidence = str((external.get("no_charge_rehearsal_evidence_flags") or {}).get("evidence_summary") or "")
+        if "evidence_packet_status=ready" not in rehearsal_external_evidence:
+            return fail(f"approval packet external no-charge item should reference the evidence packet: {rehearsal_external_evidence}")
         new_account_keys = set((external.get("clean_new_ebay_account_and_fresh_product") or {}).get("environment_keys", []))
         for required_key in {
             "JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN",
@@ -127,6 +133,15 @@ def main() -> int:
                 return fail(f"approval packet must require new-account evidence key: {required_key}")
         if readyish.get("public_paid_launch_allowed") is not False or readyish.get("charge_now_allowed") is not False:
             return fail("approval packet must still require owner approval and never directly enable charging")
+        os.environ.pop("JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID", None)
+        missing_no_charge = _build("missing-no-charge-evidence.sqlite", seed_subscription=True)
+        missing_steps = {item.get("key"): item for item in missing_no_charge.get("steps", []) if isinstance(item, dict)}
+        missing_no_charge_step = missing_steps.get("no_charge_launch_rehearsal") or {}
+        if missing_no_charge.get("summary", {}).get("no_charge_evidence_packet_status") != "blocked":
+            return fail(f"missing no-charge evidence id must block approval packet summary: {missing_no_charge.get('summary')}")
+        blocked_by = set(missing_no_charge_step.get("blocked_by", []))
+        if "no_charge_evidence:no_charge_evidence_id_recorded" not in blocked_by:
+            return fail(f"missing no-charge evidence id must block final no-charge step: {missing_no_charge_step}")
         serialized = json.dumps(readyish, ensure_ascii=False).lower()
         for forbidden in ("sk_live_unit_secret", "whsec_live_unit_secret", "authorization: bearer", "refresh_token=", "access_token=", "client_secret="):
             if forbidden in serialized:

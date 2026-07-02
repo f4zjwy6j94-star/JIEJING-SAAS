@@ -72,6 +72,11 @@ def build_paid_launch_approval_packet(settings: SaaSSettings, repository: SaaSRe
             "can_accept_real_customers": bool(readiness.get("can_accept_real_customers")),
             "stable_domain_ready": bool(domain.get("production_domain_ready")),
             "stripe_rehearsal_status": rehearsal.get("status") or "unknown",
+            "no_charge_evidence_packet_status": (
+                rehearsal.get("no_charge_live_domain_evidence_packet", {}).get("status")
+                if isinstance(rehearsal.get("no_charge_live_domain_evidence_packet"), dict)
+                else "unknown"
+            ),
             "new_account_smoke_ready": _all_ready(new_account),
             "external_configuration_needed_count": len([item for item in user_items if item.get("status") != "ready"]),
         },
@@ -138,6 +143,13 @@ def _build_steps(
     cutover_by_key = _by_key(cutover)
     drill_by_key = _by_key(drills)
     rehearsal_summary = rehearsal.get("summary") if isinstance(rehearsal.get("summary"), dict) else {}
+    no_charge_packet = (
+        rehearsal.get("no_charge_live_domain_evidence_packet")
+        if isinstance(rehearsal.get("no_charge_live_domain_evidence_packet"), dict)
+        else {}
+    )
+    no_charge_summary = no_charge_packet.get("summary") if isinstance(no_charge_packet.get("summary"), dict) else {}
+    no_charge_blocked = [str(item) for item in no_charge_summary.get("blocked_keys") or [] if str(item)]
     return [
         _step(
             "stable_domain_hardening",
@@ -177,8 +189,11 @@ def _build_steps(
         _step(
             "no_charge_launch_rehearsal",
             "No-charge full launch rehearsal and rollback packet",
-            decision.get("status") == "ready_for_owner_approval"
-            and (cutover_by_key.get("final_paid_launch_smoke_evidence") or {}).get("status") == "ready",
+            (
+                decision.get("status") == "ready_for_owner_approval"
+                and (cutover_by_key.get("final_paid_launch_smoke_evidence") or {}).get("status") == "ready"
+                and no_charge_packet.get("status") == "ready"
+            ),
             category="release",
             owner="release_manager",
             evidence_summary=_evidence(
@@ -186,11 +201,14 @@ def _build_steps(
                 public_paid_launch_allowed=bool(decision.get("public_paid_launch_allowed")),
                 final_smoke=(cutover_by_key.get("final_paid_launch_smoke_evidence") or {}).get("status") or "missing",
                 drill=(drill_by_key.get("final_commercial_smoke") or {}).get("status") or "missing",
+                evidence_packet=no_charge_packet.get("status") or "missing",
+                evidence_packet_ready=f"{no_charge_summary.get('ready_count', 0)}/{no_charge_summary.get('total_count', 0)}",
             ),
             next_action="Run final no-charge register/login/domain/billing/webhook/readiness/secret-scan/browser smoke and record rollback evidence.",
             verification=["/commercial/launch-gate", "tools/jiejing_secret_scan.py", "output/browser-smoke"],
             external_resource_required=False,
-            blocked_by=[str(item.get("key") or "") for item in cutover if isinstance(item, dict) and item.get("status") != "ready"],
+            blocked_by=[str(item.get("key") or "") for item in cutover if isinstance(item, dict) and item.get("status") != "ready"]
+            + [f"no_charge_evidence:{key}" for key in no_charge_blocked],
         ),
         _step(
             "new_ebay_account_low_risk_smoke",
@@ -220,6 +238,12 @@ def _external_configuration_items(
 ) -> list[dict[str, Any]]:
     step_by_key = _by_key(steps)
     rehearsal_summary = rehearsal.get("summary") if isinstance(rehearsal.get("summary"), dict) else {}
+    no_charge_packet = (
+        rehearsal.get("no_charge_live_domain_evidence_packet")
+        if isinstance(rehearsal.get("no_charge_live_domain_evidence_packet"), dict)
+        else {}
+    )
+    no_charge_summary = no_charge_packet.get("summary") if isinstance(no_charge_packet.get("summary"), dict) else {}
     return [
         _external_item(
             "stable_domain_dns_tls_callback",
@@ -282,7 +306,11 @@ def _external_configuration_items(
                 "JIEJING_FINAL_COMMERCIAL_SMOKE_PASSED",
                 "JIEJING_FINAL_COMMERCIAL_SMOKE_EVIDENCE_ID",
             ],
-            evidence="local tests and browser smoke must be recorded before owner approval",
+            evidence=_evidence(
+                evidence_packet_status=no_charge_packet.get("status") or "missing",
+                evidence_packet_ready=f"{no_charge_summary.get('ready_count', 0)}/{no_charge_summary.get('total_count', 0)}",
+                evidence_packet_blocked=",".join([str(item) for item in no_charge_summary.get("blocked_keys") or [] if str(item)]),
+            ),
             external_resource_required=False,
         ),
         _external_item(

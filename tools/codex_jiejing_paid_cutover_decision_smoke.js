@@ -122,6 +122,8 @@ async function main() {
   const billingMatrix = Array.isArray(billingPlan.billing_live_cutover_matrix) ? billingPlan.billing_live_cutover_matrix : [];
   const rehearsal = rehearsalPayload.json.billing_domain_cutover_rehearsal || {};
   const rehearsalStages = Array.isArray(rehearsal.stages) ? rehearsal.stages : [];
+  const noChargeEvidencePacket = rehearsal.no_charge_live_domain_evidence_packet || {};
+  const noChargeEvidenceItems = Array.isArray(noChargeEvidencePacket.evidence_items) ? noChargeEvidencePacket.evidence_items : [];
   const edgePreflight = edgePayload.json.edge_cutover_preflight || {};
   const edgeStages = Array.isArray(edgePreflight.stages) ? edgePreflight.stages : [];
   const approvalPacket = approvalPayload.json.paid_launch_approval_packet || {};
@@ -361,6 +363,18 @@ async function main() {
       billing_domain_rehearsal_public_paid_launch_allowed: Boolean(rehearsal.public_paid_launch_allowed),
       billing_domain_rehearsal_total_count: rehearsalStages.length,
       billing_domain_rehearsal_keys: rehearsalStages.map((item) => item && item.key).filter(Boolean),
+      no_charge_evidence_packet_version: noChargeEvidencePacket.contract_version || "",
+      no_charge_evidence_packet_status: noChargeEvidencePacket.status || "",
+      no_charge_evidence_packet_mode: noChargeEvidencePacket.mode || "",
+      no_charge_evidence_packet_ready_for_owner_review: Boolean(noChargeEvidencePacket.ready_for_owner_review),
+      no_charge_evidence_packet_charge_now_allowed: Boolean(noChargeEvidencePacket.charge_now_allowed),
+      no_charge_evidence_packet_calls_stripe_api: Boolean(noChargeEvidencePacket.calls_stripe_api),
+      no_charge_evidence_packet_creates_checkout_session: Boolean(noChargeEvidencePacket.creates_checkout_session),
+      no_charge_evidence_packet_triggers_ebay_oauth: Boolean(noChargeEvidencePacket.triggers_ebay_oauth),
+      no_charge_evidence_packet_triggers_real_platform_write: Boolean(noChargeEvidencePacket.triggers_real_platform_write),
+      no_charge_evidence_packet_frontend_gets_payment_secret: Boolean(noChargeEvidencePacket.frontend_gets_payment_secret),
+      no_charge_evidence_packet_total_count: noChargeEvidenceItems.length,
+      no_charge_evidence_packet_keys: noChargeEvidenceItems.map((item) => item && item.key).filter(Boolean),
       edge_cutover_contract_version: edgePreflight.contract_version || "",
       edge_cutover_status: edgePreflight.status || "",
       edge_cutover_mode: edgePreflight.mode || "",
@@ -509,6 +523,28 @@ async function main() {
     "cutover_rollback_audit_packet_recorded",
   ]) {
     if (!result.api.billing_domain_rehearsal_keys.includes(key)) failures.push(`api billing domain rehearsal missing ${key}`);
+  }
+  if (result.api.no_charge_evidence_packet_version !== "2026-07-02-no-charge-live-domain-rehearsal-evidence-packet") failures.push("api no-charge evidence packet contract missing");
+  if (result.api.no_charge_evidence_packet_status !== "blocked") failures.push(`api no-charge evidence packet status ${result.api.no_charge_evidence_packet_status}`);
+  if (result.api.no_charge_evidence_packet_mode !== "read_only_no_charge_no_checkout") failures.push(`api no-charge evidence packet mode ${result.api.no_charge_evidence_packet_mode}`);
+  if (result.api.no_charge_evidence_packet_ready_for_owner_review !== false) failures.push("api no-charge evidence packet unexpectedly owner-approved");
+  if (result.api.no_charge_evidence_packet_charge_now_allowed !== false) failures.push("api no-charge evidence packet unexpectedly allows charge");
+  if (result.api.no_charge_evidence_packet_calls_stripe_api !== false) failures.push("api no-charge evidence packet unexpectedly calls Stripe API");
+  if (result.api.no_charge_evidence_packet_creates_checkout_session !== false) failures.push("api no-charge evidence packet unexpectedly creates Checkout Session");
+  if (result.api.no_charge_evidence_packet_triggers_ebay_oauth !== false) failures.push("api no-charge evidence packet unexpectedly triggers eBay OAuth");
+  if (result.api.no_charge_evidence_packet_triggers_real_platform_write !== false) failures.push("api no-charge evidence packet unexpectedly triggers platform write");
+  if (result.api.no_charge_evidence_packet_frontend_gets_payment_secret !== false) failures.push("api no-charge evidence packet unexpectedly exposes payment secret");
+  if (result.api.no_charge_evidence_packet_total_count !== 7) failures.push(`api no-charge evidence packet item count ${result.api.no_charge_evidence_packet_total_count}`);
+  for (const key of [
+    "checkout_return_url_smoke",
+    "customer_portal_return_url_smoke",
+    "signed_webhook_smoke",
+    "subscription_quota_lifecycle_smoke",
+    "secret_scan_and_browser_smoke",
+    "rollback_audit_packet",
+    "no_charge_evidence_id_recorded",
+  ]) {
+    if (!result.api.no_charge_evidence_packet_keys.includes(key)) failures.push(`api no-charge evidence packet missing ${key}`);
   }
   if (ui.ownerOpsTabVisible) {
     if (!ui.rehearsalVisible || ui.rehearsalCardCount < 10) failures.push("billing domain rehearsal UI missing");

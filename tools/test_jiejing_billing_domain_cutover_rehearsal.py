@@ -33,6 +33,15 @@ EXPECTED_STAGES = {
     "subscription_state_and_quota_lifecycle_rehearsed",
     "cutover_rollback_audit_packet_recorded",
 }
+EXPECTED_NO_CHARGE_EVIDENCE_ITEMS = {
+    "checkout_return_url_smoke",
+    "customer_portal_return_url_smoke",
+    "signed_webhook_smoke",
+    "subscription_quota_lifecycle_smoke",
+    "secret_scan_and_browser_smoke",
+    "rollback_audit_packet",
+    "no_charge_evidence_id_recorded",
+}
 
 
 def fail(message: str) -> int:
@@ -58,6 +67,20 @@ def main() -> int:
         for key in ("stripe_live_provider_selected", "stable_domain_dns_tls_headers"):
             if stages[key].get("status") != "blocked":
                 return fail(f"{key} should stay blocked in manual_seed/trycloudflare fixture")
+        no_charge_packet = blocked.get("no_charge_live_domain_evidence_packet") if isinstance(blocked.get("no_charge_live_domain_evidence_packet"), dict) else {}
+        if no_charge_packet.get("contract_version") != "2026-07-02-no-charge-live-domain-rehearsal-evidence-packet":
+            return fail(f"no-charge live-domain evidence packet missing: {no_charge_packet}")
+        if no_charge_packet.get("status") != "blocked" or no_charge_packet.get("ready_for_owner_review") is not False:
+            return fail(f"blocked fixture must keep no-charge evidence packet blocked: {no_charge_packet.get('summary')}")
+        no_charge_items = {item.get("key"): item for item in no_charge_packet.get("evidence_items", []) if isinstance(item, dict)}
+        if set(no_charge_items) != EXPECTED_NO_CHARGE_EVIDENCE_ITEMS:
+            return fail(f"no-charge evidence items missing or unexpected: {sorted(no_charge_items)}")
+        for key, item in no_charge_items.items():
+            for flag in ("creates_checkout_session", "calls_stripe_api", "triggers_real_charge", "charge_now_allowed", "triggers_ebay_oauth", "triggers_real_platform_write"):
+                if item.get(flag) is not False:
+                    return fail(f"no-charge evidence item must be side-effect free: {key}.{flag}={item.get(flag)}")
+            if item.get("secret_exposed") is not False or item.get("frontend_gets_payment_secret") is not False:
+                return fail(f"no-charge evidence item must not expose payment secrets: {key}")
         if blocked.get("triggers_ebay_oauth") is not False or blocked.get("repeat_ebay_oauth_allowed") is not False:
             return fail("rehearsal must not trigger or permit repeated eBay OAuth")
     finally:
@@ -71,6 +94,8 @@ def main() -> int:
         summary = ready.get("summary") if isinstance(ready.get("summary"), dict) else {}
         if summary.get("ready_count") != len(EXPECTED_STAGES) or summary.get("blocked_count") != 0:
             return fail(f"all cutover stages should be ready in fixture: {summary}")
+        if summary.get("no_charge_evidence_packet_status") != "ready" or summary.get("no_charge_evidence_blocked_count") != 0:
+            return fail(f"ready fixture should include ready no-charge evidence packet summary: {summary}")
         urls = ready.get("required_urls") if isinstance(ready.get("required_urls"), dict) else {}
         if urls.get("ebay_oauth_callback_url") != "https://app.jiejing.example/oauth/ebay/callback":
             return fail(f"eBay callback URL should use stable domain: {urls}")
@@ -83,11 +108,28 @@ def main() -> int:
             return fail("subscription lifecycle stage must require a portal failure-path evidence id")
         if "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID" not in ready_stages["cutover_rollback_audit_packet_recorded"].get("environment_keys", []):
             return fail("rollback stage must require a rollback audit packet id")
+        ready_no_charge_packet = ready.get("no_charge_live_domain_evidence_packet") if isinstance(ready.get("no_charge_live_domain_evidence_packet"), dict) else {}
+        if ready_no_charge_packet.get("status") != "ready" or ready_no_charge_packet.get("ready_for_owner_review") is not True:
+            return fail(f"ready fixture should make no-charge evidence packet ready: {ready_no_charge_packet}")
+        ready_no_charge_items = {item.get("key"): item for item in ready_no_charge_packet.get("evidence_items", []) if isinstance(item, dict)}
+        if set(ready_no_charge_items) != EXPECTED_NO_CHARGE_EVIDENCE_ITEMS:
+            return fail(f"ready no-charge evidence items missing or unexpected: {sorted(ready_no_charge_items)}")
+        if "JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID" not in ready_no_charge_items["no_charge_evidence_id_recorded"].get("environment_keys", []):
+            return fail("no-charge evidence packet must require a rehearsal evidence id")
         os.environ.pop("JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID", None)
         missing_packet = _build("missing-rollback-packet.sqlite", seed_subscription=True)
         missing_packet_stages = {item.get("key"): item for item in missing_packet.get("stages", []) if isinstance(item, dict)}
         if missing_packet_stages["cutover_rollback_audit_packet_recorded"].get("status") != "blocked":
             return fail("missing rollback audit packet id must block owner approval")
+        os.environ["JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID"] = "rollback_audit_packet_cutover_unit"
+        os.environ.pop("JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID", None)
+        missing_no_charge_id = _build("missing-no-charge-evidence.sqlite", seed_subscription=True)
+        missing_no_charge_packet = missing_no_charge_id.get("no_charge_live_domain_evidence_packet") if isinstance(missing_no_charge_id.get("no_charge_live_domain_evidence_packet"), dict) else {}
+        missing_no_charge_items = {item.get("key"): item for item in missing_no_charge_packet.get("evidence_items", []) if isinstance(item, dict)}
+        if missing_no_charge_packet.get("status") != "blocked":
+            return fail("missing no-charge rehearsal evidence id must block the evidence packet")
+        if missing_no_charge_items["no_charge_evidence_id_recorded"].get("status") != "blocked":
+            return fail("missing no-charge rehearsal evidence id must block its evidence item")
         serialized = json.dumps(ready, ensure_ascii=False).lower()
         for forbidden in ("sk_live_unit_secret", "whsec_live_unit_secret", "authorization: bearer", "refresh_token=", "access_token=", "client_secret="):
             if forbidden in serialized:
@@ -189,6 +231,11 @@ def _set_ready_env() -> dict[str, str | None]:
             "JIEJING_READINESS_SNAPSHOT_RECORDED": "1",
             "JIEJING_BROWSER_SMOKE_PASSED": "1",
             "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID": "rollback_audit_packet_cutover_unit",
+            "JIEJING_NO_CHARGE_CHECKOUT_RETURN_URL_SMOKE_PASSED": "1",
+            "JIEJING_NO_CHARGE_PORTAL_RETURN_URL_SMOKE_PASSED": "1",
+            "JIEJING_NO_CHARGE_SIGNED_WEBHOOK_SMOKE_PASSED": "1",
+            "JIEJING_NO_CHARGE_READINESS_SMOKE_PASSED": "1",
+            "JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID": "no_charge_live_domain_cutover_unit",
         }
     )
     return previous
@@ -246,6 +293,11 @@ def _keys() -> list[str]:
         "JIEJING_READINESS_SNAPSHOT_RECORDED",
         "JIEJING_BROWSER_SMOKE_PASSED",
         "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID",
+        "JIEJING_NO_CHARGE_CHECKOUT_RETURN_URL_SMOKE_PASSED",
+        "JIEJING_NO_CHARGE_PORTAL_RETURN_URL_SMOKE_PASSED",
+        "JIEJING_NO_CHARGE_SIGNED_WEBHOOK_SMOKE_PASSED",
+        "JIEJING_NO_CHARGE_READINESS_SMOKE_PASSED",
+        "JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID",
     ]
 
 

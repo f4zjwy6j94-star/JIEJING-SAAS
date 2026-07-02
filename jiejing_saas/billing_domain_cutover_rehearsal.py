@@ -41,6 +41,7 @@ def build_billing_domain_cutover_rehearsal(settings: SaaSSettings, repository: S
         counts=counts,
         stable_host=stable_host,
     )
+    no_charge_evidence_packet = _no_charge_live_domain_evidence_packet(stages=stages)
     blocked = [stage for stage in stages if stage.get("status") != "ready"]
     next_stage = blocked[0] if blocked else {}
     return {
@@ -61,6 +62,7 @@ def build_billing_domain_cutover_rehearsal(settings: SaaSSettings, repository: S
         "payment_provider_secret_boundary": "backend_env_or_vault_only",
         "stable_domain": stable_host,
         "required_urls": _required_urls(stable_host),
+        "no_charge_live_domain_evidence_packet": no_charge_evidence_packet,
         "summary": {
             "ready_count": len(stages) - len(blocked),
             "total_count": len(stages),
@@ -73,6 +75,8 @@ def build_billing_domain_cutover_rehearsal(settings: SaaSSettings, repository: S
             "stripe_api_version": STRIPE_API_VERSION,
             "subscription_records": int(counts.get("billing_subscriptions") or 0),
             "webhook_event_records": int(counts.get("billing_webhook_events") or 0),
+            "no_charge_evidence_packet_status": no_charge_evidence_packet.get("status") or "unknown",
+            "no_charge_evidence_blocked_count": int((no_charge_evidence_packet.get("summary") or {}).get("blocked_count") or 0),
         },
         "stages": stages,
         "rollback_controls": [
@@ -86,6 +90,7 @@ def build_billing_domain_cutover_rehearsal(settings: SaaSSettings, repository: S
             "billing_checkout_contract_json",
             "billing_provider_contract_json",
             "domain_status_json",
+            "no_charge_live_domain_evidence_packet_json",
             "stripe_webhook_endpoint_api_version",
             "signed_webhook_test_output",
             "quota_hard_stop_test_output",
@@ -307,6 +312,164 @@ def _rehearsal_stages(
             external_resource_required=False,
         ),
     ]
+
+
+def _no_charge_live_domain_evidence_packet(*, stages: list[dict[str, Any]]) -> dict[str, Any]:
+    stage_by_key = {str(stage.get("key") or ""): stage for stage in stages if isinstance(stage, dict)}
+    items = [
+        _evidence_item(
+            "checkout_return_url_smoke",
+            "Checkout success/cancel URL smoke",
+            (stage_by_key.get("stripe_checkout_return_urls_on_stable_domain") or {}).get("status") == "ready"
+            and _env_bool("JIEJING_NO_CHARGE_CHECKOUT_RETURN_URL_SMOKE_PASSED"),
+            source="billing_domain_cutover_rehearsal",
+            evidence_summary=_evidence(
+                stable_domain_stage=(stage_by_key.get("stripe_checkout_return_urls_on_stable_domain") or {}).get("status") or "missing",
+                smoke_passed=_env_bool("JIEJING_NO_CHARGE_CHECKOUT_RETURN_URL_SMOKE_PASSED"),
+            ),
+            environment_keys=["JIEJING_NO_CHARGE_CHECKOUT_RETURN_URL_SMOKE_PASSED"],
+            verification=["/commercial/billing-domain-cutover-rehearsal", "/billing/checkout-contract"],
+        ),
+        _evidence_item(
+            "customer_portal_return_url_smoke",
+            "Customer Portal return URL smoke",
+            (stage_by_key.get("stripe_customer_portal_return_url_on_stable_domain") or {}).get("status") == "ready"
+            and _env_bool("JIEJING_NO_CHARGE_PORTAL_RETURN_URL_SMOKE_PASSED"),
+            source="billing_domain_cutover_rehearsal",
+            evidence_summary=_evidence(
+                stable_domain_stage=(stage_by_key.get("stripe_customer_portal_return_url_on_stable_domain") or {}).get("status") or "missing",
+                smoke_passed=_env_bool("JIEJING_NO_CHARGE_PORTAL_RETURN_URL_SMOKE_PASSED"),
+            ),
+            environment_keys=["JIEJING_NO_CHARGE_PORTAL_RETURN_URL_SMOKE_PASSED"],
+            verification=["/commercial/billing-domain-cutover-rehearsal", "/billing/checkout-contract"],
+        ),
+        _evidence_item(
+            "signed_webhook_smoke",
+            "Signed webhook smoke",
+            (stage_by_key.get("stripe_signed_webhook_on_stable_domain") or {}).get("status") == "ready"
+            and _env_bool("JIEJING_NO_CHARGE_SIGNED_WEBHOOK_SMOKE_PASSED"),
+            source="billing_domain_cutover_rehearsal",
+            evidence_summary=_evidence(
+                stable_domain_stage=(stage_by_key.get("stripe_signed_webhook_on_stable_domain") or {}).get("status") or "missing",
+                smoke_passed=_env_bool("JIEJING_NO_CHARGE_SIGNED_WEBHOOK_SMOKE_PASSED"),
+            ),
+            environment_keys=["JIEJING_NO_CHARGE_SIGNED_WEBHOOK_SMOKE_PASSED"],
+            verification=["/commercial/billing-domain-cutover-rehearsal", "tools/test_jiejing_billing_webhook_subscription_state.py"],
+        ),
+        _evidence_item(
+            "subscription_quota_lifecycle_smoke",
+            "Subscription and quota lifecycle smoke",
+            (stage_by_key.get("subscription_state_and_quota_lifecycle_rehearsed") or {}).get("status") == "ready"
+            and _env_bool("JIEJING_NO_CHARGE_READINESS_SMOKE_PASSED"),
+            source="billing_domain_cutover_rehearsal",
+            evidence_summary=_evidence(
+                lifecycle_stage=(stage_by_key.get("subscription_state_and_quota_lifecycle_rehearsed") or {}).get("status") or "missing",
+                readiness_smoke=_env_bool("JIEJING_NO_CHARGE_READINESS_SMOKE_PASSED"),
+            ),
+            environment_keys=["JIEJING_NO_CHARGE_READINESS_SMOKE_PASSED"],
+            verification=["/readiness/product-saas", "tools/test_jiejing_billing_webhook_subscription_state.py"],
+        ),
+        _evidence_item(
+            "secret_scan_and_browser_smoke",
+            "Secret scan and browser smoke",
+            _env_bool("JIEJING_SECRET_SCAN_PASSED")
+            and _env_bool("JIEJING_BROWSER_SMOKE_PASSED")
+            and _env_bool("JIEJING_READINESS_SNAPSHOT_RECORDED"),
+            source="release_evidence",
+            evidence_summary=_evidence(
+                secret_scan=_env_bool("JIEJING_SECRET_SCAN_PASSED"),
+                browser_smoke=_env_bool("JIEJING_BROWSER_SMOKE_PASSED"),
+                readiness_snapshot=_env_bool("JIEJING_READINESS_SNAPSHOT_RECORDED"),
+            ),
+            environment_keys=[
+                "JIEJING_SECRET_SCAN_PASSED",
+                "JIEJING_BROWSER_SMOKE_PASSED",
+                "JIEJING_READINESS_SNAPSHOT_RECORDED",
+            ],
+            verification=["tools/jiejing_secret_scan.py", "output/browser-smoke", "/readiness/product-saas"],
+        ),
+        _evidence_item(
+            "rollback_audit_packet",
+            "Rollback audit packet",
+            (stage_by_key.get("cutover_rollback_audit_packet_recorded") or {}).get("status") == "ready"
+            and _env_bool("JIEJING_CUTOVER_ROLLBACK_VERIFIED")
+            and bool(_env_text("JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID")),
+            source="release_evidence",
+            evidence_summary=_evidence(
+                rollback_stage=(stage_by_key.get("cutover_rollback_audit_packet_recorded") or {}).get("status") or "missing",
+                rollback_verified=_env_bool("JIEJING_CUTOVER_ROLLBACK_VERIFIED"),
+                audit_packet_id_present=bool(_env_text("JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID")),
+            ),
+            environment_keys=["JIEJING_CUTOVER_ROLLBACK_VERIFIED", "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID"],
+            verification=["/commercial/billing-domain-cutover-rehearsal", "output/staging-patch-backups"],
+        ),
+        _evidence_item(
+            "no_charge_evidence_id_recorded",
+            "No-charge live-domain rehearsal evidence ID",
+            bool(_env_text("JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID")),
+            source="release_evidence",
+            evidence_summary=_evidence(evidence_id_present=bool(_env_text("JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID"))),
+            environment_keys=["JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID"],
+            verification=["/commercial/billing-domain-cutover-rehearsal"],
+        ),
+    ]
+    blocked = [item for item in items if item.get("status") != "ready"]
+    return {
+        "contract_version": "2026-07-02-no-charge-live-domain-rehearsal-evidence-packet",
+        "mode": "read_only_no_charge_no_checkout",
+        "status": "ready" if not blocked else "blocked",
+        "ready_for_owner_review": not blocked,
+        "summary": {
+            "ready_count": len(items) - len(blocked),
+            "total_count": len(items),
+            "blocked_count": len(blocked),
+            "blocked_keys": [str(item.get("key") or "") for item in blocked],
+            "next_step": str((blocked[0] if blocked else {}).get("key") or "owner_approval"),
+        },
+        "evidence_items": items,
+        "creates_checkout_session": False,
+        "calls_stripe_api": False,
+        "triggers_real_charge": False,
+        "charge_now_allowed": False,
+        "triggers_ebay_oauth": False,
+        "repeat_ebay_oauth_allowed": False,
+        "triggers_real_platform_write": False,
+        "frontend_gets_payment_secret": False,
+        "frontend_gets_provider_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def _evidence_item(
+    key: str,
+    title: str,
+    ready: bool,
+    *,
+    source: str,
+    evidence_summary: str,
+    environment_keys: list[str],
+    verification: list[str],
+) -> dict[str, Any]:
+    return {
+        "key": key,
+        "title": title,
+        "status": "ready" if ready else "blocked",
+        "severity": "info" if ready else "blocker",
+        "source": source,
+        "evidence_summary": evidence_summary,
+        "environment_keys": environment_keys,
+        "verification": verification,
+        "creates_checkout_session": False,
+        "calls_stripe_api": False,
+        "triggers_real_charge": False,
+        "charge_now_allowed": False,
+        "triggers_ebay_oauth": False,
+        "repeat_ebay_oauth_allowed": False,
+        "triggers_real_platform_write": False,
+        "frontend_gets_payment_secret": False,
+        "frontend_gets_provider_secret": False,
+        "secret_exposed": False,
+    }
 
 
 def _stage(
