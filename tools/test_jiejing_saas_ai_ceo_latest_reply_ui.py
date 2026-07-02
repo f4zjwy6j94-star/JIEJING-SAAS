@@ -55,6 +55,8 @@ def main() -> int:
         "merchant_safe_ai_recovery_v1",
         "AI 已收到，但模型额度需要先恢复",
         "AI 已收到，但需要先恢复店铺状态",
+        "AI 已接通，但实时数据源需要先恢复",
+        "普通咨询和 eBay 工作流可以继续",
         "去账号与店铺",
         'data-saas-action="refresh"',
         'if (key === "account") state.saasSettingsTab = "account";',

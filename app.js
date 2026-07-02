@@ -14979,6 +14979,12 @@ function saasModelBlockedReasonText(value = "") {
     sanitized_platform_data_packet_missing: "当前店铺资料还没有整理到可生成报告的状态。",
     platform_data_packet_not_ready_for_runtime: "店铺资料还没有准备到可生成报告的状态。",
     live_model_rehearsal_not_requested: "本次没有进入实时 AI 校验。",
+    public_search_provider_not_configured: "实时数据源还没接通。普通咨询和 eBay 工作流可以继续；需要最新网页、新闻或行情时，系统会先拿到来源再回答。",
+    public_search_provider_error: "实时数据源这次没有返回可用结果。系统不会用旧知识冒充最新信息。",
+    public_search_no_results: "实时数据源没有拿到足够来源。可以换更具体的关键词再试。",
+    public_search_disabled: "实时联网搜索当前未开启。需要最新外部信息时会先说明缺口。",
+    public_web_no_results: "公开网页来源没有拿到足够结果。可以换关键词或稍后重试。",
+    public_news_source_error: "新闻来源暂时不可用。系统不会编造最新新闻。",
     external_realtime_data_source_not_connected: "当前没有接实时行情、新闻或联网搜索数据源。",
   };
   if (direct[normalized]) return direct[normalized];
@@ -18003,7 +18009,7 @@ function shouldShowSaasAiCeoRecoveryHint(turn = {}) {
   const latest = normalizeSaasAiCeoLatestTurn(turn);
   if (!latest || latest.pending) return false;
   const status = String(latest.status || "");
-  return ["blocked_before_model_chat", "blocked_missing_model_config", "model_call_failed"].includes(status);
+  return ["blocked_before_model_chat", "blocked_missing_model_config", "model_call_failed", "external_data_source_required"].includes(status);
 }
 
 function renderSaasAiCeoRecoveryHintMarkup(turn = {}) {
@@ -18012,17 +18018,22 @@ function renderSaasAiCeoRecoveryHintMarkup(turn = {}) {
   const text = String(latest.assistant_text || "");
   const isUsageBlock = /用量|额度|余额|账单|套餐|计费/.test(text);
   const isAccountBlock = /登录|会话|店铺上下文|店铺状态|没有可用店铺|受保护/.test(text);
-  const label = isUsageBlock ? "用量提示" : isAccountBlock ? "店铺状态" : "连接提示";
+  const isRealtimeBlock = latest.status === "external_data_source_required" || /实时|联网|搜索|来源|行情|新闻|provider/i.test(text);
+  const label = isUsageBlock ? "用量提示" : isAccountBlock ? "店铺状态" : isRealtimeBlock ? "实时数据源" : "连接提示";
   const title = isUsageBlock
     ? "AI 已收到，但模型额度需要先恢复"
     : isAccountBlock
       ? "AI 已收到，但需要先恢复店铺状态"
-      : "AI 已收到，但 AI 连接需要先恢复";
+      : isRealtimeBlock
+        ? "AI 已接通，但实时数据源需要先恢复"
+        : "AI 已收到，但 AI 连接需要先恢复";
   const detail = isUsageBlock
     ? "先去设置看 AI 与素材的连接和用量；不用在这里重复粘贴密钥。"
     : isAccountBlock
       ? "先刷新登录和店铺资料；如果仍没有店铺，就到设置连接 eBay 或导入资料。"
-      : "先去设置查看模型连接；凭证仍只在后端安全边界处理。";
+      : isRealtimeBlock
+        ? "普通咨询和 eBay 工作流可以继续；需要最新网页、新闻或行情时，系统会先拿到后端来源再回答。"
+        : "先去设置查看模型连接；凭证仍只在后端安全边界处理。";
   const primaryKey = isAccountBlock ? "account" : "model";
   const primaryLabel = isAccountBlock ? "去账号与店铺" : "去 AI 与素材";
   return `

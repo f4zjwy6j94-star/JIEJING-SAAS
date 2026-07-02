@@ -3592,6 +3592,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         provider_status = readiness.get("provider_status") if isinstance(readiness.get("provider_status"), dict) else {}
         billing = provider_status.get("billing") if isinstance(provider_status.get("billing"), dict) else {}
         model_value = provider_status.get("model_value") if isinstance(provider_status.get("model_value"), dict) else {}
+        public_search = provider_status.get("public_search") if isinstance(provider_status.get("public_search"), dict) else {}
         public_evidence: dict[str, Any] = {
             "latest_ebay_packet_status": evidence.get("latest_ebay_packet_status", ""),
             "latest_ebay_packet_source_mode": evidence.get("latest_ebay_packet_source_mode", ""),
@@ -3624,7 +3625,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         return {
             "service": readiness.get("service", "jiejing-saas-backend"),
             "readiness_version": readiness.get("readiness_version", ""),
-            "public_contract_version": "2026-06-20-public-readiness-summary",
+            "public_contract_version": "2026-07-03-public-readiness-search-summary",
             "detail_scope": "public_summary",
             "internal_detail_required": True,
             "authenticated_summary": authenticated,
@@ -3648,6 +3649,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "model_value": {
                     "status": model_value.get("status", ""),
                     "ready": bool(model_value.get("ready") or model_value.get("model_value_ready")),
+                    "secret_exposed": False,
+                },
+                "public_search": {
+                    "provider": public_search.get("provider", ""),
+                    "configured": bool(public_search.get("configured")),
+                    "endpoint_host": public_search.get("endpoint_host", ""),
+                    "credential_present": bool(public_search.get("credential_present")),
+                    "ai_ceo_realtime_search_enabled": bool(public_search.get("ai_ceo_realtime_search_enabled")),
+                    "builtin_public_web_fallback_enabled": bool(public_search.get("builtin_public_web_fallback_enabled")),
+                    "builtin_stock_quote_fallback_enabled": bool(public_search.get("builtin_stock_quote_fallback_enabled")),
+                    "frontend_gets_search_api_key": False,
+                    "runtime_gets_search_api_key": False,
                     "secret_exposed": False,
                 },
             },

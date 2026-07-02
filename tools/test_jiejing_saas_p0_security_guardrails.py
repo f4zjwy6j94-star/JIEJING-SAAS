@@ -342,6 +342,17 @@ def _check_public_diagnostics_are_summarized() -> str:
                 "webhook_secret": "STRIPE-WEBHOOK-SECRET-MUST-NOT-LEAK",
             },
             "model_value": {"status": "ready", "ready": True, "model_api_key": "MODEL-KEY-MUST-NOT-LEAK"},
+            "public_search": {
+                "provider": "tavily",
+                "configured": True,
+                "endpoint_host": "api.tavily.com",
+                "credential_present": True,
+                "credential_source": "TAVILY-SECRET-SOURCE-MUST-NOT-LEAK",
+                "search_api_key": "TAVILY-KEY-MUST-NOT-LEAK",
+                "ai_ceo_realtime_search_enabled": True,
+                "builtin_public_web_fallback_enabled": True,
+                "builtin_stock_quote_fallback_enabled": True,
+            },
         },
         "operational_health": {"status": "ready", "database_url_public": "postgres://secret@db"},
     }
@@ -361,10 +372,17 @@ def _check_public_diagnostics_are_summarized() -> str:
             "C:\\secret\\packet.json",
             "STRIPE-WEBHOOK-SECRET-MUST-NOT-LEAK",
             "MODEL-KEY-MUST-NOT-LEAK",
+            "TAVILY-SECRET-SOURCE-MUST-NOT-LEAK",
+            "TAVILY-KEY-MUST-NOT-LEAK",
             "postgres://secret@db",
         ):
             if forbidden in serialized:
                 return f"public readiness summary leaked internal diagnostic value: {forbidden}"
+    search_summary = unauth.get("provider_status", {}).get("public_search", {})
+    if search_summary.get("configured") is not True or search_summary.get("credential_present") is not True:
+        return "public readiness summary should expose non-secret public search readiness"
+    if "credential_source" in search_summary:
+        return "public readiness summary must not expose public search credential source"
 
     fake = _fake_handler(settings=settings, origin="")
     health = {

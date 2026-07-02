@@ -147,8 +147,10 @@ def main() -> None:
         "AI 额度或连接状态挡住了本次回复",
         "不要重复填写连接信息，除非页面明确提示连接已失效",
         "敏感连接信息仍只在安全边界内处理",
+        "实时数据源还没接通",
     ]:
         require(combined_ai_failure_body, required_copy, "merchant-facing AI failure copy")
+    require(app_js, "AI 已接通，但实时数据源需要先恢复", "AI CEO realtime-source recovery copy")
     for internal_marker in [
         "服务商账单",
         "在前台重复粘贴凭证",
