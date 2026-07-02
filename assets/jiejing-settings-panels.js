@@ -207,12 +207,6 @@
     const portal = checkout.customer_portal && typeof checkout.customer_portal === "object" ? checkout.customer_portal : {};
     const subscription = usage.subscription && typeof usage.subscription === "object" ? usage.subscription : {};
     const blockers = Array.isArray(plan.paid_launch_blockers) ? plan.paid_launch_blockers : Array.isArray(plan.blockers) ? plan.blockers : [];
-    const billingMatrix = Array.isArray(plan.billing_live_cutover_matrix) ? plan.billing_live_cutover_matrix : [];
-    const billingSummary = plan.billing_live_cutover_summary && typeof plan.billing_live_cutover_summary === "object" ? plan.billing_live_cutover_summary : {};
-    const billingTest =
-      plan.billing_test_rehearsal_summary && typeof plan.billing_test_rehearsal_summary === "object"
-        ? plan.billing_test_rehearsal_summary
-        : {};
     const shutdownClosure =
       plan.subscription_quota_shutdown_closure && typeof plan.subscription_quota_shutdown_closure === "object"
         ? plan.subscription_quota_shutdown_closure
@@ -221,112 +215,66 @@
       usage.subscription_quota_shutdown_state && typeof usage.subscription_quota_shutdown_state === "object"
         ? usage.subscription_quota_shutdown_state
         : {};
-    const latestBillingTestEvent =
-      state.saasBillingTestEvent && typeof state.saasBillingTestEvent === "object" ? state.saasBillingTestEvent : null;
-    const rehearsal =
-      state.saasBillingDomainCutoverRehearsal && typeof state.saasBillingDomainCutoverRehearsal === "object"
-        ? state.saasBillingDomainCutoverRehearsal
-        : {};
-    const billingReadyCount = Number(billingSummary.ready_count || billingMatrix.filter((item) => item && item.status === "ready").length || 0);
-    const billingTotalCount = Number(billingSummary.total_count || billingMatrix.length || 0);
-    const billingBlockedCount = Number(billingSummary.blocked_count || billingMatrix.filter((item) => item && item.status !== "ready").length || 0);
-    const billingTestReadyCount = Number(billingTest.ready_count || 0);
-    const billingTestTotalCount = Number(billingTest.total_count || 0);
-    const shutdownReadyCount = Number(shutdownClosure.ready_count || 0);
-    const shutdownTotalCount = Number(shutdownClosure.total_count || 0);
-    const shutdownBlockedCount = Number(shutdownClosure.blocked_count || 0);
     const paidReady = Boolean(plan.billing_ready_for_paid_launch);
     const privateBetaReady = Boolean(plan.billing_ready_for_private_beta);
-    const providerDetail = provider.test_billing_provider_configured
-      ? "test mode: no Stripe account, no real charge"
-      : provider.external_paid_provider_configured
-        ? "external paid provider selected"
-        : "manual_seed/private beta only, not public charging";
+    const paymentReady = Boolean(provider.external_paid_provider_configured || provider.test_billing_provider_configured || checkoutSession.ready);
+    const portalReady = Boolean(portal.ready);
+    const quotaReady = Boolean(quota.enabled);
+    const shutdownReady = Boolean(shutdownClosure.ready || shutdownState.blocks_metered_work_when_inactive);
+    const paymentStage = paidReady ? "正式商户支付已准备" : privateBetaReady ? "内测订阅可用，正式收款待切换" : "暂未开放公开收费";
+    const paymentDetail = paidReady
+      ? "商家可按正式套餐开通订阅；付款、续费和订阅变更仍由后台确认后更新权益。"
+      : privateBetaReady
+        ? "当前适合小范围内测和人工确认，不会在前台发起真实扣费。"
+        : "公开收费入口先保持关闭，等正式支付、额度和客服流程都确认后再开放。";
+    const billingAttention = shutdownState.payment_attention_required || blockers.length > 0;
+    const blockedUnits = Array.isArray(shutdownState.blocked_units) ? shutdownState.blocked_units.slice(0, 4) : [];
     return `
       <section class="saas-settings-card">
         <div class="saas-settings-card-head">
           <div>
-            <span>正式计费</span>
-            <strong>${paidReady ? "付费订阅可上线" : privateBetaReady ? "内测计费可用，公开收费未完成" : "公开收费仍阻断"}</strong>
-            <p>捷境按订阅和用量运营：Checkout 负责开通订阅，Customer Portal 负责自助管理，Webhook 回写权益，quota 负责欠费或超量停用。</p>
+            <span>订阅与付款</span>
+            <strong>${escape(paymentStage)}</strong>
+            <p>${escape(paymentDetail)}</p>
           </div>
         </div>
         <div class="saas-settings-status-list">
-          <article class="${provider.external_paid_provider_configured || provider.test_billing_provider_configured ? "is-green" : "is-amber"}">
-            <span>Billing provider</span>
-            <strong>${escape(provider.selected || "not_selected")}</strong>
-            <small>${escape(providerDetail)}</small>
-            <small>${provider.external_paid_provider_configured ? "外部付费 provider 已选择" : "manual_seed 只能用于私测，不能公开收费"}</small>
+          <article class="${paymentReady ? "is-green" : "is-amber"}">
+            <span>付款入口</span>
+            <strong>${paymentReady ? "已配置" : "待开放"}</strong>
+            <small>${paymentReady ? "商家付款会走正式支付或受控内测确认，页面不展示任何支付密钥。" : "公开收费入口关闭时，商家只能看到订阅阶段和下一步说明。"}</small>
           </article>
-          <article class="${checkoutSession.ready ? "is-green" : "is-amber"}">
-            <span>Checkout</span>
-            <strong>${checkoutSession.ready ? "ready" : "blocked"}</strong>
-            <small>${checkoutSession.test_provider ? "mock Checkout, no Stripe API call" : "Stripe subscription Checkout / frontend never sees API key"}</small>
-            <small>Stripe subscription Checkout / 前端不接触 API key</small>
+          <article class="${portalReady ? "is-green" : "is-amber"}">
+            <span>订阅管理</span>
+            <strong>${portalReady ? "可自助处理" : "客服协助"}</strong>
+            <small>${portalReady ? "升级、降级、取消和付款方式管理会跳到支付平台处理。" : "正式自助入口未开放前，由客服和后台记录协助处理订阅变更。"}</small>
           </article>
-          <article class="${portal.ready ? "is-green" : "is-amber"}">
-            <span>Customer Portal</span>
-            <strong>${portal.ready ? "ready" : "blocked"}</strong>
-            <small>${portal.test_provider ? "mock Portal, no card or payment method collection" : "Stripe Portal handles plan changes, cancel and payment methods"}</small>
-            <small>升级、降级、取消、付款方式更新走 Stripe Portal</small>
-          </article>
-          <article class="${provider.webhook_configured ? "is-green" : "is-amber"}">
-            <span>Webhook</span>
-            <strong>${provider.webhook_configured ? "signed" : "missing"}</strong>
-            <small>订阅变更、续费、失败付款必须签名验证后回写权益</small>
-          </article>
-          <article class="${quota.enabled ? "is-green" : "is-amber"}">
-            <span>Quota</span>
-            <strong>${quota.enabled ? "enforced" : "off"}</strong>
-            <small>店铺数、AI CEO 任务、调研、素材和模型用量都要可见并可硬停</small>
+          <article class="${quotaReady ? "is-green" : "is-amber"}">
+            <span>额度与用量</span>
+            <strong>${quotaReady ? "已启用" : "待启用"}</strong>
+            <small>店铺数、AI CEO 任务、调研、素材和模型用量会按套餐显示，欠费或超量只暂停高成本任务。</small>
           </article>
           <article class="${subscription.entitlement_active ? "is-green" : "is-amber"}">
             <span>当前权益</span>
-            <strong>${escape(subscription.status || "subscription_missing")}</strong>
-            <small>${subscription.entitlement_active ? "当前公司权益有效" : escape(subscription.block_reason || "等待付费订阅")}</small>
+            <strong>${escape(subscription.status || "等待订阅")}</strong>
+            <small>${subscription.entitlement_active ? "当前公司权益有效。" : escape(subscription.block_reason || "当前还没有可用订阅。")}</small>
           </article>
-          <article class="${blockers.length ? "is-amber" : "is-green"}">
-            <span>上线阻断</span>
-            <strong>${blockers.length}</strong>
-            <small>${escape(blockers.slice(0, 3).join(" / ") || "无计费阻断")}</small>
+          <article class="${billingAttention ? "is-amber" : "is-green"}">
+            <span>付款状态</span>
+            <strong>${billingAttention ? "需要关注" : "正常"}</strong>
+            <small>${billingAttention ? escape(blockedUnits.join(" / ") || blockers.slice(0, 2).join(" / ") || "部分高成本能力可能暂停") : "历史资料、审计记录和账号设置不会因为额度状态被删除。"}</small>
           </article>
-          <article class="${billingBlockedCount ? "is-amber" : "is-green"}">
-            <span>billing live cutover</span>
-            <strong>${billingReadyCount}/${billingTotalCount || "?"}</strong>
-            <small>${escape(billingSummary.next_step || (billingBlockedCount ? "stripe_billing_live_cutover" : "ready_for_owner_approval"))}</small>
+          <article class="${shutdownReady ? "is-green" : "is-amber"}">
+            <span>欠费保护</span>
+            <strong>${shutdownReady ? "已闭合" : "待完善"}</strong>
+            <small>付款失败或取消后，只暂停模型、联网、素材生成等高成本任务，保留商家历史数据。</small>
           </article>
-          <article class="${billingTest.ready ? "is-green" : "is-amber"}">
-            <span>no-charge test flow</span>
-            <strong>${billingTestReadyCount}/${billingTestTotalCount || "?"}</strong>
-            <small>${escape(billingTest.next_step || (billingTest.ready ? "ready_without_stripe_account" : "billing_test_rehearsal_pending"))}</small>
-          </article>
-          <article class="${shutdownBlockedCount ? "is-amber" : Object.keys(shutdownClosure).length ? "is-green" : "is-amber"}">
-            <span>subscription shutdown closure</span>
-            <strong>${shutdownReadyCount}/${shutdownTotalCount || "?"}</strong>
-            <small>${escape(shutdownClosure.next_step || (shutdownClosure.ready ? "quota_shutdown_ready" : "payment_failure_cancel_drill_pending"))}</small>
-            <small>current=${escape(shutdownState.subscription_status || "subscription_missing")} / blocks_inactive=${Boolean(shutdownState.blocks_metered_work_when_inactive)}</small>
+          <article class="${paidReady ? "is-green" : "is-amber"}">
+            <span>公开收费</span>
+            <strong>${paidReady ? "可开放" : "暂不开放"}</strong>
+            <small>${paidReady ? "正式开放前仍会保留确认中心和后台记录。" : "当前可以继续内测和流程演练，不对普通商家展示内部上线清单。"}</small>
           </article>
         </div>
-        ${Object.keys(billingTest).length ? _renderBillingTestRehearsal(billingTest, latestBillingTestEvent, Boolean(state.saasLoading)) : ""}
-        ${Object.keys(shutdownClosure).length ? _renderSubscriptionQuotaShutdownClosure(shutdownClosure, shutdownState) : ""}
-        ${billingMatrix.length
-          ? `
-            <div class="saas-settings-row-list saas-billing-live-cutover-matrix">
-              <article class="${billingBlockedCount ? "is-amber" : "is-green"}">
-                <div>
-                  <span>stripe_billing_live_cutover_matrix</span>
-                  <strong>${billingReadyCount}/${billingTotalCount} ready</strong>
-                  <small>Subscription Checkout, Customer Portal, signed webhooks, API version alignment, failure paths, quota and entitlement evidence stay blocked until proven.</small>
-                  <small>stripe_live_provider_selected / stripe_signed_webhook_contract / stripe_entitlement_quota_lifecycle</small>
-                  <small>charge_now_allowed=false / frontend_gets_payment_secret=false / owner_approval_required_before_public_charging=true</small>
-                </div>
-                <em>billing</em>
-              </article>
-              ${billingMatrix.map((item) => _renderBillingLiveCutoverStep(item)).join("")}
-            </div>
-          `
-          : ""}
-        ${Object.keys(rehearsal).length ? _renderBillingDomainCutoverRehearsal(rehearsal) : ""}
       </section>
     `;
   }

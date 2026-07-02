@@ -25885,7 +25885,7 @@ function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext
       state.saasManualBetaPaymentOrders?.length,
   );
   const quotaReady = Boolean(billing.quotaEnforcementEnabled);
-  const blockers = payment.blockers.length ? payment.blockers.slice(0, 3).join(" / ") : "等待正式支付 no-real-charge 演练和主理人切换批准";
+  const blockers = payment.blockers.length ? payment.blockers.slice(0, 3).join(" / ") : "等待正式支付上线前检查和平台管理员确认";
   const pathRows = [
     {
       label: "现在",
@@ -25896,13 +25896,13 @@ function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext
     {
       label: "准备",
       title: "个体户 / 公司主体申请正式商户支付",
-      detail: "准备营业执照、结算主体、服务条款、隐私、退款、客服入口和回调域名；证件、银行卡和 provider key 不进前端。",
+      detail: "准备营业执照、结算主体、服务条款、隐私、退款、客服入口和支付后台配置；证件、银行卡和支付密钥不进前端。",
       tone: payment.paidLaunchReady ? "green" : "amber",
     },
     {
       label: "正式",
-      title: "商户订单 + 签名回调 / 主动查单",
-      detail: "后端创建订单并接微信、支付宝、云闪付或聚合收单；只有签名回调或查单通过后，才能自动发放套餐和额度。",
+      title: "商户订单 + 支付平台确认",
+      detail: "系统创建订单并接微信、支付宝、云闪付或聚合收单；只有支付平台确认或后台查单通过后，才能自动发放套餐和额度。",
       tone: hasExternalProvider || payment.paidLaunchReady ? "green" : "red",
     },
     {
@@ -25914,12 +25914,12 @@ function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext
   ];
   const grantRows = [
     ["人工内测", "内部管理员确认", "个人码到账后人工核对付款备注；只有管理员确认按钮能写入 starter 30 天权益。"],
-    ["正式支付", "签名 provider 证据", "由商户支付 webhook 或主动查单结果回写订阅、额度、发票和审计。"],
+    ["正式支付", "支付平台确认", "由支付平台通知或后台查单结果回写订阅、额度、发票和审计。"],
     ["禁止路径", "前端 / 静态二维码不能自动开通", "浏览器不保存二维码图片、支付密钥、身份证件或银行卡材料。"],
   ];
   const statusRows = [
-    ["当前阶段", hasExternalProvider ? "正式 provider 已接入" : manualBetaMode ? "manual_beta 内测对账" : "不真实扣费", hasExternalProvider ? "仍需完成上线前演练和主理人 live cutover，不能因配置存在就公开收费。" : "当前只允许小范围人工对账，不代表公开付费上线。"],
-    ["上线阻断", payment.paidLaunchReady ? "支付策略材料已齐" : "公开收费仍阻断", payment.paidLaunchReady ? "仍要结合整体 product readiness 和主理人确认。" : blockers],
+    ["当前阶段", hasExternalProvider ? "正式商户支付已接入" : manualBetaMode ? "内测人工对账" : "不真实扣费", hasExternalProvider ? "仍需完成上线前检查和平台管理员确认，不能因配置存在就公开收费。" : "当前只允许小范围人工对账，不代表公开付费上线。"],
+    ["上线阻断", payment.paidLaunchReady ? "支付策略材料已齐" : "公开收费仍阻断", payment.paidLaunchReady ? "仍要结合整体产品状态和平台管理员确认。" : blockers],
     ["恢复边界", "不重复 OAuth / 不重填模型 key", "订阅或额度恢复只处理账单状态，不要求商家重新授权 eBay 或重新输入模型 key。"],
   ];
   return `
@@ -25928,7 +25928,7 @@ function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext
         <div>
           <span>订阅开通路径</span>
           <strong>先人工对账内测，再切到正式商户支付自动发放额度</strong>
-          <p>这张卡把“个人码测试、正式支付、额度发放”拆成一条可迁移路径：现在可小范围人工核对，正式上线必须等商户支付、签名回调和额度停用闭环齐全。</p>
+          <p>这张卡把“个人码测试、正式支付、额度发放”拆成一条商家能理解的路径：现在可小范围人工核对，正式上线必须等商户支付、支付平台确认和额度停用规则齐全。</p>
         </div>
         <em>${escapeHtml(hasExternalProvider ? "正式支付待切换" : manualBetaMode ? "人工对账内测" : "等待内测付款单")}</em>
       </div>
@@ -26587,7 +26587,7 @@ function renderSaasMainlandPaymentStrategyPanel() {
     {
       label: "可选",
       title: "连连支付 / 空中云汇",
-      detail: "适合作为聚合收单或跨境结算候选，前提是商户 KYC、SaaS 场景审核、API 和签名回调都通过。",
+      detail: "适合作为聚合收单或跨境结算候选，前提是商户身份、SaaS 场景审核、接口和后台确认都通过。",
       tone: "green",
     },
     {
@@ -26599,14 +26599,14 @@ function renderSaasMainlandPaymentStrategyPanel() {
     {
       label: "不做正式入口",
       title: "个人收款码（仅内测）",
-      detail: "只能小范围私测人工对账；没有签名 webhook、自动续费、欠费停用、退款和发票审计闭环。",
+      detail: "只能小范围私测人工对账；没有自动续费、欠费停用、退款和发票闭环。",
       tone: "red",
     },
   ];
   const plainRows = [
-    ["现在该做什么", selectedLabel, payment.blockers.length ? `阻断：${payment.blockers.slice(0, 3).join(" / ")}` : "等待正式通道 no-real-charge 演练。"],
+    ["现在该做什么", selectedLabel, payment.blockers.length ? `阻断：${payment.blockers.slice(0, 3).join(" / ")}` : "等待正式通道上线前检查。"],
     ["为什么不用个人收款码正式上线", "SaaS 要自动识别谁付了哪个套餐", "只扫个人码会变成人工记账，后期用户多了会丢账、错账、无法自动停用额度。"],
-    ["万里汇 / 派安盈定位", "更像收款结汇和平台回款账户", "可用于 eBay/Amazon 等平台资金回收，不是捷境官网订阅 checkout 的主入口。"],
+    ["万里汇 / 派安盈定位", "更像收款结汇和平台回款账户", "可用于 eBay/Amazon 等平台资金回收，不是捷境官网订阅付款的主入口。"],
   ];
   const formal = payment.strategy.formal_collection_architecture || {};
   const domainPlan = payment.strategy.domain_and_icp_plan || {};
@@ -26625,8 +26625,8 @@ function renderSaasMainlandPaymentStrategyPanel() {
   const reviewCards = [
     ["服务内容", "eBay AI CEO 工作台", "AI CEO 帮商家整理市场、Listing、素材、客服草稿和确认记录；真实高风险动作仍由商家确认。"],
     ["费用边界", "基础订阅和高成本用量分开", "eBay 成交费、广告费、物流费和退款由商家平台账户结算，不是捷境代扣。"],
-    ["退款与客服", reviewSupport.support_contact_status === "ready" ? "客服入口已准备" : "客服入口待补齐", "支付审核前需要公开客服或投诉入口；退款和争议按订单、订阅和审计证据处理。"],
-    ["数据安全", "证件和密钥不进前端", "商户私钥、证书、webhook secret、身份证件和结算账户只在后端/Vault 或外部支付平台边界处理。"],
+    ["退款与客服", reviewSupport.support_contact_status === "ready" ? "客服入口已准备" : "客服入口待补齐", "支付审核前需要公开客服或投诉入口；退款和争议按订单、订阅和后台记录处理。"],
+    ["数据安全", "证件和密钥不进前端", "商户私钥、证书、支付后台密钥、身份证件和结算账户只在后端或外部支付平台边界处理。"],
   ];
   const reviewLinks = [
     ["服务条款", reviewUrls.terms || "./terms.html"],
@@ -26679,8 +26679,8 @@ function renderSaasMainlandPaymentStrategyPanel() {
       <div class="saas-mainland-payment-formal" data-payment-architecture="formal_payment_collection_architecture_v1" aria-label="正式收款架构">
         <div>
           <span>正式上架架构</span>
-          <strong>个人支付宝收款码只做内测，正式收款走商户订单和签名回调</strong>
-          <small>捷境会先生成内部订单，再交给微信/支付宝/云闪付或聚合收单；支付成功必须由后端签名回调或主动查单确认，然后才更新订阅、额度、发票和审计。</small>
+          <strong>个人支付宝收款码只做内测，正式收款走商户订单和支付平台确认</strong>
+          <small>捷境会先生成订单，再交给微信/支付宝/云闪付或聚合收单；支付成功必须由支付平台通知或后台查单确认，然后才更新订阅、额度、发票和后台记录。</small>
         </div>
         ${visibleFormalSteps
           .map(
@@ -27061,31 +27061,31 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
       key: "price_and_renewal_terms",
       status: "blocked",
       merchant_promise: "商家付款前必须看到套餐价格、周期、额度边界、取消路径和用量另算边界。",
-      next_action: "发布正式商户 Price ID 和公开套餐说明。",
+      next_action: "发布正式套餐和公开价格说明。",
     },
     {
       key: "hosted_checkout_payment_boundary",
       status: "blocked",
-      merchant_promise: "首笔订阅支付必须在支付 provider 托管页完成，捷境前端不接触卡号或支付密钥。",
-      next_action: "完成 provider-hosted Checkout 和稳定域名回跳。",
+      merchant_promise: "首笔订阅支付必须在支付平台托管页完成，捷境前端不接触卡号或支付密钥。",
+      next_action: "完成支付平台托管收款页和稳定域名返回路径。",
     },
     {
       key: "self_service_cancel_portal",
       status: "blocked",
-      merchant_promise: "商家能在 Customer Portal 修改付款方式、管理套餐和取消订阅。",
-      next_action: "用签名 webhook 验证 Portal 变更后再发放或停用权益。",
+      merchant_promise: "商家能在订阅管理页修改付款方式、管理套餐和取消订阅。",
+      next_action: "等后台确认订阅变更后再发放或停用权益。",
     },
     {
       key: "invoice_receipt_tax_path",
       status: "blocked",
-      merchant_promise: "收据、发票和税务问题要能关联 provider 订单、订阅和审计证据。",
+      merchant_promise: "收据、发票和税务问题要能关联订单、订阅和后台记录。",
       next_action: "确定商户主体、结算身份和税务发票口径。",
     },
     {
       key: "refund_support_public_entry",
       status: "ready",
       merchant_promise: "付款前可见服务条款、隐私、退款政策、客服入口和风险披露。",
-      next_action: "保持公开客服入口可达，并把退款/争议留在 provider 后台处理。",
+      next_action: "保持公开客服入口可达，并把退款/争议留在正式支付后台处理。",
     },
     {
       key: "entitlement_recovery_boundary",
@@ -27099,9 +27099,9 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
   const status = packet.ready_for_paid_customer_display ? "可进入付费展示评审" : "仍是上线前说明";
   const copy = {
     price_and_renewal_terms: ["价格与续费", "付款前展示套餐价格、周期、取消路径、额度边界和 AI/素材用量另算说明。"],
-    hosted_checkout_payment_boundary: ["托管支付边界", "订阅 Checkout 由支付 provider 托管；捷境浏览器不保存卡号、不生成真实扣费。"],
-    self_service_cancel_portal: ["自助订阅门户", "商家在 Customer Portal 管理付款方式、套餐和取消；权益变化等签名 webhook。"],
-    invoice_receipt_tax_path: ["收据 / 发票 / 税务", "发票和税务口径依赖正式商户主体、provider 订单和后端审计。"],
+    hosted_checkout_payment_boundary: ["托管支付边界", "订阅付款由支付平台托管；捷境浏览器不保存卡号、不直接扣费。"],
+    self_service_cancel_portal: ["自助订阅管理", "商家在订阅管理页处理付款方式、套餐和取消；权益变化等后台确认。"],
+    invoice_receipt_tax_path: ["收据 / 发票 / 税务", "发票和税务口径依赖正式商户主体、支付订单和后台记录。"],
     refund_support_public_entry: ["退款与客服入口", "付款前可见条款、隐私、退款政策、客服入口和风险披露。"],
     entitlement_recovery_boundary: ["权益恢复边界", "欠费、取消、退款或争议只停新高成本任务，历史资料保留，不重复 eBay OAuth。"],
   };
@@ -27111,7 +27111,7 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
         <div>
           <span>付费前客户信任说明</span>
           <strong>商家在付款前要看清楚价格、续费、取消、发票、退款和权益恢复边界</strong>
-          <p>这张卡把“个人码内测”过渡到“正式商户支付”时必须对客户讲清楚的内容集中到一个地方：可以展示套餐价值，但不能让前端创建 Checkout、扣款、接触支付密钥或绕过后端权益判断。</p>
+          <p>这张卡只给商家解释付款前需要知道的事项：套餐价格、续费/取消入口、用量边界、发票税务和退款客服。内部上线检查、支付后台配置和审批证据不在商家界面展示。</p>
         </div>
         <em>${escapeHtml(`${status} · ${readyText}`)}</em>
       </div>
@@ -27133,7 +27133,7 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
       </div>
       <div class="saas-merchant-billing-trust-note">
         <strong>当前边界</strong>
-        <p>这只是付费前说明和后端契约展示，不会发起真实 Checkout，不会调用 Stripe API，不会扣款，也不会把支付密钥、卡号或 provider secret 交给浏览器。正式收费仍要等商户主体、Price ID、Customer Portal、签名 webhook、发票/税务和客服证据全部闭合。</p>
+        <p>当前仍是内测说明，不会发起真实付款、不会扣款，也不会把支付密钥或卡号交给浏览器。正式收费会在支付平台托管页完成，并且要等商户主体、正式套餐、订阅管理、发票/税务和客服路径全部就绪。</p>
       </div>
       <div class="saas-merchant-billing-trust-safety" hidden aria-hidden="true">
         <span>merchant_billing_customer_trust_packet_v1</span>
@@ -33498,7 +33498,7 @@ function saasSettingsOneGlanceRows(activeTabId = "general") {
       ["越权停住", "没权限只补资料", "高风险动作没有权限就停到决策中心。"],
     ],
     billing: [
-      ["当前阶段", "内测演练，不真实扣费", "正式收费前会先接正式 provider、订阅页和签名 webhook。"],
+      ["当前阶段", "内测演练，不真实扣费", "正式收费前会先接正式商户支付、订阅管理和后台确认。"],
       ["基础订阅", "¥99/月打开工作台", "AI CEO、Listing、批量、素材工坊和客服订单是基础功能。"],
       ["高成本用量", "AI / 素材另算", "欠费或超量只停模型、联网、素材生成等高成本任务。"],
     ],
@@ -33702,15 +33702,11 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       panels: [
         renderSaasMerchantBillingPlainSummaryPanel(ctx),
         renderSaasBillingTransitionPathPanel(ctx),
-        renderSaasBillingProviderRehearsalPanel(ctx),
-        renderSaasBillingDomainCutoverReviewPanel(ctx),
-        renderSaasBillingPaidLaunchBlockersPanel(ctx),
         renderSaasMerchantBillingCustomerTrustPanel(ctx),
         renderSaasMainlandPaymentStrategyPanel(),
         renderSaasManualBetaPaymentOrderPanel(),
         renderSaasMerchantPricingModelPanel(ctx),
         renderSaasMerchantBillingContinuityPanel(ctx),
-        renderSaasMerchantBillingIncidentRunbookPanel(ctx),
         renderSaasMerchantSecurityBoundaryPanel(),
       ],
     },
@@ -33729,7 +33725,16 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
           detail: "Stripe live、WAF、Bot、限流、稳定域名和回调域名只给上线前检查使用。",
           badge: "内部",
           open: true,
-          panels: [renderSaasBillingProviderPanel(), renderSaasSettingsSecurityPanel(ctx, options), renderSaasPublicSecurityStatusPanel(), renderSaasEdgeCutoverReadinessPanel()],
+          panels: [
+            renderSaasBillingProviderPanel(),
+            renderSaasBillingProviderRehearsalPanel(ctx),
+            renderSaasBillingDomainCutoverReviewPanel(ctx),
+            renderSaasBillingPaidLaunchBlockersPanel(ctx),
+            renderSaasMerchantBillingIncidentRunbookPanel(ctx),
+            renderSaasSettingsSecurityPanel(ctx, options),
+            renderSaasPublicSecurityStatusPanel(),
+            renderSaasEdgeCutoverReadinessPanel(),
+          ],
         }),
         renderSaasSettingsSectionGroup({
           title: "运行可靠性",

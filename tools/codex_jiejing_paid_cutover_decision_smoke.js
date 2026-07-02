@@ -211,8 +211,8 @@ async function main() {
     await page.waitForSelector(".saas-paid-launch-approval-packet", { timeout: 60000 });
   } else {
     await page.locator('[data-saas-settings-tab="billing"]').click();
-    await page.waitForSelector(".saas-paid-cutover-blockers", { timeout: 60000 });
-    await page.waitForSelector(".saas-merchant-billing-incident-runbook", { timeout: 60000 });
+    await page.waitForSelector(".saas-merchant-billing-plain-summary", { timeout: 60000 });
+    await page.waitForSelector(".saas-merchant-billing-continuity", { timeout: 60000 });
   }
   await page.screenshot({ path: path.join(outDir, "paid-cutover-decision.png"), fullPage: true, timeout: 15000 });
 
@@ -428,13 +428,24 @@ async function main() {
     if (!ui.smokeVisible || ui.smokeCardCount < 8) failures.push("new-account smoke UI missing");
     if (!ui.hasNewAccountSmoke || !ui.hasCleanAccountStep || !ui.hasOauthGate || !ui.hasCleanupGate) failures.push("new-account smoke UI missing key stages");
   } else {
-    if (ui.visible || ui.smokeVisible || ui.edgeVisible || ui.billingVisible || ui.rehearsalVisible || ui.approvalVisible) {
+    if (
+      ui.visible ||
+      ui.smokeVisible ||
+      ui.edgeVisible ||
+      ui.billingVisible ||
+      ui.rehearsalVisible ||
+      ui.approvalVisible ||
+      ui.publicBillingCutoverVisible ||
+      ui.incidentRunbookVisible
+    ) {
       failures.push("platform-internal paid launch UI exposed to ordinary merchant");
     }
-    if (!ui.publicBillingCutoverVisible) failures.push("ordinary billing cutover blockers UI missing");
-    if (!ui.incidentRunbookVisible) failures.push("ordinary billing incident runbook UI missing");
-    if (!ui.publicBillingText.includes("ready_for_paid_launch=false")) failures.push("ordinary billing UI missing paid launch false marker");
-    if (!ui.incidentRunbookText.includes("merchant_billing_incident_runbook_v1")) failures.push("ordinary billing UI missing incident runbook marker");
+    if (ui.publicBillingText.includes("paid_launch_cutover") || ui.publicBillingText.includes("cutover")) {
+      failures.push("ordinary billing UI exposes internal paid-launch cutover copy");
+    }
+    if (ui.incidentRunbookText.includes("runbook") || ui.incidentRunbookText.includes("webhook")) {
+      failures.push("ordinary billing UI exposes internal billing runbook copy");
+    }
   }
   if (result.api.billing_live_cutover_total_count !== 8) failures.push(`api billing live cutover count ${result.api.billing_live_cutover_total_count}`);
   for (const key of [

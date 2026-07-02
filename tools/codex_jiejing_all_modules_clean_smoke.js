@@ -723,7 +723,7 @@ async function main() {
                 rawText.includes("no_model_key_reentry_for_billing_recovery") &&
                 rawText.includes("triggers_real_charge=false") &&
                 rawText.includes("frontend_gets_payment_secret=false"),
-              has_billing_domain_cutover_review:
+              has_billing_internal_payment_ops:
                 Boolean(
                   section?.querySelector(
                     '.saas-billing-domain-review[data-billing-domain-cutover-review="stable_domain_checkout_portal_webhook_review_v1"]',
@@ -761,7 +761,7 @@ async function main() {
       check.settings_billing_has_plain_summary = billingAudit.has_billing_plain_summary || false;
       check.settings_billing_has_pricing_split = billingAudit.has_billing_pricing_split || false;
       check.settings_billing_has_continuity = billingAudit.has_billing_continuity || false;
-      check.settings_billing_has_domain_cutover_review = billingAudit.has_billing_domain_cutover_review || false;
+      check.settings_billing_has_internal_payment_ops = billingAudit.has_billing_internal_payment_ops || false;
       await page
         .screenshot({ path: path.join(outDir, "connect-model.png"), fullPage: true, timeout: 15000 })
         .catch((error) => screenshotFailures.push({ view: "connect-model", error: String(error.message || error).slice(0, 300) }));
@@ -837,7 +837,7 @@ async function main() {
   if (!connect.settings_billing_has_plain_summary) failures.push("settings billing plain summary missing");
   if (!connect.settings_billing_has_pricing_split) failures.push("settings billing pricing split missing");
   if (!connect.settings_billing_has_continuity) failures.push("settings billing continuity closure missing");
-  if (!connect.settings_billing_has_domain_cutover_review) failures.push("settings billing domain cutover review missing");
+  if (connect.settings_billing_has_internal_payment_ops) failures.push("ordinary settings billing tab exposes internal payment cutover review");
   const media = moduleChecks.find((item) => item.view === "media") || {};
   if (!media.has_media_tabs) failures.push("media tabs missing");
   if (!media.has_media_simple_headline || !media.has_media_simple_flow) failures.push("media simple workflow surface missing");

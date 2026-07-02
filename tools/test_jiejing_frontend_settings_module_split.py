@@ -22,8 +22,11 @@ def main() -> int:
     app_html = APP_HTML.read_text(encoding="utf-8")
     app_js = APP_JS.read_text(encoding="utf-8")
     module_js = MODULE.read_text(encoding="utf-8")
-    module_marker = "./assets/jiejing-settings-panels.js?v=20260620-prelaunch-deferred-v1"
+    module_marker = "./assets/jiejing-settings-panels.js?v=20260702-merchant-billing-ui-v1"
     app_marker = "./app.js?v="
+    billing_panel_start = module_js.index("function renderBillingProviderPanel")
+    billing_panel_end = module_js.index("function _renderBillingTestRehearsal")
+    merchant_billing_panel = module_js[billing_panel_start:billing_panel_end]
     if module_marker not in app_html:
         return fail("app.html should load the settings panels module")
     if app_html.index(module_marker) > app_html.index(app_marker):
@@ -31,35 +34,20 @@ def main() -> int:
     for marker in [
         "global.JiejingSettingsPanels",
         "renderBillingProviderPanel",
-        "billing_live_cutover_matrix",
-        "stripe_billing_live_cutover_matrix",
-        "stripe_domain_cutover_rehearsal",
-        "billing_test_rehearsal_summary",
-        "no_charge_billing_rehearsal",
-        "no-charge test flow",
-        "subscription_quota_shutdown_closure",
-        "saas-subscription-quota-shutdown-closure",
-        "payment_failed_disables_entitlement",
-        "subscription_cancel_disables_entitlement",
-        "quota_guardrail_blocks_metered_work",
-        "provider_cutover_no_real_charge_safety",
-        "quota_shutdown_state",
-        "blocks_metered_work_when_inactive",
+        "订阅与付款",
+        "付款入口",
+        "订阅管理",
+        "额度与用量",
+        "欠费保护",
+        "公开收费",
+        "商家付款会走正式支付或受控内测确认",
+        "页面不展示任何支付密钥",
+        "不对普通商家展示内部上线清单",
         "_renderBillingTestRehearsal",
         "_renderSubscriptionQuotaShutdownClosure",
-        "ready_without_stripe_account",
-        "saas-billing-domain-cutover-rehearsal",
         "_renderBillingDomainCutoverRehearsal",
         "_renderBillingDomainCutoverStage",
-        "stripe_checkout_return_urls_on_stable_domain",
-        "stripe_signed_webhook_on_stable_domain",
-        "subscription_state_and_quota_lifecycle_rehearsed",
-        "creates_checkout_session",
-        "calls_stripe_api",
         "_renderBillingLiveCutoverStep",
-        "stripe_live_provider_selected",
-        "stripe_signed_webhook_contract",
-        "stripe_entitlement_quota_lifecycle",
         "renderCommercialLaunchActionPlanPanel",
         "renderEdgeCutoverReadinessPanel",
         "saas-edge-cutover-readiness",
@@ -117,11 +105,27 @@ def main() -> int:
         "charge_now_allowed",
         "platform_write_now_allowed",
         "生产队列与深度健康",
-        "正式计费",
+        "订阅与付款",
         "正式上线行动清单",
     ]:
         if marker not in module_js:
             return fail(f"settings module missing marker: {marker}")
+    for marker in [
+        "billing live cutover",
+        "stripe_billing_live_cutover_matrix",
+        "stripe_domain_cutover_rehearsal",
+        "billing_test_event_console",
+        "no-charge test flow",
+        "Billing provider",
+        "Customer Portal",
+        "Webhook",
+        "_renderBillingTestRehearsal(",
+        "_renderSubscriptionQuotaShutdownClosure(",
+        "_renderBillingDomainCutoverRehearsal(",
+        "_renderBillingLiveCutoverStep(",
+    ]:
+        if marker in merchant_billing_panel:
+            return fail(f"merchant billing panel exposes internal marker: {marker}")
     for marker in [
         "window.JiejingSettingsPanels?.renderQueueHealthPanel",
         "window.JiejingSettingsPanels?.renderBillingProviderPanel",
