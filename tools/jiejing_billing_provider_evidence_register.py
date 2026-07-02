@@ -62,7 +62,7 @@ def main() -> int:
 
 def _fetch_register(base_url: str, *, token: str) -> dict[str, object]:
     request = Request(
-        f"{base_url}/commercial/billing-provider-evidence-register",
+        f"{base_url}/owner/billing-provider-evidence-register",
         headers={"accept": "application/json", "authorization": f"Bearer {token}", "cache-control": "no-store"},
     )
     try:

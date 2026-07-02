@@ -21487,6 +21487,8 @@ function merchantSafeSaasBillingPlan(plan) {
   if (saasOwnerLaunchCanView()) return plan;
   const safePlan = { ...plan };
   delete safePlan.payment_strategy;
+  delete safePlan.billing_live_cutover_matrix;
+  delete safePlan.billing_live_cutover_summary;
   if (safePlan.provider && typeof safePlan.provider === "object") {
     const provider = { ...safePlan.provider };
     delete provider.recommended_mainland_provider_order;
@@ -21494,8 +21496,12 @@ function merchantSafeSaasBillingPlan(plan) {
     delete provider.allowed_private_beta_providers;
     delete provider.manual_seed_allowed_for_private_beta;
     delete provider.manual_beta_allowed_for_private_beta;
+    delete provider.manual_beta_private_provider_configured;
     safePlan.provider = provider;
   }
+  safePlan.customer_visible = true;
+  safePlan.internal_launch_evidence_visible = false;
+  safePlan.secret_exposed = false;
   return safePlan;
 }
 
@@ -21666,9 +21672,15 @@ async function refreshSaasState(options = {}) {
         ? optionalSaasFetchFast("/billing/payment-options", { payment_options: null })
         : Promise.resolve({ payment_options: null, skipped: "owner_admin_only_payment_options" }),
       optionalSaasFetchFast("/billing/manual-beta/orders", { manual_beta_payment_orders: [] }),
-      optionalSaasFetchFast("/commercial/billing-domain-cutover-rehearsal", { billing_domain_cutover_rehearsal: null }, 15000),
-      optionalSaasFetchFast("/domain/edge-cutover-preflight", { edge_cutover_preflight: state.saasEdgeCutoverPreflight || null }, 15000),
-      optionalSaasFetchFast("/commercial/paid-launch-approval-packet", { paid_launch_approval_packet: null }, 20000),
+      saasOwnerLaunchCanView()
+        ? optionalSaasFetchFast("/owner/billing-domain-cutover-rehearsal", { billing_domain_cutover_rehearsal: null }, 15000)
+        : Promise.resolve({ billing_domain_cutover_rehearsal: null, skipped: "owner_admin_only_billing_cutover" }),
+      saasOwnerLaunchCanView()
+        ? optionalSaasFetchFast("/owner/edge-cutover-preflight", { edge_cutover_preflight: state.saasEdgeCutoverPreflight || null }, 15000)
+        : Promise.resolve({ edge_cutover_preflight: null, skipped: "owner_admin_only_edge_cutover" }),
+      saasOwnerLaunchCanView()
+        ? optionalSaasFetchFast("/owner/paid-launch-approval-packet", { paid_launch_approval_packet: null }, 20000)
+        : Promise.resolve({ paid_launch_approval_packet: null, skipped: "owner_admin_only_paid_launch_packet" }),
       optionalSaasFetchFast("/model/value-gate", { model_value_gate: null }),
       optionalSaasFetchFast("/model/providers/catalog", { model_provider_catalog: null }),
       optionalSaasFetchFast(`/stores/${encodeURIComponent(store.store_id)}/model/settings`, { model_settings: state.saasModelSettings || null }, 10000),
@@ -21760,9 +21772,9 @@ async function refreshSaasState(options = {}) {
     state.saasBillingCheckout = billingCheckout.billing_checkout || null;
     state.saasPaymentOptions = saasOwnerLaunchCanView() ? paymentOptions.payment_options || rawBillingPlan?.payment_strategy || null : null;
     state.saasManualBetaPaymentOrders = manualBetaPaymentOrders.manual_beta_payment_orders || [];
-    state.saasBillingDomainCutoverRehearsal = billingDomainCutoverRehearsal.billing_domain_cutover_rehearsal || null;
-    state.saasEdgeCutoverPreflight = edgeCutoverPreflight.edge_cutover_preflight || state.saasEdgeCutoverPreflight || null;
-    state.saasPaidLaunchApprovalPacket = paidLaunchApprovalPacket.paid_launch_approval_packet || null;
+    state.saasBillingDomainCutoverRehearsal = saasOwnerLaunchCanView() ? billingDomainCutoverRehearsal.billing_domain_cutover_rehearsal || null : null;
+    state.saasEdgeCutoverPreflight = saasOwnerLaunchCanView() ? edgeCutoverPreflight.edge_cutover_preflight || state.saasEdgeCutoverPreflight || null : null;
+    state.saasPaidLaunchApprovalPacket = saasOwnerLaunchCanView() ? paidLaunchApprovalPacket.paid_launch_approval_packet || null : null;
     state.saasModelValueGate = modelValueGate.model_value_gate || null;
     state.saasModelProviderCatalog = modelProviderCatalog.model_provider_catalog || null;
     state.saasModelSettings = modelSettings.model_settings || null;

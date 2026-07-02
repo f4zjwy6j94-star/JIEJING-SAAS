@@ -461,6 +461,34 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._send_json({"production_evidence_ledger": build_production_evidence_ledger(self.settings, self.repository)})
             return
 
+        if path in {"owner/billing-domain-cutover-rehearsal", "commercial/billing-domain-cutover-rehearsal"}:
+            if not self._is_platform_internal_admin(identity):
+                self._send_error(HTTPStatus.FORBIDDEN, "billing domain cutover rehearsal is platform-internal admin only")
+                return
+            self._send_json({"billing_domain_cutover_rehearsal": build_billing_domain_cutover_rehearsal(self.settings, self.repository)})
+            return
+
+        if path in {"owner/billing-provider-evidence-register", "commercial/billing-provider-evidence-register"}:
+            if not self._is_platform_internal_admin(identity):
+                self._send_error(HTTPStatus.FORBIDDEN, "billing provider evidence register is platform-internal admin only")
+                return
+            self._send_json({"billing_provider_evidence_register": build_billing_provider_evidence_register(self.settings, self.repository)})
+            return
+
+        if path in {"owner/paid-launch-approval-packet", "commercial/paid-launch-approval-packet"}:
+            if not self._is_platform_internal_admin(identity):
+                self._send_error(HTTPStatus.FORBIDDEN, "paid launch approval packet is platform-internal admin only")
+                return
+            self._send_json({"paid_launch_approval_packet": build_paid_launch_approval_packet(self.settings, self.repository)})
+            return
+
+        if path in {"owner/edge-cutover-preflight", "domain/edge-cutover-preflight"}:
+            if not self._is_platform_internal_admin(identity):
+                self._send_error(HTTPStatus.FORBIDDEN, "edge cutover preflight is platform-internal admin only")
+                return
+            self._send_json({"edge_cutover_preflight": build_edge_cutover_preflight(self.settings)})
+            return
+
         if path == "team/members":
             self._send_json({"team_members": self.repository.list_team_members(company_id=identity["company_id"])})
             return
@@ -510,23 +538,21 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "billing/plans":
-            self._send_json({"billing_plan": build_billing_plan(self.settings, self.repository)})
+            plan = build_billing_plan(self.settings, self.repository)
+            if not self._is_platform_internal_admin(identity):
+                plan = self._merchant_safe_billing_plan(plan)
+            self._send_json({"billing_plan": plan})
             return
 
         if path == "billing/payment-options":
+            if not self._is_platform_internal_admin(identity):
+                self._send_error(HTTPStatus.FORBIDDEN, "payment options are platform-internal admin only")
+                return
             self._send_json({"payment_options": build_mainland_payment_strategy(self.settings)})
             return
 
         if path == "billing/checkout-contract":
             self._send_json({"billing_checkout": build_billing_checkout_contract()})
-            return
-
-        if path == "commercial/billing-domain-cutover-rehearsal":
-            self._send_json({"billing_domain_cutover_rehearsal": build_billing_domain_cutover_rehearsal(self.settings, self.repository)})
-            return
-
-        if path == "commercial/billing-provider-evidence-register":
-            self._send_json({"billing_provider_evidence_register": build_billing_provider_evidence_register(self.settings, self.repository)})
             return
 
         if path == "billing/usage":
@@ -568,10 +594,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._send_json({"commercial_launch_gate": build_commercial_launch_gate(self.settings, self.repository)})
             return
 
-        if path == "commercial/paid-launch-approval-packet":
-            self._send_json({"paid_launch_approval_packet": build_paid_launch_approval_packet(self.settings, self.repository)})
-            return
-
         if path == "post-publish/cockpit":
             execution_results = self.repository.list_execution_results(company_id=identity["company_id"], limit=100)
             confirmations = self.repository.list_confirmations(company_id=identity["company_id"], limit=100)
@@ -589,10 +611,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         if path == "domain/status":
             self._send_json({"domain_status": build_domain_readiness(self.settings)})
-            return
-
-        if path == "domain/edge-cutover-preflight":
-            self._send_json({"edge_cutover_preflight": build_edge_cutover_preflight(self.settings)})
             return
 
         if path == "provider-job-contracts":
@@ -3731,11 +3749,19 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             ("model", "model-backed AI CEO and value proof endpoints", ["GET /model/value-gate", "GET /model/providers/catalog"]),
             (
                 "commercial",
-                "launch gates and paid cutover rehearsal",
+                "merchant-safe launch readiness summary",
                 [
                     "GET /commercial/launch-gate",
-                    "GET /commercial/billing-provider-evidence-register",
-                    "GET /commercial/paid-launch-approval-packet",
+                ],
+            ),
+            (
+                "owner",
+                "platform-internal launch and payment cutover evidence",
+                [
+                    "GET /owner/billing-domain-cutover-rehearsal",
+                    "GET /owner/billing-provider-evidence-register",
+                    "GET /owner/edge-cutover-preflight",
+                    "GET /owner/paid-launch-approval-packet",
                 ],
             ),
             ("data-packets", "sanitized platform packet retrieval", ["GET /data-packets", "GET /data-packets/{packet_id}"]),
@@ -3863,6 +3889,30 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         member = self.repository.get_team_member(company_id=identity["company_id"], user_id=identity["user_id"])
         role = str(member.get("role") or "").lower() if member else ""
         return role in {"owner", "admin"}
+
+    @staticmethod
+    def _merchant_safe_billing_plan(plan: dict[str, Any]) -> dict[str, Any]:
+        safe_plan = dict(plan)
+        safe_plan.pop("payment_strategy", None)
+        safe_plan.pop("billing_live_cutover_matrix", None)
+        safe_plan.pop("billing_live_cutover_summary", None)
+        provider = safe_plan.get("provider")
+        if isinstance(provider, dict):
+            safe_provider = dict(provider)
+            for key in (
+                "recommended_mainland_provider_order",
+                "mainland_payment_strategy_contract",
+                "allowed_private_beta_providers",
+                "manual_seed_allowed_for_private_beta",
+                "manual_beta_allowed_for_private_beta",
+                "manual_beta_private_provider_configured",
+            ):
+                safe_provider.pop(key, None)
+            safe_plan["provider"] = safe_provider
+        safe_plan["customer_visible"] = True
+        safe_plan["internal_launch_evidence_visible"] = False
+        safe_plan["secret_exposed"] = False
+        return safe_plan
 
     def _require_quota(self, identity: dict[str, Any], action_unit: str) -> bool:
         evaluation = evaluate_quota_action(

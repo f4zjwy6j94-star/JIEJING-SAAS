@@ -60,7 +60,7 @@ def main() -> int:
 
 def _fetch_packet(base_url: str, *, token: str) -> dict[str, object]:
     request = Request(
-        f"{base_url}/commercial/paid-launch-approval-packet",
+        f"{base_url}/owner/paid-launch-approval-packet",
         headers={"accept": "application/json", "authorization": f"Bearer {token}", "cache-control": "no-store"},
     )
     try:

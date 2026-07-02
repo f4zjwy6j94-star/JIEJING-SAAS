@@ -720,7 +720,7 @@ def _build_prelaunch_deferred_strategy(
                 callback=bool(domain.get("ebay_callback_verified")),
                 expensive_api_backend_limit=True,
             ),
-            verification=["/domain/edge-cutover-preflight", "/rate-limit/status", "tools/test_jiejing_public_anti_scrape_hardening.py"],
+            verification=["/owner/edge-cutover-preflight", "/rate-limit/status", "tools/test_jiejing_public_anti_scrape_hardening.py"],
         ),
         _prelaunch_internal_work_item(
             "test_data_governance_review",

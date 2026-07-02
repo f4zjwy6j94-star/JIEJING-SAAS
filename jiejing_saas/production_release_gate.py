@@ -169,7 +169,7 @@ def _domain_edge_section(*, domain: dict[str, Any], edge: dict[str, Any]) -> dic
             "JIEJING_ORIGIN_DIRECT_IP_BLOCKED",
         ],
         next_action=str(summary.get("next_action") or "Finish stable-domain DNS/TLS/WAF/origin-lock/callback proof before final release review."),
-        verification=["/domain/status", "/domain/edge-cutover-preflight", "/health/deep"],
+        verification=["/domain/status", "/owner/edge-cutover-preflight", "/health/deep"],
         external_resource_required=True,
     )
 
@@ -260,7 +260,7 @@ def _billing_section(*, billing: dict[str, Any], rehearsal: dict[str, Any], prov
             "JIEJING_PAID_LAUNCH_OWNER_APPROVAL_PACKET_ID",
         ],
         next_action="Finish live subscription provider evidence, signed webhook failure paths, no-charge live-domain rehearsal and quota lifecycle proof.",
-        verification=["/billing/plans", "/commercial/billing-provider-evidence-register", "/commercial/billing-domain-cutover-rehearsal"],
+        verification=["/billing/plans", "/owner/billing-provider-evidence-register", "/owner/billing-domain-cutover-rehearsal"],
         external_resource_required=True,
     )
 
@@ -373,7 +373,7 @@ def _owner_final_section(*, approval_packet: dict[str, Any]) -> dict[str, Any]:
             "JIEJING_PRODUCTION_MERCHANT_SURFACE_COPY_SCAN_PASSED",
         ],
         next_action="Record final owner approval and keep charge/write launch switches separate until the deploy-time release step.",
-        verification=["/commercial/paid-launch-approval-packet", "/owner/launch-control", "node tools/codex_jiejing_all_modules_clean_smoke.js"],
+        verification=["/owner/paid-launch-approval-packet", "/owner/launch-control", "node tools/codex_jiejing_all_modules_clean_smoke.js"],
         external_resource_required=False,
     )
 

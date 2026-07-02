@@ -680,6 +680,8 @@ def main() -> None:
     require(app_js, 'Promise.resolve({ payment_options: null, skipped: "owner_admin_only_payment_options" })', "payment strategy public-page quiet skip")
     require(app_js, "function merchantSafeSaasBillingPlan", "ordinary merchant billing state sanitizer")
     require(app_js, "delete safePlan.payment_strategy;", "ordinary merchant billing plan must drop internal payment strategy")
+    require(app_js, "delete safePlan.billing_live_cutover_matrix;", "ordinary merchant billing plan must drop internal live cutover matrix")
+    require(app_js, "delete safePlan.billing_live_cutover_summary;", "ordinary merchant billing plan must drop internal live cutover summary")
     require(app_js, "state.saasBillingPlan = merchantSafeSaasBillingPlan(rawBillingPlan);", "billing plan must be sanitized before ordinary UI state")
     for billing_model_marker in [
         "基础订阅保留工作台",

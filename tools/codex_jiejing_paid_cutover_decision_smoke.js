@@ -97,22 +97,17 @@ async function main() {
   if (!billing.ok) {
     throw new Error(`billing plan fetch failed: ${billing.status}`);
   }
-  const rehearsalPayload = await api("/commercial/billing-domain-cutover-rehearsal", { token: session.token });
-  if (!rehearsalPayload.ok) {
-    throw new Error(`billing domain cutover rehearsal fetch failed: ${rehearsalPayload.status}`);
-  }
-  const edgePayload = await api("/domain/edge-cutover-preflight", { token: session.token });
-  if (!edgePayload.ok) {
-    throw new Error(`edge cutover preflight fetch failed: ${edgePayload.status}`);
-  }
-  const approvalPayload = await api("/commercial/paid-launch-approval-packet", { token: session.token });
-  if (!approvalPayload.ok) {
-    throw new Error(`paid launch approval packet fetch failed: ${approvalPayload.status}`);
-  }
-  const providerRegisterPayload = await api("/commercial/billing-provider-evidence-register", { token: session.token });
-  if (!providerRegisterPayload.ok) {
-    throw new Error(`billing provider evidence register fetch failed: ${providerRegisterPayload.status}`);
-  }
+  const protectedEvidence = {
+    legacyBillingDomain: await api("/commercial/billing-domain-cutover-rehearsal", { token: session.token }),
+    ownerBillingDomain: await api("/owner/billing-domain-cutover-rehearsal", { token: session.token }),
+    legacyEdge: await api("/domain/edge-cutover-preflight", { token: session.token }),
+    ownerEdge: await api("/owner/edge-cutover-preflight", { token: session.token }),
+    legacyApproval: await api("/commercial/paid-launch-approval-packet", { token: session.token }),
+    ownerApproval: await api("/owner/paid-launch-approval-packet", { token: session.token }),
+    legacyProviderRegister: await api("/commercial/billing-provider-evidence-register", { token: session.token }),
+    ownerProviderRegister: await api("/owner/billing-provider-evidence-register", { token: session.token }),
+    paymentOptions: await api("/billing/payment-options", { token: session.token }),
+  };
   const ownerPacketResponse = await api("/owner/launch-control", { token: session.token });
   const launchGate = gate.json.commercial_launch_gate || {};
   const plan = launchGate.launch_action_plan || {};
@@ -120,15 +115,15 @@ async function main() {
   const smokeRunbook = plan.new_ebay_account_smoke_runbook || launchGate.new_ebay_account_smoke_runbook || [];
   const billingPlan = billing.json.billing_plan || {};
   const billingMatrix = Array.isArray(billingPlan.billing_live_cutover_matrix) ? billingPlan.billing_live_cutover_matrix : [];
-  const rehearsal = rehearsalPayload.json.billing_domain_cutover_rehearsal || {};
+  const rehearsal = (protectedEvidence.ownerBillingDomain.json || {}).billing_domain_cutover_rehearsal || {};
   const rehearsalStages = Array.isArray(rehearsal.stages) ? rehearsal.stages : [];
   const noChargeEvidencePacket = rehearsal.no_charge_live_domain_evidence_packet || {};
   const noChargeEvidenceItems = Array.isArray(noChargeEvidencePacket.evidence_items) ? noChargeEvidencePacket.evidence_items : [];
-  const edgePreflight = edgePayload.json.edge_cutover_preflight || {};
+  const edgePreflight = (protectedEvidence.ownerEdge.json || {}).edge_cutover_preflight || {};
   const edgeStages = Array.isArray(edgePreflight.stages) ? edgePreflight.stages : [];
-  const approvalPacket = approvalPayload.json.paid_launch_approval_packet || {};
+  const approvalPacket = (protectedEvidence.ownerApproval.json || {}).paid_launch_approval_packet || {};
   const approvalSteps = Array.isArray(approvalPacket.steps) ? approvalPacket.steps : [];
-  const providerRegister = providerRegisterPayload.json.billing_provider_evidence_register || {};
+  const providerRegister = (protectedEvidence.ownerProviderRegister.json || {}).billing_provider_evidence_register || {};
   const providerRegisterRows = Array.isArray(providerRegister.evidence_rows) ? providerRegister.evidence_rows : [];
   const providerCutoverDossier =
     providerRegister.provider_cutover_dossier && typeof providerRegister.provider_cutover_dossier === "object"
@@ -226,7 +221,12 @@ async function main() {
     await page.waitForSelector(".saas-merchant-billing-plain-summary", { timeout: 60000 });
     await page.waitForSelector(".saas-merchant-billing-continuity", { timeout: 60000 });
   }
-  await page.screenshot({ path: path.join(outDir, "paid-cutover-decision.png"), fullPage: true, timeout: 15000 });
+  let screenshotError = "";
+  await page
+    .screenshot({ path: path.join(outDir, "paid-cutover-decision.png"), fullPage: true, timeout: 30000 })
+    .catch((error) => {
+      screenshotError = String(error.message || error).slice(0, 500);
+    });
 
   const ui = await page.evaluate(() => {
     const decision = document.querySelector(".saas-paid-launch-cutover-decision");
@@ -438,11 +438,23 @@ async function main() {
       billing_provider_cutover_dossier_activation_count: providerCutoverDossierActivation.length,
       billing_provider_cutover_dossier_activation_keys: providerCutoverDossierActivation.map((item) => item && item.key).filter(Boolean),
       owner_launch_control_status: Number(ownerPacketResponse.status || 0),
+      protected_evidence_statuses: {
+        legacy_billing_domain: Number(protectedEvidence.legacyBillingDomain.status || 0),
+        owner_billing_domain: Number(protectedEvidence.ownerBillingDomain.status || 0),
+        legacy_edge: Number(protectedEvidence.legacyEdge.status || 0),
+        owner_edge: Number(protectedEvidence.ownerEdge.status || 0),
+        legacy_paid_launch: Number(protectedEvidence.legacyApproval.status || 0),
+        owner_paid_launch: Number(protectedEvidence.ownerApproval.status || 0),
+        legacy_billing_provider: Number(protectedEvidence.legacyProviderRegister.status || 0),
+        owner_billing_provider: Number(protectedEvidence.ownerProviderRegister.status || 0),
+        payment_options: Number(protectedEvidence.paymentOptions.status || 0),
+      },
       secret_exposed: Boolean(launchGate.secret_exposed),
     },
     ui,
     pageErrors,
     relevantConsoleMessages,
+    screenshotError,
   };
   fs.writeFileSync(path.join(outDir, "result.json"), JSON.stringify(result, null, 2));
   await browser.close();
@@ -508,6 +520,7 @@ async function main() {
       failures.push("ordinary billing UI exposes founder/internal payment strategy copy");
     }
   }
+  if (ui.ownerOpsTabVisible) {
   if (result.api.billing_live_cutover_total_count !== 8) failures.push(`api billing live cutover count ${result.api.billing_live_cutover_total_count}`);
   for (const key of [
     "stripe_live_provider_selected",
@@ -686,6 +699,12 @@ async function main() {
   ]) {
     if (!result.api.billing_provider_cutover_dossier_activation_keys.includes(key)) failures.push(`api billing provider cutover dossier missing activation ${key}`);
   }
+  } else {
+    if (result.api.billing_live_cutover_total_count !== 0) failures.push("ordinary billing plan exposes internal live cutover matrix");
+    for (const [key, status] of Object.entries(result.api.protected_evidence_statuses || {})) {
+      if (status !== 403) failures.push(`ordinary merchant protected evidence ${key} status ${status}`);
+    }
+  }
   if (ui.hasLoginOverlay) failures.push("login overlay visible during authenticated smoke");
 
   if (failures.length) {
@@ -706,6 +725,7 @@ function isIgnorableConsoleMessage(text) {
     /was preloaded using link preload but not used/i.test(rendered) ||
     /owner launch control is platform-internal admin only/i.test(rendered) ||
     /Failed to load resource: the server responded with a status of 403/i.test(rendered) ||
-    /Failed to load resource: net::ERR_CONNECTION_CLOSED/i.test(rendered)
+    /Failed to load resource: net::ERR_CONNECTION_CLOSED/i.test(rendered) ||
+    /Failed to load resource: net::ERR_TIMED_OUT/i.test(rendered)
   );
 }

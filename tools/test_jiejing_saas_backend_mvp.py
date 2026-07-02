@@ -393,6 +393,24 @@ def main() -> int:
             return fail("billing plan should expose starter/operator/team plans")
         if billing_plan.get("quota_contract", {}).get("merchant_visible_usage_required") is not True:
             return fail("billing plan should require merchant-visible usage")
+        if billing_plan.get("customer_visible") is not True or billing_plan.get("internal_launch_evidence_visible") is not False:
+            return fail("ordinary merchant billing plan should be the customer-visible safe payload")
+        if "payment_strategy" in billing_plan or "billing_live_cutover_matrix" in billing_plan or "billing_live_cutover_summary" in billing_plan:
+            return fail("ordinary merchant billing plan must not expose internal payment strategy or live cutover evidence")
+        billing_provider = billing_plan.get("provider", {})
+        for internal_provider_key in {
+            "recommended_mainland_provider_order",
+            "mainland_payment_strategy_contract",
+            "allowed_private_beta_providers",
+            "manual_seed_allowed_for_private_beta",
+            "manual_beta_allowed_for_private_beta",
+            "manual_beta_private_provider_configured",
+        }:
+            if internal_provider_key in billing_provider:
+                return fail(f"ordinary merchant billing provider payload exposes internal key {internal_provider_key}")
+        payment_options_status, payment_options_error = fetch_json_expect_error(f"{base_url}/billing/payment-options", token=token)
+        if payment_options_status != 403:
+            return fail(f"ordinary merchant must not access internal payment options: {payment_options_error}")
         if billing_plan.get("real_platform_writes_enabled") is not False:
             return fail("billing plan must not enable real platform writes")
         if billing_plan.get("secret_exposed") is not False:
@@ -860,37 +878,12 @@ def main() -> int:
         provider_register_status, _ = fetch_json_expect_error(f"{base_url}/commercial/billing-provider-evidence-register")
         if provider_register_status != 401:
             return fail("billing provider evidence register must require authentication")
-        provider_register = fetch_json(f"{base_url}/commercial/billing-provider-evidence-register", token=token).get("billing_provider_evidence_register", {})
-        if provider_register.get("contract_version") != "2026-07-02-live-billing-provider-evidence-register":
-            return fail("billing provider evidence register should expose the live provider evidence contract")
-        if provider_register.get("public_paid_launch_allowed") is not False or provider_register.get("charge_now_allowed") is not False:
-            return fail("billing provider evidence register must not directly allow paid launch or charging")
-        if provider_register.get("calls_stripe_api") is not False or provider_register.get("creates_checkout_session") is not False:
-            return fail("billing provider evidence register must stay read-only and avoid Checkout creation")
-        if provider_register.get("triggers_ebay_oauth") is not False or provider_register.get("repeat_ebay_oauth_allowed") is not False:
-            return fail("billing provider evidence register must not trigger or repeat eBay OAuth")
-        if provider_register.get("frontend_gets_payment_secret") is not False or provider_register.get("frontend_gets_provider_secret") is not False:
-            return fail("billing provider evidence register must not expose provider secrets to frontend")
-        provider_rows = {item.get("key") for item in provider_register.get("evidence_rows", []) if isinstance(item, dict)}
-        for required_provider_row in {
-            "live_provider_account",
-            "stripe_account_activation_go_live_evidence",
-            "stripe_live_price_catalog",
-            "stripe_live_mode_test_object_isolation",
-            "stripe_subscription_checkout_contract",
-            "stripe_customer_portal_contract",
-            "stripe_signed_webhook_contract",
-            "stripe_api_webhook_version_alignment",
-            "stripe_webhook_failure_paths",
-            "stripe_entitlement_quota_lifecycle",
-            "merchant_billing_state_machine_proof",
-            "stripe_tax_invoice_receipt_branding_evidence",
-            "stable_domain_billing_callbacks",
-            "no_charge_live_domain_rehearsal_packet",
-            "cutover_rollback_audit_packet",
-        }:
-            if required_provider_row not in provider_rows:
-                return fail(f"billing provider evidence register missing {required_provider_row}")
+        provider_register_status, provider_register_error = fetch_json_expect_error(f"{base_url}/commercial/billing-provider-evidence-register", token=token)
+        if provider_register_status != 403:
+            return fail(f"ordinary merchant must not access internal billing provider evidence register: {provider_register_error}")
+        owner_provider_status, owner_provider_error = fetch_json_expect_error(f"{base_url}/owner/billing-provider-evidence-register", token=token)
+        if owner_provider_status != 403:
+            return fail(f"ordinary merchant must not access owner billing provider evidence register: {owner_provider_error}")
         model_value_rehearsal = post_json(
             f"{base_url}/stores/{store_id}/model/value-rehearsal",
             {

@@ -326,7 +326,7 @@ def build_billing_provider_evidence_register(settings: SaaSSettings, repository:
                 "JIEJING_BILLING_PORTAL_RETURN_URL",
                 "JIEJING_BILLING_WEBHOOK_URL",
             ],
-            verification=["/commercial/billing-domain-cutover-rehearsal", "/domain/status"],
+            verification=["/owner/billing-domain-cutover-rehearsal", "/domain/status"],
             docs=["https://docs.stripe.com/customer-management/integrate-customer-portal", "https://docs.stripe.com/webhooks"],
             external_resource_required=True,
         ),
@@ -365,7 +365,7 @@ def build_billing_provider_evidence_register(settings: SaaSSettings, repository:
                 "JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID",
             ],
             verification=[
-                "/commercial/billing-domain-cutover-rehearsal",
+                "/owner/billing-domain-cutover-rehearsal",
                 "/billing/checkout-contract",
                 "/health",
                 "/health/deep",
@@ -457,8 +457,8 @@ def build_billing_provider_evidence_register(settings: SaaSSettings, repository:
         "source_packets": [
             "/billing/plans",
             "/billing/checkout-contract",
-            "/commercial/billing-domain-cutover-rehearsal",
-            "/commercial/paid-launch-approval-packet",
+            "/owner/billing-domain-cutover-rehearsal",
+            "/owner/paid-launch-approval-packet",
         ],
         "docs": [
             "https://docs.stripe.com/billing/subscriptions/build-subscriptions",

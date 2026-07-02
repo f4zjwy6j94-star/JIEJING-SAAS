@@ -328,7 +328,7 @@ def _no_charge_live_domain_evidence_packet(*, stages: list[dict[str, Any]]) -> d
                 smoke_passed=_env_bool("JIEJING_NO_CHARGE_CHECKOUT_RETURN_URL_SMOKE_PASSED"),
             ),
             environment_keys=["JIEJING_NO_CHARGE_CHECKOUT_RETURN_URL_SMOKE_PASSED"],
-            verification=["/commercial/billing-domain-cutover-rehearsal", "/billing/checkout-contract"],
+            verification=["/owner/billing-domain-cutover-rehearsal", "/billing/checkout-contract"],
         ),
         _evidence_item(
             "customer_portal_return_url_smoke",
@@ -341,7 +341,7 @@ def _no_charge_live_domain_evidence_packet(*, stages: list[dict[str, Any]]) -> d
                 smoke_passed=_env_bool("JIEJING_NO_CHARGE_PORTAL_RETURN_URL_SMOKE_PASSED"),
             ),
             environment_keys=["JIEJING_NO_CHARGE_PORTAL_RETURN_URL_SMOKE_PASSED"],
-            verification=["/commercial/billing-domain-cutover-rehearsal", "/billing/checkout-contract"],
+            verification=["/owner/billing-domain-cutover-rehearsal", "/billing/checkout-contract"],
         ),
         _evidence_item(
             "signed_webhook_smoke",
@@ -354,7 +354,7 @@ def _no_charge_live_domain_evidence_packet(*, stages: list[dict[str, Any]]) -> d
                 smoke_passed=_env_bool("JIEJING_NO_CHARGE_SIGNED_WEBHOOK_SMOKE_PASSED"),
             ),
             environment_keys=["JIEJING_NO_CHARGE_SIGNED_WEBHOOK_SMOKE_PASSED"],
-            verification=["/commercial/billing-domain-cutover-rehearsal", "tools/test_jiejing_billing_webhook_subscription_state.py"],
+            verification=["/owner/billing-domain-cutover-rehearsal", "tools/test_jiejing_billing_webhook_subscription_state.py"],
         ),
         _evidence_item(
             "subscription_quota_lifecycle_smoke",
@@ -401,7 +401,7 @@ def _no_charge_live_domain_evidence_packet(*, stages: list[dict[str, Any]]) -> d
                 audit_packet_id_present=bool(_env_text("JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID")),
             ),
             environment_keys=["JIEJING_CUTOVER_ROLLBACK_VERIFIED", "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID"],
-            verification=["/commercial/billing-domain-cutover-rehearsal", "output/staging-patch-backups"],
+            verification=["/owner/billing-domain-cutover-rehearsal", "output/staging-patch-backups"],
         ),
         _evidence_item(
             "no_charge_evidence_id_recorded",
@@ -410,7 +410,7 @@ def _no_charge_live_domain_evidence_packet(*, stages: list[dict[str, Any]]) -> d
             source="release_evidence",
             evidence_summary=_evidence(evidence_id_present=bool(_env_text("JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID"))),
             environment_keys=["JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID"],
-            verification=["/commercial/billing-domain-cutover-rehearsal"],
+            verification=["/owner/billing-domain-cutover-rehearsal"],
         ),
     ]
     blocked = [item for item in items if item.get("status") != "ready"]
@@ -495,7 +495,7 @@ def _stage(
         "evidence_summary": evidence_summary,
         "next_action": next_action,
         "environment_keys": environment_keys,
-        "verification": ["/commercial/billing-domain-cutover-rehearsal", "/billing/plans", "/billing/checkout-contract", "/domain/status"],
+        "verification": ["/owner/billing-domain-cutover-rehearsal", "/billing/plans", "/billing/checkout-contract", "/domain/status"],
         "docs": docs,
         "external_resource_required": external_resource_required,
         "creates_checkout_session": False,
