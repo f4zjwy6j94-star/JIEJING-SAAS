@@ -182,6 +182,18 @@ def build_billing_plan(settings: SaaSSettings, repository: SaaSRepository) -> di
             "frontend_gets_payment_secret": False,
             "secret_exposed": False,
         },
+        "merchant_launch_path": _build_merchant_billing_launch_path(
+            provider=provider,
+            external_provider=external_provider,
+            test_provider=test_provider,
+            manual_seed_provider=manual_seed_provider,
+            private_beta_provider=private_beta_provider,
+            checkout_contract=checkout_contract,
+            provider_contract=provider_contract,
+            plans_published=plans_published,
+            quota_enforcement_enabled=quota_enforcement_enabled,
+            paid_launch_blockers=paid_launch_blockers,
+        ),
         "billing_test_rehearsal_summary": _build_billing_test_rehearsal_summary(
             provider=provider,
             test_provider=test_provider,
@@ -232,6 +244,99 @@ def build_billing_plan(settings: SaaSSettings, repository: SaaSRepository) -> di
         "paid_launch_blockers": paid_launch_blockers,
         "next_actions": _next_actions(blockers),
         "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+
+
+def _build_merchant_billing_launch_path(
+    *,
+    provider: str,
+    external_provider: bool,
+    test_provider: bool,
+    manual_seed_provider: bool,
+    private_beta_provider: bool,
+    checkout_contract: dict[str, Any],
+    provider_contract: dict[str, Any],
+    plans_published: bool,
+    quota_enforcement_enabled: bool,
+    paid_launch_blockers: list[str],
+) -> dict[str, Any]:
+    """Merchant-visible subscription activation path without provider secrets."""
+
+    checkout_sessions = checkout_contract.get("checkout_sessions") if isinstance(checkout_contract.get("checkout_sessions"), dict) else {}
+    customer_portal = checkout_contract.get("customer_portal") if isinstance(checkout_contract.get("customer_portal"), dict) else {}
+    checkout_ready = bool(checkout_sessions.get("ready"))
+    portal_ready = bool(customer_portal.get("ready"))
+    backend_confirmation_ready = bool(provider_contract.get("webhook_configured")) or test_provider or manual_seed_provider or private_beta_provider
+    if external_provider and checkout_ready and portal_ready and backend_confirmation_ready:
+        current_stage = "online_subscription_ready"
+        headline = "在线订阅已准备好，付款仍以支付页和后端账单结果为准"
+    elif test_provider:
+        current_stage = "invited_beta_no_real_charge"
+        headline = "当前是受邀试用演练，不会自动扣费"
+    elif manual_seed_provider or private_beta_provider:
+        current_stage = "service_confirmed_trial"
+        headline = "当前由服务支持确认试用订阅"
+    else:
+        current_stage = "payment_not_open"
+        headline = "在线付款暂未开放，当前不会自动扣费"
+    blocker = paid_launch_blockers[0] if paid_launch_blockers else ""
+    return {
+        "contract_version": "2026-07-03-merchant-billing-launch-path-v1",
+        "current_stage": current_stage,
+        "headline": headline,
+        "current_charge_status": "no_real_charge_now" if not external_provider else "provider_hosted_payment_required",
+        "merchant_visible": True,
+        "internal_launch_evidence_visible": False,
+        "plans_published": bool(plans_published),
+        "public_paid_launch_allowed": False,
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "creates_checkout_session_from_browser": False,
+        "frontend_gets_payment_secret": False,
+        "frontend_can_grant_entitlement": False,
+        "frontend_can_grant_quota": False,
+        "backend_confirmation_required_before_entitlement": True,
+        "backend_confirmation_source": "signed_webhook_or_order_query",
+        "hosted_payment_page_required_for_formal_payment": True,
+        "customer_portal_required_for_self_service_cancel": True,
+        "quota_enforcement_enabled": bool(quota_enforcement_enabled),
+        "quota_grant_source": "backend_subscription_state",
+        "history_visible_after_billing_problem": True,
+        "metered_work_only_blocks_on_billing_problem": True,
+        "repeat_ebay_oauth_required_for_billing_recovery": False,
+        "model_key_reentry_required_for_billing_recovery": False,
+        "next_paid_launch_blocker": blocker,
+        "steps": [
+            {
+                "key": "current_charge_status",
+                "label": "当前是否扣费",
+                "title": "当前不会自动扣费" if not external_provider else "付款在安全支付页完成",
+                "detail": "在线付款开放前只显示套餐、申请状态和可用额度。" if not external_provider else "商家付款由支付方托管页完成，捷境页面不保存支付资料。",
+                "ready": True,
+            },
+            {
+                "key": "hosted_payment_page",
+                "label": "正式付款",
+                "title": "正式付款走安全支付页",
+                "detail": "付款资料只在支付方安全页面处理，捷境页面不保存卡号或支付凭证。",
+                "ready": bool(external_provider and checkout_ready),
+            },
+            {
+                "key": "backend_confirmation_before_entitlement",
+                "label": "订阅生效",
+                "title": "系统确认后开通权益",
+                "detail": "只有系统确认付款、试用资格或订阅状态后，才会更新套餐权益。",
+                "ready": backend_confirmation_ready,
+            },
+            {
+                "key": "quota_from_subscription_state",
+                "label": "额度发放",
+                "title": "额度按订阅状态发放",
+                "detail": "AI、联网报告和素材生成额度只能由系统账单状态发放或停用，浏览器不能自行恢复。",
+                "ready": bool(quota_enforcement_enabled),
+            },
+        ],
         "secret_exposed": False,
     }
 

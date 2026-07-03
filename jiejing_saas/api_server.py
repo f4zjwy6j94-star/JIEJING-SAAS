@@ -3643,7 +3643,45 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "billing": {
                     "provider": billing.get("provider", ""),
                     "billing_ready_for_paid_launch": bool(billing.get("billing_ready_for_paid_launch")),
+                    "billing_ready_for_private_beta": bool(billing.get("billing_ready_for_private_beta")),
+                    "external_paid_provider_configured": bool(billing.get("external_paid_provider_configured")),
+                    "test_billing_provider_configured": bool(billing.get("test_billing_provider_configured")),
+                    "checkout_ready": bool(billing.get("checkout_ready")),
+                    "customer_portal_ready": bool(billing.get("customer_portal_ready")),
+                    "signed_webhook_configured": bool(billing.get("signed_webhook_configured")),
                     "quota_enforcement_enabled": bool(billing.get("quota_enforcement_enabled")),
+                    "paid_launch_blocker_count": int(billing.get("paid_launch_blocker_count") or 0),
+                    "next_paid_launch_blocker": billing.get("next_paid_launch_blocker", ""),
+                    "merchant_launch_path": {
+                        "contract_version": (
+                            billing.get("merchant_launch_path", {}).get("contract_version", "")
+                            if isinstance(billing.get("merchant_launch_path"), dict)
+                            else ""
+                        ),
+                        "current_stage": (
+                            billing.get("merchant_launch_path", {}).get("current_stage", "")
+                            if isinstance(billing.get("merchant_launch_path"), dict)
+                            else ""
+                        ),
+                        "current_charge_status": (
+                            billing.get("merchant_launch_path", {}).get("current_charge_status", "")
+                            if isinstance(billing.get("merchant_launch_path"), dict)
+                            else ""
+                        ),
+                        "public_paid_launch_allowed": False,
+                        "charge_now_allowed": False,
+                        "triggers_real_charge": False,
+                        "backend_confirmation_required_before_entitlement": True,
+                        "frontend_can_grant_entitlement": False,
+                        "frontend_can_grant_quota": False,
+                        "quota_grant_source": "backend_subscription_state",
+                        "secret_exposed": False,
+                    },
+                    "public_charging_allowed": False,
+                    "charge_now_allowed": False,
+                    "triggers_real_charge": False,
+                    "frontend_gets_payment_secret": False,
+                    "frontend_can_grant_quota": False,
                     "secret_exposed": False,
                 },
                 "model_value": {

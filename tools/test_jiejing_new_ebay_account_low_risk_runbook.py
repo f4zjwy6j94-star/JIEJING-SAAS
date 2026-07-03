@@ -51,7 +51,7 @@ def main() -> int:
         "triggers_ebay_oauth=false",
         "triggers_real_platform_write=false",
         "repeat_oauth_allowed=false",
-        "本面板没有 eBay OAuth 按钮",
+        "本面板没有 eBay 授权按钮",
         "renderSaasNewEbayAccountOnboardingPanel()",
     ]:
         if marker not in app_js:

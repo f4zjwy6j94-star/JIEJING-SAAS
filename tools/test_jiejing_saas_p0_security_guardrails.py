@@ -383,6 +383,22 @@ def _check_public_diagnostics_are_summarized() -> str:
         return "public readiness summary should expose non-secret public search readiness"
     if "credential_source" in search_summary:
         return "public readiness summary must not expose public search credential source"
+    billing_summary = unauth.get("provider_status", {}).get("billing", {})
+    if (
+        billing_summary.get("billing_ready_for_paid_launch") is not False
+        or billing_summary.get("quota_enforcement_enabled") is not True
+        or billing_summary.get("public_charging_allowed") is not False
+        or billing_summary.get("triggers_real_charge") is not False
+        or billing_summary.get("frontend_can_grant_quota") is not False
+    ):
+        return "public readiness billing summary should expose safe launch truth without enabling charges or frontend quota"
+    billing_launch_path = billing_summary.get("merchant_launch_path") if isinstance(billing_summary.get("merchant_launch_path"), dict) else {}
+    if (
+        billing_launch_path.get("backend_confirmation_required_before_entitlement") is not True
+        or billing_launch_path.get("frontend_can_grant_entitlement") is not False
+        or billing_launch_path.get("quota_grant_source") != "backend_subscription_state"
+    ):
+        return "public readiness billing launch path should keep entitlement and quota behind backend billing state"
 
     fake = _fake_handler(settings=settings, origin="")
     health = {

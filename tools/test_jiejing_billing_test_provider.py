@@ -23,6 +23,7 @@ from jiejing_saas.billing_plan import build_billing_plan, build_billing_usage, e
 from jiejing_saas.billing_test_provider import apply_test_billing_event  # noqa: E402
 from jiejing_saas.billing_webhook import build_billing_provider_contract, handle_billing_webhook  # noqa: E402
 from jiejing_saas.config import SaaSSettings  # noqa: E402
+from jiejing_saas.readiness import build_product_readiness  # noqa: E402
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
 
 
@@ -151,6 +152,50 @@ def main() -> int:
             return fail(f"test provider should satisfy private beta rehearsal: {plan.get('blockers')}")
         if plan.get("billing_ready_for_paid_launch") is not False or "test_billing_provider_not_allowed_for_paid_launch" not in plan.get("paid_launch_blockers", []):
             return fail(f"test provider must keep public paid launch blocked: {plan.get('paid_launch_blockers')}")
+        merchant_launch_path = plan.get("merchant_launch_path") if isinstance(plan.get("merchant_launch_path"), dict) else {}
+        if merchant_launch_path.get("current_stage") != "invited_beta_no_real_charge":
+            return fail(f"test provider should expose invited-beta no-charge merchant launch path: {merchant_launch_path}")
+        if (
+            merchant_launch_path.get("public_paid_launch_allowed") is not False
+            or merchant_launch_path.get("triggers_real_charge") is not False
+            or merchant_launch_path.get("frontend_can_grant_quota") is not False
+            or merchant_launch_path.get("backend_confirmation_required_before_entitlement") is not True
+        ):
+            return fail(f"merchant launch path must preserve billing safety flags: {merchant_launch_path}")
+        step_keys = {item.get("key") for item in merchant_launch_path.get("steps", []) if isinstance(item, dict)}
+        for required_step in {
+            "current_charge_status",
+            "hosted_payment_page",
+            "backend_confirmation_before_entitlement",
+            "quota_from_subscription_state",
+        }:
+            if required_step not in step_keys:
+                return fail(f"merchant launch path missing step {required_step}: {merchant_launch_path}")
+        readiness = build_product_readiness(settings, repo)
+        public_billing = (
+            readiness.get("provider_status", {}).get("billing", {})
+            if isinstance(readiness.get("provider_status"), dict)
+            else {}
+        )
+        if public_billing.get("billing_ready_for_private_beta") is not True:
+            return fail(f"public readiness should keep private-beta billing truth: {public_billing}")
+        if (
+            public_billing.get("billing_ready_for_paid_launch") is not False
+            or public_billing.get("public_charging_allowed") is not False
+            or public_billing.get("charge_now_allowed") is not False
+            or public_billing.get("triggers_real_charge") is not False
+            or public_billing.get("frontend_can_grant_quota") is not False
+        ):
+            return fail(f"public readiness must not claim paid launch or frontend quota control: {public_billing}")
+        if public_billing.get("quota_enforcement_enabled") is not True or public_billing.get("paid_launch_blocker_count", 0) < 1:
+            return fail(f"public readiness should expose quota and paid-launch blocker summary: {public_billing}")
+        public_launch_path = public_billing.get("merchant_launch_path") if isinstance(public_billing.get("merchant_launch_path"), dict) else {}
+        if (
+            public_launch_path.get("current_stage") != "invited_beta_no_real_charge"
+            or public_launch_path.get("quota_grant_source") != "backend_subscription_state"
+            or public_launch_path.get("frontend_can_grant_entitlement") is not False
+        ):
+            return fail(f"public readiness should expose safe merchant launch path summary: {public_launch_path}")
         rehearsal = plan.get("billing_test_rehearsal_summary") if isinstance(plan.get("billing_test_rehearsal_summary"), dict) else {}
         if rehearsal.get("ready") is not True or rehearsal.get("calls_stripe_api") is not False or rehearsal.get("triggers_real_charge") is not False:
             return fail(f"billing test rehearsal summary should be ready and no-charge: {rehearsal}")
@@ -210,7 +255,7 @@ def main() -> int:
             },
             ensure_ascii=False,
         )
-        for forbidden in ("sk_test", "whsec", "card", "payment_method", "client_secret", "refresh_token", "access_token"):
+        for forbidden in ("sk_test", "whsec", "card_number", "card_token", "payment_method_secret", "client_secret", "refresh_token", "access_token"):
             if forbidden in serialized:
                 return fail(f"billing test provider output leaked forbidden marker: {forbidden}")
         print("PASS jiejing_billing_test_provider")

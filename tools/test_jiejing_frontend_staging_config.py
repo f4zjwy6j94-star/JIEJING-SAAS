@@ -28,7 +28,7 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260702-ai-ceo-route-card-v3"
+    frontend_asset_version = "20260703-merchant-billing-launch-path-v1"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -590,8 +590,8 @@ def main() -> int:
             return fail(f"SaaS production path still carries demo-only marker: {forbidden}")
     if "https://api.ebay.com/oauth/api_scope/sell.finances" not in app_js:
         return fail("frontend eBay OAuth scopes must include sell.finances for the first read-only packet")
-    if "saasLatestOAuthUrl" not in app_js or "Open eBay OAuth" not in app_js or 'target="_blank"' not in app_js:
-        return fail("frontend should retain a clickable eBay OAuth authorization URL")
+    if "saasLatestOAuthUrl" not in app_js or "打开 eBay 官方授权页" not in app_js or 'target="_blank"' not in app_js:
+        return fail("frontend should retain a clickable eBay authorization URL")
     if "API Base" not in app_js:
         return fail("frontend should surface configured API bases in the SaaS backend panel")
     if '["blocked", "pending", "published"].includes(state.publishFlow.status) &&\n    shouldShowLegacyDemoControls()' not in app_js:

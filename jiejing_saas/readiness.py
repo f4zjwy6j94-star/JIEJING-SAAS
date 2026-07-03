@@ -1229,14 +1229,51 @@ def _public_backup_status(settings: SaaSSettings, repository: SaaSRepository) ->
 
 def _public_billing_status(settings: SaaSSettings, repository: SaaSRepository) -> dict[str, Any]:
     plan = build_billing_plan(settings, repository)
+    provider = plan.get("provider") if isinstance(plan.get("provider"), dict) else {}
+    quota = plan.get("quota_contract") if isinstance(plan.get("quota_contract"), dict) else {}
+    checkout = provider.get("checkout_portal_contract") if isinstance(provider.get("checkout_portal_contract"), dict) else {}
+    checkout_sessions = checkout.get("checkout_sessions") if isinstance(checkout.get("checkout_sessions"), dict) else {}
+    customer_portal = checkout.get("customer_portal") if isinstance(checkout.get("customer_portal"), dict) else {}
+    paid_launch_blockers = list(plan.get("paid_launch_blockers") or [])
+    merchant_launch_path = plan.get("merchant_launch_path") if isinstance(plan.get("merchant_launch_path"), dict) else {}
     return {
         "contract_version": plan.get("contract_version"),
         "billing_ready_for_private_beta": bool(plan.get("billing_ready_for_private_beta")),
         "billing_ready_for_paid_launch": bool(plan.get("billing_ready_for_paid_launch")),
-        "provider": (plan.get("provider") or {}).get("selected"),
+        "provider": provider.get("selected"),
         "plan_count": len(plan.get("plan_catalog") or []),
+        "external_paid_provider_configured": bool(provider.get("external_paid_provider_configured")),
+        "test_billing_provider_configured": bool(provider.get("test_billing_provider_configured")),
+        "checkout_ready": bool(checkout_sessions.get("ready")),
+        "customer_portal_ready": bool(customer_portal.get("ready")),
+        "signed_webhook_configured": bool(provider.get("webhook_configured")),
+        "quota_enforcement_enabled": bool(quota.get("enabled")),
         "blockers": plan.get("blockers", []),
-        "paid_launch_blockers": plan.get("paid_launch_blockers", []),
+        "paid_launch_blockers": paid_launch_blockers,
+        "paid_launch_blocker_count": len(paid_launch_blockers),
+        "next_paid_launch_blocker": paid_launch_blockers[0] if paid_launch_blockers else "",
+        "merchant_launch_path": {
+            "contract_version": merchant_launch_path.get("contract_version", ""),
+            "current_stage": merchant_launch_path.get("current_stage", ""),
+            "headline": merchant_launch_path.get("headline", ""),
+            "current_charge_status": merchant_launch_path.get("current_charge_status", ""),
+            "public_paid_launch_allowed": False,
+            "charge_now_allowed": False,
+            "triggers_real_charge": False,
+            "hosted_payment_page_required_for_formal_payment": True,
+            "backend_confirmation_required_before_entitlement": True,
+            "frontend_can_grant_entitlement": False,
+            "frontend_can_grant_quota": False,
+            "quota_grant_source": "backend_subscription_state",
+            "history_visible_after_billing_problem": True,
+            "metered_work_only_blocks_on_billing_problem": True,
+            "secret_exposed": False,
+        },
+        "public_charging_allowed": False,
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "frontend_gets_payment_secret": False,
+        "frontend_can_grant_quota": False,
         "secret_exposed": False,
     }
 

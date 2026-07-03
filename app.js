@@ -4089,7 +4089,7 @@ const ebayPolicyOrchestration = [
     title: "类目字段与发布执行",
     status: "最后校验",
     body: "根据站点和 eBay 类目校验商品状态、商品参数、发货位置、出售信息、图片、价格、库存和三类店铺业务规则。",
-    handoff: "字段齐全后生成发布确认单；确认后由后端执行服务调用 eBay，前端不直接发布。",
+    handoff: "字段齐全后生成发布确认单；确认后由系统执行服务调用 eBay，前端不直接发布。",
   },
 ];
 
@@ -5071,10 +5071,10 @@ const jiejingProductCopyReplacements = [
   [/blocked_contract_only/g, "合同已就绪，等待生产配置"],
   [/dry_run_contract_only/g, "合同预检"],
   [/live_ready/g, "只读通道已就绪"],
-  [legacyExecutionBridgeEnvPattern, "完成 eBay OAuth 授权或启用后端只读凭证桥"],
+  [legacyExecutionBridgeEnvPattern, "完成 eBay 官方授权或启用系统只读凭证桥"],
   [/ebay_read_only_connection/g, "eBay 只读连接"],
   [/ebay_refresh_token_secret_ref/g, "eBay 授权凭证已托管"],
-  [/oauth_connection/g, "OAuth 只读连接"],
+  [/oauth_connection/g, "官方只读连接"],
   [legacyExecutionPairPattern, "捷境内部执行底座"],
   [legacyExecutionBrandPattern, "内部执行底座"],
   [/Demo bootstrap/gi, "operator bootstrap"],
@@ -11134,7 +11134,7 @@ function globalFlowSnapshot() {
       pill: "闭环已跑通",
       tone: "green",
       title: `${draft.titleCn} 已完成演示发布闭环`,
-      copy: `已生成 ${state.publishFlow.simulatedItemId}，发布记录已写入 AI 汇报，商品档案已同步给自动客服。正式版仍要经过 eBay OAuth、后端执行服务和操作日志。`,
+      copy: `已生成 ${state.publishFlow.simulatedItemId}，发布记录已写入 AI 汇报，商品档案已同步给自动客服。正式版仍要经过 eBay 官方授权、系统执行服务和操作日志。`,
     };
   }
   if (pending) {
@@ -14633,10 +14633,10 @@ function saasProductStatusText(value = "", fallback = "") {
       ready_to_queue_when_live: "等待真实同步",
       blocked_before_queue: "同步前已停住",
       completed_with_blocks: "完成但有缺口",
-      oauth_connection: "OAuth 只读连接",
+      oauth_connection: "官方只读连接",
       ebay_read_only_connection: "eBay 只读连接",
       ebay_refresh_token_secret_ref: "eBay 授权凭证已托管",
-      [legacyExecutionBridgeEnvKey]: "完成 eBay OAuth 授权或启用后端只读凭证桥",
+      [legacyExecutionBridgeEnvKey]: "完成 eBay 官方授权或启用系统只读凭证桥",
       blocked: "已停住",
       not_connected: "未连接",
       not_started: "未开始",
@@ -16018,7 +16018,7 @@ function renderSaasPostPublishCockpitEvidence(cockpit = null) {
       tone: safety.triggers_real_platform_write ? "red" : "green",
     },
     {
-      label: "eBay OAuth",
+      label: "eBay 官方授权",
       value: safety.triggers_ebay_oauth ? "会触发" : "不会触发",
       tone: safety.triggers_ebay_oauth ? "red" : "green",
     },
@@ -21469,7 +21469,7 @@ function renderSaasBackendPanel() {
     }
     ${renderSaasAiCeoOutputPanel()}
     <div class="runtime-bridge-actions">
-      ${state.saasLatestOAuthUrl ? `<a class="secondary-action" href="${escapeHtml(state.saasLatestOAuthUrl)}">Open eBay OAuth</a>` : ""}
+      ${state.saasLatestOAuthUrl ? `<a class="secondary-action" href="${escapeHtml(state.saasLatestOAuthUrl)}" target="_blank" rel="noopener noreferrer">打开 eBay 官方授权页</a>` : ""}
       <button class="primary-action" type="button" data-saas-action="run-workflow" ${state.saasLoading ? "disabled" : ""}>通过 SaaS 后端跑一单</button>
       <button class="secondary-action" type="button" data-saas-action="run-next-job" ${state.saasLoading || !queueWaiting ? "disabled" : ""}>处理下一个队列</button>
       <button class="secondary-action" type="button" data-saas-action="retry-latest-job" ${state.saasLoading || !failedOrCancelledJob ? "disabled" : ""}>重试最近失败</button>
@@ -22571,7 +22571,7 @@ async function planSaasEbayReadOnlyOAuth() {
       if (oauthPopup && !oauthPopup.closed) oauthPopup.close();
       const missing = Array.isArray(payload.oauth_plan?.missing_config)
         ? payload.oauth_plan.missing_config.join(" / ")
-        : "eBay OAuth config";
+        : "eBay 授权配置";
       state.saasError = `eBay 授权链接未生成：缺少 ${missing}`;
       await refreshSaasState({ silent: true });
     }
@@ -22623,7 +22623,7 @@ async function planSaasEbayPublishOAuth() {
     }
     const missing = Array.isArray(payload.oauth_plan?.missing_config)
       ? payload.oauth_plan.missing_config.join(" / ")
-      : "eBay OAuth config";
+      : "eBay 授权配置";
     state.saasError = `eBay 发布授权链接未生成：缺少 ${missing}`;
     showActionToast("eBay 发布授权还不能打开，先补后端 OAuth 配置。");
   } catch (error) {
@@ -24040,7 +24040,7 @@ function readinessAuditItems() {
     {
       status: "需后端",
       label: "真实 eBay 发布",
-      body: "页面已拦住真实发布；正式版必须由后端执行服务调用 eBay，并写入审计日志，不能由前端或 AI 直接发布。",
+      body: "页面已拦住真实发布；正式版必须由系统执行服务调用 eBay，并写入审计日志，不能由前端或 AI 直接发布。",
     },
     {
       status: "需 API",
@@ -25705,6 +25705,7 @@ function saasMerchantBillingGuardrailState() {
       : {};
   const provider = plan.provider && typeof plan.provider === "object" ? plan.provider : {};
   const quota = plan.quota_contract && typeof plan.quota_contract === "object" ? plan.quota_contract : {};
+  const merchantLaunchPath = plan.merchant_launch_path && typeof plan.merchant_launch_path === "object" ? plan.merchant_launch_path : {};
   const incidentRunbook = plan.billing_incident_runbook && typeof plan.billing_incident_runbook === "object" ? plan.billing_incident_runbook : {};
   const customerTrustPacket = plan.customer_billing_trust_packet && typeof plan.customer_billing_trust_packet === "object" ? plan.customer_billing_trust_packet : {};
   const checkoutSessions = checkout.checkout_sessions && typeof checkout.checkout_sessions === "object" ? checkout.checkout_sessions : {};
@@ -25752,6 +25753,7 @@ function saasMerchantBillingGuardrailState() {
     shutdown,
     provider,
     quota,
+    merchantLaunchPath,
     incidentRunbook,
     customerTrustPacket,
     checkoutSessions,
@@ -26095,6 +26097,111 @@ function renderSaasMerchantSubscriptionActivationPanel(ctx = saasMerchantWorkben
   `;
 }
 
+function renderSaasMerchantBillingEntitlementPathPanel(ctx = saasMerchantWorkbenchContext()) {
+  const billing = saasMerchantBillingGuardrailState();
+  const path = billing.merchantLaunchPath || {};
+  const steps = Array.isArray(path.steps) && path.steps.length
+    ? path.steps.slice(0, 4)
+    : [
+        {
+          key: "current_charge_status",
+          label: "当前是否扣费",
+          title: "当前不会自动扣费",
+          detail: "在线付款开放前只显示套餐、申请状态和可用额度。",
+          ready: true,
+        },
+        {
+          key: "hosted_payment_page",
+          label: "正式付款",
+          title: "正式付款走安全支付页",
+          detail: "付款资料由支付方安全页面处理，捷境页面不保存支付资料。",
+          ready: Boolean(billing.provider.external_paid_provider_configured),
+        },
+        {
+          key: "backend_confirmation_before_entitlement",
+          label: "订阅生效",
+          title: "系统确认后开通权益",
+          detail: "只有系统确认付款、试用资格或订阅状态后，套餐权益才会生效。",
+          ready: Boolean(billing.entitlementActive),
+        },
+        {
+          key: "quota_from_subscription_state",
+          label: "额度发放",
+          title: "额度按订阅状态发放",
+          detail: "AI、联网报告和素材生成额度由系统发放或停用，浏览器不能自行恢复。",
+          ready: Boolean(billing.quotaEnforcementEnabled),
+        },
+      ];
+  const stageLabel =
+    path.current_stage === "online_subscription_ready"
+      ? "在线订阅可用"
+      : path.current_stage === "service_confirmed_trial"
+        ? "试用确认开通"
+        : path.current_stage === "invited_beta_no_real_charge"
+          ? "受邀试用"
+          : "暂未自动扣费";
+  const headline = path.headline || (billing.entitlementActive ? "订阅已生效，额度受系统保护" : "当前不会自动扣费，订阅确认后才发放额度");
+  const ruleRows = [
+    ["资料安全", "支付资料不进入浏览器", "页面只显示状态，不保存卡号、支付凭证或密钥。"],
+    ["恢复方式", "账单恢复不重连店铺或 AI", "处理订阅状态即可恢复符合条件的权益，不要求重新连接店铺或重新配置 AI。"],
+    ["停用范围", "只停高成本任务", "账单异常或额度用尽时，历史报告、确认记录、操作记录和账号设置继续保留。"],
+  ];
+  return `
+    <section class="saas-settings-card saas-billing-entitlement-path" data-billing-entitlement-path="merchant_billing_launch_path_v1" aria-label="订阅和额度生效方式">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>订阅和额度生效方式</span>
+          <strong>先确认订阅，再开通权益和额度</strong>
+          <p>${escapeHtml(headline)}。这里说明商家会看到的生效顺序：当前是否扣费、正式付款去哪里完成、订阅什么时候生效、额度由谁发放。</p>
+        </div>
+        <em>${escapeHtml(stageLabel)}</em>
+      </div>
+      <div class="saas-billing-transition-flow">
+        ${steps
+          .map(
+            (step, index) => `
+              <article class="${step.ready ? "is-green" : "is-amber"}">
+                <span>${String(index + 1).padStart(2, "0")} · ${escapeHtml(step.label || step.key || "步骤")}</span>
+                <strong>${escapeHtml(step.title || "等待系统确认")}</strong>
+                <small>${escapeHtml(step.detail || "补齐状态后再继续。")}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-billing-transition-status" aria-label="订阅安全规则">
+        ${ruleRows
+          .map(
+            ([label, title, detail]) => `
+              <article>
+                <span>${escapeHtml(label)}</span>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml(detail)}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-billing-transition-safety" hidden aria-hidden="true">
+        <span>merchant_billing_launch_path_v1</span>
+        <span>merchant_launch_path_contract=${escapeHtml(path.contract_version || "fallback")}</span>
+        <span>hosted_payment_page_required_for_formal_payment=true</span>
+        <span>backend_confirmation_required_before_entitlement=true</span>
+        <span>frontend_cannot_grant_entitlement_or_quota</span>
+        <span>quota_grant_source=backend_subscription_state</span>
+        <span>billing_recovery_does_not_require_reconnecting_store_or_ai=true</span>
+        <span>history_visible_after_billing_problem=true</span>
+        <span>metered_work_only_blocks_on_billing_problem=true</span>
+        <span>triggers_real_charge=false</span>
+        <span>charge_now_allowed=false</span>
+        <span>frontend_gets_payment_secret=false</span>
+        <span>secret_exposed=false</span>
+        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
+      </div>
+    </section>
+  `;
+}
+
 function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
   const hasExternalProvider = Boolean(billing.provider.external_paid_provider_configured);
@@ -26138,7 +26245,7 @@ function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext
   const statusRows = [
     ["当前状态", hasExternalProvider ? "在线付款已接入" : manualBetaMode ? "试用订阅可用" : "暂不自动扣费", hasExternalProvider ? "付款成功后按账单状态开通权益。" : "当前不会自动扣款，订阅开通需按页面或客服提示完成。"],
     ["付费开放", hasExternalProvider ? "可按套餐付款" : "逐步开放", hasExternalProvider ? "商家可从订阅页进入付款流程。" : "在线付款入口开放前，页面只显示订阅说明和可用额度。"],
-    ["恢复边界", "不重复连接 eBay / 不重填 AI 连接", "账单恢复只处理订阅状态，不要求商家重新连接 eBay 或重新输入 AI 连接。"],
+    ["恢复边界", "不重复连接店铺 / 不重填 AI 连接", "账单恢复只处理订阅状态，不要求商家重新连接店铺或重新输入 AI 连接。"],
   ];
   return `
     <section class="saas-settings-card saas-billing-transition-path" data-billing-transition="merchant_subscription_activation_path_v2" aria-label="订阅开通说明">
@@ -27136,7 +27243,7 @@ function renderSaasMerchantBillingContinuityPanel(ctx = saasMerchantWorkbenchCon
     {
       step: "04",
       title: "恢复使用",
-      detail: "完成续费或客服确认后刷新用量即可继续，不需要重复连接 eBay，也不需要重填 AI 连接。",
+      detail: "完成续费或客服确认后刷新用量即可继续，不需要重复连接店铺，也不需要重填 AI 连接。",
       tone: "green",
     },
   ];
@@ -27308,7 +27415,7 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
     {
       key: "entitlement_recovery_boundary",
       status: "blocked",
-      merchant_promise: "欠费、取消、退款或争议只暂停新高成本任务，历史资料保留，恢复不重复 eBay OAuth。",
+      merchant_promise: "欠费、取消、退款或争议只暂停新高成本任务，历史资料保留，恢复不需要重复连接店铺。",
       next_action: "保持欠费、取消、退款和争议的无扣费生命周期验证。",
     },
   ];
@@ -27321,7 +27428,7 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
     self_service_cancel_portal: ["自助订阅管理", "商家在订阅管理页处理付款方式、套餐和取消；权益变化等系统确认。"],
     invoice_receipt_tax_path: ["收据 / 发票 / 税务", "发票和税务口径依赖正式订单、收据和系统记录。"],
     refund_support_public_entry: ["退款与客服入口", "付款前可见条款、隐私、退款政策、客服入口和风险披露。"],
-    entitlement_recovery_boundary: ["权益恢复边界", "欠费、取消、退款或争议只停新高成本任务，历史资料保留，不需要重复连接 eBay。"],
+    entitlement_recovery_boundary: ["权益恢复边界", "欠费、取消、退款或争议只停新高成本任务，历史资料保留，不需要重复连接店铺。"],
   };
   const nextCopy = {
     price_and_renewal_terms: "付款前会展示完整价格、续费和取消说明。",
@@ -28642,7 +28749,7 @@ function renderCurrentDecisionGuide(cards = [], hiddenCoreCount = 0, hiddenAutoC
     title = "演示发布闭环已经跑通";
     status = "已完成";
     tone = "green";
-    body = "这说明前端流程从产品刊登、确认中心到 AI 汇报能串起来；正式版仍需要后端执行服务和真实 eBay 返回结果。";
+    body = "这说明前端流程从产品刊登、确认中心到 AI 汇报能串起来；正式版仍需要系统执行服务和真实 eBay 返回结果。";
     next = "下一步适合回到 AI 汇报查看完整记录，或进入连接账号核对正式上线缺口。";
     actions = [
       ["open-activity", "看发布汇报", "primary"],
@@ -30243,7 +30350,7 @@ function renderPlatformConnectors() {
         const status = isEbay && state.publishFlow.status === "published" ? "发布闭环演示已跑通" : item.status;
         const tone = isEbay && state.publishFlow.status === "published" ? "green" : item.tone;
         const detail = isEbay && state.publishFlow.status === "published"
-          ? "演示版已经从产品刊登、确认中心走到模拟发布结果；正式版还要接官方授权、店铺业务政策、类目校验和后端执行服务。"
+          ? "演示版已经从产品刊登、确认中心走到模拟发布结果；正式版还要接官方授权、店铺业务政策、类目校验和系统执行服务。"
           : item.detail;
         return `
         <article class="platform-connector-card">
@@ -30569,10 +30676,10 @@ function renderPublishCapabilityRows() {
       : "从产品刊登点“提交发布确认”后，确认中心会承接发布动作。";
   return [
     ["发布闭环演示", simulatedStatus, simulatedDetail, published ? "green" : pending ? "amber" : blocked ? "red" : "neutral"],
-    ["eBay OAuth", "正式版必需", "必须通过 eBay 官方授权，不要求商家提供 eBay 账号密码。先只读，再按需开启发布权限。", "amber"],
+    ["eBay 官方授权", "正式版必需", "必须通过 eBay 官方授权，不要求商家提供 eBay 账号密码。先只读，再按需开启发布权限。", "amber"],
     ["店铺业务规则", "正式版必需", "发布前需要读取或确认物流政策、支付政策、退货政策；系统保存内部编号，前台只展示规则含义。", "amber"],
     ["类目动态参数", "正式版必需", "不同类目字段不同，正式版必须按站点和类目动态校验，不靠页面写死。", "amber"],
-    ["Execution Service", "待开发", "确认中心点头后，由后端执行服务调用 eBay；前端不能直接发布、扣费或保存密钥。", "neutral"],
+    ["系统执行服务", "待开发", "确认中心点头后，由系统执行服务调用 eBay；前端不能直接发布、扣费或保存密钥。", "neutral"],
   ];
 }
 
@@ -30631,7 +30738,7 @@ function connectionStateItems() {
       name: "真实发布能力",
       status: publishStatus === "published" ? "预检通过" : publishStatus === "pending" ? "等待确认" : "安全锁定",
       tone: publishStatus === "published" ? "green" : publishStatus === "pending" ? "amber" : "red",
-      detail: `${saasRealPlatformWriteDetail()} 正式版要由后端执行服务在确认中心点头后调用 eBay，并写入审计日志。`,
+      detail: `${saasRealPlatformWriteDetail()} 正式版要由系统执行服务在确认中心点头后调用 eBay，并写入审计日志。`,
       action: "launch_gap",
       actionLabel: "看上线缺口",
     },
@@ -31926,7 +32033,7 @@ function renderSaasNewEbayAccountOnboardingPanel() {
       <div class="saas-backend-preflight-actions">
         <button class="secondary-action" type="button" data-saas-action="refresh" ${state.saasLoading ? "disabled" : ""}>刷新状态</button>
         <button class="primary-action" type="button" data-saas-action="open-confirm">打开确认中心</button>
-        <small>注意：本面板没有 eBay OAuth 按钮，避免对旧冻结账号重复授权。</small>
+        <small>注意：本面板没有 eBay 授权按钮，避免对旧冻结账号重复授权。</small>
       </div>
     </section>
   `;
@@ -34133,6 +34240,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       panels: [
         renderSaasMerchantBillingPlainSummaryPanel(ctx),
         renderSaasMerchantSubscriptionActivationPanel(ctx),
+        renderSaasMerchantBillingEntitlementPathPanel(ctx),
         renderSaasMerchantBillingCustomerTrustPanel(ctx),
         renderSaasMerchantPricingModelPanel(ctx),
         renderSaasMerchantBillingContinuityPanel(ctx),

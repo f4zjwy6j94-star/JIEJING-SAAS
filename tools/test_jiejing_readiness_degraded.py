@@ -62,6 +62,7 @@ def main() -> int:
         ebay_write_live_enabled=False,
         allow_hermes_adapters=False,
         cors_origin="https://staging.example.test",
+        internal_admin_emails=(),
         host="127.0.0.1",
         port=8788,
         db_path=ROOT / "output/test-readiness-degraded/saas.sqlite",
