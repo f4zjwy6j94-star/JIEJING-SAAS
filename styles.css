@@ -35770,7 +35770,7 @@ body.saas-public-mvp .saas-model-connection-progress {
   border-radius: 8px;
   display: grid;
   gap: 14px;
-  grid-template-columns: minmax(220px, 1.1fr) minmax(320px, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   margin-top: 12px;
   padding: 14px;
 }
@@ -35851,7 +35851,7 @@ body.saas-public-mvp .saas-model-config-details {
 
 body.saas-public-mvp .saas-model-config-details summary {
   display: grid;
-  grid-template-columns: minmax(0, 0.55fr) minmax(0, 1fr) minmax(220px, 1.2fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   color: var(--ink);
@@ -35870,7 +35870,8 @@ body.saas-public-mvp .saas-model-config-details summary::after {
   color: var(--teal);
   font-size: 22px;
   font-weight: 800;
-  grid-column: 4;
+  grid-column: 2;
+  grid-row: 1 / span 2;
 }
 
 body.saas-public-mvp .saas-model-config-details[open] summary::after {
@@ -35885,13 +35886,19 @@ body.saas-public-mvp .saas-model-config-details summary small {
 }
 
 body.saas-public-mvp .saas-model-config-details summary strong {
+  grid-column: 1;
   font-size: 17px;
   line-height: 1.25;
+}
+
+body.saas-public-mvp .saas-model-config-details summary small {
+  grid-column: 1;
 }
 
 body.saas-public-mvp .saas-model-config-details .saas-merchant-resource-strip,
 body.saas-public-mvp .saas-model-config-details .saas-sync-failure-box {
   margin: 12px;
+  min-width: 0;
 }
 
 body.saas-public-mvp .saas-model-config-grid {
@@ -35939,6 +35946,14 @@ body.saas-public-mvp .saas-model-config-grid input[readonly] {
 body.saas-public-mvp .saas-model-config-details:not([open]) .saas-merchant-resource-strip,
 body.saas-public-mvp .saas-model-config-details:not([open]) .saas-sync-failure-box {
   display: none;
+}
+
+@media (max-width: 720px) {
+  body.saas-public-mvp .saas-model-provider-panel .saas-merchant-evidence-grid,
+  body.saas-public-mvp .saas-model-config-grid,
+  body.saas-public-mvp .saas-model-connection-progress ol {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 body.saas-public-mvp .saas-oauth-next-step {
@@ -39773,7 +39788,8 @@ body.saas-public-mvp .saas-settings-clean-content {
   display: grid;
   align-content: start;
   gap: 18px;
-  padding: 56px min(7vw, 72px);
+  min-width: 0;
+  padding: 48px clamp(24px, 4vw, 48px);
   overflow: auto;
 }
 
@@ -39800,7 +39816,29 @@ body.saas-public-mvp .saas-settings-clean-content header p {
 body.saas-public-mvp .saas-settings-clean-panels {
   display: grid;
   gap: 14px;
+  min-width: 0;
   max-width: 1120px;
+}
+
+body.saas-public-mvp .saas-settings-clean-panels > *,
+body.saas-public-mvp .saas-model-provider-panel,
+body.saas-public-mvp .saas-model-provider-panel > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+body.saas-public-mvp .saas-model-provider-panel {
+  overflow: hidden;
+}
+
+body.saas-public-mvp .saas-model-provider-panel .saas-merchant-evidence-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body.saas-public-mvp .saas-model-provider-panel .saas-merchant-evidence-grid article,
+body.saas-public-mvp .saas-model-provider-panel .saas-model-connection-progress,
+body.saas-public-mvp .saas-model-provider-panel .saas-sync-failure-box {
+  overflow-wrap: anywhere;
 }
 
 body.saas-public-mvp .saas-settings-one-glance {

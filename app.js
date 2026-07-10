@@ -23242,7 +23242,7 @@ function saasActiveModelSecretRef() {
   if (settings.active_secret_ref) {
     return refs.find((item) => item.secret_ref === settings.active_secret_ref) || null;
   }
-  return refs[0] || null;
+  return refs.find((item) => saasModelSecretRefReady(item)) || null;
 }
 
 function saasModelSecretRefReady(item) {
@@ -23293,6 +23293,8 @@ function saasPlatformTrialModelState() {
   const modelLabel = status.model ? String(status.model) : "";
   const quotaLabel = merchantModelConfigured
     ? "不消耗捷境试用额度"
+    : !configured
+      ? "暂未开放"
     : monthlyLimit
       ? hasUsage
         ? `${remaining}/${monthlyLimit} 次可用`
@@ -23529,17 +23531,17 @@ function saasMediaProviderBoundary() {
 function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext()) {
   const providers = saasModelProviderRows();
   const active = saasActiveModelSecretRef();
-  const activeProvider = active?.provider_key || state.saasModelSettings?.active_provider || providers[0]?.provider_key || "openai";
+  const latestAttempt = state.saasModelSettings?.latest_attempt || null;
+  const formSource = active || latestAttempt;
+  const activeProvider = formSource?.provider_key || state.saasModelSettings?.active_provider || providers[0]?.provider_key || "openai";
   const selectedProvider = providers.find((provider) => provider.provider_key === activeProvider) || providers[0] || {};
-  const liveTypes = new Set((state.saasModelValueGate?.evidence || {}).live_model_report_types || []);
-  const keyLinks = providers.slice(0, 6);
-  const modelConfigured = isSaasModelConfigured();
-  const textAiState = saasPrimaryTextAiState();
+  const merchantModelConfigured = isSaasMerchantModelConfigured();
+  const modelAvailable = isSaasModelConfigured();
   const platformTrial = saasPlatformTrialModelState();
   const searchState = saasPublicSearchState();
   const connectionAttempt = saasModelConnectionAttemptState();
   const activeProviderLabel = active?.provider_label || selectedProvider.label || activeProvider;
-  const activeModelLabel = active?.model || state.saasModelSettings?.model || selectedProvider.default_model || "等待选择模型";
+  const activeModelLabel = active?.model || state.saasModelSettings?.active_model || selectedProvider.default_model || "等待选择模型";
   const activeScope = active?.scope || state.saasModelSettings?.active_scope || "";
   const activeScopeLabel =
     activeScope === "account"
@@ -23555,21 +23557,16 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
     <section class="saas-merchant-evidence-panel saas-model-provider-panel" aria-label="AI 连接">
       <div class="saas-merchant-path-head">
         <div>
-          <span>AI 连接与素材生成</span>
-          <strong>${textAiState.configured ? "AI CEO 可以回复，素材任务进入素材工坊" : "先保存当前账号的 AI 连接"}</strong>
-          <p>AI CEO 对话、市场报告和上架资料包使用文本 AI；商家自己的 AI 连接保存后跟随当前捷境账号，可用于这个账号管理的店铺。新账号试用 AI 只给有限额度，当前是否可用以这里的状态为准。图片、详情页图、视频封面和视频任务进入素材工坊，生成后先审核，再决定能不能用于 Listing。</p>
+          <span>账号 AI</span>
+          <strong>${merchantModelConfigured ? "账号 AI 已连接" : platformTrial.configured ? "可先试用，再连接账号自己的 AI" : "连接一次，当前账号下的店铺都能使用"}</strong>
+          <p>保存商家自己的 DeepSeek 或 OpenAI 连接后，AI CEO 对话、市场报告和 Listing 文案都优先使用它；不会消耗捷境试用额度。图片和视频仍由素材工坊生成并审核。</p>
         </div>
       </div>
       <div class="saas-merchant-evidence-grid">
-        <article class="is-${escapeHtml(textAiState.tone)}">
-          <span>AI CEO 文本 AI</span>
-          <strong>${escapeHtml(modelConfigured ? activeProviderLabel : textAiState.value)}</strong>
-          <small>${escapeHtml(modelConfigured ? `${activeModelLabel} / ${activeScopeLabel} / 页面不显示原始连接信息` : textAiState.detail)}</small>
-        </article>
-        <article class="is-${escapeHtml(platformTrial.tone)}">
-          <span>${escapeHtml(platformTrial.serviceLabel)}</span>
-          <strong>${escapeHtml(platformTrial.title)}</strong>
-          <small>${escapeHtml(platformTrial.detail)}</small>
+        <article class="is-${merchantModelConfigured ? "green" : "amber"}">
+          <span>当前账号 AI</span>
+          <strong>${escapeHtml(merchantModelConfigured ? activeProviderLabel : "尚未连接")}</strong>
+          <small>${escapeHtml(merchantModelConfigured ? `${activeModelLabel} / ${activeScopeLabel} / 页面不显示原始连接信息` : platformTrial.configured ? "AI CEO 当前可使用捷境试用额度；保存账号 AI 后会自动优先使用商家的连接。" : "保存 DeepSeek 或 OpenAI 后，AI CEO 会跟随当前账号。")}</small>
         </article>
         <article class="is-${escapeHtml(platformTrial.tone)}">
           <span>${escapeHtml(platformTrial.quotaCardLabel)}</span>
@@ -23585,16 +23582,6 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
           <span>图片/视频素材</span>
           <strong>素材工坊资产</strong>
           <small>主图、详情页图、视频封面和视频脚本生成后进入素材审核。</small>
-        </article>
-        <article class="${liveTypes.has("market.report") ? "is-green" : "is-amber"}">
-          <span>市场报告</span>
-          <strong>${liveTypes.has("market.report") ? "已验证" : "待验证"}</strong>
-          <small>只读取已同步的 eBay 店铺资料，不显示原始授权信息。</small>
-        </article>
-        <article class="${liveTypes.has("listing.package") ? "is-green" : "is-amber"}">
-          <span>上架资料包</span>
-          <strong>${liveTypes.has("listing.package") ? "已验证" : "待验证"}</strong>
-          <small>生成草稿和确认清单，不自动发布。</small>
         </article>
       </div>
       <div class="saas-model-connection-progress is-${escapeHtml(connectionAttempt.tone)}" data-model-connection-state="${escapeHtml(connectionAttempt.state)}">
@@ -23615,32 +23602,17 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
         }
       </div>
       <div class="runtime-bridge-actions saas-model-live-actions">
-        <button class="primary-action" type="button" data-saas-action="run-model-value-rehearsal" ${state.saasLoading || !ctx.hasPacket || !modelConfigured ? "disabled" : ""}>生成报告和上架资料</button>
+        <button class="primary-action" type="button" data-saas-action="run-model-value-rehearsal" ${state.saasLoading || !ctx.hasPacket || !modelAvailable ? "disabled" : ""}>生成报告和上架资料</button>
         <button class="secondary-action" type="button" data-saas-action="refresh-merchant-memory" ${state.saasLoading || !ctx.store ? "disabled" : ""}>回填商家记忆</button>
       </div>
-      <details class="saas-model-config-details" ${modelConfigured && connectionAttempt.state === "ready" ? "" : "open"}>
+      <details class="saas-model-config-details" ${merchantModelConfigured && connectionAttempt.state === "ready" ? "" : "open"}>
         <summary>
-          <span>${modelConfigured ? "需要调整 AI 连接时打开" : "保存后会自动收起"}</span>
-          <strong>${modelConfigured ? "调整 AI 连接" : "保存 AI 连接"}</strong>
-          <small>${modelConfigured ? "更换模型服务、模型名称、连接地址或重新保存连接信息。" : "保存后跟随当前账号，输入框会清空，页面只显示可用状态。"}</small>
+          <strong>${merchantModelConfigured ? "调整账号 AI" : "配置账号 AI"}</strong>
+          <small>${merchantModelConfigured ? "更换服务商或模型时再打开。" : "选择服务商，粘贴连接信息，然后保存并检测。"}</small>
         </summary>
-        <div class="saas-merchant-resource-strip" aria-label="AI 服务官网入口">
-          ${keyLinks
-            .map(
-              (provider) => `
-                <article class="${provider.supported_live_adapter ? "is-green" : "is-amber"}">
-                  <span>${escapeHtml(provider.label)}</span>
-                  <strong>${provider.supported_live_adapter ? "支持连接" : "即将开放"}</strong>
-                  <small>${escapeHtml(provider.default_model || "")}</small>
-                  <button class="secondary-action" type="button" data-saas-action="open-model-provider-key" data-provider-url="${escapeHtml(provider.key_url || "")}">打开服务商页面</button>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
         <div class="saas-sync-failure-box">
-          <strong>AI 连接设置</strong>
-          <p>保存到当前捷境账号。这个账号管理多个店铺时，不需要给每个店铺重复保存一次。</p>
+          <strong>连接当前账号的 AI</strong>
+          <p>只需配置一次。切换当前账号管理的其他店铺时，不用重复配置。</p>
           <div class="saas-model-config-grid">
             <label>
               <span>AI 服务商</span>
@@ -23658,12 +23630,12 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
             </label>
             <label>
               <span>模型名称</span>
-              <input id="saas-model-model" type="text" value="${escapeHtml(active?.model || selectedProvider.default_model || "")}" placeholder="例如 deepseek-v4-pro" autocomplete="off">
+              <input id="saas-model-model" type="text" value="${escapeHtml(formSource?.model || selectedProvider.default_model || "")}" placeholder="例如 deepseek-v4-pro" autocomplete="off">
               <small>默认值已经填好；只有服务商控制台显示其他模型时才修改。</small>
             </label>
             <label>
               <span>官方连接地址</span>
-              <input id="saas-model-base-url" type="text" value="${escapeHtml(active?.base_url || selectedProvider.default_base_url || "")}" placeholder="自动使用官方地址" autocomplete="off" readonly>
+              <input id="saas-model-base-url" type="text" value="${escapeHtml(formSource?.base_url || selectedProvider.default_base_url || "")}" placeholder="自动使用官方地址" autocomplete="off" readonly>
               <small>选择服务商后自动填写，通常不需要改。</small>
             </label>
             <label>
@@ -38426,7 +38398,6 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       title: "AI 与素材",
       intro: "管理 AI 可用状态、素材生成入口和费用口径。",
       panels: [
-        renderSaasSettingsModelStatusPanel(ctx),
         renderSaasMerchantModelProviderPanel(ctx),
       ],
     },
