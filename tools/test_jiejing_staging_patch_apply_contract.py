@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "deploy" / "apply-staging-patch.sh"
 BUNDLE = ROOT / "tools" / "jiejing_prepare_public_staging_bundle.py"
 VAULT_INIT = ROOT / "deploy" / "staging-vault-init-unseal.sh"
+HTTPS_COMPOSE = ROOT / "deploy" / "docker-compose.public-https-staging.yml"
+HTTP_COMPOSE = ROOT / "deploy" / "docker-compose.public-staging.yml"
 
 
 def fail(message: str) -> int:
@@ -21,6 +23,10 @@ def main() -> int:
     text = SCRIPT.read_text(encoding="utf-8") if SCRIPT.exists() else ""
     bundle = BUNDLE.read_text(encoding="utf-8") if BUNDLE.exists() else ""
     vault_init = VAULT_INIT.read_text(encoding="utf-8") if VAULT_INIT.exists() else ""
+    compose_files = [
+        HTTPS_COMPOSE.read_text(encoding="utf-8") if HTTPS_COMPOSE.exists() else "",
+        HTTP_COMPOSE.read_text(encoding="utf-8") if HTTP_COMPOSE.exists() else "",
+    ]
     required = [
         "FILES=(",
         "AGENTS.md",
@@ -218,6 +224,8 @@ def main() -> int:
         'while [ "$attempt" -lt "$wait_seconds" ]',
         'if [ "$ready_count" -ge 2 ]',
         "STAGING_VAULT_STATUS=blocked_not_ready",
+        'while [ "$unseal_attempt" -lt 10 ]',
+        "STAGING_VAULT_STATUS=blocked_unseal_failed",
         'init_tmp="${INIT_FILE}.tmp.$$"',
         'result_tmp="${TOKEN_FILE}.tmp.$$"',
         'mv -f "$init_tmp" "$INIT_FILE"',
@@ -225,6 +233,11 @@ def main() -> int:
     ]:
         if marker not in vault_init:
             return fail(f"vault init must wait for the container readiness signal: {marker}")
+    for compose in compose_files:
+        vault_start = compose.index("  jiejing-vault:")
+        vault_end = compose.index("  jiejing-frontend:", vault_start)
+        if "env_file:" in compose[vault_start:vault_end]:
+            return fail("Vault service must not inherit the SaaS provider secret environment")
     bundle_required = [
         "public_staging_patch_whitelist_v1",
         'APPLY_SCRIPT = ROOT / "deploy" / "apply-staging-patch.sh"',

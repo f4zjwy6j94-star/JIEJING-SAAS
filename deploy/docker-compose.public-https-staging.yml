@@ -143,8 +143,6 @@ services:
     command: ["vault", "server", "-config=/vault/config/vault.public-staging.hcl"]
     cap_add:
       - IPC_LOCK
-    env_file:
-      - ../../private/jiejing-saas.staging-oauth.env
     expose:
       - "8200"
     volumes:

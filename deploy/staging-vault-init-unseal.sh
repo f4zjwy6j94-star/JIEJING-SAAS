@@ -83,7 +83,19 @@ PY
 
 sealed="$(status_json | python3 -c "import json,sys; data=sys.stdin.read().strip(); print(str(json.loads(data).get('sealed', True)).lower() if data else 'true')")"
 if [ "$sealed" = "true" ]; then
-  vault_exec "vault operator unseal '$unseal_key' >/dev/null"
+  unseal_attempt=0
+  while [ "$unseal_attempt" -lt 10 ]; do
+    if vault_exec "vault operator unseal '$unseal_key' >/dev/null" 2>/dev/null; then
+      break
+    fi
+    unseal_attempt=$((unseal_attempt + 1))
+    sleep 1
+  done
+  sealed="$(status_json | python3 -c "import json,sys; data=sys.stdin.read().strip(); print(str(json.loads(data).get('sealed', True)).lower() if data else 'true')")"
+  if [ "$sealed" = "true" ]; then
+    echo "STAGING_VAULT_STATUS=blocked_unseal_failed" >&2
+    exit 2
+  fi
 fi
 
 vault_exec "VAULT_TOKEN='$root_token' vault secrets enable -path=secret kv-v2 >/dev/null 2>&1 || true"
