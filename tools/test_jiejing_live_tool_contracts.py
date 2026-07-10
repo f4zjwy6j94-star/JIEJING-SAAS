@@ -487,7 +487,7 @@ def validate_deepseek_hermes_credential_loader() -> int:
                                 "priority": 0,
                                 "access_token": "test-deepseek-key",
                                 "last_status": "ok",
-                                "base_url": "https://api.deepseek.com/v1",
+                                "base_url": "https://api.deepseek.com",
                                 "source": "unit-test",
                             }
                         ]
@@ -540,7 +540,7 @@ def validate_default_model_prefers_deepseek_when_available() -> int:
                                     "priority": 0,
                                     "access_token": "test-default-deepseek-key",
                                     "last_status": "ok",
-                                    "base_url": "https://api.deepseek.com/v1",
+                                    "base_url": "https://api.deepseek.com",
                                 }
                             ]
                         }

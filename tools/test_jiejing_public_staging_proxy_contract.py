@@ -17,6 +17,8 @@ def main() -> int:
 
     _assert_contains(nginx, "proxy_pass http://jiejing-saas:8788", "backend proxy target")
     _assert_contains(nginx, "try_files $uri $uri/ /index.html", "SPA fallback")
+    _assert_contains(nginx, 'if ($arg_start != "app")', "bare app.html redirect guard")
+    _assert_contains(nginx, "return 302 https://$host/index.html?source=direct_app_entry&start=site", "bare app.html HTTPS redirect target")
     _assert_contains(nginx, "43\\.129\\.205\\.244", "HK public IP host allowlist")
     for header in [
         "X-Frame-Options",

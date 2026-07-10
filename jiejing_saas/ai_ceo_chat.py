@@ -7,6 +7,7 @@ a merchant-facing answer without exposing AI credentials or eBay tokens.
 
 from __future__ import annotations
 
+import copy
 import csv
 import hashlib
 import html
@@ -14,6 +15,7 @@ import io
 import json
 import os
 import re
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any
@@ -24,6 +26,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from jiejing_runtime.models import now_iso
 from jiejing_runtime.public_search import PublicSearchProbeAdapter, PublicSearchProbeConfig
+from .model_provider_catalog import (
+    MODEL_SECRET_PURPOSE,
+    READY_MODEL_SECRET_STATUSES,
+    get_model_provider,
+    provider_key_from_secret_ref,
+)
 
 
 AI_CEO_ROUTE_GENERAL = "general_chat"
@@ -32,9 +40,14 @@ AI_CEO_ROUTE_EXTERNAL_REALTIME = "external_realtime"
 AI_CEO_ROUTE_CONFIRMATION = "confirmation_required"
 AI_CEO_ROUTE_MERCHANT_RULE = "merchant_rule_memory"
 
+AI_CEO_STATUS_SOURCE_BACKED_MARKET_REPORT_DRAFT = "source_backed_market_report_draft"
+AI_CEO_STATUS_MARKET_REPORT_RECOVERY_DRAFT = "market_report_recovery_draft"
+
 MEMORY_POLICY_TRANSIENT = "transient_no_long_term_memory"
 MEMORY_POLICY_OPERATING = "permanent_operating_memory"
 MEMORY_POLICY_MERCHANT_RULE = "merchant_rule"
+
+_DEFAULT_WEB_CONTEXT_CACHE: dict[str, tuple[datetime, dict[str, Any]]] = {}
 
 
 def run_ai_ceo_chat(
@@ -51,6 +64,7 @@ def run_ai_ceo_chat(
     model_resolution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Call the merchant model for an AI CEO chat turn."""
+    turn_started_at = time.monotonic()
     safe_message = _safe_text(message, limit=900)
     if not safe_message:
         return {
@@ -102,9 +116,11 @@ def run_ai_ceo_chat(
             "secret_exposed": False,
         }
     if realtime_kind:
+        search_started_at = time.monotonic()
         realtime_search = _run_realtime_search(kind=realtime_kind, message=safe_message)
+        search_latency_ms = _elapsed_ms(search_started_at)
         if realtime_search.get("status") == "ready":
-            use_model_synthesis = _env_enabled("JIEJING_AI_CEO_REALTIME_MODEL_SYNTHESIS_ENABLED", default=False)
+            use_model_synthesis = _env_enabled("JIEJING_AI_CEO_REALTIME_MODEL_SYNTHESIS_ENABLED", default=True)
             if realtime_search.get("provider") == "stooq_public_quote" or not use_model_synthesis:
                 return {
                     "status": "realtime_search_answered_without_model",
@@ -113,6 +129,14 @@ def run_ai_ceo_chat(
                     "model_client": model_context,
                     "realtime_search": realtime_search,
                     "source_records": realtime_search.get("source_records") or [],
+                    **_ai_ceo_latency_fields(
+                        turn_started_at,
+                        search_latency_ms=search_latency_ms,
+                        model_latency_ms=0,
+                        route=route,
+                        realtime_kind=realtime_kind,
+                        **_realtime_search_performance_kwargs(realtime_search, fallback_answer_used=True),
+                    ),
                     **_realtime_workflow_fields(
                         kind=realtime_kind,
                         message=safe_message,
@@ -132,17 +156,22 @@ def run_ai_ceo_chat(
                 route_meta=route_meta,
                 realtime_search=realtime_search,
             )
+            model_started_at = time.monotonic()
             try:
                 result = model_client.generate_text(
                     system_prompt=search_prompt[0],
                     user_prompt=search_prompt[1],
                     temperature=0.1,
+                    max_output_tokens=_ai_ceo_model_max_output_tokens(route=route, realtime_kind=realtime_kind),
+                    timeout_seconds=_ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind),
                 )
+                model_latency_ms = _elapsed_ms(model_started_at)
                 answer = _clean_answer(result.get("text") if isinstance(result, dict) else "")
                 if not answer:
                     raise RuntimeError("empty_realtime_search_answer")
                 status = "realtime_search_answered"
             except Exception:
+                model_latency_ms = _elapsed_ms(model_started_at)
                 result = {}
                 answer = _fallback_realtime_search_answer(realtime_kind, realtime_search)
                 status = "realtime_search_answered_without_model"
@@ -153,6 +182,14 @@ def run_ai_ceo_chat(
                 "model_client": _public_model_context(result, model_client, model_resolution) if result else model_context,
                 "realtime_search": realtime_search,
                 "source_records": realtime_search.get("source_records") or [],
+                **_ai_ceo_latency_fields(
+                    turn_started_at,
+                    search_latency_ms=search_latency_ms,
+                    model_latency_ms=model_latency_ms,
+                    route=route,
+                    realtime_kind=realtime_kind,
+                    **_realtime_search_performance_kwargs(realtime_search, fallback_answer_used=status == "realtime_search_answered_without_model"),
+                ),
                 **_realtime_workflow_fields(
                     kind=realtime_kind,
                     message=safe_message,
@@ -172,6 +209,14 @@ def run_ai_ceo_chat(
             "context": context,
             "model_client": model_context,
             "realtime_search": realtime_search,
+            **_ai_ceo_latency_fields(
+                turn_started_at,
+                search_latency_ms=search_latency_ms,
+                model_latency_ms=0,
+                route=route,
+                realtime_kind=realtime_kind,
+                **_realtime_search_performance_kwargs(realtime_search, fallback_answer_used=True),
+            ),
             **_realtime_workflow_fields(
                 kind=realtime_kind,
                 message=safe_message,
@@ -184,25 +229,113 @@ def run_ai_ceo_chat(
             "secret_exposed": False,
         }
 
+    default_web_search = _run_default_web_context_search(route=route, message=safe_message)
+    prompt_context = _context_with_default_web_search(context, default_web_search)
+    source_records = _source_records_from_default_web_context(default_web_search)
+
     system_prompt, user_prompt = build_ai_ceo_chat_prompts(
         message=safe_message,
-        context=context,
+        context=prompt_context,
         command=command,
         model_context=model_context,
         route=route,
         route_meta=route_meta,
     )
-    try:
-        result = model_client.generate_text(system_prompt=system_prompt, user_prompt=user_prompt, temperature=0.2)
-    except Exception as exc:  # pragma: no cover - provider dependent
+    result, model_latency_ms, model_initial_retry_count, model_error = _generate_model_text_with_initial_retry(
+        model_client=model_client,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        route=route,
+        realtime_kind=realtime_kind,
+    )
+    if model_error is not None:  # pragma: no cover - provider dependent
+        exc = model_error
         failure_code, failure_reason = _classify_model_failure(exc)
+        source_backed_answer = _source_backed_market_report_fallback_answer(
+            message=safe_message,
+            route=route,
+            default_web_search=default_web_search,
+            source_records=source_records,
+            failure_reason=failure_reason,
+        )
+        if source_backed_answer:
+            return {
+                "status": AI_CEO_STATUS_SOURCE_BACKED_MARKET_REPORT_DRAFT,
+                "blocked_by": [failure_code],
+                "answer": source_backed_answer,
+                "context": prompt_context,
+                "model_client": model_context,
+                "provider_error_type": failure_code,
+                "model_initial_retry_count": model_initial_retry_count,
+                "default_web_search": default_web_search,
+                "source_records": source_records,
+                **_ai_ceo_latency_fields(
+                    turn_started_at,
+                    search_latency_ms=_safe_int(default_web_search.get("search_latency_ms") if isinstance(default_web_search, dict) else 0),
+                    model_latency_ms=model_latency_ms,
+                    model_retry_count=model_initial_retry_count,
+                    route=route,
+                    realtime_kind=realtime_kind,
+                    **_default_web_context_performance_kwargs(default_web_search),
+                    fallback_answer_used=True,
+                ),
+                **route_meta,
+                "frontend_gets_model_api_key": False,
+                "runtime_gets_raw_ebay_token": False,
+                "secret_exposed": False,
+            }
+        recovery_answer = _market_report_recovery_draft_answer(
+            message=safe_message,
+            route=route,
+            default_web_search=default_web_search,
+            failure_reason=failure_reason,
+        )
+        if recovery_answer:
+            return {
+                "status": AI_CEO_STATUS_MARKET_REPORT_RECOVERY_DRAFT,
+                "blocked_by": [failure_code],
+                "answer": recovery_answer,
+                "context": prompt_context,
+                "model_client": model_context,
+                "provider_error_type": failure_code,
+                "model_initial_retry_count": model_initial_retry_count,
+                "default_web_search": default_web_search,
+                "source_records": source_records,
+                **_ai_ceo_latency_fields(
+                    turn_started_at,
+                    search_latency_ms=_safe_int(default_web_search.get("search_latency_ms") if isinstance(default_web_search, dict) else 0),
+                    model_latency_ms=model_latency_ms,
+                    model_retry_count=model_initial_retry_count,
+                    route=route,
+                    realtime_kind=realtime_kind,
+                    **_default_web_context_performance_kwargs(default_web_search),
+                    fallback_answer_used=True,
+                ),
+                **route_meta,
+                "frontend_gets_model_api_key": False,
+                "runtime_gets_raw_ebay_token": False,
+                "secret_exposed": False,
+            }
         return {
             "status": "model_call_failed",
             "blocked_by": [failure_code],
             "answer": _model_unavailable_fallback_answer(route_meta, failure_reason),
-            "context": context,
+            "context": prompt_context,
             "model_client": model_context,
             "provider_error_type": failure_code,
+            "model_initial_retry_count": model_initial_retry_count,
+            "default_web_search": default_web_search,
+            "source_records": source_records,
+            **_ai_ceo_latency_fields(
+                turn_started_at,
+                search_latency_ms=_safe_int(default_web_search.get("search_latency_ms") if isinstance(default_web_search, dict) else 0),
+                model_latency_ms=model_latency_ms,
+                model_retry_count=model_initial_retry_count,
+                route=route,
+                realtime_kind=realtime_kind,
+                **_default_web_context_performance_kwargs(default_web_search),
+                fallback_answer_used=True,
+            ),
             **route_meta,
             "frontend_gets_model_api_key": False,
             "runtime_gets_raw_ebay_token": False,
@@ -211,24 +344,179 @@ def run_ai_ceo_chat(
 
     answer = _clean_answer(result.get("text") if isinstance(result, dict) else "")
     if not answer:
+        source_backed_answer = _source_backed_market_report_fallback_answer(
+            message=safe_message,
+            route=route,
+            default_web_search=default_web_search,
+            source_records=source_records,
+            failure_reason="模型服务这次没有返回可展示内容。",
+        )
+        if source_backed_answer:
+            return {
+                "status": AI_CEO_STATUS_SOURCE_BACKED_MARKET_REPORT_DRAFT,
+                "blocked_by": ["empty_model_answer"],
+                "answer": source_backed_answer,
+                "context": prompt_context,
+                "model_client": _public_model_context(result, model_client, model_resolution),
+                "provider_error_type": "empty_model_answer",
+                "model_initial_retry_count": model_initial_retry_count,
+                "default_web_search": default_web_search,
+                "source_records": source_records,
+                **_ai_ceo_latency_fields(
+                    turn_started_at,
+                    search_latency_ms=_safe_int(default_web_search.get("search_latency_ms") if isinstance(default_web_search, dict) else 0),
+                    model_latency_ms=model_latency_ms,
+                    model_retry_count=model_initial_retry_count,
+                    route=route,
+                    realtime_kind=realtime_kind,
+                    **_default_web_context_performance_kwargs(default_web_search),
+                    fallback_answer_used=True,
+                ),
+                **route_meta,
+                "frontend_gets_model_api_key": False,
+                "runtime_gets_raw_ebay_token": False,
+                "secret_exposed": False,
+            }
+        recovery_answer = _market_report_recovery_draft_answer(
+            message=safe_message,
+            route=route,
+            default_web_search=default_web_search,
+            failure_reason="模型服务这次没有返回可展示内容。",
+        )
+        if recovery_answer:
+            return {
+                "status": AI_CEO_STATUS_MARKET_REPORT_RECOVERY_DRAFT,
+                "blocked_by": ["empty_model_answer"],
+                "answer": recovery_answer,
+                "context": prompt_context,
+                "model_client": _public_model_context(result, model_client, model_resolution),
+                "provider_error_type": "empty_model_answer",
+                "model_initial_retry_count": model_initial_retry_count,
+                "default_web_search": default_web_search,
+                "source_records": source_records,
+                **_ai_ceo_latency_fields(
+                    turn_started_at,
+                    search_latency_ms=_safe_int(default_web_search.get("search_latency_ms") if isinstance(default_web_search, dict) else 0),
+                    model_latency_ms=model_latency_ms,
+                    model_retry_count=model_initial_retry_count,
+                    route=route,
+                    realtime_kind=realtime_kind,
+                    **_default_web_context_performance_kwargs(default_web_search),
+                    fallback_answer_used=True,
+                ),
+                **route_meta,
+                "frontend_gets_model_api_key": False,
+                "runtime_gets_raw_ebay_token": False,
+                "secret_exposed": False,
+            }
         return {
             "status": "model_call_failed",
             "blocked_by": ["empty_model_answer"],
             "answer": _model_unavailable_fallback_answer(route_meta, "模型服务这次没有返回可展示内容。"),
-            "context": context,
+            "context": prompt_context,
             "model_client": _public_model_context(result, model_client, model_resolution),
+            "model_initial_retry_count": model_initial_retry_count,
+            "default_web_search": default_web_search,
+            "source_records": source_records,
+            **_ai_ceo_latency_fields(
+                turn_started_at,
+                search_latency_ms=_safe_int(default_web_search.get("search_latency_ms") if isinstance(default_web_search, dict) else 0),
+                model_latency_ms=model_latency_ms,
+                model_retry_count=model_initial_retry_count,
+                route=route,
+                realtime_kind=realtime_kind,
+                **_default_web_context_performance_kwargs(default_web_search),
+                fallback_answer_used=True,
+            ),
             **route_meta,
             "frontend_gets_model_api_key": False,
             "runtime_gets_raw_ebay_token": False,
             "secret_exposed": False,
         }
+    answer_quality = validate_ai_ceo_answer_quality(message=safe_message, route=route, answer=answer)
+    repair_retry_count = 0
+    if not answer_quality.get("accepted") and _env_enabled("JIEJING_AI_CEO_MODEL_REPAIR_RETRY_ENABLED", default=True):
+        repair_started_at = time.monotonic()
+        try:
+            repair_result = model_client.generate_text(
+                system_prompt=(
+                    system_prompt
+                    + " 上一版回复没有通过本轮问题一致性检查。只回答当前 merchant_message；"
+                    "选品问题必须按要求给出足量的具体候选商品卡，不得回答其他历史问题。"
+                ),
+                user_prompt=user_prompt,
+                temperature=0.1,
+                max_output_tokens=_ai_ceo_model_max_output_tokens(route=route, realtime_kind=realtime_kind),
+                timeout_seconds=_ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind),
+            )
+            repair_retry_count = 1
+            model_latency_ms += _elapsed_ms(repair_started_at)
+            repair_answer = _clean_answer(repair_result.get("text") if isinstance(repair_result, dict) else "")
+            repair_quality = validate_ai_ceo_answer_quality(message=safe_message, route=route, answer=repair_answer)
+            if repair_answer and repair_quality.get("accepted"):
+                result = repair_result
+                answer = repair_answer
+                answer_quality = repair_quality
+        except Exception:
+            repair_retry_count = 1
+            model_latency_ms += _elapsed_ms(repair_started_at)
+
+    if not answer_quality.get("accepted"):
+        return {
+            "status": "model_answer_rejected",
+            "blocked_by": answer_quality.get("blocked_by") or ["model_answer_not_grounded_to_request"],
+            "answer": _model_answer_rejected_fallback(
+                message=safe_message,
+                source_records=source_records,
+            ),
+            "answer_quality": {
+                **answer_quality,
+                "initial_retry_count": model_initial_retry_count,
+                "repair_retry_count": repair_retry_count,
+            },
+            "context": prompt_context,
+            "model_client": _public_model_context(result, model_client, model_resolution),
+            "default_web_search": default_web_search,
+            "source_records": source_records,
+            **_ai_ceo_latency_fields(
+                turn_started_at,
+                search_latency_ms=_safe_int(default_web_search.get("search_latency_ms") if isinstance(default_web_search, dict) else 0),
+                model_latency_ms=model_latency_ms,
+                model_retry_count=model_initial_retry_count,
+                route=route,
+                realtime_kind=realtime_kind,
+                **_default_web_context_performance_kwargs(default_web_search),
+                fallback_answer_used=True,
+            ),
+            **route_meta,
+            "frontend_gets_model_api_key": False,
+            "runtime_gets_raw_ebay_token": False,
+            "secret_exposed": False,
+        }
+
     model_mode = str((result or {}).get("model_mode") or "")
     status = "model_answered" if model_mode.startswith("live_") else "model_answered_non_live"
     return {
         "status": status,
         "answer": answer,
-        "context": context,
+        "answer_quality": {
+            **answer_quality,
+            "initial_retry_count": model_initial_retry_count,
+            "repair_retry_count": repair_retry_count,
+        },
+        "context": prompt_context,
         "model_client": _public_model_context(result, model_client, model_resolution),
+        "default_web_search": default_web_search,
+        "source_records": source_records,
+        **_ai_ceo_latency_fields(
+            turn_started_at,
+            search_latency_ms=_safe_int(default_web_search.get("search_latency_ms") if isinstance(default_web_search, dict) else 0),
+            model_latency_ms=model_latency_ms,
+            model_retry_count=model_initial_retry_count,
+            route=route,
+            realtime_kind=realtime_kind,
+            **_default_web_context_performance_kwargs(default_web_search),
+        ),
         **route_meta,
         "frontend_gets_model_api_key": False,
         "runtime_gets_raw_ebay_token": False,
@@ -293,8 +581,36 @@ def run_ai_ceo_fast_turn(
             "runtime_gets_raw_ebay_token": False,
             "secret_exposed": False,
         }
+    capability_kind = _classify_ai_ceo_capability_request(safe_message)
+    if capability_kind:
+        model_connection = _store_model_connection_context(
+            repository=repository,
+            company_id=company_id,
+            store_id=store_id,
+            user_id=user_id,
+        )
+        return {
+            "status": "capability_status_answered",
+            "answer": _ai_ceo_capability_answer(model_context, model_connection=model_connection),
+            "context": context,
+            "model_client": model_context,
+            "model_connection": model_connection,
+            **ai_ceo_route_metadata(safe_message, route=AI_CEO_ROUTE_GENERAL),
+            "frontend_gets_model_api_key": False,
+            "runtime_gets_raw_ebay_token": False,
+            "secret_exposed": False,
+        }
     if not realtime_kind:
         return None
+    if _env_enabled("JIEJING_AI_CEO_REALTIME_MODEL_SYNTHESIS_ENABLED", default=True):
+        model_connection = _store_model_connection_context(
+            repository=repository,
+            company_id=company_id,
+            store_id=store_id,
+            user_id=user_id,
+        )
+        if model_connection.get("configured"):
+            return None
     realtime_search = _run_realtime_search(kind=realtime_kind, message=safe_message)
     if realtime_search.get("status") == "ready":
         return {
@@ -452,7 +768,19 @@ def build_ai_ceo_chat_prompts(
     if route == AI_CEO_ROUTE_GENERAL:
         system_prompt += " 当前路由是普通咨询：像 DeepSeek 一样直接回答，不创建经营任务，不写长期经营记忆。"
     elif route == AI_CEO_ROUTE_EBAY_WORKFLOW:
-        system_prompt += " 当前路由是 eBay 经营任务：输出目标、计划、来源/缺口、风险、需要确认的动作、下一步，并保持真实写入确认边界。"
+        system_prompt += (
+            " 当前路由是 eBay 经营任务：输出目标、计划、来源/缺口、风险、需要确认的动作、下一步，并保持真实写入确认边界。"
+            "如果商家问“卖什么”“帮我选品”“不知道卖什么”，必须先给市场调研报告，再给 2-4 个候选商品卡；每张卡包含商品名、推荐度评分、为什么有需求、为什么适合 eBay/轻小件、风险和待补资料。"
+            "选品类回答必须先输出“候选商品卡”，再写市场调研正文；不要先写长篇市场机会概述，候选商品名必须出现在回答前 500 字内，避免后续 Listing 无法识别具体商品。"
+            "不要把“市场调研报告”本身当成商品名；后续 Listing 草稿只能基于某个具体候选商品。"
+            "这类回答必须包含一个清晰小节，标题写“候选商品卡”，并用固定格式逐条输出："
+            "“候选商品 1：具体商品名”“推荐度评分：数字/100”“为什么有需求：...”“适合 eBay/轻小件：...”“主要风险：...”“Listing 草稿字段建议：...”。"
+            "不能只写“名称、推荐度评分、风险和 Listing 草稿字段建议”这类字段清单，必须给出真实可理解的商品名。"
+            "禁止把“商品 1”“商品 2”“候选品 A”“方向一”这类占位符当成商品名；如果模型只能想到占位符，就要明确让商家补充或重新选择。"
+            "如果商家只是泛泛说“热销小商品”“批量筛品”“小众品”，且没有明确要求电子、带电、品牌或高客单方向，默认优先推荐不带电、非液体/粉末、非医疗、非大牌侵权、低售后风险的轻小件；"
+            "不要把蓝牙耳机、充电器、电池、化妆品、保健品、强品牌配件等高合规/高售后/红海类目作为默认候选。"
+            "没有可展示来源支撑时，不要写“月销过万”“搜索量很高”等精确热度话术；只能写“需用 eBay 竞品和真实店铺数据复核”。"
+        )
     elif route == AI_CEO_ROUTE_CONFIRMATION:
         system_prompt += " 当前路由是高风险动作：不要声称已执行，只说明需要进入决策中心确认，并列出发布/改价/库存/退款/广告/政策等执行前检查项。"
     elif route == AI_CEO_ROUTE_MERCHANT_RULE:
@@ -463,9 +791,11 @@ def build_ai_ceo_chat_prompts(
         "route": route,
         "route_meta": route_meta or {},
         "current_context": _prompt_context_for_route(context, route),
+        "web_context": _prompt_web_context(context),
         "current_model_client": model_context or {},
         "frontend_command_plan": _safe_command(command) if route != AI_CEO_ROUTE_GENERAL else {},
         "response_rules": [
+            "Use web_context.source_records for current/public facts when web_context.status is ready; do not invent latest facts when sources are missing.",
             "先回答用户当前问题，再给必要的下一步。",
             "普通咨询不写长期经营记忆。",
             "只有明确要求记住规则时才写商家规则。",
@@ -529,6 +859,181 @@ def _prompt_context_for_route(context: dict[str, Any], route: str) -> dict[str, 
     }
 
 
+def _prompt_web_context(context: dict[str, Any]) -> dict[str, Any]:
+    search = context.get("default_web_search") if isinstance(context.get("default_web_search"), dict) else {}
+    if not search:
+        return {
+            "status": "not_requested",
+            "source_records": [],
+            "secret_exposed": False,
+        }
+    records = search.get("source_records") if isinstance(search.get("source_records"), list) else []
+    return {
+        "status": _safe_text(search.get("status") or "", limit=80),
+        "provider": _safe_text(search.get("provider") or "", limit=80),
+        "query": _safe_text(search.get("query") or "", limit=300),
+        "captured_at": _safe_text(search.get("captured_at") or "", limit=80),
+        "summary": _safe_text(search.get("summary") or "", limit=500),
+        "blocked_by": search.get("blocked_by") if isinstance(search.get("blocked_by"), list) else [],
+        "source_records": records[:5],
+        "frontend_gets_search_api_key": False,
+        "secret_exposed": False,
+    }
+
+
+def _default_web_context_enabled(*, route: str, message: str) -> bool:
+    if not _env_enabled("JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_ENABLED", default=True):
+        return False
+    if route not in {AI_CEO_ROUTE_GENERAL, AI_CEO_ROUTE_EBAY_WORKFLOW}:
+        return False
+    return bool(_safe_text(message, limit=900))
+
+
+def _run_default_web_context_search(*, route: str, message: str) -> dict[str, Any]:
+    search_started_at = time.monotonic()
+    if not _default_web_context_enabled(route=route, message=message):
+        return {
+            "status": "not_requested",
+            "source_records": [],
+            "search_latency_ms": 0,
+            "frontend_gets_search_api_key": False,
+            "secret_exposed": False,
+        }
+    cache_key = _default_web_context_cache_key(route=route, message=message)
+    cache_ttl_seconds = _env_int("JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_CACHE_SECONDS", default=180, minimum=0, maximum=900)
+    negative_cache_ttl_seconds = _env_int("JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_NEGATIVE_CACHE_SECONDS", default=45, minimum=0, maximum=180)
+    if cache_key and (cache_ttl_seconds or negative_cache_ttl_seconds):
+        cached = _DEFAULT_WEB_CONTEXT_CACHE.get(cache_key)
+        if cached:
+            cached_at, cached_search = cached
+            cached_ttl_seconds = cache_ttl_seconds if cached_search.get("used_for_model_prompt") else negative_cache_ttl_seconds
+            if cached_ttl_seconds and datetime.now(timezone.utc) - cached_at <= timedelta(seconds=cached_ttl_seconds):
+                cached_result = copy.deepcopy(cached_search)
+                cached_result["cache_status"] = "hit" if cached_result.get("used_for_model_prompt") else "hit_no_sources"
+                cached_result["search_latency_ms"] = 0
+                return cached_result
+    budget = _default_web_context_budget(route=route, message=message)
+    search = _run_realtime_search(
+        kind="web_search",
+        message=message,
+        timeout_seconds=budget["timeout_seconds"],
+        max_results=budget["max_results"],
+        search_depth=budget["search_depth"],
+    )
+    records = search.get("source_records") if isinstance(search.get("source_records"), list) else []
+    result = {
+        "status": _safe_text(search.get("status") or "", limit=80),
+        "blocked_by": search.get("blocked_by") if isinstance(search.get("blocked_by"), list) else [],
+        "provider": _safe_text(search.get("provider") or "", limit=80),
+        "query": _safe_text(search.get("query") or "", limit=300),
+        "captured_at": _safe_text(search.get("captured_at") or "", limit=80),
+        "summary": _safe_text(search.get("summary") or "", limit=500),
+        "source_records": records[:5],
+        "used_for_model_prompt": bool(search.get("status") == "ready" and records),
+        "search_budget_seconds": _safe_int(search.get("search_budget_seconds") or budget["timeout_seconds"]),
+        "search_max_results": _safe_int(search.get("search_max_results") or budget["max_results"]),
+        "search_depth": _safe_text(search.get("search_depth") or budget["search_depth"], limit=24),
+        "search_budget_contract": _safe_text(
+            search.get("search_budget_contract") or "2026-07-04-ai-ceo-public-search-budget-v1",
+            limit=80,
+        ),
+        "search_latency_ms": _elapsed_ms(search_started_at),
+        "cache_status": "miss",
+        "frontend_gets_search_api_key": False,
+        "secret_exposed": False,
+    }
+    should_cache_result = bool(result["used_for_model_prompt"] and cache_ttl_seconds) or bool(
+        negative_cache_ttl_seconds and cache_key and result.get("status") in {"blocked", "failed", ""}
+    )
+    if cache_key and should_cache_result:
+        _DEFAULT_WEB_CONTEXT_CACHE[cache_key] = (datetime.now(timezone.utc), copy.deepcopy(result))
+        _prune_default_web_context_cache()
+    return result
+
+
+def _default_web_context_budget(*, route: str, message: str) -> dict[str, Any]:
+    needs_report_budget = _default_web_context_needs_report_budget(route=route, message=message)
+    timeout_default = 2 if needs_report_budget else 1
+    max_results_default = 4 if needs_report_budget else 3
+    return {
+        "timeout_seconds": _env_int(
+            "JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_TIMEOUT_SECONDS",
+            default=timeout_default,
+            minimum=1,
+            maximum=8,
+        ),
+        "max_results": _env_int(
+            "JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_MAX_RESULTS",
+            default=max_results_default,
+            minimum=1,
+            maximum=5,
+        ),
+        "search_depth": _safe_text(os.environ.get("JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_DEPTH") or "fast", limit=24) or "fast",
+    }
+
+
+def _default_web_context_needs_report_budget(*, route: str, message: str) -> bool:
+    if route == AI_CEO_ROUTE_EBAY_WORKFLOW:
+        return True
+    text = _normalized_text(message)
+    if len(text) >= 240:
+        return True
+    report_markers = (
+        "报告",
+        "调研",
+        "分析",
+        "方案",
+        "计划",
+        "对比",
+        "选品",
+        "刊登",
+        "上架",
+        "listing",
+        "ebay",
+        "market research",
+        "market report",
+        "product research",
+        "research",
+        "analyze",
+        "compare",
+        "strategy",
+    )
+    return any(marker in text for marker in report_markers)
+
+
+def _default_web_context_cache_key(*, route: str, message: str) -> str:
+    safe_route = _safe_text(route or AI_CEO_ROUTE_GENERAL, limit=80)
+    safe_message = re.sub(r"\s+", " ", _safe_text(message or "", limit=500).strip().lower())
+    if not safe_message:
+        return ""
+    return hashlib.sha1(f"{safe_route}\n{safe_message}".encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _prune_default_web_context_cache() -> None:
+    max_entries = _env_int("JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_CACHE_MAX_ENTRIES", default=48, minimum=4, maximum=200)
+    if len(_DEFAULT_WEB_CONTEXT_CACHE) <= max_entries:
+        return
+    for key, _value in sorted(_DEFAULT_WEB_CONTEXT_CACHE.items(), key=lambda item: item[1][0])[: len(_DEFAULT_WEB_CONTEXT_CACHE) - max_entries]:
+        _DEFAULT_WEB_CONTEXT_CACHE.pop(key, None)
+
+
+def _context_with_default_web_search(context: dict[str, Any], default_web_search: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(default_web_search, dict) or default_web_search.get("status") == "not_requested":
+        return context
+    return {
+        **context,
+        "default_web_search": default_web_search,
+        "secret_exposed": False,
+    }
+
+
+def _source_records_from_default_web_context(default_web_search: dict[str, Any]) -> list[dict[str, Any]]:
+    records = default_web_search.get("source_records") if isinstance(default_web_search, dict) else []
+    if not isinstance(records, list):
+        return []
+    return [item for item in records[:5] if isinstance(item, dict)]
+
+
 def _classify_ai_ceo_route(message: str, *, realtime_kind: str = "") -> str:
     text = _normalized_text(message)
     if realtime_kind:
@@ -568,6 +1073,20 @@ def _classify_ai_ceo_capability_request(message: str) -> str:
         "实时搜索",
         "连接大模型",
         "接大模型",
+        "什么大模型",
+        "哪个大模型",
+        "用什么模型",
+        "用哪个模型",
+        "当前模型",
+        "模型状态",
+        "ai 连接",
+        "ai连接",
+        "为什么不可用",
+        "为啥不可用",
+        "怎么不可用",
+        "怎么不能用",
+        "ai 不可用",
+        "ai不可用",
         "接 deepseek",
         "连 deepseek",
         "连接 deepseek",
@@ -583,10 +1102,197 @@ def _classify_ai_ceo_capability_request(message: str) -> str:
     return ""
 
 
-def _ai_ceo_capability_answer(model_context: dict[str, Any]) -> str:
+def _store_model_connection_context(
+    *,
+    repository: Any,
+    company_id: str,
+    store_id: str,
+    user_id: str = "",
+) -> dict[str, Any]:
+    try:
+        company_secret_refs = repository.list_secret_refs(company_id=company_id)
+    except Exception:
+        return {
+            "configured": False,
+            "status": "unknown",
+            "blocked_by": ["model_connection_status_unavailable"],
+            "frontend_gets_model_api_key": False,
+            "secret_exposed": False,
+        }
+    model_refs = [item for item in company_secret_refs if str(item.get("purpose") or "") == MODEL_SECRET_PURPOSE]
+    account_model_refs = [
+        item
+        for item in model_refs
+        if _model_secret_ref_scope_for_status(item, user_id=user_id, store_id=store_id) == "account"
+    ]
+    store_model_refs = [
+        item
+        for item in model_refs
+        if _model_secret_ref_scope_for_status(item, user_id=user_id, store_id=store_id) == "store"
+    ]
+    company_model_refs = [
+        item
+        for item in model_refs
+        if _model_secret_ref_scope_for_status(item, user_id=user_id, store_id=store_id) == "company"
+    ]
+    selected_refs = account_model_refs
+    ready_refs = [item for item in selected_refs if str(item.get("status") or "") in READY_MODEL_SECRET_STATUSES]
+    selected = ready_refs[0] if ready_refs else selected_refs[0] if selected_refs else None
+    scope = "account"
+    if not ready_refs:
+        store_ready_refs = [
+            item for item in store_model_refs if str(item.get("status") or "") in READY_MODEL_SECRET_STATUSES
+        ]
+        if store_ready_refs:
+            selected_refs = store_model_refs
+            ready_refs = store_ready_refs
+            selected = ready_refs[0]
+            scope = "store"
+        elif not selected and store_model_refs:
+            selected_refs = store_model_refs
+            selected = store_model_refs[0]
+            scope = "store"
+    if not ready_refs:
+        company_ready_refs = [
+            item for item in company_model_refs if str(item.get("status") or "") in READY_MODEL_SECRET_STATUSES
+        ]
+        if company_ready_refs:
+            selected = company_ready_refs[0]
+            ready_refs = company_ready_refs
+            scope = "company"
+        elif not selected:
+            platform_context = _platform_model_default_context()
+            if platform_context.get("configured"):
+                return platform_context
+    if not selected:
+        platform_context = _platform_model_default_context()
+        return {
+            "configured": False,
+            "status": "not_configured_for_current_account",
+            "model_secret_ref_count": 0,
+            "blocked_by": ["current_account_model_connection_missing", *(platform_context.get("blocked_by") or [])],
+            "platform_default_configured": bool(platform_context.get("configured")),
+            "frontend_gets_model_api_key": False,
+            "secret_exposed": False,
+        }
+    metadata = selected.get("metadata") if isinstance(selected.get("metadata"), dict) else {}
+    provider_key = provider_key_from_secret_ref(selected)
+    definition = get_model_provider(provider_key)
+    model = _safe_text(metadata.get("model") or (definition.default_model if definition else ""), limit=120)
+    return {
+        "configured": bool(ready_refs),
+        "status": (
+            "account_default_ready"
+            if scope == "account" and ready_refs
+            else "ready"
+            if scope == "store" and ready_refs
+            else "company_default_ready"
+            if ready_refs
+            else "not_ready"
+        ),
+        "scope": scope,
+        "provider_key": provider_key,
+        "provider_label": definition.label if definition else provider_key,
+        "model": model,
+        "model_secret_ref_count": len(company_model_refs) if scope == "company" else len(selected_refs),
+        "ready_secret_ref_count": len(ready_refs),
+        "blocked_by": [] if ready_refs else ["current_account_model_connection_not_ready"],
+        "frontend_gets_model_api_key": False,
+        "secret_exposed": False,
+    }
+
+
+def _model_secret_ref_scope_for_status(item: dict[str, Any], *, user_id: str, store_id: str) -> str:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    explicit_scope = str(
+        metadata.get("model_connection_scope")
+        or metadata.get("scope")
+        or metadata.get("connection_scope")
+        or ""
+    ).strip().lower()
+    ref_store_id = str(item.get("store_id") or "")
+    created_by = str(item.get("created_by") or "")
+    if explicit_scope == "company":
+        return "company"
+    if explicit_scope == "store":
+        return "store" if ref_store_id == store_id else ""
+    if user_id and created_by == user_id:
+        return "account"
+    if not ref_store_id:
+        return ""
+    if ref_store_id == store_id:
+        return "store"
+    return ""
+
+
+def _platform_model_default_context() -> dict[str, Any]:
+    explicit_api_key = (os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL_API_KEY") or "").strip()
+    platform_enabled = _env_enabled("JIEJING_AI_CEO_PLATFORM_MODEL_ENABLED", default=bool(explicit_api_key))
+    if not platform_enabled:
+        return {
+            "configured": False,
+            "status": "platform_default_not_enabled",
+            "scope": "platform",
+            "blocked_by": ["platform_model_default_not_enabled"],
+            "frontend_gets_model_api_key": False,
+            "secret_exposed": False,
+        }
+    provider_key = (
+        os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL_PROVIDER")
+        or os.environ.get("JIEJING_MODEL_PROVIDER")
+        or ("deepseek" if os.environ.get("DEEPSEEK_API_KEY") else "openai")
+    )
+    definition = get_model_provider(provider_key)
+    if not definition:
+        return {
+            "configured": False,
+            "status": "platform_default_not_ready",
+            "scope": "platform",
+            "blocked_by": ["unsupported_platform_model_provider"],
+            "frontend_gets_model_api_key": False,
+            "secret_exposed": False,
+        }
+    api_key_configured = bool(
+        explicit_api_key
+        or (definition.provider_key == "deepseek" and os.environ.get("DEEPSEEK_API_KEY"))
+        or os.environ.get("JIEJING_MODEL_API_KEY")
+    )
+    model = _safe_text(
+        os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL")
+        or os.environ.get("JIEJING_MODEL")
+        or definition.default_model,
+        limit=120,
+    )
+    return {
+        "configured": api_key_configured,
+        "status": "platform_default_ready" if api_key_configured else "platform_default_missing_key",
+        "scope": "platform",
+        "provider_key": definition.provider_key,
+        "provider_label": definition.label,
+        "model": model,
+        "blocked_by": [] if api_key_configured else ["platform_model_api_key_not_configured"],
+        "merchant_pays_provider_directly": False,
+        "jiejing_pays_provider_usage": True,
+        "frontend_gets_model_api_key": False,
+        "secret_exposed": False,
+    }
+
+
+def _ai_ceo_capability_answer(model_context: dict[str, Any], model_connection: dict[str, Any] | None = None) -> str:
     provider = _safe_text(model_context.get("provider_label") or model_context.get("provider_key") or model_context.get("name") or "AI", limit=80) or "AI"
     model = _safe_text(model_context.get("model") or "", limit=80)
-    ai_label = f"{provider} / {model}" if model else provider
+    model_connection = model_connection if isinstance(model_connection, dict) else {}
+    if model_connection:
+        connection_ready = bool(model_connection.get("configured"))
+        connection_provider = _safe_text(
+            model_connection.get("provider_label") or model_connection.get("provider_key") or provider,
+            limit=80,
+        )
+        connection_model = _safe_text(model_connection.get("model") or model, limit=80)
+        ai_label = f"{connection_provider} / {connection_model}" if connection_model else connection_provider
+    else:
+        connection_ready = True
+        ai_label = f"{provider} / {model}" if model else provider
     search_status = PublicSearchProbeAdapter().provider_status("tavily")
     generic_search_ready = bool(search_status.get("configured")) and _env_enabled("JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED", default=True)
     builtin_web_ready = _env_enabled("JIEJING_AI_CEO_BUILTIN_WEB_FALLBACK_ENABLED", default=True)
@@ -596,8 +1302,18 @@ def _ai_ceo_capability_answer(model_context: dict[str, Any]) -> str:
         search_line = "实时联网兜底已启用：通用网页、新闻 RSS 和公开股票报价会走后端公共来源检索，前端不会拿到任何搜索 key。"
     else:
         search_line = "通用实时搜索 provider 还没配置；需要最新网页信息时我会说明缺口，不会编。"
+    if not connection_ready:
+        model_line = "当前账号还没有可用的 AI 连接；捷境不会跨商家、跨账号使用别人的模型连接。到「设置 -> AI 与素材」查看当前账号连接状态。"
+    elif model_connection.get("scope") == "account":
+        model_line = f"当前捷境账号 AI 已接通：{ai_label}。这个连接可用于当前账号管理的店铺。"
+    elif model_connection.get("scope") == "company":
+        model_line = f"当前店铺正在使用本公司默认 AI 连接：{ai_label}。"
+    elif model_connection.get("scope") == "platform":
+        model_line = f"当前店铺正在使用捷境托管 AI 连接：{ai_label}。"
+    else:
+        model_line = f"当前店铺 AI 已接通：{ai_label}。"
     return (
-        f"AI 已接通：{ai_label}。\n\n"
+        f"{model_line}\n\n"
         f"{search_line}\n\n"
         "普通咨询、翻译、写作、解释概念可以直接答；eBay 经营任务会进入捷境工作流；发布、改价、库存、退款、广告、政策和敏感客服承诺仍必须进决策中心。"
     )
@@ -632,10 +1348,62 @@ def _parse_client_now(client_now: str, tz: tzinfo) -> datetime | None:
     return parsed.astimezone(tz)
 
 
+def _looks_like_market_news_request(text: str) -> bool:
+    market_entities = (
+        "美股",
+        "美国股市",
+        "美国股票",
+        "纳指",
+        "纳斯达克",
+        "道指",
+        "道琼斯",
+        "标普",
+        "标普500",
+        "s&p 500",
+        "sp500",
+        "nasdaq",
+        "dow",
+        "us stocks",
+        "u.s. stocks",
+        "stock market",
+    )
+    move_markers = (
+        "大跌",
+        "暴跌",
+        "下跌",
+        "跳水",
+        "杀跌",
+        "回调",
+        "大涨",
+        "上涨",
+        "拉升",
+        "反弹",
+        "为什么跌",
+        "为什么涨",
+        "为何跌",
+        "为何涨",
+        "怎么跌",
+        "怎么涨",
+        "selloff",
+        "sell-off",
+        "plunge",
+        "drop",
+        "dropped",
+        "fall",
+        "fell",
+        "rally",
+        "surge",
+        "why",
+    )
+    return any(entity in text for entity in market_entities) and any(marker in text for marker in move_markers)
+
+
 def _classify_external_realtime_request(message: str) -> str:
     text = _normalized_text(message)
     if not text:
         return ""
+    if _looks_like_market_news_request(text):
+        return "news_search"
     current_markers = ("现在", "当前", "实时", "最新", "今天", "此刻", "刚刚", "now", "current", "latest", "today")
     stock_markers = ("股价", "股票", "行情", "报价", "盘前", "盘后", "涨跌", "收盘", "市值", "share price", "stock price", "quote")
     market_entities = (
@@ -673,7 +1441,14 @@ def _classify_external_realtime_request(message: str) -> str:
     return ""
 
 
-def _run_realtime_search(*, kind: str, message: str) -> dict[str, Any]:
+def _run_realtime_search(
+    *,
+    kind: str,
+    message: str,
+    timeout_seconds: int | None = None,
+    max_results: int | None = None,
+    search_depth: str | None = None,
+) -> dict[str, Any]:
     provider = _safe_text(
         os.environ.get("JIEJING_AI_CEO_SEARCH_PROVIDER")
         or os.environ.get("JIEJING_PUBLIC_SEARCH_PROVIDER")
@@ -682,15 +1457,35 @@ def _run_realtime_search(*, kind: str, message: str) -> dict[str, Any]:
     )
     adapter = PublicSearchProbeAdapter()
     query = _realtime_search_query(kind=kind, message=message)
-    timeout_seconds = _env_int("JIEJING_AI_CEO_SEARCH_TIMEOUT_SECONDS", default=8, minimum=3, maximum=20)
-    max_results = _env_int("JIEJING_AI_CEO_SEARCH_MAX_RESULTS", default=5, minimum=1, maximum=8)
+    timeout_seconds = (
+        _bounded_int(timeout_seconds, default=4, minimum=1, maximum=20)
+        if timeout_seconds is not None
+        else _env_int("JIEJING_AI_CEO_SEARCH_TIMEOUT_SECONDS", default=4, minimum=3, maximum=20)
+    )
+    max_results = (
+        _bounded_int(max_results, default=5, minimum=1, maximum=8)
+        if max_results is not None
+        else _env_int("JIEJING_AI_CEO_SEARCH_MAX_RESULTS", default=5, minimum=1, maximum=8)
+    )
+    search_depth_value = _safe_text(search_depth or os.environ.get("JIEJING_AI_CEO_SEARCH_DEPTH") or "basic", limit=24) or "basic"
+    budget_fields = _search_budget_public_fields(
+        timeout_seconds=timeout_seconds,
+        max_results=max_results,
+        search_depth=search_depth_value,
+    )
     live_enabled = _env_enabled("JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED", default=True)
     captured_at = now_iso()
     status = adapter.provider_status(provider)
     if not status.get("configured"):
-        builtin = _run_builtin_public_realtime_source(kind=kind, message=message, query=query, captured_at=captured_at)
+        builtin = _run_builtin_public_realtime_source(
+            kind=kind,
+            message=message,
+            query=query,
+            captured_at=captured_at,
+            timeout_seconds=timeout_seconds,
+        )
         if builtin.get("status") == "ready":
-            return builtin
+            return {**builtin, **budget_fields}
         return {
             "status": "blocked",
             "blocked_by": ["public_search_provider_not_configured"],
@@ -699,6 +1494,7 @@ def _run_realtime_search(*, kind: str, message: str) -> dict[str, Any]:
             "query": query,
             "captured_at": captured_at,
             "source_records": [],
+            **budget_fields,
             "frontend_gets_search_api_key": False,
             "secret_exposed": False,
         }
@@ -710,7 +1506,7 @@ def _run_realtime_search(*, kind: str, message: str) -> dict[str, Any]:
             live_enabled=live_enabled,
             timeout_seconds=timeout_seconds,
             max_results=max_results,
-            search_depth=_safe_text(os.environ.get("JIEJING_AI_CEO_SEARCH_DEPTH") or "basic", limit=24) or "basic",
+            search_depth=search_depth_value,
         )
     )
     snapshot_status = _safe_text(snapshot.get("status") or "", limit=80)
@@ -724,12 +1520,19 @@ def _run_realtime_search(*, kind: str, message: str) -> dict[str, Any]:
             "captured_at": captured_at,
             "summary": _safe_text(snapshot.get("summary") or "", limit=500),
             "source_records": records,
+            **budget_fields,
             "frontend_gets_search_api_key": False,
             "secret_exposed": False,
         }
-    builtin = _run_builtin_public_realtime_source(kind=kind, message=message, query=query, captured_at=captured_at)
+    builtin = _run_builtin_public_realtime_source(
+        kind=kind,
+        message=message,
+        query=query,
+        captured_at=captured_at,
+        timeout_seconds=timeout_seconds,
+    )
     if builtin.get("status") == "ready":
-        return builtin
+        return {**builtin, **budget_fields}
     blocked_by = ["public_search_provider_error"] if snapshot_status == "failed_tool" else ["public_search_no_results"]
     if not live_enabled:
         blocked_by = ["public_search_disabled"]
@@ -742,6 +1545,18 @@ def _run_realtime_search(*, kind: str, message: str) -> dict[str, Any]:
         "captured_at": captured_at,
         "summary": _safe_text(snapshot.get("summary") or snapshot.get("error") or "", limit=500),
         "source_records": records,
+        **budget_fields,
+        "frontend_gets_search_api_key": False,
+        "secret_exposed": False,
+    }
+
+
+def _search_budget_public_fields(*, timeout_seconds: int, max_results: int, search_depth: str) -> dict[str, Any]:
+    return {
+        "search_budget_seconds": _safe_int(timeout_seconds),
+        "search_max_results": _safe_int(max_results),
+        "search_depth": _safe_text(search_depth, limit=24) or "basic",
+        "search_budget_contract": "2026-07-04-ai-ceo-public-search-budget-v1",
         "frontend_gets_search_api_key": False,
         "secret_exposed": False,
     }
@@ -871,10 +1686,35 @@ def _realtime_search_query(*, kind: str, message: str) -> str:
         return f"{text} current weather official forecast"
     if kind == "news_search":
         return f"{text} latest news reliable sources"
+    if kind == "web_search" and _looks_like_product_selection_request(
+        message=text,
+        route=AI_CEO_ROUTE_EBAY_WORKFLOW,
+    ):
+        return _ebay_product_selection_search_query(text)
     return f"{text} reliable web sources"
 
 
-def _run_builtin_public_realtime_source(*, kind: str, message: str, query: str, captured_at: str) -> dict[str, Any]:
+def _ebay_product_selection_search_query(message: str) -> str:
+    text = _normalized_text(message)
+    constraints = ["eBay US", "product research", "niche demand", "sold listings"]
+    if any(marker in text for marker in ("轻小", "小件", "轻量", "small parcel", "lightweight")):
+        constraints.extend(["lightweight", "small parcel"])
+    if any(marker in text for marker in ("不带电", "无电", "非电子", "no battery", "non-electric")):
+        constraints.extend(["non-electric", "no battery"])
+    if any(marker in text for marker in ("低售后", "低退货", "low return")):
+        constraints.append("low return risk")
+    year = datetime.now(timezone.utc).year
+    return " ".join(dict.fromkeys([*constraints, str(year), "marketplace trends"]))
+
+
+def _run_builtin_public_realtime_source(
+    *,
+    kind: str,
+    message: str,
+    query: str,
+    captured_at: str,
+    timeout_seconds: int | None = None,
+) -> dict[str, Any]:
     if not _env_enabled("JIEJING_AI_CEO_BUILTIN_WEB_FALLBACK_ENABLED", default=True):
         return {
             "status": "blocked",
@@ -886,12 +1726,12 @@ def _run_builtin_public_realtime_source(*, kind: str, message: str, query: str, 
             "secret_exposed": False,
         }
     if kind == "stock_quote":
-        return _run_stooq_stock_quote(message=message, query=query, captured_at=captured_at)
+        return _run_stooq_stock_quote(message=message, query=query, captured_at=captured_at, timeout_seconds=timeout_seconds)
     if kind == "news_search":
-        news = _run_builtin_news_search(query=query, captured_at=captured_at)
+        news = _run_builtin_news_search(query=query, captured_at=captured_at, timeout_seconds=timeout_seconds)
         if news.get("status") == "ready":
             return news
-    web = _run_builtin_web_search(query=query, captured_at=captured_at)
+    web = _run_builtin_web_search(query=query, captured_at=captured_at, timeout_seconds=timeout_seconds)
     if web.get("status") == "ready":
         return web
     return {
@@ -905,13 +1745,13 @@ def _run_builtin_public_realtime_source(*, kind: str, message: str, query: str, 
     }
 
 
-def _run_builtin_news_search(*, query: str, captured_at: str) -> dict[str, Any]:
+def _run_builtin_news_search(*, query: str, captured_at: str, timeout_seconds: int | None = None) -> dict[str, Any]:
     url = (
         "https://news.google.com/rss/search?"
         + urllib.parse.urlencode({"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"})
     )
     try:
-        raw = _http_get_text(url, accept="application/rss+xml, application/xml, text/xml")
+        raw = _http_get_text(url, accept="application/rss+xml, application/xml, text/xml", timeout_seconds=timeout_seconds)
         root = ET.fromstring(raw)
     except Exception as exc:  # pragma: no cover - network/provider dependent
         return {
@@ -975,16 +1815,16 @@ def _run_builtin_news_search(*, query: str, captured_at: str) -> dict[str, Any]:
     }
 
 
-def _run_builtin_web_search(*, query: str, captured_at: str) -> dict[str, Any]:
+def _run_builtin_web_search(*, query: str, captured_at: str, timeout_seconds: int | None = None) -> dict[str, Any]:
     url = "https://duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query, "kl": "us-en"})
     records: list[dict[str, Any]] = []
     try:
-        raw = _http_get_text(url, accept="text/html,application/xhtml+xml")
+        raw = _http_get_text(url, accept="text/html,application/xhtml+xml", timeout_seconds=timeout_seconds)
         records = _duckduckgo_html_records(raw, captured_at=captured_at)
     except Exception:
         records = []
     if not records:
-        records = _duckduckgo_instant_answer_records(query=query, captured_at=captured_at)
+        records = _duckduckgo_instant_answer_records(query=query, captured_at=captured_at, timeout_seconds=timeout_seconds)
     if records:
         return {
             "status": "ready",
@@ -1049,12 +1889,12 @@ def _duckduckgo_html_records(raw: str, *, captured_at: str) -> list[dict[str, An
     return records
 
 
-def _duckduckgo_instant_answer_records(*, query: str, captured_at: str) -> list[dict[str, Any]]:
+def _duckduckgo_instant_answer_records(*, query: str, captured_at: str, timeout_seconds: int | None = None) -> list[dict[str, Any]]:
     url = "https://api.duckduckgo.com/?" + urllib.parse.urlencode(
         {"q": query, "format": "json", "no_html": "1", "no_redirect": "1", "skip_disambig": "1"}
     )
     try:
-        data = json.loads(_http_get_text(url, accept="application/json"))
+        data = json.loads(_http_get_text(url, accept="application/json", timeout_seconds=timeout_seconds))
     except Exception:  # pragma: no cover - network/provider dependent
         return []
     records: list[dict[str, Any]] = []
@@ -1112,7 +1952,7 @@ def _iter_duckduckgo_related_topics(value: Any) -> list[dict[str, Any]]:
     return items
 
 
-def _http_get_text(url: str, *, accept: str) -> str:
+def _http_get_text(url: str, *, accept: str, timeout_seconds: int | None = None) -> str:
     request = urllib.request.Request(
         url,
         headers={
@@ -1120,7 +1960,11 @@ def _http_get_text(url: str, *, accept: str) -> str:
             "user-agent": "Jiejing-AI-CEO/1.0 (+https://jiejing.ai)",
         },
     )
-    timeout = _env_int("JIEJING_AI_CEO_SEARCH_TIMEOUT_SECONDS", default=6, minimum=3, maximum=20)
+    timeout = (
+        _bounded_int(timeout_seconds, default=4, minimum=1, maximum=20)
+        if timeout_seconds is not None
+        else _env_int("JIEJING_AI_CEO_SEARCH_TIMEOUT_SECONDS", default=4, minimum=3, maximum=20)
+    )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read(1_200_000).decode("utf-8", errors="replace")
 
@@ -1145,7 +1989,7 @@ def _normalize_public_search_url(value: Any) -> str:
     return url
 
 
-def _run_stooq_stock_quote(*, message: str, query: str, captured_at: str) -> dict[str, Any]:
+def _run_stooq_stock_quote(*, message: str, query: str, captured_at: str, timeout_seconds: int | None = None) -> dict[str, Any]:
     symbol = _stock_symbol_from_message(message)
     if not symbol:
         return {
@@ -1161,7 +2005,12 @@ def _run_stooq_stock_quote(*, message: str, query: str, captured_at: str) -> dic
     url = f"https://stooq.com/q/l/?s={urllib.parse.quote(stooq_symbol)}&f=sd2t2ohlcv&h&e=csv"
     try:
         request = urllib.request.Request(url, headers={"accept": "text/csv", "user-agent": "Jiejing-AI-CEO/1.0"})
-        with urllib.request.urlopen(request, timeout=_env_int("JIEJING_AI_CEO_SEARCH_TIMEOUT_SECONDS", default=8, minimum=3, maximum=20)) as response:
+        timeout = (
+            _bounded_int(timeout_seconds, default=4, minimum=1, maximum=20)
+            if timeout_seconds is not None
+            else _env_int("JIEJING_AI_CEO_SEARCH_TIMEOUT_SECONDS", default=4, minimum=3, maximum=20)
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8", errors="replace")
         rows = list(csv.DictReader(io.StringIO(raw)))
     except Exception as exc:  # pragma: no cover - network dependent
@@ -1303,6 +2152,182 @@ def _env_int(name: str, *, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(value, maximum))
 
 
+def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(parsed, maximum))
+
+
+def _safe_int(value: Any, *, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _elapsed_ms(started_at: float) -> int:
+    if not started_at:
+        return 0
+    return max(0, int((time.monotonic() - started_at) * 1000))
+
+
+def _ai_ceo_model_timeout_seconds(*, route: str, realtime_kind: str = "") -> int:
+    if realtime_kind or route == AI_CEO_ROUTE_EXTERNAL_REALTIME:
+        default = _env_int("JIEJING_AI_CEO_REALTIME_MODEL_TIMEOUT_SECONDS", default=18, minimum=5, maximum=60)
+    elif route == AI_CEO_ROUTE_GENERAL:
+        default = _env_int("JIEJING_AI_CEO_GENERAL_MODEL_TIMEOUT_SECONDS", default=16, minimum=5, maximum=60)
+    else:
+        default = _env_int("JIEJING_AI_CEO_WORKFLOW_MODEL_TIMEOUT_SECONDS", default=32, minimum=8, maximum=90)
+    return _env_int("JIEJING_AI_CEO_MODEL_TIMEOUT_SECONDS", default=default, minimum=5, maximum=90)
+
+
+def _ai_ceo_model_max_output_tokens(*, route: str, realtime_kind: str = "") -> int:
+    if realtime_kind or route == AI_CEO_ROUTE_EXTERNAL_REALTIME:
+        default = _env_int("JIEJING_AI_CEO_REALTIME_MAX_OUTPUT_TOKENS", default=700, minimum=128, maximum=2400)
+    elif route == AI_CEO_ROUTE_GENERAL:
+        default = _env_int("JIEJING_AI_CEO_GENERAL_MAX_OUTPUT_TOKENS", default=600, minimum=128, maximum=2400)
+    else:
+        default = _env_int("JIEJING_AI_CEO_WORKFLOW_MAX_OUTPUT_TOKENS", default=1200, minimum=256, maximum=4096)
+    return _env_int("JIEJING_AI_CEO_MAX_OUTPUT_TOKENS", default=default, minimum=128, maximum=4096)
+
+
+def _generate_model_text_with_initial_retry(
+    *,
+    model_client: Any,
+    system_prompt: str,
+    user_prompt: str,
+    route: str,
+    realtime_kind: str = "",
+) -> tuple[dict[str, Any] | None, int, int, Exception | None]:
+    started_at = time.monotonic()
+    timeout_seconds = _ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind)
+    max_output_tokens = _ai_ceo_model_max_output_tokens(route=route, realtime_kind=realtime_kind)
+    try:
+        result = model_client.generate_text(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=0.2,
+            max_output_tokens=max_output_tokens,
+            timeout_seconds=timeout_seconds,
+        )
+        return result, _elapsed_ms(started_at), 0, None
+    except Exception as exc:  # pragma: no cover - provider dependent
+        failure_code, _failure_reason = _classify_model_failure(exc)
+        retry_enabled = _env_enabled("JIEJING_AI_CEO_MODEL_INITIAL_RETRY_ENABLED", default=True)
+        retryable = failure_code in {
+            "model_network_or_timeout",
+            "model_rate_limited",
+            "model_provider_temporary_error",
+        }
+        if not retry_enabled or not retryable:
+            return None, _elapsed_ms(started_at), 0, exc
+
+    retry_timeout = _env_int(
+        "JIEJING_AI_CEO_MODEL_RETRY_TIMEOUT_SECONDS",
+        default=min(timeout_seconds, 24),
+        minimum=5,
+        maximum=45,
+    )
+    retry_tokens = _env_int(
+        "JIEJING_AI_CEO_MODEL_RETRY_MAX_OUTPUT_TOKENS",
+        default=min(max_output_tokens, 900),
+        minimum=256,
+        maximum=2048,
+    )
+    retry_prompt = (
+        system_prompt
+        + " 本轮上一次连接短暂失败。请直接完成当前 merchant_message；选品任务先给具体候选商品卡，未知事实明确标为待复核。"
+    )
+    try:
+        result = model_client.generate_text(
+            system_prompt=retry_prompt,
+            user_prompt=user_prompt,
+            temperature=0.1,
+            max_output_tokens=retry_tokens,
+            timeout_seconds=retry_timeout,
+        )
+        return result, _elapsed_ms(started_at), 1, None
+    except Exception as retry_exc:  # pragma: no cover - provider dependent
+        return None, _elapsed_ms(started_at), 1, retry_exc
+
+
+def _ai_ceo_latency_fields(
+    turn_started_at: float,
+    *,
+    search_latency_ms: int = 0,
+    model_latency_ms: int = 0,
+    route: str = "",
+    realtime_kind: str = "",
+    search_budget_seconds: int = 0,
+    search_max_results: int = 0,
+    search_depth: str = "",
+    search_cache_status: str = "",
+    search_used_for_model_prompt: bool = False,
+    source_record_count: int = 0,
+    model_retry_count: int = 0,
+    fallback_answer_used: bool = False,
+) -> dict[str, Any]:
+    search_latency_ms = max(0, _safe_int(search_latency_ms))
+    model_latency_ms = max(0, _safe_int(model_latency_ms))
+    search_budget_seconds = max(0, _safe_int(search_budget_seconds))
+    search_max_results = max(0, _safe_int(search_max_results))
+    source_record_count = max(0, _safe_int(source_record_count))
+    model_retry_count = max(0, _safe_int(model_retry_count))
+    return {
+        "latency_ms": _elapsed_ms(turn_started_at),
+        "search_latency_ms": search_latency_ms,
+        "model_latency_ms": model_latency_ms,
+        "performance": {
+            "contract_version": "2026-07-04-ai-ceo-chat-latency-budget-v1",
+            "route": route,
+            "realtime_kind": realtime_kind,
+            "search_budget_seconds": search_budget_seconds,
+            "search_max_results": search_max_results,
+            "search_depth": _safe_text(search_depth, limit=24),
+            "search_latency_ms": search_latency_ms,
+            "search_cache_status": _safe_text(search_cache_status, limit=40),
+            "search_used_for_model_prompt": bool(search_used_for_model_prompt),
+            "source_record_count": source_record_count,
+            "model_latency_ms": model_latency_ms,
+            "model_retry_count": model_retry_count,
+            "model_timeout_seconds": _ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind),
+            "model_max_output_tokens": _ai_ceo_model_max_output_tokens(route=route, realtime_kind=realtime_kind),
+            "fallback_answer_used": bool(fallback_answer_used),
+            "secret_exposed": False,
+        },
+    }
+
+
+def _default_web_context_performance_kwargs(default_web_search: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(default_web_search, dict):
+        return {}
+    records = default_web_search.get("source_records") if isinstance(default_web_search.get("source_records"), list) else []
+    return {
+        "search_budget_seconds": _safe_int(default_web_search.get("search_budget_seconds")),
+        "search_max_results": _safe_int(default_web_search.get("search_max_results")),
+        "search_depth": _safe_text(default_web_search.get("search_depth") or "", limit=24),
+        "search_cache_status": _safe_text(default_web_search.get("cache_status") or "", limit=40),
+        "search_used_for_model_prompt": bool(default_web_search.get("used_for_model_prompt")),
+        "source_record_count": len(records),
+    }
+
+
+def _realtime_search_performance_kwargs(realtime_search: dict[str, Any], *, fallback_answer_used: bool = False) -> dict[str, Any]:
+    if not isinstance(realtime_search, dict):
+        return {"fallback_answer_used": fallback_answer_used}
+    records = realtime_search.get("source_records") if isinstance(realtime_search.get("source_records"), list) else []
+    return {
+        "search_budget_seconds": _safe_int(realtime_search.get("search_budget_seconds")),
+        "search_max_results": _safe_int(realtime_search.get("search_max_results")),
+        "search_depth": _safe_text(realtime_search.get("search_depth") or "", limit=24),
+        "search_used_for_model_prompt": bool(records),
+        "source_record_count": len(records),
+        "fallback_answer_used": fallback_answer_used,
+    }
+
+
 def _looks_like_explicit_rule_memory(text: str) -> bool:
     explicit_markers = (
         "记住这个规则",
@@ -1354,6 +2379,13 @@ def _looks_like_ebay_workflow(text: str) -> bool:
         "匹配",
         "出报告",
         "给我一份",
+        "给我",
+        "请给我",
+        "帮我",
+        "推荐",
+        "找",
+        "筛",
+        "选",
         "帮我做",
         "帮我生成",
         "build",
@@ -1361,6 +2393,11 @@ def _looks_like_ebay_workflow(text: str) -> bool:
         "run",
         "draft",
         "generate",
+        "make",
+        "prepare",
+        "recommend",
+        "research",
+        "analyze",
     )
     workflow_markers = (
         "ebay",
@@ -1386,6 +2423,8 @@ def _looks_like_ebay_workflow(text: str) -> bool:
         "类目",
         "item specifics",
         "business policy",
+        "market research",
+        "product research",
         "市场报告",
         "market report",
         "listing package",
@@ -1467,11 +2506,106 @@ def _classify_model_failure(exc: Exception) -> tuple[str, str]:
     lowered = raw.lower()
     if "402" in lowered or any(item in lowered for item in ("quota", "balance", "billing", "payment", "credit", "insufficient")):
         return "model_quota_or_billing_limited", "AI 用量、余额、套餐或服务商账单限制挡住了本次回复。"
+    if "429" in lowered or any(item in lowered for item in ("rate limit", "rate_limit", "too many requests")):
+        return "model_rate_limited", "AI 服务商当前请求较多，本次连接被临时限流。"
     if any(item in lowered for item in ("timeout", "timed out", "connection", "network", "temporarily unavailable")):
         return "model_network_or_timeout", "AI 连接暂时不稳定或超时。"
     if "401" in lowered or "403" in lowered or any(item in lowered for item in ("unauthorized", "forbidden", "invalid api key")):
         return "model_auth_or_permission_error", "AI 服务商拒绝了这次连接，需要在设置里复核账户、权限或模型名称。"
+    if re.search(r"\b5\d\d\b", lowered) or any(item in lowered for item in ("bad gateway", "service unavailable", "gateway timeout")):
+        return "model_provider_temporary_error", "AI 服务商暂时不可用。"
     return "model_provider_error", "AI 服务这次没有返回可展示内容。"
+
+
+def validate_ai_ceo_answer_quality(*, message: str, route: str, answer: str) -> dict[str, Any]:
+    """Reject workflow answers that cannot become the merchant's requested work item."""
+
+    if not _looks_like_product_selection_request(message=message, route=route):
+        return {
+            "accepted": bool(_safe_text(answer, limit=6000)),
+            "quality_gate": "non_selection_answer_present_v1",
+            "candidate_count": 0,
+            "required_candidate_count": 0,
+            "blocked_by": [] if _safe_text(answer, limit=6000) else ["empty_model_answer"],
+            "secret_exposed": False,
+        }
+    try:
+        from .repository import _ai_ceo_market_product_candidates
+
+        candidates = _ai_ceo_market_product_candidates(message=message, answer=answer)
+    except Exception:
+        candidates = []
+    required_count = _requested_product_candidate_count(message)
+    candidate_count = len(candidates)
+    first_window = _safe_text(answer, limit=900)
+    first_candidate_visible = bool(
+        candidates
+        and any(_safe_text(item.get("name") or "", limit=140) in first_window for item in candidates[:required_count])
+    )
+    accepted = candidate_count >= required_count and first_candidate_visible
+    blocked_by = []
+    if candidate_count < required_count:
+        blocked_by.append("missing_concrete_product_candidates")
+    if candidates and not first_candidate_visible:
+        blocked_by.append("candidate_products_not_visible_early")
+    return {
+        "accepted": accepted,
+        "quality_gate": "ebay_product_selection_answer_v1",
+        "candidate_count": candidate_count,
+        "required_candidate_count": required_count,
+        "first_candidate_visible": first_candidate_visible,
+        "blocked_by": blocked_by or (["model_answer_not_grounded_to_request"] if not accepted else []),
+        "secret_exposed": False,
+    }
+
+
+def _looks_like_product_selection_request(*, message: str, route: str) -> bool:
+    if route != AI_CEO_ROUTE_EBAY_WORKFLOW:
+        return False
+    text = _normalized_text(message)
+    markers = (
+        "选品",
+        "卖什么",
+        "什么品",
+        "小众品",
+        "热销小商品",
+        "候选商品",
+        "产品方向",
+        "商品方向",
+        "product ideas",
+        "product selection",
+        "what to sell",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _requested_product_candidate_count(message: str) -> int:
+    text = _normalized_text(message)
+    arabic_match = re.search(r"(?:给我|找|推荐|筛|选)?\s*([1-4])\s*(?:个|款|种|条)", text)
+    if arabic_match:
+        return int(arabic_match.group(1))
+    chinese_counts = (("一个", 1), ("一款", 1), ("一种", 1), ("两个", 2), ("两款", 2), ("二个", 2), ("三个", 3), ("三款", 3), ("四个", 4), ("四款", 4))
+    for marker, count in chinese_counts:
+        if marker in text:
+            return count
+    return 2
+
+
+def _model_answer_rejected_fallback(*, message: str, source_records: list[dict[str, Any]]) -> str:
+    source_lines = []
+    for index, source in enumerate(source_records[:4], start=1):
+        title = _safe_text(source.get("title") or source.get("domain") or source.get("url") or f"来源 {index}", limit=120)
+        domain = _safe_text(source.get("domain") or "", limit=80)
+        source_lines.append(f"{index}. {title}{f'（{domain}）' if domain else ''}")
+    source_text = "\n".join(source_lines) if source_lines else "这次还没有拿到足够的可核验公开来源。"
+    return (
+        "### 这次结果没有进入 Listing\n\n"
+        "这次回答没有对应你刚才的选品要求，我已经拦住，没有把无关内容当成商品，也没有生成可发布草稿。\n\n"
+        f"**你的目标：** {_safe_text(message, limit=500)}\n\n"
+        f"**已找到的公开来源：**\n{source_text}\n\n"
+        "**下一步：** 可以直接重试同一句；也可以补一个目标类目、价格带或采购限制，我会重新生成具体候选商品卡。"
+        "真实发布、采购付款、改价、库存、退款和广告仍不会自动执行。"
+    )
 
 
 def _model_unavailable_fallback_answer(route_meta: dict[str, Any], reason: str) -> str:
@@ -1492,6 +2626,188 @@ def _model_unavailable_fallback_answer(route_meta: dict[str, Any], reason: str) 
     )
 
 
+def _source_backed_market_report_fallback_answer(
+    *,
+    message: str,
+    route: str,
+    default_web_search: dict[str, Any],
+    source_records: list[dict[str, Any]],
+    failure_reason: str,
+) -> str:
+    if not _should_use_source_backed_market_report_fallback(
+        message=message,
+        route=route,
+        default_web_search=default_web_search,
+        source_records=source_records,
+    ):
+        return ""
+    source_lines = []
+    for index, source in enumerate(source_records[:4], start=1):
+        title = _safe_text(source.get("title") or source.get("domain") or source.get("url") or f"source {index}", limit=100)
+        snippet = _safe_text(source.get("snippet") or source.get("summary") or "", limit=160)
+        domain = _safe_text(source.get("domain") or "", limit=80)
+        source_lines.append(f"{index}. {title}{f'（{domain}）' if domain else ''}{f'：{snippet}' if snippet else ''}")
+    source_text = "\n".join(source_lines) or "1. 后端联网搜索已返回公开来源，但当前来源摘要不足，需要继续复核。"
+    return (
+        "### AI CEO 市场调研待复核\n\n"
+        f"{failure_reason}这次公开来源已经返回，但还没有形成与当前目标一致的具体候选商品。"
+        "我已保留调研记录，不会把无关回答或固定样例导入 Listing。\n\n"
+        f"**本次目标：** {_safe_text(message, limit=500)}\n"
+        "**当前结论：** 待重新生成具体候选商品卡；在商品名、推荐依据和风险对上之前，Listing 导入保持关闭。\n\n"
+        f"**公开来源摘要：**\n{source_text}"
+    )
+
+
+def _market_report_recovery_draft_answer(
+    *,
+    message: str,
+    route: str,
+    default_web_search: dict[str, Any],
+    failure_reason: str,
+) -> str:
+    if not _should_use_market_report_recovery_draft(message=message, route=route):
+        return ""
+    search_status = _safe_text(default_web_search.get("status") if isinstance(default_web_search, dict) else "", limit=80)
+    blocked_by = default_web_search.get("blocked_by") if isinstance(default_web_search, dict) and isinstance(default_web_search.get("blocked_by"), list) else []
+    source_note = "这次联网搜索没有拿到可核验来源。"
+    if search_status:
+        source_note = f"这次联网搜索状态：{search_status}；{source_note}"
+    if blocked_by:
+        source_note += f" 缺口：{', '.join(_safe_text(item, limit=80) for item in blocked_by[:3])}。"
+    return (
+        "### AI CEO 市场调研待继续\n\n"
+        f"{failure_reason}我已保留你的选品目标，但不会用固定样例补成商品，也不会把不完整结果导入 Listing。"
+        "发布、改价、库存、广告、退款、付款和政策修改仍必须经过确认中心。\n\n"
+        "**目标市场：** eBay 美国站（EBAY_US）\n"
+        f"**本次目标：** {_safe_text(message, limit=500)}\n"
+        f"**来源状态：** {source_note}\n\n"
+        "**下一步：** 重新生成具体候选商品卡；每个候选必须有商品名、推荐度、需求依据、eBay 适配、主要风险和 Listing 字段建议。"
+        "在这些内容对上之前，系统不会把本记录标记为可导入 Listing。"
+    )
+
+
+def _should_use_market_report_recovery_draft(*, message: str, route: str) -> bool:
+    if route != AI_CEO_ROUTE_EBAY_WORKFLOW:
+        return False
+    text = _normalized_text(message)
+    finance_only = any(marker in text for marker in ("stock", "nasdaq", "nyse", "美股", "股票", "股价", "财报")) and not any(
+        marker in text for marker in ("ebay", "listing", "商品", "产品", "选品", "货源", "上架", "刊登")
+    )
+    if finance_only:
+        return False
+    market_markers = (
+        "market research",
+        "market report",
+        "product research",
+        "research",
+        "keyword",
+        "price band",
+        "opportunity",
+        "市场调研",
+        "市场报告",
+        "调研",
+        "分析",
+        "选品",
+        "需求",
+        "价格带",
+    )
+    product_markers = (
+        "ebay",
+        "listing",
+        "商品",
+        "产品",
+        "货源",
+        "上架",
+        "刊登",
+        "类目",
+        "sku",
+    )
+    return any(marker in text for marker in market_markers) and any(marker in text for marker in product_markers)
+
+
+def _market_report_recovery_product(message: str) -> str:
+    clean = _safe_text(message, limit=320)
+    patterns = (
+        r"(?:for Listing|for eBay|for one|for a|for an)\s*[:：-]?\s*([A-Za-z0-9][^\n.;。；]{2,80})",
+        r"(?:推荐产品|建议产品|目标商品|商品方向|具体商品|商品名称|产品名称)\s*[:：]\s*([^\n。；;]{2,90})",
+        r"(?:recommended product|suggested product|target product|product name|item name)\s*[:：]\s*([^\n.;]{2,90})",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, clean, flags=re.IGNORECASE)
+        if not match:
+            continue
+        candidate = _safe_text(match.group(1), limit=90).strip(" -:：")
+        if candidate and not re.search(r"市场调研|市场报告|market research|market report|候选商品名称|推荐度评分", candidate, flags=re.IGNORECASE):
+            return candidate
+    text = _normalized_text(clean)
+    if any(marker in text for marker in ("不带电", "non-electric", "轻小", "小众")):
+        return "硅胶折叠漏斗 / Silicone Collapsible Funnel"
+    if any(marker in text for marker in ("travel", "camping", "outdoor", "旅行", "露营", "户外")):
+        return "旅行牙刷收纳盒 / Travel Toothbrush Case"
+    return "硅胶折叠漏斗 / Silicone Collapsible Funnel"
+
+
+def _should_use_source_backed_market_report_fallback(
+    *,
+    message: str,
+    route: str,
+    default_web_search: dict[str, Any],
+    source_records: list[dict[str, Any]],
+) -> bool:
+    if route != AI_CEO_ROUTE_EBAY_WORKFLOW:
+        return False
+    if not isinstance(default_web_search, dict) or default_web_search.get("status") != "ready":
+        return False
+    if not source_records:
+        return False
+    text = _normalized_text(message)
+    market_markers = (
+        "market research",
+        "market report",
+        "product research",
+        "research",
+        "analyze",
+        "keyword",
+        "price band",
+        "opportunity",
+        "市场调研",
+        "市场报告",
+        "调研",
+        "分析",
+        "选品",
+        "关键词",
+        "价格带",
+    )
+    product_markers = (
+        "ebay",
+        "listing",
+        "product",
+        "item specific",
+        "sku",
+        "商品",
+        "产品",
+        "货源",
+        "上架",
+        "刊登",
+        "类目",
+    )
+    return any(marker in text for marker in market_markers) and any(marker in text for marker in product_markers)
+
+
+def _source_backed_market_product(message: str) -> str:
+    clean = _safe_text(message, limit=260)
+    patterns = (
+        r"(?:for one|for a|for an)\s+(.+?)(?:\s+product|\s+item|\s+listing|[.;]|$)",
+        r"(?:recommended product|suggested product|target product)\s*[:：]\s*([^\n.;]{2,90})",
+        r"(?:建议产品|推荐产品|目标商品|商品方向)\s*[:：]\s*([^\n。；;]{2,90})",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, clean, flags=re.IGNORECASE)
+        if match:
+            return _safe_text(match.group(1), limit=90).strip(" -:：") or "待确认商品"
+    return "便携式户外驱蚊器 / portable outdoor mosquito repeller"
+
+
 def _public_model_context(
     result: dict[str, Any] | None,
     model_client: Any,
@@ -1507,7 +2823,10 @@ def _public_model_context(
             "api_style": _safe_text(model_resolution.get("api_style") or "", limit=80),
             "model": _safe_text(public.get("model") or model_resolution.get("model") or getattr(model_client, "model", ""), limit=120),
             "endpoint_host": _safe_text(model_resolution.get("endpoint_host") or urlparse(endpoint).netloc, limit=160),
+            "mode": _safe_text(model_resolution.get("mode") or "", limit=80),
+            "secret_ref_scope": _safe_text(model_resolution.get("secret_ref_scope") or "", limit=80),
             "merchant_pays_provider_directly": bool(model_resolution.get("merchant_pays_provider_directly", True)),
+            "jiejing_pays_provider_usage": bool(model_resolution.get("jiejing_pays_provider_usage", False)),
             "frontend_gets_model_api_key": False,
             "secret_exposed": False,
         }

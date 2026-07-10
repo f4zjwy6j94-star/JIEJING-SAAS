@@ -133,6 +133,36 @@ EXPENSIVE_API_RATE_LIMIT_EXACT_PATHS = {
 }
 SESSION_COOKIE_NAME = "jiejing_saas_session"
 MEDIA_PROVIDER_JOB_KEYS = {"media.asset_generation", "media.fal_asset_generation"}
+PLATFORM_MODEL_TRIAL_MONTHLY_LIMIT_ENV = "JIEJING_AI_CEO_PLATFORM_MODEL_TRIAL_MONTHLY_LIMIT"
+PLATFORM_MODEL_TRIAL_DEFAULT_MONTHLY_LIMIT = 20
+
+
+def build_ai_ceo_market_report_delivery(report: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return a merchant-safe handoff summary for AI CEO market reports."""
+
+    if not isinstance(report, dict) or not report.get("report_id"):
+        return None
+    body = report.get("report") if isinstance(report.get("report"), dict) else {}
+    handoff = body.get("listing_handoff") if isinstance(body.get("listing_handoff"), dict) else {}
+    return {
+        "contract_version": "2026-07-04-ai-ceo-market-report-delivery-v1",
+        "mode": "quick_then_structured_report",
+        "report_id": str(report.get("report_id") or ""),
+        "report_type": str(report.get("report_type") or "ai_ceo.market_research"),
+        "status": str(report.get("status") or "saved"),
+        "title": str(report.get("title") or body.get("merchant_readable_summary") or "AI CEO 市场调研")[:180],
+        "product": str(body.get("product") or "")[:120],
+        "created_at": str(report.get("created_at") or ""),
+        "structured_report_saved": True,
+        "listing_import_ready": handoff.get("ready_for_listing_draft") is True,
+        "source_record_count": int(body.get("source_record_count") or 0),
+        "requires_human_review_before_publish": handoff.get("requires_human_review_before_publish") is not False,
+        "triggers_real_platform_write": False,
+        "real_platform_writes_enabled": False,
+        "frontend_gets_model_api_key": False,
+        "runtime_gets_raw_ebay_token": False,
+        "secret_exposed": False,
+    }
 
 
 class RequestBodyError(ValueError):
@@ -140,6 +170,13 @@ class RequestBodyError(ValueError):
         super().__init__(message)
         self.status = status
         self.message = message
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def initialize_repository_for_startup(repository: SaaSRepository, settings: SaaSSettings) -> Exception | None:
@@ -173,6 +210,14 @@ def _positive_int_env(name: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return value if value > 0 else default
+
+
+def _nonnegative_int_env(name: str, default: int) -> int:
+    try:
+        value = int(str(os.environ.get(name) or "").strip())
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 0 else default
 
 
 def _media_asset_idempotency_key(*, store_id: str, provider_job_key: str, inputs: dict[str, Any], supplied: Any = None) -> str:
@@ -700,8 +745,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
                 return
             settings = public_model_settings_from_secret_refs(
-                self.repository.list_secret_refs(company_id=identity["company_id"], store_id=store_id)
+                self._model_settings_secret_refs_for_store(identity=identity, store_id=store_id)
             )
+            settings["platform_trial_quota"] = self._platform_model_trial_quota(identity=identity)
             self._send_json({"model_settings": settings})
             return
 
@@ -1197,6 +1243,59 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         identity = self._require_auth()
         if identity is None:
+            return
+
+        if len(parts) == 3 and parts[0] == "media-asset-jobs" and parts[2] == "review":
+            if not self._require_permission(identity, "create_task"):
+                return
+            body = self._read_json_body()
+            decision = str(body.get("decision") or "").strip().lower()
+            if decision not in {"approve_for_listing_draft", "needs_rework"}:
+                self._send_error(HTTPStatus.BAD_REQUEST, "media review decision must be approve_for_listing_draft or needs_rework")
+                return
+            media_job = self.repository.get_media_asset_job(company_id=identity["company_id"], media_job_id=parts[1])
+            if not media_job:
+                self._send_error(HTTPStatus.NOT_FOUND, "media asset job not found")
+                return
+            manifest = media_job.get("asset_manifest") if isinstance(media_job.get("asset_manifest"), list) else []
+            if not manifest:
+                self._send_error(HTTPStatus.BAD_REQUEST, "media asset job has no asset manifest to review")
+                return
+            confirmations = {
+                "fact_consistency_confirmed": body.get("fact_consistency_confirmed") is True,
+                "commercial_rights_confirmed": body.get("commercial_rights_confirmed") is True,
+                "platform_rules_checked": body.get("platform_rules_checked") is True,
+            }
+            if decision == "approve_for_listing_draft" and not all(confirmations.values()):
+                self._send_error(HTTPStatus.BAD_REQUEST, "all media review confirmations are required before Listing draft approval")
+                return
+            reviewed = self.repository.update_media_asset_job(
+                company_id=identity["company_id"],
+                media_job_id=parts[1],
+                status="approved_for_listing" if decision == "approve_for_listing_draft" else "needs_rework",
+                details={
+                    "event": "merchant_media_review",
+                    "decision": decision,
+                    "reviewed_by": identity["user_id"],
+                    "confirmations": confirmations,
+                    "note": str(body.get("note") or "")[:300],
+                    "triggers_real_platform_write": False,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                },
+            )
+            self._send_json(
+                {
+                    "media_asset_job": reviewed,
+                    "review": {
+                        "decision": decision,
+                        "listing_draft_writeback_allowed": decision == "approve_for_listing_draft",
+                        "triggers_real_platform_write": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                }
+            )
             return
 
         if path == "billing/checkout-session":
@@ -2644,10 +2743,19 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     output={"ai_ceo_chat": fast_chat, "secret_exposed": False},
                     audit_summary="AI CEO fast chat turn completed before model secret resolution.",
                 )
+                ai_ceo_market_report = self.repository.save_ai_ceo_market_research_report(
+                    task=task,
+                    message=message,
+                    chat=fast_chat,
+                    command_id=(command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
+                )
+                ai_ceo_market_report_delivery = build_ai_ceo_market_report_delivery(ai_ceo_market_report)
                 self._send_json(
                     {
                         "ai_ceo_chat": fast_chat,
                         "merchant_ceo_command": command_response,
+                        "ai_ceo_market_report": ai_ceo_market_report,
+                        "ai_ceo_market_report_delivery": ai_ceo_market_report_delivery,
                         "model_secret_resolution": {
                             "status": "not_required_for_fast_route",
                             "frontend_gets_model_api_key": False,
@@ -2666,12 +2774,25 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             model_secret_resolution = self._resolve_model_client_for_store(identity=identity, store_id=store_id, body=body)
             if model_secret_resolution.get("status") != "resolved":
                 blockers = model_secret_resolution.get("blocked_by") or [model_secret_resolution.get("status") or "model_secret_not_resolved"]
+                blocker_set = set(str(item) for item in blockers)
+                if {"merchant_model_api_key_not_saved", "platform_model_default_not_configured"}.issubset(blocker_set):
+                    blocked_answer = (
+                        "AI CEO 这次还不能生成完整回复：当前账号还没有保存自己的 AI 连接，"
+                        "捷境试用 AI 当前也未开通。你可以到设置里的 AI 与素材保存 DeepSeek/OpenAI 连接；"
+                        "普通公开来源搜索已接入，但没有可用文本 AI 时不会冒充完整模型回答。"
+                    )
+                else:
+                    blocked_answer = (
+                        "AI 连接暂时不可用。这次没有拿到可展示回复。"
+                        "你可以稍后重试，或到设置里的 AI 与素材查看连接状态；"
+                        "不要重复保存连接信息，除非页面明确提示连接已失效。"
+                    )
                 self._send_json(
                     {
                         "ai_ceo_chat": {
                             "status": "blocked_before_model_chat",
                             "blocked_by": blockers,
-                            "answer": "当前店铺的 AI 连接暂时不可用，所以我不会用固定话术冒充回答。你可以先问实时搜索类问题，或到设置页查看 AI 连接状态；系统会提示是模型名、额度、网络还是连接未就绪。",
+                            "answer": blocked_answer,
                             **route_meta,
                             "model_secret_resolution": {
                                 key: value
@@ -2683,11 +2804,49 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             "secret_exposed": False,
                         },
                         "merchant_ceo_command": command_response,
+                        "platform_model_resolution": model_secret_resolution.get("platform_model_resolution") or {},
                         "real_platform_writes_enabled": False,
                     },
                     status=HTTPStatus.ACCEPTED,
                 )
                 return
+            if model_secret_resolution.get("mode") == "platform_managed_default":
+                platform_trial_quota = self._platform_model_trial_quota(identity=identity)
+                model_secret_resolution["platform_trial_quota"] = platform_trial_quota
+                if not platform_trial_quota.get("allowed"):
+                    self._send_json(
+                        {
+                            "ai_ceo_chat": {
+                                "status": "blocked_before_model_chat",
+                                "blocked_by": ["platform_default_model_trial_exhausted"],
+                                "answer": (
+                                    "当前账号的捷境托管 AI 试用额度已用完。"
+                                    "你可以在设置里的 AI 与素材绑定自己的 DeepSeek 或 OpenAI 连接，"
+                                    "也可以升级套餐后继续使用捷境托管 AI。"
+                                ),
+                                **route_meta,
+                                "model_secret_resolution": {
+                                    key: value
+                                    for key, value in model_secret_resolution.items()
+                                    if key not in {"model_client", "secret_value"}
+                                },
+                                "platform_trial_quota": platform_trial_quota,
+                                "frontend_gets_model_api_key": False,
+                                "runtime_gets_raw_ebay_token": False,
+                                "secret_exposed": False,
+                            },
+                            "merchant_ceo_command": command_response,
+                            "model_secret_resolution": {
+                                key: value
+                                for key, value in model_secret_resolution.items()
+                                if key not in {"model_client", "secret_value"}
+                            },
+                            "real_platform_writes_enabled": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.PAYMENT_REQUIRED,
+                    )
+                    return
             chat = run_ai_ceo_chat(
                 repository=self.repository,
                 company_id=identity["company_id"],
@@ -2736,6 +2895,16 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "memory_policy": chat.get("memory_policy"),
                     "decision_center_required": bool(chat.get("decision_center_required")),
                     "model_secret_ref": model_secret_resolution.get("secret_ref"),
+                    "model_resolution_mode": model_secret_resolution.get("mode"),
+                    "model_secret_ref_scope": model_secret_resolution.get("secret_ref_scope"),
+                    "model_usage_owner": (
+                        "merchant_account_byok"
+                        if model_secret_resolution.get("merchant_pays_provider_directly")
+                        else "jiejing_platform_trial"
+                        if model_secret_resolution.get("mode") == "platform_managed_default"
+                        else "unknown"
+                    ),
+                    "platform_trial_quota": model_secret_resolution.get("platform_trial_quota") or {},
                     "provider_key": model_secret_resolution.get("provider_key"),
                     "frontend_gets_model_api_key": False,
                     "runtime_gets_raw_ebay_token": False,
@@ -2755,11 +2924,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "local_clock_answered",
                     "realtime_search_answered",
                     "realtime_search_answered_without_model",
+                    "source_backed_market_report_draft",
+                    "market_report_recovery_draft",
                 }
                 else "blocked",
                 output={"ai_ceo_chat": chat, "secret_exposed": False},
                 audit_summary="AI CEO chat turn completed through backend model boundary.",
             )
+            ai_ceo_market_report = self.repository.save_ai_ceo_market_research_report(
+                task=task,
+                message=message,
+                chat=chat,
+                command_id=(command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
+            )
+            ai_ceo_market_report_delivery = build_ai_ceo_market_report_delivery(ai_ceo_market_report)
             status = (
                 HTTPStatus.CREATED
                 if chat.get("status")
@@ -2770,6 +2948,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "local_clock_answered",
                     "realtime_search_answered",
                     "realtime_search_answered_without_model",
+                    "source_backed_market_report_draft",
+                    "market_report_recovery_draft",
                 }
                 else HTTPStatus.ACCEPTED
             )
@@ -2782,6 +2962,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         for key, value in model_secret_resolution.items()
                         if key not in {"model_client", "secret_value"}
                     },
+                    "ai_ceo_market_report": ai_ceo_market_report,
+                    "ai_ceo_market_report_delivery": ai_ceo_market_report_delivery,
                     "frontend_gets_model_api_key": False,
                     "runtime_gets_raw_ebay_token": False,
                     "real_platform_writes_enabled": False,
@@ -2812,8 +2994,22 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             model = str(body.get("model") or definition.default_model).strip() or definition.default_model
             raw_base_url = str(body.get("base_url") or "").strip().rstrip("/")
             base_url = normalize_model_api_base_url(provider_key=definition.provider_key, base_url=raw_base_url)
+            requested_scope = str(
+                body.get("model_scope")
+                or body.get("connection_scope")
+                or body.get("scope")
+                or "account"
+            ).strip().lower()
+            if requested_scope not in {"account", "store"}:
+                self._send_error(HTTPStatus.BAD_REQUEST, "unsupported model connection scope")
+                return
+            model_connection_scope = requested_scope
+            secret_store_id = store_id if model_connection_scope == "store" else None
             metadata = {
-                "contract_version": "2026-05-20-merchant-byok-model-secret",
+                "contract_version": "2026-07-03-merchant-account-byok-model-secret",
+                "model_connection_scope": model_connection_scope,
+                "scope": model_connection_scope,
+                "store_context_id": store_id,
                 "provider_key": definition.provider_key,
                 "provider_label": definition.label,
                 "api_style": definition.api_style,
@@ -2825,7 +3021,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "supported_live_adapter": definition.supported_live_adapter,
                 "merchant_brings_own_key": True,
                 "merchant_pays_provider_directly": True,
-                "jiejing_stores_only_secret_ref": True,
+                "merchant_model_follows_account": model_connection_scope == "account",
+                "jiejing_account_scoped_model_secret_ref": model_connection_scope == "account",
+                "jiejing_store_scoped_model_secret_ref": model_connection_scope == "store",
+                "jiejing_stores_only_secret_ref": model_connection_scope == "store",
                 "frontend_gets_raw_key_after_save": False,
                 "runtime_gets_raw_key": False,
                 "reports_get_raw_key": False,
@@ -2834,7 +3033,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             }
             secret_ref = self.repository.create_secret_reference(
                 company_id=identity["company_id"],
-                store_id=store_id,
+                store_id=secret_store_id,
                 user_id=identity["user_id"],
                 provider=model_secret_provider(definition.provider_key),
                 purpose=MODEL_SECRET_PURPOSE,
@@ -2853,7 +3052,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             final_status = "ready" if ready else stored_status or "store_blocked"
             secret_ref = self.repository.update_secret_reference_status(
                 company_id=identity["company_id"],
-                store_id=store_id,
+                store_id=secret_store_id,
                 secret_ref=str(secret_ref["secret_ref"]),
                 status=final_status,
                 user_id=identity["user_id"],
@@ -2871,8 +3070,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 {
                     "model_secret_ref": secret_ref,
                     "model_settings": public_model_settings_from_secret_refs(
-                        self.repository.list_secret_refs(company_id=identity["company_id"], store_id=store_id)
+                        self._model_settings_secret_refs_for_store(identity=identity, store_id=store_id)
                     ),
+                    "model_connection_scope": model_connection_scope,
                     "provider": definition.public_dict(),
                     "storage": {
                         key: value
@@ -3592,7 +3792,28 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         provider_status = readiness.get("provider_status") if isinstance(readiness.get("provider_status"), dict) else {}
         billing = provider_status.get("billing") if isinstance(provider_status.get("billing"), dict) else {}
         model_value = provider_status.get("model_value") if isinstance(provider_status.get("model_value"), dict) else {}
+        model_value_ready = bool(
+            model_value.get("ready_for_paid_value_claim")
+            or model_value.get("ready")
+            or model_value.get("model_value_ready")
+        )
+        model_value_blockers = model_value.get("blockers") if isinstance(model_value.get("blockers"), list) else []
+        model_value_report_types = (
+            model_value.get("live_model_report_types")
+            if isinstance(model_value.get("live_model_report_types"), list)
+            else []
+        )
+        platform_model = (
+            provider_status.get("ai_ceo_platform_model")
+            if isinstance(provider_status.get("ai_ceo_platform_model"), dict)
+            else {}
+        )
         public_search = provider_status.get("public_search") if isinstance(provider_status.get("public_search"), dict) else {}
+        media_generation = (
+            provider_status.get("media_generation")
+            if isinstance(provider_status.get("media_generation"), dict)
+            else {}
+        )
         public_evidence: dict[str, Any] = {
             "latest_ebay_packet_status": evidence.get("latest_ebay_packet_status", ""),
             "latest_ebay_packet_source_mode": evidence.get("latest_ebay_packet_source_mode", ""),
@@ -3625,7 +3846,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         return {
             "service": readiness.get("service", "jiejing-saas-backend"),
             "readiness_version": readiness.get("readiness_version", ""),
-            "public_contract_version": "2026-07-03-public-readiness-search-summary",
+            "public_contract_version": "2026-07-10-public-readiness-model-value-summary",
             "detail_scope": "public_summary",
             "internal_detail_required": True,
             "authenticated_summary": authenticated,
@@ -3685,8 +3906,42 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "secret_exposed": False,
                 },
                 "model_value": {
-                    "status": model_value.get("status", ""),
-                    "ready": bool(model_value.get("ready") or model_value.get("model_value_ready")),
+                    "status": "ready" if model_value_ready else model_value.get("status", "blocked"),
+                    "ready": model_value_ready,
+                    "live_model_report_types": [
+                        str(item)
+                        for item in model_value_report_types
+                        if str(item) in {"market.report", "listing.package"}
+                    ],
+                    "blocker_count": len(model_value_blockers),
+                    "secret_exposed": False,
+                },
+                "ai_ceo_platform_model": {
+                    "enabled": bool(platform_model.get("enabled")),
+                    "configured": bool(platform_model.get("configured")),
+                    "status": platform_model.get("status", ""),
+                    "provider": platform_model.get("provider", ""),
+                    "model": platform_model.get("model", ""),
+                    "trial_monthly_limit": int(platform_model.get("trial_monthly_limit") or 0),
+                    "trial_quota_scope": platform_model.get("trial_quota_scope", "account_month"),
+                    "usage_owner": platform_model.get("usage_owner", "jiejing_platform_trial"),
+                    "quota_checked_by_backend": bool(platform_model.get("quota_checked_by_backend", True)),
+                    "hard_stop_on_exhaustion": bool(platform_model.get("hard_stop_on_exhaustion", True)),
+                    "exhaustion_blocker": platform_model.get(
+                        "exhaustion_blocker",
+                        "platform_default_model_trial_exhausted",
+                    ),
+                    "merchant_byok_preferred": True,
+                    "merchant_byok_not_counted_against_platform_trial": True,
+                    "byok_bypasses_platform_trial": True,
+                    "customer_visible_next_action": platform_model.get(
+                        "customer_visible_next_action",
+                        "save_account_ai_or_upgrade_plan",
+                    ),
+                    "operator_cost_monitoring_required": True,
+                    "frontend_can_grant_quota": False,
+                    "frontend_gets_model_api_key": False,
+                    "runtime_gets_model_api_key": False,
                     "secret_exposed": False,
                 },
                 "public_search": {
@@ -3699,6 +3954,31 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "builtin_stock_quote_fallback_enabled": bool(public_search.get("builtin_stock_quote_fallback_enabled")),
                     "frontend_gets_search_api_key": False,
                     "runtime_gets_search_api_key": False,
+                    "secret_exposed": False,
+                },
+                "media_generation": {
+                    "contract_version": media_generation.get("contract_version", ""),
+                    "configured": bool(media_generation.get("configured")),
+                    "status": media_generation.get("status", ""),
+                    "live_generation_enabled": bool(media_generation.get("live_generation_enabled")),
+                    "live_image_generation_enabled": bool(media_generation.get("live_image_generation_enabled")),
+                    "live_video_generation_enabled": bool(media_generation.get("live_video_generation_enabled")),
+                    "live_provider_calls_allowed": bool(media_generation.get("live_provider_calls_allowed")),
+                    "asset_manifest_required": bool(media_generation.get("asset_manifest_required", True)),
+                    "asset_review_required": bool(media_generation.get("asset_review_required", True)),
+                    "fact_review_required": bool(media_generation.get("fact_review_required", True)),
+                    "human_review_required_before_listing": bool(
+                        media_generation.get("human_review_required_before_listing", True)
+                    ),
+                    "cost_guard_required": bool(media_generation.get("cost_guard_required", True)),
+                    "spend_now_allowed": False,
+                    "listing_use_requires_review": True,
+                    "customer_visible_summary": media_generation.get("customer_visible_summary", ""),
+                    "next_action": media_generation.get("next_action", ""),
+                    "frontend_gets_media_api_key": False,
+                    "runtime_gets_raw_secret": False,
+                    "reports_get_raw_provider_response": False,
+                    "raw_provider_response_stored": False,
                     "secret_exposed": False,
                 },
             },
@@ -4002,6 +4282,80 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         safe_plan["secret_exposed"] = False
         return safe_plan
 
+    def _platform_model_trial_guardrail(self, *, limit: int | None = None) -> dict[str, Any]:
+        monthly_limit = (
+            int(limit)
+            if limit is not None
+            else _nonnegative_int_env(
+                PLATFORM_MODEL_TRIAL_MONTHLY_LIMIT_ENV,
+                PLATFORM_MODEL_TRIAL_DEFAULT_MONTHLY_LIMIT,
+            )
+        )
+        return {
+            "trial_quota_scope": "account_month",
+            "usage_owner": "jiejing_platform_trial",
+            "usage_owner_label": "捷境试用 AI",
+            "quota_checked_by_backend": True,
+            "monthly_limit": monthly_limit,
+            "hard_stop_on_exhaustion": True,
+            "exhaustion_blocker": "platform_default_model_trial_exhausted",
+            "hard_stop_scope": "platform_managed_default_ai_only",
+            "merchant_byok_not_counted": True,
+            "byok_bypasses_platform_trial": True,
+            "counted_model_resolution_modes": ["platform_managed_default"],
+            "byok_model_resolution_modes_not_counted": ["account_byok", "company_byok_default", "merchant_byok"],
+            "customer_visible_next_action": "save_account_ai_or_upgrade_plan",
+            "operator_cost_monitoring_required": True,
+            "frontend_can_grant_quota": False,
+            "triggers_real_charge": False,
+            "secret_exposed": False,
+        }
+
+    def _platform_model_trial_quota(self, *, identity: dict[str, Any]) -> dict[str, Any]:
+        limit = _nonnegative_int_env(
+            PLATFORM_MODEL_TRIAL_MONTHLY_LIMIT_ENV,
+            PLATFORM_MODEL_TRIAL_DEFAULT_MONTHLY_LIMIT,
+        )
+        guardrail = self._platform_model_trial_guardrail(limit=limit)
+        period = time.strftime("%Y-%m", time.gmtime())
+        used = 0
+        for task in self.repository.list_tasks(company_id=identity["company_id"]):
+            if str(task.get("created_at") or "")[:7] != period:
+                continue
+            if str(task.get("task_type") or "") != "merchant_ceo_chat":
+                continue
+            task_input = task.get("input") if isinstance(task.get("input"), dict) else {}
+            task_output = task.get("output") if isinstance(task.get("output"), dict) else {}
+            chat = task_output.get("ai_ceo_chat") if isinstance(task_output.get("ai_ceo_chat"), dict) else {}
+            model_client = chat.get("model_client") if isinstance(chat.get("model_client"), dict) else {}
+            platform_used = (
+                task_input.get("model_resolution_mode") == "platform_managed_default"
+                or task_input.get("model_usage_owner") == "jiejing_platform_trial"
+                or (
+                    model_client.get("merchant_pays_provider_directly") is False
+                    and model_client.get("jiejing_pays_provider_usage") is True
+                )
+            )
+            if platform_used:
+                used += 1
+        remaining = max(0, limit - used) if limit > 0 else 0
+        allowed = limit <= 0 or used < limit
+        return {
+            "contract_version": "2026-07-03-ai-ceo-platform-model-trial-quota",
+            **guardrail,
+            "scope": "account_month",
+            "period": period,
+            "monthly_limit": limit,
+            "used": used,
+            "remaining": remaining,
+            "allowed": allowed,
+            "unlimited_when_limit_zero": limit <= 0,
+            "quota_source": "backend_task_audit",
+            "account_space_id_present": bool(identity.get("company_id")),
+            "requires_merchant_byok_or_plan_upgrade_when_exhausted": True,
+            "secret_exposed": False,
+        }
+
     def _require_quota(self, identity: dict[str, Any], action_unit: str) -> bool:
         evaluation = evaluate_quota_action(
             self.settings,
@@ -4011,6 +4365,17 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         )
         if evaluation.get("allowed") is True:
             return True
+        recovery = self._recover_missing_private_beta_entitlement(identity=identity, evaluation=evaluation)
+        if recovery.get("ok") is True:
+            evaluation = evaluate_quota_action(
+                self.settings,
+                self.repository,
+                company_id=identity["company_id"],
+                action_unit=action_unit,
+            )
+            if evaluation.get("allowed") is True:
+                return True
+            evaluation = {**evaluation, "private_beta_entitlement_recovery": recovery}
         self._send_json(
             {
                 "error": "quota exhausted",
@@ -4023,16 +4388,132 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         )
         return False
 
+    def _recover_missing_private_beta_entitlement(self, *, identity: dict[str, Any], evaluation: dict[str, Any]) -> dict[str, Any]:
+        """Recover legacy staging accounts that predate automatic beta entitlement seeding."""
+
+        usage = evaluation.get("usage") if isinstance(evaluation.get("usage"), dict) else {}
+        subscription = usage.get("subscription") if isinstance(usage.get("subscription"), dict) else {}
+        reason = str(evaluation.get("reason") or subscription.get("block_reason") or "")
+        if reason != "billing_test_subscription_not_rehearsed":
+            return {"ok": False, "status": "not_missing_test_subscription", "secret_exposed": False}
+        try:
+            recovered = apply_test_billing_event(
+                self.repository,
+                company_id=str(identity.get("company_id") or ""),
+                user_id=str(identity.get("user_id") or ""),
+                plan_key="starter",
+                action="activate",
+                event_nonce=f"legacy_recovery:{time.time_ns()}",
+            )
+        except Exception as exc:  # pragma: no cover - defensive legacy recovery guardrail
+            return {
+                "ok": False,
+                "status": "private_beta_entitlement_recovery_failed",
+                "reason": exc.__class__.__name__,
+                "creates_real_checkout_session": False,
+                "calls_stripe_api": False,
+                "triggers_real_charge": False,
+                "secret_exposed": False,
+            }
+        return {
+            "ok": bool(recovered.get("ok")),
+            "status": recovered.get("status") or "private_beta_entitlement_recovery_attempted",
+            "provider": recovered.get("provider"),
+            "action": recovered.get("action"),
+            "creates_real_checkout_session": False,
+            "calls_stripe_api": False,
+            "triggers_real_charge": False,
+            "secret_exposed": False,
+        }
+
+    def _model_settings_secret_refs_for_store(self, *, identity: dict[str, Any], store_id: str) -> list[dict[str, Any]]:
+        groups = self._model_secret_ref_groups_for_store(identity=identity, store_id=store_id)
+        return [
+            *[self._model_ref_with_effective_scope(item, "account") for item in groups["account"]],
+            *[self._model_ref_with_effective_scope(item, "store") for item in groups["store"]],
+            *[self._model_ref_with_effective_scope(item, "company") for item in groups["company"]],
+        ]
+
+    def _model_secret_ref_groups_for_store(self, *, identity: dict[str, Any], store_id: str) -> dict[str, list[dict[str, Any]]]:
+        all_refs = [
+            item
+            for item in self.repository.list_secret_refs(company_id=identity["company_id"])
+            if str(item.get("purpose") or "") == MODEL_SECRET_PURPOSE
+        ]
+        groups: dict[str, list[dict[str, Any]]] = {"account": [], "store": [], "company": []}
+        seen: set[str] = set()
+        for item in all_refs:
+            secret_ref = str(item.get("secret_ref") or "")
+            if not secret_ref or secret_ref in seen:
+                continue
+            scope = self._model_secret_ref_scope_for_identity(item, identity=identity, store_id=store_id)
+            if scope in groups:
+                groups[scope].append(item)
+                seen.add(secret_ref)
+        return groups
+
+    @staticmethod
+    def _model_secret_ref_scope_for_identity(item: dict[str, Any], *, identity: dict[str, Any], store_id: str) -> str:
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        explicit_scope = str(
+            metadata.get("model_connection_scope")
+            or metadata.get("scope")
+            or metadata.get("connection_scope")
+            or ""
+        ).strip().lower()
+        ref_store_id = str(item.get("store_id") or "")
+        created_by = str(item.get("created_by") or "")
+        user_id = str(identity.get("user_id") or "")
+        if explicit_scope == "company":
+            return "company"
+        if explicit_scope == "store":
+            return "store" if ref_store_id == store_id else ""
+        if created_by and created_by == user_id:
+            return "account"
+        if not ref_store_id:
+            return ""
+        if ref_store_id == store_id:
+            return "store"
+        return ""
+
+    @staticmethod
+    def _first_ready_model_ref(items: list[dict[str, Any]]) -> dict[str, Any] | None:
+        return next(
+            (
+                item
+                for item in items
+                if str(item.get("status") or "") in READY_MODEL_SECRET_STATUSES
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _model_ref_with_effective_scope(item: dict[str, Any], scope: str) -> dict[str, Any]:
+        copied = dict(item)
+        metadata = dict(item.get("metadata") if isinstance(item.get("metadata"), dict) else {})
+        metadata["model_connection_scope"] = scope
+        metadata["scope"] = scope
+        copied["metadata"] = metadata
+        return copied
+
     def _resolve_model_client_for_store(self, *, identity: dict[str, Any], store_id: str, body: dict[str, Any]) -> dict[str, Any]:
         requested_secret_ref = str(body.get("model_secret_ref") or "").strip()
         use_byok = body.get("use_merchant_byok") is not False
         if not requested_secret_ref and not use_byok:
+            platform_resolution = self._resolve_platform_default_model_client(body=body)
+            if platform_resolution.get("status") == "resolved":
+                return platform_resolution
             return {"status": "not_requested", "mode": "env_model_or_none", "secret_exposed": False}
-        secret_refs = self.repository.list_secret_refs(company_id=identity["company_id"], store_id=store_id)
-        model_refs = [item for item in secret_refs if str(item.get("purpose") or "") == MODEL_SECRET_PURPOSE]
+        grouped_refs = self._model_secret_ref_groups_for_store(identity=identity, store_id=store_id)
+        account_refs = grouped_refs["account"]
+        store_refs = grouped_refs["store"]
+        company_refs = grouped_refs["company"]
+        eligible_refs = [*account_refs, *store_refs, *company_refs]
         selected = None
+        selected_mode = "merchant_byok"
+        selected_scope = "store"
         if requested_secret_ref:
-            selected = next((item for item in model_refs if item.get("secret_ref") == requested_secret_ref), None)
+            selected = next((item for item in eligible_refs if item.get("secret_ref") == requested_secret_ref), None)
             if not selected:
                 return {
                     "status": "blocked",
@@ -4040,22 +4521,44 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "requested_secret_ref": requested_secret_ref,
                     "secret_exposed": False,
                 }
-        else:
-            selected = next(
-                (
-                    item
-                    for item in model_refs
-                    if str(item.get("status") or "") in READY_MODEL_SECRET_STATUSES
-                ),
-                None,
+            selected_scope = self._model_secret_ref_scope_for_identity(selected, identity=identity, store_id=store_id) or "store"
+            selected_mode = (
+                "account_byok"
+                if selected_scope == "account"
+                else "company_byok_default"
+                if selected_scope == "company"
+                else "merchant_byok"
             )
+        else:
+            selected = self._first_ready_model_ref(account_refs)
+            if selected:
+                selected_mode = "account_byok"
+                selected_scope = "account"
+            else:
+                selected = self._first_ready_model_ref(store_refs)
+                if selected:
+                    selected_mode = "merchant_byok"
+                    selected_scope = "store"
         if not selected:
-            return {
-                "status": "not_configured",
-                "mode": "merchant_byok",
-                "blocked_by": ["merchant_model_api_key_not_saved"],
-                "secret_exposed": False,
-            }
+            selected = self._first_ready_model_ref(company_refs)
+            if selected:
+                selected_mode = "company_byok_default"
+                selected_scope = "company"
+            else:
+                platform_resolution = self._resolve_platform_default_model_client(body=body)
+                if platform_resolution.get("status") == "resolved":
+                    return platform_resolution
+                return {
+                    "status": "not_configured",
+                    "mode": "merchant_byok_or_platform_default",
+                    "blocked_by": ["merchant_model_api_key_not_saved", "platform_model_default_not_configured"],
+                    "platform_model_resolution": {
+                        key: value
+                        for key, value in platform_resolution.items()
+                        if key not in {"model_client", "secret_value"}
+                    },
+                    "secret_exposed": False,
+                }
         if str(selected.get("status") or "") not in READY_MODEL_SECRET_STATUSES:
             return {
                 "status": "blocked",
@@ -4125,15 +4628,132 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             }
         return {
             "status": "resolved",
-            "mode": "merchant_byok",
+            "mode": selected_mode,
             "provider_key": definition.provider_key,
             "provider_label": definition.label,
             "api_style": definition.api_style,
             "model": getattr(model_client, "model", "") or metadata.get("model") or definition.default_model,
             "endpoint_host": urlparse(getattr(model_client, "endpoint", "") or "").netloc,
             "secret_ref": selected.get("secret_ref"),
+            "secret_ref_scope": selected_scope,
             "model_client": model_client,
             "merchant_pays_provider_directly": True,
+            "frontend_gets_model_api_key": False,
+            "runtime_gets_model_api_key": False,
+            "reports_get_model_api_key": False,
+            "secret_exposed": False,
+        }
+
+    def _resolve_platform_default_model_client(self, *, body: dict[str, Any]) -> dict[str, Any]:
+        provider_key = (
+            os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL_PROVIDER")
+            or os.environ.get("JIEJING_MODEL_PROVIDER")
+            or ""
+        ).strip()
+        explicit_api_key = (os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL_API_KEY") or "").strip()
+        platform_enabled = _env_bool("JIEJING_AI_CEO_PLATFORM_MODEL_ENABLED", default=bool(explicit_api_key))
+        if not platform_enabled:
+            return {
+                "status": "not_configured",
+                "mode": "platform_managed_default",
+                "blocked_by": ["platform_model_default_not_enabled"],
+                "secret_exposed": False,
+            }
+        if not provider_key:
+            provider_key = "deepseek" if os.environ.get("DEEPSEEK_API_KEY") else "openai"
+        definition = get_model_provider(provider_key)
+        if not definition:
+            return {
+                "status": "blocked",
+                "mode": "platform_managed_default",
+                "blocked_by": ["unsupported_platform_model_provider"],
+                "provider_key": provider_key,
+                "secret_exposed": False,
+            }
+        if not definition.supported_live_adapter:
+            return {
+                "status": "blocked",
+                "mode": "platform_managed_default",
+                "blocked_by": ["platform_model_provider_adapter_not_implemented"],
+                "provider_key": definition.provider_key,
+                "provider_label": definition.label,
+                "secret_exposed": False,
+            }
+        api_key = explicit_api_key
+        if not api_key:
+            if definition.provider_key == "deepseek":
+                api_key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+            if not api_key:
+                api_key = (os.environ.get("JIEJING_MODEL_API_KEY") or "").strip()
+        model = (
+            str(body.get("model") or "").strip()
+            or (os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL") or "").strip()
+            or (os.environ.get("JIEJING_MODEL") or "").strip()
+            or definition.default_model
+        )
+        base_url = normalize_model_api_base_url(
+            provider_key=definition.provider_key,
+            base_url=(
+                os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL_BASE_URL")
+                or os.environ.get("JIEJING_MODEL_BASE_URL")
+                or definition.default_base_url
+            ),
+        )
+        if not api_key:
+            return {
+                "status": "not_configured",
+                "mode": "platform_managed_default",
+                "blocked_by": ["platform_model_api_key_not_configured"],
+                "provider_key": definition.provider_key,
+                "provider_label": definition.label,
+                "model": model,
+                "secret_exposed": False,
+            }
+        try:
+            model_client = build_model_client_from_byok_secret(
+                provider_key=definition.provider_key,
+                api_key=api_key,
+                model=model,
+                base_url=base_url,
+            )
+        except ValueError as exc:
+            return {
+                "status": "blocked",
+                "mode": "platform_managed_default",
+                "blocked_by": [str(exc)],
+                "provider_key": definition.provider_key,
+                "provider_label": definition.label,
+                "secret_exposed": False,
+            }
+        if hasattr(model_client, "configured") and not model_client.configured():
+            return {
+                "status": "blocked",
+                "mode": "platform_managed_default",
+                "blocked_by": ["platform_model_client_not_configured_or_live_disabled"],
+                "provider_key": definition.provider_key,
+                "provider_label": definition.label,
+                "model": model,
+                "secret_exposed": False,
+            }
+        return {
+            "status": "resolved",
+            "mode": "platform_managed_default",
+            "provider_key": definition.provider_key,
+            "provider_label": definition.label,
+            "api_style": definition.api_style,
+            "model": getattr(model_client, "model", "") or model,
+            "endpoint_host": urlparse(getattr(model_client, "endpoint", "") or "").netloc,
+            "secret_ref": "",
+            "secret_ref_scope": "platform",
+            "model_client": model_client,
+            "merchant_pays_provider_directly": False,
+            "jiejing_pays_provider_usage": True,
+            "platform_trial": {
+                **self._platform_model_trial_guardrail(),
+                "enabled": True,
+                "requires_merchant_byok_or_plan_upgrade_when_exhausted": True,
+                "secret_exposed": False,
+            },
             "frontend_gets_model_api_key": False,
             "runtime_gets_model_api_key": False,
             "reports_get_model_api_key": False,

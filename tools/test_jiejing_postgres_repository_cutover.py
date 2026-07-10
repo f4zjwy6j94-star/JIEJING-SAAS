@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -14,6 +15,10 @@ if str(ROOT) not in sys.path:
 
 from jiejing_saas.postgres_repository_runtime import (  # noqa: E402
     placeholder_count,
+    postgres_pool_enabled,
+    postgres_pool_max_size,
+    postgres_pool_min_size,
+    postgres_pool_wait_timeout_seconds,
     translate_sqlite_query_to_postgres,
 )
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
@@ -88,11 +93,46 @@ def main() -> int:
     if repo.database_engine != "postgres" or repo.database_url.endswith("@db:5432/jiejing") is False:
         return fail("SaaSRepository must preserve selected Postgres runtime configuration")
 
+    pool_env_keys = (
+        "JIEJING_DATABASE_POOL_ENABLED",
+        "JIEJING_DATABASE_POOL_MIN_SIZE",
+        "JIEJING_DATABASE_POOL_MAX_SIZE",
+        "JIEJING_DATABASE_POOL_WAIT_TIMEOUT_SECONDS",
+    )
+    previous_pool_env = {key: os.environ.get(key) for key in pool_env_keys}
+    try:
+        os.environ["JIEJING_DATABASE_POOL_ENABLED"] = "true"
+        os.environ["JIEJING_DATABASE_POOL_MIN_SIZE"] = "2"
+        os.environ["JIEJING_DATABASE_POOL_MAX_SIZE"] = "12"
+        os.environ["JIEJING_DATABASE_POOL_WAIT_TIMEOUT_SECONDS"] = "7"
+        if not postgres_pool_enabled():
+            return fail("Postgres connection pooling must be enabled by default for managed runtime")
+        if postgres_pool_min_size() != 2 or postgres_pool_max_size() != 12 or postgres_pool_wait_timeout_seconds() != 7:
+            return fail("Postgres pool limits must honor bounded environment configuration")
+        os.environ["JIEJING_DATABASE_POOL_MAX_SIZE"] = "999"
+        if postgres_pool_max_size() != 32:
+            return fail("Postgres pool max size must clamp unsafe deployment values")
+    finally:
+        for key, value in previous_pool_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    runtime_text = (ROOT / "jiejing_saas" / "postgres_repository_runtime.py").read_text(encoding="utf-8")
+    requirements_text = (ROOT / "requirements.saas.txt").read_text(encoding="utf-8")
+    if "ConnectionPool(" not in runtime_text or "psycopg_pool" not in requirements_text:
+        return fail("managed Postgres runtime must ship a bounded connection pool dependency")
+    if "_postgres_initialize_lock" not in repository_text:
+        return fail("Postgres migration initialization must be guarded against concurrent requests")
+
     summary = {
         "postgres_repository_runtime_switch_implemented": True,
         "placeholder_translation": True,
         "sqlite_upsert_translation": True,
         "inventory_translation": True,
+        "bounded_connection_pool": True,
+        "concurrent_migration_guard": True,
         "secret_exposed": False,
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))

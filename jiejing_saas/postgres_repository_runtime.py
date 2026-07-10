@@ -9,9 +9,11 @@ inspection.
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
+import threading
 from typing import Any, Iterable, Sequence
 
 
@@ -74,6 +76,10 @@ order by table_name
 """
 
 
+_POSTGRES_POOLS: dict[str, Any] = {}
+_POSTGRES_POOLS_LOCK = threading.Lock()
+
+
 def postgres_connect_timeout_seconds() -> int:
     raw = os.environ.get("JIEJING_DATABASE_CONNECT_TIMEOUT_SECONDS", "").strip()
     if not raw:
@@ -85,6 +91,24 @@ def postgres_connect_timeout_seconds() -> int:
     return min(max(value, 1), 15)
 
 
+def postgres_pool_enabled() -> bool:
+    raw = os.environ.get("JIEJING_DATABASE_POOL_ENABLED", "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def postgres_pool_min_size() -> int:
+    return _bounded_int_env("JIEJING_DATABASE_POOL_MIN_SIZE", default=1, minimum=0, maximum=8)
+
+
+def postgres_pool_max_size() -> int:
+    minimum = postgres_pool_min_size()
+    return _bounded_int_env("JIEJING_DATABASE_POOL_MAX_SIZE", default=8, minimum=max(1, minimum), maximum=32)
+
+
+def postgres_pool_wait_timeout_seconds() -> int:
+    return _bounded_int_env("JIEJING_DATABASE_POOL_WAIT_TIMEOUT_SECONDS", default=5, minimum=1, maximum=30)
+
+
 def connect_postgres_repository(database_url: str) -> PostgresConnectionAdapter:
     if not database_url:
         raise RuntimeError("Postgres repository selected but JIEJING_DATABASE_URL is not configured.")
@@ -94,8 +118,62 @@ def connect_postgres_repository(database_url: str) -> PostgresConnectionAdapter:
     except Exception as exc:  # pragma: no cover - depends on deployment image
         raise RuntimeError("Postgres repository selected but psycopg is not installed.") from exc
 
+    if postgres_pool_enabled():
+        pool = _postgres_pool(database_url, row_factory=dict_row)
+        connection_context = pool.connection(timeout=postgres_pool_wait_timeout_seconds())
+        raw = connection_context.__enter__()
+        return PostgresConnectionAdapter(raw, connection_context=connection_context)
+
     raw = psycopg.connect(database_url, connect_timeout=postgres_connect_timeout_seconds(), row_factory=dict_row)
     return PostgresConnectionAdapter(raw)
+
+
+def close_postgres_pools() -> None:
+    with _POSTGRES_POOLS_LOCK:
+        pools = list(_POSTGRES_POOLS.values())
+        _POSTGRES_POOLS.clear()
+    for pool in pools:
+        try:
+            pool.close()
+        except Exception:
+            pass
+
+
+atexit.register(close_postgres_pools)
+
+
+def _postgres_pool(database_url: str, *, row_factory: Any) -> Any:
+    try:
+        from psycopg_pool import ConnectionPool  # type: ignore[import-not-found]
+    except Exception as exc:  # pragma: no cover - depends on deployment image
+        raise RuntimeError("Postgres pooling is enabled but psycopg_pool is not installed.") from exc
+
+    with _POSTGRES_POOLS_LOCK:
+        existing = _POSTGRES_POOLS.get(database_url)
+        if existing is not None:
+            return existing
+        pool = ConnectionPool(
+            conninfo=database_url,
+            min_size=postgres_pool_min_size(),
+            max_size=postgres_pool_max_size(),
+            timeout=postgres_pool_wait_timeout_seconds(),
+            kwargs={
+                "connect_timeout": postgres_connect_timeout_seconds(),
+                "row_factory": row_factory,
+            },
+            open=True,
+        )
+        _POSTGRES_POOLS[database_url] = pool
+        return pool
+
+
+def _bounded_int_env(key: str, *, default: int, minimum: int, maximum: int) -> int:
+    raw = os.environ.get(key, "").strip()
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        value = default
+    return min(max(value, minimum), maximum)
 
 
 class PostgresConnectionAdapter:
@@ -103,14 +181,18 @@ class PostgresConnectionAdapter:
 
     driver_name = "postgres"
 
-    def __init__(self, raw_connection: Any) -> None:
+    def __init__(self, raw_connection: Any, *, connection_context: Any | None = None) -> None:
         self._conn = raw_connection
+        self._connection_context = connection_context
 
     def __enter__(self) -> "PostgresConnectionAdapter":
-        self._conn.__enter__()
+        if self._connection_context is None:
+            self._conn.__enter__()
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        if self._connection_context is not None:
+            return self._connection_context.__exit__(exc_type, exc, tb)
         return self._conn.__exit__(exc_type, exc, tb)
 
     def execute(self, sql: str, params: Sequence[Any] | None = None) -> "PostgresCursorAdapter":

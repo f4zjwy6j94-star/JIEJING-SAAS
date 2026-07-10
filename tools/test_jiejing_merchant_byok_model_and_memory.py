@@ -47,12 +47,17 @@ def main() -> None:
     providers = {item["provider_key"]: item for item in catalog["providers"]}
     assert providers["openai"]["key_url"] == "https://platform.openai.com/api-keys"
     assert providers["deepseek"]["merchant_brings_own_key"] is True
+    assert providers["deepseek"]["default_base_url"] == "https://api.deepseek.com"
+    assert providers["deepseek"]["default_model"] == "deepseek-v4-pro"
     assert providers["anthropic"]["supported_live_adapter"] is False
+    assert catalog["jiejing_account_scoped_model_secret_ref"] is True
+    assert catalog["jiejing_stores_only_secret_ref"] is False
     assert (
         normalize_model_api_base_url(provider_key="deepseek", base_url="https://api-docs.deepseek.com/zh-cn/")
         == providers["deepseek"]["default_base_url"]
     )
-    assert normalize_model_api_base_url(provider_key="deepseek", base_url="https://api.deepseek.com/v1") == "https://api.deepseek.com/v1"
+    assert normalize_model_api_base_url(provider_key="deepseek", base_url="https://api.deepseek.com/v1") == "https://api.deepseek.com"
+    assert normalize_model_api_base_url(provider_key="deepseek", base_url="https://api.deepseek.com") == "https://api.deepseek.com"
 
     repo.create_secret_reference(
         company_id=company["company_id"],
@@ -74,8 +79,10 @@ def main() -> None:
     settings = public_model_settings_from_secret_refs(
         repo.list_secret_refs(company_id=company["company_id"], store_id=store["store_id"])
     )
-    assert settings["mode"] == "merchant_byok"
+    assert settings["mode"] == "merchant_byok_account_default"
     assert settings["configured"] is True
+    assert settings["active_scope"] == "store"
+    assert settings["merchant_model_follows_account"] is True
     assert settings["frontend_gets_raw_key_after_save"] is False
 
     packet = repo.create_platform_data_packet(
@@ -189,7 +196,7 @@ def main() -> None:
         metadata={
             "provider_key": "deepseek",
             "model": "deepseek-v4-pro",
-            "base_url": "https://api.deepseek.com/v1",
+            "base_url": "https://api.deepseek.com",
             "merchant_brings_own_key": True,
             "frontend_gets_model_api_key": False,
             "runtime_gets_model_api_key": False,
@@ -201,9 +208,12 @@ def main() -> None:
     )
     assert managed_settings["configured"] is True
     assert managed_settings["active_provider"] == "deepseek"
+    assert managed_settings["active_scope"] == "store"
     managed_gate = build_model_value_gate(settings_obj, repo)
     assert managed_gate["merchant_byok_model"]["configured"] is True
     assert managed_gate["merchant_byok_model"]["ready_secret_ref_count"] == 2
+    assert managed_gate["merchant_byok_model"]["jiejing_account_scoped_model_secret_ref"] is True
+    assert managed_gate["merchant_byok_model"]["jiejing_stores_only_secret_ref"] is False
 
     print("PASS jiejing_merchant_byok_model_and_memory")
 

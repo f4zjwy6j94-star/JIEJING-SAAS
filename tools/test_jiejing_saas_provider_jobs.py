@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -30,6 +31,8 @@ def main() -> int:
         if path.exists():
             path.unlink()
     port = 8793
+    env = os.environ.copy()
+    env["JIEJING_INTERNAL_ADMIN_EMAILS"] = "provider-owner@example.com"
     process = subprocess.Popen(
         [
             sys.executable,
@@ -50,6 +53,7 @@ def main() -> int:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=env,
     )
     try:
         base_url = f"http://127.0.0.1:{port}"
@@ -167,6 +171,34 @@ def main() -> int:
             for key in ("url_or_file_path", "dimensions_or_duration", "source_provider_or_upload", "commercial_use_status", "fact_review_status"):
                 if key not in item:
                     return fail(f"media manifest missing field: {key}")
+
+        media_job_id = str(media.get("media_asset_job", {}).get("media_job_id") or "")
+        if not media_job_id:
+            return fail("media provider job should return its persisted media asset job")
+        status, _ = post_json_expect_error(
+            f"{base_url}/media-asset-jobs/{media_job_id}/review",
+            {"decision": "approve_for_listing_draft", "fact_consistency_confirmed": True},
+            token=token,
+        )
+        if status != 400:
+            return fail("media review must require fact, rights, and platform confirmations")
+        reviewed_media = post_json(
+            f"{base_url}/media-asset-jobs/{media_job_id}/review",
+            {
+                "decision": "approve_for_listing_draft",
+                "fact_consistency_confirmed": True,
+                "commercial_rights_confirmed": True,
+                "platform_rules_checked": True,
+            },
+            token=token,
+        )
+        if reviewed_media.get("media_asset_job", {}).get("status") != "approved_for_listing":
+            return fail("explicit merchant review should approve assets only for Listing draft writeback")
+        review_contract = reviewed_media.get("review", {})
+        if review_contract.get("listing_draft_writeback_allowed") is not True:
+            return fail("approved media review should allow Listing draft writeback")
+        if review_contract.get("triggers_real_platform_write") is not False or review_contract.get("secret_exposed") is not False:
+            return fail("media review must not write to eBay or expose secrets")
 
         blocked = post_json(
             f"{base_url}/stores/{store_id}/provider-jobs/queue",

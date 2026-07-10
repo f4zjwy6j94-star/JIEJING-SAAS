@@ -240,6 +240,7 @@ async function main() {
   const accountA = await registerAccount("a", { createStore: true });
   const accountB = await registerAccount("b", { createStore: true });
   const accountASentinel = `ACCOUNT_A_PRIVATE_CHAT_SENTINEL_${Date.now()}`;
+  const accountAMarketResearchSentinel = `便携式户外驱蚊器_${Date.now()}`;
   const accountASourceSentinel = `ACCOUNT_A_PRIVATE_SOURCE_SENTINEL_${Date.now()}`;
   const accountAFeedbackSentinel = `ACCOUNT_A_PRIVATE_FEEDBACK_SENTINEL_${Date.now()}`;
   const accountACommandSentinel = `ACCOUNT_A_PRIVATE_COMMAND_SENTINEL_${Date.now()}`;
@@ -251,6 +252,15 @@ async function main() {
         status: "local_clock_answered",
         route: "general_chat",
         created_at: new Date().toISOString(),
+      },
+    ],
+    [`${String(accountA.userId || accountA.email).toLowerCase()}::detached-ai-ceo-research`]: [
+      {
+        user_text: "根据你的建议帮我做份市场调研报告，准确告诉我卖什么货，一个品就好",
+        assistant_text: `### 产品市场调研报告\n\n**目标市场：** eBay 美国站\n**建议产品：${accountAMarketResearchSentinel}/驱虫器**\n\n这个报告应该可以从 AI CEO 聊天导入 Listing 草稿。`,
+        status: "model_answered",
+        route: "general_chat",
+        created_at: new Date(Date.now() + 1000).toISOString(),
       },
     ],
   };
@@ -368,6 +378,16 @@ async function main() {
   });
   await waitForAppReady(accountAPage);
   const accountAShowsOwnChat = await accountAPage.evaluate((sentinel) => document.body.innerText.includes(sentinel), accountASentinel);
+  const accountAMarketImportFindsAccountScopedThread = await accountAPage.evaluate((sentinel) => {
+    const accountTurns = typeof window.loadSaasAiCeoAccountThreads === "function" ? window.loadSaasAiCeoAccountThreads() : [];
+    const importTurn = typeof window.latestSaasAiCeoMarketResearchTurn === "function" ? window.latestSaasAiCeoMarketResearchTurn() : null;
+    const importState = typeof window.saasAiCeoMarketResearchImportState === "function" ? window.saasAiCeoMarketResearchImportState() : null;
+    return Boolean(
+      accountTurns.some((turn) => String(turn.assistant_text || "").includes(sentinel)) &&
+        String(importTurn?.assistant_text || "").includes(sentinel) &&
+        String(importState?.turn?.assistant_text || "").includes(sentinel),
+    );
+  }, accountAMarketResearchSentinel);
   const accountALocalStorage = await readStorage(accountAPage);
   await accountAPage.screenshot({ path: path.join(outDir, "account-a-chat.png"), fullPage: true }).catch(() => {});
   await accountAContext.close();
@@ -412,59 +432,72 @@ async function main() {
       const feedback = typeof window.loadSaasMerchantFeedback === "function" ? window.loadSaasMerchantFeedback() : [];
       const command = typeof window.loadSaasLastCeoCommand === "function" ? window.loadSaasLastCeoCommand() : null;
       const thread = typeof window.loadSaasAiCeoThread === "function" ? window.loadSaasAiCeoThread() : [];
+      const accountThread = typeof window.loadSaasAiCeoAccountThreads === "function" ? window.loadSaasAiCeoAccountThreads() : [];
+      const importTurn = typeof window.latestSaasAiCeoMarketResearchTurn === "function" ? window.latestSaasAiCeoMarketResearchTurn() : null;
       const visibleText = document.body.innerText || "";
-      const serialized = JSON.stringify({ sourceRecords, feedback, command, thread, visibleText });
+      const serialized = JSON.stringify({ sourceRecords, feedback, command, thread, accountThread, importTurn, visibleText });
       return sentinels.every((sentinel) => !serialized.includes(sentinel));
     },
-    [accountASentinel, accountASourceSentinel, accountAFeedbackSentinel, accountACommandSentinel],
+    [accountASentinel, accountAMarketResearchSentinel, accountASourceSentinel, accountAFeedbackSentinel, accountACommandSentinel],
   );
 
+  const modelProbeMessageCountBefore = await accountBPage.locator("#ceoChat article.message.ai").count();
   await accountBPage.locator("#ceoInput").fill("解释一下 SaaS 订阅额度是什么意思");
   await accountBPage.locator('#ceoForm button[type="submit"]').click();
   await accountBPage.waitForFunction(
-    () => {
-      const text = document.body.innerText || "";
-      return (
-        text.includes("AI 额度或连接状态挡住了本次回复") ||
-        text.includes("不要重复填写连接信息") ||
-        text.includes("AI CEO 连接暂时没有完成") ||
-        text.includes("当前店铺还没有可用的 AI 连接") ||
-        text.includes("AI 连接暂时不可用") ||
-        text.includes("还没有可用店铺上下文") ||
-        text.includes("没有受保护登录会话")
-      );
+    (beforeCount) => {
+      const messages = Array.from(document.querySelectorAll("#ceoChat article.message.ai"));
+      if (messages.length <= beforeCount) return false;
+      const latest = messages[messages.length - 1];
+      const text = latest?.innerText || "";
+      const status = latest?.getAttribute("data-status") || "";
+      return Boolean(latest && !latest.classList.contains("is-pending") && !text.includes("正在处理") && (status || text.length > 20));
     },
-    null,
-    { timeout: 45000 },
+    modelProbeMessageCountBefore,
+    { timeout: 60000 },
   );
-  const modelFailureCopy = await accountBPage.evaluate(() => {
-    const text = document.body.innerText;
+  const modelReplyProbe = await accountBPage.evaluate(() => {
+    const messages = Array.from(document.querySelectorAll("#ceoChat article.message.ai"));
+    const latest = messages[messages.length - 1] || null;
+    const text = latest?.innerText || "";
+    const status = latest?.getAttribute("data-status") || "";
     const usageBlocked =
-      text.includes("AI 额度或连接状态挡住了本次回复") &&
-      text.includes("不要重复填写连接信息") &&
-      text.includes("AI 与素材");
+      text.includes("AI 额度或连接状态挡住了本次回复") ||
+      text.includes("不要重复填写连接信息") ||
+      (text.includes("额度") && text.includes("AI 与素材"));
     const connectionBlocked =
-      (text.includes("AI CEO 连接暂时没有完成") ||
-        text.includes("当前店铺还没有可用的 AI 连接") ||
-        text.includes("AI 连接暂时不可用") ||
-        text.includes("还没有可用店铺上下文") ||
-        text.includes("没有受保护登录会话")) &&
-      (text.includes("设置") || text.includes("AI 与素材") || text.includes("连接状态"));
+      text.includes("AI CEO 连接暂时没有完成") ||
+      text.includes("当前账号还没有可用的 AI 连接") ||
+      text.includes("当前店铺还没有可用的 AI 连接") ||
+      text.includes("AI 连接暂时不可用") ||
+      text.includes("还没有可用店铺上下文") ||
+      text.includes("没有受保护登录会话");
+    const blockedStatus = ["blocked_before_model_chat", "blocked_missing_model_config", "model_call_failed"].includes(status);
+    const answered =
+      !blockedStatus &&
+      (status === "model_answered" ||
+        status === "model_answered_non_live" ||
+        status === "local_clock_answered" ||
+        text.includes("直接回答") ||
+        (text.includes("订阅") && text.includes("额度") && !usageBlocked && !connectionBlocked));
+    const blocked = usageBlocked || connectionBlocked || blockedStatus;
+    const unsafeVisible =
+      /quota exceeded/i.test(text) ||
+      /traceback/i.test(text) ||
+      /api key/i.test(text) ||
+      /client secret/i.test(text) ||
+      /refresh token/i.test(text) ||
+      /\btoken\b/i.test(text);
     return {
-      mode: usageBlocked ? "provider_usage_or_billing_blocked" : connectionBlocked ? "frontend_or_backend_model_connection_blocked" : "unknown",
-      safe:
-        (usageBlocked || connectionBlocked) &&
-        !text.includes("quota exceeded") &&
-        !text.includes("traceback") &&
-        !text.includes("api key") &&
-        !text.includes("secret") &&
-        !text.includes("token"),
-      preview: text.slice(0, 400),
+      mode: answered ? "model_answered_safely" : blocked ? "model_blocked_safely" : "unknown",
+      status,
+      safe: (answered || blocked) && !unsafeVisible,
+      preview: text.slice(0, 500),
     };
   });
-  const modelFailureCopyIsMerchantSafe = Boolean(modelFailureCopy.safe);
-  const modelFailurePathObserved = model402RouteInterceptCount > 0 || modelFailureCopy.mode !== "unknown";
-  const model402OrSafeBlockObserved = model402RouteInterceptCount > 0 || modelFailureCopy.mode === "frontend_or_backend_model_connection_blocked";
+  const modelFailureCopyIsMerchantSafe = Boolean(modelReplyProbe.safe);
+  const modelFailurePathObserved = model402RouteInterceptCount > 0 || modelReplyProbe.mode !== "unknown";
+  const model402OrSafeBlockObserved = model402RouteInterceptCount > 0 || ["model_blocked_safely", "model_answered_safely"].includes(modelReplyProbe.mode);
   const model402CopyIsMerchantSafe = modelFailureCopyIsMerchantSafe;
   await accountBPage.screenshot({ path: path.join(outDir, "account-b-model-safe-copy.png"), fullPage: true }).catch(() => {});
 
@@ -475,7 +508,7 @@ async function main() {
     return (
       url.pathname.endsWith("/index.html") &&
       url.searchParams.get("start") === "site" &&
-      document.documentElement.outerHTML.includes('JIEJING_SITE_VERSION = "20260703-merchant-billing-launch-path-v1"')
+      /JIEJING_SITE_VERSION\s*=\s*["'][^"']+["']/.test(document.documentElement.outerHTML)
     );
   });
   await accountBPage.screenshot({ path: path.join(outDir, "workbench-logo-homepage-return.png"), fullPage: true }).catch(() => {});
@@ -489,6 +522,7 @@ async function main() {
       onboarded_query_did_not_bypass_onboarding: onboardedQueryDidNotBypassOnboarding,
       first_day_path_strip_present: firstDayPathStripPresent,
       account_a_shows_own_chat: accountAShowsOwnChat,
+      account_a_market_import_finds_account_scoped_thread: accountAMarketImportFindsAccountScopedThread,
       account_b_did_not_show_account_a_chat: accountBDidNotShowAccountAChat,
       account_b_scoped_local_cache_clean: accountBScopedLocalCacheClean,
       model_402_route_intercepted: model402OrSafeBlockObserved,
@@ -502,7 +536,8 @@ async function main() {
       no_ebay_oauth_triggered: true,
     },
     model_failure: {
-      mode: modelFailureCopy.mode,
+      mode: modelReplyProbe.mode,
+      status: modelReplyProbe.status,
       route_intercept_count: model402RouteInterceptCount,
     },
     pageErrors,

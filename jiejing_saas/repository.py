@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,9 @@ MERCHANT_RULE_MEMORY_TYPE = "merchant_rule"
 AI_CEO_TRANSIENT_MEMORY_POLICY = "transient_no_long_term_memory"
 AI_CEO_OPERATING_MEMORY_POLICY = "permanent_operating_memory"
 AI_CEO_RULE_MEMORY_POLICY = "merchant_rule"
+AI_CEO_MARKET_REPORT_CONTRACT_VERSION = "2026-07-04-ai-ceo-market-report-frontstage-v2"
+AI_CEO_MARKET_LISTING_HANDOFF_CONTRACT_VERSION = "2026-07-04-ai-ceo-market-to-listing-handoff-v2"
+AI_CEO_MARKET_EBAY_FIELD_MAP_CONTRACT = "ai_ceo_market_research_to_ebay_inventory_offer_v1"
 
 
 class SaaSRepository:
@@ -74,6 +78,7 @@ class SaaSRepository:
         self.database_engine = (database_engine or os.environ.get("JIEJING_DATABASE_ENGINE") or "sqlite").strip().lower() or "sqlite"
         self.database_url = database_url if database_url is not None else os.environ.get("JIEJING_DATABASE_URL", "")
         self._postgres_initialized = False
+        self._postgres_initialize_lock = threading.Lock()
 
     def initialize(self) -> None:
         if self.database_engine == "postgres":
@@ -409,14 +414,17 @@ class SaaSRepository:
     def _initialize_postgres(self) -> None:
         if self._postgres_initialized:
             return
-        from .infrastructure_drivers import run_postgres_migration
+        with self._postgres_initialize_lock:
+            if self._postgres_initialized:
+                return
+            from .infrastructure_drivers import run_postgres_migration
 
-        result = run_postgres_migration(database_url=self.database_url)
-        if result.get("status") != "ok":
-            blockers = result.get("blocked_by") if isinstance(result.get("blocked_by"), list) else []
-            message = result.get("message") or ", ".join(str(item) for item in blockers) or result.get("status") or "unknown"
-            raise RuntimeError(f"Postgres repository initialization failed: {message}")
-        self._postgres_initialized = True
+            result = run_postgres_migration(database_url=self.database_url)
+            if result.get("status") != "ok":
+                blockers = result.get("blocked_by") if isinstance(result.get("blocked_by"), list) else []
+                message = result.get("message") or ", ".join(str(item) for item in blockers) or result.get("status") or "unknown"
+                raise RuntimeError(f"Postgres repository initialization failed: {message}")
+            self._postgres_initialized = True
 
     def create_user_with_company(self, *, email: str, password: str, company_name: str) -> dict[str, Any]:
         self.initialize()
@@ -2477,6 +2485,179 @@ class SaaSRepository:
             )
             self._update_task_steps_from_runtime_results(conn, task=task, runtime_result=runtime_result)
         return {"runtime_run_id": runtime_run_id, "reports": report_count, "confirmations": confirmation_count}
+
+    def save_ai_ceo_market_research_report(
+        self,
+        *,
+        task: dict[str, Any],
+        message: str,
+        chat: dict[str, Any],
+        command_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Persist a merchant-facing AI CEO market research chat turn as a report."""
+
+        self.initialize()
+        if not _looks_like_ai_ceo_market_research_turn(message=message, chat=chat):
+            return None
+        answer = _sanitize_merchant_ceo_text(chat.get("answer"), limit=5000)
+        if not answer:
+            return None
+        created_at = now_iso()
+        report_id = _id("report")
+        runtime_run_id = str(task.get("runtime_run_id") or "ai_ceo_chat")
+        source_records = _redact_secret_like((chat.get("source_records") if isinstance(chat.get("source_records"), list) else [])[:8])
+        work_records = _redact_secret_like((chat.get("work_records") if isinstance(chat.get("work_records"), list) else [])[:8])
+        confirmation_items = _redact_secret_like((chat.get("confirmation_items") if isinstance(chat.get("confirmation_items"), list) else [])[:8])
+        answer_quality = chat.get("answer_quality") if isinstance(chat.get("answer_quality"), dict) else {}
+        rejected_statuses = {
+            "model_answer_rejected",
+            "model_call_failed",
+            "source_backed_market_report_draft",
+            "market_report_recovery_draft",
+        }
+        answer_accepted = (
+            answer_quality.get("accepted") is True
+            if answer_quality
+            else str(chat.get("status") or "") not in rejected_statuses
+        )
+        product_candidates = _ai_ceo_market_product_candidates(message=message, answer=answer) if answer_accepted else []
+        selected_candidate = _select_ai_ceo_market_candidate(answer=answer, candidates=product_candidates)
+        product = ""
+        if answer_accepted:
+            product = _clean_ai_ceo_market_candidate_name(selected_candidate.get("name")) or _infer_ai_ceo_market_product(
+                message=message,
+                answer=answer,
+                candidates=product_candidates,
+            )
+        listing_import_ready = bool(product and answer_accepted)
+        question = _sanitize_merchant_ceo_text(message, limit=900)
+        source_count = len(source_records) if isinstance(source_records, list) else 0
+        title = f"AI CEO 市场调研：{product}"[:180] if product else "AI CEO 市场调研"
+        summary = (
+            f"AI CEO 已把“{product}”整理成可导入 Listing 的市场调研。"
+            if product
+            else "AI CEO 已把本次选品/市场调研整理成可导入 Listing 的工作记录。"
+        )
+        report_payload = {
+            "contract_version": AI_CEO_MARKET_REPORT_CONTRACT_VERSION,
+            "source_type": "ai_ceo_chat",
+            "source_command_id": command_id or "",
+            "product": product,
+            "product_candidates": product_candidates,
+            "selected_product_candidate": selected_candidate,
+            "merchant_question": question,
+            "merchant_readable_summary": summary,
+            "answer": answer,
+            "route": str(chat.get("route") or ""),
+            "route_label": str(chat.get("route_label") or ""),
+            "status": str(chat.get("status") or ""),
+            "answer_quality": _redact_secret_like(answer_quality),
+            "model_client": _redact_secret_like(chat.get("model_client") if isinstance(chat.get("model_client"), dict) else {}),
+            "source_records": source_records,
+            "source_record_count": source_count,
+            "work_records": work_records,
+            "confirmation_items": confirmation_items,
+            "listing_handoff": {
+                "ready_for_listing_draft": listing_import_ready,
+                "source_mode": "ai_ceo_chat_structured_handoff",
+                "target_report_type": "ai_ceo.market_research",
+                "listing_fields": (
+                    _ai_ceo_listing_handoff_fields(
+                        product=product,
+                        answer=answer,
+                        source_records=source_records if isinstance(source_records, list) else [],
+                        selected_candidate=selected_candidate,
+                        product_candidates=product_candidates,
+                    )
+                    if listing_import_ready
+                    else {}
+                ),
+                "blocked_by": [] if listing_import_ready else ["answer_quality_not_ready_for_listing"],
+                "requires_human_review_before_publish": True,
+                "real_platform_writes_enabled": False,
+                "triggers_real_platform_write": False,
+            },
+            "source_policy": _redact_secret_like(chat.get("source_policy") if isinstance(chat.get("source_policy"), dict) else {}),
+            "frontend_gets_model_api_key": False,
+            "runtime_gets_raw_ebay_token": False,
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        }
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into reports (
+                  report_id, task_id, runtime_run_id, report_type, title, status, created_at, report_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    report_id,
+                    task["task_id"],
+                    runtime_run_id,
+                    "ai_ceo.market_research",
+                    title,
+                    "saved",
+                    created_at,
+                    json.dumps(report_payload, ensure_ascii=False, default=json_default),
+                ),
+            )
+            self._insert_merchant_memory(
+                conn,
+                company_id=task["company_id"],
+                store_id=task["store_id"],
+                memory_type="ai_ceo_market_research",
+                source_type="report",
+                source_id=report_id,
+                title=title,
+                summary=summary,
+                importance=80,
+                tags=["ai_ceo.market_research", "listing_handoff", "source_backed" if source_count else "needs_more_sources"],
+                memory={
+                    "report_id": report_id,
+                    "task_id": task["task_id"],
+                    "runtime_run_id": runtime_run_id,
+                    "report_type": "ai_ceo.market_research",
+                    "product": product,
+                    "source_record_count": source_count,
+                    "ready_for_listing_draft": listing_import_ready,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                },
+                created_by=task.get("user_id"),
+            )
+            self._insert_audit(
+                conn,
+                company_id=task["company_id"],
+                store_id=task["store_id"],
+                user_id=task.get("user_id"),
+                actor_type="system",
+                action_type="ai_ceo.market_research.saved",
+                target_type="report",
+                target_id=report_id,
+                summary="AI CEO market research chat turn saved as a structured Listing handoff report.",
+                details={
+                    "report_type": "ai_ceo.market_research",
+                    "task_id": task["task_id"],
+                    "command_id": command_id or "",
+                    "source_record_count": source_count,
+                    "ready_for_listing_draft": True,
+                    "frontend_gets_model_api_key": False,
+                    "runtime_gets_raw_ebay_token": False,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                },
+            )
+        return {
+            "report_id": report_id,
+            "task_id": task["task_id"],
+            "runtime_run_id": runtime_run_id,
+            "report_type": "ai_ceo.market_research",
+            "title": title,
+            "status": "saved",
+            "created_at": created_at,
+            "report": report_payload,
+            "secret_exposed": False,
+        }
 
     def list_task_steps(self, *, company_id: str, task_id: str) -> list[dict[str, Any]]:
         self.initialize()
@@ -4611,6 +4792,1004 @@ def _sanitize_merchant_ceo_text(value: Any, *, limit: int = 600) -> str:
     for pattern, replacement in replacements:
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     return text[:limit]
+
+
+def _looks_like_ai_ceo_market_research_turn(*, message: str, chat: dict[str, Any]) -> bool:
+    answer = str(chat.get("answer") or "")
+    route = str(chat.get("route") or "")
+    status = str(chat.get("status") or "")
+    combined = f"{message}\n{answer}\n{route}\n{chat.get('route_label') or ''}".lower()
+    if status not in {
+        "model_answered",
+        "model_answered_non_live",
+        "realtime_search_answered",
+        "realtime_search_answered_without_model",
+        "source_backed_market_report_draft",
+        "market_report_recovery_draft",
+    }:
+        return False
+    finance_only = any(
+        marker in combined
+        for marker in (
+            "stock",
+            "nasdaq",
+            "nyse",
+            "eps",
+            "earnings",
+            "美股",
+            "股票",
+            "股价",
+            "财报",
+            "营收",
+            "利润指引",
+        )
+    ) and not any(marker in combined for marker in ("ebay", "listing", "sku", "商品", "产品", "选品", "货源", "上架", "刊登"))
+    if finance_only:
+        return False
+    has_market_signal = any(
+        marker in combined
+        for marker in (
+            "market research",
+            "market report",
+            "competitor",
+            "keyword",
+            "demand",
+            "trend",
+            "price band",
+            "opportunity",
+            "市场调研",
+            "市场报告",
+            "市场",
+            "调研",
+            "竞品",
+            "热销",
+            "趋势",
+            "价格带",
+            "需求",
+        )
+    )
+    has_product_signal = any(
+        marker in combined
+        for marker in (
+            "ebay",
+            "listing",
+            "sku",
+            "item specific",
+            "product",
+            "supplier",
+            "sourcing",
+            "1688",
+            "商品",
+            "产品",
+            "品类",
+            "货源",
+            "选品",
+            "上架",
+            "刊登",
+            "标题",
+            "主图",
+            "类目",
+        )
+    )
+    return bool(has_market_signal and has_product_signal and route in {"ebay_workflow", "external_realtime", "confirmation_required", ""})
+
+
+def _is_invalid_ai_ceo_market_product_label(value: Any) -> bool:
+    text = _sanitize_merchant_ceo_text(value, limit=120).strip(" -:：")
+    if not text:
+        return True
+    compact = re.sub(r"\s+", " ", text).strip().lower()
+    invalid_markers = (
+        "ai ceo 市场调研",
+        "ai ceo market",
+        "市场调研",
+        "市场报告",
+        "market research",
+        "market report",
+        "listing package",
+        "terapeak",
+        "ebay terapeak",
+        "ebay listing",
+        "ebay us",
+        "ebay 美国站",
+        "这次调研",
+        "本次调研",
+        "待确认商品",
+    )
+    if compact in invalid_markers:
+        return True
+    if re.fullmatch(r"(?:商品|产品|品类|品|候选商品|候选品|方向|方案)\s*[一二三四五六七八九十\dA-Z]+", compact, flags=re.IGNORECASE):
+        return True
+    invalid_fragments = (
+        "候选商品名称",
+        "商品名称、推荐度",
+        "名称、推荐度",
+        "推荐度评分",
+        "listing 草稿字段建议",
+        "草稿字段建议",
+        "字段建议",
+        "风险和 listing",
+        "风险和待补",
+        "目标市场",
+        "机会窗口",
+        "竞争策略",
+        "合规与物流",
+        "数据缺口",
+        "待补资料",
+        "terapeak",
+        "ebay 官方选品",
+        "官方选品指引",
+        "真实店铺数据",
+    )
+    if any(fragment in compact for fragment in invalid_fragments):
+        return True
+    if re.fullmatch(r"e?bay\s*(us|美国站)?", compact, flags=re.IGNORECASE):
+        return True
+    if len(text) > 70 and re.search(r"帮我|应该|卖什么|不知道|你觉得|市场调研|报告", text):
+        return True
+    return False
+
+
+def _clean_ai_ceo_market_candidate_name(value: Any) -> str:
+    text = _sanitize_merchant_ceo_text(value, limit=120)
+    text = re.sub(r"^[#>*\-\d.)、\s]+", "", text).strip()
+    text = re.sub(r"^(?:方向|方案|候选|推荐|建议)\s*[一二三四五六七八九十\dA-Z]*\s*[:：.)、-]*\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"^(?:产品名称|商品名称|候选商品名称|产品|品类|商品|名称|recommended product|suggested product|target product|product name|item name|name)\s*[:：-]\s*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = text.strip(" -:：")
+    if _is_invalid_ai_ceo_market_product_label(text):
+        return ""
+    return text[:90]
+
+
+def _ai_ceo_market_candidate_score(raw_block: str, index: int) -> int:
+    match = re.search(r"(?:评分|推荐度|score)\s*[:：]?\s*(\d{2,3})", raw_block, flags=re.IGNORECASE)
+    if match:
+        score = max(0, min(100, int(match.group(1))))
+        return score
+    return max(62, 88 - index * 5)
+
+
+def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict[str, Any]]:
+    """Extract merchant-facing product cards from flexible AI CEO market reports."""
+
+    clean_answer = _sanitize_merchant_ceo_text(answer, limit=5000)
+    clean_message = _sanitize_merchant_ceo_text(message, limit=900)
+    raw_lines = [line.strip() for line in clean_answer.replace("*", "").splitlines()]
+    lines = [line for line in raw_lines if line and not re.fullmatch(r"[-_]{3,}", line)]
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def nearby_reasons(start_index: int) -> list[str]:
+        block = "\n".join(lines[start_index : start_index + 8])
+        reasons: list[str] = []
+        for line in lines[start_index + 1 : start_index + 8]:
+            cleaned = re.sub(r"^[#>*\-\d.)、\s]+", "", line).strip()
+            if not cleaned:
+                continue
+            if re.match(r"^(?:方向|方案|候选)\s*[一二三四五六七八九十\dA-Z]*\s*[:：.)、-]", cleaned):
+                break
+            if re.search(r"为什么|需求|市场|符合|轻小|不带电|差异|价格|风险|适合|卖点|利润|评分|推荐度", cleaned):
+                reasons.append(_sanitize_merchant_ceo_text(cleaned, limit=160))
+            if len(reasons) >= 3:
+                break
+        return reasons or [_sanitize_merchant_ceo_text(block, limit=160)]
+
+    def plausible_name(name: str) -> str:
+        cleaned = _clean_ai_ceo_market_candidate_name(name)
+        if not cleaned:
+            return ""
+        generic_exact = {
+            "\u4fbf\u643a",
+            "\u6536\u7eb3",
+            "\u7279\u5b9a\u573a\u666f\u4e13\u7528",
+            "\u5c0f\u5de5\u5177",
+            "\u5de5\u5177",
+            "\u914d\u4ef6",
+            "\u7528\u54c1",
+            "\u793c\u54c1",
+            "\u65b9\u5411",
+            "\u54c1\u7c7b",
+        }
+        if cleaned.strip() in generic_exact:
+            return ""
+        if len(cleaned.strip()) <= 3 and not re.search(r"[A-Za-z0-9]", cleaned):
+            return ""
+        lower = cleaned.lower()
+        reject_markers = (
+            "codex",
+            "store",
+            "jiejing",
+            "ai ceo",
+            "listing",
+            "market",
+            "ebay",
+            "\u5e02\u573a",
+            "\u8c03\u7814",
+            "\u62a5\u544a",
+            "\u8f7b\u3001\u5c0f",
+            "\u4e0d\u5e26\u7535",
+            "\u5c0f\u4f17",
+            "\u9700\u6c42",
+            "\u5546\u54c1\u5361",
+            "\u5019\u9009\u5546\u54c1",
+            "\u5019\u9009\u54c1",
+            "\u98ce\u9669",
+            "\u5305\u88c5",
+            "\u9700",
+            "\u9700\u8981",
+            "\u6210\u672c",
+            "\u552e\u4ef7",
+            "\u5229\u6da6",
+            "\u7ade\u4e89",
+            "\u5efa\u8bae",
+            "\u540d\u79f0\u3001",
+            "\u63a8\u8350\u5ea6",
+            "\u5b57\u6bb5",
+            "\u8349\u7a3f",
+            "\u76ee\u6807\u5e02\u573a",
+            "\u673a\u4f1a\u7a97\u53e3",
+            "\u4f18\u5148",
+            "\u907f\u514d",
+            "\u5f3a\u8c03",
+            "\u4f7f\u7528\u5b89\u5168",
+        )
+        if any(marker in lower for marker in reject_markers):
+            return ""
+        if len(cleaned) > 55 and re.search(r"[\u3002\uff1b;]", cleaned):
+            return ""
+        return cleaned
+
+    def add_candidate(name: str, *, start_index: int = 0, block: str = "", source: str = "ai_ceo_market_report") -> None:
+        cleaned = plausible_name(name)
+        if not cleaned:
+            return
+        key = cleaned.lower()
+        if key in seen or len(candidates) >= 5:
+            return
+        seen.add(key)
+        score_block = block or "\n".join(lines[start_index : start_index + 8])
+        candidates.append(
+            {
+                "candidate_id": f"candidate_{len(candidates) + 1}",
+                "name": cleaned,
+                "score": _ai_ceo_market_candidate_score(score_block, len(candidates)),
+                "reasons": nearby_reasons(start_index) if lines else [_sanitize_merchant_ceo_text(score_block or clean_answer, limit=160)],
+                "price_band": _extract_ai_ceo_price_band(score_block or clean_answer),
+                "source": source,
+                "selected": len(candidates) == 0,
+                "missing_facts": ["SKU", "图片 URL", "采购成本", "重量尺寸", "eBay 类目", "店铺政策"],
+                "ready_for_listing_draft": True,
+            }
+        )
+
+    heading_patterns = (
+        r"^(?:[-*•]\s*)?(?:#+\s*)?(?:\u5019\u9009\u5546\u54c1|\u5019\u9009\u54c1|\u5019\u9009)\s*[A-Z0-9\u4e00-\u9fff]*\s*[:\uff1a.)\u3001-]\s*(.+)$",
+        r"^(?:[-*•]\s*)?(?:#+\s*)?(?:方向|方案|候选)\s*([一二三四五六七八九十\dA-Z]+)\s*[:：.)、-]\s*(.+)$",
+        r"^(?:[-*•]\s*)?(?:#+\s*)?(?:推荐产品|建议产品|目标商品|推荐品类|建议品类|商品方向|具体商品|商品名称|产品名称|名称)\s*[:：-]\s*(.+)$",
+        r"^(?:[-*•]\s*)?(?:#+\s*)?(?:recommended product|suggested product|target product|product name|item name)\s*[:：-]\s*(.+)$",
+    )
+    for index, line in enumerate(lines):
+        name = ""
+        for pattern in heading_patterns:
+            match = re.search(pattern, line, flags=re.IGNORECASE)
+            if not match:
+                continue
+            name = plausible_name(match.group(match.lastindex or 1))
+            break
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        block = "\n".join(lines[index : index + 8])
+        candidates.append(
+            {
+                "candidate_id": f"candidate_{len(candidates) + 1}",
+                "name": name,
+                "score": _ai_ceo_market_candidate_score(block, len(candidates)),
+                "reasons": nearby_reasons(index),
+                "price_band": _extract_ai_ceo_price_band(block),
+                "source": "ai_ceo_market_report",
+                "selected": len(candidates) == 0,
+                "missing_facts": ["SKU", "图片 URL", "采购成本", "重量尺寸", "eBay 类目", "店铺政策"],
+                "ready_for_listing_draft": True,
+            }
+        )
+        if len(candidates) >= 5:
+            break
+
+    if not candidates:
+        label_value_pattern = re.compile(
+            r"^(?:[-*•]\s*)?(?:#+\s*)?(?:商品名称|产品名称|候选商品名称|名称|具体商品|推荐产品|建议产品|目标商品|推荐品类|建议品类|商品方向|product name|item name)\s*[:：-]\s*(.+)$",
+            flags=re.IGNORECASE,
+        )
+        for index, line in enumerate(lines):
+            match = label_value_pattern.search(line)
+            if not match:
+                continue
+            block = "\n".join(lines[max(0, index - 2) : index + 8])
+            if not re.search(r"推荐度|评分|需求|风险|Listing\s*草稿|字段建议|score|demand|risk|price", block, flags=re.IGNORECASE):
+                continue
+            add_candidate(match.group(1), start_index=index, block=block, source="ai_ceo_market_report_labeled_value")
+            if len(candidates) >= 5:
+                break
+
+    if not candidates:
+        numbered_heading_pattern = re.compile(r"^(?:[-*•]\s*)?(?:#+\s*)?(?:top\s*)?(?:\d+|[一二三四五六七八九十])\s*[.)、:：]\s*(.+)$", flags=re.IGNORECASE)
+        for index, line in enumerate(lines):
+            match = numbered_heading_pattern.search(line)
+            if not match:
+                continue
+            block = "\n".join(lines[index : index + 8])
+            if not re.search(
+                r"推荐度|评分|为什么有需求|为什么适合|Listing\s*草稿|字段建议|score|demand|risk|price",
+                block,
+                flags=re.IGNORECASE,
+            ):
+                continue
+            add_candidate(match.group(1), start_index=index, block=block, source="ai_ceo_market_report_numbered_card")
+            if len(candidates) >= 5:
+                break
+
+    if not candidates:
+        table_header_index = -1
+        for index, line in enumerate(lines):
+            if line.startswith("|") and re.search(r"商品|产品|品类|名称|product", line, flags=re.IGNORECASE) and re.search(r"推荐|评分|score|risk|风险", line, flags=re.IGNORECASE):
+                table_header_index = index
+                continue
+            if table_header_index < 0 or index <= table_header_index:
+                continue
+            if not line.startswith("|") or re.fullmatch(r"\|?\s*[-:|\s]+\|?", line):
+                continue
+            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            if len(cells) < 2:
+                continue
+            add_candidate(cells[0], start_index=max(0, table_header_index), block="\n".join(lines[table_header_index : index + 2]), source="ai_ceo_market_report_table")
+            if len(candidates) >= 5:
+                break
+
+    if not candidates:
+        vertical_table_label_pattern = re.compile(
+            r"^(?:候选商品|候选品|推荐商品|推荐产品|建议商品|建议产品|具体商品|商品名称|产品名称|product|candidate)\s*[\d一二三四五六七八九十A-Z]*$",
+            flags=re.IGNORECASE,
+        )
+        for index, line in enumerate(lines):
+            if not line.startswith("|") or re.fullmatch(r"\|?\s*[-:|\s]+\|?", line):
+                continue
+            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            if len(cells) < 2:
+                continue
+            label = re.sub(r"[:：\s]+$", "", cells[0]).strip()
+            value = cells[1].strip()
+            if not vertical_table_label_pattern.search(label):
+                continue
+            block_lines = []
+            for block_line in lines[index : index + 10]:
+                if block_line.startswith("|") and not re.fullmatch(r"\|?\s*[-:|\s]+\|?", block_line):
+                    block_cells = [cell.strip() for cell in block_line.strip("|").split("|")]
+                    if (
+                        block_lines
+                        and len(block_cells) >= 2
+                        and vertical_table_label_pattern.search(re.sub(r"[:：\s]+$", "", block_cells[0]).strip())
+                    ):
+                        break
+                block_lines.append(block_line)
+            add_candidate(value, start_index=index, block="\n".join(block_lines), source="ai_ceo_market_report_vertical_table")
+            if len(candidates) >= 5:
+                break
+
+    if not candidates:
+        context_pattern = re.compile(
+            r"(?:"
+            r"\u8bc6\u522b\u51fa|\u9501\u5b9a|\u53d1\u73b0|\u63a8\u8350|\u5efa\u8bae|\u4f18\u5148\u6d4b\u8bd5|\u4f18\u5148\u5207\u5165|"
+            r"identified|recommend|suggest|prioritize"
+            r")[^\n\u3002\uff1b;]{0,220}",
+            flags=re.IGNORECASE,
+        )
+        for context in context_pattern.findall(clean_answer):
+            for quoted in re.findall(r"[\u201c\u201d\"']([^\"\u201c\u201d']{2,70})[\u201c\u201d\"']", context):
+                add_candidate(quoted, block=context, source="ai_ceo_market_report_narrative")
+            if len(candidates) >= 5:
+                break
+
+    if not candidates:
+        for index, line in enumerate(lines):
+            stripped = re.sub(r"^[#>\-\s]+", "", line).strip(" *-:：")
+            if not re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9 /()（）&+\-]{3,60}", stripped):
+                continue
+            block = "\n".join(lines[index : index + 8])
+            if not re.search(
+                r"\u9700\u6c42|\u7ade\u4e89|\u4f18\u52bf|\u98ce\u9669|\u91c7\u8d2d|\u6210\u672c|\u552e\u4ef7|\u5229\u6da6|\u8f7b\u5c0f|\u4e0d\u5e26\u7535|demand|competition|risk|cost|margin",
+                block,
+                flags=re.IGNORECASE,
+            ):
+                continue
+            add_candidate(stripped, start_index=index, block=block, source="ai_ceo_market_report_heading")
+
+    if not candidates:
+        fallback_patterns = (
+            r"(?:建议产品|推荐产品|目标商品|商品方向|推荐品类|建议品类)\s*[:：]\s*([^\n。；;]{2,90})",
+            r"(?:recommended product|suggested product|target product)\s*[:：]\s*([^\n.;]{2,90})",
+        )
+        combined = f"{clean_answer}\n{clean_message}".replace("*", "")
+        for pattern in fallback_patterns:
+            match = re.search(pattern, combined, flags=re.IGNORECASE)
+            if not match:
+                continue
+            name = _clean_ai_ceo_market_candidate_name(match.group(1))
+            if name:
+                candidates.append(
+                    {
+                        "candidate_id": "candidate_1",
+                        "name": name,
+                        "score": 84,
+                        "reasons": ["AI CEO 已把这个方向整理成可继续做 Listing 草稿的候选商品。"],
+                        "price_band": _extract_ai_ceo_price_band(clean_answer),
+                        "source": "ai_ceo_market_report",
+                        "selected": True,
+                        "missing_facts": ["SKU", "图片 URL", "采购成本", "重量尺寸", "eBay 类目", "店铺政策"],
+                        "ready_for_listing_draft": True,
+                    }
+                )
+                break
+    return candidates
+
+
+def _normalize_ai_ceo_candidate_match(value: Any) -> str:
+    text = _sanitize_merchant_ceo_text(value, limit=240).casefold()
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", text)
+
+
+def _select_ai_ceo_market_candidate(*, answer: str, candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    """Choose the candidate explicitly recommended by the model, then by score."""
+
+    if not candidates:
+        return {}
+    clean_answer = _sanitize_merchant_ceo_text(answer, limit=5000).replace("*", "")
+    explicit_pattern = re.compile(
+        r"(?:最值得(?:优先)?测试|最值得先测|最终推荐|首选推荐|首选|最佳候选|优先测试|"
+        r"建议优先测试|建议先测试|推荐选择|选定商品|best\s+candidate|top\s+pick|final\s+recommendation)"
+        r"\s*[:：-]?\s*([^\n]{0,180})",
+        flags=re.IGNORECASE,
+    )
+
+    explicit_windows = [match.group(0) for match in explicit_pattern.finditer(clean_answer)]
+    for window in explicit_windows:
+        normalized_window = _normalize_ai_ceo_candidate_match(window)
+        for candidate in candidates:
+            name = _clean_ai_ceo_market_candidate_name(candidate.get("name"))
+            primary_name = re.split(r"[（(]", name, maxsplit=1)[0].strip()
+            normalized_name = _normalize_ai_ceo_candidate_match(name)
+            normalized_primary = _normalize_ai_ceo_candidate_match(primary_name)
+            if normalized_name and normalized_name in normalized_window:
+                selected = candidate
+                break
+            if len(normalized_primary) >= 4 and normalized_primary in normalized_window:
+                selected = candidate
+                break
+        else:
+            continue
+        break
+    else:
+        selected = max(
+            candidates,
+            key=lambda item: (int(item.get("score") or 0), -candidates.index(item)),
+        )
+
+    selected_id = str(selected.get("candidate_id") or "")
+    for candidate in candidates:
+        candidate["selected"] = str(candidate.get("candidate_id") or "") == selected_id
+    return selected
+
+
+def _ai_ceo_selected_candidate_context(
+    *,
+    answer: str,
+    selected_candidate: dict[str, Any],
+    product_candidates: list[dict[str, Any]],
+) -> str:
+    """Isolate one candidate card so Listing fields do not leak from another card."""
+
+    clean_answer = _sanitize_merchant_ceo_text(answer, limit=5000)
+    selected_name = _clean_ai_ceo_market_candidate_name(selected_candidate.get("name"))
+    if not clean_answer or not selected_name:
+        return clean_answer
+    lower_answer = clean_answer.casefold()
+    start_index = lower_answer.find(selected_name.casefold())
+    if start_index < 0:
+        primary_name = re.split(r"[（(]", selected_name, maxsplit=1)[0].strip()
+        start_index = lower_answer.find(primary_name.casefold())
+    if start_index < 0:
+        return clean_answer
+
+    end_index = len(clean_answer)
+    for candidate in product_candidates:
+        candidate_name = _clean_ai_ceo_market_candidate_name(candidate.get("name"))
+        if not candidate_name or candidate_name == selected_name:
+            continue
+        candidate_index = lower_answer.find(candidate_name.casefold(), start_index + len(selected_name))
+        if candidate_index >= 0:
+            end_index = min(end_index, candidate_index)
+    return clean_answer[start_index:end_index][:1800].strip() or clean_answer
+
+
+def _infer_ai_ceo_market_product(*, message: str, answer: str, candidates: list[dict[str, Any]] | None = None) -> str:
+    for candidate in candidates or []:
+        name = _clean_ai_ceo_market_candidate_name(candidate.get("name"))
+        if name:
+            return name
+    text = f"{answer}\n{message}".replace("*", "")
+    patterns = [
+        r"(?:建议产品|推荐产品|产品建议|推荐品类|建议品类|目标商品|商品方向|推荐商品)\s*[:：]\s*([^\n。；;]{2,90})",
+        r"(?:recommended product|suggested product|target product)\s*[:：]\s*([^\n.;]{2,90})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            cleaned = _clean_ai_ceo_market_candidate_name(match.group(1))
+            if cleaned:
+                return cleaned
+    message_match = re.search(r"(?:目标商品|推荐商品|建议产品|推荐产品|商品方向|我准备卖|我想卖)\s*[:：]\s*([^\n。；;]{2,80})", message, flags=re.IGNORECASE)
+    if message_match:
+        cleaned = _clean_ai_ceo_market_candidate_name(message_match.group(1))
+        if cleaned:
+            return cleaned
+    generic = re.search(r"(eBay\s+[A-Za-z0-9 /_-]{3,70}|[A-Za-z0-9 /_-]{3,70}\s+(?:product|item|listing))", text, flags=re.IGNORECASE)
+    if generic:
+        cleaned = _clean_ai_ceo_market_candidate_name(generic.group(1))
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def _ai_ceo_listing_handoff_fields(
+    *,
+    product: str,
+    answer: str,
+    source_records: list[dict[str, Any]],
+    selected_candidate: dict[str, Any] | None = None,
+    product_candidates: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    clean_answer = _sanitize_merchant_ceo_text(answer, limit=5000)
+    selected_candidate = selected_candidate if isinstance(selected_candidate, dict) else {}
+    product_candidates = product_candidates if isinstance(product_candidates, list) else []
+    clean_product = _clean_ai_ceo_market_candidate_name(product) or _clean_ai_ceo_market_candidate_name(selected_candidate.get("name")) or "待选择商品方向"
+    selected_context = _ai_ceo_selected_candidate_context(
+        answer=clean_answer,
+        selected_candidate=selected_candidate,
+        product_candidates=product_candidates,
+    )
+    lines = [
+        _sanitize_merchant_ceo_text(re.sub(r"^[#*\-\d.\s:：]+", "", line).strip(), limit=220)
+        for line in clean_answer.splitlines()
+    ]
+    lines = [line for line in lines if line]
+    price_band = _sanitize_merchant_ceo_text(selected_candidate.get("price_band"), limit=90) or _extract_ai_ceo_price_band(selected_context)
+    keyword_candidates = _extract_ai_ceo_keywords(selected_context, clean_product)
+    risk_notes = [
+        line
+        for line in [
+            _sanitize_merchant_ceo_text(re.sub(r"^[#*\-\d.\s:：]+", "", line).strip(), limit=220)
+            for line in selected_context.splitlines()
+            if line.strip()
+        ]
+        if re.search(r"risk|gap|warning|confirm|review|policy|publish|refund|ad|inventory|风险|缺口|确认|发布|退款|广告|库存|政策", line, flags=re.IGNORECASE)
+    ][:6]
+    candidate_reasons = [
+        _sanitize_merchant_ceo_text(reason, limit=180)
+        for reason in (selected_candidate.get("reasons") if isinstance(selected_candidate.get("reasons"), list) else [])
+        if _sanitize_merchant_ceo_text(reason, limit=180)
+    ][:4]
+    selling_points = candidate_reasons or [
+        line
+        for line in lines
+        if len(line) >= 8
+        and not re.search(r"risk|gap|warning|confirm|review|policy|publish|refund|ad|inventory|风险|缺口|确认|发布|退款|广告|库存|政策", line, flags=re.IGNORECASE)
+        and not re.match(r"^(target marketplace|suggested product|recommended product|market|price|source|目标市场|建议产品|推荐产品|价格|来源)", line, flags=re.IGNORECASE)
+    ][:6]
+    item_specifics = _ai_ceo_item_specifics(product=clean_product, answer=selected_context)
+    image_plan = _ai_ceo_image_plan(answer=selected_context)
+    logistics_plan = _ai_ceo_logistics_plan(answer=selected_context)
+    publish_gaps = _ai_ceo_listing_publish_gaps(
+        item_specifics=item_specifics,
+        price_band=price_band,
+        image_plan=image_plan,
+        logistics_plan=logistics_plan,
+    )
+    field_matrix = _ai_ceo_ebay_publish_field_matrix(
+        product=clean_product,
+        price_band=price_band,
+        item_specifics=item_specifics,
+        image_plan=image_plan,
+        logistics_plan=logistics_plan,
+    )
+    merchant_required_answers = _ai_ceo_merchant_required_answers(field_matrix=field_matrix, publish_gaps=publish_gaps)
+    ready_field_count = len([item for item in field_matrix if item.get("status") == "ready"])
+    return {
+        "contract_version": AI_CEO_MARKET_LISTING_HANDOFF_CONTRACT_VERSION,
+        "ebay_listing_field_map_contract": AI_CEO_MARKET_EBAY_FIELD_MAP_CONTRACT,
+        "title": clean_product,
+        "product": clean_product,
+        "product_candidates": product_candidates,
+        "selected_product_candidate": selected_candidate,
+        "selected_candidate_id": str(selected_candidate.get("candidate_id") or ""),
+        "recommendation_score": int(selected_candidate.get("score") or 0) if selected_candidate else 0,
+        "selling_points": selling_points,
+        "keywords": keyword_candidates,
+        "price_band": price_band,
+        "category_suggestion": "待 eBay 类目体检确认",
+        "condition": "NEW",
+        "quantity": "1",
+        "item_specifics": item_specifics,
+        "image_requirements": image_plan,
+        "logistics_requirements": logistics_plan,
+        "risk_notes": risk_notes,
+        "description_seed": "\n".join(
+            [
+                f"选定商品：{clean_product}",
+                *(selling_points[:4] if selling_points else []),
+                "这只是根据 AI CEO 市场调研生成的 Listing 草稿起点；真实发布前需补齐商品事实、图片授权、价格成本、物流和店铺政策。",
+            ]
+        )[:1800],
+        "ebay_inventory_item_draft": {
+            "sku": "",
+            "condition": "NEW",
+            "product": {
+                "title": clean_product,
+                "description": "\n".join(selling_points[:4])[:1800] or clean_answer[:800],
+                "aspects": item_specifics,
+                "imageUrls": [],
+            },
+            "availability": {
+                "shipToLocationAvailability": {
+                    "quantity": 1,
+                },
+            },
+        },
+        "ebay_offer_draft": {
+            "marketplaceId": "EBAY_US",
+            "format": "FIXED_PRICE",
+            "categoryId": "",
+            "merchantLocationKey": "",
+            "pricingSummary": {
+                "price": {
+                    "value": price_band,
+                    "currency": "USD",
+                },
+            },
+            "listingDescription": "\n".join(selling_points[:4])[:1800] or clean_answer[:800],
+            "listingPolicies": {
+                "fulfillmentPolicyId": "",
+                "paymentPolicyId": "",
+                "returnPolicyId": "",
+            },
+        },
+        "publish_preflight_required_fields": [
+            "sku",
+            "categoryId",
+            "condition",
+            "price.value",
+            "quantity",
+            "merchantLocationKey",
+            "product.aspects",
+            "product.imageUrls",
+            "fulfillmentPolicyId",
+            "paymentPolicyId",
+            "returnPolicyId",
+        ],
+        "publish_preflight_gaps": publish_gaps,
+        "merchant_required_answers": merchant_required_answers,
+        "ebay_publish_field_matrix": field_matrix,
+        "listing_readiness": {
+            "ready_field_count": ready_field_count,
+            "total_field_count": len(field_matrix),
+            "missing_or_review_count": len(field_matrix) - ready_field_count,
+            "ready_for_real_publish": False,
+            "reason": "AI CEO 市场调研只生成 Listing 草稿字段包；真实发布前仍要补齐字段并进入确认中心。",
+        },
+        "source_record_count": len(source_records),
+        "draft_source": "ai_ceo_market_research_report",
+        "ready_for_listing_draft": True,
+        "requires_human_review_before_publish": True,
+        "triggers_real_platform_write": False,
+        "secret_exposed": False,
+    }
+
+
+def _ai_ceo_item_specifics(*, product: str, answer: str) -> dict[str, str]:
+    specifics: dict[str, str] = {
+        "Brand": "Unbranded",
+        "Type": "待补",
+        "MPN": "Does Not Apply",
+    }
+    lower_product = product.lower()
+    lower_answer = answer.lower()
+    if "mosquito" in lower_product or "mosquito" in lower_answer or "驱蚊" in answer or "蚊" in answer:
+        specifics["Type"] = "Mosquito Repeller"
+    elif "jewelry" in lower_product or "jewelry" in lower_answer or "首饰" in answer:
+        specifics["Type"] = "Jewelry Organizer"
+    elif "case" in lower_product or "box" in lower_product or "盒" in answer:
+        specifics["Type"] = "Storage Case"
+    material_match = re.search(r"(?:Material|材质)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fff /_-]{2,60})", answer, flags=re.IGNORECASE)
+    if material_match:
+        specifics["Material"] = _sanitize_merchant_ceo_text(material_match.group(1), limit=60)
+    else:
+        specifics["Material"] = "待补"
+    pack_match = re.search(r"(?:Pack(?:age)? Quantity|数量|件数|pack)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fff /_-]{1,40})", answer, flags=re.IGNORECASE)
+    if pack_match:
+        specifics["Pack Quantity"] = _sanitize_merchant_ceo_text(pack_match.group(1), limit=40)
+    return specifics
+
+
+def _ai_ceo_image_plan(*, answer: str) -> dict[str, Any]:
+    urls = re.findall(r"https?://[^\s,，；;]+", answer)
+    return {
+        "imageUrls": urls[:12],
+        "main_image": "白底主图，展示真实商品全貌；不可使用旧 demo 图片冒充真实素材。",
+        "detail_images": [
+            "尺寸/比例图",
+            "材质和细节图",
+            "包装和配件图",
+            "使用场景图",
+        ],
+        "rights_check_required": True,
+        "ebay_accessible_url_required": True,
+    }
+
+
+def _ai_ceo_logistics_plan(*, answer: str) -> dict[str, str]:
+    weight_match = re.search(r"(\d+(?:\.\d+)?)\s*(kg|千克|g|克)\b", answer, flags=re.IGNORECASE)
+    dimension_match = re.search(r"(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*cm", answer, flags=re.IGNORECASE)
+    ship_from_match = re.search(r"(?:ship from|item location|发货地)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fff /_-]{2,60})", answer, flags=re.IGNORECASE)
+    return {
+        "merchantLocationKey": "",
+        "item_location": _sanitize_merchant_ceo_text(ship_from_match.group(1), limit=60) if ship_from_match else "",
+        "package_weight_g": str(round(float(weight_match.group(1)) * (1000 if re.search(r"kg|千克", weight_match.group(2), flags=re.IGNORECASE) else 1))) if weight_match else "",
+        "package_length_cm": _sanitize_merchant_ceo_text(dimension_match.group(1), limit=20) if dimension_match else "",
+        "package_width_cm": _sanitize_merchant_ceo_text(dimension_match.group(2), limit=20) if dimension_match else "",
+        "package_height_cm": _sanitize_merchant_ceo_text(dimension_match.group(3), limit=20) if dimension_match else "",
+        "fulfillment_policy_id": "",
+        "payment_policy_id": "",
+        "return_policy_id": "",
+    }
+
+
+def _ai_ceo_listing_publish_gaps(
+    *,
+    item_specifics: dict[str, str],
+    price_band: str,
+    image_plan: dict[str, Any],
+    logistics_plan: dict[str, str],
+) -> list[str]:
+    gaps = [
+        "SKU 需要按当前商家账号生成或确认",
+        "eBay 叶子类目 categoryId 需要发布体检确认",
+        "库存位置 merchantLocationKey 需要来自店铺真实 location",
+        "履约、付款、退货三个店铺政策需要来自 eBay 账号",
+    ]
+    if not price_band:
+        gaps.append("价格和利润线索待补")
+    if not image_plan.get("imageUrls"):
+        gaps.append("图片 URL 和素材授权待补")
+    if any(value in {"", "待补"} for value in item_specifics.values()):
+        gaps.append("Item specifics 仍有待补字段")
+    if not logistics_plan.get("package_weight_g"):
+        gaps.append("重量、尺寸或发货地待补")
+    return gaps[:10]
+
+
+def _ai_ceo_ebay_publish_field_matrix(
+    *,
+    product: str,
+    price_band: str,
+    item_specifics: dict[str, str],
+    image_plan: dict[str, Any],
+    logistics_plan: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Map AI CEO research into merchant-readable eBay Inventory/Offer fields."""
+
+    def has_value(value: Any) -> bool:
+        text = str(value or "").strip()
+        return bool(text) and text not in {"待补", "unknown", "todo"}
+
+    def row(
+        *,
+        label: str,
+        ebay_field: str,
+        target_api: str,
+        value: Any,
+        source: str,
+        question: str,
+        status: str | None = None,
+        blocks_publish: bool = True,
+    ) -> dict[str, Any]:
+        current_status = status or ("ready" if has_value(value) else "missing")
+        return {
+            "label": label,
+            "ebay_field": ebay_field,
+            "target_api": target_api,
+            "status": current_status,
+            "current_value": _sanitize_merchant_ceo_text(value, limit=180) if not isinstance(value, (dict, list)) else _redact_secret_like(value),
+            "source": source,
+            "merchant_question": question,
+            "blocks_publish": bool(blocks_publish and current_status != "ready"),
+        }
+
+    missing_specifics = [key for key, value in item_specifics.items() if not has_value(value)]
+    specifics_status = "ready" if not missing_specifics else "needs_review"
+    image_urls = image_plan.get("imageUrls") if isinstance(image_plan.get("imageUrls"), list) else []
+    logistics_ready = all(
+        has_value(logistics_plan.get(key))
+        for key in ("item_location", "package_weight_g", "package_length_cm", "package_width_cm", "package_height_cm")
+    )
+    return [
+        row(
+            label="商品标题",
+            ebay_field="product.title",
+            target_api="InventoryItem.product.title",
+            value=product,
+            source="AI CEO 市场调研",
+            question="确认最终 eBay 标题，控制在平台标题长度内。",
+            blocks_publish=False,
+        ),
+        row(
+            label="SKU",
+            ebay_field="sku",
+            target_api="InventoryItem.sku",
+            value="",
+            source="商家账号",
+            question="给这个商品填一个当前账号内唯一 SKU。",
+        ),
+        row(
+            label="eBay 类目",
+            ebay_field="categoryId",
+            target_api="Offer.categoryId",
+            value="",
+            source="eBay 类目体检",
+            question="确认 eBay 叶子类目 categoryId。",
+        ),
+        row(
+            label="商品状态",
+            ebay_field="condition",
+            target_api="InventoryItem.condition",
+            value="NEW",
+            source="商家确认",
+            question="确认商品是 NEW、USED 还是其他状态。",
+        ),
+        row(
+            label="Item specifics",
+            ebay_field="product.aspects",
+            target_api="InventoryItem.product.aspects",
+            value=item_specifics,
+            source="AI CEO 调研 + 商家事实",
+            question="补齐 Brand、Type、Material、尺寸、颜色等 eBay 必填属性。",
+            status=specifics_status,
+        ),
+        row(
+            label="售价",
+            ebay_field="pricingSummary.price.value",
+            target_api="Offer.pricingSummary.price",
+            value=price_band,
+            source="公开市场调研",
+            question="把价格带确认成一个可发布售价，并补采购成本和利润预留。",
+            status="needs_review" if has_value(price_band) else "missing",
+        ),
+        row(
+            label="可售数量",
+            ebay_field="availability.shipToLocationAvailability.quantity",
+            target_api="InventoryItem.availability",
+            value="1",
+            source="商家确认",
+            question="确认首批可售数量。",
+            blocks_publish=False,
+        ),
+        row(
+            label="图片 URL",
+            ebay_field="product.imageUrls",
+            target_api="InventoryItem.product.imageUrls",
+            value=image_urls,
+            source="素材工坊 / 商家上传",
+            question="提供 eBay 可访问的主图和细节图 URL，并确认商业使用权。",
+            status="ready" if image_urls else "missing",
+        ),
+        row(
+            label="库存位置",
+            ebay_field="merchantLocationKey",
+            target_api="Offer.merchantLocationKey",
+            value=logistics_plan.get("merchantLocationKey", ""),
+            source="eBay 店铺 location",
+            question="从已连接店铺选择 merchantLocationKey。",
+        ),
+        row(
+            label="包装和发货地",
+            ebay_field="packageWeightAndSize",
+            target_api="InventoryItem.packageWeightAndSize",
+            value={
+                "item_location": logistics_plan.get("item_location", ""),
+                "package_weight_g": logistics_plan.get("package_weight_g", ""),
+                "package_length_cm": logistics_plan.get("package_length_cm", ""),
+                "package_width_cm": logistics_plan.get("package_width_cm", ""),
+                "package_height_cm": logistics_plan.get("package_height_cm", ""),
+            },
+            source="商家物流资料",
+            question="补发货地、包装重量和长宽高。",
+            status="ready" if logistics_ready else "missing",
+        ),
+        row(
+            label="店铺政策",
+            ebay_field="listingPolicies",
+            target_api="Offer.listingPolicies",
+            value="",
+            source="eBay business policies",
+            question="选择履约、付款、退货三个店铺政策。",
+        ),
+    ]
+
+
+def _ai_ceo_merchant_required_answers(*, field_matrix: list[dict[str, Any]], publish_gaps: list[str]) -> list[str]:
+    answers: list[str] = []
+    for item in field_matrix:
+        if item.get("status") == "ready" and not item.get("blocks_publish"):
+            continue
+        question = _sanitize_merchant_ceo_text(item.get("merchant_question"), limit=160)
+        if question:
+            answers.append(question)
+    for gap in publish_gaps:
+        text = _sanitize_merchant_ceo_text(gap, limit=160)
+        if text and text not in answers:
+            answers.append(text)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for answer in answers:
+        key = answer.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(answer)
+    return deduped[:10]
+
+
+def _extract_ai_ceo_price_band(text: str) -> str:
+    patterns = [
+        r"(?:US\s*)?\$\s*\d+(?:\.\d{1,2})?\s*(?:-|to|~|–|—)\s*(?:US\s*)?\$?\s*\d+(?:\.\d{1,2})?",
+        r"US\s*\$?\s*\d+(?:\.\d{1,2})?\s*(?:-|to|~|–|—)\s*\$?\s*\d+(?:\.\d{1,2})?",
+        r"\d+(?:\.\d{1,2})?\s*(?:USD|美元)\s*(?:-|to|~|–|—)\s*\d+(?:\.\d{1,2})?\s*(?:USD|美元)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return _sanitize_merchant_ceo_text(match.group(0), limit=80)
+    return ""
+
+
+def _extract_ai_ceo_keywords(text: str, product: str) -> list[str]:
+    candidates: list[str] = []
+    for pattern in (
+        r"(?:keywords?|search terms?|关键词|搜索词)\s*[:：]\s*([^\n。；;]{3,220})",
+        r"(?:eBay\s+keywords?|listing\s+keywords?)\s*[:：]\s*([^\n.；;]{3,220})",
+    ):
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            candidates.extend(re.split(r"[,，/、;；|]+", match.group(1)))
+    if product:
+        candidates.extend(re.split(r"\s+|/|、", product))
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        value = _sanitize_merchant_ceo_text(item, limit=40).strip(" -_.,，、;；:：")
+        if len(value) < 2:
+            continue
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(value)
+    return normalized[:12]
 
 
 def _normalize_merchant_ceo_routes(value: Any) -> list[dict[str, str]]:

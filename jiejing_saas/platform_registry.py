@@ -96,7 +96,8 @@ PLATFORM_DEFINITIONS: dict[str, PlatformDefinition] = {
             "taxonomy_read",
         ],
         write_capabilities=[
-            "draft_listing",
+            "internal_listing_draft_no_ebay_write",
+            "ebay_draft_after_confirmation_and_adapter_ready",
             "publish_listing_after_confirmation",
             "revise_listing_after_confirmation",
             "tracking_sync_after_confirmation",

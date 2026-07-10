@@ -103,9 +103,11 @@ FILES=(
   "jiejing_saas/media_asset_pipeline.py"
   "jiejing_saas/provider_job_runner.py"
   "jiejing_saas/provider_workflow_plan.py"
+  "jiejing_saas/model_provider_catalog.py"
   "jiejing_saas/model_value_gate.py"
   "jiejing_saas/model_value_rehearsal.py"
   "jiejing_saas/monitoring.py"
+  "jiejing_saas/staging_security_gate.py"
   "jiejing_saas/vault_secret_resolver.py"
   "jiejing_saas/vault_adapter.py"
   "jiejing_saas/postgres_repository_runtime.py"
@@ -132,6 +134,7 @@ FILES=(
   "jiejing_runtime/agent_team.py"
   "jiejing_runtime/creative_capabilities.py"
   "jiejing_runtime/media_capability_router.py"
+  "jiejing_runtime/media_generation.py"
   "jiejing_runtime/model_clients.py"
   "jiejing_runtime/owned_agents.py"
   "jiejing_runtime/policies.py"
@@ -172,6 +175,8 @@ FILES=(
   "tools/test_jiejing_staging_ebay_oauth_flow_tool.py"
   "tools/test_jiejing_ebay_live_read_http_client.py"
   "tools/test_jiejing_agent_model_assist.py"
+  "tools/jiejing_controlled_model_value_proof.py"
+  "tools/test_jiejing_controlled_model_value_proof.py"
   "tools/test_jiejing_model_value_rehearsal.py"
   "tools/test_jiejing_billing_provider_webhook.py"
   "tools/test_jiejing_billing_test_provider.py"
@@ -211,6 +216,7 @@ FILES=(
   "tools/jiejing_edge_cutover_preflight.py"
   "tools/test_jiejing_staging_patch_apply_contract.py"
   "tools/test_jiejing_saas_ai_ceo_chat_model_boundary.py"
+  "tools/test_jiejing_saas_ai_ceo_platform_model_fallback.py"
   "tools/test_jiejing_operational_health_readiness.py"
   "tools/test_jiejing_stripe_checkout_portal.py"
   "tools/test_jiejing_queue_recovery_heartbeat.py"
@@ -315,8 +321,10 @@ python3 -m py_compile \
   jiejing_saas/media_asset_pipeline.py \
   jiejing_saas/provider_job_runner.py \
   jiejing_saas/provider_workflow_plan.py \
+  jiejing_saas/model_provider_catalog.py \
   jiejing_saas/model_value_gate.py \
   jiejing_saas/model_value_rehearsal.py \
+  jiejing_saas/staging_security_gate.py \
   jiejing_saas/postgres_repository_runtime.py \
   jiejing_saas/redis_queue_runtime.py \
   jiejing_saas/ebay_data_packet.py \
@@ -340,6 +348,7 @@ python3 -m py_compile \
   jiejing_runtime/agent_team.py \
   jiejing_runtime/creative_capabilities.py \
   jiejing_runtime/media_capability_router.py \
+  jiejing_runtime/media_generation.py \
   jiejing_runtime/model_clients.py \
   jiejing_runtime/owned_agents.py \
   jiejing_runtime/policies.py \
@@ -378,6 +387,8 @@ python3 -m py_compile \
   tools/test_jiejing_staging_ebay_oauth_flow_tool.py \
   tools/test_jiejing_ebay_live_read_http_client.py \
   tools/test_jiejing_agent_model_assist.py \
+  tools/jiejing_controlled_model_value_proof.py \
+  tools/test_jiejing_controlled_model_value_proof.py \
   tools/test_jiejing_model_value_rehearsal.py \
   tools/test_jiejing_billing_provider_webhook.py \
   tools/test_jiejing_billing_test_provider.py \
@@ -414,6 +425,7 @@ python3 -m py_compile \
   tools/jiejing_edge_cutover_preflight.py \
   tools/test_jiejing_staging_patch_apply_contract.py \
   tools/test_jiejing_saas_ai_ceo_chat_model_boundary.py \
+  tools/test_jiejing_saas_ai_ceo_platform_model_fallback.py \
   tools/test_jiejing_operational_health_readiness.py \
   tools/test_jiejing_stripe_checkout_portal.py \
   tools/test_jiejing_queue_recovery_heartbeat.py \

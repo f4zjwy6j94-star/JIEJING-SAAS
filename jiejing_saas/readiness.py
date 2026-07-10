@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from jiejing_runtime.ebay_provider_status import EbayProviderStatus
+from jiejing_runtime.media_generation import MediaGenerationAdapter
 from jiejing_runtime.model_clients import model_client_status_from_env
 from jiejing_runtime.public_search import PublicSearchProbeAdapter
 from jiejing_runtime.provider_job_contracts import build_provider_job_contract_catalog
@@ -119,7 +120,9 @@ def build_product_readiness(settings: SaaSSettings, repository: SaaSRepository) 
             "backup": _public_backup_status(settings, repository),
             "billing": _public_billing_status(settings, repository),
             "model_value": _public_model_value_status(settings, repository),
+            "ai_ceo_platform_model": _ai_ceo_platform_model_status(),
             "public_search": _public_search_status(),
+            "media_generation": _public_media_generation_status(),
             "operational_health": _public_operational_health_status(operational_health),
         },
         "operational_health": operational_health,
@@ -186,7 +189,9 @@ def build_degraded_product_readiness(*, settings: SaaSSettings, exc: Exception) 
             "backup": {"ready": False, "status": "unknown_readiness_degraded"},
             "billing": {"ready": False, "status": "unknown_readiness_degraded"},
             "model_value": {"ready": False, "status": "unknown_readiness_degraded"},
+            "ai_ceo_platform_model": _ai_ceo_platform_model_status(),
             "public_search": _public_search_status(),
+            "media_generation": _public_media_generation_status(),
         },
         "next_minimum_actions": [database_item.next_action],
         "secret_exposed": False,
@@ -1329,6 +1334,50 @@ def _public_operational_health_status(health: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _public_media_generation_status() -> dict[str, Any]:
+    provider = (os.environ.get("JIEJING_MEDIA_GENERATION_PROVIDER") or "fal").strip() or "fal"
+    status = MediaGenerationAdapter().provider_status(provider)
+    driver_configured = bool(status.get("configured"))
+    live_enabled = _env_enabled("JIEJING_MEDIA_LIVE_PROVIDER_ENABLED", default=False)
+    video_enabled = _env_enabled("JIEJING_MEDIA_LIVE_VIDEO_ENABLED", default=False)
+    live_calls_allowed = bool(live_enabled and driver_configured)
+    if live_calls_allowed:
+        public_status = "live_generation_ready_waiting_asset_review"
+        customer_visible_summary = "素材真实生成通道已可用；输出仍必须先进入素材清单、权利审核和 Listing 复核。"
+        next_action = "继续审核素材清单、成本记录和 Listing 使用状态；不要跳过人工确认。"
+    elif driver_configured:
+        public_status = "dry_run_review_chain_ready_live_generation_disabled"
+        customer_visible_summary = "素材审核链路已就绪；当前不会真实消耗生图或生视频额度。"
+        next_action = "上线真实生成前，先打开后台开关、额度保护和素材审核流程。"
+    else:
+        public_status = "dry_run_review_chain_ready_missing_media_driver"
+        customer_visible_summary = "当前可以生成素材需求、脚本和素材清单演练；还没有启用真实生图/生视频通道。"
+        next_action = "配置后台素材生成通道后，再用全新商品和全新素材做受控测试。"
+    return {
+        "contract_version": "2026-07-05-media-generation-readiness",
+        "configured": driver_configured,
+        "status": public_status,
+        "live_generation_enabled": live_enabled,
+        "live_image_generation_enabled": live_calls_allowed,
+        "live_video_generation_enabled": bool(live_calls_allowed and video_enabled),
+        "live_provider_calls_allowed": live_calls_allowed,
+        "asset_manifest_required": True,
+        "asset_review_required": True,
+        "fact_review_required": True,
+        "human_review_required_before_listing": True,
+        "cost_guard_required": True,
+        "spend_now_allowed": False,
+        "listing_use_requires_review": True,
+        "customer_visible_summary": customer_visible_summary,
+        "next_action": next_action,
+        "frontend_gets_media_api_key": False,
+        "runtime_gets_raw_secret": False,
+        "reports_get_raw_provider_response": False,
+        "raw_provider_response_stored": False,
+        "secret_exposed": False,
+    }
+
+
 def _public_search_status() -> dict[str, Any]:
     status = PublicSearchProbeAdapter().provider_status("tavily")
     realtime_enabled = str(os.environ.get("JIEJING_AI_CEO_REALTIME_SEARCH_ENABLED") or "true").strip().lower() not in {"0", "false", "no", "off"}
@@ -1349,6 +1398,67 @@ def _public_search_status() -> dict[str, Any]:
         "runtime_gets_search_api_key": False,
         "secret_exposed": False,
     }
+
+
+def _ai_ceo_platform_model_status() -> dict[str, Any]:
+    explicit_api_key = (os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL_API_KEY") or "").strip()
+    platform_enabled = _env_enabled("JIEJING_AI_CEO_PLATFORM_MODEL_ENABLED", default=bool(explicit_api_key))
+    provider = (
+        os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL_PROVIDER")
+        or os.environ.get("JIEJING_MODEL_PROVIDER")
+        or ("deepseek" if os.environ.get("DEEPSEEK_API_KEY") else "openai")
+    ).strip()
+    key_configured = bool(
+        explicit_api_key
+        or (provider == "deepseek" and os.environ.get("DEEPSEEK_API_KEY"))
+        or os.environ.get("JIEJING_MODEL_API_KEY")
+    )
+    monthly_limit = _nonnegative_int_env("JIEJING_AI_CEO_PLATFORM_MODEL_TRIAL_MONTHLY_LIMIT", 20)
+    return {
+        "contract_version": "2026-07-03-ai-ceo-platform-model-trial",
+        "enabled": bool(platform_enabled),
+        "configured": bool(platform_enabled and key_configured),
+        "status": "ready" if platform_enabled and key_configured else "missing_key" if platform_enabled else "not_enabled",
+        "provider": provider or "",
+        "model": (
+            os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL")
+            or os.environ.get("JIEJING_MODEL")
+            or ""
+        ).strip(),
+        "trial_monthly_limit": monthly_limit,
+        "trial_quota_source": "backend_task_audit",
+        "trial_quota_scope": "account_month",
+        "usage_owner": "jiejing_platform_trial",
+        "usage_owner_label": "捷境试用 AI",
+        "quota_checked_by_backend": True,
+        "hard_stop_on_exhaustion": True,
+        "exhaustion_blocker": "platform_default_model_trial_exhausted",
+        "hard_stop_scope": "platform_managed_default_ai_only",
+        "merchant_byok_preferred": True,
+        "merchant_byok_not_counted_against_platform_trial": True,
+        "byok_bypasses_platform_trial": True,
+        "customer_visible_next_action": "save_account_ai_or_upgrade_plan",
+        "operator_cost_monitoring_required": True,
+        "frontend_can_grant_quota": False,
+        "frontend_gets_model_api_key": False,
+        "runtime_gets_model_api_key": False,
+        "secret_exposed": False,
+    }
+
+
+def _env_enabled(name: str, *, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _nonnegative_int_env(name: str, default: int) -> int:
+    try:
+        value = int(str(os.environ.get(name) or "").strip())
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 0 else default
 
 
 def _next_minimum_actions(items: list[ReadinessItem]) -> list[str]:

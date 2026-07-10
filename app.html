@@ -11,6 +11,7 @@
       (function bootJiejingAppEntry() {
         var params = new URLSearchParams(window.location.search);
         var shouldStartApp = params.get("start") === "app" || params.get("onboarded") === "1";
+        if (shouldStartApp) document.documentElement.classList.add("app-start-requested");
         if (!shouldStartApp) {
           try {
             var publicHomeUrl = new URL("./index.html", window.location.href);
@@ -50,6 +51,52 @@
         display: none !important;
       }
 
+      html.app-start-requested:not(.app-ready) #entryShell,
+      html.app-start-requested:not(.app-ready) #siteShell,
+      html.app-start-requested:not(.app-ready) #onboardingShell {
+        display: none !important;
+      }
+
+      html.app-start-requested:not(.app-ready) body,
+      html.app-start-requested.app-shell-empty body {
+        min-height: 100dvh;
+        background: #fbfcf9;
+      }
+
+      html.app-start-requested:not(.app-ready) #appBootLoading[hidden],
+      html.app-start-requested.app-shell-empty #appBootLoading[hidden] {
+        display: grid !important;
+        min-height: 100dvh;
+        place-items: center;
+        padding: 32px;
+        color: #10231f;
+        background:
+          linear-gradient(rgba(24, 129, 117, 0.055) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(24, 129, 117, 0.055) 1px, transparent 1px),
+          #fbfcf9;
+        background-size: 86px 86px;
+      }
+
+      html.app-start-requested:not(.app-ready) #appBootLoading::before,
+      html.app-start-requested.app-shell-empty #appBootLoading::before {
+        content: "正在打开捷境工作台";
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: min(360px, calc(100vw - 48px));
+        min-height: 72px;
+        padding: 18px 22px;
+        border: 1px solid #c6ddd5;
+        border-radius: 8px;
+        box-shadow: 0 18px 50px rgba(15, 44, 38, 0.08);
+        background: rgba(255, 255, 250, 0.94);
+        font: 700 18px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      html.app-start-requested.app-ready:not(.app-shell-empty) #appBootLoading {
+        display: none !important;
+      }
+
       html.app-direct-start #entryShell,
       html.app-direct-start #siteShell,
       html.app-direct-start #onboardingShell {
@@ -72,26 +119,25 @@
       }
     </style>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
-    <link rel="preload" as="image" href="./assets/backflow-incense-generated-main.webp" />
-    <link rel="preload" as="image" href="./assets/backflow-incense-generated-scene.webp" />
-    <link rel="preload" as="image" href="./assets/backflow-incense-generated-detail.webp" />
-    <link rel="preload" as="image" href="./assets/backflow-incense-video-cover.webp" />
-    <link rel="stylesheet" href="./styles.css?v=20260703-merchant-billing-launch-path-v1" />
+    <link rel="stylesheet" href="./styles.css?v=20260710-ai-ceo-reliability-v34" />
     <style id="jiejing-cockpit-layout-guard">
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
         display: grid !important;
         grid-template-columns: minmax(0, 1fr);
         gap: 0;
-        align-items: start;
+        align-items: stretch;
         justify-content: center;
         width: min(100%, 1080px);
-        height: auto;
-        min-height: calc(100vh - 44px);
+        height: 100%;
+        min-height: 0;
       }
 
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-cockpit-main {
-        display: grid;
+        display: flex;
+        flex-direction: column;
         gap: 12px;
+        height: 100%;
+        min-height: 0;
         min-width: 0;
         width: 100%;
       }
@@ -99,6 +145,33 @@
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-cockpit-status,
       body.saas-public-mvp[data-view="cockpit"] .saas-first-order-loop {
         display: none !important;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] {
+        overflow: hidden;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] #appShell:not(.is-hidden) {
+        height: 100dvh;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] #appShell .main {
+        height: 100dvh;
+        min-height: 0;
+        overflow: hidden;
+        padding: 0;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] #view-cockpit.is-active {
+        display: flex !important;
+        align-items: stretch;
+        justify-content: center;
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
+        padding: 16px 28px 18px !important;
       }
 
       body.saas-public-mvp:not([data-view="connect"]) #globalLoopWorkbench,
@@ -116,6 +189,56 @@
       body.saas-public-mvp[data-view="cockpit"] .saas-first-order-loop {
         min-width: 0;
         max-width: 100%;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-layout,
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread {
+        display: flex !important;
+        flex-direction: column;
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread-intro,
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-first-run-handoff,
+      body.saas-public-mvp[data-view="cockpit"] .saas-ceo-route-task-slot,
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer-dock {
+        flex: 0 0 auto;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread.has-chat-messages .saas-ai-ceo-thread-intro {
+        margin-bottom: 8px;
+        text-align: left;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread.has-chat-messages .saas-ai-ceo-thread-intro h2 {
+        font-size: 22px;
+        line-height: 1.12;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread.has-chat-messages .saas-ai-ceo-thread-intro p:not(.eyebrow),
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread.has-chat-messages .saas-ai-ceo-first-run-handoff {
+        display: none !important;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chat-stream {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-gutter: stable;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chat-stream > .message:first-child {
+        margin-top: auto;
+      }
+
+      body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer-dock {
+        position: sticky;
+        bottom: 0;
+        z-index: 5;
+        background: #ffffff;
       }
 
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-layout,
@@ -140,6 +263,15 @@
       }
 
       @media (max-width: 1120px) {
+        body.saas-public-mvp[data-view="cockpit"] #appShell .main {
+          height: calc(100dvh - 86px);
+        }
+
+        body.saas-public-mvp[data-view="cockpit"] #view-cockpit.is-active {
+          height: calc(100dvh - 86px);
+          padding: 12px 12px calc(14px + env(safe-area-inset-bottom, 0px)) !important;
+        }
+
         body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
           grid-template-columns: 1fr;
         }
@@ -147,7 +279,7 @@
     </style>
   </head>
   <body>
-    <div class="app-boot-loading" id="appBootLoading" hidden></div>
+    <div class="app-boot-loading" id="appBootLoading" role="status" aria-live="polite" aria-label="正在打开捷境工作台" hidden></div>
     <div class="entry-shell" id="entryShell">
       <section class="entry-panel is-active" data-entry-panel="intro">
         <header class="entry-nav">
@@ -1549,19 +1681,19 @@
                   </div>
                   <div class="product-media-strip">
                     <figure>
-                      <img src="assets/backflow-incense-generated-main.webp" alt="倒流香炉白底主图草稿" loading="lazy" />
-                      <figcaption>白底主图</figcaption>
+                      <span class="asset-preview asset-preview-empty">待接入</span>
+                      <figcaption>主图</figcaption>
                     </figure>
                     <figure>
-                      <img src="assets/backflow-incense-generated-scene.webp" alt="倒流香炉茶室场景图草稿" loading="lazy" />
-                      <figcaption>茶室场景</figcaption>
+                      <span class="asset-preview asset-preview-empty">待接入</span>
+                      <figcaption>场景图</figcaption>
                     </figure>
                     <figure>
-                      <img src="assets/backflow-incense-generated-detail.webp" alt="倒流香炉详情页草稿" loading="lazy" />
+                      <span class="asset-preview asset-preview-empty">待接入</span>
                       <figcaption>详情页</figcaption>
                     </figure>
                     <figure class="product-video-figure">
-                      <img src="assets/backflow-incense-video-cover.webp" alt="倒流香炉短视频封面草稿" loading="lazy" />
+                      <span class="asset-preview asset-preview-empty">待接入</span>
                       <span class="video-play" aria-hidden="true"></span>
                       <figcaption>短视频脚本</figcaption>
                     </figure>
@@ -1571,70 +1703,29 @@
                     <p>1 白底主图 · 2 场景图 · 3 烟雾效果 · 4 尺寸图 · 5 细节图 · 6 包装清单</p>
                   </div>
                   <div class="media-canvas-grid product-listing-media-grid" aria-label="产品刊登素材模板">
-                    <article class="media-canvas-card main-shot" data-asset-preview="main" role="button" tabindex="0">
-                      <div class="asset-preview asset-preview-photo real-main-shot" aria-hidden="true">
-                        <img src="assets/backflow-incense-generated-main.webp" alt="">
-                        <em>AI 新生成</em>
-                      </div>
+                    <article class="media-canvas-card media-status-card is-pending">
+                      <div class="asset-preview asset-preview-empty"><span>待接入</span></div>
                       <span>主图</span>
-                      <strong>白底主图候选</strong>
-                      <p>用于 eBay 第一张图，保留真实器型、材质和比例，不能把商品改成不存在的款式。</p>
-                      <button class="asset-open-button" type="button">查看主图</button>
+                      <strong>等待当前商品主图</strong>
+                      <p>导入 AI CEO 调研、商家资料或来源图后再生成当前商品素材。</p>
                     </article>
-                    <article class="media-canvas-card" data-asset-preview="scene" role="button" tabindex="0">
-                      <div class="asset-preview asset-preview-photo" aria-hidden="true">
-                        <img src="assets/backflow-incense-generated-scene.webp" alt="">
-                      </div>
+                    <article class="media-canvas-card media-status-card is-pending">
+                      <div class="asset-preview asset-preview-empty"><span>待接入</span></div>
                       <span>场景图</span>
-                      <strong>茶室氛围图</strong>
-                      <p>用于轮播和详情页，展示摆放场景，不替代真实规格信息。</p>
-                      <button class="asset-open-button" type="button">查看茶室图</button>
+                      <strong>等待真实场景需求</strong>
+                      <p>场景图必须服务当前商品，不使用历史测试图占位。</p>
                     </article>
-                    <article class="media-canvas-card" data-asset-preview="sceneHome" role="button" tabindex="0">
-                      <div class="asset-preview asset-preview-photo" aria-hidden="true">
-                        <img src="assets/backflow-incense-generated-scene.webp" alt="">
-                      </div>
-                      <span>场景图</span>
-                      <strong>家居书桌图</strong>
-                      <p>补充家居和礼品场景，适合做 Listing 副图。</p>
-                      <button class="asset-open-button" type="button">查看家居图</button>
-                    </article>
-                    <article class="media-canvas-card" data-asset-preview="closeup" role="button" tabindex="0">
-                      <div class="asset-preview asset-preview-photo smoke-thumb" aria-hidden="true">
-                        <img src="assets/backflow-incense-generated-detail.webp" alt="">
-                      </div>
-                      <span>细节图</span>
-                      <strong>鸟枝 / 纹理 / 底座</strong>
-                      <p>展示材质和工艺细节，辅助买家理解实物。</p>
-                      <button class="asset-open-button" type="button">查看细节图</button>
-                    </article>
-                    <article class="media-canvas-card" data-asset-preview="size" role="button" tabindex="0">
-                      <div class="asset-preview asset-preview-photo size-thumb" aria-hidden="true">
-                        <img src="assets/backflow-incense-generated-detail.webp" alt="">
-                      </div>
-                      <span>尺寸图</span>
-                      <strong>待填真实尺寸</strong>
-                      <p>尺寸图模板已生成，长宽高、重量和包装尺寸等供应商确认后再填。</p>
-                      <button class="asset-open-button" type="button">查看尺寸图</button>
-                    </article>
-                    <article class="media-canvas-card" data-asset-preview="detail" role="button" tabindex="0">
-                      <div class="asset-preview asset-preview-photo detail-thumb" aria-hidden="true">
-                        <img src="assets/backflow-incense-generated-detail.webp" alt="">
-                      </div>
+                    <article class="media-canvas-card media-status-card is-pending">
+                      <div class="asset-preview asset-preview-empty"><span>待接入</span></div>
                       <span>详情页</span>
-                      <strong>卖点长图草稿</strong>
-                      <p>包含主视觉、场景、细节、参数和确认项，发布前核对真实资料。</p>
-                      <button class="asset-open-button" type="button">查看详情页</button>
+                      <strong>等待规格和包装信息</strong>
+                      <p>详情页需要尺寸、重量、材质、包装清单和使用边界。</p>
                     </article>
-                    <article class="media-canvas-card video-card" data-asset-preview="video" role="button" tabindex="0">
-                      <div class="asset-preview asset-preview-photo video-thumb" aria-hidden="true">
-                        <img src="assets/backflow-incense-video-cover.webp" alt="">
-                        <em>脚本</em>
-                      </div>
+                    <article class="media-canvas-card media-status-card is-pending">
+                      <div class="asset-preview asset-preview-empty"><span>待接入</span></div>
                       <span>视频</span>
-                      <strong>产品短视频脚本草稿</strong>
-                      <p>包含封面、镜头顺序、字幕和卖点脚本；发布前检查授权和夸大宣传风险。</p>
-                      <button class="asset-open-button" type="button">播放视频草稿</button>
+                      <strong>等待脚本和分镜</strong>
+                      <p>视频先形成脚本和封面草稿，发布前仍需确认中心审核。</p>
                     </article>
                   </div>
                 </article>
@@ -1934,20 +2025,8 @@
                   <span class="pill green" id="mediaProjectPill">5 个已导入草稿</span>
                 </div>
                 <div class="media-project-tabs">
-                  <button class="media-project-tab is-active" type="button" data-media-draft="incense" data-media-draft-title="倒流香炉" data-media-draft-note="主图、茶室场景、尺寸图、详情页、英语短视频脚本" data-media-draft-gap="尺寸、重量、材质、是否含香粒" data-media-draft-status="市场判断已完成 · Listing 草稿待素材">
-                    <span>01</span><strong>倒流香炉</strong><small>家居香薰摆件</small><em>流程导入</em>
-                  </button>
-                  <button class="media-project-tab" type="button" data-media-draft="compression" data-media-draft-title="旅行压缩收纳袋" data-media-draft-note="套装主图、容量对比、行李箱场景、详情页" data-media-draft-gap="容量、套装数量、材质厚度" data-media-draft-status="市场判断已完成 · 素材方向待定">
-                    <span>02</span><strong>旅行压缩袋</strong><small>收纳旅行用品</small><em>流程导入</em>
-                  </button>
-                  <button class="media-project-tab" type="button" data-media-draft="jewelry" data-media-draft-title="便携首饰盒" data-media-draft-note="开合细节、内部结构、旅行场景、礼品图" data-media-draft-gap="尺寸、内部分区、材质" data-media-draft-status="差异化方向已定 · 需要细节图">
-                    <span>03</span><strong>首饰收纳盒</strong><small>旅行礼品场景</small><em>流程导入</em>
-                  </button>
-                  <button class="media-project-tab" type="button" data-media-draft="candle" data-media-draft-title="香薰蜡烛套装" data-media-draft-note="套装主图、香型视觉、家居氛围、使用提醒" data-media-draft-gap="香型、克重、燃烧时长、物流限制" data-media-draft-status="风控待确认 · 先做草稿">
-                    <span>04</span><strong>香薰蜡烛</strong><small>礼品套装</small><em>流程导入</em>
-                  </button>
-                  <button class="media-project-tab" type="button" data-media-draft="cable" data-media-draft-title="桌面理线夹" data-media-draft-note="白底套装、安装步骤、桌面场景、尺寸图" data-media-draft-gap="胶面、线径、数量、适用桌面" data-media-draft-status="可快速出图 · 待补规格">
-                    <span>05</span><strong>桌面理线夹</strong><small>办公整理</small><em>流程导入</em>
+                  <button class="media-project-tab is-active" type="button" data-media-saas-real="1" data-media-draft="saas-waiting" data-media-draft-title="等待商品草稿或来源图" data-media-draft-note="先从 AI CEO、Listing 或批量铺货接入商品；也可以切到独立上传处理一张货源图。" data-media-draft-gap="等待素材来源图、授权、规格和包装信息" data-media-draft-status="等待输入">
+                    <span>01</span><strong>等待商品输入</strong><small>没有真实商品时不展示旧样例</small><em>流程导入</em>
                   </button>
                 </div>
               </section>
@@ -1993,15 +2072,15 @@
 
                   <div class="media-source-card">
                     <div class="media-upload-box">
-                      <img class="media-input-thumb" src="assets/backflow-incense-burner-hero.webp" alt="">
+                      <img class="media-input-thumb" alt="等待真实商品素材来源">
                       <span id="mediaSourceLabel">选择要做图的商品</span>
-                      <strong id="mediaSourceTitle">流程导入：倒流香炉商品草稿</strong>
-                      <p id="mediaSourceNote">素材工坊读取商品草稿和图片需求；缺真实货源图或规格时停在待补资料。</p>
+                      <strong id="mediaSourceTitle">等待商品草稿或来源图</strong>
+                      <p id="mediaSourceNote">素材工坊只展示当前商品的真实来源图、Listing 草稿或素材清单；没有真实输入时不展示旧样例图。</p>
                     </div>
                     <div class="media-source-facts">
                       <span id="mediaFactLabel">本次要做</span>
-                      <strong id="mediaFactTitle">5 个测试草稿 · 当前选中倒流香炉</strong>
-                      <p id="mediaFactNote">素材先作为草稿生成，不触发真实发布；缺尺寸、重量、材质或授权时先停住。</p>
+                      <strong id="mediaFactTitle">等待主图、场景图、详情页和视频脚本需求</strong>
+                      <p id="mediaFactNote">素材先作为草稿生成，不触发真实发布；缺图片授权、尺寸、重量、材质或包装信息时先停住。</p>
                     </div>
                   </div>
 
@@ -2009,13 +2088,13 @@
                     <div class="media-queue-head">
                       <div>
                         <span>当前素材生产单</span>
-                        <strong id="mediaProductionTitle">倒流香炉：主图、详情页与视频脚本</strong>
+                        <strong id="mediaProductionTitle">等待当前商品素材生产单</strong>
                       </div>
                       <small id="mediaProductionStatus">市场判断已完成 · Listing 草稿待素材</small>
                     </div>
                     <div class="media-production-grid">
-                      <article><span>要生成</span><strong id="mediaProductionNeed">主图、茶室场景、尺寸图、详情页、英语短视频脚本</strong></article>
-                      <article><span>待补资料</span><strong id="mediaProductionGap">尺寸、重量、材质、是否含香粒</strong></article>
+                      <article><span>要生成</span><strong id="mediaProductionNeed">等待图片需求和素材清单</strong></article>
+                      <article><span>待补资料</span><strong id="mediaProductionGap">来源图、授权、尺寸、重量、材质和包装信息</strong></article>
                       <article><span>去向</span><strong id="mediaProductionTarget">通过后回写产品刊登草稿</strong></article>
                     </div>
                   </div>
@@ -2047,70 +2126,29 @@
                   </section>
 
                   <div class="media-canvas-grid">
-                    <article class="media-canvas-card main-shot" data-asset-preview="main" role="button" tabindex="0">
-                      <div class="asset-preview asset-preview-photo real-main-shot" aria-hidden="true">
-                        <img src="assets/backflow-incense-generated-main.webp" alt="">
-                        <em>AI 新生成</em>
-                      </div>
+                    <article class="media-canvas-card media-status-card is-pending">
+                      <div class="asset-preview asset-preview-empty"><span>待接入</span></div>
                       <span>主图</span>
-                      <strong>主图候选图</strong>
-                      <p>生成白底产品主图候选，用于 Listing 首图评审。</p>
-                      <button class="asset-open-button" type="button">查看生成图</button>
+                      <strong>等待当前商品主图需求</strong>
+                      <p>先接入当前商品、来源图或 Listing 草稿；没有真实输入时不展示旧样例图。</p>
                     </article>
-                    <article class="media-canvas-card" data-asset-preview="scene" role="button" tabindex="0">
-                      <div class="asset-preview asset-preview-photo" aria-hidden="true">
-                        <img src="assets/backflow-incense-generated-scene.webp" alt="">
-                      </div>
+                    <article class="media-canvas-card media-status-card is-pending">
+                      <div class="asset-preview asset-preview-empty"><span>待接入</span></div>
                       <span>场景图</span>
-                      <strong>茶室氛围图</strong>
-                      <p>生成家居陈列场景，用于展示商品摆放氛围。</p>
-                      <button class="asset-open-button" type="button">查看茶室图</button>
+                      <strong>等待使用场景和授权边界</strong>
+                      <p>场景图只基于当前商品生成，不能用旧测试图冒充真实素材。</p>
                     </article>
-                    <article class="media-canvas-card" data-asset-preview="sceneHome" role="button" tabindex="0">
-                      <div class="asset-preview asset-preview-photo" aria-hidden="true">
-                        <img src="assets/backflow-incense-generated-scene.webp" alt="">
-                      </div>
-                      <span>场景图</span>
-                      <strong>家居书桌图</strong>
-                      <p>补充明亮场景图，适合 Listing 轮播和详情页中段。</p>
-                      <button class="asset-open-button" type="button">查看家居图</button>
-                    </article>
-                    <article class="media-canvas-card" data-asset-preview="closeup" role="button" tabindex="0">
-                      <div class="asset-preview asset-preview-photo smoke-thumb" aria-hidden="true">
-                        <img src="assets/backflow-incense-generated-detail.webp" alt="">
-                      </div>
-                      <span>细节图</span>
-                      <strong>鸟枝 / 花纹 / 底座</strong>
-                      <p>展示纹理、结构和承托位置，辅助买家判断细节。</p>
-                      <button class="asset-open-button" type="button">查看细节图</button>
-                    </article>
-                    <article class="media-canvas-card" data-asset-preview="size" role="button" tabindex="0">
-                      <div class="asset-preview asset-preview-photo size-thumb" aria-hidden="true">
-                        <img src="assets/backflow-incense-generated-detail.webp" alt="">
-                      </div>
-                      <span>尺寸图</span>
-                      <strong>待填真实尺寸</strong>
-                      <p>生成尺寸说明版式，真实长宽高和重量需实测后填写。</p>
-                      <button class="asset-open-button" type="button">查看尺寸图</button>
-                    </article>
-                    <article class="media-canvas-card" data-asset-preview="detail" role="button" tabindex="0">
-                      <div class="asset-preview asset-preview-photo detail-thumb" aria-hidden="true">
-                        <img src="assets/backflow-incense-generated-detail.webp" alt="">
-                      </div>
+                    <article class="media-canvas-card media-status-card is-pending">
+                      <div class="asset-preview asset-preview-empty"><span>待接入</span></div>
                       <span>详情页</span>
-                      <strong>卖点长图</strong>
-                      <p>生成详情页长图草稿，整合主视觉、卖点、细节和注意事项。</p>
-                      <button class="asset-open-button" type="button">查看详情页</button>
+                      <strong>等待规格、包装和卖点</strong>
+                      <p>详情页草稿需要尺寸、重量、材质、包装清单和平台规则。</p>
                     </article>
-                    <article class="media-canvas-card video-card" data-asset-preview="video" role="button" tabindex="0">
-                      <div class="asset-preview asset-preview-photo video-thumb" aria-hidden="true">
-                        <img src="assets/backflow-incense-video-cover.webp" alt="">
-                        <em>脚本</em>
-                      </div>
+                    <article class="media-canvas-card media-status-card is-pending">
+                      <div class="asset-preview asset-preview-empty"><span>待接入</span></div>
                       <span>视频</span>
-                      <strong>产品短视频脚本</strong>
-                      <p>生成短视频草稿，包含封面、镜头顺序、字幕和卖点节奏。</p>
-                      <button class="asset-open-button" type="button">查看视频脚本</button>
+                      <strong>等待视频脚本素材</strong>
+                      <p>视频先进入脚本、分镜和封面草稿，正式使用前仍需审核。</p>
                     </article>
                   </div>
 
@@ -2270,12 +2308,12 @@
                     <label>
                       <span>视频规格</span>
                       <select id="mediaVideoPresetSelect">
-                        <option>不生成视频</option>
+                        <option selected>不生成视频</option>
                         <option>10 秒产品展示视频</option>
-                        <option selected>15 秒产品展示视频</option>
+                        <option>15 秒产品展示视频</option>
                         <option>30 秒产品短视频脚本</option>
                       </select>
-                      <small>视频封面、字幕脚本和分镜会进入素材记录</small>
+                      <small>选择视频规格后，“按当前设置生成”才会生成视频；单独的脚本按钮只生成文字脚本与分镜</small>
                     </label>
                     <label>
                       <span>脚本语言</span>
@@ -3259,7 +3297,7 @@
         </div>
         <div class="button-row">
           <button class="secondary-action" data-close-modal>继续调整</button>
-          <button class="primary-action" id="assetSendConfirm">送确认中心</button>
+          <button class="primary-action" id="assetSendConfirm">完成素材审核</button>
         </div>
       </section>
     </div>
@@ -3271,6 +3309,7 @@
         if (!shouldOpenApp) return;
         const host = window.location.hostname;
         const isPublic = window.location.protocol !== "file:" && host !== "localhost" && host !== "127.0.0.1" && host !== "::1";
+        const sessionHint = localStorage.getItem("jiejing_saas_backend_session_hint") === "1";
         const lastAccount = String(localStorage.getItem("jiejing_saas_last_account") || "").trim().toLowerCase();
         const accountOnboardingDone = lastAccount && localStorage.getItem(`jiejing_saas_onboarding_done:${lastAccount}`) === "1";
         const browserOnboardingDone = !isPublic && localStorage.getItem("jiejing_saas_onboarding_done:browser") === "1";
@@ -3278,13 +3317,42 @@
         if (!onboardingDone) return;
 
         const showApp = () => {
+          if (isPublic || sessionHint) {
+            document.documentElement.classList.add("app-auth-pending");
+            document.documentElement.classList.remove("app-ready");
+            return;
+          }
           const allowedViews = new Set(["cockpit", "workflow", "product", "media", "bulk", "activity", "confirm", "service", "connect"]);
-          const requestedView = params.get("view") || "cockpit";
-          const safeView = allowedViews.has(requestedView) ? requestedView : "cockpit";
+          const viewAliases = {
+            ai: "cockpit",
+            "ai-ceo": "cockpit",
+            aiceo: "cockpit",
+            ceo: "cockpit",
+            listing: "product",
+            listings: "product",
+            product_listing: "product",
+            productlisting: "product",
+            material: "media",
+            materials: "media",
+            assets: "media",
+            asset: "media",
+            batch: "bulk",
+            decisions: "confirm",
+            decision: "confirm",
+            confirmation: "confirm",
+            settings: "connect",
+            account: "connect",
+            support: "service",
+            orders: "service",
+          };
+          const requestedView = String(params.get("view") || "cockpit").trim().toLowerCase();
+          const normalizedView = viewAliases[requestedView] || requestedView;
+          const safeView = allowedViews.has(normalizedView) ? normalizedView : "cockpit";
           document.querySelector("#entryShell")?.classList.add("is-hidden");
           document.querySelector("#siteShell")?.classList.add("is-hidden");
           document.querySelector("#onboardingShell")?.classList.add("is-hidden");
           document.querySelector("#appShell")?.classList.remove("is-hidden");
+          document.documentElement.classList.add("app-ready");
           document.body.classList.remove("site-locked");
           document.querySelectorAll(".view").forEach((view) => {
             view.classList.toggle("is-active", view.id === `view-${safeView}`);
@@ -3304,8 +3372,8 @@
         }
       })();
     </script>
-    <script src="./assets/jiejing-settings-panels.js?v=20260703-merchant-billing-launch-path-v1"></script>
-    <script src="./app.js?v=20260703-merchant-billing-launch-path-v1"></script>
+    <script src="./assets/jiejing-settings-panels.js?v=20260703-account-model-scope-v1"></script>
+    <script src="./app.js?v=20260710-ai-ceo-reliability-v34"></script>
   <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"8ceaac5cf3dd4fa491331c0faf56768c","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>

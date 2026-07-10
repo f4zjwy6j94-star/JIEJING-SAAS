@@ -30,7 +30,7 @@ def main() -> int:
             ('data-saas-readiness-incident="database"', "database incident marker"),
             ('label: "系统维护"', "merchant-safe incident label"),
             ('title: "平台连接正在恢复"', "merchant-safe incident title"),
-            ("不要重复 eBay 授权，也不要重新填写模型密钥。", "no repeat OAuth or model-key guidance"),
+            ("不要重复授权店铺，也不要重新填写 AI 连接信息。", "no repeat store authorization or AI connection guidance"),
             ('primaryAction: "refresh"', "incident refresh action"),
             ("renderSaasReadinessIncidentStrip(readiness)", "truth panel incident placement"),
         ]:

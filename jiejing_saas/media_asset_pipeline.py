@@ -23,8 +23,9 @@ def build_media_asset_generation_packet(
     contract_key: str,
     inputs: dict[str, Any],
     captured_at: str,
+    live_media_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return a provider-neutral media packet without live provider execution."""
+    """Return a provider-neutral media packet for dry-run or reviewed live media output."""
 
     product_facts = inputs.get("product_facts") if isinstance(inputs.get("product_facts"), dict) else {}
     creative_job_spec = inputs.get("creative_job_spec") if isinstance(inputs.get("creative_job_spec"), dict) else {}
@@ -47,11 +48,17 @@ def build_media_asset_generation_packet(
         scene_types=scene_types,
         video_script=video_script,
     )
+    live_provider_called = False
+    if isinstance(live_media_snapshot, dict) and live_media_snapshot.get("assets"):
+        live_assets = _live_provider_assets(live_media_snapshot)
+        if live_assets:
+            assets = live_assets
+            live_provider_called = True
     manifest_packet = {
         "assets": assets,
-        "manifest_status": "generated_placeholder_for_review",
+        "manifest_status": "generated_by_live_provider_for_review" if live_provider_called else "generated_placeholder_for_review",
         "single_output_contract": "AssetManifest",
-        "live_provider_called": False,
+        "live_provider_called": live_provider_called,
         "secret_exposed": False,
     }
     validation = _validate_manifest(manifest_packet)
@@ -74,9 +81,10 @@ def build_media_asset_generation_packet(
             "contract_key": contract_key,
             "canonical_contract_key": "media.asset_generation",
             "driver": "configured_media_provider",
-            "driver_selected_later": True,
+            "driver_selected_later": not live_provider_called,
             "fal_is_legacy_driver_alias": contract_key == "media.fal_asset_generation",
             "merchant_visible_provider_name": False,
+            "live_provider_called": live_provider_called,
         },
         "creative_job_spec": creative_job_spec,
         "product_fact_gate": {
@@ -98,13 +106,14 @@ def build_media_asset_generation_packet(
         },
         "cost_guard": cost_guard,
         "production_gate": {
-            "status": "blocked_before_live_media_provider",
-            "live_media_provider_call_allowed": False,
+            "status": "live_media_provider_completed_waiting_review" if live_provider_called else "blocked_before_live_media_provider",
+            "live_media_provider_call_allowed": live_provider_called,
+            "live_media_provider_call_completed": live_provider_called,
             "requires_quota_check": True,
             "requires_asset_manifest_validation": True,
             "requires_asset_review_approval": True,
-            "requires_provider_driver_configuration": True,
-            "next_safe_step": "approve_quota_and_provider_driver_then_run_async_media_job",
+            "requires_provider_driver_configuration": not live_provider_called,
+            "next_safe_step": "review_asset_manifest_before_listing_use" if live_provider_called else "approve_quota_and_provider_driver_then_run_async_media_job",
             "secret_exposed": False,
         },
         "merchant_visible_states": [
@@ -118,9 +127,9 @@ def build_media_asset_generation_packet(
         "scene_types": scene_types,
         "video_script_status": "received" if video_script else "missing",
         "safety": {
-            "live_provider_called": False,
-            "calls_image_provider": False,
-            "calls_video_provider": False,
+            "live_provider_called": live_provider_called,
+            "calls_image_provider": bool(live_provider_called and any(str(item.get("asset_type", "")).startswith("product_") or "image" in str(item.get("asset_type", "")) for item in assets)),
+            "calls_video_provider": bool(live_provider_called and any("video" in str(item.get("asset_type", "")) for item in assets)),
             "raw_secret_read": False,
             "raw_provider_response_stored": False,
             "real_platform_writes_enabled": False,
@@ -128,7 +137,43 @@ def build_media_asset_generation_packet(
             "runtime_gets_raw_secret": False,
             "secret_exposed": False,
         },
-    }
+}
+
+
+def _live_provider_assets(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_assets = snapshot.get("assets") if isinstance(snapshot.get("assets"), list) else []
+    provider = str(snapshot.get("provider") or "configured_media_provider")
+    assets: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_assets, start=1):
+        if not isinstance(item, dict):
+            continue
+        url_or_path = str(item.get("url") or item.get("url_or_file_path") or item.get("path") or "").strip()
+        if not url_or_path:
+            continue
+        asset_type = str(item.get("asset_type") or item.get("type") or "product_image").strip() or "product_image"
+        duration = item.get("duration_seconds") or item.get("duration")
+        dimensions = item.get("dimensions") or item.get("dimensions_or_duration") or (f"{duration}s" if duration else "provider_returned")
+        assets.append(
+            {
+                "asset_id": item.get("asset_id") or item.get("id") or f"live_provider_asset_{index:02d}",
+                "asset_type": asset_type,
+                "url": url_or_path,
+                "url_or_file_path": url_or_path,
+                "dimensions": dimensions,
+                "dimensions_or_duration": dimensions,
+                "duration_seconds": duration,
+                "source": "media_generation_provider",
+                "source_provider_or_upload": provider,
+                "prompt_version": "live_media_generation_v1",
+                "cost_estimate": "provider_spend_recorded",
+                "commercial_use_status": item.get("commercial_use_status") or "needs_rights_review",
+                "fact_review_status": "needs_review",
+                "listing_use_status": "not_ready_for_listing_until_review",
+                "status": item.get("status") or "generated",
+                "review_status": "needs_human_review_before_listing",
+            }
+        )
+    return assets
 
 
 def _placeholder_assets(

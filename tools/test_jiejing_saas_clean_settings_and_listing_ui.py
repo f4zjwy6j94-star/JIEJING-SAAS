@@ -24,10 +24,21 @@ def main() -> None:
     require(app_js, "data-saas-settings-tab", "settings tab navigation")
     require(app_js, "renderSaasSettingsCleanLayout(ctx", "settings render path")
     require(app_js, "function trustedJiejingHtml", "trusted HTML sink guard")
+    require(app_js, "function validateJiejingTrustedHtmlDocument", "DOM-level trusted HTML validation")
+    require(app_js, "jiejingTrustedHtmlForbiddenTags", "dangerous dynamic HTML tag denylist")
+    require(app_js, "jiejingTrustedHtmlUriAttributes", "dynamic HTML URL attribute validation")
+    require(app_js, 'name.startsWith("on") || name === "srcdoc"', "event and srcdoc attribute blocking")
+    require(app_js, 'normalizedValue.startsWith("data:text/html")', "HTML data URL blocking")
     require(app_js, r"\bon[a-z]+\s*=", "trusted HTML event handler boundary")
     require(app_js, "function setJiejingTrustedHtml", "trusted HTML set sink")
     require(app_js, "function insertJiejingTrustedHtml", "trusted HTML insert sink")
     require(app_js, "function replaceJiejingTrustedHtml", "trusted HTML replace sink")
+    require(app_js, "function jiejingTrustedTemplate", "trusted dynamic template guard")
+    require(app_js, '"ai_ceo.cockpit"', "AI CEO cockpit trusted template label")
+    require(app_js, '"workflow_feedback.context"', "workflow feedback trusted context label")
+    require(app_js, '"bulk.candidate_preview"', "bulk candidate trusted sink label")
+    require(app_js, '"media.generated_assets"', "media generated assets trusted sink label")
+    require(app_js, '"confirmation.center"', "confirmation center trusted template label")
     require(app_js, '"listing.product_center"', "Listing daily surface trusted sink label")
     require(app_js, '"settings.clean_layout"', "settings trusted sink label")
     require(app_js, '"settings.legacy_connect_status"', "legacy settings status trusted sink label")
@@ -102,9 +113,10 @@ def main() -> None:
         "不接触原始平台凭证",
         "不包含敏感凭证、买家敏感信息或平台账号资料",
         "店铺连接续期证明仍为 0",
-        "AI 连接信息只在后端安全保存",
+        "账号自己的 AI 连接只在后端安全保存",
         "不保存敏感凭证、网页登录状态、买家敏感信息或平台写入资料",
-        "AI 连接信息只保存在安全密钥服务里，页面只显示可用状态",
+        "页面只显示连接状态，执行层不读取原始凭证",
+        "捷境试用 AI",
     ]:
         require(app_js, required_copy, "merchant-facing credential boundary copy")
 
@@ -308,7 +320,10 @@ def main() -> None:
     require(app_js, "options.compact ? \"is-compact\" : \"\"", "Listing compact field styling hook")
     require(app_js, "data-saas-listing-draft-field", "Listing draft field persistence")
     require(app_js, "function localQaForcesSaasPublicMvpMode", "local-only public SaaS QA switch")
-    require(app_js, 'qaMode === "public-saas" || qaMode === "listing-v2-workbench"', "local QA listing route")
+    require(app_js, 'qaMode === "public-saas" || qaMode === "listing-v2-workbench" || qaMode === "ai-ceo-market-report-handoff"', "local QA listing route")
+    require(app_js, 'params.get("onboarded") === "1"', "app direct route respects explicit onboarded query")
+    require(app_js, "const saasProtectedViewAliases", "merchant URL aliases for protected SaaS views")
+    require(app_js, 'listing: "product"', "Listing URL alias routes to product workspace")
     require(app_js, "saas-listing-publish-flow", "Listing direct publish check flow")
     require(app_js, "const showPublishFlow = Boolean(state.saasListingComposerDraft || hasLiveListing)", "Listing publish form hidden until draft or listing package")
     require(app_js, "${showPublishFlow ? `", "Listing publish form is gated after a draft exists")
@@ -340,7 +355,7 @@ def main() -> None:
     require(app_js, "上架资料补全", "Listing publish data completion step")
     require(app_js, "按基础、价格利润、素材描述、平台参数和物流履约往下补", "Listing ordered publish flow copy")
     require(app_js, "function saasListingMerchantSourceLabel", "Listing merchant-facing source label helper")
-    require(app_js, "已有市场结论或上架草稿，可以作为上架依据", "Listing report import uses merchant-facing copy")
+    require(app_js, "已有 AI CEO 市场结论或上架草稿，可以作为上架依据", "Listing report import uses merchant-facing copy")
     require(app_js, "店铺连接和授权配置在设置里", "Listing settings boundary copy")
     require(app_js, '<span class="pill green">草稿</span>', "Listing draft pill uses merchant-facing label")
     require(app_js, "const productLabel = saasWorkflowProductLabel(latestTask) || saasModelValueProductLabel", "model value product label is defined before request")
@@ -369,7 +384,9 @@ def main() -> None:
     require(app_js, "官方连接返回地址", "account settings avoids callback wording")
     require(app_js, "权限围绕捷境确认中心设计", "governance settings uses Jiejing-owned permission copy")
     require(app_js, "AI 与素材", "merchant-friendly model settings title")
-    require(app_js, "AI 连接已可用，素材任务进入素材工坊", "model settings uses merchant-facing AI connection copy")
+    require(app_js, "AI CEO 可以回复，素材任务进入素材工坊", "model settings uses merchant-facing AI connection copy")
+    require(app_js, "账号 AI 或捷境试用 AI", "merchant setup guide accepts account AI or platform trial AI")
+    require(app_js, "优先用账号自己的 AI；没有账号 AI 时使用捷境试用 AI 的有限额度", "model value proof request uses BYOK first then trial AI")
     require(app_js, "生成后先审核，再决定能不能用于 Listing", "model settings explains media review before listing use")
     require(app_js, "估算文字用量", "model usage ledger avoids raw token wording")
     require(app_js, "function saasIsEnglishHeavyMerchantText", "legacy English report display guard")
@@ -951,6 +968,15 @@ def main() -> None:
     ]:
         if internal_marker in bulk_stage_body:
             raise AssertionError(f"Bulk stage copy should not show internal evidence/debug copy: {internal_marker}")
+    for expected in [
+        "function renderSaasBulkSourceRealityPanel",
+        "批量铺货货源来源",
+        "还没有导入真实货源时，只生成候选方向，不当作可采购货源。",
+        "导入后才写入采购价、库存、发货地和包装尺寸。",
+        "采购付款、下单、地址写入和真实发货不会自动执行。",
+        "real_source_handoff_v1",
+    ]:
+        require(app_js, expected, f"Bulk source reality copy: {expected}")
 
     media_html_start = app_html.index('<section class="view" id="view-media"')
     media_html_end = app_html.index('<section class="view" id="view-bulk"', media_html_start)
@@ -977,6 +1003,19 @@ def main() -> None:
             raise AssertionError(f"Media daily HTML should not show internal evidence/provider copy: {internal_marker}")
         if internal_marker in media_dynamic_body:
             raise AssertionError(f"Media daily dynamic copy should not show internal evidence/provider copy: {internal_marker}")
+    for expected in [
+        "function activeMediaDraftProfileForDisplay",
+        "没有真实商品和素材清单时，不展示旧样例图",
+        "不能用旧测试图片冒充真实生成",
+        "function renderSaasMediaGenerationReadinessPanel",
+        "素材工坊真实生成状态",
+        "真实生成状态",
+        "外部素材服务可用",
+        "素材清单和人工审核",
+        "当前不会真实消耗生图或生视频额度",
+        "media_live_service_readiness_v1",
+    ]:
+        require(app_js, expected, f"Media generation readiness copy: {expected}")
 
     service_html_start = app_html.index('<section class="view" id="view-service"')
     service_html_end = app_html.index('<section class="view" id="view-connect"', service_html_start)
@@ -1022,6 +1061,12 @@ def main() -> None:
     require(styles, "body.saas-public-mvp .saas-listing-v2-status-items", "Listing status items styling")
     require(styles, "body.saas-public-mvp .saas-listing-workflow-proof", "Listing workflow loop result styling")
     require(styles, "body.saas-public-mvp .saas-listing-workflow-proof-grid", "Listing workflow loop grid styling")
+    require(styles, ".saas-media-generation-readiness", "media generation readiness styling")
+    require(styles, ".saas-media-generation-readiness-grid", "media generation readiness grid styling")
+    require(styles, ".saas-media-generated-empty", "media generated empty state styling")
+    require(styles, ".asset-preview-empty", "media asset pending preview styling")
+    require(styles, ".bulk-source-reality-panel", "bulk source reality styling")
+    require(styles, ".bulk-source-reality-grid", "bulk source reality grid styling")
     require(styles, "grid-template-columns: repeat(5, minmax(0, 1fr));", "Listing five-step status grid")
     require(styles, "body.saas-public-mvp .saas-listing-v2-source-grid", "Listing v2 source styling")
     require(styles, "body.saas-public-mvp .saas-listing-v2-draft-editor", "Listing v2 editor styling")

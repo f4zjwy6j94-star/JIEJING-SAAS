@@ -333,6 +333,14 @@ async function main() {
     const handoff = root?.querySelector(".saas-ai-ceo-first-run-handoff");
     const oneTaskFocus = root?.querySelector('.saas-ai-ceo-one-task-focus[data-ai-ceo-one-task-focus="first_day_one_task_focus_v1"]');
     const firstDayPath = root?.querySelector('.saas-ai-ceo-first-day-path[data-ai-ceo-first-day-path="first_day_ai_ceo_path_v2"]');
+    const feedbackToggle = document.querySelector("#workflowFeedbackToggle");
+    const sendButton = root?.querySelector('#ceoForm button[type="submit"]');
+    const overlaps = (left, right) => {
+      if (!left || !right || left.offsetParent === null || right.offsetParent === null) return false;
+      const a = left.getBoundingClientRect();
+      const b = right.getBoundingClientRect();
+      return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    };
     return {
       has_one_sentence_title: text.includes("一句话交给 AI CEO"),
       has_plain_chat_copy: text.includes("问问题直接答") && text.includes("真实发布、付款、退款和广告先问你"),
@@ -361,6 +369,7 @@ async function main() {
       first_run_handoff_action_count: root?.querySelectorAll(".saas-ai-ceo-first-run-actions [data-ceo-prompt]").length || 0,
       has_starter_prompts: Boolean(starterPrompts && getComputedStyle(starterPrompts).display !== "none"),
       has_route_card: Boolean(routeCard && routeCard.offsetParent !== null),
+      feedback_overlaps_send: overlaps(feedbackToggle, sendButton),
       exposes_internal_copy: /packet|provider|preflight|数据包|后台|排查/i.test(text),
       placeholder,
       preview: text.trim().slice(0, 240),
@@ -519,6 +528,32 @@ async function main() {
     await page.locator(`.nav-item[data-view="${view}"]`).click();
     await waitForWorkbenchReady(page, id);
     await page.waitForTimeout(900);
+    if (view === "product") {
+      const draftState = await page.evaluate(() => {
+        const section = document.getElementById("view-product");
+        if (section?.querySelector(".saas-listing-v2-draft-editor")) return "already";
+        const input = section?.querySelector("#saasListingComposerInput");
+        if (input && !String(input.value || "").trim() && window.state?.saasListingComposerInput) {
+          input.value = window.state.saasListingComposerInput;
+        }
+        if (typeof window.handleSaasListingComposeDraft === "function") {
+          return window.handleSaasListingComposeDraft() ? "called_handler" : "handler_blocked";
+        }
+        const buttons = Array.from(section?.querySelectorAll('[data-saas-action="listing-compose-draft"]') || []);
+        const button = buttons.find((item) => item.offsetParent !== null && !item.disabled);
+        if (!button) return "missing";
+        button.click();
+        return "clicked";
+      });
+      if (draftState === "clicked" || draftState === "called_handler") {
+        await page
+          .waitForFunction(() => Boolean(document.querySelector("#view-product .saas-listing-v2-draft-editor")), null, {
+            timeout: 10000,
+          })
+          .catch(() => {});
+        await page.waitForTimeout(400);
+      }
+    }
     await page
       .screenshot({ path: path.join(outDir, `${view}.png`), fullPage: true, timeout: 15000 })
       .catch((error) => screenshotFailures.push({ view, error: String(error.message || error).slice(0, 300) }));
@@ -553,11 +588,31 @@ async function main() {
           has_listing_workflow_action: sectionHas('[data-saas-action="listing-start-backend-workflow"]') && text.includes("生成经营链路"),
           has_listing_ai_handoff: sectionHas(".saas-listing-ai-handoff") && text.includes("来自 AI CEO"),
           has_listing_ai_handoff_input: String(section?.querySelector("#saasListingComposerInput")?.value || "").includes("不要触发真实 eBay 写入"),
+          has_listing_draft_editor: sectionHas(".saas-listing-v2-draft-editor"),
+          has_listing_draft_state: Boolean(window.state?.saasListingComposerDraft),
           has_listing_market_stage: text.includes("市场结论"),
           has_listing_draft_stage: text.includes("Listing 草稿"),
           has_listing_asset_profit_stage: text.includes("素材/利润"),
           has_listing_publish_confirmation_stage: text.includes("发布确认"),
-          has_listing_internal_copy: /Listing Package|Market Report|数据包|后台证据|后台排查|local draft|可导入报告|极简开始/.test(text),
+          has_listing_preflight_bridge:
+            sectionHas('[data-listing-visible-publish-bridge="listing_visible_publish_bridge_v1"]') &&
+            sectionHas('[data-listing-preflight-bridge="listing_preflight_bridge_visible_v1"]') &&
+            sectionHas(".saas-listing-preflight-bridge [data-saas-action=\"run-pretest-check\"]") &&
+            sectionHas(".saas-listing-preflight-bridge [data-saas-action=\"create-publish-confirmation\"]"),
+          listing_preflight_action_count: sectionCount(".saas-listing-preflight-bridge [data-saas-action]"),
+          has_listing_publish_flow_collapsed:
+            sectionHas('[data-listing-publish-flow-details="publish_intake_collapsed_v1"]') &&
+            !section?.querySelector('[data-listing-publish-flow-details="publish_intake_collapsed_v1"]')?.open &&
+            sectionHas('[data-listing-publish-flow-details="publish_intake_collapsed_v1"] > summary'),
+          has_listing_publish_feedback:
+            sectionHas('[data-listing-visible-publish-bridge="listing_visible_publish_bridge_v1"]') &&
+            sectionHas('[data-listing-publish-feedback="listing_publish_feedback_visible_v1"]') &&
+            sectionHas(".saas-listing-publish-feedback [data-saas-action=\"open-confirm\"]"),
+          has_listing_publish_loop:
+            sectionHas('[data-listing-publish-loop="listing_publish_loop_v1"]') &&
+            sectionCount('[data-listing-publish-loop="listing_publish_loop_v1"] article') >= 4,
+          listing_publish_feedback_action_count: sectionCount(".saas-listing-publish-feedback [data-saas-action]"),
+          has_listing_internal_copy: /Listing Package|Market Report|数据包|后台证据|后台排查|Backend preflight|backend_preflight|publish_readiness|confirmation_id|local draft|可导入报告|极简开始/.test(text),
           has_direct_publish_button: Array.from(section?.querySelectorAll("button") || []).some((button) =>
             /直接发布|立即发布/.test(button.innerText || ""),
           ),
@@ -568,7 +623,7 @@ async function main() {
           ),
           publish_health_source_count: sectionCount(".saas-publish-health-sources article"),
           has_backend_preflight_panel: sectionHas(".saas-backend-preflight-panel"),
-          has_backend_preflight_waiting_copy: text.includes("Backend preflight 证据") && text.includes("等待创建发布确认单"),
+          has_backend_preflight_waiting_copy: text.includes("系统发布体检") && text.includes("等待创建发布确认单"),
           backend_preflight_action_count: sectionCount(".saas-backend-preflight-panel [data-saas-action]"),
           has_incident_mode_ops: sectionHas(".saas-incident-mode-ops"),
           has_incident_mode_copy: text.includes("事故模式") && text.includes("真实发布"),
@@ -615,7 +670,11 @@ async function main() {
             sectionHas(".saas-confirm-action-model") &&
             text.includes("你没点头前不会执行") &&
             (sectionHas(".runtime-confirm-empty") ||
-              (sectionHas(".saas-confirm-card-decision") && sectionHas(".saas-confirm-safety-detail"))),
+              (text.includes("点同意后") &&
+                text.includes("不会自动付款") &&
+                sectionHas(".saas-confirm-card-decision") &&
+                sectionHas(".saas-confirm-safety-detail") &&
+                sectionHas(".saas-confirm-merchant-brief"))),
           has_confirm_internal_copy: /高级细节|上线检查|后台|运维|preflight|packet|provider/.test(text),
           has_chat_reply: Boolean(document.querySelector("#view-cockpit #ceoChat .message.ai")),
           has_chat_stream: Boolean(document.querySelector("#view-cockpit #ceoChat")),
@@ -654,10 +713,11 @@ async function main() {
             Boolean(document.querySelector("#ceoForm")) &&
             document.querySelector("#ceoChat").compareDocumentPosition(document.querySelector("#ceoForm")) &
               Node.DOCUMENT_POSITION_FOLLOWING,
-          has_collapsed_history: Boolean(document.querySelector("#saasAiCeoHistory, #view-cockpit summary")),
+          has_collapsed_history: Boolean(document.querySelector("#saasAiCeoHistory:not([hidden]), #view-cockpit .saas-ai-ceo-history summary")),
           has_login_overlay: Boolean(document.querySelector(".auth-shell, .saas-login-modal, [data-auth-view]")),
+          has_ceo_pending_status: Boolean(document.querySelector("#view-cockpit .saas-ai-ceo-pending-status")),
           ceo_pending_chip_is_not_avatar: (() => {
-            const chip = document.querySelector("#view-cockpit .saas-ai-ceo-pending-status span");
+            const chip = document.querySelector("#view-cockpit .saas-ai-ceo-pending-status > span");
             if (!chip) return true;
             const style = getComputedStyle(chip);
             const rect = chip.getBoundingClientRect();
@@ -667,6 +727,15 @@ async function main() {
               style.backgroundColor !== "rgb(16, 28, 23)" &&
               style.color !== "rgb(255, 255, 255)"
             );
+          })(),
+          has_ceo_pending_preview: Boolean(
+            document.querySelector('#view-cockpit [data-ai-ceo-provisional-answer="quick_then_full_report_v1"]'),
+          ),
+          ceo_pending_preview_copy: (() => {
+            const preview = document.querySelector('#view-cockpit [data-ai-ceo-provisional-answer="quick_then_full_report_v1"]');
+            if (!preview) return true;
+            const previewText = preview.innerText || "";
+            return previewText.includes("先短答") && (previewText.includes("完整报告") || previewText.includes("临时方向"));
           })(),
           preview: text.trim().slice(0, 240),
         };
@@ -913,6 +982,18 @@ async function main() {
   if (!product.has_listing_asset_profit_stage || !product.has_listing_publish_confirmation_stage) {
     failures.push("product C+ asset/profit or publish confirmation stage missing");
   }
+  if (!product.has_listing_preflight_bridge || product.listing_preflight_action_count < 3) {
+    failures.push("product Listing draft does not bridge into publish preflight and confirmation actions");
+  }
+  if (!product.has_listing_publish_feedback || product.listing_publish_feedback_action_count < 3) {
+    failures.push("product Listing publish feedback receipt missing");
+  }
+  if (!product.has_listing_publish_loop) {
+    failures.push("product Listing publish confirmation loop missing");
+  }
+  if (!product.has_listing_publish_flow_collapsed) {
+    failures.push("product publish intake form should stay collapsed until the merchant needs fields");
+  }
   if (product.has_listing_internal_copy) failures.push("product daily Listing surface exposes internal report/debug copy");
   if (product.has_direct_publish_button) failures.push("product daily Listing surface exposes a direct publish button");
   const connect = moduleChecks.find((item) => item.view === "connect") || {};
@@ -991,6 +1072,9 @@ async function main() {
   if (ceoFirstRunEntry.has_starter_prompts || ceoFirstRunEntry.has_route_card) {
     failures.push("AI CEO first-run entry still exposes starter prompts or a route card before user intent");
   }
+  if (ceoFirstRunEntry.feedback_overlaps_send) {
+    failures.push("workflow feedback toggle overlaps the AI CEO send button");
+  }
   if (ceoFirstRunEntry.exposes_internal_copy) {
     failures.push("AI CEO first-run entry exposes internal/debug copy");
   }
@@ -1041,6 +1125,12 @@ async function main() {
   if (cockpit.has_collapsed_history) failures.push("AI CEO conversation is still hidden behind a collapsed history section");
   if (!cockpit.ceo_pending_chip_is_not_avatar) {
     failures.push("AI CEO pending status chip is inheriting avatar styling on small screens");
+  }
+  if (cockpit.has_ceo_pending_status && !cockpit.has_ceo_pending_preview) {
+    failures.push("AI CEO pending state is missing the quick provisional answer card");
+  }
+  if (cockpit.has_ceo_pending_status && !cockpit.ceo_pending_preview_copy) {
+    failures.push("AI CEO provisional answer copy is not merchant-readable");
   }
 
   if (failures.length) {

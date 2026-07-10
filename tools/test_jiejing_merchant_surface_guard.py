@@ -285,9 +285,10 @@ def main() -> int:
 
     for required_guard in [
         "function normalizeSaasProtectedView",
+        "function shouldOpenSaasAppRoute",
         "function hasCompletedSaasOnboarding",
         "function markSaasOnboardingCompleted",
-        "openApp(normalizeSaasProtectedView(params.get(\"view\") || \"cockpit\"));",
+        "openApp(rememberSaasStartupRequestedView(params.get(\"view\") || \"cockpit\"));",
         "markSaasOnboardingCompleted();",
     ]:
         if required_guard not in app_js:

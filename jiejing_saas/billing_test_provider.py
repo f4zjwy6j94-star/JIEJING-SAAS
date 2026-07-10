@@ -46,6 +46,7 @@ def apply_test_billing_event(
     user_id: str,
     plan_key: str,
     action: str,
+    event_nonce: str = "",
 ) -> dict[str, Any]:
     provider = selected_billing_provider()
     if provider not in TEST_BILLING_PROVIDERS:
@@ -64,7 +65,7 @@ def apply_test_billing_event(
     provider_plan_id = billing_plan_ids().get(normalized_plan) or f"mock_price_{normalized_plan}"
     provider_customer_id = _stable_provider_id("cus_mock", company_id)
     provider_subscription_id = _stable_provider_id("sub_mock", company_id)
-    event_id = _stable_provider_id("evt_mock", company_id, normalized_action, str(int(time.time() // 60)))
+    event_id = _stable_provider_id("evt_mock", company_id, normalized_action, event_nonce or str(int(time.time() // 60)))
     event = {
         "provider": provider,
         "event_id": event_id,

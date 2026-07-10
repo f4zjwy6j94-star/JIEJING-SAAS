@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable
 
+from jiejing_runtime.media_generation import MediaGenerationAdapter, MediaGenerationConfig
 from jiejing_runtime.provider_job_contracts import build_provider_job_contract_catalog
 
 from .config import SaaSSettings
@@ -110,6 +111,7 @@ class ProviderJobRunner:
                 "live_provider_called": False,
                 "raw_secret_read": False,
                 "raw_provider_response_stored": False,
+                "spend_now_allowed": False,
                 "secret_exposed": False,
                 "real_execution_allowed": False,
                 "frontend_gets_raw_secret": False,
@@ -130,17 +132,142 @@ class ProviderJobRunner:
         job_body: dict[str, Any],
         captured_at: str,
     ) -> dict[str, Any] | None:
-        if key != "public_search.market_research":
+        if key == "public_search.market_research":
+            if _env_bool("JIEJING_PUBLIC_SEARCH_LIVE_ENABLED", default=False) is not True:
+                return None
+            if missing_inputs:
+                return None
+            return self._run_public_search_live(
+                contract=contract,
+                inputs=inputs,
+                job_body=job_body,
+                captured_at=captured_at,
+            )
+        if key in {"media.asset_generation", "media.fal_asset_generation"}:
+            return self._maybe_run_media_live(
+                key=key,
+                contract=contract,
+                inputs=inputs,
+                missing_inputs=missing_inputs,
+                job_body=job_body,
+                captured_at=captured_at,
+            )
+        return None
+
+    def _maybe_run_media_live(
+        self,
+        *,
+        key: str,
+        contract: dict[str, Any],
+        inputs: dict[str, Any],
+        missing_inputs: list[str],
+        job_body: dict[str, Any],
+        captured_at: str,
+    ) -> dict[str, Any] | None:
+        if _env_bool("JIEJING_MEDIA_LIVE_PROVIDER_ENABLED", default=False) is not True:
             return None
-        if _env_bool("JIEJING_PUBLIC_SEARCH_LIVE_ENABLED", default=False) is not True:
+        if not _truthy(inputs.get("live_provider_requested") or job_body.get("live_provider_requested") or str(job_body.get("run_mode") or "") == "live_provider_now"):
             return None
         if missing_inputs:
             return None
-        return self._run_public_search_live(
-            contract=contract,
+        product_facts = inputs.get("product_facts") if isinstance(inputs.get("product_facts"), dict) else {}
+        creative_job_spec = inputs.get("creative_job_spec") if isinstance(inputs.get("creative_job_spec"), dict) else {}
+        product = str(product_facts.get("product") or product_facts.get("product_identity") or creative_job_spec.get("product") or "current product").strip()
+        provider = str(inputs.get("media_provider") or inputs.get("preferred_media_provider") or "").strip()
+        if provider.lower().replace("_", "-") in {"provider-neutral", "configured-media-provider", "backend-default"}:
+            provider = ""
+        if key == "media.fal_asset_generation" and not provider:
+            provider = "fal"
+        image_count = max(1, min(_safe_int(inputs.get("image_count"), default=1), 4))
+        image_sizes = _list_or_default(inputs.get("image_sizes"), ["1600x1600"])
+        scene_types = _list_or_default(inputs.get("scene_types"), ["white_background"])
+        blocked_claims = _list_or_default(creative_job_spec.get("blocked_claims"), ["unverified certification", "medical claims", "unauthorized brand claims"])
+        image_prompt = str(
+            inputs.get("image_prompt")
+            or creative_job_spec.get("image_prompt")
+            or f"Create eBay-safe product images for {product}. Use only confirmed product facts. Avoid: {', '.join(blocked_claims)}."
+        )
+        video_enabled = _env_bool("JIEJING_MEDIA_LIVE_VIDEO_ENABLED", default=False) and _truthy(inputs.get("video_generation_requested"))
+        video_prompt = ""
+        if video_enabled:
+            video_prompt = str(
+                inputs.get("video_prompt")
+                or creative_job_spec.get("video_prompt")
+                or f"Create an eBay-safe product demo video draft for {product}. Avoid unverified claims."
+            )
+        default_timeout = 300 if video_enabled else 45
+        max_timeout = 600 if video_enabled else 90
+        snapshot = MediaGenerationAdapter().generate(
+            MediaGenerationConfig(
+                product=product,
+                image_prompt=image_prompt,
+                video_prompt=video_prompt,
+                detail_page_prompt=str(inputs.get("detail_page_prompt") or creative_job_spec.get("detail_page_prompt") or ""),
+                image_count=image_count,
+                image_sizes=image_sizes,
+                scene_types=scene_types,
+                live_enabled=True,
+                provider=provider,
+                reference_image_url=str(inputs.get("reference_image_url") or ""),
+                timeout_seconds=max(10, min(_safe_int(inputs.get("timeout_seconds"), default=default_timeout), max_timeout)),
+            )
+        )
+        assets = snapshot.get("assets") if isinstance(snapshot.get("assets"), list) else []
+        if not assets:
+            blocked_by = ["media_provider_no_asset_returned"]
+            if snapshot.get("status") == "pending_provider":
+                blocked_by = ["media_provider_not_configured"]
+            output_packet = build_media_asset_generation_packet(base=_output_base(contract, captured_at), contract_key=key, inputs=inputs, captured_at=captured_at)
+            output_packet["live_media_provider_status"] = {
+                "status": snapshot.get("status") or "no_assets",
+                "source_type": snapshot.get("source_type"),
+                "provider_status": snapshot.get("provider_status") if isinstance(snapshot.get("provider_status"), dict) else {},
+                "provider_errors": snapshot.get("provider_errors") if isinstance(snapshot.get("provider_errors"), list) else [],
+                "secret_exposed": False,
+            }
+            return self._provider_result(
+                contract=contract,
+                status="failed_live_media_provider",
+                inputs=inputs,
+                missing_inputs=blocked_by,
+                output_packet=output_packet,
+                source_record={
+                    "source_record_type": contract.get("source_record_type"),
+                    "source_mode": "live_media_provider_failed_or_unavailable",
+                    "captured_at": captured_at,
+                    "raw_provider_response_stored": False,
+                    "normalized_output_stored": False,
+                },
+                merchant_visible_summary="Media provider did not return usable assets. No raw provider response or secret was stored.",
+                live_provider_called=bool(snapshot.get("provider_status")),
+                raw_secret_read=False,
+                next_action="Check backend media provider configuration, quota and product facts, then retry.",
+            )
+        output_packet = build_media_asset_generation_packet(
+            base=_output_base(contract, captured_at),
+            contract_key=key,
             inputs=inputs,
-            job_body=job_body,
             captured_at=captured_at,
+            live_media_snapshot=snapshot,
+        )
+        return self._provider_result(
+            contract=contract,
+            status="completed_live_media_provider",
+            inputs=inputs,
+            missing_inputs=[],
+            output_packet=output_packet,
+            source_record={
+                "source_record_type": contract.get("source_record_type"),
+                "source_mode": "live_media_provider",
+                "captured_at": captured_at,
+                "asset_count": len(assets),
+                "raw_provider_response_stored": False,
+                "normalized_output_stored": True,
+            },
+            merchant_visible_summary=f"Media provider returned {len(assets)} normalized assets. Assets are waiting for manifest and rights review before Listing use.",
+            live_provider_called=True,
+            raw_secret_read=False,
+            next_action="Review AssetManifest facts, rights and eBay media rules before writing assets back to Listing.",
         )
 
     def _run_public_search_live(
@@ -344,6 +471,7 @@ class ProviderJobRunner:
                 "live_provider_called": live_provider_called,
                 "raw_secret_read": raw_secret_read,
                 "raw_provider_response_stored": False,
+                "spend_now_allowed": False,
                 "secret_exposed": False,
                 "real_execution_allowed": False,
                 "frontend_gets_raw_secret": False,
@@ -386,17 +514,7 @@ class ProviderJobRunner:
         missing_inputs: list[str],
         captured_at: str,
     ) -> dict[str, Any]:
-        base = {
-            "packet_type": contract.get("output_packet"),
-            "provider_family": contract.get("provider_family"),
-            "source_record_type": contract.get("source_record_type"),
-            "status": "incomplete" if missing_inputs else "dry_run_ready",
-            "captured_at": captured_at,
-            "normalized_outputs": list(contract.get("normalized_outputs", [])),
-            "missing_inputs": missing_inputs,
-            "live_provider_called": False,
-            "secret_exposed": False,
-        }
+        base = _output_base(contract, captured_at, missing_inputs=missing_inputs)
         if missing_inputs:
             return {**base, "records": [], "merchant_note": "Provider job is queued in the right shape but still lacks required inputs."}
 
@@ -474,6 +592,21 @@ class ProviderJobRunner:
         return {**base, "records": [{"status": "dry_run_ready"}]}
 
 
+def _output_base(contract: dict[str, Any], captured_at: str, *, missing_inputs: list[str] | None = None) -> dict[str, Any]:
+    missing = missing_inputs if isinstance(missing_inputs, list) else []
+    return {
+        "packet_type": contract.get("output_packet"),
+        "provider_family": contract.get("provider_family"),
+        "source_record_type": contract.get("source_record_type"),
+        "status": "incomplete" if missing else "dry_run_ready",
+        "captured_at": captured_at,
+        "normalized_outputs": list(contract.get("normalized_outputs", [])),
+        "missing_inputs": missing,
+        "live_provider_called": False,
+        "secret_exposed": False,
+    }
+
+
 def _is_missing(value: Any) -> bool:
     if value is None:
         return True
@@ -540,6 +673,25 @@ def _safe_int(value: Any, *, default: int) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "live", "enabled"}
+
+
+def _list_or_default(value: Any, default: list[str]) -> list[str]:
+    if isinstance(value, list):
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        return cleaned or list(default)
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return list(default)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:

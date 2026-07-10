@@ -151,7 +151,7 @@ def main() -> int:
     if "if (isSaasPublicMvpMode())" not in ceo_submit_body:
         return fail("public SaaS AI CEO submit should use the real command routing path before legacy media demo routing")
     for marker in [
-        "20260625-onboarding-refresh-v1",
+        "20260710-prelaunch-hardening-v33",
     ]:
         if marker not in app_html + index_html:
             return fail(f"frontend cache version must advance after owner publish UI change: {marker}")
@@ -171,6 +171,7 @@ def main() -> int:
         "20260619-first-order-loop-v1",
         "20260619-confirmation-preflight-v1",
         "20260621-listing-ordered-flow-v14",
+        "20260704-bulk-media-handoff-v20",
     ]:
         if stale_asset_version in app_html + index_html:
             return fail(f"frontend cache version must not keep stale asset after owner publish UI change: {stale_asset_version}")
@@ -219,7 +220,7 @@ def main() -> int:
     for marker in [
         'id="ai-ceo-workbench"',
         "真实 SaaS 边界",
-        "eBay 官方只读数据包",
+        "官方只读连接或资料导入",
         "AI 连接",
         "来源记录",
         "决策中心",

@@ -341,7 +341,26 @@ def _check_public_diagnostics_are_summarized() -> str:
                 "webhook_secret_present": True,
                 "webhook_secret": "STRIPE-WEBHOOK-SECRET-MUST-NOT-LEAK",
             },
-            "model_value": {"status": "ready", "ready": True, "model_api_key": "MODEL-KEY-MUST-NOT-LEAK"},
+            "model_value": {
+                "ready_for_paid_value_claim": True,
+                "live_model_report_types": ["market.report", "listing.package"],
+                "blockers": [],
+                "model_api_key": "MODEL-KEY-MUST-NOT-LEAK",
+            },
+            "ai_ceo_platform_model": {
+                "enabled": True,
+                "configured": True,
+                "status": "ready",
+                "provider": "deepseek",
+                "model": "deepseek-v4-pro",
+                "trial_monthly_limit": 20,
+                "trial_quota_scope": "account_month",
+                "usage_owner": "jiejing_platform_trial",
+                "quota_checked_by_backend": True,
+                "hard_stop_on_exhaustion": True,
+                "byok_bypasses_platform_trial": True,
+                "model_api_key": "PLATFORM-MODEL-KEY-MUST-NOT-LEAK",
+            },
             "public_search": {
                 "provider": "tavily",
                 "configured": True,
@@ -352,6 +371,27 @@ def _check_public_diagnostics_are_summarized() -> str:
                 "ai_ceo_realtime_search_enabled": True,
                 "builtin_public_web_fallback_enabled": True,
                 "builtin_stock_quote_fallback_enabled": True,
+            },
+            "media_generation": {
+                "contract_version": "unit-media-readiness",
+                "configured": True,
+                "status": "live_generation_ready_waiting_asset_review",
+                "live_generation_enabled": True,
+                "live_image_generation_enabled": True,
+                "live_video_generation_enabled": True,
+                "live_provider_calls_allowed": True,
+                "asset_manifest_required": True,
+                "asset_review_required": True,
+                "fact_review_required": True,
+                "human_review_required_before_listing": True,
+                "cost_guard_required": True,
+                "spend_now_allowed": True,
+                "listing_use_requires_review": False,
+                "customer_visible_summary": "素材通道可用，仍需审核。",
+                "next_action": "审核素材清单后再用于 Listing。",
+                "media_api_key": "MEDIA-KEY-MUST-NOT-LEAK",
+                "credential_source": "MEDIA-SECRET-SOURCE-MUST-NOT-LEAK",
+                "raw_provider_response": "RAW-MEDIA-PROVIDER-RESPONSE-MUST-NOT-LEAK",
             },
         },
         "operational_health": {"status": "ready", "database_url_public": "postgres://secret@db"},
@@ -372,8 +412,12 @@ def _check_public_diagnostics_are_summarized() -> str:
             "C:\\secret\\packet.json",
             "STRIPE-WEBHOOK-SECRET-MUST-NOT-LEAK",
             "MODEL-KEY-MUST-NOT-LEAK",
+            "PLATFORM-MODEL-KEY-MUST-NOT-LEAK",
             "TAVILY-SECRET-SOURCE-MUST-NOT-LEAK",
             "TAVILY-KEY-MUST-NOT-LEAK",
+            "MEDIA-KEY-MUST-NOT-LEAK",
+            "MEDIA-SECRET-SOURCE-MUST-NOT-LEAK",
+            "RAW-MEDIA-PROVIDER-RESPONSE-MUST-NOT-LEAK",
             "postgres://secret@db",
         ):
             if forbidden in serialized:
@@ -399,6 +443,44 @@ def _check_public_diagnostics_are_summarized() -> str:
         or billing_launch_path.get("quota_grant_source") != "backend_subscription_state"
     ):
         return "public readiness billing launch path should keep entitlement and quota behind backend billing state"
+    platform_model_summary = unauth.get("provider_status", {}).get("ai_ceo_platform_model", {})
+    if (
+        platform_model_summary.get("configured") is not True
+        or platform_model_summary.get("trial_monthly_limit") != 20
+        or platform_model_summary.get("trial_quota_scope") != "account_month"
+        or platform_model_summary.get("usage_owner") != "jiejing_platform_trial"
+        or platform_model_summary.get("quota_checked_by_backend") is not True
+        or platform_model_summary.get("hard_stop_on_exhaustion") is not True
+        or platform_model_summary.get("byok_bypasses_platform_trial") is not True
+        or platform_model_summary.get("frontend_gets_model_api_key") is not False
+        or platform_model_summary.get("frontend_can_grant_quota") is not False
+    ):
+        return "public readiness platform model summary should expose only safe trial status"
+    model_value_summary = unauth.get("provider_status", {}).get("model_value", {})
+    if (
+        model_value_summary.get("status") != "ready"
+        or model_value_summary.get("ready") is not True
+        or model_value_summary.get("live_model_report_types") != ["market.report", "listing.package"]
+        or model_value_summary.get("blocker_count") != 0
+    ):
+        return "public readiness model value summary should map the current gate contract consistently"
+    media_summary = unauth.get("provider_status", {}).get("media_generation", {})
+    if (
+        media_summary.get("configured") is not True
+        or media_summary.get("live_image_generation_enabled") is not True
+        or media_summary.get("live_video_generation_enabled") is not True
+        or media_summary.get("asset_manifest_required") is not True
+        or media_summary.get("asset_review_required") is not True
+        or media_summary.get("spend_now_allowed") is not False
+        or media_summary.get("listing_use_requires_review") is not True
+        or media_summary.get("frontend_gets_media_api_key") is not False
+        or media_summary.get("runtime_gets_raw_secret") is not False
+        or media_summary.get("reports_get_raw_provider_response") is not False
+        or media_summary.get("raw_provider_response_stored") is not False
+    ):
+        return "public readiness media summary should expose only review-gated media status without provider secrets"
+    if "credential_source" in media_summary or "media_api_key" in media_summary or "raw_provider_response" in media_summary:
+        return "public readiness media summary leaked internal media provider fields"
 
     fake = _fake_handler(settings=settings, origin="")
     health = {

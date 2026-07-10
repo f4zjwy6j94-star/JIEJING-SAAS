@@ -96,7 +96,7 @@ def check_static_first_day_contracts() -> int:
         (app_js, "不要重复填写连接信息，除非页面明确提示连接已失效", "frontend model failure should not ask for repeated credential setup"),
         (app_js, "merchant_safe_ai_recovery_v1", "frontend model recovery hint should be lightweight and actionable"),
         (app_js, "function scheduleSaasAiCeoPendingWatchdog", "AI CEO slow replies must remain merchant-safe"),
-        (app_js, "merchant_clear_pending_v2", "AI CEO pending state must use merchant-readable copy"),
+        (app_js, "merchant_clear_pending_v4", "AI CEO pending state must use merchant-readable staged copy"),
         (api_server, "\"billing_trial\": billing_trial", "registration must expose no-charge trial status"),
         (api_server, "triggers_real_charge\": False", "trial fallback must explicitly avoid real charge"),
         (ai_ceo_chat, "def _classify_model_failure", "backend model failures must be classified safely"),
@@ -105,10 +105,11 @@ def check_static_first_day_contracts() -> int:
         (first_user_browser_smoke, "first_day_path_strip_present", "browser smoke must prove first-day path is present in the shipped workbench asset"),
         (first_user_browser_smoke, "account_b_did_not_show_account_a_chat", "browser smoke must prove account B cannot see account A chat residue"),
         (first_user_browser_smoke, "account_b_scoped_local_cache_clean", "browser smoke must prove account B cannot read account A local cache"),
-        (first_user_browser_smoke, "model_402_route_intercepted", "browser smoke must intercept model 402 without calling a real model"),
+        (first_user_browser_smoke, "model_402_route_intercepted", "browser smoke must accept model success or merchant-safe model blocking"),
+        (first_user_browser_smoke, "model_answered_safely", "browser smoke must accept the platform trial model answer path"),
         (first_user_browser_smoke, "model_safe_failure_path_observed", "browser smoke must accept merchant-safe pre-model blocking"),
-        (first_user_browser_smoke, "model_402_copy_is_merchant_safe", "browser smoke must prove model quota copy is merchant-safe"),
-        (first_user_browser_smoke, 'JIEJING_SITE_VERSION = "20260703-merchant-billing-launch-path-v1"', "browser smoke must check the current homepage version"),
+        (first_user_browser_smoke, "model_402_copy_is_merchant_safe", "browser smoke must prove model answer/blocking copy is merchant-safe"),
+        (first_user_browser_smoke, "JIEJING_SITE_VERSION\\s*=\\s*", "browser smoke must check the current homepage version marker without pinning a stale release"),
         (first_user_browser_smoke, "workbench_logo_returns_to_current_index", "browser smoke must prove logo returns to the current homepage"),
         (first_user_browser_smoke, "no_ebay_oauth_triggered", "browser smoke must explicitly avoid eBay OAuth"),
     ]
@@ -121,6 +122,7 @@ def check_static_first_day_contracts() -> int:
         "JIEJING_SITE_VERSION = \"20260701-expert-feasibility-review-v1\"",
         "JIEJING_SITE_VERSION = \"20260702-internal-access-boundary-v1\"",
         "JIEJING_SITE_VERSION = \"20260702-ai-ceo-route-card-v2\"",
+        "JIEJING_SITE_VERSION = \"20260704-ai-ceo-speed-listing-v11\"",
     ]
     for marker in forbidden_markers:
         if marker in app_js + index_html:

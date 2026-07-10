@@ -491,6 +491,14 @@ class LocalQueueWorker:
             return current
         output_packet = provider_output.get("output_packet") if isinstance(provider_output.get("output_packet"), dict) else {}
         validation = output_packet.get("asset_manifest_validation") if isinstance(output_packet.get("asset_manifest_validation"), dict) else {}
+        safety = provider_output.get("safety") if isinstance(provider_output.get("safety"), dict) else {}
+        cost_guard = output_packet.get("cost_guard") if isinstance(output_packet.get("cost_guard"), dict) else {}
+        manifest_packet = output_packet.get("asset_manifest_packet") if isinstance(output_packet.get("asset_manifest_packet"), dict) else {}
+        live_provider_called = bool(
+            safety.get("live_provider_called")
+            or output_packet.get("live_provider_called")
+            or manifest_packet.get("live_provider_called")
+        )
         missing_inputs = provider_output.get("missing_inputs") if isinstance(provider_output.get("missing_inputs"), list) else []
         if missing_inputs:
             status = "needs_rework"
@@ -510,11 +518,15 @@ class LocalQueueWorker:
                 provider_output=provider_output,
                 error_reason=error_reason,
                 details={
-                    "message": "Provider-neutral media asset pipeline completed without live media provider spend.",
+                    "message": (
+                        "Live media provider returned assets; AssetManifest is waiting for review."
+                        if live_provider_called
+                        else "Provider-neutral media asset pipeline completed without live media provider spend."
+                    ),
                     "provider_job_key": provider_output.get("provider_job_key"),
                     "listing_use_status": output_packet.get("asset_review", {}).get("listing_use_status") if isinstance(output_packet.get("asset_review"), dict) else "",
-                    "live_provider_called": False,
-                    "spend_now_allowed": False,
+                    "live_provider_called": live_provider_called,
+                    "spend_now_allowed": bool(cost_guard.get("spend_now_allowed")),
                     "secret_exposed": False,
                 },
             )

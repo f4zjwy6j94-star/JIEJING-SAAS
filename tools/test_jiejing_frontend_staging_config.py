@@ -28,7 +28,9 @@ def main() -> int:
 
     if "document.write(" in app_js:
         return fail("frontend must not use document.write for report export or public rendering")
-    frontend_asset_version = "20260703-merchant-billing-launch-path-v1"
+    if "onclick=" in index_html:
+        return fail("public homepage must bind actions in script instead of inline event handlers")
+    frontend_asset_version = "20260710-ai-ceo-reliability-v34"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -98,6 +100,15 @@ def main() -> int:
             return fail(f"frontend entry files still reference stale asset version: {stale_asset_version}")
     if 'document.documentElement.classList.remove("app-direct-start", "saas-public-direct-start")' not in app_js:
         return fail("returning from the workbench logo to the homepage must clear direct-start shell classes")
+    for app_boot_guard in [
+        'document.documentElement.classList.add("app-start-requested")',
+        "html.app-start-requested:not(.app-ready) #entryShell",
+        "html.app-start-requested:not(.app-ready) #appBootLoading[hidden]",
+        "正在打开捷境工作台",
+        'document.documentElement.classList.add("app-ready")',
+    ]:
+        if app_boot_guard not in app_html + app_js:
+            return fail(f"app start must hide legacy entry shell before JS boot completes: {app_boot_guard}")
     if f'const JIEJING_SITE_VERSION = "{frontend_asset_version}"' not in index_html:
         return fail("public homepage must expose the current JIEJING site version marker")
     for logo_marker in [
@@ -169,7 +180,7 @@ def main() -> int:
         if first_day_marker not in app_js + app_html + styles_css:
             return fail(f"first-day login/onboarding/AI CEO path marker missing: {first_day_marker}")
     for ai_ceo_pending_marker in [
-        "merchant_clear_pending_v2",
+        "merchant_clear_pending_v4",
         "function scheduleSaasAiCeoPendingWatchdog",
         "function updateCeoAssistantPendingMessage",
         "model_response_delayed",
@@ -533,12 +544,24 @@ def main() -> int:
         "rollback_secret_scan_readiness_browser_smoke_required",
         "public_paid_launch_allowed=false",
         "owner_approval_required_for_reenable=true",
-        "billing_plan: state.saasBillingPlan || null",
-        "state.saasBillingUsage = snapshot.billing_usage || state.saasBillingUsage || null",
+        'version: "2026-07-10-minimal-fast-restore-v2"',
         "statusPills.push(saasMerchantBillingStatusPill())",
     ]:
         if billing_guardrail_marker not in app_js + app_html + styles_css:
             return fail(f"missing merchant billing guardrail marker: {billing_guardrail_marker}")
+    snapshot_start = app_js.index("function buildSaasProtectedStateSnapshot")
+    snapshot_end = app_js.index("function saveSaasProtectedStateSnapshot", snapshot_start)
+    snapshot_body = app_js[snapshot_start:snapshot_end]
+    for forbidden_snapshot_marker in (
+        "saasBillingCheckout",
+        "saasBillingProviderRehearsal",
+        "saasBillingDomainCutoverRehearsal",
+        "saasEdgeCutoverPreflight",
+        "saasPaidLaunchApprovalPacket",
+        "saasCommercialLaunchGate",
+    ):
+        if forbidden_snapshot_marker in snapshot_body:
+            return fail(f"browser fast-restore snapshot must not persist backend control state: {forbidden_snapshot_marker}")
     for homepage_return_marker in [
         "function currentPublicHomepageUrl",
         "function openCurrentPublicHomepage",

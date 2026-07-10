@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -75,10 +76,10 @@ PROVIDER_CATALOG: dict[str, ModelProviderDefinition] = {
         api_style="openai_compatible",
         key_url="https://platform.deepseek.com/api_keys",
         docs_url="https://api-docs.deepseek.com/",
-        default_base_url="https://api.deepseek.com/v1",
-        default_model="deepseek-chat",
+        default_base_url="https://api.deepseek.com",
+        default_model="deepseek-v4-pro",
         supported_live_adapter=True,
-        notes="OpenAI-compatible chat completions endpoint.",
+        notes="OpenAI-compatible chat completions endpoint. DeepSeek documents the root base_url, not /v1.",
     ),
     "openrouter": ModelProviderDefinition(
         provider_key="openrouter",
@@ -154,7 +155,9 @@ def build_model_provider_catalog() -> dict[str, Any]:
         "contract_version": "2026-05-20-merchant-byok-model-provider-catalog",
         "billing_model": "merchant_brings_own_key",
         "merchant_pays_provider_directly": True,
-        "jiejing_stores_only_secret_ref": True,
+        "credential_scope": "account_default_with_store_context",
+        "jiejing_account_scoped_model_secret_ref": True,
+        "jiejing_stores_only_secret_ref": False,
         "frontend_gets_raw_key_after_save": False,
         "runtime_gets_raw_key": False,
         "reports_get_raw_key": False,
@@ -181,15 +184,25 @@ def public_model_settings_from_secret_refs(secret_refs: list[dict[str, Any]]) ->
     active_refs = [item for item in model_refs if str(item.get("status") or "") in READY_MODEL_SECRET_STATUSES]
     latest = model_refs[0] if model_refs else None
     active = active_refs[0] if active_refs else latest
+    scope_counts: dict[str, int] = {}
+    for item in model_refs:
+        scope = _public_model_ref_scope(item)
+        scope_counts[scope] = scope_counts.get(scope, 0) + 1
     return {
-        "contract_version": "2026-05-20-merchant-model-settings",
-        "mode": "merchant_byok",
+        "contract_version": "2026-07-03-account-model-settings",
+        "mode": "merchant_byok_account_default",
         "configured": bool(active_refs),
         "active_secret_ref": active.get("secret_ref") if active else None,
         "active_provider": provider_key_from_secret_ref(active) if active else "",
+        "active_model": _public_secret_ref(active).get("model") if active else "",
+        "active_scope": _public_model_ref_scope(active) if active else "",
+        "scope_counts": scope_counts,
         "secret_refs": [_public_secret_ref(item) for item in model_refs],
         "merchant_pays_provider_directly": True,
-        "jiejing_stores_only_secret_ref": True,
+        "merchant_model_follows_account": True,
+        "store_context_optional": True,
+        "jiejing_account_scoped_model_secret_ref": True,
+        "jiejing_stores_only_secret_ref": False,
         "frontend_gets_raw_key_after_save": False,
         "runtime_gets_raw_key": False,
         "reports_get_raw_key": False,
@@ -210,7 +223,42 @@ def provider_key_from_secret_ref(secret_ref: dict[str, Any] | None) -> str:
     return normalize_model_provider_key(provider)
 
 
-def build_model_client_from_byok_secret(*, provider_key: str, api_key: str, model: str, base_url: str | None = None) -> ModelClient:
+def _public_model_ref_scope(secret_ref: dict[str, Any] | None) -> str:
+    if not secret_ref:
+        return ""
+    metadata = secret_ref.get("metadata") if isinstance(secret_ref.get("metadata"), dict) else {}
+    raw_scope = str(
+        metadata.get("model_connection_scope")
+        or metadata.get("scope")
+        or metadata.get("connection_scope")
+        or ""
+    ).strip().lower()
+    if raw_scope in {"account", "store", "company", "platform"}:
+        return raw_scope
+    return "store" if secret_ref.get("store_id") else "account"
+
+
+def _model_client_timeout_seconds(timeout_seconds: int | None = None) -> int:
+    if timeout_seconds is not None:
+        try:
+            return max(5, min(180, int(timeout_seconds)))
+        except (TypeError, ValueError):
+            pass
+    raw = os.environ.get("JIEJING_MODEL_CLIENT_TIMEOUT_SECONDS")
+    try:
+        return max(5, min(180, int(str(raw).strip()))) if raw else 90
+    except (TypeError, ValueError):
+        return 90
+
+
+def build_model_client_from_byok_secret(
+    *,
+    provider_key: str,
+    api_key: str,
+    model: str,
+    base_url: str | None = None,
+    timeout_seconds: int | None = None,
+) -> ModelClient:
     definition = get_model_provider(provider_key)
     if not definition:
         raise ValueError("unsupported_model_provider")
@@ -218,19 +266,20 @@ def build_model_client_from_byok_secret(*, provider_key: str, api_key: str, mode
         raise ValueError("model_provider_adapter_not_implemented")
     selected_base_url = normalize_model_api_base_url(provider_key=provider_key, base_url=base_url)
     selected_model = model or definition.default_model
+    selected_timeout = _model_client_timeout_seconds(timeout_seconds)
     if definition.api_style == "responses":
         return OpenAIResponsesModelClient(
             endpoint=f"{selected_base_url}/responses",
             api_key=api_key,
             model=selected_model,
-            timeout_seconds=90,
+            timeout_seconds=selected_timeout,
         )
     if definition.api_style == "openai_compatible":
         return OpenAICompatibleModelClient(
             endpoint=f"{selected_base_url}/chat/completions",
             api_key=api_key,
             model=selected_model,
-            timeout_seconds=90,
+            timeout_seconds=selected_timeout,
         )
     raise ValueError("model_provider_adapter_not_implemented")
 
@@ -253,6 +302,8 @@ def normalize_model_api_base_url(*, provider_key: str, base_url: str | None = No
     path = parsed.path.lower()
     if "docs" in host or "doc" in path or "/zh-cn" in path:
         return definition.default_base_url
+    if definition.provider_key == "deepseek" and host == "api.deepseek.com" and path in {"", "/", "/v1"}:
+        return definition.default_base_url
     return raw
 
 
@@ -260,9 +311,12 @@ def _public_secret_ref(secret_ref: dict[str, Any]) -> dict[str, Any]:
     metadata = secret_ref.get("metadata") if isinstance(secret_ref.get("metadata"), dict) else {}
     provider_key = provider_key_from_secret_ref(secret_ref)
     definition = get_model_provider(provider_key)
+    scope = _public_model_ref_scope(secret_ref)
     return {
         "secret_ref": secret_ref.get("secret_ref"),
         "store_id": secret_ref.get("store_id"),
+        "scope": scope,
+        "model_connection_scope": scope,
         "provider": secret_ref.get("provider"),
         "provider_key": provider_key,
         "provider_label": definition.label if definition else provider_key,

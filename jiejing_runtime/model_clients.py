@@ -26,6 +26,23 @@ def _env_truthy(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_int(name: str, *, default: int, minimum: int, maximum: int) -> int:
+    raw = os.environ.get(name)
+    try:
+        value = int(str(raw).strip()) if raw not in {None, ""} else default
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
 class ModelClient(ABC):
     name = "model-client"
     version = "0.0.0"
@@ -34,7 +51,15 @@ class ModelClient(ABC):
     def generate_report(self, task: JiejingTask) -> dict[str, Any]:
         """Generate a structured report body for a task."""
 
-    def generate_text(self, *, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> dict[str, Any]:
+    def generate_text(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.2,
+        max_output_tokens: int | None = None,
+        timeout_seconds: int | None = None,
+    ) -> dict[str, Any]:
         """Generate a merchant-facing plain-text answer.
 
         Chat is used only after the SaaS backend resolves a BYOK secret ref.
@@ -61,7 +86,15 @@ class RuleBasedModelClient(ModelClient):
     name = "rule-based-model"
     version = "0.1.0"
 
-    def generate_text(self, *, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> dict[str, Any]:
+    def generate_text(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.2,
+        max_output_tokens: int | None = None,
+        timeout_seconds: int | None = None,
+    ) -> dict[str, Any]:
         return {
             "text": "本地规则模型不能作为 AI CEO 对话结果。请在设置里确认 BYOK 模型 key 已由后端保存。",
             "model_mode": "rule_based_text_unavailable",
@@ -241,9 +274,29 @@ class OpenAICompatibleModelClient(ModelClient):
         parsed["required_sections"] = sections
         return parsed
 
-    def generate_text(self, *, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> dict[str, Any]:
+    def generate_text(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.2,
+        max_output_tokens: int | None = None,
+        timeout_seconds: int | None = None,
+    ) -> dict[str, Any]:
         if not self.configured():
             raise RuntimeError("model_client_not_configured")
+        token_budget = _bounded_int(
+            max_output_tokens,
+            default=_env_int("JIEJING_MODEL_TEXT_MAX_TOKENS", default=900, minimum=128, maximum=4096),
+            minimum=128,
+            maximum=4096,
+        )
+        request_timeout = _bounded_int(
+            timeout_seconds,
+            default=self.timeout_seconds,
+            minimum=1,
+            maximum=max(1, self.timeout_seconds),
+        )
         payload = {
             "model": self.model,
             "messages": [
@@ -251,6 +304,7 @@ class OpenAICompatibleModelClient(ModelClient):
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": temperature,
+            "max_tokens": token_budget,
         }
         request = urllib.request.Request(
             self.endpoint,
@@ -262,7 +316,7 @@ class OpenAICompatibleModelClient(ModelClient):
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+            with urllib.request.urlopen(request, timeout=request_timeout) as response:
                 body = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:  # pragma: no cover - live provider dependent
             detail = exc.read().decode("utf-8", errors="replace")
@@ -274,6 +328,8 @@ class OpenAICompatibleModelClient(ModelClient):
             "model_client": self.name,
             "model_configured": True,
             "model": self.model,
+            "timeout_seconds": request_timeout,
+            "max_output_tokens": token_budget,
         }
 
 
@@ -381,14 +437,35 @@ class OpenAIResponsesModelClient(ModelClient):
         parsed["required_sections"] = sections
         return parsed
 
-    def generate_text(self, *, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> dict[str, Any]:
+    def generate_text(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.2,
+        max_output_tokens: int | None = None,
+        timeout_seconds: int | None = None,
+    ) -> dict[str, Any]:
         if not self.configured():
             raise RuntimeError("model_client_not_configured")
+        token_budget = _bounded_int(
+            max_output_tokens,
+            default=_env_int("JIEJING_MODEL_TEXT_MAX_TOKENS", default=900, minimum=128, maximum=4096),
+            minimum=128,
+            maximum=4096,
+        )
+        request_timeout = _bounded_int(
+            timeout_seconds,
+            default=self.timeout_seconds,
+            minimum=1,
+            maximum=max(1, self.timeout_seconds),
+        )
         payload = {
             "model": self.model,
             "instructions": system_prompt,
             "input": user_prompt,
             "temperature": temperature,
+            "max_output_tokens": token_budget,
             "store": False,
         }
         request = urllib.request.Request(
@@ -401,7 +478,7 @@ class OpenAIResponsesModelClient(ModelClient):
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+            with urllib.request.urlopen(request, timeout=request_timeout) as response:
                 body = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:  # pragma: no cover - live provider dependent
             detail = exc.read().decode("utf-8", errors="replace")
@@ -412,6 +489,8 @@ class OpenAIResponsesModelClient(ModelClient):
             "model_client": self.name,
             "model_configured": True,
             "model": self.model,
+            "timeout_seconds": request_timeout,
+            "max_output_tokens": token_budget,
         }
 
     def _extract_response_text(self, body: dict[str, Any]) -> str:
@@ -464,7 +543,7 @@ class DeepSeekModelClient(OpenAICompatibleModelClient):
             or os.environ.get("JIEJING_MODEL_BASE_URL")
             or os.environ.get("DEEPSEEK_BASE_URL")
             or credential.get("base_url")
-            or "https://api.deepseek.com/v1"
+            or "https://api.deepseek.com"
         ).rstrip("/")
         self.credential_source = credential.get("source") or (
             "constructor" if api_key else "env" if os.environ.get("JIEJING_MODEL_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") else "missing"
@@ -548,7 +627,7 @@ for item in pool:
             return {}
         return {
             "api_key": api_key,
-            "base_url": str(data.get("base_url") or "https://api.deepseek.com/v1"),
+            "base_url": str(data.get("base_url") or "https://api.deepseek.com"),
             "source": f"wsl_hermes_auth:{data.get('source') or 'deepseek'}",
         }
 
@@ -568,7 +647,7 @@ for item in pool:
                 continue
             return {
                 "api_key": token,
-                "base_url": str(item.get("base_url") or "https://api.deepseek.com/v1"),
+                "base_url": str(item.get("base_url") or "https://api.deepseek.com"),
                 "source": source,
             }
         return {}

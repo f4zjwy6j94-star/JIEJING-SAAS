@@ -24,6 +24,9 @@ class ExecutionRequestLike(Protocol):
 ACTION_ALIASES = {
     "publish_listing": "publish_listing",
     "bulk_publish_listing": "bulk_publish_listing",
+    "prepare_listing_draft": "prepare_listing_draft",
+    "save_listing_draft": "prepare_listing_draft",
+    "listing_draft": "prepare_listing_draft",
     "revise_listing": "revise_listing",
     "change_price": "change_price",
     "change_inventory": "change_inventory",
@@ -78,6 +81,11 @@ ACTION_REQUIREMENTS = {
         "confirmation_record",
         "idempotency_key",
     ],
+    "prepare_listing_draft": [
+        "listing.title",
+        "listing.description_html",
+        "listing.draft_source",
+    ],
     "revise_listing": ["listing_id", "change_set", "confirmation_record", "idempotency_key"],
     "change_price": ["listing_id", "new_price", "reason", "finance_review", "confirmation_record", "idempotency_key"],
     "change_inventory": ["listing_id", "new_quantity", "reason", "confirmation_record", "idempotency_key"],
@@ -97,6 +105,7 @@ ACTION_REQUIREMENTS = {
 LOW_RISK_ACTIONS = {
     "save_internal_note",
     "save_draft",
+    "prepare_listing_draft",
     "prepare_report",
     "update_task_status",
     "create_asset_task",
@@ -274,6 +283,8 @@ class ExecutionPreflightChecker:
             return "An idempotency key is required so queue retries cannot duplicate platform writes."
         if field == "account_health.status":
             return "A current eBay account-health snapshot is required before publishing so restricted, frozen or payout-held accounts cannot receive real writes."
+        if action_type == "prepare_listing_draft":
+            return f"Listing draft preparation cannot proceed until {field} is present."
         if action_type in {"publish_listing", "bulk_publish_listing", "revise_listing"}:
             return f"Listing execution cannot proceed until {field} is present."
         if action_type in {"refund", "partial_refund", "sensitive_buyer_commitment"}:

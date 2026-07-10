@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import SaaSSettings
-from .model_provider_catalog import MODEL_SECRET_PURPOSE, public_model_settings_from_secret_refs
+from .model_provider_catalog import public_model_settings_from_secret_refs
 from .repository import SaaSRepository
 
 
@@ -37,8 +37,6 @@ REQUIRED_TENANT_TABLES = {
 
 STORE_SCOPED_SECRET_PURPOSES = {
     "ebay_refresh_token",
-    "model_api_key",
-    MODEL_SECRET_PURPOSE,
     "public_search_api_key",
     "media_generation_api_key",
     "sourcing_api_secret",

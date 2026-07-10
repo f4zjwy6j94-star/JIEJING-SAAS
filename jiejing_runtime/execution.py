@@ -104,6 +104,20 @@ class ExecutionService:
                 ),
             )
 
+        if str(preflight.get("canonical_action_type") or request.action_type) in LOW_RISK_ACTIONS:
+            return ExecutionResult(
+                status="ready_low_risk_internal_handoff",
+                action_type=request.action_type,
+                task_id=request.task_id,
+                message="Request passed boundary checks for an internal low-risk handoff. No eBay write or public listing was executed.",
+                audit=self._audit(
+                    request,
+                    blocked_reason=None,
+                    execution_mode="internal_low_risk_handoff",
+                    preflight=preflight,
+                ),
+            )
+
         return ExecutionResult(
             status="ready_for_platform_adapter",
             action_type=request.action_type,
@@ -169,6 +183,10 @@ class ExecutionService:
 
     def _execution_intent(self, *, request: ExecutionRequest, preflight: dict[str, Any] | None) -> dict[str, Any]:
         canonical_action = str((preflight or {}).get("canonical_action_type") or request.action_type)
+        low_risk = canonical_action in LOW_RISK_ACTIONS
+        platform_adapter = f"{request.platform}.{canonical_action}"
+        if canonical_action == "prepare_listing_draft":
+            platform_adapter = "jiejing_internal.prepare_listing_draft"
         return {
             "intent_id": _duplicate_prevention_key(
                 request=request,
@@ -180,11 +198,15 @@ class ExecutionService:
             "task_id": request.task_id,
             "store_id": request.store_id,
             "confirmation_id": request.confirmation_id,
-            "platform_adapter": f"{request.platform}.{canonical_action}",
+            "platform_adapter": platform_adapter,
             "platform_adapter_called": False,
-            "requires_preflight_status": "ready_for_platform_adapter",
-            "requires_confirmation": canonical_action not in LOW_RISK_ACTIONS,
+            "requires_preflight_status": "ready_low_risk" if low_risk else "ready_for_platform_adapter",
+            "requires_confirmation": not low_risk,
             "audit_log_required": True,
+            "creates_public_listing": False,
+            "writes_to_ebay": False,
+            "stores_internal_draft_only": canonical_action == "prepare_listing_draft",
+            "confirmation_center_required_before_public_publish": True,
         }
 
 

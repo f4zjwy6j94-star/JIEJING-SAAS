@@ -170,6 +170,16 @@ def _confirmation_execution_bridge(settings: SaaSSettings) -> dict[str, Any]:
         "owned_by": "jiejing_runtime.execution.ExecutionService and jiejing_saas.ebay_write_adapter",
         "execution_adapter": settings.execution_adapter,
         "real_platform_writes_enabled": settings.effective_real_platform_writes_enabled,
+        "low_risk_internal_actions": [
+            {
+                "action_type": "prepare_listing_draft",
+                "label": "Prepare internal Listing draft",
+                "writes_to_ebay": False,
+                "creates_public_listing": False,
+                "requires_confirmation": False,
+                "requires_confirmation_before_public_publish": True,
+            }
+        ],
         "high_risk_actions": [
             "publish_listing",
             "revise_listing",
