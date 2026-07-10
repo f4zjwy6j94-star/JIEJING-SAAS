@@ -21,6 +21,7 @@ FILES=(
   "Dockerfile.saas"
   "requirements.saas.txt"
   "deploy/apply-staging-patch.sh"
+  "deploy/staging-vault-init-unseal.sh"
   "deploy/github-actions/jiejing-runner-doctor.sh"
   "deploy/github-actions/jiejing-staging-deploy.sh"
   "deploy/github-actions/jiejing-staging-rollback.sh"
@@ -468,8 +469,8 @@ fi
 
 docker compose "${COMPOSE_ARGS[@]}" build --no-cache jiejing-saas jiejing-worker
 if [[ "$COMPOSE_FILE" == "deploy/docker-compose.public-https-staging.yml" ]]; then
-  docker volume inspect deploy_jiejing_public_staging_vault_data_v2 >/dev/null 2>&1 || \
-    docker volume create deploy_jiejing_public_staging_vault_data_v2 >/dev/null
+  docker volume inspect deploy_jiejing_public_staging_vault_data_v3 >/dev/null 2>&1 || \
+    docker volume create deploy_jiejing_public_staging_vault_data_v3 >/dev/null
 fi
 docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps jiejing-vault
 if [[ -f "deploy/staging-vault-init-unseal.sh" ]]; then
