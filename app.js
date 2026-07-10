@@ -20774,30 +20774,12 @@ function renderSaasAiCeoPendingStatusMarkup(turn = {}) {
   const latest = normalizeSaasAiCeoLatestTurn(turn);
   if (!latest || !latest.pending) return "";
   const delayed = latest.status === "model_response_delayed";
-  const stageRows = saasAiCeoPendingStageRows(latest);
-  const activeStage = stageRows.find((item) => item.active) || stageRows[0];
-  const stageLabel = delayed ? "仍在整理" : activeStage?.label || "已接住";
-  const title = delayed
-    ? "这次内容较长，可以继续补充资料"
-    : activeStage?.title || "已接住你的目标，正在判断问题类型";
+  const stage = String(latest.pending_stage || "received");
+  const title = delayed ? "正在继续整理完整回答" : stage === "sources" ? "正在搜索公开资料" : "正在思考";
   return `
-    <div class="saas-ai-ceo-pending-status" data-ai-ceo-pending-status="merchant_clear_pending_v4" data-ai-ceo-fast-status="search_model_wait_contract_v1" data-pending-stage="${escapeHtml(activeStage?.key || "")}">
-      <span>${escapeHtml(stageLabel)}</span>
+    <div class="saas-ai-ceo-pending-status is-compact" role="status" aria-live="polite" data-ai-ceo-pending-status="compact_wait_v1" data-pending-stage="${escapeHtml(stage)}">
+      <i aria-hidden="true"><b></b><b></b><b></b></i>
       <strong>${escapeHtml(title)}</strong>
-      <div class="saas-ai-ceo-pending-steps" aria-label="AI CEO 处理进度">
-        ${stageRows
-          .map(
-            (item) => `
-              <em class="${item.done ? "is-done" : ""} ${item.active ? "is-active" : ""}">
-                <b>${escapeHtml(item.label)}</b>
-                <small>${escapeHtml(item.detail)}</small>
-              </em>
-            `,
-          )
-          .join("")}
-      </div>
-      ${renderSaasAiCeoPendingPreviewMarkup(latest)}
-      <small>多数问题会先查公开来源，再整理成可读回答；长报告可能需要十几秒。你可以继续补充资料，JIEJING 会把最新回复接回本条对话。真实发布、付款、退款、广告、授权和敏感客服承诺不会自动执行。</small>
     </div>
   `;
 }
@@ -20873,6 +20855,20 @@ function sanitizeSaasCeoCommandSourceText(text = "") {
     .replace(/\b(AIAK|AKID|ASIA)[A-Za-z0-9]{12,}\b/g, "[cloud_key_redacted]")
     .replace(/\b(access[_-]?token|refresh[_-]?token|api[_-]?key|password|secret)\s*[:=]\s*[^,\s;，；]+/gi, "$1=[redacted]")
     .slice(0, 600);
+}
+
+function saasAiCeoConversationHistoryForRequest() {
+  return (Array.isArray(state.saasAiCeoThread) ? state.saasAiCeoThread : [])
+    .map(normalizeSaasAiCeoLatestTurn)
+    .filter((turn) => turn && !turn.pending && turn.user_text && turn.assistant_text)
+    .slice(-8)
+    .map((turn) => ({
+      user_text: sanitizeSaasCeoCommandSourceText(turn.user_text).slice(0, 900),
+      assistant_text: publicRuntimeText(turn.assistant_text).slice(0, 3200),
+      route: ["general_chat", "ebay_workflow", "external_realtime", "confirmation_required", "merchant_rule_memory"].includes(turn.route)
+        ? turn.route
+        : "general_chat",
+    }));
 }
 
 function recordSaasCeoCommandSourceRecord(command = state.saasLastCeoCommand) {
@@ -20998,6 +20994,7 @@ async function requestSaasAiCeoChat(command = state.saasLastCeoCommand) {
             summary: sanitizeSaasCeoCommandSourceText(current.summary),
             title: sanitizeSaasCeoCommandSourceText(current.title),
           },
+          conversation_history: saasAiCeoConversationHistoryForRequest(),
           client_now: new Date().toISOString(),
           client_timezone: Intl?.DateTimeFormat?.().resolvedOptions?.().timeZone || "",
           real_platform_writes_enabled: isSaasRealPlatformWritesEnabled(),
@@ -21164,7 +21161,7 @@ function handleSaasCeoCommandSubmit(text) {
     return instantCommand || command;
   }
   syncSaasCeoCommandToListing(command);
-  addCeoMessage(text, "已收到。我会先查公开来源，再让 AI 整理成可用回答；真实发布、付款、退款、广告和敏感承诺仍会停在确认中心。", {
+  addCeoMessage(text, "正在思考", {
     assistantId: pendingMessageId,
     pending: true,
     pendingStage: "received",
@@ -23268,6 +23265,7 @@ function saasPlatformTrialModelState() {
   const status = saasReadinessProviderStatus("ai_ceo_platform_model");
   const settings = state.saasModelSettings && typeof state.saasModelSettings === "object" ? state.saasModelSettings : {};
   const quota = settings.platform_trial_quota && typeof settings.platform_trial_quota === "object" ? settings.platform_trial_quota : {};
+  const merchantModelConfigured = isSaasMerchantModelConfigured();
   const enabled = status.enabled === true;
   const configured = status.configured === true;
   const monthlyLimit = Math.max(0, Number(quota.monthly_limit || status.trial_monthly_limit || 0));
@@ -23278,12 +23276,16 @@ function saasPlatformTrialModelState() {
   const hasUsage = Boolean(quota.contract_version);
   const providerLabel = status.provider ? String(status.provider).replace(/_/g, " ") : "捷境试用 AI";
   const modelLabel = status.model ? String(status.model) : "";
-  const quotaLabel = monthlyLimit
-    ? hasUsage
-      ? `${remaining}/${monthlyLimit} 次可用`
-      : `每月约 ${monthlyLimit} 次`
-    : "有限额度";
-  const guardrailDetail = !configured
+  const quotaLabel = merchantModelConfigured
+    ? "不消耗捷境试用额度"
+    : monthlyLimit
+      ? hasUsage
+        ? `${remaining}/${monthlyLimit} 次可用`
+        : `每月约 ${monthlyLimit} 次`
+      : "有限额度";
+  const guardrailDetail = merchantModelConfigured
+    ? "当前对话优先使用账号自己的 AI，由商家向模型服务商承担用量；捷境试用额度不会扣减。"
+    : !configured
     ? "试用 AI 当前尚未开放，页面不会把未开放误写成额度已用完；保存账号自己的 DeepSeek/OpenAI 连接后可继续使用。"
     : allowed === false
       ? remaining > 0
@@ -23291,6 +23293,7 @@ function saasPlatformTrialModelState() {
         : "试用额度已用完；超出后只暂停捷境试用 AI，不影响账号自己的 DeepSeek/OpenAI 连接。"
     : "后端按当前账号空间统计试用额度；商家自己的 AI 连接不占试用额度，浏览器不能发放额度。";
   return {
+    merchantModelConfigured,
     enabled,
     configured,
     monthlyLimit,
@@ -23304,10 +23307,22 @@ function saasPlatformTrialModelState() {
     guardrailDetail,
     hardStopOnExhaustion: status.hard_stop_on_exhaustion !== false && quota.hard_stop_on_exhaustion !== false,
     byokNotCounted: status.byok_bypasses_platform_trial !== false && quota.byok_bypasses_platform_trial !== false,
-    tone: allowed === false ? "amber" : configured ? "green" : "amber",
-    title: configured ? (allowed === false ? "捷境试用 AI 额度已用完" : "捷境试用 AI 可用") : enabled ? "捷境试用 AI 待开通" : "捷境试用 AI 待开放",
-    detail: configured
-      ? `${quotaLabel}；可用于基础对话。超出后请保存自己的 DeepSeek/OpenAI 连接，或升级套餐后继续使用捷境试用 AI。`
+    tone: merchantModelConfigured ? "green" : allowed === false ? "amber" : configured ? "green" : "amber",
+    serviceLabel: merchantModelConfigured ? "当前模型用量" : "捷境试用 AI",
+    quotaCardLabel: merchantModelConfigured ? "捷境试用额度" : "试用额度",
+    title: merchantModelConfigured
+      ? "正在使用账号自己的 AI"
+      : configured
+        ? allowed === false
+          ? "捷境试用 AI 额度已用完"
+          : "捷境试用 AI 可用"
+        : enabled
+          ? "捷境试用 AI 待开通"
+          : "捷境试用 AI 待开放",
+    detail: merchantModelConfigured
+      ? "账号绑定的 DeepSeek/OpenAI 优先用于 AI CEO 对话；切换店铺仍沿用当前账号连接。"
+      : configured
+        ? `${quotaLabel}；可用于基础对话。超出后请保存自己的 DeepSeek/OpenAI 连接，或升级套餐后继续使用捷境试用 AI。`
       : enabled
         ? "新账号试用入口已预留，但当前线上试用 AI 还未开通；保存自己的账号 AI 后可正常使用。"
         : "新账号试用入口暂未开放；保存自己的账号 AI 后可使用。",
@@ -23467,12 +23482,12 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
           <small>${escapeHtml(modelConfigured ? `${activeModelLabel} / ${activeScopeLabel} / 页面不显示原始连接信息` : textAiState.detail)}</small>
         </article>
         <article class="is-${escapeHtml(platformTrial.tone)}">
-          <span>捷境试用 AI</span>
+          <span>${escapeHtml(platformTrial.serviceLabel)}</span>
           <strong>${escapeHtml(platformTrial.title)}</strong>
           <small>${escapeHtml(platformTrial.detail)}</small>
         </article>
-        <article class="is-${escapeHtml(platformTrial.allowed === false ? "amber" : platformTrial.tone)}">
-          <span>试用额度</span>
+        <article class="is-${escapeHtml(platformTrial.tone)}">
+          <span>${escapeHtml(platformTrial.quotaCardLabel)}</span>
           <strong>${escapeHtml(platformTrial.quotaLabel)}</strong>
           <small>${escapeHtml(platformTrial.guardrailDetail)}</small>
         </article>
@@ -36381,7 +36396,7 @@ function renderSaasSettingsModelFocusPanel(ctx = saasMerchantWorkbenchContext())
         tone: textAiState.tone,
       },
       {
-        label: "试用 AI",
+        label: platformTrial.serviceLabel,
         title: platformTrial.title,
         detail: `${platformTrial.detail} ${platformTrial.guardrailDetail}`,
         tone: platformTrial.tone,
@@ -36429,7 +36444,7 @@ function renderSaasSettingsModelStatusPanel(ctx = saasMerchantWorkbenchContext()
           <small>${escapeHtml(textAiState.detail)}</small>
         </article>
         <article class="is-${escapeHtml(platformTrial.tone)}">
-          <span>试用额度</span>
+          <span>${escapeHtml(platformTrial.quotaCardLabel)}</span>
           <strong>${escapeHtml(platformTrial.quotaLabel || platformTrial.title)}</strong>
           <small>${escapeHtml(platformTrial.guardrailDetail || platformTrial.detail)}</small>
         </article>
@@ -39318,13 +39333,16 @@ function renderSaasAiCeoChatTurnMarkup(turn = {}) {
     <article class="message ai${latest.pending ? " is-pending" : ""}"${assistantId} data-status="${escapeHtml(latest.status)}">
       <span>AI CEO</span>
       <div class="saas-ai-ceo-message-body">
-        ${showStatusLabel ? `<small>${escapeHtml(statusLabel)}</small>` : ""}
-        <div class="saas-ai-ceo-answer-markdown">${renderSaasAiCeoAnswerMarkup(assistantText)}</div>
-        ${renderSaasAiCeoPerformanceSummaryMarkup(latest)}
-        ${renderSaasAiCeoMarketReportDeliveryMarkup(latest) || renderSaasAiCeoListingHandoffMarkup(latest)}
-        ${renderSaasAiCeoPendingStatusMarkup(latest)}
-        ${renderSaasAiCeoRecoveryHintMarkup(latest)}
-        ${renderSaasAiCeoWorkDetailMarkup(latest)}
+        ${
+          latest.pending
+            ? renderSaasAiCeoPendingStatusMarkup(latest)
+            : `${showStatusLabel ? `<small>${escapeHtml(statusLabel)}</small>` : ""}
+              <div class="saas-ai-ceo-answer-markdown">${renderSaasAiCeoAnswerMarkup(assistantText)}</div>
+              ${renderSaasAiCeoPerformanceSummaryMarkup(latest)}
+              ${renderSaasAiCeoMarketReportDeliveryMarkup(latest) || renderSaasAiCeoListingHandoffMarkup(latest)}
+              ${renderSaasAiCeoRecoveryHintMarkup(latest)}
+              ${renderSaasAiCeoWorkDetailMarkup(latest)}`
+        }
       </div>
     </article>
   `;
@@ -39341,13 +39359,16 @@ function renderSaasAiCeoLatestReplyMarkup(turn = state.saasAiCeoLatestTurn) {
       <article class="saas-ai-ceo-latest-answer">
         <span>AI CEO</span>
         <div>
-          <small>${escapeHtml(statusLabel)}</small>
-          <div class="saas-ai-ceo-answer-markdown">${renderSaasAiCeoAnswerMarkup(assistantText)}</div>
-          ${renderSaasAiCeoPerformanceSummaryMarkup(latest)}
-          ${renderSaasAiCeoMarketReportDeliveryMarkup(latest) || renderSaasAiCeoListingHandoffMarkup(latest)}
-          ${renderSaasAiCeoPendingStatusMarkup(latest)}
-          ${renderSaasAiCeoRecoveryHintMarkup(latest)}
-          ${renderSaasAiCeoWorkDetailMarkup(latest)}
+          ${
+            latest.pending
+              ? renderSaasAiCeoPendingStatusMarkup(latest)
+              : `<small>${escapeHtml(statusLabel)}</small>
+                <div class="saas-ai-ceo-answer-markdown">${renderSaasAiCeoAnswerMarkup(assistantText)}</div>
+                ${renderSaasAiCeoPerformanceSummaryMarkup(latest)}
+                ${renderSaasAiCeoMarketReportDeliveryMarkup(latest) || renderSaasAiCeoListingHandoffMarkup(latest)}
+                ${renderSaasAiCeoRecoveryHintMarkup(latest)}
+                ${renderSaasAiCeoWorkDetailMarkup(latest)}`
+          }
         </div>
       </article>
     </section>

@@ -44,7 +44,8 @@ class FakeModelHandler(BaseHTTPRequestHandler):
                 {
                     "message": {
                         "content": "捷境 AI CEO 已通过平台托管 AI 连接回答；本次不会触发 eBay 写入。"
-                    }
+                    },
+                    "finish_reason": "stop",
                 }
             ]
         }
@@ -120,6 +121,9 @@ def main() -> int:
     env = os.environ.copy()
     env["JIEJING_BILLING_PROVIDER"] = "stripe_test_mock"
     env["JIEJING_QUOTA_ENFORCEMENT_ENABLED"] = "1"
+    env["JIEJING_VAULT_LOCAL_SECRET_RESOLVER_ENABLED"] = "1"
+    env["JIEJING_VAULT_LOCAL_SECRET_STORE_PATH"] = str(OUT / "local-model-secrets.json")
+    env["JIEJING_ENABLE_HERMES_WSL_SECRET_LOOKUP"] = "0"
     env["JIEJING_AI_CEO_PLATFORM_MODEL_ENABLED"] = "1"
     env["JIEJING_AI_CEO_PLATFORM_MODEL_PROVIDER"] = "deepseek"
     env["JIEJING_AI_CEO_PLATFORM_MODEL_API_KEY"] = platform_key
@@ -245,6 +249,40 @@ def main() -> int:
         if len(FakeModelHandler.calls) != first_call_count:
             return fail("exhausted platform fallback should not call the backend model provider again")
 
+        merchant_key = "unit-merchant-model-key-not-returned"
+        saved_model = post_json(
+            f"{base_url}/stores/{store_id}/model/api-key",
+            {
+                "provider_key": "deepseek",
+                "api_key": merchant_key,
+                "model": "deepseek-v4-pro",
+                "base_url": f"http://127.0.0.1:{model_server.server_address[1]}/v1",
+                "connection_scope": "account",
+            },
+            token=token,
+        )
+        if merchant_key in json.dumps(saved_model, ensure_ascii=False):
+            return fail("saved account BYOK response must not expose the merchant model key")
+        byok_response = post_json(
+            f"{base_url}/stores/{store_id}/merchant-ceo/chat",
+            {
+                "message": "请用一句话介绍跨境电商运营。",
+                "client_now": "2026-05-25T10:01:30+08:00",
+                "client_timezone": "Asia/Shanghai",
+            },
+            token=token,
+        )
+        byok_chat = byok_response.get("ai_ceo_chat", {})
+        byok_resolution = byok_response.get("model_secret_resolution", {})
+        if byok_chat.get("status") != "model_answered" or byok_resolution.get("mode") != "account_byok":
+            return fail(f"account BYOK should answer after the platform trial is exhausted: {byok_response}")
+        if byok_resolution.get("merchant_pays_provider_directly") is not True:
+            return fail(f"account BYOK usage ownership should remain merchant-paid: {byok_resolution}")
+        settings_after_byok = fetch_json(f"{base_url}/stores/{store_id}/model/settings", token=token).get("model_settings", {})
+        quota_after_byok = settings_after_byok.get("platform_trial_quota", {})
+        if quota_after_byok.get("used") != 1 or quota_after_byok.get("allowed") is not False:
+            return fail(f"account BYOK must not consume or reset the exhausted Jiejing trial: {quota_after_byok}")
+
         FakeModelHandler.calls.clear()
         capability_response = post_json(
             f"{base_url}/stores/{store_id}/merchant-ceo/chat",
@@ -258,8 +296,9 @@ def main() -> int:
         capability_chat = capability_response.get("ai_ceo_chat", {})
         if capability_chat.get("status") != "capability_status_answered":
             return fail(f"capability question should answer from platform model status: {capability_chat}")
-        if "捷境托管 AI 连接" not in str(capability_chat.get("answer") or ""):
-            return fail("capability answer should explain the platform-managed AI connection")
+        capability_answer = str(capability_chat.get("answer") or "")
+        if "当前捷境账号 AI 已接通" not in capability_answer or "DeepSeek" not in capability_answer:
+            return fail(f"capability answer should explain the active account BYOK connection: {capability_answer}")
         if FakeModelHandler.calls:
             return fail("capability question should not call the text model provider")
         print("PASS jiejing_saas_ai_ceo_platform_model_fallback")

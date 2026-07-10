@@ -67,7 +67,8 @@ class FakeModelHandler(BaseHTTPRequestHandler):
                 {
                     "message": {
                         "content": content
-                    }
+                    },
+                    "finish_reason": "stop",
                 }
             ]
         }
@@ -586,12 +587,12 @@ def main() -> int:
         if "web_context" not in company_default_model_messages:
             return fail("default account model prompt should include web_context")
         company_default_model_body = FakeModelHandler.calls[-1]["body"]
-        if company_default_model_body.get("max_tokens") != 600:
+        if company_default_model_body.get("max_tokens") != 1200:
             return fail(f"default account model chat should use the general-chat token budget: {company_default_model_body}")
         company_default_performance = company_default_chat.get("performance") if isinstance(company_default_chat.get("performance"), dict) else {}
         if company_default_performance.get("contract_version") != "2026-07-04-ai-ceo-chat-latency-budget-v1":
             return fail(f"default account model chat should expose latency budget evidence: {company_default_chat}")
-        if company_default_performance.get("model_timeout_seconds") != 16 or company_default_performance.get("model_max_output_tokens") != 600:
+        if company_default_performance.get("model_timeout_seconds") != 16 or company_default_performance.get("model_max_output_tokens") != 1200:
             return fail(f"default account model chat should expose the general-chat model budget: {company_default_performance}")
         if (
             company_default_performance.get("search_budget_seconds") != 1
@@ -846,6 +847,39 @@ def main() -> int:
         if "route" not in ebay_model_messages or "ebay_workflow" not in ebay_model_messages:
             return fail("eBay operating prompt should include ebay_workflow route")
 
+        followup_response = post_json(
+            f"{base_url}/stores/{store_id}/merchant-ceo/chat",
+            {
+                "message": "第三个为什么显示一半？",
+                "client_now": "2026-05-25T10:06:00+08:00",
+                "client_timezone": "Asia/Shanghai",
+                "conversation_history": [
+                    {
+                        "user_text": "帮我选三个适合 eBay 的轻小件",
+                        "assistant_text": "候选商品 1：折叠漏斗。候选商品 2：线缆标签。候选商品 3：旅行收纳挂钩。",
+                        "route": "ebay_workflow",
+                    }
+                ],
+                "command": {
+                    "id": "ceo-chat-context-followup-test",
+                    "text": "第三个为什么显示一半？",
+                    "title": "继续上一轮选品",
+                    "summary": "解释上一轮第三个候选商品",
+                    "intent": "general_consultation",
+                    "status": "ready",
+                    "routes": [],
+                },
+            },
+            token=token,
+        )
+        followup_chat = followup_response.get("ai_ceo_chat", {})
+        if followup_chat.get("status") != "model_answered" or followup_chat.get("route") != "ebay_workflow":
+            return fail(f"short follow-up should inherit the previous eBay conversation route: {followup_chat}")
+        followup_prompt = json.loads(str(FakeModelHandler.calls[-1]["body"]["messages"][-1]["content"]))
+        recent_conversation = followup_prompt.get("recent_conversation") or []
+        if not recent_conversation or "旅行收纳挂钩" not in str(recent_conversation[-1].get("assistant_text") or ""):
+            return fail(f"short follow-up should send sanitized recent conversation to the account model: {followup_prompt}")
+
         market_report_response = post_json(
             f"{base_url}/stores/{store_id}/merchant-ceo/chat",
             {
@@ -914,10 +948,10 @@ def main() -> int:
             if market_delivery.get(forbidden_key) is not False:
                 return fail(f"AI CEO market delivery should keep {forbidden_key}=False: {market_delivery}")
         market_report_model_body = FakeModelHandler.calls[-1]["body"]
-        if market_report_model_body.get("max_tokens") != 1200:
+        if market_report_model_body.get("max_tokens") != 2400:
             return fail(f"AI CEO market handoff should use the workflow token budget: {market_report_model_body}")
         market_report_performance = market_report_chat.get("performance") if isinstance(market_report_chat.get("performance"), dict) else {}
-        if market_report_performance.get("model_timeout_seconds") != 32 or market_report_performance.get("model_max_output_tokens") != 1200:
+        if market_report_performance.get("model_timeout_seconds") != 32 or market_report_performance.get("model_max_output_tokens") != 2400:
             return fail(f"AI CEO market handoff should expose the workflow model budget: {market_report_performance}")
         for forbidden_key in ("frontend_gets_model_api_key", "runtime_gets_raw_ebay_token", "secret_exposed"):
             if report_body.get(forbidden_key) is not False:
@@ -1001,10 +1035,10 @@ def main() -> int:
         if len(FakeModelHandler.calls) != call_count + 1:
             return fail("realtime stock question should synthesize live source records through the account model")
         realtime_model_body = FakeModelHandler.calls[-1]["body"]
-        if realtime_model_body.get("max_tokens") != 700:
+        if realtime_model_body.get("max_tokens") != 1000:
             return fail(f"realtime stock question should use the realtime token budget: {realtime_model_body}")
         realtime_performance = realtime_chat.get("performance") if isinstance(realtime_chat.get("performance"), dict) else {}
-        if realtime_performance.get("model_timeout_seconds") != 18 or realtime_performance.get("model_max_output_tokens") != 700:
+        if realtime_performance.get("model_timeout_seconds") != 18 or realtime_performance.get("model_max_output_tokens") != 1000:
             return fail(f"realtime stock question should expose the realtime model budget: {realtime_performance}")
         if (
             realtime_performance.get("search_budget_seconds") != 4

@@ -321,7 +321,8 @@ class OpenAICompatibleModelClient(ModelClient):
         except urllib.error.HTTPError as exc:  # pragma: no cover - live provider dependent
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"model HTTP {exc.code}: {detail[:300]}") from exc
-        content = body["choices"][0]["message"]["content"]
+        choice = body["choices"][0]
+        content = choice["message"]["content"]
         return {
             "text": str(content or "").strip(),
             "model_mode": "live_http_model_text",
@@ -330,6 +331,7 @@ class OpenAICompatibleModelClient(ModelClient):
             "model": self.model,
             "timeout_seconds": request_timeout,
             "max_output_tokens": token_budget,
+            "finish_reason": str(choice.get("finish_reason") or ""),
         }
 
 

@@ -61,6 +61,7 @@ def run_ai_ceo_chat(
     client_now: str = "",
     client_timezone: str = "",
     command: dict[str, Any] | None = None,
+    conversation_history: list[dict[str, Any]] | None = None,
     model_resolution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Call the merchant model for an AI CEO chat turn."""
@@ -75,6 +76,7 @@ def run_ai_ceo_chat(
             "frontend_gets_model_api_key": False,
             "secret_exposed": False,
         }
+    safe_history = _sanitize_ai_ceo_conversation_history(conversation_history)
     context = build_ai_ceo_chat_context(
         repository=repository,
         company_id=company_id,
@@ -84,8 +86,20 @@ def run_ai_ceo_chat(
         client_timezone=client_timezone,
     )
     model_context = _public_model_context(None, model_client, model_resolution)
-    realtime_kind = _classify_external_realtime_request(safe_message)
-    route = _classify_ai_ceo_route(safe_message, realtime_kind=realtime_kind)
+    direct_realtime_kind = _classify_external_realtime_request(safe_message)
+    direct_route = _classify_ai_ceo_route(safe_message, realtime_kind=direct_realtime_kind)
+    contextual_followup = bool(
+        safe_history
+        and not direct_realtime_kind
+        and direct_route == AI_CEO_ROUTE_GENERAL
+        and _looks_like_contextual_followup(safe_message)
+    )
+    route_message = _conversation_followup_query(safe_message, safe_history) if contextual_followup else safe_message
+    previous_route = str(safe_history[-1].get("route") or "") if contextual_followup else ""
+    realtime_kind = direct_realtime_kind
+    if contextual_followup and previous_route == AI_CEO_ROUTE_EXTERNAL_REALTIME:
+        realtime_kind = _classify_external_realtime_request(route_message)
+    route = previous_route if contextual_followup and previous_route else direct_route
     route_meta = ai_ceo_route_metadata(safe_message, route=route, realtime_kind=realtime_kind)
     local_clock_kind = _classify_local_clock_request(safe_message)
     if local_clock_kind:
@@ -117,7 +131,7 @@ def run_ai_ceo_chat(
         }
     if realtime_kind:
         search_started_at = time.monotonic()
-        realtime_search = _run_realtime_search(kind=realtime_kind, message=safe_message)
+        realtime_search = _run_realtime_search(kind=realtime_kind, message=route_message)
         search_latency_ms = _elapsed_ms(search_started_at)
         if realtime_search.get("status") == "ready":
             use_model_synthesis = _env_enabled("JIEJING_AI_CEO_REALTIME_MODEL_SYNTHESIS_ENABLED", default=True)
@@ -155,6 +169,7 @@ def run_ai_ceo_chat(
                 model_context=model_context,
                 route_meta=route_meta,
                 realtime_search=realtime_search,
+                conversation_history=safe_history,
             )
             model_started_at = time.monotonic()
             try:
@@ -165,10 +180,48 @@ def run_ai_ceo_chat(
                     max_output_tokens=_ai_ceo_model_max_output_tokens(route=route, realtime_kind=realtime_kind),
                     timeout_seconds=_ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind),
                 )
+                result = _complete_truncated_model_result(
+                    model_client=model_client,
+                    result=result,
+                    system_prompt=search_prompt[0],
+                    user_prompt=search_prompt[1],
+                    route=route,
+                    realtime_kind=realtime_kind,
+                )
                 model_latency_ms = _elapsed_ms(model_started_at)
                 answer = _clean_answer(result.get("text") if isinstance(result, dict) else "")
                 if not answer:
                     raise RuntimeError("empty_realtime_search_answer")
+                if _realtime_answer_needs_repair(answer, realtime_search.get("source_records") or [], realtime_kind):
+                    repair_result = model_client.generate_text(
+                        system_prompt=(
+                            search_prompt[0]
+                            + " 上一版回答过短或只说无法判断。请基于已有 source_records 给出可用分析："
+                            "先说明数据时间和能确认的事实，再列主要驱动、偏强/偏弱两种情景与风险。"
+                            "没有精确实时价时可以明确缺口，但不能只返回一句无法分析，也不能编造数字。"
+                        ),
+                        user_prompt=search_prompt[1],
+                        temperature=0.1,
+                        max_output_tokens=_ai_ceo_model_max_output_tokens(route=route, realtime_kind=realtime_kind),
+                        timeout_seconds=_ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind),
+                    )
+                    repair_result = _complete_truncated_model_result(
+                        model_client=model_client,
+                        result=repair_result,
+                        system_prompt=search_prompt[0],
+                        user_prompt=search_prompt[1],
+                        route=route,
+                        realtime_kind=realtime_kind,
+                    )
+                    repair_answer = _clean_answer(repair_result.get("text") if isinstance(repair_result, dict) else "")
+                    if repair_answer and (
+                        not _realtime_answer_needs_repair(repair_answer, realtime_search.get("source_records") or [], realtime_kind)
+                        or len(repair_answer) > len(answer)
+                    ):
+                        result = repair_result
+                        answer = repair_answer
+                if _realtime_answer_needs_repair(answer, realtime_search.get("source_records") or [], realtime_kind):
+                    answer = _fallback_realtime_search_answer(realtime_kind, realtime_search)
                 status = "realtime_search_answered"
             except Exception:
                 model_latency_ms = _elapsed_ms(model_started_at)
@@ -240,6 +293,7 @@ def run_ai_ceo_chat(
         model_context=model_context,
         route=route,
         route_meta=route_meta,
+        conversation_history=safe_history,
     )
     result, model_latency_ms, model_initial_retry_count, model_error = _generate_model_text_with_initial_retry(
         model_client=model_client,
@@ -748,6 +802,7 @@ def build_ai_ceo_chat_prompts(
     model_context: dict[str, Any] | None = None,
     route: str = AI_CEO_ROUTE_GENERAL,
     route_meta: dict[str, Any] | None = None,
+    conversation_history: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str]:
     system_prompt = (
         "你是捷境 Jiejing 的 AI CEO，产品定位是 eBay-first AI 经营工作台，不是通用 ERP、Agent 市场或普通聊天机器人。"
@@ -794,6 +849,7 @@ def build_ai_ceo_chat_prompts(
         "web_context": _prompt_web_context(context),
         "current_model_client": model_context or {},
         "frontend_command_plan": _safe_command(command) if route != AI_CEO_ROUTE_GENERAL else {},
+        "recent_conversation": _sanitize_ai_ceo_conversation_history(conversation_history),
         "response_rules": [
             "Use web_context.source_records for current/public facts when web_context.status is ready; do not invent latest facts when sources are missing.",
             "先回答用户当前问题，再给必要的下一步。",
@@ -813,6 +869,7 @@ def build_ai_ceo_realtime_search_prompts(
     model_context: dict[str, Any] | None = None,
     route_meta: dict[str, Any] | None = None,
     realtime_search: dict[str, Any],
+    conversation_history: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str]:
     system_prompt = (
         "你是捷境 Jiejing 的 AI CEO。现在这轮问题已经通过后端实时搜索拿到公开网页来源。"
@@ -820,6 +877,7 @@ def build_ai_ceo_realtime_search_prompts(
         "如果来源片段不足以确认精确数值，就明确说无法从当前来源确认精确值，并给出可继续查证的来源。"
         "商家可见回答必须使用简体中文；eBay、SKU、Listing、Market Report、Listing Package、NASDAQ、NYSE 等专有名词可以保留英文。"
         "回答要短、直接、带时间感和来源；不要出现“调用模型”“后端模型”“BYOK”“Tavily API key”等实现词。"
+        "如果来源不足以确认精确实时数值，仍要整理来源中能确认的事实、主要驱动、两种可能情景和风险；不能只用一句“无法分析”结束。"
         "需要执行真实发布、改价、库存、退款、广告、政策、付款或敏感客服承诺时，必须停在决策中心。"
         "普通实时咨询默认不写长期经营记忆。"
     )
@@ -829,6 +887,7 @@ def build_ai_ceo_realtime_search_prompts(
         "route_meta": route_meta or {},
         "current_context": _prompt_context_for_route(context, AI_CEO_ROUTE_EXTERNAL_REALTIME),
         "current_model_client": model_context or {},
+        "recent_conversation": _sanitize_ai_ceo_conversation_history(conversation_history),
         "realtime_search": {
             "status": realtime_search.get("status"),
             "provider": realtime_search.get("provider"),
@@ -2131,6 +2190,17 @@ def _fallback_realtime_search_answer(kind: str, realtime_search: dict[str, Any])
     return f"{intro}\n\n来源：\n" + "\n".join(source_lines) + suffix
 
 
+def _realtime_answer_needs_repair(answer: str, source_records: list[dict[str, Any]], kind: str = "") -> bool:
+    text = _clean_answer(answer)
+    if not text:
+        return True
+    minimum_length = 80 if kind in {"stock_quote", "exchange_rate", "weather"} else 120
+    if source_records and len(text) < minimum_length:
+        return True
+    refusal_markers = ("无法给出", "无法分析", "不能分析", "无法判断", "不能判断")
+    return bool(source_records and len(text) < 320 and any(marker in text for marker in refusal_markers))
+
+
 def _domain_from_url(url: str) -> str:
     if not url:
         return ""
@@ -2185,11 +2255,11 @@ def _ai_ceo_model_timeout_seconds(*, route: str, realtime_kind: str = "") -> int
 
 def _ai_ceo_model_max_output_tokens(*, route: str, realtime_kind: str = "") -> int:
     if realtime_kind or route == AI_CEO_ROUTE_EXTERNAL_REALTIME:
-        default = _env_int("JIEJING_AI_CEO_REALTIME_MAX_OUTPUT_TOKENS", default=700, minimum=128, maximum=2400)
+        default = _env_int("JIEJING_AI_CEO_REALTIME_MAX_OUTPUT_TOKENS", default=1000, minimum=128, maximum=2400)
     elif route == AI_CEO_ROUTE_GENERAL:
-        default = _env_int("JIEJING_AI_CEO_GENERAL_MAX_OUTPUT_TOKENS", default=600, minimum=128, maximum=2400)
+        default = _env_int("JIEJING_AI_CEO_GENERAL_MAX_OUTPUT_TOKENS", default=1200, minimum=128, maximum=2400)
     else:
-        default = _env_int("JIEJING_AI_CEO_WORKFLOW_MAX_OUTPUT_TOKENS", default=1200, minimum=256, maximum=4096)
+        default = _env_int("JIEJING_AI_CEO_WORKFLOW_MAX_OUTPUT_TOKENS", default=2400, minimum=256, maximum=4096)
     return _env_int("JIEJING_AI_CEO_MAX_OUTPUT_TOKENS", default=default, minimum=128, maximum=4096)
 
 
@@ -2211,6 +2281,14 @@ def _generate_model_text_with_initial_retry(
             temperature=0.2,
             max_output_tokens=max_output_tokens,
             timeout_seconds=timeout_seconds,
+        )
+        result = _complete_truncated_model_result(
+            model_client=model_client,
+            result=result,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            route=route,
+            realtime_kind=realtime_kind,
         )
         return result, _elapsed_ms(started_at), 0, None
     except Exception as exc:  # pragma: no cover - provider dependent
@@ -2248,9 +2326,119 @@ def _generate_model_text_with_initial_retry(
             max_output_tokens=retry_tokens,
             timeout_seconds=retry_timeout,
         )
+        result = _complete_truncated_model_result(
+            model_client=model_client,
+            result=result,
+            system_prompt=retry_prompt,
+            user_prompt=user_prompt,
+            route=route,
+            realtime_kind=realtime_kind,
+        )
         return result, _elapsed_ms(started_at), 1, None
     except Exception as retry_exc:  # pragma: no cover - provider dependent
         return None, _elapsed_ms(started_at), 1, retry_exc
+
+
+def _complete_truncated_model_result(
+    *,
+    model_client: Any,
+    result: dict[str, Any] | None,
+    system_prompt: str,
+    user_prompt: str,
+    route: str,
+    realtime_kind: str = "",
+) -> dict[str, Any]:
+    completed = dict(result or {})
+    answer = str(completed.get("text") or "").strip()
+    initial_finish_reason = str(completed.get("finish_reason") or "").strip().lower()
+    continuation_count = 0
+    while (
+        answer
+        and str(completed.get("finish_reason") or "").strip().lower() in {"length", "max_tokens", "max_output_tokens"}
+        and continuation_count < 2
+    ):
+        continuation_payload = {
+            "instruction": "Continue the same answer exactly where it stopped. Do not repeat completed sections. Finish the current answer.",
+            "original_request": user_prompt,
+            "answer_so_far": answer[-7000:],
+        }
+        next_result = model_client.generate_text(
+            system_prompt=system_prompt,
+            user_prompt=json.dumps(continuation_payload, ensure_ascii=False, default=str),
+            temperature=0.1,
+            max_output_tokens=_ai_ceo_model_max_output_tokens(route=route, realtime_kind=realtime_kind),
+            timeout_seconds=_ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind),
+        )
+        continuation = str((next_result or {}).get("text") or "").strip()
+        if not continuation:
+            break
+        answer = _merge_model_continuation(answer, continuation)
+        completed = {**completed, **(next_result or {}), "text": answer}
+        continuation_count += 1
+    completed["text"] = answer
+    completed["initial_finish_reason"] = initial_finish_reason
+    completed["continuation_count"] = continuation_count
+    return completed
+
+
+def _merge_model_continuation(answer: str, continuation: str) -> str:
+    left = str(answer or "").rstrip()
+    right = str(continuation or "").lstrip()
+    if not left:
+        return right
+    if not right or right in left:
+        return left
+    max_overlap = min(500, len(left), len(right))
+    for size in range(max_overlap, 19, -1):
+        if left[-size:] == right[:size]:
+            return left + right[size:]
+    return f"{left}\n{right}"
+
+
+def _sanitize_ai_ceo_conversation_history(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    history: list[dict[str, Any]] = []
+    for item in value[-8:]:
+        if not isinstance(item, dict):
+            continue
+        user_text = _safe_text(item.get("user_text") or item.get("user") or "", limit=900)
+        assistant_text = _safe_text(item.get("assistant_text") or item.get("assistant") or "", limit=3200)
+        if not user_text or not assistant_text:
+            continue
+        route = str(item.get("route") or AI_CEO_ROUTE_GENERAL)
+        if route not in {
+            AI_CEO_ROUTE_GENERAL,
+            AI_CEO_ROUTE_EBAY_WORKFLOW,
+            AI_CEO_ROUTE_EXTERNAL_REALTIME,
+            AI_CEO_ROUTE_CONFIRMATION,
+            AI_CEO_ROUTE_MERCHANT_RULE,
+        }:
+            route = AI_CEO_ROUTE_GENERAL
+        history.append({"user_text": user_text, "assistant_text": assistant_text, "route": route})
+    return history
+
+
+def _looks_like_contextual_followup(message: str) -> bool:
+    text = _normalized_text(message)
+    if not text or len(text) > 120:
+        return False
+    markers = (
+        "上面", "刚才", "前面", "继续", "补充", "再说", "详细", "第一", "第二", "第三", "第四",
+        "这个", "那个", "它", "为什么", "怎么办", "什么意思", "显示一半", "没说完", "接着说",
+    )
+    return len(text) <= 24 or any(marker in text for marker in markers)
+
+
+def _conversation_followup_query(message: str, history: list[dict[str, Any]]) -> str:
+    if not history:
+        return message
+    previous = history[-1]
+    return _safe_text(
+        f"上一轮用户问题：{previous.get('user_text') or ''}\n"
+        f"本轮补充：{message}",
+        limit=1800,
+    )
 
 
 def _ai_ceo_latency_fields(
@@ -2874,7 +3062,7 @@ def _safe_packet_summary(packet: dict[str, Any]) -> dict[str, Any]:
 
 
 def _clean_answer(value: Any) -> str:
-    text = _safe_text(value, limit=2200)
+    text = _safe_text(value, limit=12000)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 

@@ -2769,8 +2769,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     status=HTTPStatus.CREATED if fast_chat.get("status") in completed_statuses else HTTPStatus.ACCEPTED,
                 )
                 return
-            if not self._require_quota(identity, "model_report_assist"):
-                return
             model_secret_resolution = self._resolve_model_client_for_store(identity=identity, store_id=store_id, body=body)
             if model_secret_resolution.get("status") != "resolved":
                 blockers = model_secret_resolution.get("blocked_by") or [model_secret_resolution.get("status") or "model_secret_not_resolved"]
@@ -2809,6 +2807,14 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     },
                     status=HTTPStatus.ACCEPTED,
                 )
+                return
+            model_resolution_mode = str(model_secret_resolution.get("mode") or "")
+            quota_action = (
+                "model_report_assist"
+                if model_resolution_mode == "platform_managed_default"
+                else "ai_ceo_task"
+            )
+            if not self._require_quota(identity, quota_action):
                 return
             if model_secret_resolution.get("mode") == "platform_managed_default":
                 platform_trial_quota = self._platform_model_trial_quota(identity=identity)
@@ -2857,6 +2863,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 client_now=str(body.get("client_now") or ""),
                 client_timezone=str(body.get("client_timezone") or ""),
                 command=command_body,
+                conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
                 model_resolution={
                     key: value
                     for key, value in model_secret_resolution.items()
