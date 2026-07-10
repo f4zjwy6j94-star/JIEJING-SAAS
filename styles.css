@@ -33910,7 +33910,7 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread .message.ai {
   gap: 14px;
 }
 
-body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread .message.ai span {
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread .message.ai > span {
   width: 34px;
   height: 34px;
   border-radius: 8px;
@@ -34087,7 +34087,7 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread .message.ai {
   gap: 14px;
 }
 
-body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread .message.ai span {
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-thread .message.ai > span {
   width: 34px;
   height: 34px;
   border-radius: 8px;
@@ -36341,7 +36341,7 @@ body.saas-public-mvp .saas-ai-ceo-thread .message {
   background: transparent;
 }
 
-body.saas-public-mvp .saas-ai-ceo-thread .message span {
+body.saas-public-mvp .saas-ai-ceo-thread .message > span {
   display: inline-flex;
   width: 38px;
   height: 38px;
@@ -36357,7 +36357,7 @@ body.saas-public-mvp .saas-ai-ceo-thread .message span {
   text-align: center;
 }
 
-body.saas-public-mvp .saas-ai-ceo-thread .message.ai span {
+body.saas-public-mvp .saas-ai-ceo-thread .message.ai > span {
   border-color: rgba(8, 118, 110, 0.22);
   background: #101c17;
   color: #ffffff;
@@ -36625,7 +36625,7 @@ body.saas-public-mvp .saas-ai-ceo-context-drawer .saas-merchant-proof-grid {
     grid-template-columns: minmax(0, 1fr) 36px;
   }
 
-  body.saas-public-mvp .saas-ai-ceo-thread .message span {
+  body.saas-public-mvp .saas-ai-ceo-thread .message > span {
     width: 34px;
     height: 34px;
   }

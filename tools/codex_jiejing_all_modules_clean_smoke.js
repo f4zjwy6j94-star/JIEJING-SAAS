@@ -764,10 +764,13 @@ async function main() {
             );
           })(),
           has_ceo_pending_preview: Boolean(
-            document.querySelector('#view-cockpit [data-ai-ceo-provisional-answer="quick_then_full_report_v1"]'),
+            Array.from(document.querySelectorAll("#view-cockpit #ceoChat .message.ai.is-pending"))
+              .slice(-1)[0]
+              ?.querySelector('[data-ai-ceo-provisional-answer="quick_then_full_report_v1"]'),
           ),
           ceo_pending_preview_copy: (() => {
-            const preview = document.querySelector('#view-cockpit [data-ai-ceo-provisional-answer="quick_then_full_report_v1"]');
+            const pending = Array.from(document.querySelectorAll("#view-cockpit #ceoChat .message.ai.is-pending")).slice(-1)[0];
+            const preview = pending?.querySelector('[data-ai-ceo-provisional-answer="quick_then_full_report_v1"]');
             if (!preview) return true;
             const previewText = preview.innerText || "";
             return previewText.includes("先短答") && (previewText.includes("完整报告") || previewText.includes("临时方向"));

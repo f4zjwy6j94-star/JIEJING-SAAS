@@ -263,6 +263,13 @@ def main() -> int:
         if needle not in css:
             return fail(f"missing AI CEO latest-reply CSS contract: {needle}")
 
+    for forbidden_selector in [
+        ".saas-ai-ceo-thread .message.ai span {",
+        ".saas-ai-ceo-thread .message span {",
+    ]:
+        if forbidden_selector in css:
+            return fail(f"AI CEO avatar selector must not style nested status labels: {forbidden_selector}")
+
     if app.index('id="ceoChat"') > app.index('id="ceoForm"'):
         return fail("AI CEO chat stream must render above the composer form")
     if "今天要捷境帮你处理什么？" in app:
