@@ -30,20 +30,18 @@ def patched_env(**values: str):
 
 class FakeMediaGenerationAdapter:
     def generate(self, config):
-        return {
-            "status": "ready",
-            "source_type": "media_provider",
-            "product": config.product,
-            "provider": "fake-provider",
-            "assets": [
-                {
-                    "asset_id": "fake-main-01",
-                    "asset_type": "product_image",
-                    "url": "https://cdn.example.test/jiejing/fake-main-01.jpg",
-                    "dimensions": "1600x1600",
-                    "commercial_use_status": "needs_rights_review",
-                    "status": "generated",
-                },
+        assets = [
+            {
+                "asset_id": "fake-main-01",
+                "asset_type": "product_image",
+                "url": "https://cdn.example.test/jiejing/fake-main-01.jpg",
+                "dimensions": "1600x1600",
+                "commercial_use_status": "needs_rights_review",
+                "status": "generated",
+            }
+        ]
+        if config.video_prompt:
+            assets.append(
                 {
                     "asset_id": "fake-video-01",
                     "asset_type": "product_video",
@@ -51,8 +49,14 @@ class FakeMediaGenerationAdapter:
                     "duration_seconds": 20,
                     "commercial_use_status": "needs_rights_review",
                     "status": "generated",
-                },
-            ],
+                }
+            )
+        return {
+            "status": "ready",
+            "source_type": "media_provider",
+            "product": config.product,
+            "provider": "fake-provider",
+            "assets": assets,
             "provider_status": {
                 "credential_present": True,
                 "secret_exposed": False,
@@ -61,7 +65,7 @@ class FakeMediaGenerationAdapter:
         }
 
 
-def media_job_body(*, live_requested: bool = True) -> dict:
+def media_job_body(*, live_requested: bool = True, video_requested: bool = True) -> dict:
     return {
         "provider_job_key": "media.asset_generation",
         "inputs": {
@@ -78,8 +82,8 @@ def media_job_body(*, live_requested: bool = True) -> dict:
             "image_count": 2,
             "image_sizes": ["1600x1600"],
             "scene_types": ["white_background", "detail_page"],
-            "video_script": "15 second product demo script",
-            "video_generation_requested": True,
+            **({"video_script": "15 second product demo script"} if video_requested else {}),
+            "video_generation_requested": video_requested,
             "live_provider_requested": live_requested,
             "media_provider": "fal",
         },
@@ -116,6 +120,35 @@ def main() -> int:
             raise AssertionError("live media assets must still wait for Listing review")
         if live.get("secret_exposed") is not False:
             raise AssertionError("live media provider branch must not expose secrets")
+
+        with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="true"):
+            image_only = ProviderJobRunner().run(
+                company_id="co_test",
+                store_id="store_test",
+                user_id="user_test",
+                task_id="task_test_image_only",
+                job_id="job_test_image_only",
+                job_body=media_job_body(video_requested=False),
+            )
+        if image_only.get("status") != "completed_live_media_provider":
+            raise AssertionError(f"image-only media job must not require a video script: {image_only}")
+        image_only_manifest = image_only.get("output_packet", {}).get("asset_manifest", [])
+        if len(image_only_manifest) != 1 or image_only_manifest[0].get("asset_type") != "product_image":
+            raise AssertionError(f"image-only media job returned the wrong manifest: {image_only_manifest}")
+
+        video_without_script_body = media_job_body(video_requested=True)
+        video_without_script_body["inputs"].pop("video_script", None)
+        with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="true"):
+            video_without_script = ProviderJobRunner().run(
+                company_id="co_test",
+                store_id="store_test",
+                user_id="user_test",
+                task_id="task_test_video_missing_script",
+                job_id="job_test_video_missing_script",
+                job_body=video_without_script_body,
+            )
+        if video_without_script.get("status") != "blocked_missing_input" or "video_script" not in video_without_script.get("missing_inputs", []):
+            raise AssertionError("video generation must still require an explicit video script")
 
         with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="false", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="false"):
             dry = ProviderJobRunner().run(

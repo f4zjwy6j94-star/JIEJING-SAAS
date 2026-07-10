@@ -168,7 +168,7 @@ class ProviderJobContractCatalog:
                 queue="provider.media",
                 output_packet="asset_manifest",
                 source_record_type="media_provider",
-                required_inputs=["creative_job_spec", "product_facts", "image_count", "image_sizes", "scene_types", "video_script"],
+                required_inputs=["creative_job_spec", "product_facts", "image_count", "image_sizes", "scene_types"],
                 normalized_outputs=[
                     "asset_type",
                     "url_or_file_path",
@@ -204,7 +204,7 @@ class ProviderJobContractCatalog:
                 queue="provider.media",
                 output_packet="asset_manifest",
                 source_record_type="media_provider",
-                required_inputs=["product_facts", "image_count", "image_sizes", "scene_types", "video_script"],
+                required_inputs=["product_facts", "image_count", "image_sizes", "scene_types"],
                 normalized_outputs=["asset_type", "url_or_file_path", "dimensions_or_duration", "source_provider_or_upload", "cost_estimate", "review_status"],
                 blocked_actions=[
                     "claim_unverified_product_fact",

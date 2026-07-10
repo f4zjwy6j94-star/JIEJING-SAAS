@@ -6532,6 +6532,22 @@ function getBulkHandoffDrafts() {
     .filter(Boolean);
 }
 
+function bindSaasMediaManifestPreviewEvents(view = document.querySelector("#view-media")) {
+  if (!view || view.dataset.saasManifestPreviewEventsBound) return;
+  view.dataset.saasManifestPreviewEventsBound = "1";
+  view.addEventListener("click", (event) => {
+    const card = event.target.closest(".saas-generated-assets-grid [data-asset-preview]");
+    if (card && view.contains(card)) openAssetPreview(card.dataset.assetPreview);
+  });
+  view.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const card = event.target.closest(".saas-generated-assets-grid [data-asset-preview]");
+    if (!card || !view.contains(card)) return;
+    event.preventDefault();
+    openAssetPreview(card.dataset.assetPreview);
+  });
+}
+
 function bindRestoredMediaStudioEvents() {
   const view = document.querySelector("#view-media");
   if (!view) return;
@@ -6602,17 +6618,7 @@ function bindRestoredMediaStudioEvents() {
     const card = event.target.closest("[data-asset-preview]");
     if (card) openAssetPreview(card.dataset.assetPreview);
   });
-  bindOnce(view, "click", (event) => {
-    const card = event.target.closest(".saas-generated-assets-grid [data-asset-preview]");
-    if (card) openAssetPreview(card.dataset.assetPreview);
-  });
-  bindOnce(view, "keydown", (event) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    const card = event.target.closest(".saas-generated-assets-grid [data-asset-preview]");
-    if (!card) return;
-    event.preventDefault();
-    openAssetPreview(card.dataset.assetPreview);
-  });
+  bindSaasMediaManifestPreviewEvents(view);
   bindOnce(view.querySelector("#mediaVideoDemo"), "click", () => {
     const text = "用现有商品图生成 15 秒和 30 秒产品展示视频草稿，包含封面、字幕和镜头顺序，先不要发布。";
     addCeoMessage(text, "视频分镜已经生成到素材工坊，短视频脚本和授权风险也已写入 AI 汇报。");
@@ -6878,7 +6884,7 @@ function saasListingMediaWritebackRightsReady(draft = state.saasListingComposerD
   ]
     .filter(Boolean)
     .join(" ");
-  if (/待|未|needs|review|pending|draft_only|not_ready/i.test(joined)) return false;
+  if (/\b(?:needs_review|review_pending|pending_review|pending|draft_only(?:_until_review)?|not_ready(?:_for_listing_until_review)?)\b/i.test(joined)) return false;
   return /ready|approved|confirmed|pass|可用于/i.test(joined);
 }
 
@@ -7499,6 +7505,7 @@ function renderMediaProjectTabs() {
   const view = document.querySelector("#view-media");
   const hadTabs = Boolean(view?.querySelector(".media-project-tabs"));
   restorePreservedViewMarkup("media", ".media-project-tabs");
+  bindSaasMediaManifestPreviewEvents(view);
   if (!hadTabs) bindRestoredMediaStudioEvents();
   if (isSaasPublicMvpMode()) {
     renderSaasMediaStudioStatus();
@@ -13930,7 +13937,7 @@ function readMediaGenerationConfig(overrides = {}) {
     template: overrides.template || activeTemplate?.querySelector("strong")?.textContent?.trim() || "eBay 刊登包",
     platform: overrides.platform || document.querySelector("#mediaPlatformSelect")?.value || "eBay US Listing",
     size: overrides.size || document.querySelector("#mediaSizeSelect")?.value || "平台推荐自动匹配",
-    count: overrides.count || document.querySelector("#mediaCountSelect")?.value || "6 张",
+    count: overrides.count || document.querySelector("#mediaCountSelect")?.value || "1 张",
     type:
       overrides.type ||
       document.querySelector("#mediaTypeSelect")?.value ||
@@ -14331,8 +14338,64 @@ function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
       video_prompt: videoPrompt,
       cost_limit_cents: imageCount * 100 + (videoRequested ? 1200 : 0),
     },
-    run_mode: "local_worker_now",
+    run_mode: "queued",
   };
+}
+
+async function pollSaasMediaAssetJobUntilReview({ mediaJobId, sourceText, config, optimisticId = "" } = {}) {
+  const cleanMediaJobId = String(mediaJobId || "").trim();
+  if (!cleanMediaJobId) return null;
+  state.saasMediaAssetJobPolls = state.saasMediaAssetJobPolls || {};
+  if (state.saasMediaAssetJobPolls[cleanMediaJobId]) return null;
+  state.saasMediaAssetJobPolls[cleanMediaJobId] = true;
+  try {
+    for (let attempt = 0; attempt < 240; attempt += 1) {
+      if (attempt) await new Promise((resolve) => window.setTimeout(resolve, 2000));
+      let response;
+      try {
+        response = await saasFetch(`/media-asset-jobs/${encodeURIComponent(cleanMediaJobId)}`);
+      } catch (error) {
+        if (attempt < 239) continue;
+        throw error;
+      }
+      const mediaJob = response?.media_asset_job && typeof response.media_asset_job === "object" ? response.media_asset_job : null;
+      if (!mediaJob) continue;
+      upsertSaasMediaAssetJobForDisplay(mediaJob, optimisticId);
+      const status = String(mediaJob.status || "");
+      const liveAssetsReturned =
+        mediaJob.live_provider_called === true && Array.isArray(mediaJob.asset_manifest) && mediaJob.asset_manifest.length > 0;
+      if (liveAssetsReturned && ["waiting_review", "approved_for_listing"].includes(status)) {
+        state.mediaGenerationStatus = "generated";
+        runMediaGenerationFromCeo(sourceText, { ...config, backendMediaJobId: cleanMediaJobId });
+        refreshSaasMediaGeneratedAssetSurfaces();
+        setText("#mediaProductionStatus", "真实素材已返回 · 等待审核");
+        setText(
+          "#mediaPreviewNote",
+          "真实图片或视频已进入素材清单，先审核实物一致性、商业使用权和 eBay 素材规则，再回写 Listing。",
+        );
+        showActionToast("真实素材已返回：先审核，不会直接发布。");
+        return mediaJob;
+      }
+      if (["needs_rework", "validation_failed", "failed", "cancelled"].includes(status)) {
+        state.mediaGenerationStatus = "needs_rework";
+        setText("#mediaProductionStatus", "素材任务需要调整 · 没有生成可用素材");
+        setText("#mediaPreviewNote", "请查看任务缺口并调整商品事实或素材要求；本次结果不会回写 Listing。");
+        showActionToast("素材任务没有生成可用结果，请调整资料后重试。");
+        return mediaJob;
+      }
+      state.mediaGenerationStatus = status === "running" ? "submitted" : "queued";
+      setText("#mediaProductionStatus", status === "running" ? "素材正在生成 · 可以继续浏览其他页面" : "素材任务已排队 · 可以继续浏览其他页面");
+    }
+    setText("#mediaProductionStatus", "素材仍在后台生成 · 稍后刷新查看");
+    setText("#mediaPreviewNote", "任务没有被取消；生成完成后会进入素材清单，未审核前不会回写 Listing。");
+    return null;
+  } catch (error) {
+    console.warn(`[JIEJING media job polling skipped] ${error?.message || error}`);
+    setText("#mediaProductionStatus", "暂时无法刷新素材进度 · 稍后重试");
+    return null;
+  } finally {
+    delete state.saasMediaAssetJobPolls[cleanMediaJobId];
+  }
 }
 
 async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}) {
@@ -14371,6 +14434,12 @@ async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}) {
     } else {
       renderMediaQualityBoard(config);
       renderGlobalFlowBar();
+      void pollSaasMediaAssetJobUntilReview({
+        mediaJobId: mediaJob.media_job_id,
+        sourceText,
+        config,
+        optimisticId,
+      });
     }
     setText("#mediaProductionStatus", liveAssetsReturned ? "真实素材已返回 · 等待审核" : "素材任务已创建 · 等待素材清单审核");
     setText(

@@ -61,6 +61,10 @@ class ProviderJobRunner:
         }
         required_inputs = [str(item) for item in contract.get("required_inputs", [])]
         missing_inputs = [name for name in required_inputs if _is_missing(effective_inputs.get(name))]
+        if key in {"media.asset_generation", "media.fal_asset_generation"}:
+            video_requested = _truthy(effective_inputs.get("video_generation_requested"))
+            if video_requested and _is_missing(effective_inputs.get("video_script")):
+                missing_inputs.append("video_script")
         captured_at = _now_iso()
         live_result = self._maybe_run_live_provider(
             key=key,

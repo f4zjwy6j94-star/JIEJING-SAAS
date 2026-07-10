@@ -421,6 +421,10 @@ async function main() {
       error: String(error.message || error),
     });
   }
+  const advancedChecksCollapsedByDefault = await page.evaluate(() => {
+    const advanced = document.querySelector('[data-listing-advanced-checks="listing_advanced_checks_collapsed_v1"]');
+    return Boolean(advanced && !advanced.open);
+  });
   await page.click('[data-listing-advanced-checks="listing_advanced_checks_collapsed_v1"] > summary');
   await page.waitForFunction(
     () => {
@@ -490,6 +494,7 @@ async function main() {
       ui.has_merchant_questions &&
       ui.has_field_map_contract &&
       ui.has_report_id,
+    ui_advanced_checks_progressively_disclosed: advancedChecksCollapsedByDefault && ui.advanced_checks_open,
     ui_has_listing_text: Boolean(ui.title_not_generic && ui.has_candidate_cards && ui.selling_points_length > 20 && ui.description_length > 80),
     ui_has_merchant_next_action:
       ui.next_action_visible &&
