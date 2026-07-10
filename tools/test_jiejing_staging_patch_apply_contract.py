@@ -216,6 +216,7 @@ def main() -> int:
     for marker in [
         "JIEJING_VAULT_READY_WAIT_SECONDS",
         'while [ "$attempt" -lt "$wait_seconds" ]',
+        'if [ "$ready_count" -ge 2 ]',
         "STAGING_VAULT_STATUS=blocked_not_ready",
         'init_tmp="${INIT_FILE}.tmp.$$"',
         'result_tmp="${TOKEN_FILE}.tmp.$$"',

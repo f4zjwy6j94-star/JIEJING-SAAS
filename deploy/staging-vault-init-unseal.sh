@@ -22,17 +22,23 @@ status_json() {
 
 wait_seconds="${JIEJING_VAULT_READY_WAIT_SECONDS:-30}"
 attempt=0
+ready_count=0
 status=""
 while [ "$attempt" -lt "$wait_seconds" ]; do
   status="$(status_json)"
   if [ -n "$status" ] && printf '%s' "$status" | python3 -c "import json,sys; data=json.load(sys.stdin); assert 'initialized' in data and 'sealed' in data" 2>/dev/null; then
-    break
+    ready_count=$((ready_count + 1))
+    if [ "$ready_count" -ge 2 ]; then
+      break
+    fi
+  else
+    ready_count=0
+    status=""
   fi
-  status=""
   attempt=$((attempt + 1))
   sleep 1
 done
-if [ -z "$status" ]; then
+if [ -z "$status" ] || [ "$ready_count" -lt 2 ]; then
   echo "STAGING_VAULT_STATUS=blocked_not_ready" >&2
   exit 2
 fi
