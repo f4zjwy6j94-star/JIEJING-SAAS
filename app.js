@@ -17407,6 +17407,16 @@ function saasModelBlockedReasonText(value = "") {
     model_secret_ref_not_found: "当前账号的 AI 连接记录不可用，系统会自动尝试使用最新可用配置。",
     model_secret_ref_not_ready: "当前账号的 AI 连接还在准备中。",
     model_secret_resolve_blocked: "系统暂时无法核对当前账号的 AI 连接状态。",
+    model_secret_storage_failed: "安全保存没有完成，本次连接不会被算作已配置。",
+    tencent_ssm_write_failed: "安全保存失败，本次连接没有保存成功。",
+    tencent_ssm_resolve_failed: "已保存的连接信息暂时无法读取。",
+    model_authentication_failed: "AI 服务商没有接受当前连接信息；请确认连接信息仍然有效。",
+    model_quota_or_billing_blocked: "AI 服务商账号的额度、余额或计费状态需要处理。",
+    model_name_not_available: "AI 服务商不接受当前模型名称，请从服务商可用模型中选择。",
+    model_provider_timeout: "AI 服务商连接超时，可以直接重新检测，不必再次粘贴。",
+    model_provider_verification_failed: "AI 服务商检测没有通过，可以稍后重新检测。",
+    empty_model_verification_response: "AI 服务商已连接，但没有返回可验证内容，请重新检测。",
+    unapproved_model_base_url: "连接地址不是当前服务商的官方接口，页面会自动恢复为官方地址。",
     unsupported_model_provider: "当前 AI 连接类型暂不支持。",
     model_provider_adapter_not_implemented: "当前 AI 连接暂未开放实时调用。",
     model_client_not_configured_or_live_disabled: "当前 AI 连接或实时调用状态不可用。",
@@ -20777,7 +20787,7 @@ function renderSaasAiCeoPendingStatusMarkup(turn = {}) {
   const stage = String(latest.pending_stage || "received");
   const title = delayed ? "正在继续整理完整回答" : stage === "sources" ? "正在搜索公开资料" : "正在思考";
   return `
-    <div class="saas-ai-ceo-pending-status is-compact" role="status" aria-live="polite" data-ai-ceo-pending-status="compact_wait_v1" data-pending-stage="${escapeHtml(stage)}">
+    <div class="saas-ai-ceo-pending-status is-compact" role="status" aria-live="polite" data-ai-ceo-pending-status="compact_wait_v1" data-merchant-pending-contract="merchant_clear_pending_v4" data-pending-stage="${escapeHtml(stage)}">
       <i aria-hidden="true"><b></b><b></b><b></b></i>
       <strong>${escapeHtml(title)}</strong>
     </div>
@@ -23235,11 +23245,16 @@ function saasActiveModelSecretRef() {
   return refs[0] || null;
 }
 
+function saasModelSecretRefReady(item) {
+  const status = String(item?.status || "").trim().toLowerCase();
+  return ["ready", "stored", "active", "managed_vault_stored", "local_development_secret_stored"].includes(status);
+}
+
 function isSaasMerchantModelConfigured() {
   const gateModel = state.saasModelValueGate?.merchant_byok_model || {};
   return Boolean(
     state.saasModelSettings?.configured ||
-      saasActiveModelSecretRef()?.secret_ref ||
+      saasModelSecretRefReady(saasActiveModelSecretRef()) ||
       gateModel.configured === true ||
       Number(gateModel.ready_secret_ref_count || 0) > 0,
   );
@@ -23420,6 +23435,75 @@ function saasPrimaryTextAiState() {
   };
 }
 
+function saasModelConnectionAttemptState() {
+  const settings = state.saasModelSettings && typeof state.saasModelSettings === "object" ? state.saasModelSettings : {};
+  const latest = settings.latest_attempt && typeof settings.latest_attempt === "object"
+    ? settings.latest_attempt
+    : Array.isArray(settings.secret_refs)
+      ? settings.secret_refs[0] || null
+      : null;
+  const connectionState = String(settings.connection_state || (settings.configured ? "ready" : latest ? "save_failed" : "not_configured"));
+  const blockedBy = Array.isArray(latest?.blocked_by) ? latest.blocked_by : [];
+  const verificationError = String(latest?.verification_error_code || "").trim();
+  const reason = saasModelBlockedReasonText(verificationError || blockedBy[0] || "");
+  if (connectionState === "ready" || connectionState === "ready_with_failed_update") {
+    return {
+      tone: "green",
+      state: connectionState,
+      title: "AI 连接可用",
+      detail: connectionState === "ready_with_failed_update"
+        ? "当前可用连接仍在工作；最近一次更换没有生效，可以检查后再重试。"
+        : "连接信息已安全保存并通过服务商检测，已设为当前账号默认 AI。",
+      storageReady: true,
+      verified: true,
+      accountDefault: true,
+      canRetry: false,
+      requiresReentry: false,
+      latest,
+    };
+  }
+  if (connectionState === "saved_needs_verification") {
+    return {
+      tone: "amber",
+      state: connectionState,
+      title: "已安全保存，等待检测",
+      detail: reason || "连接信息已经进入后端安全存储，但服务商检测尚未通过；可以直接重新检测，不必再次粘贴。",
+      storageReady: true,
+      verified: false,
+      accountDefault: false,
+      canRetry: true,
+      requiresReentry: false,
+      latest,
+    };
+  }
+  if (connectionState === "save_failed") {
+    return {
+      tone: "red",
+      state: connectionState,
+      title: "这次没有保存成功",
+      detail: reason || "后端安全存储没有完成写入，本次不会被算作已配置。修复后需要重新粘贴一次。",
+      storageReady: false,
+      verified: false,
+      accountDefault: false,
+      canRetry: false,
+      requiresReentry: true,
+      latest,
+    };
+  }
+  return {
+    tone: "amber",
+    state: "not_configured",
+    title: "还没有账号 AI 连接",
+    detail: "填写服务商、模型和连接信息后，捷境会依次完成安全保存、服务商检测和账号默认设置。",
+    storageReady: false,
+    verified: false,
+    accountDefault: false,
+    canRetry: false,
+    requiresReentry: true,
+    latest: null,
+  };
+}
+
 function isSaasRealPlatformWritesEnabled() {
   return state.saasEbayWriteAdapter?.real_platform_writes_enabled === true;
 }
@@ -23453,6 +23537,7 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
   const textAiState = saasPrimaryTextAiState();
   const platformTrial = saasPlatformTrialModelState();
   const searchState = saasPublicSearchState();
+  const connectionAttempt = saasModelConnectionAttemptState();
   const activeProviderLabel = active?.provider_label || selectedProvider.label || activeProvider;
   const activeModelLabel = active?.model || state.saasModelSettings?.model || selectedProvider.default_model || "等待选择模型";
   const activeScope = active?.scope || state.saasModelSettings?.active_scope || "";
@@ -23512,11 +23597,28 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
           <small>生成草稿和确认清单，不自动发布。</small>
         </article>
       </div>
+      <div class="saas-model-connection-progress is-${escapeHtml(connectionAttempt.tone)}" data-model-connection-state="${escapeHtml(connectionAttempt.state)}">
+        <div>
+          <span>当前账号 AI</span>
+          <strong>${escapeHtml(connectionAttempt.title)}</strong>
+          <p>${escapeHtml(connectionAttempt.detail)}</p>
+        </div>
+        <ol aria-label="AI 连接进度">
+          <li class="${connectionAttempt.storageReady ? "is-done" : ""}"><span>1</span><strong>安全保存</strong></li>
+          <li class="${connectionAttempt.verified ? "is-done" : ""}"><span>2</span><strong>服务商检测</strong></li>
+          <li class="${connectionAttempt.accountDefault ? "is-done" : ""}"><span>3</span><strong>账号默认</strong></li>
+        </ol>
+        ${
+          connectionAttempt.canRetry
+            ? `<button class="secondary-action" type="button" data-saas-action="verify-model-connection" ${state.saasLoading || !ctx.store ? "disabled" : ""}>重新检测连接</button>`
+            : ""
+        }
+      </div>
       <div class="runtime-bridge-actions saas-model-live-actions">
         <button class="primary-action" type="button" data-saas-action="run-model-value-rehearsal" ${state.saasLoading || !ctx.hasPacket || !modelConfigured ? "disabled" : ""}>生成报告和上架资料</button>
         <button class="secondary-action" type="button" data-saas-action="refresh-merchant-memory" ${state.saasLoading || !ctx.store ? "disabled" : ""}>回填商家记忆</button>
       </div>
-      <details class="saas-model-config-details" ${modelConfigured ? "" : "open"}>
+      <details class="saas-model-config-details" ${modelConfigured && connectionAttempt.state === "ready" ? "" : "open"}>
         <summary>
           <span>${modelConfigured ? "需要调整 AI 连接时打开" : "保存后会自动收起"}</span>
           <strong>${modelConfigured ? "调整 AI 连接" : "保存 AI 连接"}</strong>
@@ -23539,24 +23641,39 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
         <div class="saas-sync-failure-box">
           <strong>AI 连接设置</strong>
           <p>保存到当前捷境账号。这个账号管理多个店铺时，不需要给每个店铺重复保存一次。</p>
-          <div class="runtime-bridge-actions">
-            <select id="saas-model-provider" aria-label="模型服务">
-              ${providers
-                .map(
-                  (provider) => `
-                    <option value="${escapeHtml(provider.provider_key)}" ${provider.provider_key === activeProvider ? "selected" : ""}>
-                      ${escapeHtml(provider.label)}${provider.supported_live_adapter ? "" : " / 即将开放"}
-                    </option>
-                  `,
-                )
-                .join("")}
-            </select>
-            <input id="saas-model-model" type="text" value="${escapeHtml(active?.model || selectedProvider.default_model || "")}" placeholder="模型名称" autocomplete="off">
-            <input id="saas-model-base-url" type="text" value="${escapeHtml(active?.base_url || selectedProvider.default_base_url || "")}" placeholder="连接地址（可选）" autocomplete="off">
-            <input id="saas-model-api-key" type="password" value="" placeholder="粘贴 AI 连接信息，保存后清空" autocomplete="off">
+          <div class="saas-model-config-grid">
+            <label>
+              <span>AI 服务商</span>
+              <select id="saas-model-provider" aria-label="AI 服务商">
+                ${providers
+                  .map(
+                    (provider) => `
+                      <option value="${escapeHtml(provider.provider_key)}" ${provider.provider_key === activeProvider ? "selected" : ""} ${provider.supported_live_adapter ? "" : "disabled"}>
+                        ${escapeHtml(provider.label)}${provider.supported_live_adapter ? "" : " / 即将开放"}
+                      </option>
+                    `,
+                  )
+                  .join("")}
+              </select>
+            </label>
+            <label>
+              <span>模型名称</span>
+              <input id="saas-model-model" type="text" value="${escapeHtml(active?.model || selectedProvider.default_model || "")}" placeholder="例如 deepseek-v4-pro" autocomplete="off">
+              <small>默认值已经填好；只有服务商控制台显示其他模型时才修改。</small>
+            </label>
+            <label>
+              <span>官方连接地址</span>
+              <input id="saas-model-base-url" type="text" value="${escapeHtml(active?.base_url || selectedProvider.default_base_url || "")}" placeholder="自动使用官方地址" autocomplete="off" readonly>
+              <small>选择服务商后自动填写，通常不需要改。</small>
+            </label>
+            <label>
+              <span>服务商连接信息</span>
+              <input id="saas-model-api-key" type="password" value="" placeholder="粘贴服务商提供的 API Key" autocomplete="off" spellcheck="false">
+              <small>只发送到捷境安全存储；保存后输入框立即清空。</small>
+            </label>
           </div>
           <div class="runtime-bridge-actions">
-            <button class="primary-action" type="button" data-saas-action="save-model-api-key" ${state.saasLoading || !ctx.store ? "disabled" : ""}>保存 AI 连接</button>
+            <button class="primary-action" type="button" data-saas-action="save-model-api-key" ${state.saasLoading || !ctx.store ? "disabled" : ""}>保存并检测 AI 连接</button>
           </div>
         </div>
       </details>
@@ -25863,12 +25980,60 @@ async function saveSaasModelApiKeyFromWorkbench() {
     });
     if (keyInput) keyInput.value = "";
     state.saasModelSettings = payload.model_settings || state.saasModelSettings;
-    showActionToast("AI 连接已安全保存到当前账号；页面不会保存或显示原始凭证。");
+    showActionToast("AI 连接已安全保存、通过服务商检测，并设为当前账号默认 AI。");
     await refreshSaasState({ silent: true });
     return true;
   } catch (error) {
-    state.saasError = `AI 连接保存失败：${error.message || String(error)}`;
-    showActionToast("AI 连接保存失败：系统会显示精确原因，不需要先重复配置。");
+    const payload = error?.payload && typeof error.payload === "object" ? error.payload : {};
+    const connection = payload.model_connection && typeof payload.model_connection === "object" ? payload.model_connection : {};
+    state.saasModelSettings = payload.model_settings || state.saasModelSettings;
+    if (connection.requires_api_key_reentry === false && keyInput) keyInput.value = "";
+    const requiresReentry = connection.requires_api_key_reentry === true;
+    state.saasError = requiresReentry
+      ? "这次连接信息没有写入安全存储；当前账号仍未配置成功。"
+      : "连接信息已安全保存，但服务商检测没有通过。";
+    showActionToast(
+      requiresReentry
+        ? "这次没有保存成功；修复后需要重新粘贴一次，页面不会假装已配置。"
+        : "连接已安全保存，但检测未通过；可以直接点“重新检测连接”，不必再次粘贴。",
+    );
+    await refreshSaasState({ silent: true });
+    return false;
+  } finally {
+    state.saasLoading = false;
+    renderSaasBackendPanel();
+  }
+}
+
+async function verifySaasModelConnectionFromWorkbench() {
+  const store = activeSaasStore();
+  const latest = state.saasModelSettings?.latest_attempt || saasActiveModelSecretRef();
+  if (!store) {
+    showActionToast("请先选择当前店铺。AI 连接仍然跟随登录账号，不会绑定到单个店铺。");
+    return false;
+  }
+  if (!latest?.secret_ref) {
+    showActionToast("当前账号还没有可检测的 AI 连接，请先保存一次。");
+    return false;
+  }
+  state.saasLoading = true;
+  renderSaasBackendPanel();
+  try {
+    const payload = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/model/verify`, {
+      method: "POST",
+      body: JSON.stringify({ model_secret_ref: latest.secret_ref }),
+    });
+    state.saasModelSettings = payload.model_settings || state.saasModelSettings;
+    showActionToast("AI 连接检测通过，已设为当前账号默认 AI。");
+    await refreshSaasState({ silent: true });
+    return true;
+  } catch (error) {
+    const payload = error?.payload && typeof error.payload === "object" ? error.payload : {};
+    state.saasModelSettings = payload.model_settings || state.saasModelSettings;
+    const reason = saasModelBlockedReasonText(payload.verification_error_code || payload.blocked_by?.[0] || "");
+    state.saasError = reason || "AI 连接检测没有通过。";
+    showActionToast(payload.requires_api_key_reentry ? "这次没有保存成功，需要重新粘贴一次。" : `检测未通过：${reason || "请稍后再试"}`);
+    await refreshSaasState({ silent: true });
     return false;
   } finally {
     state.saasLoading = false;
@@ -27064,6 +27229,7 @@ function handleSaasAction(button) {
     "plan-ebay-publish-oauth",
     "sync-ebay-readonly",
     "save-model-api-key",
+    "verify-model-connection",
     "run-model-value-rehearsal",
     "refresh-merchant-memory",
     "download-account-snapshot",
@@ -27135,6 +27301,10 @@ function handleSaasAction(button) {
   }
   if (action === "save-model-api-key") {
     saveSaasModelApiKeyFromWorkbench();
+    return;
+  }
+  if (action === "verify-model-connection") {
+    verifySaasModelConnectionFromWorkbench();
     return;
   }
   if (action === "run-model-value-rehearsal") {
@@ -39865,6 +40035,13 @@ function bindEvents() {
   });
 
   document.addEventListener("input", (event) => {
+    if (event.target?.id === "saas-model-provider") {
+      const provider = saasModelProviderByKey(event.target.value || "");
+      const modelInput = document.querySelector("#saas-model-model");
+      const baseUrlInput = document.querySelector("#saas-model-base-url");
+      if (modelInput && provider?.default_model) modelInput.value = provider.default_model;
+      if (baseUrlInput && provider?.default_base_url) baseUrlInput.value = provider.default_base_url;
+    }
     if (event.target?.id === "workflowFeedbackText") {
       state.saasWorkflowFeedbackDraft = sanitizeSaasWorkflowFeedbackText(event.target.value || "", 420);
     }

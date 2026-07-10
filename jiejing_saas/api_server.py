@@ -3001,6 +3001,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             model = str(body.get("model") or definition.default_model).strip() or definition.default_model
             raw_base_url = str(body.get("base_url") or "").strip().rstrip("/")
             base_url = normalize_model_api_base_url(provider_key=definition.provider_key, base_url=raw_base_url)
+            if self.settings.is_production_like:
+                expected_host = urlparse(definition.default_base_url).hostname or ""
+                selected_host = urlparse(base_url).hostname or ""
+                if selected_host.lower() != expected_host.lower():
+                    self._send_json(
+                        {
+                            "error": "当前 AI 服务商只能使用捷境已核验的官方连接地址。",
+                            "blocked_by": ["unapproved_model_base_url"],
+                            "official_base_url": definition.default_base_url,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
             requested_scope = str(
                 body.get("model_scope")
                 or body.get("connection_scope")
@@ -3055,8 +3069,25 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 metadata=metadata,
             )
             stored_status = str(stored.get("status") or "")
-            ready = stored_status in READY_MODEL_SECRET_STATUSES
-            final_status = "ready" if ready else stored_status or "store_blocked"
+            storage_ready = stored_status in READY_MODEL_SECRET_STATUSES
+            verification = (
+                self._verify_model_connection_from_secret_value(
+                    provider_key=definition.provider_key,
+                    api_key=api_key,
+                    model=model,
+                    base_url=base_url,
+                )
+                if storage_ready
+                else {
+                    "status": "not_run",
+                    "verified": False,
+                    "error_code": "model_secret_storage_failed",
+                    "blocked_by": stored.get("blocked_by") or ["model_secret_storage_failed"],
+                    "secret_exposed": False,
+                }
+            )
+            verified = verification.get("verified") is True
+            final_status = "ready" if verified else "stored_unverified" if storage_ready else stored_status or "store_blocked"
             secret_ref = self.repository.update_secret_reference_status(
                 company_id=identity["company_id"],
                 store_id=secret_store_id,
@@ -3067,33 +3098,64 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "storage_adapter": stored.get("storage_adapter"),
                     "storage_status": stored_status,
                     "blocked_by": stored.get("blocked_by") or [],
+                    "verification_status": "verified" if verified else "failed" if storage_ready else "not_run",
+                    "verification_error_code": verification.get("error_code") or "",
+                    "verification_blocked_by": verification.get("blocked_by") or [],
+                    "verified_at": verification.get("verified_at") or "",
                     "managed_vault_write_performed": bool(stored.get("managed_vault_write_performed")),
                     "local_development_write_performed": bool(stored.get("local_development_write_performed")),
                     "secret_value_returned": False,
                     "secret_exposed": False,
                 },
             )
-            self._send_json(
-                {
-                    "model_secret_ref": secret_ref,
-                    "model_settings": public_model_settings_from_secret_refs(
-                        self._model_settings_secret_refs_for_store(identity=identity, store_id=store_id)
-                    ),
-                    "model_connection_scope": model_connection_scope,
-                    "provider": definition.public_dict(),
-                    "storage": {
-                        key: value
-                        for key, value in stored.items()
-                        if key not in {"secret_value"}
-                    },
-                    "frontend_gets_model_api_key": False,
-                    "runtime_gets_model_api_key": False,
-                    "reports_get_model_api_key": False,
-                    "real_platform_writes_enabled": False,
+            response = {
+                "model_secret_ref": secret_ref,
+                "model_settings": public_model_settings_from_secret_refs(
+                    self._model_settings_secret_refs_for_store(identity=identity, store_id=store_id)
+                ),
+                "model_connection": {
+                    "status": "ready" if verified else "verification_failed" if storage_ready else "storage_failed",
+                    "verified": verified,
+                    "requires_api_key_reentry": not storage_ready,
+                    "can_retry_verification": storage_ready and not verified,
+                    "blocked_by": verification.get("blocked_by") or stored.get("blocked_by") or [],
+                    "verification_error_code": verification.get("error_code") or "",
                     "secret_exposed": False,
                 },
-                status=HTTPStatus.CREATED if ready else HTTPStatus.ACCEPTED,
-            )
+                "model_connection_scope": model_connection_scope,
+                "provider": definition.public_dict(),
+                "storage": {
+                    key: value
+                    for key, value in stored.items()
+                    if key not in {"secret_value"}
+                },
+                "frontend_gets_model_api_key": False,
+                "runtime_gets_model_api_key": False,
+                "reports_get_model_api_key": False,
+                "real_platform_writes_enabled": False,
+                "secret_exposed": False,
+            }
+            if not storage_ready:
+                response["error"] = "AI 连接没有保存成功，后端安全存储暂时不可用。"
+                self._send_json(response, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            elif not verified:
+                response["error"] = "AI 连接已安全保存，但服务商验证没有通过。"
+                self._send_json(response, status=HTTPStatus.UNPROCESSABLE_ENTITY)
+            else:
+                self._send_json(response, status=HTTPStatus.CREATED)
+            return
+
+        if len(parts) == 4 and parts[0] == "stores" and parts[2] == "model" and parts[3] == "verify":
+            if not self._require_permission(identity, "manage_connections"):
+                return
+            body = self._read_json_body()
+            store_id = parts[1]
+            store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
+            if not store:
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            result = self._verify_saved_model_connection(identity=identity, store_id=store_id, body=body)
+            self._send_json(result, status=HTTPStatus.OK if result.get("verified") else HTTPStatus.UNPROCESSABLE_ENTITY)
             return
 
         if len(parts) == 4 and parts[0] == "stores" and parts[2] == "merchant-memory" and parts[3] == "refresh":
@@ -4766,6 +4828,180 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             "reports_get_model_api_key": False,
             "secret_exposed": False,
         }
+
+    def _verify_saved_model_connection(
+        self,
+        *,
+        identity: dict[str, Any],
+        store_id: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        refs = self._model_settings_secret_refs_for_store(identity=identity, store_id=store_id)
+        requested_secret_ref = str(body.get("model_secret_ref") or "").strip()
+        selected = (
+            next((item for item in refs if str(item.get("secret_ref") or "") == requested_secret_ref), None)
+            if requested_secret_ref
+            else next(
+                (
+                    item
+                    for item in refs
+                    if str(item.get("status") or "") in READY_MODEL_SECRET_STATUSES | {"stored_unverified"}
+                ),
+                refs[0] if refs else None,
+            )
+        )
+        if not selected:
+            return {
+                "error": "当前账号还没有可检测的 AI 连接。",
+                "verified": False,
+                "requires_api_key_reentry": True,
+                "can_retry_verification": False,
+                "blocked_by": ["current_account_model_connection_missing"],
+                "model_settings": public_model_settings_from_secret_refs(refs),
+                "secret_exposed": False,
+            }
+        selected_status = str(selected.get("status") or "")
+        storage_ready = selected_status in READY_MODEL_SECRET_STATUSES or selected_status == "stored_unverified"
+        if not storage_ready:
+            return {
+                "error": "这次 AI 连接没有写入安全存储，需要重新粘贴一次连接信息。",
+                "verified": False,
+                "requires_api_key_reentry": True,
+                "can_retry_verification": False,
+                "blocked_by": ["model_secret_storage_failed"],
+                "model_settings": public_model_settings_from_secret_refs(refs),
+                "secret_exposed": False,
+            }
+        metadata = selected.get("metadata") if isinstance(selected.get("metadata"), dict) else {}
+        provider_key = str(metadata.get("provider_key") or selected.get("provider") or "")
+        definition = get_model_provider(provider_key)
+        if not definition:
+            return {
+                "error": "当前 AI 服务商暂不支持检测。",
+                "verified": False,
+                "requires_api_key_reentry": False,
+                "can_retry_verification": False,
+                "blocked_by": ["unsupported_model_provider"],
+                "model_settings": public_model_settings_from_secret_refs(refs),
+                "secret_exposed": False,
+            }
+        resolver = VaultSecretResolver(self.settings)
+        resolved = resolver.resolve_secret(
+            secret_ref=selected,
+            requested_by="model_provider_client",
+            task_scope="model_connection_verification",
+            allowed_purposes=[MODEL_SECRET_PURPOSE],
+        )
+        if not resolved.get("ok"):
+            return {
+                "error": "已保存的 AI 连接暂时无法从安全存储读取。",
+                "verified": False,
+                "requires_api_key_reentry": False,
+                "can_retry_verification": True,
+                "blocked_by": resolved.get("blocked_by") or ["model_secret_resolve_blocked"],
+                "model_settings": public_model_settings_from_secret_refs(refs),
+                "secret_exposed": False,
+            }
+        verification = self._verify_model_connection_from_secret_value(
+            provider_key=definition.provider_key,
+            api_key=str(resolved.get("secret_value") or ""),
+            model=str(metadata.get("model") or definition.default_model),
+            base_url=str(metadata.get("base_url") or definition.default_base_url),
+        )
+        verified = verification.get("verified") is True
+        updated = self.repository.update_secret_reference_status(
+            company_id=identity["company_id"],
+            store_id=selected.get("store_id"),
+            secret_ref=str(selected.get("secret_ref") or ""),
+            status="ready" if verified else "stored_unverified",
+            user_id=identity["user_id"],
+            metadata_patch={
+                "verification_status": "verified" if verified else "failed",
+                "verification_error_code": verification.get("error_code") or "",
+                "verification_blocked_by": verification.get("blocked_by") or [],
+                "verified_at": verification.get("verified_at") or "",
+                "secret_exposed": False,
+            },
+        )
+        settings = public_model_settings_from_secret_refs(
+            self._model_settings_secret_refs_for_store(identity=identity, store_id=store_id)
+        )
+        return {
+            "error": "" if verified else "AI 连接已经保存，但服务商检测仍未通过。",
+            "verified": verified,
+            "requires_api_key_reentry": False,
+            "can_retry_verification": not verified,
+            "blocked_by": verification.get("blocked_by") or [],
+            "verification_error_code": verification.get("error_code") or "",
+            "model_secret_ref": updated,
+            "model_settings": settings,
+            "frontend_gets_model_api_key": False,
+            "runtime_gets_model_api_key": False,
+            "reports_get_model_api_key": False,
+            "secret_exposed": False,
+        }
+
+    @staticmethod
+    def _verify_model_connection_from_secret_value(
+        *,
+        provider_key: str,
+        api_key: str,
+        model: str,
+        base_url: str,
+    ) -> dict[str, Any]:
+        try:
+            client = build_model_client_from_byok_secret(
+                provider_key=provider_key,
+                api_key=api_key,
+                model=model,
+                base_url=base_url,
+                timeout_seconds=20,
+            )
+            result = client.generate_text(
+                system_prompt="You are performing a private connection check. Reply with OK only.",
+                user_prompt="Jiejing model connection check.",
+                temperature=0.0,
+                max_output_tokens=16,
+                timeout_seconds=20,
+            )
+            if not str(result.get("text") or "").strip():
+                return {
+                    "status": "failed",
+                    "verified": False,
+                    "error_code": "empty_model_verification_response",
+                    "blocked_by": ["empty_model_verification_response"],
+                    "secret_exposed": False,
+                }
+        except Exception as exc:  # pragma: no cover - provider dependent
+            error_code = SaaSBackendHandler._safe_model_verification_error_code(exc)
+            return {
+                "status": "failed",
+                "verified": False,
+                "error_code": error_code,
+                "blocked_by": [error_code],
+                "secret_exposed": False,
+            }
+        return {
+            "status": "verified",
+            "verified": True,
+            "error_code": "",
+            "blocked_by": [],
+            "verified_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "secret_exposed": False,
+        }
+
+    @staticmethod
+    def _safe_model_verification_error_code(exc: Exception) -> str:
+        text = f"{exc.__class__.__name__}: {exc}".lower()
+        if any(marker in text for marker in ("401", "unauthorized", "authentication", "invalid api key", "invalid_api_key")):
+            return "model_authentication_failed"
+        if any(marker in text for marker in ("quota", "billing", "insufficient", "balance", "payment", "credit")):
+            return "model_quota_or_billing_blocked"
+        if any(marker in text for marker in ("model_not_found", "model not found", "invalid model", "does not exist")):
+            return "model_name_not_available"
+        if any(marker in text for marker in ("timeout", "timed out", "etimedout", "econnreset")):
+            return "model_provider_timeout"
+        return "model_provider_verification_failed"
 
     def _read_json_body(self) -> dict[str, Any]:
         raw_length = self.headers.get("content-length", "0") or "0"

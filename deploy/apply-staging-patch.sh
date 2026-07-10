@@ -467,6 +467,13 @@ if [[ "${JIEJING_USE_COST_SAVER_OVERRIDE:-false}" == "true" && -f "$COST_SAVER_O
 fi
 
 docker compose "${COMPOSE_ARGS[@]}" build --no-cache jiejing-saas jiejing-worker
+docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps jiejing-vault
+if [[ -f "deploy/staging-vault-init-unseal.sh" ]]; then
+  JIEJING_COMPOSE_FILE="$COMPOSE_FILE" \
+  JIEJING_VAULT_PATCH_ENV=true \
+  JIEJING_VAULT_ENV_FILE="$APP_DIR/../private/jiejing-saas.staging-oauth.env" \
+    sh deploy/staging-vault-init-unseal.sh
+fi
 docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps jiejing-saas
 docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps jiejing-worker
 docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps --force-recreate jiejing-frontend

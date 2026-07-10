@@ -183,7 +183,19 @@ def public_model_settings_from_secret_refs(secret_refs: list[dict[str, Any]]) ->
     model_refs = [item for item in secret_refs if str(item.get("purpose") or "") == MODEL_SECRET_PURPOSE]
     active_refs = [item for item in model_refs if str(item.get("status") or "") in READY_MODEL_SECRET_STATUSES]
     latest = model_refs[0] if model_refs else None
-    active = active_refs[0] if active_refs else latest
+    active = active_refs[0] if active_refs else None
+    latest_public = _public_secret_ref(latest) if latest else None
+    latest_status = str((latest or {}).get("status") or "")
+    if active:
+        connection_state = "ready"
+        if latest and latest.get("secret_ref") != active.get("secret_ref"):
+            connection_state = "ready_with_failed_update"
+    elif latest_status == "stored_unverified":
+        connection_state = "saved_needs_verification"
+    elif latest:
+        connection_state = "save_failed"
+    else:
+        connection_state = "not_configured"
     scope_counts: dict[str, int] = {}
     for item in model_refs:
         scope = _public_model_ref_scope(item)
@@ -198,6 +210,10 @@ def public_model_settings_from_secret_refs(secret_refs: list[dict[str, Any]]) ->
         "active_scope": _public_model_ref_scope(active) if active else "",
         "scope_counts": scope_counts,
         "secret_refs": [_public_secret_ref(item) for item in model_refs],
+        "connection_state": connection_state,
+        "latest_attempt": latest_public,
+        "requires_api_key_reentry": bool(latest_public and latest_public.get("requires_api_key_reentry")),
+        "can_retry_verification": bool(latest_public and latest_public.get("can_retry_verification")),
         "merchant_pays_provider_directly": True,
         "merchant_model_follows_account": True,
         "store_context_optional": True,
@@ -312,6 +328,9 @@ def _public_secret_ref(secret_ref: dict[str, Any]) -> dict[str, Any]:
     provider_key = provider_key_from_secret_ref(secret_ref)
     definition = get_model_provider(provider_key)
     scope = _public_model_ref_scope(secret_ref)
+    status = str(secret_ref.get("status") or "")
+    blocked_by = metadata.get("blocked_by") if isinstance(metadata.get("blocked_by"), list) else []
+    storage_succeeded = status in READY_MODEL_SECRET_STATUSES or status == "stored_unverified"
     return {
         "secret_ref": secret_ref.get("secret_ref"),
         "store_id": secret_ref.get("store_id"),
@@ -329,6 +348,13 @@ def _public_secret_ref(secret_ref: dict[str, Any]) -> dict[str, Any]:
         "key_url": definition.key_url if definition else metadata.get("key_url"),
         "docs_url": definition.docs_url if definition else metadata.get("docs_url"),
         "supported_live_adapter": bool(definition and definition.supported_live_adapter),
+        "storage_status": metadata.get("storage_status") or status,
+        "verification_status": metadata.get("verification_status") or ("verified" if status == "ready" else "not_verified"),
+        "verified_at": metadata.get("verified_at") or "",
+        "verification_error_code": metadata.get("verification_error_code") or "",
+        "blocked_by": blocked_by,
+        "requires_api_key_reentry": not storage_succeeded,
+        "can_retry_verification": status == "stored_unverified",
         "merchant_pays_provider_directly": True,
         "secret_exposed": False,
     }

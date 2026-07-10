@@ -263,6 +263,19 @@ def main() -> int:
         )
         if merchant_key in json.dumps(saved_model, ensure_ascii=False):
             return fail("saved account BYOK response must not expose the merchant model key")
+        saved_connection = saved_model.get("model_connection", {})
+        saved_settings = saved_model.get("model_settings", {})
+        if saved_connection.get("status") != "ready" or saved_connection.get("verified") is not True:
+            return fail(f"saving BYOK should verify the provider before reporting success: {saved_connection}")
+        if saved_settings.get("connection_state") != "ready" or saved_settings.get("configured") is not True:
+            return fail(f"verified BYOK should become the account default: {saved_settings}")
+        verified_again = post_json(
+            f"{base_url}/stores/{store_id}/model/verify",
+            {"model_secret_ref": saved_model.get("model_secret_ref", {}).get("secret_ref")},
+            token=token,
+        )
+        if verified_again.get("verified") is not True or verified_again.get("model_settings", {}).get("configured") is not True:
+            return fail(f"saved BYOK should be re-verifiable without re-entering the key: {verified_again}")
         byok_response = post_json(
             f"{base_url}/stores/{store_id}/merchant-ceo/chat",
             {
