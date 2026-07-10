@@ -20,7 +20,21 @@ status_json() {
   vault_exec "vault status -format=json" 2>/dev/null || true
 }
 
-status="$(status_json)"
+wait_seconds="${JIEJING_VAULT_READY_WAIT_SECONDS:-30}"
+attempt=0
+status=""
+while [ "$attempt" -lt "$wait_seconds" ]; do
+  status="$(status_json)"
+  if [ -n "$status" ]; then
+    break
+  fi
+  attempt=$((attempt + 1))
+  sleep 1
+done
+if [ -z "$status" ]; then
+  echo "STAGING_VAULT_STATUS=blocked_not_ready" >&2
+  exit 2
+fi
 initialized="$(printf '%s' "$status" | python3 -c "import json,sys; data=sys.stdin.read().strip(); print(str(json.loads(data).get('initialized', False)).lower() if data else 'false')")"
 
 if [ "$initialized" = "false" ]; then

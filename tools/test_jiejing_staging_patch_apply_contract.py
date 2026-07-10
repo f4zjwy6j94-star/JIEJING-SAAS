@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "deploy" / "apply-staging-patch.sh"
 BUNDLE = ROOT / "tools" / "jiejing_prepare_public_staging_bundle.py"
+VAULT_INIT = ROOT / "deploy" / "staging-vault-init-unseal.sh"
 
 
 def fail(message: str) -> int:
@@ -19,6 +20,7 @@ def fail(message: str) -> int:
 def main() -> int:
     text = SCRIPT.read_text(encoding="utf-8") if SCRIPT.exists() else ""
     bundle = BUNDLE.read_text(encoding="utf-8") if BUNDLE.exists() else ""
+    vault_init = VAULT_INIT.read_text(encoding="utf-8") if VAULT_INIT.exists() else ""
     required = [
         "FILES=(",
         "AGENTS.md",
@@ -210,6 +212,13 @@ def main() -> int:
     present = [marker for marker in forbidden if marker in text]
     if present:
         return fail("patch apply script contains forbidden destructive marker: " + ",".join(present))
+    for marker in [
+        "JIEJING_VAULT_READY_WAIT_SECONDS",
+        'while [ "$attempt" -lt "$wait_seconds" ]',
+        "STAGING_VAULT_STATUS=blocked_not_ready",
+    ]:
+        if marker not in vault_init:
+            return fail(f"vault init must wait for the container readiness signal: {marker}")
     bundle_required = [
         "public_staging_patch_whitelist_v1",
         'APPLY_SCRIPT = ROOT / "deploy" / "apply-staging-patch.sh"',
