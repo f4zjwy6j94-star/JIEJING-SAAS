@@ -491,9 +491,27 @@ def main() -> None:
     ]:
         if internal_marker in account_panel_body:
             raise AssertionError(f"Account settings panel should use merchant-facing wording: {internal_marker}")
+    platform_panel_start = app_js.index("function renderSaasSettingsPlatformPanel")
+    platform_panel_end = app_js.index("function renderSaasSettingsDataPanel", platform_panel_start)
+    platform_panel_body = app_js[platform_panel_start:platform_panel_end]
+    require(platform_panel_body, "当前只管理 eBay", "account settings stay eBay-first")
+    for unopened_platform in ["Amazon", "TikTok Shop", "Temu / Shopify"]:
+        if unopened_platform in platform_panel_body:
+            raise AssertionError(f"Account settings should not advertise an unopened platform: {unopened_platform}")
+    model_panel_start = app_js.index("function renderSaasMerchantModelProviderPanel")
+    model_panel_end = app_js.index("function renderSaasMerchantMemoryPanel", model_panel_start)
+    model_panel_body = app_js[model_panel_start:model_panel_end]
+    require(model_panel_body, "支持连接", "AI provider catalogue distinguishes support from active connection")
     permission_panel_start = app_js.index("function renderSaasMerchantPermissionPanel")
     permission_panel_end = app_js.index("function renderSaasMerchantProviderHubPanel", permission_panel_start)
     permission_panel_body = app_js[permission_panel_start:permission_panel_end]
+    for required_marker in [
+        "saas-permission-current-role",
+        "saas-permission-role-details",
+        "查看其他岗位权限",
+        "添加团队成员或调整分工时再查看完整岗位说明",
+    ]:
+        require(permission_panel_body, required_marker, "Permission settings default to the current merchant role")
     for internal_marker in [
         "借鉴 Shopify",
         "把 Shopify 加进捷境",
@@ -543,10 +561,16 @@ def main() -> None:
     owner_tab_start = settings_def_body.index('id: "owner_ops"', billing_tab_start)
     billing_tab_body = settings_def_body[billing_tab_start:owner_tab_start]
     owner_ops_body = settings_def_body[owner_tab_start:]
+    for required_marker in [
+        'title: "计费与安全说明"',
+        'badge: "按需查看"',
+    ]:
+        require(billing_tab_body, required_marker, "merchant billing keeps secondary explanations collapsed")
     for forbidden_marker in [
         "renderSaasBillingTransitionPathPanel(ctx)",
         "renderSaasManualBetaPaymentOrderPanel()",
         "renderSaasMainlandPaymentStrategyPanel()",
+        "renderSaasMerchantFormalPaymentOpeningChecklistPanel(ctx)",
     ]:
         if forbidden_marker in billing_tab_body:
             raise AssertionError(f"Ordinary merchant billing tab must not render internal payment operation panel: {forbidden_marker}")
@@ -556,6 +580,7 @@ def main() -> None:
         "renderSaasBillingProviderRehearsalPanel(ctx)",
         "renderSaasBillingPaidLaunchBlockersPanel(ctx)",
         "renderSaasMerchantBillingIncidentRunbookPanel(ctx)",
+        "renderSaasMerchantFormalPaymentOpeningChecklistPanel(ctx)",
     ]:
         require(owner_ops_body, required_marker, "internal owner ops keeps launch and billing operation controls")
     for forbidden_marker in [
@@ -732,9 +757,6 @@ def main() -> None:
         "AI 模型和素材生成单独看",
         "merchant_billing_plain_summary_v1",
         "subscription_metering_clarity_v2",
-        "月费只买工作台",
-        "用量只管高成本 AI 与素材",
-        "平台费用不由捷境收取",
         "billing_now_no_real_charge",
         "base_subscription_is_feature_fee=true",
         "ai_media_usage_is_separate=true",

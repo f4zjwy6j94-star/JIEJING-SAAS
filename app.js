@@ -15617,9 +15617,6 @@ function hydrateSaasProtectedStateFromCache() {
   if (!isSaasPublicMvpMode() || state.saasProtectedStateReady || hasSaasProtectedBackendState()) return false;
   if (!hasSaasProtectedSessionCandidate()) return false;
   try {
-    const existingCeoCommand = normalizeSaasCeoCommand(state.saasLastCeoCommand);
-    const existingCeoThread = Array.isArray(state.saasAiCeoThread) ? state.saasAiCeoThread.filter(shouldKeepSaasAiCeoThreadTurn) : [];
-    const existingLatestTurn = normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn);
     const snapshot = readSaasProtectedStateSnapshotFromStorage();
     if (!snapshot || snapshot.version !== "2026-07-10-minimal-fast-restore-v2") return false;
     if (!saasAccountStorageAliases().includes(String(snapshot.account_key || "").toLowerCase())) return false;
@@ -15640,9 +15637,9 @@ function hydrateSaasProtectedStateFromCache() {
     state.saasModelValueGate = snapshot.model_value_gate || state.saasModelValueGate || null;
     state.saasModelSettings = snapshot.model_settings || state.saasModelSettings || null;
     state.saasAccountHealth = snapshot.account_health || state.saasAccountHealth || null;
-    state.saasLastCeoCommand = existingCeoCommand || null;
-    state.saasAiCeoThread = existingCeoThread.length ? existingCeoThread : [];
-    state.saasAiCeoLatestTurn = existingLatestTurn || state.saasAiCeoThread[state.saasAiCeoThread.length - 1] || null;
+    state.saasLastCeoCommand = null;
+    state.saasAiCeoThread = [];
+    state.saasAiCeoLatestTurn = null;
     state.saasConnected = Boolean(snapshot.connected || state.saasToken || hasSaasPersistentSessionHint());
     state.saasProtectedStateReady = true;
     state.saasProtectedStateFromCache = true;
@@ -22897,6 +22894,22 @@ function renderSaasSourceRecordCollectorPanel(ctx = saasMerchantWorkbenchContext
 function renderSaasMerchantPermissionPanel() {
   const roles = saasMerchantRoleRows();
   const currentRole = state.saasTeamMember?.role || "owner";
+  const currentRoleRow = roles.find((role) => role.role === currentRole) || roles[0] || { role: currentRole, label: currentRole, permissions: [] };
+  const otherRoles = roles.filter((role) => role.role !== currentRole);
+  const renderRoleCard = (role, { current = false } = {}) => {
+    const permissions = Array.isArray(role.permissions) ? role.permissions : [];
+    const canApprove = permissions.includes("approve_high_risk");
+    return `
+      <article class="${current ? "is-current" : ""} ${canApprove ? "can-approve" : ""}">
+        <div>
+          <span>${escapeHtml(role.label || role.role)}</span>
+          <strong>${canApprove ? "可批准高风险" : "不能批准高风险"}</strong>
+        </div>
+        <p>${escapeHtml(saasRoleBusinessNote(role.role))}</p>
+        <small>${permissions.map(saasPermissionLabel).map(escapeHtml).join(" / ") || "只读或待配置"}</small>
+      </article>
+    `;
+  };
   return `
     <section class="saas-merchant-evidence-panel saas-permission-panel" aria-label="团队岗位权限">
       <div class="saas-merchant-path-head">
@@ -22905,28 +22918,23 @@ function renderSaasMerchantPermissionPanel() {
           <strong>用岗位权限替代所有人共用老板账号</strong>
           <p>权限围绕捷境确认中心设计。发布、退款、广告预算、采购付款和敏感承诺只能由有权限的人确认。</p>
         </div>
-        <em>当前角色：${escapeHtml(currentRole)}</em>
+        <em>当前角色：${escapeHtml(currentRoleRow.label || currentRole)}</em>
       </div>
-      <div class="saas-permission-matrix">
-        ${roles
-          .map(
-            (role) => {
-              const permissions = Array.isArray(role.permissions) ? role.permissions : [];
-              const canApprove = permissions.includes("approve_high_risk");
-              return `
-                <article class="${role.role === currentRole ? "is-current" : ""} ${canApprove ? "can-approve" : ""}">
-                  <div>
-                    <span>${escapeHtml(role.label || role.role)}</span>
-                    <strong>${canApprove ? "可批准高风险" : "不能批准高风险"}</strong>
-                  </div>
-                  <p>${escapeHtml(saasRoleBusinessNote(role.role))}</p>
-                  <small>${permissions.map(saasPermissionLabel).map(escapeHtml).join(" / ") || "只读或待配置"}</small>
-                </article>
-              `;
-            },
-          )
-          .join("")}
+      <div class="saas-permission-matrix saas-permission-current-role">
+        ${renderRoleCard(currentRoleRow, { current: true })}
       </div>
+      <details class="saas-permission-role-details">
+        <summary>
+          <span>
+            <strong>查看其他岗位权限</strong>
+            <small>添加团队成员或调整分工时再查看完整岗位说明。</small>
+          </span>
+          <em>${otherRoles.length} 个岗位</em>
+        </summary>
+        <div class="saas-permission-matrix">
+          ${otherRoles.map((role) => renderRoleCard(role)).join("")}
+        </div>
+      </details>
       <p class="saas-merchant-path-note">这里不是让团队直接操作平台后台，而是把关键经营动作先停到捷境确认中心，再按岗位权限放行。</p>
     </section>
   `;
@@ -23505,7 +23513,7 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
               (provider) => `
                 <article class="${provider.supported_live_adapter ? "is-green" : "is-amber"}">
                   <span>${escapeHtml(provider.label)}</span>
-                  <strong>${provider.supported_live_adapter ? "可用" : "即将开放"}</strong>
+                  <strong>${provider.supported_live_adapter ? "支持连接" : "即将开放"}</strong>
                   <small>${escapeHtml(provider.default_model || "")}</small>
                   <button class="secondary-action" type="button" data-saas-action="open-model-provider-key" data-provider-url="${escapeHtml(provider.key_url || "")}">打开服务商页面</button>
                 </article>
@@ -24609,6 +24617,7 @@ function saasCanViewPlatformInternalFromPermissions(payload) {
 async function refreshSaasState(options = {}) {
   const { silent = false, refreshLaunchGate = true } = options;
   const canFetchProtectedState = hasSaasProtectedSessionCandidate();
+  const activeAccountAliasesBeforeRefresh = new Set(saasAccountStorageAliases());
   const restoredCachedState = canFetchProtectedState && hydrateSaasProtectedStateFromCache();
   state.saasLoading = true;
   if (canFetchProtectedState && !restoredCachedState && !hasSaasProtectedBackendState()) {
@@ -24674,6 +24683,10 @@ async function refreshSaasState(options = {}) {
     state.saasIdentity = coreMe.identity || null;
     state.saasUser = coreMe.user || null;
     state.saasCompany = coreMe.company || null;
+    const confirmedAccountAliases = [state.saasUser?.user_id, state.saasIdentity?.user_id, state.saasUser?.email]
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean);
+    const shouldPreserveActiveCeoState = confirmedAccountAliases.some((alias) => activeAccountAliasesBeforeRefresh.has(alias));
     state.saasTeamMember = corePermissions.team_member || coreMe.team_member || null;
     state.saasPermissions = corePermissions.permissions || [];
     state.saasRoles = corePermissions.roles || [];
@@ -24686,23 +24699,26 @@ async function refreshSaasState(options = {}) {
     state.saasExecutionResults = coreExecutions.execution_results || [];
     state.saasProtectedStateFromCache = false;
     state.saasProtectedStateCachedAt = "";
-    const activeCeoCommandAtCoreApply = normalizeSaasCeoCommand(state.saasLastCeoCommand);
-    const activeCeoThreadAtCoreApply = Array.isArray(state.saasAiCeoThread)
+    const activeCeoCommandAtCoreApply = shouldPreserveActiveCeoState ? normalizeSaasCeoCommand(state.saasLastCeoCommand) : null;
+    const activeCeoThreadAtCoreApply = shouldPreserveActiveCeoState && Array.isArray(state.saasAiCeoThread)
       ? state.saasAiCeoThread.map(normalizeSaasAiCeoLatestTurn).filter(shouldKeepSaasAiCeoThreadTurn)
       : [];
-    const activeLatestTurnAtCoreApply = normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn);
+    const activeLatestTurnAtCoreApply = shouldPreserveActiveCeoState ? normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn) : null;
     state.saasLastCeoCommand = newestSaasCeoCommand(
       backendSaasCeoCommandFromPayload(coreCeoCommandMemory),
       loadSaasLastCeoCommand(),
       activeCeoCommandAtCoreApply,
-      activeCeoCommandBeforeRefresh,
+      shouldPreserveActiveCeoState ? activeCeoCommandBeforeRefresh : null,
     );
     state.saasAiCeoThread = uniqueSaasAiCeoThreadTurns([
       ...loadSaasAiCeoThread(),
-      ...activeCeoThreadBeforeRefresh,
+      ...(shouldPreserveActiveCeoState ? activeCeoThreadBeforeRefresh : []),
       ...activeCeoThreadAtCoreApply,
     ]).slice(-30);
-    state.saasAiCeoLatestTurn = activeLatestTurnAtCoreApply || activeLatestTurnBeforeRefresh || syncSaasAiCeoLatestTurnFromThread();
+    state.saasAiCeoLatestTurn =
+      activeLatestTurnAtCoreApply ||
+      (shouldPreserveActiveCeoState ? activeLatestTurnBeforeRefresh : null) ||
+      syncSaasAiCeoLatestTurnFromThread();
     if (state.saasLastCeoCommand) {
       persistSaasLastCeoCommand(state.saasLastCeoCommand);
       recordSaasCeoCommandSourceRecord(state.saasLastCeoCommand);
@@ -24804,7 +24820,7 @@ async function refreshSaasState(options = {}) {
         ? optionalSaasFetchFast("/owner/edge-cutover-preflight", { edge_cutover_preflight: state.saasEdgeCutoverPreflight || null }, 15000)
         : Promise.resolve({ edge_cutover_preflight: null, skipped: "owner_admin_only_edge_cutover" }),
       canViewPlatformInternal
-        ? optionalSaasFetchFast("/owner/paid-launch-approval-packet", { paid_launch_approval_packet: null }, 20000)
+        ? optionalSaasFetchFast("/owner/paid-launch-approval-packet", { paid_launch_approval_packet: state.saasPaidLaunchApprovalPacket || null }, 20000)
         : Promise.resolve({ paid_launch_approval_packet: null, skipped: "owner_admin_only_paid_launch_packet" }),
       optionalSaasFetchFast("/model/value-gate", { model_value_gate: null }),
       optionalSaasFetchFast("/model/providers/catalog", { model_provider_catalog: null }),
@@ -24878,14 +24894,12 @@ async function refreshSaasState(options = {}) {
       backendSaasCeoCommandFromPayload(ceoCommandMemory),
       loadSaasLastCeoCommand(),
       activeCeoCommandAtExtendedApply,
-      activeCeoCommandBeforeRefresh,
     );
     state.saasAiCeoThread = uniqueSaasAiCeoThreadTurns([
       ...loadSaasAiCeoThread(),
-      ...activeCeoThreadBeforeRefresh,
       ...activeCeoThreadAtExtendedApply,
     ]).slice(-30);
-    state.saasAiCeoLatestTurn = activeLatestTurnAtExtendedApply || activeLatestTurnBeforeRefresh || syncSaasAiCeoLatestTurnFromThread();
+    state.saasAiCeoLatestTurn = activeLatestTurnAtExtendedApply || syncSaasAiCeoLatestTurnFromThread();
     if (state.saasLastCeoCommand) {
       persistSaasLastCeoCommand(state.saasLastCeoCommand);
       recordSaasCeoCommandSourceRecord(state.saasLastCeoCommand);
@@ -29701,11 +29715,6 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
       tone: "green",
     },
   ];
-  const clarityRows = [
-    ["月费", "月费只买工作台", "AI CEO、Listing、批量铺货、素材工坊、客服订单、确认中心和设置。"],
-    ["用量", "用量只管高成本 AI 与素材", "文本模型、联网报告、生图生视频和长任务按额度或消耗核算。"],
-    ["平台成本", "平台费用不由捷境收取", "eBay 成交费、广告费、物流、退款和店铺订阅仍由商家平台账户承担。"],
-  ];
   return `
     <section class="saas-settings-card saas-merchant-billing-plain-summary" data-billing-summary="merchant_billing_plain_summary_v1" aria-label="订阅和用量总览">
       <div class="saas-settings-card-head">
@@ -29724,19 +29733,6 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
                 <span>${escapeHtml(row.label)}</span>
                 <strong>${escapeHtml(row.title)}</strong>
                 <small>${escapeHtml(row.detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-merchant-billing-clarity" data-billing-clarity="subscription_metering_clarity_v2" aria-label="月费、用量和平台成本">
-        ${clarityRows
-          .map(
-            ([label, title, detail]) => `
-              <article>
-                <span>${escapeHtml(label)}</span>
-                <strong>${escapeHtml(title)}</strong>
-                <small>${escapeHtml(detail)}</small>
               </article>
             `,
           )
@@ -36230,32 +36226,14 @@ function renderSaasSettingsPlatformPanel(ctx = saasMerchantWorkbenchContext()) {
         : "JIEJING 当前优先服务 eBay。连接后会同步店铺、商品、订单、政策和费用等经营资料。",
       tone: isSaasAuthorizedConnectionStatus(connectionStatus) ? "green" : "amber",
     },
-    {
-      name: "Amazon",
-      title: "后续预留",
-      detail: "暂未开放连接。后续会按同一套经营逻辑接入。",
-      tone: "neutral",
-    },
-    {
-      name: "TikTok Shop",
-      title: "后续预留",
-      detail: "适合内容电商和短视频素材链路，当前暂未开放连接。",
-      tone: "neutral",
-    },
-    {
-      name: "Temu / Shopify",
-      title: "后续预留",
-      detail: "当前暂未开放连接，也不会同步这些平台的数据。",
-      tone: "neutral",
-    },
   ];
   return `
     <section class="saas-settings-card saas-platform-roadmap-panel">
       <div class="saas-settings-card-head">
         <div>
           <span>经营平台</span>
-          <strong>当前以 eBay 为主，其他平台暂不开放</strong>
-          <p>JIEJING 先把 eBay 经营闭环做深。其他平台会在条件成熟后逐步开放。</p>
+          <strong>当前只管理 eBay</strong>
+          <p>捷境先把 eBay 经营闭环做深。未开放的平台不会出现在连接列表，也不会要求商家提前配置。</p>
         </div>
       </div>
       <div class="saas-settings-status-list">
@@ -38296,12 +38274,18 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       panels: [
         renderSaasMerchantBillingPlainSummaryPanel(ctx),
         renderSaasMerchantSubscriptionActivationPanel(ctx),
-        renderSaasMerchantBillingEntitlementPathPanel(ctx),
-        renderSaasMerchantFormalPaymentOpeningChecklistPanel(ctx),
-        renderSaasMerchantBillingCustomerTrustPanel(ctx),
-        renderSaasMerchantPricingModelPanel(ctx),
-        renderSaasMerchantBillingContinuityPanel(ctx),
-        renderSaasMerchantSecurityBoundaryPanel(),
+        renderSaasSettingsSectionGroup({
+          title: "计费与安全说明",
+          detail: "需要了解额度发放、续费停用、退款客服和凭证安全时再展开。",
+          badge: "按需查看",
+          panels: [
+            renderSaasMerchantBillingEntitlementPathPanel(ctx),
+            renderSaasMerchantBillingCustomerTrustPanel(ctx),
+            renderSaasMerchantPricingModelPanel(ctx),
+            renderSaasMerchantBillingContinuityPanel(ctx),
+            renderSaasMerchantSecurityBoundaryPanel(),
+          ],
+        }),
       ],
     },
   ];
@@ -38321,6 +38305,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
           open: true,
           panels: [
             renderSaasBillingTransitionPathPanel(ctx),
+            renderSaasMerchantFormalPaymentOpeningChecklistPanel(ctx),
             renderSaasManualBetaPaymentOrderPanel(),
             renderSaasBillingProviderPanel(),
             renderSaasBillingProviderRehearsalPanel(ctx),
@@ -41149,9 +41134,7 @@ function init() {
   applyStartupRoute();
   renderWorkflowFeedbackWidget();
   scheduleJiejingProductModeCopy();
-  if (!hasSaasProtectedSessionCandidate()) {
-    refreshSaasPublicReadiness({ render: true });
-  }
+  refreshSaasPublicReadiness({ render: true });
   refreshSaasState({ silent: true });
   refreshRuntimeState({ silent: true });
   window.setTimeout(syncAppStartVisibleShellGuard, 0);

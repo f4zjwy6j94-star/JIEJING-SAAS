@@ -320,7 +320,42 @@ async function main() {
   await gotoWithRetry(page, `${base}/app.html?start=app&view=cockpit&smoke=${Date.now()}`);
   await page.waitForLoadState("networkidle", { timeout: 45000 }).catch(() => {});
   await waitForWorkbenchReady(page, "view-cockpit");
-  await waitForVisibleCeoComposer(page);
+  try {
+    await waitForVisibleCeoComposer(page);
+  } catch (error) {
+    await page.screenshot({ path: path.join(outDir, "cockpit-composer-timeout.png"), fullPage: true }).catch(() => {});
+    const diagnostic = await page.evaluate(() => {
+      const root = document.querySelector("#view-cockpit.is-active");
+      const input = root?.querySelector("#ceoInput");
+      const form = root?.querySelector("#ceoForm");
+      const inputStyle = input ? getComputedStyle(input) : null;
+      const formStyle = form ? getComputedStyle(form) : null;
+      const rect = input?.getBoundingClientRect();
+      return {
+        html_classes: document.documentElement.className,
+        root_visible: Boolean(root && root.offsetParent !== null),
+        input_exists: Boolean(input),
+        input_display: inputStyle?.display || "",
+        input_visibility: inputStyle?.visibility || "",
+        input_width: Number(rect?.width || 0),
+        input_height: Number(rect?.height || 0),
+        form_exists: Boolean(form),
+        form_display: formStyle?.display || "",
+        form_visibility: formStyle?.visibility || "",
+        auth_overlay_visible: Boolean(document.querySelector(".auth-overlay:not([hidden]), .auth-modal:not([hidden])")),
+        saas_loading: Boolean(window.state?.saasLoading),
+        saas_connected: Boolean(window.state?.saasConnected),
+        protected_state_ready: Boolean(window.state?.saasProtectedStateReady),
+        protected_state_from_cache: Boolean(window.state?.saasProtectedStateFromCache),
+        has_user: Boolean(window.state?.saasUser),
+        saas_error: String(window.state?.saasError || "").slice(0, 300),
+        body_preview: String(document.body?.innerText || "").slice(0, 500),
+      };
+    });
+    throw new Error(
+      `AI CEO composer did not become visible: ${JSON.stringify({ ...diagnostic, requestFailures, badResponses, pageErrors })}; ${error.message || error}`,
+    );
+  }
   await page
     .screenshot({ path: path.join(outDir, "cockpit-first-run.png"), fullPage: true, timeout: 15000 })
     .catch((error) => screenshotFailures.push({ view: "cockpit-first-run", error: String(error.message || error).slice(0, 300) }));
@@ -833,10 +868,14 @@ async function main() {
             const merchantSettingsForbiddenVisibleMarkers = ["account", "data", "governance"].includes(id)
               ? merchantSettingsForbiddenMarkers.filter((marker) => text.includes(marker))
               : [];
+            const sectionGroups = Array.from(section?.querySelectorAll(".saas-settings-section-group") || []);
+            const openSectionGroups = sectionGroups.filter((group) => group.hasAttribute("open"));
             return {
               id,
               has_home_hub: Boolean(section?.querySelector(".saas-settings-home-hub")),
-              has_section_group: Boolean(section?.querySelector(".saas-settings-section-group")),
+              has_section_group: sectionGroups.length > 0,
+              section_group_count: sectionGroups.length,
+              open_section_group_count: openSectionGroups.length,
               has_focus_panel: Boolean(section?.querySelector(".saas-settings-focus-panel")),
               has_subpage_strip: Boolean(section?.querySelector(".saas-settings-subpage-strip")),
               has_one_glance: Boolean(section?.querySelector(".saas-settings-one-glance")),
@@ -858,8 +897,8 @@ async function main() {
                     '.saas-merchant-pricing-split[data-billing-split="subscription_ai_media_platform_v1"]',
                   ),
                 ) &&
-                text.includes("¥99/月是基础订阅") &&
-                text.includes("用量计费路线"),
+                rawText.includes("¥99/月是基础订阅") &&
+                rawText.includes("用量计费路线"),
               has_billing_continuity:
                 Boolean(
                   section?.querySelector(
@@ -885,6 +924,21 @@ async function main() {
                 rawText.includes("triggers_real_charge=false") &&
                 rawText.includes("repeat_ebay_oauth_allowed=false") &&
                 rawText.includes("frontend_gets_payment_secret=false"),
+              has_billing_secondary_group:
+                id === "billing" &&
+                sectionGroups.length === 1 &&
+                rawText.includes("计费与安全说明") &&
+                rawText.includes("按需查看"),
+              billing_secondary_group_closed: id === "billing" && sectionGroups.length === 1 && openSectionGroups.length === 0,
+              billing_secondary_copy_hidden:
+                id === "billing" &&
+                !text.includes("用量计费路线") &&
+                !text.includes("付费前客户信任说明") &&
+                !text.includes("续费和停用闭环"),
+              governance_roles_collapsed:
+                id === "governance" &&
+                Boolean(section?.querySelector(".saas-permission-current-role")) &&
+                Boolean(section?.querySelector(".saas-permission-role-details:not([open])")),
               has_billing_internal_customer_copy: billingForbiddenVisibleMarkers.length > 0,
               billing_internal_visible_markers: billingForbiddenVisibleMarkers,
               has_model_internal_customer_copy: modelForbiddenVisibleMarkers.length > 0,
@@ -904,7 +958,9 @@ async function main() {
           item.one_glance_count === 0 &&
           !item.has_one_glance_copy &&
           !item.has_home_hub &&
-          !item.has_section_group &&
+          (item.id === "billing"
+            ? item.section_group_count === 1 && item.open_section_group_count === 0
+            : item.section_group_count === 0) &&
           !item.has_subpage_strip,
       );
       const modelAudit = settingsChildAudit.find((item) => item.id === "model") || {};
@@ -919,6 +975,11 @@ async function main() {
       check.settings_billing_has_plain_summary = billingAudit.has_billing_plain_summary || false;
       check.settings_billing_has_pricing_split = billingAudit.has_billing_pricing_split || false;
       check.settings_billing_has_continuity = billingAudit.has_billing_continuity || false;
+      check.settings_billing_has_secondary_group = billingAudit.has_billing_secondary_group || false;
+      check.settings_billing_secondary_group_closed = billingAudit.billing_secondary_group_closed || false;
+      check.settings_billing_secondary_copy_hidden = billingAudit.billing_secondary_copy_hidden || false;
+      check.settings_governance_roles_collapsed =
+        (settingsChildAudit.find((item) => item.id === "governance") || {}).governance_roles_collapsed || false;
       check.settings_billing_has_internal_payment_ops = billingAudit.has_billing_internal_payment_ops || false;
       check.settings_billing_has_internal_customer_copy = billingAudit.has_billing_internal_customer_copy || false;
       check.settings_child_has_internal_customer_copy = merchantSettingsInternalAudits.length > 0;
@@ -1015,6 +1076,11 @@ async function main() {
   if (!connect.settings_billing_has_plain_summary) failures.push("settings billing plain summary missing");
   if (!connect.settings_billing_has_pricing_split) failures.push("settings billing pricing split missing");
   if (!connect.settings_billing_has_continuity) failures.push("settings billing continuity closure missing");
+  if (!connect.settings_billing_has_secondary_group || !connect.settings_billing_secondary_group_closed) {
+    failures.push("settings billing secondary explanation group must stay collapsed by default");
+  }
+  if (!connect.settings_billing_secondary_copy_hidden) failures.push("settings billing secondary copy is visible before expansion");
+  if (!connect.settings_governance_roles_collapsed) failures.push("settings governance full role catalogue must stay collapsed by default");
   if (connect.settings_billing_has_internal_payment_ops) failures.push("ordinary settings billing tab exposes internal payment cutover review");
   if (connect.settings_billing_has_internal_customer_copy) failures.push("ordinary settings billing tab exposes internal/founder payment strategy copy");
   const media = moduleChecks.find((item) => item.view === "media") || {};

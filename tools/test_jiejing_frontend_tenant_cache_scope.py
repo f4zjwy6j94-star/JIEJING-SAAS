@@ -132,16 +132,19 @@ def main() -> int:
     for marker in ["state.saasLastCeoCommand = null", "state.saasAiCeoThread = []", "state.saasAiCeoLatestTurn = null"]:
         require(snapshot_body, marker, "cached snapshot must not prehydrate AI CEO chat")
 
-    require(
-        app_js,
-        """state.saasDataPackets = coreDataPackets.data_packets || [];
-    state.saasExecutionResults = coreExecutions.execution_results || [];
-    state.saasProtectedStateFromCache = false;
-    state.saasProtectedStateCachedAt = "";
-    state.saasLastCeoCommand = newestSaasCeoCommand(backendSaasCeoCommandFromPayload(coreCeoCommandMemory), loadSaasLastCeoCommand());
-    state.saasAiCeoThread = loadSaasAiCeoThread();""",
-        "release cached-state protection after backend account confirmation and before AI CEO hydration",
-    )
+    refresh_body = function_body(app_js, "refreshSaasState")
+    for marker in [
+        "activeAccountAliasesBeforeRefresh",
+        "confirmedAccountAliases",
+        "shouldPreserveActiveCeoState",
+        "confirmedAccountAliases.some((alias) => activeAccountAliasesBeforeRefresh.has(alias))",
+        "shouldPreserveActiveCeoState ? activeCeoCommandBeforeRefresh : null",
+        "...(shouldPreserveActiveCeoState ? activeCeoThreadBeforeRefresh : [])",
+        "state.saasProtectedStateFromCache = false",
+        "loadSaasLastCeoCommand()",
+        "loadSaasAiCeoThread()",
+    ]:
+        require(refresh_body, marker, "backend-confirmed account gate before AI CEO hydration")
 
     remember_body = function_body(app_js, "rememberSaasAuthAccount")
     require(remember_body, "hydrateSaasCeoAccountScopedLocalState()", "rehydrate after account switch")

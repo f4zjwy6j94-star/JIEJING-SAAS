@@ -30,7 +30,7 @@ def main() -> int:
         return fail("frontend must not use document.write for report export or public rendering")
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
-    frontend_asset_version = "20260710-ai-ceo-reliability-v34"
+    frontend_asset_version = "20260710-merchant-settings-v35"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -94,6 +94,7 @@ def main() -> int:
         "20260702-merchant-subscription-request-v1",
         "20260702-internal-access-boundary-v1",
         "20260702-ai-ceo-route-card-v2",
+        "20260710-ai-ceo-reliability-v34",
         "20260510-ebay-policy-v1",
     ]:
         if stale_asset_version in index_html + app_html:
@@ -424,6 +425,8 @@ def main() -> int:
             and f'optionalSaasFetchFast("{endpoint}"' not in app_js + app_html
         ):
             return fail(f"missing frontend staging config marker: {endpoint} fetch")
+    if 'if (!hasSaasProtectedSessionCandidate()) {\n    refreshSaasPublicReadiness({ render: true });' in app_js:
+        return fail("logged-in merchants must also receive current public provider readiness")
     for marker in [
         "cursorGlow",
         "signalCanvas",
@@ -507,9 +510,6 @@ def main() -> int:
         "不真实扣费",
         "merchant_visible_billing_status_v1",
         "subscription_metering_clarity_v2",
-        "月费只买工作台",
-        "用量只管高成本 AI 与素材",
-        "平台费用不由捷境收取",
         "renderSaasMerchantBillingGuardrailPanel",
         "saasMerchantBillingGuardrailState",
         "saasMerchantBillingStatusPill",

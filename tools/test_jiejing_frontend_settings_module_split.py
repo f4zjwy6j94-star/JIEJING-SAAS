@@ -150,7 +150,6 @@ def main() -> int:
         "edge_cutover_preflight: state.saasEdgeCutoverPreflight || null",
         "saasPaidLaunchApprovalPacket",
         "/owner/paid-launch-approval-packet",
-        '"/owner/paid-launch-approval-packet", { paid_launch_approval_packet: null }, 20000',
         '"/owner/billing-domain-cutover-rehearsal", { billing_domain_cutover_rehearsal: null }, 15000',
         '"/commercial/launch-gate", { commercial_launch_gate: state.saasCommercialLaunchGate || null }, 20000',
         "paid_launch_approval_packet: state.saasPaidLaunchApprovalPacket || null",
