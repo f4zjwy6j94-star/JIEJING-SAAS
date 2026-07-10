@@ -185,6 +185,7 @@ def main() -> int:
         "JIEJING_USE_COST_SAVER_OVERRIDE",
         "COMPOSE_ARGS+=(-f \"$COST_SAVER_OVERRIDE\")",
         "docker compose \"${COMPOSE_ARGS[@]}\" build --no-cache jiejing-saas jiejing-worker",
+        "docker volume create deploy_jiejing_public_staging_vault_data_v2",
         "docker compose \"${COMPOSE_ARGS[@]}\" up -d --no-deps jiejing-worker",
         "docker compose \"${COMPOSE_ARGS[@]}\" up -d --no-deps --force-recreate jiejing-frontend",
         "install -m 0644 deploy/Caddyfile.public-staging.systemd /etc/caddy/Caddyfile",
@@ -216,6 +217,10 @@ def main() -> int:
         "JIEJING_VAULT_READY_WAIT_SECONDS",
         'while [ "$attempt" -lt "$wait_seconds" ]',
         "STAGING_VAULT_STATUS=blocked_not_ready",
+        'init_tmp="${INIT_FILE}.tmp.$$"',
+        'result_tmp="${TOKEN_FILE}.tmp.$$"',
+        'mv -f "$init_tmp" "$INIT_FILE"',
+        'mv -f "$result_tmp" "$TOKEN_FILE"',
     ]:
         if marker not in vault_init:
             return fail(f"vault init must wait for the container readiness signal: {marker}")

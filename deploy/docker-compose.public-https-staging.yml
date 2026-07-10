@@ -201,7 +201,7 @@ volumes:
     name: deploy_jiejing_public_staging_data
   jiejing_public_staging_vault_data:
     external: true
-    name: deploy_jiejing_public_staging_vault_data
+    name: deploy_jiejing_public_staging_vault_data_v2
   jiejing_caddy_data:
     external: true
     name: deploy_jiejing_caddy_data

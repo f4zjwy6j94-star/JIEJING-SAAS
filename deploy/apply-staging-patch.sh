@@ -467,6 +467,10 @@ if [[ "${JIEJING_USE_COST_SAVER_OVERRIDE:-false}" == "true" && -f "$COST_SAVER_O
 fi
 
 docker compose "${COMPOSE_ARGS[@]}" build --no-cache jiejing-saas jiejing-worker
+if [[ "$COMPOSE_FILE" == "deploy/docker-compose.public-https-staging.yml" ]]; then
+  docker volume inspect deploy_jiejing_public_staging_vault_data_v2 >/dev/null 2>&1 || \
+    docker volume create deploy_jiejing_public_staging_vault_data_v2 >/dev/null
+fi
 docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps jiejing-vault
 if [[ -f "deploy/staging-vault-init-unseal.sh" ]]; then
   JIEJING_COMPOSE_FILE="$COMPOSE_FILE" \

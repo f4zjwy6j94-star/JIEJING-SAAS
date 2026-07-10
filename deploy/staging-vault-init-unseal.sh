@@ -25,9 +25,10 @@ attempt=0
 status=""
 while [ "$attempt" -lt "$wait_seconds" ]; do
   status="$(status_json)"
-  if [ -n "$status" ]; then
+  if [ -n "$status" ] && printf '%s' "$status" | python3 -c "import json,sys; data=json.load(sys.stdin); assert 'initialized' in data and 'sealed' in data" 2>/dev/null; then
     break
   fi
+  status=""
   attempt=$((attempt + 1))
   sleep 1
 done
@@ -38,8 +39,18 @@ fi
 initialized="$(printf '%s' "$status" | python3 -c "import json,sys; data=sys.stdin.read().strip(); print(str(json.loads(data).get('initialized', False)).lower() if data else 'false')")"
 
 if [ "$initialized" = "false" ]; then
-  vault_exec "vault operator init -key-shares=1 -key-threshold=1 -format=json" > "$INIT_FILE"
-  chmod 600 "$INIT_FILE"
+  init_tmp="${INIT_FILE}.tmp.$$"
+  rm -f "$init_tmp"
+  vault_exec "vault operator init -key-shares=1 -key-threshold=1 -format=json" > "$init_tmp"
+  python3 - "$init_tmp" <<'PY'
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+if not (data.get("root_token") and (data.get("unseal_keys_b64") or data.get("unseal_keys_hex"))):
+    raise SystemExit("invalid vault init result")
+PY
+  chmod 600 "$init_tmp"
+  mv -f "$init_tmp" "$INIT_FILE"
 fi
 
 unseal_key="$(python3 - "$INIT_FILE" <<'PY'
@@ -85,8 +96,18 @@ EOF
 cat "$policy_file" | docker compose -f "$COMPOSE_FILE" exec -T "$VAULT_SERVICE" sh -lc "cat > /tmp/jiejing-saas-policy.hcl && VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault policy write jiejing-saas /tmp/jiejing-saas-policy.hcl >/dev/null"
 rm -f "$policy_file"
 
-docker compose -f "$COMPOSE_FILE" exec -T "$VAULT_SERVICE" sh -lc "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault token create -policy=jiejing-saas -period=720h -format=json" > "$TOKEN_FILE"
-chmod 600 "$TOKEN_FILE"
+result_tmp="${TOKEN_FILE}.tmp.$$"
+rm -f "$result_tmp"
+docker compose -f "$COMPOSE_FILE" exec -T "$VAULT_SERVICE" sh -lc "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault token create -policy=jiejing-saas -period=720h -format=json" > "$result_tmp"
+python3 - "$result_tmp" <<'PY'
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+if not ((data.get("auth") or {}).get("client_token")):
+    raise SystemExit("invalid vault backend token result")
+PY
+chmod 600 "$result_tmp"
+mv -f "$result_tmp" "$TOKEN_FILE"
 
 backend_token="$(python3 - "$TOKEN_FILE" <<'PY'
 import json, sys
