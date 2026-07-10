@@ -9,6 +9,7 @@ from jiejing_runtime.model_clients import model_client_status_from_env
 
 from .config import SaaSSettings
 from .model_provider_catalog import MODEL_SECRET_PURPOSE, READY_MODEL_SECRET_STATUSES, provider_key_from_secret_ref
+from .platform_model_status import build_platform_default_model_status
 from .repository import SaaSRepository
 
 
@@ -22,15 +23,20 @@ CORE_MODEL_REPORT_TYPES = {
 
 def build_model_value_gate(settings: SaaSSettings, repository: SaaSRepository) -> dict[str, Any]:
     model_status = model_client_status_from_env()
+    platform_model_status = build_platform_default_model_status()
     evidence = _model_report_evidence(repository)
     byok_evidence = _merchant_byok_model_evidence(repository)
     live_report_types = set(evidence.get("live_model_report_types", []))
     source_linked_report_types = set(evidence.get("source_packet_linked_live_report_types", []))
     required_types = {"market.report", "listing.package"}
     blockers: list[str] = []
-    if not model_status.get("configured") and not byok_evidence.get("configured"):
+    if (
+        not model_status.get("configured")
+        and not platform_model_status.get("configured")
+        and not byok_evidence.get("configured")
+    ):
         blockers.append("model_provider_not_configured")
-    if model_status.get("live_disabled"):
+    if model_status.get("live_disabled") or platform_model_status.get("live_disabled"):
         blockers.append("model_live_calls_disabled")
     if model_status.get("legacy_hermes_model_fallback_enabled") and settings.is_production_like:
         blockers.append("legacy_hermes_model_fallback_must_stay_disabled")
@@ -55,6 +61,7 @@ def build_model_value_gate(settings: SaaSSettings, repository: SaaSRepository) -
             "live_disabled": bool(model_status.get("live_disabled")),
             "secret_exposed": False,
         },
+        "platform_default_model": platform_model_status,
         "merchant_byok_model": byok_evidence,
         "required_commercial_proof": [
             {

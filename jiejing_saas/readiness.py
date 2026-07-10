@@ -24,6 +24,7 @@ from .infrastructure_drivers import build_infrastructure_driver_status
 from .model_value_gate import build_model_value_gate
 from .operational_health import build_operational_health
 from .platform_registry import registry_summary
+from .platform_model_status import build_platform_default_model_status
 from .queue_adapter import build_queue_adapter_contract
 from .queue_plan import build_queue_plan
 from .repository import SaaSRepository
@@ -56,6 +57,7 @@ def build_product_readiness(settings: SaaSSettings, repository: SaaSRepository) 
     operational_health = build_operational_health(settings, repository)
     ebay = EbayProviderStatus().to_dict()
     model_status = model_client_status_from_env()
+    platform_model_status = build_platform_default_model_status()
     items = [
         _environment_item(settings),
         _session_secret_item(settings),
@@ -78,7 +80,7 @@ def build_product_readiness(settings: SaaSSettings, repository: SaaSRepository) 
         _vault_item(settings),
         _vault_adapter_item(settings),
         _runtime_item(settings),
-        _model_item(model_status, evidence),
+        _model_item(model_status, platform_model_status, evidence),
         _model_value_item(settings, repository),
         _platform_registry_item(),
         _ebay_oauth_item(settings, evidence),
@@ -112,7 +114,7 @@ def build_product_readiness(settings: SaaSSettings, repository: SaaSRepository) 
         "counts": counts,
         "product_evidence": evidence,
         "provider_status": {
-            "model": _public_model_status(model_status, evidence),
+            "model": _public_model_status(model_status, platform_model_status, evidence),
             "ebay": _public_ebay_status(ebay),
             "platform_registry": _public_platform_registry_status(),
             "provider_jobs": _public_provider_job_status(),
@@ -120,7 +122,7 @@ def build_product_readiness(settings: SaaSSettings, repository: SaaSRepository) 
             "backup": _public_backup_status(settings, repository),
             "billing": _public_billing_status(settings, repository),
             "model_value": _public_model_value_status(settings, repository),
-            "ai_ceo_platform_model": _ai_ceo_platform_model_status(),
+            "ai_ceo_platform_model": _ai_ceo_platform_model_status(platform_model_status),
             "public_search": _public_search_status(),
             "media_generation": _public_media_generation_status(),
             "operational_health": _public_operational_health_status(operational_health),
@@ -847,7 +849,11 @@ def _runtime_item(settings: SaaSSettings) -> ReadinessItem:
     return ReadinessItem("runtime_workers", "Runtime Worker", "ready", "info", "Runtime 已按云端 worker 方向配置。", "继续做水平扩容和 worker 健康检查。")
 
 
-def _model_item(model_status: dict[str, Any], evidence: dict[str, Any]) -> ReadinessItem:
+def _model_item(
+    model_status: dict[str, Any],
+    platform_model_status: dict[str, Any],
+    evidence: dict[str, Any],
+) -> ReadinessItem:
     merchant_byok_secret_refs = int(evidence.get("model_secret_refs") or 0)
     if merchant_byok_secret_refs:
         return ReadinessItem(
@@ -857,6 +863,15 @@ def _model_item(model_status: dict[str, Any], evidence: dict[str, Any]) -> Readi
             "info",
             "商家 BYOK 模型 key 已按 secret_ref 边界保存；前端、报告和 Runtime 不接收原始 key。",
             "继续做调用费用、限流、失败重试和商家可见的运行账本。",
+        )
+    if platform_model_status.get("configured"):
+        return ReadinessItem(
+            "model_provider",
+            "大模型能力",
+            "platform_default_model_ready",
+            "info",
+            "捷境试用 AI 已在后端安全边界内配置，商家也可以保存自己的账号模型。",
+            "继续监控试用额度、调用成本、响应时间和失败降级。",
         )
     if not model_status.get("configured"):
         return ReadinessItem(
@@ -1153,17 +1168,29 @@ def _tenant_audit_item(counts: dict[str, int]) -> ReadinessItem:
     return ReadinessItem("tenant_audit", "租户与审计", "ready", "info", "已有租户、店铺、任务和审计记录。", "继续增加权限角色和审计查询。")
 
 
-def _public_model_status(model_status: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
+def _public_model_status(
+    model_status: dict[str, Any],
+    platform_model_status: dict[str, Any],
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
     merchant_byok_secret_refs = int(evidence.get("model_secret_refs") or 0)
     env_configured = bool(model_status.get("configured"))
+    platform_default_configured = bool(platform_model_status.get("configured"))
+    if merchant_byok_secret_refs > 0:
+        mode = "merchant_byok"
+    elif platform_default_configured:
+        mode = "platform_managed_default"
+    else:
+        mode = "environment_provider"
     return {
-        "client": model_status.get("client"),
-        "model": model_status.get("model"),
-        "configured": env_configured or merchant_byok_secret_refs > 0,
+        "client": model_status.get("client") if env_configured else "platform-managed-default" if platform_default_configured else model_status.get("client"),
+        "model": platform_model_status.get("model") if platform_default_configured else model_status.get("model"),
+        "configured": env_configured or platform_default_configured or merchant_byok_secret_refs > 0,
         "env_provider_configured": env_configured,
+        "platform_default_configured": platform_default_configured,
         "merchant_byok_configured": merchant_byok_secret_refs > 0,
         "merchant_byok_secret_ref_count": merchant_byok_secret_refs,
-        "mode": "merchant_byok" if merchant_byok_secret_refs > 0 and not env_configured else "environment_provider",
+        "mode": mode,
         "frontend_gets_model_api_key": False,
         "runtime_gets_model_api_key": False,
         "reports_get_model_api_key": False,
@@ -1287,13 +1314,16 @@ def _public_model_value_status(settings: SaaSSettings, repository: SaaSRepositor
     gate = build_model_value_gate(settings, repository)
     model_client = gate.get("model_client") if isinstance(gate.get("model_client"), dict) else {}
     merchant_byok = gate.get("merchant_byok_model") if isinstance(gate.get("merchant_byok_model"), dict) else {}
+    platform_default = gate.get("platform_default_model") if isinstance(gate.get("platform_default_model"), dict) else {}
     env_configured = bool(model_client.get("configured"))
     merchant_byok_configured = bool(merchant_byok.get("configured"))
+    platform_default_configured = bool(platform_default.get("configured"))
     return {
         "contract_version": gate.get("contract_version"),
         "ready_for_paid_value_claim": bool(gate.get("ready_for_paid_value_claim")),
-        "model_configured": env_configured or merchant_byok_configured,
+        "model_configured": env_configured or platform_default_configured or merchant_byok_configured,
         "env_provider_configured": env_configured,
+        "platform_default_configured": platform_default_configured,
         "merchant_byok_configured": merchant_byok_configured,
         "merchant_byok_secret_ref_count": int(merchant_byok.get("ready_secret_ref_count") or 0),
         "live_model_report_types": (gate.get("evidence") or {}).get("live_model_report_types", []),
@@ -1400,31 +1430,11 @@ def _public_search_status() -> dict[str, Any]:
     }
 
 
-def _ai_ceo_platform_model_status() -> dict[str, Any]:
-    explicit_api_key = (os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL_API_KEY") or "").strip()
-    platform_enabled = _env_enabled("JIEJING_AI_CEO_PLATFORM_MODEL_ENABLED", default=bool(explicit_api_key))
-    provider = (
-        os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL_PROVIDER")
-        or os.environ.get("JIEJING_MODEL_PROVIDER")
-        or ("deepseek" if os.environ.get("DEEPSEEK_API_KEY") else "openai")
-    ).strip()
-    key_configured = bool(
-        explicit_api_key
-        or (provider == "deepseek" and os.environ.get("DEEPSEEK_API_KEY"))
-        or os.environ.get("JIEJING_MODEL_API_KEY")
-    )
+def _ai_ceo_platform_model_status(platform_model_status: dict[str, Any] | None = None) -> dict[str, Any]:
+    safe_status = dict(platform_model_status or build_platform_default_model_status())
     monthly_limit = _nonnegative_int_env("JIEJING_AI_CEO_PLATFORM_MODEL_TRIAL_MONTHLY_LIMIT", 20)
-    return {
-        "contract_version": "2026-07-03-ai-ceo-platform-model-trial",
-        "enabled": bool(platform_enabled),
-        "configured": bool(platform_enabled and key_configured),
-        "status": "ready" if platform_enabled and key_configured else "missing_key" if platform_enabled else "not_enabled",
-        "provider": provider or "",
-        "model": (
-            os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL")
-            or os.environ.get("JIEJING_MODEL")
-            or ""
-        ).strip(),
+    safe_status.update({
+        "contract_version": "2026-07-10-ai-ceo-platform-model-trial",
         "trial_monthly_limit": monthly_limit,
         "trial_quota_source": "backend_task_audit",
         "trial_quota_scope": "account_month",
@@ -1443,7 +1453,8 @@ def _ai_ceo_platform_model_status() -> dict[str, Any]:
         "frontend_gets_model_api_key": False,
         "runtime_gets_model_api_key": False,
         "secret_exposed": False,
-    }
+    })
+    return safe_status
 
 
 def _env_enabled(name: str, *, default: bool = False) -> bool:

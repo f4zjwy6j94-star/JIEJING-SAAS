@@ -105,6 +105,7 @@ FILES=(
   "jiejing_saas/provider_job_runner.py"
   "jiejing_saas/provider_workflow_plan.py"
   "jiejing_saas/model_provider_catalog.py"
+  "jiejing_saas/platform_model_status.py"
   "jiejing_saas/model_value_gate.py"
   "jiejing_saas/model_value_rehearsal.py"
   "jiejing_saas/monitoring.py"
@@ -192,6 +193,7 @@ FILES=(
   "tools/test_jiejing_monitoring_runbook_gate.py"
   "tools/test_jiejing_chinese_report_source.py"
   "tools/test_jiejing_merchant_byok_model_and_memory.py"
+  "tools/test_jiejing_platform_model_readiness.py"
   "tools/test_jiejing_ebay_refresh_secret_readiness.py"
   "tools/test_jiejing_infrastructure_drivers.py"
   "tools/test_jiejing_postgres_durable_queue_adapter.py"
@@ -323,6 +325,7 @@ python3 -m py_compile \
   jiejing_saas/provider_job_runner.py \
   jiejing_saas/provider_workflow_plan.py \
   jiejing_saas/model_provider_catalog.py \
+  jiejing_saas/platform_model_status.py \
   jiejing_saas/model_value_gate.py \
   jiejing_saas/model_value_rehearsal.py \
   jiejing_saas/staging_security_gate.py \
@@ -402,6 +405,7 @@ python3 -m py_compile \
   tools/test_jiejing_monitoring_runbook_gate.py \
   tools/test_jiejing_chinese_report_source.py \
   tools/test_jiejing_merchant_byok_model_and_memory.py \
+  tools/test_jiejing_platform_model_readiness.py \
   tools/test_jiejing_ebay_refresh_secret_readiness.py \
   tools/test_jiejing_infrastructure_drivers.py \
   tools/test_jiejing_postgres_durable_queue_adapter.py \
