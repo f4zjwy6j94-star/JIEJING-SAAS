@@ -187,7 +187,7 @@ def main() -> int:
         "local_clock_answered",
         "capability_status_answered",
         "realtime_search_answered",
-        "merchant-ceo/chat?fresh=${Date.now()}",
+        "merchant-ceo/chat?stream=1&fresh=${Date.now()}",
         '"cache-control": "no-store"',
         "pragma: \"no-cache\"",
         "正在处理...",

@@ -776,6 +776,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 user_id=identity["user_id"],
                 limit=limit,
             )
+            revision = self.repository.ai_ceo_chat_history_revision(
+                company_id=identity["company_id"],
+                user_id=identity["user_id"],
+            )
             self._send_json(
                 {
                     "ai_ceo_chat_history": {
@@ -783,6 +787,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "cross_store": True,
                         "turns": turns,
                         "turn_count": len(turns),
+                        "revision": revision,
+                        "sync_contract": "2026-07-11-ai-ceo-cross-device-revision-v1",
                         "raw_provider_secret_stored": False,
                         "frontend_gets_model_api_key": False,
                         "real_platform_writes_enabled": False,
@@ -1072,6 +1078,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
     def _handle_post(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path.strip("/")
+        query = parse_qs(parsed.query)
         parts = [unquote(part) for part in path.split("/")] if path else []
 
         if path.startswith("auth/qr-login"):
@@ -1306,6 +1313,16 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "note": str(body.get("note") or "")[:300],
                     "triggers_real_platform_write": False,
                     "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                },
+                review_update={
+                    "contract_version": "2026-07-11-media-review-v2",
+                    "decision": decision,
+                    "confirmations": confirmations,
+                    "reviewed_by": identity["user_id"],
+                    "note": str(body.get("note") or "")[:300],
+                    "listing_draft_only": True,
+                    "triggers_real_platform_write": False,
                     "secret_exposed": False,
                 },
             )
@@ -2698,6 +2715,44 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             command_body = body.get("command") if isinstance(body.get("command"), dict) else {}
             message = str(body.get("message") or command_body.get("text") or command_body.get("command_text") or "")
             route_meta = ai_ceo_route_metadata(message)
+            stream_requested = str((query.get("stream") or [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
+            stream_started = False
+
+            def send_chat_payload(payload: dict[str, Any], status: HTTPStatus) -> None:
+                nonlocal stream_started
+                if not stream_requested:
+                    self._send_json(payload, status=status)
+                    return
+                if not stream_started:
+                    self._start_ndjson_stream()
+                    stream_started = True
+                self._send_ndjson_event(
+                    {
+                        "type": "final",
+                        "http_status": int(status),
+                        "payload": payload,
+                        "secret_exposed": False,
+                    }
+                )
+
+            def emit_text_delta(delta: str) -> None:
+                nonlocal stream_started
+                safe_delta = str(delta or "")
+                if not stream_requested or not safe_delta:
+                    return
+                if not stream_started:
+                    self._start_ndjson_stream()
+                    stream_started = True
+                    self._send_ndjson_event(
+                        {
+                            "type": "accepted",
+                            "stage": "model",
+                            "route": route_meta.get("route") or "general_chat",
+                            "secret_exposed": False,
+                        }
+                    )
+                self._send_ndjson_event({"type": "delta", "delta": safe_delta, "secret_exposed": False})
+
             command_response = None
             if command_body:
                 command_response = self.repository.save_merchant_ceo_command(
@@ -2776,7 +2831,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
                 )
                 ai_ceo_market_report_delivery = build_ai_ceo_market_report_delivery(ai_ceo_market_report)
-                self._send_json(
+                send_chat_payload(
                     {
                         "ai_ceo_chat": fast_chat,
                         "merchant_ceo_command": command_response,
@@ -2811,7 +2866,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "你可以稍后重试，或到设置里的 AI 与素材查看连接状态；"
                         "不要重复保存连接信息，除非页面明确提示连接已失效。"
                     )
-                self._send_json(
+                send_chat_payload(
                     {
                         "ai_ceo_chat": {
                             "status": "blocked_before_model_chat",
@@ -2846,7 +2901,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 platform_trial_quota = self._platform_model_trial_quota(identity=identity)
                 model_secret_resolution["platform_trial_quota"] = platform_trial_quota
                 if not platform_trial_quota.get("allowed"):
-                    self._send_json(
+                    send_chat_payload(
                         {
                             "ai_ceo_chat": {
                                 "status": "blocked_before_model_chat",
@@ -2895,6 +2950,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     for key, value in model_secret_resolution.items()
                     if key not in {"model_client", "secret_value"}
                 },
+                on_text_delta=emit_text_delta if stream_requested else None,
             )
             if command_body and chat.get("answer"):
                 command_response = self.repository.save_merchant_ceo_command(
@@ -2987,7 +3043,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 }
                 else HTTPStatus.ACCEPTED
             )
-            self._send_json(
+            send_chat_payload(
                 {
                     "ai_ceo_chat": chat,
                     "merchant_ceo_command": command_response,
@@ -3172,6 +3228,159 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_json(response, status=HTTPStatus.CREATED)
             return
 
+        if len(parts) == 3 and parts[0] == "media-asset-jobs" and parts[2] == "retry":
+            if not self._require_permission(identity, "create_task"):
+                return
+            body = self._read_json_body()
+            original = self.repository.get_media_asset_job(company_id=identity["company_id"], media_job_id=parts[1])
+            if not original:
+                self._send_error(HTTPStatus.NOT_FOUND, "media asset job not found")
+                return
+            if str(original.get("status") or "") in {"pending", "queued", "running", "provider_returned"}:
+                self._send_error(HTTPStatus.CONFLICT, "media asset job is still running and cannot be retried")
+                return
+            original_payload = original.get("job") if isinstance(original.get("job"), dict) else {}
+            original_spec = original_payload.get("job_spec") if isinstance(original_payload.get("job_spec"), dict) else {}
+            original_inputs = original_spec.get("inputs") if isinstance(original_spec.get("inputs"), dict) else {}
+            if not original_inputs:
+                self._send_error(HTTPStatus.BAD_REQUEST, "media asset job has no reusable generation inputs")
+                return
+            reason = str(body.get("reason") or "商家要求重做素材")[:200]
+            prior_version = original.get("asset_version") if isinstance(original.get("asset_version"), dict) else {}
+            version = max(1, int(prior_version.get("version") or 1)) + 1
+            root_media_job_id = str(prior_version.get("root_media_job_id") or original["media_job_id"])
+            safe_inputs = _redact_secret_like(dict(original_inputs))
+            creative_override = body.get("creative_job_spec") if isinstance(body.get("creative_job_spec"), dict) else {}
+            if creative_override:
+                current_creative = safe_inputs.get("creative_job_spec") if isinstance(safe_inputs.get("creative_job_spec"), dict) else {}
+                safe_inputs["creative_job_spec"] = {**current_creative, **_redact_secret_like(creative_override)}
+            safe_inputs["asset_version"] = {
+                "contract_version": "2026-07-11-media-asset-version-v1",
+                "version": version,
+                "root_media_job_id": root_media_job_id,
+                "parent_media_job_id": original["media_job_id"],
+                "generation_reason": reason,
+                "prompt_version": f"media_prompt_v{version}",
+                "immutable_prior_versions": True,
+                "secret_exposed": False,
+            }
+            provider_job_key = str(original.get("provider_job_key") or "media.asset_generation")
+            catalog = build_provider_job_contract_catalog()
+            contracts = {item.get("key"): item for item in catalog.get("contracts", [])}
+            contract = contracts.get(provider_job_key)
+            if not contract:
+                self._send_error(HTTPStatus.NOT_FOUND, "media provider job contract not found")
+                return
+            supplied_key = str(body.get("idempotency_key") or f"media-rework:{original['media_job_id']}:v{version}")[:160]
+            retry_key = _media_asset_idempotency_key(
+                store_id=original["store_id"],
+                provider_job_key=provider_job_key,
+                inputs=safe_inputs,
+                supplied=supplied_key,
+            )
+            existing = self.repository.get_media_asset_job_by_idempotency(company_id=identity["company_id"], idempotency_key=retry_key)
+            if existing:
+                self._send_json({"media_asset_job": existing, "idempotent_replay": True, "secret_exposed": False}, status=HTTPStatus.ACCEPTED)
+                return
+            task = self.repository.create_task(
+                company_id=identity["company_id"],
+                store_id=original["store_id"],
+                user_id=identity["user_id"],
+                task_type="provider_job",
+                title=f"素材重做 v{version}",
+                input_data={
+                    "provider_job_key": provider_job_key,
+                    "provider_family": contract.get("provider_family"),
+                    "store_id": original["store_id"],
+                    "inputs": safe_inputs,
+                    "contract_version": catalog.get("contract_version"),
+                    "media_asset_idempotency_key": retry_key,
+                    "real_platform_writes_enabled": False,
+                },
+            )
+            version_context = safe_inputs["asset_version"]
+            media_job = self.repository.create_media_asset_job(
+                company_id=identity["company_id"],
+                store_id=original["store_id"],
+                task_id=task["task_id"],
+                user_id=identity["user_id"],
+                provider_job_key=provider_job_key,
+                idempotency_key=retry_key,
+                job_spec={
+                    "provider_job_key": provider_job_key,
+                    "contract_version": catalog.get("contract_version"),
+                    "inputs": safe_inputs,
+                    "merchant_visible_provider_name": False,
+                    "live_media_provider_call_allowed": False,
+                    "spend_now_allowed": False,
+                    "secret_exposed": False,
+                },
+                status="pending",
+                version_context=version_context,
+            )
+            queue_job = self.repository.create_queue_job(
+                company_id=identity["company_id"],
+                task_id=task["task_id"],
+                max_attempts=int(contract.get("max_attempts") or 1),
+                job_data={
+                    "kind": "provider_job",
+                    "provider_job_key": provider_job_key,
+                    "provider_family": contract.get("provider_family"),
+                    "queue": contract.get("queue"),
+                    "contract": contract,
+                    "inputs": safe_inputs,
+                    "media_job_id": media_job["media_job_id"],
+                    "idempotency_key": retry_key,
+                    "run_mode": body.get("run_mode") or "queued",
+                    "live_provider_called": False,
+                    "real_platform_writes_enabled": False,
+                },
+            )
+            media_job = self.repository.update_media_asset_job(
+                company_id=identity["company_id"],
+                media_job_id=media_job["media_job_id"],
+                status="queued",
+                queue_job_id=queue_job["job_id"],
+                details={"event": "merchant_media_rework_queued", "reason": reason, "secret_exposed": False},
+            )
+            self.repository.update_media_asset_job(
+                company_id=identity["company_id"],
+                media_job_id=original["media_job_id"],
+                status=str(original.get("status") or "needs_rework"),
+                retry_delta=1,
+                details={
+                    "event": "merchant_media_rework_created",
+                    "child_media_job_id": media_job["media_job_id"],
+                    "child_version": version,
+                    "reason": reason,
+                    "secret_exposed": False,
+                },
+            )
+            worker_result = None
+            if str(body.get("run_mode") or "queued") in {"inline", "enqueue_and_wait", "local_worker_now"}:
+                worker_result = self.queue_worker.run_next(company_id=identity["company_id"], job_id=queue_job["job_id"])
+                media_job = worker_result.get("media_asset_job") if isinstance(worker_result, dict) and isinstance(worker_result.get("media_asset_job"), dict) else media_job
+                queue_job = worker_result.get("queue_job") if isinstance(worker_result, dict) and isinstance(worker_result.get("queue_job"), dict) else queue_job
+            self._send_json(
+                {
+                    "media_asset_job": media_job,
+                    "queue_job": queue_job,
+                    "worker_result": worker_result,
+                    "idempotent_replay": False,
+                    "rework": {
+                        "parent_media_job_id": original["media_job_id"],
+                        "version": version,
+                        "actual_cost_status": "unknown_until_provider_usage_record",
+                        "triggers_real_platform_write": False,
+                        "secret_exposed": False,
+                    },
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                },
+                status=HTTPStatus.ACCEPTED,
+            )
+            return
+
         if len(parts) == 4 and parts[0] == "stores" and parts[2] == "model" and parts[3] == "verify":
             if not self._require_permission(identity, "manage_connections"):
                 return
@@ -3227,11 +3436,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 return
             body = self._read_json_body()
             turns = body.get("turns") if isinstance(body.get("turns"), list) else []
+            base_revision = str(body.get("base_revision") or "")[:120]
+            server_revision_before = self.repository.ai_ceo_chat_history_revision(
+                company_id=identity["company_id"],
+                user_id=identity["user_id"],
+            )
             history = self.repository.sync_ai_ceo_chat_history(
                 company_id=identity["company_id"],
                 user_id=identity["user_id"],
                 turns=turns,
                 limit=30,
+            )
+            revision = self.repository.ai_ceo_chat_history_revision(
+                company_id=identity["company_id"],
+                user_id=identity["user_id"],
             )
             self._send_json(
                 {
@@ -3241,6 +3459,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "turns": history,
                         "turn_count": len(history),
                         "submitted_turn_count": min(len(turns), 30),
+                        "revision": revision,
+                        "base_revision": base_revision,
+                        "conflict_merged": bool(base_revision and base_revision != server_revision_before),
+                        "sync_contract": "2026-07-11-ai-ceo-cross-device-revision-v1",
                         "raw_provider_secret_stored": False,
                         "frontend_gets_model_api_key": False,
                         "real_platform_writes_enabled": False,
@@ -5116,6 +5338,26 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         self._send_cors_headers()
         self.end_headers()
         self.wfile.write(body)
+
+    def _start_ndjson_stream(self) -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("content-type", "application/x-ndjson; charset=utf-8")
+        self.send_header("cache-control", "no-store, no-transform")
+        self.send_header("x-accel-buffering", "no")
+        self.send_header("connection", "close")
+        self._send_security_headers()
+        self._send_cors_headers()
+        self.end_headers()
+        self.close_connection = True
+
+    def _send_ndjson_event(self, event: dict[str, Any]) -> bool:
+        body = (json.dumps(event, ensure_ascii=False, separators=(",", ":"), default=json_default) + "\n").encode("utf-8")
+        try:
+            self.wfile.write(body)
+            self.wfile.flush()
+            return True
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return False
 
     def _send_html(self, content: str, status: HTTPStatus = HTTPStatus.OK) -> None:
         body = content.encode("utf-8")

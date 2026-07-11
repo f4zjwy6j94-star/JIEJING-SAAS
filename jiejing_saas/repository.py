@@ -1476,6 +1476,7 @@ class SaaSRepository:
         job_spec: dict[str, Any],
         queue_job_id: str | None = None,
         status: str = "pending",
+        version_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.initialize()
         clean_key = _safe_idempotency_key(idempotency_key)
@@ -1488,6 +1489,16 @@ class SaaSRepository:
             {
                 "media_job_id": media_job_id,
                 "job_spec": job_spec,
+                "asset_version": version_context if isinstance(version_context, dict) else {
+                    "contract_version": "2026-07-11-media-asset-version-v1",
+                    "version": 1,
+                    "root_media_job_id": media_job_id,
+                    "parent_media_job_id": "",
+                    "generation_reason": "initial_generation",
+                    "prompt_version": "media_prompt_v1",
+                    "immutable_prior_versions": True,
+                    "secret_exposed": False,
+                },
                 "state_history": [
                     {
                         "status": status,
@@ -1572,6 +1583,7 @@ class SaaSRepository:
         error_reason: str | None = None,
         retry_delta: int = 0,
         details: dict[str, Any] | None = None,
+        review_update: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.initialize()
         updated_at = now_iso()
@@ -1594,6 +1606,14 @@ class SaaSRepository:
                 payload["production_gate"] = provider_packet.get("production_gate") if isinstance(provider_packet.get("production_gate"), dict) else {}
                 payload["merchant_visible_states"] = provider_packet.get("merchant_visible_states") if isinstance(provider_packet.get("merchant_visible_states"), list) else []
                 payload["media_router"] = provider_packet.get("media_router") if isinstance(provider_packet.get("media_router"), dict) else {}
+                if isinstance(provider_packet.get("asset_version"), dict):
+                    current_version = payload.get("asset_version") if isinstance(payload.get("asset_version"), dict) else {}
+                    packet_version = provider_packet["asset_version"]
+                    payload["asset_version"] = {
+                        **current_version,
+                        **{key: value for key, value in packet_version.items() if value not in (None, "")},
+                    }
+                    payload["asset_version"].setdefault("root_media_job_id", media_job_id)
                 validation_status = str(payload.get("asset_manifest_validation", {}).get("status") or "")
                 if validation_status and validation_status != "manifest_ready" and status == "waiting_review":
                     status = "validation_failed"
@@ -1607,6 +1627,23 @@ class SaaSRepository:
                 payload["secret_exposed"] = False
             if details:
                 payload.setdefault("details", []).append(_redact_secret_like({"created_at": updated_at, **details}))
+            if isinstance(review_update, dict):
+                clean_review = _redact_secret_like(review_update)
+                payload["merchant_review"] = clean_review
+                approved = clean_review.get("decision") == "approve_for_listing_draft"
+                manifest = payload.get("asset_manifest") if isinstance(payload.get("asset_manifest"), list) else []
+                for asset in manifest:
+                    if not isinstance(asset, dict):
+                        continue
+                    asset["fact_review_status"] = "confirmed_by_merchant" if approved else "needs_rework"
+                    asset["commercial_use_status"] = "confirmed_by_merchant" if approved else "needs_rework"
+                    asset["listing_use_status"] = "approved_for_listing_draft" if approved else "needs_rework"
+                    asset["review_status"] = "approved_for_listing_draft" if approved else "needs_rework"
+                asset_review = payload.get("asset_review") if isinstance(payload.get("asset_review"), dict) else {}
+                asset_review["status"] = "approved_for_listing_draft" if approved else "needs_rework"
+                asset_review["listing_use_status"] = "approved_for_listing_draft" if approved else "needs_rework"
+                asset_review["reviewed_at"] = updated_at
+                payload["asset_review"] = asset_review
             payload.setdefault("state_history", []).append(
                 _redact_secret_like(
                     {
@@ -3145,6 +3182,14 @@ class SaaSRepository:
                     assistant_id=assistant_id,
                 )
                 updated_at = now_iso()
+                existing_row = conn.execute(
+                    "select * from ai_ceo_chat_turns where company_id = ? and user_id = ? and assistant_id = ?",
+                    (company_id, user_id, assistant_id),
+                ).fetchone()
+                if existing_row:
+                    existing_turn = self._ai_ceo_chat_turn_row_to_dict(existing_row)
+                    if _ai_ceo_chat_turn_merge_score(existing_turn) >= _ai_ceo_chat_turn_merge_score(turn):
+                        continue
                 payload = json.dumps(turn, ensure_ascii=False, default=json_default)
                 conn.execute(
                     """
@@ -3206,6 +3251,25 @@ class SaaSRepository:
                 },
             )
         return self.list_ai_ceo_chat_history(company_id=company_id, user_id=user_id, limit=limit)
+
+    def ai_ceo_chat_history_revision(self, *, company_id: str, user_id: str) -> str:
+        self.initialize()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select assistant_id, status, updated_at, turn_json
+                from ai_ceo_chat_turns
+                where company_id = ? and user_id = ?
+                order by assistant_id
+                """,
+                (company_id, user_id),
+            ).fetchall()
+        revision_payload = [
+            [str(row["assistant_id"] or ""), str(row["status"] or ""), str(row["updated_at"] or ""), str(row["turn_json"] or "")]
+            for row in rows
+        ]
+        digest = hashlib.sha256(json.dumps(revision_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()[:20]
+        return f"chatrev_{len(rows)}_{digest}"
 
     def list_ai_ceo_chat_history(
         self,
@@ -4596,6 +4660,8 @@ class SaaSRepository:
             "asset_manifest": payload.get("asset_manifest") if isinstance(payload.get("asset_manifest"), list) else [],
             "asset_manifest_validation": payload.get("asset_manifest_validation") if isinstance(payload.get("asset_manifest_validation"), dict) else {},
             "asset_review": payload.get("asset_review") if isinstance(payload.get("asset_review"), dict) else {},
+            "asset_version": payload.get("asset_version") if isinstance(payload.get("asset_version"), dict) else {},
+            "merchant_review": payload.get("merchant_review") if isinstance(payload.get("merchant_review"), dict) else {},
             "cost_guard": payload.get("cost_guard") if isinstance(payload.get("cost_guard"), dict) else {},
             "production_gate": payload.get("production_gate") if isinstance(payload.get("production_gate"), dict) else {},
             "merchant_visible_states": payload.get("merchant_visible_states") if isinstance(payload.get("merchant_visible_states"), list) else [],
@@ -4725,6 +4791,7 @@ class SaaSRepository:
             return {}
         turn["store_id"] = str(row["store_id"] or turn.get("store_id") or "")
         turn["created_at"] = str(row["created_at"] or turn.get("created_at") or "")
+        turn["updated_at"] = str(row["updated_at"] or turn.get("updated_at") or "")
         turn["secret_exposed"] = False
         return turn
 
@@ -5078,6 +5145,7 @@ def _normalize_ai_ceo_chat_history_turn(
         "work_records": clean_records(value.get("work_records"), record_type="work"),
         "confirmation_items": clean_records(value.get("confirmation_items"), record_type="confirmation"),
         "created_at": str(value.get("created_at") or now_iso())[:80],
+        "updated_at": str(value.get("updated_at") or value.get("created_at") or "")[:80],
         "account_scope": "account",
         "cross_store": True,
         "raw_provider_secret_stored": False,
@@ -5085,6 +5153,20 @@ def _normalize_ai_ceo_chat_history_turn(
         "secret_exposed": False,
     }
     return _redact_secret_like(normalized)
+
+
+def _ai_ceo_chat_turn_merge_score(turn: Any) -> int:
+    if not isinstance(turn, dict):
+        return -1
+    status = str(turn.get("status") or "")
+    completion = 0 if turn.get("pending") is True or status in {"pending", "streaming"} else 100_000
+    answer = min(30_000, len(str(turn.get("assistant_text") or "")) * 10)
+    evidence = 0
+    for key in ("source_records", "work_records", "confirmation_items"):
+        records = turn.get(key) if isinstance(turn.get(key), list) else []
+        evidence += len(records) * 250
+    report = 5_000 if isinstance(turn.get("market_report_delivery"), dict) and turn["market_report_delivery"].get("report_id") else 0
+    return completion + answer + evidence + report
 
 
 def _looks_like_ai_ceo_market_research_turn(*, message: str, chat: dict[str, Any]) -> bool:
@@ -5763,8 +5845,10 @@ def _ai_ceo_listing_handoff_fields(
         "keywords": keyword_candidates,
         "price_band": price_band,
         "category_suggestion": "待 eBay 类目体检确认",
-        "condition": "NEW",
-        "quantity": "1",
+        "condition": "",
+        "condition_suggestion": "NEW",
+        "quantity": "",
+        "quantity_suggestion": "1",
         "item_specifics": item_specifics,
         "image_requirements": image_plan,
         "logistics_requirements": logistics_plan,
@@ -5778,7 +5862,7 @@ def _ai_ceo_listing_handoff_fields(
         )[:1800],
         "ebay_inventory_item_draft": {
             "sku": "",
-            "condition": "NEW",
+            "condition": "",
             "product": {
                 "title": clean_product,
                 "description": "\n".join(selling_points[:4])[:1800] or clean_answer[:800],
@@ -5787,7 +5871,7 @@ def _ai_ceo_listing_handoff_fields(
             },
             "availability": {
                 "shipToLocationAvailability": {
-                    "quantity": 1,
+                    "quantity": 0,
                 },
             },
         },
@@ -5798,10 +5882,11 @@ def _ai_ceo_listing_handoff_fields(
             "merchantLocationKey": "",
             "pricingSummary": {
                 "price": {
-                    "value": price_band,
+                    "value": "",
                     "currency": "USD",
                 },
             },
+            "research_price_band": price_band,
             "listingDescription": "\n".join(selling_points[:4])[:1800] or clean_answer[:800],
             "listingPolicies": {
                 "fulfillmentPolicyId": "",
@@ -5824,6 +5909,14 @@ def _ai_ceo_listing_handoff_fields(
         ],
         "publish_preflight_gaps": publish_gaps,
         "merchant_required_answers": merchant_required_answers,
+        "merchant_question_contract": {
+            "contract_version": "2026-07-11-listing-missing-facts-v1",
+            "questions": merchant_required_answers,
+            "confirmed_values_only_in_publish_prefill": True,
+            "suggestions_are_not_confirmed_facts": True,
+            "real_platform_write_allowed": False,
+            "secret_exposed": False,
+        },
         "ebay_publish_field_matrix": field_matrix,
         "listing_readiness": {
             "ready_field_count": ready_field_count,
@@ -5843,23 +5936,26 @@ def _ai_ceo_listing_handoff_fields(
 
 def _ai_ceo_item_specifics(*, product: str, answer: str) -> dict[str, str]:
     specifics: dict[str, str] = {
-        "Brand": "Unbranded",
+        "Brand": "待补",
         "Type": "待补",
-        "MPN": "Does Not Apply",
+        "Material": "待补",
+        "MPN": "待补",
     }
     lower_product = product.lower()
     lower_answer = answer.lower()
     if "mosquito" in lower_product or "mosquito" in lower_answer or "驱蚊" in answer or "蚊" in answer:
-        specifics["Type"] = "Mosquito Repeller"
+        specifics["Type"] = "待商家确认：Mosquito Repeller"
     elif "jewelry" in lower_product or "jewelry" in lower_answer or "首饰" in answer:
-        specifics["Type"] = "Jewelry Organizer"
+        specifics["Type"] = "待商家确认：Jewelry Organizer"
     elif "case" in lower_product or "box" in lower_product or "盒" in answer:
-        specifics["Type"] = "Storage Case"
+        specifics["Type"] = "待商家确认：Storage Case"
+    for key, label in (("Brand", "Brand|品牌"), ("Type", "Type|类型|品类"), ("MPN", "MPN|制造商零件编号")):
+        match = re.search(rf"(?:{label})\s*[:：]\s*([A-Za-z0-9\u4e00-\u9fff /_.-]{{2,60}})", answer, flags=re.IGNORECASE)
+        if match:
+            specifics[key] = _sanitize_merchant_ceo_text(match.group(1), limit=60)
     material_match = re.search(r"(?:Material|材质)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fff /_-]{2,60})", answer, flags=re.IGNORECASE)
     if material_match:
         specifics["Material"] = _sanitize_merchant_ceo_text(material_match.group(1), limit=60)
-    else:
-        specifics["Material"] = "待补"
     pack_match = re.search(r"(?:Pack(?:age)? Quantity|数量|件数|pack)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fff /_-]{1,40})", answer, flags=re.IGNORECASE)
     if pack_match:
         specifics["Pack Quantity"] = _sanitize_merchant_ceo_text(pack_match.group(1), limit=40)
@@ -5912,13 +6008,18 @@ def _ai_ceo_listing_publish_gaps(
         "库存位置 merchantLocationKey 需要来自店铺真实 location",
         "履约、付款、退货三个店铺政策需要来自 eBay 账号",
     ]
-    if not price_band:
-        gaps.append("价格和利润线索待补")
+    if price_band:
+        gaps.append("公开调研价格带只能作为参考；最终售价、采购成本、平台费和利润预留仍需确认")
+    else:
+        gaps.append("最终售价、采购成本、平台费和利润预留待补")
     if not image_plan.get("imageUrls"):
         gaps.append("图片 URL 和素材授权待补")
     if any(value in {"", "待补"} for value in item_specifics.values()):
         gaps.append("Item specifics 仍有待补字段")
-    if not logistics_plan.get("package_weight_g"):
+    if not all(
+        logistics_plan.get(key)
+        for key in ("item_location", "package_weight_g", "package_length_cm", "package_width_cm", "package_height_cm")
+    ):
         gaps.append("重量、尺寸或发货地待补")
     return gaps[:10]
 
@@ -5935,7 +6036,7 @@ def _ai_ceo_ebay_publish_field_matrix(
 
     def has_value(value: Any) -> bool:
         text = str(value or "").strip()
-        return bool(text) and text not in {"待补", "unknown", "todo"}
+        return bool(text) and text not in {"待补", "unknown", "todo"} and not text.startswith("待")
 
     def row(
         *,
@@ -5975,6 +6076,7 @@ def _ai_ceo_ebay_publish_field_matrix(
             value=product,
             source="AI CEO 市场调研",
             question="确认最终 eBay 标题，控制在平台标题长度内。",
+            status="needs_review",
             blocks_publish=False,
         ),
         row(
@@ -5997,9 +6099,9 @@ def _ai_ceo_ebay_publish_field_matrix(
             label="商品状态",
             ebay_field="condition",
             target_api="InventoryItem.condition",
-            value="NEW",
-            source="商家确认",
-            question="确认商品是 NEW、USED 还是其他状态。",
+            value="",
+            source="建议 NEW，等待商家确认",
+            question="确认商品状态；如果确为全新商品，再选择 NEW。",
         ),
         row(
             label="Item specifics",
@@ -6023,10 +6125,9 @@ def _ai_ceo_ebay_publish_field_matrix(
             label="可售数量",
             ebay_field="availability.shipToLocationAvailability.quantity",
             target_api="InventoryItem.availability",
-            value="1",
-            source="商家确认",
-            question="确认首批可售数量。",
-            blocks_publish=False,
+            value="",
+            source="建议首批从 1 件开始，等待商家确认",
+            question="填写当前真实可售数量；不要用建议数量代替库存事实。",
         ),
         row(
             label="图片 URL",

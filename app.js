@@ -3169,7 +3169,7 @@ const backflowProductReport = {
           ["Quantity", "50", "可用", "初始默认 50，真实库存或代发能力不足时降低。"],
           [
             "商品参数",
-            "Brand: Unbranded; Type: Backflow Incense Burner; Material: Ceramic/Resin/Metal look待确认; Color: Bronze/Brown待确认; Pieces: 1; UPC: Does not apply; MPN: Does not apply",
+            "Brand: 待确认; Type: 待确认; Material: 待确认; Color: 待确认; Pieces: 待确认; UPC: 待确认; MPN: 待确认",
             "待补资料",
             "Brand/Type/Material/Color/Pieces/UPC/MPN 必须全填，材质颜色不能猜。",
           ],
@@ -5612,6 +5612,9 @@ function resetSaasBulkWorkspaceForListingProject() {
   state.bulkApprovedCount = 0;
   state.bulkStage = "idle";
   state.sourceHandoffStatus = "idle";
+  state.saasBulkBatchRun = null;
+  state.saasBulkBatchPaused = false;
+  state.saasBulkListingDrafts = [];
 }
 
 function saasBulkCandidatesFromCurrentWork() {
@@ -5891,13 +5894,17 @@ function renderSaasBulkCandidatePreview() {
         )
         .join("")}
     </div>
+    ${renderSaasBulkBatchRunPanel()}
     <div class="bulk-decision-dock">
       <div>
         <span>本批决策</span>
-        <strong>同意后，只送 Listing 与素材草稿</strong>
+        <strong>${state.saasBulkBatchPaused ? "批次已暂停" : "同意后，只送 Listing 与素材草稿"}</strong>
         <p>${escapeHtml(sourceHint)} 发布、采购付款、改价、库存、退款、广告和敏感客服承诺仍必须由你确认。</p>
       </div>
-      <button class="primary-action" type="button" data-bulk-action="accept-candidates">同意，送去素材和刊登</button>
+      <div class="button-row">
+        <button class="secondary-action" type="button" data-bulk-action="${state.saasBulkBatchPaused ? "resume-batch" : "pause-batch"}">${state.saasBulkBatchPaused ? "恢复批次" : "暂停批次"}</button>
+        <button class="primary-action" type="button" data-bulk-action="accept-candidates" ${state.saasBulkBatchPaused ? "disabled" : ""}>同意，送去素材和刊登</button>
+      </div>
     </div>
   `;
 }
@@ -6573,6 +6580,11 @@ function bindSaasMediaManifestPreviewEvents(view = document.querySelector("#view
   if (!view || view.dataset.saasManifestPreviewEventsBound) return;
   view.dataset.saasManifestPreviewEventsBound = "1";
   view.addEventListener("click", (event) => {
+    const reworkButton = event.target.closest("[data-media-rework-job]");
+    if (reworkButton && view.contains(reworkButton)) {
+      void retrySaasMediaAssetJob(reworkButton.dataset.mediaReworkJob || "", reworkButton);
+      return;
+    }
     const card = event.target.closest(".saas-generated-assets-grid [data-asset-preview]");
     if (card && view.contains(card)) openAssetPreview(card.dataset.assetPreview);
   });
@@ -6817,6 +6829,152 @@ function saasCurrentListingProjectIdentity(draft = state.saasListingComposerDraf
     source_id: sourceId,
     candidate_id: candidateId,
   };
+}
+
+function saasBulkHandoffAttempt(candidate = {}, previous = {}) {
+  const candidateId = String(candidate.candidate_id || "").trim();
+  const retryCount = Number(previous.retry_count || 0);
+  const name = saasCleanMarketCandidateName(candidate.name || "");
+  const retryableFailure = Boolean(candidate.handoff_error) && candidate.handoff_retryable !== false;
+  if (!candidateId || !saasIsConcreteProductLabel(name)) {
+    return {
+      candidate_id: candidateId || `invalid-${Date.now()}`,
+      name: name || "未识别商品",
+      status: "failed",
+      error_reason: "缺少明确商品名，无法建立 Listing 草稿。",
+      retryable: false,
+      retry_count: retryCount,
+    };
+  }
+  if (candidate.handoff_error && !(retryCount > 0 && retryableFailure)) {
+    return {
+      candidate_id: candidateId,
+      name,
+      status: "failed",
+      error_reason: publicRuntimeText(candidate.handoff_error).slice(0, 180) || "草稿转换暂时失败。",
+      retryable: retryableFailure,
+      retry_count: retryCount,
+    };
+  }
+  try {
+    return {
+      candidate_id: candidateId,
+      name,
+      status: "succeeded",
+      error_reason: "",
+      retryable: false,
+      retry_count: retryCount,
+      listing_draft: saasBulkCandidateToListingDraft({ ...candidate, name }),
+    };
+  } catch (error) {
+    return {
+      candidate_id: candidateId,
+      name,
+      status: "failed",
+      error_reason: publicRuntimeText(error?.message || error).slice(0, 180) || "草稿转换暂时失败。",
+      retryable: true,
+      retry_count: retryCount,
+    };
+  }
+}
+
+function executeSaasBulkHandoffBatch(candidates = []) {
+  const items = (Array.isArray(candidates) ? candidates : []).map((candidate) => saasBulkHandoffAttempt(candidate));
+  const succeeded = items.filter((item) => item.status === "succeeded").length;
+  const failed = items.filter((item) => item.status === "failed").length;
+  state.saasBulkBatchRun = {
+    contract_version: "2026-07-11-bulk-partial-success-v1",
+    run_id: `bulk-run-${Date.now()}`,
+    status: failed && succeeded ? "partial_success" : failed ? "failed" : "completed",
+    paused: false,
+    total: items.length,
+    succeeded,
+    failed,
+    items,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    real_platform_writes_enabled: false,
+  };
+  state.saasBulkListingDrafts = items.filter((item) => item.status === "succeeded").map((item) => item.listing_draft);
+  return state.saasBulkBatchRun;
+}
+
+function renderSaasBulkBatchRunPanel() {
+  const run = state.saasBulkBatchRun && typeof state.saasBulkBatchRun === "object" ? state.saasBulkBatchRun : null;
+  if (!run) return "";
+  const statusLabel = {
+    completed: "本批草稿已完成",
+    partial_success: "部分完成，失败项可单独重试",
+    failed: "本批未生成草稿",
+    paused: "批次已暂停",
+  }[run.paused ? "paused" : run.status] || "批次处理中";
+  return `
+    <section class="saas-bulk-run-panel is-${escapeHtml(run.paused ? "paused" : run.status || "pending")}" data-bulk-run-contract="bulk_partial_success_pause_retry_v1" aria-label="批次执行结果">
+      <div class="saas-bulk-run-head">
+        <div><span>本批执行</span><strong>${escapeHtml(statusLabel)}</strong><p>成功项保留草稿，失败项不会拖回整批；真实发布仍在确认中心。</p></div>
+        <div class="saas-bulk-run-counts"><span>成功 ${escapeHtml(String(run.succeeded || 0))}</span><span>失败 ${escapeHtml(String(run.failed || 0))}</span></div>
+      </div>
+      <div class="saas-bulk-run-items">
+        ${(run.items || [])
+          .map(
+            (item) => `
+              <article class="is-${escapeHtml(item.status || "pending")}">
+                <div><span>${item.status === "succeeded" ? "草稿已生成" : "需要处理"}</span><strong>${escapeHtml(item.name || "当前候选")}</strong></div>
+                <p>${escapeHtml(item.status === "succeeded" ? "可继续补 Listing 字段和素材。" : item.error_reason || "请补资料后重试。")}</p>
+                <div class="button-row">
+                  ${item.status === "succeeded" ? `<button class="secondary-action" type="button" data-bulk-action="open-bulk-item" data-bulk-item="${escapeHtml(item.candidate_id || "")}">打开草稿</button>` : ""}
+                  ${item.status === "failed" && item.retryable ? `<button class="secondary-action" type="button" data-bulk-action="retry-bulk-item" data-bulk-item="${escapeHtml(item.candidate_id || "")}">仅重试此项</button>` : ""}
+                </div>
+              </article>`,
+          )
+          .join("")}
+      </div>
+    </section>
+  `;
+}
+
+function retrySaasBulkHandoffItem(candidateId = "") {
+  const run = state.saasBulkBatchRun;
+  if (!run || run.paused) {
+    showActionToast(run?.paused ? "批次已暂停，恢复后再重试。" : "还没有可重试的批次记录。");
+    return false;
+  }
+  const candidate = (state.saasBulkCandidates || []).find((item) => String(item?.candidate_id || "") === String(candidateId));
+  const index = (run.items || []).findIndex((item) => String(item?.candidate_id || "") === String(candidateId));
+  if (!candidate || index < 0) return false;
+  const previous = run.items[index];
+  const retried = saasBulkHandoffAttempt(candidate, { retry_count: Number(previous.retry_count || 0) + 1 });
+  run.items[index] = retried;
+  run.succeeded = run.items.filter((item) => item.status === "succeeded").length;
+  run.failed = run.items.filter((item) => item.status === "failed").length;
+  run.status = run.failed && run.succeeded ? "partial_success" : run.failed ? "failed" : "completed";
+  run.updated_at = new Date().toISOString();
+  state.saasBulkListingDrafts = run.items.filter((item) => item.status === "succeeded").map((item) => item.listing_draft);
+  state.saasBulkAcceptedCandidates = (state.saasBulkCandidates || []).filter((item) =>
+    run.items.some((runItem) => runItem.status === "succeeded" && runItem.candidate_id === item.candidate_id),
+  );
+  state.bulkApprovedCount = run.succeeded;
+  renderBulkFactory();
+  showActionToast(retried.status === "succeeded" ? `“${retried.name}”已重试成功，其他草稿未受影响。` : `“${retried.name}”仍未完成，请先补资料。`);
+  return retried.status === "succeeded";
+}
+
+function openSaasBulkHandoffItem(candidateId = "") {
+  const runItem = (state.saasBulkBatchRun?.items || []).find(
+    (item) => item.status === "succeeded" && String(item.candidate_id || "") === String(candidateId),
+  );
+  if (!runItem?.listing_draft) return false;
+  state.saasListingComposerDraft = runItem.listing_draft;
+  state.saasListingComposerInput = [runItem.name, ...(runItem.listing_draft.selected_product_candidate?.reasons || [])].filter(Boolean).join("\n");
+  state.saasListingSourceMode = "bulk_handoff";
+  state.activeListingDraft = "";
+  state.activeMediaDraft = `saas-bulk-${runItem.candidate_id}`;
+  state.sourceHandoffDraft = state.activeMediaDraft;
+  state.activeFlowKey = "product";
+  setView("product", { preserveFlowKey: true });
+  renderProductListingCenter();
+  setProductInlineFeedback(`已打开“${runItem.name}”。先补价格、图片、物流、类目和店铺政策，再生成发布确认单。`);
+  return true;
 }
 
 function prepareSaasMediaStudioForCurrentListing() {
@@ -7353,6 +7511,26 @@ function saasMediaAssetJobNextLine(job = {}) {
   return "先接入商品草稿、来源图和图片需求，不会用旧样例冒充真实结果。";
 }
 
+function saasMediaAssetJobVersionLabel(job = {}) {
+  const version = Math.max(1, Number.parseInt(job.asset_version?.version, 10) || 1);
+  return `版本 ${version}`;
+}
+
+function saasMediaAssetJobCostLabel(job = {}) {
+  const guard = job.cost_guard && typeof job.cost_guard === "object" ? job.cost_guard : {};
+  const estimate = Number(guard.estimated_max_cost_cents);
+  const actual = Number(guard.actual_cost_cents);
+  if (guard.actual_cost_cents != null && Number.isFinite(actual) && actual >= 0) return `实际素材用量约 $${(actual / 100).toFixed(2)}`;
+  if (Number.isFinite(estimate) && estimate > 0) return `本次上限估算 $${(estimate / 100).toFixed(2)}，实际用量待服务记录`;
+  return "实际素材用量待服务记录";
+}
+
+function saasMediaAssetJobCanRework(job = {}) {
+  return ["waiting_review", "approved_for_listing", "needs_rework", "validation_failed", "failed", "cancelled"].includes(
+    String(job.status || ""),
+  );
+}
+
 function renderSaasMediaAssetJobsPanel(ctx = saasMerchantWorkbenchContext()) {
   const jobs = saasMediaAssetJobsForDisplay();
   const waitingReviewCount = jobs.filter((job) => ["waiting_review", "provider_returned"].includes(String(job.status || ""))).length;
@@ -7381,10 +7559,19 @@ function renderSaasMediaAssetJobsPanel(ctx = saasMerchantWorkbenchContext()) {
                 .map(
                   (job) => `
                     <article>
-                      <span>${escapeHtml(saasMediaAssetJobStatusLabel(job))}</span>
+                      <div class="saas-media-asset-job-meta">
+                        <span>${escapeHtml(saasMediaAssetJobStatusLabel(job))}</span>
+                        <em>${escapeHtml(saasMediaAssetJobVersionLabel(job))}</em>
+                      </div>
                       <strong>${escapeHtml(saasMediaAssetJobOutputLabel(job))}</strong>
                       <p>${escapeHtml(saasMediaAssetJobNextLine(job))}</p>
+                      <p class="saas-media-asset-cost">${escapeHtml(saasMediaAssetJobCostLabel(job))}</p>
                       <small>${escapeHtml(saasTimestampLabel(job.updated_at || job.created_at || ""))} · 不展示密钥，不自动刊登</small>
+                      ${
+                        saasMediaAssetJobCanRework(job)
+                          ? `<button class="secondary-action saas-media-rework-action" type="button" data-media-rework-job="${escapeHtml(job.media_job_id || "")}">${["needs_rework", "validation_failed", "failed", "cancelled"].includes(String(job.status || "")) ? "按原要求重试" : "生成新版本"}</button>`
+                          : ""
+                      }
                     </article>
                   `,
                 )
@@ -8790,7 +8977,7 @@ function readSaasPublishIntakeForm() {
       description_html: value("description_html"),
       category_id: value("category_id"),
       category_leaf: value("category_leaf"),
-      condition: value("condition") || "NEW",
+      condition: value("condition"),
       price: { value: value("price"), currency: value("currency") || "USD" },
       quantity: value("quantity"),
       item_specifics: itemSpecifics,
@@ -10105,7 +10292,9 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
   const evidenceText = [logisticsText, clean].filter(Boolean).join("\n");
   const categoryText = fields.category && !/待|确认|体检/.test(fields.category) ? fields.category : "";
   const priceText = String(fields.price || "");
-  const priceValue = priceText.replace(/[^\d.]/g, "").slice(0, 12);
+  const priceIsRange = /(?:\d)\s*(?:-|~|–|—|to)\s*(?:\$|usd|\d)/i.test(priceText);
+  const singlePriceMatch = priceIsRange ? null : priceText.match(/\d+(?:\.\d{1,2})?/);
+  const priceValue = singlePriceMatch?.[0] || "";
   const currency = /CNY|RMB|￥|¥|元/i.test(priceText) ? "CNY" : "USD";
   const material =
     itemSpecificRows.Material ||
@@ -10134,8 +10323,8 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
     category_leaf: publishPrefill.category_leaf || categoryText,
     price: priceValue,
     currency: publishPrefill.currency || currency,
-    quantity: publishPrefill.quantity || "1",
-    condition: publishPrefill.condition || "NEW",
+    quantity: publishPrefill.quantity || "",
+    condition: publishPrefill.condition || "",
     merchant_location_key: publishPrefill.merchant_location_key || "",
     item_location: publishPrefill.item_location || itemLocation,
     package_weight_g: publishPrefill.package_weight_g || packageWeightG,
@@ -10233,7 +10422,7 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
   const disabled = !state.saasConnected || !ctx.hasPacket || state.saasLoading;
   const includeGuide = options.includeGuide !== false;
   const formValues = saasPublishIntakePrefillValues();
-  const condition = formValues.condition || "NEW";
+  const condition = formValues.condition || "";
   return `
     <section class="saas-publish-intake-panel" aria-label="新商品发布确认单">
       <div class="saas-publish-intake-head">
@@ -10263,6 +10452,7 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
             <label>
               <span>状态</span>
               <select name="condition">
+                <option value="" ${!condition ? "selected" : ""}>请选择真实状态</option>
                 <option value="NEW" ${condition === "NEW" ? "selected" : ""}>NEW</option>
                 <option value="USED" ${condition === "USED" ? "selected" : ""}>USED</option>
               </select>
@@ -10302,7 +10492,7 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
           renderSaasPublishTextareaField("Item specifics", "item_specifics", {
             value: formValues.item_specifics,
             rows: 4,
-            placeholder: "Brand: Unbranded\nType: Door Bumper\nMaterial: Silicone",
+            placeholder: "Brand: 待确认\nType: Door Bumper\nMaterial: Silicone",
             wide: true,
           }),
           renderSaasPublishInputField("Fulfillment policy ID", "fulfillment_policy_id", { value: formValues.fulfillment_policy_id, placeholder: "从 eBay 账号业务政策读取" }),
@@ -10310,7 +10500,7 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
           renderSaasPublishInputField("Return policy ID", "return_policy_id", { value: formValues.return_policy_id, placeholder: "从 eBay 账号业务政策读取" }),
         ], { step: "04" })}
         ${renderSaasPublishFormGroup("物流履约", "库存、发货地、重量和包装尺寸，影响物流承诺和退货风险。", [
-          renderSaasPublishInputField("库存", "quantity", { value: formValues.quantity || "1", type: "number", extra: 'min="1"' }),
+          renderSaasPublishInputField("库存", "quantity", { value: formValues.quantity, type: "number", placeholder: "填写真实可售数量", extra: 'min="1"' }),
           renderSaasPublishInputField("发货地", "item_location", { value: formValues.item_location, placeholder: "US / CN / ..." }),
           renderSaasPublishInputField("重量 g", "package_weight_g", { value: formValues.package_weight_g, type: "number", placeholder: "120", extra: 'min="0"' }),
           renderSaasPublishInputField("长 cm", "package_length_cm", { value: formValues.package_length_cm, type: "number", extra: 'step="0.1" min="0"' }),
@@ -10379,9 +10569,9 @@ function saasListingComposerDraftFromText(text = "") {
       selling_points: bullets.join("\n"),
       description: clean,
       item_specifics: [
-        "Brand: Unbranded",
+        "Brand: 待确认",
         materialMatch ? `Material: ${materialMatch[1].trim()}` : "Material: 待补",
-        skuMatch ? `MPN: ${skuMatch[1].trim()}` : "MPN: Does Not Apply",
+        skuMatch ? `MPN: ${skuMatch[1].trim()}` : "MPN: 待确认",
       ].join("\n"),
       category: "待发布体检确认",
       price: priceValue,
@@ -10432,7 +10622,7 @@ function saasListingComposerDraftFromCatalogDraft(draft = null, sourceType = "li
       title: draft.title || draft.titleEn || draft.titleCn || "",
       selling_points: reportReasons.join("\n"),
       description,
-      item_specifics: specifics || "Brand: Unbranded\nMaterial: 待补\nMPN: Does Not Apply",
+      item_specifics: specifics || "Brand: 待补\nMaterial: 待补\nMPN: 待补",
       category: [draft.category, draft.categoryId].filter(Boolean).join(" / ") || "待发布体检确认",
       price: draft.price || "",
       images: mediaNeeds || "待补主图、场景图、详情页和可访问图片 URL。",
@@ -10638,8 +10828,10 @@ function saasAiCeoListingHandoffFieldsFromReport(record = null) {
     currency: publicRuntimeText(pricingDraft.currency || "USD").slice(0, 12),
     category_id: publicRuntimeText(offerDraft.categoryId || fields.category_id || "").slice(0, 80),
     category_suggestion: publicRuntimeText(fields.category_suggestion || fields.category || "").slice(0, 120),
-    condition: publicRuntimeText(fields.condition || inventoryDraft.condition || "NEW").slice(0, 40),
-    quantity: String(fields.quantity || availabilityDraft.quantity || "1").slice(0, 20),
+    condition: publicRuntimeText(fields.condition || inventoryDraft.condition || "").slice(0, 40),
+    condition_suggestion: publicRuntimeText(fields.condition_suggestion || "NEW").slice(0, 40),
+    quantity: String(fields.quantity || (Number(availabilityDraft.quantity) > 0 ? availabilityDraft.quantity : "")).slice(0, 20),
+    quantity_suggestion: String(fields.quantity_suggestion || "1").slice(0, 20),
     sku: publicRuntimeText(inventoryDraft.sku || fields.sku || "").slice(0, 80),
     merchant_location_key: publicRuntimeText(offerDraft.merchantLocationKey || logisticsRequirements.merchantLocationKey || "").slice(0, 80),
     item_specifics: itemSpecificsText,
@@ -10660,8 +10852,8 @@ function saasAiCeoListingHandoffFieldsFromReport(record = null) {
     ].filter(Boolean).join("\n"),
     publish_prefill: {
       sku: publicRuntimeText(inventoryDraft.sku || fields.sku || "").slice(0, 80),
-      condition: publicRuntimeText(fields.condition || inventoryDraft.condition || "NEW").slice(0, 40),
-      quantity: String(fields.quantity || availabilityDraft.quantity || "1").slice(0, 20),
+      condition: publicRuntimeText(fields.condition || inventoryDraft.condition || "").slice(0, 40),
+      quantity: String(fields.quantity || (Number(availabilityDraft.quantity) > 0 ? availabilityDraft.quantity : "")).slice(0, 20),
       category_id: publicRuntimeText(offerDraft.categoryId || fields.category_id || "").slice(0, 80),
       category_leaf: publicRuntimeText(fields.category_suggestion || fields.category || "").slice(0, 120),
       merchant_location_key: publicRuntimeText(offerDraft.merchantLocationKey || logisticsRequirements.merchantLocationKey || "").slice(0, 80),
@@ -10679,6 +10871,8 @@ function saasAiCeoListingHandoffFieldsFromReport(record = null) {
     publish_preflight_required_fields: normalizeList(fields.publish_preflight_required_fields),
     publish_preflight_gaps: normalizeList(fields.publish_preflight_gaps),
     merchant_required_answers: normalizeList(fields.merchant_required_answers),
+    merchant_question_contract:
+      fields.merchant_question_contract && typeof fields.merchant_question_contract === "object" ? fields.merchant_question_contract : null,
     ebay_publish_field_matrix: fieldMatrix,
     listing_readiness: {
       ready_field_count: Number(readiness.ready_field_count || 0) || 0,
@@ -10754,7 +10948,7 @@ function saasListingDraftFromReport(record = null, sourceType = "ai_report") {
           ? selectedCandidate.reasons.join("\n")
           : draft.fields?.selling_points || "等待 AI 整理卖点；可先补商品资料。",
       description: candidateDescription || sectionText || "等待 AI CEO 报告正文。",
-      item_specifics: handoffFields.item_specifics || draft.fields?.item_specifics || "Brand: Unbranded\nType: 待补\nMaterial: 待补",
+      item_specifics: handoffFields.item_specifics || draft.fields?.item_specifics || "Brand: 待补\nType: 待补\nMaterial: 待补\nMPN: 待补",
       category: handoffFields.category_id || handoffFields.category_suggestion || "待发布体检确认",
       keywords: handoffFields.keywords.length ? handoffFields.keywords.join(", ") : draft.fields?.keywords || "",
       price: handoffFields.price_band || selectedCandidate?.price_band || draft.fields?.price || "",
@@ -10805,7 +10999,7 @@ function saasListingDraftFromSyncedProduct(row = null) {
       title: product,
       selling_points: "复用已有商品事实\n改写标题和描述\n重新体检类目、图片和利润",
       description: "基于官方只读同步商品改写；发布前需确认这不是直接修改原 Listing。",
-      item_specifics: "Brand: Unbranded\nType: 待补\nMaterial: 待补",
+      item_specifics: "Brand: 待补\nType: 待补\nMaterial: 待补\nMPN: 待补",
       category: row.category_id || row.category_leaf || "待发布体检确认",
       price: String(priceValue || ""),
       images: "复用图片前需确认版权、清晰度和 eBay 可访问 URL。",
@@ -10893,7 +11087,7 @@ function selectSaasListingMarketCandidate(candidateId = "") {
       title: selected.name,
       selling_points: candidateReasons.join("\n") || "等待根据真实商品资料整理卖点。",
       description,
-      item_specifics: "Brand: Unbranded\nType: 待补\nMaterial: 待补",
+      item_specifics: "Brand: 待补\nType: 待补\nMaterial: 待补\nMPN: 待补",
       category: "待发布体检确认",
       keywords: "",
       price: selected.price_band || "",
@@ -10903,8 +11097,8 @@ function selectSaasListingMarketCandidate(candidateId = "") {
     },
     publish_prefill: {
       sku: "",
-      condition: "NEW",
-      quantity: "1",
+      condition: "",
+      quantity: "",
       category_id: "",
       category_leaf: "",
       merchant_location_key: "",
@@ -11939,7 +12133,7 @@ function renderSaasListingNextActionPanel(draft = state.saasListingComposerDraft
     },
   ];
   return `
-    <section class="saas-listing-next-action-panel is-${escapeHtml(primary.action)}" data-listing-next-action="ai_ceo_to_listing_next_action_v1" aria-label="Listing 下一步处理">
+    <section class="saas-listing-next-action-panel is-${escapeHtml(primary.action)}" data-listing-next-action="ai_ceo_to_listing_next_action_v1" data-listing-primary-flow="product-facts_draft_assets_confirmation_v1" aria-label="Listing 四步主流程">
       <div class="saas-listing-next-action-head">
         <div>
           <span>下一步处理</span>
@@ -12053,6 +12247,9 @@ function renderSaasListingAdvancedWorkDetails(
   draft = state.saasListingComposerDraft,
   ctx = saasMerchantWorkbenchContext(),
   pendingConfirmations = [],
+  opportunity = null,
+  marketReport = null,
+  listingReport = null,
 ) {
   if (!draft) return "";
   const coverage = saasListingEbayFieldCoverage(draft, ctx);
@@ -12069,9 +12266,12 @@ function renderSaasListingAdvancedWorkDetails(
           <strong>这些是发布前检查，不是商家第一步必读内容</strong>
           <p>草稿可以先编辑；SKU、类目、图片、价格、物流、店铺政策和确认中心明细按需展开核对。</p>
         </section>
+        ${renderSaasListingWorkflowProofPanel({ draft, marketReport, listingReport, pendingConfirmations })}
+        ${opportunity ? renderSaasListingOpportunityPanel(opportunity) : ""}
         ${renderSaasListingEbayFieldCoveragePanel(draft, ctx)}
         ${renderSaasListingPreflightBridgePanel(draft, ctx, pendingConfirmations)}
         ${renderSaasListingPublishFeedbackPanel(draft, ctx, pendingConfirmations)}
+        ${opportunity ? renderSaasListingGapAndRiskPanel(draft, opportunity) : ""}
       </div>
     </details>
   `;
@@ -12173,15 +12373,10 @@ function renderSaasListingComposerWorkspace({
           <span>也可以从这些来源开始</span>
         </div>
         ${renderSaasListingSourceCards({ marketReport, listingReport, syncedRows })}
-        ${renderSaasListingStatusBar({ draft, reportsReady, confirmationCount })}
-        ${renderSaasListingWorkflowProofPanel({ draft, marketReport, listingReport, pendingConfirmations })}
-        ${showOpportunity ? renderSaasListingOpportunityPanel(opportunity) : ""}
         ${renderSaasListingDraftEditor(draft)}
         ${renderSaasListingMediaWritebackPanel(draft)}
         ${draft ? renderSaasListingNextActionPanel(draft, ctx, pendingConfirmations) : ""}
-        ${draft ? renderSaasListingVisiblePublishBridge(draft, ctx, pendingConfirmations) : ""}
-        ${draft ? renderSaasListingAdvancedWorkDetails(draft, ctx, pendingConfirmations) : ""}
-        ${draft ? renderSaasListingGapAndRiskPanel(draft, opportunity) : ""}
+        ${draft ? renderSaasListingAdvancedWorkDetails(draft, ctx, pendingConfirmations, opportunity, marketReport, listingReport) : ""}
       </div>
     </section>
   `;
@@ -14465,6 +14660,49 @@ async function approveLatestSaasMediaAssetJobForListingDraft() {
   }
 }
 
+async function retrySaasMediaAssetJob(mediaJobId, button = null) {
+  const cleanId = String(mediaJobId || "").trim();
+  if (!cleanId) return null;
+  const sourceJob = (state.saasMediaAssetJobs || []).find((job) => String(job?.media_job_id || "") === cleanId) || {};
+  const estimateText = saasMediaAssetJobCostLabel(sourceJob);
+  if (!window.confirm(`将保留当前版本并创建新版本。${estimateText}；不会写入 eBay。是否继续？`)) return null;
+  const originalLabel = button?.textContent || "生成新版本";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "正在创建";
+  }
+  try {
+    const payload = await saasFetch(`/media-asset-jobs/${encodeURIComponent(cleanId)}/retry`, {
+      method: "POST",
+      body: JSON.stringify({
+        reason: "商家在素材工坊要求重做并保留上一版本",
+        run_mode: "queued",
+      }),
+    });
+    const mediaJob = payload?.media_asset_job && typeof payload.media_asset_job === "object" ? payload.media_asset_job : null;
+    if (!mediaJob?.media_job_id) throw new Error("后端没有返回新素材版本");
+    upsertSaasMediaAssetJobForDisplay(mediaJob);
+    state.mediaGenerationStatus = "submitted";
+    setText("#mediaProductionStatus", `${saasMediaAssetJobVersionLabel(mediaJob)} 已创建 · 正在后台生成`);
+    setText("#mediaPreviewNote", "旧版本已保留；新版本完成后仍需核对实物一致性、商用权和 eBay 素材规则。");
+    showActionToast(`${saasMediaAssetJobVersionLabel(mediaJob)} 已创建：旧版本不会被覆盖。`);
+    void pollSaasMediaAssetJobUntilReview({
+      mediaJobId: mediaJob.media_job_id,
+      sourceText: "素材工坊重做并保留上一版本",
+      config: readMediaGenerationConfig(),
+    });
+    return mediaJob;
+  } catch (error) {
+    showActionToast(`新版本没有创建：${publicRuntimeText(error?.message || error).slice(0, 120)}`);
+    return null;
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalLabel;
+    }
+  }
+}
+
 function currentMediaStudioProductFacts(config = {}) {
   const ctx = isSaasPublicMvpMode() ? saasMerchantWorkbenchContext() : {};
   const activeDraftRaw = typeof activeListingDraft === "function" ? activeListingDraft() : null;
@@ -14639,6 +14877,12 @@ async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}) {
     merchant_visible_states: ["素材任务正在创建"],
     asset_manifest: [],
     asset_manifest_validation: { status: "queued" },
+    asset_version: {
+      contract_version: "2026-07-11-media-asset-version-v1",
+      version: 1,
+      generation_reason: "initial_generation",
+      immutable_prior_versions: true,
+    },
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   });
@@ -16211,6 +16455,89 @@ function resetSaasProtectedWorkbenchState() {
   state.saasLastPublicSearchHandoff = null;
   state.saasSourceRecords = [];
   state.saasAiCeoThreadCloudReady = false;
+}
+
+async function saasFetchNdjsonWithTimeout(path, options = {}, timeoutMs = 60000, hooks = {}) {
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const headers = {
+    accept: "application/x-ndjson, application/json",
+    "content-type": "application/json",
+    ...(options.headers || {}),
+  };
+  if (state.saasToken && shouldAttachSaasBearerToken()) headers.authorization = `Bearer ${state.saasToken}`;
+  let timer = null;
+  try {
+    timer = setTimeout(() => {
+      recordOptionalSaasSoftTimeout(path, timeoutMs);
+      controller?.abort();
+    }, timeoutMs);
+    const response = await fetch(`${state.saasApiBase}${path}`, {
+      ...options,
+      cache: options.cache || "no-store",
+      credentials: options.credentials || "include",
+      headers,
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      let payload = null;
+      try {
+        payload = JSON.parse(detail);
+      } catch {
+        payload = null;
+      }
+      const error = new Error(saasBackendErrorMessage(response.status, detail, payload));
+      error.status = response.status;
+      error.payload = payload;
+      throw error;
+    }
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) return response.json();
+    if (!contentType.includes("application/x-ndjson") || !response.body?.getReader) {
+      throw new Error("AI CEO 流式响应协议暂时不可用，请稍后重试。");
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    let streamedText = "";
+    let finalPayload = null;
+    const consumeLine = (line) => {
+      const raw = String(line || "").trim();
+      if (!raw) return;
+      let event = null;
+      try {
+        event = JSON.parse(raw);
+      } catch {
+        return;
+      }
+      if (!event || typeof event !== "object" || event.secret_exposed === true) return;
+      if (event.type === "delta" && typeof event.delta === "string" && event.delta) {
+        streamedText = `${streamedText}${event.delta}`.slice(0, 120000);
+        hooks.onDelta?.(event.delta, streamedText);
+      } else if (event.type === "accepted") {
+        hooks.onStage?.(event.stage || "model", event);
+      } else if (event.type === "final" && event.payload && typeof event.payload === "object") {
+        finalPayload = event.payload;
+      }
+      hooks.onEvent?.(event);
+    };
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      lines.forEach(consumeLine);
+      if (done) break;
+    }
+    consumeLine(buffer);
+    if (!finalPayload) throw new Error("AI CEO 流式响应未返回最终结果，请直接重试本轮问题。");
+    return finalPayload;
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error(`AI CEO response timed out after ${timeoutMs}ms`);
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function storedSaasStoreId() {
@@ -21210,7 +21537,7 @@ async function persistSaasCeoCommandToBackend(command = state.saasLastCeoCommand
   }
 }
 
-async function requestSaasAiCeoChat(command = state.saasLastCeoCommand) {
+async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = {}) {
   const current = normalizeSaasCeoCommand(command);
   if (!current || !current.store_id) {
     return {
@@ -21229,8 +21556,8 @@ async function requestSaasAiCeoChat(command = state.saasLastCeoCommand) {
     };
   }
   try {
-    return await saasFetchWithTimeout(
-      `/stores/${encodeURIComponent(current.store_id)}/merchant-ceo/chat?fresh=${Date.now()}`,
+    return await saasFetchNdjsonWithTimeout(
+      `/stores/${encodeURIComponent(current.store_id)}/merchant-ceo/chat?stream=1&fresh=${Date.now()}`,
       {
         method: "POST",
         cache: "no-store",
@@ -21253,6 +21580,7 @@ async function requestSaasAiCeoChat(command = state.saasLastCeoCommand) {
         }),
       },
       60000,
+      hooks,
     );
   } catch (error) {
     return {
@@ -21425,8 +21753,31 @@ function handleSaasCeoCommandSubmit(text) {
     decision_center_required: Boolean(command.decision_center_required),
   });
   scheduleSaasAiCeoPendingWatchdog(pendingMessageId, command);
-  state.saasLastCeoCommandPersistPromise = requestSaasAiCeoChat(command)
+  let streamRenderTimer = null;
+  let streamRenderText = "";
+  const flushStreamRender = () => {
+    streamRenderTimer = null;
+    if (streamRenderText) updateCeoAssistantStreamingMessage(pendingMessageId, streamRenderText);
+  };
+  state.saasLastCeoCommandPersistPromise = requestSaasAiCeoChat(command, {
+    onStage: (stage) => {
+      const latest = normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn);
+      if (!latest || latest.assistant_id !== pendingMessageId) return;
+      updateCeoAssistantPendingMessage(pendingMessageId, {
+        ...latest,
+        status: "model_streaming",
+        pending_stage: stage || "model",
+        pending: true,
+      });
+    },
+    onDelta: (_delta, fullText) => {
+      streamRenderText = fullText;
+      if (!streamRenderTimer) streamRenderTimer = setTimeout(flushStreamRender, 48);
+    },
+  })
     .then((payload) => {
+      if (streamRenderTimer) clearTimeout(streamRenderTimer);
+      streamRenderTimer = null;
       const latestTurnAtResponse = normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn);
       const isCurrentChatTurn = !latestTurnAtResponse?.assistant_id || latestTurnAtResponse.assistant_id === pendingMessageId;
       const chat = payload?.ai_ceo_chat && typeof payload.ai_ceo_chat === "object" ? payload.ai_ceo_chat : null;
@@ -21555,6 +21906,8 @@ function handleSaasCeoCommandSubmit(text) {
       return mergedCommand;
     })
     .catch(() => {
+      if (streamRenderTimer) clearTimeout(streamRenderTimer);
+      streamRenderTimer = null;
       const safeText = "AI CEO 连接暂时没有完成。我已经保留这次目标，可以稍后重试或补充资料；真实发布、付款、退款、广告、授权和敏感客服承诺不会自动执行。";
       const latest = normalizeSaasAiCeoLatestTurn({
         ...(state.saasAiCeoLatestTurn || {}),
@@ -26576,16 +26929,19 @@ function saasAiCeoMarketListingFieldsFromTurn(turn = {}) {
     keywords: keywordLine ? keywordLine[1].split(/[,，、]/).map((item) => item.trim()).filter(Boolean).slice(0, 8) : [],
     price_band: priceMatch ? String(priceMatch[1] || priceMatch[0] || "").trim().slice(0, 90) : "",
     category_suggestion: "待发布体检确认",
-    condition: "NEW",
-    quantity: "1",
+    condition: "",
+    condition_suggestion: "NEW",
+    quantity: "",
+    quantity_suggestion: "1",
     description_seed: saasListingDescriptionFromCandidate(
       selectedCandidate,
       [userText ? `商家目标：${userText}` : "", answer].filter(Boolean).join("\n\n"),
     ).slice(0, 1800),
     item_specifics: {
-      Brand: "Unbranded",
+      Brand: "待补",
       Type: "待补",
       Material: "待补",
+      MPN: "待补",
     },
     image_requirements: {
       main_image: "需要可访问主图 URL，并确认图片授权和实物一致性。",
@@ -32742,6 +33098,9 @@ function handleBulkAction(action, item = "") {
       return;
     }
     state.saasBulkCandidates = candidates;
+    state.saasBulkBatchRun = null;
+    state.saasBulkBatchPaused = false;
+    state.saasBulkListingDrafts = [];
     state.batchPreviewCount = 0;
     state.bulkStage = "clean";
     renderBulkFactory();
@@ -32762,6 +33121,7 @@ function handleBulkAction(action, item = "") {
         return;
       }
       state.saasBulkCandidates = candidates;
+      state.saasBulkBatchRun = null;
       state.batchPreviewCount = candidates.length;
       renderBulkFactory();
       setBulkFeedback(`已按实际 ${candidates.length} 个候选分组，不会把计划数量或旧演示商品算作真实候选。`);
@@ -32773,13 +33133,54 @@ function handleBulkAction(action, item = "") {
     return;
   }
 
+  if (action === "pause-batch") {
+    state.saasBulkBatchPaused = true;
+    if (state.saasBulkBatchRun) state.saasBulkBatchRun.paused = true;
+    renderBulkFactory();
+    setBulkFeedback("批次已暂停。已有草稿保留，不会继续创建新草稿。恢复后可继续或只重试失败项。");
+    showActionToast("批次已暂停：成功项和失败原因都已保留。");
+    return;
+  }
+
+  if (action === "resume-batch") {
+    state.saasBulkBatchPaused = false;
+    if (state.saasBulkBatchRun) state.saasBulkBatchRun.paused = false;
+    renderBulkFactory();
+    setBulkFeedback("批次已恢复。可以继续送入草稿，或只重试失败项。");
+    showActionToast("批次已恢复。");
+    return;
+  }
+
+  if (action === "retry-bulk-item") {
+    retrySaasBulkHandoffItem(item);
+    return;
+  }
+
+  if (action === "open-bulk-item") {
+    if (!openSaasBulkHandoffItem(item)) showActionToast("这条草稿暂时不可打开，请先重试或补资料。");
+    return;
+  }
+
   if (action === "accept-candidates") {
     if (isSaasPublicMvpMode()) {
+      if (state.saasBulkBatchPaused) {
+        showActionToast("批次已暂停，恢复后再继续。已有结果不会丢失。");
+        return;
+      }
       const candidates = currentSaasBulkCandidates().slice(0, Number(state.batchPreviewCount || 0));
-      const accepted = candidates.filter((candidate) => saasBulkCandidateLane(candidate) === "test");
-      if (!accepted.length) {
+      const eligible = candidates.filter((candidate) => saasBulkCandidateLane(candidate) === "test");
+      if (!eligible.length) {
         setBulkFeedback("本轮没有“建议先测”的明确商品。先补资料或回 AI CEO 重新筛选，不能用旧商品代替。");
         showActionToast("没有可送出的真实候选。");
+        return;
+      }
+      const batchRun = executeSaasBulkHandoffBatch(eligible);
+      const successfulIds = new Set(batchRun.items.filter((runItem) => runItem.status === "succeeded").map((runItem) => runItem.candidate_id));
+      const accepted = eligible.filter((candidate) => successfulIds.has(candidate.candidate_id));
+      if (!accepted.length) {
+        renderBulkFactory();
+        setBulkFeedback("本批草稿没有生成成功。失败原因已逐项保留，可以补资料后只重试对应商品。");
+        showActionToast("本批未完成：请查看失败原因并逐项重试。");
         return;
       }
       state.saasBulkAcceptedCandidates = accepted;
@@ -32808,6 +33209,9 @@ function handleBulkAction(action, item = "") {
       renderProductListingCenter();
       setProductInlineFeedback(`已从批量铺货导入“${firstCandidate.name}”。先补价格、图片、物流、类目和店铺政策，再生成发布确认单。`);
       showActionToast(`已导入“${firstCandidate.name}”；其余 ${Math.max(0, accepted.length - 1)} 个候选保留在本轮队列。`);
+      if (batchRun.status === "partial_success") {
+        showActionToast(`本批部分完成：${batchRun.succeeded} 个草稿成功，${batchRun.failed} 个失败项已保留，可返回批量铺货单独重试。`);
+      }
       return;
     }
     state.bulkApprovedCount = state.batchPreviewCount || state.batchCandidateCount;
@@ -39275,6 +39679,7 @@ function normalizeSaasAiCeoLatestTurn(turn = {}) {
     confirmation_items: normalizeSaasAiCeoConfirmationItems(turn.confirmation_items || turn.confirmationItems || []),
     source_policy: turn.source_policy && typeof turn.source_policy === "object" ? turn.source_policy : null,
     created_at: turn.created_at || new Date().toISOString(),
+    updated_at: turn.updated_at || turn.created_at || "",
   };
 }
 
@@ -39287,8 +39692,13 @@ function normalizeSaasAiCeoSourceRecords(records = []) {
       url: String(item.url || "").slice(0, 500),
       domain: publicRuntimeText(item.domain || "").slice(0, 120),
       snippet: publicRuntimeText(item.snippet || "").slice(0, 220),
+      citation_id: publicRuntimeText(item.citation_id || "").slice(0, 20),
+      published_at: publicRuntimeText(item.published_at || "").slice(0, 100),
       captured_at: publicRuntimeText(item.captured_at || "").slice(0, 80),
       source_type: publicRuntimeText(item.source_type || "live_public_search").slice(0, 80),
+      trust_tier: publicRuntimeText(item.trust_tier || "public_reference").slice(0, 60),
+      freshness_status: publicRuntimeText(item.freshness_status || "unknown").slice(0, 40),
+      quality_score: Math.max(0, Math.min(100, Number(item.quality_score || 0))),
     }))
     .filter((item) => item.title || item.url || item.snippet);
 }
@@ -39452,7 +39862,10 @@ function persistSaasAiCeoThread(options = {}) {
       .filter(shouldKeepSaasAiCeoThreadTurn)
       .slice(-30);
     localStorage.setItem(saasStorageKeys.ceoThread, JSON.stringify(payload));
-    if (syncBackend) scheduleSaasAiCeoThreadBackendSync();
+    if (syncBackend) {
+      scheduleSaasAiCeoThreadBackendSync();
+      state.saasAiCeoCrossDeviceChannel?.postMessage?.({ type: "history-changed" });
+    }
     return true;
   } catch (error) {
     return false;
@@ -39485,6 +39898,8 @@ function mergeSaasAiCeoHistoryFromBackend(payload = {}, options = {}) {
     : [];
   state.saasAiCeoThread = uniqueSaasAiCeoThreadTurns([...(state.saasAiCeoThread || []), ...backendTurns]).slice(-30);
   state.saasAiCeoThreadCloudReady = history.scope === "account" && history.cross_store === true;
+  state.saasAiCeoHistoryRevision = publicRuntimeText(history.revision || state.saasAiCeoHistoryRevision || "").slice(0, 120);
+  state.saasAiCeoHistoryConflictMerged = history.conflict_merged === true;
   syncSaasAiCeoCloudDomState();
   syncSaasAiCeoLatestTurnFromThread();
   persistSaasAiCeoThread({ syncBackend: false });
@@ -39517,7 +39932,10 @@ async function syncSaasAiCeoThreadWithBackend() {
     12000,
     {
       method: "POST",
-      body: JSON.stringify({ turns: saasAiCeoThreadForBackendSync() }),
+      body: JSON.stringify({
+        turns: saasAiCeoThreadForBackendSync(),
+        base_revision: state.saasAiCeoHistoryRevision || "",
+      }),
     },
   )
     .then((payload) => mergeSaasAiCeoHistoryFromBackend(payload))
@@ -39525,6 +39943,44 @@ async function syncSaasAiCeoThreadWithBackend() {
       state.saasAiCeoThreadSyncPromise = null;
     });
   return state.saasAiCeoThreadSyncPromise;
+}
+
+async function refreshSaasAiCeoThreadFromBackend(options = {}) {
+  const { render = true } = options;
+  if (!hasSaasProtectedSessionCandidate() || !shouldReadSaasAccountScopedLocalCache()) return null;
+  if (state.saasAiCeoThreadRefreshPromise) return state.saasAiCeoThreadRefreshPromise;
+  state.saasAiCeoThreadRefreshPromise = optionalSaasFetchFast(
+    `/ai-ceo/chat-history?limit=30&fresh=${Date.now()}`,
+    { ai_ceo_chat_history: { scope: "unavailable", cross_store: false, turns: [] } },
+    10000,
+  )
+    .then((payload) => mergeSaasAiCeoHistoryFromBackend(payload, { render }))
+    .finally(() => {
+      state.saasAiCeoThreadRefreshPromise = null;
+    });
+  return state.saasAiCeoThreadRefreshPromise;
+}
+
+function startSaasAiCeoCrossDeviceSync() {
+  if (typeof window === "undefined" || state.saasAiCeoCrossDeviceSyncStarted) return false;
+  state.saasAiCeoCrossDeviceSyncStarted = true;
+  const refreshWhenVisible = () => {
+    if (document.visibilityState === "visible" && hasSaasProtectedSessionCandidate()) {
+      void refreshSaasAiCeoThreadFromBackend({ render: document.body?.dataset?.view === "cockpit" });
+    }
+  };
+  document.addEventListener("visibilitychange", refreshWhenVisible);
+  window.addEventListener("focus", refreshWhenVisible);
+  if (typeof BroadcastChannel === "function") {
+    state.saasAiCeoCrossDeviceChannel = new BroadcastChannel("jiejing-ai-ceo-account-history");
+    state.saasAiCeoCrossDeviceChannel.addEventListener("message", (event) => {
+      if (event.data?.type === "history-changed") refreshWhenVisible();
+    });
+  }
+  state.saasAiCeoCrossDeviceSyncTimer = window.setInterval(() => {
+    if (document.visibilityState === "visible" && document.body?.dataset?.view === "cockpit") refreshWhenVisible();
+  }, 10000);
+  return true;
 }
 
 function scheduleSaasAiCeoThreadBackendSync(delay = 450) {
@@ -39623,14 +40079,28 @@ function renderSaasAiCeoSourceRecordsMarkup(records = []) {
           const label = source.title || source.domain || source.url || "来源";
           const host = source.domain || "";
           const detail = source.snippet || source.captured_at || "";
+          const trustLabel = {
+            official_or_primary: "官方/一手来源",
+            official_marketplace: "平台官方来源",
+            established_publication: "主流公开来源",
+            public_reference: "公开参考来源",
+          }[source.trust_tier] || "公开参考来源";
+          const freshnessLabel = {
+            current: "两日内",
+            recent: "近 30 日",
+            dated: "一年内",
+            stale: "较早资料",
+            unknown: "时间待核对",
+          }[source.freshness_status] || "时间待核对";
           const href = source.url && /^https?:\/\//i.test(source.url) ? source.url : "";
           const openTag = href ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">` : "<span>";
           const closeTag = href ? "</a>" : "</span>";
           return `
             ${openTag}
-              <strong>${escapeHtml(label)}</strong>
+              <strong>${source.citation_id ? `${escapeHtml(`[${source.citation_id}]`)} ` : ""}${escapeHtml(label)}</strong>
               ${host ? `<span>${escapeHtml(host)}</span>` : ""}
               ${detail ? `<small>${escapeHtml(detail)}</small>` : ""}
+              <small>${escapeHtml(`${trustLabel} · ${freshnessLabel}`)}</small>
             ${closeTag}
           `;
         })
@@ -40019,6 +40489,33 @@ function ensureCeoAssistantAnswerBody(node) {
     answerBody = messageBody.querySelector(".saas-ai-ceo-answer-markdown");
   }
   return answerBody;
+}
+
+function updateCeoAssistantStreamingMessage(messageId, text) {
+  const node = messageId ? document.getElementById(messageId) : null;
+  const safeText = productizeJiejingProductCopy(String(text || "").slice(0, 120000));
+  if (!node || !safeText) return;
+  node.dataset.status = "model_streaming";
+  node.querySelector(".saas-ai-ceo-pending-status")?.remove();
+  const answerBody = ensureCeoAssistantAnswerBody(node);
+  if (answerBody) {
+    setJiejingTrustedHtml(answerBody, trustedJiejingHtml(renderSaasAiCeoAnswerMarkup(safeText), "ai_ceo.chat_turn.streaming_answer"));
+  }
+  const meta = node.querySelector(".saas-ai-ceo-message-body > small");
+  if (meta) meta.textContent = "正在回答";
+  const latest = normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn);
+  if (!latest || !latest.assistant_id || latest.assistant_id === messageId) {
+    state.saasAiCeoLatestTurn = normalizeSaasAiCeoLatestTurn({
+      ...(latest || {}),
+      assistant_id: messageId,
+      assistant_text: safeText,
+      status: "model_streaming",
+      pending_stage: "model",
+      pending: true,
+    });
+  }
+  const chat = document.querySelector("#ceoChat");
+  if (chat) chat.scrollTop = chat.scrollHeight;
 }
 
 function updateCeoAssistantMessage(messageId, text, status = "", model = null, sourceRecords = [], workflowDetails = {}) {
@@ -41696,6 +42193,7 @@ function init() {
   refreshSaasPublicReadiness({ render: true });
   refreshSaasState({ silent: true });
   refreshRuntimeState({ silent: true });
+  startSaasAiCeoCrossDeviceSync();
   window.setTimeout(syncAppStartVisibleShellGuard, 0);
   window.setTimeout(syncAppStartVisibleShellGuard, 1200);
 }

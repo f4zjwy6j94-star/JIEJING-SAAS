@@ -336,8 +336,10 @@ def main() -> None:
     require(app_js, "缺口会停住", "Listing gap stops copy")
     require(app_js, "不直接发布", "Listing no direct publish copy")
     require(app_js, 'event.target.closest("[data-saas-listing-input-chip]")', "Listing input chip event wiring")
-    require(app_js, 'draft ? renderSaasListingGapAndRiskPanel(draft, opportunity) : ""', "Listing risk cards hidden until a draft exists")
-    require(app_js, "showOpportunity ? renderSaasListingOpportunityPanel(opportunity) : \"\"", "Listing opportunity card hidden until a real source exists")
+    require(app_js, 'data-listing-primary-flow="product-facts_draft_assets_confirmation_v1"', "Listing default four-step merchant path")
+    require(app_js, 'data-listing-advanced-checks="listing_advanced_checks_collapsed_v1"', "Listing advanced checks stay collapsed")
+    require(app_js, "opportunity ? renderSaasListingGapAndRiskPanel(draft, opportunity) : \"\"", "Listing risk cards move to advanced details")
+    require(app_js, "opportunity ? renderSaasListingOpportunityPanel(opportunity) : \"\"", "Listing opportunity card moves to advanced details")
     require(app_js, "saas-listing-v2-workbench", "Listing v2 first screen")
     require(app_js, "saas-listing-v2-status-bar", "Listing v2 compact status bar")
     require(app_js, "saas-listing-workflow-proof", "Listing workflow loop result styling hook")
@@ -454,13 +456,20 @@ def main() -> None:
     source_cards_index = composer_body.index("renderSaasListingSourceCards")
     if not input_panel_index < source_cards_index:
         raise AssertionError("Listing source alternatives must stay below the primary product input")
-    status_index = composer_body.index("renderSaasListingStatusBar")
-    workflow_index = composer_body.index("renderSaasListingWorkflowProofPanel")
-    opportunity_index = composer_body.index("renderSaasListingOpportunityPanel")
     draft_editor_index = composer_body.index("renderSaasListingDraftEditor")
-    gap_index = composer_body.index("renderSaasListingGapAndRiskPanel")
-    if not (source_cards_index < status_index < workflow_index < opportunity_index < draft_editor_index < gap_index):
-        raise AssertionError("Listing C+ surface must flow from source selection to market conclusion to draft to asset/profit gaps")
+    media_index = composer_body.index("renderSaasListingMediaWritebackPanel")
+    next_action_index = composer_body.index("renderSaasListingNextActionPanel")
+    advanced_index = composer_body.index("renderSaasListingAdvancedWorkDetails")
+    if not (source_cards_index < draft_editor_index < media_index < next_action_index < advanced_index):
+        raise AssertionError("Listing daily surface must flow from source selection to draft, media, one next action, then collapsed advanced checks")
+    for advanced_only in (
+        "renderSaasListingStatusBar",
+        "renderSaasListingWorkflowProofPanel",
+        "renderSaasListingOpportunityPanel",
+        "renderSaasListingGapAndRiskPanel",
+    ):
+        if advanced_only in composer_body:
+            raise AssertionError(f"Listing default composer must not render advanced-only panel directly: {advanced_only}")
     for internal_marker in [
         "Listing Package",
         "Market Report",

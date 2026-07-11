@@ -153,6 +153,58 @@ def main() -> int:
         if len(after_replay) != 1:
             return fail(f"idempotent replay must not create a second media asset job: {after_replay}")
 
+        rework_review = post_json(
+            f"{base_url}/media-asset-jobs/{media_job_id}/review",
+            {"decision": "needs_rework", "note": "Product color does not match the merchant reference."},
+            token=token,
+        ).get("media_asset_job", {})
+        if rework_review.get("status") != "needs_rework":
+            return fail(f"merchant should be able to mark a media version for rework: {rework_review}")
+        if any(item.get("listing_use_status") != "needs_rework" for item in rework_review.get("asset_manifest", [])):
+            return fail("rejected media assets must not remain eligible for Listing draft writeback")
+
+        retry_payload = {
+            "reason": "Correct product color and preserve the previous version.",
+            "run_mode": "local_worker_now",
+        }
+        retried = post_json(f"{base_url}/media-asset-jobs/{media_job_id}/retry", retry_payload, token=token)
+        media_v2 = retried.get("media_asset_job") if isinstance(retried.get("media_asset_job"), dict) else {}
+        media_v2_id = str(media_v2.get("media_job_id") or "")
+        version = media_v2.get("asset_version") if isinstance(media_v2.get("asset_version"), dict) else {}
+        if not media_v2_id or media_v2_id == media_job_id or media_v2.get("status") != "waiting_review":
+            return fail(f"media rework should create and complete a separate reviewable version: {retried}")
+        if version.get("version") != 2 or version.get("parent_media_job_id") != media_job_id:
+            return fail(f"media rework must preserve immutable parent/version lineage: {version}")
+        if version.get("root_media_job_id") != media_job_id:
+            return fail(f"media rework should keep the original job as the version root: {version}")
+        manifest_v2 = media_v2.get("asset_manifest") if isinstance(media_v2.get("asset_manifest"), list) else []
+        if not manifest_v2 or any(item.get("asset_version") != 2 for item in manifest_v2):
+            return fail(f"every v2 asset must carry its generated version: {manifest_v2}")
+        cost_v2 = media_v2.get("cost_guard") if isinstance(media_v2.get("cost_guard"), dict) else {}
+        if cost_v2.get("actual_cost_cents") is not None or cost_v2.get("merchant_charge_created") is not False:
+            return fail(f"unknown provider usage must not be presented as an actual merchant charge: {cost_v2}")
+        replay_v2 = post_json(f"{base_url}/media-asset-jobs/{media_job_id}/retry", retry_payload, token=token)
+        if replay_v2.get("idempotent_replay") is not True or replay_v2.get("media_asset_job", {}).get("media_job_id") != media_v2_id:
+            return fail(f"repeated v1 retry must return the same v2 instead of spending twice: {replay_v2}")
+
+        approved_v2 = post_json(
+            f"{base_url}/media-asset-jobs/{media_v2_id}/review",
+            {
+                "decision": "approve_for_listing_draft",
+                "fact_consistency_confirmed": True,
+                "commercial_rights_confirmed": True,
+                "platform_rules_checked": True,
+            },
+            token=token,
+        ).get("media_asset_job", {})
+        if approved_v2.get("status") != "approved_for_listing":
+            return fail(f"v2 should become eligible only after all merchant confirmations: {approved_v2}")
+        for item in approved_v2.get("asset_manifest", []):
+            if item.get("fact_review_status") != "confirmed_by_merchant" or item.get("commercial_use_status") != "confirmed_by_merchant":
+                return fail(f"approved asset should preserve fact and commercial-rights review evidence: {item}")
+            if item.get("listing_use_status") != "approved_for_listing_draft":
+                return fail(f"approved asset should be limited to Listing draft writeback: {item}")
+
         audit = fetch_json(f"{base_url}/audit-logs?limit=100", token=token).get("audit_logs", [])
         actions = {item.get("action_type") for item in audit}
         if "media.asset_job.created" not in actions or "media.asset_job.status_updated" not in actions:

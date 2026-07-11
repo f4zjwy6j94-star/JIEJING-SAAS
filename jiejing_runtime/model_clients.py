@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Callable
 
 from .models import JiejingTask
 
@@ -59,6 +59,7 @@ class ModelClient(ABC):
         temperature: float = 0.2,
         max_output_tokens: int | None = None,
         timeout_seconds: int | None = None,
+        on_text_delta: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         """Generate a merchant-facing plain-text answer.
 
@@ -94,6 +95,7 @@ class RuleBasedModelClient(ModelClient):
         temperature: float = 0.2,
         max_output_tokens: int | None = None,
         timeout_seconds: int | None = None,
+        on_text_delta: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         return {
             "text": "本地规则模型不能作为 AI CEO 对话结果。请在设置里确认 BYOK 模型 key 已由后端保存。",
@@ -282,6 +284,7 @@ class OpenAICompatibleModelClient(ModelClient):
         temperature: float = 0.2,
         max_output_tokens: int | None = None,
         timeout_seconds: int | None = None,
+        on_text_delta: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         if not self.configured():
             raise RuntimeError("model_client_not_configured")
@@ -323,7 +326,7 @@ class OpenAICompatibleModelClient(ModelClient):
         try:
             with urllib.request.urlopen(request, timeout=request_timeout) as response:
                 if stream_enabled:
-                    content, finish_reason = self._read_streaming_text(response)
+                    content, finish_reason = self._read_streaming_text(response, on_text_delta=on_text_delta)
                     return {
                         "text": content,
                         "model_mode": "live_http_model_text_stream",
@@ -352,7 +355,11 @@ class OpenAICompatibleModelClient(ModelClient):
         }
 
     @staticmethod
-    def _read_streaming_text(response: Any) -> tuple[str, str]:
+    def _read_streaming_text(
+        response: Any,
+        *,
+        on_text_delta: Callable[[str], None] | None = None,
+    ) -> tuple[str, str]:
         chunks: list[str] = []
         finish_reason = ""
         for raw_line in response:
@@ -374,6 +381,13 @@ class OpenAICompatibleModelClient(ModelClient):
             content = delta.get("content")
             if isinstance(content, str) and content:
                 chunks.append(content)
+                if on_text_delta is not None:
+                    try:
+                        on_text_delta(content)
+                    except Exception:
+                        # A disconnected browser must not discard a provider answer
+                        # that still needs to be validated and persisted server-side.
+                        pass
             if choice.get("finish_reason"):
                 finish_reason = str(choice.get("finish_reason") or "")
         return "".join(chunks).strip(), finish_reason
@@ -491,6 +505,7 @@ class OpenAIResponsesModelClient(ModelClient):
         temperature: float = 0.2,
         max_output_tokens: int | None = None,
         timeout_seconds: int | None = None,
+        on_text_delta: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         if not self.configured():
             raise RuntimeError("model_client_not_configured")
@@ -529,8 +544,14 @@ class OpenAIResponsesModelClient(ModelClient):
         except urllib.error.HTTPError as exc:  # pragma: no cover - live provider dependent
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"model HTTP {exc.code}: {detail[:300]}") from exc
+        output_text = self._extract_response_text(body).strip()
+        if output_text and on_text_delta is not None:
+            try:
+                on_text_delta(output_text)
+            except Exception:
+                pass
         return {
-            "text": self._extract_response_text(body).strip(),
+            "text": output_text,
             "model_mode": "live_responses_model_text",
             "model_client": self.name,
             "model_configured": True,

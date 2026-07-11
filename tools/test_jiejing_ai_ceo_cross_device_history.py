@@ -155,7 +155,11 @@ def main() -> int:
             return fail("chat history response must redact secret-like text")
 
         tablet_read = request_json(f"{base_url}/ai-ceo/chat-history?limit=30", token=account_a)
-        tablet_turns = tablet_read.get("ai_ceo_chat_history", {}).get("turns", [])
+        tablet_history = tablet_read.get("ai_ceo_chat_history", {})
+        tablet_turns = tablet_history.get("turns", [])
+        tablet_revision = str(tablet_history.get("revision") or "")
+        if not tablet_revision.startswith("chatrev_2_"):
+            return fail(f"cross-device history should expose an account revision: {tablet_history}")
         if [turn.get("assistant_id") for turn in tablet_turns] != ["turn-cross-device-1", "turn-cross-device-2"]:
             return fail(f"same account should read ordered history across stores: {tablet_turns}")
         if tablet_turns[0].get("store_id") != store_a1 or tablet_turns[1].get("store_id") != store_a2:
@@ -168,6 +172,71 @@ def main() -> int:
         )
         if len(repeated.get("ai_ceo_chat_history", {}).get("turns", [])) != 2:
             return fail("replaying one device history must not duplicate a turn")
+
+        desktop_update = request_json(
+            f"{base_url}/ai-ceo/chat-history/sync",
+            token=account_a,
+            payload={
+                "base_revision": tablet_revision,
+                "turns": [
+                    {
+                        "assistant_id": "turn-cross-device-3",
+                        "store_id": store_a1,
+                        "user_text": "电脑端补充：重量小于 200 克。",
+                        "assistant_text": "已加入重量限制。",
+                        "status": "model_answered",
+                        "route": "ebay_workflow",
+                        "created_at": "2026-07-11T01:02:00+00:00",
+                    }
+                ],
+            },
+        )
+        if desktop_update.get("ai_ceo_chat_history", {}).get("conflict_merged") is not False:
+            return fail("up-to-date device sync should not be marked as a conflict")
+
+        stale_tablet_update = request_json(
+            f"{base_url}/ai-ceo/chat-history/sync",
+            token=account_a,
+            payload={
+                "base_revision": tablet_revision,
+                "turns": [
+                    {
+                        "assistant_id": "turn-cross-device-4",
+                        "store_id": store_a2,
+                        "user_text": "平板端补充：不要玻璃材质。",
+                        "assistant_text": "已保留电脑端记录，并加入非玻璃限制。",
+                        "status": "model_answered",
+                        "route": "ebay_workflow",
+                        "created_at": "2026-07-11T01:03:00+00:00",
+                    }
+                ],
+            },
+        )
+        stale_history = stale_tablet_update.get("ai_ceo_chat_history", {})
+        if stale_history.get("conflict_merged") is not True or len(stale_history.get("turns", [])) != 4:
+            return fail(f"stale tablet revision should merge instead of overwriting desktop history: {stale_history}")
+
+        poorer_same_turn = request_json(
+            f"{base_url}/ai-ceo/chat-history/sync",
+            token=account_a,
+            payload={
+                "base_revision": stale_history.get("revision"),
+                "turns": [
+                    {
+                        "assistant_id": "turn-cross-device-1",
+                        "store_id": store_a1,
+                        "user_text": "帮我选品",
+                        "assistant_text": "处理中",
+                        "status": "streaming",
+                        "route": "ebay_workflow",
+                        "created_at": "2026-07-11T01:00:00+00:00",
+                    }
+                ],
+            },
+        )
+        retained = poorer_same_turn.get("ai_ceo_chat_history", {}).get("turns", [])[0]
+        if retained.get("assistant_text") != "建议先研究便携式硅胶折叠水瓶。":
+            return fail(f"poorer stale copy must not overwrite the completed server turn: {retained}")
 
         isolated = request_json(f"{base_url}/ai-ceo/chat-history?limit=30", token=account_b)
         if isolated.get("ai_ceo_chat_history", {}).get("turns"):

@@ -37,6 +37,7 @@ class FakeStreamingResponse:
 
 def main() -> None:
     captured: dict[str, object] = {}
+    deltas: list[str] = []
 
     def fake_urlopen(request, timeout):  # noqa: ANN001
         captured["payload"] = json.loads(request.data.decode("utf-8"))
@@ -55,12 +56,14 @@ def main() -> None:
             user_prompt="Generate candidate cards.",
             max_output_tokens=800,
             timeout_seconds=20,
+            on_text_delta=deltas.append,
         )
 
     assert captured["payload"]["stream"] is True, captured
     assert result["text"] == "候选商品卡片", result
     assert result["finish_reason"] == "stop", result
     assert result["model_mode"] == "live_http_model_text_stream", result
+    assert deltas == ["候选商品", "卡片"], deltas
     assert "internal" not in json.dumps(result, ensure_ascii=False), result
     assert "unit-test-model-key" not in json.dumps(result, ensure_ascii=False), result
     print("PASS jiejing_model_streaming_client")

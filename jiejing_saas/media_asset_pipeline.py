@@ -42,15 +42,17 @@ def build_media_asset_generation_packet(
         video_provider_configured=False,
         voice_provider_configured=False,
     )
+    version_context = _asset_version_context(inputs)
     assets = _placeholder_assets(
         image_count=image_count,
         image_sizes=image_sizes,
         scene_types=scene_types,
         video_script=video_script,
+        version_context=version_context,
     )
     live_provider_called = False
     if isinstance(live_media_snapshot, dict) and live_media_snapshot.get("assets"):
-        live_assets = _live_provider_assets(live_media_snapshot)
+        live_assets = _live_provider_assets(live_media_snapshot, version_context=version_context)
         if live_assets:
             assets = live_assets
             live_provider_called = True
@@ -87,6 +89,7 @@ def build_media_asset_generation_packet(
             "live_provider_called": live_provider_called,
         },
         "creative_job_spec": creative_job_spec,
+        "asset_version": version_context,
         "product_fact_gate": {
             "status": "needs_fact_review" if missing_fact_keys else "facts_ready_for_asset_review",
             "missing_fact_keys": missing_fact_keys,
@@ -140,7 +143,7 @@ def build_media_asset_generation_packet(
 }
 
 
-def _live_provider_assets(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+def _live_provider_assets(snapshot: dict[str, Any], *, version_context: dict[str, Any]) -> list[dict[str, Any]]:
     raw_assets = snapshot.get("assets") if isinstance(snapshot.get("assets"), list) else []
     provider = str(snapshot.get("provider") or "configured_media_provider")
     assets: list[dict[str, Any]] = []
@@ -156,6 +159,9 @@ def _live_provider_assets(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         assets.append(
             {
                 "asset_id": item.get("asset_id") or item.get("id") or f"live_provider_asset_{index:02d}",
+                "asset_version": version_context["version"],
+                "parent_media_job_id": version_context["parent_media_job_id"],
+                "generation_reason": version_context["generation_reason"],
                 "asset_type": asset_type,
                 "url": url_or_path,
                 "url_or_file_path": url_or_path,
@@ -164,8 +170,8 @@ def _live_provider_assets(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
                 "duration_seconds": duration,
                 "source": "media_generation_provider",
                 "source_provider_or_upload": provider,
-                "prompt_version": "live_media_generation_v1",
-                "cost_estimate": "provider_spend_recorded",
+                "prompt_version": version_context["prompt_version"],
+                "cost_estimate": "see_cost_guard",
                 "commercial_use_status": item.get("commercial_use_status") or "needs_rights_review",
                 "fact_review_status": "needs_review",
                 "listing_use_status": "not_ready_for_listing_until_review",
@@ -182,6 +188,7 @@ def _placeholder_assets(
     image_sizes: list[str],
     scene_types: list[str],
     video_script: str,
+    version_context: dict[str, Any],
 ) -> list[dict[str, Any]]:
     count = max(1, min(image_count, 4))
     assets: list[dict[str, Any]] = []
@@ -191,6 +198,9 @@ def _placeholder_assets(
         assets.append(
             {
                 "asset_id": f"dry_run_image_{index + 1:02d}",
+                "asset_version": version_context["version"],
+                "parent_media_job_id": version_context["parent_media_job_id"],
+                "generation_reason": version_context["generation_reason"],
                 "asset_type": _asset_type_for_scene(scene),
                 "url": f"dry-run://media/{scene or 'image'}-{index + 1}",
                 "url_or_file_path": f"dry-run://media/{scene or 'image'}-{index + 1}",
@@ -198,7 +208,7 @@ def _placeholder_assets(
                 "dimensions_or_duration": _dimension_label(size),
                 "source": "media_asset_generation_router",
                 "source_provider_or_upload": "configured_media_provider",
-                "prompt_version": "pending_live_media_generation",
+                "prompt_version": version_context["prompt_version"],
                 "cost_estimate": "pending_quota_check",
                 "commercial_use_status": "needs_rights_review",
                 "fact_review_status": "needs_review",
@@ -211,6 +221,9 @@ def _placeholder_assets(
         assets.append(
             {
                 "asset_id": "dry_run_video_script_01",
+                "asset_version": version_context["version"],
+                "parent_media_job_id": version_context["parent_media_job_id"],
+                "generation_reason": version_context["generation_reason"],
                 "asset_type": "product_video",
                 "url": "dry-run://media/video-script-placeholder",
                 "url_or_file_path": "dry-run://media/video-script-placeholder",
@@ -218,7 +231,7 @@ def _placeholder_assets(
                 "dimensions_or_duration": "20s_script_placeholder",
                 "source": "media_asset_generation_router",
                 "source_provider_or_upload": "configured_media_provider",
-                "prompt_version": "pending_live_video_generation",
+                "prompt_version": version_context["prompt_version"],
                 "cost_estimate": "pending_quota_check",
                 "commercial_use_status": "needs_rights_review",
                 "fact_review_status": "needs_review",
@@ -297,13 +310,36 @@ def _cost_guard(*, image_count: int, video_requested: bool, inputs: dict[str, An
     estimated_max_cents = image_ceiling + video_ceiling
     requested_limit = _safe_int(inputs.get("cost_limit_cents") or inputs.get("media_cost_limit_cents"), default=0)
     return {
+        "contract_version": "2026-07-11-media-cost-transparency-v1",
         "status": "blocked_until_quota_and_cost_limit",
         "estimated_max_cost_cents": estimated_max_cents,
+        "estimate_currency": "USD",
+        "estimate_is_ceiling_not_invoice": True,
         "requested_cost_limit_cents": requested_limit,
         "within_requested_limit": bool(requested_limit and estimated_max_cents <= requested_limit),
+        "actual_cost_cents": None,
+        "actual_cost_status": "unknown_until_provider_usage_record",
+        "merchant_charge_created": False,
         "spend_now_allowed": False,
         "requires_paid_entitlement_or_manual_beta_quota": True,
         "requires_owner_or_merchant_confirmation_for_high_cost": True,
+        "secret_exposed": False,
+    }
+
+
+def _asset_version_context(inputs: dict[str, Any]) -> dict[str, Any]:
+    raw = inputs.get("asset_version") if isinstance(inputs.get("asset_version"), dict) else {}
+    version = max(1, _safe_int(raw.get("version"), default=1))
+    reason = str(raw.get("generation_reason") or ("initial_generation" if version == 1 else "merchant_requested_rework"))[:200]
+    prompt_version = str(raw.get("prompt_version") or f"media_prompt_v{version}")[:80]
+    return {
+        "contract_version": "2026-07-11-media-asset-version-v1",
+        "version": version,
+        "root_media_job_id": str(raw.get("root_media_job_id") or "")[:120],
+        "parent_media_job_id": str(raw.get("parent_media_job_id") or "")[:120],
+        "generation_reason": reason,
+        "prompt_version": prompt_version,
+        "immutable_prior_versions": True,
         "secret_exposed": False,
     }
 

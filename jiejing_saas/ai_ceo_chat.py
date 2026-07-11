@@ -18,7 +18,8 @@ import re
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone, tzinfo
-from typing import Any
+from email.utils import parsedate_to_datetime
+from typing import Any, Callable
 from urllib.parse import urlparse
 import urllib.parse
 import urllib.request
@@ -63,6 +64,7 @@ def run_ai_ceo_chat(
     command: dict[str, Any] | None = None,
     conversation_history: list[dict[str, Any]] | None = None,
     model_resolution: dict[str, Any] | None = None,
+    on_text_delta: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Call the merchant model for an AI CEO chat turn."""
     turn_started_at = time.monotonic()
@@ -179,6 +181,7 @@ def run_ai_ceo_chat(
                     temperature=0.1,
                     max_output_tokens=_ai_ceo_model_max_output_tokens(route=route, realtime_kind=realtime_kind),
                     timeout_seconds=_ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind),
+                    on_text_delta=on_text_delta,
                 )
                 result = _complete_truncated_model_result(
                     model_client=model_client,
@@ -301,6 +304,7 @@ def run_ai_ceo_chat(
         user_prompt=user_prompt,
         route=route,
         realtime_kind=realtime_kind,
+        on_text_delta=on_text_delta,
     )
     if model_error is not None:  # pragma: no cover - provider dependent
         exc = model_error
@@ -852,6 +856,7 @@ def build_ai_ceo_chat_prompts(
         "recent_conversation": _sanitize_ai_ceo_conversation_history(conversation_history),
         "response_rules": [
             "Use web_context.source_records for current/public facts when web_context.status is ready; do not invent latest facts when sources are missing.",
+            "引用公开事实时使用 source_records.citation_id，例如 [S1]；quality_score 只用于排序，不代表官方背书。",
             "先回答用户当前问题，再给必要的下一步。",
             "普通咨询不写长期经营记忆。",
             "只有明确要求记住规则时才写商家规则。",
@@ -874,6 +879,7 @@ def build_ai_ceo_realtime_search_prompts(
     system_prompt = (
         "你是捷境 Jiejing 的 AI CEO。现在这轮问题已经通过后端实时搜索拿到公开网页来源。"
         "你必须只依据 source_records 回答，不得把训练记忆当成实时来源，也不得编造股价、新闻、汇率、天气或网页内容。"
+        "引用事实时用 source_records.citation_id 标注 [S1]、[S2]；trust_tier 和 quality_score 只用于来源排序，不能冒充官方认证。"
         "如果来源片段不足以确认精确数值，就明确说无法从当前来源确认精确值，并给出可继续查证的来源。"
         "商家可见回答必须使用简体中文；eBay、SKU、Listing、Market Report、Listing Package、NASDAQ、NYSE 等专有名词可以保留英文。"
         "回答要短、直接、带时间感和来源；不要出现“调用模型”“后端模型”“BYOK”“Tavily API key”等实现词。"
@@ -898,7 +904,7 @@ def build_ai_ceo_realtime_search_prompts(
         },
         "response_rules": [
             "先给直接答案；再用 1-3 条列出来源和限制。",
-            "每个来源尽量带标题、域名或 URL。",
+            "每个来源使用 citation_id 标注，并尽量带标题、域名或 URL。",
             "没有足够证据时说清楚缺口，不要编数字。",
             "不要写入长期商家记忆，除非用户明确说记住规则。",
         ],
@@ -1544,6 +1550,13 @@ def _run_realtime_search(
             timeout_seconds=timeout_seconds,
         )
         if builtin.get("status") == "ready":
+            builtin["source_records"] = _rank_and_dedupe_public_sources(
+                builtin.get("source_records") if isinstance(builtin.get("source_records"), list) else [],
+                query=query,
+                captured_at=captured_at,
+                max_results=max_results,
+            )
+            builtin["source_quality_contract"] = "2026-07-11-public-source-quality-v1"
             return {**builtin, **budget_fields}
         return {
             "status": "blocked",
@@ -1569,7 +1582,12 @@ def _run_realtime_search(
         )
     )
     snapshot_status = _safe_text(snapshot.get("status") or "", limit=80)
-    records = _source_records_from_search_snapshot(snapshot)
+    records = _rank_and_dedupe_public_sources(
+        _source_records_from_search_snapshot(snapshot),
+        query=query,
+        captured_at=captured_at,
+        max_results=max_results,
+    )
     if snapshot_status in {"ready", "partial"} and records:
         return {
             "status": "ready",
@@ -1591,6 +1609,13 @@ def _run_realtime_search(
         timeout_seconds=timeout_seconds,
     )
     if builtin.get("status") == "ready":
+        builtin["source_records"] = _rank_and_dedupe_public_sources(
+            builtin.get("source_records") if isinstance(builtin.get("source_records"), list) else [],
+            query=query,
+            captured_at=captured_at,
+            max_results=max_results,
+        )
+        builtin["source_quality_contract"] = "2026-07-11-public-source-quality-v1"
         return {**builtin, **budget_fields}
     blocked_by = ["public_search_provider_error"] if snapshot_status == "failed_tool" else ["public_search_no_results"]
     if not live_enabled:
@@ -1659,7 +1684,8 @@ def _build_realtime_workflow_handoff(
     status = "ready" if ready else "blocked_missing_source"
     safe_goal = _safe_text(message, limit=120)
     source_ids = [
-        _workflow_handoff_id("source", item.get("title"), item.get("url"), item.get("captured_at") or captured_at)
+        _safe_text(item.get("source_id") or "", limit=80)
+        or _workflow_handoff_id("source", item.get("title"), item.get("url"), item.get("captured_at") or captured_at)
         for item in source_records[:5]
         if isinstance(item, dict)
     ]
@@ -1699,6 +1725,13 @@ def _build_realtime_workflow_handoff(
         "requires_source_records": True,
         "has_source_records": ready,
         "no_source_no_latest_claim": True,
+        "source_quality_contract": "2026-07-11-public-source-quality-v1",
+        "sources_ranked_and_deduplicated": True,
+        "citation_ids": [
+            _safe_text(item.get("citation_id") or "", limit=20)
+            for item in source_records[:5]
+            if isinstance(item, dict) and item.get("citation_id")
+        ],
         "raw_provider_response_stored": False,
         "frontend_gets_search_api_key": False,
         "secret_exposed": False,
@@ -1838,7 +1871,8 @@ def _run_builtin_news_search(*, query: str, captured_at: str, timeout_seconds: i
                 "url": _safe_text(link, limit=500),
                 "domain": _safe_text(_domain_from_url(link) or source_name, limit=160),
                 "snippet": _safe_text(snippet, limit=520),
-                "captured_at": _safe_text(published_at or captured_at, limit=100),
+                "published_at": _safe_text(published_at, limit=100),
+                "captured_at": _safe_text(captured_at, limit=100),
                 "source_type": "live_public_news_search",
                 "provider": "google_news_rss",
                 "confidence": "public_news_source",
@@ -2164,6 +2198,7 @@ def _source_records_from_search_snapshot(snapshot: dict[str, Any]) -> list[dict[
                 "url": url,
                 "domain": domain,
                 "snippet": snippet,
+                "published_at": _safe_text(item.get("published_at") or item.get("published_date") or "", limit=100),
                 "captured_at": _safe_text(item.get("captured_at") or "", limit=80),
                 "source_type": "live_public_search",
                 "provider": provider,
@@ -2205,6 +2240,148 @@ def _domain_from_url(url: str) -> str:
     if not url:
         return ""
     return urlparse(url if "://" in url else f"https://{url}").netloc.lower().removeprefix("www.")
+
+
+def _canonical_public_source_url(url: str) -> str:
+    safe_url = _normalize_public_search_url(url)
+    if not safe_url:
+        return ""
+    try:
+        parsed = urlparse(safe_url)
+    except ValueError:
+        return ""
+    host = parsed.netloc.lower().removeprefix("www.")
+    path = re.sub(r"/{2,}", "/", parsed.path or "/").rstrip("/") or "/"
+    return f"{parsed.scheme.lower()}://{host}{path}"
+
+
+def _public_source_query_terms(query: str) -> set[str]:
+    text = _normalized_text(query)
+    terms = {
+        token
+        for token in re.findall(r"[a-z0-9][a-z0-9._-]{2,}", text)
+        if token not in {"reliable", "sources", "source", "current", "latest", "official"}
+    }
+    for sequence in re.findall(r"[\u4e00-\u9fff]{2,}", text):
+        terms.update(sequence[index : index + 2] for index in range(max(0, len(sequence) - 1)))
+    return {term for term in terms if term}
+
+
+def _public_source_trust(domain: str, query: str) -> tuple[int, str]:
+    host = str(domain or "").lower().removeprefix("www.")
+    official_hosts = {
+        "ebay.com",
+        "developer.ebay.com",
+        "export.ebay.com",
+        "sec.gov",
+        "federalreserve.gov",
+        "bls.gov",
+        "census.gov",
+        "weather.gov",
+    }
+    established_hosts = {
+        "reuters.com",
+        "apnews.com",
+        "bbc.com",
+        "bloomberg.com",
+        "cnbc.com",
+        "ft.com",
+        "wsj.com",
+        "finance.yahoo.com",
+        "investing.com",
+    }
+    if host in official_hosts or host.endswith(".gov"):
+        return 95, "official_or_primary"
+    if any(host == item or host.endswith(f".{item}") for item in established_hosts):
+        return 82, "established_publication"
+    if "ebay" in _normalized_text(query) and (host.endswith("ebayinc.com") or host.endswith("ebaystatic.com")):
+        return 90, "official_marketplace"
+    return 60, "public_reference"
+
+
+def _public_source_freshness(published_at: str) -> tuple[int, str]:
+    raw = _safe_text(published_at or "", limit=100)
+    if not raw:
+        return 45, "unknown"
+    parsed: datetime | None = None
+    try:
+        parsed = parsedate_to_datetime(raw)
+    except (TypeError, ValueError, OverflowError):
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except (TypeError, ValueError, OverflowError):
+            parsed = None
+    if parsed is None:
+        return 45, "unknown"
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    age = datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)
+    if age <= timedelta(days=2):
+        return 100, "current"
+    if age <= timedelta(days=30):
+        return 85, "recent"
+    if age <= timedelta(days=365):
+        return 60, "dated"
+    return 25, "stale"
+
+
+def _rank_and_dedupe_public_sources(
+    records: list[dict[str, Any]],
+    *,
+    query: str,
+    captured_at: str,
+    max_results: int = 5,
+) -> list[dict[str, Any]]:
+    query_terms = _public_source_query_terms(query)
+    ranked: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for position, raw in enumerate(records):
+        if not isinstance(raw, dict):
+            continue
+        title = _safe_text(raw.get("title") or "", limit=180)
+        url = _safe_text(raw.get("url") or "", limit=500)
+        domain = _safe_text(raw.get("domain") or _domain_from_url(url), limit=160)
+        snippet = _safe_text(raw.get("snippet") or "", limit=520)
+        canonical_url = _canonical_public_source_url(url)
+        title_key = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", title.lower())[:160]
+        dedupe_key = canonical_url or title_key
+        if not dedupe_key or dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        searchable = _normalized_text(f"{title} {snippet} {domain}")
+        matched_terms = sorted(term for term in query_terms if term in searchable)
+        relevance = min(100, 35 + len(matched_terms) * 12) if matched_terms else 20
+        trust_score, trust_tier = _public_source_trust(domain, query)
+        published_at = _safe_text(raw.get("published_at") or raw.get("published_date") or "", limit=100)
+        freshness_score, freshness_status = _public_source_freshness(published_at)
+        quality_score = round(trust_score * 0.55 + relevance * 0.35 + freshness_score * 0.10)
+        ranked.append(
+            {
+                **raw,
+                "title": title,
+                "url": url,
+                "canonical_url": canonical_url,
+                "domain": domain,
+                "snippet": snippet,
+                "published_at": published_at,
+                "captured_at": _safe_text(raw.get("captured_at") or captured_at, limit=100),
+                "trust_tier": trust_tier,
+                "trust_score": trust_score,
+                "relevance_score": relevance,
+                "freshness_status": freshness_status,
+                "quality_score": quality_score,
+                "matched_query_terms": matched_terms[:8],
+                "original_rank": position + 1,
+                "source_quality_contract": "2026-07-11-public-source-quality-v1",
+                "secret_exposed": False,
+            }
+        )
+    ranked.sort(key=lambda item: (-int(item.get("quality_score") or 0), int(item.get("original_rank") or 999)))
+    selected = ranked[: max(1, min(8, int(max_results or 5)))]
+    for index, item in enumerate(selected, start=1):
+        item["citation_id"] = f"S{index}"
+        item["source_id"] = _workflow_handoff_id("source", item.get("canonical_url"), item.get("title"))
+    return selected
 
 
 def _env_enabled(name: str, default: bool = False) -> bool:
@@ -2270,6 +2447,7 @@ def _generate_model_text_with_initial_retry(
     user_prompt: str,
     route: str,
     realtime_kind: str = "",
+    on_text_delta: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, Any] | None, int, int, Exception | None]:
     started_at = time.monotonic()
     timeout_seconds = _ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind)
@@ -2282,6 +2460,7 @@ def _generate_model_text_with_initial_retry(
             temperature=0.2,
             max_output_tokens=max_output_tokens,
             timeout_seconds=timeout_seconds,
+            on_text_delta=on_text_delta,
         )
         result = _complete_truncated_model_result(
             model_client=model_client,
@@ -2290,6 +2469,7 @@ def _generate_model_text_with_initial_retry(
             user_prompt=user_prompt,
             route=route,
             realtime_kind=realtime_kind,
+            on_text_delta=on_text_delta,
         )
         return result, _elapsed_ms(started_at), 0, None
     except Exception as exc:  # pragma: no cover - provider dependent
@@ -2333,6 +2513,7 @@ def _generate_model_text_with_initial_retry(
             temperature=0.1,
             max_output_tokens=retry_tokens,
             timeout_seconds=retry_timeout,
+            on_text_delta=on_text_delta,
         )
         result = _complete_truncated_model_result(
             model_client=model_client,
@@ -2341,6 +2522,7 @@ def _generate_model_text_with_initial_retry(
             user_prompt=user_prompt,
             route=route,
             realtime_kind=realtime_kind,
+            on_text_delta=on_text_delta,
         )
         return result, _elapsed_ms(started_at), 1, None
     except Exception as retry_exc:  # pragma: no cover - provider dependent
@@ -2374,6 +2556,7 @@ def _complete_truncated_model_result(
     user_prompt: str,
     route: str,
     realtime_kind: str = "",
+    on_text_delta: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     completed = dict(result or {})
     answer = str(completed.get("text") or "").strip()
@@ -2396,6 +2579,7 @@ def _complete_truncated_model_result(
                 temperature=0.1,
                 max_output_tokens=_ai_ceo_model_max_output_tokens(route=route, realtime_kind=realtime_kind),
                 timeout_seconds=_ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind),
+                on_text_delta=on_text_delta,
             )
         except Exception:  # pragma: no cover - provider dependent
             completed["finish_reason"] = "continuation_unavailable"
