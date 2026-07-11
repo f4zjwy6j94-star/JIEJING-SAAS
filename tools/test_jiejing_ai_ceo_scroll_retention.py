@@ -34,6 +34,7 @@ def main() -> int:
         "captureSaasAiCeoScrollState",
         "restoreSaasAiCeoScrollState",
         "saasAiCeoScrollInitialized",
+        "scheduleSaasAiCeoBottomFollow",
         "state.saasAiCeoAutoFollow = false",
     ]
     for marker in required_markers:

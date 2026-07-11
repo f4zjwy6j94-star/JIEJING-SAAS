@@ -39932,6 +39932,16 @@ function captureSaasAiCeoScrollState(chat) {
   };
 }
 
+function scheduleSaasAiCeoBottomFollow(chat) {
+  if (!chat || typeof requestAnimationFrame !== "function") return;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (state.saasAiCeoAutoFollow === false) return;
+      chat.scrollTop = chat.scrollHeight;
+    });
+  });
+}
+
 function restoreSaasAiCeoScrollState(chat, snapshot = null, options = {}) {
   if (!chat) return;
   const forceBottom = options.forceBottom === true;
@@ -39939,6 +39949,7 @@ function restoreSaasAiCeoScrollState(chat, snapshot = null, options = {}) {
   if (shouldFollow) {
     chat.scrollTop = chat.scrollHeight;
     state.saasAiCeoAutoFollow = true;
+    scheduleSaasAiCeoBottomFollow(chat);
     return;
   }
   if (snapshot && Number.isFinite(snapshot.scrollTop)) chat.scrollTop = snapshot.scrollTop;
@@ -40536,6 +40547,7 @@ function syncSaasAiCeoFixedChatViewportState() {
     state.saasAiCeoScrollInitialized = true;
     state.saasAiCeoAutoFollow = true;
     chat.scrollTop = chat.scrollHeight;
+    scheduleSaasAiCeoBottomFollow(chat);
   }
 }
 
