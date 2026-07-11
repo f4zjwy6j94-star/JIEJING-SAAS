@@ -30405,7 +30405,7 @@ body.saas-public-mvp .saas-listing-v2-candidate-row {
 
 body.saas-public-mvp .saas-listing-v2-source-row em,
 body.saas-public-mvp .saas-listing-v2-reasons span,
-body.saas-public-mvp .saas-listing-v2-candidate-row span {
+body.saas-public-mvp .saas-listing-v2-candidate-row button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -30419,6 +30419,9 @@ body.saas-public-mvp .saas-listing-v2-candidate-row span {
   font-style: normal;
   font-weight: 760;
   line-height: 1.35;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 body.saas-public-mvp .saas-listing-v2-candidate-row {
@@ -30426,14 +30429,26 @@ body.saas-public-mvp .saas-listing-v2-candidate-row {
   padding-top: 2px;
 }
 
-body.saas-public-mvp .saas-listing-v2-candidate-row span {
+body.saas-public-mvp .saas-listing-v2-candidate-row button {
   background: #ffffff;
 }
 
-body.saas-public-mvp .saas-listing-v2-candidate-row span.is-selected {
+body.saas-public-mvp .saas-listing-v2-candidate-row button:hover,
+body.saas-public-mvp .saas-listing-v2-candidate-row button:focus-visible {
+  border-color: rgba(8, 118, 110, 0.38);
+  background: #f5fbf9;
+  outline: none;
+}
+
+body.saas-public-mvp .saas-listing-v2-candidate-row button.is-selected {
   border-color: rgba(8, 118, 110, 0.32);
   background: #eef8f5;
   color: #063f39;
+}
+
+body.saas-public-mvp .saas-listing-v2-candidate-row button > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 body.saas-public-mvp .saas-listing-v2-candidate-row small {

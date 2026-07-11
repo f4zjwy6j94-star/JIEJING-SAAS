@@ -2493,6 +2493,7 @@ class SaaSRepository:
         message: str,
         chat: dict[str, Any],
         command_id: str | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         """Persist a merchant-facing AI CEO market research chat turn as a report."""
 
@@ -2521,7 +2522,24 @@ class SaaSRepository:
             else str(chat.get("status") or "") not in rejected_statuses
         )
         product_candidates = _ai_ceo_market_product_candidates(message=message, answer=answer) if answer_accepted else []
+        if answer_accepted and not product_candidates and _ai_ceo_market_context_reset_requested(message):
+            return None
+        selection_mode = "current_turn" if product_candidates else "none"
         selected_candidate = _select_ai_ceo_market_candidate(answer=answer, candidates=product_candidates)
+        if answer_accepted and not product_candidates:
+            history_candidates, history_selected = _ai_ceo_market_context_from_history(conversation_history)
+            requested_index = _ai_ceo_followup_candidate_index(message)
+            if history_candidates and (requested_index is not None or _ai_ceo_should_inherit_market_context(message)):
+                product_candidates = history_candidates
+                if requested_index is not None and requested_index < len(product_candidates):
+                    selected_candidate = product_candidates[requested_index]
+                    selection_mode = "history_candidate_index"
+                else:
+                    selected_candidate = history_selected
+                    selection_mode = "history_selected_candidate"
+                selected_id = str(selected_candidate.get("candidate_id") or "")
+                for candidate in product_candidates:
+                    candidate["selected"] = str(candidate.get("candidate_id") or "") == selected_id
         product = ""
         if answer_accepted:
             product = _clean_ai_ceo_market_candidate_name(selected_candidate.get("name")) or _infer_ai_ceo_market_product(
@@ -2545,6 +2563,14 @@ class SaaSRepository:
             "product": product,
             "product_candidates": product_candidates,
             "selected_product_candidate": selected_candidate,
+            "conversation_context": {
+                "contract_version": "2026-07-11-ai-ceo-product-context-v1",
+                "selection_mode": selection_mode,
+                "history_used": selection_mode.startswith("history_"),
+                "selected_candidate_id": str(selected_candidate.get("candidate_id") or ""),
+                "raw_conversation_stored": False,
+                "secret_exposed": False,
+            },
             "merchant_question": question,
             "merchant_readable_summary": summary,
             "answer": answer,
@@ -5244,6 +5270,52 @@ def _ai_ceo_market_product_candidates(*, message: str, answer: str) -> list[dict
 def _normalize_ai_ceo_candidate_match(value: Any) -> str:
     text = _sanitize_merchant_ceo_text(value, limit=240).casefold()
     return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", text)
+
+
+def _ai_ceo_market_context_from_history(
+    conversation_history: list[dict[str, Any]] | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not isinstance(conversation_history, list):
+        return [], {}
+    for item in reversed(conversation_history[-8:]):
+        if not isinstance(item, dict):
+            continue
+        previous_message = _sanitize_merchant_ceo_text(item.get("user_text") or item.get("user") or "", limit=900)
+        previous_answer = _sanitize_merchant_ceo_text(item.get("assistant_text") or item.get("assistant") or "", limit=5000)
+        if not previous_answer:
+            continue
+        candidates = _ai_ceo_market_product_candidates(message=previous_message, answer=previous_answer)
+        if not candidates:
+            continue
+        selected = _select_ai_ceo_market_candidate(answer=previous_answer, candidates=candidates)
+        return candidates, selected
+    return [], {}
+
+
+def _ai_ceo_followup_candidate_index(message: str) -> int | None:
+    text = _sanitize_merchant_ceo_text(message, limit=220)
+    match = re.search(r"(?:第|选|用|要|看)\s*([一二三四五1-5])\s*(?:个|项|款|种|候选)", text)
+    if not match:
+        return None
+    number = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5}.get(match.group(1), int(match.group(1)) if match.group(1).isdigit() else 0)
+    return number - 1 if number > 0 else None
+
+
+def _ai_ceo_should_inherit_market_context(message: str) -> bool:
+    text = _sanitize_merchant_ceo_text(message, limit=300)
+    if _ai_ceo_market_context_reset_requested(text):
+        return False
+    return bool(
+        re.search(
+            r"这个品|这个商品|这个产品|该商品|该产品|它(?:的|有|是|能|适合)|刚才(?:的|那个)|上面(?:的|那个)|继续(?:分析|调研|整理)|接着(?:分析|调研|整理)",
+            text,
+        )
+    )
+
+
+def _ai_ceo_market_context_reset_requested(message: str) -> bool:
+    text = _sanitize_merchant_ceo_text(message, limit=300)
+    return bool(re.search(r"换一个|换个|不要这个|这个不合适|重新选|重新推荐|另一个", text))
 
 
 def _select_ai_ceo_market_candidate(*, answer: str, candidates: list[dict[str, Any]]) -> dict[str, Any]:

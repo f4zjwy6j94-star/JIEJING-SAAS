@@ -5603,7 +5603,7 @@ function syncBulkSaasStatusCounters() {
 }
 
 function saasBulkCandidatesFromCurrentWork() {
-  const report = latestSaasReportByTypes(["ai_ceo.market_research", "market.report"]);
+  const report = latestSaasActionableProductReportByTypes(["ai_ceo.market_research", "market.report"]);
   const reportCandidates = report ? saasAiCeoListingHandoffFieldsFromReport(report).product_candidates || [] : [];
   const draftCandidates = Array.isArray(state.saasListingComposerDraft?.product_candidates)
     ? saasNormalizeMarketProductCandidates(state.saasListingComposerDraft.product_candidates)
@@ -8271,6 +8271,17 @@ function latestSaasReportByTypes(types = []) {
   return saasReportsForDisplay(state.saasReports || []).find((record) => allowed.has(record.report_type || "")) || null;
 }
 
+const SAAS_REPORT_IMPORT_SELECTION_CONTRACT = "saas_report_import_prefers_concrete_product_v1";
+
+function latestSaasActionableProductReportByTypes(types = []) {
+  const allowed = new Set(types);
+  return (
+    saasReportsForDisplay(state.saasReports || []).find(
+      (record) => allowed.has(record.report_type || "") && Boolean(saasProductLabelForRecord(record)),
+    ) || null
+  );
+}
+
 function upsertSaasReportRecord(record = null) {
   if (!record || typeof record !== "object" || !record.report_id) return false;
   const current = Array.isArray(state.saasReports) ? state.saasReports : [];
@@ -8287,7 +8298,7 @@ async function refreshSaasReportsForListingImport() {
     const payload = await saasFetchWithTimeout("/reports?limit=30", {}, 30000);
     if (Array.isArray(payload.reports)) {
       state.saasReports = payload.reports;
-      const latestAiCeoReport = latestSaasReportByTypes(["ai_ceo.market_research"]);
+      const latestAiCeoReport = latestSaasActionableProductReportByTypes(["ai_ceo.market_research"]);
       if (latestAiCeoReport) rememberLatestSaasAiCeoMarketResearchTurn(saasAiCeoMarketTurnFromReport(latestAiCeoReport));
       applySaasReportsToActivities();
       return true;
@@ -9680,8 +9691,8 @@ function renderSaasPreTestRunGuardPanel(ctx = saasMerchantWorkbenchContext()) {
 }
 
 function saasFirstOrderLaunchRows(ctx = saasMerchantWorkbenchContext()) {
-  const marketReport = latestSaasReportByTypes(["ai_ceo.market_research", "market.report", "market.data_packet"]);
-  const listingReport = latestSaasReportByTypes(["listing.package", "product.listing"]);
+  const marketReport = latestSaasActionableProductReportByTypes(["ai_ceo.market_research", "market.report", "market.data_packet"]);
+  const listingReport = latestSaasActionableProductReportByTypes(["listing.package", "product.listing"]);
   const confirmation = saasLatestPublishConfirmation();
   const readiness = state.saasLastPublishReadiness && typeof state.saasLastPublishReadiness === "object" ? state.saasLastPublishReadiness : {};
   const traffic = saasPublishTrafficLightReport(readiness);
@@ -10733,6 +10744,86 @@ function saasListingOpportunityFromDraft(draft = null, marketReport = null, list
   };
 }
 
+function selectSaasListingMarketCandidate(candidateId = "") {
+  const draft = state.saasListingComposerDraft;
+  if (!draft || !candidateId) return false;
+  const candidates = saasNormalizeMarketProductCandidates(draft.product_candidates || []);
+  const selected = candidates.find((candidate) => candidate.candidate_id === candidateId);
+  if (!selected) return false;
+
+  const productCandidates = candidates.map((candidate) => ({
+    ...candidate,
+    selected: candidate.candidate_id === selected.candidate_id,
+  }));
+  const selectedCandidate = productCandidates.find((candidate) => candidate.selected) || selected;
+  const description = saasListingDescriptionFromCandidate(selectedCandidate);
+  const candidateReasons = Array.isArray(selectedCandidate.reasons)
+    ? selectedCandidate.reasons.filter(Boolean).slice(0, 4)
+    : [];
+
+  state.saasListingComposerDraft = {
+    ...draft,
+    product: selected.name,
+    title: selected.name,
+    score: Number(selected.score || 0) || 0,
+    product_candidates: productCandidates,
+    selected_product_candidate: selectedCandidate,
+    candidate_selection_contract: "candidate_switch_resets_unverified_fields_v1",
+    summary: `已选择“${selected.name}”。这里只继承该候选的推荐理由和价格线索，其他商品事实需要重新补齐。`,
+    fields: {
+      title: selected.name,
+      selling_points: candidateReasons.join("\n") || "等待根据真实商品资料整理卖点。",
+      description,
+      item_specifics: "Brand: Unbranded\nType: 待补\nMaterial: 待补",
+      category: "待发布体检确认",
+      keywords: "",
+      price: selected.price_band || "",
+      images: "待补与当前商品一致且有使用权的主图、场景图和详情图。",
+      logistics: "待补当前商品的重量、尺寸、发货地和物流承诺。",
+      risk_notes: "切换候选后，原候选的商品参数、素材和履约信息已清空；发布前需要重新核对。",
+    },
+    publish_prefill: {
+      sku: "",
+      condition: "NEW",
+      quantity: "1",
+      category_id: "",
+      category_leaf: "",
+      merchant_location_key: "",
+      item_location: "",
+      package_weight_g: "",
+      package_length_cm: "",
+      package_width_cm: "",
+      package_height_cm: "",
+      image_urls: "",
+      description_html: description,
+      fulfillment_policy_id: "",
+      payment_policy_id: "",
+      return_policy_id: "",
+    },
+    publish_preflight_required_fields: ["SKU", "类目", "Item specifics", "图片 URL", "售价/成本", "重量尺寸", "发货地", "店铺政策"],
+    publish_preflight_gaps: ["确认当前候选的真实商品事实", "补 SKU、类目和 Item specifics", "补图片、价格、物流和店铺政策"],
+    merchant_required_answers: [],
+    ebay_publish_field_matrix: [],
+    listing_readiness: {
+      ready_field_count: 0,
+      total_field_count: 0,
+      missing_or_review_count: 8,
+      ready_for_real_publish: false,
+      reason: "切换候选后需要重新补齐并体检当前商品。",
+    },
+    source_media_job_id: "",
+    media_writeback: null,
+    gaps: ["切换候选后需要重新补齐当前商品资料", "需要重新运行发布前体检"],
+    risks: ["不能沿用其他候选的参数、图片、SKU、物流或政策", "真实发布仍需确认中心"],
+    safe_local_only: true,
+  };
+  state.saasListingComposerInput = saasListingImportedAiCeoMarketInput(state.saasListingComposerDraft, null, {});
+  state.saasPreTestCheck = null;
+  renderProductListingCenter();
+  showActionToast(`已切换到“${selected.name}”；原候选的专属字段已清空，请补当前商品资料。`);
+  return true;
+}
+
 function renderSaasFirstRunAssuranceStrip(items = [], extraClass = "") {
   const normalized = (Array.isArray(items) ? items : []).filter(Boolean).slice(0, 4);
   if (!normalized.length) return "";
@@ -10898,10 +10989,13 @@ function renderSaasListingOpportunityPanel(opportunity = {}) {
               ${candidates
                 .map(
                   (candidate) => `
-                    <span class="${candidate.name === opportunity.product ? "is-selected" : ""}">
-                      ${escapeHtml(candidate.name)}
+                    <button type="button"
+                      class="${candidate.name === opportunity.product ? "is-selected" : ""}"
+                      data-saas-listing-candidate-id="${escapeHtml(candidate.candidate_id)}"
+                      aria-pressed="${candidate.name === opportunity.product ? "true" : "false"}">
+                      <span>${escapeHtml(candidate.name)}</span>
                       <small>${escapeHtml(String(candidate.score || "--"))}</small>
-                    </span>
+                    </button>
                   `,
                 )
                 .join("")}
@@ -12035,8 +12129,8 @@ function renderSaasListingMinimalWorkspace({
 
 function renderSaasProductListingCenter(view) {
   const ctx = saasMerchantWorkbenchContext();
-  const listingReport = latestSaasReportByTypes(["listing.package", "product.listing"]);
-  const marketReport = latestSaasReportByTypes(["ai_ceo.market_research", "market.report", "market.data_packet"]);
+  const listingReport = latestSaasActionableProductReportByTypes(["listing.package", "product.listing"]);
+  const marketReport = latestSaasActionableProductReportByTypes(["ai_ceo.market_research", "market.report", "market.data_packet"]);
   const pendingConfirmations = (state.saasConfirmations || []).filter((item) => item.status === "pending");
   const activeStore = activeSaasStore();
   const activeConnection = saasConnectionForStore(activeStore);
@@ -16840,6 +16934,14 @@ function saasWorkflowProductLabel(task = null) {
   return publicRuntimeText(afterColon || title || "").slice(0, 80);
 }
 
+function saasIsConcreteProductLabel(value = "") {
+  const text = publicRuntimeText(String(value || "")).trim().slice(0, 100);
+  if (!text || text.length < 2) return false;
+  if (/^(?:AI\s*CEO\s*)?(?:市场调研|市场调研报告|产品刊登报告|Listing|上架草稿|等待选择商品|待选择商品方向|商品方向|选品)$/i.test(text)) return false;
+  if (/(?:帮我|给我|请|做个|做一份|应该).*(?:选品|卖什么|市场调研|调研报告)/i.test(text)) return false;
+  return !/(?:还没有|尚未|等待|待选择|待确认).*(?:商品|产品|方向)/i.test(text);
+}
+
 function saasProductLabelForRecord(record = {}) {
   const safeRecord = record && typeof record === "object" ? record : {};
   const task = saasTaskById(safeRecord.task_id) || saasLatestProductWorkflowTask();
@@ -16847,13 +16949,15 @@ function saasProductLabelForRecord(record = {}) {
   const nestedReport = report.report && typeof report.report === "object" ? report.report : {};
   const profile = report.merchant_profile || nestedReport.merchant_profile || {};
   const candidates = [
-    saasWorkflowProductLabel(task),
     report.product,
     nestedReport.product,
     profile.product,
     profile.product_name,
+    report.selected_product_candidate?.name,
+    nestedReport.selected_product_candidate?.name,
+    saasWorkflowProductLabel(task),
   ];
-  return candidates.find((item) => String(item || "").trim()) || "";
+  return candidates.find((item) => saasIsConcreteProductLabel(item)) || "";
 }
 
 function saasProductLabelForConfirmation(card = {}) {
@@ -26173,8 +26277,8 @@ function handleSaasListingComposeDraft() {
 }
 
 async function handleSaasListingSourceAiReport() {
-  let listingReport = latestSaasReportByTypes(["listing.package", "product.listing"]);
-  let marketReport = latestSaasReportByTypes(["ai_ceo.market_research", "market.report", "market.data_packet"]);
+  let listingReport = latestSaasActionableProductReportByTypes(["listing.package", "product.listing"]);
+  let marketReport = latestSaasActionableProductReportByTypes(["ai_ceo.market_research", "market.report", "market.data_packet"]);
   let report = listingReport || marketReport;
   let importState = saasAiCeoMarketResearchImportState();
   if (!listingReport && importState.turn && (!report || saasAiCeoTurnTimestampMillis(importState.turn) >= saasReportTimestampMillis(report))) {
@@ -26186,8 +26290,8 @@ async function handleSaasListingSourceAiReport() {
     showActionToast("正在同步 AI CEO 工作记录，确认有没有可导入的市场调研。");
     const refreshed = await refreshSaasReportsForListingImport();
     if (refreshed) {
-      listingReport = latestSaasReportByTypes(["listing.package", "product.listing"]);
-      marketReport = latestSaasReportByTypes(["ai_ceo.market_research", "market.report", "market.data_packet"]);
+      listingReport = latestSaasActionableProductReportByTypes(["listing.package", "product.listing"]);
+      marketReport = latestSaasActionableProductReportByTypes(["ai_ceo.market_research", "market.report", "market.data_packet"]);
       report = listingReport || marketReport;
     }
   }
@@ -26450,14 +26554,17 @@ function applySaasAiCeoMarketTurnToListing(marketTurn = null, options = {}) {
     (latest.market_report_id
       ? (state.saasReports || []).find((record) => record?.report_id === latest.market_report_id && record.report_type === "ai_ceo.market_research")
       : null) || latestSaasReportByTypes(["ai_ceo.market_research"]);
-  state.saasListingComposerDraft = sourceReport ? saasListingDraftFromReport(sourceReport, "ai_ceo_market_report") : saasListingDraftFromAiCeoMarketTurn(latest);
+  const structuredSourceReport = sourceReport && saasProductLabelForRecord(sourceReport) ? sourceReport : null;
+  state.saasListingComposerDraft = structuredSourceReport
+    ? saasListingDraftFromReport(structuredSourceReport, "ai_ceo_market_report")
+    : saasListingDraftFromAiCeoMarketTurn(latest);
   if (!state.saasListingComposerDraft) {
     showActionToast("这次调研还没有形成可导入的具体商品。请回到 AI CEO 重新生成候选商品卡。");
     return false;
   }
-  state.saasListingComposerInput = saasListingImportedAiCeoMarketInput(state.saasListingComposerDraft, sourceReport, latest);
-  state.saasListingSourceMode = sourceReport ? "ai_ceo_market_report" : "ai_ceo_market_chat";
-  const importedHandoff = saasListingImportedAiCeoMarketHandoff(state.saasListingComposerDraft, sourceReport, latest);
+  state.saasListingComposerInput = saasListingImportedAiCeoMarketInput(state.saasListingComposerDraft, structuredSourceReport, latest);
+  state.saasListingSourceMode = structuredSourceReport ? "ai_ceo_market_report" : "ai_ceo_market_chat";
+  const importedHandoff = saasListingImportedAiCeoMarketHandoff(state.saasListingComposerDraft, structuredSourceReport, latest);
   state.saasListingCeoHandoff = {
     id: latest.assistant_id || `ai-ceo-market-${Date.now()}`,
     title: importedHandoff.title,
@@ -26614,7 +26721,12 @@ function saasAiCeoMarketResearchEligibility(turn = {}) {
   }
   if (!hasCommerceSignal) return { eligible: false, reason: "market_without_product", latest };
   const selectionRequest = /选品|卖什么货|卖什么|一个品|小众品|热销小商品|候选商品|产品方向|商品方向/i.test(latest.user_text || "");
-  if (selectionRequest && !saasNormalizeMarketProductCandidates([], latest.assistant_text || "").length) {
+  const inferredCandidates = saasNormalizeMarketProductCandidates([], latest.assistant_text || "");
+  const inferredProduct = saasAiCeoMarketProductLabel(latest);
+  if (selectionRequest && !inferredCandidates.length && !inferredProduct) {
+    return { eligible: false, reason: "answer_quality_rejected", latest };
+  }
+  if (!inferredCandidates.length && !inferredProduct) {
     return { eligible: false, reason: "answer_quality_rejected", latest };
   }
   return { eligible: true, reason: "product_market_research", latest };
@@ -26707,10 +26819,15 @@ function saasAiCeoMarketProductLabel(turn = {}) {
   if (candidate?.name) return candidate.name;
   const match =
     text.match(/(?:建议产品|推荐产品|产品建议|推荐品类|建议品类)\s*[:：]\s*([^\n。；;]+)/i) ||
-    text.match(/(?:目标商品|商品方向|推荐商品)\s*[:：]\s*([^\n。；;]+)/i);
-  if (match) return saasCleanMarketCandidateName(match[1]);
+    text.match(/(?:目标商品|商品方向|推荐商品|我帮你选的品|产品名称)\s*[:：]\s*([^\n。；;]+)/i) ||
+    text.match(/市场调研报告\s*[:：]\s*([^\n（(。；;]+)/i) ||
+    text.match(/(?:我为你筛选了|我为你选了|建议先测试)\s*([^\n。；;]{2,80})/i) ||
+    text.match(/(?:^|[\n。！？])\s*([^\n，。；;：:]{2,60})(?:这个选品|这个商品|这个产品)/i);
+  const matchedProduct = match ? saasCleanMarketCandidateName(match[1]) : "";
+  if (saasIsConcreteProductLabel(matchedProduct)) return matchedProduct;
   const userMatch = String(latest?.user_text || "").match(/(?:卖什么货|一个品|产品|商品)\s*[:：]?\s*([^\n。；;]{2,80})/i);
-  return userMatch ? saasCleanMarketCandidateName(userMatch[1]) : "";
+  const userProduct = userMatch ? saasCleanMarketCandidateName(userMatch[1]) : "";
+  return saasIsConcreteProductLabel(userProduct) ? userProduct : "";
 }
 
 function saasListingTextFromAiCeoMarketTurn(turn = {}) {
@@ -26743,7 +26860,11 @@ function saasListingDraftFromAiCeoMarketTurn(turn = {}) {
   const latest = normalizeSaasAiCeoLatestTurn(turn);
   const baseText = saasListingTextFromAiCeoMarketTurn(latest);
   const draft = saasListingComposerDraftFromText(baseText);
-  const product = saasAiCeoMarketProductLabel(latest) || draft.product || "待选择商品方向";
+  const product =
+    saasAiCeoMarketProductLabel(latest) ||
+    (saasIsConcreteProductLabel(draft.product) ? draft.product : "") ||
+    "待选择商品方向";
+  if (!saasIsConcreteProductLabel(product)) return null;
   const productCandidates = saasNormalizeMarketProductCandidates([], latest?.assistant_text || "");
   const selectedCandidate = saasSelectedMarketProductCandidate(productCandidates);
   const sourceCount = normalizeSaasAiCeoSourceRecords(latest?.source_records || []).length;
@@ -39982,6 +40103,12 @@ function bindEvents() {
       state.saasSettingsTab = settingsMapButton.dataset.saasSettingsMapTab || "general";
       renderSaasConnectCenter(document.querySelector("#view-connect"));
       maybeRefreshSaasOwnerLaunchControlForActiveTab();
+      return;
+    }
+    const listingCandidateButton = event.target.closest("[data-saas-listing-candidate-id]");
+    if (listingCandidateButton) {
+      event.preventDefault();
+      selectSaasListingMarketCandidate(listingCandidateButton.dataset.saasListingCandidateId || "");
       return;
     }
     const listingInputChip = event.target.closest("[data-saas-listing-input-chip]");

@@ -2748,6 +2748,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     message=message,
                     chat=fast_chat,
                     command_id=(command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
+                    conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
                 )
                 ai_ceo_market_report_delivery = build_ai_ceo_market_report_delivery(ai_ceo_market_report)
                 self._send_json(
@@ -2943,6 +2944,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 message=message,
                 chat=chat,
                 command_id=(command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
+                conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
             )
             ai_ceo_market_report_delivery = build_ai_ceo_market_report_delivery(ai_ceo_market_report)
             status = (
