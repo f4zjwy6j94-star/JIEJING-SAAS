@@ -39779,6 +39779,27 @@ function loadSaasAiCeoThread() {
   }
 }
 
+function saasAiCeoThreadTurnTimestamp(turn = {}) {
+  const createdAt = Date.parse(turn?.created_at || "");
+  if (Number.isFinite(createdAt)) return createdAt;
+  const updatedAt = Date.parse(turn?.updated_at || "");
+  if (Number.isFinite(updatedAt)) return updatedAt;
+  const match = String(turn?.assistant_id || "").match(/^ceo-ai-reply-([0-9a-f]+)-/i);
+  if (match) {
+    const assistantTimestamp = parseInt(match[1], 16);
+    if (Number.isFinite(assistantTimestamp)) return assistantTimestamp;
+  }
+  return 0;
+}
+
+function compareSaasAiCeoThreadTurns(left = {}, right = {}) {
+  const timestampDelta = saasAiCeoThreadTurnTimestamp(left) - saasAiCeoThreadTurnTimestamp(right);
+  if (timestampDelta) return timestampDelta;
+  return String(left?.assistant_id || left?.user_text || "").localeCompare(
+    String(right?.assistant_id || right?.user_text || ""),
+  );
+}
+
 function uniqueSaasAiCeoThreadTurns(turns = []) {
   const selected = new Map();
   const orderedKeys = [];
@@ -39795,7 +39816,7 @@ function uniqueSaasAiCeoThreadTurns(turns = []) {
       const candidateScore = saasAiCeoThreadTurnMergeScore(turn);
       if (!existing || candidateScore >= existingScore) selected.set(key, turn);
     });
-  return orderedKeys.map((key) => selected.get(key)).filter(Boolean);
+  return orderedKeys.map((key) => selected.get(key)).filter(Boolean).sort(compareSaasAiCeoThreadTurns);
 }
 
 function saasAiCeoThreadTurnMergeScore(turn = {}) {

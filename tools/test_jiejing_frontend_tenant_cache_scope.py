@@ -169,8 +169,19 @@ def main() -> int:
     for marker in ["normalized.pending ? 0 : 100000", "normalized.assistant_text", "normalized.source_records"]:
         require(merge_score_body, marker, "cross-device completed-turn conflict preference")
     unique_turns_body = function_body(app_js, "uniqueSaasAiCeoThreadTurns")
-    for marker in ["saasAiCeoThreadTurnMergeScore(existing)", "candidateScore >= existingScore", "orderedKeys"]:
+    for marker in [
+        "saasAiCeoThreadTurnMergeScore(existing)",
+        "candidateScore >= existingScore",
+        "orderedKeys",
+        ".sort(compareSaasAiCeoThreadTurns)",
+    ]:
         require(unique_turns_body, marker, "deterministic cross-device turn merge")
+    turn_timestamp_body = function_body(app_js, "saasAiCeoThreadTurnTimestamp")
+    for marker in ["Date.parse(turn?.created_at", "assistant_id", "parseInt(match[1], 16)"]:
+        require(turn_timestamp_body, marker, "cross-device chronological timestamp fallback")
+    turn_compare_body = function_body(app_js, "compareSaasAiCeoThreadTurns")
+    for marker in ["saasAiCeoThreadTurnTimestamp(left)", "saasAiCeoThreadTurnTimestamp(right)", "localeCompare"]:
+        require(turn_compare_body, marker, "cross-device chronological ordering")
 
     viewport_body = function_body(app_js, "syncSaasAiCeoFixedChatViewportState")
     require(viewport_body, "syncSaasAiCeoCloudDomState()", "cloud history marker after chat rerender")
