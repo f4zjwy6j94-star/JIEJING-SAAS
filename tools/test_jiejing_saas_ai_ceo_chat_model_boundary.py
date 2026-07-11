@@ -920,8 +920,10 @@ def main() -> int:
             return fail(f"AI CEO market report should expose eBay Inventory/Offer field mapping: {listing_fields}")
         if listing_fields.get("ready_for_listing_draft") is not True or listing_fields.get("triggers_real_platform_write") is not False:
             return fail(f"AI CEO listing fields should remain draft-only and confirmation-gated: {listing_fields}")
-        if not listing_fields.get("description_seed") or not listing_fields.get("selling_points"):
-            return fail(f"AI CEO listing fields should carry draftable copy, not just an unstructured report: {listing_fields}")
+        if not listing_fields.get("market_rationale") or listing_fields.get("selling_points") or listing_fields.get("description_seed"):
+            return fail(f"AI CEO market rationale must stay separate from buyer-facing Listing copy: {listing_fields}")
+        if listing_fields.get("buyer_copy_status") != "waiting_for_merchant_product_facts":
+            return fail(f"AI CEO market handoff should wait for merchant product facts before buyer copy: {listing_fields}")
         product_candidates = listing_fields.get("product_candidates") if isinstance(listing_fields.get("product_candidates"), list) else []
         if not product_candidates or not listing_fields.get("selected_product_candidate"):
             return fail(f"AI CEO market handoff should carry product candidate cards before Listing import: {listing_fields}")

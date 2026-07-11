@@ -160,17 +160,27 @@ def _next_external_steps(staging_verification: dict[str, Any]) -> list[str]:
 
 def _run_check(key: str, command: list[str]) -> dict[str, Any]:
     started = time.time()
+    attempts = 0
     try:
-        completed = subprocess.run(
-            command,
-            cwd=str(ROOT),
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            timeout=180,
-            check=False,
-        )
+        while True:
+            attempts += 1
+            completed = subprocess.run(
+                command,
+                cwd=str(ROOT),
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=180,
+                check=False,
+            )
+            combined_output = f"{completed.stdout}\n{completed.stderr}"
+            transient_windows_abort = completed.returncode != 0 and (
+                "WinError 10053" in combined_output or "ConnectionAbortedError" in combined_output
+            )
+            if not transient_windows_abort or attempts >= 2:
+                break
+            time.sleep(0.5)
     except FileNotFoundError as exc:
         return {
             "key": key,
@@ -191,6 +201,7 @@ def _run_check(key: str, command: list[str]) -> dict[str, Any]:
         "key": key,
         "pass": completed.returncode == 0,
         "returncode": completed.returncode,
+        "attempts": attempts,
         "elapsed_seconds": round(time.time() - started, 2),
         "stdout_tail": completed.stdout[-1200:],
         "stderr_tail": completed.stderr[-1200:],

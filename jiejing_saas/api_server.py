@@ -1345,6 +1345,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "commercial_rights_confirmed": body.get("commercial_rights_confirmed") is True,
                 "platform_rules_checked": body.get("platform_rules_checked") is True,
             }
+            job_spec = media_job.get("job", {}).get("job_spec", {}) if isinstance(media_job.get("job"), dict) else {}
+            job_inputs = job_spec.get("inputs") if isinstance(job_spec.get("inputs"), dict) else {}
+            creative_job_spec = job_inputs.get("creative_job_spec") if isinstance(job_inputs.get("creative_job_spec"), dict) else {}
+            product_fact_gate = media_job.get("product_fact_gate") if isinstance(media_job.get("product_fact_gate"), dict) else {}
+            concept_only = creative_job_spec.get("output_safety_mode") == "concept_reference_only"
+            missing_fact_keys = product_fact_gate.get("missing_fact_keys") if isinstance(product_fact_gate.get("missing_fact_keys"), list) else []
+            if decision == "approve_for_listing_draft" and (concept_only or "reference_images_or_source_notes" in missing_fact_keys):
+                self._send_error(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "concept reference needs a real product source image before Listing draft approval",
+                )
+                return
             if decision == "approve_for_listing_draft" and not all(confirmations.values()):
                 self._send_error(HTTPStatus.BAD_REQUEST, "all media review confirmations are required before Listing draft approval")
                 return
@@ -1519,6 +1531,14 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 store_id=parts[1],
             )
             publish_payload = merge_account_health_into_payload(publish_payload, account_health)
+            raw_project_identity = body.get("listing_project_identity") if isinstance(body.get("listing_project_identity"), dict) else {}
+            listing_project_identity = {
+                "key": _safe_publish_text(raw_project_identity.get("key"), limit=160),
+                "product": _safe_publish_text(raw_project_identity.get("product"), limit=160),
+                "source_id": _safe_publish_text(raw_project_identity.get("source_id"), limit=160),
+                "candidate_id": _safe_publish_text(raw_project_identity.get("candidate_id"), limit=120),
+                "secret_exposed": False,
+            }
             task_title = _safe_publish_text(
                 body.get("product")
                 or publish_payload.get("listing", {}).get("title")
@@ -1536,6 +1556,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "product": task_title,
                     "source": "merchant_listing_publish_intake",
                     "packet_id": latest_packets[0].get("packet_id") if latest_packets else None,
+                    "listing_project_identity": listing_project_identity,
                     "secret_exposed": False,
                 },
             )
@@ -1574,6 +1595,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "expected_result": "通过发布体检后，后端执行服务才可用 eBay Inventory API 发布；失败会写入审计和平台规则记忆。",
                     "publish_payload": publish_payload,
                     "publish_payload_summary": _publish_payload_summary(publish_payload),
+                    "listing_project_identity": listing_project_identity,
                     "publish_readiness": readiness,
                     "account_health": account_health,
                     "preflight_status": preflight.get("status"),

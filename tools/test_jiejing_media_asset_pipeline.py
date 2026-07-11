@@ -112,6 +112,29 @@ def main() -> int:
     if not any(item.get("status") == "blocked_missing_product_facts" for item in gates):
         return fail("review gates should expose missing product facts")
 
+    concept = build_media_asset_generation_packet(
+        base=base,
+        contract_key="media.asset_generation",
+        captured_at="2026-07-01T00:00:00Z",
+        inputs={
+            "creative_job_spec": {
+                "output_safety_mode": "concept_reference_only",
+                "product_facts_required": ["product_identity", "reference_images_or_source_notes"],
+            },
+            "product_facts": {"product": "Silicone cup covers", "reference_images": []},
+            "image_count": 1,
+        },
+        live_media_snapshot={
+            "provider": "fake",
+            "assets": [{"asset_id": "concept-1", "asset_type": "product_image", "url": "https://example.test/concept.jpg"}],
+        },
+    )
+    concept_asset = concept.get("asset_manifest", [{}])[0]
+    if concept_asset.get("asset_type") != "concept_reference_image":
+        return fail(f"ungrounded live output must be labelled concept reference: {concept_asset}")
+    if concept_asset.get("listing_use_status") != "concept_only_not_eligible_for_listing":
+        return fail("concept reference must not become Listing eligible")
+
     for checked in (packet, missing):
         if checked.get("secret_exposed") is not False:
             return fail("pipeline packet must not expose secrets")

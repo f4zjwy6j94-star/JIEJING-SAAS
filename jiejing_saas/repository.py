@@ -1805,6 +1805,7 @@ class SaaSRepository:
                 payload["asset_manifest"] = provider_packet.get("asset_manifest") if isinstance(provider_packet.get("asset_manifest"), list) else []
                 payload["asset_manifest_validation"] = provider_packet.get("asset_manifest_validation") if isinstance(provider_packet.get("asset_manifest_validation"), dict) else {}
                 payload["asset_review"] = provider_packet.get("asset_review") if isinstance(provider_packet.get("asset_review"), dict) else {}
+                payload["product_fact_gate"] = provider_packet.get("product_fact_gate") if isinstance(provider_packet.get("product_fact_gate"), dict) else {}
                 payload["cost_guard"] = provider_packet.get("cost_guard") if isinstance(provider_packet.get("cost_guard"), dict) else {}
                 payload["production_gate"] = provider_packet.get("production_gate") if isinstance(provider_packet.get("production_gate"), dict) else {}
                 payload["merchant_visible_states"] = provider_packet.get("merchant_visible_states") if isinstance(provider_packet.get("merchant_visible_states"), list) else []
@@ -6129,7 +6130,7 @@ def _ai_ceo_listing_handoff_fields(
         for reason in (selected_candidate.get("reasons") if isinstance(selected_candidate.get("reasons"), list) else [])
         if _sanitize_merchant_ceo_text(reason, limit=180)
     ][:4]
-    selling_points = candidate_reasons or [
+    market_rationale = candidate_reasons or [
         line
         for line in lines
         if len(line) >= 8
@@ -6163,7 +6164,11 @@ def _ai_ceo_listing_handoff_fields(
         "selected_product_candidate": selected_candidate,
         "selected_candidate_id": str(selected_candidate.get("candidate_id") or ""),
         "recommendation_score": int(selected_candidate.get("score") or 0) if selected_candidate else 0,
-        "selling_points": selling_points,
+        # Market rationale is merchant-facing evidence, not buyer-facing copy.
+        # Research must not silently become product claims before facts exist.
+        "market_rationale": market_rationale,
+        "selling_points": [],
+        "buyer_copy_status": "waiting_for_merchant_product_facts",
         "keywords": keyword_candidates,
         "price_band": price_band,
         "category_suggestion": "待 eBay 类目体检确认",
@@ -6175,19 +6180,13 @@ def _ai_ceo_listing_handoff_fields(
         "image_requirements": image_plan,
         "logistics_requirements": logistics_plan,
         "risk_notes": risk_notes,
-        "description_seed": "\n".join(
-            [
-                f"选定商品：{clean_product}",
-                *(selling_points[:4] if selling_points else []),
-                "这只是根据 AI CEO 市场调研生成的 Listing 草稿起点；真实发布前需补齐商品事实、图片授权、价格成本、物流和店铺政策。",
-            ]
-        )[:1800],
+        "description_seed": "",
         "ebay_inventory_item_draft": {
             "sku": "",
             "condition": "",
             "product": {
                 "title": clean_product,
-                "description": "\n".join(selling_points[:4])[:1800] or clean_answer[:800],
+                "description": "",
                 "aspects": item_specifics,
                 "imageUrls": [],
             },
@@ -6209,7 +6208,7 @@ def _ai_ceo_listing_handoff_fields(
                 },
             },
             "research_price_band": price_band,
-            "listingDescription": "\n".join(selling_points[:4])[:1800] or clean_answer[:800],
+            "listingDescription": "",
             "listingPolicies": {
                 "fulfillmentPolicyId": "",
                 "paymentPolicyId": "",

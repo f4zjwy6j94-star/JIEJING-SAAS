@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
 import sys
 import time
@@ -29,13 +30,19 @@ def fail(message: str) -> int:
     return 1
 
 
+def find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     for path in (SAAS_DB, RUNTIME_DB):
         if path.exists():
             path.unlink()
 
-    port = 8791
+    port = find_free_port()
     process = subprocess.Popen(
         [
             sys.executable,

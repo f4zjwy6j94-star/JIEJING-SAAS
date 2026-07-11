@@ -29,7 +29,10 @@ def patched_env(**values: str):
 
 
 class FakeMediaGenerationAdapter:
+    configs = []
+
     def generate(self, config):
+        self.configs.append(config)
         assets = [
             {
                 "asset_id": "fake-main-01",
@@ -78,7 +81,9 @@ def media_job_body(*, live_requested: bool = True, video_requested: bool = True)
                 "forbidden_claims": ["medical"],
                 "supplier_facts": {"material": "silicone", "package_dimensions_cm": {"length": 30, "width": 8, "height": 8}},
                 "target_marketplace_rules": {"platform": "ebay", "marketplace": "EBAY_US"},
+                "reference_images": ["https://cdn.example.test/jiejing/source-mat.jpg"],
             },
+            "reference_image_url": "https://cdn.example.test/jiejing/source-mat.jpg",
             "image_count": 2,
             "image_sizes": ["1600x1600"],
             "scene_types": ["white_background", "detail_page"],
@@ -92,6 +97,11 @@ def media_job_body(*, live_requested: bool = True, video_requested: bool = True)
 
 
 def main() -> int:
+    app_js = (ROOT / "app.js").read_text(encoding="utf-8")
+    if "function saasMediaAssetJobIsConceptOnly" not in app_js:
+        raise AssertionError("frontend must identify concept-only media jobs")
+    if "概念参考，不能通过 Listing 审核" not in app_js:
+        raise AssertionError("frontend must block concept-only Listing approval with merchant-facing guidance")
     original_adapter = runner_module.MediaGenerationAdapter
     try:
         runner_module.MediaGenerationAdapter = FakeMediaGenerationAdapter
@@ -120,6 +130,27 @@ def main() -> int:
             raise AssertionError("live media assets must still wait for Listing review")
         if live.get("secret_exposed") is not False:
             raise AssertionError("live media provider branch must not expose secrets")
+
+        concept_body = media_job_body(video_requested=False)
+        concept_body["inputs"]["product_facts"].pop("reference_images", None)
+        concept_body["inputs"].pop("reference_image_url", None)
+        concept_body["inputs"]["creative_job_spec"]["output_safety_mode"] = "concept_reference_only"
+        with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="false"):
+            concept = ProviderJobRunner().run(
+                company_id="co_test",
+                store_id="store_test",
+                user_id="user_test",
+                task_id="task_test_concept",
+                job_id="job_test_concept",
+                job_body=concept_body,
+            )
+        concept_manifest = concept.get("output_packet", {}).get("asset_manifest", [])
+        if not concept_manifest or concept_manifest[0].get("asset_type") != "concept_reference_image":
+            raise AssertionError(f"ungrounded generation must remain concept-only: {concept_manifest}")
+        if concept_manifest[0].get("listing_use_status") != "concept_only_not_eligible_for_listing":
+            raise AssertionError("concept-only media must never be Listing eligible")
+        if "No text, letters, numbers" not in FakeMediaGenerationAdapter.configs[-1].image_prompt:
+            raise AssertionError("concept generation prompt must prohibit text and unsupported labels")
 
         with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="true"):
             image_only = ProviderJobRunner().run(

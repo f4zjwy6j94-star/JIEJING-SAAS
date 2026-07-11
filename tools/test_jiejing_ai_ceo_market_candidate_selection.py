@@ -80,7 +80,8 @@ def main() -> None:
     assert fields["recommendation_score"] == 65, fields
     assert fields["price_band"] == "$9.99-$13.99", fields
     assert fields["logistics_requirements"]["package_weight_g"] == "220", fields
-    assert expected in fields["description_seed"], fields
+    assert fields["description_seed"] == "", fields
+    assert fields["market_rationale"], fields
     assert "冰箱食品收纳整理架" not in fields["title"], fields
     assert fields["triggers_real_platform_write"] is False, fields
 
@@ -118,7 +119,8 @@ def main() -> None:
     assert followup_fields["title"] == expected, followup_fields
     assert followup_fields["selected_candidate_id"] == "candidate_2", followup_fields
     assert followup_fields["price_band"] == "$9.99-$13.99", followup_fields
-    assert "冰箱食品收纳整理架" not in followup_fields["description_seed"], followup_fields
+    assert followup_fields["description_seed"] == "", followup_fields
+    assert "冰箱食品收纳整理架" not in " ".join(followup_fields["market_rationale"]), followup_fields
     assert followup_fields["triggers_real_platform_write"] is False, followup_fields
 
     reset_task = repository.create_task(

@@ -98,6 +98,12 @@ def main() -> int:
             f"{base_url}/stores/{store['store_id']}/publish-confirmation",
             {
                 "product": "Fresh silicone door bumper pads",
+                "listing_project_identity": {
+                    "key": "listing-project-unit-fresh-bumper",
+                    "product": "Fresh silicone door bumper pads",
+                    "source_id": "report-unit-fresh-bumper",
+                    "candidate_id": "candidate-unit-fresh-bumper",
+                },
                 "listing": {
                     "sku": "JJ-FRESH-INTAKE-001",
                     "title": "Clear Silicone Cabinet Door Bumper Pads Quiet Stopper Set",
@@ -125,6 +131,8 @@ def main() -> int:
             return fail(f"publish intake should create a pending publish confirmation: {result}")
         if result.get("real_platform_writes_enabled") is not False:
             return fail("local publish intake must not enable real writes")
+        if confirmation.get("item", {}).get("listing_project_identity", {}).get("key") != "listing-project-unit-fresh-bumper":
+            return fail(f"publish confirmation must remain bound to its Listing project: {confirmation}")
         readiness = result.get("publish_readiness", {})
         keys = {item.get("key") for item in readiness.get("checks", [])}
         for required in {"ip_vero_and_claims", "profit_and_fee_sanity", "inventory_api_lifecycle"}:

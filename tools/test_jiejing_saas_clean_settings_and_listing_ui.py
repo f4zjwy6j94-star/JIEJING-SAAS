@@ -1082,7 +1082,7 @@ def main() -> None:
         "真实生成状态",
         "外部素材服务可用",
         "素材清单和人工审核",
-        "当前不会真实消耗生图或生视频额度",
+        "每次生成可能计入外部素材服务用量",
         "media_live_service_readiness_v1",
     ]:
         require(app_js, expected, f"Media generation readiness copy: {expected}")

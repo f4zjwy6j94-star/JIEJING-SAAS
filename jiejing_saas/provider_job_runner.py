@@ -186,10 +186,23 @@ class ProviderJobRunner:
         image_sizes = _list_or_default(inputs.get("image_sizes"), ["1600x1600"])
         scene_types = _list_or_default(inputs.get("scene_types"), ["white_background"])
         blocked_claims = _list_or_default(creative_job_spec.get("blocked_claims"), ["unverified certification", "medical claims", "unauthorized brand claims"])
+        reference_images = product_facts.get("reference_images") if isinstance(product_facts.get("reference_images"), list) else []
+        reference_image_url = str(inputs.get("reference_image_url") or "").strip()
+        if not reference_image_url:
+            reference_image_url = next((str(item).strip() for item in reference_images if str(item).strip().startswith("https://")), "")
+        concept_only = creative_job_spec.get("output_safety_mode") == "concept_reference_only" or not reference_image_url
+        creative_job_spec["output_safety_mode"] = "concept_reference_only" if concept_only else "reference_grounded_listing_draft"
         image_prompt = str(
             inputs.get("image_prompt")
             or creative_job_spec.get("image_prompt")
-            or f"Create eBay-safe product images for {product}. Use only confirmed product facts. Avoid: {', '.join(blocked_claims)}."
+            or (
+                f"Create a concept reference image for {product} on a neutral plain background. "
+                "No text, letters, numbers, labels, logos, certification icons, dimensions, performance claims, "
+                "materials claims, food-safety claims, or promotional badges. This is not a listing-ready product photo."
+                if concept_only
+                else f"Create an eBay-safe product image for {product} grounded only in the supplied reference image. "
+                f"No text, letters, numbers, labels, logos, certification icons, or unsupported claims. Avoid: {', '.join(blocked_claims)}."
+            )
         )
         video_enabled = _env_bool("JIEJING_MEDIA_LIVE_VIDEO_ENABLED", default=False) and _truthy(inputs.get("video_generation_requested"))
         video_prompt = ""
@@ -212,7 +225,7 @@ class ProviderJobRunner:
                 scene_types=scene_types,
                 live_enabled=True,
                 provider=provider,
-                reference_image_url=str(inputs.get("reference_image_url") or ""),
+                reference_image_url=reference_image_url,
                 timeout_seconds=max(10, min(_safe_int(inputs.get("timeout_seconds"), default=default_timeout), max_timeout)),
             )
         )

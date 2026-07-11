@@ -294,6 +294,24 @@ def main() -> int:
         ).get("media_asset_job", {})
         if needs_rework_again.get("status") != "needs_rework":
             return fail(f"approved media should be reviewable again before a new version: {needs_rework_again}")
+
+        concept_payload = json.loads(json.dumps(payload))
+        concept_payload["idempotency_key"] = "unit-media-job-concept-only-001"
+        concept_payload["inputs"]["product_facts"]["reference_images"] = []
+        concept_payload["inputs"]["creative_job_spec"]["output_safety_mode"] = "concept_reference_only"
+        concept_job = post_json(f"{base_url}/stores/{store_id}/provider-jobs/queue", concept_payload, token=token).get("media_asset_job", {})
+        concept_status, concept_review = post_json_with_status(
+            f"{base_url}/media-asset-jobs/{concept_job.get('media_job_id')}/review",
+            {
+                "decision": "approve_for_listing_draft",
+                "fact_consistency_confirmed": True,
+                "commercial_rights_confirmed": True,
+                "platform_rules_checked": True,
+            },
+            token=token,
+        )
+        if concept_status != 422 or "real product source image" not in str(concept_review.get("error") or ""):
+            return fail(f"concept-only media review must fail closed before Listing writeback: {concept_status}, {concept_review}")
         repository = SaaSRepository(SAAS_DB)
         company_id = str(registered.get("company", {}).get("company_id") or "")
         user_id = str(registered.get("user", {}).get("user_id") or "")

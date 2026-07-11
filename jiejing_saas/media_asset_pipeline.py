@@ -52,7 +52,8 @@ def build_media_asset_generation_packet(
     )
     live_provider_called = False
     if isinstance(live_media_snapshot, dict) and live_media_snapshot.get("assets"):
-        live_assets = _live_provider_assets(live_media_snapshot, version_context=version_context)
+        concept_only = creative_job_spec.get("output_safety_mode") == "concept_reference_only"
+        live_assets = _live_provider_assets(live_media_snapshot, version_context=version_context, concept_only=concept_only)
         if live_assets:
             assets = live_assets
             live_provider_called = True
@@ -103,7 +104,7 @@ def build_media_asset_generation_packet(
         "asset_review": {
             "status": _asset_review_status(validation=validation, missing_fact_keys=missing_fact_keys),
             "review_gates": review_gates,
-            "listing_use_status": "not_ready_for_listing_until_review",
+            "listing_use_status": "concept_only_not_eligible_for_listing" if creative_job_spec.get("output_safety_mode") == "concept_reference_only" else "not_ready_for_listing_until_review",
             "confirmation_center_required_before_listing_use": True,
             "secret_exposed": False,
         },
@@ -143,7 +144,12 @@ def build_media_asset_generation_packet(
 }
 
 
-def _live_provider_assets(snapshot: dict[str, Any], *, version_context: dict[str, Any]) -> list[dict[str, Any]]:
+def _live_provider_assets(
+    snapshot: dict[str, Any],
+    *,
+    version_context: dict[str, Any],
+    concept_only: bool = False,
+) -> list[dict[str, Any]]:
     raw_assets = snapshot.get("assets") if isinstance(snapshot.get("assets"), list) else []
     provider = str(snapshot.get("provider") or "configured_media_provider")
     assets: list[dict[str, Any]] = []
@@ -153,7 +159,7 @@ def _live_provider_assets(snapshot: dict[str, Any], *, version_context: dict[str
         url_or_path = str(item.get("url") or item.get("url_or_file_path") or item.get("path") or "").strip()
         if not url_or_path:
             continue
-        asset_type = str(item.get("asset_type") or item.get("type") or "product_image").strip() or "product_image"
+        asset_type = "concept_reference_image" if concept_only else str(item.get("asset_type") or item.get("type") or "product_image").strip() or "product_image"
         duration = item.get("duration_seconds") or item.get("duration")
         dimensions = item.get("dimensions") or item.get("dimensions_or_duration") or (f"{duration}s" if duration else "provider_returned")
         assets.append(
@@ -174,9 +180,9 @@ def _live_provider_assets(snapshot: dict[str, Any], *, version_context: dict[str
                 "cost_estimate": "see_cost_guard",
                 "commercial_use_status": item.get("commercial_use_status") or "needs_rights_review",
                 "fact_review_status": "needs_review",
-                "listing_use_status": "not_ready_for_listing_until_review",
+                "listing_use_status": "concept_only_not_eligible_for_listing" if concept_only else "not_ready_for_listing_until_review",
                 "status": item.get("status") or "generated",
-                "review_status": "needs_human_review_before_listing",
+                "review_status": "concept_reference_requires_real_product_source" if concept_only else "needs_human_review_before_listing",
             }
         )
     return assets
@@ -254,8 +260,8 @@ def _missing_product_fact_keys(*, product_facts: dict[str, Any], creative_job_sp
     supplier = product_facts.get("supplier_facts") if isinstance(product_facts.get("supplier_facts"), dict) else {}
     checks = {
         "product_identity": bool(product_facts.get("product") or product_facts.get("product_identity")),
-        "confirmed_dimensions_or_pending_label": bool(supplier.get("package_dimensions_cm") or supplier.get("dimensions") or product_facts.get("dimensions_pending_label")),
-        "confirmed_material_or_pending_label": bool(supplier.get("material") or product_facts.get("material_pending_label")),
+        "confirmed_dimensions_or_pending_label": _has_confirmed_fact(supplier.get("package_dimensions_cm") or supplier.get("dimensions")) or bool(product_facts.get("dimensions_pending_label")),
+        "confirmed_material_or_pending_label": _has_confirmed_fact(supplier.get("material")) or bool(product_facts.get("material_pending_label")),
         "allowed_claims": bool(product_facts.get("allowed_claims") or product_facts.get("listing_context")),
         "forbidden_claims": bool(product_facts.get("forbidden_claims") or creative_job_spec.get("blocked_claims")),
         "reference_images_or_source_notes": bool(product_facts.get("reference_images") or product_facts.get("source_notes") or product_facts.get("listing_context")),
@@ -265,6 +271,15 @@ def _missing_product_fact_keys(*, product_facts: dict[str, Any], creative_job_sp
     if not isinstance(required, list) or not required:
         required = list(checks.keys())
     return [key for key in required if checks.get(str(key)) is False]
+
+
+def _has_confirmed_fact(value: Any) -> bool:
+    if isinstance(value, dict):
+        return bool(value) and all(_has_confirmed_fact(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return bool(value) and all(_has_confirmed_fact(item) for item in value)
+    text = str(value or "").strip().lower()
+    return bool(text) and text not in {"待补", "待确认", "unknown", "todo", "pending", "n/a"}
 
 
 def _review_gates(

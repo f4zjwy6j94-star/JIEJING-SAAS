@@ -21,6 +21,16 @@ def main() -> None:
     assert "materialValue ? `Material: ${materialValue}` : \"Material: 待补\"" in app_js
     assert 'return material ? `Material: ${material}` : "Material: 待补"' in app_js
     assert "saasListingSafeItemSpecifics(handoffFields.item_specifics" in app_js
+    assert "function saasListingEbayTitleFromProduct" in app_js
+    assert "description: handoffFields.description_seed" in app_js
+    assert "fields.description || draft.summary" not in app_js
+    assert 'candidate_selection_contract: "candidate_switch_resets_unverified_fields_v1"' in app_js
+    candidate_switch = app_js[app_js.index("function selectSaasListingMarketCandidate") : app_js.index("function renderSaasFirstRunAssuranceStrip")]
+    assert 'selling_points: ""' in candidate_switch
+    assert 'description: ""' in candidate_switch
+    assert 'description_html: ""' in candidate_switch
+    assert "function saasPublishConfirmationMatchesListingProject" in app_js
+    assert "Legacy confirmations cannot be proven" in app_js
     for unsafe_phrase in ["风险", "描述", "认证", "合规", "缺口"]:
         assert unsafe_phrase in app_js[app_js.index("function saasListingSafeMaterialValue") : app_js.index("function saasListingComposerDraftFromText")]
 
@@ -56,6 +66,12 @@ def main() -> None:
     assert fields["item_specifics"]["Brand"] == "待补", fields
     assert fields["item_specifics"]["MPN"] == "待补", fields
     assert fields["item_specifics"]["Type"].startswith("待"), fields
+    assert fields["selling_points"] == [], fields
+    assert fields["description_seed"] == "", fields
+    assert fields["ebay_inventory_item_draft"]["product"]["description"] == "", fields
+    assert fields["ebay_offer_draft"]["listingDescription"] == "", fields
+    assert fields["market_rationale"], fields
+    assert fields["buyer_copy_status"] == "waiting_for_merchant_product_facts", fields
     assert fields["merchant_question_contract"]["suggestions_are_not_confirmed_facts"] is True, fields
     assert fields["listing_readiness"]["ready_for_real_publish"] is False, fields
     assert any("真实可售数量" in question for question in fields["merchant_required_answers"]), fields

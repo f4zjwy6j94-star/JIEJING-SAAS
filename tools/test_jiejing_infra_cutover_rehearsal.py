@@ -14,7 +14,9 @@ OUT = ROOT / "output" / "jiejing-infra-cutover-rehearsal-test"
 
 
 def fail(message: str) -> int:
-    print(f"FAIL {message}")
+    encoding = sys.stdout.encoding or "utf-8"
+    safe_message = str(message).encode(encoding, errors="replace").decode(encoding)
+    print(f"FAIL {safe_message}")
     return 1
 
 
