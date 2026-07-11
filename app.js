@@ -10881,6 +10881,7 @@ function saasAiCeoListingHandoffFieldsFromReport(record = null) {
         .slice(0, 14)
     : [];
   const readiness = fields.listing_readiness && typeof fields.listing_readiness === "object" ? fields.listing_readiness : {};
+  const marketResearchHandoff = ["ai_ceo.market_research", "market.report"].includes(String(record?.report_type || ""));
   const normalizeList = (value) => {
     const list = Array.isArray(value) ? value : String(value || "").split(/\r?\n|[,，;；、|]+/);
     return list.map((item) => publicRuntimeText(item).trim()).filter(Boolean).slice(0, 12);
@@ -10894,6 +10895,8 @@ function saasAiCeoListingHandoffFieldsFromReport(record = null) {
   };
   const imageUrls = normalizeList(productDraft.imageUrls || imageRequirements.imageUrls || fields.image_urls);
   const itemSpecificsText = normalizeKeyValue(fields.item_specifics || productDraft.aspects);
+  const legacySellingPoints = normalizeList(fields.selling_points);
+  const marketRationale = normalizeList(fields.market_rationale);
   const listingPolicies = {
     fulfillment_policy_id: publicRuntimeText(policyDraft.fulfillmentPolicyId || logisticsRequirements.fulfillment_policy_id || "").slice(0, 80),
     payment_policy_id: publicRuntimeText(policyDraft.paymentPolicyId || logisticsRequirements.payment_policy_id || "").slice(0, 80),
@@ -10906,9 +10909,11 @@ function saasAiCeoListingHandoffFieldsFromReport(record = null) {
     product_candidates: productCandidates,
     selected_product_candidate: selectedCandidate,
     recommendation_score: Number(fields.recommendation_score || selectedCandidate?.score || 0) || 0,
-    market_rationale: normalizeList(fields.market_rationale),
-    selling_points: normalizeList(fields.selling_points),
-    buyer_copy_status: publicRuntimeText(fields.buyer_copy_status || "").slice(0, 80),
+    market_rationale: marketRationale.length ? marketRationale : marketResearchHandoff ? legacySellingPoints : [],
+    selling_points: marketResearchHandoff ? [] : legacySellingPoints,
+    buyer_copy_status: publicRuntimeText(
+      marketResearchHandoff ? "waiting_for_merchant_product_facts" : fields.buyer_copy_status || "",
+    ).slice(0, 80),
     keywords: normalizeList(fields.keywords),
     price_band: publicRuntimeText(fields.price_band || pricingDraft.value || "").slice(0, 90),
     currency: publicRuntimeText(pricingDraft.currency || "USD").slice(0, 12),
@@ -10949,7 +10954,9 @@ function saasAiCeoListingHandoffFieldsFromReport(record = null) {
       package_width_cm: publicRuntimeText(logisticsRequirements.package_width_cm || "").slice(0, 40),
       package_height_cm: publicRuntimeText(logisticsRequirements.package_height_cm || "").slice(0, 40),
       image_urls: imageUrls.join("\n"),
-      description_html: publicRuntimeText(offerDraft.listingDescription || productDraft.description || fields.description_seed || "").slice(0, 3000),
+      description_html: publicRuntimeText(
+        marketResearchHandoff ? "" : offerDraft.listingDescription || productDraft.description || fields.description_seed || "",
+      ).slice(0, 3000),
       fulfillment_policy_id: listingPolicies.fulfillment_policy_id,
       payment_policy_id: listingPolicies.payment_policy_id,
       return_policy_id: listingPolicies.return_policy_id,
@@ -10968,7 +10975,7 @@ function saasAiCeoListingHandoffFieldsFromReport(record = null) {
       reason: publicRuntimeText(readiness.reason || "").slice(0, 240),
     },
     risk_notes: normalizeList(fields.risk_notes),
-    description_seed: publicRuntimeText(fields.description_seed || "").slice(0, 1800),
+    description_seed: publicRuntimeText(marketResearchHandoff ? "" : fields.description_seed || "").slice(0, 1800),
     source_record_count: Number(fields.source_record_count || body.source_record_count || 0) || 0,
     draft_source: publicRuntimeText(fields.draft_source || handoff.source_mode || "").slice(0, 80),
     ready_for_listing_draft: fields.ready_for_listing_draft === true || handoff.ready_for_listing_draft === true,

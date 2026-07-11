@@ -22,6 +22,9 @@ def main() -> None:
     assert 'return material ? `Material: ${material}` : "Material: 待补"' in app_js
     assert "saasListingSafeItemSpecifics(handoffFields.item_specifics" in app_js
     assert "function saasListingEbayTitleFromProduct" in app_js
+    assert 'const marketResearchHandoff = ["ai_ceo.market_research", "market.report"]' in app_js
+    assert "selling_points: marketResearchHandoff ? [] : legacySellingPoints" in app_js
+    assert 'marketResearchHandoff ? "" : fields.description_seed' in app_js
     assert "description: handoffFields.description_seed" in app_js
     assert "fields.description || draft.summary" not in app_js
     assert 'candidate_selection_contract: "candidate_switch_resets_unverified_fields_v1"' in app_js
