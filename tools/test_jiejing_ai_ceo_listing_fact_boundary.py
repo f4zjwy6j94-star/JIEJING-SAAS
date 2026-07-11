@@ -15,6 +15,12 @@ from jiejing_saas.repository import _ai_ceo_listing_handoff_fields  # noqa: E402
 
 
 def main() -> None:
+    app_js = (ROOT / "app.js").read_text(encoding="utf-8")
+    assert "function saasListingSafeMaterialValue" in app_js, "missing frontend material fact guard"
+    assert "materialValue ? `Material: ${materialValue}` : \"Material: 待补\"" in app_js
+    for unsafe_phrase in ["风险", "描述", "认证", "合规", "缺口"]:
+        assert unsafe_phrase in app_js[app_js.index("function saasListingSafeMaterialValue") : app_js.index("function saasListingComposerDraftFromText")]
+
     fields = _ai_ceo_listing_handoff_fields(
         product="硅胶折叠旅行杯",
         answer=(

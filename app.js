@@ -10516,6 +10516,13 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
   `;
 }
 
+function saasListingSafeMaterialValue(value = "") {
+  const material = publicRuntimeText(value).trim().slice(0, 80);
+  if (!material || material.length > 40) return "";
+  if (/风险|描述|认证|说明|合规|缺口|建议|是否|需要|不得|不能|如果|若/i.test(material)) return "";
+  return material;
+}
+
 function saasListingComposerDraftFromText(text = "") {
   const clean = sanitizeSaasWorkflowFeedbackText(text, 1200);
   const lines = clean
@@ -10533,6 +10540,7 @@ function saasListingComposerDraftFromText(text = "") {
   const priceValue = priceMatch ? String(priceMatch[1] || priceMatch[0] || "").trim() : "";
   const skuMatch = clean.match(/(?:SKU|货号|编号)\s*[:：]?\s*([A-Za-z0-9_-]{3,40})/i);
   const materialMatch = clean.match(/(?:材质|material)\s*[:：]?\s*([^，。；;\n]+)/i);
+  const materialValue = saasListingSafeMaterialValue(materialMatch?.[1] || "");
   const logisticsMatch = clean.match(/(?:发货地|物流|shipping|重量|尺寸)\s*[:：]?\s*([^。；;\n]+)/i);
   const gaps = [
     !hasSku ? "SKU 或货号" : "",
@@ -10546,7 +10554,7 @@ function saasListingComposerDraftFromText(text = "") {
     !hasImage ? "缺少可被 eBay 访问的图片 URL 或素材来源" : "",
   ].filter(Boolean);
   const bullets = [
-    materialMatch ? `${materialMatch[1].trim()} 材质，适合标题和参数展开` : "核心材质/规格待补",
+    materialValue ? `${materialValue} 材质，适合标题和参数展开` : "核心材质/规格待补",
     hasShipping ? "已出现物流、尺寸或重量线索，可以继续做履约体检" : "物流、重量、尺寸待补",
     hasPrice ? "已出现价格或成本线索，可以进入利润估算" : "价格、采购成本和费用待补",
     hasImage ? "已出现图片或素材线索，可以进入素材工坊" : "主图、场景图和细节图待补",
@@ -10571,7 +10579,7 @@ function saasListingComposerDraftFromText(text = "") {
       description: clean,
       item_specifics: [
         "Brand: 待确认",
-        materialMatch ? `Material: ${materialMatch[1].trim()}` : "Material: 待补",
+        materialValue ? `Material: ${materialValue}` : "Material: 待补",
         skuMatch ? `MPN: ${skuMatch[1].trim()}` : "MPN: 待确认",
       ].join("\n"),
       category: "待发布体检确认",
