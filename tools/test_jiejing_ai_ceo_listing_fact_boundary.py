@@ -17,7 +17,10 @@ from jiejing_saas.repository import _ai_ceo_listing_handoff_fields  # noqa: E402
 def main() -> None:
     app_js = (ROOT / "app.js").read_text(encoding="utf-8")
     assert "function saasListingSafeMaterialValue" in app_js, "missing frontend material fact guard"
+    assert "function saasListingSafeItemSpecifics" in app_js, "missing final item specifics guard"
     assert "materialValue ? `Material: ${materialValue}` : \"Material: 待补\"" in app_js
+    assert 'return material ? `Material: ${material}` : "Material: 待补"' in app_js
+    assert "saasListingSafeItemSpecifics(handoffFields.item_specifics" in app_js
     for unsafe_phrase in ["风险", "描述", "认证", "合规", "缺口"]:
         assert unsafe_phrase in app_js[app_js.index("function saasListingSafeMaterialValue") : app_js.index("function saasListingComposerDraftFromText")]
 

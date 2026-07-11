@@ -10523,6 +10523,20 @@ function saasListingSafeMaterialValue(value = "") {
   return material;
 }
 
+function saasListingSafeItemSpecifics(value = "") {
+  const lines = publicRuntimeText(value)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const normalized = lines.map((line) => {
+    const match = line.match(/^Material\s*:\s*(.*)$/i);
+    if (!match) return line;
+    const material = saasListingSafeMaterialValue(match[1] || "");
+    return material ? `Material: ${material}` : "Material: 待补";
+  });
+  return normalized.join("\n");
+}
+
 function saasListingComposerDraftFromText(text = "") {
   const clean = sanitizeSaasWorkflowFeedbackText(text, 1200);
   const lines = clean
@@ -10631,7 +10645,7 @@ function saasListingComposerDraftFromCatalogDraft(draft = null, sourceType = "li
       title: draft.title || draft.titleEn || draft.titleCn || "",
       selling_points: reportReasons.join("\n"),
       description,
-      item_specifics: specifics || "Brand: 待补\nMaterial: 待补\nMPN: 待补",
+      item_specifics: saasListingSafeItemSpecifics(specifics) || "Brand: 待补\nMaterial: 待补\nMPN: 待补",
       category: [draft.category, draft.categoryId].filter(Boolean).join(" / ") || "待发布体检确认",
       price: draft.price || "",
       images: mediaNeeds || "待补主图、场景图、详情页和可访问图片 URL。",
@@ -10968,7 +10982,9 @@ function saasListingDraftFromReport(record = null, sourceType = "ai_report") {
           ? selectedCandidate.reasons.join("\n")
           : draft.fields?.selling_points || "等待 AI 整理卖点；可先补商品资料。",
       description: candidateDescription || sectionText || "等待 AI CEO 报告正文。",
-      item_specifics: handoffFields.item_specifics || draft.fields?.item_specifics || "Brand: 待补\nType: 待补\nMaterial: 待补\nMPN: 待补",
+      item_specifics:
+        saasListingSafeItemSpecifics(handoffFields.item_specifics || draft.fields?.item_specifics || "") ||
+        "Brand: 待补\nType: 待补\nMaterial: 待补\nMPN: 待补",
       category: handoffFields.category_id || handoffFields.category_suggestion || "待发布体检确认",
       keywords: handoffFields.keywords.length ? handoffFields.keywords.join(", ") : draft.fields?.keywords || "",
       price: handoffFields.price_band || selectedCandidate?.price_band || draft.fields?.price || "",
