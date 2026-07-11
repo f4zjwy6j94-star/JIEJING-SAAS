@@ -40,12 +40,13 @@ def main() -> None:
     require(report_delivery, "data-report-id", "report-bound market delivery")
     require(report_delivery, "data-ai-ceo-assistant-id", "turn-bound market delivery")
     require(report_delivery, "data-product-name", "product-bound market delivery")
-    require(report_delivery, "rememberSaasAiCeoMarketImportTarget(latest)", "render-time report identity registration")
+    require(report_delivery, "rememberSaasAiCeoMarketImportTarget(latest, title)", "render-time report identity registration")
 
     import_target_memory = function_body(app_js, "rememberSaasAiCeoMarketImportTarget")
     for marker in [
         "assistant:",
         "report:",
+        "rendered_product:",
         "saasAiCeoMarketImportTargets.size > 80",
     ]:
         require(import_target_memory, marker, "bounded rendered-report target memory")
@@ -65,6 +66,9 @@ def main() -> None:
         "saasAiCeoMarketResearchTurnMatchesClickedProduct",
     ]:
         require(exact_target, marker, "exact clicked-report import resolution")
+
+    product_match = function_body(app_js, "saasAiCeoMarketResearchTurnMatchesClickedProduct")
+    require(product_match, "latest?.rendered_product", "rendered product identity comparison")
 
     import_handler = function_body(app_js, "handleSaasAiCeoImportMarketToListing")
     for marker in [

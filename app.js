@@ -21244,15 +21244,19 @@ function renderSaasAiCeoRecoveryHintMarkup(turn = {}) {
 
 const saasAiCeoMarketImportTargets = new Map();
 
-function rememberSaasAiCeoMarketImportTarget(turn = {}) {
+function rememberSaasAiCeoMarketImportTarget(turn = {}, renderedProduct = "") {
   const latest = normalizeSaasAiCeoLatestTurn(turn);
   if (!latest) return null;
-  if (latest.assistant_id) saasAiCeoMarketImportTargets.set(`assistant:${latest.assistant_id}`, latest);
-  if (latest.market_report_id) saasAiCeoMarketImportTargets.set(`report:${latest.market_report_id}`, latest);
+  const target = {
+    ...latest,
+    rendered_product: saasIsConcreteProductLabel(renderedProduct) ? publicRuntimeText(renderedProduct) : "",
+  };
+  if (target.assistant_id) saasAiCeoMarketImportTargets.set(`assistant:${target.assistant_id}`, target);
+  if (target.market_report_id) saasAiCeoMarketImportTargets.set(`report:${target.market_report_id}`, target);
   while (saasAiCeoMarketImportTargets.size > 80) {
     saasAiCeoMarketImportTargets.delete(saasAiCeoMarketImportTargets.keys().next().value);
   }
-  return latest;
+  return target;
 }
 
 function renderSaasAiCeoListingHandoffMarkup(turn = {}) {
@@ -21261,7 +21265,7 @@ function renderSaasAiCeoListingHandoffMarkup(turn = {}) {
   const latest = eligibility.latest;
   const product = saasAiCeoMarketProductLabel(latest) || "这次调研";
   const sourceCount = normalizeSaasAiCeoSourceRecords(latest.source_records || []).length;
-  rememberSaasAiCeoMarketImportTarget(latest);
+  rememberSaasAiCeoMarketImportTarget(latest, product);
   return `
     <div class="saas-ai-ceo-listing-handoff" data-ai-ceo-market-handoff="ai_ceo_market_to_listing_cta_v1">
       <div>
@@ -21283,7 +21287,7 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
     saasAiCeoMarketProductLabel(latest) ||
     delivery.title ||
     "这次市场调研";
-  rememberSaasAiCeoMarketImportTarget(latest);
+  rememberSaasAiCeoMarketImportTarget(latest, title);
   const sourceCopy = delivery.source_record_count ? `已带 ${delivery.source_record_count} 条公开来源；` : "";
   return `
     <div class="saas-ai-ceo-market-report-delivery" data-ai-ceo-market-report-delivery="ai_ceo_market_report_delivery_v1" data-report-id="${escapeHtml(delivery.report_id)}">
@@ -26874,7 +26878,7 @@ function saasAiCeoMarketImportProductKey(value = "") {
 function saasAiCeoMarketResearchTurnMatchesClickedProduct(turn = {}, expectedProduct = "") {
   const latest = normalizeSaasAiCeoLatestTurn(turn);
   const expectedKey = saasAiCeoMarketImportProductKey(expectedProduct);
-  const actualKey = saasAiCeoMarketImportProductKey(saasAiCeoMarketProductLabel(latest));
+  const actualKey = saasAiCeoMarketImportProductKey(latest?.rendered_product || saasAiCeoMarketProductLabel(latest));
   if (!latest || !expectedKey || !actualKey || expectedKey !== actualKey) return false;
   if (latest.pending || !latest.assistant_text) return false;
   if (["model_answer_rejected", "model_call_failed", "source_backed_market_report_draft", "market_report_recovery_draft"].includes(latest.status)) {
@@ -39757,6 +39761,7 @@ function normalizeSaasAiCeoLatestTurn(turn = {}) {
     model: turn.model && typeof turn.model === "object" ? turn.model : null,
     route: String(turn.route || ""),
     route_label: publicRuntimeText(turn.route_label || ""),
+    rendered_product: publicRuntimeText(turn.rendered_product || turn.renderedProduct || "").slice(0, 180),
     memory_policy: String(turn.memory_policy || ""),
     long_term_memory: Boolean(turn.long_term_memory),
     writes_merchant_rule: Boolean(turn.writes_merchant_rule),
