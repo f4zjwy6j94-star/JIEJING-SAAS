@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -22,20 +23,25 @@ def fail(message: str) -> int:
 
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
+    fixture_path = ROOT / "output" / "jiejing-saas-backend" / "test" / "saas-test.sqlite"
     # Build a current SQLite fixture through the existing backend E2E so the
     # rehearsal exercises real SaaS tables rather than a hand-written stub.
-    backend = subprocess.run(
-        [sys.executable, "tools/test_jiejing_saas_backend_mvp.py"],
-        cwd=str(ROOT),
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        timeout=180,
-        check=False,
-    )
-    if backend.returncode != 0:
-        return fail("backend fixture failed: " + backend.stdout[-500:] + backend.stderr[-500:])
+    reuse_fixture = os.getenv("JIEJING_REUSE_BACKEND_MVP_FIXTURE", "").strip().lower() in {"1", "true", "yes"}
+    if not reuse_fixture:
+        backend = subprocess.run(
+            [sys.executable, "tools/test_jiejing_saas_backend_mvp.py"],
+            cwd=str(ROOT),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=180,
+            check=False,
+        )
+        if backend.returncode != 0:
+            return fail("backend fixture failed: " + backend.stdout[-500:] + backend.stderr[-500:])
+    if not fixture_path.exists():
+        return fail("backend fixture is missing; run test_jiejing_saas_backend_mvp.py first")
 
     out_path = OUT / "latest.json"
     sql_path = OUT / "import.sql"
@@ -43,7 +49,7 @@ def main() -> int:
         sys.executable,
         "tools/jiejing_infra_cutover_rehearsal.py",
         "--sqlite-db",
-        str(ROOT / "output" / "jiejing-saas-backend" / "test" / "saas-test.sqlite"),
+        str(fixture_path),
         "--database-url",
         "postgresql://jiejing:super-secret-db@postgres:5432/jiejing",
         "--queue-url",

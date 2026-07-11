@@ -7036,8 +7036,21 @@ function latestSaasMediaAssetJobWithManifest(options = {}) {
 function saasMediaAssetJobIsConceptOnly(job = {}) {
   const review = job.asset_review && typeof job.asset_review === "object" ? job.asset_review : {};
   const manifest = Array.isArray(job.asset_manifest) ? job.asset_manifest : [];
+  const facts = saasMediaAssetJobProductFacts(job);
+  const referenceImages = Array.isArray(facts.reference_images) ? facts.reference_images : [];
+  const hasGroundedReferenceImage = referenceImages.some((url) => /^https:\/\//i.test(String(url || "").trim()));
+  const jobSpec = job.job && typeof job.job === "object" && job.job.job_spec && typeof job.job.job_spec === "object"
+    ? job.job.job_spec
+    : job.job_spec && typeof job.job_spec === "object"
+      ? job.job_spec
+      : {};
+  const creative = jobSpec.inputs?.creative_job_spec && typeof jobSpec.inputs.creative_job_spec === "object"
+    ? jobSpec.inputs.creative_job_spec
+    : {};
   return (
+    creative.output_safety_mode === "concept_reference_only" ||
     review.listing_use_status === "concept_only_not_eligible_for_listing" ||
+    (manifest.length > 0 && !hasGroundedReferenceImage) ||
     manifest.some(
       (asset) =>
         asset?.asset_type === "concept_reference_image" ||
@@ -7048,6 +7061,7 @@ function saasMediaAssetJobIsConceptOnly(job = {}) {
 
 function saasMediaManifestAssetCards(job = latestSaasMediaAssetJobWithManifest()) {
   if (!job || !Array.isArray(job.asset_manifest)) return [];
+  const conceptOnly = saasMediaAssetJobIsConceptOnly(job);
   const productName = activeMediaDraftProductNameForDisplay();
   const jobId = String(job.media_job_id || job.idempotency_key || "latest");
   return job.asset_manifest
@@ -7058,7 +7072,7 @@ function saasMediaManifestAssetCards(job = latestSaasMediaAssetJobWithManifest()
       const assetType = String(asset.asset_type || asset.type || "product_image");
       const isVideo = /video/i.test(assetType) || /\.(mp4|webm|mov)(\?|$)/i.test(url);
       const assetId = String(asset.asset_id || asset.id || `asset-${index + 1}`).replace(/[^a-z0-9_-]/gi, "-");
-      const label = isVideo ? "视频素材" : index === 0 ? "主图候选" : `图片 ${index + 1}`;
+      const label = conceptOnly ? (isVideo ? "概念视频" : "概念参考图") : isVideo ? "视频素材" : index === 0 ? "主图候选" : `图片 ${index + 1}`;
       const dimensions = String(asset.dimensions_or_duration || asset.dimensions || asset.duration_seconds || "provider_returned");
       const reviewStatus = String(asset.listing_use_status || asset.review_status || job.status || "waiting_review");
       return {
@@ -7072,9 +7086,11 @@ function saasMediaManifestAssetCards(job = latestSaasMediaAssetJobWithManifest()
         dimensions,
         reviewStatus,
         status: String(asset.status || job.status || "generated"),
-        body: isVideo
-          ? "视频素材已进入素材清单；正式用于 Listing 前仍要核对脚本、授权和实物一致性。"
-          : "图片已进入素材清单；通过实物一致性、图片权利和平台规则审核后，才能回写 Listing 草稿。",
+        body: conceptOnly
+          ? "没有真实商品来源图，只能参考构图和视觉方向；不能当作商品实拍，也不能回写 Listing。"
+          : isVideo
+            ? "视频素材已进入素材清单；正式用于 Listing 前仍要核对脚本、授权和实物一致性。"
+            : "图片已进入素材清单；通过实物一致性、图片权利和平台规则审核后，才能回写 Listing 草稿。",
       };
     })
     .filter(Boolean);
@@ -7413,15 +7429,17 @@ function renderSaasMediaGeneratedAssetsPanel(ctx = saasMerchantWorkbenchContext(
   const productName = profile?.name || activeMediaDraftProductNameForDisplay(ctx);
   const manifestCards = saasMediaManifestAssetCards();
   if (manifestCards.length) {
+    const manifestJob = latestSaasMediaAssetJobWithManifest() || {};
+    const conceptOnly = saasMediaAssetJobIsConceptOnly(manifestJob);
     return `
     <section class="saas-media-generated-assets" aria-label="素材工坊生成结果">
       <div class="media-quality-head">
         <div>
           <span>素材结果</span>
-          <strong>真实生成素材已进入审核清单</strong>
-          <p>这些图片来自后端素材生成通道，已经写入 AssetManifest。通过实物一致性、图片权利和平台规则审核后，才能回写 Listing 草稿。</p>
+          <strong>${conceptOnly ? "概念参考图不可用于刊登" : "真实生成素材已进入审核清单"}</strong>
+          <p>${conceptOnly ? "当前任务没有真实商品来源图，这些结果只用于讨论构图；请上传实物图或有权使用的供应商图后重新生成。" : "这些图片来自后端素材生成通道，已经写入 AssetManifest。通过实物一致性、图片权利和平台规则审核后，才能回写 Listing 草稿。"}</p>
         </div>
-        <em>${escapeHtml(saasMediaAssetJobStatusLabel(latestSaasMediaAssetJobWithManifest() || {}))}</em>
+        <em>${escapeHtml(saasMediaAssetJobStatusLabel(manifestJob))}</em>
       </div>
       <div class="saas-generated-assets-grid">
         ${manifestCards

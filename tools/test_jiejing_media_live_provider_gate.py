@@ -100,6 +100,10 @@ def main() -> int:
     app_js = (ROOT / "app.js").read_text(encoding="utf-8")
     if "function saasMediaAssetJobIsConceptOnly" not in app_js:
         raise AssertionError("frontend must identify concept-only media jobs")
+    if "manifest.length > 0 && !hasGroundedReferenceImage" not in app_js:
+        raise AssertionError("frontend must classify legacy ungrounded media jobs as concept-only")
+    if "概念参考图不可用于刊登" not in app_js:
+        raise AssertionError("frontend must label concept-only media before merchant review")
     if "概念参考，不能通过 Listing 审核" not in app_js:
         raise AssertionError("frontend must block concept-only Listing approval with merchant-facing guidance")
     original_adapter = runner_module.MediaGenerationAdapter

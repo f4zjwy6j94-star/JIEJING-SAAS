@@ -10,6 +10,7 @@ eBay read-only preflight, backend MVP, and productization stage gate.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -164,9 +165,13 @@ def _run_check(key: str, command: list[str]) -> dict[str, Any]:
     try:
         while True:
             attempts += 1
+            check_env = os.environ.copy()
+            if key == "infra_cutover_rehearsal":
+                check_env["JIEJING_REUSE_BACKEND_MVP_FIXTURE"] = "1"
             completed = subprocess.run(
                 command,
                 cwd=str(ROOT),
+                env=check_env,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
