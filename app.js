@@ -20553,7 +20553,7 @@ function saasCeoCommandIntent(text = "") {
   const raw = String(text || "");
   const has = (pattern) => pattern.test(raw);
   if (!raw.trim()) return "general_chat";
-  if (has(/确认|真实发布|立即发布|直接发布|马上发布|改价|库存|付款|采购|广告|预算|政策|承诺|退款|补偿|重发/)) return "confirm";
+  if (isSaasCeoHighRiskCommand(raw)) return "confirm";
   if (has(/批量|铺货|选品|候选|机会|多款|多品|清单|列表|找品|热销前|前五|前10|top\s*\d+/i)) return "bulk";
   if (has(/素材|主图|图片|视频|详情|详情页|货源图|场景图|字幕|脚本|封面|抠图|改图|生成图/)) return "media";
   if (has(/客服|订单|物流|退货|买家|消息|纠纷|售后|履约|tracking|评价|差评/)) return "service";
@@ -20564,7 +20564,14 @@ function saasCeoCommandIntent(text = "") {
 }
 
 function isSaasCeoHighRiskCommand(text = "") {
-  return /发布|上架|改价|库存|付款|采购|退款|退货|广告|预算|政策|承诺|补偿|重发|敏感|真实写入/i.test(String(text || ""));
+  const raw = String(text || "").trim();
+  if (!raw) return false;
+  const informational = /发布前|上架前|刊登前|核对项|规则|要求|规范|说明|介绍|区别|区分|为什么|是什么|如何|怎么|是否|能否|可以吗|最佳实践/i.test(raw);
+  const explicitExecution = /(?:现在|马上|直接|立即|立刻|真实|正式).{0,12}(?:发布|上架|刊登|改价|改库存|退款|付款|采购下单|投广告|开广告|修改政策|承诺买家|补偿|重发)/i.test(raw);
+  if (explicitExecution) return true;
+  if (informational) return false;
+  if (/(?:替我|帮我|请).{0,8}(?:发布|上架|刊登|改价|改库存|退款|付款|采购下单|投广告|开广告|修改政策|承诺买家|补偿|重发)/i.test(raw)) return true;
+  return /(?:改价|改库存|退款|付款|采购下单|投广告|开广告|修改政策|承诺买家|补偿买家|重发订单|真实写入)/i.test(raw);
 }
 
 function uniqueSaasCeoRoutes(routes = []) {

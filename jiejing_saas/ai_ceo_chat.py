@@ -524,6 +524,7 @@ def run_ai_ceo_chat(
                     "涉及 eBay 规则、政策、图片或发布要求时，必须区分官方强制要求、平台建议和商家最佳实践；"
                     "每条外部事实使用已有 source_records 的 [S1]、[S2] 等编号引用。"
                     "没有官方来源支撑时，不得使用‘必须’‘一律’‘绝对’‘禁止’‘会被下架’等断言。"
+                    "回答必须以完整句子结束；如果上一版停在半句话，改写成更短的完整答案。"
                 ),
                 user_prompt=user_prompt,
                 temperature=0.1,
@@ -3098,12 +3099,16 @@ def _platform_rule_answer_quality(
                 unsupported_official_claims.append(_safe_text(compact, limit=180))
 
     blocked_by = []
+    complete_endings = ("。", "！", "？", ".", "!", "?", "]", ")", "）", "”", "’")
+    looks_truncated = len(text) >= 120 and not text.rstrip().endswith(complete_endings)
     if not valid_citations:
         blocked_by.append("missing_source_citation_for_platform_rule")
     if unsupported_strong_claims:
         blocked_by.append("unsupported_absolute_platform_rule_claim")
     if unsupported_official_claims:
         blocked_by.append("official_platform_claim_without_official_source")
+    if looks_truncated:
+        blocked_by.append("truncated_platform_rule_answer")
     return {
         "accepted": bool(text) and not blocked_by,
         "quality_gate": "platform_rule_source_quality_v1",
@@ -3111,6 +3116,7 @@ def _platform_rule_answer_quality(
         "citation_count": len(valid_citations),
         "unsupported_strong_claim_count": len(unsupported_strong_claims),
         "unsupported_official_claim_count": len(unsupported_official_claims),
+        "looks_truncated": looks_truncated,
         "secret_exposed": False,
     }
 

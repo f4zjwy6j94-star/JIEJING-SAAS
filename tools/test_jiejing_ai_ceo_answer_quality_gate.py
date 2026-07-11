@@ -143,6 +143,19 @@ def main() -> None:
     assert cited_rule_quality["accepted"] is True, cited_rule_quality
     assert cited_rule_quality["citation_count"] == 1, cited_rule_quality
 
+    truncated_rule_quality = validate_ai_ceo_answer_quality(
+        message=rule_message,
+        route="ebay_workflow",
+        answer=(
+            "发布前先核对商业政策配置，并确保支付、运输和退货设置与本次商品一致 [S1]。"
+            "再核对标题、类目、Item specifics、库存和商品事实，避免草稿与实物信息不一致 [S1]。"
+            "图片应清楚展示真实商品，白底可以作为提升可读性的商家最佳实践，但不要在没有官方依据时写成纯"
+        ),
+        source_records=rule_sources,
+    )
+    assert truncated_rule_quality["accepted"] is False, truncated_rule_quality
+    assert "truncated_platform_rule_answer" in truncated_rule_quality["blocked_by"], truncated_rule_quality
+
     rule_query = _realtime_search_query(kind="web_search", message=rule_message + "，区分官方要求和商家最佳实践")
     assert "site:ebay.com/help" in rule_query, rule_query
     assert "official listing policy" in rule_query, rule_query

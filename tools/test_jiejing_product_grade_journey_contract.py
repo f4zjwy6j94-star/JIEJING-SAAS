@@ -13,6 +13,7 @@ def main() -> None:
     runner = (ROOT / "tools" / "jiejing_product_grade_merchant_journey.py").read_text(encoding="utf-8")
     bulk = (ROOT / "tools" / "codex_jiejing_bulk_media_handoff_smoke.js").read_text(encoding="utf-8")
     publish = (ROOT / "tools" / "codex_jiejing_publish_confirmation_loop_smoke.js").read_text(encoding="utf-8")
+    app = (ROOT / "app.js").read_text(encoding="utf-8")
 
     for marker in [
         "codex_jiejing_ai_ceo_market_listing_bridge_smoke.js",
@@ -29,6 +30,9 @@ def main() -> None:
     assert "acceptance_product: acceptanceProduct" in bulk
     assert "process.env.JIEJING_ACCEPTANCE_PRODUCT" in publish
     assert "product: seed.product" in publish
+    assert "const informational = /发布前|上架前|刊登前|核对项|规则|要求|规范|说明" in app
+    assert "if (informational) return false;" in app
+    assert "if (isSaasCeoHighRiskCommand(raw)) return \"confirm\";" in app
     print("PASS jiejing_product_grade_journey_contract")
 
 
