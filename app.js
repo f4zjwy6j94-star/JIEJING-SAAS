@@ -16233,7 +16233,10 @@ function rememberSaasAuthAccount(session = {}, fallbackEmail = "") {
       persistSaasAiCeoThread();
       const chat = document.querySelector("#ceoChat");
       if (chat) {
+        const scrollSnapshot = captureSaasAiCeoScrollState(chat);
         setJiejingTrustedHtml(chat, trustedJiejingHtml(renderSaasAiCeoThreadMarkup(state.saasAiCeoLatestTurn), "ai_ceo.thread.preserve_on_auth"));
+        syncSaasAiCeoFixedChatViewportState();
+        restoreSaasAiCeoScrollState(chat, scrollSnapshot);
       }
       const panel = document.querySelector("#saasAiCeoLatestReply");
       if (panel && state.saasAiCeoLatestTurn) {
@@ -32740,7 +32743,7 @@ function renderCockpitExperience(force = false) {
   }
 
   const chat = document.querySelector("#ceoChat");
-  if (chat) {
+  if (chat && !isSaasPublicMvpMode()) {
     const cockpitChat =
       state.activeProject === "backflow-incense"
         ? [

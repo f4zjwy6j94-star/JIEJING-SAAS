@@ -36,6 +36,7 @@ def main() -> int:
         "saasAiCeoScrollInitialized",
         "scheduleSaasAiCeoBottomFollow",
         "scheduleSaasAiCeoBottomFollow(chat, { force: true })",
+        "if (chat && !isSaasPublicMvpMode())",
         "state.saasAiCeoAutoFollow = false",
     ]
     for marker in required_markers:
