@@ -5602,18 +5602,52 @@ function syncBulkSaasStatusCounters() {
   }
 }
 
+function resetSaasBulkWorkspaceForListingProject() {
+  state.saasBulkCandidates = [];
+  state.saasBulkAcceptedCandidates = [];
+  state.batchPreviewCount = 0;
+  state.bulkApprovedCount = 0;
+  state.bulkStage = "idle";
+  state.sourceHandoffStatus = "idle";
+}
+
 function saasBulkCandidatesFromCurrentWork() {
+  const draft = state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object"
+    ? state.saasListingComposerDraft
+    : null;
   const report = latestSaasActionableProductReportByTypes(["ai_ceo.market_research", "market.report"]);
   const reportCandidates = report ? saasAiCeoListingHandoffFieldsFromReport(report).product_candidates || [] : [];
-  const draftCandidates = Array.isArray(state.saasListingComposerDraft?.product_candidates)
-    ? saasNormalizeMarketProductCandidates(state.saasListingComposerDraft.product_candidates)
+  const draftCandidates = Array.isArray(draft?.product_candidates)
+    ? saasNormalizeMarketProductCandidates(draft.product_candidates)
     : [];
-  const candidates = reportCandidates.length ? reportCandidates : draftCandidates;
+  const selectedCandidate =
+    (draft?.selected_product_candidate && typeof draft.selected_product_candidate === "object" ? draft.selected_product_candidate : null) ||
+    draftCandidates.find((candidate) => candidate.selected === true) ||
+    null;
+  const draftProduct = [selectedCandidate?.name, draft?.product, draft?.title].find((value) => saasIsConcreteProductLabel(value)) || "";
+  const currentListingCandidate = draftProduct
+    ? {
+        ...(selectedCandidate || {}),
+        candidate_id: selectedCandidate?.candidate_id || `current_listing_${Math.abs(hashString(draftProduct)).toString(16)}`,
+        name: draftProduct,
+        score: Number(selectedCandidate?.score || draft?.score || 0) || 68,
+        reasons: selectedCandidate?.reasons?.length
+          ? selectedCandidate.reasons
+          : Array.isArray(draft?.reasons)
+            ? draft.reasons.slice(0, 4)
+            : ["来自当前 Listing 商品项目"],
+        price_band: selectedCandidate?.price_band || draft?.fields?.price || "",
+        selected: true,
+        source_type: "current_listing_selected_product",
+        source_label: "当前 Listing 商品",
+      }
+    : null;
+  const candidates = currentListingCandidate ? [currentListingCandidate] : reportCandidates;
   return candidates.map((candidate, index) => ({
     ...candidate,
     candidate_id: candidate.candidate_id || `ai_candidate_${index + 1}`,
-    source_type: "ai_ceo_market_report",
-    source_label: "AI CEO 市场调研",
+    source_type: candidate.source_type || "ai_ceo_market_report",
+    source_label: candidate.source_label || "AI CEO 市场调研",
   }));
 }
 
@@ -6751,10 +6785,80 @@ function activeMediaDraftProductNameForDisplay(ctx = saasMerchantWorkbenchContex
   return publicRuntimeText(selected || "当前商品");
 }
 
-function latestSaasMediaAssetJobWithManifest() {
+const SAAS_MEDIA_LISTING_PROJECT_MATCH_CONTRACT = "media_asset_job_product_mismatch_blocked_v1";
+
+function saasCurrentListingProjectIdentity(draft = state.saasListingComposerDraft) {
+  const current = draft && typeof draft === "object" ? draft : {};
+  const selectedCandidate = current.selected_product_candidate && typeof current.selected_product_candidate === "object"
+    ? current.selected_product_candidate
+    : {};
+  const activeListing = typeof activeListingDraft === "function" ? activeListingDraft() : null;
+  const productCandidates = [
+    selectedCandidate.name,
+    current.product,
+    current.title,
+    current.fields?.title,
+    activeListing?.titleCn,
+  ];
+  const product = productCandidates.find((value) => saasIsConcreteProductLabel(value)) || "";
+  const sourceId = publicRuntimeText(current.source_report_id || current.source_media_job_id || "").slice(0, 120);
+  const candidateId = publicRuntimeText(selectedCandidate.candidate_id || "").slice(0, 100);
+  const normalizedProduct = publicRuntimeText(product).toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
+  if (!sourceId && !candidateId && !normalizedProduct) {
+    return { key: "", product: "", source_id: "", candidate_id: "" };
+  }
+  const keySeed = [current.source_type || "listing", sourceId, candidateId, normalizedProduct].join("|");
+  return {
+    key: `listing-project-${Math.abs(hashString(keySeed)).toString(16)}`,
+    product: publicRuntimeText(product).slice(0, 120),
+    source_id: sourceId,
+    candidate_id: candidateId,
+  };
+}
+
+function prepareSaasMediaStudioForCurrentListing() {
+  const identity = saasCurrentListingProjectIdentity();
+  state.mediaTaskEntry = "project";
+  state.activeMediaDraft = identity.key || state.activeMediaDraft || state.activeListingDraft || "saas-media";
+  state.saasActiveMediaPreviewKey = "";
+  return identity;
+}
+
+function saasMediaAssetJobProductFacts(job = {}) {
+  const payload = job?.job && typeof job.job === "object" ? job.job : {};
+  const jobSpec = payload.job_spec && typeof payload.job_spec === "object"
+    ? payload.job_spec
+    : job?.job_spec && typeof job.job_spec === "object"
+      ? job.job_spec
+      : {};
+  const inputs = jobSpec.inputs && typeof jobSpec.inputs === "object" ? jobSpec.inputs : {};
+  return inputs.product_facts && typeof inputs.product_facts === "object" ? inputs.product_facts : {};
+}
+
+function saasMediaAssetJobMatchesListingProject(job = {}, draft = state.saasListingComposerDraft) {
+  const current = saasCurrentListingProjectIdentity(draft);
+  if (!current.key) return true;
+  const facts = saasMediaAssetJobProductFacts(job);
+  const jobProjectKey = publicRuntimeText(facts.listing_project_key || facts.listing_draft_id || "").trim();
+  if (jobProjectKey) return jobProjectKey === current.key;
+  const currentProduct = publicRuntimeText(current.product).toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
+  const jobProduct = publicRuntimeText(facts.product || "").toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
+  return Boolean(currentProduct && jobProduct && currentProduct === jobProduct);
+}
+
+function latestSaasMediaAssetJobWithManifest(options = {}) {
   const jobs = Array.isArray(state.saasMediaAssetJobs) ? state.saasMediaAssetJobs : [];
+  const currentProject = saasCurrentListingProjectIdentity();
+  const requireCurrentProject = options.requireCurrentProject === true ||
+    (options.requireCurrentProject !== false && state.mediaTaskEntry !== "single" && Boolean(currentProject.key));
   return (
-    jobs.find((job) => job && Array.isArray(job.asset_manifest) && job.asset_manifest.some((asset) => asset?.url_or_file_path || asset?.url || asset?.file_path)) ||
+    jobs.find(
+      (job) =>
+        job &&
+        Array.isArray(job.asset_manifest) &&
+        job.asset_manifest.some((asset) => asset?.url_or_file_path || asset?.url || asset?.file_path) &&
+        (!requireCurrentProject || saasMediaAssetJobMatchesListingProject(job)),
+    ) ||
     null
   );
 }
@@ -6889,9 +6993,14 @@ function saasListingMediaWritebackRightsReady(draft = state.saasListingComposerD
 }
 
 function applySaasMediaManifestToListingDraft({ entry = "" } = {}) {
-  const job = latestSaasMediaAssetJobWithManifest();
+  const job = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true });
+  const latestUnscopedJob = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: false });
   const assets = saasMediaManifestAssetsForListing(job);
   if (!job || !assets.length) {
+    if (latestUnscopedJob && !saasMediaAssetJobMatchesListingProject(latestUnscopedJob)) {
+      showActionToast("最近的素材属于另一个商品，已阻止回写。请为当前 Listing 重新生成或选择对应素材。");
+      return null;
+    }
     showActionToast("还没有可回写的真实素材。先在素材工坊生成图片，并等它进入素材清单。");
     return null;
   }
@@ -7199,8 +7308,15 @@ function renderSaasMediaGeneratedAssetsPanel(ctx = saasMerchantWorkbenchContext(
 }
 
 function saasMediaAssetJobsForDisplay(jobs = state.saasMediaAssetJobs || []) {
+  const currentProject = saasCurrentListingProjectIdentity();
+  const requireCurrentProject = state.mediaTaskEntry !== "single" && Boolean(currentProject.key);
   return (Array.isArray(jobs) ? jobs : [])
-    .filter((job) => job && typeof job === "object")
+    .filter(
+      (job) =>
+        job &&
+        typeof job === "object" &&
+        (!requireCurrentProject || saasMediaAssetJobMatchesListingProject(job)),
+    )
     .slice(0, 8);
 }
 
@@ -10817,6 +10933,7 @@ function selectSaasListingMarketCandidate(candidateId = "") {
     risks: ["不能沿用其他候选的参数、图片、SKU、物流或政策", "真实发布仍需确认中心"],
     safe_local_only: true,
   };
+  resetSaasBulkWorkspaceForListingProject();
   state.saasListingComposerInput = saasListingImportedAiCeoMarketInput(state.saasListingComposerDraft, null, {});
   state.saasPreTestCheck = null;
   renderProductListingCenter();
@@ -14310,9 +14427,14 @@ function upsertSaasMediaAssetJobForDisplay(job = {}, replaceId = "") {
 }
 
 async function approveLatestSaasMediaAssetJobForListingDraft() {
-  const job = latestSaasMediaAssetJobWithManifest();
+  const job = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true });
+  const latestUnscopedJob = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: false });
   const mediaJobId = String(job?.media_job_id || "").trim();
   if (!mediaJobId) {
+    if (latestUnscopedJob && !saasMediaAssetJobMatchesListingProject(latestUnscopedJob)) {
+      showActionToast("最近的素材属于另一个商品，已阻止审核。请先切回对应商品或为当前商品重新生成素材。");
+      return null;
+    }
     showActionToast("还没有可审核的真实素材任务。");
     return null;
   }
@@ -14348,6 +14470,7 @@ function currentMediaStudioProductFacts(config = {}) {
       ? null
       : activeDraftRaw;
   const composer = state.saasListingComposerDraft || {};
+  const listingProject = saasCurrentListingProjectIdentity(composer);
   const latestReport = latestSaasReportByTypes(["listing.package", "product.listing", "ai_ceo.market_research", "market.report"]);
   const productName = publicRuntimeText(
     composer.product ||
@@ -14359,7 +14482,10 @@ function currentMediaStudioProductFacts(config = {}) {
   const store = ctx.store || activeSaasStore();
   return {
     product: productName,
-    listing_draft_id: state.activeListingDraft || state.activeMediaDraft || "",
+    listing_project_key: listingProject.key,
+    listing_draft_id: listingProject.key || state.activeMediaDraft || "",
+    listing_source_id: listingProject.source_id,
+    selected_candidate_id: listingProject.candidate_id,
     marketplace: store?.marketplace || "EBAY_US",
     source: config.entry === "single" ? "merchant_upload_or_local_image" : "listing_or_ai_ceo_workflow",
     supplier_facts: {
@@ -14391,7 +14517,7 @@ function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
     : "";
   const idempotencySource = JSON.stringify({
     store_id: store?.store_id || "",
-    draft: state.activeMediaDraft || state.activeListingDraft || "",
+    listing_project_key: productFacts.listing_project_key || "",
     sourceText,
     platform: config.platform || "",
     count: imageCount,
@@ -14505,6 +14631,7 @@ async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}) {
   upsertSaasMediaAssetJobForDisplay({
     media_job_id: optimisticId,
     idempotency_key: payload.idempotency_key,
+    job: { job_spec: payload },
     status: "queued",
     merchant_visible_states: ["素材任务正在创建"],
     asset_manifest: [],
@@ -15630,6 +15757,7 @@ function buildSaasProtectedStateSnapshot() {
           "merchant_visible_states",
           "live_provider_called",
           "spend_now_allowed",
+          "job",
           "secret_exposed",
         ]),
       ),
@@ -26267,6 +26395,7 @@ function handleSaasListingComposeDraft() {
     return false;
   }
   state.saasListingComposerDraft = saasListingComposerDraftFromText(text);
+  resetSaasBulkWorkspaceForListingProject();
   state.saasListingSourceMode = "merchant_input";
   renderProductListingCenter();
   window.requestAnimationFrame(() => {
@@ -26313,6 +26442,7 @@ async function handleSaasListingSourceAiReport() {
     return false;
   }
   state.saasListingComposerDraft = importedDraft;
+  resetSaasBulkWorkspaceForListingProject();
   state.saasListingSourceMode = "ai_report";
   renderProductListingCenter();
   showActionToast("已把 AI CEO 报告导入 Listing 草稿；不会写入 eBay。");
@@ -26562,6 +26692,7 @@ function applySaasAiCeoMarketTurnToListing(marketTurn = null, options = {}) {
     showActionToast("这次调研还没有形成可导入的具体商品。请回到 AI CEO 重新生成候选商品卡。");
     return false;
   }
+  resetSaasBulkWorkspaceForListingProject();
   state.saasListingComposerInput = saasListingImportedAiCeoMarketInput(state.saasListingComposerDraft, structuredSourceReport, latest);
   state.saasListingSourceMode = structuredSourceReport ? "ai_ceo_market_report" : "ai_ceo_market_chat";
   const importedHandoff = saasListingImportedAiCeoMarketHandoff(state.saasListingComposerDraft, structuredSourceReport, latest);
@@ -26662,6 +26793,7 @@ function handleSaasListingSourceSyncedProduct() {
     return false;
   }
   state.saasListingComposerDraft = saasListingDraftFromSyncedProduct(rows[0]);
+  resetSaasBulkWorkspaceForListingProject();
   state.saasListingSourceMode = "synced_ebay";
   renderProductListingCenter();
   showActionToast("已从已同步 eBay 商品生成改写草稿；不会修改原 Listing。");
@@ -27259,7 +27391,7 @@ function handleSaasAction(button) {
     return;
   }
   if (action === "open-media") {
-    if (state.activeListingDraft) state.activeMediaDraft = state.activeListingDraft;
+    prepareSaasMediaStudioForCurrentListing();
     setView("media");
     renderMediaProjectTabs();
     const activeTab =
@@ -27735,7 +27867,7 @@ function handleRuntimeAction(button) {
     return;
   }
   if (action === "open-media") {
-    if (state.activeListingDraft) state.activeMediaDraft = state.activeListingDraft;
+    prepareSaasMediaStudioForCurrentListing();
     setView("media");
     renderMediaProjectTabs();
     const activeTab =
@@ -32762,7 +32894,7 @@ function handleCeoPriorityAction(action) {
     return;
   }
   if (action === "open-media") {
-    if (state.activeListingDraft) state.activeMediaDraft = state.activeListingDraft;
+    prepareSaasMediaStudioForCurrentListing();
     setView("media");
     renderMediaProjectTabs();
     const activeTab =

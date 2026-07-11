@@ -87,6 +87,8 @@ def main() -> int:
                 },
                 "product_facts": {
                     "product": "stainless steel tumbler",
+                    "listing_project_key": "listing-project-stainless-tumbler-001",
+                    "listing_draft_id": "listing-project-stainless-tumbler-001",
                     "supplier_facts": {
                         "material": "stainless steel",
                         "package_dimensions_cm": {"length": 10, "width": 10, "height": 18},
@@ -133,6 +135,9 @@ def main() -> int:
         fetched = fetch_json(f"{base_url}/media-asset-jobs/{media_job_id}", token=token).get("media_asset_job", {})
         if fetched.get("media_job_id") != media_job_id or fetched.get("status") != "waiting_review":
             return fail(f"media asset job detail endpoint should return the completed media job: {fetched}")
+        fetched_facts = fetched.get("job", {}).get("job_spec", {}).get("inputs", {}).get("product_facts", {})
+        if fetched_facts.get("listing_project_key") != "listing-project-stainless-tumbler-001":
+            return fail(f"media asset job must preserve its Listing project identity: {fetched_facts}")
         store_list = fetch_json(f"{base_url}/stores/{store_id}/media-asset-jobs", token=token).get("media_asset_jobs", [])
         if len(store_list) != 1 or store_list[0].get("media_job_id") != media_job_id:
             return fail(f"store media job list should include exactly this media job: {store_list}")

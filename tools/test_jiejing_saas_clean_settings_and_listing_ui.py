@@ -234,6 +234,12 @@ def main() -> None:
     require(app_js, "素材清单（AssetManifest）", "media AssetManifest merchant copy")
     require(app_js, "没有清单就不能说已经可用于 Listing", "media manifest gate copy")
     require(app_js, "不会把旧测试图当成真实生成结果", "media no fake generated proof copy")
+    require(app_js, "function saasCurrentListingProjectIdentity", "stable Listing project identity")
+    require(app_js, "function saasMediaAssetJobMatchesListingProject", "media job current Listing match gate")
+    require(app_js, "media_asset_job_product_mismatch_blocked_v1", "cross-product media writeback block contract")
+    require(app_js, "function prepareSaasMediaStudioForCurrentListing", "Listing to media project handoff")
+    require(app_js, "function resetSaasBulkWorkspaceForListingProject", "Listing product switch resets stale bulk state")
+    require(app_js, "listing_project_key:", "media job snapshot keeps Listing project identity")
 
     require(app_js, "function saasListingSyncedProductRows", "eBay synced product extraction")
     require(app_js, "function renderSaasListingSyncedProductsPanel", "eBay synced product panel")
