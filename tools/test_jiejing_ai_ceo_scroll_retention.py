@@ -33,7 +33,7 @@ def main() -> int:
         "bindSaasAiCeoScrollIntent",
         "captureSaasAiCeoScrollState",
         "restoreSaasAiCeoScrollState",
-        "saasAiCeoScrollInitialized",
+        "aiCeoScrollInitialized",
         "scheduleSaasAiCeoBottomFollow",
         "scheduleSaasAiCeoBottomFollow(chat, { force: true })",
         "if (chat && !isSaasPublicMvpMode())",
