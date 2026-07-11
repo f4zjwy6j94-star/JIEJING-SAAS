@@ -241,6 +241,9 @@ FILES=(
   "tools/test_jiejing_registered_domain_cutover_status.py"
   "tools/test_jiejing_edge_cutover_preflight.py"
   "tools/test_jiejing_expensive_api_rate_limit.py"
+  "tools/test_jiejing_ai_ceo_scroll_retention.py"
+  "tools/test_jiejing_billing_quota_guardrail.py"
+  "tools/test_jiejing_session_revocation.py"
   "tools/test_jiejing_public_anti_scrape_hardening.py"
   "tools/test_jiejing_public_security_status_ui.py"
   "tools/test_jiejing_saas_readable_decision_service_settings_ui.py"
@@ -452,6 +455,9 @@ python3 -m py_compile \
   tools/test_jiejing_registered_domain_cutover_status.py \
   tools/test_jiejing_edge_cutover_preflight.py \
   tools/test_jiejing_expensive_api_rate_limit.py \
+  tools/test_jiejing_ai_ceo_scroll_retention.py \
+  tools/test_jiejing_billing_quota_guardrail.py \
+  tools/test_jiejing_session_revocation.py \
   tools/test_jiejing_public_anti_scrape_hardening.py \
   tools/test_jiejing_public_security_status_ui.py \
   tools/test_jiejing_saas_readable_decision_service_settings_ui.py \

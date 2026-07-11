@@ -39895,6 +39895,49 @@ function saasAiCeoThreadForBackendSync() {
     }));
 }
 
+const SAAS_AI_CEO_BOTTOM_FOLLOW_THRESHOLD = 96;
+
+function isSaasAiCeoChatNearBottom(chat) {
+  if (!chat) return true;
+  return chat.scrollHeight - chat.scrollTop - chat.clientHeight <= SAAS_AI_CEO_BOTTOM_FOLLOW_THRESHOLD;
+}
+
+function bindSaasAiCeoScrollIntent(chat) {
+  if (!chat || chat.dataset.scrollIntentBound === "true") return;
+  chat.dataset.scrollIntentBound = "true";
+  chat.addEventListener(
+    "scroll",
+    () => {
+      state.saasAiCeoAutoFollow = isSaasAiCeoChatNearBottom(chat);
+    },
+    { passive: true },
+  );
+}
+
+function captureSaasAiCeoScrollState(chat) {
+  if (!chat) return null;
+  bindSaasAiCeoScrollIntent(chat);
+  const nearBottom = isSaasAiCeoChatNearBottom(chat);
+  if (!nearBottom) state.saasAiCeoAutoFollow = false;
+  return {
+    scrollTop: chat.scrollTop,
+    shouldFollow: nearBottom && state.saasAiCeoAutoFollow !== false,
+  };
+}
+
+function restoreSaasAiCeoScrollState(chat, snapshot = null, options = {}) {
+  if (!chat) return;
+  const forceBottom = options.forceBottom === true;
+  const shouldFollow = forceBottom || (snapshot ? snapshot.shouldFollow === true : state.saasAiCeoAutoFollow !== false);
+  if (shouldFollow) {
+    chat.scrollTop = chat.scrollHeight;
+    state.saasAiCeoAutoFollow = true;
+    return;
+  }
+  if (snapshot && Number.isFinite(snapshot.scrollTop)) chat.scrollTop = snapshot.scrollTop;
+  state.saasAiCeoAutoFollow = false;
+}
+
 function mergeSaasAiCeoHistoryFromBackend(payload = {}, options = {}) {
   const { render = true } = options;
   const history = payload?.ai_ceo_chat_history && typeof payload.ai_ceo_chat_history === "object"
@@ -39913,11 +39956,13 @@ function mergeSaasAiCeoHistoryFromBackend(payload = {}, options = {}) {
   if (render) {
     const chat = document.querySelector("#ceoChat");
     if (chat) {
+      const scrollSnapshot = captureSaasAiCeoScrollState(chat);
       setJiejingTrustedHtml(
         chat,
         trustedJiejingHtml(renderSaasAiCeoThreadMarkup(state.saasAiCeoLatestTurn), "ai_ceo.thread.account_cloud_sync"),
       );
       syncSaasAiCeoFixedChatViewportState();
+      restoreSaasAiCeoScrollState(chat, scrollSnapshot);
     }
   }
   return state.saasAiCeoThread;
@@ -40377,9 +40422,7 @@ function updateSaasAiCeoLatestReply(turn = {}) {
   if (isSaasAiCeoPlainConsultationTurn(latest)) {
     refreshSaasCeoRoutingTaskCard(null);
   }
-  const chat = document.querySelector("#ceoChat");
   syncSaasAiCeoFixedChatViewportState();
-  if (chat) chat.scrollTop = chat.scrollHeight;
 }
 
 function revealSaasAiCeoHistory() {
@@ -40390,18 +40433,20 @@ function revealSaasAiCeoHistory() {
 function addAiMessage(text) {
   const chat = document.querySelector("#ceoChat");
   if (!chat) return;
+  const scrollSnapshot = captureSaasAiCeoScrollState(chat);
   insertJiejingTrustedHtml(
     chat,
     "beforeend",
     trustedJiejingHtml(renderSaasAiCeoChatTurnMarkup({ assistant_text: productizeJiejingProductCopy(text) }), "ai_ceo.chat_turn.assistant_only"),
   );
   syncSaasAiCeoFixedChatViewportState();
-  chat.scrollTop = chat.scrollHeight;
+  restoreSaasAiCeoScrollState(chat, scrollSnapshot);
 }
 
 function addCeoMessage(text, aiText, options = {}) {
   const chat = document.querySelector("#ceoChat");
   if (!chat) return;
+  const scrollSnapshot = captureSaasAiCeoScrollState(chat);
   const assistantId = String(options.assistantId || "").replace(/[^A-Za-z0-9_-]/g, "");
   const reply =
     aiText ||
@@ -40462,13 +40507,14 @@ function addCeoMessage(text, aiText, options = {}) {
     source_policy: options.source_policy || null,
   });
   syncSaasAiCeoFixedChatViewportState();
-  chat.scrollTop = chat.scrollHeight;
+  restoreSaasAiCeoScrollState(chat, scrollSnapshot, { forceBottom: true });
 }
 
 function syncSaasAiCeoFixedChatViewportState() {
   const thread = document.querySelector(".saas-ai-ceo-thread");
   const chat = document.querySelector("#ceoChat");
   if (!thread || !chat) return;
+  bindSaasAiCeoScrollIntent(chat);
   syncSaasAiCeoCloudDomState();
   const hasMessages = Boolean(chat.querySelector(".message"));
   thread.classList.toggle("has-chat-messages", hasMessages);
@@ -40479,7 +40525,10 @@ function syncSaasAiCeoFixedChatViewportState() {
   }
   const firstRun = thread.querySelector(".saas-ai-ceo-first-run-handoff");
   if (firstRun) firstRun.hidden = hasMessages;
-  if (hasMessages) chat.scrollTop = chat.scrollHeight;
+  if (typeof state.saasAiCeoAutoFollow !== "boolean") {
+    state.saasAiCeoAutoFollow = true;
+    if (hasMessages) chat.scrollTop = chat.scrollHeight;
+  }
 }
 
 function ensureCeoAssistantAnswerBody(node) {
@@ -40502,6 +40551,8 @@ function updateCeoAssistantStreamingMessage(messageId, text) {
   const node = messageId ? document.getElementById(messageId) : null;
   const safeText = productizeJiejingProductCopy(String(text || "").slice(0, 120000));
   if (!node || !safeText) return;
+  const chat = document.querySelector("#ceoChat");
+  const scrollSnapshot = captureSaasAiCeoScrollState(chat);
   node.dataset.status = "model_streaming";
   node.querySelector(".saas-ai-ceo-pending-status")?.remove();
   const answerBody = ensureCeoAssistantAnswerBody(node);
@@ -40521,12 +40572,12 @@ function updateCeoAssistantStreamingMessage(messageId, text) {
       pending: true,
     });
   }
-  const chat = document.querySelector("#ceoChat");
-  if (chat) chat.scrollTop = chat.scrollHeight;
+  restoreSaasAiCeoScrollState(chat, scrollSnapshot);
 }
 
 function updateCeoAssistantMessage(messageId, text, status = "", model = null, sourceRecords = [], workflowDetails = {}) {
   const chat = document.querySelector("#ceoChat");
+  const scrollSnapshot = captureSaasAiCeoScrollState(chat);
   const node = messageId ? document.getElementById(messageId) : null;
   const safeText = saasAiCeoProductizedAnswerText(text || "AI CEO 暂时没有返回可展示内容。", status);
   const sources = normalizeSaasAiCeoSourceRecords(sourceRecords);
@@ -40642,11 +40693,12 @@ function updateCeoAssistantMessage(messageId, text, status = "", model = null, s
     });
   }
   syncSaasAiCeoFixedChatViewportState();
-  if (chat) chat.scrollTop = chat.scrollHeight;
+  restoreSaasAiCeoScrollState(chat, scrollSnapshot);
 }
 
 function updateCeoAssistantPendingMessage(messageId, turn = {}) {
   const chat = document.querySelector("#ceoChat");
+  const scrollSnapshot = captureSaasAiCeoScrollState(chat);
   const node = messageId ? document.getElementById(messageId) : null;
   if (!node || !node.classList.contains("is-pending")) return;
   const latest = normalizeSaasAiCeoLatestTurn(turn);
@@ -40664,7 +40716,7 @@ function updateCeoAssistantPendingMessage(messageId, turn = {}) {
     updateSaasAiCeoLatestReply(latest);
   }
   syncSaasAiCeoFixedChatViewportState();
-  if (chat) chat.scrollTop = chat.scrollHeight;
+  restoreSaasAiCeoScrollState(chat, scrollSnapshot);
 }
 
 function isMediaGenerationRequest(text) {

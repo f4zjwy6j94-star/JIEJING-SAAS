@@ -39,6 +39,7 @@ def main() -> int:
             "JIEJING_EXPENSIVE_API_RATE_LIMIT_ENABLED": "1",
             "JIEJING_EXPENSIVE_API_RATE_LIMIT_WINDOW_SECONDS": "60",
             "JIEJING_EXPENSIVE_API_RATE_LIMIT_MAX_PER_IP": "2",
+            "JIEJING_TRUSTED_PROXY_CIDRS": "127.0.0.0/8,::1/128",
         }
     )
     port = 8797
@@ -146,6 +147,45 @@ def main() -> int:
         if health.get("status") != "ok":
             return fail("health must not be expensive-API rate limited")
 
+        spoof_one, _ = _fetch_json_expect_error(
+            f"{base_url}/model/value-gate",
+            ip="198.51.100.1, 203.0.113.88",
+        )
+        spoof_two, _ = _fetch_json_expect_error(
+            f"{base_url}/model/value-gate",
+            ip="198.51.100.2, 203.0.113.88",
+        )
+        spoof_three, spoof_body = _fetch_json_expect_error(
+            f"{base_url}/model/value-gate",
+            ip="198.51.100.3, 203.0.113.88",
+        )
+        if spoof_one != 401 or spoof_two != 401 or spoof_three != 429:
+            return fail(
+                "spoofed left-most forwarded IPs must not bypass the actual client bucket: "
+                f"{spoof_one}, {spoof_two}, {spoof_three}, {spoof_body}"
+            )
+
+        second_port = 8798
+        second_process = _start_backend(second_port)
+        try:
+            second_base_url = f"http://127.0.0.1:{second_port}"
+            if _wait_for_health(second_base_url):
+                return fail("second backend did not become healthy")
+            shared_one, _ = _fetch_json_expect_error(f"{base_url}/confirmations", ip="203.0.113.89")
+            shared_two, _ = _fetch_json_expect_error(f"{second_base_url}/confirmations", ip="203.0.113.89")
+            shared_three, shared_body = _fetch_json_expect_error(f"{base_url}/confirmations", ip="203.0.113.89")
+            if shared_one != 401 or shared_two != 401 or shared_three != 429:
+                return fail(
+                    "rate-limit state must be shared across API processes: "
+                    f"{shared_one}, {shared_two}, {shared_three}, {shared_body}"
+                )
+        finally:
+            second_process.terminate()
+            try:
+                second_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                second_process.kill()
+
         print("PASS jiejing_expensive_api_rate_limit")
         return 0
     finally:
@@ -164,6 +204,7 @@ def _env_keys() -> list[str]:
         "JIEJING_EXPENSIVE_API_RATE_LIMIT_ENABLED",
         "JIEJING_EXPENSIVE_API_RATE_LIMIT_WINDOW_SECONDS",
         "JIEJING_EXPENSIVE_API_RATE_LIMIT_MAX_PER_IP",
+        "JIEJING_TRUSTED_PROXY_CIDRS",
     ]
 
 
@@ -184,6 +225,30 @@ def _wait_for_health(base_url: str) -> int:
         except Exception:
             time.sleep(0.1)
     return 1
+
+
+def _start_backend(port: int) -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "jiejing_saas_backend_cli.py"),
+            "serve",
+            "--db",
+            str(SAAS_DB),
+            "--runtime-db",
+            str(RUNTIME_DB),
+            "--output-root",
+            str(OUT),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
+        cwd=str(ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
 
 
 def _fetch_json(url: str, *, ip: str = "203.0.113.10", token: str = "") -> dict[str, Any]:

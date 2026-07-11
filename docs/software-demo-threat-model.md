@@ -8,7 +8,18 @@ This review assumes a public multi-tenant service using Cookie or Bearer authent
 
 ## Executive result
 
-No confirmed Critical issue was found. Two High issues must be fixed before broad public trial or live provider spend is enabled. Seven Medium/Low issues should follow before paid launch. Current confirmation gates and disabled real writes materially reduce impact, but they do not protect model/media cost, account data, availability, or answer integrity.
+No confirmed Critical issue was found. The initial review identified two High and seven Medium/Low issues. The remediation status below is the current source of truth; remaining external verification and production-runtime work still blocks unrestricted public trial and paid launch. Current confirmation gates and disabled real writes materially reduce impact, but they are not substitutes for cost, account-data, availability and answer-integrity controls.
+
+## Remediation progress (2026-07-11)
+
+- A-01 core backend remediation implemented: trusted proxy chains are parsed from the right-most trusted hop, rate-limit buckets are shared through the SaaS database, raw IP/email values are hashed, expired buckets are pruned, bounded process fallback remains available, and registration has stricter per-IP/global limits. Verified email and a real Turnstile/email challenge are still required before unrestricted platform-funded trials.
+- A-02 remediated: media rework now enforces provider-job quota, ignores client billing idempotency keys, caps asset versions, and uses an expiring database reservation so concurrent retries enqueue at most one provider job.
+- A-03 materially remediated: signed sessions now carry a `jti`, are registered server-side, and are immediately revoked on logout. Short access-token plus rotating-refresh architecture remains a paid-launch hardening item.
+- A-04 remediated: cross-device chat writes use a persisted merge score and conditional UPSERT, so a poorer concurrent turn cannot overwrite a richer completed turn.
+- A-05 mitigated: public source instructions are removed, source records are marked untrusted and factual-extraction-only, and prompt rules prohibit source content from changing tools, memory, routing, confirmation gates or actions.
+- A-06 partially remediated: the edge and API now share a 1 MiB body limit, slow bodies time out, and oversized bodies are rejected without draining. Replacing `ThreadingHTTPServer` remains open.
+- A-07 remediated for known credential families: nested text values are scanned even under ordinary field names before persistence/provider dispatch.
+- A-08 and A-09 remain open. Registration/login enumeration reduction and removal of CSP `unsafe-inline` are still required before paid launch.
 
 ## System and trust boundaries
 

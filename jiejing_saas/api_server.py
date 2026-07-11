@@ -5,9 +5,11 @@ from __future__ import annotations
 import html
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
+import socket
 import sys
 import threading
 import time
@@ -102,8 +104,13 @@ MAX_JSON_BODY_BYTES = 1024 * 1024
 AUTH_RATE_LIMIT_WINDOW_SECONDS = 5 * 60
 AUTH_RATE_LIMIT_MAX_PER_EMAIL = 20
 AUTH_RATE_LIMIT_MAX_PER_IP = 80
+AUTH_RATE_LIMIT_MAX_GLOBAL_DEFAULT = 1500
+AUTH_REGISTER_RATE_LIMIT_MAX_PER_IP_DEFAULT = 10
+AUTH_REGISTER_RATE_LIMIT_MAX_GLOBAL_DEFAULT = 60
 EXPENSIVE_API_RATE_LIMIT_WINDOW_SECONDS_DEFAULT = 60
 EXPENSIVE_API_RATE_LIMIT_MAX_PER_IP_DEFAULT = 180
+EXPENSIVE_API_RATE_LIMIT_MAX_GLOBAL_DEFAULT = 5000
+LOCAL_RATE_LIMIT_MAX_BUCKETS_DEFAULT = 4096
 EXPENSIVE_API_RATE_LIMIT_PREFIXES = (
     "tasks",
     "reports",
@@ -212,6 +219,34 @@ def _positive_int_env(name: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return value if value > 0 else default
+
+
+def _parse_ip_address(value: str) -> Any | None:
+    try:
+        parsed = ipaddress.ip_address(str(value or "").strip())
+    except ValueError:
+        return None
+    if isinstance(parsed, ipaddress.IPv6Address) and parsed.ipv4_mapped:
+        return parsed.ipv4_mapped
+    return parsed
+
+
+def _trusted_proxy_networks() -> tuple[Any, ...]:
+    raw = os.environ.get("JIEJING_TRUSTED_PROXY_CIDRS", "127.0.0.0/8,::1/128")
+    networks: list[Any] = []
+    for item in raw.replace(";", ",").split(","):
+        value = item.strip()
+        if not value:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(value, strict=False))
+        except ValueError:
+            continue
+    return tuple(networks)
+
+
+def _ip_in_networks(value: Any, networks: tuple[Any, ...]) -> bool:
+    return any(value.version == network.version and value in network for network in networks)
 
 
 def _nonnegative_int_env(name: str, default: int) -> int:
@@ -1119,7 +1154,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 user = record["user"]
                 company = record["company"]
                 created = True
-            token = self.sessions.create_token(
+            token = self._issue_session_token(
                 user_id=user["user_id"],
                 company_id=user["default_company_id"],
                 email=user["email"],
@@ -1149,7 +1184,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     company_name=str(body.get("company_name") or "Jiejing Demo Company"),
                 )
                 user = record["user"]
-                token = self.sessions.create_token(
+                token = self._issue_session_token(
                     user_id=user["user_id"],
                     company_id=user["default_company_id"],
                     email=user["email"],
@@ -1191,7 +1226,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 return
             try:
                 user = self.repository.authenticate_user(email=str(body.get("email") or ""), password=str(body.get("password") or ""))
-                token = self.sessions.create_token(
+                token = self._issue_session_token(
                     user_id=user["user_id"],
                     company_id=user["default_company_id"],
                     email=user["email"],
@@ -1206,8 +1241,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "auth/logout":
+            token = self._request_session_token()
+            session_revoked = False
+            if token:
+                try:
+                    identity = self.sessions.verify_token(token)
+                    self.repository.ensure_user_session(identity)
+                    session_revoked = self.repository.revoke_user_session(
+                        jti=str(identity.get("jti") or ""),
+                        user_id=str(identity.get("user_id") or ""),
+                    )
+                except ValueError:
+                    session_revoked = False
             self._send_json(
-                {"ok": True, "secret_exposed": False},
+                {"ok": True, "session_revoked": session_revoked, "secret_exposed": False},
                 headers=[("set-cookie", self._expired_session_cookie_header())],
             )
             return
@@ -1226,7 +1273,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not user:
                 self._send_error(HTTPStatus.UNAUTHORIZED, "user not found")
                 return
-            token = self.sessions.create_token(user_id=user["user_id"], company_id=company_id, email=user["email"])
+            token = self._issue_session_token(user_id=user["user_id"], company_id=company_id, email=user["email"])
             self._send_json(
                 {"token": token, "company": self.repository.get_company(company_id), "team_member": member, "secret_exposed": False},
                 headers=[("set-cookie", self._session_cookie_header(token))],
@@ -3248,6 +3295,19 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             reason = str(body.get("reason") or "商家要求重做素材")[:200]
             prior_version = original.get("asset_version") if isinstance(original.get("asset_version"), dict) else {}
             version = max(1, int(prior_version.get("version") or 1)) + 1
+            max_versions = _positive_int_env("JIEJING_MEDIA_ASSET_MAX_VERSIONS", 8)
+            if version > max_versions:
+                self._send_json(
+                    {
+                        "error": "media asset version limit reached",
+                        "status": int(HTTPStatus.CONFLICT),
+                        "media_asset_version_limit": max_versions,
+                        "next_action": "review_or_archive_existing_versions_before_new_rework",
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.CONFLICT,
+                )
+                return
             root_media_job_id = str(prior_version.get("root_media_job_id") or original["media_job_id"])
             safe_inputs = _redact_secret_like(dict(original_inputs))
             creative_override = body.get("creative_job_spec") if isinstance(body.get("creative_job_spec"), dict) else {}
@@ -3271,7 +3331,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not contract:
                 self._send_error(HTTPStatus.NOT_FOUND, "media provider job contract not found")
                 return
-            supplied_key = str(body.get("idempotency_key") or f"media-rework:{original['media_job_id']}:v{version}")[:160]
+            supplied_key = f"media-rework:{original['media_job_id']}:v{version}"
             retry_key = _media_asset_idempotency_key(
                 store_id=original["store_id"],
                 provider_job_key=provider_job_key,
@@ -3281,6 +3341,41 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             existing = self.repository.get_media_asset_job_by_idempotency(company_id=identity["company_id"], idempotency_key=retry_key)
             if existing:
                 self._send_json({"media_asset_job": existing, "idempotent_replay": True, "secret_exposed": False}, status=HTTPStatus.ACCEPTED)
+                return
+            reservation = self.repository.reserve_media_rework(
+                company_id=identity["company_id"],
+                parent_media_job_id=original["media_job_id"],
+                version=version,
+                idempotency_key=retry_key,
+            )
+            if reservation.get("acquired") is not True:
+                reserved_media_job_id = str(reservation.get("media_job_id") or "")
+                reserved_media_job = (
+                    self.repository.get_media_asset_job(
+                        company_id=identity["company_id"],
+                        media_job_id=reserved_media_job_id,
+                    )
+                    if reserved_media_job_id
+                    else None
+                )
+                self._send_json(
+                    {
+                        "media_asset_job": reserved_media_job or {},
+                        "idempotent_replay": True,
+                        "retry_in_progress": not bool(reserved_media_job),
+                        "retry_after_seconds": min(5, int(reservation.get("retry_after_seconds") or 1)),
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.ACCEPTED,
+                )
+                return
+            if not self._require_quota(identity, "provider_job"):
+                self.repository.release_media_rework_reservation(
+                    company_id=identity["company_id"],
+                    parent_media_job_id=original["media_job_id"],
+                    version=version,
+                )
                 return
             task = self.repository.create_task(
                 company_id=identity["company_id"],
@@ -3317,6 +3412,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 },
                 status="pending",
                 version_context=version_context,
+            )
+            self.repository.complete_media_rework_reservation(
+                company_id=identity["company_id"],
+                parent_media_job_id=original["media_job_id"],
+                version=version,
+                media_job_id=media_job["media_job_id"],
             )
             queue_job = self.repository.create_queue_job(
                 company_id=identity["company_id"],
@@ -3981,34 +4082,47 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         return str(os.environ.get("JIEJING_SAFE_ACCESS_LOG") or "").strip().lower() in {"1", "true", "yes", "on"}
 
     def _require_auth(self) -> dict[str, Any] | None:
-        header = self.headers.get("authorization", "")
-        token = ""
-        if header.lower().startswith("bearer "):
-            token = header.split(" ", 1)[1].strip()
-        if not token:
-            token = self._session_cookie_token()
+        token = self._request_session_token()
         if not token:
             self._send_error(HTTPStatus.UNAUTHORIZED, "missing bearer token or session cookie")
             return None
         try:
-            return self.sessions.verify_token(token)
+            return self._validated_session_identity(token)
         except ValueError as exc:
             self._send_error(HTTPStatus.UNAUTHORIZED, str(exc))
             return None
 
     def _optional_identity(self) -> dict[str, Any] | None:
-        header = self.headers.get("authorization", "")
-        token = ""
-        if header.lower().startswith("bearer "):
-            token = header.split(" ", 1)[1].strip()
-        if not token:
-            token = self._session_cookie_token()
+        token = self._request_session_token()
         if not token:
             return None
         try:
-            return self.sessions.verify_token(token)
+            return self._validated_session_identity(token)
         except ValueError:
             return None
+
+    def _issue_session_token(self, *, user_id: str, company_id: str, email: str) -> str:
+        token = self.sessions.create_token(user_id=user_id, company_id=company_id, email=email)
+        identity = self.sessions.verify_token(token)
+        state = self.repository.ensure_user_session(identity)
+        if state.get("active") is not True:
+            raise RuntimeError("new session could not be persisted")
+        return token
+
+    def _validated_session_identity(self, token: str) -> dict[str, Any]:
+        identity = self.sessions.verify_token(token)
+        state = self.repository.ensure_user_session(identity)
+        if state.get("active") is not True:
+            raise ValueError("session revoked or expired")
+        return identity
+
+    def _request_session_token(self) -> str:
+        header = self.headers.get("authorization", "")
+        if header.lower().startswith("bearer "):
+            token = header.split(" ", 1)[1].strip()
+            if token:
+                return token
+        return self._session_cookie_token()
 
     def _can_view_internal_diagnostics(self, identity: dict[str, Any] | None) -> bool:
         return bool(identity and self._is_platform_internal_admin(identity))
@@ -4060,33 +4174,34 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         return host.endswith(".trycloudflare.com")
 
     def _check_auth_rate_limit(self, action: str, body: dict[str, Any]) -> bool:
-        now = time.time()
         client_ip = self._client_ip_for_rate_limit()
         email = str(body.get("email") or "").strip().lower()
-        checks = [(f"auth:{action}:ip:{client_ip}", AUTH_RATE_LIMIT_MAX_PER_IP)]
+        checks = [
+            (f"auth:{action}:global", "global", self._auth_rate_limit_max_global(action)),
+            (f"auth:{action}:ip", client_ip, self._auth_rate_limit_max_per_ip(action)),
+        ]
         if email:
-            checks.append((f"auth:{action}:email:{email}", AUTH_RATE_LIMIT_MAX_PER_EMAIL))
-        with self.auth_rate_limit_lock:
-            for key, limit in checks:
-                bucket = [
-                    value
-                    for value in self.auth_rate_limit_buckets.get(key, [])
-                    if now - value < AUTH_RATE_LIMIT_WINDOW_SECONDS
-                ]
-                self.auth_rate_limit_buckets[key] = bucket
-                if len(bucket) >= limit:
-                    self._send_json(
-                        {
-                            "error": "too many authentication attempts; please retry later",
-                            "status": int(HTTPStatus.TOO_MANY_REQUESTS),
-                            "retry_after_seconds": AUTH_RATE_LIMIT_WINDOW_SECONDS,
-                            "secret_exposed": False,
-                        },
-                        status=HTTPStatus.TOO_MANY_REQUESTS,
-                    )
-                    return False
-            for key, _limit in checks:
-                self.auth_rate_limit_buckets.setdefault(key, []).append(now)
+            checks.append((f"auth:{action}:email", email, AUTH_RATE_LIMIT_MAX_PER_EMAIL))
+        for scope, subject, limit in checks:
+            result = self._consume_rate_limit(
+                scope=scope,
+                subject=subject,
+                limit=limit,
+                window_seconds=AUTH_RATE_LIMIT_WINDOW_SECONDS,
+                local_buckets=self.auth_rate_limit_buckets,
+                local_lock=self.auth_rate_limit_lock,
+            )
+            if result.get("allowed") is not True:
+                self._send_json(
+                    {
+                        "error": "too many authentication attempts; please retry later",
+                        "status": int(HTTPStatus.TOO_MANY_REQUESTS),
+                        "retry_after_seconds": int(result.get("retry_after_seconds") or AUTH_RATE_LIMIT_WINDOW_SECONDS),
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.TOO_MANY_REQUESTS,
+                )
+                return False
         return True
 
     def _check_expensive_api_rate_limit(self, *, method: str, path: str) -> bool:
@@ -4094,30 +4209,34 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return True
         if not self._expensive_api_rate_limit_enabled():
             return True
-        now = time.time()
         window_seconds = self._expensive_api_rate_limit_window_seconds()
         limit = self._expensive_api_rate_limit_max_per_ip()
         client_ip = self._client_ip_for_rate_limit()
         route_group = self._expensive_api_route_group(path)
-        key = f"expensive:{method.upper()}:{route_group}:ip:{client_ip}"
-        with self.expensive_api_rate_limit_lock:
-            bucket = [
-                value
-                for value in self.expensive_api_rate_limit_buckets.get(key, [])
-                if now - value < window_seconds
-            ]
-            self.expensive_api_rate_limit_buckets[key] = bucket
-            if len(bucket) >= limit:
+        checks = [
+            (f"expensive:{method.upper()}:{route_group}:global", "global", self._expensive_api_rate_limit_max_global()),
+            (f"expensive:{method.upper()}:{route_group}:ip", client_ip, limit),
+        ]
+        for scope, subject, bucket_limit in checks:
+            result = self._consume_rate_limit(
+                scope=scope,
+                subject=subject,
+                limit=bucket_limit,
+                window_seconds=window_seconds,
+                local_buckets=self.expensive_api_rate_limit_buckets,
+                local_lock=self.expensive_api_rate_limit_lock,
+            )
+            if result.get("allowed") is not True:
                 self._send_json(
                     {
                         "error": "too many high-cost API requests; please retry later",
                         "status": int(HTTPStatus.TOO_MANY_REQUESTS),
-                        "retry_after_seconds": window_seconds,
+                        "retry_after_seconds": int(result.get("retry_after_seconds") or window_seconds),
                         "rate_limit": {
                             "scope": "expensive_api_per_ip",
                             "route_group": route_group,
                             "window_seconds": window_seconds,
-                            "max_requests": limit,
+                            "max_requests": bucket_limit,
                             "protected_high_cost_api": True,
                             "operator_next_step": "wait_for_window_or_reduce_polling",
                             "customer_visible": False,
@@ -4130,8 +4249,53 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     status=HTTPStatus.TOO_MANY_REQUESTS,
                 )
                 return False
-            self.expensive_api_rate_limit_buckets.setdefault(key, []).append(now)
         return True
+
+    def _consume_rate_limit(
+        self,
+        *,
+        scope: str,
+        subject: str,
+        limit: int,
+        window_seconds: int,
+        local_buckets: dict[str, list[float]],
+        local_lock: threading.Lock,
+    ) -> dict[str, Any]:
+        try:
+            return self.repository.consume_rate_limit_bucket(
+                scope=scope,
+                subject=subject,
+                limit=limit,
+                window_seconds=window_seconds,
+            )
+        except Exception:
+            now = time.time()
+            local_key = hashlib.sha256(f"{scope}|{subject}".encode("utf-8")).hexdigest()
+            with local_lock:
+                for key, values in list(local_buckets.items()):
+                    active = [value for value in values if now - value < window_seconds]
+                    if active:
+                        local_buckets[key] = active
+                    else:
+                        local_buckets.pop(key, None)
+                max_buckets = _positive_int_env("JIEJING_LOCAL_RATE_LIMIT_MAX_BUCKETS", LOCAL_RATE_LIMIT_MAX_BUCKETS_DEFAULT)
+                while len(local_buckets) >= max_buckets:
+                    local_buckets.pop(next(iter(local_buckets)), None)
+                bucket = local_buckets.setdefault(local_key, [])
+                if len(bucket) >= limit:
+                    return {
+                        "allowed": False,
+                        "retry_after_seconds": window_seconds,
+                        "storage": "bounded_process_fallback",
+                        "secret_exposed": False,
+                    }
+                bucket.append(now)
+            return {
+                "allowed": True,
+                "retry_after_seconds": window_seconds,
+                "storage": "bounded_process_fallback",
+                "secret_exposed": False,
+            }
 
     @staticmethod
     def _public_readiness_summary(readiness: dict[str, Any], *, authenticated: bool) -> dict[str, Any]:
@@ -4380,6 +4544,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "window_seconds": AUTH_RATE_LIMIT_WINDOW_SECONDS,
                 "max_per_email": AUTH_RATE_LIMIT_MAX_PER_EMAIL,
                 "max_per_ip": AUTH_RATE_LIMIT_MAX_PER_IP,
+                "register_max_per_ip": AUTH_REGISTER_RATE_LIMIT_MAX_PER_IP_DEFAULT,
+                "max_global": self._auth_rate_limit_max_global("auth/login"),
+                "register_max_global": self._auth_rate_limit_max_global("auth/register"),
+                "storage": "shared_database_with_bounded_process_fallback",
                 "protected_paths": ["auth/login", "auth/register", "auth/demo-session"],
                 "secret_exposed": False,
             },
@@ -4387,19 +4555,22 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "enabled": self._expensive_api_rate_limit_enabled(),
                 "window_seconds": self._expensive_api_rate_limit_window_seconds(),
                 "max_per_ip_per_route_group": self._expensive_api_rate_limit_max_per_ip(),
+                "max_global_per_route_group": self._expensive_api_rate_limit_max_global(),
                 "protected_prefixes": list(EXPENSIVE_API_RATE_LIMIT_PREFIXES),
                 "protected_exact_paths": sorted(EXPENSIVE_API_RATE_LIMIT_EXACT_PATHS),
                 "route_group_evidence": self._expensive_api_route_group_evidence(),
                 "active_bucket_summary": self._expensive_api_bucket_summary(),
                 "excluded_paths": ["billing/webhook", "oauth/ebay/callback", "health", "health/deep", "readiness/product-saas"],
-                "bucket_count": len(self.expensive_api_rate_limit_buckets),
+                "bucket_count": sum(int(item.get("active_client_bucket_count") or 0) for item in self._expensive_api_bucket_summary()),
                 "customer_visible": False,
                 "operator_panel_only": True,
                 "platform_internal_admin_only": True,
                 "backend_status_requires_internal_admin": True,
                 "protects_get_and_post": True,
                 "edge_layer": "cloudflare_free_custom_rules_when_enabled",
-                "origin_layer": "backend_ip_route_group_bucket",
+                "origin_layer": "trusted_proxy_chain_plus_shared_database_bucket",
+                "trusted_proxy_chain_parsing": True,
+                "raw_client_ip_persisted": False,
                 "protects_data_boundary": True,
                 "prevents_complete_copy": False,
                 "makes_scraping_costly": True,
@@ -4414,41 +4585,25 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         }
 
     def _expensive_api_bucket_summary(self) -> list[dict[str, Any]]:
-        now = time.time()
         window_seconds = self._expensive_api_rate_limit_window_seconds()
-        limit = self._expensive_api_rate_limit_max_per_ip()
-        grouped: dict[tuple[str, str], dict[str, Any]] = {}
-        with self.expensive_api_rate_limit_lock:
-            for key, values in list(self.expensive_api_rate_limit_buckets.items()):
-                parts = key.split(":")
-                if len(parts) < 5 or parts[0] != "expensive":
-                    continue
-                method = parts[1]
-                route_group = parts[2]
-                active = [value for value in values if now - value < window_seconds]
-                self.expensive_api_rate_limit_buckets[key] = active
-                if not active:
-                    continue
-                bucket_key = (method, route_group)
-                bucket = grouped.setdefault(
-                    bucket_key,
-                    {
-                        "method": method,
-                        "route_group": route_group,
-                        "active_client_bucket_count": 0,
-                        "active_request_count": 0,
-                        "saturated_client_bucket_count": 0,
-                        "window_seconds": window_seconds,
-                        "max_requests": limit,
-                        "client_ip_visible": False,
-                        "secret_exposed": False,
-                    },
-                )
-                bucket["active_client_bucket_count"] += 1
-                bucket["active_request_count"] += len(active)
-                if len(active) >= limit:
-                    bucket["saturated_client_bucket_count"] += 1
-        return sorted(grouped.values(), key=lambda item: (str(item.get("route_group")), str(item.get("method"))))[:24]
+        try:
+            rows = self.repository.rate_limit_bucket_summary(scope_prefix="expensive:")
+        except Exception:
+            return []
+        summary: list[dict[str, Any]] = []
+        for row in rows:
+            parts = str(row.get("scope") or "").split(":")
+            if len(parts) != 4 or parts[0] != "expensive" or parts[3] != "ip":
+                continue
+            summary.append(
+                {
+                    **row,
+                    "method": parts[1],
+                    "route_group": parts[2],
+                    "window_seconds": window_seconds,
+                }
+            )
+        return sorted(summary, key=lambda item: (str(item.get("route_group")), str(item.get("method"))))[:24]
 
     @staticmethod
     def _expensive_api_route_group_evidence() -> list[dict[str, Any]]:
@@ -4569,12 +4724,49 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
     def _expensive_api_rate_limit_max_per_ip() -> int:
         return _positive_int_env("JIEJING_EXPENSIVE_API_RATE_LIMIT_MAX_PER_IP", EXPENSIVE_API_RATE_LIMIT_MAX_PER_IP_DEFAULT)
 
+    @staticmethod
+    def _expensive_api_rate_limit_max_global() -> int:
+        return _positive_int_env("JIEJING_EXPENSIVE_API_RATE_LIMIT_MAX_GLOBAL", EXPENSIVE_API_RATE_LIMIT_MAX_GLOBAL_DEFAULT)
+
+    @staticmethod
+    def _auth_rate_limit_max_global(action: str) -> int:
+        if str(action).rstrip("/").endswith("auth/register"):
+            return _positive_int_env(
+                "JIEJING_AUTH_REGISTER_RATE_LIMIT_MAX_GLOBAL",
+                AUTH_REGISTER_RATE_LIMIT_MAX_GLOBAL_DEFAULT,
+            )
+        return _positive_int_env("JIEJING_AUTH_RATE_LIMIT_MAX_GLOBAL", AUTH_RATE_LIMIT_MAX_GLOBAL_DEFAULT)
+
+    @staticmethod
+    def _auth_rate_limit_max_per_ip(action: str) -> int:
+        if str(action).rstrip("/").endswith("auth/register"):
+            return _positive_int_env(
+                "JIEJING_AUTH_REGISTER_RATE_LIMIT_MAX_PER_IP",
+                AUTH_REGISTER_RATE_LIMIT_MAX_PER_IP_DEFAULT,
+            )
+        return AUTH_RATE_LIMIT_MAX_PER_IP
+
     def _client_ip_for_rate_limit(self) -> str:
-        forwarded = str(self.headers.get("x-forwarded-for") or "").split(",", 1)[0].strip()
+        peer_raw = str(self.client_address[0] if self.client_address else "").strip()
+        peer = _parse_ip_address(peer_raw)
+        if peer is None:
+            return "unknown"
+        trusted_networks = _trusted_proxy_networks()
+        if not _ip_in_networks(peer, trusted_networks):
+            return str(peer)[:80]
+        forwarded = [
+            parsed
+            for parsed in (_parse_ip_address(item.strip()) for item in str(self.headers.get("x-forwarded-for") or "").split(","))
+            if parsed is not None
+        ]
+        chain = [*forwarded, peer]
+        for candidate in reversed(chain):
+            if not _ip_in_networks(candidate, trusted_networks):
+                return str(candidate)[:80]
         if forwarded:
-            return forwarded[:80]
-        if self.client_address:
-            return str(self.client_address[0])[:80]
+            return str(forwarded[0])[:80]
+        if peer:
+            return str(peer)[:80]
         return "unknown"
 
     def _demo_session_bootstrap_allowed(self) -> bool:
@@ -5313,9 +5505,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         if length <= 0:
             return {}
         if length > MAX_JSON_BODY_BYTES:
-            self.rfile.read(min(length, MAX_JSON_BODY_BYTES + 64 * 1024))
+            self.close_connection = True
             raise RequestBodyError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "json body too large")
-        raw = self.rfile.read(length)
+        previous_timeout = self.connection.gettimeout()
+        self.connection.settimeout(_positive_int_env("JIEJING_REQUEST_BODY_TIMEOUT_SECONDS", 15))
+        try:
+            raw = self.rfile.read(length)
+        except (TimeoutError, socket.timeout) as exc:
+            self.close_connection = True
+            raise RequestBodyError(HTTPStatus.REQUEST_TIMEOUT, "request body timed out") from exc
+        finally:
+            if not self.close_connection:
+                self.connection.settimeout(previous_timeout)
         try:
             payload = json.loads(raw.decode("utf-8"))
         except UnicodeDecodeError as exc:
@@ -6253,4 +6454,24 @@ def _redact_secret_like(value: Any) -> Any:
         return out
     if isinstance(value, list):
         return [_redact_secret_like(item) for item in value]
+    if isinstance(value, str):
+        return _redact_secret_text(value)
     return value
+
+
+def _redact_secret_text(value: str) -> str:
+    text = str(value or "")
+    replacements = (
+        (r"\bsk-[A-Za-z0-9_-]{12,}\b", "[model_key_redacted]"),
+        (r"\b(?:AIAK|AKID|ASIA)[A-Za-z0-9]{12,}\b", "[cloud_key_redacted]"),
+        (r"\b[0-9a-f]{8}-[0-9a-f-]{27,}:[0-9a-f]{24,}\b", "[provider_key_redacted]"),
+        (r"\bBearer\s+[A-Za-z0-9._~+/=-]{12,}", "Bearer [redacted]"),
+        (r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b", "[jwt_redacted]"),
+        (
+            r"\b(access[_-]?token|refresh[_-]?token|api[_-]?key|apikey|password|secret)\s*[:=]\s*[^,\s;]+",
+            r"\1=[redacted]",
+        ),
+    )
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text

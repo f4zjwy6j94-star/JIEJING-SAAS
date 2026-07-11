@@ -4,15 +4,24 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from jiejing_saas.repository import SaaSRepository  # noqa: E402
+
+
 OUT = ROOT / "output" / "jiejing-media-asset-jobs" / "test"
 SAAS_DB = OUT / "saas-media-asset-jobs.sqlite"
 RUNTIME_DB = OUT / "runtime-media-asset-jobs.sqlite"
@@ -29,6 +38,15 @@ def main() -> int:
         if path.exists():
             path.unlink()
     port = 8794
+    process_env = os.environ.copy()
+    process_env.update(
+        {
+            "JIEJING_SAAS_ENV": "test",
+            "JIEJING_BILLING_PROVIDER": "manual_seed",
+            "JIEJING_BILLING_PLANS_PUBLISHED": "1",
+            "JIEJING_QUOTA_ENFORCEMENT_ENABLED": "1",
+        }
+    )
     process = subprocess.Popen(
         [
             sys.executable,
@@ -49,6 +67,7 @@ def main() -> int:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=process_env,
     )
     try:
         base_url = f"http://127.0.0.1:{port}"
@@ -74,6 +93,7 @@ def main() -> int:
         if not store_id:
             return fail("store should be created")
 
+        hidden_note_credential = "sk-" + "unit-credential-should-not-persist-2026"
         payload = {
             "provider_job_key": "media.asset_generation",
             "title": "Provider-neutral media asset job",
@@ -102,6 +122,7 @@ def main() -> int:
                 "image_sizes": ["1:1", "4:5"],
                 "scene_types": ["white_background", "detail_page"],
                 "video_script": "15 second product demo script",
+                "merchant_notes": f"Supplier note {hidden_note_credential}",
                 "api_key": "UNIT-MEDIA-KEY-MUST-NOT-PERSIST",
             },
             "run_mode": "local_worker_now",
@@ -109,6 +130,8 @@ def main() -> int:
         queued = post_json(f"{base_url}/stores/{store_id}/provider-jobs/queue", payload, token=token)
         if "UNIT-MEDIA-KEY-MUST-NOT-PERSIST" in json.dumps(queued, ensure_ascii=False):
             return fail("media asset job response leaked raw media API key")
+        if hidden_note_credential in json.dumps(queued, ensure_ascii=False):
+            return fail("media asset job response leaked a credential hidden in an ordinary notes field")
         media_job = queued.get("media_asset_job") if isinstance(queued.get("media_asset_job"), dict) else {}
         media_job_id = media_job.get("media_job_id")
         if not media_job_id:
@@ -138,6 +161,8 @@ def main() -> int:
         fetched_facts = fetched.get("job", {}).get("job_spec", {}).get("inputs", {}).get("product_facts", {})
         if fetched_facts.get("listing_project_key") != "listing-project-stainless-tumbler-001":
             return fail(f"media asset job must preserve its Listing project identity: {fetched_facts}")
+        if hidden_note_credential in json.dumps(fetched, ensure_ascii=False):
+            return fail("persisted media job leaked a credential hidden in an ordinary notes field")
         store_list = fetch_json(f"{base_url}/stores/{store_id}/media-asset-jobs", token=token).get("media_asset_jobs", [])
         if len(store_list) != 1 or store_list[0].get("media_job_id") != media_job_id:
             return fail(f"store media job list should include exactly this media job: {store_list}")
@@ -167,7 +192,46 @@ def main() -> int:
             "reason": "Correct product color and preserve the previous version.",
             "run_mode": "local_worker_now",
         }
-        retried = post_json(f"{base_url}/media-asset-jobs/{media_job_id}/retry", retry_payload, token=token)
+        with ThreadPoolExecutor(max_workers=12) as executor:
+            concurrent_retries = list(
+                executor.map(
+                    lambda _index: post_json_with_status(
+                        f"{base_url}/media-asset-jobs/{media_job_id}/retry",
+                        retry_payload,
+                        token=token,
+                    ),
+                    range(12),
+                )
+            )
+        unexpected_retry_statuses = [status for status, _body in concurrent_retries if status not in {200, 202}]
+        if unexpected_retry_statuses:
+            return fail(f"concurrent media retries must not fail or duplicate provider submission: {concurrent_retries}")
+        concurrent_media_ids = {
+            str(body.get("media_asset_job", {}).get("media_job_id") or "")
+            for _status, body in concurrent_retries
+            if isinstance(body, dict)
+        }
+        concurrent_media_ids.discard("")
+        if len(concurrent_media_ids) != 1:
+            return fail(f"concurrent media retries must resolve to one immutable version: {concurrent_media_ids}")
+        retried = next(
+            body
+            for _status, body in concurrent_retries
+            if str(body.get("media_asset_job", {}).get("media_job_id") or "")
+        )
+        concurrent_media_job_id = str(retried.get("media_asset_job", {}).get("media_job_id") or "")
+        for _attempt in range(80):
+            current_retry_job = fetch_json(
+                f"{base_url}/media-asset-jobs/{concurrent_media_job_id}",
+                token=token,
+            ).get("media_asset_job", {})
+            if current_retry_job.get("status") == "waiting_review":
+                retried = {"media_asset_job": current_retry_job}
+                break
+            time.sleep(0.05)
+        concurrent_versions = fetch_json(f"{base_url}/stores/{store_id}/media-asset-jobs", token=token).get("media_asset_jobs", [])
+        if len(concurrent_versions) != 2:
+            return fail(f"concurrent retry must create exactly one new media version: {concurrent_versions}")
         media_v2 = retried.get("media_asset_job") if isinstance(retried.get("media_asset_job"), dict) else {}
         media_v2_id = str(media_v2.get("media_job_id") or "")
         version = media_v2.get("asset_version") if isinstance(media_v2.get("asset_version"), dict) else {}
@@ -186,6 +250,19 @@ def main() -> int:
         replay_v2 = post_json(f"{base_url}/media-asset-jobs/{media_job_id}/retry", retry_payload, token=token)
         if replay_v2.get("idempotent_replay") is not True or replay_v2.get("media_asset_job", {}).get("media_job_id") != media_v2_id:
             return fail(f"repeated v1 retry must return the same v2 instead of spending twice: {replay_v2}")
+        replay_v2_with_changed_client_key = post_json(
+            f"{base_url}/media-asset-jobs/{media_job_id}/retry",
+            {**retry_payload, "idempotency_key": "attacker-controlled-new-key"},
+            token=token,
+        )
+        if (
+            replay_v2_with_changed_client_key.get("idempotent_replay") is not True
+            or replay_v2_with_changed_client_key.get("media_asset_job", {}).get("media_job_id") != media_v2_id
+        ):
+            return fail(
+                "changing a client-supplied retry key must not create another billable media version: "
+                f"{replay_v2_with_changed_client_key}"
+            )
 
         approved_v2 = post_json(
             f"{base_url}/media-asset-jobs/{media_v2_id}/review",
@@ -209,6 +286,36 @@ def main() -> int:
         actions = {item.get("action_type") for item in audit}
         if "media.asset_job.created" not in actions or "media.asset_job.status_updated" not in actions:
             return fail(f"media asset job lifecycle should be audited: {actions}")
+
+        needs_rework_again = post_json(
+            f"{base_url}/media-asset-jobs/{media_v2_id}/review",
+            {"decision": "needs_rework", "note": "Adversarial quota retry check."},
+            token=token,
+        ).get("media_asset_job", {})
+        if needs_rework_again.get("status") != "needs_rework":
+            return fail(f"approved media should be reviewable again before a new version: {needs_rework_again}")
+        repository = SaaSRepository(SAAS_DB)
+        company_id = str(registered.get("company", {}).get("company_id") or "")
+        user_id = str(registered.get("user", {}).get("user_id") or "")
+        current_provider_jobs = sum(
+            1 for task in repository.list_tasks(company_id=company_id) if task.get("task_type") == "provider_job"
+        )
+        for index in range(current_provider_jobs, 300):
+            repository.create_task(
+                company_id=company_id,
+                store_id=store_id,
+                user_id=user_id,
+                task_type="provider_job",
+                title=f"adversarial quota fixture {index}",
+                input_data={"fixture": True, "index": index},
+            )
+        quota_status, quota_body = post_json_expect_error(
+            f"{base_url}/media-asset-jobs/{media_v2_id}/retry",
+            {"reason": "Attempt one more billable version after quota exhaustion."},
+            token=token,
+        )
+        if quota_status != 402 or quota_body.get("error") != "quota exhausted":
+            return fail(f"media rework must enforce provider-job quota: {quota_status}, {quota_body}")
 
         print("PASS jiejing_media_asset_jobs")
         print(f"media_job_id={media_job_id}")
@@ -249,6 +356,24 @@ def post_json(url: str, payload: dict[str, Any], token: str | None = None) -> di
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
     with urllib.request.urlopen(request, timeout=60) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def post_json_expect_error(url: str, payload: dict[str, Any], token: str | None = None) -> tuple[int, dict[str, Any]]:
+    try:
+        return 200, post_json(url, payload, token=token)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8")
+        return exc.code, json.loads(body) if body else {}
+
+
+def post_json_with_status(url: str, payload: dict[str, Any], token: str | None = None) -> tuple[int, dict[str, Any]]:
+    try:
+        return 200, post_json(url, payload, token=token)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8")
+        return exc.code, json.loads(body) if body else {}
+    except Exception as exc:
+        return 599, {"error": exc.__class__.__name__}
 
 
 if __name__ == "__main__":

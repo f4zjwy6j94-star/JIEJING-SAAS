@@ -40,10 +40,19 @@ class SessionPayload:
     user_id: str
     company_id: str
     email: str
+    jti: str
+    iat: int
     exp: int
 
     def to_dict(self) -> dict[str, Any]:
-        return {"user_id": self.user_id, "company_id": self.company_id, "email": self.email, "exp": self.exp}
+        return {
+            "user_id": self.user_id,
+            "company_id": self.company_id,
+            "email": self.email,
+            "jti": self.jti,
+            "iat": self.iat,
+            "exp": self.exp,
+        }
 
 
 def _session_ttl_from_env() -> int:
@@ -66,11 +75,14 @@ class SessionManager:
         self.ttl_seconds = ttl_seconds if ttl_seconds is not None else _session_ttl_from_env()
 
     def create_token(self, *, user_id: str, company_id: str, email: str) -> str:
+        issued_at = int(time.time())
         payload = SessionPayload(
             user_id=user_id,
             company_id=company_id,
             email=email,
-            exp=int(time.time()) + self.ttl_seconds,
+            jti=f"session_{secrets.token_urlsafe(24)}",
+            iat=issued_at,
+            exp=issued_at + self.ttl_seconds,
         )
         payload_b64 = _b64(json.dumps(payload.to_dict(), ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
         signature = _b64(hmac.new(self.secret, payload_b64.encode("ascii"), hashlib.sha256).digest())
@@ -93,6 +105,12 @@ class SessionManager:
         required = {"user_id", "company_id", "email"}
         if not required.issubset(payload):
             raise ValueError("bearer token missing identity fields")
+        if not str(payload.get("jti") or ""):
+            payload["jti"] = f"legacy_{hashlib.sha256(token.encode('utf-8')).hexdigest()[:40]}"
+            payload["legacy_session"] = True
+        else:
+            payload["legacy_session"] = False
+        payload.setdefault("iat", max(0, int(payload.get("exp") or 0) - self.ttl_seconds))
         return payload
 
 

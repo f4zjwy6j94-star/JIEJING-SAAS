@@ -28,6 +28,16 @@ create table if not exists users (
   created_at timestamptz not null
 );
 
+create table if not exists user_sessions (
+  jti text primary key,
+  user_id text not null references users(user_id),
+  company_id text not null,
+  issued_at_epoch bigint not null,
+  expires_epoch bigint not null,
+  revoked_at timestamptz,
+  created_at timestamptz not null
+);
+
 create table if not exists team_members (
   company_id text not null references companies(company_id),
   user_id text not null references users(user_id),
@@ -160,6 +170,28 @@ create table if not exists media_asset_jobs (
   unique (company_id, idempotency_key)
 );
 
+create table if not exists media_rework_reservations (
+  reservation_key_hash text primary key,
+  company_id text not null references companies(company_id),
+  parent_media_job_id text not null,
+  version integer not null,
+  status text not null,
+  media_job_id text,
+  created_at timestamptz not null,
+  updated_at timestamptz not null,
+  expires_epoch bigint not null,
+  unique (company_id, parent_media_job_id, version)
+);
+
+create table if not exists api_rate_limit_buckets (
+  bucket_key_hash text primary key,
+  scope text not null,
+  request_count integer not null,
+  limit_count integer not null,
+  window_started_epoch bigint not null,
+  expires_epoch bigint not null
+);
+
 create table if not exists worker_runtime_heartbeats (
   worker_id text primary key,
   status text not null,
@@ -261,11 +293,14 @@ create table if not exists ai_ceo_chat_turns (
   assistant_id text not null,
   status text not null,
   route text not null,
+  merge_score integer not null default 0,
   created_at timestamptz not null,
   updated_at timestamptz not null,
   turn_json jsonb not null,
   unique (company_id, user_id, assistant_id)
 );
+
+alter table ai_ceo_chat_turns add column if not exists merge_score integer not null default 0;
 
 create table if not exists execution_results (
   execution_id text primary key,
@@ -316,6 +351,7 @@ create table if not exists billing_webhook_events (
 );
 
 create index if not exists idx_team_members_company_role on team_members(company_id, role);
+create index if not exists idx_user_sessions_user_expiry on user_sessions(user_id, expires_epoch);
 create index if not exists idx_team_invitations_company_status_created on team_invitations(company_id, status, created_at);
 create index if not exists idx_stores_company_platform_created on stores(company_id, platform, created_at);
 create index if not exists idx_secret_refs_company_store_provider_purpose on secret_refs(company_id, store_id, provider, purpose);
@@ -327,6 +363,8 @@ create index if not exists idx_queue_jobs_company_status_updated on queue_jobs(c
 create index if not exists idx_queue_jobs_task_status on queue_jobs(task_id, status);
 create index if not exists idx_media_asset_jobs_company_store_status on media_asset_jobs(company_id, store_id, status, updated_at);
 create index if not exists idx_media_asset_jobs_task_queue on media_asset_jobs(task_id, queue_job_id);
+create index if not exists idx_media_rework_reservations_company_parent on media_rework_reservations(company_id, parent_media_job_id, version);
+create index if not exists idx_api_rate_limit_buckets_scope_expiry on api_rate_limit_buckets(scope, expires_epoch);
 create index if not exists idx_worker_runtime_heartbeats_updated on worker_runtime_heartbeats(heartbeat_at);
 create index if not exists idx_task_steps_company_task_order on task_steps(company_id, task_id, step_order);
 create index if not exists idx_reports_task_type_created on reports(task_id, report_type, created_at);

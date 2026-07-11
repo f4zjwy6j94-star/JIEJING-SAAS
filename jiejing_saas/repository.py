@@ -9,6 +9,7 @@ import re
 import secrets
 import sqlite3
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -95,6 +96,16 @@ class SaaSRepository:
                   password_hash text not null,
                   status text not null,
                   default_company_id text not null,
+                  created_at text not null
+                );
+
+                create table if not exists user_sessions (
+                  jti text primary key,
+                  user_id text not null,
+                  company_id text not null,
+                  issued_at_epoch integer not null,
+                  expires_epoch integer not null,
+                  revoked_at text,
                   created_at text not null
                 );
 
@@ -236,6 +247,19 @@ class SaaSRepository:
                   unique (company_id, idempotency_key)
                 );
 
+                create table if not exists media_rework_reservations (
+                  reservation_key_hash text primary key,
+                  company_id text not null,
+                  parent_media_job_id text not null,
+                  version integer not null,
+                  status text not null,
+                  media_job_id text,
+                  created_at text not null,
+                  updated_at text not null,
+                  expires_epoch integer not null,
+                  unique (company_id, parent_media_job_id, version)
+                );
+
                 create table if not exists worker_runtime_heartbeats (
                   worker_id text primary key,
                   status text not null,
@@ -337,6 +361,7 @@ class SaaSRepository:
                   assistant_id text not null,
                   status text not null,
                   route text not null,
+                  merge_score integer not null default 0,
                   created_at text not null,
                   updated_at text not null,
                   turn_json text not null,
@@ -391,6 +416,15 @@ class SaaSRepository:
                   billing_event_json text not null
                 );
 
+                create table if not exists api_rate_limit_buckets (
+                  bucket_key_hash text primary key,
+                  scope text not null,
+                  request_count integer not null,
+                  limit_count integer not null,
+                  window_started_epoch integer not null,
+                  expires_epoch integer not null
+                );
+
                 create table if not exists schema_migrations (
                   migration_id text primary key,
                   applied_at text not null,
@@ -399,6 +433,7 @@ class SaaSRepository:
                 );
                 """
             )
+            self._ensure_ai_ceo_chat_merge_score_column(conn)
             self._ensure_indexes(conn)
             self._record_schema_migration(
                 conn,
@@ -429,6 +464,24 @@ class SaaSRepository:
                 migration_id="20260711_ai_ceo_account_chat_history",
                 checksum="jiejing-ai-ceo-account-chat-history-v20260711",
                 summary="Adds account-scoped, cross-device AI CEO chat history without provider secrets or raw credentials.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260711_shared_api_rate_limit_buckets",
+                checksum="jiejing-shared-api-rate-limit-buckets-v20260711",
+                summary="Adds expiring shared API rate-limit buckets without storing raw IP or email values.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260711_media_rework_reservations",
+                checksum="jiejing-media-rework-reservations-v20260711",
+                summary="Adds expiring database reservations so concurrent media rework requests enqueue at most one provider job.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260711_revocable_user_sessions",
+                checksum="jiejing-revocable-user-sessions-v20260711",
+                summary="Adds server-side session identifiers so logout immediately revokes signed browser and bearer sessions.",
             )
 
     def _initialize_postgres(self) -> None:
@@ -508,6 +561,55 @@ class SaaSRepository:
             details={"email": user["email"], "secret_exposed": False},
         )
         return user
+
+    def ensure_user_session(self, identity: dict[str, Any]) -> dict[str, Any]:
+        self.initialize()
+        jti = str(identity.get("jti") or "")[:160]
+        user_id = str(identity.get("user_id") or "")
+        company_id = str(identity.get("company_id") or "")
+        issued_at = int(identity.get("iat") or 0)
+        expires_epoch = int(identity.get("exp") or 0)
+        if not jti or not user_id or not company_id or expires_epoch <= 0:
+            return {"active": False, "status": "invalid_session_identity", "secret_exposed": False}
+        with self._connect() as conn:
+            conn.execute("delete from user_sessions where expires_epoch <= ?", (int(time.time()),))
+            conn.execute(
+                """
+                insert or ignore into user_sessions (
+                  jti, user_id, company_id, issued_at_epoch, expires_epoch, revoked_at, created_at
+                ) values (?, ?, ?, ?, ?, null, ?)
+                """,
+                (jti, user_id, company_id, issued_at, expires_epoch, now_iso()),
+            )
+            row = conn.execute(
+                "select user_id, company_id, expires_epoch, revoked_at from user_sessions where jti = ?",
+                (jti,),
+            ).fetchone()
+        active = bool(
+            row
+            and str(row["user_id"]) == user_id
+            and str(row["company_id"]) == company_id
+            and int(row["expires_epoch"] or 0) > int(time.time())
+            and not str(row["revoked_at"] or "")
+        )
+        return {
+            "active": active,
+            "status": "active" if active else "revoked_or_expired",
+            "legacy_session_migrated": bool(identity.get("legacy_session")),
+            "secret_exposed": False,
+        }
+
+    def revoke_user_session(self, *, jti: str, user_id: str) -> bool:
+        self.initialize()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                update user_sessions set revoked_at = ?
+                where jti = ? and user_id = ? and revoked_at is null
+                """,
+                (now_iso(), str(jti or "")[:160], user_id),
+            )
+        return int(getattr(cursor, "rowcount", 0) or 0) > 0
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
         self.initialize()
@@ -1571,6 +1673,107 @@ class SaaSRepository:
                 },
             )
         return self.get_media_asset_job(company_id=company_id, media_job_id=media_job_id) or {}
+
+    def reserve_media_rework(
+        self,
+        *,
+        company_id: str,
+        parent_media_job_id: str,
+        version: int,
+        idempotency_key: str,
+        ttl_seconds: int = 120,
+    ) -> dict[str, Any]:
+        self.initialize()
+        now_epoch = int(time.time())
+        created_at = now_iso()
+        expires_epoch = now_epoch + max(30, int(ttl_seconds))
+        reservation_key_hash = hashlib.sha256(
+            f"{company_id}|{parent_media_job_id}|{version}|{idempotency_key}".encode("utf-8")
+        ).hexdigest()
+        with self._connect() as conn:
+            conn.execute(
+                "delete from media_rework_reservations where status = 'preparing' and expires_epoch <= ?",
+                (now_epoch,),
+            )
+            inserted = conn.execute(
+                """
+                insert into media_rework_reservations (
+                  reservation_key_hash, company_id, parent_media_job_id, version,
+                  status, media_job_id, created_at, updated_at, expires_epoch
+                ) values (?, ?, ?, ?, 'preparing', null, ?, ?, ?)
+                on conflict do nothing
+                returning reservation_key_hash, status, media_job_id, expires_epoch
+                """,
+                (
+                    reservation_key_hash,
+                    company_id,
+                    parent_media_job_id,
+                    int(version),
+                    created_at,
+                    created_at,
+                    expires_epoch,
+                ),
+            ).fetchone()
+            row = inserted or conn.execute(
+                """
+                select reservation_key_hash, status, media_job_id, expires_epoch
+                from media_rework_reservations
+                where company_id = ? and parent_media_job_id = ? and version = ?
+                """,
+                (company_id, parent_media_job_id, int(version)),
+            ).fetchone()
+        return {
+            "acquired": bool(inserted),
+            "status": str(row["status"] if row else "preparing"),
+            "media_job_id": str(row["media_job_id"] or "") if row else "",
+            "retry_after_seconds": max(1, int((row["expires_epoch"] if row else expires_epoch) - now_epoch)),
+            "reservation_key_hash": reservation_key_hash,
+            "raw_idempotency_key_persisted": False,
+            "secret_exposed": False,
+        }
+
+    def complete_media_rework_reservation(
+        self,
+        *,
+        company_id: str,
+        parent_media_job_id: str,
+        version: int,
+        media_job_id: str,
+    ) -> None:
+        self.initialize()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                update media_rework_reservations
+                set status = 'created', media_job_id = ?, updated_at = ?, expires_epoch = ?
+                where company_id = ? and parent_media_job_id = ? and version = ?
+                """,
+                (
+                    media_job_id,
+                    now_iso(),
+                    int(time.time()) + 24 * 60 * 60,
+                    company_id,
+                    parent_media_job_id,
+                    int(version),
+                ),
+            )
+
+    def release_media_rework_reservation(
+        self,
+        *,
+        company_id: str,
+        parent_media_job_id: str,
+        version: int,
+    ) -> None:
+        self.initialize()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                delete from media_rework_reservations
+                where company_id = ? and parent_media_job_id = ? and version = ? and status = 'preparing'
+                """,
+                (company_id, parent_media_job_id, int(version)),
+            )
 
     def update_media_asset_job(
         self,
@@ -3191,19 +3394,22 @@ class SaaSRepository:
                     if _ai_ceo_chat_turn_merge_score(existing_turn) >= _ai_ceo_chat_turn_merge_score(turn):
                         continue
                 payload = json.dumps(turn, ensure_ascii=False, default=json_default)
+                merge_score = _ai_ceo_chat_turn_merge_score(turn)
                 conn.execute(
                     """
                     insert into ai_ceo_chat_turns (
                       chat_turn_id, company_id, user_id, store_id, assistant_id, status, route,
-                      created_at, updated_at, turn_json
-                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      merge_score, created_at, updated_at, turn_json
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     on conflict (company_id, user_id, assistant_id) do update set
                       store_id = excluded.store_id,
                       status = excluded.status,
                       route = excluded.route,
+                      merge_score = excluded.merge_score,
                       created_at = excluded.created_at,
                       updated_at = excluded.updated_at,
                       turn_json = excluded.turn_json
+                    where excluded.merge_score > ai_ceo_chat_turns.merge_score
                     """,
                     (
                         chat_turn_id,
@@ -3213,6 +3419,7 @@ class SaaSRepository:
                         assistant_id,
                         str(turn.get("status") or "completed")[:80],
                         str(turn.get("route") or "general_chat")[:80],
+                        merge_score,
                         str(turn.get("created_at") or updated_at)[:80],
                         updated_at,
                         payload,
@@ -4249,6 +4456,97 @@ class SaaSRepository:
             ).fetchall()
         return {str(row["status"]): int(row["count"]) for row in rows}
 
+    def consume_rate_limit_bucket(
+        self,
+        *,
+        scope: str,
+        subject: str,
+        limit: int,
+        window_seconds: int,
+        now_epoch: int | None = None,
+    ) -> dict[str, Any]:
+        """Atomically consume an expiring shared bucket without persisting PII."""
+
+        self.initialize()
+        current_epoch = int(now_epoch if now_epoch is not None else time.time())
+        bounded_limit = max(1, int(limit))
+        bounded_window = max(1, int(window_seconds))
+        expires_epoch = current_epoch + bounded_window
+        safe_scope = str(scope or "unknown")[:160]
+        bucket_key_hash = hashlib.sha256(f"{safe_scope}|{subject}".encode("utf-8")).hexdigest()
+        with self._connect() as conn:
+            conn.execute("delete from api_rate_limit_buckets where expires_epoch <= ?", (current_epoch,))
+            row = conn.execute(
+                """
+                insert into api_rate_limit_buckets (
+                  bucket_key_hash, scope, request_count, limit_count,
+                  window_started_epoch, expires_epoch
+                ) values (?, ?, 1, ?, ?, ?)
+                on conflict (bucket_key_hash) do update set
+                  scope = excluded.scope,
+                  request_count = case
+                    when api_rate_limit_buckets.expires_epoch <= excluded.window_started_epoch then 1
+                    else api_rate_limit_buckets.request_count + 1
+                  end,
+                  limit_count = excluded.limit_count,
+                  window_started_epoch = case
+                    when api_rate_limit_buckets.expires_epoch <= excluded.window_started_epoch
+                    then excluded.window_started_epoch
+                    else api_rate_limit_buckets.window_started_epoch
+                  end,
+                  expires_epoch = case
+                    when api_rate_limit_buckets.expires_epoch <= excluded.window_started_epoch
+                    then excluded.expires_epoch
+                    else api_rate_limit_buckets.expires_epoch
+                  end
+                returning request_count, limit_count, expires_epoch
+                """,
+                (bucket_key_hash, safe_scope, bounded_limit, current_epoch, expires_epoch),
+            ).fetchone()
+        request_count = int(row["request_count"] if row else 1)
+        return {
+            "allowed": request_count <= bounded_limit,
+            "request_count": request_count,
+            "limit": bounded_limit,
+            "retry_after_seconds": max(1, int((row["expires_epoch"] if row else expires_epoch) - current_epoch)),
+            "storage": "shared_database",
+            "subject_persisted": False,
+            "secret_exposed": False,
+        }
+
+    def rate_limit_bucket_summary(self, *, scope_prefix: str, now_epoch: int | None = None) -> list[dict[str, Any]]:
+        self.initialize()
+        current_epoch = int(now_epoch if now_epoch is not None else time.time())
+        with self._connect() as conn:
+            conn.execute("delete from api_rate_limit_buckets where expires_epoch <= ?", (current_epoch,))
+            rows = conn.execute(
+                """
+                select scope,
+                       count(*) as bucket_count,
+                       sum(case when request_count > limit_count then limit_count else request_count end) as request_count,
+                       sum(case when request_count >= limit_count then 1 else 0 end) as saturated_count,
+                       max(limit_count) as max_requests
+                from api_rate_limit_buckets
+                where scope like ?
+                group by scope
+                order by scope
+                limit 64
+                """,
+                (f"{scope_prefix}%",),
+            ).fetchall()
+        return [
+            {
+                "scope": str(row["scope"]),
+                "active_client_bucket_count": int(row["bucket_count"] or 0),
+                "active_request_count": int(row["request_count"] or 0),
+                "saturated_client_bucket_count": int(row["saturated_count"] or 0),
+                "max_requests": int(row["max_requests"] or 0),
+                "client_ip_visible": False,
+                "secret_exposed": False,
+            }
+            for row in rows
+        ]
+
     def _ensure_indexes(self, conn: sqlite3.Connection) -> None:
         conn.executescript(
             """
@@ -4256,6 +4554,8 @@ class SaaSRepository:
               on stores(company_id, platform, created_at);
             create index if not exists idx_team_members_company_role
               on team_members(company_id, role);
+            create index if not exists idx_user_sessions_user_expiry
+              on user_sessions(user_id, expires_epoch);
             create index if not exists idx_team_invitations_company_status_created
               on team_invitations(company_id, status, created_at);
             create index if not exists idx_secret_refs_company_store_provider_purpose
@@ -4276,6 +4576,8 @@ class SaaSRepository:
               on media_asset_jobs(company_id, store_id, status, updated_at);
             create index if not exists idx_media_asset_jobs_task_queue
               on media_asset_jobs(task_id, queue_job_id);
+            create index if not exists idx_media_rework_reservations_company_parent
+              on media_rework_reservations(company_id, parent_media_job_id, version);
             create index if not exists idx_worker_runtime_heartbeats_updated
               on worker_runtime_heartbeats(heartbeat_at);
             create index if not exists idx_task_steps_company_task_order
@@ -4312,8 +4614,16 @@ class SaaSRepository:
               on billing_subscriptions(provider, provider_subscription_id);
             create index if not exists idx_billing_webhook_events_company_created
               on billing_webhook_events(company_id, created_at);
+            create index if not exists idx_api_rate_limit_buckets_scope_expiry
+              on api_rate_limit_buckets(scope, expires_epoch);
             """
         )
+
+    @staticmethod
+    def _ensure_ai_ceo_chat_merge_score_column(conn: sqlite3.Connection) -> None:
+        columns = {str(row["name"]) for row in conn.execute("pragma table_info(ai_ceo_chat_turns)").fetchall()}
+        if "merge_score" not in columns:
+            conn.execute("alter table ai_ceo_chat_turns add column merge_score integer not null default 0")
 
     def _record_schema_migration(
         self,
@@ -5023,21 +5333,33 @@ def _redact_secret_like(value: Any) -> Any:
         return redacted
     if isinstance(value, list):
         return [_redact_secret_like(item) for item in value]
+    if isinstance(value, str):
+        return _redact_secret_text(value)
     return value
 
 
-def _sanitize_merchant_ceo_text(value: Any, *, limit: int = 600) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    replacements = [
+def _redact_secret_text(value: str) -> str:
+    text = str(value or "")
+    replacements = (
         (r"\bsk-[A-Za-z0-9_-]{12,}\b", "[model_key_redacted]"),
-        (r"\b(AIAK|AKID|ASIA)[A-Za-z0-9]{12,}\b", "[cloud_key_redacted]"),
+        (r"\b(?:AIAK|AKID|ASIA)[A-Za-z0-9]{12,}\b", "[cloud_key_redacted]"),
+        (r"\b[0-9a-f]{8}-[0-9a-f-]{27,}:[0-9a-f]{24,}\b", "[provider_key_redacted]"),
         (r"\bBearer\s+[A-Za-z0-9._~+/=-]{12,}", "Bearer [redacted]"),
-        (r"\b(access[_-]?token|refresh[_-]?token|api[_-]?key|apikey|password|secret)\s*[:=]\s*[^,\s;]+", r"\1=[redacted]"),
-    ]
+        (r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b", "[jwt_redacted]"),
+        (
+            r"\b(access[_-]?token|refresh[_-]?token|api[_-]?key|apikey|password|secret)\s*[:=]\s*[^,\s;]+",
+            r"\1=[redacted]",
+        ),
+    )
     for pattern, replacement in replacements:
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text
+
+
+def _sanitize_merchant_ceo_text(value: Any, *, limit: int = 600) -> str:
+    text = _redact_secret_text(str(value or "").strip())
+    if not text:
+        return ""
     return text[:limit]
 
 
