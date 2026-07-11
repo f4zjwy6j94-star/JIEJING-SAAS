@@ -10672,6 +10672,8 @@ function saasIsInvalidMarketProductLabel(value = "") {
     "商品名称",
     "产品名和两条理由",
     "商品名和两条理由",
+    "名和两条理由",
+    "名称和两条理由",
     "这次调研",
     "本次调研",
     "待确认商品",
@@ -17417,6 +17419,7 @@ function saasWorkflowProductLabel(task = null) {
 function saasIsConcreteProductLabel(value = "") {
   const text = publicRuntimeText(String(value || "")).trim().slice(0, 100);
   if (!text || text.length < 2) return false;
+  if (saasIsInvalidMarketProductLabel(text)) return false;
   if (/^(?:AI\s*CEO\s*)?(?:市场调研|市场调研报告|产品刊登报告|Listing|上架草稿|等待选择商品|待选择商品方向|商品方向|选品)$/i.test(text)) return false;
   if (/(?:帮我|给我|请|做个|做一份|应该).*(?:选品|卖什么|市场调研|调研报告)/i.test(text)) return false;
   return !/(?:还没有|尚未|等待|待选择|待确认).*(?:商品|产品|方向)/i.test(text);
@@ -21261,7 +21264,11 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
   const latest = normalizeSaasAiCeoLatestTurn(turn);
   const delivery = latest?.market_report_delivery;
   if (!delivery?.structured_report_saved || delivery.report_type !== "ai_ceo.market_research") return "";
-  const title = delivery.product || delivery.title || "这次市场调研";
+  const title =
+    (saasIsConcreteProductLabel(delivery.product) ? delivery.product : "") ||
+    saasAiCeoMarketProductLabel(latest) ||
+    delivery.title ||
+    "这次市场调研";
   const sourceCopy = delivery.source_record_count ? `已带 ${delivery.source_record_count} 条公开来源；` : "";
   return `
     <div class="saas-ai-ceo-market-report-delivery" data-ai-ceo-market-report-delivery="ai_ceo_market_report_delivery_v1" data-report-id="${escapeHtml(delivery.report_id)}">

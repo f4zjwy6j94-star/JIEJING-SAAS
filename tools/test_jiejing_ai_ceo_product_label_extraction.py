@@ -32,7 +32,7 @@ def main() -> None:
     app_js = (ROOT / "app.js").read_text(encoding="utf-8")
 
     invalid_label = function_body(app_js, "saasIsInvalidMarketProductLabel")
-    for marker in ["产品名", "商品名", "两条理由"]:
+    for marker in ["产品名", "商品名", "两条理由", "名和两条理由"]:
         require(invalid_label, marker, "generic prompt-fragment product guard")
 
     concise_label = function_body(app_js, "saasAiCeoConciseAnswerProductLabel")
@@ -43,6 +43,9 @@ def main() -> None:
     require(market_label, "saasAiCeoConciseAnswerProductLabel(latest)", "answer-first product extraction")
     require(market_label, "(?:是|为|:|：)", "explicit merchant product delimiter")
     reject(market_label, "[:：]?\\s*([^\\n。；;]{2,80})", "optional product delimiter")
+
+    concrete_label = function_body(app_js, "saasIsConcreteProductLabel")
+    require(concrete_label, "saasIsInvalidMarketProductLabel(text)", "shared product-label validation")
 
     print("PASS jiejing_ai_ceo_product_label_extraction")
 
