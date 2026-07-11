@@ -39917,8 +39917,8 @@ function bindSaasAiCeoScrollIntent(chat) {
 function captureSaasAiCeoScrollState(chat) {
   if (!chat) return null;
   bindSaasAiCeoScrollIntent(chat);
-  const autoFollowInitialized = typeof state.saasAiCeoAutoFollow === "boolean";
-  if (!autoFollowInitialized) {
+  const scrollInitialized = state.saasAiCeoScrollInitialized === true;
+  if (!scrollInitialized) {
     return {
       scrollTop: chat.scrollTop,
       shouldFollow: true,
@@ -40532,9 +40532,10 @@ function syncSaasAiCeoFixedChatViewportState() {
   }
   const firstRun = thread.querySelector(".saas-ai-ceo-first-run-handoff");
   if (firstRun) firstRun.hidden = hasMessages;
-  if (typeof state.saasAiCeoAutoFollow !== "boolean") {
+  if (hasMessages && state.saasAiCeoScrollInitialized !== true) {
+    state.saasAiCeoScrollInitialized = true;
     state.saasAiCeoAutoFollow = true;
-    if (hasMessages) chat.scrollTop = chat.scrollHeight;
+    chat.scrollTop = chat.scrollHeight;
   }
 }
 
