@@ -1811,12 +1811,29 @@ def _realtime_search_query(*, kind: str, message: str) -> str:
         return f"{text} current weather official forecast"
     if kind == "news_search":
         return f"{text} latest news reliable sources"
+    if kind == "web_search" and _looks_like_platform_rule_request(
+        message=text,
+        route=AI_CEO_ROUTE_EBAY_WORKFLOW,
+    ):
+        return _ebay_platform_rule_search_query(text)
     if kind == "web_search" and _looks_like_product_selection_request(
         message=text,
         route=AI_CEO_ROUTE_EBAY_WORKFLOW,
     ):
         return _ebay_product_selection_search_query(text)
     return f"{text} reliable web sources"
+
+
+def _ebay_platform_rule_search_query(message: str) -> str:
+    text = _normalized_text(message)
+    terms = ["site:ebay.com/help", "eBay seller", "official listing policy"]
+    if any(marker in text for marker in ("主图", "图片", "image", "picture", "水印")):
+        terms.extend(["picture policy", "listing images"])
+    if any(marker in text for marker in ("item specifics", "物品属性", "商品属性")):
+        terms.extend(["item specifics", "listing requirements"])
+    if any(marker in text for marker in ("发布前", "上架前", "核对项", "刊登")):
+        terms.extend(["create listing", "seller checklist", "business policies"])
+    return " ".join(dict.fromkeys(terms))
 
 
 def _ebay_product_selection_search_query(message: str) -> str:
@@ -3069,7 +3086,7 @@ def _platform_rule_answer_quality(
         if not isinstance(item, dict):
             continue
         domain = _safe_text(item.get("domain") or _domain_from_url(str(item.get("url") or "")), limit=120).lower()
-        if domain == "ebay.com" or domain.endswith(".ebay.com") or domain.endswith(".ebaystatic.com"):
+        if _is_official_ebay_domain(domain):
             official_ids.add(_safe_text(item.get("citation_id") or f"S{index}", limit=20).upper())
     official_claim_markers = ("eBay 规定", "eBay规定", "eBay 要求", "eBay要求", "官方要求", "平台规定", "平台禁止")
     unsupported_official_claims = []
@@ -3123,6 +3140,11 @@ def _looks_like_platform_rule_request(*, message: str, route: str) -> bool:
     )
 
 
+def _is_official_ebay_domain(domain: str) -> bool:
+    normalized = _safe_text(domain, limit=120).lower().removeprefix("www.")
+    return normalized == "ebay.com" or normalized.endswith(".ebay.com") or normalized.endswith(".ebaystatic.com")
+
+
 def _looks_like_product_selection_request(*, message: str, route: str) -> bool:
     if route != AI_CEO_ROUTE_EBAY_WORKFLOW:
         return False
@@ -3156,6 +3178,24 @@ def _requested_product_candidate_count(message: str) -> int:
 
 
 def _model_answer_rejected_fallback(*, message: str, source_records: list[dict[str, Any]]) -> str:
+    if _looks_like_platform_rule_request(message=message, route=AI_CEO_ROUTE_EBAY_WORKFLOW):
+        official_sources = []
+        for index, source in enumerate(source_records[:8], start=1):
+            domain = _safe_text(source.get("domain") or _domain_from_url(str(source.get("url") or "")), limit=120)
+            if not _is_official_ebay_domain(domain):
+                continue
+            citation_id = _safe_text(source.get("citation_id") or f"S{index}", limit=20)
+            title = _safe_text(source.get("title") or source.get("url") or "eBay 官方帮助", limit=120)
+            official_sources.append(f"[{citation_id}] {title}（{domain}）")
+        source_text = "\n".join(official_sources) if official_sources else "这次搜索没有拿到足够的 eBay 官方规则来源。"
+        return (
+            "### 这次规则回答未通过来源校验\n\n"
+            "上一版把建议写成了强制规定，或没有为平台规则附上可核验的官方来源，我已经拦住这段回答。\n\n"
+            f"**你的问题：** {_safe_text(message, limit=500)}\n\n"
+            f"**eBay 官方来源：**\n{source_text}\n\n"
+            "**下一步：** 可以直接重试；系统会继续优先检索 eBay 官方帮助与政策页面，并把官方要求、平台建议和商家最佳实践分开说明。"
+            "这次不会生成 Listing 草稿，也不会触发真实发布。"
+        )
     source_lines = []
     for index, source in enumerate(source_records[:4], start=1):
         citation_id = _safe_text(source.get("citation_id") or f"S{index}", limit=20)

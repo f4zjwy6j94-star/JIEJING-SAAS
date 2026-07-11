@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas.ai_ceo_chat import (  # noqa: E402
+    _model_answer_rejected_fallback,
     _should_retry_initial_model_failure,
     _realtime_search_query,
     run_ai_ceo_chat,
@@ -141,6 +142,28 @@ def main() -> None:
     )
     assert cited_rule_quality["accepted"] is True, cited_rule_quality
     assert cited_rule_quality["citation_count"] == 1, cited_rule_quality
+
+    rule_query = _realtime_search_query(kind="web_search", message=rule_message + "，区分官方要求和商家最佳实践")
+    assert "site:ebay.com/help" in rule_query, rule_query
+    assert "official listing policy" in rule_query, rule_query
+    assert "最佳实践" not in rule_query, rule_query
+
+    rule_fallback = _model_answer_rejected_fallback(
+        message=rule_message,
+        source_records=[
+            *rule_sources,
+            {
+                "citation_id": "S3",
+                "title": "Unrelated software best practices",
+                "domain": "example.org",
+                "url": "https://example.org/software-best-practices",
+            },
+        ],
+    )
+    assert "规则回答未通过来源校验" in rule_fallback, rule_fallback
+    assert "选品要求" not in rule_fallback and "具体候选商品卡" not in rule_fallback, rule_fallback
+    assert "Unrelated software" not in rule_fallback, rule_fallback
+    assert "[S1]" in rule_fallback, rule_fallback
 
     assert _should_retry_initial_model_failure(
         failure_code="model_network_or_timeout",
