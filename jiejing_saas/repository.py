@@ -329,6 +329,20 @@ class SaaSRepository:
                   command_json text not null
                 );
 
+                create table if not exists ai_ceo_chat_turns (
+                  chat_turn_id text primary key,
+                  company_id text not null,
+                  user_id text not null,
+                  store_id text,
+                  assistant_id text not null,
+                  status text not null,
+                  route text not null,
+                  created_at text not null,
+                  updated_at text not null,
+                  turn_json text not null,
+                  unique (company_id, user_id, assistant_id)
+                );
+
                 create table if not exists execution_results (
                   execution_id text primary key,
                   confirmation_id text not null,
@@ -409,6 +423,12 @@ class SaaSRepository:
                 migration_id="20260701_media_asset_jobs",
                 checksum="jiejing-media-asset-jobs-v20260701",
                 summary="Adds provider-neutral media asset job records with idempotency, review and cost gate state.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260711_ai_ceo_account_chat_history",
+                checksum="jiejing-ai-ceo-account-chat-history-v20260711",
+                summary="Adds account-scoped, cross-device AI CEO chat history without provider secrets or raw credentials.",
             )
 
     def _initialize_postgres(self) -> None:
@@ -3094,6 +3114,120 @@ class SaaSRepository:
             "secret_exposed": False,
         }
 
+    def sync_ai_ceo_chat_history(
+        self,
+        *,
+        company_id: str,
+        user_id: str,
+        turns: list[dict[str, Any]],
+        limit: int = 30,
+    ) -> list[dict[str, Any]]:
+        """Merge a user's sanitized device history into the account timeline."""
+
+        self.initialize()
+        bounded_turns = turns[-30:] if isinstance(turns, list) else []
+        prepared_turns: list[dict[str, Any]] = []
+        for raw_turn in bounded_turns:
+            turn = _normalize_ai_ceo_chat_history_turn(raw_turn, company_id=company_id, user_id=user_id)
+            if not turn:
+                continue
+            store_id = str(turn.get("store_id") or "") or None
+            if store_id and not self.get_store_for_company(company_id=company_id, store_id=store_id):
+                turn["store_id"] = ""
+            prepared_turns.append(turn)
+        with self._connect() as conn:
+            for turn in prepared_turns:
+                store_id = str(turn.get("store_id") or "") or None
+                assistant_id = str(turn["assistant_id"])
+                chat_turn_id = _scoped_ai_ceo_chat_turn_id(
+                    company_id=company_id,
+                    user_id=user_id,
+                    assistant_id=assistant_id,
+                )
+                updated_at = now_iso()
+                payload = json.dumps(turn, ensure_ascii=False, default=json_default)
+                conn.execute(
+                    """
+                    insert into ai_ceo_chat_turns (
+                      chat_turn_id, company_id, user_id, store_id, assistant_id, status, route,
+                      created_at, updated_at, turn_json
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    on conflict (company_id, user_id, assistant_id) do update set
+                      store_id = excluded.store_id,
+                      status = excluded.status,
+                      route = excluded.route,
+                      created_at = excluded.created_at,
+                      updated_at = excluded.updated_at,
+                      turn_json = excluded.turn_json
+                    """,
+                    (
+                        chat_turn_id,
+                        company_id,
+                        user_id,
+                        store_id,
+                        assistant_id,
+                        str(turn.get("status") or "completed")[:80],
+                        str(turn.get("route") or "general_chat")[:80],
+                        str(turn.get("created_at") or updated_at)[:80],
+                        updated_at,
+                        payload,
+                    ),
+                )
+            retained_rows = conn.execute(
+                """
+                select chat_turn_id from ai_ceo_chat_turns
+                where company_id = ? and user_id = ?
+                order by created_at desc, updated_at desc, chat_turn_id desc
+                """,
+                (company_id, user_id),
+            ).fetchall()
+            for stale_row in retained_rows[50:]:
+                conn.execute(
+                    "delete from ai_ceo_chat_turns where company_id = ? and user_id = ? and chat_turn_id = ?",
+                    (company_id, user_id, stale_row["chat_turn_id"]),
+                )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=None,
+                user_id=user_id,
+                actor_type="user",
+                action_type="ai_ceo.chat_history.synced",
+                target_type="ai_ceo_account_chat_history",
+                target_id=user_id,
+                summary="Sanitized AI CEO chat turns were merged into the account-scoped cross-device timeline.",
+                details={
+                    "submitted_turn_count": len(bounded_turns),
+                    "scope": "account",
+                    "cross_store": True,
+                    "raw_provider_secret_stored": False,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                },
+            )
+        return self.list_ai_ceo_chat_history(company_id=company_id, user_id=user_id, limit=limit)
+
+    def list_ai_ceo_chat_history(
+        self,
+        *,
+        company_id: str,
+        user_id: str,
+        limit: int = 30,
+    ) -> list[dict[str, Any]]:
+        self.initialize()
+        bounded_limit = min(max(int(limit or 30), 1), 50)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select * from ai_ceo_chat_turns
+                where company_id = ? and user_id = ?
+                order by created_at desc, updated_at desc, chat_turn_id desc
+                limit ?
+                """,
+                (company_id, user_id, bounded_limit),
+            ).fetchall()
+        return [self._ai_ceo_chat_turn_row_to_dict(row) for row in reversed(rows)]
+
     def refresh_merchant_memory_from_existing_records(
         self,
         *,
@@ -3854,6 +3988,7 @@ class SaaSRepository:
             "confirmations",
             "merchant_memory",
             "merchant_ceo_commands",
+            "ai_ceo_chat_turns",
             "execution_results",
             "audit_logs",
             "billing_subscriptions",
@@ -4097,6 +4232,10 @@ class SaaSRepository:
               on merchant_ceo_commands(company_id, store_id, updated_at);
             create index if not exists idx_merchant_ceo_commands_company_route_updated
               on merchant_ceo_commands(company_id, route, updated_at);
+            create index if not exists idx_ai_ceo_chat_turns_account_created
+              on ai_ceo_chat_turns(company_id, user_id, created_at);
+            create index if not exists idx_ai_ceo_chat_turns_account_store_created
+              on ai_ceo_chat_turns(company_id, user_id, store_id, created_at);
             create index if not exists idx_execution_results_task_created
               on execution_results(task_id, created_at);
             create index if not exists idx_audit_logs_company_created
@@ -4575,6 +4714,20 @@ class SaaSRepository:
             "secret_exposed": False,
         }
 
+    def _ai_ceo_chat_turn_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        payload = _load_json_field(row["turn_json"])
+        turn = _normalize_ai_ceo_chat_history_turn(
+            payload if isinstance(payload, dict) else {},
+            company_id=str(row["company_id"] or ""),
+            user_id=str(row["user_id"] or ""),
+        )
+        if not turn:
+            return {}
+        turn["store_id"] = str(row["store_id"] or turn.get("store_id") or "")
+        turn["created_at"] = str(row["created_at"] or turn.get("created_at") or "")
+        turn["secret_exposed"] = False
+        return turn
+
     def _connection_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
             "connection_id": row["connection_id"],
@@ -4785,6 +4938,7 @@ SAFE_SECRET_FLAG_KEYS = {
     "raw_key_stored_in_database",
     "jiejing_stores_only_secret_ref",
     "secret_value_returned",
+    "raw_provider_secret_stored",
 }
 
 
@@ -4818,6 +4972,119 @@ def _sanitize_merchant_ceo_text(value: Any, *, limit: int = 600) -> str:
     for pattern, replacement in replacements:
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     return text[:limit]
+
+
+def _scoped_ai_ceo_chat_turn_id(*, company_id: str, user_id: str, assistant_id: str) -> str:
+    digest = hashlib.sha256(f"{company_id}|{user_id}|{assistant_id}".encode("utf-8")).hexdigest()[:32]
+    return f"ceo_turn_{digest}"
+
+
+def _normalize_ai_ceo_chat_history_turn(
+    value: Any,
+    *,
+    company_id: str,
+    user_id: str,
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict) or value.get("pending") is True:
+        return None
+    user_text = _sanitize_merchant_ceo_text(value.get("user_text") or value.get("userText"), limit=900)
+    assistant_text = _sanitize_merchant_ceo_text(value.get("assistant_text") or value.get("assistantText"), limit=6000)
+    if not user_text and not assistant_text:
+        return None
+    raw_assistant_id = re.sub(r"[^A-Za-z0-9_-]", "", str(value.get("assistant_id") or value.get("assistantId") or ""))[:120]
+    if not raw_assistant_id:
+        seed = f"{value.get('created_at') or ''}|{user_text}|{assistant_text}"
+        raw_assistant_id = f"turn-{hashlib.sha256(seed.encode('utf-8')).hexdigest()[:24]}"
+
+    def clean_records(items: Any, *, record_type: str) -> list[dict[str, Any]]:
+        if not isinstance(items, list):
+            return []
+        cleaned: list[dict[str, Any]] = []
+        for item in items[:5]:
+            if not isinstance(item, dict):
+                continue
+            if record_type == "source":
+                cleaned.append(
+                    {
+                        "title": _sanitize_merchant_ceo_text(item.get("title") or item.get("domain"), limit=160),
+                        "url": _sanitize_merchant_ceo_text(item.get("url"), limit=500),
+                        "domain": _sanitize_merchant_ceo_text(item.get("domain"), limit=120),
+                        "snippet": _sanitize_merchant_ceo_text(item.get("snippet"), limit=220),
+                        "captured_at": str(item.get("captured_at") or "")[:80],
+                        "source_type": _sanitize_merchant_ceo_text(item.get("source_type") or "live_public_search", limit=80),
+                    }
+                )
+            elif record_type == "work":
+                cleaned.append(
+                    {
+                        "title": _sanitize_merchant_ceo_text(item.get("title"), limit=120),
+                        "summary": _sanitize_merchant_ceo_text(item.get("summary") or item.get("next_step"), limit=260),
+                        "status": str(item.get("status") or "")[:60],
+                        "work_record_type": str(item.get("work_record_type") or "")[:80],
+                        "source_record_count": int(item.get("source_record_count") or 0),
+                        "captured_at": str(item.get("captured_at") or "")[:80],
+                    }
+                )
+            else:
+                cleaned.append(
+                    {
+                        "title": _sanitize_merchant_ceo_text(item.get("title"), limit=120),
+                        "summary": _sanitize_merchant_ceo_text(item.get("summary"), limit=260),
+                        "status": str(item.get("status") or "")[:60],
+                        "action_type": str(item.get("action_type") or "")[:80],
+                        "is_actionable": bool(item.get("is_actionable")),
+                        "requires_confirmation_center_before_execution": bool(
+                            item.get("requires_confirmation_center_before_execution") or item.get("requires_confirmation_center")
+                        ),
+                        "real_write_allowed_without_confirmation": False,
+                        "source_record_count": int(item.get("source_record_count") or 0),
+                    }
+                )
+        return cleaned
+
+    delivery = value.get("market_report_delivery") if isinstance(value.get("market_report_delivery"), dict) else {}
+    normalized = {
+        "assistant_id": raw_assistant_id,
+        "store_id": re.sub(r"[^A-Za-z0-9_-]", "", str(value.get("store_id") or ""))[:120],
+        "user_text": user_text,
+        "assistant_text": assistant_text,
+        "status": str(value.get("status") or "completed")[:80],
+        "route": str(value.get("route") or "general_chat")[:80],
+        "route_label": _sanitize_merchant_ceo_text(value.get("route_label"), limit=120),
+        "memory_policy": str(value.get("memory_policy") or "")[:80],
+        "long_term_memory": bool(value.get("long_term_memory")),
+        "writes_merchant_rule": bool(value.get("writes_merchant_rule")),
+        "decision_center_required": bool(value.get("decision_center_required")),
+        "market_report_id": re.sub(r"[^A-Za-z0-9_-]", "", str(value.get("market_report_id") or ""))[:120],
+        "market_report_delivery": {
+            "report_id": re.sub(r"[^A-Za-z0-9_-]", "", str(delivery.get("report_id") or ""))[:120],
+            "report_type": str(delivery.get("report_type") or "")[:80],
+            "status": str(delivery.get("status") or "")[:80],
+            "title": _sanitize_merchant_ceo_text(delivery.get("title"), limit=180),
+            "product": _sanitize_merchant_ceo_text(delivery.get("product"), limit=120),
+            "created_at": str(delivery.get("created_at") or "")[:80],
+            "structured_report_saved": bool(delivery.get("structured_report_saved")),
+            "listing_import_ready": bool(delivery.get("listing_import_ready")),
+            "source_record_count": int(delivery.get("source_record_count") or 0),
+            "requires_human_review_before_publish": True,
+            "triggers_real_platform_write": False,
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        }
+        if delivery
+        else None,
+        "blocked_by": [str(item)[:80] for item in value.get("blocked_by", [])[:8]] if isinstance(value.get("blocked_by"), list) else [],
+        "source_records": clean_records(value.get("source_records"), record_type="source"),
+        "work_records": clean_records(value.get("work_records"), record_type="work"),
+        "confirmation_items": clean_records(value.get("confirmation_items"), record_type="confirmation"),
+        "created_at": str(value.get("created_at") or now_iso())[:80],
+        "account_scope": "account",
+        "cross_store": True,
+        "raw_provider_secret_stored": False,
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+    return _redact_secret_like(normalized)
 
 
 def _looks_like_ai_ceo_market_research_turn(*, message: str, chat: dict[str, Any]) -> bool:

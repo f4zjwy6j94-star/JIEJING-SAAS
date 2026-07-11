@@ -37,6 +37,7 @@ JSON_COLUMNS = {
     "input_json",
     "memory_json",
     "command_json",
+    "turn_json",
     "tags_json",
 }
 

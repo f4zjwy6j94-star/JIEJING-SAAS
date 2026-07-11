@@ -128,6 +128,46 @@ def main() -> int:
     for marker in ["state.saasAiCeoLatestTurn", "turns[turns.length - 1]", "shouldKeepSaasAiCeoThreadTurn"]:
         require(latest_sync_body, marker, "AI CEO latest turn sync")
 
+    backend_history_body = function_body(app_js, "saasAiCeoThreadForBackendSync")
+    for marker in [
+        "!turn.pending",
+        "turn.user_text && turn.assistant_text",
+        "store_id: turn.store_id || currentStoreId",
+        "model_resolution: null",
+        "model_connection: null",
+    ]:
+        require(backend_history_body, marker, "account history backend-safe turn packet")
+
+    merge_history_body = function_body(app_js, "mergeSaasAiCeoHistoryFromBackend")
+    for marker in [
+        "payload?.ai_ceo_chat_history",
+        "uniqueSaasAiCeoThreadTurns",
+        'history.scope === "account"',
+        "history.cross_store === true",
+        "persistSaasAiCeoThread({ syncBackend: false })",
+    ]:
+        require(merge_history_body, marker, "cross-device backend history merge")
+
+    sync_history_body = function_body(app_js, "syncSaasAiCeoThreadWithBackend")
+    for marker in [
+        '"/ai-ceo/chat-history/sync"',
+        'method: "POST"',
+        "saasAiCeoThreadForBackendSync()",
+        "mergeSaasAiCeoHistoryFromBackend(payload)",
+    ]:
+        require(sync_history_body, marker, "account history backend sync")
+
+    cloud_dom_body = function_body(app_js, "syncSaasAiCeoCloudDomState")
+    for marker in [
+        ".saas-ai-ceo-thread",
+        'state.saasAiCeoThreadCloudReady ? "account" : "local"',
+        "thread.dataset.aiCeoHistoryScope",
+    ]:
+        require(cloud_dom_body, marker, "non-sensitive cloud history browser proof")
+
+    viewport_body = function_body(app_js, "syncSaasAiCeoFixedChatViewportState")
+    require(viewport_body, "syncSaasAiCeoCloudDomState()", "cloud history marker after chat rerender")
+
     snapshot_body = function_body(app_js, "hydrateSaasProtectedStateFromCache")
     for marker in ["state.saasLastCeoCommand = null", "state.saasAiCeoThread = []", "state.saasAiCeoLatestTurn = null"]:
         require(snapshot_body, marker, "cached snapshot must not prehydrate AI CEO chat")
@@ -143,6 +183,9 @@ def main() -> int:
         "state.saasProtectedStateFromCache = false",
         "loadSaasLastCeoCommand()",
         "loadSaasAiCeoThread()",
+        'optionalSaasFetchFast("/ai-ceo/chat-history?limit=30"',
+        "coreCeoChatHistory.ai_ceo_chat_history.turns",
+        "scheduleSaasAiCeoThreadBackendSync(0)",
     ]:
         require(refresh_body, marker, "backend-confirmed account gate before AI CEO hydration")
 

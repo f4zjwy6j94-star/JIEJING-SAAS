@@ -115,6 +115,7 @@ EXPENSIVE_API_RATE_LIMIT_PREFIXES = (
     "ip-risk-screening",
     "merchant-memory",
     "merchant-ceo-commands",
+    "ai-ceo/",
     "queue-jobs",
     "media-asset-jobs",
     "workers/",
@@ -763,6 +764,29 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         memory_type=memory_type,
                         limit=limit,
                     )
+                }
+            )
+            return
+
+        if path == "ai-ceo/chat-history":
+            limit = _query_limit(query, default=30, maximum=50) or 30
+            turns = self.repository.list_ai_ceo_chat_history(
+                company_id=identity["company_id"],
+                user_id=identity["user_id"],
+                limit=limit,
+            )
+            self._send_json(
+                {
+                    "ai_ceo_chat_history": {
+                        "scope": "account",
+                        "cross_store": True,
+                        "turns": turns,
+                        "turn_count": len(turns),
+                        "raw_provider_secret_stored": False,
+                        "frontend_gets_model_api_key": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    }
                 }
             )
             return
@@ -3197,6 +3221,35 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._send_json({"merchant_ceo_command": command, **command}, status=HTTPStatus.CREATED)
             return
 
+        if path == "ai-ceo/chat-history/sync":
+            if not self._require_permission(identity, "create_task"):
+                return
+            body = self._read_json_body()
+            turns = body.get("turns") if isinstance(body.get("turns"), list) else []
+            history = self.repository.sync_ai_ceo_chat_history(
+                company_id=identity["company_id"],
+                user_id=identity["user_id"],
+                turns=turns,
+                limit=30,
+            )
+            self._send_json(
+                {
+                    "ai_ceo_chat_history": {
+                        "scope": "account",
+                        "cross_store": True,
+                        "turns": history,
+                        "turn_count": len(history),
+                        "submitted_turn_count": min(len(turns), 30),
+                        "raw_provider_secret_stored": False,
+                        "frontend_gets_model_api_key": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    }
+                },
+                status=HTTPStatus.CREATED,
+            )
+            return
+
         if path == "tasks/product-workflow":
             if not self._require_permission(identity, "create_task"):
                 return
@@ -4219,6 +4272,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "merchant-ceo-commands",
                 "AI CEO command persistence",
                 ["GET /stores/{store_id}/merchant-ceo/commands/latest", "POST /stores/{store_id}/merchant-ceo/commands"],
+            ),
+            (
+                "ai-ceo",
+                "account-scoped AI CEO cross-device chat history",
+                ["GET /ai-ceo/chat-history", "POST /ai-ceo/chat-history/sync"],
             ),
             ("confirmations", "decision-center actions and preflight", ["GET /confirmations", "POST /confirmations/{id}/preflight"]),
             ("execution-results", "execution audit and recovery evidence", ["GET /execution-results"]),

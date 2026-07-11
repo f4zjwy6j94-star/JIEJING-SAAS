@@ -253,6 +253,20 @@ create table if not exists merchant_ceo_commands (
   command_json jsonb not null
 );
 
+create table if not exists ai_ceo_chat_turns (
+  chat_turn_id text primary key,
+  company_id text not null references companies(company_id),
+  user_id text not null references users(user_id),
+  store_id text references stores(store_id),
+  assistant_id text not null,
+  status text not null,
+  route text not null,
+  created_at timestamptz not null,
+  updated_at timestamptz not null,
+  turn_json jsonb not null,
+  unique (company_id, user_id, assistant_id)
+);
+
 create table if not exists execution_results (
   execution_id text primary key,
   confirmation_id text not null references confirmations(confirmation_id),
@@ -323,6 +337,8 @@ create index if not exists idx_merchant_memory_company_type_created on merchant_
 create index if not exists idx_merchant_memory_source on merchant_memory(company_id, source_type, source_id);
 create index if not exists idx_merchant_ceo_commands_company_store_updated on merchant_ceo_commands(company_id, store_id, updated_at);
 create index if not exists idx_merchant_ceo_commands_company_route_updated on merchant_ceo_commands(company_id, route, updated_at);
+create index if not exists idx_ai_ceo_chat_turns_account_created on ai_ceo_chat_turns(company_id, user_id, created_at);
+create index if not exists idx_ai_ceo_chat_turns_account_store_created on ai_ceo_chat_turns(company_id, user_id, store_id, created_at);
 create index if not exists idx_execution_results_task_created on execution_results(task_id, created_at);
 create index if not exists idx_audit_logs_company_created on audit_logs(company_id, created_at);
 create index if not exists idx_audit_logs_target on audit_logs(target_type, target_id, created_at);
@@ -359,6 +375,14 @@ values (
   '20260701_media_asset_jobs',
   'jiejing-media-asset-jobs-v20260701',
   'Adds provider-neutral media asset job records with idempotency, review and cost gate state.'
+)
+on conflict (migration_id) do nothing;
+
+insert into schema_migrations (migration_id, checksum, summary)
+values (
+  '20260711_ai_ceo_account_chat_history',
+  'jiejing-ai-ceo-account-chat-history-v20260711',
+  'Adds account-scoped, cross-device AI CEO chat history without provider secrets or raw credentials.'
 )
 on conflict (migration_id) do nothing;
 

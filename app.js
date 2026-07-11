@@ -114,6 +114,9 @@ const state = {
   saasLastCeoCommand: null,
   saasAiCeoLatestTurn: null,
   saasAiCeoThread: [],
+  saasAiCeoThreadCloudReady: false,
+  saasAiCeoThreadSyncPromise: null,
+  saasAiCeoThreadSyncTimer: null,
   saasLastAiCeoMarketResearchTurn: null,
   saasLastCeoCommandPersistPromise: null,
   saasLastCeoCommandHydratePromise: null,
@@ -15543,9 +15546,9 @@ function recordOptionalSaasSoftTimeout(path, timeoutMs) {
   ].slice(0, 20);
 }
 
-async function optionalSaasFetchFast(path, fallback, timeoutMs = 5000) {
+async function optionalSaasFetchFast(path, fallback, timeoutMs = 5000, options = {}) {
   const fallbackValue = (error) => (typeof fallback === "function" ? fallback(error) : fallback);
-  const request = saasFetch(path).catch((error) => {
+  const request = saasFetch(path, options).catch((error) => {
     console.warn(`[JIEJING optional API skipped] ${path}: ${error.message}`);
     return fallbackValue(error);
   });
@@ -15862,6 +15865,7 @@ function hydrateSaasProtectedStateFromCache() {
     state.saasLastCeoCommand = null;
     state.saasAiCeoThread = [];
     state.saasAiCeoLatestTurn = null;
+    state.saasAiCeoThreadCloudReady = false;
     state.saasConnected = Boolean(snapshot.connected || state.saasToken || hasSaasPersistentSessionHint());
     state.saasProtectedStateReady = true;
     state.saasProtectedStateFromCache = true;
@@ -15883,6 +15887,11 @@ function clearSaasSessionFromStorage(options = {}) {
     : [];
   const activeLatestTurn = preserveCeoThread ? normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn) : null;
   state.saasToken = "";
+  state.saasAiCeoThreadCloudReady = false;
+  if (state.saasAiCeoThreadSyncTimer && typeof window !== "undefined") {
+    window.clearTimeout(state.saasAiCeoThreadSyncTimer);
+    state.saasAiCeoThreadSyncTimer = null;
+  }
   try {
     sessionStorage.removeItem(saasStorageKeys.token);
     localStorage.removeItem(saasStorageKeys.sessionHint);
@@ -15949,6 +15958,7 @@ function rememberSaasAuthAccount(session = {}, fallbackEmail = "") {
     email ||
     "";
   if (!accountKey) return;
+  state.saasAiCeoThreadCloudReady = false;
   try {
     localStorage.setItem(saasStorageKeys.lastAccount, String(accountKey).toLowerCase());
     const normalizedKey = String(accountKey).toLowerCase();
@@ -16200,6 +16210,7 @@ function resetSaasProtectedWorkbenchState() {
   state.saasAuditLogs = [];
   state.saasLastPublicSearchHandoff = null;
   state.saasSourceRecords = [];
+  state.saasAiCeoThreadCloudReady = false;
 }
 
 function storedSaasStoreId() {
@@ -24998,6 +25009,7 @@ async function refreshSaasState(options = {}) {
       coreModelSettings,
       coreDataPackets,
       coreCeoCommandMemory,
+      coreCeoChatHistory,
     ] = await Promise.all([
       saasFetch("/me"),
       saasFetch("/permissions/me"),
@@ -25013,6 +25025,9 @@ async function refreshSaasState(options = {}) {
         command: null,
         source_record: null,
         secret_exposed: false,
+      }, 10000),
+      optionalSaasFetchFast("/ai-ceo/chat-history?limit=30", {
+        ai_ceo_chat_history: { scope: "unavailable", cross_store: false, turns: [] },
       }, 10000),
     ]);
     state.saasIdentity = coreMe.identity || null;
@@ -25049,7 +25064,12 @@ async function refreshSaasState(options = {}) {
       ...loadSaasAiCeoThread(),
       ...(shouldPreserveActiveCeoState ? activeCeoThreadBeforeRefresh : []),
       ...activeCeoThreadAtCoreApply,
+      ...(Array.isArray(coreCeoChatHistory?.ai_ceo_chat_history?.turns) ? coreCeoChatHistory.ai_ceo_chat_history.turns : []),
     ]).slice(-30);
+    state.saasAiCeoThreadCloudReady =
+      coreCeoChatHistory?.ai_ceo_chat_history?.scope === "account" &&
+      coreCeoChatHistory?.ai_ceo_chat_history?.cross_store === true;
+    syncSaasAiCeoCloudDomState();
     state.saasAiCeoLatestTurn =
       activeLatestTurnAtCoreApply ||
       (shouldPreserveActiveCeoState ? activeLatestTurnBeforeRefresh : null) ||
@@ -25058,6 +25078,8 @@ async function refreshSaasState(options = {}) {
       persistSaasLastCeoCommand(state.saasLastCeoCommand);
       recordSaasCeoCommandSourceRecord(state.saasLastCeoCommand);
     }
+    persistSaasAiCeoThread({ syncBackend: false });
+    scheduleSaasAiCeoThreadBackendSync(0);
     state.saasProtectedStateReady = true;
     saveSaasProtectedStateSnapshot();
     state.saasLoading = false;
@@ -39204,6 +39226,7 @@ function normalizeSaasAiCeoLatestTurn(turn = {}) {
     assistant_id: assistantId,
     pending: Boolean(turn.pending),
     pending_stage: String(turn.pending_stage || turn.pendingStage || ""),
+    store_id: String(turn.store_id || turn.storeId || "").replace(/[^A-Za-z0-9_-]/g, ""),
     model: turn.model && typeof turn.model === "object" ? turn.model : null,
     route: String(turn.route || ""),
     route_label: publicRuntimeText(turn.route_label || ""),
@@ -39403,7 +39426,8 @@ function syncSaasAiCeoLatestTurnFromThread() {
   return state.saasAiCeoLatestTurn;
 }
 
-function persistSaasAiCeoThread() {
+function persistSaasAiCeoThread(options = {}) {
+  const { syncBackend = true } = options;
   if (!shouldReadSaasAccountScopedLocalCache()) return false;
   try {
     const payload = JSON.parse(localStorage.getItem(saasStorageKeys.ceoThread) || "{}");
@@ -39412,10 +39436,89 @@ function persistSaasAiCeoThread() {
       .filter(shouldKeepSaasAiCeoThreadTurn)
       .slice(-30);
     localStorage.setItem(saasStorageKeys.ceoThread, JSON.stringify(payload));
+    if (syncBackend) scheduleSaasAiCeoThreadBackendSync();
     return true;
   } catch (error) {
     return false;
   }
+}
+
+function saasAiCeoThreadForBackendSync() {
+  const currentStoreId = activeSaasStore()?.store_id || "";
+  return uniqueSaasAiCeoThreadTurns(state.saasAiCeoThread || [])
+    .filter((turn) => turn && !turn.pending && turn.user_text && turn.assistant_text)
+    .slice(-30)
+    .map((turn) => ({
+      ...turn,
+      store_id: turn.store_id || currentStoreId,
+      model: null,
+      model_resolution: null,
+      model_connection: null,
+      source_policy: null,
+      secret_exposed: false,
+    }));
+}
+
+function mergeSaasAiCeoHistoryFromBackend(payload = {}, options = {}) {
+  const { render = true } = options;
+  const history = payload?.ai_ceo_chat_history && typeof payload.ai_ceo_chat_history === "object"
+    ? payload.ai_ceo_chat_history
+    : {};
+  const backendTurns = Array.isArray(history.turns)
+    ? history.turns.map(normalizeSaasAiCeoLatestTurn).filter(shouldKeepSaasAiCeoThreadTurn)
+    : [];
+  state.saasAiCeoThread = uniqueSaasAiCeoThreadTurns([...(state.saasAiCeoThread || []), ...backendTurns]).slice(-30);
+  state.saasAiCeoThreadCloudReady = history.scope === "account" && history.cross_store === true;
+  syncSaasAiCeoCloudDomState();
+  syncSaasAiCeoLatestTurnFromThread();
+  persistSaasAiCeoThread({ syncBackend: false });
+  if (render) {
+    const chat = document.querySelector("#ceoChat");
+    if (chat) {
+      setJiejingTrustedHtml(
+        chat,
+        trustedJiejingHtml(renderSaasAiCeoThreadMarkup(state.saasAiCeoLatestTurn), "ai_ceo.thread.account_cloud_sync"),
+      );
+      syncSaasAiCeoFixedChatViewportState();
+    }
+  }
+  return state.saasAiCeoThread;
+}
+
+function syncSaasAiCeoCloudDomState() {
+  const thread = document.querySelector(".saas-ai-ceo-thread");
+  if (!thread) return false;
+  thread.dataset.aiCeoHistoryScope = state.saasAiCeoThreadCloudReady ? "account" : "local";
+  return true;
+}
+
+async function syncSaasAiCeoThreadWithBackend() {
+  if (!hasSaasProtectedSessionCandidate() || !shouldReadSaasAccountScopedLocalCache()) return null;
+  if (state.saasAiCeoThreadSyncPromise) return state.saasAiCeoThreadSyncPromise;
+  state.saasAiCeoThreadSyncPromise = optionalSaasFetchFast(
+    "/ai-ceo/chat-history/sync",
+    { ai_ceo_chat_history: { scope: "unavailable", cross_store: false, turns: [] } },
+    12000,
+    {
+      method: "POST",
+      body: JSON.stringify({ turns: saasAiCeoThreadForBackendSync() }),
+    },
+  )
+    .then((payload) => mergeSaasAiCeoHistoryFromBackend(payload))
+    .finally(() => {
+      state.saasAiCeoThreadSyncPromise = null;
+    });
+  return state.saasAiCeoThreadSyncPromise;
+}
+
+function scheduleSaasAiCeoThreadBackendSync(delay = 450) {
+  if (typeof window === "undefined" || !hasSaasProtectedSessionCandidate()) return false;
+  if (state.saasAiCeoThreadSyncTimer) window.clearTimeout(state.saasAiCeoThreadSyncTimer);
+  state.saasAiCeoThreadSyncTimer = window.setTimeout(() => {
+    state.saasAiCeoThreadSyncTimer = null;
+    syncSaasAiCeoThreadWithBackend();
+  }, Math.max(0, Number(delay) || 0));
+  return true;
 }
 
 function hydrateSaasCeoAccountScopedLocalState() {
@@ -39873,6 +39976,7 @@ function syncSaasAiCeoFixedChatViewportState() {
   const thread = document.querySelector(".saas-ai-ceo-thread");
   const chat = document.querySelector("#ceoChat");
   if (!thread || !chat) return;
+  syncSaasAiCeoCloudDomState();
   const hasMessages = Boolean(chat.querySelector(".message"));
   thread.classList.toggle("has-chat-messages", hasMessages);
   const intro = thread.querySelector(".saas-ai-ceo-thread-intro");
