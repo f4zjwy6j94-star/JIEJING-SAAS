@@ -39915,6 +39915,34 @@ body.saas-public-mvp .saas-settings-clean-content {
   overflow: auto;
 }
 
+body.saas-public-mvp .saas-ai-ceo-history-more {
+  display: flex;
+  justify-content: center;
+  padding: 6px 0 14px;
+}
+
+body.saas-public-mvp .saas-ai-ceo-history-more button {
+  border: 0;
+  background: transparent;
+  color: #006f67;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 4px 8px;
+}
+
+body.saas-public-mvp .saas-ai-ceo-history-more button:hover,
+body.saas-public-mvp .saas-ai-ceo-history-more button:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+body.saas-public-mvp .saas-ai-ceo-history-more span {
+  color: #687b76;
+  font-weight: 600;
+}
+
 body.saas-public-mvp .saas-settings-clean-content > header {
   display: grid;
   gap: 8px;

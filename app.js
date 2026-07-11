@@ -114,6 +114,7 @@ const state = {
   saasLastCeoCommand: null,
   saasAiCeoLatestTurn: null,
   saasAiCeoThread: [],
+  saasAiCeoVisibleTurnLimit: 12,
   saasAiCeoThreadCloudReady: false,
   saasAiCeoThreadSyncPromise: null,
   saasAiCeoThreadSyncTimer: null,
@@ -16108,6 +16109,7 @@ function hydrateSaasProtectedStateFromCache() {
     state.saasAccountHealth = snapshot.account_health || state.saasAccountHealth || null;
     state.saasLastCeoCommand = null;
     state.saasAiCeoThread = [];
+    state.saasAiCeoVisibleTurnLimit = 12;
     state.saasAiCeoLatestTurn = null;
     state.saasAiCeoThreadCloudReady = false;
     state.saasConnected = Boolean(snapshot.connected || state.saasToken || hasSaasPersistentSessionHint());
@@ -39899,6 +39901,8 @@ function saasAiCeoThreadForBackendSync() {
 }
 
 const SAAS_AI_CEO_BOTTOM_FOLLOW_THRESHOLD = 96;
+const SAAS_AI_CEO_INITIAL_VISIBLE_TURNS = 12;
+const SAAS_AI_CEO_LOAD_OLDER_STEP = 8;
 
 function isSaasAiCeoChatNearBottom(chat) {
   if (!chat) return true;
@@ -39960,6 +39964,39 @@ function restoreSaasAiCeoScrollState(chat, snapshot = null, options = {}) {
   }
   if (snapshot && Number.isFinite(snapshot.scrollTop)) chat.scrollTop = snapshot.scrollTop;
   state.saasAiCeoAutoFollow = false;
+}
+
+function revealOlderSaasAiCeoTurns(chat) {
+  if (!chat) return;
+  const turns = (state.saasAiCeoThread || []).map(normalizeSaasAiCeoLatestTurn).filter(shouldKeepSaasAiCeoThreadTurn);
+  const currentLimit = Math.max(SAAS_AI_CEO_INITIAL_VISIBLE_TURNS, Number(state.saasAiCeoVisibleTurnLimit || 0));
+  if (currentLimit >= turns.length) return;
+  const previousHeight = chat.scrollHeight;
+  const previousTop = chat.scrollTop;
+  state.saasAiCeoVisibleTurnLimit = Math.min(turns.length, currentLimit + SAAS_AI_CEO_LOAD_OLDER_STEP);
+  state.saasAiCeoAutoFollow = false;
+  setJiejingTrustedHtml(
+    chat,
+    trustedJiejingHtml(renderSaasAiCeoThreadMarkup(state.saasAiCeoLatestTurn), "ai_ceo.thread.load_older"),
+  );
+  syncSaasAiCeoFixedChatViewportState();
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      chat.scrollTop = previousTop + Math.max(0, chat.scrollHeight - previousHeight);
+      state.saasAiCeoAutoFollow = false;
+    });
+  });
+}
+
+function bindSaasAiCeoHistoryControls(chat) {
+  if (!chat || chat.dataset.historyControlsBound === "true") return;
+  chat.dataset.historyControlsBound = "true";
+  chat.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-ceo-load-older]");
+    if (!button || !chat.contains(button)) return;
+    event.preventDefault();
+    revealOlderSaasAiCeoTurns(chat);
+  });
 }
 
 function mergeSaasAiCeoHistoryFromBackend(payload = {}, options = {}) {
@@ -40113,7 +40150,15 @@ function renderSaasAiCeoThreadMarkup(fallbackTurn = null) {
     const hasFallback = turns.some((item) => (item.assistant_id || `${item.user_text}|${item.assistant_text}`) === fallbackKey);
     if (!hasFallback) turns = [...turns, fallback].slice(-30);
   }
-  return turns.map((turn) => renderSaasAiCeoChatTurnMarkup(turn)).join("");
+  const visibleLimit = Math.max(SAAS_AI_CEO_INITIAL_VISIBLE_TURNS, Number(state.saasAiCeoVisibleTurnLimit || 0));
+  const hiddenTurnCount = Math.max(0, turns.length - visibleLimit);
+  const visibleTurns = turns.slice(-visibleLimit);
+  const olderControl = hiddenTurnCount
+    ? `<div class="saas-ai-ceo-history-more">
+        <button type="button" data-ceo-load-older>查看更早对话 <span>${hiddenTurnCount}</span></button>
+      </div>`
+    : "";
+  return olderControl + visibleTurns.map((turn) => renderSaasAiCeoChatTurnMarkup(turn)).join("");
 }
 
 function saasAiCeoTurnStatusLabel(latest = {}) {
@@ -40539,6 +40584,7 @@ function syncSaasAiCeoFixedChatViewportState() {
   const chat = document.querySelector("#ceoChat");
   if (!thread || !chat) return;
   bindSaasAiCeoScrollIntent(chat);
+  bindSaasAiCeoHistoryControls(chat);
   syncSaasAiCeoCloudDomState();
   const hasMessages = Boolean(chat.querySelector(".message"));
   thread.classList.toggle("has-chat-messages", hasMessages);

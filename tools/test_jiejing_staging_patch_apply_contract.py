@@ -170,6 +170,7 @@ def main() -> int:
         "tools/test_jiejing_media_asset_jobs.py",
         "tools/test_jiejing_expensive_api_rate_limit.py",
         "tools/test_jiejing_ai_ceo_scroll_retention.py",
+        "tools/test_jiejing_ai_ceo_history_pagination.py",
         "tools/test_jiejing_billing_quota_guardrail.py",
         "tools/test_jiejing_session_revocation.py",
         "tools/test_jiejing_platform_authorization_strategy.py",

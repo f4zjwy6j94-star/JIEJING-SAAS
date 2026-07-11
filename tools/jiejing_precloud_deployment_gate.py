@@ -38,6 +38,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("media_asset_jobs", [sys.executable, "tools/test_jiejing_media_asset_jobs.py"]),
     ("ai_ceo_cross_device_history", [sys.executable, "tools/test_jiejing_ai_ceo_cross_device_history.py"]),
     ("ai_ceo_scroll_retention", [sys.executable, "tools/test_jiejing_ai_ceo_scroll_retention.py"]),
+    ("ai_ceo_history_pagination", [sys.executable, "tools/test_jiejing_ai_ceo_history_pagination.py"]),
     ("ai_ceo_cross_device_refresh", [sys.executable, "tools/test_jiejing_ai_ceo_cross_device_refresh_contract.py"]),
     ("bulk_partial_success", [sys.executable, "tools/test_jiejing_bulk_partial_success_contract.py"]),
     ("external_launch_blocker_gate", [sys.executable, "tools/test_jiejing_external_launch_blocker_gate.py"]),
