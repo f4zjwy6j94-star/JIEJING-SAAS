@@ -39917,6 +39917,13 @@ function bindSaasAiCeoScrollIntent(chat) {
 function captureSaasAiCeoScrollState(chat) {
   if (!chat) return null;
   bindSaasAiCeoScrollIntent(chat);
+  const autoFollowInitialized = typeof state.saasAiCeoAutoFollow === "boolean";
+  if (!autoFollowInitialized) {
+    return {
+      scrollTop: chat.scrollTop,
+      shouldFollow: true,
+    };
+  }
   const nearBottom = isSaasAiCeoChatNearBottom(chat);
   if (!nearBottom) state.saasAiCeoAutoFollow = false;
   return {

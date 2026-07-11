@@ -33,6 +33,7 @@ def main() -> int:
         "bindSaasAiCeoScrollIntent",
         "captureSaasAiCeoScrollState",
         "restoreSaasAiCeoScrollState",
+        "autoFollowInitialized",
         "state.saasAiCeoAutoFollow = false",
     ]
     for marker in required_markers:
