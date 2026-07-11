@@ -21242,12 +21242,26 @@ function renderSaasAiCeoRecoveryHintMarkup(turn = {}) {
   `;
 }
 
+const saasAiCeoMarketImportTargets = new Map();
+
+function rememberSaasAiCeoMarketImportTarget(turn = {}) {
+  const latest = normalizeSaasAiCeoLatestTurn(turn);
+  if (!latest) return null;
+  if (latest.assistant_id) saasAiCeoMarketImportTargets.set(`assistant:${latest.assistant_id}`, latest);
+  if (latest.market_report_id) saasAiCeoMarketImportTargets.set(`report:${latest.market_report_id}`, latest);
+  while (saasAiCeoMarketImportTargets.size > 80) {
+    saasAiCeoMarketImportTargets.delete(saasAiCeoMarketImportTargets.keys().next().value);
+  }
+  return latest;
+}
+
 function renderSaasAiCeoListingHandoffMarkup(turn = {}) {
   const eligibility = saasAiCeoMarketResearchEligibility(turn);
   if (!eligibility.eligible) return "";
   const latest = eligibility.latest;
   const product = saasAiCeoMarketProductLabel(latest) || "这次调研";
   const sourceCount = normalizeSaasAiCeoSourceRecords(latest.source_records || []).length;
+  rememberSaasAiCeoMarketImportTarget(latest);
   return `
     <div class="saas-ai-ceo-listing-handoff" data-ai-ceo-market-handoff="ai_ceo_market_to_listing_cta_v1">
       <div>
@@ -21269,6 +21283,7 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
     saasAiCeoMarketProductLabel(latest) ||
     delivery.title ||
     "这次市场调研";
+  rememberSaasAiCeoMarketImportTarget(latest);
   const sourceCopy = delivery.source_record_count ? `已带 ${delivery.source_record_count} 条公开来源；` : "";
   return `
     <div class="saas-ai-ceo-market-report-delivery" data-ai-ceo-market-report-delivery="ai_ceo_market_report_delivery_v1" data-report-id="${escapeHtml(delivery.report_id)}">
@@ -26875,6 +26890,10 @@ function saasAiCeoMarketResearchTurnForImport(source = null) {
   const expectedProduct = String(source?.dataset?.productName || "").trim();
   if (!reportId && !assistantId) return null;
   const candidates = [];
+  const rememberedAssistant = assistantId ? saasAiCeoMarketImportTargets.get(`assistant:${assistantId}`) : null;
+  const rememberedReport = reportId ? saasAiCeoMarketImportTargets.get(`report:${reportId}`) : null;
+  if (rememberedAssistant) candidates.push(rememberedAssistant);
+  if (rememberedReport && rememberedReport !== rememberedAssistant) candidates.push(rememberedReport);
   if (reportId) {
     const record = (state.saasReports || []).find(
       (item) => item?.report_type === "ai_ceo.market_research" && item.report_id === reportId,

@@ -40,12 +40,23 @@ def main() -> None:
     require(report_delivery, "data-report-id", "report-bound market delivery")
     require(report_delivery, "data-ai-ceo-assistant-id", "turn-bound market delivery")
     require(report_delivery, "data-product-name", "product-bound market delivery")
+    require(report_delivery, "rememberSaasAiCeoMarketImportTarget(latest)", "render-time report identity registration")
+
+    import_target_memory = function_body(app_js, "rememberSaasAiCeoMarketImportTarget")
+    for marker in [
+        "assistant:",
+        "report:",
+        "saasAiCeoMarketImportTargets.size > 80",
+    ]:
+        require(import_target_memory, marker, "bounded rendered-report target memory")
 
     exact_target = function_body(app_js, "saasAiCeoMarketResearchTurnForImport")
     for marker in [
         "source?.dataset?.reportId",
         "source?.dataset?.aiCeoAssistantId",
         "source?.dataset?.productName",
+        "saasAiCeoMarketImportTargets.get(`assistant:${assistantId}`)",
+        "saasAiCeoMarketImportTargets.get(`report:${reportId}`)",
         "item.report_id === reportId",
         "turn.assistant_id === assistantId",
         "saasAiCeoMarketResearchEligibility",
