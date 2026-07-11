@@ -10665,11 +10665,20 @@ function saasIsInvalidMarketProductLabel(value = "") {
     "ebay listing",
     "ebay us",
     "ebay 美国站",
+    "候选商品卡",
+    "产品名",
+    "商品名",
+    "产品名称",
+    "商品名称",
+    "产品名和两条理由",
+    "商品名和两条理由",
     "这次调研",
     "本次调研",
     "待确认商品",
   ]);
   if (invalidExact.has(lower)) return true;
+  if (/(?:两|2)条理由/.test(text) && /(?:产品|商品)?名(?:称)?/.test(text)) return true;
+  if (/^(?:新)?(?:产品|商品)名(?:称)?(?:和|及|与).+$/.test(text)) return true;
   if (/^(商品|产品|品类|品|候选商品|候选品|方向|方案)\s*[一二三四五六七八九十\dA-Z]+$/i.test(text)) return true;
   if (/^e?bay\s*(us|美国站)?$/i.test(text)) return true;
   if (text.length > 70 && /帮我|应该|卖什么|不知道|你觉得|市场调研|报告/.test(text)) return true;
@@ -27339,6 +27348,8 @@ function saasAiCeoMarketProductLabel(turn = {}) {
   const text = String(latest?.assistant_text || latest?.user_text || "").replace(/\*\*/g, "");
   const candidate = saasSelectedMarketProductCandidate(saasNormalizeMarketProductCandidates([], text));
   if (candidate?.name) return candidate.name;
+  const conciseAnswerProduct = saasAiCeoConciseAnswerProductLabel(latest);
+  if (conciseAnswerProduct) return conciseAnswerProduct;
   const match =
     text.match(/(?:建议产品|推荐产品|产品建议|推荐品类|建议品类)\s*[:：]\s*([^\n。；;]+)/i) ||
     text.match(/(?:目标商品|商品方向|推荐商品|我帮你选的品|产品名称)\s*[:：]\s*([^\n。；;]+)/i) ||
@@ -27347,9 +27358,25 @@ function saasAiCeoMarketProductLabel(turn = {}) {
     text.match(/(?:^|[\n。！？])\s*([^\n，。；;：:]{2,60})(?:这个选品|这个商品|这个产品)/i);
   const matchedProduct = match ? saasCleanMarketCandidateName(match[1]) : "";
   if (saasIsConcreteProductLabel(matchedProduct)) return matchedProduct;
-  const userMatch = String(latest?.user_text || "").match(/(?:卖什么货|一个品|产品|商品)\s*[:：]?\s*([^\n。；;]{2,80})/i);
+  const userMatch = String(latest?.user_text || "").match(/(?:卖什么货|一个品|产品|商品)\s*(?:是|为|:|：)\s*([^\n。；;]{2,80})/i);
   const userProduct = userMatch ? saasCleanMarketCandidateName(userMatch[1]) : "";
   return saasIsConcreteProductLabel(userProduct) ? userProduct : "";
+}
+
+function saasAiCeoConciseAnswerProductLabel(turn = {}) {
+  const latest = normalizeSaasAiCeoLatestTurn(turn);
+  const lines = String(latest?.assistant_text || "")
+    .replace(/\*\*/g, "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[#>*\-\d.)、\s]+/, "").trim())
+    .filter(Boolean);
+  if (!lines.length) return "";
+  const firstLine = saasCleanMarketCandidateName(lines[0]);
+  if (!firstLine || firstLine.length > 90 || /^(?:好的|收到|可以|当然|候选商品|市场调研|结构化)/.test(firstLine)) return "";
+  if (!saasIsConcreteProductLabel(firstLine)) return "";
+  const support = lines.slice(1, 5).join(" ");
+  if (!/(?:理由|需求|适合|风险|市场|轻小|物流|场景)/.test(support)) return "";
+  return firstLine;
 }
 
 function saasListingTextFromAiCeoMarketTurn(turn = {}) {
