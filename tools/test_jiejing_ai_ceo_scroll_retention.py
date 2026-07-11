@@ -35,6 +35,7 @@ def main() -> int:
         "restoreSaasAiCeoScrollState",
         "saasAiCeoScrollInitialized",
         "scheduleSaasAiCeoBottomFollow",
+        "scheduleSaasAiCeoBottomFollow(chat, { force: true })",
         "state.saasAiCeoAutoFollow = false",
     ]
     for marker in required_markers:

@@ -39932,12 +39932,14 @@ function captureSaasAiCeoScrollState(chat) {
   };
 }
 
-function scheduleSaasAiCeoBottomFollow(chat) {
+function scheduleSaasAiCeoBottomFollow(chat, options = {}) {
   if (!chat || typeof requestAnimationFrame !== "function") return;
+  const force = options.force === true;
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      if (state.saasAiCeoAutoFollow === false) return;
+      if (!force && state.saasAiCeoAutoFollow === false) return;
       chat.scrollTop = chat.scrollHeight;
+      state.saasAiCeoAutoFollow = true;
     });
   });
 }
@@ -39949,7 +39951,7 @@ function restoreSaasAiCeoScrollState(chat, snapshot = null, options = {}) {
   if (shouldFollow) {
     chat.scrollTop = chat.scrollHeight;
     state.saasAiCeoAutoFollow = true;
-    scheduleSaasAiCeoBottomFollow(chat);
+    scheduleSaasAiCeoBottomFollow(chat, { force: forceBottom });
     return;
   }
   if (snapshot && Number.isFinite(snapshot.scrollTop)) chat.scrollTop = snapshot.scrollTop;
@@ -40547,7 +40549,7 @@ function syncSaasAiCeoFixedChatViewportState() {
     state.saasAiCeoScrollInitialized = true;
     state.saasAiCeoAutoFollow = true;
     chat.scrollTop = chat.scrollHeight;
-    scheduleSaasAiCeoBottomFollow(chat);
+    scheduleSaasAiCeoBottomFollow(chat, { force: true });
   }
 }
 
