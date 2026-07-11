@@ -20787,9 +20787,8 @@ function renderSaasAiCeoPendingStatusMarkup(turn = {}) {
   const stage = String(latest.pending_stage || "received");
   const title = delayed ? "正在继续整理完整回答" : stage === "sources" ? "正在搜索公开资料" : "正在思考";
   return `
-    <div class="saas-ai-ceo-pending-status is-compact" role="status" aria-live="polite" data-ai-ceo-pending-status="compact_wait_v1" data-merchant-pending-contract="merchant_clear_pending_v4" data-pending-stage="${escapeHtml(stage)}">
-      <i aria-hidden="true"><b></b><b></b><b></b></i>
-      <strong>${escapeHtml(title)}</strong>
+    <div class="saas-ai-ceo-pending-status is-compact" role="status" aria-live="polite" aria-label="${escapeHtml(title)}" data-ai-ceo-pending-status="single_black_thinking_dot_v1" data-merchant-pending-contract="merchant_clear_pending_v4" data-pending-stage="${escapeHtml(stage)}">
+      <span class="saas-ai-ceo-thinking-dot" aria-hidden="true"></span>
     </div>
   `;
 }
@@ -39633,6 +39632,22 @@ function syncSaasAiCeoFixedChatViewportState() {
   if (hasMessages) chat.scrollTop = chat.scrollHeight;
 }
 
+function ensureCeoAssistantAnswerBody(node) {
+  if (!node) return null;
+  const messageBody = node.querySelector(".saas-ai-ceo-message-body");
+  if (!messageBody) return null;
+  let answerBody = messageBody.querySelector(".saas-ai-ceo-answer-markdown");
+  if (!answerBody) {
+    insertJiejingTrustedHtml(
+      messageBody,
+      "beforeend",
+      trustedJiejingHtml('<div class="saas-ai-ceo-answer-markdown"></div>', "ai_ceo.chat_turn.ensure_answer_body"),
+    );
+    answerBody = messageBody.querySelector(".saas-ai-ceo-answer-markdown");
+  }
+  return answerBody;
+}
+
 function updateCeoAssistantMessage(messageId, text, status = "", model = null, sourceRecords = [], workflowDetails = {}) {
   const chat = document.querySelector("#ceoChat");
   const node = messageId ? document.getElementById(messageId) : null;
@@ -39678,10 +39693,6 @@ function updateCeoAssistantMessage(messageId, text, status = "", model = null, s
   }
   node.classList.remove("is-pending");
   if (status) node.dataset.status = String(status);
-  const answerBody = node.querySelector(".saas-ai-ceo-answer-markdown");
-  if (answerBody) {
-    setJiejingTrustedHtml(answerBody, trustedJiejingHtml(renderSaasAiCeoAnswerMarkup(safeText), "ai_ceo.chat_turn.answer_markdown"));
-  }
   node.querySelector(".saas-ai-ceo-work-detail")?.remove();
   node.querySelector(".saas-ai-ceo-source-list")?.remove();
   node.querySelector(".saas-ai-ceo-operating-brief")?.remove();
@@ -39690,6 +39701,10 @@ function updateCeoAssistantMessage(messageId, text, status = "", model = null, s
   node.querySelector(".saas-ai-ceo-recovery-hint")?.remove();
   node.querySelector(".saas-ai-ceo-pending-status")?.remove();
   node.querySelector(".saas-ai-ceo-performance-summary")?.remove();
+  const answerBody = ensureCeoAssistantAnswerBody(node);
+  if (answerBody) {
+    setJiejingTrustedHtml(answerBody, trustedJiejingHtml(renderSaasAiCeoAnswerMarkup(safeText), "ai_ceo.chat_turn.answer_markdown"));
+  }
   const updatedTurn = normalizeSaasAiCeoLatestTurn({
     ...(latest || {}),
     assistant_text: safeText,
@@ -39760,16 +39775,12 @@ function updateCeoAssistantPendingMessage(messageId, turn = {}) {
   const latest = normalizeSaasAiCeoLatestTurn(turn);
   if (!latest) return;
   node.dataset.status = latest.status || "pending";
-  const body = node.querySelector(".saas-ai-ceo-answer-markdown");
-  if (body) {
-    setJiejingTrustedHtml(
-      body,
-      trustedJiejingHtml(renderSaasAiCeoAnswerMarkup(latest.assistant_text || "我还在处理这次请求。"), "ai_ceo.chat_turn.pending_answer_markdown"),
-    );
-  }
+  const messageBody = node.querySelector(".saas-ai-ceo-message-body");
   node.querySelector(".saas-ai-ceo-pending-status")?.remove();
   node.querySelector(".saas-ai-ceo-listing-handoff")?.remove();
-  insertJiejingTrustedHtml(body, "afterend", trustedJiejingHtml(renderSaasAiCeoPendingStatusMarkup(latest), "ai_ceo.chat_turn.pending_status"));
+  if (messageBody) {
+    insertJiejingTrustedHtml(messageBody, "beforeend", trustedJiejingHtml(renderSaasAiCeoPendingStatusMarkup(latest), "ai_ceo.chat_turn.pending_status"));
+  }
   const meta = node.querySelector(".saas-ai-ceo-message-body > small");
   if (meta) meta.textContent = saasAiCeoTurnStatusLabel(latest);
   if (!state.saasAiCeoLatestTurn || state.saasAiCeoLatestTurn.assistant_id === messageId) {

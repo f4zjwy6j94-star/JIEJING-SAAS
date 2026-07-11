@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas.ai_ceo_chat import (  # noqa: E402
+    _should_retry_initial_model_failure,
     _realtime_search_query,
     run_ai_ceo_chat,
     validate_ai_ceo_answer_quality,
@@ -85,6 +86,22 @@ def main() -> None:
     accepted = validate_ai_ceo_answer_quality(message=message, route="ebay_workflow", answer=valid)
     assert accepted["accepted"] is True, accepted
     assert accepted["candidate_count"] >= 3, accepted
+
+    assert _should_retry_initial_model_failure(
+        failure_code="model_network_or_timeout",
+        elapsed_ms=120,
+        timeout_seconds=24,
+    ) is True
+    assert _should_retry_initial_model_failure(
+        failure_code="model_network_or_timeout",
+        elapsed_ms=23_500,
+        timeout_seconds=24,
+    ) is False
+    assert _should_retry_initial_model_failure(
+        failure_code="model_auth_or_permission_error",
+        elapsed_ms=100,
+        timeout_seconds=24,
+    ) is False
 
     compact_query = _realtime_search_query(
         kind="web_search",

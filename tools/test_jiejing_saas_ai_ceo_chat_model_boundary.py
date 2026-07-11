@@ -951,7 +951,7 @@ def main() -> int:
         if market_report_model_body.get("max_tokens") != 2400:
             return fail(f"AI CEO market handoff should use the workflow token budget: {market_report_model_body}")
         market_report_performance = market_report_chat.get("performance") if isinstance(market_report_chat.get("performance"), dict) else {}
-        if market_report_performance.get("model_timeout_seconds") != 32 or market_report_performance.get("model_max_output_tokens") != 2400:
+        if market_report_performance.get("model_timeout_seconds") != 24 or market_report_performance.get("model_max_output_tokens") != 2400:
             return fail(f"AI CEO market handoff should expose the workflow model budget: {market_report_performance}")
         for forbidden_key in ("frontend_gets_model_api_key", "runtime_gets_raw_ebay_token", "secret_exposed"):
             if report_body.get(forbidden_key) is not False:

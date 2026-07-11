@@ -87,7 +87,9 @@ def main() -> int:
         "AI CEO response timed out after",
         "60000,",
         "Promise.race([request, timeout])",
-        "compact_wait_v1",
+        "single_black_thinking_dot_v1",
+        "saas-ai-ceo-thinking-dot",
+        "function ensureCeoAssistantAnswerBody",
         "function saasAiCeoConversationHistoryForRequest",
         "conversation_history: saasAiCeoConversationHistoryForRequest()",
         "不消耗捷境试用额度",
@@ -231,7 +233,8 @@ def main() -> int:
         ".saas-ai-ceo-recovery-actions",
         ".saas-ai-ceo-pending-status",
         ".saas-ai-ceo-pending-status.is-compact",
-        "@keyframes saas-ai-ceo-wait-dot",
+        ".saas-ai-ceo-thinking-dot",
+        "@keyframes saas-ai-ceo-thinking-pulse",
         ".saas-ai-ceo-source-list",
         ".saas-ai-ceo-work-record-list",
         ".saas-ai-ceo-confirmation-guidance",
@@ -268,6 +271,14 @@ def main() -> int:
     for needle in required_css:
         if needle not in css:
             return fail(f"missing AI CEO latest-reply CSS contract: {needle}")
+
+    for obsolete_wait_contract in [
+        "compact_wait_v1",
+        "@keyframes saas-ai-ceo-wait-dot",
+        ".saas-ai-ceo-pending-status.is-compact > i b",
+    ]:
+        if obsolete_wait_contract in app or obsolete_wait_contract in css:
+            return fail(f"AI CEO must not keep the obsolete three-dot wait contract: {obsolete_wait_contract}")
 
     for forbidden_selector in [
         ".saas-ai-ceo-thread .message.ai span {",

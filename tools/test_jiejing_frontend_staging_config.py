@@ -30,7 +30,7 @@ def main() -> int:
         return fail("frontend must not use document.write for report export or public rendering")
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
-    frontend_asset_version = "20260710-model-connection-v38"
+    frontend_asset_version = "20260711-ai-response-v40"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -95,6 +95,8 @@ def main() -> int:
         "20260702-internal-access-boundary-v1",
         "20260702-ai-ceo-route-card-v2",
         "20260710-ai-ceo-reliability-v34",
+        "20260710-model-connection-v38",
+        "20260711-ai-response-v39",
         "20260510-ebay-policy-v1",
     ]:
         if stale_asset_version in index_html + app_html:

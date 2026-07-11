@@ -2249,7 +2249,7 @@ def _ai_ceo_model_timeout_seconds(*, route: str, realtime_kind: str = "") -> int
     elif route == AI_CEO_ROUTE_GENERAL:
         default = _env_int("JIEJING_AI_CEO_GENERAL_MODEL_TIMEOUT_SECONDS", default=16, minimum=5, maximum=60)
     else:
-        default = _env_int("JIEJING_AI_CEO_WORKFLOW_MODEL_TIMEOUT_SECONDS", default=32, minimum=8, maximum=90)
+        default = _env_int("JIEJING_AI_CEO_WORKFLOW_MODEL_TIMEOUT_SECONDS", default=24, minimum=8, maximum=90)
     return _env_int("JIEJING_AI_CEO_MODEL_TIMEOUT_SECONDS", default=default, minimum=5, maximum=90)
 
 
@@ -2293,18 +2293,19 @@ def _generate_model_text_with_initial_retry(
         return result, _elapsed_ms(started_at), 0, None
     except Exception as exc:  # pragma: no cover - provider dependent
         failure_code, _failure_reason = _classify_model_failure(exc)
+        first_attempt_latency_ms = _elapsed_ms(started_at)
         retry_enabled = _env_enabled("JIEJING_AI_CEO_MODEL_INITIAL_RETRY_ENABLED", default=True)
-        retryable = failure_code in {
-            "model_network_or_timeout",
-            "model_rate_limited",
-            "model_provider_temporary_error",
-        }
+        retryable = _should_retry_initial_model_failure(
+            failure_code=failure_code,
+            elapsed_ms=first_attempt_latency_ms,
+            timeout_seconds=timeout_seconds,
+        )
         if not retry_enabled or not retryable:
-            return None, _elapsed_ms(started_at), 0, exc
+            return None, first_attempt_latency_ms, 0, exc
 
     retry_timeout = _env_int(
         "JIEJING_AI_CEO_MODEL_RETRY_TIMEOUT_SECONDS",
-        default=min(timeout_seconds, 24),
+        default=min(timeout_seconds, 10),
         minimum=5,
         maximum=45,
     )
@@ -2337,6 +2338,25 @@ def _generate_model_text_with_initial_retry(
         return result, _elapsed_ms(started_at), 1, None
     except Exception as retry_exc:  # pragma: no cover - provider dependent
         return None, _elapsed_ms(started_at), 1, retry_exc
+
+
+def _should_retry_initial_model_failure(*, failure_code: str, elapsed_ms: int, timeout_seconds: int) -> bool:
+    if failure_code not in {
+        "model_network_or_timeout",
+        "model_rate_limited",
+        "model_provider_temporary_error",
+    }:
+        return False
+    retry_window_ms = _env_int(
+        "JIEJING_AI_CEO_MODEL_INITIAL_RETRY_WINDOW_MS",
+        default=5000,
+        minimum=250,
+        maximum=15000,
+    )
+    full_timeout_threshold_ms = max(5000, max(1, timeout_seconds - 2) * 1000)
+    if failure_code == "model_network_or_timeout" and elapsed_ms >= full_timeout_threshold_ms:
+        return False
+    return elapsed_ms <= retry_window_ms
 
 
 def _complete_truncated_model_result(
