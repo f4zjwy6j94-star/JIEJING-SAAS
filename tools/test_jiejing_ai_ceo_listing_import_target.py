@@ -63,6 +63,18 @@ def main() -> None:
     action_handler = function_body(app_js, "handleSaasAction")
     require(action_handler, "handleSaasAiCeoImportMarketToListing(button)", "clicked button forwarding")
 
+    chat_binding = function_body(app_js, "bindSaasAiCeoMarketImportControls")
+    for marker in [
+        'data-saas-action="ai-ceo-import-market-to-listing"',
+        "event.stopPropagation()",
+        "handleSaasAiCeoImportMarketToListing(button)",
+        "系统不会改用其他商品代替",
+    ]:
+        require(chat_binding, marker, "dynamic AI CEO import control binding")
+
+    viewport_sync = function_body(app_js, "syncSaasAiCeoFixedChatViewportState")
+    require(viewport_sync, "bindSaasAiCeoMarketImportControls(chat)", "chat import binding activation")
+
     print("PASS jiejing_ai_ceo_listing_import_target")
 
 

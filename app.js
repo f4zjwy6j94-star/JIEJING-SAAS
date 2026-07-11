@@ -40665,12 +40665,27 @@ function addCeoMessage(text, aiText, options = {}) {
   restoreSaasAiCeoScrollState(chat, scrollSnapshot, { forceBottom: true });
 }
 
+function bindSaasAiCeoMarketImportControls(chat) {
+  if (!chat || chat.dataset.aiCeoMarketImportBound === "true") return;
+  chat.dataset.aiCeoMarketImportBound = "true";
+  chat.addEventListener("click", (event) => {
+    const button = event.target.closest('[data-saas-action="ai-ceo-import-market-to-listing"]');
+    if (!button || !chat.contains(button)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    Promise.resolve(handleSaasAiCeoImportMarketToListing(button)).catch(() => {
+      showActionToast("这份市场调研暂时无法导入，请刷新对话后重试；系统不会改用其他商品代替。");
+    });
+  });
+}
+
 function syncSaasAiCeoFixedChatViewportState() {
   const thread = document.querySelector(".saas-ai-ceo-thread");
   const chat = document.querySelector("#ceoChat");
   if (!thread || !chat) return;
   bindSaasAiCeoScrollIntent(chat);
   bindSaasAiCeoHistoryControls(chat);
+  bindSaasAiCeoMarketImportControls(chat);
   syncSaasAiCeoCloudDomState();
   const hasMessages = Boolean(chat.querySelector(".message"));
   thread.classList.toggle("has-chat-messages", hasMessages);
