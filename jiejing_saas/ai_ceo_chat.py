@@ -195,7 +195,12 @@ def run_ai_ceo_chat(
                 answer = _clean_answer(result.get("text") if isinstance(result, dict) else "")
                 if not answer:
                     raise RuntimeError("empty_realtime_search_answer")
-                if _realtime_answer_needs_repair(answer, realtime_search.get("source_records") or [], realtime_kind):
+                if _realtime_answer_needs_repair(
+                    answer,
+                    realtime_search.get("source_records") or [],
+                    realtime_kind,
+                    message=route_message,
+                ):
                     repair_result = model_client.generate_text(
                         system_prompt=(
                             search_prompt[0]
@@ -218,12 +223,22 @@ def run_ai_ceo_chat(
                     )
                     repair_answer = _clean_answer(repair_result.get("text") if isinstance(repair_result, dict) else "")
                     if repair_answer and (
-                        not _realtime_answer_needs_repair(repair_answer, realtime_search.get("source_records") or [], realtime_kind)
+                        not _realtime_answer_needs_repair(
+                            repair_answer,
+                            realtime_search.get("source_records") or [],
+                            realtime_kind,
+                            message=route_message,
+                        )
                         or len(repair_answer) > len(answer)
                     ):
                         result = repair_result
                         answer = repair_answer
-                if _realtime_answer_needs_repair(answer, realtime_search.get("source_records") or [], realtime_kind):
+                if _realtime_answer_needs_repair(
+                    answer,
+                    realtime_search.get("source_records") or [],
+                    realtime_kind,
+                    message=route_message,
+                ):
                     answer = _fallback_realtime_search_answer(realtime_kind, realtime_search)
                 status = "realtime_search_answered"
             except Exception:
@@ -491,7 +506,12 @@ def run_ai_ceo_chat(
             "runtime_gets_raw_ebay_token": False,
             "secret_exposed": False,
         }
-    answer_quality = validate_ai_ceo_answer_quality(message=safe_message, route=route, answer=answer)
+    answer_quality = validate_ai_ceo_answer_quality(
+        message=safe_message,
+        route=route,
+        answer=answer,
+        source_records=source_records,
+    )
     repair_retry_count = 0
     if not answer_quality.get("accepted") and _env_enabled("JIEJING_AI_CEO_MODEL_REPAIR_RETRY_ENABLED", default=True):
         repair_started_at = time.monotonic()
@@ -501,6 +521,9 @@ def run_ai_ceo_chat(
                     system_prompt
                     + " 上一版回复没有通过本轮问题一致性检查。只回答当前 merchant_message；"
                     "选品问题必须按要求给出足量的具体候选商品卡，不得回答其他历史问题。"
+                    "涉及 eBay 规则、政策、图片或发布要求时，必须区分官方强制要求、平台建议和商家最佳实践；"
+                    "每条外部事实使用已有 source_records 的 [S1]、[S2] 等编号引用。"
+                    "没有官方来源支撑时，不得使用‘必须’‘一律’‘绝对’‘禁止’‘会被下架’等断言。"
                 ),
                 user_prompt=user_prompt,
                 temperature=0.1,
@@ -510,7 +533,12 @@ def run_ai_ceo_chat(
             repair_retry_count = 1
             model_latency_ms += _elapsed_ms(repair_started_at)
             repair_answer = _clean_answer(repair_result.get("text") if isinstance(repair_result, dict) else "")
-            repair_quality = validate_ai_ceo_answer_quality(message=safe_message, route=route, answer=repair_answer)
+            repair_quality = validate_ai_ceo_answer_quality(
+                message=safe_message,
+                route=route,
+                answer=repair_answer,
+                source_records=source_records,
+            )
             if repair_answer and repair_quality.get("accepted"):
                 result = repair_result
                 answer = repair_answer
@@ -857,6 +885,8 @@ def build_ai_ceo_chat_prompts(
         "response_rules": [
             "Use web_context.source_records for current/public facts when web_context.status is ready; do not invent latest facts when sources are missing.",
             "引用公开事实时使用 source_records.citation_id，例如 [S1]；quality_score 只用于排序，不代表官方背书。",
+            "涉及 eBay 规则、政策、图片或发布要求时，区分官方强制要求、平台建议和商家最佳实践。",
+            "没有对应官方来源时，不得把建议写成‘必须’‘一律’‘绝对’‘禁止’或‘会被下架’。",
             "先回答用户当前问题，再给必要的下一步。",
             "普通咨询不写长期经营记忆。",
             "只有明确要求记住规则时才写商家规则。",
@@ -883,6 +913,8 @@ def build_ai_ceo_realtime_search_prompts(
         "如果来源片段不足以确认精确数值，就明确说无法从当前来源确认精确值，并给出可继续查证的来源。"
         "商家可见回答必须使用简体中文；eBay、SKU、Listing、Market Report、Listing Package、NASDAQ、NYSE 等专有名词可以保留英文。"
         "回答要短、直接、带时间感和来源；不要出现“调用模型”“后端模型”“BYOK”“Tavily API key”等实现词。"
+        "涉及 eBay 规则、政策、图片或发布要求时，必须区分官方强制要求、平台建议和商家最佳实践；"
+        "强制性表述必须紧跟对应的官方来源编号。没有官方来源支撑时，不得使用‘必须’‘一律’‘绝对’‘禁止’或‘会被下架’等断言。"
         "如果来源不足以确认精确实时数值，仍要整理来源中能确认的事实、主要驱动、两种可能情景和风险；不能只用一句“无法分析”结束。"
         "需要执行真实发布、改价、库存、退款、广告、政策、付款或敏感客服承诺时，必须停在决策中心。"
         "普通实时咨询默认不写长期经营记忆。"
@@ -905,6 +937,7 @@ def build_ai_ceo_realtime_search_prompts(
         "response_rules": [
             "先给直接答案；再用 1-3 条列出来源和限制。",
             "每个来源使用 citation_id 标注，并尽量带标题、域名或 URL。",
+            "平台规则回答必须区分官方要求、平台建议和商家最佳实践；强制性表述紧跟官方来源编号。",
             "没有足够证据时说清楚缺口，不要编数字。",
             "不要写入长期商家记忆，除非用户明确说记住规则。",
         ],
@@ -2217,17 +2250,32 @@ def _fallback_realtime_search_answer(kind: str, realtime_search: dict[str, Any])
     intro = "我已查到公开网页来源，但当前来源片段不足以让我直接确认精确实时数值。" if kind == "stock_quote" else "我已查到公开网页来源，先按来源给你一个简短结论。"
     source_lines = []
     for index, record in enumerate(records[:3], start=1):
+        citation_id = _safe_text(record.get("citation_id") or f"S{index}", limit=20)
         label = _safe_text(record.get("title") or record.get("domain") or record.get("url") or f"来源 {index}", limit=120)
         domain = _safe_text(record.get("domain") or _domain_from_url(str(record.get("url") or "")), limit=120)
         snippet = _safe_text(record.get("snippet") or "", limit=180)
-        source_lines.append(f"{index}. {label}{f'（{domain}）' if domain else ''}：{snippet}")
+        source_lines.append(f"[{citation_id}] {label}{f'（{domain}）' if domain else ''}：{snippet}")
     suffix = f"\n\n搜索时间：{captured_at}" if captured_at else ""
     return f"{intro}\n\n来源：\n" + "\n".join(source_lines) + suffix
 
 
-def _realtime_answer_needs_repair(answer: str, source_records: list[dict[str, Any]], kind: str = "") -> bool:
+def _realtime_answer_needs_repair(
+    answer: str,
+    source_records: list[dict[str, Any]],
+    kind: str = "",
+    *,
+    message: str = "",
+) -> bool:
     text = _clean_answer(answer)
     if not text:
+        return True
+    policy_quality = _platform_rule_answer_quality(
+        message=message,
+        route=AI_CEO_ROUTE_EXTERNAL_REALTIME,
+        answer=text,
+        source_records=source_records,
+    )
+    if not policy_quality.get("accepted"):
         return True
     minimum_length = 80 if kind in {"stock_quote", "exchange_rate", "weather"} else 120
     if source_records and len(text) < minimum_length:
@@ -2921,9 +2969,25 @@ def _classify_model_failure(exc: Exception) -> tuple[str, str]:
     return "model_provider_error", "AI 服务这次没有返回可展示内容。"
 
 
-def validate_ai_ceo_answer_quality(*, message: str, route: str, answer: str) -> dict[str, Any]:
+def validate_ai_ceo_answer_quality(
+    *,
+    message: str,
+    route: str,
+    answer: str,
+    source_records: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Reject workflow answers that cannot become the merchant's requested work item."""
 
+    source_quality = _platform_rule_answer_quality(
+        message=message,
+        route=route,
+        answer=answer,
+        source_records=source_records or [],
+    )
+    if not source_quality.get("accepted"):
+        return source_quality
+    if _looks_like_platform_rule_request(message=message, route=route) and source_records:
+        return source_quality
     if not _looks_like_product_selection_request(message=message, route=route):
         return {
             "accepted": bool(_safe_text(answer, limit=6000)),
@@ -2963,6 +3027,102 @@ def validate_ai_ceo_answer_quality(*, message: str, route: str, answer: str) -> 
     }
 
 
+def _platform_rule_answer_quality(
+    *,
+    message: str,
+    route: str,
+    answer: str,
+    source_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    text = _safe_text(answer, limit=12000)
+    if not _looks_like_platform_rule_request(message=message, route=route) or not source_records:
+        return {
+            "accepted": bool(text),
+            "quality_gate": "platform_rule_source_quality_v1",
+            "blocked_by": [] if text else ["empty_model_answer"],
+            "citation_count": 0,
+            "secret_exposed": False,
+        }
+
+    valid_ids = {
+        _safe_text(item.get("citation_id") or f"S{index}", limit=20)
+        for index, item in enumerate(source_records[:8], start=1)
+        if isinstance(item, dict)
+    }
+    cited_ids = set(re.findall(r"\[(S\d{1,2})\]", text, flags=re.IGNORECASE))
+    cited_ids = {item.upper() for item in cited_ids}
+    valid_ids = {item.upper() for item in valid_ids if item}
+    valid_citations = cited_ids & valid_ids
+
+    strong_markers = ("必须", "一律", "绝对", "禁止", "不得", "不允许", "会被下架", "必然下架")
+    unsupported_strong_claims = []
+    for clause in re.split(r"(?<=[。！？；])|\n+", text):
+        compact = clause.strip()
+        is_internal_confirmation_boundary = "确认中心" in compact or "决策中心" in compact
+        if compact and not is_internal_confirmation_boundary and any(marker in compact for marker in strong_markers):
+            clause_citations = {item.upper() for item in re.findall(r"\[(S\d{1,2})\]", compact, flags=re.IGNORECASE)}
+            if not clause_citations.intersection(valid_ids):
+                unsupported_strong_claims.append(_safe_text(compact, limit=180))
+
+    official_ids = set()
+    for index, item in enumerate(source_records[:8], start=1):
+        if not isinstance(item, dict):
+            continue
+        domain = _safe_text(item.get("domain") or _domain_from_url(str(item.get("url") or "")), limit=120).lower()
+        if domain == "ebay.com" or domain.endswith(".ebay.com") or domain.endswith(".ebaystatic.com"):
+            official_ids.add(_safe_text(item.get("citation_id") or f"S{index}", limit=20).upper())
+    official_claim_markers = ("eBay 规定", "eBay规定", "eBay 要求", "eBay要求", "官方要求", "平台规定", "平台禁止")
+    unsupported_official_claims = []
+    for clause in re.split(r"(?<=[。！？；])|\n+", text):
+        compact = clause.strip()
+        if compact and any(marker in compact for marker in official_claim_markers):
+            clause_citations = {item.upper() for item in re.findall(r"\[(S\d{1,2})\]", compact, flags=re.IGNORECASE)}
+            if not clause_citations.intersection(official_ids):
+                unsupported_official_claims.append(_safe_text(compact, limit=180))
+
+    blocked_by = []
+    if not valid_citations:
+        blocked_by.append("missing_source_citation_for_platform_rule")
+    if unsupported_strong_claims:
+        blocked_by.append("unsupported_absolute_platform_rule_claim")
+    if unsupported_official_claims:
+        blocked_by.append("official_platform_claim_without_official_source")
+    return {
+        "accepted": bool(text) and not blocked_by,
+        "quality_gate": "platform_rule_source_quality_v1",
+        "blocked_by": blocked_by,
+        "citation_count": len(valid_citations),
+        "unsupported_strong_claim_count": len(unsupported_strong_claims),
+        "unsupported_official_claim_count": len(unsupported_official_claims),
+        "secret_exposed": False,
+    }
+
+
+def _looks_like_platform_rule_request(*, message: str, route: str) -> bool:
+    text = _normalized_text(message)
+    if "ebay" not in text and "listing" not in text:
+        return False
+    rule_markers = (
+        "规则",
+        "政策",
+        "要求",
+        "规范",
+        "发布前",
+        "上架前",
+        "核对项",
+        "主图",
+        "图片",
+        "item specifics",
+        "business policy",
+        "合规",
+        "违禁",
+        "下架",
+    )
+    return route in {AI_CEO_ROUTE_EBAY_WORKFLOW, AI_CEO_ROUTE_EXTERNAL_REALTIME, AI_CEO_ROUTE_GENERAL} and any(
+        marker in text for marker in rule_markers
+    )
+
+
 def _looks_like_product_selection_request(*, message: str, route: str) -> bool:
     if route != AI_CEO_ROUTE_EBAY_WORKFLOW:
         return False
@@ -2998,9 +3158,10 @@ def _requested_product_candidate_count(message: str) -> int:
 def _model_answer_rejected_fallback(*, message: str, source_records: list[dict[str, Any]]) -> str:
     source_lines = []
     for index, source in enumerate(source_records[:4], start=1):
+        citation_id = _safe_text(source.get("citation_id") or f"S{index}", limit=20)
         title = _safe_text(source.get("title") or source.get("domain") or source.get("url") or f"来源 {index}", limit=120)
         domain = _safe_text(source.get("domain") or "", limit=80)
-        source_lines.append(f"{index}. {title}{f'（{domain}）' if domain else ''}")
+        source_lines.append(f"[{citation_id}] {title}{f'（{domain}）' if domain else ''}")
     source_text = "\n".join(source_lines) if source_lines else "这次还没有拿到足够的可核验公开来源。"
     return (
         "### 这次结果没有进入 Listing\n\n"
@@ -3047,10 +3208,11 @@ def _source_backed_market_report_fallback_answer(
         return ""
     source_lines = []
     for index, source in enumerate(source_records[:4], start=1):
+        citation_id = _safe_text(source.get("citation_id") or f"S{index}", limit=20)
         title = _safe_text(source.get("title") or source.get("domain") or source.get("url") or f"source {index}", limit=100)
         snippet = _safe_text(source.get("snippet") or source.get("summary") or "", limit=160)
         domain = _safe_text(source.get("domain") or "", limit=80)
-        source_lines.append(f"{index}. {title}{f'（{domain}）' if domain else ''}{f'：{snippet}' if snippet else ''}")
+        source_lines.append(f"[{citation_id}] {title}{f'（{domain}）' if domain else ''}{f'：{snippet}' if snippet else ''}")
     source_text = "\n".join(source_lines) or "1. 后端联网搜索已返回公开来源，但当前来源摘要不足，需要继续复核。"
     return (
         "### AI CEO 市场调研待复核\n\n"

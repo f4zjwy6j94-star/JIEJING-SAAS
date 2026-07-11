@@ -103,6 +103,45 @@ def main() -> None:
     assert accepted["accepted"] is True, accepted
     assert accepted["candidate_count"] >= 3, accepted
 
+    rule_message = "请用三句话说明 eBay Listing 发布前最重要的三个核对项。"
+    rule_sources = [
+        {
+            "citation_id": "S1",
+            "title": "eBay picture policy",
+            "domain": "ebay.com",
+            "url": "https://www.ebay.com/help/policies/listing-policies/picture-policy",
+        },
+        {
+            "citation_id": "S2",
+            "title": "Seller listing guidance",
+            "domain": "example.com",
+            "url": "https://example.com/listing-guidance",
+        },
+    ]
+    missing_rule_citation = validate_ai_ceo_answer_quality(
+        message=rule_message,
+        route="ebay_workflow",
+        answer="主图必须为纯白底，所有图片不得出现参照物。",
+        source_records=rule_sources,
+    )
+    assert missing_rule_citation["accepted"] is False, missing_rule_citation
+    assert "missing_source_citation_for_platform_rule" in missing_rule_citation["blocked_by"], missing_rule_citation
+    assert "unsupported_absolute_platform_rule_claim" in missing_rule_citation["blocked_by"], missing_rule_citation
+
+    cited_rule_answer = (
+        "先核对标题、类目和 Item specifics 是否与商品事实一致，这是发布前的基础检查 [S1]。\n"
+        "图片应清楚展示真实商品；白底可以作为主图最佳实践，但不要在没有官方依据时写成一律要求 [S1]。\n"
+        "最后确认价格、库存、物流和退货政策，真实发布仍进入确认中心。"
+    )
+    cited_rule_quality = validate_ai_ceo_answer_quality(
+        message=rule_message,
+        route="ebay_workflow",
+        answer=cited_rule_answer,
+        source_records=rule_sources,
+    )
+    assert cited_rule_quality["accepted"] is True, cited_rule_quality
+    assert cited_rule_quality["citation_count"] == 1, cited_rule_quality
+
     assert _should_retry_initial_model_failure(
         failure_code="model_network_or_timeout",
         elapsed_ms=120,
