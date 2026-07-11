@@ -34,6 +34,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("ai_ceo_source_quality", [sys.executable, "tools/test_jiejing_ai_ceo_source_quality.py"]),
     ("ai_ceo_listing_fact_boundary", [sys.executable, "tools/test_jiejing_ai_ceo_listing_fact_boundary.py"]),
     ("ai_ceo_product_label_extraction", [sys.executable, "tools/test_jiejing_ai_ceo_product_label_extraction.py"]),
+    ("ai_ceo_listing_import_target", [sys.executable, "tools/test_jiejing_ai_ceo_listing_import_target.py"]),
     ("listing_progressive_disclosure", [sys.executable, "tools/test_jiejing_listing_progressive_disclosure.py"]),
     ("media_version_rework_ui", [sys.executable, "tools/test_jiejing_media_version_rework_ui.py"]),
     ("media_asset_jobs", [sys.executable, "tools/test_jiejing_media_asset_jobs.py"]),

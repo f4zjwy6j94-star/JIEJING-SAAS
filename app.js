@@ -21255,7 +21255,7 @@ function renderSaasAiCeoListingHandoffMarkup(turn = {}) {
         <strong>${escapeHtml(product)}</strong>
         <small>${sourceCount ? `已带 ${sourceCount} 条公开来源；` : ""}导入后只生成本地草稿，真实发布仍要经过确认中心。</small>
       </div>
-      <button class="primary-action compact-action" type="button" data-saas-action="ai-ceo-import-market-to-listing">导入 Listing 草稿</button>
+      <button class="primary-action compact-action" type="button" data-saas-action="ai-ceo-import-market-to-listing" data-ai-ceo-assistant-id="${escapeHtml(latest.assistant_id || "")}">导入 Listing 草稿</button>
     </div>
   `;
 }
@@ -21277,7 +21277,7 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
         <strong>${escapeHtml(title)}</strong>
         <small>${sourceCopy}可以导入 Listing 草稿。真实发布、改价、库存、广告、退款、付款和政策修改仍要经过确认中心。</small>
       </div>
-      <button class="primary-action compact-action" type="button" data-saas-action="ai-ceo-import-market-to-listing">导入 Listing 草稿</button>
+      <button class="primary-action compact-action" type="button" data-saas-action="ai-ceo-import-market-to-listing" data-report-id="${escapeHtml(delivery.report_id)}" data-ai-ceo-assistant-id="${escapeHtml(latest.assistant_id || "")}">导入 Listing 草稿</button>
     </div>
   `;
 }
@@ -26852,14 +26852,40 @@ async function handleSaasListingSourceAiReport() {
   return true;
 }
 
-async function handleSaasAiCeoImportMarketToListing() {
-  const importState = saasAiCeoMarketResearchImportState();
-  if (!importState.turn) {
-    showActionToast(saasAiCeoMarketImportBlockedMessage(importState));
+function saasAiCeoMarketResearchTurnForImport(source = null) {
+  const reportId = String(source?.dataset?.reportId || "").trim();
+  const assistantId = String(source?.dataset?.aiCeoAssistantId || "").trim();
+  if (!reportId && !assistantId) return null;
+  const candidates = [];
+  if (reportId) {
+    const record = (state.saasReports || []).find(
+      (item) => item?.report_type === "ai_ceo.market_research" && item.report_id === reportId,
+    );
+    if (record) candidates.push(saasAiCeoMarketTurnFromReport(record));
+  }
+  candidates.push(...saasAiCeoMarketResearchCandidates());
+  const exact = candidates
+    .map(normalizeSaasAiCeoLatestTurn)
+    .filter(Boolean)
+    .find((turn) => (reportId && turn.market_report_id === reportId) || (assistantId && turn.assistant_id === assistantId));
+  const eligibility = saasAiCeoMarketResearchEligibility(exact);
+  return eligibility.eligible ? eligibility.latest : null;
+}
+
+async function handleSaasAiCeoImportMarketToListing(source = null) {
+  const clickedTarget = Boolean(source?.dataset?.reportId || source?.dataset?.aiCeoAssistantId);
+  const targetedTurn = saasAiCeoMarketResearchTurnForImport(source);
+  if (clickedTarget && !targetedTurn) {
+    showActionToast("这份市场调研暂时无法精确定位，请刷新 AI CEO 对话后再导入；系统不会改用其他商品代替。");
+    return false;
+  }
+  const importTurn = targetedTurn || saasAiCeoMarketResearchImportState().turn;
+  if (!importTurn) {
+    showActionToast(saasAiCeoMarketImportBlockedMessage(saasAiCeoMarketResearchImportState()));
     return false;
   }
   setView("product");
-  const imported = applySaasAiCeoMarketTurnToListing(importState.turn, {
+  const imported = applySaasAiCeoMarketTurnToListing(importTurn, {
     toast: "已把这次 AI CEO 市场调研导入 Listing 草稿；不会写入 eBay。",
   });
   if (imported) {
@@ -27837,7 +27863,7 @@ function handleSaasAction(button) {
     return;
   }
   if (action === "ai-ceo-import-market-to-listing") {
-    handleSaasAiCeoImportMarketToListing();
+    handleSaasAiCeoImportMarketToListing(button);
     return;
   }
   if (action === "listing-source-merchant-input") {
