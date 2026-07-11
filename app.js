@@ -26864,12 +26864,17 @@ function saasAiCeoMarketResearchTurnForImport(source = null) {
     if (record) candidates.push(saasAiCeoMarketTurnFromReport(record));
   }
   candidates.push(...saasAiCeoMarketResearchCandidates());
-  const exact = candidates
-    .map(normalizeSaasAiCeoLatestTurn)
-    .filter(Boolean)
-    .find((turn) => (reportId && turn.market_report_id === reportId) || (assistantId && turn.assistant_id === assistantId));
-  const eligibility = saasAiCeoMarketResearchEligibility(exact);
-  return eligibility.eligible ? eligibility.latest : null;
+  const normalized = candidates.map(normalizeSaasAiCeoLatestTurn).filter(Boolean);
+  const assistantMatches = assistantId ? normalized.filter((turn) => turn.assistant_id === assistantId) : [];
+  const reportMatches = reportId
+    ? normalized.filter(
+        (turn) => turn.market_report_id === reportId && !assistantMatches.some((item) => item.assistant_id === turn.assistant_id),
+      )
+    : [];
+  const eligibility = [...assistantMatches, ...reportMatches]
+    .map((turn) => saasAiCeoMarketResearchEligibility(turn))
+    .find((eligibility) => eligibility.eligible);
+  return eligibility?.latest || null;
 }
 
 async function handleSaasAiCeoImportMarketToListing(source = null) {

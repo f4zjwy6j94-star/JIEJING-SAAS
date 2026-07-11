@@ -46,6 +46,8 @@ def main() -> None:
         "item.report_id === reportId",
         "turn.assistant_id === assistantId",
         "saasAiCeoMarketResearchEligibility",
+        ".filter((turn) => turn.assistant_id === assistantId)",
+        ".find((eligibility) => eligibility.eligible)",
     ]:
         require(exact_target, marker, "exact clicked-report import resolution")
 
