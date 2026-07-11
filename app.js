@@ -21255,7 +21255,7 @@ function renderSaasAiCeoListingHandoffMarkup(turn = {}) {
         <strong>${escapeHtml(product)}</strong>
         <small>${sourceCount ? `已带 ${sourceCount} 条公开来源；` : ""}导入后只生成本地草稿，真实发布仍要经过确认中心。</small>
       </div>
-      <button class="primary-action compact-action" type="button" data-saas-action="ai-ceo-import-market-to-listing" data-ai-ceo-assistant-id="${escapeHtml(latest.assistant_id || "")}">导入 Listing 草稿</button>
+      <button class="primary-action compact-action" type="button" data-saas-action="ai-ceo-import-market-to-listing" data-ai-ceo-assistant-id="${escapeHtml(latest.assistant_id || "")}" data-product-name="${escapeHtml(product)}">导入 Listing 草稿</button>
     </div>
   `;
 }
@@ -21277,7 +21277,7 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
         <strong>${escapeHtml(title)}</strong>
         <small>${sourceCopy}可以导入 Listing 草稿。真实发布、改价、库存、广告、退款、付款和政策修改仍要经过确认中心。</small>
       </div>
-      <button class="primary-action compact-action" type="button" data-saas-action="ai-ceo-import-market-to-listing" data-report-id="${escapeHtml(delivery.report_id)}" data-ai-ceo-assistant-id="${escapeHtml(latest.assistant_id || "")}">导入 Listing 草稿</button>
+      <button class="primary-action compact-action" type="button" data-saas-action="ai-ceo-import-market-to-listing" data-report-id="${escapeHtml(delivery.report_id)}" data-ai-ceo-assistant-id="${escapeHtml(latest.assistant_id || "")}" data-product-name="${escapeHtml(title)}">导入 Listing 草稿</button>
     </div>
   `;
 }
@@ -26852,9 +26852,27 @@ async function handleSaasListingSourceAiReport() {
   return true;
 }
 
+function saasAiCeoMarketImportProductKey(value = "") {
+  return publicRuntimeText(value).toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
+}
+
+function saasAiCeoMarketResearchTurnMatchesClickedProduct(turn = {}, expectedProduct = "") {
+  const latest = normalizeSaasAiCeoLatestTurn(turn);
+  const expectedKey = saasAiCeoMarketImportProductKey(expectedProduct);
+  const actualKey = saasAiCeoMarketImportProductKey(saasAiCeoMarketProductLabel(latest));
+  if (!latest || !expectedKey || !actualKey || expectedKey !== actualKey) return false;
+  if (latest.pending || !latest.assistant_text) return false;
+  if (["model_answer_rejected", "model_call_failed", "source_backed_market_report_draft", "market_report_recovery_draft"].includes(latest.status)) {
+    return false;
+  }
+  if (latest.market_report_delivery?.listing_import_ready === false) return false;
+  return true;
+}
+
 function saasAiCeoMarketResearchTurnForImport(source = null) {
   const reportId = String(source?.dataset?.reportId || "").trim();
   const assistantId = String(source?.dataset?.aiCeoAssistantId || "").trim();
+  const expectedProduct = String(source?.dataset?.productName || "").trim();
   if (!reportId && !assistantId) return null;
   const candidates = [];
   if (reportId) {
@@ -26871,10 +26889,12 @@ function saasAiCeoMarketResearchTurnForImport(source = null) {
         (turn) => turn.market_report_id === reportId && !assistantMatches.some((item) => item.assistant_id === turn.assistant_id),
       )
     : [];
-  const eligibility = [...assistantMatches, ...reportMatches]
+  const orderedMatches = [...assistantMatches, ...reportMatches];
+  const eligibility = orderedMatches
     .map((turn) => saasAiCeoMarketResearchEligibility(turn))
     .find((eligibility) => eligibility.eligible);
-  return eligibility?.latest || null;
+  if (eligibility?.latest) return eligibility.latest;
+  return orderedMatches.find((turn) => saasAiCeoMarketResearchTurnMatchesClickedProduct(turn, expectedProduct)) || null;
 }
 
 async function handleSaasAiCeoImportMarketToListing(source = null) {
@@ -26891,6 +26911,7 @@ async function handleSaasAiCeoImportMarketToListing(source = null) {
   }
   setView("product");
   const imported = applySaasAiCeoMarketTurnToListing(importTurn, {
+    expectedProduct: String(source?.dataset?.productName || "").trim(),
     toast: "已把这次 AI CEO 市场调研导入 Listing 草稿；不会写入 eBay。",
   });
   if (imported) {
@@ -27115,13 +27136,19 @@ function saasAiCeoMarketTurnFromReport(record = null) {
 
 function applySaasAiCeoMarketTurnToListing(marketTurn = null, options = {}) {
   const latest = normalizeSaasAiCeoLatestTurn(marketTurn);
-  if (!latest || !saasAiCeoMarketResearchEligibility(latest).eligible) return false;
+  const clickedProductMatches = saasAiCeoMarketResearchTurnMatchesClickedProduct(latest, options.expectedProduct || "");
+  if (!latest || (!saasAiCeoMarketResearchEligibility(latest).eligible && !clickedProductMatches)) return false;
   rememberLatestSaasAiCeoMarketResearchTurn(latest);
   const sourceReport =
     (latest.market_report_id
       ? (state.saasReports || []).find((record) => record?.report_id === latest.market_report_id && record.report_type === "ai_ceo.market_research")
       : null) || latestSaasReportByTypes(["ai_ceo.market_research"]);
-  const structuredSourceReport = sourceReport && saasProductLabelForRecord(sourceReport) ? sourceReport : null;
+  const sourceReportProduct = sourceReport ? saasProductLabelForRecord(sourceReport) : "";
+  const structuredSourceReport =
+    sourceReportProduct &&
+    (!options.expectedProduct || saasAiCeoMarketImportProductKey(sourceReportProduct) === saasAiCeoMarketImportProductKey(options.expectedProduct))
+      ? sourceReport
+      : null;
   state.saasListingComposerDraft = structuredSourceReport
     ? saasListingDraftFromReport(structuredSourceReport, "ai_ceo_market_report")
     : saasListingDraftFromAiCeoMarketTurn(latest);

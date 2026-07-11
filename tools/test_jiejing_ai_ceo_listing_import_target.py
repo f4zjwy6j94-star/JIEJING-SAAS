@@ -34,20 +34,24 @@ def main() -> None:
 
     listing_handoff = function_body(app_js, "renderSaasAiCeoListingHandoffMarkup")
     require(listing_handoff, "data-ai-ceo-assistant-id", "turn-bound Listing handoff")
+    require(listing_handoff, "data-product-name", "product-bound Listing handoff")
 
     report_delivery = function_body(app_js, "renderSaasAiCeoMarketReportDeliveryMarkup")
     require(report_delivery, "data-report-id", "report-bound market delivery")
     require(report_delivery, "data-ai-ceo-assistant-id", "turn-bound market delivery")
+    require(report_delivery, "data-product-name", "product-bound market delivery")
 
     exact_target = function_body(app_js, "saasAiCeoMarketResearchTurnForImport")
     for marker in [
         "source?.dataset?.reportId",
         "source?.dataset?.aiCeoAssistantId",
+        "source?.dataset?.productName",
         "item.report_id === reportId",
         "turn.assistant_id === assistantId",
         "saasAiCeoMarketResearchEligibility",
         ".filter((turn) => turn.assistant_id === assistantId)",
         ".find((eligibility) => eligibility.eligible)",
+        "saasAiCeoMarketResearchTurnMatchesClickedProduct",
     ]:
         require(exact_target, marker, "exact clicked-report import resolution")
 
@@ -57,8 +61,17 @@ def main() -> None:
         "clickedTarget",
         "clickedTarget && !targetedTurn",
         "targetedTurn || saasAiCeoMarketResearchImportState().turn",
+        "expectedProduct:",
     ]:
         require(import_handler, marker, "clicked-report import handler")
+
+    apply_import = function_body(app_js, "applySaasAiCeoMarketTurnToListing")
+    for marker in [
+        "clickedProductMatches",
+        "options.expectedProduct",
+        "saasAiCeoMarketImportProductKey(sourceReportProduct)",
+    ]:
+        require(apply_import, marker, "clicked-product-safe draft application")
 
     action_handler = function_body(app_js, "handleSaasAction")
     require(action_handler, "handleSaasAiCeoImportMarketToListing(button)", "clicked button forwarding")
