@@ -62,7 +62,23 @@ class SequenceModel:
             "model_mode": "live_http_model_text",
             "model_client": "quality-gate-test",
             "model_configured": True,
+            "model": self.model,
         }
+
+
+class TruncatedThenTimeoutModel(SequenceModel):
+    def generate_text(self, **_: Any) -> dict[str, Any]:
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "text": self.answers[0],
+                "model_mode": "live_http_model_text",
+                "model_client": "quality-gate-test",
+                "model_configured": True,
+                "model": self.model,
+                "finish_reason": "length",
+            }
+        raise TimeoutError("continuation timed out")
 
 
 def main() -> None:
@@ -144,6 +160,44 @@ def main() -> None:
         assert transient_recovered["status"] == "model_answered", transient_recovered
         assert transient_recovered["answer_quality"]["initial_retry_count"] == 1, transient_recovered
         assert transient_model.calls == 2, transient_model.calls
+
+        full_timeout_model = SequenceModel([TimeoutError("provider timed out")])
+        fast_fallback_model = SequenceModel([valid])
+        fast_fallback_model.model = "deepseek-v4-flash"
+        full_timeout_model.jiejing_fallback_model_client = fast_fallback_model
+        original_timeout_classifier = full_timeout_model.generate_text
+
+        def delayed_timeout(**kwargs: Any) -> dict[str, Any]:
+            _ = kwargs
+            raise TimeoutError("provider timed out after full workflow budget")
+
+        full_timeout_model.generate_text = delayed_timeout
+        failover_recovered = run_ai_ceo_chat(
+            repository=MinimalRepository(),
+            company_id="company_quality",
+            store_id="store_quality",
+            user_id="user_quality",
+            message=message,
+            model_client=full_timeout_model,
+        )
+        full_timeout_model.generate_text = original_timeout_classifier
+        assert failover_recovered["status"] == "model_answered", failover_recovered
+        assert failover_recovered["answer_quality"]["initial_retry_count"] == 1, failover_recovered
+        assert failover_recovered["model_client"]["model"] == "deepseek-v4-flash", failover_recovered
+        assert fast_fallback_model.calls == 1, fast_fallback_model.calls
+
+        truncated_model = TruncatedThenTimeoutModel([valid])
+        truncated_recovered = run_ai_ceo_chat(
+            repository=MinimalRepository(),
+            company_id="company_quality",
+            store_id="store_quality",
+            user_id="user_quality",
+            message=message,
+            model_client=truncated_model,
+        )
+        assert truncated_recovered["status"] == "model_answered", truncated_recovered
+        assert truncated_recovered["answer_quality"]["accepted"] is True, truncated_recovered
+        assert truncated_model.calls == 2, truncated_model.calls
 
         auth_model = SequenceModel([RuntimeError("model HTTP 401: unauthorized")])
         auth_blocked = run_ai_ceo_chat(

@@ -230,18 +230,18 @@ async function setListingDraft(page, seed) {
       product: seed.product,
       title: seed.title,
       source: "codex_no_write_publish_loop_smoke",
-      bullets: ["Reusable organizer tabs", "Fresh smoke SKU only", "No real platform write"],
+      bullets: ["Acceptance product identity preserved", "Fresh smoke SKU only", "No real platform write"],
       gaps: [],
       risks: ["真实发布仍需确认中心"],
       fields: {
         title: seed.title,
-        selling_points: "Reusable label tabs for home-office drawer organization.",
+        selling_points: `Controlled acceptance draft for ${seed.product}; merchant facts still require review.`,
         description: seed.description,
         category: seed.categoryLeaf,
         images: seed.imageUrl,
         price: seed.price,
-        item_specifics: "Brand: Unbranded\nType: Label Holder\nMaterial: Polypropylene",
-        logistics: "item location: US; 60 g; 10x6x2 cm",
+        item_specifics: "Brand: Unbranded\nType: Acceptance Test Fixture\nMaterial: Requires merchant verification",
+        logistics: "test fixture only; merchant must verify location, weight and dimensions",
       },
     };
     state.saasListingComposerInput = `${seed.product}\n${seed.description}`;
@@ -272,25 +272,26 @@ async function fillPublishIntakeForm(page, seed) {
   await fill("category_id", seed.categoryId);
   await fill("category_leaf", seed.categoryLeaf);
   await fill("merchant_location_key", "codex-main-location");
-  await fill("item_specifics", "Brand: Unbranded\nType: Label Holder\nMaterial: Polypropylene");
+  await fill("item_specifics", "Brand: Unbranded\nType: Acceptance Test Fixture\nMaterial: Requires merchant verification");
   await fill("quantity", "1");
   await fill("item_location", "US");
   await fill("package_weight_g", "60");
   await fill("package_length_cm", "10");
   await fill("package_width_cm", "6");
   await fill("package_height_cm", "2");
-  await fill("material", "Polypropylene");
+  await fill("material", "Requires merchant verification");
 }
 
 async function main() {
   const session = await makeSession();
+  const acceptanceProduct = process.env.JIEJING_ACCEPTANCE_PRODUCT || `Acceptance fixture label set ${Date.now()}`;
   const seed = {
-    product: `Fresh drawer label tab set ${Date.now()}`,
+    product: acceptanceProduct,
     sku: `JJ-PUBLISH-LOOP-${Date.now()}`,
-    title: "Reusable Desk Drawer Label Tabs for Home Office Organization",
-    description: "<p>Reusable label tabs for organizing desk drawers and storage bins.</p>",
+    title: acceptanceProduct.slice(0, 80),
+    description: `<p>Controlled acceptance draft for ${acceptanceProduct.replace(/[<>&]/g, "")}. Product facts require merchant verification before any real listing.</p>`,
     categoryId: "299",
-    categoryLeaf: "Label Holders",
+    categoryLeaf: "Synthetic no-write category fixture; requires taxonomy review",
     price: "9.99",
     imageUrl: "https://example.com/jiejing-no-write-label-tabs.jpg",
   };
@@ -522,6 +523,7 @@ async function main() {
       packet_id: session.packet.packet_id,
     },
     seed: {
+      product: seed.product,
       sku: seed.sku,
       title: seed.title,
       category_id: seed.categoryId,

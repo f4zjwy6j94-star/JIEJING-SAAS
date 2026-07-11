@@ -71,6 +71,7 @@ from .model_provider_catalog import (
 from .monitoring import build_monitoring_status
 from .operational_health import build_operational_health
 from .owner_launch_control import build_owner_launch_control
+from .platform_model_status import platform_default_serving_model
 from .paid_launch_approval_packet import build_paid_launch_approval_packet
 from .platform_registry import build_platform_connection_plan, get_platform_definition, registry_summary
 from .platform_data_packet_handoff import build_runtime_handoff_from_platform_packet, merge_runtime_handoff_input
@@ -4814,12 +4815,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 api_key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
             if not api_key:
                 api_key = (os.environ.get("JIEJING_MODEL_API_KEY") or "").strip()
-        model = (
-            str(body.get("model") or "").strip()
-            or (os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL") or "").strip()
+        configured_model = (
+            (os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL") or "").strip()
             or (os.environ.get("JIEJING_MODEL") or "").strip()
             or definition.default_model
         )
+        model = platform_default_serving_model(provider=definition.provider_key, configured_model=configured_model)
         base_url = normalize_model_api_base_url(
             provider_key=definition.provider_key,
             base_url=(
@@ -4854,6 +4855,21 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "provider_label": definition.label,
                 "secret_exposed": False,
             }
+        fallback_model = (
+            os.environ.get("JIEJING_AI_CEO_PLATFORM_FALLBACK_MODEL")
+            or (configured_model if configured_model != model else "")
+        ).strip()
+        if fallback_model and fallback_model != model:
+            try:
+                fallback_model_client = build_model_client_from_byok_secret(
+                    provider_key=definition.provider_key,
+                    api_key=api_key,
+                    model=fallback_model,
+                    base_url=base_url,
+                )
+                setattr(model_client, "jiejing_fallback_model_client", fallback_model_client)
+            except ValueError:
+                fallback_model = ""
         if hasattr(model_client, "configured") and not model_client.configured():
             return {
                 "status": "blocked",
@@ -4871,6 +4887,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             "provider_label": definition.label,
             "api_style": definition.api_style,
             "model": getattr(model_client, "model", "") or model,
+            "configured_model": configured_model,
+            "fallback_model": fallback_model,
+            "fallback_policy": "platform_default_transient_failover" if fallback_model else "disabled",
             "endpoint_host": urlparse(getattr(model_client, "endpoint", "") or "").netloc,
             "secret_ref": "",
             "secret_ref_scope": "platform",

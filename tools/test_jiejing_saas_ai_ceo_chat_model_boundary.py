@@ -651,7 +651,7 @@ def main() -> int:
         other_platform_resolution = other_response.get("platform_model_resolution", {})
         if other_platform_resolution.get("blocked_by") != ["platform_model_api_key_not_configured"]:
             return fail(f"platform trial AI missing-key blocker should be explicit and sanitized: {other_platform_resolution}")
-        if other_platform_resolution.get("provider_key") != "deepseek" or other_platform_resolution.get("model") != "deepseek-v4-pro":
+        if other_platform_resolution.get("provider_key") != "deepseek" or other_platform_resolution.get("model") != "deepseek-v4-flash":
             return fail(f"platform trial AI summary should expose only safe provider/model labels: {other_platform_resolution}")
         if other_platform_resolution.get("secret_exposed") is not False:
             return fail(f"platform trial AI summary must not expose secrets: {other_platform_resolution}")

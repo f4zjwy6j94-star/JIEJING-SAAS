@@ -13,6 +13,9 @@ const viewportHeight = Number(process.env.JIEJING_SMOKE_VIEWPORT_HEIGHT || 920);
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const outDir = path.join("output", "browser-smoke", `${stamp}-bulk-media-handoff`);
 const smokeMarker = "codex_jiejing_bulk_media_handoff_smoke";
+const includeVideo = /^(1|true|yes|on)$/i.test(String(process.env.JIEJING_ACCEPTANCE_INCLUDE_VIDEO || ""));
+const acceptanceProduct = process.env.JIEJING_ACCEPTANCE_PRODUCT || `Acceptance fixture lightweight organizer ${Date.now()}`;
+let smokeStage = "starting";
 fs.mkdirSync(outDir, { recursive: true });
 
 function fail(message, details = {}) {
@@ -189,7 +192,7 @@ async function setupContext(browser, session, appHtml) {
   return context;
 }
 
-async function waitForReady(page, selector) {
+async function waitForReady(page, selector, timeoutMs = 60000) {
   await page.waitForFunction(
     (selector) => {
       const root = document.querySelector(selector);
@@ -201,13 +204,15 @@ async function waitForReady(page, selector) {
       );
     },
     selector,
-    { timeout: 60000 },
+    { timeout: timeoutMs },
   );
   await page.waitForTimeout(350);
 }
 
 async function main() {
+  smokeStage = "creating_safe_test_account";
   const session = await makeSession();
+  smokeStage = "loading_workbench";
   const appHtmlResponse = localStaticRoot
     ? { ok: true, text: async () => fs.readFileSync(path.join(localStaticRoot, "app.html"), "utf8"), status: 200 }
     : await fetch(`${base}/app.html?start=app&view=bulk&bulk-media-smoke=${Date.now()}`, { cache: "no-store" });
@@ -257,7 +262,18 @@ async function main() {
   });
   await page.waitForSelector("body", { timeout: 30000 });
   await page.waitForLoadState("networkidle", { timeout: 45000 }).catch(() => {});
+  smokeStage = "waiting_for_initial_workbench";
+  await page.waitForFunction(
+    () =>
+      document.documentElement.classList.contains("app-ready") &&
+      !document.querySelector(".auth-shell, .saas-login-modal, [data-auth-view]") &&
+      typeof setView === "function",
+    null,
+    { timeout: 90000 },
+  );
+  await page.evaluate(() => setView("bulk"));
   await waitForReady(page, "#view-bulk.is-active");
+  smokeStage = "bulk_ready";
   await page
     .screenshot({ path: path.join(outDir, "01-bulk-initial.png"), fullPage: true, timeout: 15000 })
     .catch((error) => screenshotFailures.push({ view: "bulk-initial", error: String(error.message || error).slice(0, 300) }));
@@ -280,11 +296,12 @@ async function main() {
   await page.fill(
     "#bulkManualSourceInput",
     [
-      "Adjustable Drawer Dividers | https://supplier.invalid/drawer-dividers | 11.8 CNY | 240 | Yiwu | 190g / 32x8x6cm",
-      "Sink Sponge Organizer | https://supplier.invalid/sink-organizer | 8.6 CNY | 500 | Ningbo | 120g / 18x9x7cm",
+      `${acceptanceProduct} | https://supplier.invalid/product-grade-acceptance | 11.8 CNY | 240 | Yiwu | 190g / 32x8x6cm`,
+      `Acceptance fixture backup ${Date.now()} | https://supplier.invalid/product-grade-backup | 8.6 CNY | 500 | Ningbo | 120g / 18x9x7cm`,
     ].join("\n"),
   );
   await page.click('[data-bulk-action="import-manual-source"]');
+  smokeStage = "importing_bulk_candidates";
   await page.waitForFunction(
     () => Array.isArray(state.saasBulkCandidates) && state.saasBulkCandidates.length === 2,
     null,
@@ -294,6 +311,7 @@ async function main() {
   await page.evaluate(() => {
     document.querySelector('#view-bulk.is-active [data-bulk-action="generate-candidates"]')?.click();
   });
+  smokeStage = "generating_bulk_candidates";
   await page.waitForFunction(
     () => {
       const root = document.querySelector("#view-bulk.is-active");
@@ -322,16 +340,17 @@ async function main() {
   await page.evaluate(() => {
     document.querySelector('#view-bulk.is-active [data-bulk-action="accept-candidates"]')?.click();
   });
+  smokeStage = "opening_listing_from_bulk";
   await waitForReady(page, "#view-product.is-active");
   await page.waitForFunction(
-    () => {
+    (expectedProduct) => {
       return Boolean(
         state.saasListingComposerDraft?.source_type === "bulk_handoff" &&
-          state.saasListingComposerDraft?.product === "Adjustable Drawer Dividers" &&
+          state.saasListingComposerDraft?.product === expectedProduct &&
           String(state.activeMediaDraft || "").startsWith("saas-bulk-"),
       );
     },
-    null,
+    acceptanceProduct,
     { timeout: 60000 },
   );
   await page
@@ -366,11 +385,12 @@ async function main() {
   await page.evaluate(() => {
     document.querySelector('#view-product.is-active [data-saas-action="open-media"], #view-product.is-active [data-product-action="media"]')?.click();
   });
+  smokeStage = "opening_media_for_listing_project";
   await waitForReady(page, "#view-media.is-active");
   await page.waitForFunction(
     () => {
       const activeTab = document.querySelector("#view-media.is-active .media-project-tab.is-active");
-      return Boolean(activeTab && activeTab.getAttribute("data-media-draft") === state.activeMediaDraft && String(state.activeMediaDraft || "").startsWith("saas-bulk-"));
+      return Boolean(activeTab && activeTab.getAttribute("data-media-draft") === state.activeMediaDraft && String(state.activeMediaDraft || "").startsWith("listing-project-"));
     },
     null,
     { timeout: 60000 },
@@ -386,6 +406,8 @@ async function main() {
     return {
       active_media_draft: state.activeMediaDraft || "",
       active_tab_draft: activeTab?.getAttribute("data-media-draft") || "",
+      listing_project_key: typeof saasCurrentListingProjectIdentity === "function" ? saasCurrentListingProjectIdentity()?.key || "" : "",
+      product_name: typeof activeMediaDraftProductNameForDisplay === "function" ? activeMediaDraftProductNameForDisplay() : "",
       has_asset_jobs_panel: Boolean(root?.querySelector(".saas-media-asset-jobs")),
       has_generated_assets_panel: Boolean(root?.querySelector(".saas-media-generated-assets")),
       has_generate_button: Boolean(root?.querySelector("#mediaGenerateImagesDraft")),
@@ -396,26 +418,34 @@ async function main() {
     };
   });
 
-  await page.evaluate(() => {
+  await page.evaluate(({ includeVideo }) => {
+    const videoPreset = document.querySelector("#view-media.is-active #mediaVideoPresetSelect");
+    if (includeVideo && videoPreset) {
+      videoPreset.value = "10 秒产品展示视频";
+      videoPreset.dispatchEvent(new Event("change", { bubbles: true }));
+    }
     document.querySelector("#view-media.is-active #mediaGenerateImagesDraft")?.click();
-  });
+  }, { includeVideo });
+  smokeStage = "generating_media_assets";
   await page.waitForFunction(
     () => ["submitted", "generated", "done"].includes(state.mediaGenerationStatus) && (document.querySelector("#mediaProductionStatus")?.textContent || "").length > 0,
     null,
     { timeout: 60000 },
   );
+  const assetWaitTimeout = includeVideo ? 480000 : 60000;
   await page
     .waitForFunction(
-      () =>
+      ({ includeVideo }) =>
         (state.saasMediaAssetJobs || []).some(
           (job) =>
             job &&
             String(job.status || "") === "waiting_review" &&
             Array.isArray(job.asset_manifest) &&
-            job.asset_manifest.length > 0,
+            job.asset_manifest.length > 0 &&
+            (!includeVideo || job.asset_manifest.some((asset) => /video/i.test(String(asset?.asset_type || "")))),
         ),
-      null,
-      { timeout: 60000 },
+      { includeVideo },
+      { timeout: assetWaitTimeout },
     )
     .catch(() => {});
   let mediaJobsApi = await api(`/stores/${encodeURIComponent(session.store.store_id)}/media-asset-jobs?limit=8`, {
@@ -430,6 +460,9 @@ async function main() {
     media_job_id: latestBackendMediaJob.media_job_id || "",
     job_status: latestBackendMediaJob.status || "",
     manifest_count: Array.isArray(latestBackendMediaJob.asset_manifest) ? latestBackendMediaJob.asset_manifest.length : 0,
+    manifest_types: Array.isArray(latestBackendMediaJob.asset_manifest)
+      ? latestBackendMediaJob.asset_manifest.map((asset) => String(asset?.asset_type || ""))
+      : [],
     validation_status: latestBackendMediaJob.asset_manifest_validation?.status || "",
     live_provider_called: latestBackendMediaJob.live_provider_called,
     spend_now_allowed: latestBackendMediaJob.spend_now_allowed,
@@ -482,6 +515,9 @@ async function main() {
     media_job_id: latestBackendMediaJob.media_job_id || "",
     job_status: latestBackendMediaJob.status || "",
     manifest_count: Array.isArray(latestBackendMediaJob.asset_manifest) ? latestBackendMediaJob.asset_manifest.length : 0,
+    manifest_types: Array.isArray(latestBackendMediaJob.asset_manifest)
+      ? latestBackendMediaJob.asset_manifest.map((asset) => String(asset?.asset_type || ""))
+      : [],
     validation_status: latestBackendMediaJob.asset_manifest_validation?.status || "",
     live_provider_called: latestBackendMediaJob.live_provider_called,
     spend_now_allowed: latestBackendMediaJob.spend_now_allowed,
@@ -491,6 +527,7 @@ async function main() {
   await page.evaluate(() => {
     document.querySelector("#view-media.is-active #mediaConfirmDraft")?.click();
   });
+  smokeStage = "writing_media_back_to_listing";
   await waitForReady(page, "#view-product.is-active");
   await page.waitForFunction(
     () =>
@@ -528,15 +565,17 @@ async function main() {
     bulk_handoff_reaches_listing:
       productAfterBulk.source_type === "bulk_handoff" &&
       productAfterBulk.active_media_draft.startsWith("saas-bulk-") &&
-      productAfterBulk.active_title_cn === "Adjustable Drawer Dividers" &&
+      productAfterBulk.active_title_cn === acceptanceProduct &&
       productAfterBulk.cost_price.includes("11.8") &&
       productAfterBulk.logistics.includes("Yiwu") &&
       productAfterBulk.handoff_status === "sent" &&
       productAfterBulk.title_is_not_generic_ai_ceo_report &&
       productAfterBulk.has_media_button,
     media_opens_same_bulk_draft:
-      mediaOpened.active_media_draft === productAfterBulk.active_media_draft &&
+      mediaOpened.active_media_draft.startsWith("listing-project-") &&
+      mediaOpened.active_media_draft === mediaOpened.listing_project_key &&
       mediaOpened.active_tab_draft === mediaOpened.active_media_draft &&
+      mediaOpened.product_name === acceptanceProduct &&
       mediaOpened.has_asset_jobs_panel &&
       mediaOpened.has_generate_button &&
       mediaOpened.has_writeback_button &&
@@ -555,8 +594,10 @@ async function main() {
       backendMediaJob.live_provider_called === true &&
       backendMediaJob.spend_now_allowed === false &&
       backendMediaJob.secret_exposed === false,
+    requested_video_returned:
+      !includeVideo || backendMediaJob.manifest_types.some((assetType) => /video/i.test(assetType)),
     media_writeback_returns_to_listing:
-      productAfterMedia.active_media_draft === productAfterBulk.active_media_draft &&
+      productAfterMedia.active_media_draft === mediaOpened.active_media_draft &&
       productAfterMedia.active_flow_key === "product" &&
       productAfterMedia.has_writeback_feedback &&
       productAfterMedia.has_publish_confirmation_flow &&
@@ -574,6 +615,8 @@ async function main() {
   const result = {
     ok: Object.values(checks).every(Boolean) && !pageErrors.length && !requestFailures.length && !badResponses.length && !forbiddenRequests.length,
     marker: smokeMarker,
+    acceptance_product: acceptanceProduct,
+    include_video: includeVideo,
     timestamp: new Date().toISOString(),
     base,
     outDir,
@@ -627,6 +670,7 @@ main().catch((error) => {
       {
         ok: false,
         message: error.message,
+        stage: smokeStage,
         details: error.details || {},
         outDir,
       },

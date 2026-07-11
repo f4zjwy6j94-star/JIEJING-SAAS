@@ -30,11 +30,12 @@ def build_platform_default_model_status() -> dict[str, Any]:
         credential_present = True
         credential_source = "generic_model_env"
 
-    model = (
+    configured_model = (
         os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL")
         or os.environ.get("JIEJING_MODEL")
         or (definition.default_model if definition else "")
     ).strip()
+    model = platform_default_serving_model(provider=provider, configured_model=configured_model)
     raw_base_url = (
         os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL_BASE_URL")
         or os.environ.get("JIEJING_MODEL_BASE_URL")
@@ -57,12 +58,15 @@ def build_platform_default_model_status() -> dict[str, Any]:
         status = "incomplete_configuration"
 
     return {
-        "contract_version": "2026-07-10-platform-default-model-readiness",
+        "contract_version": "2026-07-11-platform-default-model-serving-policy",
         "enabled": enabled,
         "configured": configured,
         "status": status,
         "provider": provider,
         "model": model,
+        "configured_model": configured_model,
+        "serving_policy": "fast_trial_model_with_configured_fallback" if model != configured_model else "configured_model",
+        "fallback_model": configured_model if model != configured_model else "",
         "endpoint_host": urlparse(base_url).netloc if base_url else "",
         "provider_supported": provider_supported,
         "credential_present": credential_present,
@@ -73,6 +77,15 @@ def build_platform_default_model_status() -> dict[str, Any]:
         "reports_get_model_api_key": False,
         "secret_exposed": False,
     }
+
+
+def platform_default_serving_model(*, provider: str, configured_model: str) -> str:
+    explicit = (os.environ.get("JIEJING_AI_CEO_PLATFORM_SERVING_MODEL") or "").strip()
+    if explicit:
+        return explicit
+    if provider.strip().lower() == "deepseek":
+        return "deepseek-v4-flash"
+    return configured_model
 
 
 def _env_enabled(name: str, *, default: bool = False) -> bool:

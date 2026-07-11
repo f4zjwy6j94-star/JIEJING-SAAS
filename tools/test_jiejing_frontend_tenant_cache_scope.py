@@ -165,6 +165,13 @@ def main() -> int:
     ]:
         require(cloud_dom_body, marker, "non-sensitive cloud history browser proof")
 
+    merge_score_body = function_body(app_js, "saasAiCeoThreadTurnMergeScore")
+    for marker in ["normalized.pending ? 0 : 100000", "normalized.assistant_text", "normalized.source_records"]:
+        require(merge_score_body, marker, "cross-device completed-turn conflict preference")
+    unique_turns_body = function_body(app_js, "uniqueSaasAiCeoThreadTurns")
+    for marker in ["saasAiCeoThreadTurnMergeScore(existing)", "candidateScore >= existingScore", "orderedKeys"]:
+        require(unique_turns_body, marker, "deterministic cross-device turn merge")
+
     viewport_body = function_body(app_js, "syncSaasAiCeoFixedChatViewportState")
     require(viewport_body, "syncSaasAiCeoCloudDomState()", "cloud history marker after chat rerender")
 

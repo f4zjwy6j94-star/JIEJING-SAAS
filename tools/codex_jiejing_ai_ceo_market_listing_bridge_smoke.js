@@ -291,6 +291,13 @@ async function main() {
     fail("persisted AI CEO market report does not match Listing handoff contract", {
       problems: reportValidation.problems,
       report_id: report.report_id,
+      chat_diagnostics: {
+        status: chatResponse.json?.ai_ceo_chat?.status || "",
+        blocked_by: chatResponse.json?.ai_ceo_chat?.blocked_by || [],
+        provider_error_type: chatResponse.json?.ai_ceo_chat?.provider_error_type || "",
+        model_client: chatResponse.json?.ai_ceo_chat?.model_client || {},
+        performance: chatResponse.json?.ai_ceo_chat?.performance || {},
+      },
       response: redact(report),
     });
   }

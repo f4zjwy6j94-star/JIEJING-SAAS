@@ -2274,6 +2274,7 @@ def _generate_model_text_with_initial_retry(
     started_at = time.monotonic()
     timeout_seconds = _ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind)
     max_output_tokens = _ai_ceo_model_max_output_tokens(route=route, realtime_kind=realtime_kind)
+    fallback_model_client = getattr(model_client, "jiejing_fallback_model_client", None)
     try:
         result = model_client.generate_text(
             system_prompt=system_prompt,
@@ -2300,18 +2301,24 @@ def _generate_model_text_with_initial_retry(
             elapsed_ms=first_attempt_latency_ms,
             timeout_seconds=timeout_seconds,
         )
-        if not retry_enabled or not retryable:
+        fallback_retryable = fallback_model_client is not None and failure_code in {
+            "model_network_or_timeout",
+            "model_rate_limited",
+            "model_provider_temporary_error",
+        }
+        if not retry_enabled or not (retryable or fallback_retryable):
             return None, first_attempt_latency_ms, 0, exc
 
+    retry_client = fallback_model_client or model_client
     retry_timeout = _env_int(
         "JIEJING_AI_CEO_MODEL_RETRY_TIMEOUT_SECONDS",
-        default=min(timeout_seconds, 10),
+        default=min(timeout_seconds, 16 if fallback_model_client is not None else 10),
         minimum=5,
         maximum=45,
     )
     retry_tokens = _env_int(
         "JIEJING_AI_CEO_MODEL_RETRY_MAX_OUTPUT_TOKENS",
-        default=min(max_output_tokens, 900),
+        default=min(max_output_tokens, 1200 if fallback_model_client is not None else 900),
         minimum=256,
         maximum=2048,
     )
@@ -2320,7 +2327,7 @@ def _generate_model_text_with_initial_retry(
         + " 本轮上一次连接短暂失败。请直接完成当前 merchant_message；选品任务先给具体候选商品卡，未知事实明确标为待复核。"
     )
     try:
-        result = model_client.generate_text(
+        result = retry_client.generate_text(
             system_prompt=retry_prompt,
             user_prompt=user_prompt,
             temperature=0.1,
@@ -2382,13 +2389,18 @@ def _complete_truncated_model_result(
             "original_request": user_prompt,
             "answer_so_far": answer[-7000:],
         }
-        next_result = model_client.generate_text(
-            system_prompt=system_prompt,
-            user_prompt=json.dumps(continuation_payload, ensure_ascii=False, default=str),
-            temperature=0.1,
-            max_output_tokens=_ai_ceo_model_max_output_tokens(route=route, realtime_kind=realtime_kind),
-            timeout_seconds=_ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind),
-        )
+        try:
+            next_result = model_client.generate_text(
+                system_prompt=system_prompt,
+                user_prompt=json.dumps(continuation_payload, ensure_ascii=False, default=str),
+                temperature=0.1,
+                max_output_tokens=_ai_ceo_model_max_output_tokens(route=route, realtime_kind=realtime_kind),
+                timeout_seconds=_ai_ceo_model_timeout_seconds(route=route, realtime_kind=realtime_kind),
+            )
+        except Exception:  # pragma: no cover - provider dependent
+            completed["finish_reason"] = "continuation_unavailable"
+            completed["continuation_failed"] = True
+            break
         continuation = str((next_result or {}).get("text") or "").strip()
         if not continuation:
             break

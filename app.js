@@ -39358,18 +39358,34 @@ function loadSaasAiCeoThread() {
 }
 
 function uniqueSaasAiCeoThreadTurns(turns = []) {
-  const seen = new Set();
-  return turns
+  const selected = new Map();
+  const orderedKeys = [];
+  turns
     .map(normalizeSaasAiCeoLatestTurn)
     .filter(shouldKeepSaasAiCeoThreadTurn)
-    .filter((turn) => {
+    .forEach((turn) => {
       const key =
         turn.assistant_id ||
         `turn-${Math.abs(hashString(`${turn.created_at}|${turn.user_text}|${turn.assistant_text}`)).toString(16)}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
+      if (!selected.has(key)) orderedKeys.push(key);
+      const existing = selected.get(key);
+      const existingScore = existing ? saasAiCeoThreadTurnMergeScore(existing) : -1;
+      const candidateScore = saasAiCeoThreadTurnMergeScore(turn);
+      if (!existing || candidateScore >= existingScore) selected.set(key, turn);
     });
+  return orderedKeys.map((key) => selected.get(key)).filter(Boolean);
+}
+
+function saasAiCeoThreadTurnMergeScore(turn = {}) {
+  const normalized = normalizeSaasAiCeoLatestTurn(turn);
+  if (!normalized) return -1;
+  const completionScore = normalized.pending ? 0 : 100000;
+  const answerScore = Math.min(20000, String(normalized.assistant_text || "").length * 10);
+  const evidenceScore =
+    (normalized.source_records || []).length * 100 +
+    (normalized.work_records || []).length * 100 +
+    (normalized.confirmation_items || []).length * 100;
+  return completionScore + answerScore + evidenceScore;
 }
 
 function loadSaasAiCeoAccountThreads() {

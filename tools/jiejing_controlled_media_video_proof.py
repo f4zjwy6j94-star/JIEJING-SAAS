@@ -19,6 +19,19 @@ from jiejing_runtime.media_generation import MediaGenerationAdapter, MediaGenera
 from jiejing_saas.media_asset_pipeline import build_media_asset_generation_packet
 
 
+def _acceptance_product() -> str:
+    explicit = os.environ.get("JIEJING_ACCEPTANCE_PRODUCT", "").strip()
+    if explicit:
+        return explicit
+    journey_path = ROOT / "output" / "jiejing-product-grade-journey" / "latest.json"
+    if journey_path.exists():
+        payload = json.loads(journey_path.read_text(encoding="utf-8"))
+        product = str(payload.get("acceptance_product") or "").strip()
+        if product:
+            return product
+    raise SystemExit("Run the product-grade merchant journey first or set JIEJING_ACCEPTANCE_PRODUCT.")
+
+
 def _download(url: str, target: Path) -> int:
     request = urllib.request.Request(url, headers={"User-Agent": "Jiejing controlled media proof"})
     with urllib.request.urlopen(request, timeout=90) as response:
@@ -32,21 +45,22 @@ def main() -> int:
         raise SystemExit("Set JIEJING_CONTROLLED_MEDIA_VIDEO_PROOF=true for this one authorized provider call.")
 
     captured_at = datetime.now(timezone.utc).isoformat()
+    product = _acceptance_product()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     output_root = ROOT / "output" / "jiejing-controlled-media-video-proof" / stamp
     output_root.mkdir(parents=True, exist_ok=True)
 
     snapshot = MediaGenerationAdapter().generate(
         MediaGenerationConfig(
-            product="Adjustable Drawer Dividers - controlled capability proof only",
+            product=product,
             image_prompt=(
-                "Create one realistic studio product image of an unbranded adjustable drawer divider set on a pure white background. "
-                "Show only the product, preserve a plausible simple structure, and add no text, logo, certification, price or performance claim. "
-                "This is a controlled media capability proof, not a real supplier product photo."
+                f"Create one realistic studio concept image for an unbranded {product} on a pure white background. "
+                "Show one product only. Add no text, logo, certification, price, exact dimensions or performance claim. "
+                "Treat unverified construction details as a visual concept, not a real supplier product photo."
             ),
             video_prompt=(
                 "Create a short product-focused demonstration from the supplied first frame. Use a slow camera push-in and subtle parallax only. "
-                "Preserve the divider structure and color. Add no people, hands, logos, text, price or unsupported claim."
+                "Preserve the product structure and color from the first frame. Add no people, hands, logos, text, price or unsupported claim."
             ),
             image_count=1,
             image_sizes=["1024x1024"],
@@ -64,7 +78,7 @@ def main() -> int:
         "scene_types": ["white_background"],
         "video_script": "Controlled short product demonstration; no unsupported claims.",
         "product_facts": {
-            "product": "Adjustable Drawer Dividers - controlled capability proof only",
+            "product": product,
             "material": "unverified",
         },
         "creative_job_spec": {
@@ -120,6 +134,7 @@ def main() -> int:
         ),
         "captured_at": captured_at,
         "purpose": "controlled_capability_proof_only_not_a_real_listing",
+        "acceptance_product": product,
         "asset_count": len(assets),
         "downloaded_assets": downloaded,
         "asset_manifest_validation": packet.get("asset_manifest_validation"),

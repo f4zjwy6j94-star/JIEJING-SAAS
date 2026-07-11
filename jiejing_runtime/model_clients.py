@@ -297,6 +297,10 @@ class OpenAICompatibleModelClient(ModelClient):
             minimum=1,
             maximum=max(1, self.timeout_seconds),
         )
+        stream_enabled = _env_truthy(
+            "JIEJING_MODEL_TEXT_STREAM_ENABLED",
+            default=urlparse(self.endpoint).netloc.lower() == "api.deepseek.com",
+        )
         payload = {
             "model": self.model,
             "messages": [
@@ -305,6 +309,7 @@ class OpenAICompatibleModelClient(ModelClient):
             ],
             "temperature": temperature,
             "max_tokens": token_budget,
+            "stream": stream_enabled,
         }
         request = urllib.request.Request(
             self.endpoint,
@@ -317,6 +322,18 @@ class OpenAICompatibleModelClient(ModelClient):
         )
         try:
             with urllib.request.urlopen(request, timeout=request_timeout) as response:
+                if stream_enabled:
+                    content, finish_reason = self._read_streaming_text(response)
+                    return {
+                        "text": content,
+                        "model_mode": "live_http_model_text_stream",
+                        "model_client": self.name,
+                        "model_configured": True,
+                        "model": self.model,
+                        "timeout_seconds": request_timeout,
+                        "max_output_tokens": token_budget,
+                        "finish_reason": finish_reason,
+                    }
                 body = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:  # pragma: no cover - live provider dependent
             detail = exc.read().decode("utf-8", errors="replace")
@@ -333,6 +350,33 @@ class OpenAICompatibleModelClient(ModelClient):
             "max_output_tokens": token_budget,
             "finish_reason": str(choice.get("finish_reason") or ""),
         }
+
+    @staticmethod
+    def _read_streaming_text(response: Any) -> tuple[str, str]:
+        chunks: list[str] = []
+        finish_reason = ""
+        for raw_line in response:
+            line = raw_line.decode("utf-8", errors="replace").strip() if isinstance(raw_line, bytes) else str(raw_line).strip()
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                event = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            choices = event.get("choices") if isinstance(event, dict) else None
+            if not isinstance(choices, list) or not choices:
+                continue
+            choice = choices[0] if isinstance(choices[0], dict) else {}
+            delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
+            content = delta.get("content")
+            if isinstance(content, str) and content:
+                chunks.append(content)
+            if choice.get("finish_reason"):
+                finish_reason = str(choice.get("finish_reason") or "")
+        return "".join(chunks).strip(), finish_reason
 
 
 class OpenAIResponsesModelClient(ModelClient):

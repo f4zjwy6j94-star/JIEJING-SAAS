@@ -91,7 +91,10 @@ def main() -> None:
         gate = build_model_value_gate(settings, repo)
         assert gate["platform_default_model"]["configured"] is True
         assert gate["platform_default_model"]["provider"] == "deepseek"
-        assert gate["platform_default_model"]["model"] == "deepseek-v4-pro"
+        assert gate["platform_default_model"]["model"] == "deepseek-v4-flash"
+        assert gate["platform_default_model"]["configured_model"] == "deepseek-v4-pro"
+        assert gate["platform_default_model"]["fallback_model"] == "deepseek-v4-pro"
+        assert gate["platform_default_model"]["serving_policy"] == "fast_trial_model_with_configured_fallback"
         assert "model_provider_not_configured" not in gate["blockers"]
 
         readiness = build_product_readiness(settings, repo)

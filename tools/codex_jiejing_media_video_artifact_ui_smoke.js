@@ -10,6 +10,8 @@ const root = path.resolve(__dirname, "..");
 const proof = JSON.parse(
   fs.readFileSync(path.join(root, "output", "jiejing-controlled-media-video-proof", "revalidated-latest.json"), "utf8"),
 );
+const acceptanceProduct = String(proof.acceptance_product || "").trim();
+if (!acceptanceProduct) throw new Error("revalidated media proof is missing acceptance_product");
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const outDir = path.join(root, "output", "browser-smoke", `${stamp}-media-video-artifact-ui`);
 fs.mkdirSync(outDir, { recursive: true });
@@ -28,13 +30,13 @@ async function main() {
       { timeout: 60000 },
     );
     await page.evaluate(
-      ({ imageUrl, videoUrl, duration }) => {
+      ({ imageUrl, videoUrl, duration, product }) => {
         setView("media");
         state.saasListingComposerDraft = {
           source_type: "controlled_media_capability_proof",
-          product: "Adjustable Drawer Dividers - capability proof",
-          title: "Adjustable Drawer Dividers - capability proof",
-          fields: { title: "Adjustable Drawer Dividers - capability proof", images: "" },
+          product,
+          title: product,
+          fields: { title: product, images: "" },
         };
         state.activeListingDraft = "";
         state.activeMediaDraft = "saas-controlled-media-proof";
@@ -79,6 +81,7 @@ async function main() {
         imageUrl: pathToFileURL(proof.image_path).href,
         videoUrl: pathToFileURL(proof.video_path).href,
         duration: proof.video_duration_seconds,
+        product: acceptanceProduct,
       },
     );
     await page.waitForSelector('#view-media.is-active [data-asset-preview^="manifest:"] video', { timeout: 30000 });
@@ -93,7 +96,7 @@ async function main() {
       null,
       { timeout: 30000 },
     );
-    const result = await page.evaluate(() => {
+    const result = await page.evaluate((product) => {
       const modal = document.querySelector("#assetModal:not([hidden])");
       const video = modal?.querySelector("video");
       const checks = Array.from(modal?.querySelectorAll("[data-media-review-check]") || []);
@@ -114,10 +117,10 @@ async function main() {
         review_button_enabled_after: Boolean(button && !button.disabled),
         exposes_provider_brand: /\bFAL\b|fal\.ai|API key|refresh token/i.test(modal?.innerText || ""),
         has_direct_publish_copy: /直接发布|一键发布|自动发布到 eBay/.test(modal?.innerText || ""),
-        contains_current_product: /Adjustable Drawer Dividers/.test(modal?.innerText || ""),
+        contains_current_product: String(modal?.innerText || "").includes(product),
         contains_legacy_demo: /倒流香|香炉|Backflow Incense|incense burner|香粒/i.test(modal?.innerText || ""),
       };
-    });
+    }, acceptanceProduct);
     await page.screenshot({ path: path.join(outDir, "media-video-preview.png"), fullPage: true });
     const checks = {
       live_video_preview_loaded:

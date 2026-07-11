@@ -74,6 +74,7 @@ def main() -> int:
         raise AssertionError("revalidated manifest did not retain the real video asset")
     revalidated = {
         "ok": True,
+        "acceptance_product": latest.get("acceptance_product"),
         "revalidated_at": captured_at,
         "source_live_proof_captured_at": latest.get("captured_at"),
         "source_evidence": str(latest_path.resolve()),
