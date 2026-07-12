@@ -7052,7 +7052,10 @@ function saasMediaAssetJobIsConceptOnly(job = {}) {
   const manifest = Array.isArray(job.asset_manifest) ? job.asset_manifest : [];
   const facts = saasMediaAssetJobProductFacts(job);
   const referenceImages = Array.isArray(facts.reference_images) ? facts.reference_images : [];
-  const hasGroundedReferenceImage = referenceImages.some((url) => /^https:\/\//i.test(String(url || "").trim()));
+  const hasGroundedReferenceImage =
+    Boolean(String(facts.source_asset_id || "").trim()) ||
+    facts.private_source_transport === "backend_asset_id" ||
+    referenceImages.some((url) => /^https:\/\//i.test(String(url || "").trim()));
   const jobSpec = job.job && typeof job.job === "object" && job.job.job_spec && typeof job.job.job_spec === "object"
     ? job.job.job_spec
     : job.job_spec && typeof job.job_spec === "object"

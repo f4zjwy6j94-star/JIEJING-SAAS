@@ -116,6 +116,8 @@ def main() -> int:
         raise AssertionError("frontend must identify concept-only media jobs")
     if "manifest.length > 0 && !hasGroundedReferenceImage" not in app_js:
         raise AssertionError("frontend must classify legacy ungrounded media jobs as concept-only")
+    if 'facts.private_source_transport === "backend_asset_id"' not in app_js:
+        raise AssertionError("frontend must treat a backend-owned source asset as grounded media evidence")
     if "概念参考图不可用于刊登" not in app_js:
         raise AssertionError("frontend must label concept-only media before merchant review")
     if "概念参考，不能通过 Listing 审核" not in app_js:
