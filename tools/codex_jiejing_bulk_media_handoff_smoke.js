@@ -242,12 +242,15 @@ async function main() {
     }
   });
   page.on("requestfailed", (request) => {
-    if (request.url().startsWith(base)) {
+    const requestUrl = request.url();
+    if (requestUrl.startsWith(base)) {
       const failure = request.failure()?.errorText || "";
       const resourceType = request.resourceType();
       // Images can be aborted during intentional view transitions. Treat only app/API/script failures as smoke blockers.
       if (resourceType === "image" && /ERR_ABORTED/i.test(failure)) return;
-      requestFailures.push({ url: request.url(), error: failure, resourceType });
+      // Cloudflare RUM is optional edge telemetry and is commonly cancelled when the test closes the page.
+      if (resourceType === "ping" && requestUrl.includes("/cdn-cgi/rum") && /ERR_ABORTED/i.test(failure)) return;
+      requestFailures.push({ url: requestUrl, error: failure, resourceType });
     }
   });
   page.on("response", (response) => {
