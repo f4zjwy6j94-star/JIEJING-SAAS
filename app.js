@@ -25719,6 +25719,7 @@ async function refreshSaasState(options = {}) {
       coreDataPackets,
       coreCeoCommandMemory,
       coreCeoChatHistory,
+      coreReadiness,
     ] = await Promise.all([
       saasFetch("/me"),
       saasFetch("/permissions/me"),
@@ -25738,6 +25739,7 @@ async function refreshSaasState(options = {}) {
       optionalSaasFetchFast("/ai-ceo/chat-history?limit=30", {
         ai_ceo_chat_history: { scope: "unavailable", cross_store: false, turns: [] },
       }, 10000),
+      optionalSaasFetchFast("/readiness/product-saas", { readiness: state.saasReadiness || null }, 10000),
     ]);
     state.saasIdentity = coreMe.identity || null;
     state.saasUser = coreMe.user || null;
@@ -25756,6 +25758,7 @@ async function refreshSaasState(options = {}) {
     state.saasModelSettings = coreModelSettings.model_settings || null;
     state.saasDataPackets = coreDataPackets.data_packets || [];
     state.saasExecutionResults = coreExecutions.execution_results || [];
+    state.saasReadiness = coreReadiness.readiness || state.saasReadiness || null;
     state.saasProtectedStateFromCache = false;
     state.saasProtectedStateCachedAt = "";
     const activeCeoCommandAtCoreApply = shouldPreserveActiveCeoState ? normalizeSaasCeoCommand(state.saasLastCeoCommand) : null;

@@ -63,6 +63,11 @@ def main() -> int:
     for marker in required_js:
         if marker not in app_js:
             raise AssertionError(f"media generation payload is missing {marker}")
+    if (
+        'optionalSaasFetchFast("/readiness/product-saas"' not in app_js
+        or "state.saasReadiness = coreReadiness.readiness" not in app_js
+    ):
+        raise AssertionError("authenticated refresh must hydrate media readiness before rendering the workshop")
 
     adapter = MediaGenerationAdapter()
     grounded = MediaGenerationConfig(

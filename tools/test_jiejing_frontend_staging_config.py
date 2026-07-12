@@ -30,7 +30,7 @@ def main() -> int:
         return fail("frontend must not use document.write for report export or public rendering")
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
-    frontend_asset_version = "20260712-media-quality-v76"
+    frontend_asset_version = "20260712-media-readiness-v77"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
