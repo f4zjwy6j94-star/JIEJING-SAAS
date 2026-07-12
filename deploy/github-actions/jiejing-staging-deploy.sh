@@ -115,7 +115,11 @@ if [[ ! -d "$resolved_app_dir" || ! -f "$resolved_app_dir/app.js" ]]; then
 fi
 
 mkdir -p "$backup_dir/app"
-rsync -a --delete "$resolved_app_dir/" "$backup_dir/app/"
+rsync -a --delete \
+  --exclude '/output/private-backups/' \
+  --exclude '/output/deploy-backups/' \
+  --exclude '/output/staging-patch-backups/' \
+  "$resolved_app_dir/" "$backup_dir/app/"
 
 if command -v curl >/dev/null 2>&1; then
   curl -fsS --max-time 8 http://127.0.0.1:8788/health > "$backup_dir/pre-deploy-health.json" || true

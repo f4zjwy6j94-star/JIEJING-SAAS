@@ -74,7 +74,11 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 
-rsync -a --delete "$resolved_app_dir/" "$rollback_safety_backup/app/"
+rsync -a --delete \
+  --exclude '/output/private-backups/' \
+  --exclude '/output/deploy-backups/' \
+  --exclude '/output/staging-patch-backups/' \
+  "$resolved_app_dir/" "$rollback_safety_backup/app/"
 rsync -a --delete "$selected_backup/app/" "$resolved_app_dir/"
 
 cd "$resolved_app_dir"
