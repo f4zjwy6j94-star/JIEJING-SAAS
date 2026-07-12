@@ -26,6 +26,8 @@ def main() -> int:
         "REFUSE_CONTROLLED_MEDIA_CONFIRMATION_MISMATCH",
         "real_platform_writes_enabled",
         "JIEJING_CONTROLLED_MEDIA_VIDEO_PROOF=true",
+        "JIEJING_CONTROLLED_MEDIA_ROOT=/app",
+        'jiejing-saas python - < "$proof_tool"',
         "sudo -n docker compose",
         "sudo -n chown",
         "file_signature_valid",

@@ -11,7 +11,11 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = (
+    Path(os.environ["JIEJING_CONTROLLED_MEDIA_ROOT"]).resolve()
+    if os.environ.get("JIEJING_CONTROLLED_MEDIA_ROOT", "").strip()
+    else Path(__file__).resolve().parents[1]
+)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 

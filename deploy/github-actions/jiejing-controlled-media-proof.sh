@@ -33,6 +33,11 @@ case "$resolved_app_dir" in
 esac
 
 cd "$resolved_app_dir"
+proof_tool="$resolved_workspace/tools/jiejing_controlled_media_video_proof.py"
+if [[ ! -f "$proof_tool" ]]; then
+  echo "REFUSE_CONTROLLED_MEDIA_PROOF_TOOL_MISSING=1" >&2
+  exit 67
+fi
 COMPOSE_FILE="deploy/docker-compose.public-https-staging.yml"
 if [[ ! -f "$COMPOSE_FILE" ]]; then
   COMPOSE_FILE="deploy/docker-compose.public-staging.yml"
@@ -59,7 +64,8 @@ PY
 sudo -n docker compose "${COMPOSE_ARGS[@]}" exec -T \
   -e JIEJING_CONTROLLED_MEDIA_VIDEO_PROOF=true \
   -e JIEJING_ACCEPTANCE_PRODUCT="$PRODUCT" \
-  jiejing-saas python tools/jiejing_controlled_media_video_proof.py
+  -e JIEJING_CONTROLLED_MEDIA_ROOT=/app \
+  jiejing-saas python - < "$proof_tool"
 
 container_id="$(sudo -n docker compose "${COMPOSE_ARGS[@]}" ps -q jiejing-saas)"
 if [[ -z "$container_id" ]]; then
