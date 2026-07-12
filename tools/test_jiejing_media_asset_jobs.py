@@ -11,7 +11,9 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from typing import Any
 
 
@@ -27,6 +29,35 @@ SAAS_DB = OUT / "saas-media-asset-jobs.sqlite"
 RUNTIME_DB = OUT / "runtime-media-asset-jobs.sqlite"
 
 
+class FakeMediaProviderHandler(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("content-length") or 0)
+        if length:
+            self.rfile.read(length)
+        body = json.dumps(
+            {
+                "provider": "local-test-media-provider",
+                "assets": [
+                    {
+                        "asset_id": "live-main-01",
+                        "asset_type": "product_image",
+                        "url": "https://cdn.example.test/media/live-main-01.jpg",
+                        "dimensions": "1600x1600",
+                        "status": "generated",
+                    }
+                ],
+            }
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format: str, *_args: Any) -> None:
+        return
+
+
 def fail(message: str) -> int:
     print(f"FAIL {message}")
     return 1
@@ -38,6 +69,10 @@ def main() -> int:
         if path.exists():
             path.unlink()
     port = 8794
+    provider_port = 8795
+    provider_server = ThreadingHTTPServer(("127.0.0.1", provider_port), FakeMediaProviderHandler)
+    provider_thread = Thread(target=provider_server.serve_forever, daemon=True)
+    provider_thread.start()
     process_env = os.environ.copy()
     process_env.update(
         {
@@ -45,6 +80,10 @@ def main() -> int:
             "JIEJING_BILLING_PROVIDER": "manual_seed",
             "JIEJING_BILLING_PLANS_PUBLISHED": "1",
             "JIEJING_QUOTA_ENFORCEMENT_ENABLED": "1",
+            "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED": "true",
+            "JIEJING_MEDIA_LIVE_VIDEO_ENABLED": "false",
+            "JIEJING_IMAGE_GENERATION_ENDPOINT": f"http://127.0.0.1:{provider_port}/generate",
+            "JIEJING_MEDIA_GENERATION_API_KEY": "unit-test-provider-credential",
         }
     )
     process = subprocess.Popen(
@@ -100,7 +139,7 @@ def main() -> int:
             "idempotency_key": "unit-media-job-idempotency-001",
             "inputs": {
                 "model_provider": "deepseek",
-                "media_provider": "fal",
+                "media_provider": "generic",
                 "creative_job_spec": {
                     "job_type": "eBay_listing_asset_package",
                     "blocked_claims": ["unverified_certification"],
@@ -115,13 +154,14 @@ def main() -> int:
                     },
                     "allowed_claims": ["keeps drinks cold"],
                     "forbidden_claims": ["medical"],
-                    "reference_images": ["merchant_upload://reference-1"],
+                    "reference_images": ["https://cdn.example.test/source/reference-1.jpg"],
                     "target_marketplace_rules": {"platform": "ebay"},
                 },
                 "image_count": 2,
                 "image_sizes": ["1:1", "4:5"],
                 "scene_types": ["white_background", "detail_page"],
                 "video_script": "15 second product demo script",
+                "live_provider_requested": True,
                 "merchant_notes": f"Supplier note {hidden_note_credential}",
                 "api_key": "UNIT-MEDIA-KEY-MUST-NOT-PERSIST",
             },
@@ -137,9 +177,9 @@ def main() -> int:
         if not media_job_id:
             return fail(f"media provider job should create a media asset job: {queued}")
         if media_job.get("status") != "waiting_review":
-            return fail(f"media asset job should wait for human asset review after dry-run: {media_job}")
-        if media_job.get("live_provider_called") is not False or media_job.get("spend_now_allowed") is not False:
-            return fail("media asset job must not call providers or allow spend")
+            return fail(f"live media asset job should wait for human review: {media_job}")
+        if media_job.get("live_provider_called") is not True or media_job.get("spend_now_allowed") is not False:
+            return fail("media asset job must record the live provider call without allowing platform writes")
         if media_job.get("secret_exposed") is not False:
             return fail("media asset job must keep secret_exposed=false")
         validation = media_job.get("asset_manifest_validation") if isinstance(media_job.get("asset_manifest_validation"), dict) else {}
@@ -344,6 +384,8 @@ def main() -> int:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
+        provider_server.shutdown()
+        provider_server.server_close()
 
 
 def wait_for_health(base_url: str) -> int:

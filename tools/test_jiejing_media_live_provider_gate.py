@@ -79,6 +79,13 @@ def media_job_body(*, live_requested: bool = True, video_requested: bool = True)
                 "generation_tier": "high_quality",
                 "quality_mode": "fidelity_first",
                 "fact_locks": ["product_structure", "color", "material", "included_parts"],
+                "video_intent": "appearance_showcase",
+                "motion_constraints": [
+                    "camera_motion_only",
+                    "product_remains_static",
+                    "no_hands_or_people",
+                    "no_use_or_installation_demo",
+                ],
             },
             "product_facts": {
                 "product": "foldable silicone drying mat",
@@ -146,6 +153,8 @@ def main() -> int:
             raise AssertionError(f"merchant generation tier must map to provider quality: {live_config}")
         if live_config.video_duration_seconds != 10:
             raise AssertionError(f"merchant video duration must reach the provider adapter: {live_config}")
+        if "Camera motion only" not in live_config.video_prompt or "product must remain completely static" not in live_config.video_prompt:
+            raise AssertionError(f"appearance video must not invent product operation: {live_config.video_prompt}")
         if "Locked facts that must not be changed or invented" not in live_config.image_prompt:
             raise AssertionError("grounded image prompt must preserve immutable product facts")
 
@@ -217,6 +226,22 @@ def main() -> int:
             raise AssertionError(f"disabled requested video must be reported as partial: {video_disabled}")
         if "video_provider_disabled" not in video_disabled.get("missing_inputs", []):
             raise AssertionError("disabled requested video must expose a safe, explicit blocker")
+
+        functional_without_evidence = media_job_body(video_requested=True)
+        functional_without_evidence["inputs"]["creative_job_spec"]["video_intent"] = "functional_demo"
+        with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="true"):
+            blocked_functional = ProviderJobRunner().run(
+                company_id="co_test",
+                store_id="store_test",
+                user_id="user_test",
+                task_id="task_test_functional_without_evidence",
+                job_id="job_test_functional_without_evidence",
+                job_body=functional_without_evidence,
+            )
+        if blocked_functional.get("status") != "blocked_missing_input":
+            raise AssertionError(f"functional demo without verified usage evidence must fail closed: {blocked_functional}")
+        if "verified_usage_evidence" not in blocked_functional.get("missing_inputs", []):
+            raise AssertionError("functional video blocker must name verified_usage_evidence")
 
         video_without_script_body = media_job_body(video_requested=True)
         video_without_script_body["inputs"].pop("video_script", None)

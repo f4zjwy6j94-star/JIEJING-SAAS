@@ -1407,10 +1407,26 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not manifest:
                 self._send_error(HTTPStatus.BAD_REQUEST, "media asset job has no asset manifest to review")
                 return
+            live_provider_called = media_job.get("live_provider_called") is True
+            real_asset_references = [
+                str(item.get("url_or_file_path") or item.get("url") or item.get("file_path") or "").strip()
+                for item in manifest
+                if isinstance(item, dict)
+            ]
+            has_only_reviewable_asset_references = bool(real_asset_references) and all(
+                reference.startswith("https://") for reference in real_asset_references
+            )
+            video_assets_present = any(
+                "video" in str(item.get("asset_type") or item.get("type") or "").lower()
+                or str(item.get("url_or_file_path") or item.get("url") or "").lower().split("?", 1)[0].endswith((".mp4", ".webm", ".mov"))
+                for item in manifest
+                if isinstance(item, dict)
+            )
             confirmations = {
                 "fact_consistency_confirmed": body.get("fact_consistency_confirmed") is True,
                 "commercial_rights_confirmed": body.get("commercial_rights_confirmed") is True,
                 "platform_rules_checked": body.get("platform_rules_checked") is True,
+                "motion_and_usage_consistency_confirmed": body.get("motion_and_usage_consistency_confirmed") is True,
             }
             job_spec = media_job.get("job", {}).get("job_spec", {}) if isinstance(media_job.get("job"), dict) else {}
             job_inputs = job_spec.get("inputs") if isinstance(job_spec.get("inputs"), dict) else {}
@@ -1418,13 +1434,26 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             product_fact_gate = media_job.get("product_fact_gate") if isinstance(media_job.get("product_fact_gate"), dict) else {}
             concept_only = creative_job_spec.get("output_safety_mode") == "concept_reference_only"
             missing_fact_keys = product_fact_gate.get("missing_fact_keys") if isinstance(product_fact_gate.get("missing_fact_keys"), list) else []
+            if decision == "approve_for_listing_draft" and (not live_provider_called or not has_only_reviewable_asset_references):
+                self._send_error(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "素材服务没有返回可核验的真实文件，本次结果不能审核或回写 Listing",
+                )
+                return
             if decision == "approve_for_listing_draft" and (concept_only or "reference_images_or_source_notes" in missing_fact_keys):
                 self._send_error(
                     HTTPStatus.UNPROCESSABLE_ENTITY,
                     "concept reference needs a real product source image before Listing draft approval",
                 )
                 return
-            if decision == "approve_for_listing_draft" and not all(confirmations.values()):
+            required_confirmations = [
+                confirmations["fact_consistency_confirmed"],
+                confirmations["commercial_rights_confirmed"],
+                confirmations["platform_rules_checked"],
+            ]
+            if video_assets_present:
+                required_confirmations.append(confirmations["motion_and_usage_consistency_confirmed"])
+            if decision == "approve_for_listing_draft" and not all(required_confirmations):
                 self._send_error(HTTPStatus.BAD_REQUEST, "all media review confirmations are required before Listing draft approval")
                 return
             reviewed = self.repository.update_media_asset_job(

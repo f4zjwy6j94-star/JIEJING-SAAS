@@ -6810,7 +6810,12 @@ function saasCurrentListingProjectIdentity(draft = state.saasListingComposerDraf
   const selectedCandidate = current.selected_product_candidate && typeof current.selected_product_candidate === "object"
     ? current.selected_product_candidate
     : {};
-  const activeListing = typeof activeListingDraft === "function" ? activeListingDraft() : null;
+  const explicitKey = publicRuntimeText(current.listing_project_key || "").trim().slice(0, 120);
+  const activeListingRaw = typeof activeListingDraft === "function" ? activeListingDraft() : null;
+  const activeListing =
+    isSaasPublicMvpMode() && isLegacySampleMediaDraftKey(activeListingRaw?.id || state.activeListingDraft)
+      ? null
+      : activeListingRaw;
   const productCandidates = [
     selectedCandidate.name,
     current.product,
@@ -6825,9 +6830,11 @@ function saasCurrentListingProjectIdentity(draft = state.saasListingComposerDraf
   if (!sourceId && !candidateId && !normalizedProduct) {
     return { key: "", product: "", source_id: "", candidate_id: "" };
   }
-  const keySeed = [current.source_type || "listing", sourceId, candidateId, normalizedProduct].join("|");
+  const keySeed = sourceId || candidateId
+    ? [sourceId, candidateId, normalizedProduct].join("|")
+    : [current.source_type || "listing", normalizedProduct].join("|");
   return {
-    key: `listing-project-${Math.abs(hashString(keySeed)).toString(16)}`,
+    key: explicitKey || `listing-project-${Math.abs(hashString(keySeed)).toString(16)}`,
     product: publicRuntimeText(product).slice(0, 120),
     source_id: sourceId,
     candidate_id: candidateId,
@@ -6990,9 +6997,13 @@ function openSaasBulkHandoffItem(candidateId = "") {
 
 function prepareSaasMediaStudioForCurrentListing() {
   const identity = saasCurrentListingProjectIdentity();
+  if (state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object" && identity.key) {
+    state.saasListingComposerDraft.listing_project_key = identity.key;
+  }
   state.mediaTaskEntry = "project";
   state.activeMediaDraft = identity.key || state.activeMediaDraft || state.activeListingDraft || "saas-media";
   state.saasActiveMediaPreviewKey = "";
+  saveSaasProtectedStateSnapshot();
   return identity;
 }
 
@@ -7027,8 +7038,9 @@ function latestSaasMediaAssetJobWithManifest(options = {}) {
     jobs.find(
       (job) =>
         job &&
+        job.live_provider_called === true &&
         Array.isArray(job.asset_manifest) &&
-        job.asset_manifest.some((asset) => asset?.url_or_file_path || asset?.url || asset?.file_path) &&
+        job.asset_manifest.some((asset) => saasSafeListingAssetUrl(asset?.url_or_file_path || asset?.url || asset?.file_path)) &&
         (!requireCurrentProject || saasMediaAssetJobMatchesListingProject(job)),
     ) ||
     null
@@ -7130,6 +7142,12 @@ function saasMediaManifestAssetPreview(key) {
         ]
       : [
           "核对素材是否和真实商品一致",
+          ...(card.isVideo
+            ? [
+                "完整播放视频，确认产品形状、零件和比例没有变化",
+                "确认视频没有虚构安装、操作、开合、变形或使用方式",
+              ]
+            : []),
           "确认图片或视频有商业使用权",
           "检查是否含夸大卖点、认证标志或未证实承诺",
           "通过后只回写 Listing 草稿，真实发布仍进决策中心",
@@ -7138,13 +7156,32 @@ function saasMediaManifestAssetPreview(key) {
   };
 }
 
+function saasSafeListingAssetUrl(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw, window.location.origin);
+    if (parsed.protocol === "https:") return parsed.href;
+    if (
+      parsed.protocol === "http:" &&
+      ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname) &&
+      ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)
+    ) {
+      return parsed.href;
+    }
+  } catch (error) {
+    return "";
+  }
+  return "";
+}
+
 function saasMediaManifestAssetsForListing(job = latestSaasMediaAssetJobWithManifest()) {
   if (!job) return [];
   const approvedForDraft = job.status === "approved_for_listing";
   return saasMediaManifestAssetCards(job)
     .map((card, index) => {
-      const url = String(card.url || "").trim();
-      if (!/^https?:\/\//i.test(url)) return null;
+      const url = saasSafeListingAssetUrl(card.url);
+      if (!url) return null;
       const rawAsset = card.asset && typeof card.asset === "object" ? card.asset : {};
       return {
         asset_id: String(rawAsset.asset_id || rawAsset.id || `asset_${index + 1}`).slice(0, 100),
@@ -7538,10 +7575,12 @@ function saasMediaAssetJobStatusLabel(job = {}) {
   const status = String(job.status || "").trim();
   const validationStatus = String(job.asset_manifest_validation?.status || "").trim();
   if (saasMediaAssetJobIsConceptOnly(job)) return "概念参考 · 不可刊登";
+  if (job.live_provider_called !== true && ["needs_rework", "waiting_review"].includes(status)) return "未生成真实文件";
   if (status === "approved_for_listing") return "可回写 Listing";
-  if (status === "waiting_review" || validationStatus === "manifest_ready") return "待人工审核";
-  if (status === "validation_failed") return "清单校验未过";
   if (status === "needs_rework") return "需要重做";
+  if (status === "waiting_review" && job.live_provider_called === true) return "待人工审核";
+  if (status === "validation_failed") return "清单校验未过";
+  if (validationStatus === "manifest_ready" && job.live_provider_called === true) return "待人工审核";
   if (status === "running" || status === "queued" || status === "provider_returned") return "生成处理中";
   if (status === "pending") return "等待排队";
   return "等待素材任务";
@@ -7550,6 +7589,7 @@ function saasMediaAssetJobStatusLabel(job = {}) {
 function saasMediaAssetJobOutputLabel(job = {}) {
   const manifest = Array.isArray(job.asset_manifest) ? job.asset_manifest : [];
   const visibleStates = Array.isArray(job.merchant_visible_states) ? job.merchant_visible_states.filter(Boolean) : [];
+  if (manifest.length && job.live_provider_called !== true) return "素材服务未返回真实文件";
   if (manifest.length) return `${manifest.length} 个素材项已形成素材清单`;
   if (visibleStates.length) return visibleStates.slice(0, 2).join("、");
   return "等待图片、详情页或视频脚本结果";
@@ -7558,6 +7598,9 @@ function saasMediaAssetJobOutputLabel(job = {}) {
 function saasMediaAssetJobNextLine(job = {}) {
   const status = String(job.status || "").trim();
   if (saasMediaAssetJobIsConceptOnly(job)) return "缺真实商品来源图；只能参考构图，不能审核为 Listing 素材。";
+  if (job.live_provider_called !== true && ["needs_rework", "waiting_review"].includes(status)) {
+    return "这次只有任务占位记录，没有真实图片或视频，不能审核或回写 Listing。";
+  }
   if (status === "approved_for_listing") return "可以进入 Listing 草稿回写，但正式发布仍要走确认中心。";
   if (status === "waiting_review") return "先核对实物一致、图片权利和 eBay 图片规则，再决定是否回写。";
   if (status === "validation_failed") return "素材清单缺字段或事实不一致，需要补资料后重做。";
@@ -14860,6 +14903,7 @@ function upsertSaasMediaAssetJobForDisplay(job = {}, replaceId = "") {
       return currentId && currentId !== jobId && currentId !== replaceId;
     }),
   ].slice(0, 8);
+  saveSaasProtectedStateSnapshot();
   const panel = document.querySelector("#view-media .saas-media-asset-jobs");
   if (panel) replaceJiejingTrustedHtml(panel, trustedJiejingHtml(renderSaasMediaAssetJobsPanel(), "media.asset_jobs"));
   refreshSaasMediaGeneratedAssetSurfaces();
@@ -14881,6 +14925,11 @@ async function approveLatestSaasMediaAssetJobForListingDraft() {
     showActionToast("这是没有真实商品来源图的概念参考，不能通过 Listing 审核。请先上传实物图或有权使用的供应商来源图后重新生成。");
     return null;
   }
+  if (job.live_provider_called !== true || !saasMediaManifestAssetsForListing(job).length) {
+    showActionToast("素材服务没有返回可核验的真实文件，本次结果不能审核或回写 Listing。");
+    return null;
+  }
+  const hasVideoAsset = saasMediaManifestAssetCards(job).some((asset) => asset.isVideo);
   try {
     const payload = await saasFetch(`/media-asset-jobs/${encodeURIComponent(mediaJobId)}/review`, {
       method: "POST",
@@ -14889,7 +14938,10 @@ async function approveLatestSaasMediaAssetJobForListingDraft() {
         fact_consistency_confirmed: true,
         commercial_rights_confirmed: true,
         platform_rules_checked: true,
-        note: "商家在素材预览中逐项确认，仅允许回写 Listing 草稿。",
+        motion_and_usage_consistency_confirmed: true,
+        note: hasVideoAsset
+          ? "商家完整查看视频并确认产品结构、动作与真实用法一致，仅允许回写 Listing 草稿。"
+          : "商家在素材预览中逐项确认，仅允许回写 Listing 草稿。",
       }),
     });
     const reviewed = payload?.media_asset_job;
@@ -15020,8 +15072,16 @@ function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
   const videoPreset = String(config.videoPreset || "").trim();
   const videoDurationSeconds = Number(config.videoDurationSeconds || mediaVideoDurationSeconds(videoPreset));
   const videoRequested = [6, 10].includes(videoDurationSeconds);
+  const videoIntent = "appearance_showcase";
+  const motionConstraints = [
+    "camera_motion_only",
+    "product_remains_static",
+    "no_hands_or_people",
+    "no_use_or_installation_demo",
+    "no_open_close_fold_bend_or_transform",
+  ];
   const videoPrompt = videoRequested
-    ? `Create a ${videoDurationSeconds}-second eBay product demo for ${productFacts.product || "the confirmed product"}. Use the grounded product image as the first frame. Use a slow push-in and subtle product-focused motion. Preserve the exact product structure, color, material, included parts and brand marks. Do not add people, unsupported claims, prices or promotional text.`
+    ? `Create a ${videoDurationSeconds}-second appearance-only eBay product showcase for ${productFacts.product || "the confirmed product"}. Use the grounded product image as the first frame. Camera motion only; the product must remain completely static. Do not show hands, people, use, installation, opening, closing, folding, bending, transformation or implied operation. Preserve exact product geometry, parts, proportions, color, material and visible brand marks. Do not add unsupported claims, prices or promotional text.`
     : "";
   const imageBudgetByTier = { draft: 60, standard: 120, high_quality: 260 };
   const videoBudgetByDuration = { 6: 900, 10: 1500 };
@@ -15040,6 +15100,8 @@ function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
     video_preset: videoPreset,
     video_duration_seconds: videoDurationSeconds,
     video_requested: videoRequested,
+    video_intent: videoIntent,
+    motion_constraints: motionConstraints,
   });
   return {
     provider_job_key: "media.asset_generation",
@@ -15066,6 +15128,8 @@ function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
         video_preset: videoPreset || "不生成视频",
         video_duration_seconds: videoDurationSeconds,
         video_prompt: videoPrompt,
+        video_intent: videoIntent,
+        motion_constraints: motionConstraints,
         workflow_source: "media_studio_generate_button",
         blocked_claims: ["unverified_certification", "medical_claim", "brand_authorization_without_proof"],
       },
@@ -16234,10 +16298,73 @@ function sanitizeSaasPacketSnapshot(packet = {}) {
   };
 }
 
+function restoreSaasListingComposerDraftFromBackendReports() {
+  if (state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object") return state.saasListingComposerDraft;
+  const report =
+    latestSaasActionableProductReportByTypes(["listing.package", "product.listing"]) ||
+    latestSaasActionableProductReportByTypes(["ai_ceo.market_research", "market.report"]);
+  if (!report) return null;
+  const restored = saasListingDraftFromReport(report, report.report_type === "ai_ceo.market_research" ? "ai_ceo_market_report" : "ai_report");
+  if (!restored) return null;
+  const identity = saasCurrentListingProjectIdentity(restored);
+  state.saasListingComposerDraft = { ...restored, listing_project_key: identity.key };
+  state.saasListingSourceMode = "backend_report_restore";
+  if (!state.activeMediaDraft || isLegacySampleMediaDraftKey(state.activeMediaDraft)) {
+    state.activeMediaDraft = identity.key || "";
+  }
+  return state.saasListingComposerDraft;
+}
+
+function sanitizeSaasListingComposerDraftSnapshot(draft = null) {
+  if (!draft || typeof draft !== "object") return null;
+  const selected = draft.selected_product_candidate && typeof draft.selected_product_candidate === "object"
+    ? draft.selected_product_candidate
+    : null;
+  const fields = draft.fields && typeof draft.fields === "object" ? draft.fields : {};
+  const identity = saasCurrentListingProjectIdentity(draft);
+  return {
+    ...pickSaasSnapshotFields(draft, [
+      "source_type",
+      "source_label",
+      "source_report_id",
+      "source_media_job_id",
+      "product",
+      "title",
+      "summary",
+      "score",
+      "safe_local_only",
+      "created_at",
+    ]),
+    listing_project_key: identity.key || publicRuntimeText(draft.listing_project_key || "").slice(0, 120),
+    selected_product_candidate: selected
+      ? pickSaasSnapshotFields(selected, ["candidate_id", "name", "score", "price_band", "selected", "source_type", "source_label"])
+      : null,
+    fields: pickSaasSnapshotFields(fields, [
+      "title",
+      "selling_points",
+      "description",
+      "item_specifics",
+      "category",
+      "keywords",
+      "price",
+      "cost_price",
+      "images",
+      "logistics",
+      "risk_notes",
+    ]),
+    gaps: Array.isArray(draft.gaps) ? draft.gaps.slice(0, 40) : [],
+    risks: Array.isArray(draft.risks) ? draft.risks.slice(0, 40) : [],
+    media_writeback:
+      draft.media_writeback && typeof draft.media_writeback === "object"
+        ? pickSaasSnapshotFields(draft.media_writeback, ["status", "media_job_id", "reviewed_at", "asset_count"])
+        : null,
+  };
+}
+
 function buildSaasProtectedStateSnapshot() {
   const activeStoreId = activeSaasStore()?.store_id || storedSaasStoreId();
   return {
-    version: "2026-07-10-minimal-fast-restore-v2",
+    version: "2026-07-12-listing-media-restore-v3",
     saved_at: new Date().toISOString(),
     account_key: saasOnboardingAccountKey(),
     store_id: activeStoreId || "",
@@ -16279,6 +16406,10 @@ function buildSaasProtectedStateSnapshot() {
         ]),
       ),
     data_packets: (state.saasDataPackets || []).slice(0, 5).map(sanitizeSaasPacketSnapshot),
+    listing_composer_draft: sanitizeSaasListingComposerDraftSnapshot(state.saasListingComposerDraft),
+    listing_source_mode: publicRuntimeText(state.saasListingSourceMode || "").slice(0, 80),
+    active_media_draft: publicRuntimeText(state.activeMediaDraft || "").slice(0, 160),
+    media_task_entry: state.mediaTaskEntry === "single" ? "single" : "project",
     media_asset_jobs: (state.saasMediaAssetJobs || [])
       .slice(0, 8)
       .map((job) =>
@@ -16383,7 +16514,10 @@ function hydrateSaasProtectedStateFromCache() {
   if (!hasSaasProtectedSessionCandidate()) return false;
   try {
     const snapshot = readSaasProtectedStateSnapshotFromStorage();
-    if (!snapshot || snapshot.version !== "2026-07-10-minimal-fast-restore-v2") return false;
+    if (
+      !snapshot ||
+      !["2026-07-10-minimal-fast-restore-v2", "2026-07-12-listing-media-restore-v3"].includes(snapshot.version)
+    ) return false;
     if (!saasAccountStorageAliases().includes(String(snapshot.account_key || "").toLowerCase())) return false;
     const savedAt = Date.parse(snapshot.saved_at || "");
     if (!Number.isFinite(savedAt) || Date.now() - savedAt > 1000 * 60 * 60 * 24 * 14) return false;
@@ -16396,6 +16530,13 @@ function hydrateSaasProtectedStateFromCache() {
     state.saasStores = Array.isArray(snapshot.stores) ? snapshot.stores : state.saasStores || [];
     state.saasConnections = Array.isArray(snapshot.connections) ? snapshot.connections : state.saasConnections || [];
     state.saasDataPackets = Array.isArray(snapshot.data_packets) ? snapshot.data_packets : state.saasDataPackets || [];
+    state.saasListingComposerDraft =
+      snapshot.listing_composer_draft && typeof snapshot.listing_composer_draft === "object"
+        ? snapshot.listing_composer_draft
+        : state.saasListingComposerDraft || null;
+    state.saasListingSourceMode = publicRuntimeText(snapshot.listing_source_mode || state.saasListingSourceMode || "").slice(0, 80);
+    state.activeMediaDraft = publicRuntimeText(snapshot.active_media_draft || state.activeMediaDraft || "").slice(0, 160);
+    state.mediaTaskEntry = snapshot.media_task_entry === "single" ? "single" : state.mediaTaskEntry || "project";
     state.saasMediaAssetJobs = Array.isArray(snapshot.media_asset_jobs) ? snapshot.media_asset_jobs : state.saasMediaAssetJobs || [];
     state.saasReports = Array.isArray(snapshot.reports) ? snapshot.reports : state.saasReports || [];
     state.saasConfirmations = Array.isArray(snapshot.confirmations) ? snapshot.confirmations : state.saasConfirmations || [];
@@ -26045,6 +26186,7 @@ async function refreshSaasState(options = {}) {
     state.saasMediaAssetJobs = mediaAssetJobs.media_asset_jobs || [];
     state.saasQueueHealth = queueHealth.queue_health || null;
     state.saasReports = reports.reports || [];
+    restoreSaasListingComposerDraftFromBackendReports();
     state.saasConfirmations = confirmations.confirmations || [];
     state.saasMerchantMemory = merchantMemory.merchant_memory || [];
     state.saasExecutionResults = executions.execution_results || state.saasExecutionResults || [];

@@ -503,6 +503,9 @@ class LocalQueueWorker:
         if missing_inputs:
             status = "needs_rework"
             error_reason = "missing_inputs:" + ",".join(str(item) for item in missing_inputs[:8])
+        elif not live_provider_called:
+            status = "needs_rework"
+            error_reason = "live_media_provider_not_called"
         elif validation.get("status") != "manifest_ready":
             status = "validation_failed"
             error_reason = "asset_manifest_validation_failed"
@@ -521,7 +524,7 @@ class LocalQueueWorker:
                     "message": (
                         "Live media provider returned assets; AssetManifest is waiting for review."
                         if live_provider_called
-                        else "Provider-neutral media asset pipeline completed without live media provider spend."
+                        else "Media provider did not return real files; placeholder output is blocked from review and Listing writeback."
                     ),
                     "provider_job_key": provider_output.get("provider_job_key"),
                     "listing_use_status": output_packet.get("asset_review", {}).get("listing_use_status") if isinstance(output_packet.get("asset_review"), dict) else "",

@@ -238,6 +238,12 @@ def main() -> None:
     require(app_js, "function saasMediaAssetJobMatchesListingProject", "media job current Listing match gate")
     require(app_js, "media_asset_job_product_mismatch_blocked_v1", "cross-product media writeback block contract")
     require(app_js, "function prepareSaasMediaStudioForCurrentListing", "Listing to media project handoff")
+    require(app_js, "function sanitizeSaasListingComposerDraftSnapshot", "account-scoped Listing draft snapshot sanitizer")
+    require(app_js, "2026-07-12-listing-media-restore-v3", "Listing and media refresh restore contract")
+    require(app_js, "function restoreSaasListingComposerDraftFromBackendReports", "backend report Listing restore fallback")
+    require(app_js, "function saasSafeListingAssetUrl", "safe same-origin media URL restore")
+    require(app_js, "new URL(raw, window.location.origin)", "relative media URL canonicalization")
+    require(app_js, "saveSaasProtectedStateSnapshot();", "media task updates persist account-scoped refresh state")
     require(app_js, "function resetSaasBulkWorkspaceForListingProject", "Listing product switch resets stale bulk state")
     require(app_js, "listing_project_key:", "media job snapshot keeps Listing project identity")
 

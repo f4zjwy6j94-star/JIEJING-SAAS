@@ -40,6 +40,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("media_version_rework_ui", [sys.executable, "tools/test_jiejing_media_version_rework_ui.py"]),
     ("media_quality_control", [sys.executable, "tools/test_jiejing_media_quality_control.py"]),
     ("media_live_provider_gate", [sys.executable, "tools/test_jiejing_media_live_provider_gate.py"]),
+    ("media_placeholder_review_gate", [sys.executable, "tools/test_jiejing_media_placeholder_review_gate.py"]),
     ("media_asset_jobs", [sys.executable, "tools/test_jiejing_media_asset_jobs.py"]),
     ("media_source_assets", [sys.executable, "tools/test_jiejing_media_source_assets.py"]),
     ("media_source_upload_http", [sys.executable, "tools/test_jiejing_media_source_upload_http.py"]),

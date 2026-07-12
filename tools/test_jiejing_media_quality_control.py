@@ -58,6 +58,11 @@ def main() -> int:
         'fact_locks: factLocks',
         'facts_may_not_be_unlocked_by_merchant: true',
         'videoRequested = [6, 10].includes(videoDurationSeconds)',
+        'videoIntent = "appearance_showcase"',
+        '"camera_motion_only"',
+        '"product_remains_static"',
+        '"no_use_or_installation_demo"',
+        'motion_and_usage_consistency_confirmed: true',
         'qualityMode !== "creative_exploration"',
     )
     for marker in required_js:

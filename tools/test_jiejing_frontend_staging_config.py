@@ -556,7 +556,7 @@ def main() -> int:
         "rollback_secret_scan_readiness_browser_smoke_required",
         "public_paid_launch_allowed=false",
         "owner_approval_required_for_reenable=true",
-        'version: "2026-07-10-minimal-fast-restore-v2"',
+        'version: "2026-07-12-listing-media-restore-v3"',
         "statusPills.push(saasMerchantBillingStatusPill())",
     ]:
         if billing_guardrail_marker not in app_js + app_html + styles_css:

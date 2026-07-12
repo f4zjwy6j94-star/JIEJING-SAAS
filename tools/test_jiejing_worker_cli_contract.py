@@ -85,6 +85,19 @@ def main() -> int:
             return fail(f"{compose_name} worker service must not expose public ports")
         if "--json-lines" in block:
             return fail(f"{compose_name} worker service must not print idle JSON lines forever")
+    for compose_name in (
+        "deploy/docker-compose.public-staging.yml",
+        "deploy/docker-compose.public-https-staging.yml",
+    ):
+        text = (ROOT / compose_name).read_text(encoding="utf-8")
+        for service in ("jiejing-saas", "jiejing-worker"):
+            block = _service_block(text, service)
+            for marker in (
+                'JIEJING_MEDIA_LIVE_PROVIDER_ENABLED: "true"',
+                'JIEJING_MEDIA_LIVE_VIDEO_ENABLED: "true"',
+            ):
+                if marker not in block:
+                    return fail(f"{compose_name} {service} must share the explicit staging media gate: {marker}")
     print(
         json.dumps(
             {

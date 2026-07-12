@@ -467,6 +467,12 @@ async function main() {
   }));
 
   await page.evaluate(({ includeVideo }) => {
+    const countSelect = document.querySelector("#view-media.is-active #mediaCountSelect");
+    if (countSelect) {
+      const singleOption = Array.from(countSelect.options || []).find((option) => /^1\s/.test(String(option.value || option.textContent || "")));
+      if (singleOption) countSelect.value = singleOption.value;
+      countSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    }
     const videoPreset = document.querySelector("#view-media.is-active #mediaVideoPresetSelect");
     if (includeVideo && videoPreset) {
       videoPreset.value = "10 秒产品展示视频";
@@ -536,6 +542,94 @@ async function main() {
     };
   });
 
+  const mediaBeforeReload = await page.evaluate(() => {
+    const currentProject = typeof saasCurrentListingProjectIdentity === "function" ? saasCurrentListingProjectIdentity() : {};
+    const visibleJobs = typeof saasMediaAssetJobsForDisplay === "function" ? saasMediaAssetJobsForDisplay() : [];
+    return {
+      listing_project_key: currentProject?.key || "",
+      product: currentProject?.product || "",
+      media_job_id: visibleJobs[0]?.media_job_id || "",
+      visible_job_count: visibleJobs.length,
+    };
+  });
+  smokeStage = "reloading_media_asset_job";
+  await page.reload({ waitUntil: "commit", timeout: 90000 });
+  await page.waitForSelector("body", { timeout: 30000 });
+  await page.waitForLoadState("networkidle", { timeout: 45000 }).catch(() => {});
+  await page.waitForFunction(
+    () =>
+      document.documentElement.classList.contains("app-ready") &&
+      !document.querySelector(".auth-shell, .saas-login-modal, [data-auth-view]") &&
+      typeof setView === "function",
+    null,
+    { timeout: 90000 },
+  );
+  await page.evaluate(() => setView("media"));
+  await waitForReady(page, "#view-media.is-active");
+  let mediaReloadWaitError = "";
+  await page
+    .waitForFunction(
+      (expectedMediaJobId) => {
+        const visibleJobs = typeof saasMediaAssetJobsForDisplay === "function" ? saasMediaAssetJobsForDisplay() : [];
+        return Boolean(expectedMediaJobId && visibleJobs.some((job) => job?.media_job_id === expectedMediaJobId));
+      },
+      mediaBeforeReload.media_job_id,
+      { timeout: 60000 },
+    )
+    .catch((error) => {
+      mediaReloadWaitError = String(error?.message || error).slice(0, 500);
+    });
+  const mediaAfterReload = await page.evaluate(() => {
+    const currentProject = typeof saasCurrentListingProjectIdentity === "function" ? saasCurrentListingProjectIdentity() : {};
+    const visibleJobs = typeof saasMediaAssetJobsForDisplay === "function" ? saasMediaAssetJobsForDisplay() : [];
+    const allJobs = Array.isArray(state.saasMediaAssetJobs) ? state.saasMediaAssetJobs : [];
+    const snapshotKeys = typeof saasProtectedSnapshotStorageKeys === "function" ? saasProtectedSnapshotStorageKeys() : [];
+    const snapshot = snapshotKeys
+      .map((key) => {
+        try {
+          return JSON.parse(localStorage.getItem(key) || "null");
+        } catch (_error) {
+          return null;
+        }
+      })
+      .find(Boolean);
+    return {
+      listing_project_key: currentProject?.key || "",
+      product: currentProject?.product || "",
+      media_job_id: visibleJobs[0]?.media_job_id || "",
+      visible_job_count: visibleJobs.length,
+      restored_from_snapshot: Boolean(state.saasListingComposerDraft?.listing_project_key),
+      exposes_other_product: visibleJobs.some((job) => !saasMediaAssetJobMatchesListingProject(job)),
+      active_media_draft: state.activeMediaDraft || "",
+      composer: {
+        listing_project_key: state.saasListingComposerDraft?.listing_project_key || "",
+        product: state.saasListingComposerDraft?.product || "",
+        source_type: state.saasListingComposerDraft?.source_type || "",
+        source_report_id: state.saasListingComposerDraft?.source_report_id || "",
+        candidate_id: state.saasListingComposerDraft?.selected_product_candidate?.candidate_id || "",
+      },
+      all_jobs: allJobs.map((job) => ({
+        media_job_id: job?.media_job_id || "",
+        status: job?.status || "",
+        listing_project_key: saasMediaAssetJobProductFacts(job)?.listing_project_key || "",
+        product: saasMediaAssetJobProductFacts(job)?.product || "",
+        matches: saasMediaAssetJobMatchesListingProject(job),
+      })),
+      snapshot: snapshot
+        ? {
+            version: snapshot.version || "",
+            listing_project_key: snapshot.listing_composer_draft?.listing_project_key || "",
+            product: snapshot.listing_composer_draft?.product || "",
+            active_media_draft: snapshot.active_media_draft || "",
+            media_job_ids: Array.isArray(snapshot.media_asset_jobs) ? snapshot.media_asset_jobs.map((job) => job?.media_job_id || "") : [],
+          }
+        : null,
+    };
+  });
+  if (mediaReloadWaitError) {
+    fail("media asset job was not restored after reload", { mediaReloadWaitError, mediaBeforeReload, mediaAfterReload });
+  }
+
   const manifestPreview = page.locator('#view-media.is-active [data-asset-preview^="manifest:"]').first();
   await manifestPreview.click();
   await page.waitForSelector("#assetModal:not([hidden])", { timeout: 30000 });
@@ -572,19 +666,95 @@ async function main() {
     secret_exposed: latestBackendMediaJob.secret_exposed,
   };
 
-  await page.evaluate(() => {
-    document.querySelector("#view-media.is-active #mediaConfirmDraft")?.click();
+  const mediaWritebackClick = await page.evaluate(() => {
+    const button = document.querySelector("#view-media.is-active #mediaConfirmDraft");
+    const before = {
+      found: Boolean(button),
+      disabled: Boolean(button?.disabled),
+      media_generation_status: state.mediaGenerationStatus || "",
+      visible_jobs: saasMediaAssetJobsForDisplay().map((job) => ({ media_job_id: job?.media_job_id || "", status: job?.status || "" })),
+    };
+    button?.click();
+    return before;
   });
   smokeStage = "writing_media_back_to_listing";
-  await waitForReady(page, "#view-product.is-active");
-  await page.waitForFunction(
-    () =>
-      document.body?.dataset?.view === "product" &&
-      state.saasListingComposerDraft?.source_type === "bulk_handoff" &&
-      state.saasListingComposerDraft?.media_writeback?.status === "merchant_reviewed_for_listing_draft",
-    null,
-    { timeout: 60000 },
-  );
+  let mediaWritebackViewError = "";
+  await waitForReady(page, "#view-product.is-active", 10000).catch((error) => {
+    mediaWritebackViewError = String(error?.message || error).slice(0, 500);
+  });
+  if (mediaWritebackViewError) {
+    const mediaWritebackViewDebug = await page.evaluate(() => {
+      return {
+        body_view: document.body?.dataset?.view || "",
+        state_view: state.view || "",
+        button_disabled: Boolean(document.querySelector("#mediaConfirmDraft")?.disabled),
+        composer: {
+          source_type: state.saasListingComposerDraft?.source_type || "",
+          product: state.saasListingComposerDraft?.product || "",
+          listing_project_key: state.saasListingComposerDraft?.listing_project_key || "",
+          media_writeback: state.saasListingComposerDraft?.media_writeback || null,
+        },
+        media_generation_status: state.mediaGenerationStatus || "",
+        visible_jobs: saasMediaAssetJobsForDisplay().map((job) => ({
+          media_job_id: job?.media_job_id || "",
+          status: job?.status || "",
+          manifest_count: Array.isArray(job?.asset_manifest) ? job.asset_manifest.length : 0,
+          concept_only: saasMediaAssetJobIsConceptOnly(job),
+          listing_asset_count: saasMediaManifestAssetsForListing(job).length,
+          asset_references: (job?.asset_manifest || []).map((asset) => {
+            const raw = String(asset?.url_or_file_path || asset?.url || asset?.file_path || "");
+            let scheme = "";
+            try {
+              scheme = new URL(raw, window.location.origin).protocol;
+            } catch (_error) {
+              scheme = "invalid";
+            }
+            return {
+              scheme,
+              starts_with_slash: raw.startsWith("/"),
+              starts_with_data: raw.startsWith("data:"),
+              safe_for_listing: Boolean(saasSafeListingAssetUrl(raw)),
+            };
+          }),
+          matches: saasMediaAssetJobMatchesListingProject(job),
+        })),
+      };
+    });
+    fail("media writeback did not open Listing after reload", { mediaWritebackViewError, mediaWritebackClick, mediaWritebackViewDebug });
+  }
+  let mediaWritebackWaitError = "";
+  await page
+    .waitForFunction(
+      () =>
+        document.body?.dataset?.view === "product" &&
+        state.saasListingComposerDraft?.source_type === "bulk_handoff" &&
+        state.saasListingComposerDraft?.media_writeback?.status === "merchant_reviewed_for_listing_draft",
+      null,
+      { timeout: 60000 },
+    )
+    .catch((error) => {
+      mediaWritebackWaitError = String(error?.message || error).slice(0, 500);
+    });
+  if (mediaWritebackWaitError) {
+    const mediaWritebackDebug = await page.evaluate(() => ({
+      body_view: document.body?.dataset?.view || "",
+      state_view: state.view || "",
+      button_disabled: Boolean(document.querySelector("#mediaConfirmDraft")?.disabled),
+      composer: {
+        source_type: state.saasListingComposerDraft?.source_type || "",
+        product: state.saasListingComposerDraft?.product || "",
+        listing_project_key: state.saasListingComposerDraft?.listing_project_key || "",
+        media_writeback: state.saasListingComposerDraft?.media_writeback || null,
+      },
+      media_generation_status: state.mediaGenerationStatus || "",
+      visible_jobs: saasMediaAssetJobsForDisplay().map((job) => ({
+        media_job_id: job?.media_job_id || "",
+        status: job?.status || "",
+        matches: saasMediaAssetJobMatchesListingProject(job),
+      })),
+    }));
+    fail("approved media was not written back to Listing after reload", { mediaWritebackWaitError, mediaWritebackDebug });
+  }
   await page
     .screenshot({ path: path.join(outDir, "06-product-after-media-writeback.png"), fullPage: true, timeout: 15000 })
     .catch((error) => screenshotFailures.push({ view: "product-after-media-writeback", error: String(error.message || error).slice(0, 300) }));
@@ -649,6 +819,14 @@ async function main() {
       backendMediaJob.live_provider_called === true &&
       backendMediaJob.spend_now_allowed === false &&
       backendMediaJob.secret_exposed === false,
+    media_job_survives_reload_for_same_listing:
+      Boolean(mediaBeforeReload.media_job_id) &&
+      mediaAfterReload.media_job_id === mediaBeforeReload.media_job_id &&
+      mediaAfterReload.listing_project_key === mediaBeforeReload.listing_project_key &&
+      mediaAfterReload.product === mediaBeforeReload.product &&
+      mediaAfterReload.visible_job_count > 0 &&
+      mediaAfterReload.restored_from_snapshot === true &&
+      mediaAfterReload.exposes_other_product === false,
     requested_video_returned:
       !includeVideo || backendMediaJob.manifest_types.some((assetType) => /video/i.test(assetType)),
     media_writeback_returns_to_listing:
@@ -663,7 +841,7 @@ async function main() {
       readinessApi.json?.readiness?.production_ready === false && readinessApi.json?.readiness?.can_accept_real_customers === false,
     no_forbidden_requests: forbiddenRequests.length === 0,
     no_secret_exposed:
-      !JSON.stringify({ bulkInitial, bulkGenerated, productAfterBulk, mediaOpened, mediaGenerated, backendMediaJob, productAfterMedia })
+      !JSON.stringify({ bulkInitial, bulkGenerated, productAfterBulk, mediaOpened, mediaGenerated, mediaBeforeReload, mediaAfterReload, backendMediaJob, productAfterMedia })
         .toLowerCase()
         .includes("refresh_token"),
   };
@@ -686,6 +864,8 @@ async function main() {
     mediaOpened,
     sourceUpload,
     mediaGenerated,
+    mediaBeforeReload,
+    mediaAfterReload,
     backendMediaJob,
     productAfterMedia,
     api: {

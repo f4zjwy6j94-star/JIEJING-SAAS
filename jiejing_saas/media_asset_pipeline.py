@@ -59,7 +59,7 @@ def build_media_asset_generation_packet(
             live_provider_called = True
     manifest_packet = {
         "assets": assets,
-        "manifest_status": "generated_by_live_provider_for_review" if live_provider_called else "generated_placeholder_for_review",
+        "manifest_status": "generated_by_live_provider_for_review" if live_provider_called else "placeholder_not_reviewable",
         "single_output_contract": "AssetManifest",
         "live_provider_called": live_provider_called,
         "secret_exposed": False,
@@ -70,6 +70,7 @@ def build_media_asset_generation_packet(
         validation=validation,
         missing_fact_keys=missing_fact_keys,
         creative_job_spec=creative_job_spec,
+        live_provider_called=live_provider_called,
     )
     cost_guard = _cost_guard(
         image_count=image_count,
@@ -102,9 +103,19 @@ def build_media_asset_generation_packet(
         "asset_manifest_packet": manifest_packet,
         "asset_manifest_validation": validation,
         "asset_review": {
-            "status": _asset_review_status(validation=validation, missing_fact_keys=missing_fact_keys),
+            "status": _asset_review_status(
+                validation=validation,
+                missing_fact_keys=missing_fact_keys,
+                live_provider_called=live_provider_called,
+            ),
             "review_gates": review_gates,
-            "listing_use_status": "concept_only_not_eligible_for_listing" if creative_job_spec.get("output_safety_mode") == "concept_reference_only" else "not_ready_for_listing_until_review",
+            "listing_use_status": (
+                "concept_only_not_eligible_for_listing"
+                if creative_job_spec.get("output_safety_mode") == "concept_reference_only"
+                else "not_ready_for_listing_until_review"
+                if live_provider_called
+                else "blocked_missing_live_provider"
+            ),
             "confirmation_center_required_before_listing_use": True,
             "secret_exposed": False,
         },
@@ -218,9 +229,9 @@ def _placeholder_assets(
                 "cost_estimate": "pending_quota_check",
                 "commercial_use_status": "needs_rights_review",
                 "fact_review_status": "needs_review",
-                "listing_use_status": "not_ready_for_listing_until_review",
+                "listing_use_status": "blocked_missing_live_provider",
                 "status": "generated_placeholder",
-                "review_status": "needs_human_review_before_listing",
+                "review_status": "blocked_missing_live_provider",
             }
         )
     if video_script:
@@ -241,9 +252,9 @@ def _placeholder_assets(
                 "cost_estimate": "pending_quota_check",
                 "commercial_use_status": "needs_rights_review",
                 "fact_review_status": "needs_review",
-                "listing_use_status": "not_ready_for_listing_until_review",
+                "listing_use_status": "blocked_missing_live_provider",
                 "status": "script_placeholder",
-                "review_status": "needs_human_review_before_listing",
+                "review_status": "blocked_missing_live_provider",
             }
         )
     return assets
@@ -287,6 +298,7 @@ def _review_gates(
     validation: dict[str, Any],
     missing_fact_keys: list[str],
     creative_job_spec: dict[str, Any],
+    live_provider_called: bool,
 ) -> list[dict[str, Any]]:
     requested = creative_job_spec.get("review_gates")
     if not isinstance(requested, list) or not requested:
@@ -303,6 +315,8 @@ def _review_gates(
         key = str(key)
         if key == "fact_consistency_review" and missing_fact_keys:
             status = "blocked_missing_product_facts"
+        elif not live_provider_called:
+            status = "blocked_missing_live_provider"
         elif not manifest_ready:
             status = "blocked_manifest_not_ready"
         else:
@@ -359,11 +373,13 @@ def _asset_version_context(inputs: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _asset_review_status(*, validation: dict[str, Any], missing_fact_keys: list[str]) -> str:
+def _asset_review_status(*, validation: dict[str, Any], missing_fact_keys: list[str], live_provider_called: bool) -> str:
     if validation.get("status") != "manifest_ready":
         return "blocked_manifest_not_ready"
     if missing_fact_keys:
         return "blocked_missing_product_facts"
+    if not live_provider_called:
+        return "blocked_missing_live_provider"
     return "waiting_for_human_asset_review"
 
 

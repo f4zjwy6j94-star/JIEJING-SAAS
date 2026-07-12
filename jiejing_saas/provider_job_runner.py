@@ -65,6 +65,23 @@ class ProviderJobRunner:
             video_requested = _truthy(effective_inputs.get("video_generation_requested"))
             if video_requested and _is_missing(effective_inputs.get("video_script")):
                 missing_inputs.append("video_script")
+            if video_requested:
+                creative_job_spec = (
+                    effective_inputs.get("creative_job_spec")
+                    if isinstance(effective_inputs.get("creative_job_spec"), dict)
+                    else {}
+                )
+                product_facts = (
+                    effective_inputs.get("product_facts")
+                    if isinstance(effective_inputs.get("product_facts"), dict)
+                    else {}
+                )
+                video_intent = str(creative_job_spec.get("video_intent") or "").strip().lower()
+                if video_intent not in {"appearance_showcase", "functional_demo"}:
+                    missing_inputs.append("video_intent")
+                elif video_intent == "functional_demo" and not _has_verified_usage_evidence(product_facts):
+                    missing_inputs.append("verified_usage_evidence")
+        missing_inputs = list(dict.fromkeys(missing_inputs))
         captured_at = _now_iso()
         live_result = self._maybe_run_live_provider(
             key=key,
@@ -230,6 +247,13 @@ class ProviderJobRunner:
             )
         )
         video_requested = _truthy(inputs.get("video_generation_requested"))
+        video_intent = str(creative_job_spec.get("video_intent") or "appearance_showcase").strip().lower()
+        motion_constraints = _list_or_default(
+            creative_job_spec.get("motion_constraints"),
+            ["camera_motion_only", "product_remains_static", "no_hands_or_people", "no_use_or_installation_demo"],
+        )
+        creative_job_spec["video_intent"] = video_intent
+        creative_job_spec["motion_constraints"] = motion_constraints
         video_provider_enabled = _env_bool("JIEJING_MEDIA_LIVE_VIDEO_ENABLED", default=False)
         video_enabled = video_provider_enabled and video_requested
         video_duration_seconds = _safe_int(inputs.get("video_duration_seconds") or creative_job_spec.get("video_duration_seconds"), default=0)
@@ -237,11 +261,26 @@ class ProviderJobRunner:
             video_duration_seconds = 0
         video_prompt = ""
         if video_enabled:
-            video_prompt = str(
+            requested_video_prompt = str(
                 inputs.get("video_prompt")
                 or creative_job_spec.get("video_prompt")
-                or f"Create an eBay-safe product demo video draft for {product}. Avoid unverified claims."
-            )
+                or ""
+            ).strip()
+            if video_intent == "functional_demo":
+                usage_evidence = product_facts.get("usage_evidence") if isinstance(product_facts.get("usage_evidence"), dict) else {}
+                usage_steps = _list_or_default(usage_evidence.get("confirmed_steps"), [])
+                video_prompt = (
+                    f"Create a reference-grounded functional demonstration for {product}. Follow only these merchant-confirmed steps: "
+                    f"{'; '.join(usage_steps) or 'the verified reference usage footage'}. Do not invent, reorder, or add operations, parts, "
+                    f"hands, tools, transformations, installation steps, performance results, or product behavior. {requested_video_prompt}"
+                ).strip()
+            else:
+                video_prompt = (
+                    f"Create an appearance-only showcase for {product}. Camera motion only; the product must remain completely static. "
+                    "Do not show hands, people, operation, installation, opening, closing, folding, unfolding, bending, pouring, wearing, "
+                    "attachment, transformation, or any implied use. Preserve exact geometry, parts, proportions, color, material and visible marks. "
+                    f"Requested visual direction: {requested_video_prompt or 'slow restrained push-in with neutral lighting'}"
+                ).strip()
         default_timeout = 300 if video_enabled else 45
         max_timeout = 600 if video_enabled else 90
         snapshot = MediaGenerationAdapter().generate(
@@ -314,10 +353,20 @@ class ProviderJobRunner:
             "video_provider_enabled": video_provider_enabled,
             "video_duration_seconds": video_duration_seconds,
             "video_asset_returned": video_asset_returned,
+            "video_intent": video_intent,
+            "usage_evidence_verified": _has_verified_usage_evidence(product_facts),
+            "motion_constraints": motion_constraints,
             "generation_tier": generation_tier,
             "quality_mode": quality_mode,
             "secret_exposed": False,
         }
+        for asset in output_packet.get("asset_manifest", []):
+            if isinstance(asset, dict) and "video" in str(asset.get("asset_type") or "").lower():
+                asset["video_intent"] = video_intent
+                asset["usage_evidence_status"] = (
+                    "verified" if _has_verified_usage_evidence(product_facts) else "not_required_for_appearance_showcase"
+                )
+                asset["motion_review_status"] = "needs_merchant_confirmation"
         if missing_requested_outputs:
             return self._provider_result(
                 contract=contract,
@@ -754,6 +803,16 @@ def _normalize_tavily_results(*, payload: dict[str, Any], captured_at: str) -> l
             }
         )
     return records
+
+
+def _has_verified_usage_evidence(product_facts: dict[str, Any]) -> bool:
+    evidence = product_facts.get("usage_evidence") if isinstance(product_facts.get("usage_evidence"), dict) else {}
+    if evidence.get("verified") is not True:
+        return False
+    reference_video_url = str(evidence.get("reference_video_url") or "").strip()
+    confirmed_steps = evidence.get("confirmed_steps") if isinstance(evidence.get("confirmed_steps"), list) else []
+    instruction_source = str(evidence.get("instruction_source") or "").strip()
+    return bool(reference_video_url.startswith("https://") or confirmed_steps or instruction_source)
 
 
 def _safe_int(value: Any, *, default: int) -> int:

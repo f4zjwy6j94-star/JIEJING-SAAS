@@ -77,10 +77,10 @@ def main() -> int:
     validation = packet.get("asset_manifest_validation") if isinstance(packet.get("asset_manifest_validation"), dict) else {}
     if validation.get("status") != "manifest_ready":
         return fail(f"pipeline should produce validator-ready manifest placeholders: {validation}")
-    if packet.get("asset_review", {}).get("listing_use_status") != "not_ready_for_listing_until_review":
-        return fail("asset manifest must not become listing-ready before review")
-    if packet.get("asset_review", {}).get("status") != "waiting_for_human_asset_review":
-        return fail("complete product facts should move to human asset review")
+    if packet.get("asset_review", {}).get("listing_use_status") != "blocked_missing_live_provider":
+        return fail("placeholder manifest must remain blocked before a live provider returns files")
+    if packet.get("asset_review", {}).get("status") != "blocked_missing_live_provider":
+        return fail("complete product facts must not make placeholder assets reviewable")
     if packet.get("production_gate", {}).get("live_media_provider_call_allowed") is not False:
         return fail("pipeline must not allow live media provider calls")
     if packet.get("cost_guard", {}).get("spend_now_allowed") is not False:

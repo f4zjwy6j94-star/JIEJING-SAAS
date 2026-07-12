@@ -156,8 +156,8 @@ def main() -> int:
         if validation.get("status") != "manifest_ready":
             return fail("media dry-run should validate the AssetManifest before review")
         review = media_packet.get("asset_review") if isinstance(media_packet.get("asset_review"), dict) else {}
-        if review.get("listing_use_status") != "not_ready_for_listing_until_review":
-            return fail("media dry-run must not mark assets usable for listing before review")
+        if review.get("listing_use_status") != "blocked_missing_live_provider":
+            return fail("media dry-run must remain blocked until a live provider returns files")
         if media_packet.get("production_gate", {}).get("live_media_provider_call_allowed") is not False:
             return fail("media dry-run must block live media provider calls")
         if media_packet.get("cost_guard", {}).get("spend_now_allowed") is not False:
@@ -166,8 +166,8 @@ def main() -> int:
         if not manifest:
             return fail("media dry-run should return an AssetManifest")
         for item in manifest:
-            if item.get("listing_use_status") != "not_ready_for_listing_until_review":
-                return fail("media assets must wait for listing review")
+            if item.get("listing_use_status") != "blocked_missing_live_provider":
+                return fail("placeholder media assets must never enter listing review")
             for key in ("url_or_file_path", "dimensions_or_duration", "source_provider_or_upload", "commercial_use_status", "fact_review_status"):
                 if key not in item:
                     return fail(f"media manifest missing field: {key}")
@@ -175,30 +175,19 @@ def main() -> int:
         media_job_id = str(media.get("media_asset_job", {}).get("media_job_id") or "")
         if not media_job_id:
             return fail("media provider job should return its persisted media asset job")
-        status, _ = post_json_expect_error(
-            f"{base_url}/media-asset-jobs/{media_job_id}/review",
-            {"decision": "approve_for_listing_draft", "fact_consistency_confirmed": True},
-            token=token,
-        )
-        if status != 400:
-            return fail("media review must require fact, rights, and platform confirmations")
-        reviewed_media = post_json(
+        status, rejected_review = post_json_expect_error(
             f"{base_url}/media-asset-jobs/{media_job_id}/review",
             {
                 "decision": "approve_for_listing_draft",
                 "fact_consistency_confirmed": True,
                 "commercial_rights_confirmed": True,
                 "platform_rules_checked": True,
+                "motion_and_usage_consistency_confirmed": True,
             },
             token=token,
         )
-        if reviewed_media.get("media_asset_job", {}).get("status") != "approved_for_listing":
-            return fail("explicit merchant review should approve assets only for Listing draft writeback")
-        review_contract = reviewed_media.get("review", {})
-        if review_contract.get("listing_draft_writeback_allowed") is not True:
-            return fail("approved media review should allow Listing draft writeback")
-        if review_contract.get("triggers_real_platform_write") is not False or review_contract.get("secret_exposed") is not False:
-            return fail("media review must not write to eBay or expose secrets")
+        if status != 422 or "真实文件" not in str(rejected_review.get("error") or ""):
+            return fail("dry-run media review must fail closed with a merchant-readable real-file blocker")
 
         blocked = post_json(
             f"{base_url}/stores/{store_id}/provider-jobs/queue",
