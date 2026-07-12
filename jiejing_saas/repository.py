@@ -1810,6 +1810,11 @@ class SaaSRepository:
                 payload["production_gate"] = provider_packet.get("production_gate") if isinstance(provider_packet.get("production_gate"), dict) else {}
                 payload["merchant_visible_states"] = provider_packet.get("merchant_visible_states") if isinstance(provider_packet.get("merchant_visible_states"), list) else []
                 payload["media_router"] = provider_packet.get("media_router") if isinstance(provider_packet.get("media_router"), dict) else {}
+                payload["live_media_provider_status"] = (
+                    provider_packet.get("live_media_provider_status")
+                    if isinstance(provider_packet.get("live_media_provider_status"), dict)
+                    else {}
+                )
                 if isinstance(provider_packet.get("asset_version"), dict):
                     current_version = payload.get("asset_version") if isinstance(payload.get("asset_version"), dict) else {}
                     packet_version = provider_packet["asset_version"]

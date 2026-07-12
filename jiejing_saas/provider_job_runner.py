@@ -267,6 +267,37 @@ class ProviderJobRunner:
             captured_at=captured_at,
             live_media_snapshot=snapshot,
         )
+        provider_errors = snapshot.get("provider_errors") if isinstance(snapshot.get("provider_errors"), list) else []
+        video_asset_returned = any("video" in str(asset.get("asset_type") or "").lower() for asset in assets if isinstance(asset, dict))
+        missing_requested_outputs = ["video_provider_no_asset_returned"] if video_enabled and not video_asset_returned else []
+        output_packet["live_media_provider_status"] = {
+            "status": "partial" if missing_requested_outputs else (snapshot.get("status") or "returned"),
+            "provider_status": snapshot.get("provider_status") if isinstance(snapshot.get("provider_status"), dict) else {},
+            "provider_errors": provider_errors,
+            "video_requested": video_enabled,
+            "video_asset_returned": video_asset_returned,
+            "secret_exposed": False,
+        }
+        if missing_requested_outputs:
+            return self._provider_result(
+                contract=contract,
+                status="partial_live_media_provider",
+                inputs=inputs,
+                missing_inputs=missing_requested_outputs,
+                output_packet=output_packet,
+                source_record={
+                    "source_record_type": contract.get("source_record_type"),
+                    "source_mode": "live_media_provider_partial",
+                    "captured_at": captured_at,
+                    "asset_count": len(assets),
+                    "raw_provider_response_stored": False,
+                    "normalized_output_stored": True,
+                },
+                merchant_visible_summary="Image assets returned, but the requested video did not. The job needs rework before Listing writeback.",
+                live_provider_called=True,
+                raw_secret_read=False,
+                next_action="Review the video provider error and retry the video generation request.",
+            )
         return self._provider_result(
             contract=contract,
             status="completed_live_media_provider",

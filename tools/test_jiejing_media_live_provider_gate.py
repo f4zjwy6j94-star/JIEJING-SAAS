@@ -30,6 +30,7 @@ def patched_env(**values: str):
 
 class FakeMediaGenerationAdapter:
     configs = []
+    force_image_only = False
 
     def generate(self, config):
         self.configs.append(config)
@@ -43,7 +44,7 @@ class FakeMediaGenerationAdapter:
                 "status": "generated",
             }
         ]
-        if config.video_prompt:
+        if config.video_prompt and not self.force_image_only:
             assets.append(
                 {
                     "asset_id": "fake-video-01",
@@ -171,6 +172,25 @@ def main() -> int:
         if len(image_only_manifest) != 1 or image_only_manifest[0].get("asset_type") != "product_image":
             raise AssertionError(f"image-only media job returned the wrong manifest: {image_only_manifest}")
 
+        FakeMediaGenerationAdapter.force_image_only = True
+        with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="true"):
+            partial_video = ProviderJobRunner().run(
+                company_id="co_test",
+                store_id="store_test",
+                user_id="user_test",
+                task_id="task_test_partial_video",
+                job_id="job_test_partial_video",
+                job_body=media_job_body(video_requested=True),
+            )
+        FakeMediaGenerationAdapter.force_image_only = False
+        if partial_video.get("status") != "partial_live_media_provider":
+            raise AssertionError(f"missing requested video must not be reported as complete: {partial_video}")
+        if "video_provider_no_asset_returned" not in partial_video.get("missing_inputs", []):
+            raise AssertionError("partial video result must identify the missing requested output")
+        partial_status = partial_video.get("output_packet", {}).get("live_media_provider_status", {})
+        if partial_status.get("video_requested") is not True or partial_status.get("video_asset_returned") is not False:
+            raise AssertionError(f"partial video status must remain explicit: {partial_status}")
+
         video_without_script_body = media_job_body(video_requested=True)
         video_without_script_body["inputs"].pop("video_script", None)
         with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="true"):
@@ -203,6 +223,7 @@ def main() -> int:
         print("PASS jiejing_media_live_provider_gate")
         return 0
     finally:
+        FakeMediaGenerationAdapter.force_image_only = False
         runner_module.MediaGenerationAdapter = original_adapter
 
 
