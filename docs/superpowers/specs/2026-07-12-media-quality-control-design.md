@@ -61,3 +61,7 @@ No generation result writes to eBay. Results require AssetManifest validation, m
 - Frontend QA covers desktop and mobile Media Studio rendering, template selection, quality selection, and payload formation.
 - Run JavaScript syntax checks, Python compilation, secret scan, focused tests, and the precloud deployment gate.
 - Staging deployment remains a separate manual dry-run and explicitly approved apply step.
+
+## Controlled staging proof
+
+One manual GitHub Actions workflow may generate a single synthetic image and short video inside the staging SaaS container. It requires an exact confirmation phrase, refuses to run while real platform writes are enabled, keeps provider credentials inside the container, validates downloaded file signatures, and retains the proof artifact for seven days. The proof product is explicitly synthetic and must never be treated as a real supplier product or Listing asset.

@@ -77,6 +77,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("staging_patch_apply_contract", [sys.executable, "tools/test_jiejing_staging_patch_apply_contract.py"]),
     ("agents_md_guardrails", [sys.executable, "tools/test_jiejing_agents_md_guardrails.py"]),
     ("github_actions_deploy_guardrails", [sys.executable, "tools/test_jiejing_github_actions_deploy_guardrails.py"]),
+    ("controlled_media_proof_workflow", [sys.executable, "tools/test_jiejing_controlled_media_proof_workflow.py"]),
     ("github_runner_doctor_guardrails", [sys.executable, "tools/test_jiejing_github_runner_doctor_guardrails.py"]),
     ("github_runner_maintenance_guardrails", [sys.executable, "tools/test_jiejing_github_runner_maintenance_guardrails.py"]),
     ("local_first_cloud_fallback_guardrails", [sys.executable, "tools/test_jiejing_local_first_cloud_fallback_guardrails.py"]),

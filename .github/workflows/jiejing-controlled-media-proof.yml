@@ -1,0 +1,50 @@
+name: Jiejing Controlled Media Proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      acceptance_product:
+        description: "Synthetic acceptance product; never use this as a real listing"
+        required: true
+        default: "unbranded blue five-slot silicone cable organizer concept; no supplier claims; not for listing"
+        type: string
+      confirm_controlled_media_proof:
+        description: "Type: generate one controlled media proof"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jiejing-controlled-media-proof
+  cancel-in-progress: false
+
+jobs:
+  controlled-media-proof:
+    name: Controlled FAL image and video proof
+    if: >-
+      ${{
+        github.ref == 'refs/heads/main' &&
+        inputs.confirm_controlled_media_proof == 'generate one controlled media proof'
+      }}
+    runs-on: [self-hosted, jiejing-staging]
+    timeout-minutes: 20
+    env:
+      JIEJING_CONTROLLED_MEDIA_PROOF_CONFIRM: ${{ inputs.confirm_controlled_media_proof }}
+      JIEJING_ACCEPTANCE_PRODUCT: ${{ inputs.acceptance_product }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate controlled image and video proof
+        run: bash deploy/github-actions/jiejing-controlled-media-proof.sh
+
+      - name: Upload reviewed proof artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: jiejing-controlled-media-proof-${{ github.run_id }}
+          path: output/jiejing-controlled-media-video-proof
+          if-no-files-found: error
+          retention-days: 7
+
