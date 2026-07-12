@@ -18,6 +18,7 @@ RUN python -m py_compile \
     tools/jiejing_saas_backend_cli.py \
     tools/jiejing_worker_cli.py \
     jiejing_saas/api_server.py \
+    jiejing_saas/media_source_assets.py \
     jiejing_saas/backup_plan.py \
     jiejing_saas/billing_payment_options.py \
     jiejing_saas/billing_plan.py \

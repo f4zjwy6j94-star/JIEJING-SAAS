@@ -208,6 +208,8 @@ function validateReport(record) {
   if (!Array.isArray(fields.publish_preflight_gaps) || !fields.publish_preflight_gaps.length) problems.push("missing_preflight_gaps");
   if (!Array.isArray(fields.ebay_publish_field_matrix) || fields.ebay_publish_field_matrix.length < 8) problems.push("missing_field_matrix");
   if (!Array.isArray(fields.merchant_required_answers) || fields.merchant_required_answers.length < 4) problems.push("missing_merchant_questions");
+  if (fields.buyer_copy_status !== "waiting_for_merchant_product_facts") problems.push("unsafe_buyer_copy_status");
+  if ((fields.selling_points || []).length > 0 || String(fields.description_seed || "").trim()) problems.push("unverified_buyer_copy_present");
   const matrixFields = new Set((fields.ebay_publish_field_matrix || []).map((item) => item.ebay_field));
   for (const requiredField of ["sku", "categoryId", "product.aspects", "product.imageUrls", "listingPolicies"]) {
     if (!matrixFields.has(requiredField)) problems.push(`field_matrix_missing_${requiredField}`);
@@ -502,7 +504,13 @@ async function main() {
       ui.has_field_map_contract &&
       ui.has_report_id,
     ui_advanced_checks_progressively_disclosed: advancedChecksCollapsedByDefault && ui.advanced_checks_open,
-    ui_has_listing_text: Boolean(ui.title_not_generic && ui.has_candidate_cards && ui.selling_points_length > 20 && ui.description_length > 80),
+    ui_has_truthful_listing_handoff: Boolean(
+      ui.title_not_generic &&
+        ui.has_candidate_cards &&
+        ui.selling_points_length === 0 &&
+        ui.description_length === 0 &&
+        reportValidation.fields.buyer_copy_status === "waiting_for_merchant_product_facts",
+    ),
     ui_has_merchant_next_action:
       ui.next_action_visible &&
       /下一步处理|补发布资料|素材工坊|确认中心/.test(ui.next_action_text || "") &&

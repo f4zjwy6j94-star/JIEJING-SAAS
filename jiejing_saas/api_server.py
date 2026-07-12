@@ -71,6 +71,7 @@ from .model_provider_catalog import (
     public_model_settings_from_secret_refs,
 )
 from .monitoring import build_monitoring_status
+from .media_source_assets import MAX_MEDIA_SOURCE_BYTES, MediaSourceAssetError, MediaSourceAssetStore
 from .operational_health import build_operational_health
 from .owner_launch_control import build_owner_launch_control
 from .platform_model_status import platform_default_serving_model
@@ -126,6 +127,7 @@ EXPENSIVE_API_RATE_LIMIT_PREFIXES = (
     "ai-ceo/",
     "queue-jobs",
     "media-asset-jobs",
+    "media-source-assets",
     "workers/",
     "confirmations",
     "execution-results",
@@ -296,6 +298,12 @@ class SaaSBackendServer:
     def serve_forever(self) -> None:
         session_manager = SessionManager()
         backend_settings = self.settings
+        public_base_url = str(os.environ.get("JIEJING_PUBLIC_BASE_URL") or f"http://{self.host}:{self.port}").rstrip("/")
+        media_source_assets = MediaSourceAssetStore(
+            root=self.output_root / "private-media-source-assets",
+            signing_secret=session_manager.secret,
+            public_base_url=public_base_url,
+        )
         repo = SaaSRepository(
             self.db_path,
             database_engine=backend_settings.database_engine,
@@ -341,6 +349,7 @@ class SaaSBackendServer:
             ebay_oauth_planner = ebay_oauth
             ebay_read_adapter = ebay_read
             ebay_live_read_plan_builder = ebay_live_read_plan
+            media_source_asset_store = media_source_assets
             settings = backend_settings
             repository_startup_error = startup_repository_error
 
@@ -358,6 +367,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
     ebay_oauth_planner: EbayOAuthPlanner
     ebay_read_adapter: EbayReadOnlyAdapter
     ebay_live_read_plan_builder: EbayLiveReadPlanBuilder
+    media_source_asset_store: MediaSourceAssetStore
     settings: SaaSSettings
     repository_startup_error: Exception | None = None
     auth_rate_limit_lock = threading.Lock()
@@ -462,6 +472,26 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_html(self._oauth_callback_public_html(result), status=status)
             else:
                 self._send_json({"oauth_callback": result}, status=status)
+            return
+
+        if len(parts) == 3 and parts[0] == "media-source-assets" and parts[2] == "content":
+            if not self._check_expensive_api_rate_limit(method="GET", path=path):
+                return
+            try:
+                asset = self.media_source_asset_store.resolve(
+                    asset_id=parts[1],
+                    expires=query.get("expires", [""])[0],
+                    signature=str(query.get("signature", [""])[0]),
+                )
+            except MediaSourceAssetError as exc:
+                status = {
+                    "asset_not_found": HTTPStatus.NOT_FOUND,
+                    "signed_url_expired": HTTPStatus.GONE,
+                    "asset_expired": HTTPStatus.GONE,
+                }.get(exc.code, HTTPStatus.FORBIDDEN)
+                self._send_error(status, str(exc))
+                return
+            self._send_media_source_asset(asset)
             return
 
         if not self._check_expensive_api_rate_limit(method="GET", path=path):
@@ -1322,6 +1352,43 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         identity = self._require_auth()
         if identity is None:
+            return
+
+        if len(parts) == 3 and parts[0] == "stores" and parts[2] == "media-source-assets":
+            if not self._require_permission(identity, "create_task"):
+                return
+            store_id = parts[1]
+            store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
+            if not store:
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            content = self._read_media_source_body()
+            try:
+                asset, source_url = self.media_source_asset_store.create(
+                    company_id=identity["company_id"],
+                    store_id=store_id,
+                    user_id=identity["user_id"],
+                    content_type=str(self.headers.get("content-type") or ""),
+                    filename=unquote(str(self.headers.get("x-jiejing-file-name") or "source-image")),
+                    content=content,
+                )
+            except MediaSourceAssetError as exc:
+                status = {
+                    "file_too_large": HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                    "tenant_upload_quota_exceeded": HTTPStatus.TOO_MANY_REQUESTS,
+                }.get(exc.code, HTTPStatus.BAD_REQUEST)
+                self._send_error(status, str(exc))
+                return
+            self._send_json(
+                {
+                    "media_source_asset": asset.public_dict(source_url=source_url),
+                    "provider_reference_ready": True,
+                    "requires_asset_review": True,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                },
+                status=HTTPStatus.CREATED,
+            )
             return
 
         if len(parts) == 3 and parts[0] == "media-asset-jobs" and parts[2] == "review":
@@ -5549,6 +5616,31 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             raise RequestBodyError(HTTPStatus.BAD_REQUEST, "json body must be an object")
         return payload
 
+    def _read_media_source_body(self) -> bytes:
+        raw_length = self.headers.get("content-length", "0") or "0"
+        try:
+            length = int(raw_length)
+        except (TypeError, ValueError) as exc:
+            raise RequestBodyError(HTTPStatus.BAD_REQUEST, "invalid content-length") from exc
+        if length <= 0:
+            raise RequestBodyError(HTTPStatus.BAD_REQUEST, "source image is empty")
+        if length > MAX_MEDIA_SOURCE_BYTES:
+            self.close_connection = True
+            raise RequestBodyError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "source image exceeds the 5 MB limit")
+        previous_timeout = self.connection.gettimeout()
+        self.connection.settimeout(_positive_int_env("JIEJING_REQUEST_BODY_TIMEOUT_SECONDS", 15))
+        try:
+            content = self.rfile.read(length)
+        except (TimeoutError, socket.timeout) as exc:
+            self.close_connection = True
+            raise RequestBodyError(HTTPStatus.REQUEST_TIMEOUT, "source image upload timed out") from exc
+        finally:
+            if not self.close_connection:
+                self.connection.settimeout(previous_timeout)
+        if len(content) != length:
+            raise RequestBodyError(HTTPStatus.BAD_REQUEST, "source image upload was incomplete")
+        return content
+
     def _send_json(self, data: Any, status: HTTPStatus = HTTPStatus.OK, headers: list[tuple[str, str]] | None = None) -> None:
         body = json.dumps(data, ensure_ascii=False, indent=2, default=json_default).encode("utf-8")
         self.send_response(status)
@@ -5559,6 +5651,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self.send_header(key, value)
         self._send_security_headers()
         self._send_cors_headers()
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_media_source_asset(self, asset: Any) -> None:
+        body = asset.file_path.read_bytes()
+        if len(body) != asset.size_bytes or hashlib.sha256(body).hexdigest() != asset.sha256:
+            self._send_error(HTTPStatus.GONE, "media source asset integrity check failed")
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("content-type", asset.content_type)
+        self.send_header("content-length", str(len(body)))
+        self.send_header("cache-control", "private, max-age=60")
+        self.send_header("content-disposition", "inline")
+        self._send_security_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -5846,7 +5952,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if origin != "*":
                 self.send_header("access-control-allow-credentials", "true")
         self.send_header("access-control-allow-methods", "GET, POST, OPTIONS")
-        self.send_header("access-control-allow-headers", "content-type, authorization, x-jiejing-operator-secret")
+        self.send_header("access-control-allow-headers", "content-type, authorization, x-jiejing-operator-secret, x-jiejing-file-name")
 
     def _send_security_headers(self) -> None:
         self.send_header("x-content-type-options", "nosniff")

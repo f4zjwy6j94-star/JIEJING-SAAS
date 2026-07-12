@@ -366,7 +366,7 @@ async function main() {
     { timeout: 60000 },
   );
   await fillPublishIntakeForm(page, seed);
-  await page.waitForSelector(".saas-listing-publish-loop", { timeout: 30000 });
+  await page.waitForSelector(".saas-listing-publish-loop", { state: "attached", timeout: 30000 });
   await page
     .screenshot({ path: path.join(outDir, "01-product-draft-before-confirmation.png"), fullPage: true, timeout: 15000 })
     .catch((error) => screenshotFailures.push({ view: "product-before-confirmation", error: String(error.message || error).slice(0, 300) }));

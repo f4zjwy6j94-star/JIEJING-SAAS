@@ -102,6 +102,7 @@ FILES=(
   "jiejing_saas/production_release_gate.py"
   "jiejing_saas/post_publish_cockpit.py"
   "jiejing_saas/media_asset_pipeline.py"
+  "jiejing_saas/media_source_assets.py"
   "jiejing_saas/provider_job_runner.py"
   "jiejing_saas/provider_workflow_plan.py"
   "jiejing_saas/model_provider_catalog.py"
@@ -326,6 +327,7 @@ python3 -m py_compile \
   jiejing_saas/production_release_gate.py \
   jiejing_saas/post_publish_cockpit.py \
   jiejing_saas/media_asset_pipeline.py \
+  jiejing_saas/media_source_assets.py \
   jiejing_saas/provider_job_runner.py \
   jiejing_saas/provider_workflow_plan.py \
   jiejing_saas/model_provider_catalog.py \

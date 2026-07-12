@@ -418,6 +418,33 @@ async function main() {
     };
   });
 
+  smokeStage = "uploading_grounded_media_source";
+  const sourceFixturePath = path.join(outDir, "controlled-merchant-source.png");
+  const fixturePage = await context.newPage();
+  await fixturePage.setViewportSize({ width: 720, height: 720 });
+  await fixturePage.setContent(
+    '<main style="width:680px;height:680px;display:grid;place-items:center;background:#fff;border:20px solid #0a8f87;font-family:Arial,sans-serif;text-align:center"><div><strong id="fixture-label" style="display:block;font-size:42px;color:#10241f"></strong><span style="display:block;margin-top:24px;font-size:24px;color:#52645f">CONTROLLED QA SOURCE IMAGE<br>NOT FOR REAL LISTING</span></div></main>',
+  );
+  await fixturePage.locator("#fixture-label").evaluate((node, label) => {
+    node.textContent = label;
+  }, acceptanceProduct);
+  await fixturePage.locator("main").screenshot({ path: sourceFixturePath });
+  await fixturePage.close();
+  await page.setInputFiles("#mediaSourceFileInput", sourceFixturePath);
+  await page.waitForFunction(
+    () => Boolean(state.saasMediaSourceUpload?.asset_id && /^https:\/\//i.test(String(state.saasMediaSourceUpload?.source_url || ""))),
+    null,
+    { timeout: 60000 },
+  );
+  const sourceUpload = await page.evaluate(() => ({
+    asset_id: state.saasMediaSourceUpload?.asset_id || "",
+    content_type: state.saasMediaSourceUpload?.content_type || "",
+    size_bytes: state.saasMediaSourceUpload?.size_bytes || 0,
+    listing_project_key: state.saasMediaSourceUpload?.listing_project_key || "",
+    source_url_signed: /^https:\/\/.+[?&]signature=/.test(String(state.saasMediaSourceUpload?.source_url || "")),
+    secret_exposed: JSON.stringify(state.saasMediaSourceUpload || {}).toLowerCase().includes("api_key"),
+  }));
+
   await page.evaluate(({ includeVideo }) => {
     const videoPreset = document.querySelector("#view-media.is-active #mediaVideoPresetSelect");
     if (includeVideo && videoPreset) {
@@ -581,6 +608,13 @@ async function main() {
       mediaOpened.has_writeback_button &&
       mediaOpened.has_workflow_copy &&
       !mediaOpened.exposes_provider_copy,
+    grounded_source_upload_ready:
+      Boolean(sourceUpload.asset_id) &&
+      sourceUpload.content_type === "image/png" &&
+      sourceUpload.size_bytes > 0 &&
+      sourceUpload.listing_project_key === mediaOpened.listing_project_key &&
+      sourceUpload.source_url_signed === true &&
+      sourceUpload.secret_exposed === false,
     media_generation_creates_reviewable_assets:
       ["submitted", "generated", "done"].includes(mediaGenerated.media_generation_status) &&
       mediaGenerated.has_review_copy &&
@@ -629,6 +663,7 @@ async function main() {
     bulkGenerated,
     productAfterBulk,
     mediaOpened,
+    sourceUpload,
     mediaGenerated,
     backendMediaJob,
     productAfterMedia,

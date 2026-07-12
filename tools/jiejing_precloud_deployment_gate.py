@@ -39,6 +39,8 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("listing_progressive_disclosure", [sys.executable, "tools/test_jiejing_listing_progressive_disclosure.py"]),
     ("media_version_rework_ui", [sys.executable, "tools/test_jiejing_media_version_rework_ui.py"]),
     ("media_asset_jobs", [sys.executable, "tools/test_jiejing_media_asset_jobs.py"]),
+    ("media_source_assets", [sys.executable, "tools/test_jiejing_media_source_assets.py"]),
+    ("media_source_upload_http", [sys.executable, "tools/test_jiejing_media_source_upload_http.py"]),
     ("ai_ceo_cross_device_history", [sys.executable, "tools/test_jiejing_ai_ceo_cross_device_history.py"]),
     ("ai_ceo_scroll_retention", [sys.executable, "tools/test_jiejing_ai_ceo_scroll_retention.py"]),
     ("ai_ceo_history_pagination", [sys.executable, "tools/test_jiejing_ai_ceo_history_pagination.py"]),

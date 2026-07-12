@@ -33,6 +33,16 @@ def main() -> None:
     assert "const informational = /发布前|上架前|刊登前|核对项|规则|要求|规范|说明" in app
     assert "if (informational) return false;" in app
     assert "if (isSaasCeoHighRiskCommand(raw)) return \"confirm\";" in app
+    assert 'fields.buyer_copy_status !== "waiting_for_merchant_product_facts"' in (
+        ROOT / "tools" / "codex_jiejing_ai_ceo_market_listing_bridge_smoke.js"
+    ).read_text(encoding="utf-8")
+    assert "ui_has_truthful_listing_handoff" in (
+        ROOT / "tools" / "codex_jiejing_ai_ceo_market_listing_bridge_smoke.js"
+    ).read_text(encoding="utf-8")
+    assert "payload = _structured_payload(completed.stderr)" in runner
+    assert 'state: "attached"' in publish
+    assert "uploading_grounded_media_source" in bulk
+    assert "grounded_source_upload_ready" in bulk
     print("PASS jiejing_product_grade_journey_contract")
 
 

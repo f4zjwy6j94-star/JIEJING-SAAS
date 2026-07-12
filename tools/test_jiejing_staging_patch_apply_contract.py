@@ -98,6 +98,7 @@ def main() -> int:
         "jiejing_saas/provider_job_runner.py",
         "jiejing_saas/provider_workflow_plan.py",
         "jiejing_saas/media_asset_pipeline.py",
+        "jiejing_saas/media_source_assets.py",
         "jiejing_saas/platform_model_status.py",
         "jiejing_saas/model_value_gate.py",
         "jiejing_saas/model_value_rehearsal.py",

@@ -18,6 +18,7 @@ const state = {
   mediaGenerationCount: 0,
   mediaTaskEntry: "project",
   mediaSourceObjectUrl: "",
+  saasMediaSourceUpload: null,
   activeListingDraft: "incense",
   activeCockpitMarketDraft: "incense",
   marketReportMode: "single",
@@ -6609,7 +6610,7 @@ function bindRestoredMediaStudioEvents() {
   const mediaSourceFileInput = view.querySelector("#mediaSourceFileInput");
   bindOnce(view.querySelector("#mediaBrowseFileButton"), "click", () => mediaSourceFileInput?.click());
   bindOnce(mediaSourceFileInput, "change", (event) => {
-    handleMediaSourceFile(event.target.files?.[0], event);
+    void handleMediaSourceFile(event.target.files?.[0], event);
     event.target.value = "";
   });
   const mediaDropPanel = view.querySelector("#mediaNewTaskDropPanel");
@@ -6627,7 +6628,7 @@ function bindRestoredMediaStudioEvents() {
         mediaDropPanel.classList.remove("is-dragging");
       });
     });
-    mediaDropPanel.addEventListener("drop", (event) => handleMediaSourceFile(event.dataTransfer?.files?.[0], event));
+    mediaDropPanel.addEventListener("drop", (event) => void handleMediaSourceFile(event.dataTransfer?.files?.[0], event));
   }
   view.querySelectorAll(".media-channel-card").forEach((button) => {
     bindOnce(button, "click", () => {
@@ -14415,13 +14416,46 @@ function setMediaNewTaskMode() {
   setText("#mediaDecisionSummary", "当前是独立上传素材单。生成结果只作为素材草稿；如果要变成正式商品，需要再进入市场报告、产品刊登和确认中心。");
 }
 
-function handleMediaSourceFile(file, sourceEvent) {
+async function uploadSaasMediaSourceFile(file) {
+  const store = activeSaasStore();
+  if (!store?.store_id) throw new Error("请先进入一个店铺工作区，再上传商品来源图。");
+  const payload = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/media-source-assets`, {
+    method: "POST",
+    headers: {
+      "content-type": file.type || "application/octet-stream",
+      "x-jiejing-file-name": encodeURIComponent(file.name || "source-image"),
+    },
+    body: file,
+  });
+  const asset = payload?.media_source_asset && typeof payload.media_source_asset === "object" ? payload.media_source_asset : null;
+  const sourceUrl = String(asset?.source_url || "");
+  const sourceHost = (() => {
+    try {
+      return new URL(sourceUrl).hostname;
+    } catch {
+      return "";
+    }
+  })();
+  const localDevelopmentSource = ["localhost", "127.0.0.1"].includes(location.hostname) && ["localhost", "127.0.0.1"].includes(sourceHost);
+  if (!asset?.asset_id || (!/^https:\/\//i.test(sourceUrl) && !localDevelopmentSource)) {
+    throw new Error("后端没有返回可供素材服务读取的安全来源图地址。");
+  }
+  return asset;
+}
+
+async function handleMediaSourceFile(file, sourceEvent) {
   if (!file) return;
-  if (!/^image\//.test(file.type || "")) {
-    showActionToast("请拖入图片文件：WEBP、PNG 或 JPG。");
+  if (!/^image\/(png|jpeg|webp)$/i.test(file.type || "")) {
+    showActionToast("请选择 PNG、JPG 或 WEBP 商品图片。");
     return;
   }
-  setMediaNewTaskMode();
+  if (file.size > 5 * 1024 * 1024) {
+    showActionToast("图片不能超过 5 MB；请压缩后重新上传。");
+    return;
+  }
+  const attachToCurrentProject = Boolean(state.activeMediaDraft || state.saasListingComposerDraft?.product);
+  if (!attachToCurrentProject) setMediaNewTaskMode();
+  state.saasMediaSourceUpload = null;
   const localPath = inferMediaLocalPath(file, sourceEvent);
   const previewUrl = URL.createObjectURL(file);
   if (state.mediaSourceObjectUrl) URL.revokeObjectURL(state.mediaSourceObjectUrl);
@@ -14431,17 +14465,30 @@ function handleMediaSourceFile(file, sourceEvent) {
   document.querySelector("#mediaNewTaskDropPanel")?.classList.add("is-ready");
   setText("#mediaLocalPath", localPath.path);
   setText("#mediaLocalPathNote", `${localPath.note} 文件：${file.name}，大小：${Math.max(1, Math.round(file.size / 1024))} KB。`);
-  setText("#mediaDropHint", "已接收货源图，素材草稿已开始生成");
-  setText("#mediaProductionTitle", `1688 货源图：${file.name}`);
-  setText("#mediaProductionStatus", "已接收本机图片 · 正在生成素材草稿");
-  setText("#mediaProductionNeed", "主图、场景图、详情页、尺寸图、短视频脚本");
-  setText("#mediaProductionGap", "尺寸、重量、材质、套装口径、是否含配件");
-  runMediaGenerationFromCeo(`1688货源图：${localPath.path}`, {
-    entry: "single",
-    localPath: localPath.path,
-    fileName: file.name,
-  });
-  showActionToast("已接收 1688 货源图：本机路径已写入素材单，图片和详情页草稿已生成。");
+  setText("#mediaDropHint", "正在安全上传商品来源图");
+  setText("#mediaProductionTitle", `商品来源图：${file.name}`);
+  setText("#mediaProductionStatus", "正在上传真实来源图 · 尚未调用素材生成服务");
+  setText("#mediaProductionNeed", "主图、场景图、详情图、尺寸图和短视频脚本");
+  setText("#mediaProductionGap", "尺寸、重量、材质、套装内容和图片使用权仍需核对");
+  try {
+    const asset = await uploadSaasMediaSourceFile(file);
+    const listingProject = saasCurrentListingProjectIdentity(state.saasListingComposerDraft || {});
+    state.saasMediaSourceUpload = {
+      ...asset,
+      listing_project_key: listingProject.key || state.activeMediaDraft || "",
+      local_preview_url: previewUrl,
+    };
+    setText("#mediaDropHint", "真实来源图已上传，可以开始生成素材");
+    setText("#mediaProductionStatus", "真实来源图已进入安全暂存 · 选择要求后点击生成素材");
+    setText("#mediaSourceNote", "素材服务只读取短时签名来源图；生成结果仍需核对实物一致性和图片权利。");
+    showActionToast("商品来源图已上传。请确认素材要求后点击“生成素材”，不会自动发布。");
+  } catch (error) {
+    state.saasMediaSourceUpload = null;
+    setText("#mediaDropHint", "图片上传失败，请重试");
+    setText("#mediaProductionStatus", "真实来源图尚未上传 · 没有调用素材生成服务");
+    setText("#mediaSourceNote", "本机预览不会冒充已上传素材；请检查网络或图片格式后重试。");
+    showActionToast(`图片没有上传成功：${publicRuntimeText(error?.message || error).slice(0, 120)}`);
+  }
 }
 
 function readMediaGenerationConfig(overrides = {}) {
@@ -14838,6 +14885,16 @@ function currentMediaStudioProductFacts(config = {}) {
       "当前商品",
   );
   const store = ctx.store || activeSaasStore();
+  const upload = state.saasMediaSourceUpload && typeof state.saasMediaSourceUpload === "object" ? state.saasMediaSourceUpload : null;
+  const uploadMatchesProject =
+    upload &&
+    (!upload.listing_project_key ||
+      !listingProject.key ||
+      upload.listing_project_key === listingProject.key ||
+      upload.listing_project_key === state.activeMediaDraft);
+  const referenceImages = [config.referenceImageUrl, uploadMatchesProject ? upload.source_url : ""]
+    .map((url) => String(url || "").trim())
+    .filter((url, index, values) => /^https:\/\//i.test(url) && values.indexOf(url) === index);
   return {
     product: productName,
     listing_project_key: listingProject.key,
@@ -14853,7 +14910,9 @@ function currentMediaStudioProductFacts(config = {}) {
     },
     allowed_claims: [],
     forbidden_claims: ["未验证认证", "医疗功效", "未经授权品牌词", "夸大性能承诺"],
-    reference_images: config.localPath ? [`local_upload://${config.localPath}`] : [],
+    reference_images: referenceImages,
+    source_asset_id: uploadMatchesProject ? upload.asset_id || "" : "",
+    source_image_sha256: uploadMatchesProject ? upload.sha256 || "" : "",
     target_marketplace_rules: {
       platform: "ebay",
       marketplace: store?.marketplace || "EBAY_US",
@@ -41956,7 +42015,7 @@ function bindEvents() {
   const mediaSourceFileInput = document.querySelector("#mediaSourceFileInput");
   document.querySelector("#mediaBrowseFileButton")?.addEventListener("click", () => mediaSourceFileInput?.click());
   mediaSourceFileInput?.addEventListener("change", (event) => {
-    handleMediaSourceFile(event.target.files?.[0], event);
+    void handleMediaSourceFile(event.target.files?.[0], event);
     event.target.value = "";
   });
   if (mediaDropPanel) {
@@ -41973,7 +42032,7 @@ function bindEvents() {
       });
     });
     mediaDropPanel.addEventListener("drop", (event) => {
-      handleMediaSourceFile(event.dataTransfer?.files?.[0], event);
+      void handleMediaSourceFile(event.dataTransfer?.files?.[0], event);
     });
   }
 

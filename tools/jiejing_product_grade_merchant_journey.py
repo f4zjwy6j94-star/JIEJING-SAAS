@@ -29,9 +29,10 @@ def _run(command: list[str], *, env: dict[str, str], timeout: int) -> dict[str, 
         timeout=timeout,
         check=False,
     )
-    try:
-        payload = json.loads(completed.stdout.strip()) if completed.stdout.strip() else {}
-    except json.JSONDecodeError:
+    payload = _structured_payload(completed.stdout)
+    if not payload:
+        payload = _structured_payload(completed.stderr)
+    if not payload:
         payload = {"ok": False, "error": "invalid_json_output"}
     return {
         "command": command,
@@ -42,6 +43,28 @@ def _run(command: list[str], *, env: dict[str, str], timeout: int) -> dict[str, 
         "stderr_tail": completed.stderr[-1200:],
         "secret_exposed": False,
     }
+
+
+def _structured_payload(output: str) -> dict[str, Any]:
+    text = output.strip()
+    if not text:
+        return {}
+    try:
+        value = json.loads(text)
+        return value if isinstance(value, dict) else {}
+    except json.JSONDecodeError:
+        pass
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(text):
+        if character != "{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return {}
 
 
 def main() -> int:
