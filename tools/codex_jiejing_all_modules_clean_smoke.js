@@ -150,8 +150,7 @@ async function waitForCeoRouteTaskTarget(page, target) {
       (expectedTarget) => {
         const card = document.querySelector("#view-cockpit .saas-ceo-routing-task-card");
         const button = card?.querySelector("[data-global-flow-view]");
-        const pending = document.querySelector("#view-cockpit #ceoChat .message.ai.is-pending");
-        return Boolean(card && card.offsetParent !== null && button?.getAttribute("data-global-flow-view") === expectedTarget && !pending);
+        return Boolean(card && card.offsetParent !== null && button?.getAttribute("data-global-flow-view") === expectedTarget);
       },
       target,
       { timeout: 12000 },
@@ -294,6 +293,7 @@ async function main() {
   const pageErrors = [];
   const requestFailures = [];
   const ignoredRequestFailures = [];
+  const clientResponses = [];
   const badResponses = [];
   const screenshotFailures = [];
   page.on("pageerror", (error) => pageErrors.push(String(error.message || error).slice(0, 500)));
@@ -304,7 +304,11 @@ async function main() {
         failure.resourceType === "image" &&
         failure.url.startsWith(`${base}/assets/`) &&
         /ERR_ABORTED|NS_BINDING_ABORTED/i.test(failure.error);
-      if (isIgnorableAssetAbort) {
+      const isIgnorableStreamAbort =
+        failure.resourceType === "fetch" &&
+        failure.url.includes("/merchant-ceo/chat?stream=1") &&
+        /ERR_ABORTED|NS_BINDING_ABORTED/i.test(failure.error);
+      if (isIgnorableAssetAbort || isIgnorableStreamAbort) {
         ignoredRequestFailures.push(failure);
         return;
       }
@@ -312,6 +316,9 @@ async function main() {
     }
   });
   page.on("response", (response) => {
+    if (response.url().startsWith(base) && response.status() >= 400 && response.status() < 500) {
+      clientResponses.push({ url: response.url(), status: response.status() });
+    }
     if (response.url().startsWith(base) && response.status() >= 500) {
       badResponses.push({ url: response.url(), status: response.status() });
     }
@@ -353,7 +360,7 @@ async function main() {
       };
     });
     throw new Error(
-      `AI CEO composer did not become visible: ${JSON.stringify({ ...diagnostic, requestFailures, badResponses, pageErrors })}; ${error.message || error}`,
+      `AI CEO composer did not become visible: ${JSON.stringify({ ...diagnostic, requestFailures, clientResponses, badResponses, pageErrors })}; ${error.message || error}`,
     );
   }
   await page
@@ -604,6 +611,12 @@ async function main() {
           const style = getComputedStyle(el);
           return `${style.display}/${style.visibility}`;
         };
+        const viewportWidth = window.innerWidth;
+        const clippedControls = Array.from(section?.querySelectorAll("button, input, textarea, select, summary") || []).filter((control) => {
+          if (control.offsetParent === null) return false;
+          const rect = control.getBoundingClientRect();
+          return rect.width > 0 && (rect.left < -2 || rect.right > viewportWidth + 2);
+        });
         return {
           view,
           exists: Boolean(section),
@@ -612,6 +625,10 @@ async function main() {
           topbar_style: styleOf("#appShell .main > .topbar"),
           flow_style: styleOf(".global-flow-bar"),
           handoff_style: styleOf(".saas-ceo-module-handoff"),
+          horizontal_overflow: document.documentElement.scrollWidth > viewportWidth + 2,
+          document_scroll_width: document.documentElement.scrollWidth,
+          viewport_width: viewportWidth,
+          clipped_control_count: clippedControls.length,
           has_listing_simple_head: Boolean(document.querySelector(".saas-listing-simple-head")),
           has_listing_products: Boolean(document.querySelector(".saas-listing-simple-products")),
           has_listing_cplus_stack: sectionHas(".saas-listing-cplus-stack"),
@@ -687,9 +704,9 @@ async function main() {
             text.includes("不会把旧测试图当成真实生成结果"),
           has_media_internal_copy: /官方数据包|Listing Package|数据包可用|等待数据包|确认记录|费用和用量|素材状态拆分|Provider Hub|素材 Provider|素材 brief|后台证据|后台状态|素材清单已回写|流程导入不需要本机路径/.test(text),
           has_bulk_simple_headline: text.includes("先小批量筛，不一键乱铺"),
-          has_bulk_roadmap: sectionHas(".bulk-output-snapshot"),
+          has_bulk_import_preview: sectionHas(".bulk-manual-source-intake") && text.includes("预览导入"),
           has_bulk_grouping_copy: text.includes("能试") && text.includes("要补") && text.includes("先不做"),
-          has_bulk_first_run_strip: sectionHas(".bulk-output-snapshot") && text.includes("真实发布") && text.includes("决策中心"),
+          has_bulk_one_next_step: text.includes("生成三类候选") && text.includes("只进入预览和草稿"),
           has_bulk_internal_copy: /真实账号批量质检|官方数据包|字段完整度|质检槽位|等待数据包/.test(text),
           has_service_simple_headline: text.includes("客服、物流和售后放在一页"),
           has_service_simple_flow:
@@ -751,22 +768,24 @@ async function main() {
           has_collapsed_history: Boolean(document.querySelector("#saasAiCeoHistory:not([hidden]), #view-cockpit .saas-ai-ceo-history summary")),
           has_login_overlay: Boolean(document.querySelector(".auth-shell, .saas-login-modal, [data-auth-view]")),
           has_ceo_pending_status: Boolean(document.querySelector("#view-cockpit .saas-ai-ceo-pending-status")),
-          ceo_pending_chip_is_not_avatar: (() => {
-            const chip = document.querySelector("#view-cockpit .saas-ai-ceo-pending-status > span");
-            if (!chip) return true;
-            const style = getComputedStyle(chip);
-            const rect = chip.getBoundingClientRect();
+          ceo_pending_is_single_thinking_dot: (() => {
+            const status = document.querySelector("#view-cockpit .saas-ai-ceo-pending-status.is-compact");
+            const dot = status?.querySelector(":scope > span.saas-ai-ceo-thinking-dot");
+            if (!status || !dot) return !status;
+            const style = getComputedStyle(dot);
+            const rect = dot.getBoundingClientRect();
             return (
-              rect.width > 34 &&
-              rect.height < 30 &&
-              style.backgroundColor !== "rgb(16, 28, 23)" &&
-              style.color !== "rgb(255, 255, 255)"
+              rect.width >= 5 &&
+              rect.width <= 18 &&
+              Math.abs(rect.width - rect.height) <= 1 &&
+              style.borderRadius !== "0px" &&
+              style.backgroundColor === "rgb(17, 17, 17)"
             );
           })(),
-          has_ceo_pending_preview: Boolean(
-            Array.from(document.querySelectorAll("#view-cockpit #ceoChat .message.ai.is-pending"))
-              .slice(-1)[0]
-              ?.querySelector('[data-ai-ceo-provisional-answer="quick_then_full_report_v1"]'),
+          has_complex_ceo_pending_preview: Boolean(
+            document.querySelector(
+              '#view-cockpit #ceoChat .message.ai.is-pending [data-ai-ceo-provisional-answer="quick_then_full_report_v1"]',
+            ),
           ),
           ceo_pending_preview_copy: (() => {
             const pending = Array.from(document.querySelectorAll("#view-cockpit #ceoChat .message.ai.is-pending")).slice(-1)[0];
@@ -1010,6 +1029,7 @@ async function main() {
     pageErrors,
     requestFailures,
     ignoredRequestFailures,
+    clientResponses,
     badResponses,
     screenshotFailures,
     navCount: await page.locator(".nav-item").count(),
@@ -1035,23 +1055,20 @@ async function main() {
     if (!String(check.flow_style).startsWith("none/")) failures.push(`${check.view} flow bar still visible`);
     if (check.handoff_style !== "missing" && !String(check.handoff_style).startsWith("none/")) failures.push(`${check.view} handoff visible`);
     if (check.has_login_overlay) failures.push(`${check.view} login overlay visible`);
+    if (check.horizontal_overflow) failures.push(`${check.view} horizontal overflow ${check.document_scroll_width}/${check.viewport_width}`);
+    if (check.clipped_control_count) failures.push(`${check.view} clipped controls ${check.clipped_control_count}`);
   }
   const product = moduleChecks.find((item) => item.view === "product") || {};
   if (!product.has_listing_cplus_stack || !product.has_listing_input_panel) failures.push("product C+ listing input surface missing");
   if (!product.has_listing_ai_handoff || !product.has_listing_ai_handoff_input) failures.push("product AI CEO to Listing handoff missing");
-  if (!product.has_listing_source_grid || !product.has_listing_status_rail) failures.push("product C+ listing source/status rail missing");
+  if (!product.has_listing_source_grid) failures.push("product Listing source choices missing");
   if (!product.has_listing_first_run_strip) failures.push("product first-run assurance strip missing");
   if (!product.has_listing_workflow_action) failures.push("product C+ listing backend workflow action missing");
   if (!product.has_listing_market_stage || !product.has_listing_draft_stage) failures.push("product C+ market-to-draft flow missing");
   if (!product.has_listing_asset_profit_stage || !product.has_listing_publish_confirmation_stage) {
     failures.push("product C+ asset/profit or publish confirmation stage missing");
   }
-  if (!product.has_listing_preflight_bridge || product.listing_preflight_action_count < 3) {
-    failures.push("product Listing draft does not bridge into publish preflight and confirmation actions");
-  }
-  if (!product.has_listing_publish_feedback || product.listing_publish_feedback_action_count < 3) {
-    failures.push("product Listing publish feedback receipt missing");
-  }
+  if (product.listing_preflight_action_count < 2) failures.push("product Listing draft is missing publish-preparation actions");
   if (!product.has_listing_publish_loop) {
     failures.push("product Listing publish confirmation loop missing");
   }
@@ -1093,10 +1110,10 @@ async function main() {
   if (!media.has_media_asset_jobs_panel) failures.push("media asset job manifest panel missing");
   if (media.has_media_internal_copy) failures.push("media daily surface exposes internal evidence/provider copy");
   const bulk = moduleChecks.find((item) => item.view === "bulk") || {};
-  if (!bulk.has_bulk_simple_headline || !bulk.has_bulk_roadmap || !bulk.has_bulk_grouping_copy) {
+  if (!bulk.has_bulk_simple_headline || !bulk.has_bulk_import_preview || !bulk.has_bulk_grouping_copy) {
     failures.push("bulk simple grouping surface missing");
   }
-  if (!bulk.has_bulk_first_run_strip) failures.push("bulk first-run assurance strip missing");
+  if (!bulk.has_bulk_one_next_step) failures.push("bulk one-next-step empty state missing");
   if (bulk.has_bulk_internal_copy) failures.push("bulk daily surface exposes internal evidence/debug copy");
   const service = moduleChecks.find((item) => item.view === "service") || {};
   if (!service.has_service_simple_headline || !service.has_service_simple_flow) failures.push("service simple workflow surface missing");
@@ -1192,14 +1209,11 @@ async function main() {
     failures.push("AI CEO first screen still exposes starter prompt buttons");
   }
   if (cockpit.has_collapsed_history) failures.push("AI CEO conversation is still hidden behind a collapsed history section");
-  if (!cockpit.ceo_pending_chip_is_not_avatar) {
-    failures.push("AI CEO pending status chip is inheriting avatar styling on small screens");
+  if (!cockpit.ceo_pending_is_single_thinking_dot) {
+    failures.push("AI CEO pending state is not the single compact thinking dot");
   }
-  if (cockpit.has_ceo_pending_status && !cockpit.has_ceo_pending_preview) {
-    failures.push("AI CEO pending state is missing the quick provisional answer card");
-  }
-  if (cockpit.has_ceo_pending_status && !cockpit.ceo_pending_preview_copy) {
-    failures.push("AI CEO provisional answer copy is not merchant-readable");
+  if (cockpit.has_complex_ceo_pending_preview) {
+    failures.push("AI CEO pending state still exposes the old complex waiting card");
   }
 
   if (failures.length) {

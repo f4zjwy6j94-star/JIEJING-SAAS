@@ -73,6 +73,14 @@ def create_store(base_url: str, token: str, name: str) -> str:
 
 
 def main() -> int:
+    app_js = (ROOT / "app.js").read_text(encoding="utf-8")
+    for marker in (
+        "const submittedAt = new Date(submittedAtMs).toISOString();",
+        "created_at: submittedAt",
+        "saasAiCeoThreadTurnByAssistantId",
+    ):
+        if marker not in app_js:
+            return fail(f"frontend late-response ordering contract missing: {marker}")
     OUT.mkdir(parents=True, exist_ok=True)
     for path in (SAAS_DB, RUNTIME_DB):
         if path.exists():

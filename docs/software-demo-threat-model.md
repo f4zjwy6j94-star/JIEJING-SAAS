@@ -1,6 +1,6 @@
 # JIEJING adversarial security review
 
-Review date: 2026-07-11
+Review date: 2026-07-12
 
 Scope: the public SaaS entry points, AI CEO chat and web grounding, account-scoped model configuration, Listing handoff, media generation/rework, batch workflows, queue recovery, authentication, tenant boundaries, and the public staging reverse-proxy path.
 
@@ -19,7 +19,16 @@ No confirmed Critical issue was found. The initial review identified two High an
 - A-05 mitigated: public source instructions are removed, source records are marked untrusted and factual-extraction-only, and prompt rules prohibit source content from changing tools, memory, routing, confirmation gates or actions.
 - A-06 partially remediated: the edge and API now share a 1 MiB body limit, slow bodies time out, and oversized bodies are rejected without draining. Replacing `ThreadingHTTPServer` remains open.
 - A-07 remediated for known credential families: nested text values are scanned even under ordinary field names before persistence/provider dispatch.
-- A-08 and A-09 remain open. Registration/login enumeration reduction and removal of CSP `unsafe-inline` are still required before paid launch.
+- A-08 remediated: unknown-account login performs the same PBKDF2 work as a known account, and registration conflicts no longer expose that an email already exists.
+- A-09 remains open. Removal of CSP `unsafe-inline` is still required before paid launch.
+
+## Product-integrity adversarial pass (2026-07-12)
+
+- AI CEO late responses now update the turn that initiated the request and remain ordered by submission time. A slow older request cannot replace a newer answer as the latest conversation state.
+- Bulk imports now preview every row, reject invalid rows, skip duplicate names/URLs, preserve partial success, and keep item-level retry and pause controls.
+- Media review now compares the protected source image with the generated result, preserves prior versions during rework, and requires explicit checks for shape, proportion, color, material, logos, packaging and factual claims.
+- A generated video cannot be treated as a usable demonstration when the merchant has not supplied verified use, installation or motion evidence. Such output remains blocked for Listing use.
+- Desktop, tablet and mobile browser regressions validate all seven merchant modules, fixed AI CEO composition, progressive Listing disclosure, focused Settings pages, horizontal overflow and clipped controls.
 
 ## System and trust boundaries
 
@@ -62,7 +71,7 @@ Primary trust boundaries:
 | A-05 | Medium | Malicious content / AI integrity | Public search snippets are inserted into `web_context.source_records` and sent to the model (`jiejing_saas/ai_ceo_chat.py:877-898`, `961-980`). Current rules demand citations and fact boundaries but do not explicitly classify or isolate prompt-injection text from source snippets. | A malicious page can place instructions in a snippet and bias recommendations, policy summaries or Listing drafts. Confirmation gates prevent direct writes, but merchants can still receive manipulated advice. | Treat every source field as untrusted data. Strip or flag instruction-like text, perform structured fact extraction before synthesis, require independent corroboration for strong claims, and prevent web content from changing tool selection, memory policy, confirmation state or action plans. |
 | A-06 | Medium | Extreme input / availability | The API uses `ThreadingHTTPServer` and blocking reads. It reads the declared body length without an application socket timeout and drains up to about 1 MiB before rejecting oversized JSON (`api_server.py:312`, `5307-5327`). The public Nginx config has a 10 MiB edge limit and 300-second proxy timeouts (`deploy/nginx.public-staging.conf:9`, `95-107`). | Slow clients or many partially sent requests can occupy threads and connections. Large edge allowance also exceeds the API contract and wastes bandwidth before rejection. | Enforce a 1 MiB body limit at the first public edge, set short header/read/idle timeouts and connection limits, and run the API under a hardened multi-process WSGI/ASGI server. Close oversized requests at the edge instead of draining them in application code. |
 | A-07 | Medium | Secret handling / malicious input | Generic recursive redaction masks values only when dictionary keys contain `secret`, `token`, `password`, or `api_key` (`jiejing_saas/api_server.py:6244-6256`). Chat history has stronger text sanitization, but generic provider inputs can carry a credential under an innocent key such as `notes`. | A merchant can accidentally persist or send a credential to a model/media provider, audit record or worker payload even though the intended secret boundary is backend-only. | Apply value-pattern secret detection to every free-text and nested provider input before persistence or dispatch. Reject likely credentials and direct the merchant to the secure connection form; do not rely only on masking key names. |
-| A-08 | Low | Enumeration | Login returns before password hashing when an email does not exist (`jiejing_saas/repository.py:489-500`), and registration returns an explicit conflict for an existing email (`api_server.py:1175-1177`). | Timing and response differences can help enumerate registered merchant emails, especially if A-01 is not fixed. | Run a fixed-cost dummy hash for unknown users, use less distinguishable public responses, and keep precise reasons only in backend audit logs. |
+| A-08 | Low | Enumeration | Remediated. Unknown-account login performs a fixed-cost dummy PBKDF2 verification, and registration conflicts return a generic public error. | Residual status differences remain inherent until registration uses verified-email delivery, but direct timing and message disclosure are reduced. | Keep exact reasons in backend audit logs, retain rate limits, and add verified-email enrollment before unrestricted platform-funded trials. |
 | A-09 | Low | Browser defense in depth | Public pages currently permit inline scripts/styles in CSP. Cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` on HTTPS (`api_server.py:4028-4050`). | Existing escaping and safe-rendering guards reduce XSS risk, but `unsafe-inline` weakens CSP if a DOM injection is introduced later. | Move inline scripts to versioned static files or use nonces/hashes. Add Trusted Types after the current rendering paths are compatible. Keep HSTS enforced at the public edge. |
 
 ## Adversarial scenarios
@@ -110,23 +119,22 @@ Primary trust boundaries:
 
 ### P0 before broad public trial or live media spend
 
-1. Fix A-01 with edge header normalization plus Redis distributed limits. Prove spoofed `X-Forwarded-For` cannot change the effective client identity and that keys expire.
-2. Fix A-02 with atomic quota/cost reservation on retry. Prove 100 concurrent retries for one asset produce at most one billable provider submission.
-3. Require verified email before platform-funded model quota. Keep merchant BYOK outside the platform-funded trial counter.
+1. Add verified email and a production bot challenge before platform-funded model/media quota. Keep merchant BYOK outside the platform-funded trial counter.
+2. Move the shared rate-limit contract to the production Redis boundary and alert on registration, login and provider-cost velocity.
+3. Keep the media retry reservation and server-derived idempotency proof in the release gate; 100 concurrent retries must still produce at most one billable provider submission.
 
 ### P1 before paid launch
 
-1. Add revocable short-lived sessions for A-03.
-2. Implement database-level merge/CAS for A-04.
-3. Add untrusted-source extraction and injection tests for A-05.
-4. Align edge/body/timeouts and production server runtime for A-06.
-5. Extend secret-pattern rejection for A-07.
+1. Replace the current revocable long-lived session with short access tokens and rotating refresh sessions.
+2. Re-run the conditional chat-merge proof on managed PostgreSQL.
+3. Continue strengthening corroboration and extraction for untrusted public sources.
+4. Replace `ThreadingHTTPServer` with the hardened production application server and keep edge/body timeouts aligned.
+5. Keep nested credential-pattern rejection in every new free-text/provider input contract.
 
 ### P2 hardening
 
-1. Reduce account-enumeration signals.
-2. Remove CSP `unsafe-inline` and add browser security regression tests.
-3. Add abuse telemetry: registration velocity, failed login distribution, platform-model usage, media spend reservations, retry fan-out, queue age, provider duplicate IDs and tenant-scope denials.
+1. Remove CSP `unsafe-inline` and add browser security regression tests.
+2. Add abuse telemetry: registration velocity, failed login distribution, platform-model usage, media spend reservations, retry fan-out, queue age, provider duplicate IDs and tenant-scope denials.
 
 ## Readiness conclusion
 

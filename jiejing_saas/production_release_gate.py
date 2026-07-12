@@ -325,11 +325,15 @@ def _ebay_section(*, evidence: dict[str, Any], approval_packet: dict[str, Any]) 
 
 def _monitoring_section(*, monitoring: dict[str, Any]) -> dict[str, Any]:
     runbooks = monitoring.get("incident_runbooks") if isinstance(monitoring.get("incident_runbooks"), dict) else {}
+    provider_observability = (
+        monitoring.get("provider_observability") if isinstance(monitoring.get("provider_observability"), dict) else {}
+    )
     checks = {
         "production_monitoring_ready": bool(monitoring.get("production_monitoring_ready")),
         "safe_access_logs_enabled": bool((monitoring.get("safe_access_logs") or {}).get("enabled")),
         "cloud_monitoring_target_ready": bool((monitoring.get("cloud_monitoring") or {}).get("target_ready")),
         "incident_runbooks_ready": bool(runbooks.get("runbook_ready")),
+        "provider_latency_and_cost_monitoring_ready": bool(provider_observability.get("ready")),
         "request_body_not_logged": (monitoring.get("safe_access_logs") or {}).get("records_request_body") is False,
         "authorization_header_not_logged": (monitoring.get("safe_access_logs") or {}).get("records_authorization_header") is False,
     }
@@ -345,6 +349,9 @@ def _monitoring_section(*, monitoring: dict[str, Any]) -> dict[str, Any]:
             "JIEJING_INCIDENT_RUNBOOK_PUBLISHED",
             "JIEJING_ONCALL_ALERT_ROUTE_CONFIGURED",
             "JIEJING_BILLING_INCIDENT_RUNBOOK_PUBLISHED",
+            "JIEJING_PROVIDER_METRICS_ENABLED",
+            "JIEJING_PROVIDER_LATENCY_ALERTS_CONFIGURED",
+            "JIEJING_PROVIDER_COST_ALERTS_CONFIGURED",
         ],
         next_action="Enable safe access logs, cloud monitoring, alert policies and incident runbooks for OAuth, billing, database, backup and model-cost failures.",
         verification=["/monitoring/status", "tools/test_jiejing_monitoring_runbook_gate.py"],

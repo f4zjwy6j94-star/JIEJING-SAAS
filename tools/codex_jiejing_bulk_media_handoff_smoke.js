@@ -301,7 +301,17 @@ async function main() {
     [
       `${acceptanceProduct} | https://supplier.invalid/product-grade-acceptance | 11.8 CNY | 240 | Yiwu | 190g / 32x8x6cm`,
       `Acceptance fixture backup ${Date.now()} | https://supplier.invalid/product-grade-backup | 8.6 CNY | 500 | Ningbo | 120g / 18x9x7cm`,
+      `${acceptanceProduct} | https://supplier.invalid/product-grade-acceptance | 11.8 CNY | 240 | Yiwu | 190g / 32x8x6cm`,
     ].join("\n"),
+  );
+  await page.click('[data-bulk-action="import-manual-source"]');
+  await page.waitForFunction(
+    () =>
+      state.saasBulkImportPreview?.candidates?.length === 2 &&
+      state.saasBulkImportPreview?.duplicates === 1 &&
+      document.querySelectorAll(".bulk-import-preview-row").length === 3,
+    null,
+    { timeout: 30000 },
   );
   await page.click('[data-bulk-action="import-manual-source"]');
   smokeStage = "importing_bulk_candidates";

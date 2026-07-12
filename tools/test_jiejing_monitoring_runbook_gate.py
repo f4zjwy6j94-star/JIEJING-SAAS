@@ -34,6 +34,9 @@ ENV_KEYS = (
     "JIEJING_BILLING_INCIDENT_RUNBOOK_PUBLISHED",
     "JIEJING_CLOUD_BILLING_INCIDENT_RUNBOOK_PUBLISHED",
     "JIEJING_DATABASE_ENDPOINT_INCIDENT_RUNBOOK_PUBLISHED",
+    "JIEJING_PROVIDER_METRICS_ENABLED",
+    "JIEJING_PROVIDER_LATENCY_ALERTS_CONFIGURED",
+    "JIEJING_PROVIDER_COST_ALERTS_CONFIGURED",
 )
 
 
@@ -69,6 +72,14 @@ def main() -> int:
             return fail(f"production-like monitoring must block without published runbooks and alert route: {runbook_blockers}")
         if blocked.get("production_monitoring_ready") is not False:
             return fail("monitoring must not be production-ready before runbook evidence exists")
+        provider_blockers = blocked.get("provider_observability", {}).get("blocked_by", [])
+        for required in (
+            "provider_metrics_not_enabled",
+            "provider_latency_alerts_not_configured",
+            "provider_cost_alerts_not_configured",
+        ):
+            if required not in provider_blockers:
+                return fail(f"production monitoring must block without provider telemetry: {provider_blockers}")
 
         os.environ.update(
             {
@@ -79,6 +90,9 @@ def main() -> int:
                 "JIEJING_BILLING_INCIDENT_RUNBOOK_PUBLISHED": "true",
                 "JIEJING_CLOUD_BILLING_INCIDENT_RUNBOOK_PUBLISHED": "true",
                 "JIEJING_DATABASE_ENDPOINT_INCIDENT_RUNBOOK_PUBLISHED": "true",
+                "JIEJING_PROVIDER_METRICS_ENABLED": "true",
+                "JIEJING_PROVIDER_LATENCY_ALERTS_CONFIGURED": "true",
+                "JIEJING_PROVIDER_COST_ALERTS_CONFIGURED": "true",
             }
         )
         ready = build_monitoring_status(settings, repo)
@@ -91,9 +105,17 @@ def main() -> int:
             "backup_restore_drill_overdue",
             "cloud_billing_or_resource_suspension",
             "database_endpoint_or_dns_unreachable",
+            "ai_model_latency_or_error_spike",
+            "public_search_latency_or_no_result_spike",
+            "media_provider_cost_or_retry_spike",
         }:
             if key not in alert_keys:
                 return fail(f"missing paid-launch alert contract: {key}")
+        provider_observability = ready.get("provider_observability", {})
+        if provider_observability.get("ready") is not True:
+            return fail(f"provider observability must be production-ready with evidence: {provider_observability}")
+        if provider_observability.get("records_raw_prompts") is not False or provider_observability.get("records_secrets") is not False:
+            return fail(f"provider monitoring must not record prompts or secrets: {provider_observability}")
         runbook_dump = json.dumps(ready.get("incident_runbooks", {}), ensure_ascii=False)
         for required in ("cloud billing arrears", "managed database endpoint"):
             if required not in runbook_dump:

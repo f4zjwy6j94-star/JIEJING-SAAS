@@ -43250,10 +43250,169 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ceo-route-closure {
   margin-top: 10px;
 }
 
-body.saas-public-mvp[data-view="cockpit"] .saas-ceo-route-closure > span {
+.asset-source-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.asset-source-comparison figure,
+.asset-source-comparison article {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid rgba(198, 215, 205, 0.98);
+  border-radius: 8px;
+  background: rgba(255, 254, 250, 0.96);
+}
+
+.asset-source-comparison figcaption,
+.asset-source-comparison span {
+  color: var(--jiejing-teal);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.asset-source-comparison .real-asset-image.source,
+.asset-source-comparison article img {
+  width: 100%;
+  min-height: 260px;
+  max-height: 440px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.asset-source-comparison .is-source-private {
+  place-content: center;
+  min-height: 260px;
+  text-align: center;
+  background: #f4f8f5;
+}
+
+.asset-source-comparison.is-video-comparison {
+  margin-top: 12px;
+}
+
+.bulk-import-preview {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(8, 118, 110, 0.18);
+  border-radius: 8px;
+  background: #f8fbf8;
+}
+
+.bulk-import-preview-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bulk-import-preview-summary span {
+  color: #5b6863;
+  font-size: 12px;
+}
+
+.bulk-import-preview-rows {
+  display: grid;
+  gap: 7px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.bulk-import-preview-row {
+  display: grid;
+  grid-template-columns: 64px minmax(120px, 0.7fr) minmax(0, 1.3fr);
+  gap: 8px;
+  align-items: center;
+  padding: 9px 10px;
+  border-left: 3px solid #0b8579;
+  background: #fff;
+}
+
+.bulk-import-preview-row.is-duplicate,
+.bulk-import-preview-row.is-invalid {
+  border-left-color: #b45d48;
+}
+
+.bulk-import-preview-row.is-needs_info {
+  border-left-color: #b88a24;
+}
+
+.bulk-import-preview-row span,
+.bulk-import-preview-row small {
+  color: #5b6863;
+  font-size: 12px;
+}
+
+.bulk-empty-next-step {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid rgba(8, 118, 110, 0.16);
+  border-radius: 8px;
+  background: #f8fbf8;
+}
+
+@media (max-width: 760px) {
+  .asset-source-comparison,
+  .bulk-import-preview-row {
+    grid-template-columns: 1fr;
+  }
+
+  .bulk-import-preview-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-route-closure summary {
+  display: flex;
+  align-items: center;
+  width: fit-content;
+  gap: 6px;
+  padding: 4px 0;
+  color: #08766e;
+  cursor: pointer;
+  list-style: none;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-route-closure summary::-webkit-details-marker {
+  display: none;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-route-closure summary::before {
+  content: "+";
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid rgba(11, 133, 121, 0.24);
+  border-radius: 50%;
+  font-size: 11px;
+  line-height: 1;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-route-closure[open] summary::before {
+  content: "−";
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-route-closure summary span {
+  margin: 0;
   color: #08766e;
   font-size: 10px;
   font-weight: 900;
+  line-height: 1.2;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ceo-route-closure summary small {
+  color: #68766f;
+  font-size: 10px;
   line-height: 1.2;
 }
 
@@ -44408,11 +44567,10 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ceo-route-task-slot {
   flex: 0 0 auto;
   width: min(100%, 980px) !important;
   max-width: 980px !important;
-  max-height: min(30dvh, 260px);
+  max-height: none;
   margin-right: auto;
   margin-left: auto;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow: visible;
 }
 
 body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-composer-dock {

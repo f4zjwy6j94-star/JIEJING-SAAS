@@ -51,6 +51,10 @@ def main() -> int:
         raise AssertionError("image templates must not silently enable a video")
     if "<option>15 秒产品展示视频</option>" in app_html or "<option>30 秒产品短视频脚本</option>" in app_html:
         raise AssertionError("media UI must not promise unsupported video output")
+    platform_select = app_html.split('id="mediaPlatformSelect"', 1)[1].split("</select>", 1)[0]
+    for unsupported_platform in ("Amazon", "Shopify", "TikTok Shop", "通用独立站"):
+        if unsupported_platform in platform_select:
+            raise AssertionError(f"eBay-first media UI must hide unavailable platform preset: {unsupported_platform}")
 
     required_js = (
         'generation_tier: generationTier',
@@ -68,6 +72,11 @@ def main() -> int:
     for marker in required_js:
         if marker not in app_js:
             raise AssertionError(f"media generation payload is missing {marker}")
+    active_media_sync = app_js.split("function syncSaasMediaProjectDraft", 1)[1].split("\nfunction ", 1)[0]
+    if 'setText("#mediaGapTitle", gap)' not in active_media_sync:
+        raise AssertionError("active media project must replace the legacy static gap with current product gaps")
+    if "是否含香粒" in active_media_sync:
+        raise AssertionError("active media project must not inherit incense-demo facts")
     if (
         'optionalSaasFetchFast("/readiness/product-saas"' not in app_js
         or "state.saasReadiness = coreReadiness.readiness" not in app_js

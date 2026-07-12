@@ -41,6 +41,8 @@ def main() -> None:
     require(report_delivery, "data-ai-ceo-assistant-id", "turn-bound market delivery")
     require(report_delivery, "data-product-name", "product-bound market delivery")
     require(report_delivery, "rememberSaasAiCeoMarketImportTarget(latest, title)", "render-time report identity registration")
+    require(report_delivery, "const answerProduct", "answer-derived stale report correction")
+    require(report_delivery, "answerProduct ||", "answer product priority over stale saved product")
 
     import_target_memory = function_body(app_js, "rememberSaasAiCeoMarketImportTarget")
     for marker in [

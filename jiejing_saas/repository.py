@@ -20,6 +20,12 @@ from .json_safe import json_default
 from .permissions import permissions_for_role, valid_role
 from .postgres_repository_runtime import connect_postgres_repository
 from .security import hash_password, verify_password
+
+
+# Fixed PBKDF2 record used only to equalize unknown-account login work. It is
+# not a credential and never authenticates a user.
+AUTH_DUMMY_PASSWORD_SALT = "jiejing-auth-dummy-salt-v1"
+AUTH_DUMMY_PASSWORD_HASH = "0fed6ff3d46dfba00b7f3f1a00a1b3ce6d0331d0cfbab025aea32467b26c97f7"
 from .workflow_plan import step_status_from_runtime
 
 
@@ -543,6 +549,7 @@ class SaaSRepository:
         self.initialize()
         user = self.get_user_by_email(email.strip().lower())
         if not user:
+            verify_password(password, AUTH_DUMMY_PASSWORD_SALT, AUTH_DUMMY_PASSWORD_HASH)
             raise ValueError("invalid email or password")
         with self._connect() as conn:
             row = conn.execute(

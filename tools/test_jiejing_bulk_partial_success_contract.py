@@ -23,6 +23,10 @@ def main() -> int:
         "successful drafts retained": "state.saasBulkListingDrafts",
         "no real writes": "real_platform_writes_enabled: false",
         "responsive run items": ".saas-bulk-run-items",
+        "manual import preview": "saasBulkManualImportPreview",
+        "manual import dedupe": "saasBulkManualCandidateDedupeKey",
+        "row-level validation": "bulk-import-preview-row",
+        "two-step import": "确认导入",
     }
     corpus = app + "\n" + styles
     missing = [label for label, marker in checks.items() if marker not in corpus]
@@ -35,6 +39,10 @@ def main() -> int:
         return 1
     if "successfulIds" not in accept:
         print("FAIL public bulk acceptance must keep successful items when siblings fail")
+        return 1
+    empty_preview = app[app.index("if (!previewCount)") : app.index("const laneMeta", app.index("if (!previewCount)"))]
+    if empty_preview.count("先小批量筛，不一键乱铺") > 0:
+        print("FAIL bulk result panel must not repeat the page hero and controls")
         return 1
     print("PASS jiejing_bulk_partial_success_contract")
     return 0

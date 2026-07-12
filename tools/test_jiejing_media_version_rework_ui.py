@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main() -> int:
     app = (ROOT / "app.js").read_text(encoding="utf-8")
+    app_html = (ROOT / "app.html").read_text(encoding="utf-8")
     styles = (ROOT / "styles.css").read_text(encoding="utf-8")
     api = (ROOT / "jiejing_saas" / "api_server.py").read_text(encoding="utf-8")
     repository = (ROOT / "jiejing_saas" / "repository.py").read_text(encoding="utf-8")
@@ -23,8 +24,14 @@ def main() -> int:
         "review evidence": "confirmed_by_merchant",
         "draft-only approval": "approved_for_listing_draft",
         "no merchant charge claim": '"merchant_charge_created": False',
+        "source output comparison": "asset-source-comparison",
+        "source image extraction": "saasMediaSourceImageForReview",
+        "modal rework action": 'id="assetReworkCurrent"',
+        "shape review": "商品外形、结构、比例和配件数量与来源图一致",
+        "material review": "颜色、材质、Logo 和包装没有被擅自改变",
+        "claim review": "尺寸、容量、认证和效果承诺都有真实资料支持",
     }
-    corpus = "\n".join((app, styles, api, repository, pipeline))
+    corpus = "\n".join((app_html, app, styles, api, repository, pipeline))
     missing = [label for label, marker in required.items() if marker not in corpus]
     if missing:
         print(f"FAIL media version/rework UI contract missing: {missing}")

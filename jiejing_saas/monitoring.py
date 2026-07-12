@@ -70,6 +70,24 @@ ALERT_CONTRACTS = [
         "severity": "critical",
         "source": "backup_plan.restore",
     },
+    {
+        "key": "ai_model_latency_or_error_spike",
+        "label": "AI model latency or error spike",
+        "severity": "warning",
+        "source": "ai_ceo_chat.performance.model",
+    },
+    {
+        "key": "public_search_latency_or_no_result_spike",
+        "label": "Public search latency or no-result spike",
+        "severity": "warning",
+        "source": "ai_ceo_chat.performance.search",
+    },
+    {
+        "key": "media_provider_cost_or_retry_spike",
+        "label": "Media provider cost, retry, or duplicate-submission spike",
+        "severity": "critical",
+        "source": "media_asset_jobs.cost_guard",
+    },
 ]
 
 
@@ -81,11 +99,18 @@ def build_monitoring_status(settings: SaaSSettings, repository: SaaSRepository) 
     safe_access_log_enabled = _safe_access_log_enabled(settings)
     cls_target = _cls_monitoring_target_status()
     runbook = _runbook_status()
-    blockers = _monitoring_blockers(settings, safe_access_log_enabled, cls_target, runbook)
+    provider_observability = _provider_observability_status()
+    blockers = _monitoring_blockers(settings, safe_access_log_enabled, cls_target, runbook, provider_observability)
     return {
         "contract_version": "2026-05-18-tencent-cls-monitoring-boundary",
         "environment": settings.environment,
-        "production_monitoring_ready": bool(settings.is_production_like and safe_access_log_enabled and cls_target["target_ready"] and not blockers),
+        "production_monitoring_ready": bool(
+            settings.is_production_like
+            and safe_access_log_enabled
+            and cls_target["target_ready"]
+            and provider_observability["ready"]
+            and not blockers
+        ),
         "safe_access_logs": {
             "enabled": safe_access_log_enabled,
             "required_in_production": True,
@@ -94,6 +119,7 @@ def build_monitoring_status(settings: SaaSSettings, repository: SaaSRepository) 
             "records_raw_tokens": False,
         },
         "cloud_monitoring": cls_target,
+        "provider_observability": provider_observability,
         "health_checks": {
             "health_endpoint": "/health",
             "readiness_endpoint": "/readiness/product-saas",
@@ -129,6 +155,7 @@ def _monitoring_blockers(
     safe_access_log_enabled: bool,
     cls_target: dict[str, Any],
     runbook: dict[str, Any],
+    provider_observability: dict[str, Any],
 ) -> list[str]:
     blockers: list[str] = []
     if settings.is_production_like and not safe_access_log_enabled:
@@ -140,6 +167,9 @@ def _monitoring_blockers(
         for item in runbook["blocked_by"]:
             if item not in blockers:
                 blockers.append(item)
+        for item in provider_observability["blocked_by"]:
+            if item not in blockers:
+                blockers.append(item)
     if not settings.is_production_like:
         blockers.extend(
             [
@@ -149,6 +179,49 @@ def _monitoring_blockers(
             ]
         )
     return blockers
+
+
+def _provider_observability_status() -> dict[str, Any]:
+    metrics_enabled = _env_bool("JIEJING_PROVIDER_METRICS_ENABLED")
+    latency_alerts_configured = _env_bool("JIEJING_PROVIDER_LATENCY_ALERTS_CONFIGURED")
+    cost_alerts_configured = _env_bool("JIEJING_PROVIDER_COST_ALERTS_CONFIGURED")
+    blocked_by: list[str] = []
+    if not metrics_enabled:
+        blocked_by.append("provider_metrics_not_enabled")
+    if not latency_alerts_configured:
+        blocked_by.append("provider_latency_alerts_not_configured")
+    if not cost_alerts_configured:
+        blocked_by.append("provider_cost_alerts_not_configured")
+    return {
+        "contract_version": "2026-07-12-provider-latency-cost-alerts-v1",
+        "ready": not blocked_by,
+        "metrics_enabled": metrics_enabled,
+        "latency_alerts_configured": latency_alerts_configured,
+        "cost_alerts_configured": cost_alerts_configured,
+        "metric_contracts": [
+            {
+                "key": "ai_model_request",
+                "measures": ["latency_ms", "timeout_count", "initial_retry_count", "failure_code"],
+                "warning_latency_ms": _env_int("JIEJING_AI_MODEL_LATENCY_WARNING_MS", 15000),
+            },
+            {
+                "key": "public_search_request",
+                "measures": ["latency_ms", "result_count", "no_result_count", "failure_code"],
+                "warning_latency_ms": _env_int("JIEJING_PUBLIC_SEARCH_LATENCY_WARNING_MS", 4000),
+            },
+            {
+                "key": "media_provider_job",
+                "measures": ["queue_age_ms", "provider_duration_ms", "estimated_cost_cents", "actual_cost_cents", "retry_count", "duplicate_submission_count"],
+                "warning_latency_ms": _env_int("JIEJING_MEDIA_PROVIDER_LATENCY_WARNING_MS", 120000),
+            },
+        ],
+        "dimensions": ["environment", "provider", "model_or_driver", "route_group", "status"],
+        "records_raw_prompts": False,
+        "records_source_text": False,
+        "records_secrets": False,
+        "blocked_by": blocked_by,
+        "secret_exposed": False,
+    }
 
 
 def _runbook_status() -> dict[str, Any]:
@@ -237,3 +310,10 @@ def _tencent_secret_key() -> str:
 
 def _env_bool(name: str) -> bool:
     return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(str(os.environ.get(name) or default).strip()))
+    except (TypeError, ValueError):
+        return default

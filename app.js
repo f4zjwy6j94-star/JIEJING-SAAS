@@ -170,6 +170,7 @@ const state = {
   saasBulkCandidates: [],
   saasBulkAcceptedCandidates: [],
   saasBulkManualSourceText: "",
+  saasBulkImportPreview: null,
   bulkApprovedCount: 0,
   bulkApprovedPrefs: [],
   bulkStage: "score",
@@ -5617,6 +5618,7 @@ function resetSaasBulkWorkspaceForListingProject() {
   state.saasBulkBatchRun = null;
   state.saasBulkBatchPaused = false;
   state.saasBulkListingDrafts = [];
+  state.saasBulkImportPreview = null;
 }
 
 function saasBulkCandidatesFromCurrentWork() {
@@ -5659,25 +5661,48 @@ function saasBulkCandidatesFromCurrentWork() {
   }));
 }
 
-function parseSaasBulkManualCandidates(value = "") {
-  return String(value || "")
+function saasBulkManualCandidateDedupeKey(name = "", sourceUrl = "") {
+  const normalizedName = publicRuntimeText(name).toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
+  let normalizedUrl = "";
+  try {
+    const parsed = new URL(String(sourceUrl || "").trim());
+    normalizedUrl = `${parsed.hostname.toLowerCase()}${parsed.pathname.replace(/\/$/, "")}`;
+  } catch (error) {
+    normalizedUrl = String(sourceUrl || "").trim().toLowerCase();
+  }
+  return { name: normalizedName, url: normalizedUrl };
+}
+
+function saasBulkManualImportPreview(value = "") {
+  const seenNames = new Set();
+  const seenUrls = new Set();
+  const rows = String(value || "")
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
+    .map((line, sourceIndex) => ({ line: line.trim(), lineNumber: sourceIndex + 1 }))
+    .filter((item) => item.line)
     .slice(0, 50)
-    .map((line, index) => {
+    .map(({ line, lineNumber }, index) => {
       const parts = line.split(/\t|\s*\|\s*/).map((part) => publicRuntimeText(part).trim());
       const name = saasCleanMarketCandidateName(parts[0] || "");
-      if (!name || /^https?:\/\//i.test(name)) return null;
       const [sourceUrl, cost, stock, origin, weight] = parts.slice(1);
+      if (!name || /^https?:\/\//i.test(name)) {
+        return { lineNumber, raw: line, name: "未识别商品", status: "invalid", message: "第一列需要填写明确商品名。", candidate: null };
+      }
+      const dedupe = saasBulkManualCandidateDedupeKey(name, sourceUrl);
+      const duplicate = (dedupe.name && seenNames.has(dedupe.name)) || (dedupe.url && seenUrls.has(dedupe.url));
+      if (duplicate) {
+        return { lineNumber, raw: line, name, status: "duplicate", message: "与本次导入中的前一行重复，已跳过。", candidate: null };
+      }
+      if (dedupe.name) seenNames.add(dedupe.name);
+      if (dedupe.url) seenUrls.add(dedupe.url);
       const missingFacts = [];
       if (!sourceUrl) missingFacts.push("货源链接或图片");
       if (!cost) missingFacts.push("采购成本");
       if (!stock) missingFacts.push("库存");
       if (!origin) missingFacts.push("发货地");
       if (!weight) missingFacts.push("包装重量尺寸");
-      return {
-        candidate_id: `manual_${Math.abs(hashString(`${name}|${index}`)).toString(16)}`,
+      const candidate = {
+        candidate_id: `manual_${Math.abs(hashString(`${name}|${sourceUrl || "no-url"}`)).toString(16)}`,
         name,
         score: Math.max(60, 78 - index * 2),
         reasons: ["来自商家手动货源资料", cost ? `采购成本线索：${cost}` : "采购成本待补", stock ? `库存线索：${stock}` : "库存待补"],
@@ -5689,8 +5714,30 @@ function parseSaasBulkManualCandidates(value = "") {
         source_url: sourceUrl || "",
         source_facts: { cost: cost || "", stock: stock || "", origin: origin || "", weight: weight || "" },
       };
+      return {
+        lineNumber,
+        raw: line,
+        name,
+        status: missingFacts.length ? "needs_info" : "ready",
+        message: missingFacts.length ? `可导入，待补：${missingFacts.join("、")}` : "资料格式完整，可以导入。",
+        candidate,
+      };
     })
     .filter(Boolean);
+  const candidates = rows.map((row) => row.candidate).filter(Boolean);
+  return {
+    sourceText: String(value || "").slice(0, 12000),
+    rows,
+    candidates,
+    ready: rows.filter((row) => row.status === "ready").length,
+    needsInfo: rows.filter((row) => row.status === "needs_info").length,
+    duplicates: rows.filter((row) => row.status === "duplicate").length,
+    invalid: rows.filter((row) => row.status === "invalid").length,
+  };
+}
+
+function parseSaasBulkManualCandidates(value = "") {
+  return saasBulkManualImportPreview(value).candidates;
 }
 
 function currentSaasBulkCandidates() {
@@ -5737,6 +5784,32 @@ function renderSaasBulkSourceRealityPanel(sourceRecordCount = Array.isArray(stat
   const reportCandidateCount = saasBulkCandidatesFromCurrentWork().length;
   const manualCandidateCount = parseSaasBulkManualCandidates(state.saasBulkManualSourceText).length;
   const hasSource = Number(sourceRecordCount || 0) > 0 || reportCandidateCount > 0 || manualCandidateCount > 0;
+  const importPreview = state.saasBulkImportPreview && state.saasBulkImportPreview.sourceText === state.saasBulkManualSourceText
+    ? state.saasBulkImportPreview
+    : null;
+  const importPreviewMarkup = importPreview
+    ? `
+      <section class="bulk-import-preview" aria-label="导入预览">
+        <div class="bulk-import-preview-summary">
+          <strong>导入预览</strong>
+          <span>${escapeHtml(String(importPreview.candidates.length))} 项可导入 · ${escapeHtml(String(importPreview.duplicates))} 项重复 · ${escapeHtml(String(importPreview.invalid))} 项格式错误</span>
+        </div>
+        <div class="bulk-import-preview-rows">
+          ${importPreview.rows
+            .map(
+              (row) => `
+                <article class="bulk-import-preview-row is-${escapeHtml(row.status)}">
+                  <span>第 ${escapeHtml(String(row.lineNumber))} 行</span>
+                  <strong>${escapeHtml(row.name)}</strong>
+                  <small>${escapeHtml(row.message)}</small>
+                </article>
+              `,
+            )
+            .join("")}
+        </div>
+      </section>
+    `
+    : "";
   return `
     <section class="bulk-source-reality-panel" aria-label="批量铺货货源来源" data-bulk-source-reality="real_source_handoff_v1">
       <div>
@@ -5767,7 +5840,8 @@ function renderSaasBulkSourceRealityPanel(sourceRecordCount = Array.isArray(stat
           <small>每行一个商品：商品名 | 货源链接 | 采购价 | 库存 | 发货地 | 包装重量尺寸。只有商品名也能先建草稿，其余字段会显示待补。</small>
         </label>
         <textarea id="bulkManualSourceInput" rows="4" placeholder="例如：抽屉分隔板 | https://... | 12.5 CNY | 300 | 义乌 | 180g / 30x8x5cm">${escapeHtml(state.saasBulkManualSourceText || "")}</textarea>
-        <button class="secondary-action" type="button" data-bulk-action="import-manual-source">导入本轮候选</button>
+        ${importPreviewMarkup}
+        <button class="secondary-action" type="button" data-bulk-action="import-manual-source">${importPreview ? `确认导入 ${escapeHtml(String(importPreview.candidates.length))} 项` : "预览导入"}</button>
       </div>
     </section>
   `;
@@ -5793,53 +5867,10 @@ function renderSaasBulkCandidatePreview() {
 
   if (!previewCount) {
     return `
-      <div class="bulk-candidate-head bulk-candidate-decision-head">
-        <div>
-          <span>小批量实验台</span>
-          <strong>先小批量筛，不一键乱铺</strong>
-          <p>用最小批次看清机会和风险。先分清能试、要补、先不做；通过后只生成 Listing 和素材草稿，真实发布、付款、广告和承诺仍在决策中心停住。</p>
-        </div>
-        <div class="bulk-candidate-actions">
-          <button class="primary-action" type="button" data-bulk-action="generate-candidates">生成三类候选</button>
-        </div>
-      </div>
-      <div class="bulk-output-snapshot bulk-saas-roadmap" aria-label="批量铺货当前设置">
-        <article>
-          <span>本轮</span>
-          <strong>${escapeHtml(countLabel)} 个候选</strong>
-          <p>够判断方向，跑顺再扩大。</p>
-        </article>
-        <article>
-          <span>货源</span>
-          <strong>${sourceRecordCount ? `${escapeHtml(String(sourceRecordCount))} 条来源` : "AI 找货 / 手动补充"}</strong>
-          <p>不使用旧演示商品冒充真实批次。</p>
-        </article>
-        <article>
-          <span>输出</span>
-          <strong>三类结论</strong>
-          <p>能试、要补、先不做。</p>
-        </article>
-      </div>
       ${renderSaasBulkSourceRealityPanel(sourceRecordCount)}
-      <div class="saas-first-run-strip bulk-first-run-strip" aria-label="批量铺货开始前说明">
-        <article>
-          <span>不会乱铺</span>
-          <strong>先分组，再决定</strong>
-          <p>这里只做可测、补资料、暂不做三类判断。</p>
-        </article>
-        <article>
-          <span>不直接执行</span>
-          <strong>真实发布仍去决策中心</strong>
-          <p>发布、付款、广告和客服承诺不会自动执行。</p>
-        </article>
-      </div>
-      <div class="bulk-decision-dock">
-        <div>
-          <span>当前批次</span>
-          <strong>准备筛 ${escapeHtml(countLabel)} 个候选方向</strong>
-          <p>${escapeHtml(sourceHint)} 先给出结论和下一步草稿，复杂连接和边界设置会集中到设置页。</p>
-        </div>
-        <button class="secondary-action" type="button" data-bulk-action="report">查看批量汇报</button>
+      <div class="bulk-empty-next-step">
+        <strong>${availableCandidates.length ? `已有 ${escapeHtml(String(availableCandidates.length))} 个候选，点击左侧“生成三类候选”开始分组。` : "先导入真实候选，再生成三类结论。"}</strong>
+        <p>${escapeHtml(sourceHint)}</p>
       </div>
     `;
   }
@@ -7113,6 +7144,12 @@ function saasMediaManifestAssetCards(job = latestSaasMediaAssetJobWithManifest()
     .filter(Boolean);
 }
 
+function saasMediaSourceImageForReview(job = latestSaasMediaAssetJobWithManifest()) {
+  const facts = saasMediaAssetJobProductFacts(job || {});
+  const references = Array.isArray(facts.reference_images) ? facts.reference_images : [];
+  return references.map((url) => saasSafeListingAssetUrl(url)).find(Boolean) || "";
+}
+
 function saasMediaManifestAssetPreview(key) {
   const cards = saasMediaManifestAssetCards();
   const card = cards.find((item) => item.key === key);
@@ -7122,6 +7159,7 @@ function saasMediaManifestAssetPreview(key) {
   const productName = activeMediaDraftProductNameForDisplay();
   const posterCard = card.isVideo ? cards.find((item) => !item.isVideo && item.url) : null;
   const posterUrl = posterCard?.url || (card.isVideo ? "" : card.url);
+  const sourceImage = saasMediaSourceImageForReview(job);
   return {
     role: conceptOnly ? "创意概念图 · 非商品实拍" : "真实生成素材",
     title: card.title,
@@ -7131,7 +7169,8 @@ function saasMediaManifestAssetPreview(key) {
     meta: card.reviewStatus === "not_ready_for_listing_until_review" ? "待审核后回写 Listing" : card.reviewStatus,
     productName,
     image: posterUrl,
-    secondaryImage: "",
+    sourceImage,
+    secondaryImage: sourceImage,
     visualClass: card.isVideo ? "asset-render-video" : /detail|page|dimension|infographic/i.test(card.assetType) ? "asset-render-detail" : "asset-render-main",
     video: card.isVideo ? card.url : "",
     videoMime: card.isVideo && /\.mp4(?:\?|$)/i.test(card.url) ? "video/mp4" : card.isVideo ? "video/webm" : "",
@@ -7144,11 +7183,13 @@ function saasMediaManifestAssetPreview(key) {
           "概念图不会回写 Listing，也不会进入发布确认",
         ]
       : [
-          "核对素材是否和真实商品一致",
+          "商品外形、结构、比例和配件数量与来源图一致",
+          "颜色、材质、Logo 和包装没有被擅自改变",
+          "尺寸、容量、认证和效果承诺都有真实资料支持",
           ...(card.isVideo
             ? [
-                "完整播放视频，确认产品形状、零件和比例没有变化",
-                "确认视频没有虚构安装、操作、开合、变形或使用方式",
+                "完整播放视频，确认镜头运动没有改变商品结构和零件",
+                "视频没有虚构安装、操作、开合、变形或使用方式",
               ]
             : []),
           "确认图片或视频有商业使用权",
@@ -7759,6 +7800,8 @@ function syncSaasMediaProjectDraft(button) {
   setText("#mediaFactLabel", "产出");
   setText("#mediaFactTitle", note || "主图、场景图、详情页和视频脚本");
   setText("#mediaFactNote", "生成后先预览，通过后回写 Listing 草稿；真实发布、广告和承诺仍要确认。");
+  setText("#mediaGapTitle", gap);
+  setText("#mediaGapNote", "这些资料必须来自当前商品或供应商确认；缺失时可以继续做草稿，但不能进入真实发布。");
   setText("#mediaPreviewTitle", title);
   setText("#mediaPreviewNote", note);
   setText("#mediaRouteStatus", "流程导入");
@@ -10827,6 +10870,41 @@ function saasCleanMarketCandidateName(value = "") {
   return saasIsInvalidMarketProductLabel(text) ? "" : text.slice(0, 90);
 }
 
+function saasMarketCandidateMatchKey(value = "") {
+  return publicRuntimeText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
+}
+
+function saasSelectMarketProductCandidateFromText(candidates = [], sourceText = "") {
+  const items = Array.isArray(candidates) ? candidates : [];
+  if (!items.length) return items;
+  const cleanText = publicRuntimeText(sourceText).replace(/\*\*/g, "");
+  const explicitPattern = /(?:最值得(?:优先)?测试|最值得先测|最终推荐|首选推荐|首选|最佳候选|优先测试|建议优先测试|建议先测试|推荐选择|选定商品|best\s+candidate|top\s+pick|final\s+recommendation)\s*[:：-]?\s*([^\n]{0,180})/gi;
+  let selected = null;
+  for (const match of cleanText.matchAll(explicitPattern)) {
+    const windowKey = saasMarketCandidateMatchKey(match[0]);
+    selected =
+      items.find((candidate) => {
+        const name = saasCleanMarketCandidateName(candidate?.name || "");
+        const primaryName = name.split(/[（(]/, 1)[0].trim();
+        const nameKey = saasMarketCandidateMatchKey(name);
+        const primaryKey = saasMarketCandidateMatchKey(primaryName);
+        return Boolean((nameKey && windowKey.includes(nameKey)) || (primaryKey.length >= 4 && windowKey.includes(primaryKey)));
+      }) || null;
+    if (selected) break;
+  }
+  selected =
+    selected ||
+    items.find((candidate) => candidate?.selected === true) ||
+    items.reduce((best, candidate) => (Number(candidate?.score || 0) > Number(best?.score || 0) ? candidate : best), items[0]);
+  const selectedId = String(selected?.candidate_id || "");
+  return items.map((candidate) => ({
+    ...candidate,
+    selected: String(candidate?.candidate_id || "") === selectedId,
+  }));
+}
+
 function saasNormalizeMarketProductCandidates(value = [], fallbackText = "") {
   const raw = Array.isArray(value) ? value : [];
   const normalized = [];
@@ -10857,7 +10935,8 @@ function saasNormalizeMarketProductCandidates(value = [], fallbackText = "") {
       selected: source.selected === true || index === 0,
     });
   });
-  if (normalized.length || !fallbackText) return normalized;
+  if (normalized.length) return saasSelectMarketProductCandidateFromText(normalized, fallbackText);
+  if (!fallbackText) return normalized;
   const lines = publicRuntimeText(fallbackText)
     .replace(/\*\*/g, "")
     .split(/\r?\n/)
@@ -10865,24 +10944,26 @@ function saasNormalizeMarketProductCandidates(value = [], fallbackText = "") {
     .filter(Boolean);
   lines.forEach((line, index) => {
     const match =
-      line.match(/^(?:#+\s*)?(?:方向|方案|候选)\s*[一二三四五六七八九十\dA-Z]+\s*[:：.)、-]\s*(.+)$/i) ||
+      line.match(/^(?:#+\s*)?(?:候选商品|候选品|候选|方向|方案)\s*[一二三四五六七八九十\dA-Z]+\s*[:：.)、-]\s*(.+)$/i) ||
       line.match(/^(?:推荐产品|建议产品|目标商品|推荐品类|建议品类|商品方向)\s*[:：-]\s*(.+)$/i) ||
       line.match(/^(?:recommended product|suggested product|target product)\s*[:：-]\s*(.+)$/i);
     if (!match) return;
     const name = saasCleanMarketCandidateName(match[1]);
     if (!name || seen.has(name.toLowerCase())) return;
     seen.add(name.toLowerCase());
+    const candidateBlock = lines.slice(index, index + 8).join("\n");
+    const scoreMatch = candidateBlock.match(/(?:评分|推荐度|score)\s*[:：]?\s*(\d{2,3})/i);
     normalized.push({
       candidate_id: `candidate_${normalized.length + 1}`,
       name,
-      score: Math.max(62, 88 - normalized.length * 5),
+      score: scoreMatch ? Math.max(0, Math.min(100, Number(scoreMatch[1]) || 0)) : Math.max(62, 88 - normalized.length * 5),
       reasons: lines.slice(index + 1, index + 5).filter((item) => /为什么|需求|市场|轻小|不带电|差异|价格|风险|适合|卖点|利润/.test(item)).slice(0, 3),
       price_band: "",
       missing_facts: ["SKU", "图片 URL", "采购成本", "重量尺寸", "eBay 类目", "店铺政策"],
-      selected: normalized.length === 0,
+      selected: false,
     });
   });
-  return normalized.slice(0, 5);
+  return saasSelectMarketProductCandidateFromText(normalized.slice(0, 5), fallbackText);
 }
 
 function saasSelectedMarketProductCandidate(candidates = []) {
@@ -14868,7 +14949,7 @@ function recordMediaGeneration(sourceText = "商品图", options = {}) {
       "素材用量：已进入素材工坊账本，具体费用在设置页查看",
       `素材商品：${productName}`,
       "平台边界：不自动发布、不自动投放、不替商家确认授权",
-      "缺口字段：尺寸、重量、材质、是否含香粒、包装和发货口径",
+      "缺口字段：尺寸、重量、材质、套装数量、包装和发货口径",
     ],
     result: returnedAssetCount
       ? `素材工坊实际返回 ${returnedAssetCount} 个素材文件并进入审核清单；未返回的图片或视频不计为已生成。发布、价格、广告、退款和买家消息发送仍按确认规则处理。`
@@ -17379,6 +17460,8 @@ function saasStoreStatusLabel(status = "") {
       authorized: "已授权",
       connected: "已连接",
       pending: "等待授权",
+      read_only_pending: "等待只读连接",
+      read_only_pending_or_demo: "等待只读连接",
     }[normalized] || status || "等待授权"
   );
 }
@@ -21027,10 +21110,15 @@ function saasCeoCommandIntent(text = "") {
   const has = (pattern) => pattern.test(raw);
   if (!raw.trim()) return "general_chat";
   if (isSaasCeoHighRiskCommand(raw)) return "confirm";
-  if (has(/批量|铺货|选品|候选|机会|多款|多品|清单|列表|找品|热销前|前五|前10|top\s*\d+/i)) return "bulk";
+  const asksForListingHandoff =
+    has(/Listing|listing|刊登草稿|上架草稿|导入\s*Listing|生成.{0,12}(?:Listing|刊登|上架)草稿|可导入.{0,12}(?:Listing|刊登|上架)/i) ||
+    (has(/市场调研|市场报告|结构化报告/i) && has(/一个最值得|选出一个|推荐一个|一个品|一个商品/i));
+  const asksForBulkWorkspace = has(/批量铺货|批量筛|批量导入|批量发布|批量生成|多款|多品|商品清单|商品列表|货盘|前五|前十|前\s*\d+|top\s*\d+/i);
+  if (asksForListingHandoff) return "listing";
+  if (asksForBulkWorkspace) return "bulk";
   if (has(/素材|主图|图片|视频|详情|详情页|货源图|场景图|字幕|脚本|封面|抠图|改图|生成图/)) return "media";
   if (has(/客服|订单|物流|退货|买家|消息|纠纷|售后|履约|tracking|评价|差评/)) return "service";
-  if (has(/eBay|ebay|Listing|listing|商品|产品|货源|SKU|1688|上架草稿|刊登|标题|描述|价格|利润|类目|item|市场|调研|竞品|热销/i)) {
+  if (has(/eBay|ebay|Listing|listing|商品|产品|货源|选品|候选|机会|找品|SKU|1688|上架草稿|刊登|标题|描述|价格|利润|类目|item|市场|调研|竞品|热销/i)) {
     return "listing";
   }
   return "general_chat";
@@ -21385,8 +21473,8 @@ function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
             .join("")}
         </div>
         <p class="saas-ceo-routing-nextline">${escapeHtml(saasCeoRoutingNextLine(route, current))}</p>
-        <div class="saas-ceo-route-closure" data-ai-ceo-first-day-closure="first_day_ai_ceo_closure_v1" aria-label="AI CEO 首日闭环">
-          <span>首日闭环</span>
+        <details class="saas-ceo-route-closure" data-ai-ceo-first-day-closure="first_day_ai_ceo_closure_v1" aria-label="AI CEO 首日闭环">
+          <summary><span>查看处理步骤</span><small>目标 → 判断 → 工作台 → 设置</small></summary>
           <div>
             ${closureRows
               .map(
@@ -21400,7 +21488,7 @@ function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
               )
               .join("")}
           </div>
-        </div>
+        </details>
       </div>
       <button class="primary-action compact-action" type="button" data-global-flow-view="${escapeHtml(route.view)}" data-global-flow-key="${escapeHtml(route.key || route.view)}">
         ${escapeHtml(buttonLabel)}
@@ -21738,9 +21826,10 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
   const latest = normalizeSaasAiCeoLatestTurn(turn);
   const delivery = latest?.market_report_delivery;
   if (!delivery?.structured_report_saved || delivery.report_type !== "ai_ceo.market_research") return "";
+  const answerProduct = saasAiCeoMarketProductLabel(latest);
   const title =
+    answerProduct ||
     (saasIsConcreteProductLabel(delivery.product) ? delivery.product : "") ||
-    saasAiCeoMarketProductLabel(latest) ||
     delivery.title ||
     "这次市场调研";
   rememberSaasAiCeoMarketImportTarget(latest, title);
@@ -22204,7 +22293,9 @@ function handleSaasCeoCommandSubmit(text) {
   state.saasCeoCommandChatVisible = true;
   persistSaasLastCeoCommand(command);
   recordSaasCeoCommandSourceRecord(command);
-  const pendingMessageId = `ceo-ai-reply-${Date.now().toString(16)}-${Math.abs(hashString(text)).toString(16)}`;
+  const submittedAtMs = Date.now();
+  const submittedAt = new Date(submittedAtMs).toISOString();
+  const pendingMessageId = `ceo-ai-reply-${submittedAtMs.toString(16)}-${Math.abs(hashString(text)).toString(16)}`;
   const localInstantAnswer = buildSaasLocalClockAnswer(text);
   if (localInstantAnswer) {
     const instantCommand = normalizeSaasCeoCommand({
@@ -22231,6 +22322,7 @@ function handleSaasCeoCommandSubmit(text) {
       long_term_memory: false,
       writes_merchant_rule: false,
       decision_center_required: false,
+      createdAt: submittedAt,
     });
     if (instantCommand) {
       state.saasLastCeoCommand = instantCommand;
@@ -22254,6 +22346,7 @@ function handleSaasCeoCommandSubmit(text) {
     long_term_memory: Boolean(command.long_term_memory),
     writes_merchant_rule: Boolean(command.writes_merchant_rule),
     decision_center_required: Boolean(command.decision_center_required),
+    createdAt: submittedAt,
   });
   scheduleSaasAiCeoPendingWatchdog(pendingMessageId, command);
   let streamRenderTimer = null;
@@ -22326,6 +22419,7 @@ function handleSaasCeoCommandSubmit(text) {
         performance,
         pending_stage: "",
         pending: false,
+        created_at: submittedAt,
       });
       const marketReportTurn = ensureSaasAiCeoMarketReportRecordFromTurn(marketReportCandidateTurn, aiCeoMarketReport);
       if (marketReportTurn?.market_report_id) {
@@ -22394,6 +22488,7 @@ function handleSaasCeoCommandSubmit(text) {
         performance,
         pending_stage: "",
         pending: false,
+        created_at: submittedAt,
       };
       const completedTurnWithReport = ensureSaasAiCeoMarketReportRecordFromTurn(completedTurn, aiCeoMarketReport) || completedTurn;
       if (isCurrentChatTurn) {
@@ -22422,6 +22517,7 @@ function handleSaasCeoCommandSubmit(text) {
         memory_policy: command.memory_policy || state.saasAiCeoLatestTurn?.memory_policy || "transient_no_long_term_memory",
         pending_stage: "",
         pending: false,
+        created_at: submittedAt,
       });
       updateCeoAssistantMessage(pendingMessageId, safeText, "model_call_failed", latest?.model || null, []);
       const latestTurnAtFailure = normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn);
@@ -24406,7 +24502,7 @@ function saasPlatformTrialModelState() {
       ? remaining > 0
         ? "试用 AI 当前不可用，但额度记录尚未耗尽；这是连接状态，不应显示成额度已用完。账号自己的 DeepSeek/OpenAI 连接不受影响。"
         : "试用额度已用完；超出后只暂停捷境试用 AI，不影响账号自己的 DeepSeek/OpenAI 连接。"
-    : "后端按当前账号空间统计试用额度；商家自己的 AI 连接不占试用额度，浏览器不能发放额度。";
+    : "试用额度按当前捷境账号统计；商家自己的 AI 连接不占试用额度。";
   return {
     merchantModelConfigured,
     enabled,
@@ -30050,6 +30146,10 @@ function assetVisualMarkup(asset) {
     const videoUrl = escapeHtml(asset.video || "");
     const videoMime = escapeHtml(asset.videoMime || (/\.mp4(?:\?|$)/i.test(asset.video || "") ? "video/mp4" : "video/webm"));
     const poster = asset.image ? ` poster="${escapeHtml(asset.image)}"` : "";
+    const sourceImage = asset.sourceImage || asset.secondaryImage || "";
+    const sourceComparison = sourceImage
+      ? `<article><span>来源图</span><img src="${escapeHtml(sourceImage)}" alt="商品来源图"><small>对照外形、结构、颜色、Logo 与配件</small></article>`
+      : `<article class="is-source-private"><span>来源依据</span><strong>来源图已在后端安全边界绑定</strong><small>当前签名地址不可展示时，不伪造预览；请回到来源资料核对实物。</small></article>`;
     const frameLabels = [
       ["首帧", "确认商品主体"],
       ["动态", "检查画面运动"],
@@ -30089,20 +30189,30 @@ function assetVisualMarkup(asset) {
         <strong>视频文件已生成，等待素材审核</strong>
         <small>正式用于 Listing 前仍需确认商品事实、商业使用权和平台规则。</small>
       </div>
+      <div class="asset-source-comparison is-video-comparison">
+        ${sourceComparison}
+        <article><span>生成视频</span><strong>完整播放后再确认</strong><small>只允许镜头运动；不得虚构安装、操作、开合、变形或用途。</small></article>
+      </div>
     `;
   }
 
   const primaryImage = escapeHtml(asset.image || "");
-  const secondaryImage =
-    asset.secondaryImage && asset.secondaryImage !== asset.image
-      ? `<img class="real-asset-image secondary" src="${escapeHtml(asset.secondaryImage)}" alt="">`
-      : "";
+  const sourceImage = asset.sourceImage || asset.secondaryImage || "";
+  const hasVisibleSource = Boolean(sourceImage && sourceImage !== asset.image);
+  const sourcePanel = hasVisibleSource
+    ? `<figure><figcaption>来源图</figcaption><img class="real-asset-image source" src="${escapeHtml(sourceImage)}" alt="商品来源图"></figure>`
+    : `<figure class="is-source-private"><figcaption>来源依据</figcaption><strong>来源图已安全绑定</strong><small>当前不可展示时不生成假的对照图，请结合实物或供应商资料核对。</small></figure>`;
   return `
     <div class="generated-asset generated-real-asset ${asset.visualClass}">
-      <div class="generated-image-stage">
-        <img class="real-asset-image primary" src="${primaryImage}" alt="${escapeHtml(asset.title || "素材预览")}">
-        ${secondaryImage}
-        <span class="generated-output-badge">AI 生成预览</span>
+      <div class="asset-source-comparison">
+        ${sourcePanel}
+        <figure>
+          <figcaption>生成结果 · 待审核</figcaption>
+          <div class="generated-image-stage">
+            <img class="real-asset-image primary" src="${primaryImage}" alt="${escapeHtml(asset.title || "素材预览")}">
+            <span class="generated-output-badge">AI 生成预览</span>
+          </div>
+        </figure>
       </div>
       <div class="generated-edit-strip">
         <article><span>原图</span><strong>识别商品主体</strong></article>
@@ -30139,6 +30249,9 @@ function openAssetPreview(key) {
   script.textContent = asset.script || "";
   document.querySelector("#assetModalVisual").innerHTML = assetVisualMarkup(asset);
   const reviewButton = document.querySelector("#assetSendConfirm");
+  const reworkButton = document.querySelector("#assetReworkCurrent");
+  const manifestAsset = saasMediaManifestAssetPreview(key);
+  if (reworkButton) reworkButton.hidden = !manifestAsset;
   if (reviewButton) {
     reviewButton.textContent = asset.requiresReviewConfirmation ? "完成素材审核" : "保存脚本草稿";
     reviewButton.disabled = Boolean(asset.requiresReviewConfirmation);
@@ -31175,7 +31288,7 @@ function renderSaasMerchantSubscriptionActivationPanel(ctx = saasMerchantWorkben
     {
       label: "额度",
       title: "按套餐状态生效",
-      detail: "权益生效后才发放 AI、联网报告和素材生成额度；浏览器不能自己发放或恢复额度。",
+      detail: "权益生效后，AI、联网报告和素材生成额度会按套餐状态发放；停用后恢复也以套餐状态为准。",
       tone: billing.quotaEnforcementEnabled || billing.entitlementActive ? "green" : "amber",
     },
     {
@@ -33683,13 +33796,25 @@ function handleBulkAction(action, item = "") {
   if (action === "import-manual-source") {
     const input = document.querySelector("#bulkManualSourceInput");
     state.saasBulkManualSourceText = String(input?.value || state.saasBulkManualSourceText || "").slice(0, 12000);
-    const candidates = parseSaasBulkManualCandidates(state.saasBulkManualSourceText);
+    const currentPreview = state.saasBulkImportPreview && state.saasBulkImportPreview.sourceText === state.saasBulkManualSourceText
+      ? state.saasBulkImportPreview
+      : null;
+    if (!currentPreview) {
+      state.saasBulkImportPreview = saasBulkManualImportPreview(state.saasBulkManualSourceText);
+      renderBulkFactory();
+      const preview = state.saasBulkImportPreview;
+      setBulkFeedback(`已完成逐行预览：${preview.candidates.length} 项可导入，${preview.duplicates} 项重复，${preview.invalid} 项格式错误。确认后才进入本轮候选。`);
+      showActionToast("导入预览已生成，请核对后确认导入。");
+      return;
+    }
+    const candidates = currentPreview.candidates;
     if (!candidates.length) {
       setBulkFeedback("没有识别到商品名。请按“商品名 | 货源链接 | 采购价 | 库存 | 发货地 | 包装重量尺寸”每行填写一个商品。");
       showActionToast("手动导入未完成：至少需要一个明确商品名。");
       return;
     }
     state.saasBulkCandidates = candidates;
+    state.saasBulkImportPreview = null;
     state.saasBulkBatchRun = null;
     state.saasBulkBatchPaused = false;
     state.saasBulkListingDrafts = [];
@@ -37601,8 +37726,8 @@ function renderSaasSettingsAccountPanel(ctx = saasMerchantWorkbenchContext(), op
             <strong>${escapeHtml(saasStoreStatusLabel(ctx.connection?.status || ctx.store?.status || "not_connected"))}</strong>
             <small>${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</small>
           </div>
-          <button class="secondary-action compact-action" type="button" data-saas-action="plan-ebay-oauth" ${!hasSessionCandidate || ebayAuthorized ? "disabled" : ""}>${ebayAuthorized ? "只读已完成" : "检查只读授权"}</button>
-          <button class="secondary-action compact-action" type="button" data-saas-action="plan-ebay-publish-oauth" ${!hasSessionCandidate || ebayPublishAuthorized ? "disabled" : ""}>${ebayPublishAuthorized ? "发布已完成" : "检查发布授权"}</button>
+          <button class="secondary-action compact-action" type="button" data-saas-action="plan-ebay-oauth" ${!hasSessionCandidate || ebayAuthorized ? "disabled" : ""}>${ebayAuthorized ? "只读已连接" : "连接只读数据"}</button>
+          <button class="secondary-action compact-action" type="button" data-saas-action="plan-ebay-publish-oauth" ${!hasSessionCandidate || ebayPublishAuthorized ? "disabled" : ""}>${ebayPublishAuthorized ? "发布权限已开通" : "开通发布权限"}</button>
         </article>
         <article>
           <div>
@@ -37682,6 +37807,8 @@ function renderSaasSettingsPlatformPanel(ctx = saasMerchantWorkbenchContext()) {
 
 function renderSaasSettingsDataPanel(ctx = saasMerchantWorkbenchContext()) {
   const resourceRows = saasEbayPacketResourceRows(ctx.packetBody);
+  const connectionStatus = ctx.connection?.status || ctx.store?.connection_status || ctx.store?.status || "not_connected";
+  const connectionReady = isSaasAuthorizedConnectionStatus(connectionStatus);
   return `
     <section class="saas-settings-card">
       <div class="saas-settings-card-head">
@@ -37690,7 +37817,7 @@ function renderSaasSettingsDataPanel(ctx = saasMerchantWorkbenchContext()) {
           <strong>店铺数据、来源记录和同步缺口</strong>
           <p>显示经营资料的同步情况和待补信息。缺少资料时会明确提示，不会用旧商品或旧素材代替。</p>
         </div>
-        <button class="secondary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !state.saasConnected ? "disabled" : ""}>更新 eBay 数据</button>
+        <button class="secondary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !state.saasConnected || !connectionReady ? "disabled" : ""}>${connectionReady ? "更新 eBay 数据" : "连接店铺后更新"}</button>
       </div>
       <div class="saas-settings-status-list">
         <article>
@@ -39684,7 +39811,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
     {
       id: "governance",
       label: "团队权限",
-      detail: "团队 / 记忆",
+      detail: "角色 / 审批",
       title: "团队权限",
       intro: "设置发布、退款、广告、采购付款和敏感客服承诺的确认权限。",
       panels: [
@@ -40741,6 +40868,16 @@ function upsertSaasAiCeoThreadTurn(turn = {}) {
   return latest;
 }
 
+function saasAiCeoThreadTurnByAssistantId(assistantId = "") {
+  const key = String(assistantId || "").replace(/[^A-Za-z0-9_-]/g, "");
+  if (!key) return null;
+  return (
+    (state.saasAiCeoThread || [])
+      .map(normalizeSaasAiCeoLatestTurn)
+      .find((turn) => turn?.assistant_id === key) || null
+  );
+}
+
 function renderSaasAiCeoThreadMarkup(fallbackTurn = null) {
   const fallback = normalizeSaasAiCeoLatestTurn(fallbackTurn);
   if (!Array.isArray(state.saasAiCeoThread) || !state.saasAiCeoThread.length) {
@@ -41150,6 +41287,7 @@ function addCeoMessage(text, aiText, options = {}) {
         work_records: options.work_records || [],
         confirmation_items: options.confirmation_items || [],
         source_policy: options.source_policy || null,
+        created_at: options.createdAt || options.created_at || new Date().toISOString(),
       }),
       "ai_ceo.chat_turn.user_and_assistant",
     ),
@@ -41176,6 +41314,7 @@ function addCeoMessage(text, aiText, options = {}) {
     work_records: options.work_records || [],
     confirmation_items: options.confirmation_items || [],
     source_policy: options.source_policy || null,
+    created_at: options.createdAt || options.created_at || new Date().toISOString(),
   });
   syncSaasAiCeoFixedChatViewportState();
   restoreSaasAiCeoScrollState(chat, scrollSnapshot, { forceBottom: true });
@@ -41285,13 +41424,15 @@ function updateCeoAssistantMessage(messageId, text, status = "", model = null, s
   const marketReportDelivery = normalizeSaasAiCeoMarketReportDelivery(workflowDetails.market_report_delivery || workflowDetails.ai_ceo_market_report_delivery || null);
   const blockedBy = Array.isArray(workflowDetails.blocked_by) ? workflowDetails.blocked_by : [];
   const latest = normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn);
+  const matchingTurn = saasAiCeoThreadTurnByAssistantId(messageId);
+  const baseTurn = matchingTurn || latest;
   if (!node) {
     addAiMessage(safeText);
     updateSaasAiCeoLatestReply({
-      ...(latest || {}),
+      ...(baseTurn || {}),
       assistant_text: safeText,
       status,
-      model: model || latest?.model || null,
+      model: model || baseTurn?.model || null,
       source_records: sources,
       work_records: workRecords,
       confirmation_items: confirmationItems,
@@ -41323,10 +41464,10 @@ function updateCeoAssistantMessage(messageId, text, status = "", model = null, s
     setJiejingTrustedHtml(answerBody, trustedJiejingHtml(renderSaasAiCeoAnswerMarkup(safeText), "ai_ceo.chat_turn.answer_markdown"));
   }
   const updatedTurn = normalizeSaasAiCeoLatestTurn({
-    ...(latest || {}),
+    ...(baseTurn || {}),
     assistant_text: safeText,
     status,
-    model: model || latest?.model || null,
+    model: model || baseTurn?.model || null,
     source_records: sources,
     work_records: workRecords,
     confirmation_items: confirmationItems,
@@ -41657,6 +41798,7 @@ function bindEvents() {
     if (event.target?.id === "bulkManualSourceInput") {
       state.saasBulkManualSourceText = String(event.target.value || "").slice(0, 12000);
       state.saasBulkCandidates = [];
+      state.saasBulkImportPreview = null;
       state.batchPreviewCount = 0;
     }
     if (event.target?.matches?.("[data-saas-listing-draft-field]")) {
@@ -41687,6 +41829,17 @@ function bindEvents() {
       button.disabled = false;
       button.textContent = "完成素材审核";
     }
+  });
+
+  document.querySelector("#assetReworkCurrent")?.addEventListener("click", async (event) => {
+    const job = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true });
+    const mediaJobId = String(job?.media_job_id || "").trim();
+    if (!mediaJobId) {
+      showActionToast("当前没有可重做的素材版本。");
+      return;
+    }
+    const created = await retrySaasMediaAssetJob(mediaJobId, event.currentTarget);
+    if (created) closeModals();
   });
 
   document.querySelectorAll("[data-scroll]").forEach((button) => {

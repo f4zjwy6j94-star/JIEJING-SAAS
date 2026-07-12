@@ -47,6 +47,16 @@ def main() -> None:
     concrete_label = function_body(app_js, "saasIsConcreteProductLabel")
     require(concrete_label, "saasIsInvalidMarketProductLabel(text)", "shared product-label validation")
 
+    candidate_parser = function_body(app_js, "saasNormalizeMarketProductCandidates")
+    require(candidate_parser, "候选商品|候选品|候选", "numbered candidate-card extraction")
+    require(candidate_parser, "saasSelectMarketProductCandidateFromText", "explicit recommendation selection")
+
+    intent_router = function_body(app_js, "saasCeoCommandIntent")
+    require(intent_router, "asksForListingHandoff", "Listing handoff priority")
+    require(intent_router, "asksForBulkWorkspace", "explicit bulk-workspace routing")
+    require(intent_router, "批量筛", "natural bulk screening phrase")
+    require(intent_router, "if (asksForListingHandoff)", "Listing routing before generic selection words")
+
     print("PASS jiejing_ai_ceo_product_label_extraction")
 
 

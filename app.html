@@ -2227,12 +2227,8 @@
                       <span>购物平台</span>
                       <select id="mediaPlatformSelect">
                         <option selected>eBay US Listing</option>
-                        <option>Amazon Listing 预设</option>
-                        <option>Shopify 商品页预设</option>
-                        <option>TikTok Shop 短视频预设</option>
-                        <option>通用独立站素材包</option>
                       </select>
-                      <small>当前以 eBay 为主，其他平台只做预留规格</small>
+                      <small>捷境当前只开放已验证的 eBay 素材规格；其他平台接入后再显示</small>
                     </label>
                     <label>
                       <span>图片尺寸</span>
@@ -2346,7 +2342,7 @@
                   </details>
                   <div class="media-gap-card media-settings-alert">
                     <span>发布前必须补齐</span>
-                    <strong id="mediaGapTitle">尺寸、包装重量、材质、是否含香粒</strong>
+                    <strong id="mediaGapTitle">当前商品事实、图片授权、重量尺寸和包装资料</strong>
                     <p id="mediaGapNote">这些信息不补齐，AI CEO 只能继续生成草稿，不能推进到真实发布或自动刊登。</p>
                   </div>
                   <div class="button-row media-settings-actions">
@@ -3308,6 +3304,7 @@
         </div>
         <div class="button-row">
           <button class="secondary-action" data-close-modal>继续调整</button>
+          <button class="secondary-action" id="assetReworkCurrent" type="button" hidden>保留旧版并重做</button>
           <button class="primary-action" id="assetSendConfirm">完成素材审核</button>
         </div>
       </section>

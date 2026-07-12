@@ -1263,7 +1263,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "secret_exposed": False,
                     }
             except sqlite_unique_error() as exc:
-                self._send_error(HTTPStatus.CONFLICT, "email already registered")
+                self._send_error(HTTPStatus.CONFLICT, "account registration could not be completed")
                 return
             except ValueError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
