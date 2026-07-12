@@ -76,6 +76,9 @@ def media_job_body(*, live_requested: bool = True, video_requested: bool = True)
             "creative_job_spec": {
                 "job_type": "eBay_listing_asset_package",
                 "blocked_claims": ["unverified_certification"],
+                "generation_tier": "high_quality",
+                "quality_mode": "fidelity_first",
+                "fact_locks": ["product_structure", "color", "material", "included_parts"],
             },
             "product_facts": {
                 "product": "foldable silicone drying mat",
@@ -90,6 +93,9 @@ def media_job_body(*, live_requested: bool = True, video_requested: bool = True)
             "scene_types": ["white_background", "detail_page"],
             **({"video_script": "15 second product demo script"} if video_requested else {}),
             "video_generation_requested": video_requested,
+            "video_duration_seconds": 10 if video_requested else 0,
+            "generation_tier": "high_quality",
+            "quality_mode": "fidelity_first",
             "live_provider_requested": live_requested,
             "media_provider": "fal",
         },
@@ -135,6 +141,13 @@ def main() -> int:
             raise AssertionError("live media assets must still wait for Listing review")
         if live.get("secret_exposed") is not False:
             raise AssertionError("live media provider branch must not expose secrets")
+        live_config = FakeMediaGenerationAdapter.configs[-1]
+        if live_config.image_quality != "high":
+            raise AssertionError(f"merchant generation tier must map to provider quality: {live_config}")
+        if live_config.video_duration_seconds != 10:
+            raise AssertionError(f"merchant video duration must reach the provider adapter: {live_config}")
+        if "Locked facts that must not be changed or invented" not in live_config.image_prompt:
+            raise AssertionError("grounded image prompt must preserve immutable product facts")
 
         concept_body = media_job_body(video_requested=False)
         concept_body["inputs"]["product_facts"].pop("reference_images", None)
@@ -190,6 +203,20 @@ def main() -> int:
         partial_status = partial_video.get("output_packet", {}).get("live_media_provider_status", {})
         if partial_status.get("video_requested") is not True or partial_status.get("video_asset_returned") is not False:
             raise AssertionError(f"partial video status must remain explicit: {partial_status}")
+
+        with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="false"):
+            video_disabled = ProviderJobRunner().run(
+                company_id="co_test",
+                store_id="store_test",
+                user_id="user_test",
+                task_id="task_test_video_disabled",
+                job_id="job_test_video_disabled",
+                job_body=media_job_body(video_requested=True),
+            )
+        if video_disabled.get("status") != "partial_live_media_provider":
+            raise AssertionError(f"disabled requested video must be reported as partial: {video_disabled}")
+        if "video_provider_disabled" not in video_disabled.get("missing_inputs", []):
+            raise AssertionError("disabled requested video must expose a safe, explicit blocker")
 
         video_without_script_body = media_job_body(video_requested=True)
         video_without_script_body["inputs"].pop("video_script", None)

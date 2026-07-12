@@ -186,25 +186,55 @@ class ProviderJobRunner:
         image_sizes = _list_or_default(inputs.get("image_sizes"), ["1600x1600"])
         scene_types = _list_or_default(inputs.get("scene_types"), ["white_background"])
         blocked_claims = _list_or_default(creative_job_spec.get("blocked_claims"), ["unverified certification", "medical claims", "unauthorized brand claims"])
+        generation_tier = str(inputs.get("generation_tier") or creative_job_spec.get("generation_tier") or "standard").strip().lower()
+        if generation_tier not in {"draft", "standard", "high_quality"}:
+            generation_tier = "standard"
+        image_quality = {"draft": "low", "standard": "medium", "high_quality": "high"}[generation_tier]
+        quality_mode = str(inputs.get("quality_mode") or creative_job_spec.get("quality_mode") or "fidelity_first").strip().lower()
+        if quality_mode not in {"fidelity_first", "balanced", "creative_exploration"}:
+            quality_mode = "fidelity_first"
+        fact_locks = _list_or_default(
+            creative_job_spec.get("fact_locks"),
+            ["product_structure", "color", "material", "included_parts", "logo_and_brand_marks", "confirmed_specifications"],
+        )
+        creative_job_spec["generation_tier"] = generation_tier
+        creative_job_spec["quality_mode"] = quality_mode
+        creative_job_spec["fact_locks"] = fact_locks
+        creative_job_spec["facts_may_not_be_unlocked_by_merchant"] = True
         reference_images = product_facts.get("reference_images") if isinstance(product_facts.get("reference_images"), list) else []
         reference_image_url = str(inputs.get("reference_image_url") or "").strip()
         if not reference_image_url:
             reference_image_url = next((str(item).strip() for item in reference_images if str(item).strip().startswith("https://")), "")
-        concept_only = creative_job_spec.get("output_safety_mode") == "concept_reference_only" or not reference_image_url
+        concept_only = (
+            creative_job_spec.get("output_safety_mode") == "concept_reference_only"
+            or quality_mode == "creative_exploration"
+            or not reference_image_url
+        )
         creative_job_spec["output_safety_mode"] = "concept_reference_only" if concept_only else "reference_grounded_listing_draft"
+        fidelity_instruction = {
+            "fidelity_first": "Preserve the exact product structure, color, material, included parts, proportions and visible brand marks from the reference image. Change only the requested background or lighting.",
+            "balanced": "Preserve the product structure, color, material, included parts and visible brand marks while allowing restrained lighting and background improvements.",
+            "creative_exploration": "Create a clearly labeled concept direction. Keep the recognizable product subject, but treat the result as non-listing reference art.",
+        }[quality_mode]
+        fact_lock_instruction = f"Locked facts that must not be changed or invented: {', '.join(fact_locks)}."
         image_prompt = str(
             inputs.get("image_prompt")
             or creative_job_spec.get("image_prompt")
             or (
-                f"Create a concept reference image for {product} on a neutral plain background. "
+                f"Create a concept reference image for {product} on a neutral plain background. {fidelity_instruction} {fact_lock_instruction} "
                 "No text, letters, numbers, labels, logos, certification icons, dimensions, performance claims, "
                 "materials claims, food-safety claims, or promotional badges. This is not a listing-ready product photo."
                 if concept_only
-                else f"Create an eBay-safe product image for {product} grounded only in the supplied reference image. "
-                f"No text, letters, numbers, labels, logos, certification icons, or unsupported claims. Avoid: {', '.join(blocked_claims)}."
+                else f"Create an eBay-safe product image for {product} grounded only in the supplied reference image. {fidelity_instruction} {fact_lock_instruction} "
+                f"Do not add new text, letters, numbers, labels, logos, certification icons, or unsupported claims. Preserve existing visible product branding exactly; do not invent or remove it. Avoid: {', '.join(blocked_claims)}."
             )
         )
-        video_enabled = _env_bool("JIEJING_MEDIA_LIVE_VIDEO_ENABLED", default=False) and _truthy(inputs.get("video_generation_requested"))
+        video_requested = _truthy(inputs.get("video_generation_requested"))
+        video_provider_enabled = _env_bool("JIEJING_MEDIA_LIVE_VIDEO_ENABLED", default=False)
+        video_enabled = video_provider_enabled and video_requested
+        video_duration_seconds = _safe_int(inputs.get("video_duration_seconds") or creative_job_spec.get("video_duration_seconds"), default=0)
+        if video_duration_seconds not in {6, 10}:
+            video_duration_seconds = 0
         video_prompt = ""
         if video_enabled:
             video_prompt = str(
@@ -225,7 +255,9 @@ class ProviderJobRunner:
                 scene_types=scene_types,
                 live_enabled=True,
                 provider=provider,
+                image_quality=image_quality,
                 reference_image_url=reference_image_url,
+                video_duration_seconds=video_duration_seconds,
                 timeout_seconds=max(10, min(_safe_int(inputs.get("timeout_seconds"), default=default_timeout), max_timeout)),
             )
         )
@@ -269,13 +301,21 @@ class ProviderJobRunner:
         )
         provider_errors = snapshot.get("provider_errors") if isinstance(snapshot.get("provider_errors"), list) else []
         video_asset_returned = any("video" in str(asset.get("asset_type") or "").lower() for asset in assets if isinstance(asset, dict))
-        missing_requested_outputs = ["video_provider_no_asset_returned"] if video_enabled and not video_asset_returned else []
+        missing_requested_outputs: list[str] = []
+        if video_requested and not video_provider_enabled:
+            missing_requested_outputs.append("video_provider_disabled")
+        elif video_enabled and not video_asset_returned:
+            missing_requested_outputs.append("video_provider_no_asset_returned")
         output_packet["live_media_provider_status"] = {
             "status": "partial" if missing_requested_outputs else (snapshot.get("status") or "returned"),
             "provider_status": snapshot.get("provider_status") if isinstance(snapshot.get("provider_status"), dict) else {},
             "provider_errors": provider_errors,
-            "video_requested": video_enabled,
+            "video_requested": video_requested,
+            "video_provider_enabled": video_provider_enabled,
+            "video_duration_seconds": video_duration_seconds,
             "video_asset_returned": video_asset_returned,
+            "generation_tier": generation_tier,
+            "quality_mode": quality_mode,
             "secret_exposed": False,
         }
         if missing_requested_outputs:

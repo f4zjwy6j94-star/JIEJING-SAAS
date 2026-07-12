@@ -23,6 +23,10 @@ from pathlib import Path
 from typing import Any
 
 
+DEFAULT_FAL_VIDEO_MODEL = "fal-ai/minimax/hailuo-2.3/standard/image-to-video"
+LEGACY_FAL_VIDEO_MODELS = {"fal-ai/minimax/video-01/image-to-video"}
+
+
 @dataclass(slots=True)
 class MediaGenerationConfig:
     product: str
@@ -40,7 +44,9 @@ class MediaGenerationConfig:
     api_key: str | None = None
     proxy_url: str | None = None
     image_model: str = ""
-    video_model: str = "fal-ai/minimax/video-01/image-to-video"
+    image_quality: str = ""
+    video_model: str = DEFAULT_FAL_VIDEO_MODEL
+    video_duration_seconds: int = 0
     reference_image_url: str = ""
     timeout_seconds: int = 45
 
@@ -81,7 +87,11 @@ class MediaGenerationAdapter:
                     image_result = self._post_json(
                         image_endpoint,
                         image_connection["authorization"],
-                        self._image_payload(batch_config, provider=image_connection["provider"]),
+                        self._image_payload(
+                            batch_config,
+                            provider=image_connection["provider"],
+                            model=image_connection.get("model", ""),
+                        ),
                         batch_config.timeout_seconds,
                         image_connection["proxy_url"],
                     )
@@ -191,7 +201,7 @@ class MediaGenerationAdapter:
                 "provider": "fal",
                 "configured": bool(credential),
                 "image_endpoint_host": self._host(self._fal_endpoint(os.environ.get("JIEJING_FAL_IMAGE_MODEL") or "openai/gpt-image-2")),
-                "video_endpoint_host": self._host(self._fal_endpoint(os.environ.get("JIEJING_FAL_VIDEO_MODEL") or "fal-ai/minimax/video-01/image-to-video")),
+                "video_endpoint_host": self._host(self._fal_endpoint(self._fal_video_model(os.environ.get("JIEJING_FAL_VIDEO_MODEL") or ""))),
                 "credential_present": bool(credential),
                 "credential_source": credential_source if credential else "missing",
                 "proxy_configured": bool(proxy),
@@ -272,16 +282,19 @@ class MediaGenerationAdapter:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"media provider HTTP {exc.code}: {detail[:300]}") from exc
 
-    def _image_payload(self, config: MediaGenerationConfig, *, provider: str = "") -> dict[str, Any]:
+    def _image_payload(self, config: MediaGenerationConfig, *, provider: str = "", model: str = "") -> dict[str, Any]:
         normalized_provider = self._provider(provider)
         if normalized_provider == "fal":
-            return {
+            payload: dict[str, Any] = {
                 "prompt": config.image_prompt or f"Generate eBay-safe product images for {config.product}.",
                 "image_size": _fal_image_size(config.image_sizes[0] if config.image_sizes else ""),
-                "quality": os.environ.get("JIEJING_FAL_IMAGE_QUALITY") or "low",
+                "quality": config.image_quality or os.environ.get("JIEJING_FAL_IMAGE_QUALITY") or "low",
                 "num_images": max(1, min(int(config.image_count or 1), 4)),
                 "output_format": "jpeg",
             }
+            if config.reference_image_url and str(model or "").rstrip("/").endswith("/edit"):
+                payload["image_urls"] = [config.reference_image_url]
+            return payload
         if normalized_provider == "openai":
             payload: dict[str, Any] = {
                 "model": os.environ.get("JIEJING_OPENAI_IMAGE_MODEL") or config.image_model or "gpt-image-1",
@@ -321,11 +334,14 @@ class MediaGenerationAdapter:
                     "fps": 25,
                 }
             image_field = "start_image_url" if "kling-video/v2.6" in normalized_model else "image_url"
-            return {
+            payload: dict[str, Any] = {
                 "prompt": prompt[:1500],
                 image_field: image_url,
                 "prompt_optimizer": True,
             }
+            if "minimax/hailuo-02" in normalized_model or "minimax/hailuo-2.3" in normalized_model:
+                payload["duration"] = "10" if int(config.video_duration_seconds or 0) >= 10 else "6"
+            return payload
         return {
             "product": config.product,
             "prompt": prompt,
@@ -425,8 +441,14 @@ class MediaGenerationAdapter:
             credential, credential_source = self._resolve_fal_credential(config.api_key)
             if asset_kind == "image":
                 model = config.image_model or os.environ.get("JIEJING_FAL_IMAGE_MODEL") or "openai/gpt-image-2"
+                normalized_image_model = model.rstrip("/").lower()
+                supports_reference_image = normalized_image_model.endswith("/edit") or any(
+                    marker in normalized_image_model for marker in ("image-to-image", "image2image", "subject-reference")
+                )
+                if config.reference_image_url and not supports_reference_image:
+                    model = "openai/gpt-image-2/edit"
             else:
-                model = os.environ.get("JIEJING_FAL_VIDEO_MODEL") or config.video_model or "fal-ai/minimax/video-01/image-to-video"
+                model = self._fal_video_model(os.environ.get("JIEJING_FAL_VIDEO_MODEL") or config.video_model)
             endpoint = endpoint or self._fal_endpoint(model)
             authorization = f"Key {credential}" if credential else ""
             proxy_url = self._proxy_url(config.proxy_url)
@@ -614,6 +636,10 @@ elif values.get('FAL_KEY_ID') and values.get('FAL_KEY_SECRET'):
         model_id = (model_id or "openai/gpt-image-2").strip().strip("/")
         return f"https://fal.run/{model_id}"
 
+    def _fal_video_model(self, configured_model: str | None) -> str:
+        model = str(configured_model or DEFAULT_FAL_VIDEO_MODEL).strip().strip("/")
+        return DEFAULT_FAL_VIDEO_MODEL if model in LEGACY_FAL_VIDEO_MODELS else model
+
     def _proxy_url(self, explicit_proxy: str | None) -> str:
         return (
             explicit_proxy
@@ -671,7 +697,6 @@ elif values.get('FAL_KEY_ID') and values.get('FAL_KEY_SECRET'):
     def _should_generate_video(self, config: MediaGenerationConfig) -> bool:
         return bool(
             config.video_prompt
-            or config.reference_image_url
             or config.video_endpoint
             or self._env_enabled("JIEJING_MEDIA_GENERATE_VIDEO_BY_DEFAULT")
         )

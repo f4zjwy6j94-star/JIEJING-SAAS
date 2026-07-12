@@ -38,6 +38,8 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("ai_ceo_listing_import_target", [sys.executable, "tools/test_jiejing_ai_ceo_listing_import_target.py"]),
     ("listing_progressive_disclosure", [sys.executable, "tools/test_jiejing_listing_progressive_disclosure.py"]),
     ("media_version_rework_ui", [sys.executable, "tools/test_jiejing_media_version_rework_ui.py"]),
+    ("media_quality_control", [sys.executable, "tools/test_jiejing_media_quality_control.py"]),
+    ("media_live_provider_gate", [sys.executable, "tools/test_jiejing_media_live_provider_gate.py"]),
     ("media_asset_jobs", [sys.executable, "tools/test_jiejing_media_asset_jobs.py"]),
     ("media_source_assets", [sys.executable, "tools/test_jiejing_media_source_assets.py"]),
     ("media_source_upload_http", [sys.executable, "tools/test_jiejing_media_source_upload_http.py"]),

@@ -119,7 +119,7 @@
       }
     </style>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
-    <link rel="stylesheet" href="./styles.css?v=20260712-publish-receipt-v75" />
+    <link rel="stylesheet" href="./styles.css?v=20260712-media-quality-v76" />
     <style id="jiejing-cockpit-layout-guard">
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
         display: grid !important;
@@ -2176,8 +2176,8 @@
                     </article>
                     <article>
                       <span>输出</span>
-                      <strong id="mediaOutputStatus">6 张图 + 视频脚本</strong>
-                      <p id="mediaOutputNote">图片、详情页、视频脚本一起回写。</p>
+                      <strong id="mediaOutputStatus">4 张候选 · 默认不生成视频</strong>
+                      <p id="mediaOutputNote">图片通过审核后回写；视频需要单独明确选择。</p>
                     </article>
                   </div>
                   <div class="media-template-board" aria-label="素材包模板">
@@ -2189,16 +2189,16 @@
                       <small id="mediaTemplateHint">流程导入会优先按产品经理图片需求生成；独立上传按商家选择生成。</small>
                     </div>
                     <div class="media-template-grid">
-                      <button class="media-template-card is-active" type="button" data-media-template="standard" data-template-size="平台推荐自动匹配" data-template-count="6 张" data-template-type="完整素材包：主图 + 场景图 + 详情页 + 尺寸图" data-template-scene="按商品用途自动选择" data-template-video="15 秒产品展示视频" data-template-note="适合 eBay 标准刊登，一次生成主图、场景图、详情页和尺寸说明。">
-                        <span>标准</span><strong>eBay 刊登包</strong><small>主图 / 场景 / 详情 / 尺寸</small>
+                      <button class="media-template-card is-active" type="button" data-media-template="standard" data-template-size="平台推荐自动匹配" data-template-count="4 张" data-template-type="完整素材包：主图 + 场景图 + 详情页 + 尺寸图" data-template-scene="按商品用途自动选择" data-template-video="不生成视频" data-template-note="适合 eBay 标准刊登，先生成 4 张不同用途的候选图；视频需要单独明确选择。">
+                        <span>标准</span><strong>eBay 刊登包</strong><small>4 张候选 · 默认不生成视频</small>
                       </button>
                       <button class="media-template-card" type="button" data-media-template="main" data-template-size="eBay 主图 1600×1600" data-template-count="4 张" data-template-type="只做 eBay 主图：白底 / 干净背景 / 主体清晰" data-template-scene="白底或浅灰背景" data-template-video="不生成视频" data-template-note="适合快速修主图，优先保证主体清楚、背景干净、不过度加字。">
                         <span>主图</span><strong>主图优化</strong><small>白底 / 干净背景</small>
                       </button>
-                      <button class="media-template-card" type="button" data-media-template="scene" data-template-size="方图 1200×1200" data-template-count="8 张" data-template-type="只做场景图：家居 / 户外 / 使用场景" data-template-scene="家居/礼品/使用场景" data-template-video="15 秒产品展示视频" data-template-note="适合做购买欲，围绕买家使用场景生成多张候选图。">
-                        <span>场景</span><strong>场景种草</strong><small>家居 / 礼品 / 使用场景</small>
+                      <button class="media-template-card" type="button" data-media-template="scene" data-template-size="方图 1200×1200" data-template-count="4 张" data-template-type="只做场景图：家居 / 户外 / 使用场景" data-template-scene="家居/礼品/使用场景" data-template-video="不生成视频" data-template-note="适合测试购买场景，先生成 4 张候选图；不会自动产生视频费用。">
+                        <span>场景</span><strong>场景种草</strong><small>4 张候选 · 默认不生成视频</small>
                       </button>
-                      <button class="media-template-card" type="button" data-media-template="detail" data-template-size="详情页长图 1200×1800" data-template-count="6 张" data-template-type="只做详情页：卖点长图 + 参数图 + FAQ 图" data-template-scene="详情页说明版式" data-template-video="不生成视频" data-template-note="适合补详情页，把卖点、参数、尺寸和买家疑问做成说明图。">
+                      <button class="media-template-card" type="button" data-media-template="detail" data-template-size="详情页长图 1200×1800" data-template-count="4 张" data-template-type="只做详情页：卖点长图 + 参数图 + FAQ 图" data-template-scene="详情页说明版式" data-template-video="不生成视频" data-template-note="适合补详情页，先生成 4 张卖点、参数、尺寸和常见问题候选图。">
                         <span>详情</span><strong>详情页说明</strong><small>卖点 / 参数 / FAQ</small>
                       </button>
                     </div>
@@ -2210,7 +2210,7 @@
                     </article>
                     <article>
                       <span>输出</span>
-                      <strong id="mediaChoiceCount">6 张 · 平台推荐自动匹配</strong>
+                      <strong id="mediaChoiceCount">4 张 · 平台推荐自动匹配</strong>
                     </article>
                     <article>
                       <span>场景</span>
@@ -2252,12 +2252,10 @@
                     <label>
                       <span>生成张数</span>
                       <select id="mediaCountSelect">
-                        <option selected>1 张</option>
+                        <option>1 张</option>
+                        <option>2 张</option>
                         <option>3 张</option>
-                        <option>4 张</option>
-                        <option>6 张</option>
-                        <option>8 张</option>
-                        <option>12 张</option>
+                        <option selected>4 张</option>
                       </select>
                       <small>先用 1 张快速样图确认方向，再增加候选；结果不直接发布</small>
                     </label>
@@ -2291,9 +2289,18 @@
                       <select id="mediaFidelitySelect">
                         <option selected>严格保留实物结构</option>
                         <option>轻微美化光影和背景</option>
-                        <option>创意场景但不改变商品主体</option>
+                        <option>创意场景探索（仅供参考）</option>
                       </select>
-                      <small>正式刊登前必须核对实物、颜色、材质和尺寸</small>
+                      <small>创意探索结果只作方向参考，不能直接作为 Listing 素材</small>
+                    </label>
+                    <label>
+                      <span>生成质量</span>
+                      <select id="mediaGenerationTierSelect">
+                        <option>快速样图（低成本）</option>
+                        <option selected>标准质量（推荐）</option>
+                        <option>精细质量（最终候选）</option>
+                      </select>
+                      <small id="mediaGenerationTierNote">标准质量适合大多数商品；先确认方向，再决定是否生成精细候选</small>
                     </label>
                     <label>
                       <span>文字规则</span>
@@ -2309,11 +2316,10 @@
                       <span>视频规格</span>
                       <select id="mediaVideoPresetSelect">
                         <option selected>不生成视频</option>
+                        <option>6 秒产品展示视频</option>
                         <option>10 秒产品展示视频</option>
-                        <option>15 秒产品展示视频</option>
-                        <option>30 秒产品短视频脚本</option>
                       </select>
-                      <small>选择视频规格后，“按当前设置生成”才会生成视频；单独的脚本按钮只生成文字脚本与分镜</small>
+                      <small>图片模板不会自动开启视频；单独的脚本按钮只生成文字脚本与分镜</small>
                     </label>
                     <label>
                       <span>脚本语言</span>
@@ -2325,6 +2331,11 @@
                       </select>
                       <small>脚本和字幕会单独审核</small>
                     </label>
+                    <div class="media-fact-lock" role="note" aria-label="商品事实锁定">
+                      <span>商品事实锁定</span>
+                      <strong>默认开启，不可关闭</strong>
+                      <small>结构、颜色、材质、配件数量、Logo 和已确认参数不得被生成模型改写；缺失信息继续标记待确认。</small>
+                    </div>
                   </div>
                   <div class="media-guardrail-list" aria-label="发布前确认边界">
                     <article><span>01</span><p>颜色、材质、尺寸、重量必须和真实商品一致。</p></article>
@@ -3373,7 +3384,7 @@
       })();
     </script>
     <script src="./assets/jiejing-settings-panels.js?v=20260703-account-model-scope-v1"></script>
-    <script src="./app.js?v=20260712-publish-receipt-v75"></script>
+    <script src="./app.js?v=20260712-media-quality-v76"></script>
   <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"8ceaac5cf3dd4fa491331c0faf56768c","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>

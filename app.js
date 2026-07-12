@@ -545,7 +545,7 @@ const tasks = [
   },
   {
     title: "确认倒流香炉烟雾场景方案",
-    detail: "AI 已生成主图、细节图、场景图和 15 秒视频脚本，需要你确认是否继续。",
+    detail: "AI 已生成主图、细节图、场景图和 10 秒视频脚本，需要你确认是否继续。",
     status: "待确认",
     risk: "中",
   },
@@ -692,7 +692,7 @@ const productListingDrafts = [
       ["主图", "套装展开白底图", "已生成"],
       ["场景图", "行李箱收纳前后对比", "待生成"],
       ["详情页", "容量、尺寸、材质、拉链细节", "待生成"],
-      ["视频", "15 秒装箱演示", "可生成"],
+      ["视频", "10 秒装箱演示", "可生成"],
     ],
     policy: {
       fulfillment: "轻小件标准物流 · 2-3 个工作日处理",
@@ -755,7 +755,7 @@ const productListingDrafts = [
       ["主图", "打开状态白底图", "已生成"],
       ["场景图", "旅行箱、梳妆台、礼品场景", "已生成"],
       ["详情页", "内部格位、尺寸、颜色", "已生成"],
-      ["视频", "开合展示 15 秒", "脚本已生成"],
+      ["视频", "开合展示 10 秒", "脚本已生成"],
     ],
     policy: {
       fulfillment: "轻小件标准物流 · 2 个工作日处理",
@@ -881,7 +881,7 @@ const productListingDrafts = [
       ["主图", "20 件套白底排布", "已生成"],
       ["场景图", "桌面前后对比", "已生成"],
       ["详情页", "尺寸、适用线径、安装步骤", "已生成"],
-      ["视频", "贴装和走线 15 秒", "脚本已生成"],
+      ["视频", "贴装和走线 10 秒", "脚本已生成"],
     ],
     policy: {
       fulfillment: "轻小件标准物流 · 2 个工作日处理",
@@ -973,7 +973,7 @@ const bulkListingDraftCatalog = [
       ["主图", "白底主图、折叠状态和沥水结构", "待生成"],
       ["场景图", "水槽边餐具沥水、台面保护", "待生成"],
       ["详情页", "尺寸、厚度、材质、清洗方式", "待生成"],
-      ["视频", "10-15 秒铺开、沥水和收纳演示", "脚本待生成"],
+      ["视频", "6-10 秒铺开、沥水和收纳演示", "脚本待生成"],
     ],
     missing: ["真实尺寸", "材质等级", "厚度", "包装重量", "耐温范围", "适配水槽宽度"],
     supplierQuestions: [
@@ -1662,7 +1662,7 @@ const listingDraftCatalog = [
       ["主图", "套装展开白底图", "已生成"],
       ["场景图", "行李箱收纳前后对比", "已生成"],
       ["详情页", "容量、尺寸、材质、拉链细节", "已生成"],
-      ["视频", "15 秒装箱演示", "可生成"],
+      ["视频", "10 秒装箱演示", "可生成"],
     ],
     missing: ["套装数量", "每个袋子尺寸", "材质厚度", "拉链材质", "包装重量"],
     supplierQuestions: [
@@ -1896,7 +1896,7 @@ const listingDraftCatalog = [
       ["主图", "套装数量和颜色展示", "已生成"],
       ["场景图", "桌面线缆前后对比", "已生成"],
       ["详情页", "线径、粘胶、安装步骤", "已生成"],
-      ["视频", "15 秒安装演示", "脚本已生成"],
+      ["视频", "10 秒安装演示", "脚本已生成"],
     ],
     missing: ["每包数量", "单个尺寸", "材质", "粘胶类型", "适配线径", "包装重量"],
     supplierQuestions: [
@@ -3662,7 +3662,7 @@ const activities = [
   {
     role: "素材生成",
     title: "规划图片和视频素材",
-    action: "生成主图、细节图、场景图、尺寸图需求，并生成 15 秒展示视频脚本。",
+    action: "生成主图、细节图、场景图、尺寸图需求，并生成 10 秒展示视频脚本。",
     sources: [
       "eBay 图片要求",
       "同类商品主图构图",
@@ -6661,6 +6661,7 @@ function bindRestoredMediaStudioEvents() {
     "#mediaTypeSelect",
     "#mediaSceneSelect",
     "#mediaFidelitySelect",
+    "#mediaGenerationTierSelect",
     "#mediaTextRuleSelect",
     "#mediaVideoPresetSelect",
     "#mediaVoiceSelect",
@@ -6671,8 +6672,8 @@ function bindRestoredMediaStudioEvents() {
   });
   bindSaasMediaManifestPreviewEvents(view);
   bindOnce(view.querySelector("#mediaVideoDemo"), "click", () => {
-    const text = "用现有商品图生成 15 秒和 30 秒产品展示视频草稿，包含封面、字幕和镜头顺序，先不要发布。";
-    addCeoMessage(text, "视频分镜已经生成到素材工坊，短视频脚本和授权风险也已写入 AI 汇报。");
+    const text = "用现有商品图生成 6 秒或 10 秒产品展示视频的脚本与分镜，包含封面、字幕和镜头顺序，先不要发布。";
+    addCeoMessage(text, "视频脚本与分镜已经生成到素材工坊；只有 Provider 返回真实视频文件后，页面才会显示视频成片。");
     runMediaGenerationFromCeo(text);
     openAssetPreview("video");
   });
@@ -14525,9 +14526,40 @@ async function handleMediaSourceFile(file, sourceEvent) {
   }
 }
 
+const MEDIA_FACT_LOCKS = Object.freeze([
+  "product_structure",
+  "color",
+  "material",
+  "included_parts",
+  "logo_and_brand_marks",
+  "confirmed_specifications",
+]);
+
+function mediaGenerationTierKey(value = "") {
+  if (/快速|低成本/.test(String(value))) return "draft";
+  if (/精细|最终候选/.test(String(value))) return "high_quality";
+  return "standard";
+}
+
+function mediaQualityModeKey(value = "") {
+  if (/创意/.test(String(value))) return "creative_exploration";
+  if (/轻微|美化/.test(String(value))) return "balanced";
+  return "fidelity_first";
+}
+
+function mediaVideoDurationSeconds(value = "") {
+  if (/不生成视频/.test(String(value))) return 0;
+  const seconds = Number.parseInt(String(value), 10);
+  return [6, 10].includes(seconds) ? seconds : 0;
+}
+
 function readMediaGenerationConfig(overrides = {}) {
   const entry = overrides.entry || state.mediaTaskEntry || "project";
   const activeTemplate = document.querySelector(".media-template-card.is-active");
+  const fidelity = overrides.fidelity || document.querySelector("#mediaFidelitySelect")?.value || "严格保留实物结构";
+  const generationTier =
+    overrides.generationTier || document.querySelector("#mediaGenerationTierSelect")?.value || "标准质量（推荐）";
+  const videoPreset = overrides.videoPreset || document.querySelector("#mediaVideoPresetSelect")?.value || "不生成视频";
   return {
     entry,
     entryLabel: entry === "single" ? "独立上传素材单" : "流程导入商品草稿",
@@ -14540,9 +14572,16 @@ function readMediaGenerationConfig(overrides = {}) {
       document.querySelector("#mediaTypeSelect")?.value ||
       "完整素材包：主图 + 场景 + 详情页 + 尺寸图",
     scene: overrides.scene || document.querySelector("#mediaSceneSelect")?.value || "按商品用途自动选择",
-    fidelity: overrides.fidelity || document.querySelector("#mediaFidelitySelect")?.value || "严格保留实物结构",
+    fidelity,
+    qualityMode: overrides.qualityMode || mediaQualityModeKey(fidelity),
+    generationTier,
+    generationTierKey: overrides.generationTierKey || mediaGenerationTierKey(generationTier),
+    factLocks: Array.isArray(overrides.factLocks) ? [...overrides.factLocks] : [...MEDIA_FACT_LOCKS],
     textRule: overrides.textRule || document.querySelector("#mediaTextRuleSelect")?.value || "eBay 相册图不加营销文字",
-    videoPreset: overrides.videoPreset || document.querySelector("#mediaVideoPresetSelect")?.value || "不生成视频",
+    videoPreset,
+    videoDurationSeconds: Number.isFinite(overrides.videoDurationSeconds)
+      ? overrides.videoDurationSeconds
+      : mediaVideoDurationSeconds(videoPreset),
     voice: overrides.voice || document.querySelector("#mediaVoiceSelect")?.value || "英语脚本",
   };
 }
@@ -14554,10 +14593,18 @@ function syncMediaRequirementSummary() {
   setText("#mediaChoiceType", config.template);
   setText("#mediaChoiceCount", `${config.count} · ${config.size}`);
   setText("#mediaChoiceScene", config.scene);
-  setText("#mediaAdvancedSummary", `${config.platform} · ${config.textRule} · ${config.videoPreset}`);
+  setText("#mediaAdvancedSummary", `${config.platform} · ${config.generationTier} · ${config.videoPreset}`);
+  setText(
+    "#mediaGenerationTierNote",
+    config.generationTierKey === "draft"
+      ? "快速样图用于确认构图和场景方向，不建议直接作为最终刊登素材"
+      : config.generationTierKey === "high_quality"
+        ? "精细质量适合已经确认方向的最终候选，耗时和用量会高于标准质量"
+        : "标准质量适合大多数商品；先确认方向，再决定是否生成精细候选",
+  );
   setText(
     "#mediaDecisionSummary",
-    `当前任务：${config.entryLabel}，素材包「${config.template}」，生成 ${config.count}。场景：${config.scene}。生成结果只作为草稿预览，通过后再回写 Listing。`,
+    `当前任务：${config.entryLabel}，素材包「${config.template}」，生成 ${config.count}，${config.generationTier}。场景：${config.scene}。商品事实锁定始终开启；生成结果只作为草稿预览，通过后再回写 Listing。`,
   );
   renderMediaQualityBoard(config);
   return config;
@@ -14957,21 +15004,27 @@ function currentMediaStudioProductFacts(config = {}) {
 
 function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
   const store = activeSaasStore();
-  const imageCount = Number.parseInt(config.count, 10) || 4;
+  const imageCount = Math.max(1, Math.min(Number.parseInt(config.count, 10) || 4, 4));
   const imageSizes = [config.size || "1:1"].filter(Boolean);
   const sceneTypes = [config.scene || "white_background", config.type || "listing_assets"].filter(Boolean);
   const productFacts = currentMediaStudioProductFacts(config);
   const groundedReferenceImages = (Array.isArray(productFacts.reference_images) ? productFacts.reference_images : [])
     .map((url) => String(url || "").trim())
     .filter((url) => /^https:\/\//i.test(url));
-  const outputSafetyMode = groundedReferenceImages.length
+  const generationTier = config.generationTierKey || mediaGenerationTierKey(config.generationTier);
+  const qualityMode = config.qualityMode || mediaQualityModeKey(config.fidelity);
+  const factLocks = Array.isArray(config.factLocks) && config.factLocks.length ? [...config.factLocks] : [...MEDIA_FACT_LOCKS];
+  const outputSafetyMode = groundedReferenceImages.length && qualityMode !== "creative_exploration"
     ? "reference_grounded_listing_draft"
     : "concept_reference_only";
   const videoPreset = String(config.videoPreset || "").trim();
-  const videoRequested = /视频/.test(String(config.type || "")) || Boolean(videoPreset && !/不生成视频/.test(videoPreset));
+  const videoDurationSeconds = Number(config.videoDurationSeconds || mediaVideoDurationSeconds(videoPreset));
+  const videoRequested = [6, 10].includes(videoDurationSeconds);
   const videoPrompt = videoRequested
-    ? `Create a concise eBay product demo for ${productFacts.product || "the confirmed product"}. Use the generated product image as the first frame. Use a slow push-in and subtle product-focused motion. Preserve the product structure, color and material. Do not add people, logos, unsupported claims, prices or promotional text.`
+    ? `Create a ${videoDurationSeconds}-second eBay product demo for ${productFacts.product || "the confirmed product"}. Use the grounded product image as the first frame. Use a slow push-in and subtle product-focused motion. Preserve the exact product structure, color, material, included parts and brand marks. Do not add people, unsupported claims, prices or promotional text.`
     : "";
+  const imageBudgetByTier = { draft: 60, standard: 120, high_quality: 260 };
+  const videoBudgetByDuration = { 6: 900, 10: 1500 };
   const idempotencySource = JSON.stringify({
     store_id: store?.store_id || "",
     listing_project_key: productFacts.listing_project_key || "",
@@ -14981,7 +15034,11 @@ function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
     size: imageSizes.join(","),
     scene: sceneTypes.join(","),
     type: config.type || "",
+    generation_tier: generationTier,
+    quality_mode: qualityMode,
+    fact_locks: factLocks,
     video_preset: videoPreset,
+    video_duration_seconds: videoDurationSeconds,
     video_requested: videoRequested,
   });
   return {
@@ -15000,9 +15057,14 @@ function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
         scene_types: sceneTypes,
         text_rule: "no_text_no_numbers_no_certifications",
         fidelity: config.fidelity || "fact_checked",
+        generation_tier: generationTier,
+        quality_mode: qualityMode,
+        fact_locks: factLocks,
+        facts_may_not_be_unlocked_by_merchant: true,
         output_safety_mode: outputSafetyMode,
         reference_image_required_for_listing_use: true,
-        video_preset: config.videoPreset || "listing_short_video_script",
+        video_preset: videoPreset || "不生成视频",
+        video_duration_seconds: videoDurationSeconds,
         video_prompt: videoPrompt,
         workflow_source: "media_studio_generate_button",
         blocked_claims: ["unverified_certification", "medical_claim", "brand_authorization_without_proof"],
@@ -15014,9 +15076,15 @@ function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
       image_sizes: imageSizes,
       scene_types: sceneTypes,
       reference_image_url: groundedReferenceImages[0] || "",
-      video_script: videoRequested ? videoPreset || "15 second product demo script" : "",
+      video_script: videoRequested ? `${videoDurationSeconds} second product demo` : "",
       video_prompt: videoPrompt,
-      cost_limit_cents: imageCount * 100 + (videoRequested ? 1200 : 0),
+      video_duration_seconds: videoDurationSeconds,
+      generation_tier: generationTier,
+      quality_mode: qualityMode,
+      cost_limit_cents:
+        imageCount * (imageBudgetByTier[generationTier] || imageBudgetByTier.standard) +
+        (videoRequested ? videoBudgetByDuration[videoDurationSeconds] || 1500 : 0),
+      timeout_seconds: videoRequested ? 600 : generationTier === "high_quality" ? 90 : 60,
     },
     run_mode: "queued",
   };
@@ -15170,8 +15238,8 @@ function handleMediaGenerateImagesDraftClick() {
   const config = readMediaGenerationConfig();
   const text =
     config.entry === "single"
-      ? `请基于本次商品图，使用「${config.template}」，按 ${config.platform} 生成 ${config.count} ${config.type}，尺寸使用 ${config.size}，场景为 ${config.scene}，并列出正式发布前需要补充的资料。`
-      : `请基于当前商品草稿，使用「${config.template}」，按 ${config.platform} 生成 ${config.count} ${config.type}，尺寸使用 ${config.size}，场景为 ${config.scene}，输出后回写到商品草稿。`;
+      ? `请基于本次商品图，使用「${config.template}」，按 ${config.platform} 生成 ${config.count} ${config.type}，尺寸使用 ${config.size}，场景为 ${config.scene}，质量为 ${config.generationTier}，还原要求为 ${config.fidelity}，并列出正式发布前需要补充的资料。`
+      : `请基于当前商品草稿，使用「${config.template}」，按 ${config.platform} 生成 ${config.count} ${config.type}，尺寸使用 ${config.size}，场景为 ${config.scene}，质量为 ${config.generationTier}，还原要求为 ${config.fidelity}，输出后回写到商品草稿。`;
   addCeoMessage(text, "我会先整理素材草稿和素材清单任务；通过审核前不会把图片、视频脚本或详情页标记为可发布素材。");
   state.mediaGenerationStatus = "submitted";
   renderMediaQualityBoard(config);
@@ -15190,7 +15258,8 @@ async function handleMediaScriptDraftClick() {
     return;
   }
   const product = activeMediaDraftProductNameForDisplay();
-  const text = `请只为“${product}”生成一份${config.videoPreset}的${config.voice}视频脚本与分镜。必须包含开场钩子、逐镜头画面、字幕、商品事实待确认项和发布前审核清单；不要声称视频文件已经生成，不要发布。`;
+  const scriptPreset = config.videoDurationSeconds ? config.videoPreset : "10 秒产品展示视频";
+  const text = `请只为“${product}”生成一份${scriptPreset}的${config.voice}视频脚本与分镜。必须包含开场钩子、逐镜头画面、字幕、商品事实待确认项和发布前审核清单；不要声称视频文件已经生成，不要发布。`;
   setText("#mediaProductionStatus", "正在生成脚本与分镜 · 不生成虚假视频");
   showActionToast("正在生成文字脚本；视频文件只有 provider 实际返回后才会显示。");
   const command = buildSaasCeoCommand(text, saasMerchantWorkbenchContext());
@@ -15215,7 +15284,7 @@ async function handleMediaScriptDraftClick() {
     role: "素材生成",
     title: `${product}视频脚本与分镜`,
     action: "AI 根据当前商品草稿生成文字脚本、镜头表、字幕和待确认事实；没有 provider 返回视频文件时，不标记为已生成视频。",
-    sources: [`商品：${product}`, `规格：${config.videoPreset}`, `语言：${config.voice}`],
+    sources: [`商品：${product}`, `规格：${scriptPreset}`, `语言：${config.voice}`],
     result: script,
     status: "脚本已生成",
     confidence: "待商家审核",
@@ -42111,6 +42180,7 @@ function bindEvents() {
     "#mediaTypeSelect",
     "#mediaSceneSelect",
     "#mediaFidelitySelect",
+    "#mediaGenerationTierSelect",
     "#mediaTextRuleSelect",
     "#mediaVideoPresetSelect",
     "#mediaVoiceSelect",
@@ -42138,8 +42208,8 @@ function bindEvents() {
   });
 
   document.querySelector("#mediaVideoDemo")?.addEventListener("click", () => {
-    const text = "用现有产品图生成 15 秒和 30 秒产品展示视频草稿，包含封面、字幕和镜头顺序，先不要发布。";
-    addCeoMessage(text, "视频分镜已经生成到素材工坊，字幕脚本和授权风险也已写入 AI 汇报。");
+    const text = "用现有产品图生成 6 秒或 10 秒产品展示视频的脚本与分镜，包含封面、字幕和镜头顺序，先不要发布。";
+    addCeoMessage(text, "视频脚本与分镜已经生成到素材工坊；只有 Provider 返回真实视频文件后，页面才会显示视频成片。");
     runMediaGenerationFromCeo(text);
     openAssetPreview("video");
   });

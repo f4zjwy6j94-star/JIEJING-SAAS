@@ -30,7 +30,7 @@ def main() -> int:
         return fail("frontend must not use document.write for report export or public rendering")
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
-    frontend_asset_version = "20260712-publish-receipt-v75"
+    frontend_asset_version = "20260712-media-quality-v76"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -38,6 +38,7 @@ def main() -> int:
         if expected_asset not in index_html + app_html:
             return fail(f"frontend entry files must bust owner publish cache with {expected_asset}")
     for stale_asset_version in [
+        "20260712-publish-receipt-v75",
         "20260711-account-chat-sync-v48",
         "20260711-account-chat-sync-v47",
         "20260525-workflow-feedback-v1",
