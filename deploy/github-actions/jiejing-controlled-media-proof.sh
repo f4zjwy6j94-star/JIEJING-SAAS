@@ -43,7 +43,7 @@ if [[ "${JIEJING_USE_COST_SAVER_OVERRIDE:-false}" == "true" && -f "$COST_SAVER_O
   COMPOSE_ARGS+=(-f "$COST_SAVER_OVERRIDE")
 fi
 
-health_json="$(docker compose "${COMPOSE_ARGS[@]}" exec -T jiejing-saas python -c \
+health_json="$(sudo -n docker compose "${COMPOSE_ARGS[@]}" exec -T jiejing-saas python -c \
   "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8788/health', timeout=10).read().decode())")"
 HEALTH_JSON="$health_json" python3 - <<'PY'
 import json
@@ -56,12 +56,12 @@ if payload.get("secret_exposed") is not False:
     raise SystemExit("REFUSE_SECRET_EXPOSURE_SIGNAL=1")
 PY
 
-docker compose "${COMPOSE_ARGS[@]}" exec -T \
+sudo -n docker compose "${COMPOSE_ARGS[@]}" exec -T \
   -e JIEJING_CONTROLLED_MEDIA_VIDEO_PROOF=true \
   -e JIEJING_ACCEPTANCE_PRODUCT="$PRODUCT" \
   jiejing-saas python tools/jiejing_controlled_media_video_proof.py
 
-container_id="$(docker compose "${COMPOSE_ARGS[@]}" ps -q jiejing-saas)"
+container_id="$(sudo -n docker compose "${COMPOSE_ARGS[@]}" ps -q jiejing-saas)"
 if [[ -z "$container_id" ]]; then
   echo "REFUSE_SAAS_CONTAINER_NOT_FOUND=1" >&2
   exit 65
@@ -74,7 +74,8 @@ case "$artifact_root" in
 esac
 rm -rf -- "$artifact_root"
 mkdir -p "$artifact_root"
-docker cp "$container_id:/app/output/jiejing-controlled-media-video-proof/." "$artifact_root/"
+sudo -n docker cp "$container_id:/app/output/jiejing-controlled-media-video-proof/." "$artifact_root/"
+sudo -n chown -R "$(id -u):$(id -g)" "$artifact_root"
 
 python3 - "$artifact_root/latest.json" <<'PY'
 import json
@@ -101,4 +102,3 @@ PY
 echo "CONTROLLED_MEDIA_PROOF_COMPLETED=1"
 echo "REAL_PLATFORM_WRITES_ENABLED=false"
 echo "SECRET_EXPOSED=false"
-

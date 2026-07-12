@@ -26,7 +26,8 @@ def main() -> int:
         "REFUSE_CONTROLLED_MEDIA_CONFIRMATION_MISMATCH",
         "real_platform_writes_enabled",
         "JIEJING_CONTROLLED_MEDIA_VIDEO_PROOF=true",
-        "docker compose",
+        "sudo -n docker compose",
+        "sudo -n chown",
         "file_signature_valid",
         "SECRET_EXPOSED=false",
     )
@@ -44,4 +45,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
