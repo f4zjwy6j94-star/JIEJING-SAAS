@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
@@ -30,10 +31,15 @@ RUNTIME_DB = OUT / "runtime-media-asset-jobs.sqlite"
 
 
 class FakeMediaProviderHandler(BaseHTTPRequestHandler):
+    captured_payloads: list[dict[str, Any]] = []
+
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("content-length") or 0)
-        if length:
-            self.rfile.read(length)
+        raw_body = self.rfile.read(length) if length else b"{}"
+        try:
+            self.__class__.captured_payloads.append(json.loads(raw_body.decode("utf-8")))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self.__class__.captured_payloads.append({"invalid_payload": True})
         body = json.dumps(
             {
                 "provider": "local-test-media-provider",
@@ -132,6 +138,21 @@ def main() -> int:
         if not store_id:
             return fail("store should be created")
 
+        source_png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        source_asset = upload_media_source(
+            f"{base_url}/stores/{store_id}/media-source-assets",
+            source_png,
+            token=token,
+        ).get("media_source_asset", {})
+        source_asset_id = str(source_asset.get("asset_id") or "")
+        if not source_asset_id:
+            return fail(f"grounded source upload should return an asset id: {source_asset}")
+        legacy_signed_source_url = str(source_asset.get("source_url") or "")
+        if "signature=" not in legacy_signed_source_url:
+            return fail("source upload fixture should expose the legacy signed URL for persistence redaction coverage")
+
         hidden_note_credential = "sk-" + "unit-credential-should-not-persist-2026"
         payload = {
             "provider_job_key": "media.asset_generation",
@@ -139,7 +160,7 @@ def main() -> int:
             "idempotency_key": "unit-media-job-idempotency-001",
             "inputs": {
                 "model_provider": "deepseek",
-                "media_provider": "generic",
+                "media_provider": "fal",
                 "creative_job_spec": {
                     "job_type": "eBay_listing_asset_package",
                     "blocked_claims": ["unverified_certification"],
@@ -154,10 +175,13 @@ def main() -> int:
                     },
                     "allowed_claims": ["keeps drinks cold"],
                     "forbidden_claims": ["medical"],
-                    "reference_images": ["https://cdn.example.test/source/reference-1.jpg"],
+                    "reference_images": [legacy_signed_source_url],
+                    "source_asset_id": source_asset_id,
+                    "source_image_sha256": source_asset.get("sha256"),
                     "target_marketplace_rules": {"platform": "ebay"},
                 },
                 "image_count": 2,
+                "reference_image_url": legacy_signed_source_url,
                 "image_sizes": ["1:1", "4:5"],
                 "scene_types": ["white_background", "detail_page"],
                 "video_script": "15 second product demo script",
@@ -168,6 +192,13 @@ def main() -> int:
             "run_mode": "local_worker_now",
         }
         queued = post_json(f"{base_url}/stores/{store_id}/provider-jobs/queue", payload, token=token)
+        provider_payload = FakeMediaProviderHandler.captured_payloads[-1] if FakeMediaProviderHandler.captured_payloads else {}
+        provider_references = provider_payload.get("image_urls") if isinstance(provider_payload.get("image_urls"), list) else []
+        if len(provider_references) != 1 or not str(provider_references[0]).startswith("data:image/png;base64,"):
+            return fail(f"worker must pass the private source image to FAL without a public callback URL: {provider_payload}")
+        encoded_reference = str(provider_references[0]).split(",", 1)[1]
+        if base64.b64decode(encoded_reference) != source_png:
+            return fail("worker changed the uploaded merchant source image before the provider handoff")
         if "UNIT-MEDIA-KEY-MUST-NOT-PERSIST" in json.dumps(queued, ensure_ascii=False):
             return fail("media asset job response leaked raw media API key")
         if hidden_note_credential in json.dumps(queued, ensure_ascii=False):
@@ -196,6 +227,9 @@ def main() -> int:
             return fail("queue job should be linked to the media asset job")
 
         fetched = fetch_json(f"{base_url}/media-asset-jobs/{media_job_id}", token=token).get("media_asset_job", {})
+        persisted_media = json.dumps(fetched, ensure_ascii=False)
+        if "data:image/" in persisted_media or "signature=" in persisted_media:
+            return fail("media job persisted a private image body or signed provider fetch capability")
         if fetched.get("media_job_id") != media_job_id or fetched.get("status") != "waiting_review":
             return fail(f"media asset job detail endpoint should return the completed media job: {fetched}")
         fetched_facts = fetched.get("job", {}).get("job_spec", {}).get("inputs", {}).get("product_facts", {})
@@ -352,6 +386,25 @@ def main() -> int:
         )
         if concept_status != 422 or "real product source image" not in str(concept_review.get("error") or ""):
             return fail(f"concept-only media review must fail closed before Listing writeback: {concept_status}, {concept_review}")
+
+        provider_calls_before_missing_source = len(FakeMediaProviderHandler.captured_payloads)
+        missing_source_payload = json.loads(json.dumps(payload))
+        missing_source_payload["idempotency_key"] = "unit-media-job-missing-private-source-001"
+        missing_source_payload["inputs"].pop("reference_image_url", None)
+        missing_source_payload["inputs"]["product_facts"]["reference_images"] = []
+        missing_source_payload["inputs"]["product_facts"]["source_asset_id"] = "media_src_aaaaaaaaaaaaaaaa"
+        missing_source = post_json(
+            f"{base_url}/stores/{store_id}/provider-jobs/queue",
+            missing_source_payload,
+            token=token,
+        ).get("media_asset_job", {})
+        if missing_source.get("status") != "needs_rework" or "private_media_source_asset_not_found" not in str(
+            missing_source.get("error_reason") or ""
+        ):
+            return fail(f"missing private source must fail closed as a merchant-visible rework state: {missing_source}")
+        if len(FakeMediaProviderHandler.captured_payloads) != provider_calls_before_missing_source:
+            return fail("missing private source must not call or spend external media provider quota")
+
         repository = SaaSRepository(SAAS_DB)
         company_id = str(registered.get("company", {}).get("company_id") or "")
         user_id = str(registered.get("user", {}).get("user_id") or "")
@@ -415,6 +468,21 @@ def post_json(url: str, payload: dict[str, Any], token: str | None = None) -> di
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
     with urllib.request.urlopen(request, timeout=60) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def upload_media_source(url: str, content: bytes, *, token: str) -> dict[str, Any]:
+    request = urllib.request.Request(
+        url,
+        data=content,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "image/png",
+            "X-Jiejing-File-Name": "merchant-source.png",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
         return json.loads(response.read().decode("utf-8"))
 
 

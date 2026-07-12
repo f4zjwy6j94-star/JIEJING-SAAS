@@ -14506,6 +14506,8 @@ async function uploadSaasMediaSourceFile(file) {
     body: file,
   });
   const asset = payload?.media_source_asset && typeof payload.media_source_asset === "object" ? payload.media_source_asset : null;
+  const safeAsset = asset ? { ...asset, provider_reference_ready: payload?.provider_reference_ready === true } : null;
+  if (safeAsset) delete safeAsset.source_url;
   const sourceUrl = String(asset?.source_url || "");
   const sourceHost = (() => {
     try {
@@ -14518,7 +14520,7 @@ async function uploadSaasMediaSourceFile(file) {
   if (!asset?.asset_id || (!/^https:\/\//i.test(sourceUrl) && !localDevelopmentSource)) {
     throw new Error("后端没有返回可供素材服务读取的安全来源图地址。");
   }
-  return asset;
+  return safeAsset;
 }
 
 async function handleMediaSourceFile(file, sourceEvent) {
@@ -15025,7 +15027,7 @@ function currentMediaStudioProductFacts(config = {}) {
       !listingProject.key ||
       upload.listing_project_key === listingProject.key ||
       upload.listing_project_key === state.activeMediaDraft);
-  const referenceImages = [config.referenceImageUrl, uploadMatchesProject ? upload.source_url : ""]
+  const referenceImages = [config.referenceImageUrl]
     .map((url) => String(url || "").trim())
     .filter((url, index, values) => /^https:\/\//i.test(url) && values.indexOf(url) === index);
   return {
@@ -15066,7 +15068,8 @@ function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
   const generationTier = config.generationTierKey || mediaGenerationTierKey(config.generationTier);
   const qualityMode = config.qualityMode || mediaQualityModeKey(config.fidelity);
   const factLocks = Array.isArray(config.factLocks) && config.factLocks.length ? [...config.factLocks] : [...MEDIA_FACT_LOCKS];
-  const outputSafetyMode = groundedReferenceImages.length && qualityMode !== "creative_exploration"
+  const hasPrivateSourceAsset = Boolean(productFacts.source_asset_id);
+  const outputSafetyMode = (groundedReferenceImages.length || hasPrivateSourceAsset) && qualityMode !== "creative_exploration"
     ? "reference_grounded_listing_draft"
     : "concept_reference_only";
   const videoPreset = String(config.videoPreset || "").trim();

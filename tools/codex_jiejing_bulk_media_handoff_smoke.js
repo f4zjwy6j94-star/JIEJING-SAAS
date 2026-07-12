@@ -433,15 +433,8 @@ async function main() {
   await page.setInputFiles("#mediaSourceFileInput", sourceFixturePath);
   await page.waitForFunction(
     () => {
-      const assetId = String(state.saasMediaSourceUpload?.asset_id || "");
-      try {
-        const sourceUrl = new URL(String(state.saasMediaSourceUpload?.source_url || ""));
-        const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(sourceUrl.hostname);
-        const transportAllowed = sourceUrl.protocol === "https:" || (isLoopback && sourceUrl.protocol === "http:");
-        return Boolean(assetId && transportAllowed && sourceUrl.searchParams.get("signature"));
-      } catch (_error) {
-        return false;
-      }
+        const assetId = String(state.saasMediaSourceUpload?.asset_id || "");
+        return Boolean(assetId && state.saasMediaSourceUpload?.provider_reference_ready === true);
     },
     null,
     { timeout: 60000 },
@@ -451,18 +444,8 @@ async function main() {
     content_type: state.saasMediaSourceUpload?.content_type || "",
     size_bytes: state.saasMediaSourceUpload?.size_bytes || 0,
     listing_project_key: state.saasMediaSourceUpload?.listing_project_key || "",
-    source_url_signed: (() => {
-      try {
-        const sourceUrl = new URL(String(state.saasMediaSourceUpload?.source_url || ""));
-        const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(sourceUrl.hostname);
-        return Boolean(
-          (sourceUrl.protocol === "https:" || (isLoopback && sourceUrl.protocol === "http:")) &&
-            sourceUrl.searchParams.get("signature"),
-        );
-      } catch (_error) {
-        return false;
-      }
-    })(),
+    provider_reference_ready: state.saasMediaSourceUpload?.provider_reference_ready === true,
+    source_url_retained: Boolean(state.saasMediaSourceUpload?.source_url),
     secret_exposed: JSON.stringify(state.saasMediaSourceUpload || {}).toLowerCase().includes("api_key"),
   }));
 
@@ -804,7 +787,8 @@ async function main() {
       sourceUpload.content_type === "image/png" &&
       sourceUpload.size_bytes > 0 &&
       sourceUpload.listing_project_key === mediaOpened.listing_project_key &&
-      sourceUpload.source_url_signed === true &&
+      sourceUpload.provider_reference_ready === true &&
+      sourceUpload.source_url_retained === false &&
       sourceUpload.secret_exposed === false,
     media_generation_creates_reviewable_assets:
       ["submitted", "generated", "done"].includes(mediaGenerated.media_generation_status) &&

@@ -8,6 +8,8 @@ cloud queue.
 
 from __future__ import annotations
 
+import base64
+import copy
 import os
 from typing import Any
 
@@ -18,6 +20,7 @@ from .ebay_data_packet import build_ebay_read_only_data_packet
 from .ebay_http_client import EbayReadOnlyHttpClient
 from .ebay_read_adapter import EbayReadOnlyAdapter
 from .provider_job_runner import ProviderJobRunner
+from .media_source_assets import MediaSourceAssetError, MediaSourceAssetStore
 from .repository import SaaSRepository
 from .runtime_bridge import RuntimeBridge
 
@@ -365,14 +368,38 @@ class LocalQueueWorker:
             audit_summary="Local worker started provider job contract dry-run.",
         )
         media_asset_job = self._mark_media_asset_job_running(task=task, job=job, job_body=job_body)
-        provider_output = self.provider_job_runner.run(
-            company_id=task["company_id"],
-            store_id=task["store_id"],
-            user_id=task["user_id"],
-            task_id=task["task_id"],
-            job_id=job["job_id"],
-            job_body=job_body,
-        )
+        try:
+            execution_job_body = self._hydrate_private_media_source(
+                company_id=str(task["company_id"]),
+                store_id=str(task["store_id"]),
+                job_body=job_body,
+            )
+            provider_output = self.provider_job_runner.run(
+                company_id=task["company_id"],
+                store_id=task["store_id"],
+                user_id=task["user_id"],
+                task_id=task["task_id"],
+                job_id=job["job_id"],
+                job_body=execution_job_body,
+            )
+        except MediaSourceAssetError as exc:
+            blocked_body = copy.deepcopy(job_body)
+            blocked_inputs = blocked_body.setdefault("inputs", {})
+            blocked_inputs["live_provider_requested"] = False
+            blocked_inputs.pop("reference_image_url", None)
+            provider_output = self.provider_job_runner.run(
+                company_id=task["company_id"],
+                store_id=task["store_id"],
+                user_id=task["user_id"],
+                task_id=task["task_id"],
+                job_id=job["job_id"],
+                job_body=blocked_body,
+            )
+            provider_output["status"] = "blocked_private_media_source"
+            provider_output["missing_inputs"] = [f"private_media_source_{exc.code}"]
+            provider_output["merchant_visible_summary"] = (
+                "The uploaded source image is no longer available. Upload the product image again before regenerating."
+            )
         safety = provider_output.get("safety") if isinstance(provider_output.get("safety"), dict) else {}
         live_provider_called = bool(safety.get("live_provider_called"))
         raw_secret_read = bool(safety.get("raw_secret_read"))
@@ -446,6 +473,35 @@ class LocalQueueWorker:
             "media_asset_job": media_asset_job,
             "real_platform_writes_enabled": False,
         }
+
+    def _hydrate_private_media_source(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        job_body: dict[str, Any],
+    ) -> dict[str, Any]:
+        key = str(job_body.get("provider_job_key") or job_body.get("contract_key") or "")
+        if key not in {"media.asset_generation", "media.fal_asset_generation"}:
+            return job_body
+        inputs = job_body.get("inputs") if isinstance(job_body.get("inputs"), dict) else {}
+        product_facts = inputs.get("product_facts") if isinstance(inputs.get("product_facts"), dict) else {}
+        asset_id = str(product_facts.get("source_asset_id") or inputs.get("source_asset_id") or "").strip()
+        if not asset_id or not self.settings:
+            return job_body
+        store = MediaSourceAssetStore(
+            root=self.settings.output_root / "private-media-source-assets",
+            signing_secret=None,
+            public_base_url="",
+        )
+        asset, content = store.read_for_provider(asset_id=asset_id, company_id=company_id, store_id=store_id)
+        hydrated = copy.deepcopy(job_body)
+        hydrated_inputs = hydrated.setdefault("inputs", {})
+        hydrated_inputs["reference_image_url"] = (
+            f"data:{asset.content_type};base64,{base64.b64encode(content).decode('ascii')}"
+        )
+        hydrated_inputs["private_media_source_hydrated"] = True
+        return hydrated
 
     def _mark_media_asset_job_running(
         self,

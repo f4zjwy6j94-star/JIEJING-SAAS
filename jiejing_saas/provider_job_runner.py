@@ -778,6 +778,8 @@ def _redact_secret_like(value: Any) -> Any:
         return output
     if isinstance(value, list):
         return [_redact_secret_like(item) for item in value]
+    if isinstance(value, str) and value.startswith("data:image/"):
+        return "[REDACTED_PRIVATE_MEDIA_SOURCE]"
     return value
 
 

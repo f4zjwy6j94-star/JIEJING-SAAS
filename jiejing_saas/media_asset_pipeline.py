@@ -275,7 +275,12 @@ def _missing_product_fact_keys(*, product_facts: dict[str, Any], creative_job_sp
         "confirmed_material_or_pending_label": _has_confirmed_fact(supplier.get("material")) or bool(product_facts.get("material_pending_label")),
         "allowed_claims": bool(product_facts.get("allowed_claims") or product_facts.get("listing_context")),
         "forbidden_claims": bool(product_facts.get("forbidden_claims") or creative_job_spec.get("blocked_claims")),
-        "reference_images_or_source_notes": bool(product_facts.get("reference_images") or product_facts.get("source_notes") or product_facts.get("listing_context")),
+        "reference_images_or_source_notes": bool(
+            product_facts.get("reference_images")
+            or product_facts.get("source_asset_id")
+            or product_facts.get("source_notes")
+            or product_facts.get("listing_context")
+        ),
         "target_marketplace_rules": bool(product_facts.get("target_marketplace_rules") or product_facts.get("listing_context")),
     }
     required = creative_job_spec.get("product_facts_required")

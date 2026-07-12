@@ -59,6 +59,28 @@ def main() -> None:
             signature=query["signature"][0],
         )
         assert resolved.file_path.read_bytes() == png
+        provider_asset, provider_content = store.read_for_provider(
+            asset_id=asset.asset_id,
+            company_id="company_test",
+            store_id="store_test",
+        )
+        assert provider_asset.asset_id == asset.asset_id and provider_content == png
+        expect_error(
+            "asset_scope_mismatch",
+            lambda: store.read_for_provider(
+                asset_id=asset.asset_id,
+                company_id="company_attacker",
+                store_id="store_test",
+            ),
+        )
+        expect_error(
+            "asset_scope_mismatch",
+            lambda: store.read_for_provider(
+                asset_id=asset.asset_id,
+                company_id="company_test",
+                store_id="store_attacker",
+            ),
+        )
         expect_error(
             "invalid_signature",
             lambda: store.resolve(asset_id=asset.asset_id, expires=query["expires"][0], signature="wrong"),
@@ -147,7 +169,9 @@ def main() -> None:
         "uploadSaasMediaSourceFile",
         "saasMediaSourceUpload",
         "referenceImageUrl",
-        "source_url",
+        "source_asset_id",
+        "provider_reference_ready",
+        "delete safeAsset.source_url",
     ]:
         assert marker in app, marker
     assert "media-source-assets" in nginx

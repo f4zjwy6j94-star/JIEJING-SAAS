@@ -71,17 +71,15 @@ class MediaSourceAssetStore:
         self,
         *,
         root: Path,
-        signing_secret: bytes,
+        signing_secret: bytes | None,
         public_base_url: str,
         now: Callable[[], float] = time.time,
         max_assets_per_company: int = MAX_ACTIVE_ASSETS_PER_COMPANY,
         max_bytes_per_company: int = MAX_ACTIVE_BYTES_PER_COMPANY,
     ) -> None:
-        if not signing_secret:
-            raise ValueError("media source signing secret is required")
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
-        self.signing_secret = signing_secret
+        self.signing_secret = signing_secret or b""
         self.public_base_url = public_base_url.rstrip("/")
         self.now = now
         self.max_assets_per_company = max(1, int(max_assets_per_company))
@@ -142,6 +140,8 @@ class MediaSourceAssetStore:
         return asset, self.signed_url(asset_id)
 
     def signed_url(self, asset_id: str, *, ttl_seconds: int = SIGNED_URL_TTL_SECONDS) -> str:
+        if not self.signing_secret:
+            raise MediaSourceAssetError("signing_unavailable", "media source signing is unavailable")
         if not _ASSET_ID_PATTERN.fullmatch(asset_id):
             raise MediaSourceAssetError("invalid_asset_id", "invalid media source asset id")
         expires = int(self.now()) + max(60, min(int(ttl_seconds), SIGNED_URL_TTL_SECONDS))
@@ -150,6 +150,8 @@ class MediaSourceAssetStore:
         return f"{self.public_base_url}/media-source-assets/{asset_id}/content?{query}"
 
     def resolve(self, *, asset_id: str, expires: Any, signature: str) -> MediaSourceAsset:
+        if not self.signing_secret:
+            raise MediaSourceAssetError("signing_unavailable", "media source signing is unavailable")
         if not _ASSET_ID_PATTERN.fullmatch(asset_id):
             raise MediaSourceAssetError("invalid_asset_id", "invalid media source asset id")
         try:
@@ -174,6 +176,41 @@ class MediaSourceAssetStore:
         if not file_path.is_file() or file_path.parent != metadata_path.parent:
             raise MediaSourceAssetError("asset_unavailable", "media source asset file is unavailable")
         return _asset_from_metadata(metadata, file_path=file_path)
+
+    def read_for_provider(
+        self,
+        *,
+        asset_id: str,
+        company_id: str,
+        store_id: str,
+    ) -> tuple[MediaSourceAsset, bytes]:
+        """Read one retained source image for an in-memory provider request."""
+        if not _ASSET_ID_PATTERN.fullmatch(asset_id):
+            raise MediaSourceAssetError("invalid_asset_id", "invalid media source asset id")
+        metadata_path = self._metadata_path(asset_id)
+        if not metadata_path.exists():
+            raise MediaSourceAssetError("asset_not_found", "media source asset not found")
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise MediaSourceAssetError("asset_unavailable", "media source asset is unavailable") from exc
+        if not hmac.compare_digest(str(metadata.get("company_id") or ""), str(company_id or "")):
+            raise MediaSourceAssetError("asset_scope_mismatch", "media source asset is not available to this company")
+        if not hmac.compare_digest(str(metadata.get("store_id") or ""), str(store_id or "")):
+            raise MediaSourceAssetError("asset_scope_mismatch", "media source asset is not available to this store")
+        if int(metadata.get("retention_expires_at") or 0) < int(self.now()):
+            raise MediaSourceAssetError("asset_expired", "media source asset retention expired")
+        file_path = metadata_path.with_name(str(metadata.get("file_name") or ""))
+        if not file_path.is_file() or file_path.parent != metadata_path.parent:
+            raise MediaSourceAssetError("asset_unavailable", "media source asset file is unavailable")
+        asset = _asset_from_metadata(metadata, file_path=file_path)
+        try:
+            content = file_path.read_bytes()
+        except OSError as exc:
+            raise MediaSourceAssetError("asset_unavailable", "media source asset file is unavailable") from exc
+        if hashlib.sha256(content).hexdigest() != asset.sha256:
+            raise MediaSourceAssetError("asset_integrity_failed", "media source asset integrity check failed")
+        return asset, content
 
     def _signature(self, *, asset_id: str, expires: int) -> str:
         payload = f"{asset_id}:{expires}".encode("utf-8")

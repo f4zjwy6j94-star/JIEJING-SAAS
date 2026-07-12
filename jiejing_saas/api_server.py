@@ -272,6 +272,31 @@ def _media_asset_idempotency_key(*, store_id: str, provider_job_key: str, inputs
     return f"media:{store_id}:{fingerprint}"
 
 
+def _sanitize_media_source_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    """Persist only the opaque asset id, never a signed source capability URL."""
+    sanitized = dict(inputs)
+    product_facts = dict(sanitized.get("product_facts")) if isinstance(sanitized.get("product_facts"), dict) else {}
+    asset_id = str(product_facts.get("source_asset_id") or sanitized.get("source_asset_id") or "").strip()
+    if not asset_id:
+        return sanitized
+    if _is_signed_media_source_url(sanitized.get("reference_image_url")):
+        sanitized.pop("reference_image_url", None)
+    references = product_facts.get("reference_images") if isinstance(product_facts.get("reference_images"), list) else []
+    product_facts["reference_images"] = [item for item in references if not _is_signed_media_source_url(item)]
+    product_facts["private_source_transport"] = "backend_asset_id"
+    sanitized["product_facts"] = product_facts
+    return sanitized
+
+
+def _is_signed_media_source_url(value: Any) -> bool:
+    try:
+        parsed = urlparse(str(value or ""))
+        query = parse_qs(parsed.query)
+    except (TypeError, ValueError):
+        return False
+    return parsed.path.startswith("/media-source-assets/") and parsed.path.endswith("/content") and bool(query.get("signature"))
+
+
 class SaaSBackendServer:
     def __init__(
         self,
@@ -2676,6 +2701,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             raw_inputs = body.get("inputs") if isinstance(body.get("inputs"), dict) else {}
             safe_inputs = _redact_secret_like(raw_inputs)
             is_media_provider_job = provider_job_key in MEDIA_PROVIDER_JOB_KEYS
+            if is_media_provider_job:
+                safe_inputs = _sanitize_media_source_inputs(safe_inputs)
             media_idempotency_key = ""
             if is_media_provider_job:
                 media_idempotency_key = _media_asset_idempotency_key(
