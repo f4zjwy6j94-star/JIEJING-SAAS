@@ -89,7 +89,8 @@ def main() -> int:
             "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED": "true",
             "JIEJING_MEDIA_LIVE_VIDEO_ENABLED": "false",
             "JIEJING_IMAGE_GENERATION_ENDPOINT": f"http://127.0.0.1:{provider_port}/generate",
-            "JIEJING_MEDIA_GENERATION_API_KEY": "unit-test-provider-credential",
+            "JIEJING_FAL_KEY": "unit-test-provider-credential",
+            "JIEJING_ENABLE_HERMES_WSL_SECRET_LOOKUP": "false",
         }
     )
     process = subprocess.Popen(
