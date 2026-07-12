@@ -12185,6 +12185,12 @@ function renderSaasListingNextActionPanel(draft = state.saasListingComposerDraft
   const localSummary = saasListingDraftPreflightSummary(draft, ctx, pendingConfirmations);
   const coverage = saasListingEbayFieldCoverage(draft, ctx);
   const assetCheck = localSummary.checks.find((item) => item.key === "assets") || {};
+  const confirmation = saasLatestPublishConfirmation() || pendingConfirmations[0] || null;
+  const execution = confirmation?.confirmation_id ? saasExecutionResultForConfirmation(confirmation.confirmation_id, "publish_listing") : null;
+  const executionStatus = execution?.status || execution?.result?.status || "";
+  const hasConfirmation = Boolean(confirmation?.confirmation_id);
+  const confirmationApproved = confirmation?.status === "approved";
+  const hasExecution = Boolean(execution);
   const primary =
     localSummary.red > 0
       ? {
@@ -12200,6 +12206,23 @@ function renderSaasListingNextActionPanel(draft = state.saasListingComposerDraft
             detail: "确认单已经生成，下一步由你复核后再决定是否放行。",
             disabled: false,
           }
+        : hasExecution
+          ? {
+              action: "open-activity",
+              label: "查看发布回执",
+              detail:
+                executionStatus === "published_to_ebay"
+                  ? "发布结果已经回填；可以查看操作记录和平台回执。"
+                  : "你的确认已经完成，系统已记录安全交接；当前没有绕过发布前校验写入 eBay。",
+              disabled: false,
+            }
+          : confirmationApproved
+            ? {
+                action: "open-confirm",
+                label: "查看确认结果",
+                detail: "确认已经完成，系统正在等待或整理发布回执；不会绕过发布前校验。",
+                disabled: false,
+              }
         : {
             action: "create-publish-confirmation",
             label: "生成确认单",
@@ -12235,9 +12258,20 @@ function renderSaasListingNextActionPanel(draft = state.saasListingComposerDraft
     },
     {
       step: "04",
-      title: "确认中心",
-      value: pendingConfirmations.length ? `${pendingConfirmations.length} 个确认项` : localSummary.readyForConfirmation ? "可生成确认单" : "等待资料完整",
-      tone: pendingConfirmations.length ? "green" : localSummary.readyForConfirmation ? "amber" : "neutral",
+      title: hasExecution ? "发布回执" : "确认中心",
+      value:
+        executionStatus === "published_to_ebay"
+          ? "已回填发布结果"
+          : hasExecution
+            ? "已记录安全交接"
+            : confirmationApproved
+              ? "已确认，等待回执"
+              : pendingConfirmations.length
+                ? `${pendingConfirmations.length} 个确认项`
+                : localSummary.readyForConfirmation
+                  ? "可生成确认单"
+                  : "等待资料完整",
+      tone: hasExecution || confirmationApproved || pendingConfirmations.length ? "green" : localSummary.readyForConfirmation ? "amber" : "neutral",
     },
   ];
   return `
@@ -12276,7 +12310,7 @@ function renderSaasListingNextActionPanel(draft = state.saasListingComposerDraft
         <button class="secondary-action" type="button" data-saas-action="open-media">去素材工坊</button>
         <button class="secondary-action" type="button" data-saas-action="run-pretest-check">本地体检</button>
         <button class="secondary-action" type="button" data-saas-action="create-publish-confirmation" ${state.saasLoading || localSummary.red > 0 ? "disabled" : ""}>生成确认单</button>
-        <button class="secondary-action" type="button" data-saas-action="open-confirm" ${pendingConfirmations.length ? "" : "disabled"}>打开确认中心</button>
+        <button class="secondary-action" type="button" data-saas-action="open-confirm" ${hasConfirmation ? "" : "disabled"}>打开确认中心</button>
       </div>
     </section>
   `;

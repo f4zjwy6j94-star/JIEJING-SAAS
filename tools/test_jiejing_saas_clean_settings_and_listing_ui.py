@@ -462,6 +462,17 @@ def main() -> None:
     advanced_index = composer_body.index("renderSaasListingAdvancedWorkDetails")
     if not (source_cards_index < draft_editor_index < media_index < next_action_index < advanced_index):
         raise AssertionError("Listing daily surface must flow from source selection to draft, media, one next action, then collapsed advanced checks")
+    next_action_start = app_js.index("function renderSaasListingNextActionPanel")
+    next_action_end = app_js.index("function renderSaasListingWorkflowProofPanel", next_action_start)
+    next_action_body = app_js[next_action_start:next_action_end]
+    for receipt_marker in (
+        "saasLatestPublishConfirmation()",
+        "saasExecutionResultForConfirmation",
+        "查看发布回执",
+        "已记录安全交接",
+        "已确认，等待回执",
+    ):
+        require(next_action_body, receipt_marker, "Listing visible confirmation and execution receipt state")
     for advanced_only in (
         "renderSaasListingStatusBar",
         "renderSaasListingWorkflowProofPanel",

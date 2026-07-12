@@ -432,7 +432,17 @@ async function main() {
   await fixturePage.close();
   await page.setInputFiles("#mediaSourceFileInput", sourceFixturePath);
   await page.waitForFunction(
-    () => Boolean(state.saasMediaSourceUpload?.asset_id && /^https:\/\//i.test(String(state.saasMediaSourceUpload?.source_url || ""))),
+    () => {
+      const assetId = String(state.saasMediaSourceUpload?.asset_id || "");
+      try {
+        const sourceUrl = new URL(String(state.saasMediaSourceUpload?.source_url || ""));
+        const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(sourceUrl.hostname);
+        const transportAllowed = sourceUrl.protocol === "https:" || (isLoopback && sourceUrl.protocol === "http:");
+        return Boolean(assetId && transportAllowed && sourceUrl.searchParams.get("signature"));
+      } catch (_error) {
+        return false;
+      }
+    },
     null,
     { timeout: 60000 },
   );
@@ -441,7 +451,18 @@ async function main() {
     content_type: state.saasMediaSourceUpload?.content_type || "",
     size_bytes: state.saasMediaSourceUpload?.size_bytes || 0,
     listing_project_key: state.saasMediaSourceUpload?.listing_project_key || "",
-    source_url_signed: /^https:\/\/.+[?&]signature=/.test(String(state.saasMediaSourceUpload?.source_url || "")),
+    source_url_signed: (() => {
+      try {
+        const sourceUrl = new URL(String(state.saasMediaSourceUpload?.source_url || ""));
+        const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(sourceUrl.hostname);
+        return Boolean(
+          (sourceUrl.protocol === "https:" || (isLoopback && sourceUrl.protocol === "http:")) &&
+            sourceUrl.searchParams.get("signature"),
+        );
+      } catch (_error) {
+        return false;
+      }
+    })(),
     secret_exposed: JSON.stringify(state.saasMediaSourceUpload || {}).toLowerCase().includes("api_key"),
   }));
 

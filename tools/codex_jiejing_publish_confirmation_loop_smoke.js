@@ -449,7 +449,15 @@ async function main() {
     .screenshot({ path: path.join(outDir, "04-confirm-center-approved.png"), fullPage: true, timeout: 15000 })
     .catch((error) => screenshotFailures.push({ view: "confirm-approved", error: String(error.message || error).slice(0, 300) }));
   await page.evaluate(() => setView("product", { preserveFlowKey: true }));
-  await page.waitForSelector("#view-product.is-active .saas-listing-publish-loop", { timeout: 60000 });
+  await page.waitForFunction(
+    () => {
+      const panel = document.querySelector("#view-product.is-active .saas-listing-next-action-panel");
+      const text = panel?.innerText || "";
+      return Boolean(panel && panel.offsetParent !== null && (text.includes("已记录安全交接") || text.includes("已回填发布结果")));
+    },
+    null,
+    { timeout: 60000 },
+  );
   await page
     .screenshot({ path: path.join(outDir, "05-product-publish-receipt.png"), fullPage: true, timeout: 15000 })
     .catch((error) => screenshotFailures.push({ view: "product-publish-receipt", error: String(error.message || error).slice(0, 300) }));
@@ -457,18 +465,18 @@ async function main() {
   const ui = await page.evaluate((confirmationId) => {
     const product = document.querySelector("#view-product.is-active");
     const confirm = document.querySelector("#view-confirm");
-    const loop = product?.querySelector(".saas-listing-publish-loop");
-    const feedback = product?.querySelector(".saas-listing-publish-feedback");
+    const nextAction = product?.querySelector(".saas-listing-next-action-panel");
     const confirmations = typeof state !== "undefined" && Array.isArray(state.saasConfirmations) ? state.saasConfirmations : [];
     const executions = typeof state !== "undefined" && Array.isArray(state.saasExecutionResults) ? state.saasExecutionResults : [];
     const confirmation = confirmations.find((item) => item?.confirmation_id === confirmationId) || null;
     const execution = executions.find((record) => record?.confirmation_id === confirmationId || record?.result?.audit?.confirmation_id === confirmationId) || null;
     const text = [product?.innerText || "", confirm?.innerText || ""].join("\n");
+    const nextActionText = nextAction?.innerText || "";
     return {
-      loop_visible: Boolean(loop && loop.offsetParent !== null),
-      feedback_visible: Boolean(feedback && feedback.offsetParent !== null),
-      has_loop_copy: text.includes("草稿到确认中心再回到发布回执") && text.includes("没有通过系统体检不会写入 eBay"),
-      has_receipt_copy: text.includes("发布回执") && (text.includes("已记录交接") || text.includes("结果会回写到 Listing")),
+      loop_visible: Boolean(nextAction && nextAction.offsetParent !== null),
+      feedback_visible: Boolean(nextAction && nextAction.offsetParent !== null),
+      has_loop_copy: nextActionText.includes("发布回执") && text.includes("当前没有绕过发布前校验写入 eBay"),
+      has_receipt_copy: nextActionText.includes("发布回执") && nextActionText.includes("已记录安全交接"),
       has_confirm_center_copy: text.includes("你没点头前不会执行") && text.includes("点同意后"),
       confirmation_status: confirmation?.status || "",
       execution_status: execution?.status || execution?.result?.status || "",
