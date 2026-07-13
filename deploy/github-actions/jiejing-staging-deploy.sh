@@ -122,6 +122,15 @@ printf '%s' "$JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN" | \
   sudo -n python3 "$release_dir/tools/jiejing_upsert_private_env_secret.py" \
     "$DEPLOY_ROOT/private/jiejing-saas.staging-oauth.env" \
     JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN
+if [[ -z "${JIEJING_EBAY_CLIENT_SECRET:-}" ]]; then
+  echo "REFUSE_MISSING_EBAY_CLIENT_SECRET=1" >&2
+  exit 20
+fi
+printf '%s' "$JIEJING_EBAY_CLIENT_SECRET" | \
+  sudo -n python3 "$release_dir/tools/jiejing_upsert_private_env_secret.py" \
+    "$DEPLOY_ROOT/private/jiejing-saas.staging-oauth.env" \
+    JIEJING_EBAY_CLIENT_SECRET
+unset JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN JIEJING_EBAY_CLIENT_SECRET
 
 mkdir -p "$backup_dir/app"
 rsync -a --delete \

@@ -56,6 +56,8 @@ def main() -> int:
         "Set up Node for frontend syntax check",
         "node-version: \"20\"",
         "JIEJING_DEPLOY_DRY_RUN",
+        "JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN: ${{ secrets.JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN }}",
+        "JIEJING_EBAY_CLIENT_SECRET: ${{ secrets.JIEJING_EBAY_CLIENT_SECRET }}",
         "bash deploy/github-actions/jiejing-staging-deploy.sh",
     ]
     required_rollback_workflow = [
@@ -95,6 +97,9 @@ def main() -> int:
         "node --check app.js",
         "JIEJING_GITHUB_ACTION_DEPLOY_MANIFEST.txt",
         "PATCH_APPLIED=0",
+        "REFUSE_MISSING_EBAY_CLIENT_SECRET=1",
+        "JIEJING_EBAY_CLIENT_SECRET",
+        "unset JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN JIEJING_EBAY_CLIENT_SECRET",
         "sudo -n JIEJING_APP_DIR=",
         "deploy/apply-staging-patch.sh",
     ]

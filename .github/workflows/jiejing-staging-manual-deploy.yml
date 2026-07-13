@@ -78,6 +78,7 @@ jobs:
       JIEJING_STAGING_DEPLOY_CONFIRM: ${{ inputs.confirm_staging_deploy }}
       JIEJING_DEPLOY_DRY_RUN: ${{ inputs.deploy_mode == 'apply' && '0' || '1' }}
       JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN: ${{ secrets.JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN }}
+      JIEJING_EBAY_CLIENT_SECRET: ${{ secrets.JIEJING_EBAY_CLIENT_SECRET }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
