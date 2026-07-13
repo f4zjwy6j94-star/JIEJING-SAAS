@@ -257,6 +257,24 @@ def main() -> int:
             return fail("private env secret upsert should succeed without printing secret material")
         if private_env.read_text(encoding="utf-8").strip() != f"JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN={env_secret}":
             return fail("private env secret upsert did not write the intended backend-only key")
+        client_secret = "PRD-client-secret-rotation-test-1234567890"
+        client_secret_upsert = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "tools" / "jiejing_upsert_private_env_secret.py"),
+                str(private_env),
+                "JIEJING_EBAY_CLIENT_SECRET",
+            ],
+            input=client_secret,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if client_secret_upsert.returncode != 0 or client_secret_upsert.stdout or client_secret_upsert.stderr:
+            return fail("eBay client secret upsert should succeed without printing secret material")
+        private_env_text = private_env.read_text(encoding="utf-8")
+        if f"JIEJING_EBAY_CLIENT_SECRET={client_secret}" not in private_env_text:
+            return fail("private env secret upsert did not write the rotated eBay client secret")
         account = repository.create_user_with_company(
             email="account-deletion-owner@example.test",
             password="account-deletion-password",
