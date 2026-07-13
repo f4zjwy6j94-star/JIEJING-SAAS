@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -409,6 +410,9 @@ def _seed_oauth_request(*, case_key: str, port: int) -> tuple[SaaSSettings, SaaS
         user_id=user_id,
         marketplace_id="EBAY_US",
     )
+    oauth_query = urllib.parse.parse_qs(urllib.parse.urlparse(plan["authorization_url"]).query)
+    if oauth_query.get("prompt") != ["login"]:
+        raise AssertionError("seller OAuth should force an explicit eBay login before consent")
     request = repo.create_oauth_authorization_request(
         company_id=company_id,
         store_id=store["store_id"],

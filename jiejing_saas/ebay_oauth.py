@@ -512,6 +512,7 @@ class EbayOAuthPlanner:
             "response_type": "code",
             "scope": " ".join(scopes),
             "state": state_nonce,
+            "prompt": "login",
         }
         return f"{base}?{urllib.parse.urlencode(params)}"
 
