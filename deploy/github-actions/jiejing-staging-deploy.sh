@@ -114,6 +114,15 @@ if [[ ! -d "$resolved_app_dir" || ! -f "$resolved_app_dir/app.js" ]]; then
   exit 18
 fi
 
+if [[ -z "${JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN:-}" ]]; then
+  echo "REFUSE_MISSING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN=1" >&2
+  exit 19
+fi
+printf '%s' "$JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN" | \
+  sudo -n python3 "$release_dir/tools/jiejing_upsert_private_env_secret.py" \
+    "$DEPLOY_ROOT/private/jiejing-saas.staging-oauth.env" \
+    JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN
+
 mkdir -p "$backup_dir/app"
 rsync -a --delete \
   --exclude '/output/private-backups/' \

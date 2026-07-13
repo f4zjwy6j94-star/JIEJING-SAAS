@@ -49,6 +49,11 @@ jobs:
           jiejing_saas/operational_health.py
           jiejing_saas/repository.py
           jiejing_saas/infrastructure_drivers.py
+          jiejing_saas/ebay_account_deletion.py
+          jiejing_saas/ebay_oauth_callback.py
+          jiejing_saas/redis_queue_runtime.py
+          jiejing_saas/vault_secret_resolver.py
+          jiejing_saas/worker.py
 
       - name: Frontend syntax
         run: node --check app.js
@@ -62,6 +67,11 @@ jobs:
           python tools/test_jiejing_infrastructure_drivers.py
           python tools/test_jiejing_stripe_checkout_portal.py
           python tools/test_jiejing_new_ebay_account_low_risk_runbook.py
+          python tools/test_jiejing_ebay_account_deletion.py
+          python tools/test_jiejing_ebay_oauth_callback_vault.py
+          python tools/test_jiejing_vault_secret_resolver.py
+          python tools/test_jiejing_tencent_cloud_integrations.py
+          python tools/test_jiejing_sqlite_to_postgres_rehearsal.py
 
       - name: Deployment automation guardrails
         run: |

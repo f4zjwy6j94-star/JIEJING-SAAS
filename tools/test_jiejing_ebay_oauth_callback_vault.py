@@ -49,6 +49,8 @@ FORBIDDEN = (
     "CALLBACK-MANAGED-REFRESH-MUST-NOT-LEAK",
     "CALLBACK-MANAGED-SECRET-MUST-NOT-LEAK",
     "VAULT-CALLBACK-TOKEN-MUST-NOT-LEAK",
+    "CALLBACK-IMMUTABLE-USER-MUST-NOT-LEAK",
+    "CALLBACK-USERNAME-MUST-NOT-LEAK",
     "Bearer ",
     "Basic ",
 )
@@ -73,6 +75,10 @@ def main() -> int:
         expired_result = _run_expired_state_blocked(local_secret_path=local_secret_path)
         if expired_result != "ok":
             return fail(expired_result)
+
+        identity_failure_result = _run_identity_mapping_failure_no_secret(local_secret_path=local_secret_path)
+        if identity_failure_result != "ok":
+            return fail(identity_failure_result)
 
         managed_result = _run_managed_vault_callback()
         if managed_result != "ok":
@@ -122,6 +128,8 @@ def _run_local_secret_resolver_callback(*, local_secret_path: Path) -> str:
         return "local callback should update secret_ref status"
     if result.get("connection", {}).get("status") != "read_only_authorized":
         return "local callback should create read-only platform connection"
+    if result.get("account_deletion_identity_mapping", {}).get("immutable_selector_ready") is not True:
+        return "local callback should map the immutable eBay user selector"
     if result.get("access_token_returned_to_frontend") is not False or result.get("refresh_token_returned_to_frontend") is not False:
         return "local callback must not return tokens to frontend"
     public_serialized = json.dumps(result, ensure_ascii=False)
@@ -218,6 +226,44 @@ def _run_expired_state_blocked(*, local_secret_path: Path) -> str:
     return "ok"
 
 
+def _run_identity_mapping_failure_no_secret(*, local_secret_path: Path) -> str:
+    _clear_env()
+    _base_oauth_env(environment="local_dev")
+    os.environ["JIEJING_EBAY_CLIENT_SECRET"] = "CALLBACK-CLIENT-SECRET-MUST-NOT-LEAK"
+    os.environ["JIEJING_VAULT_LOCAL_SECRET_RESOLVER_ENABLED"] = "true"
+    os.environ["JIEJING_VAULT_LOCAL_SECRET_STORE_PATH"] = str(local_secret_path)
+    local_secret_path.unlink(missing_ok=True)
+    settings, repo, store, request = _seed_oauth_request(case_key="identity-failure", port=8824)
+
+    def transport(request_obj: Any, timeout: float) -> tuple[int, dict[str, str], bytes]:
+        if request_obj.get_method() == "POST" and "/identity/v1/oauth2/token" in request_obj.full_url:
+            return _oauth_response(
+                access_token="CALLBACK-ACCESS-TOKEN-MUST-NOT-LEAK",
+                refresh_token="CALLBACK-REFRESH-TOKEN-MUST-NOT-LEAK",
+            )
+        return 503, {"content-type": "application/json"}, b'{"error":"temporary"}'
+
+    result = process_ebay_oauth_callback(
+        repository=repo,
+        settings=settings,
+        secret_store_boundary=SecretStoreBoundary(settings),
+        ebay_oauth_planner=EbayOAuthPlanner(settings),
+        state=request["state_nonce"],
+        code="UNIT_AUTH_CODE",
+        error="",
+        oauth_transport=transport,
+    )
+    if result.get("status") != "callback_exchange_identity_mapping_failed":
+        return "identity API failure should stop OAuth before credential persistence"
+    if repo.list_connections(company_id=store["company_id"], store_id=store["store_id"]):
+        return "identity mapping failure must not create an unmapped active eBay connection"
+    if repo.list_secret_refs(company_id=store["company_id"], store_id=store["store_id"]):
+        return "identity mapping failure must not create an orphaned refresh-token reference"
+    if local_secret_path.exists():
+        return "identity mapping failure must not write the refresh token to local secret storage"
+    return "ok"
+
+
 def _run_managed_vault_callback() -> str:
     _clear_env()
     _base_oauth_env(environment="staging")
@@ -235,6 +281,20 @@ def _run_managed_vault_callback() -> str:
     vault_seen = {"post": False, "body_had_refresh_token": False}
 
     def oauth_transport(request_obj: Any, timeout: float) -> tuple[int, dict[str, str], bytes]:
+        if request_obj.get_method() == "GET" and request_obj.full_url.endswith("/commerce/identity/v1/user/"):
+            return (
+                200,
+                {"content-type": "application/json"},
+                json.dumps(
+                    {
+                        "userId": "CALLBACK-IMMUTABLE-USER-MUST-NOT-LEAK",
+                        "username": "CALLBACK-USERNAME-MUST-NOT-LEAK",
+                        "registrationMarketplaceId": "EBAY_US",
+                        "accountType": "BUSINESS",
+                        "status": "CONFIRMED",
+                    }
+                ).encode("utf-8"),
+            )
         oauth_seen["post"] = True
         return _oauth_response(
             access_token="CALLBACK-MANAGED-ACCESS-MUST-NOT-LEAK",
@@ -367,6 +427,22 @@ def _base_oauth_env(*, environment: str) -> None:
 
 def _fake_oauth_transport(*, access_token: str, refresh_token: str) -> Any:
     def transport(request_obj: Any, timeout: float) -> tuple[int, dict[str, str], bytes]:
+        if request_obj.get_method() == "GET" and request_obj.full_url.endswith("/commerce/identity/v1/user/"):
+            if request_obj.get_header("Authorization") != f"Bearer {access_token}":
+                raise AssertionError("identity request should use the transient access token")
+            return (
+                200,
+                {"content-type": "application/json"},
+                json.dumps(
+                    {
+                        "userId": "CALLBACK-IMMUTABLE-USER-MUST-NOT-LEAK",
+                        "username": "CALLBACK-USERNAME-MUST-NOT-LEAK",
+                        "registrationMarketplaceId": "EBAY_US",
+                        "accountType": "INDIVIDUAL",
+                        "status": "CONFIRMED",
+                    }
+                ).encode("utf-8"),
+            )
         if request_obj.get_method() != "POST" or "/identity/v1/oauth2/token" not in request_obj.full_url:
             return 404, {"content-type": "application/json"}, b'{"error":"missing"}'
         return _oauth_response(access_token=access_token, refresh_token=refresh_token)

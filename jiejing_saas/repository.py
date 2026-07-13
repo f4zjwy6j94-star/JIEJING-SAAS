@@ -422,6 +422,19 @@ class SaaSRepository:
                   billing_event_json text not null
                 );
 
+                create table if not exists ebay_account_deletion_events (
+                  event_key text primary key,
+                  company_id text,
+                  store_id text,
+                  connection_id text,
+                  task_id text,
+                  job_id text,
+                  status text not null,
+                  created_at text not null,
+                  updated_at text not null,
+                  deletion_event_json text not null
+                );
+
                 create table if not exists api_rate_limit_buckets (
                   bucket_key_hash text primary key,
                   scope text not null,
@@ -488,6 +501,12 @@ class SaaSRepository:
                 migration_id="20260711_revocable_user_sessions",
                 checksum="jiejing-revocable-user-sessions-v20260711",
                 summary="Adds server-side session identifiers so logout immediately revokes signed browser and bearer sessions.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260713_ebay_account_deletion_events",
+                checksum="jiejing-ebay-account-deletion-events-v20260713",
+                summary="Adds sanitized, idempotent eBay marketplace account deletion receipts and compliance jobs.",
             )
 
     def _initialize_postgres(self) -> None:
@@ -1070,6 +1089,7 @@ class SaaSRepository:
         connection_type = str(payload.get("connection_type") or "oauth")
         scopes = payload.get("scopes") if isinstance(payload.get("scopes"), list) else []
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        stored_metadata = _redact_secret_like(metadata)
         has_secret_input = any(key in payload for key in ("token", "access_token", "refresh_token", "client_secret", "api_key"))
         provided_secret_ref = str(payload.get("secret_ref") or "").strip()
         secret_ref = None
@@ -1122,7 +1142,7 @@ class SaaSRepository:
                 "status": status,
                 "scopes": scopes,
                 "secret_ref": secret_ref,
-                "metadata": _redact_secret_like(metadata),
+                "metadata": _public_connection_metadata(stored_metadata),
                 "created_by": user_id,
                 "created_at": created_at,
                 "secret_exposed": False,
@@ -1143,7 +1163,7 @@ class SaaSRepository:
                     status,
                     json.dumps(scopes, ensure_ascii=False),
                     secret_ref,
-                    json.dumps(record["metadata"], ensure_ascii=False),
+                    json.dumps(stored_metadata, ensure_ascii=False),
                     user_id,
                     created_at,
                 ),
@@ -4147,6 +4167,378 @@ class SaaSRepository:
             "secret_exposed": False,
         }
 
+    def accept_ebay_account_deletion_event(self, *, event: dict[str, Any]) -> dict[str, Any]:
+        """Persist one sanitized eBay deletion receipt and at most one compliance job."""
+
+        self.initialize()
+        event_key = str(event.get("event_key") or "")
+        payload_sha256 = str(event.get("payload_sha256") or "")
+        if not re.fullmatch(r"[0-9a-f]{64}", event_key) or not re.fullmatch(r"[0-9a-f]{64}", payload_sha256):
+            raise ValueError("invalid eBay account deletion event")
+        allowed_keys = {
+            "event_key", "notification_id_hash", "topic", "schema_version", "deprecated",
+            "event_date", "publish_date", "publish_attempt_count", "user_id_hash",
+            "username_hash", "eias_identity_hash", "payload_sha256", "signature_present",
+            "raw_payload_persisted", "raw_identity_persisted", "secret_exposed",
+        }
+        safe_event = _redact_secret_like({key: value for key, value in event.items() if key in allowed_keys})
+        created_at = now_iso()
+        with self._connect() as conn:
+            existing = conn.execute("select * from ebay_account_deletion_events where event_key = ?", (event_key,)).fetchone()
+            if existing:
+                record = _load_json_field(existing["deletion_event_json"])
+                if str(record.get("payload_sha256") or "") != payload_sha256:
+                    return {
+                        "status": "idempotency_conflict", "event_key": event_key, "duplicate": True,
+                        "data_mutated": False, "secret_exposed": False,
+                    }
+                return {
+                    **record,
+                    "status": str(existing["status"]),
+                    "company_id": existing["company_id"],
+                    "store_id": existing["store_id"],
+                    "connection_id": existing["connection_id"],
+                    "task_id": existing["task_id"],
+                    "job_id": existing["job_id"],
+                    "duplicate": True,
+                    "secret_exposed": False,
+                }
+
+            match = self._find_ebay_connection_for_deletion(conn, event=safe_event)
+            if not match:
+                record = {
+                    **safe_event,
+                    "status": "completed_no_matching_connection",
+                    "matched_connection": False,
+                    "data_mutated": False,
+                    "duplicate": False,
+                    "secret_exposed": False,
+                }
+                conn.execute(
+                    """
+                    insert into ebay_account_deletion_events (
+                      event_key, company_id, store_id, connection_id, task_id, job_id,
+                      status, created_at, updated_at, deletion_event_json
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (event_key, None, None, None, None, None, record["status"], created_at, created_at, json.dumps(record, ensure_ascii=False)),
+                )
+                return record
+
+            company_id = str(match["company_id"])
+            store_id = str(match["store_id"])
+            connection_id = str(match["connection_id"])
+            user_id = str(match["created_by"])
+            task_id = _id("task")
+            job_id = _id("job")
+            task_input = {
+                "event_key": event_key,
+                "connection_id": connection_id,
+                "topic": "MARKETPLACE_ACCOUNT_DELETION",
+                "signature_verified": True,
+                "real_platform_writes_enabled": False,
+                "secret_exposed": False,
+            }
+            conn.execute(
+                """
+                insert into tasks (
+                  task_id, company_id, store_id, user_id, runtime_run_id, task_type, title,
+                  status, created_at, updated_at, input_json, output_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id, company_id, store_id, user_id, None, "ebay_account_deletion_compliance",
+                    "eBay marketplace account deletion compliance", "queued", created_at, created_at,
+                    json.dumps(task_input, ensure_ascii=False), json.dumps({}, ensure_ascii=False),
+                ),
+            )
+            job_data = {
+                "kind": "ebay_account_deletion",
+                "event_key": event_key,
+                "connection_id": connection_id,
+                "signature_verified": True,
+                "real_platform_writes_enabled": False,
+                "secret_exposed": False,
+            }
+            conn.execute(
+                """
+                insert into queue_jobs (
+                  job_id, task_id, company_id, status, attempts, max_attempts,
+                  created_at, updated_at, job_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (job_id, task_id, company_id, "queued", 0, 5, created_at, created_at, json.dumps(job_data, ensure_ascii=False)),
+            )
+            record = {
+                **safe_event,
+                "status": "queued",
+                "company_id": company_id,
+                "store_id": store_id,
+                "connection_id": connection_id,
+                "task_id": task_id,
+                "job_id": job_id,
+                "matched_connection": True,
+                "data_mutated": False,
+                "duplicate": False,
+                "secret_exposed": False,
+            }
+            conn.execute(
+                """
+                insert into ebay_account_deletion_events (
+                  event_key, company_id, store_id, connection_id, task_id, job_id,
+                  status, created_at, updated_at, deletion_event_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_key, company_id, store_id, connection_id, task_id, job_id, "queued",
+                    created_at, created_at, json.dumps(record, ensure_ascii=False),
+                ),
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                user_id=user_id,
+                actor_type="system",
+                action_type="ebay.account_deletion.received",
+                target_type="ebay_account_deletion_event",
+                target_id=event_key,
+                summary="Verified eBay account deletion notification queued for scoped compliance processing.",
+                details={
+                    "connection_id": connection_id, "task_id": task_id, "job_id": job_id,
+                    "raw_identity_persisted": False, "real_platform_writes_enabled": False, "secret_exposed": False,
+                },
+            )
+        return record
+
+    def ebay_account_deletion_event_count(self) -> int:
+        self.initialize()
+        with self._connect() as conn:
+            row = conn.execute("select count(*) as count from ebay_account_deletion_events").fetchone()
+        return int(row["count"] if row else 0)
+
+    def process_ebay_account_deletion_event(
+        self,
+        *,
+        event_key: str,
+        company_id: str,
+        connection_id: str,
+    ) -> dict[str, Any]:
+        """Irreversibly purge one matched eBay store while preserving a minimal receipt."""
+
+        self.initialize()
+        completed_at = now_iso()
+        with self._connect() as conn:
+            event_row = conn.execute(
+                """
+                select * from ebay_account_deletion_events
+                where event_key = ? and company_id = ? and connection_id = ?
+                """,
+                (event_key, company_id, connection_id),
+            ).fetchone()
+            if not event_row:
+                raise KeyError("eBay account deletion event not found")
+            if str(event_row["status"]) == "completed":
+                existing = _load_json_field(event_row["deletion_event_json"])
+                return {**existing, "status": "completed", "duplicate": True, "secret_exposed": False}
+            connection = conn.execute(
+                """
+                select * from platform_connections
+                where connection_id = ? and company_id = ? and lower(platform) = 'ebay'
+                """,
+                (connection_id, company_id),
+            ).fetchone()
+            if not connection or str(connection["store_id"]) != str(event_row["store_id"]):
+                raise KeyError("matched eBay connection not found")
+            store_id = str(connection["store_id"])
+            user_id = str(connection["created_by"])
+            store_connections = conn.execute(
+                """
+                select connection_id, secret_ref from platform_connections
+                where company_id = ? and store_id = ? and lower(platform) = 'ebay'
+                """,
+                (company_id, store_id),
+            ).fetchall()
+            compliance_task_id = str(event_row["task_id"] or "")
+            compliance_job_id = str(event_row["job_id"] or "")
+            task_rows = conn.execute(
+                "select task_id from tasks where company_id = ? and store_id = ? and task_id <> ?",
+                (company_id, store_id, compliance_task_id),
+            ).fetchall()
+            task_ids = [str(row["task_id"]) for row in task_rows]
+            deleted_counts: dict[str, int] = {}
+
+            def delete_where(table: str, where: str, params: tuple[Any, ...]) -> None:
+                cursor = conn.execute(f"delete from {table} where {where}", params)
+                deleted_counts[table] = int(cursor.rowcount if cursor.rowcount >= 0 else 0)
+
+            if task_ids:
+                placeholders = ",".join("?" for _ in task_ids)
+                ids = tuple(task_ids)
+                delete_where("execution_results", f"task_id in ({placeholders})", ids)
+                delete_where("confirmations", f"task_id in ({placeholders})", ids)
+                delete_where("reports", f"task_id in ({placeholders})", ids)
+                delete_where("media_asset_jobs", f"task_id in ({placeholders})", ids)
+                delete_where("task_steps", f"task_id in ({placeholders})", ids)
+                delete_where("queue_jobs", f"task_id in ({placeholders})", ids)
+                delete_where("tasks", f"task_id in ({placeholders})", ids)
+            delete_where("platform_data_packets", "company_id = ? and store_id = ?", (company_id, store_id))
+            delete_where("merchant_memory", "company_id = ? and store_id = ?", (company_id, store_id))
+            delete_where("merchant_ceo_commands", "company_id = ? and store_id = ?", (company_id, store_id))
+            delete_where("ai_ceo_chat_turns", "company_id = ? and store_id = ?", (company_id, store_id))
+            delete_where("audit_logs", "company_id = ? and store_id = ?", (company_id, store_id))
+
+            secret_refs = sorted({str(row["secret_ref"] or "") for row in store_connections if row["secret_ref"]})
+            for secret_ref in secret_refs:
+                minimal_secret_metadata = {
+                    "revoked_for": "ebay_marketplace_account_deletion",
+                    "revoked_at": completed_at,
+                    "secret_value_stored": False,
+                    "secret_exposed": False,
+                }
+                conn.execute(
+                    """
+                    update secret_refs set status = ?, metadata_json = ?
+                    where company_id = ? and store_id = ? and secret_ref = ?
+                    """,
+                    (
+                        "revoked_account_deleted",
+                        json.dumps(minimal_secret_metadata, ensure_ascii=False),
+                        company_id,
+                        store_id,
+                        secret_ref,
+                    ),
+                )
+
+            connection_metadata = {
+                "revoked_for": "ebay_marketplace_account_deletion",
+                "revoked_at": completed_at,
+                "identity_selectors_removed": True,
+                "real_platform_writes_enabled": False,
+                "secret_exposed": False,
+            }
+            conn.execute(
+                """
+                update platform_connections
+                set status = ?, scopes_json = ?, metadata_json = ?
+                where company_id = ? and store_id = ? and lower(platform) = 'ebay'
+                """,
+                (
+                    "revoked_account_deleted",
+                    json.dumps([], ensure_ascii=False),
+                    json.dumps(connection_metadata, ensure_ascii=False),
+                    company_id,
+                    store_id,
+                ),
+            )
+            store_row = conn.execute(
+                "select store_json from stores where company_id = ? and store_id = ?",
+                (company_id, store_id),
+            ).fetchone()
+            store_record = _load_json_field(store_row["store_json"]) if store_row else {}
+            store_record.update(
+                {
+                    "store_name": "Disconnected eBay store",
+                    "stage": "account_deleted",
+                    "settings": {},
+                    "account_deletion_completed_at": completed_at,
+                }
+            )
+            conn.execute(
+                """
+                update stores set store_name = ?, stage = ?, store_json = ?
+                where company_id = ? and store_id = ?
+                """,
+                (
+                    store_record["store_name"],
+                    store_record["stage"],
+                    json.dumps(store_record, ensure_ascii=False),
+                    company_id,
+                    store_id,
+                ),
+            )
+            result = {
+                "event_key": event_key,
+                "status": "completed",
+                "company_id": company_id,
+                "store_id": store_id,
+                "connection_id": connection_id,
+                "task_id": compliance_task_id,
+                "job_id": compliance_job_id,
+                "completed_at": completed_at,
+                "deleted_record_counts": deleted_counts,
+                "secret_ref_present": bool(secret_refs),
+                "secret_value_deleted_by_worker": False,
+                "identity_selectors_removed": True,
+                "other_stores_mutated": False,
+                "real_platform_write_performed": False,
+                "secret_exposed": False,
+            }
+            conn.execute(
+                """
+                update ebay_account_deletion_events
+                set status = ?, updated_at = ?, deletion_event_json = ?
+                where event_key = ?
+                """,
+                ("completed", completed_at, json.dumps(result, ensure_ascii=False), event_key),
+            )
+            if compliance_task_id:
+                conn.execute(
+                    "update tasks set status = ?, updated_at = ?, output_json = ? where task_id = ? and company_id = ?",
+                    ("completed", completed_at, json.dumps(result, ensure_ascii=False), compliance_task_id, company_id),
+                )
+            if compliance_job_id:
+                conn.execute(
+                    "update queue_jobs set status = ?, updated_at = ?, job_json = ? where job_id = ? and company_id = ?",
+                    (
+                        "completed",
+                        completed_at,
+                        json.dumps({"kind": "ebay_account_deletion", "event_key": event_key, "status": "completed", "secret_exposed": False}, ensure_ascii=False),
+                        compliance_job_id,
+                        company_id,
+                    ),
+                )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                user_id=user_id,
+                actor_type="system",
+                action_type="ebay.account_deletion.completed",
+                target_type="ebay_account_deletion_event",
+                target_id=event_key,
+                summary="Scoped eBay account data was deleted or irreversibly anonymized.",
+                details={
+                    "deleted_record_counts": deleted_counts,
+                    "identity_selectors_removed": True,
+                    "ebay_connections_revoked": len(store_connections),
+                    "credential_refs_revoked": len(secret_refs),
+                    "other_stores_mutated": False,
+                    "real_platform_write_performed": False,
+                    "secret_exposed": False,
+                },
+            )
+        return result
+
+    @staticmethod
+    def _find_ebay_connection_for_deletion(conn: sqlite3.Connection, *, event: dict[str, Any]) -> sqlite3.Row | None:
+        selectors = {
+            "ebay_user_id_hash": str(event.get("user_id_hash") or ""),
+            "ebay_username_hash": str(event.get("username_hash") or ""),
+            "ebay_eias_identity_hash": str(event.get("eias_identity_hash") or ""),
+        }
+        rows = conn.execute(
+            """
+            select connection_id, company_id, store_id, created_by, metadata_json
+            from platform_connections where lower(platform) = 'ebay' order by created_at desc
+            """
+        ).fetchall()
+        for row in rows:
+            metadata = _load_json_field(row["metadata_json"])
+            if any(expected and str(metadata.get(key) or "") == expected for key, expected in selectors.items()):
+                return row
+        return None
+
     def list_audit_logs(self, *, company_id: str, limit: int = 100) -> list[dict[str, Any]]:
         self.initialize()
         with self._connect() as conn:
@@ -4277,6 +4669,7 @@ class SaaSRepository:
             "audit_logs",
             "billing_subscriptions",
             "billing_webhook_events",
+            "ebay_account_deletion_events",
             "schema_migrations",
         ]
         with self._connect() as conn:
@@ -4347,6 +4740,28 @@ class SaaSRepository:
             ).fetchone()
             report_count = int(conn.execute("select count(*) as count from reports").fetchone()["count"])
             confirmation_count = int(conn.execute("select count(*) as count from confirmations").fetchone()["count"])
+            ebay_identity_rows = conn.execute(
+                """
+                select company_id, store_id, status, metadata_json from platform_connections
+                where lower(platform) = 'ebay'
+                  and status in ('read_only_authorized', 'publish_authorized')
+                """
+            ).fetchall()
+
+        mapped_ebay_identities = 0
+        identity_store_owners: dict[str, set[str]] = {}
+        for identity_row in ebay_identity_rows:
+            metadata = _load_json_field(identity_row["metadata_json"])
+            if isinstance(metadata, dict) and any(
+                str(metadata.get(key) or "")
+                for key in ("ebay_user_id_hash", "ebay_username_hash", "ebay_eias_identity_hash")
+            ):
+                mapped_ebay_identities += 1
+            if isinstance(metadata, dict) and metadata.get("ebay_user_id_hash"):
+                selector = str(metadata["ebay_user_id_hash"])
+                owner = f"{identity_row['company_id']}:{identity_row['store_id']}"
+                identity_store_owners.setdefault(selector, set()).add(owner)
+        duplicate_identity_store_count = sum(max(0, len(owners) - 1) for owners in identity_store_owners.values())
 
         packet_body = latest_packet.get("packet") if isinstance(latest_packet, dict) else {}
         if not isinstance(packet_body, dict):
@@ -4367,6 +4782,9 @@ class SaaSRepository:
             "latest_ebay_token_refresh_success_at": latest_ebay_token_refresh_success["created_at"] if latest_ebay_token_refresh_success else "",
             "report_count": report_count,
             "confirmation_count": confirmation_count,
+            "active_ebay_identity_connections": len(ebay_identity_rows),
+            "mapped_ebay_identity_connections": mapped_ebay_identities,
+            "duplicate_ebay_identity_store_count": duplicate_identity_store_count,
             "secret_exposed": False,
         }
 
@@ -4627,6 +5045,8 @@ class SaaSRepository:
               on billing_subscriptions(provider, provider_subscription_id);
             create index if not exists idx_billing_webhook_events_company_created
               on billing_webhook_events(company_id, created_at);
+            create index if not exists idx_ebay_account_deletion_events_status_updated
+              on ebay_account_deletion_events(status, updated_at);
             create index if not exists idx_api_rate_limit_buckets_scope_expiry
               on api_rate_limit_buckets(scope, expires_epoch);
             """
@@ -5128,7 +5548,7 @@ class SaaSRepository:
             "status": row["status"],
             "scopes": _load_json_field(row["scopes_json"]),
             "secret_ref": row["secret_ref"],
-            "metadata": _load_json_field(row["metadata_json"]),
+            "metadata": _public_connection_metadata(_load_json_field(row["metadata_json"])),
             "created_by": row["created_by"],
             "created_at": row["created_at"],
             "secret_exposed": False,
@@ -5271,6 +5691,12 @@ def _load_json_field(value: Any) -> Any:
     if isinstance(value, (bytes, bytearray)):
         return json.loads(value.decode("utf-8"))
     return json.loads(value)
+
+
+def _public_connection_metadata(value: Any) -> dict[str, Any]:
+    metadata = value if isinstance(value, dict) else {}
+    hidden = {"ebay_user_id_hash", "ebay_username_hash", "ebay_eias_identity_hash"}
+    return {key: item for key, item in metadata.items() if key not in hidden}
 
 
 def _safe_int(value: Any, *, default: int = 0) -> int:

@@ -100,6 +100,7 @@ def main() -> int:
             "vault",
             "vault_adapter_contract",
             "platform_registry",
+            "ebay_account_deletion_notifications",
             "ebay_token_refresh",
             "ebay_read_only_adapter",
             "ebay_live_read_adapter",

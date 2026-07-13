@@ -18,6 +18,7 @@ from .vault_secret_resolver import VaultSecretResolver, build_vault_secret_resol
 
 READ_ONLY_SCOPES = [
     "https://api.ebay.com/oauth/api_scope",
+    "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
     "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
     "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
     "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly",
@@ -26,6 +27,7 @@ READ_ONLY_SCOPES = [
 
 PUBLISH_SCOPES = [
     "https://api.ebay.com/oauth/api_scope",
+    "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
     "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
     "https://api.ebay.com/oauth/api_scope/sell.inventory",
     "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
@@ -531,6 +533,9 @@ class EbayOAuthPlanner:
             scopes.append(text)
         if "https://api.ebay.com/oauth/api_scope" not in scopes:
             scopes.insert(0, "https://api.ebay.com/oauth/api_scope")
+        identity_scope = "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly"
+        if identity_scope not in scopes:
+            scopes.append(identity_scope)
         return scopes or list(READ_ONLY_SCOPES)
 
     def _normalize_publish_scopes(self, requested_scopes: list[str] | None) -> list[str]:

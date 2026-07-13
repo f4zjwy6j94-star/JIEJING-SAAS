@@ -17,6 +17,7 @@ from .config import SaaSSettings
 from .runtime_bridge import RuntimeBridge
 from .repository import SaaSRepository
 from .worker import LocalQueueWorker
+from .media_source_assets import MediaSourceAssetStore
 
 
 DEFAULT_STREAM = "jiejing:queue"
@@ -70,8 +71,20 @@ def publish_redis_queue_job_if_configured(job: dict[str, Any]) -> dict[str, Any]
 
 
 class RedisStreamQueueWorker(LocalQueueWorker):
-    def __init__(self, *, repository: SaaSRepository, runtime_bridge: RuntimeBridge, settings: SaaSSettings | None = None) -> None:
-        super().__init__(repository=repository, runtime_bridge=runtime_bridge, settings=settings)
+    def __init__(
+        self,
+        *,
+        repository: SaaSRepository,
+        runtime_bridge: RuntimeBridge,
+        settings: SaaSSettings | None = None,
+        media_source_asset_store: MediaSourceAssetStore | None = None,
+    ) -> None:
+        super().__init__(
+            repository=repository,
+            runtime_bridge=runtime_bridge,
+            settings=settings,
+            media_source_asset_store=media_source_asset_store,
+        )
         self.queue_url = os.environ.get("JIEJING_QUEUE_URL") or ""
         self.stream = _stream_name()
         self.dead_letter_stream = os.environ.get("JIEJING_REDIS_DEAD_LETTER_STREAM", DEFAULT_DEAD_LETTER_STREAM)
@@ -147,6 +160,16 @@ class RedisStreamQueueWorker(LocalQueueWorker):
                 "secret_exposed": False,
             }
         result = self.run_claimed_job(claimed)
+        if result.get("status") == "retrying":
+            client.xadd(
+                self.stream,
+                {
+                    "job_id": stream_job_id,
+                    "company_id": stream_company_id,
+                    "task_id": str(fields.get("task_id") or ""),
+                    "kind": str(fields.get("kind") or "ebay_account_deletion"),
+                },
+            )
         if result.get("status") == "failed":
             self._dead_letter(client, message_id, fields, reason=str(result.get("error") or "worker_failed")[:120])
         client.xack(self.stream, self.group, message_id)

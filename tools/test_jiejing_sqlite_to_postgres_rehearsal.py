@@ -132,6 +132,26 @@ def main() -> int:
         task_id=task["task_id"],
         job_data={"kind": "runtime_workflow", "source": "standard_data_packet"},
     )
+    repo.accept_ebay_account_deletion_event(
+        event={
+            "event_key": "a" * 64,
+            "notification_id_hash": "a" * 64,
+            "topic": "MARKETPLACE_ACCOUNT_DELETION",
+            "schema_version": "1.0",
+            "deprecated": False,
+            "event_date": "2026-07-13T01:00:00.000Z",
+            "publish_date": "2026-07-13T01:00:01.000Z",
+            "publish_attempt_count": 1,
+            "user_id_hash": "b" * 64,
+            "username_hash": "c" * 64,
+            "eias_identity_hash": "d" * 64,
+            "payload_sha256": "e" * 64,
+            "signature_present": True,
+            "raw_payload_persisted": False,
+            "raw_identity_persisted": False,
+            "secret_exposed": False,
+        }
+    )
     repo.create_media_asset_job(
         company_id=company["company_id"],
         store_id=store["store_id"],
@@ -220,7 +240,7 @@ def main() -> int:
         return fail("rehearsal summary should be ready for isolated import")
     if summary.get("secret_exposed") is not False or summary.get("raw_rows_printed") is not False:
         return fail("summary must not expose raw row values or secrets")
-    for table in ("companies", "users", "stores", "ai_ceo_chat_turns", "platform_data_packets", "tasks", "queue_jobs", "media_asset_jobs", "reports", "confirmations", "execution_results", "audit_logs"):
+    for table in ("companies", "users", "stores", "ai_ceo_chat_turns", "platform_data_packets", "tasks", "queue_jobs", "ebay_account_deletion_events", "media_asset_jobs", "reports", "confirmations", "execution_results", "audit_logs"):
         if summary.get("table_counts", {}).get(table, 0) < 1:
             return fail(f"expected exported rows for {table}")
     if "\"packet_json\"" not in sql or "::jsonb" not in sql:
@@ -235,6 +255,8 @@ def main() -> int:
         return fail("stores must be inserted before account chat turns for foreign keys")
     if not _appears_before(sql, 'insert into "queue_jobs"', 'insert into "media_asset_jobs"'):
         return fail("queue jobs must be inserted before media asset jobs for foreign keys")
+    if not _appears_before(sql, 'insert into "queue_jobs"', 'insert into "ebay_account_deletion_events"'):
+        return fail("queue jobs must be inserted before account deletion receipts for foreign keys")
     if not _appears_before(sql, 'insert into "confirmations"', 'insert into "execution_results"'):
         return fail("confirmations must be inserted before execution results")
     if "local-test-password" in sql:

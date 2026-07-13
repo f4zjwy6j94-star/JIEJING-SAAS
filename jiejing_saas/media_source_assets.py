@@ -212,6 +212,34 @@ class MediaSourceAssetStore:
             raise MediaSourceAssetError("asset_integrity_failed", "media source asset integrity check failed")
         return asset, content
 
+    def purge_store(self, *, company_id: str, store_id: str) -> dict[str, Any]:
+        """Delete every retained source asset owned by one store."""
+
+        removed_files = 0
+        removed_metadata = 0
+        with self._lock:
+            for metadata_path in self.root.glob("*/*.json"):
+                try:
+                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if str(metadata.get("company_id") or "") != str(company_id or ""):
+                    continue
+                if str(metadata.get("store_id") or "") != str(store_id or ""):
+                    continue
+                file_path = metadata_path.with_name(str(metadata.get("file_name") or ""))
+                if file_path.is_file() and file_path.parent == metadata_path.parent:
+                    file_path.unlink(missing_ok=True)
+                    removed_files += 1
+                metadata_path.unlink(missing_ok=True)
+                removed_metadata += 1
+        return {
+            "removed_files": removed_files,
+            "removed_metadata": removed_metadata,
+            "other_stores_mutated": False,
+            "secret_exposed": False,
+        }
+
     def _signature(self, *, asset_id: str, expires: int) -> str:
         payload = f"{asset_id}:{expires}".encode("utf-8")
         return hmac.new(self.signing_secret, payload, hashlib.sha256).hexdigest()

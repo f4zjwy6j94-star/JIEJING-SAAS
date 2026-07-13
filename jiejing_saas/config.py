@@ -29,6 +29,8 @@ class SaaSSettings:
     ebay_client_id: str
     ebay_ru_name: str
     ebay_client_secret_configured: bool
+    ebay_account_deletion_endpoint_url: str
+    ebay_account_deletion_verification_token_configured: bool
     ebay_access_token_configured: bool
     ebay_refresh_token_configured: bool
     ebay_oauth_live_exchange_enabled: bool
@@ -73,6 +75,13 @@ class SaaSSettings:
             ebay_client_id=os.environ.get("JIEJING_EBAY_CLIENT_ID") or os.environ.get("EBAY_CLIENT_ID") or "",
             ebay_ru_name=os.environ.get("JIEJING_EBAY_RU_NAME") or os.environ.get("EBAY_RU_NAME") or "",
             ebay_client_secret_configured=bool(os.environ.get("JIEJING_EBAY_CLIENT_SECRET") or os.environ.get("EBAY_CLIENT_SECRET")),
+            ebay_account_deletion_endpoint_url=(
+                os.environ.get("JIEJING_EBAY_ACCOUNT_DELETION_ENDPOINT_URL")
+                or "https://app.jiejing.shop/webhooks/ebay/marketplace-account-deletion"
+            ).strip(),
+            ebay_account_deletion_verification_token_configured=bool(
+                os.environ.get("JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN")
+            ),
             ebay_access_token_configured=bool(os.environ.get("JIEJING_EBAY_ACCESS_TOKEN") or os.environ.get("EBAY_ACCESS_TOKEN")),
             ebay_refresh_token_configured=bool(os.environ.get("JIEJING_EBAY_REFRESH_TOKEN") or os.environ.get("EBAY_REFRESH_TOKEN")),
             ebay_oauth_live_exchange_enabled=_env_bool("JIEJING_EBAY_OAUTH_EXCHANGE_LIVE", default=False),
@@ -139,6 +148,8 @@ class SaaSSettings:
             "ebay_client_id_configured": bool(self.ebay_client_id),
             "ebay_ru_name_configured": bool(self.ebay_ru_name),
             "ebay_client_secret_configured": self.ebay_client_secret_configured,
+            "ebay_account_deletion_endpoint_url_configured": bool(self.ebay_account_deletion_endpoint_url),
+            "ebay_account_deletion_verification_token_configured": self.ebay_account_deletion_verification_token_configured,
             "ebay_access_token_configured": self.ebay_access_token_configured,
             "ebay_env_access_token_allowed": self.ebay_env_access_token_allowed,
             "ebay_env_access_token_blocked": self.ebay_env_access_token_blocked,

@@ -4,3 +4,4 @@ redis>=5,<7
 tencentcloud-sdk-python-ssm>=3.0,<4
 tencentcloud-sdk-python-cls>=3.0,<4
 cos-python-sdk-v5>=1.9,<2
+cryptography>=43,<47

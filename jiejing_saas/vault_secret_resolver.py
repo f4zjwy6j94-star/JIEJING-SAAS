@@ -267,6 +267,85 @@ class VaultSecretResolver:
             return self._resolve_tencent_ssm_secret(secret_ref=secret_ref)
         return self._resolve_local_secret(secret_ref=secret_ref)
 
+    def revoke_secret(self, *, secret_ref: dict[str, Any] | None, requested_by: str, task_scope: str) -> dict[str, Any]:
+        """Permanently remove a backend secret value without returning it."""
+
+        if not secret_ref or not secret_ref.get("secret_ref"):
+            return {"status": "revoke_blocked", "blocked_by": ["secret_ref_not_found"], "secret_exposed": False}
+        if requested_by not in ALLOWED_REQUESTERS or not task_scope:
+            return {"status": "revoke_blocked", "blocked_by": ["requester_or_scope_invalid"], "secret_exposed": False}
+        if _local_resolver_enabled(self.settings):
+            records = self._read_records()
+            existed = records.pop(str(secret_ref["secret_ref"]), None) is not None
+            self._write_records(records)
+            return {
+                "status": "revoked",
+                "storage_adapter": "local_secret_resolver",
+                "secret_ref": secret_ref.get("secret_ref"),
+                "secret_value_existed": existed,
+                "secret_value_returned": False,
+                "secret_exposed": False,
+            }
+        if _hashicorp_vault_live_ready(self.settings):
+            return self._revoke_hashicorp_vault_secret(secret_ref=secret_ref)
+        if _tencent_ssm_live_ready(self.settings):
+            return self._revoke_tencent_ssm_secret(secret_ref=secret_ref)
+        return {
+            "status": "revoke_blocked",
+            "secret_ref": secret_ref.get("secret_ref"),
+            "blocked_by": ["managed_vault_revoke_not_ready"],
+            "secret_value_returned": False,
+            "secret_exposed": False,
+        }
+
+    def _revoke_hashicorp_vault_secret(self, *, secret_ref: dict[str, Any]) -> dict[str, Any]:
+        config = _hashicorp_vault_config(self.settings)
+        mount = urllib.parse.quote(str(config["mount"]).strip("/"), safe="")
+        path = _hashicorp_secret_path(config=config, secret_ref=secret_ref)
+        prefix = "metadata/" if config["kv_version"] == "v2" else ""
+        request = urllib.request.Request(
+            f"{str(config['addr']).rstrip('/')}/v1/{mount}/{prefix}{path}",
+            headers={"X-Vault-Token": _hashicorp_vault_token(), "Accept": "application/json"},
+            method="DELETE",
+        )
+        try:
+            status, _headers, _raw = self.transport(request, 20)
+        except Exception as exc:  # pragma: no cover - live provider dependent
+            return {
+                "status": "revoke_blocked", "blocked_by": ["managed_vault_http_error"],
+                "error_type": type(exc).__name__, "secret_value_returned": False, "secret_exposed": False,
+            }
+        return {
+            "status": "revoked" if status < 400 or status == 404 else "revoke_blocked",
+            "storage_adapter": "managed_hashicorp_vault",
+            "secret_ref": secret_ref.get("secret_ref"),
+            "http_status": status,
+            "secret_value_returned": False,
+            "secret_exposed": False,
+        }
+
+    def _revoke_tencent_ssm_secret(self, *, secret_ref: dict[str, Any]) -> dict[str, Any]:
+        config = _tencent_ssm_config(self.settings)
+        try:
+            client = _build_tencent_ssm_client(config)
+            request = _new_tencent_ssm_request("DeleteSecretRequest")
+            setattr(request, "SecretName", _tencent_secret_name(config=config, secret_ref=secret_ref))
+            setattr(request, "ForceDelete", True)
+            client.DeleteSecret(request)
+        except Exception as exc:  # pragma: no cover - live provider dependent
+            if not _looks_like_tencent_secret_missing(exc):
+                return {
+                    "status": "revoke_blocked", "blocked_by": ["tencent_ssm_revoke_failed"],
+                    "error_type": type(exc).__name__, "secret_value_returned": False, "secret_exposed": False,
+                }
+        return {
+            "status": "revoked",
+            "storage_adapter": "managed_tencent_ssm",
+            "secret_ref": secret_ref.get("secret_ref"),
+            "secret_value_returned": False,
+            "secret_exposed": False,
+        }
+
     def _resolve_local_secret(self, *, secret_ref: dict[str, Any]) -> dict[str, Any]:
         record = self._read_records().get(str(secret_ref["secret_ref"]))
         if not isinstance(record, dict) or not record.get("secret_value"):

@@ -23,14 +23,23 @@ from .provider_job_runner import ProviderJobRunner
 from .media_source_assets import MediaSourceAssetError, MediaSourceAssetStore
 from .repository import SaaSRepository
 from .runtime_bridge import RuntimeBridge
+from .vault_secret_resolver import VaultSecretResolver
 
 
 class LocalQueueWorker:
-    def __init__(self, *, repository: SaaSRepository, runtime_bridge: RuntimeBridge, settings: SaaSSettings | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        repository: SaaSRepository,
+        runtime_bridge: RuntimeBridge,
+        settings: SaaSSettings | None = None,
+        media_source_asset_store: MediaSourceAssetStore | None = None,
+    ) -> None:
         self.repository = repository
         self.runtime_bridge = runtime_bridge
         self.settings = settings
         self.provider_job_runner = ProviderJobRunner(settings=settings)
+        self.media_source_asset_store = media_source_asset_store
         self.process_started_at = now_iso()
 
     def run_next(self, *, company_id: str | None = None, job_id: str | None = None) -> dict[str, Any]:
@@ -85,6 +94,8 @@ class LocalQueueWorker:
                 return self._run_ebay_read_only_live_plan_job(job=job, task=task, job_body=job_body)
             if job_body.get("kind") == "provider_job":
                 return self._run_provider_job(job=job, task=task, job_body=job_body)
+            if job_body.get("kind") == "ebay_account_deletion":
+                return self._run_ebay_account_deletion_job(job=job, task=task, job_body=job_body)
             self.repository.update_task_status(
                 task_id=task["task_id"],
                 company_id=task["company_id"],
@@ -136,6 +147,32 @@ class LocalQueueWorker:
             message = str(exc)
             task_id = str(task.get("task_id") or job.get("task_id") or "")
             company_id = str(task.get("company_id") or job.get("company_id") or "")
+            job_body = job.get("job") if isinstance(job.get("job"), dict) else {}
+            is_account_deletion = job_body.get("kind") == "ebay_account_deletion"
+            attempts = int(job.get("attempts") or 0)
+            max_attempts = int(job.get("max_attempts") or 1)
+            if is_account_deletion and attempts < max_attempts:
+                self.repository.update_task_status(
+                    task_id=task_id,
+                    company_id=company_id,
+                    status="queued",
+                    output={"retrying": True, "failed_by": "account_deletion_compliance_worker"},
+                    audit_summary="eBay account deletion compliance processing will retry after a temporary failure.",
+                )
+                retry_job = self.repository.update_queue_job(
+                    job_id=job["job_id"],
+                    company_id=job["company_id"],
+                    status="queued",
+                    details={"retry_scheduled": True, "attempts": attempts, "error_type": exc.__class__.__name__},
+                )
+                return {
+                    "status": "retrying",
+                    "task": self.repository.get_task(company_id=company_id, task_id=task_id),
+                    "queue_job": retry_job,
+                    "error": "Temporary compliance processing failure; retry scheduled.",
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                }
             self.repository.update_task_status(
                 task_id=task_id,
                 company_id=company_id,
@@ -147,8 +184,8 @@ class LocalQueueWorker:
             failed_job = self.repository.update_queue_job(
                 job_id=job["job_id"],
                 company_id=job["company_id"],
-                status="failed",
-                details={"error": message},
+                status="dead_letter" if is_account_deletion else "failed",
+                details={"error": message, "compliance_retry_exhausted": is_account_deletion},
             )
             return {
                 "status": "failed",
@@ -352,6 +389,85 @@ class LocalQueueWorker:
             "saved": {"reports": 0, "confirmations": 0},
             "live_read_plan": live_read_plan,
             "real_platform_writes_enabled": False,
+        }
+
+    def _run_ebay_account_deletion_job(
+        self,
+        *,
+        job: dict[str, Any],
+        task: dict[str, Any],
+        job_body: dict[str, Any],
+    ) -> dict[str, Any]:
+        event_key = str(job_body.get("event_key") or "")
+        connection_id = str(job_body.get("connection_id") or "")
+        if job_body.get("signature_verified") is not True or not event_key or not connection_id:
+            raise ValueError("eBay account deletion job is missing verified identity")
+        connections = self.repository.list_connections(company_id=task["company_id"], store_id=task["store_id"])
+        connection = next((item for item in connections if item.get("connection_id") == connection_id), None)
+        if not connection:
+            raise KeyError("eBay account deletion connection not found")
+        ebay_connections = [item for item in connections if str(item.get("platform") or "").lower() == "ebay"]
+        secret_ref_ids = sorted({str(item.get("secret_ref") or "") for item in ebay_connections if item.get("secret_ref")})
+        revocations: list[dict[str, Any]] = []
+        for secret_ref_id in secret_ref_ids:
+            secret_ref = self.repository.get_secret_ref(
+                company_id=task["company_id"],
+                store_id=task["store_id"],
+                secret_ref=secret_ref_id,
+            )
+            if not self.settings:
+                raise RuntimeError("Vault settings unavailable for eBay credential revocation")
+            revocation = VaultSecretResolver(self.settings).revoke_secret(
+                secret_ref=secret_ref,
+                requested_by="queued_worker",
+                task_scope="ebay_marketplace_account_deletion",
+            )
+            if revocation.get("status") != "revoked":
+                raise RuntimeError("eBay credential revocation did not complete")
+            revocations.append(revocation)
+        media_purge = (
+            self.media_source_asset_store.purge_store(company_id=task["company_id"], store_id=task["store_id"])
+            if self.media_source_asset_store is not None
+            else {"status": "not_configured", "secret_exposed": False}
+        )
+        result = self.repository.process_ebay_account_deletion_event(
+            event_key=event_key,
+            company_id=task["company_id"],
+            connection_id=connection_id,
+        )
+        self.repository.write_audit(
+            company_id=task["company_id"],
+            store_id=task["store_id"],
+            user_id=task.get("user_id"),
+            actor_type="system",
+            action_type="ebay.account_deletion.credential_revoked",
+            target_type="ebay_account_deletion_event",
+            target_id=event_key,
+            summary="eBay seller credential was revoked and retained source assets were purged.",
+            details={
+                "credential_revocation_status": "revoked" if secret_ref_ids else "not_required",
+                "credential_refs_revoked": len(revocations),
+                "ebay_connections_revoked": len(ebay_connections),
+                "media_removed_files": media_purge.get("removed_files", 0),
+                "media_removed_metadata": media_purge.get("removed_metadata", 0),
+                "real_platform_write_performed": False,
+                "secret_exposed": False,
+            },
+        )
+        return {
+            "status": "completed",
+            "task": self.repository.get_task(company_id=task["company_id"], task_id=task["task_id"]),
+            "queue_job": self.repository.get_queue_job(company_id=task["company_id"], job_id=job["job_id"]),
+            "account_deletion": result,
+            "credential_revocation": {
+                "status": "revoked" if secret_ref_ids else "not_required",
+                "revoked_count": len(revocations),
+                "secret_value_returned": False,
+                "secret_exposed": False,
+            },
+            "media_purge": media_purge,
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
         }
 
     def _run_provider_job(

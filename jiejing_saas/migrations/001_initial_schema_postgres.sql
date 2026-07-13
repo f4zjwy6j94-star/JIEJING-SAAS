@@ -350,6 +350,19 @@ create table if not exists billing_webhook_events (
   billing_event_json jsonb not null
 );
 
+create table if not exists ebay_account_deletion_events (
+  event_key text primary key,
+  company_id text references companies(company_id),
+  store_id text references stores(store_id),
+  connection_id text references platform_connections(connection_id),
+  task_id text references tasks(task_id),
+  job_id text references queue_jobs(job_id),
+  status text not null,
+  created_at timestamptz not null,
+  updated_at timestamptz not null,
+  deletion_event_json jsonb not null
+);
+
 create index if not exists idx_team_members_company_role on team_members(company_id, role);
 create index if not exists idx_user_sessions_user_expiry on user_sessions(user_id, expires_epoch);
 create index if not exists idx_team_invitations_company_status_created on team_invitations(company_id, status, created_at);
@@ -383,6 +396,7 @@ create index if not exists idx_audit_logs_target on audit_logs(target_type, targ
 create index if not exists idx_billing_subscriptions_provider_customer on billing_subscriptions(provider, provider_customer_id);
 create index if not exists idx_billing_subscriptions_provider_subscription on billing_subscriptions(provider, provider_subscription_id);
 create index if not exists idx_billing_webhook_events_company_created on billing_webhook_events(company_id, created_at);
+create index if not exists idx_ebay_account_deletion_events_status_updated on ebay_account_deletion_events(status, updated_at);
 
 insert into schema_migrations (migration_id, checksum, summary)
 values (

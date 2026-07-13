@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .config import SaaSSettings
+from .ebay_account_deletion import fetch_ebay_identity_hashes
 from .ebay_oauth import EbayOAuthPlanner
 from .ebay_oauth_token_store import EbayLocalOAuthTokenStore, OAuthTransport
 from .repository import SaaSRepository
@@ -170,6 +171,25 @@ def _exchange_and_store_refresh_token(
             "secret_exposed": False,
         }
 
+    identity_mapping = fetch_ebay_identity_hashes(
+        access_token=str(token_response.get("access_token") or ""),
+        environment=settings.ebay_oauth_environment,
+        transport=oauth_transport,
+    )
+    if identity_mapping.get("status") != "identity_mapping_ready" or not identity_mapping.get("ebay_user_id_hash"):
+        return {
+            **callback_result,
+            "status": "callback_exchange_identity_mapping_failed",
+            "token_exchange_performed": True,
+            "vault_write_performed": False,
+            "blocked_by": identity_mapping.get("blocked_by") or ["ebay_identity_mapping_failed"],
+            "token_response_summary": _token_response_summary(token_response),
+            "next_step": "retry_oauth_authorization_after_ebay_identity_api_recovers",
+            "access_token_returned_to_frontend": False,
+            "refresh_token_returned_to_frontend": False,
+            "secret_exposed": False,
+        }
+
     secret_ref = repository.create_secret_reference(
         company_id=request_record["company_id"],
         store_id=request_record["store_id"],
@@ -281,6 +301,12 @@ def _exchange_and_store_refresh_token(
                 "token_exchange_http_status": exchange.get("http_status"),
                 "access_token_ttl_seconds": _safe_int(token_response.get("expires_in")),
                 "seller_refresh_credential_ttl_seconds": _safe_int(token_response.get("refresh_token_expires_in")),
+                "account_deletion_identity_mapping_status": identity_mapping.get("status"),
+                "ebay_user_id_hash": identity_mapping.get("ebay_user_id_hash") or "",
+                "ebay_username_hash": identity_mapping.get("ebay_username_hash") or "",
+                "registration_marketplace_id": identity_mapping.get("registration_marketplace_id") or "",
+                "ebay_account_type": identity_mapping.get("account_type") or "",
+                "ebay_account_status": identity_mapping.get("account_status") or "",
                 "token_values_returned_to_public_response": False,
                 "access_token_stored_in_database": False,
                 "refresh_token_stored_in_database": False,
@@ -300,6 +326,12 @@ def _exchange_and_store_refresh_token(
         "secret_storage": _public_storage(storage),
         "secret_ref": updated_ref,
         "connection": connection,
+        "account_deletion_identity_mapping": {
+            "status": identity_mapping.get("status"),
+            "immutable_selector_ready": bool(identity_mapping.get("ebay_user_id_hash")),
+            "raw_identity_returned": False,
+            "secret_exposed": False,
+        },
         "next_step": "run_ebay_read_only_credential_preflight",
         "access_token_returned_to_frontend": False,
         "refresh_token_returned_to_frontend": False,

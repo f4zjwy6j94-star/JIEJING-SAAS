@@ -83,6 +83,7 @@ def build_product_readiness(settings: SaaSSettings, repository: SaaSRepository) 
         _model_item(model_status, platform_model_status, evidence),
         _model_value_item(settings, repository),
         _platform_registry_item(),
+        _ebay_account_deletion_item(settings, evidence),
         _ebay_oauth_item(settings, evidence),
         _ebay_token_refresh_item(settings, evidence),
         _ebay_read_adapter_item(settings, evidence),
@@ -916,6 +917,55 @@ def _ebay_oauth_item(settings: SaaSSettings, evidence: dict[str, Any]) -> Readin
         "info",
         "后端可以生成 eBay 只读授权 URL，并记录 state、scope、store 和用户。",
         "下一步实现 OAuth callback：校验 state，后端换 token，refresh token 写入 Vault/KMS。",
+    )
+
+
+def _ebay_account_deletion_item(settings: SaaSSettings, evidence: dict[str, Any]) -> ReadinessItem:
+    blockers = []
+    if not settings.ebay_account_deletion_endpoint_url.startswith("https://"):
+        blockers.append("https_endpoint")
+    if not settings.ebay_account_deletion_verification_token_configured:
+        blockers.append("verification_token")
+    if not settings.ebay_client_id or not settings.ebay_client_secret_configured:
+        blockers.append("ebay_application_credentials")
+    if blockers:
+        return ReadinessItem(
+            "ebay_account_deletion_notifications",
+            "eBay account deletion notifications",
+            "blocked_missing_compliance_config",
+            "warning",
+            "The eBay account deletion endpoint is implemented but its backend-only production configuration is incomplete.",
+            "Configure the HTTPS endpoint, verification token and eBay application credentials, then complete Developer Portal validation.",
+        )
+    active_connections = int(evidence.get("active_ebay_identity_connections") or 0)
+    mapped_connections = int(evidence.get("mapped_ebay_identity_connections") or 0)
+    if int(evidence.get("duplicate_ebay_identity_store_count") or 0) > 0:
+        return ReadinessItem(
+            "ebay_account_deletion_notifications",
+            "eBay account deletion notifications",
+            "duplicate_identity_review_required",
+            "warning",
+            "One immutable eBay seller identity is attached to more than one Jiejing store, so automatic deletion cannot safely choose a single store.",
+            "Resolve the duplicate store ownership before enabling production onboarding; do not delete across tenants by inference.",
+        )
+    if mapped_connections < active_connections:
+        return ReadinessItem(
+            "ebay_account_deletion_notifications",
+            "eBay account deletion notifications",
+            "identity_mapping_pending",
+            "warning",
+            "The notification endpoint is configured, but one or more active eBay connections do not yet have an immutable backend identity selector.",
+            "Reconnect only the affected seller account with the commerce.identity.readonly scope, then verify the identity mapping status.",
+        )
+    return ReadinessItem(
+        "ebay_account_deletion_notifications",
+        "eBay account deletion notifications",
+        "operational_ready" if active_connections else "ready_for_portal_validation",
+        "info",
+        "Challenge validation, official-format signature verification, idempotent intake and scoped deletion processing are configured.",
+        "Keep the Developer Portal subscription active and monitor verified delivery, retry, revocation and scoped deletion receipts."
+        if active_connections
+        else "Validate the endpoint in eBay Developer Portal and send a test notification.",
     )
 
 

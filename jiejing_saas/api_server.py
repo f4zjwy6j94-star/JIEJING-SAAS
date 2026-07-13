@@ -43,6 +43,12 @@ from .database_plan import build_database_plan
 from .domain_readiness import build_domain_readiness
 from .edge_cutover_preflight import build_edge_cutover_preflight
 from .ebay_credential_preflight import build_ebay_credential_preflight
+from .ebay_account_deletion import (
+    AccountDeletionError,
+    EbayNotificationSignatureVerifier,
+    build_challenge_response,
+    normalize_notification,
+)
 from .ebay_data_packet import build_ebay_read_only_data_packet
 from .ebay_http_client import build_ebay_http_client_contract, build_http_dry_run_from_live_plan
 from .ebay_live_read_adapter import EbayLiveReadPlanBuilder, build_live_read_adapter_status
@@ -96,7 +102,7 @@ from .staging_security_gate import build_controlled_staging_security_gate
 from .task_secret_grants import build_task_secret_grant_plan
 from .vault_client import build_task_secret_resolution_contract, build_vault_client_contract
 from .vault_secret_resolver import VaultSecretResolver, build_vault_secret_resolver_status
-from .redis_queue_runtime import RedisStreamQueueWorker
+from .redis_queue_runtime import RedisStreamQueueWorker, publish_redis_queue_job_if_configured
 from .worker import LocalQueueWorker
 from .workflow_plan import product_workflow_steps
 
@@ -136,6 +142,7 @@ EXPENSIVE_API_RATE_LIMIT_PREFIXES = (
     "provider-job-contracts",
     "post-publish",
     "owner/",
+    "webhooks/ebay/",
 )
 EXPENSIVE_API_RATE_LIMIT_EXACT_PATHS = {
     "billing/checkout-session",
@@ -347,14 +354,29 @@ class SaaSBackendServer:
             allow_hermes_adapters=backend_settings.allow_hermes_adapters,
         )
         worker_runtime = (
-            RedisStreamQueueWorker(repository=repo, runtime_bridge=bridge, settings=backend_settings)
+            RedisStreamQueueWorker(
+                repository=repo,
+                runtime_bridge=bridge,
+                settings=backend_settings,
+                media_source_asset_store=media_source_assets,
+            )
             if backend_settings.queue_provider == "redis_streams"
-            else LocalQueueWorker(repository=repo, runtime_bridge=bridge, settings=backend_settings)
+            else LocalQueueWorker(
+                repository=repo,
+                runtime_bridge=bridge,
+                settings=backend_settings,
+                media_source_asset_store=media_source_assets,
+            )
         )
         secret_store = SecretStoreBoundary(backend_settings)
         ebay_oauth = EbayOAuthPlanner(backend_settings)
         ebay_read = EbayReadOnlyAdapter(backend_settings)
         ebay_live_read_plan = EbayLiveReadPlanBuilder(backend_settings)
+        ebay_account_deletion_verifier = EbayNotificationSignatureVerifier(
+            environment=backend_settings.ebay_oauth_environment,
+            client_id=backend_settings.ebay_client_id,
+            client_secret=os.environ.get("JIEJING_EBAY_CLIENT_SECRET") or os.environ.get("EBAY_CLIENT_SECRET") or "",
+        )
         readiness = (
             build_degraded_product_readiness(settings=backend_settings, exc=startup_repository_error)
             if startup_repository_error is not None
@@ -374,6 +396,7 @@ class SaaSBackendServer:
             ebay_oauth_planner = ebay_oauth
             ebay_read_adapter = ebay_read
             ebay_live_read_plan_builder = ebay_live_read_plan
+            ebay_account_deletion_signature_verifier = ebay_account_deletion_verifier
             media_source_asset_store = media_source_assets
             settings = backend_settings
             repository_startup_error = startup_repository_error
@@ -392,6 +415,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
     ebay_oauth_planner: EbayOAuthPlanner
     ebay_read_adapter: EbayReadOnlyAdapter
     ebay_live_read_plan_builder: EbayLiveReadPlanBuilder
+    ebay_account_deletion_signature_verifier: EbayNotificationSignatureVerifier
     media_source_asset_store: MediaSourceAssetStore
     settings: SaaSSettings
     repository_startup_error: Exception | None = None
@@ -485,6 +509,22 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_error(HTTPStatus.NOT_FOUND, "platform not found in connector registry")
                 return
             self._send_json({"platform": platform})
+            return
+
+        if path == "webhooks/ebay/marketplace-account-deletion":
+            if not self._check_expensive_api_rate_limit(method="GET", path=path):
+                return
+            try:
+                response = build_challenge_response(
+                    challenge_code=query.get("challenge_code", [""])[0],
+                    verification_token=os.environ.get("JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN") or "",
+                    endpoint_url=self.settings.ebay_account_deletion_endpoint_url,
+                )
+            except AccountDeletionError as exc:
+                status = HTTPStatus.BAD_REQUEST if exc.code == "invalid_challenge" else HTTPStatus.SERVICE_UNAVAILABLE
+                self._send_error(status, "account deletion endpoint verification is unavailable")
+                return
+            self._send_json(response)
             return
 
         if path == "oauth/ebay/callback":
@@ -1370,6 +1410,81 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 }
             status = HTTPStatus.OK if result.get("ok") else HTTPStatus(int(result.get("http_status") or 400))
             self._send_json({"billing_webhook": result}, status=status)
+            return
+
+        if path == "webhooks/ebay/marketplace-account-deletion":
+            if not self._check_expensive_api_rate_limit(method="POST", path=path):
+                return
+            content_type = str(self.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+            if content_type != "application/json":
+                self._send_error(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "account deletion notification must be application/json")
+                return
+            try:
+                length = int(self.headers.get("content-length") or "0")
+            except (TypeError, ValueError):
+                self._send_error(HTTPStatus.BAD_REQUEST, "account deletion notification body is invalid")
+                return
+            if length <= 0 or length > 65536:
+                status = HTTPStatus.REQUEST_ENTITY_TOO_LARGE if length > 65536 else HTTPStatus.BAD_REQUEST
+                self._send_error(status, "account deletion notification body is invalid")
+                return
+            raw_body = self.rfile.read(length)
+            signature_header = str(self.headers.get("x-ebay-signature") or "")
+            try:
+                event = normalize_notification(raw_body=raw_body, signature_header=signature_header)
+            except AccountDeletionError as exc:
+                status = HTTPStatus.PRECONDITION_FAILED if exc.code == "invalid_signature_header" else HTTPStatus.BAD_REQUEST
+                self._send_error(status, "account deletion notification is invalid")
+                return
+            verification = self.ebay_account_deletion_signature_verifier.verify(
+                raw_body=raw_body,
+                signature_header=signature_header,
+            )
+            if verification.get("verified") is not True:
+                status = HTTPStatus.SERVICE_UNAVAILABLE if verification.get("retryable") else HTTPStatus.PRECONDITION_FAILED
+                self._send_error(status, "account deletion notification could not be verified")
+                return
+            accepted = self.repository.accept_ebay_account_deletion_event(event=event)
+            if accepted.get("status") == "idempotency_conflict":
+                self._send_error(HTTPStatus.CONFLICT, "account deletion notification conflicts with a prior delivery")
+                return
+            job_id = str(accepted.get("job_id") or "")
+            company_id = str(accepted.get("company_id") or "")
+            if job_id and company_id:
+                queue_job = self.repository.get_queue_job(company_id=company_id, job_id=job_id) or {}
+                if queue_job.get("status") in {"completed", "cancelled"}:
+                    queue_job = {}
+                queue_job_body = queue_job.get("job") if isinstance(queue_job.get("job"), dict) else {}
+                prior_dispatches = [
+                    update.get("queue_dispatch")
+                    for update in queue_job_body.get("updates", [])
+                    if isinstance(update, dict) and isinstance(update.get("queue_dispatch"), dict)
+                ]
+                already_published = any(item.get("status") == "published" for item in prior_dispatches)
+                if queue_job and not already_published:
+                    dispatch = publish_redis_queue_job_if_configured(queue_job)
+                    if dispatch.get("required") and dispatch.get("status") != "published":
+                        self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "account deletion notification queue is unavailable")
+                        return
+                    if dispatch.get("status") == "published":
+                        self.repository.update_queue_job(
+                            job_id=job_id,
+                            company_id=company_id,
+                            status="queued",
+                            details={"queue_dispatch": dispatch},
+                        )
+            self._send_json(
+                {
+                    "accepted": True,
+                    "status": accepted.get("status"),
+                    "duplicate": bool(accepted.get("duplicate")),
+                    "matched_connection": bool(accepted.get("matched_connection")),
+                    "raw_payload_persisted": False,
+                    "real_platform_write_performed": False,
+                    "secret_exposed": False,
+                },
+                status=HTTPStatus.ACCEPTED,
+            )
             return
 
         if not self._check_expensive_api_rate_limit(method="POST", path=path):
@@ -4705,7 +4820,14 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "protected_exact_paths": sorted(EXPENSIVE_API_RATE_LIMIT_EXACT_PATHS),
                 "route_group_evidence": self._expensive_api_route_group_evidence(),
                 "active_bucket_summary": self._expensive_api_bucket_summary(),
-                "excluded_paths": ["billing/webhook", "oauth/ebay/callback", "health", "health/deep", "readiness/product-saas"],
+                "excluded_paths": [
+                    "billing/webhook",
+                    "oauth/ebay/callback",
+                    "webhooks/ebay/marketplace-account-deletion",
+                    "health",
+                    "health/deep",
+                    "readiness/product-saas",
+                ],
                 "bucket_count": sum(int(item.get("active_client_bucket_count") or 0) for item in self._expensive_api_bucket_summary()),
                 "customer_visible": False,
                 "operator_panel_only": True,

@@ -54,6 +54,7 @@ FILES=(
   "docs/JIEJING_GITHUB_CI_STATUS_20260617.md"
   "docs/JIEJING_FRONTEND_SPLIT_STATUS_20260617.md"
   "docs/JIEJING_NEW_EBAY_ACCOUNT_LOW_RISK_RUNBOOK_20260617.md"
+  "docs/JIEJING_EBAY_MARKETPLACE_ACCOUNT_DELETION_DESIGN_20260713.md"
   "docs/superpowers/specs/2026-06-19-jiejing-first-order-loop-design.md"
   "docs/superpowers/specs/2026-06-19-jiejing-publish-preflight-resolution-design.md"
   "favicon.ico"
@@ -116,6 +117,7 @@ FILES=(
   "jiejing_saas/postgres_repository_runtime.py"
   "jiejing_saas/redis_queue_runtime.py"
   "jiejing_saas/ebay_data_packet.py"
+  "jiejing_saas/ebay_account_deletion.py"
   "jiejing_saas/worker.py"
   "jiejing_saas/api_server.py"
   "jiejing_saas/security.py"
@@ -148,10 +150,12 @@ FILES=(
   "tools/jiejing_cost_saver_snapshot.py"
   "tools/jiejing_infra_cutover_rehearsal.py"
   "tools/jiejing_worker_cli.py"
+  "tools/jiejing_upsert_private_env_secret.py"
   "tools/test_jiejing_sqlite_to_postgres_rehearsal.py"
   "tools/test_jiejing_cost_saver_snapshot.py"
   "tools/test_jiejing_infra_cutover_rehearsal.py"
   "tools/test_jiejing_worker_cli_contract.py"
+  "tools/test_jiejing_ebay_account_deletion.py"
   "tools/jiejing_infrastructure_stage_gate.py"
   "tools/jiejing_deploy_channel_doctor.py"
   "tools/jiejing_deploy_frontend_staging_with_key.ps1"
@@ -338,6 +342,7 @@ python3 -m py_compile \
   jiejing_saas/postgres_repository_runtime.py \
   jiejing_saas/redis_queue_runtime.py \
   jiejing_saas/ebay_data_packet.py \
+  jiejing_saas/ebay_account_deletion.py \
   jiejing_saas/worker.py \
   jiejing_saas/api_server.py \
   jiejing_saas/security.py \
@@ -369,10 +374,12 @@ python3 -m py_compile \
   tools/jiejing_cost_saver_snapshot.py \
   tools/jiejing_infra_cutover_rehearsal.py \
   tools/jiejing_worker_cli.py \
+  tools/jiejing_upsert_private_env_secret.py \
   tools/test_jiejing_sqlite_to_postgres_rehearsal.py \
   tools/test_jiejing_cost_saver_snapshot.py \
   tools/test_jiejing_infra_cutover_rehearsal.py \
   tools/test_jiejing_worker_cli_contract.py \
+  tools/test_jiejing_ebay_account_deletion.py \
   tools/jiejing_infrastructure_stage_gate.py \
   tools/jiejing_deploy_channel_doctor.py \
   tools/jiejing_prepare_public_staging_bundle.py \

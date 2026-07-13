@@ -48,6 +48,8 @@ def main() -> int:
         ebay_client_id="",
         ebay_ru_name="",
         ebay_client_secret_configured=False,
+        ebay_account_deletion_endpoint_url="https://app.jiejing.shop/webhooks/ebay/marketplace-account-deletion",
+        ebay_account_deletion_verification_token_configured=False,
         ebay_access_token_configured=False,
         ebay_refresh_token_configured=False,
         ebay_oauth_live_exchange_enabled=False,

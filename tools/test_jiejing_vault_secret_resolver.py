@@ -197,11 +197,20 @@ def main() -> int:
                 return fail("Tencent SSM resolver should resolve through the backend-only client")
             if tencent_resolved.get("secret_value") != "TENCENT-SSM-SECRET-MUST-NOT-LEAK":
                 return fail("Tencent SSM resolver did not return the expected internal secret value")
+            tencent_revoked = tencent_resolver.revoke_secret(
+                secret_ref=secret_ref,
+                requested_by="queued_worker",
+                task_scope="ebay_marketplace_account_deletion",
+            )
+            if tencent_revoked.get("status") != "revoked" or tencent_revoked.get("storage_adapter") != "managed_tencent_ssm":
+                return fail("Tencent SSM resolver should permanently revoke through the managed backend adapter")
+            if fake_client.force_delete_seen is not True:
+                return fail("Tencent SSM revocation should request immediate permanent deletion")
             tencent_public_serialized = json.dumps({"status": tencent_status, "store": tencent_store}, ensure_ascii=False)
             for forbidden in ("TENCENT-SECRET-ID-MUST-NOT-LEAK", "TENCENT-SECRET-KEY-MUST-NOT-LEAK", "TENCENT-SSM-SECRET-MUST-NOT-LEAK"):
                 if forbidden in tencent_public_serialized:
                     return fail(f"Tencent SSM public responses leaked secret marker {forbidden}")
-            if fake_client.operations != ["put", "get"]:
+            if fake_client.operations != ["put", "get", "delete"]:
                 return fail(f"Tencent SSM fake client saw unexpected operations: {fake_client.operations}")
         finally:
             vault_resolver_module._tencent_ssm_sdk_available = original_sdk_available
@@ -259,6 +268,7 @@ class _FakeTencentSSMClient:
     def __init__(self) -> None:
         self.secret_string = ""
         self.operations: list[str] = []
+        self.force_delete_seen = False
 
     def PutSecretValue(self, request: Any) -> object:
         self.operations.append("put")
@@ -273,6 +283,12 @@ class _FakeTencentSSMClient:
     def GetSecretValue(self, request: Any) -> _FakeTencentSSMResponse:
         self.operations.append("get")
         return _FakeTencentSSMResponse(self.secret_string)
+
+    def DeleteSecret(self, request: Any) -> object:
+        self.operations.append("delete")
+        self.force_delete_seen = bool(request.ForceDelete)
+        self.secret_string = ""
+        return object()
 
 
 if __name__ == "__main__":
