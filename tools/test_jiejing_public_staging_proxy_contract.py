@@ -55,6 +55,7 @@ def main() -> int:
         "/media-asset-jobs",
         "/confirmations",
         "/workers",
+        "/webhooks",
     ]:
         _assert_contains(nginx, route.lstrip("/"), f"proxied API route {route}")
 

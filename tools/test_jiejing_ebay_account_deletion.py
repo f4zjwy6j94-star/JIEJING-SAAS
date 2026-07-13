@@ -59,6 +59,12 @@ def main() -> int:
     serialized = json.dumps(result, ensure_ascii=False)
     if verification_token in serialized or challenge in serialized:
         return fail("challenge response leaked input material")
+    nginx_proxy = (ROOT / "deploy" / "nginx.public-staging.conf").read_text(encoding="utf-8")
+    production_proxy = (ROOT / "deploy" / "Caddyfile.production").read_text(encoding="utf-8")
+    if "|webhooks)" not in nginx_proxy:
+        return fail("public staging proxy does not route webhook requests to the backend")
+    if "/webhooks/*" not in production_proxy:
+        return fail("production proxy does not route webhook requests to the backend")
     for field_name, kwargs, expected_code in (
         (
             "missing verification token",
