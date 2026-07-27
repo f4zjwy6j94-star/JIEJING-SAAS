@@ -8,6 +8,8 @@ merchant data is accepted.
 
 from __future__ import annotations
 
+import math
+from datetime import datetime, timezone
 import os
 from typing import Any
 
@@ -15,12 +17,30 @@ from .config import SaaSSettings
 from .repository import SaaSRepository
 
 
+BACKUP_PROBE_MAX_AGE_HOURS = 36.0
+RESTORE_DRILL_MAX_AGE_DAYS = 30.0
+EVIDENCE_MAX_FUTURE_SKEW_MINUTES = 5.0
+
+
 def build_backup_plan(settings: SaaSSettings, repository: SaaSRepository) -> dict[str, Any]:
     counts = repository.system_counts()
     database_managed = settings.database_engine == "postgres" and settings.database_adapter == "postgres-managed"
-    cos_target = _cos_backup_target_status()
+    cos_target = _cos_backup_target_status(require_fresh_probe=settings.is_production_like)
     policy_configured = _env_bool("JIEJING_BACKUP_POLICY_CONFIGURED")
     restore_drill_at = os.environ.get("JIEJING_RESTORE_DRILL_LAST_AT", "").strip()
+    restore_drill_max_age_days = _env_bounded_float(
+        "JIEJING_RESTORE_DRILL_MAX_AGE_DAYS", RESTORE_DRILL_MAX_AGE_DAYS, minimum=1.0, maximum=365.0
+    )
+    restore_drill_age_hours = _timestamp_age_hours(restore_drill_at)
+    restore_drill_timestamp_valid = bool(restore_drill_at and restore_drill_age_hours is not None)
+    restore_drill_timestamp_in_future = bool(
+        restore_drill_timestamp_valid and restore_drill_age_hours < -(EVIDENCE_MAX_FUTURE_SKEW_MINUTES / 60)
+    )
+    restore_drill_fresh = bool(
+        restore_drill_timestamp_valid
+        and not restore_drill_timestamp_in_future
+        and restore_drill_age_hours <= restore_drill_max_age_days * 24
+    )
     alerts_configured = _env_bool("JIEJING_BACKUP_ALERTS_CONFIGURED")
     vault_backup_configured = _env_bool("JIEJING_VAULT_BACKUP_POLICY_CONFIGURED")
     blockers: list[str] = []
@@ -32,6 +52,17 @@ def build_backup_plan(settings: SaaSSettings, repository: SaaSRepository) -> dic
         blockers.append("backup_policy_not_configured")
     if not restore_drill_at:
         blockers.append("restore_drill_not_recorded")
+    if restore_drill_at and not restore_drill_timestamp_valid:
+        blockers.append("restore_drill_timestamp_invalid")
+    if restore_drill_timestamp_in_future:
+        blockers.append("restore_drill_timestamp_in_future")
+    if (
+        restore_drill_at
+        and restore_drill_age_hours is not None
+        and not restore_drill_fresh
+        and not restore_drill_timestamp_in_future
+    ):
+        blockers.append("restore_drill_overdue")
     if not alerts_configured:
         blockers.append("backup_alerts_not_configured")
     if settings.vault_enabled and settings.vault_provider != "secret_ref_only" and not vault_backup_configured:
@@ -67,6 +98,13 @@ def build_backup_plan(settings: SaaSSettings, repository: SaaSRepository) -> dic
         "restore": {
             "last_restore_drill_at": restore_drill_at,
             "restore_drill_recorded": bool(restore_drill_at),
+            "restore_drill_timestamp_valid": restore_drill_timestamp_valid,
+            "restore_drill_timestamp_in_future": restore_drill_timestamp_in_future,
+            "restore_drill_fresh": restore_drill_fresh,
+            "restore_drill_age_days": (
+                round(restore_drill_age_hours / 24, 3) if restore_drill_age_hours is not None else None
+            ),
+            "restore_drill_max_age_days": restore_drill_max_age_days,
             "must_verify_tables": [
                 "users",
                 "companies",
@@ -108,7 +146,15 @@ def _next_actions(blockers: list[str]) -> list[str]:
         actions.append("switch_staging_database_to_managed_postgres_before_paid_launch")
     if "backup_policy_not_configured" in blockers:
         actions.append("configure_daily_backup_and_point_in_time_recovery")
-    if "restore_drill_not_recorded" in blockers:
+    if any(
+        item in blockers
+        for item in (
+            "restore_drill_not_recorded",
+            "restore_drill_timestamp_invalid",
+            "restore_drill_timestamp_in_future",
+            "restore_drill_overdue",
+        )
+    ):
         actions.append("run_restore_drill_and_record_JIEJING_RESTORE_DRILL_LAST_AT")
     if "backup_alerts_not_configured" in blockers:
         actions.append("wire_backup_failure_and_restore_overdue_alerts")
@@ -116,19 +162,39 @@ def _next_actions(blockers: list[str]) -> list[str]:
         actions.append("configure_vault_snapshot_or_managed_kms_recovery_policy")
     if "cos_backup_target_not_configured" in blockers:
         actions.append("configure_private_cos_bucket_for_backup_artifacts")
-    if "cos_backup_probe_not_recorded" in blockers:
+    if any(
+        item in blockers
+        for item in (
+            "cos_backup_probe_not_recorded",
+            "cos_backup_probe_timestamp_invalid",
+            "cos_backup_probe_timestamp_in_future",
+            "cos_backup_probe_stale",
+        )
+    ):
         actions.append("run_non_secret_cos_backup_probe_and_record_success_time")
     return actions
 
 
-def _cos_backup_target_status() -> dict[str, Any]:
+def _cos_backup_target_status(*, require_fresh_probe: bool = False) -> dict[str, Any]:
     enabled = _env_bool("JIEJING_COS_BACKUP_ENABLED")
     provider = (os.environ.get("JIEJING_BACKUP_STORAGE_PROVIDER") or ("cos" if enabled else "unconfigured")).strip().lower()
     region = os.environ.get("JIEJING_COS_REGION") or os.environ.get("JIEJING_TENCENT_REGION") or "ap-guangzhou"
     bucket = os.environ.get("JIEJING_COS_BUCKET", "").strip()
     prefix = (os.environ.get("JIEJING_COS_PREFIX") or "jiejing/staging/backups").strip().strip("/")
     probe_at = os.environ.get("JIEJING_COS_BACKUP_LAST_SUCCESS_AT", "").strip()
+    probe_max_age_hours = _env_bounded_float(
+        "JIEJING_BACKUP_PROBE_MAX_AGE_HOURS", BACKUP_PROBE_MAX_AGE_HOURS, minimum=1.0, maximum=168.0
+    )
+    probe_age_hours = _timestamp_age_hours(probe_at)
+    probe_timestamp_valid = bool(probe_at and probe_age_hours is not None)
+    probe_timestamp_in_future = bool(
+        probe_timestamp_valid and probe_age_hours < -(EVIDENCE_MAX_FUTURE_SKEW_MINUTES / 60)
+    )
+    probe_fresh = bool(
+        probe_timestamp_valid and not probe_timestamp_in_future and probe_age_hours <= probe_max_age_hours
+    )
     live_probe_required = _env_bool("JIEJING_COS_BACKUP_LIVE_PROBE_REQUIRED")
+    fresh_probe_required = bool(require_fresh_probe or live_probe_required)
     credentials_configured = bool(_tencent_secret_id()) and bool(_tencent_secret_key())
     blockers: list[str] = []
     if provider == "cos" or enabled:
@@ -138,18 +204,37 @@ def _cos_backup_target_status() -> dict[str, Any]:
             blockers.append("cos_backup_target_not_configured")
         if not region:
             blockers.append("JIEJING_COS_REGION")
-        if live_probe_required and not probe_at:
+        if fresh_probe_required and not probe_at:
             blockers.append("cos_backup_probe_not_recorded")
+        if fresh_probe_required and probe_at and not probe_timestamp_valid:
+            blockers.append("cos_backup_probe_timestamp_invalid")
+        if fresh_probe_required and probe_timestamp_in_future:
+            blockers.append("cos_backup_probe_timestamp_in_future")
+        if (
+            fresh_probe_required
+            and probe_at
+            and probe_age_hours is not None
+            and not probe_fresh
+            and not probe_timestamp_in_future
+        ):
+            blockers.append("cos_backup_probe_stale")
     return {
         "provider": provider,
         "enabled": enabled,
-        "target_ready": bool(enabled and bucket and region and (probe_at or not live_probe_required)),
+        "target_ready": bool(enabled and bucket and region and (probe_fresh or not fresh_probe_required)),
         "region": region,
         "bucket_configured": bool(bucket),
         "prefix_configured": bool(prefix),
         "credentials_configured": credentials_configured,
         "live_probe_required": live_probe_required,
+        "fresh_probe_required_for_paid_launch": bool(require_fresh_probe),
+        "fresh_probe_required": fresh_probe_required,
         "last_successful_probe_at": probe_at,
+        "live_probe_timestamp_valid": probe_timestamp_valid,
+        "live_probe_timestamp_in_future": probe_timestamp_in_future,
+        "live_probe_fresh": probe_fresh,
+        "live_probe_age_hours": round(probe_age_hours, 3) if probe_age_hours is not None else None,
+        "live_probe_max_age_hours": probe_max_age_hours,
         "stores_raw_secret_values": False,
         "raw_secret_export_allowed": False,
         "blocked_by": blockers,
@@ -167,3 +252,28 @@ def _tencent_secret_key() -> str:
 
 def _env_bool(name: str) -> bool:
     return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_bounded_float(name: str, default: float, *, minimum: float, maximum: float) -> float:
+    raw = str(os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    if not math.isfinite(value) or value < minimum or value > maximum:
+        return default
+    return value
+
+
+def _timestamp_age_hours(value: str) -> float | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() / 3600

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow,noarchive,nosnippet" />
+    <meta name="referrer" content="no-referrer" />
+    <title>捷境运营后台</title>
+    <link rel="icon" href="assets/jiejing-app-icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="ops.css?v=20260715-ops-v1" />
+  </head>
+  <body>
+    <div id="ops-login" class="ops-login" hidden>
+      <main class="ops-login-panel" aria-labelledby="ops-login-title">
+        <div class="ops-brand ops-brand-login">
+          <img src="assets/jiejing-logo-mark.svg" alt="" width="48" height="48" />
+          <div><strong>捷境</strong><span>内部运营后台</span></div>
+        </div>
+        <p class="ops-eyebrow">INTERNAL OPERATIONS</p>
+        <h1 id="ops-login-title">内部人员登录</h1>
+        <p class="ops-login-copy">此入口仅供获授权的捷境运营人员使用。</p>
+        <form id="ops-login-form" class="ops-login-form">
+          <label for="ops-email">账号</label>
+          <input id="ops-email" name="email" type="email" autocomplete="username" required />
+          <label for="ops-password">密码</label>
+          <input id="ops-password" name="password" type="password" autocomplete="current-password" required />
+          <button class="ops-button ops-button-primary" type="submit">登录</button>
+        </form>
+        <p id="ops-login-status" class="ops-form-status" role="status"></p>
+      </main>
+    </div>
+
+    <div id="ops-denied" class="ops-login" hidden>
+      <main class="ops-login-panel" aria-labelledby="ops-denied-title">
+        <p class="ops-eyebrow">ACCESS DENIED</p>
+        <h1 id="ops-denied-title">当前账号没有运营权限</h1>
+        <p class="ops-login-copy">运营后台与商家工作台相互隔离。请使用已授权的内部账号。</p>
+        <button id="ops-denied-logout" class="ops-button" type="button">退出当前账号</button>
+      </main>
+    </div>
+
+    <div id="ops-app" class="ops-shell" hidden>
+      <aside class="ops-sidebar">
+        <div class="ops-brand">
+          <img src="assets/jiejing-logo-mark.svg" alt="" width="42" height="42" />
+          <div><strong>捷境</strong><span>运营后台</span></div>
+        </div>
+        <nav id="ops-nav" class="ops-nav" aria-label="运营后台导航">
+          <button type="button" data-view="overview" class="is-active">经营总览</button>
+          <button type="button" data-view="traffic">流量与转化</button>
+          <button type="button" data-view="merchants">商家与订阅</button>
+          <button type="button" data-view="transactions">交易与退款</button>
+          <button type="button" data-view="costs">AI 与素材成本</button>
+          <button type="button" data-view="workflows">任务与工作流</button>
+          <button type="button" data-view="reliability">系统可靠性</button>
+          <button type="button" data-view="audit">安全与审计</button>
+          <button type="button" data-view="settings">内部设置</button>
+        </nav>
+        <div class="ops-sidebar-footer">
+          <span id="ops-identity">内部账号</span>
+          <button id="ops-logout" type="button">退出</button>
+        </div>
+      </aside>
+
+      <main class="ops-main">
+        <header class="ops-toolbar">
+          <div>
+            <p class="ops-eyebrow">JIEJING OPERATIONS</p>
+            <h1 id="ops-title">经营总览</h1>
+          </div>
+          <div class="ops-toolbar-actions">
+            <div class="ops-segmented" aria-label="统计时间范围">
+              <button type="button" data-period="7">7 天</button>
+              <button type="button" data-period="30" class="is-active">30 天</button>
+              <button type="button" data-period="90">90 天</button>
+            </div>
+            <button id="ops-refresh" class="ops-icon-button" type="button" title="刷新数据" aria-label="刷新数据">&#8635;</button>
+          </div>
+        </header>
+
+        <section class="ops-status-strip" aria-live="polite">
+          <span id="ops-data-status">正在读取真实数据</span>
+          <span id="ops-updated-at"></span>
+        </section>
+
+        <section id="ops-alert" class="ops-alert" hidden role="alert"></section>
+        <section id="ops-content" class="ops-content" aria-live="polite"></section>
+      </main>
+    </div>
+
+    <script src="ops.js?v=20260715-ops-v1" defer></script>
+  </body>
+</html>

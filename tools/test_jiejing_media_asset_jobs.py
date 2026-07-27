@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -86,6 +87,7 @@ def main() -> int:
             "JIEJING_BILLING_PROVIDER": "manual_seed",
             "JIEJING_BILLING_PLANS_PUBLISHED": "1",
             "JIEJING_QUOTA_ENFORCEMENT_ENABLED": "1",
+            "JIEJING_MEDIA_CREDIT_ENFORCEMENT_ENABLED": "1",
             "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED": "true",
             "JIEJING_MEDIA_LIVE_VIDEO_ENABLED": "false",
             "JIEJING_IMAGE_GENERATION_ENDPOINT": f"http://127.0.0.1:{provider_port}/generate",
@@ -130,6 +132,18 @@ def main() -> int:
         token = registered.get("token")
         if not token:
             return fail("registration should return token")
+        repository = SaaSRepository(SAAS_DB)
+        company_id = str(registered.get("company", {}).get("company_id") or "")
+        user_id = str(registered.get("user", {}).get("user_id") or "")
+        repository.apply_media_credit_operation(
+            company_id=company_id,
+            user_id=user_id,
+            operation_type="grant",
+            points=1000,
+            idempotency_key="media-asset-job-test-credit-v1",
+            reference_type="test_fixture",
+            reference_id="media-asset-job-suite",
+        )
         store = post_json(
             f"{base_url}/stores",
             {"platform": "ebay", "store_name": "mediaassetstore", "marketplace": "EBAY_US"},
@@ -204,6 +218,8 @@ def main() -> int:
             return fail("media asset job response leaked raw media API key")
         if hidden_note_credential in json.dumps(queued, ensure_ascii=False):
             return fail("media asset job response leaked a credential hidden in an ordinary notes field")
+        if re.search(r"\bfal\b", json.dumps(queued, ensure_ascii=False), flags=re.IGNORECASE):
+            return fail("merchant media response must not expose the replaceable media provider")
         media_job = queued.get("media_asset_job") if isinstance(queued.get("media_asset_job"), dict) else {}
         media_job_id = media_job.get("media_job_id")
         if not media_job_id:
@@ -238,6 +254,8 @@ def main() -> int:
             return fail(f"media asset job must preserve its Listing project identity: {fetched_facts}")
         if hidden_note_credential in json.dumps(fetched, ensure_ascii=False):
             return fail("persisted media job leaked a credential hidden in an ordinary notes field")
+        if re.search(r"\bfal\b", json.dumps(fetched, ensure_ascii=False), flags=re.IGNORECASE):
+            return fail("persisted media response must remain provider-neutral")
         store_list = fetch_json(f"{base_url}/stores/{store_id}/media-asset-jobs", token=token).get("media_asset_jobs", [])
         if len(store_list) != 1 or store_list[0].get("media_job_id") != media_job_id:
             return fail(f"store media job list should include exactly this media job: {store_list}")
@@ -406,28 +424,25 @@ def main() -> int:
         if len(FakeMediaProviderHandler.captured_payloads) != provider_calls_before_missing_source:
             return fail("missing private source must not call or spend external media provider quota")
 
-        repository = SaaSRepository(SAAS_DB)
-        company_id = str(registered.get("company", {}).get("company_id") or "")
-        user_id = str(registered.get("user", {}).get("user_id") or "")
-        current_provider_jobs = sum(
-            1 for task in repository.list_tasks(company_id=company_id) if task.get("task_type") == "provider_job"
-        )
-        for index in range(current_provider_jobs, 300):
-            repository.create_task(
+        media_account = repository.get_media_credit_account(company_id=company_id)
+        available_points = int(media_account.get("available_points") or 0)
+        if available_points:
+            repository.apply_media_credit_operation(
                 company_id=company_id,
-                store_id=store_id,
                 user_id=user_id,
-                task_type="provider_job",
-                title=f"adversarial quota fixture {index}",
-                input_data={"fixture": True, "index": index},
+                operation_type="reserve",
+                points=available_points,
+                idempotency_key="media-credit-exhaustion-fixture-v1",
+                reference_type="test_fixture",
+                reference_id="media-credit-exhaustion",
             )
         quota_status, quota_body = post_json_expect_error(
             f"{base_url}/media-asset-jobs/{media_v2_id}/retry",
             {"reason": "Attempt one more billable version after quota exhaustion."},
             token=token,
         )
-        if quota_status != 402 or quota_body.get("error") != "quota exhausted":
-            return fail(f"media rework must enforce provider-job quota: {quota_status}, {quota_body}")
+        if quota_status != 402 or "素材点不足" not in str(quota_body.get("error") or ""):
+            return fail(f"media rework must enforce media points before queueing: {quota_status}, {quota_body}")
 
         print("PASS jiejing_media_asset_jobs")
         print(f"media_job_id={media_job_id}")

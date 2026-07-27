@@ -56,14 +56,14 @@ def main() -> int:
     if "platform-admin@example.test" in json.dumps(packet, ensure_ascii=False).lower():
         return fail("owner launch-control packet must not echo internal admin emails")
     release_gate = platform_admin["production_body"].get("production_release_gate") or {}
-    if release_gate.get("contract_version") != "2026-07-02-production-release-gate-v1":
+    if release_gate.get("contract_version") != "2026-07-27-production-release-gate-v2":
         return fail(f"platform admin production release gate missing: {release_gate}")
     if release_gate.get("audience") != "platform_internal_admin":
         return fail(f"production release gate should stay internal: {release_gate}")
     if "platform-admin@example.test" in json.dumps(release_gate, ensure_ascii=False).lower():
         return fail("production release gate must not echo internal admin emails")
     ledger = platform_admin["ledger_body"].get("production_evidence_ledger") or {}
-    if ledger.get("contract_version") != "2026-07-02-production-evidence-ledger-v1":
+    if ledger.get("contract_version") != "2026-07-27-production-evidence-ledger-v2":
         return fail(f"platform admin production evidence ledger missing: {ledger}")
     if ledger.get("audience") != "platform_internal_admin" or ledger.get("customer_visible") is not False:
         return fail(f"production evidence ledger should stay internal: {ledger}")
@@ -76,7 +76,7 @@ def main() -> int:
         return fail("owner billing provider evidence register contract missing")
     if (protected_bodies.get("owner_edge_cutover") or {}).get("edge_cutover_preflight", {}).get("contract_version") != "2026-06-18-edge-waf-origin-callback-preflight":
         return fail("owner edge cutover preflight contract missing")
-    if (protected_bodies.get("owner_paid_launch") or {}).get("paid_launch_approval_packet", {}).get("contract_version") != "2026-06-18-paid-launch-approval-packet":
+    if (protected_bodies.get("owner_paid_launch") or {}).get("paid_launch_approval_packet", {}).get("contract_version") != "2026-07-27-paid-launch-approval-packet-v2":
         return fail("owner paid launch approval packet contract missing")
     if (protected_bodies.get("billing_payment_options") or {}).get("payment_options", {}).get("contract_version") != "2026-06-29-mainland-payment-strategy":
         return fail("owner billing payment options contract missing")
@@ -92,7 +92,7 @@ def main() -> int:
         return fail("owner monitoring status contract missing")
     if (protected_bodies.get("infrastructure_drivers") or {}).get("infrastructure_drivers", {}).get("contract_version") != "2026-05-17-infrastructure-drivers":
         return fail("owner infrastructure drivers contract missing")
-    if (protected_bodies.get("controlled_bridges") or {}).get("controlled_bridges", {}).get("contract_version") != "2026-06-12-controlled-bridges":
+    if (protected_bodies.get("controlled_bridges") or {}).get("controlled_bridges", {}).get("contract_version") != "2026-07-14-controlled-bridges-v2":
         return fail("owner controlled bridges contract missing")
 
     print("PASS jiejing_owner_launch_control_access")

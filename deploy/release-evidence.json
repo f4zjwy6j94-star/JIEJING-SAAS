@@ -1,0 +1,10 @@
+{
+  "contract_version": "2026-07-14-version-bound-release-evidence-v1",
+  "frontend_asset_version": "20260715-owner-traffic-analytics-v104",
+  "precloud_gate_passed": true,
+  "local_browser_smoke_passed": true,
+  "public_browser_smoke_passed": true,
+  "secret_scan_passed": true,
+  "real_merchant_workflow_validation_passed": false,
+  "public_charging_approved": false
+}

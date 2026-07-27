@@ -13,7 +13,7 @@ from .production_release_gate import build_production_release_gate
 from .repository import SaaSRepository
 
 
-PRODUCTION_EVIDENCE_LEDGER_VERSION = "2026-07-02-production-evidence-ledger-v1"
+PRODUCTION_EVIDENCE_LEDGER_VERSION = "2026-07-27-production-evidence-ledger-v2"
 
 
 _SECTION_SOURCE_TYPES = {
@@ -21,7 +21,7 @@ _SECTION_SOURCE_TYPES = {
     "stable_domain_edge_origin_callbacks": "external_dns_tls_waf_and_callback_console",
     "managed_data_plane_and_secret_boundary": "managed_cloud_runtime_and_backend_live_probe",
     "backup_restore_dr_and_secret_recovery": "managed_backup_restore_drill_and_alert",
-    "subscription_billing_webhook_and_quota": "payment_provider_signed_webhook_and_no_charge_rehearsal",
+    "mainland_wechat_payment_and_refund_controls": "wechat_native_signed_callbacks_query_refund_and_controlled_acceptance",
     "ebay_clean_account_refresh_and_write_boundary": "backend_audit_log_and_clean_platform_account",
     "monitoring_alerts_incidents_and_customer_support": "cloud_monitoring_alerts_and_runbooks",
     "final_owner_approval_and_launch_switch_hold": "owner_approval_packet_and_launch_switch_review",
@@ -33,7 +33,7 @@ _SECTION_CATEGORIES = {
     "stable_domain_edge_origin_callbacks": "edge",
     "managed_data_plane_and_secret_boundary": "infrastructure",
     "backup_restore_dr_and_secret_recovery": "recovery",
-    "subscription_billing_webhook_and_quota": "billing",
+    "mainland_wechat_payment_and_refund_controls": "billing",
     "ebay_clean_account_refresh_and_write_boundary": "platform",
     "monitoring_alerts_incidents_and_customer_support": "operations",
     "final_owner_approval_and_launch_switch_hold": "approval",
@@ -44,7 +44,7 @@ _EXTERNAL_TO_SECTION = {
     "stable_domain_edge_origin": "stable_domain_edge_origin_callbacks",
     "managed_postgres_redis_vault": "managed_data_plane_and_secret_boundary",
     "backup_restore_drill": "backup_restore_dr_and_secret_recovery",
-    "stripe_live_billing": "subscription_billing_webhook_and_quota",
+    "wechat_pay_native_production_cutover": "mainland_wechat_payment_and_refund_controls",
     "new_ebay_account_refresh": "ebay_clean_account_refresh_and_write_boundary",
     "monitoring_incident_support": "monitoring_alerts_incidents_and_customer_support",
     "final_owner_approval": "final_owner_approval_and_launch_switch_hold",
@@ -95,7 +95,7 @@ def build_production_evidence_ledger(settings: SaaSSettings, repository: SaaSRep
             "secret_names_may_appear_but_values_must_stay_in_backend_env_or_vault": True,
             "config_flag_alone_is_not_customer_launch_proof": True,
             "ebay_refresh_requires_backend_audit_log_proof": True,
-            "billing_requires_signed_webhook_no_charge_rehearsal_and_quota_lifecycle": True,
+            "mainland_payment_requires_signed_callbacks_query_refund_and_controlled_acceptance": True,
             "owner_approval_is_required_but_never_auto_launches_public_paid_mode": True,
             "old_frozen_ebay_account_or_old_demo_sku_is_not_accepted_as_evidence": True,
         },
@@ -108,8 +108,8 @@ def build_production_evidence_ledger(settings: SaaSSettings, repository: SaaSRep
                 "secret_exposed": False,
             },
             {
-                "key": "billing_webhook_lifecycle",
-                "action_type": "billing.webhook.*",
+                "key": "wechat_payment_lifecycle",
+                "action_type": "billing.wechat_pay.*",
                 "required_before_public_launch": True,
                 "frontend_gets_payment_secret": False,
                 "secret_exposed": False,

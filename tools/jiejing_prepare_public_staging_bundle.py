@@ -80,7 +80,7 @@ def main() -> int:
             zf.write(path, arcname)
     digest = _sha256(zip_path)
     manifest["zip_sha256"] = digest
-    manifest["zip_path"] = str(zip_path)
+    manifest["zip_path"] = zip_path.relative_to(ROOT).as_posix()
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"BUNDLE_STATUS=created")

@@ -274,6 +274,7 @@ class OpenAICompatibleModelClient(ModelClient):
         parsed["product"] = product
         parsed["task_type"] = task.task_type
         parsed["required_sections"] = sections
+        parsed["_usage"] = _normalized_model_usage(body)
         return parsed
 
     def generate_text(
@@ -314,6 +315,8 @@ class OpenAICompatibleModelClient(ModelClient):
             "max_tokens": token_budget,
             "stream": stream_enabled,
         }
+        if stream_enabled:
+            payload["stream_options"] = {"include_usage": True}
         request = urllib.request.Request(
             self.endpoint,
             data=json.dumps(payload).encode("utf-8"),
@@ -326,7 +329,7 @@ class OpenAICompatibleModelClient(ModelClient):
         try:
             with urllib.request.urlopen(request, timeout=request_timeout) as response:
                 if stream_enabled:
-                    content, finish_reason = self._read_streaming_text(response, on_text_delta=on_text_delta)
+                    content, finish_reason, usage = self._read_streaming_text(response, on_text_delta=on_text_delta)
                     return {
                         "text": content,
                         "model_mode": "live_http_model_text_stream",
@@ -336,6 +339,7 @@ class OpenAICompatibleModelClient(ModelClient):
                         "timeout_seconds": request_timeout,
                         "max_output_tokens": token_budget,
                         "finish_reason": finish_reason,
+                        "_usage": usage,
                     }
                 body = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:  # pragma: no cover - live provider dependent
@@ -352,6 +356,7 @@ class OpenAICompatibleModelClient(ModelClient):
             "timeout_seconds": request_timeout,
             "max_output_tokens": token_budget,
             "finish_reason": str(choice.get("finish_reason") or ""),
+            "_usage": _normalized_model_usage(body),
         }
 
     @staticmethod
@@ -359,9 +364,10 @@ class OpenAICompatibleModelClient(ModelClient):
         response: Any,
         *,
         on_text_delta: Callable[[str], None] | None = None,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, dict[str, int]]:
         chunks: list[str] = []
         finish_reason = ""
+        usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         for raw_line in response:
             line = raw_line.decode("utf-8", errors="replace").strip() if isinstance(raw_line, bytes) else str(raw_line).strip()
             if not line or not line.startswith("data:"):
@@ -373,6 +379,9 @@ class OpenAICompatibleModelClient(ModelClient):
                 event = json.loads(data)
             except json.JSONDecodeError:
                 continue
+            event_usage = _normalized_model_usage(event if isinstance(event, dict) else {})
+            if event_usage["total_tokens"] or event_usage["input_tokens"] or event_usage["output_tokens"]:
+                usage = event_usage
             choices = event.get("choices") if isinstance(event, dict) else None
             if not isinstance(choices, list) or not choices:
                 continue
@@ -390,7 +399,7 @@ class OpenAICompatibleModelClient(ModelClient):
                         pass
             if choice.get("finish_reason"):
                 finish_reason = str(choice.get("finish_reason") or "")
-        return "".join(chunks).strip(), finish_reason
+        return "".join(chunks).strip(), finish_reason, usage
 
 
 class OpenAIResponsesModelClient(ModelClient):
@@ -495,6 +504,7 @@ class OpenAIResponsesModelClient(ModelClient):
         parsed["product"] = product
         parsed["task_type"] = task.task_type
         parsed["required_sections"] = sections
+        parsed["_usage"] = _normalized_model_usage(body)
         return parsed
 
     def generate_text(
@@ -558,6 +568,7 @@ class OpenAIResponsesModelClient(ModelClient):
             "model": self.model,
             "timeout_seconds": request_timeout,
             "max_output_tokens": token_budget,
+            "_usage": _normalized_model_usage(body),
         }
 
     def _extract_response_text(self, body: dict[str, Any]) -> str:
@@ -724,6 +735,29 @@ for item in pool:
         if raw is None:
             return default
         return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _normalized_model_usage(body: dict[str, Any]) -> dict[str, int]:
+    usage = body.get("usage") if isinstance(body, dict) and isinstance(body.get("usage"), dict) else {}
+
+    def read(*keys: str) -> int:
+        for key in keys:
+            if key not in usage:
+                continue
+            try:
+                return max(0, int(usage.get(key) or 0))
+            except (TypeError, ValueError):
+                return 0
+        return 0
+
+    input_tokens = read("input_tokens", "prompt_tokens")
+    output_tokens = read("output_tokens", "completion_tokens")
+    total_tokens = read("total_tokens") or input_tokens + output_tokens
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+    }
 
 
 def model_client_from_env() -> ModelClient:

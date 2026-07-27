@@ -170,6 +170,54 @@ def main() -> int:
             return fail("model value gate should require live reports to link back to a sanitized official packet")
         if (gate.get("evidence") or {}).get("sanitized_official_packet_count_sampled") != 1:
             return fail("model value gate should sample the sanitized official packet source chain")
+
+        smoke_fixture = repo.create_user_with_company(
+            email="codex-model-value-noise@local.invalid",
+            password="local-smoke-password",
+            company_name="Codex Browser Smoke",
+        )
+        smoke_user = smoke_fixture["user"]
+        smoke_company = smoke_fixture["company"]
+        smoke_store = repo.create_store(
+            company_id=smoke_company["company_id"],
+            user_id=smoke_user["user_id"],
+            payload={
+                "platform": "ebay",
+                "store_name": "Codex UI Smoke Store",
+                "marketplace": "EBAY_US",
+                "settings": {"created_from": "codex_browser_smoke"},
+            },
+        )
+        smoke_task = repo.create_task(
+            company_id=smoke_company["company_id"],
+            store_id=smoke_store["store_id"],
+            user_id=smoke_user["user_id"],
+            task_type="browser_smoke",
+            title="Synthetic browser smoke noise",
+            input_data={"created_from": "codex_browser_smoke"},
+        )
+        repo.save_runtime_outputs(
+            task=smoke_task,
+            runtime_result={
+                "run_id": "browser-smoke-noise",
+                "results": [
+                    {
+                        "task_type": "market.report",
+                        "status": "completed",
+                        "summary": f"Synthetic smoke report {index}",
+                        "report": {"model_mode": "deterministic_fallback"},
+                    }
+                    for index in range(120)
+                ],
+                "confirmations": [],
+            },
+        )
+        noisy_gate = build_model_value_gate(settings, repo)
+        if noisy_gate.get("ready_for_paid_value_claim") is not True:
+            return fail("synthetic browser smoke reports must not displace controlled model value proof")
+        if set((noisy_gate.get("evidence") or {}).get("live_model_report_types", [])) != {"market.report", "listing.package"}:
+            return fail("controlled live-model proof must remain visible after high-volume smoke reports")
+
         launch_gate = build_commercial_launch_gate(settings, repo)
         launch_groups = {item.get("key"): item for item in launch_gate.get("groups", [])}
         if launch_groups.get("official_ebay_read_loop", {}).get("status") != "ready":

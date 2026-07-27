@@ -28,7 +28,9 @@ def main() -> int:
         "product_evidence": {"ebay_token_refresh_success_count": 0, "ebay_secret_refs": 0},
         "provider_status": {
             "billing": {
-                "provider": "stripe_test_mock",
+                "provider": "wechat_pay_native",
+                "provider_configured": True,
+                "payment_path_status": "controlled_acceptance_proven_public_charging_closed",
                 "external_paid_provider_configured": False,
                 "billing_ready_for_paid_launch": False,
                 "public_charging_allowed": False,
@@ -36,10 +38,28 @@ def main() -> int:
                 "frontend_gets_payment_secret": False,
                 "frontend_can_grant_quota": False,
                 "triggers_real_charge": False,
+                "domestic_payment": {
+                    "provider": "wechat_pay_native",
+                    "status": "controlled_acceptance_proven",
+                    "configured_component_count": 9,
+                    "required_component_count": 9,
+                    "real_checkout_ready": False,
+                    "charge_now_allowed": False,
+                    "frontend_gets_payment_secret": False,
+                },
             }
         },
     }
-    gate = build_gate({"status": "ok"}, {"status": "ok"}, readiness)
+    deep = {
+        "operational_health": {
+            "status": "ready",
+            "database": {"status": "ready"},
+            "queue": {"status": "ready"},
+            "worker": {"status": "ready"},
+            "secret_exposed": False,
+        }
+    }
+    gate = build_gate({"status": "ok"}, deep, readiness)
     if gate.get("preparation_gate_passed") is not True:
         return fail("private-beta preparation should pass while external gates remain blocked")
     if gate.get("formal_public_launch_ready") is not False:
@@ -52,6 +72,18 @@ def main() -> int:
         return fail("eBay gate must preserve frozen-account and write boundaries")
     if billing.get("ready") is not False or billing.get("real_charge_performed") is not False:
         return fail("formal billing must stay blocked without charging")
+    if billing.get("provider") != "wechat_pay_native":
+        return fail("gate should report the accepted mainland provider instead of the legacy test provider")
+    if billing.get("status") != "controlled_acceptance_proven_public_charging_closed":
+        return fail("gate should distinguish accepted WeChat Pay from an unconfigured formal provider")
+    if billing.get("controlled_acceptance_proven") is not True or billing.get("public_charging_allowed") is not False:
+        return fail("controlled payment proof must stay separate from public charging approval")
+    if billing.get("provider_configured") is not True:
+        return fail("gate should recognize the configured active domestic provider")
+    if "select_and_verify_a_formal_hosted_payment_provider_before_public_charging" in gate.get("next_actions", []):
+        return fail("gate must not ask the owner to select another provider after WeChat Pay acceptance")
+    if "finish_internal_product_acceptance_without_real_ebay_or_payment_actions" in gate.get("next_actions", []):
+        return fail("gate must not repeat internal product acceptance after preparation already passed")
     if billing.get("frontend_gets_payment_secret") is not False or billing.get("frontend_can_grant_quota") is not False:
         return fail("frontend must not receive secrets or grant quota")
     for key in ["no_oauth_started", "no_real_platform_write_performed", "no_real_charge_performed"]:
@@ -59,6 +91,37 @@ def main() -> int:
             return fail(f"missing safe boundary {key}")
     if gate.get("secret_exposed") is not False:
         return fail("gate must not expose secrets")
+
+    degraded = {
+        "operational_health": {
+            "status": "degraded",
+            "database": {"status": "ready"},
+            "queue": {"status": "ready"},
+            "worker": {"status": "not_ready"},
+            "secret_exposed": False,
+        }
+    }
+    degraded_gate = build_gate({"status": "ok"}, degraded, readiness)
+    if degraded_gate.get("preparation_gate_passed") is not False:
+        return fail("deep-health degradation must block preparation even when the shallow health endpoint is ok")
+
+    probe_failed_gate = build_gate(
+        {"status": "ok"},
+        deep,
+        {"request_failed": True, "error_type": "TimeoutError", "secret_exposed": False},
+    )
+    if probe_failed_gate.get("status") != "probe_failed":
+        return fail("a readiness timeout must be reported as probe_failed, never ready")
+    if probe_failed_gate.get("preparation_gate_passed") is not False:
+        return fail("a readiness timeout cannot pass preparation")
+    if probe_failed_gate.get("probe_errors") != ["readiness"]:
+        return fail("the gate must identify the failed readiness probe")
+    failed_billing = probe_failed_gate.get("formal_merchant_payment") or {}
+    failed_ebay = probe_failed_gate.get("clean_ebay_account_validation") or {}
+    if failed_billing.get("status") != "readiness_probe_failed" or failed_ebay.get("status") != "readiness_probe_failed":
+        return fail("probe failure must not be reinterpreted as missing provider or seller configuration")
+    if probe_failed_gate.get("next_actions") != ["retry_public_readiness_probe_before_changing_configuration"]:
+        return fail("probe failure should request a retry instead of configuration changes")
     print("PASS jiejing_external_launch_blocker_gate")
     return 0
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import copy
 import os
+import time
 from typing import Any
 
 from jiejing_runtime.models import now_iso
@@ -21,6 +22,7 @@ from .ebay_http_client import EbayReadOnlyHttpClient
 from .ebay_read_adapter import EbayReadOnlyAdapter
 from .provider_job_runner import ProviderJobRunner
 from .media_source_assets import MediaSourceAssetError, MediaSourceAssetStore
+from .operations_metering import media_cost_measurement, provider_telemetry_from_result
 from .repository import SaaSRepository
 from .runtime_bridge import RuntimeBridge
 from .vault_secret_resolver import VaultSecretResolver
@@ -148,6 +150,11 @@ class LocalQueueWorker:
             task_id = str(task.get("task_id") or job.get("task_id") or "")
             company_id = str(task.get("company_id") or job.get("company_id") or "")
             job_body = job.get("job") if isinstance(job.get("job"), dict) else {}
+            self._release_media_credit_reservation(
+                task=task,
+                job_body=job_body,
+                reason="worker_failure_before_media_completion",
+            )
             is_account_deletion = job_body.get("kind") == "ebay_account_deletion"
             attempts = int(job.get("attempts") or 0)
             max_attempts = int(job.get("max_attempts") or 1)
@@ -484,6 +491,7 @@ class LocalQueueWorker:
             audit_summary="Local worker started provider job contract dry-run.",
         )
         media_asset_job = self._mark_media_asset_job_running(task=task, job=job, job_body=job_body)
+        provider_started_at = time.perf_counter()
         try:
             execution_job_body = self._hydrate_private_media_source(
                 company_id=str(task["company_id"]),
@@ -516,6 +524,12 @@ class LocalQueueWorker:
             provider_output["merchant_visible_summary"] = (
                 "The uploaded source image is no longer available. Upload the product image again before regenerating."
             )
+        provider_duration_ms = int(round((time.perf_counter() - provider_started_at) * 1000))
+        provider_telemetry = provider_telemetry_from_result(
+            scope="media_generation",
+            provider_output=provider_output,
+            duration_ms=provider_duration_ms,
+        )
         safety = provider_output.get("safety") if isinstance(provider_output.get("safety"), dict) else {}
         live_provider_called = bool(safety.get("live_provider_called"))
         raw_secret_read = bool(safety.get("raw_secret_read"))
@@ -526,6 +540,59 @@ class LocalQueueWorker:
             provider_output=provider_output,
             current=media_asset_job,
         )
+        media_credit_result = self._settle_media_credit_reservation(
+            task=task,
+            job_body=job_body,
+            provider_output=provider_output,
+            live_provider_called=live_provider_called,
+        )
+        if live_provider_called:
+            output_packet = provider_output.get("output_packet") if isinstance(provider_output.get("output_packet"), dict) else {}
+            manifest = output_packet.get("asset_manifest") if isinstance(output_packet.get("asset_manifest"), list) else []
+            settled_points = (
+                int(media_credit_result.get("points") or 0)
+                if isinstance(media_credit_result, dict) and media_credit_result.get("status") == "settled"
+                else 0
+            )
+            measurement = media_cost_measurement(
+                provider_output=provider_output,
+                media_points=settled_points,
+            )
+            if provider_telemetry.get("outcome") not in {"success", "partial"} and measurement.get("cost_status") == "configured_estimate":
+                measurement = {"cost_minor": 0, "currency": "CNY", "cost_status": "unavailable"}
+            try:
+                self.repository.record_provider_cost(
+                    company_id=str(task.get("company_id") or ""),
+                    user_id=str(task.get("user_id") or "") or None,
+                    task_id=str(task.get("task_id") or "") or None,
+                    reference_type="media_job",
+                    reference_id=str(job_body.get("media_job_id") or job.get("job_id") or ""),
+                    cost_category="media_generation",
+                    resource_type=self._media_manifest_resource_type(manifest),
+                    unit_count=len(manifest),
+                    media_points=settled_points,
+                    cost_minor=int(measurement.get("cost_minor") or 0),
+                    currency=str(measurement.get("currency") or "CNY"),
+                    cost_status=str(measurement.get("cost_status") or "unavailable"),
+                    idempotency_key=f"{job_body.get('media_job_id') or job.get('job_id')}:provider-cost:v1",
+                    details={
+                        "usable_asset_count": len(manifest),
+                        "provider_neutral": True,
+                        "telemetry": provider_telemetry,
+                    },
+                )
+            except Exception as exc:
+                self.repository.write_audit(
+                    company_id=str(task.get("company_id") or ""),
+                    store_id=str(task.get("store_id") or "") or None,
+                    user_id=str(task.get("user_id") or "") or None,
+                    actor_type="system",
+                    action_type="operations.provider_cost_metering.failed",
+                    target_type="queue_job",
+                    target_id=str(job.get("job_id") or ""),
+                    summary="Generated assets were preserved but internal provider cost metering did not persist.",
+                    details={"error_type": exc.__class__.__name__, "secret_exposed": False},
+                )
         action_type = "provider_job.live_read.completed" if live_provider_called else "provider_job.dry_run.completed"
         audit_summary = (
             "Provider job live read completed through a backend adapter. No raw provider response or secret was persisted."
@@ -553,6 +620,7 @@ class LocalQueueWorker:
                 "raw_secret_read": raw_secret_read,
                 "media_asset_job_id": media_asset_job.get("media_job_id") if media_asset_job else "",
                 "media_asset_job_status": media_asset_job.get("status") if media_asset_job else "",
+                "media_credit_status": media_credit_result.get("status") if media_credit_result else "not_applicable",
                 "secret_exposed": False,
             },
         )
@@ -575,6 +643,7 @@ class LocalQueueWorker:
                 "raw_provider_response_stored": False,
                 "media_asset_job_id": media_asset_job.get("media_job_id") if media_asset_job else "",
                 "media_asset_job_status": media_asset_job.get("status") if media_asset_job else "",
+                "media_credit_status": media_credit_result.get("status") if media_credit_result else "not_applicable",
                 "secret_exposed": False,
             },
         )
@@ -587,8 +656,129 @@ class LocalQueueWorker:
             "saved": {"reports": 0, "confirmations": 0, "provider_jobs": 1, "media_asset_jobs": 1 if media_asset_job else 0},
             "provider_job": provider_output,
             "media_asset_job": media_asset_job,
+            "media_credits": media_credit_result,
             "real_platform_writes_enabled": False,
         }
+
+    def _settle_media_credit_reservation(
+        self,
+        *,
+        task: dict[str, Any],
+        job_body: dict[str, Any],
+        provider_output: dict[str, Any],
+        live_provider_called: bool,
+    ) -> dict[str, Any] | None:
+        credit_state = job_body.get("media_credits") if isinstance(job_body.get("media_credits"), dict) else {}
+        reservation_result = credit_state.get("reservation") if isinstance(credit_state.get("reservation"), dict) else {}
+        reservation = reservation_result.get("ledger_entry") if isinstance(reservation_result.get("ledger_entry"), dict) else {}
+        reservation_id = str(reservation.get("ledger_id") or "")
+        quote = credit_state.get("quote") if isinstance(credit_state.get("quote"), dict) else {}
+        reserved_points = int(quote.get("estimated_points") or reservation.get("points") or 0)
+        if not reservation_id or reserved_points <= 0:
+            return None
+        output_packet = provider_output.get("output_packet") if isinstance(provider_output.get("output_packet"), dict) else {}
+        manifest = output_packet.get("asset_manifest") if isinstance(output_packet.get("asset_manifest"), list) else []
+        usable_result = live_provider_called and bool(manifest) and not str(provider_output.get("status") or "").startswith("failed")
+        operation = "settle" if usable_result else "release"
+        points, points_source = self._reported_media_points(provider_output, reserved_points=reserved_points)
+        if not usable_result:
+            points = reserved_points
+            points_source = "full_reservation_release"
+        result = self.repository.apply_media_credit_operation(
+            company_id=str(task.get("company_id") or ""),
+            user_id=str(task.get("user_id") or "") or None,
+            operation_type=operation,
+            points=points,
+            idempotency_key=f"{reservation_id}:{operation}:v1",
+            reference_type="media_job",
+            reference_id=str(job_body.get("media_job_id") or job_body.get("idempotency_key") or ""),
+            reservation_id=reservation_id,
+            details={
+                "reason": "usable_assets_returned" if usable_result else "no_usable_assets_returned",
+                "points_source": points_source,
+                "reserved_points": reserved_points,
+            },
+        )
+        return {
+            "status": "settled" if usable_result else "released",
+            "points": points,
+            "reserved_points": reserved_points,
+            "points_source": points_source,
+            "account": result.get("account") or {},
+            "provider_neutral": True,
+            "secret_exposed": False,
+        }
+
+    @staticmethod
+    def _reported_media_points(provider_output: dict[str, Any], *, reserved_points: int) -> tuple[int, str]:
+        """Read provider-neutral usage and cap it at the merchant-approved quote."""
+
+        safe_reserved = max(0, int(reserved_points or 0))
+        output_packet = provider_output.get("output_packet") if isinstance(provider_output.get("output_packet"), dict) else {}
+        usage_candidates = [
+            provider_output.get("usage") if isinstance(provider_output.get("usage"), dict) else {},
+            output_packet.get("usage") if isinstance(output_packet.get("usage"), dict) else {},
+        ]
+        for usage in usage_candidates:
+            for key in ("media_points", "actual_points", "billed_media_points"):
+                try:
+                    reported = int(usage.get(key) or 0)
+                except (TypeError, ValueError):
+                    reported = 0
+                if reported > 0:
+                    return min(safe_reserved, reported), "provider_usage"
+        return safe_reserved, "reserved_quote"
+
+    @staticmethod
+    def _media_manifest_resource_type(manifest: list[Any]) -> str:
+        kinds: set[str] = set()
+        for item in manifest:
+            if not isinstance(item, dict):
+                continue
+            value = str(
+                item.get("asset_type")
+                or item.get("media_type")
+                or item.get("type")
+                or item.get("mime_type")
+                or ""
+            ).lower()
+            if "video" in value:
+                kinds.add("video")
+            elif "image" in value or value in {"photo", "product_photo"}:
+                kinds.add("image")
+        if len(kinds) == 1:
+            return next(iter(kinds))
+        return "mixed"
+
+    def _release_media_credit_reservation(
+        self,
+        *,
+        task: dict[str, Any],
+        job_body: dict[str, Any],
+        reason: str,
+    ) -> dict[str, Any] | None:
+        credit_state = job_body.get("media_credits") if isinstance(job_body.get("media_credits"), dict) else {}
+        reservation_result = credit_state.get("reservation") if isinstance(credit_state.get("reservation"), dict) else {}
+        reservation = reservation_result.get("ledger_entry") if isinstance(reservation_result.get("ledger_entry"), dict) else {}
+        reservation_id = str(reservation.get("ledger_id") or "")
+        points = int(reservation.get("points") or 0)
+        company_id = str(task.get("company_id") or "")
+        if not reservation_id or points <= 0 or not company_id:
+            return None
+        try:
+            return self.repository.apply_media_credit_operation(
+                company_id=company_id,
+                user_id=str(task.get("user_id") or "") or None,
+                operation_type="release",
+                points=points,
+                idempotency_key=f"{reservation_id}:release:v1",
+                reference_type="media_job",
+                reference_id=str(job_body.get("media_job_id") or job_body.get("idempotency_key") or ""),
+                reservation_id=reservation_id,
+                details={"reason": reason},
+            )
+        except ValueError:
+            return None
 
     def _hydrate_private_media_source(
         self,

@@ -180,6 +180,60 @@ def main() -> int:
         serialized = json.dumps(result, ensure_ascii=False).lower()
         if "refresh_token" in serialized or "api_key" in serialized or "access_token" in serialized:
             return fail("publish intake response must not expose secrets")
+
+        draft_result = post_json(
+            f"{base_url}/stores/{store['store_id']}/ebay-draft-confirmation",
+            {
+                "product": "Fresh silicone door bumper pads",
+                "listing_project_identity": {
+                    "key": "listing-project-unit-fresh-bumper",
+                    "product": "Fresh silicone door bumper pads",
+                    "source_id": "report-unit-fresh-bumper",
+                    "candidate_id": "candidate-unit-fresh-bumper",
+                },
+                "listing": result.get("confirmation", {}).get("item", {}).get("publish_payload", {}).get("listing", {}),
+                "supplier_facts": result.get("confirmation", {}).get("item", {}).get("publish_payload", {}).get("supplier_facts", {}),
+                "asset_manifest": result.get("confirmation", {}).get("item", {}).get("publish_payload", {}).get("asset_manifest", {}),
+                "finance_review": result.get("confirmation", {}).get("item", {}).get("publish_payload", {}).get("finance_review", {}),
+                "idempotency_key": "draft-intake-unit-fresh-bumper",
+            },
+            token=token,
+        )
+        draft_confirmation = draft_result.get("confirmation", {})
+        if draft_confirmation.get("action_type") != "save_ebay_listing_draft" or draft_confirmation.get("status") != "pending":
+            return fail(f"draft intake should create a distinct pending eBay draft confirmation: {draft_result}")
+        if draft_confirmation.get("item", {}).get("creates_public_listing") is not False:
+            return fail(f"draft confirmation must explicitly prove it cannot create a public listing: {draft_confirmation}")
+        if draft_confirmation.get("item", {}).get("requires_publish_offer_call") is not False:
+            return fail(f"draft confirmation must explicitly prohibit publishOffer: {draft_confirmation}")
+        if draft_result.get("real_platform_writes_enabled") is not False:
+            return fail("local draft intake must not enable real external writes")
+        draft_serialized = json.dumps(draft_result, ensure_ascii=False).lower()
+        if "refresh_token" in draft_serialized or "api_key" in draft_serialized or "access_token" in draft_serialized:
+            return fail("draft intake response must not expose secrets")
+        draft_confirmation_id = draft_confirmation.get("confirmation_id")
+        draft_decision = post_json(
+            f"{base_url}/confirmations/{draft_confirmation_id}/decision",
+            {"decision": "approve", "note": "Contract test only; external writes remain disabled."},
+            token=token,
+        )
+        if draft_decision.get("confirmation", {}).get("status") != "approved":
+            return fail(f"merchant should be able to approve the distinct draft-save confirmation: {draft_decision}")
+        draft_execution = post_json(
+            f"{base_url}/confirmations/{draft_confirmation_id}/execute",
+            {"platform": "ebay", "idempotency_key": "draft-intake-unit-fresh-bumper"},
+            token=token,
+        )
+        stored_draft_execution = draft_execution.get("execution", {})
+        if stored_draft_execution.get("status") != "simulated_no_platform_write":
+            return fail(f"disabled staging boundary should simulate the draft handoff without eBay writes: {draft_execution}")
+        draft_intent = stored_draft_execution.get("audit", {}).get("execution_intent", {})
+        if draft_intent.get("platform_adapter") != "ebay.save_ebay_listing_draft":
+            return fail(f"draft execution should preserve the dedicated adapter intent: {draft_intent}")
+        if draft_intent.get("writes_to_ebay") is not True or draft_intent.get("creates_public_listing") is not False:
+            return fail(f"draft intent must distinguish an external draft write from public publish: {draft_intent}")
+        if draft_intent.get("requires_publish_offer_call") is not False:
+            return fail(f"draft intent must explicitly prohibit publishOffer: {draft_intent}")
         print("PASS jiejing_publish_confirmation_intake")
         return 0
     finally:

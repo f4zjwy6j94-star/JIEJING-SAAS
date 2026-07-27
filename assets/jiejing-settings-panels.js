@@ -206,6 +206,9 @@
     const checkoutSession = checkout.checkout_sessions && typeof checkout.checkout_sessions === "object" ? checkout.checkout_sessions : {};
     const portal = checkout.customer_portal && typeof checkout.customer_portal === "object" ? checkout.customer_portal : {};
     const subscription = usage.subscription && typeof usage.subscription === "object" ? usage.subscription : {};
+    const domestic = state.saasDomesticBillingContract && typeof state.saasDomesticBillingContract === "object" ? state.saasDomesticBillingContract : {};
+    const domesticConfigured = domestic.provider === "wechat_pay_native";
+    const domesticOnline = domesticConfigured && domestic.real_checkout_ready === true && domestic.charge_now_allowed === true;
     const blockers = Array.isArray(plan.paid_launch_blockers) ? plan.paid_launch_blockers : Array.isArray(plan.blockers) ? plan.blockers : [];
     const shutdownClosure =
       plan.subscription_quota_shutdown_closure && typeof plan.subscription_quota_shutdown_closure === "object"
@@ -217,12 +220,14 @@
         : {};
     const paidReady = Boolean(plan.billing_ready_for_paid_launch);
     const privateBetaReady = Boolean(plan.billing_ready_for_private_beta);
-    const paymentReady = Boolean(provider.external_paid_provider_configured || provider.test_billing_provider_configured || checkoutSession.ready);
+    const paymentReady = Boolean(domesticOnline || provider.external_paid_provider_configured || provider.test_billing_provider_configured || checkoutSession.ready);
     const portalReady = Boolean(portal.ready);
     const quotaReady = Boolean(quota.enabled);
     const shutdownReady = Boolean(shutdownClosure.ready || shutdownState.blocks_metered_work_when_inactive);
-    const billingModeLabel = paidReady ? "在线付款可用" : privateBetaReady ? "受邀试用中" : "在线付款尚未开放";
-    const billingModeDetail = paidReady
+    const billingModeLabel = domesticOnline ? "微信扫码付款可用" : paidReady ? "在线付款可用" : privateBetaReady ? "受邀试用中" : "在线付款尚未开放";
+    const billingModeDetail = domesticOnline
+      ? "商家主动扫码购买 30 天；后端确认到账后开通权益，不会自动续费或自动扣款。"
+      : paidReady
       ? "订阅开通、续费、取消和付款异常会按系统账单状态处理；浏览器不保存支付密钥。"
       : privateBetaReady
         ? "当前只支持受邀试用和人工确认，不会在前台发起真实扣费。"
@@ -252,12 +257,12 @@
           <article class="${paymentReady ? "is-green" : "is-amber"}">
             <span>当前模式</span>
             <strong>${escape(billingModeLabel)}</strong>
-            <small>${paymentReady ? "订阅处理会走安全支付页或客服确认，页面不展示任何支付密钥。" : "在线付款开放前，商家只会看到套餐、额度和下一步说明。"}</small>
+            <small>${domesticOnline ? "商家主动创建订单并微信扫码，页面不展示任何支付密钥。" : paymentReady ? "订阅处理只以支付平台确认结果为准，页面不展示任何支付密钥。" : "在线付款开放前，商家只会看到套餐、额度和下一步说明。"}</small>
           </article>
-          <article class="${portalReady ? "is-green" : "is-amber"}">
+          <article class="${domesticConfigured || portalReady ? "is-green" : "is-amber"}">
             <span>续费 / 取消</span>
-            <strong>${portalReady ? "自助管理可用" : "客服协助"}</strong>
-            <small>${portalReady ? "升级、降级、取消和付款方式管理会在安全订阅页处理。" : "自助入口未开放前，由客服协助处理订阅变更。"}</small>
+            <strong>${domesticConfigured ? "到期自主续购" : portalReady ? "自助管理可用" : "客服协助"}</strong>
+            <small>${domesticConfigured ? "每次单独购买 30 天，不设置自动续费；退款或订单问题进入客服审核。" : portalReady ? "升级、降级、取消和付款方式管理会在支付平台处理。" : "自助入口未开放前，由客服协助处理订阅变更。"}</small>
           </article>
           <article class="${quotaReady ? "is-green" : "is-amber"}">
             <span>AI / 素材用量</span>
@@ -279,10 +284,10 @@
             <strong>${shutdownReady ? "已启用" : "待完善"}</strong>
             <small>付款失败或取消后，只暂停模型、联网、素材生成等高成本任务，保留商家历史数据。</small>
           </article>
-          <article class="${paidReady ? "is-green" : "is-amber"}">
+          <article class="${domesticOnline || paidReady ? "is-green" : "is-amber"}">
             <span>在线付款开放</span>
-            <strong>${paidReady ? "可开放" : "暂不开放"}</strong>
-            <small>${paidReady ? "开放后仍会保留确认中心和操作记录。" : "当前仅展示试用和订阅说明；在线付款开放前不会收取订阅费用。"}</small>
+            <strong>${domesticOnline ? "微信支付可用" : paidReady ? "可开放" : "暂不开放"}</strong>
+            <small>${domesticOnline ? "正式公开收费仍需独立上线批准；当前链路不会影响 eBay 或经营确认中心。" : paidReady ? "开放后仍会保留确认中心和操作记录。" : "当前仅展示试用和订阅说明；在线付款开放前不会收取订阅费用。"}</small>
           </article>
         </div>
         <div class="saas-settings-row-list">
@@ -304,6 +309,9 @@
           <span>merchant_billing_copy_public_safe_v1</span>
           <span>ordinary_merchant_gets_internal_provider_copy=false</span>
           <span>ordinary_merchant_gets_rehearsal_controls=false</span>
+          <span>domestic_payment_provider=${escape(domesticConfigured ? "wechat_pay_native" : "not_configured")}</span>
+          <span>domestic_payment_online=${escape(String(domesticOnline))}</span>
+          <span>renewal_mode=${escape(domesticConfigured ? "merchant_confirmed_one_time_30_day" : "provider_subscription")}</span>
           <span>triggers_real_charge=false</span>
           <span>frontend_gets_payment_secret=false</span>
         </div>
@@ -986,7 +994,7 @@
             <span>paid_launch_approval_packet</span>
             <strong>${readyCount}/${totalCount || "?"} ready</strong>
             <small>${escape(summary.next_step || (blockedCount ? "external_evidence_required" : "ready_for_owner_approval"))}</small>
-            <small>stable_domain_hardening / stripe_live_cutover / no_charge_launch_rehearsal / new_ebay_account_low_risk_smoke</small>
+            <small>stable_domain_hardening / wechat_pay_native_cutover / no_charge_launch_rehearsal / new_ebay_account_low_risk_smoke</small>
             <small>${escape(flags.join(" / "))}</small>
           </div>
           <em>${allowed ? "approval" : "blocked"}</em>
@@ -1202,8 +1210,8 @@
                 <span>billing_domain_cutover_runbook</span>
                 <strong>${runbookReadyCount}/${runbookTotalCount} ready</strong>
                 <small>${escape(nextRunbook.key || (runbookBlockedCount ? "runbook_evidence_required" : "runbook_ready"))}</small>
-                <small>Stripe live billing, stable domain, webhook resilience, OAuth/CORS alignment and rollback evidence stay blocked until proven.</small>
-                <small>stripe_live_webhook_resilience / stable_domain_oauth_cors_alignment</small>
+                <small>WeChat Native、稳定域名、签名回调、OAuth/CORS 对齐和回滚证据未证明前保持阻塞。</small>
+                <small>wechat_pay_signed_callback_resilience / stable_domain_oauth_cors_alignment</small>
               </div>
               <em>runbook</em>
             </article>

@@ -8,37 +8,78 @@ from typing import Any
 
 from .config import SaaSSettings
 from .billing_checkout import STRIPE_API_VERSION, build_billing_checkout_contract
-from .billing_payment_options import build_mainland_payment_strategy
+from .billing_payment_options import build_mainland_payment_launch_status, build_mainland_payment_strategy
 from .billing_webhook import PRIVATE_BETA_BILLING_PROVIDERS, TEST_BILLING_PROVIDERS, build_billing_provider_contract, billing_plan_ids
 from .repository import SaaSRepository
 
 
 PLAN_CATALOG = [
     {
+        "key": "free",
+        "label": "免费体验",
+        "intended_user": "first-time merchant validating one safe operating workflow",
+        "amount_minor": 0,
+        "currency": "CNY",
+        "duration_days": 30,
+        "workspace_quota": 1,
+        "team_member_quota": 1,
+        "monthly_task_quota": 10,
+        "connected_store_quota": 1,
+        "provider_job_quota": 30,
+        "batch_row_quota": 0,
+        "store_access_mode": "read_only",
+        "media_points_included": 0,
+        "includes_real_platform_writes": False,
+    },
+    {
         "key": "starter",
-        "label": "Starter",
-        "intended_user": "single eBay seller validating the AI CEO workflow",
+        "label": "单店铺版",
+        "intended_user": "single-store merchant running a complete listing workflow",
+        "amount_minor": 9900,
+        "currency": "CNY",
+        "duration_days": 30,
+        "workspace_quota": 1,
+        "team_member_quota": 2,
         "monthly_task_quota": 100,
         "connected_store_quota": 1,
         "provider_job_quota": 300,
+        "batch_row_quota": 20,
+        "store_access_mode": "full_workflow",
+        "media_points_included": 0,
         "includes_real_platform_writes": False,
     },
     {
         "key": "operator",
-        "label": "Operator",
-        "intended_user": "active seller with repeated listing and reporting work",
+        "label": "成长版",
+        "intended_user": "growing merchant reusing workflows across several stores",
+        "amount_minor": 19900,
+        "currency": "CNY",
+        "duration_days": 30,
+        "workspace_quota": 1,
+        "team_member_quota": 5,
         "monthly_task_quota": 500,
         "connected_store_quota": 3,
         "provider_job_quota": 1500,
+        "batch_row_quota": 200,
+        "store_access_mode": "multi_store",
+        "media_points_included": 0,
         "includes_real_platform_writes": False,
     },
     {
         "key": "team",
-        "label": "Team",
-        "intended_user": "multi-store or small team requiring permissions and audit",
-        "monthly_task_quota": 2000,
-        "connected_store_quota": 10,
-        "provider_job_quota": 6000,
+        "label": "团队版",
+        "intended_user": "multi-store team requiring roles, approvals and audit",
+        "amount_minor": 29900,
+        "currency": "CNY",
+        "duration_days": 30,
+        "workspace_quota": 1,
+        "team_member_quota": 5,
+        "monthly_task_quota": 1500,
+        "connected_store_quota": 5,
+        "provider_job_quota": 4500,
+        "batch_row_quota": 1000,
+        "store_access_mode": "team_controlled",
+        "media_points_included": 0,
         "includes_real_platform_writes": False,
     },
 ]
@@ -50,7 +91,6 @@ QUOTA_ACTION_UNITS = {
     "official_ebay_sync": "provider_job_quota",
     "provider_job": "provider_job_quota",
     "model_report_assist": "provider_job_quota",
-    "media_generation_request": "provider_job_quota",
 }
 STRIPE_CURRENT_API_VERSION = "2026-06-24.dahlia"
 STRIPE_GO_LIVE_DOCS = [
@@ -79,6 +119,7 @@ def build_billing_plan(settings: SaaSSettings, repository: SaaSRepository) -> di
     provider_contract = build_billing_provider_contract()
     checkout_contract = build_billing_checkout_contract()
     payment_strategy = build_mainland_payment_strategy(settings)
+    mainland_payment_launch = build_mainland_payment_launch_status(settings, repository)
     webhook_configured = bool(provider_contract.get("webhook_configured")) or _env_bool("JIEJING_BILLING_WEBHOOK_CONFIGURED")
     plans_published = _env_bool("JIEJING_BILLING_PLANS_PUBLISHED")
     quota_enforcement_enabled = _env_bool("JIEJING_QUOTA_ENFORCEMENT_ENABLED")
@@ -125,12 +166,30 @@ def build_billing_plan(settings: SaaSSettings, repository: SaaSRepository) -> di
     )
     live_cutover_ready_count = sum(1 for item in live_cutover_matrix if item["status"] == "ready")
     live_cutover_blocked = [item for item in live_cutover_matrix if item["status"] != "ready"]
+    legacy_paid_launch_ready = settings.is_production_like and external_provider and not paid_launch_blockers
+    future_international_payment = dict(mainland_payment_launch.get("future_international_payment") or {})
+    future_international_payment.update(
+        {
+            "provider": "stripe",
+            "role": "future_international_payment_only",
+            "subscription_provider_contract_version": provider_contract.get("contract_version", ""),
+            "checkout_portal_contract_version": checkout_contract.get("contract_version", ""),
+            "legacy_paid_launch_compatibility_ready": legacy_paid_launch_ready,
+            "blocks_mainland_launch": False,
+            "calls_stripe_api": False,
+            "triggers_real_charge": False,
+            "secret_exposed": False,
+        }
+    )
 
     return {
         "contract_version": "2026-05-18-billing-quota-boundary",
         "environment": settings.environment,
         "billing_ready_for_private_beta": settings.is_production_like and not blockers,
-        "billing_ready_for_paid_launch": settings.is_production_like and external_provider and not paid_launch_blockers,
+        "billing_ready_for_paid_launch": legacy_paid_launch_ready,
+        "mainland_payment_ready_for_owner_approval": bool(
+            mainland_payment_launch.get("mainland_payment_ready_for_owner_approval")
+        ),
         "provider": {
             "selected": provider or "not_selected",
             "allowed_external_providers": ["stripe", "paddle", "lemon_squeezy"],
@@ -155,6 +214,8 @@ def build_billing_plan(settings: SaaSSettings, repository: SaaSRepository) -> di
             "raw_payment_secret_exposed": False,
         },
         "payment_strategy": payment_strategy,
+        "mainland_payment_launch": mainland_payment_launch,
+        "future_international_payment": future_international_payment,
         "plan_catalog": _plan_catalog_with_provider_ids(),
         "quota_contract": {
             "enabled": quota_enforcement_enabled,
@@ -164,12 +225,18 @@ def build_billing_plan(settings: SaaSSettings, repository: SaaSRepository) -> di
                 "provider_job",
                 "official_ebay_sync",
                 "model_report_assist",
-                "media_generation_request",
             ],
             "hard_stop_on_quota_exhaustion": quota_enforcement_enabled,
             "merchant_visible_usage_required": True,
+            "merchant_byok_chat_not_counted_as_workflow_task": True,
+            "media_generation_uses_separate_media_points": True,
+            "media_points_are_not_bundled_with_subscription": True,
             "cost_control_required_before_live_media_or_large_model_batches": True,
         },
+        "add_on_catalog": [
+            {"key": "extra_store_30d", "label": "增加 1 个店铺", "amount_minor": 3900, "currency": "CNY", "duration_days": 30},
+            {"key": "extra_seat_30d", "label": "增加 1 个成员", "amount_minor": 1900, "currency": "CNY", "duration_days": 30},
+        ],
         "billing_live_cutover_matrix": live_cutover_matrix,
         "billing_live_cutover_summary": {
             "contract_version": "2026-06-18-stripe-billing-live-cutover",
@@ -1173,6 +1240,8 @@ def build_billing_usage(settings: SaaSSettings, repository: SaaSRepository, *, c
     usage = _company_usage(repository, company_id=company_id)
     quota_status = _quota_status(plan=plan, usage=usage)
     public_subscription = _public_subscription(subscription=subscription, provider=provider, entitlement_active=entitlement_active)
+    from .media_credits import build_media_credit_summary
+
     return {
         "contract_version": "2026-05-19-billing-usage-quota",
         "environment": settings.environment,
@@ -1182,6 +1251,12 @@ def build_billing_usage(settings: SaaSSettings, repository: SaaSRepository, *, c
             "label": plan["label"],
             "source": _plan_source(provider=provider, subscription=subscription),
             "provider_plan_id": plan.get("provider_plan_id") or "",
+            "amount_minor": int(plan.get("amount_minor") or 0),
+            "currency": plan.get("currency") or "CNY",
+            "duration_days": int(plan.get("duration_days") or 30),
+            "team_member_quota": int(plan.get("team_member_quota") or 1),
+            "batch_row_quota": int(plan.get("batch_row_quota") or 0),
+            "media_points_included": 0,
             "includes_real_platform_writes": False,
         },
         "subscription": public_subscription,
@@ -1189,6 +1264,7 @@ def build_billing_usage(settings: SaaSSettings, repository: SaaSRepository, *, c
         "usage": usage,
         "quota_status": quota_status,
         "blocked_units": [item["unit"] for item in quota_status if item["would_block_next_unit"]],
+        "media_credits": build_media_credit_summary(repository, company_id=company_id),
         "subscription_quota_shutdown_state": _build_subscription_quota_shutdown_state(
             subscription=public_subscription,
             quota_enforcement_enabled=_env_bool("JIEJING_QUOTA_ENFORCEMENT_ENABLED"),
@@ -1348,13 +1424,13 @@ def _selected_plan_key(*, subscription: dict[str, Any] | None = None, entitlemen
         value = str(subscription.get("plan_key") or "").strip().lower()
         if value in {item["key"] for item in PLAN_CATALOG}:
             return value
-    value = os.environ.get("JIEJING_DEFAULT_PLAN_KEY", "starter").strip().lower() or "starter"
-    return value if value in {item["key"] for item in PLAN_CATALOG} else "starter"
+    value = os.environ.get("JIEJING_DEFAULT_PLAN_KEY", "free").strip().lower() or "free"
+    return value if value in {item["key"] for item in PLAN_CATALOG} else "free"
 
 
 def _plan_by_key(plan_key: str) -> dict[str, Any]:
     plans = {item["key"]: item for item in _plan_catalog_with_provider_ids()}
-    return plans.get(plan_key) or plans["starter"]
+    return plans.get(plan_key) or plans["free"]
 
 
 def _provider() -> str:

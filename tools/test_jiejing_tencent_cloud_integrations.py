@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -17,6 +18,7 @@ from jiejing_saas.backup_plan import build_backup_plan  # noqa: E402
 from jiejing_saas.commercial_launch_gate import build_commercial_launch_gate  # noqa: E402
 from jiejing_saas.config import SaaSSettings  # noqa: E402
 from jiejing_saas.monitoring import build_monitoring_status  # noqa: E402
+from jiejing_saas.readiness import build_product_readiness  # noqa: E402
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
 from jiejing_saas.vault_adapter import build_vault_adapter_contract  # noqa: E402
 import jiejing_saas.vault_secret_resolver as vault_resolver_module  # noqa: E402
@@ -50,6 +52,8 @@ ENV_KEYS = (
     "JIEJING_COS_PREFIX",
     "JIEJING_COS_BACKUP_LIVE_PROBE_REQUIRED",
     "JIEJING_COS_BACKUP_LAST_SUCCESS_AT",
+    "JIEJING_BACKUP_PROBE_MAX_AGE_HOURS",
+    "JIEJING_RESTORE_DRILL_MAX_AGE_DAYS",
     "JIEJING_CLS_ENABLED",
     "JIEJING_CLS_REGION",
     "JIEJING_CLS_LOGSET_ID",
@@ -57,6 +61,9 @@ ENV_KEYS = (
     "JIEJING_CLS_ALERT_POLICY_CONFIGURED",
     "JIEJING_CLS_LIVE_PROBE_REQUIRED",
     "JIEJING_CLS_LIVE_PROBE_LAST_AT",
+    "JIEJING_CLS_INGESTION_LIVE_PROBE_PASSED",
+    "JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT",
+    "JIEJING_CLS_PROBE_MAX_AGE_HOURS",
     "JIEJING_INCIDENT_RUNBOOK_PUBLISHED",
     "JIEJING_ONCALL_ALERT_ROUTE_CONFIGURED",
     "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED",
@@ -67,6 +74,13 @@ ENV_KEYS = (
     "JIEJING_PROVIDER_METRICS_ENABLED",
     "JIEJING_PROVIDER_LATENCY_ALERTS_CONFIGURED",
     "JIEJING_PROVIDER_COST_ALERTS_CONFIGURED",
+    "JIEJING_PROVIDER_MONITOR_SCHEDULER_ENABLED",
+    "JIEJING_PROVIDER_MONITOR_EVIDENCE_MAX_AGE_MINUTES",
+    "JIEJING_PROVIDER_DAILY_COST_WARNING_MINOR",
+    "JIEJING_PROVIDER_DAILY_COST_CRITICAL_MINOR",
+    "JIEJING_PROVIDER_LATENCY_ALARM_VERIFIED_AT",
+    "JIEJING_PROVIDER_COST_ALARM_VERIFIED_AT",
+    "JIEJING_PROVIDER_ALARM_VERIFICATION_MAX_AGE_DAYS",
 )
 
 
@@ -84,6 +98,7 @@ def main() -> int:
     try:
         vault_resolver_module._tencent_ssm_sdk_available = lambda: True
         _clear_env()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
         os.environ.update(
             {
                 "JIEJING_SAAS_ENV": "staging",
@@ -103,7 +118,7 @@ def main() -> int:
                 "JIEJING_TENCENT_SSM_KEYSPACE": "jiejing-staging",
                 "JIEJING_BACKUP_STORAGE_PROVIDER": "cos",
                 "JIEJING_BACKUP_POLICY_CONFIGURED": "true",
-                "JIEJING_RESTORE_DRILL_LAST_AT": "2026-05-18T16:55:00+08:00",
+                "JIEJING_RESTORE_DRILL_LAST_AT": (now - timedelta(days=1)).isoformat(),
                 "JIEJING_BACKUP_ALERTS_CONFIGURED": "true",
                 "JIEJING_VAULT_BACKUP_POLICY_CONFIGURED": "true",
                 "JIEJING_COS_BACKUP_ENABLED": "true",
@@ -111,14 +126,16 @@ def main() -> int:
                 "JIEJING_COS_BUCKET": "jiejing-private-backups-1250000000",
                 "JIEJING_COS_PREFIX": "jiejing/staging/backups",
                 "JIEJING_COS_BACKUP_LIVE_PROBE_REQUIRED": "true",
-                "JIEJING_COS_BACKUP_LAST_SUCCESS_AT": "2026-05-18T16:56:00+08:00",
+                "JIEJING_COS_BACKUP_LAST_SUCCESS_AT": (now - timedelta(hours=1)).isoformat(),
                 "JIEJING_CLS_ENABLED": "true",
                 "JIEJING_CLS_REGION": "ap-guangzhou",
                 "JIEJING_CLS_LOGSET_ID": "logset-jiejing",
                 "JIEJING_CLS_TOPIC_ID": "topic-saas-backend",
                 "JIEJING_CLS_ALERT_POLICY_CONFIGURED": "true",
                 "JIEJING_CLS_LIVE_PROBE_REQUIRED": "true",
-                "JIEJING_CLS_LIVE_PROBE_LAST_AT": "2026-05-18T16:57:00+08:00",
+                "JIEJING_CLS_LIVE_PROBE_LAST_AT": (now - timedelta(minutes=2)).isoformat(),
+                "JIEJING_CLS_INGESTION_LIVE_PROBE_PASSED": "true",
+                "JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT": (now - timedelta(minutes=1)).isoformat(),
                 "JIEJING_INCIDENT_RUNBOOK_PUBLISHED": "true",
                 "JIEJING_ONCALL_ALERT_ROUTE_CONFIGURED": "true",
                 "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED": "true",
@@ -129,16 +146,78 @@ def main() -> int:
                 "JIEJING_PROVIDER_METRICS_ENABLED": "true",
                 "JIEJING_PROVIDER_LATENCY_ALERTS_CONFIGURED": "true",
                 "JIEJING_PROVIDER_COST_ALERTS_CONFIGURED": "true",
+                "JIEJING_PROVIDER_MONITOR_SCHEDULER_ENABLED": "true",
+                "JIEJING_PROVIDER_MONITOR_EVIDENCE_MAX_AGE_MINUTES": "15",
+                "JIEJING_PROVIDER_DAILY_COST_WARNING_MINOR": "10000",
+                "JIEJING_PROVIDER_DAILY_COST_CRITICAL_MINOR": "20000",
+                "JIEJING_PROVIDER_LATENCY_ALARM_VERIFIED_AT": (now - timedelta(minutes=1)).isoformat(),
+                "JIEJING_PROVIDER_COST_ALARM_VERIFIED_AT": (now - timedelta(minutes=1)).isoformat(),
+                "JIEJING_PROVIDER_ALARM_VERIFICATION_MAX_AGE_DAYS": "7",
             }
         )
         settings = _settings(db_path)
         repo = SaaSRepository(settings.db_path, database_engine="sqlite")
         repo.initialize()
+        _seed_provider_monitoring_state(repo, now)
 
         backup = build_backup_plan(settings, repo)
-        monitoring = build_monitoring_status(settings, repo)
+        monitoring = build_monitoring_status(settings, repo, now_utc=now)
         vault_adapter = build_vault_adapter_contract(settings)
         launch_gate = build_commercial_launch_gate(settings, repo)
+        os.environ["JIEJING_CLS_LIVE_PROBE_LAST_AT"] = (now - timedelta(hours=25)).isoformat()
+        stale_cls_control = build_monitoring_status(settings, repo, now_utc=now)
+        os.environ["JIEJING_CLS_LIVE_PROBE_LAST_AT"] = (now - timedelta(minutes=2)).isoformat()
+        os.environ["JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT"] = (now - timedelta(hours=25)).isoformat()
+        stale_cls_ingestion = build_monitoring_status(settings, repo, now_utc=now)
+        os.environ["JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT"] = "not-an-iso-timestamp"
+        invalid_cls_ingestion = build_monitoring_status(settings, repo, now_utc=now)
+        os.environ["JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT"] = (now + timedelta(minutes=6)).isoformat()
+        future_cls_ingestion = build_monitoring_status(settings, repo, now_utc=now)
+        os.environ["JIEJING_CLS_PROBE_MAX_AGE_HOURS"] = "2"
+        os.environ["JIEJING_CLS_LIVE_PROBE_LAST_AT"] = (now - timedelta(hours=3)).isoformat()
+        os.environ["JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT"] = (now - timedelta(minutes=1)).isoformat()
+        custom_cls_age = build_monitoring_status(settings, repo, now_utc=now)
+        os.environ["JIEJING_CLS_PROBE_MAX_AGE_HOURS"] = "nan"
+        os.environ["JIEJING_CLS_LIVE_PROBE_LAST_AT"] = (now - timedelta(hours=23)).isoformat()
+        fallback_cls_age = build_monitoring_status(settings, repo, now_utc=now)
+        os.environ.pop("JIEJING_CLS_PROBE_MAX_AGE_HOURS", None)
+        os.environ["JIEJING_CLS_LIVE_PROBE_LAST_AT"] = (now - timedelta(minutes=2)).isoformat()
+        os.environ["JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT"] = (now - timedelta(minutes=1)).isoformat()
+        os.environ["JIEJING_COS_BACKUP_LAST_SUCCESS_AT"] = (now - timedelta(hours=37)).isoformat()
+        stale_cos_backup = build_backup_plan(settings, repo)
+        os.environ["JIEJING_COS_BACKUP_LAST_SUCCESS_AT"] = (now - timedelta(hours=1)).isoformat()
+        os.environ["JIEJING_RESTORE_DRILL_LAST_AT"] = (now - timedelta(days=31)).isoformat()
+        stale_restore_backup = build_backup_plan(settings, repo)
+        os.environ["JIEJING_RESTORE_DRILL_LAST_AT"] = (now - timedelta(days=1)).isoformat()
+        os.environ["JIEJING_COS_BACKUP_LAST_SUCCESS_AT"] = "not-an-iso-timestamp"
+        invalid_cos_backup = build_backup_plan(settings, repo)
+        os.environ["JIEJING_COS_BACKUP_LAST_SUCCESS_AT"] = (now - timedelta(hours=1)).isoformat()
+        os.environ["JIEJING_RESTORE_DRILL_LAST_AT"] = "not-an-iso-timestamp"
+        invalid_restore_backup = build_backup_plan(settings, repo)
+        os.environ["JIEJING_RESTORE_DRILL_LAST_AT"] = (now - timedelta(days=1)).isoformat()
+        os.environ["JIEJING_COS_BACKUP_LAST_SUCCESS_AT"] = (now + timedelta(minutes=10)).isoformat()
+        future_cos_backup = build_backup_plan(settings, repo)
+        os.environ["JIEJING_COS_BACKUP_LAST_SUCCESS_AT"] = (now - timedelta(hours=1)).isoformat()
+        os.environ["JIEJING_RESTORE_DRILL_LAST_AT"] = (now + timedelta(minutes=10)).isoformat()
+        future_restore_backup = build_backup_plan(settings, repo)
+        os.environ["JIEJING_RESTORE_DRILL_LAST_AT"] = (now - timedelta(days=1)).isoformat()
+        os.environ["JIEJING_COS_BACKUP_LAST_SUCCESS_AT"] = (now - timedelta(hours=3)).isoformat()
+        os.environ["JIEJING_BACKUP_PROBE_MAX_AGE_HOURS"] = "2"
+        custom_cos_age_backup = build_backup_plan(settings, repo)
+        os.environ["JIEJING_BACKUP_PROBE_MAX_AGE_HOURS"] = "36"
+        os.environ["JIEJING_COS_BACKUP_LAST_SUCCESS_AT"] = (now - timedelta(hours=1)).isoformat()
+        os.environ["JIEJING_RESTORE_DRILL_LAST_AT"] = (now - timedelta(days=8)).isoformat()
+        os.environ["JIEJING_RESTORE_DRILL_MAX_AGE_DAYS"] = "7"
+        custom_restore_age_backup = build_backup_plan(settings, repo)
+        os.environ["JIEJING_RESTORE_DRILL_MAX_AGE_DAYS"] = "30"
+        os.environ["JIEJING_RESTORE_DRILL_LAST_AT"] = (now - timedelta(days=1)).isoformat()
+        os.environ["JIEJING_COS_BACKUP_LIVE_PROBE_REQUIRED"] = "false"
+        os.environ.pop("JIEJING_COS_BACKUP_LAST_SUCCESS_AT", None)
+        missing_cos_backup = build_backup_plan(settings, repo)
+        os.environ["JIEJING_COS_BACKUP_LIVE_PROBE_REQUIRED"] = "true"
+        os.environ["JIEJING_COS_BACKUP_LAST_SUCCESS_AT"] = (now - timedelta(hours=37)).isoformat()
+        os.environ["JIEJING_RESTORE_DRILL_LAST_AT"] = (now - timedelta(days=31)).isoformat()
+        stale_evidence_readiness = build_product_readiness(settings, repo)
     finally:
         vault_resolver_module._tencent_ssm_sdk_available = original_sdk_available
         _restore_env(previous)
@@ -159,10 +238,76 @@ def main() -> int:
         return fail(f"COS backup plan should be ready when managed policy and restore drill are configured: {backup.get('blockers')}")
     if backup.get("object_storage", {}).get("target_ready") is not True:
         return fail("COS backup target should be ready when bucket, region and probe are configured")
+    if stale_cos_backup.get("backup_ready_for_paid_launch") is not False:
+        return fail("COS backup evidence older than 36 hours must block paid launch")
+    if "cos_backup_probe_stale" not in (stale_cos_backup.get("blockers") or []):
+        return fail(f"stale COS backup evidence should report cos_backup_probe_stale: {stale_cos_backup.get('blockers')}")
+    if "run_non_secret_cos_backup_probe_and_record_success_time" not in (stale_cos_backup.get("next_actions") or []):
+        return fail("stale COS evidence should direct operators to record a new non-secret probe")
+    if stale_restore_backup.get("backup_ready_for_paid_launch") is not False:
+        return fail("restore drill evidence older than 30 days must block paid launch")
+    if "restore_drill_overdue" not in (stale_restore_backup.get("blockers") or []):
+        return fail(f"stale restore drill evidence should report restore_drill_overdue: {stale_restore_backup.get('blockers')}")
+    if invalid_cos_backup.get("backup_ready_for_paid_launch") is not False:
+        return fail("invalid COS backup evidence timestamp must block paid launch")
+    if "cos_backup_probe_timestamp_invalid" not in (invalid_cos_backup.get("blockers") or []):
+        return fail(f"invalid COS timestamp should report cos_backup_probe_timestamp_invalid: {invalid_cos_backup.get('blockers')}")
+    if invalid_restore_backup.get("backup_ready_for_paid_launch") is not False:
+        return fail("invalid restore drill timestamp must block paid launch")
+    if "restore_drill_timestamp_invalid" not in (invalid_restore_backup.get("blockers") or []):
+        return fail(f"invalid restore timestamp should report restore_drill_timestamp_invalid: {invalid_restore_backup.get('blockers')}")
+    if future_cos_backup.get("backup_ready_for_paid_launch") is not False:
+        return fail("COS backup evidence more than five minutes in the future must block paid launch")
+    if "cos_backup_probe_timestamp_in_future" not in (future_cos_backup.get("blockers") or []):
+        return fail(f"future COS timestamp should report cos_backup_probe_timestamp_in_future: {future_cos_backup.get('blockers')}")
+    if future_restore_backup.get("backup_ready_for_paid_launch") is not False:
+        return fail("restore drill evidence more than five minutes in the future must block paid launch")
+    if "restore_drill_timestamp_in_future" not in (future_restore_backup.get("blockers") or []):
+        return fail(f"future restore timestamp should report restore_drill_timestamp_in_future: {future_restore_backup.get('blockers')}")
+    if "cos_backup_probe_stale" not in (custom_cos_age_backup.get("blockers") or []):
+        return fail(f"custom two-hour COS threshold should block three-hour-old evidence: {custom_cos_age_backup.get('blockers')}")
+    if custom_cos_age_backup.get("object_storage", {}).get("live_probe_max_age_hours") != 2.0:
+        return fail("COS backup plan should expose the configured freshness threshold")
+    if "restore_drill_overdue" not in (custom_restore_age_backup.get("blockers") or []):
+        return fail(f"custom seven-day restore threshold should block eight-day-old evidence: {custom_restore_age_backup.get('blockers')}")
+    if custom_restore_age_backup.get("restore", {}).get("restore_drill_max_age_days") != 7.0:
+        return fail("backup plan should expose the configured restore drill freshness threshold")
+    if missing_cos_backup.get("backup_ready_for_paid_launch") is not False:
+        return fail("paid-launch backup readiness must require recent COS success evidence even when the optional live-probe flag is false")
+    if "cos_backup_probe_not_recorded" not in (missing_cos_backup.get("blockers") or []):
+        return fail(f"missing paid-launch COS evidence should report cos_backup_probe_not_recorded: {missing_cos_backup.get('blockers')}")
+    stale_readiness_items = {item.get("key"): item for item in stale_evidence_readiness.get("items") or []}
+    stale_backup_item = stale_readiness_items.get("backup_restore") or {}
+    if stale_backup_item.get("status") != "paid_launch_backup_evidence_stale":
+        return fail(f"staging should identify freshness-only backup debt without regressing beta: {stale_backup_item}")
+    if stale_backup_item.get("severity") != "warning":
+        return fail(f"freshness-only backup debt should remain a paid-launch warning in staging: {stale_backup_item}")
     if monitoring.get("production_monitoring_ready") is not True:
         return fail(f"CLS monitoring should be ready when logset/topic and alert policy are configured: {monitoring.get('current_blockers')}")
     if monitoring.get("cloud_monitoring", {}).get("target_ready") is not True:
         return fail("CLS target should be ready")
+    if "tencent_cls_live_probe_stale" not in (stale_cls_control.get("cloud_monitoring", {}).get("blocked_by") or []):
+        return fail("stale CLS control-plane evidence must block the integrated monitoring contract")
+    if "tencent_cls_ingestion_live_probe_stale" not in (
+        stale_cls_ingestion.get("cloud_monitoring", {}).get("blocked_by") or []
+    ):
+        return fail("stale CLS ingestion evidence must block the integrated monitoring contract")
+    if "tencent_cls_ingestion_live_probe_timestamp_invalid" not in (
+        invalid_cls_ingestion.get("cloud_monitoring", {}).get("blocked_by") or []
+    ):
+        return fail("invalid CLS ingestion evidence must block the integrated monitoring contract")
+    if "tencent_cls_ingestion_live_probe_timestamp_in_future" not in (
+        future_cls_ingestion.get("cloud_monitoring", {}).get("blocked_by") or []
+    ):
+        return fail("future CLS ingestion evidence must block the integrated monitoring contract")
+    if "tencent_cls_live_probe_stale" not in (custom_cls_age.get("cloud_monitoring", {}).get("blocked_by") or []):
+        return fail("custom CLS evidence threshold must flow through the integrated monitoring contract")
+    if custom_cls_age.get("cloud_monitoring", {}).get("live_probe_max_age_hours") != 2.0:
+        return fail("integrated CLS status must expose the custom freshness threshold")
+    if fallback_cls_age.get("cloud_monitoring", {}).get("target_ready") is not True:
+        return fail("invalid integrated CLS threshold must fall back to the safe 24-hour default")
+    if fallback_cls_age.get("cloud_monitoring", {}).get("live_probe_max_age_hours") != 24.0:
+        return fail("integrated CLS status must expose the fallback freshness threshold")
     groups = {item.get("key"): item for item in launch_gate.get("groups") or []}
     if groups.get("monitoring_alerting", {}).get("status") != "ready":
         return fail("commercial launch gate should require and recognize the Tencent CLS monitoring target")
@@ -193,6 +338,24 @@ def _settings(db_path: Path) -> SaaSSettings:
         output_root=OUT,
         host="127.0.0.1",
         port=8788,
+    )
+
+
+def _seed_provider_monitoring_state(repo: SaaSRepository, now: datetime) -> None:
+    owner_hash = "tencent-cloud-integrations-fixture"
+    repo.acquire_provider_monitoring_lease(
+        scheduler_key="provider-monitor",
+        owner_hash=owner_hash,
+        lease_seconds=300,
+        now_epoch=int(now.timestamp()) - 60,
+    )
+    repo.complete_provider_monitoring_evaluation(
+        scheduler_key="provider-monitor",
+        owner_hash=owner_hash,
+        evaluated_at=(now - timedelta(minutes=1)).isoformat(),
+        exported_at=(now - timedelta(minutes=1)).isoformat(),
+        outcome="exported",
+        snapshot={"reliability_status": "insufficient_data", "cost_status": "healthy"},
     )
 
 

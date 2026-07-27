@@ -80,6 +80,9 @@ services:
         condition: service_completed_successfully
     env_file:
       - ./jiejing-saas.infra.env
+    environment:
+      JIEJING_DOMESTIC_BILLING_MAINTENANCE_ENABLED: "true"
+      JIEJING_DOMESTIC_BILLING_AUTO_RECONCILE_ENABLED: "true"
     volumes:
       - jiejing_saas_runtime_data:/data
     command:

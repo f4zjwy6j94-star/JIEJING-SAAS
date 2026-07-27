@@ -8,14 +8,38 @@ creating a charge.
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from . import billing_domestic, billing_wechat_pay as wechat_pay
 from .config import SaaSSettings
+
+if TYPE_CHECKING:
+    from .repository import SaaSRepository
 
 
 MAINLAND_PAYMENT_CONTRACT_VERSION = "2026-06-29-mainland-payment-strategy"
 FORMAL_PAYMENT_ARCHITECTURE_VERSION = "2026-06-29-formal-payment-collection-architecture"
 MERCHANT_APPLICATION_PACKET_VERSION = "2026-07-01-merchant-payment-application-packet"
+MAINLAND_PAYMENT_LAUNCH_CONTRACT_VERSION = "2026-07-27-mainland-payment-launch-v1"
+MAINLAND_WECHAT_CONFIGURATION_KEYS = (
+    "appid",
+    "mchid",
+    "merchant_serial",
+    "merchant_private_key",
+    "api_v3_key",
+    "response_verification_key",
+    "response_verification_key_id",
+    "notify_url",
+    "refund_notify_url",
+)
+MAINLAND_PAYMENT_REQUIRED_CAPABILITY_KEYS = (
+    "signed_payment_callback_implemented",
+    "signed_refund_callback_implemented",
+    "real_order_creation_implemented",
+    "authenticated_order_query_implemented",
+    "quota_entitlement_persistence_implemented",
+    "high_risk_confirmation_boundary_implemented",
+)
 
 
 def build_mainland_payment_strategy(settings: SaaSSettings) -> dict[str, Any]:
@@ -129,6 +153,490 @@ def build_mainland_payment_strategy(settings: SaaSSettings) -> dict[str, Any]:
         ),
         "charge_now_allowed": False,
         "triggers_real_charge": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def build_mainland_payment_launch_status(
+    settings: SaaSSettings,
+    repository: SaaSRepository,
+) -> dict[str, Any]:
+    """Return the canonical, sanitized mainland payment launch state.
+
+    Building this status is deliberately read-only: it checks configuration
+    presence and aggregate acceptance evidence, but never creates, queries, or
+    refunds a provider order.
+    """
+
+    try:
+        strategy = build_mainland_payment_strategy(settings)
+        wechat = wechat_pay.build_wechat_pay_native_contract()
+        acceptance = repository.domestic_payment_acceptance_evidence()
+        if not isinstance(strategy, dict) or not isinstance(wechat, dict) or not isinstance(acceptance, dict):
+            raise TypeError("payment launch dependency returned an invalid contract")
+        return _build_mainland_payment_launch_status(
+            strategy=strategy,
+            wechat=wechat,
+            acceptance=acceptance,
+        )
+    except Exception:
+        return _unavailable_mainland_payment_launch_status()
+
+
+def validate_mainland_payment_launch_for_public(value: Any) -> dict[str, Any]:
+    """Validate and reduce the canonical launch contract for response boundaries.
+
+    Both the merchant billing response and the unauthenticated readiness response
+    consume this exact result.  Keeping the fail-closed decision here prevents
+    either boundary from accepting a contradictory count, marker, or safety flag.
+    """
+
+    mainland = value if isinstance(value, dict) else {}
+    unavailable = {
+        "mainland_payment_ready_for_owner_approval": False,
+        "provider_configured": False,
+        "payment_path_status": "payment_status_unavailable",
+        "merchant_status": "unavailable",
+        "domestic_payment_status": "unavailable",
+        "configured_component_count": 0,
+        "required_component_count": 0,
+        "controlled_acceptance_proven": False,
+        "verified_paid_order_count": 0,
+        "next_paid_launch_blocker": "merchant_payment_status_unavailable",
+    }
+    safety_fields = (
+        "public_charging_allowed",
+        "charge_now_allowed",
+        "triggers_real_charge",
+        "triggers_real_refund",
+        "calls_external_payment_api",
+        "calls_stripe_api",
+        "real_platform_writes_enabled",
+        "frontend_gets_payment_secret",
+        "secret_exposed",
+    )
+    identity_valid = all(
+        (
+            mainland.get("contract_version") == MAINLAND_PAYMENT_LAUNCH_CONTRACT_VERSION,
+            mainland.get("market") == "mainland_china",
+            mainland.get("primary_provider") == "wechat_pay_native",
+            mainland.get("checkout_mode") == "native_qr",
+            mainland.get("billing_mode") == "one_time_30_day_plan",
+            all(mainland.get(key) is False for key in safety_fields),
+        )
+    )
+    configuration = mainland.get("configuration") if isinstance(mainland.get("configuration"), dict) else {}
+    required_count = configuration.get("required_count")
+    configured_count = configuration.get("completed_count")
+    configuration_shape_valid = all(
+        (
+            type(required_count) is int,
+            required_count == len(MAINLAND_WECHAT_CONFIGURATION_KEYS),
+            type(configured_count) is int,
+            type(configured_count) is int
+            and type(required_count) is int
+            and 0 <= configured_count <= required_count,
+            type(configuration.get("complete")) is bool,
+            type(configured_count) is int
+            and configuration.get("complete") is (configured_count == len(MAINLAND_WECHAT_CONFIGURATION_KEYS)),
+        )
+    )
+    configuration_complete = configuration_shape_valid and configured_count == required_count
+
+    capabilities = mainland.get("code_capabilities") if isinstance(mainland.get("code_capabilities"), dict) else {}
+    capability_shape_valid = all(type(capabilities.get(key)) is bool for key in MAINLAND_PAYMENT_REQUIRED_CAPABILITY_KEYS)
+    capability_ready = capability_shape_valid and all(
+        capabilities.get(key) is True for key in MAINLAND_PAYMENT_REQUIRED_CAPABILITY_KEYS
+    )
+
+    acceptance = mainland.get("acceptance_evidence") if isinstance(mainland.get("acceptance_evidence"), dict) else {}
+    verified_count = acceptance.get("verified_paid_order_count")
+    acceptance_marker = acceptance.get("controlled_acceptance_proven")
+    verified_count_valid = type(verified_count) is int and verified_count >= 0
+    acceptance_shape_valid = all(
+        (
+            acceptance.get("contract_version") == "2026-07-27-domestic-payment-acceptance-evidence-v2",
+            acceptance.get("provider") == "wechat_pay_native",
+            acceptance.get("acceptance_kind") == "owner_approved_one_cny_live_acceptance",
+            verified_count_valid,
+            type(acceptance_marker) is bool,
+            verified_count_valid and acceptance_marker is (verified_count > 0),
+            all(
+                acceptance.get(key) is False
+                for key in (
+                    "public_charging_allowed",
+                    "charge_now_allowed",
+                    "triggers_real_charge",
+                    "calls_external_payment_api",
+                    "secret_exposed",
+                )
+            ),
+        )
+    )
+    outer_acceptance_marker = mainland.get("controlled_acceptance_proven")
+    provider_checkout_marker = mainland.get("provider_checkout_ready")
+    production_environment_marker = mainland.get("production_environment")
+    refund_ready_marker = mainland.get("refund_now_allowed")
+    canonical_owner_marker = mainland.get("mainland_payment_ready_for_owner_approval")
+    dynamic_shape_valid = all(
+        (
+            type(outer_acceptance_marker) is bool,
+            outer_acceptance_marker is acceptance_marker,
+            type(provider_checkout_marker) is bool,
+            type(production_environment_marker) is bool,
+            type(refund_ready_marker) is bool,
+            type(canonical_owner_marker) is bool,
+        )
+    )
+    controlled_acceptance_proven = bool(
+        acceptance_shape_valid
+        and outer_acceptance_marker is True
+        and acceptance_marker is True
+        and verified_count > 0
+    )
+    computed_owner_ready = all(
+        (
+            configuration_complete,
+            capability_ready,
+            provider_checkout_marker is True,
+            production_environment_marker is True,
+            refund_ready_marker is True,
+            controlled_acceptance_proven,
+        )
+    )
+    owner_shape_valid = type(canonical_owner_marker) is bool
+    canonical_valid = all(
+        (
+            identity_valid,
+            configuration_shape_valid,
+            capability_shape_valid,
+            acceptance_shape_valid,
+            dynamic_shape_valid,
+            owner_shape_valid,
+        )
+    )
+    if not canonical_valid:
+        return unavailable
+
+    provider_configured = configuration_complete and provider_checkout_marker is True
+    if not configuration_complete:
+        blocker = "merchant_payment_provider_configuration_incomplete"
+        payment_status = "configuration_in_progress"
+        domestic_status = "configuration_in_progress"
+        merchant_status = "configuration_in_progress"
+    elif not capability_ready:
+        blocker = "merchant_payment_backend_safety_controls_incomplete"
+        payment_status = "backend_safety_controls_in_progress"
+        domestic_status = "backend_safety_controls_in_progress"
+        merchant_status = "backend_safety_controls_in_progress"
+    elif provider_checkout_marker is not True:
+        blocker = "merchant_payment_provider_connection_not_ready"
+        payment_status = "provider_connection_in_progress"
+        domestic_status = "provider_connection_in_progress"
+        merchant_status = "provider_connection_in_progress"
+    elif production_environment_marker is not True:
+        blocker = "merchant_payment_production_environment_required"
+        payment_status = "production_environment_pending"
+        domestic_status = "production_environment_pending"
+        merchant_status = "production_environment_pending"
+    elif refund_ready_marker is not True:
+        blocker = "merchant_payment_refund_not_ready"
+        payment_status = "refund_controls_pending"
+        domestic_status = "refund_controls_pending"
+        merchant_status = "refund_controls_pending"
+    elif not controlled_acceptance_proven:
+        blocker = "merchant_payment_controlled_acceptance_not_proven"
+        payment_status = "controlled_acceptance_pending"
+        domestic_status = "controlled_acceptance_pending"
+        merchant_status = "controlled_acceptance_pending"
+    elif canonical_owner_marker is not True:
+        return unavailable
+    else:
+        blocker = "merchant_payment_public_cutover_not_approved"
+        payment_status = "controlled_acceptance_proven_public_charging_closed"
+        domestic_status = "controlled_acceptance_proven"
+        merchant_status = "awaiting_public_cutover"
+    return {
+        "mainland_payment_ready_for_owner_approval": computed_owner_ready and canonical_owner_marker is True,
+        "provider_configured": provider_configured,
+        "payment_path_status": payment_status,
+        "merchant_status": merchant_status,
+        "domestic_payment_status": domestic_status,
+        "configured_component_count": configured_count,
+        "required_component_count": required_count,
+        "controlled_acceptance_proven": controlled_acceptance_proven,
+        "verified_paid_order_count": verified_count,
+        "next_paid_launch_blocker": blocker,
+    }
+
+
+def _build_mainland_payment_launch_status(
+    *,
+    strategy: dict[str, Any],
+    wechat: dict[str, Any],
+    acceptance: dict[str, Any],
+) -> dict[str, Any]:
+    mainland_payment_strategy_contract_valid = all(
+        (
+            strategy.get("contract_version") == MAINLAND_PAYMENT_CONTRACT_VERSION,
+            strategy.get("charge_now_allowed") is False,
+            strategy.get("triggers_real_charge") is False,
+            strategy.get("frontend_gets_payment_secret") is False,
+            strategy.get("secret_exposed") is False,
+        )
+    )
+    configured_source = wechat.get("configured") if isinstance(wechat.get("configured"), dict) else {}
+    configured = {key: configured_source.get(key) is True for key in MAINLAND_WECHAT_CONFIGURATION_KEYS}
+    completed_count = sum(1 for ready in configured.values() if ready)
+    configuration_complete = completed_count == len(MAINLAND_WECHAT_CONFIGURATION_KEYS)
+    wechat_native_contract_valid = all(
+        (
+            wechat.get("contract_version") == "2026-07-14-wechat-pay-native-v3",
+            wechat.get("provider") == "wechat_pay_native",
+            wechat.get("checkout_mode") == "native_qr",
+            wechat.get("billing_mode") == "one_time_30_day_plan",
+            wechat.get("merchant_credentials_backend_only") is True,
+            wechat.get("frontend_gets_payment_secret") is False,
+            wechat.get("secret_exposed") is False,
+        )
+    )
+    provider_checkout_ready = (
+        mainland_payment_strategy_contract_valid
+        and wechat_native_contract_valid
+        and configuration_complete
+        and wechat.get("provider_connection_ready") is True
+    )
+    verified_paid_order_count = _safe_verified_payment_count(acceptance.get("verified_paid_order_count"))
+    acceptance_source_flag = acceptance.get("controlled_acceptance_proven") is True
+    acceptance_count_proves_payment = verified_paid_order_count > 0
+    acceptance_evidence_inconsistent = acceptance_source_flag != acceptance_count_proves_payment
+    acceptance_identity_contract_valid = all(
+        (
+            acceptance.get("contract_version") == "2026-07-27-domestic-payment-acceptance-evidence-v2",
+            acceptance.get("provider") == "wechat_pay_native",
+            acceptance.get("acceptance_kind") == "owner_approved_one_cny_live_acceptance",
+        )
+    )
+    acceptance_safety_contract_valid = all(
+        acceptance.get(key) is False
+        for key in (
+            "public_charging_allowed",
+            "charge_now_allowed",
+            "triggers_real_charge",
+            "calls_external_payment_api",
+            "secret_exposed",
+        )
+    )
+    controlled_acceptance_proven = (
+        acceptance_source_flag
+        and acceptance_count_proves_payment
+        and acceptance_identity_contract_valid
+        and acceptance_safety_contract_valid
+    )
+    production_environment = wechat.get("production_environment") is True
+    owner_approval_recorded = wechat.get("owner_approval_recorded") is True
+
+    code_capabilities = {
+        "signed_payment_callback_implemented": (
+            wechat.get("signed_callback_implemented") is True
+            and callable(getattr(wechat_pay, "process_wechat_pay_notification_from_env", None))
+        ),
+        "signed_refund_callback_implemented": (
+            wechat.get("signed_refund_callback_implemented") is True
+            and callable(getattr(wechat_pay, "process_wechat_pay_refund_notification_from_env", None))
+        ),
+        "real_order_creation_implemented": (
+            wechat.get("real_order_creation_implemented") is True
+            and callable(getattr(wechat_pay, "create_wechat_pay_native_order_from_env", None))
+        ),
+        "authenticated_order_query_implemented": (
+            callable(getattr(wechat_pay, "query_wechat_pay_order_from_env", None))
+            and callable(getattr(wechat_pay, "reconcile_wechat_pay_order_query", None))
+        ),
+        "quota_entitlement_persistence_implemented": callable(
+            getattr(wechat_pay, "recover_paid_wechat_pay_entitlement", None)
+        ),
+        "refund_execution_confirmation_required": wechat.get("refund_execution_confirmation_required") is True,
+        "high_risk_confirmation_boundary_implemented": (
+            wechat.get("refund_execution_confirmation_required") is True
+            and callable(getattr(billing_domestic, "request_domestic_billing_refund_review", None))
+            and callable(getattr(billing_domestic, "execute_approved_domestic_billing_refund", None))
+        ),
+    }
+    blockers: list[str] = []
+    if not mainland_payment_strategy_contract_valid:
+        blockers.append("mainland_payment_strategy_contract_invalid")
+    if not wechat_native_contract_valid:
+        blockers.append("wechat_pay_native_contract_invalid")
+    if not configured_source:
+        blockers.append("wechat_pay_configuration_contract_missing")
+    blockers.extend(f"wechat_pay_{key}_not_configured" for key in MAINLAND_WECHAT_CONFIGURATION_KEYS if not configured[key])
+    blockers.extend(
+        f"wechat_pay_{key}_missing"
+        for key in (*MAINLAND_PAYMENT_REQUIRED_CAPABILITY_KEYS, "refund_execution_confirmation_required")
+        if code_capabilities.get(key) is not True
+    )
+    if configuration_complete and not provider_checkout_ready:
+        blockers.append("wechat_pay_live_api_disabled")
+    if not acceptance_identity_contract_valid:
+        blockers.append("controlled_wechat_pay_acceptance_identity_contract_invalid")
+    if not acceptance_safety_contract_valid:
+        blockers.append("controlled_wechat_pay_acceptance_safety_contract_invalid")
+    if acceptance_evidence_inconsistent:
+        blockers.append("controlled_wechat_pay_acceptance_evidence_inconsistent")
+    elif not (acceptance_source_flag and acceptance_count_proves_payment):
+        blockers.append("controlled_wechat_pay_acceptance_not_proven")
+    if not production_environment:
+        blockers.append("public_checkout_requires_production_environment")
+    if wechat.get("refund_now_allowed") is not True:
+        blockers.append("wechat_pay_refund_not_approved_or_ready")
+    if not owner_approval_recorded:
+        blockers.append("paid_launch_owner_approval_packet_missing")
+    blockers.append("public_charging_requires_higher_commercial_release_gate")
+    blockers = list(dict.fromkeys(blockers))
+
+    stripe_lane = next(
+        (
+            lane
+            for lane in strategy.get("cross_border_lanes", [])
+            if isinstance(lane, dict) and lane.get("key") == "stripe"
+        ),
+        {},
+    )
+    acceptance_evidence = {
+        "contract_version": "2026-07-27-domestic-payment-acceptance-evidence-v2",
+        "provider": "wechat_pay_native",
+        "acceptance_kind": "owner_approved_one_cny_live_acceptance",
+        "controlled_acceptance_proven": controlled_acceptance_proven,
+        "verified_paid_order_count": verified_paid_order_count,
+        "public_charging_allowed": False,
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "calls_external_payment_api": False,
+        "secret_exposed": False,
+    }
+    ready_for_owner_approval = all(
+        (
+            provider_checkout_ready,
+            controlled_acceptance_proven,
+            production_environment,
+            wechat.get("refund_now_allowed") is True,
+            all(code_capabilities.get(key) is True for key in MAINLAND_PAYMENT_REQUIRED_CAPABILITY_KEYS),
+        )
+    )
+
+    return {
+        "contract_version": MAINLAND_PAYMENT_LAUNCH_CONTRACT_VERSION,
+        "status": "blocked" if blockers else "ready",
+        "market": "mainland_china",
+        "primary_provider": "wechat_pay_native",
+        "checkout_mode": "native_qr",
+        "billing_mode": "one_time_30_day_plan",
+        "future_international_payment": {
+            "provider": "stripe",
+            "role": "future_international_payment_only",
+            "selected": stripe_lane.get("selected") is True,
+            "blocks_mainland_launch": False,
+            "calls_stripe_api": False,
+            "triggers_real_charge": False,
+            "secret_exposed": False,
+        },
+        "code_capabilities": code_capabilities,
+        "configuration": {
+            "required_count": len(MAINLAND_WECHAT_CONFIGURATION_KEYS),
+            "completed_count": completed_count,
+            "complete": configuration_complete,
+            "component_presence": configured,
+            "secret_values_included": False,
+        },
+        "acceptance_evidence": acceptance_evidence,
+        "controlled_acceptance_proven": controlled_acceptance_proven,
+        "provider_checkout_ready": provider_checkout_ready,
+        "production_environment": production_environment,
+        "refund_now_allowed": wechat.get("refund_now_allowed") is True,
+        "owner_approval_recorded": owner_approval_recorded,
+        "mainland_payment_ready_for_owner_approval": ready_for_owner_approval,
+        "paid_launch_ready": False,
+        "paid_launch_blockers": blockers,
+        "public_charging_allowed": False,
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "triggers_real_refund": False,
+        "calls_external_payment_api": False,
+        "calls_stripe_api": False,
+        "real_platform_writes_enabled": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def _safe_verified_payment_count(value: Any) -> int:
+    if type(value) is not int or value < 0:
+        return 0
+    return min(value, 100)
+
+
+def _unavailable_mainland_payment_launch_status() -> dict[str, Any]:
+    return {
+        "contract_version": MAINLAND_PAYMENT_LAUNCH_CONTRACT_VERSION,
+        "status": "blocked",
+        "market": "mainland_china",
+        "primary_provider": "wechat_pay_native",
+        "checkout_mode": "native_qr",
+        "billing_mode": "one_time_30_day_plan",
+        "future_international_payment": {
+            "provider": "stripe",
+            "role": "future_international_payment_only",
+            "selected": False,
+            "blocks_mainland_launch": False,
+            "calls_stripe_api": False,
+            "triggers_real_charge": False,
+            "secret_exposed": False,
+        },
+        "code_capabilities": {
+            "signed_payment_callback_implemented": False,
+            "signed_refund_callback_implemented": False,
+            "real_order_creation_implemented": False,
+            "authenticated_order_query_implemented": False,
+            "quota_entitlement_persistence_implemented": False,
+            "refund_execution_confirmation_required": False,
+            "high_risk_confirmation_boundary_implemented": False,
+        },
+        "configuration": {
+            "required_count": len(MAINLAND_WECHAT_CONFIGURATION_KEYS),
+            "completed_count": 0,
+            "complete": False,
+            "component_presence": {key: False for key in MAINLAND_WECHAT_CONFIGURATION_KEYS},
+            "secret_values_included": False,
+        },
+        "acceptance_evidence": {
+            "contract_version": "2026-07-27-domestic-payment-acceptance-evidence-v2",
+            "provider": "wechat_pay_native",
+            "acceptance_kind": "owner_approved_one_cny_live_acceptance",
+            "controlled_acceptance_proven": False,
+            "verified_paid_order_count": 0,
+            "public_charging_allowed": False,
+            "charge_now_allowed": False,
+            "triggers_real_charge": False,
+            "calls_external_payment_api": False,
+            "secret_exposed": False,
+        },
+        "controlled_acceptance_proven": False,
+        "provider_checkout_ready": False,
+        "production_environment": False,
+        "refund_now_allowed": False,
+        "owner_approval_recorded": False,
+        "mainland_payment_ready_for_owner_approval": False,
+        "paid_launch_ready": False,
+        "paid_launch_blockers": ["mainland_payment_status_unavailable"],
+        "public_charging_allowed": False,
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "triggers_real_refund": False,
+        "calls_external_payment_api": False,
+        "calls_stripe_api": False,
+        "real_platform_writes_enabled": False,
         "frontend_gets_payment_secret": False,
         "secret_exposed": False,
     }
@@ -295,6 +803,10 @@ def _customer_review_brief(
 
 
 def _domestic_lanes(selected_provider: str) -> list[dict[str, Any]]:
+    wechat_contract = wechat_pay.build_wechat_pay_native_contract()
+    wechat_configured = (
+        wechat_contract.get("configured") if isinstance(wechat_contract.get("configured"), dict) else {}
+    )
     return [
         _domestic_lane(
             key="wechat_pay_native",
@@ -304,9 +816,25 @@ def _domestic_lanes(selected_provider: str) -> list[dict[str, Any]]:
             required_env=[
                 "JIEJING_WECHAT_PAY_MCH_ID",
                 "JIEJING_WECHAT_PAY_APP_ID",
+                "JIEJING_WECHAT_PAY_MERCHANT_SERIAL_NO",
+                "JIEJING_WECHAT_PAY_MERCHANT_PRIVATE_KEY_PEM_B64",
                 "JIEJING_WECHAT_PAY_API_V3_KEY",
-                "JIEJING_WECHAT_PAY_CERT_SERIAL_NO",
+                "JIEJING_WECHAT_PAY_PUBLIC_KEY_ID",
+                "JIEJING_WECHAT_PAY_PUBLIC_KEY_PEM_B64",
+                "JIEJING_WECHAT_PAY_NOTIFY_URL",
+                "JIEJING_WECHAT_PAY_REFUND_NOTIFY_URL",
             ],
+            configured_override={
+                "JIEJING_WECHAT_PAY_MCH_ID": wechat_configured.get("mchid") is True,
+                "JIEJING_WECHAT_PAY_APP_ID": wechat_configured.get("appid") is True,
+                "JIEJING_WECHAT_PAY_MERCHANT_SERIAL_NO": wechat_configured.get("merchant_serial") is True,
+                "JIEJING_WECHAT_PAY_MERCHANT_PRIVATE_KEY_PEM_B64": wechat_configured.get("merchant_private_key") is True,
+                "JIEJING_WECHAT_PAY_API_V3_KEY": wechat_configured.get("api_v3_key") is True,
+                "JIEJING_WECHAT_PAY_PUBLIC_KEY_ID": wechat_configured.get("response_verification_key_id") is True,
+                "JIEJING_WECHAT_PAY_PUBLIC_KEY_PEM_B64": wechat_configured.get("response_verification_key") is True,
+                "JIEJING_WECHAT_PAY_NOTIFY_URL": wechat_configured.get("notify_url") is True,
+                "JIEJING_WECHAT_PAY_REFUND_NOTIFY_URL": wechat_configured.get("refund_notify_url") is True,
+            },
             fit="best_for_mainland_wechat_users_and_qr_checkout",
         ),
         _domestic_lane(
@@ -367,9 +895,14 @@ def _domestic_lane(
     selected_provider: str,
     aliases: set[str],
     required_env: list[str],
+    configured_override: dict[str, bool] | None = None,
     fit: str,
 ) -> dict[str, Any]:
-    configured = {name: bool(os.environ.get(name, "").strip()) for name in required_env}
+    configured = (
+        {name: configured_override.get(name) is True for name in required_env}
+        if configured_override is not None
+        else {name: bool(os.environ.get(name, "").strip()) for name in required_env}
+    )
     missing = [name for name, ready in configured.items() if not ready]
     selected = selected_provider in aliases
     return {

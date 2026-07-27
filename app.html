@@ -119,7 +119,7 @@
       }
     </style>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
-    <link rel="stylesheet" href="./styles.css?v=20260712-private-media-handoff-v79" />
+    <link rel="stylesheet" href="./styles.css?v=20260715-owner-traffic-analytics-v104" />
     <style id="jiejing-cockpit-layout-guard">
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
         display: grid !important;
@@ -751,7 +751,7 @@
           <div>
             <p class="eyebrow">订阅</p>
             <h2>先免费用起来，再按店铺数量和自动化深度升级。</h2>
-          <p class="section-note">早期试用期注册送 1 个月单店铺版体验。基础订阅负责软件功能；大模型、生图生视频等高成本用量单独核算，eBay 广告费、成交费、物流和退款不是捷境代扣。</p>
+          <p class="section-note">四档套餐只收软件使用费。商家自带模型，文本模型费用由商家承担；图片和视频生成使用素材点，和订阅分开结算。平台广告费、成交费、物流和退款不是捷境代扣。</p>
           </div>
           <button class="primary-action" id="openPlans">查看订阅方案</button>
         </div>
@@ -762,27 +762,27 @@
               <strong>¥0</strong>
               <p>基础功能可用，适合先跑通一条商品线。</p>
             </article>
-            <article class="plan-card is-featured is-selected" data-plan-choice="single">
-              <span>单店铺版</span>
-              <strong>¥99/月</strong>
-              <p>1 个 eBay 店铺基础工作台；AI 模型和素材生成按实际用量另算。</p>
+            <article class="plan-card is-featured is-selected" data-plan-choice="starter">
+              <span>起步版</span>
+              <strong>¥99 / 30 天</strong>
+              <p>1 个店铺、2 个席位、100 个经营任务；素材点另购。</p>
             </article>
-            <article class="plan-card" data-plan-choice="multi">
-              <span>多店铺版</span>
-              <strong>¥199/月</strong>
-              <p>适合多店铺、多项目和跨店流程复用。</p>
+            <article class="plan-card" data-plan-choice="operator">
+              <span>经营版</span>
+              <strong>¥199 / 30 天</strong>
+              <p>3 个店铺、5 个席位、500 个经营任务。</p>
             </article>
-            <article class="plan-card" data-plan-choice="pro">
-              <span>高级付费版</span>
-              <strong>¥299/月</strong>
-              <p>适合更深自动化、更细权限和更高额度。</p>
+            <article class="plan-card" data-plan-choice="team">
+              <span>团队版</span>
+              <strong>¥299 / 30 天</strong>
+              <p>5 个店铺、5 个席位、1500 个经营任务。</p>
             </article>
           </div>
           <aside class="pricing-detail" id="pricingDetail" aria-live="polite">
             <p class="eyebrow">当前选择</p>
-            <h3 id="pricingDetailTitle">单店铺版</h3>
-            <strong id="pricingDetailPrice">¥99/月</strong>
-        <p id="pricingDetailDesc">注册送 1 个月单店铺版体验。¥99/月是基础订阅，覆盖 1 个 eBay 店铺的 AI CEO、Listing、素材工坊、客服订单和确认中心；大模型、生图生视频等高成本用量另算。</p>
+            <h3 id="pricingDetailTitle">起步版</h3>
+            <strong id="pricingDetailPrice">¥99 / 30 天</strong>
+        <p id="pricingDetailDesc">单次购买 30 天软件使用权，不会自动续费；商家自带模型不消耗素材点，图片和视频生成使用素材点。</p>
             <ul id="pricingDetailList"></ul>
             <div class="button-row">
               <button class="primary-action" id="pricingStart">登录后选择方案</button>
@@ -886,6 +886,24 @@
             <span>设置</span>
           </button>
         </nav>
+
+        <button
+          class="sidebar-subscription-entry"
+          type="button"
+          data-global-flow-view="connect"
+          data-global-flow-key="billing"
+          aria-label="查看订阅套餐、素材额度和账单"
+          title="订阅与额度"
+        >
+          <span class="sidebar-subscription-icon" aria-hidden="true">¥</span>
+          <span>
+            <strong>
+              <span class="subscription-entry-full-label">订阅与额度</span>
+              <span class="subscription-entry-compact-label" aria-hidden="true">订阅</span>
+            </strong>
+            <small>套餐 · 素材 · 账单</small>
+          </span>
+        </button>
 
         <div class="sidebar-footer">
           <span class="status-dot"></span>
@@ -3160,6 +3178,10 @@
             <input data-saas-login-password type="password" autocomplete="current-password" placeholder="输入账号密码" />
           </label>
         </div>
+        <div class="auth-challenge-shell" id="authChallengeShell" hidden>
+          <div id="authChallengeWidget"></div>
+          <p id="authChallengeStatus" role="status" aria-live="polite"></p>
+        </div>
         <select id="authStage" hidden>
           <option value="newbie">新手商家，还没开店</option>
           <option value="store_opened">已有店铺</option>
@@ -3192,26 +3214,26 @@
               <strong>¥0</strong>
               <p>基础功能可用，先跑通一条商品线。</p>
             </article>
-            <article class="plan-card is-featured is-selected" data-plan-choice="single">
-              <span>单店铺版</span>
-              <strong>¥99/月</strong>
-              <p>1 个 eBay 店铺基础工作台，AI 和素材用量另算。</p>
+            <article class="plan-card is-featured is-selected" data-plan-choice="starter">
+              <span>起步版</span>
+              <strong>¥99 / 30 天</strong>
+              <p>1 个店铺、2 个席位、100 个经营任务；素材点另购。</p>
             </article>
-            <article class="plan-card" data-plan-choice="multi">
-              <span>多店铺版</span>
-              <strong>¥199/月</strong>
-              <p>多店铺/多项目工作台，跨店复用流程模板。</p>
+            <article class="plan-card" data-plan-choice="operator">
+              <span>经营版</span>
+              <strong>¥199 / 30 天</strong>
+              <p>3 个店铺、5 个席位、500 个经营任务。</p>
             </article>
-            <article class="plan-card" data-plan-choice="pro">
-              <span>高级付费版</span>
-              <strong>¥299/月</strong>
-              <p>更高额度、更细权限和更深自动化。</p>
+            <article class="plan-card" data-plan-choice="team">
+              <span>团队版</span>
+              <strong>¥299 / 30 天</strong>
+              <p>5 个店铺、5 个席位、1500 个经营任务。</p>
             </article>
           </div>
           <aside class="pricing-detail modal-pricing-detail" id="modalPricingDetail" aria-live="polite">
             <p class="eyebrow">方案详情</p>
-            <h3 id="modalPricingTitle">单店铺版</h3>
-            <strong id="modalPricingPrice">¥99/月</strong>
+            <h3 id="modalPricingTitle">起步版</h3>
+            <strong id="modalPricingPrice">¥99 / 30 天</strong>
             <p id="modalPricingDesc"></p>
             <ul id="modalPricingList"></ul>
           </aside>
@@ -3380,8 +3402,7 @@
         }
       })();
     </script>
-    <script src="./assets/jiejing-settings-panels.js?v=20260703-account-model-scope-v1"></script>
-    <script src="./app.js?v=20260712-private-media-handoff-v79"></script>
-  <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"8ceaac5cf3dd4fa491331c0faf56768c","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+    <script src="./assets/jiejing-first-party-analytics.js?v=20260715-owner-traffic-analytics-v104"></script>
+    <script src="./app.js?v=20260715-owner-traffic-analytics-v104"></script>
 </body>
 </html>

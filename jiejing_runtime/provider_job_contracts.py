@@ -34,6 +34,7 @@ class ProviderJobContract:
     required_inputs: list[str] = field(default_factory=list)
     normalized_outputs: list[str] = field(default_factory=list)
     failure_visible_to_merchant: bool = True
+    merchant_visible: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -59,11 +60,14 @@ class ProviderJobContract:
 class ProviderJobContractCatalog:
     """Front-end-safe catalog of provider job boundaries."""
 
-    def list_contracts(self) -> list[dict[str, Any]]:
-        return [item.to_dict() for item in self._contracts()]
+    def list_contracts(self, *, merchant_safe: bool = False) -> list[dict[str, Any]]:
+        contracts = self._contracts()
+        if merchant_safe:
+            contracts = [item for item in contracts if item.merchant_visible]
+        return [item.to_dict() for item in contracts]
 
-    def to_dict(self) -> dict[str, Any]:
-        contracts = self.list_contracts()
+    def to_dict(self, *, merchant_safe: bool = False) -> dict[str, Any]:
+        contracts = self.list_contracts(merchant_safe=merchant_safe)
         provider_families = sorted({item["provider_family"] for item in contracts})
         task_types = sorted({task for item in contracts for task in item["used_by_tasks"]})
         return {
@@ -211,6 +215,7 @@ class ProviderJobContractCatalog:
                     "use_brand_or_person_without_rights",
                     "treat_fal_as_product_identity",
                 ],
+                merchant_visible=False,
             ),
             ProviderJobContract(
                 key="model.role_report_assist",
@@ -238,5 +243,5 @@ class ProviderJobContractCatalog:
         ]
 
 
-def build_provider_job_contract_catalog() -> dict[str, Any]:
-    return ProviderJobContractCatalog().to_dict()
+def build_provider_job_contract_catalog(*, merchant_safe: bool = False) -> dict[str, Any]:
+    return ProviderJobContractCatalog().to_dict(merchant_safe=merchant_safe)

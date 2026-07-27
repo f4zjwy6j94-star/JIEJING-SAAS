@@ -338,6 +338,17 @@ def _check_public_diagnostics_are_summarized() -> str:
                 "provider": "stripe_live",
                 "billing_ready_for_paid_launch": False,
                 "quota_enforcement_enabled": True,
+                "domestic_payment": {
+                    "provider": "wechat_pay_native",
+                    "checkout_mode": "native_qr",
+                    "status": "configuration_in_progress",
+                    "configured_component_count": 7,
+                    "required_component_count": 8,
+                    "signed_callback_implemented": True,
+                    "real_order_creation_implemented": False,
+                    "real_checkout_ready": False,
+                    "api_v3_key": "WECHAT-API-V3-KEY-MUST-NOT-LEAK",
+                },
                 "webhook_secret_present": True,
                 "webhook_secret": "STRIPE-WEBHOOK-SECRET-MUST-NOT-LEAK",
             },
@@ -411,6 +422,7 @@ def _check_public_diagnostics_are_summarized() -> str:
             "INTERNAL-READY-DETAIL-MUST-NOT-LEAK",
             "C:\\secret\\packet.json",
             "STRIPE-WEBHOOK-SECRET-MUST-NOT-LEAK",
+            "WECHAT-API-V3-KEY-MUST-NOT-LEAK",
             "MODEL-KEY-MUST-NOT-LEAK",
             "PLATFORM-MODEL-KEY-MUST-NOT-LEAK",
             "TAVILY-SECRET-SOURCE-MUST-NOT-LEAK",
@@ -443,6 +455,22 @@ def _check_public_diagnostics_are_summarized() -> str:
         or billing_launch_path.get("quota_grant_source") != "backend_subscription_state"
     ):
         return "public readiness billing launch path should keep entitlement and quota behind backend billing state"
+    domestic_summary = billing_summary.get("domestic_payment") if isinstance(billing_summary.get("domestic_payment"), dict) else {}
+    if (
+        domestic_summary.get("provider") != "wechat_pay_native"
+        or domestic_summary.get("configured_component_count") != 0
+        or domestic_summary.get("required_component_count") != 0
+        or domestic_summary.get("charge_now_allowed") is not False
+        or domestic_summary.get("frontend_gets_payment_secret") is not False
+    ):
+        return "malformed public readiness payment counts must fail closed without enabling charges or secrets"
+    for internal_capability in (
+        "signed_callback_implemented",
+        "real_order_creation_implemented",
+        "real_checkout_ready",
+    ):
+        if internal_capability in domestic_summary:
+            return f"public readiness must not expose payment implementation capability {internal_capability}"
     platform_model_summary = unauth.get("provider_status", {}).get("ai_ceo_platform_model", {})
     if (
         platform_model_summary.get("configured") is not True

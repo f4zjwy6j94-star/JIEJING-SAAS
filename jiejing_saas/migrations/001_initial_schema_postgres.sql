@@ -25,7 +25,24 @@ create table if not exists users (
   password_hash text not null,
   status text not null,
   default_company_id text not null references companies(company_id),
+  account_classification text not null default 'merchant',
   created_at timestamptz not null
+);
+
+alter table users
+  add column if not exists account_classification text not null default 'merchant';
+
+update users
+set account_classification = 'synthetic_test'
+where lower(split_part(email, '@', 2)) in ('example.com', 'jiejing.local', 'local.invalid');
+
+create table if not exists platform_trial_activations (
+  company_id text primary key references companies(company_id),
+  user_id text not null references users(user_id),
+  status text not null,
+  activated_at timestamptz,
+  updated_at timestamptz not null,
+  activation_json jsonb not null
 );
 
 create table if not exists user_sessions (
@@ -240,8 +257,8 @@ create table if not exists reports (
 create table if not exists confirmations (
   confirmation_id text primary key,
   company_id text not null references companies(company_id),
-  store_id text not null references stores(store_id),
-  task_id text not null references tasks(task_id),
+  store_id text references stores(store_id),
+  task_id text references tasks(task_id),
   runtime_run_id text not null,
   action_type text not null,
   title text not null,
@@ -350,6 +367,150 @@ create table if not exists billing_webhook_events (
   billing_event_json jsonb not null
 );
 
+alter table confirmations alter column store_id drop not null;
+alter table confirmations alter column task_id drop not null;
+
+create table if not exists billing_orders (
+  order_id text primary key,
+  company_id text not null references companies(company_id),
+  user_id text not null references users(user_id),
+  provider text not null,
+  provider_order_id text,
+  plan_key text not null,
+  amount_minor integer not null,
+  currency text not null,
+  duration_days integer not null,
+  status text not null,
+  idempotency_key_hash text not null,
+  expires_at timestamptz,
+  paid_at timestamptz,
+  created_at timestamptz not null,
+  updated_at timestamptz not null,
+  order_json jsonb not null,
+  unique (company_id, idempotency_key_hash)
+);
+
+create table if not exists media_credit_accounts (
+  company_id text primary key references companies(company_id),
+  balance_points integer not null,
+  reserved_points integer not null,
+  lifetime_granted_points integer not null,
+  lifetime_spent_points integer not null,
+  updated_at timestamptz not null,
+  account_json jsonb not null
+);
+
+create table if not exists media_credit_ledger (
+  ledger_id text primary key,
+  company_id text not null references companies(company_id),
+  user_id text references users(user_id),
+  operation_type text not null,
+  points integer not null,
+  status text not null,
+  reference_type text not null,
+  reference_id text not null,
+  reservation_id text,
+  idempotency_key_hash text not null,
+  created_at timestamptz not null,
+  updated_at timestamptz not null,
+  ledger_json jsonb not null,
+  unique (company_id, idempotency_key_hash)
+);
+
+create table if not exists platform_analytics_events (
+  analytics_event_id text primary key,
+  event_id_hash text not null unique,
+  company_id text references companies(company_id),
+  user_id text references users(user_id),
+  event_key text not null,
+  page_key text not null,
+  visitor_hash text,
+  session_hash text,
+  occurred_at timestamptz not null,
+  analytics_json jsonb not null
+);
+
+create table if not exists model_usage_ledger (
+  usage_id text primary key,
+  company_id text not null references companies(company_id),
+  user_id text references users(user_id),
+  task_id text references tasks(task_id),
+  usage_owner text not null,
+  model_family text not null,
+  model_label text not null,
+  request_count integer not null,
+  input_tokens integer not null,
+  output_tokens integer not null,
+  total_tokens integer not null,
+  cost_minor integer not null,
+  currency text not null,
+  cost_status text not null,
+  idempotency_key_hash text not null unique,
+  created_at timestamptz not null,
+  usage_json jsonb not null
+);
+
+create table if not exists provider_cost_ledger (
+  cost_id text primary key,
+  company_id text not null references companies(company_id),
+  user_id text references users(user_id),
+  task_id text references tasks(task_id),
+  reference_type text not null,
+  reference_id text not null,
+  cost_category text not null,
+  resource_type text not null,
+  unit_count integer not null,
+  media_points integer not null,
+  cost_minor integer not null,
+  currency text not null,
+  cost_status text not null,
+  idempotency_key_hash text not null unique,
+  created_at timestamptz not null,
+  cost_json jsonb not null
+);
+
+create table if not exists platform_reliability_alert_state (
+  alert_scope text primary key,
+  lifecycle_status text not null,
+  severity text not null,
+  observed_status text not null,
+  consecutive_breach_count integer not null,
+  consecutive_healthy_count integer not null,
+  fingerprint text not null,
+  opened_at timestamptz,
+  recovered_at timestamptz,
+  acknowledged_at timestamptz,
+  acknowledged_by text,
+  acknowledgement_action text,
+  last_evaluated_at timestamptz not null,
+  updated_at timestamptz not null,
+  state_json jsonb not null
+);
+
+create table if not exists platform_reliability_alert_events (
+  event_id text primary key,
+  alert_scope text not null,
+  transition_key text not null,
+  severity text not null,
+  fingerprint text not null,
+  action_key text not null,
+  actor_user_id text,
+  created_at timestamptz not null,
+  event_json jsonb not null,
+  unique (alert_scope, transition_key, fingerprint, action_key)
+);
+
+create table if not exists platform_provider_monitor_state (
+  scheduler_key text primary key,
+  lease_owner_hash text not null,
+  lease_expires_at_epoch bigint not null,
+  last_evaluated_at timestamptz,
+  last_exported_at timestamptz,
+  last_outcome text not null,
+  snapshot_json text not null,
+  updated_at timestamptz not null
+);
+
 create table if not exists ebay_account_deletion_events (
   event_key text primary key,
   company_id text references companies(company_id),
@@ -395,14 +556,63 @@ create index if not exists idx_audit_logs_company_created on audit_logs(company_
 create index if not exists idx_audit_logs_target on audit_logs(target_type, target_id, created_at);
 create index if not exists idx_billing_subscriptions_provider_customer on billing_subscriptions(provider, provider_customer_id);
 create index if not exists idx_billing_subscriptions_provider_subscription on billing_subscriptions(provider, provider_subscription_id);
+create index if not exists idx_users_account_classification_created on users(account_classification, created_at);
 create index if not exists idx_billing_webhook_events_company_created on billing_webhook_events(company_id, created_at);
+create index if not exists idx_billing_orders_company_created on billing_orders(company_id, created_at);
+create index if not exists idx_billing_orders_company_status_updated on billing_orders(company_id, status, updated_at);
+create index if not exists idx_billing_orders_provider_order on billing_orders(provider, provider_order_id);
+create unique index if not exists idx_billing_orders_provider_transaction_unique
+  on billing_orders(provider, provider_order_id)
+  where provider_order_id is not null;
+create index if not exists idx_media_credit_ledger_company_created
+  on media_credit_ledger(company_id, created_at);
+create index if not exists idx_media_credit_ledger_company_reference
+  on media_credit_ledger(company_id, reference_type, reference_id, created_at);
+create index if not exists idx_platform_analytics_events_time_event
+  on platform_analytics_events(occurred_at, event_key);
+create index if not exists idx_platform_analytics_events_visitor_time
+  on platform_analytics_events(visitor_hash, occurred_at);
+create index if not exists idx_model_usage_ledger_owner_created
+  on model_usage_ledger(usage_owner, created_at);
+create index if not exists idx_model_usage_ledger_company_created
+  on model_usage_ledger(company_id, created_at);
+create index if not exists idx_provider_cost_ledger_category_created
+  on provider_cost_ledger(cost_category, created_at);
+create index if not exists idx_provider_cost_ledger_company_created
+  on provider_cost_ledger(company_id, created_at);
+create index if not exists idx_platform_reliability_alert_state_status_updated
+  on platform_reliability_alert_state(lifecycle_status, updated_at);
+create index if not exists idx_platform_reliability_alert_events_scope_created
+  on platform_reliability_alert_events(alert_scope, created_at);
+create index if not exists idx_platform_reliability_alert_events_transition_created
+  on platform_reliability_alert_events(transition_key, created_at);
+create index if not exists idx_platform_provider_monitor_state_lease_expiry
+  on platform_provider_monitor_state(lease_expires_at_epoch);
 create index if not exists idx_ebay_account_deletion_events_status_updated on ebay_account_deletion_events(status, updated_at);
+create index if not exists idx_platform_trial_activations_status_updated
+  on platform_trial_activations(status, updated_at);
 
 insert into schema_migrations (migration_id, checksum, summary)
 values (
   '20260515_001_initial_schema_postgres',
   'jiejing-saas-postgres-schema-v20260515',
   'Initial production PostgreSQL schema for Jiejing SaaS backend.'
+)
+on conflict (migration_id) do nothing;
+
+insert into schema_migrations (migration_id, checksum, summary)
+values (
+  '20260713_domestic_billing_orders',
+  'jiejing-domestic-billing-orders-v20260713',
+  'Adds tenant-scoped, idempotent domestic billing orders without payment credentials or bank details.'
+)
+on conflict (migration_id) do nothing;
+
+insert into schema_migrations (migration_id, checksum, summary)
+values (
+  '20260714_media_credit_ledger',
+  'jiejing-media-credit-ledger-v20260714',
+  'Adds provider-neutral tenant media-point balances and an idempotent reserve, settle and release ledger.'
 )
 on conflict (migration_id) do nothing;
 
@@ -435,6 +645,38 @@ values (
   '20260711_ai_ceo_account_chat_history',
   'jiejing-ai-ceo-account-chat-history-v20260711',
   'Adds account-scoped, cross-device AI CEO chat history without provider secrets or raw credentials.'
+)
+on conflict (migration_id) do nothing;
+
+insert into schema_migrations (migration_id, checksum, summary)
+values (
+  '20260714_platform_operations_metering',
+  'jiejing-platform-operations-metering-v20260714',
+  'Adds privacy-safe traffic, provider-reported model usage and provider-neutral cost ledgers for the internal operator console.'
+)
+on conflict (migration_id) do nothing;
+
+insert into schema_migrations (migration_id, checksum, summary)
+values (
+  '20260714_platform_reliability_alert_lifecycle',
+  'jiejing-platform-reliability-alert-lifecycle-v20260714',
+  'Adds provider-neutral alert confirmation, recovery, deduplication and internal handling history.'
+)
+on conflict (migration_id) do nothing;
+
+insert into schema_migrations (migration_id, checksum, summary)
+values (
+  '20260715_platform_trial_activations',
+  'jiejing-platform-trial-activations-v20260715',
+  'Separates merchant registration from privacy-safe activation of Jiejing-funded AI and media trials.'
+)
+on conflict (migration_id) do nothing;
+
+insert into schema_migrations (migration_id, checksum, summary)
+values (
+  '20260717_platform_provider_monitor_state',
+  'jiejing-platform-provider-monitor-state-v20260717',
+  'Adds an expiring singleton lease and privacy-safe passive provider monitoring evidence.'
 )
 on conflict (migration_id) do nothing;
 

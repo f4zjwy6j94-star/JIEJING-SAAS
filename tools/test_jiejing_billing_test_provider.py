@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -23,11 +23,13 @@ from jiejing_saas.billing_plan import build_billing_plan, build_billing_usage, e
 from jiejing_saas.billing_test_provider import apply_test_billing_event  # noqa: E402
 from jiejing_saas.billing_webhook import build_billing_provider_contract, handle_billing_webhook  # noqa: E402
 from jiejing_saas.config import SaaSSettings  # noqa: E402
+from jiejing_saas.api_server import SaaSBackendHandler  # noqa: E402
 from jiejing_saas.readiness import build_product_readiness  # noqa: E402
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
 
 
-OUT = ROOT / "output" / "jiejing-billing-test-provider"
+_TEMP_ROOT = tempfile.TemporaryDirectory(prefix="jiejing-billing-test-provider-", ignore_cleanup_errors=True)
+OUT = Path(_TEMP_ROOT.name)
 
 
 def fail(message: str) -> int:
@@ -36,9 +38,6 @@ def fail(message: str) -> int:
 
 
 def main() -> int:
-    if OUT.exists():
-        shutil.rmtree(OUT)
-    OUT.mkdir(parents=True, exist_ok=True)
     previous = _set_env()
     try:
         settings = SaaSSettings.from_env(
@@ -171,6 +170,33 @@ def main() -> int:
         }:
             if required_step not in step_keys:
                 return fail(f"merchant launch path missing step {required_step}: {merchant_launch_path}")
+        safe_merchant_plan = SaaSBackendHandler._merchant_safe_billing_plan(plan)
+        safe_merchant_provider = (
+            safe_merchant_plan.get("provider") if isinstance(safe_merchant_plan.get("provider"), dict) else {}
+        )
+        safe_merchant_path = (
+            safe_merchant_plan.get("merchant_launch_path")
+            if isinstance(safe_merchant_plan.get("merchant_launch_path"), dict)
+            else {}
+        )
+        if (
+            "test_billing_provider_configured" in safe_merchant_provider
+            or safe_merchant_path.get("current_stage") != "invited_beta_no_real_charge"
+        ):
+            return fail(
+                "merchant allowlist must preserve private-beta compatibility through the safe launch path only: "
+                f"{safe_merchant_plan}"
+            )
+        safe_step_keys = {
+            item.get("key") for item in safe_merchant_path.get("steps", []) if isinstance(item, dict)
+        }
+        if not {
+            "current_charge_status",
+            "hosted_payment_page",
+            "backend_confirmation_before_entitlement",
+            "quota_from_subscription_state",
+        }.issubset(safe_step_keys):
+            return fail(f"merchant allowlist must retain the safe Settings renderer steps: {safe_merchant_path}")
         readiness = build_product_readiness(settings, repo)
         public_billing = (
             readiness.get("provider_status", {}).get("billing", {})
@@ -196,6 +222,22 @@ def main() -> int:
             or public_launch_path.get("frontend_can_grant_entitlement") is not False
         ):
             return fail(f"public readiness should expose safe merchant launch path summary: {public_launch_path}")
+        serialized_readiness = SaaSBackendHandler._public_readiness_summary(readiness, authenticated=False)
+        serialized_public_billing = serialized_readiness.get("provider_status", {}).get("billing", {})
+        if serialized_public_billing.get("merchant_launch_path", {}).get("current_stage") != "invited_beta_no_real_charge":
+            return fail(
+                "public readiness serializer must preserve private-beta compatibility without legacy diagnostics: "
+                f"{serialized_public_billing}"
+            )
+        for internal_key in (
+            "external_paid_provider_configured",
+            "test_billing_provider_configured",
+            "checkout_ready",
+            "customer_portal_ready",
+            "signed_webhook_configured",
+        ):
+            if internal_key in serialized_public_billing:
+                return fail(f"public readiness serializer exposed legacy provider diagnostic {internal_key}")
         rehearsal = plan.get("billing_test_rehearsal_summary") if isinstance(plan.get("billing_test_rehearsal_summary"), dict) else {}
         if rehearsal.get("ready") is not True or rehearsal.get("calls_stripe_api") is not False or rehearsal.get("triggers_real_charge") is not False:
             return fail(f"billing test rehearsal summary should be ready and no-charge: {rehearsal}")

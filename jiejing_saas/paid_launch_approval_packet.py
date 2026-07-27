@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from .billing_domain_cutover_rehearsal import build_billing_domain_cutover_rehearsal
+from .billing_payment_options import (
+    build_mainland_payment_launch_status,
+    validate_mainland_payment_launch_for_public,
+)
 from .commercial_launch_gate import build_commercial_launch_gate
 from .config import SaaSSettings
 from .domain_readiness import build_domain_readiness
@@ -14,7 +19,7 @@ from .repository import SaaSRepository
 
 PRIMARY_SEQUENCE = [
     "stable_domain_hardening",
-    "stripe_live_cutover",
+    "wechat_pay_native_cutover",
     "no_charge_launch_rehearsal",
     "new_ebay_account_low_risk_smoke",
 ]
@@ -27,24 +32,27 @@ def build_paid_launch_approval_packet(settings: SaaSSettings, repository: SaaSRe
     domain = build_domain_readiness(settings)
     launch_gate = build_commercial_launch_gate(settings, repository)
     rehearsal = build_billing_domain_cutover_rehearsal(settings, repository)
+    mainland_payment = build_mainland_payment_launch_status(settings, repository)
+    no_charge = _no_charge_launch_rehearsal_status()
     action_plan = launch_gate.get("launch_action_plan") if isinstance(launch_gate.get("launch_action_plan"), dict) else {}
-    decision = action_plan.get("paid_launch_cutover_decision") if isinstance(action_plan.get("paid_launch_cutover_decision"), dict) else {}
-    cutover = action_plan.get("paid_launch_cutover_checklist") if isinstance(action_plan.get("paid_launch_cutover_checklist"), list) else []
     new_account = action_plan.get("new_ebay_account_smoke_runbook") if isinstance(action_plan.get("new_ebay_account_smoke_runbook"), list) else []
-    drills = action_plan.get("commercial_hardening_drills") if isinstance(action_plan.get("commercial_hardening_drills"), list) else []
     steps = _build_steps(
-        readiness=readiness,
         domain=domain,
-        rehearsal=rehearsal,
-        decision=decision,
-        cutover=cutover,
+        mainland_payment=mainland_payment,
+        no_charge=no_charge,
         new_account=new_account,
-        drills=drills,
     )
     blocked = [step for step in steps if step.get("status") != "ready"]
-    user_items = _external_configuration_items(steps=steps, domain=domain, rehearsal=rehearsal, new_account=new_account)
+    user_items = _external_configuration_items(
+        steps=steps,
+        domain=domain,
+        mainland_payment=mainland_payment,
+        no_charge=no_charge,
+        new_account=new_account,
+    )
+    future_international_payment = _future_international_payment(mainland_payment)
     return {
-        "contract_version": "2026-06-18-paid-launch-approval-packet",
+        "contract_version": "2026-07-27-paid-launch-approval-packet-v2",
         "mode": "owner_approval_packet_no_charge_no_write",
         "environment": settings.environment,
         "status": "ready_for_owner_approval" if not blocked else "blocked",
@@ -67,25 +75,32 @@ def build_paid_launch_approval_packet(settings: SaaSSettings, repository: SaaSRe
             "blocked_count": len(blocked),
             "blocked_keys": [str(step.get("key") or "") for step in blocked],
             "next_step": str((blocked[0] if blocked else {}).get("key") or ""),
-            "production_ready": bool(readiness.get("production_ready")),
-            "beta_ready": bool(readiness.get("beta_ready")),
-            "can_accept_real_customers": bool(readiness.get("can_accept_real_customers")),
-            "stable_domain_ready": bool(domain.get("production_domain_ready")),
-            "stripe_rehearsal_status": rehearsal.get("status") or "unknown",
-            "no_charge_evidence_packet_status": (
-                rehearsal.get("no_charge_live_domain_evidence_packet", {}).get("status")
-                if isinstance(rehearsal.get("no_charge_live_domain_evidence_packet"), dict)
-                else "unknown"
+            "production_ready": readiness.get("production_ready") is True,
+            "beta_ready": readiness.get("beta_ready") is True,
+            "can_accept_real_customers": readiness.get("can_accept_real_customers") is True,
+            "stable_domain_ready": domain.get("production_domain_ready") is True,
+            "mainland_payment_status": validate_mainland_payment_launch_for_public(mainland_payment).get(
+                "payment_path_status"
             ),
+            "mainland_payment_ready_for_owner_approval": validate_mainland_payment_launch_for_public(
+                mainland_payment
+            ).get("mainland_payment_ready_for_owner_approval")
+            is True,
+            "stripe_rehearsal_status": rehearsal.get("status") or "unknown",
+            "stripe_rehearsal_status_deprecated": True,
+            "no_charge_evidence_packet_status": "ready" if no_charge.get("ready") is True else "blocked",
             "new_account_smoke_ready": _all_ready(new_account),
             "external_configuration_needed_count": len([item for item in user_items if item.get("status") != "ready"]),
         },
         "steps": steps,
         "external_configuration_needed": user_items,
+        "future_international_payment": future_international_payment,
         "agent_completed_before_user_intervention": [
             "read_only_paid_launch_approval_packet_contract",
             "stable_domain_dns_tls_callback_evidence_slots",
-            "stripe_live_price_checkout_portal_webhook_rehearsal_contract",
+            "wechat_pay_native_backend_only_cutover_contract",
+            "signed_payment_and_refund_callback_contract",
+            "controlled_acceptance_evidence_contract",
             "subscription_state_quota_lifecycle_regressions",
             "new_ebay_account_low_risk_smoke_runbook",
             "settings_launch_gate_visibility",
@@ -104,25 +119,24 @@ def build_paid_launch_approval_packet(settings: SaaSSettings, repository: SaaSRe
             "/readiness/product-saas",
             "/domain/status",
             "/billing/plans",
-            "/billing/checkout-contract",
-            "/owner/billing-domain-cutover-rehearsal",
-            "/owner/billing-provider-evidence-register",
+            "/billing/domestic/orders",
+            "/billing/domestic/wechat-pay/notify",
+            "/billing/domestic/wechat-pay/refund-notify",
             "/commercial/launch-gate",
             "/owner/paid-launch-approval-packet",
-            "tools/jiejing_billing_provider_evidence_register.py --output output/billing-provider-evidence-register/latest.json",
+            "tools/jiejing_wechat_pay_acceptance_verify.py",
             "tools/jiejing_new_ebay_account_low_risk_check.py --checklist-only",
         ],
         "docs": [
-            "https://docs.stripe.com/api/versioning",
-            "https://docs.stripe.com/billing/quickstart",
-            "https://docs.stripe.com/webhooks/signature",
+            "docs/superpowers/specs/2026-07-13-wechat-pay-native-design.md",
+            "docs/JIEJING_WECHAT_PAY_PRODUCTION_RUNBOOK_20260713.md",
             "https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/routing-to-tunnel/dns/",
             "https://developer.ebay.com/develop/guides-v2/authorization",
         ],
         "rollback_controls": [
             "keep_trycloudflare_staging_available_until_stable_domain_smoke_passes",
             "do_not_enable_public_checkout_until_owner_approval",
-            "disable_JIEJING_BILLING_PROVIDER_or_quota_flags_if_webhook_smoke_fails",
+            "disable_wechat_public_charge_switch_if_signed_callback_or_query_smoke_fails",
             "keep_real_ebay_writes_confirmation_gated_after_billing_cutover",
             "never_retry_platform_write_after_timeout_without_platform_state_check",
         ],
@@ -132,24 +146,19 @@ def build_paid_launch_approval_packet(settings: SaaSSettings, repository: SaaSRe
 
 def _build_steps(
     *,
-    readiness: dict[str, Any],
     domain: dict[str, Any],
-    rehearsal: dict[str, Any],
-    decision: dict[str, Any],
-    cutover: list[dict[str, Any]],
+    mainland_payment: dict[str, Any],
+    no_charge: dict[str, Any],
     new_account: list[dict[str, Any]],
-    drills: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    cutover_by_key = _by_key(cutover)
-    drill_by_key = _by_key(drills)
-    rehearsal_summary = rehearsal.get("summary") if isinstance(rehearsal.get("summary"), dict) else {}
-    no_charge_packet = (
-        rehearsal.get("no_charge_live_domain_evidence_packet")
-        if isinstance(rehearsal.get("no_charge_live_domain_evidence_packet"), dict)
-        else {}
-    )
-    no_charge_summary = no_charge_packet.get("summary") if isinstance(no_charge_packet.get("summary"), dict) else {}
-    no_charge_blocked = [str(item) for item in no_charge_summary.get("blocked_keys") or [] if str(item)]
+    payment = validate_mainland_payment_launch_for_public(mainland_payment)
+    payment_ready = payment.get("mainland_payment_ready_for_owner_approval") is True
+    payment_blockers = _mainland_payment_blockers(mainland_payment, fallback=payment.get("next_paid_launch_blocker"))
+    no_charge_blockers = [
+        str(item)
+        for item in no_charge.get("blocked_by") or []
+        if isinstance(item, str) and item
+    ]
     return [
         _step(
             "stable_domain_hardening",
@@ -171,44 +180,54 @@ def _build_steps(
             blocked_by=domain.get("blockers") if isinstance(domain.get("blockers"), list) else [],
         ),
         _step(
-            "stripe_live_cutover",
-            "Stripe live Price IDs, Checkout, Portal and signed webhook cutover",
-            rehearsal.get("status") == "ready_for_owner_approval",
+            "wechat_pay_native_cutover",
+            "WeChat Pay Native production prerequisites and controlled acceptance",
+            payment_ready,
             category="billing",
             owner="platform_ops",
             evidence_summary=_evidence(
-                rehearsal_status=rehearsal.get("status") or "unknown",
-                ready=f"{rehearsal_summary.get('ready_count', 0)}/{rehearsal_summary.get('total_count', 0)}",
-                next=rehearsal_summary.get("next_step") or "stripe_live_provider_selected",
+                provider="wechat_pay_native",
+                checkout_mode="native_qr",
+                configuration=(
+                    f"{payment.get('configured_component_count', 0)}/"
+                    f"{payment.get('required_component_count', 0)}"
+                ),
+                controlled_acceptance=payment.get("controlled_acceptance_proven") is True,
+                verified_payments=payment.get("verified_paid_order_count", 0),
+                status=payment.get("payment_path_status") or "payment_status_unavailable",
             ),
-            next_action=rehearsal_summary.get("next_action") or "Configure Stripe live provider, Price IDs, stable-domain URLs and signed webhook evidence.",
-            verification=["/owner/billing-domain-cutover-rehearsal", "/billing/plans", "/billing/checkout-contract"],
+            next_action=(
+                "Complete backend-only WeChat merchant credentials, signed payment/refund callbacks, "
+                "authenticated query, controlled acceptance and refund proof."
+            ),
+            verification=[
+                "/readiness/product-saas",
+                "/billing/plans",
+                "tools/jiejing_wechat_pay_acceptance_verify.py",
+            ],
             external_resource_required=True,
-            blocked_by=rehearsal_summary.get("blocked_keys") if isinstance(rehearsal_summary.get("blocked_keys"), list) else [],
+            blocked_by=[] if payment_ready else payment_blockers,
         ),
         _step(
             "no_charge_launch_rehearsal",
             "No-charge full launch rehearsal and rollback packet",
-            (
-                decision.get("status") == "ready_for_owner_approval"
-                and (cutover_by_key.get("final_paid_launch_smoke_evidence") or {}).get("status") == "ready"
-                and no_charge_packet.get("status") == "ready"
-            ),
+            no_charge.get("ready") is True,
             category="release",
             owner="release_manager",
             evidence_summary=_evidence(
-                decision=decision.get("status") or "blocked",
-                public_paid_launch_allowed=bool(decision.get("public_paid_launch_allowed")),
-                final_smoke=(cutover_by_key.get("final_paid_launch_smoke_evidence") or {}).get("status") or "missing",
-                drill=(drill_by_key.get("final_commercial_smoke") or {}).get("status") or "missing",
-                evidence_packet=no_charge_packet.get("status") or "missing",
-                evidence_packet_ready=f"{no_charge_summary.get('ready_count', 0)}/{no_charge_summary.get('total_count', 0)}",
+                public_paid_launch_allowed=False,
+                evidence_packet="ready" if no_charge.get("ready") is True else "blocked",
+                evidence_packet_ready=(
+                    f"{no_charge.get('ready_count', 0)}/{no_charge.get('total_count', 0)}"
+                ),
             ),
-            next_action="Run final no-charge register/login/domain/billing/webhook/readiness/secret-scan/browser smoke and record rollback evidence.",
+            next_action=(
+                "Run final no-charge register/login/domain/WeChat callback/readiness/secret-scan/browser smoke "
+                "and record rollback evidence."
+            ),
             verification=["/commercial/launch-gate", "tools/jiejing_secret_scan.py", "output/browser-smoke"],
             external_resource_required=False,
-            blocked_by=[str(item.get("key") or "") for item in cutover if isinstance(item, dict) and item.get("status") != "ready"]
-            + [f"no_charge_evidence:{key}" for key in no_charge_blocked],
+            blocked_by=no_charge_blockers,
         ),
         _step(
             "new_ebay_account_low_risk_smoke",
@@ -233,17 +252,12 @@ def _external_configuration_items(
     *,
     steps: list[dict[str, Any]],
     domain: dict[str, Any],
-    rehearsal: dict[str, Any],
+    mainland_payment: dict[str, Any],
+    no_charge: dict[str, Any],
     new_account: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     step_by_key = _by_key(steps)
-    rehearsal_summary = rehearsal.get("summary") if isinstance(rehearsal.get("summary"), dict) else {}
-    no_charge_packet = (
-        rehearsal.get("no_charge_live_domain_evidence_packet")
-        if isinstance(rehearsal.get("no_charge_live_domain_evidence_packet"), dict)
-        else {}
-    )
-    no_charge_summary = no_charge_packet.get("summary") if isinstance(no_charge_packet.get("summary"), dict) else {}
+    payment = validate_mainland_payment_launch_for_public(mainland_payment)
     return [
         _external_item(
             "stable_domain_dns_tls_callback",
@@ -262,54 +276,60 @@ def _external_configuration_items(
             evidence=_evidence(domain=domain.get("stable_domain") or "not_selected", blockers=",".join(domain.get("blockers") or [])),
         ),
         _external_item(
-            "stripe_live_products_prices_webhook",
-            "Stripe live Products, Price IDs, Checkout/Portal URLs and signed webhook",
-            (step_by_key.get("stripe_live_cutover") or {}).get("status") == "ready",
+            "wechat_pay_native_production_cutover",
+            "WeChat Pay Native backend credentials, signed callbacks, query and refund controls",
+            (step_by_key.get("wechat_pay_native_cutover") or {}).get("status") == "ready",
             env_keys=[
-                "JIEJING_BILLING_PROVIDER",
-                "JIEJING_STRIPE_SECRET_KEY",
-                "JIEJING_STRIPE_WEBHOOK_SECRET",
-                "JIEJING_STRIPE_PRICE_STARTER_ID",
-                "JIEJING_STRIPE_PRICE_OPERATOR_ID",
-                "JIEJING_STRIPE_PRICE_TEAM_ID",
-                "JIEJING_BILLING_SUCCESS_URL",
-                "JIEJING_BILLING_CANCEL_URL",
-                "JIEJING_BILLING_PORTAL_RETURN_URL",
-                "JIEJING_BILLING_WEBHOOK_URL",
-                "JIEJING_STRIPE_ACCOUNT_ACTIVATED",
-                "JIEJING_STRIPE_LIVE_MODE_DASHBOARD_REVIEWED",
-                "JIEJING_STRIPE_GO_LIVE_CHECKLIST_EVIDENCE_ID",
-                "JIEJING_STRIPE_TEST_MODE_OBJECTS_EXCLUDED",
-                "JIEJING_STRIPE_TAX_INVOICE_RECEIPT_REVIEWED",
-                "JIEJING_STRIPE_SUPPORT_CONTACT_BRANDING_REVIEWED",
-                "JIEJING_STRIPE_TAX_INVOICE_RECEIPT_EVIDENCE_ID",
-                "JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID",
-                "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID",
+                "JIEJING_SAAS_ENV",
+                "JIEJING_WECHAT_PAY_APP_ID",
+                "JIEJING_WECHAT_PAY_MCH_ID",
+                "JIEJING_WECHAT_PAY_MERCHANT_SERIAL_NO",
+                "JIEJING_WECHAT_PAY_MERCHANT_PRIVATE_KEY_PEM",
+                "JIEJING_WECHAT_PAY_MERCHANT_PRIVATE_KEY_PEM_B64",
+                "JIEJING_WECHAT_PAY_API_V3_KEY",
+                "JIEJING_WECHAT_PAY_PUBLIC_KEY_PEM",
+                "JIEJING_WECHAT_PAY_PUBLIC_KEY_PEM_B64",
+                "JIEJING_WECHAT_PAY_PUBLIC_KEY_ID",
+                "JIEJING_WECHAT_PAY_PLATFORM_CERTIFICATE_PEM",
+                "JIEJING_WECHAT_PAY_PLATFORM_CERTIFICATE_PEM_B64",
+                "JIEJING_WECHAT_PAY_PLATFORM_SERIAL_NO",
+                "JIEJING_WECHAT_PAY_NOTIFY_URL",
+                "JIEJING_WECHAT_PAY_REFUND_NOTIFY_URL",
+                "JIEJING_WECHAT_PAY_LIVE_API_ENABLED",
+                "JIEJING_WECHAT_PAY_REFUND_ALLOWED",
             ],
-            evidence=_evidence(next=rehearsal_summary.get("next_step") or "stripe_live_provider_selected"),
+            evidence=_evidence(
+                configured=(
+                    f"{payment.get('configured_component_count', 0)}/"
+                    f"{payment.get('required_component_count', 0)}"
+                ),
+                provider_configured=payment.get("provider_configured") is True,
+                controlled_acceptance=payment.get("controlled_acceptance_proven") is True,
+                refund_ready=(
+                    isinstance(mainland_payment, dict)
+                    and mainland_payment.get("refund_now_allowed") is True
+                ),
+                production_environment=(
+                    isinstance(mainland_payment, dict)
+                    and mainland_payment.get("production_environment") is True
+                ),
+            ),
         ),
         _external_item(
             "no_charge_rehearsal_evidence_flags",
             "No-charge rehearsal evidence flags",
             (step_by_key.get("no_charge_launch_rehearsal") or {}).get("status") == "ready",
             env_keys=[
-                "JIEJING_CUTOVER_ROLLBACK_VERIFIED",
-                "JIEJING_SECRET_SCAN_PASSED",
-                "JIEJING_READINESS_SNAPSHOT_RECORDED",
-                "JIEJING_BROWSER_SMOKE_PASSED",
-                "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID",
-                "JIEJING_NO_CHARGE_CHECKOUT_RETURN_URL_SMOKE_PASSED",
-                "JIEJING_NO_CHARGE_PORTAL_RETURN_URL_SMOKE_PASSED",
-                "JIEJING_NO_CHARGE_SIGNED_WEBHOOK_SMOKE_PASSED",
-                "JIEJING_NO_CHARGE_READINESS_SMOKE_PASSED",
-                "JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID",
-                "JIEJING_FINAL_COMMERCIAL_SMOKE_PASSED",
-                "JIEJING_FINAL_COMMERCIAL_SMOKE_EVIDENCE_ID",
+                *list(no_charge.get("environment_keys") or []),
             ],
             evidence=_evidence(
-                evidence_packet_status=no_charge_packet.get("status") or "missing",
-                evidence_packet_ready=f"{no_charge_summary.get('ready_count', 0)}/{no_charge_summary.get('total_count', 0)}",
-                evidence_packet_blocked=",".join([str(item) for item in no_charge_summary.get("blocked_keys") or [] if str(item)]),
+                evidence_packet_status="ready" if no_charge.get("ready") is True else "blocked",
+                evidence_packet_ready=(
+                    f"{no_charge.get('ready_count', 0)}/{no_charge.get('total_count', 0)}"
+                ),
+                evidence_packet_blocked=",".join(
+                    str(item) for item in no_charge.get("blocked_by") or [] if isinstance(item, str)
+                ),
             ),
             external_resource_required=False,
         ),
@@ -336,6 +356,94 @@ def _external_configuration_items(
             evidence="old frozen account and old demo product/SKU/assets remain forbidden",
         ),
     ]
+
+
+def _no_charge_launch_rehearsal_status() -> dict[str, Any]:
+    checks = (
+        ("cutover_rollback_not_verified", "JIEJING_CUTOVER_ROLLBACK_VERIFIED", "bool"),
+        ("secret_scan_not_verified", "JIEJING_SECRET_SCAN_PASSED", "bool"),
+        ("readiness_snapshot_not_recorded", "JIEJING_READINESS_SNAPSHOT_RECORDED", "bool"),
+        ("browser_smoke_not_verified", "JIEJING_BROWSER_SMOKE_PASSED", "bool"),
+        ("cutover_rollback_audit_packet_missing", "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID", "present"),
+        ("signed_payment_callback_smoke_not_verified", "JIEJING_NO_CHARGE_SIGNED_WEBHOOK_SMOKE_PASSED", "bool"),
+        ("readiness_smoke_not_verified", "JIEJING_NO_CHARGE_READINESS_SMOKE_PASSED", "bool"),
+        (
+            "no_charge_live_domain_rehearsal_evidence_missing",
+            "JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID",
+            "present",
+        ),
+        ("final_commercial_smoke_not_verified", "JIEJING_FINAL_COMMERCIAL_SMOKE_PASSED", "bool"),
+        ("final_commercial_smoke_evidence_missing", "JIEJING_FINAL_COMMERCIAL_SMOKE_EVIDENCE_ID", "present"),
+    )
+    readiness: list[bool] = []
+    blocked_by: list[str] = []
+    for blocker, environment_key, mode in checks:
+        ready = _env_true(environment_key) if mode == "bool" else bool(os.environ.get(environment_key, "").strip())
+        readiness.append(ready)
+        if not ready:
+            blocked_by.append(blocker)
+    return {
+        "ready": all(readiness),
+        "ready_count": sum(1 for ready in readiness if ready),
+        "total_count": len(readiness),
+        "blocked_by": blocked_by,
+        "environment_keys": [environment_key for _, environment_key, _ in checks],
+        "public_paid_launch_allowed": False,
+        "charge_now_allowed": False,
+        "calls_external_payment_api": False,
+        "triggers_real_charge": False,
+        "secret_exposed": False,
+    }
+
+
+def _future_international_payment(mainland_payment: dict[str, Any]) -> dict[str, Any]:
+    future = (
+        mainland_payment.get("future_international_payment")
+        if isinstance(mainland_payment, dict)
+        and isinstance(mainland_payment.get("future_international_payment"), dict)
+        else {}
+    )
+    return {
+        "provider": "stripe",
+        "role": "future_international_payment_only",
+        "selected": future.get("selected") is True,
+        "blocks_mainland_launch": False,
+        "calls_stripe_api": False,
+        "triggers_real_charge": False,
+        "secret_exposed": False,
+        "docs": [
+            "https://docs.stripe.com/api/versioning",
+            "https://docs.stripe.com/billing/quickstart",
+            "https://docs.stripe.com/webhooks/signature",
+        ],
+    }
+
+
+def _mainland_payment_blockers(mainland_payment: dict[str, Any], *, fallback: Any) -> list[str]:
+    ignored = {
+        "paid_launch_owner_approval_packet_missing",
+        "public_charging_requires_higher_commercial_release_gate",
+    }
+    blockers: list[str] = []
+    raw = mainland_payment.get("paid_launch_blockers") if isinstance(mainland_payment, dict) else []
+    if isinstance(raw, list):
+        for item in raw:
+            blocker = str(item or "").strip()
+            if (
+                blocker
+                and blocker not in ignored
+                and "stripe" not in blocker.lower()
+                and len(blocker) <= 160
+            ):
+                blockers.append(blocker)
+    fallback_blocker = str(fallback or "merchant_payment_status_unavailable").strip()
+    if not blockers and fallback_blocker and "stripe" not in fallback_blocker.lower():
+        blockers.append(fallback_blocker[:160])
+    return list(dict.fromkeys(blockers))
+
+
+def _env_true(key: str) -> bool:
+    return os.environ.get(key, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _step(

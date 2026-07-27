@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -51,6 +52,13 @@ ENV_KEYS = (
     "JIEJING_PROVIDER_METRICS_ENABLED",
     "JIEJING_PROVIDER_LATENCY_ALERTS_CONFIGURED",
     "JIEJING_PROVIDER_COST_ALERTS_CONFIGURED",
+    "JIEJING_PROVIDER_MONITOR_SCHEDULER_ENABLED",
+    "JIEJING_PROVIDER_MONITOR_EVIDENCE_MAX_AGE_MINUTES",
+    "JIEJING_PROVIDER_DAILY_COST_WARNING_MINOR",
+    "JIEJING_PROVIDER_DAILY_COST_CRITICAL_MINOR",
+    "JIEJING_PROVIDER_LATENCY_ALARM_VERIFIED_AT",
+    "JIEJING_PROVIDER_COST_ALARM_VERIFIED_AT",
+    "JIEJING_PROVIDER_ALARM_VERIFICATION_MAX_AGE_DAYS",
     "JIEJING_ENABLE_REAL_PLATFORM_WRITES",
     "JIEJING_EBAY_WRITE_LIVE",
     "JIEJING_EBAY_TOKEN_REFRESH_LIVE",
@@ -70,6 +78,7 @@ def main() -> int:
     db_path.unlink(missing_ok=True)
     runtime_db_path.unlink(missing_ok=True)
     try:
+        now = datetime.now(timezone.utc).replace(microsecond=0)
         os.environ.update(
             {
                 "JIEJING_SAAS_ENV": "staging",
@@ -102,6 +111,13 @@ def main() -> int:
                 "JIEJING_PROVIDER_METRICS_ENABLED": "true",
                 "JIEJING_PROVIDER_LATENCY_ALERTS_CONFIGURED": "true",
                 "JIEJING_PROVIDER_COST_ALERTS_CONFIGURED": "true",
+                "JIEJING_PROVIDER_MONITOR_SCHEDULER_ENABLED": "true",
+                "JIEJING_PROVIDER_MONITOR_EVIDENCE_MAX_AGE_MINUTES": "15",
+                "JIEJING_PROVIDER_DAILY_COST_WARNING_MINOR": "10000",
+                "JIEJING_PROVIDER_DAILY_COST_CRITICAL_MINOR": "20000",
+                "JIEJING_PROVIDER_LATENCY_ALARM_VERIFIED_AT": (now - timedelta(minutes=1)).isoformat(),
+                "JIEJING_PROVIDER_COST_ALARM_VERIFIED_AT": (now - timedelta(minutes=1)).isoformat(),
+                "JIEJING_PROVIDER_ALARM_VERIFICATION_MAX_AGE_DAYS": "7",
                 "JIEJING_ENABLE_REAL_PLATFORM_WRITES": "true",
                 "JIEJING_EBAY_WRITE_LIVE": "true",
                 "JIEJING_EBAY_TOKEN_REFRESH_LIVE": "true",
@@ -116,6 +132,7 @@ def main() -> int:
         )
         repo = SaaSRepository(settings.db_path, database_engine="sqlite")
         repo.initialize()
+        _seed_provider_monitoring_state(repo, now)
         queue_plan = build_queue_plan(settings, repo)
         vault_adapter = build_vault_adapter_contract(settings)
         readiness = build_product_readiness(settings, repo)
@@ -198,6 +215,24 @@ def _restore_env(previous: dict[str, str | None]) -> None:
             os.environ.pop(key, None)
         else:
             os.environ[key] = value
+
+
+def _seed_provider_monitoring_state(repo: SaaSRepository, now: datetime) -> None:
+    owner_hash = "managed-infra-readiness-fixture"
+    repo.acquire_provider_monitoring_lease(
+        scheduler_key="provider-monitor",
+        owner_hash=owner_hash,
+        lease_seconds=300,
+        now_epoch=int(now.timestamp()) - 60,
+    )
+    repo.complete_provider_monitoring_evaluation(
+        scheduler_key="provider-monitor",
+        owner_hash=owner_hash,
+        evaluated_at=(now - timedelta(minutes=1)).isoformat(),
+        exported_at=(now - timedelta(minutes=1)).isoformat(),
+        outcome="exported",
+        snapshot={"reliability_status": "insufficient_data", "cost_status": "healthy"},
+    )
 
 
 if __name__ == "__main__":

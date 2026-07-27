@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import os
 import shutil
 import sys
@@ -15,7 +16,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas.config import SaaSSettings  # noqa: E402
-from jiejing_saas.owner_launch_control import build_owner_launch_control  # noqa: E402
+from jiejing_saas.owner_launch_control import (  # noqa: E402
+    _owner_mainland_billing_view,
+    _owner_mainland_cutover_view,
+    _owner_mainland_edge_view,
+    _portable_artifact_filename,
+    build_owner_launch_control,
+)
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
 
 
@@ -28,6 +35,51 @@ def fail(message: str) -> int:
 
 
 def main() -> int:
+    if _portable_artifact_filename(r"C:\\private\\bundle.zip", fallback="fallback.zip") != "bundle.zip":
+        return fail("release history must normalize Windows artifact paths without exposing internal directories")
+    governance_source = inspect.getsource(SaaSRepository.test_data_governance_snapshot).lower()
+    if " like '" in governance_source:
+        return fail("test-data governance LIKE patterns must be parameterized for PostgreSQL")
+    canonical_packet = {
+        "summary": {"mainland_payment_ready_for_owner_approval": True},
+        "steps": [
+            {"key": "wechat_pay_native_cutover", "status": "ready", "blocked_by": []},
+            {"key": "no_charge_launch_rehearsal", "status": "ready", "blocked_by": []},
+        ],
+        "external_configuration_needed": [
+            {"key": "no_charge_rehearsal_evidence_flags", "environment_keys": ["SAFE_FLAG"]}
+        ],
+        "future_international_payment": {
+            "provider": "stripe",
+            "blocks_mainland_launch": False,
+            "calls_stripe_api": False,
+        },
+    }
+    billing_view = _owner_mainland_billing_view(
+        billing={"provider": {"selected": "stripe"}, "billing_ready_for_paid_launch": False},
+        paid_packet=canonical_packet,
+    )
+    if (billing_view.get("provider") or {}).get("selected") != "wechat_pay_native":
+        return fail(f"owner billing view must use canonical mainland provider: {billing_view}")
+    if billing_view.get("mainland_payment_ready_for_owner_approval") is not True:
+        return fail(f"owner billing view ignored canonical owner-ready state: {billing_view}")
+    cutover_view = _owner_mainland_cutover_view(
+        paid_packet=canonical_packet,
+        legacy_billing_cutover={"status": "blocked_by_stripe"},
+    )
+    if cutover_view.get("status") != "ready_for_owner_approval":
+        return fail(f"legacy Stripe rehearsal must not block mainland owner view: {cutover_view}")
+    edge_view = _owner_mainland_edge_view(
+        edge={
+            "status": "blocked_by_stripe_callback",
+            "summary": {"waf_ready": True, "origin_locked": True, "callbacks_ready": False},
+            "callback_cutover": {"ebay_callback_verified": True, "stripe_urls_verified_in_dashboard": False},
+            "required_callback_urls": {"ebay_oauth_callback": "https://app.jiejing.shop/oauth/ebay/callback"},
+        },
+        paid_packet=canonical_packet,
+    )
+    if edge_view.get("status") != "ready_for_owner_approval":
+        return fail(f"Stripe callback state must not block the mainland owner edge view: {edge_view}")
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -37,12 +89,26 @@ def main() -> int:
     finally:
         _restore_env(previous)
 
-    if packet.get("contract_version") != "2026-06-21-owner-launch-control-v4":
+    if packet.get("contract_version") != "2026-07-27-owner-launch-control-v8":
         return fail("owner launch control contract version missing")
     if packet.get("audience") != "platform_internal_admin" or packet.get("customer_visible") is not False:
         return fail("owner launch control must stay platform-internal")
     if packet.get("public_paid_launch_allowed") is not False:
         return fail("owner launch control must not directly allow paid public launch")
+    fixed_progress = packet.get("fixed_launch_progress") if isinstance(packet.get("fixed_launch_progress"), dict) else {}
+    if fixed_progress.get("contract_version") != "2026-07-14-fixed-public-launch-progress-v1":
+        return fail("fixed launch progress contract missing from owner control")
+    if fixed_progress.get("fixed_denominator") is not True or fixed_progress.get("total_points") != 100:
+        return fail("owner progress must use the fixed 100-point denominator")
+    if fixed_progress.get("customer_visible") is not False:
+        return fail("fixed launch progress must remain internal")
+    if not isinstance(fixed_progress.get("remaining_actions"), list):
+        return fail("fixed launch progress must expose a deterministic remaining queue")
+    merchant_validation = packet.get("merchant_workflow_validation") if isinstance(packet.get("merchant_workflow_validation"), dict) else {}
+    if merchant_validation.get("contract_version") != "2026-07-14-real-merchant-workflow-validation-v1":
+        return fail("real merchant workflow validation contract missing from owner control")
+    if merchant_validation.get("passed") is not False or merchant_validation.get("customer_visible") is not False:
+        return fail("synthetic owner fixture must not earn real merchant validation evidence")
     for marker in (
         "charge_now_allowed",
         "calls_stripe_api",
@@ -101,7 +167,7 @@ def main() -> int:
     external_keys = {item.get("key") for item in packet.get("external_blockers", []) if isinstance(item, dict)}
     for key in {
         "stable_domain_waf_callbacks",
-        "stripe_live_products_prices_webhook",
+        "wechat_pay_native_production_cutover",
         "clean_new_ebay_account",
         "fresh_real_test_product_assets",
         "no_charge_rehearsal_evidence",
@@ -432,7 +498,7 @@ def main() -> int:
         if key not in state_keys:
             return fail(f"owner continuity handoff state missing: {key}")
     action_keys = {item.get("key") for item in handoff.get("next_external_actions", []) if isinstance(item, dict)}
-    if "stripe_live_products_prices_webhook" not in action_keys:
+    if "wechat_pay_native_production_cutover" not in action_keys:
         return fail(f"owner continuity handoff should preserve external blocker actions: {action_keys}")
     handoff_text = handoff.get("handoff_text") or ""
     for marker in (
@@ -500,7 +566,7 @@ def main() -> int:
         if key not in phase_keys:
             return fail(f"cutover decision phase missing: {key}")
     founder_keys = {item.get("key") for item in cutover.get("founder_external_actions", []) if isinstance(item, dict)}
-    for key in {"stripe_live_products_prices_webhook", "clean_new_ebay_account"}:
+    for key in {"wechat_pay_native_production_cutover", "clean_new_ebay_account"}:
         if key not in founder_keys:
             return fail(f"cutover decision should preserve founder external action: {key}")
     internal_keys = {item.get("key") for item in cutover.get("codex_internal_actions", []) if isinstance(item, dict)}
@@ -574,7 +640,7 @@ def main() -> int:
         if key not in step_keys:
             return fail(f"final launch rehearsal execution step missing: {key}")
     final_external_keys = {item.get("key") for item in final_record.get("remaining_external_blockers", []) if isinstance(item, dict)}
-    for key in {"stripe_live_products_prices_webhook", "clean_new_ebay_account"}:
+    for key in {"wechat_pay_native_production_cutover", "clean_new_ebay_account"}:
         if key not in final_external_keys:
             return fail(f"final launch rehearsal should preserve external blocker action: {key}")
     final_internal_keys = {item.get("key") for item in final_record.get("remaining_internal_actions", []) if isinstance(item, dict)}
@@ -635,7 +701,7 @@ def main() -> int:
     dossier_section_keys = {item.get("key") for item in approval_dossier.get("sections", []) if isinstance(item, dict)}
     for key in {
         "public_readiness_truth",
-        "billing_provider_truth",
+        "mainland_payment_truth",
         "no_charge_live_domain_evidence",
         "new_ebay_account_refresh_proof",
         "paid_launch_packet_truth",
@@ -644,15 +710,7 @@ def main() -> int:
         if key not in dossier_section_keys:
             return fail(f"owner paid launch approval dossier section missing: {key}")
     no_charge_item_keys = {item.get("key") for item in approval_dossier.get("no_charge_evidence_items", []) if isinstance(item, dict)}
-    for key in {
-        "checkout_return_url_smoke",
-        "customer_portal_return_url_smoke",
-        "signed_webhook_smoke",
-        "subscription_quota_lifecycle_smoke",
-        "secret_scan_and_browser_smoke",
-        "rollback_audit_packet",
-        "no_charge_evidence_id_recorded",
-    }:
+    for key in {"no_charge_rehearsal_evidence_flags"}:
         if key not in no_charge_item_keys:
             return fail(f"owner paid launch approval dossier should include no-charge evidence item: {key}")
     dossier_safety = approval_dossier.get("safety") if isinstance(approval_dossier.get("safety"), dict) else {}
@@ -719,7 +777,7 @@ def main() -> int:
     if report_summary.get("owner_paid_launch_approval_dossier_status") != approval_dossier.get("status"):
         return fail(f"prelaunch report should summarize approval dossier status: {report_summary}")
     report_founder_keys = {item.get("key") for item in prelaunch_report.get("founder_required_actions", []) if isinstance(item, dict)}
-    for key in {"stripe_live_products_prices_webhook", "clean_new_ebay_account"}:
+    for key in {"wechat_pay_native_production_cutover", "clean_new_ebay_account"}:
         if key not in report_founder_keys:
             return fail(f"prelaunch report should preserve founder required action: {key}")
     decision_record = prelaunch_report.get("decision_record") if isinstance(prelaunch_report.get("decision_record"), dict) else {}
@@ -731,7 +789,7 @@ def main() -> int:
         "decision: do_not_launch_paid_public_yet",
         "public_paid_launch_allowed: False",
         "charge_now_allowed: False",
-        "Do not create live Stripe Checkout sessions",
+        "Do not create a payable QR or call a live payment provider",
         "Do not run or repeat eBay OAuth",
     ):
         if marker not in report_markdown:

@@ -22,6 +22,7 @@ class FakeStreamingResponse:
             'data: {"choices":[{"delta":{"content":"候选商品"},"finish_reason":null}]}\n'.encode("utf-8"),
             b'data: {"choices":[{"delta":{"reasoning_content":"internal"},"finish_reason":null}]}\n',
             'data: {"choices":[{"delta":{"content":"卡片"},"finish_reason":"stop"}]}\n'.encode("utf-8"),
+            b'data: {"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":30,"total_tokens":150}}\n',
             b'data: [DONE]\n',
         ]
 
@@ -60,9 +61,11 @@ def main() -> None:
         )
 
     assert captured["payload"]["stream"] is True, captured
+    assert captured["payload"]["stream_options"] == {"include_usage": True}, captured
     assert result["text"] == "候选商品卡片", result
     assert result["finish_reason"] == "stop", result
     assert result["model_mode"] == "live_http_model_text_stream", result
+    assert result["_usage"] == {"input_tokens": 120, "output_tokens": 30, "total_tokens": 150}, result
     assert deltas == ["候选商品", "卡片"], deltas
     assert "internal" not in json.dumps(result, ensure_ascii=False), result
     assert "unit-test-model-key" not in json.dumps(result, ensure_ascii=False), result

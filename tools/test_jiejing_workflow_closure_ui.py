@@ -37,8 +37,8 @@ def main() -> int:
     require(app_html, '<option selected>不生成视频</option>', "video generation requires explicit merchant choice")
     if 'id="assetSendConfirm">送确认中心' in app_html:
         raise AssertionError("media review must not navigate to an empty high-risk confirmation center")
-    require(app_js, "const videoRequested = /视频/.test", "video request derives from merchant media settings")
-    require(app_js, "!/不生成视频/.test(videoPreset)", "no-video selection prevents provider spend")
+    require(app_js, "const videoRequested = [6, 10].includes(videoDurationSeconds);", "video request requires an explicit supported duration")
+    require(app_js, "if (/不生成视频/.test(String(value))) return 0;", "no-video selection prevents provider spend")
     require(app_js, "video_generation_requested: videoRequested", "video request reaches backend provider job")
 
     public_accept_start = app_js.index('if (action === "accept-candidates")')

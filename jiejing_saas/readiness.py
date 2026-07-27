@@ -14,6 +14,7 @@ from jiejing_runtime.provider_job_contracts import build_provider_job_contract_c
 
 from .backup_plan import build_backup_plan
 from .billing_plan import build_billing_plan
+from .billing_payment_options import validate_mainland_payment_launch_for_public
 from .config import SaaSSettings
 from .controlled_bridges import build_controlled_bridge_contract
 from .database_adapter import build_database_adapter_contract
@@ -22,6 +23,7 @@ from .ebay_live_read_adapter import build_live_read_adapter_status
 from .ebay_token_refresh_adapter import build_ebay_token_refresh_adapter_status
 from .infrastructure_drivers import build_infrastructure_driver_status
 from .model_value_gate import build_model_value_gate
+from .monitoring import build_monitoring_status
 from .operational_health import build_operational_health
 from .platform_registry import registry_summary
 from .platform_model_status import build_platform_default_model_status
@@ -71,7 +73,7 @@ def build_product_readiness(settings: SaaSSettings, repository: SaaSRepository) 
         _queue_worker_plan_item(settings, repository),
         *_operational_health_items(operational_health),
         _infrastructure_driver_item(settings),
-        _monitoring_item(settings),
+        _monitoring_item(settings, repository),
         _backup_item(settings, repository),
         _billing_item(settings, repository),
         _provider_job_runner_item(),
@@ -294,6 +296,17 @@ def _backup_item(settings: SaaSSettings, repository: SaaSRepository) -> Readines
             "Managed database backup policy, restore drill evidence and backup alerts are configured.",
             "Keep restore drills scheduled and alert recovery owners before paid launch.",
         )
+    blockers = {str(item) for item in (plan.get("blockers") or []) if str(item)}
+    freshness_only_blockers = {"cos_backup_probe_stale", "restore_drill_overdue"}
+    if settings.environment == "staging" and blockers and blockers.issubset(freshness_only_blockers):
+        return ReadinessItem(
+            "backup_restore",
+            "Backup and restore",
+            "paid_launch_backup_evidence_stale",
+            "warning",
+            "Managed backup controls remain configured, but the latest backup and restore evidence is outside the paid-launch freshness windows.",
+            "Record a recent successful backup probe and run a new restore drill before paid launch.",
+        )
     return ReadinessItem(
         "backup_restore",
         "Backup and restore",
@@ -306,31 +319,44 @@ def _backup_item(settings: SaaSSettings, repository: SaaSRepository) -> Readines
 
 def _billing_item(settings: SaaSSettings, repository: SaaSRepository) -> ReadinessItem:
     plan = build_billing_plan(settings, repository)
-    if plan.get("billing_ready_for_paid_launch"):
+    mainland = plan.get("mainland_payment_launch") if isinstance(plan.get("mainland_payment_launch"), dict) else {}
+    payment = _validated_public_mainland_payment(mainland)
+    configured_count = payment["configured_component_count"]
+    required_count = payment["required_component_count"]
+    if payment["mainland_payment_ready_for_owner_approval"] is True:
         return ReadinessItem(
             "billing_quota",
             "Billing and quota",
-            "ready",
-            "info",
-            "Billing provider, plan catalog, signed webhook and quota enforcement are configured.",
-            "Monitor plan usage, provider costs and failed billing webhooks.",
-        )
-    if settings.environment == "staging" and plan.get("billing_ready_for_private_beta"):
-        return ReadinessItem(
-            "billing_quota",
-            "Billing and quota",
-            "private_beta_quota_ready",
+            "mainland_payment_ready_for_owner_approval",
             "warning",
-            "Manual-seed billing and merchant-visible quota enforcement are configured for staging private beta, but an external paid subscription provider is still required before charging merchants.",
-            "Select Stripe, Paddle or Lemon Squeezy, publish real plan IDs and configure signed webhooks before paid public launch.",
+            "WeChat Pay Native configuration, signed callbacks, authenticated order query and controlled acceptance evidence are ready; public charging remains closed.",
+            "Complete the separate owner commercial-release review before approving public payment cutover.",
+        )
+    if payment["next_paid_launch_blocker"] == "merchant_payment_status_unavailable":
+        return ReadinessItem(
+            "billing_quota",
+            "Billing and quota",
+            "blocked_mainland_payment_status_unavailable",
+            "blocker" if settings.is_production_like else "warning",
+            "The public mainland payment status is unavailable or malformed; public charging remains closed.",
+            "Restore the canonical backend payment status before any payment cutover review.",
+        )
+    if payment["next_paid_launch_blocker"] == "merchant_payment_provider_configuration_incomplete":
+        return ReadinessItem(
+            "billing_quota",
+            "Billing and quota",
+            "blocked_mainland_payment_not_ready" if settings.is_production_like else "mainland_payment_configuration_in_progress",
+            "blocker" if settings.is_production_like else "warning",
+            f"WeChat Pay Native has {configured_count}/{required_count} required backend components configured; public charging remains closed.",
+            "Complete the current backend payment configuration before relying on historical acceptance evidence.",
         )
     return ReadinessItem(
         "billing_quota",
         "Billing and quota",
-        "blocked_billing_quota_not_ready" if settings.is_production_like else "contract_ready_provider_pending",
+        "mainland_payment_provider_configured",
         "blocker" if settings.is_production_like else "warning",
-        "The backend exposes plan and quota contracts, but paid subscription provider, webhooks or quota enforcement are not fully configured.",
-        "Choose billing provider, publish plan IDs, configure signed webhooks and enforce quotas before charging merchants.",
+        f"WeChat Pay Native has {configured_count}/{required_count} required backend components configured; public charging remains closed.",
+        "Complete the next controlled mainland payment gate before public cutover.",
     )
 
 
@@ -386,24 +412,25 @@ def _infrastructure_driver_item(settings: SaaSSettings) -> ReadinessItem:
     )
 
 
-def _monitoring_item(settings: SaaSSettings) -> ReadinessItem:
+def _monitoring_item(settings: SaaSSettings, repository: SaaSRepository) -> ReadinessItem:
     if settings.is_production_like:
-        if _cls_env_ready():
+        monitoring = build_monitoring_status(settings, repository)
+        if monitoring.get("production_monitoring_ready") is True:
             return ReadinessItem(
                 "monitoring_alerting",
                 "Monitoring and alerting",
                 "cloud_monitoring_ready",
                 "info",
                 "Production-like environments enable safe access logs and point the monitoring contract at Tencent CLS without request bodies or raw tokens.",
-                "Continue checking OAuth/Vault/eBay sync and backup alerts before increasing merchant traffic.",
+                "Continue checking the passive provider monitor, OAuth/Vault/eBay sync and backup alerts before increasing merchant traffic.",
             )
         return ReadinessItem(
             "monitoring_alerting",
             "Monitoring and alerting",
-            "blocked_cloud_monitoring_not_configured",
-            "blocker",
-            "Safe access logs are available, but Tencent CLS logset/topic and alert policy are not fully configured for this environment.",
-            "Configure JIEJING_CLS_ENABLED, region, logset/topic ids and alert policy before paid launch.",
+            "blocked_provider_monitoring_evidence",
+            "warning",
+            "Production monitoring evidence is incomplete. Public readiness intentionally withholds internal provider diagnostics.",
+            "Complete the internal passive monitoring, cloud alert verification and incident-response evidence before paid launch.",
         )
     return ReadinessItem(
         "monitoring_alerting",
@@ -1024,10 +1051,19 @@ def _ebay_token_refresh_item(settings: SaaSSettings, evidence: dict[str, Any]) -
     )
 
 
+def _has_current_official_ebay_packet(evidence: dict[str, Any]) -> bool:
+    current_marker = evidence.get("latest_ebay_packet_current_connection")
+    packet_is_current = True if current_marker is None else bool(current_marker)
+    return bool(
+        packet_is_current
+        and evidence.get("latest_ebay_packet_source_mode") == "official_api"
+        and evidence.get("latest_ebay_packet_present_resource_keys")
+    )
+
+
 def _ebay_read_adapter_item(settings: SaaSSettings, evidence: dict[str, Any]) -> ReadinessItem:
     if (
-        evidence.get("latest_ebay_packet_source_mode") == "official_api"
-        and evidence.get("latest_ebay_packet_present_resource_keys")
+        _has_current_official_ebay_packet(evidence)
         and settings.ebay_read_only_live_enabled
     ):
         return ReadinessItem(
@@ -1037,6 +1073,15 @@ def _ebay_read_adapter_item(settings: SaaSSettings, evidence: dict[str, Any]) ->
             "info",
             "The backend has completed an official eBay read-only sync and cached a sanitized standard packet.",
             "Continue route-level retry, packet freshness checks, and seller-visible failure recovery.",
+        )
+    if evidence.get("historical_ebay_packet_present"):
+        return ReadinessItem(
+            "ebay_read_only_adapter",
+            "eBay read-only adapter",
+            "historical_packet_not_current",
+            "info",
+            "A previous seller packet remains archived, but it is not accepted as evidence for the current store connection.",
+            "Wait for operator-approved authorization of the clean seller account, then create a new read-only packet.",
         )
     missing = []
     if not settings.ebay_read_only_live_enabled:
@@ -1056,6 +1101,15 @@ def _ebay_read_adapter_item(settings: SaaSSettings, evidence: dict[str, Any]) ->
 
 
 def _data_packet_cache_item(counts: dict[str, int], evidence: dict[str, Any]) -> ReadinessItem:
+    if evidence.get("historical_ebay_packet_present"):
+        return ReadinessItem(
+            "platform_data_packets",
+            "只读数据包缓存",
+            "historical_packet_archived",
+            "info",
+            "旧卖家数据包仍保留用于审计，但不会作为当前店铺、Listing 或发布判断的依据。",
+            "新账号完成只读授权后生成新的脱敏数据包；不要复用历史账号证据。",
+        )
     if counts.get("platform_data_packets", 0) < 1:
         return ReadinessItem(
             "platform_data_packets",
@@ -1080,7 +1134,7 @@ def _real_saas_loop_item(evidence: dict[str, Any]) -> ReadinessItem:
     missing = evidence.get("latest_ebay_packet_missing_resource_keys") or []
     has_reports = int(evidence.get("report_count") or 0) > 0
     has_confirmations = int(evidence.get("confirmation_count") or 0) > 0
-    if evidence.get("latest_ebay_packet_source_mode") == "official_api" and present and has_reports and has_confirmations:
+    if _has_current_official_ebay_packet(evidence) and has_reports and has_confirmations:
         return ReadinessItem(
             "real_saas_loop_evidence",
             "Real SaaS loop evidence",
@@ -1088,6 +1142,15 @@ def _real_saas_loop_item(evidence: dict[str, Any]) -> ReadinessItem:
             "info",
             f"Official eBay packet {evidence.get('latest_ebay_packet_id')} has {len(present)} resource sections, {len(missing)} source gaps, reports, and confirmation records.",
             "Next make this evidence the frontend source of truth and remove old demo fallbacks from production mode.",
+        )
+    if evidence.get("historical_ebay_packet_present"):
+        return ReadinessItem(
+            "real_saas_loop_evidence",
+            "Real SaaS loop evidence",
+            "historical_loop_archived_not_current",
+            "info",
+            "The archived seller packet, reports and confirmations cannot prove the workflow for the current seller account.",
+            "Re-run the read-only packet to confirmation path only after the clean account is explicitly approved.",
         )
     return ReadinessItem(
         "real_saas_loop_evidence",
@@ -1100,7 +1163,7 @@ def _real_saas_loop_item(evidence: dict[str, Any]) -> ReadinessItem:
 
 
 def _ebay_read_item(ebay: dict[str, Any], evidence: dict[str, Any]) -> ReadinessItem:
-    if evidence.get("latest_ebay_packet_source_mode") == "official_api" and evidence.get("latest_ebay_packet_present_resource_keys"):
+    if _has_current_official_ebay_packet(evidence):
         return ReadinessItem(
             "ebay_read",
             "eBay read-only access",
@@ -1108,6 +1171,15 @@ def _ebay_read_item(ebay: dict[str, Any], evidence: dict[str, Any]) -> Readiness
             "info",
             "Official eBay read-only data is present as a sanitized backend packet; Runtime and frontend still do not receive raw tokens.",
             "Continue packet freshness, route health, and token refresh failure recovery.",
+        )
+    if evidence.get("historical_ebay_packet_present"):
+        return ReadinessItem(
+            "ebay_read",
+            "eBay read-only access",
+            "historical_packet_not_current",
+            "info",
+            "Official data from a previous seller account is archived, but current eBay read access is not proven.",
+            "Do not repeat OAuth until the operator approves a clean account; then prove read-only access and token refresh.",
         )
     if not ebay.get("credential_present"):
         status = "expired_or_missing" if ebay.get("refresh_required") else "missing"
@@ -1124,7 +1196,7 @@ def _ebay_read_item(ebay: dict[str, Any], evidence: dict[str, Any]) -> Readiness
 
 def _account_health_incident_item(evidence: dict[str, Any]) -> ReadinessItem:
     present = set(evidence.get("latest_ebay_packet_present_resource_keys") or [])
-    has_official_packet = evidence.get("latest_ebay_packet_source_mode") == "official_api"
+    has_official_packet = _has_current_official_ebay_packet(evidence)
     if has_official_packet and "store_profile" in present:
         return ReadinessItem(
             "account_health_incident_mode",
@@ -1133,6 +1205,15 @@ def _account_health_incident_item(evidence: dict[str, Any]) -> ReadinessItem:
             "info",
             "Latest official eBay packet includes store_profile, so publish preflight can derive an account-health gate without exposing tokens.",
             "Keep missing or abnormal account health as a real-write blocker and show the evidence package in Settings and publish health.",
+        )
+    if evidence.get("historical_ebay_packet_present"):
+        return ReadinessItem(
+            "account_health_incident_mode",
+            "Account health incident mode",
+            "historical_snapshot_archived_block_by_default",
+            "info",
+            "The available account-health snapshot belongs to historical seller evidence, so real writes remain blocked by default.",
+            "Create a fresh store_profile snapshot only after the clean seller account is explicitly authorized.",
         )
     if evidence.get("latest_ebay_packet_id"):
         return ReadinessItem(
@@ -1155,7 +1236,7 @@ def _account_health_incident_item(evidence: dict[str, Any]) -> ReadinessItem:
 
 def _ebay_policy_item(ebay: dict[str, Any], evidence: dict[str, Any]) -> ReadinessItem:
     present = set(evidence.get("latest_ebay_packet_present_resource_keys") or [])
-    if "account_business_policies" in present:
+    if _has_current_official_ebay_packet(evidence) and "account_business_policies" in present:
         return ReadinessItem(
             "ebay_business_policies",
             "eBay business policies",
@@ -1163,6 +1244,15 @@ def _ebay_policy_item(ebay: dict[str, Any], evidence: dict[str, Any]) -> Readine
             "info",
             "Business policy data is present in the latest official eBay read-only packet.",
             "Continue mapping policy IDs into listing-package validation and confirmation center previews.",
+        )
+    if evidence.get("historical_ebay_packet_present"):
+        return ReadinessItem(
+            "ebay_business_policies",
+            "eBay business policies",
+            "historical_policy_packet_archived",
+            "info",
+            "Previous seller policy IDs remain archived and are not reusable for the current seller account.",
+            "Read the clean account policies after approved authorization; never copy policy IDs across seller accounts.",
         )
     if not ebay.get("policy_snapshot_present"):
         return ReadinessItem(
@@ -1198,10 +1288,10 @@ def _execution_item(settings: SaaSSettings) -> ReadinessItem:
     return ReadinessItem(
         "execution_service",
         "真实执行服务",
-        "safe_demo_boundary",
+        "ebay_draft_save_adapter_ready_disabled",
         "warning",
-        "ExecutionService 当前只做确认后交接记录，不执行真实 eBay/付款/退款/采购。",
-        "下一阶段先实现 eBay draft/save 类低风险 adapter，再考虑发布、改价等高风险写入。",
+        "eBay 未发布草稿适配器已接入确认、预检、幂等和审计边界，但当前开关关闭，不会写入 eBay；付款、退款、采购等动作也仍未开放。",
+        "账号准备好后，先做一次受控的 eBay 未发布草稿保存证明，确认没有公开 Listing，再考虑单商品发布。",
     )
 
 
@@ -1311,38 +1401,62 @@ def _public_backup_status(settings: SaaSSettings, repository: SaaSRepository) ->
 
 def _public_billing_status(settings: SaaSSettings, repository: SaaSRepository) -> dict[str, Any]:
     plan = build_billing_plan(settings, repository)
-    provider = plan.get("provider") if isinstance(plan.get("provider"), dict) else {}
+    mainland = plan.get("mainland_payment_launch") if isinstance(plan.get("mainland_payment_launch"), dict) else {}
     quota = plan.get("quota_contract") if isinstance(plan.get("quota_contract"), dict) else {}
-    checkout = provider.get("checkout_portal_contract") if isinstance(provider.get("checkout_portal_contract"), dict) else {}
-    checkout_sessions = checkout.get("checkout_sessions") if isinstance(checkout.get("checkout_sessions"), dict) else {}
-    customer_portal = checkout.get("customer_portal") if isinstance(checkout.get("customer_portal"), dict) else {}
-    paid_launch_blockers = list(plan.get("paid_launch_blockers") or [])
-    merchant_launch_path = plan.get("merchant_launch_path") if isinstance(plan.get("merchant_launch_path"), dict) else {}
+    payment = _validated_public_mainland_payment(mainland)
+    legacy_provider = plan.get("provider") if isinstance(plan.get("provider"), dict) else {}
+    legacy_launch_path = plan.get("merchant_launch_path") if isinstance(plan.get("merchant_launch_path"), dict) else {}
+    private_beta_test_active = all(
+        (
+            plan.get("billing_ready_for_private_beta") is True,
+            legacy_provider.get("test_billing_provider_configured") is True,
+            legacy_launch_path.get("contract_version") == "2026-07-03-merchant-billing-launch-path-v1",
+            legacy_launch_path.get("current_stage") == "invited_beta_no_real_charge",
+            legacy_launch_path.get("public_paid_launch_allowed") is False,
+            legacy_launch_path.get("charge_now_allowed") is False,
+            legacy_launch_path.get("triggers_real_charge") is False,
+            legacy_launch_path.get("frontend_can_grant_entitlement") is False,
+            legacy_launch_path.get("frontend_can_grant_quota") is False,
+            legacy_launch_path.get("backend_confirmation_required_before_entitlement") is True,
+            legacy_launch_path.get("secret_exposed") is False,
+        )
+    )
+    public_paid_launch_blockers = [payment["next_paid_launch_blocker"]]
     return {
         "contract_version": plan.get("contract_version"),
-        "billing_ready_for_private_beta": bool(plan.get("billing_ready_for_private_beta")),
-        "billing_ready_for_paid_launch": bool(plan.get("billing_ready_for_paid_launch")),
-        "provider": provider.get("selected"),
-        "plan_count": len(plan.get("plan_catalog") or []),
-        "external_paid_provider_configured": bool(provider.get("external_paid_provider_configured")),
-        "test_billing_provider_configured": bool(provider.get("test_billing_provider_configured")),
-        "checkout_ready": bool(checkout_sessions.get("ready")),
-        "customer_portal_ready": bool(customer_portal.get("ready")),
-        "signed_webhook_configured": bool(provider.get("webhook_configured")),
-        "quota_enforcement_enabled": bool(quota.get("enabled")),
-        "blockers": plan.get("blockers", []),
-        "paid_launch_blockers": paid_launch_blockers,
-        "paid_launch_blocker_count": len(paid_launch_blockers),
-        "next_paid_launch_blocker": paid_launch_blockers[0] if paid_launch_blockers else "",
+        "billing_ready_for_private_beta": plan.get("billing_ready_for_private_beta") is True,
+        "billing_ready_for_paid_launch": False,
+        "mainland_payment_ready_for_owner_approval": payment["mainland_payment_ready_for_owner_approval"],
+        "provider": "wechat_pay_native",
+        "checkout_mode": "native_qr",
+        "billing_mode": "one_time_30_day_plan",
+        "provider_configured": payment["provider_configured"],
+        "payment_path_status": payment["payment_path_status"],
+        "configured_component_count": payment["configured_component_count"],
+        "required_component_count": payment["required_component_count"],
+        "verified_paid_order_count": payment["verified_paid_order_count"],
+        "plan_count": len(plan.get("plan_catalog")) if isinstance(plan.get("plan_catalog"), list) else 0,
+        "quota_enforcement_enabled": quota.get("enabled") is True,
+        "paid_launch_blockers": public_paid_launch_blockers,
+        "paid_launch_blocker_count": len(public_paid_launch_blockers),
+        "next_paid_launch_blocker": public_paid_launch_blockers[0] if public_paid_launch_blockers else "",
         "merchant_launch_path": {
-            "contract_version": merchant_launch_path.get("contract_version", ""),
-            "current_stage": merchant_launch_path.get("current_stage", ""),
-            "headline": merchant_launch_path.get("headline", ""),
-            "current_charge_status": merchant_launch_path.get("current_charge_status", ""),
+            "contract_version": (
+                "2026-07-03-merchant-billing-launch-path-v1"
+                if private_beta_test_active
+                else "2026-07-27-merchant-mainland-payment-path-v1"
+            ),
+            "current_stage": (
+                "invited_beta_no_real_charge" if private_beta_test_active else payment["payment_path_status"]
+            ),
+            "headline": "merchant_payment_status_available_in_billing_control_room",
+            "current_charge_status": "no_real_charge_now",
             "public_paid_launch_allowed": False,
             "charge_now_allowed": False,
             "triggers_real_charge": False,
-            "hosted_payment_page_required_for_formal_payment": True,
+            "checkout_mode": "native_qr",
+            "billing_mode": "one_time_30_day_plan",
+            "hosted_payment_page_required_for_formal_payment": False,
             "backend_confirmation_required_before_entitlement": True,
             "frontend_can_grant_entitlement": False,
             "frontend_can_grant_quota": False,
@@ -1351,13 +1465,44 @@ def _public_billing_status(settings: SaaSSettings, repository: SaaSRepository) -
             "metered_work_only_blocks_on_billing_problem": True,
             "secret_exposed": False,
         },
+        "domestic_payment": {
+            "provider": "wechat_pay_native",
+            "checkout_mode": "native_qr",
+            "billing_mode": "one_time_30_day_plan",
+            "status": payment["domestic_payment_status"],
+            "configured_component_count": payment["configured_component_count"],
+            "required_component_count": payment["required_component_count"],
+            "controlled_acceptance_proven": payment["controlled_acceptance_proven"],
+            "verified_paid_order_count": payment["verified_paid_order_count"],
+            "public_charging_allowed": False,
+            "charge_now_allowed": False,
+            "triggers_real_charge": False,
+            "triggers_real_refund": False,
+            "calls_external_payment_api": False,
+            "frontend_gets_payment_secret": False,
+            "secret_exposed": False,
+        },
         "public_charging_allowed": False,
         "charge_now_allowed": False,
         "triggers_real_charge": False,
+        "triggers_real_refund": False,
+        "calls_external_payment_api": False,
+        "real_platform_writes_enabled": False,
         "frontend_gets_payment_secret": False,
         "frontend_can_grant_quota": False,
         "secret_exposed": False,
-    }
+}
+
+
+def _validated_public_mainland_payment(mainland: dict[str, Any]) -> dict[str, Any]:
+    """Validate the canonical internal contract before exposing aggregate facts."""
+    return validate_mainland_payment_launch_for_public(mainland)
+
+
+def _safe_public_count(value: Any) -> int:
+    if type(value) is not int or value < 0:
+        return 0
+    return value
 
 
 def _public_model_value_status(settings: SaaSSettings, repository: SaaSRepository) -> dict[str, Any]:

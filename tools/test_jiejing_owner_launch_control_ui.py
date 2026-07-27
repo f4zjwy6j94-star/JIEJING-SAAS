@@ -25,7 +25,7 @@ def main() -> int:
     for marker in [
         "saasOwnerLaunchControl: null",
         'optionalSaasFetchFast("/owner/launch-control"',
-        "state.saasOwnerLaunchControl = ownerLaunchControl.owner_launch_control",
+        "state.saasOwnerLaunchControl = canViewPlatformInternal ? ownerLaunchControl.owner_launch_control",
         "async function refreshSaasOwnerLaunchControl",
         "function maybeRefreshSaasOwnerLaunchControlForActiveTab",
         "maybeRefreshSaasOwnerLaunchControlForActiveTab();",
@@ -36,6 +36,15 @@ def main() -> int:
         'control?.audience === "platform_internal_admin"',
         'if (!saasOwnerLaunchCanView()) return "";',
         "saas-owner-launch-control",
+        "fixed_launch_progress",
+        "real_merchant_workflow_validation_v1",
+        "真实商家闭环验收",
+        "固定正式上线准备度",
+        "固定 100 分口径",
+        "saas-owner-fixed-progress",
+        "saas-owner-fixed-progress-grid",
+        "saas-owner-fixed-progress-queue",
+        "next_autonomous_action",
         "owner_admin_only",
         "platform_internal_admin_only",
         "not_customer_visible",
@@ -175,6 +184,12 @@ def main() -> int:
 
     for marker in [
         ".saas-owner-launch-control",
+        ".saas-owner-fixed-progress",
+        ".saas-owner-fixed-progress-head",
+        ".saas-owner-fixed-progress-track",
+        ".saas-owner-fixed-progress-grid",
+        ".saas-owner-fixed-progress-queue",
+        ".saas-owner-fixed-progress-next",
         ".saas-owner-launch-head",
         ".saas-owner-launch-head-actions",
         ".saas-owner-launch-summary",
@@ -248,7 +263,7 @@ def main() -> int:
         "_is_platform_internal_admin",
         "platform-internal admin only",
         '"owner_launch_control": build_owner_launch_control',
-        '"platform-internal-admin-only launch-control evidence"',
+        '"platform-internal-admin-only launch and production-release evidence"',
         '"GET /security/rate-limit/status"',
     ]:
         if marker not in api_server:
@@ -256,8 +271,10 @@ def main() -> int:
 
     for marker in [
         "jiejing_saas/owner_launch_control.py",
+        "jiejing_saas/launch_progress.py",
         "tools/test_jiejing_owner_launch_control.py",
         "tools/test_jiejing_owner_launch_control_ui.py",
+        "tools/test_jiejing_fixed_launch_progress.py",
         "tools/codex_jiejing_owner_launch_control_smoke.js",
     ]:
         if marker not in deploy:
@@ -288,10 +305,10 @@ def main() -> int:
         "function saasConfirmationImpactRows",
         "function saasConfirmationEvidenceChecklist",
         "function saasConfirmationRollbackPlan",
-        "P0 money movement",
-        "P1 platform write",
-        "P1 buyer promise",
-        "no_secret",
+        "资金/预算动作",
+        "平台动作",
+        "买家承诺",
+        "敏感凭证隔离",
         "saas-confirm-approval-brief",
     ]:
         if marker not in confirm_scope:

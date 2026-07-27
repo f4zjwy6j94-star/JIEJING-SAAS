@@ -13,6 +13,10 @@ from typing import Any
 
 from .backup_plan import build_backup_plan
 from .billing_domain_cutover_rehearsal import build_billing_domain_cutover_rehearsal
+from .billing_payment_options import (
+    build_mainland_payment_launch_status,
+    validate_mainland_payment_launch_for_public,
+)
 from .billing_plan import build_billing_plan
 from .billing_provider_evidence_register import build_billing_provider_evidence_register
 from .config import SaaSSettings
@@ -25,7 +29,7 @@ from .readiness import build_product_readiness_or_degraded
 from .repository import SaaSRepository
 
 
-PRODUCTION_RELEASE_GATE_VERSION = "2026-07-02-production-release-gate-v1"
+PRODUCTION_RELEASE_GATE_VERSION = "2026-07-27-production-release-gate-v2"
 
 
 def build_production_release_gate(settings: SaaSSettings, repository: SaaSRepository) -> dict[str, Any]:
@@ -42,13 +46,15 @@ def build_production_release_gate(settings: SaaSSettings, repository: SaaSReposi
     rehearsal = build_billing_domain_cutover_rehearsal(settings, repository)
     provider_register = build_billing_provider_evidence_register(settings, repository)
     approval_packet = build_paid_launch_approval_packet(settings, repository)
+    mainland_payment = build_mainland_payment_launch_status(settings, repository)
+    validated_mainland_payment = validate_mainland_payment_launch_for_public(mainland_payment)
 
     sections = [
         _deployment_section(),
-        _domain_edge_section(domain=domain, edge=edge),
+        _domain_edge_section(domain=domain, edge=edge, mainland_payment=mainland_payment),
         _managed_data_plane_section(settings=settings, infrastructure=infrastructure),
         _backup_restore_section(backup=backup),
-        _billing_section(billing=billing, rehearsal=rehearsal, provider_register=provider_register),
+        _billing_section(mainland_payment=mainland_payment, approval_packet=approval_packet),
         _ebay_section(evidence=evidence, approval_packet=approval_packet),
         _monitoring_section(monitoring=monitoring),
         _owner_final_section(approval_packet=approval_packet),
@@ -73,7 +79,13 @@ def build_production_release_gate(settings: SaaSSettings, repository: SaaSReposi
             "production_ready": bool(readiness.get("production_ready")),
             "can_accept_real_customers": bool(readiness.get("can_accept_real_customers")),
             "ebay_token_refresh_success_count": _as_int(evidence.get("ebay_token_refresh_success_count")),
-            "billing_ready_for_paid_launch": bool(billing.get("billing_ready_for_paid_launch")),
+            "mainland_payment_provider": "wechat_pay_native",
+            "mainland_payment_ready_for_owner_approval": (
+                validated_mainland_payment.get("mainland_payment_ready_for_owner_approval") is True
+            ),
+            "billing_ready_for_paid_launch": (
+                validated_mainland_payment.get("mainland_payment_ready_for_owner_approval") is True
+            ),
             "provider_register_status": provider_register.get("status") or "unknown",
             "paid_launch_approval_status": approval_packet.get("status") or "unknown",
             "backup_ready_for_paid_launch": bool(backup.get("backup_ready_for_paid_launch")),
@@ -88,11 +100,25 @@ def build_production_release_gate(settings: SaaSSettings, repository: SaaSReposi
         },
         "sections": sections,
         "final_cutover_sequence": _final_cutover_sequence(sections),
-        "required_external_evidence": _required_external_evidence(),
+        "required_external_evidence": _required_external_evidence(settings=settings),
+        "future_international_payment": {
+            "provider": "stripe",
+            "role": "future_international_payment_only",
+            "billing_plan_selected": (
+                isinstance(billing.get("future_international_payment"), dict)
+                and billing.get("future_international_payment", {}).get("selected") is True
+            ),
+            "rehearsal_status": rehearsal.get("status") or "unknown",
+            "provider_register_status": provider_register.get("status") or "unknown",
+            "blocks_mainland_launch": False,
+            "calls_stripe_api": False,
+            "triggers_real_charge": False,
+            "secret_exposed": False,
+        },
         "forbidden_actions": [
             "Do not enable public paid launch from this gate alone.",
-            "Do not create Stripe Checkout Sessions while building this gate.",
-            "Do not call Stripe or payment-provider APIs while building this gate.",
+            "Do not create a payable QR while building this gate.",
+            "Do not call any live payment-provider API while building this gate.",
             "Do not run or repeat eBay OAuth from this gate.",
             "Do not perform real eBay writes, refunds, ads, procurement, price, inventory or policy changes.",
             "Do not expose payment, eBay, model or cloud secrets to frontend, reports, logs or memory.",
@@ -142,19 +168,25 @@ def _deployment_section() -> dict[str, Any]:
     )
 
 
-def _domain_edge_section(*, domain: dict[str, Any], edge: dict[str, Any]) -> dict[str, Any]:
+def _domain_edge_section(
+    *,
+    domain: dict[str, Any],
+    edge: dict[str, Any],
+    mainland_payment: dict[str, Any],
+) -> dict[str, Any]:
     summary = edge.get("summary") if isinstance(edge.get("summary"), dict) else {}
+    payment = validate_mainland_payment_launch_for_public(mainland_payment)
     checks = {
         "stable_domain_ready": bool(domain.get("production_domain_ready")),
-        "edge_preflight_ready": edge.get("status") == "ready_for_owner_approval",
         "waf_ready": bool(summary.get("waf_ready")),
         "origin_locked": bool(summary.get("origin_locked")),
-        "callbacks_ready": bool(summary.get("callbacks_ready")),
+        "ebay_callback_ready": domain.get("ebay_callback_verified") is True,
+        "wechat_payment_callbacks_and_provider_ready": payment.get("provider_configured") is True,
         "security_headers_verified": bool(domain.get("security_headers_verified")),
     }
     return _section(
         "stable_domain_edge_origin_callbacks",
-        "Stable domain, WAF, origin lock and eBay/Stripe callbacks",
+        "Stable domain, WAF, origin lock and eBay/WeChat callbacks",
         checks,
         env_keys=[
             "JIEJING_PUBLIC_BASE_URL",
@@ -163,7 +195,8 @@ def _domain_edge_section(*, domain: dict[str, Any], edge: dict[str, Any]) -> dic
             "JIEJING_DOMAIN_DNS_VERIFIED",
             "JIEJING_TLS_VERIFIED",
             "JIEJING_EBAY_CALLBACK_VERIFIED",
-            "JIEJING_STRIPE_CALLBACK_URLS_VERIFIED",
+            "JIEJING_WECHAT_PAY_NOTIFY_URL",
+            "JIEJING_WECHAT_PAY_REFUND_NOTIFY_URL",
             "JIEJING_EDGE_DOMAIN_ADDED",
             "JIEJING_EDGE_DNS_PROXIED",
             "JIEJING_ORIGIN_DIRECT_IP_BLOCKED",
@@ -175,20 +208,26 @@ def _domain_edge_section(*, domain: dict[str, Any], edge: dict[str, Any]) -> dic
 
 
 def _managed_data_plane_section(*, settings: SaaSSettings, infrastructure: dict[str, Any]) -> dict[str, Any]:
+    postgres_durable_selected = settings.queue_provider == "postgres_durable"
+    redis_streams_selected = settings.queue_provider == "redis_streams" and settings.queue_url_configured
     checks = {
         "managed_postgres_selected": settings.database_engine == "postgres" and settings.database_adapter == "postgres-managed",
         "database_url_configured": settings.database_url_configured,
-        "redis_queue_selected": settings.queue_provider == "redis_streams" and settings.queue_url_configured,
+        "production_durable_queue_selected": postgres_durable_selected or redis_streams_selected,
         "vault_enabled": settings.vault_enabled and settings.vault_provider != "secret_ref_only",
         "postgres_live_probe_passed": _env_bool("JIEJING_POSTGRES_LIVE_PROBE_PASSED"),
-        "redis_live_probe_passed": _env_bool("JIEJING_REDIS_LIVE_PROBE_PASSED"),
+        "durable_queue_live_probe_passed": (
+            _env_bool("JIEJING_POSTGRES_DURABLE_QUEUE_LIVE_PROBE_PASSED")
+            if postgres_durable_selected
+            else _env_bool("JIEJING_REDIS_LIVE_PROBE_PASSED")
+        ),
         "vault_live_probe_passed": _env_bool("JIEJING_VAULT_LIVE_PROBE_PASSED"),
         "runtime_cutover_contract_visible": bool(infrastructure.get("postgres", {}).get("repository_runtime_switch_implemented"))
         and bool(infrastructure.get("redis", {}).get("worker_runtime_switch_implemented")),
     }
     return _section(
         "managed_data_plane_and_secret_boundary",
-        "Managed Postgres, Redis queue, Vault/KMS and live probes",
+        "Managed Postgres, durable queue, Vault/KMS and live probes",
         checks,
         env_keys=[
             "JIEJING_DATABASE_ENGINE",
@@ -199,10 +238,11 @@ def _managed_data_plane_section(*, settings: SaaSSettings, infrastructure: dict[
             "JIEJING_VAULT_ENABLED",
             "JIEJING_VAULT_PROVIDER",
             "JIEJING_POSTGRES_LIVE_PROBE_PASSED",
+            "JIEJING_POSTGRES_DURABLE_QUEUE_LIVE_PROBE_PASSED",
             "JIEJING_REDIS_LIVE_PROBE_PASSED",
             "JIEJING_VAULT_LIVE_PROBE_PASSED",
         ],
-        next_action="Run live Postgres, Redis and Vault probes in the target production-like network; keep raw secrets inside backend Vault/env only.",
+        next_action="Run live Postgres, selected durable-queue and Vault probes in the target production-like network; keep raw secrets inside backend Vault/env only.",
         verification=["/infrastructure/drivers", "tools/test_jiejing_infrastructure_drivers.py", "tools/jiejing_infra_cutover_rehearsal.py"],
         external_resource_required=True,
     )
@@ -213,6 +253,8 @@ def _backup_restore_section(*, backup: dict[str, Any]) -> dict[str, Any]:
         "backup_ready_for_paid_launch": bool(backup.get("backup_ready_for_paid_launch")),
         "managed_database_backup_policy": bool((backup.get("database") or {}).get("managed_database_selected")),
         "restore_drill_recorded": bool((backup.get("restore") or {}).get("restore_drill_recorded")),
+        "restore_drill_fresh": bool((backup.get("restore") or {}).get("restore_drill_fresh")),
+        "recent_backup_probe_fresh": bool((backup.get("object_storage") or {}).get("live_probe_fresh")),
         "backup_alerts_configured": bool((backup.get("alerts") or {}).get("configured")),
         "raw_secret_export_blocked": (backup.get("vault") or {}).get("raw_secret_export_allowed") is False,
     }
@@ -228,6 +270,8 @@ def _backup_restore_section(*, backup: dict[str, Any]) -> dict[str, Any]:
             "JIEJING_COS_BACKUP_ENABLED",
             "JIEJING_COS_BUCKET",
             "JIEJING_COS_BACKUP_LAST_SUCCESS_AT",
+            "JIEJING_BACKUP_PROBE_MAX_AGE_HOURS",
+            "JIEJING_RESTORE_DRILL_MAX_AGE_DAYS",
         ],
         next_action="Configure managed backup/PITR, run a restore drill, wire backup alerts and verify secret recovery without exporting raw secrets.",
         verification=["/backup/plan", "tools/test_jiejing_infra_cutover_rehearsal.py"],
@@ -235,32 +279,79 @@ def _backup_restore_section(*, backup: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _billing_section(*, billing: dict[str, Any], rehearsal: dict[str, Any], provider_register: dict[str, Any]) -> dict[str, Any]:
+def _billing_section(
+    *,
+    mainland_payment: dict[str, Any],
+    approval_packet: dict[str, Any],
+) -> dict[str, Any]:
+    payment = validate_mainland_payment_launch_for_public(mainland_payment)
+    approval_steps = _by_key(approval_packet.get("steps"))
+    payment_step = approval_steps.get("wechat_pay_native_cutover") or {}
     checks = {
-        "billing_ready_for_paid_launch": bool(billing.get("billing_ready_for_paid_launch")),
-        "billing_rehearsal_ready": rehearsal.get("status") == "ready_for_owner_approval",
-        "provider_register_ready": provider_register.get("ready_for_owner_review") is True,
-        "provider_register_no_charge": provider_register.get("charge_now_allowed") is False,
-        "provider_register_no_checkout": provider_register.get("creates_checkout_session") is False,
-        "provider_register_no_stripe_call": provider_register.get("calls_stripe_api") is False,
-        "provider_register_no_frontend_secret": provider_register.get("frontend_gets_payment_secret") is False,
+        "mainland_payment_contract_valid": payment.get("payment_path_status") != "payment_status_unavailable",
+        "wechat_pay_native_selected": (
+            isinstance(mainland_payment, dict)
+            and mainland_payment.get("primary_provider") == "wechat_pay_native"
+            and mainland_payment.get("checkout_mode") == "native_qr"
+            and mainland_payment.get("billing_mode") == "one_time_30_day_plan"
+        ),
+        "wechat_provider_configured": payment.get("provider_configured") is True,
+        "controlled_acceptance_proven": payment.get("controlled_acceptance_proven") is True,
+        "verified_paid_order_count_positive": _as_int(payment.get("verified_paid_order_count")) > 0,
+        "refund_controls_ready": (
+            isinstance(mainland_payment, dict) and mainland_payment.get("refund_now_allowed") is True
+        ),
+        "production_environment": (
+            isinstance(mainland_payment, dict) and mainland_payment.get("production_environment") is True
+        ),
+        "mainland_payment_ready_for_owner_approval": (
+            payment.get("mainland_payment_ready_for_owner_approval") is True
+        ),
+        "paid_launch_packet_v2_visible": (
+            approval_packet.get("contract_version") == "2026-07-27-paid-launch-approval-packet-v2"
+        ),
+        "paid_launch_packet_wechat_step_ready": payment_step.get("status") == "ready",
+        "public_charging_still_closed": approval_packet.get("public_paid_launch_allowed") is False,
+        "charge_now_still_closed": approval_packet.get("charge_now_allowed") is False,
+        "checkout_creation_not_triggered": approval_packet.get("creates_checkout_session") is False,
+        "real_charge_not_triggered": approval_packet.get("triggers_real_charge") is False,
+        "no_live_payment_api_called": approval_packet.get("calls_stripe_api") is False,
+        "frontend_payment_secret_blocked": approval_packet.get("frontend_gets_payment_secret") is False,
     }
     return _section(
-        "subscription_billing_webhook_and_quota",
-        "Subscription billing, signed webhook, portal, quota and no-charge rehearsal",
+        "mainland_wechat_payment_and_refund_controls",
+        "WeChat Native payment, signed callbacks, query, refund and controlled acceptance",
         checks,
         env_keys=[
-            "JIEJING_BILLING_PROVIDER",
-            "JIEJING_BILLING_PLANS_PUBLISHED",
-            "JIEJING_QUOTA_ENFORCEMENT_ENABLED",
-            "JIEJING_STRIPE_SECRET_KEY",
-            "JIEJING_STRIPE_WEBHOOK_SECRET",
-            "JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID",
+            "JIEJING_SAAS_ENV",
+            "JIEJING_WECHAT_PAY_APP_ID",
+            "JIEJING_WECHAT_PAY_MCH_ID",
+            "JIEJING_WECHAT_PAY_MERCHANT_SERIAL_NO",
+            "JIEJING_WECHAT_PAY_MERCHANT_PRIVATE_KEY_PEM",
+            "JIEJING_WECHAT_PAY_MERCHANT_PRIVATE_KEY_PEM_B64",
+            "JIEJING_WECHAT_PAY_API_V3_KEY",
+            "JIEJING_WECHAT_PAY_PUBLIC_KEY_PEM",
+            "JIEJING_WECHAT_PAY_PUBLIC_KEY_PEM_B64",
+            "JIEJING_WECHAT_PAY_PUBLIC_KEY_ID",
+            "JIEJING_WECHAT_PAY_PLATFORM_CERTIFICATE_PEM",
+            "JIEJING_WECHAT_PAY_PLATFORM_CERTIFICATE_PEM_B64",
+            "JIEJING_WECHAT_PAY_PLATFORM_SERIAL_NO",
+            "JIEJING_WECHAT_PAY_NOTIFY_URL",
+            "JIEJING_WECHAT_PAY_REFUND_NOTIFY_URL",
+            "JIEJING_WECHAT_PAY_LIVE_API_ENABLED",
+            "JIEJING_WECHAT_PAY_REFUND_ALLOWED",
             "JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID",
-            "JIEJING_PAID_LAUNCH_OWNER_APPROVAL_PACKET_ID",
         ],
-        next_action="Finish live subscription provider evidence, signed webhook failure paths, no-charge live-domain rehearsal and quota lifecycle proof.",
-        verification=["/billing/plans", "/owner/billing-provider-evidence-register", "/owner/billing-domain-cutover-rehearsal"],
+        next_action=(
+            "Finish backend-only WeChat credentials, signed payment/refund callbacks, authenticated query, "
+            "controlled acceptance and approved-refund proof."
+        ),
+        verification=[
+            "/billing/plans",
+            "/readiness/product-saas",
+            "/owner/paid-launch-approval-packet",
+            "tools/jiejing_wechat_pay_acceptance_verify.py",
+        ],
         external_resource_required=True,
     )
 
@@ -346,14 +437,29 @@ def _monitoring_section(*, monitoring: dict[str, Any]) -> dict[str, Any]:
             "JIEJING_CLS_LOGSET_ID",
             "JIEJING_CLS_TOPIC_ID",
             "JIEJING_CLS_ALERT_POLICY_CONFIGURED",
+            "JIEJING_CLS_LIVE_PROBE_REQUIRED",
+            "JIEJING_CLS_LIVE_PROBE_LAST_AT",
+            "JIEJING_CLS_INGESTION_LIVE_PROBE_PASSED",
+            "JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT",
+            "JIEJING_CLS_PROBE_MAX_AGE_HOURS",
             "JIEJING_INCIDENT_RUNBOOK_PUBLISHED",
             "JIEJING_ONCALL_ALERT_ROUTE_CONFIGURED",
             "JIEJING_BILLING_INCIDENT_RUNBOOK_PUBLISHED",
             "JIEJING_PROVIDER_METRICS_ENABLED",
             "JIEJING_PROVIDER_LATENCY_ALERTS_CONFIGURED",
             "JIEJING_PROVIDER_COST_ALERTS_CONFIGURED",
+            "JIEJING_PROVIDER_MONITOR_SCHEDULER_ENABLED",
+            "JIEJING_PROVIDER_MONITOR_INTERVAL_SECONDS",
+            "JIEJING_PROVIDER_MONITOR_WINDOW_MINUTES",
+            "JIEJING_PROVIDER_MONITOR_COST_WINDOW_HOURS",
+            "JIEJING_PROVIDER_MONITOR_EVIDENCE_MAX_AGE_MINUTES",
+            "JIEJING_PROVIDER_DAILY_COST_WARNING_MINOR",
+            "JIEJING_PROVIDER_DAILY_COST_CRITICAL_MINOR",
+            "JIEJING_PROVIDER_LATENCY_ALARM_VERIFIED_AT",
+            "JIEJING_PROVIDER_COST_ALARM_VERIFIED_AT",
+            "JIEJING_PROVIDER_ALARM_VERIFICATION_MAX_AGE_DAYS",
         ],
-        next_action="Enable safe access logs, cloud monitoring, alert policies and incident runbooks for OAuth, billing, database, backup and model-cost failures.",
+        next_action="Enable the passive provider monitor, configure explicit cost budgets, verify both CLS alarms, and keep incident runbooks current.",
         verification=["/monitoring/status", "tools/test_jiejing_monitoring_runbook_gate.py"],
         external_resource_required=True,
     )
@@ -361,7 +467,9 @@ def _monitoring_section(*, monitoring: dict[str, Any]) -> dict[str, Any]:
 
 def _owner_final_section(*, approval_packet: dict[str, Any]) -> dict[str, Any]:
     checks = {
-        "paid_launch_approval_packet_contract_visible": approval_packet.get("contract_version") == "2026-06-18-paid-launch-approval-packet",
+        "paid_launch_approval_packet_contract_visible": (
+            approval_packet.get("contract_version") == "2026-07-27-paid-launch-approval-packet-v2"
+        ),
         "production_release_owner_approval_recorded": bool(_env_text("JIEJING_PRODUCTION_RELEASE_OWNER_APPROVAL_PACKET_ID")),
         "public_charge_flag_reviewed": _env_bool("JIEJING_PRODUCTION_RELEASE_CHARGE_FLAG_REVIEWED"),
         "real_write_flag_reviewed": _env_bool("JIEJING_PRODUCTION_RELEASE_REAL_WRITE_FLAG_REVIEWED"),
@@ -434,7 +542,10 @@ def _final_cutover_sequence(sections: list[dict[str, Any]]) -> list[dict[str, An
     sequence = [
         ("freeze_staging_baseline", ["deployment_artifact_and_rollback"]),
         ("verify_edge_data_and_backup", ["stable_domain_edge_origin_callbacks", "managed_data_plane_and_secret_boundary", "backup_restore_dr_and_secret_recovery"]),
-        ("verify_paid_subscription_and_no_charge_rehearsal", ["subscription_billing_webhook_and_quota"]),
+        (
+            "verify_wechat_native_payment_refund_and_controlled_acceptance",
+            ["mainland_wechat_payment_and_refund_controls"],
+        ),
         ("verify_ebay_clean_account_and_refresh", ["ebay_clean_account_refresh_and_write_boundary"]),
         ("verify_monitoring_support_and_incident_routes", ["monitoring_alerts_incidents_and_customer_support"]),
         ("record_owner_approval_keep_switches_separate", ["final_owner_approval_and_launch_switch_hold"]),
@@ -466,14 +577,53 @@ def _final_cutover_sequence(sections: list[dict[str, Any]]) -> list[dict[str, An
     return output
 
 
-def _required_external_evidence() -> list[dict[str, Any]]:
+def _required_external_evidence(*, settings: SaaSSettings) -> list[dict[str, Any]]:
+    durable_queue_evidence = (
+        _evidence_item(
+            "managed_postgres_durable_queue_vault",
+            [
+                "JIEJING_POSTGRES_LIVE_PROBE_PASSED",
+                "JIEJING_POSTGRES_DURABLE_QUEUE_LIVE_PROBE_PASSED",
+                "JIEJING_VAULT_LIVE_PROBE_PASSED",
+            ],
+        )
+        if settings.queue_provider == "postgres_durable"
+        else _evidence_item(
+            "managed_postgres_redis_vault",
+            ["JIEJING_POSTGRES_LIVE_PROBE_PASSED", "JIEJING_REDIS_LIVE_PROBE_PASSED", "JIEJING_VAULT_LIVE_PROBE_PASSED"],
+        )
+    )
     return [
         _evidence_item("stable_domain_edge_origin", ["JIEJING_DOMAIN_DNS_VERIFIED", "JIEJING_TLS_VERIFIED", "JIEJING_ORIGIN_DIRECT_IP_BLOCKED"]),
-        _evidence_item("managed_postgres_redis_vault", ["JIEJING_POSTGRES_LIVE_PROBE_PASSED", "JIEJING_REDIS_LIVE_PROBE_PASSED", "JIEJING_VAULT_LIVE_PROBE_PASSED"]),
+        durable_queue_evidence,
         _evidence_item("backup_restore_drill", ["JIEJING_BACKUP_POLICY_CONFIGURED", "JIEJING_RESTORE_DRILL_LAST_AT", "JIEJING_BACKUP_ALERTS_CONFIGURED"]),
-        _evidence_item("stripe_live_billing", ["JIEJING_STRIPE_GO_LIVE_CHECKLIST_EVIDENCE_ID", "JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID"]),
+        _evidence_item(
+            "wechat_pay_native_production_cutover",
+            [
+                "JIEJING_WECHAT_PAY_APP_ID",
+                "JIEJING_WECHAT_PAY_MCH_ID",
+                "JIEJING_WECHAT_PAY_MERCHANT_SERIAL_NO",
+                "JIEJING_WECHAT_PAY_MERCHANT_PRIVATE_KEY_PEM",
+                "JIEJING_WECHAT_PAY_API_V3_KEY",
+                "JIEJING_WECHAT_PAY_NOTIFY_URL",
+                "JIEJING_WECHAT_PAY_REFUND_NOTIFY_URL",
+                "JIEJING_WECHAT_PAY_LIVE_API_ENABLED",
+                "JIEJING_WECHAT_PAY_REFUND_ALLOWED",
+                "JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID",
+            ],
+        ),
         _evidence_item("new_ebay_account_refresh", ["audit_logs.oauth.token_refresh.executed", "JIEJING_NEW_EBAY_ACCOUNT_REAL_PUBLISH_PASSED"]),
-        _evidence_item("monitoring_incident_support", ["JIEJING_CLS_ALERT_POLICY_CONFIGURED", "JIEJING_ONCALL_ALERT_ROUTE_CONFIGURED"]),
+        _evidence_item(
+            "monitoring_incident_support",
+            [
+                "JIEJING_PROVIDER_MONITOR_SCHEDULER_ENABLED",
+                "JIEJING_PROVIDER_DAILY_COST_WARNING_MINOR",
+                "JIEJING_PROVIDER_DAILY_COST_CRITICAL_MINOR",
+                "JIEJING_PROVIDER_LATENCY_ALARM_VERIFIED_AT",
+                "JIEJING_PROVIDER_COST_ALARM_VERIFIED_AT",
+                "JIEJING_ONCALL_ALERT_ROUTE_CONFIGURED",
+            ],
+        ),
         _evidence_item("final_owner_approval", ["JIEJING_PRODUCTION_RELEASE_OWNER_APPROVAL_PACKET_ID"]),
     ]
 

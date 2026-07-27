@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import json
-import shutil
 import sys
+import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,8 @@ from jiejing_saas.production_evidence_ledger import (  # noqa: E402
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
 from tools.test_jiejing_production_release_gate import (  # noqa: E402
     EXPECTED_SECTIONS,
+    _ready_mainland_payment,
+    _ready_paid_launch_packet,
     _restore_env,
     _seed_ready_repository,
     _set_blocked_env,
@@ -28,7 +31,7 @@ from tools.test_jiejing_production_release_gate import (  # noqa: E402
 )
 
 
-OUT = ROOT / "output" / "jiejing-production-evidence-ledger-test"
+OUT = Path(tempfile.mkdtemp(prefix="jiejing-production-evidence-ledger-test-"))
 UNSAFE_FLAGS = (
     "public_paid_launch_allowed",
     "charge_now_allowed",
@@ -52,10 +55,6 @@ def fail(message: str) -> int:
 
 
 def main() -> int:
-    if OUT.exists():
-        shutil.rmtree(OUT)
-    OUT.mkdir(parents=True, exist_ok=True)
-
     previous = _set_blocked_env()
     try:
         blocked = _build("blocked.sqlite")
@@ -68,6 +67,8 @@ def main() -> int:
         rows = {row.get("section_key"): row for row in blocked.get("evidence_rows", []) if isinstance(row, dict)}
         if set(rows) != EXPECTED_SECTIONS:
             return fail(f"ledger should mirror production release sections: {sorted(rows)}")
+        if "mainland_wechat_payment_and_refund_controls" not in rows or "subscription_billing_webhook_and_quota" in rows:
+            return fail(f"ledger billing section must use the canonical mainland contract: {sorted(rows)}")
         if not blocked.get("next_missing_evidence"):
             return fail("blocked ledger should explain next missing evidence")
         if not any(row.get("raw_secret_value_allowed") is False for row in blocked.get("evidence_rows", [])):
@@ -92,15 +93,22 @@ def main() -> int:
             "raw_secret_values_allowed_in_ledger",
             "config_flag_alone_is_not_customer_launch_proof",
             "ebay_refresh_requires_backend_audit_log_proof",
+            "mainland_payment_requires_signed_callbacks_query_refund_and_controlled_acceptance",
             "owner_approval_is_required_but_never_auto_launches_public_paid_mode",
         ):
             expected = False if key == "raw_secret_values_allowed_in_ledger" else True
             if rules.get(key) is not expected:
                 return fail(f"ledger acceptance rule missing or wrong: {key}={rules.get(key)}")
         audit_keys = {item.get("key") for item in ready.get("audit_log_requirements", []) if isinstance(item, dict)}
-        for key in {"ebay_refresh_success", "billing_webhook_lifecycle", "owner_approval_packet"}:
+        for key in {"ebay_refresh_success", "wechat_payment_lifecycle", "owner_approval_packet"}:
             if key not in audit_keys:
                 return fail(f"ledger missing audit requirement: {key}")
+        external_rows = {item.get("key"): item for item in ready.get("external_evidence_rows", []) if isinstance(item, dict)}
+        wechat_cutover = external_rows.get("wechat_pay_native_production_cutover") or {}
+        if wechat_cutover.get("linked_section_key") != "mainland_wechat_payment_and_refund_controls":
+            return fail(f"WeChat cutover evidence must link to the mainland billing section: {wechat_cutover}")
+        if "stripe_live_billing" in external_rows:
+            return fail("Stripe evidence must not remain a mainland evidence-ledger requirement")
         _assert_unsafe_flags_false(ready, "ready ledger")
         _assert_rows_safe(ready)
         serialized = json.dumps(ready, ensure_ascii=False).lower()
@@ -138,6 +146,14 @@ def _build(name: str, *, seed_ready_data: bool = False) -> dict[str, object]:
     repo.initialize()
     if seed_ready_data:
         _seed_ready_repository(repo)
+        with patch(
+            "jiejing_saas.production_release_gate.build_mainland_payment_launch_status",
+            return_value=_ready_mainland_payment(),
+        ), patch(
+            "jiejing_saas.production_release_gate.build_paid_launch_approval_packet",
+            return_value=_ready_paid_launch_packet(),
+        ):
+            return build_production_evidence_ledger(settings, repo)
     return build_production_evidence_ledger(settings, repo)
 
 

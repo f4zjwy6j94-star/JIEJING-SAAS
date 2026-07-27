@@ -187,6 +187,7 @@ class ExecutionService:
         platform_adapter = f"{request.platform}.{canonical_action}"
         if canonical_action == "prepare_listing_draft":
             platform_adapter = "jiejing_internal.prepare_listing_draft"
+        external_ebay_draft = canonical_action == "save_ebay_listing_draft"
         return {
             "intent_id": _duplicate_prevention_key(
                 request=request,
@@ -204,7 +205,8 @@ class ExecutionService:
             "requires_confirmation": not low_risk,
             "audit_log_required": True,
             "creates_public_listing": False,
-            "writes_to_ebay": False,
+            "writes_to_ebay": external_ebay_draft,
+            "requires_publish_offer_call": False if external_ebay_draft else None,
             "stores_internal_draft_only": canonical_action == "prepare_listing_draft",
             "confirmation_center_required_before_public_publish": True,
         }

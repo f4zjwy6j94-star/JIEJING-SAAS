@@ -96,22 +96,62 @@ def _model_report_evidence(repository: SaaSRepository) -> dict[str, Any]:
     repository.initialize()
     report_rows: list[Any] = []
     execution_rows: list[Any] = []
+    controlled_rehearsal_report_count = 0
+    recent_report_count = 0
     with repository._connect() as conn:  # Internal readiness contract; no row values are returned raw.
-        report_rows = conn.execute(
+        controlled_rehearsal_rows = conn.execute(
             """
-            select report_type, report_json, created_at from reports
+            select r.report_id, r.report_type, r.report_json, r.created_at
+            from reports r
+            join tasks t on t.task_id = r.task_id
+            where t.task_type = ?
+            order by r.created_at desc
+            limit 100
+            """,
+            ("model_value_rehearsal",),
+        ).fetchall()
+        recent_report_rows = conn.execute(
+            """
+            select report_id, report_type, report_json, created_at from reports
             order by created_at desc
             limit 100
             """
         ).fetchall()
-        packet_rows = conn.execute(
+        controlled_rehearsal_report_count = len(controlled_rehearsal_rows)
+        recent_report_count = len(recent_report_rows)
+        seen_report_ids: set[str] = set()
+        for row in [*controlled_rehearsal_rows, *recent_report_rows]:
+            report_id = str(row["report_id"] or "")
+            if not report_id or report_id in seen_report_ids:
+                continue
+            seen_report_ids.add(report_id)
+            report_rows.append(row)
+
+        linked_packet_ids = {
+            source_packet_id
+            for row in report_rows
+            if (source_packet_id := _find_source_packet_id(_json_object(row["report_json"])))
+        }
+        packet_rows = list(conn.execute(
             """
             select packet_id, source_mode, status, packet_json
             from platform_data_packets
             order by created_at desc
             limit 100
             """
-        ).fetchall()
+        ).fetchall())
+        seen_packet_ids = {str(row["packet_id"] or "") for row in packet_rows}
+        for packet_id in sorted(linked_packet_ids - seen_packet_ids):
+            linked_row = conn.execute(
+                """
+                select packet_id, source_mode, status, packet_json
+                from platform_data_packets
+                where packet_id = ?
+                """,
+                (packet_id,),
+            ).fetchone()
+            if linked_row is not None:
+                packet_rows.append(linked_row)
         execution_rows = conn.execute(
             """
             select result_json, created_at from execution_results
@@ -154,6 +194,8 @@ def _model_report_evidence(repository: SaaSRepository) -> dict[str, Any]:
 
     return {
         "report_count_sampled": len(report_rows),
+        "controlled_rehearsal_report_count_sampled": controlled_rehearsal_report_count,
+        "recent_report_count_sampled": recent_report_count,
         "execution_count_sampled": len(execution_rows),
         "core_report_types_present": sorted(report_types & CORE_MODEL_REPORT_TYPES),
         "sanitized_official_packet_count_sampled": len(sanitized_packet_ids),

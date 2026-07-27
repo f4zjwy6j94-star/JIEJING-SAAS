@@ -6,6 +6,7 @@ services:
     depends_on:
       - jiejing-vault
     env_file:
+      - ../../private/tencent-managed.env
       - ../../private/jiejing-saas.staging-oauth.env
     environment:
       JIEJING_ENABLE_REAL_PLATFORM_WRITES: "false"
@@ -28,6 +29,7 @@ services:
       - jiejing-vault
       - jiejing-saas
     env_file:
+      - ../../private/tencent-managed.env
       - ../../private/jiejing-saas.staging-oauth.env
     environment:
       JIEJING_ENABLE_REAL_PLATFORM_WRITES: "false"
@@ -35,6 +37,8 @@ services:
       JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "disabled_public_staging"
       JIEJING_MEDIA_LIVE_PROVIDER_ENABLED: "true"
       JIEJING_MEDIA_LIVE_VIDEO_ENABLED: "true"
+      JIEJING_DOMESTIC_BILLING_MAINTENANCE_ENABLED: "true"
+      JIEJING_DOMESTIC_BILLING_AUTO_RECONCILE_ENABLED: "true"
     volumes:
       - jiejing_public_staging_data:/data
     command:
@@ -73,6 +77,7 @@ services:
     volumes:
       - ../index.html:/usr/share/nginx/html/index.html:ro
       - ../app.html:/usr/share/nginx/html/app.html:ro
+      - ../ops.html:/usr/share/nginx/html/ops.html:ro
       - ../privacy.html:/usr/share/nginx/html/privacy.html:ro
       - ../terms.html:/usr/share/nginx/html/terms.html:ro
       - ../refund-policy.html:/usr/share/nginx/html/refund-policy.html:ro
@@ -80,7 +85,9 @@ services:
       - ../risk-disclosure.html:/usr/share/nginx/html/risk-disclosure.html:ro
       - ../robots.txt:/usr/share/nginx/html/robots.txt:ro
       - ../app.js:/usr/share/nginx/html/app.js:ro
+      - ../ops.js:/usr/share/nginx/html/ops.js:ro
       - ../styles.css:/usr/share/nginx/html/styles.css:ro
+      - ../ops.css:/usr/share/nginx/html/ops.css:ro
       - ../favicon.ico:/usr/share/nginx/html/favicon.ico:ro
       - ../assets:/usr/share/nginx/html/assets:ro
       - ./nginx.public-staging.conf:/etc/nginx/conf.d/default.conf:ro

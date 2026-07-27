@@ -1,8 +1,9 @@
 """Backend-only eBay write adapter for the formal SaaS boundary.
 
-The first live action supported here is intentionally narrow: one confirmed
-``publish_listing`` through the eBay Inventory API. Other high-risk actions
-remain contract-only until they get their own adapter and tests.
+The live actions supported here are intentionally narrow: a confirmed
+unpublished draft save and a confirmed single ``publish_listing`` through the
+eBay Inventory API. Other high-risk actions remain contract-only until they
+get their own adapter and tests.
 """
 
 from __future__ import annotations
@@ -20,6 +21,33 @@ from .ebay_http_client import EbayReadOnlyHttpClient, HttpTransport, _urlopen_tr
 
 
 WRITE_ACTIONS = [
+    {
+        "action_type": "save_ebay_listing_draft",
+        "label": "Save unpublished eBay draft",
+        "risk_level": "high",
+        "adapter_route_candidates": ["Inventory API inventory item + unpublished offer; never publishOffer"],
+        "requires_preflight_fields": [
+            "listing.sku",
+            "listing.title",
+            "listing.description_html",
+            "listing.category_id",
+            "listing.condition",
+            "listing.price",
+            "listing.quantity",
+            "listing.item_specifics",
+            "listing.merchant_location_key",
+            "business_policies.fulfillment_policy_id",
+            "business_policies.payment_policy_id",
+            "business_policies.return_policy_id",
+            "asset_manifest.assets",
+            "confirmation_record",
+            "idempotency_key",
+        ],
+        "requires_confirmation": True,
+        "sandbox_first": True,
+        "creates_public_listing": False,
+        "calls_publish_offer": False,
+    },
     {
         "action_type": "publish_listing",
         "label": "Publish new eBay listing",
@@ -138,7 +166,7 @@ def build_ebay_write_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
         blockers.append("ebay_read_only_not_ready")
     return {
         "adapter": "ebay_write_adapter",
-        "version": "2026-05-22-publish-listing-v1",
+        "version": "2026-07-14-draft-save-v2",
         "enabled": live_enabled,
         "real_platform_writes_enabled": live_enabled,
         "requested_enabled": requested_enabled,
@@ -146,7 +174,7 @@ def build_ebay_write_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
         "contract_only": not live_enabled,
         "blocked_by": blockers,
         "actions": WRITE_ACTIONS,
-        "live_actions_supported": ["publish_listing"] if live_enabled else [],
+        "live_actions_supported": ["save_ebay_listing_draft", "publish_listing"] if live_enabled else [],
         "live_actions_not_supported": [
             "revise_listing",
             "change_price",
@@ -180,6 +208,7 @@ def build_ebay_write_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
         },
         "next_engineering_steps": [
             "Reauthorize the seller with the eBay sell.inventory write scope.",
+            "Run one confirmation-gated unpublished draft save and verify that no public listing exists.",
             "Run one low-volume publish_listing test from the confirmation center.",
             "Add idempotency keys so retries do not duplicate listings, refunds, payments, or policy edits.",
             "Persist platform request/response summaries with sensitive fields redacted.",
@@ -575,7 +604,7 @@ class EbayWriteHttpAdapter:
             return _blocked("ebay_publish_scope_missing", ["seller_must_authorize_sell.inventory_scope"], preflight=preflight)
 
         secret_ref_id = str(connection.get("secret_ref") or _first_secret_ref(secret_refs) or "")
-        token = EbayReadOnlyHttpClient(self.settings, transport=self.transport)._resolve_access_token(
+        token = self._resolve_access_token(
             secret_ref_id=secret_ref_id,
             company_id=str(getattr(request, "company_id", "") or ""),
             store_id=str(getattr(request, "store_id", "") or ""),
@@ -668,6 +697,166 @@ class EbayWriteHttpAdapter:
             "secret_exposed": False,
         }
 
+    def save_listing_draft(
+        self,
+        *,
+        request: Any,
+        preflight: dict[str, Any],
+        connections: list[dict[str, Any]],
+        secret_refs: list[dict[str, Any]],
+        marketplace_id: str,
+    ) -> dict[str, Any]:
+        """Save an unpublished Inventory API offer; never calls publishOffer."""
+
+        action_type = str(getattr(request, "action_type", "") or "")
+        if not self.settings.effective_real_platform_writes_enabled:
+            return _draft_blocked("real_platform_writes_disabled", ["JIEJING_ENABLE_REAL_PLATFORM_WRITES_OR_JIEJING_EBAY_WRITE_LIVE"])
+        if action_type not in {"save_ebay_listing_draft", "save_ebay_draft"}:
+            return _draft_blocked("unsupported_write_action", ["only_save_ebay_listing_draft_supported"])
+        if preflight.get("status") != "ready_for_platform_adapter":
+            return _draft_blocked(
+                "preflight_not_ready",
+                preflight.get("missing_fields") or ["execution_preflight_not_ready"],
+                preflight=preflight,
+            )
+
+        connection = _find_publish_connection(connections)
+        if not connection:
+            return _draft_blocked("ebay_inventory_scope_missing", ["seller_must_authorize_sell.inventory_scope"], preflight=preflight)
+
+        secret_ref_id = str(connection.get("secret_ref") or _first_secret_ref(secret_refs) or "")
+        token = self._resolve_access_token(
+            secret_ref_id=secret_ref_id,
+            company_id=str(getattr(request, "company_id", "") or ""),
+            store_id=str(getattr(request, "store_id", "") or ""),
+        )
+        if not token.get("ok"):
+            return _draft_blocked("token_resolution_failed", token.get("blocked_by") or ["access_token_unavailable"], preflight=preflight)
+
+        payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
+        listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
+        sku = str(listing.get("sku") or "").strip()
+        inventory_body = _inventory_item_body(payload)
+        offer_body = _offer_body(payload, marketplace_id=marketplace_id)
+        if not sku or not inventory_body or not offer_body:
+            return _draft_blocked("draft_payload_invalid", ["listing_payload_not_mappable_to_ebay_inventory_api"], preflight=preflight)
+
+        access_token = str(token["access_token"])
+        base_url = _base_url(self.settings)
+        steps: list[dict[str, Any]] = []
+        offers_path = f"/sell/inventory/v1/offer?sku={urllib.parse.quote(sku, safe='')}"
+        offers_result = self._get_json(
+            url=f"{base_url}{offers_path}",
+            access_token=access_token,
+            marketplace_id=marketplace_id,
+        )
+        steps.append(_step_summary("inspect_offers_by_sku", offers_path, offers_result))
+        if offers_result.get("status") != "ok":
+            return _draft_write_result(
+                "blocked_offer_inspection_failed",
+                "Existing eBay offers could not be checked, so no new draft offer was created.",
+                steps,
+                preflight=preflight,
+            )
+
+        offers_json = offers_result.get("json") if isinstance(offers_result.get("json"), dict) else {}
+        offers = offers_json.get("offers") if isinstance(offers_json.get("offers"), list) else []
+        published_offer = _published_offer(offers)
+        if published_offer:
+            return _draft_write_result(
+                "blocked_existing_published_offer",
+                "This SKU already has a published eBay offer; draft save stopped to avoid changing a live listing.",
+                steps,
+                preflight=preflight,
+                platform_result={
+                    "sku": sku,
+                    "published_offer": published_offer,
+                    "published_to_ebay": False,
+                    "public_listing_created": False,
+                    "writes_to_ebay": False,
+                },
+            )
+
+        existing_offer = _unpublished_offer(offers, marketplace_id=marketplace_id)
+        inventory_path = f"/sell/inventory/v1/inventory_item/{urllib.parse.quote(sku, safe='')}"
+        inventory_result = self._send_json(
+            method="PUT",
+            url=f"{base_url}{inventory_path}",
+            access_token=access_token,
+            marketplace_id=marketplace_id,
+            body=inventory_body,
+        )
+        steps.append(_step_summary("create_or_replace_inventory_item", inventory_path, inventory_result))
+        if inventory_result.get("status") != "ok":
+            return _draft_write_result("blocked_platform_error", "eBay inventory draft write failed.", steps, preflight=preflight)
+
+        if existing_offer:
+            offer_id = str(existing_offer.get("offer_id") or "").strip()
+            offer_path = f"/sell/inventory/v1/offer/{urllib.parse.quote(offer_id, safe='')}"
+            offer_result = self._send_json(
+                method="PUT",
+                url=f"{base_url}{offer_path}",
+                access_token=access_token,
+                marketplace_id=marketplace_id,
+                body=offer_body,
+            )
+            operation = "update_unpublished_offer"
+        else:
+            offer_path = "/sell/inventory/v1/offer"
+            offer_result = self._send_json(
+                method="POST",
+                url=f"{base_url}{offer_path}",
+                access_token=access_token,
+                marketplace_id=marketplace_id,
+                body=offer_body,
+            )
+            offer_json = offer_result.get("json") if isinstance(offer_result.get("json"), dict) else {}
+            offer_id = str(offer_json.get("offerId") or offer_json.get("offer_id") or "").strip()
+            operation = "create_unpublished_offer"
+        steps.append(_step_summary(operation, offer_path, offer_result))
+        if offer_result.get("status") != "ok":
+            return _draft_write_result("blocked_platform_error", "eBay unpublished offer save failed.", steps, preflight=preflight)
+        if not offer_id:
+            return _draft_write_result("blocked_missing_offer_id", "eBay did not return or retain an offerId.", steps, preflight=preflight)
+
+        platform_result = {
+            "offer_id": offer_id,
+            "sku": sku,
+            "marketplace_id": marketplace_id,
+            "operation": operation,
+            "offer_status": "UNPUBLISHED",
+            "published_to_ebay": False,
+            "public_listing_created": False,
+            "writes_to_ebay": True,
+            "token_source": token.get("source"),
+            "access_token_returned_to_frontend": False,
+            "access_token_returned_to_runtime": False,
+            "raw_response_stored": False,
+        }
+        audit = _audit(
+            request=request,
+            preflight=preflight,
+            real_execution={
+                "ebay_draft_saved": True,
+                "published_to_ebay": False,
+                "procurement_paid": False,
+                "refund_executed": False,
+                "ad_budget_changed": False,
+                "store_policy_changed": False,
+            },
+            platform_result=platform_result,
+        )
+        return {
+            "status": "saved_to_ebay_draft",
+            "action_type": "save_ebay_listing_draft",
+            "task_id": getattr(request, "task_id", ""),
+            "message": "Confirmed Listing data was saved as an unpublished eBay offer; no public listing was created.",
+            "steps": steps,
+            "platform_result": audit["platform_result"],
+            "audit": audit,
+            "secret_exposed": False,
+        }
+
     def inspect_publish_state(
         self,
         *,
@@ -689,7 +878,7 @@ class EbayWriteHttpAdapter:
             return _recovery_result("ebay_publish_scope_missing", sku=sku, checks=[], safe_to_retry=False)
 
         secret_ref_id = str(connection.get("secret_ref") or _first_secret_ref(secret_refs) or "")
-        token = EbayReadOnlyHttpClient(self.settings, transport=self.transport)._resolve_access_token(
+        token = self._resolve_access_token(
             secret_ref_id=secret_ref_id,
             company_id=str(getattr(request, "company_id", "") or ""),
             store_id=str(getattr(request, "store_id", "") or ""),
@@ -752,6 +941,13 @@ class EbayWriteHttpAdapter:
             "raw_response_stored": False,
             "secret_exposed": False,
         }
+
+    def _resolve_access_token(self, *, secret_ref_id: str, company_id: str, store_id: str) -> dict[str, Any]:
+        return EbayReadOnlyHttpClient(self.settings, transport=self.transport)._resolve_access_token(
+            secret_ref_id=secret_ref_id,
+            company_id=company_id,
+            store_id=store_id,
+        )
 
     def _send_json(self, *, method: str, url: str, access_token: str, marketplace_id: str, body: dict[str, Any]) -> dict[str, Any]:
         data = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -1512,6 +1708,28 @@ def _published_offer(offers: list[Any]) -> dict[str, Any]:
     return {}
 
 
+def _unpublished_offer(offers: list[Any], *, marketplace_id: str) -> dict[str, Any]:
+    target_marketplace = str(marketplace_id or "").strip().upper()
+    for item in offers:
+        if not isinstance(item, dict):
+            continue
+        offer_id = str(item.get("offerId") or item.get("offer_id") or "").strip()
+        listing = item.get("listing") if isinstance(item.get("listing"), dict) else {}
+        listing_id = str(item.get("listingId") or item.get("listing_id") or listing.get("listingId") or "").strip()
+        listing_status = str(item.get("listingStatus") or item.get("status") or listing.get("status") or "").strip().upper()
+        offer_marketplace = str(item.get("marketplaceId") or item.get("marketplace_id") or "").strip().upper()
+        if not offer_id or listing_id or listing_status in {"PUBLISHED", "ACTIVE"}:
+            continue
+        if target_marketplace and offer_marketplace and offer_marketplace != target_marketplace:
+            continue
+        return {
+            "offer_id": offer_id,
+            "listing_status": listing_status or "UNPUBLISHED",
+            "marketplace_id": offer_marketplace or target_marketplace,
+        }
+    return {}
+
+
 def _cleanup_plan(*, sku: str, published_offer: dict[str, Any], offer_count: int, inventory_found: bool) -> dict[str, Any]:
     operations: list[dict[str, Any]] = []
     listing_id = str((published_offer or {}).get("listing_id") or "").strip()
@@ -1555,6 +1773,29 @@ def _blocked(status: str, blockers: list[Any], *, preflight: dict[str, Any] | No
     }
 
 
+def _draft_blocked(status: str, blockers: list[Any], *, preflight: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "status": status,
+        "action_type": "save_ebay_listing_draft",
+        "message": "eBay draft save is blocked before any platform write.",
+        "blocked_by": [str(item) for item in blockers],
+        "audit": {
+            "preflight": preflight or {},
+            "real_execution": {
+                "ebay_draft_saved": False,
+                "published_to_ebay": False,
+                "procurement_paid": False,
+                "refund_executed": False,
+                "ad_budget_changed": False,
+                "store_policy_changed": False,
+            },
+            "access_token_returned_to_frontend": False,
+            "access_token_returned_to_runtime": False,
+        },
+        "secret_exposed": False,
+    }
+
+
 def _write_result(status: str, message: str, steps: list[dict[str, Any]], *, preflight: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": status,
@@ -1564,6 +1805,38 @@ def _write_result(status: str, message: str, steps: list[dict[str, Any]], *, pre
         "audit": {
             "preflight": preflight,
             "real_execution": {
+                "published_to_ebay": False,
+                "procurement_paid": False,
+                "refund_executed": False,
+                "ad_budget_changed": False,
+                "store_policy_changed": False,
+            },
+            "access_token_returned_to_frontend": False,
+            "access_token_returned_to_runtime": False,
+            "raw_response_stored": False,
+        },
+        "secret_exposed": False,
+    }
+
+
+def _draft_write_result(
+    status: str,
+    message: str,
+    steps: list[dict[str, Any]],
+    *,
+    preflight: dict[str, Any],
+    platform_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "action_type": "save_ebay_listing_draft",
+        "message": message,
+        "steps": steps,
+        "platform_result": platform_result or {},
+        "audit": {
+            "preflight": preflight,
+            "real_execution": {
+                "ebay_draft_saved": False,
                 "published_to_ebay": False,
                 "procurement_paid": False,
                 "refund_executed": False,
@@ -1588,7 +1861,11 @@ def _audit(*, request: Any, preflight: dict[str, Any], real_execution: dict[str,
         "confirmed_by": getattr(request, "confirmed_by", None),
         "confirmed_at": getattr(request, "confirmed_at", None),
         "idempotency_key_present": bool(getattr(request, "idempotency_key", None) or getattr(request, "payload", {}).get("idempotency_key")),
-        "execution_mode": "ebay_inventory_publish_adapter",
+        "execution_mode": (
+            "ebay_inventory_draft_save_adapter"
+            if str(getattr(request, "action_type", "") or "") in {"save_ebay_listing_draft", "save_ebay_draft"}
+            else "ebay_inventory_publish_adapter"
+        ),
         "platform_adapter_called": True,
         "preflight": preflight,
         "real_execution": real_execution,

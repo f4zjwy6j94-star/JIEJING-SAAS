@@ -25,6 +25,7 @@ BUNDLE = ROOT / "tools" / "jiejing_prepare_public_staging_bundle.py"
 PATCH_SCRIPT = ROOT / "deploy" / "apply-staging-patch.sh"
 API_SERVER = ROOT / "jiejing_saas" / "api_server.py"
 ORIGIN_UFW = ROOT / "deploy" / "apply-cloudflare-origin-ufw.sh"
+PUBLIC_HTML_FILES = [ROOT / "index.html", ROOT / "app.html"]
 
 
 NOINDEX = "noindex, nofollow, noarchive, nosnippet, noimageindex"
@@ -64,7 +65,8 @@ def main() -> int:
         "add_header X-Robots-Tag",
         NOINDEX,
         'add_header Cache-Control "no-store" always',
-        "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com",
+        "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com https://challenges.cloudflare.com",
+        "frame-src https://challenges.cloudflare.com",
         "post-publish",
         "location ~ ^/(?:\\.git|\\.github|deploy|tools|docs|tests|jiejing_saas|jiejing_runtime|schemas|output|private)(?:/|$)",
         "location ~* \\.(?:env|pem|key|sqlite|db|py|pyc|md|ya?ml|toml|ini|log|bak|zip|tar|gz|ps1|sh|conf)$",
@@ -116,6 +118,10 @@ def main() -> int:
         if "../robots.txt:/usr/share/nginx/html/robots.txt:ro" not in content:
             return fail(f"{path.name} should mount robots.txt into the public frontend")
 
+    for path in PUBLIC_HTML_FILES:
+        if "static.cloudflareinsights.com/beacon.min.js" in _read(path):
+            return fail(f"{path.name} must rely on the Cloudflare edge beacon instead of embedding a duplicate copy")
+
     bundle = _read(BUNDLE)
     patch_script = _read(PATCH_SCRIPT)
     if "public_staging_patch_whitelist_v1" not in bundle or "_apply_patch_file_list" not in bundle:
@@ -139,11 +145,15 @@ def main() -> int:
         "ufw default deny incoming",
         "ufw default allow outgoing",
         "existing_direct_web_denies",
+        "existing_ops_public_allows",
         "ufw --force delete",
         "JIEJING_SSH_PORTS:-22 2222",
         "JIEJING_WEB_PORTS:-80 443",
+        "JIEJING_OPS_PUBLIC_IPV4_RANGES:-0.0.0.0/1 128.0.0.0/1",
         'read -r cidr || [[ -n "$cidr" ]]',
         "Jiejing Cloudflare web",
+        "Jiejing ops ACME HTTP IPv4",
+        "Jiejing ops public TLS IPv4",
         "Jiejing deny direct origin web",
         "ufw --force enable",
     ]:

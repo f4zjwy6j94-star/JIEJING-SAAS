@@ -1,4 +1,21 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS jiejing-wheel-builder
+
+ENV PIP_DEFAULT_TIMEOUT=120
+ENV PIP_INDEX_URL=https://mirrors.tencent.com/pypi/simple/
+ENV PIP_TRUSTED_HOST=mirrors.tencent.com
+
+WORKDIR /build
+
+COPY requirements.saas.txt /build/requirements.saas.txt
+
+# The official CLS uploader currently constrains lz4 to a source-only release
+# on Python 3.12. Keep compilation tools in this disposable wheel stage only.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.saas.txt \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM python:3.12-slim AS jiejing-runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -10,7 +27,10 @@ WORKDIR /app
 
 COPY requirements.saas.txt /app/requirements.saas.txt
 
-RUN pip install --no-cache-dir -r requirements.saas.txt
+COPY --from=jiejing-wheel-builder /wheels /wheels
+
+RUN pip install --no-cache-dir -r requirements.saas.txt --no-index --find-links=/wheels \
+    && rm -rf /wheels
 
 COPY . /app
 
@@ -20,8 +40,11 @@ RUN python -m py_compile \
     jiejing_saas/api_server.py \
     jiejing_saas/media_source_assets.py \
     jiejing_saas/backup_plan.py \
+    jiejing_saas/billing_domestic.py \
+    jiejing_saas/billing_operations_maintenance.py \
     jiejing_saas/billing_payment_options.py \
     jiejing_saas/billing_plan.py \
+    jiejing_saas/billing_wechat_pay.py \
     jiejing_saas/commercial_launch_gate.py \
     jiejing_saas/ebay_data_packet.py \
     jiejing_saas/infrastructure_drivers.py \
@@ -29,6 +52,7 @@ RUN python -m py_compile \
     jiejing_saas/model_value_rehearsal.py \
     jiejing_saas/postgres_repository_runtime.py \
     jiejing_saas/redis_queue_runtime.py \
+    jiejing_saas/registration_challenge.py \
     jiejing_saas/staging_security_gate.py \
     jiejing_saas/worker.py \
     jiejing_saas/independence.py \

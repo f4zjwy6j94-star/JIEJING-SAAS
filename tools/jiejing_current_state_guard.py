@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,8 @@ CORE_EBAY_RESOURCES = [
     "finances",
     "taxonomy_listing_metadata",
 ]
+
+ACCOUNT_EVIDENCE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 
 
 def parse_args() -> argparse.Namespace:
@@ -72,8 +75,10 @@ def main() -> int:
 def build_state(workspace: Path, *, output_root: Path | None = None, db_path: Path | None = None) -> dict[str, Any]:
     artifacts = {name: _read_json(_artifact_path(workspace, rel_path, output_root)) for name, rel_path in DEFAULT_ARTIFACTS.items()}
     db_evidence = _read_db_evidence(db_path)
-    oauth = artifacts["staging_oauth"].get("data") or {}
-    sync = artifacts["staging_sync"].get("data") or {}
+    oauth_artifact = artifacts["staging_oauth"]
+    sync_artifact = artifacts["staging_sync"]
+    oauth = oauth_artifact.get("data") or {}
+    sync = sync_artifact.get("data") or {}
     deploy = artifacts["deploy_doctor"].get("data") or {}
     infra = artifacts["infra_gate"].get("data") or {}
 
@@ -83,17 +88,35 @@ def build_state(workspace: Path, *, output_root: Path | None = None, db_path: Pa
     db_present_resources = db_evidence.get("latest_ebay_packet_present_resource_keys") or []
     db_missing_resources = db_evidence.get("latest_ebay_packet_missing_resource_keys") or []
 
-    callback_completed = bool(oauth.get("callback_completed")) or oauth.get("oauth_latest_status") == "callback_exchange_completed" or db_authorized
+    historical_callback_completed = bool(oauth.get("callback_completed")) or oauth.get("oauth_latest_status") == "callback_exchange_completed"
+    oauth_artifact_fresh = _artifact_is_fresh(oauth_artifact)
+    sync_artifact_fresh = _artifact_is_fresh(sync_artifact)
+    callback_completed = bool(historical_callback_completed and oauth_artifact_fresh) or db_authorized
     can_queue_sync = bool((oauth.get("preflight") or {}).get("can_queue_sync")) or db_authorized
-    artifact_sync_completed = sync.get("status") == "completed" or sync.get("sync_status") == "completed"
-    artifact_live_read_completed = sync.get("live_read_status") == "completed_live_read"
-    present_resources = sync.get("present_resource_keys") or _present_resources_from_routes(sync) or db_present_resources
+    if not callback_completed:
+        can_queue_sync = False
+    historical_sync_completed = sync.get("status") == "completed" or sync.get("sync_status") == "completed"
+    historical_live_read_completed = sync.get("live_read_status") == "completed_live_read"
+    historical_official_packet = sync.get("source_mode") == "official_api" or bool(sync.get("live_request_performed"))
+    artifact_sync_completed = bool(historical_sync_completed and sync_artifact_fresh)
+    artifact_live_read_completed = bool(historical_live_read_completed and sync_artifact_fresh)
+    present_resources = (
+        (sync.get("present_resource_keys") or _present_resources_from_routes(sync))
+        if sync_artifact_fresh
+        else []
+    ) or db_present_resources
     missing_resources = [key for key in CORE_EBAY_RESOURCES if key not in set(present_resources)]
     if db_packet_id and isinstance(db_missing_resources, list) and not db_missing_resources and not missing_resources:
         missing_resources = []
-    official_packet = sync.get("source_mode") == "official_api" or bool(sync.get("live_request_performed")) or db_packet_source_mode == "official_api"
+    official_packet = bool(historical_official_packet and sync_artifact_fresh) or db_packet_source_mode == "official_api"
     sync_completed = artifact_sync_completed or bool(db_packet_id and official_packet)
     live_read_completed = artifact_live_read_completed or bool(db_packet_id and official_packet)
+    historical_account_evidence_stale = bool(
+        (historical_callback_completed and not oauth_artifact_fresh)
+        or ((historical_sync_completed or historical_official_packet) and not sync_artifact_fresh)
+    )
+    active_data_packet_id = (sync.get("data_packet_id") if sync_artifact_fresh else "") or db_packet_id
+    historical_data_packet_id = sync.get("data_packet_id") if historical_account_evidence_stale else ""
     deploy_channel_ready = bool(deploy.get("deploy_channel_ready") and deploy.get("ssh", {}).get("status") == "usable") or _env_flag(
         "JIEJING_DEPLOY_CHANNEL_READY"
     )
@@ -102,7 +125,13 @@ def build_state(workspace: Path, *, output_root: Path | None = None, db_path: Pa
     safe_next = []
     blockers = []
 
-    if callback_completed and can_queue_sync:
+    if historical_account_evidence_stale and not callback_completed:
+      no_repeat.append(
+          "Do not start OAuth from historical local artifacts alone; verify active staging readiness and wait for explicit operator confirmation."
+      )
+      safe_next.append("Compare active public readiness with the intended clean seller account before any authorization action.")
+      blockers.append("Historical eBay account evidence is stale and cannot prove the current active seller connection.")
+    elif callback_completed and can_queue_sync:
       no_repeat.append("Do not run OAuth prepare or open a new eBay authorization URL; callback exchange is already complete.")
       safe_next.append("Read status artifacts or run frontend/backend work that consumes the existing secret_ref connection.")
     else:
@@ -133,18 +162,25 @@ def build_state(workspace: Path, *, output_root: Path | None = None, db_path: Pa
       "production_infrastructure": "rehearsal_only" if not _infra_paid_ready(infra) else "ready_for_cutover",
     }
 
+    status = "partial_evidence" if blockers else "ready_to_continue"
     return {
       "product": "Jiejing SaaS",
-      "status": "ready_to_continue" if safe_next else "partial_evidence",
+      "status": status,
       "checked_at": datetime.now(timezone.utc).isoformat(),
       "workspace": str(workspace),
       "output_root": str(output_root) if output_root else str(workspace / "output"),
       "callback_completed": callback_completed,
+      "historical_callback_completed": historical_callback_completed,
       "can_queue_sync": can_queue_sync,
       "sync_completed": sync_completed,
+      "historical_sync_completed": historical_sync_completed,
       "live_read_completed": live_read_completed,
       "official_packet": official_packet,
-      "data_packet_id": sync.get("data_packet_id") or db_packet_id,
+      "historical_official_packet": historical_official_packet,
+      "historical_account_evidence_stale": historical_account_evidence_stale,
+      "account_evidence_max_age_seconds": ACCOUNT_EVIDENCE_MAX_AGE_SECONDS,
+      "data_packet_id": active_data_packet_id,
+      "historical_data_packet_id": historical_data_packet_id,
       "present_resource_keys": present_resources,
       "missing_resource_keys": missing_resources,
       "deploy_channel_ready": deploy_channel_ready,
@@ -152,7 +188,15 @@ def build_state(workspace: Path, *, output_root: Path | None = None, db_path: Pa
       "no_repeat_actions": no_repeat,
       "safe_next_actions": safe_next,
       "blockers": blockers,
-      "artifacts": {name: {"path": item["path"], "exists": item["exists"]} for name, item in artifacts.items()},
+      "artifacts": {
+          name: {
+              "path": item["path"],
+              "exists": item["exists"],
+              "age_seconds": item.get("age_seconds"),
+              "fresh": _artifact_is_fresh(item),
+          }
+          for name, item in artifacts.items()
+      },
       "db_evidence": db_evidence,
       "real_platform_writes_enabled": False,
       "secret_exposed": False,
@@ -169,9 +213,24 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {"path": str(path), "exists": False, "data": None}
     try:
-        return {"path": str(path), "exists": True, "data": json.loads(path.read_text(encoding="utf-8"))}
+        modified_at = path.stat().st_mtime
+        return {
+            "path": str(path),
+            "exists": True,
+            "modified_at": datetime.fromtimestamp(modified_at, timezone.utc).isoformat(),
+            "age_seconds": max(0, int(time.time() - modified_at)),
+            "data": json.loads(path.read_text(encoding="utf-8")),
+        }
     except Exception as exc:
         return {"path": str(path), "exists": True, "error": str(exc), "data": None}
+
+
+def _artifact_is_fresh(item: dict[str, Any]) -> bool:
+    return bool(
+        item.get("exists")
+        and item.get("data") is not None
+        and int(item.get("age_seconds") or 0) <= ACCOUNT_EVIDENCE_MAX_AGE_SECONDS
+    )
 
 
 def _read_db_evidence(db_path: Path | None) -> dict[str, Any]:
@@ -217,6 +276,7 @@ def _print_human(result: dict[str, Any]) -> None:
     print(f"CALLBACK_COMPLETED={result['callback_completed']}")
     print(f"SYNC_COMPLETED={result['sync_completed']}")
     print(f"OFFICIAL_PACKET={result['official_packet']}")
+    print(f"HISTORICAL_ACCOUNT_EVIDENCE_STALE={result.get('historical_account_evidence_stale', False)}")
     print(f"DATA_PACKET_ID={result.get('data_packet_id') or '-'}")
     print(f"PRESENT_RESOURCES={','.join(result.get('present_resource_keys') or []) or '-'}")
     print(f"MISSING_RESOURCES={','.join(result.get('missing_resource_keys') or []) or '-'}")

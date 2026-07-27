@@ -1,3 +1,68 @@
+const JIEJING_SETTINGS_PANELS_SRC = "./assets/jiejing-settings-panels.js?v=20260715-owner-traffic-analytics-v104";
+let jiejingSettingsPanelsLoadPromise = null;
+
+function ensureJiejingSettingsPanelsLoaded() {
+  if (window.JiejingSettingsPanels) return Promise.resolve(window.JiejingSettingsPanels);
+  if (jiejingSettingsPanelsLoadPromise) return jiejingSettingsPanelsLoadPromise;
+
+  const loadStartedAt = window.performance?.now?.() || Date.now();
+  let performanceRecorded = false;
+  const recordPerformance = (outcome) => {
+    if (performanceRecorded) return;
+    performanceRecorded = true;
+    const finishedAt = window.performance?.now?.() || Date.now();
+    window.JiejingAnalytics?.trackPerformance?.("settings_module", {
+      duration_ms: Math.max(0, finishedAt - loadStartedAt),
+      outcome,
+    });
+  };
+  jiejingSettingsPanelsLoadPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-jiejing-settings-panels="lazy"]');
+    const finish = () => {
+      if (window.JiejingSettingsPanels) {
+        recordPerformance("success");
+        resolve(window.JiejingSettingsPanels);
+        return;
+      }
+      recordPerformance("error");
+      reject(new Error("settings panels module did not initialize"));
+    };
+    if (existing) {
+      existing.addEventListener("load", finish, { once: true });
+      existing.addEventListener(
+        "error",
+        () => {
+          recordPerformance("error");
+          reject(new Error("settings panels module failed to load"));
+        },
+        { once: true },
+      );
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = JIEJING_SETTINGS_PANELS_SRC;
+    script.async = true;
+    script.dataset.jiejingSettingsPanels = "lazy";
+    script.addEventListener("load", finish, { once: true });
+    script.addEventListener(
+      "error",
+      () => {
+        script.remove();
+        recordPerformance("error");
+        reject(new Error("settings panels module failed to load"));
+      },
+      { once: true },
+    );
+    document.head.appendChild(script);
+  }).catch((error) => {
+    jiejingSettingsPanelsLoadPromise = null;
+    throw error;
+  });
+
+  return jiejingSettingsPanelsLoadPromise;
+}
+
 const state = {
   view: "cockpit",
   pageState: "normal",
@@ -13,7 +78,7 @@ const state = {
   serviceFilter: "all",
   confirmFilter: "immediate",
   savedDecisionDefaults: {},
-  selectedPlan: "single",
+  selectedPlan: "starter",
   mediaGenerationStatus: "idle",
   mediaGenerationCount: 0,
   mediaTaskEntry: "project",
@@ -67,12 +132,16 @@ const state = {
   saasBillingPlan: null,
   saasBillingUsage: null,
   saasBillingCheckout: null,
+  saasDomesticBillingContract: null,
+  saasDomesticBillingOrders: [],
+  saasDomesticBillingCheckout: null,
   saasPaymentOptions: null,
   saasBillingTestEvent: null,
   saasBillingProviderRehearsal: null,
   saasManualBetaPaymentOrders: [],
   saasBillingDomainCutoverRehearsal: null,
   saasPaidLaunchApprovalPacket: null,
+  saasOperationsOverview: null,
   saasOwnerLaunchControl: null,
   saasModelValueGate: null,
   saasModelProviderCatalog: null,
@@ -4251,56 +4320,53 @@ const planDetails = {
   free: {
     title: "免费版",
     price: "¥0",
-    desc: "适合刚开始整理 eBay 流程的商家。免费版用于体验基础工作台和手动流程，不触发真实收费。",
+    desc: "适合第一次体验捷境的商家。可进行基础咨询、整理一个店铺的只读资料，并完成少量经营任务；不会触发真实平台写入或自动收费。",
     cta: "登录后选择方案",
     items: [
-      "AI CEO 基础对话和商家身份向导",
-      "通用 eBay 流程模板，可隐藏不需要的步骤",
-      "手动录入货源图、采购价、物流方式和确认事项",
-      "基础工作记录和确认清单，适合先跑通一条商品线",
-      "不含真实平台写入、多店铺协同、批量铺货和高级规则",
+      "1 个账号空间 · 1 个席位 · 1 个店铺只读连接",
+      "每 30 天 10 个经营任务，适合体验 AI CEO 与 Listing 草稿",
+      "不开放批量铺货；真实发布等高风险动作仍需确认",
+      "商家自带模型；捷境不重复收取文本模型费用",
+      "新账号获得一次性体验素材点，后续素材点单独购买",
     ],
   },
-  single: {
-    title: "单店铺版",
-    price: "¥99/月",
-    desc: "注册送 1 个月单店铺版体验。¥99/月是基础订阅，覆盖 1 个 eBay 店铺的 AI CEO、Listing、素材工坊、客服订单和确认中心；大模型、生图生视频等高成本用量另算。",
+  starter: {
+    title: "起步版",
+    price: "¥99 / 30 天",
+    desc: "适合单店起步。单次购买 30 天软件使用权，不会自动续费；商家自带模型不消耗素材点，图片和视频生成使用素材点。",
     cta: "登录后选择方案",
     items: [
-      "1 个 eBay 店铺工作台",
-      "完整单品流程、素材工坊和自动客服基础流程",
-      "可为这个店铺添加、删除、调整通用流程模板步骤",
-      "支持确认中心、工作记录、来源记录和按需 PDF 汇报",
-      "基础订阅不包含无限模型、生图生视频或 eBay 平台经营费用",
-      "可保存一次确认规则，后续普通小事按默认规则走",
+      "1 个店铺 · 2 个席位 · 100 个经营任务",
+      "单次批量最多 20 行，覆盖 AI CEO、Listing、素材工坊和客服订单",
+      "确认中心、来源记录、工作记录和按需报告",
+      "商家自带模型；模型费用由商家直接承担",
+      "素材生成按素材点结算，不随订阅赠送循环额度",
     ],
   },
-  multi: {
-    title: "多店铺版",
-    price: "¥199/月",
-    desc: "适合同时管理多个 eBay 店铺或多条商品线，把流程模板按店铺复制、调整和复用；AI 与素材高成本用量仍按实际消耗或额度另算。",
+  operator: {
+    title: "经营版",
+    price: "¥199 / 30 天",
+    desc: "适合已进入稳定经营期的商家。支持多店铺、多项目和更大批量，软件订阅与素材点继续分开核算。",
     cta: "登录后选择方案",
     items: [
-      "多店铺/多项目工作台",
-      "店铺维度的流程模板、确认规则、履约方式和利润底线",
-      "批量铺货基础队列，按市场机会、货源渠道、店铺、订单、客服和物流拆分",
-      "模板可以跨店复制，也可以为不同店铺保留例外规则",
-      "可添加、删除和调整模板步骤，但不能超出已开发模块",
-      "平台广告费、成交费、物流和退款不是捷境代扣",
+      "3 个店铺 · 5 个席位 · 500 个经营任务",
+      "单次批量最多 200 行，支持失败重试和部分成功",
+      "店铺级流程模板、确认规则、履约方式和利润底线",
+      "跨店复用模板，同时保留每个店铺的例外规则",
+      "商家自带模型；素材点按实际生成任务单独结算",
     ],
   },
-  pro: {
-    title: "高级付费版",
-    price: "¥299/月",
-    desc: "适合需要更高自动化深度、更多流程模板、更细权限规则和更高处理额度的成熟卖家；基础订阅和 AI/素材用量分开核算。",
+  team: {
+    title: "团队版",
+    price: "¥299 / 30 天",
+    desc: "适合需要团队协作、权限分层和高吞吐工作流的成熟商家。高风险动作仍由有权限的人确认，不因套餐升级而越权执行。",
     cta: "登录后选择方案",
     items: [
-      "更高额度的选品、素材、Listing 和工作记录",
-      "高级流程模板：批量铺货、售后处理、费用复盘、权限分层",
-      "更细的确认规则：按金额、店铺、品类和动作类型设置",
-      "可扩展货源/物流接口配置入口和更完整的来源记录",
-      "仍不开放越权执行；资金、刊登、退款、广告和买家消息仍需确认",
-      "大模型、生图生视频和供应商账单会在用量页单独展示",
+      "5 个店铺 · 5 个席位 · 1500 个经营任务",
+      "单次批量最多 1000 行，支持角色权限、操作审计和优先任务",
+      "按金额、店铺、品类和动作类型设置确认规则",
+      "更完整的来源记录、费用复盘和跨店协作",
+      "商家自带模型；素材点单独结算，失败任务自动返还预占点数",
     ],
   },
 };
@@ -4760,10 +4826,20 @@ const siteShell = document.querySelector("#siteShell");
 const onboardingShell = document.querySelector("#onboardingShell");
 const appShell = document.querySelector("#appShell");
 const authModal = document.querySelector("#authModal");
+const authChallengeShell = document.querySelector("#authChallengeShell");
+const authChallengeWidget = document.querySelector("#authChallengeWidget");
+const authChallengeStatus = document.querySelector("#authChallengeStatus");
 const plansModal = document.querySelector("#plansModal");
 const evidenceModal = document.querySelector("#evidenceModal");
 const manualModal = document.querySelector("#manualModal");
 const assetModal = document.querySelector("#assetModal");
+const registrationChallengeState = {
+  config: null,
+  widgetId: null,
+  token: "",
+  scriptPromise: null,
+  pending: null,
+};
 
 function restorePreservedViewMarkup(viewId, requiredSelector = "") {
   const view = document.querySelector(`#view-${viewId}`);
@@ -5748,6 +5824,7 @@ function currentSaasBulkCandidates() {
 
 function saasBulkCandidateLane(candidate = {}) {
   if (Number(candidate.score || 0) < 55) return "blocked";
+  if (Array.isArray(candidate.missing_facts) && candidate.missing_facts.length) return "info";
   if (candidate.selected === true || Number(candidate.score || 0) >= 70) return "test";
   return "info";
 }
@@ -5770,7 +5847,8 @@ function saasBulkCandidateToListingDraft(candidate = {}) {
     fields: {
       ...base.fields,
       title: candidate.name,
-      selling_points: (candidate.reasons || []).join("\n"),
+      selling_points: "",
+      description: "",
       cost_price: sourceFacts.cost || "",
       logistics: [sourceFacts.origin ? `发货地：${sourceFacts.origin}` : "", sourceFacts.weight ? `包装：${sourceFacts.weight}` : ""].filter(Boolean).join("\n"),
     },
@@ -6704,7 +6782,7 @@ function bindRestoredMediaStudioEvents() {
   bindSaasMediaManifestPreviewEvents(view);
   bindOnce(view.querySelector("#mediaVideoDemo"), "click", () => {
     const text = "用现有商品图生成 6 秒或 10 秒产品展示视频的脚本与分镜，包含封面、字幕和镜头顺序，先不要发布。";
-    addCeoMessage(text, "视频脚本与分镜已经生成到素材工坊；只有 Provider 返回真实视频文件后，页面才会显示视频成片。");
+    addCeoMessage(text, "视频脚本与分镜已经生成到素材工坊；只有素材生成服务返回真实视频文件后，页面才会显示视频成片。");
     runMediaGenerationFromCeo(text);
     openAssetPreview("video");
   });
@@ -7343,7 +7421,7 @@ function applySaasMediaManifestToListingDraft({ entry = "" } = {}) {
   const previousImages = String(currentFields.images || "").trim();
   const imageSummary = [
     `已接入素材清单：${assets.length} 个素材，${imageAssets.length || 0} 张图片可作为 Listing 草稿候选。`,
-    imageUrls.length ? "图片 URL：已由系统接入素材清单，发布包内部使用；商家界面不展示 provider 域名。" : "",
+    imageUrls.length ? "图片 URL：已由系统接入素材清单，发布包内部使用；商家界面不展示底层素材服务地址。" : "",
     assetUrls.some((url) => /\.(mp4|webm|mov)(\?|$)/i.test(url)) ? "视频素材：已进入素材清单，正式使用前仍需脚本、字幕、封面和权利复核。" : "",
     "素材状态：已送回 Listing 草稿；真实发布前仍需人工审核实物一致性、图片权利和平台规则。",
     "使用边界：当前只补草稿，不会自动发布、不改价、不扣费、不写入 eBay。",
@@ -9943,8 +10021,9 @@ function renderSaasPublishConfirmationEvidencePanel(readiness = {}, ctx = saasMe
       </div>
       <div class="saas-backend-preflight-actions">
         <button class="secondary-action" type="button" data-saas-action="create-publish-confirmation" ${state.saasLoading ? "disabled" : ""}>刷新系统体检</button>
+        <button class="secondary-action" type="button" data-saas-action="create-ebay-draft-confirmation" ${state.saasLoading ? "disabled" : ""}>生成 eBay 草稿确认</button>
         <button class="primary-action" type="button" data-saas-action="open-confirm" ${canOpenConfirm ? "" : "disabled"}>打开确认中心</button>
-        <small>此处只创建/查看确认证据，不会直接写入 eBay。</small>
+        <small>草稿确认批准后只保存未发布 Offer；公开发布仍需单独确认。</small>
       </div>
     </section>
   `;
@@ -10439,6 +10518,9 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
   const draft = state.saasListingComposerDraft || (clean.trim() ? saasListingComposerDraftFromText(clean) : null);
   const fields = draft?.fields || {};
   const publishPrefill = draft?.publish_prefill && typeof draft.publish_prefill === "object" ? draft.publish_prefill : {};
+  const buyerCopyRequiresMerchantFacts = ["ai_ceo_market_chat", "ai_ceo_market_report", "bulk_handoff"].includes(
+    String(draft?.source_type || state.saasListingSourceMode || ""),
+  );
   const itemSpecifics = fields.item_specifics || "";
   const itemSpecificRows = parseSaasKeyValueLines(itemSpecifics);
   const logisticsText = fields.logistics || "";
@@ -10495,7 +10577,10 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
     gross_margin_percent: "",
     item_specifics: itemSpecifics,
     image_urls: publishPrefill.image_urls || imageUrls,
-    description_html: publishPrefill.description_html || [fields.selling_points, fields.description].filter(Boolean).join("\n\n") || clean,
+    description_html:
+      publishPrefill.description_html ||
+      [fields.selling_points, fields.description].filter(Boolean).join("\n\n") ||
+      (buyerCopyRequiresMerchantFacts ? "" : clean),
     fulfillment_policy_id: publishPrefill.fulfillment_policy_id || "",
     payment_policy_id: publishPrefill.payment_policy_id || "",
     return_policy_id: publishPrefill.return_policy_id || "",
@@ -10795,8 +10880,8 @@ function saasListingComposerDraftFromCatalogDraft(draft = null, sourceType = "li
     ].filter(Boolean),
     fields: {
       title: draft.title || draft.titleEn || draft.titleCn || "",
-      selling_points: reportReasons.join("\n"),
-      description,
+      selling_points: sourceType === "bulk_handoff" ? "" : reportReasons.join("\n"),
+      description: sourceType === "bulk_handoff" ? "" : description,
       item_specifics: saasListingSafeItemSpecifics(specifics) || "Brand: 待补\nMaterial: 待补\nMPN: 待补",
       category: [draft.category, draft.categoryId].filter(Boolean).join(" / ") || "待发布体检确认",
       price: draft.price || "",
@@ -10909,6 +10994,7 @@ function saasNormalizeMarketProductCandidates(value = [], fallbackText = "") {
   const raw = Array.isArray(value) ? value : [];
   const normalized = [];
   const seen = new Set();
+  const hasExplicitSelection = raw.some((item) => item && typeof item === "object" && item.selected === true);
   raw.forEach((item, index) => {
     const source = item && typeof item === "object" ? item : { name: item };
     const name = saasCleanMarketCandidateName(source.name || source.product || source.title || source.label || "");
@@ -10932,7 +11018,7 @@ function saasNormalizeMarketProductCandidates(value = [], fallbackText = "") {
       missing_facts: Array.isArray(source.missing_facts)
         ? source.missing_facts.map((item) => publicRuntimeText(item).trim()).filter(Boolean).slice(0, 8)
         : [],
-      selected: source.selected === true || index === 0,
+      selected: source.selected === true || (!hasExplicitSelection && index === 0),
     });
   });
   if (normalized.length) return saasSelectMarketProductCandidateFromText(normalized, fallbackText);
@@ -10972,16 +11058,8 @@ function saasSelectedMarketProductCandidate(candidates = []) {
 }
 
 function saasListingDescriptionFromCandidate(candidate = null, fallback = "") {
-  if (!candidate?.name) return publicRuntimeText(fallback).slice(0, 1200);
-  const reasons = Array.isArray(candidate.reasons) ? candidate.reasons.filter(Boolean).slice(0, 4) : [];
-  return [
-    `选定商品：${candidate.name}`,
-    reasons.length ? `推荐理由：${reasons.join("；")}` : "推荐理由：来自 AI CEO 市场调研报告，适合作为 Listing 草稿起点。",
-    candidate.price_band ? `价格线索：${candidate.price_band}` : "价格线索：待补采购成本、物流成本和建议售价。",
-    "发布前必须补齐 SKU、图片 URL、商品事实、eBay 类目、Item specifics、重量尺寸、发货地和店铺政策。",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  // Candidate reasons are market rationale for the merchant, not confirmed buyer-facing facts.
+  return "";
 }
 
 function saasListingEbayTitleFromProduct(product = "") {
@@ -12547,6 +12625,78 @@ function renderSaasListingAdvancedWorkDetails(
   `;
 }
 
+function renderSaasListingSourceIntake({
+  draft = state.saasListingComposerDraft,
+  inputValue = state.saasListingComposerInput || "",
+  inputChips = [],
+  marketReport = null,
+  listingReport = null,
+  syncedRows = [],
+} = {}) {
+  const intake = `
+    <section class="saas-listing-input-panel" aria-label="商品资料入口">
+      <div class="saas-listing-input-head">
+        <div>
+          <span>商品资料入口</span>
+          <strong>把你手上的资料直接放进来</strong>
+          <p>链接、图片说明、价格成本、规格和物流信息可以混在一起。页面先保持简单，生成后才展开市场结论和 Listing 草稿。</p>
+        </div>
+        <em>不用先整理格式</em>
+      </div>
+      <label class="saas-listing-composer-input saas-listing-v2-input">
+        <span>商品资料</span>
+        <textarea id="saasListingComposerInput" rows="6" placeholder="例如：1688 链接、商品名、采购价、建议售价、材质、尺寸重量、发货地、图片说明和主卖点。可以混在一起写。">${escapeHtml(inputValue)}</textarea>
+      </label>
+      <div class="saas-listing-input-chips" aria-label="可补充的资料类型">
+        ${inputChips
+          .map(
+            ([label, value]) =>
+              `<button type="button" data-saas-listing-input-chip="${escapeHtml(value)}">${escapeHtml(label)}</button>`,
+          )
+          .join("")}
+      </div>
+      ${renderSaasFirstRunAssuranceStrip([
+        {
+          label: "不用完整",
+          title: "先把线索放进来",
+          copy: "链接、图片说明、价格成本或规格不完整也可以开始。",
+        },
+        {
+          label: "缺口会停住",
+          title: "不把猜测写进 Listing",
+          copy: "缺尺寸、图片授权、物流或利润线索时先提醒你补。",
+        },
+        {
+          label: "不直接发布",
+          title: "只生成草稿和体检",
+          copy: "发布、改价、库存、广告和退款仍进决策中心。",
+        },
+      ])}
+    </section>
+    <div class="saas-listing-composer-actions">
+      <button class="primary-action" type="button" data-saas-action="listing-start-backend-workflow" ${state.saasLoading ? "disabled" : ""}>生成经营链路</button>
+      <button class="secondary-action" type="button" data-saas-action="listing-compose-draft" ${state.saasLoading ? "disabled" : ""}>先看草稿</button>
+      <button class="secondary-action" type="button" data-saas-action="listing-source-ai-report">导入 AI CEO 调研</button>
+    </div>
+    <div class="saas-listing-source-kicker">
+      <span>也可以从这些来源开始</span>
+    </div>
+    ${renderSaasListingSourceCards({ marketReport, listingReport, syncedRows })}
+  `;
+  if (!draft) return intake;
+  return `
+    <details class="saas-listing-source-details saas-listing-advanced-details" data-listing-source-details="listing_source_collapsed_after_draft_v1">
+      <summary>
+        <span>更换或补充商品资料</span>
+        <small>当前草稿已生成；只有换商品或补链接、图片、成本、规格时再展开</small>
+      </summary>
+      <div class="saas-listing-advanced-body saas-listing-source-details-body">
+        ${intake}
+      </div>
+    </details>
+  `;
+}
+
 function renderSaasListingComposerWorkspace({
   listingReport,
   marketReport,
@@ -12595,54 +12745,7 @@ function renderSaasListingComposerWorkspace({
               </section>`
             : ""
         }
-        <section class="saas-listing-input-panel" aria-label="商品资料入口">
-          <div class="saas-listing-input-head">
-            <div>
-              <span>商品资料入口</span>
-              <strong>把你手上的资料直接放进来</strong>
-              <p>链接、图片说明、价格成本、规格和物流信息可以混在一起。页面先保持简单，生成后才展开市场结论和 Listing 草稿。</p>
-            </div>
-            <em>不用先整理格式</em>
-          </div>
-          <label class="saas-listing-composer-input saas-listing-v2-input">
-            <span>商品资料</span>
-            <textarea id="saasListingComposerInput" rows="6" placeholder="例如：1688 链接、商品名、采购价、建议售价、材质、尺寸重量、发货地、图片说明和主卖点。可以混在一起写。">${escapeHtml(inputValue)}</textarea>
-          </label>
-          <div class="saas-listing-input-chips" aria-label="可补充的资料类型">
-            ${inputChips
-              .map(
-                ([label, value]) =>
-                  `<button type="button" data-saas-listing-input-chip="${escapeHtml(value)}">${escapeHtml(label)}</button>`,
-              )
-              .join("")}
-          </div>
-          ${renderSaasFirstRunAssuranceStrip([
-            {
-              label: "不用完整",
-              title: "先把线索放进来",
-              copy: "链接、图片说明、价格成本或规格不完整也可以开始。",
-            },
-            {
-              label: "缺口会停住",
-              title: "不把猜测写进 Listing",
-              copy: "缺尺寸、图片授权、物流或利润线索时先提醒你补。",
-            },
-            {
-              label: "不直接发布",
-              title: "只生成草稿和体检",
-              copy: "发布、改价、库存、广告和退款仍进决策中心。",
-            },
-          ])}
-        </section>
-        <div class="saas-listing-composer-actions">
-          <button class="primary-action" type="button" data-saas-action="listing-start-backend-workflow" ${state.saasLoading ? "disabled" : ""}>生成经营链路</button>
-          <button class="secondary-action" type="button" data-saas-action="listing-compose-draft" ${state.saasLoading ? "disabled" : ""}>先看草稿</button>
-          <button class="secondary-action" type="button" data-saas-action="listing-source-ai-report">导入 AI CEO 调研</button>
-        </div>
-        <div class="saas-listing-source-kicker">
-          <span>也可以从这些来源开始</span>
-        </div>
-        ${renderSaasListingSourceCards({ marketReport, listingReport, syncedRows })}
+        ${draft ? renderSaasListingSourceIntake({ draft, inputValue, inputChips, marketReport, listingReport, syncedRows }) : renderSaasListingSourceIntake({ draft: null, inputValue, inputChips, marketReport, listingReport, syncedRows })}
         ${renderSaasListingDraftEditor(draft)}
         ${renderSaasListingMediaWritebackPanel(draft)}
         ${draft ? renderSaasListingNextActionPanel(draft, ctx, pendingConfirmations) : ""}
@@ -14197,6 +14300,7 @@ function handleGlobalFlowNavigation(button) {
     confirm: "已打开确认中心：发布、付款、退款和广告等高风险动作在这里确认。",
     account: "已打开设置：先恢复登录、店铺和 eBay 连接状态。",
     model: "已打开设置：AI 连接、商家记忆、来源和上线状态都在这里。",
+    billing: "已打开订阅与额度：这里查看当前套餐、素材额度、账单和续费状态。",
     audit: "已打开 AI CEO 汇报：查看报告、来源、确认记录和长期记忆的回写。",
   };
   if (key === "goal") {
@@ -14211,6 +14315,7 @@ function handleGlobalFlowNavigation(button) {
   }
   if (key === "account") state.saasSettingsTab = "account";
   if (key === "model") state.saasSettingsTab = "model";
+  if (key === "billing") state.saasSettingsTab = "billing";
   setView(view, { preserveFlowKey: Boolean(key) });
   if (key === "source") pulseFlowTarget("#view-connect .source-intake-panel", { message: messages.source });
   else if (key === "product" || key === "finance") pulseFlowTarget("#view-product", { message: messages[key] });
@@ -14220,6 +14325,7 @@ function handleGlobalFlowNavigation(button) {
   else if (key === "service") pulseFlowTarget("#view-service", { message: messages.service });
   else if (key === "account") pulseFlowTarget("#view-connect", { message: messages.account });
   else if (key === "model") pulseFlowTarget("#view-connect", { message: messages.model });
+  else if (key === "billing") pulseFlowTarget("#view-connect .saas-settings-clean-content", { message: messages.billing });
   else if (key === "audit") pulseFlowTarget("#view-activity", { message: messages.audit });
   else showActionToast(messages[key] || "已打开对应流程。");
 }
@@ -15140,6 +15246,26 @@ function currentMediaStudioProductFacts(config = {}) {
   };
 }
 
+function saasMediaGenerationGroundingGate(productFacts = {}, config = {}) {
+  const referenceImages = Array.isArray(productFacts.reference_images) ? productFacts.reference_images : [];
+  const hasGroundedSource =
+    Boolean(String(productFacts.source_asset_id || "").trim()) ||
+    productFacts.private_source_transport === "backend_asset_id" ||
+    referenceImages.some((url) => /^https:\/\//i.test(String(url || "").trim()));
+  const qualityMode = config.qualityMode || mediaQualityModeKey(config.fidelity);
+  const videoDurationSeconds = Number.isFinite(Number(config.videoDurationSeconds))
+    ? Number(config.videoDurationSeconds)
+    : mediaVideoDurationSeconds(config.videoPreset);
+  const videoRequested = [6, 10].includes(videoDurationSeconds);
+  const conceptOnly = !hasGroundedSource || qualityMode === "creative_exploration";
+  return {
+    allowed: hasGroundedSource || (qualityMode === "creative_exploration" && !videoRequested),
+    conceptOnly,
+    hasGroundedSource,
+    videoRequested,
+  };
+}
+
 function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
   const store = activeSaasStore();
   const imageCount = Math.max(1, Math.min(Number.parseInt(config.count, 10) || 4, 4));
@@ -15152,10 +15278,8 @@ function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
   const generationTier = config.generationTierKey || mediaGenerationTierKey(config.generationTier);
   const qualityMode = config.qualityMode || mediaQualityModeKey(config.fidelity);
   const factLocks = Array.isArray(config.factLocks) && config.factLocks.length ? [...config.factLocks] : [...MEDIA_FACT_LOCKS];
-  const hasPrivateSourceAsset = Boolean(productFacts.source_asset_id);
-  const outputSafetyMode = (groundedReferenceImages.length || hasPrivateSourceAsset) && qualityMode !== "creative_exploration"
-    ? "reference_grounded_listing_draft"
-    : "concept_reference_only";
+  const groundingGate = saasMediaGenerationGroundingGate(productFacts, config);
+  const outputSafetyMode = groundingGate.conceptOnly ? "concept_reference_only" : "reference_grounded_listing_draft";
   const videoPreset = String(config.videoPreset || "").trim();
   const videoDurationSeconds = Number(config.videoDurationSeconds || mediaVideoDurationSeconds(videoPreset));
   const videoRequested = [6, 10].includes(videoDurationSeconds);
@@ -15387,6 +15511,21 @@ async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}) {
 
 function handleMediaGenerateImagesDraftClick() {
   const config = readMediaGenerationConfig();
+  const productFacts = currentMediaStudioProductFacts(config);
+  const groundingGate = saasMediaGenerationGroundingGate(productFacts, config);
+  if (!groundingGate.allowed) {
+    state.mediaGenerationStatus = "needs_source";
+    setMediaNewTaskMode();
+    setText("#mediaProductionStatus", groundingGate.videoRequested ? "视频需要真实商品图 · 尚未调用生成服务" : "先上传真实商品图 · 尚未调用生成服务");
+    setText(
+      "#mediaPreviewNote",
+      groundingGate.videoRequested
+        ? "视频必须以真实商品图作为首帧，只允许镜头运动，不会凭文字虚构商品用法。"
+        : "默认刊登素材必须基于实拍图或有权使用的供应商图。上传后再生成，避免浪费额度和生成与实物不符的图片。",
+    );
+    showActionToast("先上传真实商品图：本次没有调用付费素材服务。只有明确选择“创意场景探索”时，才允许生成不可刊登的概念参考图。");
+    return;
+  }
   const text =
     config.entry === "single"
       ? `请基于本次商品图，使用「${config.template}」，按 ${config.platform} 生成 ${config.count} ${config.type}，尺寸使用 ${config.size}，场景为 ${config.scene}，质量为 ${config.generationTier}，还原要求为 ${config.fidelity}，并列出正式发布前需要补充的资料。`
@@ -15412,7 +15551,7 @@ async function handleMediaScriptDraftClick() {
   const scriptPreset = config.videoDurationSeconds ? config.videoPreset : "10 秒产品展示视频";
   const text = `请只为“${product}”生成一份${scriptPreset}的${config.voice}视频脚本与分镜。必须包含开场钩子、逐镜头画面、字幕、商品事实待确认项和发布前审核清单；不要声称视频文件已经生成，不要发布。`;
   setText("#mediaProductionStatus", "正在生成脚本与分镜 · 不生成虚假视频");
-  showActionToast("正在生成文字脚本；视频文件只有 provider 实际返回后才会显示。");
+  showActionToast("正在生成文字脚本；视频文件只有素材生成服务实际返回后才会显示。");
   const command = buildSaasCeoCommand(text, saasMerchantWorkbenchContext());
   const payload = await requestSaasAiCeoChat(command);
   const chat = payload?.ai_ceo_chat && typeof payload.ai_ceo_chat === "object" ? payload.ai_ceo_chat : {};
@@ -15434,7 +15573,7 @@ async function handleMediaScriptDraftClick() {
   upsertActivity("media-script-draft", {
     role: "素材生成",
     title: `${product}视频脚本与分镜`,
-    action: "AI 根据当前商品草稿生成文字脚本、镜头表、字幕和待确认事实；没有 provider 返回视频文件时，不标记为已生成视频。",
+    action: "AI 根据当前商品草稿生成文字脚本、镜头表、字幕和待确认事实；素材生成服务没有返回视频文件时，不标记为已生成视频。",
     sources: [`商品：${product}`, `规格：${scriptPreset}`, `语言：${config.voice}`],
     result: script,
     status: "脚本已生成",
@@ -18382,6 +18521,7 @@ function renderAccountMenu() {
       </article>
     </div>
     <div class="account-menu-actions" aria-label="账号操作">
+      <button type="button" data-account-action="subscription">订阅与额度</button>
       <button type="button" data-account-action="settings">账号与安全设置</button>
       <button type="button" data-account-action="refresh">刷新账号状态</button>
       <button type="button" data-account-action="switch-account">切换账号</button>
@@ -18461,6 +18601,14 @@ function logoutSaasAccount() {
 
 function handleAccountMenuAction(button) {
   const action = button?.dataset?.accountAction || "";
+  if (action === "subscription") {
+    closeAccountMenu();
+    state.saasSettingsTab = "billing";
+    setView("connect");
+    renderConnect();
+    showActionToast("已打开订阅与额度，可查看套餐、素材额度和账单状态。");
+    return;
+  }
   if (action === "settings") {
     closeAccountMenu();
     setView("connect");
@@ -24445,12 +24593,9 @@ function saasModelSecretRefReady(item) {
 }
 
 function isSaasMerchantModelConfigured() {
-  const gateModel = state.saasModelValueGate?.merchant_byok_model || {};
   return Boolean(
     state.saasModelSettings?.configured ||
-      saasModelSecretRefReady(saasActiveModelSecretRef()) ||
-      gateModel.configured === true ||
-      Number(gateModel.ready_secret_ref_count || 0) > 0,
+      saasModelSecretRefReady(saasActiveModelSecretRef()),
   );
 }
 
@@ -25932,6 +26077,10 @@ async function refreshSaasState(options = {}) {
     renderGlobalLoopWorkbench();
     renderStoreContext();
     setView(activeSaasRefreshView("cockpit"), { preserveFlowKey: true });
+    document.documentElement.classList.remove("app-auth-pending");
+    if (isSaasPublicMvpMode() && isProtectedSaasAppRoute()) {
+      openApp(activeSaasRefreshView("cockpit"));
+    }
   }
   try {
     if (!canFetchProtectedState) {
@@ -26066,6 +26215,8 @@ async function refreshSaasState(options = {}) {
       billingPlan,
       billingUsage,
       billingCheckout,
+      domesticBillingContract,
+      domesticBillingOrders,
       paymentOptions,
       manualBetaPaymentOrders,
       billingDomainCutoverRehearsal,
@@ -26121,6 +26272,8 @@ async function refreshSaasState(options = {}) {
       optionalSaasFetchFast("/billing/plans", { billing_plan: null }),
       optionalSaasFetchFast("/billing/usage", { billing_usage: null }),
       optionalSaasFetchFast("/billing/checkout-contract", { billing_checkout: null }),
+      optionalSaasFetchFast("/billing/domestic/contract", { domestic_billing: null }),
+      optionalSaasFetchFast("/billing/domestic/orders", { domestic_billing_orders: [] }),
       canViewPlatformInternal
         ? optionalSaasFetchFast("/billing/payment-options", { payment_options: null })
         : Promise.resolve({ payment_options: null, skipped: "owner_admin_only_payment_options" }),
@@ -26222,8 +26375,15 @@ async function refreshSaasState(options = {}) {
     if (canViewPlatformInternal) {
       const rateLimitStatus = await optionalSaasFetchFast("/security/rate-limit/status", { rate_limit_status: state.saasRateLimitStatus || null }, 10000);
       state.saasRateLimitStatus = rateLimitStatus.rate_limit_status || state.saasRateLimitStatus || null;
+      const operationsOverview = await optionalSaasFetchFast(
+        "/owner/operations-overview",
+        { operations_overview: state.saasOperationsOverview || null },
+        10000,
+      );
+      state.saasOperationsOverview = operationsOverview.operations_overview || state.saasOperationsOverview || null;
     } else {
       state.saasRateLimitStatus = null;
+      state.saasOperationsOverview = null;
     }
     state.saasSecretRefs = secretRefs.secret_refs || [];
     state.saasVaultStatus = canViewPlatformInternal ? vault.vault || null : null;
@@ -26237,6 +26397,8 @@ async function refreshSaasState(options = {}) {
     state.saasBillingPlan = merchantSafeSaasBillingPlan(rawBillingPlan);
     state.saasBillingUsage = billingUsage.billing_usage || null;
     state.saasBillingCheckout = billingCheckout.billing_checkout || null;
+    state.saasDomesticBillingContract = domesticBillingContract.domestic_billing || null;
+    state.saasDomesticBillingOrders = domesticBillingOrders.domestic_billing_orders || [];
     state.saasPaymentOptions = canViewPlatformInternal ? paymentOptions.payment_options || rawBillingPlan?.payment_strategy || null : null;
     state.saasManualBetaPaymentOrders = manualBetaPaymentOrders.manual_beta_payment_orders || [];
     state.saasBillingDomainCutoverRehearsal = canViewPlatformInternal ? billingDomainCutoverRehearsal.billing_domain_cutover_rehearsal || null : null;
@@ -26414,6 +26576,44 @@ async function refreshSaasOwnerLaunchControl(options = {}) {
     showActionToast("主理人上线控制台已刷新；没有触发 eBay OAuth、Stripe Checkout 或真实平台写入。");
   }
   return state.saasOwnerLaunchControl;
+}
+
+async function reconcileSaasOwnerReliabilityAlerts() {
+  if (!requireSaasProtectedSessionForAction()) return;
+  try {
+    const payload = await saasFetch("/owner/operations-reliability-alerts/reconcile", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    state.saasOperationsOverview = payload.operations_overview || state.saasOperationsOverview || null;
+    renderSaasBackendPanel();
+    renderGlobalLoopWorkbench();
+    renderStoreContext();
+    setView(state.view || "connect", { preserveFlowKey: true });
+    showActionToast("告警状态已评估；仅更新内部值班记录，没有触发支付、eBay 或供应商动作。");
+  } catch (error) {
+    showActionToast(`告警状态评估失败：${String(error.message || error)}`);
+  }
+}
+
+async function acknowledgeSaasOwnerReliabilityAlert(button) {
+  if (!requireSaasProtectedSessionForAction()) return;
+  const scope = String(button?.dataset?.reliabilityScope || "");
+  const actionKey = String(button?.dataset?.reliabilityAction || "");
+  try {
+    const payload = await saasFetch("/owner/operations-reliability-alerts/acknowledge", {
+      method: "POST",
+      body: JSON.stringify({ scope, action_key: actionKey }),
+    });
+    state.saasOperationsOverview = payload.operations_overview || state.saasOperationsOverview || null;
+    renderSaasBackendPanel();
+    renderGlobalLoopWorkbench();
+    renderStoreContext();
+    setView(state.view || "connect", { preserveFlowKey: true });
+    showActionToast("内部处理进度已记录；没有触发任何商家侧或外部平台动作。");
+  } catch (error) {
+    showActionToast(`处理进度没有保存：${String(error.message || error)}`);
+  }
 }
 
 function maybeRefreshSaasOwnerLaunchControlForActiveTab() {
@@ -26600,11 +26800,12 @@ async function createSaasProductWorkflowFromBackend(options = {}) {
   }
 }
 
-async function createSaasPublishConfirmationFromIntakeForm() {
+async function createSaasPublishConfirmationFromIntakeForm(mode = "publish") {
   if (!requireSaasProtectedSessionForAction()) return false;
+  const draftSave = mode === "ebay-draft";
   const store = activeSaasStore();
   if (!store?.store_id) {
-    showActionToast("当前没有可用店铺上下文，不能创建发布确认单。");
+    showActionToast(draftSave ? "当前没有可用店铺上下文，不能创建 eBay 草稿确认单。" : "当前没有可用店铺上下文，不能创建发布确认单。");
     return false;
   }
   const payload = readSaasPublishIntakeForm();
@@ -26616,7 +26817,8 @@ async function createSaasPublishConfirmationFromIntakeForm() {
   state.saasError = "";
   renderSaasBackendPanel();
   try {
-    const result = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/publish-confirmation`, {
+    const endpoint = draftSave ? "ebay-draft-confirmation" : "publish-confirmation";
+    const result = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/${endpoint}`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
@@ -26635,12 +26837,14 @@ async function createSaasPublishConfirmationFromIntakeForm() {
     ].filter(Boolean).slice(0, 5);
     state.saasLastPublishConfirmationEvidence = {
       confirmation_id: result.confirmation?.confirmation_id || "",
+      action_type: result.confirmation?.action_type || "",
       confirmation_status: result.confirmation?.status || "",
       preflight_status: result.preflight?.status || "",
       source_packet_id: result.confirmation?.item?.source_packet_id || "",
       listing_project_key: listingProjectKey,
       backend_evidence_packet: publishReadiness?.backend_evidence_packet || {},
       real_execution_allowed: result.preflight?.real_execution_allowed === true,
+      creates_public_listing: result.confirmation?.item?.creates_public_listing === true,
       secret_exposed: false,
       captured_at: new Date().toISOString(),
     };
@@ -26656,11 +26860,15 @@ async function createSaasPublishConfirmationFromIntakeForm() {
         document.querySelector(".saas-backend-preflight-panel");
       target?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 120);
-    showActionToast("发布确认单已创建：系统体检已回填，先修红项，再进确认中心。");
+    showActionToast(
+      draftSave
+        ? "eBay 草稿确认单已创建：批准后只保存未发布草稿，不会产生公开 Listing。"
+        : "发布确认单已创建：系统体检已回填，先修红项，再进确认中心。",
+    );
     return true;
   } catch (error) {
-    state.saasError = `创建发布确认单失败：${error.message}`;
-    showActionToast("创建发布确认单失败，已停住，没有写入 eBay。");
+    state.saasError = `${draftSave ? "创建 eBay 草稿确认单" : "创建发布确认单"}失败：${error.message}`;
+    showActionToast(`${draftSave ? "创建 eBay 草稿确认单" : "创建发布确认单"}失败，已停住，没有写入 eBay。`);
     renderSaasBackendPanel();
     return false;
   } finally {
@@ -26855,7 +27063,141 @@ async function createSaasTestListingCleanupPlan(confirmationId = "") {
   }
 }
 
+function setRegistrationChallengeStatus(message = "") {
+  if (authChallengeStatus) authChallengeStatus.textContent = message;
+}
+
+function settleRegistrationChallenge(token = "") {
+  const pending = registrationChallengeState.pending;
+  registrationChallengeState.pending = null;
+  if (!pending) return;
+  if (pending.timer) window.clearTimeout(pending.timer);
+  pending.resolve(token);
+}
+
+function loadTurnstileClient() {
+  if (window.turnstile?.render) return Promise.resolve(window.turnstile);
+  if (registrationChallengeState.scriptPromise) return registrationChallengeState.scriptPromise;
+  registrationChallengeState.scriptPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector("script[data-jiejing-registration-challenge]");
+    const script = existing || document.createElement("script");
+    const timer = window.setTimeout(
+      () => reject(new Error("registration challenge client timed out")),
+      10000,
+    );
+    const finish = (callback) => (value) => {
+      window.clearTimeout(timer);
+      callback(value);
+    };
+    script.addEventListener("load", finish(() => resolve(window.turnstile)), { once: true });
+    script.addEventListener(
+      "error",
+      finish(() => reject(new Error("registration challenge client unavailable"))),
+      { once: true },
+    );
+    if (!existing) {
+      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      script.defer = true;
+      script.dataset.jiejingRegistrationChallenge = "true";
+      document.head.appendChild(script);
+    }
+  }).catch((error) => {
+    registrationChallengeState.scriptPromise = null;
+    throw error;
+  });
+  return registrationChallengeState.scriptPromise;
+}
+
+async function prepareRegistrationChallenge({ force = false } = {}) {
+  if (!registrationChallengeState.config || force) {
+    try {
+      const payload = await saasFetch("/auth/challenge-config");
+      registrationChallengeState.config = payload.registration_challenge || {};
+    } catch (error) {
+      registrationChallengeState.config = { required: true, verification_ready: false, action: "jiejing_register" };
+    }
+  }
+  const config = registrationChallengeState.config || {};
+  if (config.required !== true) {
+    if (authChallengeShell) authChallengeShell.hidden = true;
+    return config;
+  }
+  if (authChallengeShell) authChallengeShell.hidden = false;
+  if (config.verification_ready !== true || !config.site_key) {
+    setRegistrationChallengeStatus("账号可以正常创建，赠送试用额度将在安全验证可用后激活。");
+    return config;
+  }
+  try {
+    await loadTurnstileClient();
+    if (registrationChallengeState.widgetId === null && authChallengeWidget && window.turnstile?.render) {
+      registrationChallengeState.widgetId = window.turnstile.render(authChallengeWidget, {
+        sitekey: config.site_key,
+        action: config.action || "jiejing_register",
+        appearance: "interaction-only",
+        execution: "execute",
+        callback: (token) => {
+          registrationChallengeState.token = String(token || "");
+          setRegistrationChallengeStatus("");
+          settleRegistrationChallenge(registrationChallengeState.token);
+        },
+        "expired-callback": () => {
+          registrationChallengeState.token = "";
+          settleRegistrationChallenge("");
+        },
+        "error-callback": () => {
+          registrationChallengeState.token = "";
+          setRegistrationChallengeStatus("安全验证暂时不可用，账号仍可创建，赠送额度稍后激活。");
+          settleRegistrationChallenge("");
+          return true;
+        },
+      });
+    }
+  } catch (error) {
+    config.verification_ready = false;
+    setRegistrationChallengeStatus("安全验证暂时不可用，账号仍可创建，赠送额度稍后激活。");
+  }
+  return config;
+}
+
+async function registrationChallengeForSubmission() {
+  const config = await prepareRegistrationChallenge();
+  if (config.required !== true) return null;
+  const base = { provider: "turnstile", action: config.action || "jiejing_register" };
+  if (config.verification_ready !== true || registrationChallengeState.widgetId === null || !window.turnstile?.execute) {
+    return { ...base, token: "" };
+  }
+  if (registrationChallengeState.token) return { ...base, token: registrationChallengeState.token };
+  setRegistrationChallengeStatus("正在完成安全验证...");
+  const token = await new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      setRegistrationChallengeStatus("安全验证响应较慢，账号仍可继续创建。");
+      settleRegistrationChallenge("");
+    }, 30000);
+    registrationChallengeState.pending = { resolve, timer };
+    try {
+      window.turnstile.execute(registrationChallengeState.widgetId);
+    } catch (error) {
+      settleRegistrationChallenge("");
+    }
+  });
+  return { ...base, token: String(token || "") };
+}
+
+function resetRegistrationChallenge() {
+  settleRegistrationChallenge("");
+  registrationChallengeState.token = "";
+  setRegistrationChallengeStatus("");
+  if (registrationChallengeState.widgetId !== null && window.turnstile?.reset) {
+    try {
+      window.turnstile.reset(registrationChallengeState.widgetId);
+    } catch (error) {
+      // The widget will be recreated by the provider when registration opens again.
+    }
+  }
+}
+
 async function registerSaasBackendSession(button = null) {
+  if (state.saasLoading) return;
   const { email, password, companyName, card } = readSaasLoginCredentials(button);
   if (!email || !password) {
     showActionToast("请输入邮箱和密码后再注册。");
@@ -26866,12 +27208,15 @@ async function registerSaasBackendSession(button = null) {
   renderSaasBackendPanel();
   renderGlobalLoopWorkbench();
   try {
+    const trialActivationChallenge = await registrationChallengeForSubmission();
     const session = await saasFetch("/auth/register", {
       method: "POST",
       body: JSON.stringify({
         email,
         password,
         company_name: companyName || email.split("@")[0] || "JIEJING Merchant",
+        analytics: window.JiejingAnalytics?.context?.() || {},
+        trial_activation_challenge: trialActivationChallenge,
       }),
     });
     state.saasToken = session.token || "";
@@ -26881,6 +27226,12 @@ async function registerSaasBackendSession(button = null) {
     clearSaasLoginPassword(card);
     await refreshSaasState({ silent: true });
     showActionToast("捷境账号已创建。先完成身份向导，再连接 eBay 和模型 API。");
+    const activation = session.platform_trial_activation || {};
+    showActionToast(
+      activation.platform_trial_allowed === true
+        ? "捷境账号已创建，赠送试用额度已激活。"
+        : "捷境账号已创建；你可以先连接自己的 AI，赠送试用额度将在安全验证后激活。",
+    );
     continueSaasMvpAfterAuth();
   } catch (error) {
     state.saasConnected = false;
@@ -27992,9 +28343,21 @@ function latestSaasAiCeoMarketResearchTurn() {
   return null;
 }
 
+function saasExplicitRecommendedMarketProductLabelFromText(value = "") {
+  const text = publicRuntimeText(value).replace(/\*\*/g, "");
+  const match = text.match(
+    /(?:最值得(?:优先)?测试|最值得先测|最终推荐|首选推荐|最佳候选|优先测试|建议优先测试|建议先测试|推荐选择|选定商品|best\s+candidate|top\s+pick|final\s+recommendation)\s*[:：-]\s*(?:[✅⭐★]\s*)?([^\n]{2,120})/i,
+  );
+  if (!match?.[1]) return "";
+  const recommended = saasCleanMarketCandidateName(match[1].split(/[。；;]/, 1)[0]);
+  return saasIsConcreteProductLabel(recommended) ? recommended : "";
+}
+
 function saasAiCeoMarketProductLabel(turn = {}) {
   const latest = normalizeSaasAiCeoLatestTurn(turn);
   const text = String(latest?.assistant_text || latest?.user_text || "").replace(/\*\*/g, "");
+  const explicitRecommendation = saasExplicitRecommendedMarketProductLabelFromText(text);
+  if (explicitRecommendation) return explicitRecommendation;
   const candidate = saasSelectedMarketProductCandidate(saasNormalizeMarketProductCandidates([], text));
   if (candidate?.name) return candidate.name;
   const conciseAnswerProduct = saasAiCeoConciseAnswerProductLabel(latest);
@@ -28066,6 +28429,7 @@ function saasListingDraftFromAiCeoMarketTurn(turn = {}) {
   const productCandidates = saasNormalizeMarketProductCandidates([], latest?.assistant_text || "");
   const selectedCandidate = saasSelectedMarketProductCandidate(productCandidates);
   const sourceCount = normalizeSaasAiCeoSourceRecords(latest?.source_records || []).length;
+  const ebayTitle = saasListingEbayTitleFromProduct(product);
   return {
     ...draft,
     source_type: "ai_ceo_market_chat",
@@ -28084,11 +28448,9 @@ function saasListingDraftFromAiCeoMarketTurn(turn = {}) {
     ],
     fields: {
       ...(draft.fields || {}),
-      title: product,
-      description: saasListingDescriptionFromCandidate(selectedCandidate, baseText || draft.fields?.description || ""),
-      selling_points: selectedCandidate?.reasons?.length
-        ? selectedCandidate.reasons.join("\n")
-        : draft.fields?.selling_points || "等待从调研结论整理卖点；发布前需核对事实和来源。",
+      title: ebayTitle,
+      description: "",
+      selling_points: "",
     },
     gaps: [
       ...(draft.gaps || []),
@@ -28416,6 +28778,185 @@ async function runSaasManualBetaConfirmOrder(button) {
   }
 }
 
+let saasDomesticBillingPollTimer = null;
+
+function saasDomesticBillingIdempotencyKey() {
+  const randomPart = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `merchant-checkout-${String(randomPart).replace(/[^A-Za-z0-9._:-]/g, "-")}`.slice(0, 120);
+}
+
+function upsertSaasDomesticBillingOrder(order) {
+  if (!order?.order_id) return;
+  state.saasDomesticBillingOrders = [
+    order,
+    ...(Array.isArray(state.saasDomesticBillingOrders) ? state.saasDomesticBillingOrders : []).filter(
+      (item) => item?.order_id !== order.order_id,
+    ),
+  ].slice(0, 20);
+}
+
+function stopSaasDomesticBillingPoll() {
+  if (saasDomesticBillingPollTimer) window.clearTimeout(saasDomesticBillingPollTimer);
+  saasDomesticBillingPollTimer = null;
+}
+
+function scheduleSaasDomesticBillingPoll(orderId, attempt = 0) {
+  stopSaasDomesticBillingPoll();
+  const normalizedOrderId = String(orderId || "").trim();
+  if (!normalizedOrderId || attempt >= 120) return;
+  const delayMs = attempt < 10 ? 3000 : attempt < 30 ? 5000 : 10000;
+  saasDomesticBillingPollTimer = window.setTimeout(async () => {
+    if (document.visibilityState === "hidden") {
+      scheduleSaasDomesticBillingPoll(normalizedOrderId, attempt);
+      return;
+    }
+    const keepPolling = await runSaasDomesticBillingQueryOrder(
+      { dataset: { domesticOrderId: normalizedOrderId } },
+      { silent: true },
+    );
+    if (keepPolling) scheduleSaasDomesticBillingPoll(normalizedOrderId, attempt + 1);
+  }, delayMs);
+}
+
+async function runSaasDomesticBillingCreateOrder(button) {
+  const planKey = String(button?.dataset?.domesticPlanKey || "starter").trim().toLowerCase();
+  const mediaPointPurchase = planKey.startsWith("media_points_");
+  state.saasLoading = true;
+  renderSaasBillingActionSurfaces();
+  try {
+    const payload = await saasFetch("/billing/domestic/orders", {
+      method: "POST",
+      headers: { "idempotency-key": saasDomesticBillingIdempotencyKey() },
+      body: JSON.stringify({ provider: "wechat_pay_native", plan_key: planKey }),
+    });
+    const order = payload.domestic_billing_order || {};
+    upsertSaasDomesticBillingOrder(order);
+    if (order.qr_image_data_url) {
+      state.saasDomesticBillingCheckout = order;
+      scheduleSaasDomesticBillingPoll(order.order_id);
+      showActionToast(
+        mediaPointPurchase
+          ? "微信支付二维码已生成，请扫码付款；到账后素材点会自动进入当前账号空间。"
+          : "微信支付二维码已生成，请扫码付款；支付成功后套餐会自动开通。",
+      );
+    } else {
+      showActionToast("在线付款暂未开放，本次没有生成可付款二维码。");
+    }
+  } catch (error) {
+    showActionToast(`付款订单没有创建成功：${String(error.message || error)}`);
+  } finally {
+    resetRegistrationChallenge();
+    state.saasLoading = false;
+    renderSaasBillingActionSurfaces();
+  }
+}
+
+async function runSaasDomesticBillingContinueOrder(button) {
+  const orderId = String(button?.dataset?.domesticOrderId || "").trim();
+  if (!orderId) return;
+  state.saasLoading = true;
+  renderSaasBillingActionSurfaces();
+  try {
+    const payload = await saasFetch(`/billing/domestic/orders/${encodeURIComponent(orderId)}/checkout`, {
+      method: "POST",
+      body: "{}",
+    });
+    const order = payload.domestic_billing_order || {};
+    upsertSaasDomesticBillingOrder(order);
+    state.saasDomesticBillingCheckout = order.qr_image_data_url ? order : null;
+    if (state.saasDomesticBillingCheckout) scheduleSaasDomesticBillingPoll(orderId);
+    showActionToast(state.saasDomesticBillingCheckout ? "已恢复本次微信付款二维码。" : "这张订单当前不能继续付款。");
+  } catch (error) {
+    showActionToast(`付款二维码没有恢复：${String(error.message || error)}`);
+  } finally {
+    state.saasLoading = false;
+    renderSaasBillingActionSurfaces();
+  }
+}
+
+async function runSaasDomesticBillingQueryOrder(button, options = {}) {
+  const orderId = String(button?.dataset?.domesticOrderId || "").trim();
+  if (!orderId) return false;
+  try {
+    const payload = await saasFetch(`/billing/domestic/orders/${encodeURIComponent(orderId)}/query`, {
+      method: "POST",
+      body: "{}",
+    });
+    const result = payload.domestic_billing_order_query || {};
+    const paid = ["paid", "payment_confirmed"].includes(String(result.status || ""));
+    if (paid) {
+      const previousCheckout = state.saasDomesticBillingCheckout;
+      const matchedOrder = (Array.isArray(state.saasDomesticBillingOrders) ? state.saasDomesticBillingOrders : []).find(
+        (item) => item?.order_id === orderId,
+      );
+      const purchaseType = String(result.purchase_type || previousCheckout?.purchase_type || matchedOrder?.purchase_type || "subscription");
+      stopSaasDomesticBillingPoll();
+      state.saasDomesticBillingCheckout = null;
+      await refreshSaasState({ silent: true, refreshLaunchGate: false });
+      renderSaasBillingActionSurfaces();
+      showActionToast(purchaseType === "media_points" ? "付款已确认，素材点已经到账。" : "付款已确认，所选软件套餐已经开通。");
+      return false;
+    }
+    if (result.status === "closed" || result.status === "payment_not_completed" || result.provider_query_required === false) {
+      stopSaasDomesticBillingPoll();
+      state.saasDomesticBillingCheckout = null;
+      await refreshSaasState({ silent: true, refreshLaunchGate: false });
+      renderSaasBillingActionSurfaces();
+      if (!options.silent) showActionToast("这张订单已结束，没有发生扣款。");
+      return false;
+    }
+    if (!options.silent) showActionToast("暂未确认到账，二维码仍可继续使用。");
+    return true;
+  } catch (error) {
+    if (!options.silent) showActionToast(`付款状态暂时没有更新：${String(error.message || error)}`);
+    return Boolean(options.silent);
+  }
+}
+
+async function runSaasDomesticBillingCloseOrder(button) {
+  const orderId = String(button?.dataset?.domesticOrderId || "").trim();
+  if (!orderId) return;
+  state.saasLoading = true;
+  renderSaasBillingActionSurfaces();
+  try {
+    await saasFetch(`/billing/domestic/orders/${encodeURIComponent(orderId)}/close`, { method: "POST", body: "{}" });
+    stopSaasDomesticBillingPoll();
+    state.saasDomesticBillingCheckout = null;
+    await refreshSaasState({ silent: true, refreshLaunchGate: false });
+    showActionToast("本次未付款订单已取消，没有发生扣款。");
+  } catch (error) {
+    showActionToast(`订单没有取消成功：${String(error.message || error)}`);
+  } finally {
+    state.saasLoading = false;
+    renderSaasBillingActionSurfaces();
+  }
+}
+
+async function runSaasDomesticBillingRefundRequest(button) {
+  const orderId = String(button?.dataset?.domesticOrderId || "").trim();
+  if (!orderId) return;
+  const reason = window.prompt(
+    "请简要说明退款原因（2-500 字）。提交后由客服审核，不会立即退款；请勿填写密码、API 密钥或支付凭证。",
+    "",
+  )?.trim();
+  if (!reason) return;
+  state.saasLoading = true;
+  renderSaasBillingActionSurfaces();
+  try {
+    await saasFetch(`/billing/domestic/orders/${encodeURIComponent(orderId)}/refund-request`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    });
+    await refreshSaasState({ silent: true, refreshLaunchGate: false });
+    showActionToast("退款申请已提交，客服审核后会更新处理结果。");
+  } catch (error) {
+    showActionToast(`退款申请没有提交成功：${String(error.message || error)}`);
+  } finally {
+    state.saasLoading = false;
+    renderSaasBillingActionSurfaces();
+  }
+}
+
 function handleSaasAction(button) {
   const action = button.dataset.saasAction;
   if (action === "login-session") {
@@ -28511,6 +29052,12 @@ function handleSaasAction(button) {
     copySaasEbayCallbackUrl();
     return;
   }
+  if (action === "domestic-billing-select-plan") {
+    state.selectedPlan = normalizePlanKey(button.dataset.domesticPlanKey || "starter");
+    renderSaasConnectCenter(document.querySelector("#view-connect"));
+    showActionToast(`已选择${planDetails[state.selectedPlan]?.title || "套餐"}，创建订单前仍会显示金额和 30 天期限。`);
+    return;
+  }
   const protectedActions = new Set([
     "run-workflow",
     "run-next-job",
@@ -28547,6 +29094,7 @@ function handleSaasAction(button) {
     "merchant-feedback-remember-rule",
     "listing-start-backend-workflow",
     "create-publish-confirmation",
+    "create-ebay-draft-confirmation",
     "approve-first",
     "approve-confirmation",
     "recover-publish",
@@ -28555,8 +29103,30 @@ function handleSaasAction(button) {
     "billing-provider-rehearsal",
     "manual-beta-create-order",
     "manual-beta-confirm-order",
+    "domestic-billing-create-order",
+    "domestic-billing-continue-order",
+    "domestic-billing-query-order",
+    "domestic-billing-close-order",
+    "domestic-billing-refund-request",
+    "media-credit-purchase",
+    "reconcile-owner-reliability-alerts",
+    "acknowledge-owner-reliability-alert",
   ]);
   if (protectedActions.has(action) && !requireSaasProtectedSessionForAction()) return;
+  if (action === "reconcile-owner-reliability-alerts") {
+    reconcileSaasOwnerReliabilityAlerts();
+    return;
+  }
+  if (action === "acknowledge-owner-reliability-alert") {
+    acknowledgeSaasOwnerReliabilityAlert(button);
+    return;
+  }
+  if (action === "media-credit-purchase") {
+    runSaasDomesticBillingCreateOrder({
+      dataset: { domesticPlanKey: button.dataset.mediaCreditPackKey || "" },
+    });
+    return;
+  }
   if (action === "run-workflow") {
     createSaasProductWorkflowFromBackend();
     return;
@@ -28567,6 +29137,10 @@ function handleSaasAction(button) {
   }
   if (action === "create-publish-confirmation") {
     createSaasPublishConfirmationFromIntakeForm();
+    return;
+  }
+  if (action === "create-ebay-draft-confirmation") {
+    createSaasPublishConfirmationFromIntakeForm("ebay-draft");
     return;
   }
   if (action === "run-next-job") {
@@ -28723,6 +29297,26 @@ function handleSaasAction(button) {
   }
   if (action === "manual-beta-confirm-order") {
     runSaasManualBetaConfirmOrder(button);
+    return;
+  }
+  if (action === "domestic-billing-create-order") {
+    runSaasDomesticBillingCreateOrder(button);
+    return;
+  }
+  if (action === "domestic-billing-continue-order") {
+    runSaasDomesticBillingContinueOrder(button);
+    return;
+  }
+  if (action === "domestic-billing-query-order") {
+    runSaasDomesticBillingQueryOrder(button);
+    return;
+  }
+  if (action === "domestic-billing-close-order") {
+    runSaasDomesticBillingCloseOrder(button);
+    return;
+  }
+  if (action === "domestic-billing-refund-request") {
+    runSaasDomesticBillingRefundRequest(button);
     return;
   }
 }
@@ -30012,6 +30606,12 @@ function openAuth(mode = "register") {
   document.querySelector("#authStage").value = state.dna.merchantStage;
   authModal.hidden = false;
   document.body.classList.add("site-locked");
+  if (mode === "register") {
+    void prepareRegistrationChallenge({ force: true });
+  } else if (authChallengeShell) {
+    authChallengeShell.hidden = true;
+    resetRegistrationChallenge();
+  }
 }
 
 function openPlans() {
@@ -30022,6 +30622,7 @@ function openPlans() {
 }
 
 function closeModals() {
+  resetRegistrationChallenge();
   authModal.hidden = true;
   plansModal.hidden = true;
   evidenceModal.hidden = true;
@@ -30134,7 +30735,7 @@ function assetVisualMarkup(asset) {
         <div class="script-strip">
           <span>下一步</span>
           <strong>补商品事实，再进入视频生成</strong>
-          <small>视频 provider 返回文件后，才会进入 AssetManifest 审核。</small>
+          <small>素材生成服务返回视频文件后，才会进入素材清单审核。</small>
         </div>
       </div>
     `;
@@ -31079,24 +31680,37 @@ function saasMerchantBillingStatusPill() {
   };
 }
 
+function saasMerchantDomesticBillingState() {
+  const contract = state.saasDomesticBillingContract && typeof state.saasDomesticBillingContract === "object"
+    ? state.saasDomesticBillingContract
+    : {};
+  const provider = String(contract.provider || "");
+  const configuredPath = provider === "wechat_pay_native";
+  const online = configuredPath && contract.real_checkout_ready === true && contract.charge_now_allowed === true;
+  return { contract, provider, configuredPath, online };
+}
+
 function renderSaasMerchantBillingCurrentStatusPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
-  const hasExternalProvider = Boolean(billing.provider.external_paid_provider_configured);
+  const domesticBilling = saasMerchantDomesticBillingState();
+  const hasExternalProvider = domesticBilling.online || Boolean(billing.provider.external_paid_provider_configured);
   const isTestMode = Boolean(billing.provider.test_billing_provider_configured);
   const statusRows = [
     {
       label: "当前模式",
-      title: hasExternalProvider ? "在线付款已接入" : isTestMode ? "试用模式，不真实扣费" : "等待在线付款开放",
-      detail: hasExternalProvider
-        ? "订阅开通、续费、取消和付款失败由系统账单状态判断。"
-        : isTestMode
+      title: domesticBilling.online ? "微信扫码付款已接入" : hasExternalProvider ? "在线付款已接入" : isTestMode ? "试用模式，不真实扣费" : "等待在线付款开放",
+      detail: domesticBilling.online
+        ? "每次由商家确认后微信扫码购买 30 天，不会自动续费或自动扣款。"
+        : hasExternalProvider
+          ? "订阅开通、取消和付款失败由系统账单状态判断。"
+          : isTestMode
           ? "现在只验证订阅状态和额度停用，不创建真实付款。"
           : "在线付款开放前还要补齐订阅管理；当前不会向商家扣费。",
       tone: hasExternalProvider || isTestMode ? "green" : "amber",
     },
     {
       label: "基础订阅",
-      title: "¥99/月起",
+      title: "¥99 / 30 天",
       detail: "覆盖 AI CEO、Listing、批量铺货、素材工坊、客服订单、设置和基础工作记录。",
       tone: "green",
     },
@@ -31114,8 +31728,12 @@ function renderSaasMerchantBillingCurrentStatusPanel(ctx = saasMerchantWorkbench
     },
     {
       label: "续费 / 取消",
-      title: hasExternalProvider ? "订阅页处理" : "在线付款开放后可用",
-      detail: hasExternalProvider ? "商家通过订阅页自助管理，前端不接触支付密钥。" : "受邀试用阶段只展示说明和状态，不收银行卡或支付信息。",
+      title: domesticBilling.online ? "到期后自主续购" : hasExternalProvider ? "订阅页处理" : "在线付款开放后可用",
+      detail: domesticBilling.online
+        ? "当前为单次购买 30 天，到期前后可再次扫码；不会自动扣款。"
+        : hasExternalProvider
+          ? "商家通过订阅页自助管理，前端不接触支付密钥。"
+          : "受邀试用阶段只展示说明和状态，不收银行卡或支付信息。",
       tone: hasExternalProvider ? "green" : "amber",
     },
   ];
@@ -31175,11 +31793,17 @@ function renderSaasMerchantBillingCurrentStatusPanel(ctx = saasMerchantWorkbench
 
 function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
-  const hasExternalProvider = Boolean(billing.provider.external_paid_provider_configured);
+  const domesticBilling = saasMerchantDomesticBillingState();
+  const currentPlan = billing.usage?.plan && typeof billing.usage.plan === "object" ? billing.usage.plan : {};
+  const currentPlanLabel = currentPlan.label || "免费版";
+  const currentPlanPrice = Number(currentPlan.amount_minor || 0) > 0 ? `¥${Math.round(Number(currentPlan.amount_minor) / 100)} / 30 天` : "¥0";
+  const hasExternalProvider = domesticBilling.online || Boolean(billing.provider.external_paid_provider_configured);
   const isTestMode = Boolean(billing.provider.test_billing_provider_configured);
-  const stageLabel = hasExternalProvider ? "在线付款可用" : isTestMode ? "试用模式，不自动扣费" : "暂未开放在线支付";
-  const stageDetail = hasExternalProvider
-    ? "订阅、续费、取消和付款失败会按系统账单状态处理，页面不接触支付密钥。"
+  const stageLabel = domesticBilling.online ? "微信扫码付款可用" : hasExternalProvider ? "在线付款可用" : isTestMode ? "试用模式，不自动扣费" : "暂未开放在线支付";
+  const stageDetail = domesticBilling.online
+    ? "商家主动扫码购买 30 天；到账后系统开通权益，不会自动续费或自动扣款。"
+    : hasExternalProvider
+      ? "付款和取消按系统账单状态处理，页面不接触支付密钥。"
     : "当前只展示套餐、额度和停用规则；不会创建真实付款，也不会自动扣款。";
   const rows = [
     {
@@ -31189,15 +31813,21 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
       tone: hasExternalProvider ? "green" : "amber",
     },
     {
-      label: "基础订阅",
-      title: "¥99/月是软件功能费",
-      detail: "打开 AI CEO、Listing、批量铺货、素材工坊、客服订单、设置和基础工作记录。",
+      label: "软件套餐",
+      title: `${currentPlanLabel} · ${currentPlanPrice}`,
+      detail: "套餐只决定店铺数、席位数、经营任务和批量上限，不包含文本模型或素材生成成本。",
       tone: "green",
     },
     {
-      label: "另算用量",
-      title: "AI 模型和素材生成单独看",
-      detail: "文本模型、联网长报告、生图和生视频按套餐额度或实际消耗核算，不默认无限量。",
+      label: "商家自带模型",
+      title: "不消耗素材点",
+      detail: "DeepSeek、OpenAI 等文本模型由商家账号连接并直接承担模型费用，切换店铺无需重复配置。",
+      tone: "green",
+    },
+    {
+      label: "图片 / 视频",
+      title: "使用素材点",
+      detail: "生成前显示预计点数，任务完成后按实际结算；生成失败或质量门禁未通过会返还预占点数。",
       tone: "amber",
     },
     {
@@ -31212,8 +31842,8 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
       <div class="saas-settings-card-head">
         <div>
           <span>订阅和用量总览</span>
-          <strong>先分清月费、用量费和平台成本</strong>
-          <p>这页只回答商家最关心的三件事：现在会不会扣费，¥99/月包含什么，AI/素材和 eBay 经营成本为什么另算。</p>
+          <strong>软件套餐、商家模型、素材点和平台成本分开</strong>
+          <p>捷境不把不同成本混在一起：套餐是软件使用权，文本模型由商家自带，图片和视频使用素材点，电商平台经营成本仍由商家在对应平台结算。</p>
         </div>
         <em>${escapeHtml(stageLabel)}</em>
       </div>
@@ -31232,7 +31862,7 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
       </div>
       <div class="saas-merchant-billing-plain-note">
         <strong>停用规则</strong>
-        <p>订阅取消、欠费或额度用尽时，只停会继续产生费用的模型、联网和素材生成；历史报告、确认记录、操作记录和账号设置继续保留。</p>
+        <p>订阅取消或欠费时暂停新增经营任务；素材点不足时只暂停素材生成。历史报告、确认记录、操作记录和账号设置继续保留。</p>
       </div>
       <div class="saas-merchant-billing-plain-safety" hidden aria-hidden="true">
         <span>merchant_billing_plain_summary_v1</span>
@@ -31370,10 +32000,382 @@ function renderSaasMerchantSubscriptionActivationPanel(ctx = saasMerchantWorkben
   `;
 }
 
+function saasDomesticBillingStatusLabel(status) {
+  const labels = {
+    pending_payment: "等待付款",
+    payable_order_created: "等待付款",
+    paid: "已付款",
+    closed: "已取消",
+    payment_failed: "付款未完成",
+    refund_review_requested: "退款审核中",
+    refunded: "已退款",
+    refund_failed: "退款处理失败",
+    rehearsal_order_created: "在线付款未开放",
+  };
+  return labels[String(status || "")] || "处理中";
+}
+
+function renderSaasMerchantMediaCreditsPanel() {
+  const usage = state.saasBillingUsage && typeof state.saasBillingUsage === "object" ? state.saasBillingUsage : {};
+  const mediaCredits = usage.media_credits && typeof usage.media_credits === "object" ? usage.media_credits : {};
+  const account = mediaCredits.account && typeof mediaCredits.account === "object" ? mediaCredits.account : {};
+  const purchase = mediaCredits.purchase && typeof mediaCredits.purchase === "object" ? mediaCredits.purchase : {};
+  const packs = Array.isArray(mediaCredits.packs) ? mediaCredits.packs : [];
+  const recent = Array.isArray(mediaCredits.recent_activity) ? mediaCredits.recent_activity.slice(0, 5) : [];
+  const available = Number(account.available_points || 0);
+  const reserved = Number(account.reserved_points || 0);
+  const spent = Number(account.lifetime_spent_points || 0);
+  const purchaseOpen = purchase.purchase_enabled === true && purchase.status === "available";
+  const operationLabels = {
+    grant: "入账",
+    reserve: "任务预占",
+    settle: "任务结算",
+    release: "失败返还",
+    revoke: "退款收回",
+  };
+  const mediaOrders = (Array.isArray(state.saasDomesticBillingOrders) ? state.saasDomesticBillingOrders : []).filter(
+    (item) => item?.purchase_type === "media_points",
+  );
+  const checkout = state.saasDomesticBillingCheckout?.purchase_type === "media_points" && state.saasDomesticBillingCheckout?.qr_image_data_url
+    ? state.saasDomesticBillingCheckout
+    : null;
+  const purchaseAvailable = purchaseOpen && !checkout && !state.saasLoading;
+  return `
+    <section class="saas-settings-card saas-merchant-media-credits" data-media-credit-contract="merchant_media_points_v1" aria-label="素材点余额与记录">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>素材点</span>
+          <strong>素材点余额 ${available.toLocaleString("zh-CN")}</strong>
+          <p>素材点只用于图片和视频生成。生成前预估，完成后按实际结算；失败、超时或真实性与权利门禁未通过时返还预占点数。</p>
+        </div>
+        <em>${purchaseOpen ? "可购买" : "购买入口准备中"}</em>
+      </div>
+      <div class="saas-media-credit-balance-grid">
+        <article class="is-green">
+          <span>可用</span>
+          <strong>${available.toLocaleString("zh-CN")}</strong>
+          <small>可用于新的素材任务</small>
+        </article>
+        <article class="${reserved ? "is-amber" : "is-green"}">
+          <span>处理中</span>
+          <strong>${reserved.toLocaleString("zh-CN")}</strong>
+          <small>任务完成后结算，失败自动返还</small>
+        </article>
+        <article>
+          <span>累计使用</span>
+          <strong>${spent.toLocaleString("zh-CN")}</strong>
+          <small>商家自带模型不计入这里</small>
+        </article>
+      </div>
+      <div class="saas-media-credit-pack-list" aria-label="素材点固定充值包">
+        ${packs.length
+          ? packs
+              .map((pack) => {
+                const points = Number(pack.points || 0).toLocaleString("zh-CN");
+                const amount = (Number(pack.amount_minor || 0) / 100).toFixed(0);
+                return `
+                  <article>
+                    <div>
+                      <strong>${escapeHtml(pack.label || `${points} 素材点`)}</strong>
+                      <small>¥${escapeHtml(amount)} · 充值后进入当前账号空间</small>
+                    </div>
+                    <button class="secondary-action compact-action" type="button" ${purchaseAvailable ? `data-saas-action="media-credit-purchase" data-media-credit-pack-key="${escapeHtml(pack.key || "")}"` : "disabled"}>购买素材点</button>
+                  </article>
+                `;
+              })
+              .join("")
+          : `<p class="saas-empty-note">素材点充值包正在准备中。</p>`}
+      </div>
+      ${checkout ? `
+        <div class="saas-domestic-checkout" data-media-credit-checkout="merchant_media_points_checkout_v1">
+          <div class="saas-domestic-checkout-qr">
+            <img src="${escapeHtml(checkout.qr_image_data_url)}" alt="素材点微信支付二维码" width="220" height="220">
+          </div>
+          <div class="saas-domestic-checkout-copy">
+            <span>微信扫码购买素材点</span>
+            <strong>¥${escapeHtml((Number(checkout.amount_minor || 0) / 100).toFixed(2).replace(/\.00$/, ""))} · ${Number(checkout.media_points || 0).toLocaleString("zh-CN")} 素材点</strong>
+            <p>页面会自动确认到账并发放素材点；二维码通常在 15 分钟内有效。不会改变软件套餐，也不会自动续费。</p>
+            <div class="saas-domestic-order-actions">
+              <button class="primary-action compact-action" type="button" data-saas-action="domestic-billing-query-order" data-domestic-order-id="${escapeHtml(checkout.order_id || "")}">我已付款</button>
+              <button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-close-order" data-domestic-order-id="${escapeHtml(checkout.order_id || "")}">取消本次付款</button>
+            </div>
+          </div>
+        </div>
+      ` : ""}
+      ${mediaOrders.length ? `
+        <details class="saas-media-credit-history">
+          <summary>最近素材点订单</summary>
+          <div class="saas-settings-row-list">
+            ${mediaOrders.slice(0, 5).map((order) => `
+              <article class="${order.status === "paid" ? "is-green" : order.status === "pending_payment" ? "is-amber" : ""}">
+                <div>
+                  <span>${escapeHtml(saasDomesticBillingStatusLabel(order.status))}</span>
+                  <strong>${escapeHtml(order.display_name || `${Number(order.media_points || 0).toLocaleString("zh-CN")} 素材点`)}</strong>
+                  <small>¥${escapeHtml((Number(order.amount_minor || 0) / 100).toFixed(2).replace(/\.00$/, ""))} · ${escapeHtml(saasDomesticBillingDateLabel(order.paid_at || order.created_at) || "刚刚更新")}</small>
+                </div>
+                <div class="saas-domestic-order-actions">
+                  ${order.can_continue_payment ? `<button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-continue-order" data-domestic-order-id="${escapeHtml(order.order_id || "")}">继续付款</button>` : ""}
+                  ${order.status === "pending_payment" ? `<button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-query-order" data-domestic-order-id="${escapeHtml(order.order_id || "")}">刷新状态</button>` : ""}
+                  ${order.can_request_refund ? `<button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-refund-request" data-domestic-order-id="${escapeHtml(order.order_id || "")}">申请退款</button>` : ""}
+                </div>
+              </article>
+            `).join("")}
+          </div>
+        </details>
+      ` : ""}
+      ${recent.length
+        ? `
+          <details class="saas-media-credit-history">
+            <summary>最近素材点记录</summary>
+            <div class="saas-settings-row-list">
+              ${recent
+                .map((entry) => `
+                  <article class="${entry.operation_type === "release" || entry.operation_type === "grant" ? "is-green" : ""}">
+                    <div>
+                      <span>${escapeHtml(operationLabels[entry.operation_type] || "素材任务")}</span>
+                      <strong>${Number(entry.points || 0).toLocaleString("zh-CN")} 点</strong>
+                      <small>${escapeHtml(entry.created_at || "")} · ${escapeHtml(entry.status || "已记录")}</small>
+                    </div>
+                  </article>
+                `)
+                .join("")}
+            </div>
+          </details>
+        `
+        : ""}
+      <div class="saas-settings-safety" hidden aria-hidden="true">
+        <span>merchant_media_points_v1</span>
+        <span>frontend_can_grant_points=false</span>
+        <span>purchase_open=${purchaseOpen}</span>
+        <span>replaceable_media_service_hidden=true</span>
+        <span>frontend_gets_payment_secret=false</span>
+      </div>
+    </section>
+  `;
+}
+
+function saasDomesticBillingDateLabel(value) {
+  const parsed = new Date(value || "");
+  if (Number.isNaN(parsed.getTime())) return "";
+  return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(parsed);
+}
+
+function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchContext()) {
+  const billing = saasMerchantBillingGuardrailState();
+  const domesticBilling = saasMerchantDomesticBillingState();
+  const online = domesticBilling.online;
+  const subscription = state.saasBillingUsage?.subscription && typeof state.saasBillingUsage.subscription === "object"
+    ? state.saasBillingUsage.subscription
+    : {};
+  const subscriptionPlanKey = normalizePlanKey(subscription.plan_key || "");
+  const selectedCheckoutPlanKey = ["starter", "operator", "team"].includes(normalizePlanKey(state.selectedPlan))
+    ? normalizePlanKey(state.selectedPlan)
+    : "starter";
+  const checkoutPlanKey = billing.entitlementActive && ["starter", "operator", "team"].includes(subscriptionPlanKey)
+    ? subscriptionPlanKey
+    : selectedCheckoutPlanKey;
+  const checkoutPlan = planDetails[checkoutPlanKey] || planDetails.starter;
+  const entitlementActive = Boolean(billing.entitlementActive);
+  const activeUntil = String(subscription.active_until || "").trim();
+  const activeUntilLabel = activeUntil ? String(activeUntil).slice(0, 10) : "当前套餐有效期以订阅状态为准";
+  const paymentOrders = (Array.isArray(state.saasDomesticBillingOrders) ? state.saasDomesticBillingOrders : []).filter(
+    (item) => item?.purchase_type !== "media_points",
+  );
+  const trialOrders = Array.isArray(state.saasManualBetaPaymentOrders) ? state.saasManualBetaPaymentOrders : [];
+  const pendingTrial = trialOrders.find((item) => item?.status === "pending_manual_payment_confirmation") || null;
+  const pendingPayment = paymentOrders.find((item) => item?.status === "pending_payment" && item?.checkout_expired !== true) || null;
+  const checkout = state.saasDomesticBillingCheckout?.purchase_type !== "media_points" && state.saasDomesticBillingCheckout?.qr_image_data_url
+    ? state.saasDomesticBillingCheckout
+    : null;
+  const status = entitlementActive
+    ? "套餐可用"
+    : checkout || pendingPayment
+      ? "等待微信付款"
+      : pendingTrial
+        ? "试用申请待确认"
+        : online
+          ? "微信支付可用"
+          : "在线付款暂未开放";
+  const actionDisabled = state.saasLoading || entitlementActive || Boolean(pendingTrial) ? "disabled" : "";
+  const actionLabel = entitlementActive ? "套餐已开通" : pendingTrial ? "试用申请已提交" : "申请免费试用";
+  const rows = [
+    ["当前状态", status, online ? (entitlementActive ? `当前套餐有效期至 ${activeUntilLabel}。` : "微信扫码付款，到账后自动开通套餐和额度。") : "当前不会自动扣款，也不会生成可付款二维码。"],
+    [checkoutPlan.title, checkoutPlan.price, "单次购买 30 天，不会自动续费；再次购买前会重新确认。"],
+    ["生效时间", online ? "付款成功后自动开通" : "试用资格确认后开通", online ? "系统只以微信支付签名回调或安全查单结果为准。" : "当前不会创建付款二维码，也不会自动扣费。"],
+  ];
+  const orderMarkup = paymentOrders.slice(0, 5).map((order) => {
+    const orderStatus = String(order?.status || "");
+    const amount = (Number(order?.amount_minor || 0) / 100).toFixed(2).replace(/\.00$/, "");
+    const time = saasDomesticBillingDateLabel(order?.paid_at || order?.created_at);
+    const canContinue = online && order?.can_continue_payment === true;
+    const canClose = order?.can_close === true;
+    const canRefund = order?.can_request_refund === true;
+    const statusLabel = order?.checkout_expired === true && orderStatus === "pending_payment"
+      ? "二维码已过期"
+      : saasDomesticBillingStatusLabel(orderStatus);
+    return `
+      <article class="is-${orderStatus === "paid" ? "green" : orderStatus === "pending_payment" ? "amber" : "neutral"}">
+        <div>
+          <span>${escapeHtml(statusLabel)}</span>
+          <strong>${escapeHtml(order.display_name || "捷境基础版 30 天")}</strong>
+          <small>¥${escapeHtml(amount)} · ${escapeHtml(time || "刚刚更新")}</small>
+          <small>订单号：${escapeHtml(order.order_id || "待生成")}</small>
+          ${order.payment_record_available ? `<small>支付记录已保存；订单记录不等同税务发票。</small>` : ""}
+        </div>
+        <div class="saas-domestic-order-actions">
+          ${canContinue ? `<button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-continue-order" data-domestic-order-id="${escapeHtml(order.order_id || "")}">继续付款</button>` : ""}
+          ${orderStatus === "pending_payment" ? `<button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-query-order" data-domestic-order-id="${escapeHtml(order.order_id || "")}">刷新状态</button>` : ""}
+          ${canClose ? `<button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-close-order" data-domestic-order-id="${escapeHtml(order.order_id || "")}">取消本次付款</button>` : ""}
+          ${canRefund ? `<button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-refund-request" data-domestic-order-id="${escapeHtml(order.order_id || "")}">申请退款</button>` : ""}
+        </div>
+      </article>
+    `;
+  }).join("");
+  return `
+    <section class="saas-settings-card saas-merchant-subscription-activation" data-subscription-activation="merchant_domestic_payment_path_v1" aria-label="订阅开通">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>订阅开通</span>
+          <strong>${escapeHtml(online ? "微信扫码开通，付款成功后自动生效" : "先使用试用套餐，在线付款开放后可微信扫码")}</strong>
+          <p>${escapeHtml(online ? "捷境只接收支付结果，不保存银行卡、身份证或支付密钥；未付款订单可以随时取消。" : "当前不会自动扣款。在线付款开放后，付款成功并经后台确认，所选软件套餐权益会自动生效。")}</p>
+        </div>
+        <em>${escapeHtml(status)}</em>
+      </div>
+      <div class="saas-billing-transition-status" aria-label="订阅状态">
+        ${rows.map(([label, title, detail]) => `
+          <article>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(title)}</strong>
+            <small>${escapeHtml(detail)}</small>
+          </article>
+        `).join("")}
+      </div>
+      ${online && !entitlementActive && !checkout && !pendingPayment ? `
+        <div class="saas-subscription-plan-choices" aria-label="选择要开通的软件套餐">
+          <div class="saas-subscription-plan-choice-head">
+            <strong>选择要开通的软件套餐</strong>
+            <small>套餐只包含捷境软件使用权，商家模型和素材点分开结算。</small>
+          </div>
+          <div class="saas-subscription-plan-choice-grid">
+            <button class="${checkoutPlanKey === "starter" ? "is-selected" : ""}" type="button" data-saas-action="domestic-billing-select-plan" data-domestic-plan-key="starter" aria-pressed="${checkoutPlanKey === "starter"}">
+              <span>基础版</span><strong>¥99 / 30 天</strong><small>1 店铺 · 2 席位 · 100 个经营任务</small>
+            </button>
+            <button class="${checkoutPlanKey === "operator" ? "is-selected" : ""}" type="button" data-saas-action="domestic-billing-select-plan" data-domestic-plan-key="operator" aria-pressed="${checkoutPlanKey === "operator"}">
+              <span>运营版</span><strong>¥199 / 30 天</strong><small>3 店铺 · 5 席位 · 500 个经营任务</small>
+            </button>
+            <button class="${checkoutPlanKey === "team" ? "is-selected" : ""}" type="button" data-saas-action="domestic-billing-select-plan" data-domestic-plan-key="team" aria-pressed="${checkoutPlanKey === "team"}">
+              <span>团队版</span><strong>¥299 / 30 天</strong><small>5 店铺 · 5 席位 · 1500 个经营任务</small>
+            </button>
+          </div>
+        </div>
+      ` : ""}
+      ${checkout ? `
+        <div class="saas-domestic-checkout" data-domestic-checkout="wechat_native_qr_checkout_v1">
+          <div class="saas-domestic-checkout-qr">
+            <img src="${escapeHtml(checkout.qr_image_data_url)}" alt="微信支付二维码" width="220" height="220">
+          </div>
+          <div class="saas-domestic-checkout-copy">
+            <span>微信扫码付款</span>
+            <strong>¥${escapeHtml((Number(checkout.amount_minor || 9900) / 100).toFixed(2).replace(/\.00$/, ""))} · ${escapeHtml(checkout.duration_days || 30)} 天</strong>
+            <p>请使用微信扫码完成付款。页面会自动确认到账；二维码通常在 15 分钟内有效。</p>
+            <div class="saas-domestic-order-actions">
+              <button class="primary-action compact-action" type="button" data-saas-action="domestic-billing-query-order" data-domestic-order-id="${escapeHtml(checkout.order_id || "")}">我已付款</button>
+              <button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-close-order" data-domestic-order-id="${escapeHtml(checkout.order_id || "")}">取消本次付款</button>
+            </div>
+          </div>
+        </div>
+      ` : online && pendingPayment && !checkout ? `
+        <div class="saas-domestic-checkout saas-domestic-checkout-recovery" data-payment-recovery="merchant_pending_payment_recovery_v1">
+          <div class="saas-domestic-checkout-copy">
+            <span>待付款订单</span>
+            <strong>继续上一笔付款</strong>
+            <p>刷新或更换设备后，订单仍保留在当前捷境账号。请继续原订单、刷新状态或取消，不需要重复创建订单。</p>
+            <div class="saas-domestic-order-actions">
+              ${pendingPayment.can_continue_payment ? `<button class="primary-action compact-action" type="button" data-saas-action="domestic-billing-continue-order" data-domestic-order-id="${escapeHtml(pendingPayment.order_id || "")}">继续上一笔付款</button>` : ""}
+              <button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-query-order" data-domestic-order-id="${escapeHtml(pendingPayment.order_id || "")}">刷新付款状态</button>
+              ${pendingPayment.can_close ? `<button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-close-order" data-domestic-order-id="${escapeHtml(pendingPayment.order_id || "")}">取消本次付款</button>` : ""}
+            </div>
+          </div>
+        </div>
+      ` : online && entitlementActive && !checkout ? `
+        <div class="saas-domestic-checkout saas-domestic-renewal" data-subscription-renewal="merchant_confirmed_renewal_v1">
+          <div class="saas-domestic-checkout-copy">
+            <span>当前套餐有效期</span>
+            <strong>${escapeHtml(activeUntilLabel)}</strong>
+            <p>续购当前套餐会把新的 30 天顺延到现有有效期之后，不覆盖剩余天数；每次仍需主动扫码确认，不会自动扣款。</p>
+            <div class="saas-domestic-order-actions">
+              <button class="primary-action compact-action" type="button" data-saas-action="domestic-billing-create-order" data-domestic-plan-key="${escapeHtml(checkoutPlanKey)}" ${state.saasLoading ? "disabled" : ""}>续购当前套餐</button>
+            </div>
+          </div>
+        </div>
+      ` : online && !entitlementActive && !pendingPayment ? `
+        <div class="saas-manual-beta-payment-actions">
+          <button class="primary-action compact-action" type="button" data-saas-action="domestic-billing-create-order" data-domestic-plan-key="${escapeHtml(checkoutPlanKey)}" ${state.saasLoading ? "disabled" : ""}>微信扫码开通 ${escapeHtml(checkoutPlan.title)}</button>
+        </div>
+      ` : !online ? `
+        <div class="saas-manual-beta-payment-actions">
+          <button class="primary-action compact-action" type="button" data-saas-action="manual-beta-create-order" data-manual-beta-plan-key="starter" ${actionDisabled}>${escapeHtml(actionLabel)}</button>
+        </div>
+      ` : ""}
+      ${orderMarkup ? `
+        <div class="saas-domestic-order-list">
+          <div class="saas-domestic-order-list-head">
+            <strong>最近订单</strong>
+            <small>付款、取消和退款状态会保留在当前账号。</small>
+          </div>
+          ${orderMarkup}
+        </div>
+      ` : ""}
+      <div hidden aria-hidden="true">
+        <span>merchant_domestic_payment_path_v1</span>
+        <span>wechat_native_qr_checkout_v1</span>
+        <span>real_checkout_ready=${online}</span>
+        <span>backend_confirmation_required_before_entitlement=true</span>
+        <span>raw_provider_payment_uri_visible=false</span>
+        <span>frontend_gets_payment_secret=false</span>
+        <span>secret_exposed=false</span>
+        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
+      </div>
+    </section>
+  `;
+}
+
 function renderSaasMerchantBillingEntitlementPathPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
+  const domesticBilling = saasMerchantDomesticBillingState();
   const path = billing.merchantLaunchPath || {};
-  const steps = Array.isArray(path.steps) && path.steps.length
+  const steps = domesticBilling.configuredPath
+    ? [
+        {
+          key: "current_charge_status",
+          label: "当前是否扣费",
+          title: domesticBilling.online ? "微信扫码付款可用" : "当前不会自动扣费",
+          detail: domesticBilling.online ? "只有商家主动创建并扫码的订单才会付款。" : "公开付款开关关闭时，不会生成可付款二维码。",
+          ready: true,
+        },
+        {
+          key: "wechat_native_qr_payment",
+          label: "付款方式",
+          title: "商家主动微信扫码",
+          detail: "每次购买 30 天，不输入银行卡，不会自动续费或自动扣款。",
+          ready: domesticBilling.online,
+        },
+        {
+          key: "backend_confirmation_before_entitlement",
+          label: "权益生效",
+          title: "系统确认到账后开通",
+          detail: "只以微信支付签名回调或安全查单结果为准，浏览器不能自行开通权益。",
+          ready: Boolean(billing.entitlementActive),
+        },
+        {
+          key: "merchant_confirmed_renewal",
+          label: "到期续购",
+          title: "到期后由商家自主续购",
+          detail: "续购前再次确认价格和期限，不设置自动扣款。",
+          ready: true,
+        },
+      ]
+    : Array.isArray(path.steps) && path.steps.length
     ? path.steps.slice(0, 4)
     : [
         {
@@ -31405,15 +32407,18 @@ function renderSaasMerchantBillingEntitlementPathPanel(ctx = saasMerchantWorkben
           ready: Boolean(billing.quotaEnforcementEnabled),
         },
       ];
-  const stageLabel =
-    path.current_stage === "online_subscription_ready"
+  const stageLabel = domesticBilling.configuredPath
+    ? domesticBilling.online ? "微信支付可用" : "微信支付待开放"
+    : path.current_stage === "online_subscription_ready"
       ? "在线订阅可用"
       : path.current_stage === "service_confirmed_trial"
         ? "试用确认开通"
         : path.current_stage === "invited_beta_no_real_charge"
           ? "受邀试用"
           : "暂未自动扣费";
-  const headline = path.headline || (billing.entitlementActive ? "订阅已生效，额度受系统保护" : "当前不会自动扣费，订阅确认后才发放额度");
+  const headline = domesticBilling.configuredPath
+    ? domesticBilling.online ? "微信付款由商家主动发起，到账后系统开通权益" : "微信支付链路已配置，公开付款开关仍关闭"
+    : path.headline || (billing.entitlementActive ? "订阅已生效，额度受系统保护" : "当前不会自动扣费，订阅确认后才发放额度");
   const ruleRows = [
     ["资料安全", "支付资料不进入浏览器", "页面只显示状态，不保存卡号、支付凭证或密钥。"],
     ["恢复方式", "账单恢复不重连店铺或 AI", "处理订阅状态即可恢复符合条件的权益，不要求重新连接店铺或重新配置 AI。"],
@@ -31424,8 +32429,8 @@ function renderSaasMerchantBillingEntitlementPathPanel(ctx = saasMerchantWorkben
       <div class="saas-settings-card-head">
         <div>
           <span>订阅和额度生效方式</span>
-          <strong>先确认订阅，再开通权益和额度</strong>
-          <p>${escapeHtml(headline)}。这里说明商家会看到的生效顺序：当前是否扣费、正式付款去哪里完成、订阅什么时候生效、额度由谁发放。</p>
+          <strong>${escapeHtml(domesticBilling.configuredPath ? "主动扫码付款，系统确认后开通" : "先确认订阅，再开通权益和额度")}</strong>
+          <p>${escapeHtml(headline)}。这里说明商家会看到的顺序：当前是否扣费、如何付款、权益什么时候生效、到期如何续购。</p>
         </div>
         <em>${escapeHtml(stageLabel)}</em>
       </div>
@@ -31458,7 +32463,7 @@ function renderSaasMerchantBillingEntitlementPathPanel(ctx = saasMerchantWorkben
       <div class="saas-billing-transition-safety" hidden aria-hidden="true">
         <span>merchant_billing_launch_path_v1</span>
         <span>merchant_launch_path_contract=${escapeHtml(path.contract_version || "fallback")}</span>
-        <span>hosted_payment_page_required_for_formal_payment=true</span>
+        <span>payment_page_mode=${escapeHtml(domesticBilling.configuredPath ? "wechat_native_qr" : "hosted_provider_page")}</span>
         <span>backend_confirmation_required_before_entitlement=true</span>
         <span>frontend_cannot_grant_entitlement_or_quota</span>
         <span>quota_grant_source=backend_subscription_state</span>
@@ -31466,7 +32471,7 @@ function renderSaasMerchantBillingEntitlementPathPanel(ctx = saasMerchantWorkben
         <span>history_visible_after_billing_problem=true</span>
         <span>metered_work_only_blocks_on_billing_problem=true</span>
         <span>triggers_real_charge=false</span>
-        <span>charge_now_allowed=false</span>
+        <span>charge_now_allowed=${escapeHtml(String(domesticBilling.online))}</span>
         <span>frontend_gets_payment_secret=false</span>
         <span>secret_exposed=false</span>
         <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
@@ -31477,47 +32482,75 @@ function renderSaasMerchantBillingEntitlementPathPanel(ctx = saasMerchantWorkben
 
 function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
-  const hasExternalProvider = Boolean(billing.provider.external_paid_provider_configured);
+  const domesticBilling = saasMerchantDomesticBillingState();
+  const hasExternalProvider = domesticBilling.online || Boolean(billing.provider.external_paid_provider_configured);
   const manualBetaMode = Boolean(
     billing.provider.manual_beta_private_provider_configured ||
       billing.subscription?.provider === "manual_beta" ||
       state.saasManualBetaPaymentOrders?.length,
   );
   const quotaReady = Boolean(billing.quotaEnforcementEnabled);
-  const pathRows = [
-    {
-      label: "现在",
-      title: "当前不会自动扣费",
-      detail: "页面只显示订阅状态和套餐说明；在线付款入口未开放前，不会主动向商家扣款。",
-      tone: manualBetaMode ? "green" : "amber",
-    },
-    {
-      label: "开通",
-      title: "按客服指引开通订阅",
-      detail: "付款或试用资格确认后，系统更新基础订阅和套餐额度；页面只展示结果，不展示后台处理细节。",
-      tone: manualBetaMode || hasExternalProvider ? "green" : "amber",
-    },
-    {
-      label: "以后",
-      title: "在线付款会在安全支付页完成",
-      detail: "正式开放在线付款后，商家在安全付款页完成支付；捷境根据后台确认开通套餐和额度。",
-      tone: hasExternalProvider ? "green" : "amber",
-    },
-    {
-      label: "额度",
-      title: "订阅状态驱动发放和停用",
-      detail: "开通、续费、取消、付款失败和退款争议按系统账单状态处理；额度只停高成本任务，历史资料和确认记录保留。",
-      tone: quotaReady ? "green" : "amber",
-    },
-  ];
+  const pathRows = domesticBilling.configuredPath
+    ? [
+        {
+          label: "现在",
+          title: domesticBilling.online ? "微信扫码付款可用" : "公开付款开关仍关闭",
+          detail: domesticBilling.online ? "商家主动创建订单后才生成微信付款二维码。" : "链路已配置，但不会向商家生成可付款二维码。",
+          tone: domesticBilling.online ? "green" : "amber",
+        },
+        {
+          label: "付款",
+          title: "商家主动微信扫码",
+          detail: "每次购买 30 天，不输入银行卡，不会自动续费或自动扣款。",
+          tone: domesticBilling.online ? "green" : "amber",
+        },
+        {
+          label: "到账",
+          title: "后端验签确认后开通",
+          detail: "只以微信支付签名回调或安全查单结果为准，浏览器不能自行发放权益。",
+          tone: billing.entitlementActive ? "green" : "amber",
+        },
+        {
+          label: "续购",
+          title: "到期后由商家自主续购",
+          detail: "再次购买前重新确认价格和期限，不设置自动扣款。",
+          tone: "green",
+        },
+      ]
+    : [
+        {
+          label: "现在",
+          title: "当前不会自动扣费",
+          detail: "页面只显示订阅状态和套餐说明；在线付款入口未开放前，不会主动向商家扣款。",
+          tone: manualBetaMode ? "green" : "amber",
+        },
+        {
+          label: "开通",
+          title: "按客服指引开通订阅",
+          detail: "付款或试用资格确认后，系统更新基础订阅和套餐额度；页面只展示结果，不展示后台处理细节。",
+          tone: manualBetaMode || hasExternalProvider ? "green" : "amber",
+        },
+        {
+          label: "以后",
+          title: "在线付款由已接入的支付方式完成",
+          detail: "正式开放在线付款后，捷境只根据后端确认的支付结果开通套餐和额度。",
+          tone: hasExternalProvider ? "green" : "amber",
+        },
+        {
+          label: "额度",
+          title: "订阅状态驱动发放和停用",
+          detail: "开通、续费、取消、付款失败和退款争议按系统账单状态处理；额度只停高成本任务，历史资料和确认记录保留。",
+          tone: quotaReady ? "green" : "amber",
+        },
+      ];
   const grantRows = [
     ["订阅开通", "后台确认后生效", "付款或试用资格确认后写入订阅状态和套餐额度。"],
     ["用量发放", "按套餐额度更新", "AI、联网报告和素材生成只按套餐额度或实际用量消耗。"],
     ["安全边界", "浏览器不保存支付资料", "页面不保存卡号、证件、银行卡或支付密钥。"],
   ];
   const statusRows = [
-    ["当前状态", hasExternalProvider ? "在线付款已接入" : manualBetaMode ? "试用订阅可用" : "暂不自动扣费", hasExternalProvider ? "付款成功后按账单状态开通权益。" : "当前不会自动扣款，订阅开通需按页面或客服提示完成。"],
-    ["付费开放", hasExternalProvider ? "可按套餐付款" : "逐步开放", hasExternalProvider ? "商家可从订阅页进入付款流程。" : "在线付款入口开放前，页面只显示订阅说明和可用额度。"],
+    ["当前状态", domesticBilling.online ? "微信扫码付款可用" : hasExternalProvider ? "在线付款已接入" : manualBetaMode ? "试用订阅可用" : "暂不自动扣费", domesticBilling.online ? "订单到账并由后端确认后开通 30 天权益。" : hasExternalProvider ? "付款成功后按账单状态开通权益。" : "当前不会自动扣款，订阅开通需按页面或客服提示完成。"],
+    ["付费开放", domesticBilling.online ? "单次购买 30 天" : hasExternalProvider ? "可按套餐付款" : "逐步开放", domesticBilling.online ? "商家每次主动扫码购买，不会自动续费。" : hasExternalProvider ? "商家可从订阅页进入付款流程。" : "在线付款入口开放前，页面只显示订阅说明和可用额度。"],
     ["恢复边界", "不重复连接店铺 / 不重填 AI 连接", "账单恢复只处理订阅状态，不要求商家重新连接店铺或重新输入 AI 连接。"],
   ];
   return `
@@ -31525,8 +32558,8 @@ function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext
       <div class="saas-settings-card-head">
         <div>
           <span>订阅开通说明</span>
-          <strong>先看当前是否扣费，再看订阅和额度怎么生效</strong>
-          <p>商家只需要知道当前会不会自动扣费、如何开通套餐、额度什么时候生效。支付接入细节不会出现在这里。</p>
+          <strong>${escapeHtml(domesticBilling.configuredPath ? "微信扫码、到账确认、权益开通和自主续购" : "先看当前是否扣费，再看订阅和额度怎么生效")}</strong>
+          <p>${escapeHtml(domesticBilling.configuredPath ? "商家主动创建订单并扫码；系统确认到账后开通 30 天权益，到期后由商家决定是否再次购买。" : "商家只需要知道当前会不会自动扣费、如何开通套餐、额度什么时候生效。支付接入细节不会出现在这里。")}</p>
         </div>
         <em>${escapeHtml(hasExternalProvider ? "在线付款可用" : manualBetaMode ? "试用订阅可用" : "暂未自动扣费")}</em>
       </div>
@@ -31577,6 +32610,8 @@ function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext
         <span>static_qr_never_paid_launch_provider</span>
         <span>no_repeat_oauth_for_billing_recovery</span>
         <span>no_model_key_reentry_for_billing_recovery</span>
+        <span>payment_mode=${escapeHtml(domesticBilling.configuredPath ? "wechat_native_qr" : "external_provider")}</span>
+        <span>renewal_mode=${escapeHtml(domesticBilling.configuredPath ? "merchant_confirmed_one_time_30_day" : "provider_subscription")}</span>
         <span>triggers_real_charge=false</span>
         <span>frontend_gets_payment_secret=false</span>
         <span>secret_exposed=false</span>
@@ -32489,22 +33524,25 @@ function renderSaasManualBetaPaymentOrderPanel() {
 
 function renderSaasMerchantFormalPaymentOpeningChecklistPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
-  const hasExternalProvider = Boolean(billing.provider.external_paid_provider_configured);
-  const stateLabel = hasExternalProvider ? "在线付款可用" : billing.entitlementActive ? "试用已开通" : "当前不自动扣费";
-  const stateDetail = hasExternalProvider
-    ? "正式付款会跳转到安全支付页完成；捷境只接收支付结果和订阅状态。"
+  const domesticBilling = saasMerchantDomesticBillingState();
+  const hasExternalProvider = domesticBilling.online || Boolean(billing.provider.external_paid_provider_configured);
+  const stateLabel = domesticBilling.online ? "微信扫码付款可用" : hasExternalProvider ? "在线付款可用" : billing.entitlementActive ? "试用已开通" : "当前不自动扣费";
+  const stateDetail = domesticBilling.online
+    ? "商家主动创建订单并微信扫码；捷境只在后端确认到账后开通 30 天权益。"
+    : hasExternalProvider
+    ? "正式付款由已接入的支付方式完成；捷境只接收支付结果和订阅状态。"
     : "现在只展示套餐、试用和额度规则；不会自动扣费，也不会保存付款资料。";
   const checklist = [
     {
       label: "付款前",
-      title: "先看清价格、周期、取消和额度边界",
-      detail: "付款按钮开放前，商家必须能看到套餐价格、计费周期、续费规则、取消入口，以及 AI/素材用量是否另算。",
+      title: "先看清价格、期限、续购和额度边界",
+      detail: "付款按钮开放前，商家必须能看到套餐价格、30 天期限、续购规则，以及 AI/素材用量是否另算。",
       tone: "green",
     },
     {
       label: "付款页",
-      title: "正式开放后跳转安全支付页",
-      detail: "卡号、支付资料和付款凭证由支付平台处理；捷境页面只展示跳转入口、订单状态和客服入口。",
+      title: domesticBilling.configuredPath ? "商家主动微信扫码" : "付款由已接入的支付方式完成",
+      detail: domesticBilling.configuredPath ? "捷境页面只展示本次订单二维码、订单状态和客服入口，不保存支付密钥。" : "支付资料和付款凭证由支付平台处理；捷境页面只展示入口、订单状态和客服入口。",
       tone: hasExternalProvider ? "green" : "amber",
     },
     {
@@ -32522,7 +33560,7 @@ function renderSaasMerchantFormalPaymentOpeningChecklistPanel(ctx = saasMerchant
   ];
   const stateRows = [
     ["现在状态", stateLabel, stateDetail],
-    ["订阅管理", "未来提供自助管理入口", "商家可查看续费、取消、付款失败处理、发票、退款政策和客服入口。"],
+    ["订阅管理", domesticBilling.configuredPath ? "到期自主续购" : "未来提供自助管理入口", domesticBilling.configuredPath ? "商家可查看订单、30 天有效期、再次购买、发票申请、退款政策和客服入口。" : "商家可查看续费、取消、付款失败处理、发票、退款政策和客服入口。"],
     ["额度发放", "以后端订阅状态为准", "前端不能自己发放权益或额度，也不能绕过账单状态继续跑高成本任务。"],
   ];
   return `
@@ -32530,8 +33568,8 @@ function renderSaasMerchantFormalPaymentOpeningChecklistPanel(ctx = saasMerchant
       <div class="saas-settings-card-head">
         <div>
           <span>付款开通前检查</span>
-          <strong>先把订阅、付款和额度规则说清楚，再开放正式支付</strong>
-          <p>这块给商家看，不展示内部支付配置。正式收费开放前，页面必须先说明价格、周期、取消、客服、退款、额度和安全支付边界。</p>
+          <strong>先把价格、付款、有效期和额度规则说清楚，再开放正式支付</strong>
+          <p>这块不展示内部支付配置。正式收费开放前，页面必须先说明价格、30 天期限、续购、客服、退款、额度和支付安全边界。</p>
         </div>
         <em>${escapeHtml(stateLabel)}</em>
       </div>
@@ -32563,11 +33601,11 @@ function renderSaasMerchantFormalPaymentOpeningChecklistPanel(ctx = saasMerchant
       </div>
       <div class="saas-formal-payment-opening-safety" hidden aria-hidden="true">
         <span>merchant_formal_payment_opening_checklist_v1</span>
-        <span>stripe_billing_checkout_sessions_mode_subscription</span>
-        <span>customer_portal_for_subscription_changes</span>
+        <span>payment_mode=${escapeHtml(domesticBilling.configuredPath ? "wechat_native_qr" : "external_provider")}</span>
+        <span>renewal_mode=${escapeHtml(domesticBilling.configuredPath ? "merchant_confirmed_one_time_30_day" : "provider_subscription")}</span>
         <span>signed_webhook_or_order_query_before_entitlement</span>
         <span>price_terms_visible_before_checkout</span>
-        <span>hosted_checkout_payment_boundary</span>
+        <span>provider_confirmed_payment_boundary</span>
         <span>frontend_cannot_grant_entitlement_or_quota</span>
         <span>no_repeat_ebay_oauth_for_billing_recovery</span>
         <span>no_model_key_reentry_for_billing_recovery</span>
@@ -32656,6 +33694,7 @@ function renderSaasMerchantBillingContinuityPanel(ctx = saasMerchantWorkbenchCon
 
 function renderSaasMerchantBillingIncidentRunbookPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
+  const domesticBilling = saasMerchantDomesticBillingState();
   const runbook = billing.incidentRunbook && typeof billing.incidentRunbook === "object" ? billing.incidentRunbook : {};
   const cards = Array.isArray(runbook.cards) ? runbook.cards.filter(Boolean) : [];
   const fallbackCards = [
@@ -32684,23 +33723,48 @@ function renderSaasMerchantBillingIncidentRunbookPanel(ctx = saasMerchantWorkben
       operator_action: "真实退款和争议只在支付 provider 后台处理，捷境只记录状态和审计。",
     },
   ];
-  const visibleCards = cards.length ? cards : fallbackCards;
-  const readyText = `${Number(runbook.ready_count || 0)}/${Number(runbook.total_count || visibleCards.length)} ready`;
-  const status = runbook.blocked_count ? "仍需 live 证据" : "处理链路已闭合";
+  const domesticCards = [
+    {
+      key: "wechat_order_expired",
+      status: "ready",
+      title: "二维码过期 / 未付款",
+      visible_result: "订单保持未付款或关闭，不开通权益。",
+      operator_action: "商家需要时重新创建订单；不要复用已过期二维码。",
+    },
+    {
+      key: "wechat_callback_delayed",
+      status: "ready",
+      title: "回调延迟",
+      visible_result: "前端继续显示处理中，不自行判定已付款。",
+      operator_action: "后端用商户订单号安全查单，确认后再开通权益。",
+    },
+    {
+      key: "refund_or_dispute",
+      status: "ready",
+      title: "退款 / 争议",
+      visible_result: "先进入审核，暂停新的高成本任务，历史资料继续保留。",
+      operator_action: "只由后端调用支付平台退款并记录审计，前端不能直接退款。",
+    },
+  ];
+  const visibleCards = domesticBilling.configuredPath ? domesticCards : cards.length ? cards : fallbackCards;
+  const readyText = domesticBilling.configuredPath ? `${domesticCards.length}/${domesticCards.length} 已定义` : `${Number(runbook.ready_count || 0)}/${Number(runbook.total_count || visibleCards.length)} ready`;
+  const status = domesticBilling.configuredPath ? "微信支付异常链路" : runbook.blocked_count ? "仍需 live 证据" : "处理链路已闭合";
   const copy = {
     customer_portal_change: ["自助订阅变更", "Customer Portal 只负责 provider 侧变更；捷境等签名 webhook 后更新权益。"],
     payment_failed: ["付款失败", "欠费会进入 payment attention，高成本任务暂停，历史资料不删除。"],
     subscription_cancelled: ["订阅取消", "取消后 entitlement inactive；恢复必须走 provider 或内部管理员确认。"],
     refund_or_dispute: ["退款 / 争议", "真实退款、拒付和争议不在前端执行，只由 provider 后台和审计记录处理。"],
     quota_hard_stop: ["额度强停", "后端 quota 判断阻断 metered work，前端不能绕过。"],
+    wechat_order_expired: ["二维码过期 / 未付款", "未确认到账就不开通权益；商家可重新创建订单。"],
+    wechat_callback_delayed: ["回调延迟", "保持处理中，并由后端安全查单确认最终状态。"],
   };
   return `
     <section class="saas-settings-card saas-merchant-billing-incident-runbook" data-billing-incident-runbook="merchant_billing_incident_runbook_v1" aria-label="账单异常处理">
       <div class="saas-settings-card-head">
         <div>
           <span>账单异常处理</span>
-          <strong>Portal 变更、欠费、取消、退款和争议都要先有后端证据</strong>
-          <p>这张卡把正式收费后最容易出事故的账单状态拆清楚：商家可以自助管理订阅，但权益发放、停用、退款/争议状态必须来自签名 webhook、后端查单或主理人确认，不能由浏览器直接发放或恢复。</p>
+          <strong>${escapeHtml(domesticBilling.configuredPath ? "未付款、回调延迟、退款和争议都由后端确认" : "订阅变更、欠费、取消、退款和争议都要先有后端证据")}</strong>
+          <p>${escapeHtml(domesticBilling.configuredPath ? "微信支付只在签名回调或安全查单确认后开通权益；未付款、超时、退款和争议都不能由浏览器直接改变账单或权益。" : "正式收费后的权益发放、停用、退款和争议状态必须来自签名 webhook、后端查单或主理人确认，不能由浏览器直接发放或恢复。")}</p>
         </div>
         <em>${escapeHtml(`${status} · ${readyText}`)}</em>
       </div>
@@ -32722,17 +33786,17 @@ function renderSaasMerchantBillingIncidentRunbookPanel(ctx = saasMerchantWorkben
       </div>
       <div class="saas-merchant-billing-incident-note">
         <strong>运营边界</strong>
-        <p>退款、争议、付款方式和发票问题不在捷境前端执行。捷境只接收 provider 签名结果、更新订阅/quota 状态、保留审计，并把真实退款、拒付处理和付款方式管理留在支付平台后台。</p>
+        <p>${escapeHtml(domesticBilling.configuredPath ? "退款、争议和发票问题不在捷境前端直接执行。捷境只接收微信支付签名结果、更新权益状态并保留审计；真实退款仍需审核。" : "退款、争议、付款方式和发票问题不在捷境前端执行。捷境只接收支付平台签名结果、更新订阅和额度状态并保留审计。")}</p>
       </div>
       <div class="saas-merchant-billing-incident-safety" hidden aria-hidden="true">
         <span>merchant_billing_incident_runbook_v1</span>
-        <span>customer_portal_change_signed_webhook_required</span>
+        <span>payment_mode=${escapeHtml(domesticBilling.configuredPath ? "wechat_native_qr" : "external_provider")}</span>
         <span>refund_dispute_webhook_sets_payment_attention</span>
         <span>refund_or_dispute_cannot_be_frontend_executed</span>
         <span>payment_failed_cancel_blocks_metered_work</span>
         <span>quota_shutdown_keeps_history_visible</span>
         <span>browser_cannot_grant_or_restore_entitlement</span>
-        <span>charge_now_allowed=false</span>
+        <span>charge_now_allowed=${escapeHtml(String(domesticBilling.online))}</span>
         <span>triggers_real_charge=false</span>
         <span>frontend_gets_payment_secret=false</span>
         <span>repeat_ebay_oauth_allowed=false</span>
@@ -32743,7 +33807,7 @@ function renderSaasMerchantBillingIncidentRunbookPanel(ctx = saasMerchantWorkben
   `;
 }
 
-function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbenchContext()) {
+function renderLegacySaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
   const packet = billing.customerTrustPacket && typeof billing.customerTrustPacket === "object" ? billing.customerTrustPacket : {};
   const cards = Array.isArray(packet.cards) ? packet.cards.filter(Boolean) : [];
@@ -32847,6 +33911,60 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
         <span>triggers_real_charge=false</span>
         <span>creates_checkout_session=false</span>
         <span>calls_stripe_api=false</span>
+        <span>frontend_gets_payment_secret=false</span>
+        <span>secret_exposed=false</span>
+        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
+      </div>
+    </section>
+  `;
+}
+
+function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbenchContext()) {
+  const domesticBilling = saasMerchantDomesticBillingState();
+  const cards = [
+    ["价格与续购", "¥99 / 30 天，单次购买 30 天；不会自动续费或自动扣款。"],
+    ["微信扫码付款", "微信扫码，不输入银行卡；捷境浏览器不保存付款密钥或付款凭证。"],
+    ["订单与付款记录", "付款状态和订单号保留在当前捷境账号，可用于客服核对。"],
+    ["发票申请", "按已付款订单人工受理；订单记录不等同税务发票。"],
+    ["退款与客服", "退款申请进入审核，付款前可查看退款政策、客服入口和风险披露。"],
+    ["权益恢复", "退款或争议只暂停新高成本任务，历史资料保留，不要求重复连接店铺。"],
+  ];
+  return `
+    <section class="saas-settings-card saas-merchant-billing-trust-packet" data-billing-trust-packet="merchant_billing_customer_trust_packet_v2" aria-label="付费前客户信任说明">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>付费前客户信任说明</span>
+          <strong>付款前看清价格、期限、记录、发票和退款方式</strong>
+          <p>${escapeHtml(domesticBilling.online ? "当前使用微信扫码付款。每次购买 30 天，不会自动续费；支付结果由系统确认后发放权益。" : "当前仍处于试用阶段，不会生成可付款二维码，也不会自动扣款。微信支付开放后，每次购买 30 天并由商家主动确认。")}</p>
+        </div>
+        <em>${escapeHtml(domesticBilling.online ? "微信支付" : "试用阶段")}</em>
+      </div>
+      <div class="saas-merchant-billing-trust-grid">
+        ${cards
+          .map(([title, detail]) => `
+            <article class="is-green">
+              <strong>${escapeHtml(title)}</strong>
+              <small>${escapeHtml(detail)}</small>
+            </article>
+          `)
+          .join("")}
+      </div>
+      <div class="saas-merchant-billing-trust-note">
+        <strong>需要订单或发票帮助</strong>
+        <p>在“客服与订单”提交订单号和需求。发票申请仅按已付款订单受理，具体开票信息以客服审核结果为准。</p>
+        <button class="secondary-action compact-action" type="button" data-global-flow-view="service">去客服与订单</button>
+      </div>
+      <div class="saas-merchant-billing-trust-safety" hidden aria-hidden="true">
+        <span>merchant_billing_customer_trust_packet_v2</span>
+        <span>wechat_native_qr_payment_boundary</span>
+        <span>merchant_confirmed_one_time_30_day_renewal</span>
+        <span>payment_record_is_not_tax_invoice</span>
+        <span>invoice_request_requires_paid_order_and_service_review</span>
+        <span>billing_support_refund_links_visible</span>
+        <span>entitlement_recovery_does_not_repeat_ebay_oauth</span>
+        <span>charge_now_allowed=${escapeHtml(String(domesticBilling.online))}</span>
+        <span>triggers_real_charge=false</span>
+        <span>creates_checkout_session=false</span>
         <span>frontend_gets_payment_secret=false</span>
         <span>secret_exposed=false</span>
         <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
@@ -33016,11 +34134,12 @@ function renderSaasMerchantBillingGuardrailPanel(ctx = saasMerchantWorkbenchCont
 
 function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
-  const billingModeLabel = billing.provider.external_paid_provider_configured ? "在线付款已接入" : "试用模式";
+  const domesticBilling = saasMerchantDomesticBillingState();
+  const billingModeLabel = domesticBilling.online ? "微信扫码付款" : billing.provider.external_paid_provider_configured ? "在线付款已接入" : "试用模式";
   const splitRows = [
-    ["01", "基础订阅", "¥99/月是基础订阅", "打开工作台、AI CEO、Listing、批量、素材工坊、客服订单和基础记录。"],
-    ["02", "AI 文本用量", "不包含无限模型", "普通问答、Listing 文案、联网总结和长报告按套餐额度或实际用量核算。"],
-    ["03", "图片 / 视频", "素材任务另算", "主图、场景图、详情图、视频封面和视频生成按张、秒、任务或供应商账单核算。"],
+    ["01", "软件套餐", "¥0 / ¥99 / ¥199 / ¥299", "套餐只决定店铺数、席位数、经营任务和批量上限，单次购买 30 天。"],
+    ["02", "商家自带模型", "费用由商家承担", "普通问答、Listing 文案、联网总结和长报告使用商家账号绑定的模型，不消耗素材点。"],
+    ["03", "图片 / 视频", "使用素材点", "主图、场景图、详情图、视频封面和视频生成统一按素材点预估、预占和结算。"],
     ["04", "平台经营成本", "捷境不代扣", "eBay 成交费、广告费、物流、退款和店铺订阅只进入利润测算与确认中心。"],
   ];
   const usageRouteRows = [
@@ -33030,21 +34149,21 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
   ];
   const pricingRows = [
     {
-      label: "基础订阅",
-      title: "¥99/月起",
-      detail: "打开 AI CEO、Listing、批量铺货、素材工坊、客服订单、设置和基础工作记录。它是软件使用费，不是无限 AI 成本包。",
+      label: "软件套餐",
+      title: "四档按业务规模选择",
+      detail: "免费、起步、经营、团队四档只收软件使用费，不把文本模型和素材成本藏进套餐。",
       tone: "green",
     },
     {
-      label: "大模型用量",
-      title: "按实际消耗另计",
-      detail: "DeepSeek、OpenAI 或商家自带 AI 连接的文本、联网总结、长报告和高上下文任务按用量、次数或套餐额度核算。",
-      tone: "amber",
+      label: "商家自带模型",
+      title: "捷境不重复收费",
+      detail: "DeepSeek、OpenAI 等模型连接跟随捷境登录账号，商家直接承担模型费用，切换店铺无需重复配置。",
+      tone: "green",
     },
     {
       label: "生图 / 生视频",
-      title: "按素材任务另计",
-      detail: "主图、场景图、详情图、短视频脚本或生成任务按张、秒、任务或供应商账单核算，默认不静默开高成本生成。",
+      title: "按素材点结算",
+      detail: "主图、场景图、详情图、短视频脚本或生成任务先显示预计点数；成功结算，失败返还。",
       tone: "amber",
     },
     {
@@ -33055,7 +34174,7 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
     },
   ];
   const billingRules = [
-    ["先显示后收费", "正式收费前，商家必须能看清套餐、金额、续费/取消入口和用量记录；当前环境仍不触发真实扣费。"],
+    ["先显示后收费", domesticBilling.online ? "付款前显示套餐、金额、30 天期限和用量边界；只有商家主动扫码才会付款。" : "正式收费前，商家必须能看清套餐、金额、续购入口和用量记录；当前环境仍不触发真实扣费。"],
     ["欠费不删资料", "欠费、取消或额度耗尽时，只停联网模型、素材生成和高成本任务，历史资料继续可读。"],
     ["高风险仍确认", "真实发布、采购付款、退款、广告预算和敏感客服承诺仍进入决策中心。"],
   ];
@@ -33064,8 +34183,8 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
       <div class="saas-settings-card-head">
         <div>
           <span>计费模型</span>
-          <strong>订阅是基础功能月费，AI 和素材按用量另算</strong>
-          <p>商家只需要分清四件事：¥99/月是基础订阅，不包含无限模型；大模型、生图生视频按实际消耗另计；eBay、物流、广告和退款属于平台经营成本。</p>
+          <strong>软件套餐、商家模型、素材点和平台成本互不混账</strong>
+          <p>商家只需要分清四件事：四档套餐是 30 天软件使用权；文本模型由商家自带；图片和视频使用素材点；电商平台、物流、广告和退款仍由商家在对应平台结算。</p>
         </div>
         <em>${escapeHtml(billingModeLabel)}</em>
       </div>
@@ -38071,7 +39190,7 @@ function renderSaasSettingsBillingFocusPanel(ctx = saasMerchantWorkbenchContext(
     rows: [
       {
         label: "基础订阅",
-        title: "¥99/月起",
+        title: "¥99 / 30 天",
         detail: "覆盖 AI CEO、Listing、批量铺货、素材工坊、客服订单和基础工作记录。",
         tone: "green",
       },
@@ -38253,6 +39372,248 @@ function saasOwnerLaunchToneClass(value) {
   return "is-red";
 }
 
+function renderSaasOwnerOperationsOverviewPanel() {
+  if (!saasOwnerLaunchCanView()) return "";
+  const overview = state.saasOperationsOverview && typeof state.saasOperationsOverview === "object" ? state.saasOperationsOverview : null;
+  if (!overview) {
+    return `
+      <section class="saas-settings-card" aria-label="平台内部经营数据">
+        <div class="saas-settings-card-head">
+          <div><span>平台内部经营数据</span><strong>正在读取真实汇总</strong><p>仅内部管理员可见，不进入商家工作流。</p></div>
+        </div>
+      </section>
+    `;
+  }
+  const accounts = overview.accounts && typeof overview.accounts === "object" ? overview.accounts : {};
+  const subscriptions = Array.isArray(overview.subscriptions) ? overview.subscriptions : [];
+  const payments = Array.isArray(overview.domestic_payments) ? overview.domestic_payments : [];
+  const media = overview.media_points && typeof overview.media_points === "object" ? overview.media_points : {};
+  const traffic = overview.traffic_analytics && typeof overview.traffic_analytics === "object" ? overview.traffic_analytics : {};
+  const performance = overview.performance_analytics && typeof overview.performance_analytics === "object" ? overview.performance_analytics : {};
+  const pagePerformance = performance.page_load && typeof performance.page_load === "object" ? performance.page_load : {};
+  const pagePerformanceP75 = pagePerformance.p75 && typeof pagePerformance.p75 === "object" ? pagePerformance.p75 : {};
+  const settingsPerformance = performance.settings_module && typeof performance.settings_module === "object" ? performance.settings_module : {};
+  const settingsPerformanceP75 =
+    settingsPerformance.p75 && typeof settingsPerformance.p75 === "object" ? settingsPerformance.p75 : {};
+  const modelCost = overview.model_cost_analytics && typeof overview.model_cost_analytics === "object" ? overview.model_cost_analytics : {};
+  const providerCost = overview.provider_cost_analytics && typeof overview.provider_cost_analytics === "object" ? overview.provider_cost_analytics : {};
+  const providerReliability =
+    overview.provider_reliability_analytics && typeof overview.provider_reliability_analytics === "object"
+      ? overview.provider_reliability_analytics
+      : {};
+  const modelReliability = providerReliability.model && typeof providerReliability.model === "object" ? providerReliability.model : {};
+  const searchReliability =
+    providerReliability.public_search && typeof providerReliability.public_search === "object" ? providerReliability.public_search : {};
+  const mediaReliability =
+    providerReliability.media_generation && typeof providerReliability.media_generation === "object"
+      ? providerReliability.media_generation
+      : {};
+  const paymentReliability =
+    providerReliability.payment && typeof providerReliability.payment === "object" ? providerReliability.payment : {};
+  const reliabilityAlerts =
+    providerReliability.alerts && typeof providerReliability.alerts === "object" ? providerReliability.alerts : {};
+  const reliabilityAlertItems = Array.isArray(reliabilityAlerts.items) ? reliabilityAlerts.items : [];
+  const reliabilityLifecycle =
+    providerReliability.lifecycle && typeof providerReliability.lifecycle === "object" ? providerReliability.lifecycle : {};
+  const reliabilityLifecycleStates = Array.isArray(reliabilityLifecycle.states) ? reliabilityLifecycle.states : [];
+  const reliabilityLifecycleEvents = Array.isArray(reliabilityLifecycle.events) ? reliabilityLifecycle.events.slice(0, 4) : [];
+  const activeReliabilityStates = reliabilityLifecycleStates.filter((item) =>
+    ["pending", "open", "recovering"].includes(String(item?.lifecycle_status || "")),
+  );
+  const reliabilityAlertFor = (scope) =>
+    reliabilityAlertItems.find((item) => String(item?.scope || "") === scope) || {};
+  const unitEconomics = overview.unit_economics && typeof overview.unit_economics === "object" ? overview.unit_economics : {};
+  const dataQuality = overview.data_quality && typeof overview.data_quality === "object" ? overview.data_quality : {};
+  const period = overview.period && typeof overview.period === "object" ? overview.period : {};
+  const activeSubscriptions = subscriptions
+    .filter((item) => ["active", "trialing"].includes(String(item?.status || "").toLowerCase()))
+    .reduce((total, item) => total + Number(item?.count || 0), 0);
+  const paidPayments = payments.filter((item) => ["paid", "success", "succeeded"].includes(String(item?.status || "").toLowerCase()));
+  const paidOrderCount = Number(unitEconomics.paid_order_count ?? paidPayments.reduce((total, item) => total + Number(item?.count || 0), 0));
+  const paidAmountMinor = Number(unitEconomics.paid_revenue_minor ?? paidPayments.reduce((total, item) => total + Number(item?.amount_minor || 0), 0));
+  const trafficReady = ["instrumented", "ready_no_events"].includes(String(traffic.status || ""));
+  const trafficTrend = Array.isArray(traffic.daily_trend) ? traffic.daily_trend.slice(-14) : [];
+  const trafficPages = Array.isArray(traffic.page_breakdown) ? traffic.page_breakdown.slice(0, 6) : [];
+  const safeTrafficCount = (value) => Math.max(0, Number(value || 0));
+  const trafficTrendPeak = Math.max(1, ...trafficTrend.map((item) => safeTrafficCount(item?.page_views)));
+  const trafficBarWidth = (value, peak = trafficTrendPeak) =>
+    Math.min(100, Math.max(3, Math.round((safeTrafficCount(value) / Math.max(1, peak)) * 100)));
+  const trafficPageLabel = (pageKey) =>
+    ({ landing: "官网首页", pricing: "套餐", register: "注册", login: "登录", workbench: "商家工作台" })[
+      String(pageKey || "")
+    ] || "其他页面";
+  const performanceReady = String(performance.status || "") === "instrumented";
+  const pageLcpP75 = Number(pagePerformanceP75.lcp_ms || 0);
+  const settingsLoadP75 = Number(settingsPerformanceP75.duration_ms || 0);
+  const modelCostReady = ["metered", "ready_no_usage"].includes(String(modelCost.status || ""));
+  const providerCostReady = ["metered", "ready_no_usage"].includes(String(providerCost.status || ""));
+  const reliabilityStatusTone = (status) => {
+    const normalized = String(status || "");
+    if (normalized === "critical") return "is-red";
+    if (normalized === "healthy") return "is-green";
+    return "is-amber";
+  };
+  const reliabilityStatusCopy = (status) => {
+    const normalized = String(status || "");
+    if (normalized === "critical") return "需要立即处理";
+    if (normalized === "attention") return "需要关注";
+    if (normalized === "healthy") return "运行正常";
+    return "继续采样";
+  };
+  const reliabilityTone = (scope) => reliabilityStatusTone(reliabilityAlertFor(scope).status);
+  const reliabilityP75 = (item) => {
+    const value = Number(item?.p75_duration_ms || 0);
+    return value > 0 ? `${escapeHtml(String(value))} ms` : "待采样";
+  };
+  const reliabilityDetail = (item, scope) => {
+    const alert = reliabilityAlertFor(scope);
+    const base = `请求 ${escapeHtml(String(item?.request_count || 0))} · 失败 ${escapeHtml(String(item?.failure_count || 0))} · 超时 ${escapeHtml(String(item?.timeout_count || 0))}`;
+    if (String(alert.status || "") === "insufficient_data") return `${base} · 样本不足，继续采样`;
+    return `${base} · 失败率 ${escapeHtml(String(alert.failure_rate_percent || 0))}% · 超时率 ${escapeHtml(String(alert.timeout_rate_percent || 0))}%`;
+  };
+  const reliabilityScopeCopy = (scope) =>
+    ({ model: "模型响应", public_search: "联网搜索", media_generation: "素材生成", payment: "支付链路" })[
+      String(scope || "")
+    ] || "未知链路";
+  const reliabilityLifecycleCopy = (status) =>
+    ({ pending: "待二次确认", open: "处理中", recovering: "恢复观察", healthy: "已恢复" })[String(status || "")] || "未评估";
+  const reliabilityActionCopy = (action) =>
+    ({ investigating: "排查中", mitigation_in_progress: "修复中", monitoring: "观察中" })[String(action || "")] || "尚未确认";
+  const reliabilityTransitionCopy = (transition) =>
+    ({ opened: "告警开启", escalated: "严重度升级", acknowledged: "处理进度更新", recovered: "确认恢复" })[
+      String(transition || "")
+    ] || "状态更新";
+  const marginReady = String(unitEconomics.status || "") === "ready" && unitEconomics.contribution_margin_minor !== null;
+  const currentMeteringReady = String(unitEconomics.current_metering_health || "") === "ready";
+  const currentUnmeteredTasks = Number(unitEconomics.current_unmetered_model_tasks || 0);
+  const legacyUnmeteredTasks = Number(unitEconomics.legacy_unmetered_model_tasks || 0);
+  const meteringHealthCopy = currentMeteringReady ? "当前计量正常" : `当前仍有 ${escapeHtml(String(currentUnmeteredTasks))} 条未计量`;
+  const modelCostGapCopy = currentUnmeteredTasks
+    ? `当前未计量 ${escapeHtml(String(currentUnmeteredTasks))} 条 · 未知素材 ${escapeHtml(String(unitEconomics.unknown_provider_cost_records || 0))}`
+    : legacyUnmeteredTasks
+      ? `${escapeHtml(String(legacyUnmeteredTasks))} 条历史对话成本不可追溯 · 未知素材 ${escapeHtml(String(unitEconomics.unknown_provider_cost_records || 0))}`
+      : `未知模型 ${escapeHtml(String(unitEconomics.unknown_model_cost_records || 0))} · 未知素材 ${escapeHtml(String(unitEconomics.unknown_provider_cost_records || 0))}`;
+  const cny = (minor) => `¥${(Number(minor || 0) / 100).toFixed(2)}`;
+  return `
+    <section class="saas-settings-card saas-owner-operations-overview" aria-label="平台内部经营数据">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>平台内部经营数据</span>
+          <strong>获客、收入、模型用量和素材成本真实汇总</strong>
+          <p>近 ${escapeHtml(String(period.days || 30))} 天口径。真实成本、配置估算和未知成本分开显示；成本不全时不计算虚假毛利。</p>
+        </div>
+        <em>内部管理员</em>
+      </div>
+      <div class="saas-owner-ops-grid">
+        <article class="is-green"><span>真实商户账号</span><strong>${escapeHtml(String(accounts.registered_users || 0))}</strong><small>${escapeHtml(String(accounts.merchant_companies || 0))} 个商家公司 · ${escapeHtml(String(accounts.connected_stores || 0))} 家已授权店铺</small></article>
+        <article class="${activeSubscriptions ? "is-green" : "is-amber"}"><span>有效订阅</span><strong>${escapeHtml(String(activeSubscriptions))}</strong><small>按 active / trialing 后端状态汇总</small></article>
+        <article class="${paidOrderCount ? "is-green" : "is-amber"}"><span>已付订单</span><strong>${escapeHtml(String(paidOrderCount))}</strong><small>实收 ¥${escapeHtml((paidAmountMinor / 100).toFixed(2))}</small></article>
+        <article class="is-green"><span>素材点</span><strong>${escapeHtml(String(media.balance_points || 0))}</strong><small>累计消耗 ${escapeHtml(String(media.lifetime_spent_points || 0))} · 预留 ${escapeHtml(String(media.reserved_points || 0))}</small></article>
+        <article class="${trafficReady ? "is-green" : "is-amber"}"><span>网站访问</span><strong>${trafficReady ? escapeHtml(String(traffic.visitors || 0)) : "未接入"}</strong><small>${trafficReady ? `会话 ${escapeHtml(String(traffic.sessions || 0))} · 浏览 ${escapeHtml(String(traffic.page_views || 0))}` : "第一方统计尚未形成数据"}</small></article>
+        <article class="${trafficReady ? "is-green" : "is-amber"}"><span>注册转化</span><strong>${trafficReady ? `${escapeHtml(String(traffic.visitor_to_signup_percent || 0))}%` : "待计量"}</strong><small>完成注册 ${escapeHtml(String(traffic.signup_completed || 0))} · 不采集原始 IP</small></article>
+        <article class="${performanceReady && pageLcpP75 > 0 && pageLcpP75 <= 2500 ? "is-green" : "is-amber"}"><span>首屏体验 P75</span><strong>${pageLcpP75 > 0 ? `${escapeHtml(String(pageLcpP75))} ms` : "待采样"}</strong><small>样本 ${escapeHtml(String(pagePerformance.sample_count || 0))} · 不采集网址、设备指纹或对话内容</small></article>
+        <article class="${performanceReady && Number(settingsPerformance.error_count || 0) === 0 ? "is-green" : "is-amber"}"><span>设置模块 P75</span><strong>${settingsLoadP75 > 0 ? `${escapeHtml(String(settingsLoadP75))} ms` : "待采样"}</strong><small>成功 ${escapeHtml(String(settingsPerformance.success_count || 0))} · 失败 ${escapeHtml(String(settingsPerformance.error_count || 0))}</small></article>
+        <article class="${reliabilityStatusTone(reliabilityAlerts.status)}"><span>可靠性告警</span><strong>${reliabilityStatusCopy(reliabilityAlerts.status)}</strong><small>严重 ${escapeHtml(String(reliabilityAlerts.critical_count || 0))} · 关注 ${escapeHtml(String(reliabilityAlerts.attention_count || 0))} · 至少 5 次请求后判级</small></article>
+        <article class="${reliabilityTone("model")}"><span>模型响应 P75</span><strong>${reliabilityP75(modelReliability)}</strong><small>${reliabilityDetail(modelReliability, "model")}</small></article>
+        <article class="${reliabilityTone("public_search")}"><span>联网搜索 P75</span><strong>${reliabilityP75(searchReliability)}</strong><small>${reliabilityDetail(searchReliability, "public_search")} · 查询内容不入账</small></article>
+        <article class="${reliabilityTone("media_generation")}"><span>素材生成 P75</span><strong>${reliabilityP75(mediaReliability)}</strong><small>${reliabilityDetail(mediaReliability, "media_generation")} · 供应商中立</small></article>
+        <article class="${reliabilityTone("payment")}"><span>支付链路 P75</span><strong>${reliabilityP75(paymentReliability)}</strong><small>${reliabilityDetail(paymentReliability, "payment")} · 不记录支付响应或凭证</small></article>
+        <article class="${modelCostReady && currentMeteringReady ? "is-green" : "is-amber"}"><span>模型用量</span><strong>${escapeHtml(String(modelCost.platform_trial_tokens || 0))}</strong><small>${meteringHealthCopy} · 平台试用成本 ${cny(modelCost.platform_cost_minor)} · 商家 BYOK ${escapeHtml(String(modelCost.merchant_byok_tokens || 0))} tokens</small></article>
+        <article class="${providerCostReady ? "is-green" : "is-amber"}"><span>素材供应成本</span><strong>${cny(providerCost.media_cost_minor)}</strong><small>供应商中立汇总 · 不向商家暴露底层服务商</small></article>
+        <article class="${marginReady ? "is-green" : "is-amber"}"><span>贡献毛利</span><strong>${marginReady ? cny(unitEconomics.contribution_margin_minor) : "待补成本"}</strong><small>${marginReady ? `实收 ${cny(unitEconomics.paid_revenue_minor)}` : modelCostGapCopy}</small></article>
+      </div>
+      <div class="saas-owner-traffic-detail">
+        <section class="saas-owner-traffic-trend" aria-label="访问趋势">
+          <div class="saas-owner-traffic-head">
+            <div><span>访问趋势</span><strong>最近 14 天</strong></div>
+            <small>自动化验收浏览不计入</small>
+          </div>
+          <div class="saas-owner-traffic-bars">
+            ${
+              trafficTrend.length
+                ? trafficTrend
+                    .map(
+                      (item) => `
+                        <article>
+                          <span>${escapeHtml(String(item?.day || "").slice(5))}</span>
+                          <div><i style="width:${trafficBarWidth(item?.page_views)}%"></i></div>
+                          <strong>${escapeHtml(String(safeTrafficCount(item?.visitors)))} 人 · ${escapeHtml(String(safeTrafficCount(item?.page_views)))} 次</strong>
+                        </article>
+                      `,
+                    )
+                    .join("")
+                : `<p>统计已经接入，等待真实访问形成趋势。</p>`
+            }
+          </div>
+        </section>
+        <section class="saas-owner-traffic-pages" aria-label="页面与转化">
+          <div class="saas-owner-traffic-head">
+            <div><span>页面与转化</span><strong>近 ${escapeHtml(String(period.days || 30))} 天</strong></div>
+            <small>只保留聚合数量</small>
+          </div>
+          <div class="saas-owner-traffic-page-list">
+            ${
+              trafficPages.length
+                ? trafficPages
+                    .map(
+                      (item) => `
+                        <article>
+                          <div><strong>${escapeHtml(trafficPageLabel(item?.page_key))}</strong><span>${escapeHtml(String(safeTrafficCount(item?.visitors)))} 位访客</span></div>
+                          <small>浏览 ${escapeHtml(String(safeTrafficCount(item?.page_views)))} · 套餐 ${escapeHtml(String(safeTrafficCount(item?.pricing_views)))} · 注册 ${escapeHtml(String(safeTrafficCount(item?.signup_completed)))} </small>
+                        </article>
+                      `,
+                    )
+                    .join("")
+                : `<p>暂无页面访问数据。</p>`
+            }
+          </div>
+        </section>
+      </div>
+      <div class="saas-owner-reliability-duty" aria-label="平台内部可靠性值班">
+        <div class="saas-owner-reliability-duty-head">
+          <div>
+            <span>内部可靠性值班</span>
+            <strong>告警需连续两次异常才开启，连续两次健康才恢复</strong>
+            <p>开启 ${escapeHtml(String(reliabilityLifecycle.open_count || 0))} · 待确认 ${escapeHtml(String(reliabilityLifecycle.pending_count || 0))} · 恢复观察 ${escapeHtml(String(reliabilityLifecycle.recovering_count || 0))}</p>
+          </div>
+          <button class="secondary-action" type="button" data-saas-action="reconcile-owner-reliability-alerts">评估当前告警</button>
+        </div>
+        <div class="saas-owner-reliability-duty-list">
+          ${
+            activeReliabilityStates.length
+              ? activeReliabilityStates
+                  .map(
+                    (item) => `
+                      <article class="${reliabilityStatusTone(item.severity)}">
+                        <div><strong>${escapeHtml(reliabilityScopeCopy(item.scope))}</strong><span>${escapeHtml(reliabilityLifecycleCopy(item.lifecycle_status))} · ${escapeHtml(reliabilityActionCopy(item.acknowledgement_action))}</span></div>
+                        <div class="saas-owner-reliability-actions">
+                          <button type="button" data-saas-action="acknowledge-owner-reliability-alert" data-reliability-scope="${escapeHtml(String(item.scope || ""))}" data-reliability-action="investigating">开始排查</button>
+                          <button type="button" data-saas-action="acknowledge-owner-reliability-alert" data-reliability-scope="${escapeHtml(String(item.scope || ""))}" data-reliability-action="mitigation_in_progress">处理中</button>
+                          <button type="button" data-saas-action="acknowledge-owner-reliability-alert" data-reliability-scope="${escapeHtml(String(item.scope || ""))}" data-reliability-action="monitoring">观察中</button>
+                        </div>
+                      </article>
+                    `,
+                  )
+                  .join("")
+              : `<p class="saas-owner-reliability-empty">当前没有需要值班处理的告警。点击评估只会更新内部状态，不会调用外部平台。</p>`
+          }
+        </div>
+        ${
+          reliabilityLifecycleEvents.length
+            ? `<div class="saas-owner-reliability-events"><span>最近状态记录</span>${reliabilityLifecycleEvents
+                .map(
+                  (item) => `<small>${escapeHtml(reliabilityScopeCopy(item.scope))} · ${escapeHtml(reliabilityTransitionCopy(item.transition_key))} · ${escapeHtml(String(item.created_at || ""))}</small>`,
+                )
+                .join("")}</div>`
+            : ""
+        }
+      </div>
+      <p class="saas-owner-internal-marker">统计口径已排除 ${escapeHtml(String(dataQuality.synthetic_test_accounts_excluded || 0))} 个演练账号、${escapeHtml(String(dataQuality.test_subscriptions_excluded || 0))} 条测试订阅和 ${escapeHtml(String(dataQuality.acceptance_orders_excluded || 0))} 笔支付验收单。</p>
+      <p class="saas-owner-internal-marker">platform_internal_admin_only · merchant_navigation_visible=false · secret_exposed=false</p>
+    </section>
+  `;
+}
+
 function renderSaasOwnerLaunchControlPanel() {
   if (!saasOwnerLaunchCanView()) return "";
   const control = state.saasOwnerLaunchControl && typeof state.saasOwnerLaunchControl === "object" ? state.saasOwnerLaunchControl : null;
@@ -38263,7 +39624,7 @@ function renderSaasOwnerLaunchControlPanel() {
           <div>
             <span>主理人上线控制台</span>
             <strong>等待后端证据</strong>
-            <p>platform internal admin only. 这里只显示捷境平台内部上线证据，不给普通商家展示，也不触发 eBay OAuth、Stripe Checkout 或真实平台写入。</p>
+          <p>platform internal admin only. 这里只显示捷境平台内部上线证据，不给普通商家展示，也不触发 eBay OAuth、真实支付或真实平台写入。</p>
           </div>
           <button class="secondary-action" type="button" data-saas-action="refresh-owner-launch-control">刷新</button>
         </div>
@@ -38374,6 +39735,18 @@ function renderSaasOwnerLaunchControlPanel() {
   const subscriptionShutdownCards = Array.isArray(subscriptionShutdown.cards) ? subscriptionShutdown.cards : [];
   const testData = control.test_data_governance && typeof control.test_data_governance === "object" ? control.test_data_governance : {};
   const testCounts = testData.counts && typeof testData.counts === "object" ? testData.counts : {};
+  const fixedProgress =
+    control.fixed_launch_progress && typeof control.fixed_launch_progress === "object" ? control.fixed_launch_progress : {};
+  const fixedProgressCategories = Array.isArray(fixedProgress.categories) ? fixedProgress.categories : [];
+  const fixedProgressActions = Array.isArray(fixedProgress.remaining_actions) ? fixedProgress.remaining_actions : [];
+  const fixedProgressNext =
+    fixedProgress.next_autonomous_action && typeof fixedProgress.next_autonomous_action === "object"
+      ? fixedProgress.next_autonomous_action
+      : null;
+  const merchantValidation =
+    control.merchant_workflow_validation && typeof control.merchant_workflow_validation === "object"
+      ? control.merchant_workflow_validation
+      : {};
   const lanes = Array.isArray(control.lanes) ? control.lanes : [];
   const external = Array.isArray(control.external_blockers) ? control.external_blockers : [];
   const internal = Array.isArray(control.internal_work_queue) ? control.internal_work_queue : [];
@@ -38440,6 +39813,56 @@ function renderSaasOwnerLaunchControlPanel() {
           <button class="secondary-action" type="button" data-saas-action="download-prelaunch-acceptance-report">Download prelaunch report</button>
           <span class="saas-owner-launch-pill ${saasOwnerLaunchToneClass(control.status)}">${escapeHtml(control.mode || "read_only")}</span>
         </div>
+      </div>
+      <div class="saas-owner-fixed-progress" aria-label="fixed public launch progress">
+        <div class="saas-owner-fixed-progress-head">
+          <div>
+            <span>固定正式上线准备度</span>
+            <strong>${escapeHtml(String(fixedProgress.score_percent ?? 0))}%</strong>
+          </div>
+          <p>固定 100 分口径 · 同一证据得到同一分数 · 新增待办不会扩张分母。公开收费仍以最终批准为准。</p>
+        </div>
+        <div class="saas-owner-fixed-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${escapeHtml(String(fixedProgress.score_percent ?? 0))}">
+          <span style="width: ${Math.max(0, Math.min(100, Number(fixedProgress.score_percent || 0)))}%"></span>
+        </div>
+        <div class="saas-owner-fixed-progress-grid">
+          ${fixedProgressCategories
+            .map(
+              (item) => `
+                <article class="${saasOwnerLaunchToneClass(item.status === "ready" ? "green" : item.earned_points ? "amber" : "red")}">
+                  <span>${escapeHtml(item.label || item.key || "category")}</span>
+                  <strong>${escapeHtml(`${item.earned_points ?? 0}/${item.total_points ?? 0}`)}</strong>
+                  <small>${escapeHtml(item.status || "pending")}</small>
+                </article>
+              `,
+            )
+            .join("")}
+        </div>
+        <div class="saas-owner-fixed-progress-next">
+          <span>我会自动继续</span>
+          <strong>${escapeHtml(fixedProgressNext?.label || "当前内部自动队列已清空")}</strong>
+          <small>${escapeHtml(fixedProgressNext?.next_action || "等待外部条件或双方确认，不会擅自触发真实收费、OAuth 或平台写入。")}</small>
+        </div>
+        <div class="saas-owner-fixed-progress-next" data-owner-merchant-validation="real_merchant_workflow_validation_v1">
+          <span>真实商家闭环验收</span>
+          <strong>${escapeHtml(`${merchantValidation.validated_merchant_count || 0}/${merchantValidation.required_merchant_count || 3} 个商家 · ${merchantValidation.validated_path_count || 0}/${merchantValidation.required_path_count || 20} 条完整路径`)}</strong>
+          <small>${escapeHtml(merchantValidation.next_action || "等待真实商家完成 AI CEO、报告、Listing 确认和决策中心闭环。测试账号不会计入。")}</small>
+        </div>
+        <div class="saas-owner-fixed-progress-queue">
+          ${fixedProgressActions
+            .slice(0, 8)
+            .map(
+              (item) => `
+                <article>
+                  <span>${escapeHtml(item.executor || "pending")}</span>
+                  <strong>${escapeHtml(item.label || item.key || "remaining_action")}</strong>
+                  <small>${escapeHtml(`剩余 ${item.points || 0} 分 · ${item.next_action || "等待证据"}`)}</small>
+                </article>
+              `,
+            )
+            .join("")}
+        </div>
+        <p class="saas-owner-fixed-progress-contract">${escapeHtml(fixedProgress.contract_version || "fixed_progress_pending")} · customer_visible=false · public_paid_launch_allowed=${escapeHtml(String(Boolean(fixedProgress.public_paid_launch_allowed)))}</p>
       </div>
       <div class="saas-owner-launch-summary">
         ${summaryRows
@@ -39596,6 +41019,7 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
 }
 
 function saasSettingsOneGlanceRows(activeTabId = "general") {
+  const domesticBilling = saasMerchantDomesticBillingState();
   const rowsByTab = {
     general: [
       ["经营状态", "确认当前工作台是否准备好", "账号、店铺数据、AI、订阅和确认边界集中显示。"],
@@ -39623,9 +41047,9 @@ function saasSettingsOneGlanceRows(activeTabId = "general") {
       ["越权停住", "没权限只补资料", "高风险动作没有权限就停到决策中心。"],
     ],
     billing: [
-      ["当前阶段", "试用模式，不自动扣费", "在线付款开放前会先准备订阅管理、收据和系统确认。"],
-      ["基础订阅", "¥99/月打开工作台", "AI CEO、Listing、批量、素材工坊和客服订单是基础功能。"],
-      ["高成本用量", "AI / 素材另算", "欠费或超量只停模型、联网、素材生成等高成本任务。"],
+      ["当前阶段", domesticBilling.online ? "微信扫码付款可用" : "试用模式，不自动扣费", domesticBilling.online ? "单次购买 30 天，到账后自动开通；不会自动续费。" : "在线付款开放前不会生成付款二维码。"],
+      ["软件套餐", "¥0 / ¥99 / ¥199 / ¥299", "按店铺、席位、经营任务和批量上限选择，付费套餐单次购买 30 天。"],
+      ["模型与素材", "BYOK / 素材点", "商家模型由商家承担；图片和视频使用素材点，失败任务返还预占点数。"],
     ],
     owner_ops: [
       ["内部可见", "只给主理人管理员", "普通商家不会看到上线、WAF、队列和门禁排查。"],
@@ -39826,7 +41250,8 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       intro: "查看基础订阅、AI 用量、素材生成、欠费停用和账号安全边界。",
       panels: [
         renderSaasMerchantBillingPlainSummaryPanel(ctx),
-        renderSaasMerchantSubscriptionActivationPanel(ctx),
+        renderSaasMerchantMediaCreditsPanel(),
+        renderSaasMerchantDomesticPaymentPanel(ctx),
         renderSaasSettingsSectionGroup({
           title: "计费与安全说明",
           detail: "需要了解额度发放、续费停用、退款客服和凭证安全时再展开。",
@@ -39851,6 +41276,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       intro: "只给内部管理员看，用于上线、WAF、队列、发布体检和生产门禁排查。",
       panels: [
         renderSaasOwnerLaunchControlPanel(),
+        renderSaasOwnerOperationsOverviewPanel(),
         renderSaasSettingsSectionGroup({
           title: "正式收费和公网安全",
           detail: "Stripe live、WAF、Bot、限流、稳定域名和回调域名只给上线前检查使用。",
@@ -40110,6 +41536,13 @@ function renderSaasConnectCenter(view) {
 function renderConnect() {
   if (isSaasPublicMvpMode()) {
     renderSaasConnectCenter(document.querySelector("#view-connect"));
+    if (state.view === "connect" && !window.JiejingSettingsPanels) {
+      ensureJiejingSettingsPanelsLoaded()
+        .then(() => {
+          if (state.view === "connect") renderConnect();
+        })
+        .catch(() => {});
+    }
     return;
   }
   const connectStatusEl = document.querySelector("#connectStatus");
@@ -40892,12 +42325,22 @@ function renderSaasAiCeoThreadMarkup(fallbackTurn = null) {
   const visibleLimit = Math.max(SAAS_AI_CEO_INITIAL_VISIBLE_TURNS, Number(state.saasAiCeoVisibleTurnLimit || 0));
   const hiddenTurnCount = Math.max(0, turns.length - visibleLimit);
   const visibleTurns = turns.slice(-visibleLimit);
+  const latestPendingIndex = visibleTurns.reduce((latestIndex, turn, index) => (turn.pending ? index : latestIndex), -1);
   const olderControl = hiddenTurnCount
     ? `<div class="saas-ai-ceo-history-more">
         <button type="button" data-ceo-load-older>查看更早对话 <span>${hiddenTurnCount}</span></button>
       </div>`
     : "";
-  return olderControl + visibleTurns.map((turn) => renderSaasAiCeoChatTurnMarkup(turn)).join("");
+  return (
+    olderControl +
+    visibleTurns
+      .map((turn, index) =>
+        renderSaasAiCeoChatTurnMarkup(turn, {
+          suppressPendingAssistant: Boolean(turn.pending && index !== latestPendingIndex),
+        }),
+      )
+      .join("")
+  );
 }
 
 function saasAiCeoTurnStatusLabel(latest = {}) {
@@ -41106,6 +42549,12 @@ function renderSaasAiCeoInlineMarkdown(value = "") {
     .replace(/\*\*([^*]+?)\*\*/g, "<strong>$1</strong>");
 }
 
+function saasAiCeoHeadingIsMeaningful(value = "") {
+  const normalized = publicRuntimeText(value).replace(/[*_`#]/g, "").trim();
+  if (!normalized) return false;
+  return !/^(?:[一二三四五六七八九十百]+|\d+)[、.．]?$/.test(normalized);
+}
+
 function renderSaasAiCeoAnswerMarkup(text = "") {
   const raw = productizeJiejingProductCopy(String(text || "")).replace(/\r\n/g, "\n").trim();
   if (!raw) return "<p>正在处理...</p>";
@@ -41133,7 +42582,9 @@ function renderSaasAiCeoAnswerMarkup(text = "") {
     if (heading) {
       flushParagraph();
       flushList();
-      parts.push(`<h3>${renderSaasAiCeoInlineMarkdown(heading[1])}</h3>`);
+      if (saasAiCeoHeadingIsMeaningful(heading[1])) {
+        parts.push(`<h3>${renderSaasAiCeoInlineMarkdown(heading[1])}</h3>`);
+      }
       return;
     }
     if (/^-{3,}$/.test(trimmed)) {
@@ -41156,7 +42607,7 @@ function renderSaasAiCeoAnswerMarkup(text = "") {
   return parts.join("") || `<p>${renderSaasAiCeoInlineMarkdown(raw)}</p>`;
 }
 
-function renderSaasAiCeoChatTurnMarkup(turn = {}) {
+function renderSaasAiCeoChatTurnMarkup(turn = {}, options = {}) {
   const latest = normalizeSaasAiCeoLatestTurn(turn);
   if (!latest) return "";
   const statusLabel = saasAiCeoTurnStatusLabel(latest);
@@ -41172,7 +42623,9 @@ function renderSaasAiCeoChatTurnMarkup(turn = {}) {
           </article>`
         : ""
     }
-    <article class="message ai${latest.pending ? " is-pending" : ""}"${assistantId} data-status="${escapeHtml(latest.status)}">
+    <article class="message ai${latest.pending ? " is-pending" : ""}${
+      latest.pending && options.suppressPendingAssistant ? " is-superseded-pending" : ""
+    }"${assistantId} data-status="${escapeHtml(latest.status)}">
       <span>AI CEO</span>
       <div class="saas-ai-ceo-message-body">
         ${
@@ -41381,6 +42834,7 @@ function updateCeoAssistantStreamingMessage(messageId, text) {
   if (!node || !safeText) return;
   const chat = document.querySelector("#ceoChat");
   const scrollSnapshot = captureSaasAiCeoScrollState(chat);
+  node.classList.remove("is-superseded-pending");
   node.dataset.status = "model_streaming";
   node.querySelector(".saas-ai-ceo-pending-status")?.remove();
   const answerBody = ensureCeoAssistantAnswerBody(node);
@@ -41449,7 +42903,7 @@ function updateCeoAssistantMessage(messageId, text, status = "", model = null, s
     });
     return;
   }
-  node.classList.remove("is-pending");
+  node.classList.remove("is-pending", "is-superseded-pending");
   if (status) node.dataset.status = String(status);
   node.querySelector(".saas-ai-ceo-work-detail")?.remove();
   node.querySelector(".saas-ai-ceo-source-list")?.remove();
@@ -41610,16 +43064,19 @@ function updateHeroCommand(key) {
 
 function normalizePlanKey(planKey) {
   const aliases = {
-    basic: "single",
-    custom: "pro",
+    basic: "starter",
+    single: "starter",
+    multi: "operator",
+    pro: "team",
+    custom: "team",
   };
   const normalized = aliases[planKey] || planKey;
-  return planDetails[normalized] ? normalized : "single";
+  return planDetails[normalized] ? normalized : "starter";
 }
 
 function renderPricingDetails() {
   state.selectedPlan = normalizePlanKey(state.selectedPlan);
-  const plan = planDetails[state.selectedPlan] || planDetails.single;
+  const plan = planDetails[state.selectedPlan] || planDetails.starter;
   const apply = (prefix) => {
     document.querySelector(`#${prefix}Title`).textContent = plan.title;
     document.querySelector(`#${prefix}Price`).textContent = plan.price;
@@ -42513,7 +43970,7 @@ function bindEvents() {
 
   document.querySelector("#mediaVideoDemo")?.addEventListener("click", () => {
     const text = "用现有产品图生成 6 秒或 10 秒产品展示视频的脚本与分镜，包含封面、字幕和镜头顺序，先不要发布。";
-    addCeoMessage(text, "视频脚本与分镜已经生成到素材工坊；只有 Provider 返回真实视频文件后，页面才会显示视频成片。");
+    addCeoMessage(text, "视频脚本与分镜已经生成到素材工坊；只有素材生成服务返回真实视频文件后，页面才会显示视频成片。");
     runMediaGenerationFromCeo(text);
     openAssetPreview("video");
   });
@@ -43098,6 +44555,7 @@ function init() {
   startSaasAiCeoCrossDeviceSync();
   window.setTimeout(syncAppStartVisibleShellGuard, 0);
   window.setTimeout(syncAppStartVisibleShellGuard, 1200);
+  window.JiejingAnalytics?.markAppShellReady?.();
 }
 
 function applyStartupRoute() {

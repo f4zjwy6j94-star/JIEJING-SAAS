@@ -68,6 +68,7 @@ def main() -> None:
 
     previous_default_web = os.environ.get("JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_ENABLED")
     os.environ["JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_ENABLED"] = "false"
+    stages: list[str] = []
     try:
         message = (
             "帮我找个小众品，市场有需求，适合 eBay 美国站，轻小件，不带电。"
@@ -86,6 +87,7 @@ def main() -> None:
                 "model": "deepseek-v4-pro",
                 "endpoint_host": "api.deepseek.com",
             },
+            on_stage=stages.append,
         )
     finally:
         if previous_default_web is None:
@@ -94,6 +96,7 @@ def main() -> None:
             os.environ["JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_ENABLED"] = previous_default_web
 
     assert chat["status"] == AI_CEO_STATUS_MARKET_REPORT_RECOVERY_DRAFT, chat
+    assert stages == ["model"], stages
     assert chat["route"] == "ebay_workflow", chat
     assert chat["default_web_search"]["status"] == "not_requested", chat
     assert chat["source_records"] == [], chat

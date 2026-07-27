@@ -104,11 +104,29 @@ def main() -> int:
         return fail(f"controlled bridge should expose the internal draft contract: {confirmation_bridge}")
     if draft_contract.get("writes_to_ebay") is not False or draft_contract.get("creates_public_listing") is not False:
         return fail(f"internal draft bridge must not look like an eBay write: {draft_contract}")
+    external_actions = confirmation_bridge.get("confirmation_gated_external_actions") or []
+    ebay_draft_contract = next(
+        (item for item in external_actions if item.get("action_type") == "save_ebay_listing_draft"),
+        None,
+    )
+    if not ebay_draft_contract:
+        return fail(f"controlled bridge should expose the confirmation-gated eBay draft contract: {confirmation_bridge}")
+    expected_external_boundary = {
+        "writes_to_ebay": True,
+        "creates_public_listing": False,
+        "calls_publish_offer": False,
+        "requires_confirmation": True,
+    }
+    for key, expected in expected_external_boundary.items():
+        if ebay_draft_contract.get(key) is not expected:
+            return fail(f"eBay draft bridge should keep {key}={expected}: {ebay_draft_contract}")
 
     ebay = get_platform_definition("ebay") or {}
     write_capabilities = set(ebay.get("write_capabilities") or [])
     if "internal_listing_draft_no_ebay_write" not in write_capabilities:
         return fail(f"eBay platform registry should distinguish internal drafts from real writes: {ebay}")
+    if "save_ebay_listing_draft_after_confirmation" not in write_capabilities:
+        return fail(f"eBay platform registry should expose the explicit unpublished draft capability: {ebay}")
     if "draft_listing" in write_capabilities:
         return fail(f"ambiguous draft_listing capability should not remain in the eBay registry: {ebay}")
 

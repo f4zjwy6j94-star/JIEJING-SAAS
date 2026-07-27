@@ -55,11 +55,16 @@ FILES=(
   "docs/JIEJING_FRONTEND_SPLIT_STATUS_20260617.md"
   "docs/JIEJING_NEW_EBAY_ACCOUNT_LOW_RISK_RUNBOOK_20260617.md"
   "docs/JIEJING_EBAY_MARKETPLACE_ACCOUNT_DELETION_DESIGN_20260713.md"
+  "docs/JIEJING_WECHAT_PAY_PRODUCTION_RUNBOOK_20260713.md"
+  "docs/superpowers/specs/2026-07-14-billing-operations-maintenance-design.md"
+  "docs/superpowers/specs/2026-07-14-operations-metering-design.md"
+  "docs/superpowers/specs/2026-07-15-independent-operations-console-design.md"
   "docs/superpowers/specs/2026-06-19-jiejing-first-order-loop-design.md"
   "docs/superpowers/specs/2026-06-19-jiejing-publish-preflight-resolution-design.md"
   "favicon.ico"
   "index.html"
   "app.html"
+  "ops.html"
   "privacy.html"
   "terms.html"
   "refund-policy.html"
@@ -67,14 +72,19 @@ FILES=(
   "risk-disclosure.html"
   "robots.txt"
   "app.js"
+  "ops.js"
   "styles.css"
+  "ops.css"
   "assets/jiejing-app-icon.svg"
   "assets/jiejing-logo-lockup.svg"
   "assets/jiejing-logo-mark.svg"
+  "assets/jiejing-first-party-analytics.js"
   "assets/jiejing-settings-panels.js"
   "jiejing_saas/account_health.py"
   "jiejing_saas/backup_plan.py"
   "jiejing_saas/billing_checkout.py"
+  "jiejing_saas/billing_domestic.py"
+  "jiejing_saas/billing_operations_maintenance.py"
   "jiejing_saas/billing_domain_cutover_rehearsal.py"
   "jiejing_saas/billing_manual_beta.py"
   "jiejing_saas/billing_payment_options.py"
@@ -83,6 +93,7 @@ FILES=(
   "jiejing_saas/billing_provider_rehearsal.py"
   "jiejing_saas/billing_test_provider.py"
   "jiejing_saas/billing_webhook.py"
+  "jiejing_saas/billing_wechat_pay.py"
   "jiejing_saas/ai_ceo_chat.py"
   "jiejing_saas/commercial_launch_gate.py"
   "jiejing_saas/controlled_bridges.py"
@@ -94,6 +105,9 @@ FILES=(
   "jiejing_saas/repository.py"
   "jiejing_saas/infrastructure_drivers.py"
   "jiejing_saas/operational_health.py"
+  "jiejing_saas/operations_metering.py"
+  "jiejing_saas/launch_progress.py"
+  "deploy/release-evidence.json"
   "jiejing_saas/owner_launch_control.py"
   "jiejing_saas/feasibility_review.py"
   "jiejing_saas/platform_authorization_strategy.py"
@@ -103,6 +117,7 @@ FILES=(
   "jiejing_saas/production_release_gate.py"
   "jiejing_saas/post_publish_cockpit.py"
   "jiejing_saas/media_asset_pipeline.py"
+  "jiejing_saas/media_credits.py"
   "jiejing_saas/media_source_assets.py"
   "jiejing_saas/provider_job_runner.py"
   "jiejing_saas/provider_workflow_plan.py"
@@ -120,6 +135,7 @@ FILES=(
   "jiejing_saas/ebay_account_deletion.py"
   "jiejing_saas/worker.py"
   "jiejing_saas/api_server.py"
+  "jiejing_saas/registration_challenge.py"
   "jiejing_saas/security.py"
   "jiejing_saas/readiness.py"
   "jiejing_saas/config.py"
@@ -151,11 +167,16 @@ FILES=(
   "tools/jiejing_infra_cutover_rehearsal.py"
   "tools/jiejing_worker_cli.py"
   "tools/jiejing_upsert_private_env_secret.py"
+  "tools/jiejing_wechat_pay_noncharge_acceptance.py"
+  "tools/jiejing_wechat_pay_live_acceptance.py"
+  "tools/jiejing_wechat_pay_acceptance_verify.py"
   "tools/test_jiejing_sqlite_to_postgres_rehearsal.py"
   "tools/test_jiejing_cost_saver_snapshot.py"
   "tools/test_jiejing_infra_cutover_rehearsal.py"
   "tools/test_jiejing_worker_cli_contract.py"
+  "tools/test_jiejing_domestic_billing_maintenance.py"
   "tools/test_jiejing_ebay_account_deletion.py"
+  "tools/test_jiejing_operations_console.py"
   "tools/jiejing_infrastructure_stage_gate.py"
   "tools/jiejing_deploy_channel_doctor.py"
   "tools/jiejing_deploy_frontend_staging_with_key.ps1"
@@ -163,17 +184,21 @@ FILES=(
   "tools/jiejing_prepare_public_staging_bundle.py"
   "tools/jiejing_staging_deploy.py"
   "tools/jiejing_current_state_guard.py"
+  "tools/jiejing_external_launch_blocker_gate.py"
   "tools/jiejing_configure_tencent_runtime_env.py"
   "tools/jiejing_a_class_unattended_gate.py"
   "tools/jiejing_b_class_production_gate.py"
   "tools/jiejing_c_class_production_gate.py"
   "tools/test_jiejing_deploy_channel_doctor.py"
   "tools/test_jiejing_staging_deploy_channel_contract.py"
+  "tools/test_jiejing_staging_deploy_disk_guard.py"
   "tools/test_jiejing_agents_md_guardrails.py"
   "tools/test_jiejing_github_actions_deploy_guardrails.py"
   "tools/test_jiejing_github_runner_doctor_guardrails.py"
   "tools/jiejing_precloud_deployment_gate.py"
   "tools/test_jiejing_current_state_guard.py"
+  "tools/test_jiejing_external_launch_blocker_gate.py"
+  "tools/test_jiejing_historical_ebay_readiness.py"
   "tools/test_jiejing_configure_tencent_runtime_env.py"
   "tools/test_jiejing_frontend_staging_config.py"
   "tools/test_jiejing_saas_p0_security_guardrails.py"
@@ -246,6 +271,8 @@ FILES=(
   "tools/test_jiejing_registered_domain_cutover_status.py"
   "tools/test_jiejing_edge_cutover_preflight.py"
   "tools/test_jiejing_expensive_api_rate_limit.py"
+  "tools/test_jiejing_platform_trial_activation_guard.py"
+  "tools/test_jiejing_registration_challenge_ui.py"
   "tools/test_jiejing_ai_ceo_scroll_retention.py"
   "tools/test_jiejing_ai_ceo_history_pagination.py"
   "tools/test_jiejing_billing_quota_guardrail.py"
@@ -258,6 +285,9 @@ FILES=(
   "tools/test_jiejing_owner_launch_control.py"
   "tools/test_jiejing_owner_launch_control_access.py"
   "tools/test_jiejing_owner_launch_control_ui.py"
+  "tools/test_jiejing_fixed_launch_progress.py"
+  "tools/test_jiejing_merchant_workflow_validation.py"
+  "tools/test_jiejing_version_bound_release_evidence.py"
   "tools/codex_jiejing_owner_launch_control_smoke.js"
   "tools/codex_jiejing_all_modules_clean_smoke.js"
   "tools/codex_jiejing_paid_cutover_decision_smoke.js"
@@ -301,6 +331,8 @@ python3 -m py_compile \
   jiejing_saas/account_health.py \
   jiejing_saas/backup_plan.py \
   jiejing_saas/billing_checkout.py \
+  jiejing_saas/billing_domestic.py \
+  jiejing_saas/billing_operations_maintenance.py \
   jiejing_saas/billing_domain_cutover_rehearsal.py \
   jiejing_saas/billing_manual_beta.py \
   jiejing_saas/billing_payment_options.py \
@@ -309,6 +341,7 @@ python3 -m py_compile \
   jiejing_saas/billing_provider_rehearsal.py \
   jiejing_saas/billing_test_provider.py \
   jiejing_saas/billing_webhook.py \
+  jiejing_saas/billing_wechat_pay.py \
   jiejing_saas/ai_ceo_chat.py \
   jiejing_saas/commercial_launch_gate.py \
   jiejing_saas/controlled_bridges.py \
@@ -322,6 +355,8 @@ python3 -m py_compile \
   jiejing_saas/vault_adapter.py \
   jiejing_saas/infrastructure_drivers.py \
   jiejing_saas/operational_health.py \
+  jiejing_saas/operations_metering.py \
+  jiejing_saas/launch_progress.py \
   jiejing_saas/owner_launch_control.py \
   jiejing_saas/feasibility_review.py \
   jiejing_saas/platform_authorization_strategy.py \
@@ -331,6 +366,7 @@ python3 -m py_compile \
   jiejing_saas/production_release_gate.py \
   jiejing_saas/post_publish_cockpit.py \
   jiejing_saas/media_asset_pipeline.py \
+  jiejing_saas/media_credits.py \
   jiejing_saas/media_source_assets.py \
   jiejing_saas/provider_job_runner.py \
   jiejing_saas/provider_workflow_plan.py \
@@ -345,6 +381,7 @@ python3 -m py_compile \
   jiejing_saas/ebay_account_deletion.py \
   jiejing_saas/worker.py \
   jiejing_saas/api_server.py \
+  jiejing_saas/registration_challenge.py \
   jiejing_saas/security.py \
   jiejing_saas/readiness.py \
   jiejing_saas/config.py \
@@ -373,29 +410,37 @@ python3 -m py_compile \
   tools/jiejing_sqlite_to_postgres_rehearsal.py \
   tools/jiejing_cost_saver_snapshot.py \
   tools/jiejing_infra_cutover_rehearsal.py \
-  tools/jiejing_worker_cli.py \
-  tools/jiejing_upsert_private_env_secret.py \
+    tools/jiejing_worker_cli.py \
+    tools/jiejing_upsert_private_env_secret.py \
+    tools/jiejing_wechat_pay_noncharge_acceptance.py \
+    tools/jiejing_wechat_pay_live_acceptance.py \
+    tools/jiejing_wechat_pay_acceptance_verify.py \
   tools/test_jiejing_sqlite_to_postgres_rehearsal.py \
   tools/test_jiejing_cost_saver_snapshot.py \
   tools/test_jiejing_infra_cutover_rehearsal.py \
   tools/test_jiejing_worker_cli_contract.py \
+  tools/test_jiejing_domestic_billing_maintenance.py \
   tools/test_jiejing_ebay_account_deletion.py \
   tools/jiejing_infrastructure_stage_gate.py \
   tools/jiejing_deploy_channel_doctor.py \
   tools/jiejing_prepare_public_staging_bundle.py \
   tools/jiejing_staging_deploy.py \
   tools/jiejing_current_state_guard.py \
+  tools/jiejing_external_launch_blocker_gate.py \
   tools/jiejing_configure_tencent_runtime_env.py \
   tools/jiejing_a_class_unattended_gate.py \
   tools/jiejing_b_class_production_gate.py \
   tools/jiejing_c_class_production_gate.py \
   tools/test_jiejing_deploy_channel_doctor.py \
   tools/test_jiejing_staging_deploy_channel_contract.py \
+  tools/test_jiejing_staging_deploy_disk_guard.py \
   tools/test_jiejing_agents_md_guardrails.py \
   tools/test_jiejing_github_actions_deploy_guardrails.py \
   tools/test_jiejing_github_runner_doctor_guardrails.py \
   tools/jiejing_precloud_deployment_gate.py \
   tools/test_jiejing_current_state_guard.py \
+  tools/test_jiejing_external_launch_blocker_gate.py \
+  tools/test_jiejing_historical_ebay_readiness.py \
   tools/test_jiejing_configure_tencent_runtime_env.py \
   tools/test_jiejing_frontend_staging_config.py \
   tools/test_jiejing_saas_p0_security_guardrails.py \
@@ -465,6 +510,8 @@ python3 -m py_compile \
   tools/test_jiejing_registered_domain_cutover_status.py \
   tools/test_jiejing_edge_cutover_preflight.py \
   tools/test_jiejing_expensive_api_rate_limit.py \
+  tools/test_jiejing_platform_trial_activation_guard.py \
+  tools/test_jiejing_registration_challenge_ui.py \
   tools/test_jiejing_ai_ceo_scroll_retention.py \
   tools/test_jiejing_ai_ceo_history_pagination.py \
   tools/test_jiejing_billing_quota_guardrail.py \
@@ -476,7 +523,10 @@ python3 -m py_compile \
   tools/test_jiejing_publish_preflight_resolution_ui.py \
   tools/test_jiejing_owner_launch_control.py \
   tools/test_jiejing_owner_launch_control_access.py \
-  tools/test_jiejing_owner_launch_control_ui.py
+  tools/test_jiejing_owner_launch_control_ui.py \
+  tools/test_jiejing_fixed_launch_progress.py \
+  tools/test_jiejing_merchant_workflow_validation.py \
+  tools/test_jiejing_version_bound_release_evidence.py
 
 COMPOSE_FILE="deploy/docker-compose.public-https-staging.yml"
 if [[ ! -f "$COMPOSE_FILE" ]]; then
@@ -501,6 +551,21 @@ if [[ -f "deploy/staging-vault-init-unseal.sh" ]]; then
     sh deploy/staging-vault-init-unseal.sh
 fi
 docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps jiejing-saas
+api_health_ready=false
+for attempt in $(seq 1 15); do
+  if docker compose "${COMPOSE_ARGS[@]}" exec -T jiejing-saas \
+    python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8788/health', timeout=10).read().decode())" \
+    >/tmp/jiejing-health.json 2>/tmp/jiejing-health.err; then
+    api_health_ready=true
+    break
+  fi
+  sleep 2
+done
+if [[ "$api_health_ready" != "true" ]]; then
+  echo "Refusing to start the worker before the API health check passes." >&2
+  tail -c 1000 /tmp/jiejing-health.err >&2 || true
+  exit 6
+fi
 docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps jiejing-worker
 docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps --force-recreate jiejing-frontend
 if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy; then
@@ -512,11 +577,6 @@ if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy; th
 else
   docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps --force-recreate jiejing-edge
 fi
-
-sleep 3
-docker compose "${COMPOSE_ARGS[@]}" exec -T jiejing-saas \
-  python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8788/health', timeout=10).read().decode())" \
-  >/tmp/jiejing-health.json
 
 echo "PATCH_APPLIED=1"
 echo "BACKUP_DIR=$BACKUP_DIR"

@@ -323,7 +323,7 @@ def _check_managed_readiness_stays_blocked_until_drivers_exist() -> dict[str, An
         and "dependency" in driver_status.get("redis", {}),
         "cutover_not_ready_without_live_probes": driver_status.get("ready_for_runtime_cutover") is False,
         "backup_gate_visible": backup.get("status") == "blocked_backup_restore_not_ready",
-        "billing_gate_visible": billing.get("status") == "blocked_billing_quota_not_ready",
+        "billing_gate_visible": billing.get("status") == "blocked_mainland_payment_not_ready",
         "model_value_gate_visible": model_value.get("status") == "blocked_live_model_value_not_proven",
         "provider_status_backup_visible": "backup" in provider_status,
         "provider_status_billing_visible": "billing" in provider_status,

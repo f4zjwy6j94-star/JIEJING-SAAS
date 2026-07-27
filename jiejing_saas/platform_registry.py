@@ -97,7 +97,7 @@ PLATFORM_DEFINITIONS: dict[str, PlatformDefinition] = {
         ],
         write_capabilities=[
             "internal_listing_draft_no_ebay_write",
-            "ebay_draft_after_confirmation_and_adapter_ready",
+            "save_ebay_listing_draft_after_confirmation",
             "publish_listing_after_confirmation",
             "revise_listing_after_confirmation",
             "tracking_sync_after_confirmation",

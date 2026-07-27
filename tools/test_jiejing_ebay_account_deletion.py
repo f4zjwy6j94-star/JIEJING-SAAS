@@ -275,6 +275,24 @@ def main() -> int:
         private_env_text = private_env.read_text(encoding="utf-8")
         if f"JIEJING_EBAY_CLIENT_SECRET={client_secret}" not in private_env_text:
             return fail("private env secret upsert did not write the rotated eBay client secret")
+        wechat_app_id = "wx1234567890abcdef"
+        app_id_upsert = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "tools" / "jiejing_upsert_private_env_secret.py"),
+                str(private_env),
+                "JIEJING_WECHAT_PAY_APP_ID",
+            ],
+            input=wechat_app_id,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if app_id_upsert.returncode != 0 or app_id_upsert.stdout or app_id_upsert.stderr:
+            return fail("WeChat Pay AppID upsert should succeed without printing private env material")
+        private_env_text = private_env.read_text(encoding="utf-8")
+        if f"JIEJING_WECHAT_PAY_APP_ID={wechat_app_id}" not in private_env_text:
+            return fail("private env upsert did not write the validated WeChat Pay AppID")
         account = repository.create_user_with_company(
             email="account-deletion-owner@example.test",
             password="account-deletion-password",

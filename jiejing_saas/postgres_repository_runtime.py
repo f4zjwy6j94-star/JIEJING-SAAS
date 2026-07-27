@@ -19,13 +19,17 @@ from typing import Any, Iterable, Sequence
 
 JSON_COLUMNS = {
     "audit_json",
+    "analytics_json",
     "billing_event_json",
     "invite_json",
     "item_json",
     "job_json",
     "media_job_json",
+    "account_json",
+    "ledger_json",
     "metadata_json",
     "output_json",
+    "order_json",
     "packet_json",
     "report_json",
     "request_json",
@@ -37,7 +41,9 @@ JSON_COLUMNS = {
     "input_json",
     "memory_json",
     "command_json",
+    "cost_json",
     "turn_json",
+    "usage_json",
     "tags_json",
 }
 
@@ -125,7 +131,12 @@ def connect_postgres_repository(database_url: str) -> PostgresConnectionAdapter:
         raw = connection_context.__enter__()
         return PostgresConnectionAdapter(raw, connection_context=connection_context)
 
-    raw = psycopg.connect(database_url, connect_timeout=postgres_connect_timeout_seconds(), row_factory=dict_row)
+    raw = psycopg.connect(
+        database_url,
+        connect_timeout=postgres_connect_timeout_seconds(),
+        row_factory=dict_row,
+        options="-c timezone=UTC",
+    )
     return PostgresConnectionAdapter(raw)
 
 
@@ -161,6 +172,7 @@ def _postgres_pool(database_url: str, *, row_factory: Any) -> Any:
             kwargs={
                 "connect_timeout": postgres_connect_timeout_seconds(),
                 "row_factory": row_factory,
+                "options": "-c timezone=UTC",
             },
             open=True,
         )

@@ -4,9 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="prefetch" href="./app.html?start=app&view=cockpit" as="document" />
-    <link rel="prefetch" href="./app.js?v=20260712-private-media-handoff-v79" as="script" />
-    <link rel="prefetch" href="./assets/jiejing-settings-panels.js?v=20260703-account-model-scope-v1" as="script" />
-    <link rel="prefetch" href="./styles.css?v=20260712-private-media-handoff-v79" as="style" />
+    <link rel="prefetch" href="./app.js?v=20260715-owner-traffic-analytics-v104" as="script" />
+    <link rel="prefetch" href="./styles.css?v=20260715-owner-traffic-analytics-v104" as="style" />
     <title>捷境 · eBay AI CEO 自动化工作台</title>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
     <style>
@@ -2593,8 +2592,10 @@
 
       .price {
         margin: 18px 0 12px;
-        font-size: 44px;
+        font-size: 38px;
         font-weight: 900;
+        line-height: 1.08;
+        white-space: nowrap;
       }
 
       .price-card p {
@@ -4562,7 +4563,7 @@
             <h2>先免费用起来，再按店铺数量和自动化深度升级。</h2>
           </div>
           <p class="section-note">
-            注册送 1 个月单店铺版体验。基础订阅负责软件功能；大模型、生图生视频等高成本用量单独核算，eBay 广告费、成交费、物流和退款不是捷境代扣。
+            免费版可长期使用。基础订阅只负责软件功能；商家自带的大模型由商家自行承担费用，图片和视频等素材生成使用素材点单独核算；eBay 广告费、成交费、物流和退款不是捷境代扣。
           </p>
         </div>
         <div class="pricing-grid">
@@ -4572,26 +4573,26 @@
             <p>基础功能可用：AI CEO 基础对话、通用流程模板、手动资料导入和基础工作记录。</p>
           </button>
           <button class="price-card featured is-active" type="button" data-plan="single">
-            <span class="pill green">注册送 1 个月</span>
-            <div class="price">¥99/月</div>
-            <p>1 个 eBay 店铺基础工作台；AI 模型和素材生成按实际用量另算。</p>
+            <span class="pill green">基础版</span>
+            <div class="price">¥99 / 30 天</div>
+            <p>1 个店铺、2 个席位和每月 100 个经营任务；模型与素材费用分开核算。</p>
           </button>
           <button class="price-card" type="button" data-plan="multi">
-            <span class="pill">多店铺版</span>
-            <div class="price">¥199/月</div>
-            <p>适合多个 eBay 店铺或多条商品线，流程模板按店铺复制、调整和复用。</p>
+            <span class="pill">运营版</span>
+            <div class="price">¥199 / 30 天</div>
+            <p>3 个店铺、5 个席位和每月 500 个经营任务，适合稳定经营和小批量铺货。</p>
           </button>
           <button class="price-card" type="button" data-plan="pro">
-            <span class="pill">高级付费版</span>
-            <div class="price">¥299/月</div>
-            <p>适合更深自动化、更多流程模板、更细权限规则和更高处理额度。</p>
+            <span class="pill">团队版</span>
+            <div class="price">¥299 / 30 天</div>
+            <p>5 个店铺、5 个席位和每月 1500 个经营任务，适合团队协作与更深自动化。</p>
           </button>
         </div>
         <aside class="panel pricing-detail" aria-live="polite">
           <div>
             <p class="eyebrow">当前订阅建议</p>
-            <h3 id="planTitle">单店铺版</h3>
-            <p id="planDesc">注册送 1 个月单店铺版体验。¥99/月是基础订阅，覆盖 1 个 eBay 店铺的 AI CEO、Listing、素材工坊、客服订单和确认中心；大模型、生图生视频等高成本用量另算。</p>
+            <h3 id="planTitle">基础版</h3>
+            <p id="planDesc">¥99 单次购买 30 天，不会自动续费；覆盖 1 个店铺的 AI CEO、Listing、素材工坊、客服订单和确认中心。商家自带模型的费用由商家承担，图片和视频生成使用素材点。</p>
           </div>
           <ul id="planList"></ul>
           <button class="button" type="button" id="choosePlan">登录后选择方案</button>
@@ -4667,8 +4668,9 @@
 
     <div class="toast" id="toast" aria-live="polite"></div>
 
+    <script src="./assets/jiejing-first-party-analytics.js?v=20260715-owner-traffic-analytics-v104"></script>
     <script>
-      const JIEJING_SITE_VERSION = "20260712-private-media-handoff-v79";
+      const JIEJING_SITE_VERSION = "20260715-owner-traffic-analytics-v104";
 
       (function routeOfficialEntryToApp() {
         const params = new URLSearchParams(window.location.search);
@@ -4682,9 +4684,8 @@
       function warmWorkspaceAssets() {
         const assets = [
           ["prefetch", "./app.html?start=app&view=workflow", "document"],
-          ["preload", "./assets/jiejing-settings-panels.js?v=20260703-account-model-scope-v1", "script"],
-          ["preload", "./app.js?v=20260712-private-media-handoff-v79", "script"],
-          ["preload", "./styles.css?v=20260712-private-media-handoff-v79", "style"],
+          ["preload", "./app.js?v=20260715-owner-traffic-analytics-v104", "script"],
+          ["preload", "./styles.css?v=20260715-owner-traffic-analytics-v104", "style"],
         ];
         assets.forEach(([rel, href, as]) => {
           if (document.querySelector(`link[href="${href}"]`)) return;
@@ -4795,8 +4796,8 @@
           ],
         },
         single: {
-          title: "单店铺版",
-          desc: "注册送 1 个月单店铺版体验。¥99/月是基础订阅，覆盖 1 个 eBay 店铺的 AI CEO、Listing、素材工坊、客服订单和确认中心；大模型、生图生视频等高成本用量另算。",
+          title: "基础版",
+          desc: "¥99 单次购买 30 天，不会自动续费；覆盖 1 个店铺的 AI CEO、Listing、素材工坊、客服订单和确认中心。商家自带模型的费用由商家承担，图片和视频生成使用素材点。",
           items: [
             "1 个 eBay 店铺工作台",
             "完整选品/上架项目流、素材工坊和客服物流基础流程",
@@ -4807,7 +4808,7 @@
           ],
         },
         multi: {
-          title: "多店铺版",
+          title: "运营版",
           desc: "适合同时管理多个 eBay 店铺或多条商品线，把流程模板按店铺复制、调整和复用；AI 与素材高成本用量仍按实际消耗或额度另算。",
           items: [
             "多店铺/多项目工作台",
@@ -4819,7 +4820,7 @@
           ],
         },
         pro: {
-          title: "高级付费版",
+          title: "团队版",
           desc: "适合需要更高自动化深度、更多流程模板、更细权限规则和更高处理额度的成熟卖家；基础订阅和 AI/素材用量分开核算。",
           items: [
             "更高额度的选品、素材、Listing 和工作记录",
@@ -5936,7 +5937,12 @@
         const endpoint = mode === "register" ? "/auth/register" : "/auth/login";
         const payload =
           mode === "register"
-            ? { email, password, company_name: email.split("@")[0] || "JIEJING Merchant" }
+            ? {
+                email,
+                password,
+                company_name: email.split("@")[0] || "JIEJING Merchant",
+                analytics: window.JiejingAnalytics?.context?.() || {},
+              }
             : { email, password };
         try {
           window.__jiejingEntryAuthPending = true;
@@ -6496,6 +6502,5 @@
       setupSignalCanvas();
       openAuthModalFromUrl();
     </script>
-  <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"8ceaac5cf3dd4fa491331c0faf56768c","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>

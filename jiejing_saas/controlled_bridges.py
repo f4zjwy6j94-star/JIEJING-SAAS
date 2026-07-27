@@ -51,7 +51,7 @@ def build_controlled_bridge_contract(settings: SaaSSettings, repository: SaaSRep
     if settings.is_production_like and not queue_plan.get("production_queue_ready"):
         blockers.append("queue_worker_bridge_not_production_ready")
     return {
-        "contract_version": "2026-06-12-controlled-bridges",
+        "contract_version": "2026-07-14-controlled-bridges-v2",
         "product": "Jiejing SaaS",
         "position": "Backend-owned controlled bridges; Hermes legacy bridge is transitional only.",
         "formal_bridge_count": len(formal),
@@ -177,6 +177,18 @@ def _confirmation_execution_bridge(settings: SaaSSettings) -> dict[str, Any]:
                 "writes_to_ebay": False,
                 "creates_public_listing": False,
                 "requires_confirmation": False,
+                "requires_confirmation_before_public_publish": True,
+            }
+        ],
+        "confirmation_gated_external_actions": [
+            {
+                "action_type": "save_ebay_listing_draft",
+                "label": "Save an unpublished eBay offer",
+                "writes_to_ebay": True,
+                "creates_public_listing": False,
+                "calls_publish_offer": False,
+                "requires_confirmation": True,
+                "blocks_if_published_offer_exists": True,
                 "requires_confirmation_before_public_publish": True,
             }
         ],

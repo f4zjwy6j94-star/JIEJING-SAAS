@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import hashlib
 import os
@@ -10,13 +11,22 @@ import secrets
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from jiejing_runtime.models import now_iso
 
 from .json_safe import json_default
+from .operations_metering import (
+    ANALYTICS_EVENT_KEYS,
+    ANALYTICS_PAGE_KEYS,
+    PROVIDER_MONITOR_AGGREGATE_KEYS,
+    PROVIDER_TELEMETRY_SCOPES,
+    build_reliability_alert_summary,
+    reconcile_reliability_alert_state,
+)
 from .permissions import permissions_for_role, valid_role
 from .postgres_repository_runtime import connect_postgres_repository
 from .security import hash_password, verify_password
@@ -77,6 +87,59 @@ AI_CEO_RULE_MEMORY_POLICY = "merchant_rule"
 AI_CEO_MARKET_REPORT_CONTRACT_VERSION = "2026-07-04-ai-ceo-market-report-frontstage-v2"
 AI_CEO_MARKET_LISTING_HANDOFF_CONTRACT_VERSION = "2026-07-04-ai-ceo-market-to-listing-handoff-v2"
 AI_CEO_MARKET_EBAY_FIELD_MAP_CONTRACT = "ai_ceo_market_research_to_ebay_inventory_offer_v1"
+_DOMESTIC_BILLING_COMPANY_LOCKS = tuple(threading.Lock() for _ in range(128))
+_MEDIA_CREDIT_COMPANY_LOCKS = tuple(threading.Lock() for _ in range(128))
+_PLATFORM_RELIABILITY_ALERT_LOCK = threading.Lock()
+ACCOUNT_CLASSIFICATION_MERCHANT = "merchant"
+ACCOUNT_CLASSIFICATION_SYNTHETIC_TEST = "synthetic_test"
+_SYNTHETIC_ACCOUNT_DOMAINS = {"example.com", "example.test", "jiejing.local", "local.invalid"}
+REAL_MERCHANT_VALIDATION_REQUIRED_COMPANIES = 3
+REAL_MERCHANT_VALIDATION_REQUIRED_PATHS = 20
+_NON_COMMERCIAL_BILLING_PROVIDERS = {"manual_beta", "stripe_test_mock"}
+
+
+def _operations_short_ref(scope: str, value: Any) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    return hashlib.sha256(f"jiejing-ops|{scope}|{normalized}".encode("utf-8")).hexdigest()[:12]
+
+
+def _operations_mask_email(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    local, separator, domain = normalized.partition("@")
+    if not separator or not local or not domain:
+        return ""
+    visible = local[:2] if len(local) > 2 else local[:1]
+    return f"{visible}{'*' * min(max(len(local) - len(visible), 3), 8)}@{domain}"
+
+
+def _operations_cursor_offset(cursor: Any) -> int:
+    normalized = str(cursor or "").strip()
+    if not normalized:
+        return 0
+    try:
+        padding = "=" * (-len(normalized) % 4)
+        decoded = base64.urlsafe_b64decode(f"{normalized}{padding}".encode("ascii")).decode("ascii")
+        version, raw_offset = decoded.split(":", 1)
+        if version != "v1":
+            return 0
+        return min(max(int(raw_offset), 0), 5000)
+    except (ValueError, UnicodeError, OSError):
+        return 0
+
+
+def _operations_next_cursor(offset: int) -> str:
+    return base64.urlsafe_b64encode(f"v1:{max(0, int(offset))}".encode("ascii")).decode("ascii").rstrip("=")
+
+
+def _account_classification_for_email(email: str) -> str:
+    domain = str(email or "").strip().lower().partition("@")[2]
+    return (
+        ACCOUNT_CLASSIFICATION_SYNTHETIC_TEST
+        if domain in _SYNTHETIC_ACCOUNT_DOMAINS
+        else ACCOUNT_CLASSIFICATION_MERCHANT
+    )
 
 
 class SaaSRepository:
@@ -102,7 +165,17 @@ class SaaSRepository:
                   password_hash text not null,
                   status text not null,
                   default_company_id text not null,
+                  account_classification text not null default 'merchant',
                   created_at text not null
+                );
+
+                create table if not exists platform_trial_activations (
+                  company_id text primary key,
+                  user_id text not null,
+                  status text not null,
+                  activated_at text,
+                  updated_at text not null,
+                  activation_json text not null
                 );
 
                 create table if not exists user_sessions (
@@ -314,8 +387,8 @@ class SaaSRepository:
                 create table if not exists confirmations (
                   confirmation_id text primary key,
                   company_id text not null,
-                  store_id text not null,
-                  task_id text not null,
+                  store_id text,
+                  task_id text,
                   runtime_run_id text not null,
                   action_type text not null,
                   title text not null,
@@ -422,6 +495,147 @@ class SaaSRepository:
                   billing_event_json text not null
                 );
 
+                create table if not exists billing_orders (
+                  order_id text primary key,
+                  company_id text not null,
+                  user_id text not null,
+                  provider text not null,
+                  provider_order_id text,
+                  plan_key text not null,
+                  amount_minor integer not null,
+                  currency text not null,
+                  duration_days integer not null,
+                  status text not null,
+                  idempotency_key_hash text not null,
+                  expires_at text,
+                  paid_at text,
+                  created_at text not null,
+                  updated_at text not null,
+                  order_json text not null,
+                  unique (company_id, idempotency_key_hash)
+                );
+
+                create table if not exists media_credit_accounts (
+                  company_id text primary key,
+                  balance_points integer not null,
+                  reserved_points integer not null,
+                  lifetime_granted_points integer not null,
+                  lifetime_spent_points integer not null,
+                  updated_at text not null,
+                  account_json text not null
+                );
+
+                create table if not exists media_credit_ledger (
+                  ledger_id text primary key,
+                  company_id text not null,
+                  user_id text,
+                  operation_type text not null,
+                  points integer not null,
+                  status text not null,
+                  reference_type text not null,
+                  reference_id text not null,
+                  reservation_id text,
+                  idempotency_key_hash text not null,
+                  created_at text not null,
+                  updated_at text not null,
+                  ledger_json text not null,
+                  unique (company_id, idempotency_key_hash)
+                );
+
+                create table if not exists platform_analytics_events (
+                  analytics_event_id text primary key,
+                  event_id_hash text not null unique,
+                  company_id text,
+                  user_id text,
+                  event_key text not null,
+                  page_key text not null,
+                  visitor_hash text,
+                  session_hash text,
+                  occurred_at text not null,
+                  analytics_json text not null
+                );
+
+                create table if not exists model_usage_ledger (
+                  usage_id text primary key,
+                  company_id text not null,
+                  user_id text,
+                  task_id text,
+                  usage_owner text not null,
+                  model_family text not null,
+                  model_label text not null,
+                  request_count integer not null,
+                  input_tokens integer not null,
+                  output_tokens integer not null,
+                  total_tokens integer not null,
+                  cost_minor integer not null,
+                  currency text not null,
+                  cost_status text not null,
+                  idempotency_key_hash text not null unique,
+                  created_at text not null,
+                  usage_json text not null
+                );
+
+                create table if not exists provider_cost_ledger (
+                  cost_id text primary key,
+                  company_id text not null,
+                  user_id text,
+                  task_id text,
+                  reference_type text not null,
+                  reference_id text not null,
+                  cost_category text not null,
+                  resource_type text not null,
+                  unit_count integer not null,
+                  media_points integer not null,
+                  cost_minor integer not null,
+                  currency text not null,
+                  cost_status text not null,
+                  idempotency_key_hash text not null unique,
+                  created_at text not null,
+                  cost_json text not null
+                );
+
+                create table if not exists platform_reliability_alert_state (
+                  alert_scope text primary key,
+                  lifecycle_status text not null,
+                  severity text not null,
+                  observed_status text not null,
+                  consecutive_breach_count integer not null,
+                  consecutive_healthy_count integer not null,
+                  fingerprint text not null,
+                  opened_at text,
+                  recovered_at text,
+                  acknowledged_at text,
+                  acknowledged_by text,
+                  acknowledgement_action text,
+                  last_evaluated_at text not null,
+                  updated_at text not null,
+                  state_json text not null
+                );
+
+                create table if not exists platform_reliability_alert_events (
+                  event_id text primary key,
+                  alert_scope text not null,
+                  transition_key text not null,
+                  severity text not null,
+                  fingerprint text not null,
+                  action_key text not null,
+                  actor_user_id text,
+                  created_at text not null,
+                  event_json text not null,
+                  unique (alert_scope, transition_key, fingerprint, action_key)
+                );
+
+                create table if not exists platform_provider_monitor_state (
+                  scheduler_key text primary key,
+                  lease_owner_hash text not null,
+                  lease_expires_at_epoch integer not null,
+                  last_evaluated_at text,
+                  last_exported_at text,
+                  last_outcome text not null,
+                  snapshot_json text not null,
+                  updated_at text not null
+                );
+
                 create table if not exists ebay_account_deletion_events (
                   event_key text primary key,
                   company_id text,
@@ -452,7 +666,9 @@ class SaaSRepository:
                 );
                 """
             )
+            self._ensure_user_account_classification(conn)
             self._ensure_ai_ceo_chat_merge_score_column(conn)
+            self._ensure_account_scoped_confirmations(conn)
             self._ensure_indexes(conn)
             self._record_schema_migration(
                 conn,
@@ -465,6 +681,12 @@ class SaaSRepository:
                 migration_id="20260613_billing_subscription_state",
                 checksum="jiejing-billing-subscription-state-v20260613",
                 summary="Adds paid billing subscription state and sanitized webhook event persistence.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260714_user_account_classification",
+                checksum="jiejing-user-account-classification-v20260714",
+                summary="Separates merchant accounts from synthetic regression accounts for honest platform operations metrics.",
             )
             self._record_schema_migration(
                 conn,
@@ -508,6 +730,42 @@ class SaaSRepository:
                 checksum="jiejing-ebay-account-deletion-events-v20260713",
                 summary="Adds sanitized, idempotent eBay marketplace account deletion receipts and compliance jobs.",
             )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260713_domestic_billing_orders",
+                checksum="jiejing-domestic-billing-orders-v20260713",
+                summary="Adds tenant-scoped, idempotent domestic billing orders without payment credentials or bank details.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260714_account_scoped_confirmations",
+                checksum="jiejing-account-scoped-confirmations-v20260714",
+                summary="Allows account-level billing confirmations without inventing a store or commerce task.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260714_platform_operations_metering",
+                checksum="jiejing-platform-operations-metering-v20260714",
+                summary="Adds privacy-safe traffic, provider-reported model usage and provider-neutral cost ledgers for the internal operator console.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260714_platform_reliability_alert_lifecycle",
+                checksum="jiejing-platform-reliability-alert-lifecycle-v20260714",
+                summary="Adds provider-neutral alert confirmation, recovery, deduplication and internal handling history.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260717_platform_provider_monitor_state",
+                checksum="jiejing-platform-provider-monitor-state-v20260717",
+                summary="Adds an expiring singleton lease and privacy-safe passive provider monitoring evidence.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260715_platform_trial_activations",
+                checksum="jiejing-platform-trial-activations-v20260715",
+                summary="Separates merchant registration from privacy-safe activation of Jiejing-funded AI and media trials.",
+            )
 
     def _initialize_postgres(self) -> None:
         if self._postgres_initialized:
@@ -541,10 +799,20 @@ class SaaSRepository:
             conn.execute(
                 """
                 insert into users (
-                  user_id, email, password_salt, password_hash, status, default_company_id, created_at
-                ) values (?, ?, ?, ?, ?, ?, ?)
+                  user_id, email, password_salt, password_hash, status, default_company_id,
+                  account_classification, created_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (user_id, email, salt, password_digest, "active", company_id, created_at),
+                (
+                    user_id,
+                    email,
+                    salt,
+                    password_digest,
+                    "active",
+                    company_id,
+                    _account_classification_for_email(email),
+                    created_at,
+                ),
             )
             conn.execute(
                 "insert into team_members (company_id, user_id, role, created_at) values (?, ?, ?, ?)",
@@ -3066,11 +3334,11 @@ class SaaSRepository:
                     join users u on u.user_id = tm.user_id
                     where tm.company_id = ?
                       and (
-                        lower(u.email) like 'codex-owner-launch-%@local.invalid'
-                        or lower(u.email) like '%@example.test'
+                        lower(u.email) like ?
+                        or lower(u.email) like ?
                       )
                     """,
-                    (company_id,),
+                    (company_id, "codex-owner-launch-%@local.invalid", "%@example.test"),
                 ).fetchone()["count"]
             )
             test_companies = int(
@@ -3079,9 +3347,9 @@ class SaaSRepository:
                     select count(*) as count
                     from companies
                     where company_id = ?
-                      and lower(name) like 'codex owner launch%'
+                      and lower(name) like ?
                     """,
-                    (company_id,),
+                    (company_id, "codex owner launch%"),
                 ).fetchone()["count"]
             )
             smoke_stores = int(
@@ -3091,11 +3359,11 @@ class SaaSRepository:
                     from stores
                     where company_id = ?
                       and (
-                        lower(store_name) like 'codex owner launch smoke%'
-                        or lower(cast(store_json as text)) like '%codex_owner_launch_control_smoke%'
+                        lower(store_name) like ?
+                        or lower(cast(store_json as text)) like ?
                       )
                     """,
-                    (company_id,),
+                    (company_id, "codex owner launch smoke%", "%codex_owner_launch_control_smoke%"),
                 ).fetchone()["count"]
             )
             billing_test_events = int(
@@ -3116,12 +3384,12 @@ class SaaSRepository:
                     from audit_logs
                     where company_id = ?
                       and (
-                        lower(cast(audit_json as text)) like '%codex-owner-launch-%'
-                        or lower(cast(audit_json as text)) like '%codex_owner_launch_control_smoke%'
+                        lower(cast(audit_json as text)) like ?
+                        or lower(cast(audit_json as text)) like ?
                         or action_type = 'billing.test_event.applied'
                       )
                     """,
-                    (company_id,),
+                    (company_id, "%codex-owner-launch-%", "%codex_owner_launch_control_smoke%"),
                 ).fetchone()["count"]
             )
             pending_confirmations = int(
@@ -3142,12 +3410,12 @@ class SaaSRepository:
                 from audit_logs
                 where company_id = ?
                   and (
-                    lower(cast(audit_json as text)) like '%codex-owner-launch-%'
-                    or lower(cast(audit_json as text)) like '%codex_owner_launch_control_smoke%'
+                    lower(cast(audit_json as text)) like ?
+                    or lower(cast(audit_json as text)) like ?
                     or action_type = 'billing.test_event.applied'
                   )
                 """,
-                (company_id,),
+                (company_id, "%codex-owner-launch-%", "%codex_owner_launch_control_smoke%"),
             ).fetchone()
             candidate_rows = conn.execute(
                 """
@@ -3155,13 +3423,13 @@ class SaaSRepository:
                 from stores
                 where company_id = ?
                   and (
-                    lower(store_name) like 'codex owner launch smoke%'
-                    or lower(cast(store_json as text)) like '%codex_owner_launch_control_smoke%'
+                    lower(store_name) like ?
+                    or lower(cast(store_json as text)) like ?
                   )
                 order by created_at desc
                 limit 5
                 """,
-                (company_id,),
+                (company_id, "codex owner launch smoke%", "%codex_owner_launch_control_smoke%"),
             ).fetchall()
         candidate_count = team_test_users + test_companies + smoke_stores + billing_test_events
         return {
@@ -3659,8 +3927,8 @@ class SaaSRepository:
         self,
         *,
         company_id: str,
-        store_id: str,
-        task_id: str,
+        store_id: str | None,
+        task_id: str | None,
         runtime_run_id: str,
         action_type: str,
         title: str,
@@ -3931,6 +4199,989 @@ class SaaSRepository:
             ).fetchone()
         return self._billing_subscription_row_to_dict(row) if row else None
 
+    @contextmanager
+    def media_credit_company_lock(self, *, company_id: str) -> Iterator[None]:
+        """Serialize one tenant's media-point balance mutations."""
+
+        normalized_company = str(company_id or "").strip()
+        if not normalized_company:
+            raise ValueError("company_id is required for media credit lock")
+        digest = hashlib.sha256(f"jiejing-media-credit:{normalized_company}".encode("utf-8")).digest()
+        if self.database_engine == "postgres":
+            advisory_key = int.from_bytes(digest[:8], "big", signed=True)
+            with self._connect() as conn:
+                conn.execute("select pg_advisory_lock(?)", (advisory_key,)).fetchone()
+                try:
+                    yield
+                finally:
+                    conn.execute("select pg_advisory_unlock(?)", (advisory_key,)).fetchone()
+            return
+        lock = _MEDIA_CREDIT_COMPANY_LOCKS[int.from_bytes(digest[:2], "big") % len(_MEDIA_CREDIT_COMPANY_LOCKS)]
+        with lock:
+            yield
+
+    def get_media_credit_account(self, *, company_id: str) -> dict[str, Any]:
+        self.initialize()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select company_id, balance_points, reserved_points, lifetime_granted_points,
+                       lifetime_spent_points, updated_at, account_json
+                from media_credit_accounts where company_id = ?
+                """,
+                (company_id,),
+            ).fetchone()
+        if row:
+            return self._media_credit_account_row_to_dict(row)
+        return {
+            "balance_points": 0,
+            "reserved_points": 0,
+            "available_points": 0,
+            "lifetime_granted_points": 0,
+            "lifetime_spent_points": 0,
+            "updated_at": "",
+            "provider_neutral": True,
+            "secret_exposed": False,
+        }
+
+    def upsert_platform_trial_activation(
+        self,
+        *,
+        company_id: str,
+        user_id: str,
+        status: str,
+        platform_trial_allowed: bool,
+        welcome_media_points_granted: int = 0,
+        requires_challenge: bool,
+        challenge_attested: bool,
+        decision_reason: str,
+    ) -> dict[str, Any]:
+        """Persist a sanitized tenant trial decision without client IPs or provider secrets."""
+
+        self.initialize()
+        safe_status = str(status or "verification_required").strip().lower()
+        if safe_status not in {"active", "verification_required", "activation_budget_exhausted"}:
+            raise ValueError("unsupported platform trial activation status")
+        now = now_iso()
+        activated_at = now if safe_status == "active" else None
+        record = {
+            "contract_version": "2026-07-15-platform-trial-activation-v1",
+            "status": safe_status,
+            "platform_trial_allowed": bool(platform_trial_allowed),
+            "welcome_media_points_granted": max(0, int(welcome_media_points_granted)),
+            "requires_challenge": bool(requires_challenge),
+            "challenge_attested": bool(challenge_attested),
+            "merchant_byok_unaffected": True,
+            "decision_reason": str(decision_reason or safe_status)[:120],
+            "activated_at": activated_at or "",
+            "updated_at": now,
+            "raw_client_ip_persisted": False,
+            "frontend_can_grant_trial": False,
+            "triggers_real_charge": False,
+            "secret_exposed": False,
+        }
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into platform_trial_activations (
+                  company_id, user_id, status, activated_at, updated_at, activation_json
+                ) values (?, ?, ?, ?, ?, ?)
+                on conflict (company_id) do update set
+                  user_id = excluded.user_id,
+                  status = excluded.status,
+                  activated_at = coalesce(platform_trial_activations.activated_at, excluded.activated_at),
+                  updated_at = excluded.updated_at,
+                  activation_json = excluded.activation_json
+                """,
+                (
+                    company_id,
+                    user_id,
+                    safe_status,
+                    activated_at,
+                    now,
+                    json.dumps(record, ensure_ascii=False),
+                ),
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=None,
+                user_id=user_id,
+                actor_type="system",
+                action_type="platform_trial_activation_decided",
+                target_type="platform_trial_activation",
+                target_id=company_id,
+                summary="Platform-funded trial activation decision recorded",
+                details={
+                    "status": safe_status,
+                    "platform_trial_allowed": bool(platform_trial_allowed),
+                    "welcome_media_points_granted": max(0, int(welcome_media_points_granted)),
+                    "raw_client_ip_persisted": False,
+                },
+            )
+        return record
+
+    def get_platform_trial_activation(self, *, company_id: str) -> dict[str, Any] | None:
+        self.initialize()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select activation_json
+                from platform_trial_activations
+                where company_id = ?
+                """,
+                (company_id,),
+            ).fetchone()
+        if not row:
+            return None
+        value = _load_json_field(row["activation_json"])
+        return value if isinstance(value, dict) else None
+
+    def list_media_credit_ledger(self, *, company_id: str, limit: int = 30) -> list[dict[str, Any]]:
+        self.initialize()
+        safe_limit = min(max(int(limit), 1), 100)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select ledger_id, company_id, user_id, operation_type, points, status,
+                       reference_type, reference_id, reservation_id, created_at, updated_at, ledger_json
+                from media_credit_ledger
+                where company_id = ?
+                order by created_at desc, ledger_id desc
+                limit ?
+                """,
+                (company_id, safe_limit),
+            ).fetchall()
+        return [self._media_credit_ledger_row_to_dict(row) for row in rows]
+
+    def apply_media_credit_operation(
+        self,
+        *,
+        company_id: str,
+        user_id: str | None,
+        operation_type: str,
+        points: int,
+        idempotency_key: str,
+        reference_type: str,
+        reference_id: str,
+        reservation_id: str = "",
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Apply one idempotent grant, reserve, settle, release, or revoke operation."""
+
+        self.initialize()
+        operation = str(operation_type or "").strip().lower()
+        if operation not in {"grant", "reserve", "settle", "release", "revoke"}:
+            raise ValueError("unsupported media credit operation")
+        safe_points = int(points)
+        if safe_points <= 0:
+            raise ValueError("media credit points must be positive")
+        raw_idempotency = str(idempotency_key or "").strip()
+        if len(raw_idempotency) < 8 or len(raw_idempotency) > 200:
+            raise ValueError("media credit idempotency key is invalid")
+        safe_reference_type = str(reference_type or "media_job").strip()[:64]
+        safe_reference_id = str(reference_id or "").strip()[:160]
+        safe_reservation_id = str(reservation_id or "").strip()[:80]
+        idempotency_hash = hashlib.sha256(f"{company_id}|{raw_idempotency}".encode("utf-8")).hexdigest()
+        safe_details = _redact_secret_like(details or {})
+
+        with self.media_credit_company_lock(company_id=company_id):
+            with self._connect() as conn:
+                existing = conn.execute(
+                    """
+                    select ledger_id, company_id, user_id, operation_type, points, status,
+                           reference_type, reference_id, reservation_id, created_at, updated_at, ledger_json
+                    from media_credit_ledger
+                    where company_id = ? and idempotency_key_hash = ?
+                    """,
+                    (company_id, idempotency_hash),
+                ).fetchone()
+                if existing:
+                    account_row = self._ensure_media_credit_account_row(conn, company_id=company_id)
+                    return {
+                        "account": self._media_credit_account_row_to_dict(account_row),
+                        "ledger_entry": self._media_credit_ledger_row_to_dict(existing),
+                        "duplicate_request": True,
+                        "secret_exposed": False,
+                    }
+
+                account_row = self._ensure_media_credit_account_row(conn, company_id=company_id)
+                balance = int(account_row["balance_points"] or 0)
+                reserved = int(account_row["reserved_points"] or 0)
+                lifetime_granted = int(account_row["lifetime_granted_points"] or 0)
+                lifetime_spent = int(account_row["lifetime_spent_points"] or 0)
+                if operation in {"settle", "release"} or (operation == "revoke" and safe_reservation_id):
+                    if not safe_reservation_id:
+                        raise ValueError("reservation_id is required")
+                    reservation = conn.execute(
+                        """
+                        select ledger_id, operation_type, points, status
+                        from media_credit_ledger
+                        where company_id = ? and ledger_id = ?
+                        """,
+                        (company_id, safe_reservation_id),
+                    ).fetchone()
+                    if not reservation or reservation["operation_type"] != "reserve" or reservation["status"] != "reserved":
+                        raise ValueError("media credit reservation is not available")
+                    reserved_by_entry = int(reservation["points"] or 0)
+                    if operation in {"settle", "revoke"} and safe_points > reserved_by_entry:
+                        raise ValueError("settlement exceeds reserved media points")
+                    reserved = max(0, reserved - reserved_by_entry)
+                    if operation == "settle":
+                        if balance < safe_points:
+                            raise ValueError("insufficient media point balance")
+                        balance -= safe_points
+                        lifetime_spent += safe_points
+                    elif operation == "revoke":
+                        balance -= safe_points
+                    conn.execute(
+                        "update media_credit_ledger set status = ?, updated_at = ? where company_id = ? and ledger_id = ?",
+                        (
+                            "settled" if operation == "settle" else "revoked" if operation == "revoke" else "released",
+                            now_iso(),
+                            company_id,
+                            safe_reservation_id,
+                        ),
+                    )
+                elif operation == "grant":
+                    balance += safe_points
+                    lifetime_granted += safe_points
+                elif operation == "revoke":
+                    # A provider-confirmed refund must remove its purchased points even
+                    # when they were already consumed. A negative balance prevents more
+                    # generation until the merchant tops up, closing refund abuse.
+                    balance -= safe_points
+                else:
+                    if safe_points > balance - reserved:
+                        raise ValueError("insufficient available media points")
+                    reserved += safe_points
+
+                now = now_iso()
+                account_payload = {
+                    "contract_version": "2026-07-14-media-points-account-v1",
+                    "provider_neutral": True,
+                    "secret_exposed": False,
+                }
+                conn.execute(
+                    """
+                    update media_credit_accounts
+                    set balance_points = ?, reserved_points = ?, lifetime_granted_points = ?,
+                        lifetime_spent_points = ?, updated_at = ?, account_json = ?
+                    where company_id = ?
+                    """,
+                    (
+                        balance,
+                        reserved,
+                        lifetime_granted,
+                        lifetime_spent,
+                        now,
+                        json.dumps(account_payload, ensure_ascii=False),
+                        company_id,
+                    ),
+                )
+                ledger_id = _id("mcredit")
+                ledger_status = "reserved" if operation == "reserve" else "completed"
+                ledger_payload = {
+                    "contract_version": "2026-07-14-media-points-ledger-v1",
+                    "operation_type": operation,
+                    "reference_type": safe_reference_type,
+                    "reference_id": safe_reference_id,
+                    "details": safe_details,
+                    "provider_neutral": True,
+                    "secret_exposed": False,
+                }
+                conn.execute(
+                    """
+                    insert into media_credit_ledger (
+                      ledger_id, company_id, user_id, operation_type, points, status,
+                      reference_type, reference_id, reservation_id, idempotency_key_hash,
+                      created_at, updated_at, ledger_json
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ledger_id,
+                        company_id,
+                        user_id,
+                        operation,
+                        safe_points,
+                        ledger_status,
+                        safe_reference_type,
+                        safe_reference_id,
+                        safe_reservation_id or None,
+                        idempotency_hash,
+                        now,
+                        now,
+                        json.dumps(ledger_payload, ensure_ascii=False),
+                    ),
+                )
+                account_row = conn.execute(
+                    """
+                    select company_id, balance_points, reserved_points, lifetime_granted_points,
+                           lifetime_spent_points, updated_at, account_json
+                    from media_credit_accounts where company_id = ?
+                    """,
+                    (company_id,),
+                ).fetchone()
+                ledger_row = conn.execute(
+                    """
+                    select ledger_id, company_id, user_id, operation_type, points, status,
+                           reference_type, reference_id, reservation_id, created_at, updated_at, ledger_json
+                    from media_credit_ledger where company_id = ? and ledger_id = ?
+                    """,
+                    (company_id, ledger_id),
+                ).fetchone()
+        return {
+            "account": self._media_credit_account_row_to_dict(account_row),
+            "ledger_entry": self._media_credit_ledger_row_to_dict(ledger_row),
+            "duplicate_request": False,
+            "secret_exposed": False,
+        }
+
+    def _ensure_media_credit_account_row(self, conn: Any, *, company_id: str) -> Any:
+        now = now_iso()
+        conn.execute(
+            """
+            insert or ignore into media_credit_accounts (
+              company_id, balance_points, reserved_points, lifetime_granted_points,
+              lifetime_spent_points, updated_at, account_json
+            ) values (?, 0, 0, 0, 0, ?, ?)
+            """,
+            (
+                company_id,
+                now,
+                json.dumps({"contract_version": "2026-07-14-media-points-account-v1", "provider_neutral": True}, ensure_ascii=False),
+            ),
+        )
+        row = conn.execute(
+            """
+            select company_id, balance_points, reserved_points, lifetime_granted_points,
+                   lifetime_spent_points, updated_at, account_json
+            from media_credit_accounts where company_id = ?
+            """,
+            (company_id,),
+        ).fetchone()
+        if not row:
+            raise RuntimeError("media credit account was not persisted")
+        return row
+
+    def create_domestic_billing_order_record(
+        self,
+        *,
+        order_id: str,
+        company_id: str,
+        user_id: str,
+        provider: str,
+        plan_key: str,
+        amount_minor: int,
+        currency: str,
+        duration_days: int,
+        status: str,
+        idempotency_key_hash: str,
+        order: dict[str, Any],
+        provider_order_id: str = "",
+        expires_at: str | None = None,
+        paid_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Create one sanitized domestic order or return its idempotent predecessor."""
+
+        self.initialize()
+        created_at = now_iso()
+        safe_order = _redact_secret_like(order)
+        with self._connect() as conn:
+            inserted = conn.execute(
+                """
+                insert or ignore into billing_orders (
+                  order_id, company_id, user_id, provider, provider_order_id,
+                  plan_key, amount_minor, currency, duration_days, status,
+                  idempotency_key_hash, expires_at, paid_at, created_at, updated_at, order_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    order_id,
+                    company_id,
+                    user_id,
+                    provider,
+                    provider_order_id or None,
+                    plan_key,
+                    int(amount_minor),
+                    currency,
+                    int(duration_days),
+                    status,
+                    idempotency_key_hash,
+                    expires_at,
+                    paid_at,
+                    created_at,
+                    created_at,
+                    json.dumps(safe_order, ensure_ascii=False),
+                ),
+            ).rowcount
+            row = conn.execute(
+                """
+                select order_id, company_id, user_id, provider, provider_order_id,
+                       plan_key, amount_minor, currency, duration_days, status,
+                       expires_at, paid_at, created_at, updated_at, order_json
+                from billing_orders
+                where company_id = ? and idempotency_key_hash = ?
+                """,
+                (company_id, idempotency_key_hash),
+            ).fetchone()
+            if inserted:
+                self._insert_audit(
+                    conn,
+                    company_id=company_id,
+                    store_id=None,
+                    user_id=user_id,
+                    actor_type="user",
+                    action_type="billing.domestic_order.created",
+                    target_type="billing_order",
+                    target_id=order_id,
+                    summary="Domestic billing order created inside the backend payment boundary.",
+                    details={
+                        "provider": provider,
+                        "plan_key": plan_key,
+                        "amount_minor": int(amount_minor),
+                        "currency": currency,
+                        "status": status,
+                        "provider_order_created": bool(provider_order_id),
+                        "bank_details_persisted": False,
+                        "payment_secret_persisted": False,
+                        "secret_exposed": False,
+                    },
+                )
+        if not row:
+            raise RuntimeError("domestic billing order was not persisted")
+        return {**self._domestic_billing_order_row_to_dict(row), "duplicate_request": not bool(inserted)}
+
+    @contextmanager
+    def domestic_billing_company_lock(self, *, company_id: str) -> Iterator[None]:
+        """Serialize entitlement mutations for one company across callbacks and workers."""
+
+        normalized_company = str(company_id or "").strip()
+        if not normalized_company:
+            raise ValueError("company_id is required for domestic billing lock")
+        digest = hashlib.sha256(f"jiejing-domestic-billing:{normalized_company}".encode("utf-8")).digest()
+        if self.database_engine == "postgres":
+            advisory_key = int.from_bytes(digest[:8], "big", signed=True)
+            with self._connect() as conn:
+                conn.execute("select pg_advisory_lock(?)", (advisory_key,)).fetchone()
+                try:
+                    yield
+                finally:
+                    conn.execute("select pg_advisory_unlock(?)", (advisory_key,)).fetchone()
+            return
+
+        lock = _DOMESTIC_BILLING_COMPANY_LOCKS[int.from_bytes(digest[:2], "big") % len(_DOMESTIC_BILLING_COMPANY_LOCKS)]
+        with lock:
+            yield
+
+    def get_domestic_billing_order(self, *, company_id: str, order_id: str) -> dict[str, Any] | None:
+        self.initialize()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select order_id, company_id, user_id, provider, provider_order_id,
+                       plan_key, amount_minor, currency, duration_days, status,
+                       expires_at, paid_at, created_at, updated_at, order_json
+                from billing_orders
+                where company_id = ? and order_id = ?
+                """,
+                (company_id, order_id),
+            ).fetchone()
+        return self._domestic_billing_order_row_to_dict(row) if row else None
+
+    def find_domestic_billing_order_for_provider(self, *, provider: str, order_id: str) -> dict[str, Any] | None:
+        """Resolve a provider callback without exposing a cross-tenant merchant API."""
+
+        self.initialize()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select order_id, company_id, user_id, provider, provider_order_id,
+                       plan_key, amount_minor, currency, duration_days, status,
+                       expires_at, paid_at, created_at, updated_at, order_json
+                from billing_orders
+                where provider = ? and order_id = ?
+                """,
+                (provider, order_id),
+            ).fetchone()
+        return self._domestic_billing_order_row_to_dict(row) if row else None
+
+    def mark_domestic_billing_order_paid(
+        self,
+        *,
+        company_id: str,
+        order_id: str,
+        provider_order_id: str,
+        paid_at: str,
+        payment: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Persist a verified payment result without raw callback or payment secrets."""
+
+        self.initialize()
+        updated_at = now_iso()
+        with self._connect() as conn:
+            existing = conn.execute(
+                """
+                select order_id, company_id, user_id, provider, provider_order_id,
+                       plan_key, amount_minor, currency, duration_days, status,
+                       expires_at, paid_at, created_at, updated_at, order_json
+                from billing_orders
+                where company_id = ? and order_id = ?
+                """,
+                (company_id, order_id),
+            ).fetchone()
+            if not existing:
+                return None
+            current = self._domestic_billing_order_row_to_dict(existing)
+            current_provider_order = str(current.get("provider_order_id") or "")
+            if current.get("status") == "paid" and current_provider_order and current_provider_order != provider_order_id:
+                raise ValueError("paid domestic order has a different provider transaction")
+            if current.get("status") == "paid" and current_provider_order == provider_order_id:
+                return current
+            conflicting = conn.execute(
+                """
+                select order_id
+                from billing_orders
+                where provider = ? and provider_order_id = ? and order_id != ?
+                limit 1
+                """,
+                (str(current.get("provider") or ""), provider_order_id, order_id),
+            ).fetchone()
+            if conflicting:
+                raise ValueError("provider transaction is already bound to another domestic billing order")
+            safe_order = current.get("order") if isinstance(current.get("order"), dict) else {}
+            safe_order = _without_domestic_checkout_uri(safe_order)
+            safe_order = _redact_secret_like(
+                {
+                    **safe_order,
+                    "payment": payment,
+                    "raw_callback_persisted": False,
+                    "raw_signature_persisted": False,
+                    "payment_secret_persisted": False,
+                    "secret_exposed": False,
+                }
+            )
+            updated = conn.execute(
+                """
+                update billing_orders
+                set provider_order_id = ?, status = ?, paid_at = ?, updated_at = ?, order_json = ?
+                where company_id = ? and order_id = ? and status = 'pending_payment'
+                """,
+                (
+                    provider_order_id,
+                    "paid",
+                    paid_at,
+                    updated_at,
+                    json.dumps(safe_order, ensure_ascii=False),
+                    company_id,
+                    order_id,
+                ),
+            ).rowcount
+            if not updated:
+                latest = conn.execute(
+                    """
+                    select order_id, company_id, user_id, provider, provider_order_id,
+                           plan_key, amount_minor, currency, duration_days, status,
+                           expires_at, paid_at, created_at, updated_at, order_json
+                    from billing_orders
+                    where company_id = ? and order_id = ?
+                    """,
+                    (company_id, order_id),
+                ).fetchone()
+                if latest:
+                    latest_order = self._domestic_billing_order_row_to_dict(latest)
+                    if latest_order.get("status") == "paid" and str(latest_order.get("provider_order_id") or "") == provider_order_id:
+                        return latest_order
+                raise ValueError("domestic billing order is no longer payable")
+            row = conn.execute(
+                """
+                select order_id, company_id, user_id, provider, provider_order_id,
+                       plan_key, amount_minor, currency, duration_days, status,
+                       expires_at, paid_at, created_at, updated_at, order_json
+                from billing_orders
+                where company_id = ? and order_id = ?
+                """,
+                (company_id, order_id),
+            ).fetchone()
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=None,
+                user_id=None,
+                actor_type="system",
+                action_type="billing.domestic_order.payment_verified",
+                target_type="billing_order",
+                target_id=order_id,
+                summary="Verified domestic payment marked the billing order as paid.",
+                details={
+                    "provider": current.get("provider"),
+                    "plan_key": current.get("plan_key"),
+                    "amount_minor": current.get("amount_minor"),
+                    "currency": current.get("currency"),
+                    "signature_verified": payment.get("signature_verified") is True,
+                    "amount_verified": payment.get("amount_verified") is True,
+                    "raw_callback_persisted": False,
+                    "raw_signature_persisted": False,
+                    "secret_exposed": False,
+                },
+            )
+        return self._domestic_billing_order_row_to_dict(row) if row else None
+
+    def attach_domestic_billing_checkout(
+        self,
+        *,
+        company_id: str,
+        order_id: str,
+        code_url: str,
+    ) -> dict[str, Any] | None:
+        """Attach only the tenant-visible Native QR URL, never the raw provider response."""
+
+        self.initialize()
+        updated_at = now_iso()
+        with self._connect() as conn:
+            existing = conn.execute(
+                """
+                select order_id, company_id, user_id, provider, provider_order_id,
+                       plan_key, amount_minor, currency, duration_days, status,
+                       expires_at, paid_at, created_at, updated_at, order_json
+                from billing_orders
+                where company_id = ? and order_id = ?
+                """,
+                (company_id, order_id),
+            ).fetchone()
+            if not existing:
+                return None
+            current = self._domestic_billing_order_row_to_dict(existing)
+            if current.get("status") != "pending_payment":
+                return current
+            safe_order = current.get("order") if isinstance(current.get("order"), dict) else {}
+            safe_order = _redact_secret_like(
+                {
+                    **safe_order,
+                    "provider_order_created": True,
+                    "payable_qr_created": True,
+                    "checkout": {
+                        "code_url": str(code_url or "").strip(),
+                        "raw_provider_response_persisted": False,
+                        "payment_secret_persisted": False,
+                        "secret_exposed": False,
+                    },
+                    "payment_secret_persisted": False,
+                    "secret_exposed": False,
+                }
+            )
+            updated = conn.execute(
+                """
+                update billing_orders
+                set updated_at = ?, order_json = ?
+                where company_id = ? and order_id = ? and status = 'pending_payment'
+                """,
+                (updated_at, json.dumps(safe_order, ensure_ascii=False), company_id, order_id),
+            ).rowcount
+            row = conn.execute(
+                """
+                select order_id, company_id, user_id, provider, provider_order_id,
+                       plan_key, amount_minor, currency, duration_days, status,
+                       expires_at, paid_at, created_at, updated_at, order_json
+                from billing_orders
+                where company_id = ? and order_id = ?
+                """,
+                (company_id, order_id),
+            ).fetchone()
+            if updated != 1:
+                return self._domestic_billing_order_row_to_dict(row) if row else None
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=None,
+                user_id=None,
+                actor_type="system",
+                action_type="billing.domestic_order.checkout_created",
+                target_type="billing_order",
+                target_id=order_id,
+                summary="WeChat Pay Native checkout was attached to the tenant billing order.",
+                details={
+                    "provider": current.get("provider"),
+                    "plan_key": current.get("plan_key"),
+                    "payable_qr_created": True,
+                    "raw_provider_response_persisted": False,
+                    "payment_secret_persisted": False,
+                    "secret_exposed": False,
+                },
+            )
+        return self._domestic_billing_order_row_to_dict(row) if row else None
+
+    def update_domestic_billing_order_state(
+        self,
+        *,
+        company_id: str,
+        order_id: str,
+        status: str,
+        allowed_current_statuses: set[str],
+        state_details: dict[str, Any],
+        audit_action: str,
+        audit_summary: str,
+        user_id: str | None = None,
+        calls_external_payment_api: bool = False,
+        triggers_real_refund: bool = False,
+    ) -> dict[str, Any] | None:
+        """Apply one allowlisted domestic billing state transition."""
+
+        allowed_targets = {
+            "closed",
+            "payment_failed",
+            "refund_review_requested",
+            "refund_processing",
+            "refunded",
+            "refund_failed",
+        }
+        if status not in allowed_targets:
+            raise ValueError("domestic billing target status is not allowed")
+        self.initialize()
+        updated_at = now_iso()
+        with self._connect() as conn:
+            existing = conn.execute(
+                """
+                select order_id, company_id, user_id, provider, provider_order_id,
+                       plan_key, amount_minor, currency, duration_days, status,
+                       expires_at, paid_at, created_at, updated_at, order_json
+                from billing_orders
+                where company_id = ? and order_id = ?
+                """,
+                (company_id, order_id),
+            ).fetchone()
+            if not existing:
+                return None
+            current = self._domestic_billing_order_row_to_dict(existing)
+            current_status = str(current.get("status") or "")
+            duplicate_transition = current_status == status
+            if not duplicate_transition and current_status not in allowed_current_statuses:
+                raise ValueError("domestic billing state transition is not allowed")
+            safe_order = current.get("order") if isinstance(current.get("order"), dict) else {}
+            if status in {"closed", "payment_failed", "refunded"}:
+                safe_order = _without_domestic_checkout_uri(safe_order)
+            safe_order = _redact_secret_like(
+                {
+                    **safe_order,
+                    "state": {**(safe_order.get("state") if isinstance(safe_order.get("state"), dict) else {}), **state_details},
+                    "payment_secret_persisted": False,
+                    "secret_exposed": False,
+                }
+            )
+            if not duplicate_transition:
+                updated = conn.execute(
+                    """
+                    update billing_orders
+                    set status = ?, updated_at = ?, order_json = ?
+                    where company_id = ? and order_id = ? and status = ?
+                    """,
+                    (
+                        status,
+                        updated_at,
+                        json.dumps(safe_order, ensure_ascii=False),
+                        company_id,
+                        order_id,
+                        current_status,
+                    ),
+                ).rowcount
+                if updated != 1:
+                    latest = conn.execute(
+                        """
+                        select order_id, company_id, user_id, provider, provider_order_id,
+                               plan_key, amount_minor, currency, duration_days, status,
+                               expires_at, paid_at, created_at, updated_at, order_json
+                        from billing_orders
+                        where company_id = ? and order_id = ?
+                        """,
+                        (company_id, order_id),
+                    ).fetchone()
+                    if not latest:
+                        return None
+                    latest_order = self._domestic_billing_order_row_to_dict(latest)
+                    if str(latest_order.get("status") or "") == status:
+                        return {**latest_order, "duplicate_transition": True}
+                    raise ValueError("domestic billing state changed concurrently")
+            row = conn.execute(
+                """
+                select order_id, company_id, user_id, provider, provider_order_id,
+                       plan_key, amount_minor, currency, duration_days, status,
+                       expires_at, paid_at, created_at, updated_at, order_json
+                from billing_orders
+                where company_id = ? and order_id = ?
+                """,
+                (company_id, order_id),
+            ).fetchone()
+            if not duplicate_transition:
+                self._insert_audit(
+                    conn,
+                    company_id=company_id,
+                    store_id=None,
+                    user_id=user_id,
+                    actor_type="user" if user_id else "system",
+                    action_type=audit_action,
+                    target_type="billing_order",
+                    target_id=order_id,
+                    summary=audit_summary,
+                    details={
+                        "from_status": current_status,
+                        "to_status": status,
+                        "provider": current.get("provider"),
+                        "plan_key": current.get("plan_key"),
+                        "calls_external_payment_api": bool(calls_external_payment_api),
+                        "triggers_real_refund": bool(triggers_real_refund),
+                        "secret_exposed": False,
+                    },
+                )
+        result = self._domestic_billing_order_row_to_dict(row) if row else None
+        return {**result, "duplicate_transition": duplicate_transition} if result else None
+
+    def list_domestic_billing_orders(self, *, company_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        self.initialize()
+        safe_limit = max(1, min(int(limit), 100))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select order_id, company_id, user_id, provider, provider_order_id,
+                       plan_key, amount_minor, currency, duration_days, status,
+                       expires_at, paid_at, created_at, updated_at, order_json
+                from billing_orders
+                where company_id = ?
+                order by created_at desc
+                limit ?
+                """,
+                (company_id, safe_limit),
+            ).fetchall()
+        return [self._domestic_billing_order_row_to_dict(row) for row in rows]
+
+    def list_domestic_billing_company_ids(self, *, limit: int = 100) -> list[str]:
+        """Return a bounded internal tenant list ordered by recent billing activity."""
+
+        self.initialize()
+        safe_limit = max(1, min(int(limit), 500))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select company_id, max(updated_at) as latest_billing_activity
+                from billing_orders
+                group by company_id
+                order by latest_billing_activity desc, company_id asc
+                limit ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return [str(row["company_id"]) for row in rows if str(row["company_id"] or "").strip()]
+
+    def domestic_payment_acceptance_evidence(self) -> dict[str, Any]:
+        """Return sanitized aggregate proof for readiness without opening charging.
+
+        This application-layer proof rejects a single billing-order write or a
+        direct repository payment mark unless the matching successful
+        entitlement event was also persisted by the billing domain. Coordinated
+        tampering across all tables by a privileged database administrator is
+        outside this threat boundary.
+        """
+
+        self.initialize()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select o.order_id, o.company_id, o.provider_order_id, o.plan_key,
+                       o.amount_minor, o.currency, o.duration_days, o.paid_at,
+                       o.order_json,
+                       case when exists (
+                         select 1
+                         from billing_webhook_events e
+                         where e.company_id = o.company_id
+                           and e.provider = 'wechat_pay_native'
+                           and e.event_type = 'payment_succeeded'
+                           and e.status in ('applied', 'applied_duplicate_ignored')
+                           and e.event_key = 'wechat_pay_native:' || o.provider_order_id
+                       ) then 1 else 0 end as entitlement_event_persisted
+                from billing_orders o
+                where o.provider = ? and o.status in ('paid', 'refund_review_requested', 'refund_processing', 'refund_failed', 'refunded')
+                order by o.paid_at desc
+                limit 100
+                """,
+                ("wechat_pay_native",),
+            ).fetchall()
+        verified_paid_at: list[str] = []
+        for row in rows:
+            order_id = str(row["order_id"] or "").strip()
+            provider_order_id = str(row["provider_order_id"] or "").strip()
+            paid_at = str(row["paid_at"] or "").strip()
+            if re.fullmatch(r"JJLIVE[0-9a-f]{26}", order_id) is None:
+                continue
+            if not str(row["company_id"] or "").strip() or not provider_order_id or not paid_at:
+                continue
+            if row["entitlement_event_persisted"] != 1:
+                continue
+            if row["plan_key"] != "starter" or row["amount_minor"] != 100:
+                continue
+            if row["currency"] != "CNY" or row["duration_days"] != 30:
+                continue
+            payload = _load_json_field(row["order_json"])
+            payment = payload.get("payment") if isinstance(payload, dict) and isinstance(payload.get("payment"), dict) else {}
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("contract_version") != "2026-07-13-wechat-pay-live-acceptance-v1":
+                continue
+            if payload.get("live_acceptance_test") is not True:
+                continue
+            if payload.get("provider_mode") != "owner_approved_single_live_acceptance":
+                continue
+            checkout = payload.get("checkout") if isinstance(payload.get("checkout"), dict) else {}
+            if payload.get("provider_order_created") is not True:
+                continue
+            if payload.get("payable_qr_created") is not False or checkout.get("payable_uri_removed") is not True:
+                continue
+            if not all(
+                payload.get(key) is False
+                for key in (
+                    "calls_external_payment_api",
+                    "triggers_real_charge",
+                    "bank_details_persisted",
+                    "payment_secret_persisted",
+                    "frontend_gets_payment_secret",
+                    "secret_exposed",
+                )
+            ):
+                continue
+            if payment.get("provider_transaction_present") is not True:
+                continue
+            if type(payment.get("amount_minor")) is not int or payment.get("amount_minor") != 100:
+                continue
+            if payment.get("currency") != "CNY" or payment.get("purchase_type") != "subscription":
+                continue
+            verification_source = payment.get("verification_source")
+            signature_verified = payment.get("signature_verified")
+            if not (
+                (verification_source == "signed_callback" and signature_verified is True)
+                or (verification_source == "authenticated_order_query" and signature_verified is False)
+            ):
+                continue
+            if payment.get("trade_type") != "NATIVE":
+                continue
+            if not str(payment.get("entitlement_active_from") or "").strip():
+                continue
+            if not str(payment.get("entitlement_active_until") or "").strip():
+                continue
+            if not all(payment.get(key) is True for key in ("appid_verified", "mchid_verified", "amount_verified")):
+                continue
+            verified_paid_at.append(paid_at)
+        return {
+            "contract_version": "2026-07-27-domestic-payment-acceptance-evidence-v2",
+            "provider": "wechat_pay_native",
+            "acceptance_kind": "owner_approved_one_cny_live_acceptance",
+            "controlled_acceptance_proven": bool(verified_paid_at),
+            "verified_paid_order_count": len(verified_paid_at),
+            "latest_verified_paid_at": verified_paid_at[0] if verified_paid_at else "",
+            "public_charging_allowed": False,
+            "charge_now_allowed": False,
+            "triggers_real_charge": False,
+            "calls_external_payment_api": False,
+            "secret_exposed": False,
+        }
+
     def apply_billing_webhook_event(self, *, event: dict[str, Any]) -> dict[str, Any]:
         """Persist a signed, normalized billing event and update entitlement state.
 
@@ -3958,7 +5209,7 @@ class SaaSRepository:
         event_key = _billing_event_key(provider=provider, event_id=event_id, event_type=event_type, fallback=now)
         status = _billing_entitlement_status(str(event.get("subscription_status") or ""), event_type=event_type)
         plan_key = str(event.get("plan_key") or "").strip().lower() or "unknown"
-        if plan_key not in {"starter", "operator", "team", "unknown"}:
+        if plan_key not in {"free", "starter", "operator", "team", "unknown"}:
             plan_key = "unknown"
         if plan_key == "unknown" and existing_subscription:
             plan_key = str(existing_subscription.get("plan_key") or "unknown")
@@ -4645,11 +5896,189 @@ class SaaSRepository:
             "events": events,
         }
 
+    def record_platform_analytics_event(
+        self,
+        *,
+        event_key: str,
+        page_key: str,
+        event_id_hash: str,
+        visitor_hash: str = "",
+        session_hash: str = "",
+        company_id: str | None = None,
+        user_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        normalized_event = str(event_key or "").strip().lower()
+        normalized_page = str(page_key or "").strip().lower()
+        normalized_event_hash = str(event_id_hash or "").strip().lower()
+        if normalized_event not in ANALYTICS_EVENT_KEYS:
+            raise ValueError("unsupported analytics event")
+        if normalized_page not in ANALYTICS_PAGE_KEYS:
+            raise ValueError("unsupported analytics page")
+        if not re.fullmatch(r"[a-f0-9]{64}", normalized_event_hash):
+            raise ValueError("analytics event id hash is invalid")
+        occurred_at = now_iso()
+        analytics_event_id = _id("analytics")
+        event_json = {
+            "contract_version": "2026-07-14-first-party-analytics-v1",
+            "metadata": metadata if isinstance(metadata, dict) else {},
+            "raw_ip_stored": False,
+            "user_agent_stored": False,
+            "raw_url_stored": False,
+            "referrer_stored": False,
+            "secret_exposed": False,
+        }
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert or ignore into platform_analytics_events (
+                  analytics_event_id, event_id_hash, company_id, user_id, event_key, page_key,
+                  visitor_hash, session_hash, occurred_at, analytics_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    analytics_event_id,
+                    normalized_event_hash,
+                    str(company_id or "") or None,
+                    str(user_id or "") or None,
+                    normalized_event,
+                    normalized_page,
+                    str(visitor_hash or "")[:64] or None,
+                    str(session_hash or "")[:64] or None,
+                    occurred_at,
+                    json.dumps(event_json, ensure_ascii=False, default=json_default),
+                ),
+            )
+            row = conn.execute(
+                "select * from platform_analytics_events where event_id_hash = ?",
+                (normalized_event_hash,),
+            ).fetchone()
+        return dict(row) if row else {}
+
+    def record_model_usage(
+        self,
+        *,
+        company_id: str,
+        user_id: str | None,
+        task_id: str | None,
+        usage_owner: str,
+        model_family: str,
+        model_label: str,
+        request_count: int,
+        input_tokens: int,
+        output_tokens: int,
+        total_tokens: int,
+        cost_minor: int,
+        currency: str,
+        cost_status: str,
+        idempotency_key: str,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        normalized_company = str(company_id or "").strip()
+        normalized_key = str(idempotency_key or "").strip()
+        if not normalized_company or not normalized_key:
+            raise ValueError("model usage company and idempotency key are required")
+        owner = str(usage_owner or "unknown").strip()[:80]
+        idempotency_hash = hashlib.sha256(f"model-usage|{normalized_company}|{normalized_key}".encode("utf-8")).hexdigest()
+        created_at = now_iso()
+        usage_json = {
+            "contract_version": "2026-07-14-model-usage-ledger-v1",
+            "details": details if isinstance(details, dict) else {},
+            "prompts_stored": False,
+            "responses_stored": False,
+            "provider_credentials_stored": False,
+            "secret_exposed": False,
+        }
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert or ignore into model_usage_ledger (
+                  usage_id, company_id, user_id, task_id, usage_owner, model_family, model_label,
+                  request_count, input_tokens, output_tokens, total_tokens, cost_minor, currency,
+                  cost_status, idempotency_key_hash, created_at, usage_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    _id("usage"), normalized_company, str(user_id or "") or None, str(task_id or "") or None,
+                    owner, str(model_family or "provider_neutral")[:120], str(model_label or "")[:160],
+                    max(0, int(request_count or 0)), max(0, int(input_tokens or 0)),
+                    max(0, int(output_tokens or 0)), max(0, int(total_tokens or 0)),
+                    max(0, int(cost_minor or 0)), str(currency or "CNY")[:8], str(cost_status or "unavailable")[:80],
+                    idempotency_hash, created_at,
+                    json.dumps(usage_json, ensure_ascii=False, default=json_default),
+                ),
+            )
+            row = conn.execute(
+                "select * from model_usage_ledger where idempotency_key_hash = ?",
+                (idempotency_hash,),
+            ).fetchone()
+        return dict(row) if row else {}
+
+    def record_provider_cost(
+        self,
+        *,
+        company_id: str,
+        user_id: str | None,
+        task_id: str | None,
+        reference_type: str,
+        reference_id: str,
+        cost_category: str,
+        resource_type: str,
+        unit_count: int,
+        media_points: int,
+        cost_minor: int,
+        currency: str,
+        cost_status: str,
+        idempotency_key: str,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        normalized_company = str(company_id or "").strip()
+        normalized_key = str(idempotency_key or "").strip()
+        if not normalized_company or not normalized_key:
+            raise ValueError("provider cost company and idempotency key are required")
+        idempotency_hash = hashlib.sha256(f"provider-cost|{normalized_company}|{normalized_key}".encode("utf-8")).hexdigest()
+        created_at = now_iso()
+        cost_json = {
+            "contract_version": "2026-07-14-provider-cost-ledger-v1",
+            "details": details if isinstance(details, dict) else {},
+            "provider_neutral": True,
+            "raw_provider_response_stored": False,
+            "provider_credentials_stored": False,
+            "secret_exposed": False,
+        }
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert or ignore into provider_cost_ledger (
+                  cost_id, company_id, user_id, task_id, reference_type, reference_id,
+                  cost_category, resource_type, unit_count, media_points, cost_minor, currency,
+                  cost_status, idempotency_key_hash, created_at, cost_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    _id("cost"), normalized_company, str(user_id or "") or None, str(task_id or "") or None,
+                    str(reference_type or "media_job")[:80], str(reference_id or "")[:160],
+                    str(cost_category or "media_generation")[:80], str(resource_type or "mixed")[:40],
+                    max(0, int(unit_count or 0)), max(0, int(media_points or 0)), max(0, int(cost_minor or 0)),
+                    str(currency or "CNY")[:8], str(cost_status or "unavailable")[:80], idempotency_hash, created_at,
+                    json.dumps(cost_json, ensure_ascii=False, default=json_default),
+                ),
+            )
+            row = conn.execute(
+                "select * from provider_cost_ledger where idempotency_key_hash = ?",
+                (idempotency_hash,),
+            ).fetchone()
+        return dict(row) if row else {}
+
     def system_counts(self) -> dict[str, int]:
         self.initialize()
         tables = [
             "users",
             "companies",
+            "platform_trial_activations",
             "team_members",
             "team_invitations",
             "stores",
@@ -4669,11 +6098,1402 @@ class SaaSRepository:
             "audit_logs",
             "billing_subscriptions",
             "billing_webhook_events",
+            "billing_orders",
+            "media_credit_accounts",
+            "media_credit_ledger",
+            "platform_analytics_events",
+            "model_usage_ledger",
+            "provider_cost_ledger",
+            "platform_reliability_alert_state",
+            "platform_reliability_alert_events",
             "ebay_account_deletion_events",
             "schema_migrations",
         ]
         with self._connect() as conn:
             return {table: int(conn.execute(f"select count(*) as count from {table}").fetchone()["count"]) for table in tables}
+
+    def reconcile_provider_reliability_alerts(
+        self,
+        *,
+        alert_summary: dict[str, Any],
+        actor_user_id: str,
+    ) -> dict[str, Any]:
+        """Persist only confirmed provider-neutral alert transitions."""
+
+        self.initialize()
+        items = alert_summary.get("items") if isinstance(alert_summary.get("items"), list) else []
+        evaluated_at = now_iso()
+        transitions: list[dict[str, Any]] = []
+        with _PLATFORM_RELIABILITY_ALERT_LOCK:
+            with self._connect() as conn:
+                for observed in items:
+                    if not isinstance(observed, dict):
+                        continue
+                    scope = str(observed.get("scope") or "").strip().lower()
+                    if scope not in PROVIDER_TELEMETRY_SCOPES:
+                        continue
+                    row = conn.execute(
+                        "select state_json from platform_reliability_alert_state where alert_scope = ?",
+                        (scope,),
+                    ).fetchone()
+                    previous = _load_json_field(row["state_json"]) if row else None
+                    reconciled = reconcile_reliability_alert_state(
+                        previous_state=previous if isinstance(previous, dict) else None,
+                        observed_alert=observed,
+                        evaluated_at=evaluated_at,
+                    )
+                    state = _redact_secret_like(reconciled["state"])
+                    conn.execute(
+                        """
+                        insert or replace into platform_reliability_alert_state (
+                          alert_scope, lifecycle_status, severity, observed_status,
+                          consecutive_breach_count, consecutive_healthy_count, fingerprint,
+                          opened_at, recovered_at, acknowledged_at, acknowledged_by,
+                          acknowledgement_action, last_evaluated_at, updated_at, state_json
+                        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            scope,
+                            state["lifecycle_status"],
+                            state["severity"],
+                            state["observed_status"],
+                            int(state["consecutive_breach_count"]),
+                            int(state["consecutive_healthy_count"]),
+                            state["fingerprint"],
+                            state.get("opened_at") or None,
+                            state.get("recovered_at") or None,
+                            state.get("acknowledged_at") or None,
+                            state.get("acknowledged_by") or None,
+                            state.get("acknowledgement_action") or None,
+                            state["last_evaluated_at"],
+                            state["updated_at"],
+                            json.dumps(state, ensure_ascii=False, default=json_default),
+                        ),
+                    )
+                    transition = reconciled.get("transition")
+                    if isinstance(transition, dict) and self._insert_platform_reliability_alert_event(
+                        conn,
+                        transition=transition,
+                        actor_user_id=actor_user_id,
+                    ):
+                        transitions.append(_redact_secret_like(transition))
+        lifecycle = self.provider_reliability_alert_lifecycle()
+        return {
+            **lifecycle,
+            "transition_count": len(transitions),
+            "events": transitions,
+            "mutated_by_get": False,
+            "provider_neutral": True,
+            "secret_exposed": False,
+        }
+
+    def provider_reliability_alert_lifecycle(self, *, event_limit: int = 20) -> dict[str, Any]:
+        self.initialize()
+        safe_limit = min(max(int(event_limit or 20), 1), 100)
+        with self._connect() as conn:
+            state_rows = conn.execute(
+                "select state_json from platform_reliability_alert_state order by alert_scope"
+            ).fetchall()
+            event_rows = conn.execute(
+                """
+                select event_id, alert_scope, transition_key, severity, fingerprint, action_key,
+                       actor_user_id, created_at, event_json
+                from platform_reliability_alert_events
+                order by created_at desc, event_id desc
+                limit ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        states = [
+            _redact_secret_like(_load_json_field(row["state_json"]))
+            for row in state_rows
+            if isinstance(_load_json_field(row["state_json"]), dict)
+        ]
+        events = [
+            {
+                "event_id": str(row["event_id"]),
+                "scope": str(row["alert_scope"]),
+                "transition_key": str(row["transition_key"]),
+                "severity": str(row["severity"]),
+                "fingerprint": str(row["fingerprint"]),
+                "action_key": str(row["action_key"]),
+                "actor_user_id": str(row["actor_user_id"] or ""),
+                "created_at": str(row["created_at"]),
+                "provider_neutral": True,
+                "secret_exposed": False,
+            }
+            for row in event_rows
+        ]
+        return {
+            "contract_version": "2026-07-14-provider-reliability-alert-lifecycle-v1",
+            "status": "instrumented" if states else "ready_no_evaluations",
+            "open_count": sum(1 for state in states if state.get("lifecycle_status") == "open"),
+            "pending_count": sum(1 for state in states if state.get("lifecycle_status") == "pending"),
+            "recovering_count": sum(1 for state in states if state.get("lifecycle_status") == "recovering"),
+            "states": states,
+            "events": events,
+            "event_count": len(events),
+            "merchant_navigation_visible": False,
+            "provider_neutral": True,
+            "prompts_stored": False,
+            "responses_stored": False,
+            "queries_stored": False,
+            "raw_errors_stored": False,
+            "secret_exposed": False,
+        }
+
+    def acknowledge_provider_reliability_alert(
+        self,
+        *,
+        scope: str,
+        actor_user_id: str,
+        action_key: str,
+    ) -> dict[str, Any]:
+        self.initialize()
+        normalized_scope = str(scope or "").strip().lower()
+        normalized_action = str(action_key or "").strip().lower()
+        if normalized_scope not in PROVIDER_TELEMETRY_SCOPES:
+            raise ValueError("unsupported reliability alert scope")
+        if normalized_action not in {"investigating", "mitigation_in_progress", "monitoring"}:
+            raise ValueError("unsupported reliability acknowledgement action")
+        with _PLATFORM_RELIABILITY_ALERT_LOCK:
+            with self._connect() as conn:
+                row = conn.execute(
+                    "select state_json from platform_reliability_alert_state where alert_scope = ?",
+                    (normalized_scope,),
+                ).fetchone()
+                state = _load_json_field(row["state_json"]) if row else {}
+                if not isinstance(state, dict) or state.get("lifecycle_status") not in {"open", "recovering"}:
+                    return {
+                        "ok": False,
+                        "status": "no_open_alert",
+                        "scope": normalized_scope,
+                        "secret_exposed": False,
+                    }
+                acknowledged_at = now_iso()
+                transition = {
+                    "transition_key": "acknowledged",
+                    "scope": normalized_scope,
+                    "severity": str(state.get("severity") or "none"),
+                    "fingerprint": str(state.get("fingerprint") or ""),
+                    "action_key": normalized_action,
+                    "created_at": acknowledged_at,
+                    "provider_neutral": True,
+                    "secret_exposed": False,
+                }
+                inserted = self._insert_platform_reliability_alert_event(
+                    conn,
+                    transition=transition,
+                    actor_user_id=actor_user_id,
+                )
+                if inserted:
+                    state["acknowledged_at"] = acknowledged_at
+                    state["acknowledged_by"] = str(actor_user_id or "")[:160]
+                    state["acknowledgement_action"] = normalized_action
+                    state["updated_at"] = acknowledged_at
+                    state = _redact_secret_like(state)
+                    conn.execute(
+                        """
+                        update platform_reliability_alert_state
+                        set acknowledged_at = ?, acknowledged_by = ?, acknowledgement_action = ?,
+                            updated_at = ?, state_json = ?
+                        where alert_scope = ?
+                        """,
+                        (
+                            acknowledged_at,
+                            state["acknowledged_by"],
+                            normalized_action,
+                            acknowledged_at,
+                            json.dumps(state, ensure_ascii=False, default=json_default),
+                            normalized_scope,
+                        ),
+                    )
+        return {
+            "ok": True,
+            "status": "acknowledged" if inserted else "already_acknowledged",
+            "duplicate": not inserted,
+            "scope": normalized_scope,
+            "action_key": normalized_action,
+            "provider_neutral": True,
+            "secret_exposed": False,
+        }
+
+    @staticmethod
+    def _insert_platform_reliability_alert_event(
+        conn: sqlite3.Connection,
+        *,
+        transition: dict[str, Any],
+        actor_user_id: str,
+    ) -> bool:
+        safe_transition = _redact_secret_like(
+            {
+                "scope": str(transition.get("scope") or "")[:40],
+                "transition_key": str(transition.get("transition_key") or "")[:40],
+                "severity": str(transition.get("severity") or "none")[:20],
+                "fingerprint": str(transition.get("fingerprint") or "")[:128],
+                "action_key": str(transition.get("action_key") or "none")[:80],
+                "created_at": str(transition.get("created_at") or now_iso())[:80],
+                "provider_neutral": True,
+                "secret_exposed": False,
+            }
+        )
+        cursor = conn.execute(
+            """
+            insert or ignore into platform_reliability_alert_events (
+              event_id, alert_scope, transition_key, severity, fingerprint,
+              action_key, actor_user_id, created_at, event_json
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _id("reliability_event"),
+                safe_transition["scope"],
+                safe_transition["transition_key"],
+                safe_transition["severity"],
+                safe_transition["fingerprint"],
+                safe_transition["action_key"],
+                str(actor_user_id or "")[:160] or None,
+                safe_transition["created_at"],
+                json.dumps(safe_transition, ensure_ascii=False, default=json_default),
+            ),
+        )
+        return int(getattr(cursor, "rowcount", 0) or 0) > 0
+
+    def merchant_workflow_validation_snapshot(self) -> dict[str, Any]:
+        """Return privacy-safe proof of independent merchants completing the core path."""
+
+        self.initialize()
+        with self._connect() as conn:
+            account_row = conn.execute(
+                """
+                select count(distinct default_company_id) as merchant_company_count
+                from users
+                where account_classification = ?
+                """,
+                (ACCOUNT_CLASSIFICATION_MERCHANT,),
+            ).fetchone()
+            evidence_row = conn.execute(
+                """
+                select
+                  count(*) as validated_path_count,
+                  count(distinct t.company_id) as validated_merchant_count
+                from tasks t
+                where t.task_type = ?
+                  and t.status = ?
+                  and exists (
+                    select 1
+                    from users u
+                    where u.default_company_id = t.company_id
+                      and u.account_classification = ?
+                  )
+                  and exists (
+                    select 1
+                    from reports r
+                    where r.task_id = t.task_id
+                  )
+                  and exists (
+                    select 1
+                    from confirmations c
+                    where c.company_id = t.company_id
+                      and c.task_id = t.task_id
+                      and c.status in (?, ?, ?)
+                      and c.decided_at is not null
+                  )
+                """,
+                (
+                    "product_workflow",
+                    "completed",
+                    ACCOUNT_CLASSIFICATION_MERCHANT,
+                    "approved",
+                    "rejected",
+                    "needs_revision",
+                ),
+            ).fetchone()
+
+        eligible_merchants = int((account_row or {})["merchant_company_count"] or 0)
+        validated_merchants = int((evidence_row or {})["validated_merchant_count"] or 0)
+        validated_paths = int((evidence_row or {})["validated_path_count"] or 0)
+        passed = (
+            validated_merchants >= REAL_MERCHANT_VALIDATION_REQUIRED_COMPANIES
+            and validated_paths >= REAL_MERCHANT_VALIDATION_REQUIRED_PATHS
+        )
+        remaining_merchants = max(REAL_MERCHANT_VALIDATION_REQUIRED_COMPANIES - validated_merchants, 0)
+        remaining_paths = max(REAL_MERCHANT_VALIDATION_REQUIRED_PATHS - validated_paths, 0)
+        return {
+            "contract_version": "2026-07-14-real-merchant-workflow-validation-v1",
+            "status": "threshold_met" if passed else "pending_real_merchant_evidence",
+            "passed": passed,
+            "required_merchant_count": REAL_MERCHANT_VALIDATION_REQUIRED_COMPANIES,
+            "required_path_count": REAL_MERCHANT_VALIDATION_REQUIRED_PATHS,
+            "eligible_merchant_count": eligible_merchants,
+            "validated_merchant_count": validated_merchants,
+            "validated_path_count": validated_paths,
+            "remaining_merchant_count": remaining_merchants,
+            "remaining_path_count": remaining_paths,
+            "synthetic_accounts_excluded": True,
+            "decision_required": True,
+            "customer_visible": False,
+            "read_only": True,
+            "triggers_real_platform_write": False,
+            "triggers_charge": False,
+            "next_action": (
+                "Evidence threshold met; keep public charging blocked until the separate final smoke and owner approvals pass."
+                if passed
+                else (
+                    f"Complete the core workflow with {remaining_merchants} more independent merchant(s) "
+                    f"and {remaining_paths} more decided path(s)."
+                )
+            ),
+        }
+
+    def platform_operations_overview(self, *, period_days: int = 30) -> dict[str, Any]:
+        """Return platform-wide aggregates for the internal operator console only."""
+
+        self.initialize()
+        safe_period_days = min(max(int(30 if period_days is None else period_days), 1), 366)
+        period_ended_at = datetime.now(timezone.utc)
+        period_start_date = period_ended_at.date() - timedelta(days=safe_period_days - 1)
+        period_started_at = datetime.combine(period_start_date, datetime.min.time(), tzinfo=timezone.utc).isoformat()
+        with self._connect() as conn:
+            accounts_row = conn.execute(
+                """
+                select
+                  (select count(*) from users where account_classification = 'merchant') as registered_users,
+                  (select count(distinct default_company_id) from users where account_classification = 'merchant') as merchant_companies,
+                  (select count(*) from stores s where exists (
+                    select 1 from users u
+                    where u.default_company_id = s.company_id and u.account_classification = 'merchant'
+                  )) as stores_created,
+                  (select count(distinct pc.store_id) from platform_connections pc where
+                    pc.status in ('read_only_authorized', 'publish_authorized') and exists (
+                      select 1 from users u
+                      where u.default_company_id = pc.company_id and u.account_classification = 'merchant'
+                    )
+                  ) as connected_stores,
+                  (select count(*) from team_members tm where exists (
+                    select 1 from users u
+                    where u.default_company_id = tm.company_id and u.account_classification = 'merchant'
+                  )) as team_members,
+                  (select count(*) from users where account_classification = 'synthetic_test') as synthetic_test_accounts
+                """
+            ).fetchone()
+            all_plan_rows = conn.execute(
+                """
+                select company_id, provider, plan_key, status, entitlement_active, subscription_json,
+                       case when exists (
+                         select 1 from users u
+                         where u.default_company_id = s.company_id and u.account_classification = 'merchant'
+                       ) then 1 else 0 end as merchant_account
+                from billing_subscriptions s
+                """
+            ).fetchall()
+            all_order_rows = conn.execute(
+                """
+                select company_id, provider, status, amount_minor, order_json,
+                       case when exists (
+                         select 1 from users u
+                         where u.default_company_id = o.company_id and u.account_classification = 'merchant'
+                       ) then 1 else 0 end as merchant_account
+                from billing_orders o
+                where coalesce(paid_at, created_at) >= ?
+                """,
+                (period_started_at,),
+            ).fetchall()
+            active_subscription_order_rows = conn.execute(
+                """
+                select o.company_id, o.provider, o.plan_key, o.status, o.amount_minor,
+                       o.duration_days, o.paid_at, o.created_at, o.order_json,
+                       case when exists (
+                         select 1 from users u
+                         where u.default_company_id = o.company_id and u.account_classification = 'merchant'
+                       ) then 1 else 0 end as merchant_account
+                from billing_orders o
+                where o.status = 'paid' and exists (
+                  select 1 from billing_subscriptions s where s.company_id = o.company_id
+                )
+                order by coalesce(o.paid_at, o.created_at) desc
+                limit 10001
+                """
+            ).fetchall()
+            task_rows = conn.execute(
+                """
+                select status, count(*) as count
+                from tasks t
+                where t.created_at >= ? and exists (
+                  select 1 from users u
+                  where u.default_company_id = t.company_id and u.account_classification = 'merchant'
+                )
+                group by status
+                order by status
+                """,
+                (period_started_at,),
+            ).fetchall()
+            active_merchants_row = conn.execute(
+                """
+                select count(distinct t.company_id) as count
+                from tasks t
+                where t.created_at >= ? and exists (
+                  select 1 from users u
+                  where u.default_company_id = t.company_id and u.account_classification = 'merchant'
+                )
+                """,
+                (period_started_at,),
+            ).fetchone()
+            media_row = conn.execute(
+                """
+                select
+                  count(*) as account_count,
+                  coalesce(sum(balance_points), 0) as balance_points,
+                  coalesce(sum(reserved_points), 0) as reserved_points,
+                  coalesce(sum(lifetime_granted_points), 0) as lifetime_granted_points,
+                  coalesce(sum(lifetime_spent_points), 0) as lifetime_spent_points
+                from media_credit_accounts m
+                where exists (
+                  select 1 from users u
+                  where u.default_company_id = m.company_id and u.account_classification = 'merchant'
+                )
+                """
+            ).fetchone()
+            traffic_row = conn.execute(
+                """
+                select
+                  count(*) as event_count,
+                  count(distinct case when visitor_hash is not null and visitor_hash <> '' then visitor_hash end) as visitors,
+                  count(distinct case when session_hash is not null and session_hash <> '' then session_hash end) as sessions,
+                  coalesce(sum(case when event_key = 'page_view' then 1 else 0 end), 0) as page_views,
+                  coalesce(sum(case when event_key = 'pricing_view' then 1 else 0 end), 0) as pricing_views,
+                  coalesce(sum(case when event_key = 'signup_started' then 1 else 0 end), 0) as signup_started,
+                  coalesce(sum(case when event_key = 'signup_completed' then 1 else 0 end), 0) as signup_completed,
+                  count(distinct case when event_key = 'signup_completed' and visitor_hash is not null and visitor_hash <> '' then visitor_hash end) as signup_completed_visitors
+                from platform_analytics_events
+                where occurred_at >= ?
+                """,
+                (period_started_at,),
+            ).fetchone()
+            traffic_daily_rows = conn.execute(
+                """
+                select
+                  substr(cast(occurred_at as text), 1, 10) as day_key,
+                  count(distinct case when visitor_hash is not null and visitor_hash <> '' then visitor_hash end) as visitors,
+                  count(distinct case when session_hash is not null and session_hash <> '' then session_hash end) as sessions,
+                  coalesce(sum(case when event_key = 'page_view' then 1 else 0 end), 0) as page_views,
+                  coalesce(sum(case when event_key = 'pricing_view' then 1 else 0 end), 0) as pricing_views,
+                  coalesce(sum(case when event_key = 'signup_started' then 1 else 0 end), 0) as signup_started,
+                  coalesce(sum(case when event_key = 'signup_completed' then 1 else 0 end), 0) as signup_completed
+                from platform_analytics_events
+                where occurred_at >= ? and event_key <> 'performance_sample'
+                group by substr(cast(occurred_at as text), 1, 10)
+                order by day_key
+                """,
+                (period_started_at,),
+            ).fetchall()
+            traffic_page_rows = conn.execute(
+                """
+                select
+                  page_key,
+                  count(*) as event_count,
+                  count(distinct case when visitor_hash is not null and visitor_hash <> '' then visitor_hash end) as visitors,
+                  count(distinct case when session_hash is not null and session_hash <> '' then session_hash end) as sessions,
+                  coalesce(sum(case when event_key = 'page_view' then 1 else 0 end), 0) as page_views,
+                  coalesce(sum(case when event_key = 'pricing_view' then 1 else 0 end), 0) as pricing_views,
+                  coalesce(sum(case when event_key = 'signup_started' then 1 else 0 end), 0) as signup_started,
+                  coalesce(sum(case when event_key = 'signup_completed' then 1 else 0 end), 0) as signup_completed
+                from platform_analytics_events
+                where occurred_at >= ? and event_key <> 'performance_sample'
+                group by page_key
+                order by event_count desc, page_key
+                """,
+                (period_started_at,),
+            ).fetchall()
+            performance_rows = conn.execute(
+                """
+                select analytics_json
+                from platform_analytics_events
+                where occurred_at >= ? and event_key = 'performance_sample'
+                order by occurred_at desc
+                limit 5000
+                """,
+                (period_started_at,),
+            ).fetchall()
+            model_usage_rows = conn.execute(
+                """
+                select usage_owner, cost_status,
+                       coalesce(sum(request_count), 0) as request_count,
+                       coalesce(sum(input_tokens), 0) as input_tokens,
+                       coalesce(sum(output_tokens), 0) as output_tokens,
+                       coalesce(sum(total_tokens), 0) as total_tokens,
+                       coalesce(sum(cost_minor), 0) as cost_minor
+                from model_usage_ledger m
+                where created_at >= ? and (
+                  company_id is null or exists (
+                    select 1 from users u
+                    where u.default_company_id = m.company_id and u.account_classification = 'merchant'
+                  )
+                )
+                group by usage_owner, cost_status
+                order by usage_owner, cost_status
+                """,
+                (period_started_at,),
+            ).fetchall()
+            model_reliability_rows = conn.execute(
+                """
+                select usage_json
+                from model_usage_ledger m
+                where created_at >= ? and (
+                  company_id is null or exists (
+                    select 1 from users u
+                    where u.default_company_id = m.company_id and u.account_classification = 'merchant'
+                  )
+                )
+                order by created_at desc
+                limit 5000
+                """,
+                (period_started_at,),
+            ).fetchall()
+            provider_cost_rows = conn.execute(
+                """
+                select cost_category, cost_status,
+                       count(*) as record_count,
+                       coalesce(sum(unit_count), 0) as unit_count,
+                       coalesce(sum(media_points), 0) as media_points,
+                       coalesce(sum(cost_minor), 0) as cost_minor
+                from provider_cost_ledger c
+                where created_at >= ? and (
+                  company_id is null or exists (
+                    select 1 from users u
+                    where u.default_company_id = c.company_id and u.account_classification = 'merchant'
+                  )
+                )
+                group by cost_category, cost_status
+                order by cost_category, cost_status
+                """,
+                (period_started_at,),
+            ).fetchall()
+            provider_reliability_rows = conn.execute(
+                """
+                select cost_json
+                from provider_cost_ledger c
+                where created_at >= ? and (
+                  company_id is null or exists (
+                    select 1 from users u
+                    where u.default_company_id = c.company_id and u.account_classification = 'merchant'
+                  )
+                )
+                order by created_at desc
+                limit 5000
+                """,
+                (period_started_at,),
+            ).fetchall()
+            metering_migration_row = conn.execute(
+                "select applied_at from schema_migrations where migration_id = ?",
+                ("20260714_platform_operations_metering",),
+            ).fetchone()
+            metering_started_at_value = metering_migration_row["applied_at"] if metering_migration_row else None
+            metering_started_at = (
+                metering_started_at_value.isoformat()
+                if hasattr(metering_started_at_value, "isoformat")
+                else str(metering_started_at_value or "")
+            )
+            unmetered_model_row = conn.execute(
+                """
+                select count(*) as count
+                from tasks t
+                left join model_usage_ledger m on m.task_id = t.task_id
+                where t.task_type = 'merchant_ceo_chat' and t.created_at >= ? and m.usage_id is null
+                  and exists (
+                    select 1 from users u
+                    where u.default_company_id = t.company_id and u.account_classification = 'merchant'
+                  )
+                """,
+                (period_started_at,),
+            ).fetchone()
+            current_unmetered_model_row = (
+                conn.execute(
+                    """
+                    select count(*) as count
+                    from tasks t
+                    left join model_usage_ledger m on m.task_id = t.task_id
+                    where t.task_type = 'merchant_ceo_chat'
+                      and t.created_at >= ? and t.created_at >= ? and m.usage_id is null
+                      and exists (
+                        select 1 from users u
+                        where u.default_company_id = t.company_id and u.account_classification = 'merchant'
+                      )
+                    """,
+                    (period_started_at, metering_started_at_value),
+                ).fetchone()
+                if metering_started_at_value
+                else None
+            )
+            unmetered_media_row = conn.execute(
+                """
+                select count(*) as count
+                from media_credit_ledger l
+                left join provider_cost_ledger c
+                  on c.company_id = l.company_id and c.reference_type = 'media_job' and c.reference_id = l.reference_id
+                where l.operation_type = 'settle' and l.created_at >= ? and c.cost_id is null
+                  and exists (
+                    select 1 from users u
+                    where u.default_company_id = l.company_id and u.account_classification = 'merchant'
+                  )
+                """,
+                (period_started_at,),
+            ).fetchone()
+
+        def non_commercial_provider(provider: Any) -> bool:
+            normalized = str(provider or "").strip().lower()
+            return normalized in _NON_COMMERCIAL_BILLING_PROVIDERS or normalized.endswith("_mock")
+
+        def acceptance_order(row: Any) -> bool:
+            payload = _load_json_field(row["order_json"])
+            return isinstance(payload, dict) and payload.get("live_acceptance_test") is True
+
+        plan_rows = [row for row in all_plan_rows if bool(row["merchant_account"])]
+        order_rows = [row for row in all_order_rows if bool(row["merchant_account"])]
+        commercial_order_rows = [
+            row for row in order_rows if not non_commercial_provider(row["provider"]) and not acceptance_order(row)
+        ]
+        period_paid_company_ids = {
+            str(row["company_id"])
+            for row in commercial_order_rows
+            if str(row["status"] or "").lower() == "paid"
+        }
+        subscription_order_scan_capped = len(active_subscription_order_rows) > 10000
+        active_subscription_paid_rows: dict[str, Any] = {}
+        for row in active_subscription_order_rows[:10000]:
+            company_id = str(row["company_id"] or "")
+            if (
+                not company_id
+                or not bool(row["merchant_account"])
+                or non_commercial_provider(row["provider"])
+                or acceptance_order(row)
+                or company_id in active_subscription_paid_rows
+            ):
+                continue
+            active_subscription_paid_rows[company_id] = row
+        commercial_paid_company_ids = set(active_subscription_paid_rows)
+
+        def non_commercial_subscription(row: Any) -> bool:
+            provider = str(row["provider"] or "").strip().lower()
+            if not bool(row["merchant_account"]) or non_commercial_provider(provider):
+                return True
+            return provider == "wechat_pay_native" and str(row["company_id"]) not in commercial_paid_company_ids
+
+        subscription_counts: dict[tuple[str, str], int] = {}
+        test_subscriptions_excluded = sum(1 for row in all_plan_rows if non_commercial_subscription(row))
+        for row in plan_rows:
+            if non_commercial_subscription(row):
+                continue
+            key = (str(row["plan_key"] or "unknown"), str(row["status"] or "unknown"))
+            subscription_counts[key] = subscription_counts.get(key, 0) + 1
+        subscriptions = [
+            {"plan_key": key[0], "status": key[1], "count": count}
+            for key, count in sorted(subscription_counts.items())
+        ]
+        payment_counts: dict[str, dict[str, int]] = {}
+        for row in commercial_order_rows:
+            status = str(row["status"] or "unknown")
+            aggregate = payment_counts.setdefault(status, {"count": 0, "amount_minor": 0})
+            aggregate["count"] += 1
+            aggregate["amount_minor"] += int(row["amount_minor"] or 0)
+        domestic_payments = [
+            {
+                "status": status,
+                "count": values["count"],
+                "amount_minor": values["amount_minor"],
+                "currency": "CNY",
+            }
+            for status, values in sorted(payment_counts.items())
+        ]
+        visitors = int(traffic_row["visitors"] or 0)
+        signup_completed = int(traffic_row["signup_completed"] or 0)
+        signup_completed_visitors = int(traffic_row["signup_completed_visitors"] or 0)
+        traffic_daily_by_day = {
+            str(row["day_key"] or ""): {
+                "visitors": int(row["visitors"] or 0),
+                "sessions": int(row["sessions"] or 0),
+                "page_views": int(row["page_views"] or 0),
+                "pricing_views": int(row["pricing_views"] or 0),
+                "signup_started": int(row["signup_started"] or 0),
+                "signup_completed": int(row["signup_completed"] or 0),
+            }
+            for row in traffic_daily_rows
+            if str(row["day_key"] or "")
+        }
+        traffic_daily_trend = []
+        for offset in range(safe_period_days):
+            day_key = (period_start_date + timedelta(days=offset)).isoformat()
+            traffic_daily_trend.append(
+                {
+                    "day": day_key,
+                    **traffic_daily_by_day.get(
+                        day_key,
+                        {
+                            "visitors": 0,
+                            "sessions": 0,
+                            "page_views": 0,
+                            "pricing_views": 0,
+                            "signup_started": 0,
+                            "signup_completed": 0,
+                        },
+                    ),
+                }
+            )
+        traffic_page_breakdown = [
+            {
+                "page_key": str(row["page_key"] or "unknown"),
+                "event_count": int(row["event_count"] or 0),
+                "visitors": int(row["visitors"] or 0),
+                "sessions": int(row["sessions"] or 0),
+                "page_views": int(row["page_views"] or 0),
+                "pricing_views": int(row["pricing_views"] or 0),
+                "signup_started": int(row["signup_started"] or 0),
+                "signup_completed": int(row["signup_completed"] or 0),
+            }
+            for row in traffic_page_rows
+        ]
+
+        performance_samples: list[dict[str, Any]] = []
+        for row in performance_rows:
+            packet = _load_json_field(row["analytics_json"])
+            metadata = packet.get("metadata") if isinstance(packet, dict) and isinstance(packet.get("metadata"), dict) else {}
+            scope = str(metadata.get("performance_scope") or "")
+            if scope not in {"page_load", "settings_module"}:
+                continue
+            performance_samples.append({"scope": scope, **metadata})
+
+        def performance_p75(scope: str, key: str) -> int | None:
+            values = sorted(
+                int(sample[key])
+                for sample in performance_samples
+                if sample.get("scope") == scope and isinstance(sample.get(key), int)
+            )
+            if not values:
+                return None
+            return values[max(0, ((len(values) * 3 + 3) // 4) - 1)]
+
+        page_performance_samples = [sample for sample in performance_samples if sample.get("scope") == "page_load"]
+        settings_performance_samples = [sample for sample in performance_samples if sample.get("scope") == "settings_module"]
+        performance_analytics = {
+            "status": "instrumented" if performance_samples else "ready_no_samples",
+            "sample_count": len(performance_samples),
+            "page_load": {
+                "sample_count": len(page_performance_samples),
+                "p75": {
+                    key: performance_p75("page_load", key)
+                    for key in (
+                        "ttfb_ms",
+                        "fcp_ms",
+                        "lcp_ms",
+                        "cls_milli",
+                        "dom_ready_ms",
+                        "load_complete_ms",
+                        "app_shell_ready_ms",
+                    )
+                },
+            },
+            "settings_module": {
+                "sample_count": len(settings_performance_samples),
+                "success_count": sum(1 for sample in settings_performance_samples if sample.get("outcome") == "success"),
+                "error_count": sum(1 for sample in settings_performance_samples if sample.get("outcome") == "error"),
+                "p75": {"duration_ms": performance_p75("settings_module", "duration_ms")},
+            },
+            "raw_url_stored": False,
+            "referrer_stored": False,
+            "user_agent_stored": False,
+            "prompt_or_response_stored": False,
+        }
+
+        def bounded_duration(value: Any) -> int | None:
+            try:
+                duration = int(value)
+            except (TypeError, ValueError):
+                return None
+            return min(max(0, duration), 120_000)
+
+        def nonnegative_int(value: Any) -> int:
+            try:
+                return max(0, int(value or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        reliability_buckets: dict[str, dict[str, Any]] = {
+            scope: {
+                "request_count": 0,
+                "success_count": 0,
+                "failure_count": 0,
+                "timeout_count": 0,
+                "partial_count": 0,
+                "blocked_count": 0,
+                "durations": [],
+                "error_classes": {},
+            }
+            for scope in ("model", "public_search", "media_generation", "payment")
+        }
+
+        for row in model_reliability_rows:
+            packet = _load_json_field(row["usage_json"])
+            details = packet.get("details") if isinstance(packet, dict) and isinstance(packet.get("details"), dict) else {}
+            reliability = details.get("reliability") if isinstance(details.get("reliability"), dict) else {}
+            if not reliability:
+                continue
+            bucket = reliability_buckets["model"]
+            request_count = nonnegative_int(reliability.get("request_count"))
+            success_count = min(request_count, nonnegative_int(reliability.get("success_count")))
+            timeout_count = min(request_count, nonnegative_int(reliability.get("timeout_count")))
+            bucket["request_count"] += request_count
+            bucket["success_count"] += success_count
+            bucket["failure_count"] += max(0, request_count - success_count)
+            bucket["timeout_count"] += timeout_count
+            duration_samples = reliability.get("duration_samples_ms") if isinstance(reliability.get("duration_samples_ms"), list) else []
+            if not duration_samples:
+                duration_samples = [reliability.get("p75_duration_ms")]
+            for value in duration_samples[:50]:
+                duration = bounded_duration(value)
+                if duration is not None:
+                    bucket["durations"].append(duration)
+            error_classes = reliability.get("error_classes") if isinstance(reliability.get("error_classes"), dict) else {}
+            for error_class, count in error_classes.items():
+                normalized_error = str(error_class or "")
+                if normalized_error not in {"timeout", "http_error", "provider_error", "invalid_response", "no_output", "not_configured", "blocked_input"}:
+                    continue
+                bucket["error_classes"][normalized_error] = bucket["error_classes"].get(normalized_error, 0) + nonnegative_int(count)
+
+        for row in provider_reliability_rows:
+            packet = _load_json_field(row["cost_json"])
+            details = packet.get("details") if isinstance(packet, dict) and isinstance(packet.get("details"), dict) else {}
+            telemetry = details.get("telemetry") if isinstance(details.get("telemetry"), dict) else {}
+            scope = str(telemetry.get("scope") or "")
+            if scope not in {"public_search", "media_generation", "payment"}:
+                continue
+            outcome = str(telemetry.get("outcome") or "error")
+            if outcome not in {"success", "partial", "error", "timeout", "blocked"}:
+                outcome = "error"
+            bucket = reliability_buckets[scope]
+            bucket["request_count"] += 1
+            bucket["success_count"] += 1 if outcome == "success" else 0
+            bucket["failure_count"] += 0 if outcome == "success" else 1
+            bucket["timeout_count"] += 1 if outcome == "timeout" else 0
+            bucket["partial_count"] += 1 if outcome == "partial" else 0
+            bucket["blocked_count"] += 1 if outcome == "blocked" else 0
+            duration = bounded_duration(telemetry.get("duration_ms"))
+            if duration is not None:
+                bucket["durations"].append(duration)
+            error_class = str(telemetry.get("error_class") or "")
+            if error_class in {"timeout", "http_error", "provider_error", "invalid_response", "no_output", "not_configured", "blocked_input"}:
+                bucket["error_classes"][error_class] = bucket["error_classes"].get(error_class, 0) + 1
+
+        def reliability_summary(scope: str) -> dict[str, Any]:
+            bucket = reliability_buckets[scope]
+            durations = sorted(bucket.pop("durations"))
+            return {
+                "status": "instrumented" if bucket["request_count"] else "ready_no_samples",
+                "sample_count": len(durations),
+                **bucket,
+                "p75_duration_ms": durations[max(0, ((len(durations) * 3 + 3) // 4) - 1)] if durations else None,
+                "max_duration_ms": max(durations) if durations else None,
+            }
+
+        provider_reliability_analytics = {
+            "model": reliability_summary("model"),
+            "public_search": reliability_summary("public_search"),
+            "media_generation": reliability_summary("media_generation"),
+            "payment": reliability_summary("payment"),
+            "provider_neutral": True,
+            "prompts_stored": False,
+            "responses_stored": False,
+            "queries_stored": False,
+            "raw_errors_stored": False,
+            "raw_provider_response_stored": False,
+        }
+        provider_reliability_analytics["alerts"] = build_reliability_alert_summary(provider_reliability_analytics)
+        provider_reliability_analytics["lifecycle"] = self.provider_reliability_alert_lifecycle()
+        model_usage = [
+            {
+                "usage_owner": str(row["usage_owner"] or "unknown"),
+                "cost_status": str(row["cost_status"] or "unavailable"),
+                "request_count": int(row["request_count"] or 0),
+                "input_tokens": int(row["input_tokens"] or 0),
+                "output_tokens": int(row["output_tokens"] or 0),
+                "total_tokens": int(row["total_tokens"] or 0),
+                "cost_minor": int(row["cost_minor"] or 0),
+                "currency": "CNY",
+            }
+            for row in model_usage_rows
+        ]
+        provider_costs = [
+            {
+                "cost_category": str(row["cost_category"] or "unknown"),
+                "cost_status": str(row["cost_status"] or "unavailable"),
+                "record_count": int(row["record_count"] or 0),
+                "unit_count": int(row["unit_count"] or 0),
+                "media_points": int(row["media_points"] or 0),
+                "cost_minor": int(row["cost_minor"] or 0),
+                "currency": "CNY",
+            }
+            for row in provider_cost_rows
+        ]
+        platform_model_cost_minor = sum(
+            row["cost_minor"] for row in model_usage if row["usage_owner"] == "jiejing_platform_trial"
+        )
+        provider_cost_minor = sum(row["cost_minor"] for row in provider_costs)
+        media_cost_minor = sum(row["cost_minor"] for row in provider_costs if row["cost_category"] == "media_generation")
+        public_search_cost_minor = sum(row["cost_minor"] for row in provider_costs if row["cost_category"] == "public_search")
+        unknown_model_cost_records = sum(
+            row["request_count"]
+            for row in model_usage
+            if row["usage_owner"] in {"jiejing_platform_trial", "unknown"} and row["cost_status"] == "unavailable"
+        ) + int(unmetered_model_row["count"] or 0)
+        unknown_provider_cost_records = sum(
+            row["record_count"] for row in provider_costs if row["cost_status"] == "unavailable"
+        ) + int(unmetered_media_row["count"] or 0)
+        unmetered_model_tasks = int(unmetered_model_row["count"] or 0)
+        current_unmetered_model_tasks = (
+            int(current_unmetered_model_row["count"] or 0) if current_unmetered_model_row else unmetered_model_tasks
+        )
+        legacy_unmetered_model_tasks = max(unmetered_model_tasks - current_unmetered_model_tasks, 0)
+        current_metering_health = (
+            "ready"
+            if metering_started_at and current_unmetered_model_tasks == 0
+            else "degraded"
+            if metering_started_at
+            else "unavailable"
+        )
+        cost_coverage_complete = unknown_model_cost_records == 0 and unknown_provider_cost_records == 0
+        paid_order_rows = [row for row in commercial_order_rows if str(row["status"] or "").lower() == "paid"]
+        paid_revenue_minor = sum(int(row["amount_minor"] or 0) for row in paid_order_rows)
+        active_subscription_company_ids = {
+            str(row["company_id"])
+            for row in plan_rows
+            if not non_commercial_subscription(row) and bool(row["entitlement_active"])
+        }
+        normalized_mrr_minor = 0
+        mrr_missing_order_count = 0
+        for company_id in active_subscription_company_ids:
+            order = active_subscription_paid_rows.get(company_id)
+            if not order:
+                mrr_missing_order_count += 1
+                continue
+            duration_days = max(0, int(order["duration_days"] or 0))
+            if duration_days <= 0:
+                mrr_missing_order_count += 1
+                continue
+            normalized_mrr_minor += round(int(order["amount_minor"] or 0) * 30 / duration_days)
+        contribution_margin_minor = (
+            paid_revenue_minor - platform_model_cost_minor - provider_cost_minor
+            if cost_coverage_complete
+            else None
+        )
+        return {
+            "contract_version": "2026-07-15-platform-operations-overview-v9",
+            "audience": "platform_internal_admin",
+            "period": {"days": safe_period_days, "started_at": period_started_at},
+            "accounts": {
+                "registered_users": int(accounts_row["registered_users"] or 0),
+                "merchant_companies": int(accounts_row["merchant_companies"] or 0),
+                "stores_created": int(accounts_row["stores_created"] or 0),
+                "connected_stores": int(accounts_row["connected_stores"] or 0),
+                "team_members": int(accounts_row["team_members"] or 0),
+                "active_merchant_companies": int(active_merchants_row["count"] or 0),
+            },
+            "subscriptions": subscriptions,
+            "domestic_payments": domestic_payments,
+            "tasks": {str(row["status"] or "unknown"): int(row["count"] or 0) for row in task_rows},
+            "media_points": {
+                "account_count": int(media_row["account_count"] or 0),
+                "balance_points": int(media_row["balance_points"] or 0),
+                "reserved_points": int(media_row["reserved_points"] or 0),
+                "lifetime_granted_points": int(media_row["lifetime_granted_points"] or 0),
+                "lifetime_spent_points": int(media_row["lifetime_spent_points"] or 0),
+            },
+            "traffic_analytics": {
+                "status": "instrumented" if int(traffic_row["event_count"] or 0) > 0 else "ready_no_events",
+                "event_count": int(traffic_row["event_count"] or 0),
+                "visitors": visitors,
+                "sessions": int(traffic_row["sessions"] or 0),
+                "page_views": int(traffic_row["page_views"] or 0),
+                "pricing_views": int(traffic_row["pricing_views"] or 0),
+                "signup_started": int(traffic_row["signup_started"] or 0),
+                "signup_completed": signup_completed,
+                "signup_completed_visitors": signup_completed_visitors,
+                "visitor_to_signup_percent": round((signup_completed_visitors / visitors) * 100, 2) if visitors else 0.0,
+                "daily_trend": traffic_daily_trend,
+                "page_breakdown": traffic_page_breakdown,
+                "automated_browser_collection_enabled": False,
+                "raw_ip_stored": False,
+                "user_agent_stored": False,
+            },
+            "performance_analytics": performance_analytics,
+            "provider_reliability_analytics": provider_reliability_analytics,
+            "model_cost_analytics": {
+                "status": "metered" if model_usage else "ready_no_usage",
+                "byok_tokens_are_merchant_billed": True,
+                "usage": model_usage,
+                "platform_trial_tokens": sum(
+                    row["total_tokens"] for row in model_usage if row["usage_owner"] == "jiejing_platform_trial"
+                ),
+                "merchant_byok_tokens": sum(
+                    row["total_tokens"] for row in model_usage if row["usage_owner"] == "merchant_account_byok"
+                ),
+                "platform_cost_minor": platform_model_cost_minor,
+                "currency": "CNY",
+                "prompts_stored": False,
+                "responses_stored": False,
+                "metering_started_at": metering_started_at,
+                "current_metering_health": current_metering_health,
+                "legacy_unmetered_tasks": legacy_unmetered_model_tasks,
+                "current_unmetered_tasks": current_unmetered_model_tasks,
+            },
+            "provider_cost_analytics": {
+                "status": "metered" if provider_costs else "ready_no_usage",
+                "provider_neutral": True,
+                "costs": provider_costs,
+                "media_cost_minor": media_cost_minor,
+                "public_search_cost_minor": public_search_cost_minor,
+                "total_provider_cost_minor": provider_cost_minor,
+                "currency": "CNY",
+                "raw_provider_response_stored": False,
+            },
+            "unit_economics": {
+                "status": "ready" if cost_coverage_complete else "partial",
+                "paid_order_count": len(paid_order_rows),
+                "paid_company_count": len(period_paid_company_ids),
+                "paid_revenue_minor": paid_revenue_minor,
+                "active_subscriber_company_count": len(active_subscription_company_ids),
+                "normalized_mrr_minor": normalized_mrr_minor,
+                "mrr_status": "ready" if mrr_missing_order_count == 0 and not subscription_order_scan_capped else "partial",
+                "mrr_missing_order_count": mrr_missing_order_count,
+                "platform_model_cost_minor": platform_model_cost_minor,
+                "media_cost_minor": media_cost_minor,
+                "public_search_cost_minor": public_search_cost_minor,
+                "total_provider_cost_minor": provider_cost_minor,
+                "contribution_margin_minor": contribution_margin_minor,
+                "currency": "CNY",
+                "unknown_model_cost_records": unknown_model_cost_records,
+                "unknown_provider_cost_records": unknown_provider_cost_records,
+                "unmetered_model_tasks": unmetered_model_tasks,
+                "legacy_unmetered_model_tasks": legacy_unmetered_model_tasks,
+                "current_unmetered_model_tasks": current_unmetered_model_tasks,
+                "metering_started_at": metering_started_at,
+                "current_metering_health": current_metering_health,
+                "unmetered_media_settlements": int(unmetered_media_row["count"] or 0),
+                "cost_coverage_complete": cost_coverage_complete,
+            },
+            "data_quality": {
+                "scope": "merchant_accounts_and_commercial_transactions",
+                "synthetic_test_accounts_excluded": int(accounts_row["synthetic_test_accounts"] or 0),
+                "test_subscriptions_excluded": test_subscriptions_excluded,
+                "acceptance_orders_excluded": sum(1 for row in all_order_rows if acceptance_order(row)),
+                "test_payment_providers_excluded": sum(
+                    1
+                    for row in all_order_rows
+                    if non_commercial_provider(row["provider"]) or not bool(row["merchant_account"])
+                ),
+                "rehearsal_data_excluded": True,
+                "subscription_order_scan_capped": subscription_order_scan_capped,
+            },
+            "merchant_navigation_visible": False,
+            "frontend_gets_secret": False,
+            "secret_exposed": False,
+        }
+
+    def platform_operations_detail(
+        self,
+        *,
+        section: str,
+        period_days: int = 30,
+        cursor: str | None = None,
+        limit: int = 25,
+        status: str | None = None,
+        category: str | None = None,
+        plan: str | None = None,
+        module: str | None = None,
+        event: str | None = None,
+        result: str | None = None,
+    ) -> dict[str, Any]:
+        """Return bounded, sanitized internal operations drill-down records."""
+
+        self.initialize()
+        normalized_section = str(section or "").strip().lower()
+        if normalized_section not in {"traffic", "merchants", "transactions", "costs", "workflows", "audit"}:
+            raise ValueError("unsupported operations detail section")
+        safe_period_days = min(max(int(30 if period_days is None else period_days), 1), 366)
+        safe_limit = min(max(int(limit or 25), 1), 100)
+        offset = _operations_cursor_offset(cursor)
+        period_ended_at = datetime.now(timezone.utc)
+        period_start_date = period_ended_at.date() - timedelta(days=safe_period_days - 1)
+        period_started_at = datetime.combine(period_start_date, datetime.min.time(), tzinfo=timezone.utc).isoformat()
+        normalized_filters = {
+            "status": str(status or "").strip().lower(),
+            "category": str(category or "").strip().lower(),
+            "plan": str(plan or "").strip().lower(),
+            "module": str(module or "").strip().lower(),
+            "event": str(event or "").strip().lower(),
+            "result": str(result or "").strip().lower(),
+        }
+
+        if normalized_section == "traffic":
+            overview = self.platform_operations_overview(period_days=safe_period_days)
+            return {
+                "contract_version": "2026-07-15-platform-operations-detail-v1",
+                "section": "traffic",
+                "period": overview["period"],
+                "summary": overview["traffic_analytics"],
+                "performance": overview["performance_analytics"],
+                "items": overview["traffic_analytics"].get("page_breakdown", []),
+                "next_cursor": "",
+                "privacy": {
+                    "raw_ip_stored": False,
+                    "raw_url_stored": False,
+                    "visitor_level_tracking_exposed": False,
+                },
+                "secret_exposed": False,
+            }
+
+        with self._connect() as conn:
+            if normalized_section == "merchants":
+                rows = conn.execute(
+                    """
+                    select c.company_id, c.name, c.created_at,
+                           (select u.email from users u where u.default_company_id = c.company_id
+                            and u.account_classification = 'merchant' order by u.created_at asc limit 1) as email,
+                           (select u.status from users u where u.default_company_id = c.company_id
+                            and u.account_classification = 'merchant' order by u.created_at asc limit 1) as account_status,
+                           s.plan_key, s.status as subscription_status, s.entitlement_active, s.updated_at as subscription_updated_at,
+                           (select max(t.updated_at) from tasks t where t.company_id = c.company_id) as last_workflow_at,
+                           (select count(*) from stores st where st.company_id = c.company_id) as store_count
+                    from companies c
+                    left join billing_subscriptions s on s.company_id = c.company_id
+                    where exists (
+                      select 1 from users u where u.default_company_id = c.company_id
+                      and u.account_classification = 'merchant'
+                    )
+                    order by c.created_at desc, c.company_id asc
+                    limit 5001
+                    """
+                ).fetchall()
+                records = []
+                for row in rows:
+                    account_status = str(row["account_status"] or "unknown").lower()
+                    subscription_status = str(row["subscription_status"] or "none").lower()
+                    plan_key = str(row["plan_key"] or "free").lower()
+                    if normalized_filters["status"] and normalized_filters["status"] not in {account_status, subscription_status}:
+                        continue
+                    if normalized_filters["plan"] and normalized_filters["plan"] != plan_key:
+                        continue
+                    records.append(
+                        {
+                            "company_ref": _operations_short_ref("company", row["company_id"]),
+                            "company_name": str(row["name"] or "未命名商家")[:80],
+                            "email_masked": _operations_mask_email(row["email"]),
+                            "account_status": account_status,
+                            "plan_key": plan_key,
+                            "subscription_status": subscription_status,
+                            "entitlement_active": bool(row["entitlement_active"]),
+                            "store_count": int(row["store_count"] or 0),
+                            "registered_at": str(row["created_at"] or ""),
+                            "last_active_at": str(row["last_workflow_at"] or row["subscription_updated_at"] or ""),
+                        }
+                    )
+            elif normalized_section == "transactions":
+                rows = conn.execute(
+                    """
+                    select o.* from billing_orders o
+                    where coalesce(o.paid_at, o.created_at) >= ? and exists (
+                      select 1 from users u where u.default_company_id = o.company_id
+                      and u.account_classification = 'merchant'
+                    )
+                    order by o.created_at desc, o.order_id asc
+                    limit 5001
+                    """,
+                    (period_started_at,),
+                ).fetchall()
+                records = []
+                for row in rows:
+                    provider = str(row["provider"] or "").strip().lower()
+                    payload = _load_json_field(row["order_json"])
+                    if provider in _NON_COMMERCIAL_BILLING_PROVIDERS or provider.endswith("_mock"):
+                        continue
+                    if isinstance(payload, dict) and payload.get("live_acceptance_test") is True:
+                        continue
+                    row_status = str(row["status"] or "unknown").lower()
+                    plan_key = str(row["plan_key"] or "unknown").lower()
+                    kind = "media_credit" if "media" in plan_key or "credit" in plan_key else "subscription"
+                    if normalized_filters["status"] and normalized_filters["status"] != row_status:
+                        continue
+                    if normalized_filters["category"] and normalized_filters["category"] != kind:
+                        continue
+                    records.append(
+                        {
+                            "transaction_ref": _operations_short_ref("billing-order", row["order_id"]),
+                            "company_ref": _operations_short_ref("company", row["company_id"]),
+                            "kind": kind,
+                            "plan_key": plan_key,
+                            "status": row_status,
+                            "amount_minor": int(row["amount_minor"] or 0),
+                            "currency": str(row["currency"] or "CNY"),
+                            "payment_channel": "domestic_payment" if provider == "wechat_pay_native" else "external_payment",
+                            "created_at": str(row["created_at"] or ""),
+                            "paid_at": str(row["paid_at"] or ""),
+                            "updated_at": str(row["updated_at"] or ""),
+                        }
+                    )
+            elif normalized_section == "costs":
+                model_rows = conn.execute(
+                    """
+                    select usage_id, company_id, task_id, usage_owner, request_count,
+                           input_tokens, output_tokens, total_tokens, cost_minor, currency, cost_status, created_at
+                    from model_usage_ledger m where created_at >= ? and (
+                      company_id is null or exists (
+                        select 1 from users u where u.default_company_id = m.company_id
+                        and u.account_classification = 'merchant'
+                      )
+                    ) order by created_at desc limit 5001
+                    """,
+                    (period_started_at,),
+                ).fetchall()
+                provider_rows = conn.execute(
+                    """
+                    select cost_id, company_id, task_id, cost_category, resource_type,
+                           unit_count, media_points, cost_minor, currency, cost_status, created_at
+                    from provider_cost_ledger c where created_at >= ? and (
+                      company_id is null or exists (
+                        select 1 from users u where u.default_company_id = c.company_id
+                        and u.account_classification = 'merchant'
+                      )
+                    ) order by created_at desc limit 5001
+                    """,
+                    (period_started_at,),
+                ).fetchall()
+                records = []
+                for row in model_rows:
+                    cost_status = str(row["cost_status"] or "unavailable").lower()
+                    if normalized_filters["category"] and normalized_filters["category"] != "model":
+                        continue
+                    if normalized_filters["status"] and normalized_filters["status"] != cost_status:
+                        continue
+                    records.append(
+                        {
+                            "cost_ref": _operations_short_ref("model-cost", row["usage_id"]),
+                            "company_ref": _operations_short_ref("company", row["company_id"]),
+                            "category": "model",
+                            "resource_type": "text_model",
+                            "usage_owner": str(row["usage_owner"] or "unknown"),
+                            "units": int(row["request_count"] or 0),
+                            "input_tokens": int(row["input_tokens"] or 0),
+                            "output_tokens": int(row["output_tokens"] or 0),
+                            "total_tokens": int(row["total_tokens"] or 0),
+                            "cost_minor": int(row["cost_minor"] or 0),
+                            "currency": str(row["currency"] or "CNY"),
+                            "cost_status": cost_status,
+                            "created_at": str(row["created_at"] or ""),
+                        }
+                    )
+                for row in provider_rows:
+                    cost_category = str(row["cost_category"] or "other").lower()
+                    cost_status = str(row["cost_status"] or "unavailable").lower()
+                    if normalized_filters["category"] and normalized_filters["category"] != cost_category:
+                        continue
+                    if normalized_filters["status"] and normalized_filters["status"] != cost_status:
+                        continue
+                    records.append(
+                        {
+                            "cost_ref": _operations_short_ref("provider-cost", row["cost_id"]),
+                            "company_ref": _operations_short_ref("company", row["company_id"]),
+                            "category": cost_category,
+                            "resource_type": str(row["resource_type"] or "unknown")[:40],
+                            "units": int(row["unit_count"] or 0),
+                            "media_points": int(row["media_points"] or 0),
+                            "cost_minor": int(row["cost_minor"] or 0),
+                            "currency": str(row["currency"] or "CNY"),
+                            "cost_status": cost_status,
+                            "created_at": str(row["created_at"] or ""),
+                        }
+                    )
+                records.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+            elif normalized_section == "workflows":
+                rows = conn.execute(
+                    """
+                    select t.task_id, t.company_id, t.task_type, t.status, t.created_at, t.updated_at,
+                           (select count(*) from queue_jobs q where q.task_id = t.task_id) as job_count,
+                           (select coalesce(sum(q.attempts), 0) from queue_jobs q where q.task_id = t.task_id) as attempt_count
+                    from tasks t where t.created_at >= ? and exists (
+                      select 1 from users u where u.default_company_id = t.company_id
+                      and u.account_classification = 'merchant'
+                    ) order by t.created_at desc, t.task_id asc limit 5001
+                    """,
+                    (period_started_at,),
+                ).fetchall()
+                records = []
+                for row in rows:
+                    task_status = str(row["status"] or "unknown").lower()
+                    task_module = str(row["task_type"] or "unknown").lower()
+                    if normalized_filters["status"] and normalized_filters["status"] != task_status:
+                        continue
+                    if normalized_filters["module"] and normalized_filters["module"] not in task_module:
+                        continue
+                    records.append(
+                        {
+                            "task_ref": _operations_short_ref("task", row["task_id"]),
+                            "company_ref": _operations_short_ref("company", row["company_id"]),
+                            "module": task_module,
+                            "status": task_status,
+                            "job_count": int(row["job_count"] or 0),
+                            "attempt_count": int(row["attempt_count"] or 0),
+                            "created_at": str(row["created_at"] or ""),
+                            "updated_at": str(row["updated_at"] or ""),
+                        }
+                    )
+            else:
+                rows = conn.execute(
+                    """
+                    select a.audit_id, a.company_id, a.actor_type, a.action_type, a.target_type,
+                           a.created_at, a.audit_json from audit_logs a
+                    where a.created_at >= ? and exists (
+                      select 1 from users u where u.default_company_id = a.company_id
+                      and u.account_classification = 'merchant'
+                    ) order by a.created_at desc, a.audit_id asc limit 5001
+                    """,
+                    (period_started_at,),
+                ).fetchall()
+                records = []
+                for row in rows:
+                    action_type = str(row["action_type"] or "unknown").lower()
+                    packet = _load_json_field(row["audit_json"])
+                    details = packet.get("details") if isinstance(packet, dict) and isinstance(packet.get("details"), dict) else {}
+                    action_result = str(details.get("result") or details.get("status") or "recorded").lower()
+                    if normalized_filters["event"] and normalized_filters["event"] not in action_type:
+                        continue
+                    if normalized_filters["result"] and normalized_filters["result"] != action_result:
+                        continue
+                    records.append(
+                        {
+                            "audit_ref": _operations_short_ref("audit", row["audit_id"]),
+                            "company_ref": _operations_short_ref("company", row["company_id"]),
+                            "actor_type": str(row["actor_type"] or "unknown")[:32],
+                            "action_type": action_type[:120],
+                            "target_type": str(row["target_type"] or "unknown")[:80],
+                            "result": action_result[:40],
+                            "created_at": str(row["created_at"] or ""),
+                        }
+                    )
+
+        total_available = len(records)
+        page_items = records[offset : offset + safe_limit]
+        next_offset = offset + len(page_items)
+        return {
+            "contract_version": "2026-07-15-platform-operations-detail-v1",
+            "section": normalized_section,
+            "period": {"days": safe_period_days, "started_at": period_started_at},
+            "filters": {key: value for key, value in normalized_filters.items() if value},
+            "items": page_items,
+            "returned_count": len(page_items),
+            "has_more": next_offset < total_available,
+            "next_cursor": _operations_next_cursor(next_offset) if next_offset < total_available else "",
+            "data_window_capped": total_available > 5000,
+            "merchant_content_exposed": False,
+            "provider_neutral": True,
+            "secret_exposed": False,
+        }
 
     def product_readiness_evidence(self) -> dict[str, Any]:
         self.initialize()
@@ -4747,6 +7567,38 @@ class SaaSRepository:
                   and status in ('read_only_authorized', 'publish_authorized')
                 """
             ).fetchall()
+            latest_packet_connection_count = 0
+            latest_packet_secret_ref_count = 0
+            if latest_packet:
+                latest_packet_connection_count = int(
+                    conn.execute(
+                        """
+                        select count(*) as count from platform_connections
+                        where lower(platform) = 'ebay'
+                          and company_id = ?
+                          and store_id = ?
+                          and status in ('read_only_authorized', 'publish_authorized')
+                        """,
+                        (latest_packet["company_id"], latest_packet["store_id"]),
+                    ).fetchone()["count"]
+                )
+                latest_packet_secret_ref_count = int(
+                    conn.execute(
+                        """
+                        select count(*) as count from secret_refs
+                        where provider = 'ebay'
+                          and purpose = 'ebay_refresh_token'
+                          and company_id = ?
+                          and store_id = ?
+                          and status in ({})
+                        """.format(", ".join("?" for _ in ACTIVE_SECRET_REF_STATUSES)),
+                        (
+                            latest_packet["company_id"],
+                            latest_packet["store_id"],
+                            *tuple(sorted(ACTIVE_SECRET_REF_STATUSES)),
+                        ),
+                    ).fetchone()["count"]
+                )
 
         mapped_ebay_identities = 0
         identity_store_owners: dict[str, set[str]] = {}
@@ -4768,6 +7620,9 @@ class SaaSRepository:
             packet_body = {}
         present = packet_body.get("present_resource_keys")
         missing = packet_body.get("missing_resource_keys")
+        latest_packet_current_connection = bool(
+            latest_packet and latest_packet_connection_count > 0 and latest_packet_secret_ref_count > 0
+        )
         return {
             "read_only_authorized_connections": read_only_authorized_connections,
             "ebay_secret_refs": ebay_secret_refs,
@@ -4777,6 +7632,8 @@ class SaaSRepository:
             "latest_ebay_packet_created_at": latest_packet.get("created_at") if latest_packet else "",
             "latest_ebay_packet_present_resource_keys": present if isinstance(present, list) else [],
             "latest_ebay_packet_missing_resource_keys": missing if isinstance(missing, list) else [],
+            "latest_ebay_packet_current_connection": latest_packet_current_connection,
+            "historical_ebay_packet_present": bool(latest_packet and not latest_packet_current_connection),
             "model_secret_refs": model_secret_refs,
             "ebay_token_refresh_success_count": ebay_token_refresh_success_count,
             "latest_ebay_token_refresh_success_at": latest_ebay_token_refresh_success["created_at"] if latest_ebay_token_refresh_success else "",
@@ -4887,6 +7744,400 @@ class SaaSRepository:
             ).fetchall()
         return {str(row["status"]): int(row["count"]) for row in rows}
 
+    def acquire_provider_monitoring_lease(
+        self,
+        *,
+        scheduler_key: str,
+        owner_hash: str,
+        lease_seconds: int,
+        now_epoch: int | None = None,
+    ) -> dict[str, Any]:
+        """Atomically acquire an expiring singleton lease without exposing its owner."""
+
+        self.initialize()
+        safe_scheduler_key = str(scheduler_key or "").strip()[:120]
+        safe_owner_hash = str(owner_hash or "").strip()[:128]
+        if not safe_scheduler_key or not safe_owner_hash:
+            raise ValueError("provider monitoring scheduler key and owner hash are required")
+        current_epoch = int(now_epoch if now_epoch is not None else time.time())
+        bounded_lease_seconds = min(3600, max(15, int(lease_seconds)))
+        expires_epoch = current_epoch + bounded_lease_seconds
+        updated_at = now_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                insert into platform_provider_monitor_state (
+                  scheduler_key, lease_owner_hash, lease_expires_at_epoch,
+                  last_evaluated_at, last_exported_at, last_outcome, snapshot_json, updated_at
+                ) values (?, ?, ?, null, null, 'idle', '{}', ?)
+                on conflict(scheduler_key) do update set
+                  lease_owner_hash = excluded.lease_owner_hash,
+                  lease_expires_at_epoch = excluded.lease_expires_at_epoch,
+                  updated_at = excluded.updated_at
+                where platform_provider_monitor_state.lease_expires_at_epoch <= ?
+                returning scheduler_key
+                """,
+                (safe_scheduler_key, safe_owner_hash, expires_epoch, updated_at, current_epoch),
+            ).fetchone()
+        if not row:
+            return {
+                "acquired": False,
+                "status": "skipped_lease_contended",
+                "secret_exposed": False,
+            }
+        return {
+            "acquired": True,
+            "status": "lease_acquired",
+            "lease_seconds": bounded_lease_seconds,
+            "secret_exposed": False,
+        }
+
+    def complete_provider_monitoring_evaluation(
+        self,
+        *,
+        scheduler_key: str,
+        owner_hash: str,
+        evaluated_at: str | None,
+        exported_at: str | None,
+        outcome: str,
+        snapshot: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Persist allowlisted aggregate evidence while retaining the lease until interval expiry."""
+
+        self.initialize()
+        safe_scheduler_key = str(scheduler_key or "").strip()[:120]
+        safe_owner_hash = str(owner_hash or "").strip()[:128]
+        if not safe_scheduler_key or not safe_owner_hash:
+            raise ValueError("provider monitoring scheduler key and owner hash are required")
+        normalized_outcome = str(outcome or "evaluation_failed").strip().lower()
+        if normalized_outcome not in {
+            "exported",
+            "export_failed",
+            "query_failed",
+            "evaluation_failed",
+        }:
+            normalized_outcome = "evaluation_failed"
+        safe_snapshot = {
+            key: value
+            for key, value in (snapshot.items() if isinstance(snapshot, dict) else [])
+            if key in PROVIDER_MONITOR_AGGREGATE_KEYS and isinstance(value, (str, int, bool))
+        }
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                update platform_provider_monitor_state
+                set last_evaluated_at = coalesce(?, last_evaluated_at),
+                    last_exported_at = coalesce(?, last_exported_at),
+                    last_outcome = ?,
+                    snapshot_json = ?,
+                    updated_at = ?
+                where scheduler_key = ? and lease_owner_hash = ?
+                returning scheduler_key
+                """,
+                (
+                    str(evaluated_at or "")[:80] or None,
+                    str(exported_at or "")[:80] or None,
+                    normalized_outcome,
+                    json.dumps(safe_snapshot, ensure_ascii=False, sort_keys=True),
+                    now_iso(),
+                    safe_scheduler_key,
+                    safe_owner_hash,
+                ),
+            ).fetchone()
+        return {
+            "updated": bool(row),
+            "status": normalized_outcome if row else "lease_owner_mismatch",
+            "secret_exposed": False,
+        }
+
+    def provider_monitoring_state(self, *, scheduler_key: str = "provider-monitor") -> dict[str, Any]:
+        """Return scheduler evidence without lease ownership or cloud identifiers."""
+
+        self.initialize()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select last_evaluated_at, last_exported_at, last_outcome, snapshot_json
+                from platform_provider_monitor_state where scheduler_key = ?
+                """,
+                (str(scheduler_key or "provider-monitor").strip()[:120],),
+            ).fetchone()
+        if not row:
+            return {
+                "configured": False,
+                "last_evaluated_at": "",
+                "last_exported_at": "",
+                "last_outcome": "never_run",
+                "aggregate": {},
+                "secret_exposed": False,
+            }
+        aggregate = _load_json_field(row["snapshot_json"])
+        return {
+            "configured": True,
+            "last_evaluated_at": str(row["last_evaluated_at"] or ""),
+            "last_exported_at": str(row["last_exported_at"] or ""),
+            "last_outcome": str(row["last_outcome"] or "never_run"),
+            "aggregate": aggregate if isinstance(aggregate, dict) else {},
+            "secret_exposed": False,
+        }
+
+    def provider_monitoring_snapshot(
+        self,
+        *,
+        reliability_window_minutes: int = 30,
+        cost_window_hours: int = 24,
+        now_utc: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate passive real-business provider telemetry over focused windows."""
+
+        self.initialize()
+        bounded_reliability_minutes = min(1440, max(1, int(reliability_window_minutes)))
+        bounded_cost_hours = min(168, max(1, int(cost_window_hours)))
+        current = now_utc or datetime.now(timezone.utc)
+        if current.tzinfo is None or current.utcoffset() is None:
+            current = current.replace(tzinfo=timezone.utc)
+        current = current.astimezone()
+        reliability_started_at = (current - timedelta(minutes=bounded_reliability_minutes)).isoformat()
+        cost_started_at = (current - timedelta(hours=bounded_cost_hours)).isoformat()
+        merchant_company_predicate = """
+          exists (
+            select 1 from users u
+            where u.default_company_id = {alias}.company_id and u.account_classification = 'merchant'
+          )
+        """
+        merchant_actor_predicate = """
+          (
+            {alias}.user_id is null
+            or exists (
+              select 1 from users actor_user
+              where actor_user.user_id = {alias}.user_id
+                and actor_user.account_classification = 'merchant'
+            )
+          )
+        """
+        task_predicate = """
+          ({alias}.task_id is null or not exists (
+            select 1 from tasks eligible_task
+            where eligible_task.task_id = {alias}.task_id and (
+              lower(eligible_task.task_type) like '%%rehearsal%%'
+              or lower(eligible_task.task_type) like '%%acceptance%%'
+              or lower(eligible_task.task_type) like '%%verification%%'
+              or lower(eligible_task.task_type) like '%%probe%%'
+              or not exists (
+                select 1 from users task_actor
+                where task_actor.user_id = eligible_task.user_id
+                  and task_actor.account_classification = 'merchant'
+              )
+            )
+          ))
+        """
+        payment_predicate = """
+          (
+            c.reference_type <> 'payment_provider_call'
+            or (
+              billing_order.order_id is not null
+              and lower(coalesce(billing_order.provider, '')) not in ('manual_beta', 'stripe_test_mock')
+              and replace(cast(billing_order.order_json as text), ' ', '') not like '%%\"live_acceptance_test\":true%%'
+            )
+          )
+        """
+        with self._connect() as conn:
+            model_reliability_rows = conn.execute(
+                f"""
+                select usage_json
+                from model_usage_ledger m
+                where m.created_at >= ?
+                  and {merchant_company_predicate.format(alias='m')}
+                  and {merchant_actor_predicate.format(alias='m')}
+                  and {task_predicate.format(alias='m')}
+                order by m.created_at desc
+                limit 5000
+                """,
+                (reliability_started_at,),
+            ).fetchall()
+            provider_reliability_rows = conn.execute(
+                f"""
+                select c.cost_json
+                from provider_cost_ledger c
+                left join billing_orders billing_order
+                  on c.reference_type = 'payment_provider_call' and billing_order.order_id = c.reference_id
+                where c.created_at >= ?
+                  and {merchant_company_predicate.format(alias='c')}
+                  and {merchant_actor_predicate.format(alias='c')}
+                  and {task_predicate.format(alias='c')}
+                  and {payment_predicate}
+                order by c.created_at desc
+                limit 5000
+                """,
+                (reliability_started_at,),
+            ).fetchall()
+            model_cost_rows = conn.execute(
+                f"""
+                select m.usage_owner, m.cost_status,
+                       coalesce(sum(m.request_count), 0) as request_count,
+                       coalesce(sum(m.cost_minor), 0) as cost_minor
+                from model_usage_ledger m
+                where m.created_at >= ?
+                  and {merchant_company_predicate.format(alias='m')}
+                  and {merchant_actor_predicate.format(alias='m')}
+                  and {task_predicate.format(alias='m')}
+                group by m.usage_owner, m.cost_status
+                """,
+                (cost_started_at,),
+            ).fetchall()
+            provider_cost_rows = conn.execute(
+                f"""
+                select c.cost_status, count(*) as record_count,
+                       coalesce(sum(c.cost_minor), 0) as cost_minor
+                from provider_cost_ledger c
+                left join billing_orders billing_order
+                  on c.reference_type = 'payment_provider_call' and billing_order.order_id = c.reference_id
+                where c.created_at >= ?
+                  and {merchant_company_predicate.format(alias='c')}
+                  and {merchant_actor_predicate.format(alias='c')}
+                  and {task_predicate.format(alias='c')}
+                  and {payment_predicate}
+                group by c.cost_status
+                """,
+                (cost_started_at,),
+            ).fetchall()
+            current_unmetered_row = conn.execute(
+                f"""
+                select count(*) as count
+                from tasks t
+                left join model_usage_ledger m on m.task_id = t.task_id
+                where t.task_type = 'merchant_ceo_chat'
+                  and t.created_at >= ? and m.usage_id is null
+                  and {merchant_company_predicate.format(alias='t')}
+                  and {merchant_actor_predicate.format(alias='t')}
+                """,
+                (cost_started_at,),
+            ).fetchone()
+
+        def nonnegative_int(value: Any) -> int:
+            try:
+                return max(0, int(value or 0))
+            except (TypeError, ValueError, OverflowError):
+                return 0
+
+        def bounded_duration(value: Any) -> int | None:
+            try:
+                duration = int(value)
+            except (TypeError, ValueError, OverflowError):
+                return None
+            return min(120_000, max(0, duration))
+
+        buckets: dict[str, dict[str, Any]] = {
+            scope: {
+                "request_count": 0,
+                "success_count": 0,
+                "failure_count": 0,
+                "timeout_count": 0,
+                "partial_count": 0,
+                "blocked_count": 0,
+                "durations": [],
+                "error_classes": {},
+            }
+            for scope in ("model", "public_search", "media_generation", "payment")
+        }
+        for row in model_reliability_rows:
+            packet = _load_json_field(row["usage_json"])
+            details = packet.get("details") if isinstance(packet, dict) and isinstance(packet.get("details"), dict) else {}
+            telemetry = details.get("reliability") if isinstance(details.get("reliability"), dict) else {}
+            if not telemetry:
+                continue
+            bucket = buckets["model"]
+            request_count = nonnegative_int(telemetry.get("request_count"))
+            success_count = min(request_count, nonnegative_int(telemetry.get("success_count")))
+            bucket["request_count"] += request_count
+            bucket["success_count"] += success_count
+            bucket["failure_count"] += max(0, request_count - success_count)
+            bucket["timeout_count"] += min(request_count, nonnegative_int(telemetry.get("timeout_count")))
+            duration_samples = telemetry.get("duration_samples_ms") if isinstance(telemetry.get("duration_samples_ms"), list) else []
+            if not duration_samples:
+                duration_samples = [telemetry.get("p75_duration_ms")]
+            for value in duration_samples[:50]:
+                duration = bounded_duration(value)
+                if duration is not None:
+                    bucket["durations"].append(duration)
+        for row in provider_reliability_rows:
+            packet = _load_json_field(row["cost_json"])
+            details = packet.get("details") if isinstance(packet, dict) and isinstance(packet.get("details"), dict) else {}
+            telemetry = details.get("telemetry") if isinstance(details.get("telemetry"), dict) else {}
+            scope = str(telemetry.get("scope") or "")
+            if scope not in {"public_search", "media_generation", "payment"}:
+                continue
+            outcome = str(telemetry.get("outcome") or "error")
+            if outcome not in {"success", "partial", "error", "timeout", "blocked"}:
+                outcome = "error"
+            bucket = buckets[scope]
+            bucket["request_count"] += 1
+            bucket["success_count"] += 1 if outcome == "success" else 0
+            bucket["failure_count"] += 0 if outcome == "success" else 1
+            bucket["timeout_count"] += 1 if outcome == "timeout" else 0
+            bucket["partial_count"] += 1 if outcome == "partial" else 0
+            bucket["blocked_count"] += 1 if outcome == "blocked" else 0
+            duration = bounded_duration(telemetry.get("duration_ms"))
+            if duration is not None:
+                bucket["durations"].append(duration)
+
+        def reliability_summary(scope: str) -> dict[str, Any]:
+            bucket = buckets[scope]
+            durations = sorted(bucket.pop("durations"))
+            return {
+                "status": "instrumented" if bucket["request_count"] else "ready_no_samples",
+                "sample_count": len(durations),
+                **bucket,
+                "p75_duration_ms": durations[max(0, ((len(durations) * 3 + 3) // 4) - 1)] if durations else None,
+                "max_duration_ms": max(durations) if durations else None,
+            }
+
+        reliability = {scope: reliability_summary(scope) for scope in buckets}
+        reliability.update(
+            {
+                "provider_neutral": True,
+                "prompts_stored": False,
+                "responses_stored": False,
+                "queries_stored": False,
+                "raw_errors_stored": False,
+                "raw_provider_response_stored": False,
+            }
+        )
+        reliability["alerts"] = build_reliability_alert_summary(reliability)
+        platform_model_cost_minor = sum(
+            nonnegative_int(row["cost_minor"])
+            for row in model_cost_rows
+            if str(row["usage_owner"] or "") == "jiejing_platform_trial"
+        )
+        provider_cost_minor = sum(nonnegative_int(row["cost_minor"]) for row in provider_cost_rows)
+        current_unmetered_model_tasks = nonnegative_int(current_unmetered_row["count"] if current_unmetered_row else 0)
+        unknown_model_cost_records = current_unmetered_model_tasks + sum(
+            nonnegative_int(row["request_count"])
+            for row in model_cost_rows
+            if str(row["usage_owner"] or "") in {"jiejing_platform_trial", "unknown"}
+            and str(row["cost_status"] or "") == "unavailable"
+        )
+        unknown_provider_cost_records = sum(
+            nonnegative_int(row["record_count"])
+            for row in provider_cost_rows
+            if str(row["cost_status"] or "") == "unavailable"
+        )
+        return {
+            "contract_version": "2026-07-17-provider-monitoring-snapshot-v1",
+            "reliability_window_minutes": bounded_reliability_minutes,
+            "cost_window_hours": bounded_cost_hours,
+            "reliability": reliability,
+            "platform_model_cost_minor": platform_model_cost_minor,
+            "provider_cost_minor": provider_cost_minor,
+            "cost_total_minor": platform_model_cost_minor + provider_cost_minor,
+            "unknown_model_cost_records": unknown_model_cost_records,
+            "unknown_provider_cost_records": unknown_provider_cost_records,
+            "current_unmetered_model_tasks": current_unmetered_model_tasks,
+            "cost_coverage_complete": not bool(unknown_model_cost_records or unknown_provider_cost_records),
+            "provider_neutral": True,
+            "secret_exposed": False,
+        }
+
     def consume_rate_limit_bucket(
         self,
         *,
@@ -4981,6 +8232,10 @@ class SaaSRepository:
     def _ensure_indexes(self, conn: sqlite3.Connection) -> None:
         conn.executescript(
             """
+            create index if not exists idx_users_account_classification_created
+              on users(account_classification, created_at);
+            create index if not exists idx_platform_trial_activations_status_updated
+              on platform_trial_activations(status, updated_at);
             create index if not exists idx_stores_company_platform_created
               on stores(company_id, platform, created_at);
             create index if not exists idx_team_members_company_role
@@ -5045,6 +8300,39 @@ class SaaSRepository:
               on billing_subscriptions(provider, provider_subscription_id);
             create index if not exists idx_billing_webhook_events_company_created
               on billing_webhook_events(company_id, created_at);
+            create index if not exists idx_billing_orders_company_created
+              on billing_orders(company_id, created_at);
+            create index if not exists idx_billing_orders_company_status_updated
+              on billing_orders(company_id, status, updated_at);
+            create index if not exists idx_billing_orders_provider_order
+              on billing_orders(provider, provider_order_id);
+            create unique index if not exists idx_billing_orders_provider_transaction_unique
+              on billing_orders(provider, provider_order_id)
+              where provider_order_id is not null;
+            create index if not exists idx_media_credit_ledger_company_created
+              on media_credit_ledger(company_id, created_at);
+            create index if not exists idx_media_credit_ledger_company_reference
+              on media_credit_ledger(company_id, reference_type, reference_id, created_at);
+            create index if not exists idx_platform_analytics_events_time_event
+              on platform_analytics_events(occurred_at, event_key);
+            create index if not exists idx_platform_analytics_events_visitor_time
+              on platform_analytics_events(visitor_hash, occurred_at);
+            create index if not exists idx_model_usage_ledger_owner_created
+              on model_usage_ledger(usage_owner, created_at);
+            create index if not exists idx_model_usage_ledger_company_created
+              on model_usage_ledger(company_id, created_at);
+            create index if not exists idx_provider_cost_ledger_category_created
+              on provider_cost_ledger(cost_category, created_at);
+            create index if not exists idx_provider_cost_ledger_company_created
+              on provider_cost_ledger(company_id, created_at);
+            create index if not exists idx_platform_reliability_alert_state_status_updated
+              on platform_reliability_alert_state(lifecycle_status, updated_at);
+            create index if not exists idx_platform_reliability_alert_events_scope_created
+              on platform_reliability_alert_events(alert_scope, created_at);
+            create index if not exists idx_platform_reliability_alert_events_transition_created
+              on platform_reliability_alert_events(transition_key, created_at);
+            create index if not exists idx_platform_provider_monitor_state_lease_expiry
+              on platform_provider_monitor_state(lease_expires_at_epoch);
             create index if not exists idx_ebay_account_deletion_events_status_updated
               on ebay_account_deletion_events(status, updated_at);
             create index if not exists idx_api_rate_limit_buckets_scope_expiry
@@ -5053,10 +8341,70 @@ class SaaSRepository:
         )
 
     @staticmethod
+    def _ensure_user_account_classification(conn: sqlite3.Connection) -> None:
+        columns = {str(row["name"]) for row in conn.execute("pragma table_info(users)").fetchall()}
+        if "account_classification" not in columns:
+            conn.execute(
+                "alter table users add column account_classification text not null default 'merchant'"
+            )
+        placeholders = ", ".join("?" for _ in _SYNTHETIC_ACCOUNT_DOMAINS)
+        conn.execute(
+            f"""
+            update users
+            set account_classification = ?
+            where lower(substr(email, instr(email, '@') + 1)) in ({placeholders})
+            """,
+            (
+                ACCOUNT_CLASSIFICATION_SYNTHETIC_TEST,
+                *sorted(_SYNTHETIC_ACCOUNT_DOMAINS),
+            ),
+        )
+
+    @staticmethod
     def _ensure_ai_ceo_chat_merge_score_column(conn: sqlite3.Connection) -> None:
         columns = {str(row["name"]) for row in conn.execute("pragma table_info(ai_ceo_chat_turns)").fetchall()}
         if "merge_score" not in columns:
             conn.execute("alter table ai_ceo_chat_turns add column merge_score integer not null default 0")
+
+    @staticmethod
+    def _ensure_account_scoped_confirmations(conn: sqlite3.Connection) -> None:
+        """Make store/task ownership optional for billing and other account controls."""
+
+        columns = {str(row["name"]): row for row in conn.execute("pragma table_info(confirmations)").fetchall()}
+        if not columns or "store_id" not in columns or "task_id" not in columns:
+            return
+        if int(columns["store_id"]["notnull"] or 0) == 0 and int(columns["task_id"]["notnull"] or 0) == 0:
+            return
+        conn.executescript(
+            """
+            alter table confirmations rename to confirmations_store_scoped_legacy;
+            create table confirmations (
+              confirmation_id text primary key,
+              company_id text not null,
+              store_id text,
+              task_id text,
+              runtime_run_id text not null,
+              action_type text not null,
+              title text not null,
+              status text not null,
+              default_action text not null,
+              created_at text not null,
+              item_json text not null,
+              decided_by text,
+              decided_at text,
+              decision_note text
+            );
+            insert into confirmations (
+              confirmation_id, company_id, store_id, task_id, runtime_run_id, action_type, title, status,
+              default_action, created_at, item_json, decided_by, decided_at, decision_note
+            )
+            select
+              confirmation_id, company_id, store_id, task_id, runtime_run_id, action_type, title, status,
+              default_action, created_at, item_json, decided_by, decided_at, decision_note
+            from confirmations_store_scoped_legacy;
+            drop table confirmations_store_scoped_legacy;
+            """
+        )
 
     def _record_schema_migration(
         self,
@@ -5585,6 +8933,57 @@ class SaaSRepository:
             "secret_exposed": False,
         }
 
+    def _media_credit_account_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        balance = int(row["balance_points"] or 0)
+        reserved = int(row["reserved_points"] or 0)
+        return {
+            "balance_points": balance,
+            "reserved_points": reserved,
+            "available_points": max(0, balance - reserved),
+            "lifetime_granted_points": int(row["lifetime_granted_points"] or 0),
+            "lifetime_spent_points": int(row["lifetime_spent_points"] or 0),
+            "updated_at": row["updated_at"],
+            "provider_neutral": True,
+            "secret_exposed": False,
+        }
+
+    def _media_credit_ledger_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "ledger_id": row["ledger_id"],
+            "operation_type": row["operation_type"],
+            "points": int(row["points"] or 0),
+            "status": row["status"],
+            "reference_type": row["reference_type"],
+            "reference_id": row["reference_id"],
+            "reservation_id": row["reservation_id"] or "",
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "provider_neutral": True,
+            "secret_exposed": False,
+        }
+
+    def _domestic_billing_order_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        order = _load_json_field(row["order_json"])
+        return {
+            "order_id": row["order_id"],
+            "company_id": row["company_id"],
+            "user_id": row["user_id"],
+            "provider": row["provider"],
+            "provider_order_id": row["provider_order_id"] or "",
+            "plan_key": row["plan_key"],
+            "amount_minor": int(row["amount_minor"]),
+            "currency": row["currency"],
+            "duration_days": int(row["duration_days"]),
+            "status": row["status"],
+            "expires_at": row["expires_at"],
+            "paid_at": row["paid_at"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "order": order if isinstance(order, dict) else {},
+            "frontend_gets_payment_secret": False,
+            "secret_exposed": False,
+        }
+
     def _find_billing_company_id(
         self,
         *,
@@ -5718,6 +9117,20 @@ def _parse_iso_datetime(value: str) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _without_domestic_checkout_uri(value: dict[str, Any]) -> dict[str, Any]:
+    """Remove a payable URI as soon as the order is no longer payable."""
+
+    cleaned = dict(value or {})
+    checkout = cleaned.get("checkout")
+    if isinstance(checkout, dict):
+        safe_checkout = dict(checkout)
+        safe_checkout.pop("code_url", None)
+        safe_checkout["payable_uri_removed"] = True
+        cleaned["checkout"] = safe_checkout
+    cleaned["payable_qr_created"] = False
+    return cleaned
+
+
 def _safe_idempotency_key(value: Any) -> str:
     text = str(value or "").strip()
     text = re.sub(r"[^A-Za-z0-9._:-]+", "-", text)[:160].strip("-._:")
@@ -5755,6 +9168,9 @@ SAFE_SECRET_FLAG_KEYS = {
     "jiejing_stores_only_secret_ref",
     "secret_value_returned",
     "raw_provider_secret_stored",
+    "payment_secret_persisted",
+    "frontend_gets_payment_secret",
+    "raw_provider_response_persisted",
 }
 
 

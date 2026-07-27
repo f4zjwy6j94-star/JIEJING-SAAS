@@ -71,3 +71,37 @@ jiejing.43-129-205-244.sslip.io {
         header_down -X-Robots-Tag
     }
 }
+
+(jiejing_ops_console) {
+    encode zstd gzip
+
+    header {
+        X-Frame-Options "DENY"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=(), serial=()"
+        Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+        X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
+        Cross-Origin-Opener-Policy "same-origin"
+        Cross-Origin-Resource-Policy "same-origin"
+    }
+
+    reverse_proxy jiejing-frontend:80 {
+        header_down -X-Frame-Options
+        header_down -X-Content-Type-Options
+        header_down -Referrer-Policy
+        header_down -Permissions-Policy
+        header_down -Content-Security-Policy
+        header_down -X-Robots-Tag
+        header_down -Cross-Origin-Opener-Policy
+        header_down -Cross-Origin-Resource-Policy
+    }
+}
+
+http://ops.jiejing.shop {
+    import jiejing_ops_console
+}
+
+ops.jiejing.shop {
+    import jiejing_ops_console
+}

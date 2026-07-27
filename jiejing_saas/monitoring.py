@@ -2,11 +2,228 @@
 
 from __future__ import annotations
 
+import math
+import hashlib
 import os
+import re
+import time
+from datetime import datetime, timezone
 from typing import Any
 
 from .config import SaaSSettings
+from .operations_metering import (
+    PROVIDER_MONITOR_AGGREGATE_KEYS,
+    PROVIDER_MONITOR_EVENT_TYPE,
+    build_provider_cost_alert_summary,
+    build_provider_monitoring_aggregate_event,
+)
 from .repository import SaaSRepository
+
+
+CLS_PROBE_MAX_AGE_HOURS = 24.0
+EVIDENCE_MAX_FUTURE_SKEW_MINUTES = 5.0
+
+
+class ProviderMonitoringScheduler:
+    """Lease-protected evaluator for already-recorded provider telemetry."""
+
+    def __init__(
+        self,
+        *,
+        repository: SaaSRepository | None,
+        environment: str,
+        exporter: Any = None,
+        enabled: bool | None = None,
+        interval_seconds: int | None = None,
+        reliability_window_minutes: int | None = None,
+        cost_window_hours: int | None = None,
+        warning_minor: Any = None,
+        critical_minor: Any = None,
+        owner_nonce: str | None = None,
+    ) -> None:
+        self.repository = repository
+        self.environment = str(environment or "unknown")
+        self.exporter = exporter or export_provider_monitoring_aggregate_to_cls
+        self.enabled = _env_bool("JIEJING_PROVIDER_MONITOR_SCHEDULER_ENABLED") if enabled is None else bool(enabled)
+        self.interval_seconds = _bounded_int_value(
+            interval_seconds if interval_seconds is not None else os.environ.get("JIEJING_PROVIDER_MONITOR_INTERVAL_SECONDS"),
+            default=300,
+            minimum=60,
+            maximum=3600,
+        )
+        self.reliability_window_minutes = _bounded_int_value(
+            reliability_window_minutes
+            if reliability_window_minutes is not None
+            else os.environ.get("JIEJING_PROVIDER_MONITOR_WINDOW_MINUTES"),
+            default=30,
+            minimum=1,
+            maximum=1440,
+        )
+        self.cost_window_hours = _bounded_int_value(
+            cost_window_hours
+            if cost_window_hours is not None
+            else os.environ.get("JIEJING_PROVIDER_MONITOR_COST_WINDOW_HOURS"),
+            default=24,
+            minimum=1,
+            maximum=168,
+        )
+        self.warning_minor = (
+            warning_minor
+            if warning_minor is not None
+            else os.environ.get("JIEJING_PROVIDER_DAILY_COST_WARNING_MINOR")
+        )
+        self.critical_minor = (
+            critical_minor
+            if critical_minor is not None
+            else os.environ.get("JIEJING_PROVIDER_DAILY_COST_CRITICAL_MINOR")
+        )
+        nonce = str(owner_nonce or f"{os.getpid()}|{time.time_ns()}|{id(self)}")
+        self.owner_hash = hashlib.sha256(f"jiejing-provider-monitor|{nonce}".encode("utf-8")).hexdigest()
+
+    def run_once(self, *, now_utc: datetime | None = None, now_epoch: int | None = None) -> dict[str, Any]:
+        if not self.enabled:
+            return {
+                "status": "disabled",
+                "external_provider_action_triggered": False,
+                "real_platform_writes_enabled": False,
+                "secret_exposed": False,
+            }
+        if self.repository is None:
+            return _provider_monitoring_run_result(status="evaluation_failed")
+        lease = self.repository.acquire_provider_monitoring_lease(
+            scheduler_key="provider-monitor",
+            owner_hash=self.owner_hash,
+            lease_seconds=self.interval_seconds,
+            now_epoch=now_epoch,
+        )
+        if not lease.get("acquired"):
+            return _provider_monitoring_run_result(status="skipped_lease_contended")
+        current = now_utc or datetime.now(timezone.utc)
+        if current.tzinfo is None or current.utcoffset() is None:
+            current = current.replace(tzinfo=timezone.utc)
+        evaluated_at = current.astimezone(timezone.utc).isoformat()
+        try:
+            snapshot = self.repository.provider_monitoring_snapshot(
+                reliability_window_minutes=self.reliability_window_minutes,
+                cost_window_hours=self.cost_window_hours,
+                now_utc=current,
+            )
+            reliability = snapshot.get("reliability") if isinstance(snapshot.get("reliability"), dict) else {}
+            reliability_summary = reliability.get("alerts") if isinstance(reliability.get("alerts"), dict) else {}
+            self.repository.reconcile_provider_reliability_alerts(
+                alert_summary=reliability_summary,
+                actor_user_id="system:provider-monitor-scheduler",
+            )
+            cost_summary = build_provider_cost_alert_summary(
+                cost_total_minor=snapshot.get("cost_total_minor"),
+                cost_coverage_complete=bool(snapshot.get("cost_coverage_complete")),
+                warning_minor=self.warning_minor,
+                critical_minor=self.critical_minor,
+            )
+            event = build_provider_monitoring_aggregate_event(
+                reliability_summary=reliability_summary,
+                cost_summary=cost_summary,
+                environment=self.environment,
+                probe=False,
+            )
+        except Exception:
+            self.repository.complete_provider_monitoring_evaluation(
+                scheduler_key="provider-monitor",
+                owner_hash=self.owner_hash,
+                evaluated_at=None,
+                exported_at=None,
+                outcome="query_failed",
+                snapshot={},
+            )
+            return _provider_monitoring_run_result(status="query_failed")
+        try:
+            exported = bool(self.exporter(event))
+        except Exception:
+            exported = False
+        outcome = "exported" if exported else "export_failed"
+        self.repository.complete_provider_monitoring_evaluation(
+            scheduler_key="provider-monitor",
+            owner_hash=self.owner_hash,
+            evaluated_at=evaluated_at,
+            exported_at=evaluated_at if exported else None,
+            outcome=outcome,
+            snapshot=event,
+        )
+        return _provider_monitoring_run_result(
+            status=outcome,
+            reliability_status=str(reliability_summary.get("status") or "insufficient_data"),
+            cost_status=str(cost_summary.get("status") or "blocked"),
+            evaluated_scope_count=max(0, int(reliability_summary.get("evaluated_count") or 0)),
+        )
+
+
+def _provider_monitoring_run_result(
+    *,
+    status: str,
+    reliability_status: str | None = None,
+    cost_status: str | None = None,
+    evaluated_scope_count: int | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "status": str(status or "evaluation_failed"),
+        "external_provider_action_triggered": False,
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+    if reliability_status is not None:
+        result["reliability_status"] = reliability_status
+    if cost_status is not None:
+        result["cost_status"] = cost_status
+    if evaluated_scope_count is not None:
+        result["evaluated_scope_count"] = max(0, int(evaluated_scope_count))
+    return result
+
+
+def export_provider_monitoring_aggregate_to_cls(
+    event: dict[str, Any],
+    *,
+    client_factory: Any = None,
+    message_factory: Any = None,
+) -> bool:
+    """Upload one allowlisted aggregate through Tencent's protobuf-capable SDK."""
+
+    if not _env_bool("JIEJING_CLS_ENABLED") or not isinstance(event, dict):
+        return False
+    if set(event) != PROVIDER_MONITOR_AGGREGATE_KEYS:
+        return False
+    if event.get("event_type") != PROVIDER_MONITOR_EVENT_TYPE:
+        return False
+    region = str(os.environ.get("JIEJING_CLS_REGION") or os.environ.get("JIEJING_TENCENT_REGION") or "").strip()
+    topic_id = str(os.environ.get("JIEJING_CLS_TOPIC_ID") or os.environ.get("JIEJING_CLS_TOPIC") or "").strip()
+    access_id = _tencent_secret_id()
+    access_key = _tencent_secret_key()
+    if not re.fullmatch(r"[a-z0-9-]{3,64}", region) or not topic_id or not access_id or not access_key:
+        return False
+    try:
+        if client_factory is None:
+            from tencentcloud.log.logclient import LogClient  # type: ignore[import-not-found]
+
+            client_factory = LogClient
+        if message_factory is None:
+            from tencentcloud.log.cls_pb2 import LogGroupList  # type: ignore[import-not-found]
+
+            message_factory = LogGroupList
+        packet = message_factory()
+        group = packet.logGroupList.add()
+        log = group.logs.add()
+        log.time = int(time.time() * 1_000_000)
+        for key in sorted(PROVIDER_MONITOR_AGGREGATE_KEYS):
+            value = event[key]
+            content = log.contents.add()
+            content.key = key
+            content.value = str(value).lower() if isinstance(value, bool) else str(value)
+        endpoint = f"https://{region}.cls.tencentcs.com"
+        client = client_factory(endpoint, access_id, access_key)
+        client.timeout = 5
+        client.put_log_raw(topic_id, packet)
+        return True
+    except Exception:
+        return False
 
 
 ALERT_CONTRACTS = [
@@ -91,15 +308,20 @@ ALERT_CONTRACTS = [
 ]
 
 
-def build_monitoring_status(settings: SaaSSettings, repository: SaaSRepository) -> dict[str, Any]:
+def build_monitoring_status(
+    settings: SaaSSettings,
+    repository: SaaSRepository,
+    *,
+    now_utc: datetime | None = None,
+) -> dict[str, Any]:
     counts = repository.system_counts()
     queue_counts = repository.queue_status_counts()
     pending_confirmations = int(queue_counts.get("pending", 0))
     failed_jobs = int(queue_counts.get("failed", 0))
     safe_access_log_enabled = _safe_access_log_enabled(settings)
-    cls_target = _cls_monitoring_target_status()
+    cls_target = _cls_monitoring_target_status(now_utc=now_utc)
     runbook = _runbook_status()
-    provider_observability = _provider_observability_status()
+    provider_observability = _provider_observability_status(repository, now_utc=now_utc)
     blockers = _monitoring_blockers(settings, safe_access_log_enabled, cls_target, runbook, provider_observability)
     return {
         "contract_version": "2026-05-18-tencent-cls-monitoring-boundary",
@@ -181,23 +403,118 @@ def _monitoring_blockers(
     return blockers
 
 
-def _provider_observability_status() -> dict[str, Any]:
+def _provider_observability_status(
+    repository: SaaSRepository,
+    *,
+    now_utc: datetime | None = None,
+) -> dict[str, Any]:
     metrics_enabled = _env_bool("JIEJING_PROVIDER_METRICS_ENABLED")
-    latency_alerts_configured = _env_bool("JIEJING_PROVIDER_LATENCY_ALERTS_CONFIGURED")
-    cost_alerts_configured = _env_bool("JIEJING_PROVIDER_COST_ALERTS_CONFIGURED")
+    legacy_latency_flag = _env_bool("JIEJING_PROVIDER_LATENCY_ALERTS_CONFIGURED")
+    legacy_cost_flag = _env_bool("JIEJING_PROVIDER_COST_ALERTS_CONFIGURED")
+    scheduler_enabled = _env_bool("JIEJING_PROVIDER_MONITOR_SCHEDULER_ENABLED")
+    interval_seconds = _bounded_int_value(
+        os.environ.get("JIEJING_PROVIDER_MONITOR_INTERVAL_SECONDS"),
+        default=300,
+        minimum=60,
+        maximum=3600,
+    )
+    reliability_window_minutes = _bounded_int_value(
+        os.environ.get("JIEJING_PROVIDER_MONITOR_WINDOW_MINUTES"),
+        default=30,
+        minimum=1,
+        maximum=1440,
+    )
+    cost_window_hours = _bounded_int_value(
+        os.environ.get("JIEJING_PROVIDER_MONITOR_COST_WINDOW_HOURS"),
+        default=24,
+        minimum=1,
+        maximum=168,
+    )
+    evidence_max_age_minutes = _env_positive_float("JIEJING_PROVIDER_MONITOR_EVIDENCE_MAX_AGE_MINUTES", 15.0)
+    alarm_max_age_days = _env_positive_float("JIEJING_PROVIDER_ALARM_VERIFICATION_MAX_AGE_DAYS", 7.0)
+    evidence_now = now_utc or datetime.now(timezone.utc)
+    state = repository.provider_monitoring_state()
+    aggregate = state.get("aggregate") if isinstance(state.get("aggregate"), dict) else {}
+    evaluation_evidence = _timestamp_evidence_status(
+        str(state.get("last_evaluated_at") or ""),
+        evidence_max_age_minutes / 60.0,
+        evidence_now,
+    )
+    export_evidence = _timestamp_evidence_status(
+        str(state.get("last_exported_at") or ""),
+        evidence_max_age_minutes / 60.0,
+        evidence_now,
+    )
+    latency_alarm_evidence = _timestamp_evidence_status(
+        str(os.environ.get("JIEJING_PROVIDER_LATENCY_ALARM_VERIFIED_AT") or "").strip(),
+        alarm_max_age_days * 24.0,
+        evidence_now,
+    )
+    cost_alarm_evidence = _timestamp_evidence_status(
+        str(os.environ.get("JIEJING_PROVIDER_COST_ALARM_VERIFIED_AT") or "").strip(),
+        alarm_max_age_days * 24.0,
+        evidence_now,
+    )
+    cost_summary = build_provider_cost_alert_summary(
+        cost_total_minor=aggregate.get("cost_total_minor"),
+        cost_coverage_complete=bool(aggregate.get("cost_coverage_complete")),
+        warning_minor=os.environ.get("JIEJING_PROVIDER_DAILY_COST_WARNING_MINOR"),
+        critical_minor=os.environ.get("JIEJING_PROVIDER_DAILY_COST_CRITICAL_MINOR"),
+    )
     blocked_by: list[str] = []
     if not metrics_enabled:
         blocked_by.append("provider_metrics_not_enabled")
-    if not latency_alerts_configured:
-        blocked_by.append("provider_latency_alerts_not_configured")
-    if not cost_alerts_configured:
-        blocked_by.append("provider_cost_alerts_not_configured")
+    if not scheduler_enabled:
+        blocked_by.append("provider_monitor_scheduler_not_enabled")
+    _append_evidence_blocker(
+        blocked_by,
+        prefix="provider_monitor_evaluation",
+        raw_value=str(state.get("last_evaluated_at") or ""),
+        evidence=evaluation_evidence,
+    )
+    _append_evidence_blocker(
+        blocked_by,
+        prefix="provider_monitor_export",
+        raw_value=str(state.get("last_exported_at") or ""),
+        evidence=export_evidence,
+    )
+    if not cost_summary.get("budget_configured"):
+        blocked_by.append("provider_cost_budget_not_configured")
+    _append_evidence_blocker(
+        blocked_by,
+        prefix="provider_latency_alarm_verification",
+        raw_value=str(os.environ.get("JIEJING_PROVIDER_LATENCY_ALARM_VERIFIED_AT") or ""),
+        evidence=latency_alarm_evidence,
+    )
+    _append_evidence_blocker(
+        blocked_by,
+        prefix="provider_cost_alarm_verification",
+        raw_value=str(os.environ.get("JIEJING_PROVIDER_COST_ALARM_VERIFIED_AT") or ""),
+        evidence=cost_alarm_evidence,
+    )
     return {
-        "contract_version": "2026-07-12-provider-latency-cost-alerts-v1",
+        "contract_version": "2026-07-17-passive-provider-monitoring-v1",
         "ready": not blocked_by,
         "metrics_enabled": metrics_enabled,
-        "latency_alerts_configured": latency_alerts_configured,
-        "cost_alerts_configured": cost_alerts_configured,
+        "scheduler_enabled": scheduler_enabled,
+        "interval_seconds": interval_seconds,
+        "reliability_window_minutes": reliability_window_minutes,
+        "cost_window_hours": cost_window_hours,
+        "legacy_latency_flag": legacy_latency_flag,
+        "legacy_cost_flag": legacy_cost_flag,
+        "legacy_flags_prove_readiness": False,
+        "evaluation_evidence": _derived_evidence(evaluation_evidence, max_age_minutes=evidence_max_age_minutes),
+        "export_evidence": _derived_evidence(export_evidence, max_age_minutes=evidence_max_age_minutes),
+        "alarm_evidence": {
+            "latency": _derived_evidence(latency_alarm_evidence, max_age_minutes=alarm_max_age_days * 1440.0),
+            "cost": _derived_evidence(cost_alarm_evidence, max_age_minutes=alarm_max_age_days * 1440.0),
+            "max_age_days": alarm_max_age_days,
+        },
+        "reliability_status": str(aggregate.get("reliability_status") or "insufficient_data"),
+        "evaluated_scope_count": max(0, _safe_nonnegative_int(aggregate.get("reliability_evaluated_count"))),
+        "cost_status": str(cost_summary.get("status") or "blocked"),
+        "cost_budget_configured": bool(cost_summary.get("budget_configured")),
+        "cost_coverage_complete": bool(cost_summary.get("cost_coverage_complete")),
         "metric_contracts": [
             {
                 "key": "ai_model_request",
@@ -215,7 +532,7 @@ def _provider_observability_status() -> dict[str, Any]:
                 "warning_latency_ms": _env_int("JIEJING_MEDIA_PROVIDER_LATENCY_WARNING_MS", 120000),
             },
         ],
-        "dimensions": ["environment", "provider", "model_or_driver", "route_group", "status"],
+        "dimensions": ["environment", "scope", "status"],
         "records_raw_prompts": False,
         "records_source_text": False,
         "records_secrets": False,
@@ -253,7 +570,7 @@ def _runbook_status() -> dict[str, Any]:
     }
 
 
-def _cls_monitoring_target_status() -> dict[str, Any]:
+def _cls_monitoring_target_status(*, now_utc: datetime | None = None) -> dict[str, Any]:
     enabled = _env_bool("JIEJING_CLS_ENABLED")
     region = os.environ.get("JIEJING_CLS_REGION") or os.environ.get("JIEJING_TENCENT_REGION") or "ap-guangzhou"
     logset_id = os.environ.get("JIEJING_CLS_LOGSET_ID") or os.environ.get("JIEJING_CLS_LOGSET") or ""
@@ -261,6 +578,12 @@ def _cls_monitoring_target_status() -> dict[str, Any]:
     alert_policy_configured = _env_bool("JIEJING_CLS_ALERT_POLICY_CONFIGURED")
     live_probe_at = os.environ.get("JIEJING_CLS_LIVE_PROBE_LAST_AT", "").strip()
     live_probe_required = _env_bool("JIEJING_CLS_LIVE_PROBE_REQUIRED")
+    ingestion_probe_passed = _env_bool("JIEJING_CLS_INGESTION_LIVE_PROBE_PASSED")
+    ingestion_probe_at = os.environ.get("JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT", "").strip()
+    probe_max_age_hours = _env_positive_float("JIEJING_CLS_PROBE_MAX_AGE_HOURS", CLS_PROBE_MAX_AGE_HOURS)
+    evidence_now = now_utc or datetime.now(timezone.utc)
+    live_evidence = _timestamp_evidence_status(live_probe_at, probe_max_age_hours, evidence_now)
+    ingestion_evidence = _timestamp_evidence_status(ingestion_probe_at, probe_max_age_hours, evidence_now)
     credentials_configured = bool(_tencent_secret_id()) and bool(_tencent_secret_key())
     blockers: list[str] = []
     if not enabled:
@@ -273,12 +596,40 @@ def _cls_monitoring_target_status() -> dict[str, Any]:
         blockers.append("JIEJING_CLS_TOPIC_ID")
     if not alert_policy_configured:
         blockers.append("JIEJING_CLS_ALERT_POLICY_CONFIGURED")
-    if live_probe_required and not live_probe_at:
-        blockers.append("tencent_cls_live_probe_not_recorded")
+    if live_probe_required:
+        if not live_probe_at:
+            blockers.append("tencent_cls_live_probe_not_recorded")
+        elif not live_evidence["timestamp_valid"]:
+            blockers.append("tencent_cls_live_probe_timestamp_invalid")
+        elif live_evidence["timestamp_in_future"]:
+            blockers.append("tencent_cls_live_probe_timestamp_in_future")
+        elif not live_evidence["fresh"]:
+            blockers.append("tencent_cls_live_probe_stale")
+    if live_probe_required:
+        if not (ingestion_probe_passed and ingestion_probe_at):
+            blockers.append("tencent_cls_ingestion_live_probe_not_passed")
+        elif not ingestion_evidence["timestamp_valid"]:
+            blockers.append("tencent_cls_ingestion_live_probe_timestamp_invalid")
+        elif ingestion_evidence["timestamp_in_future"]:
+            blockers.append("tencent_cls_ingestion_live_probe_timestamp_in_future")
+        elif not ingestion_evidence["fresh"]:
+            blockers.append("tencent_cls_ingestion_live_probe_stale")
+    control_plane_ready = bool(
+        enabled
+        and region
+        and logset_id
+        and topic_id
+        and alert_policy_configured
+        and (live_evidence["fresh"] or not live_probe_required)
+    )
     return {
         "provider": "tencent_cls",
         "enabled": enabled,
-        "target_ready": bool(enabled and region and logset_id and topic_id and alert_policy_configured and (live_probe_at or not live_probe_required)),
+        "control_plane_ready": control_plane_ready,
+        "target_ready": bool(
+            control_plane_ready
+            and ((ingestion_probe_passed and ingestion_evidence["fresh"]) or not live_probe_required)
+        ),
         "region": region,
         "logset_configured": bool(logset_id),
         "topic_configured": bool(topic_id),
@@ -286,6 +637,17 @@ def _cls_monitoring_target_status() -> dict[str, Any]:
         "credentials_configured": credentials_configured,
         "live_probe_required": live_probe_required,
         "last_live_probe_at": live_probe_at,
+        "live_probe_timestamp_valid": live_evidence["timestamp_valid"],
+        "live_probe_timestamp_in_future": live_evidence["timestamp_in_future"],
+        "live_probe_fresh": live_evidence["fresh"],
+        "live_probe_age_hours": live_evidence["age_hours"],
+        "live_probe_max_age_hours": probe_max_age_hours,
+        "ingestion_live_probe_passed": ingestion_probe_passed,
+        "last_ingestion_live_probe_at": ingestion_probe_at,
+        "ingestion_live_probe_timestamp_valid": ingestion_evidence["timestamp_valid"],
+        "ingestion_live_probe_timestamp_in_future": ingestion_evidence["timestamp_in_future"],
+        "ingestion_live_probe_fresh": ingestion_evidence["fresh"],
+        "ingestion_live_probe_age_hours": ingestion_evidence["age_hours"],
         "records_request_body": False,
         "records_authorization_header": False,
         "records_raw_tokens": False,
@@ -317,3 +679,88 @@ def _env_int(name: str, default: int) -> int:
         return max(1, int(str(os.environ.get(name) or default).strip()))
     except (TypeError, ValueError):
         return default
+
+
+def _bounded_int_value(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        normalized = int(str(value if value not in {None, ""} else default).strip())
+    except (TypeError, ValueError):
+        normalized = default
+    return min(maximum, max(minimum, normalized))
+
+
+def _env_positive_float(name: str, default: float) -> float:
+    raw = str(os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    if not math.isfinite(value) or value <= 0:
+        return default
+    return value
+
+
+def _timestamp_evidence_status(value: str, max_age_hours: float, now_utc: datetime) -> dict[str, Any]:
+    age_hours: float | None = None
+    if value:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            parsed = None
+        if parsed is not None and parsed.tzinfo is not None:
+            current = now_utc.astimezone(timezone.utc)
+            age_hours = (current - parsed.astimezone(timezone.utc)).total_seconds() / 3600
+    timestamp_valid = bool(value and age_hours is not None)
+    timestamp_in_future = bool(
+        timestamp_valid and age_hours is not None and age_hours < -(EVIDENCE_MAX_FUTURE_SKEW_MINUTES / 60)
+    )
+    fresh = bool(
+        timestamp_valid
+        and age_hours is not None
+        and not timestamp_in_future
+        and age_hours <= max_age_hours
+    )
+    return {
+        "timestamp_valid": timestamp_valid,
+        "timestamp_in_future": timestamp_in_future,
+        "fresh": fresh,
+        "age_hours": round(age_hours, 3) if age_hours is not None else None,
+    }
+
+
+def _append_evidence_blocker(
+    blockers: list[str],
+    *,
+    prefix: str,
+    raw_value: str,
+    evidence: dict[str, Any],
+) -> None:
+    if not str(raw_value or "").strip():
+        blockers.append(f"{prefix}_not_recorded")
+    elif not evidence.get("timestamp_valid"):
+        blockers.append(f"{prefix}_timestamp_invalid")
+    elif evidence.get("timestamp_in_future"):
+        blockers.append(f"{prefix}_timestamp_in_future")
+    elif not evidence.get("fresh"):
+        blockers.append(f"{prefix}_stale")
+
+
+def _derived_evidence(evidence: dict[str, Any], *, max_age_minutes: float) -> dict[str, Any]:
+    age_hours = evidence.get("age_hours")
+    return {
+        "recorded": bool(evidence.get("timestamp_valid")),
+        "timestamp_valid": bool(evidence.get("timestamp_valid")),
+        "timestamp_in_future": bool(evidence.get("timestamp_in_future")),
+        "fresh": bool(evidence.get("fresh")),
+        "age_minutes": round(float(age_hours) * 60.0, 3) if age_hours is not None else None,
+        "max_age_minutes": float(max_age_minutes),
+    }
+
+
+def _safe_nonnegative_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0

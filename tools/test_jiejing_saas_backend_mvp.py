@@ -7,6 +7,7 @@ import json
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -20,7 +21,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-OUT = ROOT / "output" / "jiejing-saas-backend" / "test"
+_TEMP_ROOT = tempfile.TemporaryDirectory(prefix="jiejing-saas-backend-test-")
+OUT = Path(_TEMP_ROOT.name)
 SAAS_DB = OUT / "saas-test.sqlite"
 RUNTIME_DB = OUT / "runtime-test.sqlite"
 
@@ -37,6 +39,356 @@ def find_free_port() -> int:
 
 
 def main() -> int:
+    from jiejing_saas.api_server import SaaSBackendHandler
+
+    internal_plan = {
+        "contract_version": "merchant-plan-test-v1",
+        "environment": "production-internal-marker",
+        "current_usage_shape": {"users": 99, "evidence_id": "internal-usage-marker"},
+        "billing_ready_for_private_beta": True,
+        "billing_ready_for_paid_launch": False,
+        "provider": {
+            "selected": "stripe",
+            "checkout_mode": "hosted",
+            "signed_webhook_contract": {"secret_ref": "internal-webhook-marker"},
+            "checkout_portal_contract": {"price_id": "internal-price-marker"},
+            "environment_keys": ["INTERNAL_PAYMENT_KEY"],
+        },
+        "plan_catalog": [
+            {
+                "key": "starter",
+                "label": "Starter",
+                "amount_minor": 9900,
+                "currency": "CNY",
+                "duration_days": 30,
+                "monthly_task_quota": 100,
+                "includes_real_platform_writes": False,
+                "provider_plan_id": "internal-provider-plan-marker",
+                "nested": {"secret_ref": "internal-plan-secret-marker"},
+            }
+        ],
+        "add_on_catalog": [
+            {
+                "key": "extra_store_30d",
+                "label": "Extra store",
+                "amount_minor": 3900,
+                "currency": "CNY",
+                "duration_days": 30,
+                "provider_price_id": "internal-addon-price-marker",
+            }
+        ],
+        "quota_contract": {
+            "enabled": True,
+            "merchant_visible_usage_required": True,
+            "hard_stop_on_quota_exhaustion": True,
+            "environment_keys": ["INTERNAL_QUOTA_KEY"],
+        },
+        "mainland_payment_launch": {
+            "contract_version": "2026-07-27-mainland-payment-launch-v1",
+            "market": "mainland_china",
+            "primary_provider": "wechat_pay_native",
+            "checkout_mode": "native_qr",
+            "billing_mode": "one_time_30_day_plan",
+            "configuration": {"complete": True, "completed_count": 9, "required_count": 9},
+            "controlled_acceptance_proven": True,
+            "provider_checkout_ready": True,
+            "production_environment": True,
+            "refund_now_allowed": True,
+            "mainland_payment_ready_for_owner_approval": True,
+            "code_capabilities": {
+                "signed_payment_callback_implemented": True,
+                "signed_refund_callback_implemented": True,
+                "real_order_creation_implemented": True,
+                "authenticated_order_query_implemented": True,
+                "quota_entitlement_persistence_implemented": True,
+                "high_risk_confirmation_boundary_implemented": True,
+            },
+            "acceptance_evidence": {
+                "contract_version": "2026-07-27-domestic-payment-acceptance-evidence-v2",
+                "provider": "wechat_pay_native",
+                "acceptance_kind": "owner_approved_one_cny_live_acceptance",
+                "controlled_acceptance_proven": True,
+                "verified_paid_order_count": 1,
+                "public_charging_allowed": False,
+                "charge_now_allowed": False,
+                "triggers_real_charge": False,
+                "calls_external_payment_api": False,
+                "secret_exposed": False,
+            },
+            "component_presence": {"merchant_private_key_ref": "internal-ref-marker"},
+            "paid_launch_blockers": ["internal-blocker-marker"],
+            "order_reference": "internal-order-marker",
+            "public_charging_allowed": False,
+            "charge_now_allowed": False,
+            "triggers_real_charge": False,
+            "triggers_real_refund": False,
+            "calls_external_payment_api": False,
+            "calls_stripe_api": False,
+            "real_platform_writes_enabled": False,
+            "frontend_gets_payment_secret": False,
+            "secret_exposed": False,
+        },
+        "mainland_payment_ready_for_owner_approval": True,
+        "future_international_payment": {"provider_reference": "internal-provider-marker"},
+        "merchant_launch_path": {
+            "contract_version": "merchant-path-test-v1",
+            "current_stage": "internal-launch-stage",
+            "headline": "internal launch headline",
+            "next_paid_launch_blocker": "raw_internal_launch_blocker",
+            "environment_keys": ["INTERNAL_LAUNCH_KEY"],
+            "quota_enforcement_enabled": True,
+        },
+        "confirmation_boundary": {
+            "billing_changes_need_owner_or_admin": True,
+            "real_platform_writes_not_included_in_any_current_plan": True,
+            "refunds_and_payment_disputes_need_human_operator": True,
+            "evidence_id": "internal-confirmation-marker",
+        },
+        "billing_test_rehearsal_summary": {"evidence_id": "internal-rehearsal-marker"},
+        "customer_billing_trust_packet": {"provider_reference": "internal-trust-marker"},
+        "blockers": ["raw-internal-blocker"],
+        "paid_launch_blockers": ["raw-internal-paid-blocker"],
+        "next_actions": ["internal-next-action"],
+        "real_platform_writes_enabled": False,
+        "customer_visible": False,
+        "internal_launch_evidence_visible": True,
+        "secret_exposed": True,
+    }
+    original_plan = json.loads(json.dumps(internal_plan))
+    merchant_safe_plan = SaaSBackendHandler._merchant_safe_billing_plan(internal_plan)
+    if internal_plan != original_plan:
+        return fail("merchant billing-plan sanitizer must not mutate the platform-internal source plan")
+    for internal_launch_key in {
+        "mainland_payment_launch",
+        "mainland_payment_ready_for_owner_approval",
+        "future_international_payment",
+    }:
+        if internal_launch_key in merchant_safe_plan:
+            return fail(f"merchant billing-plan sanitizer exposes internal launch key {internal_launch_key}")
+    if merchant_safe_plan.get("customer_visible") is not True:
+        return fail("merchant billing-plan sanitizer must preserve customer_visible=true")
+    if merchant_safe_plan.get("internal_launch_evidence_visible") is not False:
+        return fail("merchant billing-plan sanitizer must preserve internal_launch_evidence_visible=false")
+    if merchant_safe_plan.get("secret_exposed") is not False:
+        return fail("merchant billing-plan sanitizer must preserve secret_exposed=false")
+    expected_top_level = {
+        "contract_version",
+        "billing_ready_for_private_beta",
+        "billing_ready_for_paid_launch",
+        "provider",
+        "plan_catalog",
+        "add_on_catalog",
+        "quota_contract",
+        "mainland_payment",
+        "merchant_launch_path",
+        "paid_launch_blockers",
+        "billing_test_rehearsal_summary",
+        "subscription_quota_shutdown_closure",
+        "billing_incident_runbook",
+        "customer_billing_trust_packet",
+        "confirmation_boundary",
+        "public_charging_allowed",
+        "charge_now_allowed",
+        "triggers_real_charge",
+        "triggers_real_refund",
+        "calls_external_payment_api",
+        "real_platform_writes_enabled",
+        "frontend_gets_payment_secret",
+        "frontend_can_grant_entitlement",
+        "frontend_can_grant_quota",
+        "customer_visible",
+        "internal_launch_evidence_visible",
+        "secret_exposed",
+    }
+    if set(merchant_safe_plan) != expected_top_level:
+        return fail(f"merchant billing plan must be a fresh top-level allowlist: {set(merchant_safe_plan)}")
+    if merchant_safe_plan.get("provider") != {
+        "provider": "wechat_pay_native",
+        "checkout_mode": "native_qr",
+        "billing_mode": "one_time_30_day_plan",
+        "available": False,
+        "provider_configured": True,
+        "customer_visible": True,
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }:
+        return fail(f"merchant provider payload must use only mainland merchant semantics: {merchant_safe_plan.get('provider')}")
+    safe_catalog = merchant_safe_plan.get("plan_catalog", [])
+    if safe_catalog != [
+        {
+            "key": "starter",
+            "label": "Starter",
+            "amount_minor": 9900,
+            "currency": "CNY",
+            "duration_days": 30,
+            "monthly_task_quota": 100,
+            "includes_real_platform_writes": False,
+        }
+    ]:
+        return fail(f"merchant plan catalog must include only allowlisted price and quota fields: {safe_catalog}")
+    merchant_safe_plan["plan_catalog"][0]["label"] = "merchant-copy-mutated"
+    merchant_safe_plan["quota_contract"]["enabled"] = False
+    if internal_plan != original_plan:
+        return fail("nested merchant billing-plan values must not share mutable objects with the internal source")
+    serialized_merchant_plan = json.dumps(merchant_safe_plan, ensure_ascii=False)
+    if any(
+        marker in serialized_merchant_plan
+        for marker in {
+            "internal-ref-marker",
+            "internal-blocker-marker",
+            "internal-order-marker",
+            "internal-provider-marker",
+            "production-internal-marker",
+            "internal-usage-marker",
+            "internal-webhook-marker",
+            "internal-price-marker",
+            "internal-provider-plan-marker",
+            "internal-plan-secret-marker",
+            "internal-addon-price-marker",
+            "internal-rehearsal-marker",
+            "internal-trust-marker",
+            "raw-internal-blocker",
+        }
+    ):
+        return fail("merchant billing-plan sanitizer leaked internal launch evidence")
+
+    malformed_merchant_variants: list[tuple[str, dict[str, Any]]] = []
+    for field, invalid_value in (
+        ("contract_version", "wrong-contract"),
+        ("market", "international"),
+        ("primary_provider", "stripe"),
+        ("refund_now_allowed", "true"),
+        ("mainland_payment_ready_for_owner_approval", "true"),
+    ):
+        candidate = json.loads(json.dumps(internal_plan))
+        candidate["mainland_payment_launch"][field] = invalid_value
+        malformed_merchant_variants.append((field, candidate))
+    invalid_merchant_count = json.loads(json.dumps(internal_plan))
+    invalid_merchant_count["mainland_payment_launch"]["configuration"]["completed_count"] = 9.0
+    malformed_merchant_variants.append(("completed_count_float", invalid_merchant_count))
+    invalid_merchant_acceptance = json.loads(json.dumps(internal_plan))
+    invalid_merchant_acceptance["mainland_payment_launch"]["acceptance_evidence"]["acceptance_kind"] = "uncontrolled"
+    malformed_merchant_variants.append(("acceptance_kind", invalid_merchant_acceptance))
+    for label, candidate in malformed_merchant_variants:
+        malformed_safe = SaaSBackendHandler._merchant_safe_billing_plan(candidate)
+        payment = malformed_safe.get("mainland_payment", {})
+        if (
+            payment.get("status") != "unavailable"
+            or payment.get("mainland_payment_ready_for_owner_approval") is not False
+            or payment.get("provider_configured") is not False
+            or payment.get("configured_component_count") != 0
+            or payment.get("verified_paid_order_count") != 0
+        ):
+            return fail(f"malformed merchant payment contract must fail closed ({label}): {payment}")
+
+    refund_blocked_plan = json.loads(json.dumps(internal_plan))
+    refund_blocked_plan["mainland_payment_launch"]["refund_now_allowed"] = False
+    refund_blocked = SaaSBackendHandler._merchant_safe_billing_plan(refund_blocked_plan).get("mainland_payment", {})
+    if (
+        refund_blocked.get("status") != "refund_controls_pending"
+        or refund_blocked.get("next_blocker") != "merchant_payment_refund_not_ready"
+        or refund_blocked.get("mainland_payment_ready_for_owner_approval") is not False
+    ):
+        return fail(f"historical payment proof must not hide current refund control loss: {refund_blocked}")
+
+    public_billing_source = {
+        "provider": "wechat_pay_native",
+        "checkout_mode": "native_qr",
+        "billing_mode": "one_time_30_day_plan",
+        "provider_configured": True,
+        "payment_path_status": "controlled_acceptance_proven_public_charging_closed",
+        "mainland_payment_ready_for_owner_approval": True,
+        "billing_ready_for_private_beta": False,
+        "billing_ready_for_paid_launch": False,
+        "configured_component_count": 9,
+        "required_component_count": 9,
+        "verified_paid_order_count": 1,
+        "quota_enforcement_enabled": True,
+        "next_paid_launch_blocker": "merchant_payment_public_cutover_not_approved",
+        "merchant_launch_path": {
+            "contract_version": "2026-07-27-merchant-mainland-payment-path-v1",
+            "current_stage": "controlled_acceptance_proven_public_charging_closed",
+            "public_paid_launch_allowed": False,
+            "charge_now_allowed": False,
+            "triggers_real_charge": False,
+            "backend_confirmation_required_before_entitlement": True,
+            "frontend_can_grant_entitlement": False,
+            "frontend_can_grant_quota": False,
+            "secret_exposed": False,
+        },
+        "domestic_payment": {
+            "provider": "wechat_pay_native",
+            "checkout_mode": "native_qr",
+            "billing_mode": "one_time_30_day_plan",
+            "status": "controlled_acceptance_proven",
+            "configured_component_count": 9,
+            "required_component_count": 9,
+            "verified_paid_order_count": 1,
+            "controlled_acceptance_proven": True,
+            "public_charging_allowed": False,
+            "charge_now_allowed": False,
+            "triggers_real_charge": False,
+            "triggers_real_refund": False,
+            "calls_external_payment_api": False,
+            "frontend_gets_payment_secret": False,
+            "secret_exposed": False,
+        },
+        "public_charging_allowed": False,
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "triggers_real_refund": False,
+        "calls_external_payment_api": False,
+        "real_platform_writes_enabled": False,
+        "frontend_gets_payment_secret": False,
+        "frontend_can_grant_quota": False,
+        "secret_exposed": False,
+        "external_paid_provider_configured": True,
+        "test_billing_provider_configured": True,
+        "signed_webhook_configured": True,
+    }
+    malformed_public_readiness = {
+        "production_ready": "true",
+        "beta_ready": 1,
+        "can_accept_real_customers": 1.0,
+        "real_platform_writes_enabled": "false",
+        "requested_real_platform_writes": True,
+        "blocker_count": True,
+        "warning_count": -1,
+        "product_evidence": {"ebay_token_refresh_success_count": 1.0},
+        "provider_status": {"billing": public_billing_source},
+    }
+    public_summary = SaaSBackendHandler._public_readiness_summary(malformed_public_readiness, authenticated=False)
+    if any(
+        public_summary.get(key) is not False
+        for key in ("production_ready", "beta_ready", "can_accept_real_customers", "real_platform_writes_enabled")
+    ):
+        return fail(f"public readiness booleans must not coerce strings or numbers: {public_summary}")
+    if public_summary.get("blocker_count") != 0 or public_summary.get("warning_count") != 0:
+        return fail(f"public readiness counts must reject bool/negative values: {public_summary}")
+    public_billing = public_summary.get("provider_status", {}).get("billing", {})
+    for stale_key in (
+        "external_paid_provider_configured",
+        "test_billing_provider_configured",
+        "checkout_ready",
+        "customer_portal_ready",
+        "signed_webhook_configured",
+    ):
+        if stale_key in public_billing:
+            return fail(f"public readiness must not expose stale provider diagnostics: {stale_key}")
+    malformed_public_readiness["provider_status"]["billing"]["configured_component_count"] = "9"
+    malformed_payment_summary = SaaSBackendHandler._public_readiness_summary(
+        malformed_public_readiness,
+        authenticated=False,
+    ).get("provider_status", {}).get("billing", {})
+    if (
+        malformed_payment_summary.get("payment_path_status") != "payment_status_unavailable"
+        or malformed_payment_summary.get("mainland_payment_ready_for_owner_approval") is not False
+        or malformed_payment_summary.get("configured_component_count") != 0
+    ):
+        return fail(f"public billing counts must fail closed without coercion: {malformed_payment_summary}")
+
     OUT.mkdir(parents=True, exist_ok=True)
     for path in (SAAS_DB, RUNTIME_DB):
         if path.exists():
@@ -326,6 +678,13 @@ def main() -> int:
             return fail("ordinary merchant billing plan should be the customer-visible safe payload")
         if "payment_strategy" in billing_plan or "billing_live_cutover_matrix" in billing_plan or "billing_live_cutover_summary" in billing_plan:
             return fail("ordinary merchant billing plan must not expose internal payment strategy or live cutover evidence")
+        for internal_launch_key in {
+            "mainland_payment_launch",
+            "mainland_payment_ready_for_owner_approval",
+            "future_international_payment",
+        }:
+            if internal_launch_key in billing_plan:
+                return fail(f"ordinary merchant billing plan exposes internal launch key {internal_launch_key}")
         billing_provider = billing_plan.get("provider", {})
         for internal_provider_key in {
             "recommended_mainland_provider_order",
@@ -333,7 +692,6 @@ def main() -> int:
             "allowed_private_beta_providers",
             "manual_seed_allowed_for_private_beta",
             "manual_beta_allowed_for_private_beta",
-            "manual_beta_private_provider_configured",
         }:
             if internal_provider_key in billing_provider:
                 return fail(f"ordinary merchant billing provider payload exposes internal key {internal_provider_key}")

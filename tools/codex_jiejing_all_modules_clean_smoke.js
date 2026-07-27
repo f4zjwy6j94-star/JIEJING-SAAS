@@ -642,6 +642,9 @@ async function main() {
           has_listing_ai_handoff_input: String(section?.querySelector("#saasListingComposerInput")?.value || "").includes("不要触发真实 eBay 写入"),
           has_listing_draft_editor: sectionHas(".saas-listing-v2-draft-editor"),
           has_listing_draft_state: Boolean(window.state?.saasListingComposerDraft),
+          has_listing_source_collapsed_after_draft:
+            sectionHas('[data-listing-source-details="listing_source_collapsed_after_draft_v1"]') &&
+            !section?.querySelector('[data-listing-source-details="listing_source_collapsed_after_draft_v1"]')?.open,
           has_listing_market_stage: text.includes("市场结论"),
           has_listing_draft_stage: text.includes("Listing 草稿"),
           has_listing_asset_profit_stage: text.includes("素材/利润"),
@@ -768,10 +771,16 @@ async function main() {
           has_collapsed_history: Boolean(document.querySelector("#saasAiCeoHistory:not([hidden]), #view-cockpit .saas-ai-ceo-history summary")),
           has_login_overlay: Boolean(document.querySelector(".auth-shell, .saas-login-modal, [data-auth-view]")),
           has_ceo_pending_status: Boolean(document.querySelector("#view-cockpit .saas-ai-ceo-pending-status")),
+          visible_ceo_pending_status_count: Array.from(
+            document.querySelectorAll("#view-cockpit .saas-ai-ceo-pending-status"),
+          ).filter((status) => status.getClientRects().length > 0).length,
           ceo_pending_is_single_thinking_dot: (() => {
-            const status = document.querySelector("#view-cockpit .saas-ai-ceo-pending-status.is-compact");
+            const status = Array.from(
+              document.querySelectorAll("#view-cockpit .saas-ai-ceo-pending-status.is-compact"),
+            ).find((candidate) => candidate.getClientRects().length > 0);
             const dot = status?.querySelector(":scope > span.saas-ai-ceo-thinking-dot");
-            if (!status || !dot) return !status;
+            if (!status) return true;
+            if (!dot) return false;
             const style = getComputedStyle(dot);
             const rect = dot.getBoundingClientRect();
             return (
@@ -817,7 +826,6 @@ async function main() {
               "个体户",
               "主体资料",
               "聚合收单",
-              "微信",
               "支付宝",
               "云闪付",
               "个人码",
@@ -909,18 +917,21 @@ async function main() {
                 rawText.includes("merchant_visible_billing_status_v1") &&
                 rawText.includes("triggers_real_charge=false") &&
                 rawText.includes("frontend_gets_payment_secret=false"),
-              has_billing_plain_summary:
-                Boolean(section?.querySelector(".saas-merchant-billing-plain-summary")) &&
-                rawText.includes("merchant_billing_plain_summary_v1") &&
-                text.includes("先分清月费、用量费和平台成本"),
-              has_billing_pricing_split:
-                Boolean(
-                  section?.querySelector(
-                    '.saas-merchant-pricing-split[data-billing-split="subscription_ai_media_platform_v1"]',
-                  ),
-                ) &&
-                rawText.includes("¥99/月是基础订阅") &&
-                rawText.includes("用量计费路线"),
+              has_billing_plain_summary: (() => {
+                const summary = section?.querySelector(
+                  '.saas-merchant-billing-plain-summary[data-billing-summary="merchant_billing_plain_summary_v1"]',
+                );
+                return (
+                  Boolean(summary) &&
+                  summary.querySelectorAll(".saas-merchant-billing-plain-grid article").length >= 5
+                );
+              })(),
+              has_billing_pricing_split: (() => {
+                const split = section?.querySelector(
+                  '.saas-merchant-pricing-split[data-billing-split="subscription_ai_media_platform_v1"]',
+                );
+                return Boolean(split) && split.querySelectorAll(":scope > article").length === 4;
+              })(),
               has_billing_continuity:
                 Boolean(
                   section?.querySelector(
@@ -1062,8 +1073,11 @@ async function main() {
   if (!product.has_listing_cplus_stack || !product.has_listing_input_panel) failures.push("product C+ listing input surface missing");
   if (!product.has_listing_ai_handoff || !product.has_listing_ai_handoff_input) failures.push("product AI CEO to Listing handoff missing");
   if (!product.has_listing_source_grid) failures.push("product Listing source choices missing");
-  if (!product.has_listing_first_run_strip) failures.push("product first-run assurance strip missing");
-  if (!product.has_listing_workflow_action) failures.push("product C+ listing backend workflow action missing");
+  if (!product.has_listing_draft_editor && !product.has_listing_first_run_strip) failures.push("product first-run assurance strip missing");
+  if (!product.has_listing_draft_editor && !product.has_listing_workflow_action) failures.push("product C+ listing backend workflow action missing");
+  if (product.has_listing_draft_editor && !product.has_listing_source_collapsed_after_draft) {
+    failures.push("product existing draft must collapse raw source intake by default");
+  }
   if (!product.has_listing_market_stage || !product.has_listing_draft_stage) failures.push("product C+ market-to-draft flow missing");
   if (!product.has_listing_asset_profit_stage || !product.has_listing_publish_confirmation_stage) {
     failures.push("product C+ asset/profit or publish confirmation stage missing");
@@ -1211,6 +1225,9 @@ async function main() {
   if (cockpit.has_collapsed_history) failures.push("AI CEO conversation is still hidden behind a collapsed history section");
   if (!cockpit.ceo_pending_is_single_thinking_dot) {
     failures.push("AI CEO pending state is not the single compact thinking dot");
+  }
+  if (cockpit.visible_ceo_pending_status_count > 1) {
+    failures.push(`AI CEO shows ${cockpit.visible_ceo_pending_status_count} simultaneous waiting indicators`);
   }
   if (cockpit.has_complex_ceo_pending_preview) {
     failures.push("AI CEO pending state still exposes the old complex waiting card");

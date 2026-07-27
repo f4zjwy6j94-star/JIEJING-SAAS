@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP_HTML = ROOT / "app.html"
 APP_JS = ROOT / "app.js"
+INDEX_HTML = ROOT / "index.html"
 MODULE = ROOT / "assets" / "jiejing-settings-panels.js"
 
 
@@ -21,16 +22,36 @@ def fail(message: str) -> int:
 def main() -> int:
     app_html = APP_HTML.read_text(encoding="utf-8")
     app_js = APP_JS.read_text(encoding="utf-8")
+    index_html = INDEX_HTML.read_text(encoding="utf-8")
     module_js = MODULE.read_text(encoding="utf-8")
-    module_marker = "./assets/jiejing-settings-panels.js?v=20260703-account-model-scope-v1"
-    app_marker = "./app.js?v="
+    module_marker = "./assets/jiejing-settings-panels.js?v=20260715-owner-traffic-analytics-v104"
     billing_panel_start = module_js.index("function renderBillingProviderPanel")
     billing_panel_end = module_js.index("function _renderBillingTestRehearsal")
     merchant_billing_panel = module_js[billing_panel_start:billing_panel_end]
-    if module_marker not in app_html:
-        return fail("app.html should load the settings panels module")
-    if app_html.index(module_marker) > app_html.index(app_marker):
-        return fail("settings panels module must load before app.js so init can use it")
+    if module_marker in app_html:
+        return fail("app.html must not eagerly load the settings-only module")
+    if "jiejing-settings-panels.js" in index_html:
+        return fail("public homepage must not prefetch the settings-only module")
+    for lazy_marker in [
+        f'const JIEJING_SETTINGS_PANELS_SRC = "{module_marker}";',
+        "let jiejingSettingsPanelsLoadPromise = null;",
+        "function ensureJiejingSettingsPanelsLoaded()",
+        'script.dataset.jiejingSettingsPanels = "lazy";',
+        "script.async = true;",
+        "jiejingSettingsPanelsLoadPromise = null;",
+    ]:
+        if lazy_marker not in app_js:
+            return fail(f"settings module lazy loader missing marker: {lazy_marker}")
+    render_connect_start = app_js.index("function renderConnect()")
+    render_connect_end = app_js.index("function riskText", render_connect_start)
+    render_connect = app_js[render_connect_start:render_connect_end]
+    for lazy_settings_entry_marker in [
+        'if (state.view === "connect" && !window.JiejingSettingsPanels)',
+        "ensureJiejingSettingsPanelsLoaded()",
+        'if (state.view === "connect") renderConnect();',
+    ]:
+        if lazy_settings_entry_marker not in render_connect:
+            return fail(f"settings view must finish lazy loading before rerender: {lazy_settings_entry_marker}")
     for marker in [
         "global.JiejingSettingsPanels",
         "renderBillingProviderPanel",
@@ -40,7 +61,7 @@ def main() -> int:
         "AI / 素材用量",
         "欠费保护",
         "在线付款开放",
-        "订阅处理会走安全支付页或客服确认",
+        "商家主动创建订单并微信扫码",
         "页面不展示任何支付密钥",
         "当前仅展示试用和订阅说明",
         "merchant_billing_copy_public_safe_v1",
@@ -66,7 +87,7 @@ def main() -> int:
         "_renderPaidLaunchApprovalStep",
         "_renderPaidLaunchExternalItem",
         "stable_domain_hardening",
-        "stripe_live_cutover",
+        "wechat_pay_native_cutover",
         "no_charge_launch_rehearsal",
         "renderQueueHealthPanel",
         "renderPublicSecurityStatusPanel",
@@ -101,7 +122,7 @@ def main() -> int:
         "clean_new_account_declared",
         "new_account_oauth_authorization_gate",
         "post_publish_cockpit_cleanup_gate",
-        "stripe_live_webhook_resilience",
+        "wechat_pay_signed_callback_resilience",
         "stable_domain_oauth_cors_alignment",
         "charge_now_allowed",
         "platform_write_now_allowed",

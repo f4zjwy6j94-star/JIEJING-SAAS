@@ -7,7 +7,10 @@ import json
 import os
 import shutil
 import sys
+import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,17 +19,21 @@ if str(ROOT) not in sys.path:
 
 from jiejing_saas.billing_plan import STRIPE_CURRENT_API_VERSION  # noqa: E402
 from jiejing_saas.config import SaaSSettings  # noqa: E402
-from jiejing_saas.production_release_gate import PRODUCTION_RELEASE_GATE_VERSION, build_production_release_gate  # noqa: E402
+from jiejing_saas.production_release_gate import (  # noqa: E402
+    PRODUCTION_RELEASE_GATE_VERSION,
+    _billing_section,
+    build_production_release_gate,
+)
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
 
 
-OUT = ROOT / "output" / "jiejing-production-release-gate-test"
+OUT = Path(tempfile.mkdtemp(prefix="jiejing-production-release-gate-test-"))
 EXPECTED_SECTIONS = {
     "deployment_artifact_and_rollback",
     "stable_domain_edge_origin_callbacks",
     "managed_data_plane_and_secret_boundary",
     "backup_restore_dr_and_secret_recovery",
-    "subscription_billing_webhook_and_quota",
+    "mainland_wechat_payment_and_refund_controls",
     "ebay_clean_account_refresh_and_write_boundary",
     "monitoring_alerts_incidents_and_customer_support",
     "final_owner_approval_and_launch_switch_hold",
@@ -54,6 +61,16 @@ def fail(message: str) -> int:
 
 
 def main() -> int:
+    contradictory = _ready_mainland_payment()
+    contradictory["refund_now_allowed"] = False
+    malformed_section = _billing_section(
+        mainland_payment=contradictory,
+        approval_packet=_ready_paid_launch_packet(),
+    )
+    if malformed_section.get("status") != "blocked":
+        return fail(f"refund-not-ready canonical state must fail closed: {malformed_section}")
+    if malformed_section.get("checks", {}).get("refund_controls_ready") is not False:
+        return fail(f"refund readiness blocker must remain explicit: {malformed_section}")
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -74,6 +91,21 @@ def main() -> int:
         for item in blocked.get("sections", []):
             if isinstance(item, dict):
                 _assert_unsafe_flags_false(item, f"blocked section {item.get('key')}")
+
+        os.environ.update(
+            {
+                "JIEJING_PROVIDER_METRICS_ENABLED": "1",
+                "JIEJING_PROVIDER_LATENCY_ALERTS_CONFIGURED": "1",
+                "JIEJING_PROVIDER_COST_ALERTS_CONFIGURED": "1",
+            }
+        )
+        legacy_only = _build("legacy-provider-booleans.sqlite")
+        legacy_sections = {
+            item.get("key"): item for item in legacy_only.get("sections", []) if isinstance(item, dict)
+        }
+        legacy_monitoring = legacy_sections.get("monitoring_alerts_incidents_and_customer_support", {})
+        if legacy_monitoring.get("checks", {}).get("provider_latency_and_cost_monitoring_ready") is not False:
+            return fail("legacy provider alert booleans alone must not prove production monitoring readiness")
     finally:
         _restore_env(previous)
 
@@ -91,6 +123,36 @@ def main() -> int:
         for key in EXPECTED_SECTIONS:
             if sections.get(key, {}).get("status") != "ready":
                 return fail(f"ready section should be ready: {key} {sections.get(key)}")
+        backup_checks = sections["backup_restore_dr_and_secret_recovery"].get("checks", {})
+        if backup_checks.get("restore_drill_fresh") is not True:
+            return fail(f"ready backup section should expose fresh restore-drill evidence: {backup_checks}")
+        if backup_checks.get("recent_backup_probe_fresh") is not True:
+            return fail(f"ready backup section should expose recent backup success evidence: {backup_checks}")
+        monitoring_env_keys = set(
+            sections["monitoring_alerts_incidents_and_customer_support"].get("environment_keys") or []
+        )
+        required_cls_evidence_keys = {
+            "JIEJING_CLS_LIVE_PROBE_REQUIRED",
+            "JIEJING_CLS_LIVE_PROBE_LAST_AT",
+            "JIEJING_CLS_INGESTION_LIVE_PROBE_PASSED",
+            "JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT",
+            "JIEJING_CLS_PROBE_MAX_AGE_HOURS",
+            "JIEJING_PROVIDER_MONITOR_SCHEDULER_ENABLED",
+            "JIEJING_PROVIDER_MONITOR_INTERVAL_SECONDS",
+            "JIEJING_PROVIDER_MONITOR_WINDOW_MINUTES",
+            "JIEJING_PROVIDER_MONITOR_COST_WINDOW_HOURS",
+            "JIEJING_PROVIDER_MONITOR_EVIDENCE_MAX_AGE_MINUTES",
+            "JIEJING_PROVIDER_DAILY_COST_WARNING_MINOR",
+            "JIEJING_PROVIDER_DAILY_COST_CRITICAL_MINOR",
+            "JIEJING_PROVIDER_LATENCY_ALARM_VERIFIED_AT",
+            "JIEJING_PROVIDER_COST_ALARM_VERIFIED_AT",
+            "JIEJING_PROVIDER_ALARM_VERIFICATION_MAX_AGE_DAYS",
+        }
+        if not required_cls_evidence_keys.issubset(monitoring_env_keys):
+            return fail(
+                "production release monitoring evidence must name every CLS freshness input: "
+                f"{sorted(required_cls_evidence_keys - monitoring_env_keys)}"
+            )
         if len(ready.get("final_cutover_sequence", [])) != 6:
             return fail("production release gate should expose final cutover sequence")
         for step in ready.get("final_cutover_sequence", []):
@@ -101,11 +163,67 @@ def main() -> int:
             _assert_unsafe_flags_false(step, f"ready cutover step {step.get('key')}")
         if len(ready.get("required_external_evidence", [])) < 6:
             return fail("production release gate should list external evidence buckets")
+        external_evidence = {
+            item.get("key"): item
+            for item in ready.get("required_external_evidence", [])
+            if isinstance(item, dict)
+        }
+        if "wechat_pay_native_production_cutover" not in external_evidence:
+            return fail(f"WeChat production evidence bucket is missing: {sorted(external_evidence)}")
+        if "stripe_live_billing" in external_evidence:
+            return fail("Stripe evidence must not remain a mainland production release requirement")
         _assert_unsafe_flags_false(ready, "ready gate")
         serialized = json.dumps(ready, ensure_ascii=False).lower()
         for forbidden in ("sk_live_unit_secret", "whsec_live_unit_secret", "unit-vault-token", "test-client-secret", "refresh_token="):
             if forbidden in serialized:
                 return fail(f"production release gate leaked forbidden marker: {forbidden}")
+
+        removed_stripe = {
+            key: os.environ.pop(key)
+            for key in list(os.environ)
+            if key.startswith("JIEJING_STRIPE_")
+        }
+        os.environ["JIEJING_BILLING_PROVIDER"] = "manual_seed"
+        try:
+            no_stripe = _build("ready-without-stripe.sqlite", seed_ready_data=True)
+        finally:
+            os.environ.update(removed_stripe)
+            os.environ["JIEJING_BILLING_PROVIDER"] = "stripe"
+        no_stripe_sections = {
+            item.get("key"): item for item in no_stripe.get("sections", []) if isinstance(item, dict)
+        }
+        if no_stripe_sections.get("mainland_wechat_payment_and_refund_controls", {}).get("status") != "ready":
+            return fail(
+                "missing Stripe must not block the canonical mainland production billing section: "
+                f"{no_stripe_sections.get('mainland_wechat_payment_and_refund_controls')}"
+            )
+
+        os.environ["JIEJING_QUEUE_PROVIDER"] = "postgres_durable"
+        os.environ.pop("JIEJING_QUEUE_URL", None)
+        os.environ.pop("JIEJING_REDIS_LIVE_PROBE_PASSED", None)
+        os.environ["JIEJING_POSTGRES_DURABLE_QUEUE_LIVE_PROBE_PASSED"] = "1"
+        postgres_durable = _build("ready-postgres-durable.sqlite", seed_ready_data=True)
+        durable_sections = {
+            item.get("key"): item for item in postgres_durable.get("sections", []) if isinstance(item, dict)
+        }
+        durable_data_plane = durable_sections.get("managed_data_plane_and_secret_boundary", {})
+        if durable_data_plane.get("status") != "ready":
+            return fail(
+                "production release gate should accept the production-allowed Postgres durable queue "
+                f"without requiring Redis: {durable_data_plane}"
+            )
+        durable_external = [
+            item for item in postgres_durable.get("required_external_evidence", []) if isinstance(item, dict)
+        ]
+        durable_queue_evidence = next(
+            (item for item in durable_external if str(item.get("key") or "").startswith("managed_postgres_")),
+            {},
+        )
+        durable_env_keys = set(durable_queue_evidence.get("environment_keys") or [])
+        if "JIEJING_POSTGRES_DURABLE_QUEUE_LIVE_PROBE_PASSED" not in durable_env_keys:
+            return fail(f"Postgres durable external evidence key is missing: {durable_queue_evidence}")
+        if "JIEJING_REDIS_LIVE_PROBE_PASSED" in durable_env_keys:
+            return fail(f"Postgres durable external evidence must not require Redis: {durable_queue_evidence}")
         print("PASS jiejing_production_release_gate")
         return 0
     finally:
@@ -126,7 +244,81 @@ def _build(name: str, *, seed_ready_data: bool = False) -> dict[str, object]:
     repo.initialize()
     if seed_ready_data:
         _seed_ready_repository(repo)
+        with patch(
+            "jiejing_saas.production_release_gate.build_mainland_payment_launch_status",
+            return_value=_ready_mainland_payment(),
+        ), patch(
+            "jiejing_saas.production_release_gate.build_paid_launch_approval_packet",
+            return_value=_ready_paid_launch_packet(),
+        ):
+            return build_production_release_gate(settings, repo)
     return build_production_release_gate(settings, repo)
+
+
+def _ready_paid_launch_packet() -> dict[str, object]:
+    return {
+        "contract_version": "2026-07-27-paid-launch-approval-packet-v2",
+        "status": "ready_for_owner_approval",
+        "ready_for_owner_approval": True,
+        "public_paid_launch_allowed": False,
+        "charge_now_allowed": False,
+        "creates_checkout_session": False,
+        "calls_stripe_api": False,
+        "triggers_real_charge": False,
+        "frontend_gets_payment_secret": False,
+        "triggers_real_platform_write": False,
+        "old_frozen_ebay_account_reuse_allowed": False,
+        "old_demo_product_or_sku_allowed": False,
+        "steps": [
+            {"key": "wechat_pay_native_cutover", "status": "ready", "blocked_by": []},
+            {"key": "new_ebay_account_low_risk_smoke", "status": "ready", "blocked_by": []},
+        ],
+    }
+
+
+def _ready_mainland_payment() -> dict[str, object]:
+    return {
+        "contract_version": "2026-07-27-mainland-payment-launch-v1",
+        "market": "mainland_china",
+        "primary_provider": "wechat_pay_native",
+        "checkout_mode": "native_qr",
+        "billing_mode": "one_time_30_day_plan",
+        "configuration": {"required_count": 9, "completed_count": 9, "complete": True},
+        "code_capabilities": {
+            "signed_payment_callback_implemented": True,
+            "signed_refund_callback_implemented": True,
+            "real_order_creation_implemented": True,
+            "authenticated_order_query_implemented": True,
+            "quota_entitlement_persistence_implemented": True,
+            "high_risk_confirmation_boundary_implemented": True,
+        },
+        "acceptance_evidence": {
+            "contract_version": "2026-07-27-domestic-payment-acceptance-evidence-v2",
+            "provider": "wechat_pay_native",
+            "acceptance_kind": "owner_approved_one_cny_live_acceptance",
+            "controlled_acceptance_proven": True,
+            "verified_paid_order_count": 1,
+            "public_charging_allowed": False,
+            "charge_now_allowed": False,
+            "triggers_real_charge": False,
+            "calls_external_payment_api": False,
+            "secret_exposed": False,
+        },
+        "controlled_acceptance_proven": True,
+        "provider_checkout_ready": True,
+        "production_environment": True,
+        "refund_now_allowed": True,
+        "mainland_payment_ready_for_owner_approval": True,
+        "public_charging_allowed": False,
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "triggers_real_refund": False,
+        "calls_external_payment_api": False,
+        "calls_stripe_api": False,
+        "real_platform_writes_enabled": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
 
 
 def _seed_ready_repository(repo: SaaSRepository) -> None:
@@ -222,6 +414,34 @@ def _seed_ready_repository(repo: SaaSRepository) -> None:
             "secret_exposed": False,
         }
     )
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    repo.acquire_provider_monitoring_lease(
+        scheduler_key="provider-monitor",
+        owner_hash="production-release-gate-fixture",
+        lease_seconds=300,
+        now_epoch=int(now.timestamp()) - 60,
+    )
+    repo.complete_provider_monitoring_evaluation(
+        scheduler_key="provider-monitor",
+        owner_hash="production-release-gate-fixture",
+        evaluated_at=(now - timedelta(minutes=1)).isoformat(),
+        exported_at=(now - timedelta(minutes=1)).isoformat(),
+        outcome="exported",
+        snapshot={
+            "event_type": "jiejing_provider_monitor_aggregate",
+            "contract_version": "2026-07-17-provider-monitor-aggregate-v1",
+            "environment": "staging",
+            "probe": False,
+            "reliability_status": "insufficient_data",
+            "reliability_evaluated_count": 0,
+            "reliability_attention_count": 0,
+            "reliability_critical_count": 0,
+            "cost_status": "healthy",
+            "cost_coverage_complete": True,
+            "cost_budget_configured": True,
+            "cost_total_minor": 0,
+        },
+    )
 
 
 def _set_blocked_env() -> dict[str, str | None]:
@@ -243,6 +463,7 @@ def _set_ready_env() -> dict[str, str | None]:
     previous = {key: os.environ.get(key) for key in _keys()}
     _clear_keys()
     stable = "https://app.jiejing.example"
+    now = datetime.now(timezone.utc).replace(microsecond=0)
     os.environ.update(
         {
             "JIEJING_SAAS_ENV": "staging",
@@ -266,12 +487,12 @@ def _set_ready_env() -> dict[str, str | None]:
             "JIEJING_REDIS_LIVE_PROBE_PASSED": "1",
             "JIEJING_VAULT_LIVE_PROBE_PASSED": "1",
             "JIEJING_BACKUP_POLICY_CONFIGURED": "1",
-            "JIEJING_RESTORE_DRILL_LAST_AT": "2026-07-02T00:00:00Z",
+            "JIEJING_RESTORE_DRILL_LAST_AT": (now - timedelta(days=1)).isoformat(),
             "JIEJING_BACKUP_ALERTS_CONFIGURED": "1",
             "JIEJING_VAULT_BACKUP_POLICY_CONFIGURED": "1",
             "JIEJING_COS_BACKUP_ENABLED": "1",
             "JIEJING_COS_BUCKET": "jiejing-release-backup",
-            "JIEJING_COS_BACKUP_LAST_SUCCESS_AT": "2026-07-02T00:00:00Z",
+            "JIEJING_COS_BACKUP_LAST_SUCCESS_AT": (now - timedelta(hours=1)).isoformat(),
             "JIEJING_BILLING_PROVIDER": "stripe",
             "JIEJING_BILLING_PLANS_PUBLISHED": "1",
             "JIEJING_QUOTA_ENFORCEMENT_ENABLED": "1",
@@ -360,6 +581,11 @@ def _set_ready_env() -> dict[str, str | None]:
             "JIEJING_CLS_LOGSET_ID": "release-logset",
             "JIEJING_CLS_TOPIC_ID": "release-topic",
             "JIEJING_CLS_ALERT_POLICY_CONFIGURED": "1",
+            "JIEJING_CLS_LIVE_PROBE_REQUIRED": "1",
+            "JIEJING_CLS_LIVE_PROBE_LAST_AT": (now - timedelta(minutes=2)).isoformat(),
+            "JIEJING_CLS_INGESTION_LIVE_PROBE_PASSED": "1",
+            "JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT": (now - timedelta(minutes=1)).isoformat(),
+            "JIEJING_CLS_PROBE_MAX_AGE_HOURS": "24",
             "JIEJING_INCIDENT_RUNBOOK_PUBLISHED": "1",
             "JIEJING_ONCALL_ALERT_ROUTE_CONFIGURED": "1",
             "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED": "1",
@@ -370,6 +596,16 @@ def _set_ready_env() -> dict[str, str | None]:
             "JIEJING_PROVIDER_METRICS_ENABLED": "1",
             "JIEJING_PROVIDER_LATENCY_ALERTS_CONFIGURED": "1",
             "JIEJING_PROVIDER_COST_ALERTS_CONFIGURED": "1",
+            "JIEJING_PROVIDER_MONITOR_SCHEDULER_ENABLED": "1",
+            "JIEJING_PROVIDER_MONITOR_INTERVAL_SECONDS": "300",
+            "JIEJING_PROVIDER_MONITOR_WINDOW_MINUTES": "30",
+            "JIEJING_PROVIDER_MONITOR_COST_WINDOW_HOURS": "24",
+            "JIEJING_PROVIDER_MONITOR_EVIDENCE_MAX_AGE_MINUTES": "15",
+            "JIEJING_PROVIDER_DAILY_COST_WARNING_MINOR": "10000",
+            "JIEJING_PROVIDER_DAILY_COST_CRITICAL_MINOR": "20000",
+            "JIEJING_PROVIDER_LATENCY_ALARM_VERIFIED_AT": (now - timedelta(minutes=1)).isoformat(),
+            "JIEJING_PROVIDER_COST_ALARM_VERIFIED_AT": (now - timedelta(minutes=1)).isoformat(),
+            "JIEJING_PROVIDER_ALARM_VERIFICATION_MAX_AGE_DAYS": "7",
             "JIEJING_PRODUCTION_RELEASE_ARTIFACT_SHA256": "a" * 64,
             "JIEJING_PRODUCTION_DEPLOYMENT_DRY_RUN_PASSED": "1",
             "JIEJING_PRODUCTION_ROLLBACK_POINT_ID": "rollback_point_release_unit",

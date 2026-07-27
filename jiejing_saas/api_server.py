@@ -28,13 +28,30 @@ from .ai_ceo_chat import ai_ceo_route_metadata, run_ai_ceo_chat, run_ai_ceo_fast
 from .backup_plan import build_backup_plan
 from .billing_plan import build_billing_plan, build_billing_usage, evaluate_quota_action
 from .billing_checkout import build_billing_checkout_contract, create_stripe_checkout_session, create_stripe_customer_portal_session
+from .billing_domestic import (
+    build_domestic_billing_operations_snapshot,
+    close_domestic_billing_order,
+    create_domestic_billing_order,
+    execute_approved_domestic_billing_refund,
+    merchant_domestic_billing_order,
+    open_domestic_billing_checkout,
+    query_and_reconcile_domestic_billing_order,
+    query_and_reconcile_domestic_billing_refund,
+    reconcile_domestic_billing_orders,
+    request_domestic_billing_refund_review,
+)
 from .billing_domain_cutover_rehearsal import build_billing_domain_cutover_rehearsal
 from .billing_manual_beta import create_manual_beta_payment_order, confirm_manual_beta_payment_order, list_manual_beta_payment_orders
-from .billing_payment_options import build_mainland_payment_strategy
+from .billing_payment_options import build_mainland_payment_strategy, validate_mainland_payment_launch_for_public
 from .billing_provider_evidence_register import build_billing_provider_evidence_register
 from .billing_provider_rehearsal import run_billing_provider_rehearsal
 from .billing_test_provider import apply_test_billing_event
 from .billing_webhook import handle_billing_webhook
+from .billing_wechat_pay import (
+    build_wechat_pay_native_contract,
+    process_wechat_pay_notification_from_env,
+    process_wechat_pay_refund_notification_from_env,
+)
 from .commercial_launch_gate import build_commercial_launch_gate
 from .config import SaaSSettings
 from .controlled_bridges import build_controlled_bridge_contract
@@ -62,6 +79,7 @@ from .ebay_token_refresh_adapter import EbayVaultTokenRefreshAdapter, public_tok
 from .ebay_write_adapter import EbayWriteHttpAdapter, build_ebay_write_adapter_contract, build_publish_readiness
 from .independence import build_independence_status
 from .infrastructure_drivers import build_infrastructure_driver_status
+from .media_credits import build_media_credit_summary, estimate_media_points
 from .ip_risk_screening import build_ip_logo_brand_screening
 from .json_safe import json_default
 from .model_value_gate import build_model_value_gate
@@ -77,6 +95,7 @@ from .model_provider_catalog import (
     public_model_settings_from_secret_refs,
 )
 from .monitoring import build_monitoring_status
+from .operations_metering import MeteredModelClient, model_cost_measurement, sanitize_analytics_event
 from .media_source_assets import MAX_MEDIA_SOURCE_BYTES, MediaSourceAssetError, MediaSourceAssetStore
 from .operational_health import build_operational_health
 from .owner_launch_control import build_owner_launch_control
@@ -103,6 +122,7 @@ from .task_secret_grants import build_task_secret_grant_plan
 from .vault_client import build_task_secret_resolution_contract, build_vault_client_contract
 from .vault_secret_resolver import VaultSecretResolver, build_vault_secret_resolver_status
 from .redis_queue_runtime import RedisStreamQueueWorker, publish_redis_queue_job_if_configured
+from .registration_challenge import public_registration_challenge_config, verify_registration_challenge
 from .worker import LocalQueueWorker
 from .workflow_plan import product_workflow_steps
 
@@ -117,6 +137,8 @@ AUTH_REGISTER_RATE_LIMIT_MAX_GLOBAL_DEFAULT = 60
 EXPENSIVE_API_RATE_LIMIT_WINDOW_SECONDS_DEFAULT = 60
 EXPENSIVE_API_RATE_LIMIT_MAX_PER_IP_DEFAULT = 180
 EXPENSIVE_API_RATE_LIMIT_MAX_GLOBAL_DEFAULT = 5000
+DOMESTIC_RECONCILIATION_RATE_LIMIT_WINDOW_SECONDS = 60
+DOMESTIC_RECONCILIATION_RATE_LIMIT_MAX_PER_COMPANY = 6
 LOCAL_RATE_LIMIT_MAX_BUCKETS_DEFAULT = 4096
 EXPENSIVE_API_RATE_LIMIT_PREFIXES = (
     "tasks",
@@ -139,6 +161,7 @@ EXPENSIVE_API_RATE_LIMIT_PREFIXES = (
     "execution-results",
     "audit-logs",
     "billing/manual-beta",
+    "billing/domestic",
     "provider-job-contracts",
     "post-publish",
     "owner/",
@@ -153,6 +176,9 @@ SESSION_COOKIE_NAME = "jiejing_saas_session"
 MEDIA_PROVIDER_JOB_KEYS = {"media.asset_generation", "media.fal_asset_generation"}
 PLATFORM_MODEL_TRIAL_MONTHLY_LIMIT_ENV = "JIEJING_AI_CEO_PLATFORM_MODEL_TRIAL_MONTHLY_LIMIT"
 PLATFORM_MODEL_TRIAL_DEFAULT_MONTHLY_LIMIT = 20
+PLATFORM_TRIAL_ACTIVATION_WINDOW_SECONDS = 24 * 60 * 60
+PLATFORM_TRIAL_ACTIVATION_MAX_PER_IP_DEFAULT = 3
+PLATFORM_TRIAL_ACTIVATION_MAX_GLOBAL_DEFAULT = 200
 
 
 def build_ai_ceo_market_report_delivery(report: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -295,6 +321,28 @@ def _sanitize_media_source_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
     return sanitized
 
 
+def _merchant_safe_replaceable_media_provider(value: Any) -> Any:
+    """Remove replaceable media driver names from every browser JSON response."""
+
+    if isinstance(value, dict):
+        safe: dict[str, Any] = {}
+        for raw_key, raw_value in value.items():
+            key = str(raw_key)
+            if key.lower() in {"media_provider", "preferred_media_provider", "source_provider_or_upload"}:
+                safe[key] = "jiejing_media_router"
+            else:
+                safe[key] = _merchant_safe_replaceable_media_provider(raw_value)
+        return safe
+    if isinstance(value, list):
+        return [_merchant_safe_replaceable_media_provider(item) for item in value]
+    if isinstance(value, tuple):
+        return [_merchant_safe_replaceable_media_provider(item) for item in value]
+    if isinstance(value, str):
+        safe_text = re.sub(r"media\.fal_asset_generation", "media.asset_generation", value, flags=re.IGNORECASE)
+        return re.sub(r"\bfal(?:\.ai)?\b", "jiejing_media_router", safe_text, flags=re.IGNORECASE)
+    return value
+
+
 def _is_signed_media_source_url(value: Any) -> bool:
     try:
         parsed = urlparse(str(value or ""))
@@ -406,6 +454,700 @@ class SaaSBackendServer:
         server.serve_forever()
 
 
+_MERCHANT_PLAN_TEXT_FIELDS = {"key", "label", "intended_user", "currency", "store_access_mode"}
+_MERCHANT_PLAN_COUNT_FIELDS = {
+    "amount_minor",
+    "duration_days",
+    "workspace_quota",
+    "team_member_quota",
+    "monthly_task_quota",
+    "connected_store_quota",
+    "provider_job_quota",
+    "batch_row_quota",
+    "media_points_included",
+}
+_MERCHANT_METERED_UNITS = {
+    "connected_store",
+    "ai_ceo_task",
+    "provider_job",
+    "official_ebay_sync",
+    "model_report_assist",
+}
+_MAINLAND_PAYMENT_SAFETY_FIELDS = (
+    "public_charging_allowed",
+    "charge_now_allowed",
+    "triggers_real_charge",
+    "triggers_real_refund",
+    "calls_external_payment_api",
+    "calls_stripe_api",
+    "real_platform_writes_enabled",
+    "frontend_gets_payment_secret",
+    "secret_exposed",
+)
+_MAINLAND_PAYMENT_CAPABILITY_FIELDS = (
+    "signed_payment_callback_implemented",
+    "signed_refund_callback_implemented",
+    "real_order_creation_implemented",
+    "authenticated_order_query_implemented",
+    "quota_entitlement_persistence_implemented",
+    "high_risk_confirmation_boundary_implemented",
+)
+
+
+def _safe_bounded_text(value: Any, limit: int) -> str:
+    return str(value).strip()[:limit] if isinstance(value, str) else ""
+
+
+_PUBLIC_SENSITIVE_TEXT = re.compile(
+    r"(?i)(?:bearer\s+\S+|secret[_-]?ref|api[_-]?key|"
+    r"access[_-]?token|refresh[_-]?token|password\s*[:=]|"
+    r"credential\s*[:=]|-----BEGIN[^-]*PRIVATE KEY-----)"
+)
+_PUBLIC_TOKEN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.:/+-]{0,159}$")
+_PUBLIC_MODEL_PROVIDERS = {
+    "openai",
+    "deepseek",
+    "openrouter",
+    "qwen_dashscope",
+    "moonshot",
+    "anthropic",
+    "google_gemini",
+    "tencent_hunyuan",
+}
+
+
+def _safe_public_text(value: Any, limit: int = 1024) -> str:
+    text = _safe_bounded_text(value, limit)
+    return "" if not text or _PUBLIC_SENSITIVE_TEXT.search(text) else text
+
+
+def _safe_public_token(value: Any, *, allowed: set[str] | None = None, limit: int = 160) -> str:
+    text = _safe_public_text(value, limit)
+    if not text or not _PUBLIC_TOKEN.fullmatch(text):
+        return ""
+    if allowed is not None and text not in allowed:
+        return ""
+    return text
+
+
+def _safe_public_token_list(value: Any, *, limit: int = 32) -> list[str]:
+    safe: list[str] = []
+    for item in value if isinstance(value, list) else []:
+        token = _safe_public_token(item)
+        if token and token not in safe:
+            safe.append(token)
+        if len(safe) >= limit:
+            break
+    return safe
+
+
+def _safe_public_readiness_items(value: Any) -> list[dict[str, Any]]:
+    safe: list[dict[str, Any]] = []
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict) or item.get("severity") not in {"warning", "blocker"}:
+            continue
+        safe.append(
+            {
+                "key": _safe_public_token(item.get("key")),
+                "label": _safe_public_text(item.get("label"), 256),
+                "status": _safe_public_token(item.get("status")),
+                "severity": item["severity"],
+                "detail": _safe_public_text(item.get("detail"), 1024),
+                "next_action": _safe_public_text(item.get("next_action"), 1024),
+            }
+        )
+        if len(safe) >= 8:
+            break
+    return safe
+
+
+def _strict_nonnegative_int(value: Any) -> int:
+    return value if type(value) is int and value >= 0 else 0
+
+
+def _merchant_safe_plan_catalog(value: Any) -> list[dict[str, Any]]:
+    safe_catalog: list[dict[str, Any]] = []
+    for raw_plan in value if isinstance(value, list) else []:
+        if not isinstance(raw_plan, dict):
+            continue
+        safe_plan: dict[str, Any] = {}
+        for key in _MERCHANT_PLAN_TEXT_FIELDS:
+            if isinstance(raw_plan.get(key), str):
+                safe_plan[key] = _safe_public_text(raw_plan[key], 512)
+        for key in _MERCHANT_PLAN_COUNT_FIELDS:
+            item = raw_plan.get(key)
+            if type(item) is int and item >= 0:
+                safe_plan[key] = item
+        if "includes_real_platform_writes" in raw_plan:
+            safe_plan["includes_real_platform_writes"] = False
+        if safe_plan.get("key"):
+            safe_catalog.append(safe_plan)
+    return safe_catalog
+
+
+def _merchant_safe_add_on_catalog(value: Any) -> list[dict[str, Any]]:
+    safe_catalog: list[dict[str, Any]] = []
+    for raw_add_on in value if isinstance(value, list) else []:
+        if not isinstance(raw_add_on, dict):
+            continue
+        safe_add_on: dict[str, Any] = {}
+        for key in ("key", "label", "currency"):
+            if isinstance(raw_add_on.get(key), str):
+                safe_add_on[key] = _safe_public_text(raw_add_on[key], 512)
+        for key in ("amount_minor", "duration_days"):
+            item = raw_add_on.get(key)
+            if type(item) is int and item >= 0:
+                safe_add_on[key] = item
+        if safe_add_on.get("key"):
+            safe_catalog.append(safe_add_on)
+    return safe_catalog
+
+
+def _merchant_safe_metered_units(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item in _MERCHANT_METERED_UNITS]
+
+
+def _merchant_safe_mainland_payment(launch: dict[str, Any]) -> dict[str, Any]:
+    payment = validate_mainland_payment_launch_for_public(launch)
+    return {
+        "provider": "wechat_pay_native",
+        "checkout_mode": "native_qr",
+        "billing_mode": "one_time_30_day_plan",
+        "status": payment["merchant_status"],
+        "next_blocker": payment["next_paid_launch_blocker"],
+        "mainland_payment_ready_for_owner_approval": payment["mainland_payment_ready_for_owner_approval"],
+        "provider_configured": payment["provider_configured"],
+        "configured_component_count": payment["configured_component_count"],
+        "required_component_count": payment["required_component_count"],
+        "verified_paid_order_count": payment["verified_paid_order_count"],
+        "public_charging_allowed": False,
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "triggers_real_refund": False,
+        "calls_external_payment_api": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def _merchant_safe_launch_path(value: Any, *, mainland_payment: dict[str, Any], quota_enabled: bool) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    private_beta_active = all(
+        (
+            source.get("contract_version") == "2026-07-03-merchant-billing-launch-path-v1",
+            source.get("current_stage") == "invited_beta_no_real_charge",
+            source.get("public_paid_launch_allowed") is False,
+            source.get("charge_now_allowed") is False,
+            source.get("triggers_real_charge") is False,
+            source.get("frontend_can_grant_entitlement") is False,
+            source.get("frontend_can_grant_quota") is False,
+            source.get("backend_confirmation_required_before_entitlement") is True,
+            source.get("secret_exposed") is False,
+        )
+    )
+    safe_steps: list[dict[str, Any]] = []
+    if private_beta_active:
+        for item in source.get("steps") if isinstance(source.get("steps"), list) else []:
+            if not isinstance(item, dict) or not isinstance(item.get("key"), str):
+                continue
+            safe_steps.append(
+                {
+                    "key": _safe_bounded_text(item.get("key"), 96),
+                    "label": _safe_public_text(item.get("label"), 256),
+                    "title": _safe_public_text(item.get("title"), 512),
+                    "detail": _safe_public_text(item.get("detail"), 1024),
+                    "ready": item.get("ready") is True,
+                }
+            )
+    return {
+        "contract_version": (
+            "2026-07-03-merchant-billing-launch-path-v1"
+            if private_beta_active
+            else "2026-07-27-merchant-mainland-payment-path-v1"
+        ),
+        "current_stage": "invited_beta_no_real_charge" if private_beta_active else mainland_payment["status"],
+        "headline": (
+            _safe_public_text(source.get("headline"), 1024)
+            if private_beta_active
+            else "merchant_payment_status_available_in_billing_control_room"
+        ),
+        "current_charge_status": "no_real_charge_now",
+        "merchant_visible": True,
+        "internal_launch_evidence_visible": False,
+        "public_paid_launch_allowed": False,
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "frontend_gets_payment_secret": False,
+        "frontend_can_grant_entitlement": False,
+        "frontend_can_grant_quota": False,
+        "backend_confirmation_required_before_entitlement": True,
+        "hosted_payment_page_required_for_formal_payment": False,
+        "quota_enforcement_enabled": quota_enabled,
+        "quota_grant_source": "backend_subscription_state",
+        "history_visible_after_billing_problem": True,
+        "metered_work_only_blocks_on_billing_problem": True,
+        "repeat_ebay_oauth_required_for_billing_recovery": False,
+        "model_key_reentry_required_for_billing_recovery": False,
+        "next_paid_launch_blocker": mainland_payment["next_blocker"],
+        "steps": safe_steps,
+        "secret_exposed": False,
+    }
+
+
+_MERCHANT_REHEARSAL_STEP_KEYS = {
+    "test_provider_selected",
+    "test_plan_catalog_available",
+    "test_checkout_and_portal_contract",
+    "test_subscription_lifecycle_events",
+    "test_provider_order_query_or_signed_webhook",
+    "quota_hard_stop_rehearsal",
+    "test_checkout_session",
+    "backend_order_query_or_signed_webhook_proof",
+    "quota_shutdown_closure",
+    "quota_guardrail_evaluated",
+}
+_MERCHANT_SHUTDOWN_STEP_KEYS = {
+    "subscription_activation_grants_entitlement",
+    "invoice_paid_keeps_quota_open",
+    "payment_failed_disables_entitlement",
+    "subscription_cancel_disables_entitlement",
+    "quota_guardrail_blocks_metered_work",
+    "customer_portal_changes_audited",
+    "provider_cutover_no_real_charge_safety",
+}
+_MERCHANT_INCIDENT_CARD_KEYS = {
+    "customer_portal_change",
+    "payment_failed",
+    "subscription_cancelled",
+    "refund_or_dispute",
+    "quota_hard_stop",
+}
+_MERCHANT_TRUST_CARD_KEYS = {
+    "price_and_renewal_terms",
+    "invoice_receipt_tax_path",
+    "refund_support_public_entry",
+    "entitlement_recovery_boundary",
+}
+
+
+def _merchant_safe_status_items(value: Any, *, allowed_keys: set[str], limit: int = 12) -> list[dict[str, Any]]:
+    safe: list[dict[str, Any]] = []
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict) or item.get("key") not in allowed_keys:
+            continue
+        status = item.get("status") if item.get("status") in {"ready", "blocked", "pending"} else "blocked"
+        safe.append(
+            {
+                "key": item["key"],
+                "status": status,
+                "severity": "info" if status == "ready" else "blocker",
+                "owner_approval_required": item.get("owner_approval_required") is True,
+                "frontend_action_allowed": False,
+                "charge_now_allowed": False,
+                "triggers_real_charge": False,
+                "frontend_gets_payment_secret": False,
+                "secret_exposed": False,
+            }
+        )
+        if len(safe) >= limit:
+            break
+    return safe
+
+
+def _merchant_safe_item_counts(items: list[dict[str, Any]]) -> tuple[int, int, int]:
+    ready = sum(1 for item in items if item.get("status") == "ready")
+    total = len(items)
+    return ready, total, total - ready
+
+
+def _merchant_safe_rehearsal_summary(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    steps = _merchant_safe_status_items(source.get("steps"), allowed_keys=_MERCHANT_REHEARSAL_STEP_KEYS)
+    ready_count, total_count, blocked_count = _merchant_safe_item_counts(steps)
+    next_step = next((item["key"] for item in steps if item["status"] != "ready"), "")
+    return {
+        "contract_version": (
+            "2026-06-18-no-charge-billing-rehearsal"
+            if source.get("contract_version") == "2026-06-18-no-charge-billing-rehearsal"
+            else ""
+        ),
+        "ready": source.get("ready") is True and blocked_count == 0 and total_count > 0,
+        "ready_count": ready_count,
+        "total_count": total_count,
+        "blocked_count": blocked_count,
+        "next_step": next_step,
+        "steps": steps,
+        "paid_launch_ready": False,
+        "public_charging_allowed": False,
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def _merchant_safe_shutdown_summary(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    steps = _merchant_safe_status_items(source.get("steps"), allowed_keys=_MERCHANT_SHUTDOWN_STEP_KEYS)
+    ready_count, total_count, blocked_count = _merchant_safe_item_counts(steps)
+    guards = source.get("shutdown_guards") if isinstance(source.get("shutdown_guards"), dict) else {}
+    return {
+        "contract_version": (
+            "2026-06-20-subscription-quota-shutdown-closure"
+            if source.get("contract_version") == "2026-06-20-subscription-quota-shutdown-closure"
+            else ""
+        ),
+        "ready": source.get("ready") is True and blocked_count == 0 and total_count > 0,
+        "ready_count": ready_count,
+        "total_count": total_count,
+        "blocked_count": blocked_count,
+        "next_step": next((item["key"] for item in steps if item["status"] != "ready"), ""),
+        "steps": steps,
+        "covered_actions": _merchant_safe_metered_units(source.get("covered_actions")),
+        "shutdown_guards": {
+            "hard_stop_on_inactive_subscription": guards.get("hard_stop_on_inactive_subscription") is True,
+            "payment_failure_blocks_metered_work": guards.get("payment_failure_blocks_metered_work") is True,
+            "cancellation_blocks_metered_work": guards.get("cancellation_blocks_metered_work") is True,
+            "usage_remains_visible_after_shutdown": guards.get("usage_remains_visible_after_shutdown") is True,
+            "owner_approval_required_for_reenable": True,
+            "secret_exposed": False,
+        },
+        "public_charging_allowed": False,
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def _merchant_safe_incident_runbook(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    cards = _merchant_safe_status_items(source.get("cards"), allowed_keys=_MERCHANT_INCIDENT_CARD_KEYS)
+    ready_count, total_count, blocked_count = _merchant_safe_item_counts(cards)
+    return {
+        "contract_version": (
+            "2026-07-01-billing-incident-runbook-v1"
+            if source.get("contract_version") == "2026-07-01-billing-incident-runbook-v1"
+            else ""
+        ),
+        "cards": cards,
+        "ready_count": ready_count,
+        "total_count": total_count,
+        "blocked_count": blocked_count,
+        "refund_or_dispute_cannot_be_frontend_executed": True,
+        "history_and_audit_remain_visible": True,
+        "public_charging_allowed": False,
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def _merchant_safe_trust_packet(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    cards = _merchant_safe_status_items(source.get("cards"), allowed_keys=_MERCHANT_TRUST_CARD_KEYS)
+    ready_count, total_count, blocked_count = _merchant_safe_item_counts(cards)
+    return {
+        "contract_version": (
+            "2026-07-01-customer-billing-trust-packet-v1"
+            if source.get("contract_version") == "2026-07-01-customer-billing-trust-packet-v1"
+            else ""
+        ),
+        "cards": cards,
+        "ready_count": ready_count,
+        "total_count": total_count,
+        "blocked_count": blocked_count,
+        "next_step": next((item["key"] for item in cards if item["status"] != "ready"), ""),
+        "support_refund_links_visible": source.get("support_refund_links_visible") is True,
+        "entitlement_recovery_does_not_repeat_ebay_oauth": True,
+        "ready_for_paid_customer_display": False,
+        "public_charging_allowed": False,
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
+def _public_safe_billing_summary(value: Any) -> dict[str, Any]:
+    billing = value if isinstance(value, dict) else {}
+    domestic = billing.get("domestic_payment") if isinstance(billing.get("domestic_payment"), dict) else {}
+    launch_path = billing.get("merchant_launch_path") if isinstance(billing.get("merchant_launch_path"), dict) else {}
+    configured_count = billing.get("configured_component_count")
+    required_count = billing.get("required_component_count")
+    verified_count = billing.get("verified_paid_order_count")
+    payment_statuses = {
+        "payment_status_unavailable",
+        "configuration_in_progress",
+        "backend_safety_controls_in_progress",
+        "provider_connection_in_progress",
+        "production_environment_pending",
+        "refund_controls_pending",
+        "controlled_acceptance_pending",
+        "controlled_acceptance_proven_public_charging_closed",
+    }
+    domestic_statuses = {
+        "unavailable",
+        "configuration_in_progress",
+        "backend_safety_controls_in_progress",
+        "provider_connection_in_progress",
+        "production_environment_pending",
+        "refund_controls_pending",
+        "controlled_acceptance_pending",
+        "controlled_acceptance_proven",
+    }
+    status_contracts = {
+        "payment_status_unavailable": ("unavailable", "merchant_payment_status_unavailable", False, False),
+        "configuration_in_progress": (
+            "configuration_in_progress",
+            "merchant_payment_provider_configuration_incomplete",
+            False,
+            False,
+        ),
+        "backend_safety_controls_in_progress": (
+            "backend_safety_controls_in_progress",
+            "merchant_payment_backend_safety_controls_incomplete",
+            False,
+            True,
+        ),
+        "provider_connection_in_progress": (
+            "provider_connection_in_progress",
+            "merchant_payment_provider_connection_not_ready",
+            False,
+            False,
+        ),
+        "production_environment_pending": (
+            "production_environment_pending",
+            "merchant_payment_production_environment_required",
+            False,
+            True,
+        ),
+        "refund_controls_pending": (
+            "refund_controls_pending",
+            "merchant_payment_refund_not_ready",
+            False,
+            True,
+        ),
+        "controlled_acceptance_pending": (
+            "controlled_acceptance_pending",
+            "merchant_payment_controlled_acceptance_not_proven",
+            False,
+            True,
+        ),
+        "controlled_acceptance_proven_public_charging_closed": (
+            "controlled_acceptance_proven",
+            "merchant_payment_public_cutover_not_approved",
+            True,
+            True,
+        ),
+    }
+    counts_valid = (
+        type(configured_count) is int
+        and type(required_count) is int
+        and type(verified_count) is int
+        and configured_count >= 0
+        and required_count == 9
+        and configured_count <= required_count
+        and verified_count >= 0
+        and type(domestic.get("configured_component_count")) is int
+        and domestic.get("configured_component_count") == configured_count
+        and type(domestic.get("required_component_count")) is int
+        and domestic.get("required_component_count") == required_count
+        and type(domestic.get("verified_paid_order_count")) is int
+        and domestic.get("verified_paid_order_count") == verified_count
+        and type(domestic.get("controlled_acceptance_proven")) is bool
+        and domestic.get("controlled_acceptance_proven") is (verified_count > 0)
+    )
+    count_semantics_valid = counts_valid and (
+        (
+            billing.get("payment_path_status") == "configuration_in_progress"
+            and configured_count < required_count
+        )
+        or (
+            billing.get("payment_path_status") == "payment_status_unavailable"
+            and configured_count == 0
+            and verified_count == 0
+        )
+        or (
+            billing.get("payment_path_status")
+            not in {"configuration_in_progress", "payment_status_unavailable"}
+            and configured_count == required_count
+        )
+    )
+    safety_valid = all(
+        billing.get(key) is False
+        for key in (
+            "billing_ready_for_paid_launch",
+            "public_charging_allowed",
+            "charge_now_allowed",
+            "triggers_real_charge",
+            "triggers_real_refund",
+            "calls_external_payment_api",
+            "real_platform_writes_enabled",
+            "frontend_gets_payment_secret",
+            "frontend_can_grant_quota",
+            "secret_exposed",
+        )
+    ) and all(
+        domestic.get(key) is False
+        for key in (
+            "public_charging_allowed",
+            "charge_now_allowed",
+            "triggers_real_charge",
+            "triggers_real_refund",
+            "calls_external_payment_api",
+            "frontend_gets_payment_secret",
+            "secret_exposed",
+        )
+    )
+    expected_status_contract = status_contracts.get(billing.get("payment_path_status"))
+    core_valid = all(
+        (
+            billing.get("provider") == "wechat_pay_native",
+            billing.get("checkout_mode") == "native_qr",
+            billing.get("billing_mode") == "one_time_30_day_plan",
+            domestic.get("provider") == "wechat_pay_native",
+            domestic.get("checkout_mode") == "native_qr",
+            domestic.get("billing_mode") == "one_time_30_day_plan",
+            type(billing.get("provider_configured")) is bool,
+            type(billing.get("mainland_payment_ready_for_owner_approval")) is bool,
+            type(billing.get("billing_ready_for_private_beta")) is bool,
+            type(billing.get("quota_enforcement_enabled")) is bool,
+            billing.get("payment_path_status") in payment_statuses,
+            domestic.get("status") in domestic_statuses,
+            expected_status_contract is not None,
+            expected_status_contract is not None
+            and domestic.get("status") == expected_status_contract[0],
+            expected_status_contract is not None
+            and billing.get("next_paid_launch_blocker") == expected_status_contract[1],
+            expected_status_contract is not None
+            and billing.get("mainland_payment_ready_for_owner_approval") is expected_status_contract[2],
+            expected_status_contract is not None
+            and billing.get("provider_configured") is expected_status_contract[3],
+            count_semantics_valid,
+            expected_status_contract is not None
+            and (
+                billing.get("payment_path_status") != "controlled_acceptance_pending"
+                or verified_count == 0
+            ),
+            expected_status_contract is not None
+            and (
+                billing.get("payment_path_status") != "controlled_acceptance_proven_public_charging_closed"
+                or verified_count > 0
+            ),
+            counts_valid,
+            safety_valid,
+        )
+    )
+    private_beta_path = all(
+        (
+            launch_path.get("contract_version") == "2026-07-03-merchant-billing-launch-path-v1",
+            launch_path.get("current_stage") == "invited_beta_no_real_charge",
+            billing.get("billing_ready_for_private_beta") is True,
+        )
+    )
+    mainland_path = all(
+        (
+            launch_path.get("contract_version") == "2026-07-27-merchant-mainland-payment-path-v1",
+            launch_path.get("current_stage") in payment_statuses,
+        )
+    )
+    launch_path_valid = (private_beta_path or mainland_path) and all(
+        launch_path.get(key) is expected
+        for key, expected in {
+            "public_paid_launch_allowed": False,
+            "charge_now_allowed": False,
+            "triggers_real_charge": False,
+            "backend_confirmation_required_before_entitlement": True,
+            "frontend_can_grant_entitlement": False,
+            "frontend_can_grant_quota": False,
+            "secret_exposed": False,
+        }.items()
+    )
+    if not core_valid:
+        configured_count = 0
+        required_count = 0
+        verified_count = 0
+        payment_status = "payment_status_unavailable"
+        domestic_status = "unavailable"
+        next_blocker = "merchant_payment_status_unavailable"
+        owner_ready = False
+        provider_configured = False
+    else:
+        payment_status = billing["payment_path_status"]
+        domestic_status = domestic["status"]
+        next_blocker = billing["next_paid_launch_blocker"]
+        owner_ready = billing.get("mainland_payment_ready_for_owner_approval") is True
+        provider_configured = billing.get("provider_configured") is True
+    safe_stage = (
+        "invited_beta_no_real_charge"
+        if launch_path_valid and private_beta_path
+        else payment_status
+    )
+    safe_path_contract = (
+        "2026-07-03-merchant-billing-launch-path-v1"
+        if launch_path_valid and private_beta_path
+        else "2026-07-27-merchant-mainland-payment-path-v1"
+    )
+    return {
+        "provider": "wechat_pay_native",
+        "checkout_mode": "native_qr",
+        "billing_mode": "one_time_30_day_plan",
+        "provider_configured": provider_configured,
+        "payment_path_status": payment_status,
+        "mainland_payment_ready_for_owner_approval": owner_ready,
+        "billing_ready_for_private_beta": billing.get("billing_ready_for_private_beta") is True,
+        "billing_ready_for_paid_launch": False,
+        "configured_component_count": configured_count,
+        "required_component_count": required_count,
+        "verified_paid_order_count": verified_count,
+        "quota_enforcement_enabled": billing.get("quota_enforcement_enabled") is True,
+        "paid_launch_blocker_count": 1,
+        "next_paid_launch_blocker": next_blocker,
+        "merchant_launch_path": {
+            "contract_version": safe_path_contract,
+            "current_stage": safe_stage,
+            "current_charge_status": "no_real_charge_now",
+            "public_paid_launch_allowed": False,
+            "charge_now_allowed": False,
+            "triggers_real_charge": False,
+            "backend_confirmation_required_before_entitlement": True,
+            "frontend_can_grant_entitlement": False,
+            "frontend_can_grant_quota": False,
+            "quota_grant_source": "backend_subscription_state",
+            "secret_exposed": False,
+        },
+        "domestic_payment": {
+            "provider": "wechat_pay_native",
+            "checkout_mode": "native_qr",
+            "billing_mode": "one_time_30_day_plan",
+            "status": domestic_status,
+            "configured_component_count": configured_count,
+            "required_component_count": required_count,
+            "verified_paid_order_count": verified_count,
+            "public_charging_allowed": False,
+            "charge_now_allowed": False,
+            "triggers_real_charge": False,
+            "triggers_real_refund": False,
+            "calls_external_payment_api": False,
+            "frontend_gets_payment_secret": False,
+            "secret_exposed": False,
+        },
+        "public_charging_allowed": False,
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "triggers_real_refund": False,
+        "calls_external_payment_api": False,
+        "real_platform_writes_enabled": False,
+        "frontend_gets_payment_secret": False,
+        "frontend_can_grant_quota": False,
+        "secret_exposed": False,
+    }
+
+
 class SaaSBackendHandler(BaseHTTPRequestHandler):
     repository: SaaSRepository
     sessions: SessionManager
@@ -423,6 +1165,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
     auth_rate_limit_buckets: dict[str, list[float]] = {}
     expensive_api_rate_limit_lock = threading.Lock()
     expensive_api_rate_limit_buckets: dict[str, list[float]] = {}
+    platform_trial_activation_rate_limit_lock = threading.Lock()
+    platform_trial_activation_rate_limit_buckets: dict[str, list[float]] = {}
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         self.send_response(HTTPStatus.NO_CONTENT)
@@ -501,6 +1245,17 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         if path.startswith("auth/qr-login"):
             self._send_error(HTTPStatus.NOT_FOUND, "QR login is not an active Jiejing login path")
+            return
+
+        if path == "auth/challenge-config":
+            self._send_json(
+                {
+                    "registration_challenge": public_registration_challenge_config(
+                        environment=self.settings.environment
+                    ),
+                    "secret_exposed": False,
+                }
+            )
             return
 
         if len(parts) == 2 and parts[0] == "platforms":
@@ -751,8 +1506,118 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._send_json({"billing_checkout": build_billing_checkout_contract()})
             return
 
+        if path == "owner/operations-overview":
+            if not self._require_platform_internal_admin(identity, "operations overview"):
+                return
+            try:
+                period_days = int(query.get("period_days", ["30"])[0])
+            except (TypeError, ValueError):
+                period_days = 30
+            self._send_json(
+                {"operations_overview": self.repository.platform_operations_overview(period_days=period_days)}
+            )
+            return
+
+        if len(parts) == 3 and parts[0] == "owner" and parts[1] == "operations":
+            if not self._require_platform_internal_admin(identity, "operations detail"):
+                return
+            try:
+                period_days = int(query.get("period_days", ["30"])[0])
+                limit = int(query.get("limit", ["25"])[0])
+                detail = self.repository.platform_operations_detail(
+                    section=parts[2],
+                    period_days=period_days,
+                    cursor=query.get("cursor", [""])[0],
+                    limit=limit,
+                    status=query.get("status", [""])[0],
+                    category=query.get("category", [""])[0],
+                    plan=query.get("plan", [""])[0],
+                    module=query.get("module", [""])[0],
+                    event=query.get("event", [""])[0],
+                    result=query.get("result", [""])[0],
+                )
+            except ValueError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            self._send_json({"operations_detail": detail})
+            return
+
+        if path == "billing/domestic/contract":
+            contract = build_wechat_pay_native_contract()
+            acceptance = self.repository.domestic_payment_acceptance_evidence()
+            self._send_json(
+                {
+                    "domestic_billing": {
+                        "provider": contract["provider"],
+                        "checkout_mode": contract["checkout_mode"],
+                        "billing_mode": contract["billing_mode"],
+                        "status": (
+                            "available"
+                            if contract["real_checkout_ready"]
+                            else "controlled_acceptance_proven"
+                            if acceptance.get("controlled_acceptance_proven")
+                            else "not_open"
+                        ),
+                        "rehearsal_order_supported": contract["rehearsal_order_supported"],
+                        "real_checkout_ready": contract["real_checkout_ready"],
+                        "charge_now_allowed": contract["charge_now_allowed"],
+                        "controlled_acceptance_proven": bool(acceptance.get("controlled_acceptance_proven")),
+                        "verified_paid_order_count": int(acceptance.get("verified_paid_order_count") or 0),
+                        "frontend_gets_payment_secret": False,
+                        "secret_exposed": False,
+                    }
+                }
+            )
+            return
+
+        if path == "billing/domestic/orders":
+            orders = self.repository.list_domestic_billing_orders(
+                company_id=identity["company_id"],
+                limit=_query_limit(query, default=20, maximum=100) or 20,
+            )
+            self._send_json(
+                {
+                    "domestic_billing_orders": [merchant_domestic_billing_order(order) for order in orders],
+                    "secret_exposed": False,
+                }
+            )
+            return
+
+        if path == "billing/domestic/operations":
+            if not self._require_permission(identity, "manage_billing"):
+                return
+            self._send_json(
+                {
+                    "domestic_billing_operations": build_domestic_billing_operations_snapshot(
+                        self.repository,
+                        company_id=identity["company_id"],
+                    )
+                }
+            )
+            return
+
+        if len(parts) == 4 and parts[:3] == ["billing", "domestic", "orders"]:
+            order = self.repository.get_domestic_billing_order(company_id=identity["company_id"], order_id=parts[3])
+            if not order:
+                self._send_error(HTTPStatus.NOT_FOUND, "domestic billing order not found")
+                return
+            self._send_json({"domestic_billing_order": merchant_domestic_billing_order(order), "secret_exposed": False})
+            return
+
         if path == "billing/usage":
             self._send_json({"billing_usage": build_billing_usage(self.settings, self.repository, company_id=identity["company_id"])})
+            return
+
+        if path == "billing/media-credits":
+            self._send_json(
+                {
+                    "media_credits": build_media_credit_summary(
+                        self.repository,
+                        company_id=identity["company_id"],
+                        limit=_query_limit(query, default=30, maximum=100) or 30,
+                    )
+                }
+            )
             return
 
         if path == "billing/manual-beta/orders":
@@ -1211,6 +2076,30 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         parts = [unquote(part) for part in path.split("/")] if path else []
 
+        if path == "analytics/events":
+            body = self._read_json_body()
+            if not self._check_public_analytics_rate_limit():
+                return
+            try:
+                event = sanitize_analytics_event(body)
+                if not event.get("event_id_hash"):
+                    raise ValueError("analytics event id is required")
+                self.repository.record_platform_analytics_event(**event)
+            except ValueError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            self._send_json(
+                {
+                    "accepted": True,
+                    "raw_ip_stored": False,
+                    "user_agent_stored": False,
+                    "raw_url_stored": False,
+                    "secret_exposed": False,
+                },
+                status=HTTPStatus.ACCEPTED,
+            )
+            return
+
         if path.startswith("auth/qr-login"):
             self._send_error(HTTPStatus.NOT_FOUND, "QR login is not an active Jiejing login path")
             return
@@ -1284,24 +2173,84 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     company_id=user["default_company_id"],
                     email=user["email"],
                 )
-                try:
-                    billing_trial = apply_test_billing_event(
-                        self.repository,
-                        company_id=user["default_company_id"],
-                        user_id=user["user_id"],
-                        plan_key=str(body.get("plan_key") or "starter"),
-                        action="activate",
-                    )
-                except Exception as exc:  # pragma: no cover - defensive onboarding guardrail
+                requested_plan = str(body.get("plan_key") or "free").strip().lower()
+                if requested_plan == "free":
                     billing_trial = {
-                        "ok": False,
-                        "status": "billing_trial_activation_skipped",
-                        "reason": str(exc.__class__.__name__),
+                        "ok": True,
+                        "status": "free_plan_active",
+                        "plan_key": "free",
                         "creates_real_checkout_session": False,
                         "calls_stripe_api": False,
                         "triggers_real_charge": False,
                         "secret_exposed": False,
                     }
+                else:
+                    try:
+                        billing_trial = apply_test_billing_event(
+                            self.repository,
+                            company_id=user["default_company_id"],
+                            user_id=user["user_id"],
+                            plan_key=requested_plan,
+                            action="activate",
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive onboarding guardrail
+                        billing_trial = {
+                            "ok": False,
+                            "status": "billing_trial_activation_skipped",
+                            "reason": str(exc.__class__.__name__),
+                            "creates_real_checkout_session": False,
+                            "calls_stripe_api": False,
+                            "triggers_real_charge": False,
+                            "secret_exposed": False,
+                        }
+                challenge_verification = verify_registration_challenge(
+                    body.get("trial_activation_challenge")
+                    if isinstance(body.get("trial_activation_challenge"), dict)
+                    else None,
+                    environment=self.settings.environment,
+                    remote_ip=self._client_ip_for_rate_limit(),
+                )
+                platform_trial_activation = self._platform_trial_activation_for_registration(
+                    user=user,
+                    challenge_verification=challenge_verification,
+                )
+                if platform_trial_activation.get("platform_trial_allowed") is True:
+                    media_welcome = self.repository.apply_media_credit_operation(
+                        company_id=user["default_company_id"],
+                        user_id=user["user_id"],
+                        operation_type="grant",
+                        points=300,
+                        idempotency_key="account-welcome-media-points-v1",
+                        reference_type="onboarding",
+                        reference_id="account_welcome",
+                        details={"reason": "new_account_product_trial"},
+                    )
+                else:
+                    media_welcome = {
+                        "status": "platform_trial_activation_required",
+                        "account": self.repository.get_media_credit_account(company_id=user["default_company_id"]),
+                        "points_granted": 0,
+                        "merchant_byok_unaffected": True,
+                        "triggers_real_charge": False,
+                        "secret_exposed": False,
+                    }
+                analytics_input = body.get("analytics") if isinstance(body.get("analytics"), dict) else {}
+                try:
+                    signup_event = sanitize_analytics_event(
+                        {
+                            **analytics_input,
+                            "event_key": "signup_completed",
+                            "page_key": "register",
+                            "event_id": analytics_input.get("event_id") or f"signup-completed:{user['user_id']}",
+                        }
+                    )
+                    self.repository.record_platform_analytics_event(
+                        **signup_event,
+                        company_id=user["default_company_id"],
+                        user_id=user["user_id"],
+                    )
+                except (TypeError, ValueError):
+                    pass
             except sqlite_unique_error() as exc:
                 self._send_error(HTTPStatus.CONFLICT, "account registration could not be completed")
                 return
@@ -1309,8 +2258,51 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
                 return
             self._send_json(
-                {"token": token, **record, "billing_trial": billing_trial, "secret_exposed": False},
+                {
+                    "token": token,
+                    **record,
+                    "billing_trial": billing_trial,
+                    "media_welcome": media_welcome,
+                    "platform_trial_activation": platform_trial_activation,
+                    "secret_exposed": False,
+                },
                 status=HTTPStatus.CREATED,
+                headers=[("set-cookie", self._session_cookie_header(token))],
+            )
+            return
+
+        if path == "owner/auth/login":
+            body = self._read_json_body()
+            if not self._check_auth_rate_limit("auth/login", body):
+                return
+            try:
+                user = self.repository.authenticate_user(
+                    email=str(body.get("email") or ""),
+                    password=str(body.get("password") or ""),
+                )
+            except ValueError as exc:
+                self._send_error(HTTPStatus.UNAUTHORIZED, str(exc))
+                return
+            preflight_identity = {
+                "user_id": user["user_id"],
+                "company_id": user["default_company_id"],
+                "email": user["email"],
+            }
+            if not self._is_platform_internal_admin(preflight_identity):
+                self._send_error(HTTPStatus.FORBIDDEN, "operations console is platform-internal admin only")
+                return
+            token = self._issue_session_token(
+                user_id=user["user_id"],
+                company_id=user["default_company_id"],
+                email=user["email"],
+            )
+            self._send_json(
+                {
+                    "ok": True,
+                    "platform_internal_admin": True,
+                    "token_returned_to_frontend": False,
+                    "secret_exposed": False,
+                },
                 headers=[("set-cookie", self._session_cookie_header(token))],
             )
             return
@@ -1412,6 +2404,64 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._send_json({"billing_webhook": result}, status=status)
             return
 
+        if path == "billing/domestic/wechat-pay/notify":
+            if not self._check_expensive_api_rate_limit(method="POST", path=path):
+                return
+            content_type = str(self.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+            if content_type != "application/json":
+                self._send_json({"code": "FAIL", "message": "invalid request"}, status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+                return
+            try:
+                length = int(self.headers.get("content-length") or "0")
+            except (TypeError, ValueError):
+                length = 0
+            if length <= 0 or length > MAX_JSON_BODY_BYTES:
+                status = HTTPStatus.REQUEST_ENTITY_TOO_LARGE if length > MAX_JSON_BODY_BYTES else HTTPStatus.BAD_REQUEST
+                self._send_json({"code": "FAIL", "message": "invalid request"}, status=status)
+                return
+            result = process_wechat_pay_notification_from_env(
+                self.repository,
+                raw_body=self.rfile.read(length),
+                headers=dict(self.headers.items()),
+            )
+            if result.get("ok"):
+                self._send_json({"code": "SUCCESS", "message": "成功", "secret_exposed": False})
+            else:
+                self._send_json(
+                    {"code": "FAIL", "message": "payment notification rejected", "secret_exposed": False},
+                    status=HTTPStatus(int(result.get("http_status") or 400)),
+                )
+            return
+
+        if path == "billing/domestic/wechat-pay/refund-notify":
+            if not self._check_expensive_api_rate_limit(method="POST", path=path):
+                return
+            content_type = str(self.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+            if content_type != "application/json":
+                self._send_json({"code": "FAIL", "message": "invalid request"}, status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+                return
+            try:
+                length = int(self.headers.get("content-length") or "0")
+            except (TypeError, ValueError):
+                length = 0
+            if length <= 0 or length > MAX_JSON_BODY_BYTES:
+                status = HTTPStatus.REQUEST_ENTITY_TOO_LARGE if length > MAX_JSON_BODY_BYTES else HTTPStatus.BAD_REQUEST
+                self._send_json({"code": "FAIL", "message": "invalid request"}, status=status)
+                return
+            result = process_wechat_pay_refund_notification_from_env(
+                self.repository,
+                raw_body=self.rfile.read(length),
+                headers=dict(self.headers.items()),
+            )
+            if result.get("ok"):
+                self._send_json({"code": "SUCCESS", "message": "成功", "secret_exposed": False})
+            else:
+                self._send_json(
+                    {"code": "FAIL", "message": "refund notification rejected", "secret_exposed": False},
+                    status=HTTPStatus(int(result.get("http_status") or 400)),
+                )
+            return
+
         if path == "webhooks/ebay/marketplace-account-deletion":
             if not self._check_expensive_api_rate_limit(method="POST", path=path):
                 return
@@ -1492,6 +2542,62 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         identity = self._require_auth()
         if identity is None:
+            return
+
+        if path == "owner/operations-reliability-alerts/reconcile":
+            if not self._require_platform_internal_admin(identity, "operations reliability alerts"):
+                return
+            monitoring_snapshot = self.repository.provider_monitoring_snapshot(
+                reliability_window_minutes=30,
+                cost_window_hours=24,
+            )
+            reliability = monitoring_snapshot.get("reliability")
+            reliability = reliability if isinstance(reliability, dict) else {}
+            alerts = reliability.get("alerts")
+            alerts = alerts if isinstance(alerts, dict) else {}
+            lifecycle = self.repository.reconcile_provider_reliability_alerts(
+                alert_summary=alerts,
+                actor_user_id=str(identity.get("user_id") or ""),
+            )
+            self._send_json(
+                {
+                    "reliability_alert_lifecycle": lifecycle,
+                    "reliability_evaluation_window_minutes": int(
+                        monitoring_snapshot.get("reliability_window_minutes") or 30
+                    ),
+                    "operations_overview": self.repository.platform_operations_overview(),
+                    "real_platform_writes_enabled": False,
+                    "external_provider_action_triggered": False,
+                    "secret_exposed": False,
+                }
+            )
+            return
+
+        if path == "owner/operations-reliability-alerts/acknowledge":
+            if not self._require_platform_internal_admin(identity, "operations reliability alerts"):
+                return
+            body = self._read_json_body()
+            try:
+                acknowledgement = self.repository.acknowledge_provider_reliability_alert(
+                    scope=str(body.get("scope") or ""),
+                    actor_user_id=str(identity.get("user_id") or ""),
+                    action_key=str(body.get("action_key") or ""),
+                )
+            except ValueError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            if acknowledgement.get("ok") is not True:
+                self._send_error(HTTPStatus.CONFLICT, "reliability alert is not open")
+                return
+            self._send_json(
+                {
+                    "reliability_alert_acknowledgement": acknowledgement,
+                    "operations_overview": self.repository.platform_operations_overview(),
+                    "real_platform_writes_enabled": False,
+                    "external_provider_action_triggered": False,
+                    "secret_exposed": False,
+                }
+            )
             return
 
         if len(parts) == 3 and parts[0] == "stores" and parts[2] == "media-source-assets":
@@ -1704,6 +2810,164 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if path == "billing/domestic/orders":
+            if not self._require_permission(identity, "manage_billing"):
+                return
+            body = self._read_json_body()
+            payment_contract = build_wechat_pay_native_contract()
+            live_checkout = payment_contract.get("charge_now_allowed") is True
+            result = create_domestic_billing_order(
+                self.repository,
+                company_id=identity["company_id"],
+                user_id=identity["user_id"],
+                provider=str(body.get("provider") or "wechat_pay_native"),
+                plan_key=str(body.get("plan_key") or "starter"),
+                idempotency_key=str(self.headers.get("idempotency-key") or ""),
+                rehearsal=not live_checkout,
+            )
+            if result.get("ok") and live_checkout:
+                result = open_domestic_billing_checkout(
+                    self.repository,
+                    company_id=identity["company_id"],
+                    order_id=str(result.get("order_id") or ""),
+                )
+            if result.get("ok") is True:
+                result = merchant_domestic_billing_order(result, include_checkout=live_checkout)
+            self._send_json(
+                {"domestic_billing_order": result},
+                status=(
+                    HTTPStatus.OK
+                    if result.get("ok") and result.get("duplicate_request")
+                    else HTTPStatus.CREATED
+                    if result.get("ok")
+                    else HTTPStatus(int(result.get("http_status") or 400))
+                ),
+            )
+            return
+
+        if path == "billing/domestic/reconcile":
+            if not self._require_permission(identity, "manage_billing"):
+                return
+            if not self._check_domestic_reconciliation_rate_limit(identity):
+                return
+            body = self._read_json_body()
+            order_ids = body.get("order_ids") if isinstance(body.get("order_ids"), list) else []
+            result = reconcile_domestic_billing_orders(
+                self.repository,
+                company_id=identity["company_id"],
+                order_ids=order_ids,
+            )
+            self._send_json(
+                {"domestic_billing_reconciliation": result},
+                status=HTTPStatus.OK if result.get("ok") else HTTPStatus(int(result.get("http_status") or 400)),
+            )
+            return
+
+        if len(parts) == 5 and parts[:3] == ["billing", "domestic", "orders"] and parts[4] == "checkout":
+            if not self._require_permission(identity, "manage_billing"):
+                return
+            payment_contract = build_wechat_pay_native_contract()
+            if payment_contract.get("charge_now_allowed") is not True:
+                self._send_json(
+                    {"domestic_billing_order": {"ok": False, "status": "blocked", "reason": "domestic_real_checkout_not_enabled", "secret_exposed": False}},
+                    status=HTTPStatus.CONFLICT,
+                )
+                return
+            result = open_domestic_billing_checkout(
+                self.repository,
+                company_id=identity["company_id"],
+                order_id=parts[3],
+            )
+            safe_result = merchant_domestic_billing_order(result, include_checkout=True) if result.get("ok") is True else result
+            self._send_json(
+                {"domestic_billing_order": safe_result},
+                status=HTTPStatus.OK if result.get("ok") else HTTPStatus(int(result.get("http_status") or 400)),
+            )
+            return
+
+        if len(parts) == 5 and parts[:3] == ["billing", "domestic", "orders"] and parts[4] == "close":
+            if not self._require_permission(identity, "manage_billing"):
+                return
+            result = close_domestic_billing_order(
+                self.repository,
+                company_id=identity["company_id"],
+                user_id=identity["user_id"],
+                order_id=parts[3],
+            )
+            self._send_json(
+                {"domestic_billing_order_close": result},
+                status=HTTPStatus.OK if result.get("ok") else HTTPStatus(int(result.get("http_status") or 400)),
+            )
+            return
+
+        if len(parts) == 5 and parts[:3] == ["billing", "domestic", "orders"] and parts[4] == "query":
+            if not self._require_permission(identity, "manage_billing"):
+                return
+            if not self._check_domestic_reconciliation_rate_limit(identity):
+                return
+            result = query_and_reconcile_domestic_billing_order(
+                self.repository,
+                company_id=identity["company_id"],
+                order_id=parts[3],
+            )
+            self._send_json(
+                {"domestic_billing_order_query": result},
+                status=HTTPStatus.OK if result.get("ok") else HTTPStatus(int(result.get("http_status") or 400)),
+            )
+            return
+
+        if len(parts) == 5 and parts[:3] == ["billing", "domestic", "orders"] and parts[4] == "refund-request":
+            if not self._require_permission(identity, "manage_billing"):
+                return
+            body = self._read_json_body()
+            result = request_domestic_billing_refund_review(
+                self.repository,
+                company_id=identity["company_id"],
+                user_id=identity["user_id"],
+                order_id=parts[3],
+                reason=str(body.get("reason") or ""),
+            )
+            self._send_json(
+                {"domestic_billing_refund_request": result},
+                status=HTTPStatus.ACCEPTED if result.get("ok") else HTTPStatus(int(result.get("http_status") or 400)),
+            )
+            return
+
+        if len(parts) == 5 and parts[:3] == ["billing", "domestic", "orders"] and parts[4] == "refund-execute":
+            if not self._require_permission(identity, "manage_billing"):
+                return
+            if not self._require_permission(identity, "approve_high_risk"):
+                return
+            if not self._check_domestic_reconciliation_rate_limit(identity):
+                return
+            result = execute_approved_domestic_billing_refund(
+                self.repository,
+                company_id=identity["company_id"],
+                user_id=identity["user_id"],
+                order_id=parts[3],
+            )
+            self._send_json(
+                {"domestic_billing_refund_execution": result},
+                status=HTTPStatus.ACCEPTED if result.get("ok") else HTTPStatus(int(result.get("http_status") or 400)),
+            )
+            return
+
+        if len(parts) == 5 and parts[:3] == ["billing", "domestic", "orders"] and parts[4] == "refund-query":
+            if not self._require_permission(identity, "manage_billing"):
+                return
+            if not self._check_domestic_reconciliation_rate_limit(identity):
+                return
+            result = query_and_reconcile_domestic_billing_refund(
+                self.repository,
+                company_id=identity["company_id"],
+                order_id=parts[3],
+            )
+            self._send_json(
+                {"domestic_billing_refund_query": result},
+                status=HTTPStatus.OK if result.get("ok") else HTTPStatus(int(result.get("http_status") or 400)),
+            )
+            return
+
         if path == "billing/manual-beta/orders":
             if not self._require_permission(identity, "manage_billing"):
                 return
@@ -1743,12 +3007,15 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if len(parts) == 3 and parts[0] == "stores" and parts[2] == "publish-confirmation":
+        if len(parts) == 3 and parts[0] == "stores" and parts[2] in {"publish-confirmation", "ebay-draft-confirmation"}:
             body = self._read_json_body()
             store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=parts[1])
             if not store:
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found")
                 return
+            draft_save_intake = parts[2] == "ebay-draft-confirmation"
+            action_type = "save_ebay_listing_draft" if draft_save_intake else "publish_listing"
+            intake_source = "merchant_ebay_draft_save_intake" if draft_save_intake else "merchant_listing_publish_intake"
             latest_packets = self.repository.list_platform_data_packets(
                 company_id=identity["company_id"],
                 store_id=parts[1],
@@ -1779,25 +3046,25 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 body.get("product")
                 or publish_payload.get("listing", {}).get("title")
                 or publish_payload.get("listing", {}).get("sku")
-                or "Fresh eBay publish confirmation",
+                or ("Fresh eBay draft save confirmation" if draft_save_intake else "Fresh eBay publish confirmation"),
                 limit=120,
             )
             task = self.repository.create_task(
                 company_id=identity["company_id"],
                 store_id=parts[1],
                 user_id=identity["user_id"],
-                task_type="publish_confirmation_intake",
-                title=f"Publish confirmation intake · {task_title}",
+                task_type="ebay_draft_save_intake" if draft_save_intake else "publish_confirmation_intake",
+                title=(f"eBay draft save intake · {task_title}" if draft_save_intake else f"Publish confirmation intake · {task_title}"),
                 input_data={
                     "product": task_title,
-                    "source": "merchant_listing_publish_intake",
+                    "source": intake_source,
                     "packet_id": latest_packets[0].get("packet_id") if latest_packets else None,
                     "listing_project_identity": listing_project_identity,
                     "secret_exposed": False,
                 },
             )
             execution_request = ExecutionRequest(
-                action_type="publish_listing",
+                action_type=action_type,
                 task_id=task["task_id"],
                 user_id=identity["user_id"],
                 company_id=identity["company_id"],
@@ -1807,7 +3074,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 confirmation_id=None,
                 confirmed_by=None,
                 confirmed_at=None,
-                idempotency_key=str(body.get("idempotency_key") or f"publish-intake-{task['task_id']}"),
+                idempotency_key=str(
+                    body.get("idempotency_key")
+                    or (f"ebay-draft-intake-{task['task_id']}" if draft_save_intake else f"publish-intake-{task['task_id']}")
+                ),
             )
             preflight = ExecutionService(demo_mode=True).preflight(execution_request)
             latest_execution_results = self.repository.list_execution_results(company_id=identity["company_id"], limit=100)
@@ -1822,13 +3092,21 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 company_id=identity["company_id"],
                 store_id=parts[1],
                 task_id=task["task_id"],
-                runtime_run_id="merchant_publish_confirmation_intake",
-                action_type="publish_listing",
-                title=f"发布确认 · {task_title}",
+                runtime_run_id="merchant_ebay_draft_save_intake" if draft_save_intake else "merchant_publish_confirmation_intake",
+                action_type=action_type,
+                title=(f"保存到 eBay 草稿确认 · {task_title}" if draft_save_intake else f"发布确认 · {task_title}"),
                 item={
-                    "source": "merchant_listing_publish_intake",
-                    "reason": "商家从捷境 Listing 页面录入全新商品；真实发布必须先看发布体检报告，再由确认中心批准。",
-                    "expected_result": "通过发布体检后，后端执行服务才可用 eBay Inventory API 发布；失败会写入审计和平台规则记忆。",
+                    "source": intake_source,
+                    "reason": (
+                        "商家希望先把完整商品资料保存为 eBay 未发布草稿；这仍会写入卖家账号，必须由确认中心批准。"
+                        if draft_save_intake
+                        else "商家从捷境 Listing 页面录入全新商品；真实发布必须先看发布体检报告，再由确认中心批准。"
+                    ),
+                    "expected_result": (
+                        "后端只创建或更新 Inventory Item 和未发布 Offer，不调用 publishOffer，也不产生公开 Listing。"
+                        if draft_save_intake
+                        else "通过发布体检后，后端执行服务才可用 eBay Inventory API 发布；失败会写入审计和平台规则记忆。"
+                    ),
                     "publish_payload": publish_payload,
                     "publish_payload_summary": _publish_payload_summary(publish_payload),
                     "listing_project_identity": listing_project_identity,
@@ -1838,6 +3116,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "source_packet_id": latest_packets[0].get("packet_id") if latest_packets else None,
                     "high_risk": True,
                     "writes_to_ebay_after_approval": self.settings.effective_real_platform_writes_enabled,
+                    "creates_public_listing": False if draft_save_intake else self.settings.effective_real_platform_writes_enabled,
+                    "requires_publish_offer_call": False if draft_save_intake else self.settings.effective_real_platform_writes_enabled,
                     "frontend_gets_token": False,
                     "runtime_gets_token": False,
                 },
@@ -2798,8 +4078,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         if len(parts) == 4 and parts[0] == "stores" and parts[2] == "provider-jobs" and parts[3] == "queue":
             if not self._require_permission(identity, "create_task"):
                 return
-            if not self._require_quota(identity, "provider_job"):
-                return
             body = self._read_json_body()
             store_id = parts[1]
             store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
@@ -2816,9 +4094,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             raw_inputs = body.get("inputs") if isinstance(body.get("inputs"), dict) else {}
             safe_inputs = _redact_secret_like(raw_inputs)
             is_media_provider_job = provider_job_key in MEDIA_PROVIDER_JOB_KEYS
+            if not is_media_provider_job and not self._require_quota(identity, "provider_job"):
+                return
             if is_media_provider_job:
                 safe_inputs = _sanitize_media_source_inputs(safe_inputs)
             media_idempotency_key = ""
+            media_credit_state: dict[str, Any] | None = None
             if is_media_provider_job:
                 media_idempotency_key = _media_asset_idempotency_key(
                     store_id=store_id,
@@ -2853,6 +4134,44 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         status=HTTPStatus.ACCEPTED,
                     )
                     return
+                media_quote = estimate_media_points(safe_inputs)
+                media_credit_state = {
+                    "quote": media_quote,
+                    "enforcement_enabled": _env_bool("JIEJING_MEDIA_CREDIT_ENFORCEMENT_ENABLED"),
+                    "reservation": None,
+                    "provider_neutral": True,
+                    "secret_exposed": False,
+                }
+                if media_credit_state["enforcement_enabled"] and bool(safe_inputs.get("live_provider_requested")):
+                    try:
+                        media_credit_state["reservation"] = self.repository.apply_media_credit_operation(
+                            company_id=identity["company_id"],
+                            user_id=identity["user_id"],
+                            operation_type="reserve",
+                            points=int(media_quote["estimated_points"]),
+                            idempotency_key=f"{media_idempotency_key}:reserve:v1",
+                            reference_type="media_job",
+                            reference_id=media_idempotency_key,
+                            details={"quote": media_quote},
+                        )
+                    except ValueError as exc:
+                        if "insufficient" not in str(exc).lower():
+                            raise
+                        self._send_json(
+                            {
+                                "error": "素材点不足，当前任务没有进入生成队列。",
+                                "status": int(HTTPStatus.PAYMENT_REQUIRED),
+                                "media_credits": build_media_credit_summary(
+                                    self.repository,
+                                    company_id=identity["company_id"],
+                                ),
+                                "media_quote": media_quote,
+                                "triggers_real_charge": False,
+                                "secret_exposed": False,
+                            },
+                            status=HTTPStatus.PAYMENT_REQUIRED,
+                        )
+                        return
             task = self.repository.create_task(
                 company_id=identity["company_id"],
                 store_id=store_id,
@@ -2866,6 +4185,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "inputs": safe_inputs,
                     "contract_version": catalog.get("contract_version"),
                     "media_asset_idempotency_key": media_idempotency_key,
+                    "media_credits": media_credit_state,
                     "real_platform_writes_enabled": False,
                 },
             )
@@ -2885,6 +4205,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "merchant_visible_provider_name": False,
                         "live_media_provider_call_allowed": False,
                         "spend_now_allowed": False,
+                        "media_credits": media_credit_state,
                         "secret_exposed": False,
                     },
                     status="pending",
@@ -2904,6 +4225,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "secret_ref": str(body.get("secret_ref") or ""),
                     "media_job_id": media_asset_job.get("media_job_id") if media_asset_job else "",
                     "idempotency_key": media_idempotency_key,
+                    "media_credits": media_credit_state,
                     "run_mode": body.get("run_mode") or "queued",
                     "live_provider_called": False,
                     "real_platform_writes_enabled": False,
@@ -2943,6 +4265,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "worker_result": worker_result,
                     "provider_job": worker_result.get("provider_job") if isinstance(worker_result, dict) else None,
                     "media_asset_job": media_asset_job,
+                    "media_credits": media_credit_state,
                     "idempotent_replay": False,
                     "real_platform_writes_enabled": False,
                     "secret_exposed": False,
@@ -3024,6 +4347,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             route_meta = ai_ceo_route_metadata(message)
             stream_requested = str((query.get("stream") or [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
             stream_started = False
+            last_stream_stage = ""
 
             def send_chat_payload(payload: dict[str, Any], status: HTTPStatus) -> None:
                 nonlocal stream_started
@@ -3042,22 +4366,31 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     }
                 )
 
-            def emit_text_delta(delta: str) -> None:
-                nonlocal stream_started
-                safe_delta = str(delta or "")
-                if not stream_requested or not safe_delta:
+            def emit_chat_stage(stage: str) -> None:
+                nonlocal stream_started, last_stream_stage
+                safe_stage = str(stage or "model").strip().lower()
+                if safe_stage not in {"sources", "model"}:
+                    safe_stage = "model"
+                if not stream_requested or safe_stage == last_stream_stage:
                     return
                 if not stream_started:
                     self._start_ndjson_stream()
                     stream_started = True
-                    self._send_ndjson_event(
-                        {
-                            "type": "accepted",
-                            "stage": "model",
-                            "route": route_meta.get("route") or "general_chat",
-                            "secret_exposed": False,
-                        }
-                    )
+                last_stream_stage = safe_stage
+                self._send_ndjson_event(
+                    {
+                        "type": "accepted",
+                        "stage": safe_stage,
+                        "route": route_meta.get("route") or "general_chat",
+                        "secret_exposed": False,
+                    }
+                )
+
+            def emit_text_delta(delta: str) -> None:
+                safe_delta = str(delta or "")
+                if not stream_requested or not safe_delta:
+                    return
+                emit_chat_stage("model")
                 self._send_ndjson_event({"type": "delta", "delta": safe_delta, "secret_exposed": False})
 
             command_response = None
@@ -3208,16 +4541,25 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 platform_trial_quota = self._platform_model_trial_quota(identity=identity)
                 model_secret_resolution["platform_trial_quota"] = platform_trial_quota
                 if not platform_trial_quota.get("allowed"):
+                    trial_blocker = str(
+                        platform_trial_quota.get("blocked_by") or "platform_default_model_trial_exhausted"
+                    )
+                    if trial_blocker == "platform_trial_activation_required":
+                        trial_answer = (
+                            "当前账号已注册，但捷境提供的 AI 试用尚未激活。"
+                            "你仍可在设置中连接自己的 DeepSeek 或 OpenAI，连接后不占用捷境试用额度。"
+                        )
+                    else:
+                        trial_answer = (
+                            "当前账号本月的捷境 AI 试用额度已用完。"
+                            "你可以在设置中连接自己的 DeepSeek 或 OpenAI，或升级套餐后继续使用。"
+                        )
                     send_chat_payload(
                         {
                             "ai_ceo_chat": {
                                 "status": "blocked_before_model_chat",
-                                "blocked_by": ["platform_default_model_trial_exhausted"],
-                                "answer": (
-                                    "当前账号的捷境托管 AI 试用额度已用完。"
-                                    "你可以在设置里的 AI 与素材绑定自己的 DeepSeek 或 OpenAI 连接，"
-                                    "也可以升级套餐后继续使用捷境托管 AI。"
-                                ),
+                                "blocked_by": [trial_blocker],
+                                "answer": trial_answer,
                                 **route_meta,
                                 "model_secret_resolution": {
                                     key: value
@@ -3241,13 +4583,14 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         status=HTTPStatus.PAYMENT_REQUIRED,
                     )
                     return
+            metered_model_client = MeteredModelClient(model_secret_resolution["model_client"])
             chat = run_ai_ceo_chat(
                 repository=self.repository,
                 company_id=identity["company_id"],
                 store_id=store_id,
                 user_id=identity["user_id"],
                 message=message,
-                model_client=model_secret_resolution["model_client"],
+                model_client=metered_model_client,
                 client_now=str(body.get("client_now") or ""),
                 client_timezone=str(body.get("client_timezone") or ""),
                 command=command_body,
@@ -3257,6 +4600,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     for key, value in model_secret_resolution.items()
                     if key not in {"model_client", "secret_value"}
                 },
+                on_stage=emit_chat_stage if stream_requested else None,
                 on_text_delta=emit_text_delta if stream_requested else None,
             )
             if command_body and chat.get("answer"):
@@ -3308,6 +4652,51 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "secret_exposed": False,
                 },
             )
+            model_usage = metered_model_client.usage_summary()
+            model_reliability = metered_model_client.reliability_summary()
+            if model_usage.get("request_count"):
+                usage_owner = (
+                    "merchant_account_byok"
+                    if model_secret_resolution.get("merchant_pays_provider_directly")
+                    else "jiejing_platform_trial"
+                    if model_secret_resolution.get("mode") == "platform_managed_default"
+                    else "unknown"
+                )
+                cost_measurement = model_cost_measurement(usage_owner=usage_owner, usage=model_usage)
+                try:
+                    self.repository.record_model_usage(
+                        company_id=identity["company_id"],
+                        user_id=identity["user_id"],
+                        task_id=task["task_id"],
+                        usage_owner=usage_owner,
+                        model_family=str(model_secret_resolution.get("provider_key") or "provider_neutral"),
+                        model_label=str(model_secret_resolution.get("model") or getattr(metered_model_client, "model", "")),
+                        request_count=int(model_usage.get("request_count") or 0),
+                        input_tokens=int(model_usage.get("input_tokens") or 0),
+                        output_tokens=int(model_usage.get("output_tokens") or 0),
+                        total_tokens=int(model_usage.get("total_tokens") or 0),
+                        cost_minor=int(cost_measurement.get("cost_minor") or 0),
+                        currency=str(cost_measurement.get("currency") or "CNY"),
+                        cost_status=str(cost_measurement.get("cost_status") or "unavailable"),
+                        idempotency_key=f"{task['task_id']}:model-usage:v1",
+                        details={
+                            "provider_reported_tokens": bool(model_usage.get("total_tokens")),
+                            "retry_calls_included": True,
+                            "reliability": model_reliability,
+                        },
+                    )
+                except Exception as exc:
+                    self.repository.write_audit(
+                        company_id=identity["company_id"],
+                        store_id=store_id,
+                        user_id=identity["user_id"],
+                        actor_type="system",
+                        action_type="operations.model_usage_metering.failed",
+                        target_type="task",
+                        target_id=task["task_id"],
+                        summary="Model answer was preserved but internal usage metering did not persist.",
+                        details={"error_type": exc.__class__.__name__, "secret_exposed": False},
+                    )
             self.repository.update_task_status(
                 task_id=task["task_id"],
                 company_id=identity["company_id"],
@@ -3630,13 +5019,49 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     status=HTTPStatus.ACCEPTED,
                 )
                 return
-            if not self._require_quota(identity, "provider_job"):
-                self.repository.release_media_rework_reservation(
-                    company_id=identity["company_id"],
-                    parent_media_job_id=original["media_job_id"],
-                    version=version,
-                )
-                return
+            media_quote = estimate_media_points(safe_inputs)
+            media_credit_state: dict[str, Any] = {
+                "quote": media_quote,
+                "enforcement_enabled": _env_bool("JIEJING_MEDIA_CREDIT_ENFORCEMENT_ENABLED"),
+                "reservation": None,
+                "provider_neutral": True,
+                "secret_exposed": False,
+            }
+            if media_credit_state["enforcement_enabled"] and bool(safe_inputs.get("live_provider_requested")):
+                try:
+                    media_credit_state["reservation"] = self.repository.apply_media_credit_operation(
+                        company_id=identity["company_id"],
+                        user_id=identity["user_id"],
+                        operation_type="reserve",
+                        points=int(media_quote["estimated_points"]),
+                        idempotency_key=f"{retry_key}:reserve:v1",
+                        reference_type="media_rework",
+                        reference_id=retry_key,
+                        details={"quote": media_quote, "parent_media_job_id": original["media_job_id"], "version": version},
+                    )
+                except ValueError as exc:
+                    self.repository.release_media_rework_reservation(
+                        company_id=identity["company_id"],
+                        parent_media_job_id=original["media_job_id"],
+                        version=version,
+                    )
+                    if "insufficient" not in str(exc).lower():
+                        raise
+                    self._send_json(
+                        {
+                            "error": "素材点不足，重做任务没有进入生成队列。",
+                            "status": int(HTTPStatus.PAYMENT_REQUIRED),
+                            "media_credits": build_media_credit_summary(
+                                self.repository,
+                                company_id=identity["company_id"],
+                            ),
+                            "media_quote": media_quote,
+                            "triggers_real_charge": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.PAYMENT_REQUIRED,
+                    )
+                    return
             task = self.repository.create_task(
                 company_id=identity["company_id"],
                 store_id=original["store_id"],
@@ -3650,6 +5075,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "inputs": safe_inputs,
                     "contract_version": catalog.get("contract_version"),
                     "media_asset_idempotency_key": retry_key,
+                    "media_credits": media_credit_state,
                     "real_platform_writes_enabled": False,
                 },
             )
@@ -3668,6 +5094,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "merchant_visible_provider_name": False,
                     "live_media_provider_call_allowed": False,
                     "spend_now_allowed": False,
+                    "media_credits": media_credit_state,
                     "secret_exposed": False,
                 },
                 status="pending",
@@ -3694,6 +5121,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "idempotency_key": retry_key,
                     "run_mode": body.get("run_mode") or "queued",
                     "live_provider_called": False,
+                    "media_credits": media_credit_state,
                     "real_platform_writes_enabled": False,
                 },
             )
@@ -3735,6 +5163,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "triggers_real_platform_write": False,
                         "secret_exposed": False,
                     },
+                    "media_credits": media_credit_state,
                     "real_platform_writes_enabled": False,
                     "secret_exposed": False,
                 },
@@ -3861,6 +5290,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if body.get("attach_public_search_market_signal") is not False:
                 public_search_handoff = build_public_search_market_handoff(
                     settings=self.settings,
+                    repository=self.repository,
                     company_id=identity["company_id"],
                     store=store,
                     user_id=identity["user_id"],
@@ -3906,6 +5336,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "provider_status": public_search_handoff.get("provider_status"),
                         "source_mode": public_search_handoff.get("source_mode"),
                         "result_count": public_search_handoff.get("result_count"),
+                        "telemetry": public_search_handoff.get("telemetry") or {},
+                        "metering_status": public_search_handoff.get("metering_status"),
                         "raw_provider_response_stored": False,
                         "secret_exposed": False,
                     },
@@ -4290,16 +5722,23 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 confirmed_at=confirmation["decided_at"],
                 idempotency_key=str(body.get("idempotency_key") or ""),
             )
-            if self.settings.effective_real_platform_writes_enabled and confirmation["action_type"] == "publish_listing":
+            live_ebay_write_actions = {"publish_listing", "save_ebay_listing_draft"}
+            if self.settings.effective_real_platform_writes_enabled and confirmation["action_type"] in live_ebay_write_actions:
                 boundary_result = ExecutionService(demo_mode=False).execute(execution_request).to_dict()
                 if boundary_result.get("status") == "ready_for_platform_adapter":
                     store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=confirmation["store_id"]) or {}
-                    write_result = EbayWriteHttpAdapter(self.settings).publish_listing(
-                        request=execution_request,
-                        preflight=boundary_result.get("audit", {}).get("preflight") if isinstance(boundary_result.get("audit"), dict) else {},
-                        connections=self.repository.list_connections(company_id=identity["company_id"], store_id=confirmation["store_id"]),
-                        secret_refs=self.repository.list_secret_refs(company_id=identity["company_id"], store_id=confirmation["store_id"]),
-                        marketplace_id=str(store.get("marketplace") or "EBAY_US"),
+                    adapter = EbayWriteHttpAdapter(self.settings)
+                    adapter_kwargs = {
+                        "request": execution_request,
+                        "preflight": boundary_result.get("audit", {}).get("preflight") if isinstance(boundary_result.get("audit"), dict) else {},
+                        "connections": self.repository.list_connections(company_id=identity["company_id"], store_id=confirmation["store_id"]),
+                        "secret_refs": self.repository.list_secret_refs(company_id=identity["company_id"], store_id=confirmation["store_id"]),
+                        "marketplace_id": str(store.get("marketplace") or "EBAY_US"),
+                    }
+                    write_result = (
+                        adapter.save_listing_draft(**adapter_kwargs)
+                        if confirmation["action_type"] == "save_ebay_listing_draft"
+                        else adapter.publish_listing(**adapter_kwargs)
                     )
                     write_result.setdefault("created_at", boundary_result.get("created_at"))
                     write_audit = write_result.get("audit") if isinstance(write_result.get("audit"), dict) else {}
@@ -4400,24 +5839,26 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         return str(morsel.value or "").strip() if morsel else ""
 
     def _session_cookie_header(self, token: str) -> str:
+        same_site = "Strict" if self._operations_console_cookie_context() else "Lax"
         parts = [
             f"{SESSION_COOKIE_NAME}={token}",
             "Path=/",
             f"Max-Age={int(getattr(self.sessions, 'ttl_seconds', 60 * 60 * 24 * 7))}",
             "HttpOnly",
-            "SameSite=Lax",
+            f"SameSite={same_site}",
         ]
         if self._secure_cookie_context():
             parts.append("Secure")
         return "; ".join(parts)
 
     def _expired_session_cookie_header(self) -> str:
+        same_site = "Strict" if self._operations_console_cookie_context() else "Lax"
         parts = [
             f"{SESSION_COOKIE_NAME}=",
             "Path=/",
             "Max-Age=0",
             "HttpOnly",
-            "SameSite=Lax",
+            f"SameSite={same_site}",
         ]
         if self._secure_cookie_context():
             parts.append("Secure")
@@ -4432,6 +5873,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return True
         host = str(self.headers.get("host") or "").lower()
         return host.endswith(".trycloudflare.com")
+
+    def _operations_console_cookie_context(self) -> bool:
+        host = str(self.headers.get("host") or "").split(":", 1)[0].strip().lower()
+        return host == "ops.jiejing.shop" or host.startswith("ops.") and host.endswith(".jiejing.shop")
 
     def _check_auth_rate_limit(self, action: str, body: dict[str, Any]) -> bool:
         client_ip = self._client_ip_for_rate_limit()
@@ -4457,6 +5902,33 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "error": "too many authentication attempts; please retry later",
                         "status": int(HTTPStatus.TOO_MANY_REQUESTS),
                         "retry_after_seconds": int(result.get("retry_after_seconds") or AUTH_RATE_LIMIT_WINDOW_SECONDS),
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.TOO_MANY_REQUESTS,
+                )
+                return False
+        return True
+
+    def _check_public_analytics_rate_limit(self) -> bool:
+        window_seconds = 60
+        checks = [
+            ("analytics:events:global", "global", _positive_int_env("JIEJING_ANALYTICS_RATE_LIMIT_GLOBAL_PER_MINUTE", 6000)),
+            ("analytics:events:ip", self._client_ip_for_rate_limit(), _positive_int_env("JIEJING_ANALYTICS_RATE_LIMIT_PER_IP_PER_MINUTE", 120)),
+        ]
+        for scope, subject, limit in checks:
+            result = self._consume_rate_limit(
+                scope=scope,
+                subject=subject,
+                limit=limit,
+                window_seconds=window_seconds,
+                local_buckets=self.expensive_api_rate_limit_buckets,
+                local_lock=self.expensive_api_rate_limit_lock,
+            )
+            if result.get("allowed") is not True:
+                self._send_json(
+                    {
+                        "error": "analytics rate limit exceeded",
+                        "retry_after_seconds": int(result.get("retry_after_seconds") or window_seconds),
                         "secret_exposed": False,
                     },
                     status=HTTPStatus.TOO_MANY_REQUESTS,
@@ -4511,6 +5983,39 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 return False
         return True
 
+    def _check_domestic_reconciliation_rate_limit(self, identity: dict[str, Any]) -> bool:
+        result = self._consume_rate_limit(
+            scope="billing:domestic:reconciliation:company",
+            subject=str(identity.get("company_id") or ""),
+            limit=DOMESTIC_RECONCILIATION_RATE_LIMIT_MAX_PER_COMPANY,
+            window_seconds=DOMESTIC_RECONCILIATION_RATE_LIMIT_WINDOW_SECONDS,
+            local_buckets=self.expensive_api_rate_limit_buckets,
+            local_lock=self.expensive_api_rate_limit_lock,
+        )
+        if result.get("allowed") is True:
+            return True
+        self._send_json(
+            {
+                "error": "payment status checks are temporarily limited; please retry later",
+                "status": int(HTTPStatus.TOO_MANY_REQUESTS),
+                "retry_after_seconds": int(
+                    result.get("retry_after_seconds") or DOMESTIC_RECONCILIATION_RATE_LIMIT_WINDOW_SECONDS
+                ),
+                "rate_limit": {
+                    "scope": "domestic_reconciliation_per_company",
+                    "window_seconds": DOMESTIC_RECONCILIATION_RATE_LIMIT_WINDOW_SECONDS,
+                    "max_requests": DOMESTIC_RECONCILIATION_RATE_LIMIT_MAX_PER_COMPANY,
+                    "query_only": True,
+                    "triggers_real_charge": False,
+                    "triggers_real_refund": False,
+                    "secret_exposed": False,
+                },
+                "secret_exposed": False,
+            },
+            status=HTTPStatus.TOO_MANY_REQUESTS,
+        )
+        return False
+
     def _consume_rate_limit(
         self,
         *,
@@ -4562,11 +6067,15 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         evidence = readiness.get("product_evidence") if isinstance(readiness.get("product_evidence"), dict) else {}
         provider_status = readiness.get("provider_status") if isinstance(readiness.get("provider_status"), dict) else {}
         billing = provider_status.get("billing") if isinstance(provider_status.get("billing"), dict) else {}
+        domestic_payment = (
+            billing.get("domestic_payment")
+            if isinstance(billing.get("domestic_payment"), dict)
+            else {}
+        )
         model_value = provider_status.get("model_value") if isinstance(provider_status.get("model_value"), dict) else {}
-        model_value_ready = bool(
-            model_value.get("ready_for_paid_value_claim")
-            or model_value.get("ready")
-            or model_value.get("model_value_ready")
+        model_value_ready = any(
+            model_value.get(key) is True
+            for key in ("ready_for_paid_value_claim", "ready", "model_value_ready")
         )
         model_value_blockers = model_value.get("blockers") if isinstance(model_value.get("blockers"), list) else []
         model_value_report_types = (
@@ -4585,130 +6094,98 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if isinstance(provider_status.get("media_generation"), dict)
             else {}
         )
+        packet_current_marker = evidence.get("latest_ebay_packet_current_connection")
+        packet_is_current = True if packet_current_marker is None else packet_current_marker is True
+        historical_packet_present = evidence.get("historical_ebay_packet_present") is True
         public_evidence: dict[str, Any] = {
-            "latest_ebay_packet_status": evidence.get("latest_ebay_packet_status", ""),
-            "latest_ebay_packet_source_mode": evidence.get("latest_ebay_packet_source_mode", ""),
-            "latest_ebay_packet_present_resource_keys": evidence.get("latest_ebay_packet_present_resource_keys", []),
-            "latest_ebay_packet_missing_resource_keys": evidence.get("latest_ebay_packet_missing_resource_keys", []),
-            "ebay_token_refresh_success_count": int(evidence.get("ebay_token_refresh_success_count") or 0),
-            "model_secret_refs": int(evidence.get("model_secret_refs") or 0),
-            "ebay_secret_refs": int(evidence.get("ebay_secret_refs") or 0),
+            "latest_ebay_packet_status": (
+                _safe_public_token(evidence.get("latest_ebay_packet_status"))
+                if packet_is_current
+                else "historical_packet_archived_not_current"
+            ),
+            "latest_ebay_packet_source_mode": (
+                _safe_public_token(evidence.get("latest_ebay_packet_source_mode"))
+                if packet_is_current
+                else "historical_archived"
+            ),
+            "latest_ebay_packet_present_resource_keys": (
+                _safe_public_token_list(evidence.get("latest_ebay_packet_present_resource_keys"))
+                if packet_is_current
+                else []
+            ),
+            "latest_ebay_packet_missing_resource_keys": (
+                _safe_public_token_list(evidence.get("latest_ebay_packet_missing_resource_keys"))
+                if packet_is_current
+                else []
+            ),
+            "latest_ebay_packet_current_connection": packet_is_current,
+            "historical_ebay_packet_present": historical_packet_present,
+            "ebay_token_refresh_success_count": _strict_nonnegative_int(evidence.get("ebay_token_refresh_success_count")),
             "secret_exposed": False,
         }
-        if authenticated:
+        if authenticated is True:
             public_evidence.update(
                 {
-                    "latest_ebay_packet_id": evidence.get("latest_ebay_packet_id", ""),
-                    "latest_ebay_packet_created_at": evidence.get("latest_ebay_packet_created_at", ""),
+                    "latest_ebay_packet_id": _safe_public_token(evidence.get("latest_ebay_packet_id")),
+                    "latest_ebay_packet_created_at": _safe_public_token(evidence.get("latest_ebay_packet_created_at")),
                 }
             )
-        warning_items = [
-            {
-                "key": item.get("key", ""),
-                "label": item.get("label", ""),
-                "status": item.get("status", ""),
-                "severity": item.get("severity", ""),
-                "detail": item.get("detail", ""),
-                "next_action": item.get("next_action", ""),
-            }
-            for item in readiness.get("items", [])
-            if isinstance(item, dict) and item.get("severity") in {"warning", "blocker"}
-        ][:8]
+        warning_items = _safe_public_readiness_items(readiness.get("items"))
         return {
-            "service": readiness.get("service", "jiejing-saas-backend"),
-            "readiness_version": readiness.get("readiness_version", ""),
-            "public_contract_version": "2026-07-10-public-readiness-model-value-summary",
+            "service": "jiejing-saas-backend",
+            "readiness_version": _safe_public_token(readiness.get("readiness_version")),
+            "public_contract_version": "2026-07-15-public-readiness-current-ebay-evidence",
             "detail_scope": "public_summary",
             "internal_detail_required": True,
-            "authenticated_summary": authenticated,
-            "environment": readiness.get("environment", ""),
-            "production_ready": bool(readiness.get("production_ready")),
-            "beta_ready": bool(readiness.get("beta_ready")),
-            "can_accept_real_customers": bool(readiness.get("can_accept_real_customers")),
-            "real_platform_writes_enabled": bool(readiness.get("real_platform_writes_enabled")),
-            "requested_real_platform_writes": bool(readiness.get("requested_real_platform_writes")),
-            "blocker_count": int(readiness.get("blocker_count") or 0),
-            "warning_count": int(readiness.get("warning_count") or 0),
+            "authenticated_summary": authenticated is True,
+            "environment": _safe_public_token(
+                readiness.get("environment"),
+                allowed={"local", "test", "development", "staging", "production"},
+            ),
+            "production_ready": readiness.get("production_ready") is True,
+            "beta_ready": readiness.get("beta_ready") is True,
+            "can_accept_real_customers": readiness.get("can_accept_real_customers") is True,
+            "real_platform_writes_enabled": readiness.get("real_platform_writes_enabled") is True,
+            "requested_real_platform_writes": readiness.get("requested_real_platform_writes") is True,
+            "blocker_count": _strict_nonnegative_int(readiness.get("blocker_count")),
+            "warning_count": _strict_nonnegative_int(readiness.get("warning_count")),
             "items": warning_items,
             "product_evidence": public_evidence,
             "provider_status": {
-                "billing": {
-                    "provider": billing.get("provider", ""),
-                    "billing_ready_for_paid_launch": bool(billing.get("billing_ready_for_paid_launch")),
-                    "billing_ready_for_private_beta": bool(billing.get("billing_ready_for_private_beta")),
-                    "external_paid_provider_configured": bool(billing.get("external_paid_provider_configured")),
-                    "test_billing_provider_configured": bool(billing.get("test_billing_provider_configured")),
-                    "checkout_ready": bool(billing.get("checkout_ready")),
-                    "customer_portal_ready": bool(billing.get("customer_portal_ready")),
-                    "signed_webhook_configured": bool(billing.get("signed_webhook_configured")),
-                    "quota_enforcement_enabled": bool(billing.get("quota_enforcement_enabled")),
-                    "paid_launch_blocker_count": int(billing.get("paid_launch_blocker_count") or 0),
-                    "next_paid_launch_blocker": billing.get("next_paid_launch_blocker", ""),
-                    "merchant_launch_path": {
-                        "contract_version": (
-                            billing.get("merchant_launch_path", {}).get("contract_version", "")
-                            if isinstance(billing.get("merchant_launch_path"), dict)
-                            else ""
-                        ),
-                        "current_stage": (
-                            billing.get("merchant_launch_path", {}).get("current_stage", "")
-                            if isinstance(billing.get("merchant_launch_path"), dict)
-                            else ""
-                        ),
-                        "current_charge_status": (
-                            billing.get("merchant_launch_path", {}).get("current_charge_status", "")
-                            if isinstance(billing.get("merchant_launch_path"), dict)
-                            else ""
-                        ),
-                        "public_paid_launch_allowed": False,
-                        "charge_now_allowed": False,
-                        "triggers_real_charge": False,
-                        "backend_confirmation_required_before_entitlement": True,
-                        "frontend_can_grant_entitlement": False,
-                        "frontend_can_grant_quota": False,
-                        "quota_grant_source": "backend_subscription_state",
-                        "secret_exposed": False,
-                    },
-                    "public_charging_allowed": False,
-                    "charge_now_allowed": False,
-                    "triggers_real_charge": False,
-                    "frontend_gets_payment_secret": False,
-                    "frontend_can_grant_quota": False,
-                    "secret_exposed": False,
-                },
+                "billing": _public_safe_billing_summary(billing),
                 "model_value": {
-                    "status": "ready" if model_value_ready else model_value.get("status", "blocked"),
+                    "status": "ready" if model_value_ready else _safe_public_token(model_value.get("status")) or "blocked",
                     "ready": model_value_ready,
                     "live_model_report_types": [
-                        str(item)
+                        item
                         for item in model_value_report_types
-                        if str(item) in {"market.report", "listing.package"}
+                        if isinstance(item, str) and item in {"market.report", "listing.package"}
                     ],
                     "blocker_count": len(model_value_blockers),
                     "secret_exposed": False,
                 },
                 "ai_ceo_platform_model": {
-                    "enabled": bool(platform_model.get("enabled")),
-                    "configured": bool(platform_model.get("configured")),
-                    "status": platform_model.get("status", ""),
-                    "provider": platform_model.get("provider", ""),
-                    "model": platform_model.get("model", ""),
-                    "trial_monthly_limit": int(platform_model.get("trial_monthly_limit") or 0),
-                    "trial_quota_scope": platform_model.get("trial_quota_scope", "account_month"),
-                    "usage_owner": platform_model.get("usage_owner", "jiejing_platform_trial"),
-                    "quota_checked_by_backend": bool(platform_model.get("quota_checked_by_backend", True)),
-                    "hard_stop_on_exhaustion": bool(platform_model.get("hard_stop_on_exhaustion", True)),
-                    "exhaustion_blocker": platform_model.get(
-                        "exhaustion_blocker",
-                        "platform_default_model_trial_exhausted",
+                    "enabled": platform_model.get("enabled") is True,
+                    "configured": platform_model.get("configured") is True,
+                    "status": _safe_public_token(
+                        platform_model.get("status"),
+                        allowed={"ready", "not_enabled", "unsupported_provider", "missing_key", "live_disabled", "incomplete_configuration"},
                     ),
+                    "provider": _safe_public_token(
+                        platform_model.get("provider"),
+                        allowed=_PUBLIC_MODEL_PROVIDERS,
+                    ),
+                    "model": _safe_public_token(platform_model.get("model")),
+                    "trial_monthly_limit": _strict_nonnegative_int(platform_model.get("trial_monthly_limit")),
+                    "trial_quota_scope": "account_month",
+                    "usage_owner": "jiejing_platform_trial",
+                    "quota_checked_by_backend": platform_model.get("quota_checked_by_backend") is True,
+                    "hard_stop_on_exhaustion": platform_model.get("hard_stop_on_exhaustion") is True,
+                    "exhaustion_blocker": "platform_default_model_trial_exhausted",
                     "merchant_byok_preferred": True,
                     "merchant_byok_not_counted_against_platform_trial": True,
                     "byok_bypasses_platform_trial": True,
-                    "customer_visible_next_action": platform_model.get(
-                        "customer_visible_next_action",
-                        "save_account_ai_or_upgrade_plan",
-                    ),
+                    "customer_visible_next_action": "save_account_ai_or_upgrade_plan",
                     "operator_cost_monitoring_required": True,
                     "frontend_can_grant_quota": False,
                     "frontend_gets_model_api_key": False,
@@ -4716,36 +6193,46 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "secret_exposed": False,
                 },
                 "public_search": {
-                    "provider": public_search.get("provider", ""),
-                    "configured": bool(public_search.get("configured")),
-                    "endpoint_host": public_search.get("endpoint_host", ""),
-                    "credential_present": bool(public_search.get("credential_present")),
-                    "ai_ceo_realtime_search_enabled": bool(public_search.get("ai_ceo_realtime_search_enabled")),
-                    "builtin_public_web_fallback_enabled": bool(public_search.get("builtin_public_web_fallback_enabled")),
-                    "builtin_stock_quote_fallback_enabled": bool(public_search.get("builtin_stock_quote_fallback_enabled")),
+                    "provider": _safe_public_token(public_search.get("provider"), allowed={"tavily"}),
+                    "configured": public_search.get("configured") is True,
+                    "endpoint_host": _safe_public_token(public_search.get("endpoint_host"), allowed={"api.tavily.com"}),
+                    "credential_present": public_search.get("credential_present") is True,
+                    "ai_ceo_realtime_search_enabled": public_search.get("ai_ceo_realtime_search_enabled") is True,
+                    "builtin_public_web_fallback_enabled": public_search.get("builtin_public_web_fallback_enabled") is True,
+                    "builtin_stock_quote_fallback_enabled": public_search.get("builtin_stock_quote_fallback_enabled") is True,
                     "frontend_gets_search_api_key": False,
                     "runtime_gets_search_api_key": False,
                     "secret_exposed": False,
                 },
                 "media_generation": {
-                    "contract_version": media_generation.get("contract_version", ""),
-                    "configured": bool(media_generation.get("configured")),
-                    "status": media_generation.get("status", ""),
-                    "live_generation_enabled": bool(media_generation.get("live_generation_enabled")),
-                    "live_image_generation_enabled": bool(media_generation.get("live_image_generation_enabled")),
-                    "live_video_generation_enabled": bool(media_generation.get("live_video_generation_enabled")),
-                    "live_provider_calls_allowed": bool(media_generation.get("live_provider_calls_allowed")),
-                    "asset_manifest_required": bool(media_generation.get("asset_manifest_required", True)),
-                    "asset_review_required": bool(media_generation.get("asset_review_required", True)),
-                    "fact_review_required": bool(media_generation.get("fact_review_required", True)),
-                    "human_review_required_before_listing": bool(
-                        media_generation.get("human_review_required_before_listing", True)
+                    "contract_version": _safe_public_token(
+                        media_generation.get("contract_version"),
+                        allowed={"2026-07-05-media-generation-readiness"},
                     ),
-                    "cost_guard_required": bool(media_generation.get("cost_guard_required", True)),
+                    "configured": media_generation.get("configured") is True,
+                    "status": _safe_public_token(
+                        media_generation.get("status"),
+                        allowed={
+                            "live_generation_ready_waiting_asset_review",
+                            "dry_run_review_chain_ready_live_generation_disabled",
+                            "dry_run_review_chain_ready_missing_media_driver",
+                        },
+                    ),
+                    "live_generation_enabled": media_generation.get("live_generation_enabled") is True,
+                    "live_image_generation_enabled": media_generation.get("live_image_generation_enabled") is True,
+                    "live_video_generation_enabled": media_generation.get("live_video_generation_enabled") is True,
+                    "live_provider_calls_allowed": media_generation.get("live_provider_calls_allowed") is True,
+                    "asset_manifest_required": media_generation.get("asset_manifest_required") is True,
+                    "asset_review_required": media_generation.get("asset_review_required") is True,
+                    "fact_review_required": media_generation.get("fact_review_required") is True,
+                    "human_review_required_before_listing": (
+                        media_generation.get("human_review_required_before_listing") is True
+                    ),
+                    "cost_guard_required": media_generation.get("cost_guard_required") is True,
                     "spend_now_allowed": False,
                     "listing_use_requires_review": True,
-                    "customer_visible_summary": media_generation.get("customer_visible_summary", ""),
-                    "next_action": media_generation.get("next_action", ""),
+                    "customer_visible_summary": _safe_public_text(media_generation.get("customer_visible_summary"), 1024),
+                    "next_action": _safe_public_text(media_generation.get("next_action"), 1024),
                     "frontend_gets_media_api_key": False,
                     "runtime_gets_raw_secret": False,
                     "reports_get_raw_provider_response": False,
@@ -4755,7 +6242,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             },
             "operational_health": {
                 "status": (
-                    readiness.get("operational_health", {}).get("status")
+                    _safe_public_token(readiness.get("operational_health", {}).get("status"))
                     if isinstance(readiness.get("operational_health"), dict)
                     else ""
                 ),
@@ -5071,27 +6558,83 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _merchant_safe_billing_plan(plan: dict[str, Any]) -> dict[str, Any]:
-        safe_plan = dict(plan)
-        safe_plan.pop("payment_strategy", None)
-        safe_plan.pop("billing_live_cutover_matrix", None)
-        safe_plan.pop("billing_live_cutover_summary", None)
-        provider = safe_plan.get("provider")
-        if isinstance(provider, dict):
-            safe_provider = dict(provider)
-            for key in (
-                "recommended_mainland_provider_order",
-                "mainland_payment_strategy_contract",
-                "allowed_private_beta_providers",
-                "manual_seed_allowed_for_private_beta",
-                "manual_beta_allowed_for_private_beta",
-                "manual_beta_private_provider_configured",
-            ):
-                safe_provider.pop(key, None)
-            safe_plan["provider"] = safe_provider
-        safe_plan["customer_visible"] = True
-        safe_plan["internal_launch_evidence_visible"] = False
-        safe_plan["secret_exposed"] = False
-        return safe_plan
+        """Build a new merchant contract from positive allowlists only.
+
+        The internal billing plan intentionally contains launch evidence and
+        provider diagnostics.  None of its nested containers are reused here.
+        """
+
+        launch = plan.get("mainland_payment_launch") if isinstance(plan.get("mainland_payment_launch"), dict) else {}
+        mainland_payment = _merchant_safe_mainland_payment(launch)
+        quota = plan.get("quota_contract") if isinstance(plan.get("quota_contract"), dict) else {}
+        return {
+            "contract_version": _safe_bounded_text(plan.get("contract_version"), 128),
+            "billing_ready_for_private_beta": plan.get("billing_ready_for_private_beta") is True,
+            "billing_ready_for_paid_launch": False,
+            "provider": {
+                "provider": "wechat_pay_native",
+                "checkout_mode": "native_qr",
+                "billing_mode": "one_time_30_day_plan",
+                "available": False,
+                "provider_configured": mainland_payment["provider_configured"],
+                "customer_visible": True,
+                "charge_now_allowed": False,
+                "triggers_real_charge": False,
+                "frontend_gets_payment_secret": False,
+                "secret_exposed": False,
+            },
+            "plan_catalog": _merchant_safe_plan_catalog(plan.get("plan_catalog")),
+            "add_on_catalog": _merchant_safe_add_on_catalog(plan.get("add_on_catalog")),
+            "quota_contract": {
+                "enabled": quota.get("enabled") is True,
+                "metered_units": _merchant_safe_metered_units(quota.get("metered_units")),
+                "hard_stop_on_quota_exhaustion": quota.get("hard_stop_on_quota_exhaustion") is True,
+                "merchant_visible_usage_required": quota.get("merchant_visible_usage_required") is True,
+                "merchant_byok_chat_not_counted_as_workflow_task": (
+                    quota.get("merchant_byok_chat_not_counted_as_workflow_task") is True
+                ),
+                "media_generation_uses_separate_media_points": (
+                    quota.get("media_generation_uses_separate_media_points") is True
+                ),
+                "media_points_are_not_bundled_with_subscription": (
+                    quota.get("media_points_are_not_bundled_with_subscription") is True
+                ),
+            },
+            "mainland_payment": mainland_payment,
+            "merchant_launch_path": _merchant_safe_launch_path(
+                plan.get("merchant_launch_path"),
+                mainland_payment=mainland_payment,
+                quota_enabled=quota.get("enabled") is True,
+            ),
+            "paid_launch_blockers": [mainland_payment["next_blocker"]],
+            "billing_test_rehearsal_summary": _merchant_safe_rehearsal_summary(
+                plan.get("billing_test_rehearsal_summary")
+            ),
+            "subscription_quota_shutdown_closure": _merchant_safe_shutdown_summary(
+                plan.get("subscription_quota_shutdown_closure")
+            ),
+            "billing_incident_runbook": _merchant_safe_incident_runbook(plan.get("billing_incident_runbook")),
+            "customer_billing_trust_packet": _merchant_safe_trust_packet(
+                plan.get("customer_billing_trust_packet")
+            ),
+            "confirmation_boundary": {
+                "billing_changes_need_owner_or_admin": True,
+                "real_platform_writes_not_included_in_any_current_plan": True,
+                "refunds_and_payment_disputes_need_human_operator": True,
+            },
+            "public_charging_allowed": False,
+            "charge_now_allowed": False,
+            "triggers_real_charge": False,
+            "triggers_real_refund": False,
+            "calls_external_payment_api": False,
+            "real_platform_writes_enabled": False,
+            "frontend_gets_payment_secret": False,
+            "frontend_can_grant_entitlement": False,
+            "frontend_can_grant_quota": False,
+            "customer_visible": True,
+            "internal_launch_evidence_visible": False,
+            "secret_exposed": False,
+        }
 
     def _platform_model_trial_guardrail(self, *, limit: int | None = None) -> dict[str, Any]:
         monthly_limit = (
@@ -5149,8 +6692,16 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             if platform_used:
                 used += 1
+        activation = self.repository.get_platform_trial_activation(company_id=identity["company_id"])
+        if activation is None:
+            activation_status = "grandfathered_active"
+            activation_allowed = True
+        else:
+            activation_status = str(activation.get("status") or "verification_required")
+            activation_allowed = activation.get("platform_trial_allowed") is True
         remaining = max(0, limit - used) if limit > 0 else 0
-        allowed = limit <= 0 or used < limit
+        quota_available = limit <= 0 or used < limit
+        allowed = activation_allowed and quota_available
         return {
             "contract_version": "2026-07-03-ai-ceo-platform-model-trial-quota",
             **guardrail,
@@ -5160,12 +6711,86 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             "used": used,
             "remaining": remaining,
             "allowed": allowed,
+            "activation_status": activation_status,
+            "platform_trial_activated": activation_allowed,
+            "merchant_byok_unaffected": True,
+            "blocked_by": (
+                "platform_trial_activation_required"
+                if not activation_allowed
+                else ("platform_default_model_trial_exhausted" if not quota_available else "")
+            ),
             "unlimited_when_limit_zero": limit <= 0,
             "quota_source": "backend_task_audit",
             "account_space_id_present": bool(identity.get("company_id")),
             "requires_merchant_byok_or_plan_upgrade_when_exhausted": True,
             "secret_exposed": False,
         }
+
+    def _platform_trial_activation_for_registration(
+        self,
+        *,
+        user: dict[str, Any],
+        challenge_verification: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        required = _env_bool(
+            "JIEJING_PLATFORM_TRIAL_ACTIVATION_REQUIRED",
+            self.settings.environment in {"staging", "production"},
+        )
+        verification = challenge_verification if isinstance(challenge_verification, dict) else {}
+        challenge_attested = verification.get("verified") is True
+        status = "active"
+        allowed = True
+        reason = "activation_guard_not_required"
+        if required and not challenge_attested:
+            status = "verification_required"
+            allowed = False
+            reason = str(verification.get("decision_reason") or "challenge_required")
+        elif required:
+            client_subject = self._client_ip_for_rate_limit()
+            checks = (
+                (
+                    "platform_trial_activation:daily:ip",
+                    client_subject,
+                    _positive_int_env(
+                        "JIEJING_PLATFORM_TRIAL_ACTIVATION_MAX_PER_IP_PER_DAY",
+                        PLATFORM_TRIAL_ACTIVATION_MAX_PER_IP_DEFAULT,
+                    ),
+                ),
+                (
+                    "platform_trial_activation:daily:global",
+                    "global",
+                    _positive_int_env(
+                        "JIEJING_PLATFORM_TRIAL_ACTIVATION_MAX_GLOBAL_PER_DAY",
+                        PLATFORM_TRIAL_ACTIVATION_MAX_GLOBAL_DEFAULT,
+                    ),
+                ),
+            )
+            for scope, subject, bucket_limit in checks:
+                result = self._consume_rate_limit(
+                    scope=scope,
+                    subject=subject,
+                    limit=bucket_limit,
+                    window_seconds=PLATFORM_TRIAL_ACTIVATION_WINDOW_SECONDS,
+                    local_buckets=self.platform_trial_activation_rate_limit_buckets,
+                    local_lock=self.platform_trial_activation_rate_limit_lock,
+                )
+                if result.get("allowed") is not True:
+                    status = "activation_budget_exhausted"
+                    allowed = False
+                    reason = "daily_activation_budget_exhausted"
+                    break
+            if allowed:
+                reason = "server_verified_challenge_and_daily_budget_passed"
+        return self.repository.upsert_platform_trial_activation(
+            company_id=str(user["default_company_id"]),
+            user_id=str(user["user_id"]),
+            status=status,
+            platform_trial_allowed=allowed,
+            welcome_media_points_granted=300 if allowed else 0,
+            requires_challenge=required,
+            challenge_attested=challenge_attested,
+            decision_reason=reason,
+        )
 
     def _require_quota(self, identity: dict[str, Any], action_unit: str) -> bool:
         evaluation = evaluate_quota_action(
@@ -5820,7 +7445,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         return content
 
     def _send_json(self, data: Any, status: HTTPStatus = HTTPStatus.OK, headers: list[tuple[str, str]] | None = None) -> None:
-        body = json.dumps(data, ensure_ascii=False, indent=2, default=json_default).encode("utf-8")
+        merchant_safe_data = _merchant_safe_replaceable_media_provider(data)
+        body = json.dumps(merchant_safe_data, ensure_ascii=False, indent=2, default=json_default).encode("utf-8")
         self.send_response(status)
         self.send_header("content-type", "application/json; charset=utf-8")
         self.send_header("content-length", str(len(body)))
@@ -6221,7 +7847,7 @@ def _execution_payload_from_context(
     body_payload: dict[str, Any],
 ) -> dict[str, Any]:
     payload = dict(body_payload or {})
-    if confirmation.get("action_type") != "publish_listing":
+    if confirmation.get("action_type") not in {"publish_listing", "save_ebay_listing_draft"}:
         return payload
     item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
     confirmation_payload = item.get("publish_payload") if isinstance(item.get("publish_payload"), dict) else {}

@@ -70,14 +70,44 @@ The cleanup did not make the product paid-launch ready. Billing live provider an
 
 Before frequent staging bundle deploys:
 
-1. Check `df -hPT / /tmp`.
-2. If root usage is above `80%`, clean old `/tmp/jiejing-public-staging-*` artifacts using the same allowlist guard.
-3. Keep current app files and rollback backups intact.
-4. If root usage stays above `80%` after `/tmp` cleanup, inspect logs and Docker cache next.
-5. Do not prune Docker volumes or app backups unless there is a separate verified backup/restore plan.
+1. The stable deploy tool checks `df -Pk` for the app path and `/tmp` before uploading a bundle.
+2. At `80%` usage it records a warning and continues only when at least `2 GiB` remains.
+3. At `92%` usage, below `2 GiB` free, or when the report cannot be parsed, deployment is blocked before upload.
+4. After a successful deployment, clean old `/tmp/jiejing-public-staging-*` artifacts using the same allowlist guard and keep the newest four.
+5. Keep current app files and rollback backups intact.
+6. If root usage stays above `80%` after `/tmp` cleanup, inspect logs and Docker cache next.
+7. Do not prune Docker volumes or app backups unless there is a separate verified backup/restore plan.
 
 Recommended future hardening:
 
-- Add a deploy-script cleanup step that keeps only the newest 2 to 4 `/tmp/jiejing-public-staging-*` artifacts.
-- Add disk usage monitoring alert at `80%` warning and `90%` critical.
+- Keep disk monitoring aligned with the deploy guard: `80%` warning and `92%` deployment block.
 - Plan storage expansion before production traffic if deploy frequency remains high.
+
+## Automated deploy-artifact retention - 2026-07-15
+
+A follow-up read-only audit found that repeated `--no-cache` image builds and
+unbounded deployment rollback artifacts had become the main growth path:
+
+- Docker build cache: `15.48G`, of which `14.69G` was unused and reclaimable
+- GitHub Actions backups: `2.2G`
+- GitHub Actions release candidates: `2.2G`
+- staging patch backups: `870M`
+
+The stable staging deploy tool now applies bounded retention only after the new
+deployment passes its local container health check:
+
+- keep the newest `8` `output/staging-patch-backups/[timestamp]` directories
+- keep the newest `5` `github-action-backups/pre-github-*` directories
+- keep the newest `5` `github-action-releases/github-*` directories
+- remove only unused Docker builder cache older than `1` hour; current staging
+  builds already use `--no-cache`, so retaining older build cache has no runtime
+  or build-speed value
+- retain the existing newest `4` `/tmp/jiejing-public-staging-*` artifacts
+
+The cleanup resolves and validates every deletion candidate beneath one of the
+three exact deployment roots. It refuses non-canonical app roots and reports
+before/after filesystem evidence in the deploy result.
+
+Explicit exclusions remain unchanged: no Docker volume prune, no Docker system
+prune, no database, Vault, private env, uploaded media, business output, current
+container image, or `/opt/jiejing-staging/backups` recovery archive deletion.

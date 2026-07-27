@@ -30,7 +30,7 @@ def main() -> int:
         return fail("frontend must not use document.write for report export or public rendering")
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
-    frontend_asset_version = "20260712-private-media-handoff-v79"
+    frontend_asset_version = "20260715-owner-traffic-analytics-v104"
     for expected_asset in [
         f"./app.js?v={frontend_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -38,6 +38,11 @@ def main() -> int:
         if expected_asset not in index_html + app_html:
             return fail(f"frontend entry files must bust owner publish cache with {expected_asset}")
     for stale_asset_version in [
+        "20260715-billing-recovery-renewal-v101",
+        "20260715-listing-us-title-v98",
+        "20260715-listing-copy-boundary-v97",
+        "20260715-listing-copy-boundary-v96",
+        "20260714-ebay-draft-save-v95",
         "20260712-publish-receipt-v75",
         "20260711-account-chat-sync-v48",
         "20260711-account-chat-sync-v47",
@@ -450,6 +455,14 @@ def main() -> int:
     ]:
         if marker not in index_html:
             return fail(f"missing interactive homepage/onboarding marker: {marker}")
+    for marker in [
+        ".price {",
+        "font-size: 38px;",
+        "line-height: 1.08;",
+        "white-space: nowrap;",
+    ]:
+        if marker not in index_html:
+            return fail(f"public pricing cards must keep the full price on one stable line: {marker}")
     if "体验流程会用倒流香炉跑一遍" in index_html:
         return fail("homepage onboarding copy must not route real testing through a fixed sample product")
     for stale_public_copy in [
@@ -495,23 +508,23 @@ def main() -> int:
     for billing_guardrail_marker in [
         "function renderSaasMerchantPricingModelPanel",
         "saas-merchant-pricing-model",
-        "订阅是基础功能月费，AI 和素材按用量另算",
+        "四档套餐只收软件使用费",
         "subscription_ai_media_platform_v1",
         "saas-merchant-pricing-split",
         "用量计费路线",
-        "¥99/月是基础订阅",
-        "不包含无限模型",
-        "大模型用量",
-        "生图 / 生视频",
+        "¥99 / 30 天",
+        "¥0 / ¥99 / ¥199 / ¥299",
+        "商家自带模型",
+        "图片 / 视频",
         "eBay 费用、广告费、物流和退款不是捷境代扣",
         "function renderSaasMerchantBillingCurrentStatusPanel",
         "function renderSaasMerchantBillingPlainSummaryPanel",
         "merchant_billing_plain_summary_v1",
         "订阅和用量总览",
-        "先分清月费、用量费和平台成本",
-        "现在会不会扣费",
-        "¥99/月是软件功能费",
-        "AI 模型和素材生成单独看",
+        "软件套餐、商家模型、素材点和平台成本分开",
+        "套餐只决定店铺数、席位数、经营任务和批量上限",
+        "不消耗素材点",
+        "生成前显示预计点数",
         "billing_now_no_real_charge",
         "base_subscription_is_feature_fee=true",
         "ai_media_usage_is_separate=true",
@@ -609,6 +622,15 @@ def main() -> int:
     store_fetch_index = refresh_body.find("const store = await ensureSaasDemoStoreAndConnection();")
     if guard_index < 0 or store_fetch_index < 0 or guard_index > store_fetch_index:
         return fail("refreshSaasState must skip protected store/report reads before ensuring a store")
+    cached_restore_start = refresh_body.index("if (restoredCachedState)")
+    cached_restore_end = refresh_body.index("\n  try", cached_restore_start)
+    cached_restore_body = refresh_body[cached_restore_start:cached_restore_end]
+    for cached_restore_marker in (
+        'document.documentElement.classList.remove("app-auth-pending")',
+        'openApp(activeSaasRefreshView("cockpit"))',
+    ):
+        if cached_restore_marker not in cached_restore_body:
+            return fail(f"account-scoped fast restore must reveal the cached workbench immediately: {cached_restore_marker}")
     for endpoint in [
         "live-read-plan",
         "http-client-dry-run",

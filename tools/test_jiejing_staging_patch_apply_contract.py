@@ -54,6 +54,8 @@ def main() -> int:
         "docs/JIEJING_STAGING_DISK_CLEANUP_20260619.md",
         "docs/JIEJING_PUBLIC_WAF_ANTI_SCRAPE_RUNBOOK_20260618.md",
         "docs/JIEJING_MAINLAND_PAYMENT_COLLECTION_PLAN_20260629.md",
+        "docs/JIEJING_WECHAT_PAY_PRODUCTION_RUNBOOK_20260713.md",
+        "docs/superpowers/specs/2026-07-14-billing-operations-maintenance-design.md",
         "docs/JIEJING_PRELAUNCH_INTERNAL_HARDENING_RUNBOOK_20260620.md",
         "docs/JIEJING_GITHUB_SELF_HOSTED_RUNNER_DEPLOY_RUNBOOK_20260622.md",
         "docs/superpowers/specs/2026-06-19-jiejing-first-order-loop-design.md",
@@ -74,8 +76,10 @@ def main() -> int:
         "assets/jiejing-logo-mark.svg",
         "jiejing_saas/backup_plan.py",
         "jiejing_saas/billing_manual_beta.py",
+        "jiejing_saas/billing_operations_maintenance.py",
         "jiejing_saas/billing_payment_options.py",
         "jiejing_saas/billing_plan.py",
+        "jiejing_saas/registration_challenge.py",
         "jiejing_saas/billing_provider_evidence_register.py",
         "jiejing_saas/billing_provider_rehearsal.py",
         "jiejing_saas/billing_webhook.py",
@@ -91,6 +95,8 @@ def main() -> int:
         "jiejing_saas/production_evidence_ledger.py",
         "jiejing_saas/production_release_gate.py",
         "jiejing_saas/post_publish_cockpit.py",
+        "jiejing_saas/launch_progress.py",
+        "deploy/release-evidence.json",
         "jiejing_saas/owner_launch_control.py",
         "jiejing_saas/feasibility_review.py",
         "jiejing_saas/platform_authorization_strategy.py",
@@ -110,11 +116,14 @@ def main() -> int:
         "jiejing_saas/workflow_plan.py",
         "jiejing_saas/migrations/001_initial_schema_postgres.sql",
         "tools/jiejing_current_state_guard.py",
+        "tools/jiejing_external_launch_blocker_gate.py",
         "tools/jiejing_configure_tencent_runtime_env.py",
         "tools/jiejing_a_class_unattended_gate.py",
         "tools/jiejing_b_class_production_gate.py",
         "tools/jiejing_c_class_production_gate.py",
         "tools/test_jiejing_current_state_guard.py",
+        "tools/test_jiejing_external_launch_blocker_gate.py",
+        "tools/test_jiejing_historical_ebay_readiness.py",
         "tools/test_jiejing_platform_model_readiness.py",
         "tools/test_jiejing_configure_tencent_runtime_env.py",
         "tools/test_jiejing_frontend_staging_config.py",
@@ -140,12 +149,14 @@ def main() -> int:
         "tools/jiejing_infra_cutover_rehearsal.py",
         "tools/jiejing_worker_cli.py",
         "tools/test_jiejing_worker_cli_contract.py",
+        "tools/test_jiejing_domestic_billing_maintenance.py",
         "tools/test_jiejing_cost_saver_snapshot.py",
         "tools/test_jiejing_infra_cutover_rehearsal.py",
         "tools/jiejing_deploy_channel_doctor.py",
         "tools/jiejing_prepare_public_staging_bundle.py",
         "tools/jiejing_staging_deploy.py",
         "tools/test_jiejing_staging_deploy_channel_contract.py",
+        "tools/test_jiejing_staging_deploy_disk_guard.py",
         "tools/test_jiejing_agents_md_guardrails.py",
         "tools/test_jiejing_github_actions_deploy_guardrails.py",
         "tools/test_jiejing_github_runner_doctor_guardrails.py",
@@ -166,10 +177,15 @@ def main() -> int:
         "tools/test_jiejing_owner_launch_control.py",
         "tools/test_jiejing_owner_launch_control_access.py",
         "tools/test_jiejing_owner_launch_control_ui.py",
+        "tools/test_jiejing_fixed_launch_progress.py",
+        "tools/test_jiejing_merchant_workflow_validation.py",
+        "tools/test_jiejing_version_bound_release_evidence.py",
         "tools/test_jiejing_media_capability_router.py",
         "tools/test_jiejing_media_asset_pipeline.py",
         "tools/test_jiejing_media_asset_jobs.py",
         "tools/test_jiejing_expensive_api_rate_limit.py",
+        "tools/test_jiejing_platform_trial_activation_guard.py",
+        "tools/test_jiejing_registration_challenge_ui.py",
         "tools/test_jiejing_ai_ceo_scroll_retention.py",
         "tools/test_jiejing_ai_ceo_history_pagination.py",
         "tools/test_jiejing_billing_quota_guardrail.py",
@@ -201,6 +217,9 @@ def main() -> int:
         "COMPOSE_ARGS+=(-f \"$COST_SAVER_OVERRIDE\")",
         "docker compose \"${COMPOSE_ARGS[@]}\" build --no-cache jiejing-saas jiejing-worker",
         "docker volume create deploy_jiejing_public_staging_vault_data_v3",
+        "api_health_ready=false",
+        'if [[ "$api_health_ready" != "true" ]]',
+        "Refusing to start the worker before the API health check passes.",
         "docker compose \"${COMPOSE_ARGS[@]}\" up -d --no-deps jiejing-worker",
         "docker compose \"${COMPOSE_ARGS[@]}\" up -d --no-deps --force-recreate jiejing-frontend",
         "install -m 0644 deploy/Caddyfile.public-staging.systemd /etc/caddy/Caddyfile",
@@ -217,6 +236,11 @@ def main() -> int:
     missing = [marker for marker in required if marker not in text]
     if missing:
         return fail("patch apply script missing markers: " + ",".join(missing))
+    api_start = text.index('up -d --no-deps jiejing-saas')
+    health_gate = text.index('if [[ "$api_health_ready" != "true" ]]', api_start)
+    worker_start = text.index('up -d --no-deps jiejing-worker', api_start)
+    if not api_start < health_gate < worker_start:
+        return fail("worker startup must remain behind the API health gate")
     forbidden = [
         "rm -rf /",
         "docker volume rm",
@@ -243,6 +267,16 @@ def main() -> int:
         if marker not in vault_init:
             return fail(f"vault init must wait for the container readiness signal: {marker}")
     for compose in compose_files:
+        for service, next_service in (("jiejing-saas", "jiejing-worker"), ("jiejing-worker", "jiejing-vault")):
+            service_start = compose.index(f"  {service}:")
+            service_end = compose.index(f"  {next_service}:", service_start)
+            service_block = compose[service_start:service_end]
+            managed_env = "../../private/tencent-managed.env"
+            if service_block.count(managed_env) != 1:
+                return fail(f"{service} must consume the single private Tencent-managed env path")
+            if "../../private/jiejing-saas.staging-oauth.env" in service_block:
+                if service_block.index(managed_env) > service_block.index("../../private/jiejing-saas.staging-oauth.env"):
+                    return fail(f"{service} must load the broad Tencent env before the narrower OAuth env")
         vault_start = compose.index("  jiejing-vault:")
         vault_end = compose.index("  jiejing-frontend:", vault_start)
         if "env_file:" in compose[vault_start:vault_end]:
@@ -254,6 +288,7 @@ def main() -> int:
         "unable to parse FILES whitelist",
         "apply patch script must include itself",
         '"full_assets_included": False',
+        'manifest["zip_path"] = zip_path.relative_to(ROOT).as_posix()',
     ]
     missing_bundle = [marker for marker in bundle_required if marker not in bundle]
     if missing_bundle:

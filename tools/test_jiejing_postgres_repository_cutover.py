@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas.postgres_repository_runtime import (  # noqa: E402
+    JSON_COLUMNS,
     placeholder_count,
     postgres_pool_enabled,
     postgres_pool_max_size,
@@ -123,8 +124,39 @@ def main() -> int:
     requirements_text = (ROOT / "requirements.saas.txt").read_text(encoding="utf-8")
     if "ConnectionPool(" not in runtime_text or "psycopg_pool" not in requirements_text:
         return fail("managed Postgres runtime must ship a bounded connection pool dependency")
+    if runtime_text.count('options="-c timezone=UTC"') != 1 or runtime_text.count('"options": "-c timezone=UTC"') != 1:
+        return fail("managed Postgres connections must normalize the session timezone to UTC")
+    if "order_json" not in JSON_COLUMNS:
+        return fail("domestic billing order JSON must be adapted for the Postgres JSONB column")
     if "_postgres_initialize_lock" not in repository_text:
         return fail("Postgres migration initialization must be guarded against concurrent requests")
+    if "pg_advisory_lock" not in repository_text or "pg_advisory_unlock" not in repository_text:
+        return fail("domestic billing entitlement mutations must use a Postgres company advisory lock")
+
+    migration_text = (ROOT / "jiejing_saas" / "migrations" / "001_initial_schema_postgres.sql").read_text(encoding="utf-8")
+    if "idx_billing_orders_provider_transaction_unique" not in migration_text:
+        return fail("one provider transaction must not activate more than one domestic billing order")
+    for marker in (
+        "create table if not exists platform_provider_monitor_state",
+        "lease_expires_at_epoch bigint not null",
+        "idx_platform_provider_monitor_state_lease_expiry",
+        "20260717_platform_provider_monitor_state",
+    ):
+        if marker not in migration_text.lower():
+            return fail(f"Postgres migration must ship passive provider monitoring lease state: {marker}")
+    if "on conflict(scheduler_key) do update set" not in repository_text.lower():
+        return fail("provider monitoring lease must use a cross-process atomic Postgres-compatible upsert")
+    if "where platform_provider_monitor_state.lease_expires_at_epoch <= ?" not in repository_text.lower():
+        return fail("provider monitoring lease takeover must be conditional on expiry")
+    for literal_like_pattern in (
+        "like '%%rehearsal%%'",
+        "like '%%acceptance%%'",
+        "like '%%verification%%'",
+        "like '%%probe%%'",
+        "not like '%%\\\"live_acceptance_test\\\":true%%'",
+    ):
+        if literal_like_pattern not in repository_text:
+            return fail(f"provider monitoring LIKE patterns must escape literal percent signs for psycopg: {literal_like_pattern}")
 
     summary = {
         "postgres_repository_runtime_switch_implemented": True,
@@ -133,6 +165,8 @@ def main() -> int:
         "inventory_translation": True,
         "bounded_connection_pool": True,
         "concurrent_migration_guard": True,
+        "domestic_billing_company_lock": True,
+        "provider_transaction_uniqueness": True,
         "secret_exposed": False,
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))

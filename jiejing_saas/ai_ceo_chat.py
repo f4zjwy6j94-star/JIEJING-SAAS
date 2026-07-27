@@ -64,6 +64,7 @@ def run_ai_ceo_chat(
     command: dict[str, Any] | None = None,
     conversation_history: list[dict[str, Any]] | None = None,
     model_resolution: dict[str, Any] | None = None,
+    on_stage: Callable[[str], None] | None = None,
     on_text_delta: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Call the merchant model for an AI CEO chat turn."""
@@ -132,6 +133,8 @@ def run_ai_ceo_chat(
             "secret_exposed": False,
         }
     if realtime_kind:
+        if on_stage is not None:
+            on_stage("sources")
         search_started_at = time.monotonic()
         realtime_search = _run_realtime_search(kind=realtime_kind, message=route_message)
         search_latency_ms = _elapsed_ms(search_started_at)
@@ -173,6 +176,8 @@ def run_ai_ceo_chat(
                 realtime_search=realtime_search,
                 conversation_history=safe_history,
             )
+            if on_stage is not None:
+                on_stage("model")
             model_started_at = time.monotonic()
             try:
                 result = model_client.generate_text(
@@ -300,6 +305,8 @@ def run_ai_ceo_chat(
             "secret_exposed": False,
         }
 
+    if on_stage is not None and _default_web_context_enabled(route=route, message=safe_message):
+        on_stage("sources")
     default_web_search = _run_default_web_context_search(route=route, message=safe_message)
     prompt_context = _context_with_default_web_search(context, default_web_search)
     source_records = _source_records_from_default_web_context(default_web_search)
@@ -313,6 +320,8 @@ def run_ai_ceo_chat(
         route_meta=route_meta,
         conversation_history=safe_history,
     )
+    if on_stage is not None:
+        on_stage("model")
     result, model_latency_ms, model_initial_retry_count, model_error = _generate_model_text_with_initial_retry(
         model_client=model_client,
         system_prompt=system_prompt,

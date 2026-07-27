@@ -71,7 +71,7 @@ def main() -> None:
     require(index_html, "未连接前不会读取店铺数据，也不会执行高风险动作", "merchant-facing homepage auth copy")
     require(app_html, "不保存敏感凭证或平台账号资料", "merchant-facing feedback privacy copy")
     require(app_js, "不保存敏感凭证或平台账号资料", "workflow feedback avoids token/key wording")
-    require(app_js, "按套餐额度或实际用量核算", "billing pricing avoids token wording")
+    require(app_js, "软件套餐、商家模型、素材点和平台成本分开", "billing pricing keeps software, BYOK, media, and platform costs separate")
     settings_data_body = app_js[app_js.index("function renderSaasSettingsDataPanel") : app_js.index("function renderSaasSettingsFocusPanel")]
     if "后端" in settings_data_body or "浏览器不能" in settings_data_body:
         raise AssertionError("merchant store data settings should not explain browser/backend implementation")
@@ -342,6 +342,11 @@ def main() -> None:
     require(app_js, "saas-listing-input-panel", "Listing simple input panel")
     require(app_js, "商品资料入口", "Listing input entry label")
     require(app_js, "把你手上的资料直接放进来", "Listing low-learning-cost input headline")
+    require(app_js, "function renderSaasListingSourceIntake", "Listing source intake renderer")
+    require(app_js, 'data-listing-source-details="listing_source_collapsed_after_draft_v1"', "Listing source intake collapses after draft")
+    require(app_js, "更换或补充商品资料", "Listing collapsed source intake merchant label")
+    require(app_js, "当前草稿已生成；只有换商品或补链接、图片、成本、规格时再展开", "Listing collapsed source intake guidance")
+    require(app_js, "draft ? renderSaasListingSourceIntake", "Listing source intake switches to collapsed mode after draft")
     require(app_js, "data-saas-listing-input-chip", "Listing input quick chips")
     require(app_js, "function renderSaasFirstRunAssuranceStrip", "shared first-run assurance strip")
     require(app_js, "不用完整", "Listing simple first-run copy")
@@ -464,15 +469,18 @@ def main() -> None:
     composer_start = app_js.index("function renderSaasListingComposerWorkspace")
     composer_end = app_js.index("function renderSaasListingMinimalWorkspace", composer_start)
     composer_body = app_js[composer_start:composer_end]
-    input_panel_index = composer_body.index("saas-listing-input-panel")
-    source_cards_index = composer_body.index("renderSaasListingSourceCards")
+    source_intake_start = app_js.index("function renderSaasListingSourceIntake")
+    source_intake_body = app_js[source_intake_start:composer_start]
+    input_panel_index = source_intake_body.index("saas-listing-input-panel")
+    source_cards_index = source_intake_body.index("renderSaasListingSourceCards")
     if not input_panel_index < source_cards_index:
         raise AssertionError("Listing source alternatives must stay below the primary product input")
+    source_intake_call_index = composer_body.index("renderSaasListingSourceIntake")
     draft_editor_index = composer_body.index("renderSaasListingDraftEditor")
     media_index = composer_body.index("renderSaasListingMediaWritebackPanel")
     next_action_index = composer_body.index("renderSaasListingNextActionPanel")
     advanced_index = composer_body.index("renderSaasListingAdvancedWorkDetails")
-    if not (source_cards_index < draft_editor_index < media_index < next_action_index < advanced_index):
+    if not (source_intake_call_index < draft_editor_index < media_index < next_action_index < advanced_index):
         raise AssertionError("Listing daily surface must flow from source selection to draft, media, one next action, then collapsed advanced checks")
     next_action_start = app_js.index("function renderSaasListingNextActionPanel")
     next_action_end = app_js.index("function renderSaasListingWorkflowProofPanel", next_action_start)
@@ -820,12 +828,12 @@ def main() -> None:
         "基础订阅不包含无限模型",
         "eBay 费用、广告费、物流和退款不是捷境代扣",
         "高成本联网任务",
-        "正式收费前，商家必须能看清套餐、金额、续费/取消入口和用量记录",
+        "付款前显示套餐、金额、30 天期限和用量边界",
         "订阅和用量总览",
-        "先分清月费、用量费和平台成本",
-        "现在会不会扣费",
-        "¥99/月是软件功能费",
-        "AI 模型和素材生成单独看",
+        "软件套餐、商家模型、素材点和平台成本分开",
+        "当前是否扣费",
+        "套餐是软件使用权",
+        "文本模型由商家自带，图片和视频使用素材点",
         "merchant_billing_plain_summary_v1",
         "subscription_metering_clarity_v2",
         "billing_now_no_real_charge",
@@ -841,25 +849,25 @@ def main() -> None:
         "entitlement_grant_requires_billing_state",
         "试用订阅申请已生成",
         "订阅开通说明",
-        "先看当前是否扣费，再看订阅和额度怎么生效",
-        "当前不会自动扣费",
-        "按客服指引开通订阅",
-        "在线付款会在安全支付页完成",
-        "订阅状态驱动发放和停用",
+        "微信扫码、到账确认、权益开通和自主续购",
+        "微信扫码付款可用",
+        "商家主动微信扫码",
+        "后端验签确认后开通",
+        "到期后由商家自主续购",
         "浏览器不保存支付资料",
         "merchant_subscription_activation_path_v2",
         "quota_grant_not_frontend_driven",
         "static_qr_never_paid_launch_provider",
         "订阅和额度生效方式",
-        "先确认订阅，再开通权益和额度",
-        "正式付款走安全支付页",
-        "系统确认后开通权益",
-        "额度按订阅状态发放",
+        "主动扫码付款，系统确认后开通",
+        "每次购买 30 天",
+        "系统确认到账后开通",
+        "到期后由商家自主续购",
         "支付资料不进入浏览器",
         "账单恢复不重连店铺或 AI",
         "只停高成本任务",
         "merchant_billing_launch_path_v1",
-        "hosted_payment_page_required_for_formal_payment=true",
+        "payment_page_mode=",
         "backend_confirmation_required_before_entitlement=true",
         "frontend_cannot_grant_entitlement_or_quota",
         "billing_recovery_does_not_require_reconnecting_store_or_ai=true",
@@ -884,17 +892,19 @@ def main() -> None:
         "no_repeat_oauth_for_billing_recovery",
         "no_model_key_reentry_for_billing_recovery",
         "merchant_billing_incident_runbook_v1",
-        "customer_portal_change_signed_webhook_required",
+        "wechat_order_expired",
+        "wechat_callback_delayed",
+        "payment_mode=",
         "refund_dispute_webhook_sets_payment_attention",
         "refund_or_dispute_cannot_be_frontend_executed",
         "payment_failed_cancel_blocks_metered_work",
         "quota_shutdown_keeps_history_visible",
         "browser_cannot_grant_or_restore_entitlement",
-        "merchant_billing_customer_trust_packet_v1",
-        "checkout_hosted_by_payment_provider",
-        "customer_can_cancel_or_update_payment_in_portal",
-        "invoice_receipt_requires_live_provider",
-        "tax_invoice_policy_pending_until_merchant_entity",
+        "merchant_billing_customer_trust_packet_v2",
+        "wechat_native_qr_payment_boundary",
+        "merchant_confirmed_one_time_30_day_renewal",
+        "payment_record_is_not_tax_invoice",
+        "invoice_request_requires_paid_order_and_service_review",
         "billing_support_refund_links_visible",
         "entitlement_recovery_does_not_repeat_ebay_oauth",
         "正式支付接入前演练",

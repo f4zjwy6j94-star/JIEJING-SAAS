@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upsert one validated secret from stdin into a private backend env file."""
+"""Upsert one validated value from stdin into a private backend env file."""
 
 from __future__ import annotations
 
@@ -9,9 +9,10 @@ import sys
 from pathlib import Path
 
 
-SECRET_PATTERNS = {
+PRIVATE_ENV_VALUE_PATTERNS = {
     "JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN": re.compile(r"^[A-Za-z0-9_-]{32,80}$"),
     "JIEJING_EBAY_CLIENT_SECRET": re.compile(r"^[A-Za-z0-9._-]{20,200}$"),
+    "JIEJING_WECHAT_PAY_APP_ID": re.compile(r"^wx[0-9a-f]{16}$"),
 }
 
 
@@ -20,7 +21,7 @@ def main() -> int:
         return 2
     target = Path(sys.argv[1]).resolve()
     key = sys.argv[2]
-    pattern = SECRET_PATTERNS.get(key)
+    pattern = PRIVATE_ENV_VALUE_PATTERNS.get(key)
     if pattern is None:
         return 3
     value = sys.stdin.read().strip()

@@ -7,15 +7,18 @@ source records and packet summaries, never API keys or raw provider responses.
 from __future__ import annotations
 
 import hashlib
+import time
 from typing import Any
 
 from .config import SaaSSettings
+from .operations_metering import provider_telemetry_from_result, public_search_cost_measurement
 from .provider_job_runner import ProviderJobRunner
 
 
 def build_public_search_market_handoff(
     *,
     settings: SaaSSettings,
+    repository: Any | None = None,
     company_id: str,
     store: dict[str, Any],
     user_id: str,
@@ -31,6 +34,7 @@ def build_public_search_market_handoff(
         or body.get("search_query")
         or f"{product} {marketplace} eBay price reviews competitors supplier"
     ).strip()
+    started_at = time.perf_counter()
     provider_output = ProviderJobRunner(settings=settings).run(
         company_id=company_id,
         store_id=str(store.get("store_id") or body.get("store_id") or ""),
@@ -49,6 +53,19 @@ def build_public_search_market_handoff(
             },
         },
     )
+    duration_ms = int(round((time.perf_counter() - started_at) * 1000))
+    telemetry = provider_telemetry_from_result(
+        scope="public_search",
+        provider_output=provider_output,
+        duration_ms=duration_ms,
+    )
+    metering_status = _record_public_search_metering(
+        repository=repository,
+        company_id=company_id,
+        user_id=user_id,
+        provider_output=provider_output,
+        telemetry=telemetry,
+    )
     runtime_probe = _runtime_probe_from_provider_output(provider_output=provider_output)
     return {
         "status": runtime_probe.get("status"),
@@ -61,12 +78,53 @@ def build_public_search_market_handoff(
         "result_count": len(runtime_probe.get("source_records") or []),
         "runtime_probe": runtime_probe,
         "provider_job": _safe_provider_summary(provider_output),
+        "telemetry": telemetry,
+        "metering_status": metering_status,
         "runtime_gets_raw_secret": False,
         "frontend_gets_raw_secret": False,
         "raw_provider_response_stored": False,
         "real_platform_writes_enabled": False,
         "secret_exposed": False,
     }
+
+
+def _record_public_search_metering(
+    *,
+    repository: Any | None,
+    company_id: str,
+    user_id: str,
+    provider_output: dict[str, Any],
+    telemetry: dict[str, Any],
+) -> str:
+    safety = provider_output.get("safety") if isinstance(provider_output.get("safety"), dict) else {}
+    if repository is None:
+        return "repository_not_attached"
+    if not bool(safety.get("live_provider_called")):
+        return "not_a_live_provider_call"
+    measurement = public_search_cost_measurement(provider_output=provider_output)
+    meter_id = hashlib.sha256(
+        f"{company_id}|{user_id}|{time.time_ns()}|public_search".encode("utf-8")
+    ).hexdigest()[:24]
+    try:
+        repository.record_provider_cost(
+            company_id=company_id,
+            user_id=user_id or None,
+            task_id=None,
+            reference_type="public_search_request",
+            reference_id=meter_id,
+            cost_category="public_search",
+            resource_type="request",
+            unit_count=1,
+            media_points=0,
+            cost_minor=int(measurement.get("cost_minor") or 0),
+            currency=str(measurement.get("currency") or "CNY"),
+            cost_status=str(measurement.get("cost_status") or "unavailable"),
+            idempotency_key=f"{meter_id}:provider-cost:v1",
+            details={"telemetry": telemetry, "provider_neutral": True},
+        )
+    except Exception:
+        return "persistence_failed"
+    return "recorded"
 
 
 def merge_public_search_handoff_input(body: dict[str, Any], handoff: dict[str, Any]) -> dict[str, Any]:

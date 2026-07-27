@@ -19,6 +19,7 @@ from .commercial_launch_gate import build_commercial_launch_gate
 from .config import SaaSSettings
 from .edge_cutover_preflight import build_edge_cutover_preflight
 from .feasibility_review import build_feasibility_review
+from .launch_progress import build_fixed_launch_progress
 from .monitoring import build_monitoring_status
 from .operational_health import build_operational_health
 from .paid_launch_approval_packet import build_paid_launch_approval_packet
@@ -28,7 +29,8 @@ from .readiness import build_product_readiness_or_degraded
 from .repository import SaaSRepository
 
 
-OWNER_LAUNCH_CONTROL_VERSION = "2026-06-21-owner-launch-control-v4"
+OWNER_LAUNCH_CONTROL_VERSION = "2026-07-27-owner-launch-control-v8"
+FIXED_PROGRESS_RELEASE_EVIDENCE_CONTRACT = "2026-07-14-version-bound-release-evidence-v1"
 
 
 def build_owner_launch_control(
@@ -54,17 +56,44 @@ def build_owner_launch_control(
     billing_usage = _safe_call("billing_usage", lambda: build_billing_usage(settings, repository, company_id=company_id), {})
     backup = _safe_call("backup_plan", lambda: build_backup_plan(settings, repository), {})
     monitoring = _safe_call("monitoring", lambda: build_monitoring_status(settings, repository), {})
-    billing_cutover = _safe_call(
+    legacy_billing_cutover = _safe_call(
         "billing_domain_cutover_rehearsal",
         lambda: build_billing_domain_cutover_rehearsal(settings, repository),
         {},
     )
     edge = _safe_call("edge_cutover_preflight", lambda: build_edge_cutover_preflight(settings), {})
     paid_packet = _safe_call("paid_launch_approval_packet", lambda: build_paid_launch_approval_packet(settings, repository), {})
+    edge = _owner_mainland_edge_view(edge=edge, paid_packet=paid_packet)
+    billing = _owner_mainland_billing_view(billing=billing, paid_packet=paid_packet)
+    billing_cutover = _owner_mainland_cutover_view(
+        paid_packet=paid_packet,
+        legacy_billing_cutover=legacy_billing_cutover,
+    )
     queue_adapter = _safe_call("queue_adapter", lambda: build_queue_adapter_contract(settings), {})
     test_data_governance = _safe_call(
         "test_data_governance",
         lambda: repository.test_data_governance_snapshot(company_id=company_id),
+        {},
+    )
+    merchant_workflow_validation = _safe_call(
+        "merchant_workflow_validation",
+        repository.merchant_workflow_validation_snapshot,
+        {},
+    )
+    fixed_progress_release_evidence = _load_fixed_progress_release_evidence()
+    fixed_progress_release_evidence["real_merchant_workflow_validation_passed"] = bool(
+        merchant_workflow_validation.get("passed")
+    )
+    fixed_launch_progress = _safe_call(
+        "fixed_launch_progress",
+        lambda: build_fixed_launch_progress(
+            readiness=readiness,
+            launch_gate=launch_gate,
+            billing=billing,
+            operational=operational,
+            test_data_governance=test_data_governance,
+            release_evidence=fixed_progress_release_evidence,
+        ),
         {},
     )
     data_packets = _safe_call(
@@ -320,9 +349,11 @@ def build_owner_launch_control(
         "war_room": war_room,
         "feasibility_review": feasibility_review,
         "test_data_governance": test_data_governance,
+        "merchant_workflow_validation": merchant_workflow_validation,
         "operations_observability": operations_observability,
         "resilience_war_room": resilience_war_room,
         "subscription_shutdown_control": subscription_shutdown_control,
+        "fixed_launch_progress": fixed_launch_progress,
         "lanes": lanes,
         "external_blockers": external_blockers,
         "internal_work_queue": internal_work_queue,
@@ -343,6 +374,164 @@ def build_owner_launch_control(
             "confirmation_center_required_for_real_risk_actions": True,
             "secret_exposed": False,
         },
+    }
+
+
+def _owner_mainland_billing_view(*, billing: dict[str, Any], paid_packet: dict[str, Any]) -> dict[str, Any]:
+    """Project the canonical mainland approval packet into legacy owner helpers.
+
+    This is an internal compatibility view only.  It prevents the v7 helper
+    graph from using the future-international Stripe lane as mainland truth.
+    """
+
+    summary = paid_packet.get("summary") if isinstance(paid_packet.get("summary"), dict) else {}
+    ready = summary.get("mainland_payment_ready_for_owner_approval") is True
+    provider = billing.get("provider") if isinstance(billing.get("provider"), dict) else {}
+    view = dict(billing)
+    view["provider"] = {
+        **provider,
+        "selected": "wechat_pay_native",
+        "provider": "wechat_pay_native",
+        "checkout_mode": "native_qr",
+        "billing_mode": "one_time_30_day_plan",
+        "calls_stripe_api": False,
+        "triggers_real_charge": False,
+        "secret_exposed": False,
+    }
+    view["mainland_payment_ready_for_owner_approval"] = ready
+    view["billing_ready_for_paid_launch"] = ready
+    view["future_international_payment"] = (
+        dict(paid_packet.get("future_international_payment"))
+        if isinstance(paid_packet.get("future_international_payment"), dict)
+        else {
+            "provider": "stripe",
+            "role": "future_international_payment_only",
+            "blocks_mainland_launch": False,
+            "calls_stripe_api": False,
+            "triggers_real_charge": False,
+            "secret_exposed": False,
+        }
+    )
+    view["public_charging_allowed"] = False
+    view["charge_now_allowed"] = False
+    view["calls_stripe_api"] = False
+    view["triggers_real_charge"] = False
+    view["secret_exposed"] = False
+    return view
+
+
+def _owner_mainland_edge_view(*, edge: dict[str, Any], paid_packet: dict[str, Any]) -> dict[str, Any]:
+    summary = edge.get("summary") if isinstance(edge.get("summary"), dict) else {}
+    callbacks = edge.get("callback_cutover") if isinstance(edge.get("callback_cutover"), dict) else {}
+    paid_steps = _by_key(paid_packet.get("steps"))
+    payment_ready = (paid_steps.get("wechat_pay_native_cutover") or {}).get("status") == "ready"
+    callbacks_ready = callbacks.get("ebay_callback_verified") is True and payment_ready
+    waf_ready = summary.get("waf_ready") is True
+    origin_locked = summary.get("origin_locked") is True
+    view = dict(edge)
+    view["summary"] = {
+        **summary,
+        "callbacks_ready": callbacks_ready,
+        "ready_count": sum(1 for ready in (waf_ready, origin_locked, callbacks_ready) if ready),
+        "total_count": 3,
+        "next_step": (
+            ""
+            if waf_ready and origin_locked and callbacks_ready
+            else "complete_stable_domain_waf_origin_ebay_wechat_callbacks"
+        ),
+        "next_action": (
+            "Stable domain, WAF, origin lock, eBay callback and WeChat signed callback proof are required."
+        ),
+    }
+    view["status"] = "ready_for_owner_approval" if waf_ready and origin_locked and callbacks_ready else "blocked"
+    view["required_callback_urls"] = {
+        "ebay_oauth_callback": (
+            edge.get("required_callback_urls", {}).get("ebay_oauth_callback")
+            if isinstance(edge.get("required_callback_urls"), dict)
+            else ""
+        ),
+        "wechat_pay_notify": "backend_configured_https_url",
+        "wechat_pay_refund_notify": "backend_configured_https_url",
+        "secret_exposed": False,
+    }
+    view["calls_stripe_api"] = False
+    view["creates_checkout_session"] = False
+    view["triggers_real_charge"] = False
+    view["secret_exposed"] = False
+    return view
+
+
+def _owner_mainland_cutover_view(
+    *,
+    paid_packet: dict[str, Any],
+    legacy_billing_cutover: dict[str, Any],
+) -> dict[str, Any]:
+    steps = _by_key(paid_packet.get("steps"))
+    external = _by_key(paid_packet.get("external_configuration_needed"))
+    payment = steps.get("wechat_pay_native_cutover") or {}
+    no_charge = steps.get("no_charge_launch_rehearsal") or {}
+    payment_ready = payment.get("status") == "ready"
+    no_charge_ready = no_charge.get("status") == "ready"
+    payment_blocked = [
+        str(item)
+        for item in payment.get("blocked_by") or []
+        if isinstance(item, str) and item
+    ]
+    no_charge_blocked = [
+        str(item)
+        for item in no_charge.get("blocked_by") or []
+        if isinstance(item, str) and item
+    ]
+    no_charge_external = external.get("no_charge_rehearsal_evidence_flags") or {}
+    no_charge_evidence = {
+        "key": "no_charge_rehearsal_evidence_flags",
+        "status": "ready" if no_charge_ready else "blocked",
+        "environment_keys": [
+            str(item)
+            for item in no_charge_external.get("environment_keys") or []
+            if isinstance(item, str) and item
+        ],
+        "secret_value_returned": False,
+        "frontend_gets_secret": False,
+        "secret_exposed": False,
+    }
+    return {
+        "contract_version": "2026-07-27-mainland-payment-owner-cutover-view-v1",
+        "provider": "wechat_pay_native",
+        "status": "ready_for_owner_approval" if payment_ready else "blocked",
+        "summary": {
+            "ready_count": 1 if payment_ready else 0,
+            "total_count": 1,
+            "blocked_count": 0 if payment_ready else 1,
+            "blocked_keys": payment_blocked,
+            "next_step": "" if payment_ready else "wechat_pay_native_cutover",
+            "next_action": payment.get("next_action") or "Complete the WeChat Native production prerequisites.",
+            "provider": "wechat_pay_native",
+        },
+        "no_charge_live_domain_evidence_packet": {
+            "contract_version": "2026-07-27-no-charge-mainland-payment-evidence-v1",
+            "status": "ready" if no_charge_ready else "blocked",
+            "summary": {
+                "ready_count": 1 if no_charge_ready else 0,
+                "total_count": 1,
+                "blocked_count": 0 if no_charge_ready else 1,
+                "blocked_keys": no_charge_blocked,
+            },
+            "evidence_items": [no_charge_evidence],
+            "public_paid_launch_allowed": False,
+            "charge_now_allowed": False,
+            "calls_external_payment_api": False,
+            "triggers_real_charge": False,
+            "secret_exposed": False,
+        },
+        "deprecated_stripe_rehearsal_status": (
+            legacy_billing_cutover.get("status") if isinstance(legacy_billing_cutover, dict) else "unknown"
+        ),
+        "public_paid_launch_allowed": False,
+        "charge_now_allowed": False,
+        "calls_stripe_api": False,
+        "triggers_real_charge": False,
+        "secret_exposed": False,
     }
 
 
@@ -384,7 +573,11 @@ def _summary(
         "ebay_token_refresh_success_count": _as_int(evidence.get("ebay_token_refresh_success_count")),
         "model_value_ready": _provider_ready(readiness, "model_value"),
         "billing_provider": provider.get("selected") or "not_selected",
-        "billing_ready_for_paid_launch": bool(billing.get("billing_ready_for_paid_launch")),
+        "mainland_payment_provider": "wechat_pay_native",
+        "mainland_payment_ready_for_owner_approval": (
+            billing.get("mainland_payment_ready_for_owner_approval") is True
+        ),
+        "billing_ready_for_paid_launch": billing.get("mainland_payment_ready_for_owner_approval") is True,
         "subscription_shutdown_ready": bool(
             shutdown_closure.get("ready_for_no_charge_rehearsal") or shutdown_closure.get("ready_for_live_cutover")
         ),
@@ -453,9 +646,13 @@ def _lanes(
         _lane(
             "billing",
             "Billing and quota cutover",
-            "ready" if bool(billing.get("billing_ready_for_paid_launch")) and billing_cutover.get("status") == "ready_for_owner_approval" else "blocked",
+            "ready"
+            if billing.get("mainland_payment_ready_for_owner_approval") is True
+            and billing_cutover.get("status") == "ready_for_owner_approval"
+            else "blocked",
             f"provider={billing_provider.get('selected') or 'not_selected'}; cutover={billing_cutover.get('status') or 'unknown'}",
-            _summary_next_action(billing_cutover) or "Configure Stripe live provider, Price IDs, signed webhook, Portal and quota proof.",
+            _summary_next_action(billing_cutover)
+            or "Complete WeChat Native backend credentials, signed callbacks, query, refund and controlled-acceptance proof.",
         ),
         _lane(
             "subscription_shutdown",
@@ -508,7 +705,8 @@ def _lanes(
             "No-real-charge final rehearsal",
             "ready" if bool(paid_packet.get("ready_for_owner_approval")) and paid_summary.get("blocked_count") == 0 else "blocked",
             f"approval_packet={paid_packet.get('status') or 'unknown'}; next={paid_summary.get('next_step') or 'none'}",
-            paid_summary.get("next_step") or "Run no-charge launch rehearsal only after Stripe/domain/eBay prerequisites are ready.",
+            paid_summary.get("next_step")
+            or "Run the no-charge rehearsal only after WeChat Native, domain and clean eBay prerequisites are ready.",
         ),
         _lane(
             "test_data_governance",
@@ -534,16 +732,18 @@ def _external_blockers(
     return [
         _external_item(
             "stable_domain_waf_callbacks",
-            "Stable domain, WAF/Bot controls, origin lock, eBay and Stripe callback URLs",
+            "Stable domain, WAF/Bot controls, origin lock, eBay and WeChat callback URLs",
             edge.get("status") == "ready_for_owner_approval",
-            "Finish DNS/TLS/WAF/origin/callback verification in Cloudflare/Tencent/Stripe/eBay consoles.",
+            "Finish DNS/TLS/WAF/origin/callback verification for Cloudflare, Tencent, WeChat Pay and eBay.",
             evidence=f"edge_ready={edge_summary.get('ready_count', 0)}/{edge_summary.get('total_count', 0)}; next={edge_summary.get('next_step') or 'none'}",
         ),
         _external_item(
-            "stripe_live_products_prices_webhook",
-            "Stripe live Products, Price IDs, Checkout, Portal and signed webhook",
-            bool(billing.get("billing_ready_for_paid_launch")) and billing_cutover.get("status") == "ready_for_owner_approval",
-            _summary_next_action(billing_cutover) or "Finish Stripe live setup with real merchant information and stable-domain URLs.",
+            "wechat_pay_native_production_cutover",
+            "WeChat Pay Native credentials, signed callbacks, query, refund and controlled acceptance",
+            billing.get("mainland_payment_ready_for_owner_approval") is True
+            and billing_cutover.get("status") == "ready_for_owner_approval",
+            _summary_next_action(billing_cutover)
+            or "Finish backend-only WeChat Pay production prerequisites and stable callback URLs.",
             evidence=f"billing_cutover={billing_cutover.get('status') or 'unknown'}",
         ),
         _external_item(
@@ -636,7 +836,7 @@ def _internal_work_queue(
             "no_charge_rehearsal",
             "No-real-charge launch rehearsal",
             "ready" if paid_summary.get("blocked_count") == 0 else "blocked",
-            "Run only after external domain, Stripe and eBay prerequisites are ready.",
+            "Run only after external domain, WeChat Native and clean eBay prerequisites are ready.",
             "python tools/test_jiejing_paid_launch_approval_packet.py",
         ),
         _work_item(
@@ -690,7 +890,10 @@ def _evidence_summary(
         },
         "billing": {
             "provider": billing_provider.get("selected") or "not_selected",
-            "paid_launch_ready": bool(billing.get("billing_ready_for_paid_launch")),
+            "paid_launch_ready": billing.get("mainland_payment_ready_for_owner_approval") is True,
+            "mainland_payment_ready_for_owner_approval": (
+                billing.get("mainland_payment_ready_for_owner_approval") is True
+            ),
             "private_beta_ready": bool(billing.get("billing_ready_for_private_beta")),
             "cutover_status": billing_cutover.get("status") or "unknown",
             "next_action": _summary_next_action(billing_cutover),
@@ -764,7 +967,7 @@ def _owner_review_packet(
         _review_item(
             "billing_cutover",
             "Billing provider cutover",
-            "ready" if summary.get("billing_ready_for_paid_launch") else "blocked",
+            "ready" if summary.get("mainland_payment_ready_for_owner_approval") is True else "blocked",
             f"provider={summary.get('billing_provider') or 'not_selected'}; cutover={summary.get('billing_cutover_status') or 'unknown'}; charge_now_allowed=false",
             "Finish live provider setup and no-real-charge rehearsal before any real checkout path is enabled.",
             "/billing/plans",
@@ -782,7 +985,7 @@ def _owner_review_packet(
             "Stable domain, WAF and callback URLs",
             "ready" if summary.get("stable_domain_ready") else "attention_required",
             f"edge={_as_int(summary.get('edge_ready_count'))}/{_as_int(summary.get('edge_total_count'))}; app_domain=app.jiejing.shop",
-            "Verify free WAF/Bot controls, origin lock, and eBay/Stripe callback URLs on the stable domain.",
+            "Verify free WAF/Bot controls, origin lock, and eBay/WeChat callback URLs on the stable domain.",
             "/owner/edge-cutover-preflight",
         ),
         _review_item(
@@ -995,6 +1198,11 @@ def _launch_rehearsal_audit_packet(
     evidence_summary: dict[str, Any],
 ) -> dict[str, Any]:
     billing_summary = billing_cutover.get("summary") if isinstance(billing_cutover.get("summary"), dict) else {}
+    no_charge_packet = (
+        billing_cutover.get("no_charge_live_domain_evidence_packet")
+        if isinstance(billing_cutover.get("no_charge_live_domain_evidence_packet"), dict)
+        else {}
+    )
     edge_summary = edge.get("summary") if isinstance(edge.get("summary"), dict) else {}
     paid_summary = paid_packet.get("summary") if isinstance(paid_packet.get("summary"), dict) else {}
     owner_review_summary = owner_review_packet.get("summary") if isinstance(owner_review_packet.get("summary"), dict) else {}
@@ -1037,10 +1245,10 @@ def _launch_rehearsal_audit_packet(
         _audit_check(
             "billing_no_charge_rehearsal",
             "Billing no-charge rehearsal",
-            "ready" if billing_cutover.get("status") == "ready_for_owner_approval" else "blocked",
-            f"billing_rehearsal={billing_cutover.get('status') or 'unknown'}; ready={_as_int(billing_summary.get('ready_count'))}/{_as_int(billing_summary.get('total_count'))}; charge_now_allowed=false",
-            billing_summary.get("next_action") or "Keep live Checkout disabled until the no-charge rehearsal is owner-approved.",
-            "/owner/billing-domain-cutover-rehearsal",
+            "ready" if no_charge_packet.get("status") == "ready" else "blocked",
+            f"no_charge_rehearsal={no_charge_packet.get('status') or 'unknown'}; charge_now_allowed=false",
+            "Keep payable QR creation disabled until the no-charge rehearsal is owner-approved.",
+            "/owner/paid-launch-approval-packet no_charge_launch_rehearsal",
         ),
         _audit_check(
             "edge_waf_callback_snapshot",
@@ -1133,7 +1341,6 @@ def _launch_rehearsal_audit_packet(
             "/health/deep",
             "/readiness/product-saas",
             "/owner/launch-control",
-            "/owner/billing-domain-cutover-rehearsal",
             "/owner/edge-cutover-preflight",
             "/owner/paid-launch-approval-packet",
             "python tools/jiejing_secret_scan.py",
@@ -1261,7 +1468,9 @@ def _release_history(
             ),
             "billing_provider": (billing.get("provider") if isinstance(billing, dict) else "") or summary.get("billing_provider") or "not_selected",
             "billing_ready_for_paid_launch": bool(
-                billing.get("paid_launch_ready") if isinstance(billing, dict) else summary.get("billing_ready_for_paid_launch")
+                billing.get("mainland_payment_ready_for_owner_approval")
+                if isinstance(billing, dict)
+                else summary.get("mainland_payment_ready_for_owner_approval")
             ),
             "edge_status": edge.get("status") if isinstance(edge, dict) else "unknown",
             "owner_review_status": owner_review_packet.get("status") or "unknown",
@@ -1307,8 +1516,10 @@ def _bundle_manifest_records(*, output_root: Path) -> list[dict[str, Any]]:
     for manifest_path in manifests[:8]:
         manifest = _read_json_file(manifest_path)
         created_at = str(manifest.get("created_at") or _mtime_iso(manifest_path))
-        zip_path = Path(str(manifest.get("zip_path") or ""))
-        zip_file = zip_path.name or manifest_path.name.replace(".manifest.json", ".zip")
+        zip_file = _portable_artifact_filename(
+            manifest.get("zip_path"),
+            fallback=manifest_path.name.replace(".manifest.json", ".zip"),
+        )
         records.append(
             {
                 "key": manifest_path.stem.replace(".manifest", ""),
@@ -1327,6 +1538,12 @@ def _bundle_manifest_records(*, output_root: Path) -> list[dict[str, Any]]:
             }
         )
     return records
+
+
+def _portable_artifact_filename(value: Any, *, fallback: str) -> str:
+    normalized = str(value or "").strip().replace("\\", "/").rstrip("/")
+    filename = normalized.rsplit("/", 1)[-1] if normalized else ""
+    return filename or fallback
 
 
 def _rollback_points(*, output_root: Path) -> list[dict[str, Any]]:
@@ -1401,8 +1618,10 @@ def _release_history_checks(
         _release_check(
             "billing_public_charge_block",
             "Billing public charge block",
-            "ready" if not bool(summary.get("billing_ready_for_paid_launch")) else "attention_required",
-            f"provider={summary.get('billing_provider') or 'not_selected'}; paid_ready={bool(summary.get('billing_ready_for_paid_launch'))}; charge_now_allowed=false",
+            "ready"
+            if summary.get("mainland_payment_ready_for_owner_approval") is not True
+            else "attention_required",
+            f"provider={summary.get('billing_provider') or 'not_selected'}; owner_ready={summary.get('mainland_payment_ready_for_owner_approval') is True}; charge_now_allowed=false",
             "Keep public charging disabled until live provider and no-charge rehearsal are owner-approved.",
         ),
     ]
@@ -1496,8 +1715,10 @@ def _continuity_handoff_digest(
         _handoff_line(
             "billing",
             "Billing provider",
-            "blocked" if not bool(summary.get("billing_ready_for_paid_launch")) else "ready",
-            f"provider={(billing.get('provider') if isinstance(billing, dict) else '') or summary.get('billing_provider') or 'not_selected'}; paid_ready={bool(summary.get('billing_ready_for_paid_launch'))}; charge_now_allowed=false",
+            "blocked"
+            if summary.get("mainland_payment_ready_for_owner_approval") is not True
+            else "ready",
+            f"provider={(billing.get('provider') if isinstance(billing, dict) else '') or summary.get('billing_provider') or 'not_selected'}; owner_ready={summary.get('mainland_payment_ready_for_owner_approval') is True}; charge_now_allowed=false",
             "Use test/mock billing until live provider, prices, portal and signed webhook are owner-approved.",
         ),
         _handoff_line(
@@ -1520,7 +1741,7 @@ def _continuity_handoff_digest(
     ]
     do_not_do = [
         "Do not repeat eBay OAuth with the frozen old account.",
-        "Do not create live Stripe Checkout sessions or real charges until owner-approved cutover.",
+        "Do not create a payable QR or call a live payment provider until owner-approved cutover.",
         "Do not perform real eBay writes, price changes, inventory changes, refunds, ads or policy edits outside confirmation center.",
         "Do not export database rows, raw secrets, eBay tokens, refresh tokens, model keys, API keys or payment secrets.",
         "Do not automatically delete smoke/test data; keep cleanup as a reviewed plan.",
@@ -1683,7 +1904,7 @@ def _cutover_decision_checklist(
         rehearsal_ready
         and bool(summary.get("production_ready"))
         and bool(summary.get("can_accept_real_customers"))
-        and bool(summary.get("billing_ready_for_paid_launch"))
+        and summary.get("mainland_payment_ready_for_owner_approval") is True
         and _as_int(summary.get("ebay_token_refresh_success_count")) > 0
     )
     recommended_next_step = (
@@ -1728,21 +1949,21 @@ def _cutover_decision_checklist(
             "Final no-real-charge rehearsal",
             "ready" if rehearsal_ready else "blocked",
             f"external_done={external_done}; audit_status={launch_rehearsal_audit_packet.get('status') or 'unknown'}; charge_now_allowed=false",
-            "Run the final no-real-charge rehearsal only after external Stripe/domain/eBay prerequisites are ready.",
+            "Run the final no-real-charge rehearsal only after external WeChat/domain/eBay prerequisites are ready.",
             owner="platform_ops",
         ),
         _cutover_phase(
             "live_paid_public_launch",
             "Live paid public launch",
             "ready" if live_ready else "blocked",
-            f"billing_ready={bool(summary.get('billing_ready_for_paid_launch'))}; refresh_success={_as_int(summary.get('ebay_token_refresh_success_count'))}; public_paid_launch_allowed=false",
+            f"mainland_payment_owner_ready={summary.get('mainland_payment_ready_for_owner_approval') is True}; refresh_success={_as_int(summary.get('ebay_token_refresh_success_count'))}; public_paid_launch_allowed=false",
             "Live charging and real-customer launch remain blocked until owner approval after all proof is attached.",
             owner="founder_operator",
             external_console_required=True,
         ),
     ]
     forbidden_actions = [
-        "Do not create live Stripe Checkout sessions from this panel.",
+        "Do not create a payable QR or call a live payment provider from this panel.",
         "Do not repeat eBay OAuth until a clean new eBay account is ready.",
         "Do not reuse the frozen old eBay account for live smoke.",
         "Do not perform real eBay writes, price, inventory, refund, ad or policy changes outside confirmation center.",
@@ -1771,7 +1992,10 @@ def _cutover_decision_checklist(
             "beta_ready": bool(summary.get("beta_ready")),
             "production_ready": bool(summary.get("production_ready")),
             "can_accept_real_customers": bool(summary.get("can_accept_real_customers")),
-            "billing_ready_for_paid_launch": bool(summary.get("billing_ready_for_paid_launch")),
+            "billing_ready_for_paid_launch": summary.get("mainland_payment_ready_for_owner_approval") is True,
+            "mainland_payment_ready_for_owner_approval": (
+                summary.get("mainland_payment_ready_for_owner_approval") is True
+            ),
             "ebay_token_refresh_success_count": _as_int(summary.get("ebay_token_refresh_success_count")),
             "public_paid_launch_allowed": False,
             "charge_now_allowed": False,
@@ -1949,14 +2173,16 @@ def _final_launch_rehearsal_execution_record(
     rollback_points = release_history.get("rollback_points") if isinstance(release_history.get("rollback_points"), list) else []
     bundle_ready = bool(release_summary.get("latest_bundle_sha256"))
     stable_domain_ready = bool(summary.get("stable_domain_ready") or edge.get("callbacks_ready"))
-    billing_rehearsal_ready = bool(billing.get("subscription_shutdown_ready")) and not bool(summary.get("billing_ready_for_paid_launch"))
+    billing_rehearsal_ready = bool(billing.get("subscription_shutdown_ready")) and (
+        summary.get("mainland_payment_ready_for_owner_approval") is not True
+    )
     refresh_success_count = _as_int(ebay.get("refresh_success_count") or summary.get("ebay_token_refresh_success_count"))
     owner_approval_ready = (
         not blocked_external
         and not pending_internal
         and bool(readiness.get("production_ready") or summary.get("production_ready"))
         and bool(summary.get("can_accept_real_customers"))
-        and bool(summary.get("billing_ready_for_paid_launch"))
+        and summary.get("mainland_payment_ready_for_owner_approval") is True
         and refresh_success_count > 0
         and bool(rollback_points)
     )
@@ -2021,7 +2247,7 @@ def _final_launch_rehearsal_execution_record(
             "no_real_charge_billing_rehearsal",
             "No-real-charge billing rehearsal",
             "ready" if billing_rehearsal_ready else "blocked",
-            f"provider={billing.get('provider') or summary.get('billing_provider') or 'not_selected'}; paid_ready={bool(summary.get('billing_ready_for_paid_launch'))}; subscription_shutdown_ready={bool(billing.get('subscription_shutdown_ready'))}; charge_now_allowed=false",
+            f"provider={billing.get('provider') or summary.get('billing_provider') or 'not_selected'}; owner_ready={summary.get('mainland_payment_ready_for_owner_approval') is True}; subscription_shutdown_ready={bool(billing.get('subscription_shutdown_ready'))}; charge_now_allowed=false",
             "Use mock/test mode until live prices, portal and signed webhook are configured and owner-approved.",
             source_endpoint="/billing/plans + /billing/usage",
         ),
@@ -2098,7 +2324,10 @@ def _final_launch_rehearsal_execution_record(
             "beta_ready": bool(summary.get("beta_ready")),
             "production_ready": bool(summary.get("production_ready")),
             "can_accept_real_customers": bool(summary.get("can_accept_real_customers")),
-            "billing_ready_for_paid_launch": bool(summary.get("billing_ready_for_paid_launch")),
+            "billing_ready_for_paid_launch": summary.get("mainland_payment_ready_for_owner_approval") is True,
+            "mainland_payment_ready_for_owner_approval": (
+                summary.get("mainland_payment_ready_for_owner_approval") is True
+            ),
             "ebay_token_refresh_success_count": refresh_success_count,
             "public_paid_launch_allowed": False,
             "charge_now_allowed": False,
@@ -2326,19 +2555,24 @@ def _owner_paid_launch_approval_dossier(
             source_endpoint="/readiness/product-saas",
         ),
         _approval_dossier_section(
-            "billing_provider_truth",
-            "Billing provider and subscription truth",
-            "ready" if bool(summary.get("billing_ready_for_paid_launch")) else "blocked",
+            "mainland_payment_truth",
+            "Mainland WeChat Native payment truth",
+            "ready"
+            if summary.get("mainland_payment_ready_for_owner_approval") is True
+            else "blocked",
             _dossier_evidence(
                 provider=billing.get("provider") or summary.get("billing_provider") or "not_selected",
-                billing_ready_for_paid_launch=bool(summary.get("billing_ready_for_paid_launch")),
+                mainland_payment_ready_for_owner_approval=(
+                    summary.get("mainland_payment_ready_for_owner_approval") is True
+                ),
                 cutover_status=billing_cutover.get("status") or "unknown",
                 cutover_ready=f"{billing_summary.get('ready_count', 0)}/{billing_summary.get('total_count', 0)}",
                 creates_checkout_session=False,
                 charge_now_allowed=False,
             ),
-            billing_summary.get("next_action") or "Finish live billing provider, prices, portal, signed webhook and quota lifecycle evidence before charging.",
-            source_endpoint="/owner/billing-domain-cutover-rehearsal",
+            billing_summary.get("next_action")
+            or "Finish WeChat Native credentials, signed callbacks, query, refund and controlled acceptance before charging.",
+            source_endpoint="/owner/paid-launch-approval-packet",
         ),
         _approval_dossier_section(
             "no_charge_live_domain_evidence",
@@ -2351,7 +2585,7 @@ def _owner_paid_launch_approval_dossier(
                 blocked=",".join([str(item) for item in no_charge_summary.get("blocked_keys") or [] if str(item)]),
             ),
             "Complete all no-charge live-domain smoke, webhook, readiness, secret-scan, browser-smoke and rollback evidence flags.",
-            source_endpoint="/owner/billing-domain-cutover-rehearsal no_charge_live_domain_evidence_packet",
+            source_endpoint="/owner/paid-launch-approval-packet no_charge_launch_rehearsal",
             evidence_items=_approval_dossier_evidence_items(no_charge_items),
         ),
         _approval_dossier_section(
@@ -2431,7 +2665,10 @@ def _owner_paid_launch_approval_dossier(
             "production_ready": bool(summary.get("production_ready")),
             "can_accept_real_customers": bool(summary.get("can_accept_real_customers")),
             "billing_provider": billing.get("provider") or summary.get("billing_provider") or "not_selected",
-            "billing_ready_for_paid_launch": bool(summary.get("billing_ready_for_paid_launch")),
+            "billing_ready_for_paid_launch": summary.get("mainland_payment_ready_for_owner_approval") is True,
+            "mainland_payment_ready_for_owner_approval": (
+                summary.get("mainland_payment_ready_for_owner_approval") is True
+            ),
             "no_charge_evidence_packet_status": no_charge_packet.get("status") or "missing",
             "no_charge_evidence_ready_count": _as_int(no_charge_summary.get("ready_count")),
             "no_charge_evidence_total_count": _as_int(no_charge_summary.get("total_count")),
@@ -2450,7 +2687,7 @@ def _owner_paid_launch_approval_dossier(
             {"label": "health", "url": "https://app.jiejing.shop/health"},
             {"label": "deep_health", "url": "https://app.jiejing.shop/health/deep"},
             {"label": "readiness", "url": "https://app.jiejing.shop/readiness/product-saas"},
-            {"label": "billing_domain_cutover_rehearsal", "url": "/owner/billing-domain-cutover-rehearsal"},
+            {"label": "mainland_payment_approval", "url": "/owner/paid-launch-approval-packet"},
             {"label": "paid_launch_approval_packet", "url": "/owner/paid-launch-approval-packet"},
             {"label": "owner_launch_control", "url": "/owner/launch-control"},
         ],
@@ -2632,9 +2869,11 @@ def _prelaunch_acceptance_report(
         _prelaunch_report_item(
             "billing_provider",
             "Billing provider and quota",
-            "blocked" if not bool(summary.get("billing_ready_for_paid_launch")) else "ready",
-            f"provider={billing.get('provider') or summary.get('billing_provider') or 'not_selected'}; paid_launch_ready={bool(summary.get('billing_ready_for_paid_launch'))}; charge_now_allowed=false",
-            "Configure live products, price IDs, portal and signed webhook before any real merchant charge.",
+            "blocked"
+            if summary.get("mainland_payment_ready_for_owner_approval") is not True
+            else "ready",
+            f"provider={billing.get('provider') or summary.get('billing_provider') or 'not_selected'}; owner_ready={summary.get('mainland_payment_ready_for_owner_approval') is True}; charge_now_allowed=false",
+            "Complete WeChat Native credentials, signed callbacks, query, refund and controlled acceptance before any real merchant charge.",
         ),
         _prelaunch_report_item(
             "ebay_refresh_proof",
@@ -2700,7 +2939,10 @@ def _prelaunch_acceptance_report(
         "production_ready": bool(summary.get("production_ready")),
         "can_accept_real_customers": bool(summary.get("can_accept_real_customers")),
         "billing_provider": billing.get("provider") or summary.get("billing_provider") or "not_selected",
-        "billing_ready_for_paid_launch": bool(summary.get("billing_ready_for_paid_launch")),
+        "billing_ready_for_paid_launch": summary.get("mainland_payment_ready_for_owner_approval") is True,
+        "mainland_payment_ready_for_owner_approval": (
+            summary.get("mainland_payment_ready_for_owner_approval") is True
+        ),
         "ebay_token_refresh_success_count": refresh_success_count,
         "latest_bundle": release_summary.get("latest_bundle") or "",
         "latest_bundle_sha256": release_summary.get("latest_bundle_sha256") or "",
@@ -2852,7 +3094,7 @@ def _prelaunch_report_markdown(
         f"- production_ready: {bool(summary.get('production_ready'))}",
         f"- can_accept_real_customers: {bool(summary.get('can_accept_real_customers'))}",
         f"- billing_provider: {summary.get('billing_provider')}",
-        f"- billing_ready_for_paid_launch: {bool(summary.get('billing_ready_for_paid_launch'))}",
+        f"- mainland_payment_ready_for_owner_approval: {summary.get('mainland_payment_ready_for_owner_approval') is True}",
         f"- ebay_token_refresh_success_count: {_as_int(summary.get('ebay_token_refresh_success_count'))}",
         f"- public_paid_launch_allowed: {bool(summary.get('public_paid_launch_allowed'))}",
         f"- charge_now_allowed: {bool(summary.get('charge_now_allowed'))}",
@@ -2888,7 +3130,7 @@ def _prelaunch_report_markdown(
     lines.append("## No-go boundary")
     lines.extend(
         [
-            "- Do not create live Stripe Checkout sessions from this report.",
+            "- Do not create a payable QR or call a live payment provider from this report.",
             "- Do not run or repeat eBay OAuth until a clean new eBay account is ready.",
             "- Do not perform real eBay writes, price, inventory, refund, ad, policy or sensitive customer-promise actions outside confirmation center.",
             "- Do not export database rows, raw secrets, eBay tokens, refresh tokens, model keys, API keys or payment secrets.",
@@ -2952,6 +3194,43 @@ def _current_frontend_asset_version() -> str:
     return ""
 
 
+def _load_fixed_progress_release_evidence(root: Path | None = None) -> dict[str, Any]:
+    """Load only release evidence that is bound to the currently deployed frontend."""
+
+    project_root = root or Path(__file__).resolve().parents[1]
+    evidence = _read_json_file(project_root / "deploy" / "release-evidence.json")
+    expected_version = str(evidence.get("frontend_asset_version") or "")[:80]
+    current_version = ""
+    for path in (project_root / "index.html", project_root / "app.html"):
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        if expected_version and expected_version in text:
+            current_version = expected_version
+            break
+
+    browser_smoke_passed = (
+        evidence.get("contract_version") == FIXED_PROGRESS_RELEASE_EVIDENCE_CONTRACT
+        and bool(expected_version)
+        and current_version == expected_version
+        and evidence.get("precloud_gate_passed") is True
+        and evidence.get("local_browser_smoke_passed") is True
+        and evidence.get("public_browser_smoke_passed") is True
+        and evidence.get("secret_scan_passed") is True
+    )
+    return {
+        "contract_version": FIXED_PROGRESS_RELEASE_EVIDENCE_CONTRACT,
+        "frontend_asset_version": current_version,
+        "browser_smoke_passed": browser_smoke_passed,
+        "public_domain_tls_passed": browser_smoke_passed,
+        "real_merchant_workflow_validation_passed": False,
+        "manual_real_merchant_validation_flag_ignored": True,
+        "public_charging_approved": bool(evidence.get("public_charging_approved")),
+        "secret_exposed": False,
+    }
+
+
 def _war_room(
     *,
     summary: dict[str, Any],
@@ -2980,9 +3259,11 @@ def _war_room(
             _war_room_section(
                 "billing_revenue",
                 "Billing and revenue cutover",
-                "ready" if bool(summary.get("billing_ready_for_paid_launch")) else "blocked",
+                "ready"
+                if summary.get("mainland_payment_ready_for_owner_approval") is True
+                else "blocked",
                 f"provider={summary.get('billing_provider') or 'unknown'}; cutover={summary.get('billing_cutover_status') or 'unknown'}",
-                "Stripe live Products, Price IDs, Portal and signed webhook still need real merchant configuration before charging.",
+                "WeChat Native credentials, signed callbacks, query, refund and controlled-acceptance proof are required before charging.",
             ),
             _war_room_section(
                 "ebay_account",
@@ -3032,7 +3313,7 @@ def _war_room(
             "charge_now_allowed": False,
             "platform_write_now_allowed": False,
             "repeat_ebay_oauth_allowed": False,
-            "next_owner_decision": "Keep private beta until Stripe live, clean eBay account, refresh proof and no-charge rehearsal are complete.",
+            "next_owner_decision": "Keep private beta until WeChat Native, a clean eBay account, refresh proof and no-charge rehearsal are complete.",
         },
         "secret_exposed": False,
     }
@@ -3095,7 +3376,7 @@ def _operations_observability(
             "subscription_quota_shutdown",
             "Subscription and quota shutdown",
             "ready" if shutdown.get("merchant_visible") is True and shutdown.get("charge_now_allowed") is False else "attention_required",
-            "Billing shutdown state is visible without calling Stripe or exposing payment secrets.",
+            "Billing shutdown state is visible without calling a live payment provider or exposing payment secrets.",
             f"subscription={shutdown.get('subscription_status') or 'unknown'}; entitlement_active={bool(shutdown.get('entitlement_active'))}; quota_enabled={bool(shutdown.get('quota_enforcement_enabled'))}; blocked_units={_as_int(shutdown.get('blocked_units_count'))}",
             "Keep failed-payment, cancellation and quota hard-stop visible before live provider cutover.",
             "/billing/usage",
@@ -3290,7 +3571,7 @@ def _resilience_war_room(
             "billing_quota_incident_mode",
             "Billing and quota incident mode",
             "ready" if shutdown.get("merchant_visible") is True and shutdown.get("charge_now_allowed") is False else "attention_required",
-            "Billing incidents can show entitlement/quota shutdown without creating Checkout sessions or calling live Stripe.",
+            "Billing incidents can show entitlement/quota shutdown without creating a payable QR or calling a live payment provider.",
             f"merchant_visible={bool(shutdown.get('merchant_visible'))}; charge_now_allowed={bool(shutdown.get('charge_now_allowed'))}; quota_enabled={bool(shutdown.get('quota_enforcement_enabled'))}; blocked_units={_as_int(shutdown.get('blocked_units_count'))}",
             "Keep failed-payment, cancellation and quota hard-stop rehearsals current before live provider cutover.",
             "/billing/usage",

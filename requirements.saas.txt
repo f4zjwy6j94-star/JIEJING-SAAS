@@ -3,5 +3,7 @@ psycopg_pool>=3.2,<4
 redis>=5,<7
 tencentcloud-sdk-python-ssm>=3.0,<4
 tencentcloud-sdk-python-cls>=3.0,<4
+tencentcloud-cls-sdk-python>=1.0.4,<2
 cos-python-sdk-v5>=1.9,<2
 cryptography>=43,<47
+qrcode[pil]>=8,<9

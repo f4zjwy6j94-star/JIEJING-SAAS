@@ -325,7 +325,7 @@ async function main() {
       hasRehearsalNoFrontendSecret: rehearsalText.includes("frontend_gets_payment_secret=false") || rehearsalText.includes("secret_exposed_false"),
       hasApprovalPacket: approvalText.includes("paid_launch_approval_packet"),
       hasApprovalStableDomain: approvalText.includes("stable_domain_hardening"),
-      hasApprovalStripeCutover: approvalText.includes("stripe_live_cutover"),
+      hasApprovalWechatCutover: approvalText.includes("wechat_pay_native_cutover"),
       hasApprovalNoChargeRehearsal: approvalText.includes("no_charge_launch_rehearsal"),
       hasApprovalNewEbaySmoke: approvalText.includes("new_ebay_account_low_risk_smoke"),
       hasApprovalExternalConfig: approvalText.includes("external_configuration_needed"),
@@ -636,7 +636,7 @@ async function main() {
     if (!ui.hasEdgeCutover || !ui.hasEdgeStableDomain || !ui.hasEdgeWaf || !ui.hasEdgeOriginLock || !ui.hasEdgeCallbacks) failures.push("edge cutover UI missing key stages");
     if (!ui.hasEdgeNoCharge || !ui.hasEdgeNoCheckout || !ui.hasEdgeNoStripeCall || !ui.hasEdgeNoOauth || !ui.hasEdgeNoWrite || !ui.hasEdgeNoFrontendSecret) failures.push("edge cutover UI missing safety flags");
   }
-  if (result.api.paid_launch_approval_version !== "2026-06-18-paid-launch-approval-packet") failures.push("api paid launch approval contract missing");
+  if (result.api.paid_launch_approval_version !== "2026-07-27-paid-launch-approval-packet-v2") failures.push("api paid launch approval contract missing");
   if (result.api.paid_launch_approval_status !== "blocked") failures.push(`api paid launch approval status ${result.api.paid_launch_approval_status}`);
   if (result.api.paid_launch_approval_mode !== "owner_approval_packet_no_charge_no_write") failures.push(`api paid launch approval mode ${result.api.paid_launch_approval_mode}`);
   if (result.api.paid_launch_approval_ready_for_owner_approval !== false) failures.push("api paid launch approval unexpectedly owner-approved");
@@ -646,12 +646,12 @@ async function main() {
   if (result.api.paid_launch_approval_triggers_ebay_oauth !== false) failures.push("api paid launch approval unexpectedly triggers eBay OAuth");
   if (result.api.paid_launch_approval_triggers_real_platform_write !== false) failures.push("api paid launch approval unexpectedly triggers platform write");
   if (result.api.paid_launch_approval_total_count !== 4) failures.push(`api paid launch approval step count ${result.api.paid_launch_approval_total_count}`);
-  for (const key of ["stable_domain_hardening", "stripe_live_cutover", "no_charge_launch_rehearsal", "new_ebay_account_low_risk_smoke"]) {
+  for (const key of ["stable_domain_hardening", "wechat_pay_native_cutover", "no_charge_launch_rehearsal", "new_ebay_account_low_risk_smoke"]) {
     if (!result.api.paid_launch_approval_keys.includes(key)) failures.push(`api paid launch approval missing ${key}`);
   }
   if (ui.ownerOpsTabVisible) {
     if (!ui.approvalVisible || ui.approvalCardCount < 4) failures.push("paid launch approval UI missing");
-    if (!ui.hasApprovalPacket || !ui.hasApprovalStableDomain || !ui.hasApprovalStripeCutover || !ui.hasApprovalNoChargeRehearsal || !ui.hasApprovalNewEbaySmoke) failures.push("paid launch approval UI missing key stages");
+    if (!ui.hasApprovalPacket || !ui.hasApprovalStableDomain || !ui.hasApprovalWechatCutover || !ui.hasApprovalNoChargeRehearsal || !ui.hasApprovalNewEbaySmoke) failures.push("paid launch approval UI missing key stages");
     if (!ui.hasApprovalExternalConfig || !ui.hasApprovalNoCharge || !ui.hasApprovalNoStripeCall || !ui.hasApprovalNoOauth || !ui.hasApprovalNoWrite) failures.push("paid launch approval UI missing safety flags");
     if (ui.laneCount !== 6) failures.push(`cutover decision lane count ${ui.laneCount}`);
   }

@@ -43,6 +43,11 @@ TABLE_ORDER = (
     "confirmations",
     "execution_results",
     "audit_logs",
+    "platform_analytics_events",
+    "model_usage_ledger",
+    "provider_cost_ledger",
+    "platform_reliability_alert_state",
+    "platform_reliability_alert_events",
     "schema_migrations",
 )
 
@@ -64,6 +69,11 @@ JSON_COLUMNS = {
     "item_json",
     "result_json",
     "audit_json",
+    "analytics_json",
+    "usage_json",
+    "cost_json",
+    "state_json",
+    "event_json",
 }
 
 

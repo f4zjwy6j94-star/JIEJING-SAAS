@@ -67,7 +67,8 @@ def main() -> int:
         '"product_remains_static"',
         '"no_use_or_installation_demo"',
         'motion_and_usage_consistency_confirmed: true',
-        'qualityMode !== "creative_exploration"',
+        'const groundingGate = saasMediaGenerationGroundingGate(productFacts, config)',
+        'groundingGate.conceptOnly ? "concept_reference_only" : "reference_grounded_listing_draft"',
     )
     for marker in required_js:
         if marker not in app_js:

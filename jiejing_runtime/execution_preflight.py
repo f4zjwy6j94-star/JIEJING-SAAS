@@ -27,6 +27,8 @@ ACTION_ALIASES = {
     "prepare_listing_draft": "prepare_listing_draft",
     "save_listing_draft": "prepare_listing_draft",
     "listing_draft": "prepare_listing_draft",
+    "save_ebay_listing_draft": "save_ebay_listing_draft",
+    "save_ebay_draft": "save_ebay_listing_draft",
     "revise_listing": "revise_listing",
     "change_price": "change_price",
     "change_inventory": "change_inventory",
@@ -86,6 +88,24 @@ ACTION_REQUIREMENTS = {
         "listing.description_html",
         "listing.draft_source",
     ],
+    "save_ebay_listing_draft": [
+        "account_health.status",
+        "listing.sku",
+        "listing.title",
+        "listing.description_html",
+        "listing.category_id",
+        "listing.condition",
+        "listing.price",
+        "listing.quantity",
+        "listing.item_specifics",
+        "listing.merchant_location_key",
+        "business_policies.fulfillment_policy_id",
+        "business_policies.payment_policy_id",
+        "business_policies.return_policy_id",
+        "asset_manifest.assets",
+        "confirmation_record",
+        "idempotency_key",
+    ],
     "revise_listing": ["listing_id", "change_set", "confirmation_record", "idempotency_key"],
     "change_price": ["listing_id", "new_price", "reason", "finance_review", "confirmation_record", "idempotency_key"],
     "change_inventory": ["listing_id", "new_quantity", "reason", "confirmation_record", "idempotency_key"],
@@ -126,7 +146,7 @@ class ExecutionPreflightChecker:
     """Checks whether a confirmed request is complete enough for execution."""
 
     name = "jiejing-execution-preflight"
-    version = "2026-05-15.1"
+    version = "2026-07-14.1"
 
     def review(self, request: ExecutionRequestLike) -> dict[str, Any]:
         action_type = self._canonical_action(request.action_type)
@@ -205,7 +225,7 @@ class ExecutionPreflightChecker:
         return bool(request.confirmation_id and request.confirmed_by and request.confirmed_at)
 
     def _category_relevance_issue(self, action_type: str, payload: dict[str, Any]) -> PreflightIssue | None:
-        if action_type != "publish_listing":
+        if action_type not in {"publish_listing", "save_ebay_listing_draft"}:
             return None
         listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
         validation = listing.get("category_validation") if isinstance(listing.get("category_validation"), dict) else {}
@@ -285,7 +305,7 @@ class ExecutionPreflightChecker:
             return "A current eBay account-health snapshot is required before publishing so restricted, frozen or payout-held accounts cannot receive real writes."
         if action_type == "prepare_listing_draft":
             return f"Listing draft preparation cannot proceed until {field} is present."
-        if action_type in {"publish_listing", "bulk_publish_listing", "revise_listing"}:
+        if action_type in {"publish_listing", "save_ebay_listing_draft", "bulk_publish_listing", "revise_listing"}:
             return f"Listing execution cannot proceed until {field} is present."
         if action_type in {"refund", "partial_refund", "sensitive_buyer_commitment"}:
             return f"Customer-impacting execution cannot proceed until {field} is present."

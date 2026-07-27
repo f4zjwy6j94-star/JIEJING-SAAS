@@ -39,6 +39,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--public-url", default=DEFAULT_PUBLIC_URL)
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--skip-doctor", action="store_true")
+    parser.add_argument("--disk-warning-percent", type=int, default=80)
+    parser.add_argument("--disk-block-percent", type=int, default=92)
+    parser.add_argument("--disk-min-free-gib", type=int, default=2)
     parser.add_argument(
         "--transfer-mode",
         choices=("auto", "scp", "ssh-stdin"),
@@ -51,7 +54,12 @@ def parse_args() -> argparse.Namespace:
         default=4,
         help="Keep this many newest /tmp/jiejing-public-staging-* upload/extract artifacts after a successful deploy.",
     )
+    parser.add_argument("--remote-patch-backup-keep", type=int, default=8)
+    parser.add_argument("--remote-runner-backup-keep", type=int, default=5)
+    parser.add_argument("--remote-runner-release-keep", type=int, default=5)
+    parser.add_argument("--remote-build-cache-until-hours", type=int, default=1)
     parser.add_argument("--skip-remote-temp-cleanup", action="store_true")
+    parser.add_argument("--skip-remote-deploy-artifact-cleanup", action="store_true")
     return parser.parse_args()
 
 
@@ -64,12 +72,31 @@ def main() -> int:
         return fail(f"ssh_key_not_found: {args.ssh_key}")
     if args.remote_temp_keep < 1:
         return fail("remote_temp_keep_must_be_positive")
+    if min(args.remote_patch_backup_keep, args.remote_runner_backup_keep, args.remote_runner_release_keep) < 1:
+        return fail("remote_deploy_artifact_keep_must_be_positive")
+    if not 1 <= args.remote_build_cache_until_hours <= 168:
+        return fail("remote_build_cache_until_hours_out_of_range")
+    if not 1 <= args.disk_warning_percent < args.disk_block_percent <= 99:
+        return fail("remote_disk_thresholds_invalid")
+    if args.disk_min_free_gib < 1:
+        return fail("remote_disk_min_free_gib_must_be_positive")
 
     if not args.skip_doctor:
         doctor = _run_doctor(args)
         if not doctor.get("deploy_channel_ready"):
             print(json.dumps({"status": "blocked", "deploy_channel": doctor, "secret_exposed": False}, ensure_ascii=False, indent=2))
             return 2
+
+    disk_preflight = _remote_disk_preflight(args)
+    if disk_preflight.get("deploy_allowed") is not True:
+        print(
+            json.dumps(
+                {"status": "blocked", "step": "remote_disk_preflight", "disk_preflight": disk_preflight, "secret_exposed": False},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 2
 
     remote_zip = f"/tmp/{patch.name}"
     remote_dir = f"/tmp/{patch.stem}"
@@ -90,6 +117,9 @@ def main() -> int:
     cleanup_result = {}
     if not args.skip_remote_temp_cleanup:
         cleanup_result = _cleanup_remote_staging_tmp(args)
+    artifact_cleanup_result = {}
+    if not args.skip_remote_deploy_artifact_cleanup:
+        artifact_cleanup_result = _cleanup_remote_deploy_artifacts(args)
     print(
         json.dumps(
             {
@@ -99,10 +129,12 @@ def main() -> int:
                 "port": args.port,
                 "user": args.user,
                 "app_path": args.app_path,
+                "disk_preflight": disk_preflight,
                 "upload": upload_result,
                 "stdout_tail": result.stdout[-2000:],
                 "stderr_tail": result.stderr[-2000:],
                 "remote_temp_cleanup": cleanup_result,
+                "remote_deploy_artifact_cleanup": artifact_cleanup_result,
                 "secret_exposed": False,
             },
             ensure_ascii=False,
@@ -110,6 +142,102 @@ def main() -> int:
         )
     )
     return 0
+
+
+def _remote_disk_preflight(args: argparse.Namespace) -> dict[str, Any]:
+    command = (
+        "LC_ALL=C df -Pk -- "
+        + shlex.quote(args.app_path)
+        + " /tmp"
+    )
+    completed = _run(
+        _ssh_base(args) + [command],
+        label="remote_disk_preflight",
+        timeout=_operation_timeout_seconds(args),
+    )
+    classified = classify_remote_disk_report(
+        parse_remote_disk_report(completed.stdout),
+        warning_percent=args.disk_warning_percent,
+        block_percent=args.disk_block_percent,
+        min_free_bytes=args.disk_min_free_gib * 1024**3,
+    )
+    return {
+        **classified,
+        "checked_paths": [args.app_path, "/tmp"],
+        "warning_percent": args.disk_warning_percent,
+        "block_percent": args.disk_block_percent,
+        "min_free_gib": args.disk_min_free_gib,
+    }
+
+
+def parse_remote_disk_report(output: str) -> list[dict[str, Any]]:
+    mounts: dict[str, dict[str, Any]] = {}
+    for raw_line in str(output or "").splitlines():
+        parts = raw_line.split()
+        if len(parts) < 6 or not parts[1].isdigit() or not parts[3].isdigit():
+            continue
+        percent_text = parts[4].rstrip("%")
+        if not percent_text.isdigit():
+            continue
+        mount = " ".join(parts[5:]).strip()
+        if not mount:
+            continue
+        mounts[mount] = {
+            "mount": mount,
+            "total_bytes": int(parts[1]) * 1024,
+            "free_bytes": int(parts[3]) * 1024,
+            "use_percent": int(percent_text),
+        }
+    return list(mounts.values())
+
+
+def classify_remote_disk_report(
+    report: list[dict[str, Any]],
+    *,
+    warning_percent: int,
+    block_percent: int,
+    min_free_bytes: int,
+) -> dict[str, Any]:
+    if not report:
+        return {
+            "status": "blocked",
+            "reason": "remote_disk_report_unavailable",
+            "deploy_allowed": False,
+            "mounts": [],
+            "secret_exposed": False,
+        }
+    safe_mounts = [
+        {
+            "mount": str(item.get("mount") or ""),
+            "use_percent": int(item.get("use_percent") or 0),
+            "free_bytes": int(item.get("free_bytes") or 0),
+            "free_gib": round(int(item.get("free_bytes") or 0) / 1024**3, 2),
+        }
+        for item in report
+    ]
+    max_use = max(item["use_percent"] for item in safe_mounts)
+    min_free = min(item["free_bytes"] for item in safe_mounts)
+    if min_free < int(min_free_bytes):
+        status = "blocked"
+        reason = "remote_disk_free_space_below_minimum"
+    elif max_use >= int(block_percent):
+        status = "blocked"
+        reason = "remote_disk_usage_block_threshold_reached"
+    elif max_use >= int(warning_percent):
+        status = "warning"
+        reason = "remote_disk_usage_warning_threshold_reached"
+    else:
+        status = "ready"
+        reason = "remote_disk_capacity_ready"
+    return {
+        "status": status,
+        "reason": reason,
+        "deploy_allowed": status != "blocked",
+        "max_use_percent": max_use,
+        "minimum_free_bytes": min_free,
+        "mounts": safe_mounts,
+        "secret_exposed": False,
+    }
 
 
 def _upload_patch(args: argparse.Namespace, patch: Path, remote_zip: str) -> dict[str, Any]:
@@ -290,6 +418,131 @@ df -hPT / /tmp
     }
 
 
+def build_remote_deploy_artifact_cleanup_script(args: argparse.Namespace) -> str:
+    """Build a fail-closed cleanup script for disposable staging deploy artifacts."""
+
+    app_path = str(args.app_path or "").rstrip("/")
+    if app_path != "/opt/jiejing-staging/app":
+        raise ValueError("remote deploy artifact cleanup only supports the canonical staging app path")
+    patch_root = f"{app_path}/output/staging-patch-backups"
+    runner_backup_root = "/opt/jiejing-staging/github-action-backups"
+    runner_release_root = "/opt/jiejing-staging/github-action-releases"
+    patch_keep = int(args.remote_patch_backup_keep)
+    runner_backup_keep = int(args.remote_runner_backup_keep)
+    runner_release_keep = int(args.remote_runner_release_keep)
+    cache_hours = int(args.remote_build_cache_until_hours)
+    if min(patch_keep, runner_backup_keep, runner_release_keep, cache_hours) < 1 or cache_hours > 168:
+        raise ValueError("remote deploy artifact cleanup limits are invalid")
+
+    return f"""
+set -euo pipefail
+
+retain_newest() {{
+  label="$1"
+  root="$2"
+  name_pattern="$3"
+  keep="$4"
+  if [[ ! -d "$root" ]]; then
+    printf 'REMOTE_DEPLOY_CLEANUP_%s_TOTAL=0\\n' "$label"
+    printf 'REMOTE_DEPLOY_CLEANUP_%s_DELETED=0\\n' "$label"
+    return 0
+  fi
+  resolved_root="$(readlink -f -- "$root" 2>/dev/null || true)"
+  case "$resolved_root" in
+    {patch_root}|{runner_backup_root}|{runner_release_root}) ;;
+    *) echo "REFUSE_DEPLOY_CLEANUP_ROOT=$resolved_root" >&2; exit 31 ;;
+  esac
+  mapfile -t entries < <(find "$resolved_root" -mindepth 1 -maxdepth 1 -type d -name "$name_pattern" -printf '%T@ %p\\n' 2>/dev/null | sort -nr | awk '{{ $1=""; sub(/^ /,""); print }}')
+  count="${{#entries[@]}}"
+  deleted=0
+  bytes_candidate=0
+  if (( count > keep )); then
+    for ((i=keep; i<count; i++)); do
+      candidate="${{entries[$i]}}"
+      candidate_real="$(readlink -f -- "$candidate" 2>/dev/null || true)"
+      case "$label:$candidate_real" in
+        patch_backups:"$resolved_root"/[0-9]*) ;;
+        runner_backups:"$resolved_root"/pre-github-*) ;;
+        runner_releases:"$resolved_root"/github-*) ;;
+        *) echo "REFUSE_DEPLOY_CLEANUP_CANDIDATE=$label:$candidate_real" >&2; exit 32 ;;
+      esac
+      if [[ "$candidate_real" == "$resolved_root" || -z "$candidate_real" ]]; then
+        echo "REFUSE_DEPLOY_CLEANUP_DANGEROUS_PATH=$candidate_real" >&2
+        exit 33
+      fi
+      size="$(du -sb -- "$candidate_real" 2>/dev/null | awk '{{print $1}}')"
+      bytes_candidate=$((bytes_candidate + ${{size:-0}}))
+      rm -rf -- "$candidate_real"
+      deleted=$((deleted + 1))
+    done
+  fi
+  printf 'REMOTE_DEPLOY_CLEANUP_%s_TOTAL=%s\\n' "$label" "$count"
+  printf 'REMOTE_DEPLOY_CLEANUP_%s_KEEP=%s\\n' "$label" "$keep"
+  printf 'REMOTE_DEPLOY_CLEANUP_%s_DELETED=%s\\n' "$label" "$deleted"
+  printf 'REMOTE_DEPLOY_CLEANUP_%s_BYTES_CANDIDATE=%s\\n' "$label" "$bytes_candidate"
+}}
+
+echo "REMOTE_DEPLOY_CLEANUP_DISK_BEFORE"
+df -hPT -- / /tmp {app_path}
+retain_newest "patch_backups" "{patch_root}" "[0-9]*" "{patch_keep}"
+retain_newest "runner_backups" "{runner_backup_root}" "pre-github-*" "{runner_backup_keep}"
+retain_newest "runner_releases" "{runner_release_root}" "github-*" "{runner_release_keep}"
+if command -v docker >/dev/null 2>&1; then
+  docker builder prune --all --force --filter 'until={cache_hours}h'
+  echo "REMOTE_DEPLOY_CLEANUP_BUILD_CACHE=pruned_unused_older_than_{cache_hours}h"
+else
+  echo "REMOTE_DEPLOY_CLEANUP_BUILD_CACHE=skipped_docker_unavailable"
+fi
+echo "REMOTE_DEPLOY_CLEANUP_DISK_AFTER"
+df -hPT -- / /tmp {app_path}
+echo "REMOTE_DEPLOY_CLEANUP_STATUS=completed"
+"""
+
+
+def _cleanup_remote_deploy_artifacts(args: argparse.Namespace) -> dict[str, Any]:
+    """Apply bounded retention after a healthy deploy without changing deploy success."""
+
+    try:
+        script = build_remote_deploy_artifact_cleanup_script(args)
+    except (TypeError, ValueError) as exc:
+        return {
+            "status": "warning",
+            "reason": str(exc),
+            "secret_exposed": False,
+        }
+    command = _ssh_base(args) + [f"sudo -n bash -lc {shlex.quote(script)}"]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=_operation_timeout_seconds(args),
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "status": "warning",
+            "reason": "remote_deploy_artifact_cleanup_timeout",
+            "stdout_tail": _text_tail(exc.stdout, 3000),
+            "stderr_tail": _text_tail(exc.stderr, 1500),
+            "secret_exposed": False,
+        }
+    return {
+        "status": "completed" if completed.returncode == 0 else "warning",
+        "returncode": completed.returncode,
+        "patch_backup_keep": args.remote_patch_backup_keep,
+        "runner_backup_keep": args.remote_runner_backup_keep,
+        "runner_release_keep": args.remote_runner_release_keep,
+        "build_cache_until_hours": args.remote_build_cache_until_hours,
+        "stdout_tail": completed.stdout[-5000:],
+        "stderr_tail": completed.stderr[-2000:],
+        "secret_exposed": False,
+    }
+
+
 def _run_doctor(args: argparse.Namespace) -> dict[str, Any]:
     output = ROOT / "output" / "jiejing-deploy-channel-doctor" / "staging-deploy-latest.json"
     command = [
@@ -367,7 +620,10 @@ def _upload_timeout_seconds(args: argparse.Namespace, patch: Path) -> int:
 
 
 def _operation_timeout_seconds(args: argparse.Namespace) -> int:
-    return max(args.timeout * 6, 180)
+    # The official CLS uploader currently compiles its constrained lz4 release
+    # during no-cache image builds on Python 3.12. Keep SSH connect timeouts
+    # short while allowing the remote build and health-gated rollout to finish.
+    return max(args.timeout * 6, 600)
 
 
 def _text_tail(value: str | bytes | None, length: int) -> str:
