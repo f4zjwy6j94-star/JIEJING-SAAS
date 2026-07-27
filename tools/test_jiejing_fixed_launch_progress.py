@@ -19,7 +19,7 @@ def fail(message: str) -> int:
     return 1
 
 
-def fixture(*, browser_smoke_passed: bool = True) -> dict:
+def fixture(*, browser_smoke_passed: bool = True, canonical_capabilities_only: bool = False) -> dict:
     groups = [
         {"key": key, "status": status}
         for key, status in {
@@ -80,11 +80,23 @@ def fixture(*, browser_smoke_passed: bool = True) -> dict:
             "status": "controlled_acceptance_proven",
             "configured_component_count": 9,
             "required_component_count": 9,
-            "signed_callback_implemented": True,
-            "real_order_creation_implemented": True,
             "public_charging_allowed": False,
         },
     }
+    if canonical_capabilities_only:
+        billing["mainland_payment_launch"] = {
+            "code_capabilities": {
+                "signed_payment_callback_implemented": True,
+                "real_order_creation_implemented": True,
+            }
+        }
+    else:
+        billing["domestic_payment"].update(
+            {
+                "signed_callback_implemented": True,
+                "real_order_creation_implemented": True,
+            }
+        )
     return build_fixed_launch_progress(
         readiness=readiness,
         launch_gate={"groups": groups, "paid_commercial_launch_ready": False},
@@ -119,6 +131,13 @@ def main() -> int:
         return fail("score change policy must be explicit")
     if packet != fixture():
         return fail("same evidence must produce exactly the same score and queue")
+
+    canonical_capabilities = fixture(canonical_capabilities_only=True)
+    if canonical_capabilities.get("score_percent") != 59:
+        return fail(
+            "internal progress must count canonical mainland code capabilities without relying on the public summary: "
+            f"{canonical_capabilities.get('score_percent')}"
+        )
 
     categories = {item.get("key"): item for item in packet.get("categories", []) if isinstance(item, dict)}
     if categories.get("payment_entitlements", {}).get("earned_points") != 16:

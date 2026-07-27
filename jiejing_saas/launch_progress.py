@@ -108,6 +108,8 @@ def build_fixed_launch_progress(
     media = _dict(provider_status.get("media_generation"))
     public_billing = _dict(provider_status.get("billing"))
     domestic_payment = _dict(billing.get("domestic_payment")) or _dict(public_billing.get("domestic_payment"))
+    mainland_payment_launch = _dict(billing.get("mainland_payment_launch"))
+    mainland_code_capabilities = _dict(mainland_payment_launch.get("code_capabilities"))
     quota = _dict(billing.get("quota_contract"))
 
     configured_count = int(domestic_payment.get("configured_component_count") or 0)
@@ -298,7 +300,8 @@ def build_fixed_launch_progress(
                     key="signed_payment_callback",
                     label="签名回调已实现",
                     points=3,
-                    passed=bool(domestic_payment.get("signed_callback_implemented")),
+                    passed=bool(domestic_payment.get("signed_callback_implemented"))
+                    or bool(mainland_code_capabilities.get("signed_payment_callback_implemented")),
                     executor="codex_internal",
                     priority=13,
                     next_action="完成签名回调校验和幂等处理。",
@@ -307,7 +310,8 @@ def build_fixed_launch_progress(
                     key="real_payment_order_adapter",
                     label="真实订单适配器已实现",
                     points=3,
-                    passed=bool(domestic_payment.get("real_order_creation_implemented")),
+                    passed=bool(domestic_payment.get("real_order_creation_implemented"))
+                    or bool(mainland_code_capabilities.get("real_order_creation_implemented")),
                     executor="codex_internal",
                     priority=16,
                     next_action="完成支付订单创建、查询和状态回写。",
