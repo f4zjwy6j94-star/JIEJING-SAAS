@@ -40,6 +40,7 @@ RUN python -m py_compile \
     jiejing_saas/api_server.py \
     jiejing_saas/media_source_assets.py \
     jiejing_saas/backup_plan.py \
+    jiejing_saas/cos_backup_probe.py \
     jiejing_saas/billing_domestic.py \
     jiejing_saas/billing_operations_maintenance.py \
     jiejing_saas/billing_payment_options.py \
@@ -60,6 +61,7 @@ RUN python -m py_compile \
     tools/jiejing_b_class_production_gate.py \
     tools/jiejing_c_class_production_gate.py \
     tools/jiejing_current_state_guard.py \
+    tools/jiejing_cos_backup_probe.py \
     tools/jiejing_precloud_deployment_gate.py \
     jiejing_runtime/runtime.py
 

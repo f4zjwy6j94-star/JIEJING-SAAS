@@ -82,6 +82,7 @@ FILES=(
   "assets/jiejing-settings-panels.js"
   "jiejing_saas/account_health.py"
   "jiejing_saas/backup_plan.py"
+  "jiejing_saas/cos_backup_probe.py"
   "jiejing_saas/billing_checkout.py"
   "jiejing_saas/billing_domestic.py"
   "jiejing_saas/billing_operations_maintenance.py"
@@ -186,6 +187,7 @@ FILES=(
   "tools/jiejing_current_state_guard.py"
   "tools/jiejing_external_launch_blocker_gate.py"
   "tools/jiejing_configure_tencent_runtime_env.py"
+  "tools/jiejing_cos_backup_probe.py"
   "tools/jiejing_a_class_unattended_gate.py"
   "tools/jiejing_b_class_production_gate.py"
   "tools/jiejing_c_class_production_gate.py"
@@ -200,6 +202,7 @@ FILES=(
   "tools/test_jiejing_external_launch_blocker_gate.py"
   "tools/test_jiejing_historical_ebay_readiness.py"
   "tools/test_jiejing_configure_tencent_runtime_env.py"
+  "tools/test_jiejing_cos_backup_probe.py"
   "tools/test_jiejing_frontend_staging_config.py"
   "tools/test_jiejing_saas_p0_security_guardrails.py"
   "tools/test_jiejing_runtime_knowledge.py"
@@ -330,6 +333,7 @@ python3 -m py_compile \
   jiejing_saas/database_adapter.py \
   jiejing_saas/account_health.py \
   jiejing_saas/backup_plan.py \
+  jiejing_saas/cos_backup_probe.py \
   jiejing_saas/billing_checkout.py \
   jiejing_saas/billing_domestic.py \
   jiejing_saas/billing_operations_maintenance.py \
@@ -428,6 +432,7 @@ python3 -m py_compile \
   tools/jiejing_current_state_guard.py \
   tools/jiejing_external_launch_blocker_gate.py \
   tools/jiejing_configure_tencent_runtime_env.py \
+  tools/jiejing_cos_backup_probe.py \
   tools/jiejing_a_class_unattended_gate.py \
   tools/jiejing_b_class_production_gate.py \
   tools/jiejing_c_class_production_gate.py \
@@ -442,6 +447,7 @@ python3 -m py_compile \
   tools/test_jiejing_external_launch_blocker_gate.py \
   tools/test_jiejing_historical_ebay_readiness.py \
   tools/test_jiejing_configure_tencent_runtime_env.py \
+  tools/test_jiejing_cos_backup_probe.py \
   tools/test_jiejing_frontend_staging_config.py \
   tools/test_jiejing_saas_p0_security_guardrails.py \
   tools/test_jiejing_runtime_knowledge.py \
