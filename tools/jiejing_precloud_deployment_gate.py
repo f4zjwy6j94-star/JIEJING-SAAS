@@ -124,6 +124,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("manual_beta_payment_flow", [sys.executable, "tools/test_jiejing_manual_beta_payment_flow.py"]),
     ("billing_provider_rehearsal", [sys.executable, "tools/test_jiejing_billing_provider_rehearsal.py"]),
     ("billing_provider_evidence_register", [sys.executable, "tools/test_jiejing_billing_provider_evidence_register.py"]),
+    ("cos_backup_probe", [sys.executable, "tools/test_jiejing_cos_backup_probe.py"]),
     ("production_release_gate", [sys.executable, "tools/test_jiejing_production_release_gate.py"]),
     ("production_evidence_ledger", [sys.executable, "tools/test_jiejing_production_evidence_ledger.py"]),
     ("fixed_launch_progress", [sys.executable, "tools/test_jiejing_fixed_launch_progress.py"]),
