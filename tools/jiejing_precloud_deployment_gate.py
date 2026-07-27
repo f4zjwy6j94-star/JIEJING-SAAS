@@ -213,8 +213,6 @@ def _run_check(key: str, command: list[str]) -> dict[str, Any]:
         while True:
             attempts += 1
             check_env = os.environ.copy()
-            if key == "infra_cutover_rehearsal":
-                check_env["JIEJING_REUSE_BACKEND_MVP_FIXTURE"] = "1"
             completed = subprocess.run(
                 command,
                 cwd=str(ROOT),

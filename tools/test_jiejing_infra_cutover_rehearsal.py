@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +11,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "output" / "jiejing-infra-cutover-rehearsal-test"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from jiejing_saas import SaaSRepository  # noqa: E402
 
 
 def fail(message: str) -> int:
@@ -23,25 +26,14 @@ def fail(message: str) -> int:
 
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
-    fixture_path = ROOT / "output" / "jiejing-saas-backend" / "test" / "saas-test.sqlite"
-    # Build a current SQLite fixture through the existing backend E2E so the
-    # rehearsal exercises real SaaS tables rather than a hand-written stub.
-    reuse_fixture = os.getenv("JIEJING_REUSE_BACKEND_MVP_FIXTURE", "").strip().lower() in {"1", "true", "yes"}
-    if not reuse_fixture:
-        backend = subprocess.run(
-            [sys.executable, "tools/test_jiejing_saas_backend_mvp.py"],
-            cwd=str(ROOT),
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            timeout=180,
-            check=False,
-        )
-        if backend.returncode != 0:
-            return fail("backend fixture failed: " + backend.stdout[-500:] + backend.stderr[-500:])
+    fixture_path = OUT / "saas-test.sqlite"
+    # Build an isolated current schema through the production repository. This
+    # keeps the rehearsal independent from test ordering and stale output.
+    if fixture_path.exists():
+        fixture_path.unlink()
+    SaaSRepository(fixture_path).initialize()
     if not fixture_path.exists():
-        return fail("backend fixture is missing; run test_jiejing_saas_backend_mvp.py first")
+        return fail("isolated backend fixture was not initialized")
 
     out_path = OUT / "latest.json"
     sql_path = OUT / "import.sql"

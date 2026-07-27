@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -24,6 +25,9 @@ def fail(message: str) -> int:
 
 
 def main() -> int:
+    startup_retry_result = _test_health_wait_retries_connection_refusal()
+    if startup_retry_result:
+        return fail(startup_retry_result)
     OUT.mkdir(parents=True, exist_ok=True)
     db = OUT / "reliability-alert-api.sqlite"
     runtime_db = OUT / "runtime.sqlite"
@@ -155,14 +159,41 @@ def _register(base: str, email: str) -> str:
     return token
 
 
-def _wait_for_health(base: str) -> None:
-    deadline = time.time() + 20
-    while time.time() < deadline:
-        result = _request_json(f"{base}/health")
+def _wait_for_health(
+    base: str,
+    *,
+    timeout_seconds: float = 20,
+    retry_interval_seconds: float = 0.2,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            result = _request_json(f"{base}/health")
+        except (urllib.error.URLError, ConnectionError, OSError, json.JSONDecodeError):
+            result = {"status": 0}
         if result["status"] == 200:
             return
-        time.sleep(0.2)
+        time.sleep(retry_interval_seconds)
     raise RuntimeError("backend did not become healthy")
+
+
+def _test_health_wait_retries_connection_refusal() -> str:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        unavailable_port = int(probe.getsockname()[1])
+    try:
+        _wait_for_health(
+            f"http://127.0.0.1:{unavailable_port}",
+            timeout_seconds=0.05,
+            retry_interval_seconds=0.01,
+        )
+    except RuntimeError as exc:
+        if str(exc) == "backend did not become healthy":
+            return ""
+        return f"unexpected startup retry error: {exc}"
+    except urllib.error.URLError as exc:
+        return f"health wait leaked transient connection refusal: {exc.reason.__class__.__name__}"
+    return "health wait unexpectedly accepted an unavailable local port"
 
 
 def _request_json(
