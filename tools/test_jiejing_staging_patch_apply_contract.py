@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "deploy" / "apply-staging-patch.sh"
+DOCKERFILE = ROOT / "Dockerfile.saas"
 BUNDLE = ROOT / "tools" / "jiejing_prepare_public_staging_bundle.py"
 VAULT_INIT = ROOT / "deploy" / "staging-vault-init-unseal.sh"
 HTTPS_COMPOSE = ROOT / "deploy" / "docker-compose.public-https-staging.yml"
@@ -21,6 +22,7 @@ def fail(message: str) -> int:
 
 def main() -> int:
     text = SCRIPT.read_text(encoding="utf-8") if SCRIPT.exists() else ""
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8") if DOCKERFILE.exists() else ""
     bundle = BUNDLE.read_text(encoding="utf-8") if BUNDLE.exists() else ""
     vault_init = VAULT_INIT.read_text(encoding="utf-8") if VAULT_INIT.exists() else ""
     compose_files = [
@@ -74,6 +76,7 @@ def main() -> int:
         "assets/jiejing-app-icon.svg",
         "assets/jiejing-logo-lockup.svg",
         "assets/jiejing-logo-mark.svg",
+        "jiejing_saas/merchant_onboarding.py",
         "jiejing_saas/backup_plan.py",
         "jiejing_saas/cos_backup_probe.py",
         "jiejing_saas/billing_manual_beta.py",
@@ -126,6 +129,8 @@ def main() -> int:
         "tools/test_jiejing_current_state_guard.py",
         "tools/test_jiejing_external_launch_blocker_gate.py",
         "tools/test_jiejing_historical_ebay_readiness.py",
+        "tools/test_jiejing_merchant_onboarding_state.py",
+        "tools/test_jiejing_merchant_onboarding_frontend.py",
         "tools/test_jiejing_platform_model_readiness.py",
         "tools/test_jiejing_configure_tencent_runtime_env.py",
         "tools/test_jiejing_cos_backup_probe.py",
@@ -239,6 +244,8 @@ def main() -> int:
     missing = [marker for marker in required if marker not in text]
     if missing:
         return fail("patch apply script missing markers: " + ",".join(missing))
+    if 'python -c "import jiejing_saas.api_server; import jiejing_saas.repository"' not in dockerfile:
+        return fail("SaaS image must import its backend entry points during build")
     api_start = text.index('up -d --no-deps jiejing-saas')
     health_gate = text.index('if [[ "$api_health_ready" != "true" ]]', api_start)
     worker_start = text.index('up -d --no-deps jiejing-worker', api_start)

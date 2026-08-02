@@ -81,6 +81,7 @@ FILES=(
   "assets/jiejing-first-party-analytics.js"
   "assets/jiejing-settings-panels.js"
   "jiejing_saas/account_health.py"
+  "jiejing_saas/merchant_onboarding.py"
   "jiejing_saas/backup_plan.py"
   "jiejing_saas/cos_backup_probe.py"
   "jiejing_saas/billing_checkout.py"
@@ -201,6 +202,8 @@ FILES=(
   "tools/test_jiejing_current_state_guard.py"
   "tools/test_jiejing_external_launch_blocker_gate.py"
   "tools/test_jiejing_historical_ebay_readiness.py"
+  "tools/test_jiejing_merchant_onboarding_state.py"
+  "tools/test_jiejing_merchant_onboarding_frontend.py"
   "tools/test_jiejing_configure_tencent_runtime_env.py"
   "tools/test_jiejing_cos_backup_probe.py"
   "tools/test_jiejing_frontend_staging_config.py"
@@ -332,6 +335,7 @@ done
 python3 -m py_compile \
   jiejing_saas/database_adapter.py \
   jiejing_saas/account_health.py \
+  jiejing_saas/merchant_onboarding.py \
   jiejing_saas/backup_plan.py \
   jiejing_saas/cos_backup_probe.py \
   jiejing_saas/billing_checkout.py \

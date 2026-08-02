@@ -38,6 +38,7 @@ RUN python -m py_compile \
     tools/jiejing_saas_backend_cli.py \
     tools/jiejing_worker_cli.py \
     jiejing_saas/api_server.py \
+    jiejing_saas/merchant_onboarding.py \
     jiejing_saas/media_source_assets.py \
     jiejing_saas/backup_plan.py \
     jiejing_saas/cos_backup_probe.py \
@@ -64,6 +65,8 @@ RUN python -m py_compile \
     tools/jiejing_cos_backup_probe.py \
     tools/jiejing_precloud_deployment_gate.py \
     jiejing_runtime/runtime.py
+
+RUN python -c "import jiejing_saas.api_server; import jiejing_saas.repository"
 
 EXPOSE 8788
 
