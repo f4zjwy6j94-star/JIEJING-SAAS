@@ -19,7 +19,13 @@ def fail(message: str) -> int:
     return 1
 
 
-def fixture(*, browser_smoke_passed: bool = True, canonical_capabilities_only: bool = False) -> dict:
+def fixture(
+    *,
+    browser_smoke_passed: bool = True,
+    canonical_capabilities_only: bool = False,
+    reliability_ready: bool = False,
+    ebay_secret_refs: int = 0,
+) -> dict:
     groups = [
         {"key": key, "status": status}
         for key, status in {
@@ -45,7 +51,7 @@ def fixture(*, browser_smoke_passed: bool = True, canonical_capabilities_only: b
         "real_platform_writes_enabled": False,
         "secret_exposed": False,
         "product_evidence": {
-            "ebay_secret_refs": 0,
+            "ebay_secret_refs": ebay_secret_refs,
             "ebay_token_refresh_success_count": 0,
             "secret_exposed": False,
         },
@@ -65,8 +71,14 @@ def fixture(*, browser_smoke_passed: bool = True, canonical_capabilities_only: b
             {"key": "worker_runtime_health", "status": "ready"},
             {"key": "vault", "status": "ready"},
             {"key": "vault_adapter_contract", "status": "adapter_contract_ready"},
-            {"key": "backup_restore", "status": "paid_launch_backup_evidence_stale"},
-            {"key": "monitoring_alerting", "status": "managed_monitoring_pending"},
+            {
+                "key": "backup_restore",
+                "status": "ready" if reliability_ready else "paid_launch_backup_evidence_stale",
+            },
+            {
+                "key": "monitoring_alerting",
+                "status": "cloud_monitoring_ready" if reliability_ready else "managed_monitoring_pending",
+            },
             {"key": "execution_service", "status": "safe_demo_boundary"},
             {"key": "ebay_read_only_adapter", "status": "current_account_not_connected"},
             {"key": "ebay_read", "status": "current_account_packet_missing"},
@@ -169,6 +181,26 @@ def main() -> int:
     if next_internal.get("key") != "monitoring_alerting_ready" or next_internal.get("executor") != "codex_internal":
         return fail(f"monitoring reliability must remain the next autonomous internal task: {next_internal}")
 
+    reliability_without_ebay_account = fixture(reliability_ready=True)
+    reliability_actions = {
+        item.get("key"): item
+        for item in reliability_without_ebay_account.get("remaining_actions", [])
+        if isinstance(item, dict)
+    }
+    for key in ("official_ebay_read_loop_ready", "store_sync_visibility_ready"):
+        if reliability_actions.get(key, {}).get("actionable_now") is not False:
+            return fail(f"{key} must wait for a current backend eBay secret reference: {reliability_actions.get(key)}")
+    if reliability_without_ebay_account.get("next_autonomous_action") is not None:
+        return fail(
+            "fixed progress must not route Codex into eBay sync when the current account authorization is absent: "
+            f"{reliability_without_ebay_account.get('next_autonomous_action')}"
+        )
+
+    reliability_with_ebay_account = fixture(reliability_ready=True, ebay_secret_refs=1)
+    authorized_next = reliability_with_ebay_account.get("next_autonomous_action") or {}
+    if authorized_next.get("key") != "official_ebay_read_loop_ready":
+        return fail(f"current backend eBay authorization should unlock the read-only proof route: {authorized_next}")
+
     browser_pending = fixture(browser_smoke_passed=False)
     if browser_pending.get("score_percent") != 56:
         return fail(f"real evidence regression should reduce only its fixed points: {browser_pending.get('score_percent')}")
@@ -187,3 +219,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
