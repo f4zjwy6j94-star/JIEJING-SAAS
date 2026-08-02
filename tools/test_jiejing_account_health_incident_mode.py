@@ -157,6 +157,8 @@ def main() -> int:
     )
     if healthy.get("status") != "normal" or healthy.get("incident_mode") is not False:
         return fail(f"healthy official store_profile should be clear: {healthy}")
+    if healthy.get("business_policy_statuses") != {"payment": True, "fulfillment": True, "return": True}:
+        return fail(f"healthy evidence should expose all three policy statuses: {healthy}")
     healthy_payload = merge_account_health_into_payload(_publish_payload(), healthy)
     healthy_preflight = ExecutionService(demo_mode=False).preflight(
         _request(healthy_payload, store_id=healthy_ctx["store"]["store_id"])
@@ -239,6 +241,12 @@ def main() -> int:
         return fail(f"a partial business-policy section must not be treated as publish-ready: {incomplete_policies}")
     if (incomplete_policies.get("evidence_package") or {}).get("business_policies_present") is not False:
         return fail(f"all three policy IDs are required for business-policy readiness: {incomplete_policies}")
+    if incomplete_policies.get("business_policy_statuses") != {
+        "payment": True,
+        "fulfillment": True,
+        "return": False,
+    }:
+        return fail(f"partial business policies should identify the exact missing policy: {incomplete_policies}")
 
     no_packet = repo.create_store(
         company_id=healthy_ctx["company_id"],

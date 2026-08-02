@@ -80,6 +80,12 @@ from .ebay_write_adapter import EbayWriteHttpAdapter, build_ebay_write_adapter_c
 from .independence import build_independence_status
 from .infrastructure_drivers import build_infrastructure_driver_status
 from .media_credits import build_media_credit_summary, estimate_media_points
+from .merchant_onboarding import (
+    AUTHORIZED_CONNECTION_STATUSES,
+    MerchantOnboardingValidationError,
+    MerchantOnboardingVersionConflict,
+    build_merchant_onboarding_read_model,
+)
 from .ip_risk_screening import build_ip_logo_brand_screening
 from .json_safe import json_default
 from .model_value_gate import build_model_value_gate
@@ -1321,6 +1327,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         if identity is None:
             return
 
+        if path == "merchant-onboarding/primary-ebay":
+            self._send_json({"merchant_onboarding": self._merchant_onboarding_read_model(identity)})
+            return
+
         if path == "security/rate-limit/status":
             if not self._is_platform_internal_admin(identity):
                 self._send_error(HTTPStatus.FORBIDDEN, "rate-limit status is platform-internal admin only")
@@ -2542,6 +2552,39 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         identity = self._require_auth()
         if identity is None:
+            return
+
+        if path == "merchant-onboarding/primary-ebay/progress":
+            if not self._require_permission(identity, "manage_connections"):
+                return
+            body = self._read_json_body()
+            expected_version = body.get("expected_version")
+            if isinstance(expected_version, bool) or not isinstance(expected_version, int) or expected_version < 0:
+                self._send_error(HTTPStatus.BAD_REQUEST, "expected_version must be a non-negative integer")
+                return
+            existing = self.repository.get_merchant_onboarding_state(company_id=identity["company_id"])
+            _, _, _, store = self._merchant_onboarding_context(identity, progress=existing)
+            try:
+                saved = self.repository.upsert_merchant_onboarding_state(
+                    company_id=identity["company_id"],
+                    user_id=identity["user_id"],
+                    progress=body,
+                    expected_version=expected_version,
+                    store_id=str((store or {}).get("store_id") or "") or None,
+                )
+            except MerchantOnboardingValidationError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            except (ValueError, KeyError) as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            except MerchantOnboardingVersionConflict as exc:
+                self._send_json(
+                    {"merchant_onboarding": self._merchant_onboarding_read_model(identity, progress=exc.latest)},
+                    status=HTTPStatus.CONFLICT,
+                )
+                return
+            self._send_json({"merchant_onboarding": self._merchant_onboarding_read_model(identity, progress=saved)})
             return
 
         if path == "owner/operations-reliability-alerts/reconcile":
@@ -5779,6 +5822,80 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         if settings and settings.is_production_like:
             return True
         return str(os.environ.get("JIEJING_SAFE_ACCESS_LOG") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _merchant_onboarding_context(
+        self,
+        identity: dict[str, Any],
+        *,
+        progress: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], dict[str, Any], dict[str, Any] | None]:
+        """Resolve one tenant's current eBay evidence without invoking OAuth or a sync."""
+
+        company_id = str(identity.get("company_id") or "")
+        persisted = progress if isinstance(progress, dict) else self.repository.get_merchant_onboarding_state(company_id=company_id)
+        all_connections = self.repository.list_connections(company_id=company_id)
+        stores = self.repository.list_stores(company_id=company_id)
+        accessible_stores = {
+            str(store.get("store_id") or ""): store
+            for store in stores
+            if isinstance(store, dict) and str(store.get("store_id") or "")
+        }
+        preferred_store_id = str((persisted or {}).get("store_id") or "")
+        if preferred_store_id not in accessible_stores:
+            preferred_store_id = ""
+        if not preferred_store_id:
+            current_connection = next(
+                (
+                    connection
+                    for connection in all_connections
+                    if isinstance(connection, dict)
+                    and str(connection.get("platform") or "ebay").strip().lower() == "ebay"
+                    and str(connection.get("status") or "").strip().lower() in AUTHORIZED_CONNECTION_STATUSES
+                    and str(connection.get("store_id") or "") in accessible_stores
+                ),
+                None,
+            )
+            preferred_store_id = str((current_connection or {}).get("store_id") or "")
+        if not preferred_store_id:
+            preferred_store = next(
+                (
+                    store
+                    for store in stores
+                    if isinstance(store, dict) and str(store.get("platform") or "ebay").strip().lower() == "ebay"
+                ),
+                None,
+            )
+            preferred_store_id = str((preferred_store or {}).get("store_id") or "")
+        store = accessible_stores.get(preferred_store_id)
+        connections = (
+            [
+                connection
+                for connection in all_connections
+                if isinstance(connection, dict) and str(connection.get("store_id") or "") == preferred_store_id
+            ]
+            if preferred_store_id
+            else all_connections
+        )
+        account_health = (
+            build_account_health_snapshot(self.repository, company_id=company_id, store_id=preferred_store_id)
+            if preferred_store_id
+            else {}
+        )
+        return persisted, connections, account_health, store
+
+    def _merchant_onboarding_read_model(
+        self,
+        identity: dict[str, Any],
+        *,
+        progress: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        persisted, connections, account_health, store = self._merchant_onboarding_context(identity, progress=progress)
+        return build_merchant_onboarding_read_model(
+            progress=persisted or {},
+            connections=connections,
+            account_health=account_health,
+            store=store,
+        )
 
     def _require_auth(self) -> dict[str, Any] | None:
         token = self._request_session_token()

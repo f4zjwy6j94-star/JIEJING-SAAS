@@ -87,6 +87,23 @@ create table if not exists stores (
   store_json jsonb not null
 );
 
+create table if not exists merchant_onboarding_states (
+  company_id text not null references companies(company_id),
+  onboarding_key text not null,
+  store_id text references stores(store_id),
+  path_key text not null,
+  current_step_key text not null,
+  work_mode text not null,
+  seller_returned boolean not null,
+  answers_json jsonb not null,
+  completed_step_keys_json jsonb not null,
+  version bigint not null,
+  updated_by_user_id text not null references users(user_id),
+  created_at timestamptz not null,
+  updated_at timestamptz not null,
+  primary key (company_id, onboarding_key)
+);
+
 create table if not exists secret_refs (
   secret_ref text primary key,
   company_id text not null references companies(company_id),
@@ -591,6 +608,8 @@ create index if not exists idx_platform_provider_monitor_state_lease_expiry
 create index if not exists idx_ebay_account_deletion_events_status_updated on ebay_account_deletion_events(status, updated_at);
 create index if not exists idx_platform_trial_activations_status_updated
   on platform_trial_activations(status, updated_at);
+create index if not exists idx_merchant_onboarding_store_updated
+  on merchant_onboarding_states(company_id, store_id, updated_at);
 
 insert into schema_migrations (migration_id, checksum, summary)
 values (
@@ -677,6 +696,14 @@ values (
   '20260717_platform_provider_monitor_state',
   'jiejing-platform-provider-monitor-state-v20260717',
   'Adds an expiring singleton lease and privacy-safe passive provider monitoring evidence.'
+)
+on conflict (migration_id) do nothing;
+
+insert into schema_migrations (migration_id, checksum, summary)
+values (
+  '20260802_merchant_onboarding_states',
+  'jiejing-merchant-onboarding-states-v20260802',
+  'Adds tenant-scoped enum-only merchant onboarding progress with optimistic concurrency.'
 )
 on conflict (migration_id) do nothing;
 

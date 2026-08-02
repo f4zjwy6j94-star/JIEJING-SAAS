@@ -74,6 +74,7 @@ def build_account_health_snapshot(
     present_resource_keys = _packet_resource_keys(packet, "present_resource_keys")
     missing_resource_keys = _packet_resource_keys(packet, "missing_resource_keys")
     business_policies_present = _business_policies_ready(business_policies)
+    business_policy_statuses = _business_policy_statuses(business_policies)
     has_store_profile = bool(store_profile)
     status = _classify_status(
         raw_status=raw_status,
@@ -119,6 +120,7 @@ def build_account_health_snapshot(
         "can_execute_real_writes": not incident_mode,
         "can_enter_publish_preflight": not incident_mode and business_policies_present,
         "onboarding_stage": onboarding_stage,
+        "business_policy_statuses": business_policy_statuses,
         "summary": _merchant_summary(
             status,
             has_store_profile=has_store_profile,
@@ -317,10 +319,17 @@ def _packet_resource_keys(packet: dict[str, Any], key: str) -> list[str]:
 
 
 def _business_policies_ready(policies: dict[str, Any]) -> bool:
-    return all(
-        str(policies.get(key) or "").strip()
-        for key in ("fulfillment_policy_id", "payment_policy_id", "return_policy_id")
-    )
+    return all(_business_policy_statuses(policies).values())
+
+
+def _business_policy_statuses(policies: dict[str, Any]) -> dict[str, bool]:
+    """Expose presence only; policy identifiers remain backend evidence."""
+
+    return {
+        "payment": bool(str(policies.get("payment_policy_id") or "").strip()),
+        "fulfillment": bool(str(policies.get("fulfillment_policy_id") or "").strip()),
+        "return": bool(str(policies.get("return_policy_id") or "").strip()),
+    }
 
 
 def _recent_platform_error_summaries(execution_results: list[dict[str, Any]]) -> list[dict[str, Any]]:

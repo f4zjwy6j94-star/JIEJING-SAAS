@@ -18,9 +18,11 @@ from typing import Any, Iterable, Sequence
 
 
 JSON_COLUMNS = {
+    "answers_json",
     "audit_json",
     "analytics_json",
     "billing_event_json",
+    "completed_step_keys_json",
     "invite_json",
     "item_json",
     "job_json",

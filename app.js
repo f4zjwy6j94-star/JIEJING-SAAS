@@ -171,6 +171,7 @@ const state = {
   saasEbayCredentialPreflight: null,
   saasEbayDiagnosticsLastCheckedAt: "",
   saasAccountHealth: null,
+  saasMerchantOnboarding: null,
   saasEbaySync: null,
   saasEbaySyncStartedAt: "",
   saasEbaySyncLastCompletedAt: "",
@@ -16714,6 +16715,7 @@ function buildSaasProtectedStateSnapshot() {
       active_model: state.saasModelSettings?.active_model || "",
     },
     account_health: state.saasAccountHealth || null,
+    merchant_onboarding: state.saasMerchantOnboarding || null,
     last_ceo_command: state.saasLastCeoCommand || null,
   };
 }
@@ -16775,6 +16777,7 @@ function hydrateSaasProtectedStateFromCache() {
     state.saasModelValueGate = snapshot.model_value_gate || state.saasModelValueGate || null;
     state.saasModelSettings = snapshot.model_settings || state.saasModelSettings || null;
     state.saasAccountHealth = snapshot.account_health || state.saasAccountHealth || null;
+    state.saasMerchantOnboarding = snapshot.merchant_onboarding || state.saasMerchantOnboarding || null;
     state.saasLastCeoCommand = null;
     state.saasAiCeoThread = [];
     state.saasAiCeoVisibleTurnLimit = 12;
@@ -17110,6 +17113,7 @@ function resetSaasProtectedWorkbenchState() {
   state.saasEbayHttpDryRun = null;
   state.saasEbayCredentialPreflight = null;
   state.saasAccountHealth = null;
+  state.saasMerchantOnboarding = null;
   state.saasEbaySync = null;
   state.saasEbayWriteAdapter = null;
   state.saasOauthRequests = [];
@@ -26131,6 +26135,7 @@ async function refreshSaasState(options = {}) {
       corePermissions,
       coreStores,
       coreConnections,
+      coreMerchantOnboarding,
       coreEbayWriteAdapter,
       coreExecutions,
       coreSecretRefs,
@@ -26144,6 +26149,7 @@ async function refreshSaasState(options = {}) {
       saasFetch("/permissions/me"),
       saasFetch("/stores"),
       saasFetch("/connections"),
+      optionalSaasFetchFast("/merchant-onboarding/primary-ebay", { merchant_onboarding: null }, 10000),
       optionalSaasFetchFast("/ebay-write/adapter/status", { ebay_write_adapter: null }, 10000),
       optionalSaasFetchFast("/execution-results?limit=20", { execution_results: [] }, 10000),
       optionalSaasFetchFast(`/secret-refs?store_id=${encodeURIComponent(store.store_id)}`, { secret_refs: [] }, 10000),
@@ -26172,6 +26178,7 @@ async function refreshSaasState(options = {}) {
     state.saasRoles = corePermissions.roles || [];
     state.saasStores = coreStores.stores || [];
     state.saasConnections = coreConnections.connections || [];
+    state.saasMerchantOnboarding = coreMerchantOnboarding.merchant_onboarding || null;
     state.saasEbayWriteAdapter = coreEbayWriteAdapter.ebay_write_adapter || null;
     state.saasSecretRefs = coreSecretRefs.secret_refs || [];
     state.saasModelSettings = coreModelSettings.model_settings || null;
@@ -26256,6 +26263,7 @@ async function refreshSaasState(options = {}) {
       postPublishCockpit,
       dataPackets,
       accountHealth,
+      merchantOnboarding,
       ipRiskScreening,
       queuePlan,
       queueAdapters,
@@ -26324,6 +26332,9 @@ async function refreshSaasState(options = {}) {
       optionalSaasFetchFast(`/data-packets?platform=ebay&limit=5`, { data_packets: state.saasDataPackets || [] }, 12000),
       optionalSaasFetchFast(`/stores/${encodeURIComponent(store.store_id)}/account-health`, {
         account_health: state.saasAccountHealth || null,
+      }, 10000),
+      optionalSaasFetchFast("/merchant-onboarding/primary-ebay", {
+        merchant_onboarding: state.saasMerchantOnboarding || null,
       }, 10000),
       optionalSaasFetchFast(`/ip-risk-screening?store_id=${encodeURIComponent(store.store_id)}`, {
         ip_risk_screening: {
@@ -26438,6 +26449,7 @@ async function refreshSaasState(options = {}) {
     state.saasPostPublishCockpit = postPublishCockpit.post_publish_cockpit || state.saasPostPublishCockpit || null;
     state.saasDataPackets = dataPackets.data_packets || [];
     state.saasAccountHealth = accountHealth.account_health || state.saasAccountHealth || null;
+    state.saasMerchantOnboarding = merchantOnboarding.merchant_onboarding || state.saasMerchantOnboarding || null;
     const refreshedActiveStore = activeSaasStore();
     if (refreshedActiveStore?.store_id) saveSaasSessionToStorage(refreshedActiveStore.store_id);
     if (refreshedActiveStore?.store_id && refreshedActiveStore.store_id !== store.store_id) {
@@ -26567,6 +26579,7 @@ async function refreshSaasState(options = {}) {
     state.saasEbayHttpDryRun = null;
     state.saasEbayCredentialPreflight = null;
     state.saasAccountHealth = null;
+    state.saasMerchantOnboarding = null;
     state.saasEbaySync = null;
     state.saasEbayWriteAdapter = null;
     state.saasOauthRequests = [];
@@ -29071,6 +29084,16 @@ function handleSaasAction(button) {
   if (action === "open-model-provider-key") {
     const url = button.dataset.providerUrl || "";
     if (url) window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  if (action === "open-official-ebay-seller-registration") {
+    window.open("https://www.ebay.com/sl/sell", "_blank", "noopener,noreferrer");
+    showActionToast("已打开 eBay 官方卖家注册页。返回捷境后刷新，系统会按只读证据给出下一步。");
+    return;
+  }
+  if (action === "open-official-ebay-business-policies") {
+    window.open("https://www.ebay.com/bp/manage", "_blank", "noopener,noreferrer");
+    showActionToast("已打开 eBay 官方商业政策页。补齐付款、配送和退货政策后再更新只读资料。");
     return;
   }
   if (action === "copy-saas-status") {
@@ -34465,6 +34488,11 @@ function renderSaasCockpitRealWorkbench() {
 }
 
 function renderSaasAiCeoFirstRunHandoff() {
+  const onboardingModel = state.saasMerchantOnboarding && typeof state.saasMerchantOnboarding === "object"
+    ? state.saasMerchantOnboarding
+    : {};
+  const onboardingStage = String(onboardingModel.effective_stage || "");
+  const onboardingNeedsAction = Boolean(onboardingStage && onboardingStage !== "ready_for_publish_preflight");
   const prompts = [
     "帮我从一个商品做 Listing",
     "帮我先筛 10 个小商品",
@@ -34482,12 +34510,16 @@ function renderSaasAiCeoFirstRunHandoff() {
   ];
   return `
     <section class="saas-ai-ceo-first-run-handoff" data-ai-ceo-first-run-handoff="first_run_ai_ceo_handoff_v1" data-does-not-trigger-real-write="true" aria-label="AI CEO 开口建议">
-      <div class="saas-ai-ceo-first-run-copy">
-        <span>可以这样开始</span>
-        <strong>首日只做一条主线：先说目标，再看 AI CEO 带你去哪</strong>
-        <p>直接说经营目标，不用先找功能。点一句只会填入输入框；你确认发送后，AI CEO 再判断去 Listing、批量、素材、客服或决策中心。连接和计费问题以后回设置补。</p>
-      </div>
-      ${renderSaasMerchantLaunchReadinessPath()}
+      ${onboardingNeedsAction
+        ? renderSaasMerchantOnboardingPanel({ compact: true })
+        : `
+          <div class="saas-ai-ceo-first-run-copy">
+            <span>可以这样开始</span>
+            <strong>首日只做一条主线：先说目标，再看 AI CEO 带你去哪</strong>
+            <p>直接说经营目标，不用先找功能。点一句只会填入输入框；你确认发送后，AI CEO 再判断去 Listing、批量、素材、客服或决策中心。连接和计费问题以后回设置补。</p>
+          </div>
+          ${renderSaasMerchantLaunchReadinessPath()}
+        `}
       <div class="saas-ai-ceo-one-task-focus" data-ai-ceo-one-task-focus="first_day_one_task_focus_v1" aria-label="首日聚焦">
         <div class="saas-ai-ceo-one-task-head">
           <span>现在只做一件事</span>
@@ -38688,6 +38720,123 @@ function renderSaasAccountHealthTrafficPanel({ compact = false } = {}) {
   `;
 }
 
+function renderSaasMerchantOnboardingPanel(options = {}) {
+  const compact = options.compact === true;
+  const model = state.saasMerchantOnboarding && typeof state.saasMerchantOnboarding === "object" ? state.saasMerchantOnboarding : {};
+  const stage = String(model.effective_stage || "loading");
+  const policyStatuses = model.business_policy_statuses && typeof model.business_policy_statuses === "object"
+    ? model.business_policy_statuses
+    : { payment: false, fulfillment: false, return: false };
+  const actionByStage = {
+    seller_registration_required: {
+      key: "open-official-ebay-seller-registration",
+      label: "打开 eBay 官方卖家注册",
+      note: "只去 eBay 官方页面填写，捷境不读取或保存 eBay 密码。",
+    },
+    authorization_required: {
+      key: "plan-ebay-oauth",
+      label: "连接 eBay 只读数据",
+      note: "只有你明确点击后才会生成授权入口；不会发布、改价或扣费。",
+    },
+    read_only_check_required: {
+      key: "sync-ebay-readonly",
+      label: "更新 eBay 只读资料",
+      note: "只读取账号状态和经营资料，不触发真实平台写入。",
+    },
+    account_review_required: {
+      key: "open-connect",
+      label: "查看账号健康与处理建议",
+      note: "账号异常时暂停真实动作，保留诊断、证据整理和只读同步。",
+    },
+    business_policies_required: {
+      key: "open-official-ebay-business-policies",
+      label: "去 eBay 完善商业政策",
+      note: "补齐付款、配送和退货政策后，再更新只读资料；无需重复授权。",
+    },
+    ready_for_publish_preflight: {
+      key: "focus-publish-intake",
+      label: "准备第一条 Listing 草稿",
+      note: "这里只进入草稿和发布体检；真实发布仍需决策中心确认。",
+    },
+    loading: {
+      key: "refresh",
+      label: "读取账号下一步",
+      note: "等待后端根据当前店铺连接和只读证据判断。",
+    },
+  };
+  const action = actionByStage[stage] || actionByStage.loading;
+  const connectionLabel = model.connection_current ? "只读连接可用" : "尚未连接";
+  const policyRows = [
+    ["付款政策", policyStatuses.payment === true],
+    ["配送政策", policyStatuses.fulfillment === true],
+    ["退货政策", policyStatuses.return === true],
+  ];
+  if (compact) {
+    return `
+      <section class="saas-settings-card saas-merchant-onboarding-panel is-compact" data-onboarding-contract="merchant_onboarding_single_next_step_v1" aria-label="eBay 起步下一步">
+        <div class="saas-settings-card-head">
+          <div>
+            <span>eBay 起步向导</span>
+            <strong>${escapeHtml(model.stage_label || "正在读取账号下一步")}</strong>
+          </div>
+        </div>
+        <div class="saas-backend-preflight-actions">
+          <button class="primary-action" type="button" data-saas-action="${escapeHtml(action.key)}" ${state.saasLoading ? "disabled" : ""}>${escapeHtml(action.label)}</button>
+          <small>${escapeHtml(action.note)}</small>
+        </div>
+        <div hidden aria-hidden="true">
+          <span>merchant_onboarding_single_next_step_v1</span>
+          <span>triggers_real_platform_write=false</span>
+          <span>triggers_real_charge=false</span>
+          <span>automatic_oauth=false</span>
+          <span>secret_exposed=false</span>
+        </div>
+      </section>
+    `;
+  }
+  return `
+    <section class="saas-settings-card saas-merchant-onboarding-panel" data-onboarding-contract="merchant_onboarding_single_next_step_v1" aria-label="eBay 起步下一步">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>eBay 起步向导</span>
+          <strong>${escapeHtml(model.stage_label || "正在读取账号下一步")}</strong>
+          <p>${escapeHtml(model.stage_summary || "捷境会根据当前连接和官方只读证据，只给你一个下一步。")}</p>
+        </div>
+        <span class="pill ${model.connection_current ? "green" : "amber"}">${escapeHtml(connectionLabel)}</span>
+      </div>
+      ${compact ? "" : `<div class="saas-settings-status-list">
+        <article class="${model.account_health_evidence_present ? "is-green" : "is-amber"}">
+          <span>账号证据</span>
+          <strong>${model.account_health_evidence_present ? "官方只读资料已读取" : "等待读取"}</strong>
+          <small>没有官方证据时不会把注册、政策或账号健康冒充完成。</small>
+        </article>
+        ${policyRows
+          .map(
+            ([label, ready]) => `
+              <article class="${ready ? "is-green" : "is-amber"}">
+                <span>${escapeHtml(label)}</span>
+                <strong>${ready ? "已读取" : "待完善"}</strong>
+                <small>${ready ? "后端只记录是否存在，不向浏览器返回政策密钥。" : "在 eBay 官方页面完成后再做只读更新。"}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>`}
+      <div class="saas-backend-preflight-actions">
+        <button class="primary-action" type="button" data-saas-action="${escapeHtml(action.key)}" ${state.saasLoading ? "disabled" : ""}>${escapeHtml(action.label)}</button>
+        <small>${escapeHtml(action.note)}</small>
+      </div>
+      <div hidden aria-hidden="true">
+        <span>merchant_onboarding_single_next_step_v1</span>
+        <span>triggers_real_platform_write=false</span>
+        <span>triggers_real_charge=false</span>
+        <span>automatic_oauth=false</span>
+        <span>secret_exposed=false</span>
+      </div>
+    </section>
+  `;
+}
+
 function renderSaasNewEbayAccountOnboardingPanel() {
   const launchGate = state.saasCommercialLaunchGate && typeof state.saasCommercialLaunchGate === "object" ? state.saasCommercialLaunchGate : {};
   const runbook = Array.isArray(launchGate.new_ebay_account_smoke_runbook) ? launchGate.new_ebay_account_smoke_runbook : [];
@@ -41280,6 +41429,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       title: "账号与店铺",
       intro: "管理捷境登录账号、eBay 店铺连接和账号健康。",
       panels: [
+        renderSaasMerchantOnboardingPanel(),
         renderSaasSettingsAccountAccessPanel(),
         renderSaasSettingsPlatformPanel(ctx),
         renderSaasSettingsAccountPanel(ctx, options),

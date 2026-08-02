@@ -128,6 +128,9 @@ def main() -> int:
         return fail("managed Postgres connections must normalize the session timezone to UTC")
     if "order_json" not in JSON_COLUMNS:
         return fail("domestic billing order JSON must be adapted for the Postgres JSONB column")
+    for onboarding_json_column in ("answers_json", "completed_step_keys_json"):
+        if onboarding_json_column not in JSON_COLUMNS:
+            return fail(f"merchant onboarding JSON must be adapted for Postgres JSONB: {onboarding_json_column}")
     if "_postgres_initialize_lock" not in repository_text:
         return fail("Postgres migration initialization must be guarded against concurrent requests")
     if "pg_advisory_lock" not in repository_text or "pg_advisory_unlock" not in repository_text:
@@ -144,6 +147,15 @@ def main() -> int:
     ):
         if marker not in migration_text.lower():
             return fail(f"Postgres migration must ship passive provider monitoring lease state: {marker}")
+    for marker in (
+        "create table if not exists merchant_onboarding_states",
+        "answers_json jsonb not null",
+        "completed_step_keys_json jsonb not null",
+        "idx_merchant_onboarding_store_updated",
+        "20260802_merchant_onboarding_states",
+    ):
+        if marker not in migration_text.lower():
+            return fail(f"Postgres migration must ship tenant merchant onboarding state: {marker}")
     if "on conflict(scheduler_key) do update set" not in repository_text.lower():
         return fail("provider monitoring lease must use a cross-process atomic Postgres-compatible upsert")
     if "where platform_provider_monitor_state.lease_expires_at_epoch <= ?" not in repository_text.lower():

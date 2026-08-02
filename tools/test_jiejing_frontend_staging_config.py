@@ -31,13 +31,15 @@ def main() -> int:
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
     frontend_asset_version = "20260715-owner-traffic-analytics-v104"
+    app_js_asset_version = "20260802-merchant-onboarding-v2"
     for expected_asset in [
-        f"./app.js?v={frontend_asset_version}",
+        f"./app.js?v={app_js_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
     ]:
         if expected_asset not in index_html + app_html:
             return fail(f"frontend entry files must bust owner publish cache with {expected_asset}")
     for stale_asset_version in [
+        "20260802-merchant-onboarding-v1",
         "20260715-billing-recovery-renewal-v101",
         "20260715-listing-us-title-v98",
         "20260715-listing-copy-boundary-v97",

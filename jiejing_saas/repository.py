@@ -19,6 +19,12 @@ from typing import Any, Iterator
 from jiejing_runtime.models import now_iso
 
 from .json_safe import json_default
+from .merchant_onboarding import (
+    CONTRACT_VERSION as MERCHANT_ONBOARDING_CONTRACT_VERSION,
+    PRIMARY_EBAY_ONBOARDING_KEY,
+    MerchantOnboardingVersionConflict,
+    normalize_merchant_onboarding_progress,
+)
 from .operations_metering import (
     ANALYTICS_EVENT_KEYS,
     ANALYTICS_PAGE_KEYS,
@@ -176,6 +182,23 @@ class SaaSRepository:
                   activated_at text,
                   updated_at text not null,
                   activation_json text not null
+                );
+
+                create table if not exists merchant_onboarding_states (
+                  company_id text not null,
+                  onboarding_key text not null,
+                  store_id text,
+                  path_key text not null,
+                  current_step_key text not null,
+                  work_mode text not null,
+                  seller_returned integer not null,
+                  answers_json text not null,
+                  completed_step_keys_json text not null,
+                  version integer not null,
+                  updated_by_user_id text not null,
+                  created_at text not null,
+                  updated_at text not null,
+                  primary key (company_id, onboarding_key)
                 );
 
                 create table if not exists user_sessions (
@@ -765,6 +788,12 @@ class SaaSRepository:
                 migration_id="20260715_platform_trial_activations",
                 checksum="jiejing-platform-trial-activations-v20260715",
                 summary="Separates merchant registration from privacy-safe activation of Jiejing-funded AI and media trials.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260802_merchant_onboarding_states",
+                checksum="jiejing-merchant-onboarding-states-v20260802",
+                summary="Adds tenant-scoped enum-only merchant onboarding progress with optimistic concurrency.",
             )
 
     def _initialize_postgres(self) -> None:
@@ -4244,6 +4273,186 @@ class SaaSRepository:
             "secret_exposed": False,
         }
 
+    def get_merchant_onboarding_state(
+        self,
+        *,
+        company_id: str,
+        onboarding_key: str = PRIMARY_EBAY_ONBOARDING_KEY,
+    ) -> dict[str, Any] | None:
+        """Return one company's enum-only onboarding progress."""
+
+        self.initialize()
+        if onboarding_key != PRIMARY_EBAY_ONBOARDING_KEY:
+            raise ValueError("unsupported merchant onboarding key")
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select company_id, onboarding_key, store_id, path_key, current_step_key,
+                       work_mode, seller_returned, answers_json, completed_step_keys_json,
+                       version, created_at, updated_at
+                from merchant_onboarding_states
+                where company_id = ? and onboarding_key = ?
+                """,
+                (company_id, onboarding_key),
+            ).fetchone()
+        return self._merchant_onboarding_row_to_dict(row) if row else None
+
+    def upsert_merchant_onboarding_state(
+        self,
+        *,
+        company_id: str,
+        user_id: str,
+        progress: dict[str, Any],
+        expected_version: int,
+        store_id: str | None = None,
+        onboarding_key: str = PRIMARY_EBAY_ONBOARDING_KEY,
+    ) -> dict[str, Any]:
+        """Persist merchant intent without accepting derived account or launch truth."""
+
+        self.initialize()
+        if onboarding_key != PRIMARY_EBAY_ONBOARDING_KEY:
+            raise ValueError("unsupported merchant onboarding key")
+        if isinstance(expected_version, bool):
+            raise ValueError("expected_version must be a non-negative integer")
+        try:
+            safe_expected_version = int(expected_version)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("expected_version must be a non-negative integer") from exc
+        if safe_expected_version < 0:
+            raise ValueError("expected_version must be a non-negative integer")
+        if store_id and not self.get_store_for_company(company_id=company_id, store_id=store_id):
+            raise KeyError("store not found")
+
+        now = now_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select company_id, onboarding_key, store_id, path_key, current_step_key,
+                       work_mode, seller_returned, answers_json, completed_step_keys_json,
+                       version, created_at, updated_at
+                from merchant_onboarding_states
+                where company_id = ? and onboarding_key = ?
+                """,
+                (company_id, onboarding_key),
+            ).fetchone()
+            existing = self._merchant_onboarding_row_to_dict(row) if row else None
+            current_version = int(existing.get("version") or 0) if existing else 0
+            if safe_expected_version != current_version:
+                raise MerchantOnboardingVersionConflict(existing)
+
+            normalized = normalize_merchant_onboarding_progress(progress, previous=existing)
+            bound_store_id = str(store_id or (existing or {}).get("store_id") or "") or None
+            next_version = current_version + 1
+            created_at = str((existing or {}).get("created_at") or now)
+            params = (
+                bound_store_id,
+                normalized["path_key"],
+                normalized["current_step_key"],
+                normalized["work_mode"],
+                1 if normalized["seller_returned"] else 0,
+                json.dumps(normalized["answers"], ensure_ascii=False, default=json_default),
+                json.dumps(normalized["completed_step_keys"], ensure_ascii=False, default=json_default),
+                next_version,
+                user_id,
+                now,
+            )
+            if existing:
+                changed = conn.execute(
+                    """
+                    update merchant_onboarding_states
+                    set store_id = ?, path_key = ?, current_step_key = ?, work_mode = ?,
+                        seller_returned = ?, answers_json = ?, completed_step_keys_json = ?,
+                        version = ?, updated_by_user_id = ?, updated_at = ?
+                    where company_id = ? and onboarding_key = ? and version = ?
+                    returning company_id
+                    """,
+                    (*params, company_id, onboarding_key, current_version),
+                ).fetchone()
+            else:
+                changed = conn.execute(
+                    """
+                    insert into merchant_onboarding_states (
+                      company_id, onboarding_key, store_id, path_key, current_step_key,
+                      work_mode, seller_returned, answers_json, completed_step_keys_json,
+                      version, updated_by_user_id, created_at, updated_at
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    on conflict do nothing
+                    returning company_id
+                    """,
+                    (
+                        company_id,
+                        onboarding_key,
+                        bound_store_id,
+                        normalized["path_key"],
+                        normalized["current_step_key"],
+                        normalized["work_mode"],
+                        1 if normalized["seller_returned"] else 0,
+                        json.dumps(normalized["answers"], ensure_ascii=False, default=json_default),
+                        json.dumps(normalized["completed_step_keys"], ensure_ascii=False, default=json_default),
+                        next_version,
+                        user_id,
+                        created_at,
+                        now,
+                    ),
+                ).fetchone()
+            if not changed:
+                latest_row = conn.execute(
+                    """
+                    select company_id, onboarding_key, store_id, path_key, current_step_key,
+                           work_mode, seller_returned, answers_json, completed_step_keys_json,
+                           version, created_at, updated_at
+                    from merchant_onboarding_states
+                    where company_id = ? and onboarding_key = ?
+                    """,
+                    (company_id, onboarding_key),
+                ).fetchone()
+                latest = self._merchant_onboarding_row_to_dict(latest_row) if latest_row else None
+                raise MerchantOnboardingVersionConflict(latest)
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=bound_store_id,
+                user_id=user_id,
+                actor_type="user",
+                action_type="merchant.onboarding.progress_saved",
+                target_type="merchant_onboarding",
+                target_id=onboarding_key,
+                summary="Merchant onboarding progress saved without OAuth, platform writes or raw answers.",
+                details={
+                    "onboarding_key": onboarding_key,
+                    "path_key": normalized["path_key"],
+                    "current_step_key": normalized["current_step_key"],
+                    "work_mode": normalized["work_mode"],
+                    "completed_step_count": len(normalized["completed_step_keys"]),
+                    "version": next_version,
+                    "triggers_oauth": False,
+                    "triggers_real_charge": False,
+                    "triggers_real_platform_write": False,
+                    "secret_exposed": False,
+                },
+            )
+        return self.get_merchant_onboarding_state(company_id=company_id, onboarding_key=onboarding_key) or {}
+
+    def _merchant_onboarding_row_to_dict(self, row: Any) -> dict[str, Any]:
+        answers = _load_json_field(row["answers_json"])
+        completed = _load_json_field(row["completed_step_keys_json"])
+        return {
+            "contract_version": MERCHANT_ONBOARDING_CONTRACT_VERSION,
+            "onboarding_key": str(row["onboarding_key"] or PRIMARY_EBAY_ONBOARDING_KEY),
+            "store_id": str(row["store_id"] or ""),
+            "path_key": str(row["path_key"] or "newbie"),
+            "current_step_key": str(row["current_step_key"] or "ebayStage"),
+            "work_mode": str(row["work_mode"] or "guided"),
+            "seller_returned": bool(row["seller_returned"]),
+            "answers": answers if isinstance(answers, dict) else {},
+            "completed_step_keys": completed if isinstance(completed, list) else [],
+            "preferences_saved": True,
+            "version": int(row["version"] or 0),
+            "created_at": str(row["created_at"] or ""),
+            "updated_at": str(row["updated_at"] or ""),
+            "secret_exposed": False,
+        }
+
     def upsert_platform_trial_activation(
         self,
         *,
@@ -6079,6 +6288,7 @@ class SaaSRepository:
             "users",
             "companies",
             "platform_trial_activations",
+            "merchant_onboarding_states",
             "team_members",
             "team_invitations",
             "stores",
@@ -8236,6 +8446,8 @@ class SaaSRepository:
               on users(account_classification, created_at);
             create index if not exists idx_platform_trial_activations_status_updated
               on platform_trial_activations(status, updated_at);
+            create index if not exists idx_merchant_onboarding_store_updated
+              on merchant_onboarding_states(company_id, store_id, updated_at);
             create index if not exists idx_stores_company_platform_created
               on stores(company_id, platform, created_at);
             create index if not exists idx_team_members_company_role
