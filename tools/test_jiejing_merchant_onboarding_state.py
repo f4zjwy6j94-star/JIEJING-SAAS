@@ -197,6 +197,9 @@ def main() -> int:
     repository_error = _test_repository_behavior()
     if repository_error:
         return fail(repository_error)
+    health_retry_error = _test_health_wait_retry_behavior()
+    if health_retry_error:
+        return fail(health_retry_error)
     api_error = _test_http_behavior()
     if api_error:
         return fail(api_error)
@@ -279,6 +282,30 @@ def _test_repository_behavior() -> str:
         for forbidden in ("choice_0", "choice_2", "onboarding-test-password", "seller_returned\": true"):
             if forbidden in audit_text:
                 return f"onboarding audit persisted raw answers or sensitive input: {forbidden}"
+    return ""
+
+
+def _test_health_wait_retry_behavior() -> str:
+    original_request_json = globals()["_request_json"]
+    attempts = 0
+
+    def transient_request_json(url: str, **_: object) -> tuple[int, dict[str, object]]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+        return 200, {"status": "ok"}
+
+    globals()["_request_json"] = transient_request_json
+    try:
+        if not _wait_for_health("http://127.0.0.1:1"):
+            return "health wait did not recover from a transient connection refusal"
+    except urllib.error.URLError:
+        return "health wait leaked a transient connection refusal"
+    finally:
+        globals()["_request_json"] = original_request_json
+    if attempts != 2:
+        return f"health wait should recover on the second attempt, got {attempts} attempts"
     return ""
 
 
@@ -449,7 +476,11 @@ def _request_json(
 
 def _wait_for_health(base_url: str) -> bool:
     for _ in range(100):
-        status, body = _request_json(f"{base_url}/health")
+        try:
+            status, body = _request_json(f"{base_url}/health")
+        except urllib.error.URLError:
+            time.sleep(0.1)
+            continue
         if status == 200 and body.get("status") == "ok":
             return True
         time.sleep(0.1)
