@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW_DIR = ROOT / ".github" / "workflows"
 DEPLOY_WORKFLOW = ROOT / ".github" / "workflows" / "jiejing-staging-manual-deploy.yml"
 ROLLBACK_WORKFLOW = ROOT / ".github" / "workflows" / "jiejing-staging-manual-rollback.yml"
 DEPLOY_SCRIPT = ROOT / "deploy" / "github-actions" / "jiejing-staging-deploy.sh"
@@ -180,6 +181,26 @@ def main() -> int:
             present.append(f"script:{marker}")
     if present:
         return fail("github actions deploy guardrail contains forbidden marker: " + ",".join(present))
+
+    workflow_sources = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(WORKFLOW_DIR.glob("jiejing-*.yml"))
+    )
+    required_supported_actions = [
+        "actions/checkout@v6",
+        "actions/setup-python@v6",
+        "actions/setup-node@v6",
+    ]
+    missing_supported_actions = [marker for marker in required_supported_actions if marker not in workflow_sources]
+    if missing_supported_actions:
+        return fail("github actions Node 24 runtime upgrades are missing: " + ",".join(missing_supported_actions))
+    deprecated_actions = [
+        "actions/checkout@v4",
+        "actions/setup-python@v5",
+        "actions/setup-node@v4",
+    ]
+    present_deprecated_actions = [marker for marker in deprecated_actions if marker in workflow_sources]
+    if present_deprecated_actions:
+        return fail("github actions still use deprecated Node 20 runtimes: " + ",".join(present_deprecated_actions))
 
     print("PASS jiejing_github_actions_deploy_guardrails")
     return 0

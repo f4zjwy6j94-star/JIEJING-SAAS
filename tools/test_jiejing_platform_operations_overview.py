@@ -84,10 +84,11 @@ def main() -> int:
         title="Legacy unmetered chat fixture",
         input_data={"test_fixture": True},
     )
+    legacy_task_at = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
     with repo._connect() as conn:
         conn.execute(
             "update tasks set created_at = ?, updated_at = ? where task_id = ?",
-            ("2026-07-01T00:00:00+00:00", "2026-07-01T00:00:00+00:00", legacy_chat_task["task_id"]),
+            (legacy_task_at, legacy_task_at, legacy_chat_task["task_id"]),
         )
         conn.commit()
     repo.create_platform_connection(

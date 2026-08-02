@@ -35,7 +35,7 @@ jobs:
       JIEJING_ACCEPTANCE_PRODUCT: ${{ inputs.acceptance_product }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Generate controlled image and video proof
         run: bash deploy/github-actions/jiejing-controlled-media-proof.sh
@@ -47,4 +47,3 @@ jobs:
           path: output/jiejing-controlled-media-video-proof
           if-no-files-found: error
           retention-days: 7
-
