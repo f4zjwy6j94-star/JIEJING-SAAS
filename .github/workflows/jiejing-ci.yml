@@ -1,5 +1,7 @@
 name: Jiejing CI
 
+# Official checkout/setup actions use Node 24; staging runner 2.336.0 was verified on 2026-08-02.
+
 on:
   pull_request:
   push:
