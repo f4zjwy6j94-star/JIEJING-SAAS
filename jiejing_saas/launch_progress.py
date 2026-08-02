@@ -528,4 +528,3 @@ def build_fixed_launch_progress(
             "secret_exposed": False,
         },
     }
-
