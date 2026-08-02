@@ -47,7 +47,7 @@ jobs:
       JIEJING_RUNNER_MAINTENANCE_CONFIRM: ${{ inputs.confirm_runner_maintenance }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Runner release maintenance
         run: bash deploy/github-actions/jiejing-runner-maintenance.sh
