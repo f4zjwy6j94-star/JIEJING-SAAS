@@ -33,6 +33,11 @@ def main() -> int:
             ("不要重复授权店铺，也不要重新填写 AI 连接信息。", "no repeat store authorization or AI connection guidance"),
             ('primaryAction: "refresh"', "incident refresh action"),
             ("renderSaasReadinessIncidentStrip(readiness)", "truth panel incident placement"),
+            ("function saasSellerOnboardingGuidance", "seller onboarding guidance mapper"),
+            ("完成 eBay 卖家注册", "precise seller registration guidance"),
+            ("无需重新授权", "no repeat OAuth guidance"),
+            ("在 Seller Hub 启用 Business Policies", "business policy setup guidance"),
+            ("data-saas-seller-onboarding", "seller onboarding UI marker"),
         ]:
             require(app_js, needle, label)
 

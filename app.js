@@ -382,7 +382,13 @@ function isPlausibleJiejingApiBase(value, kind = "saas") {
     const path = url.pathname || "";
     if (url.search || url.hash) return false;
     if (/\.html?$/i.test(path) || /\/(index|app)\.html/i.test(path)) return false;
-    if (kind === "saas" && url.protocol === "file:") return false;
+    if (!["http:", "https:"].includes(url.protocol)) return false;
+    if (kind === "saas" && isPublicJiejingOrigin()) {
+      // Public SaaS requests must stay on the current HTTPS origin so a crafted
+      // query/config override cannot redirect login credentials to another host.
+      if (url.protocol !== "https:") return false;
+      if (url.origin !== window.location.origin) return false;
+    }
     return true;
   } catch (error) {
     return false;
@@ -17417,15 +17423,36 @@ function latestSaasOAuthRequest() {
   return (state.saasOauthRequests || [])[0] || null;
 }
 
+function safeEbayOAuthAuthorizationUrl(value = "") {
+  if (!value) return "";
+  try {
+    const url = new URL(value);
+    const allowedHosts = new Set(["auth.ebay.com", "auth.sandbox.ebay.com"]);
+    if (
+      url.protocol !== "https:" ||
+      !allowedHosts.has(url.hostname) ||
+      url.port ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/oauth2/authorize"
+    ) {
+      return "";
+    }
+    return url.toString();
+  } catch (error) {
+    return "";
+  }
+}
+
 function latestSaasOAuthAuthorizationUrl() {
   const latest = latestSaasOAuthRequest() || {};
   const request = latest.request && typeof latest.request === "object" ? latest.request : {};
-  return (
+  return safeEbayOAuthAuthorizationUrl(
     state.saasLatestOAuthUrl ||
-    latest.auth_url ||
-    latest.authorization_url ||
-    request.authorization_url ||
-    ""
+      latest.auth_url ||
+      latest.authorization_url ||
+      request.authorization_url ||
+      "",
   );
 }
 
@@ -25989,7 +26016,7 @@ function renderSaasBackendPanel() {
     }
     ${renderSaasAiCeoOutputPanel()}
     <div class="runtime-bridge-actions">
-      ${state.saasLatestOAuthUrl ? `<a class="secondary-action" href="${escapeHtml(state.saasLatestOAuthUrl)}" target="_blank" rel="noopener noreferrer">打开 eBay 官方授权页</a>` : ""}
+      ${latestSaasOAuthAuthorizationUrl() ? `<a class="secondary-action" href="${escapeHtml(latestSaasOAuthAuthorizationUrl())}" target="_blank" rel="noopener noreferrer">打开 eBay 官方授权页</a>` : ""}
       <button class="primary-action" type="button" data-saas-action="run-workflow" ${state.saasLoading ? "disabled" : ""}>通过 SaaS 后端跑一单</button>
       <button class="secondary-action" type="button" data-saas-action="run-next-job" ${state.saasLoading || !queueWaiting ? "disabled" : ""}>处理下一个队列</button>
       <button class="secondary-action" type="button" data-saas-action="retry-latest-job" ${state.saasLoading || !failedOrCancelledJob ? "disabled" : ""}>重试最近失败</button>
@@ -27346,7 +27373,8 @@ async function planSaasEbayReadOnlyOAuth() {
         ],
       }),
     });
-    const plannedOAuthUrl = payload.oauth_plan?.authorization_url || payload.oauth_request?.auth_url || "";
+    const rawPlannedOAuthUrl = payload.oauth_plan?.authorization_url || payload.oauth_request?.auth_url || "";
+    const plannedOAuthUrl = safeEbayOAuthAuthorizationUrl(rawPlannedOAuthUrl);
     state.saasLatestOAuthUrl = plannedOAuthUrl;
     const planStatus = payload.oauth_plan?.status || "unknown";
     if (state.saasLatestOAuthUrl) {
@@ -27408,7 +27436,8 @@ async function planSaasEbayPublishOAuth() {
         ],
       }),
     });
-    const plannedOAuthUrl = payload.oauth_plan?.authorization_url || payload.oauth_request?.auth_url || "";
+    const rawPlannedOAuthUrl = payload.oauth_plan?.authorization_url || payload.oauth_request?.auth_url || "";
+    const plannedOAuthUrl = safeEbayOAuthAuthorizationUrl(rawPlannedOAuthUrl);
     state.saasLatestOAuthUrl = plannedOAuthUrl;
     if (plannedOAuthUrl) {
       renderSaasBackendPanel();
@@ -38565,6 +38594,37 @@ function saasAccountHealthTone(health = saasAccountHealthSnapshot()) {
   return "amber";
 }
 
+function saasSellerOnboardingGuidance(health = saasAccountHealthSnapshot()) {
+  const evidence = health.evidence_package && typeof health.evidence_package === "object" ? health.evidence_package : {};
+  const stage = String(health.onboarding_stage || "").toLowerCase();
+  const sellerStatus = String(evidence.seller_account_status || health.status || "")
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  if (stage === "seller_registration_required" || sellerStatus === "registration_incomplete") {
+    return {
+      key: "seller_registration_required",
+      tone: "red",
+      title: "先完成 eBay 卖家注册",
+      detail: "当前 eBay 授权与 Token 续期正常，无需重新授权。请在 eBay 官方页面完成身份、注册地址和收款验证，完成后回到 Seller Hub。",
+      next: "回来后只刷新官方只读数据；若仍缺政策，再按下一条提示补齐 Business Policies。",
+    };
+  }
+  const missingResources = Array.isArray(evidence.missing_resource_keys) ? evidence.missing_resource_keys : [];
+  if (
+    stage === "business_policies_required" ||
+    (evidence.business_policies_present === false && missingResources.includes("account_business_policies"))
+  ) {
+    return {
+      key: "business_policies_required",
+      tone: "amber",
+      title: "在 Seller Hub 启用 Business Policies",
+      detail: "建立付款、配送和退货三类政策，让 Listing 草稿可以引用真实店铺规则。无需重新授权，也不要在捷境里填写 eBay 密码。",
+      next: "完成后刷新官方只读数据，捷境会继续发布体检；真实发布仍需决策中心确认。",
+    };
+  }
+  return null;
+}
+
 function renderSaasAccountHealthTrafficPanel({ compact = false } = {}) {
   const health = saasAccountHealthSnapshot();
   const evidence = health.evidence_package && typeof health.evidence_package === "object" ? health.evidence_package : {};
@@ -38713,6 +38773,7 @@ function renderSaasAccountHealthPanel() {
   const blocked = Array.isArray(guardrails.blocked_real_actions) ? guardrails.blocked_real_actions : [];
   const allowed = Array.isArray(guardrails.allowed_incident_actions) ? guardrails.allowed_incident_actions : [];
   const nextActions = Array.isArray(health.next_actions) ? health.next_actions : [];
+  const onboardingGuidance = saasSellerOnboardingGuidance(health);
   const tone = saasAccountHealthTone(health);
   return `
     <section class="saas-settings-card saas-account-health-card">
@@ -38746,6 +38807,18 @@ function renderSaasAccountHealthPanel() {
           <small>${Number(evidence.restriction_count || 0)} 条限制 / ${Number((evidence.recent_platform_errors || []).length || 0)} 条近期平台错误</small>
         </article>
       </div>
+      ${
+        onboardingGuidance
+          ? `<div class="saas-settings-resource-list" data-saas-seller-onboarding="${escapeHtml(onboardingGuidance.key)}">
+              <article class="is-${escapeHtml(onboardingGuidance.tone)}">
+                <span>当前唯一正确步骤</span>
+                <strong>${escapeHtml(onboardingGuidance.title)}</strong>
+                <small>${escapeHtml(onboardingGuidance.detail)}</small>
+                <small>${escapeHtml(onboardingGuidance.next)}</small>
+              </article>
+            </div>`
+          : ""
+      }
       ${
         health.incident_mode
           ? `<div class="saas-sync-failure-box">

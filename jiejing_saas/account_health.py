@@ -42,6 +42,7 @@ def build_account_health_snapshot(
     latest_packet = packets[0] if packets else {}
     packet = latest_packet.get("packet") if isinstance(latest_packet.get("packet"), dict) else {}
     store_profile = _packet_section_data(packet, "store_profile")
+    business_policies = _packet_section_data(packet, "account_business_policies")
     finances = _packet_section_data(packet, "finances")
     connections = repository.list_connections(company_id=company_id, store_id=store_id)
     execution_results = repository.list_execution_results(company_id=company_id, limit=80)
@@ -70,6 +71,9 @@ def build_account_health_snapshot(
     official_packet_present = bool(packet) and (
         latest_packet.get("source_mode") == "official_api" or packet.get("source_label") == "official_api"
     )
+    present_resource_keys = _packet_resource_keys(packet, "present_resource_keys")
+    missing_resource_keys = _packet_resource_keys(packet, "missing_resource_keys")
+    business_policies_present = _business_policies_ready(business_policies)
     has_store_profile = bool(store_profile)
     status = _classify_status(
         raw_status=raw_status,
@@ -80,7 +84,18 @@ def build_account_health_snapshot(
         recent_platform_errors=recent_platform_errors,
         has_store_profile=has_store_profile,
     )
-    incident_mode = status in {"unknown", "restricted", "suspended", "payout_hold", "quota_limited"}
+    incident_mode = status in {
+        "unknown",
+        "registration_incomplete",
+        "restricted",
+        "suspended",
+        "payout_hold",
+        "quota_limited",
+    }
+    onboarding_stage = _onboarding_stage(
+        status=status,
+        business_policies_present=business_policies_present,
+    )
     account_health_for_publish = _publish_health_payload(
         status=status,
         raw_status=raw_status,
@@ -91,7 +106,7 @@ def build_account_health_snapshot(
         selling_limits=selling_limits,
     )
     return {
-        "contract_version": "2026-06-13-account-health-incident-mode",
+        "contract_version": "2026-08-02-account-health-seller-onboarding-v2",
         "platform": "ebay",
         "company_id": company_id,
         "store_id": store_id,
@@ -102,7 +117,13 @@ def build_account_health_snapshot(
         "severity": _status_severity(status),
         "incident_mode": incident_mode,
         "can_execute_real_writes": not incident_mode,
-        "summary": _merchant_summary(status, has_store_profile=has_store_profile),
+        "can_enter_publish_preflight": not incident_mode and business_policies_present,
+        "onboarding_stage": onboarding_stage,
+        "summary": _merchant_summary(
+            status,
+            has_store_profile=has_store_profile,
+            business_policies_present=business_policies_present,
+        ),
         "account_health": account_health_for_publish,
         "evidence_package": {
             "status_source": "latest_sanitized_ebay_packet" if latest_packet else "missing_packet",
@@ -111,6 +132,9 @@ def build_account_health_snapshot(
             "packet_created_at": latest_packet.get("created_at") or packet.get("created_at") or "",
             "official_packet_present": official_packet_present,
             "store_profile_present": has_store_profile,
+            "business_policies_present": business_policies_present,
+            "present_resource_keys": present_resource_keys,
+            "missing_resource_keys": missing_resource_keys,
             "connection_statuses": _connection_statuses(connections),
             "seller_account_status": raw_status or "",
             "selling_status": selling_status or "",
@@ -131,7 +155,7 @@ def build_account_health_snapshot(
             "allowed_incident_actions": ALLOWED_INCIDENT_ACTIONS,
             "confirmation_center_still_required_when_clear": True,
         },
-        "next_actions": _next_actions(status),
+        "next_actions": _next_actions(status, business_policies_present=business_policies_present),
         "secret_exposed": False,
     }
 
@@ -161,6 +185,13 @@ def merge_account_health_into_payload(
 
 def account_health_readiness_item(account_health: dict[str, Any]) -> dict[str, str]:
     status = str(account_health.get("status") or "unknown")
+    if status == "registration_incomplete":
+        return {
+            "status": "blocked_seller_registration_incomplete",
+            "severity": "warning",
+            "detail": "eBay authorization can be healthy while the seller account registration is still incomplete.",
+            "next_action": "Complete seller registration in eBay Seller Hub; do not repeat OAuth. Then refresh the official read-only packet.",
+        }
     if status == "normal":
         return {
             "status": "account_health_clear",
@@ -205,6 +236,8 @@ def _classify_status(
     ).strip().lower().replace("_", " ")
     if not has_store_profile:
         return "unknown"
+    if any(marker in text for marker in ("registration incomplete", "registration_incomplete")):
+        return "registration_incomplete"
     if any(marker in text for marker in ("suspended", "suspend", "frozen", "freeze", "closed", "disabled", "account freeze")):
         return "suspended"
     if any(marker in text for marker in ("payout hold", "payment hold", "funds on hold", "hold funds", "held payout")):
@@ -219,8 +252,6 @@ def _classify_status(
             "limited",
             "below standard",
             "unverified",
-            "registration incomplete",
-            "registration_incomplete",
             "policy violation",
             "verification required",
         )
@@ -276,6 +307,20 @@ def _packet_sections(packet: dict[str, Any]) -> list[Any]:
     if isinstance(packet.get("resources"), list):
         return list(packet.get("resources") or [])
     return []
+
+
+def _packet_resource_keys(packet: dict[str, Any], key: str) -> list[str]:
+    values = packet.get(key)
+    if not isinstance(values, list):
+        return []
+    return [str(value).strip() for value in values if str(value).strip()][:20]
+
+
+def _business_policies_ready(policies: dict[str, Any]) -> bool:
+    return all(
+        str(policies.get(key) or "").strip()
+        for key in ("fulfillment_policy_id", "payment_policy_id", "return_policy_id")
+    )
 
 
 def _recent_platform_error_summaries(execution_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -372,6 +417,7 @@ def _merchant_status_label(status: str) -> str:
     return {
         "normal": "账号正常",
         "attention": "需要关注",
+        "registration_incomplete": "卖家注册未完成",
         "restricted": "账号受限",
         "suspended": "账号冻结",
         "payout_hold": "付款冻结",
@@ -388,8 +434,12 @@ def _status_severity(status: str) -> str:
     return "red"
 
 
-def _merchant_summary(status: str, *, has_store_profile: bool) -> str:
+def _merchant_summary(status: str, *, has_store_profile: bool, business_policies_present: bool) -> str:
+    if status == "registration_incomplete":
+        return "eBay 授权和安全凭证可以正常，但卖家注册尚未完成；无需重新授权，先在 eBay 完成身份、地址和收款验证。"
     if status == "normal":
+        if not business_policies_present:
+            return "卖家账号已完成注册，但官方数据包还没有付款、配送和退货政策；先在 Seller Hub 启用 Business Policies。"
         return "最新账号健康快照未发现冻结、受限、付款冻结或额度阻断；真实动作仍必须经过决策中心。"
     if status == "attention":
         return "账号存在需要关注的信号；发布前必须复核额度、政策警告和近期平台错误。"
@@ -398,8 +448,19 @@ def _merchant_summary(status: str, *, has_store_profile: bool) -> str:
     return "账号存在冻结、受限、付款冻结或额度风险；系统进入事故模式，只允许诊断、证据包和只读同步。"
 
 
-def _next_actions(status: str) -> list[str]:
+def _next_actions(status: str, *, business_policies_present: bool) -> list[str]:
+    if status == "registration_incomplete":
+        return [
+            "在 eBay 官方页面完成 eBay 卖家注册，包括身份、注册地址和收款验证；无需重新授权。",
+            "完成后回到 Seller Hub，确认卖家功能可用；捷境只刷新官方只读数据，不重复 OAuth。",
+            "若账号恢复后仍缺政策，再在 Seller Hub 启用 Business Policies，并建立付款、配送和退货政策。",
+        ]
     if status == "normal":
+        if not business_policies_present:
+            return [
+                "在 Seller Hub 启用 Business Policies，并建立付款、配送和退货政策。",
+                "完成后刷新官方只读数据即可，无需重新授权；真实动作仍进入决策中心。",
+            ]
         return [
             "继续发布体检：类目、item specifics、图片、VeRO/IP、GPSR、政策、费用和利润。",
             "真实发布、改价、库存、退款、广告和政策动作仍进入决策中心。",
@@ -414,3 +475,13 @@ def _next_actions(status: str) -> list[str]:
         "运行只读同步并导出账号证据包，区分 eBay 原因、人工操作和捷境动作。",
         "账号恢复或换新账号后，再重新同步 packet 并跑发布体检。",
     ]
+
+
+def _onboarding_stage(*, status: str, business_policies_present: bool) -> str:
+    if status == "registration_incomplete":
+        return "seller_registration_required"
+    if status in {"unknown", "restricted", "suspended", "payout_hold", "quota_limited"}:
+        return "account_review_required"
+    if not business_policies_present:
+        return "business_policies_required"
+    return "ready_for_publish_preflight"

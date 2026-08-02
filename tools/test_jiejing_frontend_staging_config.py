@@ -352,6 +352,18 @@ def main() -> int:
         return fail("SaaS API base is still hardcoded in initial state")
     for marker in [
         "resolveJiejingApiBase",
+        "function isPlausibleJiejingApiBase",
+        'url.protocol !== "https:"',
+        "url.origin !== window.location.origin",
+        "Public SaaS requests must stay on the current HTTPS origin",
+        "function safeEbayOAuthAuthorizationUrl",
+        '"auth.ebay.com"',
+        '"auth.sandbox.ebay.com"',
+        'url.pathname !== "/oauth2/authorize"',
+        "url.port",
+        "url.username",
+        "url.password",
+        "safeEbayOAuthAuthorizationUrl(rawPlannedOAuthUrl)",
         "window.JIEJING_CONFIG",
         "__JIEJING_CONFIG__",
         "jiejing_saas_api_base",

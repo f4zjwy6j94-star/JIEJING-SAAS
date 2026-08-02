@@ -69,7 +69,14 @@ def _request(payload: dict, *, store_id: str) -> ExecutionRequest:
     )
 
 
-def _create_store_with_packet(repo: SaaSRepository, *, status: str, store_name: str) -> dict:
+def _create_store_with_packet(
+    repo: SaaSRepository,
+    *,
+    status: str,
+    store_name: str,
+    include_business_policies: bool = True,
+    complete_business_policies: bool = True,
+) -> dict:
     record = repo.create_user_with_company(
         email=f"{store_name}@jiejing.local",
         password="account-health-password",
@@ -93,6 +100,29 @@ def _create_store_with_packet(repo: SaaSRepository, *, status: str, store_name: 
             "scopes": ["sell.account.readonly", "sell.inventory"],
         },
     )
+    sections = [
+        {
+            "key": "store_profile",
+            "source_type": "official_api",
+            "data": {
+                "marketplace_id": "EBAY_US",
+                "seller_account_status": status,
+                "selling_limits": {"used": 1, "limit": 35},
+            },
+        }
+    ]
+    if include_business_policies:
+        sections.append(
+            {
+                "key": "account_business_policies",
+                "source_type": "official_api",
+                "data": {
+                    "fulfillment_policy_id": "fulfillment-policy",
+                    "payment_policy_id": "payment-policy",
+                    **({"return_policy_id": "return-policy"} if complete_business_policies else {}),
+                },
+            }
+        )
     repo.create_platform_data_packet(
         company_id=company_id,
         store_id=store["store_id"],
@@ -103,28 +133,9 @@ def _create_store_with_packet(repo: SaaSRepository, *, status: str, store_name: 
             "source_mode": "official_api",
             "status": "packet_cached_sanitized",
             "source_label": "official_api",
-            "present_resource_keys": ["store_profile", "account_business_policies"],
-            "missing_resource_keys": [],
-            "sections": [
-                {
-                    "key": "store_profile",
-                    "source_type": "official_api",
-                    "data": {
-                        "marketplace_id": "EBAY_US",
-                        "seller_account_status": status,
-                        "selling_limits": {"used": 1, "limit": 35},
-                    },
-                },
-                {
-                    "key": "account_business_policies",
-                    "source_type": "official_api",
-                    "data": {
-                        "fulfillment_policy_id": "fulfillment-policy",
-                        "payment_policy_id": "payment-policy",
-                        "return_policy_id": "return-policy",
-                    },
-                },
-            ],
+            "present_resource_keys": ["store_profile", *(["account_business_policies"] if include_business_policies else [])],
+            "missing_resource_keys": [] if include_business_policies else ["account_business_policies"],
+            "sections": sections,
             "secret_exposed": False,
         },
     )
@@ -169,6 +180,66 @@ def main() -> int:
     if frozen_preflight.get("status") != "blocked_missing_execution_facts" or "account_health.status" not in issue_keys:
         return fail(f"incident account should block publish preflight: {frozen_preflight}")
 
+    incomplete_ctx = _create_store_with_packet(
+        repo,
+        status="registration_incomplete",
+        store_name="registration-incomplete-store",
+        include_business_policies=False,
+    )
+    incomplete = build_account_health_snapshot(
+        repo,
+        company_id=incomplete_ctx["company_id"],
+        store_id=incomplete_ctx["store"]["store_id"],
+    )
+    if incomplete.get("status") != "registration_incomplete" or incomplete.get("incident_mode") is not True:
+        return fail(f"incomplete seller registration should have a precise blocked status: {incomplete}")
+    if incomplete.get("onboarding_stage") != "seller_registration_required":
+        return fail(f"incomplete seller registration should expose the exact onboarding stage: {incomplete}")
+    incomplete_evidence = incomplete.get("evidence_package") or {}
+    if incomplete_evidence.get("business_policies_present") is not False:
+        return fail(f"missing business policies should remain visible without exposing secrets: {incomplete}")
+    incomplete_actions = " ".join(incomplete.get("next_actions") or [])
+    for required in ("完成 eBay 卖家注册", "无需重新授权", "Seller Hub"):
+        if required not in incomplete_actions:
+            return fail(f"registration guidance should contain {required!r}: {incomplete}")
+
+    policies_ctx = _create_store_with_packet(
+        repo,
+        status="registration_completed",
+        store_name="business-policies-missing-store",
+        include_business_policies=False,
+    )
+    policies_missing = build_account_health_snapshot(
+        repo,
+        company_id=policies_ctx["company_id"],
+        store_id=policies_ctx["store"]["store_id"],
+    )
+    if policies_missing.get("status") != "normal" or policies_missing.get("onboarding_stage") != "business_policies_required":
+        return fail(f"healthy seller with missing policies should receive policy setup guidance: {policies_missing}")
+    if policies_missing.get("can_enter_publish_preflight") is not False:
+        return fail(f"missing policy references should stop publish preflight readiness: {policies_missing}")
+    policies_actions = " ".join(policies_missing.get("next_actions") or [])
+    for required in ("Business Policies", "付款、配送和退货", "无需重新授权"):
+        if required not in policies_actions:
+            return fail(f"business-policy guidance should contain {required!r}: {policies_missing}")
+
+    incomplete_policies_ctx = _create_store_with_packet(
+        repo,
+        status="registration_completed",
+        store_name="business-policies-incomplete-store",
+        include_business_policies=True,
+        complete_business_policies=False,
+    )
+    incomplete_policies = build_account_health_snapshot(
+        repo,
+        company_id=incomplete_policies_ctx["company_id"],
+        store_id=incomplete_policies_ctx["store"]["store_id"],
+    )
+    if incomplete_policies.get("onboarding_stage") != "business_policies_required":
+        return fail(f"a partial business-policy section must not be treated as publish-ready: {incomplete_policies}")
+    if (incomplete_policies.get("evidence_package") or {}).get("business_policies_present") is not False:
+        return fail(f"all three policy IDs are required for business-policy readiness: {incomplete_policies}")
+
     no_packet = repo.create_store(
         company_id=healthy_ctx["company_id"],
         user_id=healthy_ctx["user_id"],
@@ -178,7 +249,17 @@ def main() -> int:
     if unknown.get("status") != "unknown" or unknown.get("incident_mode") is not True:
         return fail(f"missing store_profile should default to incident mode: {unknown}")
 
-    serialized = json.dumps({"healthy": healthy, "frozen": frozen, "unknown": unknown}, ensure_ascii=False)
+    serialized = json.dumps(
+        {
+            "healthy": healthy,
+            "frozen": frozen,
+            "registration_incomplete": incomplete,
+            "business_policies_missing": policies_missing,
+            "business_policies_incomplete": incomplete_policies,
+            "unknown": unknown,
+        },
+        ensure_ascii=False,
+    )
     for forbidden in (
         "UNIT-ACCESS-TOKEN-MUST-NOT-PERSIST",
         "UNIT-REFRESH-TOKEN-MUST-NOT-PERSIST",
