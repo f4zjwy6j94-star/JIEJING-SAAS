@@ -103,6 +103,7 @@ def build_fixed_launch_progress(
     item_statuses = _readiness_item_statuses(readiness)
     provider_status = _dict(readiness.get("provider_status"))
     evidence = _dict(readiness.get("product_evidence"))
+    current_ebay_secret_ref_ready = int(evidence.get("ebay_secret_refs") or 0) > 0
     model_value = _dict(provider_status.get("model_value"))
     public_search = _dict(provider_status.get("public_search"))
     media = _dict(provider_status.get("media_generation"))
@@ -359,12 +360,13 @@ def build_fixed_launch_progress(
                     executor="codex_internal",
                     priority=28,
                     next_action="恢复 eBay 官方只读同步和来源证据。",
+                    actionable_now=current_ebay_secret_ref_ready,
                 ),
                 _check(
                     key="ebay_current_secret_ref",
                     label="当前可用卖家授权引用",
                     points=4,
-                    passed=int(evidence.get("ebay_secret_refs") or 0) > 0,
+                    passed=current_ebay_secret_ref_ready,
                     executor="founder_external",
                     priority=65,
                     next_action="待新的合规卖家账号可用后，由商家本人完成一次授权。",
@@ -386,6 +388,7 @@ def build_fixed_launch_progress(
                     executor="codex_internal",
                     priority=29,
                     next_action="补齐店铺同步状态、错误原因和恢复入口。",
+                    actionable_now=current_ebay_secret_ref_ready,
                 ),
                 _check(
                     key="new_ebay_account_smoke",
