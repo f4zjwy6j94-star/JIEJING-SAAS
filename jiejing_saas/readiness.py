@@ -33,6 +33,17 @@ from .repository import SaaSRepository
 from .vault_adapter import build_vault_adapter_contract
 
 
+_PRIVATE_BETA_PAID_LAUNCH_ONLY_BLOCKERS = frozenset(
+    {
+        "merchant_payment_provider_connection_not_ready",
+        "merchant_payment_production_environment_required",
+        "merchant_payment_refund_not_ready",
+        "merchant_payment_controlled_acceptance_not_proven",
+        "merchant_payment_public_cutover_not_approved",
+    }
+)
+
+
 @dataclass(slots=True)
 class ReadinessItem:
     key: str
@@ -323,14 +334,23 @@ def _billing_item(settings: SaaSSettings, repository: SaaSRepository) -> Readine
     payment = _validated_public_mainland_payment(mainland)
     configured_count = payment["configured_component_count"]
     required_count = payment["required_component_count"]
+    private_beta_ready = plan.get("billing_ready_for_private_beta") is True
     if payment["mainland_payment_ready_for_owner_approval"] is True:
         return ReadinessItem(
             "billing_quota",
             "Billing and quota",
-            "mainland_payment_ready_for_owner_approval",
-            "warning",
+            (
+                "mainland_payment_ready_for_owner_approval"
+                if private_beta_ready
+                else "blocked_private_beta_billing_not_ready"
+            ),
+            "warning" if private_beta_ready else "blocker",
             "WeChat Pay Native configuration, signed callbacks, authenticated order query and controlled acceptance evidence are ready; public charging remains closed.",
-            "Complete the separate owner commercial-release review before approving public payment cutover.",
+            (
+                "Complete the separate owner commercial-release review before approving public payment cutover."
+                if private_beta_ready
+                else "Restore the strict private-beta billing contract before inviting merchants or reviewing public payment cutover."
+            ),
         )
     if payment["next_paid_launch_blocker"] == "merchant_payment_status_unavailable":
         return ReadinessItem(
@@ -349,6 +369,16 @@ def _billing_item(settings: SaaSSettings, repository: SaaSRepository) -> Readine
             "blocker" if settings.is_production_like else "warning",
             f"WeChat Pay Native has {configured_count}/{required_count} required backend components configured; public charging remains closed.",
             "Complete the current backend payment configuration before relying on historical acceptance evidence.",
+        )
+    paid_launch_only_gap = payment["next_paid_launch_blocker"] in _PRIVATE_BETA_PAID_LAUNCH_ONLY_BLOCKERS
+    if private_beta_ready and paid_launch_only_gap:
+        return ReadinessItem(
+            "billing_quota",
+            "Billing and quota",
+            "private_beta_ready_paid_launch_pending",
+            "warning",
+            f"Free invited-beta billing controls are ready; WeChat Pay Native has {configured_count}/{required_count} required backend components configured, while public charging remains closed.",
+            "Complete the next controlled mainland payment gate before the separate public paid-launch approval.",
         )
     return ReadinessItem(
         "billing_quota",

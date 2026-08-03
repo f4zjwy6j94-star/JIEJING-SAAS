@@ -35,6 +35,7 @@
 ### 文件
 
 - 修改 `tools/test_jiejing_phase2_response_boundary_hardening.py`。
+- 修改 `tools/test_jiejing_domestic_billing_production_completion.py`，更新 owner-ready 但私测计费合同缺失时的 fail-closed 断言。
 
 ### 失败测试
 
@@ -45,6 +46,7 @@
 3. 同一结果的 `production_ready=false`、`can_accept_real_customers=false`，公共 billing 的扣款、退款、前端发权益和平台写入字段全部保持 false。
 4. canonical 合同损坏或安全字段矛盾时，billing item 必须是 blocker，公开 `beta_ready=false`。
 5. `billing_ready_for_private_beta` 为 false、字符串或缺失时不得放行。
+6. 即使大陆支付技术证据已达到 owner review，只要严格私测计费合同不是 true，billing item 仍必须是 blocker；公共支付摘要可以保留 owner-review 事实，但不能据此合成 beta readiness。
 
 先运行并确认测试因当前 billing item 仍返回 blocker 而失败：
 
@@ -90,6 +92,7 @@ python tools/test_jiejing_phase2_response_boundary_hardening.py
 python tools/test_jiejing_billing_test_provider.py
 python tools/test_jiejing_billing_quota_guardrail.py
 python tools/test_jiejing_mainland_payment_strategy.py
+python tools/test_jiejing_domestic_billing_production_completion.py
 python tools/test_jiejing_saas_backend_mvp.py
 python tools/test_jiejing_saas_p0_security_guardrails.py
 python tools/test_jiejing_fixed_launch_progress.py

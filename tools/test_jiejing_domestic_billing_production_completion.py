@@ -341,8 +341,16 @@ def _run_production_completion(temp_root: Path) -> int:
             "legacy strategy lane must honor the native-contract platform certificate fallback: "
             f"{certificate_fallback_strategy}"
         )
-    if readiness_item.status != "mainland_payment_ready_for_owner_approval":
-        return fail(f"billing readiness item must be driven by the canonical mainland status: {readiness_item}")
+    if plan.get("billing_ready_for_private_beta") is not False:
+        return fail("owner-ready payment evidence must not synthesize a missing private-beta billing contract")
+    if (
+        readiness_item.status != "blocked_private_beta_billing_not_ready"
+        or readiness_item.severity != "blocker"
+    ):
+        return fail(
+            "owner-ready payment evidence must remain blocked when the strict private-beta billing contract is absent: "
+            f"{readiness_item}"
+        )
     readiness_copy = f"{readiness_item.detail} {readiness_item.next_action}".lower()
     if "stripe" in readiness_copy or "external paid subscription provider" in readiness_copy:
         return fail(f"mainland billing readiness must not instruct merchants to configure Stripe: {readiness_item}")
