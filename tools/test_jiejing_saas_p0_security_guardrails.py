@@ -255,6 +255,8 @@ def _check_safe_access_log() -> str:
         return "access log should record a safe path-only HTTP event"
     if "STATE-MUST-NOT-LOG" in log_line or "CODE-MUST-NOT-LOG" in log_line:
         return "access log leaked OAuth query parameters"
+    if "203.0.113.10" in log_line or "client_ip" in event:
+        return "production access log must omit the raw client IP for every route"
     if any(key.lower() in {"authorization", "body", "headers", "query"} for key in event):
         return "access log must not include headers, query, body, or authorization fields"
     if event.get("secret_exposed") is not False:

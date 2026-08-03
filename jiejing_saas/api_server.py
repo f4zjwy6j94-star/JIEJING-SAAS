@@ -10,6 +10,7 @@ import json
 import os
 import re
 import socket
+import sqlite3
 import sys
 import threading
 import time
@@ -118,6 +119,11 @@ from .public_search_handoff import build_public_search_market_handoff, merge_pub
 from .queue_plan import build_queue_plan
 from .queue_adapter import build_queue_adapter_contract
 from .provider_workflow_plan import build_provider_workflow_plan
+from .product_feedback import (
+    ProductFeedbackIdempotencyConflict,
+    ProductFeedbackStatusConflict,
+    ProductFeedbackValidationError,
+)
 from .readiness import build_degraded_product_readiness, build_product_readiness_or_degraded
 from .repository import HIGH_RISK_ACTIONS, SaaSRepository
 from .runtime_bridge import RuntimeBridge
@@ -143,6 +149,15 @@ AUTH_REGISTER_RATE_LIMIT_MAX_GLOBAL_DEFAULT = 60
 EXPENSIVE_API_RATE_LIMIT_WINDOW_SECONDS_DEFAULT = 60
 EXPENSIVE_API_RATE_LIMIT_MAX_PER_IP_DEFAULT = 180
 EXPENSIVE_API_RATE_LIMIT_MAX_GLOBAL_DEFAULT = 5000
+PRODUCT_FEEDBACK_RATE_LIMIT_WINDOW_SECONDS_DEFAULT = 60
+PRODUCT_FEEDBACK_RATE_LIMIT_WINDOW_SECONDS_MIN = 10
+PRODUCT_FEEDBACK_RATE_LIMIT_WINDOW_SECONDS_MAX = 60 * 60
+PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_USER_DEFAULT = 12
+PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_USER_MAX = 120
+PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_COMPANY_DEFAULT = 30
+PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_COMPANY_MAX = 300
+PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_IP_DEFAULT = 60
+PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_IP_MAX = 600
 DOMESTIC_RECONCILIATION_RATE_LIMIT_WINDOW_SECONDS = 60
 DOMESTIC_RECONCILIATION_RATE_LIMIT_MAX_PER_COMPANY = 6
 LOCAL_RATE_LIMIT_MAX_BUCKETS_DEFAULT = 4096
@@ -222,6 +237,20 @@ class RequestBodyError(ValueError):
         self.message = message
 
 
+class JiejingSafeThreadingHTTPServer(ThreadingHTTPServer):
+    """Emit a bounded event for unhandled handlers without request or exception details."""
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        event = {
+            "event": "http_request_handler_error",
+            "request_data_logged": False,
+            "client_address_logged": False,
+            "exception_details_logged": False,
+            "secret_exposed": False,
+        }
+        sys.stderr.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None:
@@ -260,6 +289,10 @@ def _positive_int_env(name: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return value if value > 0 else default
+
+
+def _bounded_positive_int_env(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    return min(max(_positive_int_env(name, default), minimum), maximum)
 
 
 def _parse_ip_address(value: str) -> Any | None:
@@ -455,7 +488,7 @@ class SaaSBackendServer:
             settings = backend_settings
             repository_startup_error = startup_repository_error
 
-        server = ThreadingHTTPServer((self.host, self.port), Handler)
+        server = JiejingSafeThreadingHTTPServer((self.host, self.port), Handler)
         print(f"Jiejing SaaS Backend MVP listening on http://{self.host}:{self.port} env={backend_settings.environment}")
         server.serve_forever()
 
@@ -1325,6 +1358,21 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         identity = self._require_auth()
         if identity is None:
+            return
+
+        if path == "product-feedback":
+            limit = _query_limit(query, default=20, maximum=50) or 20
+            receipts = self.repository.list_product_feedback(
+                company_id=str(identity["company_id"]),
+                limit=limit,
+            )
+            self._send_json(
+                {
+                    "product_feedback_receipts": receipts,
+                    "returned_count": len(receipts),
+                    "secret_exposed": False,
+                }
+            )
             return
 
         if path == "merchant-onboarding/primary-ebay":
@@ -2552,6 +2600,74 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         identity = self._require_auth()
         if identity is None:
+            return
+
+        if path == "product-feedback":
+            if not self._check_product_feedback_rate_limit(identity):
+                return
+            body = self._read_json_body()
+            idempotency_key = body.get("idempotency_key")
+            if not isinstance(idempotency_key, str):
+                self._send_error(HTTPStatus.BAD_REQUEST, "product feedback idempotency key must be text")
+                return
+            try:
+                receipt = self.repository.create_product_feedback(
+                    company_id=str(identity["company_id"]),
+                    user_id=str(identity["user_id"]),
+                    idempotency_key=idempotency_key,
+                    payload={key: value for key, value in body.items() if key != "idempotency_key"},
+                    store_id=None,
+                )
+            except ProductFeedbackIdempotencyConflict as exc:
+                self._send_error(HTTPStatus.CONFLICT, str(exc))
+                return
+            except (ProductFeedbackValidationError, ValueError) as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            self._send_json(
+                {
+                    "product_feedback": receipt,
+                    "delivered": True,
+                    "external_provider_action_triggered": False,
+                    "real_platform_write_performed": False,
+                    "secret_exposed": False,
+                },
+                status=HTTPStatus.OK if receipt.get("duplicate_request") is True else HTTPStatus.CREATED,
+            )
+            return
+
+        if path in {"owner/product-feedback/review", "owner/product-feedback/resolve"}:
+            if not self._require_platform_internal_admin(identity, "product feedback operation"):
+                return
+            body = self._read_json_body()
+            feedback_id = body.get("feedback_id")
+            if set(body) != {"feedback_id"} or not isinstance(feedback_id, str) or not feedback_id.strip():
+                self._send_error(HTTPStatus.BAD_REQUEST, "feedback_id is required")
+                return
+            target_status = "reviewing" if path.endswith("/review") else "resolved"
+            try:
+                receipt = self.repository.transition_product_feedback_status(
+                    feedback_id=feedback_id.strip(),
+                    actor_user_id=str(identity["user_id"]),
+                    target_status=target_status,
+                )
+            except KeyError:
+                self._send_error(HTTPStatus.NOT_FOUND, "product feedback not found")
+                return
+            except ProductFeedbackStatusConflict as exc:
+                self._send_error(HTTPStatus.CONFLICT, str(exc))
+                return
+            except ValueError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            self._send_json(
+                {
+                    "product_feedback": receipt,
+                    "external_provider_action_triggered": False,
+                    "real_platform_write_performed": False,
+                    "secret_exposed": False,
+                }
+            )
             return
 
         if path == "merchant-onboarding/primary-ebay/progress":
@@ -5812,7 +5928,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             "method": self.command,
             "path": parsed.path,
             "status": status_code,
-            "client_ip": self.client_address[0] if self.client_address else None,
             "secret_exposed": False,
         }
         sys.stderr.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -6178,6 +6293,92 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "storage": "bounded_process_fallback",
                 "secret_exposed": False,
             }
+
+    def _check_product_feedback_rate_limit(self, identity: dict[str, Any]) -> bool:
+        window_seconds = _bounded_positive_int_env(
+            "JIEJING_PRODUCT_FEEDBACK_RATE_LIMIT_WINDOW_SECONDS",
+            PRODUCT_FEEDBACK_RATE_LIMIT_WINDOW_SECONDS_DEFAULT,
+            minimum=PRODUCT_FEEDBACK_RATE_LIMIT_WINDOW_SECONDS_MIN,
+            maximum=PRODUCT_FEEDBACK_RATE_LIMIT_WINDOW_SECONDS_MAX,
+        )
+        checks = (
+            (
+                "product_feedback:submit:user",
+                str(identity.get("user_id") or "unknown"),
+                _bounded_positive_int_env(
+                    "JIEJING_PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_USER",
+                    PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_USER_DEFAULT,
+                    minimum=1,
+                    maximum=PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_USER_MAX,
+                ),
+            ),
+            (
+                "product_feedback:submit:company",
+                str(identity.get("company_id") or "unknown"),
+                _bounded_positive_int_env(
+                    "JIEJING_PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_COMPANY",
+                    PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_COMPANY_DEFAULT,
+                    minimum=1,
+                    maximum=PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_COMPANY_MAX,
+                ),
+            ),
+            (
+                "product_feedback:submit:ip",
+                self._client_ip_for_rate_limit(),
+                _bounded_positive_int_env(
+                    "JIEJING_PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_IP",
+                    PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_IP_DEFAULT,
+                    minimum=1,
+                    maximum=PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_IP_MAX,
+                ),
+            ),
+        )
+        try:
+            results = [
+                self.repository.consume_rate_limit_bucket(
+                    scope=scope,
+                    subject=subject,
+                    limit=limit,
+                    window_seconds=window_seconds,
+                )
+                for scope, subject, limit in checks
+            ]
+        except Exception:
+            self._send_json(
+                {
+                    "error": "product feedback is temporarily unavailable; keep this feedback queued and retry later",
+                    "status": int(HTTPStatus.SERVICE_UNAVAILABLE),
+                    "delivered": False,
+                    "retryable": True,
+                    "queue_locally": True,
+                    "retry_after_seconds": window_seconds,
+                    "external_provider_action_triggered": False,
+                    "real_platform_write_performed": False,
+                    "secret_exposed": False,
+                },
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return False
+        denied_results = [result for result in results if result.get("allowed") is not True]
+        if not denied_results:
+            return True
+        self._send_json(
+            {
+                "error": "product feedback submissions are temporarily limited; please retry later",
+                "status": int(HTTPStatus.TOO_MANY_REQUESTS),
+                "delivered": False,
+                "retryable": True,
+                "queue_locally": True,
+                "retry_after_seconds": max(
+                    int(result.get("retry_after_seconds") or window_seconds) for result in denied_results
+                ),
+                "external_provider_action_triggered": False,
+                "real_platform_write_performed": False,
+                "secret_exposed": False,
+            },
+            status=HTTPStatus.TOO_MANY_REQUESTS,
+        )
+        return False
 
     @staticmethod
     def _public_readiness_summary(readiness: dict[str, Any], *, authenticated: bool) -> dict[str, Any]:
@@ -7836,6 +8037,23 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         exc_type = exc.__class__.__name__.lower()
         exc_module = exc.__class__.__module__.lower()
         text = f"{exc_type}: {exc}".lower()
+        if isinstance(exc, sqlite3.DatabaseError):
+            return any(
+                marker in text
+                for marker in (
+                    "database is locked",
+                    "database table is locked",
+                    "database schema is locked",
+                    "unable to open database file",
+                    "attempt to write a readonly database",
+                    "disk i/o error",
+                    "database or disk is full",
+                    "database disk image is malformed",
+                    "file is not a database",
+                    "malformed database schema",
+                    "cannot operate on a closed database",
+                )
+            )
         if exc_module.startswith("psycopg"):
             return True
         return any(
