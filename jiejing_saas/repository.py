@@ -35,6 +35,12 @@ from .operations_metering import (
 )
 from .permissions import permissions_for_role, valid_role
 from .postgres_repository_runtime import connect_postgres_repository
+from .product_feedback import (
+    ProductFeedbackIdempotencyConflict,
+    ProductFeedbackStatusConflict,
+    normalize_product_feedback_payload,
+    product_feedback_payload_hash,
+)
 from .security import hash_password, verify_password
 
 
@@ -199,6 +205,23 @@ class SaaSRepository:
                   created_at text not null,
                   updated_at text not null,
                   primary key (company_id, onboarding_key)
+                );
+
+                create table if not exists merchant_product_feedback (
+                  feedback_id text primary key,
+                  company_id text not null,
+                  user_id text not null,
+                  store_id text,
+                  feedback_type text not null check (feedback_type = 'product_improvement'),
+                  module_key text not null,
+                  reason text not null check (reason in ('unclear', 'wrong_result', 'missing_action')),
+                  status text not null check (status in ('open', 'reviewing', 'resolved')),
+                  idempotency_key_hash text not null,
+                  created_at text not null,
+                  updated_at text not null,
+                  resolved_at text,
+                  feedback_json text not null,
+                  unique (company_id, idempotency_key_hash)
                 );
 
                 create table if not exists user_sessions (
@@ -794,6 +817,12 @@ class SaaSRepository:
                 migration_id="20260802_merchant_onboarding_states",
                 checksum="jiejing-merchant-onboarding-states-v20260802",
                 summary="Adds tenant-scoped enum-only merchant onboarding progress with optimistic concurrency.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260803_merchant_product_feedback",
+                checksum="jiejing-merchant-product-feedback-v20260803",
+                summary="Adds tenant-scoped, idempotent and auditable merchant product feedback.",
             )
 
     def _initialize_postgres(self) -> None:
@@ -4433,6 +4462,234 @@ class SaaSRepository:
             )
         return self.get_merchant_onboarding_state(company_id=company_id, onboarding_key=onboarding_key) or {}
 
+    def create_product_feedback(
+        self,
+        *,
+        company_id: str,
+        user_id: str,
+        idempotency_key: str,
+        payload: dict[str, Any],
+        store_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Create one tenant product-feedback receipt from a normalized safe payload."""
+
+        self.initialize()
+        normalized_company_id = str(company_id or "").strip()
+        normalized_user_id = str(user_id or "").strip()
+        normalized_store_id = str(store_id or "").strip() or None
+        raw_idempotency_key = str(idempotency_key or "").strip()
+        if not normalized_company_id or not normalized_user_id:
+            raise ValueError("company_id and user_id are required")
+        if len(raw_idempotency_key) < 8 or len(raw_idempotency_key) > 200:
+            raise ValueError("product feedback idempotency key is invalid")
+        if normalized_store_id and not self.get_store_for_company(
+            company_id=normalized_company_id,
+            store_id=normalized_store_id,
+        ):
+            raise KeyError("store not found")
+
+        normalized = normalize_product_feedback_payload(payload)
+        payload_hash = product_feedback_payload_hash(
+            normalized,
+            user_id=normalized_user_id,
+            store_id=normalized_store_id,
+        )
+        idempotency_key_hash = hashlib.sha256(
+            (
+                "jiejing-product-feedback-idempotency-key-v1\0"
+                f"{normalized_company_id}\0{raw_idempotency_key}"
+            ).encode("utf-8")
+        ).hexdigest()
+        now = now_iso()
+        feedback_id = _id("feedback")
+        feedback_packet = {
+            "contract_version": "2026-08-03-product-feedback-v1",
+            **normalized,
+            "request_payload_hash": payload_hash,
+            "secret_exposed": False,
+        }
+        with self._connect() as conn:
+            inserted = conn.execute(
+                """
+                insert into merchant_product_feedback (
+                  feedback_id, company_id, user_id, store_id, feedback_type,
+                  module_key, reason, status, idempotency_key_hash,
+                  created_at, updated_at, resolved_at, feedback_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict (company_id, idempotency_key_hash) do nothing
+                returning feedback_id
+                """,
+                (
+                    feedback_id,
+                    normalized_company_id,
+                    normalized_user_id,
+                    normalized_store_id,
+                    normalized["feedback_type"],
+                    normalized["module_key"],
+                    normalized["reason"],
+                    "open",
+                    idempotency_key_hash,
+                    now,
+                    now,
+                    None,
+                    json.dumps(feedback_packet, ensure_ascii=False, default=json_default),
+                ),
+            ).fetchone()
+            row = conn.execute(
+                """
+                select feedback_id, feedback_type, module_key, reason, status,
+                       created_at, updated_at, resolved_at, feedback_json
+                from merchant_product_feedback
+                where company_id = ? and idempotency_key_hash = ?
+                """,
+                (normalized_company_id, idempotency_key_hash),
+            ).fetchone()
+            if not inserted:
+                stored_packet = _load_json_field(row["feedback_json"]) if row else {}
+                stored_hash = str(stored_packet.get("request_payload_hash") or "") if isinstance(stored_packet, dict) else ""
+                if not stored_hash or not secrets.compare_digest(stored_hash, payload_hash):
+                    raise ProductFeedbackIdempotencyConflict(
+                        "product feedback idempotency key already belongs to another payload"
+                    )
+            else:
+                self._insert_audit(
+                    conn,
+                    company_id=normalized_company_id,
+                    store_id=normalized_store_id,
+                    user_id=normalized_user_id,
+                    actor_type="user",
+                    action_type="product_feedback.created",
+                    target_type="product_feedback",
+                    target_id=feedback_id,
+                    summary="Merchant product feedback was recorded inside the tenant boundary.",
+                    details={
+                        "feedback_type": normalized["feedback_type"],
+                        "module_key": normalized["module_key"],
+                        "reason": normalized["reason"],
+                        "status": "open",
+                        "detail_present": bool(normalized["detail"]),
+                        "detail_length": len(normalized["detail"]),
+                        "context_labels_present": any(
+                            bool(normalized[key])
+                            for key in ("task_id", "report_id", "confirmation_id", "packet_id")
+                        ),
+                        "external_provider_action_triggered": False,
+                        "secret_exposed": False,
+                    },
+                )
+        receipt = self._product_feedback_receipt(row)
+        receipt["duplicate_request"] = not bool(inserted)
+        return receipt
+
+    def list_product_feedback(self, *, company_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        """List bounded safe receipts for one company only."""
+
+        self.initialize()
+        safe_limit = min(max(int(limit or 20), 1), 50)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select feedback_id, feedback_type, module_key, reason, status,
+                       created_at, updated_at, resolved_at
+                from merchant_product_feedback
+                where company_id = ?
+                order by created_at desc, feedback_id desc
+                limit ?
+                """,
+                (company_id, safe_limit),
+            ).fetchall()
+        return [self._product_feedback_receipt(row) for row in rows]
+
+    def transition_product_feedback_status(
+        self,
+        *,
+        feedback_id: str,
+        actor_user_id: str,
+        target_status: str,
+    ) -> dict[str, Any]:
+        """Advance one feedback record through the fixed internal lifecycle."""
+
+        self.initialize()
+        normalized_feedback_id = str(feedback_id or "").strip()
+        normalized_actor_user_id = str(actor_user_id or "").strip()
+        normalized_target = str(target_status or "").strip().lower()
+        expected_status = {"reviewing": "open", "resolved": "reviewing"}.get(normalized_target)
+        if not normalized_feedback_id or not normalized_actor_user_id:
+            raise ValueError("feedback_id and actor_user_id are required")
+        if not expected_status:
+            raise ProductFeedbackStatusConflict("unsupported product feedback status transition")
+
+        now = now_iso()
+        with self._connect() as conn:
+            existing = conn.execute(
+                """
+                select feedback_id, company_id, store_id, feedback_type, module_key,
+                       reason, status, created_at, updated_at, resolved_at
+                from merchant_product_feedback where feedback_id = ?
+                """,
+                (normalized_feedback_id,),
+            ).fetchone()
+            if not existing:
+                raise KeyError("product feedback not found")
+            if str(existing["status"]) != expected_status:
+                raise ProductFeedbackStatusConflict("product feedback status transition is not allowed")
+            changed = conn.execute(
+                """
+                update merchant_product_feedback
+                set status = ?, updated_at = ?, resolved_at = ?
+                where feedback_id = ? and status = ?
+                returning feedback_id, feedback_type, module_key, reason, status,
+                          created_at, updated_at, resolved_at
+                """,
+                (
+                    normalized_target,
+                    now,
+                    now if normalized_target == "resolved" else None,
+                    normalized_feedback_id,
+                    expected_status,
+                ),
+            ).fetchone()
+            if not changed:
+                raise ProductFeedbackStatusConflict("product feedback changed concurrently")
+            self._insert_audit(
+                conn,
+                company_id=str(existing["company_id"]),
+                store_id=str(existing["store_id"] or "") or None,
+                user_id=normalized_actor_user_id,
+                actor_type="platform_internal_admin",
+                action_type="product_feedback.status_changed",
+                target_type="product_feedback",
+                target_id=normalized_feedback_id,
+                summary="Internal product feedback status advanced through the fixed lifecycle.",
+                details={
+                    "previous_status": expected_status,
+                    "status": normalized_target,
+                    "feedback_type": str(existing["feedback_type"]),
+                    "module_key": str(existing["module_key"]),
+                    "reason": str(existing["reason"]),
+                    "external_provider_action_triggered": False,
+                    "secret_exposed": False,
+                },
+            )
+        return self._product_feedback_receipt(changed)
+
+    @staticmethod
+    def _product_feedback_receipt(row: Any) -> dict[str, Any]:
+        if not row:
+            raise RuntimeError("product feedback was not persisted")
+        return {
+            "contract_version": "2026-08-03-product-feedback-receipt-v1",
+            "feedback_id": str(row["feedback_id"]),
+            "feedback_type": str(row["feedback_type"]),
+            "module_key": str(row["module_key"]),
+            "reason": str(row["reason"]),
+            "status": str(row["status"]),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+            "resolved_at": str(row["resolved_at"] or ""),
+            "secret_exposed": False,
+        }
+
     def _merchant_onboarding_row_to_dict(self, row: Any) -> dict[str, Any]:
         answers = _load_json_field(row["answers_json"])
         completed = _load_json_field(row["completed_step_keys_json"])
@@ -6011,7 +6268,15 @@ class SaaSRepository:
                 """,
                 (company_id, limit),
             ).fetchall()
-        return [self._audit_row_to_dict(row) for row in rows]
+        audits: list[dict[str, Any]] = []
+        for row in rows:
+            audit = self._audit_row_to_dict(row)
+            if str(audit.get("actor_type") or "") == "platform_internal_admin":
+                audit = dict(audit)
+                audit.pop("user_id", None)
+                audit["internal_actor"] = True
+            audits.append(audit)
+        return audits
 
     def task_timeline(self, *, company_id: str, task_id: str) -> dict[str, Any]:
         self.initialize()
@@ -8448,6 +8713,10 @@ class SaaSRepository:
               on platform_trial_activations(status, updated_at);
             create index if not exists idx_merchant_onboarding_store_updated
               on merchant_onboarding_states(company_id, store_id, updated_at);
+            create index if not exists idx_merchant_product_feedback_company_created
+              on merchant_product_feedback(company_id, created_at);
+            create index if not exists idx_merchant_product_feedback_status_updated
+              on merchant_product_feedback(status, updated_at);
             create index if not exists idx_stores_company_platform_created
               on stores(company_id, platform, created_at);
             create index if not exists idx_team_members_company_role

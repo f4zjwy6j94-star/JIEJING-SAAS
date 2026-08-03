@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import types
 from pathlib import Path
 
 
@@ -15,6 +16,7 @@ if str(ROOT) not in sys.path:
 
 from jiejing_saas.postgres_repository_runtime import (  # noqa: E402
     JSON_COLUMNS,
+    adapt_jsonb_parameters,
     placeholder_count,
     postgres_pool_enabled,
     postgres_pool_max_size,
@@ -131,6 +133,59 @@ def main() -> int:
     for onboarding_json_column in ("answers_json", "completed_step_keys_json"):
         if onboarding_json_column not in JSON_COLUMNS:
             return fail(f"merchant onboarding JSON must be adapted for Postgres JSONB: {onboarding_json_column}")
+    if "feedback_json" not in JSON_COLUMNS:
+        return fail("merchant product feedback JSON must be adapted for the Postgres JSONB column")
+    feedback_insert_sql, feedback_insert_params = translate_sqlite_query_to_postgres(
+        """
+        insert into merchant_product_feedback (
+          feedback_id, company_id, user_id, store_id, feedback_type,
+          module_key, reason, status, idempotency_key_hash,
+          created_at, updated_at, resolved_at, feedback_json
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        on conflict (company_id, idempotency_key_hash) do nothing
+        returning feedback_id
+        """,
+        (
+            "feedback_1",
+            "company_1",
+            "user_1",
+            None,
+            "product_improvement",
+            "workflow",
+            "unclear",
+            "open",
+            "idempotency-hash",
+            "2026-08-03T00:00:00+00:00",
+            "2026-08-03T00:00:00+00:00",
+            None,
+            '{"safe":true}',
+        ),
+    )
+    class Jsonb:
+        def __init__(self, value: object) -> None:
+            self.value = value
+
+    module_names = ("psycopg", "psycopg.types", "psycopg.types.json")
+    previous_modules = {name: sys.modules.get(name) for name in module_names}
+    fake_psycopg = types.ModuleType("psycopg")
+    fake_types = types.ModuleType("psycopg.types")
+    fake_json = types.ModuleType("psycopg.types.json")
+    fake_json.Jsonb = Jsonb
+    fake_types.json = fake_json
+    fake_psycopg.types = fake_types
+    try:
+        sys.modules["psycopg"] = fake_psycopg
+        sys.modules["psycopg.types"] = fake_types
+        sys.modules["psycopg.types.json"] = fake_json
+        adapted_feedback_params = adapt_jsonb_parameters(feedback_insert_sql, feedback_insert_params)
+    finally:
+        for name, previous in previous_modules.items():
+            if previous is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
+    if not isinstance(adapted_feedback_params[-1], Jsonb):
+        return fail("merchant product feedback INSERT did not adapt feedback_json as Postgres JSONB")
     if "_postgres_initialize_lock" not in repository_text:
         return fail("Postgres migration initialization must be guarded against concurrent requests")
     if "pg_advisory_lock" not in repository_text or "pg_advisory_unlock" not in repository_text:
@@ -156,6 +211,16 @@ def main() -> int:
     ):
         if marker not in migration_text.lower():
             return fail(f"Postgres migration must ship tenant merchant onboarding state: {marker}")
+    for marker in (
+        "create table if not exists merchant_product_feedback",
+        "feedback_json jsonb not null",
+        "unique (company_id, idempotency_key_hash)",
+        "idx_merchant_product_feedback_company_created",
+        "idx_merchant_product_feedback_status_updated",
+        "20260803_merchant_product_feedback",
+    ):
+        if marker not in migration_text.lower():
+            return fail(f"Postgres migration must ship merchant product feedback closure: {marker}")
     if "on conflict(scheduler_key) do update set" not in repository_text.lower():
         return fail("provider monitoring lease must use a cross-process atomic Postgres-compatible upsert")
     if "where platform_provider_monitor_state.lease_expires_at_epoch <= ?" not in repository_text.lower():

@@ -104,6 +104,23 @@ create table if not exists merchant_onboarding_states (
   primary key (company_id, onboarding_key)
 );
 
+create table if not exists merchant_product_feedback (
+  feedback_id text primary key,
+  company_id text not null references companies(company_id),
+  user_id text not null references users(user_id),
+  store_id text references stores(store_id),
+  feedback_type text not null check (feedback_type = 'product_improvement'),
+  module_key text not null,
+  reason text not null check (reason in ('unclear', 'wrong_result', 'missing_action')),
+  status text not null check (status in ('open', 'reviewing', 'resolved')),
+  idempotency_key_hash text not null,
+  created_at timestamptz not null,
+  updated_at timestamptz not null,
+  resolved_at timestamptz,
+  feedback_json jsonb not null,
+  unique (company_id, idempotency_key_hash)
+);
+
 create table if not exists secret_refs (
   secret_ref text primary key,
   company_id text not null references companies(company_id),
@@ -610,6 +627,10 @@ create index if not exists idx_platform_trial_activations_status_updated
   on platform_trial_activations(status, updated_at);
 create index if not exists idx_merchant_onboarding_store_updated
   on merchant_onboarding_states(company_id, store_id, updated_at);
+create index if not exists idx_merchant_product_feedback_company_created
+  on merchant_product_feedback(company_id, created_at);
+create index if not exists idx_merchant_product_feedback_status_updated
+  on merchant_product_feedback(status, updated_at);
 
 insert into schema_migrations (migration_id, checksum, summary)
 values (
@@ -704,6 +725,14 @@ values (
   '20260802_merchant_onboarding_states',
   'jiejing-merchant-onboarding-states-v20260802',
   'Adds tenant-scoped enum-only merchant onboarding progress with optimistic concurrency.'
+)
+on conflict (migration_id) do nothing;
+
+insert into schema_migrations (migration_id, checksum, summary)
+values (
+  '20260803_merchant_product_feedback',
+  'jiejing-merchant-product-feedback-v20260803',
+  'Adds tenant-scoped, idempotent and auditable merchant product feedback.'
 )
 on conflict (migration_id) do nothing;
 

@@ -23,6 +23,7 @@ JSON_COLUMNS = {
     "analytics_json",
     "billing_event_json",
     "completed_step_keys_json",
+    "feedback_json",
     "invite_json",
     "item_json",
     "job_json",
