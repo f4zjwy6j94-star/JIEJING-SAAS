@@ -2621,6 +2621,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             except ProductFeedbackIdempotencyConflict as exc:
                 self._send_error(HTTPStatus.CONFLICT, str(exc))
                 return
+            except KeyError:
+                self._send_error(HTTPStatus.FORBIDDEN, "access denied")
+                return
             except (ProductFeedbackValidationError, ValueError) as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
                 return

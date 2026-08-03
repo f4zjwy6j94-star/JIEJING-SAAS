@@ -503,8 +503,9 @@ def _test_http_merchant_tracer() -> str:
                 "JIEJING_PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_IP": "60",
             },
         )
+        database_path = Path(temp_dir) / "saas.sqlite"
         process = _start_backend_test_process(
-            database_path=Path(temp_dir) / "saas.sqlite",
+            database_path=database_path,
             runtime_database_path=Path(temp_dir) / "runtime.sqlite",
             output_root=temp_dir,
             port=port,
@@ -635,6 +636,45 @@ def _test_http_merchant_tracer() -> str:
             second_status, second_list = _request_json(f"{base_url}/product-feedback?limit=500", token=second_token)
             if second_status != 200 or second_list.get("product_feedback_receipts") != []:
                 return f"product feedback crossed the authenticated company boundary: {second_status} {second_list}"
+            stale_merchant = _register(base_url, "feedback-http-stale-member@example.test")
+            stale_token = str(stale_merchant.get("token") or "")
+            with sqlite3.connect(database_path) as connection:
+                stale_identity = connection.execute(
+                    "select user_id, default_company_id from users where email = ?",
+                    ("feedback-http-stale-member@example.test",),
+                ).fetchone()
+                if not stale_identity:
+                    return "stale-member HTTP fixture could not resolve the authenticated identity"
+                connection.execute(
+                    "delete from team_members where company_id = ? and user_id = ?",
+                    (stale_identity[1], stale_identity[0]),
+                )
+            stale_payload = {
+                **payload,
+                "idempotency_key": "feedback-http-stale-member-key-001",
+                "detail": "This body must never be echoed by a stale membership response.",
+            }
+            try:
+                stale_status, stale_response = _request_json(
+                    f"{base_url}/product-feedback",
+                    method="POST",
+                    token=stale_token,
+                    body=stale_payload,
+                )
+            except Exception as exc:
+                return f"stale-member feedback disconnected instead of returning a safe 403: {exc.__class__.__name__}"
+            if stale_status != 403 or stale_response.get("status") != 403 or stale_response.get("error") != "access denied":
+                return f"stale-member feedback must return a non-enumerating 403: {stale_status} {stale_response}"
+            serialized_stale = json.dumps(stale_response, ensure_ascii=False).lower()
+            for forbidden in (
+                str(stale_identity[0]).lower(),
+                str(stale_identity[1]).lower(),
+                stale_payload["idempotency_key"].lower(),
+                stale_payload["detail"].lower(),
+                "team member",
+            ):
+                if forbidden in serialized_stale:
+                    return f"stale-member feedback 403 leaked scope or request content: {stale_response}"
             safe_status, safe_list = _request_json(
                 f"{base_url}/product-feedback?limit=500&company_id=forged-company",
                 token=token,

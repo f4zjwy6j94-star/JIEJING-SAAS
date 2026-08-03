@@ -6,10 +6,12 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -18,10 +20,16 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from jiejing_saas.repository import SaaSRepository  # noqa: E402
+
 OUT = ROOT / "output" / "jiejing-operations-console-test"
 PORT = 8867
 ADMIN_EMAIL = "ops-owner@jiejing-shop.cn"
 MERCHANT_EMAIL = "ordinary-merchant@jiejing-shop.cn"
+SYNTHETIC_EMAIL = "synthetic-feedback@jiejing-shop.cn"
 PASSWORD = "operations-console-test-password"
 
 
@@ -30,14 +38,42 @@ def fail(message: str) -> int:
     return 1
 
 
+def _sanitized_backend_env() -> dict[str, str]:
+    inherited = {"COMSPEC", "LANG", "LC_ALL", "PATH", "PATHEXT", "SYSTEMROOT", "TEMP", "TMP", "WINDIR"}
+    env = {name: value for name in inherited if (value := os.environ.get(name)) is not None}
+    env.update(
+        {
+            "JIEJING_INTERNAL_ADMIN_EMAILS": ADMIN_EMAIL,
+            "JIEJING_SAAS_ENV": "test",
+            "JIEJING_SAAS_SESSION_SECRET": "operations-console-tests-only-not-a-production-secret",
+            "JIEJING_DATABASE_ENGINE": "sqlite",
+            "JIEJING_DATABASE_ADAPTER": "sqlite-local",
+            "JIEJING_QUEUE_PROVIDER": "local_worker",
+            "JIEJING_VAULT_PROVIDER": "secret_ref_only",
+            "JIEJING_VAULT_ENABLED": "false",
+            "JIEJING_EXECUTION_ADAPTER": "demo_no_platform_write",
+            "JIEJING_ENABLE_REAL_PLATFORM_WRITES": "false",
+            "JIEJING_EBAY_OAUTH_EXCHANGE_LIVE": "false",
+            "JIEJING_EBAY_TOKEN_REFRESH_LIVE": "false",
+            "JIEJING_EBAY_READ_ONLY_LIVE": "false",
+            "JIEJING_EBAY_WRITE_LIVE": "false",
+            "JIEJING_ALLOW_HERMES_ADAPTERS": "false",
+            "JIEJING_MODEL_DISABLE_LIVE": "true",
+            "JIEJING_PUBLIC_SEARCH_LIVE": "false",
+            "PYTHONIOENCODING": "utf-8",
+            "PYTHONUNBUFFERED": "1",
+        }
+    )
+    return env
+
+
 def main() -> int:
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True, exist_ok=True)
     db = OUT / "saas.sqlite"
     runtime_db = OUT / "runtime.sqlite"
-    env = os.environ.copy()
-    env["JIEJING_INTERNAL_ADMIN_EMAILS"] = ADMIN_EMAIL
+    env = _sanitized_backend_env()
     process = subprocess.Popen(
         [
             sys.executable,
@@ -71,10 +107,104 @@ def main() -> int:
             f"{base}/auth/register",
             {"email": ADMIN_EMAIL, "password": PASSWORD, "company_name": "Jiejing Operations"},
         )
+        synthetic = _post_json(
+            f"{base}/auth/register",
+            {"email": SYNTHETIC_EMAIL, "password": PASSWORD, "company_name": "Synthetic Feedback"},
+        )
         merchant_token = str(merchant["body"].get("token") or "")
         admin_token = str(admin["body"].get("token") or "")
-        if not merchant_token or not admin_token:
+        synthetic_token = str(synthetic["body"].get("token") or "")
+        if not merchant_token or not admin_token or not synthetic_token:
             return fail("registration did not create test sessions")
+
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "update users set account_classification = 'synthetic_test' where email = ?",
+                (SYNTHETIC_EMAIL,),
+            )
+
+        real_feedback = _post_json(
+            f"{base}/product-feedback",
+            {
+                "idempotency_key": "ops-real-feedback-001",
+                "feedback_type": "product_improvement",
+                "module_key": "workflow",
+                "reason": "unclear",
+                "stage_title": "<b>确认经营步骤</b>",
+                "detail": "<img src=x onerror=window.__opsXss=1>这里的下一步不够清楚。",
+            },
+            token=merchant_token,
+        )
+        synthetic_feedback = _post_json(
+            f"{base}/product-feedback",
+            {
+                "idempotency_key": "ops-synthetic-feedback-001",
+                "feedback_type": "product_improvement",
+                "module_key": "media",
+                "reason": "wrong_result",
+                "stage_title": "自动化测试反馈",
+                "detail": "这条 synthetic-test 记录不得计入真实经营聚合。",
+            },
+            token=synthetic_token,
+        )
+        if real_feedback["status"] != 201 or synthetic_feedback["status"] != 201:
+            return fail(f"feedback fixtures were not persisted: {real_feedback}, {synthetic_feedback}")
+
+        repository = SaaSRepository(db)
+        with repository._connect() as conn:
+            merchant_user_id = str(conn.execute("select user_id from users where email = ?", (MERCHANT_EMAIL,)).fetchone()["user_id"])
+            admin_user_id = str(conn.execute("select user_id from users where email = ?", (ADMIN_EMAIL,)).fetchone()["user_id"])
+            shared_company_id = "company_ops_shared_membership"
+            created_at = datetime.now(timezone.utc).astimezone().isoformat()
+            conn.execute(
+                "insert into companies (company_id, name, created_at) values (?, ?, ?)",
+                (shared_company_id, "Shared Merchant Company", created_at),
+            )
+            conn.execute(
+                "insert into team_members (company_id, user_id, role, created_at) values (?, ?, ?, ?)",
+                (shared_company_id, admin_user_id, "owner", created_at),
+            )
+        try:
+            repository.create_product_feedback(
+                company_id=shared_company_id,
+                user_id=merchant_user_id,
+                idempotency_key="ops-nonmember-feedback-must-fail",
+                payload={
+                    "feedback_type": "product_improvement",
+                    "module_key": "service",
+                    "reason": "missing_action",
+                    "stage_title": "非成员反馈",
+                    "detail": "非成员不得写入其他公司。",
+                },
+            )
+        except KeyError:
+            pass
+        else:
+            return fail("non-member product feedback crossed the company boundary")
+        with repository._connect() as conn:
+            conn.execute(
+                "insert into team_members (company_id, user_id, role, created_at) values (?, ?, ?, ?)",
+                (shared_company_id, merchant_user_id, "operator", created_at),
+            )
+        shared_feedback = repository.create_product_feedback(
+            company_id=shared_company_id,
+            user_id=merchant_user_id,
+            idempotency_key="ops-shared-member-feedback-001",
+            payload={
+                "feedback_type": "product_improvement",
+                "module_key": "service",
+                "reason": "missing_action",
+                "stage_title": "客服与物流步骤",
+                "detail": "这里还缺一个适合新手的下一步动作。",
+            },
+        )
+        with repository._connect() as conn:
+            conn.execute(
+                "delete from team_members where company_id = ? and user_id = ?",
+                (shared_company_id, merchant_user_id),
+            )
+        if shared_feedback.get("status") != "open":
+            return fail(f"shared-company feedback was not created: {shared_feedback}")
 
         unauthenticated = _get_json(f"{base}/owner/operations-overview")
         if unauthenticated["status"] != 401:
@@ -83,7 +213,7 @@ def main() -> int:
         merchant_overview = _get_json(f"{base}/owner/operations-overview", token=merchant_token)
         merchant_details = [
             _get_json(f"{base}/owner/operations/{section}", token=merchant_token)
-            for section in ("traffic", "merchants", "transactions", "costs", "workflows", "audit")
+            for section in ("traffic", "merchants", "transactions", "costs", "workflows", "audit", "feedback")
         ]
         if merchant_overview["status"] != 403 or any(item["status"] != 403 for item in merchant_details):
             return fail("ordinary merchant accessed internal operations data")
@@ -118,6 +248,18 @@ def main() -> int:
             return fail(f"overview period or audience is wrong: {overview}")
         if overview.get("merchant_navigation_visible") is not False or overview.get("secret_exposed") is not False:
             return fail("overview crossed merchant or secret boundary")
+        feedback_summary = overview.get("product_feedback") or {}
+        if feedback_summary.get("total") != 2 or feedback_summary.get("open") != 2:
+            return fail(f"real merchant feedback aggregation is wrong: {feedback_summary}")
+        if feedback_summary.get("reviewing") != 0 or feedback_summary.get("resolved") != 0:
+            return fail(f"feedback lifecycle aggregation is wrong: {feedback_summary}")
+        if feedback_summary.get("by_module") != {"service": 1, "workflow": 1} or feedback_summary.get("by_reason") != {"missing_action": 1, "unclear": 1}:
+            return fail(f"feedback dimensions are wrong: {feedback_summary}")
+        oldest_open_age_seconds = feedback_summary.get("oldest_open_age_seconds")
+        if not isinstance(oldest_open_age_seconds, int) or oldest_open_age_seconds < 0:
+            return fail(f"oldest open feedback age is missing: {feedback_summary}")
+        if overview.get("data_quality", {}).get("synthetic_test_feedback_excluded") != 1:
+            return fail(f"synthetic feedback exclusion is not explicit: {overview.get('data_quality')}")
         clamped_overview = _get_json(f"{base}/owner/operations-overview?period_days=999999", token=admin_token)
         if clamped_overview["body"].get("operations_overview", {}).get("period", {}).get("days") != 366:
             return fail(f"overview period upper bound failed: {clamped_overview}")
@@ -133,7 +275,7 @@ def main() -> int:
             return fail(f"concurrent read-only overview requests were unstable: {concurrent_results}")
 
         all_detail_payloads = {}
-        for section in ("traffic", "merchants", "transactions", "costs", "workflows", "audit"):
+        for section in ("traffic", "merchants", "transactions", "costs", "workflows", "audit", "feedback"):
             response = _get_json(
                 f"{base}/owner/operations/{section}?period_days=7&limit=1&cursor=not-a-valid-cursor",
                 token=admin_token,
@@ -146,6 +288,115 @@ def main() -> int:
             if detail.get("merchant_content_exposed") is True:
                 return fail(f"{section} detail exposed merchant content")
             all_detail_payloads[section] = detail
+
+        feedback_detail_response = _get_json(
+            f"{base}/owner/operations/feedback?period_days=7&status=open&module=workflow&limit=1",
+            token=admin_token,
+        )
+        feedback_detail = feedback_detail_response["body"].get("operations_detail") or {}
+        feedback_items = feedback_detail.get("items") or []
+        if feedback_detail_response["status"] != 200 or len(feedback_items) != 1:
+            return fail(f"feedback detail filters failed: {feedback_detail_response}")
+        if feedback_detail.get("raw_merchant_content_exposed") is not False:
+            return fail(f"feedback detail raw-content flag is wrong: {feedback_detail}")
+        if feedback_detail.get("sanitized_feedback_text_internal_only") is not True:
+            return fail(f"feedback detail internal-text flag is wrong: {feedback_detail}")
+        feedback_item = feedback_items[0]
+        expected_feedback_keys = {
+            "feedback_id",
+            "module_key",
+            "reason",
+            "status",
+            "stage_title",
+            "detail",
+            "created_at",
+            "updated_at",
+            "resolved_at",
+        }
+        if set(feedback_item) != expected_feedback_keys:
+            return fail(f"feedback detail exposed unexpected fields: {feedback_item}")
+        serialized_feedback = json.dumps(feedback_detail, ensure_ascii=False).lower()
+        for forbidden in (
+            "company_id",
+            "user_id",
+            "store_id",
+            "task_id",
+            "report_id",
+            "confirmation_id",
+            "packet_id",
+            "idempotency",
+            "onerror",
+            "<img",
+        ):
+            if forbidden in serialized_feedback:
+                return fail(f"feedback detail exposed forbidden content: {forbidden}")
+        if feedback_item.get("stage_title") != "确认经营步骤" or feedback_item.get("detail") != "这里的下一步不够清楚。":
+            return fail(f"feedback detail did not return sanitized short text: {feedback_item}")
+        departed_member_detail = _get_json(
+            f"{base}/owner/operations/feedback?period_days=7&status=open&module=service&limit=10",
+            token=admin_token,
+        )
+        departed_items = departed_member_detail["body"].get("operations_detail", {}).get("items") or []
+        if departed_member_detail["status"] != 200 or len(departed_items) != 1:
+            return fail(f"legitimate departed-member feedback history was hidden: {departed_member_detail}")
+
+        real_feedback_id = str(real_feedback["body"].get("product_feedback", {}).get("feedback_id") or "")
+        older_matching_at = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        newer_nonmatching_at = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        with repository._connect() as conn:
+            merchant_company_id = str(
+                conn.execute("select default_company_id from users where user_id = ?", (merchant_user_id,)).fetchone()["default_company_id"]
+            )
+            conn.execute(
+                "update merchant_product_feedback set created_at = ?, updated_at = ? where feedback_id = ?",
+                (older_matching_at, older_matching_at, real_feedback_id),
+            )
+            conn.executemany(
+                """
+                insert into merchant_product_feedback (
+                  feedback_id, company_id, user_id, store_id, feedback_type,
+                  module_key, reason, status, idempotency_key_hash,
+                  created_at, updated_at, resolved_at, feedback_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        f"feedback_nonmatching_{index:05d}",
+                        merchant_company_id,
+                        merchant_user_id,
+                        None,
+                        "product_improvement",
+                        "media",
+                        "wrong_result",
+                        "resolved",
+                        f"nonmatching-hash-{index:05d}",
+                        newer_nonmatching_at,
+                        newer_nonmatching_at,
+                        newer_nonmatching_at,
+                        json.dumps({"stage_title": "较新的非匹配反馈", "detail": "用于筛选下推上限测试。"}, ensure_ascii=False),
+                    )
+                    for index in range(5002)
+                ],
+            )
+        capped_filtered = _get_json(
+            f"{base}/owner/operations/feedback?period_days=7&status=open&module=workflow&limit=10",
+            token=admin_token,
+        )
+        capped_filtered_detail = capped_filtered["body"].get("operations_detail", {})
+        capped_filtered_items = capped_filtered_detail.get("items") or []
+        if (
+            capped_filtered["status"] != 200
+            or len(capped_filtered_items) != 1
+            or capped_filtered_items[0].get("feedback_id") != real_feedback_id
+            or capped_filtered_detail.get("data_window_capped") is not False
+        ):
+            return fail(f"feedback SQL filters were applied after the 5001-row cap: {capped_filtered}")
+        capped_unfiltered = _get_json(
+            f"{base}/owner/operations/feedback?period_days=7&limit=1",
+            token=admin_token,
+        )
+        if capped_unfiltered["body"].get("operations_detail", {}).get("data_window_capped") is not True:
+            return fail(f"feedback detail cap semantics did not report a capped matching window: {capped_unfiltered}")
 
         serialized_details = json.dumps(all_detail_payloads, ensure_ascii=False).lower()
         if ADMIN_EMAIL in serialized_details or MERCHANT_EMAIL in serialized_details:
@@ -187,6 +438,30 @@ def main() -> int:
         caddy_systemd = (ROOT / "deploy" / "Caddyfile.public-staging.systemd").read_text(encoding="utf-8")
         if "noindex,nofollow" not in ops_html or "/owner/auth/login" not in ops_js:
             return fail("operations frontend security markers are missing")
+        cache_version = "20260803-product-feedback-v1"
+        if ops_html.count(cache_version) != 2:
+            return fail("operations feedback cache version is not exact for CSS and JS")
+        for marker in (
+            'data-view="feedback">产品反馈',
+            "经营数据只读，反馈处理只更新内部状态",
+        ):
+            if marker not in ops_html + ops_js:
+                return fail(f"operations feedback UI marker is missing: {marker}")
+        for marker in (
+            'feedback: "产品反馈"',
+            'metric("待处理反馈"',
+            'selectFilter("status", "全部状态"',
+            'selectFilter("module", "全部模块"',
+            '/owner/product-feedback/review',
+            '/owner/product-feedback/resolve',
+            "await Promise.all([",
+            'loadDetail("feedback", filters)',
+            "loadOverview(true)",
+            'showAlert("反馈状态已更新，列表刷新失败，请刷新")',
+            'setLoading(false, "反馈状态已更新，列表待刷新")',
+        ):
+            if marker not in ops_js:
+                return fail(f"operations feedback interaction contract is missing: {marker}")
         if "localStorage" in ops_js or "sessionStorage" in ops_js:
             return fail("operations frontend persists a session token in browser storage")
         if "server_name ops.jiejing.shop" not in nginx or "location = /ops.html { return 404; }" not in nginx:
@@ -198,6 +473,26 @@ def main() -> int:
         for allowed_route in ("auth/logout", "permissions/me", "owner/auth/login", "owner/operations-overview"):
             if allowed_route not in nginx:
                 return fail(f"operations hostname is missing required route: {allowed_route}")
+        app_server_start = nginx.find("server {\n    listen 80 default_server;")
+        if app_server_start < 0:
+            return fail("merchant application default server block is missing")
+        ops_server = nginx[:app_server_start]
+        app_server = nginx[app_server_start:]
+        for exact_location, method_guard in (
+            ("location = /owner/operations/feedback", "$request_method != GET"),
+            ("location = /owner/product-feedback/review", "$request_method != POST"),
+            ("location = /owner/product-feedback/resolve", "$request_method != POST"),
+        ):
+            location_start = ops_server.find(exact_location)
+            next_location = ops_server.find("\n    location ", location_start + len(exact_location))
+            location_block = ops_server[location_start : next_location if next_location >= 0 else len(ops_server)]
+            if ops_server.count(exact_location) != 1 or location_start < 0 or method_guard not in location_block or "return 405" not in location_block or "proxy_pass" not in location_block:
+                return fail(f"operations feedback proxy allowlist is not exact: {exact_location}")
+            app_location_start = app_server.find(exact_location)
+            next_app_location = app_server.find("\n    location ", app_location_start + len(exact_location))
+            app_location_block = app_server[app_location_start : next_app_location if next_app_location >= 0 else len(app_server)]
+            if app_server.count(exact_location) != 1 or app_location_start < 0 or "return 404" not in app_location_block or "proxy_pass" in app_location_block:
+                return fail(f"merchant application exposes operations feedback route: {exact_location}")
         if "ops.jiejing.shop" not in caddy_systemd or 'Referrer-Policy "no-referrer"' not in caddy_systemd:
             return fail("systemd edge is missing the isolated operations hostname")
         if any(name in ops_js.lower() for name in ("fal.ai", "fal_api", "runway")):

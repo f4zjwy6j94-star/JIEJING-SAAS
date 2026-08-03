@@ -7,7 +7,7 @@
     <meta name="referrer" content="no-referrer" />
     <title>捷境运营后台</title>
     <link rel="icon" href="assets/jiejing-app-icon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="ops.css?v=20260715-ops-v1" />
+    <link rel="stylesheet" href="ops.css?v=20260803-product-feedback-v1" />
   </head>
   <body>
     <div id="ops-login" class="ops-login" hidden>
@@ -45,17 +45,19 @@
           <img src="assets/jiejing-logo-mark.svg" alt="" width="42" height="42" />
           <div><strong>捷境</strong><span>运营后台</span></div>
         </div>
-        <nav id="ops-nav" class="ops-nav" aria-label="运营后台导航">
+        <nav id="ops-nav" class="ops-nav" aria-label="运营后台导航" aria-describedby="ops-nav-scroll-hint" tabindex="0">
           <button type="button" data-view="overview" class="is-active">经营总览</button>
           <button type="button" data-view="traffic">流量与转化</button>
           <button type="button" data-view="merchants">商家与订阅</button>
           <button type="button" data-view="transactions">交易与退款</button>
           <button type="button" data-view="costs">AI 与素材成本</button>
           <button type="button" data-view="workflows">任务与工作流</button>
+          <button type="button" data-view="feedback">产品反馈</button>
           <button type="button" data-view="reliability">系统可靠性</button>
           <button type="button" data-view="audit">安全与审计</button>
           <button type="button" data-view="settings">内部设置</button>
         </nav>
+        <p id="ops-nav-scroll-hint" class="ops-nav-scroll-hint">横向滑动查看更多栏目</p>
         <div class="ops-sidebar-footer">
           <span id="ops-identity">内部账号</span>
           <button id="ops-logout" type="button">退出</button>
@@ -88,6 +90,6 @@
       </main>
     </div>
 
-    <script src="ops.js?v=20260715-ops-v1" defer></script>
+    <script src="ops.js?v=20260803-product-feedback-v1" defer></script>
   </body>
 </html>

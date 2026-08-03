@@ -8,12 +8,13 @@
     transactions: "交易与退款",
     costs: "AI 与素材成本",
     workflows: "任务与工作流",
+    feedback: "产品反馈",
     reliability: "系统可靠性",
     audit: "安全与审计",
     settings: "内部设置",
   };
 
-  const DETAIL_VIEWS = new Set(["traffic", "merchants", "transactions", "costs", "workflows", "audit"]);
+  const DETAIL_VIEWS = new Set(["traffic", "merchants", "transactions", "costs", "workflows", "feedback", "audit"]);
   const state = {
     view: "overview",
     period: 30,
@@ -93,6 +94,9 @@
       completed: "已完成",
       running: "进行中",
       queued: "排队中",
+      open: "待处理",
+      reviewing: "处理中",
+      resolved: "已解决",
       ready: "正常",
       partial: "数据不完整",
       unavailable: "暂无数据",
@@ -164,6 +168,9 @@
     state.loading = loading;
     elements.refresh.classList.toggle("is-loading", loading);
     elements.refresh.disabled = loading;
+    elements.content.querySelectorAll("[data-filter], [data-load-more], [data-feedback-action]").forEach((control) => {
+      control.disabled = loading;
+    });
     elements.dataStatus.textContent = copy;
   }
 
@@ -174,6 +181,15 @@
 
   function showSkeleton() {
     elements.content.innerHTML = `<div class="ops-metrics">${Array.from({ length: 4 }, () => '<div class="ops-skeleton"></div>').join("")}</div><div class="ops-skeleton"></div>`;
+  }
+
+  function showDetailLoadFailure(view) {
+    const title = VIEW_TITLES[view] || "下钻数据";
+    elements.content.innerHTML = `<div class="ops-empty">${escapeHtml(title)}暂时无法读取，请使用刷新按钮重试。</div>`;
+  }
+
+  function showFeedbackRefreshFailure() {
+    elements.content.innerHTML = '<div class="ops-empty">反馈状态已更新，列表刷新失败，请使用刷新按钮重试。</div>';
   }
 
   async function authenticate() {
@@ -240,6 +256,38 @@
     return merchants ? `${((paid / merchants) * 100).toFixed(1)}%` : "0.0%";
   }
 
+  function feedbackModuleLabel(value) {
+    const labels = {
+      cockpit: "AI 主管工作台",
+      workflow: "工作流",
+      product: "选品与上架",
+      bulk: "批量铺货",
+      media: "素材工坊",
+      confirm: "确认中心",
+      service: "客服与物流",
+      connect: "平台连接",
+      activity: "AI 工作记录",
+    };
+    return labels[String(value || "").toLowerCase()] || String(value || "未知模块");
+  }
+
+  function feedbackReasonLabel(value) {
+    const labels = {
+      unclear: "这一步不清楚",
+      wrong_result: "结果不对",
+      missing_action: "缺一个动作",
+    };
+    return labels[String(value || "").toLowerCase()] || String(value || "未知原因");
+  }
+
+  function topFeedbackModule(byModule) {
+    const entries = Object.entries(byModule || {})
+      .map(([key, value]) => [key, Number(value || 0)])
+      .filter(([, value]) => Number.isFinite(value) && value > 0)
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+    return entries.length ? feedbackModuleLabel(entries[0][0]) : "暂无集中模块";
+  }
+
   function renderTrend(daily) {
     const rows = Array.isArray(daily) ? daily : [];
     if (!rows.length) return '<div class="ops-empty">当前时间范围没有流量趋势数据。</div>';
@@ -273,6 +321,7 @@
     const marginReady = economics.cost_coverage_complete === true;
     const alertSummary = overview.provider_reliability_analytics?.alerts || {};
     const openAlerts = Number(alertSummary.critical_count || 0) + Number(alertSummary.attention_count || 0);
+    const feedback = overview.product_feedback || {};
     elements.content.innerHTML = `
       <div class="ops-metrics">
         ${metric("唯一访客", formatNumber(traffic.visitors), `${state.period} 天 · ${formatNumber(traffic.sessions)} 个会话`)}
@@ -284,6 +333,7 @@
         ${metric("素材与联网成本", formatMoney(economics.total_provider_cost_minor), marginReady ? "成本覆盖完整" : "仍有成本数据待补", marginReady ? "" : "is-attention")}
         ${metric("贡献毛利", marginReady ? formatMoney(economics.contribution_margin_minor) : "待补成本", marginReady ? "实收减已覆盖供应商成本" : "不会用缺失数据估算利润", marginReady ? "" : "is-attention")}
         ${metric("待处理告警", formatNumber(openAlerts), openAlerts ? "请进入系统可靠性查看" : "当前没有达到阈值的告警", openAlerts ? "is-critical" : "")}
+        ${metric("待处理反馈", formatNumber(feedback.open), `待处理 ${formatNumber(feedback.open)} · 处理中 ${formatNumber(feedback.reviewing)} · 已解决 ${formatNumber(feedback.resolved)} · 主要集中：${topFeedbackModule(feedback.by_module)}`, Number(feedback.open) ? "is-attention" : "")}
       </div>
       <div class="ops-grid-two">
         <section class="ops-panel"><div class="ops-section-head"><div><h2>访客趋势</h2><p>按日去重访客，只统计允许列表事件。</p></div>${pill(traffic.status, traffic.status === "instrumented" ? "已采集" : "暂无事件")}</div>${renderTrend(traffic.daily_trend)}</section>
@@ -293,6 +343,7 @@
         <div class="ops-section-head"><div><h2>数据质量</h2><p>测试账号、验收订单和未覆盖成本不计入正式经营指标。</p></div>${pill(marginReady ? "ready" : "partial", marginReady ? "成本覆盖完整" : "成本覆盖不完整")}</div>
         <dl class="ops-definition-list">
           <dt>测试账号排除</dt><dd>${formatNumber(overview.data_quality?.synthetic_test_accounts_excluded)} 个</dd>
+          <dt>测试反馈排除</dt><dd>${formatNumber(overview.data_quality?.synthetic_test_feedback_excluded)} 条</dd>
           <dt>验收订单排除</dt><dd>${formatNumber(overview.data_quality?.acceptance_orders_excluded)} 笔</dd>
           <dt>当前未计量模型任务</dt><dd>${formatNumber(economics.current_unmetered_model_tasks)} 个</dd>
           <dt>未覆盖供应商成本</dt><dd>${formatNumber(economics.unknown_provider_cost_records)} 条</dd>
@@ -300,9 +351,16 @@
       </section>`;
   }
 
-  function table(headers, rows) {
+  function table(headers, rows, options = {}) {
     if (!rows.length) return '<div class="ops-empty">当前筛选条件下没有真实数据。</div>';
-    return `<div class="ops-table-wrap"><table class="ops-table"><thead><tr>${headers.map((item) => `<th class="${item.number ? "is-number" : ""}">${escapeHtml(item.label)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${headers.map((item) => `<td class="${item.number ? "is-number" : ""}">${item.render ? item.render(row) : escapeHtml(row[item.key])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    const columnClass = (item) => [item.number ? "is-number" : "", item.className || ""].filter(Boolean).join(" ");
+    const wrapClass = ["ops-table-wrap", options.className || ""].filter(Boolean).join(" ");
+    const hintId = options.hintId || "";
+    const hint = options.scrollHint ? `<p id="${escapeHtml(hintId)}" class="ops-table-scroll-hint">${escapeHtml(options.scrollHint)}</p>` : "";
+    const regionAttributes = options.ariaLabel
+      ? ` tabindex="0" role="region" aria-label="${escapeHtml(options.ariaLabel)}"${hintId ? ` aria-describedby="${escapeHtml(hintId)}"` : ""}`
+      : "";
+    return `${hint}<div class="${escapeHtml(wrapClass)}"${regionAttributes}><table class="ops-table"><thead><tr>${headers.map((item) => `<th class="${escapeHtml(columnClass(item))}">${escapeHtml(item.label)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${headers.map((item) => `<td class="${escapeHtml(columnClass(item))}">${item.render ? item.render(row) : escapeHtml(row[item.key])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
   }
 
   function detailPanel(title, copy, filters, body, detail) {
@@ -396,6 +454,35 @@
     return detailPanel("安全与审计", "操作记录不包含密钥、token、原始请求或商家内容。", filters, table(headers, detail.items || []), detail);
   }
 
+  function renderFeedback(detail) {
+    const filters = selectFilter("status", "全部状态", [["open", "待处理"], ["reviewing", "处理中"], ["resolved", "已解决"]], detail.filters?.status || "")
+      + selectFilter("module", "全部模块", [["cockpit", "AI 主管工作台"], ["workflow", "工作流"], ["product", "选品与上架"], ["bulk", "批量铺货"], ["media", "素材工坊"], ["confirm", "确认中心"], ["service", "客服与物流"], ["connect", "平台连接"], ["activity", "AI 工作记录"]], detail.filters?.module || "");
+    const headers = [
+      { key: "created_at", label: "提交时间", render: (r) => formatDate(r.created_at) },
+      { key: "module_key", label: "模块", render: (r) => escapeHtml(feedbackModuleLabel(r.module_key)) },
+      { key: "stage_title", label: "步骤" },
+      { key: "reason", label: "原因", render: (r) => escapeHtml(feedbackReasonLabel(r.reason)) },
+      { key: "detail", label: "清洗后的说明" },
+      { key: "status", label: "状态", className: "ops-feedback-status-column", render: (r) => pill(r.status) },
+      {
+        key: "feedback_id",
+        label: "处理",
+        className: "ops-feedback-action-column",
+        render: (r) => {
+          if (r.status === "open") return `<button type="button" class="ops-button" data-feedback-action="review" data-feedback-id="${escapeHtml(r.feedback_id)}">开始处理</button>`;
+          if (r.status === "reviewing") return `<button type="button" class="ops-button ops-button-primary" data-feedback-action="resolve" data-feedback-id="${escapeHtml(r.feedback_id)}">标记解决</button>`;
+          return '<span class="ops-muted">已完成</span>';
+        },
+      },
+    ];
+    return detailPanel("商家产品反馈", "只展示经过服务端清洗的产品与流程反馈；处理动作仅更新捷境内部状态。", filters, table(headers, detail.items || [], {
+      className: "ops-feedback-table-wrap",
+      ariaLabel: "产品反馈明细，可横向滚动",
+      hintId: "ops-feedback-scroll-hint",
+      scrollHint: "左右滑动查看完整信息；状态与处理操作固定在右侧。",
+    }), detail);
+  }
+
   function renderReliability() {
     const overview = state.overview || {};
     const reliability = overview.provider_reliability_analytics || {};
@@ -413,13 +500,13 @@
 
   function renderSettings() {
     const overview = state.overview || {};
-    elements.content.innerHTML = `<section class="ops-panel"><div class="ops-section-head"><div><h2>后台边界</h2><p>当前版本为独立只读运营后台，高风险命令仍由确认中心和人工审批控制。</p></div>${pill("ready", "内部账号")}</div><dl class="ops-definition-list"><dt>统计范围</dt><dd>${escapeHtml(overview.data_quality?.scope || "商家账号与商业交易")}</dd><dt>商家导航</dt><dd>不显示运营后台入口</dd><dt>供应商显示</dt><dd>中性能力名称，不展示供应商品牌或密钥</dd><dt>流量隐私</dt><dd>不存 IP、完整 URL、查询参数、User-Agent 或浏览器指纹</dd><dt>商家内容</dt><dd>任务下钻不显示对话、商品、客户或原始模型内容</dd><dt>资金与平台写入</dt><dd>本后台不直接执行付款、退款、eBay 发布、改价、库存、广告、采购或政策修改</dd><dt>成本覆盖</dt><dd>${overview.unit_economics?.cost_coverage_complete ? "当前时间范围覆盖完整" : "当前仍有缺失项，不显示确定毛利"}</dd><dt>版本</dt><dd>${escapeHtml(overview.contract_version || "-")}</dd></dl></section>`;
+    elements.content.innerHTML = `<section class="ops-panel"><div class="ops-section-head"><div><h2>后台边界</h2><p>经营数据只读，反馈处理只更新内部状态；高风险命令仍由确认中心和人工审批控制。</p></div>${pill("ready", "内部账号")}</div><dl class="ops-definition-list"><dt>统计范围</dt><dd>${escapeHtml(overview.data_quality?.scope || "商家账号与商业交易")}</dd><dt>商家导航</dt><dd>不显示运营后台入口</dd><dt>供应商显示</dt><dd>中性能力名称，不展示供应商品牌或密钥</dd><dt>流量隐私</dt><dd>不存 IP、完整 URL、查询参数、User-Agent 或浏览器指纹</dd><dt>商家内容</dt><dd>任务下钻不显示对话、商品、客户或原始模型内容</dd><dt>资金与平台写入</dt><dd>本后台不直接执行付款、退款、eBay 发布、改价、库存、广告、采购或政策修改</dd><dt>成本覆盖</dt><dd>${overview.unit_economics?.cost_coverage_complete ? "当前时间范围覆盖完整" : "当前仍有缺失项，不显示确定毛利"}</dd><dt>版本</dt><dd>${escapeHtml(overview.contract_version || "-")}</dd></dl></section>`;
   }
 
   function renderDetail(view) {
     const detail = state.details.get(view);
     if (!detail) { showSkeleton(); return; }
-    const renderers = { traffic: renderTraffic, merchants: renderMerchants, transactions: renderTransactions, costs: renderCosts, workflows: renderWorkflows, audit: renderAudit };
+    const renderers = { traffic: renderTraffic, merchants: renderMerchants, transactions: renderTransactions, costs: renderCosts, workflows: renderWorkflows, feedback: renderFeedback, audit: renderAudit };
     elements.content.innerHTML = renderers[view](detail);
     bindDetailControls();
   }
@@ -448,6 +535,7 @@
     const payload = await api(`/owner/operations/${encodeURIComponent(view)}?${query.toString()}`);
     const detail = payload.operations_detail;
     if (!detail || detail.secret_exposed !== false || detail.merchant_content_exposed === true) throw new Error("运营下钻安全合同未通过");
+    if (view === "feedback" && (detail.raw_merchant_content_exposed !== false || detail.sanitized_feedback_text_internal_only !== true)) throw new Error("产品反馈清洗合同未通过");
     detail.filters = filters;
     if (append && existing) detail.items = [...(existing.items || []), ...(detail.items || [])];
     state.details.set(view, detail);
@@ -480,7 +568,14 @@
     if (DETAIL_VIEWS.has(view) && !state.details.has(view)) {
       setLoading(true, "正在读取下钻数据");
       showSkeleton();
-      try { await loadDetail(view); } catch (error) { showAlert(error.message); }
+      try {
+        await loadDetail(view);
+      } catch (error) {
+        showAlert(error.message || "下钻数据读取失败");
+        setLoading(false, "下钻数据读取失败");
+        showDetailLoadFailure(view);
+        return;
+      }
       setLoading(false, "真实数据已更新");
     }
     renderCurrentView();
@@ -489,22 +584,75 @@
   function bindDetailControls() {
     elements.content.querySelectorAll("[data-filter]").forEach((control) => {
       control.addEventListener("change", async () => {
+        if (state.loading) return;
         const filters = {};
         elements.content.querySelectorAll("[data-filter]").forEach((item) => { if (item.value) filters[item.dataset.filter] = item.value; });
         setLoading(true, "正在应用筛选条件");
-        try { await loadDetail(state.view, filters); showAlert(""); } catch (error) { showAlert(error.message); }
-        setLoading(false, "筛选结果已更新");
-        renderCurrentView();
+        try {
+          await loadDetail(state.view, filters);
+          showAlert("");
+          setLoading(false, "筛选结果已更新");
+          renderCurrentView();
+        } catch (error) {
+          showAlert(error.message || "筛选失败");
+          setLoading(false, "筛选失败，结果未更新");
+        }
       });
     });
     const more = elements.content.querySelector("[data-load-more]");
     if (more) more.addEventListener("click", async () => {
+      if (state.loading) return;
       more.disabled = true;
       const filters = state.details.get(state.view)?.filters || {};
       setLoading(true, "正在加载更多记录");
-      try { await loadDetail(state.view, filters, true); showAlert(""); } catch (error) { showAlert(error.message); }
-      setLoading(false, "记录已更新");
-      renderCurrentView();
+      try {
+        await loadDetail(state.view, filters, true);
+        showAlert("");
+        setLoading(false, "记录已更新");
+        renderCurrentView();
+      } catch (error) {
+        showAlert(error.message || "加载更多失败");
+        more.disabled = false;
+        setLoading(false, "加载失败，记录未更新");
+      }
+    });
+    elements.content.querySelectorAll("[data-feedback-action]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        if (state.loading) return;
+        const action = button.dataset.feedbackAction;
+        const feedbackId = button.dataset.feedbackId;
+        const path = action === "review"
+          ? "/owner/product-feedback/review"
+          : action === "resolve"
+            ? "/owner/product-feedback/resolve"
+            : "";
+        if (!path || !feedbackId) return;
+        button.disabled = true;
+        setLoading(true, action === "review" ? "正在开始处理反馈" : "正在标记反馈已解决");
+        showAlert("");
+        try {
+          await api(path, { method: "POST", body: { feedback_id: feedbackId } });
+        } catch (error) {
+          showAlert(error.message || "反馈状态更新失败");
+          button.disabled = false;
+          setLoading(false, "反馈状态更新失败");
+          return;
+        }
+        const filters = state.details.get("feedback")?.filters || {};
+        try {
+          await Promise.all([
+            loadDetail("feedback", filters),
+            loadOverview(true),
+          ]);
+          renderCurrentView();
+          setLoading(false, "反馈状态已更新");
+        } catch (_) {
+          state.details.delete("feedback");
+          showAlert("反馈状态已更新，列表刷新失败，请刷新");
+          showFeedbackRefreshFailure();
+          setLoading(false, "反馈状态已更新，列表待刷新");
+        }
+      });
     });
   }
 

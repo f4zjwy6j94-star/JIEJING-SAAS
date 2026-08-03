@@ -28,11 +28,59 @@ def fail(message: str) -> int:
 
 def main() -> int:
     repository_source = (ROOT / "jiejing_saas" / "repository.py").read_text(encoding="utf-8")
-    if "substr(cast(occurred_at as text), 1, 10)" not in repository_source:
-        return fail("daily operations analytics must cast timestamps to text before substr for PostgreSQL")
+    for marker in (
+        "datetime(occurred_at) >= datetime(?)",
+        "date(datetime(occurred_at), '+8 hours')",
+        "to_char(occurred_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')",
+        "analytics_period_started_utc",
+    ):
+        if marker not in repository_source:
+            return fail(f"daily operations analytics is missing dialect-aware timezone semantics: {marker}")
+    if "substr(cast(occurred_at as text), 1, 10)" in repository_source:
+        return fail("daily operations analytics must not group timestamptz rows by their stored text prefix")
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True, exist_ok=True)
+    midnight_repo = SaaSRepository(OUT / "midnight.sqlite")
+    midnight_event_hash = hash_analytics_identifier("beijing-midnight-boundary-event")
+    midnight_repo.record_platform_analytics_event(
+        event_key="page_view",
+        page_key="landing",
+        event_id_hash=midnight_event_hash,
+        visitor_hash=hash_analytics_identifier("beijing-midnight-visitor"),
+        session_hash=hash_analytics_identifier("beijing-midnight-session"),
+    )
+    with midnight_repo._connect() as conn:
+        conn.execute(
+            "update platform_analytics_events set occurred_at = ? where event_id_hash = ?",
+            ("2026-08-04T01:15:00+08:00", midnight_event_hash),
+        )
+    legacy_utc_hash = hash_analytics_identifier("beijing-midnight-legacy-utc-event")
+    midnight_repo.record_platform_analytics_event(
+        event_key="page_view",
+        page_key="landing",
+        event_id_hash=legacy_utc_hash,
+        visitor_hash=hash_analytics_identifier("beijing-midnight-legacy-utc-visitor"),
+        session_hash=hash_analytics_identifier("beijing-midnight-legacy-utc-session"),
+    )
+    with midnight_repo._connect() as conn:
+        conn.execute(
+            "update platform_analytics_events set occurred_at = ? where event_id_hash = ?",
+            ("2026-08-03T17:15:00+00:00", legacy_utc_hash),
+        )
+    midnight_overview = midnight_repo.platform_operations_overview(
+        period_days=1,
+        now_utc=datetime(2026, 8, 3, 17, 30, tzinfo=timezone.utc),
+    )
+    midnight_traffic = midnight_overview.get("traffic_analytics", {})
+    midnight_trend = midnight_traffic.get("daily_trend") or []
+    if (
+        midnight_traffic.get("page_views") != 2
+        or len(midnight_trend) != 1
+        or midnight_trend[0].get("day") != "2026-08-04"
+        or midnight_trend[0].get("page_views") != 2
+    ):
+        return fail(f"Beijing midnight analytics window is inconsistent: {midnight_overview}")
     repo = SaaSRepository(OUT / "saas.sqlite")
     fixture = repo.create_user_with_company(
         email="platform-operations@jiejing-shop.cn",

@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import types
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -48,6 +49,20 @@ def main() -> int:
         return fail("placeholder translator must not rewrite quoted strings or comments")
     if placeholder_count(sql) != 2 or params != ("company_1", 5):
         return fail("placeholder translator changed parameter cardinality")
+
+    analytics_start = datetime(2026, 8, 3, 16, 0, tzinfo=timezone.utc)
+    analytics_sql, analytics_params = translate_sqlite_query_to_postgres(
+        """
+        select to_char(occurred_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') as day_key
+        from platform_analytics_events
+        where occurred_at >= ?
+        """,
+        (analytics_start,),
+    )
+    if "occurred_at AT TIME ZONE 'Asia/Shanghai'" not in analytics_sql or "occurred_at >= %s" not in analytics_sql:
+        return fail("Postgres operations analytics must group in Beijing time and compare timestamptz instants")
+    if analytics_params != (analytics_start,) or not isinstance(analytics_params[0], datetime):
+        return fail("Postgres operations analytics must preserve an aware UTC datetime parameter")
 
     ignore_sql, _ = translate_sqlite_query_to_postgres(
         "insert or ignore into team_members (company_id, user_id, role, created_at) values (?, ?, ?, ?)",
@@ -91,6 +106,12 @@ def main() -> int:
     repository_text = (ROOT / "jiejing_saas" / "repository.py").read_text(encoding="utf-8")
     if "rowid desc" in repository_text.lower():
         return fail("repository queries used by the Postgres adapter must not depend on SQLite rowid ordering")
+    for analytics_marker in (
+        "to_char(occurred_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')",
+        'analytics_period_parameter: datetime | str = analytics_period_started_utc',
+    ):
+        if analytics_marker not in repository_text:
+            return fail(f"repository is missing managed Postgres analytics timezone semantics: {analytics_marker}")
 
     repo = SaaSRepository(OUT / "saas.sqlite", database_engine="postgres", database_url="postgresql://jiejing:secret@db:5432/jiejing")
     if repo.database_engine != "postgres" or repo.database_url.endswith("@db:5432/jiejing") is False:

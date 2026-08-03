@@ -102,6 +102,7 @@ AI_CEO_MARKET_EBAY_FIELD_MAP_CONTRACT = "ai_ceo_market_research_to_ebay_inventor
 _DOMESTIC_BILLING_COMPANY_LOCKS = tuple(threading.Lock() for _ in range(128))
 _MEDIA_CREDIT_COMPANY_LOCKS = tuple(threading.Lock() for _ in range(128))
 _PLATFORM_RELIABILITY_ALERT_LOCK = threading.Lock()
+_OPERATIONS_ANALYTICS_TIMEZONE = timezone(timedelta(hours=8))
 ACCOUNT_CLASSIFICATION_MERCHANT = "merchant"
 ACCOUNT_CLASSIFICATION_SYNTHETIC_TEST = "synthetic_test"
 _SYNTHETIC_ACCOUNT_DOMAINS = {"example.com", "example.test", "jiejing.local", "local.invalid"}
@@ -143,6 +144,16 @@ def _operations_cursor_offset(cursor: Any) -> int:
 
 def _operations_next_cursor(offset: int) -> str:
     return base64.urlsafe_b64encode(f"v1:{max(0, int(offset))}".encode("ascii")).decode("ascii").rstrip("=")
+
+
+def _operations_feedback_text(value: Any, *, limit: int) -> str:
+    """Return bounded plain text for the isolated internal feedback console."""
+
+    text = re.sub(r"[\x00-\x1f\x7f]+", " ", str(value or ""))
+    text = re.sub(r"<[^>]{0,1000}>", " ", text)
+    text = text.replace("<", " ").replace(">", " ")
+    text = _redact_secret_text(text)
+    return re.sub(r"\s+", " ", text).strip()[:limit]
 
 
 def _account_classification_for_email(email: str) -> str:
@@ -4482,6 +4493,8 @@ class SaaSRepository:
             raise ValueError("company_id and user_id are required")
         if len(raw_idempotency_key) < 8 or len(raw_idempotency_key) > 200:
             raise ValueError("product feedback idempotency key is invalid")
+        if not self.get_team_member(company_id=normalized_company_id, user_id=normalized_user_id):
+            raise KeyError("team member not found")
         if normalized_store_id and not self.get_store_for_company(
             company_id=normalized_company_id,
             store_id=normalized_store_id,
@@ -6392,7 +6405,9 @@ class SaaSRepository:
             raise ValueError("unsupported analytics page")
         if not re.fullmatch(r"[a-f0-9]{64}", normalized_event_hash):
             raise ValueError("analytics event id hash is invalid")
-        occurred_at = now_iso()
+        occurred_at = datetime.now(timezone.utc).astimezone(_OPERATIONS_ANALYTICS_TIMEZONE).isoformat(
+            timespec="microseconds"
+        )
         analytics_event_id = _id("analytics")
         event_json = {
             "contract_version": "2026-07-14-first-party-analytics-v1",
@@ -6920,14 +6935,39 @@ class SaaSRepository:
             ),
         }
 
-    def platform_operations_overview(self, *, period_days: int = 30) -> dict[str, Any]:
+    def platform_operations_overview(
+        self,
+        *,
+        period_days: int = 30,
+        now_utc: datetime | None = None,
+    ) -> dict[str, Any]:
         """Return platform-wide aggregates for the internal operator console only."""
 
         self.initialize()
         safe_period_days = min(max(int(30 if period_days is None else period_days), 1), 366)
-        period_ended_at = datetime.now(timezone.utc)
+        period_ended_at = now_utc or datetime.now(timezone.utc)
+        if period_ended_at.tzinfo is None:
+            period_ended_at = period_ended_at.replace(tzinfo=timezone.utc)
+        else:
+            period_ended_at = period_ended_at.astimezone(timezone.utc)
         period_start_date = period_ended_at.date() - timedelta(days=safe_period_days - 1)
         period_started_at = datetime.combine(period_start_date, datetime.min.time(), tzinfo=timezone.utc).isoformat()
+        analytics_period_ended_at = period_ended_at.astimezone(_OPERATIONS_ANALYTICS_TIMEZONE)
+        analytics_period_start_date = analytics_period_ended_at.date() - timedelta(days=safe_period_days - 1)
+        analytics_period_started_at = datetime.combine(
+            analytics_period_start_date,
+            datetime.min.time(),
+            tzinfo=_OPERATIONS_ANALYTICS_TIMEZONE,
+        )
+        analytics_period_started_utc = analytics_period_started_at.astimezone(timezone.utc)
+        if self.database_engine == "postgres":
+            analytics_window_sql = "occurred_at >= ?"
+            analytics_day_sql = "to_char(occurred_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')"
+            analytics_period_parameter: datetime | str = analytics_period_started_utc
+        else:
+            analytics_window_sql = "datetime(occurred_at) >= datetime(?)"
+            analytics_day_sql = "date(datetime(occurred_at), '+8 hours')"
+            analytics_period_parameter = analytics_period_started_utc.isoformat()
         with self._connect() as conn:
             accounts_row = conn.execute(
                 """
@@ -6950,6 +6990,39 @@ class SaaSRepository:
                   )) as team_members,
                   (select count(*) from users where account_classification = 'synthetic_test') as synthetic_test_accounts
                 """
+            ).fetchone()
+            feedback_rows = conn.execute(
+                """
+                select f.status, f.module_key, f.reason, f.created_at
+                from merchant_product_feedback f
+                where f.created_at >= ?
+                  and exists (
+                    select 1 from users actor
+                    where actor.user_id = f.user_id
+                      and actor.account_classification = 'merchant'
+                  )
+                  and exists (
+                    select 1 from team_members tm
+                    join users member on member.user_id = tm.user_id
+                    where tm.company_id = f.company_id
+                      and member.status = 'active'
+                      and member.account_classification = 'merchant'
+                )
+                order by f.created_at asc
+                """,
+                (period_started_at,),
+            ).fetchall()
+            synthetic_feedback_excluded_row = conn.execute(
+                """
+                select count(*) as count
+                from merchant_product_feedback f
+                where f.created_at >= ? and exists (
+                  select 1 from users u
+                  where u.user_id = f.user_id
+                    and u.account_classification = 'synthetic_test'
+                )
+                """,
+                (period_started_at,),
             ).fetchone()
             all_plan_rows = conn.execute(
                 """
@@ -7029,7 +7102,7 @@ class SaaSRepository:
                 """
             ).fetchone()
             traffic_row = conn.execute(
-                """
+                f"""
                 select
                   count(*) as event_count,
                   count(distinct case when visitor_hash is not null and visitor_hash <> '' then visitor_hash end) as visitors,
@@ -7040,14 +7113,14 @@ class SaaSRepository:
                   coalesce(sum(case when event_key = 'signup_completed' then 1 else 0 end), 0) as signup_completed,
                   count(distinct case when event_key = 'signup_completed' and visitor_hash is not null and visitor_hash <> '' then visitor_hash end) as signup_completed_visitors
                 from platform_analytics_events
-                where occurred_at >= ?
+                where {analytics_window_sql}
                 """,
-                (period_started_at,),
+                (analytics_period_parameter,),
             ).fetchone()
             traffic_daily_rows = conn.execute(
-                """
+                f"""
                 select
-                  substr(cast(occurred_at as text), 1, 10) as day_key,
+                  {analytics_day_sql} as day_key,
                   count(distinct case when visitor_hash is not null and visitor_hash <> '' then visitor_hash end) as visitors,
                   count(distinct case when session_hash is not null and session_hash <> '' then session_hash end) as sessions,
                   coalesce(sum(case when event_key = 'page_view' then 1 else 0 end), 0) as page_views,
@@ -7055,14 +7128,14 @@ class SaaSRepository:
                   coalesce(sum(case when event_key = 'signup_started' then 1 else 0 end), 0) as signup_started,
                   coalesce(sum(case when event_key = 'signup_completed' then 1 else 0 end), 0) as signup_completed
                 from platform_analytics_events
-                where occurred_at >= ? and event_key <> 'performance_sample'
-                group by substr(cast(occurred_at as text), 1, 10)
+                where {analytics_window_sql} and event_key <> 'performance_sample'
+                group by {analytics_day_sql}
                 order by day_key
                 """,
-                (period_started_at,),
+                (analytics_period_parameter,),
             ).fetchall()
             traffic_page_rows = conn.execute(
-                """
+                f"""
                 select
                   page_key,
                   count(*) as event_count,
@@ -7073,21 +7146,21 @@ class SaaSRepository:
                   coalesce(sum(case when event_key = 'signup_started' then 1 else 0 end), 0) as signup_started,
                   coalesce(sum(case when event_key = 'signup_completed' then 1 else 0 end), 0) as signup_completed
                 from platform_analytics_events
-                where occurred_at >= ? and event_key <> 'performance_sample'
+                where {analytics_window_sql} and event_key <> 'performance_sample'
                 group by page_key
                 order by event_count desc, page_key
                 """,
-                (period_started_at,),
+                (analytics_period_parameter,),
             ).fetchall()
             performance_rows = conn.execute(
-                """
+                f"""
                 select analytics_json
                 from platform_analytics_events
-                where occurred_at >= ? and event_key = 'performance_sample'
+                where {analytics_window_sql} and event_key = 'performance_sample'
                 order by occurred_at desc
                 limit 5000
                 """,
-                (period_started_at,),
+                (analytics_period_parameter,),
             ).fetchall()
             model_usage_rows = conn.execute(
                 """
@@ -7296,7 +7369,7 @@ class SaaSRepository:
         }
         traffic_daily_trend = []
         for offset in range(safe_period_days):
-            day_key = (period_start_date + timedelta(days=offset)).isoformat()
+            day_key = (analytics_period_start_date + timedelta(days=offset)).isoformat()
             traffic_daily_trend.append(
                 {
                     "day": day_key,
@@ -7558,6 +7631,31 @@ class SaaSRepository:
             if cost_coverage_complete
             else None
         )
+        feedback_status_counts = {"open": 0, "reviewing": 0, "resolved": 0}
+        feedback_module_counts: dict[str, int] = {}
+        feedback_reason_counts: dict[str, int] = {}
+        oldest_open_created_at = ""
+        for row in feedback_rows:
+            feedback_status = str(row["status"] or "").strip().lower()
+            feedback_module = str(row["module_key"] or "").strip().lower()
+            feedback_reason = str(row["reason"] or "").strip().lower()
+            if feedback_status in feedback_status_counts:
+                feedback_status_counts[feedback_status] += 1
+            if feedback_module:
+                feedback_module_counts[feedback_module] = feedback_module_counts.get(feedback_module, 0) + 1
+            if feedback_reason:
+                feedback_reason_counts[feedback_reason] = feedback_reason_counts.get(feedback_reason, 0) + 1
+            if feedback_status == "open" and not oldest_open_created_at:
+                oldest_open_created_at = str(row["created_at"] or "")
+        oldest_open_age_seconds: int | None = None
+        if oldest_open_created_at:
+            try:
+                oldest_open_at = datetime.fromisoformat(oldest_open_created_at.replace("Z", "+00:00"))
+                if oldest_open_at.tzinfo is None:
+                    oldest_open_at = oldest_open_at.replace(tzinfo=timezone.utc)
+                oldest_open_age_seconds = max(int((period_ended_at - oldest_open_at).total_seconds()), 0)
+            except ValueError:
+                oldest_open_age_seconds = None
         return {
             "contract_version": "2026-07-15-platform-operations-overview-v9",
             "audience": "platform_internal_admin",
@@ -7573,6 +7671,15 @@ class SaaSRepository:
             "subscriptions": subscriptions,
             "domestic_payments": domestic_payments,
             "tasks": {str(row["status"] or "unknown"): int(row["count"] or 0) for row in task_rows},
+            "product_feedback": {
+                "total": len(feedback_rows),
+                "open": feedback_status_counts["open"],
+                "reviewing": feedback_status_counts["reviewing"],
+                "resolved": feedback_status_counts["resolved"],
+                "by_module": dict(sorted(feedback_module_counts.items())),
+                "by_reason": dict(sorted(feedback_reason_counts.items())),
+                "oldest_open_age_seconds": oldest_open_age_seconds,
+            },
             "media_points": {
                 "account_count": int(media_row["account_count"] or 0),
                 "balance_points": int(media_row["balance_points"] or 0),
@@ -7656,6 +7763,7 @@ class SaaSRepository:
             "data_quality": {
                 "scope": "merchant_accounts_and_commercial_transactions",
                 "synthetic_test_accounts_excluded": int(accounts_row["synthetic_test_accounts"] or 0),
+                "synthetic_test_feedback_excluded": int(synthetic_feedback_excluded_row["count"] or 0),
                 "test_subscriptions_excluded": test_subscriptions_excluded,
                 "acceptance_orders_excluded": sum(1 for row in all_order_rows if acceptance_order(row)),
                 "test_payment_providers_excluded": sum(
@@ -7689,7 +7797,15 @@ class SaaSRepository:
 
         self.initialize()
         normalized_section = str(section or "").strip().lower()
-        if normalized_section not in {"traffic", "merchants", "transactions", "costs", "workflows", "audit"}:
+        if normalized_section not in {
+            "traffic",
+            "merchants",
+            "transactions",
+            "costs",
+            "workflows",
+            "audit",
+            "feedback",
+        }:
             raise ValueError("unsupported operations detail section")
         safe_period_days = min(max(int(30 if period_days is None else period_days), 1), 366)
         safe_limit = min(max(int(limit or 25), 1), 100)
@@ -7918,6 +8034,64 @@ class SaaSRepository:
                             "updated_at": str(row["updated_at"] or ""),
                         }
                     )
+            elif normalized_section == "feedback":
+                feedback_where = [
+                    "f.created_at >= ?",
+                    """
+                    exists (
+                      select 1 from users actor
+                      where actor.user_id = f.user_id
+                        and actor.account_classification = 'merchant'
+                    )
+                    """,
+                    """
+                    exists (
+                      select 1 from team_members tm
+                      join users member on member.user_id = tm.user_id
+                      where tm.company_id = f.company_id
+                        and member.status = 'active'
+                        and member.account_classification = 'merchant'
+                    )
+                    """,
+                ]
+                feedback_params: list[Any] = [period_started_at]
+                if normalized_filters["status"]:
+                    feedback_where.append("f.status = ?")
+                    feedback_params.append(normalized_filters["status"])
+                if normalized_filters["module"]:
+                    feedback_where.append("f.module_key = ?")
+                    feedback_params.append(normalized_filters["module"])
+                rows = conn.execute(
+                    f"""
+                    select f.feedback_id, f.module_key, f.reason, f.status,
+                           f.created_at, f.updated_at, f.resolved_at, f.feedback_json
+                    from merchant_product_feedback f
+                    where {" and ".join(feedback_where)}
+                    order by f.created_at desc, f.feedback_id asc
+                    limit 5001
+                    """,
+                    tuple(feedback_params),
+                ).fetchall()
+                records = []
+                for row in rows:
+                    feedback_status = str(row["status"] or "").strip().lower()
+                    feedback_module = str(row["module_key"] or "").strip().lower()
+                    packet = _load_json_field(row["feedback_json"])
+                    if not isinstance(packet, dict):
+                        packet = {}
+                    records.append(
+                        {
+                            "feedback_id": str(row["feedback_id"]),
+                            "module_key": feedback_module[:40],
+                            "reason": str(row["reason"] or "")[:40],
+                            "status": feedback_status[:40],
+                            "stage_title": _operations_feedback_text(packet.get("stage_title"), limit=160),
+                            "detail": _operations_feedback_text(packet.get("detail"), limit=420),
+                            "created_at": str(row["created_at"] or ""),
+                            "updated_at": str(row["updated_at"] or ""),
+                            "resolved_at": str(row["resolved_at"] or ""),
+                        }
+                    )
             else:
                 rows = conn.execute(
                     """
@@ -7955,7 +8129,7 @@ class SaaSRepository:
         total_available = len(records)
         page_items = records[offset : offset + safe_limit]
         next_offset = offset + len(page_items)
-        return {
+        response = {
             "contract_version": "2026-07-15-platform-operations-detail-v1",
             "section": normalized_section,
             "period": {"days": safe_period_days, "started_at": period_started_at},
@@ -7969,6 +8143,14 @@ class SaaSRepository:
             "provider_neutral": True,
             "secret_exposed": False,
         }
+        if normalized_section == "feedback":
+            response.update(
+                {
+                    "raw_merchant_content_exposed": False,
+                    "sanitized_feedback_text_internal_only": True,
+                }
+            )
+        return response
 
     def product_readiness_evidence(self) -> dict[str, Any]:
         self.initialize()

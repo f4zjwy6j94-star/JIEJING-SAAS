@@ -79,6 +79,23 @@ def main() -> int:
     if "vault server -dev" in compose:
         raise AssertionError("public staging profile must not use in-memory Vault dev mode")
 
+    server_blocks = nginx.split("server {")
+    if len(server_blocks) != 3:
+        raise AssertionError("public staging nginx must keep exactly isolated ops and app server blocks")
+    ops_server = server_blocks[1]
+    app_server = server_blocks[2]
+    for route, allowed_method in (
+        ("/owner/operations/feedback", "GET"),
+        ("/owner/product-feedback/review", "POST"),
+        ("/owner/product-feedback/resolve", "POST"),
+    ):
+        ops_location = _exact_location_block(ops_server, route)
+        if f"$request_method != {allowed_method}" not in ops_location or "return 405" not in ops_location or "proxy_pass http://jiejing-saas:8788" not in ops_location:
+            raise AssertionError(f"ops host method contract is wrong for {route}")
+        app_location = _exact_location_block(app_server, route)
+        if "return 404" not in app_location or "proxy_pass" in app_location:
+            raise AssertionError(f"app host must deny every method without proxying for {route}")
+
     print("PUBLIC_STAGING_PROXY_CONTRACT=pass")
     return 0
 
@@ -92,6 +109,15 @@ def _read(path: Path) -> str:
 def _assert_contains(content: str, needle: str, label: str) -> None:
     if needle not in content:
         raise AssertionError(f"missing {label}: {needle}")
+
+
+def _exact_location_block(server_block: str, route: str) -> str:
+    marker = f"location = {route}"
+    start = server_block.find(marker)
+    if start < 0:
+        raise AssertionError(f"missing exact location: {route}")
+    next_location = server_block.find("\n    location ", start + len(marker))
+    return server_block[start : next_location if next_location >= 0 else len(server_block)]
 
 
 if __name__ == "__main__":
