@@ -14,15 +14,19 @@ paths; same-basename files elsewhere are intentionally not accepted.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import secrets
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 
 SCHEMA_VERSION = "jiejing_runtime_env_overlap_guard_v1"
+MIGRATION_APPLY_CONFIRMATION = "APPLY_JIEJING_RUNTIME_ENV_MIGRATION"
 MANAGED_SOURCE = "tencent-managed.env"
 SECRET_SOURCE = "jiejing-saas.staging-oauth.env"
 POSTGRES_SOURCE = "postgres-localqueue.env"
@@ -232,6 +236,105 @@ class GuardAnalysis:
 
 
 @dataclass(frozen=True)
+class MigrationAction:
+    key: str
+    source: str
+    owner: str
+    comparison: str
+    bindings: tuple[RemovalBinding, ...] = field(repr=False)
+
+
+@dataclass(frozen=True)
+class RemovalBinding:
+    line_number: int = field(repr=False)
+    key: str = field(repr=False)
+    line_digest: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class SourceSnapshot:
+    source: str
+    path: Path = field(repr=False)
+    payload: bytes = field(repr=False)
+    digest: str = field(repr=False)
+    resolved_identity: str = field(repr=False)
+    physical_identity: tuple[int, int] = field(repr=False)
+    metadata: tuple[int, int, int] = field(repr=False)
+
+
+@dataclass(frozen=True)
+class MigrationLock:
+    path: Path = field(repr=False)
+    physical_identity: tuple[int, int] = field(repr=False)
+
+
+@dataclass(frozen=True)
+class ArtifactRef:
+    role: str
+    path: Path = field(repr=False)
+
+
+@dataclass(frozen=True)
+class PreparedCandidate:
+    path: Path = field(repr=False)
+    planned_payload: bytes = field(repr=False)
+    planned_digest: str = field(repr=False)
+    physical_identity: tuple[int, int] = field(repr=False)
+    metadata: tuple[int, int, int] = field(repr=False)
+    role: str
+
+
+@dataclass(frozen=True)
+class NamespaceMutationOutcome:
+    path: Path = field(repr=False)
+    physical_identity: tuple[int, int] = field(repr=False)
+    metadata: tuple[int, int, int] = field(repr=False)
+    durable: bool
+    content_verified: bool = True
+    prepared_artifact_removed: bool = False
+
+
+@dataclass(frozen=True)
+class CommitRecord:
+    source: str
+    path: Path = field(repr=False)
+    candidate_payload: bytes = field(repr=False)
+    candidate_digest: str = field(repr=False)
+    physical_identity: tuple[int, int] = field(repr=False)
+    candidate_metadata: tuple[int, int, int] = field(repr=False)
+    backup_path: Path = field(repr=False)
+    candidate_artifact_path: Path = field(repr=False)
+    mode: int = field(repr=False)
+
+
+@dataclass(frozen=True)
+class RecoveryOutcome:
+    installed: bool
+    durable: bool
+    artifacts: tuple[ArtifactRef, ...] = field(default=(), repr=False)
+
+
+@dataclass(frozen=True)
+class RollbackOutcome:
+    blockers: tuple[dict[str, object], ...]
+    artifacts: tuple[ArtifactRef, ...] = field(default=(), repr=False)
+
+
+class PreparedArtifactError(OSError):
+    def __init__(self, artifact: ArtifactRef) -> None:
+        super().__init__("prepared artifact failed")
+        self.artifact = artifact
+
+
+@dataclass(frozen=True)
+class MigrationPlan:
+    analysis: GuardAnalysis = field(repr=False)
+    actions: tuple[MigrationAction, ...]
+    blockers: tuple[dict[str, object], ...]
+    snapshots: tuple[SourceSnapshot, ...] = field(default=(), repr=False)
+
+
+@dataclass(frozen=True)
 class ComposeEnvironmentBlock:
     service: str
     service_occurrence: int
@@ -396,6 +499,120 @@ def _normalized_path_identity(path: Path, *, relative_to: Path | None = None) ->
     return os.path.normcase(os.path.abspath(os.path.normpath(os.fspath(candidate))))
 
 
+def _path_is_link_or_reparse(path: Path) -> bool:
+    try:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        if callable(is_junction) and is_junction():
+            return True
+        attributes = getattr(os.lstat(path), "st_file_attributes", 0)
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        return bool(reparse_flag and attributes & reparse_flag)
+    except (OSError, RuntimeError):
+        return False
+
+
+def _source_parent_link_blocker(path: Path, source: str) -> dict[str, object] | None:
+    absolute_path = Path(os.path.abspath(os.fspath(path)))
+    for parent in absolute_path.parents:
+        if parent == parent.parent:
+            continue
+        if _path_is_link_or_reparse(parent):
+            return {"code": "source_parent_link", "source": source}
+    return None
+
+
+def _capture_source_snapshot(path: Path, source: str) -> tuple[SourceSnapshot | None, dict[str, object] | None]:
+    parent_blocker = _source_parent_link_blocker(path, source)
+    if parent_blocker is not None:
+        return None, parent_blocker
+    if _path_is_link_or_reparse(path):
+        return None, {"code": "source_symlink", "source": source}
+    try:
+        resolved = path.resolve(strict=True)
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(os.fspath(path), flags)
+        try:
+            before = os.fstat(descriptor)
+            with os.fdopen(descriptor, "rb") as stream:
+                descriptor = -1
+                payload = stream.read()
+            after = os.stat(path, follow_symlinks=False)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+    except FileNotFoundError:
+        return None, {"code": "source_missing", "source": source}
+    except (OSError, RuntimeError):
+        return None, {"code": "source_unreadable", "source": source}
+    before_identity = (int(before.st_dev), int(before.st_ino))
+    after_identity = (int(after.st_dev), int(after.st_ino))
+    before_metadata = (int(before.st_size), int(before.st_mtime_ns), stat.S_IMODE(before.st_mode))
+    after_metadata = (int(after.st_size), int(after.st_mtime_ns), stat.S_IMODE(after.st_mode))
+    if (
+        before_identity != after_identity
+        or before_metadata != after_metadata
+        or int(before.st_size) != len(payload)
+    ):
+        return None, {"code": "source_changed_during_snapshot", "source": source}
+    return (
+        SourceSnapshot(
+            source=source,
+            path=path,
+            payload=payload,
+            digest=hashlib.sha256(payload).hexdigest(),
+            resolved_identity=os.path.normcase(os.fspath(resolved)),
+            physical_identity=after_identity,
+            metadata=after_metadata,
+        ),
+        None,
+    )
+
+
+def _capture_source_snapshots(
+    *,
+    compose_path: Path,
+    managed_env_path: Path,
+    secret_env_path: Path,
+    postgres_env_path: Path,
+) -> tuple[dict[str, SourceSnapshot], list[dict[str, object]]]:
+    snapshots: dict[str, SourceSnapshot] = {}
+    blockers: list[dict[str, object]] = []
+    for source, path in (
+        (COMPOSE_SOURCE, compose_path),
+        (MANAGED_SOURCE, managed_env_path),
+        (SECRET_SOURCE, secret_env_path),
+        (POSTGRES_SOURCE, postgres_env_path),
+    ):
+        snapshot, blocker = _capture_source_snapshot(path, source)
+        if blocker is not None:
+            blockers.append(blocker)
+        elif snapshot is not None:
+            snapshots[source] = snapshot
+
+    snapshot_items = list(snapshots.items())
+    for index, (left_source, left) in enumerate(snapshot_items):
+        for right_source, right in snapshot_items[index + 1 :]:
+            same_physical_file = (
+                left.resolved_identity == right.resolved_identity
+                or left.physical_identity == right.physical_identity
+            )
+            if not same_physical_file:
+                try:
+                    same_physical_file = os.path.samefile(left.path, right.path)
+                except (OSError, RuntimeError):
+                    same_physical_file = False
+            if same_physical_file:
+                blockers.append(
+                    {
+                        "code": "migration_source_path_alias",
+                        "sources": sorted((left_source, right_source)),
+                    }
+                )
+    return snapshots, blockers
+
+
 def _normalize_compose_env_file_source(raw: str, *, compose_parent: Path) -> str | None:
     scalar = _strip_yaml_scalar(raw)
     if not scalar or any(marker in scalar for marker in ("$", "%", "~", "\x00")):
@@ -405,21 +622,17 @@ def _normalize_compose_env_file_source(raw: str, *, compose_parent: Path) -> str
     return _normalized_path_identity(Path(scalar), relative_to=compose_parent)
 
 
-def _parse_env_file(path: Path, source: str) -> tuple[list[Declaration], list[dict[str, object]]]:
-    blockers: list[dict[str, object]] = []
-    path_blocker = _input_path_blocker(path, source)
-    if path_blocker is not None:
-        return [], [path_blocker]
-    if not path.is_file():
-        return [], [{"code": "source_missing", "source": source}]
-
+def _parse_env_payload(payload: bytes, source: str) -> tuple[list[Declaration], list[dict[str, object]]]:
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeError):
+        lines = payload.decode("utf-8").splitlines()
+    except UnicodeError:
         return [], [{"code": "source_unreadable", "source": source}]
 
+    blockers: list[dict[str, object]] = []
     declarations: list[Declaration] = []
     for line_number, line in enumerate(lines, start=1):
+        if line_number == 1 and line.startswith("\ufeff"):
+            line = line[1:]
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
@@ -435,14 +648,31 @@ def _parse_env_file(path: Path, source: str) -> tuple[list[Declaration], list[di
     return declarations, blockers
 
 
-def _parse_compose(path: Path) -> ComposeParseResult:
+def _parse_env_file(path: Path, source: str) -> tuple[list[Declaration], list[dict[str, object]]]:
+    path_blocker = _input_path_blocker(path, source)
+    if path_blocker is not None:
+        return [], [path_blocker]
+    if not path.is_file():
+        return [], [{"code": "source_missing", "source": source}]
+    try:
+        payload = path.read_bytes()
+    except OSError:
+        return [], [{"code": "source_unreadable", "source": source}]
+    return _parse_env_payload(payload, source)
+
+
+def _parse_compose(path: Path, *, payload: bytes | None = None) -> ComposeParseResult:
     path_blocker = _input_path_blocker(path, COMPOSE_SOURCE)
     if path_blocker is not None:
         return ComposeParseResult((), (path_blocker,), 0, (), (), ())
     if not path.is_file():
         return ComposeParseResult((), ({"code": "source_missing", "source": COMPOSE_SOURCE},), 0, (), (), ())
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = (
+            path.read_text(encoding="utf-8").splitlines()
+            if payload is None
+            else payload.decode("utf-8").splitlines()
+        )
     except (OSError, UnicodeError):
         return ComposeParseResult((), ({"code": "source_unreadable", "source": COMPOSE_SOURCE},), 0, (), (), ())
 
@@ -940,18 +1170,34 @@ def analyze_runtime_env_ownership(
     managed_env_path: Path,
     secret_env_path: Path,
     postgres_env_path: Path,
+    _source_snapshots: Mapping[str, SourceSnapshot] | None = None,
+    _snapshot_blockers: Sequence[dict[str, object]] = (),
 ) -> GuardAnalysis:
     declarations: list[Declaration] = []
-    blockers: list[dict[str, object]] = []
+    blockers: list[dict[str, object]] = list(_snapshot_blockers)
     for parser, path, source in (
         (_parse_env_file, managed_env_path, MANAGED_SOURCE),
         (_parse_env_file, secret_env_path, SECRET_SOURCE),
         (_parse_env_file, postgres_env_path, POSTGRES_SOURCE),
     ):
-        parsed, parse_blockers = parser(path, source)
+        if _source_snapshots is not None:
+            snapshot = _source_snapshots.get(source)
+            if snapshot is None:
+                continue
+            parsed, parse_blockers = _parse_env_payload(snapshot.payload, source)
+        else:
+            parsed, parse_blockers = parser(path, source)
         declarations.extend(parsed)
         blockers.extend(parse_blockers)
-    compose_result = _parse_compose(compose_path)
+    compose_snapshot = _source_snapshots.get(COMPOSE_SOURCE) if _source_snapshots is not None else None
+    compose_result = (
+        ComposeParseResult((), (), 0, (), (), ())
+        if _source_snapshots is not None and compose_snapshot is None
+        else _parse_compose(
+            compose_path,
+            payload=compose_snapshot.payload if compose_snapshot is not None else None,
+        )
+    )
     declarations.extend(compose_result.declarations)
     blockers.extend(compose_result.blockers)
 
@@ -1366,27 +1612,1232 @@ def check_runtime_env_ownership(
     )
 
 
+def plan_runtime_env_migration(
+    *,
+    compose_path: Path,
+    managed_env_path: Path,
+    secret_env_path: Path,
+    postgres_env_path: Path,
+) -> dict[str, object]:
+    plan = _build_migration_plan(
+        compose_path=compose_path,
+        managed_env_path=managed_env_path,
+        secret_env_path=secret_env_path,
+        postgres_env_path=postgres_env_path,
+    )
+    return _project_migration_report(plan, mode="dry_run", applied=False)
+
+
+def _project_migration_report(
+    plan: MigrationPlan,
+    *,
+    mode: str,
+    applied: bool,
+    backup_count: int = 0,
+    artifact_counts: Mapping[str, int] | None = None,
+    additional_blockers: Sequence[dict[str, object]] = (),
+) -> dict[str, object]:
+    analysis = plan.analysis
+    blockers = (*plan.blockers, *additional_blockers)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "operation": "migrate",
+        "mode": mode,
+        "ok": not blockers,
+        "applied": applied,
+        "secret_exposed": False,
+        "summary": {
+            "action_count": len(plan.actions),
+            "changed_source_count": len({action.source for action in plan.actions}),
+            "blocker_count": len(blockers),
+            "warning_count": len(analysis.warnings),
+            "backup_count": backup_count,
+            "artifact_counts": dict(sorted((artifact_counts or {}).items())),
+        },
+        "actions": [
+            {
+                "action": "remove_from_wrong_source",
+                "key": action.key,
+                "source": action.source,
+                "owner": action.owner,
+                "count": len(action.bindings),
+                "comparison": action.comparison,
+            }
+            for action in plan.actions
+        ],
+        "blockers": list(blockers),
+        "warnings": list(analysis.warnings),
+    }
+
+
+def migrate_runtime_env_ownership(
+    *,
+    compose_path: Path,
+    managed_env_path: Path,
+    secret_env_path: Path,
+    postgres_env_path: Path,
+    apply: bool = False,
+    confirm: str | None = None,
+) -> dict[str, object]:
+    plan = _build_migration_plan(
+        compose_path=compose_path,
+        managed_env_path=managed_env_path,
+        secret_env_path=secret_env_path,
+        postgres_env_path=postgres_env_path,
+    )
+    if not apply:
+        return _project_migration_report(plan, mode="dry_run", applied=False)
+    if confirm != MIGRATION_APPLY_CONFIRMATION:
+        return _project_migration_report(
+            plan,
+            mode="apply",
+            applied=False,
+            additional_blockers=(
+                {
+                    "code": "apply_confirmation_required",
+                    "required_confirmation": MIGRATION_APPLY_CONFIRMATION,
+                },
+            ),
+        )
+    if plan.blockers:
+        return _project_migration_report(plan, mode="apply", applied=False)
+    try:
+        artifact_counts = _apply_migration_plan(
+            plan,
+            compose_path=compose_path,
+            managed_env_path=managed_env_path,
+            secret_env_path=secret_env_path,
+            postgres_env_path=postgres_env_path,
+        )
+    except MigrationApplyError as error:
+        return _project_migration_report(
+            plan,
+            mode="apply",
+            applied=False,
+            backup_count=error.backup_count,
+            artifact_counts=error.artifact_counts,
+            additional_blockers=error.blockers,
+        )
+    return _project_migration_report(
+        plan,
+        mode="apply",
+        applied=True,
+        backup_count=sum(artifact_counts.values()),
+        artifact_counts=artifact_counts,
+    )
+
+
+class MigrationApplyError(Exception):
+    def __init__(
+        self,
+        code: str,
+        source: str,
+        *,
+        artifacts: Sequence[ArtifactRef] = (),
+        blockers: Sequence[dict[str, object]] | None = None,
+    ) -> None:
+        super().__init__(code)
+        self.code = code
+        self.source = source
+        self.artifacts = tuple(artifacts)
+        self.artifact_counts = _retained_artifact_counts(self.artifacts)
+        self.backup_count = sum(self.artifact_counts.values())
+        self.blockers = tuple(blockers or ({"code": code, "source": source},))
+
+
+def _retained_artifact_counts(artifacts: Sequence[ArtifactRef]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    seen: set[tuple[str, str]] = set()
+    for artifact in artifacts:
+        marker = (artifact.role, os.fspath(artifact.path))
+        if marker in seen:
+            continue
+        seen.add(marker)
+        try:
+            retained = artifact.path.exists() or artifact.path.is_symlink()
+        except OSError:
+            retained = False
+        if retained:
+            counts[artifact.role] = counts.get(artifact.role, 0) + 1
+    return counts
+
+
+def _safe_private_mode(snapshot: SourceSnapshot) -> int:
+    return snapshot.metadata[2] & 0o600
+
+
+def _env_key_from_line_segment(segment: bytes, line_number: int) -> str | None:
+    try:
+        line = segment.decode("utf-8")
+    except UnicodeError:
+        return None
+    if line_number == 1 and line.startswith("\ufeff"):
+        line = line[1:]
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        return None
+    key = stripped.split("=", 1)[0].strip()
+    return key if KEY_PATTERN.fullmatch(key) else None
+
+
+def _render_candidate(snapshot: SourceSnapshot, bindings: Sequence[RemovalBinding]) -> bytes:
+    lines = snapshot.payload.splitlines(keepends=True)
+    removal_lines: set[int] = set()
+    for binding in bindings:
+        if binding.line_number < 1 or binding.line_number > len(lines):
+            raise MigrationApplyError("apply_plan_stale", snapshot.source)
+        segment = lines[binding.line_number - 1]
+        if (
+            hashlib.sha256(segment).hexdigest() != binding.line_digest
+            or _env_key_from_line_segment(segment, binding.line_number) != binding.key
+            or binding.line_number in removal_lines
+        ):
+            raise MigrationApplyError("apply_plan_stale", snapshot.source)
+        removal_lines.add(binding.line_number)
+    return b"".join(
+        line for line_number, line in enumerate(lines, start=1) if line_number not in removal_lines
+    )
+
+
+def _verify_source_snapshot(snapshot: SourceSnapshot, *, error_code: str) -> None:
+    parent_blocker = _source_parent_link_blocker(snapshot.path, snapshot.source)
+    if parent_blocker is not None or _path_is_link_or_reparse(snapshot.path):
+        raise MigrationApplyError(error_code, snapshot.source)
+    try:
+        resolved = os.path.normcase(os.fspath(snapshot.path.resolve(strict=True)))
+        before = os.stat(snapshot.path, follow_symlinks=False)
+        payload = snapshot.path.read_bytes()
+        after = os.stat(snapshot.path, follow_symlinks=False)
+    except (OSError, RuntimeError) as error:
+        raise MigrationApplyError(error_code, snapshot.source) from error
+    physical_identity = (int(after.st_dev), int(after.st_ino))
+    metadata = (int(after.st_size), int(after.st_mtime_ns), stat.S_IMODE(after.st_mode))
+    before_metadata = (int(before.st_size), int(before.st_mtime_ns), stat.S_IMODE(before.st_mode))
+    if (
+        resolved != snapshot.resolved_identity
+        or physical_identity != snapshot.physical_identity
+        or (int(before.st_dev), int(before.st_ino)) != physical_identity
+        or int(before.st_size) != len(payload)
+        or before_metadata != metadata
+        or metadata != snapshot.metadata
+        or payload != snapshot.payload
+        or hashlib.sha256(payload).hexdigest() != snapshot.digest
+    ):
+        raise MigrationApplyError(error_code, snapshot.source)
+
+
+def _verify_source_snapshots(
+    snapshots: Sequence[SourceSnapshot],
+    *,
+    excluded_sources: frozenset[str] = frozenset(),
+    error_code: str,
+) -> None:
+    for snapshot in snapshots:
+        if snapshot.source not in excluded_sources:
+            _verify_source_snapshot(snapshot, error_code=error_code)
+
+
+def _write_new_file(path: Path, payload: bytes, mode: int) -> None:
+    descriptor = os.open(os.fspath(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = -1
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        path.chmod(mode)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _fsync_directory(directory: Path) -> None:
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            os.fspath(directory),
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+        )
+        os.fsync(descriptor)
+    except OSError:
+        # Windows does not expose a portable directory fsync handle. Files are
+        # still fsynced before linkage; POSIX callers get the directory fsync.
+        if os.name != "nt":
+            raise
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _unique_artifact_path(path: Path, kind: str) -> Path:
+    for _attempt in range(32):
+        candidate = path.with_name(
+            f".{path.name}.jiejing-runtime-env-{kind}-{secrets.token_hex(16)}"
+        )
+        if not candidate.exists() and not candidate.is_symlink():
+            return candidate
+    raise OSError("artifact namespace unavailable")
+
+
+def _prepare_payload_artifact(
+    path: Path,
+    payload: bytes,
+    mode: int,
+    kind: str,
+) -> PreparedCandidate:
+    artifact = _unique_artifact_path(path, kind)
+    try:
+        _write_new_file(artifact, payload, mode)
+        _fsync_directory(path.parent)
+        verified_payload, identity, metadata = _stable_read_artifact(artifact)
+        digest = hashlib.sha256(payload).hexdigest()
+        if verified_payload != payload or hashlib.sha256(verified_payload).hexdigest() != digest:
+            raise OSError("prepared artifact changed")
+    except (OSError, RuntimeError) as error:
+        raise PreparedArtifactError(ArtifactRef(kind, artifact)) from error
+    return PreparedCandidate(
+        path=artifact,
+        planned_payload=payload,
+        planned_digest=digest,
+        physical_identity=identity,
+        metadata=metadata,
+        role=kind,
+    )
+
+
+def _stable_read_artifact(path: Path) -> tuple[bytes, tuple[int, int], tuple[int, int, int]]:
+    before = os.stat(path, follow_symlinks=False)
+    payload = path.read_bytes()
+    after = os.stat(path, follow_symlinks=False)
+    verification_payload = path.read_bytes()
+    final = os.stat(path, follow_symlinks=False)
+    before_identity = (int(before.st_dev), int(before.st_ino))
+    after_identity = (int(after.st_dev), int(after.st_ino))
+    before_metadata = (int(before.st_size), int(before.st_mtime_ns), stat.S_IMODE(before.st_mode))
+    after_metadata = (int(after.st_size), int(after.st_mtime_ns), stat.S_IMODE(after.st_mode))
+    final_identity = (int(final.st_dev), int(final.st_ino))
+    final_metadata = (int(final.st_size), int(final.st_mtime_ns), stat.S_IMODE(final.st_mode))
+    if (
+        before_identity != after_identity
+        or after_identity != final_identity
+        or before_metadata != after_metadata
+        or after_metadata != final_metadata
+        or int(after.st_size) != len(payload)
+        or int(final.st_size) != len(verification_payload)
+        or verification_payload != payload
+    ):
+        raise OSError("artifact changed during read")
+    return payload, after_identity, after_metadata
+
+
+def _prepared_candidate_matches(prepared: PreparedCandidate) -> bool:
+    try:
+        payload, identity, metadata = _stable_read_artifact(prepared.path)
+    except (OSError, RuntimeError):
+        return False
+    return (
+        identity == prepared.physical_identity
+        and metadata == prepared.metadata
+        and payload == prepared.planned_payload
+        and hashlib.sha256(payload).hexdigest() == prepared.planned_digest
+    )
+
+
+def _install_artifact_no_clobber(
+    prepared: PreparedCandidate,
+    target: Path,
+) -> NamespaceMutationOutcome:
+    if not _prepared_candidate_matches(prepared):
+        raise OSError("prepared artifact changed")
+    os.link(prepared.path, target, follow_symlinks=False)
+
+    content_verified = False
+    identity = prepared.physical_identity
+    metadata = prepared.metadata
+    try:
+        payload, identity, metadata = _stable_read_artifact(target)
+        content_verified = (
+            identity == prepared.physical_identity
+            and metadata == prepared.metadata
+            and payload == prepared.planned_payload
+            and hashlib.sha256(payload).hexdigest() == prepared.planned_digest
+        )
+    except (OSError, RuntimeError):
+        content_verified = False
+
+    artifact_removed = False
+    if content_verified:
+        try:
+            prepared.path.unlink()
+            artifact_removed = True
+        except OSError:
+            artifact_removed = False
+
+    durable = True
+    try:
+        _fsync_directory(target.parent)
+    except OSError:
+        durable = False
+    return NamespaceMutationOutcome(
+        path=target,
+        physical_identity=identity,
+        metadata=metadata,
+        durable=durable,
+        content_verified=content_verified,
+        prepared_artifact_removed=artifact_removed,
+    )
+
+
+def _detach_target_no_clobber(target: Path, kind: str) -> NamespaceMutationOutcome:
+    detached = _unique_artifact_path(target, kind)
+    if detached.exists() or detached.is_symlink():
+        raise FileExistsError
+    target_stat = os.stat(target, follow_symlinks=False)
+    identity = (int(target_stat.st_dev), int(target_stat.st_ino))
+    metadata = (
+        int(target_stat.st_size),
+        int(target_stat.st_mtime_ns),
+        stat.S_IMODE(target_stat.st_mode),
+    )
+    os.rename(target, detached)
+    durable = True
+    try:
+        _fsync_directory(target.parent)
+    except OSError:
+        durable = False
+    return NamespaceMutationOutcome(
+        path=detached,
+        physical_identity=identity,
+        metadata=metadata,
+        durable=durable,
+    )
+
+
+def _artifact_matches_snapshot(path: Path, snapshot: SourceSnapshot) -> bool:
+    try:
+        payload, identity, metadata = _stable_read_artifact(path)
+    except (OSError, RuntimeError):
+        return False
+    return (
+        identity == snapshot.physical_identity
+        and metadata == snapshot.metadata
+        and payload == snapshot.payload
+        and hashlib.sha256(payload).hexdigest() == snapshot.digest
+    )
+
+
+def _artifact_matches_commit(path: Path, record: CommitRecord) -> bool:
+    try:
+        payload, identity, metadata = _stable_read_artifact(path)
+    except (OSError, RuntimeError):
+        return False
+    return (
+        identity == record.physical_identity
+        and metadata == record.candidate_metadata
+        and payload == record.candidate_payload
+        and hashlib.sha256(payload).hexdigest() == record.candidate_digest
+    )
+
+
+def _restore_artifact_payload_if_absent(
+    artifact: Path,
+    target: Path,
+    *,
+    mode: int,
+) -> RecoveryOutcome:
+    prepared: PreparedCandidate | None = None
+    try:
+        payload, _identity, _metadata = _stable_read_artifact(artifact)
+        prepared = _prepare_payload_artifact(target, payload, mode, "restore")
+        outcome = _install_artifact_no_clobber(prepared, target)
+        artifacts = (ArtifactRef(prepared.role, prepared.path),)
+        return RecoveryOutcome(
+            installed=outcome.content_verified,
+            durable=outcome.durable,
+            artifacts=artifacts,
+        )
+    except (OSError, RuntimeError) as error:
+        artifacts = (
+            (ArtifactRef(prepared.role, prepared.path),)
+            if prepared is not None
+            else (
+                (error.artifact,)
+                if isinstance(error, PreparedArtifactError)
+                else ()
+            )
+        )
+        return RecoveryOutcome(installed=False, durable=False, artifacts=artifacts)
+
+
+def _guarded_commit_before_detach(_snapshot: SourceSnapshot) -> None:
+    return None
+
+
+def _guarded_commit_before_install(_snapshot: SourceSnapshot, _backup_path: Path) -> None:
+    return None
+
+
+def _guarded_commit_after_install(_record: CommitRecord) -> None:
+    return None
+
+
+def _guarded_rollback_before_detach(_record: CommitRecord) -> None:
+    return None
+
+
+def _guarded_rollback_before_restore(
+    _record: CommitRecord,
+    _candidate_hold: Path,
+    _backup_path: Path,
+) -> None:
+    return None
+
+
+def _record_artifacts(record: CommitRecord) -> tuple[ArtifactRef, ...]:
+    return (
+        ArtifactRef("backup", record.backup_path),
+        ArtifactRef("candidate", record.candidate_artifact_path),
+    )
+
+
+def _target_matches_prepared(target: Path, prepared: PreparedCandidate) -> bool:
+    try:
+        payload, identity, metadata = _stable_read_artifact(target)
+    except (OSError, RuntimeError):
+        return False
+    return (
+        identity == prepared.physical_identity
+        and metadata == prepared.metadata
+        and payload == prepared.planned_payload
+        and hashlib.sha256(payload).hexdigest() == prepared.planned_digest
+    )
+
+
+def _restore_original_after_forward_install(record: CommitRecord) -> RollbackOutcome:
+    artifacts: list[ArtifactRef] = list(_record_artifacts(record))
+    blockers: list[dict[str, object]] = []
+    try:
+        detached = _detach_target_no_clobber(record.path, "candidate-hold")
+    except (OSError, RuntimeError):
+        return RollbackOutcome(
+            blockers=({"code": "apply_recovery_conflict", "source": record.source},),
+            artifacts=tuple(artifacts),
+        )
+    artifacts.append(ArtifactRef("candidate_hold", detached.path))
+    if not detached.durable:
+        blockers.append({"code": "apply_durability_failed", "source": record.source})
+    recovery = _restore_artifact_payload_if_absent(
+        record.backup_path,
+        record.path,
+        mode=record.mode,
+    )
+    artifacts.extend(recovery.artifacts)
+    if not recovery.installed:
+        blockers.append({"code": "apply_recovery_conflict", "source": record.source})
+    elif not recovery.durable:
+        blockers.append({"code": "apply_durability_failed", "source": record.source})
+    return RollbackOutcome(blockers=tuple(blockers), artifacts=tuple(artifacts))
+
+
+def _commit_candidate(
+    snapshot: SourceSnapshot,
+    candidate_payload: bytes,
+    candidate_digest: str,
+    mode: int,
+) -> CommitRecord:
+    if hashlib.sha256(candidate_payload).hexdigest() != candidate_digest:
+        raise MigrationApplyError("apply_plan_stale", snapshot.source)
+    try:
+        prepared = _prepare_payload_artifact(
+            snapshot.path,
+            candidate_payload,
+            mode,
+            "candidate",
+        )
+    except PreparedArtifactError as error:
+        raise MigrationApplyError(
+            "apply_candidate_prepare_failed",
+            snapshot.source,
+            artifacts=(error.artifact,),
+        ) from error
+    candidate_ref = ArtifactRef("candidate", prepared.path)
+    _verify_source_snapshot(snapshot, error_code="apply_source_changed")
+    _guarded_commit_before_detach(snapshot)
+    try:
+        detached = _detach_target_no_clobber(snapshot.path, "backup")
+    except (OSError, RuntimeError) as error:
+        raise MigrationApplyError(
+            "apply_source_changed",
+            snapshot.source,
+            artifacts=(candidate_ref,),
+        ) from error
+
+    backup_path = detached.path
+    base_artifacts = (candidate_ref, ArtifactRef("backup", backup_path))
+    if not detached.durable:
+        recovery = _restore_artifact_payload_if_absent(
+            backup_path,
+            snapshot.path,
+            mode=mode,
+        )
+        blockers = [{"code": "apply_durability_failed", "source": snapshot.source}]
+        if not recovery.installed:
+            blockers.append({"code": "apply_recovery_conflict", "source": snapshot.source})
+        elif not recovery.durable:
+            blockers.append({"code": "apply_recovery_durability_failed", "source": snapshot.source})
+        raise MigrationApplyError(
+            "apply_durability_failed",
+            snapshot.source,
+            artifacts=(*base_artifacts, *recovery.artifacts),
+            blockers=blockers,
+        )
+
+    if not _artifact_matches_snapshot(backup_path, snapshot):
+        recovered = _restore_artifact_payload_if_absent(
+            backup_path,
+            snapshot.path,
+            mode=mode,
+        )
+        blockers = [{"code": "apply_source_changed", "source": snapshot.source}]
+        if not recovered.installed:
+            blockers.append({"code": "apply_recovery_conflict", "source": snapshot.source})
+        elif not recovered.durable:
+            blockers.append({"code": "apply_recovery_durability_failed", "source": snapshot.source})
+        raise MigrationApplyError(
+            "apply_source_changed",
+            snapshot.source,
+            artifacts=(*base_artifacts, *recovered.artifacts),
+            blockers=blockers,
+        )
+
+    _guarded_commit_before_install(snapshot, backup_path)
+    try:
+        install = _install_artifact_no_clobber(
+            prepared,
+            snapshot.path,
+        )
+    except (OSError, RuntimeError) as error:
+        recovered = _restore_artifact_payload_if_absent(
+            backup_path,
+            snapshot.path,
+            mode=mode,
+        )
+        code = (
+            "apply_candidate_changed"
+            if not _prepared_candidate_matches(prepared)
+            else "apply_install_conflict"
+        )
+        blockers = [{"code": code, "source": snapshot.source}]
+        if not recovered.installed:
+            blockers.append({"code": "apply_recovery_conflict", "source": snapshot.source})
+        elif not recovered.durable:
+            blockers.append({"code": "apply_recovery_durability_failed", "source": snapshot.source})
+        raise MigrationApplyError(
+            code,
+            snapshot.source,
+            artifacts=(*base_artifacts, *recovered.artifacts),
+            blockers=blockers,
+        ) from error
+
+    record = CommitRecord(
+        source=snapshot.source,
+        path=snapshot.path,
+        candidate_payload=candidate_payload,
+        candidate_digest=candidate_digest,
+        physical_identity=prepared.physical_identity,
+        candidate_metadata=prepared.metadata,
+        backup_path=backup_path,
+        candidate_artifact_path=prepared.path,
+        mode=mode,
+    )
+    if not install.content_verified or not _commit_target_matches(record):
+        rollback = _restore_original_after_forward_install(record)
+        raise MigrationApplyError(
+            "apply_candidate_changed",
+            snapshot.source,
+            artifacts=rollback.artifacts,
+            blockers=(
+                {"code": "apply_candidate_changed", "source": snapshot.source},
+                *rollback.blockers,
+            ),
+        )
+    if not install.durable:
+        rollback = _restore_original_after_forward_install(record)
+        raise MigrationApplyError(
+            "apply_durability_failed",
+            snapshot.source,
+            artifacts=rollback.artifacts,
+            blockers=(
+                {"code": "apply_durability_failed", "source": snapshot.source},
+                *rollback.blockers,
+            ),
+        )
+    _guarded_commit_after_install(record)
+    if not _artifact_matches_snapshot(backup_path, snapshot):
+        rollback = _guarded_rollback_commit(record)
+        blockers = [
+            {"code": "apply_backup_source_changed", "source": snapshot.source},
+            *rollback.blockers,
+        ]
+        raise MigrationApplyError(
+            "apply_backup_source_changed",
+            snapshot.source,
+            artifacts=rollback.artifacts,
+            blockers=blockers,
+        )
+    return record
+
+
+def _commit_target_matches(record: CommitRecord) -> bool:
+    if _source_parent_link_blocker(record.path, record.source) is not None:
+        return False
+    if _path_is_link_or_reparse(record.path):
+        return False
+    return _artifact_matches_commit(record.path, record)
+
+
+def _promote_rollback_candidate_drift(
+    record: CommitRecord,
+    candidate_hold: Path,
+    restored: PreparedCandidate,
+) -> RollbackOutcome:
+    artifacts: list[ArtifactRef] = [
+        *_record_artifacts(record),
+        ArtifactRef("candidate_hold", candidate_hold),
+        ArtifactRef("rollback_restore", restored.path),
+    ]
+    blockers: list[dict[str, object]] = [
+        {"code": "apply_rollback_source_changed", "source": record.source}
+    ]
+    try:
+        external_payload, _identity, _metadata = _stable_read_artifact(candidate_hold)
+    except (OSError, RuntimeError):
+        blockers.append({"code": "apply_rollback_conflict", "source": record.source})
+        return RollbackOutcome(tuple(blockers), tuple(artifacts))
+
+    if not _target_matches_prepared(record.path, restored):
+        blockers.append({"code": "apply_rollback_conflict", "source": record.source})
+        return RollbackOutcome(tuple(blockers), tuple(artifacts))
+    try:
+        recovery = _detach_target_no_clobber(record.path, "rollback-recovery")
+    except (OSError, RuntimeError):
+        blockers.append({"code": "apply_rollback_conflict", "source": record.source})
+        return RollbackOutcome(tuple(blockers), tuple(artifacts))
+    artifacts.append(ArtifactRef("rollback_recovery", recovery.path))
+    if not recovery.durable:
+        blockers.append({"code": "apply_rollback_durability_failed", "source": record.source})
+    if not _target_matches_prepared(recovery.path, restored):
+        recovered = _restore_artifact_payload_if_absent(
+            recovery.path,
+            record.path,
+            mode=record.mode,
+        )
+        artifacts.extend(recovered.artifacts)
+        blockers.append({"code": "apply_rollback_conflict", "source": record.source})
+        return RollbackOutcome(tuple(blockers), tuple(artifacts))
+
+    promoted: PreparedCandidate | None = None
+    try:
+        promoted = _prepare_payload_artifact(
+            record.path,
+            external_payload,
+            record.mode,
+            "rollback-promotion",
+        )
+        artifacts.append(ArtifactRef("rollback_promotion", promoted.path))
+        outcome = _install_artifact_no_clobber(promoted, record.path)
+        if not outcome.content_verified or not outcome.durable:
+            blockers.append({"code": "apply_rollback_conflict", "source": record.source})
+    except (OSError, RuntimeError) as error:
+        if isinstance(error, PreparedArtifactError):
+            artifacts.append(error.artifact)
+        blockers.append({"code": "apply_rollback_conflict", "source": record.source})
+        restored_original = _restore_artifact_payload_if_absent(
+            recovery.path,
+            record.path,
+            mode=record.mode,
+        )
+        artifacts.extend(restored_original.artifacts)
+    return RollbackOutcome(tuple(blockers), tuple(artifacts))
+
+
+def _guarded_rollback_commit(record: CommitRecord) -> RollbackOutcome:
+    artifacts: list[ArtifactRef] = list(_record_artifacts(record))
+    # This preflight is diagnostic only. The authoritative validation happens
+    # on the atomically detached candidate below.
+    _commit_target_matches(record)
+    _guarded_rollback_before_detach(record)
+    try:
+        detached = _detach_target_no_clobber(record.path, "candidate-hold")
+    except (OSError, RuntimeError):
+        return RollbackOutcome(
+            blockers=({"code": "apply_rollback_source_changed", "source": record.source},),
+            artifacts=tuple(artifacts),
+        )
+
+    candidate_hold = detached.path
+    artifacts.append(ArtifactRef("candidate_hold", candidate_hold))
+    if not detached.durable:
+        recovery = _restore_artifact_payload_if_absent(
+            candidate_hold,
+            record.path,
+            mode=record.mode,
+        )
+        artifacts.extend(recovery.artifacts)
+        blockers = [{"code": "apply_rollback_durability_failed", "source": record.source}]
+        if not recovery.installed:
+            blockers.append({"code": "apply_rollback_conflict", "source": record.source})
+        return RollbackOutcome(tuple(blockers), tuple(artifacts))
+
+    if not _artifact_matches_commit(candidate_hold, record):
+        recovered = _restore_artifact_payload_if_absent(
+            candidate_hold,
+            record.path,
+            mode=record.mode,
+        )
+        blockers = [{"code": "apply_rollback_source_changed", "source": record.source}]
+        if not recovered.installed:
+            blockers.append({"code": "apply_rollback_conflict", "source": record.source})
+        elif not recovered.durable:
+            blockers.append({"code": "apply_rollback_durability_failed", "source": record.source})
+        artifacts.extend(recovered.artifacts)
+        return RollbackOutcome(tuple(blockers), tuple(artifacts))
+
+    _guarded_rollback_before_restore(record, candidate_hold, record.backup_path)
+    restored: PreparedCandidate | None = None
+    try:
+        backup_payload, _identity, _metadata = _stable_read_artifact(record.backup_path)
+        restored = _prepare_payload_artifact(
+            record.path,
+            backup_payload,
+            record.mode,
+            "rollback-restore",
+        )
+        artifacts.append(ArtifactRef("rollback_restore", restored.path))
+        restore_outcome = _install_artifact_no_clobber(restored, record.path)
+    except (OSError, RuntimeError) as error:
+        if isinstance(error, PreparedArtifactError):
+            artifacts.append(error.artifact)
+        return RollbackOutcome(
+            blockers=({"code": "apply_rollback_conflict", "source": record.source},),
+            artifacts=tuple(artifacts),
+        )
+    if not restore_outcome.content_verified or not _target_matches_prepared(record.path, restored):
+        return RollbackOutcome(
+            blockers=({"code": "apply_rollback_conflict", "source": record.source},),
+            artifacts=tuple(artifacts),
+        )
+    if not _artifact_matches_commit(candidate_hold, record):
+        promoted = _promote_rollback_candidate_drift(record, candidate_hold, restored)
+        if restore_outcome.durable:
+            return promoted
+        return RollbackOutcome(
+            blockers=(
+                {"code": "apply_rollback_durability_failed", "source": record.source},
+                *promoted.blockers,
+            ),
+            artifacts=(*artifacts, *promoted.artifacts),
+        )
+    if not restore_outcome.durable:
+        return RollbackOutcome(
+            blockers=({"code": "apply_rollback_durability_failed", "source": record.source},),
+            artifacts=tuple(artifacts),
+        )
+    return RollbackOutcome(blockers=(), artifacts=tuple(artifacts))
+
+
+def _migration_lock_path(plan: MigrationPlan) -> Path:
+    private_snapshots = {
+        snapshot.source: snapshot
+        for snapshot in plan.snapshots
+        if snapshot.source in {MANAGED_SOURCE, SECRET_SOURCE, POSTGRES_SOURCE}
+    }
+    anchor = private_snapshots.get(MANAGED_SOURCE)
+    if anchor is None:
+        raise MigrationApplyError("migration_lock_scope_unavailable", "migration")
+    return anchor.path.parent / ".jiejing-runtime-env-migration.lock"
+
+
+def _acquire_migration_lock(plan: MigrationPlan) -> MigrationLock:
+    lock_path = _migration_lock_path(plan)
+    if _source_parent_link_blocker(lock_path, "migration") is not None:
+        raise MigrationApplyError("migration_lock_scope_unsafe", "migration")
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            os.fspath(lock_path),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = -1
+            stream.write(b"jiejing-runtime-env-migration\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        lock_path.chmod(0o600)
+        lock_stat = os.stat(lock_path, follow_symlinks=False)
+        return MigrationLock(
+            path=lock_path,
+            physical_identity=(int(lock_stat.st_dev), int(lock_stat.st_ino)),
+        )
+    except FileExistsError as error:
+        raise MigrationApplyError("migration_lock_unavailable", "migration") from error
+    except OSError as error:
+        raise MigrationApplyError("migration_lock_failed", "migration") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _release_migration_lock(lock: MigrationLock) -> None:
+    try:
+        lock_stat = os.stat(lock.path, follow_symlinks=False)
+        identity = (int(lock_stat.st_dev), int(lock_stat.st_ino))
+        if identity == lock.physical_identity and not _path_is_link_or_reparse(lock.path):
+            lock.path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+
+
+def _apply_migration_plan(
+    plan: MigrationPlan,
+    *,
+    compose_path: Path,
+    managed_env_path: Path,
+    secret_env_path: Path,
+    postgres_env_path: Path,
+) -> dict[str, int]:
+    if not plan.actions:
+        return {}
+    lock = _acquire_migration_lock(plan)
+    try:
+        return _apply_migration_plan_locked(
+            plan,
+            compose_path=compose_path,
+            managed_env_path=managed_env_path,
+            secret_env_path=secret_env_path,
+            postgres_env_path=postgres_env_path,
+        )
+    finally:
+        _release_migration_lock(lock)
+
+
+def _apply_migration_plan_locked(
+    plan: MigrationPlan,
+    *,
+    compose_path: Path,
+    managed_env_path: Path,
+    secret_env_path: Path,
+    postgres_env_path: Path,
+) -> dict[str, int]:
+    del compose_path, managed_env_path, secret_env_path, postgres_env_path
+    snapshots_by_source = {snapshot.source: snapshot for snapshot in plan.snapshots}
+    bindings_by_source: dict[str, list[RemovalBinding]] = {}
+    for action in plan.actions:
+        role = _source_role(action.source)
+        if role not in {MANAGED_SOURCE, SECRET_SOURCE, POSTGRES_SOURCE}:
+            raise MigrationApplyError("apply_unknown_source", "migration")
+        if role not in snapshots_by_source:
+            raise MigrationApplyError("apply_plan_stale", role)
+        bindings_by_source.setdefault(role, []).extend(action.bindings)
+    if not bindings_by_source:
+        return {}
+
+    changed_snapshots = [snapshots_by_source[source] for source in bindings_by_source]
+    candidate_payloads = {
+        snapshot.source: _render_candidate(snapshot, bindings_by_source[snapshot.source])
+        for snapshot in changed_snapshots
+    }
+    candidate_digests = {
+        source: hashlib.sha256(payload).hexdigest()
+        for source, payload in candidate_payloads.items()
+    }
+    modes = {snapshot.source: _safe_private_mode(snapshot) for snapshot in changed_snapshots}
+    _verify_source_snapshots(plan.snapshots, error_code="apply_plan_stale")
+
+    commits: list[CommitRecord] = []
+    try:
+        for snapshot in changed_snapshots:
+            _verify_source_snapshots(
+                plan.snapshots,
+                excluded_sources=frozenset(commit.source for commit in commits),
+                error_code="apply_source_changed",
+            )
+            commit = _commit_candidate(
+                snapshot,
+                candidate_payloads[snapshot.source],
+                candidate_digests[snapshot.source],
+                modes[snapshot.source],
+            )
+            commits.append(commit)
+        validation = _build_migration_plan(
+            compose_path=snapshots_by_source[COMPOSE_SOURCE].path,
+            managed_env_path=snapshots_by_source[MANAGED_SOURCE].path,
+            secret_env_path=snapshots_by_source[SECRET_SOURCE].path,
+            postgres_env_path=snapshots_by_source[POSTGRES_SOURCE].path,
+        )
+        if validation.blockers or validation.actions:
+            raise MigrationApplyError("post_apply_validation_failed", "migration")
+        for commit in commits:
+            snapshot = snapshots_by_source[commit.source]
+            if not _artifact_matches_snapshot(commit.backup_path, snapshot):
+                raise MigrationApplyError(
+                    "apply_backup_source_changed",
+                    commit.source,
+                )
+            if not _commit_target_matches(commit):
+                raise MigrationApplyError(
+                    "apply_commit_source_changed",
+                    commit.source,
+                )
+    except Exception as error:
+        rollback_blockers: list[dict[str, object]] = []
+        retained_artifacts: list[ArtifactRef] = (
+            list(error.artifacts) if isinstance(error, MigrationApplyError) else []
+        )
+        for commit in reversed(commits):
+            try:
+                rollback = _guarded_rollback_commit(commit)
+                rollback_blockers.extend(rollback.blockers)
+                retained_artifacts.extend(rollback.artifacts)
+            except Exception:
+                rollback_blockers.append(
+                    {"code": "apply_rollback_failed", "source": commit.source}
+                )
+                retained_artifacts.extend(_record_artifacts(commit))
+        original_blockers = (
+            list(error.blockers)
+            if isinstance(error, MigrationApplyError)
+            else [{"code": "apply_atomic_replace_failed", "source": "migration"}]
+        )
+        combined_blockers = (*original_blockers, *rollback_blockers)
+        first_blocker = combined_blockers[0]
+        raise MigrationApplyError(
+            str(first_blocker.get("code") or "apply_failed"),
+            str(first_blocker.get("source") or "migration"),
+            artifacts=retained_artifacts,
+            blockers=combined_blockers,
+        ) from error
+    return _retained_artifact_counts(
+        tuple(artifact for commit in commits for artifact in _record_artifacts(commit))
+    )
+
+
+MIGRATION_RESOLVABLE_BLOCKER_CODES = frozenset(
+    {"cross_source_duplicate", "same_source_duplicate", "wrong_source"}
+)
+
+
+def _build_migration_plan(
+    *,
+    compose_path: Path,
+    managed_env_path: Path,
+    secret_env_path: Path,
+    postgres_env_path: Path,
+) -> MigrationPlan:
+    snapshots, snapshot_blockers = _capture_source_snapshots(
+        compose_path=compose_path,
+        managed_env_path=managed_env_path,
+        secret_env_path=secret_env_path,
+        postgres_env_path=postgres_env_path,
+    )
+    analysis = analyze_runtime_env_ownership(
+        compose_path=compose_path,
+        managed_env_path=managed_env_path,
+        secret_env_path=secret_env_path,
+        postgres_env_path=postgres_env_path,
+        _source_snapshots=snapshots,
+        _snapshot_blockers=snapshot_blockers,
+    )
+    blockers = [
+        blocker
+        for blocker in analysis.blockers
+        if blocker.get("code") not in MIGRATION_RESOLVABLE_BLOCKER_CODES
+    ]
+    actions: list[MigrationAction] = []
+    for key_analysis in analysis.keys:
+        wrong_declarations = tuple(
+            declaration
+            for declaration in key_analysis.declarations
+            if key_analysis.owner is not None and _source_role(declaration.source) != key_analysis.owner
+        )
+        duplicate_in_one_source = any(len(group.declarations) > 1 for group in key_analysis.source_groups)
+        if key_analysis.owner is None:
+            if key_analysis.unauthorized_duplicate:
+                blockers.append(
+                    {
+                        "code": "unknown_duplicate",
+                        "key": key_analysis.key,
+                        "sources": list(key_analysis.source_roles),
+                        "comparison": key_analysis.comparison,
+                    }
+                )
+            continue
+        owner_declarations = tuple(
+            declaration
+            for declaration in key_analysis.declarations
+            if _source_role(declaration.source) == key_analysis.owner
+        )
+        compose_wrong_declarations = tuple(
+            declaration
+            for declaration in wrong_declarations
+            if _source_role(declaration.source) == COMPOSE_SOURCE
+        )
+        if compose_wrong_declarations:
+            for declaration in compose_wrong_declarations:
+                blockers.append(
+                    {
+                        "code": "compose_migration_deferred",
+                        "key": key_analysis.key,
+                        "source": declaration.source,
+                        "owner": key_analysis.owner,
+                    }
+                )
+            continue
+        if not wrong_declarations:
+            if duplicate_in_one_source:
+                blockers.append(
+                    {
+                        "code": "authoritative_source_duplicate",
+                        "key": key_analysis.key,
+                        "owner": key_analysis.owner,
+                        "comparison": key_analysis.comparison,
+                    }
+                )
+            continue
+        if not owner_declarations:
+            blockers.append(
+                {
+                    "code": "authoritative_source_missing",
+                    "key": key_analysis.key,
+                    "owner": key_analysis.owner,
+                }
+            )
+            continue
+        owner_groups = tuple(
+            group
+            for group in key_analysis.source_groups
+            if _source_role(group.source) == key_analysis.owner
+        )
+        if any(len(group.declarations) != 1 for group in owner_groups):
+            blockers.append(
+                {
+                    "code": "authoritative_source_duplicate",
+                    "key": key_analysis.key,
+                    "owner": key_analysis.owner,
+                    "comparison": key_analysis.comparison,
+                }
+            )
+            continue
+        if key_analysis.comparison != "equal":
+            blockers.append(
+                {
+                    "code": "migration_value_conflict",
+                    "key": key_analysis.key,
+                    "owner": key_analysis.owner,
+                    "comparison": "conflict",
+                }
+            )
+            continue
+        declarations_by_wrong_source: dict[str, list[Declaration]] = {}
+        for declaration in wrong_declarations:
+            declarations_by_wrong_source.setdefault(declaration.source, []).append(declaration)
+        for source, declarations in sorted(declarations_by_wrong_source.items()):
+            snapshot = snapshots.get(_source_role(source))
+            if snapshot is None or _source_role(source) not in {
+                MANAGED_SOURCE,
+                SECRET_SOURCE,
+                POSTGRES_SOURCE,
+            }:
+                blockers.append(
+                    {
+                        "code": "migration_action_source_forbidden",
+                        "key": key_analysis.key,
+                        "source": source,
+                        "owner": key_analysis.owner,
+                    }
+                )
+                continue
+            line_segments = snapshot.payload.splitlines(keepends=True)
+            if any(
+                declaration.line_number < 1 or declaration.line_number > len(line_segments)
+                for declaration in declarations
+            ):
+                blockers.append(
+                    {
+                        "code": "migration_snapshot_binding_failed",
+                        "key": key_analysis.key,
+                        "source": source,
+                    }
+                )
+                continue
+            actions.append(
+                MigrationAction(
+                    key=key_analysis.key,
+                    source=source,
+                    owner=key_analysis.owner,
+                    comparison="equal",
+                    bindings=tuple(
+                        RemovalBinding(
+                            line_number=declaration.line_number,
+                            key=declaration.key,
+                            line_digest=hashlib.sha256(
+                                line_segments[declaration.line_number - 1]
+                            ).hexdigest(),
+                        )
+                        for declaration in declarations
+                    ),
+                )
+            )
+    return MigrationPlan(
+        analysis=analysis,
+        actions=tuple(sorted(actions, key=lambda action: (action.key, action.source))),
+        blockers=tuple(blockers),
+        snapshots=tuple(snapshots.values()),
+    )
+
+
+def _add_source_path_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--compose", type=Path, required=True)
+    parser.add_argument("--managed-env", type=Path, required=True)
+    parser.add_argument("--secret-env", type=Path, required=True)
+    parser.add_argument("--postgres-env", type=Path, required=True)
+    parser.add_argument("--json", action="store_true")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     check_parser = subparsers.add_parser("check", help="Check runtime env ownership without changing files.")
-    check_parser.add_argument("--compose", type=Path, required=True)
-    check_parser.add_argument("--managed-env", type=Path, required=True)
-    check_parser.add_argument("--secret-env", type=Path, required=True)
-    check_parser.add_argument("--postgres-env", type=Path, required=True)
-    check_parser.add_argument("--json", action="store_true")
+    _add_source_path_arguments(check_parser)
+    migrate_parser = subparsers.add_parser(
+        "migrate",
+        help="Plan runtime env ownership cleanup without changing files.",
+    )
+    _add_source_path_arguments(migrate_parser)
+    migrate_parser.add_argument("--apply", action="store_true")
+    migrate_parser.add_argument("--confirm")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    if args.command != "check":
-        return 2
-    report = check_runtime_env_ownership(
-        compose_path=args.compose,
-        managed_env_path=args.managed_env,
-        secret_env_path=args.secret_env,
-        postgres_env_path=args.postgres_env,
+    source_paths = {
+        "compose_path": args.compose,
+        "managed_env_path": args.managed_env,
+        "secret_env_path": args.secret_env,
+        "postgres_env_path": args.postgres_env,
+    }
+    report = (
+        check_runtime_env_ownership(**source_paths)
+        if args.command == "check"
+        else migrate_runtime_env_ownership(
+            **source_paths,
+            apply=args.apply,
+            confirm=args.confirm,
+        )
     )
     if args.json:
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))
