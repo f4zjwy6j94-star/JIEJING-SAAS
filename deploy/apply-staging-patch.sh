@@ -6,6 +6,7 @@ set -euo pipefail
 
 APP_DIR="${JIEJING_APP_DIR:-/opt/jiejing-staging/app}"
 PATCH_DIR="${1:-}"
+TRUSTED_RUNTIME_ENV_GUARD="${JIEJING_TRUSTED_RUNTIME_ENV_GUARD:-/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py}"
 
 if [[ -z "$PATCH_DIR" ]]; then
   echo "Usage: bash deploy/apply-staging-patch.sh /path/to/extracted/patch" >&2
@@ -13,14 +14,17 @@ if [[ -z "$PATCH_DIR" ]]; then
 fi
 
 cd "$APP_DIR"
+APP_DIR="$(pwd -P)"
 PATCH_DIR="$(cd "$PATCH_DIR" && pwd)"
 BACKUP_DIR="$APP_DIR/output/staging-patch-backups/$(date +%Y%m%d-%H%M%S)"
 
 FILES=(
+  ".gitattributes"
   "AGENTS.md"
   "Dockerfile.saas"
   "requirements.saas.txt"
   "deploy/apply-staging-patch.sh"
+  "deploy/bootstrap.public-staging.ubuntu.sh"
   "deploy/staging-vault-init-unseal.sh"
   "deploy/github-actions/jiejing-runner-doctor.sh"
   "deploy/github-actions/jiejing-staging-deploy.sh"
@@ -29,6 +33,7 @@ FILES=(
   "deploy/docker-compose.public-staging.yml"
   "deploy/docker-compose.public-https-staging.yml"
   "deploy/docker-compose.staging-infra.yml"
+  "deploy/jiejing-saas.postgres-localqueue.env.example"
   "deploy/nginx.public-staging.conf"
   "deploy/Caddyfile.public-staging"
   "deploy/Caddyfile.public-staging.systemd"
@@ -40,6 +45,7 @@ FILES=(
   "deploy/jiejing-saas.infra.env.example"
   "deploy/jiejing-saas.tencent-managed.env.example"
   "deploy/tencentcloud-install-jiejing-ssh-key.sh"
+  "deploy/tencentcloud-public-staging-checklist.md"
   "docs/JIEJING_INDEPENDENT_SAAS_DEPLOYMENT_RUNBOOK.md"
   "docs/JIEJING_COMMERCIAL_LAUNCH_RUNBOOK_20260526.md"
   "docs/JIEJING_DOMAIN_PENDING_PURCHASE_PREP_20260618.md"
@@ -63,6 +69,8 @@ FILES=(
   "docs/superpowers/specs/2026-06-19-jiejing-publish-preflight-resolution-design.md"
   "docs/superpowers/specs/2026-08-03-real-merchant-feedback-closure-design.md"
   "docs/superpowers/plans/2026-08-03-real-merchant-feedback-closure-implementation-plan.md"
+  "docs/superpowers/specs/2026-08-04-runtime-env-single-source-and-overlap-guard-design.md"
+  "docs/superpowers/plans/2026-08-04-runtime-env-overlap-guard-implementation-plan.md"
   "favicon.ico"
   "index.html"
   "app.html"
@@ -191,6 +199,7 @@ FILES=(
   "tools/jiejing_current_state_guard.py"
   "tools/jiejing_external_launch_blocker_gate.py"
   "tools/jiejing_configure_tencent_runtime_env.py"
+  "tools/jiejing_runtime_env_overlap_guard.py"
   "tools/jiejing_cos_backup_probe.py"
   "tools/jiejing_a_class_unattended_gate.py"
   "tools/jiejing_b_class_production_gate.py"
@@ -208,6 +217,8 @@ FILES=(
   "tools/test_jiejing_merchant_onboarding_state.py"
   "tools/test_jiejing_merchant_onboarding_frontend.py"
   "tools/test_jiejing_configure_tencent_runtime_env.py"
+  "tools/test_jiejing_runtime_env_overlap_guard.py"
+  "tools/test_jiejing_runtime_env_public_contract.py"
   "tools/test_jiejing_cos_backup_probe.py"
   "tools/test_jiejing_frontend_staging_config.py"
   "tools/test_jiejing_media_nav_and_state_restore.py"
@@ -325,6 +336,89 @@ for rel in "${FILES[@]}"; do
     exit 4
   fi
 done
+
+candidate_compose="$PATCH_DIR/deploy/docker-compose.public-https-staging.yml"
+if [[ ! -f "$candidate_compose" ]]; then
+  candidate_compose="$PATCH_DIR/deploy/docker-compose.public-staging.yml"
+fi
+runtime_compose="$APP_DIR/deploy/$(basename -- "$candidate_compose")"
+deploy_root="$(cd "$APP_DIR/.." && pwd -P)"
+private_dir="$deploy_root/private"
+cost_saver_override=""
+
+trusted_root_owned_path_chain_is_safe() {
+  local path="$1"
+  local resolved current metadata owner mode
+  case "$path" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  [[ -f "$path" && ! -L "$path" ]] || return 1
+  resolved="$(readlink -f -- "$path" 2>/dev/null || true)"
+  [[ -n "$resolved" && "$resolved" == "$path" ]] || return 1
+  metadata="$(stat -c '%u %a' -- "$path" 2>/dev/null || true)"
+  read -r owner mode <<<"$metadata"
+  [[ "$owner" == "0" && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+  (( (8#$mode & 0022) == 0 )) || return 1
+
+  current="$(dirname -- "$path")"
+  while :; do
+    [[ -d "$current" && ! -L "$current" ]] || return 1
+    metadata="$(stat -c '%u %a' -- "$current" 2>/dev/null || true)"
+    read -r owner mode <<<"$metadata"
+    [[ "$owner" == "0" && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (( (8#$mode & 0022) == 0 )) || return 1
+    [[ "$current" == "/" ]] && break
+    current="$(dirname -- "$current")"
+  done
+}
+
+if ! trusted_root_owned_path_chain_is_safe "$TRUSTED_RUNTIME_ENV_GUARD"; then
+  echo "REFUSE_UNTRUSTED_RUNTIME_ENV_GUARD=1" >&2
+  exit 7
+fi
+trusted_guard_resolved="$(readlink -f -- "$TRUSTED_RUNTIME_ENV_GUARD" 2>/dev/null || true)"
+[[ "$trusted_guard_resolved" == "$TRUSTED_RUNTIME_ENV_GUARD" ]] || {
+  echo "REFUSE_UNTRUSTED_RUNTIME_ENV_GUARD=1" >&2
+  exit 7
+}
+
+if [[ "${JIEJING_USE_COST_SAVER_OVERRIDE:-false}" == "true" ]]; then
+  cost_saver_override="${JIEJING_COST_SAVER_COMPOSE_OVERRIDE:-$private_dir/docker-compose.cost-saver-local.yml}"
+  if [[ "$cost_saver_override" != "$private_dir/docker-compose.cost-saver-local.yml" ]] || \
+    ! trusted_root_owned_path_chain_is_safe "$cost_saver_override"; then
+    echo "REFUSE_UNTRUSTED_COST_SAVER_OVERRIDE=1" >&2
+    exit 8
+  fi
+fi
+
+run_runtime_env_guard() {
+  local candidate_compose_path="$1"
+  local runtime_compose_path="$2"
+  local override_args=()
+  if [[ -n "$cost_saver_override" ]]; then
+    override_args+=(--compose-override "$cost_saver_override")
+  fi
+  if [[ ! -f "$candidate_compose_path" ]]; then
+    echo "REFUSE_RUNTIME_ENV_OWNERSHIP_GUARD=1" >&2
+    exit 9
+  fi
+  if ! sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" check \
+    --compose "$candidate_compose_path" \
+    --compose-runtime-path "$runtime_compose_path" \
+    --managed-env "$private_dir/tencent-managed.env" \
+    --secret-env "$private_dir/jiejing-saas.staging-oauth.env" \
+    --postgres-env "$private_dir/postgres-localqueue.env" \
+    --required-runtime-service jiejing-saas \
+    --required-runtime-service jiejing-worker \
+    "${override_args[@]}"; then
+    echo "REFUSE_RUNTIME_ENV_OWNERSHIP_GUARD=1" >&2
+    exit 9
+  fi
+  echo "RUNTIME_ENV_GUARD_STATUS=passed"
+}
+
+run_runtime_env_guard "$candidate_compose" "$runtime_compose"
 
 mkdir -p "$BACKUP_DIR"
 for rel in "${FILES[@]}"; do
@@ -447,6 +541,7 @@ python3 -m py_compile \
   tools/jiejing_current_state_guard.py \
   tools/jiejing_external_launch_blocker_gate.py \
   tools/jiejing_configure_tencent_runtime_env.py \
+  tools/jiejing_runtime_env_overlap_guard.py \
   tools/jiejing_cos_backup_probe.py \
   tools/jiejing_a_class_unattended_gate.py \
   tools/jiejing_b_class_production_gate.py \
@@ -462,6 +557,8 @@ python3 -m py_compile \
   tools/test_jiejing_external_launch_blocker_gate.py \
   tools/test_jiejing_historical_ebay_readiness.py \
   tools/test_jiejing_configure_tencent_runtime_env.py \
+  tools/test_jiejing_runtime_env_overlap_guard.py \
+  tools/test_jiejing_runtime_env_public_contract.py \
   tools/test_jiejing_cos_backup_probe.py \
   tools/test_jiejing_frontend_staging_config.py \
   tools/test_jiejing_media_nav_and_state_restore.py \
@@ -565,9 +662,8 @@ if [[ ! -f "$COMPOSE_FILE" ]]; then
   COMPOSE_FILE="deploy/docker-compose.public-staging.yml"
 fi
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
-COST_SAVER_OVERRIDE="${JIEJING_COST_SAVER_COMPOSE_OVERRIDE:-$APP_DIR/../private/docker-compose.cost-saver-local.yml}"
-if [[ "${JIEJING_USE_COST_SAVER_OVERRIDE:-false}" == "true" && -f "$COST_SAVER_OVERRIDE" ]]; then
-  COMPOSE_ARGS+=(-f "$COST_SAVER_OVERRIDE")
+if [[ -n "$cost_saver_override" ]]; then
+  COMPOSE_ARGS+=(-f "$cost_saver_override")
 fi
 
 docker compose "${COMPOSE_ARGS[@]}" build --no-cache jiejing-saas jiejing-worker

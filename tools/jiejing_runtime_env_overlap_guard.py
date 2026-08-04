@@ -6,9 +6,10 @@ checker can validate exact Compose safety clamps; they are never copied into a
 report, exception, or diagnostic message.
 
 Compose ``env_file`` references are resolved relative to the Compose file and
-must identify the exact files supplied by the three CLI path arguments.  A
-candidate/pre-copy caller must stage those audited files at the referenced
-paths; same-basename files elsewhere are intentionally not accepted.
+must identify the exact runtime files supplied by the three runtime-identity
+arguments.  Candidate/pre-copy checks may separately supply public template
+files as the data sources, without reading the private runtime files.  A
+same-basename file is intentionally not accepted as a runtime identity.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ MANAGED_SOURCE = "tencent-managed.env"
 SECRET_SOURCE = "jiejing-saas.staging-oauth.env"
 POSTGRES_SOURCE = "postgres-localqueue.env"
 COMPOSE_SOURCE = "compose"
+COMPOSE_OVERRIDE_SOURCE = "compose-override"
 
 KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 COMPOSE_MAPPING_PATTERN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):(?:\s*(.*?))?\s*$")
@@ -336,6 +338,7 @@ class MigrationPlan:
         default=RUNTIME_SERVICE_NAMES,
         repr=False,
     )
+    compose_override_paths: tuple[Path, ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True)
@@ -665,7 +668,12 @@ def _parse_env_file(path: Path, source: str) -> tuple[list[Declaration], list[di
     return _parse_env_payload(payload, source)
 
 
-def _parse_compose(path: Path, *, payload: bytes | None = None) -> ComposeParseResult:
+def _parse_compose(
+    path: Path,
+    *,
+    payload: bytes | None = None,
+    runtime_path: Path | None = None,
+) -> ComposeParseResult:
     path_blocker = _input_path_blocker(path, COMPOSE_SOURCE)
     if path_blocker is not None:
         return ComposeParseResult((), (path_blocker,), 0, (), (), ())
@@ -969,7 +977,10 @@ def _parse_compose(path: Path, *, payload: bytes | None = None) -> ComposeParseR
         if env_file_indent is not None and indent > env_file_indent:
             env_file_entry = re.fullmatch(r"-\s*(.+)", stripped)
             resolved_source = (
-                _normalize_compose_env_file_source(env_file_entry.group(1), compose_parent=path.parent)
+                _normalize_compose_env_file_source(
+                    env_file_entry.group(1),
+                    compose_parent=(runtime_path if runtime_path is not None else path).parent,
+                )
                 if env_file_entry is not None
                 else None
             )
@@ -1112,6 +1123,205 @@ def _parse_compose(path: Path, *, payload: bytes | None = None) -> ComposeParseR
     )
 
 
+def _resource_override_scalar_is_safe(key: str, raw: str, *, bucket: str) -> bool:
+    scalar = _strip_yaml_comment(raw).strip()
+    if not scalar or scalar.startswith(("[", "{", "|", ">", "&", "*", "!")):
+        return False
+    if scalar[0] in {'"', "'"}:
+        if len(scalar) < 2 or scalar[-1] != scalar[0]:
+            return False
+        scalar = scalar[1:-1]
+    elif '"' in scalar or "'" in scalar:
+        return False
+
+    if key == "cpus":
+        if re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]{1,3})?", scalar) is None:
+            return False
+        value = float(scalar)
+        return 0.001 <= value <= 64.0
+    if key == "pids":
+        return bucket == "limits" and bool(re.fullmatch(r"[1-9][0-9]{0,6}", scalar)) and int(scalar) <= 1_048_576
+    if key == "memory":
+        match = re.fullmatch(r"([1-9][0-9]*)([kmgt]i?b?|b)?", scalar, flags=re.IGNORECASE)
+        if match is None:
+            return False
+        unit = (match.group(2) or "b").casefold()
+        multipliers = {
+            "b": 1,
+            "k": 1_000,
+            "kb": 1_000,
+            "ki": 1_024,
+            "kib": 1_024,
+            "m": 1_000_000,
+            "mb": 1_000_000,
+            "mi": 1_048_576,
+            "mib": 1_048_576,
+            "g": 1_000_000_000,
+            "gb": 1_000_000_000,
+            "gi": 1_073_741_824,
+            "gib": 1_073_741_824,
+            "t": 1_000_000_000_000,
+            "tb": 1_000_000_000_000,
+            "ti": 1_099_511_627_776,
+            "tib": 1_099_511_627_776,
+        }
+        byte_count = int(match.group(1)) * multipliers[unit]
+        return 16_000_000 <= byte_count <= 1_099_511_627_776
+    return False
+
+
+def _parse_compose_override(path: Path, *, occurrence: int) -> list[dict[str, object]]:
+    """Accept only a narrow, literal deploy.resources cost-saver overlay."""
+
+    source = f"{COMPOSE_OVERRIDE_SOURCE}:{occurrence}"
+    snapshot, snapshot_blocker = _capture_source_snapshot(path, source)
+    if snapshot_blocker is not None:
+        return [snapshot_blocker]
+    if snapshot is None:
+        return [{"code": "source_unreadable", "source": source}]
+    try:
+        lines = snapshot.payload.decode("utf-8").splitlines()
+    except UnicodeError:
+        return [{"code": "source_unreadable", "source": source}]
+
+    blockers: list[dict[str, object]] = []
+    meaningful: list[tuple[int, int, str]] = []
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        leading = line[: len(line) - len(line.lstrip())]
+        stripped = _strip_yaml_comment(line)
+        if "\t" in leading or re.search(r"(?:^|[\s:{\[,])(?:<<\s*:|[&*!][^\s]*)", stripped):
+            blockers.append({"code": "ambiguous_compose_override", "source": source, "line": line_number})
+            continue
+        meaningful.append((line_number, len(leading), stripped))
+
+    services_lines = [line_number for line_number, indent, text in meaningful if indent == 0 and text == "services:"]
+    if len(services_lines) != 1:
+        blockers.append(
+            {
+                "code": "invalid_compose_override_services",
+                "source": source,
+                "count": len(services_lines),
+            }
+        )
+
+    current_service: str | None = None
+    current_bucket: str | None = None
+    current_deploy = False
+    current_resources = False
+    seen_services: set[str] = set()
+    seen_paths: set[tuple[str, ...]] = set()
+    resource_scalar_count = 0
+    for line_number, indent, text in meaningful:
+        if indent == 0:
+            if text != "services:":
+                blockers.append(
+                    {
+                        "code": "unsafe_compose_override",
+                        "source": source,
+                        "reason": "top_level_key_not_allowed",
+                        "line": line_number,
+                    }
+                )
+            continue
+
+        mapping = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*?)\s*", text)
+        if mapping is None:
+            blockers.append({"code": "ambiguous_compose_override", "source": source, "line": line_number})
+            continue
+        key, tail = mapping.groups()
+
+        if indent == 2:
+            current_service = key if key in RUNTIME_SERVICE_NAMES else None
+            current_bucket = None
+            current_deploy = False
+            current_resources = False
+            if key not in RUNTIME_SERVICE_NAMES or tail:
+                blockers.append(
+                    {
+                        "code": "ambiguous_compose_override_service" if key in RUNTIME_SERVICE_NAMES else "unsafe_compose_override",
+                        "source": source,
+                        "reason": "runtime_service_declaration_required",
+                        "line": line_number,
+                    }
+                )
+                continue
+            if key in seen_services:
+                blockers.append({"code": "duplicate_compose_override_service", "source": source, "service": key})
+            seen_services.add(key)
+            continue
+
+        if current_service is None:
+            blockers.append({"code": "ambiguous_compose_override", "source": source, "line": line_number})
+            continue
+
+        if indent <= 4:
+            current_deploy = False
+            current_resources = False
+            current_bucket = None
+        elif indent <= 6:
+            current_resources = False
+            current_bucket = None
+        elif indent <= 8:
+            current_bucket = None
+
+        expected: tuple[int, str, tuple[str, ...]] | None = None
+        if indent == 4 and key == "deploy" and not tail:
+            current_deploy = True
+            expected = (4, key, (current_service, "deploy"))
+        elif indent == 6 and current_deploy and key == "resources" and not tail:
+            current_resources = True
+            expected = (6, key, (current_service, "deploy", "resources"))
+        elif indent == 8 and current_resources and key in {"limits", "reservations"} and not tail:
+            current_bucket = key
+            expected = (8, key, (current_service, "deploy", "resources", key))
+        elif indent == 10 and current_bucket is not None and key in {"cpus", "memory", "pids"}:
+            expected = (10, key, (current_service, "deploy", "resources", current_bucket, key))
+            if _resource_override_scalar_is_safe(key, tail, bucket=current_bucket):
+                resource_scalar_count += 1
+            else:
+                blockers.append(
+                    {
+                        "code": "unsafe_compose_override",
+                        "source": source,
+                        "service": current_service,
+                        "reason": "invalid_resource_scalar",
+                        "line": line_number,
+                    }
+                )
+        else:
+            blockers.append(
+                {
+                    "code": "unsafe_compose_override",
+                    "source": source,
+                    "service": current_service,
+                    "reason": "resource_key_not_allowed",
+                    "line": line_number,
+                }
+            )
+            continue
+
+        path_key = expected[2]
+        if path_key in seen_paths:
+            blockers.append(
+                {
+                    "code": "ambiguous_compose_override",
+                    "source": source,
+                    "service": current_service,
+                    "reason": "duplicate_resource_key",
+                    "line": line_number,
+                }
+            )
+        seen_paths.add(path_key)
+
+    if not seen_services:
+        blockers.append({"code": "invalid_compose_override_services", "source": source, "count": 0})
+    if resource_scalar_count == 0:
+        blockers.append({"code": "invalid_compose_override_resources", "source": source, "count": 0})
+    return blockers
+
+
 def _owner_for_key(key: str) -> str | None:
     if key in COMPOSE_REQUIRED_VALUES:
         return COMPOSE_SOURCE
@@ -1186,6 +1396,11 @@ def analyze_runtime_env_ownership(
     managed_env_path: Path,
     secret_env_path: Path,
     postgres_env_path: Path,
+    compose_runtime_path: Path | None = None,
+    managed_runtime_path: Path | None = None,
+    secret_runtime_path: Path | None = None,
+    postgres_runtime_path: Path | None = None,
+    compose_override_paths: Sequence[Path] = (),
     required_runtime_services: Sequence[str] | None = None,
     _source_snapshots: Mapping[str, SourceSnapshot] | None = None,
     _snapshot_blockers: Sequence[dict[str, object]] = (),
@@ -1214,10 +1429,13 @@ def analyze_runtime_env_ownership(
         else _parse_compose(
             compose_path,
             payload=compose_snapshot.payload if compose_snapshot is not None else None,
+            runtime_path=compose_runtime_path,
         )
     )
     declarations.extend(compose_result.declarations)
     blockers.extend(compose_result.blockers)
+    for occurrence, override_path in enumerate(compose_override_paths, start=1):
+        blockers.extend(_parse_compose_override(override_path, occurrence=occurrence))
 
     service_counts: dict[str, int] = {}
     for service_name, _service_occurrence in compose_result.service_occurrences:
@@ -1311,9 +1529,9 @@ def analyze_runtime_env_ownership(
             (env_file_block.service, env_file_block.service_occurrence), []
         ).append(env_file_block)
     expected_env_file_sources = (
-        ("managed", _normalized_path_identity(managed_env_path)),
-        ("secret", _normalized_path_identity(secret_env_path)),
-        ("postgres", _normalized_path_identity(postgres_env_path)),
+        ("managed", _normalized_path_identity(managed_runtime_path or managed_env_path)),
+        ("secret", _normalized_path_identity(secret_runtime_path or secret_env_path)),
+        ("postgres", _normalized_path_identity(postgres_runtime_path or postgres_env_path)),
     )
     expected_env_file_identities = tuple(identity for _role, identity in expected_env_file_sources)
     for service_name, service_occurrence in compose_result.service_occurrences:
@@ -1519,13 +1737,18 @@ def analyze_runtime_env_ownership(
 COMPOSE_STRUCTURE_BLOCKER_CODES = frozenset(
     {
         "ambiguous_compose_environment_entry_indent",
+        "ambiguous_compose_override",
+        "ambiguous_compose_override_service",
         "duplicate_compose_env_file_block",
         "duplicate_compose_env_file_source",
         "duplicate_compose_environment_block",
+        "duplicate_compose_override_service",
         "duplicate_compose_service",
         "duplicate_top_level_services",
         "invalid_compose_environment_syntax",
         "invalid_compose_indentation",
+        "invalid_compose_override_services",
+        "invalid_compose_override_resources",
         "invalid_compose_service_syntax",
         "missing_compose_service_declaration",
         "missing_compose_services_section",
@@ -1619,6 +1842,11 @@ def check_runtime_env_ownership(
     managed_env_path: Path,
     secret_env_path: Path,
     postgres_env_path: Path,
+    compose_runtime_path: Path | None = None,
+    managed_runtime_path: Path | None = None,
+    secret_runtime_path: Path | None = None,
+    postgres_runtime_path: Path | None = None,
+    compose_override_paths: Sequence[Path] = (),
     required_runtime_services: Sequence[str] | None = None,
 ) -> dict[str, object]:
     return _project_public_report(
@@ -1627,6 +1855,11 @@ def check_runtime_env_ownership(
             managed_env_path=managed_env_path,
             secret_env_path=secret_env_path,
             postgres_env_path=postgres_env_path,
+            compose_runtime_path=compose_runtime_path,
+            managed_runtime_path=managed_runtime_path,
+            secret_runtime_path=secret_runtime_path,
+            postgres_runtime_path=postgres_runtime_path,
+            compose_override_paths=compose_override_paths,
             required_runtime_services=required_runtime_services,
         )
     )
@@ -1638,6 +1871,7 @@ def plan_runtime_env_migration(
     managed_env_path: Path,
     secret_env_path: Path,
     postgres_env_path: Path,
+    compose_override_paths: Sequence[Path] = (),
     required_runtime_services: Sequence[str] | None = None,
 ) -> dict[str, object]:
     plan = _build_migration_plan(
@@ -1645,6 +1879,7 @@ def plan_runtime_env_migration(
         managed_env_path=managed_env_path,
         secret_env_path=secret_env_path,
         postgres_env_path=postgres_env_path,
+        compose_override_paths=compose_override_paths,
         required_runtime_services=required_runtime_services,
     )
     return _project_migration_report(plan, mode="dry_run", applied=False)
@@ -1698,6 +1933,7 @@ def migrate_runtime_env_ownership(
     managed_env_path: Path,
     secret_env_path: Path,
     postgres_env_path: Path,
+    compose_override_paths: Sequence[Path] = (),
     required_runtime_services: Sequence[str] | None = None,
     apply: bool = False,
     confirm: str | None = None,
@@ -1707,10 +1943,23 @@ def migrate_runtime_env_ownership(
         managed_env_path=managed_env_path,
         secret_env_path=secret_env_path,
         postgres_env_path=postgres_env_path,
+        compose_override_paths=compose_override_paths,
         required_runtime_services=required_runtime_services,
     )
     if not apply:
         return _project_migration_report(plan, mode="dry_run", applied=False)
+    if compose_override_paths:
+        return _project_migration_report(
+            plan,
+            mode="apply",
+            applied=False,
+            additional_blockers=(
+                {
+                    "code": "apply_with_compose_override_not_supported",
+                    "source": COMPOSE_OVERRIDE_SOURCE,
+                },
+            ),
+        )
     if confirm != MIGRATION_APPLY_CONFIRMATION:
         return _project_migration_report(
             plan,
@@ -2601,6 +2850,7 @@ def _apply_migration_plan_locked(
             managed_env_path=snapshots_by_source[MANAGED_SOURCE].path,
             secret_env_path=snapshots_by_source[SECRET_SOURCE].path,
             postgres_env_path=snapshots_by_source[POSTGRES_SOURCE].path,
+            compose_override_paths=plan.compose_override_paths,
             required_runtime_services=tuple(plan.required_runtime_services),
         )
         if validation.blockers or validation.actions:
@@ -2661,6 +2911,7 @@ def _build_migration_plan(
     managed_env_path: Path,
     secret_env_path: Path,
     postgres_env_path: Path,
+    compose_override_paths: Sequence[Path] = (),
     required_runtime_services: Sequence[str] | None = None,
 ) -> MigrationPlan:
     normalized_required_services = _normalize_required_runtime_services(required_runtime_services)
@@ -2675,6 +2926,7 @@ def _build_migration_plan(
         managed_env_path=managed_env_path,
         secret_env_path=secret_env_path,
         postgres_env_path=postgres_env_path,
+        compose_override_paths=compose_override_paths,
         required_runtime_services=tuple(normalized_required_services),
         _source_snapshots=snapshots,
         _snapshot_blockers=snapshot_blockers,
@@ -2825,6 +3077,7 @@ def _build_migration_plan(
         blockers=tuple(blockers),
         snapshots=tuple(snapshots.values()),
         required_runtime_services=normalized_required_services,
+        compose_override_paths=tuple(compose_override_paths),
     )
 
 
@@ -2833,6 +3086,12 @@ def _add_source_path_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--managed-env", type=Path, required=True)
     parser.add_argument("--secret-env", type=Path, required=True)
     parser.add_argument("--postgres-env", type=Path, required=True)
+    parser.add_argument(
+        "--compose-override",
+        type=Path,
+        action="append",
+        help="Read-only Compose override to validate. Repeat for multiple overrides.",
+    )
     parser.add_argument(
         "--required-runtime-service",
         action="append",
@@ -2850,6 +3109,17 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     check_parser = subparsers.add_parser("check", help="Check runtime env ownership without changing files.")
     _add_source_path_arguments(check_parser)
+    check_parser.add_argument(
+        "--compose-runtime-path",
+        type=Path,
+        help=(
+            "Future installed Compose path used only to resolve relative env_file references; "
+            "the candidate content is still read from --compose."
+        ),
+    )
+    check_parser.add_argument("--managed-runtime-path", type=Path)
+    check_parser.add_argument("--secret-runtime-path", type=Path)
+    check_parser.add_argument("--postgres-runtime-path", type=Path)
     migrate_parser = subparsers.add_parser(
         "migrate",
         help="Plan runtime env ownership cleanup without changing files.",
@@ -2867,10 +3137,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         "managed_env_path": args.managed_env,
         "secret_env_path": args.secret_env,
         "postgres_env_path": args.postgres_env,
+        "compose_override_paths": tuple(args.compose_override or ()),
         "required_runtime_services": args.required_runtime_service,
     }
     report = (
-        check_runtime_env_ownership(**source_paths)
+        check_runtime_env_ownership(
+            **source_paths,
+            compose_runtime_path=args.compose_runtime_path,
+            managed_runtime_path=args.managed_runtime_path,
+            secret_runtime_path=args.secret_runtime_path,
+            postgres_runtime_path=args.postgres_runtime_path,
+        )
         if args.command == "check"
         else migrate_runtime_env_ownership(
             **source_paths,

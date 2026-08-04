@@ -3341,6 +3341,261 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
                 )
                 self.assertNotIn(str(target_path), serialized)
 
+    def test_candidate_compose_can_be_checked_at_its_future_runtime_path(self) -> None:
+        self._write_legal_fixture()
+        candidate_dir = self.fixture_root / "candidate" / "deploy"
+        candidate_dir.mkdir(parents=True)
+        candidate_compose = candidate_dir / self.compose_path.name
+        candidate_compose.write_text(self.compose_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+        report = check_runtime_env_ownership(
+            compose_path=candidate_compose,
+            compose_runtime_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+        )
+
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertFalse(report["secret_exposed"])
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(TOOL),
+                "check",
+                "--compose",
+                str(candidate_compose),
+                "--compose-runtime-path",
+                str(self.compose_path),
+                "--managed-env",
+                str(self.managed_path),
+                "--secret-env",
+                str(self.secret_path),
+                "--postgres-env",
+                str(self.postgres_path),
+                "--required-runtime-service",
+                "jiejing-saas",
+                "--required-runtime-service",
+                "jiejing-worker",
+                "--json",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        self.assertNotIn(str(candidate_compose), completed.stdout + completed.stderr)
+        self.assertNotIn(str(self.compose_path), completed.stdout + completed.stderr)
+
+    def test_candidate_templates_can_be_read_without_touching_runtime_env_paths(self) -> None:
+        self._write_legal_fixture()
+        candidate_dir = self.fixture_root / "candidate-public-inputs"
+        candidate_dir.mkdir()
+        candidate_managed = candidate_dir / "managed.example"
+        candidate_secret = candidate_dir / "secret.example"
+        candidate_postgres = candidate_dir / "postgres.example"
+        candidate_managed.write_text(self.managed_path.read_text(encoding="utf-8"), encoding="utf-8")
+        candidate_secret.write_text(self.secret_path.read_text(encoding="utf-8"), encoding="utf-8")
+        candidate_postgres.write_text(self.postgres_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+        report = check_runtime_env_ownership(
+            compose_path=self.compose_path,
+            managed_env_path=candidate_managed,
+            secret_env_path=candidate_secret,
+            postgres_env_path=candidate_postgres,
+            managed_runtime_path=self.managed_path,
+            secret_runtime_path=self.secret_path,
+            postgres_runtime_path=self.postgres_path,
+        )
+
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resource_only_compose_override_is_allowed(self) -> None:
+        self._write_legal_fixture()
+        override_path = self.fixture_root / "docker-compose.cost-saver.yml"
+        override_path.write_text(
+            """services:
+  jiejing-saas:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 768M
+          pids: 256
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+  jiejing-worker:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+""",
+            encoding="utf-8",
+        )
+
+        report = check_runtime_env_ownership(
+            compose_path=self.compose_path,
+            compose_override_paths=(override_path,),
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+        )
+
+        self.assertTrue(report["ok"], report["blockers"])
+
+        second_override = self.fixture_root / "docker-compose.cost-saver-worker.yml"
+        second_override.write_text(
+            "services:\n  jiejing-worker:\n    deploy:\n      resources:\n        limits:\n          memory: 512M\n",
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(TOOL),
+                "check",
+                "--compose",
+                str(self.compose_path),
+                "--managed-env",
+                str(self.managed_path),
+                "--secret-env",
+                str(self.secret_path),
+                "--postgres-env",
+                str(self.postgres_path),
+                "--compose-override",
+                str(override_path),
+                "--compose-override",
+                str(second_override),
+                "--json",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+
+    def test_compose_override_cannot_change_runtime_env_or_safety_contract(self) -> None:
+        unsafe_cases = {
+            "environment": "    environment:\n      JIEJING_ENABLE_REAL_PLATFORM_WRITES: true\n",
+            "env_file": "    env_file:\n      - /tmp/untrusted.env\n",
+            "safety_key": "    JIEJING_BILLING_PROVIDER: stripe\n",
+            "extends": "    extends:\n      service: other\n",
+            "anchor": "    deploy: &runtime_settings\n      resources: {}\n",
+            "image": "    image: attacker/example:latest\n",
+            "build": "    build: /tmp/untrusted\n",
+            "command": "    command: python /tmp/untrusted.py\n",
+            "entrypoint": "    entrypoint: /tmp/untrusted\n",
+            "privileged": "    privileged: true\n",
+            "cap_add": "    cap_add:\n      - SYS_ADMIN\n",
+            "security_opt": "    security_opt:\n      - seccomp=unconfined\n",
+            "volumes": "    volumes:\n      - /:/host\n",
+            "devices": "    devices:\n      - /dev:/dev\n",
+            "network_mode": "    network_mode: host\n",
+            "ports": "    ports:\n      - 9999:9999\n",
+            "restart": "    restart: always\n",
+            "profiles": "    profiles:\n      - unsafe\n",
+            "direct_resource_key": "    mem_limit: 512M\n",
+        }
+        for case, service_body in unsafe_cases.items():
+            with self.subTest(case=case):
+                self._write_legal_fixture()
+                override_path = self.fixture_root / f"override-{case}.yml"
+                override_path.write_text(
+                    "services:\n  jiejing-saas:\n" + service_body,
+                    encoding="utf-8",
+                )
+
+                report = check_runtime_env_ownership(
+                    compose_path=self.compose_path,
+                    compose_override_paths=(override_path,),
+                    managed_env_path=self.managed_path,
+                    secret_env_path=self.secret_path,
+                    postgres_env_path=self.postgres_path,
+                )
+
+                self.assertFalse(report["ok"])
+                self.assertTrue(
+                    any(
+                        blocker.get("code") in {"unsafe_compose_override", "ambiguous_compose_override"}
+                        for blocker in report["blockers"]
+                    ),
+                    report["blockers"],
+                )
+                self.assertFalse(report["secret_exposed"])
+
+        top_level_include = self.fixture_root / "override-top-level-include.yml"
+        top_level_include.write_text(
+            "include:\n  - untrusted-runtime.yml\nservices:\n  jiejing-saas:\n    mem_limit: 768M\n",
+            encoding="utf-8",
+        )
+        report = check_runtime_env_ownership(
+            compose_path=self.compose_path,
+            compose_override_paths=(top_level_include,),
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+        )
+        self.assertFalse(report["ok"])
+        self.assertTrue(
+            any(blocker.get("code") == "ambiguous_compose_override" for blocker in report["blockers"]),
+            report["blockers"],
+        )
+
+        for top_level_key in ("name", "version", "volumes", "networks", "configs", "secrets"):
+            with self.subTest(top_level_key=top_level_key):
+                top_level_override = self.fixture_root / f"override-top-level-{top_level_key}.yml"
+                top_level_override.write_text(
+                    f"services:\n  jiejing-saas:\n    deploy:\n      resources:\n        limits:\n          memory: 512M\n{top_level_key}: {{}}\n",
+                    encoding="utf-8",
+                )
+                report = check_runtime_env_ownership(
+                    compose_path=self.compose_path,
+                    compose_override_paths=(top_level_override,),
+                    managed_env_path=self.managed_path,
+                    secret_env_path=self.secret_path,
+                    postgres_env_path=self.postgres_path,
+                )
+                self.assertFalse(report["ok"], top_level_key)
+
+        unknown_service = self.fixture_root / "override-unknown-service.yml"
+        unknown_service.write_text(
+            "services:\n  attacker-sidecar:\n    image: attacker/example:latest\n",
+            encoding="utf-8",
+        )
+        report = check_runtime_env_ownership(
+            compose_path=self.compose_path,
+            compose_override_paths=(unknown_service,),
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+        )
+        self.assertFalse(report["ok"], report["blockers"])
+
+    def test_compose_override_resource_scalars_are_bounded_and_literal(self) -> None:
+        unsafe_values = ("0", "-1", "65", "1e3", "${CPU_LIMIT}", "*cpu", "[1]", "{}", "1:2")
+        for value in unsafe_values:
+            with self.subTest(value=value):
+                self._write_legal_fixture()
+                override_path = self.fixture_root / "override-unsafe-scalar.yml"
+                override_path.write_text(
+                    "services:\n  jiejing-saas:\n    deploy:\n      resources:\n        limits:\n"
+                    f"          cpus: {value}\n",
+                    encoding="utf-8",
+                )
+                report = check_runtime_env_ownership(
+                    compose_path=self.compose_path,
+                    compose_override_paths=(override_path,),
+                    managed_env_path=self.managed_path,
+                    secret_env_path=self.secret_path,
+                    postgres_env_path=self.postgres_path,
+                )
+                self.assertFalse(report["ok"], value)
+
 
 def _all_json_keys(item: object) -> set[str]:
     if isinstance(item, dict):

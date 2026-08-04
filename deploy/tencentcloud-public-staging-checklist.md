@@ -102,24 +102,49 @@ postgres-localqueue.env: PostgreSQL and queue connection URLs
 static configuration, not secret-file values. Keep all three real files under
 `/opt/jiejing-staging/private/`; `deploy/` contains examples only.
 
-4. Before any build, copy or container operation, run the ownership check and
-   migration dry-run. Neither command changes private files.
+4. Before any build, copy or container operation, use the separately reviewed,
+   root-controlled guard at the fixed path below. The app bundle, candidate
+   checkout and deploy scripts must never auto-install or replace it. The file
+   and all of its parent path components must not be symlinks. The file and
+   every parent directory through `/` must be owned by uid 0 and not
+   group/world writable. Bootstrap also requires this preinstalled guard and
+   never copies it from the candidate bundle. A candidate source update is
+   only input to a later, separately reviewed root-controlled rollout.
+
+   Run the ownership check and migration dry-run with that trusted guard.
+   Neither command changes private files.
+   The audited flow remains `jiejing_runtime_env_overlap_guard.py check` followed
+   by `jiejing_runtime_env_overlap_guard.py migrate`; only the separately
+   provisioned trusted copy may execute these commands with private env access.
 
 ```bash
 cd /opt/jiejing-staging/app
-sudo -n python3 tools/jiejing_runtime_env_overlap_guard.py check \
+TRUSTED_RUNTIME_ENV_GUARD=/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py
+sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" check \
   --compose deploy/docker-compose.public-staging.yml \
   --managed-env /opt/jiejing-staging/private/tencent-managed.env \
   --secret-env /opt/jiejing-staging/private/jiejing-saas.staging-oauth.env \
   --postgres-env /opt/jiejing-staging/private/postgres-localqueue.env \
   --json
-sudo -n python3 tools/jiejing_runtime_env_overlap_guard.py migrate \
+sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" migrate \
   --compose deploy/docker-compose.public-staging.yml \
   --managed-env /opt/jiejing-staging/private/tencent-managed.env \
   --secret-env /opt/jiejing-staging/private/jiejing-saas.staging-oauth.env \
   --postgres-env /opt/jiejing-staging/private/postgres-localqueue.env \
   --json
 ```
+
+When `JIEJING_USE_COST_SAVER_OVERRIDE=true`, the only accepted file is
+`/opt/jiejing-staging/private/docker-compose.cost-saver-local.yml`. Provision it
+as a root-owned, non-group/world-writable, resource-only Compose override. The
+only accepted grammar is `services` with `jiejing-saas` / `jiejing-worker`, then
+literal bounded `deploy.resources.limits` / `reservations` values for `cpus`,
+`memory`, and limits-only `pids`. Existing environment-switching cost-saver
+files are intentionally rejected and require a separate reviewed replacement.
+Unknown keys or services, environment data, inline collections, interpolation,
+includes, anchors, aliases or merges all fail closed. Add `--compose-override`
+with that exact path to the trusted guard check; never use
+`docker compose config` because it can render private environment values.
 
 5. Start public staging only after both commands pass.
 

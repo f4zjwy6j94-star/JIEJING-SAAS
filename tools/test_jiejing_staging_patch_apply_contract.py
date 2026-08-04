@@ -14,6 +14,7 @@ VAULT_INIT = ROOT / "deploy" / "staging-vault-init-unseal.sh"
 HTTPS_COMPOSE = ROOT / "deploy" / "docker-compose.public-https-staging.yml"
 HTTP_COMPOSE = ROOT / "deploy" / "docker-compose.public-staging.yml"
 PRECLOUD_GATE = ROOT / "tools" / "jiejing_precloud_deployment_gate.py"
+GITATTRIBUTES = ROOT / ".gitattributes"
 
 
 def fail(message: str) -> int:
@@ -27,15 +28,18 @@ def main() -> int:
     bundle = BUNDLE.read_text(encoding="utf-8") if BUNDLE.exists() else ""
     vault_init = VAULT_INIT.read_text(encoding="utf-8") if VAULT_INIT.exists() else ""
     precloud_gate = PRECLOUD_GATE.read_text(encoding="utf-8") if PRECLOUD_GATE.exists() else ""
+    gitattributes = GITATTRIBUTES.read_text(encoding="utf-8") if GITATTRIBUTES.exists() else ""
     compose_files = [
         HTTPS_COMPOSE.read_text(encoding="utf-8") if HTTPS_COMPOSE.exists() else "",
         HTTP_COMPOSE.read_text(encoding="utf-8") if HTTP_COMPOSE.exists() else "",
     ]
     required = [
         "FILES=(",
+        ".gitattributes",
         "AGENTS.md",
         "Dockerfile.saas",
         "requirements.saas.txt",
+        "deploy/bootstrap.public-staging.ubuntu.sh",
         "deploy/staging-vault-init-unseal.sh",
         "deploy/github-actions/jiejing-runner-doctor.sh",
         "deploy/github-actions/jiejing-staging-deploy.sh",
@@ -44,12 +48,14 @@ def main() -> int:
         "deploy/docker-compose.public-staging.yml",
         "deploy/docker-compose.public-https-staging.yml",
         "deploy/docker-compose.staging-infra.yml",
+        "deploy/jiejing-saas.postgres-localqueue.env.example",
         "deploy/nginx.public-staging.conf",
         "deploy/Caddyfile.public-staging.systemd",
         "deploy/Caddyfile.production",
         "deploy/jiejing-saas.production.env.example",
         "deploy/jiejing-saas.infra.env.example",
         "deploy/tencentcloud-install-jiejing-ssh-key.sh",
+        "deploy/tencentcloud-public-staging-checklist.md",
         "docs/JIEJING_INDEPENDENT_SAAS_DEPLOYMENT_RUNBOOK.md",
         "docs/JIEJING_COMMERCIAL_LAUNCH_RUNBOOK_20260526.md",
         "docs/JIEJING_DOMAIN_PENDING_PURCHASE_PREP_20260618.md",
@@ -66,6 +72,8 @@ def main() -> int:
         "docs/superpowers/specs/2026-06-19-jiejing-publish-preflight-resolution-design.md",
         "docs/superpowers/specs/2026-08-03-real-merchant-feedback-closure-design.md",
         "docs/superpowers/plans/2026-08-03-real-merchant-feedback-closure-implementation-plan.md",
+        "docs/superpowers/specs/2026-08-04-runtime-env-single-source-and-overlap-guard-design.md",
+        "docs/superpowers/plans/2026-08-04-runtime-env-overlap-guard-implementation-plan.md",
         "favicon.ico",
         "index.html",
         "app.html",
@@ -127,6 +135,7 @@ def main() -> int:
         "tools/jiejing_current_state_guard.py",
         "tools/jiejing_external_launch_blocker_gate.py",
         "tools/jiejing_configure_tencent_runtime_env.py",
+        "tools/jiejing_runtime_env_overlap_guard.py",
         "tools/jiejing_cos_backup_probe.py",
         "tools/jiejing_a_class_unattended_gate.py",
         "tools/jiejing_b_class_production_gate.py",
@@ -138,6 +147,8 @@ def main() -> int:
         "tools/test_jiejing_merchant_onboarding_frontend.py",
         "tools/test_jiejing_platform_model_readiness.py",
         "tools/test_jiejing_configure_tencent_runtime_env.py",
+        "tools/test_jiejing_runtime_env_overlap_guard.py",
+        "tools/test_jiejing_runtime_env_public_contract.py",
         "tools/test_jiejing_cos_backup_probe.py",
         "tools/test_jiejing_frontend_staging_config.py",
         "tools/test_jiejing_media_nav_and_state_restore.py",
@@ -232,9 +243,9 @@ def main() -> int:
         "tools/test_jiejing_merchant_byok_model_and_memory.py",
         "python3 -m py_compile",
         "COMPOSE_ARGS=(-f \"$COMPOSE_FILE\")",
-        "COST_SAVER_OVERRIDE=",
+        "cost_saver_override=",
         "JIEJING_USE_COST_SAVER_OVERRIDE",
-        "COMPOSE_ARGS+=(-f \"$COST_SAVER_OVERRIDE\")",
+        "COMPOSE_ARGS+=(-f \"$cost_saver_override\")",
         "docker compose \"${COMPOSE_ARGS[@]}\" build --no-cache jiejing-saas jiejing-worker",
         "docker volume create deploy_jiejing_public_staging_vault_data_v3",
         "api_health_ready=false",
@@ -258,6 +269,49 @@ def main() -> int:
     missing = [marker for marker in required if marker not in text]
     if missing:
         return fail("patch apply script missing markers: " + ",".join(missing))
+    if "*.sh text eol=lf" not in gitattributes:
+        return fail("shell scripts must be pinned to LF in .gitattributes")
+    for shell_script in (
+        SCRIPT,
+        ROOT / "deploy" / "github-actions" / "jiejing-staging-deploy.sh",
+        ROOT / "deploy" / "github-actions" / "jiejing-runner-doctor.sh",
+    ):
+        if b"\r" in shell_script.read_bytes():
+            return fail(f"shell script contains CR bytes: {shell_script.name}")
+    guard_call = text.index('run_runtime_env_guard "$candidate_compose" "$runtime_compose"')
+    first_backup = text.index('mkdir -p "$BACKUP_DIR"')
+    first_copy = text.index('cp "$APP_DIR/$rel" "$BACKUP_DIR/$rel"')
+    first_install = text.index('install -D -m 0644 "$PATCH_DIR/$rel" "$APP_DIR/$rel"')
+    first_docker = text.index('docker compose "${COMPOSE_ARGS[@]}" build')
+    if not guard_call < min(first_backup, first_copy, first_install, first_docker):
+        return fail("candidate runtime env guard must run before every patch mutation")
+    for marker in (
+        'TRUSTED_RUNTIME_ENV_GUARD="${JIEJING_TRUSTED_RUNTIME_ENV_GUARD:-/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py}"',
+        "REFUSE_UNTRUSTED_RUNTIME_ENV_GUARD=1",
+        "REFUSE_UNTRUSTED_COST_SAVER_OVERRIDE=1",
+        'trusted_guard_resolved="$(readlink -f -- "$TRUSTED_RUNTIME_ENV_GUARD"',
+        "stat -c '%u %a'",
+        '[[ -f "$path" && ! -L "$path" ]]',
+        '(( (8#$mode & 0022) == 0 ))',
+        'current="$(dirname -- "$path")"',
+        '[[ -d "$current" && ! -L "$current" ]]',
+        'private_dir="$deploy_root/private"',
+        '--managed-env "$private_dir/tencent-managed.env"',
+        '--secret-env "$private_dir/jiejing-saas.staging-oauth.env"',
+        '--postgres-env "$private_dir/postgres-localqueue.env"',
+        '--compose-runtime-path "$runtime_compose_path"',
+        '--required-runtime-service jiejing-saas',
+        '--required-runtime-service jiejing-worker',
+        '--compose-override "$cost_saver_override"',
+        "REFUSE_RUNTIME_ENV_OWNERSHIP_GUARD=1",
+        "RUNTIME_ENV_GUARD_STATUS=passed",
+    ):
+        if marker not in text:
+            return fail(f"patch apply runtime env guard missing marker: {marker}")
+    if "jiejing_runtime_env_overlap_guard.py\" migrate" in text:
+        return fail("patch apply must never migrate private env files automatically")
+    if '$PATCH_DIR/tools/jiejing_runtime_env_overlap_guard.py' in text:
+        return fail("patch apply must never execute a candidate runtime env guard")
     compiled_or_checked = {
         "jiejing_saas/product_feedback.py": 2,
         "tools/test_jiejing_product_feedback_closure.py": 2,
@@ -274,6 +328,8 @@ def main() -> int:
     for marker in [
         '("product_feedback_closure", [sys.executable, "tools/test_jiejing_product_feedback_closure.py"])',
         '("product_feedback_browser_smoke", ["node", "tools/codex_jiejing_product_feedback_smoke.js"])',
+        '("runtime_env_overlap_guard", [sys.executable, "tools/test_jiejing_runtime_env_overlap_guard.py"])',
+        '("runtime_env_public_contract", [sys.executable, "tools/test_jiejing_runtime_env_public_contract.py"])',
     ]:
         if marker not in precloud_gate:
             return fail(f"precloud gate missing product-feedback closure check: {marker}")

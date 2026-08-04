@@ -156,8 +156,13 @@ def main() -> int:
         "stat -c '%a'",
         "Refusing symlink private env directory",
         "Refusing symlink private env target",
-        "jiejing_runtime_env_overlap_guard.py\" check",
-        "jiejing_runtime_env_overlap_guard.py\" migrate",
+        'TRUSTED_RUNTIME_ENV_GUARD="${JIEJING_TRUSTED_RUNTIME_ENV_GUARD:-/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py}"',
+        'python3 "$TRUSTED_RUNTIME_ENV_GUARD" check',
+        'python3 "$TRUSTED_RUNTIME_ENV_GUARD" migrate',
+        "trusted_root_owned_path_chain_is_safe",
+        'current="$(dirname -- "$path")"',
+        '[[ -d "$current" && ! -L "$current" ]]',
+        "REFUSE_UNTRUSTED_RUNTIME_ENV_GUARD=1",
         "--managed-env",
         "--secret-env",
         "--postgres-env",
@@ -166,6 +171,12 @@ def main() -> int:
             return fail(f"bootstrap missing safe three-source validation marker: {marker}")
     if 'source "$PRIVATE_DIR' in bootstrap or 'cat "$PRIVATE_DIR' in bootstrap:
         return fail("bootstrap must never source or print private env files")
+    if '$APP_DIR/tools/jiejing_runtime_env_overlap_guard.py' in bootstrap:
+        return fail("bootstrap must never execute the candidate app guard")
+    trust_gate = bootstrap.index('if ! trusted_root_owned_path_chain_is_safe "$TRUSTED_RUNTIME_ENV_GUARD"')
+    first_bootstrap_side_effect = bootstrap.index("sudo apt-get update")
+    if not trust_gate < first_bootstrap_side_effect:
+        return fail("bootstrap must validate the preinstalled trusted guard before side effects")
     for marker in (
         "jiejing_runtime_env_overlap_guard.py check",
         "jiejing_runtime_env_overlap_guard.py migrate",

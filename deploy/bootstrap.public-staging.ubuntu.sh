@@ -18,6 +18,39 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 OWNER_UID="$(id -u)"
 OWNER_GID="$(id -g)"
+TRUSTED_RUNTIME_ENV_GUARD="${JIEJING_TRUSTED_RUNTIME_ENV_GUARD:-/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py}"
+
+trusted_root_owned_path_chain_is_safe() {
+  local path="$1"
+  local resolved current metadata owner mode
+  case "$path" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  [[ -f "$path" && ! -L "$path" ]] || return 1
+  resolved="$(readlink -f -- "$path" 2>/dev/null || true)"
+  [[ -n "$resolved" && "$resolved" == "$path" ]] || return 1
+  metadata="$(stat -c '%u %a' -- "$path" 2>/dev/null || true)"
+  read -r owner mode <<<"$metadata"
+  [[ "$owner" == "0" && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+  (( (8#$mode & 0022) == 0 )) || return 1
+
+  current="$(dirname -- "$path")"
+  while :; do
+    [[ -d "$current" && ! -L "$current" ]] || return 1
+    metadata="$(stat -c '%u %a' -- "$current" 2>/dev/null || true)"
+    read -r owner mode <<<"$metadata"
+    [[ "$owner" == "0" && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (( (8#$mode & 0022) == 0 )) || return 1
+    [[ "$current" == "/" ]] && break
+    current="$(dirname -- "$current")"
+  done
+}
+
+if ! trusted_root_owned_path_chain_is_safe "$TRUSTED_RUNTIME_ENV_GUARD"; then
+  echo "REFUSE_UNTRUSTED_RUNTIME_ENV_GUARD=1" >&2
+  exit 2
+fi
 
 sudo apt-get update
 sudo apt-get install -y ca-certificates curl gnupg lsb-release python3 unzip
@@ -73,24 +106,36 @@ install_private_env "jiejing-saas.staging-oauth.env.example" "jiejing-saas.stagi
 install_private_env "jiejing-saas.postgres-localqueue.env.example" "postgres-localqueue.env"
 
 run_runtime_env_guard() {
-  local guard="$APP_DIR/tools/jiejing_runtime_env_overlap_guard.py"
   local compose="$APP_DIR/deploy/docker-compose.public-staging.yml"
-  if [[ ! -f "$guard" || ! -f "$compose" ]]; then
+  local cost_saver_override=""
+  local override_args=()
+  if [[ ! -f "$compose" ]]; then
     echo "RUNTIME_ENV_GUARD_STATUS=pending_bundle_in_app"
     return 0
   fi
+  if [[ "${JIEJING_USE_COST_SAVER_OVERRIDE:-false}" == "true" ]]; then
+    cost_saver_override="${JIEJING_COST_SAVER_COMPOSE_OVERRIDE:-$PRIVATE_DIR/docker-compose.cost-saver-local.yml}"
+    if [[ "$cost_saver_override" != "$PRIVATE_DIR/docker-compose.cost-saver-local.yml" ]] || \
+      ! trusted_root_owned_path_chain_is_safe "$cost_saver_override"; then
+      echo "REFUSE_UNTRUSTED_COST_SAVER_OVERRIDE=1" >&2
+      exit 3
+    fi
+    override_args+=(--compose-override "$cost_saver_override")
+  fi
 
-  sudo -n python3 "$APP_DIR/tools/jiejing_runtime_env_overlap_guard.py" check \
+  sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" check \
     --compose "$compose" \
     --managed-env "$PRIVATE_DIR/tencent-managed.env" \
     --secret-env "$PRIVATE_DIR/jiejing-saas.staging-oauth.env" \
     --postgres-env "$PRIVATE_DIR/postgres-localqueue.env" \
+    "${override_args[@]}" \
     --json
-  sudo -n python3 "$APP_DIR/tools/jiejing_runtime_env_overlap_guard.py" migrate \
+  sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" migrate \
     --compose "$compose" \
     --managed-env "$PRIVATE_DIR/tencent-managed.env" \
     --secret-env "$PRIVATE_DIR/jiejing-saas.staging-oauth.env" \
     --postgres-env "$PRIVATE_DIR/postgres-localqueue.env" \
+    "${override_args[@]}" \
     --json
   echo "RUNTIME_ENV_GUARD_STATUS=check_and_dry_run_passed"
 }

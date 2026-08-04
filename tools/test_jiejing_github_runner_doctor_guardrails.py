@@ -39,6 +39,28 @@ def main() -> int:
         "PUBLIC_HEALTH=",
         "JIEJING_RUNNER_DOCTOR_STATUS=",
         "JIEJING_RUNNER_DOCTOR_BLOCKERS",
+        "RUNTIME_ENV_GUARD_STATUS=",
+        "runtime_env_guard_missing",
+        "runtime_env_guard_untrusted",
+        "runtime_env_compose_missing",
+        "runtime_env_ownership_guard_blocked",
+        'TRUSTED_RUNTIME_ENV_GUARD="${JIEJING_TRUSTED_RUNTIME_ENV_GUARD:-/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py}"',
+        'app_dir_safe="false"',
+        'app_dir_safe="true"',
+        'if [[ "$app_dir_safe" != "true" ||',
+        "stat -c '%u %a'",
+        '[[ -f "$path" && ! -L "$path" ]]',
+        '(( (8#$mode & 0022) == 0 ))',
+        'current="$(dirname -- "$path")"',
+        '[[ -d "$current" && ! -L "$current" ]]',
+        'sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" check',
+        '--managed-env "$private_dir/tencent-managed.env"',
+        '--secret-env "$private_dir/jiejing-saas.staging-oauth.env"',
+        '--postgres-env "$private_dir/postgres-localqueue.env"',
+        '--required-runtime-service jiejing-saas',
+        '--required-runtime-service jiejing-worker',
+        'JIEJING_USE_COST_SAVER_OVERRIDE',
+        '--compose-override "$cost_saver_override"',
         "SECRET_EXPOSED=false",
     ]
     required_workflow = [
@@ -56,6 +78,9 @@ def main() -> int:
         "docker_cli_missing",
         "sudo_noninteractive_unavailable",
         "disk_usage_at_or_above_90_percent",
+        "/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py",
+        "never install or update this file",
+        "/opt/jiejing-staging/private/docker-compose.cost-saver-local.yml",
     ]
 
     missing: list[str] = []
@@ -87,6 +112,16 @@ def main() -> int:
     present = [marker for marker in forbidden if marker in script or marker in workflow]
     if present:
         return fail("runner doctor contains forbidden marker: " + ",".join(present))
+    if 'cat /tmp/jiejing-runner-doctor-runtime-env-guard' in script:
+        return fail("runner doctor must not print the runtime env guard payload")
+    if "RUNTIME_ENV_GUARD_PATH=" in script or "RUNTIME_ENV_GUARD_REPORT=" in script:
+        return fail("runner doctor runtime env status must not expose paths or report bodies")
+    if '$resolved_app_dir/tools/jiejing_runtime_env_overlap_guard.py' in script:
+        return fail("runner doctor must never execute the deployed app copy of the guard")
+    app_safe = script.index('app_dir_safe="true"')
+    guard_call = script.index('sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" check')
+    if not app_safe < guard_call:
+        return fail("runner doctor must validate app_dir before any privileged guard invocation")
 
     print("PASS jiejing_github_runner_doctor_guardrails")
     return 0

@@ -17,6 +17,7 @@ RUN_ID="${GITHUB_RUN_ID:-manual}"
 RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT:-1}"
 SHA="${GITHUB_SHA:-}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+TRUSTED_RUNTIME_ENV_GUARD="${JIEJING_TRUSTED_RUNTIME_ENV_GUARD:-/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py}"
 
 if [[ "$CONFIRM" != "$EXPECTED_CONFIRM" ]]; then
   echo "REFUSE_DEPLOY_CONFIRMATION_MISMATCH=1" >&2
@@ -55,6 +56,124 @@ if [[ -z "$short_sha" ]]; then
   short_sha="$(git -C "$WORKSPACE" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
 fi
 
+candidate_compose="$WORKSPACE/deploy/docker-compose.public-https-staging.yml"
+if [[ ! -f "$candidate_compose" ]]; then
+  candidate_compose="$WORKSPACE/deploy/docker-compose.public-staging.yml"
+fi
+runtime_compose="$resolved_app_dir/deploy/$(basename -- "$candidate_compose")"
+private_dir="$resolved_deploy_root/private"
+candidate_managed="$WORKSPACE/deploy/jiejing-saas.tencent-managed.env.example"
+candidate_secret="$WORKSPACE/deploy/jiejing-saas.staging-oauth.env.example"
+candidate_postgres="$WORKSPACE/deploy/jiejing-saas.postgres-localqueue.env.example"
+cost_saver_override=""
+
+trusted_root_owned_path_chain_is_safe() {
+  local path="$1"
+  local resolved current metadata owner mode
+  case "$path" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  [[ -f "$path" && ! -L "$path" ]] || return 1
+  resolved="$(readlink -f -- "$path" 2>/dev/null || true)"
+  [[ -n "$resolved" && "$resolved" == "$path" ]] || return 1
+  metadata="$(stat -c '%u %a' -- "$path" 2>/dev/null || true)"
+  read -r owner mode <<<"$metadata"
+  [[ "$owner" == "0" && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+  (( (8#$mode & 0022) == 0 )) || return 1
+
+  current="$(dirname -- "$path")"
+  while :; do
+    [[ -d "$current" && ! -L "$current" ]] || return 1
+    metadata="$(stat -c '%u %a' -- "$current" 2>/dev/null || true)"
+    read -r owner mode <<<"$metadata"
+    [[ "$owner" == "0" && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (( (8#$mode & 0022) == 0 )) || return 1
+    [[ "$current" == "/" ]] && break
+    current="$(dirname -- "$current")"
+  done
+}
+
+if ! trusted_root_owned_path_chain_is_safe "$TRUSTED_RUNTIME_ENV_GUARD"; then
+  echo "REFUSE_UNTRUSTED_RUNTIME_ENV_GUARD=1" >&2
+  exit 22
+fi
+trusted_guard_resolved="$(readlink -f -- "$TRUSTED_RUNTIME_ENV_GUARD" 2>/dev/null || true)"
+[[ "$trusted_guard_resolved" == "$TRUSTED_RUNTIME_ENV_GUARD" ]] || {
+  echo "REFUSE_UNTRUSTED_RUNTIME_ENV_GUARD=1" >&2
+  exit 22
+}
+
+if [[ "${JIEJING_USE_COST_SAVER_OVERRIDE:-false}" == "true" ]]; then
+  cost_saver_override="${JIEJING_COST_SAVER_COMPOSE_OVERRIDE:-$private_dir/docker-compose.cost-saver-local.yml}"
+  if [[ "$cost_saver_override" != "$private_dir/docker-compose.cost-saver-local.yml" ]] || \
+    ! trusted_root_owned_path_chain_is_safe "$cost_saver_override"; then
+    echo "REFUSE_UNTRUSTED_COST_SAVER_OVERRIDE=1" >&2
+    exit 23
+  fi
+fi
+
+run_dry_run_runtime_env_guard() {
+  local candidate_compose_path="$1"
+  local runtime_compose_path="$2"
+  local override_args=()
+  if [[ -n "$cost_saver_override" ]]; then
+    override_args+=(--compose-override "$cost_saver_override")
+  fi
+  if [[ ! -f "$candidate_compose_path" || ! -f "$candidate_managed" || \
+    ! -f "$candidate_secret" || ! -f "$candidate_postgres" ]]; then
+    echo "REFUSE_RUNTIME_ENV_OWNERSHIP_GUARD=1" >&2
+    exit 24
+  fi
+  if ! python3 "$TRUSTED_RUNTIME_ENV_GUARD" check \
+    --compose "$candidate_compose_path" \
+    --compose-runtime-path "$runtime_compose_path" \
+    --managed-env "$candidate_managed" \
+    --secret-env "$candidate_secret" \
+    --postgres-env "$candidate_postgres" \
+    --managed-runtime-path "$private_dir/tencent-managed.env" \
+    --secret-runtime-path "$private_dir/jiejing-saas.staging-oauth.env" \
+    --postgres-runtime-path "$private_dir/postgres-localqueue.env" \
+    --required-runtime-service jiejing-saas \
+    --required-runtime-service jiejing-worker \
+    "${override_args[@]}"; then
+    echo "REFUSE_RUNTIME_ENV_OWNERSHIP_GUARD=1" >&2
+    exit 24
+  fi
+}
+
+run_apply_runtime_env_guard() {
+  local candidate_compose_path="$1"
+  local runtime_compose_path="$2"
+  local override_args=()
+  if [[ -n "$cost_saver_override" ]]; then
+    override_args+=(--compose-override "$cost_saver_override")
+  fi
+  if ! sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" check \
+    --compose "$candidate_compose_path" \
+    --compose-runtime-path "$runtime_compose_path" \
+    --managed-env "$private_dir/tencent-managed.env" \
+    --secret-env "$private_dir/jiejing-saas.staging-oauth.env" \
+    --postgres-env "$private_dir/postgres-localqueue.env" \
+    --required-runtime-service jiejing-saas \
+    --required-runtime-service jiejing-worker \
+    "${override_args[@]}"; then
+    echo "REFUSE_RUNTIME_ENV_OWNERSHIP_GUARD=1" >&2
+    exit 24
+  fi
+}
+
+run_runtime_env_guard() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    run_dry_run_runtime_env_guard "$candidate_compose" "$runtime_compose"
+  else
+    run_apply_runtime_env_guard "$candidate_compose" "$runtime_compose"
+  fi
+  echo "RUNTIME_ENV_GUARD_STATUS=passed"
+}
+
+run_runtime_env_guard
+
 release_dir="$RELEASE_ROOT/github-${RUN_ID}-${RUN_ATTEMPT}-${short_sha}"
 backup_dir="$BACKUP_ROOT/pre-github-${RUN_ID}-${RUN_ATTEMPT}-${STAMP}"
 mkdir -p "$RELEASE_ROOT" "$BACKUP_ROOT"
@@ -80,7 +199,9 @@ rsync -a --delete \
 
 (
   cd "$release_dir"
-  python3 tools/jiejing_secret_scan.py
+  if [[ "$DRY_RUN" == "0" ]]; then
+    python3 tools/jiejing_secret_scan.py
+  fi
   node --check app.js
   python3 -m py_compile \
     jiejing_saas/api_server.py \

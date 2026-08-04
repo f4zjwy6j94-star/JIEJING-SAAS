@@ -160,7 +160,42 @@ Do this only after you are ready to let GitHub Actions deploy to staging.
 
 If `sudo -n true` fails, do not weaken the whole server. Add only the minimum no-password sudo rules needed by the existing staging deploy script, then test again.
 
-9. After the runner appears online, open GitHub Actions > `Jiejing Staging Runner Doctor` and run it once.
+9. Provision the runtime-environment guard through a separate root-controlled
+   change, outside the app checkout, release directory, and GitHub Actions
+   workspace. The deploy and Doctor scripts never install or update this file:
+
+   ```text
+   /usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py
+   ```
+
+   It must resolve to that absolute regular file without any symlink. The file
+   and every parent directory through `/` must be owned by uid 0 and must not
+   be group/world writable. Review and pin the exact guard version before this
+   manual root-controlled provisioning step. Bootstrap, deploy, patch and
+   Doctor never install or update the trusted copy. A candidate bundle may
+   update the source proposed for a later, separately approved trusted-guard
+   rollout, but it cannot change the guard used in its own execution. A missing
+   or untrusted fixed guard is a hard blocker; never fall back to
+   `$GITHUB_WORKSPACE/tools/`, a release candidate, or `$APP_DIR/tools/`.
+
+   Server-side deploy `dry_run` executes only this trusted guard. It reads the
+   candidate Compose and committed public env examples as data, without sudo
+   and without reading the server-private env files. Runner Doctor and deploy
+   apply use the same trusted guard to inspect the real private env files via
+   the existing restricted sudo boundary.
+
+   If cost-saver mode is enabled, its only accepted override is the fixed,
+   root-owned, non-writable resource override at
+   `/opt/jiejing-staging/private/docker-compose.cost-saver-local.yml`. It may
+   contain only `services`, the `jiejing-saas` / `jiejing-worker` service names,
+   and literal bounded `deploy.resources.limits` / `reservations` values for
+   `cpus`, `memory`, and `pids` (`pids` is limits-only). Any old environment-
+   switching cost-saver file, unknown key or service, inline collection, YAML
+   include, anchor, alias, merge, variable interpolation, or unsafe scalar
+   makes the guard fail closed. Replace a rejected legacy file only through a
+   separate reviewed root-controlled operation; these scripts never rewrite it.
+
+10. After the runner appears online, open GitHub Actions > `Jiejing Staging Runner Doctor` and run it once.
 
    A healthy result should include:
 

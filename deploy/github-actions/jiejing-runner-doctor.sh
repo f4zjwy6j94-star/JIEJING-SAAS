@@ -13,6 +13,7 @@ HEALTH_URL="${JIEJING_RUNNER_DOCTOR_HEALTH_URL:-http://127.0.0.1:8788/health}"
 PUBLIC_HEALTH_URL="${JIEJING_RUNNER_DOCTOR_PUBLIC_HEALTH_URL:-https://app.jiejing.shop/health}"
 DISK_WARN_PERCENT="${JIEJING_RUNNER_DOCTOR_DISK_WARN_PERCENT:-90}"
 DISK_BLOCK_PERCENT="${JIEJING_RUNNER_DOCTOR_DISK_BLOCK_PERCENT:-95}"
+TRUSTED_RUNTIME_ENV_GUARD="${JIEJING_TRUSTED_RUNTIME_ENV_GUARD:-/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py}"
 
 blockers=()
 warnings=()
@@ -46,26 +47,30 @@ print_list() {
 
 resolved_app_dir="$(readlink -f -- "$APP_DIR" 2>/dev/null || true)"
 resolved_deploy_root="$(readlink -f -- "$DEPLOY_ROOT" 2>/dev/null || true)"
+app_dir_safe="false"
+deploy_root_safe="false"
 
 if [[ -z "$resolved_deploy_root" ]]; then
   add_blocker "deploy_root_missing"
 else
   case "$resolved_deploy_root" in
-    /opt/jiejing-staging|/opt/jiejing-staging/*) ;;
+    /opt/jiejing-staging|/opt/jiejing-staging/*) deploy_root_safe="true" ;;
     *) add_blocker "deploy_root_outside_staging" ;;
   esac
 fi
 
-if [[ -z "$resolved_app_dir" ]]; then
+if [[ -z "$resolved_app_dir" || ! -d "$resolved_app_dir" ]]; then
   add_blocker "app_dir_missing"
 else
   case "$resolved_app_dir" in
-    /opt/jiejing-staging/app|/opt/jiejing-staging/app/*) ;;
+    /opt/jiejing-staging/app|/opt/jiejing-staging/app/*) app_dir_safe="true" ;;
     *) add_blocker "app_dir_outside_staging" ;;
   esac
-  [[ -f "$resolved_app_dir/app.js" ]] || add_blocker "app_js_missing"
-  [[ -f "$resolved_app_dir/deploy/apply-staging-patch.sh" ]] || add_blocker "apply_staging_patch_missing"
-  [[ -f "$resolved_app_dir/deploy/docker-compose.public-https-staging.yml" || -f "$resolved_app_dir/deploy/docker-compose.public-staging.yml" ]] || add_blocker "staging_compose_missing"
+  if [[ "$app_dir_safe" == "true" ]]; then
+    [[ -f "$resolved_app_dir/app.js" ]] || add_blocker "app_js_missing"
+    [[ -f "$resolved_app_dir/deploy/apply-staging-patch.sh" ]] || add_blocker "apply_staging_patch_missing"
+    [[ -f "$resolved_app_dir/deploy/docker-compose.public-https-staging.yml" || -f "$resolved_app_dir/deploy/docker-compose.public-staging.yml" ]] || add_blocker "staging_compose_missing"
+  fi
 fi
 
 if [[ -n "${GITHUB_WORKSPACE:-}" ]]; then
@@ -89,6 +94,87 @@ else
   echo "SUDO_NONINTERACTIVE=blocked"
   add_blocker "sudo_noninteractive_unavailable"
 fi
+
+runtime_guard_status="blocked"
+private_dir="$resolved_deploy_root/private"
+runtime_compose="$resolved_app_dir/deploy/docker-compose.public-https-staging.yml"
+if [[ ! -f "$runtime_compose" ]]; then
+  runtime_compose="$resolved_app_dir/deploy/docker-compose.public-staging.yml"
+fi
+cost_saver_override=""
+
+trusted_root_owned_path_chain_is_safe() {
+  local path="$1"
+  local resolved current metadata owner mode
+  case "$path" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  [[ -f "$path" && ! -L "$path" ]] || return 1
+  resolved="$(readlink -f -- "$path" 2>/dev/null || true)"
+  [[ -n "$resolved" && "$resolved" == "$path" ]] || return 1
+  metadata="$(stat -c '%u %a' -- "$path" 2>/dev/null || true)"
+  read -r owner mode <<<"$metadata"
+  [[ "$owner" == "0" && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+  (( (8#$mode & 0022) == 0 )) || return 1
+
+  current="$(dirname -- "$path")"
+  while :; do
+    [[ -d "$current" && ! -L "$current" ]] || return 1
+    metadata="$(stat -c '%u %a' -- "$current" 2>/dev/null || true)"
+    read -r owner mode <<<"$metadata"
+    [[ "$owner" == "0" && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (( (8#$mode & 0022) == 0 )) || return 1
+    [[ "$current" == "/" ]] && break
+    current="$(dirname -- "$current")"
+  done
+}
+
+runtime_compose_is_safe() {
+  local resolved
+  [[ -f "$runtime_compose" && ! -L "$runtime_compose" ]] || return 1
+  resolved="$(readlink -f -- "$runtime_compose" 2>/dev/null || true)"
+  [[ "$resolved" == "$runtime_compose" ]]
+}
+
+override_args=()
+if [[ "$app_dir_safe" != "true" || "$deploy_root_safe" != "true" ]]; then
+  :
+elif [[ ! -f "$TRUSTED_RUNTIME_ENV_GUARD" ]]; then
+  add_blocker "runtime_env_guard_missing"
+elif ! trusted_root_owned_path_chain_is_safe "$TRUSTED_RUNTIME_ENV_GUARD"; then
+  add_blocker "runtime_env_guard_untrusted"
+elif ! runtime_compose_is_safe; then
+  add_blocker "runtime_env_compose_missing"
+elif [[ "${JIEJING_USE_COST_SAVER_OVERRIDE:-false}" == "true" ]]; then
+  cost_saver_override="${JIEJING_COST_SAVER_COMPOSE_OVERRIDE:-$private_dir/docker-compose.cost-saver-local.yml}"
+  if [[ "$cost_saver_override" != "$private_dir/docker-compose.cost-saver-local.yml" ]] || \
+    ! trusted_root_owned_path_chain_is_safe "$cost_saver_override"; then
+    add_blocker "runtime_env_cost_saver_override_untrusted"
+  else
+    override_args+=(--compose-override "$cost_saver_override")
+  fi
+fi
+
+if [[ "$app_dir_safe" == "true" && "$deploy_root_safe" == "true" && \
+  -f "$TRUSTED_RUNTIME_ENV_GUARD" ]] && trusted_root_owned_path_chain_is_safe "$TRUSTED_RUNTIME_ENV_GUARD" && \
+  runtime_compose_is_safe && [[ "${#override_args[@]}" -gt 0 || \
+  "${JIEJING_USE_COST_SAVER_OVERRIDE:-false}" != "true" ]]; then
+  if sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" check \
+  --compose "$runtime_compose" \
+  --managed-env "$private_dir/tencent-managed.env" \
+  --secret-env "$private_dir/jiejing-saas.staging-oauth.env" \
+  --postgres-env "$private_dir/postgres-localqueue.env" \
+  --required-runtime-service jiejing-saas \
+  --required-runtime-service jiejing-worker \
+  "${override_args[@]}" \
+  >/dev/null 2>/dev/null; then
+    runtime_guard_status="ready"
+  else
+    add_blocker "runtime_env_ownership_guard_blocked"
+  fi
+fi
+echo "RUNTIME_ENV_GUARD_STATUS=$runtime_guard_status"
 
 if [[ -n "$resolved_deploy_root" ]]; then
   [[ -w "$resolved_deploy_root" ]] || add_blocker "deploy_root_not_writable_by_runner"

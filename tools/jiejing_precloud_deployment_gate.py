@@ -118,6 +118,8 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("staging_deploy_channel_contract", [sys.executable, "tools/test_jiejing_staging_deploy_channel_contract.py"]),
     ("staging_deploy_disk_guard", [sys.executable, "tools/test_jiejing_staging_deploy_disk_guard.py"]),
     ("staging_patch_apply_contract", [sys.executable, "tools/test_jiejing_staging_patch_apply_contract.py"]),
+    ("runtime_env_overlap_guard", [sys.executable, "tools/test_jiejing_runtime_env_overlap_guard.py"]),
+    ("runtime_env_public_contract", [sys.executable, "tools/test_jiejing_runtime_env_public_contract.py"]),
     ("agents_md_guardrails", [sys.executable, "tools/test_jiejing_agents_md_guardrails.py"]),
     ("secret_scan", [sys.executable, "tools/jiejing_secret_scan.py"]),
     ("github_actions_deploy_guardrails", [sys.executable, "tools/test_jiejing_github_actions_deploy_guardrails.py"]),
