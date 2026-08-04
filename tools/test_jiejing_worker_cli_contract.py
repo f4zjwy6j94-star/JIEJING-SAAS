@@ -364,6 +364,7 @@ def main() -> int:
             return fail(f"{compose_name} worker service must not expose public ports")
         if "--json-lines" in block:
             return fail(f"{compose_name} worker service must not print idle JSON lines forever")
+    secret_env_template = (ROOT / "deploy/jiejing-saas.staging-oauth.env.example").read_text(encoding="utf-8")
     for compose_name in (
         "deploy/docker-compose.public-staging.yml",
         "deploy/docker-compose.public-https-staging.yml",
@@ -375,8 +376,14 @@ def main() -> int:
                 'JIEJING_MEDIA_LIVE_PROVIDER_ENABLED: "true"',
                 'JIEJING_MEDIA_LIVE_VIDEO_ENABLED: "true"',
             ):
-                if marker not in block:
-                    return fail(f"{compose_name} {service} must share the explicit staging media gate: {marker}")
+                if marker in block:
+                    return fail(f"{compose_name} {service} must not override the secret-owned staging media gate: {marker}")
+    for marker in (
+        "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED=true",
+        "JIEJING_MEDIA_LIVE_VIDEO_ENABLED=true",
+    ):
+        if marker not in secret_env_template:
+            return fail(f"secret runtime env template must preserve the explicit staging media gate: {marker}")
     print(
         json.dumps(
             {

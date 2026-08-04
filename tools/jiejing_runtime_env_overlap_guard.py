@@ -332,6 +332,10 @@ class MigrationPlan:
     actions: tuple[MigrationAction, ...]
     blockers: tuple[dict[str, object], ...]
     snapshots: tuple[SourceSnapshot, ...] = field(default=(), repr=False)
+    required_runtime_services: frozenset[str] = field(
+        default=RUNTIME_SERVICE_NAMES,
+        repr=False,
+    )
 
 
 @dataclass(frozen=True)
@@ -1164,15 +1168,29 @@ def _build_key_analyses(declarations: Sequence[Declaration]) -> tuple[KeyAnalysi
     return tuple(analyses)
 
 
+def _normalize_required_runtime_services(
+    required_runtime_services: Sequence[str] | None,
+) -> frozenset[str]:
+    if not required_runtime_services:
+        return RUNTIME_SERVICE_NAMES
+    normalized = frozenset(required_runtime_services)
+    invalid = normalized - RUNTIME_SERVICE_NAMES
+    if invalid:
+        raise ValueError("required runtime service is not allowed")
+    return normalized
+
+
 def analyze_runtime_env_ownership(
     *,
     compose_path: Path,
     managed_env_path: Path,
     secret_env_path: Path,
     postgres_env_path: Path,
+    required_runtime_services: Sequence[str] | None = None,
     _source_snapshots: Mapping[str, SourceSnapshot] | None = None,
     _snapshot_blockers: Sequence[dict[str, object]] = (),
 ) -> GuardAnalysis:
+    required_services = _normalize_required_runtime_services(required_runtime_services)
     declarations: list[Declaration] = []
     blockers: list[dict[str, object]] = list(_snapshot_blockers)
     for parser, path, source in (
@@ -1215,7 +1233,7 @@ def analyze_runtime_env_ownership(
                 "count": count,
             }
         )
-    for required_service in sorted(RUNTIME_SERVICE_NAMES):
+    for required_service in sorted(required_services):
         if service_counts.get(required_service, 0) == 0:
             blockers.append(
                 {
@@ -1242,7 +1260,7 @@ def analyze_runtime_env_ownership(
                     "count": len(environment_blocks),
                 }
             )
-        if service_name not in RUNTIME_SERVICE_NAMES:
+        if service_name not in required_services:
             continue
         if not environment_blocks:
             blockers.append(
@@ -1310,7 +1328,7 @@ def analyze_runtime_env_ownership(
                     "count": len(env_file_blocks),
                 }
             )
-        if service_name not in RUNTIME_SERVICE_NAMES:
+        if service_name not in required_services:
             continue
         if not env_file_blocks:
             blockers.append(
@@ -1601,6 +1619,7 @@ def check_runtime_env_ownership(
     managed_env_path: Path,
     secret_env_path: Path,
     postgres_env_path: Path,
+    required_runtime_services: Sequence[str] | None = None,
 ) -> dict[str, object]:
     return _project_public_report(
         analyze_runtime_env_ownership(
@@ -1608,6 +1627,7 @@ def check_runtime_env_ownership(
             managed_env_path=managed_env_path,
             secret_env_path=secret_env_path,
             postgres_env_path=postgres_env_path,
+            required_runtime_services=required_runtime_services,
         )
     )
 
@@ -1618,12 +1638,14 @@ def plan_runtime_env_migration(
     managed_env_path: Path,
     secret_env_path: Path,
     postgres_env_path: Path,
+    required_runtime_services: Sequence[str] | None = None,
 ) -> dict[str, object]:
     plan = _build_migration_plan(
         compose_path=compose_path,
         managed_env_path=managed_env_path,
         secret_env_path=secret_env_path,
         postgres_env_path=postgres_env_path,
+        required_runtime_services=required_runtime_services,
     )
     return _project_migration_report(plan, mode="dry_run", applied=False)
 
@@ -1676,6 +1698,7 @@ def migrate_runtime_env_ownership(
     managed_env_path: Path,
     secret_env_path: Path,
     postgres_env_path: Path,
+    required_runtime_services: Sequence[str] | None = None,
     apply: bool = False,
     confirm: str | None = None,
 ) -> dict[str, object]:
@@ -1684,6 +1707,7 @@ def migrate_runtime_env_ownership(
         managed_env_path=managed_env_path,
         secret_env_path=secret_env_path,
         postgres_env_path=postgres_env_path,
+        required_runtime_services=required_runtime_services,
     )
     if not apply:
         return _project_migration_report(plan, mode="dry_run", applied=False)
@@ -2577,6 +2601,7 @@ def _apply_migration_plan_locked(
             managed_env_path=snapshots_by_source[MANAGED_SOURCE].path,
             secret_env_path=snapshots_by_source[SECRET_SOURCE].path,
             postgres_env_path=snapshots_by_source[POSTGRES_SOURCE].path,
+            required_runtime_services=tuple(plan.required_runtime_services),
         )
         if validation.blockers or validation.actions:
             raise MigrationApplyError("post_apply_validation_failed", "migration")
@@ -2636,7 +2661,9 @@ def _build_migration_plan(
     managed_env_path: Path,
     secret_env_path: Path,
     postgres_env_path: Path,
+    required_runtime_services: Sequence[str] | None = None,
 ) -> MigrationPlan:
+    normalized_required_services = _normalize_required_runtime_services(required_runtime_services)
     snapshots, snapshot_blockers = _capture_source_snapshots(
         compose_path=compose_path,
         managed_env_path=managed_env_path,
@@ -2648,6 +2675,7 @@ def _build_migration_plan(
         managed_env_path=managed_env_path,
         secret_env_path=secret_env_path,
         postgres_env_path=postgres_env_path,
+        required_runtime_services=tuple(normalized_required_services),
         _source_snapshots=snapshots,
         _snapshot_blockers=snapshot_blockers,
     )
@@ -2796,6 +2824,7 @@ def _build_migration_plan(
         actions=tuple(sorted(actions, key=lambda action: (action.key, action.source))),
         blockers=tuple(blockers),
         snapshots=tuple(snapshots.values()),
+        required_runtime_services=normalized_required_services,
     )
 
 
@@ -2804,6 +2833,15 @@ def _add_source_path_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--managed-env", type=Path, required=True)
     parser.add_argument("--secret-env", type=Path, required=True)
     parser.add_argument("--postgres-env", type=Path, required=True)
+    parser.add_argument(
+        "--required-runtime-service",
+        action="append",
+        choices=sorted(RUNTIME_SERVICE_NAMES),
+        help=(
+            "Required runtime service. Repeat to select multiple services; "
+            "defaults to both jiejing-saas and jiejing-worker."
+        ),
+    )
     parser.add_argument("--json", action="store_true")
 
 
@@ -2829,6 +2867,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "managed_env_path": args.managed_env,
         "secret_env_path": args.secret_env,
         "postgres_env_path": args.postgres_env,
+        "required_runtime_services": args.required_runtime_service,
     }
     report = (
         check_runtime_env_ownership(**source_paths)

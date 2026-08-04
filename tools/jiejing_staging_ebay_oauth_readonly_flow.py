@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -34,9 +35,13 @@ DEFAULT_RESOURCES = [
     "taxonomy_listing_metadata",
 ]
 DEFAULT_OUTPUT_ROOT = ROOT / "output" / "jiejing-saas-backend" / "staging-ebay-oauth-readonly"
-REQUIRED_ENV = [
+BASE_REQUIRED_ENV = [
     "JIEJING_SAAS_ENV",
     "JIEJING_CORS_ORIGIN",
+    "JIEJING_ENABLE_REAL_PLATFORM_WRITES",
+    "JIEJING_EBAY_WRITE_LIVE",
+    "JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY",
+    "JIEJING_BILLING_PROVIDER",
     "JIEJING_EBAY_CLIENT_ID",
     "JIEJING_EBAY_RU_NAME",
     "JIEJING_EBAY_CLIENT_SECRET",
@@ -46,16 +51,31 @@ REQUIRED_ENV = [
     "JIEJING_VAULT_ENABLED",
     "JIEJING_VAULT_PROVIDER",
     "JIEJING_VAULT_LIVE_RESOLVE_ENABLED",
+    "JIEJING_DATABASE_ENGINE",
+    "JIEJING_DATABASE_ADAPTER",
+    "JIEJING_DATABASE_URL",
+    "JIEJING_QUEUE_PROVIDER",
+    "JIEJING_QUEUE_URL",
+    "JIEJING_ENABLE_HERMES_EBAY_BRIDGE",
+    "JIEJING_EBAY_ACCESS_TOKEN",
+    "JIEJING_EBAY_REFRESH_TOKEN",
+]
+HASHICORP_VAULT_REQUIRED_ENV = [
     "JIEJING_VAULT_ADDR",
     "JIEJING_VAULT_TOKEN",
     "JIEJING_VAULT_MOUNT",
     "JIEJING_VAULT_KEYSPACE",
     "JIEJING_VAULT_KV_VERSION",
-    "JIEJING_ENABLE_HERMES_EBAY_BRIDGE",
-    "JIEJING_EBAY_ACCESS_TOKEN",
-    "JIEJING_EBAY_REFRESH_TOKEN",
 ]
-SECRET_ENV_MARKERS = ("SECRET", "TOKEN", "PASSWORD", "KEY", "URL", "ADDR")
+TENCENT_SSM_REQUIRED_ENV = [
+    "JIEJING_TENCENT_REGION",
+    "JIEJING_TENCENT_SSM_LIVE_RESOLVE_ENABLED",
+    "JIEJING_TENCENT_SSM_KEYSPACE",
+    "JIEJING_TENCENT_SECRET_ID",
+    "JIEJING_TENCENT_SECRET_KEY",
+]
+SUPPORTED_VAULT_PROVIDERS = frozenset({"vault", "tencent_kms", "tencent_ssm"})
+SECRET_ENV_MARKERS = ("SECRET", "TOKEN", "PASSWORD", "KEY", "URL", "ADDR", "CLIENT_ID", "RU_NAME")
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,7 +88,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--marketplace", default=os.environ.get("JIEJING_STAGING_EBAY_MARKETPLACE", "EBAY_US"))
     parser.add_argument("--context", default=str(DEFAULT_OUTPUT_ROOT / "staging_oauth_context.json"))
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT))
-    parser.add_argument("--env-file", default="", help="Load a KEY=VALUE env file before checking or calling staging.")
+    parser.add_argument(
+        "--env-file",
+        action="append",
+        default=[],
+        help="Load a KEY=VALUE env file. Repeat in managed, secret, postgres order for the staging runtime.",
+    )
     parser.add_argument("--register-if-needed", action="store_true", help="Register the operator account if login fails.")
     parser.add_argument("--resources", default=",".join(DEFAULT_RESOURCES))
 
@@ -84,8 +109,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if args.env_file:
-        _load_env_file(Path(args.env_file))
+    for env_file in args.env_file:
+        _load_env_file(Path(env_file))
     output_root = Path(args.output_root).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     context_path = Path(args.context).resolve()
@@ -179,8 +204,14 @@ def main() -> int:
 
 
 def _check_env() -> dict[str, Any]:
+    provider = os.environ.get("JIEJING_VAULT_PROVIDER", "").strip().lower()
+    required_env = list(BASE_REQUIRED_ENV)
+    if provider == "vault":
+        required_env.extend(HASHICORP_VAULT_REQUIRED_ENV)
+    elif provider in {"tencent_kms", "tencent_ssm"}:
+        required_env.extend(TENCENT_SSM_REQUIRED_ENV)
     items = []
-    for key in REQUIRED_ENV:
+    for key in required_env:
         value = os.environ.get(key)
         configured = bool(value)
         expected = _expected_env_value(key)
@@ -194,10 +225,9 @@ def _check_env() -> dict[str, Any]:
                 "ok": ok,
             }
         )
-    provider = os.environ.get("JIEJING_VAULT_PROVIDER", "")
     provider_warning = ""
-    if provider in {"tencent_kms", "aliyun_kms"}:
-        provider_warning = "Tencent/Aliyun KMS are adapter contracts in this repo; use provider=vault for the first real staging OAuth run unless the managed client has been implemented."
+    if provider not in SUPPORTED_VAULT_PROVIDERS:
+        provider_warning = "Select a currently implemented backend secret resolver before staging OAuth."
     ready = all(item["ok"] for item in items) and not provider_warning
     return {
         "status": "ready" if ready else "blocked",
@@ -537,12 +567,19 @@ def _context_store_id(context: dict[str, Any]) -> str:
 def _expected_env_value(key: str) -> str | None:
     expected = {
         "JIEJING_SAAS_ENV": "staging",
+        "JIEJING_ENABLE_REAL_PLATFORM_WRITES": "false",
+        "JIEJING_EBAY_WRITE_LIVE": "false",
+        "JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY": "disabled_public_staging",
+        "JIEJING_BILLING_PROVIDER": "stripe_test_mock",
         "JIEJING_EBAY_OAUTH_EXCHANGE_LIVE": "true",
         "JIEJING_EBAY_TOKEN_REFRESH_LIVE": "true",
         "JIEJING_EBAY_READ_ONLY_LIVE": "true",
         "JIEJING_VAULT_ENABLED": "true",
-        "JIEJING_VAULT_PROVIDER": "vault",
         "JIEJING_VAULT_LIVE_RESOLVE_ENABLED": "true",
+        "JIEJING_TENCENT_SSM_LIVE_RESOLVE_ENABLED": "true",
+        "JIEJING_DATABASE_ENGINE": "postgres",
+        "JIEJING_DATABASE_ADAPTER": "postgres-managed",
+        "JIEJING_QUEUE_PROVIDER": "redis_streams",
         "JIEJING_ENABLE_HERMES_EBAY_BRIDGE": "false",
         "JIEJING_EBAY_ACCESS_TOKEN": "missing",
         "JIEJING_EBAY_REFRESH_TOKEN": "missing",
@@ -576,10 +613,12 @@ def _env_item_ok(key: str, value: str | None, expected: str | None) -> bool:
 
 def _is_placeholder_value(value: str) -> bool:
     normalized = value.strip().lower()
+    angle_bracket_placeholder = re.fullmatch(r"<[a-z0-9][a-z0-9._-]{0,127}>", normalized) is not None
     return (
         not normalized
         or normalized.startswith("replace-with")
         or normalized.startswith("inject-from")
+        or angle_bracket_placeholder
         or normalized in {"changeme", "todo", "example", "https://staging.jiejing.example", "https://vault.staging.example"}
     )
 

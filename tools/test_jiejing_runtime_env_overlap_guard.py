@@ -154,24 +154,32 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
             index = end
         self.compose_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    def _run_check(self, *, augment_legacy_contract: bool = True) -> subprocess.CompletedProcess[str]:
+    def _run_check(
+        self,
+        *,
+        augment_legacy_contract: bool = True,
+        required_runtime_services: tuple[str, ...] = (),
+    ) -> subprocess.CompletedProcess[str]:
         if augment_legacy_contract:
             self._augment_legacy_compose_contract()
+        command = [
+            sys.executable,
+            str(TOOL),
+            "check",
+            "--compose",
+            str(self.compose_path),
+            "--managed-env",
+            str(self.managed_path),
+            "--secret-env",
+            str(self.secret_path),
+            "--postgres-env",
+            str(self.postgres_path),
+            "--json",
+        ]
+        for service_name in required_runtime_services:
+            command.extend(("--required-runtime-service", service_name))
         return subprocess.run(
-            [
-                sys.executable,
-                str(TOOL),
-                "check",
-                "--compose",
-                str(self.compose_path),
-                "--managed-env",
-                str(self.managed_path),
-                "--secret-env",
-                str(self.secret_path),
-                "--postgres-env",
-                str(self.postgres_path),
-                "--json",
-            ],
+            command,
             cwd=ROOT,
             text=True,
             capture_output=True,
@@ -184,6 +192,7 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
         apply: bool = False,
         confirm: str | None = None,
         augment_legacy_contract: bool = True,
+        required_runtime_services: tuple[str, ...] = (),
     ) -> subprocess.CompletedProcess[str]:
         if augment_legacy_contract:
             self._augment_legacy_compose_contract()
@@ -201,6 +210,8 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
             str(self.postgres_path),
             "--json",
         ]
+        for service_name in required_runtime_services:
+            command.extend(("--required-runtime-service", service_name))
         if apply:
             command.append("--apply")
         if confirm is not None:
@@ -2376,6 +2387,82 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
         }
         self.assertEqual(missing, {"jiejing-saas", "jiejing-worker"})
         self.assertEqual(report["summary"]["illegal_compose_override_count"], 2)
+
+    def test_check_saas_only_profile_does_not_require_worker(self) -> None:
+        self._write_legal_fixture()
+        compose = self.compose_path.read_text(encoding="utf-8")
+        self.compose_path.write_text(compose.split("  jiejing-worker:\n", 1)[0], encoding="utf-8")
+
+        completed = self._run_check(required_runtime_services=("jiejing-saas",))
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["blockers"], [])
+
+    def test_required_runtime_service_option_is_repeatable(self) -> None:
+        self._write_legal_fixture()
+
+        completed = self._run_check(
+            required_runtime_services=("jiejing-saas", "jiejing-worker"),
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        self.assertTrue(json.loads(completed.stdout)["ok"])
+
+    def test_migrate_saas_only_profile_does_not_require_worker(self) -> None:
+        self._write_legal_fixture()
+        compose = self.compose_path.read_text(encoding="utf-8")
+        self.compose_path.write_text(compose.split("  jiejing-worker:\n", 1)[0], encoding="utf-8")
+
+        completed = self._run_migrate(required_runtime_services=("jiejing-saas",))
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["mode"], "dry_run")
+        self.assertEqual(report["blockers"], [])
+
+    def test_saas_only_profile_still_rejects_worker_structural_duplicates(self) -> None:
+        self._write_legal_fixture()
+        compose = self.compose_path.read_text(encoding="utf-8")
+        self.compose_path.write_text(
+            compose.split("  jiejing-worker:\n", 1)[0]
+            + """  jiejing-worker:
+    environment:
+      WORKER_STATIC_ONE: "one"
+    environment:
+      WORKER_STATIC_TWO: "two"
+""",
+            encoding="utf-8",
+        )
+
+        completed = self._run_check(
+            augment_legacy_contract=False,
+            required_runtime_services=("jiejing-saas",),
+        )
+
+        self.assertNotEqual(completed.returncode, 0)
+        report = json.loads(completed.stdout)
+        self.assertTrue(
+            any(
+                blocker.get("code") == "duplicate_compose_environment_block"
+                and blocker.get("service") == "jiejing-worker"
+                for blocker in report["blockers"]
+            )
+        )
+        self.assertFalse(
+            any(
+                blocker.get("code") in {
+                    "missing_runtime_environment",
+                    "missing_required_compose_env_file",
+                    "missing_required_compose_clamp",
+                    "missing_required_billing_provider_pin",
+                }
+                and blocker.get("service") == "jiejing-worker"
+                for blocker in report["blockers"]
+            )
+        )
 
     def test_repeated_environment_blocks_cannot_split_required_clamps(self) -> None:
         self._write_legal_fixture()

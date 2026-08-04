@@ -245,6 +245,7 @@ def main() -> int:
 
     compose_public = (ROOT / "deploy/docker-compose.public-staging.yml").read_text(encoding="utf-8")
     compose_https = (ROOT / "deploy/docker-compose.public-https-staging.yml").read_text(encoding="utf-8")
+    managed_env_template = (ROOT / "deploy/jiejing-saas.tencent-managed.env.example").read_text(encoding="utf-8")
     deploy_script = (ROOT / "tools/jiejing_deploy_frontend_staging_with_key.ps1").read_text(encoding="utf-8")
     prelaunch_runbook = (ROOT / "docs/JIEJING_PRELAUNCH_INTERNAL_HARDENING_RUNBOOK_20260620.md").read_text(encoding="utf-8")
     for compose_name, compose_text in [
@@ -283,13 +284,21 @@ def main() -> int:
     for marker in [
         'JIEJING_INCIDENT_RUNBOOK_PUBLISHED: "true"',
         'JIEJING_ONCALL_ALERT_ROUTE_CONFIGURED: "true"',
-        'JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED: "true"',
         'JIEJING_POST_PUBLISH_RECOVERY_RUNBOOK_PUBLISHED: "true"',
         'JIEJING_BILLING_INCIDENT_RUNBOOK_PUBLISHED: "true"',
         'JIEJING_TEST_DATA_GOVERNANCE_REVIEWED: "true"',
     ]:
         if marker not in compose_https:
             return fail(f"public HTTPS staging compose missing prelaunch evidence flag: {marker}")
+    for marker in [
+        "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED=true",
+        "JIEJING_DATABASE_ENDPOINT_INCIDENT_RUNBOOK_PUBLISHED=true",
+    ]:
+        if marker not in managed_env_template:
+            return fail(f"managed runtime env template missing operations evidence flag: {marker}")
+        compose_marker = marker.replace("=true", ': "true"')
+        if compose_marker in compose_public or compose_marker in compose_https:
+            return fail(f"operations evidence flag must not be owned by Compose: {compose_marker}")
     for marker in [
         "Do not create live Stripe Checkout sessions.",
         "Do not start or repeat eBay OAuth.",

@@ -145,7 +145,7 @@ $env:JIEJING_EBAY_READ_ONLY_LIVE="true"
 $env:JIEJING_EBAY_TOKEN_REFRESH_LIVE="true"
 $env:JIEJING_EBAY_CLIENT_ID="<ebay-app-id-from-deployment-secret>"
 $env:JIEJING_EBAY_CLIENT_SECRET="<client-secret-from-deployment-secret>"
-$env:JIEJING_VAULT_PROVIDER="vault"
+$env:JIEJING_VAULT_PROVIDER="tencent_ssm"
 $env:JIEJING_VAULT_ENABLED="true"
 ```
 
@@ -173,16 +173,20 @@ returns to:
 https://staging.jiejing.example/oauth/ebay/callback
 ```
 
-3. Start staging with a private env file based on:
+3. The active staging contract uses three private env files in canonical
+`managed -> secret -> postgres` order:
 
 ```text
+deploy/jiejing-saas.tencent-managed.env.example
 deploy/jiejing-saas.staging-oauth.env.example
+deploy/jiejing-saas.postgres-localqueue.env.example
 ```
 
-For the first real run, use the implemented HashiCorp Vault resolver:
+This supersedes the older single-file OAuth staging instruction. The current
+managed source selects the implemented Tencent SSM resolver:
 
 ```powershell
-$env:JIEJING_VAULT_PROVIDER="vault"
+$env:JIEJING_VAULT_PROVIDER="tencent_ssm"
 $env:JIEJING_VAULT_LIVE_RESOLVE_ENABLED="true"
 $env:JIEJING_EBAY_OAUTH_EXCHANGE_LIVE="true"
 $env:JIEJING_EBAY_TOKEN_REFRESH_LIVE="true"
@@ -190,14 +194,15 @@ $env:JIEJING_EBAY_READ_ONLY_LIVE="true"
 $env:JIEJING_ENABLE_HERMES_EBAY_BRIDGE="false"
 ```
 
-Tencent KMS and Aliyun KMS are currently adapter contracts in this repo. Use
-HashiCorp Vault for the first real staging OAuth loop unless the managed KMS
-client has been implemented and tested.
+HashiCorp Vault remains a deliberate fallback profile. If it is selected, keep
+its address/token only in the secret source and keep provider/enabled state only
+in the managed source; never configure both providers in different env files.
 
-Public staging must not run Vault in `vault server -dev` mode. The public
-staging compose profile uses `deploy/vault.public-staging.hcl` with file-backed
-storage in the `jiejing_public_staging_vault_data` Docker volume. After the
-Vault container is first created, initialize and unseal it from the server:
+When the HashiCorp fallback is deliberately selected, public staging must not
+run Vault in `vault server -dev` mode. The public staging compose profile uses
+`deploy/vault.public-staging.hcl` with file-backed storage in the
+`jiejing_public_staging_vault_data` Docker volume. After the Vault container is
+first created, initialize and unseal it from the server:
 
 ```bash
 cd /opt/jiejing-staging/app
@@ -211,14 +216,39 @@ with `0600` permissions and patches only the private staging env file when
 If the Vault container restarts later, run the same script again without
 recreating OAuth; it will unseal the existing file-backed Vault.
 
-Start this validation profile with:
+Start this backend-only validation profile from three sibling private files.
+The copy commands below are initialization examples only; never overwrite an
+existing private file:
 
 ```powershell
-copy deploy\jiejing-saas.staging-oauth.env.example deploy\jiejing-saas.staging-oauth.env
-# edit deploy\jiejing-saas.staging-oauth.env with real staging/Vault/eBay values
+New-Item -ItemType Directory -Force ..\private | Out-Null
+if (-not (Test-Path ..\private\tencent-managed.env)) { Copy-Item deploy\jiejing-saas.tencent-managed.env.example ..\private\tencent-managed.env }
+if (-not (Test-Path ..\private\jiejing-saas.staging-oauth.env)) { Copy-Item deploy\jiejing-saas.staging-oauth.env.example ..\private\jiejing-saas.staging-oauth.env }
+if (-not (Test-Path ..\private\postgres-localqueue.env)) { Copy-Item deploy\jiejing-saas.postgres-localqueue.env.example ..\private\postgres-localqueue.env }
+python tools\jiejing_runtime_env_overlap_guard.py check `
+  --compose deploy\docker-compose.oauth-staging.yml `
+  --managed-env ..\private\tencent-managed.env `
+  --secret-env ..\private\jiejing-saas.staging-oauth.env `
+  --postgres-env ..\private\postgres-localqueue.env `
+  --required-runtime-service jiejing-saas `
+  --json
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+python tools\jiejing_runtime_env_overlap_guard.py migrate `
+  --compose deploy\docker-compose.oauth-staging.yml `
+  --managed-env ..\private\tencent-managed.env `
+  --secret-env ..\private\jiejing-saas.staging-oauth.env `
+  --postgres-env ..\private\postgres-localqueue.env `
+  --required-runtime-service jiejing-saas `
+  --json
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 docker compose -f deploy/docker-compose.oauth-staging.yml build
 docker compose -f deploy/docker-compose.oauth-staging.yml up
 ```
+
+Both guard reports are value-free. `migrate` is a dry-run unless an operator
+separately supplies the explicit apply flag and confirmation; do not use apply
+in this OAuth startup path. Stop before the first Compose operation when either
+guard command returns nonzero.
 
 That backend-only compose file is useful for internal API validation, but the
 first public staging URL should normally use the same-origin frontend/proxy
@@ -302,12 +332,11 @@ window.JIEJING_CONFIG = {
 };
 ```
 
-4. Check the staging process environment without printing secrets:
+4. Check the merged staging process environment without printing secrets:
 
 ```powershell
-python tools/jiejing_staging_ebay_oauth_readonly_flow.py `
-  --env-file deploy/jiejing-saas.staging-oauth.env `
-  check-env
+docker compose -f deploy/docker-compose.public-staging.yml exec -T jiejing-saas `
+  python tools/jiejing_staging_ebay_oauth_readonly_flow.py check-env
 ```
 
 5. Check the running backend guardrails before seller OAuth:

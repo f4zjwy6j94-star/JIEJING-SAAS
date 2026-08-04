@@ -298,10 +298,11 @@ prefer fixed operator source IP or VPN/bastion access.
 
 Do not write raw eBay tokens, refresh tokens, model keys, Stripe secret keys, webhook secrets, client secrets, passwords, or API keys into docs, frontend code, or public readiness payloads.
 
-On the staging host, real runtime env values live under
-`/opt/jiejing-staging/private/jiejing-saas.staging-oauth.env`. The project
-`deploy/` directory should keep only `jiejing-saas.staging-oauth.env.example`
-so bundle creation and patch deploys do not carry private values.
+The dated single-file staging note is superseded: current runtime values
+are split under `/opt/jiejing-staging/private/` into `tencent-managed.env`,
+`jiejing-saas.staging-oauth.env`, and `postgres-localqueue.env`, loaded in that
+order. The project `deploy/` directory keeps examples only, so bundle creation
+and patch deploys do not carry private values.
 
 ## Final Cutover Order
 

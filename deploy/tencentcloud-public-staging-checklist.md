@@ -15,7 +15,7 @@ Use the smallest setup that proves the real loop without pretending to be produc
 - Network: one public IPv4, inbound `80` and `443` only for public traffic, SSH restricted to your own IP.
 - HTTPS: use a Tencent Cloud SSL certificate or another certificate managed by the fronting reverse proxy/load balancer.
 - DNS: use DNSPod or your current DNS provider to point `staging.<domain>` to the staging server or load balancer.
-- Secrets: use HashiCorp Vault for this first staging OAuth loop because the repo already has a tested live Vault resolver. Tencent KMS remains an adapter contract until its managed client is implemented.
+- Secrets: use the current backend Tencent SSM resolver selected by `tencent-managed.env`. Vault enable/provider state belongs to that managed source; eBay/model/media/session secret material remains in the backend-only secret source.
 
 Official reference links:
 
@@ -46,14 +46,11 @@ Official reference links:
 https://staging.<domain>/oauth/ebay/callback
 ```
 
-4. Prepare HashiCorp Vault for staging.
-   - Enable KV v2 at the configured mount, default `secret`.
-   - Create a policy that can read/write only the Jiejing staging keyspace.
-   - Create a token for the SaaS backend with that policy.
-   - Public staging uses file-backed Vault storage, not `vault server -dev`.
-   - Start the compose profile, then run:
-     `JIEJING_VAULT_PATCH_ENV=true sh deploy/staging-vault-init-unseal.sh`.
-   - Do not paste Vault token values into chat or committed files.
+4. Prepare the backend secret resolver for staging.
+   - Keep `JIEJING_VAULT_ENABLED` and `JIEJING_VAULT_PROVIDER` only in `tencent-managed.env`.
+   - Keep Tencent region, SSM keyspace and managed resolver evidence in that same managed file.
+   - Keep credentials and provider secrets backend-only; never paste them into chat, logs or committed files.
+   - If an operator deliberately selects the HashiCorp Vault fallback, use the file-backed profile and its existing init/unseal runbook; do not mix both provider selections across env files.
 
 5. Prepare eBay developer settings.
    - Set the RuName/callback to `https://staging.<domain>/oauth/ebay/callback`.
@@ -62,50 +59,89 @@ https://staging.<domain>/oauth/ebay/callback
 
 ## Host Deployment Tasks
 
-1. Copy the repo or upload the generated staging bundle to the host.
+1. Copy the repo or upload the generated staging bundle into the active app directory.
 
 ```bash
-cd /opt/jiejing-staging
+mkdir -p /opt/jiejing-staging/app
+cd /opt/jiejing-staging/app
 unzip jiejing-public-staging-*.zip
 ```
 
-2. Create the private staging env file.
+2. Run the bootstrap from the extracted app tree. This initializes missing env
+   files without overwriting existing private values, validates strict modes,
+   and runs the value-free ownership check when the bundle is complete.
 
 ```bash
-mkdir -p /opt/jiejing-staging/private
-cp deploy/jiejing-saas.staging-oauth.env.example /opt/jiejing-staging/private/jiejing-saas.staging-oauth.env
-chmod 600 /opt/jiejing-staging/private/jiejing-saas.staging-oauth.env
+cd /opt/jiejing-staging/app
+bash deploy/bootstrap.public-staging.ubuntu.sh
 ```
 
-3. Fill these values manually on the host.
+The canonical load order is `managed -> secret -> postgres`. This supersedes the older single-file OAuth staging instruction.
+
+If the bootstrap cannot copy templates automatically, initialize only missing
+files manually and never overwrite an existing private env:
+
+```bash
+install -d -m 0700 /opt/jiejing-staging/private
+test -e /opt/jiejing-staging/private/tencent-managed.env || install -m 0600 deploy/jiejing-saas.tencent-managed.env.example /opt/jiejing-staging/private/tencent-managed.env
+test -e /opt/jiejing-staging/private/jiejing-saas.staging-oauth.env || install -m 0600 deploy/jiejing-saas.staging-oauth.env.example /opt/jiejing-staging/private/jiejing-saas.staging-oauth.env
+test -e /opt/jiejing-staging/private/postgres-localqueue.env || install -m 0600 deploy/jiejing-saas.postgres-localqueue.env.example /opt/jiejing-staging/private/postgres-localqueue.env
+chmod 600 /opt/jiejing-staging/private/tencent-managed.env /opt/jiejing-staging/private/jiejing-saas.staging-oauth.env /opt/jiejing-staging/private/postgres-localqueue.env
+stat -c '%a %n' /opt/jiejing-staging/private/tencent-managed.env /opt/jiejing-staging/private/jiejing-saas.staging-oauth.env /opt/jiejing-staging/private/postgres-localqueue.env
+```
+
+3. Fill placeholders through the backend-only operator path.
 
 ```text
-JIEJING_SAAS_SESSION_SECRET
-JIEJING_CORS_ORIGIN
-JIEJING_VAULT_ADDR
-JIEJING_VAULT_TOKEN
-JIEJING_EBAY_CLIENT_ID
-JIEJING_EBAY_RU_NAME
-JIEJING_EBAY_CLIENT_SECRET
+tencent-managed.env: Tencent region/SSM settings and managed Vault evidence
+jiejing-saas.staging-oauth.env: session, eBay, model, search, media and payment-provider secrets
+postgres-localqueue.env: PostgreSQL and queue connection URLs
 ```
 
-Keep the real file under `/opt/jiejing-staging/private/`. The `deploy/`
-directory should only contain `jiejing-saas.staging-oauth.env.example`.
+`JIEJING_SAAS_ENV`, CORS and other stable public route settings remain Compose
+static configuration, not secret-file values. Keep all three real files under
+`/opt/jiejing-staging/private/`; `deploy/` contains examples only.
 
-4. Start public staging.
+4. Before any build, copy or container operation, run the ownership check and
+   migration dry-run. Neither command changes private files.
 
 ```bash
+cd /opt/jiejing-staging/app
+sudo -n python3 tools/jiejing_runtime_env_overlap_guard.py check \
+  --compose deploy/docker-compose.public-staging.yml \
+  --managed-env /opt/jiejing-staging/private/tencent-managed.env \
+  --secret-env /opt/jiejing-staging/private/jiejing-saas.staging-oauth.env \
+  --postgres-env /opt/jiejing-staging/private/postgres-localqueue.env \
+  --json
+sudo -n python3 tools/jiejing_runtime_env_overlap_guard.py migrate \
+  --compose deploy/docker-compose.public-staging.yml \
+  --managed-env /opt/jiejing-staging/private/tencent-managed.env \
+  --secret-env /opt/jiejing-staging/private/jiejing-saas.staging-oauth.env \
+  --postgres-env /opt/jiejing-staging/private/postgres-localqueue.env \
+  --json
+```
+
+5. Start public staging only after both commands pass.
+
+```bash
+cd /opt/jiejing-staging/app
 JIEJING_PUBLIC_HTTP_PORT=80 docker compose -f deploy/docker-compose.public-staging.yml up -d --build
 ```
 
-5. Verify health.
+6. Verify health.
 
 ```bash
 curl -fsS http://127.0.0.1/health
 curl -fsS https://staging.<domain>/health
 ```
 
-6. Run the operator flow from a machine that can reach the staging URL.
+7. Validate the merged env shape without printing values, then run the operator
+   flow from a machine that can reach the staging URL.
+
+```bash
+docker compose -f deploy/docker-compose.public-staging.yml exec -T jiejing-saas \
+  python tools/jiejing_staging_ebay_oauth_readonly_flow.py check-env
+```
 
 ```bash
 python tools/jiejing_staging_ebay_oauth_readonly_flow.py doctor \
