@@ -61,6 +61,8 @@ FILES=(
   "docs/superpowers/specs/2026-07-15-independent-operations-console-design.md"
   "docs/superpowers/specs/2026-06-19-jiejing-first-order-loop-design.md"
   "docs/superpowers/specs/2026-06-19-jiejing-publish-preflight-resolution-design.md"
+  "docs/superpowers/specs/2026-08-03-real-merchant-feedback-closure-design.md"
+  "docs/superpowers/plans/2026-08-03-real-merchant-feedback-closure-implementation-plan.md"
   "favicon.ico"
   "index.html"
   "app.html"
@@ -105,6 +107,7 @@ FILES=(
   "jiejing_saas/queue_adapter.py"
   "jiejing_saas/queue_plan.py"
   "jiejing_saas/repository.py"
+  "jiejing_saas/product_feedback.py"
   "jiejing_saas/infrastructure_drivers.py"
   "jiejing_saas/operational_health.py"
   "jiejing_saas/operations_metering.py"
@@ -207,6 +210,13 @@ FILES=(
   "tools/test_jiejing_configure_tencent_runtime_env.py"
   "tools/test_jiejing_cos_backup_probe.py"
   "tools/test_jiejing_frontend_staging_config.py"
+  "tools/test_jiejing_media_nav_and_state_restore.py"
+  "tools/test_jiejing_saas_clean_settings_and_listing_ui.py"
+  "tools/test_jiejing_product_feedback_closure.py"
+  "tools/test_jiejing_platform_operations_overview.py"
+  "tools/test_jiejing_public_staging_proxy_contract.py"
+  "tools/codex_jiejing_operations_console_smoke.js"
+  "tools/codex_jiejing_product_feedback_smoke.js"
   "tools/test_jiejing_saas_p0_security_guardrails.py"
   "tools/test_jiejing_runtime_knowledge.py"
   "tools/test_jiejing_runtime_mvp.py"
@@ -358,6 +368,7 @@ python3 -m py_compile \
   jiejing_saas/queue_adapter.py \
   jiejing_saas/queue_plan.py \
   jiejing_saas/repository.py \
+  jiejing_saas/product_feedback.py \
   jiejing_saas/monitoring.py \
   jiejing_saas/vault_secret_resolver.py \
   jiejing_saas/vault_adapter.py \
@@ -453,6 +464,11 @@ python3 -m py_compile \
   tools/test_jiejing_configure_tencent_runtime_env.py \
   tools/test_jiejing_cos_backup_probe.py \
   tools/test_jiejing_frontend_staging_config.py \
+  tools/test_jiejing_media_nav_and_state_restore.py \
+  tools/test_jiejing_saas_clean_settings_and_listing_ui.py \
+  tools/test_jiejing_product_feedback_closure.py \
+  tools/test_jiejing_platform_operations_overview.py \
+  tools/test_jiejing_public_staging_proxy_contract.py \
   tools/test_jiejing_saas_p0_security_guardrails.py \
   tools/test_jiejing_runtime_knowledge.py \
   tools/test_jiejing_runtime_mvp.py \
@@ -537,6 +553,11 @@ python3 -m py_compile \
   tools/test_jiejing_fixed_launch_progress.py \
   tools/test_jiejing_merchant_workflow_validation.py \
   tools/test_jiejing_version_bound_release_evidence.py
+
+node --check app.js
+node --check ops.js
+node --check tools/codex_jiejing_operations_console_smoke.js
+node --check tools/codex_jiejing_product_feedback_smoke.js
 
 COMPOSE_FILE="deploy/docker-compose.public-https-staging.yml"
 if [[ ! -f "$COMPOSE_FILE" ]]; then

@@ -13,6 +13,7 @@ BUNDLE = ROOT / "tools" / "jiejing_prepare_public_staging_bundle.py"
 VAULT_INIT = ROOT / "deploy" / "staging-vault-init-unseal.sh"
 HTTPS_COMPOSE = ROOT / "deploy" / "docker-compose.public-https-staging.yml"
 HTTP_COMPOSE = ROOT / "deploy" / "docker-compose.public-staging.yml"
+PRECLOUD_GATE = ROOT / "tools" / "jiejing_precloud_deployment_gate.py"
 
 
 def fail(message: str) -> int:
@@ -25,6 +26,7 @@ def main() -> int:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8") if DOCKERFILE.exists() else ""
     bundle = BUNDLE.read_text(encoding="utf-8") if BUNDLE.exists() else ""
     vault_init = VAULT_INIT.read_text(encoding="utf-8") if VAULT_INIT.exists() else ""
+    precloud_gate = PRECLOUD_GATE.read_text(encoding="utf-8") if PRECLOUD_GATE.exists() else ""
     compose_files = [
         HTTPS_COMPOSE.read_text(encoding="utf-8") if HTTPS_COMPOSE.exists() else "",
         HTTP_COMPOSE.read_text(encoding="utf-8") if HTTP_COMPOSE.exists() else "",
@@ -62,6 +64,8 @@ def main() -> int:
         "docs/JIEJING_GITHUB_SELF_HOSTED_RUNNER_DEPLOY_RUNBOOK_20260622.md",
         "docs/superpowers/specs/2026-06-19-jiejing-first-order-loop-design.md",
         "docs/superpowers/specs/2026-06-19-jiejing-publish-preflight-resolution-design.md",
+        "docs/superpowers/specs/2026-08-03-real-merchant-feedback-closure-design.md",
+        "docs/superpowers/plans/2026-08-03-real-merchant-feedback-closure-implementation-plan.md",
         "favicon.ico",
         "index.html",
         "app.html",
@@ -94,6 +98,7 @@ def main() -> int:
         "jiejing_saas/database_adapter.py",
         "jiejing_saas/queue_adapter.py",
         "jiejing_saas/repository.py",
+        "jiejing_saas/product_feedback.py",
         "jiejing_saas/infrastructure_drivers.py",
         "jiejing_saas/paid_launch_approval_packet.py",
         "jiejing_saas/production_evidence_ledger.py",
@@ -135,6 +140,13 @@ def main() -> int:
         "tools/test_jiejing_configure_tencent_runtime_env.py",
         "tools/test_jiejing_cos_backup_probe.py",
         "tools/test_jiejing_frontend_staging_config.py",
+        "tools/test_jiejing_media_nav_and_state_restore.py",
+        "tools/test_jiejing_saas_clean_settings_and_listing_ui.py",
+        "tools/test_jiejing_product_feedback_closure.py",
+        "tools/test_jiejing_platform_operations_overview.py",
+        "tools/test_jiejing_public_staging_proxy_contract.py",
+        "tools/codex_jiejing_operations_console_smoke.js",
+        "tools/codex_jiejing_product_feedback_smoke.js",
         "tools/test_jiejing_staging_ebay_oauth_flow_tool.py",
         "tools/test_jiejing_ebay_live_read_http_client.py",
         "tools/test_jiejing_agent_model_assist.py",
@@ -244,6 +256,25 @@ def main() -> int:
     missing = [marker for marker in required if marker not in text]
     if missing:
         return fail("patch apply script missing markers: " + ",".join(missing))
+    compiled_or_checked = {
+        "jiejing_saas/product_feedback.py": 2,
+        "tools/test_jiejing_product_feedback_closure.py": 2,
+        "tools/test_jiejing_media_nav_and_state_restore.py": 2,
+        "tools/test_jiejing_saas_clean_settings_and_listing_ui.py": 2,
+        "tools/test_jiejing_platform_operations_overview.py": 2,
+        "tools/test_jiejing_public_staging_proxy_contract.py": 2,
+        "tools/codex_jiejing_operations_console_smoke.js": 2,
+        "tools/codex_jiejing_product_feedback_smoke.js": 2,
+    }
+    for marker, minimum_count in compiled_or_checked.items():
+        if text.count(marker) < minimum_count:
+            return fail(f"patch apply script must whitelist and syntax-check the feedback closure file: {marker}")
+    for marker in [
+        '("product_feedback_closure", [sys.executable, "tools/test_jiejing_product_feedback_closure.py"])',
+        '("product_feedback_browser_smoke", ["node", "tools/codex_jiejing_product_feedback_smoke.js"])',
+    ]:
+        if marker not in precloud_gate:
+            return fail(f"precloud gate missing product-feedback closure check: {marker}")
     if 'python -c "import jiejing_saas.api_server; import jiejing_saas.repository"' not in dockerfile:
         return fail("SaaS image must import its backend entry points during build")
     api_start = text.index('up -d --no-deps jiejing-saas')
