@@ -246,6 +246,8 @@ def main() -> int:
         "caddy validate --config /etc/caddy/Caddyfile",
         "docker compose \"${COMPOSE_ARGS[@]}\" exec -T jiejing-saas",
         "urllib.request.urlopen('http://127.0.0.1:8788/health'",
+        'NODE_BIN="${JIEJING_NODE_BIN:-node}"',
+        '"$NODE_BIN" --check app.js',
         "BACKUP_DIR=",
         "COMPOSE_FILES=",
         "PUBLIC_ASSET_RETIREMENTS=(",

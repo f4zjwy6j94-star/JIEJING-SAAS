@@ -132,6 +132,12 @@ printf '%s' "$JIEJING_EBAY_CLIENT_SECRET" | \
     JIEJING_EBAY_CLIENT_SECRET
 unset JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN JIEJING_EBAY_CLIENT_SECRET
 
+NODE_BIN="$(command -v node)"
+if [[ -z "$NODE_BIN" || ! -x "$NODE_BIN" ]]; then
+  echo "REFUSE_MISSING_NODE_BIN=1" >&2
+  exit 21
+fi
+
 mkdir -p "$backup_dir/app"
 rsync -a --delete \
   --exclude '/output/private-backups/' \
@@ -143,7 +149,8 @@ if command -v curl >/dev/null 2>&1; then
   curl -fsS --max-time 8 http://127.0.0.1:8788/health > "$backup_dir/pre-deploy-health.json" || true
 fi
 
-sudo -n JIEJING_APP_DIR="$resolved_app_dir" bash "$release_dir/deploy/apply-staging-patch.sh" "$release_dir"
+sudo -n JIEJING_APP_DIR="$resolved_app_dir" JIEJING_NODE_BIN="$NODE_BIN" \
+  bash "$release_dir/deploy/apply-staging-patch.sh" "$release_dir"
 
 echo "JIEJING_STAGING_DEPLOY_APPLIED=1"
 echo "RELEASE_DIR=$release_dir"

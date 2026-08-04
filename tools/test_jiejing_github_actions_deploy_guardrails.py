@@ -102,6 +102,8 @@ def main() -> int:
         "REFUSE_MISSING_EBAY_CLIENT_SECRET=1",
         "JIEJING_EBAY_CLIENT_SECRET",
         "unset JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN JIEJING_EBAY_CLIENT_SECRET",
+        'NODE_BIN="$(command -v node)"',
+        'JIEJING_NODE_BIN="$NODE_BIN"',
         "sudo -n JIEJING_APP_DIR=",
         "deploy/apply-staging-patch.sh",
     ]

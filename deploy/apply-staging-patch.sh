@@ -554,10 +554,11 @@ python3 -m py_compile \
   tools/test_jiejing_merchant_workflow_validation.py \
   tools/test_jiejing_version_bound_release_evidence.py
 
-node --check app.js
-node --check ops.js
-node --check tools/codex_jiejing_operations_console_smoke.js
-node --check tools/codex_jiejing_product_feedback_smoke.js
+NODE_BIN="${JIEJING_NODE_BIN:-node}"
+"$NODE_BIN" --check app.js
+"$NODE_BIN" --check ops.js
+"$NODE_BIN" --check tools/codex_jiejing_operations_console_smoke.js
+"$NODE_BIN" --check tools/codex_jiejing_product_feedback_smoke.js
 
 COMPOSE_FILE="deploy/docker-compose.public-https-staging.yml"
 if [[ ! -f "$COMPOSE_FILE" ]]; then
