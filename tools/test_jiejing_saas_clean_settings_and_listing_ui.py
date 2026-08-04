@@ -71,6 +71,12 @@ def main() -> None:
     require(index_html, "未连接前不会读取店铺数据，也不会执行高风险动作", "merchant-facing homepage auth copy")
     require(app_html, "不保存敏感凭证或平台账号资料", "merchant-facing feedback privacy copy")
     require(app_js, "不保存敏感凭证或平台账号资料", "workflow feedback avoids token/key wording")
+    require(app_js, "已送达 JIEJING 团队；服务器已返回接收回执。", "server-receipt delivery copy")
+    require(app_js, "意见已保存在本机", "honest queued feedback copy")
+    require(app_js, "请实际修改意见类型或补充内容", "editable validation recovery copy")
+    require(app_js, "已隔离且停止自动重试", "idempotency conflict copy")
+    require(app_html, "data-workflow-feedback-retry", "manual product feedback retry action")
+    require(styles, "body.saas-public-mvp[data-view=\"cockpit\"] .workflow-feedback-shell", "mobile-safe feedback placement")
     require(app_js, "软件套餐、商家模型、素材点和平台成本分开", "billing pricing keeps software, BYOK, media, and platform costs separate")
     settings_data_body = app_js[app_js.index("function renderSaasSettingsDataPanel") : app_js.index("function renderSaasSettingsFocusPanel")]
     if "后端" in settings_data_body or "浏览器不能" in settings_data_body:

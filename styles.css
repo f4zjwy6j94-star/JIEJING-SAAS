@@ -38029,10 +38029,6 @@ body.saas-public-mvp[data-view="cockpit"] .workflow-feedback-drawer {
     bottom: 14px;
   }
 
-  body.saas-public-mvp .workflow-feedback-shell {
-    display: none;
-  }
-
   .workflow-feedback-drawer {
     right: 12px;
     bottom: 66px;

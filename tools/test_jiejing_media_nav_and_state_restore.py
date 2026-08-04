@@ -102,9 +102,9 @@ def main() -> int:
     for marker in [
         "markEntryOnboardingCompleted()",
         "function hasEntryOnboardingCompleted",
-        'activePath = "opened"',
+        "await loadEntryMerchantOnboarding()",
+        "model?.progress?.preferences_saved",
         "openLoggedInExperience(activePath, { onboarded: true })",
-        'if (hasEntryOnboardingCompleted())',
     ]:
         if marker not in index_html:
             return fail(f"login restore must respect completed onboarding before reopening workbench: {marker}")
@@ -151,7 +151,7 @@ def main() -> int:
     if "if (isSaasPublicMvpMode())" not in ceo_submit_body:
         return fail("public SaaS AI CEO submit should use the real command routing path before legacy media demo routing")
     for marker in [
-        "20260714-operations-metering-v86",
+        "20260803-product-feedback-v1",
     ]:
         if marker not in app_html + index_html:
             return fail(f"frontend cache version must advance after owner publish UI change: {marker}")
@@ -185,6 +185,31 @@ def main() -> int:
         "product_improvement",
         "data-workflow-feedback-reason",
         "提交给 JIEJING 团队",
+        "data-workflow-feedback-retry",
+        'productFeedbackOutbox: "jiejing_saas_product_feedback_outbox_v1"',
+        'productFeedbackReceipts: "jiejing_saas_product_feedback_receipts_v1"',
+        'productFeedbackMigration: "jiejing_saas_product_feedback_migration_v1"',
+        "function saasProductFeedbackStorageScope",
+        "function migrateLegacySaasProductFeedback",
+        "function flushSaasProductFeedbackOutbox",
+        "function deliverSaasProductFeedbackItem",
+        "saasProductFeedbackLiveIdentityConfirmed",
+        "saasProductFeedbackLiveIdentityGeneration",
+        "function markSaasProductFeedbackLiveIdentity",
+        "function saasProductFeedbackContainsSecret",
+        "function validateSaasProductFeedbackServerReceipt",
+        "const saasProductFeedbackFlushPromises = new Map()",
+        'delivery_state: "needs_edit"',
+        'delivery_state: "conflict"',
+        "next_retry_at",
+        "processed_fingerprints",
+        "next_index",
+        "data-workflow-feedback-edit",
+        "data-workflow-feedback-discard",
+        'saasFetchWithTimeout(\n      "/product-feedback"',
+        'status === 400',
+        'status === 409',
+        'status === 401 || status === 429 || status === 503',
     ]:
         if marker not in app_js + app_html + css:
             return fail(f"workflow feedback must be folded into the app flow, not a sidebar module: {marker}")
@@ -193,6 +218,12 @@ def main() -> int:
     feedback_body = app_js[feedback_start:feedback_end]
     if "recordSaasWorkflowFeedbackToMemory(record)" in feedback_body or "addCeoMessage(summary" in feedback_body:
         return fail("workflow feedback must go to product feedback, not AI CEO memory or chat replay")
+    if "state.saasMerchantFeedback" in feedback_body or "persistSaasMerchantFeedback" in feedback_body:
+        return fail("product improvement delivery must not mutate useful/not_useful/remember_rule merchant memory")
+    if 'optionalSaasFetchFast("/product-feedback"' in app_js or "optionalSaasFetchFast('/product-feedback'" in app_js:
+        return fail("product feedback writes must use the abortable authenticated timeout path")
+    if "body.saas-public-mvp .workflow-feedback-shell {\n    display: none;" in css:
+        return fail("mobile public workbench must keep the product feedback entry reachable")
     if 'data-view="feedback"' in nav_html or "意见箱" in nav_html:
         return fail("workflow feedback must not become an eighth sidebar module")
     for forbidden in ["state.saasToken", "refresh_token:", "api_key:", "model_key:"]:

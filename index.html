@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="prefetch" href="./app.html?start=app&view=cockpit" as="document" />
-    <link rel="prefetch" href="./app.js?v=20260802-merchant-onboarding-v2" as="script" />
-    <link rel="prefetch" href="./styles.css?v=20260715-owner-traffic-analytics-v104" as="style" />
+    <link rel="prefetch" href="./app.js?v=20260803-product-feedback-v1" as="script" />
+    <link rel="prefetch" href="./styles.css?v=20260803-product-feedback-v1" as="style" />
     <title>捷境 · eBay AI CEO 自动化工作台</title>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
     <style>
@@ -4691,7 +4691,7 @@
 
     <script src="./assets/jiejing-first-party-analytics.js?v=20260715-owner-traffic-analytics-v104"></script>
     <script>
-      const JIEJING_SITE_VERSION = "20260715-owner-traffic-analytics-v104";
+      const JIEJING_SITE_VERSION = "20260803-product-feedback-v1";
 
       (function routeOfficialEntryToApp() {
         const params = new URLSearchParams(window.location.search);
@@ -4705,8 +4705,8 @@
       function warmWorkspaceAssets() {
         const assets = [
           ["prefetch", "./app.html?start=app&view=workflow", "document"],
-          ["preload", "./app.js?v=20260802-merchant-onboarding-v2", "script"],
-          ["preload", "./styles.css?v=20260715-owner-traffic-analytics-v104", "style"],
+          ["preload", "./app.js?v=20260803-product-feedback-v1", "script"],
+          ["preload", "./styles.css?v=20260803-product-feedback-v1", "style"],
         ];
         assets.forEach(([rel, href, as]) => {
           if (document.querySelector(`link[href="${href}"]`)) return;

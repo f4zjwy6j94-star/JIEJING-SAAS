@@ -197,6 +197,16 @@ const state = {
   saasWorkflowFeedbackReason: "",
   saasWorkflowFeedbackDraft: "",
   saasWorkflowFeedbackContextOverride: null,
+  saasProductFeedbackScope: "",
+  saasProductFeedbackStatus: "idle",
+  saasProductFeedbackStatusMessage: "",
+  saasProductFeedbackLiveIdentityConfirmed: false,
+  saasProductFeedbackLiveIdentityGeneration: 0,
+  saasProductFeedbackLiveIdentityKey: "",
+  saasProductFeedbackStorageError: false,
+  saasProductFeedbackDraftItemId: "",
+  saasProductFeedbackRecoveryItemId: "",
+  saasProductFeedbackRecoveryOriginalSignature: "",
   saasListingComposerInput: "",
   saasListingCeoHandoff: null,
   saasListingComposerDraft: null,
@@ -297,6 +307,9 @@ const saasStorageKeys = {
   onboardingDone: "jiejing_saas_onboarding_done",
   sourceRecords: "jiejing_saas_source_records",
   merchantFeedback: "jiejing_saas_merchant_feedback",
+  productFeedbackOutbox: "jiejing_saas_product_feedback_outbox_v1",
+  productFeedbackReceipts: "jiejing_saas_product_feedback_receipts_v1",
+  productFeedbackMigration: "jiejing_saas_product_feedback_migration_v1",
   ceoCommand: "jiejing_saas_ceo_command",
   ceoThread: "jiejing_saas_ceo_thread",
   ceoMarketTurn: "jiejing_saas_ceo_market_turn",
@@ -16746,6 +16759,7 @@ function readSaasProtectedStateSnapshotFromStorage() {
 function hydrateSaasProtectedStateFromCache() {
   if (!isSaasPublicMvpMode() || state.saasProtectedStateReady || hasSaasProtectedBackendState()) return false;
   if (!hasSaasProtectedSessionCandidate()) return false;
+  clearSaasProductFeedbackLiveIdentity();
   try {
     const snapshot = readSaasProtectedStateSnapshotFromStorage();
     if (
@@ -16797,6 +16811,8 @@ function hydrateSaasProtectedStateFromCache() {
 }
 
 function clearSaasSessionFromStorage(options = {}) {
+  clearSaasProductFeedbackLiveIdentity();
+  resetSaasProductFeedbackViewState();
   const preserveCeoThread = Boolean(options.preserveCeoThread);
   const activeCeoCommand = preserveCeoThread ? normalizeSaasCeoCommand(state.saasLastCeoCommand) : null;
   const activeCeoThread = preserveCeoThread && Array.isArray(state.saasAiCeoThread)
@@ -17067,6 +17083,8 @@ function shouldFetchDirectRuntimeApi() {
 }
 
 function resetSaasProtectedWorkbenchState() {
+  clearSaasProductFeedbackLiveIdentity();
+  resetSaasProductFeedbackViewState();
   state.saasConnected = false;
   state.saasProtectedStateReady = false;
   state.saasProtectedStateFromCache = false;
@@ -21060,7 +21078,7 @@ function renderWorkflowFeedbackReasonButtons(context = {}) {
   return buttons
     .map(
       ([key, label]) => `
-        <button class="workflow-feedback-reason ${state.saasWorkflowFeedbackReason === key ? "is-active" : ""}" type="button" data-workflow-feedback-reason="${escapeHtml(key)}" data-workflow-feedback-open data-workflow-feedback-module="${escapeHtml(moduleLabel)}" data-workflow-feedback-stage="${escapeHtml(stageTitle)}" data-workflow-feedback-module-key="${escapeHtml(moduleKey)}">
+        <button class="workflow-feedback-reason ${state.saasWorkflowFeedbackReason === key ? "is-active" : ""}" type="button" aria-pressed="${state.saasWorkflowFeedbackReason === key ? "true" : "false"}" data-workflow-feedback-reason="${escapeHtml(key)}" data-workflow-feedback-open data-workflow-feedback-module="${escapeHtml(moduleLabel)}" data-workflow-feedback-stage="${escapeHtml(stageTitle)}" data-workflow-feedback-module-key="${escapeHtml(moduleKey)}">
           ${escapeHtml(label)}
         </button>
       `,
@@ -21114,6 +21132,14 @@ function renderWorkflowFeedbackWidget() {
   const reasonsNode = shell.querySelector("#workflowFeedbackReasons");
   const textNode = shell.querySelector("#workflowFeedbackText");
   const statusNode = shell.querySelector("#workflowFeedbackStatus");
+  const submitNode = shell.querySelector("[data-workflow-feedback-submit]");
+  const retryNode = shell.querySelector("[data-workflow-feedback-retry]");
+  const editNode = shell.querySelector("[data-workflow-feedback-edit]");
+  const discardNode = shell.querySelector("[data-workflow-feedback-discard]");
+  const scope = syncSaasProductFeedbackViewScope();
+  const outbox = scope ? readSaasProductFeedbackOutbox(scope) : [];
+  const retryableCount = outbox.filter((item) => !SAAS_PRODUCT_FEEDBACK_QUARANTINE_STATES.has(item.delivery_state)).length;
+  const recoveryItem = outbox.find((item) => SAAS_PRODUCT_FEEDBACK_QUARANTINE_STATES.has(item.delivery_state));
   shell.classList.toggle("is-open", state.saasWorkflowFeedbackOpen);
   if (toggle) {
     toggle.setAttribute("aria-expanded", state.saasWorkflowFeedbackOpen ? "true" : "false");
@@ -21124,7 +21150,30 @@ function renderWorkflowFeedbackWidget() {
   if (contextNode) setJiejingTrustedHtml(contextNode, trustedJiejingHtml(renderWorkflowFeedbackContextChips(context), "workflow_feedback.context"));
   if (reasonsNode) setJiejingTrustedHtml(reasonsNode, trustedJiejingHtml(renderWorkflowFeedbackReasonButtons(context), "workflow_feedback.reasons"));
   if (textNode && document.activeElement !== textNode) textNode.value = state.saasWorkflowFeedbackDraft || "";
-  if (statusNode) statusNode.textContent = "只记录产品/流程改进意见和上下文编号，不保存敏感凭证或平台账号资料，不影响店铺执行。";
+  if (submitNode) {
+    submitNode.disabled = state.saasProductFeedbackStatus === "submitting" || !scope;
+    submitNode.textContent = state.saasProductFeedbackStatus === "submitting" ? "正在送达…" : "提交给 JIEJING 团队";
+  }
+  if (retryNode) {
+    retryNode.hidden = retryableCount === 0;
+    retryNode.disabled = state.saasProductFeedbackStatus === "submitting" || !scope;
+    retryNode.textContent = retryableCount > 1 ? `重试 ${retryableCount} 条待发意见` : "重试待发意见";
+  }
+  if (editNode) {
+    editNode.hidden = !recoveryItem;
+    editNode.dataset.workflowFeedbackItemId = recoveryItem?.local_id || "";
+    editNode.textContent = recoveryItem?.delivery_state === "conflict" ? "编辑后作为新意见提交" : "打开并修改";
+  }
+  if (discardNode) {
+    discardNode.hidden = !recoveryItem;
+    discardNode.dataset.workflowFeedbackItemId = recoveryItem?.local_id || "";
+  }
+  if (statusNode) {
+    statusNode.dataset.feedbackState = state.saasProductFeedbackStatus || "idle";
+    statusNode.textContent = state.saasProductFeedbackStatusMessage || (outbox.length
+      ? `有 ${outbox.length} 条意见安全保存在本机；登录并联网后会自动重试。`
+      : "只记录产品/流程改进意见和上下文编号，不保存敏感凭证或平台账号资料，不影响店铺执行。");
+  }
   return true;
 }
 
@@ -21141,46 +21190,183 @@ function closeSaasWorkflowFeedback() {
   state.saasWorkflowFeedbackReason = "";
   state.saasWorkflowFeedbackDraft = "";
   state.saasWorkflowFeedbackContextOverride = null;
+  state.saasProductFeedbackRecoveryItemId = "";
+  state.saasProductFeedbackRecoveryOriginalSignature = "";
   renderWorkflowFeedbackWidget();
 }
 
-function submitSaasWorkflowFeedback() {
+function openSaasProductFeedbackRecovery(scope, localId) {
+  if (!scope || scope !== saasProductFeedbackStorageScope()) return false;
+  const item = readSaasProductFeedbackOutbox(scope).find((candidate) => candidate.local_id === localId);
+  if (!item || !SAAS_PRODUCT_FEEDBACK_QUARANTINE_STATES.has(item.delivery_state)) return false;
   const textNode = document.querySelector("#workflowFeedbackText");
-  state.saasWorkflowFeedbackDraft = sanitizeSaasWorkflowFeedbackText(textNode?.value || state.saasWorkflowFeedbackDraft || "", 420);
-  if (!state.saasWorkflowFeedbackReason && !state.saasWorkflowFeedbackDraft) {
-    showActionToast("先选一个意见类型，或写一句要改进的地方。");
+  const activeDraft = String(textNode?.value || state.saasWorkflowFeedbackDraft || "").trim();
+  if (activeDraft && activeDraft !== String(item.payload.detail || "").trim() && state.saasProductFeedbackRecoveryItemId !== item.local_id) {
+    state.saasProductFeedbackStatus = "draft_preserved";
+    state.saasProductFeedbackStatusMessage = "当前正在填写的草稿未被覆盖。请先提交、清空或关闭当前草稿，再打开待处理意见。";
+    renderWorkflowFeedbackWidget();
     return false;
   }
-  const context = buildSaasWorkflowFeedbackContext(state.saasWorkflowFeedbackReason);
-  const summary = workflowFeedbackProductSummary(context, state.saasWorkflowFeedbackDraft);
-  const latest = latestSaasMerchantReport();
-  const record = normalizeSaasMerchantFeedback({
-    id: `workflow-feedback-${Date.now()}`,
-    feedback_type: "product_improvement",
-    feedback_label: context.reason_label || "产品改进意见",
-    report_id: context.report_id || latest?.report_id || latest?.task_id || "no_report_yet",
-    report_type: context.module_key || state.view || "",
-    report_title: context.stage_title || context.module_label || workflowFeedbackViewLabel(state.view),
-    rule_text: summary,
-    category_hint: context.packet_id || "",
-    supplier_hint: context.confirmation_id || "",
-    workflow_context: context,
-    created_at: context.created_at || new Date().toISOString(),
-  });
-  state.saasMerchantFeedback = [record, ...(state.saasMerchantFeedback || []).filter((item) => item.id !== record.id)].slice(0, 80);
-  persistSaasMerchantFeedback();
-  state.saasWorkflowFeedbackOpen = false;
-  state.saasWorkflowFeedbackReason = "";
-  state.saasWorkflowFeedbackDraft = "";
-  state.saasWorkflowFeedbackContextOverride = null;
+  state.saasWorkflowFeedbackOpen = true;
+  state.saasWorkflowFeedbackReason = item.payload.reason;
+  state.saasWorkflowFeedbackDraft = item.payload.detail;
+  state.saasWorkflowFeedbackContextOverride = {
+    module_key: item.payload.module_key,
+    module_label: workflowFeedbackViewLabel(item.payload.module_key),
+    stage_title: item.payload.stage_title,
+    task_id: item.payload.task_id,
+    report_id: item.payload.report_id,
+    confirmation_id: item.payload.confirmation_id,
+    packet_id: item.payload.packet_id,
+  };
+  state.saasProductFeedbackRecoveryItemId = item.local_id;
+  state.saasProductFeedbackRecoveryOriginalSignature = saasProductFeedbackPayloadSignature(item.payload);
+  state.saasProductFeedbackDraftItemId = "";
+  state.saasProductFeedbackStatus = item.delivery_state;
+  state.saasProductFeedbackStatusMessage = item.delivery_state === "conflict"
+    ? "请实际修改意见类型或补充内容，再作为一条新意见提交；也可以丢弃本机冲突记录。"
+    : "请修改后重新提交；原记录会保留到新意见已安全写入本机。";
   renderWorkflowFeedbackWidget();
-  showActionToast("意见已提交给 JIEJING 团队；只用于改进产品流程，不影响店铺执行。");
+  window.setTimeout(() => document.querySelector("#workflowFeedbackText")?.focus(), 0);
   return true;
 }
 
+function discardSaasProductFeedbackRecovery(scope, localId) {
+  if (!scope || scope !== saasProductFeedbackStorageScope()) return false;
+  const item = readSaasProductFeedbackOutbox(scope).find((candidate) => candidate.local_id === localId);
+  if (!item || !SAAS_PRODUCT_FEEDBACK_QUARANTINE_STATES.has(item.delivery_state)) return false;
+  if (!removeSaasProductFeedbackOutboxItem(scope, item.local_id)) {
+    setSaasProductFeedbackStatus(scope, "storage_failed", "本机记录无法安全更新，没有丢弃任何数据。请检查浏览器存储后重试。");
+    return false;
+  }
+  if (state.saasProductFeedbackRecoveryItemId === item.local_id) {
+    state.saasProductFeedbackRecoveryItemId = "";
+    state.saasProductFeedbackRecoveryOriginalSignature = "";
+    state.saasWorkflowFeedbackReason = "";
+    state.saasWorkflowFeedbackDraft = "";
+    state.saasWorkflowFeedbackContextOverride = null;
+  }
+  setSaasProductFeedbackStatus(scope, "idle", "本机待处理记录已丢弃；没有触发外部平台动作。");
+  showActionToast("本机待处理意见已丢弃。 ");
+  return true;
+}
+
+async function submitSaasWorkflowFeedback() {
+  const textNode = document.querySelector("#workflowFeedbackText");
+  const rawDetail = String(textNode?.value || state.saasWorkflowFeedbackDraft || "");
+  if (!state.saasWorkflowFeedbackReason) {
+    showActionToast("请先选一个最接近的意见类型；补充说明可以留空。");
+    return false;
+  }
+  const context = buildSaasWorkflowFeedbackContext(state.saasWorkflowFeedbackReason);
+  const rawPayload = saasProductFeedbackRawPayloadFromContext(context, rawDetail);
+  if (saasProductFeedbackContainsSecret(rawPayload)) {
+    state.saasWorkflowFeedbackDraft = "";
+    state.saasProductFeedbackStatus = "secret_blocked";
+    state.saasProductFeedbackStatusMessage = "检测到可能的密码、令牌或密钥；本条未保存、未发送。请删除敏感内容后重新填写。";
+    renderWorkflowFeedbackWidget();
+    showActionToast("检测到可能的敏感连接信息；没有保存或发送。 ");
+    return false;
+  }
+  state.saasWorkflowFeedbackDraft = sanitizeSaasWorkflowFeedbackText(rawDetail, 420);
+  const scope = syncSaasProductFeedbackViewScope();
+  if (!scope) {
+    state.saasWorkflowFeedbackOpen = true;
+    state.saasProductFeedbackStatus = "identity_required";
+    state.saasProductFeedbackStatusMessage = "请先完成登录并等当前店铺加载完成；未确认身份前不会读取或发送本机意见。";
+    renderWorkflowFeedbackWidget();
+    showActionToast("请先登录并等店铺加载完成，再提交意见。");
+    return false;
+  }
+  const existingOutbox = readSaasProductFeedbackOutbox(scope);
+  if (state.saasProductFeedbackStorageError) {
+    state.saasProductFeedbackStatus = "storage_failed";
+    state.saasProductFeedbackStatusMessage = "本机意见存储无法安全读取；为避免覆盖原记录，系统已停止保存和发送。当前草稿仍保留。";
+    renderWorkflowFeedbackWidget();
+    showActionToast("本机意见存储需要修复；没有保存或发送。 ");
+    return false;
+  }
+  const recoveryId = state.saasProductFeedbackRecoveryItemId || "";
+  const recoveryItem = recoveryId ? existingOutbox.find((item) => item.local_id === recoveryId) : null;
+  if (recoveryId && (!recoveryItem || !SAAS_PRODUCT_FEEDBACK_QUARANTINE_STATES.has(recoveryItem.delivery_state))) {
+    state.saasProductFeedbackStatus = "recovery_missing";
+    state.saasProductFeedbackStatusMessage = "待修改记录已变化，请重新打开待处理意见；当前草稿仍保留。";
+    renderWorkflowFeedbackWidget();
+    return false;
+  }
+  const remainingOutbox = recoveryItem ? existingOutbox.filter((item) => item.local_id !== recoveryItem.local_id) : existingOutbox;
+  if (remainingOutbox.length >= SAAS_PRODUCT_FEEDBACK_OUTBOX_LIMIT) {
+    state.saasProductFeedbackStatus = "outbox_full";
+    state.saasProductFeedbackStatusMessage = "本机待发意见已达到 20 条上限；请先联网重试，当前草稿不会被清除。";
+    renderWorkflowFeedbackWidget();
+    showActionToast("待发意见已满，请先联网重试；当前草稿仍保留。 ");
+    return false;
+  }
+  const payload = saasProductFeedbackPayloadFromContext(context, state.saasWorkflowFeedbackDraft);
+  if (!payload) {
+    state.saasProductFeedbackStatus = "failed_validation";
+    state.saasProductFeedbackStatusMessage = "当前意见类型或页面信息不完整，请重新选择后提交。";
+    renderWorkflowFeedbackWidget();
+    return false;
+  }
+  if (recoveryItem && saasProductFeedbackPayloadSignature(payload) === state.saasProductFeedbackRecoveryOriginalSignature) {
+    state.saasProductFeedbackStatus = "recovery_unchanged";
+    state.saasProductFeedbackStatusMessage = recoveryItem.delivery_state === "conflict"
+      ? "请实际修改意见类型或补充内容，再作为一条新意见提交。"
+      : "请先实际修改意见类型或补充内容，再重新提交。";
+    renderWorkflowFeedbackWidget();
+    return false;
+  }
+  const createdAt = context.created_at || new Date().toISOString();
+  const localId = `product-feedback-${Date.now()}-${Math.abs(hashString(`${createdAt}|${JSON.stringify(payload)}`))}`;
+  const item = normalizeSaasProductFeedbackOutboxItem({
+    local_id: localId,
+    idempotency_key: saasProductFeedbackIdempotencyKey(payload),
+    payload,
+    created_at: createdAt,
+    delivery_state: "queued_local",
+  });
+  if (!item || !writeSaasProductFeedbackOutbox(scope, [item, ...remainingOutbox])) {
+    state.saasProductFeedbackStatus = "storage_failed";
+    state.saasProductFeedbackStatusMessage = "浏览器未能安全保存这条意见；草稿仍在，请检查浏览器存储权限后重试。";
+    renderWorkflowFeedbackWidget();
+    showActionToast("意见尚未送达，草稿仍保留；请检查浏览器存储权限。 ");
+    return false;
+  }
+  state.saasProductFeedbackDraftItemId = localId;
+  state.saasProductFeedbackRecoveryItemId = "";
+  state.saasProductFeedbackRecoveryOriginalSignature = "";
+  state.saasProductFeedbackStatus = "submitting";
+  state.saasProductFeedbackStatusMessage = "正在安全送达 JIEJING 团队…";
+  renderWorkflowFeedbackWidget();
+  const result = await flushSaasProductFeedbackOutbox({ scope, trigger: "submit" });
+  return result.delivered > 0;
+}
+
 function handleWorkflowFeedbackButton(button) {
+  if (button.hasAttribute("data-workflow-feedback-edit")) {
+    const scope = syncSaasProductFeedbackViewScope();
+    if (!scope) return true;
+    openSaasProductFeedbackRecovery(scope, button.dataset.workflowFeedbackItemId || "");
+    return true;
+  }
+  if (button.hasAttribute("data-workflow-feedback-discard")) {
+    const scope = syncSaasProductFeedbackViewScope();
+    if (!scope) return true;
+    discardSaasProductFeedbackRecovery(scope, button.dataset.workflowFeedbackItemId || "");
+    return true;
+  }
+  if (button.hasAttribute("data-workflow-feedback-retry")) {
+    const scope = syncSaasProductFeedbackViewScope();
+    if (!scope) {
+      showActionToast("请先登录并等店铺加载完成，再重试待发意见。");
+      return true;
+    }
+    void flushSaasProductFeedbackOutbox({ scope, trigger: "manual" });
+    return true;
+  }
   if (button.hasAttribute("data-workflow-feedback-submit")) {
-    submitSaasWorkflowFeedback();
+    void submitSaasWorkflowFeedback();
     return true;
   }
   if (button.hasAttribute("data-workflow-feedback-close")) {
@@ -26219,7 +26405,9 @@ async function refreshSaasState(options = {}) {
     persistSaasAiCeoThread({ syncBackend: false });
     scheduleSaasAiCeoThreadBackendSync(0);
     state.saasProtectedStateReady = true;
+    markSaasProductFeedbackLiveIdentity(coreMe);
     saveSaasProtectedStateSnapshot();
+    prepareSaasProductFeedbackScopeAfterIdentity();
     state.saasLoading = false;
     document.documentElement.classList.remove("app-auth-pending");
     if (isSaasPublicMvpMode() && isProtectedSaasAppRoute()) {
@@ -26634,6 +26822,743 @@ async function reconcileSaasOwnerReliabilityAlerts() {
   } catch (error) {
     showActionToast(`告警状态评估失败：${String(error.message || error)}`);
   }
+}
+
+const SAAS_PRODUCT_FEEDBACK_ACCOUNT_WIDE_SCOPE = "__account_wide__";
+const SAAS_PRODUCT_FEEDBACK_OUTBOX_LIMIT = 20;
+const SAAS_PRODUCT_FEEDBACK_RECEIPT_LIMIT = 40;
+const SAAS_PRODUCT_FEEDBACK_RETRY_BASE_MS = 2000;
+const SAAS_PRODUCT_FEEDBACK_RETRY_MAX_MS = 300000;
+const SAAS_PRODUCT_FEEDBACK_MODULE_KEYS = new Set(["cockpit", "workflow", "product", "bulk", "media", "confirm", "service", "connect", "activity"]);
+const SAAS_PRODUCT_FEEDBACK_REASONS = new Set(["unclear", "wrong_result", "missing_action"]);
+const SAAS_PRODUCT_FEEDBACK_SERVER_STATUSES = new Set(["open", "reviewing", "resolved"]);
+const SAAS_PRODUCT_FEEDBACK_QUARANTINE_STATES = new Set(["needs_edit", "conflict", "blocked_error"]);
+const saasProductFeedbackFlushPromises = new Map();
+const saasProductFeedbackCorruptStorageKeys = new Set();
+const saasProductFeedbackUncertainDeliveryItems = new Set();
+
+function clearSaasProductFeedbackLiveIdentity() {
+  state.saasProductFeedbackLiveIdentityConfirmed = false;
+  state.saasProductFeedbackLiveIdentityKey = "";
+}
+
+function markSaasProductFeedbackLiveIdentity(me = {}) {
+  const companyId = String(me.company?.company_id || me.identity?.company_id || state.saasCompany?.company_id || "").trim();
+  const userId = String(me.user?.user_id || me.identity?.user_id || state.saasUser?.user_id || "").trim();
+  if (!companyId || !userId) {
+    clearSaasProductFeedbackLiveIdentity();
+    return false;
+  }
+  state.saasProductFeedbackLiveIdentityGeneration = Math.max(0, Number(state.saasProductFeedbackLiveIdentityGeneration || 0)) + 1;
+  state.saasProductFeedbackLiveIdentityConfirmed = true;
+  state.saasProductFeedbackLiveIdentityKey = `${companyId}\u0000${userId}`;
+  return true;
+}
+
+function saasProductFeedbackIdentityParts() {
+  if (!state.saasProtectedStateReady || state.saasProtectedStateFromCache || !state.saasProductFeedbackLiveIdentityConfirmed) return null;
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const userId = String(state.saasUser?.user_id || state.saasIdentity?.user_id || "").trim();
+  if (!companyId || !userId || state.saasProductFeedbackLiveIdentityKey !== `${companyId}\u0000${userId}`) return null;
+  const activeStoreId = String(activeSaasStore()?.store_id || "").trim();
+  const storeId = activeStoreId || (Array.isArray(state.saasStores) && state.saasStores.length === 0 ? SAAS_PRODUCT_FEEDBACK_ACCOUNT_WIDE_SCOPE : "");
+  if (!storeId) return null;
+  return { companyId, userId, storeId };
+}
+
+function saasProductFeedbackStorageScope() {
+  const identity = saasProductFeedbackIdentityParts();
+  if (!identity) return "";
+  return `company:${encodeURIComponent(identity.companyId)}::user:${encodeURIComponent(identity.userId)}::store:${encodeURIComponent(identity.storeId)}`;
+}
+
+function noteSaasProductFeedbackStorageFailure(storageKey) {
+  saasProductFeedbackCorruptStorageKeys.add(storageKey);
+  state.saasProductFeedbackStorageError = true;
+  state.saasProductFeedbackStatus = "storage_failed";
+  state.saasProductFeedbackStatusMessage = "本机意见存储无法安全读取；为避免覆盖原记录，系统已停止发送。当前草稿仍保留。";
+}
+
+function readSaasProductFeedbackStorageResult(storageKey) {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) {
+      saasProductFeedbackCorruptStorageKeys.delete(storageKey);
+      state.saasProductFeedbackStorageError = saasProductFeedbackCorruptStorageKeys.size > 0;
+      return { ok: true, value: {} };
+    }
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid scoped storage shape");
+    saasProductFeedbackCorruptStorageKeys.delete(storageKey);
+    state.saasProductFeedbackStorageError = saasProductFeedbackCorruptStorageKeys.size > 0;
+    return { ok: true, value: parsed };
+  } catch (error) {
+    noteSaasProductFeedbackStorageFailure(storageKey);
+    return { ok: false, value: null };
+  }
+}
+
+function writeSaasProductFeedbackStorageObject(storageKey, value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const current = readSaasProductFeedbackStorageResult(storageKey);
+  if (!current.ok) return false;
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(value));
+    return true;
+  } catch (error) {
+    noteSaasProductFeedbackStorageFailure(storageKey);
+    return false;
+  }
+}
+
+function saasProductFeedbackTextContainsSecret(value = "") {
+  const text = String(value || "");
+  if (!text) return false;
+  const directPatterns = [
+    /\bauthorization\s*[:=]\s*[^\s,;]{8,}/i,
+    /\bbearer\s+[A-Za-z0-9._~+/=-]{8,}/i,
+    /\b(?:sk|rk)_(?:live|test|prod)_[A-Za-z0-9_-]{8,}\b/i,
+    /\bsk_[A-Za-z0-9_-]{16,}\b/i,
+    /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
+    /\bgh[pousr]_[A-Za-z0-9]{20,}\b/i,
+    /\bgithub_pat_[A-Za-z0-9_]{20,}\b/i,
+    /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/i,
+    /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
+    /\bAIza[0-9A-Za-z_-]{35}\b/,
+    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/i,
+    /\bv\^1\.1#i\^\d+#r\^\d+#/i,
+    /\b(?:ebay|provider)[\s_-]*(?:access[\s_-]*|refresh[\s_-]*)?token\s*[:=]\s*\S{8,}/i,
+  ];
+  if (directPatterns.some((pattern) => pattern.test(text))) return true;
+  const assignment = /\b(password|passcode|api[\s_-]*key|client[\s_-]*secret|access[\s_-]*token|refresh[\s_-]*token)\b\s*(?:[:=]|\bis\b)\s*([^\r\n]{6,})/gi;
+  let match = assignment.exec(text);
+  while (match) {
+    const candidate = String(match[2] || "").trim();
+    if (candidate && !/^(?:missing|none|not configured|not saved|expired|invalid|unavailable|未配置|未保存|已失效|连接失败)\b/i.test(candidate)) return true;
+    match = assignment.exec(text);
+  }
+  return false;
+}
+
+function saasProductFeedbackContainsSecret(payload = {}) {
+  if (!payload || typeof payload !== "object") return false;
+  return Object.values(payload).some((value) => saasProductFeedbackTextContainsSecret(value));
+}
+
+function normalizeSaasProductFeedbackPayload(payload = {}) {
+  if (!payload || typeof payload !== "object" || saasProductFeedbackContainsSecret(payload)) return null;
+  const moduleKey = String(payload.module_key || "").trim();
+  const reason = String(payload.reason || "").trim();
+  if (!SAAS_PRODUCT_FEEDBACK_MODULE_KEYS.has(moduleKey) || !SAAS_PRODUCT_FEEDBACK_REASONS.has(reason)) return null;
+  return {
+    feedback_type: "product_improvement",
+    module_key: moduleKey,
+    reason,
+    detail: sanitizeSaasWorkflowFeedbackText(payload.detail || "", 420),
+    stage_title: sanitizeSaasWorkflowFeedbackText(payload.stage_title || "", 160),
+    task_id: sanitizeSaasWorkflowFeedbackText(payload.task_id || "", 160),
+    report_id: sanitizeSaasWorkflowFeedbackText(payload.report_id || "", 160),
+    confirmation_id: sanitizeSaasWorkflowFeedbackText(payload.confirmation_id || "", 160),
+    packet_id: sanitizeSaasWorkflowFeedbackText(payload.packet_id || "", 160),
+  };
+}
+
+function normalizeSaasProductFeedbackOutboxItem(item = {}) {
+  const payload = normalizeSaasProductFeedbackPayload(item.payload || {});
+  const idempotencyKey = String(item.idempotency_key || "").trim();
+  const localId = String(item.local_id || "").trim();
+  const allowedStates = ["queued_local", "submitting", "wait_for_live_identity", "needs_edit", "conflict", "blocked_error"];
+  if (!payload || !localId || idempotencyKey.length < 8 || idempotencyKey.length > 200 || saasProductFeedbackTextContainsSecret(idempotencyKey)) return null;
+  return {
+    local_id: localId.slice(0, 200),
+    idempotency_key: idempotencyKey,
+    payload,
+    created_at: String(item.created_at || new Date().toISOString()).slice(0, 80),
+    last_attempt_at: String(item.last_attempt_at || "").slice(0, 80),
+    retry_count: Math.max(0, Math.min(100, Number(item.retry_count || 0))),
+    delivery_state: allowedStates.includes(item.delivery_state) ? item.delivery_state : "queued_local",
+    next_retry_at: String(item.next_retry_at || "").slice(0, 80),
+    wait_for_live_identity_generation: Math.max(0, Number(item.wait_for_live_identity_generation || 0)),
+    last_error_class: String(item.last_error_class || "").replace(/[^a-z0-9_-]/gi, "").slice(0, 48),
+    migrated_from_legacy: item.migrated_from_legacy === true,
+    legacy_fingerprint: String(item.legacy_fingerprint || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 120),
+  };
+}
+
+function readSaasProductFeedbackOutbox(scope = saasProductFeedbackStorageScope()) {
+  if (!scope) return [];
+  const result = readSaasProductFeedbackStorageResult(saasStorageKeys.productFeedbackOutbox);
+  if (!result.ok) return [];
+  const hasScope = Object.prototype.hasOwnProperty.call(result.value, scope);
+  if (hasScope && !Array.isArray(result.value[scope])) {
+    noteSaasProductFeedbackStorageFailure(saasStorageKeys.productFeedbackOutbox);
+    return [];
+  }
+  return (hasScope ? result.value[scope] : [])
+    .map(normalizeSaasProductFeedbackOutboxItem)
+    .filter(Boolean)
+    .slice(0, SAAS_PRODUCT_FEEDBACK_OUTBOX_LIMIT);
+}
+
+function writeSaasProductFeedbackOutbox(scope, items = []) {
+  if (!scope) return false;
+  const result = readSaasProductFeedbackStorageResult(saasStorageKeys.productFeedbackOutbox);
+  if (!result.ok) return false;
+  const hasScope = Object.prototype.hasOwnProperty.call(result.value, scope);
+  if (hasScope && !Array.isArray(result.value[scope])) {
+    noteSaasProductFeedbackStorageFailure(saasStorageKeys.productFeedbackOutbox);
+    return false;
+  }
+  const previousRaw = hasScope ? result.value[scope] : [];
+  if (previousRaw.some((item) => !normalizeSaasProductFeedbackOutboxItem(item))) {
+    noteSaasProductFeedbackStorageFailure(saasStorageKeys.productFeedbackOutbox);
+    return false;
+  }
+  const normalized = items.map(normalizeSaasProductFeedbackOutboxItem);
+  if (normalized.some((item) => !item) || normalized.length > SAAS_PRODUCT_FEEDBACK_OUTBOX_LIMIT) return false;
+  const next = { ...result.value };
+  if (normalized.length) next[scope] = normalized;
+  else delete next[scope];
+  return writeSaasProductFeedbackStorageObject(saasStorageKeys.productFeedbackOutbox, next);
+}
+
+function isSaasProductFeedbackReceiptTimestamp(value, allowEmpty = false) {
+  if (allowEmpty && value === "") return true;
+  return typeof value === "string" && value.length <= 80 && Number.isFinite(Date.parse(value));
+}
+
+function normalizeSaasProductFeedbackStoredReceipt(receipt = {}) {
+  const allowedKeys = new Set([
+    "contract_version", "feedback_id", "feedback_type", "module_key", "reason", "status",
+    "created_at", "updated_at", "resolved_at", "delivered_at", "duplicate_request", "secret_exposed",
+  ]);
+  if (!receipt || typeof receipt !== "object" || Object.keys(receipt).some((key) => !allowedKeys.has(key))) return null;
+  const feedbackId = String(receipt.feedback_id || "").trim();
+  if (
+    receipt.contract_version !== "2026-08-03-product-feedback-receipt-v1" ||
+    receipt.feedback_type !== "product_improvement" ||
+    receipt.secret_exposed !== false ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/.test(feedbackId) ||
+    !isSaasProductFeedbackReceiptTimestamp(receipt.created_at) ||
+    !isSaasProductFeedbackReceiptTimestamp(receipt.updated_at) ||
+    !isSaasProductFeedbackReceiptTimestamp(receipt.resolved_at || "", true) ||
+    !isSaasProductFeedbackReceiptTimestamp(receipt.delivered_at || "") ||
+    (receipt.duplicate_request !== undefined && typeof receipt.duplicate_request !== "boolean") ||
+    saasProductFeedbackContainsSecret(receipt)
+  ) return null;
+  const moduleKey = String(receipt.module_key || "");
+  const reason = String(receipt.reason || "");
+  const status = String(receipt.status || "");
+  if (!SAAS_PRODUCT_FEEDBACK_MODULE_KEYS.has(moduleKey) || !SAAS_PRODUCT_FEEDBACK_REASONS.has(reason) || !SAAS_PRODUCT_FEEDBACK_SERVER_STATUSES.has(status)) return null;
+  return {
+    contract_version: "2026-08-03-product-feedback-receipt-v1",
+    feedback_id: feedbackId,
+    feedback_type: "product_improvement",
+    module_key: moduleKey,
+    reason,
+    status,
+    created_at: receipt.created_at,
+    updated_at: receipt.updated_at,
+    resolved_at: receipt.resolved_at || "",
+    delivered_at: receipt.delivered_at,
+    duplicate_request: receipt.duplicate_request === true,
+    secret_exposed: false,
+  };
+}
+
+function readSaasProductFeedbackReceipts(scope = saasProductFeedbackStorageScope()) {
+  if (!scope) return [];
+  const result = readSaasProductFeedbackStorageResult(saasStorageKeys.productFeedbackReceipts);
+  if (!result.ok) return [];
+  const hasScope = Object.prototype.hasOwnProperty.call(result.value, scope);
+  if (hasScope && !Array.isArray(result.value[scope])) {
+    noteSaasProductFeedbackStorageFailure(saasStorageKeys.productFeedbackReceipts);
+    return [];
+  }
+  return (hasScope ? result.value[scope] : [])
+    .map(normalizeSaasProductFeedbackStoredReceipt)
+    .filter(Boolean)
+    .slice(0, SAAS_PRODUCT_FEEDBACK_RECEIPT_LIMIT);
+}
+
+function writeSaasProductFeedbackReceipts(scope, receipts = []) {
+  if (!scope) return false;
+  const result = readSaasProductFeedbackStorageResult(saasStorageKeys.productFeedbackReceipts);
+  if (!result.ok) return false;
+  const hasScope = Object.prototype.hasOwnProperty.call(result.value, scope);
+  if (hasScope && !Array.isArray(result.value[scope])) {
+    noteSaasProductFeedbackStorageFailure(saasStorageKeys.productFeedbackReceipts);
+    return false;
+  }
+  const previousRaw = hasScope ? result.value[scope] : [];
+  if (previousRaw.some((receipt) => !normalizeSaasProductFeedbackStoredReceipt(receipt))) {
+    noteSaasProductFeedbackStorageFailure(saasStorageKeys.productFeedbackReceipts);
+    return false;
+  }
+  const seen = new Set();
+  const normalized = [];
+  for (const raw of receipts) {
+    const receipt = normalizeSaasProductFeedbackStoredReceipt(raw);
+    if (!receipt) return false;
+    if (seen.has(receipt.feedback_id)) continue;
+    seen.add(receipt.feedback_id);
+    normalized.push(receipt);
+    if (normalized.length >= SAAS_PRODUCT_FEEDBACK_RECEIPT_LIMIT) break;
+  }
+  const next = { ...result.value };
+  if (normalized.length) next[scope] = normalized;
+  else delete next[scope];
+  return writeSaasProductFeedbackStorageObject(saasStorageKeys.productFeedbackReceipts, next);
+}
+
+function validateSaasProductFeedbackServerReceipt(result = {}, item = {}) {
+  const topAllowed = new Set(["product_feedback", "delivered", "external_provider_action_triggered", "real_platform_write_performed", "secret_exposed"]);
+  if (!result || typeof result !== "object" || Object.keys(result).some((key) => !topAllowed.has(key))) return null;
+  if (result.delivered !== true || result.external_provider_action_triggered !== false || result.real_platform_write_performed !== false || result.secret_exposed !== false) return null;
+  const receipt = result.product_feedback;
+  const receiptAllowed = new Set(["contract_version", "feedback_id", "feedback_type", "module_key", "reason", "status", "created_at", "updated_at", "resolved_at", "duplicate_request", "secret_exposed"]);
+  if (!receipt || typeof receipt !== "object" || Object.keys(receipt).some((key) => !receiptAllowed.has(key))) return null;
+  const feedbackId = String(receipt.feedback_id || "").trim();
+  if (
+    receipt.contract_version !== "2026-08-03-product-feedback-receipt-v1" ||
+    feedbackId.length < 8 || feedbackId.length > 160 || /[\u0000-\u001f\u007f]/.test(feedbackId) ||
+    receipt.feedback_type !== item.payload?.feedback_type || receipt.module_key !== item.payload?.module_key || receipt.reason !== item.payload?.reason ||
+    !SAAS_PRODUCT_FEEDBACK_SERVER_STATUSES.has(String(receipt.status || "")) || receipt.secret_exposed !== false ||
+    saasProductFeedbackContainsSecret(receipt)
+  ) return null;
+  for (const key of ["created_at", "updated_at", "resolved_at"]) {
+    if (receipt[key] !== undefined && (typeof receipt[key] !== "string" || receipt[key].length > 80)) return null;
+  }
+  if (receipt.duplicate_request !== undefined && typeof receipt.duplicate_request !== "boolean") return null;
+  return normalizeSaasProductFeedbackStoredReceipt({ ...receipt, delivered_at: new Date().toISOString() });
+}
+
+function setSaasProductFeedbackStatus(scope, status, message) {
+  if (!scope || saasProductFeedbackStorageScope() !== scope) return false;
+  state.saasProductFeedbackScope = scope;
+  state.saasProductFeedbackStatus = status;
+  state.saasProductFeedbackStatusMessage = message;
+  renderWorkflowFeedbackWidget();
+  return true;
+}
+
+function resetSaasProductFeedbackViewState() {
+  state.saasProductFeedbackScope = "";
+  state.saasProductFeedbackStatus = "idle";
+  state.saasProductFeedbackStatusMessage = "";
+  state.saasProductFeedbackDraftItemId = "";
+  state.saasProductFeedbackRecoveryItemId = "";
+  state.saasProductFeedbackRecoveryOriginalSignature = "";
+  state.saasWorkflowFeedbackOpen = false;
+  state.saasWorkflowFeedbackReason = "";
+  state.saasWorkflowFeedbackDraft = "";
+  state.saasWorkflowFeedbackContextOverride = null;
+}
+
+function syncSaasProductFeedbackViewScope() {
+  const scope = saasProductFeedbackStorageScope();
+  if (state.saasProductFeedbackScope && state.saasProductFeedbackScope !== scope) resetSaasProductFeedbackViewState();
+  if (scope) state.saasProductFeedbackScope = scope;
+  return scope;
+}
+
+function saasProductFeedbackRawPayloadFromContext(context = {}, detail = "") {
+  return {
+    feedback_type: "product_improvement",
+    module_key: context.module_key,
+    reason: context.reason,
+    detail,
+    stage_title: context.stage_title,
+    task_id: context.task_id,
+    report_id: context.report_id,
+    confirmation_id: context.confirmation_id,
+    packet_id: context.packet_id,
+  };
+}
+
+function saasProductFeedbackPayloadFromContext(context = {}, detail = "") {
+  return normalizeSaasProductFeedbackPayload(saasProductFeedbackRawPayloadFromContext(context, detail));
+}
+
+function saasProductFeedbackPayloadSignature(payload = {}) {
+  return `${String(payload.reason || "")}\u0000${String(payload.detail || "")}`;
+}
+
+function saasProductFeedbackIdempotencyKey(payload = {}, prefix = "browser") {
+  const randomPart = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `product-feedback-${prefix}-${Math.abs(hashString(JSON.stringify(payload)))}-${randomPart}`.slice(0, 180);
+}
+
+function normalizeSaasProductFeedbackMigrationMarker(marker = {}) {
+  return {
+    version: "2026-08-03-product-feedback-browser-migration-v2",
+    legacy_scope: String(marker.legacy_scope || "").slice(0, 300),
+    next_index: Math.max(0, Math.min(100000, Number(marker.next_index || 0))),
+    processed_fingerprints: Array.from(new Set(Array.isArray(marker.processed_fingerprints) ? marker.processed_fingerprints.map(String) : [])).slice(0, 160),
+    rejected_fingerprints: Array.from(new Set(Array.isArray(marker.rejected_fingerprints) ? marker.rejected_fingerprints.map(String) : [])).slice(0, 160),
+    completed: marker.completed === true,
+    updated_at: String(marker.updated_at || "").slice(0, 80),
+  };
+}
+
+function saasProductFeedbackLegacyFingerprint(legacyScope, raw, index, payload = null) {
+  const identityHash = Math.abs(hashString(`${legacyScope}|${index}|${String(raw?.id || "")}|${String(raw?.created_at || "")}`));
+  const payloadHash = payload ? Math.abs(hashString(JSON.stringify(payload))) : Math.abs(hashString(`${String(raw?.feedback_type || "")}|${index}`));
+  return `legacy-${identityHash}-${payloadHash}`;
+}
+
+function migrateLegacySaasProductFeedback(scope) {
+  if (!scope) return { migrated: 0, pending: 0 };
+  const identity = saasProductFeedbackIdentityParts();
+  if (!identity) return { migrated: 0, pending: 0 };
+  const migrationResult = readSaasProductFeedbackStorageResult(saasStorageKeys.productFeedbackMigration);
+  const legacyResult = readSaasProductFeedbackStorageResult(saasStorageKeys.merchantFeedback);
+  if (!migrationResult.ok || !legacyResult.ok) return { migrated: 0, pending: 0, storage_failed: true };
+  const legacyScope = `${identity.userId.toLowerCase()}::${identity.storeId === SAAS_PRODUCT_FEEDBACK_ACCOUNT_WIDE_SCOPE ? "account-wide" : identity.storeId.toLowerCase()}`;
+  const hasLegacyScope = Object.prototype.hasOwnProperty.call(legacyResult.value, legacyScope);
+  if (hasLegacyScope && !Array.isArray(legacyResult.value[legacyScope])) {
+    noteSaasProductFeedbackStorageFailure(saasStorageKeys.merchantFeedback);
+    return { migrated: 0, pending: 0, storage_failed: true };
+  }
+  const hasMigrationScope = Object.prototype.hasOwnProperty.call(migrationResult.value, scope);
+  const rawMarker = hasMigrationScope ? migrationResult.value[scope] : {};
+  if (!rawMarker || typeof rawMarker !== "object" || Array.isArray(rawMarker)) {
+    noteSaasProductFeedbackStorageFailure(saasStorageKeys.productFeedbackMigration);
+    return { migrated: 0, pending: 0, storage_failed: true };
+  }
+  const legacyRecords = hasLegacyScope ? legacyResult.value[legacyScope] : [];
+  const marker = normalizeSaasProductFeedbackMigrationMarker(rawMarker);
+  if (marker.legacy_scope && marker.legacy_scope !== legacyScope) {
+    marker.next_index = 0;
+    marker.processed_fingerprints = [];
+    marker.rejected_fingerprints = [];
+    marker.completed = false;
+  }
+  marker.legacy_scope = legacyScope;
+  marker.next_index = Math.min(marker.next_index, legacyRecords.length);
+  if (marker.completed && marker.next_index >= legacyRecords.length) return { migrated: 0, pending: 0, completed: true };
+  const processed = new Set(marker.processed_fingerprints);
+  const rejected = new Set(marker.rejected_fingerprints);
+  const outbox = readSaasProductFeedbackOutbox(scope);
+  if (state.saasProductFeedbackStorageError) return { migrated: 0, pending: 0, storage_failed: true };
+  const existingIds = new Set(outbox.map((item) => item.local_id));
+  let migrated = 0;
+  let nextIndex = marker.next_index;
+  for (let index = marker.next_index; index < legacyRecords.length; index += 1) {
+    const raw = legacyRecords[index];
+    if (String(raw?.feedback_type || raw?.type || "") !== "product_improvement") {
+      nextIndex = index + 1;
+      continue;
+    }
+    const rawContext = raw.workflow_context && typeof raw.workflow_context === "object" ? raw.workflow_context : {};
+    const rawPayload = saasProductFeedbackRawPayloadFromContext(
+      {
+        module_key: rawContext.module_key || raw.report_type || "",
+        reason: rawContext.reason || "",
+        stage_title: rawContext.stage_title || raw.report_title || "",
+        task_id: rawContext.task_id || "",
+        report_id: rawContext.report_id || raw.report_id || "",
+        confirmation_id: rawContext.confirmation_id || "",
+        packet_id: rawContext.packet_id || raw.category_hint || "",
+      },
+      raw.rule_text || raw.note || "",
+    );
+    const containsSecret = saasProductFeedbackContainsSecret(rawPayload);
+    const payload = containsSecret ? null : normalizeSaasProductFeedbackPayload(rawPayload);
+    const fingerprint = saasProductFeedbackLegacyFingerprint(legacyScope, raw, index, payload);
+    if (!payload) {
+      rejected.add(fingerprint);
+      nextIndex = index + 1;
+      continue;
+    }
+    if (processed.has(fingerprint) || rejected.has(fingerprint)) {
+      nextIndex = index + 1;
+      continue;
+    }
+    const localId = `migrated-${fingerprint}`;
+    if (existingIds.has(localId)) {
+      processed.add(fingerprint);
+      nextIndex = index + 1;
+      continue;
+    }
+    if (outbox.length >= SAAS_PRODUCT_FEEDBACK_OUTBOX_LIMIT) break;
+    const item = normalizeSaasProductFeedbackOutboxItem({
+      local_id: localId,
+      idempotency_key: `product-feedback-migration-${fingerprint}`,
+      payload,
+      created_at: raw.created_at || new Date().toISOString(),
+      delivery_state: "queued_local",
+      migrated_from_legacy: true,
+      legacy_fingerprint: fingerprint,
+    });
+    if (!item) {
+      rejected.add(fingerprint);
+      nextIndex = index + 1;
+      continue;
+    }
+    outbox.push(item);
+    existingIds.add(localId);
+    processed.add(fingerprint);
+    migrated += 1;
+    nextIndex = index + 1;
+  }
+  const pending = Math.max(0, legacyRecords.length - nextIndex);
+  if (migrated > 0 && !writeSaasProductFeedbackOutbox(scope, outbox)) return { migrated: 0, pending, storage_failed: true };
+  marker.next_index = nextIndex;
+  marker.processed_fingerprints = Array.from(processed).slice(-160);
+  marker.rejected_fingerprints = Array.from(rejected).slice(-160);
+  marker.completed = nextIndex >= legacyRecords.length;
+  marker.updated_at = new Date().toISOString();
+  const migrations = { ...migrationResult.value, [scope]: marker };
+  if (!writeSaasProductFeedbackStorageObject(saasStorageKeys.productFeedbackMigration, migrations)) return { migrated, pending, storage_failed: true };
+  return { migrated, pending, completed: marker.completed };
+}
+
+function updateSaasProductFeedbackOutboxItem(scope, localId, changes = {}) {
+  const items = readSaasProductFeedbackOutbox(scope);
+  const index = items.findIndex((item) => item.local_id === localId);
+  if (index < 0) return false;
+  items[index] = { ...items[index], ...changes };
+  return writeSaasProductFeedbackOutbox(scope, items);
+}
+
+function removeSaasProductFeedbackOutboxItem(scope, localId) {
+  const items = readSaasProductFeedbackOutbox(scope);
+  if (!items.some((item) => item.local_id === localId)) return false;
+  return writeSaasProductFeedbackOutbox(scope, items.filter((item) => item.local_id !== localId));
+}
+
+function saasProductFeedbackDeliveryItemKey(scope, localId) {
+  return `${String(scope || "")}\u0000${String(localId || "")}`;
+}
+
+function blockSaasProductFeedbackUncertainDelivery(scope, localId, message) {
+  saasProductFeedbackUncertainDeliveryItems.add(saasProductFeedbackDeliveryItemKey(scope, localId));
+  setSaasProductFeedbackStatus(
+    scope,
+    "storage_failed",
+    message || "服务器已经响应，但本机无法安全确认待发状态；本页已停止自动和手动重试，刷新后仍会沿用原编号核对。",
+  );
+  return false;
+}
+
+function persistSaasProductFeedbackDeliveryState(scope, localId, changes, failureMessage) {
+  if (!updateSaasProductFeedbackOutboxItem(scope, localId, changes)) {
+    return blockSaasProductFeedbackUncertainDelivery(scope, localId, failureMessage);
+  }
+  saasProductFeedbackUncertainDeliveryItems.delete(saasProductFeedbackDeliveryItemKey(scope, localId));
+  return true;
+}
+
+function saasProductFeedbackRetryAt(attemptCount = 1, status = 0) {
+  const multiplier = status === 429 ? 2 : status >= 500 ? 1.5 : 1;
+  const delay = Math.min(SAAS_PRODUCT_FEEDBACK_RETRY_MAX_MS, Math.round(SAAS_PRODUCT_FEEDBACK_RETRY_BASE_MS * multiplier * (2 ** Math.max(0, attemptCount - 1))));
+  return new Date(Date.now() + delay).toISOString();
+}
+
+function saasProductFeedbackRetryEligibility(item, trigger = "automatic", scope = saasProductFeedbackStorageScope()) {
+  if (saasProductFeedbackUncertainDeliveryItems.has(saasProductFeedbackDeliveryItemKey(scope, item.local_id))) {
+    return { eligible: false, reason: "storage_failed" };
+  }
+  if (SAAS_PRODUCT_FEEDBACK_QUARANTINE_STATES.has(item.delivery_state)) return { eligible: false, reason: "quarantined" };
+  if (item.delivery_state === "wait_for_live_identity") {
+    if (trigger !== "identity" || !state.saasProductFeedbackLiveIdentityConfirmed) return { eligible: false, reason: "live_identity_required" };
+    if (state.saasProductFeedbackLiveIdentityGeneration < item.wait_for_live_identity_generation) return { eligible: false, reason: "new_live_identity_required" };
+    return { eligible: true };
+  }
+  const nextRetryMs = Date.parse(item.next_retry_at || "");
+  if (Number.isFinite(nextRetryMs) && nextRetryMs > Date.now()) {
+    return { eligible: false, reason: "throttled", wait_seconds: Math.max(1, Math.ceil((nextRetryMs - Date.now()) / 1000)) };
+  }
+  return { eligible: true };
+}
+
+async function deliverSaasProductFeedbackItem(scope, sourceItem, options = {}) {
+  if (!scope || saasProductFeedbackStorageScope() !== scope) return { delivered: false, stopped: true };
+  const item = normalizeSaasProductFeedbackOutboxItem(sourceItem);
+  if (!item || saasProductFeedbackContainsSecret(item.payload)) return { delivered: false, stopped: true };
+  readSaasProductFeedbackReceipts(scope);
+  if (state.saasProductFeedbackStorageError) {
+    setSaasProductFeedbackStatus(scope, "storage_failed", "本机回执存储无法安全读取；意见仍保留在本机，修复存储前不会发送。 ");
+    return { delivered: false, stopped: true, storage_failed: true };
+  }
+  const eligibility = saasProductFeedbackRetryEligibility(item, options.trigger || "automatic", scope);
+  if (!eligibility.eligible) return { delivered: false, stopped: true, ...eligibility };
+  const attemptCount = item.retry_count + 1;
+  if (!updateSaasProductFeedbackOutboxItem(scope, item.local_id, {
+    delivery_state: "submitting",
+    last_attempt_at: new Date().toISOString(),
+    retry_count: attemptCount,
+    last_error_class: "",
+  })) {
+    setSaasProductFeedbackStatus(scope, "storage_failed", "本机意见存储无法安全更新；没有发送，也没有覆盖原记录。 ");
+    return { delivered: false, stopped: true };
+  }
+  setSaasProductFeedbackStatus(scope, "submitting", options.background ? "正在重试本机待发意见…" : "正在安全送达 JIEJING 团队…");
+  try {
+    if (saasProductFeedbackContainsSecret(item.payload)) throw Object.assign(new Error("unsafe product feedback blocked"), { code: "unsafe_payload" });
+    const result = await saasFetchWithTimeout(
+      "/product-feedback",
+      { method: "POST", body: JSON.stringify({ idempotency_key: item.idempotency_key, ...item.payload }) },
+      15000,
+    );
+    const serverReceipt = validateSaasProductFeedbackServerReceipt(result, item);
+    if (!serverReceipt) {
+      if (!persistSaasProductFeedbackDeliveryState(
+        scope,
+        item.local_id,
+        { delivery_state: "blocked_error", last_error_class: "invalid_receipt" },
+        "服务器回执未通过校验，且本机无法安全固定隔离状态；本页已停止重试。",
+      )) return { delivered: false, stopped: true, invalid_receipt: true, storage_failed: true };
+      setSaasProductFeedbackStatus(scope, "failed", "服务器回执未通过安全校验；意见仍保存在本机，未标记送达。 ");
+      return { delivered: false, stopped: true, invalid_receipt: true };
+    }
+    if (!writeSaasProductFeedbackReceipts(scope, [serverReceipt, ...readSaasProductFeedbackReceipts(scope)])) {
+      blockSaasProductFeedbackUncertainDelivery(scope, item.local_id, "服务器已响应，但本机无法安全保存回执；意见保留待核对，不显示已送达，本页停止重试。 ");
+      return { delivered: false, stopped: true };
+    }
+    if (!removeSaasProductFeedbackOutboxItem(scope, item.local_id)) {
+      blockSaasProductFeedbackUncertainDelivery(scope, item.local_id, "服务器已响应，但本机待发记录无法安全更新；将沿用同一编号核对，本页停止重试。 ");
+      return { delivered: false, stopped: true };
+    }
+    saasProductFeedbackUncertainDeliveryItems.delete(saasProductFeedbackDeliveryItemKey(scope, item.local_id));
+    if (saasProductFeedbackStorageScope() === scope) {
+      if (state.saasProductFeedbackDraftItemId === item.local_id) {
+        state.saasWorkflowFeedbackDraft = "";
+        state.saasWorkflowFeedbackReason = "";
+        state.saasWorkflowFeedbackContextOverride = null;
+        state.saasProductFeedbackDraftItemId = "";
+        state.saasProductFeedbackRecoveryItemId = "";
+        state.saasProductFeedbackRecoveryOriginalSignature = "";
+        state.saasWorkflowFeedbackOpen = false;
+      }
+      setSaasProductFeedbackStatus(scope, "delivered", "已送达 JIEJING 团队；服务器已返回接收回执。");
+      showActionToast(options.background ? "本机待发意见已送达 JIEJING 团队。" : "意见已送达 JIEJING 团队，服务器已确认接收。");
+    }
+    return { delivered: true, receipt: serverReceipt };
+  } catch (error) {
+    const status = Number(error?.status || 0);
+    if (error?.code === "unsafe_payload") {
+      if (!persistSaasProductFeedbackDeliveryState(
+        scope,
+        item.local_id,
+        { delivery_state: "blocked_error", last_error_class: "unsafe_payload" },
+        "检测到敏感内容，但本机无法安全固定隔离状态；本页已停止重试。",
+      )) return { delivered: false, stopped: true, storage_failed: true };
+      setSaasProductFeedbackStatus(scope, "secret_blocked", "检测到可能的敏感连接信息；本条未发送。请删除敏感内容后重新填写。 ");
+      return { delivered: false, stopped: true };
+    }
+    if (status === 400) {
+      const anchored = persistSaasProductFeedbackDeliveryState(
+        scope,
+        item.local_id,
+        { delivery_state: "needs_edit", next_retry_at: "", last_error_class: "validation" },
+        "意见需要修改，但本机无法安全固定恢复记录；本页已停止重试。",
+      );
+      if (!anchored) {
+        return { delivered: false, status, stopped: true };
+      }
+      if (saasProductFeedbackStorageScope() === scope) {
+        setSaasProductFeedbackStatus(scope, "needs_edit", "这条意见尚未送达：请点“打开并修改”，系统不会覆盖你正在填写的另一条草稿。 ");
+        showActionToast("意见尚未送达，已保存在本机等待你打开修改。");
+      }
+      return { delivered: false, status, stopped: true };
+    }
+    if (status === 409) {
+      if (!persistSaasProductFeedbackDeliveryState(
+        scope,
+        item.local_id,
+        { delivery_state: "conflict", next_retry_at: "", last_error_class: "idempotency_conflict" },
+        "重复校验出现冲突，但本机无法安全固定隔离状态；本页已停止重试。",
+      )) return { delivered: false, status, stopped: true, storage_failed: true };
+      setSaasProductFeedbackStatus(scope, "conflict", "重复校验出现冲突，已隔离且停止自动重试；可编辑成真正不同的新意见，或丢弃本机记录。 ");
+      showActionToast("意见未送达：重复校验冲突，原记录没有被覆盖。");
+      return { delivered: false, status, stopped: true };
+    }
+    const retryable = !status || status === 401 || status === 429 || status === 503 || status >= 500;
+    if (retryable) {
+      const waitingForIdentity = status === 401;
+      if (!persistSaasProductFeedbackDeliveryState(scope, item.local_id, {
+        delivery_state: waitingForIdentity ? "wait_for_live_identity" : "queued_local",
+        next_retry_at: saasProductFeedbackRetryAt(attemptCount, status),
+        wait_for_live_identity_generation: waitingForIdentity ? state.saasProductFeedbackLiveIdentityGeneration + 1 : 0,
+        last_error_class: waitingForIdentity ? "unauthorized" : status === 429 ? "rate_limited" : status >= 500 ? "service_unavailable" : "network",
+      }, "服务器暂未接收意见，但本机无法安全保存重试状态；本页已停止重试。")) {
+        return { delivered: false, status, stopped: true, storage_failed: true };
+      }
+      const message = waitingForIdentity
+        ? "登录状态需要重新确认；意见保存在本机，只会在新的实时身份确认后重试。"
+        : status === 429
+          ? "提交较频繁；意见已保存在本机，并会按等待时间重试。"
+          : "暂时未送达；意见已保存在本机，并会按安全间隔重试。";
+      setSaasProductFeedbackStatus(scope, waitingForIdentity ? "wait_for_live_identity" : "queued_local", message);
+      showActionToast(message);
+      return { delivered: false, status, stopped: true };
+    }
+    if (!persistSaasProductFeedbackDeliveryState(
+      scope,
+      item.local_id,
+      { delivery_state: "blocked_error", last_error_class: "non_retryable" },
+      "服务器拒绝了意见，但本机无法安全固定隔离状态；本页已停止重试。",
+    )) return { delivered: false, status, stopped: true, storage_failed: true };
+    setSaasProductFeedbackStatus(scope, "failed", "意见尚未送达，已隔离保存在本机；系统不会虚报成功。 ");
+    showActionToast("意见尚未送达，已安全保存在本机；系统不会虚报成功。");
+    return { delivered: false, status, stopped: true };
+  }
+}
+
+function flushSaasProductFeedbackOutbox(options = {}) {
+  const scope = options.scope || saasProductFeedbackStorageScope();
+  const trigger = options.trigger || "automatic";
+  if (!scope || saasProductFeedbackStorageScope() !== scope) return Promise.resolve({ delivered: 0, skipped: true });
+  if (saasProductFeedbackFlushPromises.has(scope)) return saasProductFeedbackFlushPromises.get(scope);
+  const run = (async () => {
+    let delivered = 0;
+    for (let cycle = 0; cycle < 8; cycle += 1) {
+      if (saasProductFeedbackStorageScope() !== scope) break;
+      const migration = migrateLegacySaasProductFeedback(scope);
+      if (migration.storage_failed) break;
+      const outbox = readSaasProductFeedbackOutbox(scope).slice().reverse();
+      const eligible = outbox.filter((item) => saasProductFeedbackRetryEligibility(item, trigger, scope).eligible);
+      if (!eligible.length) {
+        if (trigger === "manual") {
+          const eligibility = outbox.map((item) => saasProductFeedbackRetryEligibility(item, trigger, scope));
+          const throttled = eligibility.find((item) => item.reason === "throttled");
+          const storageFailed = eligibility.some((item) => item.reason === "storage_failed");
+          const waitingIdentity = outbox.some((item) => item.delivery_state === "wait_for_live_identity");
+          if (storageFailed) setSaasProductFeedbackStatus(scope, "storage_failed", "本机无法安全确认上次响应后的状态；本页已停止重试，请刷新后沿用原编号核对。 ");
+          else if (throttled) setSaasProductFeedbackStatus(scope, "queued_local", `安全重试还需等待约 ${throttled.wait_seconds} 秒；没有重复发送。`);
+          else if (waitingIdentity) setSaasProductFeedbackStatus(scope, "wait_for_live_identity", "请先重新登录并完成实时身份确认；手动重试不会绕过身份边界。 ");
+        }
+        break;
+      }
+      let cycleDelivered = 0;
+      for (const item of eligible) {
+        if (saasProductFeedbackStorageScope() !== scope) break;
+        const result = await deliverSaasProductFeedbackItem(scope, item, { background: trigger !== "submit", trigger });
+        if (!result.delivered) break;
+        delivered += 1;
+        cycleDelivered += 1;
+      }
+      if (!cycleDelivered) break;
+    }
+    return { delivered };
+  })();
+  const tracked = run.finally(() => {
+    if (saasProductFeedbackFlushPromises.get(scope) === tracked) saasProductFeedbackFlushPromises.delete(scope);
+    if (saasProductFeedbackStorageScope() === scope) renderWorkflowFeedbackWidget();
+  });
+  saasProductFeedbackFlushPromises.set(scope, tracked);
+  return tracked;
+}
+
+function prepareSaasProductFeedbackScopeAfterIdentity() {
+  const scope = syncSaasProductFeedbackViewScope();
+  if (!scope) return false;
+  const migration = migrateLegacySaasProductFeedback(scope);
+  renderWorkflowFeedbackWidget();
+  if (!migration.storage_failed) void flushSaasProductFeedbackOutbox({ scope, trigger: "identity" });
+  return true;
 }
 
 async function acknowledgeSaasOwnerReliabilityAlert(button) {
@@ -43394,7 +44319,7 @@ function bindEvents() {
       return;
     }
     const workflowFeedbackButton = event.target.closest(
-      "[data-workflow-feedback-open], [data-workflow-feedback-close], [data-workflow-feedback-reason], [data-workflow-feedback-submit]",
+      "[data-workflow-feedback-open], [data-workflow-feedback-close], [data-workflow-feedback-reason], [data-workflow-feedback-submit], [data-workflow-feedback-retry], [data-workflow-feedback-edit], [data-workflow-feedback-discard]",
     );
     if (workflowFeedbackButton) {
       event.preventDefault();
@@ -43470,7 +44395,14 @@ function bindEvents() {
       if (baseUrlInput && provider?.default_base_url) baseUrlInput.value = provider.default_base_url;
     }
     if (event.target?.id === "workflowFeedbackText") {
-      state.saasWorkflowFeedbackDraft = sanitizeSaasWorkflowFeedbackText(event.target.value || "", 420);
+      const rawFeedbackDraft = String(event.target.value || "");
+      if (saasProductFeedbackTextContainsSecret(rawFeedbackDraft)) {
+        state.saasWorkflowFeedbackDraft = "";
+        state.saasProductFeedbackStatus = "secret_blocked";
+        state.saasProductFeedbackStatusMessage = "检测到可能的密码、令牌或密钥；不会保存或发送。请删除敏感内容。";
+      } else {
+        state.saasWorkflowFeedbackDraft = sanitizeSaasWorkflowFeedbackText(rawFeedbackDraft, 420);
+      }
     }
     if (event.target?.id === "saasListingComposerInput") {
       state.saasListingComposerInput = sanitizeSaasWorkflowFeedbackText(event.target.value || "", 1200);
@@ -44051,6 +44983,7 @@ function bindEvents() {
   document.querySelector("#storeSwitch").addEventListener("change", (event) => {
     const selectedStoreId = String(event.target.value || "");
     if (selectedStoreId.startsWith("saas:")) {
+      resetSaasProductFeedbackViewState();
       try {
         localStorage.setItem(saasStorageKeys.storeId, selectedStoreId.slice(5));
       } catch (error) {
@@ -44746,6 +45679,10 @@ function init() {
   initJiejingProductModeCopyObserver();
   if (!state.bulkApprovedCount) detachBulkHandoffDrafts();
   bindEvents();
+  window.addEventListener("online", () => {
+    const scope = syncSaasProductFeedbackViewScope();
+    if (scope) void flushSaasProductFeedbackOutbox({ scope, trigger: "online" });
+  });
   applyStartupShellVisibility();
   renderEntryChoices();
   renderLandingPreselect();

@@ -30,8 +30,8 @@ def main() -> int:
         return fail("frontend must not use document.write for report export or public rendering")
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
-    frontend_asset_version = "20260715-owner-traffic-analytics-v104"
-    app_js_asset_version = "20260802-merchant-onboarding-v2"
+    frontend_asset_version = "20260803-product-feedback-v1"
+    app_js_asset_version = "20260803-product-feedback-v1"
     for expected_asset in [
         f"./app.js?v={app_js_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -39,6 +39,7 @@ def main() -> int:
         if expected_asset not in index_html + app_html:
             return fail(f"frontend entry files must bust owner publish cache with {expected_asset}")
     for stale_asset_version in [
+        "20260802-merchant-onboarding-v2",
         "20260802-merchant-onboarding-v1",
         "20260715-billing-recovery-renewal-v101",
         "20260715-listing-us-title-v98",
@@ -446,6 +447,13 @@ def main() -> int:
         "currentSaasEbayCallbackUrl",
         "copy-ebay-return-url",
         "官方连接返回地址应保持一致",
+        'productFeedbackOutbox: "jiejing_saas_product_feedback_outbox_v1"',
+        'productFeedbackReceipts: "jiejing_saas_product_feedback_receipts_v1"',
+        'productFeedbackMigration: "jiejing_saas_product_feedback_migration_v1"',
+        "function saasProductFeedbackIdentityParts",
+        "function prepareSaasProductFeedbackScopeAfterIdentity",
+        'saasFetchWithTimeout(\n      "/product-feedback"',
+        "window.addEventListener(\"online\"",
     ]:
         if marker not in app_js + app_html:
             return fail(f"missing frontend staging config marker: {marker}")

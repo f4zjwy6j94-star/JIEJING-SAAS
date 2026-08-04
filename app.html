@@ -119,7 +119,7 @@
       }
     </style>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
-    <link rel="stylesheet" href="./styles.css?v=20260715-owner-traffic-analytics-v104" />
+    <link rel="stylesheet" href="./styles.css?v=20260803-product-feedback-v1" />
     <style id="jiejing-cockpit-layout-guard">
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
         display: grid !important;
@@ -3261,9 +3261,12 @@
           <span>补充一句</span>
           <textarea id="workflowFeedbackText" rows="4" placeholder="例如：素材工坊缺少外部图片导入提示；Listing 价格解释不够清楚。"></textarea>
         </label>
-        <p class="workflow-feedback-status" id="workflowFeedbackStatus">只记录产品/流程改进意见和上下文编号，不保存敏感凭证或平台账号资料，不影响店铺执行。</p>
+        <p class="workflow-feedback-status" id="workflowFeedbackStatus" role="status" aria-live="polite">只记录产品/流程改进意见和上下文编号，不保存敏感凭证或平台账号资料，不影响店铺执行。</p>
         <div class="workflow-feedback-actions">
           <button class="secondary-action compact-action" type="button" data-workflow-feedback-close>取消</button>
+          <button class="secondary-action compact-action" type="button" data-workflow-feedback-edit hidden aria-label="打开并修改待处理意见">打开并修改</button>
+          <button class="secondary-action compact-action" type="button" data-workflow-feedback-discard hidden aria-label="丢弃本机待处理意见">丢弃本机记录</button>
+          <button class="secondary-action compact-action" type="button" data-workflow-feedback-retry hidden aria-label="重试本机待发意见">重试待发意见</button>
           <button class="primary-action compact-action" type="button" data-workflow-feedback-submit>提交给 JIEJING 团队</button>
         </div>
       </aside>
@@ -3403,6 +3406,6 @@
       })();
     </script>
     <script src="./assets/jiejing-first-party-analytics.js?v=20260715-owner-traffic-analytics-v104"></script>
-    <script src="./app.js?v=20260802-merchant-onboarding-v2"></script>
+    <script src="./app.js?v=20260803-product-feedback-v1"></script>
 </body>
 </html>
