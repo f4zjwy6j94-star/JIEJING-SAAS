@@ -48,6 +48,9 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Install browser test dependency
+        run: npm install --prefix output/codex-playwright-deps --no-save --no-package-lock --ignore-scripts playwright-core@1.59.1
+
       - name: Install Python dependencies
         run: python -m pip install --upgrade pip && pip install -r requirements.saas.txt
 

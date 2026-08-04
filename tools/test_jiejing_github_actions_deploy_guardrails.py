@@ -56,6 +56,7 @@ def main() -> int:
         "runs-on: [self-hosted, jiejing-staging]",
         "Set up Node for frontend syntax check",
         "node-version: \"20\"",
+        "npm install --prefix output/codex-playwright-deps --no-save --no-package-lock --ignore-scripts playwright-core@1.59.1",
         "JIEJING_DEPLOY_DRY_RUN",
         "JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN: ${{ secrets.JIEJING_EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN }}",
         "JIEJING_EBAY_CLIENT_SECRET: ${{ secrets.JIEJING_EBAY_CLIENT_SECRET }}",
