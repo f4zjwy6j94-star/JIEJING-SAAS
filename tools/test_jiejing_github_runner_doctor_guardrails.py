@@ -43,7 +43,6 @@ def main() -> int:
         "runtime_env_guard_missing",
         "runtime_env_guard_untrusted",
         "runtime_env_compose_missing",
-        "runtime_env_ownership_guard_blocked",
         'TRUSTED_RUNTIME_ENV_GUARD="${JIEJING_TRUSTED_RUNTIME_ENV_GUARD:-/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py}"',
         'app_dir_safe="false"',
         'app_dir_safe="true"',
@@ -54,6 +53,20 @@ def main() -> int:
         'current="$(dirname -- "$path")"',
         '[[ -d "$current" && ! -L "$current" ]]',
         'sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" check',
+        'candidate_workspace="${GITHUB_WORKSPACE:-}"',
+        'candidate_compose="$resolved_candidate_workspace/deploy/docker-compose.public-https-staging.yml"',
+        'candidate_compose_is_safe',
+        '[[ -n "$candidate_workspace" && ! -L "$candidate_workspace" ]]',
+        'git -C "$resolved_candidate_workspace" diff --cached --quiet --exit-code -- "$tracked_path"',
+        'git -C "$resolved_candidate_workspace" hash-object -- "$candidate_compose"',
+        'candidate_checkout_sha_is_exact',
+        'live_release_sha_is_verified',
+        'git -C "$resolved_candidate_workspace" merge-base --is-ancestor "$live_release_sha" "$candidate_sha"',
+        '--compose "$candidate_compose"',
+        '--compose-runtime-path "$runtime_compose"',
+        'runtime_env_candidate_guard_blocked',
+        'runtime_env_live_transition_unverified',
+        'runtime_env_live_compose_transition_detected',
         '--managed-env "$private_dir/tencent-managed.env"',
         '--secret-env "$private_dir/jiejing-saas.staging-oauth.env"',
         '--postgres-env "$private_dir/postgres-localqueue.env"',
@@ -68,6 +81,7 @@ def main() -> int:
         "permissions:",
         "contents: read",
         "runs-on: [self-hosted, jiejing-staging]",
+        "fetch-depth: 0",
         "bash deploy/github-actions/jiejing-runner-doctor.sh",
     ]
     required_runbook = [
@@ -81,6 +95,11 @@ def main() -> int:
         "/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py",
         "never install or update this file",
         "/opt/jiejing-staging/private/docker-compose.cost-saver-local.yml",
+        "RUNTIME_ENV_GUARD_STATUS=ready_transition",
+        "runtime_env_live_compose_transition_detected",
+        "candidate Compose",
+        "--compose-runtime-path",
+        "current live release SHA",
     ]
 
     missing: list[str] = []
@@ -108,6 +127,7 @@ def main() -> int:
         "STRIPE_SECRET_KEY",
         "OPENAI_API_KEY",
         "git credential",
+        '$resolved_candidate_workspace/tools/jiejing_runtime_env_overlap_guard.py',
     ]
     present = [marker for marker in forbidden if marker in script or marker in workflow]
     if present:
@@ -118,6 +138,8 @@ def main() -> int:
         return fail("runner doctor runtime env status must not expose paths or report bodies")
     if '$resolved_app_dir/tools/jiejing_runtime_env_overlap_guard.py' in script:
         return fail("runner doctor must never execute the deployed app copy of the guard")
+    if '$resolved_candidate_workspace/tools/jiejing_runtime_env_overlap_guard.py' in script:
+        return fail("runner doctor must never execute the candidate checkout copy of the guard")
     app_safe = script.index('app_dir_safe="true"')
     guard_call = script.index('sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" check')
     if not app_safe < guard_call:

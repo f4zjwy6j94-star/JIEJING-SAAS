@@ -101,6 +101,11 @@ runtime_compose="$resolved_app_dir/deploy/docker-compose.public-https-staging.ym
 if [[ ! -f "$runtime_compose" ]]; then
   runtime_compose="$resolved_app_dir/deploy/docker-compose.public-staging.yml"
 fi
+candidate_workspace="${GITHUB_WORKSPACE:-}"
+resolved_candidate_workspace="$(readlink -f -- "$candidate_workspace" 2>/dev/null || true)"
+candidate_compose="$resolved_candidate_workspace/deploy/docker-compose.public-https-staging.yml"
+candidate_sha="${GITHUB_SHA:-}"
+live_release_sha=""
 cost_saver_override=""
 
 trusted_root_owned_path_chain_is_safe() {
@@ -137,6 +142,73 @@ runtime_compose_is_safe() {
   [[ "$resolved" == "$runtime_compose" ]]
 }
 
+candidate_compose_is_safe() {
+  local resolved_candidate tracked_path working_blob head_blob
+  [[ -n "$candidate_workspace" && ! -L "$candidate_workspace" ]] || return 1
+  [[ -n "$resolved_candidate_workspace" && -d "$resolved_candidate_workspace" && \
+    ! -L "$resolved_candidate_workspace" ]] || return 1
+  [[ -f "$candidate_compose" && ! -L "$candidate_compose" ]] || return 1
+  resolved_candidate="$(readlink -f -- "$candidate_compose" 2>/dev/null || true)"
+  [[ -n "$resolved_candidate" && "$resolved_candidate" == "$candidate_compose" ]] || return 1
+  case "$resolved_candidate" in
+    "$resolved_candidate_workspace"/*) ;;
+    *) return 1 ;;
+  esac
+  tracked_path="deploy/docker-compose.public-https-staging.yml"
+  git -C "$resolved_candidate_workspace" ls-files --error-unmatch -- "$tracked_path" >/dev/null 2>&1 || return 1
+  git -C "$resolved_candidate_workspace" diff --quiet --exit-code -- "$tracked_path" || return 1
+  git -C "$resolved_candidate_workspace" diff --cached --quiet --exit-code -- "$tracked_path" || return 1
+  working_blob="$(git -C "$resolved_candidate_workspace" hash-object -- "$candidate_compose" 2>/dev/null || true)"
+  head_blob="$(git -C "$resolved_candidate_workspace" rev-parse "HEAD:$tracked_path" 2>/dev/null || true)"
+  [[ -n "$working_blob" && "$working_blob" == "$head_blob" ]]
+}
+
+candidate_checkout_sha_is_exact() {
+  local checkout_sha
+  [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+  checkout_sha="$(git -C "$resolved_candidate_workspace" rev-parse --verify HEAD 2>/dev/null || true)"
+  [[ "$checkout_sha" == "$candidate_sha" ]]
+}
+
+live_release_sha_is_verified() {
+  local manifest resolved_manifest release_dir release_compose backup_dir
+  local run_id run_attempt release_sha stamp dry_run mtime best_mtime="-1"
+  local best_sha=""
+  shopt -s nullglob
+  for manifest in "$RELEASE_ROOT"/github-*/JIEJING_GITHUB_ACTION_DEPLOY_MANIFEST.txt; do
+    [[ -f "$manifest" && ! -L "$manifest" ]] || continue
+    resolved_manifest="$(readlink -f -- "$manifest" 2>/dev/null || true)"
+    case "$resolved_manifest" in
+      "$resolved_deploy_root"/github-action-releases/*/JIEJING_GITHUB_ACTION_DEPLOY_MANIFEST.txt) ;;
+      *) continue ;;
+    esac
+    run_id="$(sed -n 's/^RUN_ID=//p' "$manifest")"
+    run_attempt="$(sed -n 's/^RUN_ATTEMPT=//p' "$manifest")"
+    release_sha="$(sed -n 's/^SHA=//p' "$manifest")"
+    stamp="$(sed -n 's/^STAMP=//p' "$manifest")"
+    dry_run="$(sed -n 's/^DRY_RUN=//p' "$manifest")"
+    [[ "$run_id" =~ ^[0-9]+$ && "$run_attempt" =~ ^[0-9]+$ && \
+      "$release_sha" =~ ^[0-9a-f]{40}$ && "$stamp" =~ ^[0-9]{8}T[0-9]{6}Z$ && \
+      "$dry_run" == "0" ]] || continue
+    release_dir="$(dirname -- "$manifest")"
+    release_compose="$release_dir/deploy/docker-compose.public-https-staging.yml"
+    backup_dir="$BACKUP_ROOT/pre-github-${run_id}-${run_attempt}-${stamp}"
+    [[ -d "$backup_dir" && ! -L "$backup_dir" && -f "$release_compose" && \
+      ! -L "$release_compose" && -f "$release_dir/app.js" ]] || continue
+    cmp -s -- "$runtime_compose" "$release_compose" || continue
+    cmp -s -- "$resolved_app_dir/app.js" "$release_dir/app.js" || continue
+    mtime="$(stat -c '%Y' -- "$manifest" 2>/dev/null || true)"
+    [[ "$mtime" =~ ^[0-9]+$ ]] || continue
+    if (( mtime > best_mtime )); then
+      best_mtime="$mtime"
+      best_sha="$release_sha"
+    fi
+  done
+  shopt -u nullglob
+  [[ -n "$best_sha" && "$best_sha" != "$candidate_sha" ]] || return 1
+  live_release_sha="$best_sha"
+}
+
 override_args=()
 if [[ "$app_dir_safe" != "true" || "$deploy_root_safe" != "true" ]]; then
   :
@@ -146,6 +218,10 @@ elif ! trusted_root_owned_path_chain_is_safe "$TRUSTED_RUNTIME_ENV_GUARD"; then
   add_blocker "runtime_env_guard_untrusted"
 elif ! runtime_compose_is_safe; then
   add_blocker "runtime_env_compose_missing"
+elif ! candidate_compose_is_safe; then
+  add_blocker "runtime_env_candidate_compose_untrusted"
+elif ! candidate_checkout_sha_is_exact; then
+  add_blocker "runtime_env_candidate_checkout_unverified"
 elif [[ "${JIEJING_USE_COST_SAVER_OVERRIDE:-false}" == "true" ]]; then
   cost_saver_override="${JIEJING_COST_SAVER_COMPOSE_OVERRIDE:-$private_dir/docker-compose.cost-saver-local.yml}"
   if [[ "$cost_saver_override" != "$private_dir/docker-compose.cost-saver-local.yml" ]] || \
@@ -158,20 +234,35 @@ fi
 
 if [[ "$app_dir_safe" == "true" && "$deploy_root_safe" == "true" && \
   -f "$TRUSTED_RUNTIME_ENV_GUARD" ]] && trusted_root_owned_path_chain_is_safe "$TRUSTED_RUNTIME_ENV_GUARD" && \
-  runtime_compose_is_safe && [[ "${#override_args[@]}" -gt 0 || \
-  "${JIEJING_USE_COST_SAVER_OVERRIDE:-false}" != "true" ]]; then
-  if sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" check \
-  --compose "$runtime_compose" \
-  --managed-env "$private_dir/tencent-managed.env" \
-  --secret-env "$private_dir/jiejing-saas.staging-oauth.env" \
-  --postgres-env "$private_dir/postgres-localqueue.env" \
-  --required-runtime-service jiejing-saas \
-  --required-runtime-service jiejing-worker \
-  "${override_args[@]}" \
-  >/dev/null 2>/dev/null; then
+  runtime_compose_is_safe && candidate_compose_is_safe && candidate_checkout_sha_is_exact && \
+  [[ "${#override_args[@]}" -gt 0 || "${JIEJING_USE_COST_SAVER_OVERRIDE:-false}" != "true" ]]; then
+  if ! sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" check \
+    --compose "$candidate_compose" \
+    --compose-runtime-path "$runtime_compose" \
+    --managed-env "$private_dir/tencent-managed.env" \
+    --secret-env "$private_dir/jiejing-saas.staging-oauth.env" \
+    --postgres-env "$private_dir/postgres-localqueue.env" \
+    --required-runtime-service jiejing-saas \
+    --required-runtime-service jiejing-worker \
+    "${override_args[@]}" \
+    >/dev/null 2>/dev/null; then
+    add_blocker "runtime_env_candidate_guard_blocked"
+  elif sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" check \
+    --compose "$runtime_compose" \
+    --managed-env "$private_dir/tencent-managed.env" \
+    --secret-env "$private_dir/jiejing-saas.staging-oauth.env" \
+    --postgres-env "$private_dir/postgres-localqueue.env" \
+    --required-runtime-service jiejing-saas \
+    --required-runtime-service jiejing-worker \
+    "${override_args[@]}" \
+    >/dev/null 2>/dev/null; then
     runtime_guard_status="ready"
+  elif live_release_sha_is_verified && \
+    git -C "$resolved_candidate_workspace" merge-base --is-ancestor "$live_release_sha" "$candidate_sha"; then
+    runtime_guard_status="ready_transition"
+    add_warning "runtime_env_live_compose_transition_detected"
   else
-    add_blocker "runtime_env_ownership_guard_blocked"
+    add_blocker "runtime_env_live_transition_unverified"
   fi
 fi
 echo "RUNTIME_ENV_GUARD_STATUS=$runtime_guard_status"

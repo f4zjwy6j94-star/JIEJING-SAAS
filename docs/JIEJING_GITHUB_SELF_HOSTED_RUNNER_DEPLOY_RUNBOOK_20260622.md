@@ -270,6 +270,26 @@ If `sudo -n true` fails, do not weaken the whole server. Add only the minimum no
 
 10. After the runner appears online, open GitHub Actions > `Jiejing Staging Runner Doctor` and run it once.
 
+   Doctor validates the reviewed candidate Compose from the exact Actions
+   checkout as data with the root-pinned trusted guard. It binds relative
+   `env_file` resolution to the future installed location through
+   `--compose-runtime-path`; it never executes the candidate guard. The
+   checkout HEAD must equal the 40-character workflow target SHA and the
+   candidate Compose must be a tracked, unchanged, regular non-symlink file
+   inside that checkout.
+
+   During a separately approved private-env-to-Compose transition, the old
+   live Compose may fail the legacy ownership check after the private files
+   have already been transactionally aligned to the candidate. Doctor accepts
+   this state only when the candidate check has zero blockers and it can prove
+   the current live release SHA from the latest applied release whose Compose
+   and application payload match the live files. That SHA must differ from and
+   be a Git ancestor of the exact candidate SHA. It then reports
+   `RUNTIME_ENV_GUARD_STATUS=ready_transition` and the value-free warning
+   `runtime_env_live_compose_transition_detected`. Missing, ambiguous or
+   non-ancestor release evidence fails closed; never suppress an unknown live
+   ownership failure.
+
    A healthy result should include:
 
    ```text
