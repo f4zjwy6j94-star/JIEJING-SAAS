@@ -185,13 +185,20 @@ If `sudo -n true` fails, do not weaken the whole server. Add only the minimum no
    the existing restricted sudo boundary.
 
    Conflict resolution is a separate value-free preparation step. The checked-in
-   staging resolution manifest contains key names and source roles only, and
+   staging resolution manifest contains value-free key names, source roles and
+   the single reviewed retire action enum only, and
    `resolution-plan` validates that evidence without mutating Compose or any
    private env file. For a reviewed candidate, `--compose-runtime-path` supplies
    only the future installed path identity used to resolve `env_file`, while
    `--donor-compose` is the strictly read-only current Compose and may supply a
    value only for an explicit `donor_role=compose` decision. The donor is never
-   treated as the desired owner, and reports expose roles/count/comparison only.
+   treated as the desired owner. The two media decisions explicitly use
+   `resolution_action=retire_equal_compose_donor_keep_authoritative`; they pass
+   only when the candidate omits the key, the secret owner is unique, the donor
+   has exactly one declaration in each required runtime service, and all current
+   declarations compare equal. Missing owners, conflicts, candidate declarations
+   and abnormal donor service topology fail closed. Reports expose action, key,
+   roles, count and comparison only.
    The plan is not wired to `migrate --apply`; any later private-env migration
    apply requires a separate review and explicit operator approval.
 

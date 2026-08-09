@@ -305,10 +305,12 @@ def main() -> int:
         return fail("runtime env resolution manifest must contain the reviewed 24 decisions")
     if any(
         not isinstance(decision, dict)
-        or not set(decision).issubset({"key", "authoritative_role", "donor_role"})
+        or not set(decision).issubset(
+            {"key", "authoritative_role", "donor_role", "resolution_action"}
+        )
         for decision in decisions
     ):
-        return fail("runtime env resolution manifest decisions must remain key/role-only")
+        return fail("runtime env resolution manifest decisions must remain value-free key/role/action-only")
     compose_donor_keys = {
         decision.get("key")
         for decision in decisions
@@ -321,6 +323,25 @@ def main() -> int:
         "JIEJING_MEDIA_LIVE_VIDEO_ENABLED",
     }:
         return fail("runtime env resolution manifest must pin the four reviewed Compose donors")
+    retire_decisions = {
+        decision.get("key"): (
+            decision.get("authoritative_role"),
+            decision.get("donor_role"),
+            decision.get("resolution_action"),
+        )
+        for decision in decisions
+        if "resolution_action" in decision
+    }
+    expected_retire = (
+        "secret",
+        "compose",
+        "retire_equal_compose_donor_keep_authoritative",
+    )
+    if retire_decisions != {
+        "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED": expected_retire,
+        "JIEJING_MEDIA_LIVE_VIDEO_ENABLED": expected_retire,
+    }:
+        return fail("runtime env resolution manifest must explicitly pin the two reviewed media retire actions")
     for marker in (
         'TRUSTED_RUNTIME_ENV_GUARD="${JIEJING_TRUSTED_RUNTIME_ENV_GUARD:-/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py}"',
         "REFUSE_UNTRUSTED_RUNTIME_ENV_GUARD=1",

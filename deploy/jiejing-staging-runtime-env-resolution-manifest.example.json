@@ -54,12 +54,14 @@
     {
       "key": "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED",
       "authoritative_role": "secret",
-      "donor_role": "compose"
+      "donor_role": "compose",
+      "resolution_action": "retire_equal_compose_donor_keep_authoritative"
     },
     {
       "key": "JIEJING_MEDIA_LIVE_VIDEO_ENABLED",
       "authoritative_role": "secret",
-      "donor_role": "compose"
+      "donor_role": "compose",
+      "resolution_action": "retire_equal_compose_donor_keep_authoritative"
     },
     {
       "key": "JIEJING_QUEUE_PROVIDER",

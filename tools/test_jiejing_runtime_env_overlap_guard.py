@@ -364,6 +364,163 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
             [],
         )
 
+    def test_resolution_plan_retires_equal_compose_donor_when_secret_owner_exists(self) -> None:
+        self._write_legal_fixture()
+        key = "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED"
+        sentinel = "RETIRE_EQUAL_PRIVATE_VALUE_MUST_NOT_LEAK"
+        donor_compose = self.fixture_root / "legacy-donor-compose.yml"
+        donor_compose.write_text(
+            self.compose_path.read_text(encoding="utf-8").replace(
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                f'      {key}: "{sentinel}"\n',
+            ),
+            encoding="utf-8",
+        )
+        self.secret_path.write_text(
+            self.secret_path.read_text(encoding="utf-8") + f"{key}={sentinel}\n",
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [
+                {
+                    "key": key,
+                    "authoritative_role": "secret",
+                    "donor_role": "compose",
+                    "resolution_action": "retire_equal_compose_donor_keep_authoritative",
+                }
+            ]
+        )
+        before = {
+            path: path.read_bytes()
+            for path in (
+                self.compose_path,
+                donor_compose,
+                self.managed_path,
+                self.secret_path,
+                self.postgres_path,
+                manifest_path,
+            )
+        }
+
+        completed = self._run_resolution_plan(
+            manifest_path,
+            augment_legacy_contract=False,
+            donor_compose_path=donor_compose,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        self.assertNotIn(sentinel, completed.stdout + completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertFalse(report["applied"])
+        self.assertEqual(report["blockers"], [])
+        self.assertEqual(
+            report["actions"],
+            [
+                {
+                    "action": "retire_equal_compose_donor_keep_authoritative",
+                    "key": key,
+                    "source_role": "compose",
+                    "target_role": "secret",
+                    "count": 2,
+                    "comparison": "equal",
+                }
+            ],
+        )
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertEqual(
+            sorted(key for key in _all_json_keys(report) if _looks_like_value_field(key)),
+            [],
+        )
+
+    def test_resolution_plan_retire_action_fails_closed_when_preconditions_are_not_exact(self) -> None:
+        key = "JIEJING_MEDIA_LIVE_VIDEO_ENABLED"
+        cases = (
+            ("owner_conflict", "resolution_retire_owner_donor_conflict"),
+            ("owner_missing", "resolution_retire_authoritative_owner_missing"),
+            ("candidate_declares", "resolution_retire_candidate_declaration_present"),
+            ("service_topology", "resolution_compose_donor_service_topology_invalid"),
+        )
+        for case_name, expected_code in cases:
+            with self.subTest(case_name=case_name):
+                self._write_legal_fixture()
+                owner_value = "RETIRE_OWNER_VALUE_MUST_NOT_LEAK"
+                donor_value = (
+                    "RETIRE_DONOR_CONFLICT_MUST_NOT_LEAK"
+                    if case_name == "owner_conflict"
+                    else owner_value
+                )
+                donor_compose = self.fixture_root / f"{case_name}-legacy-donor.yml"
+                donor_compose.write_text(
+                    self.compose_path.read_text(encoding="utf-8").replace(
+                        '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                        '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                        f'      {key}: "{donor_value}"\n',
+                        1 if case_name == "service_topology" else -1,
+                    ),
+                    encoding="utf-8",
+                )
+                if case_name != "owner_missing":
+                    self.secret_path.write_text(
+                        self.secret_path.read_text(encoding="utf-8")
+                        + f"{key}={owner_value}\n",
+                        encoding="utf-8",
+                    )
+                if case_name == "candidate_declares":
+                    self.compose_path.write_text(
+                        self.compose_path.read_text(encoding="utf-8").replace(
+                            '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                            '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                            f'      {key}: "{owner_value}"\n',
+                        ),
+                        encoding="utf-8",
+                    )
+                manifest_path = self._write_resolution_manifest(
+                    [
+                        {
+                            "key": key,
+                            "authoritative_role": "secret",
+                            "donor_role": "compose",
+                            "resolution_action": "retire_equal_compose_donor_keep_authoritative",
+                        }
+                    ]
+                )
+                before = {
+                    path: path.read_bytes()
+                    for path in (
+                        self.compose_path,
+                        donor_compose,
+                        self.managed_path,
+                        self.secret_path,
+                        self.postgres_path,
+                        manifest_path,
+                    )
+                }
+
+                completed = self._run_resolution_plan(
+                    manifest_path,
+                    augment_legacy_contract=False,
+                    donor_compose_path=donor_compose,
+                )
+
+                self.assertNotEqual(completed.returncode, 0)
+                report = json.loads(completed.stdout)
+                self.assertFalse(report["ok"])
+                self.assertFalse(report["applied"])
+                self.assertEqual(report["actions"], [])
+                self.assertIn(expected_code, {blocker["code"] for blocker in report["blockers"]})
+                self.assertEqual(before, {path: path.read_bytes() for path in before})
+                serialized = completed.stdout + completed.stderr
+                self.assertNotIn(owner_value, serialized)
+                self.assertNotIn(donor_value, serialized)
+                self.assertNotIn(str(donor_compose), serialized)
+                self.assertNotIn("digest", serialized.casefold())
+                self.assertEqual(
+                    sorted(field for field in _all_json_keys(report) if _looks_like_value_field(field)),
+                    [],
+                )
+
     def test_resolution_plan_resolves_private_forbidden_value_with_explicit_safe_compose_keep(self) -> None:
         self._write_legal_fixture()
         sentinel = "FORBIDDEN_PRIVATE_VALUE_MUST_NOT_LEAK"
@@ -1338,6 +1495,13 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
             for decision in decisions
             if decision.get("donor_role") == "compose"
         }
+        retire_compose_donor_keys = {
+            decision["key"]
+            for decision in decisions
+            if decision.get("resolution_action")
+            == "retire_equal_compose_donor_keep_authoritative"
+        }
+        move_compose_donor_keys = compose_donor_keys - retire_compose_donor_keys
         private_donor_keys = {
             decision["key"]: decision["donor_role"]
             for decision in decisions
@@ -1392,6 +1556,8 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
             target_by_role[wrong_role].append(f"{key}=LIVE_TOPOLOGY_WRONG_{wrong_role}")
         for key, donor_role in private_donor_keys.items():
             target_by_role[donor_role].append(f"{key}=LIVE_TOPOLOGY_PRIVATE_DONOR")
+        for key in sorted(retire_compose_donor_keys):
+            target_by_role["secret"].append(f"{key}=true")
 
         self.managed_path.write_text("\n".join(target_by_role["managed"]) + "\n", encoding="utf-8")
         self.secret_path.write_text("\n".join(target_by_role["secret"]) + "\n", encoding="utf-8")
@@ -1404,6 +1570,7 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
                 self.managed_path,
                 self.secret_path,
                 self.postgres_path,
+                manifest_path,
             )
         }
 
@@ -1428,7 +1595,7 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
                 for action in report["actions"]
                 if action["action"] == "move_equal_donors_to_authoritative"
             },
-            compose_donor_keys,
+            move_compose_donor_keys,
         )
         self.assertTrue(
             all(
@@ -1437,6 +1604,24 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
                 and action["comparison"] == "equal"
                 for action in report["actions"]
                 if action["action"] == "move_equal_donors_to_authoritative"
+            )
+        )
+        self.assertEqual(
+            {
+                action["key"]
+                for action in report["actions"]
+                if action["action"] == "retire_equal_compose_donor_keep_authoritative"
+            },
+            retire_compose_donor_keys,
+        )
+        self.assertTrue(
+            all(
+                action["source_role"] == "compose"
+                and action["target_role"] == "secret"
+                and action["count"] == 2
+                and action["comparison"] == "equal"
+                for action in report["actions"]
+                if action["action"] == "retire_equal_compose_donor_keep_authoritative"
             )
         )
         self.assertEqual(before, {path: path.read_bytes() for path in before})
@@ -1591,7 +1776,7 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
         )
         self.assertNotIn("UNKNOWN_DECISION_SENTINEL", json.dumps(unknown_report))
 
-    def test_resolution_plan_rejects_non_string_roles_without_traceback_or_path(self) -> None:
+    def test_resolution_plan_rejects_invalid_roles_and_actions_without_traceback_or_path(self) -> None:
         self._write_legal_fixture()
         cases = (
             (
@@ -1605,6 +1790,51 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
                     "donor_role": {"role": "secret"},
                 },
                 "resolution_decision_donor_role_invalid",
+            ),
+            (
+                {
+                    "key": "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED",
+                    "authoritative_role": "secret",
+                    "donor_role": "compose",
+                    "resolution_action": ["retire"],
+                },
+                "resolution_decision_action_invalid",
+            ),
+            (
+                {
+                    "key": "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED",
+                    "authoritative_role": "secret",
+                    "donor_role": "compose",
+                    "resolution_action": None,
+                },
+                "resolution_decision_action_invalid",
+            ),
+            (
+                {
+                    "key": "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED",
+                    "authoritative_role": "secret",
+                    "donor_role": "compose",
+                    "resolution_action": "move_equal_donors_to_authoritative",
+                },
+                "resolution_decision_action_invalid",
+            ),
+            (
+                {
+                    "key": "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED",
+                    "authoritative_role": "managed",
+                    "donor_role": "compose",
+                    "resolution_action": "retire_equal_compose_donor_keep_authoritative",
+                },
+                "resolution_decision_action_roles_invalid",
+            ),
+            (
+                {
+                    "key": "JIEJING_EBAY_CLIENT_SECRET",
+                    "authoritative_role": "secret",
+                    "donor_role": "compose",
+                    "resolution_action": "retire_equal_compose_donor_keep_authoritative",
+                },
+                "resolution_decision_action_key_invalid",
             ),
         )
         for decision, expected_code in cases:
@@ -1622,7 +1852,7 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
                 self.assertIn(expected_code, {item["code"] for item in report["blockers"]})
                 self.assertFalse(report["secret_exposed"])
 
-    def test_checked_in_staging_resolution_manifest_is_key_and_role_only(self) -> None:
+    def test_checked_in_staging_resolution_manifest_is_value_free_and_action_explicit(self) -> None:
         manifest_path = ROOT / "deploy" / "jiejing-staging-runtime-env-resolution-manifest.example.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
@@ -1642,8 +1872,25 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
         )
         for decision in manifest["decisions"]:
             self.assertTrue(
-                set(decision).issubset({"key", "authoritative_role", "donor_role"})
+                set(decision).issubset(
+                    {"key", "authoritative_role", "donor_role", "resolution_action"}
+                )
             )
+        self.assertEqual(
+            {
+                decision["key"]: decision["resolution_action"]
+                for decision in manifest["decisions"]
+                if "resolution_action" in decision
+            },
+            {
+                "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED": (
+                    "retire_equal_compose_donor_keep_authoritative"
+                ),
+                "JIEJING_MEDIA_LIVE_VIDEO_ENABLED": (
+                    "retire_equal_compose_donor_keep_authoritative"
+                ),
+            },
+        )
         self.assertEqual(
             sorted(key for key in _all_json_keys(manifest) if _looks_like_value_field(key)),
             [],
@@ -1785,6 +2032,72 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
                 | set(guard_module.COMPOSE_STATIC_KEYS)
             )
         )
+
+    def test_compose_exact_registry_accepts_runtime_topology_and_rejects_private_sources(self) -> None:
+        self._write_legal_fixture()
+        keys = ("JIEJING_ALLOW_HERMES_ADAPTERS", "JIEJING_SAAS_ENV")
+        compose_text = self.compose_path.read_text(encoding="utf-8").replace(
+            '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+            '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+            '      JIEJING_ALLOW_HERMES_ADAPTERS: "false"\n'
+            '      JIEJING_SAAS_ENV: "staging"\n',
+        )
+        self.compose_path.write_text(compose_text, encoding="utf-8")
+
+        candidate_report = check_runtime_env_ownership(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+        )
+
+        self.assertTrue(candidate_report["ok"], candidate_report["blockers"])
+        for key in keys:
+            declarations = [
+                declaration
+                for declaration in candidate_report["declarations"]
+                if declaration["key"] == key
+            ]
+            self.assertEqual(
+                {declaration["source"] for declaration in declarations},
+                {"compose:jiejing-saas", "compose:jiejing-worker"},
+            )
+            self.assertTrue(
+                all(declaration["owner"] == "compose" for declaration in declarations)
+            )
+
+        self.compose_path.write_text(
+            compose_text.replace(
+                '      JIEJING_ALLOW_HERMES_ADAPTERS: "false"\n'
+                '      JIEJING_SAAS_ENV: "staging"\n',
+                "",
+            ),
+            encoding="utf-8",
+        )
+        self.secret_path.write_text(
+            self.secret_path.read_text(encoding="utf-8")
+            + "JIEJING_ALLOW_HERMES_ADAPTERS=PRIVATE_SOURCE_SENTINEL\n"
+            + "JIEJING_SAAS_ENV=PRIVATE_SOURCE_SENTINEL\n",
+            encoding="utf-8",
+        )
+
+        private_report = check_runtime_env_ownership(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+        )
+
+        self.assertFalse(private_report["ok"])
+        for key in keys:
+            self.assertTrue(
+                any(
+                    blocker.get("code") == "wrong_source"
+                    and blocker.get("key") == key
+                    and blocker.get("owner") == "compose"
+                    for blocker in private_report["blockers"]
+                )
+            )
 
     def test_migrate_defaults_to_dry_run_and_does_not_modify_files(self) -> None:
         self._write_legal_fixture()

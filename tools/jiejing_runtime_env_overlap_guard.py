@@ -29,6 +29,13 @@ from typing import Mapping, Sequence
 SCHEMA_VERSION = "jiejing_runtime_env_overlap_guard_v1"
 RESOLUTION_MANIFEST_SCHEMA_VERSION = "jiejing_runtime_env_resolution_manifest_v1"
 MIGRATION_APPLY_CONFIRMATION = "APPLY_JIEJING_RUNTIME_ENV_MIGRATION"
+RETIRE_EQUAL_COMPOSE_DONOR_ACTION = "retire_equal_compose_donor_keep_authoritative"
+RETIRE_EQUAL_COMPOSE_DONOR_KEYS = frozenset(
+    {
+        "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED",
+        "JIEJING_MEDIA_LIVE_VIDEO_ENABLED",
+    }
+)
 MANAGED_SOURCE = "tencent-managed.env"
 SECRET_SOURCE = "jiejing-saas.staging-oauth.env"
 POSTGRES_SOURCE = "postgres-localqueue.env"
@@ -189,9 +196,11 @@ COMPOSE_REQUIRED_VALUES = {
 }
 COMPOSE_STATIC_KEYS = frozenset(
     {
+        "JIEJING_ALLOW_HERMES_ADAPTERS",
         "JIEJING_BILLING_PLANS_PUBLISHED",
         "JIEJING_CORS_ORIGIN",
         "JIEJING_QUOTA_ENFORCEMENT_ENABLED",
+        "JIEJING_SAAS_ENV",
     }
 )
 COMPOSE_OWNED_KEYS = frozenset(COMPOSE_REQUIRED_VALUES) | COMPOSE_STATIC_KEYS
@@ -386,6 +395,7 @@ class ResolutionDecision:
     key: str
     authoritative_role: str
     donor_role: str | None = None
+    resolution_action: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2112,7 +2122,7 @@ def _load_resolution_decisions(
     decisions: dict[str, ResolutionDecision] = {}
     for index, raw_decision in enumerate(raw_decisions, start=1):
         if not isinstance(raw_decision, dict) or not set(raw_decision).issubset(
-            {"key", "authoritative_role", "donor_role"}
+            {"key", "authoritative_role", "donor_role", "resolution_action"}
         ) or not {"key", "authoritative_role"}.issubset(raw_decision):
             blockers.append(
                 {"code": "resolution_decision_schema_invalid", "count": index}
@@ -2121,6 +2131,8 @@ def _load_resolution_decisions(
         key = raw_decision.get("key")
         authoritative_role = raw_decision.get("authoritative_role")
         donor_role = raw_decision.get("donor_role")
+        resolution_action_present = "resolution_action" in raw_decision
+        resolution_action = raw_decision.get("resolution_action")
         if not isinstance(key, str) or KEY_PATTERN.fullmatch(key) is None:
             blockers.append(
                 {"code": "resolution_decision_key_invalid", "count": index}
@@ -2146,6 +2158,31 @@ def _load_resolution_decisions(
                 {"code": "resolution_decision_roles_not_distinct", "key": key}
             )
             continue
+        if resolution_action_present and resolution_action != RETIRE_EQUAL_COMPOSE_DONOR_ACTION:
+            blockers.append(
+                {"code": "resolution_decision_action_invalid", "key": key}
+            )
+            continue
+        if resolution_action is not None and (
+            authoritative_role != "secret" or donor_role != "compose"
+        ):
+            blockers.append(
+                {
+                    "code": "resolution_decision_action_roles_invalid",
+                    "key": key,
+                    "authoritative_role": authoritative_role,
+                    "donor_role": donor_role,
+                }
+            )
+            continue
+        if (
+            resolution_action == RETIRE_EQUAL_COMPOSE_DONOR_ACTION
+            and key not in RETIRE_EQUAL_COMPOSE_DONOR_KEYS
+        ):
+            blockers.append(
+                {"code": "resolution_decision_action_key_invalid", "key": key}
+            )
+            continue
         if key in decisions:
             blockers.append({"code": "resolution_decision_duplicate", "key": key})
             continue
@@ -2153,6 +2190,7 @@ def _load_resolution_decisions(
             key=key,
             authoritative_role=authoritative_role,
             donor_role=donor_role,
+            resolution_action=resolution_action,
         )
     return decisions, blockers
 
@@ -2402,7 +2440,50 @@ def plan_runtime_env_resolution(
             )
             continue
         desired_key_analysis = analysis_by_key.get(key)
-        if desired_key_analysis is not None and desired_key_analysis.declarations:
+        desired_topology = (
+            _resolution_topology_by_role(desired_key_analysis)
+            if desired_key_analysis is not None
+            else {}
+        )
+        if decision.resolution_action == RETIRE_EQUAL_COMPOSE_DONOR_ACTION:
+            candidate_declarations = desired_topology.get("compose", ())
+            if candidate_declarations:
+                blockers.append(
+                    {
+                        "code": "resolution_retire_candidate_declaration_present",
+                        "key": key,
+                        "source_role": "compose",
+                        "target_role": owner_role,
+                        "count": len(candidate_declarations),
+                    }
+                )
+                continue
+            owner_declarations = desired_topology.get(owner_role, ())
+            if not owner_declarations:
+                blockers.append(
+                    {
+                        "code": "resolution_retire_authoritative_owner_missing",
+                        "key": key,
+                        "target_role": owner_role,
+                        "count": 0,
+                    }
+                )
+                continue
+            if set(desired_topology) != {owner_role} or not _owner_declaration_count_is_exact(
+                owner_role=owner_role,
+                declarations=owner_declarations,
+                required_runtime_services=normalized_required_services,
+            ):
+                blockers.append(
+                    {
+                        "code": "resolution_retire_desired_topology_invalid",
+                        "key": key,
+                        "target_role": owner_role,
+                        "count": len(desired_key_analysis.declarations),
+                    }
+                )
+                continue
+        elif desired_key_analysis is not None and desired_key_analysis.declarations:
             blockers.append(
                 {
                     "code": "resolution_donor_target_topology_not_empty",
@@ -2453,6 +2534,32 @@ def plan_runtime_env_resolution(
                     "count": len(donor_declarations),
                     "comparison": donor_comparison,
                 }
+            )
+            continue
+        if decision.resolution_action == RETIRE_EQUAL_COMPOSE_DONOR_ACTION:
+            owner_declarations = desired_topology[owner_role]
+            owner_donor_comparison = _comparison((*donor_declarations, *owner_declarations))
+            if owner_donor_comparison != "equal":
+                blockers.append(
+                    {
+                        "code": "resolution_retire_owner_donor_conflict",
+                        "key": key,
+                        "donor_role": "compose",
+                        "target_role": owner_role,
+                        "count": len(donor_declarations),
+                        "comparison": owner_donor_comparison,
+                    }
+                )
+                continue
+            actions.append(
+                ResolutionAction(
+                    action=RETIRE_EQUAL_COMPOSE_DONOR_ACTION,
+                    key=key,
+                    source_role="compose",
+                    target_role=owner_role,
+                    count=len(donor_declarations),
+                    comparison="equal",
+                )
             )
             continue
         actions.append(

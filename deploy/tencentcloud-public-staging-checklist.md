@@ -98,9 +98,10 @@ jiejing-saas.staging-oauth.env: session, eBay, model, search, media and payment-
 postgres-localqueue.env: PostgreSQL and queue connection URLs
 ```
 
-`JIEJING_SAAS_ENV`, CORS and other stable public route settings remain Compose
-static configuration, not secret-file values. Keep all three real files under
-`/opt/jiejing-staging/private/`; `deploy/` contains examples only.
+`JIEJING_SAAS_ENV`, `JIEJING_ALLOW_HERMES_ADAPTERS`, CORS and other stable
+public route settings remain Compose static configuration, not secret-file
+values. Keep all three real files under `/opt/jiejing-staging/private/`;
+`deploy/` contains examples only.
 
 4. Before any build, copy or container operation, use the separately reviewed,
    root-controlled guard at the fixed path below. The app bundle, candidate
@@ -117,14 +118,20 @@ static configuration, not secret-file values. Keep all three real files under
    by `jiejing_runtime_env_overlap_guard.py migrate`; only the separately
    provisioned trusted copy may execute these commands with private env access.
    If the dry-run reports value conflicts or a registered owner is missing, run
-   `resolution-plan` with the reviewed key/role-only manifest before requesting
-   any apply window. Pass the reviewed desired Compose as `--compose`, its future
+   `resolution-plan` with the reviewed value-free key/role/action manifest before
+   requesting any apply window. Pass the reviewed desired Compose as `--compose`, its future
    installed identity as `--compose-runtime-path`, and the current installed
    Compose as the strictly read-only `--donor-compose`. The donor is consulted
    only for explicit `donor_role=compose` decisions; it is never treated as the
-   desired owner or changed. The resolution plan is preparation only: it emits
-   no values, digests, paths or line contents, never changes either Compose file
-   or any private env file, and is deliberately not connected to
+   desired owner or changed. A Compose donor normally supplies evidence for a
+   missing owner. The two media decisions instead explicitly use
+   `resolution_action=retire_equal_compose_donor_keep_authoritative`: the desired
+   candidate must omit the key, the current secret owner must be unique, the
+   donor must declare it exactly once in each required runtime service, and all
+   three declarations must compare equal. Any missing owner, conflict, candidate
+   declaration or abnormal service topology fails closed. The resolution plan is
+   preparation only: it emits no values, digests, paths or line contents, never
+   changes either Compose file or any private env file, and is deliberately not connected to
    `migrate --apply`. A later migration apply still requires its own review and
    explicit approval.
 
