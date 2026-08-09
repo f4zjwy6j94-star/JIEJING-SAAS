@@ -1,6 +1,6 @@
 # JIEJING adversarial security review
 
-Review date: 2026-07-12
+Review date: 2026-08-10
 
 Scope: the public SaaS entry points, AI CEO chat and web grounding, account-scoped model configuration, Listing handoff, media generation/rework, batch workflows, queue recovery, authentication, tenant boundaries, and the public staging reverse-proxy path.
 
@@ -10,7 +10,7 @@ This review assumes a public multi-tenant service using Cookie or Bearer authent
 
 No confirmed Critical issue was found. The initial review identified two High and seven Medium/Low issues. The remediation status below is the current source of truth; remaining external verification and production-runtime work still blocks unrestricted public trial and paid launch. Current confirmation gates and disabled real writes materially reduce impact, but they are not substitutes for cost, account-data, availability and answer-integrity controls.
 
-## Remediation progress (2026-07-11)
+## Remediation progress (2026-08-10)
 
 - A-01 core backend remediation implemented: trusted proxy chains are parsed from the right-most trusted hop, rate-limit buckets are shared through the SaaS database, raw IP/email values are hashed, expired buckets are pruned, bounded process fallback remains available, and registration has stricter per-IP/global limits. Verified email and a real Turnstile/email challenge are still required before unrestricted platform-funded trials.
 - A-02 remediated: media rework now enforces provider-job quota, ignores client billing idempotency keys, caps asset versions, and uses an expiring database reservation so concurrent retries enqueue at most one provider job.
@@ -21,6 +21,11 @@ No confirmed Critical issue was found. The initial review identified two High an
 - A-07 remediated for known credential families: nested text values are scanned even under ordinary field names before persistence/provider dispatch.
 - A-08 remediated: unknown-account login performs the same PBKDF2 work as a known account, and registration conflicts no longer expose that an email already exists.
 - A-09 remains open. Removal of CSP `unsafe-inline` is still required before paid launch.
+- A-10 remediated: production-like BYOK execution now binds both the stored and request-time base URL to the reviewed provider HTTPS host before resolving a secret or constructing a client.
+- A-11 remediated: staging/production registration, login, demo bootstrap and company switching no longer return a browser-readable bearer token; the session remains in an `HttpOnly` cookie.
+- A-12 remediated: production-like POST requests with an `Origin` header must match the configured or same-origin HTTPS boundary before request-body handling. Server-to-server callbacks without an `Origin` remain supported and keep their independent signature/authentication checks.
+- A-13 remediated: staging/production session and expiry cookies always carry `Secure`, even if an internal request arrives without a forwarded HTTPS hint.
+- A-14 remains open as supply-chain hardening: `requirements.saas.txt` uses bounded version ranges but there is no checked-in, hashed deployment lock file. Current environment integrity passes `pip check`; an ephemeral vulnerability scanner was not available in this review environment.
 
 ## Product-integrity adversarial pass (2026-07-12)
 
@@ -73,6 +78,11 @@ Primary trust boundaries:
 | A-07 | Medium | Secret handling / malicious input | Generic recursive redaction masks values only when dictionary keys contain `secret`, `token`, `password`, or `api_key` (`jiejing_saas/api_server.py:6244-6256`). Chat history has stronger text sanitization, but generic provider inputs can carry a credential under an innocent key such as `notes`. | A merchant can accidentally persist or send a credential to a model/media provider, audit record or worker payload even though the intended secret boundary is backend-only. | Apply value-pattern secret detection to every free-text and nested provider input before persistence or dispatch. Reject likely credentials and direct the merchant to the secure connection form; do not rely only on masking key names. |
 | A-08 | Low | Enumeration | Remediated. Unknown-account login performs a fixed-cost dummy PBKDF2 verification, and registration conflicts return a generic public error. | Residual status differences remain inherent until registration uses verified-email delivery, but direct timing and message disclosure are reduced. | Keep exact reasons in backend audit logs, retain rate limits, and add verified-email enrollment before unrestricted platform-funded trials. |
 | A-09 | Low | Browser defense in depth | Public pages currently permit inline scripts/styles in CSP. Cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` on HTTPS (`api_server.py:4028-4050`). | Existing escaping and safe-rendering guards reduce XSS risk, but `unsafe-inline` weakens CSP if a DOM injection is introduced later. | Move inline scripts to versioned static files or use nonces/hashes. Add Trusted Types after the current rendering paths are compatible. Keep HSTS enforced at the public edge. |
+| A-10 | High | SSRF / secret boundary | Remediated. The runtime BYOK path previously accepted a request-body `base_url`, even though the save path had provider-host validation. Production-like execution now validates the stored endpoint and rejects any non-identical request override before secret resolution (`jiejing_saas/api_server.py:7351-7379`). | A merchant with a valid model secret reference could otherwise direct a backend-authenticated model request to an internal or attacker-controlled endpoint. | Keep `tools/test_jiejing_global_security_hardening.py` in the precloud gate and require an exact reviewed provider HTTPS host for every new live model adapter. |
+| A-11 | Medium | Session disclosure | Remediated. Production-like auth responses now return only `token_returned_to_frontend=false`; the signed token is delivered through the `HttpOnly` cookie (`jiejing_saas/api_server.py:6084-6100`). | A browser-readable bearer token increases impact from DOM injection and encourages token persistence outside the cookie boundary. | Keep local/test bearer compatibility isolated from staging/production and add new auth paths to the same response helper. |
+| A-12 | Medium | CSRF / cross-origin mutation | Remediated. Production-like POST requests now reject unapproved HTTPS origins before body parsing (`jiejing_saas/api_server.py:8145-8165`). | Cookie-authenticated state changes could otherwise be initiated by a malicious site if a route accepted a browser-compatible request shape. | Keep webhook routes independently signed and add any future public origin to the explicit CORS list before enabling browser mutations. |
+| A-13 | Low | Cookie transport | Remediated. Production-like cookies always include `Secure`; local/test still infer secure transport for proxy/browser rehearsals (`jiejing_saas/api_server.py:6115-6125`). | Missing proxy metadata could otherwise produce a non-Secure session cookie on an internal HTTP hop or misconfigured deployment. | Preserve the regression assertion and continue terminating public traffic at TLS-only trusted edges. |
+| A-14 | Low | Supply chain | Open. Runtime packages are bounded in `requirements.saas.txt`, but exact artifacts and hashes are not checked in. | A rebuild can select newer transitive artifacts than a previously reviewed release, reducing reproducibility and complicating advisory response. | Produce a platform-reviewed, hashed lock/constraints file in CI, scan it with `pip-audit` or an equivalent advisory scanner, and make container builds consume that immutable set. |
 
 ## Adversarial scenarios
 

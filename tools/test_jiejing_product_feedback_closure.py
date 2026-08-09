@@ -1154,6 +1154,10 @@ def _test_product_feedback_persistence_failures_return_503() -> str:
             SaaSBackendHandler._handle_post(self)
 
         @staticmethod
+        def _require_safe_mutation_origin() -> bool:
+            return True
+
+        @staticmethod
         def _check_expensive_api_rate_limit(**_: object) -> bool:
             return True
 

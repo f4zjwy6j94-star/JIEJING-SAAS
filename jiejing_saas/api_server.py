@@ -2134,6 +2134,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         parts = [unquote(part) for part in path.split("/")] if path else []
 
+        if not self._require_safe_mutation_origin():
+            return
+
         if path == "analytics/events":
             body = self._read_json_body()
             if not self._check_public_analytics_rate_limit():
@@ -2203,7 +2206,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             self._send_json(
                 {
-                    "token": token,
+                    **self._browser_session_response(token),
                     "user": user,
                     "company": company,
                     "created": created,
@@ -2317,7 +2320,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(
                 {
-                    "token": token,
+                    **self._browser_session_response(token),
                     **record,
                     "billing_trial": billing_trial,
                     "media_welcome": media_welcome,
@@ -2380,7 +2383,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_error(HTTPStatus.UNAUTHORIZED, str(exc))
                 return
             self._send_json(
-                {"token": token, "user": user, "secret_exposed": False},
+                {**self._browser_session_response(token), "user": user, "secret_exposed": False},
                 headers=[("set-cookie", self._session_cookie_header(token))],
             )
             return
@@ -2420,7 +2423,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 return
             token = self._issue_session_token(user_id=user["user_id"], company_id=company_id, email=user["email"])
             self._send_json(
-                {"token": token, "company": self.repository.get_company(company_id), "team_member": member, "secret_exposed": False},
+                {
+                    **self._browser_session_response(token),
+                    "company": self.repository.get_company(company_id),
+                    "team_member": member,
+                    "secret_exposed": False,
+                },
                 headers=[("set-cookie", self._session_cookie_header(token))],
             )
             return
@@ -6086,6 +6094,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             parts.append("Secure")
         return "; ".join(parts)
 
+    def _browser_session_response(self, token: str) -> dict[str, Any]:
+        if self.settings.is_production_like:
+            return {"token_returned_to_frontend": False}
+        return {"token": token, "token_returned_to_frontend": True}
+
     def _expired_session_cookie_header(self) -> str:
         same_site = "Strict" if self._operations_console_cookie_context() else "Lax"
         parts = [
@@ -6100,6 +6113,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         return "; ".join(parts)
 
     def _secure_cookie_context(self) -> bool:
+        if self.settings.is_production_like:
+            return True
         proto = str(self.headers.get("x-forwarded-proto") or "").lower()
         if proto == "https":
             return True
@@ -7333,6 +7348,35 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "secret_ref": selected.get("secret_ref"),
                 "secret_exposed": False,
             }
+        stored_base_url = normalize_model_api_base_url(
+            provider_key=definition.provider_key,
+            base_url=str(metadata.get("base_url") or definition.default_base_url),
+        )
+        requested_base_url = str(body.get("base_url") or "").strip()
+        if self.settings.is_production_like:
+            approved_host = (urlparse(definition.default_base_url).hostname or "").lower()
+            stored = urlparse(stored_base_url)
+            if stored.scheme != "https" or (stored.hostname or "").lower() != approved_host:
+                return {
+                    "status": "blocked",
+                    "blocked_by": ["unapproved_model_stored_base_url"],
+                    "provider_key": definition.provider_key,
+                    "provider_label": definition.label,
+                    "secret_exposed": False,
+                }
+            if requested_base_url:
+                requested = normalize_model_api_base_url(
+                    provider_key=definition.provider_key,
+                    base_url=requested_base_url,
+                )
+                if requested != stored_base_url:
+                    return {
+                        "status": "blocked",
+                        "blocked_by": ["unapproved_model_base_url_override"],
+                        "provider_key": definition.provider_key,
+                        "provider_label": definition.label,
+                        "secret_exposed": False,
+                    }
         if not definition.supported_live_adapter:
             return {
                 "status": "blocked",
@@ -7363,7 +7407,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 provider_key=definition.provider_key,
                 api_key=str(resolved.get("secret_value") or ""),
                 model=str(body.get("model") or metadata.get("model") or definition.default_model),
-                base_url=str(body.get("base_url") or metadata.get("base_url") or definition.default_base_url),
+                base_url=(
+                    stored_base_url
+                    if self.settings.is_production_like
+                    else str(body.get("base_url") or stored_base_url)
+                ),
             )
         except ValueError as exc:
             return {
@@ -8095,6 +8143,28 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self.send_header("access-control-allow-credentials", "true")
         self.send_header("access-control-allow-methods", "GET, POST, OPTIONS")
         self.send_header("access-control-allow-headers", "content-type, authorization, x-jiejing-operator-secret, x-jiejing-file-name")
+
+    def _require_safe_mutation_origin(self) -> bool:
+        if not self.settings.is_production_like:
+            return True
+        origin = str(self.headers.get("origin") or "").strip()
+        if not origin:
+            return True
+        parsed = urlparse(origin)
+        if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+            self._send_error(HTTPStatus.FORBIDDEN, "cross-origin mutation is not allowed")
+            return False
+        configured = {
+            item.strip().rstrip("/")
+            for item in str(self.settings.cors_origin or "").split(",")
+            if item.strip() and item.strip() != "*"
+        }
+        request_host = str(self.headers.get("host") or "").strip().lower()
+        same_origin_host = bool(request_host and parsed.netloc.lower() == request_host)
+        if origin.rstrip("/") in configured or same_origin_host:
+            return True
+        self._send_error(HTTPStatus.FORBIDDEN, "cross-origin mutation is not allowed")
+        return False
 
     def _send_security_headers(self) -> None:
         self.send_header("x-content-type-options", "nosniff")

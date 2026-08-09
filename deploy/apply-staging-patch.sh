@@ -230,6 +230,7 @@ FILES=(
   "tools/codex_jiejing_operations_console_smoke.js"
   "tools/codex_jiejing_product_feedback_smoke.js"
   "tools/test_jiejing_saas_p0_security_guardrails.py"
+  "tools/test_jiejing_global_security_hardening.py"
   "tools/test_jiejing_runtime_knowledge.py"
   "tools/test_jiejing_runtime_mvp.py"
   "tools/test_jiejing_staging_ebay_oauth_flow_tool.py"

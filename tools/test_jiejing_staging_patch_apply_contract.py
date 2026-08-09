@@ -232,6 +232,7 @@ def main() -> int:
         "tools/test_jiejing_ai_ceo_history_pagination.py",
         "tools/test_jiejing_billing_quota_guardrail.py",
         "tools/test_jiejing_session_revocation.py",
+        "tools/test_jiejing_global_security_hardening.py",
         "tools/test_jiejing_platform_authorization_strategy.py",
         "tools/test_jiejing_provider_job_contracts.py",
         "tools/test_jiejing_agent_provider_plan.py",

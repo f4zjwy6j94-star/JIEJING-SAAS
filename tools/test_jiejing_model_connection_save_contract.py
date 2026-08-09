@@ -32,11 +32,20 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def request_json(url: str, *, method: str = "GET", payload: dict[str, Any] | None = None, token: str = "") -> tuple[int, dict[str, Any]]:
+def request_json(
+    url: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, Any] | None = None,
+    token: str = "",
+    cookie: str = "",
+) -> tuple[int, dict[str, Any]]:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers = {"accept": "application/json", "content-type": "application/json"}
     if token:
         headers["authorization"] = f"Bearer {token}"
+    if cookie:
+        headers["cookie"] = cookie
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
@@ -44,6 +53,20 @@ def request_json(url: str, *, method: str = "GET", payload: dict[str, Any] | Non
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8")
         return int(exc.code), json.loads(raw) if raw else {}
+
+
+def register_session(url: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any], str]:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"accept": "application/json", "content-type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        record = json.loads(response.read().decode("utf-8"))
+        cookie = str(response.headers.get("set-cookie") or "").split(";", 1)[0]
+        return int(response.status), record, cookie
 
 
 def wait_for_health(base_url: str) -> bool:
@@ -97,16 +120,16 @@ def main() -> int:
         base_url = f"http://127.0.0.1:{port}"
         if not wait_for_health(base_url):
             return fail("backend did not become healthy")
-        _, auth = request_json(
+        register_status, auth, session_cookie = register_session(
             f"{base_url}/auth/register",
-            method="POST",
-            payload={"email": "model-save-contract@example.test", "password": "password123", "company_name": "Model Save Contract"},
+            {"email": "model-save-contract@example.test", "password": "password123", "company_name": "Model Save Contract"},
         )
-        token = str(auth.get("token") or "")
+        if register_status != 201 or not session_cookie or "token" in auth:
+            return fail("staging registration must use an HttpOnly session cookie without a browser-readable token")
         _, created = request_json(
             f"{base_url}/stores",
             method="POST",
-            token=token,
+            cookie=session_cookie,
             payload={"platform": "ebay", "store_name": "Model Save Store", "marketplace": "EBAY_US", "stage": "store_opened"},
         )
         store_id = str((created.get("store") or {}).get("store_id") or "")
@@ -114,7 +137,7 @@ def main() -> int:
         unsafe_status, unsafe_response = request_json(
             f"{base_url}/stores/{store_id}/model/api-key",
             method="POST",
-            token=token,
+            cookie=session_cookie,
             payload={
                 "provider_key": "deepseek",
                 "model": "deepseek-v4-pro",
@@ -130,7 +153,7 @@ def main() -> int:
         status, response = request_json(
             f"{base_url}/stores/{store_id}/model/api-key",
             method="POST",
-            token=token,
+            cookie=session_cookie,
             payload={
                 "provider_key": "deepseek",
                 "model": "deepseek-v4-pro",

@@ -71,6 +71,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("public_staging_proxy_contract", [sys.executable, "tools/test_jiejing_public_staging_proxy_contract.py"]),
     ("staging_oauth_operator_flow_tool", [sys.executable, "tools/test_jiejing_staging_ebay_oauth_flow_tool.py"]),
     ("p0_security_guardrails", [sys.executable, "tools/test_jiejing_saas_p0_security_guardrails.py"]),
+    ("global_security_hardening", [sys.executable, "tools/test_jiejing_global_security_hardening.py"]),
     ("shared_expensive_api_rate_limit", [sys.executable, "tools/test_jiejing_expensive_api_rate_limit.py"]),
     ("platform_trial_activation_guard", [sys.executable, "tools/test_jiejing_platform_trial_activation_guard.py"]),
     ("registration_challenge_ui", [sys.executable, "tools/test_jiejing_registration_challenge_ui.py"]),
