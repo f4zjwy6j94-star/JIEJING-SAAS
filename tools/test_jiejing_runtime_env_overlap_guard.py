@@ -5570,7 +5570,9 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
             encoding="utf-8",
         )
         self.postgres_path.write_text(f"JIEJING_DATABASE_URL={sentinel}\n", encoding="utf-8")
-        expected_candidate = b"JIEJING_BACKUP_POLICY_CONFIGURED=true\r\n"
+        managed_bytes = self.managed_path.read_bytes()
+        newline = b"\r\n" if b"\r\n" in managed_bytes else b"\n"
+        expected_candidate = b"JIEJING_BACKUP_POLICY_CONFIGURED=true" + newline
         real_build_plan = guard_module._build_migration_plan
         real_fsync_directory = guard_module._fsync_directory
         build_count = 0
