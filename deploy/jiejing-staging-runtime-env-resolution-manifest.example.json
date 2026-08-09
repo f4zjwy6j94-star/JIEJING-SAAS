@@ -14,6 +14,11 @@
       "authoritative_role": "compose"
     },
     {
+      "key": "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED",
+      "authoritative_role": "managed",
+      "donor_role": "compose"
+    },
+    {
       "key": "JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT",
       "authoritative_role": "managed"
     },
@@ -34,12 +39,27 @@
       "authoritative_role": "postgres"
     },
     {
+      "key": "JIEJING_DATABASE_ENDPOINT_INCIDENT_RUNBOOK_PUBLISHED",
+      "authoritative_role": "managed",
+      "donor_role": "compose"
+    },
+    {
       "key": "JIEJING_EBAY_WRITE_LIVE",
       "authoritative_role": "compose"
     },
     {
       "key": "JIEJING_ENABLE_REAL_PLATFORM_WRITES",
       "authoritative_role": "compose"
+    },
+    {
+      "key": "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED",
+      "authoritative_role": "secret",
+      "donor_role": "compose"
+    },
+    {
+      "key": "JIEJING_MEDIA_LIVE_VIDEO_ENABLED",
+      "authoritative_role": "secret",
+      "donor_role": "compose"
     },
     {
       "key": "JIEJING_QUEUE_PROVIDER",

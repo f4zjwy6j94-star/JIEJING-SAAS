@@ -118,14 +118,21 @@ static configuration, not secret-file values. Keep all three real files under
    provisioned trusted copy may execute these commands with private env access.
    If the dry-run reports value conflicts or a registered owner is missing, run
    `resolution-plan` with the reviewed key/role-only manifest before requesting
-   any apply window. The resolution plan is preparation only: it emits no values,
-   digests, paths or line contents, never changes Compose or private env files,
-   and is deliberately not connected to `migrate --apply`. A later migration
-   apply still requires its own review and explicit approval.
+   any apply window. Pass the reviewed desired Compose as `--compose`, its future
+   installed identity as `--compose-runtime-path`, and the current installed
+   Compose as the strictly read-only `--donor-compose`. The donor is consulted
+   only for explicit `donor_role=compose` decisions; it is never treated as the
+   desired owner or changed. The resolution plan is preparation only: it emits
+   no values, digests, paths or line contents, never changes either Compose file
+   or any private env file, and is deliberately not connected to
+   `migrate --apply`. A later migration apply still requires its own review and
+   explicit approval.
 
 ```bash
 cd /opt/jiejing-staging/app
 TRUSTED_RUNTIME_ENV_GUARD=/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py
+CURRENT_COMPOSE=/opt/jiejing-staging/app/deploy/docker-compose.public-staging.yml
+CANDIDATE_COMPOSE=/path/to/reviewed-candidate/deploy/docker-compose.public-staging.yml
 sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" check \
   --compose deploy/docker-compose.public-staging.yml \
   --managed-env /opt/jiejing-staging/private/tencent-managed.env \
@@ -139,7 +146,9 @@ sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" migrate \
   --postgres-env /opt/jiejing-staging/private/postgres-localqueue.env \
   --json
 sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" resolution-plan \
-  --compose deploy/docker-compose.public-staging.yml \
+  --compose "$CANDIDATE_COMPOSE" \
+  --compose-runtime-path "$CURRENT_COMPOSE" \
+  --donor-compose "$CURRENT_COMPOSE" \
   --managed-env /opt/jiejing-staging/private/tencent-managed.env \
   --secret-env /opt/jiejing-staging/private/jiejing-saas.staging-oauth.env \
   --postgres-env /opt/jiejing-staging/private/postgres-localqueue.env \

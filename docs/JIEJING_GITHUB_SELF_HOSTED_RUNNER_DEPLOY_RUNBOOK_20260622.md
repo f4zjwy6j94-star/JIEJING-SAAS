@@ -187,8 +187,13 @@ If `sudo -n true` fails, do not weaken the whole server. Add only the minimum no
    Conflict resolution is a separate value-free preparation step. The checked-in
    staging resolution manifest contains key names and source roles only, and
    `resolution-plan` validates that evidence without mutating Compose or any
-   private env file. It is not wired to `migrate --apply`; any later private-env
-   migration apply requires a separate review and explicit operator approval.
+   private env file. For a reviewed candidate, `--compose-runtime-path` supplies
+   only the future installed path identity used to resolve `env_file`, while
+   `--donor-compose` is the strictly read-only current Compose and may supply a
+   value only for an explicit `donor_role=compose` decision. The donor is never
+   treated as the desired owner, and reports expose roles/count/comparison only.
+   The plan is not wired to `migrate --apply`; any later private-env migration
+   apply requires a separate review and explicit operator approval.
 
    If cost-saver mode is enabled, its only accepted override is the fixed,
    root-owned, non-writable resource override at

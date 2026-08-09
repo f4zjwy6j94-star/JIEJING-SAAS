@@ -34,6 +34,8 @@ SECRET_SOURCE = "jiejing-saas.staging-oauth.env"
 POSTGRES_SOURCE = "postgres-localqueue.env"
 COMPOSE_SOURCE = "compose"
 COMPOSE_OVERRIDE_SOURCE = "compose-override"
+DONOR_COMPOSE_SOURCE = "donor-compose"
+RESOLUTION_MANIFEST_SOURCE = "resolution-manifest"
 
 KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 COMPOSE_MAPPING_PATTERN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):(?:\s*(.*?))?\s*$")
@@ -290,6 +292,16 @@ class SourceSnapshot:
     resolved_identity: str = field(repr=False)
     physical_identity: tuple[int, int] = field(repr=False)
     metadata: tuple[int, int, int] = field(repr=False)
+
+
+@dataclass(frozen=True)
+class ParentDirectorySnapshot:
+    lexical_identity: str = field(repr=False)
+    resolved_identity: str = field(repr=False)
+    physical_identity: tuple[int, int] = field(repr=False)
+    directory_type: int = field(repr=False)
+    link_or_reparse: bool = field(repr=False)
+    mode: int = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -575,13 +587,113 @@ def _source_parent_link_blocker(path: Path, source: str) -> dict[str, object] | 
     return None
 
 
+def _capture_source_parent_chain(
+    path: Path,
+    source: str,
+) -> tuple[tuple[ParentDirectorySnapshot, ...], dict[str, object] | None]:
+    absolute_path = Path(os.path.abspath(os.fspath(path)))
+    parent_chain: list[Path] = []
+    parent = absolute_path.parent
+    while True:
+        parent_chain.append(parent)
+        if parent == parent.parent:
+            break
+        parent = parent.parent
+    snapshots: list[ParentDirectorySnapshot] = []
+    try:
+        for parent in reversed(parent_chain):
+            if _path_is_link_or_reparse(parent):
+                return (), {"code": "source_parent_link", "source": source}
+            checked = os.stat(parent, follow_symlinks=False)
+            checked_attributes = getattr(checked, "st_file_attributes", 0)
+            reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            if stat.S_ISLNK(checked.st_mode) or bool(
+                reparse_flag and checked_attributes & reparse_flag
+            ):
+                return (), {"code": "source_parent_link", "source": source}
+            resolved = parent.resolve(strict=True)
+            followed = os.stat(parent, follow_symlinks=True)
+            checked_identity = (int(checked.st_dev), int(checked.st_ino))
+            followed_identity = (int(followed.st_dev), int(followed.st_ino))
+            if checked_identity != followed_identity or not stat.S_ISDIR(followed.st_mode):
+                return (), {
+                    "code": "source_parent_changed_during_snapshot",
+                    "source": source,
+                }
+            snapshots.append(
+                ParentDirectorySnapshot(
+                    lexical_identity=_normalized_path_identity(parent),
+                    resolved_identity=os.path.normcase(os.fspath(resolved)),
+                    physical_identity=followed_identity,
+                    directory_type=stat.S_IFMT(followed.st_mode),
+                    link_or_reparse=False,
+                    mode=stat.S_IMODE(followed.st_mode),
+                )
+            )
+    except (OSError, RuntimeError):
+        return (), {"code": "source_parent_unreadable", "source": source}
+    return tuple(snapshots), None
+
+
+def _capture_source_path_binding(
+    path: Path,
+    source: str,
+) -> tuple[tuple[str, tuple[int, int], tuple[int, int, int]] | None, dict[str, object] | None]:
+    try:
+        if _path_is_link_or_reparse(path):
+            return None, {"code": "source_changed_during_snapshot", "source": source}
+        checked = os.stat(path, follow_symlinks=False)
+        checked_attributes = getattr(checked, "st_file_attributes", 0)
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if stat.S_ISLNK(checked.st_mode) or bool(
+            reparse_flag and checked_attributes & reparse_flag
+        ):
+            return None, {"code": "source_changed_during_snapshot", "source": source}
+        resolved = path.resolve(strict=True)
+        followed = os.stat(path, follow_symlinks=True)
+    except (OSError, RuntimeError):
+        return None, {"code": "source_changed_during_snapshot", "source": source}
+    checked_identity = (int(checked.st_dev), int(checked.st_ino))
+    followed_identity = (int(followed.st_dev), int(followed.st_ino))
+    checked_metadata = (
+        int(checked.st_size),
+        int(checked.st_mtime_ns),
+        stat.S_IMODE(checked.st_mode),
+    )
+    followed_metadata = (
+        int(followed.st_size),
+        int(followed.st_mtime_ns),
+        stat.S_IMODE(followed.st_mode),
+    )
+    if checked_identity != followed_identity or checked_metadata != followed_metadata:
+        return None, {"code": "source_changed_during_snapshot", "source": source}
+    return (
+        (
+            os.path.normcase(os.fspath(resolved)),
+            followed_identity,
+            followed_metadata,
+        ),
+        None,
+    )
+
+
 def _capture_source_snapshot(path: Path, source: str) -> tuple[SourceSnapshot | None, dict[str, object] | None]:
+    parent_chain_before, parent_chain_blocker = _capture_source_parent_chain(path, source)
+    if parent_chain_blocker is not None:
+        return None, parent_chain_blocker
     parent_blocker = _source_parent_link_blocker(path, source)
     if parent_blocker is not None:
         return None, parent_blocker
     if _path_is_link_or_reparse(path):
         return None, {"code": "source_symlink", "source": source}
     try:
+        checked = os.stat(path, follow_symlinks=False)
+        checked_attributes = getattr(checked, "st_file_attributes", 0)
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if stat.S_ISLNK(checked.st_mode) or bool(
+            reparse_flag and checked_attributes & reparse_flag
+        ):
+            return None, {"code": "source_symlink", "source": source}
         resolved = path.resolve(strict=True)
         flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(os.fspath(path), flags)
@@ -598,15 +710,44 @@ def _capture_source_snapshot(path: Path, source: str) -> tuple[SourceSnapshot | 
         return None, {"code": "source_missing", "source": source}
     except (OSError, RuntimeError):
         return None, {"code": "source_unreadable", "source": source}
+    checked_identity = (int(checked.st_dev), int(checked.st_ino))
     before_identity = (int(before.st_dev), int(before.st_ino))
     after_identity = (int(after.st_dev), int(after.st_ino))
+    checked_metadata = (int(checked.st_size), int(checked.st_mtime_ns), stat.S_IMODE(checked.st_mode))
     before_metadata = (int(before.st_size), int(before.st_mtime_ns), stat.S_IMODE(before.st_mode))
     after_metadata = (int(after.st_size), int(after.st_mtime_ns), stat.S_IMODE(after.st_mode))
     if (
-        before_identity != after_identity
+        checked_identity != before_identity
+        or before_identity != after_identity
+        or checked_metadata != before_metadata
         or before_metadata != after_metadata
         or int(before.st_size) != len(payload)
     ):
+        return None, {"code": "source_changed_during_snapshot", "source": source}
+    parent_chain_after, parent_chain_blocker = _capture_source_parent_chain(path, source)
+    if parent_chain_blocker is not None:
+        return None, parent_chain_blocker
+    if parent_chain_before != parent_chain_after:
+        return None, {"code": "source_parent_changed_during_snapshot", "source": source}
+    opened_binding = (
+        os.path.normcase(os.fspath(resolved)),
+        after_identity,
+        after_metadata,
+    )
+    final_binding, final_binding_blocker = _capture_source_path_binding(path, source)
+    if final_binding_blocker is not None:
+        return None, final_binding_blocker
+    if final_binding != opened_binding:
+        return None, {"code": "source_changed_during_snapshot", "source": source}
+    parent_chain_closing, parent_chain_blocker = _capture_source_parent_chain(path, source)
+    if parent_chain_blocker is not None:
+        return None, parent_chain_blocker
+    if parent_chain_before != parent_chain_closing:
+        return None, {"code": "source_parent_changed_during_snapshot", "source": source}
+    closing_binding, closing_binding_blocker = _capture_source_path_binding(path, source)
+    if closing_binding_blocker is not None:
+        return None, closing_binding_blocker
+    if closing_binding != opened_binding:
         return None, {"code": "source_changed_during_snapshot", "source": source}
     return (
         SourceSnapshot(
@@ -629,14 +770,25 @@ def _capture_source_snapshots(
     secret_env_path: Path,
     postgres_env_path: Path,
 ) -> tuple[dict[str, SourceSnapshot], list[dict[str, object]]]:
+    return _capture_bound_source_snapshots(
+        (
+            (COMPOSE_SOURCE, compose_path),
+            (MANAGED_SOURCE, managed_env_path),
+            (SECRET_SOURCE, secret_env_path),
+            (POSTGRES_SOURCE, postgres_env_path),
+        ),
+        alias_blocker_code="migration_source_path_alias",
+    )
+
+
+def _capture_bound_source_snapshots(
+    source_paths: Sequence[tuple[str, Path]],
+    *,
+    alias_blocker_code: str,
+) -> tuple[dict[str, SourceSnapshot], list[dict[str, object]]]:
     snapshots: dict[str, SourceSnapshot] = {}
     blockers: list[dict[str, object]] = []
-    for source, path in (
-        (COMPOSE_SOURCE, compose_path),
-        (MANAGED_SOURCE, managed_env_path),
-        (SECRET_SOURCE, secret_env_path),
-        (POSTGRES_SOURCE, postgres_env_path),
-    ):
+    for source, path in source_paths:
         snapshot, blocker = _capture_source_snapshot(path, source)
         if blocker is not None:
             blockers.append(blocker)
@@ -658,7 +810,7 @@ def _capture_source_snapshots(
             if same_physical_file:
                 blockers.append(
                     {
-                        "code": "migration_source_path_alias",
+                        "code": alias_blocker_code,
                         "sources": sorted((left_source, right_source)),
                     }
                 )
@@ -719,11 +871,12 @@ def _parse_compose(
     payload: bytes | None = None,
     runtime_path: Path | None = None,
 ) -> ComposeParseResult:
-    path_blocker = _input_path_blocker(path, COMPOSE_SOURCE)
-    if path_blocker is not None:
-        return ComposeParseResult((), (path_blocker,), 0, (), (), ())
-    if not path.is_file():
-        return ComposeParseResult((), ({"code": "source_missing", "source": COMPOSE_SOURCE},), 0, (), (), ())
+    if payload is None:
+        path_blocker = _input_path_blocker(path, COMPOSE_SOURCE)
+        if path_blocker is not None:
+            return ComposeParseResult((), (path_blocker,), 0, (), (), ())
+        if not path.is_file():
+            return ComposeParseResult((), ({"code": "source_missing", "source": COMPOSE_SOURCE},), 0, (), (), ())
     try:
         lines = (
             path.read_text(encoding="utf-8").splitlines()
@@ -1926,24 +2079,32 @@ RESOLUTION_RESOLVABLE_BLOCKER_CODES = frozenset({"cross_source_duplicate", "wron
 
 
 def _public_role_for_source(source: str) -> str | None:
+    if source == DONOR_COMPOSE_SOURCE:
+        return "compose"
     return SOURCE_TO_ROLE.get(_source_role(source))
 
 
 def _load_resolution_decisions(
     manifest_path: Path,
+    *,
+    payload: bytes | None = None,
 ) -> tuple[dict[str, ResolutionDecision], list[dict[str, object]]]:
     blockers: list[dict[str, object]] = []
     try:
-        if manifest_path.is_symlink() or not manifest_path.is_file():
-            return {}, [{"code": "resolution_manifest_unavailable"}]
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if payload is None:
+            if manifest_path.is_symlink() or not manifest_path.is_file():
+                return {}, [{"code": "resolution_manifest_unavailable"}]
+            manifest_payload = manifest_path.read_text(encoding="utf-8")
+        else:
+            manifest_payload = payload.decode("utf-8")
+        parsed_payload = json.loads(manifest_payload)
     except (OSError, UnicodeError, json.JSONDecodeError):
         return {}, [{"code": "resolution_manifest_invalid"}]
-    if not isinstance(payload, dict) or set(payload) != {"schema_version", "decisions"}:
+    if not isinstance(parsed_payload, dict) or set(parsed_payload) != {"schema_version", "decisions"}:
         return {}, [{"code": "resolution_manifest_schema_invalid"}]
-    if payload.get("schema_version") != RESOLUTION_MANIFEST_SCHEMA_VERSION:
+    if parsed_payload.get("schema_version") != RESOLUTION_MANIFEST_SCHEMA_VERSION:
         blockers.append({"code": "resolution_manifest_version_invalid"})
-    raw_decisions = payload.get("decisions")
+    raw_decisions = parsed_payload.get("decisions")
     if not isinstance(raw_decisions, list):
         blockers.append({"code": "resolution_manifest_decisions_invalid"})
         return {}, blockers
@@ -2053,6 +2214,61 @@ def _resolution_blocker_public_projection(
     return projected
 
 
+def _forbidden_private_value_is_covered_by_safe_compose_keep(
+    blocker: Mapping[str, object],
+    *,
+    analysis_by_key: Mapping[str, KeyAnalysis],
+    decisions: Mapping[str, ResolutionDecision],
+    actions: Sequence[ResolutionAction],
+    required_runtime_services: frozenset[str],
+) -> bool:
+    if blocker.get("code") != "forbidden_staging_value":
+        return False
+    key = blocker.get("key")
+    source = blocker.get("source")
+    if not isinstance(key, str) or not isinstance(source, str):
+        return False
+    source_role = _public_role_for_source(source)
+    if source_role not in {"managed", "secret", "postgres"}:
+        return False
+    decision = decisions.get(key)
+    if (
+        decision is None
+        or decision.authoritative_role != "compose"
+        or decision.donor_role is not None
+    ):
+        return False
+    required_value = COMPOSE_REQUIRED_VALUES.get(key)
+    key_analysis = analysis_by_key.get(key)
+    if required_value is None or key_analysis is None or key_analysis.owner != COMPOSE_SOURCE:
+        return False
+    topology = _resolution_topology_by_role(key_analysis)
+    compose_declarations = topology.get("compose", ())
+    if not _owner_declaration_count_is_exact(
+        owner_role="compose",
+        declarations=compose_declarations,
+        required_runtime_services=required_runtime_services,
+    ):
+        return False
+    if any(declaration.private_value != required_value for declaration in compose_declarations):
+        return False
+    planned_removal_count = sum(
+        action.count
+        for action in actions
+        if action.key == key
+        and action.action == "keep_authoritative_remove_wrong_source"
+        and action.source_role == source_role
+        and action.target_role == "compose"
+    )
+    offending_private_count = sum(
+        1
+        for declaration in topology.get(source_role, ())
+        if declaration.private_value.strip().casefold()
+        not in STAGING_VALUE_CONSTRAINTS.get(key, frozenset())
+    )
+    return offending_private_count > 0 and planned_removal_count >= offending_private_count
+
+
 def plan_runtime_env_resolution(
     *,
     compose_path: Path,
@@ -2060,6 +2276,8 @@ def plan_runtime_env_resolution(
     secret_env_path: Path,
     postgres_env_path: Path,
     decision_manifest_path: Path,
+    compose_runtime_path: Path | None = None,
+    donor_compose_path: Path | None = None,
     compose_override_paths: Sequence[Path] = (),
     required_runtime_services: Sequence[str] | None = None,
 ) -> dict[str, object]:
@@ -2070,15 +2288,44 @@ def plan_runtime_env_resolution(
     """
 
     normalized_required_services = _normalize_required_runtime_services(required_runtime_services)
+    resolution_source_paths: list[tuple[str, Path]] = [
+        (COMPOSE_SOURCE, compose_path),
+        (MANAGED_SOURCE, managed_env_path),
+        (SECRET_SOURCE, secret_env_path),
+        (POSTGRES_SOURCE, postgres_env_path),
+        (RESOLUTION_MANIFEST_SOURCE, decision_manifest_path),
+    ]
+    if donor_compose_path is not None:
+        resolution_source_paths.append((DONOR_COMPOSE_SOURCE, donor_compose_path))
+    source_snapshots, snapshot_blockers = _capture_bound_source_snapshots(
+        tuple(resolution_source_paths),
+        alias_blocker_code="resolution_source_path_alias",
+    )
+    desired_source_snapshots = {
+        source: snapshot
+        for source, snapshot in source_snapshots.items()
+        if source in {COMPOSE_SOURCE, MANAGED_SOURCE, SECRET_SOURCE, POSTGRES_SOURCE}
+    }
     analysis = analyze_runtime_env_ownership(
         compose_path=compose_path,
         managed_env_path=managed_env_path,
         secret_env_path=secret_env_path,
         postgres_env_path=postgres_env_path,
+        compose_runtime_path=compose_runtime_path,
         compose_override_paths=compose_override_paths,
         required_runtime_services=tuple(normalized_required_services),
+        _source_snapshots=desired_source_snapshots,
+        _snapshot_blockers=snapshot_blockers,
     )
-    decisions, manifest_blockers = _load_resolution_decisions(decision_manifest_path)
+    manifest_snapshot = source_snapshots.get(RESOLUTION_MANIFEST_SOURCE)
+    decisions, manifest_blockers = (
+        _load_resolution_decisions(
+            decision_manifest_path,
+            payload=manifest_snapshot.payload,
+        )
+        if manifest_snapshot is not None
+        else ({}, [])
+    )
     blockers: list[dict[str, object]] = [
         dict(blocker)
         for blocker in analysis.blockers
@@ -2087,9 +2334,142 @@ def plan_runtime_env_resolution(
     blockers.extend(manifest_blockers)
     actions: list[ResolutionAction] = []
     consumed_decisions: set[str] = set()
+    analysis_by_key = {key_analysis.key: key_analysis for key_analysis in analysis.keys}
+
+    compose_donor_decisions = {
+        key: decision
+        for key, decision in decisions.items()
+        if decision.donor_role == "compose"
+    }
+    donor_declarations_by_key: dict[str, list[Declaration]] = {}
+    if donor_compose_path is None:
+        if compose_donor_decisions:
+            blockers.append({"code": "resolution_donor_compose_required", "source_role": "compose"})
+    else:
+        donor_snapshot = source_snapshots.get(DONOR_COMPOSE_SOURCE)
+        donor_source_snapshots = {
+            source: snapshot
+            for source, snapshot in source_snapshots.items()
+            if source in {MANAGED_SOURCE, SECRET_SOURCE, POSTGRES_SOURCE}
+        }
+        if donor_snapshot is not None:
+            donor_source_snapshots[COMPOSE_SOURCE] = donor_snapshot
+        donor_analysis = analyze_runtime_env_ownership(
+            compose_path=donor_compose_path,
+            managed_env_path=managed_env_path,
+            secret_env_path=secret_env_path,
+            postgres_env_path=postgres_env_path,
+            compose_override_paths=(),
+            required_runtime_services=tuple(normalized_required_services),
+            _source_snapshots=donor_source_snapshots,
+        )
+        blockers.extend(
+            dict(blocker)
+            for blocker in donor_analysis.blockers
+            if _is_compose_contract_blocker(dict(blocker))
+            and blocker.get("code") not in {"cross_source_duplicate", "wrong_source"}
+        )
+        for declaration in donor_analysis.declarations:
+            if _source_role(declaration.source) != COMPOSE_SOURCE:
+                continue
+            donor_declarations_by_key.setdefault(declaration.key, []).append(declaration)
+
+    for key, decision in sorted(compose_donor_decisions.items()):
+        consumed_decisions.add(key)
+        owner_source = _owner_for_key(key)
+        owner_role = SOURCE_TO_ROLE.get(owner_source or "")
+        if owner_role is None:
+            blockers.append({"code": "resolution_decision_unknown_key", "key": key})
+            continue
+        if decision.authoritative_role != owner_role:
+            blockers.append(
+                {
+                    "code": "resolution_decision_owner_mismatch",
+                    "key": key,
+                    "authoritative_role": decision.authoritative_role,
+                    "target_role": owner_role,
+                }
+            )
+            continue
+        if owner_role == "compose":
+            blockers.append(
+                {
+                    "code": "resolution_donor_target_role_invalid",
+                    "key": key,
+                    "donor_role": "compose",
+                    "target_role": owner_role,
+                }
+            )
+            continue
+        desired_key_analysis = analysis_by_key.get(key)
+        if desired_key_analysis is not None and desired_key_analysis.declarations:
+            blockers.append(
+                {
+                    "code": "resolution_donor_target_topology_not_empty",
+                    "key": key,
+                    "donor_role": "compose",
+                    "target_role": owner_role,
+                    "count": len(desired_key_analysis.declarations),
+                }
+            )
+            continue
+        donor_declarations = tuple(donor_declarations_by_key.get(key, ()))
+        if not donor_declarations:
+            blockers.append(
+                {
+                    "code": "resolution_compose_donor_missing",
+                    "key": key,
+                    "donor_role": "compose",
+                    "target_role": owner_role,
+                    "count": 0,
+                }
+            )
+            continue
+        donor_service_counts: dict[str, int] = {}
+        for declaration in donor_declarations:
+            service_name = declaration.source.removeprefix(f"{COMPOSE_SOURCE}:")
+            donor_service_counts[service_name] = donor_service_counts.get(service_name, 0) + 1
+        if set(donor_service_counts) != set(normalized_required_services) or any(
+            count != 1 for count in donor_service_counts.values()
+        ):
+            blockers.append(
+                {
+                    "code": "resolution_compose_donor_service_topology_invalid",
+                    "key": key,
+                    "donor_role": "compose",
+                    "target_role": owner_role,
+                    "count": len(donor_declarations),
+                }
+            )
+            continue
+        donor_comparison = _comparison(donor_declarations)
+        if donor_comparison != "equal":
+            blockers.append(
+                {
+                    "code": "resolution_compose_donor_conflict",
+                    "key": key,
+                    "donor_role": "compose",
+                    "target_role": owner_role,
+                    "count": len(donor_declarations),
+                    "comparison": donor_comparison,
+                }
+            )
+            continue
+        actions.append(
+            ResolutionAction(
+                action="move_equal_donors_to_authoritative",
+                key=key,
+                source_role="compose",
+                target_role=owner_role,
+                count=len(donor_declarations),
+                comparison="equal",
+            )
+        )
 
     for key_analysis in analysis.keys:
         decision = decisions.get(key_analysis.key)
+        if decision is not None and decision.donor_role == "compose":
+            continue
         owner_source = key_analysis.owner
         topology = _resolution_topology_by_role(key_analysis)
         if owner_source is None:
@@ -2270,6 +2650,17 @@ def plan_runtime_env_resolution(
     for key in sorted(set(decisions) - consumed_decisions):
         blockers.append({"code": "resolution_decision_stale", "key": key})
 
+    blockers = [
+        blocker
+        for blocker in blockers
+        if not _forbidden_private_value_is_covered_by_safe_compose_keep(
+            blocker,
+            analysis_by_key=analysis_by_key,
+            decisions=decisions,
+            actions=actions,
+            required_runtime_services=normalized_required_services,
+        )
+    ]
     public_blockers = [
         _resolution_blocker_public_projection(blocker)
         for blocker in blockers
@@ -3566,6 +3957,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Validate a value-free decision manifest and prepare a non-mutating plan.",
     )
     _add_source_path_arguments(resolution_parser)
+    resolution_parser.add_argument(
+        "--compose-runtime-path",
+        type=Path,
+        help=(
+            "Future installed Compose path used only to resolve relative env_file references; "
+            "the candidate content is still read from --compose."
+        ),
+    )
+    resolution_parser.add_argument(
+        "--donor-compose",
+        type=Path,
+        help=(
+            "Read-only current Compose topology used only by explicit donor_role=compose "
+            "resolution decisions."
+        ),
+    )
     resolution_parser.add_argument("--decision-manifest", type=Path, required=True)
     migrate_parser = subparsers.add_parser(
         "migrate",
@@ -3599,6 +4006,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = plan_runtime_env_resolution(
             **source_paths,
             decision_manifest_path=args.decision_manifest,
+            compose_runtime_path=args.compose_runtime_path,
+            donor_compose_path=args.donor_compose,
         )
     else:
         report = migrate_runtime_env_ownership(

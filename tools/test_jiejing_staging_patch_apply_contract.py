@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
@@ -15,6 +16,9 @@ HTTPS_COMPOSE = ROOT / "deploy" / "docker-compose.public-https-staging.yml"
 HTTP_COMPOSE = ROOT / "deploy" / "docker-compose.public-staging.yml"
 PRECLOUD_GATE = ROOT / "tools" / "jiejing_precloud_deployment_gate.py"
 GITATTRIBUTES = ROOT / ".gitattributes"
+RUNTIME_ENV_RESOLUTION_MANIFEST = (
+    ROOT / "deploy" / "jiejing-staging-runtime-env-resolution-manifest.example.json"
+)
 
 
 def fail(message: str) -> int:
@@ -292,6 +296,31 @@ def main() -> int:
     checklist_entry = text.index('"deploy/tencentcloud-public-staging-checklist.md"')
     if manifest_entry >= checklist_entry:
         return fail("runtime env resolution manifest must be copied before the checklist that uses it")
+    try:
+        resolution_manifest = json.loads(RUNTIME_ENV_RESOLUTION_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return fail("runtime env resolution manifest must be readable JSON")
+    decisions = resolution_manifest.get("decisions") if isinstance(resolution_manifest, dict) else None
+    if not isinstance(decisions, list) or len(decisions) != 24:
+        return fail("runtime env resolution manifest must contain the reviewed 24 decisions")
+    if any(
+        not isinstance(decision, dict)
+        or not set(decision).issubset({"key", "authoritative_role", "donor_role"})
+        for decision in decisions
+    ):
+        return fail("runtime env resolution manifest decisions must remain key/role-only")
+    compose_donor_keys = {
+        decision.get("key")
+        for decision in decisions
+        if decision.get("donor_role") == "compose"
+    }
+    if compose_donor_keys != {
+        "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED",
+        "JIEJING_DATABASE_ENDPOINT_INCIDENT_RUNBOOK_PUBLISHED",
+        "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED",
+        "JIEJING_MEDIA_LIVE_VIDEO_ENABLED",
+    }:
+        return fail("runtime env resolution manifest must pin the four reviewed Compose donors")
     for marker in (
         'TRUSTED_RUNTIME_ENV_GUARD="${JIEJING_TRUSTED_RUNTIME_ENV_GUARD:-/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py}"',
         "REFUSE_UNTRUSTED_RUNTIME_ENV_GUARD=1",

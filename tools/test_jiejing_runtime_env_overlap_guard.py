@@ -244,16 +244,18 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
         manifest_path: Path,
         *,
         augment_legacy_contract: bool = True,
+        compose_path: Path | None = None,
+        compose_runtime_path: Path | None = None,
+        donor_compose_path: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         if augment_legacy_contract:
             self._augment_legacy_compose_contract()
-        return subprocess.run(
-            [
+        command = [
                 sys.executable,
                 str(TOOL),
                 "resolution-plan",
                 "--compose",
-                str(self.compose_path),
+                str(compose_path or self.compose_path),
                 "--managed-env",
                 str(self.managed_path),
                 "--secret-env",
@@ -263,11 +265,1187 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
                 "--decision-manifest",
                 str(manifest_path),
                 "--json",
-            ],
+            ]
+        if compose_runtime_path is not None:
+            command.extend(("--compose-runtime-path", str(compose_runtime_path)))
+        if donor_compose_path is not None:
+            command.extend(("--donor-compose", str(donor_compose_path)))
+        return subprocess.run(
+            command,
             cwd=ROOT,
             text=True,
             capture_output=True,
             check=False,
+        )
+
+    def test_resolution_plan_candidate_compose_uses_future_runtime_path(self) -> None:
+        self._write_legal_fixture()
+        candidate_dir = self.fixture_root / "candidate" / "deploy"
+        candidate_dir.mkdir(parents=True)
+        candidate_compose = candidate_dir / self.compose_path.name
+        candidate_compose.write_text(self.compose_path.read_text(encoding="utf-8"), encoding="utf-8")
+        manifest_path = self._write_resolution_manifest([])
+
+        completed = self._run_resolution_plan(
+            manifest_path,
+            augment_legacy_contract=False,
+            compose_path=candidate_compose,
+            compose_runtime_path=self.compose_path,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertFalse(report["secret_exposed"])
+        self.assertNotIn(str(candidate_compose), completed.stdout + completed.stderr)
+        self.assertNotIn(str(self.compose_path), completed.stdout + completed.stderr)
+
+    def test_resolution_plan_can_move_equal_read_only_compose_donors_to_missing_owner(self) -> None:
+        self._write_legal_fixture()
+        sentinel = "COMPOSE_DONOR_VALUE_MUST_NOT_LEAK"
+        donor_compose = self.fixture_root / "donor-compose.yml"
+        donor_compose.write_text(
+            self.compose_path.read_text(encoding="utf-8").replace(
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                f'      JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED: "{sentinel}"\n',
+            ),
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [
+                {
+                    "key": "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED",
+                    "authoritative_role": "managed",
+                    "donor_role": "compose",
+                }
+            ]
+        )
+        before = {
+            path: path.read_bytes()
+            for path in (
+                self.compose_path,
+                donor_compose,
+                self.managed_path,
+                self.secret_path,
+                self.postgres_path,
+            )
+        }
+
+        completed = self._run_resolution_plan(
+            manifest_path,
+            augment_legacy_contract=False,
+            donor_compose_path=donor_compose,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        self.assertNotIn(sentinel, completed.stdout + completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertEqual(
+            report["actions"],
+            [
+                {
+                    "action": "move_equal_donors_to_authoritative",
+                    "key": "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED",
+                    "source_role": "compose",
+                    "target_role": "managed",
+                    "count": 2,
+                    "comparison": "equal",
+                }
+            ],
+        )
+        self.assertEqual(
+            before,
+            {path: path.read_bytes() for path in before},
+        )
+        self.assertEqual(
+            sorted(key for key in _all_json_keys(report) if _looks_like_value_field(key)),
+            [],
+        )
+
+    def test_resolution_plan_resolves_private_forbidden_value_with_explicit_safe_compose_keep(self) -> None:
+        self._write_legal_fixture()
+        sentinel = "FORBIDDEN_PRIVATE_VALUE_MUST_NOT_LEAK"
+        self.secret_path.write_text(
+            self.secret_path.read_text(encoding="utf-8")
+            + f"JIEJING_ENABLE_REAL_PLATFORM_WRITES={sentinel}\n",
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [
+                {
+                    "key": "JIEJING_ENABLE_REAL_PLATFORM_WRITES",
+                    "authoritative_role": "compose",
+                }
+            ]
+        )
+
+        completed = self._run_resolution_plan(
+            manifest_path,
+            augment_legacy_contract=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        self.assertNotIn(sentinel, completed.stdout + completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertEqual(
+            [
+                action
+                for action in report["actions"]
+                if action["key"] == "JIEJING_ENABLE_REAL_PLATFORM_WRITES"
+            ],
+            [
+                {
+                    "action": "keep_authoritative_remove_wrong_source",
+                    "key": "JIEJING_ENABLE_REAL_PLATFORM_WRITES",
+                    "source_role": "secret",
+                    "target_role": "compose",
+                    "count": 1,
+                    "comparison": "conflict",
+                }
+            ],
+        )
+        self.assertNotIn(
+            "forbidden_staging_value",
+            {blocker["code"] for blocker in report["blockers"]},
+        )
+
+    def test_resolution_plan_keeps_forbidden_blocker_when_candidate_compose_is_unsafe(self) -> None:
+        self._write_legal_fixture()
+        self.compose_path.write_text(
+            self.compose_path.read_text(encoding="utf-8").replace(
+                'JIEJING_ENABLE_REAL_PLATFORM_WRITES: "false"',
+                'JIEJING_ENABLE_REAL_PLATFORM_WRITES: "true"',
+            ),
+            encoding="utf-8",
+        )
+        self.secret_path.write_text(
+            self.secret_path.read_text(encoding="utf-8")
+            + "JIEJING_ENABLE_REAL_PLATFORM_WRITES=true\n",
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [
+                {
+                    "key": "JIEJING_ENABLE_REAL_PLATFORM_WRITES",
+                    "authoritative_role": "compose",
+                }
+            ]
+        )
+
+        completed = self._run_resolution_plan(
+            manifest_path,
+            augment_legacy_contract=False,
+        )
+
+        self.assertNotEqual(completed.returncode, 0)
+        report = json.loads(completed.stdout)
+        self.assertFalse(report["ok"])
+        self.assertIn(
+            "forbidden_staging_value",
+            {blocker["code"] for blocker in report["blockers"]},
+        )
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_plan_rejects_conflicting_compose_donor_values(self) -> None:
+        self._write_legal_fixture()
+        first_sentinel = "DONOR_CONFLICT_ONE_MUST_NOT_LEAK"
+        second_sentinel = "DONOR_CONFLICT_TWO_MUST_NOT_LEAK"
+        billing_line = '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+        donor_text = self.compose_path.read_text(encoding="utf-8").replace(
+            billing_line,
+            billing_line
+            + f'      JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED: "{first_sentinel}"\n',
+            1,
+        )
+        donor_prefix, donor_suffix = donor_text.rsplit(billing_line, 1)
+        donor_text = (
+            donor_prefix
+            + billing_line
+            + f'      JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED: "{second_sentinel}"\n'
+            + donor_suffix
+        )
+        donor_compose = self.fixture_root / "conflicting-donor-compose.yml"
+        donor_compose.write_text(donor_text, encoding="utf-8")
+        manifest_path = self._write_resolution_manifest(
+            [
+                {
+                    "key": "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED",
+                    "authoritative_role": "managed",
+                    "donor_role": "compose",
+                }
+            ]
+        )
+
+        completed = self._run_resolution_plan(
+            manifest_path,
+            augment_legacy_contract=False,
+            donor_compose_path=donor_compose,
+        )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertNotIn(first_sentinel, completed.stdout + completed.stderr)
+        self.assertNotIn(second_sentinel, completed.stdout + completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertIn(
+            "resolution_compose_donor_conflict",
+            {blocker["code"] for blocker in report["blockers"]},
+        )
+
+    def test_resolution_plan_requires_exact_compose_donor_runtime_service_topology(self) -> None:
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED"
+        manifest_path = self._write_resolution_manifest(
+            [{"key": key, "authoritative_role": "managed", "donor_role": "compose"}]
+        )
+
+        def runtime_service(name: str, donor_count: int) -> str:
+            donor_lines = "".join(
+                f'      {key}: "DONOR_SERVICE_TOPOLOGY_MUST_NOT_LEAK"\n'
+                for _ in range(donor_count)
+            )
+            return (
+                f"  {name}:\n"
+                "    env_file:\n"
+                "      - ./runtime-env/tencent-managed.env\n"
+                "      - ./runtime-env/jiejing-saas.staging-oauth.env\n"
+                "      - ./runtime-env/postgres-localqueue.env\n"
+                "    environment:\n"
+                '      JIEJING_ENABLE_REAL_PLATFORM_WRITES: "false"\n'
+                '      JIEJING_EBAY_WRITE_LIVE: "false"\n'
+                '      JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "disabled_public_staging"\n'
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                + donor_lines
+            )
+
+        def sidecar_service(donor_count: int) -> str:
+            donor_lines = "".join(
+                f'      {key}: "DONOR_SERVICE_TOPOLOGY_MUST_NOT_LEAK"\n'
+                for _ in range(donor_count)
+            )
+            return "  metrics-sidecar:\n    environment:\n" + donor_lines
+
+        cases = {
+            "single_saas": runtime_service("jiejing-saas", 1) + runtime_service("jiejing-worker", 0),
+            "single_worker": runtime_service("jiejing-saas", 0) + runtime_service("jiejing-worker", 1),
+            "sidecar_only": (
+                runtime_service("jiejing-saas", 0)
+                + runtime_service("jiejing-worker", 0)
+                + sidecar_service(1)
+            ),
+            "extra_sidecar": (
+                runtime_service("jiejing-saas", 1)
+                + runtime_service("jiejing-worker", 1)
+                + sidecar_service(1)
+            ),
+            "same_service_repeat": (
+                runtime_service("jiejing-saas", 2) + runtime_service("jiejing-worker", 1)
+            ),
+        }
+        for case_name, services in cases.items():
+            with self.subTest(case_name=case_name):
+                donor_compose = self.fixture_root / f"{case_name}-donor-compose.yml"
+                donor_compose.write_text("services:\n" + services, encoding="utf-8")
+
+                completed = self._run_resolution_plan(
+                    manifest_path,
+                    augment_legacy_contract=False,
+                    donor_compose_path=donor_compose,
+                )
+
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertNotIn(
+                    "DONOR_SERVICE_TOPOLOGY_MUST_NOT_LEAK",
+                    completed.stdout + completed.stderr,
+                )
+                report = json.loads(completed.stdout)
+                self.assertIn(
+                    "resolution_compose_donor_service_topology_invalid",
+                    {blocker["code"] for blocker in report["blockers"]},
+                )
+                self.assertFalse(
+                    any(
+                        action["key"] == key
+                        and action["action"] == "move_equal_donors_to_authoritative"
+                        for action in report["actions"]
+                    )
+                )
+
+    def test_resolution_plan_rejects_missing_compose_donor_declaration(self) -> None:
+        self._write_legal_fixture()
+        donor_compose = self.fixture_root / "missing-key-donor-compose.yml"
+        donor_compose.write_text(self.compose_path.read_text(encoding="utf-8"), encoding="utf-8")
+        manifest_path = self._write_resolution_manifest(
+            [
+                {
+                    "key": "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED",
+                    "authoritative_role": "managed",
+                    "donor_role": "compose",
+                }
+            ]
+        )
+
+        completed = self._run_resolution_plan(
+            manifest_path,
+            augment_legacy_contract=False,
+            donor_compose_path=donor_compose,
+        )
+
+        self.assertNotEqual(completed.returncode, 0)
+        report = json.loads(completed.stdout)
+        self.assertIn(
+            "resolution_compose_donor_missing",
+            {blocker["code"] for blocker in report["blockers"]},
+        )
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_plan_rejects_compose_donor_when_target_owner_already_exists(self) -> None:
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED"
+        self.managed_path.write_text(
+            self.managed_path.read_text(encoding="utf-8") + f"{key}=TARGET_OWNER_EXISTS\n",
+            encoding="utf-8",
+        )
+        donor_compose = self.fixture_root / "owner-present-donor-compose.yml"
+        donor_compose.write_text(
+            self.compose_path.read_text(encoding="utf-8").replace(
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                f'      {key}: "DONOR_MUST_NOT_LEAK"\n',
+            ),
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [{"key": key, "authoritative_role": "managed", "donor_role": "compose"}]
+        )
+
+        completed = self._run_resolution_plan(
+            manifest_path,
+            augment_legacy_contract=False,
+            donor_compose_path=donor_compose,
+        )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertNotIn("DONOR_MUST_NOT_LEAK", completed.stdout + completed.stderr)
+        self.assertNotIn("TARGET_OWNER_EXISTS", completed.stdout + completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertIn(
+            "resolution_donor_target_topology_not_empty",
+            {blocker["code"] for blocker in report["blockers"]},
+        )
+
+    def test_resolution_plan_rejects_invalid_and_structurally_unsafe_donor_paths(self) -> None:
+        self._write_legal_fixture()
+        manifest_path = self._write_resolution_manifest([])
+        missing_donor = self.fixture_root / "missing-donor-compose.yml"
+        missing_report = plan_runtime_env_resolution(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+            decision_manifest_path=manifest_path,
+            donor_compose_path=missing_donor,
+        )
+        self.assertFalse(missing_report["ok"])
+        self.assertIn("source_missing", {blocker["code"] for blocker in missing_report["blockers"]})
+        self.assertNotIn(str(missing_donor), json.dumps(missing_report))
+
+        invalid_donor = self.fixture_root / "invalid-donor-compose.yml"
+        invalid_donor.write_text("services: {}\n", encoding="utf-8")
+        invalid_report = plan_runtime_env_resolution(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+            decision_manifest_path=manifest_path,
+            donor_compose_path=invalid_donor,
+        )
+        self.assertFalse(invalid_report["ok"])
+        self.assertIn(
+            "unsupported_inline_compose_services",
+            {blocker["code"] for blocker in invalid_report["blockers"]},
+        )
+        self.assertNotIn(str(invalid_donor), json.dumps(invalid_report))
+
+    def test_resolution_plan_rejects_symlink_donor_without_path_leakage(self) -> None:
+        self._write_legal_fixture()
+        donor_compose = self.fixture_root / "donor-compose.yml"
+        donor_compose.write_text(self.compose_path.read_text(encoding="utf-8"), encoding="utf-8")
+        manifest_path = self._write_resolution_manifest([])
+        original_is_symlink = Path.is_symlink
+
+        def simulated_is_symlink(path: Path) -> bool:
+            return path == donor_compose or original_is_symlink(path)
+
+        with patch.object(Path, "is_symlink", simulated_is_symlink):
+            report = plan_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                donor_compose_path=donor_compose,
+            )
+
+        self.assertFalse(report["ok"])
+        self.assertIn("source_symlink", {blocker["code"] for blocker in report["blockers"]})
+        self.assertNotIn(str(donor_compose), json.dumps(report))
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_plan_rejects_parent_reparse_for_donor_and_manifest(self) -> None:
+        self._write_legal_fixture()
+        donor_parent = self.fixture_root / "donor-parent"
+        donor_parent.mkdir()
+        donor_compose = donor_parent / "donor-compose.yml"
+        donor_compose.write_text(self.compose_path.read_text(encoding="utf-8"), encoding="utf-8")
+        manifest_parent = self.fixture_root / "manifest-parent"
+        manifest_parent.mkdir()
+        manifest_path = manifest_parent / "resolution-manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {"schema_version": RESOLUTION_MANIFEST_SCHEMA_VERSION, "decisions": []}
+            ),
+            encoding="utf-8",
+        )
+        real_link_check = guard_module._path_is_link_or_reparse
+
+        def simulated_reparse(path: Path) -> bool:
+            return path in {donor_parent, manifest_parent} or real_link_check(path)
+
+        with patch.object(guard_module, "_path_is_link_or_reparse", simulated_reparse):
+            report = plan_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                donor_compose_path=donor_compose,
+            )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertFalse(report["ok"])
+        self.assertGreaterEqual(
+            sum(blocker["code"] == "source_parent_link" for blocker in report["blockers"]),
+            2,
+        )
+        self.assertTrue(
+            any(
+                blocker.get("code") == "source_parent_link"
+                and blocker.get("source_role") == "compose"
+                for blocker in report["blockers"]
+            )
+        )
+        self.assertNotIn(str(donor_parent), serialized)
+        self.assertNotIn(str(manifest_parent), serialized)
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_plan_rejects_donor_parent_directory_swap_after_parent_check(self) -> None:
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED"
+        sentinel = "DONOR_PARENT_SWAP_MUST_NOT_LEAK"
+        billing_line = '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+        donor_payload = self.compose_path.read_text(encoding="utf-8").replace(
+            billing_line,
+            billing_line + f'      {key}: "{sentinel}"\n',
+            2,
+        )
+        for relative_path, runtime_path in (
+            ("./runtime-env/tencent-managed.env", self.managed_path),
+            ("./runtime-env/jiejing-saas.staging-oauth.env", self.secret_path),
+            ("./runtime-env/postgres-localqueue.env", self.postgres_path),
+        ):
+            donor_payload = donor_payload.replace(relative_path, runtime_path.as_posix())
+        donor_parent = self.fixture_root / "donor-live"
+        donor_parent.mkdir()
+        donor_compose = donor_parent / "docker-compose.yml"
+        donor_compose.write_text(donor_payload, encoding="utf-8")
+        replacement_parent = self.fixture_root / "donor-replacement"
+        replacement_parent.mkdir()
+        (replacement_parent / donor_compose.name).write_text(donor_payload, encoding="utf-8")
+        parked_parent = self.fixture_root / "donor-parked"
+        manifest_path = self._write_resolution_manifest(
+            [{"key": key, "authoritative_role": "managed", "donor_role": "compose"}]
+        )
+        real_parent_check = guard_module._source_parent_link_blocker
+        swapped = False
+
+        def swap_after_parent_check(path: Path, source: str) -> dict[str, object] | None:
+            nonlocal swapped
+            blocker = real_parent_check(path, source)
+            if source == guard_module.DONOR_COMPOSE_SOURCE and blocker is None and not swapped:
+                swapped = True
+                donor_parent.rename(parked_parent)
+                replacement_parent.rename(donor_parent)
+            return blocker
+
+        with patch.object(
+            guard_module,
+            "_source_parent_link_blocker",
+            swap_after_parent_check,
+        ):
+            report = plan_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                donor_compose_path=donor_compose,
+            )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertTrue(swapped)
+        self.assertFalse(report["ok"])
+        self.assertIn(
+            "source_parent_changed_during_snapshot",
+            {blocker["code"] for blocker in report["blockers"]},
+        )
+        self.assertNotIn(sentinel, serialized)
+        self.assertNotIn(str(donor_parent), serialized)
+        self.assertNotIn(str(replacement_parent), serialized)
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_plan_rejects_manifest_parent_directory_swap_after_parent_check(self) -> None:
+        self._write_legal_fixture()
+        manifest_parent = self.fixture_root / "manifest-live"
+        manifest_parent.mkdir()
+        manifest_path = manifest_parent / "resolution-manifest.json"
+        manifest_payload = json.dumps(
+            {"schema_version": RESOLUTION_MANIFEST_SCHEMA_VERSION, "decisions": []}
+        )
+        manifest_path.write_text(manifest_payload, encoding="utf-8")
+        replacement_parent = self.fixture_root / "manifest-replacement"
+        replacement_parent.mkdir()
+        (replacement_parent / manifest_path.name).write_text(manifest_payload, encoding="utf-8")
+        parked_parent = self.fixture_root / "manifest-parked"
+        real_parent_check = guard_module._source_parent_link_blocker
+        swapped = False
+
+        def swap_after_parent_check(path: Path, source: str) -> dict[str, object] | None:
+            nonlocal swapped
+            blocker = real_parent_check(path, source)
+            if source == guard_module.RESOLUTION_MANIFEST_SOURCE and blocker is None and not swapped:
+                swapped = True
+                manifest_parent.rename(parked_parent)
+                replacement_parent.rename(manifest_parent)
+            return blocker
+
+        with patch.object(
+            guard_module,
+            "_source_parent_link_blocker",
+            swap_after_parent_check,
+        ):
+            report = plan_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+            )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertTrue(swapped)
+        self.assertFalse(report["ok"])
+        self.assertIn(
+            "source_parent_changed_during_snapshot",
+            {blocker["code"] for blocker in report["blockers"]},
+        )
+        self.assertNotIn(str(manifest_parent), serialized)
+        self.assertNotIn(str(replacement_parent), serialized)
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_plan_rechecks_donor_and_manifest_parent_reparse_after_parent_check(self) -> None:
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED"
+        sentinel = "PARENT_REPARSE_SWAP_MUST_NOT_LEAK"
+        billing_line = '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+        donor_payload = self.compose_path.read_text(encoding="utf-8").replace(
+            billing_line,
+            billing_line + f'      {key}: "{sentinel}"\n',
+            2,
+        )
+        for relative_path, runtime_path in (
+            ("./runtime-env/tencent-managed.env", self.managed_path),
+            ("./runtime-env/jiejing-saas.staging-oauth.env", self.secret_path),
+            ("./runtime-env/postgres-localqueue.env", self.postgres_path),
+        ):
+            donor_payload = donor_payload.replace(relative_path, runtime_path.as_posix())
+        donor_parent = self.fixture_root / "donor-reparse-live"
+        donor_parent.mkdir()
+        donor_compose = donor_parent / "docker-compose.yml"
+        donor_compose.write_text(donor_payload, encoding="utf-8")
+        manifest_parent = self.fixture_root / "manifest-reparse-live"
+        manifest_parent.mkdir()
+        manifest_path = manifest_parent / "resolution-manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": RESOLUTION_MANIFEST_SCHEMA_VERSION,
+                    "decisions": [
+                        {"key": key, "authoritative_role": "managed", "donor_role": "compose"}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        real_parent_check = guard_module._source_parent_link_blocker
+        real_link_check = guard_module._path_is_link_or_reparse
+        active_reparse_parents: set[Path] = set()
+
+        def activate_reparse_after_parent_check(
+            path: Path,
+            source: str,
+        ) -> dict[str, object] | None:
+            blocker = real_parent_check(path, source)
+            if blocker is None and source == guard_module.DONOR_COMPOSE_SOURCE:
+                active_reparse_parents.add(donor_parent)
+            if blocker is None and source == guard_module.RESOLUTION_MANIFEST_SOURCE:
+                active_reparse_parents.add(manifest_parent)
+            return blocker
+
+        def simulated_reparse(path: Path) -> bool:
+            return path in active_reparse_parents or real_link_check(path)
+
+        with (
+            patch.object(
+                guard_module,
+                "_source_parent_link_blocker",
+                activate_reparse_after_parent_check,
+            ),
+            patch.object(guard_module, "_path_is_link_or_reparse", simulated_reparse),
+        ):
+            report = plan_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                donor_compose_path=donor_compose,
+            )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        parent_link_blockers = [
+            blocker for blocker in report["blockers"] if blocker["code"] == "source_parent_link"
+        ]
+        self.assertEqual(
+            active_reparse_parents,
+            {donor_parent, manifest_parent},
+        )
+        self.assertFalse(report["ok"])
+        self.assertGreaterEqual(len(parent_link_blockers), 2)
+        self.assertTrue(
+            any(blocker.get("source_role") == "compose" for blocker in parent_link_blockers)
+        )
+        self.assertNotIn(sentinel, serialized)
+        self.assertNotIn(str(donor_parent), serialized)
+        self.assertNotIn(str(manifest_parent), serialized)
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_plan_allows_unrelated_sibling_churn_in_donor_and_manifest_parents(self) -> None:
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED"
+        sentinel = "SIBLING_CHURN_DONOR_VALUE_MUST_NOT_LEAK"
+        billing_line = '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+        donor_payload = self.compose_path.read_text(encoding="utf-8").replace(
+            billing_line,
+            billing_line + f'      {key}: "{sentinel}"\n',
+            2,
+        )
+        for relative_path, runtime_path in (
+            ("./runtime-env/tencent-managed.env", self.managed_path),
+            ("./runtime-env/jiejing-saas.staging-oauth.env", self.secret_path),
+            ("./runtime-env/postgres-localqueue.env", self.postgres_path),
+        ):
+            donor_payload = donor_payload.replace(relative_path, runtime_path.as_posix())
+        donor_parent = self.fixture_root / "donor-sibling-live"
+        donor_parent.mkdir()
+        donor_compose = donor_parent / "docker-compose.yml"
+        donor_compose.write_text(donor_payload, encoding="utf-8")
+        manifest_parent = self.fixture_root / "manifest-sibling-live"
+        manifest_parent.mkdir()
+        manifest_path = manifest_parent / "resolution-manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": RESOLUTION_MANIFEST_SCHEMA_VERSION,
+                    "decisions": [
+                        {"key": key, "authoritative_role": "managed", "donor_role": "compose"}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        real_parent_check = guard_module._source_parent_link_blocker
+        churned_sources: set[str] = set()
+        source_parents = {
+            guard_module.DONOR_COMPOSE_SOURCE: donor_parent,
+            guard_module.RESOLUTION_MANIFEST_SOURCE: manifest_parent,
+        }
+
+        def churn_sibling_after_parent_check(
+            path: Path,
+            source: str,
+        ) -> dict[str, object] | None:
+            blocker = real_parent_check(path, source)
+            parent = source_parents.get(source)
+            if blocker is None and parent is not None and source not in churned_sources:
+                churned_sources.add(source)
+                sibling = parent / "unrelated-sibling.tmp"
+                sibling.write_text("unrelated", encoding="utf-8")
+                sibling.unlink()
+                parent_stat = guard_module.os.stat(parent, follow_symlinks=False)
+                guard_module.os.utime(
+                    parent,
+                    ns=(
+                        int(parent_stat.st_atime_ns),
+                        int(parent_stat.st_mtime_ns) + 1_000_000_000,
+                    ),
+                )
+            return blocker
+
+        with patch.object(
+            guard_module,
+            "_source_parent_link_blocker",
+            churn_sibling_after_parent_check,
+        ):
+            report = plan_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                donor_compose_path=donor_compose,
+            )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertEqual(
+            churned_sources,
+            {guard_module.DONOR_COMPOSE_SOURCE, guard_module.RESOLUTION_MANIFEST_SOURCE},
+        )
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertTrue(
+            any(
+                action["key"] == key
+                and action["action"] == "move_equal_donors_to_authoritative"
+                for action in report["actions"]
+            )
+        )
+        self.assertNotIn(sentinel, serialized)
+        self.assertNotIn(str(donor_parent), serialized)
+        self.assertNotIn(str(manifest_parent), serialized)
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_plan_rejects_donor_and_manifest_parent_aba_swap(self) -> None:
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED"
+        sentinel = "PARENT_ABA_DONOR_VALUE_MUST_NOT_LEAK"
+        billing_line = '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+        donor_payload = self.compose_path.read_text(encoding="utf-8").replace(
+            billing_line,
+            billing_line + f'      {key}: "{sentinel}"\n',
+            2,
+        )
+        for relative_path, runtime_path in (
+            ("./runtime-env/tencent-managed.env", self.managed_path),
+            ("./runtime-env/jiejing-saas.staging-oauth.env", self.secret_path),
+            ("./runtime-env/postgres-localqueue.env", self.postgres_path),
+        ):
+            donor_payload = donor_payload.replace(relative_path, runtime_path.as_posix())
+        donor_parent = self.fixture_root / "donor-aba-live"
+        donor_parent.mkdir()
+        donor_compose = donor_parent / "docker-compose.yml"
+        donor_compose.write_text(donor_payload, encoding="utf-8")
+        donor_attack_parent = self.fixture_root / "donor-aba-attack"
+        donor_attack_parent.mkdir()
+        (donor_attack_parent / donor_compose.name).write_text(donor_payload, encoding="utf-8")
+        manifest_parent = self.fixture_root / "manifest-aba-live"
+        manifest_parent.mkdir()
+        manifest_path = manifest_parent / "resolution-manifest.json"
+        manifest_payload = json.dumps(
+            {
+                "schema_version": RESOLUTION_MANIFEST_SCHEMA_VERSION,
+                "decisions": [
+                    {"key": key, "authoritative_role": "managed", "donor_role": "compose"}
+                ],
+            }
+        )
+        manifest_path.write_text(manifest_payload, encoding="utf-8")
+        manifest_attack_parent = self.fixture_root / "manifest-aba-attack"
+        manifest_attack_parent.mkdir()
+        (manifest_attack_parent / manifest_path.name).write_text(manifest_payload, encoding="utf-8")
+        source_states = {
+            guard_module.DONOR_COMPOSE_SOURCE: {
+                "live": donor_parent,
+                "attack": donor_attack_parent,
+                "original_parked": self.fixture_root / "donor-aba-original-parked",
+                "attack_parked": self.fixture_root / "donor-aba-attack-parked",
+            },
+            guard_module.RESOLUTION_MANIFEST_SOURCE: {
+                "live": manifest_parent,
+                "attack": manifest_attack_parent,
+                "original_parked": self.fixture_root / "manifest-aba-original-parked",
+                "attack_parked": self.fixture_root / "manifest-aba-attack-parked",
+            },
+        }
+        real_parent_check = guard_module._source_parent_link_blocker
+        real_parent_capture = guard_module._capture_source_parent_chain
+        parent_capture_counts: dict[str, int] = {}
+        attacked_sources: set[str] = set()
+        restored_sources: set[str] = set()
+
+        def swap_to_attack_after_parent_check(
+            path: Path,
+            source: str,
+        ) -> dict[str, object] | None:
+            blocker = real_parent_check(path, source)
+            state = source_states.get(source)
+            if blocker is None and state is not None and source not in attacked_sources:
+                attacked_sources.add(source)
+                state["live"].rename(state["original_parked"])
+                state["attack"].rename(state["live"])
+            return blocker
+
+        def restore_before_parent_recapture(
+            path: Path,
+            source: str,
+        ) -> tuple[
+            tuple[guard_module.ParentDirectorySnapshot, ...],
+            dict[str, object] | None,
+        ]:
+            parent_capture_counts[source] = parent_capture_counts.get(source, 0) + 1
+            state = source_states.get(source)
+            if (
+                state is not None
+                and parent_capture_counts[source] == 2
+                and source in attacked_sources
+                and source not in restored_sources
+            ):
+                restored_sources.add(source)
+                state["live"].rename(state["attack_parked"])
+                state["original_parked"].rename(state["live"])
+            return real_parent_capture(path, source)
+
+        with (
+            patch.object(
+                guard_module,
+                "_source_parent_link_blocker",
+                swap_to_attack_after_parent_check,
+            ),
+            patch.object(
+                guard_module,
+                "_capture_source_parent_chain",
+                restore_before_parent_recapture,
+            ),
+        ):
+            report = plan_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                donor_compose_path=donor_compose,
+            )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertEqual(
+            attacked_sources,
+            {guard_module.DONOR_COMPOSE_SOURCE, guard_module.RESOLUTION_MANIFEST_SOURCE},
+        )
+        self.assertEqual(restored_sources, attacked_sources)
+        self.assertFalse(report["ok"])
+        changed_blockers = [
+            blocker
+            for blocker in report["blockers"]
+            if blocker["code"] == "source_changed_during_snapshot"
+        ]
+        self.assertGreaterEqual(len(changed_blockers), 2)
+        self.assertTrue(
+            any(blocker.get("source_role") == "compose" for blocker in changed_blockers)
+        )
+        self.assertNotIn(sentinel, serialized)
+        for state in source_states.values():
+            for path in state.values():
+                self.assertNotIn(str(path), serialized)
+        self.assertNotIn("digest", serialized.casefold())
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_plan_rejects_hardlinked_inputs_without_path_leakage(self) -> None:
+        self._write_legal_fixture()
+        hardlink_donor = self.fixture_root / "donor-compose-hardlink.yml"
+        try:
+            hardlink_donor.hardlink_to(self.compose_path)
+        except (OSError, NotImplementedError) as error:
+            self.skipTest(f"hardlinks unavailable: {type(error).__name__}")
+        manifest_path = self._write_resolution_manifest([])
+
+        report = plan_runtime_env_resolution(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+            decision_manifest_path=manifest_path,
+            donor_compose_path=hardlink_donor,
+        )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertFalse(report["ok"])
+        self.assertIn(
+            "resolution_source_path_alias",
+            {blocker["code"] for blocker in report["blockers"]},
+        )
+        self.assertNotIn(str(self.compose_path), serialized)
+        self.assertNotIn(str(hardlink_donor), serialized)
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_plan_rejects_manifest_mid_snapshot_change(self) -> None:
+        self._write_legal_fixture()
+        manifest_path = self._write_resolution_manifest([])
+        original = manifest_path.read_bytes()
+        mutated = original.replace(b"v1", b"x1", 1)
+        self.assertEqual(len(original), len(mutated))
+        replacement_path = manifest_path.with_suffix(".replacement")
+        replacement_path.write_bytes(mutated)
+        real_stat = guard_module.os.stat
+        mutated_once = False
+        manifest_lstat_count = 0
+
+        def mutate_before_post_read_stat(
+            path: object,
+            *args: object,
+            **kwargs: object,
+        ) -> object:
+            nonlocal manifest_lstat_count, mutated_once
+            if (
+                Path(path) == manifest_path
+                and kwargs.get("follow_symlinks") is False
+            ):
+                manifest_lstat_count += 1
+                if manifest_lstat_count == 3:
+                    mutated_once = True
+                    guard_module.os.replace(replacement_path, manifest_path)
+            return real_stat(path, *args, **kwargs)
+
+        with patch.object(guard_module.os, "stat", mutate_before_post_read_stat):
+            report = plan_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+            )
+
+        self.assertTrue(mutated_once)
+        self.assertFalse(report["ok"])
+        self.assertIn(
+            "source_changed_during_snapshot",
+            {blocker["code"] for blocker in report["blockers"]},
+        )
+        self.assertNotIn(str(manifest_path), json.dumps(report))
+
+    def test_resolution_plan_rejects_manifest_swap_between_precheck_and_open(self) -> None:
+        self._write_legal_fixture()
+        manifest_path = self._write_resolution_manifest([])
+        original = manifest_path.read_bytes()
+        replacement = original.replace(b"v1", b"x1", 1)
+        self.assertEqual(len(original), len(replacement))
+        replacement_path = manifest_path.with_suffix(".replacement")
+        replacement_path.write_bytes(replacement)
+        real_open = guard_module.os.open
+        swapped = False
+
+        def swap_before_open(
+            path: object,
+            flags: int,
+            *args: object,
+            **kwargs: object,
+        ) -> int:
+            nonlocal swapped
+            if Path(path) == manifest_path and not swapped:
+                swapped = True
+                guard_module.os.replace(replacement_path, manifest_path)
+            return real_open(path, flags, *args, **kwargs)
+
+        with patch.object(guard_module.os, "open", swap_before_open):
+            report = plan_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+            )
+
+        self.assertTrue(swapped)
+        self.assertFalse(report["ok"])
+        self.assertIn(
+            "source_changed_during_snapshot",
+            {blocker["code"] for blocker in report["blockers"]},
+        )
+        self.assertNotIn(str(manifest_path), json.dumps(report))
+
+    def test_resolution_plan_uses_bound_manifest_bytes_after_path_swap(self) -> None:
+        self._write_legal_fixture()
+        manifest_path = self._write_resolution_manifest([])
+        replacement = json.dumps(
+            {
+                "schema_version": RESOLUTION_MANIFEST_SCHEMA_VERSION,
+                "decisions": [
+                    {
+                        "key": "SWAPPED_MANIFEST_SENTINEL",
+                        "authoritative_role": "managed",
+                    }
+                ],
+            }
+        ).encode("utf-8")
+        real_capture = guard_module._capture_source_snapshot
+        swapped = False
+
+        def swap_after_capture(
+            path: Path,
+            source: str,
+        ) -> tuple[guard_module.SourceSnapshot | None, dict[str, object] | None]:
+            nonlocal swapped
+            result = real_capture(path, source)
+            if path == manifest_path and not swapped and result[0] is not None:
+                swapped = True
+                replacement_path = manifest_path.with_suffix(".replacement")
+                replacement_path.write_bytes(replacement)
+                guard_module.os.replace(replacement_path, manifest_path)
+            return result
+
+        with patch.object(guard_module, "_capture_source_snapshot", swap_after_capture):
+            report = plan_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+            )
+
+        self.assertTrue(swapped)
+        self.assertEqual(manifest_path.read_bytes(), replacement)
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertNotIn("SWAPPED_MANIFEST_SENTINEL", json.dumps(report))
+        self.assertFalse(report["secret_exposed"])
+
+    def test_checked_in_resolution_manifest_closes_full_synthetic_live_topology_without_mutation(self) -> None:
+        self._write_legal_fixture()
+        manifest_path = ROOT / "deploy" / "jiejing-staging-runtime-env-resolution-manifest.example.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        decisions = manifest["decisions"]
+        compose_donor_keys = {
+            decision["key"]
+            for decision in decisions
+            if decision.get("donor_role") == "compose"
+        }
+        private_donor_keys = {
+            decision["key"]: decision["donor_role"]
+            for decision in decisions
+            if decision.get("donor_role") not in {None, "compose"}
+        }
+        keep_owner_decisions = [decision for decision in decisions if "donor_role" not in decision]
+
+        candidate_text = self.compose_path.read_text(encoding="utf-8").replace(
+            '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+            '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+            '      JIEJING_CORS_ORIGIN: "https://candidate.example"\n',
+        )
+        donor_insert = "".join(
+            f'      {key}: "true"\n'
+            if key.startswith("JIEJING_MEDIA_")
+            else f'      {key}: "LIVE_TOPOLOGY_COMPOSE_DONOR"\n'
+            for key in sorted(compose_donor_keys)
+        )
+        donor_text = candidate_text.replace(
+            '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+            '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n' + donor_insert,
+        )
+        self.compose_path.write_text(donor_text, encoding="utf-8")
+        candidate_dir = self.fixture_root / "candidate" / "deploy"
+        candidate_dir.mkdir(parents=True)
+        candidate_compose = candidate_dir / "docker-compose.yml"
+        candidate_compose.write_text(candidate_text, encoding="utf-8")
+
+        target_by_role: dict[str, list[str]] = {
+            "managed": [],
+            "secret": ["JIEJING_EBAY_CLIENT_SECRET=LIVE_TOPOLOGY_SECRET_BASE"],
+            "postgres": ["JIEJING_DATABASE_URL=LIVE_TOPOLOGY_POSTGRES_BASE"],
+        }
+        for decision in keep_owner_decisions:
+            key = decision["key"]
+            owner_role = decision["authoritative_role"]
+            if owner_role == "compose":
+                legacy_value = (
+                    "true"
+                    if key in {
+                        "JIEJING_ENABLE_REAL_PLATFORM_WRITES",
+                        "JIEJING_EBAY_WRITE_LIVE",
+                    }
+                    else "LIVE_TOPOLOGY_LEGACY_PRIVATE"
+                )
+                if key == "JIEJING_BILLING_PROVIDER":
+                    legacy_value = "LIVE_TOPOLOGY_LEGACY_PROVIDER"
+                target_by_role["secret"].append(f"{key}={legacy_value}")
+                continue
+            target_by_role[owner_role].append(f"{key}=LIVE_TOPOLOGY_OWNER_{owner_role}")
+            wrong_role = "secret" if owner_role != "secret" else "managed"
+            target_by_role[wrong_role].append(f"{key}=LIVE_TOPOLOGY_WRONG_{wrong_role}")
+        for key, donor_role in private_donor_keys.items():
+            target_by_role[donor_role].append(f"{key}=LIVE_TOPOLOGY_PRIVATE_DONOR")
+
+        self.managed_path.write_text("\n".join(target_by_role["managed"]) + "\n", encoding="utf-8")
+        self.secret_path.write_text("\n".join(target_by_role["secret"]) + "\n", encoding="utf-8")
+        self.postgres_path.write_text("\n".join(target_by_role["postgres"]) + "\n", encoding="utf-8")
+        before = {
+            path: path.read_bytes()
+            for path in (
+                candidate_compose,
+                self.compose_path,
+                self.managed_path,
+                self.secret_path,
+                self.postgres_path,
+            )
+        }
+
+        completed = self._run_resolution_plan(
+            manifest_path,
+            augment_legacy_contract=False,
+            compose_path=candidate_compose,
+            compose_runtime_path=self.compose_path,
+            donor_compose_path=self.compose_path,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        self.assertNotIn("LIVE_TOPOLOGY_", completed.stdout + completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertEqual(report["summary"]["decision_count"], 24)
+        self.assertEqual(report["summary"]["action_count"], 24)
+        self.assertEqual(report["blockers"], [])
+        self.assertEqual(
+            {
+                action["key"]
+                for action in report["actions"]
+                if action["action"] == "move_equal_donors_to_authoritative"
+            },
+            compose_donor_keys,
+        )
+        self.assertTrue(
+            all(
+                action["source_role"] == "compose"
+                and action["count"] == 2
+                and action["comparison"] == "equal"
+                for action in report["actions"]
+                if action["action"] == "move_equal_donors_to_authoritative"
+            )
+        )
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertNotIn(str(candidate_compose), serialized)
+        self.assertNotIn(str(self.compose_path), serialized)
+        self.assertEqual(
+            sorted(key for key in _all_json_keys(report) if _looks_like_value_field(key)),
+            [],
         )
 
     def _write_resolution_topology_fixture(self) -> tuple[Path, dict[Path, bytes], tuple[str, ...]]:
@@ -449,10 +1627,14 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
         self.assertEqual(manifest["schema_version"], RESOLUTION_MANIFEST_SCHEMA_VERSION)
-        self.assertEqual(len(manifest["decisions"]), 20)
+        self.assertEqual(len(manifest["decisions"]), 24)
         self.assertEqual(
             {decision["key"] for decision in manifest["decisions"] if "donor_role" in decision},
             {
+                "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED",
+                "JIEJING_DATABASE_ENDPOINT_INCIDENT_RUNBOOK_PUBLISHED",
+                "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED",
+                "JIEJING_MEDIA_LIVE_VIDEO_ENABLED",
                 "JIEJING_POSTGRES_LIVE_PROBE_PASSED",
                 "JIEJING_VAULT_ENABLED",
                 "JIEJING_VAULT_LIVE_PROBE_PASSED",
