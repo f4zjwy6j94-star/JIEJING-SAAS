@@ -197,10 +197,65 @@ If `sudo -n true` fails, do not weaken the whole server. Add only the minimum no
    only when the candidate omits the key, the secret owner is unique, the donor
    has exactly one declaration in each required runtime service, and all current
    declarations compare equal. Missing owners, conflicts, candidate declarations
-   and abnormal donor service topology fail closed. Reports expose action, key,
-   roles, count and comparison only.
-   The plan is not wired to `migrate --apply`; any later private-env migration
-   apply requires a separate review and explicit operator approval.
+   and abnormal donor service topology fail closed. Plan reports expose action,
+   key, roles, count and comparison only. The plan is not wired to
+   `migrate --apply`.
+
+   A later private-env resolution uses the separate `resolution-apply`
+   subcommand only after explicit operator approval. It accepts the same
+   candidate, runtime identity, donor, manifest, overrides, three private env
+   files and required-service inputs as `resolution-plan`; there is no apply
+   flag. No confirmation is a non-mutating dry-run, and the only accepted apply
+   phrase is `APPLY_JIEJING_RUNTIME_ENV_RESOLUTION`. The command rebuilds the
+   zero-blocker plan under the exclusive transaction lock and binds every input
+   snapshot plus internal plan identity before changing only managed, secret or
+   postgres private env files. Candidate/donor Compose and the manifest are
+   always read-only; the media retire action remains evidence-only. Existing
+   CAS/no-clobber, backup and transaction-wide rollback controls protect every
+   changed private file, preserve concurrent external bytes, and require a
+   zero-blocker post-apply guard of the desired candidate topology. After that
+   validator and every backup/commit integrity check, a final readonly-snapshot
+   check binds candidate/donor Compose, manifest and every override until the
+   success return; only committed private sources are excluded. Late readonly
+   drift is preserved and rolls back all private commits, while retire-only
+   execution remains zero-write.
+
+   Compose donor values use a strict reversible single-quoted `env_file`
+   encoding and target-parser semantic round trip, keeping hash, surrounding
+   spaces, quotes and backslashes literal. A dollar marker requires a verified
+   single-quoted source; plain or double-quoted Compose/private dollar values
+   may interpolate and fail closed. Compose donor apply is mapping-only,
+   including evidence-only retire: every Compose environment list donor fails
+   before backup, regardless of content, RHS-like quote characters or whole-item
+   quoting. Newline, NUL, Unicode `Cc` controls, `Zl` line separators, `Zp` paragraph separators
+   and unsupported escape forms fail closed before backup
+   or commit, while ordinary printable Unicode remains supported. Every fully rendered private candidate
+   is processed by the complete env parser before
+   backup/commit; it must have zero blockers, and every addition must occur
+   exactly once with the bound runtime value. Existing private env payloads are
+   scanned as complete text before `splitlines`: only physical LF and CRLF are line endings,
+   lone CR fails closed, and mixed LF/CRLF stays valid with untouched bytes
+   preserved. Candidate Compose, donor Compose and manifest structure do not
+   pass through this env-file parser. Private-to-private moves retain and
+   revalidate the exact original RHS rather than stripping it. Apply
+   reports omit key names, values, paths, digests and
+   line contents. This subcommand does not copy a candidate, run Docker Compose,
+   deploy or restart anything.
+
+   Example syntax for a separately approved maintenance window:
+
+   ```bash
+   sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" resolution-apply \
+     --compose "$CANDIDATE_COMPOSE" \
+     --compose-runtime-path "$CURRENT_COMPOSE" \
+     --donor-compose "$CURRENT_COMPOSE" \
+     --managed-env /opt/jiejing-staging/private/tencent-managed.env \
+     --secret-env /opt/jiejing-staging/private/jiejing-saas.staging-oauth.env \
+     --postgres-env /opt/jiejing-staging/private/postgres-localqueue.env \
+     --decision-manifest deploy/jiejing-staging-runtime-env-resolution-manifest.example.json \
+     --confirm APPLY_JIEJING_RUNTIME_ENV_RESOLUTION \
+     --json
+   ```
 
    If cost-saver mode is enabled, its only accepted override is the fixed,
    root-owned, non-writable resource override at

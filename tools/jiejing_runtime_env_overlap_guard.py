@@ -21,14 +21,16 @@ import os
 import re
 import secrets
 import stat
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 
 SCHEMA_VERSION = "jiejing_runtime_env_overlap_guard_v1"
 RESOLUTION_MANIFEST_SCHEMA_VERSION = "jiejing_runtime_env_resolution_manifest_v1"
 MIGRATION_APPLY_CONFIRMATION = "APPLY_JIEJING_RUNTIME_ENV_MIGRATION"
+RESOLUTION_APPLY_CONFIRMATION = "APPLY_JIEJING_RUNTIME_ENV_RESOLUTION"
 RETIRE_EQUAL_COMPOSE_DONOR_ACTION = "retire_equal_compose_donor_keep_authoritative"
 RETIRE_EQUAL_COMPOSE_DONOR_KEYS = frozenset(
     {
@@ -46,7 +48,6 @@ RESOLUTION_MANIFEST_SOURCE = "resolution-manifest"
 
 KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 COMPOSE_MAPPING_PATTERN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):(?:\s*(.*?))?\s*$")
-COMPOSE_LIST_PATTERN = re.compile(r"^-\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 
 POSTGRES_PREFIXES = (
     "JIEJING_DATABASE_",
@@ -238,6 +239,10 @@ class Declaration:
     private_value: str = field(repr=False)
     service_occurrence: int | None = None
     environment_block_occurrence: int | None = None
+    private_raw_rhs: str | None = field(default=None, repr=False)
+    private_value_style: str | None = field(default=None, repr=False)
+    compose_environment_container: str | None = field(default=None, repr=False)
+    compose_scalar_style: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -283,6 +288,7 @@ class MigrationAction:
     owner: str
     comparison: str
     bindings: tuple[RemovalBinding, ...] = field(repr=False)
+    additions: tuple[AdditionBinding, ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True)
@@ -290,6 +296,13 @@ class RemovalBinding:
     line_number: int = field(repr=False)
     key: str = field(repr=False)
     line_digest: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class AdditionBinding:
+    key: str = field(repr=False)
+    private_value: str = field(repr=False)
+    encoded_rhs: str = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -388,6 +401,8 @@ class MigrationPlan:
         repr=False,
     )
     compose_override_paths: tuple[Path, ...] = field(default=(), repr=False)
+    pre_apply_validator: Callable[[], None] | None = field(default=None, repr=False, compare=False)
+    post_apply_validator: Callable[[], None] | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -406,6 +421,25 @@ class ResolutionAction:
     target_role: str
     count: int
     comparison: str
+
+
+@dataclass(frozen=True)
+class ResolutionExecutionPlan:
+    """Private snapshot-bound form of the public resolution plan."""
+
+    report: Mapping[str, object] = field(repr=False)
+    analysis: GuardAnalysis = field(repr=False)
+    donor_analysis: GuardAnalysis | None = field(default=None, repr=False)
+    actions: tuple[ResolutionAction, ...] = ()
+    blockers: tuple[dict[str, object], ...] = field(default=(), repr=False)
+    snapshots: tuple[SourceSnapshot, ...] = field(default=(), repr=False)
+    required_runtime_services: frozenset[str] = field(
+        default=RUNTIME_SERVICE_NAMES,
+        repr=False,
+    )
+    compose_override_paths: tuple[Path, ...] = field(default=(), repr=False)
+    compose_runtime_path: Path | None = field(default=None, repr=False)
+    plan_identity: str = field(default="", repr=False)
 
 
 @dataclass(frozen=True)
@@ -459,11 +493,91 @@ def _strip_yaml_comment(raw: str) -> str:
     return text[:comment_at].strip() if comment_at is not None else text
 
 
-def _strip_yaml_scalar(raw: str) -> str:
+def _decode_yaml_double_quoted_scalar(scalar: str) -> str | None:
+    """Decode the strict YAML double-quoted subset used by Compose scalars."""
+
+    if len(scalar) < 2 or scalar[0] != '"' or scalar[-1] != '"':
+        return None
+    simple_escapes = {
+        "0": "\x00",
+        "a": "\x07",
+        "b": "\x08",
+        "t": "\t",
+        "n": "\n",
+        "v": "\x0b",
+        "f": "\x0c",
+        "r": "\r",
+        "e": "\x1b",
+        " ": " ",
+        '"': '"',
+        "/": "/",
+        "\\": "\\",
+    }
+    decoded: list[str] = []
+    cursor = 1
+    while cursor < len(scalar) - 1:
+        character = scalar[cursor]
+        if character == '"' or ord(character) < 0x20 or ord(character) == 0x7F:
+            return None
+        if character != "\\":
+            decoded.append(character)
+            cursor += 1
+            continue
+        cursor += 1
+        if cursor >= len(scalar) - 1:
+            return None
+        escape = scalar[cursor]
+        if escape in simple_escapes:
+            decoded.append(simple_escapes[escape])
+            cursor += 1
+            continue
+        hex_width = {"x": 2, "u": 4, "U": 8}.get(escape)
+        if hex_width is None:
+            return None
+        hex_start = cursor + 1
+        hex_end = hex_start + hex_width
+        digits = scalar[hex_start:hex_end]
+        if len(digits) != hex_width or not re.fullmatch(r"[0-9A-Fa-f]+", digits):
+            return None
+        try:
+            decoded.append(chr(int(digits, 16)))
+        except (OverflowError, ValueError):
+            return None
+        cursor = hex_end
+    return "".join(decoded)
+
+
+def _decode_yaml_scalar(raw: str) -> tuple[bool, str]:
+    """Return an unambiguous scalar and whether its YAML spelling is supported."""
+
     scalar = _strip_yaml_comment(raw)
-    if len(scalar) >= 2 and scalar[0] == scalar[-1] and scalar[0] in {'"', "'"}:
-        return scalar[1:-1]
-    return scalar
+    if not scalar:
+        return False, ""
+    if scalar[0] == "'":
+        if len(scalar) < 2 or scalar[-1] != "'":
+            return False, ""
+        inner = scalar[1:-1]
+        if re.fullmatch(r"(?:''|[^'])*", inner) is None:
+            return False, ""
+        return True, inner.replace("''", "'")
+    if scalar[0] == '"':
+        decoded = _decode_yaml_double_quoted_scalar(scalar)
+        return (decoded is not None, decoded or "")
+    return True, scalar
+
+
+def _strip_yaml_scalar(raw: str) -> str:
+    supported, decoded = _decode_yaml_scalar(raw)
+    return decoded if supported else _strip_yaml_comment(raw)
+
+
+def _yaml_scalar_value_style(raw: str) -> str:
+    scalar = _strip_yaml_comment(raw)
+    if scalar.startswith("'"):
+        return "single_quoted"
+    if scalar.startswith('"'):
+        return "double_quoted"
+    return "unquoted"
 
 
 def _is_unambiguous_compose_environment_scalar(raw: str) -> bool:
@@ -471,7 +585,8 @@ def _is_unambiguous_compose_environment_scalar(raw: str) -> bool:
     if not scalar:
         return False
     if scalar[0] in {'"', "'"}:
-        return len(scalar) >= 2 and scalar[-1] == scalar[0]
+        supported, _decoded = _decode_yaml_scalar(raw)
+        return supported
     if scalar.casefold() in {"null", "~"}:
         return False
     if scalar.startswith(("[", "{", "|", ">", "&", "*", "!", "- ")):
@@ -836,29 +951,166 @@ def _normalize_compose_env_file_source(raw: str, *, compose_parent: Path) -> str
     return _normalized_path_identity(Path(scalar), relative_to=compose_parent)
 
 
+def _decode_runtime_env_file_rhs(raw_rhs: str) -> str:
+    """Decode the explicit Compose ``env_file`` value subset used by this guard.
+
+    Single-quoted values are literal and only ``\\'`` decodes to a quote; this
+    keeps ``#``, surrounding spaces, dollar interpolation markers, double
+    quotes, and every other backslash literal.  Double-quoted values accept the
+    documented newline/tab/return, quote, and backslash escapes.  Unquoted
+    values trim surrounding horizontal whitespace and recognize a whitespace-
+    preceded inline comment.  Unsupported quote/trailer/escape forms are never
+    guessed.
+    """
+
+    text = raw_rhs.lstrip(" \t")
+    if not text:
+        return ""
+
+    if text[0] == "'":
+        decoded: list[str] = []
+        cursor = 1
+        while cursor < len(text):
+            character = text[cursor]
+            if character == "\\" and cursor + 1 < len(text) and text[cursor + 1] == "'":
+                decoded.append("'")
+                cursor += 2
+                continue
+            if character == "'":
+                remainder = text[cursor + 1 :]
+                if remainder and not remainder.startswith((" ", "\t")):
+                    raise ValueError("unsupported env_file single-quote trailer")
+                trailer = remainder.lstrip(" \t")
+                if trailer and not trailer.startswith("#"):
+                    raise ValueError("unsupported env_file single-quote trailer")
+                return "".join(decoded)
+            decoded.append(character)
+            cursor += 1
+        raise ValueError("unterminated env_file single quote")
+
+    if text[0] == '"':
+        escape_map = {
+            '"': '"',
+            "\\": "\\",
+            "n": "\n",
+            "r": "\r",
+            "t": "\t",
+        }
+        decoded = []
+        cursor = 1
+        while cursor < len(text):
+            character = text[cursor]
+            if character == '"':
+                remainder = text[cursor + 1 :]
+                if remainder and not remainder.startswith((" ", "\t")):
+                    raise ValueError("unsupported env_file double-quote trailer")
+                trailer = remainder.lstrip(" \t")
+                if trailer and not trailer.startswith("#"):
+                    raise ValueError("unsupported env_file double-quote trailer")
+                return "".join(decoded)
+            if character != "\\":
+                decoded.append(character)
+                cursor += 1
+                continue
+            cursor += 1
+            if cursor >= len(text) or text[cursor] not in escape_map:
+                raise ValueError("unsupported env_file double-quote escape")
+            decoded.append(escape_map[text[cursor]])
+            cursor += 1
+        raise ValueError("unterminated env_file double quote")
+
+    unquoted = text.rstrip(" \t")
+    for index, character in enumerate(unquoted):
+        if character == "#" and index > 0 and unquoted[index - 1].isspace():
+            return unquoted[:index].rstrip(" \t")
+    return unquoted
+
+
+def _runtime_env_value_is_representable(value: str) -> bool:
+    return not any(
+        unicodedata.category(character) in {"Cc", "Zl", "Zp"}
+        for character in value
+    )
+
+
+def _runtime_env_file_rhs_style(raw_rhs: str) -> str:
+    text = raw_rhs.lstrip(" \t")
+    if text.startswith("'"):
+        return "single_quoted"
+    if text.startswith('"'):
+        return "double_quoted"
+    return "unquoted"
+
+
+def _encode_runtime_env_file_literal(value: str) -> str:
+    """Encode a reversible, non-interpolating Compose env_file scalar."""
+
+    if not _runtime_env_value_is_representable(value):
+        raise ValueError("env_file value contains an unsafe control character")
+    try:
+        value.encode("utf-8")
+    except UnicodeError as error:
+        raise ValueError("env_file value is not UTF-8 encodable") from error
+    encoded = "'" + value.replace("'", "\\'") + "'"
+    if _decode_runtime_env_file_rhs(encoded) != value:
+        raise ValueError("env_file literal round trip failed")
+    return encoded
+
+
 def _parse_env_payload(payload: bytes, source: str) -> tuple[list[Declaration], list[dict[str, object]]]:
     try:
-        lines = payload.decode("utf-8").splitlines()
+        text = payload.decode("utf-8")
     except UnicodeError:
         return [], [{"code": "source_unreadable", "source": source}]
+
+    cursor = 0
+    while cursor < len(text):
+        character = text[cursor]
+        if character == "\n":
+            cursor += 1
+            continue
+        if character == "\r":
+            if cursor + 1 >= len(text) or text[cursor + 1] != "\n":
+                return [], [{"code": "invalid_env_syntax", "source": source}]
+            cursor += 2
+            continue
+        if unicodedata.category(character) in {"Cc", "Zl", "Zp"}:
+            return [], [{"code": "invalid_env_syntax", "source": source}]
+        cursor += 1
+    lines = text.splitlines()
 
     blockers: list[dict[str, object]] = []
     declarations: list[Declaration] = []
     for line_number, line in enumerate(lines, start=1):
         if line_number == 1 and line.startswith("\ufeff"):
             line = line[1:]
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+        structural = line.strip()
+        if not structural or structural.startswith("#"):
             continue
-        if "=" not in stripped:
+        assignment = line.lstrip(" \t")
+        if "=" not in assignment:
             blockers.append({"code": "invalid_env_syntax", "source": source, "line": line_number})
             continue
-        key, private_value = stripped.split("=", 1)
-        key = key.strip()
+        raw_key, raw_rhs = assignment.split("=", 1)
+        key = raw_key.strip(" \t")
         if not KEY_PATTERN.fullmatch(key):
             blockers.append({"code": "invalid_env_key", "source": source, "line": line_number})
             continue
-        declarations.append(Declaration(key, source, line_number, private_value.strip()))
+        try:
+            private_value = _decode_runtime_env_file_rhs(raw_rhs)
+        except ValueError:
+            blockers.append({"code": "invalid_env_syntax", "source": source, "line": line_number})
+            continue
+        declarations.append(
+            Declaration(
+                key=key,
+                source=source,
+                line_number=line_number,
+                private_value=private_value,
+                private_raw_rhs=raw_rhs,
+                private_value_style=_runtime_env_file_rhs_style(raw_rhs),
+            )
+        )
     return declarations, blockers
 
 
@@ -1141,22 +1393,58 @@ def _parse_compose(
                     }
                 )
                 continue
-            match = COMPOSE_MAPPING_PATTERN.fullmatch(stripped) or COMPOSE_LIST_PATTERN.fullmatch(stripped)
-            if not match:
+            mapping_match = COMPOSE_MAPPING_PATTERN.fullmatch(stripped)
+            if mapping_match is not None:
+                key, raw_private_value = mapping_match.groups()
+                if not _is_unambiguous_compose_environment_scalar(raw_private_value or ""):
+                    blockers.append(
+                        {
+                            "code": "non_scalar_compose_environment_value",
+                            "key": key,
+                            "source": f"{COMPOSE_SOURCE}:{current_service}",
+                            "line": line_number,
+                        }
+                    )
+                    continue
+                private_value = _strip_yaml_scalar(raw_private_value or "")
+                compose_container = "mapping"
+                compose_scalar_style = _yaml_scalar_value_style(raw_private_value or "")
+            else:
+                raw_list_match = re.fullmatch(r"-\s*(.+)", stripped)
+                supported_list_item = False
+                decoded_list_item = ""
+                raw_list_item = ""
+                if raw_list_match is not None:
+                    raw_list_item = raw_list_match.group(1)
+                    supported_list_item, decoded_list_item = _decode_yaml_scalar(raw_list_item)
+                if (
+                    not supported_list_item
+                    or "=" not in decoded_list_item
+                ):
+                    blockers.append(
+                        {
+                            "code": "invalid_compose_environment_syntax",
+                            "source": f"{COMPOSE_SOURCE}:{current_service}",
+                            "line": line_number,
+                        }
+                    )
+                    continue
+                key, private_value = decoded_list_item.split("=", 1)
+                if KEY_PATTERN.fullmatch(key) is None:
+                    blockers.append(
+                        {
+                            "code": "invalid_compose_environment_syntax",
+                            "source": f"{COMPOSE_SOURCE}:{current_service}",
+                            "line": line_number,
+                        }
+                    )
+                    continue
+                compose_container = "list"
+                compose_scalar_style = _yaml_scalar_value_style(raw_list_item)
+            if not key:
                 blockers.append(
                     {
                         "code": "invalid_compose_environment_syntax",
-                        "source": f"{COMPOSE_SOURCE}:{current_service}",
-                        "line": line_number,
-                    }
-                )
-                continue
-            key, private_value = match.groups()
-            if not _is_unambiguous_compose_environment_scalar(private_value or ""):
-                blockers.append(
-                    {
-                        "code": "non_scalar_compose_environment_value",
-                        "key": key,
                         "source": f"{COMPOSE_SOURCE}:{current_service}",
                         "line": line_number,
                     }
@@ -1167,9 +1455,11 @@ def _parse_compose(
                     key=key,
                     source=f"{COMPOSE_SOURCE}:{current_service}",
                     line_number=line_number,
-                    private_value=_strip_yaml_scalar(private_value or ""),
+                    private_value=private_value,
                     service_occurrence=current_service_occurrence,
                     environment_block_occurrence=current_environment_block,
+                    compose_environment_container=compose_container,
+                    compose_scalar_style=compose_scalar_style,
                 )
             )
             if current_environment_block is not None:
@@ -2307,7 +2597,7 @@ def _forbidden_private_value_is_covered_by_safe_compose_keep(
     return offending_private_count > 0 and planned_removal_count >= offending_private_count
 
 
-def plan_runtime_env_resolution(
+def _build_runtime_env_resolution(
     *,
     compose_path: Path,
     managed_env_path: Path,
@@ -2318,8 +2608,8 @@ def plan_runtime_env_resolution(
     donor_compose_path: Path | None = None,
     compose_override_paths: Sequence[Path] = (),
     required_runtime_services: Sequence[str] | None = None,
-) -> dict[str, object]:
-    """Prepare a value-free, non-mutating resolution plan.
+) -> ResolutionExecutionPlan:
+    """Build the value-free report and its private snapshot-bound execution form.
 
     The manifest records operator decisions only.  It cannot authorize or
     invoke migration apply, and this function never writes any input file.
@@ -2335,6 +2625,10 @@ def plan_runtime_env_resolution(
     ]
     if donor_compose_path is not None:
         resolution_source_paths.append((DONOR_COMPOSE_SOURCE, donor_compose_path))
+    resolution_source_paths.extend(
+        (f"{COMPOSE_OVERRIDE_SOURCE}:{occurrence}", override_path)
+        for occurrence, override_path in enumerate(compose_override_paths, start=1)
+    )
     source_snapshots, snapshot_blockers = _capture_bound_source_snapshots(
         tuple(resolution_source_paths),
         alias_blocker_code="resolution_source_path_alias",
@@ -2380,6 +2674,7 @@ def plan_runtime_env_resolution(
         if decision.donor_role == "compose"
     }
     donor_declarations_by_key: dict[str, list[Declaration]] = {}
+    donor_analysis: GuardAnalysis | None = None
     if donor_compose_path is None:
         if compose_donor_decisions:
             blockers.append({"code": "resolution_donor_compose_required", "source_role": "compose"})
@@ -2776,7 +3071,7 @@ def plan_runtime_env_resolution(
         actions,
         key=lambda action: (action.key, action.source_role, action.target_role, action.action),
     )
-    return {
+    report = {
         "schema_version": SCHEMA_VERSION,
         "operation": "resolution-plan",
         "mode": "dry_run",
@@ -2802,6 +3097,470 @@ def plan_runtime_env_resolution(
         ],
         "blockers": public_blockers,
     }
+    identity_payload = {
+        "snapshots": [
+            {
+                "source": snapshot.source,
+                "digest": snapshot.digest,
+                "resolved_identity": snapshot.resolved_identity,
+                "physical_identity": snapshot.physical_identity,
+                "metadata": snapshot.metadata,
+            }
+            for snapshot in sorted(source_snapshots.values(), key=lambda item: item.source)
+        ],
+        "actions": [
+            {
+                "action": action.action,
+                "key": action.key,
+                "source_role": action.source_role,
+                "target_role": action.target_role,
+                "count": action.count,
+                "comparison": action.comparison,
+            }
+            for action in ordered_actions
+        ],
+        "required_runtime_services": sorted(normalized_required_services),
+        "compose_runtime_identity": (
+            _normalized_path_identity(compose_runtime_path)
+            if compose_runtime_path is not None
+            else None
+        ),
+        "compose_override_identities": [
+            _normalized_path_identity(path) for path in compose_override_paths
+        ],
+    }
+    plan_identity = hashlib.sha256(
+        json.dumps(identity_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return ResolutionExecutionPlan(
+        report=report,
+        analysis=analysis,
+        donor_analysis=donor_analysis,
+        actions=tuple(ordered_actions),
+        blockers=tuple(blockers),
+        snapshots=tuple(source_snapshots.values()),
+        required_runtime_services=normalized_required_services,
+        compose_override_paths=tuple(compose_override_paths),
+        compose_runtime_path=compose_runtime_path,
+        plan_identity=plan_identity,
+    )
+
+
+def plan_runtime_env_resolution(
+    *,
+    compose_path: Path,
+    managed_env_path: Path,
+    secret_env_path: Path,
+    postgres_env_path: Path,
+    decision_manifest_path: Path,
+    compose_runtime_path: Path | None = None,
+    donor_compose_path: Path | None = None,
+    compose_override_paths: Sequence[Path] = (),
+    required_runtime_services: Sequence[str] | None = None,
+) -> dict[str, object]:
+    """Prepare a value-free, non-mutating resolution plan."""
+
+    return dict(
+        _build_runtime_env_resolution(
+            compose_path=compose_path,
+            managed_env_path=managed_env_path,
+            secret_env_path=secret_env_path,
+            postgres_env_path=postgres_env_path,
+            decision_manifest_path=decision_manifest_path,
+            compose_runtime_path=compose_runtime_path,
+            donor_compose_path=donor_compose_path,
+            compose_override_paths=compose_override_paths,
+            required_runtime_services=required_runtime_services,
+        ).report
+    )
+
+
+def _resolution_apply_public_projection(
+    plan_report: Mapping[str, object],
+    *,
+    mode: str,
+    applied: bool,
+    backup_count: int = 0,
+    artifact_counts: Mapping[str, int] | None = None,
+    additional_blockers: Sequence[dict[str, object]] = (),
+) -> dict[str, object]:
+    """Project a resolution apply result without keys or private input identity."""
+
+    action_counts: dict[tuple[str, str, str], int] = {}
+    for raw_action in plan_report.get("actions", ()):
+        if not isinstance(raw_action, dict):
+            continue
+        action = str(raw_action.get("action") or "unknown")
+        source_role = str(raw_action.get("source_role") or "unknown")
+        target_role = str(raw_action.get("target_role") or "unknown")
+        action_counts[(action, source_role, target_role)] = (
+            action_counts.get((action, source_role, target_role), 0) + 1
+        )
+    blockers = []
+    for blocker in (*plan_report.get("blockers", ()), *additional_blockers):
+        if not isinstance(blocker, dict):
+            continue
+        projected = {
+            field: blocker[field]
+            for field in (
+                "code",
+                "source_role",
+                "target_role",
+                "authoritative_role",
+                "donor_role",
+                "count",
+                "comparison",
+            )
+            if field in blocker
+        }
+        source = blocker.get("source")
+        source_role = _public_role_for_source(str(source)) if source is not None else None
+        if source_role is not None:
+            projected["source_role"] = source_role
+        blockers.append(projected)
+    plan_summary = plan_report.get("summary", {})
+    if not isinstance(plan_summary, dict):
+        plan_summary = {}
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "operation": "resolution-apply",
+        "mode": mode,
+        "ok": not blockers,
+        "applied": applied,
+        "secret_exposed": False,
+        "summary": {
+            "action_count": int(plan_summary.get("action_count") or 0),
+            "action_summary_count": len(action_counts),
+            "blocker_count": len(blockers),
+            "warning_count": int(plan_summary.get("warning_count") or 0),
+            "decision_count": int(plan_summary.get("decision_count") or 0),
+            "backup_count": backup_count,
+            "artifact_counts": dict(sorted((artifact_counts or {}).items())),
+        },
+        "actions": [
+            {
+                "action": action,
+                "source_role": source_role,
+                "target_role": target_role,
+                "count": count,
+            }
+            for (action, source_role, target_role), count in sorted(action_counts.items())
+        ],
+        "blockers": blockers,
+    }
+
+
+def _resolution_migration_plan(
+    plan: ResolutionExecutionPlan,
+) -> MigrationPlan:
+    """Bind resolution actions to opaque private mutations on captured snapshots."""
+
+    snapshots_by_source = {snapshot.source: snapshot for snapshot in plan.snapshots}
+    key_analyses = {key_analysis.key: key_analysis for key_analysis in plan.analysis.keys}
+    migration_actions: list[MigrationAction] = []
+    for action in plan.actions:
+        compose_donor_declarations: tuple[Declaration, ...] = ()
+        if action.source_role == "compose":
+            compose_donor_declarations = tuple(
+                declaration
+                for declaration in (
+                    plan.donor_analysis.declarations if plan.donor_analysis is not None else ()
+                )
+                if _source_role(declaration.source) == COMPOSE_SOURCE
+                and declaration.key == action.key
+            )
+            donor_service_counts: dict[str, int] = {}
+            for declaration in compose_donor_declarations:
+                service_name = declaration.source.removeprefix(f"{COMPOSE_SOURCE}:")
+                donor_service_counts[service_name] = donor_service_counts.get(service_name, 0) + 1
+            if (
+                len(compose_donor_declarations) != action.count
+                or set(donor_service_counts) != set(plan.required_runtime_services)
+                or any(count != 1 for count in donor_service_counts.values())
+                or _comparison(compose_donor_declarations) != "equal"
+            ):
+                raise MigrationApplyError("resolution_apply_plan_stale", "migration")
+            if any(
+                declaration.compose_environment_container != "mapping"
+                for declaration in compose_donor_declarations
+            ):
+                raise MigrationApplyError(
+                    "resolution_apply_value_unrepresentable",
+                    "migration",
+                )
+        if action.action == RETIRE_EQUAL_COMPOSE_DONOR_ACTION:
+            if action.source_role != "compose":
+                raise MigrationApplyError("resolution_apply_plan_stale", "migration")
+            continue
+        if action.action == "move_equal_donors_to_authoritative":
+            target = ROLE_TO_SOURCE.get(action.target_role)
+            if (
+                action.source_role != "compose"
+                or target not in {MANAGED_SOURCE, SECRET_SOURCE, POSTGRES_SOURCE}
+                or target not in snapshots_by_source
+            ):
+                raise MigrationApplyError("resolution_apply_plan_stale", "migration")
+            donor_value = compose_donor_declarations[0].private_value
+            if "$" in donor_value and any(
+                declaration.compose_scalar_style != "single_quoted"
+                for declaration in compose_donor_declarations
+            ):
+                raise MigrationApplyError(
+                    "resolution_apply_value_unrepresentable",
+                    "migration",
+                )
+            try:
+                encoded_rhs = _encode_runtime_env_file_literal(donor_value)
+            except ValueError as error:
+                raise MigrationApplyError(
+                    "resolution_apply_value_unrepresentable",
+                    "migration",
+                ) from error
+            migration_actions.append(
+                MigrationAction(
+                    key=action.key,
+                    source=target,
+                    owner=action.target_role,
+                    comparison=action.comparison,
+                    bindings=(),
+                    additions=(
+                        AdditionBinding(
+                            key=action.key,
+                            private_value=donor_value,
+                            encoded_rhs=encoded_rhs,
+                        ),
+                    ),
+                )
+            )
+            continue
+        if action.action not in {
+            "remove_equal_duplicate",
+            "keep_authoritative_remove_wrong_source",
+            "move_unique_to_authoritative",
+        }:
+            raise MigrationApplyError("resolution_apply_action_unsupported", "migration")
+        source = ROLE_TO_SOURCE.get(action.source_role)
+        if source not in {MANAGED_SOURCE, SECRET_SOURCE, POSTGRES_SOURCE}:
+            raise MigrationApplyError("resolution_apply_source_forbidden", "migration")
+        snapshot = snapshots_by_source.get(source)
+        key_analysis = key_analyses.get(action.key)
+        if snapshot is None or key_analysis is None:
+            raise MigrationApplyError("resolution_apply_plan_stale", source)
+        declarations = tuple(
+            declaration
+            for declaration in key_analysis.declarations
+            if _source_role(declaration.source) == source
+        )
+        if len(declarations) != action.count:
+            raise MigrationApplyError("resolution_apply_plan_stale", source)
+        line_segments = snapshot.payload.splitlines(keepends=True)
+        if any(
+            declaration.line_number < 1 or declaration.line_number > len(line_segments)
+            for declaration in declarations
+        ):
+            raise MigrationApplyError("resolution_apply_plan_stale", source)
+        removal_bindings = tuple(
+            RemovalBinding(
+                line_number=declaration.line_number,
+                key=declaration.key,
+                line_digest=hashlib.sha256(
+                    line_segments[declaration.line_number - 1]
+                ).hexdigest(),
+            )
+            for declaration in declarations
+        )
+        removal_action = MigrationAction(
+            key=action.key,
+            source=source,
+            owner=action.target_role,
+            comparison=action.comparison,
+            bindings=removal_bindings,
+        )
+        if action.action == "move_unique_to_authoritative":
+            target = ROLE_TO_SOURCE.get(action.target_role)
+            donor_declaration = declarations[0] if len(declarations) == 1 else None
+            if (
+                donor_declaration is None
+                or target not in {MANAGED_SOURCE, SECRET_SOURCE, POSTGRES_SOURCE}
+                or target not in snapshots_by_source
+                or donor_declaration.private_raw_rhs is None
+            ):
+                raise MigrationApplyError("resolution_apply_plan_stale", "migration")
+            try:
+                decoded_private_rhs = _decode_runtime_env_file_rhs(
+                    donor_declaration.private_raw_rhs
+                )
+            except ValueError as error:
+                raise MigrationApplyError(
+                    "resolution_apply_value_unrepresentable",
+                    "migration",
+                ) from error
+            if (
+                decoded_private_rhs != donor_declaration.private_value
+                or not _runtime_env_value_is_representable(decoded_private_rhs)
+                or (
+                    "$" in decoded_private_rhs
+                    and donor_declaration.private_value_style != "single_quoted"
+                )
+            ):
+                raise MigrationApplyError(
+                    "resolution_apply_value_unrepresentable",
+                    "migration",
+                )
+            addition_action = MigrationAction(
+                key=action.key,
+                source=target,
+                owner=action.target_role,
+                comparison=action.comparison,
+                bindings=(),
+                additions=(
+                    AdditionBinding(
+                        key=action.key,
+                        private_value=donor_declaration.private_value,
+                        encoded_rhs=donor_declaration.private_raw_rhs,
+                    ),
+                ),
+            )
+            migration_actions.extend((addition_action, removal_action))
+        else:
+            migration_actions.append(removal_action)
+    compose_snapshot = snapshots_by_source.get(COMPOSE_SOURCE)
+    managed_snapshot = snapshots_by_source.get(MANAGED_SOURCE)
+    secret_snapshot = snapshots_by_source.get(SECRET_SOURCE)
+    postgres_snapshot = snapshots_by_source.get(POSTGRES_SOURCE)
+    manifest_snapshot = snapshots_by_source.get(RESOLUTION_MANIFEST_SOURCE)
+    donor_snapshot = snapshots_by_source.get(DONOR_COMPOSE_SOURCE)
+    if any(
+        snapshot is None
+        for snapshot in (
+            compose_snapshot,
+            managed_snapshot,
+            secret_snapshot,
+            postgres_snapshot,
+            manifest_snapshot,
+        )
+    ):
+        raise MigrationApplyError("resolution_apply_plan_stale", "migration")
+
+    def pre_apply_validator() -> None:
+        rebuilt = _build_runtime_env_resolution(
+            compose_path=compose_snapshot.path,
+            managed_env_path=managed_snapshot.path,
+            secret_env_path=secret_snapshot.path,
+            postgres_env_path=postgres_snapshot.path,
+            decision_manifest_path=manifest_snapshot.path,
+            compose_runtime_path=plan.compose_runtime_path,
+            donor_compose_path=(donor_snapshot.path if donor_snapshot is not None else None),
+            compose_override_paths=plan.compose_override_paths,
+            required_runtime_services=tuple(plan.required_runtime_services),
+        )
+        if rebuilt.blockers or rebuilt.plan_identity != plan.plan_identity:
+            raise MigrationApplyError("resolution_apply_plan_drift", "migration")
+
+    def post_apply_validator() -> None:
+        desired_snapshots, snapshot_blockers = _capture_source_snapshots(
+            compose_path=compose_snapshot.path,
+            managed_env_path=managed_snapshot.path,
+            secret_env_path=secret_snapshot.path,
+            postgres_env_path=postgres_snapshot.path,
+        )
+        validation = analyze_runtime_env_ownership(
+            compose_path=compose_snapshot.path,
+            managed_env_path=managed_snapshot.path,
+            secret_env_path=secret_snapshot.path,
+            postgres_env_path=postgres_snapshot.path,
+            compose_runtime_path=plan.compose_runtime_path,
+            compose_override_paths=plan.compose_override_paths,
+            required_runtime_services=tuple(plan.required_runtime_services),
+            _source_snapshots=desired_snapshots,
+            _snapshot_blockers=snapshot_blockers,
+        )
+        if validation.blockers:
+            raise MigrationApplyError("post_apply_validation_failed", "migration")
+
+    return MigrationPlan(
+        analysis=plan.analysis,
+        actions=tuple(migration_actions),
+        blockers=(),
+        snapshots=plan.snapshots,
+        required_runtime_services=plan.required_runtime_services,
+        compose_override_paths=plan.compose_override_paths,
+        pre_apply_validator=pre_apply_validator,
+        post_apply_validator=post_apply_validator,
+    )
+
+
+def apply_runtime_env_resolution(
+    *,
+    compose_path: Path,
+    managed_env_path: Path,
+    secret_env_path: Path,
+    postgres_env_path: Path,
+    decision_manifest_path: Path,
+    compose_runtime_path: Path | None = None,
+    donor_compose_path: Path | None = None,
+    compose_override_paths: Sequence[Path] = (),
+    required_runtime_services: Sequence[str] | None = None,
+    confirm: str | None = None,
+) -> dict[str, object]:
+    """Dry-run unless the independent resolution confirmation is exact."""
+
+    execution_plan = _build_runtime_env_resolution(
+        compose_path=compose_path,
+        managed_env_path=managed_env_path,
+        secret_env_path=secret_env_path,
+        postgres_env_path=postgres_env_path,
+        decision_manifest_path=decision_manifest_path,
+        compose_runtime_path=compose_runtime_path,
+        donor_compose_path=donor_compose_path,
+        compose_override_paths=compose_override_paths,
+        required_runtime_services=required_runtime_services,
+    )
+    plan_report = execution_plan.report
+    if confirm is None:
+        return _resolution_apply_public_projection(
+            plan_report,
+            mode="dry_run",
+            applied=False,
+        )
+    if confirm != RESOLUTION_APPLY_CONFIRMATION:
+        return _resolution_apply_public_projection(
+            plan_report,
+            mode="apply",
+            applied=False,
+            additional_blockers=({"code": "resolution_apply_confirmation_invalid"},),
+        )
+    if execution_plan.blockers:
+        return _resolution_apply_public_projection(
+            plan_report,
+            mode="apply",
+            applied=False,
+        )
+    try:
+        migration_plan = _resolution_migration_plan(execution_plan)
+        artifact_counts = _apply_migration_plan(
+            migration_plan,
+            compose_path=compose_path,
+            managed_env_path=managed_env_path,
+            secret_env_path=secret_env_path,
+            postgres_env_path=postgres_env_path,
+        )
+    except MigrationApplyError as error:
+        return _resolution_apply_public_projection(
+            plan_report,
+            mode="apply",
+            applied=False,
+            backup_count=error.backup_count,
+            artifact_counts=error.artifact_counts,
+            additional_blockers=error.blockers,
+        )
+    return _resolution_apply_public_projection(
+        plan_report,
+        mode="apply",
+        applied=True,
+        backup_count=sum(artifact_counts.values()),
+        artifact_counts=artifact_counts,
+    )
 
 
 def plan_runtime_env_migration(
@@ -2992,7 +3751,11 @@ def _env_key_from_line_segment(segment: bytes, line_number: int) -> str | None:
     return key if KEY_PATTERN.fullmatch(key) else None
 
 
-def _render_candidate(snapshot: SourceSnapshot, bindings: Sequence[RemovalBinding]) -> bytes:
+def _render_candidate(
+    snapshot: SourceSnapshot,
+    bindings: Sequence[RemovalBinding],
+    additions: Sequence[AdditionBinding] = (),
+) -> bytes:
     lines = snapshot.payload.splitlines(keepends=True)
     removal_lines: set[int] = set()
     for binding in bindings:
@@ -3006,9 +3769,61 @@ def _render_candidate(snapshot: SourceSnapshot, bindings: Sequence[RemovalBindin
         ):
             raise MigrationApplyError("apply_plan_stale", snapshot.source)
         removal_lines.add(binding.line_number)
-    return b"".join(
+    candidate = b"".join(
         line for line_number, line in enumerate(lines, start=1) if line_number not in removal_lines
     )
+    if not additions:
+        return candidate
+    existing_keys = {
+        key
+        for line_number, segment in enumerate(candidate.splitlines(keepends=True), start=1)
+        if (key := _env_key_from_line_segment(segment, line_number)) is not None
+    }
+    addition_keys: set[str] = set()
+    encoded_additions: list[bytes] = []
+    for addition in additions:
+        try:
+            round_trip_value = _decode_runtime_env_file_rhs(addition.encoded_rhs)
+        except ValueError as error:
+            raise MigrationApplyError("apply_plan_stale", snapshot.source) from error
+        if (
+            not KEY_PATTERN.fullmatch(addition.key)
+            or addition.key in existing_keys
+            or addition.key in addition_keys
+            or round_trip_value != addition.private_value
+            or not _runtime_env_value_is_representable(round_trip_value)
+        ):
+            raise MigrationApplyError("apply_plan_stale", snapshot.source)
+        addition_keys.add(addition.key)
+        try:
+            encoded_additions.append(
+                f"{addition.key}={addition.encoded_rhs}\n".encode("utf-8")
+            )
+        except UnicodeError as error:
+            raise MigrationApplyError("apply_plan_stale", snapshot.source) from error
+    if candidate and not candidate.endswith((b"\n", b"\r")):
+        candidate += b"\n"
+    return candidate + b"".join(encoded_additions)
+
+
+def _validate_rendered_private_candidate(
+    snapshot: SourceSnapshot,
+    candidate_payload: bytes,
+    additions: Sequence[AdditionBinding],
+) -> None:
+    """Fail before backup/commit unless the complete candidate preserves additions."""
+
+    declarations, blockers = _parse_env_payload(candidate_payload, snapshot.source)
+    if blockers:
+        raise MigrationApplyError("apply_candidate_preflight_failed", snapshot.source)
+    for addition in additions:
+        matching = tuple(
+            declaration
+            for declaration in declarations
+            if declaration.key == addition.key
+        )
+        if len(matching) != 1 or matching[0].private_value != addition.private_value:
+            raise MigrationApplyError("apply_candidate_preflight_failed", snapshot.source)
 
 
 def _verify_source_snapshot(snapshot: SourceSnapshot, *, error_code: str) -> None:
@@ -3290,6 +4105,12 @@ def _guarded_commit_before_install(_snapshot: SourceSnapshot, _backup_path: Path
 
 
 def _guarded_commit_after_install(_record: CommitRecord) -> None:
+    return None
+
+
+def _guarded_apply_after_post_validation(_plan: MigrationPlan) -> None:
+    """Test seam for the final readonly-snapshot validation window."""
+
     return None
 
 
@@ -3721,7 +4542,7 @@ def _apply_migration_plan(
     secret_env_path: Path,
     postgres_env_path: Path,
 ) -> dict[str, int]:
-    if not plan.actions:
+    if not plan.actions and plan.pre_apply_validator is None and plan.post_apply_validator is None:
         return {}
     lock = _acquire_migration_lock(plan)
     try:
@@ -3747,6 +4568,7 @@ def _apply_migration_plan_locked(
     del compose_path, managed_env_path, secret_env_path, postgres_env_path
     snapshots_by_source = {snapshot.source: snapshot for snapshot in plan.snapshots}
     bindings_by_source: dict[str, list[RemovalBinding]] = {}
+    additions_by_source: dict[str, list[AdditionBinding]] = {}
     for action in plan.actions:
         role = _source_role(action.source)
         if role not in {MANAGED_SOURCE, SECRET_SOURCE, POSTGRES_SOURCE}:
@@ -3754,21 +4576,38 @@ def _apply_migration_plan_locked(
         if role not in snapshots_by_source:
             raise MigrationApplyError("apply_plan_stale", role)
         bindings_by_source.setdefault(role, []).extend(action.bindings)
-    if not bindings_by_source:
+        additions_by_source.setdefault(role, []).extend(action.additions)
+    changed_sources = tuple(dict.fromkeys((*bindings_by_source, *additions_by_source)))
+    if plan.pre_apply_validator is not None:
+        plan.pre_apply_validator()
+    _verify_source_snapshots(plan.snapshots, error_code="apply_plan_stale")
+    if not changed_sources:
+        if plan.post_apply_validator is not None:
+            plan.post_apply_validator()
+        _guarded_apply_after_post_validation(plan)
+        _verify_source_snapshots(plan.snapshots, error_code="apply_source_changed")
         return {}
 
-    changed_snapshots = [snapshots_by_source[source] for source in bindings_by_source]
+    changed_snapshots = [snapshots_by_source[source] for source in changed_sources]
     candidate_payloads = {
-        snapshot.source: _render_candidate(snapshot, bindings_by_source[snapshot.source])
+        snapshot.source: _render_candidate(
+            snapshot,
+            bindings_by_source.get(snapshot.source, ()),
+            additions_by_source.get(snapshot.source, ()),
+        )
         for snapshot in changed_snapshots
     }
+    for snapshot in changed_snapshots:
+        _validate_rendered_private_candidate(
+            snapshot,
+            candidate_payloads[snapshot.source],
+            additions_by_source.get(snapshot.source, ()),
+        )
     candidate_digests = {
         source: hashlib.sha256(payload).hexdigest()
         for source, payload in candidate_payloads.items()
     }
     modes = {snapshot.source: _safe_private_mode(snapshot) for snapshot in changed_snapshots}
-    _verify_source_snapshots(plan.snapshots, error_code="apply_plan_stale")
-
     commits: list[CommitRecord] = []
     try:
         for snapshot in changed_snapshots:
@@ -3784,16 +4623,24 @@ def _apply_migration_plan_locked(
                 modes[snapshot.source],
             )
             commits.append(commit)
-        validation = _build_migration_plan(
-            compose_path=snapshots_by_source[COMPOSE_SOURCE].path,
-            managed_env_path=snapshots_by_source[MANAGED_SOURCE].path,
-            secret_env_path=snapshots_by_source[SECRET_SOURCE].path,
-            postgres_env_path=snapshots_by_source[POSTGRES_SOURCE].path,
-            compose_override_paths=plan.compose_override_paths,
-            required_runtime_services=tuple(plan.required_runtime_services),
+        _verify_source_snapshots(
+            plan.snapshots,
+            excluded_sources=frozenset(commit.source for commit in commits),
+            error_code="apply_source_changed",
         )
-        if validation.blockers or validation.actions:
-            raise MigrationApplyError("post_apply_validation_failed", "migration")
+        if plan.post_apply_validator is not None:
+            plan.post_apply_validator()
+        else:
+            validation = _build_migration_plan(
+                compose_path=snapshots_by_source[COMPOSE_SOURCE].path,
+                managed_env_path=snapshots_by_source[MANAGED_SOURCE].path,
+                secret_env_path=snapshots_by_source[SECRET_SOURCE].path,
+                postgres_env_path=snapshots_by_source[POSTGRES_SOURCE].path,
+                compose_override_paths=plan.compose_override_paths,
+                required_runtime_services=tuple(plan.required_runtime_services),
+            )
+            if validation.blockers or validation.actions:
+                raise MigrationApplyError("post_apply_validation_failed", "migration")
         for commit in commits:
             snapshot = snapshots_by_source[commit.source]
             if not _artifact_matches_snapshot(commit.backup_path, snapshot):
@@ -3806,6 +4653,15 @@ def _apply_migration_plan_locked(
                     "apply_commit_source_changed",
                     commit.source,
                 )
+        artifact_counts = _retained_artifact_counts(
+            tuple(artifact for commit in commits for artifact in _record_artifacts(commit))
+        )
+        _guarded_apply_after_post_validation(plan)
+        _verify_source_snapshots(
+            plan.snapshots,
+            excluded_sources=frozenset(commit.source for commit in commits),
+            error_code="apply_source_changed",
+        )
     except Exception as error:
         rollback_blockers: list[dict[str, object]] = []
         retained_artifacts: list[ArtifactRef] = (
@@ -3834,9 +4690,7 @@ def _apply_migration_plan_locked(
             artifacts=retained_artifacts,
             blockers=combined_blockers,
         ) from error
-    return _retained_artifact_counts(
-        tuple(artifact for commit in commits for artifact in _record_artifacts(commit))
-    )
+    return artifact_counts
 
 
 MIGRATION_RESOLVABLE_BLOCKER_CODES = frozenset(
@@ -4081,6 +4935,22 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     resolution_parser.add_argument("--decision-manifest", type=Path, required=True)
+    resolution_apply_parser = subparsers.add_parser(
+        "resolution-apply",
+        help="Apply a rebuilt zero-blocker resolution plan after exact confirmation.",
+    )
+    _add_source_path_arguments(resolution_apply_parser)
+    resolution_apply_parser.add_argument(
+        "--compose-runtime-path",
+        type=Path,
+        help=(
+            "Future installed Compose path used only to resolve relative env_file references; "
+            "the candidate content is still read from --compose."
+        ),
+    )
+    resolution_apply_parser.add_argument("--donor-compose", type=Path)
+    resolution_apply_parser.add_argument("--decision-manifest", type=Path, required=True)
+    resolution_apply_parser.add_argument("--confirm")
     migrate_parser = subparsers.add_parser(
         "migrate",
         help="Plan runtime env ownership cleanup without changing files.",
@@ -4115,6 +4985,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             decision_manifest_path=args.decision_manifest,
             compose_runtime_path=args.compose_runtime_path,
             donor_compose_path=args.donor_compose,
+        )
+    elif args.command == "resolution-apply":
+        report = apply_runtime_env_resolution(
+            **source_paths,
+            decision_manifest_path=args.decision_manifest,
+            compose_runtime_path=args.compose_runtime_path,
+            donor_compose_path=args.donor_compose,
+            confirm=args.confirm,
         )
     else:
         report = migrate_runtime_env_ownership(

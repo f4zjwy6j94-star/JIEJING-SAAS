@@ -19,6 +19,9 @@ GITATTRIBUTES = ROOT / ".gitattributes"
 RUNTIME_ENV_RESOLUTION_MANIFEST = (
     ROOT / "deploy" / "jiejing-staging-runtime-env-resolution-manifest.example.json"
 )
+RUNTIME_ENV_GUARD = ROOT / "tools" / "jiejing_runtime_env_overlap_guard.py"
+STAGING_CHECKLIST = ROOT / "deploy" / "tencentcloud-public-staging-checklist.md"
+RUNNER_RUNBOOK = ROOT / "docs" / "JIEJING_GITHUB_SELF_HOSTED_RUNNER_DEPLOY_RUNBOOK_20260622.md"
 
 
 def fail(message: str) -> int:
@@ -32,6 +35,9 @@ def main() -> int:
     bundle = BUNDLE.read_text(encoding="utf-8") if BUNDLE.exists() else ""
     vault_init = VAULT_INIT.read_text(encoding="utf-8") if VAULT_INIT.exists() else ""
     precloud_gate = PRECLOUD_GATE.read_text(encoding="utf-8") if PRECLOUD_GATE.exists() else ""
+    runtime_env_guard = RUNTIME_ENV_GUARD.read_text(encoding="utf-8") if RUNTIME_ENV_GUARD.exists() else ""
+    staging_checklist = STAGING_CHECKLIST.read_text(encoding="utf-8") if STAGING_CHECKLIST.exists() else ""
+    runner_runbook = RUNNER_RUNBOOK.read_text(encoding="utf-8") if RUNNER_RUNBOOK.exists() else ""
     gitattributes = GITATTRIBUTES.read_text(encoding="utf-8") if GITATTRIBUTES.exists() else ""
     compose_files = [
         HTTPS_COMPOSE.read_text(encoding="utf-8") if HTTPS_COMPOSE.exists() else "",
@@ -342,6 +348,87 @@ def main() -> int:
         "JIEJING_MEDIA_LIVE_VIDEO_ENABLED": expected_retire,
     }:
         return fail("runtime env resolution manifest must explicitly pin the two reviewed media retire actions")
+    for marker in (
+        'RESOLUTION_APPLY_CONFIRMATION = "APPLY_JIEJING_RUNTIME_ENV_RESOLUTION"',
+        '"resolution-apply",',
+        "def apply_runtime_env_resolution(",
+        'resolution_apply_parser.add_argument("--confirm")',
+        '"operation": "resolution-apply"',
+        "def _guarded_apply_after_post_validation(",
+        "def _encode_runtime_env_file_literal(",
+        "def _decode_runtime_env_file_rhs(",
+        "def _runtime_env_file_rhs_style(",
+        'private_value_style != "single_quoted"',
+        "compose_environment_container",
+        "compose_scalar_style",
+        'declaration.compose_environment_container != "mapping"',
+        "donor_service_counts",
+        "set(plan.required_runtime_services)",
+        '"resolution_apply_value_unrepresentable"',
+        "import unicodedata",
+        'unicodedata.category(character) in {"Cc", "Zl", "Zp"}',
+        "def _validate_rendered_private_candidate(",
+        "_parse_env_payload(candidate_payload, snapshot.source)",
+        '"apply_candidate_preflight_failed"',
+        'text = payload.decode("utf-8")',
+        'if character == "\\r":',
+        'text[cursor + 1] != "\\n"',
+        "lines = text.splitlines()",
+    ):
+        if marker not in runtime_env_guard:
+            return fail("runtime env guard missing independent resolution apply marker: " + marker)
+    if 'resolution_parser.add_argument("--apply"' in runtime_env_guard:
+        return fail("resolution-plan must never gain an apply flag")
+    migration_start = runtime_env_guard.index("def _resolution_migration_plan(")
+    migration_end = runtime_env_guard.index("def apply_runtime_env_resolution(", migration_start)
+    resolution_migration = runtime_env_guard[migration_start:migration_end]
+    if resolution_migration.index('compose_environment_container != "mapping"') > resolution_migration.index(
+        "if action.action == RETIRE_EQUAL_COMPOSE_DONOR_ACTION:"
+    ):
+        return fail("Compose donor mapping-only validation must precede retire action dispatch")
+    apply_start = runtime_env_guard.index("def _apply_migration_plan_locked(")
+    apply_locked = runtime_env_guard[apply_start:]
+    if apply_locked.index("_validate_rendered_private_candidate(") > apply_locked.index(
+        "_commit_candidate("
+    ):
+        return fail("complete rendered private candidate preflight must precede commit")
+    env_parse_start = runtime_env_guard.index("def _parse_env_payload(")
+    env_parse_end = runtime_env_guard.index("def _parse_env_file(", env_parse_start)
+    env_parse = runtime_env_guard[env_parse_start:env_parse_end]
+    if 'payload.decode("utf-8").splitlines()' in env_parse:
+        return fail("private env payload must be scanned as complete decoded text before splitlines")
+    if env_parse.index('unicodedata.category(character) in {"Cc", "Zl", "Zp"}') > env_parse.index(
+        "lines = text.splitlines()"
+    ):
+        return fail("private env Unicode boundary scan must precede splitlines")
+    for document_name, document in (
+        ("staging checklist", staging_checklist),
+        ("runner runbook", runner_runbook),
+    ):
+        for marker in (
+            "resolution-apply",
+            "APPLY_JIEJING_RUNTIME_ENV_RESOLUTION",
+            "does not",
+            "deploy",
+            "restart",
+            "final readonly",
+            "single-quoted `env_file`",
+            "single-quoted source",
+            "Compose environment list",
+            "mapping-only",
+            "including evidence-only retire",
+            "Unicode `Cc`",
+            "`Zl` line separators",
+            "`Zp` paragraph separators",
+            "fully rendered private candidate",
+            "exactly once",
+            "complete text before `splitlines`",
+            "physical LF and CRLF",
+            "lone CR",
+            "mixed LF/CRLF",
+        ):
+            if marker not in document:
+                return fail(f"{document_name} missing resolution apply safety marker: {marker}")
     for marker in (
         'TRUSTED_RUNTIME_ENV_GUARD="${JIEJING_TRUSTED_RUNTIME_ENV_GUARD:-/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py}"',
         "REFUSE_UNTRUSTED_RUNTIME_ENV_GUARD=1",

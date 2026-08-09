@@ -131,9 +131,50 @@ values. Keep all three real files under `/opt/jiejing-staging/private/`;
    three declarations must compare equal. Any missing owner, conflict, candidate
    declaration or abnormal service topology fails closed. The resolution plan is
    preparation only: it emits no values, digests, paths or line contents, never
-   changes either Compose file or any private env file, and is deliberately not connected to
-   `migrate --apply`. A later migration apply still requires its own review and
-   explicit approval.
+   changes either Compose file or any private env file, and is deliberately not
+   connected to `migrate --apply`.
+
+   After a separate review and explicit private-env maintenance approval, use
+   the independent `resolution-apply` command with exactly the same inputs. It
+   has no `--apply` flag: without confirmation it repeats the dry-run and writes
+   nothing; an inexact confirmation fails closed. The only accepted phrase is
+   `APPLY_JIEJING_RUNTIME_ENV_RESOLUTION`. Before writing, it rebuilds and binds
+   the zero-blocker plan to stable candidate, donor, manifest, override and
+   three-private-env snapshots. It may change only the managed, secret and
+   postgres private env files through the guarded transaction. Candidate and
+   donor Compose plus the manifest remain byte-for-byte read-only, and
+   `retire_equal_compose_donor_keep_authoritative` is evidence-only. Any drift,
+   link/reparse path, alias, concurrent change, commit failure or post-apply
+   desired-topology blocker fails the whole transaction; rollback never
+   overwrites an external edit. After that post-apply guard and every
+   backup/commit integrity check, and immediately before reporting success, the
+   command rechecks every readonly candidate, donor, manifest and override
+   snapshot; committed private sources alone are excluded from the final readonly-
+   snapshot check. A final-window readonly edit is retained and rolls
+   back the private transaction, including an otherwise evidence-only retire
+   action.
+
+   A Compose donor value is written to a private env only as a reversible
+   single-quoted `env_file` literal whose target-parser round trip is exact.
+   Hashes, leading/trailing spaces, quotes and backslashes stay literal. A
+   dollar marker is allowed only for a verified single-quoted source; plain or
+   double-quoted Compose/private dollar values can interpolate and therefore
+   fail closed. Compose donor apply is mapping-only, including evidence-only retire:
+   every Compose environment list donor fails before backup, regardless of its
+   content, RHS-like quote characters or whole-item quoting. Newline, NUL, all
+   Unicode `Cc` controls, `Zl` line separators, `Zp` paragraph separators, or
+   any unsupported escape fail before backup or commit; ordinary printable
+   Unicode remains allowed. Before any backup/commit, each fully rendered private candidate
+   must pass the complete env parser with zero blockers, and
+   every addition must occur exactly once with its bound runtime value. Existing
+   private env payloads are scanned as complete text before `splitlines`: only physical LF and CRLF
+   are line endings, lone CR fails closed, and mixed LF/CRLF remains valid with
+   every untouched byte preserved. This env-file scan does not reinterpret
+   candidate Compose, donor Compose, or manifest structure. A private donor
+   move preserves and revalidates its exact source RHS instead of
+   trimming it. The apply report contains roles,
+   counts, codes and action summaries only. This command does not run Compose,
+   deploy, restart services or install the candidate.
 
 ```bash
 cd /opt/jiejing-staging/app
@@ -161,6 +202,17 @@ sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" resolution-plan \
   --postgres-env /opt/jiejing-staging/private/postgres-localqueue.env \
   --decision-manifest deploy/jiejing-staging-runtime-env-resolution-manifest.example.json \
   --json
+# Run only in a separately approved private-env maintenance window.
+sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" resolution-apply \
+  --compose "$CANDIDATE_COMPOSE" \
+  --compose-runtime-path "$CURRENT_COMPOSE" \
+  --donor-compose "$CURRENT_COMPOSE" \
+  --managed-env /opt/jiejing-staging/private/tencent-managed.env \
+  --secret-env /opt/jiejing-staging/private/jiejing-saas.staging-oauth.env \
+  --postgres-env /opt/jiejing-staging/private/postgres-localqueue.env \
+  --decision-manifest deploy/jiejing-staging-runtime-env-resolution-manifest.example.json \
+  --confirm APPLY_JIEJING_RUNTIME_ENV_RESOLUTION \
+  --json
 ```
 
 When `JIEJING_USE_COST_SAVER_OVERRIDE=true`, the only accepted file is
@@ -175,7 +227,9 @@ includes, anchors, aliases or merges all fail closed. Add `--compose-override`
 with that exact path to the trusted guard check; never use
 `docker compose config` because it can render private environment values.
 
-5. Start public staging only after both commands pass.
+5. Start public staging only after the ownership checks pass and, when the
+   resolution plan contains actions, the separately approved `resolution-apply`
+   succeeds. Resolution apply itself never starts or restarts staging.
 
 ```bash
 cd /opt/jiejing-staging/app

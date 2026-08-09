@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,9 +19,11 @@ from jiejing_runtime_env_overlap_guard import (
     Declaration,
     GuardAnalysis,
     MIGRATION_APPLY_CONFIRMATION,
+    RESOLUTION_APPLY_CONFIRMATION,
     RESOLUTION_MANIFEST_SCHEMA_VERSION,
     _strip_yaml_scalar,
     analyze_runtime_env_ownership,
+    apply_runtime_env_resolution,
     check_runtime_env_ownership,
     plan_runtime_env_resolution,
 )
@@ -28,6 +31,67 @@ from jiejing_runtime_env_overlap_guard import (
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "tools" / "jiejing_runtime_env_overlap_guard.py"
+
+
+RESOLUTION_APPLY_SAFETY_CONTRACT = """Phase 8 resolution-apply public contract.
+
+The command is independent from resolution-plan and has no apply flag.  Without
+the new exact confirmation phrase it is a dry-run; a wrong phrase fails closed,
+and both cases leave every input byte unchanged.  Before any mutation it must
+rebuild the same zero-blocker plan and bind the candidate Compose, donor
+Compose, decision manifest, managed env, secret env, and postgres env to stable
+non-aliased, non-link/reparse snapshots and one plan identity.  Any blocker,
+drift, path alias, symlink/junction/reparse, or pre/mid-operation TOCTOU produces
+zero forward mutation or transaction-wide rollback.
+
+Only managed/secret/postgres private env payloads may change.  Candidate and
+donor Compose plus the manifest are read-only forever; retire-equal Compose
+donor actions are evidence-only.  The four executable action kinds preserve
+opaque internally-bound values while removing wrong-source declarations and,
+where needed, moving a unique/equal donor value to its authoritative private
+owner.  Existing byte-preserving render, CAS/no-clobber, lock, backup, and
+rollback primitives are the only allowed write path.  Concurrent external
+changes are retained and fail the whole transaction.  A post-apply guard of the
+candidate desired topology must have zero blockers/actions or every committed
+private change is rolled back.  After that validator, every backup/commit check,
+and immediately before success, every uncommitted readonly snapshot is checked
+again; late drift is preserved while all private commits roll back, including
+evidence-only retire transactions.
+
+Compose donor scalars may enter a private env file only through an explicit
+Compose env_file-compatible reversible encoding contract.  The encoded RHS is
+round-tripped with literal single-quote runtime semantics: hash, surrounding
+spaces, dollar interpolation markers, double quotes and backslashes remain
+literal, and embedded single quotes use the runtime-supported backslash escape.
+Only a source that is itself explicitly single-quoted may carry a dollar marker:
+plain/double-quoted Compose scalars and unquoted/double-quoted private RHS values
+can interpolate in a runtime context and therefore fail closed.  A Compose
+environment list item is never reclassified as a literal because quote-like
+characters appear only after ``KEY=``; its entire YAML item/container context is
+bound.  Resolution planning may report a list-form donor read-only, but apply
+accepts Compose donors only from an ``environment`` mapping; every list-form
+donor fails closed before backup regardless of content or quote appearance.
+Newline, NUL, Unicode Cc/Zl/Zp characters (including NEL, line separator, and
+paragraph separator), invalid escape/trailer forms, and any value that cannot
+be proven reversible fail closed before a backup or commit; ordinary printable
+Unicode remains allowed.  Every fully rendered private candidate is parsed by
+the complete env parser before backup/commit, with zero blockers, and each
+addition must appear exactly once with a runtime value identical to its bound
+value.  Private-to-private moves bind the source's exact RHS instead of
+stripping it, and independently verify that the moved RHS retains the same
+runtime semantic value.
+
+Existing private payloads are decoded and scanned as complete text before any
+``splitlines`` operation.  Only physical LF and CRLF line endings are valid;
+lone CR and all other Unicode Cc/Zl/Zp characters fail closed with a value-free
+source-role blocker.  LF, CRLF and mixed LF/CRLF files remain valid, and removal
+rendering preserves every untouched byte.  This env-file rule does not parse or
+rewrite candidate Compose, donor Compose, or manifest structure.
+
+Public output contains only roles, counts, codes, and action summaries: never
+private key names, values, paths, digests, or line content; secret_exposed is
+always false.
+"""
 
 
 class RuntimeEnvOverlapGuardTest(unittest.TestCase):
@@ -276,6 +340,2405 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
             text=True,
             capture_output=True,
             check=False,
+        )
+
+    def _run_resolution_apply(
+        self,
+        manifest_path: Path,
+        *,
+        confirm: str | None = None,
+        augment_legacy_contract: bool = True,
+        compose_path: Path | None = None,
+        compose_runtime_path: Path | None = None,
+        donor_compose_path: Path | None = None,
+        compose_override_paths: tuple[Path, ...] = (),
+        required_runtime_services: tuple[str, ...] = (),
+    ) -> subprocess.CompletedProcess[str]:
+        if augment_legacy_contract:
+            self._augment_legacy_compose_contract()
+        command = [
+            sys.executable,
+            str(TOOL),
+            "resolution-apply",
+            "--compose",
+            str(compose_path or self.compose_path),
+            "--managed-env",
+            str(self.managed_path),
+            "--secret-env",
+            str(self.secret_path),
+            "--postgres-env",
+            str(self.postgres_path),
+            "--decision-manifest",
+            str(manifest_path),
+            "--json",
+        ]
+        if confirm is not None:
+            command.extend(("--confirm", confirm))
+        if compose_runtime_path is not None:
+            command.extend(("--compose-runtime-path", str(compose_runtime_path)))
+        if donor_compose_path is not None:
+            command.extend(("--donor-compose", str(donor_compose_path)))
+        for override_path in compose_override_paths:
+            command.extend(("--compose-override", str(override_path)))
+        for service_name in required_runtime_services:
+            command.extend(("--required-runtime-service", service_name))
+        return subprocess.run(
+            command,
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def test_resolution_apply_without_confirmation_is_a_value_free_dry_run(self) -> None:
+        self._write_legal_fixture()
+        self.managed_path.write_text(
+            self.managed_path.read_text(encoding="utf-8")
+            + "JIEJING_EBAY_CLIENT_SECRET=LEGAL_SECRET_SENTINEL\n",
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest([])
+        before = {
+            path: path.read_bytes()
+            for path in (
+                self.compose_path,
+                self.managed_path,
+                self.secret_path,
+                self.postgres_path,
+                manifest_path,
+            )
+        }
+
+        completed = self._run_resolution_apply(
+            manifest_path,
+            augment_legacy_contract=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertEqual(report["operation"], "resolution-apply")
+        self.assertEqual(report["mode"], "dry_run")
+        self.assertFalse(report["applied"])
+        self.assertFalse(report["secret_exposed"])
+        self.assertEqual(report["summary"]["action_count"], 1)
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertNotIn("JIEJING_EBAY_CLIENT_SECRET", completed.stdout + completed.stderr)
+        self.assertNotIn("LEGAL_SECRET_SENTINEL", completed.stdout + completed.stderr)
+        self.assertEqual(
+            sorted(key for key in _all_json_keys(report) if _looks_like_value_field(key)),
+            [],
+        )
+
+    def test_resolution_apply_exact_confirmation_removes_equal_private_duplicate(self) -> None:
+        self._write_legal_fixture()
+        duplicate = b"JIEJING_EBAY_CLIENT_SECRET=LEGAL_SECRET_SENTINEL\r\n"
+        original_managed = self.managed_path.read_bytes()
+        self.managed_path.write_bytes(original_managed + duplicate)
+        manifest_path = self._write_resolution_manifest([])
+        read_only_before = {
+            path: path.read_bytes()
+            for path in (self.compose_path, self.secret_path, self.postgres_path, manifest_path)
+        }
+
+        completed = self._run_resolution_apply(
+            manifest_path,
+            confirm=RESOLUTION_APPLY_CONFIRMATION,
+            augment_legacy_contract=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertEqual(report["mode"], "apply")
+        self.assertTrue(report["applied"])
+        self.assertFalse(report["secret_exposed"])
+        self.assertEqual(self.managed_path.read_bytes(), original_managed)
+        self.assertEqual(read_only_before, {path: path.read_bytes() for path in read_only_before})
+        self.assertEqual(
+            report["actions"],
+            [
+                {
+                    "action": "remove_equal_duplicate",
+                    "source_role": "managed",
+                    "target_role": "secret",
+                    "count": 1,
+                }
+            ],
+        )
+        self.assertNotIn("JIEJING_EBAY_CLIENT_SECRET", completed.stdout + completed.stderr)
+        self.assertNotIn("LEGAL_SECRET_SENTINEL", completed.stdout + completed.stderr)
+
+    def test_resolution_apply_rejects_inexact_confirmation_without_writes_or_echo(self) -> None:
+        self._write_legal_fixture()
+        self.managed_path.write_text(
+            self.managed_path.read_text(encoding="utf-8")
+            + "JIEJING_EBAY_CLIENT_SECRET=LEGAL_SECRET_SENTINEL\n",
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest([])
+        before = {
+            path: path.read_bytes()
+            for path in (
+                self.compose_path,
+                self.managed_path,
+                self.secret_path,
+                self.postgres_path,
+                manifest_path,
+            )
+        }
+        inexact = RESOLUTION_APPLY_CONFIRMATION + " "
+
+        completed = self._run_resolution_apply(
+            manifest_path,
+            confirm=inexact,
+            augment_legacy_contract=False,
+        )
+
+        self.assertEqual(completed.returncode, 1)
+        report = json.loads(completed.stdout)
+        self.assertFalse(report["ok"])
+        self.assertFalse(report["applied"])
+        self.assertIn(
+            "resolution_apply_confirmation_invalid",
+            {blocker["code"] for blocker in report["blockers"]},
+        )
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertNotIn(inexact, completed.stdout + completed.stderr)
+
+    def test_resolution_apply_moves_unique_private_value_to_authoritative_owner(self) -> None:
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED"
+        sentinel = "UNIQUE_PRIVATE_VALUE_MUST_NOT_LEAK"
+        original_managed = self.managed_path.read_bytes()
+        original_secret = self.secret_path.read_bytes()
+        self.secret_path.write_bytes(original_secret + f"{key}={sentinel}\r\n".encode())
+        manifest_path = self._write_resolution_manifest(
+            [
+                {
+                    "key": key,
+                    "authoritative_role": "managed",
+                    "donor_role": "secret",
+                }
+            ]
+        )
+        read_only_before = {
+            path: path.read_bytes()
+            for path in (self.compose_path, manifest_path)
+        }
+
+        completed = self._run_resolution_apply(
+            manifest_path,
+            confirm=RESOLUTION_APPLY_CONFIRMATION,
+            augment_legacy_contract=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertTrue(report["applied"])
+        self.assertEqual(self.secret_path.read_bytes(), original_secret)
+        self.assertEqual(
+            self.managed_path.read_bytes(),
+            original_managed + f"{key}={sentinel}\n".encode(),
+        )
+        self.assertEqual(read_only_before, {path: path.read_bytes() for path in read_only_before})
+        validation = check_runtime_env_ownership(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+        )
+        self.assertTrue(validation["ok"], validation["blockers"])
+        self.assertNotIn(key, completed.stdout + completed.stderr)
+        self.assertNotIn(sentinel, completed.stdout + completed.stderr)
+
+    def test_resolution_apply_moves_equal_compose_donors_to_private_owner_only(self) -> None:
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED"
+        sentinel = "EQUAL_COMPOSE_DONOR_VALUE_MUST_NOT_LEAK"
+        donor_compose = self.fixture_root / "donor-compose.yml"
+        donor_compose.write_text(
+            self.compose_path.read_text(encoding="utf-8").replace(
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                f'      {key}: "{sentinel}"\n',
+            ),
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [
+                {
+                    "key": key,
+                    "authoritative_role": "managed",
+                    "donor_role": "compose",
+                }
+            ]
+        )
+        original_managed = self.managed_path.read_bytes()
+        read_only_before = {
+            path: path.read_bytes()
+            for path in (self.compose_path, donor_compose, manifest_path)
+        }
+
+        completed = self._run_resolution_apply(
+            manifest_path,
+            confirm=RESOLUTION_APPLY_CONFIRMATION,
+            augment_legacy_contract=False,
+            donor_compose_path=donor_compose,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertTrue(report["applied"])
+        self.assertEqual(
+            self.managed_path.read_bytes(),
+            original_managed + f"{key}='{sentinel}'\n".encode(),
+        )
+        self.assertEqual(read_only_before, {path: path.read_bytes() for path in read_only_before})
+        validation = check_runtime_env_ownership(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+        )
+        self.assertTrue(validation["ok"], validation["blockers"])
+        self.assertNotIn(key, completed.stdout + completed.stderr)
+        self.assertNotIn(sentinel, completed.stdout + completed.stderr)
+
+    def test_resolution_apply_retire_compose_donor_is_evidence_only_zero_write(self) -> None:
+        self._write_legal_fixture()
+        key = "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED"
+        sentinel = "RETIRE_PRIVATE_VALUE_MUST_NOT_LEAK"
+        donor_compose = self.fixture_root / "legacy-donor-compose.yml"
+        donor_compose.write_text(
+            self.compose_path.read_text(encoding="utf-8").replace(
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                f'      {key}: "{sentinel}"\n',
+            ),
+            encoding="utf-8",
+        )
+        self.secret_path.write_text(
+            self.secret_path.read_text(encoding="utf-8") + f"{key}={sentinel}\n",
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [
+                {
+                    "key": key,
+                    "authoritative_role": "secret",
+                    "donor_role": "compose",
+                    "resolution_action": "retire_equal_compose_donor_keep_authoritative",
+                }
+            ]
+        )
+        before = {
+            path: path.read_bytes()
+            for path in (
+                self.compose_path,
+                donor_compose,
+                self.managed_path,
+                self.secret_path,
+                self.postgres_path,
+                manifest_path,
+            )
+        }
+
+        completed = self._run_resolution_apply(
+            manifest_path,
+            confirm=RESOLUTION_APPLY_CONFIRMATION,
+            augment_legacy_contract=False,
+            donor_compose_path=donor_compose,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertTrue(report["applied"])
+        self.assertEqual(report["summary"]["backup_count"], 0)
+        self.assertEqual(report["summary"]["artifact_counts"], {})
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertNotIn(key, completed.stdout + completed.stderr)
+        self.assertNotIn(sentinel, completed.stdout + completed.stderr)
+
+    def test_resolution_apply_rejects_list_form_retire_after_readonly_plan(self) -> None:
+        """Mapping-only validation applies before evidence-only retire dispatch."""
+
+        self._write_legal_fixture()
+        key = "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED"
+        sentinel = "RETIRE_LIST_VALUE_MUST_NOT_LEAK"
+        donor_text = self.compose_path.read_text(encoding="utf-8")
+        for compose_key, value in (
+            ("JIEJING_ENABLE_REAL_PLATFORM_WRITES", "false"),
+            ("JIEJING_EBAY_WRITE_LIVE", "false"),
+            ("JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY", "disabled_public_staging"),
+            ("JIEJING_BILLING_PROVIDER", "stripe_test_mock"),
+        ):
+            donor_text = donor_text.replace(
+                f'      {compose_key}: "{value}"\n',
+                f"      - {compose_key}={value}\n",
+            )
+        donor_text = donor_text.replace(
+            "      - JIEJING_BILLING_PROVIDER=stripe_test_mock\n",
+            "      - JIEJING_BILLING_PROVIDER=stripe_test_mock\n"
+            f"      - {key}={sentinel}\n",
+        )
+        donor_compose = self.fixture_root / "retire-list-donor.yml"
+        donor_compose.write_text(donor_text, encoding="utf-8")
+        self.secret_path.write_text(
+            self.secret_path.read_text(encoding="utf-8") + f"{key}={sentinel}\n",
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [
+                {
+                    "key": key,
+                    "authoritative_role": "secret",
+                    "donor_role": "compose",
+                    "resolution_action": "retire_equal_compose_donor_keep_authoritative",
+                }
+            ]
+        )
+        before = {
+            path: path.read_bytes()
+            for path in (
+                self.compose_path,
+                donor_compose,
+                manifest_path,
+                self.managed_path,
+                self.secret_path,
+                self.postgres_path,
+            )
+        }
+
+        plan = plan_runtime_env_resolution(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+            decision_manifest_path=manifest_path,
+            donor_compose_path=donor_compose,
+        )
+        report = apply_runtime_env_resolution(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+            decision_manifest_path=manifest_path,
+            donor_compose_path=donor_compose,
+            confirm=RESOLUTION_APPLY_CONFIRMATION,
+        )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertTrue(plan["ok"], plan["blockers"])
+        self.assertEqual(plan["summary"]["action_count"], 1)
+        self.assertEqual(
+            plan["actions"][0]["action"],
+            "retire_equal_compose_donor_keep_authoritative",
+        )
+        self.assertFalse(report["ok"])
+        self.assertFalse(report["applied"])
+        self.assertIn(
+            "resolution_apply_value_unrepresentable",
+            {item["code"] for item in report["blockers"]},
+        )
+        self.assertEqual(report["summary"]["backup_count"], 0)
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertNotIn(key, serialized)
+        self.assertNotIn(sentinel, serialized)
+        self.assertNotIn(str(donor_compose), serialized)
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_rebuild_detects_manifest_plan_drift_before_mutation(self) -> None:
+        self._write_legal_fixture()
+        self.managed_path.write_text(
+            self.managed_path.read_text(encoding="utf-8")
+            + "JIEJING_EBAY_CLIENT_SECRET=LEGAL_SECRET_SENTINEL\n",
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest([])
+        private_before = {
+            path: path.read_bytes()
+            for path in (self.managed_path, self.secret_path, self.postgres_path)
+        }
+        original_manifest = manifest_path.read_bytes()
+        real_acquire = guard_module._acquire_migration_lock
+        drifted = False
+
+        def drift_manifest_then_lock(
+            plan: guard_module.MigrationPlan,
+        ) -> guard_module.MigrationLock:
+            nonlocal drifted
+            manifest_path.write_bytes(original_manifest + b" ")
+            drifted = True
+            return real_acquire(plan)
+
+        with patch.object(guard_module, "_acquire_migration_lock", drift_manifest_then_lock):
+            report = apply_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                confirm=RESOLUTION_APPLY_CONFIRMATION,
+            )
+
+        self.assertTrue(drifted)
+        self.assertFalse(report["ok"])
+        self.assertFalse(report["applied"])
+        self.assertIn(
+            "resolution_apply_plan_drift",
+            {blocker["code"] for blocker in report["blockers"]},
+        )
+        self.assertEqual(private_before, {path: path.read_bytes() for path in private_before})
+        self.assertEqual(manifest_path.read_bytes(), original_manifest + b" ")
+        self.assertNotIn(str(manifest_path), json.dumps(report))
+
+    def test_resolution_apply_alias_preflight_is_zero_mutation(self) -> None:
+        self._write_legal_fixture()
+        before = {
+            path: path.read_bytes()
+            for path in (
+                self.compose_path,
+                self.managed_path,
+                self.secret_path,
+                self.postgres_path,
+            )
+        }
+
+        report = apply_runtime_env_resolution(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+            decision_manifest_path=self.compose_path,
+            confirm=RESOLUTION_APPLY_CONFIRMATION,
+        )
+
+        self.assertFalse(report["ok"])
+        self.assertFalse(report["applied"])
+        self.assertIn(
+            "resolution_source_path_alias",
+            {blocker["code"] for blocker in report["blockers"]},
+        )
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertEqual(report["summary"]["backup_count"], 0)
+
+    def test_resolution_apply_symlink_and_parent_reparse_preflight_are_zero_mutation(self) -> None:
+        self._write_legal_fixture()
+        manifest_path = self._write_resolution_manifest([])
+        before = {
+            path: path.read_bytes()
+            for path in (
+                self.compose_path,
+                self.managed_path,
+                self.secret_path,
+                self.postgres_path,
+                manifest_path,
+            )
+        }
+        original_is_symlink = Path.is_symlink
+
+        def simulated_symlink(path: Path) -> bool:
+            return path == self.secret_path or original_is_symlink(path)
+
+        with patch.object(Path, "is_symlink", simulated_symlink):
+            symlink_report = apply_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                confirm=RESOLUTION_APPLY_CONFIRMATION,
+            )
+
+        real_link_check = guard_module._path_is_link_or_reparse
+        managed_parent = self.managed_path.parent
+
+        def simulated_reparse(path: Path) -> bool:
+            return path == managed_parent or real_link_check(path)
+
+        with patch.object(guard_module, "_path_is_link_or_reparse", simulated_reparse):
+            reparse_report = apply_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                confirm=RESOLUTION_APPLY_CONFIRMATION,
+            )
+
+        self.assertIn("source_symlink", {item["code"] for item in symlink_report["blockers"]})
+        self.assertIn("source_parent_link", {item["code"] for item in reparse_report["blockers"]})
+        self.assertFalse(symlink_report["applied"])
+        self.assertFalse(reparse_report["applied"])
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertNotIn(str(self.secret_path), json.dumps(symlink_report))
+        self.assertNotIn(str(managed_parent), json.dumps(reparse_report))
+
+    def test_resolution_apply_snapshot_binds_all_six_primary_inputs(self) -> None:
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED"
+        donor_compose = self.fixture_root / "donor-compose.yml"
+        donor_compose.write_text(
+            self.compose_path.read_text(encoding="utf-8").replace(
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                f'      {key}: "BOUND_INPUT_SENTINEL"\n',
+            ),
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [{"key": key, "authoritative_role": "managed", "donor_role": "compose"}]
+        )
+        bound_paths = (
+            self.compose_path,
+            donor_compose,
+            manifest_path,
+            self.managed_path,
+            self.secret_path,
+            self.postgres_path,
+        )
+        originals = {path: path.read_bytes() for path in bound_paths}
+        real_acquire = guard_module._acquire_migration_lock
+
+        for drift_path in bound_paths:
+            with self.subTest(role=bound_paths.index(drift_path)):
+                for path, payload in originals.items():
+                    path.write_bytes(payload)
+
+                def drift_then_lock(
+                    plan: guard_module.MigrationPlan,
+                    *,
+                    selected: Path = drift_path,
+                ) -> guard_module.MigrationLock:
+                    selected.write_bytes(originals[selected] + b"\n")
+                    return real_acquire(plan)
+
+                with patch.object(guard_module, "_acquire_migration_lock", drift_then_lock):
+                    report = apply_runtime_env_resolution(
+                        compose_path=self.compose_path,
+                        managed_env_path=self.managed_path,
+                        secret_env_path=self.secret_path,
+                        postgres_env_path=self.postgres_path,
+                        decision_manifest_path=manifest_path,
+                        donor_compose_path=donor_compose,
+                        confirm=RESOLUTION_APPLY_CONFIRMATION,
+                    )
+
+                self.assertFalse(report["ok"])
+                self.assertFalse(report["applied"])
+                self.assertIn(
+                    "resolution_apply_plan_drift",
+                    {blocker["code"] for blocker in report["blockers"]},
+                )
+                self.assertEqual(drift_path.read_bytes(), originals[drift_path] + b"\n")
+                for unchanged_path in set(bound_paths) - {drift_path}:
+                    self.assertEqual(unchanged_path.read_bytes(), originals[unchanged_path])
+                self.assertEqual(report["summary"]["backup_count"], 0)
+
+    def test_resolution_apply_binds_compose_override_content_before_mutation(self) -> None:
+        self._write_legal_fixture()
+        self.managed_path.write_text(
+            self.managed_path.read_text(encoding="utf-8")
+            + "JIEJING_EBAY_CLIENT_SECRET=LEGAL_SECRET_SENTINEL\n",
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest([])
+        override_path = self.fixture_root / "docker-compose.cost-saver.yml"
+        override_path.write_text(
+            "services:\n"
+            "  jiejing-saas:\n"
+            "    deploy:\n"
+            "      resources:\n"
+            "        limits:\n"
+            "          memory: 768M\n",
+            encoding="utf-8",
+        )
+        private_before = {
+            path: path.read_bytes()
+            for path in (self.managed_path, self.secret_path, self.postgres_path)
+        }
+        override_before = override_path.read_bytes()
+        real_acquire = guard_module._acquire_migration_lock
+
+        def drift_override_then_lock(
+            plan: guard_module.MigrationPlan,
+        ) -> guard_module.MigrationLock:
+            override_path.write_bytes(override_before.replace(b"768M", b"769M"))
+            return real_acquire(plan)
+
+        with patch.object(guard_module, "_acquire_migration_lock", drift_override_then_lock):
+            report = apply_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                compose_override_paths=(override_path,),
+                confirm=RESOLUTION_APPLY_CONFIRMATION,
+            )
+
+        self.assertFalse(report["ok"])
+        self.assertFalse(report["applied"])
+        self.assertIn(
+            "resolution_apply_plan_drift",
+            {blocker["code"] for blocker in report["blockers"]},
+        )
+        self.assertEqual(private_before, {path: path.read_bytes() for path in private_before})
+        self.assertEqual(override_path.read_bytes(), override_before.replace(b"768M", b"769M"))
+        self.assertEqual(report["summary"]["backup_count"], 0)
+
+    def test_resolution_apply_mid_transaction_failure_rolls_back_all_private_changes(self) -> None:
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED"
+        sentinel = "ROLLBACK_UNIQUE_VALUE_MUST_NOT_LEAK"
+        self.secret_path.write_text(
+            self.secret_path.read_text(encoding="utf-8") + f"{key}={sentinel}\n",
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [{"key": key, "authoritative_role": "managed", "donor_role": "secret"}]
+        )
+        before = {
+            path: path.read_bytes()
+            for path in (
+                self.compose_path,
+                self.managed_path,
+                self.secret_path,
+                self.postgres_path,
+                manifest_path,
+            )
+        }
+        real_commit = guard_module._commit_candidate
+        call_count = 0
+
+        def fail_second_private_commit(
+            snapshot: guard_module.SourceSnapshot,
+            candidate_payload: bytes,
+            candidate_digest: str,
+            mode: int,
+        ) -> guard_module.CommitRecord:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise OSError("PRIVATE_TRANSACTION_FAILURE_MUST_NOT_LEAK")
+            return real_commit(snapshot, candidate_payload, candidate_digest, mode)
+
+        with patch.object(guard_module, "_commit_candidate", fail_second_private_commit):
+            report = apply_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                confirm=RESOLUTION_APPLY_CONFIRMATION,
+            )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertEqual(call_count, 2)
+        self.assertFalse(report["ok"])
+        self.assertFalse(report["applied"])
+        self.assertIn("apply_atomic_replace_failed", {item["code"] for item in report["blockers"]})
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertNotIn(key, serialized)
+        self.assertNotIn(sentinel, serialized)
+        self.assertNotIn("PRIVATE_TRANSACTION_FAILURE_MUST_NOT_LEAK", serialized)
+
+    def test_resolution_apply_preserves_concurrent_external_change_and_fails_whole_transaction(self) -> None:
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED"
+        sentinel = "CONCURRENT_UNIQUE_VALUE_MUST_NOT_LEAK"
+        self.secret_path.write_text(
+            self.secret_path.read_text(encoding="utf-8") + f"{key}={sentinel}\n",
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [{"key": key, "authoritative_role": "managed", "donor_role": "secret"}]
+        )
+        secret_before = self.secret_path.read_bytes()
+        concurrent = b"JIEJING_BACKUP_POLICY_CONFIGURED=external-owner-change\r\n"
+        real_commit = guard_module._commit_candidate
+        call_count = 0
+
+        def inject_external_change_before_second_failure(
+            snapshot: guard_module.SourceSnapshot,
+            candidate_payload: bytes,
+            candidate_digest: str,
+            mode: int,
+        ) -> guard_module.CommitRecord:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                self.managed_path.write_bytes(concurrent)
+                raise OSError("CONCURRENT_FAILURE_DETAIL_MUST_NOT_LEAK")
+            return real_commit(snapshot, candidate_payload, candidate_digest, mode)
+
+        with patch.object(
+            guard_module,
+            "_commit_candidate",
+            inject_external_change_before_second_failure,
+        ):
+            report = apply_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                confirm=RESOLUTION_APPLY_CONFIRMATION,
+            )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertFalse(report["ok"])
+        self.assertFalse(report["applied"])
+        self.assertEqual(self.managed_path.read_bytes(), concurrent)
+        self.assertEqual(self.secret_path.read_bytes(), secret_before)
+        self.assertIn("apply_atomic_replace_failed", {item["code"] for item in report["blockers"]})
+        self.assertIn("apply_rollback_source_changed", {item["code"] for item in report["blockers"]})
+        self.assertNotIn(key, serialized)
+        self.assertNotIn(sentinel, serialized)
+        self.assertNotIn("CONCURRENT_FAILURE_DETAIL_MUST_NOT_LEAK", serialized)
+
+    def test_resolution_apply_rolls_back_when_post_apply_desired_guard_blocks(self) -> None:
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED"
+        sentinel = "POST_GUARD_VALUE_MUST_NOT_LEAK"
+        self.secret_path.write_text(
+            self.secret_path.read_text(encoding="utf-8") + f"{key}={sentinel}\n",
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [{"key": key, "authoritative_role": "managed", "donor_role": "secret"}]
+        )
+        before = {
+            path: path.read_bytes()
+            for path in (self.managed_path, self.secret_path, self.postgres_path)
+        }
+        real_capture = guard_module._capture_source_snapshots
+
+        def blocked_post_guard(**kwargs: Path) -> tuple[
+            dict[str, guard_module.SourceSnapshot],
+            list[dict[str, object]],
+        ]:
+            snapshots, blockers = real_capture(**kwargs)
+            return snapshots, [*blockers, {"code": "synthetic_post_guard_blocker"}]
+
+        with patch.object(guard_module, "_capture_source_snapshots", blocked_post_guard):
+            report = apply_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                confirm=RESOLUTION_APPLY_CONFIRMATION,
+            )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertFalse(report["ok"])
+        self.assertFalse(report["applied"])
+        self.assertIn(
+            "post_apply_validation_failed",
+            {blocker["code"] for blocker in report["blockers"]},
+        )
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertNotIn(key, serialized)
+        self.assertNotIn(sentinel, serialized)
+
+    def test_resolution_apply_final_candidate_drift_rolls_back_private_commit(self) -> None:
+        """Post-validator readonly drift must fail the whole private transaction."""
+
+        self._write_legal_fixture()
+        sentinel = "FINAL_CANDIDATE_DRIFT_VALUE_MUST_NOT_LEAK"
+        self.managed_path.write_text(
+            self.managed_path.read_text(encoding="utf-8")
+            + f"JIEJING_EBAY_CLIENT_SECRET={sentinel}\n",
+            encoding="utf-8",
+        )
+        self.secret_path.write_text(
+            f"JIEJING_EBAY_CLIENT_SECRET={sentinel}\n",
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest([])
+        private_before = {
+            path: path.read_bytes()
+            for path in (self.managed_path, self.secret_path, self.postgres_path)
+        }
+        candidate_before = self.compose_path.read_bytes()
+        external_candidate = candidate_before + b"# external-final-candidate-window\n"
+        real_capture = guard_module._capture_source_snapshots
+        injected = False
+
+        def drift_after_post_snapshot(**kwargs: Path) -> tuple[
+            dict[str, guard_module.SourceSnapshot],
+            list[dict[str, object]],
+        ]:
+            nonlocal injected
+            snapshots, blockers = real_capture(**kwargs)
+            if not injected:
+                injected = True
+                self.compose_path.write_bytes(external_candidate)
+            return snapshots, blockers
+
+        with patch.object(guard_module, "_capture_source_snapshots", drift_after_post_snapshot):
+            report = apply_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                confirm=RESOLUTION_APPLY_CONFIRMATION,
+            )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertTrue(injected)
+        self.assertFalse(report["ok"])
+        self.assertFalse(report["applied"])
+        self.assertIn("apply_source_changed", {item["code"] for item in report["blockers"]})
+        self.assertEqual(private_before, {path: path.read_bytes() for path in private_before})
+        self.assertEqual(self.compose_path.read_bytes(), external_candidate)
+        self.assertNotIn(sentinel, serialized)
+        self.assertNotIn(str(self.compose_path), serialized)
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_readonly_drift_after_final_artifact_check_rolls_back(self) -> None:
+        """The last readonly verify follows every backup/commit integrity check."""
+
+        self._write_legal_fixture()
+        key = "JIEJING_EBAY_CLIENT_SECRET"
+        sentinel = "FINAL_ARTIFACT_WINDOW_VALUE_MUST_NOT_LEAK"
+        self.managed_path.write_text(
+            self.managed_path.read_text(encoding="utf-8") + f"{key}={sentinel}\n",
+            encoding="utf-8",
+        )
+        self.secret_path.write_text(f"{key}={sentinel}\n", encoding="utf-8")
+        manifest_path = self._write_resolution_manifest([])
+        private_before = {
+            path: path.read_bytes()
+            for path in (self.managed_path, self.secret_path, self.postgres_path)
+        }
+        manifest_before = manifest_path.read_bytes()
+        external_manifest = manifest_before + b" "
+        real_artifact_match = guard_module._artifact_matches_snapshot
+        artifact_match_count = 0
+
+        def drift_manifest_after_third_artifact_check(
+            path: Path,
+            snapshot: guard_module.SourceSnapshot,
+        ) -> bool:
+            nonlocal artifact_match_count
+            matched = real_artifact_match(path, snapshot)
+            artifact_match_count += 1
+            if artifact_match_count == 3:
+                manifest_path.write_bytes(external_manifest)
+            return matched
+
+        with patch.object(
+            guard_module,
+            "_artifact_matches_snapshot",
+            drift_manifest_after_third_artifact_check,
+        ):
+            report = apply_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                confirm=RESOLUTION_APPLY_CONFIRMATION,
+            )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertGreaterEqual(artifact_match_count, 3)
+        self.assertFalse(report["ok"])
+        self.assertFalse(report["applied"])
+        self.assertIn("apply_source_changed", {item["code"] for item in report["blockers"]})
+        self.assertEqual(private_before, {path: path.read_bytes() for path in private_before})
+        self.assertEqual(manifest_path.read_bytes(), external_manifest)
+        self.assertNotIn(str(manifest_path), serialized)
+        self.assertNotIn(key, serialized)
+        self.assertNotIn(sentinel, serialized)
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_final_readonly_drift_rolls_back_private_commit(self) -> None:
+        """Donor, manifest and override remain bound through the final success window."""
+
+        cases = ("donor", "manifest", "override")
+        for case in cases:
+            with self.subTest(readonly_role=case):
+                self._write_legal_fixture()
+                donor_compose: Path | None = None
+                compose_override_paths: tuple[Path, ...] = ()
+                if case == "donor":
+                    key = "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED"
+                    donor_compose = self.fixture_root / "final-window-donor-compose.yml"
+                    donor_compose.write_text(
+                        self.compose_path.read_text(encoding="utf-8").replace(
+                            '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                            '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                            f'      {key}: "FINAL_DONOR_VALUE_MUST_NOT_LEAK"\n',
+                        ),
+                        encoding="utf-8",
+                    )
+                    manifest_path = self._write_resolution_manifest(
+                        [{"key": key, "authoritative_role": "managed", "donor_role": "compose"}]
+                    )
+                    selected = donor_compose
+                    external = donor_compose.read_bytes() + b"# external-final-donor-window\n"
+                else:
+                    self.managed_path.write_text(
+                        self.managed_path.read_text(encoding="utf-8")
+                        + "JIEJING_EBAY_CLIENT_SECRET=FINAL_READONLY_VALUE_MUST_NOT_LEAK\n",
+                        encoding="utf-8",
+                    )
+                    self.secret_path.write_text(
+                        "JIEJING_EBAY_CLIENT_SECRET=FINAL_READONLY_VALUE_MUST_NOT_LEAK\n",
+                        encoding="utf-8",
+                    )
+                    manifest_path = self._write_resolution_manifest([])
+                    if case == "manifest":
+                        selected = manifest_path
+                        external = manifest_path.read_bytes() + b" "
+                    else:
+                        override_path = self.fixture_root / "final-window-override.yml"
+                        override_path.write_text(
+                            "services:\n"
+                            "  jiejing-saas:\n"
+                            "    deploy:\n"
+                            "      resources:\n"
+                            "        limits:\n"
+                            "          memory: 768M\n",
+                            encoding="utf-8",
+                        )
+                        compose_override_paths = (override_path,)
+                        selected = override_path
+                        external = override_path.read_bytes().replace(b"768M", b"769M")
+                private_before = {
+                    path: path.read_bytes()
+                    for path in (self.managed_path, self.secret_path, self.postgres_path)
+                }
+                readonly_paths = tuple(
+                    path
+                    for path in (
+                        self.compose_path,
+                        donor_compose,
+                        manifest_path,
+                        *compose_override_paths,
+                    )
+                    if path is not None
+                )
+                readonly_before = {path: path.read_bytes() for path in readonly_paths}
+
+                def drift_in_final_window(_plan: guard_module.MigrationPlan) -> None:
+                    selected.write_bytes(external)
+
+                with patch.object(
+                    guard_module,
+                    "_guarded_apply_after_post_validation",
+                    drift_in_final_window,
+                ):
+                    report = apply_runtime_env_resolution(
+                        compose_path=self.compose_path,
+                        managed_env_path=self.managed_path,
+                        secret_env_path=self.secret_path,
+                        postgres_env_path=self.postgres_path,
+                        decision_manifest_path=manifest_path,
+                        donor_compose_path=donor_compose,
+                        compose_override_paths=compose_override_paths,
+                        confirm=RESOLUTION_APPLY_CONFIRMATION,
+                    )
+
+                serialized = json.dumps(report, ensure_ascii=False)
+                self.assertFalse(report["ok"])
+                self.assertFalse(report["applied"])
+                self.assertIn(
+                    "apply_source_changed",
+                    {item["code"] for item in report["blockers"]},
+                )
+                self.assertEqual(private_before, {path: path.read_bytes() for path in private_before})
+                self.assertEqual(selected.read_bytes(), external)
+                for unchanged in set(readonly_paths) - {selected}:
+                    self.assertEqual(unchanged.read_bytes(), readonly_before[unchanged])
+                self.assertNotIn(str(selected), serialized)
+                self.assertNotIn("MUST_NOT_LEAK", serialized)
+                self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_final_readonly_drift_fails_retire_only_without_writes(self) -> None:
+        """Evidence-only apply still binds every readonly input through final return."""
+
+        for case in ("candidate", "donor", "manifest", "override"):
+            with self.subTest(readonly_role=case):
+                self._write_legal_fixture()
+                key = "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED"
+                sentinel = "FINAL_RETIRE_VALUE_MUST_NOT_LEAK"
+                donor_compose = self.fixture_root / "final-retire-donor-compose.yml"
+                donor_compose.write_text(
+                    self.compose_path.read_text(encoding="utf-8").replace(
+                        '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                        '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                        f'      {key}: "{sentinel}"\n',
+                    ),
+                    encoding="utf-8",
+                )
+                self.secret_path.write_text(
+                    self.secret_path.read_text(encoding="utf-8") + f"{key}={sentinel}\n",
+                    encoding="utf-8",
+                )
+                manifest_path = self._write_resolution_manifest(
+                    [
+                        {
+                            "key": key,
+                            "authoritative_role": "secret",
+                            "donor_role": "compose",
+                            "resolution_action": (
+                                "retire_equal_compose_donor_keep_authoritative"
+                            ),
+                        }
+                    ]
+                )
+                override_path = self.fixture_root / "final-retire-override.yml"
+                override_path.write_text(
+                    "services:\n"
+                    "  jiejing-saas:\n"
+                    "    deploy:\n"
+                    "      resources:\n"
+                    "        limits:\n"
+                    "          memory: 768M\n",
+                    encoding="utf-8",
+                )
+                readonly_by_role = {
+                    "candidate": self.compose_path,
+                    "donor": donor_compose,
+                    "manifest": manifest_path,
+                    "override": override_path,
+                }
+                selected = readonly_by_role[case]
+                external = selected.read_bytes() + b"# external-final-retire-window\n"
+                all_paths = (
+                    self.compose_path,
+                    donor_compose,
+                    manifest_path,
+                    override_path,
+                    self.managed_path,
+                    self.secret_path,
+                    self.postgres_path,
+                )
+                before = {path: path.read_bytes() for path in all_paths}
+
+                def drift_in_final_window(_plan: guard_module.MigrationPlan) -> None:
+                    selected.write_bytes(external)
+
+                with patch.object(
+                    guard_module,
+                    "_guarded_apply_after_post_validation",
+                    drift_in_final_window,
+                ):
+                    report = apply_runtime_env_resolution(
+                        compose_path=self.compose_path,
+                        managed_env_path=self.managed_path,
+                        secret_env_path=self.secret_path,
+                        postgres_env_path=self.postgres_path,
+                        decision_manifest_path=manifest_path,
+                        donor_compose_path=donor_compose,
+                        compose_override_paths=(override_path,),
+                        confirm=RESOLUTION_APPLY_CONFIRMATION,
+                    )
+
+                serialized = json.dumps(report, ensure_ascii=False)
+                self.assertFalse(report["ok"])
+                self.assertFalse(report["applied"])
+                self.assertIn(
+                    "apply_source_changed",
+                    {item["code"] for item in report["blockers"]},
+                )
+                self.assertEqual(selected.read_bytes(), external)
+                for unchanged in set(all_paths) - {selected}:
+                    self.assertEqual(unchanged.read_bytes(), before[unchanged])
+                self.assertEqual(report["summary"]["backup_count"], 0)
+                self.assertNotIn(str(selected), serialized)
+                self.assertNotIn(key, serialized)
+                self.assertNotIn(sentinel, serialized)
+                self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_compose_donor_uses_literal_reversible_env_encoding(self) -> None:
+        """Safe Compose scalars must survive the independent env_file runtime contract."""
+
+        safe_values = (
+            ("hash", "hash#value", "hash#value"),
+            ("spaces", "'  leading and trailing  '", "  leading and trailing  "),
+            ("single_quote", "single'quote", "single'quote"),
+            ("double_quote", 'double"quote', 'double"quote'),
+            ("backslash", r"back\slash", r"back\slash"),
+            ("dollar", "'${INTERPOLATED_MUST_STAY_LITERAL}'", "${INTERPOLATED_MUST_STAY_LITERAL}"),
+            ("empty", '""', ""),
+        )
+
+        def reference_decode_literal_env_rhs(rhs: str) -> str:
+            self.assertGreaterEqual(len(rhs), 2)
+            self.assertEqual(rhs[0], "'")
+            self.assertEqual(rhs[-1], "'")
+            decoded: list[str] = []
+            cursor = 1
+            while cursor < len(rhs) - 1:
+                character = rhs[cursor]
+                if character == "\\" and cursor + 1 < len(rhs) - 1 and rhs[cursor + 1] == "'":
+                    decoded.append("'")
+                    cursor += 2
+                    continue
+                self.assertNotEqual(character, "'", "unescaped quote is outside the safe subset")
+                decoded.append(character)
+                cursor += 1
+            return "".join(decoded)
+
+        for label, donor_scalar, expected_value in safe_values:
+            with self.subTest(value_kind=label):
+                self._write_legal_fixture()
+                key = "JIEJING_BACKUP_REVERSIBLE_COMPOSE_DONOR"
+                donor_compose = self.fixture_root / f"reversible-{label}-donor.yml"
+                donor_compose.write_text(
+                    self.compose_path.read_text(encoding="utf-8").replace(
+                        '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                        '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                        f"      {key}: {donor_scalar}\n",
+                    ),
+                    encoding="utf-8",
+                )
+                manifest_path = self._write_resolution_manifest(
+                    [{"key": key, "authoritative_role": "managed", "donor_role": "compose"}]
+                )
+                readonly_before = {
+                    path: path.read_bytes()
+                    for path in (self.compose_path, donor_compose, manifest_path)
+                }
+
+                report = apply_runtime_env_resolution(
+                    compose_path=self.compose_path,
+                    managed_env_path=self.managed_path,
+                    secret_env_path=self.secret_path,
+                    postgres_env_path=self.postgres_path,
+                    decision_manifest_path=manifest_path,
+                    donor_compose_path=donor_compose,
+                    confirm=RESOLUTION_APPLY_CONFIRMATION,
+                )
+
+                serialized = json.dumps(report, ensure_ascii=False)
+                self.assertTrue(report["ok"], report["blockers"])
+                self.assertTrue(report["applied"])
+                target_line = next(
+                    line
+                    for line in self.managed_path.read_text(encoding="utf-8").splitlines()
+                    if line.startswith(f"{key}=")
+                )
+                encoded_rhs = target_line.split("=", 1)[1]
+                self.assertEqual(
+                    encoded_rhs,
+                    "'" + expected_value.replace("'", "\\'") + "'",
+                )
+                self.assertEqual(reference_decode_literal_env_rhs(encoded_rhs), expected_value)
+                self.assertEqual(
+                    readonly_before,
+                    {path: path.read_bytes() for path in readonly_before},
+                )
+                self.assertNotIn(key, serialized)
+                if expected_value:
+                    self.assertNotIn(expected_value, serialized)
+                self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_compose_donor_dollar_requires_single_quoted_source(self) -> None:
+        """Plain/double Compose dollar values may interpolate; only single quotes are literal."""
+
+        key = "JIEJING_BACKUP_COMPOSE_DOLLAR_SOURCE"
+        marker = "${RUNTIME_INTERPOLATION_MUST_NOT_LEAK}"
+        for source_style, donor_scalar, allowed in (
+            ("plain", marker, False),
+            ("double", f'"{marker}"', False),
+            ("single", f"'{marker}'", True),
+        ):
+            with self.subTest(source_style=source_style):
+                self._write_legal_fixture()
+                donor_compose = self.fixture_root / f"dollar-{source_style}-donor.yml"
+                donor_compose.write_text(
+                    self.compose_path.read_text(encoding="utf-8").replace(
+                        '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                        '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                        f"      {key}: {donor_scalar}\n",
+                    ),
+                    encoding="utf-8",
+                )
+                manifest_path = self._write_resolution_manifest(
+                    [{"key": key, "authoritative_role": "managed", "donor_role": "compose"}]
+                )
+                before = {
+                    path: path.read_bytes()
+                    for path in (
+                        self.compose_path,
+                        donor_compose,
+                        manifest_path,
+                        self.managed_path,
+                        self.secret_path,
+                        self.postgres_path,
+                    )
+                }
+
+                report = apply_runtime_env_resolution(
+                    compose_path=self.compose_path,
+                    managed_env_path=self.managed_path,
+                    secret_env_path=self.secret_path,
+                    postgres_env_path=self.postgres_path,
+                    decision_manifest_path=manifest_path,
+                    donor_compose_path=donor_compose,
+                    confirm=RESOLUTION_APPLY_CONFIRMATION,
+                )
+
+                serialized = json.dumps(report, ensure_ascii=False)
+                if allowed:
+                    self.assertTrue(report["ok"], report["blockers"])
+                    self.assertTrue(report["applied"])
+                    self.assertIn(f"{key}='{marker}'\n".encode(), self.managed_path.read_bytes())
+                    for readonly in (self.compose_path, donor_compose, manifest_path):
+                        self.assertEqual(readonly.read_bytes(), before[readonly])
+                else:
+                    self.assertFalse(report["ok"])
+                    self.assertFalse(report["applied"])
+                    self.assertIn(
+                        "resolution_apply_value_unrepresentable",
+                        {item["code"] for item in report["blockers"]},
+                    )
+                    self.assertEqual(before, {path: path.read_bytes() for path in before})
+                self.assertNotIn(key, serialized)
+                self.assertNotIn(marker, serialized)
+                self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_compose_list_rhs_quotes_cannot_spoof_literal_dollar(self) -> None:
+        """A list item's YAML container is unquoted even when its RHS resembles a quote."""
+
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_LIST_STYLE_SPOOF"
+        marker = "${LIST_CONTEXT_MUST_NOT_LEAK}"
+        donor_text = self.compose_path.read_text(encoding="utf-8")
+        for compose_key, value in (
+            ("JIEJING_ENABLE_REAL_PLATFORM_WRITES", "false"),
+            ("JIEJING_EBAY_WRITE_LIVE", "false"),
+            ("JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY", "disabled_public_staging"),
+            ("JIEJING_BILLING_PROVIDER", "stripe_test_mock"),
+        ):
+            donor_text = donor_text.replace(
+                f'      {compose_key}: "{value}"\n',
+                f"      - {compose_key}={value}\n",
+            )
+        donor_text = donor_text.replace(
+            "      - JIEJING_BILLING_PROVIDER=stripe_test_mock\n",
+            "      - JIEJING_BILLING_PROVIDER=stripe_test_mock\n"
+            f"      - {key}='{marker}'\n",
+        )
+        donor_compose = self.fixture_root / "list-style-spoof-donor.yml"
+        donor_compose.write_text(donor_text, encoding="utf-8")
+        manifest_path = self._write_resolution_manifest(
+            [{"key": key, "authoritative_role": "managed", "donor_role": "compose"}]
+        )
+        before = {
+            path: path.read_bytes()
+            for path in (
+                self.compose_path,
+                donor_compose,
+                manifest_path,
+                self.managed_path,
+                self.secret_path,
+                self.postgres_path,
+            )
+        }
+
+        report = apply_runtime_env_resolution(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+            decision_manifest_path=manifest_path,
+            donor_compose_path=donor_compose,
+            confirm=RESOLUTION_APPLY_CONFIRMATION,
+        )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertFalse(report["ok"])
+        self.assertFalse(report["applied"])
+        self.assertIn(
+            "resolution_apply_value_unrepresentable",
+            {item["code"] for item in report["blockers"]},
+        )
+        self.assertEqual(report["summary"]["backup_count"], 0)
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertNotIn(key, serialized)
+        self.assertNotIn(marker, serialized)
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_rejects_plain_compose_list_donor_after_readonly_plan(self) -> None:
+        """Resolution plan can report a plain list donor, but apply is mapping-only."""
+
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_PLAIN_LIST_DONOR"
+        sentinel = "PLAIN_LIST_DONOR_VALUE_MUST_NOT_LEAK"
+        donor_text = self.compose_path.read_text(encoding="utf-8")
+        for compose_key, value in (
+            ("JIEJING_ENABLE_REAL_PLATFORM_WRITES", "false"),
+            ("JIEJING_EBAY_WRITE_LIVE", "false"),
+            ("JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY", "disabled_public_staging"),
+            ("JIEJING_BILLING_PROVIDER", "stripe_test_mock"),
+        ):
+            donor_text = donor_text.replace(
+                f'      {compose_key}: "{value}"\n',
+                f"      - {compose_key}={value}\n",
+            )
+        donor_text = donor_text.replace(
+            "      - JIEJING_BILLING_PROVIDER=stripe_test_mock\n",
+            "      - JIEJING_BILLING_PROVIDER=stripe_test_mock\n"
+            f"      - {key}={sentinel}\n",
+        )
+        donor_compose = self.fixture_root / "plain-list-donor.yml"
+        donor_compose.write_text(donor_text, encoding="utf-8")
+        manifest_path = self._write_resolution_manifest(
+            [{"key": key, "authoritative_role": "managed", "donor_role": "compose"}]
+        )
+        before = {
+            path: path.read_bytes()
+            for path in (
+                self.compose_path,
+                donor_compose,
+                manifest_path,
+                self.managed_path,
+                self.secret_path,
+                self.postgres_path,
+            )
+        }
+
+        plan = plan_runtime_env_resolution(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+            decision_manifest_path=manifest_path,
+            donor_compose_path=donor_compose,
+        )
+        report = apply_runtime_env_resolution(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+            decision_manifest_path=manifest_path,
+            donor_compose_path=donor_compose,
+            confirm=RESOLUTION_APPLY_CONFIRMATION,
+        )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertTrue(plan["ok"], plan["blockers"])
+        self.assertEqual(plan["summary"]["action_count"], 1)
+        self.assertFalse(report["ok"])
+        self.assertFalse(report["applied"])
+        self.assertIn(
+            "resolution_apply_value_unrepresentable",
+            {item["code"] for item in report["blockers"]},
+        )
+        self.assertEqual(report["summary"]["backup_count"], 0)
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertNotIn(key, serialized)
+        self.assertNotIn(sentinel, serialized)
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_future_compose_action_cannot_bypass_mapping_only(self) -> None:
+        """Unknown future Compose actions cross the common structure gate before dispatch."""
+
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_FUTURE_LIST_DONOR"
+        sentinel = "FUTURE_LIST_DONOR_VALUE_MUST_NOT_LEAK"
+        donor_text = self.compose_path.read_text(encoding="utf-8")
+        for compose_key, value in (
+            ("JIEJING_ENABLE_REAL_PLATFORM_WRITES", "false"),
+            ("JIEJING_EBAY_WRITE_LIVE", "false"),
+            ("JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY", "disabled_public_staging"),
+            ("JIEJING_BILLING_PROVIDER", "stripe_test_mock"),
+        ):
+            donor_text = donor_text.replace(
+                f'      {compose_key}: "{value}"\n',
+                f"      - {compose_key}={value}\n",
+            )
+        donor_text = donor_text.replace(
+            "      - JIEJING_BILLING_PROVIDER=stripe_test_mock\n",
+            "      - JIEJING_BILLING_PROVIDER=stripe_test_mock\n"
+            f"      - {key}={sentinel}\n",
+        )
+        donor_compose = self.fixture_root / "future-list-donor.yml"
+        donor_compose.write_text(donor_text, encoding="utf-8")
+        manifest_path = self._write_resolution_manifest(
+            [{"key": key, "authoritative_role": "managed", "donor_role": "compose"}]
+        )
+        execution_plan = guard_module._build_runtime_env_resolution(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+            decision_manifest_path=manifest_path,
+            donor_compose_path=donor_compose,
+        )
+        self.assertFalse(execution_plan.blockers)
+        future_action = replace(
+            execution_plan.actions[0],
+            action="future_compose_donor_action",
+        )
+        future_plan = replace(execution_plan, actions=(future_action,))
+        before = {
+            path: path.read_bytes()
+            for path in (
+                self.compose_path,
+                donor_compose,
+                manifest_path,
+                self.managed_path,
+                self.secret_path,
+                self.postgres_path,
+            )
+        }
+
+        with patch.object(
+            guard_module,
+            "_build_runtime_env_resolution",
+            return_value=future_plan,
+        ):
+            report = apply_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                donor_compose_path=donor_compose,
+                confirm=RESOLUTION_APPLY_CONFIRMATION,
+            )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertFalse(report["ok"])
+        self.assertFalse(report["applied"])
+        self.assertIn(
+            "resolution_apply_value_unrepresentable",
+            {item["code"] for item in report["blockers"]},
+        )
+        self.assertEqual(report["summary"]["backup_count"], 0)
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertNotIn(key, serialized)
+        self.assertNotIn(sentinel, serialized)
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_revalidates_compose_donor_required_service_exact(self) -> None:
+        """Snapshot-bound apply refuses a donor missing one required service declaration."""
+
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_REQUIRED_SERVICE_EXACT"
+        sentinel = "REQUIRED_SERVICE_VALUE_MUST_NOT_LEAK"
+        donor_compose = self.fixture_root / "required-service-donor.yml"
+        donor_compose.write_text(
+            self.compose_path.read_text(encoding="utf-8").replace(
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                f'      {key}: "{sentinel}"\n',
+            ),
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [{"key": key, "authoritative_role": "managed", "donor_role": "compose"}]
+        )
+        execution_plan = guard_module._build_runtime_env_resolution(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+            decision_manifest_path=manifest_path,
+            donor_compose_path=donor_compose,
+        )
+        self.assertFalse(execution_plan.blockers)
+        self.assertIsNotNone(execution_plan.donor_analysis)
+        incomplete_donor_analysis = replace(
+            execution_plan.donor_analysis,
+            declarations=tuple(
+                declaration
+                for declaration in execution_plan.donor_analysis.declarations
+                if not (
+                    declaration.key == key
+                    and declaration.source == "compose:jiejing-worker"
+                )
+            ),
+        )
+        incomplete_plan = replace(
+            execution_plan,
+            donor_analysis=incomplete_donor_analysis,
+        )
+        before = {
+            path: path.read_bytes()
+            for path in (
+                self.compose_path,
+                donor_compose,
+                manifest_path,
+                self.managed_path,
+                self.secret_path,
+                self.postgres_path,
+            )
+        }
+
+        with patch.object(
+            guard_module,
+            "_build_runtime_env_resolution",
+            return_value=incomplete_plan,
+        ):
+            report = apply_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                donor_compose_path=donor_compose,
+                confirm=RESOLUTION_APPLY_CONFIRMATION,
+            )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertFalse(report["ok"])
+        self.assertFalse(report["applied"])
+        self.assertIn(
+            "resolution_apply_plan_stale",
+            {item["code"] for item in report["blockers"]},
+        )
+        self.assertEqual(report["summary"]["backup_count"], 0)
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertNotIn(key, serialized)
+        self.assertNotIn(sentinel, serialized)
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_compose_list_dollar_variants_all_fail_closed(self) -> None:
+        """Comments, escapes and whole-item YAML quotes never make list-form dollars safe."""
+
+        key = "JIEJING_BACKUP_LIST_DOLLAR_VARIANT"
+        marker = "${LIST_VARIANT_MUST_NOT_LEAK}"
+        for variant, raw_item in (
+            ("rhs_double", f'{key}="$LIST_VARIANT_MUST_NOT_LEAK"'),
+            ("rhs_comment", f"{key}='{marker}' # reviewed comment"),
+            ("rhs_escape", f"{key}='{marker}\\suffix'"),
+            ("whole_double", f'"{key}={marker}"'),
+            ("whole_single", f"'{key}={marker}'"),
+            ("whole_double_escape", f'"{key}=$LIST_VARIANT_MUST_NOT_LEAK\\\\suffix"'),
+        ):
+            with self.subTest(variant=variant):
+                self._write_legal_fixture()
+                donor_text = self.compose_path.read_text(encoding="utf-8")
+                for compose_key, value in (
+                    ("JIEJING_ENABLE_REAL_PLATFORM_WRITES", "false"),
+                    ("JIEJING_EBAY_WRITE_LIVE", "false"),
+                    ("JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY", "disabled_public_staging"),
+                    ("JIEJING_BILLING_PROVIDER", "stripe_test_mock"),
+                ):
+                    donor_text = donor_text.replace(
+                        f'      {compose_key}: "{value}"\n',
+                        f"      - {compose_key}={value}\n",
+                    )
+                donor_text = donor_text.replace(
+                    "      - JIEJING_BILLING_PROVIDER=stripe_test_mock\n",
+                    "      - JIEJING_BILLING_PROVIDER=stripe_test_mock\n"
+                    f"      - {raw_item}\n",
+                )
+                donor_compose = self.fixture_root / f"list-{variant}-donor.yml"
+                donor_compose.write_text(donor_text, encoding="utf-8")
+                manifest_path = self._write_resolution_manifest(
+                    [{"key": key, "authoritative_role": "managed", "donor_role": "compose"}]
+                )
+                before = {
+                    path: path.read_bytes()
+                    for path in (
+                        self.compose_path,
+                        donor_compose,
+                        manifest_path,
+                        self.managed_path,
+                        self.secret_path,
+                        self.postgres_path,
+                    )
+                }
+
+                report = apply_runtime_env_resolution(
+                    compose_path=self.compose_path,
+                    managed_env_path=self.managed_path,
+                    secret_env_path=self.secret_path,
+                    postgres_env_path=self.postgres_path,
+                    decision_manifest_path=manifest_path,
+                    donor_compose_path=donor_compose,
+                    confirm=RESOLUTION_APPLY_CONFIRMATION,
+                )
+
+                serialized = json.dumps(report, ensure_ascii=False)
+                self.assertFalse(report["ok"])
+                self.assertFalse(report["applied"])
+                self.assertIn(
+                    "resolution_apply_value_unrepresentable",
+                    {item["code"] for item in report["blockers"]},
+                )
+                self.assertEqual(report["summary"]["backup_count"], 0)
+                self.assertEqual(before, {path: path.read_bytes() for path in before})
+                self.assertNotIn(key, serialized)
+                self.assertNotIn("LIST_VARIANT_MUST_NOT_LEAK", serialized)
+                self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_rejects_unsupported_compose_donor_structures_zero_write(self) -> None:
+        """Compact/flow/tag/reference/explicit YAML structures cannot authorize apply."""
+
+        key = "JIEJING_BACKUP_UNSUPPORTED_DONOR_STRUCTURE"
+        sentinel = "UNSUPPORTED_DONOR_STRUCTURE_MUST_NOT_LEAK"
+        for variant, environment_replacement in (
+            ("compact_mapping_colon_space", f"environment:\n      - {key}: {sentinel}\n"),
+            ("compact_mapping_colon_eol", f"environment:\n      - {key}:\n"),
+            ("flow_mapping", f"environment: {{{key}: {sentinel}}}\n"),
+            ("flow_sequence", f"environment: [{key}={sentinel}]\n"),
+            ("tag", f"environment:\n      {key}: !unsafe {sentinel}\n"),
+            ("anchor", f"environment:\n      {key}: &unsafe {sentinel}\n"),
+            ("alias", f"environment:\n      {key}: *unsafe\n"),
+            ("merge", "environment:\n      <<: *unsafe\n"),
+            ("explicit_mapping", f"environment:\n      ? {key}\n      : {sentinel}\n"),
+        ):
+            with self.subTest(variant=variant):
+                self._write_legal_fixture()
+                donor_compose = self.fixture_root / f"unsupported-{variant}-donor.yml"
+                donor_compose.write_text(
+                    self.compose_path.read_text(encoding="utf-8").replace(
+                        "environment:\n",
+                        environment_replacement,
+                    ),
+                    encoding="utf-8",
+                )
+                manifest_path = self._write_resolution_manifest(
+                    [{"key": key, "authoritative_role": "managed", "donor_role": "compose"}]
+                )
+                before = {
+                    path: path.read_bytes()
+                    for path in (
+                        self.compose_path,
+                        donor_compose,
+                        manifest_path,
+                        self.managed_path,
+                        self.secret_path,
+                        self.postgres_path,
+                    )
+                }
+
+                report = apply_runtime_env_resolution(
+                    compose_path=self.compose_path,
+                    managed_env_path=self.managed_path,
+                    secret_env_path=self.secret_path,
+                    postgres_env_path=self.postgres_path,
+                    decision_manifest_path=manifest_path,
+                    donor_compose_path=donor_compose,
+                    confirm=RESOLUTION_APPLY_CONFIRMATION,
+                )
+
+                serialized = json.dumps(report, ensure_ascii=False)
+                self.assertFalse(report["ok"])
+                self.assertFalse(report["applied"])
+                self.assertGreater(report["summary"]["blocker_count"], 0)
+                self.assertEqual(report["summary"]["backup_count"], 0)
+                self.assertEqual(before, {path: path.read_bytes() for path in before})
+                self.assertNotIn(key, serialized)
+                self.assertNotIn(sentinel, serialized)
+                self.assertNotIn(str(donor_compose), serialized)
+                self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_rejects_unrepresentable_compose_donor_values_zero_write(self) -> None:
+        """Decoded newline, NUL and control values are outside the reversible subset."""
+
+        for label, donor_scalar in (
+            ("newline", '"line\\nbreak"'),
+            ("nul", '"nul\\0value"'),
+            ("control", '"control\\u0001value"'),
+        ):
+            with self.subTest(value_kind=label):
+                self._write_legal_fixture()
+                key = "JIEJING_BACKUP_UNREPRESENTABLE_COMPOSE_DONOR"
+                donor_compose = self.fixture_root / f"unrepresentable-{label}-donor.yml"
+                donor_compose.write_text(
+                    self.compose_path.read_text(encoding="utf-8").replace(
+                        '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                        '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                        f"      {key}: {donor_scalar}\n",
+                    ),
+                    encoding="utf-8",
+                )
+                manifest_path = self._write_resolution_manifest(
+                    [{"key": key, "authoritative_role": "managed", "donor_role": "compose"}]
+                )
+                before = {
+                    path: path.read_bytes()
+                    for path in (
+                        self.compose_path,
+                        donor_compose,
+                        manifest_path,
+                        self.managed_path,
+                        self.secret_path,
+                        self.postgres_path,
+                    )
+                }
+
+                report = apply_runtime_env_resolution(
+                    compose_path=self.compose_path,
+                    managed_env_path=self.managed_path,
+                    secret_env_path=self.secret_path,
+                    postgres_env_path=self.postgres_path,
+                    decision_manifest_path=manifest_path,
+                    donor_compose_path=donor_compose,
+                    confirm=RESOLUTION_APPLY_CONFIRMATION,
+                )
+
+                serialized = json.dumps(report, ensure_ascii=False)
+                self.assertFalse(report["ok"])
+                self.assertFalse(report["applied"])
+                self.assertIn(
+                    "resolution_apply_value_unrepresentable",
+                    {item["code"] for item in report["blockers"]},
+                )
+                self.assertEqual(before, {path: path.read_bytes() for path in before})
+                self.assertNotIn(key, serialized)
+                self.assertNotIn(donor_scalar, serialized)
+                self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_rejects_compose_unicode_separators_before_private_commit(self) -> None:
+        """YAML-escaped Cc/Zl/Zp values must never reach the commit primitive."""
+
+        for label, yaml_escape in (
+            ("nel", r"\x85"),
+            ("line_separator", r"\u2028"),
+            ("paragraph_separator", r"\u2029"),
+            ("other_cc", r"\u0080"),
+        ):
+            with self.subTest(unicode_category=label):
+                self._write_legal_fixture()
+                key = "JIEJING_BACKUP_UNICODE_SEPARATOR_DONOR"
+                marker = "UNICODE_SEPARATOR_VALUE_MUST_NOT_LEAK"
+                donor_scalar = f'"{marker}{yaml_escape}suffix"'
+                donor_compose = self.fixture_root / f"unicode-{label}-donor.yml"
+                donor_compose.write_text(
+                    self.compose_path.read_text(encoding="utf-8").replace(
+                        '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                        '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                        f"      {key}: {donor_scalar}\n",
+                    ),
+                    encoding="utf-8",
+                )
+                manifest_path = self._write_resolution_manifest(
+                    [{"key": key, "authoritative_role": "managed", "donor_role": "compose"}]
+                )
+                before = {
+                    path: path.read_bytes()
+                    for path in (
+                        self.compose_path,
+                        donor_compose,
+                        manifest_path,
+                        self.managed_path,
+                        self.secret_path,
+                        self.postgres_path,
+                    )
+                }
+                commit_calls = 0
+
+                def forbidden_commit(*args: object, **kwargs: object) -> object:
+                    nonlocal commit_calls
+                    commit_calls += 1
+                    raise AssertionError("UNICODE_SEPARATOR_MUST_FAIL_BEFORE_COMMIT")
+
+                with patch.object(guard_module, "_commit_candidate", forbidden_commit):
+                    report = apply_runtime_env_resolution(
+                        compose_path=self.compose_path,
+                        managed_env_path=self.managed_path,
+                        secret_env_path=self.secret_path,
+                        postgres_env_path=self.postgres_path,
+                        decision_manifest_path=manifest_path,
+                        donor_compose_path=donor_compose,
+                        confirm=RESOLUTION_APPLY_CONFIRMATION,
+                    )
+
+                serialized = json.dumps(report, ensure_ascii=False)
+                self.assertFalse(report["ok"])
+                self.assertFalse(report["applied"])
+                self.assertIn(
+                    "resolution_apply_value_unrepresentable",
+                    {item["code"] for item in report["blockers"]},
+                )
+                self.assertEqual(commit_calls, 0)
+                self.assertEqual(report["summary"]["backup_count"], 0)
+                self.assertEqual(before, {path: path.read_bytes() for path in before})
+                self.assertNotIn(key, serialized)
+                self.assertNotIn(marker, serialized)
+                self.assertNotIn(str(donor_compose), serialized)
+                for forbidden_field in ("key", "value", "path", "digest", "line"):
+                    self.assertNotIn(f'"{forbidden_field}"', serialized)
+                self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_validates_complete_rendered_private_candidate_before_commit(self) -> None:
+        """The full rendered payload and bound addition must agree before backup/commit."""
+
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_RENDERED_CANDIDATE_PREFLIGHT"
+        marker = "RENDERED_CANDIDATE_VALUE_MUST_NOT_LEAK"
+        replacement = "ALTERED_RENDERED_VALUE_MUST_NOT_LEAK"
+        donor_compose = self.fixture_root / "rendered-candidate-donor.yml"
+        donor_compose.write_text(
+            self.compose_path.read_text(encoding="utf-8").replace(
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                f'      {key}: "{marker}"\n',
+            ),
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [{"key": key, "authoritative_role": "managed", "donor_role": "compose"}]
+        )
+        before = {
+            path: path.read_bytes()
+            for path in (
+                self.compose_path,
+                donor_compose,
+                manifest_path,
+                self.managed_path,
+                self.secret_path,
+                self.postgres_path,
+            )
+        }
+        real_render = guard_module._render_candidate
+        commit_calls = 0
+
+        def render_value_mismatch(*args: object, **kwargs: object) -> bytes:
+            payload = real_render(*args, **kwargs)
+            self.assertIn(marker.encode(), payload)
+            return payload.replace(marker.encode(), replacement.encode(), 1)
+
+        def forbidden_commit(*args: object, **kwargs: object) -> object:
+            nonlocal commit_calls
+            commit_calls += 1
+            raise AssertionError("INVALID_RENDERED_CANDIDATE_MUST_NOT_COMMIT")
+
+        with (
+            patch.object(guard_module, "_render_candidate", render_value_mismatch),
+            patch.object(guard_module, "_commit_candidate", forbidden_commit),
+        ):
+            report = apply_runtime_env_resolution(
+                compose_path=self.compose_path,
+                managed_env_path=self.managed_path,
+                secret_env_path=self.secret_path,
+                postgres_env_path=self.postgres_path,
+                decision_manifest_path=manifest_path,
+                donor_compose_path=donor_compose,
+                confirm=RESOLUTION_APPLY_CONFIRMATION,
+            )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertFalse(report["ok"])
+        self.assertFalse(report["applied"])
+        self.assertIn(
+            "apply_candidate_preflight_failed",
+            {item["code"] for item in report["blockers"]},
+        )
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        for forbidden in (key, marker, replacement, str(donor_compose)):
+            self.assertNotIn(forbidden, serialized)
+        for forbidden_field in ("key", "value", "path", "digest", "line"):
+            self.assertNotIn(f'"{forbidden_field}"', serialized)
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_allows_ordinary_printable_unicode_compose_donor(self) -> None:
+        """Printable Unicode remains in the reversible literal env_file subset."""
+
+        self._write_legal_fixture()
+        key = "JIEJING_BACKUP_PRINTABLE_UNICODE_DONOR"
+        value = "可打印-é-🙂"
+        donor_compose = self.fixture_root / "printable-unicode-donor.yml"
+        donor_compose.write_text(
+            self.compose_path.read_text(encoding="utf-8").replace(
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                f'      {key}: "{value}"\n',
+            ),
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [{"key": key, "authoritative_role": "managed", "donor_role": "compose"}]
+        )
+        readonly_before = {
+            path: path.read_bytes()
+            for path in (self.compose_path, donor_compose, manifest_path)
+        }
+
+        report = apply_runtime_env_resolution(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+            decision_manifest_path=manifest_path,
+            donor_compose_path=donor_compose,
+            confirm=RESOLUTION_APPLY_CONFIRMATION,
+        )
+
+        serialized = json.dumps(report, ensure_ascii=False)
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertTrue(report["applied"])
+        self.assertIn(f"{key}='{value}'\n".encode(), self.managed_path.read_bytes())
+        self.assertEqual(
+            readonly_before,
+            {path: path.read_bytes() for path in readonly_before},
+        )
+        self.assertNotIn(key, serialized)
+        self.assertNotIn(value, serialized)
+        for forbidden_field in ("key", "value", "path", "digest", "line"):
+            self.assertNotIn(f'"{forbidden_field}"', serialized)
+        self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_rejects_private_unicode_separators_before_commit(self) -> None:
+        """Private donor Cc/Zl/Zp spellings fail before any commit or backup."""
+
+        for label, unsafe_character in (
+            ("nel", "\u0085"),
+            ("line_separator", "\u2028"),
+            ("paragraph_separator", "\u2029"),
+            ("other_cc", "\u0080"),
+        ):
+            with self.subTest(unicode_category=label):
+                self._write_legal_fixture()
+                key = "JIEJING_BACKUP_PRIVATE_UNICODE_SEPARATOR"
+                marker = "PRIVATE_UNICODE_SEPARATOR_MUST_NOT_LEAK"
+                self.secret_path.write_text(
+                    self.secret_path.read_text(encoding="utf-8")
+                    + f"{key}='{marker}{unsafe_character}suffix'\n",
+                    encoding="utf-8",
+                )
+                manifest_path = self._write_resolution_manifest(
+                    [{"key": key, "authoritative_role": "managed", "donor_role": "secret"}]
+                )
+                before = {
+                    path: path.read_bytes()
+                    for path in (
+                        self.compose_path,
+                        manifest_path,
+                        self.managed_path,
+                        self.secret_path,
+                        self.postgres_path,
+                    )
+                }
+                commit_calls = 0
+
+                def forbidden_commit(*args: object, **kwargs: object) -> object:
+                    nonlocal commit_calls
+                    commit_calls += 1
+                    raise AssertionError("PRIVATE_UNICODE_SEPARATOR_MUST_FAIL_PREFLIGHT")
+
+                with patch.object(guard_module, "_commit_candidate", forbidden_commit):
+                    report = apply_runtime_env_resolution(
+                        compose_path=self.compose_path,
+                        managed_env_path=self.managed_path,
+                        secret_env_path=self.secret_path,
+                        postgres_env_path=self.postgres_path,
+                        decision_manifest_path=manifest_path,
+                        confirm=RESOLUTION_APPLY_CONFIRMATION,
+                    )
+
+                serialized = json.dumps(report, ensure_ascii=False)
+                self.assertFalse(report["ok"])
+                self.assertFalse(report["applied"])
+                self.assertEqual(commit_calls, 0)
+                self.assertEqual(report["summary"]["backup_count"], 0)
+                self.assertEqual(before, {path: path.read_bytes() for path in before})
+                self.assertNotIn(key, serialized)
+                self.assertNotIn(marker, serialized)
+                self.assertNotIn(str(self.secret_path), serialized)
+                for forbidden_field in ("key", "value", "path", "digest", "line"):
+                    self.assertNotIn(f'"{forbidden_field}"', serialized)
+                self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_rejects_existing_private_unicode_boundaries_before_removal(self) -> None:
+        """Existing NEL/LS/PS cannot be swallowed before same-file removals."""
+
+        for role, source_path, unsafe_key, duplicate_assignment in (
+            (
+                "managed",
+                self.managed_path,
+                "JIEJING_COS_EXISTING_UNICODE_BOUNDARY",
+                "JIEJING_EBAY_CLIENT_SECRET=LEGAL_SECRET_SENTINEL",
+            ),
+            (
+                "secret",
+                self.secret_path,
+                "JIEJING_EBAY_CLIENT_ID",
+                "JIEJING_BACKUP_POLICY_CONFIGURED=true",
+            ),
+            (
+                "postgres",
+                self.postgres_path,
+                "JIEJING_DATABASE_POOL_MODE",
+                "JIEJING_BACKUP_POLICY_CONFIGURED=true",
+            ),
+        ):
+            for separator_name, unsafe_character in (
+                ("nel", "\u0085"),
+                ("line_separator", "\u2028"),
+                ("paragraph_separator", "\u2029"),
+            ):
+                with self.subTest(role=role, separator=separator_name):
+                    self._write_legal_fixture()
+                    marker = "EXISTING_PRIVATE_BOUNDARY_MUST_NOT_LEAK"
+                    source_path.write_bytes(
+                        source_path.read_bytes()
+                        + f"{duplicate_assignment}\n".encode()
+                        + f"{unsafe_key}={marker}{unsafe_character}#hidden-tail\n".encode()
+                    )
+                    manifest_path = self._write_resolution_manifest([])
+                    before = {
+                        path: path.read_bytes()
+                        for path in (
+                            self.compose_path,
+                            manifest_path,
+                            self.managed_path,
+                            self.secret_path,
+                            self.postgres_path,
+                        )
+                    }
+                    real_commit = guard_module._commit_candidate
+                    commit_calls = 0
+
+                    def count_commit(*args: object, **kwargs: object) -> object:
+                        nonlocal commit_calls
+                        commit_calls += 1
+                        return real_commit(*args, **kwargs)
+
+                    with patch.object(guard_module, "_commit_candidate", count_commit):
+                        report = apply_runtime_env_resolution(
+                            compose_path=self.compose_path,
+                            managed_env_path=self.managed_path,
+                            secret_env_path=self.secret_path,
+                            postgres_env_path=self.postgres_path,
+                            decision_manifest_path=manifest_path,
+                            confirm=RESOLUTION_APPLY_CONFIRMATION,
+                        )
+
+                    serialized = json.dumps(report, ensure_ascii=False)
+                    self.assertEqual(commit_calls, 0)
+                    self.assertEqual(report["summary"]["backup_count"], 0)
+                    self.assertFalse(report["ok"])
+                    self.assertFalse(report["applied"])
+                    self.assertIn(
+                        "invalid_env_syntax",
+                        {item["code"] for item in report["blockers"]},
+                    )
+                    self.assertEqual(before, {path: path.read_bytes() for path in before})
+                    for forbidden in (
+                        unsafe_key,
+                        duplicate_assignment.split("=", 1)[0],
+                        marker,
+                        str(source_path),
+                    ):
+                        self.assertNotIn(forbidden, serialized)
+                    for forbidden_field in ("key", "value", "path", "digest", "line"):
+                        self.assertNotIn(f'"{forbidden_field}"', serialized)
+                    self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_rejects_existing_private_lone_cr_before_removal(self) -> None:
+        """A lone CR in any private role fails before an unrelated same-file removal."""
+
+        for role, source_path, unsafe_key, duplicate_assignment in (
+            (
+                "managed",
+                self.managed_path,
+                "JIEJING_COS_EXISTING_LONE_CR",
+                "JIEJING_EBAY_CLIENT_SECRET=LEGAL_SECRET_SENTINEL",
+            ),
+            (
+                "secret",
+                self.secret_path,
+                "JIEJING_EBAY_CLIENT_ID",
+                "JIEJING_BACKUP_POLICY_CONFIGURED=true",
+            ),
+            (
+                "postgres",
+                self.postgres_path,
+                "JIEJING_DATABASE_POOL_MODE",
+                "JIEJING_BACKUP_POLICY_CONFIGURED=true",
+            ),
+        ):
+            with self.subTest(role=role):
+                self._write_legal_fixture()
+                marker = "EXISTING_PRIVATE_LONE_CR_MUST_NOT_LEAK"
+                source_path.write_bytes(
+                    source_path.read_bytes()
+                    + f"{duplicate_assignment}\n".encode()
+                    + f"{unsafe_key}={marker}\r#hidden-tail\n".encode()
+                )
+                manifest_path = self._write_resolution_manifest([])
+                before = {
+                    path: path.read_bytes()
+                    for path in (
+                        self.compose_path,
+                        manifest_path,
+                        self.managed_path,
+                        self.secret_path,
+                        self.postgres_path,
+                    )
+                }
+                commit_calls = 0
+
+                def forbidden_commit(*args: object, **kwargs: object) -> object:
+                    nonlocal commit_calls
+                    commit_calls += 1
+                    raise AssertionError("LONE_CR_MUST_FAIL_BEFORE_COMMIT")
+
+                with patch.object(guard_module, "_commit_candidate", forbidden_commit):
+                    report = apply_runtime_env_resolution(
+                        compose_path=self.compose_path,
+                        managed_env_path=self.managed_path,
+                        secret_env_path=self.secret_path,
+                        postgres_env_path=self.postgres_path,
+                        decision_manifest_path=manifest_path,
+                        confirm=RESOLUTION_APPLY_CONFIRMATION,
+                    )
+
+                serialized = json.dumps(report, ensure_ascii=False)
+                self.assertFalse(report["ok"])
+                self.assertFalse(report["applied"])
+                self.assertIn(
+                    "invalid_env_syntax",
+                    {item["code"] for item in report["blockers"]},
+                )
+                self.assertEqual(commit_calls, 0)
+                self.assertEqual(report["summary"]["backup_count"], 0)
+                self.assertEqual(before, {path: path.read_bytes() for path in before})
+                for forbidden in (unsafe_key, marker, str(source_path)):
+                    self.assertNotIn(forbidden, serialized)
+                for forbidden_field in ("key", "value", "path", "digest", "line"):
+                    self.assertNotIn(f'"{forbidden_field}"', serialized)
+                self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_preserves_lf_crlf_and_mixed_private_line_endings(self) -> None:
+        """Valid physical LF/CRLF mixtures survive an unrelated removal byte-for-byte."""
+
+        key = "JIEJING_EBAY_CLIENT_SECRET"
+        base = b"JIEJING_BACKUP_POLICY_CONFIGURED=true"
+        duplicate = b"JIEJING_EBAY_CLIENT_SECRET=LEGAL_SECRET_SENTINEL"
+        untouched = b"JIEJING_COS_UNTOUCHED_PRINTABLE=unicode-safe"
+        for line_style, original, expected in (
+            (
+                "lf",
+                base + b"\n" + duplicate + b"\n" + untouched + b"\n",
+                base + b"\n" + untouched + b"\n",
+            ),
+            (
+                "crlf",
+                base + b"\r\n" + duplicate + b"\r\n" + untouched + b"\r\n",
+                base + b"\r\n" + untouched + b"\r\n",
+            ),
+            (
+                "mixed",
+                base + b"\r\n" + duplicate + b"\n" + untouched + b"\r\n",
+                base + b"\r\n" + untouched + b"\r\n",
+            ),
+        ):
+            with self.subTest(line_style=line_style):
+                self._write_legal_fixture()
+                self.managed_path.write_bytes(original)
+                manifest_path = self._write_resolution_manifest([])
+                readonly_before = {
+                    path: path.read_bytes()
+                    for path in (
+                        self.compose_path,
+                        manifest_path,
+                        self.secret_path,
+                        self.postgres_path,
+                    )
+                }
+
+                report = apply_runtime_env_resolution(
+                    compose_path=self.compose_path,
+                    managed_env_path=self.managed_path,
+                    secret_env_path=self.secret_path,
+                    postgres_env_path=self.postgres_path,
+                    decision_manifest_path=manifest_path,
+                    confirm=RESOLUTION_APPLY_CONFIRMATION,
+                )
+
+                serialized = json.dumps(report, ensure_ascii=False)
+                self.assertTrue(report["ok"], report["blockers"])
+                self.assertTrue(report["applied"])
+                self.assertEqual(self.managed_path.read_bytes(), expected)
+                self.assertEqual(
+                    readonly_before,
+                    {path: path.read_bytes() for path in readonly_before},
+                )
+                self.assertNotIn(key, serialized)
+                for forbidden_field in ("key", "value", "path", "digest", "line"):
+                    self.assertNotIn(f'"{forbidden_field}"', serialized)
+                self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_private_donor_dollar_requires_single_quoted_source(self) -> None:
+        """Moving a contextual private dollar RHS is safe only when its source is literal."""
+
+        key = "JIEJING_BACKUP_PRIVATE_DOLLAR_SOURCE"
+        marker = "${PRIVATE_CONTEXT_MUST_NOT_LEAK}"
+        for source_style, raw_rhs, allowed in (
+            ("unquoted", marker, False),
+            ("double", f'"{marker}"', False),
+            ("single", f"'{marker}'", True),
+        ):
+            with self.subTest(source_style=source_style):
+                self._write_legal_fixture()
+                self.secret_path.write_text(
+                    self.secret_path.read_text(encoding="utf-8") + f"{key}={raw_rhs}\n",
+                    encoding="utf-8",
+                )
+                manifest_path = self._write_resolution_manifest(
+                    [{"key": key, "authoritative_role": "managed", "donor_role": "secret"}]
+                )
+                before = {
+                    path: path.read_bytes()
+                    for path in (
+                        self.compose_path,
+                        manifest_path,
+                        self.managed_path,
+                        self.secret_path,
+                        self.postgres_path,
+                    )
+                }
+
+                report = apply_runtime_env_resolution(
+                    compose_path=self.compose_path,
+                    managed_env_path=self.managed_path,
+                    secret_env_path=self.secret_path,
+                    postgres_env_path=self.postgres_path,
+                    decision_manifest_path=manifest_path,
+                    confirm=RESOLUTION_APPLY_CONFIRMATION,
+                )
+
+                serialized = json.dumps(report, ensure_ascii=False)
+                if allowed:
+                    self.assertTrue(report["ok"], report["blockers"])
+                    self.assertTrue(report["applied"])
+                    self.assertIn(f"{key}={raw_rhs}\n".encode(), self.managed_path.read_bytes())
+                    self.assertNotIn(f"{key}=".encode(), self.secret_path.read_bytes())
+                    self.assertEqual(self.compose_path.read_bytes(), before[self.compose_path])
+                    self.assertEqual(manifest_path.read_bytes(), before[manifest_path])
+                else:
+                    self.assertFalse(report["ok"])
+                    self.assertFalse(report["applied"])
+                    self.assertIn(
+                        "resolution_apply_value_unrepresentable",
+                        {item["code"] for item in report["blockers"]},
+                    )
+                    self.assertEqual(before, {path: path.read_bytes() for path in before})
+                self.assertNotIn(key, serialized)
+                self.assertNotIn(marker, serialized)
+                self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_private_donor_preserves_exact_runtime_rhs(self) -> None:
+        """A private move binds the exact RHS; whitespace and quoting are not stripped."""
+
+        for label, raw_rhs in (
+            ("spaces", "  leading and trailing  "),
+            ("literal", r"'# $ double-quote \\ literal'"),
+            ("single_quote", r"'single\'quote\tail'"),
+            ("double_quote", r'"double\"quote\\tail"'),
+            ("empty", ""),
+        ):
+            with self.subTest(value_kind=label):
+                self._write_legal_fixture()
+                key = "JIEJING_BACKUP_PRIVATE_DONOR_RHS"
+                self.secret_path.write_text(
+                    self.secret_path.read_text(encoding="utf-8") + f"{key}={raw_rhs}\n",
+                    encoding="utf-8",
+                )
+                manifest_path = self._write_resolution_manifest(
+                    [{"key": key, "authoritative_role": "managed", "donor_role": "secret"}]
+                )
+                readonly_before = {
+                    path: path.read_bytes() for path in (self.compose_path, manifest_path)
+                }
+
+                report = apply_runtime_env_resolution(
+                    compose_path=self.compose_path,
+                    managed_env_path=self.managed_path,
+                    secret_env_path=self.secret_path,
+                    postgres_env_path=self.postgres_path,
+                    decision_manifest_path=manifest_path,
+                    confirm=RESOLUTION_APPLY_CONFIRMATION,
+                )
+
+                serialized = json.dumps(report, ensure_ascii=False)
+                self.assertTrue(report["ok"], report["blockers"])
+                self.assertTrue(report["applied"])
+                self.assertIn(f"{key}={raw_rhs}\n".encode(), self.managed_path.read_bytes())
+                self.assertNotIn(f"{key}=".encode(), self.secret_path.read_bytes())
+                self.assertEqual(
+                    readonly_before,
+                    {path: path.read_bytes() for path in readonly_before},
+                )
+                self.assertNotIn(key, serialized)
+                if raw_rhs:
+                    self.assertNotIn(raw_rhs, serialized)
+                self.assertFalse(report["secret_exposed"])
+
+    def test_resolution_apply_complete_live_97_action_fixture_reaches_zero_blockers(self) -> None:
+        self._write_legal_fixture()
+        sentinel = "FULL_LIVE_97_VALUE_MUST_NOT_LEAK"
+        keys = [f"JIEJING_BACKUP_SYNTHETIC_LIVE_{index:03d}" for index in range(97)]
+        original_managed = self.managed_path.read_bytes()
+        original_secret = self.secret_path.read_bytes()
+        self.managed_path.write_bytes(
+            original_managed
+            + b"".join(f"{key}={sentinel}\n".encode() for key in keys)
+        )
+        self.secret_path.write_bytes(
+            original_secret
+            + b"".join(f"{key}={sentinel}\r\n".encode() for key in keys)
+        )
+        donor_compose = self.fixture_root / "current-live-donor-compose.yml"
+        donor_compose.write_bytes(self.compose_path.read_bytes())
+        manifest_path = self._write_resolution_manifest([])
+        managed_before_apply = self.managed_path.read_bytes()
+        read_only_before = {
+            path: path.read_bytes()
+            for path in (self.compose_path, donor_compose, manifest_path)
+        }
+
+        completed = self._run_resolution_apply(
+            manifest_path,
+            confirm=RESOLUTION_APPLY_CONFIRMATION,
+            augment_legacy_contract=False,
+            donor_compose_path=donor_compose,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertTrue(report["applied"])
+        self.assertEqual(report["summary"]["action_count"], 97)
+        self.assertEqual(
+            report["actions"],
+            [
+                {
+                    "action": "remove_equal_duplicate",
+                    "source_role": "secret",
+                    "target_role": "managed",
+                    "count": 97,
+                }
+            ],
+        )
+        self.assertEqual(self.managed_path.read_bytes(), managed_before_apply)
+        self.assertEqual(self.secret_path.read_bytes(), original_secret)
+        self.assertEqual(read_only_before, {path: path.read_bytes() for path in read_only_before})
+        validation = check_runtime_env_ownership(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+        )
+        self.assertTrue(validation["ok"], validation["blockers"])
+        self.assertEqual(validation["summary"]["blocker_count"], 0)
+        self.assertNotIn(keys[0], completed.stdout + completed.stderr)
+        self.assertNotIn(keys[-1], completed.stdout + completed.stderr)
+        self.assertNotIn(sentinel, completed.stdout + completed.stderr)
+        self.assertFalse(report["secret_exposed"])
+        self.assertEqual(
+            sorted(key for key in _all_json_keys(report) if _looks_like_value_field(key)),
+            [],
         )
 
     def test_resolution_plan_candidate_compose_uses_future_runtime_path(self) -> None:
@@ -1718,6 +4181,48 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
             sorted(key for key in _all_json_keys(report) if _looks_like_value_field(key)),
             [],
         )
+
+    def test_resolution_apply_executes_all_private_action_kinds_without_compose_mutation(self) -> None:
+        manifest_path, before, sentinels = self._write_resolution_topology_fixture()
+        manifest_before = manifest_path.read_bytes()
+
+        completed = self._run_resolution_apply(
+            manifest_path,
+            confirm=RESOLUTION_APPLY_CONFIRMATION,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertTrue(report["applied"])
+        self.assertEqual(report["summary"]["action_count"], 4)
+        self.assertEqual(self.compose_path.read_bytes(), before[self.compose_path])
+        self.assertEqual(self.managed_path.read_bytes(), before[self.managed_path])
+        self.assertEqual(
+            self.secret_path.read_bytes(),
+            before[self.secret_path].splitlines(keepends=True)[0],
+        )
+        self.assertEqual(
+            self.postgres_path.read_bytes(),
+            before[self.postgres_path]
+            + f"JIEJING_POSTGRES_LIVE_PROBE_PASSED={sentinels[3]}\n".encode(),
+        )
+        self.assertEqual(manifest_path.read_bytes(), manifest_before)
+        validation = check_runtime_env_ownership(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+        )
+        self.assertTrue(validation["ok"], validation["blockers"])
+        self.assertTrue(all(sentinel not in completed.stdout for sentinel in sentinels))
+        for key in (
+            "JIEJING_BROWSER_SMOKE_PASSED",
+            "JIEJING_CORS_ORIGIN",
+            "JIEJING_COS_BACKUP_LAST_SUCCESS_AT",
+            "JIEJING_POSTGRES_LIVE_PROBE_PASSED",
+        ):
+            self.assertNotIn(key, completed.stdout)
 
     def test_resolution_plan_rejects_stale_decision(self) -> None:
         self._write_legal_fixture()
