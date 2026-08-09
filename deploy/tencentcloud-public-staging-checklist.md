@@ -116,6 +116,12 @@ static configuration, not secret-file values. Keep all three real files under
    The audited flow remains `jiejing_runtime_env_overlap_guard.py check` followed
    by `jiejing_runtime_env_overlap_guard.py migrate`; only the separately
    provisioned trusted copy may execute these commands with private env access.
+   If the dry-run reports value conflicts or a registered owner is missing, run
+   `resolution-plan` with the reviewed key/role-only manifest before requesting
+   any apply window. The resolution plan is preparation only: it emits no values,
+   digests, paths or line contents, never changes Compose or private env files,
+   and is deliberately not connected to `migrate --apply`. A later migration
+   apply still requires its own review and explicit approval.
 
 ```bash
 cd /opt/jiejing-staging/app
@@ -131,6 +137,13 @@ sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" migrate \
   --managed-env /opt/jiejing-staging/private/tencent-managed.env \
   --secret-env /opt/jiejing-staging/private/jiejing-saas.staging-oauth.env \
   --postgres-env /opt/jiejing-staging/private/postgres-localqueue.env \
+  --json
+sudo -n python3 "$TRUSTED_RUNTIME_ENV_GUARD" resolution-plan \
+  --compose deploy/docker-compose.public-staging.yml \
+  --managed-env /opt/jiejing-staging/private/tencent-managed.env \
+  --secret-env /opt/jiejing-staging/private/jiejing-saas.staging-oauth.env \
+  --postgres-env /opt/jiejing-staging/private/postgres-localqueue.env \
+  --decision-manifest deploy/jiejing-staging-runtime-env-resolution-manifest.example.json \
   --json
 ```
 

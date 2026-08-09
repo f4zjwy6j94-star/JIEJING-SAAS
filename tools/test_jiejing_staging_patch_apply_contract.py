@@ -49,6 +49,7 @@ def main() -> int:
         "deploy/docker-compose.public-https-staging.yml",
         "deploy/docker-compose.staging-infra.yml",
         "deploy/jiejing-saas.postgres-localqueue.env.example",
+        "deploy/jiejing-staging-runtime-env-resolution-manifest.example.json",
         "deploy/nginx.public-staging.conf",
         "deploy/Caddyfile.public-staging.systemd",
         "deploy/Caddyfile.production",
@@ -285,6 +286,12 @@ def main() -> int:
     first_docker = text.index('docker compose "${COMPOSE_ARGS[@]}" build')
     if not guard_call < min(first_backup, first_copy, first_install, first_docker):
         return fail("candidate runtime env guard must run before every patch mutation")
+    manifest_entry = text.index(
+        '"deploy/jiejing-staging-runtime-env-resolution-manifest.example.json"'
+    )
+    checklist_entry = text.index('"deploy/tencentcloud-public-staging-checklist.md"')
+    if manifest_entry >= checklist_entry:
+        return fail("runtime env resolution manifest must be copied before the checklist that uses it")
     for marker in (
         'TRUSTED_RUNTIME_ENV_GUARD="${JIEJING_TRUSTED_RUNTIME_ENV_GUARD:-/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py}"',
         "REFUSE_UNTRUSTED_RUNTIME_ENV_GUARD=1",

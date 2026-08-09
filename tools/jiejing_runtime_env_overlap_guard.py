@@ -27,6 +27,7 @@ from typing import Mapping, Sequence
 
 
 SCHEMA_VERSION = "jiejing_runtime_env_overlap_guard_v1"
+RESOLUTION_MANIFEST_SCHEMA_VERSION = "jiejing_runtime_env_resolution_manifest_v1"
 MIGRATION_APPLY_CONFIRMATION = "APPLY_JIEJING_RUNTIME_ENV_MIGRATION"
 MANAGED_SOURCE = "tencent-managed.env"
 SECRET_SOURCE = "jiejing-saas.staging-oauth.env"
@@ -155,13 +156,24 @@ MANAGED_VAULT_EVIDENCE_KEYS = {
 }
 MANAGED_EXACT_KEYS = MANAGED_VAULT_EVIDENCE_KEYS | {
     "JIEJING_BACKUP_RESTORE_DRILL_RUNBOOK_PUBLISHED",
+    "JIEJING_BROWSER_SMOKE_PASSED",
     "JIEJING_DATABASE_ENDPOINT_INCIDENT_RUNBOOK_PUBLISHED",
+    "JIEJING_DEFAULT_PLAN_KEY",
+    "JIEJING_DEPLOY_CHANNEL_READY",
+    "JIEJING_PRODUCTION_DEPLOYMENT_DRY_RUN_PASSED",
+    "JIEJING_PRODUCTION_POST_DEPLOY_HEALTH_SMOKE_PASSED",
+    "JIEJING_PRODUCTION_RELEASE_ARTIFACT_SHA256",
+    "JIEJING_PRODUCTION_ROLLBACK_POINT_ID",
+    "JIEJING_SECRET_SCAN_PASSED",
     "JIEJING_VAULT_ENABLED",
     "JIEJING_VAULT_LIVE_PROBE_PASSED",
     "TENCENTCLOUD_SECRET_ID",
     "TENCENTCLOUD_SECRET_KEY",
     "TENCENTCLOUD_TOKEN",
     "VAULT_ADDR",
+}
+POSTGRES_EXACT_KEYS = {
+    "JIEJING_POSTGRES_LIVE_PROBE_PASSED",
 }
 COMPOSE_SAFETY_VALUES = {
     "JIEJING_ENABLE_REAL_PLATFORM_WRITES": "false",
@@ -173,6 +185,22 @@ COMPOSE_REQUIRED_VALUES = {
     **COMPOSE_SAFETY_VALUES,
     "JIEJING_BILLING_PROVIDER": COMPOSE_BILLING_PROVIDER_VALUE,
 }
+COMPOSE_STATIC_KEYS = frozenset(
+    {
+        "JIEJING_BILLING_PLANS_PUBLISHED",
+        "JIEJING_CORS_ORIGIN",
+        "JIEJING_QUOTA_ENFORCEMENT_ENABLED",
+    }
+)
+COMPOSE_OWNED_KEYS = frozenset(COMPOSE_REQUIRED_VALUES) | COMPOSE_STATIC_KEYS
+PUBLIC_SOURCE_ROLES = frozenset({"managed", "secret", "postgres", "compose"})
+ROLE_TO_SOURCE = {
+    "managed": MANAGED_SOURCE,
+    "secret": SECRET_SOURCE,
+    "postgres": POSTGRES_SOURCE,
+    "compose": COMPOSE_SOURCE,
+}
+SOURCE_TO_ROLE = {source: role for role, source in ROLE_TO_SOURCE.items()}
 RUNTIME_SERVICE_NAMES = frozenset({"jiejing-saas", "jiejing-worker"})
 FALSE_OR_DISABLED_VALUES = frozenset({"false", "0", "no", "off", "disabled"})
 STAGING_VALUE_CONSTRAINTS: dict[str, frozenset[str]] = {
@@ -339,6 +367,23 @@ class MigrationPlan:
         repr=False,
     )
     compose_override_paths: tuple[Path, ...] = field(default=(), repr=False)
+
+
+@dataclass(frozen=True)
+class ResolutionDecision:
+    key: str
+    authoritative_role: str
+    donor_role: str | None = None
+
+
+@dataclass(frozen=True)
+class ResolutionAction:
+    action: str
+    key: str
+    source_role: str
+    target_role: str
+    count: int
+    comparison: str
 
 
 @dataclass(frozen=True)
@@ -1323,13 +1368,21 @@ def _parse_compose_override(path: Path, *, occurrence: int) -> list[dict[str, ob
 
 
 def _owner_for_key(key: str) -> str | None:
-    if key in COMPOSE_REQUIRED_VALUES:
+    # Exact ownership is intentionally evaluated before broad domain prefixes.
+    # This keeps evidence-driven exceptions stable as the prefix registry grows.
+    if key in COMPOSE_OWNED_KEYS:
         return COMPOSE_SOURCE
-    if key in MANAGED_EXACT_KEYS or key.startswith(MANAGED_PREFIXES):
+    if key in MANAGED_EXACT_KEYS:
+        return MANAGED_SOURCE
+    if key in POSTGRES_EXACT_KEYS:
+        return POSTGRES_SOURCE
+    if key in SECRET_EXACT_KEYS:
+        return SECRET_SOURCE
+    if key.startswith(MANAGED_PREFIXES):
         return MANAGED_SOURCE
     if key.startswith(POSTGRES_PREFIXES):
         return POSTGRES_SOURCE
-    if key in SECRET_EXACT_KEYS or (key.startswith("JIEJING_") and key.endswith(SECRET_CREDENTIAL_SUFFIXES)):
+    if key.startswith("JIEJING_") and key.endswith(SECRET_CREDENTIAL_SUFFIXES):
         return SECRET_SOURCE
     return None
 
@@ -1658,7 +1711,7 @@ def analyze_runtime_env_ownership(
                     "source": declaration.source,
                 }
             )
-        if source_role == COMPOSE_SOURCE and declaration.key not in COMPOSE_REQUIRED_VALUES:
+        if source_role == COMPOSE_SOURCE and declaration.key not in COMPOSE_OWNED_KEYS:
             if owner is None:
                 classification = "compose_static_warning"
                 warnings.append(
@@ -1700,7 +1753,11 @@ def analyze_runtime_env_ownership(
                     "owner": owner,
                 }
             )
-        elif owner == COMPOSE_SOURCE and declaration.private_value != COMPOSE_REQUIRED_VALUES[declaration.key]:
+        elif (
+            owner == COMPOSE_SOURCE
+            and declaration.key in COMPOSE_REQUIRED_VALUES
+            and declaration.private_value != COMPOSE_REQUIRED_VALUES[declaration.key]
+        ):
             blocker_code = (
                 "unsafe_billing_provider"
                 if declaration.key == "JIEJING_BILLING_PROVIDER"
@@ -1863,6 +1920,390 @@ def check_runtime_env_ownership(
             required_runtime_services=required_runtime_services,
         )
     )
+
+
+RESOLUTION_RESOLVABLE_BLOCKER_CODES = frozenset({"cross_source_duplicate", "wrong_source"})
+
+
+def _public_role_for_source(source: str) -> str | None:
+    return SOURCE_TO_ROLE.get(_source_role(source))
+
+
+def _load_resolution_decisions(
+    manifest_path: Path,
+) -> tuple[dict[str, ResolutionDecision], list[dict[str, object]]]:
+    blockers: list[dict[str, object]] = []
+    try:
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            return {}, [{"code": "resolution_manifest_unavailable"}]
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}, [{"code": "resolution_manifest_invalid"}]
+    if not isinstance(payload, dict) or set(payload) != {"schema_version", "decisions"}:
+        return {}, [{"code": "resolution_manifest_schema_invalid"}]
+    if payload.get("schema_version") != RESOLUTION_MANIFEST_SCHEMA_VERSION:
+        blockers.append({"code": "resolution_manifest_version_invalid"})
+    raw_decisions = payload.get("decisions")
+    if not isinstance(raw_decisions, list):
+        blockers.append({"code": "resolution_manifest_decisions_invalid"})
+        return {}, blockers
+
+    decisions: dict[str, ResolutionDecision] = {}
+    for index, raw_decision in enumerate(raw_decisions, start=1):
+        if not isinstance(raw_decision, dict) or not set(raw_decision).issubset(
+            {"key", "authoritative_role", "donor_role"}
+        ) or not {"key", "authoritative_role"}.issubset(raw_decision):
+            blockers.append(
+                {"code": "resolution_decision_schema_invalid", "count": index}
+            )
+            continue
+        key = raw_decision.get("key")
+        authoritative_role = raw_decision.get("authoritative_role")
+        donor_role = raw_decision.get("donor_role")
+        if not isinstance(key, str) or KEY_PATTERN.fullmatch(key) is None:
+            blockers.append(
+                {"code": "resolution_decision_key_invalid", "count": index}
+            )
+            continue
+        if (
+            not isinstance(authoritative_role, str)
+            or authoritative_role not in PUBLIC_SOURCE_ROLES
+        ):
+            blockers.append(
+                {"code": "resolution_decision_authoritative_role_invalid", "key": key}
+            )
+            continue
+        if donor_role is not None and (
+            not isinstance(donor_role, str) or donor_role not in PUBLIC_SOURCE_ROLES
+        ):
+            blockers.append(
+                {"code": "resolution_decision_donor_role_invalid", "key": key}
+            )
+            continue
+        if donor_role == authoritative_role:
+            blockers.append(
+                {"code": "resolution_decision_roles_not_distinct", "key": key}
+            )
+            continue
+        if key in decisions:
+            blockers.append({"code": "resolution_decision_duplicate", "key": key})
+            continue
+        decisions[key] = ResolutionDecision(
+            key=key,
+            authoritative_role=authoritative_role,
+            donor_role=donor_role,
+        )
+    return decisions, blockers
+
+
+def _resolution_topology_by_role(
+    key_analysis: KeyAnalysis,
+) -> dict[str, tuple[Declaration, ...]]:
+    by_role: dict[str, list[Declaration]] = {}
+    for declaration in key_analysis.declarations:
+        role = _public_role_for_source(declaration.source)
+        if role is not None:
+            by_role.setdefault(role, []).append(declaration)
+    return {role: tuple(declarations) for role, declarations in by_role.items()}
+
+
+def _owner_declaration_count_is_exact(
+    *,
+    owner_role: str,
+    declarations: Sequence[Declaration],
+    required_runtime_services: frozenset[str],
+) -> bool:
+    if owner_role != "compose":
+        return len(declarations) == 1
+    if len(declarations) != len(required_runtime_services):
+        return False
+    return {
+        declaration.source.removeprefix(f"{COMPOSE_SOURCE}:")
+        for declaration in declarations
+    } == set(required_runtime_services)
+
+
+def _resolution_blocker_public_projection(
+    blocker: Mapping[str, object],
+) -> dict[str, object]:
+    projected: dict[str, object] = {"code": str(blocker.get("code") or "resolution_blocked")}
+    key = blocker.get("key")
+    if isinstance(key, str) and KEY_PATTERN.fullmatch(key):
+        projected["key"] = key
+    source = blocker.get("source")
+    if isinstance(source, str):
+        source_role = _public_role_for_source(source)
+        if source_role is not None:
+            projected["source_role"] = source_role
+    owner = blocker.get("owner")
+    if isinstance(owner, str):
+        target_role = SOURCE_TO_ROLE.get(owner)
+        if target_role is not None:
+            projected["target_role"] = target_role
+    for role_field in ("authoritative_role", "donor_role", "source_role", "target_role"):
+        role = blocker.get(role_field)
+        if role in PUBLIC_SOURCE_ROLES:
+            projected[role_field] = role
+    count = blocker.get("count")
+    if isinstance(count, int) and not isinstance(count, bool):
+        projected["count"] = count
+    comparison = blocker.get("comparison")
+    if comparison in {"equal", "conflict"}:
+        projected["comparison"] = comparison
+    return projected
+
+
+def plan_runtime_env_resolution(
+    *,
+    compose_path: Path,
+    managed_env_path: Path,
+    secret_env_path: Path,
+    postgres_env_path: Path,
+    decision_manifest_path: Path,
+    compose_override_paths: Sequence[Path] = (),
+    required_runtime_services: Sequence[str] | None = None,
+) -> dict[str, object]:
+    """Prepare a value-free, non-mutating resolution plan.
+
+    The manifest records operator decisions only.  It cannot authorize or
+    invoke migration apply, and this function never writes any input file.
+    """
+
+    normalized_required_services = _normalize_required_runtime_services(required_runtime_services)
+    analysis = analyze_runtime_env_ownership(
+        compose_path=compose_path,
+        managed_env_path=managed_env_path,
+        secret_env_path=secret_env_path,
+        postgres_env_path=postgres_env_path,
+        compose_override_paths=compose_override_paths,
+        required_runtime_services=tuple(normalized_required_services),
+    )
+    decisions, manifest_blockers = _load_resolution_decisions(decision_manifest_path)
+    blockers: list[dict[str, object]] = [
+        dict(blocker)
+        for blocker in analysis.blockers
+        if blocker.get("code") not in RESOLUTION_RESOLVABLE_BLOCKER_CODES
+    ]
+    blockers.extend(manifest_blockers)
+    actions: list[ResolutionAction] = []
+    consumed_decisions: set[str] = set()
+
+    for key_analysis in analysis.keys:
+        decision = decisions.get(key_analysis.key)
+        owner_source = key_analysis.owner
+        topology = _resolution_topology_by_role(key_analysis)
+        if owner_source is None:
+            if decision is not None:
+                consumed_decisions.add(key_analysis.key)
+                blockers.append(
+                    {"code": "resolution_decision_unknown_key", "key": key_analysis.key}
+                )
+            if key_analysis.unauthorized_duplicate:
+                blockers.append(
+                    {
+                        "code": "resolution_unregistered_duplicate",
+                        "key": key_analysis.key,
+                        "comparison": key_analysis.comparison,
+                    }
+                )
+            continue
+
+        owner_role = SOURCE_TO_ROLE[owner_source]
+        owner_declarations = topology.get(owner_role, ())
+        wrong_topology = {
+            role: declarations
+            for role, declarations in topology.items()
+            if role != owner_role
+        }
+        if decision is not None:
+            consumed_decisions.add(key_analysis.key)
+            if decision.authoritative_role != owner_role:
+                blockers.append(
+                    {
+                        "code": "resolution_decision_owner_mismatch",
+                        "key": key_analysis.key,
+                        "authoritative_role": decision.authoritative_role,
+                        "target_role": owner_role,
+                    }
+                )
+                continue
+
+        if wrong_topology and not owner_declarations:
+            if decision is None:
+                blockers.append(
+                    {
+                        "code": "resolution_move_decision_required",
+                        "key": key_analysis.key,
+                        "target_role": owner_role,
+                    }
+                )
+                continue
+            if owner_role == "compose":
+                blockers.append(
+                    {
+                        "code": "resolution_compose_mutation_forbidden",
+                        "key": key_analysis.key,
+                        "target_role": owner_role,
+                    }
+                )
+                continue
+            if decision.donor_role is None:
+                blockers.append(
+                    {
+                        "code": "resolution_missing_owner_requires_donor",
+                        "key": key_analysis.key,
+                        "target_role": owner_role,
+                    }
+                )
+                continue
+            donor_declarations = wrong_topology.get(decision.donor_role, ())
+            if (
+                decision.donor_role == "compose"
+                or len(donor_declarations) != 1
+                or len(key_analysis.declarations) != 1
+            ):
+                blockers.append(
+                    {
+                        "code": "resolution_donor_not_unique",
+                        "key": key_analysis.key,
+                        "donor_role": decision.donor_role,
+                        "target_role": owner_role,
+                        "count": len(donor_declarations),
+                    }
+                )
+                continue
+            actions.append(
+                ResolutionAction(
+                    action="move_unique_to_authoritative",
+                    key=key_analysis.key,
+                    source_role=decision.donor_role,
+                    target_role=owner_role,
+                    count=1,
+                    comparison="conflict",
+                )
+            )
+            continue
+
+        if wrong_topology and owner_declarations:
+            if not _owner_declaration_count_is_exact(
+                owner_role=owner_role,
+                declarations=owner_declarations,
+                required_runtime_services=normalized_required_services,
+            ):
+                blockers.append(
+                    {
+                        "code": "resolution_owner_declaration_count_invalid",
+                        "key": key_analysis.key,
+                        "target_role": owner_role,
+                        "count": len(owner_declarations),
+                    }
+                )
+                continue
+            invalid_wrong_role = next(
+                (
+                    role
+                    for role, declarations in sorted(wrong_topology.items())
+                    if role == "compose" or len(declarations) != 1
+                ),
+                None,
+            )
+            if invalid_wrong_role is not None:
+                blockers.append(
+                    {
+                        "code": (
+                            "resolution_compose_mutation_forbidden"
+                            if invalid_wrong_role == "compose"
+                            else "resolution_source_declaration_count_invalid"
+                        ),
+                        "key": key_analysis.key,
+                        "source_role": invalid_wrong_role,
+                        "target_role": owner_role,
+                        "count": len(wrong_topology[invalid_wrong_role]),
+                    }
+                )
+                continue
+            if key_analysis.comparison == "equal":
+                if decision is not None:
+                    blockers.append(
+                        {"code": "resolution_decision_stale", "key": key_analysis.key}
+                    )
+                    continue
+                action_kind = "remove_equal_duplicate"
+            else:
+                if decision is None:
+                    blockers.append(
+                        {
+                            "code": "resolution_conflict_decision_required",
+                            "key": key_analysis.key,
+                            "target_role": owner_role,
+                            "comparison": "conflict",
+                        }
+                    )
+                    continue
+                if decision.donor_role is not None:
+                    blockers.append(
+                        {
+                            "code": "resolution_keep_owner_donor_forbidden",
+                            "key": key_analysis.key,
+                            "donor_role": decision.donor_role,
+                            "target_role": owner_role,
+                        }
+                    )
+                    continue
+                action_kind = "keep_authoritative_remove_wrong_source"
+            for source_role, declarations in sorted(wrong_topology.items()):
+                actions.append(
+                    ResolutionAction(
+                        action=action_kind,
+                        key=key_analysis.key,
+                        source_role=source_role,
+                        target_role=owner_role,
+                        count=len(declarations),
+                        comparison=key_analysis.comparison,
+                    )
+                )
+            continue
+
+        if decision is not None:
+            blockers.append({"code": "resolution_decision_stale", "key": key_analysis.key})
+
+    for key in sorted(set(decisions) - consumed_decisions):
+        blockers.append({"code": "resolution_decision_stale", "key": key})
+
+    public_blockers = [
+        _resolution_blocker_public_projection(blocker)
+        for blocker in blockers
+    ]
+    ordered_actions = sorted(
+        actions,
+        key=lambda action: (action.key, action.source_role, action.target_role, action.action),
+    )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "operation": "resolution-plan",
+        "mode": "dry_run",
+        "ok": not public_blockers,
+        "applied": False,
+        "secret_exposed": False,
+        "summary": {
+            "action_count": len(ordered_actions),
+            "blocker_count": len(public_blockers),
+            "warning_count": len(analysis.warnings),
+            "decision_count": len(decisions),
+        },
+        "actions": [
+            {
+                "action": action.action,
+                "key": action.key,
+                "source_role": action.source_role,
+                "target_role": action.target_role,
+                "count": action.count,
+                "comparison": action.comparison,
+            }
+            for action in ordered_actions
+        ],
+        "blockers": public_blockers,
+    }
 
 
 def plan_runtime_env_migration(
@@ -3120,6 +3561,12 @@ def _build_parser() -> argparse.ArgumentParser:
     check_parser.add_argument("--managed-runtime-path", type=Path)
     check_parser.add_argument("--secret-runtime-path", type=Path)
     check_parser.add_argument("--postgres-runtime-path", type=Path)
+    resolution_parser = subparsers.add_parser(
+        "resolution-plan",
+        help="Validate a value-free decision manifest and prepare a non-mutating plan.",
+    )
+    _add_source_path_arguments(resolution_parser)
+    resolution_parser.add_argument("--decision-manifest", type=Path, required=True)
     migrate_parser = subparsers.add_parser(
         "migrate",
         help="Plan runtime env ownership cleanup without changing files.",
@@ -3140,21 +3587,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         "compose_override_paths": tuple(args.compose_override or ()),
         "required_runtime_services": args.required_runtime_service,
     }
-    report = (
-        check_runtime_env_ownership(
+    if args.command == "check":
+        report = check_runtime_env_ownership(
             **source_paths,
             compose_runtime_path=args.compose_runtime_path,
             managed_runtime_path=args.managed_runtime_path,
             secret_runtime_path=args.secret_runtime_path,
             postgres_runtime_path=args.postgres_runtime_path,
         )
-        if args.command == "check"
-        else migrate_runtime_env_ownership(
+    elif args.command == "resolution-plan":
+        report = plan_runtime_env_resolution(
+            **source_paths,
+            decision_manifest_path=args.decision_manifest,
+        )
+    else:
+        report = migrate_runtime_env_ownership(
             **source_paths,
             apply=args.apply,
             confirm=args.confirm,
         )
-    )
     if args.json:
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))
     else:

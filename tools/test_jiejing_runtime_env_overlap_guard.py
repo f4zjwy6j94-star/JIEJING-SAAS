@@ -18,9 +18,11 @@ from jiejing_runtime_env_overlap_guard import (
     Declaration,
     GuardAnalysis,
     MIGRATION_APPLY_CONFIRMATION,
+    RESOLUTION_MANIFEST_SCHEMA_VERSION,
     _strip_yaml_scalar,
     analyze_runtime_env_ownership,
     check_runtime_env_ownership,
+    plan_runtime_env_resolution,
 )
 
 
@@ -222,6 +224,384 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
             text=True,
             capture_output=True,
             check=False,
+        )
+
+    def _write_resolution_manifest(self, decisions: list[dict[str, object]]) -> Path:
+        manifest_path = self.fixture_root / "resolution-manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": RESOLUTION_MANIFEST_SCHEMA_VERSION,
+                    "decisions": decisions,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return manifest_path
+
+    def _run_resolution_plan(
+        self,
+        manifest_path: Path,
+        *,
+        augment_legacy_contract: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        if augment_legacy_contract:
+            self._augment_legacy_compose_contract()
+        return subprocess.run(
+            [
+                sys.executable,
+                str(TOOL),
+                "resolution-plan",
+                "--compose",
+                str(self.compose_path),
+                "--managed-env",
+                str(self.managed_path),
+                "--secret-env",
+                str(self.secret_path),
+                "--postgres-env",
+                str(self.postgres_path),
+                "--decision-manifest",
+                str(manifest_path),
+                "--json",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def _write_resolution_topology_fixture(self) -> tuple[Path, dict[Path, bytes], tuple[str, ...]]:
+        self._write_legal_fixture()
+        compose_text = self.compose_path.read_text(encoding="utf-8").replace(
+            '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+            '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+            '      JIEJING_CORS_ORIGIN: "https://owner.example"\n',
+        )
+        self.compose_path.write_text(compose_text, encoding="utf-8")
+        sentinels = (
+            "OWNER_BROWSER_MUST_NOT_LEAK",
+            "DONOR_BROWSER_MUST_NOT_LEAK",
+            "WRONG_CORS_MUST_NOT_LEAK",
+            "MOVE_POSTGRES_MUST_NOT_LEAK",
+            "EQUAL_EVIDENCE_MUST_NOT_LEAK",
+        )
+        self.managed_path.write_text(
+            "JIEJING_BACKUP_POLICY_CONFIGURED=true\n"
+            f"JIEJING_BROWSER_SMOKE_PASSED={sentinels[0]}\n"
+            f"JIEJING_COS_BACKUP_LAST_SUCCESS_AT={sentinels[4]}\n",
+            encoding="utf-8",
+        )
+        self.secret_path.write_text(
+            "JIEJING_EBAY_CLIENT_SECRET=LEGAL_SECRET_SENTINEL\n"
+            f"JIEJING_BROWSER_SMOKE_PASSED={sentinels[1]}\n"
+            f"JIEJING_CORS_ORIGIN={sentinels[2]}\n"
+            f"JIEJING_POSTGRES_LIVE_PROBE_PASSED={sentinels[3]}\n"
+            f"JIEJING_COS_BACKUP_LAST_SUCCESS_AT={sentinels[4]}\n",
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [
+                {"key": "JIEJING_BROWSER_SMOKE_PASSED", "authoritative_role": "managed"},
+                {"key": "JIEJING_CORS_ORIGIN", "authoritative_role": "compose"},
+                {
+                    "key": "JIEJING_POSTGRES_LIVE_PROBE_PASSED",
+                    "authoritative_role": "postgres",
+                    "donor_role": "secret",
+                },
+            ]
+        )
+        before = {
+            path: path.read_bytes()
+            for path in (self.compose_path, self.managed_path, self.secret_path, self.postgres_path)
+        }
+        return manifest_path, before, sentinels
+
+    def test_resolution_plan_is_value_free_non_mutating_and_covers_observed_topologies(self) -> None:
+        manifest_path, before, sentinels = self._write_resolution_topology_fixture()
+
+        completed = self._run_resolution_plan(manifest_path)
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        self.assertTrue(all(sentinel not in completed.stdout + completed.stderr for sentinel in sentinels))
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ok"], report["blockers"])
+        self.assertEqual(report["operation"], "resolution-plan")
+        self.assertEqual(report["mode"], "dry_run")
+        self.assertFalse(report["applied"])
+        self.assertFalse(report["secret_exposed"])
+        self.assertEqual(
+            {(action["key"], action["action"], action["source_role"], action["target_role"]) for action in report["actions"]},
+            {
+                ("JIEJING_BROWSER_SMOKE_PASSED", "keep_authoritative_remove_wrong_source", "secret", "managed"),
+                ("JIEJING_CORS_ORIGIN", "keep_authoritative_remove_wrong_source", "secret", "compose"),
+                ("JIEJING_COS_BACKUP_LAST_SUCCESS_AT", "remove_equal_duplicate", "secret", "managed"),
+                ("JIEJING_POSTGRES_LIVE_PROBE_PASSED", "move_unique_to_authoritative", "secret", "postgres"),
+            },
+        )
+        for action in report["actions"]:
+            self.assertEqual(
+                set(action),
+                {"action", "key", "source_role", "target_role", "count", "comparison"},
+            )
+            self.assertIn(action["comparison"], {"equal", "conflict"})
+        self.assertEqual(
+            before,
+            {
+                path: path.read_bytes()
+                for path in (self.compose_path, self.managed_path, self.secret_path, self.postgres_path)
+            },
+        )
+        self.assertEqual(
+            sorted(key for key in _all_json_keys(report) if _looks_like_value_field(key)),
+            [],
+        )
+
+    def test_resolution_plan_rejects_stale_decision(self) -> None:
+        self._write_legal_fixture()
+        manifest_path = self._write_resolution_manifest(
+            [{"key": "JIEJING_DEFAULT_PLAN_KEY", "authoritative_role": "managed"}]
+        )
+
+        report = plan_runtime_env_resolution(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+            decision_manifest_path=manifest_path,
+        )
+
+        self.assertFalse(report["ok"])
+        self.assertIn("resolution_decision_stale", {item["code"] for item in report["blockers"]})
+
+    def test_resolution_plan_rejects_invalid_and_unknown_decisions(self) -> None:
+        self._write_legal_fixture()
+        invalid_manifest = self._write_resolution_manifest(
+            [{"key": "JIEJING_DEFAULT_PLAN_KEY", "authoritative_role": "runtime"}]
+        )
+        invalid_report = plan_runtime_env_resolution(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+            decision_manifest_path=invalid_manifest,
+        )
+        self.assertFalse(invalid_report["ok"])
+        self.assertIn(
+            "resolution_decision_authoritative_role_invalid",
+            {item["code"] for item in invalid_report["blockers"]},
+        )
+
+        self.secret_path.write_text(
+            self.secret_path.read_text(encoding="utf-8")
+            + "UNREGISTERED_LEGACY_FLAG=UNKNOWN_DECISION_SENTINEL\n",
+            encoding="utf-8",
+        )
+        unknown_manifest = self._write_resolution_manifest(
+            [{"key": "UNREGISTERED_LEGACY_FLAG", "authoritative_role": "managed"}]
+        )
+        unknown_report = plan_runtime_env_resolution(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+            decision_manifest_path=unknown_manifest,
+        )
+        self.assertFalse(unknown_report["ok"])
+        self.assertIn(
+            "resolution_decision_unknown_key",
+            {item["code"] for item in unknown_report["blockers"]},
+        )
+        self.assertNotIn("UNKNOWN_DECISION_SENTINEL", json.dumps(unknown_report))
+
+    def test_resolution_plan_rejects_non_string_roles_without_traceback_or_path(self) -> None:
+        self._write_legal_fixture()
+        cases = (
+            (
+                {"key": "JIEJING_DEFAULT_PLAN_KEY", "authoritative_role": ["managed"]},
+                "resolution_decision_authoritative_role_invalid",
+            ),
+            (
+                {
+                    "key": "JIEJING_DEFAULT_PLAN_KEY",
+                    "authoritative_role": "managed",
+                    "donor_role": {"role": "secret"},
+                },
+                "resolution_decision_donor_role_invalid",
+            ),
+        )
+        for decision, expected_code in cases:
+            with self.subTest(expected_code=expected_code):
+                manifest_path = self._write_resolution_manifest([decision])
+
+                completed = self._run_resolution_plan(manifest_path)
+
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertEqual(completed.stderr, "")
+                self.assertNotIn("Traceback", completed.stdout)
+                self.assertNotIn(str(manifest_path), completed.stdout)
+                report = json.loads(completed.stdout)
+                self.assertFalse(report["ok"])
+                self.assertIn(expected_code, {item["code"] for item in report["blockers"]})
+                self.assertFalse(report["secret_exposed"])
+
+    def test_checked_in_staging_resolution_manifest_is_key_and_role_only(self) -> None:
+        manifest_path = ROOT / "deploy" / "jiejing-staging-runtime-env-resolution-manifest.example.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(manifest["schema_version"], RESOLUTION_MANIFEST_SCHEMA_VERSION)
+        self.assertEqual(len(manifest["decisions"]), 20)
+        self.assertEqual(
+            {decision["key"] for decision in manifest["decisions"] if "donor_role" in decision},
+            {
+                "JIEJING_POSTGRES_LIVE_PROBE_PASSED",
+                "JIEJING_VAULT_ENABLED",
+                "JIEJING_VAULT_LIVE_PROBE_PASSED",
+            },
+        )
+        for decision in manifest["decisions"]:
+            self.assertTrue(
+                set(decision).issubset({"key", "authoritative_role", "donor_role"})
+            )
+        self.assertEqual(
+            sorted(key for key in _all_json_keys(manifest) if _looks_like_value_field(key)),
+            [],
+        )
+
+    def test_resolution_plan_requires_donor_when_owner_is_missing(self) -> None:
+        self._write_legal_fixture()
+        self.secret_path.write_text(
+            "JIEJING_EBAY_CLIENT_SECRET=LEGAL_SECRET_SENTINEL\n"
+            "JIEJING_POSTGRES_LIVE_PROBE_PASSED=MISSING_OWNER_SENTINEL\n",
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [{"key": "JIEJING_POSTGRES_LIVE_PROBE_PASSED", "authoritative_role": "postgres"}]
+        )
+
+        completed = self._run_resolution_plan(manifest_path)
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertNotIn("MISSING_OWNER_SENTINEL", completed.stdout + completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertIn(
+            "resolution_missing_owner_requires_donor",
+            {item["code"] for item in report["blockers"]},
+        )
+
+    def test_resolution_plan_rejects_ambiguous_donor(self) -> None:
+        self._write_legal_fixture()
+        self.secret_path.write_text(
+            "JIEJING_EBAY_CLIENT_SECRET=LEGAL_SECRET_SENTINEL\n"
+            "JIEJING_VAULT_ENABLED=AMBIGUOUS_DONOR_ONE\n"
+            "JIEJING_VAULT_ENABLED=AMBIGUOUS_DONOR_TWO\n",
+            encoding="utf-8",
+        )
+        manifest_path = self._write_resolution_manifest(
+            [
+                {
+                    "key": "JIEJING_VAULT_ENABLED",
+                    "authoritative_role": "managed",
+                    "donor_role": "secret",
+                }
+            ]
+        )
+
+        completed = self._run_resolution_plan(manifest_path)
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertNotIn("AMBIGUOUS_DONOR", completed.stdout + completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertIn("resolution_donor_not_unique", {item["code"] for item in report["blockers"]})
+
+    def test_observed_exact_registry_keys_have_evidence_driven_owners(self) -> None:
+        self._write_legal_fixture()
+        self.managed_path.write_text(
+            self.managed_path.read_text(encoding="utf-8")
+            + "\n".join(
+                f"{key}=registered"
+                for key in (
+                    "JIEJING_BROWSER_SMOKE_PASSED",
+                    "JIEJING_DEFAULT_PLAN_KEY",
+                    "JIEJING_DEPLOY_CHANNEL_READY",
+                    "JIEJING_PRODUCTION_DEPLOYMENT_DRY_RUN_PASSED",
+                    "JIEJING_PRODUCTION_POST_DEPLOY_HEALTH_SMOKE_PASSED",
+                    "JIEJING_PRODUCTION_RELEASE_ARTIFACT_SHA256",
+                    "JIEJING_PRODUCTION_ROLLBACK_POINT_ID",
+                    "JIEJING_SECRET_SCAN_PASSED",
+                    "JIEJING_VAULT_ENABLED",
+                    "JIEJING_VAULT_LIVE_PROBE_PASSED",
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.postgres_path.write_text(
+            self.postgres_path.read_text(encoding="utf-8")
+            + "JIEJING_POSTGRES_LIVE_PROBE_PASSED=registered\n",
+            encoding="utf-8",
+        )
+        self.compose_path.write_text(
+            self.compose_path.read_text(encoding="utf-8").replace(
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n',
+                '      JIEJING_BILLING_PROVIDER: "stripe_test_mock"\n'
+                '      JIEJING_BILLING_PLANS_PUBLISHED: "true"\n'
+                '      JIEJING_CORS_ORIGIN: "https://registered.example"\n'
+                '      JIEJING_QUOTA_ENFORCEMENT_ENABLED: "true"\n',
+            ),
+            encoding="utf-8",
+        )
+
+        report = check_runtime_env_ownership(
+            compose_path=self.compose_path,
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+        )
+
+        self.assertTrue(report["ok"], report["blockers"])
+        owners = {
+            declaration["key"]: declaration["owner"]
+            for declaration in report["declarations"]
+        }
+        self.assertEqual(owners["JIEJING_BILLING_PLANS_PUBLISHED"], "compose")
+        self.assertEqual(owners["JIEJING_CORS_ORIGIN"], "compose")
+        self.assertEqual(owners["JIEJING_QUOTA_ENFORCEMENT_ENABLED"], "compose")
+        self.assertEqual(owners["JIEJING_POSTGRES_LIVE_PROBE_PASSED"], "postgres-localqueue.env")
+        for key in (
+            "JIEJING_BROWSER_SMOKE_PASSED",
+            "JIEJING_DEFAULT_PLAN_KEY",
+            "JIEJING_DEPLOY_CHANNEL_READY",
+            "JIEJING_PRODUCTION_DEPLOYMENT_DRY_RUN_PASSED",
+            "JIEJING_PRODUCTION_POST_DEPLOY_HEALTH_SMOKE_PASSED",
+            "JIEJING_PRODUCTION_RELEASE_ARTIFACT_SHA256",
+            "JIEJING_PRODUCTION_ROLLBACK_POINT_ID",
+            "JIEJING_SECRET_SCAN_PASSED",
+            "JIEJING_VAULT_ENABLED",
+            "JIEJING_VAULT_LIVE_PROBE_PASSED",
+        ):
+            self.assertEqual(owners[key], "tencent-managed.env")
+        bare_aliases = {
+            "BILLING_PLANS_PUBLISHED",
+            "BROWSER_SMOKE_PASSED",
+            "CORS_ORIGIN",
+            "DEFAULT_PLAN_KEY",
+            "DEPLOY_CHANNEL_READY",
+            "POSTGRES_LIVE_PROBE_PASSED",
+            "PRODUCTION_DEPLOYMENT_DRY_RUN_PASSED",
+            "PRODUCTION_POST_DEPLOY_HEALTH_SMOKE_PASSED",
+            "PRODUCTION_RELEASE_ARTIFACT_SHA256",
+            "PRODUCTION_ROLLBACK_POINT_ID",
+            "QUOTA_ENFORCEMENT_ENABLED",
+            "SECRET_SCAN_PASSED",
+            "VAULT_ENABLED",
+            "VAULT_LIVE_PROBE_PASSED",
+        }
+        self.assertTrue(
+            bare_aliases.isdisjoint(
+                guard_module.MANAGED_EXACT_KEYS
+                | guard_module.POSTGRES_EXACT_KEYS
+                | set(guard_module.COMPOSE_STATIC_KEYS)
+            )
         )
 
     def test_migrate_defaults_to_dry_run_and_does_not_modify_files(self) -> None:

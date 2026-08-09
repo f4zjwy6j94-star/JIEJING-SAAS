@@ -184,6 +184,12 @@ If `sudo -n true` fails, do not weaken the whole server. Add only the minimum no
    apply use the same trusted guard to inspect the real private env files via
    the existing restricted sudo boundary.
 
+   Conflict resolution is a separate value-free preparation step. The checked-in
+   staging resolution manifest contains key names and source roles only, and
+   `resolution-plan` validates that evidence without mutating Compose or any
+   private env file. It is not wired to `migrate --apply`; any later private-env
+   migration apply requires a separate review and explicit operator approval.
+
    If cost-saver mode is enabled, its only accepted override is the fixed,
    root-owned, non-writable resource override at
    `/opt/jiejing-staging/private/docker-compose.cost-saver-local.yml`. It may

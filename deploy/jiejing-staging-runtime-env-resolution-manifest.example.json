@@ -1,0 +1,88 @@
+{
+  "schema_version": "jiejing_runtime_env_resolution_manifest_v1",
+  "decisions": [
+    {
+      "key": "JIEJING_BROWSER_SMOKE_PASSED",
+      "authoritative_role": "managed"
+    },
+    {
+      "key": "JIEJING_CORS_ORIGIN",
+      "authoritative_role": "compose"
+    },
+    {
+      "key": "JIEJING_BILLING_PROVIDER",
+      "authoritative_role": "compose"
+    },
+    {
+      "key": "JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT",
+      "authoritative_role": "managed"
+    },
+    {
+      "key": "JIEJING_CLS_LIVE_PROBE_LAST_AT",
+      "authoritative_role": "managed"
+    },
+    {
+      "key": "JIEJING_COS_BACKUP_LAST_SUCCESS_AT",
+      "authoritative_role": "managed"
+    },
+    {
+      "key": "JIEJING_DATABASE_ADAPTER",
+      "authoritative_role": "postgres"
+    },
+    {
+      "key": "JIEJING_DATABASE_ENGINE",
+      "authoritative_role": "postgres"
+    },
+    {
+      "key": "JIEJING_EBAY_WRITE_LIVE",
+      "authoritative_role": "compose"
+    },
+    {
+      "key": "JIEJING_ENABLE_REAL_PLATFORM_WRITES",
+      "authoritative_role": "compose"
+    },
+    {
+      "key": "JIEJING_QUEUE_PROVIDER",
+      "authoritative_role": "postgres"
+    },
+    {
+      "key": "JIEJING_QUEUE_URL",
+      "authoritative_role": "postgres"
+    },
+    {
+      "key": "JIEJING_REDIS_DEAD_LETTER_STREAM",
+      "authoritative_role": "postgres"
+    },
+    {
+      "key": "JIEJING_REDIS_STREAM",
+      "authoritative_role": "postgres"
+    },
+    {
+      "key": "JIEJING_RESTORE_DRILL_LAST_AT",
+      "authoritative_role": "managed"
+    },
+    {
+      "key": "JIEJING_VAULT_PROVIDER",
+      "authoritative_role": "managed"
+    },
+    {
+      "key": "JIEJING_POSTGRES_LIVE_PROBE_PASSED",
+      "authoritative_role": "postgres",
+      "donor_role": "secret"
+    },
+    {
+      "key": "JIEJING_SECRET_SCAN_PASSED",
+      "authoritative_role": "managed"
+    },
+    {
+      "key": "JIEJING_VAULT_ENABLED",
+      "authoritative_role": "managed",
+      "donor_role": "secret"
+    },
+    {
+      "key": "JIEJING_VAULT_LIVE_PROBE_PASSED",
+      "authoritative_role": "managed",
+      "donor_role": "secret"
+    }
+  ]
+}

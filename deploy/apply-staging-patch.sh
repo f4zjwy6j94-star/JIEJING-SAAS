@@ -34,6 +34,7 @@ FILES=(
   "deploy/docker-compose.public-https-staging.yml"
   "deploy/docker-compose.staging-infra.yml"
   "deploy/jiejing-saas.postgres-localqueue.env.example"
+  "deploy/jiejing-staging-runtime-env-resolution-manifest.example.json"
   "deploy/nginx.public-staging.conf"
   "deploy/Caddyfile.public-staging"
   "deploy/Caddyfile.public-staging.systemd"
