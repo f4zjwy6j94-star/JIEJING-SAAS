@@ -11,7 +11,11 @@ movement.
 
 ## Deployment Modes
 
-1. **Rehearsal**: no provider order, no payable QR, no charge.
+1. **Rehearsal**: an isolated temporary database, in-memory test keys, and an
+   in-process fake transport validate the Native request, signed callback
+   replay, entitlement, refund confirmation, and accounting recovery. It makes
+   no external API call, creates no real provider order or payable QR, and
+   cannot charge or refund money.
 2. **Controlled acceptance**: one owner-approved acceptance order through the
    backend-only tool. This proves the real provider lifecycle but does not open
    public checkout.
@@ -30,6 +34,55 @@ The public charge gate requires all of these conditions at the same time:
 - a recorded owner approval packet ID is present.
 
 No single switch is sufficient by itself.
+
+`JIEJING_WECHAT_PAY_CHARGE_ALLOWED` is false by default and stays false during
+the zero-charge rehearsal, controlled acceptance review, and owner-readiness
+review. `mainland_payment_ready_for_owner_approval=true` does not mean public
+charging is enabled. The exact charge switch is pinned separately in both the
+paid-launch approval packet and the production-release gate, and is changed
+only during the separately approved production cutover.
+
+Stripe is reserved for a future international-payment lane. Its readiness,
+Price IDs, Checkout/Portal state, or webhook state must not satisfy or block
+the mainland WeChat launch gate.
+
+## Isolated Zero-Charge Rehearsal
+
+- Use authenticated `POST /billing/wechat-pay/zero-charge-rehearsal` with
+  `manage_billing` permission (tenant owner or finance billing manager) and
+  the exact safe-mode confirmation phrase.
+- A missing or different phrase returns a blocked result before even the fake
+  transport is invoked.
+- The successful report and tenant-scoped audit are limited to sanitized
+  contract/version, mode, status, and step-key metadata plus booleans, codes,
+  and counts. They contain no merchant, order, transaction, key, certificate,
+  PEM, or filesystem-path value.
+- The rehearsal never reads production payment secrets and never modifies the
+  live provider, environment, charge switch, public-launch score, or the
+  existing controlled one-CNY acceptance evidence.
+- The rehearsal audit proves this isolated code path only. It is not proof of a
+  live provider connection and cannot by itself authorize public charging.
+- The backend binds each audit to the fixed audit contract, tenant target, and
+  current deployed backend build. The tenant audit stores sanitized contract
+  version/build metadata and boolean/code/count evidence only. Evidence older
+  than 24 hours, more than five minutes in the future, or bound to another
+  version, target, or build fails closed; indexed action/target lookup remains
+  reachable under high unrelated audit volume, while the public report exposes
+  only boolean/code/count results and never the build identifier.
+- The route uses the shared high-cost global/IP limiter and a company-scoped
+  maximum of two runs per hour. A rejected third run performs zero fake
+  transport calls and writes no rehearsal audit.
+- Paid owner preapproval accepts only a strict product-readiness contract: the
+  final all-green state, or `beta_ready=true` with zero blockers and exactly one
+  `billing_quota/mainland_payment_ready_for_owner_approval/warning` item while
+  `production_ready=false`, `can_accept_real_customers=false`, and
+  `reason=expected_public_charge_approval_hold`. Counts are recomputed from the
+  typed item list and must match, and canonical mainland payment must already
+  be owner-ready. Any malformed item, extra warning, blocker, false beta, or
+  count mismatch fails closed. After separate final public-charge approval, a
+  distinct final state removes that warning; owner-ready itself never enables
+  public charging. Production release billing also inherits the whole approval
+  packet and zero-charge evidence.
 
 ## Preflight
 
@@ -55,6 +108,12 @@ and other credentials are written only through the backend secret-management
 path. Never paste them into frontend settings, source files, deployment bundles,
 chat, tickets, screenshots, or audit notes. Public readiness exposes only
 presence and verification booleans.
+
+Official WeChat Pay APIv3 references used by this boundary:
+
+- request signing and response verification: https://pay.wechatpay.cn/doc/v3/merchant/4012365342
+- signed notification handling and replay-safe processing: https://pay.wechatpay.cn/doc/v3/merchant/4012791861
+- refund notification locking and merchant-side reconciliation: https://pay.wechatpay.cn/doc/v3/merchant/4012268885
 
 ## Cutover
 

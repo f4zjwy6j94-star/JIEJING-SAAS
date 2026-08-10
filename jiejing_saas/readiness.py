@@ -64,6 +64,102 @@ class ReadinessItem:
         }
 
 
+def validate_paid_owner_product_readiness(
+    raw_readiness: Any,
+    *,
+    mainland_payment_ready_for_owner_approval: bool,
+) -> dict[str, Any]:
+    """Accept only the final-ready state or the exact public-charge hold state."""
+
+    readiness = raw_readiness if isinstance(raw_readiness, dict) else {}
+    booleans_valid = isinstance(raw_readiness, dict) and all(
+        type(readiness.get(key)) is bool
+        for key in ("production_ready", "beta_ready", "can_accept_real_customers")
+    )
+    counts_valid = all(
+        type(readiness.get(key)) is int and readiness.get(key) >= 0
+        for key in ("blocker_count", "warning_count")
+    )
+    raw_items = readiness.get("items")
+    items_valid = isinstance(raw_items, list) and all(
+        isinstance(item, dict)
+        and all(
+            isinstance(item.get(key), str) and bool(item.get(key).strip())
+            for key in ("key", "label", "status", "severity", "detail", "next_action")
+        )
+        and item.get("severity") in {"info", "warning", "blocker"}
+        for item in (raw_items if isinstance(raw_items, list) else [])
+    )
+    items = raw_items if items_valid and isinstance(raw_items, list) else []
+    blockers = [
+        item
+        for item in items
+        if item.get("severity") == "blocker" and item.get("status") != "ready"
+    ]
+    warnings = [
+        item
+        for item in items
+        if item.get("severity") == "warning" and item.get("status") != "ready"
+    ]
+    counts_match = bool(
+        counts_valid
+        and readiness.get("blocker_count") == len(blockers)
+        and readiness.get("warning_count") == len(warnings)
+    )
+    canonical_owner_ready = mainland_payment_ready_for_owner_approval is True
+    final_ready = bool(
+        booleans_valid
+        and items_valid
+        and counts_match
+        and readiness.get("production_ready") is True
+        and readiness.get("beta_ready") is True
+        and readiness.get("can_accept_real_customers") is True
+        and readiness.get("reason") == "ready"
+        and not blockers
+        and not warnings
+    )
+    exact_public_charge_hold = bool(
+        booleans_valid
+        and items_valid
+        and counts_match
+        and readiness.get("production_ready") is False
+        and readiness.get("beta_ready") is True
+        and readiness.get("can_accept_real_customers") is False
+        and readiness.get("reason") == "expected_public_charge_approval_hold"
+        and not blockers
+        and len(warnings) == 1
+        and warnings[0].get("key") == "billing_quota"
+        and warnings[0].get("status") == "mainland_payment_ready_for_owner_approval"
+        and warnings[0].get("severity") == "warning"
+    )
+    contract_valid = bool(booleans_valid and counts_valid and items_valid and counts_match)
+    ready = bool(contract_valid and canonical_owner_ready and (final_ready or exact_public_charge_hold))
+    if ready:
+        blockers_codes: list[str] = []
+    elif not contract_valid:
+        blockers_codes = ["readiness_contract_invalid"]
+    elif not canonical_owner_ready:
+        blockers_codes = ["mainland_payment_not_ready_for_owner_approval"]
+    else:
+        blockers_codes = ["product_readiness_state_not_approved"]
+    return {
+        "contract_valid": contract_valid,
+        "counts_match": counts_match,
+        "canonical_mainland_payment_owner_ready": canonical_owner_ready,
+        "final_ready": final_ready,
+        "expected_public_charge_approval_hold": exact_public_charge_hold,
+        "ready_for_owner_approval": ready,
+        "state": (
+            "final_ready"
+            if ready and final_ready
+            else "expected_public_charge_approval_hold"
+            if ready and exact_public_charge_hold
+            else "blocked"
+        ),
+        "blockers": blockers_codes,
+    }
+
+
 def build_product_readiness(settings: SaaSSettings, repository: SaaSRepository) -> dict[str, Any]:
     counts = repository.system_counts()
     evidence = repository.product_readiness_evidence()
@@ -113,6 +209,15 @@ def build_product_readiness(settings: SaaSSettings, repository: SaaSRepository) 
     warnings = [item for item in items if item.severity == "warning" and item.status != "ready"]
     production_ready = not critical_blockers and not warnings and settings.is_production_like
     beta_ready = not critical_blockers and counts.get("users", 0) >= 1 and counts.get("stores", 0) >= 1
+    expected_public_charge_approval_hold = bool(
+        settings.is_production_like
+        and beta_ready
+        and not critical_blockers
+        and len(warnings) == 1
+        and warnings[0].key == "billing_quota"
+        and warnings[0].status == "mainland_payment_ready_for_owner_approval"
+        and warnings[0].severity == "warning"
+    )
     return {
         "service": "jiejing-saas-backend",
         "readiness_version": "2026-05-15-product-saas",
@@ -120,6 +225,13 @@ def build_product_readiness(settings: SaaSSettings, repository: SaaSRepository) 
         "production_ready": production_ready,
         "beta_ready": beta_ready,
         "can_accept_real_customers": False if not production_ready else True,
+        "reason": (
+            "ready"
+            if production_ready
+            else "expected_public_charge_approval_hold"
+            if expected_public_charge_approval_hold
+            else "readiness_blocked"
+        ),
         "real_platform_writes_enabled": settings.effective_real_platform_writes_enabled,
         "requested_real_platform_writes": settings.requested_real_platform_writes,
         "blocker_count": len(critical_blockers),

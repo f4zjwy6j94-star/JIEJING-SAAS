@@ -7333,7 +7333,7 @@ class SaaSRepository:
         self,
         *,
         company_id: str,
-        store_id: str,
+        store_id: str | None,
         action_type: str,
         target_type: str,
         target_id: str,
@@ -7342,16 +7342,28 @@ class SaaSRepository:
 
         self.initialize()
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                select * from audit_logs
-                where company_id = ? and store_id = ? and action_type = ?
-                  and target_type = ? and target_id = ?
-                order by created_at desc
-                limit 1
-                """,
-                (company_id, store_id, action_type, target_type, target_id),
-            ).fetchone()
+            if store_id is None:
+                row = conn.execute(
+                    """
+                    select * from audit_logs
+                    where company_id = ? and store_id is null and action_type = ?
+                      and target_type = ? and target_id = ?
+                    order by created_at desc
+                    limit 1
+                    """,
+                    (company_id, action_type, target_type, target_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    select * from audit_logs
+                    where company_id = ? and store_id = ? and action_type = ?
+                      and target_type = ? and target_id = ?
+                    order by created_at desc
+                    limit 1
+                    """,
+                    (company_id, store_id, action_type, target_type, target_id),
+                ).fetchone()
         return self._audit_row_to_dict(row) if row else None
 
     def task_timeline(self, *, company_id: str, task_id: str) -> dict[str, Any]:

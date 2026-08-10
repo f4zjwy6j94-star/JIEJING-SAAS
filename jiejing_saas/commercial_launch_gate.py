@@ -9,7 +9,17 @@ from typing import Any
 
 from .account_health import build_account_health_snapshot
 from .backup_plan import build_backup_plan
-from .billing_plan import STRIPE_CURRENT_API_VERSION, build_billing_plan, stripe_webhook_api_version, stripe_webhook_api_version_aligned
+from .billing_plan import build_billing_plan
+from .billing_payment_options import (
+    build_mainland_payment_launch_status,
+    validate_mainland_payment_launch_for_public,
+)
+from .billing_wechat_pay_rehearsal import (
+    WECHAT_PAY_ZERO_CHARGE_AUDIT_CONTRACT_VERSION,
+    WECHAT_PAY_ZERO_CHARGE_AUDIT_TARGET_ID,
+    WECHAT_PAY_ZERO_CHARGE_AUDIT_TARGET_TYPE,
+    current_deployment_build_artifact_id,
+)
 from .config import SaaSSettings
 from .domain_readiness import build_domain_readiness
 from .infrastructure_drivers import build_infrastructure_driver_status
@@ -57,7 +67,18 @@ def build_commercial_launch_gate(
     counts = readiness.get("counts") if isinstance(readiness.get("counts"), dict) else repository.system_counts()
     infrastructure = build_infrastructure_driver_status(settings)
     backup = build_backup_plan(settings, repository)
-    billing = build_billing_plan(settings, repository)
+    legacy_billing = build_billing_plan(settings, repository)
+    mainland_payment = validate_mainland_payment_launch_for_public(
+        build_mainland_payment_launch_status(settings, repository)
+    )
+    billing = {
+        **legacy_billing,
+        "mainland_payment_launch": mainland_payment,
+        "wechat_zero_charge_rehearsal_evidence": _wechat_zero_charge_rehearsal_evidence(
+            repository=repository,
+            company_id=company_id,
+        ),
+    }
     model_value = build_model_value_gate(settings, repository)
     monitoring = build_monitoring_status(settings, repository)
     domain = build_domain_readiness(settings)
@@ -162,10 +183,22 @@ def build_commercial_launch_gate(
         ),
         _group(
             "billing_quota",
-            "Billing and quota",
-            bool(billing.get("billing_ready_for_paid_launch")),
-            "Choose billing provider, publish plan IDs, configure webhook, and enforce merchant-visible quotas.",
-            evidence={"provider": (billing.get("provider") or {}).get("selected"), "blockers": billing.get("blockers", [])},
+            "Mainland WeChat payment and quota",
+            mainland_payment.get("mainland_payment_ready_for_owner_approval") is True,
+            "Complete backend-only WeChat production configuration, verified payment/refund evidence, and merchant-visible quota enforcement while public charging stays closed.",
+            evidence={
+                "provider": "wechat_pay_native",
+                "mainland_payment_ready_for_owner_approval": (
+                    mainland_payment.get("mainland_payment_ready_for_owner_approval") is True
+                ),
+                "provider_configured": mainland_payment.get("provider_configured") is True,
+                "controlled_acceptance_proven": mainland_payment.get("controlled_acceptance_proven") is True,
+                "verified_paid_order_count": _safe_nonnegative_int(
+                    mainland_payment.get("verified_paid_order_count")
+                ),
+                "public_charging_allowed": False,
+                "next_paid_launch_blocker": mainland_payment.get("next_paid_launch_blocker") or "",
+            },
         ),
         _group(
             "publish_safety_system",
@@ -863,6 +896,108 @@ def _vault_ready(settings: SaaSSettings, vault: dict[str, Any]) -> bool:
     )
 
 
+def _wechat_zero_charge_rehearsal_evidence(
+    *,
+    repository: SaaSRepository,
+    company_id: str | None,
+    now: datetime | None = None,
+    expected_build_artifact_id: str | None = None,
+) -> dict[str, Any]:
+    blocked = {
+        "ready": False,
+        "evidence_code": "zero_charge_rehearsal_evidence_missing",
+        "step_count": 0,
+        "fake_transport_call_count": 0,
+        "fresh": False,
+        "build_bound": False,
+    }
+    normalized_company = str(company_id or "").strip()
+    if not normalized_company:
+        return blocked
+    expected_build = str(expected_build_artifact_id or current_deployment_build_artifact_id()).strip().lower()
+    if not _is_sha256(expected_build):
+        return {**blocked, "evidence_code": "deployment_build_artifact_unavailable"}
+    evaluated_at = now if isinstance(now, datetime) else datetime.now(timezone.utc)
+    if evaluated_at.tzinfo is None:
+        evaluated_at = evaluated_at.replace(tzinfo=timezone.utc)
+    evaluated_at = evaluated_at.astimezone(timezone.utc)
+    try:
+        item = repository.find_latest_audit_log_by_target(
+            company_id=normalized_company,
+            store_id=None,
+            action_type="billing.wechat_pay.zero_charge_rehearsal.completed",
+            target_type=WECHAT_PAY_ZERO_CHARGE_AUDIT_TARGET_TYPE,
+            target_id=WECHAT_PAY_ZERO_CHARGE_AUDIT_TARGET_ID,
+        )
+    except Exception:
+        return {**blocked, "evidence_code": "zero_charge_rehearsal_audit_unavailable"}
+    if not isinstance(item, dict):
+        return blocked
+    if (
+        item.get("action_type") != "billing.wechat_pay.zero_charge_rehearsal.completed"
+        or item.get("actor_type") != "user"
+        or item.get("target_type") != WECHAT_PAY_ZERO_CHARGE_AUDIT_TARGET_TYPE
+        or item.get("target_id") != WECHAT_PAY_ZERO_CHARGE_AUDIT_TARGET_ID
+    ):
+        return {**blocked, "evidence_code": "zero_charge_rehearsal_target_mismatch"}
+    details = item.get("details") if isinstance(item.get("details"), dict) else {}
+    step_count = _safe_nonnegative_int(details.get("step_count"))
+    fake_transport_call_count = _safe_nonnegative_int(details.get("fake_transport_call_count"))
+    created_at = _parse_utc_datetime(item.get("created_at"))
+    age_seconds = (evaluated_at - created_at).total_seconds() if created_at is not None else None
+    fresh = age_seconds is not None and -300 <= age_seconds <= 24 * 60 * 60
+    contract_valid = details.get("contract_version") == WECHAT_PAY_ZERO_CHARGE_AUDIT_CONTRACT_VERSION
+    build_bound = str(details.get("build_artifact_id") or "").strip().lower() == expected_build
+    safety_ready = all(
+        details.get(key) is False
+        for key in (
+            "creates_real_order",
+            "calls_external_api",
+            "calls_external_payment_api",
+            "triggers_real_charge",
+            "triggers_real_refund",
+            "charge_allowed",
+            "public_charging_allowed",
+            "secret_exposed",
+        )
+    )
+    ready = bool(
+        contract_valid
+        and build_bound
+        and fresh
+        and details.get("ready") is True
+        and step_count == 5
+        and fake_transport_call_count == 1
+        and safety_ready
+    )
+    return {
+        "ready": ready,
+        "evidence_code": "ready" if ready else "zero_charge_rehearsal_binding_invalid",
+        "step_count": step_count,
+        "fake_transport_call_count": fake_transport_call_count,
+        "fresh": fresh,
+        "build_bound": build_bound,
+    }
+
+
+def _parse_utc_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _is_sha256(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return len(text) == 64 and all(character in "0123456789abcdef" for character in text)
+
+
 def _monitoring_ready(monitoring: dict[str, Any]) -> bool:
     alerts = {item.get("key") for item in monitoring.get("alert_contracts", []) if isinstance(item, dict)}
     required = {
@@ -1145,10 +1280,17 @@ def _build_prelaunch_deferred_strategy(
     evidence: dict[str, Any],
     counts: dict[str, Any],
 ) -> dict[str, Any]:
-    billing_provider = billing.get("provider") if isinstance(billing.get("provider"), dict) else {}
-    billing_test = billing.get("billing_test_rehearsal_summary") if isinstance(billing.get("billing_test_rehearsal_summary"), dict) else {}
-    quota_shutdown = billing.get("subscription_quota_shutdown_closure") if isinstance(billing.get("subscription_quota_shutdown_closure"), dict) else {}
-    no_charge_ready = bool(billing_test.get("ready")) or bool(quota_shutdown.get("ready_for_no_charge_rehearsal"))
+    mainland_payment = (
+        billing.get("mainland_payment_launch")
+        if isinstance(billing.get("mainland_payment_launch"), dict)
+        else {}
+    )
+    rehearsal_evidence = (
+        billing.get("wechat_zero_charge_rehearsal_evidence")
+        if isinstance(billing.get("wechat_zero_charge_rehearsal_evidence"), dict)
+        else {}
+    )
+    no_charge_ready = rehearsal_evidence.get("ready") is True
     readiness_snapshot_ready = (
         readiness.get("beta_ready") is True
         and _strict_zero_int(readiness.get("blocker_count"))
@@ -1161,17 +1303,24 @@ def _build_prelaunch_deferred_strategy(
     external_deferred = [
         _prelaunch_external_deferred_item(
             "formal_payment_deferred",
-            "Formal payment provider cutover deferred",
+            "Mainland WeChat production cutover deferred",
             owner="founder_operator",
             category="billing",
-            next_action="Keep live Stripe or alternative payment cutover frozen until the owner supplies a verified payment account, live price IDs, live webhook secret, and stable-domain URLs.",
+            next_action="Keep WeChat public charging closed until backend-only production configuration, zero-charge rehearsal evidence, final release proof, and exact owner approval are complete.",
             evidence_summary=_compact_drill_evidence(
-                provider=billing_provider.get("selected") or "not_selected",
-                billing_paid_ready=bool(billing.get("billing_ready_for_paid_launch")),
-                paid_launch_blockers=len(billing.get("paid_launch_blockers") or []),
+                provider="wechat_pay_native",
+                mainland_payment_ready_for_owner_approval=(
+                    mainland_payment.get("mainland_payment_ready_for_owner_approval") is True
+                ),
+                public_charging_allowed=False,
+                next_paid_launch_blocker=mainland_payment.get("next_paid_launch_blocker") or "",
                 cutover_status=cutover_decision.get("status") or "blocked",
             ),
-            verification=["/billing/plans", "/commercial/launch-gate", "tools/test_jiejing_billing_test_provider.py"],
+            verification=[
+                "/billing/payment-options",
+                "/commercial/launch-gate",
+                "tools/test_jiejing_wechat_pay_zero_charge_rehearsal.py",
+            ],
         ),
         _prelaunch_external_deferred_item(
             "clean_ebay_account_validation_deferred",
@@ -1230,17 +1379,19 @@ def _build_prelaunch_deferred_strategy(
         ),
         _prelaunch_internal_work_item(
             "no_charge_billing_rehearsal",
-            "No-real-charge billing and quota rehearsal",
+            "WeChat zero-charge payment and entitlement rehearsal",
             no_charge_ready,
             owner="billing_ops",
             category="billing",
-            next_action=billing_test.get("next_step") or quota_shutdown.get("next_step") or "Keep the stripe_test_mock billing path able to rehearse activate, payment_failed, cancel and quota hard-stop without real Stripe.",
+            next_action="Run the exact-phrase isolated WeChat rehearsal; keep the production charge switch false.",
             evidence_summary=_compact_drill_evidence(
-                test_provider_ready=bool(billing_test.get("ready")),
-                quota_shutdown_ready=bool(quota_shutdown.get("ready_for_no_charge_rehearsal")),
-                provider=billing_provider.get("selected") or "not_selected",
+                provider="wechat_pay_native",
+                zero_charge_rehearsal_ready=no_charge_ready,
+                step_count=_safe_nonnegative_int(rehearsal_evidence.get("step_count")),
+                calls_external_api=False,
+                triggers_real_charge=False,
             ),
-            verification=["tools/test_jiejing_billing_test_provider.py", "tools/test_jiejing_billing_webhook_subscription_state.py"],
+            verification=["tools/test_jiejing_wechat_pay_zero_charge_rehearsal.py"],
         ),
         _prelaunch_internal_work_item(
             "public_security_evidence_capture",
@@ -1429,12 +1580,17 @@ def _build_commercial_hardening_drills(
     current_store_ebay_evidence: dict[str, Any],
 ) -> list[dict[str, Any]]:
     _ = groups_by_key
-    provider = billing.get("provider") if isinstance(billing.get("provider"), dict) else {}
-    provider_contract = provider.get("signed_webhook_contract") if isinstance(provider.get("signed_webhook_contract"), dict) else {}
-    checkout_contract = provider.get("checkout_portal_contract") if isinstance(provider.get("checkout_portal_contract"), dict) else {}
-    checkout_sessions = checkout_contract.get("checkout_sessions") if isinstance(checkout_contract.get("checkout_sessions"), dict) else {}
-    customer_portal = checkout_contract.get("customer_portal") if isinstance(checkout_contract.get("customer_portal"), dict) else {}
-    billing_ready = bool(billing.get("billing_ready_for_paid_launch"))
+    mainland_payment = (
+        billing.get("mainland_payment_launch")
+        if isinstance(billing.get("mainland_payment_launch"), dict)
+        else {}
+    )
+    rehearsal_evidence = (
+        billing.get("wechat_zero_charge_rehearsal_evidence")
+        if isinstance(billing.get("wechat_zero_charge_rehearsal_evidence"), dict)
+        else {}
+    )
+    mainland_owner_ready = mainland_payment.get("mainland_payment_ready_for_owner_approval") is True
     domain_ready = bool(domain.get("production_domain_ready"))
     token_ready = (action_items.get("ebay_token_refresh_vault_adapter") or {}).get("status") == "ready"
     account_health_ready = (action_items.get("account_health_incident_mode") or {}).get("status") == "ready"
@@ -1444,30 +1600,28 @@ def _build_commercial_hardening_drills(
 
     return [
         _hardening_drill(
-            "stripe_billing_live_mode",
-            "Stripe paid billing live-mode drill",
-            billing_ready and provider.get("selected") == "stripe",
+            "wechat_pay_zero_charge_production_rehearsal",
+            "WeChat Pay production contract and zero-charge rehearsal",
+            mainland_owner_ready and rehearsal_evidence.get("ready") is True,
             owner="platform_ops",
-            next_action=(action_items.get("billing_quota") or {}).get("next_action") or "Configure Stripe Billing, Checkout, Customer Portal, signed webhook, plan IDs, and quota enforcement.",
+            next_action=(action_items.get("billing_quota") or {}).get("next_action") or "Complete canonical WeChat production evidence and run the isolated zero-charge rehearsal; keep public charging closed.",
             evidence_summary=_compact_drill_evidence(
-                provider=provider.get("selected") or "not_selected",
-                stripe_api_version=checkout_contract.get("stripe_api_version") or "",
-                checkout_ready=bool(checkout_sessions.get("ready")),
-                portal_ready=bool(customer_portal.get("ready")),
-                webhook_configured=bool(provider.get("webhook_configured")),
-                quota_enabled=bool((billing.get("quota_contract") or {}).get("enabled")),
+                provider="wechat_pay_native",
+                mainland_payment_ready_for_owner_approval=mainland_owner_ready,
+                zero_charge_rehearsal_ready=rehearsal_evidence.get("ready") is True,
+                public_charging_allowed=False,
             ),
             evidence={
-                "selected_provider": provider.get("selected") or "not_selected",
-                "stripe_api_version": checkout_contract.get("stripe_api_version") or "",
-                "checkout_sessions_ready": bool(checkout_sessions.get("ready")),
-                "checkout_mode": checkout_sessions.get("mode") or "",
-                "customer_portal_ready": bool(customer_portal.get("ready")),
-                "signed_webhook_configured": bool(provider.get("webhook_configured")),
-                "plan_ids_present": provider_contract.get("plan_ids") or {},
-                "quota_enforcement_enabled": bool((billing.get("quota_contract") or {}).get("enabled")),
-                "frontend_gets_api_key": False,
-                "raw_payment_secret_exposed": False,
+                "provider": "wechat_pay_native",
+                "mainland_payment_ready_for_owner_approval": mainland_owner_ready,
+                "provider_configured": mainland_payment.get("provider_configured") is True,
+                "controlled_acceptance_proven": mainland_payment.get("controlled_acceptance_proven") is True,
+                "verified_paid_order_count": _safe_nonnegative_int(mainland_payment.get("verified_paid_order_count")),
+                "zero_charge_rehearsal_ready": rehearsal_evidence.get("ready") is True,
+                "zero_charge_rehearsal_step_count": _safe_nonnegative_int(rehearsal_evidence.get("step_count")),
+                "fake_transport_call_count": _safe_nonnegative_int(rehearsal_evidence.get("fake_transport_call_count")),
+                "public_charging_allowed": False,
+                "frontend_gets_payment_secret": False,
             },
             requires_confirmation_center=False,
         ),
@@ -1781,63 +1935,54 @@ def _build_paid_launch_cutover_checklist(
     evidence: dict[str, Any],
     current_store_ebay_evidence: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    provider = billing.get("provider") if isinstance(billing.get("provider"), dict) else {}
-    checkout_contract = provider.get("checkout_portal_contract") if isinstance(provider.get("checkout_portal_contract"), dict) else {}
-    provider_contract = provider.get("signed_webhook_contract") if isinstance(provider.get("signed_webhook_contract"), dict) else {}
+    mainland_payment = (
+        billing.get("mainland_payment_launch")
+        if isinstance(billing.get("mainland_payment_launch"), dict)
+        else {}
+    )
+    rehearsal_evidence = (
+        billing.get("wechat_zero_charge_rehearsal_evidence")
+        if isinstance(billing.get("wechat_zero_charge_rehearsal_evidence"), dict)
+        else {}
+    )
     token_drill = drills.get("ebay_refresh_vault_probe") or {}
     return [
         _cutover_item(
-            "billing_provider_live_contract",
-            "Stripe subscription billing contract",
-            (drills.get("stripe_billing_live_mode") or {}).get("status") == "ready",
+            "mainland_wechat_payment_contract",
+            "Mainland WeChat production payment contract",
+            (drills.get("wechat_pay_zero_charge_production_rehearsal") or {}).get("status") == "ready",
             owner="platform_ops",
             category="billing",
-            next_action="Select the external paid provider, publish live Price IDs, enable quota enforcement, and verify Checkout, Portal and signed webhook evidence before charging.",
+            next_action="Complete canonical WeChat production evidence and the isolated zero-charge rehearsal, then keep the real charge switch closed until exact owner approval.",
             evidence_summary=_compact_drill_evidence(
-                provider=provider.get("selected") or "not_selected",
-                checkout_ready=bool((checkout_contract.get("checkout_sessions") or {}).get("ready")),
-                portal_ready=bool((checkout_contract.get("customer_portal") or {}).get("ready")),
-                webhook_ready=bool(provider_contract.get("webhook_configured")),
-                quota_enabled=bool((billing.get("quota_contract") or {}).get("enabled")),
+                provider="wechat_pay_native",
+                mainland_payment_ready_for_owner_approval=(
+                    mainland_payment.get("mainland_payment_ready_for_owner_approval") is True
+                ),
+                zero_charge_rehearsal_ready=rehearsal_evidence.get("ready") is True,
+                public_charging_allowed=False,
             ),
             environment_keys=[
-                "JIEJING_BILLING_PROVIDER",
-                "JIEJING_BILLING_PLANS_PUBLISHED",
-                "JIEJING_QUOTA_ENFORCEMENT_ENABLED",
-                "JIEJING_STRIPE_PRICE_STARTER_ID",
-                "JIEJING_STRIPE_PRICE_OPERATOR_ID",
-                "JIEJING_STRIPE_PRICE_TEAM_ID",
-                "JIEJING_BILLING_WEBHOOK_URL",
-                "JIEJING_BILLING_SUCCESS_URL",
-                "JIEJING_BILLING_CANCEL_URL",
-                "JIEJING_BILLING_PORTAL_RETURN_URL",
+                "JIEJING_SAAS_ENV",
+                "JIEJING_WECHAT_PAY_APP_ID",
+                "JIEJING_WECHAT_PAY_MCH_ID",
+                "JIEJING_WECHAT_PAY_MERCHANT_SERIAL_NO",
+                "JIEJING_WECHAT_PAY_MERCHANT_PRIVATE_KEY_PEM_B64",
+                "JIEJING_WECHAT_PAY_API_V3_KEY",
+                "JIEJING_WECHAT_PAY_PUBLIC_KEY_ID",
+                "JIEJING_WECHAT_PAY_PUBLIC_KEY_PEM_B64",
+                "JIEJING_WECHAT_PAY_NOTIFY_URL",
+                "JIEJING_WECHAT_PAY_REFUND_NOTIFY_URL",
+                "JIEJING_WECHAT_PAY_LIVE_API_ENABLED",
+                "JIEJING_WECHAT_PAY_CHARGE_ALLOWED",
+                "JIEJING_WECHAT_PAY_REFUND_ALLOWED",
+                "JIEJING_PAID_LAUNCH_OWNER_APPROVAL_PACKET_ID",
             ],
             verification=[
-                "/billing/plans",
-                "/billing/checkout-contract",
-                "tools/test_jiejing_stripe_checkout_portal.py",
-                "tools/test_jiejing_billing_provider_webhook.py",
+                "/billing/payment-options",
+                "POST /billing/wechat-pay/zero-charge-rehearsal",
+                "tools/test_jiejing_wechat_pay_zero_charge_rehearsal.py",
             ],
-            external_resource_required=True,
-            triggers_real_charge=False,
-            confirmation_center_required=False,
-        ),
-        _cutover_item(
-            "stripe_api_webhook_version_alignment",
-            "Stripe API and webhook version alignment",
-            checkout_contract.get("stripe_api_version") == STRIPE_CURRENT_API_VERSION and stripe_webhook_api_version_aligned(),
-            owner="platform_ops",
-            category="billing",
-            next_action="Create or update the Stripe webhook endpoint with the same pinned API version and record verification; do not rely on dashboard defaults silently drifting.",
-            evidence_summary=_compact_drill_evidence(
-                request_api_version=checkout_contract.get("stripe_api_version") or "missing",
-                expected_api_version=STRIPE_CURRENT_API_VERSION,
-                recorded_webhook_api_version=stripe_webhook_api_version() or "missing",
-                webhook_endpoint_version_verified=_env_bool("JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"),
-                webhook_endpoint_version_aligned=stripe_webhook_api_version() == STRIPE_CURRENT_API_VERSION,
-            ),
-            environment_keys=["JIEJING_STRIPE_WEBHOOK_API_VERSION", "JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"],
-            verification=["Stripe Workbench/webhook endpoint metadata", "tools/test_jiejing_stripe_checkout_portal.py"],
             external_resource_required=True,
             triggers_real_charge=False,
             confirmation_center_required=False,
@@ -1962,38 +2107,23 @@ def _build_paid_launch_cutover_checklist(
     ]
 
 
-def _build_billing_domain_cutover_runbook(
+def _build_wechat_domain_cutover_runbook(
     *,
     cutover_checklist: list[dict[str, Any]],
     billing: dict[str, Any],
     domain: dict[str, Any],
 ) -> list[dict[str, Any]]:
     by_key = {str(item.get("key") or ""): item for item in cutover_checklist if isinstance(item, dict)}
-    provider = billing.get("provider") if isinstance(billing.get("provider"), dict) else {}
-    checkout_contract = provider.get("checkout_portal_contract") if isinstance(provider.get("checkout_portal_contract"), dict) else {}
-    provider_contract = provider.get("signed_webhook_contract") if isinstance(provider.get("signed_webhook_contract"), dict) else {}
-    checkout_sessions = checkout_contract.get("checkout_sessions") if isinstance(checkout_contract.get("checkout_sessions"), dict) else {}
-    customer_portal = checkout_contract.get("customer_portal") if isinstance(checkout_contract.get("customer_portal"), dict) else {}
-    quota = billing.get("quota_contract") if isinstance(billing.get("quota_contract"), dict) else {}
-    stripe_docs = [
-        "https://docs.stripe.com/get-started/checklist/go-live",
-        "https://docs.stripe.com/billing/testing",
-        "https://docs.stripe.com/api/versioning",
-    ]
-    resilience_env = [
-        "JIEJING_STRIPE_WEBHOOK_DUPLICATE_TESTED",
-        "JIEJING_STRIPE_WEBHOOK_DELAYED_TESTED",
-        "JIEJING_STRIPE_WEBHOOK_OUT_OF_ORDER_TESTED",
-        "JIEJING_STRIPE_PAYMENT_FAILURE_TESTED",
-    ]
-    webhook_failure_path_evidence_id = "JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID"
-    portal_env = [
-        "JIEJING_STRIPE_CUSTOMER_PORTAL_TESTED",
-        "JIEJING_STRIPE_SUBSCRIPTION_CANCEL_TESTED",
-        "JIEJING_STRIPE_INVOICE_PAID_TESTED",
-        "JIEJING_STRIPE_PAYMENT_FAILURE_TESTED",
-    ]
-    portal_failure_path_evidence_id = "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID"
+    mainland_payment = (
+        billing.get("mainland_payment_launch")
+        if isinstance(billing.get("mainland_payment_launch"), dict)
+        else {}
+    )
+    rehearsal = (
+        billing.get("wechat_zero_charge_rehearsal_evidence")
+        if isinstance(billing.get("wechat_zero_charge_rehearsal_evidence"), dict)
+        else {}
+    )
     rollback_env = [
         "JIEJING_CUTOVER_ROLLBACK_VERIFIED",
         "JIEJING_SECRET_SCAN_PASSED",
@@ -2003,100 +2133,87 @@ def _build_billing_domain_cutover_runbook(
     rollback_audit_packet_id = "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID"
     return [
         _runbook_step(
-            "stripe_account_live_mode_contract",
-            "Stripe account and live-mode contract",
-            (by_key.get("billing_provider_live_contract") or {}).get("status") == "ready",
+            "wechat_pay_production_contract",
+            "WeChat Pay production contract",
+            (by_key.get("mainland_wechat_payment_contract") or {}).get("status") == "ready",
             owner="platform_ops",
             category="billing",
-            next_action="Switch only after Stripe is the selected live provider, live Price IDs are present, Checkout/Portal are ready, signed webhook is configured, and quota enforcement is enabled.",
+            next_action="Complete canonical WeChat production configuration and verified payment/refund evidence while public charging remains closed.",
             evidence_summary=_compact_drill_evidence(
-                provider=provider.get("selected") or "not_selected",
-                api_key_configured=bool(provider_contract.get("api_key_configured")),
-                plan_ids_present=provider_contract.get("plan_ids") or {},
-                checkout_ready=bool(checkout_sessions.get("ready")),
-                portal_ready=bool(customer_portal.get("ready")),
-                return_url_overrides_locked=bool((checkout_contract.get("urls") or {}).get("request_override_must_match_configured_url")),
-                quota_enabled=bool(quota.get("enabled")),
+                provider="wechat_pay_native",
+                owner_ready=mainland_payment.get("mainland_payment_ready_for_owner_approval") is True,
+                provider_configured=mainland_payment.get("provider_configured") is True,
+                controlled_acceptance=mainland_payment.get("controlled_acceptance_proven") is True,
+                public_charging_allowed=False,
             ),
             environment_keys=[
-                "JIEJING_BILLING_PROVIDER",
-                "JIEJING_BILLING_PLANS_PUBLISHED",
-                "JIEJING_QUOTA_ENFORCEMENT_ENABLED",
-                "JIEJING_STRIPE_PRICE_STARTER_ID",
-                "JIEJING_STRIPE_PRICE_OPERATOR_ID",
-                "JIEJING_STRIPE_PRICE_TEAM_ID",
+                "JIEJING_SAAS_ENV",
+                "JIEJING_WECHAT_PAY_APP_ID",
+                "JIEJING_WECHAT_PAY_MCH_ID",
+                "JIEJING_WECHAT_PAY_MERCHANT_SERIAL_NO",
+                "JIEJING_WECHAT_PAY_MERCHANT_PRIVATE_KEY_PEM_B64",
+                "JIEJING_WECHAT_PAY_API_V3_KEY",
+                "JIEJING_WECHAT_PAY_PUBLIC_KEY_ID",
+                "JIEJING_WECHAT_PAY_PUBLIC_KEY_PEM_B64",
+                "JIEJING_WECHAT_PAY_NOTIFY_URL",
+                "JIEJING_WECHAT_PAY_REFUND_NOTIFY_URL",
+                "JIEJING_WECHAT_PAY_LIVE_API_ENABLED",
+                "JIEJING_WECHAT_PAY_REFUND_ALLOWED",
             ],
-            verification=["/billing/plans", "/billing/checkout-contract", "tools/test_jiejing_stripe_checkout_portal.py"],
-            docs=[stripe_docs[0], stripe_docs[1]],
+            verification=["/billing/payment-options", "tools/test_jiejing_mainland_payment_strategy.py"],
+            docs=[],
             external_resource_required=True,
         ),
         _runbook_step(
-            "stripe_api_webhook_version_contract",
-            "Stripe API and webhook version contract",
-            (by_key.get("stripe_api_webhook_version_alignment") or {}).get("status") == "ready",
+            "wechat_pay_zero_charge_rehearsal_evidence",
+            "WeChat Pay isolated zero-charge rehearsal evidence",
+            rehearsal.get("ready") is True,
             owner="platform_ops",
             category="billing",
-            next_action="Pin API requests and the production webhook endpoint to the same reviewed Stripe API version; record endpoint metadata before public charging.",
+            next_action="Run the authenticated exact-phrase WeChat zero-charge rehearsal and retain its value-free backend audit evidence.",
             evidence_summary=_compact_drill_evidence(
-                request_api_version=checkout_contract.get("stripe_api_version") or "missing",
-                expected_api_version=STRIPE_CURRENT_API_VERSION,
-                recorded_webhook_api_version=stripe_webhook_api_version() or "missing",
-                webhook_endpoint_version_verified=_env_bool("JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"),
-                webhook_endpoint_version_aligned=stripe_webhook_api_version() == STRIPE_CURRENT_API_VERSION,
+                ready=rehearsal.get("ready") is True,
+                step_count=_safe_nonnegative_int(rehearsal.get("step_count")),
+                fake_transport_call_count=_safe_nonnegative_int(rehearsal.get("fake_transport_call_count")),
+                calls_external_api=False,
+                triggers_real_charge=False,
             ),
-            environment_keys=["JIEJING_STRIPE_WEBHOOK_API_VERSION", "JIEJING_STRIPE_WEBHOOK_API_VERSION_VERIFIED"],
-            verification=["Stripe webhook endpoint metadata", "tools/test_jiejing_stripe_checkout_portal.py"],
-            docs=[stripe_docs[0], stripe_docs[2]],
-            external_resource_required=True,
+            environment_keys=[],
+            verification=[
+                "POST /billing/wechat-pay/zero-charge-rehearsal",
+                "tools/test_jiejing_wechat_pay_zero_charge_rehearsal.py",
+            ],
+            docs=[],
+            external_resource_required=False,
         ),
         _runbook_step(
-            "stripe_live_webhook_resilience",
-            "Stripe live webhook resilience",
-            bool(provider_contract.get("webhook_configured"))
-            and all(_env_bool(name) for name in resilience_env)
-            and _env_present(webhook_failure_path_evidence_id),
-            owner="platform_ops",
+            "wechat_pay_public_charge_approval_hold",
+            "WeChat Pay public-charge approval hold",
+            not _env_bool("JIEJING_WECHAT_PAY_CHARGE_ALLOWED"),
+            owner="founder_operator",
             category="billing",
-            next_action="Test signed production webhook handling for duplicate, delayed, out-of-order and payment-failure events before accepting paid customers.",
+            next_action="Keep the charge switch false until the version-bound paid-launch and production-release approvals are recorded; never treat owner-ready as public charging.",
             evidence_summary=_compact_drill_evidence(
-                signed_webhook=bool(provider_contract.get("webhook_configured")),
-                duplicate_tested=_env_bool("JIEJING_STRIPE_WEBHOOK_DUPLICATE_TESTED"),
-                delayed_tested=_env_bool("JIEJING_STRIPE_WEBHOOK_DELAYED_TESTED"),
-                out_of_order_tested=_env_bool("JIEJING_STRIPE_WEBHOOK_OUT_OF_ORDER_TESTED"),
-                payment_failure_tested=_env_bool("JIEJING_STRIPE_PAYMENT_FAILURE_TESTED"),
-                evidence_id_present=_env_present(webhook_failure_path_evidence_id),
+                charge_switch_closed=not _env_bool("JIEJING_WECHAT_PAY_CHARGE_ALLOWED"),
+                paid_launch_owner_packet_present=_env_present("JIEJING_PAID_LAUNCH_OWNER_APPROVAL_PACKET_ID"),
+                production_release_owner_packet_present=_env_present("JIEJING_PRODUCTION_RELEASE_OWNER_APPROVAL_PACKET_ID"),
+                public_charging_allowed=False,
             ),
-            environment_keys=[*resilience_env, webhook_failure_path_evidence_id],
-            verification=["tools/test_jiejing_billing_provider_webhook.py", "tools/test_jiejing_billing_webhook_subscription_state.py"],
-            docs=[stripe_docs[1]],
-            external_resource_required=True,
-        ),
-        _runbook_step(
-            "stripe_customer_portal_failure_paths",
-            "Stripe Customer Portal and failure paths",
-            bool(customer_portal.get("ready"))
-            and all(_env_bool(name) for name in portal_env)
-            and _env_present(portal_failure_path_evidence_id),
-            owner="platform_ops",
-            category="billing",
-            next_action="Verify Portal self-service, cancellation, invoice paid provisioning and payment failure recovery without exposing payment secrets to the frontend.",
-            evidence_summary=_compact_drill_evidence(
-                portal_ready=bool(customer_portal.get("ready")),
-                portal_tested=_env_bool("JIEJING_STRIPE_CUSTOMER_PORTAL_TESTED"),
-                cancel_tested=_env_bool("JIEJING_STRIPE_SUBSCRIPTION_CANCEL_TESTED"),
-                invoice_paid_tested=_env_bool("JIEJING_STRIPE_INVOICE_PAID_TESTED"),
-                payment_failure_tested=_env_bool("JIEJING_STRIPE_PAYMENT_FAILURE_TESTED"),
-                evidence_id_present=_env_present(portal_failure_path_evidence_id),
-            ),
-            environment_keys=[*portal_env, portal_failure_path_evidence_id],
-            verification=["/billing/customer-portal", "tools/test_jiejing_stripe_checkout_portal.py", "tools/test_jiejing_billing_webhook_subscription_state.py"],
-            docs=[stripe_docs[1]],
-            external_resource_required=True,
+            environment_keys=[
+                "JIEJING_WECHAT_PAY_CHARGE_ALLOWED",
+                "JIEJING_PAID_LAUNCH_OWNER_APPROVAL_PACKET_ID",
+                "JIEJING_PRODUCTION_RELEASE_OWNER_APPROVAL_PACKET_ID",
+            ],
+            verification=["/owner/paid-launch-approval-packet", "/owner/production-release-gate"],
+            docs=[],
+            external_resource_required=False,
+            owner_approval_required=True,
         ),
         _runbook_step(
             "stable_domain_dns_tls_headers",
             "Stable domain DNS, TLS, and security headers",
-            (by_key.get("stable_domain_dns_tls_callback") or {}).get("status") == "ready" and bool(domain.get("security_headers_verified")),
+            (by_key.get("stable_domain_dns_tls_callback") or {}).get("status") == "ready"
+            and bool(domain.get("security_headers_verified")),
             owner="platform_ops",
             category="domain",
             next_action="Keep DNS, TLS, deployment hardening and security headers verified on the stable HTTPS domain before routing public paid traffic.",
@@ -2128,14 +2245,14 @@ def _build_billing_domain_cutover_runbook(
             and bool(domain.get("cors_origin_aligned")),
             owner="platform_ops",
             category="domain",
-            next_action="Align the stable HTTPS origin, CORS allowlist and eBay callback URL; do not rerun eBay OAuth until the owner explicitly starts a clean new account test.",
+            next_action="Align stable HTTPS CORS and eBay callback evidence without repeating OAuth.",
             evidence_summary=_compact_drill_evidence(
                 callback=bool(domain.get("ebay_callback_verified")),
                 cors=bool(domain.get("cors_origin_aligned")),
                 repeat_oauth_allowed=False,
             ),
             environment_keys=["JIEJING_CORS_ORIGIN", "JIEJING_EBAY_CALLBACK_VERIFIED"],
-            verification=["/domain/status", "eBay developer callback configuration screenshot or audit note"],
+            verification=["/domain/status", "eBay callback audit evidence"],
             docs=[],
             external_resource_required=True,
             repeat_oauth_allowed=False,
@@ -2149,7 +2266,7 @@ def _build_billing_domain_cutover_runbook(
             and _env_present(rollback_audit_packet_id),
             owner="release_manager",
             category="release",
-            next_action="Record rollback plan, secret scan, readiness snapshots and browser smoke evidence before owner approval for paid public launch.",
+            next_action="Record rollback plan, secret scan, readiness snapshots and browser smoke evidence before owner approval.",
             evidence_summary=_compact_drill_evidence(
                 final_smoke=(by_key.get("final_paid_launch_smoke_evidence") or {}).get("status") or "missing",
                 rollback_verified=_env_bool("JIEJING_CUTOVER_ROLLBACK_VERIFIED"),
@@ -2159,7 +2276,7 @@ def _build_billing_domain_cutover_runbook(
                 audit_packet_id_present=_env_present(rollback_audit_packet_id),
             ),
             environment_keys=[*rollback_env, rollback_audit_packet_id],
-            verification=["tools/jiejing_secret_scan.py", "/health", "/health/deep", "/readiness/product-saas", "output/browser-smoke"],
+            verification=["tools/jiejing_secret_scan.py", "/health/deep", "/readiness/product-saas"],
             docs=[],
             external_resource_required=False,
             owner_approval_required=True,
@@ -2176,7 +2293,11 @@ def _build_paid_launch_cutover_decision(
 ) -> dict[str, Any]:
     by_key = {str(item.get("key") or ""): item for item in cutover_checklist if isinstance(item, dict)}
     blocked_items = [item for item in cutover_checklist if isinstance(item, dict) and item.get("status") != "ready"]
-    runbook = _build_billing_domain_cutover_runbook(cutover_checklist=cutover_checklist, billing=billing, domain=domain)
+    runbook = _build_wechat_domain_cutover_runbook(
+        cutover_checklist=cutover_checklist,
+        billing=billing,
+        domain=domain,
+    )
     blocked_runbook = [item for item in runbook if isinstance(item, dict) and item.get("status") != "ready"]
     ready_for_owner_approval = paid_launch_ready and not blocked_items and not blocked_runbook
     next_item = blocked_items[0] if blocked_items else {}
@@ -2206,21 +2327,23 @@ def _build_paid_launch_cutover_decision(
         "runbook_total_count": len(runbook),
         "runbook_blocked_count": len(blocked_runbook),
         "next_runbook_step": _cutover_next_operator_step(next_runbook),
-        "billing_live_contract_ready": (by_key.get("billing_provider_live_contract") or {}).get("status") == "ready",
+        "billing_live_contract_ready": (by_key.get("mainland_wechat_payment_contract") or {}).get("status") == "ready",
         "stable_domain_ready": (by_key.get("stable_domain_dns_tls_callback") or {}).get("status") == "ready",
-        "stripe_webhook_version_verified": (by_key.get("stripe_api_webhook_version_alignment") or {}).get("status") == "ready",
+        "wechat_zero_charge_rehearsal_ready": (
+            billing.get("wechat_zero_charge_rehearsal_evidence") or {}
+        ).get("ready") is True,
         "ebay_refresh_proof_ready": (by_key.get("ebay_refresh_probe_after_new_account") or {}).get("status") == "ready",
         "rollback_plan": [
             "keep_current_staging_url_available_until_stable_domain_smoke_passes",
             "do_not_enable_public_checkout_until_billing_domain_legal_and_final_smoke_are_ready",
-            "disable_quota_enforcement_or_billing_provider_flags_if_checkout_or_webhook_smoke_fails",
+            "close_wechat_charge_switch_if_signed_callback_query_refund_or_entitlement_smoke_fails",
             "keep_real_ebay_writes_confirmation_gated_after_cutover",
         ],
         "evidence_to_record": [
             "domain_status_json",
-            "billing_checkout_contract_json",
-            "signed_webhook_contract_json",
-            "stripe_webhook_endpoint_api_version",
+            "mainland_wechat_payment_contract_json",
+            "wechat_zero_charge_rehearsal_audit",
+            "wechat_charge_approval_hold_json",
             "commercial_launch_gate_json",
             "browser_smoke_output",
             "secret_scan_output",
@@ -2434,7 +2557,7 @@ def _action_plan_item(
     ready_statuses = {"ready", "packet_backed_gate_ready", "vault_backed_refresh_adapter_ready"}
     status = "ready" if group.get("status") == "ready" or readiness_item.get("status") in ready_statuses else "blocked"
     titles = {
-        "billing_quota": "正式收费系统",
+        "billing_quota": "大陆微信支付与额度",
         "stable_domain_tls": "稳定域名与 OAuth callback",
         "ebay_token_refresh_vault_adapter": "eBay 授权自动续期",
         "account_health_incident_mode": "账号健康与事故模式",
@@ -2458,7 +2581,7 @@ def _action_plan_item(
         "final_commercial_smoke": "发布经理",
     }
     next_actions = {
-        "billing_quota": "接正式 Stripe/Paddle/Lemon Squeezy provider，发布真实 plan、quota、签名 webhook、欠费停用和发票/用量账单。",
+        "billing_quota": "完成微信支付生产证据和隔离零扣款演练；在最终书面批准前保持公开收费关闭。",
         "stable_domain_tls": "绑定稳定域名，完成 DNS/TLS、CORS、eBay callback、部署硬化和安全头验证。",
         "ebay_token_refresh_vault_adapter": "用后端 Vault/KMS secret_ref 跑一次真实 refresh 证明；前端、Runtime、报告和记忆都不能拿到原始 token。",
         "account_health_incident_mode": "每次真实写入前读取账号健康快照；冻结、受限、付款冻结、额度不足时进入事故模式，只允许诊断和证据包。",
@@ -2502,9 +2625,22 @@ def _action_evidence_summary(
     counts: dict[str, Any],
 ) -> str:
     if key == "billing_quota":
-        provider = (billing.get("provider") or {}).get("selected") or "not_selected"
-        blockers = billing.get("paid_launch_blockers") or []
-        return f"provider={provider}; paid_blockers={len(blockers)}"
+        payment = (
+            billing.get("mainland_payment_launch")
+            if isinstance(billing.get("mainland_payment_launch"), dict)
+            else {}
+        )
+        rehearsal = (
+            billing.get("wechat_zero_charge_rehearsal_evidence")
+            if isinstance(billing.get("wechat_zero_charge_rehearsal_evidence"), dict)
+            else {}
+        )
+        return (
+            "provider=wechat_pay_native; "
+            f"owner_ready={payment.get('mainland_payment_ready_for_owner_approval') is True}; "
+            f"zero_charge_rehearsal_ready={rehearsal.get('ready') is True}; "
+            "public_charging_allowed=false"
+        )
     if key == "stable_domain_tls":
         blockers = domain.get("blockers") or []
         return f"domain={domain.get('stable_domain') or 'not_selected'}; blockers={len(blockers)}"

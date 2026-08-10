@@ -35,7 +35,7 @@ def fail(message: str) -> int:
 
 
 def main() -> int:
-    with patch("jiejing_saas.commercial_launch_gate._build_billing_domain_cutover_runbook", return_value=[]):
+    with patch("jiejing_saas.commercial_launch_gate._build_wechat_domain_cutover_runbook", return_value=[]):
         owner_ready_decision = _build_paid_launch_cutover_decision(
             cutover_checklist=[],
             billing={},
@@ -113,7 +113,7 @@ def main() -> int:
             if isinstance(item, dict)
         }
         if set(drills) != {
-            "stripe_billing_live_mode",
+            "wechat_pay_zero_charge_production_rehearsal",
             "stable_domain_cutover",
             "ebay_refresh_vault_probe",
             "account_health_incident_mode",
@@ -368,8 +368,7 @@ def main() -> int:
             if isinstance(item, dict)
         }
         if set(cutover) != {
-            "billing_provider_live_contract",
-            "stripe_api_webhook_version_alignment",
+            "mainland_wechat_payment_contract",
             "stable_domain_dns_tls_callback",
             "backup_monitoring_restore_drill",
             "legal_risk_boundary_docs",
@@ -396,16 +395,15 @@ def main() -> int:
             if isinstance(item, dict)
         }
         if set(runbook) != {
-            "stripe_account_live_mode_contract",
-            "stripe_api_webhook_version_contract",
-            "stripe_live_webhook_resilience",
-            "stripe_customer_portal_failure_paths",
+            "wechat_pay_production_contract",
+            "wechat_pay_zero_charge_rehearsal_evidence",
+            "wechat_pay_public_charge_approval_hold",
             "stable_domain_dns_tls_headers",
             "stable_domain_oauth_cors_alignment",
             "cutover_rollback_audit_packet",
         }:
             return fail(f"billing/domain cutover runbook missing or unexpected: {sorted(runbook)}")
-        if decision.get("runbook_total_count") != 7 or not (decision.get("next_runbook_step") or {}).get("key"):
+        if decision.get("runbook_total_count") != 6 or not (decision.get("next_runbook_step") or {}).get("key"):
             return fail(f"cutover decision should expose runbook counts and next step: {decision}")
         for key, item in runbook.items():
             if item.get("triggers_real_charge") is not False:
@@ -418,10 +416,8 @@ def main() -> int:
             return fail("domain/OAuth runbook item must forbid repeating eBay OAuth")
         if runbook["stable_domain_oauth_cors_alignment"].get("triggers_ebay_oauth") is not False:
             return fail("domain/OAuth runbook item must not trigger eBay OAuth")
-        if "JIEJING_STRIPE_WEBHOOK_FAILURE_PATH_EVIDENCE_ID" not in runbook["stripe_live_webhook_resilience"].get("environment_keys", []):
-            return fail("webhook resilience runbook must require a failure-path evidence id")
-        if "JIEJING_STRIPE_CUSTOMER_PORTAL_FAILURE_PATH_EVIDENCE_ID" not in runbook["stripe_customer_portal_failure_paths"].get("environment_keys", []):
-            return fail("Customer Portal failure-path runbook must require an evidence id")
+        if "JIEJING_WECHAT_PAY_CHARGE_ALLOWED" not in runbook["wechat_pay_public_charge_approval_hold"].get("environment_keys", []):
+            return fail("WeChat public-charge hold must pin the exact approval switch")
         if "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID" not in runbook["cutover_rollback_audit_packet"].get("environment_keys", []):
             return fail("rollback runbook must require an audit packet id")
         lane_categories = {item.get("category") for item in decision.get("lanes", []) if isinstance(item, dict)}
@@ -431,18 +427,38 @@ def main() -> int:
             return fail("cutover decision should expose the next blocked operator step")
         if summary.get("cutover_decision_status") != decision.get("status"):
             return fail("launch action summary should include cutover decision status")
-        if summary.get("runbook_total_count") != 7 or not summary.get("next_runbook_step"):
+        if summary.get("runbook_total_count") != 6 or not summary.get("next_runbook_step"):
             return fail(f"launch action summary should include runbook counts and next step: {summary}")
         if cutover["stable_domain_dns_tls_callback"].get("status") != "ready":
             return fail("stable domain cutover checklist item should be ready in stable-domain fixture")
-        if cutover["billing_provider_live_contract"].get("triggers_real_charge") is not False:
+        if cutover["mainland_wechat_payment_contract"].get("triggers_real_charge") is not False:
             return fail("billing cutover checklist must not trigger a real charge")
         if cutover["ebay_refresh_probe_after_new_account"].get("repeat_oauth_allowed") is not False:
             return fail("eBay refresh cutover item must forbid OAuth repeat")
         if cutover["ebay_refresh_probe_after_new_account"].get("triggers_real_platform_write") is not False:
             return fail("eBay refresh cutover item must not trigger platform writes")
-        if summary.get("cutover_total_count") != 7 or not summary.get("next_cutover_item"):
+        if summary.get("cutover_total_count") != 6 or not summary.get("next_cutover_item"):
             return fail(f"launch action summary should include cutover counts and next item: {summary}")
+        mainland_payment_projection = {
+            "drill": {
+                key: (drills.get("wechat_pay_zero_charge_production_rehearsal") or {}).get(key)
+                for key in ("key", "title", "next_action", "evidence_summary", "verification")
+            },
+            "cutover": {
+                key: (cutover.get("mainland_wechat_payment_contract") or {}).get(key)
+                for key in ("key", "title", "next_action", "evidence_summary", "environment_keys", "verification")
+            },
+            "billing_runbook": [
+                {
+                    key: item.get(key)
+                    for key in ("key", "title", "next_action", "evidence_summary", "environment_keys", "verification")
+                }
+                for item in runbook.values()
+                if item.get("category") == "billing"
+            ],
+        }
+        if "stripe" in json.dumps(mainland_payment_projection, ensure_ascii=False).lower():
+            return fail(f"Stripe must not participate in the mainland commercial launch sequence: {mainland_payment_projection}")
         serialized = json.dumps(action_plan, ensure_ascii=False).lower()
         for forbidden in ("access_token", "refresh_token=", "client_secret=", "api_key=", "password="):
             if forbidden in serialized:

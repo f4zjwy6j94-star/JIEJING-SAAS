@@ -111,6 +111,8 @@ def main() -> int:
         "jiejing_saas/billing_provider_evidence_register.py",
         "jiejing_saas/billing_provider_rehearsal.py",
         "jiejing_saas/billing_webhook.py",
+        "jiejing_saas/billing_wechat_pay.py",
+        "jiejing_saas/billing_wechat_pay_rehearsal.py",
         "jiejing_saas/billing_domain_cutover_rehearsal.py",
         "jiejing_saas/commercial_launch_gate.py",
         "jiejing_saas/domain_readiness.py",

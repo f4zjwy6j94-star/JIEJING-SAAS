@@ -72,6 +72,40 @@ def main() -> int:
         return fail(f"refund-not-ready canonical state must fail closed: {malformed_section}")
     if malformed_section.get("checks", {}).get("refund_controls_ready") is not False:
         return fail(f"refund readiness blocker must remain explicit: {malformed_section}")
+    blocked_packet = _ready_paid_launch_packet()
+    blocked_packet["status"] = "blocked"
+    owner_blocked_packet = _ready_paid_launch_packet()
+    owner_blocked_packet["ready_for_owner_approval"] = False
+    rehearsal_blocked_packet = _ready_paid_launch_packet()
+    rehearsal_blocked_packet["steps"] = [
+        {**step, "status": "blocked"}
+        if step.get("key") == "no_charge_launch_rehearsal"
+        else step
+        for step in rehearsal_blocked_packet["steps"]
+    ]
+    zero_charge_blocked_packet = _ready_paid_launch_packet()
+    zero_charge_blocked_packet["summary"] = {
+        **zero_charge_blocked_packet["summary"],
+        "wechat_zero_charge_rehearsal_ready": False,
+    }
+    evidence_blocked_packet = _ready_paid_launch_packet()
+    evidence_blocked_packet["summary"] = {
+        **evidence_blocked_packet["summary"],
+        "no_charge_evidence_packet_status": "blocked",
+    }
+    for label, packet in (
+        ("approval_status", blocked_packet),
+        ("approval_owner_ready", owner_blocked_packet),
+        ("no_charge_step", rehearsal_blocked_packet),
+        ("zero_charge_evidence", zero_charge_blocked_packet),
+        ("no_charge_packet", evidence_blocked_packet),
+    ):
+        inherited = _billing_section(
+            mainland_payment=_ready_mainland_payment(),
+            approval_packet=packet,
+        )
+        if inherited.get("status") != "blocked":
+            return fail(f"billing section must inherit blocked {label}: {inherited}")
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -165,12 +199,81 @@ def main() -> int:
         summary = ready.get("summary") if isinstance(ready.get("summary"), dict) else {}
         if summary.get("decision") != "ready_for_owner_approval_not_auto_launch":
             return fail(f"ready fixture should not auto-launch: {summary}")
+        if (
+            summary.get("production_ready") is not False
+            or summary.get("beta_ready") is not True
+            or summary.get("can_accept_real_customers") is not False
+        ):
+            return fail(f"release must accept only the exact public-charge hold preapproval state: {summary}")
         if summary.get("ebay_token_refresh_success_count") != 1:
             return fail(f"ready fixture must use backend refresh audit proof: {summary}")
         sections = {item.get("key"): item for item in ready.get("sections", []) if isinstance(item, dict)}
         for key in EXPECTED_SECTIONS:
             if sections.get(key, {}).get("status") != "ready":
                 return fail(f"ready section should be ready: {key} {sections.get(key)}")
+        readiness_blocked = _build(
+            "product-readiness-blocked.sqlite",
+            seed_ready_data=True,
+            readiness_override={
+                "production_ready": False,
+                "beta_ready": False,
+                "can_accept_real_customers": False,
+                "reason": "readiness_blocked",
+                "blocker_count": 1,
+                "warning_count": 0,
+                "items": [
+                    _readiness_item("database_reachability", "blocked", "blocker")
+                ],
+                "product_evidence": {},
+            },
+        )
+        readiness_summary = (
+            readiness_blocked.get("summary")
+            if isinstance(readiness_blocked.get("summary"), dict)
+            else {}
+        )
+        readiness_sections = {
+            item.get("key"): item
+            for item in readiness_blocked.get("sections", [])
+            if isinstance(item, dict)
+        }
+        if (
+            readiness_blocked.get("status") != "blocked"
+            or readiness_blocked.get("ready_for_owner_approval") is not False
+            or readiness_summary.get("ready_count") == readiness_summary.get("total_count")
+        ):
+            return fail(f"all-false product readiness must hard-block production release: {readiness_summary}")
+        owner_readiness_checks = readiness_sections.get(
+            "final_owner_approval_and_launch_switch_hold", {}
+        ).get("checks", {})
+        if owner_readiness_checks.get("product_readiness_owner_approval_state") is not False:
+            return fail(f"product readiness blockers must remain explicit: {owner_readiness_checks}")
+        extra_warning = _preapproval_product_readiness()
+        extra_warning["warning_count"] = 2
+        extra_warning["items"] = [
+            *extra_warning["items"],
+            _readiness_item("another_warning", "not_ready", "warning"),
+        ]
+        warning_blocked = _build(
+            "product-readiness-extra-warning.sqlite",
+            seed_ready_data=True,
+            readiness_override=extra_warning,
+        )
+        if warning_blocked.get("ready_for_owner_approval") is not False:
+            return fail("production release must reject an extra readiness warning")
+        payment_env_keys = set(
+            sections["mainland_wechat_payment_and_refund_controls"].get("environment_keys") or []
+        )
+        if "JIEJING_WECHAT_PAY_CHARGE_ALLOWED" not in payment_env_keys:
+            return fail("production payment section must pin the exact WeChat charge approval switch")
+        owner_checks = sections["final_owner_approval_and_launch_switch_hold"].get("checks", {})
+        owner_env_keys = set(
+            sections["final_owner_approval_and_launch_switch_hold"].get("environment_keys") or []
+        )
+        if owner_checks.get("wechat_charge_switch_closed") is not True:
+            return fail("production owner-approval state must keep the WeChat charge switch closed")
+        if "JIEJING_WECHAT_PAY_CHARGE_ALLOWED" not in owner_env_keys:
+            return fail("final production approval hold must pin the exact WeChat charge switch")
         backup_checks = sections["backup_restore_dr_and_secret_recovery"].get("checks", {})
         if backup_checks.get("restore_drill_fresh") is not True:
             return fail(f"ready backup section should expose fresh restore-drill evidence: {backup_checks}")
@@ -218,6 +321,11 @@ def main() -> int:
         }
         if "wechat_pay_native_production_cutover" not in external_evidence:
             return fail(f"WeChat production evidence bucket is missing: {sorted(external_evidence)}")
+        external_wechat_keys = set(
+            external_evidence["wechat_pay_native_production_cutover"].get("environment_keys") or []
+        )
+        if "JIEJING_WECHAT_PAY_CHARGE_ALLOWED" not in external_wechat_keys:
+            return fail("production external evidence must pin the exact WeChat charge approval switch")
         if "stripe_live_billing" in external_evidence:
             return fail("Stripe evidence must not remain a mainland production release requirement")
         _assert_unsafe_flags_false(ready, "ready gate")
@@ -284,7 +392,12 @@ def _assert_unsafe_flags_false(payload: dict[str, object], label: str) -> None:
             raise AssertionError(f"{label} unsafe flag should be false: {flag}")
 
 
-def _build(name: str, *, seed_ready_data: bool = False) -> dict[str, object]:
+def _build(
+    name: str,
+    *,
+    seed_ready_data: bool = False,
+    readiness_override: dict[str, object] | None = None,
+) -> dict[str, object]:
     db_path = OUT / name
     runtime_db_path = OUT / f"runtime-{name}"
     settings = SaaSSettings.from_env(db_path=db_path, runtime_db_path=runtime_db_path, output_root=OUT, host="127.0.0.1", port=8788)
@@ -298,6 +411,13 @@ def _build(name: str, *, seed_ready_data: bool = False) -> dict[str, object]:
         ), patch(
             "jiejing_saas.production_release_gate.build_paid_launch_approval_packet",
             return_value=_ready_paid_launch_packet(),
+        ), patch(
+            "jiejing_saas.production_release_gate.build_product_readiness_or_degraded",
+            return_value=(
+                readiness_override
+                if readiness_override is not None
+                else _preapproval_product_readiness()
+            ),
         ):
             return build_production_release_gate(settings, repo)
     return build_production_release_gate(settings, repo)
@@ -317,6 +437,10 @@ def _ready_paid_launch_packet() -> dict[str, object]:
         "triggers_real_platform_write": False,
         "old_frozen_ebay_account_reuse_allowed": False,
         "old_demo_product_or_sku_allowed": False,
+        "summary": {
+            "wechat_zero_charge_rehearsal_ready": True,
+            "no_charge_evidence_packet_status": "ready",
+        },
         "current_store_oauth_boundary": {
             "status": "authorized",
             "authorized": True,
@@ -351,8 +475,39 @@ def _ready_paid_launch_packet() -> dict[str, object]:
         },
         "steps": [
             {"key": "wechat_pay_native_cutover", "status": "ready", "blocked_by": []},
+            {"key": "no_charge_launch_rehearsal", "status": "ready", "blocked_by": []},
             {"key": "new_ebay_account_low_risk_smoke", "status": "ready", "blocked_by": []},
         ],
+    }
+
+
+def _readiness_item(key: str, status: str, severity: str) -> dict[str, object]:
+    return {
+        "key": key,
+        "label": key,
+        "status": status,
+        "severity": severity,
+        "detail": "sanitized readiness detail",
+        "next_action": "sanitized next action",
+    }
+
+
+def _preapproval_product_readiness() -> dict[str, object]:
+    return {
+        "production_ready": False,
+        "beta_ready": True,
+        "can_accept_real_customers": False,
+        "reason": "expected_public_charge_approval_hold",
+        "blocker_count": 0,
+        "warning_count": 1,
+        "items": [
+            _readiness_item(
+                "billing_quota",
+                "mainland_payment_ready_for_owner_approval",
+                "warning",
+            )
+        ],
+        "product_evidence": {},
     }
 
 

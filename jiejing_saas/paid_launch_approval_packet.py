@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from .billing_domain_cutover_rehearsal import build_billing_domain_cutover_rehearsal
 from .billing_payment_options import (
     build_mainland_payment_launch_status,
     validate_mainland_payment_launch_for_public,
@@ -13,7 +12,10 @@ from .billing_payment_options import (
 from .commercial_launch_gate import build_commercial_launch_gate
 from .config import SaaSSettings
 from .domain_readiness import build_domain_readiness
-from .readiness import build_product_readiness_or_degraded
+from .readiness import (
+    build_product_readiness_or_degraded,
+    validate_paid_owner_product_readiness,
+)
 from .repository import SaaSRepository
 
 
@@ -36,10 +38,6 @@ def build_paid_launch_approval_packet(
 
     raw_readiness = build_product_readiness_or_degraded(settings, repository)
     readiness = raw_readiness if isinstance(raw_readiness, dict) else {}
-    readiness_contract_valid = isinstance(raw_readiness, dict) and all(
-        type(readiness.get(key)) is bool
-        for key in ("production_ready", "beta_ready", "can_accept_real_customers")
-    )
     domain = build_domain_readiness(settings)
     launch_gate = build_commercial_launch_gate(
         settings,
@@ -47,10 +45,29 @@ def build_paid_launch_approval_packet(
         company_id=company_id,
         store_id=store_id,
     )
-    rehearsal = build_billing_domain_cutover_rehearsal(settings, repository)
     mainland_payment = build_mainland_payment_launch_status(settings, repository)
-    no_charge = _no_charge_launch_rehearsal_status()
+    validated_mainland_payment = validate_mainland_payment_launch_for_public(mainland_payment)
+    paid_product_readiness = validate_paid_owner_product_readiness(
+        raw_readiness,
+        mainland_payment_ready_for_owner_approval=(
+            validated_mainland_payment.get("mainland_payment_ready_for_owner_approval") is True
+        ),
+    )
+    readiness_blockers = [
+        str(item)
+        for item in paid_product_readiness.get("blockers", [])
+        if isinstance(item, str) and item
+    ]
     action_plan = launch_gate.get("launch_action_plan") if isinstance(launch_gate.get("launch_action_plan"), dict) else {}
+    cutover_decision = (
+        action_plan.get("paid_launch_cutover_decision")
+        if isinstance(action_plan.get("paid_launch_cutover_decision"), dict)
+        else {}
+    )
+    wechat_zero_charge_rehearsal_ready = cutover_decision.get("wechat_zero_charge_rehearsal_ready") is True
+    no_charge = _no_charge_launch_rehearsal_status(
+        wechat_zero_charge_rehearsal_ready=wechat_zero_charge_rehearsal_ready
+    )
     new_account = action_plan.get("new_ebay_account_smoke_runbook") if isinstance(action_plan.get("new_ebay_account_smoke_runbook"), list) else []
     current_store_oauth_boundary = (
         launch_gate.get("current_store_oauth_boundary")
@@ -76,7 +93,7 @@ def build_paid_launch_approval_packet(
         no_charge=no_charge,
         new_account=new_account,
     )
-    if not readiness_contract_valid:
+    if readiness_blockers:
         steps = [
             {
                 **step,
@@ -88,7 +105,7 @@ def build_paid_launch_approval_packet(
                         if isinstance(step.get("blocked_by"), list)
                         else []
                     ),
-                    "readiness_contract_invalid",
+                    *readiness_blockers,
                 ],
             }
             if step.get("key") == "no_charge_launch_rehearsal"
@@ -151,15 +168,12 @@ def build_paid_launch_approval_packet(
             "beta_ready": readiness.get("beta_ready") is True,
             "can_accept_real_customers": readiness.get("can_accept_real_customers") is True,
             "stable_domain_ready": domain.get("production_domain_ready") is True,
-            "mainland_payment_status": validate_mainland_payment_launch_for_public(mainland_payment).get(
-                "payment_path_status"
+            "mainland_payment_status": validated_mainland_payment.get("payment_path_status"),
+            "mainland_payment_ready_for_owner_approval": (
+                validated_mainland_payment.get("mainland_payment_ready_for_owner_approval") is True
             ),
-            "mainland_payment_ready_for_owner_approval": validate_mainland_payment_launch_for_public(
-                mainland_payment
-            ).get("mainland_payment_ready_for_owner_approval")
-            is True,
-            "stripe_rehearsal_status": rehearsal.get("status") or "unknown",
-            "stripe_rehearsal_status_deprecated": True,
+            "product_readiness_owner_approval_state": paid_product_readiness.get("state"),
+            "wechat_zero_charge_rehearsal_ready": wechat_zero_charge_rehearsal_ready,
             "no_charge_evidence_packet_status": "ready" if no_charge.get("ready") is True else "blocked",
             "new_account_smoke_ready": _all_ready(new_account),
             "external_configuration_needed_count": len([item for item in user_items if item.get("status") != "ready"]),
@@ -183,7 +197,8 @@ def build_paid_launch_approval_packet(
         "final_rehearsal_commands": [
             "python tools/test_jiejing_paid_launch_approval_packet.py",
             "python tools/test_jiejing_domain_launch_gate.py",
-            "python tools/test_jiejing_billing_domain_cutover_rehearsal.py",
+            "python tools/test_jiejing_wechat_pay_zero_charge_rehearsal.py",
+            "python tools/test_jiejing_wechat_pay_zero_charge_rehearsal_http.py",
             "python tools/test_jiejing_new_ebay_account_low_risk_runbook.py",
             "python tools/jiejing_secret_scan.py",
             "node tools/codex_jiejing_paid_cutover_decision_smoke.js",
@@ -371,6 +386,7 @@ def _external_configuration_items(
                 "JIEJING_WECHAT_PAY_NOTIFY_URL",
                 "JIEJING_WECHAT_PAY_REFUND_NOTIFY_URL",
                 "JIEJING_WECHAT_PAY_LIVE_API_ENABLED",
+                "JIEJING_WECHAT_PAY_CHARGE_ALLOWED",
                 "JIEJING_WECHAT_PAY_REFUND_ALLOWED",
             ],
             evidence=_evidence(
@@ -431,25 +447,25 @@ def _external_configuration_items(
     ]
 
 
-def _no_charge_launch_rehearsal_status() -> dict[str, Any]:
+def _no_charge_launch_rehearsal_status(
+    *,
+    wechat_zero_charge_rehearsal_ready: bool,
+) -> dict[str, Any]:
     checks = (
         ("cutover_rollback_not_verified", "JIEJING_CUTOVER_ROLLBACK_VERIFIED", "bool"),
         ("secret_scan_not_verified", "JIEJING_SECRET_SCAN_PASSED", "bool"),
         ("readiness_snapshot_not_recorded", "JIEJING_READINESS_SNAPSHOT_RECORDED", "bool"),
         ("browser_smoke_not_verified", "JIEJING_BROWSER_SMOKE_PASSED", "bool"),
         ("cutover_rollback_audit_packet_missing", "JIEJING_CUTOVER_ROLLBACK_AUDIT_PACKET_ID", "present"),
-        ("signed_payment_callback_smoke_not_verified", "JIEJING_NO_CHARGE_SIGNED_WEBHOOK_SMOKE_PASSED", "bool"),
         ("readiness_smoke_not_verified", "JIEJING_NO_CHARGE_READINESS_SMOKE_PASSED", "bool"),
-        (
-            "no_charge_live_domain_rehearsal_evidence_missing",
-            "JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID",
-            "present",
-        ),
         ("final_commercial_smoke_not_verified", "JIEJING_FINAL_COMMERCIAL_SMOKE_PASSED", "bool"),
         ("final_commercial_smoke_evidence_missing", "JIEJING_FINAL_COMMERCIAL_SMOKE_EVIDENCE_ID", "present"),
     )
     readiness: list[bool] = []
     blocked_by: list[str] = []
+    readiness.append(wechat_zero_charge_rehearsal_ready is True)
+    if wechat_zero_charge_rehearsal_ready is not True:
+        blocked_by.append("wechat_zero_charge_rehearsal_evidence_missing")
     for blocker, environment_key, mode in checks:
         ready = _env_true(environment_key) if mode == "bool" else bool(os.environ.get(environment_key, "").strip())
         readiness.append(ready)
@@ -461,6 +477,7 @@ def _no_charge_launch_rehearsal_status() -> dict[str, Any]:
         "total_count": len(readiness),
         "blocked_by": blocked_by,
         "environment_keys": [environment_key for _, environment_key, _ in checks],
+        "wechat_zero_charge_rehearsal_ready": wechat_zero_charge_rehearsal_ready is True,
         "public_paid_launch_allowed": False,
         "charge_now_allowed": False,
         "calls_external_payment_api": False,

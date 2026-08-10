@@ -53,6 +53,7 @@ from .billing_wechat_pay import (
     process_wechat_pay_notification_from_env,
     process_wechat_pay_refund_notification_from_env,
 )
+from .billing_wechat_pay_rehearsal import run_wechat_pay_zero_charge_rehearsal
 from .commercial_launch_gate import build_commercial_launch_gate, build_current_store_ebay_evidence
 from .config import SaaSSettings
 from .controlled_bridges import build_controlled_bridge_contract
@@ -165,6 +166,8 @@ PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_IP_DEFAULT = 60
 PRODUCT_FEEDBACK_RATE_LIMIT_MAX_PER_IP_MAX = 600
 DOMESTIC_RECONCILIATION_RATE_LIMIT_WINDOW_SECONDS = 60
 DOMESTIC_RECONCILIATION_RATE_LIMIT_MAX_PER_COMPANY = 6
+WECHAT_ZERO_CHARGE_REHEARSAL_RATE_LIMIT_WINDOW_SECONDS = 60 * 60
+WECHAT_ZERO_CHARGE_REHEARSAL_RATE_LIMIT_MAX_PER_COMPANY = 2
 LOCAL_RATE_LIMIT_MAX_BUCKETS_DEFAULT = 4096
 EXPENSIVE_API_RATE_LIMIT_PREFIXES = (
     "tasks",
@@ -197,6 +200,7 @@ EXPENSIVE_API_RATE_LIMIT_EXACT_PATHS = {
     "billing/checkout-session",
     "billing/customer-portal",
     "billing/test-event",
+    "billing/wechat-pay/zero-charge-rehearsal",
 }
 SESSION_COOKIE_NAME = "jiejing_saas_session"
 MEDIA_PROVIDER_JOB_KEYS = {"media.asset_generation", "media.fal_asset_generation"}
@@ -3075,6 +3079,28 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     else HTTPStatus.CREATED
                     if result.get("ok")
                     else HTTPStatus(int(result.get("http_status") or 400))
+                ),
+            )
+            return
+
+        if path == "billing/wechat-pay/zero-charge-rehearsal":
+            if not self._require_permission(identity, "manage_billing"):
+                return
+            if not self._check_wechat_zero_charge_rehearsal_rate_limit(identity):
+                return
+            body = self._read_json_body()
+            result = run_wechat_pay_zero_charge_rehearsal(
+                exact_confirmation=str(body.get("exact_confirmation") or ""),
+                repository=self.repository,
+                company_id=identity["company_id"],
+                user_id=identity["user_id"],
+            )
+            self._send_json(
+                {"wechat_pay_zero_charge_rehearsal": result},
+                status=(
+                    HTTPStatus.OK
+                    if result.get("status") == "ready"
+                    else HTTPStatus.CONFLICT
                 ),
             )
             return
@@ -6681,6 +6707,46 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         )
         return False
 
+    def _check_wechat_zero_charge_rehearsal_rate_limit(self, identity: dict[str, Any]) -> bool:
+        result = self._consume_rate_limit(
+            scope="billing:wechat-zero-charge-rehearsal:company",
+            subject=str(identity.get("company_id") or ""),
+            limit=WECHAT_ZERO_CHARGE_REHEARSAL_RATE_LIMIT_MAX_PER_COMPANY,
+            window_seconds=WECHAT_ZERO_CHARGE_REHEARSAL_RATE_LIMIT_WINDOW_SECONDS,
+            local_buckets=self.expensive_api_rate_limit_buckets,
+            local_lock=self.expensive_api_rate_limit_lock,
+        )
+        if result.get("allowed") is True:
+            return True
+        self._send_json(
+            {
+                "error": "zero-charge rehearsal rate limit exceeded",
+                "status": int(HTTPStatus.TOO_MANY_REQUESTS),
+                "retry_after_seconds": int(
+                    result.get("retry_after_seconds")
+                    or WECHAT_ZERO_CHARGE_REHEARSAL_RATE_LIMIT_WINDOW_SECONDS
+                ),
+                "rate_limit": {
+                    "scope": "wechat_zero_charge_rehearsal_per_company",
+                    "window_seconds": WECHAT_ZERO_CHARGE_REHEARSAL_RATE_LIMIT_WINDOW_SECONDS,
+                    "max_requests": WECHAT_ZERO_CHARGE_REHEARSAL_RATE_LIMIT_MAX_PER_COMPANY,
+                    "protected_high_cost_api": True,
+                    "secret_exposed": False,
+                },
+                "transport_invoked": False,
+                "fake_transport_call_count": 0,
+                "evidence_recorded": False,
+                "creates_real_order": False,
+                "calls_external_api": False,
+                "calls_external_payment_api": False,
+                "triggers_real_charge": False,
+                "triggers_real_refund": False,
+                "secret_exposed": False,
+            },
+            status=HTTPStatus.TOO_MANY_REQUESTS,
+        )
+        return False
+
     def _consume_rate_limit(
         self,
         *,
@@ -7168,7 +7234,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             (
                 "billing",
                 "checkout, portal, billing test events and manual beta payment orders",
-                ["POST /billing/checkout-session", "POST /billing/test-event", "POST /billing/manual-beta/orders"],
+                [
+                    "POST /billing/checkout-session",
+                    "POST /billing/test-event",
+                    "POST /billing/manual-beta/orders",
+                    "POST /billing/wechat-pay/zero-charge-rehearsal",
+                ],
             ),
             (
                 "owner",

@@ -152,6 +152,27 @@ def _build(name: str, *, seed_ready_data: bool = False) -> dict[str, object]:
         ), patch(
             "jiejing_saas.production_release_gate.build_paid_launch_approval_packet",
             return_value=_ready_paid_launch_packet(),
+        ), patch(
+            "jiejing_saas.production_release_gate.build_product_readiness_or_degraded",
+            return_value={
+                "production_ready": False,
+                "beta_ready": True,
+                "can_accept_real_customers": False,
+                "reason": "expected_public_charge_approval_hold",
+                "blocker_count": 0,
+                "warning_count": 1,
+                "items": [
+                    {
+                        "key": "billing_quota",
+                        "label": "Billing and quota",
+                        "status": "mainland_payment_ready_for_owner_approval",
+                        "severity": "warning",
+                        "detail": "Sanitized owner-preapproval hold.",
+                        "next_action": "Keep public charging closed until final approval.",
+                    }
+                ],
+                "product_evidence": {},
+            },
         ):
             return build_production_evidence_ledger(settings, repo)
     return build_production_evidence_ledger(settings, repo)

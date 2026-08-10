@@ -37,6 +37,7 @@ WECHAT_ENV_KEYS = {
     "JIEJING_WECHAT_PAY_NOTIFY_URL",
     "JIEJING_WECHAT_PAY_REFUND_NOTIFY_URL",
     "JIEJING_WECHAT_PAY_LIVE_API_ENABLED",
+    "JIEJING_WECHAT_PAY_CHARGE_ALLOWED",
     "JIEJING_WECHAT_PAY_REFUND_ALLOWED",
 }
 
@@ -105,6 +106,74 @@ def main() -> int:
         summary = ready.get("summary") if isinstance(ready.get("summary"), dict) else {}
         if summary.get("blocked_count") != 0 or summary.get("next_step") != "":
             return fail(f"legacy Stripe rehearsal must not affect blocked count or next step: {summary}")
+        if (
+            summary.get("production_ready") is not False
+            or summary.get("beta_ready") is not True
+            or summary.get("can_accept_real_customers") is not False
+        ):
+            return fail(f"exact public-charge-hold preapproval state drifted: {summary}")
+
+        final_ready = _build(
+            settings,
+            repository,
+            mainland=_mainland_payment(owner_ready=True),
+            domain_ready=True,
+            no_charge_ready=True,
+            new_account_ready=True,
+            readiness_override=_final_product_readiness(),
+        )
+        if final_ready.get("ready_for_owner_approval") is not True:
+            return fail(f"future all-green final readiness state must remain accepted: {final_ready.get('summary')}")
+
+        invalid_readiness_cases = {
+            "all_false": {
+                **_preapproval_product_readiness(),
+                "beta_ready": False,
+            },
+            "wrong_reason": {
+                **_preapproval_product_readiness(),
+                "reason": "generic_not_ready",
+            },
+            "extra_warning": {
+                **_preapproval_product_readiness(),
+                "warning_count": 2,
+                "items": [
+                    *_preapproval_product_readiness()["items"],
+                    _readiness_item("another_warning", "not_ready", "warning"),
+                ],
+            },
+            "blocker": {
+                **_preapproval_product_readiness(),
+                "blocker_count": 1,
+                "items": [
+                    *_preapproval_product_readiness()["items"],
+                    _readiness_item("database_reachability", "blocked", "blocker"),
+                ],
+            },
+            "count_mismatch": {
+                **_preapproval_product_readiness(),
+                "warning_count": 0,
+            },
+            "malformed_item": {
+                **_preapproval_product_readiness(),
+                "items": [{"key": "billing_quota", "status": True, "severity": "warning"}],
+            },
+        }
+        for label, product_not_ready in invalid_readiness_cases.items():
+            product_blocked = _build(
+                settings,
+                repository,
+                mainland=_mainland_payment(owner_ready=True),
+                domain_ready=True,
+                no_charge_ready=True,
+                new_account_ready=True,
+                readiness_override=product_not_ready,
+            )
+            if (
+                product_blocked.get("status") != "blocked"
+                or product_blocked.get("ready_for_owner_approval") is not False
+            ):
+                return fail(f"strict product readiness must reject {label}: {product_blocked.get('summary')}")
 
         cross_store = _build(
             settings,
@@ -214,15 +283,14 @@ def main() -> int:
             repository,
             mainland=_mainland_payment(owner_ready=True),
             domain_ready=True,
-            no_charge_ready=True,
+            no_charge_ready=False,
             new_account_ready=True,
-            omitted_env_key="JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID",
         )
         missing_summary = missing_evidence.get("summary") if isinstance(missing_evidence.get("summary"), dict) else {}
         missing_step = _by_key(missing_evidence.get("steps")).get("no_charge_launch_rehearsal") or {}
         if missing_summary.get("next_step") != "no_charge_launch_rehearsal":
             return fail(f"missing no-charge proof should be the next blocker: {missing_summary}")
-        if "no_charge_live_domain_rehearsal_evidence_missing" not in set(missing_step.get("blocked_by") or []):
+        if "wechat_zero_charge_rehearsal_evidence_missing" not in set(missing_step.get("blocked_by") or []):
             return fail(f"missing no-charge proof blocker is not precise: {missing_step}")
 
         serialized = json.dumps(ready, ensure_ascii=False).lower()
@@ -275,7 +343,11 @@ def _build(
             os.environ.pop(key, None)
     try:
         action_plan = {
-            "paid_launch_cutover_decision": {"status": "blocked", "public_paid_launch_allowed": False},
+            "paid_launch_cutover_decision": {
+                "status": "blocked",
+                "public_paid_launch_allowed": False,
+                "wechat_zero_charge_rehearsal_ready": no_charge_ready,
+            },
             "paid_launch_cutover_checklist": [],
             "new_ebay_account_smoke_runbook": [
                 {"key": "clean_account", "status": "ready" if new_account_ready else "blocked"}
@@ -289,11 +361,7 @@ def _build(
                     return_value=(
                         readiness_override
                         if readiness_override is not None
-                        else {
-                            "production_ready": False,
-                            "beta_ready": True,
-                            "can_accept_real_customers": False,
-                        }
+                        else _preapproval_product_readiness()
                     ),
                 )
             )
@@ -326,12 +394,6 @@ def _build(
                         "connection_id_sha256": "connection-other-hash" if ebay_hash_mismatch else "connection-oauth-hash",
                         "secret_exposed": False,
                     },
-                })
-            )
-            stack.enter_context(
-                patch("jiejing_saas.paid_launch_approval_packet.build_billing_domain_cutover_rehearsal", return_value={
-                    "status": "blocked",
-                    "summary": {"next_step": "stripe_live_provider_selected"},
                 })
             )
             stack.enter_context(
@@ -408,6 +470,47 @@ def _mainland_payment(*, owner_ready: bool) -> dict[str, object]:
         "real_platform_writes_enabled": False,
         "frontend_gets_payment_secret": False,
         "secret_exposed": False,
+    }
+
+
+def _readiness_item(key: str, status: str, severity: str) -> dict[str, object]:
+    return {
+        "key": key,
+        "label": key,
+        "status": status,
+        "severity": severity,
+        "detail": "sanitized readiness detail",
+        "next_action": "sanitized next action",
+    }
+
+
+def _preapproval_product_readiness() -> dict[str, object]:
+    return {
+        "production_ready": False,
+        "beta_ready": True,
+        "can_accept_real_customers": False,
+        "reason": "expected_public_charge_approval_hold",
+        "blocker_count": 0,
+        "warning_count": 1,
+        "items": [
+            _readiness_item(
+                "billing_quota",
+                "mainland_payment_ready_for_owner_approval",
+                "warning",
+            )
+        ],
+    }
+
+
+def _final_product_readiness() -> dict[str, object]:
+    return {
+        "production_ready": True,
+        "beta_ready": True,
+        "can_accept_real_customers": True,
+        "reason": "ready",
+        "blocker_count": 0,
+        "warning_count": 0,
+        "items": [],
     }
 
 

@@ -108,6 +108,7 @@ FILES=(
   "jiejing_saas/billing_test_provider.py"
   "jiejing_saas/billing_webhook.py"
   "jiejing_saas/billing_wechat_pay.py"
+  "jiejing_saas/billing_wechat_pay_rehearsal.py"
   "jiejing_saas/ai_ceo_chat.py"
   "jiejing_saas/commercial_launch_gate.py"
   "jiejing_saas/controlled_bridges.py"

@@ -12,20 +12,20 @@ import re
 from typing import Any
 
 from .backup_plan import build_backup_plan
-from .billing_domain_cutover_rehearsal import build_billing_domain_cutover_rehearsal
 from .billing_payment_options import (
     build_mainland_payment_launch_status,
     validate_mainland_payment_launch_for_public,
 )
-from .billing_plan import build_billing_plan
-from .billing_provider_evidence_register import build_billing_provider_evidence_register
 from .config import SaaSSettings
 from .domain_readiness import build_domain_readiness
 from .edge_cutover_preflight import build_edge_cutover_preflight
 from .infrastructure_drivers import build_infrastructure_driver_status
 from .monitoring import build_monitoring_status
 from .paid_launch_approval_packet import build_paid_launch_approval_packet
-from .readiness import build_product_readiness_or_degraded
+from .readiness import (
+    build_product_readiness_or_degraded,
+    validate_paid_owner_product_readiness,
+)
 from .repository import SaaSRepository
 
 
@@ -41,16 +41,14 @@ def build_production_release_gate(
 ) -> dict[str, Any]:
     """Build a production launch packet that is safe for internal automation."""
 
-    readiness = build_product_readiness_or_degraded(settings, repository)
+    raw_readiness = build_product_readiness_or_degraded(settings, repository)
+    readiness = raw_readiness if isinstance(raw_readiness, dict) else {}
     evidence = readiness.get("product_evidence") if isinstance(readiness.get("product_evidence"), dict) else {}
     domain = build_domain_readiness(settings)
     edge = build_edge_cutover_preflight(settings)
     infrastructure = build_infrastructure_driver_status(settings)
     backup = build_backup_plan(settings, repository)
     monitoring = build_monitoring_status(settings, repository)
-    billing = build_billing_plan(settings, repository)
-    rehearsal = build_billing_domain_cutover_rehearsal(settings, repository)
-    provider_register = build_billing_provider_evidence_register(settings, repository)
     approval_packet = build_paid_launch_approval_packet(
         settings,
         repository,
@@ -59,6 +57,12 @@ def build_production_release_gate(
     )
     mainland_payment = build_mainland_payment_launch_status(settings, repository)
     validated_mainland_payment = validate_mainland_payment_launch_for_public(mainland_payment)
+    paid_product_readiness = validate_paid_owner_product_readiness(
+        raw_readiness,
+        mainland_payment_ready_for_owner_approval=(
+            validated_mainland_payment.get("mainland_payment_ready_for_owner_approval") is True
+        ),
+    )
     current_store_ebay_evidence = (
         approval_packet.get("current_store_ebay_evidence")
         if isinstance(approval_packet.get("current_store_ebay_evidence"), dict)
@@ -73,7 +77,10 @@ def build_production_release_gate(
         _billing_section(mainland_payment=mainland_payment, approval_packet=approval_packet),
         _ebay_section(evidence=evidence, approval_packet=approval_packet),
         _monitoring_section(monitoring=monitoring),
-        _owner_final_section(approval_packet=approval_packet),
+        _owner_final_section(
+            approval_packet=approval_packet,
+            paid_product_readiness=paid_product_readiness,
+        ),
     ]
     blocked = [section for section in sections if section.get("status") != "ready"]
     ready_for_owner_approval = not blocked
@@ -91,18 +98,14 @@ def build_production_release_gate(
             "blocked_count": len(blocked),
             "blocked_keys": [str(section.get("key") or "") for section in blocked],
             "next_step": str((blocked[0] if blocked else {}).get("key") or ""),
-            "beta_ready": bool(readiness.get("beta_ready")),
-            "production_ready": bool(readiness.get("production_ready")),
-            "can_accept_real_customers": bool(readiness.get("can_accept_real_customers")),
+            "beta_ready": readiness.get("beta_ready") is True,
+            "production_ready": readiness.get("production_ready") is True,
+            "can_accept_real_customers": readiness.get("can_accept_real_customers") is True,
             "ebay_token_refresh_success_count": _as_int(current_store_ebay_evidence.get("refresh_success_count")),
             "mainland_payment_provider": "wechat_pay_native",
             "mainland_payment_ready_for_owner_approval": (
                 validated_mainland_payment.get("mainland_payment_ready_for_owner_approval") is True
             ),
-            "billing_ready_for_paid_launch": (
-                validated_mainland_payment.get("mainland_payment_ready_for_owner_approval") is True
-            ),
-            "provider_register_status": provider_register.get("status") or "unknown",
             "paid_launch_approval_status": approval_packet.get("status") or "unknown",
             "backup_ready_for_paid_launch": bool(backup.get("backup_ready_for_paid_launch")),
             "monitoring_ready": bool(monitoring.get("production_monitoring_ready")),
@@ -120,12 +123,10 @@ def build_production_release_gate(
         "future_international_payment": {
             "provider": "stripe",
             "role": "future_international_payment_only",
-            "billing_plan_selected": (
-                isinstance(billing.get("future_international_payment"), dict)
-                and billing.get("future_international_payment", {}).get("selected") is True
+            "selected": (
+                isinstance(mainland_payment.get("future_international_payment"), dict)
+                and mainland_payment.get("future_international_payment", {}).get("selected") is True
             ),
-            "rehearsal_status": rehearsal.get("status") or "unknown",
-            "provider_register_status": provider_register.get("status") or "unknown",
             "blocks_mainland_launch": False,
             "calls_stripe_api": False,
             "triggers_real_charge": False,
@@ -303,6 +304,12 @@ def _billing_section(
     payment = validate_mainland_payment_launch_for_public(mainland_payment)
     approval_steps = _by_key(approval_packet.get("steps"))
     payment_step = approval_steps.get("wechat_pay_native_cutover") or {}
+    no_charge_step = approval_steps.get("no_charge_launch_rehearsal") or {}
+    approval_summary = (
+        approval_packet.get("summary")
+        if isinstance(approval_packet.get("summary"), dict)
+        else {}
+    )
     checks = {
         "mainland_payment_contract_valid": payment.get("payment_path_status") != "payment_status_unavailable",
         "wechat_pay_native_selected": (
@@ -326,7 +333,16 @@ def _billing_section(
         "paid_launch_packet_v2_visible": (
             approval_packet.get("contract_version") == "2026-07-27-paid-launch-approval-packet-v2"
         ),
+        "paid_launch_packet_status_ready": approval_packet.get("status") == "ready_for_owner_approval",
+        "paid_launch_packet_owner_ready": approval_packet.get("ready_for_owner_approval") is True,
         "paid_launch_packet_wechat_step_ready": payment_step.get("status") == "ready",
+        "paid_launch_packet_no_charge_step_ready": no_charge_step.get("status") == "ready",
+        "wechat_zero_charge_rehearsal_evidence_ready": (
+            approval_summary.get("wechat_zero_charge_rehearsal_ready") is True
+        ),
+        "no_charge_evidence_packet_ready": (
+            approval_summary.get("no_charge_evidence_packet_status") == "ready"
+        ),
         "public_charging_still_closed": approval_packet.get("public_paid_launch_allowed") is False,
         "charge_now_still_closed": approval_packet.get("charge_now_allowed") is False,
         "checkout_creation_not_triggered": approval_packet.get("creates_checkout_session") is False,
@@ -355,6 +371,7 @@ def _billing_section(
             "JIEJING_WECHAT_PAY_NOTIFY_URL",
             "JIEJING_WECHAT_PAY_REFUND_NOTIFY_URL",
             "JIEJING_WECHAT_PAY_LIVE_API_ENABLED",
+            "JIEJING_WECHAT_PAY_CHARGE_ALLOWED",
             "JIEJING_WECHAT_PAY_REFUND_ALLOWED",
             "JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID",
         ],
@@ -519,13 +536,25 @@ def _monitoring_section(*, monitoring: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _owner_final_section(*, approval_packet: dict[str, Any]) -> dict[str, Any]:
+def _owner_final_section(
+    *,
+    approval_packet: dict[str, Any],
+    paid_product_readiness: dict[str, Any],
+) -> dict[str, Any]:
     checks = {
+        "product_readiness_contract_valid": paid_product_readiness.get("contract_valid") is True,
+        "product_readiness_owner_approval_state": (
+            paid_product_readiness.get("ready_for_owner_approval") is True
+        ),
+        "canonical_mainland_payment_owner_ready": (
+            paid_product_readiness.get("canonical_mainland_payment_owner_ready") is True
+        ),
         "paid_launch_approval_packet_contract_visible": (
             approval_packet.get("contract_version") == "2026-07-27-paid-launch-approval-packet-v2"
         ),
         "production_release_owner_approval_recorded": bool(_env_text("JIEJING_PRODUCTION_RELEASE_OWNER_APPROVAL_PACKET_ID")),
         "public_charge_flag_reviewed": _env_bool("JIEJING_PRODUCTION_RELEASE_CHARGE_FLAG_REVIEWED"),
+        "wechat_charge_switch_closed": not _env_bool("JIEJING_WECHAT_PAY_CHARGE_ALLOWED"),
         "real_write_flag_reviewed": _env_bool("JIEJING_PRODUCTION_RELEASE_REAL_WRITE_FLAG_REVIEWED"),
         "support_refund_policy_reviewed": _env_bool("JIEJING_PRODUCTION_SUPPORT_REFUND_POLICY_REVIEWED"),
         "merchant_surface_internal_copy_scan_passed": _env_bool("JIEJING_PRODUCTION_MERCHANT_SURFACE_COPY_SCAN_PASSED"),
@@ -537,6 +566,7 @@ def _owner_final_section(*, approval_packet: dict[str, Any]) -> dict[str, Any]:
         env_keys=[
             "JIEJING_PRODUCTION_RELEASE_OWNER_APPROVAL_PACKET_ID",
             "JIEJING_PRODUCTION_RELEASE_CHARGE_FLAG_REVIEWED",
+            "JIEJING_WECHAT_PAY_CHARGE_ALLOWED",
             "JIEJING_PRODUCTION_RELEASE_REAL_WRITE_FLAG_REVIEWED",
             "JIEJING_PRODUCTION_SUPPORT_REFUND_POLICY_REVIEWED",
             "JIEJING_PRODUCTION_MERCHANT_SURFACE_COPY_SCAN_PASSED",
@@ -662,6 +692,7 @@ def _required_external_evidence(*, settings: SaaSSettings) -> list[dict[str, Any
                 "JIEJING_WECHAT_PAY_NOTIFY_URL",
                 "JIEJING_WECHAT_PAY_REFUND_NOTIFY_URL",
                 "JIEJING_WECHAT_PAY_LIVE_API_ENABLED",
+                "JIEJING_WECHAT_PAY_CHARGE_ALLOWED",
                 "JIEJING_WECHAT_PAY_REFUND_ALLOWED",
                 "JIEJING_NO_CHARGE_LIVE_DOMAIN_REHEARSAL_EVIDENCE_ID",
             ],

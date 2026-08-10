@@ -122,13 +122,24 @@ Provider endpoint:
 
 - `POST /billing/domestic/wechat-pay/notify`
 
-Owner-only rehearsal endpoint:
+Billing-manager-protected rehearsal endpoint:
 
-- `POST /owner/billing/domestic/rehearsal`
+- `POST /billing/wechat-pay/zero-charge-rehearsal`
 
 The rehearsal generates and verifies sanitized mock evidence. It never calls
 WeChat, creates a payable QR code, charges money, or grants production launch
-readiness.
+readiness. It remains behind authentication and `manage_billing` (granted to
+the tenant owner or finance billing manager), the shared high-cost global/IP
+limiter, and a tenant limit of two runs per hour.
+
+Rehearsal readiness is accepted only from a fresh backend audit bound to the
+fixed audit contract, tenant target, and current deployed backend build. The
+tenant audit stores only sanitized contract/build metadata plus boolean/code/
+count evidence. The audit expires after 24 hours, rejects timestamps more than
+five minutes in the future, and never exposes its build identifier through the
+public report. Evidence lookup uses the indexed action and target binding, so
+unrelated tenant audit volume cannot push valid evidence out of a recent-page
+scan.
 
 ## Rollout Gates
 
@@ -147,6 +158,11 @@ following are true:
 - close-order and refund-state tests pass;
 - support and refund pages remain publicly reachable;
 - owner explicitly approves live cutover.
+
+Owner readiness also requires exact-boolean product readiness for production,
+beta, and real-customer acceptance. The production billing section inherits
+the complete paid-approval packet and zero-charge evidence status; a blocked
+or malformed upstream packet remains blocked downstream.
 
 Public charging also requires the deployment itself to be the production
 environment, live provider access to be enabled, the charge switch to be
