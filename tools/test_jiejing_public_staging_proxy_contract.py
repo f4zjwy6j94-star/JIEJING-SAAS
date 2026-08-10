@@ -53,6 +53,7 @@ def main() -> int:
         "/data-packets",
         "/ai-ceo",
         "/media-asset-jobs",
+        "/merchant-onboarding",
         "/confirmations",
         "/workers",
         "/webhooks",
