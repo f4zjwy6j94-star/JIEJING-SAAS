@@ -45,6 +45,7 @@ def main() -> int:
     ]
     required = [
         "FILES=(",
+        "jiejing_saas/*.py",
         ".gitattributes",
         "AGENTS.md",
         "Dockerfile.saas",
@@ -129,7 +130,9 @@ def main() -> int:
         "jiejing_saas/feasibility_review.py",
         "jiejing_saas/platform_authorization_strategy.py",
         "jiejing_saas/platform_registry.py",
+        "jiejing_saas/permissions.py",
         "jiejing_saas/provider_job_runner.py",
+        "jiejing_saas/public_search_handoff.py",
         "jiejing_saas/provider_workflow_plan.py",
         "jiejing_saas/media_asset_pipeline.py",
         "jiejing_saas/media_source_assets.py",
@@ -281,6 +284,16 @@ def main() -> int:
     missing = [marker for marker in required if marker not in text]
     if missing:
         return fail("patch apply script missing markers: " + ",".join(missing))
+    missing_package_modules = [
+        f"jiejing_saas/{path.name}"
+        for path in sorted((ROOT / "jiejing_saas").glob("*.py"))
+        if f'"jiejing_saas/{path.name}"' not in text
+    ]
+    if missing_package_modules:
+        return fail(
+            "patch apply whitelist must carry the complete SaaS Python package: "
+            + ",".join(missing_package_modules)
+        )
     if "*.sh text eol=lf" not in gitattributes:
         return fail("shell scripts must be pinned to LF in .gitattributes")
     for shell_script in (

@@ -91,6 +91,7 @@ FILES=(
   "assets/jiejing-logo-mark.svg"
   "assets/jiejing-first-party-analytics.js"
   "assets/jiejing-settings-panels.js"
+  "jiejing_saas/__init__.py"
   "jiejing_saas/account_health.py"
   "jiejing_saas/merchant_onboarding.py"
   "jiejing_saas/backup_plan.py"
@@ -113,6 +114,15 @@ FILES=(
   "jiejing_saas/domain_readiness.py"
   "jiejing_saas/edge_cutover_preflight.py"
   "jiejing_saas/database_adapter.py"
+  "jiejing_saas/database_plan.py"
+  "jiejing_saas/ebay_oauth_token_store.py"
+  "jiejing_saas/ebay_read_adapter.py"
+  "jiejing_saas/ebay_read_contract.py"
+  "jiejing_saas/hermes_ebay_bridge.py"
+  "jiejing_saas/independence.py"
+  "jiejing_saas/ip_risk_screening.py"
+  "jiejing_saas/json_safe.py"
+  "jiejing_saas/platform_data_packet_handoff.py"
   "jiejing_saas/queue_adapter.py"
   "jiejing_saas/queue_plan.py"
   "jiejing_saas/repository.py"
@@ -126,6 +136,7 @@ FILES=(
   "jiejing_saas/feasibility_review.py"
   "jiejing_saas/platform_authorization_strategy.py"
   "jiejing_saas/platform_registry.py"
+  "jiejing_saas/permissions.py"
   "jiejing_saas/paid_launch_approval_packet.py"
   "jiejing_saas/production_evidence_ledger.py"
   "jiejing_saas/production_release_gate.py"
@@ -134,7 +145,12 @@ FILES=(
   "jiejing_saas/media_credits.py"
   "jiejing_saas/media_source_assets.py"
   "jiejing_saas/provider_job_runner.py"
+  "jiejing_saas/public_search_handoff.py"
   "jiejing_saas/provider_workflow_plan.py"
+  "jiejing_saas/runtime_bridge.py"
+  "jiejing_saas/secret_store.py"
+  "jiejing_saas/task_secret_grants.py"
+  "jiejing_saas/vault_client.py"
   "jiejing_saas/model_provider_catalog.py"
   "jiejing_saas/platform_model_status.py"
   "jiejing_saas/model_value_gate.py"
@@ -439,6 +455,7 @@ for rel in "${PUBLIC_ASSET_RETIREMENTS[@]}"; do
 done
 
 python3 -m py_compile \
+  jiejing_saas/*.py \
   jiejing_saas/database_adapter.py \
   jiejing_saas/account_health.py \
   jiejing_saas/merchant_onboarding.py \
@@ -476,6 +493,7 @@ python3 -m py_compile \
   jiejing_saas/feasibility_review.py \
   jiejing_saas/platform_authorization_strategy.py \
   jiejing_saas/platform_registry.py \
+  jiejing_saas/permissions.py \
   jiejing_saas/paid_launch_approval_packet.py \
   jiejing_saas/production_evidence_ledger.py \
   jiejing_saas/production_release_gate.py \
@@ -484,6 +502,7 @@ python3 -m py_compile \
   jiejing_saas/media_credits.py \
   jiejing_saas/media_source_assets.py \
   jiejing_saas/provider_job_runner.py \
+  jiejing_saas/public_search_handoff.py \
   jiejing_saas/provider_workflow_plan.py \
   jiejing_saas/model_provider_catalog.py \
   jiejing_saas/platform_model_status.py \
