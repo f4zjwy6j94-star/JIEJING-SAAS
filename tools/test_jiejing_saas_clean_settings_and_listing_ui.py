@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 
@@ -134,6 +135,64 @@ def main() -> None:
     index_auth_script_start = index_html.index("function saveEntryAuthSession")
     index_auth_script_end = index_html.index("function showEntryLogin", index_auth_script_start)
     index_auth_script_body = index_html[index_auth_script_start:index_auth_script_end]
+    cookie_session_contract = f"""
+const values = new Map([
+  ["jiejing_saas_backend_token", "legacy-token"],
+]);
+globalThis.localStorage = {{
+  getItem: (key) => values.has(key) ? values.get(key) : null,
+  setItem: (key, value) => values.set(key, String(value)),
+  removeItem: (key) => values.delete(key),
+}};
+const sessionValues = new Map([["jiejing_saas_backend_token", "legacy-token"]]);
+globalThis.sessionStorage = {{
+  getItem: (key) => sessionValues.has(key) ? sessionValues.get(key) : null,
+  setItem: (key, value) => sessionValues.set(key, String(value)),
+  removeItem: (key) => sessionValues.delete(key),
+}};
+let remembered = false;
+function rememberEntryAuthAccount(session, credentials) {{
+  remembered = Boolean(session && credentials && credentials.email);
+}}
+{index_auth_script_body}
+saveEntryAuthSession(
+  {{ token_returned_to_frontend: false, store_id: "store-cookie-session" }},
+  {{ email: "merchant@example.test" }},
+);
+if (localStorage.getItem("jiejing_saas_backend_session_hint") !== "1") {{
+  throw new Error("cookie session hint was not saved");
+}}
+if (localStorage.getItem("jiejing_saas_backend_store_id") !== "store-cookie-session") {{
+  throw new Error("cookie session store was not saved");
+}}
+if (localStorage.getItem("jiejing_saas_backend_token") !== null) {{
+  throw new Error("legacy local token was not removed");
+}}
+if (sessionStorage.getItem("jiejing_saas_backend_token") !== null) {{
+  throw new Error("legacy session token was not removed");
+}}
+if (!remembered) throw new Error("cookie session account was not remembered");
+let malformedRejected = false;
+try {{
+  saveEntryAuthSession({{}}, {{ email: "merchant@example.test" }});
+}} catch (error) {{
+  malformedRejected = true;
+}}
+if (!malformedRejected) throw new Error("malformed session response was accepted");
+"""
+    cookie_session_result = subprocess.run(
+        ["node", "-e", cookie_session_contract],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if cookie_session_result.returncode != 0:
+        raise AssertionError(
+            "homepage login must accept an HttpOnly cookie session without exposing a token: "
+            f"{cookie_session_result.stderr.strip()}"
+        )
     for internal_marker in ["后端没有返回登录凭证", "登录凭证", "HTTP 401", "provider", "quota", "模型 key"]:
         if internal_marker in index_auth_script_body:
             raise AssertionError(f"homepage auth script should keep failure copy merchant-facing: {internal_marker}")

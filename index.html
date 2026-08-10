@@ -5869,8 +5869,11 @@
       }
 
       function saveEntryAuthSession(session, credentials = {}) {
-        const token = session?.token || "";
-        if (!token) throw new Error("登录没有完成，请稍后重试；不会读取店铺资料或执行高风险动作。");
+        const cookieSessionReady = session?.token_returned_to_frontend === false;
+        const legacyTokenReady = Boolean(session?.token);
+        if (!cookieSessionReady && !legacyTokenReady) {
+          throw new Error("登录没有完成，请稍后重试；不会读取店铺资料或执行高风险动作。");
+        }
         try {
           localStorage.removeItem("jiejing_saas_backend_token");
           sessionStorage.removeItem("jiejing_saas_backend_token");
