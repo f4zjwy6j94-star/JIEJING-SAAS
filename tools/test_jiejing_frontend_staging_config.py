@@ -31,13 +31,17 @@ def main() -> int:
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
     frontend_asset_version = "20260803-product-feedback-v1"
-    app_js_asset_version = "20260803-product-feedback-v1"
+    app_js_asset_version = "20260810-safe-revise-confirmation-v1"
     for expected_asset in [
         f"./app.js?v={app_js_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
     ]:
         if expected_asset not in index_html + app_html:
             return fail(f"frontend entry files must bust owner publish cache with {expected_asset}")
+    if f"./app.js?v={app_js_asset_version}" not in app_html or f"./app.js?v={app_js_asset_version}" not in index_html:
+        return fail("both public and workbench entry files must reference the current app.js cache version")
+    if "./app.js?v=20260803-product-feedback-v1" in index_html + app_html:
+        return fail("frontend entry files must not retain the stale app.js cache version")
     for stale_asset_version in [
         "20260802-merchant-onboarding-v2",
         "20260802-merchant-onboarding-v1",
