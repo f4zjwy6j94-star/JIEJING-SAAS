@@ -106,6 +106,19 @@ def main() -> int:
         if summary.get("blocked_count") != 0 or summary.get("next_step") != "":
             return fail(f"legacy Stripe rehearsal must not affect blocked count or next step: {summary}")
 
+        cross_store = _build(
+            settings,
+            repository,
+            mainland=_mainland_payment(owner_ready=True),
+            domain_ready=True,
+            no_charge_ready=True,
+            new_account_ready=True,
+            ebay_hash_mismatch=True,
+        )
+        cross_store_step = _by_key(cross_store.get("steps")).get("new_ebay_account_low_risk_smoke") or {}
+        if cross_store_step.get("status") != "blocked" or cross_store.get("ready_for_owner_approval") is not False:
+            return fail("paid launch must reject all-true OAuth/evidence assembled from different store/connection hashes")
+
         external = _by_key(ready.get("external_configuration_needed"))
         if "wechat_pay_native_production_cutover" not in external:
             return fail(f"WeChat production cutover item missing: {sorted(external)}")
@@ -116,6 +129,12 @@ def main() -> int:
             return fail(f"WeChat backend environment keys incomplete: {sorted(WECHAT_ENV_KEYS - wechat_keys)}")
         if any("STRIPE" in key for key in wechat_keys):
             return fail(f"Stripe key leaked into WeChat cutover item: {sorted(wechat_keys)}")
+        ebay_keys = set(external["clean_new_ebay_account_and_fresh_product"].get("environment_keys") or [])
+        if {
+            "JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED",
+            "JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED",
+        } & ebay_keys:
+            return fail("paid launch packet must not present OAuth env flags as completion evidence")
         for item in external.values():
             if item.get("frontend_gets_secret") is not False or item.get("secret_exposed") is not False:
                 return fail(f"external configuration item leaked secret surface: {item.get('key')}")
@@ -161,6 +180,34 @@ def main() -> int:
         malformed_step = _by_key(malformed_packet.get("steps")).get("wechat_pay_native_cutover") or {}
         if malformed_step.get("status") != "blocked":
             return fail(f"malformed canonical status must fail closed: {malformed_step}")
+
+        readiness_sentinel = "paid-readiness-malformed-must-not-leak"
+        for malformed_readiness in (
+            [readiness_sentinel],
+            readiness_sentinel,
+            {"production_ready": float("nan"), "beta_ready": {"nested": readiness_sentinel}, "can_accept_real_customers": [readiness_sentinel]},
+        ):
+            try:
+                malformed_readiness_packet = _build(
+                    settings,
+                    repository,
+                    mainland=_mainland_payment(owner_ready=True),
+                    domain_ready=True,
+                    no_charge_ready=True,
+                    new_account_ready=True,
+                    readiness_override=malformed_readiness,
+                )
+                malformed_readiness_serialized = json.dumps(
+                    malformed_readiness_packet,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                )
+            except (TypeError, ValueError, OverflowError) as exc:
+                return fail(f"paid launch malformed readiness must return stable JSON: {type(exc).__name__}")
+            if malformed_readiness_packet.get("ready_for_owner_approval") is not False:
+                return fail("paid launch malformed readiness must fail closed")
+            if readiness_sentinel in malformed_readiness_serialized:
+                return fail("paid launch malformed readiness values must not be reflected")
 
         missing_evidence = _build(
             settings,
@@ -214,6 +261,8 @@ def _build(
     no_charge_ready: bool,
     new_account_ready: bool,
     omitted_env_key: str = "",
+    readiness_override: object | None = None,
+    ebay_hash_mismatch: bool = False,
 ) -> dict[str, object]:
     env_values = dict(NO_CHARGE_ENV) if no_charge_ready else {key: "" for key in NO_CHARGE_ENV}
     if omitted_env_key:
@@ -235,11 +284,18 @@ def _build(
         }
         with ExitStack() as stack:
             stack.enter_context(
-                patch("jiejing_saas.paid_launch_approval_packet.build_product_readiness_or_degraded", return_value={
-                    "production_ready": False,
-                    "beta_ready": True,
-                    "can_accept_real_customers": False,
-                })
+                patch(
+                    "jiejing_saas.paid_launch_approval_packet.build_product_readiness_or_degraded",
+                    return_value=(
+                        readiness_override
+                        if readiness_override is not None
+                        else {
+                            "production_ready": False,
+                            "beta_ready": True,
+                            "can_accept_real_customers": False,
+                        }
+                    ),
+                )
             )
             stack.enter_context(
                 patch("jiejing_saas.paid_launch_approval_packet.build_domain_readiness", return_value={
@@ -255,7 +311,21 @@ def _build(
             )
             stack.enter_context(
                 patch("jiejing_saas.paid_launch_approval_packet.build_commercial_launch_gate", return_value={
-                    "launch_action_plan": action_plan
+                    "launch_action_plan": action_plan,
+                    "current_store_oauth_boundary": {
+                        "store_id_sha256": "store-current-hash",
+                        "connection_id_sha256": "connection-oauth-hash",
+                        "authorized": new_account_ready,
+                        "current_store_selected": new_account_ready,
+                        "strong_identity_ready": new_account_ready,
+                        "backend_provenance_ready": new_account_ready,
+                        "secret_exposed": False,
+                    },
+                    "current_store_ebay_evidence": {
+                        "store_id_sha256": "store-other-hash" if ebay_hash_mismatch else "store-current-hash",
+                        "connection_id_sha256": "connection-other-hash" if ebay_hash_mismatch else "connection-oauth-hash",
+                        "secret_exposed": False,
+                    },
                 })
             )
             stack.enter_context(

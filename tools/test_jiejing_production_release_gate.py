@@ -22,6 +22,7 @@ from jiejing_saas.config import SaaSSettings  # noqa: E402
 from jiejing_saas.production_release_gate import (  # noqa: E402
     PRODUCTION_RELEASE_GATE_VERSION,
     _billing_section,
+    _ebay_section,
     build_production_release_gate,
 )
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
@@ -111,6 +112,53 @@ def main() -> int:
 
     previous = _set_ready_env()
     try:
+        env_only_ebay = _ebay_section(
+            evidence={
+                "latest_ebay_packet_status": "created",
+                "latest_ebay_packet_source_mode": "official_api",
+                "ebay_token_refresh_success_count": 1,
+            },
+            approval_packet={
+                "old_frozen_ebay_account_reuse_allowed": False,
+                "old_demo_product_or_sku_allowed": False,
+                "triggers_real_platform_write": False,
+            },
+        )
+        if env_only_ebay.get("checks", {}).get("new_account_oauth_completed_with_owner_approval") is not False:
+            return fail("production release gate must not accept OAuth completion env flags without backend proof")
+        if env_only_ebay.get("checks", {}).get("official_packet_present") is not False:
+            return fail("global or cross-store official packet evidence must not satisfy production release")
+        if env_only_ebay.get("checks", {}).get("backend_refresh_success_proven") is not False:
+            return fail("global or cross-store refresh count must not satisfy production release")
+        if env_only_ebay.get("checks", {}).get("controlled_publish_and_cleanup_recorded") is not False:
+            return fail("production release must not accept global/env publish-cleanup flags without current-store action evidence")
+        cross_store_packet = _ready_paid_launch_packet()
+        cross_store_packet["current_store_oauth_boundary"] = {
+            **cross_store_packet["current_store_oauth_boundary"],
+            "store_id_sha256": "store-a-hash",
+            "connection_id_sha256": "connection-a-hash",
+        }
+        cross_store_packet["current_store_ebay_evidence"] = {
+            **cross_store_packet["current_store_ebay_evidence"],
+            "store_id_sha256": "store-b-hash",
+            "connection_id_sha256": "connection-b-hash",
+        }
+        cross_store_section = _ebay_section(evidence={}, approval_packet=cross_store_packet)
+        if cross_store_section.get("status") != "blocked":
+            return fail("production release must reject all-true OAuth/evidence assembled from different store/connection hashes")
+        for unsafe_count in (True, 5.0, float("nan"), float("inf"), "5", [5], {"value": 5}):
+            unsafe_packet = _ready_paid_launch_packet()
+            unsafe_packet["current_store_ebay_evidence"] = {
+                **unsafe_packet["current_store_ebay_evidence"],
+                "refresh_success_count": unsafe_count,
+            }
+            try:
+                unsafe_section = _ebay_section(evidence={}, approval_packet=unsafe_packet)
+                json.dumps(unsafe_section, ensure_ascii=False, allow_nan=False)
+            except (TypeError, ValueError, OverflowError) as exc:
+                return fail(f"production release malformed counts must return stable JSON: {type(exc).__name__}")
+            if unsafe_section.get("checks", {}).get("backend_refresh_success_proven") is not False:
+                return fail("production release refresh proof must accept only genuine JSON positive integers")
         ready = _build("ready.sqlite", seed_ready_data=True)
         if ready.get("status") != "ready_for_owner_approval" or ready.get("ready_for_owner_approval") is not True:
             return fail(f"ready fixture should reach owner approval, not launch: {ready.get('summary')}")
@@ -269,6 +317,38 @@ def _ready_paid_launch_packet() -> dict[str, object]:
         "triggers_real_platform_write": False,
         "old_frozen_ebay_account_reuse_allowed": False,
         "old_demo_product_or_sku_allowed": False,
+        "current_store_oauth_boundary": {
+            "status": "authorized",
+            "authorized": True,
+            "current_store_selected": True,
+            "strong_identity_ready": True,
+            "backend_provenance_ready": True,
+            "connection_id_sha256": "unit-connection-hash",
+            "store_id_sha256": "unit-store-hash",
+            "secret_exposed": False,
+        },
+        "current_store_ebay_evidence": {
+            "status": "ready",
+            "current_store_selected": True,
+            "store_id_sha256": "unit-store-hash",
+            "connection_id_sha256": "unit-connection-hash",
+            "official_packet_ready": True,
+            "backend_worker_provenance_ready": True,
+            "same_oauth_connection_ready": True,
+            "account_health_ready": True,
+            "refresh_success_ready": True,
+            "refresh_same_connection_ready": True,
+            "refresh_success_count": 1,
+            "new_account_action_evidence": {
+                "contract_version": "2026-06-18-new-ebay-account-low-risk-smoke",
+                "company_store_bound": True,
+                "publish_health_confirmation_ready": True,
+                "controlled_real_publish_ready": True,
+                "post_publish_cleanup_ready": True,
+                "secret_exposed": False,
+            },
+            "secret_exposed": False,
+        },
         "steps": [
             {"key": "wechat_pay_native_cutover", "status": "ready", "blocked_by": []},
             {"key": "new_ebay_account_low_risk_smoke", "status": "ready", "blocked_by": []},

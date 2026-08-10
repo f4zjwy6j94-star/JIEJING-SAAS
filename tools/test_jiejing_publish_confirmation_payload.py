@@ -80,12 +80,16 @@ def main() -> int:
         repository=repo,
         company_id=user["default_company_id"],
         confirmation=confirmation,
-        body_payload={"listing": {"quantity": 3}, "source": "unit"},
+        body_payload={
+            "listing": {"sku": "ATTACKER-SKU", "title": "Attacker title", "quantity": 3},
+            "source": "attacker",
+            "store_id": "attacker-store",
+        },
     )
     if merged.get("listing", {}).get("sku") != "JJ-SUNGLASSES-UNIT":
         return fail(f"confirmation publish payload was not merged: {merged}")
-    if merged.get("listing", {}).get("quantity") != 3:
-        return fail("body payload should still override/extend confirmation payload")
+    if merged != confirmation_payload:
+        return fail("execute payload must be the exact approved confirmation snapshot")
     if len(merged.get("asset_manifest", {}).get("assets", [])) != 1:
         return fail("asset manifest from confirmation item should be preserved")
     if not merged.get("finance_review", {}).get("net_profit_money"):

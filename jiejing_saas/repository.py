@@ -72,6 +72,9 @@ HIGH_RISK_ACTIONS = {
 }
 
 
+EXTERNAL_EXECUTION_PROCESSING_STATUS = "external_execution_processing_manual_reconcile"
+
+
 ACTIVE_SECRET_REF_STATUSES = {
     "active",
     "ready",
@@ -732,6 +735,12 @@ class SaaSRepository:
                 migration_id="20260515_initial_sqlite_mvp_with_indexes",
                 checksum="jiejing-saas-mvp-schema-v20260515-indexed",
                 summary="Initial local SaaS MVP schema with tenant, task, report, confirmation, audit, OAuth, data packet and index boundaries.",
+            )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260811_sqlite_oauth_state_nonce_unique",
+                checksum="jiejing-sqlite-oauth-state-nonce-unique-v20260811",
+                summary="Requires globally unique OAuth callback state nonces; initialization fails closed if legacy duplicates exist.",
             )
             self._record_schema_migration(
                 conn,
@@ -1628,6 +1637,205 @@ class SaaSRepository:
             ).fetchall()
         return [self._oauth_request_row_to_dict(row) for row in rows]
 
+    def ebay_read_only_oauth_boundary(self, *, company_id: str, store_id: str) -> dict[str, Any]:
+        """Return a safe, backend-derived OAuth identity/idempotency boundary."""
+
+        self.initialize()
+        requests = self.list_oauth_authorization_requests(company_id=company_id, store_id=store_id)
+        now_utc = datetime.now(timezone.utc)
+        pending = next(
+            (
+                item
+                for item in requests
+                if str(item.get("platform") or "").lower() == "ebay"
+                and str(item.get("status") or "") in {"ready_to_redirect", "blocked_missing_oauth_config"}
+                and str((item.get("request") or {}).get("scope_profile") or "seller_read_only") == "seller_read_only"
+                and _timestamp_within_seconds(_parse_iso_datetime(str(item.get("updated_at") or "")), now_utc, 15 * 60)
+            ),
+            {},
+        )
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select connection_id, company_id, store_id, platform, connection_type, status, scopes_json,
+                       secret_ref, metadata_json, created_by, created_at
+                from platform_connections
+                where company_id = ? and store_id = ? and platform = ?
+                order by created_at desc
+                """,
+                (company_id, store_id, "ebay"),
+            ).fetchall()
+
+        authorized = False
+        authorized_connection_id_sha256 = ""
+        strong_identity_ready = False
+        backend_provenance_ready = False
+        for row in rows:
+            connection = self._connection_row_to_dict(row)
+            metadata = _load_json_field(row["metadata_json"])
+            metadata = metadata if isinstance(metadata, dict) else {}
+            oauth_request_id = str(metadata.get("oauth_request_id") or "")
+            secret_ref = str(connection.get("secret_ref") or "")
+            if not (
+                str(connection.get("connection_id") or "")
+                and str(connection.get("connection_type") or "").lower() == "oauth"
+                and str(connection.get("status") or "") in {"read_only_authorized", "publish_authorized"}
+                and oauth_request_id
+                and secret_ref
+                and str(metadata.get("credential_source") or "") == "jiejing_vault_secret_ref"
+                and str(metadata.get("account_deletion_identity_mapping_status") or "") == "identity_mapping_ready"
+                and str(metadata.get("ebay_user_id_hash") or "")
+            ):
+                continue
+            request_record = next(
+                (
+                    item
+                    for item in requests
+                    if str(item.get("oauth_request_id") or "") == oauth_request_id
+                    and str(item.get("status") or "") == "callback_exchange_completed"
+                ),
+                {},
+            )
+            request_payload = (
+                request_record.get("request")
+                if isinstance(request_record.get("request"), dict)
+                else {}
+            )
+            callback_events = (
+                request_payload.get("callback_events")
+                if isinstance(request_payload.get("callback_events"), list)
+                else []
+            )
+            callback_binding_event = next(
+                (
+                    event
+                    for event in callback_events
+                    if isinstance(event, dict)
+                    and str(event.get("status") or "") == "callback_exchange_completed"
+                    and isinstance(event.get("connection"), dict)
+                    and str(event["connection"].get("connection_id") or "")
+                    == str(connection.get("connection_id") or "")
+                    and str(event["connection"].get("company_id") or "") == company_id
+                    and str(event["connection"].get("store_id") or "") == store_id
+                    and isinstance(event.get("backend_connection_binding"), dict)
+                ),
+                {},
+            )
+            callback_binding = (
+                callback_binding_event.get("backend_connection_binding")
+                if isinstance(callback_binding_event.get("backend_connection_binding"), dict)
+                else {}
+            )
+            callback_connection_binding_ready = bool(
+                callback_binding_event
+                and callback_binding.get("contract_version")
+                == "2026-08-10-oauth-callback-connection-binding-v1"
+                and str(callback_binding.get("oauth_request_id") or "") == oauth_request_id
+                and str(callback_binding.get("connection_id") or "")
+                == str(connection.get("connection_id") or "")
+                and str(callback_binding.get("connection_id_sha256") or "")
+                == hashlib.sha256(str(connection.get("connection_id") or "").encode("utf-8")).hexdigest()
+                and str(callback_binding.get("credential_ref_sha256") or "")
+                == hashlib.sha256(secret_ref.encode("utf-8")).hexdigest()
+                and str(callback_binding.get("seller_identity_sha256") or "")
+                == hashlib.sha256(str(metadata.get("ebay_user_id_hash") or "").encode("utf-8")).hexdigest()
+                and callback_binding.get("created_by_backend_callback") is True
+                and callback_binding.get("secret_exposed") is False
+            )
+            secret_record = self.get_secret_ref(company_id=company_id, store_id=store_id, secret_ref=secret_ref) or {}
+            secret_metadata = secret_record.get("metadata") if isinstance(secret_record.get("metadata"), dict) else {}
+            strong_identity_ready = bool(
+                request_record
+                and callback_connection_binding_ready
+                and str(secret_record.get("purpose") or "") == "ebay_refresh_token"
+                and str(secret_record.get("status") or "") in {"local_secret_resolver_stored", "managed_vault_stored"}
+                and str(secret_metadata.get("oauth_request_id") or "") == oauth_request_id
+                and str(secret_metadata.get("credential_owner") or "") == "jiejing_saas_backend"
+            )
+            if not strong_identity_ready:
+                continue
+            request_time = _parse_iso_datetime(str(request_record.get("updated_at") or ""))
+            matching_audit = self.find_latest_audit_log_by_target(
+                company_id=company_id,
+                store_id=store_id,
+                action_type="oauth.callback.received",
+                target_type="oauth_authorization_request",
+                target_id=oauth_request_id,
+            )
+            audit_details = (
+                matching_audit.get("details")
+                if isinstance(matching_audit, dict) and isinstance(matching_audit.get("details"), dict)
+                else {}
+            )
+            backend_provenance_ready = bool(
+                matching_audit
+                and str(matching_audit.get("actor_type") or "") == "system"
+                and str(audit_details.get("status") or "") == "callback_exchange_completed"
+                and audit_details.get("secret_exposed") is False
+                and _timestamp_within_seconds(
+                    _parse_iso_datetime(str(matching_audit.get("created_at") or "")),
+                    request_time,
+                    5 * 60,
+                )
+            )
+            authorized = bool(strong_identity_ready and backend_provenance_ready)
+            if authorized:
+                authorized_connection_id_sha256 = hashlib.sha256(
+                    str(connection["connection_id"]).encode("utf-8")
+                ).hexdigest()
+                break
+
+        status = "authorized" if authorized else "pending" if pending else "missing"
+        return {
+            "status": status,
+            "authorized": authorized,
+            "pending": bool(not authorized and pending),
+            "strong_identity_ready": bool(authorized and strong_identity_ready),
+            "backend_provenance_ready": bool(authorized and backend_provenance_ready),
+            "connection_id_sha256": authorized_connection_id_sha256,
+            "repeat_oauth_allowed": False,
+            "secret_exposed": False,
+        }
+
+    def current_ebay_read_only_oauth_boundary(
+        self,
+        *,
+        company_id: str,
+        store_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve one explicitly selected or persisted current store, then prove OAuth."""
+
+        selected_store_id = str(store_id or "").strip()
+        selection_source = "explicit_store_id" if selected_store_id else "merchant_onboarding_state"
+        if not selected_store_id:
+            onboarding = self.get_merchant_onboarding_state(company_id=company_id) or {}
+            selected_store_id = str(onboarding.get("store_id") or "").strip()
+        store = (
+            self.get_store_for_company(company_id=company_id, store_id=selected_store_id)
+            if selected_store_id
+            else None
+        )
+        if not store or str(store.get("platform") or "").strip().lower() != "ebay":
+            return {
+                "status": "current_store_unselected",
+                "authorized": False,
+                "pending": False,
+                "current_store_selected": False,
+                "selection_source": selection_source,
+                "strong_identity_ready": False,
+                "backend_provenance_ready": False,
+                "connection_id_sha256": "",
+                "secret_exposed": False,
+            }
+        boundary = self.ebay_read_only_oauth_boundary(company_id=company_id, store_id=selected_store_id)
+        return {
+            **boundary,
+            "current_store_selected": True,
+            "selection_source": selection_source,
+            "store_id_sha256": hashlib.sha256(selected_store_id.encode("utf-8")).hexdigest(),
+            "secret_exposed": False,
+        }
+
     def get_oauth_authorization_request_by_state(self, *, state_nonce: str) -> dict[str, Any] | None:
         self.initialize()
         with self._connect() as conn:
@@ -1636,6 +1844,59 @@ class SaaSRepository:
                 (state_nonce,),
             ).fetchone()
         return self._oauth_request_row_to_dict(row) if row else None
+
+    def claim_oauth_callback_exchange(self, *, state_nonce: str) -> dict[str, Any]:
+        """Atomically claim one pending OAuth callback before any token exchange."""
+
+        self.initialize()
+        claimed = False
+        request_record: dict[str, Any] | None = None
+        updated_at = now_iso()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                f"select * from oauth_authorization_requests where state_nonce = ?{lock_suffix}",
+                (state_nonce,),
+            ).fetchone()
+            if not row:
+                return {"claimed": False, "oauth_request": None, "secret_exposed": False}
+            existing = self._oauth_request_row_to_dict(row)
+            if str(existing.get("status") or "") in {"ready_to_redirect", "blocked_missing_oauth_config"}:
+                transitioned = conn.execute(
+                    """
+                    update oauth_authorization_requests
+                    set status = 'callback_exchange_processing_manual_reconcile', updated_at = ?
+                    where oauth_request_id = ?
+                      and status in ('ready_to_redirect', 'blocked_missing_oauth_config')
+                    """,
+                    (updated_at, existing["oauth_request_id"]),
+                ).rowcount
+                claimed = transitioned == 1
+                if claimed:
+                    self._insert_audit(
+                        conn,
+                        company_id=existing["company_id"],
+                        store_id=existing["store_id"],
+                        user_id=existing["created_by"],
+                        actor_type="system",
+                        action_type="oauth.callback.exchange_claimed",
+                        target_type="oauth_authorization_request",
+                        target_id=existing["oauth_request_id"],
+                        summary="OAuth callback exchange was atomically claimed by the backend.",
+                        details={
+                            "status": "callback_exchange_processing_manual_reconcile",
+                            "automatic_retry_allowed": False,
+                            "secret_exposed": False,
+                        },
+                    )
+            refreshed_row = conn.execute(
+                "select * from oauth_authorization_requests where oauth_request_id = ?",
+                (existing["oauth_request_id"],),
+            ).fetchone()
+            request_record = self._oauth_request_row_to_dict(refreshed_row) if refreshed_row else existing
+        return {"claimed": claimed, "oauth_request": request_record, "secret_exposed": False}
 
     def create_platform_data_packet(
         self,
@@ -3001,6 +3262,8 @@ class SaaSRepository:
         report_count = 0
         confirmation_count = 0
         with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
             for result in results:
                 report_id = _id("report")
                 report_type = str(result.get("task_type") or "runtime.result")
@@ -3051,13 +3314,35 @@ class SaaSRepository:
             for item in confirmations:
                 source_confirmation_id = str(item.get("confirmation_id") or _id("runtime_confirm"))
                 confirmation_id = f"{task['task_id']}::{source_confirmation_id}"
-                status = "pending"
-                conn.execute(
+                action_type = str(item.get("action_type") or "unknown")
+                title = str(item.get("title") or "Confirmation item")
+                default_action = str(item.get("default_action") or "hold")
+                safe_item = _redact_secret_like(item)
+                lock_suffix = " for update" if self.database_engine == "postgres" else ""
+                existing_row = conn.execute(
+                    f"select * from confirmations where confirmation_id = ?{lock_suffix}",
+                    (confirmation_id,),
+                ).fetchone()
+                if existing_row:
+                    existing = self._confirmation_row_to_dict(existing_row)
+                    if not _runtime_confirmation_matches(
+                        existing,
+                        task=task,
+                        runtime_run_id=runtime_run_id,
+                        action_type=action_type,
+                        title=title,
+                        default_action=default_action,
+                        item=safe_item,
+                    ):
+                        raise ConfirmationDecisionConflict("runtime_confirmation_payload_conflict")
+                    continue
+                inserted = conn.execute(
                     """
-                    insert or replace into confirmations (
+                    insert into confirmations (
                       confirmation_id, company_id, store_id, task_id, runtime_run_id, action_type, title, status,
                       default_action, created_at, item_json, decided_by, decided_at, decision_note
                     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    on conflict(confirmation_id) do nothing
                     """,
                     (
                         confirmation_id,
@@ -3065,17 +3350,34 @@ class SaaSRepository:
                         task["store_id"],
                         task["task_id"],
                         runtime_run_id,
-                        str(item.get("action_type") or "unknown"),
-                        str(item.get("title") or "Confirmation item"),
-                        status,
-                        str(item.get("default_action") or "hold"),
+                        action_type,
+                        title,
+                        "pending",
+                        default_action,
                         created_at,
-                        json.dumps(item, ensure_ascii=False),
+                        json.dumps(safe_item, ensure_ascii=False, default=json_default),
                         None,
                         None,
                         None,
                     ),
                 )
+                if inserted.rowcount != 1:
+                    raced_row = conn.execute(
+                        f"select * from confirmations where confirmation_id = ?{lock_suffix}",
+                        (confirmation_id,),
+                    ).fetchone()
+                    raced = self._confirmation_row_to_dict(raced_row) if raced_row else {}
+                    if not _runtime_confirmation_matches(
+                        raced,
+                        task=task,
+                        runtime_run_id=runtime_run_id,
+                        action_type=action_type,
+                        title=title,
+                        default_action=default_action,
+                        item=safe_item,
+                    ):
+                        raise ConfirmationDecisionConflict("runtime_confirmation_payload_conflict")
+                    continue
                 confirmation_count += 1
                 self._insert_merchant_memory(
                     conn,
@@ -3084,18 +3386,18 @@ class SaaSRepository:
                     memory_type="confirmation_boundary",
                     source_type="confirmation",
                     source_id=confirmation_id,
-                    title=str(item.get("title") or "Confirmation item"),
-                    summary=_memory_summary_from_confirmation(item),
-                    importance=90 if str(item.get("action_type") or "") in HIGH_RISK_ACTIONS else 70,
-                    tags=[str(item.get("action_type") or "unknown"), "confirmation_center", "risk_control"],
+                    title=title,
+                    summary=_memory_summary_from_confirmation(safe_item),
+                    importance=90 if action_type in HIGH_RISK_ACTIONS else 70,
+                    tags=[action_type, "confirmation_center", "risk_control"],
                     memory={
                         "confirmation_id": confirmation_id,
                         "task_id": task["task_id"],
                         "runtime_run_id": runtime_run_id,
-                        "action_type": str(item.get("action_type") or "unknown"),
-                        "default_action": str(item.get("default_action") or "hold"),
-                        "source_packet_id": item.get("source_packet_id"),
-                        "high_risk": str(item.get("action_type") or "") in HIGH_RISK_ACTIONS,
+                        "action_type": action_type,
+                        "default_action": default_action,
+                        "source_packet_id": safe_item.get("source_packet_id"),
+                        "high_risk": action_type in HIGH_RISK_ACTIONS,
                         "real_platform_writes_enabled": False,
                         "secret_exposed": False,
                     },
@@ -4020,30 +4322,35 @@ class SaaSRepository:
             }
         )
         with self._connect() as conn:
-            conn.execute(
-                """
-                insert or replace into confirmations (
-                  confirmation_id, company_id, store_id, task_id, runtime_run_id, action_type, title, status,
-                  default_action, created_at, item_json, decided_by, decided_at, decision_note
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record_id,
-                    company_id,
-                    store_id,
-                    task_id,
-                    runtime_run_id,
-                    action_type,
-                    title,
-                    "pending",
-                    default_action,
-                    created_at,
-                    json.dumps(safe_item, ensure_ascii=False, default=json_default),
-                    None,
-                    None,
-                    None,
-                ),
-            )
+            try:
+                conn.execute(
+                    """
+                    insert into confirmations (
+                      confirmation_id, company_id, store_id, task_id, runtime_run_id, action_type, title, status,
+                      default_action, created_at, item_json, decided_by, decided_at, decision_note
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record_id,
+                        company_id,
+                        store_id,
+                        task_id,
+                        runtime_run_id,
+                        action_type,
+                        title,
+                        "pending",
+                        default_action,
+                        created_at,
+                        json.dumps(safe_item, ensure_ascii=False, default=json_default),
+                        None,
+                        None,
+                        None,
+                    ),
+                )
+            except Exception as exc:
+                if isinstance(exc, sqlite3.IntegrityError) or str(getattr(exc, "sqlstate", "")) == "23505":
+                    raise ConfirmationDecisionConflict("confirmation_create_conflict") from None
+                raise
             self._insert_audit(
                 conn,
                 company_id=company_id,
@@ -4089,20 +4396,31 @@ class SaaSRepository:
         self.initialize()
         if decision not in {"approve", "reject", "modify"}:
             raise ValueError("decision must be approve, reject, or modify")
-        existing = self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id)
-        if not existing:
-            raise KeyError("confirmation not found")
         decided_at = now_iso()
         status = {"approve": "approved", "reject": "rejected", "modify": "needs_revision"}[decision]
         with self._connect() as conn:
-            conn.execute(
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            existing_row = conn.execute(
+                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
+                (company_id, confirmation_id),
+            ).fetchone()
+            if not existing_row:
+                raise KeyError("confirmation not found")
+            existing = self._confirmation_row_to_dict(existing_row)
+            if str(existing.get("status") or "") != "pending":
+                raise ConfirmationDecisionConflict("confirmation_decision_conflict")
+            transitioned = conn.execute(
                 """
                 update confirmations
                 set status = ?, decided_by = ?, decided_at = ?, decision_note = ?
-                where company_id = ? and confirmation_id = ?
+                where company_id = ? and confirmation_id = ? and status = 'pending'
                 """,
                 (status, decided_by, decided_at, note, company_id, confirmation_id),
-            )
+            ).rowcount
+            if transitioned != 1:
+                raise ConfirmationDecisionConflict("confirmation_decision_conflict")
             self._insert_audit(
                 conn,
                 company_id=company_id,
@@ -4117,11 +4435,75 @@ class SaaSRepository:
             )
         return self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {}
 
+    def claim_external_execution(
+        self,
+        *,
+        company_id: str,
+        confirmation_id: str,
+        user_id: str,
+    ) -> dict[str, Any]:
+        """Claim one approved external write before its platform adapter runs.
+
+        The processing status deliberately requires manual reconciliation if the
+        process stops after this transaction: blindly retrying an uncertain
+        external write could publish or clean up twice.
+        """
+
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
+                (company_id, confirmation_id),
+            ).fetchone()
+            if not row:
+                raise KeyError("confirmation not found")
+            confirmation = self._confirmation_row_to_dict(row)
+            if str(confirmation.get("status") or "") != "approved":
+                raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            transitioned = conn.execute(
+                """
+                update confirmations set status = ?
+                where company_id = ? and confirmation_id = ? and status = 'approved'
+                """,
+                (EXTERNAL_EXECUTION_PROCESSING_STATUS, company_id, confirmation_id),
+            ).rowcount
+            if transitioned != 1:
+                raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=confirmation.get("store_id"),
+                user_id=user_id,
+                actor_type="system",
+                action_type="external_execution.claimed",
+                target_type="confirmation",
+                target_id=confirmation_id,
+                summary="Approved external execution was claimed before the platform adapter call.",
+                details={
+                    "action_type": confirmation.get("action_type"),
+                    "status": EXTERNAL_EXECUTION_PROCESSING_STATUS,
+                    "automatic_retry_allowed": False,
+                    "secret_exposed": False,
+                },
+            )
+        return {**confirmation, "external_execution_claimed": True}
+
     def save_execution_result(self, *, confirmation: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
         self.initialize()
         execution_id = _id("exec")
         created_at = result.get("created_at") or now_iso()
         incoming_idempotency = _execution_idempotency(result)
+        terminal_smoke_execution = _is_terminal_new_account_smoke_execution(
+            confirmation=confirmation,
+            result=result,
+        )
+        successful_claimed_external_execution = _is_successful_claimed_external_execution(
+            confirmation=confirmation,
+            result=result,
+        )
         with self._connect() as conn:
             duplicate = _find_execution_duplicate(
                 conn=conn,
@@ -4200,8 +4582,37 @@ class SaaSRepository:
                 target_type="execution",
                 target_id=execution_id,
                 summary="ExecutionService returned a result.",
-                details={"status": result.get("status"), "real_execution": result.get("audit", {}).get("real_execution")},
+                details={
+                    "status": result.get("status"),
+                    "real_execution": result.get("audit", {}).get("real_execution"),
+                    **(
+                        {
+                            "source": "new_ebay_account_low_risk_smoke",
+                            "runbook_contract_version": "2026-06-18-new-ebay-account-low-risk-smoke",
+                            "company_id": confirmation["company_id"],
+                            "store_id": confirmation["store_id"],
+                            "confirmation_id": confirmation["confirmation_id"],
+                        }
+                        if terminal_smoke_execution
+                        else {}
+                    ),
+                },
             )
+            if terminal_smoke_execution or successful_claimed_external_execution:
+                expected_status = (
+                    EXTERNAL_EXECUTION_PROCESSING_STATUS
+                    if confirmation.get("external_execution_claimed") is True
+                    else "approved"
+                )
+                transitioned = conn.execute(
+                    """
+                    update confirmations set status = 'executed'
+                    where company_id = ? and confirmation_id = ? and status = ?
+                    """,
+                    (confirmation["company_id"], confirmation["confirmation_id"], expected_status),
+                ).rowcount
+                if transitioned != 1:
+                    raise ConfirmationDecisionConflict("confirmation_execution_conflict")
         return {"execution_id": execution_id, **result}
 
     def list_execution_results(self, *, company_id: str, limit: int | None = None) -> list[dict[str, Any]]:
@@ -4799,6 +5210,633 @@ class SaaSRepository:
                 },
             )
         return record
+
+    def create_read_only_oauth_confirmation(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        user_id: str,
+    ) -> dict[str, Any]:
+        """Create one backend-bound pending confirmation without creating OAuth state."""
+
+        self.initialize()
+        confirmation_id = _id("confirm")
+        created_at = now_iso()
+        action_type = "ebay_oauth_scope_change"
+        title = "Approve the exact current-store read-only OAuth plan"
+        item = {
+            "confirmation_id": confirmation_id,
+            "action_type": action_type,
+            "title": title,
+            "default_action": "hold",
+            "source": "new_ebay_account_low_risk_smoke",
+            "requested_step": "new_account_oauth_authorization_gate",
+            "scope_profile": "seller_read_only",
+            "oauth_state_created": False,
+            "authorization_url_created": False,
+            "oauth_request_created": False,
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        }
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            store_row = conn.execute(
+                f"select store_id, platform from stores where company_id = ? and store_id = ?{lock_suffix}",
+                (company_id, store_id),
+            ).fetchone()
+            if not store_row or str(store_row["platform"] or "").strip().lower() != "ebay":
+                raise KeyError("store not found")
+            active_rows = conn.execute(
+                f"""
+                select * from confirmations
+                where company_id = ? and store_id = ? and action_type = ?
+                  and status in ('pending', 'approved')
+                {lock_suffix}
+                """,
+                (company_id, store_id, action_type),
+            ).fetchall()
+            for row in active_rows:
+                existing = self._confirmation_row_to_dict(row)
+                existing_item = existing.get("item") if isinstance(existing.get("item"), dict) else {}
+                if (
+                    str(existing_item.get("source") or "") == "new_ebay_account_low_risk_smoke"
+                    and str(existing_item.get("requested_step") or "") == "new_account_oauth_authorization_gate"
+                    and str(existing_item.get("scope_profile") or "") == "seller_read_only"
+                ):
+                    raise ValueError("oauth_confirmation_already_active")
+            conn.execute(
+                """
+                insert into confirmations (
+                  confirmation_id, company_id, store_id, task_id, runtime_run_id, action_type, title, status,
+                  default_action, created_at, item_json, decided_by, decided_at, decision_note
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    confirmation_id,
+                    company_id,
+                    store_id,
+                    None,
+                    "new_ebay_account_oauth_authorization_gate",
+                    action_type,
+                    title,
+                    "pending",
+                    "hold",
+                    created_at,
+                    json.dumps(item, ensure_ascii=False, default=json_default),
+                    None,
+                    None,
+                    None,
+                ),
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                user_id=user_id,
+                actor_type="user",
+                action_type="confirmation.created",
+                target_type="confirmation",
+                target_id=confirmation_id,
+                summary="A pending current-store eBay read-only OAuth confirmation was created; no OAuth request was created.",
+                details={
+                    "action_type": action_type,
+                    "source": item["source"],
+                    "requested_step": item["requested_step"],
+                    "scope_profile": item["scope_profile"],
+                    "oauth_request_created": False,
+                    "secret_exposed": False,
+                },
+            )
+            self._insert_merchant_memory(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                memory_type="confirmation_boundary",
+                source_type="confirmation",
+                source_id=confirmation_id,
+                title=title,
+                summary=_memory_summary_from_confirmation(item),
+                importance=90,
+                tags=[action_type, "confirmation_center", "risk_control"],
+                memory={
+                    "confirmation_id": confirmation_id,
+                    "action_type": action_type,
+                    "high_risk": True,
+                    "secret_exposed": False,
+                },
+                created_by=user_id,
+            )
+        return self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {}
+
+    def create_read_only_sync_confirmation(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        user_id: str,
+    ) -> dict[str, Any]:
+        """Create one exact pending confirmation without starting an official sync."""
+
+        self.initialize()
+        confirmation_id = _id("confirm")
+        created_at = now_iso()
+        action_type = "ebay_read_only_sync"
+        title = "Approve one exact current-store official eBay read-only sync"
+        item = {
+            "confirmation_id": confirmation_id,
+            "action_type": action_type,
+            "title": title,
+            "default_action": "hold",
+            "source": "new_ebay_account_low_risk_smoke",
+            "requested_step": "official_packet_account_health_snapshot",
+            "scope_profile": "seller_read_only_official_sync",
+            "sync_started": False,
+            "task_created": False,
+            "queue_job_created": False,
+            "live_request_performed": False,
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        }
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            store_row = conn.execute(
+                f"select store_id, platform from stores where company_id = ? and store_id = ?{lock_suffix}",
+                (company_id, store_id),
+            ).fetchone()
+            if not store_row or str(store_row["platform"] or "").strip().lower() != "ebay":
+                raise KeyError("store not found")
+            active_rows = conn.execute(
+                f"""
+                select * from confirmations
+                where company_id = ? and store_id = ? and action_type = ?
+                  and status in ('pending', 'approved')
+                {lock_suffix}
+                """,
+                (company_id, store_id, action_type),
+            ).fetchall()
+            if any(
+                _is_exact_read_only_sync_confirmation(
+                    self._confirmation_row_to_dict(row),
+                    store_id=store_id,
+                    require_approved=False,
+                )
+                for row in active_rows
+            ):
+                raise ValueError("sync_confirmation_already_active")
+            conn.execute(
+                """
+                insert into confirmations (
+                  confirmation_id, company_id, store_id, task_id, runtime_run_id, action_type, title, status,
+                  default_action, created_at, item_json, decided_by, decided_at, decision_note
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    confirmation_id,
+                    company_id,
+                    store_id,
+                    None,
+                    "new_ebay_account_official_read_only_sync_gate",
+                    action_type,
+                    title,
+                    "pending",
+                    "hold",
+                    created_at,
+                    json.dumps(item, ensure_ascii=False, default=json_default),
+                    None,
+                    None,
+                    None,
+                ),
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                user_id=user_id,
+                actor_type="user",
+                action_type="confirmation.created",
+                target_type="confirmation",
+                target_id=confirmation_id,
+                summary="A pending exact current-store official read-only sync confirmation was created; no sync was started.",
+                details={
+                    "action_type": action_type,
+                    "source": item["source"],
+                    "requested_step": item["requested_step"],
+                    "scope_profile": item["scope_profile"],
+                    "sync_started": False,
+                    "secret_exposed": False,
+                },
+            )
+        return self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {}
+
+    def approved_read_only_sync_confirmation(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        confirmation_id: str,
+    ) -> bool:
+        confirmation = self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {}
+        return _is_exact_read_only_sync_confirmation(
+            confirmation,
+            store_id=store_id,
+            require_approved=True,
+        )
+
+    def create_approved_read_only_sync_task_and_job(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        user_id: str,
+        confirmation_id: str,
+        title: str,
+        input_data: dict[str, Any],
+        job_data: dict[str, Any],
+        max_attempts: int = 2,
+    ) -> dict[str, Any]:
+        """Atomically consume approval and persist exactly one sync task/job pair."""
+
+        self.initialize()
+        task_id = _id("task")
+        job_id = _id("job")
+        created_at = now_iso()
+        queue_provider = os.environ.get("JIEJING_QUEUE_PROVIDER", "local_worker").strip().lower() or "local_worker"
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
+                (company_id, confirmation_id),
+            ).fetchone()
+            confirmation = self._confirmation_row_to_dict(row) if row else {}
+            if not _is_exact_read_only_sync_confirmation(
+                confirmation,
+                store_id=store_id,
+                require_approved=True,
+            ):
+                raise ValueError("sync_exact_approval_required")
+            consumed = conn.execute(
+                """
+                update confirmations set status = 'executed'
+                where company_id = ? and confirmation_id = ? and status = 'approved'
+                """,
+                (company_id, confirmation_id),
+            ).rowcount
+            if consumed != 1:
+                raise ValueError("sync_exact_approval_required")
+            conn.execute(
+                """
+                insert into tasks (
+                  task_id, company_id, store_id, user_id, runtime_run_id, task_type, title,
+                  status, created_at, updated_at, input_json, output_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    company_id,
+                    store_id,
+                    user_id,
+                    None,
+                    "ebay_read_only_sync",
+                    str(title or "Official eBay read-only sync")[:180],
+                    "queued",
+                    created_at,
+                    created_at,
+                    json.dumps(input_data, ensure_ascii=False),
+                    "{}",
+                ),
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                user_id=user_id,
+                actor_type="user",
+                action_type="task.create",
+                target_type="task",
+                target_id=task_id,
+                summary="Approved official eBay read-only sync task created.",
+                details={"task_type": "ebay_read_only_sync", "confirmation_id": confirmation_id},
+            )
+            serialized_job = json.dumps(job_data, ensure_ascii=False)
+            conn.execute(
+                """
+                insert into queue_jobs (
+                  job_id, task_id, company_id, status, attempts, max_attempts, created_at, updated_at, job_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    task_id,
+                    company_id,
+                    "queued",
+                    0,
+                    max(1, int(max_attempts)),
+                    created_at,
+                    created_at,
+                    serialized_job,
+                ),
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                user_id=user_id,
+                actor_type="user",
+                action_type="ebay.read_only.sync.approval_consumed",
+                target_type="confirmation",
+                target_id=confirmation_id,
+                summary="Exact current-store official read-only sync approval was consumed before queueing.",
+                details={
+                    "scope_profile": "seller_read_only_official_sync",
+                    "task_id": task_id,
+                    "job_id": job_id,
+                    "secret_exposed": False,
+                },
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                user_id=user_id,
+                actor_type="system",
+                action_type="queue.job.created",
+                target_type="queue_job",
+                target_id=job_id,
+                summary="Approved official eBay read-only sync task was queued for worker execution.",
+                details={
+                    "task_id": task_id,
+                    "queue_provider": queue_provider,
+                    "job_kind": job_data.get("kind"),
+                    "confirmation_id": confirmation_id,
+                },
+            )
+        return {
+            "confirmation": self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {},
+            "task": self.get_task(company_id=company_id, task_id=task_id) or {},
+            "queue_job": self.get_queue_job(job_id=job_id, company_id=company_id) or {},
+            "queue_dispatch_pending": True,
+            "secret_exposed": False,
+        }
+
+    def create_approved_read_only_oauth_authorization_request(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        user_id: str,
+        confirmation_id: str,
+        plan: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Atomically consume one exact approval and create at most one active OAuth plan."""
+
+        self.initialize()
+        created_at = now_iso()
+        now_utc = datetime.now(timezone.utc)
+        request_id = _id("oauth")
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            store_row = conn.execute(
+                f"select store_id, platform from stores where company_id = ? and store_id = ?{lock_suffix}",
+                (company_id, store_id),
+            ).fetchone()
+            if not store_row or str(store_row["platform"] or "").strip().lower() != "ebay":
+                raise KeyError("store not found")
+            if self._strong_ebay_oauth_connection_exists(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                lock_rows=self.database_engine == "postgres",
+            ):
+                raise ValueError("oauth_plan_already_authorized")
+            pending_rows = conn.execute(
+                """
+                select updated_at, request_json from oauth_authorization_requests
+                where company_id = ? and store_id = ? and lower(platform) = 'ebay'
+                  and status in ('ready_to_redirect', 'blocked_missing_oauth_config')
+                """,
+                (company_id, store_id),
+            ).fetchall()
+            if any(
+                str((_load_json_field(row["request_json"]) or {}).get("scope_profile") or "seller_read_only")
+                == "seller_read_only"
+                and _timestamp_within_seconds(_parse_iso_datetime(str(row["updated_at"] or "")), now_utc, 15 * 60)
+                for row in pending_rows
+            ):
+                raise ValueError("oauth_plan_already_pending")
+            confirmation_row = conn.execute(
+                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
+                (company_id, confirmation_id),
+            ).fetchone()
+            confirmation = self._confirmation_row_to_dict(confirmation_row) if confirmation_row else {}
+            item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+            decided_at = _parse_iso_datetime(str(confirmation.get("decided_at") or ""))
+            exact_approval = bool(
+                confirmation
+                and str(confirmation.get("store_id") or "") == store_id
+                and str(confirmation.get("action_type") or "") == "ebay_oauth_scope_change"
+                and str(confirmation.get("status") or "") == "approved"
+                and str(confirmation.get("decided_by") or "")
+                and str(item.get("source") or "") == "new_ebay_account_low_risk_smoke"
+                and str(item.get("requested_step") or "") == "new_account_oauth_authorization_gate"
+                and str(item.get("scope_profile") or "") == "seller_read_only"
+                and _timestamp_within_seconds(decided_at, now_utc, 15 * 60)
+            )
+            if not exact_approval:
+                raise ValueError("oauth_plan_exact_approval_required")
+
+            consumed = conn.execute(
+                """
+                update confirmations set status = 'executed'
+                where company_id = ? and confirmation_id = ? and status = 'approved'
+                """,
+                (company_id, confirmation_id),
+            ).rowcount
+            if consumed != 1:
+                raise ValueError("oauth_plan_exact_approval_required")
+            safe_plan = _redact_secret_like({**plan, "confirmation_id": confirmation_id})
+            record = {
+                "oauth_request_id": request_id,
+                "company_id": company_id,
+                "store_id": store_id,
+                "platform": str(safe_plan.get("platform") or "ebay"),
+                "status": str(safe_plan.get("status") or "created"),
+                "state_nonce": str(safe_plan.get("state_nonce") or ""),
+                "scopes": safe_plan.get("scopes") if isinstance(safe_plan.get("scopes"), list) else [],
+                "auth_url": safe_plan.get("authorization_url") if isinstance(safe_plan.get("authorization_url"), str) else None,
+                "created_by": user_id,
+                "created_at": created_at,
+                "updated_at": created_at,
+                "request": safe_plan,
+                "secret_exposed": False,
+            }
+            conn.execute(
+                """
+                insert into oauth_authorization_requests (
+                  oauth_request_id, company_id, store_id, platform, status, state_nonce, scopes_json,
+                  auth_url, created_by, created_at, updated_at, request_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    request_id,
+                    company_id,
+                    store_id,
+                    record["platform"],
+                    record["status"],
+                    record["state_nonce"],
+                    json.dumps(record["scopes"], ensure_ascii=False),
+                    record["auth_url"],
+                    user_id,
+                    created_at,
+                    created_at,
+                    json.dumps(record["request"], ensure_ascii=False),
+                ),
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                user_id=user_id,
+                actor_type="user",
+                action_type="oauth.read_only.plan_created",
+                target_type="oauth_authorization_request",
+                target_id=request_id,
+                summary="eBay read-only OAuth authorization plan created from exact-step approval.",
+                details={
+                    "status": record["status"],
+                    "scope_profile": "seller_read_only",
+                    "scope_count": len(record["scopes"]),
+                    "authorization_url_created": bool(record["auth_url"]),
+                    "confirmation_id": confirmation_id,
+                    "secret_exposed": False,
+                },
+            )
+        return record
+
+    def _strong_ebay_oauth_connection_exists(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        company_id: str,
+        store_id: str,
+        lock_rows: bool,
+    ) -> bool:
+        lock_suffix = " for update" if lock_rows else ""
+        connections = conn.execute(
+            f"""
+            select connection_id, status, secret_ref, metadata_json
+            from platform_connections
+            where company_id = ? and store_id = ? and lower(platform) = 'ebay'
+            order by created_at desc{lock_suffix}
+            """,
+            (company_id, store_id),
+        ).fetchall()
+        for connection in connections:
+            connection_id = str(connection["connection_id"] or "")
+            secret_ref = str(connection["secret_ref"] or "")
+            metadata = _load_json_field(connection["metadata_json"])
+            metadata = metadata if isinstance(metadata, dict) else {}
+            oauth_request_id = str(metadata.get("oauth_request_id") or "")
+            if not (
+                connection_id
+                and str(connection["status"] or "") in {"read_only_authorized", "publish_authorized"}
+                and secret_ref
+                and oauth_request_id
+                and str(metadata.get("credential_source") or "") == "jiejing_vault_secret_ref"
+                and str(metadata.get("account_deletion_identity_mapping_status") or "") == "identity_mapping_ready"
+                and str(metadata.get("ebay_user_id_hash") or "")
+            ):
+                continue
+            request_row = conn.execute(
+                f"""
+                select status, updated_at, request_json from oauth_authorization_requests
+                where company_id = ? and store_id = ? and oauth_request_id = ?{lock_suffix}
+                """,
+                (company_id, store_id, oauth_request_id),
+            ).fetchone()
+            if not request_row or str(request_row["status"] or "") != "callback_exchange_completed":
+                continue
+            request_payload = _load_json_field(request_row["request_json"])
+            request_payload = request_payload if isinstance(request_payload, dict) else {}
+            callback_events = request_payload.get("callback_events") if isinstance(request_payload.get("callback_events"), list) else []
+            binding_event = next(
+                (
+                    event
+                    for event in callback_events
+                    if isinstance(event, dict)
+                    and str(event.get("status") or "") == "callback_exchange_completed"
+                    and isinstance(event.get("connection"), dict)
+                    and str(event["connection"].get("connection_id") or "") == connection_id
+                    and str(event["connection"].get("company_id") or "") == company_id
+                    and str(event["connection"].get("store_id") or "") == store_id
+                    and isinstance(event.get("backend_connection_binding"), dict)
+                ),
+                {},
+            )
+            binding = binding_event.get("backend_connection_binding") if isinstance(binding_event.get("backend_connection_binding"), dict) else {}
+            if not (
+                binding.get("contract_version") == "2026-08-10-oauth-callback-connection-binding-v1"
+                and str(binding.get("oauth_request_id") or "") == oauth_request_id
+                and str(binding.get("connection_id") or "") == connection_id
+                and str(binding.get("connection_id_sha256") or "")
+                == hashlib.sha256(connection_id.encode("utf-8")).hexdigest()
+                and str(binding.get("credential_ref_sha256") or "")
+                == hashlib.sha256(secret_ref.encode("utf-8")).hexdigest()
+                and str(binding.get("seller_identity_sha256") or "")
+                == hashlib.sha256(str(metadata.get("ebay_user_id_hash") or "").encode("utf-8")).hexdigest()
+                and binding.get("created_by_backend_callback") is True
+                and binding.get("secret_exposed") is False
+            ):
+                continue
+            secret_row = conn.execute(
+                f"""
+                select purpose, status, metadata_json from secret_refs
+                where company_id = ? and store_id = ? and secret_ref = ?{lock_suffix}
+                """,
+                (company_id, store_id, secret_ref),
+            ).fetchone()
+            secret_metadata = _load_json_field(secret_row["metadata_json"]) if secret_row else {}
+            secret_metadata = secret_metadata if isinstance(secret_metadata, dict) else {}
+            if not (
+                secret_row
+                and str(secret_row["purpose"] or "") == "ebay_refresh_token"
+                and str(secret_row["status"] or "") in {"local_secret_resolver_stored", "managed_vault_stored"}
+                and str(secret_metadata.get("oauth_request_id") or "") == oauth_request_id
+                and str(secret_metadata.get("credential_owner") or "") == "jiejing_saas_backend"
+            ):
+                continue
+            audit_row = conn.execute(
+                f"""
+                select actor_type, created_at, audit_json from audit_logs
+                where company_id = ? and store_id = ? and action_type = 'oauth.callback.received'
+                  and target_type = 'oauth_authorization_request' and target_id = ?
+                order by created_at desc limit 1{lock_suffix}
+                """,
+                (company_id, store_id, oauth_request_id),
+            ).fetchone()
+            audit = _load_json_field(audit_row["audit_json"]) if audit_row else {}
+            audit_details = audit.get("details") if isinstance(audit, dict) and isinstance(audit.get("details"), dict) else {}
+            if (
+                audit_row
+                and str(audit_row["actor_type"] or "") == "system"
+                and str(audit_details.get("status") or "") == "callback_exchange_completed"
+                and audit_details.get("secret_exposed") is False
+                and _timestamp_within_seconds(
+                    _parse_iso_datetime(str(audit_row["created_at"] or "")),
+                    _parse_iso_datetime(str(request_row["updated_at"] or "")),
+                    5 * 60,
+                )
+            ):
+                return True
+        return False
 
     def get_platform_trial_activation(self, *, company_id: str) -> dict[str, Any] | None:
         self.initialize()
@@ -6290,6 +7328,31 @@ class SaaSRepository:
                 audit["internal_actor"] = True
             audits.append(audit)
         return audits
+
+    def find_latest_audit_log_by_target(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        action_type: str,
+        target_type: str,
+        target_id: str,
+    ) -> dict[str, Any] | None:
+        """Use the targeted audit index; never infer durable proof from a recent-page scan."""
+
+        self.initialize()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select * from audit_logs
+                where company_id = ? and store_id = ? and action_type = ?
+                  and target_type = ? and target_id = ?
+                order by created_at desc
+                limit 1
+                """,
+                (company_id, store_id, action_type, target_type, target_id),
+            ).fetchone()
+        return self._audit_row_to_dict(row) if row else None
 
     def task_timeline(self, *, company_id: str, task_id: str) -> dict[str, Any]:
         self.initialize()
@@ -8973,6 +10036,17 @@ class SaaSRepository:
         ]
 
     def _ensure_indexes(self, conn: sqlite3.Connection) -> None:
+        duplicate_state = conn.execute(
+            """
+            select 1
+            from oauth_authorization_requests
+            group by state_nonce
+            having count(*) > 1
+            limit 1
+            """
+        ).fetchone()
+        if duplicate_state:
+            raise RuntimeError("oauth_state_nonce_duplicate_migration_blocked")
         conn.executescript(
             """
             create index if not exists idx_users_account_classification_created
@@ -8999,6 +10073,8 @@ class SaaSRepository:
               on platform_connections(company_id, store_id, platform, status);
             create index if not exists idx_oauth_requests_company_store_status_updated
               on oauth_authorization_requests(company_id, store_id, status, updated_at);
+            create unique index if not exists idx_oauth_requests_state_nonce_unique
+              on oauth_authorization_requests(state_nonce);
             create index if not exists idx_platform_data_packets_company_store_platform_created
               on platform_data_packets(company_id, store_id, platform, created_at);
             create index if not exists idx_tasks_company_store_status_updated
@@ -9866,6 +10942,45 @@ def _parse_iso_datetime(value: str) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _timestamp_within_seconds(left: datetime | None, right: datetime | None, maximum: int) -> bool:
+    return bool(
+        left is not None
+        and right is not None
+        and maximum >= 0
+        and abs((left - right).total_seconds()) <= maximum
+    )
+
+
+def _is_exact_read_only_sync_confirmation(
+    confirmation: dict[str, Any],
+    *,
+    store_id: str,
+    require_approved: bool,
+) -> bool:
+    item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+    status = str(confirmation.get("status") or "")
+    exact = bool(
+        str(confirmation.get("store_id") or "") == store_id
+        and str(confirmation.get("action_type") or "") == "ebay_read_only_sync"
+        and str(item.get("source") or "") == "new_ebay_account_low_risk_smoke"
+        and str(item.get("requested_step") or "") == "official_packet_account_health_snapshot"
+        and str(item.get("scope_profile") or "") == "seller_read_only_official_sync"
+    )
+    if not exact:
+        return False
+    if not require_approved:
+        return status in {"pending", "approved"}
+    return bool(
+        status == "approved"
+        and str(confirmation.get("decided_by") or "")
+        and _timestamp_within_seconds(
+            _parse_iso_datetime(str(confirmation.get("decided_at") or "")),
+            datetime.now(timezone.utc),
+            15 * 60,
+        )
+    )
+
+
 def _without_domestic_checkout_uri(value: dict[str, Any]) -> dict[str, Any]:
     """Remove a payable URI as soon as the order is no longer payable."""
 
@@ -9921,6 +11036,35 @@ SAFE_SECRET_FLAG_KEYS = {
     "frontend_gets_payment_secret",
     "raw_provider_response_persisted",
 }
+
+
+def _runtime_confirmation_matches(
+    existing: dict[str, Any],
+    *,
+    task: dict[str, Any],
+    runtime_run_id: str,
+    action_type: str,
+    title: str,
+    default_action: str,
+    item: dict[str, Any],
+) -> bool:
+    existing_item = existing.get("item") if isinstance(existing.get("item"), dict) else {}
+    return bool(
+        existing
+        and str(existing.get("company_id") or "") == str(task.get("company_id") or "")
+        and str(existing.get("store_id") or "") == str(task.get("store_id") or "")
+        and str(existing.get("task_id") or "") == str(task.get("task_id") or "")
+        and str(existing.get("runtime_run_id") or "") == runtime_run_id
+        and str(existing.get("action_type") or "") == action_type
+        and str(existing.get("title") or "") == title
+        and str(existing.get("default_action") or "") == default_action
+        and existing_item == item
+    )
+
+
+class ConfirmationDecisionConflict(ValueError):
+    """Raised when a terminal confirmation is asked to transition again."""
+
 
 
 def _redact_secret_like(value: Any) -> Any:
@@ -11350,6 +12494,56 @@ def _execution_idempotency(result: dict[str, Any]) -> dict[str, Any]:
         "duplicate_prevention_key": idempotency.get("duplicate_prevention_key"),
         "payload_hash": idempotency.get("payload_hash"),
     }
+
+
+def _is_terminal_new_account_smoke_execution(
+    *,
+    confirmation: dict[str, Any],
+    result: dict[str, Any],
+) -> bool:
+    item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+    version = "2026-06-18-new-ebay-account-low-risk-smoke"
+    action_type = str(confirmation.get("action_type") or "")
+    terminal_statuses = {
+        "publish_listing": {"published_to_ebay"},
+        "cleanup_test_listing": {"completed", "cleanup_completed", "ended_listing", "deleted_test_listing"},
+    }
+    return bool(
+        action_type in terminal_statuses
+        and str(result.get("status") or "") in terminal_statuses[action_type]
+        and str(result.get("source") or "") == "new_ebay_account_low_risk_smoke"
+        and str(result.get("workflow_scope") or "") == "new_ebay_account_low_risk_smoke"
+        and str(result.get("runbook_contract_version") or "") == version
+        and str(result.get("company_id") or "") == str(confirmation.get("company_id") or "")
+        and str(result.get("store_id") or "") == str(confirmation.get("store_id") or "")
+        and str(result.get("confirmation_id") or "") == str(confirmation.get("confirmation_id") or "")
+        and str(item.get("source") or "") == "new_ebay_account_low_risk_smoke"
+        and str(item.get("workflow_scope") or "") == "new_ebay_account_low_risk_smoke"
+        and str(item.get("runbook_contract_version") or "") == version
+        and str(item.get("company_id") or "") == str(confirmation.get("company_id") or "")
+        and str(item.get("store_id") or "") == str(confirmation.get("store_id") or "")
+        and result.get("secret_exposed") is False
+    )
+
+
+def _is_successful_claimed_external_execution(
+    *,
+    confirmation: dict[str, Any],
+    result: dict[str, Any],
+) -> bool:
+    terminal_statuses = {
+        "publish_listing": {"published_to_ebay"},
+        "cleanup_test_listing": {"completed", "cleanup_completed", "ended_listing", "deleted_test_listing"},
+    }
+    action_type = str(confirmation.get("action_type") or "")
+    return bool(
+        confirmation.get("external_execution_claimed") is True
+        and action_type in terminal_statuses
+        and str(result.get("action_type") or "") == action_type
+        and str(result.get("status") or "") in terminal_statuses[action_type]
+        and str(result.get("task_id") or "") == str(confirmation.get("task_id") or "")
+        and result.get("secret_exposed") is False
+    )
 
 
 def _find_execution_duplicate(

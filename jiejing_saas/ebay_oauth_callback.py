@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from typing import Any
 
@@ -43,22 +44,30 @@ def process_ebay_oauth_callback(
         result = state_block
         should_record_callback = bool(state_block.get("record_callback_event"))
     else:
-        result = ebay_oauth_planner.callback_result(
-            request_record=request_record,
-            code=code or None,
-            error=error or None,
-            secret_store_status=secret_store_boundary.status(),
-        )
-        if request_record and result.get("status") == "callback_received_exchange_ready" and code:
-            result = _exchange_and_store_refresh_token(
-                repository=repository,
-                settings=settings,
+        claim = repository.claim_oauth_callback_exchange(state_nonce=state) if request_record else {}
+        claimed_request = claim.get("oauth_request") if isinstance(claim.get("oauth_request"), dict) else None
+        if request_record and not claim.get("claimed"):
+            request_record = claimed_request or request_record
+            result = _oauth_claim_blocker(request_record=request_record, code=code)
+            should_record_callback = False
+        else:
+            request_record = claimed_request or request_record
+            result = ebay_oauth_planner.callback_result(
                 request_record=request_record,
-                callback_result=result,
-                code=code,
-                oauth_transport=oauth_transport,
-                vault_transport=vault_transport,
+                code=code or None,
+                error=error or None,
+                secret_store_status=secret_store_boundary.status(),
             )
+            if request_record and result.get("status") == "callback_received_exchange_ready" and code:
+                result = _exchange_and_store_refresh_token(
+                    repository=repository,
+                    settings=settings,
+                    request_record=request_record,
+                    callback_result=result,
+                    code=code,
+                    oauth_transport=oauth_transport,
+                    vault_transport=vault_transport,
+                )
     if request_record and result.get("oauth_request_id") and should_record_callback:
         repository.update_oauth_authorization_request(
             oauth_request_id=str(result["oauth_request_id"]),
@@ -66,6 +75,42 @@ def process_ebay_oauth_callback(
             details=result,
         )
     return result
+
+
+def _oauth_claim_blocker(*, request_record: dict[str, Any], code: str) -> dict[str, Any]:
+    status = str(request_record.get("status") or "")
+    if status.startswith(OAUTH_CALLBACK_TERMINAL_PREFIXES):
+        blocked_status = "blocked_replayed_state"
+        blocked_by = ["oauth_state_already_consumed"]
+        summary = "OAuth callback state was already consumed."
+    else:
+        blocked_status = "blocked_callback_exchange_in_progress"
+        blocked_by = ["oauth_callback_exchange_already_claimed"]
+        summary = "OAuth callback exchange is already claimed and requires terminal-state review."
+    return {
+        "oauth_request_id": request_record.get("oauth_request_id"),
+        "company_id": request_record.get("company_id"),
+        "store_id": request_record.get("store_id"),
+        "platform": request_record.get("platform") or "ebay",
+        "status": blocked_status,
+        "summary": summary,
+        "blocked_by": blocked_by,
+        "code_received": bool(code),
+        "code_stored": False,
+        "token_exchange_performed": False,
+        "vault_write_performed": False,
+        "automatic_retry_allowed": False,
+        "manual_reconcile_required": blocked_status == "blocked_callback_exchange_in_progress",
+        "record_callback_event": False,
+        "access_token_returned_to_frontend": False,
+        "refresh_token_returned_to_frontend": False,
+        "access_token_returned_to_runtime": False,
+        "refresh_token_returned_to_runtime": False,
+        "access_token_stored_in_database": False,
+        "refresh_token_stored_in_database": False,
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
 
 
 def _oauth_state_blocker(*, request_record: dict[str, Any] | None, code: str) -> dict[str, Any] | None:
@@ -102,10 +147,11 @@ def _oauth_state_blocker(*, request_record: dict[str, Any] | None, code: str) ->
     if status and status not in OAUTH_CALLBACK_PENDING_STATUSES:
         return {
             **base,
-            "status": "blocked_invalid_state_status",
-            "summary": "OAuth callback state is not in a pending status.",
-            "blocked_by": ["oauth_state_not_pending"],
-            "record_callback_event": True,
+            "status": "blocked_replayed_state",
+            "summary": "OAuth callback state was already consumed.",
+            "blocked_by": ["oauth_state_already_consumed"],
+            "state_replay_blocked": True,
+            "record_callback_event": False,
         }
     age_seconds = _oauth_state_age_seconds(request_record)
     if age_seconds is None or age_seconds > OAUTH_CALLBACK_STATE_TTL_SECONDS:
@@ -153,7 +199,7 @@ def _exchange_and_store_refresh_token(
             "token_exchange_performed": False,
             "vault_write_performed": False,
             "blocked_by": exchange.get("blocked_by") or ["oauth_token_exchange_failed"],
-            "next_step": "check_jiejing_oauth_config_and_retry_callback",
+            "next_step": "manual_reconcile_then_start_a_new_authorization_only_if_explicitly_approved",
             "secret_exposed": False,
         }
 
@@ -167,7 +213,7 @@ def _exchange_and_store_refresh_token(
             "vault_write_performed": False,
             "blocked_by": ["oauth_refresh_token_missing"],
             "token_response_summary": _token_response_summary(token_response),
-            "next_step": "retry_oauth_authorization_with_offline_refresh_token_scope",
+            "next_step": "manual_reconcile_then_start_a_new_authorization_with_offline_scope_only_if_explicitly_approved",
             "secret_exposed": False,
         }
 
@@ -184,7 +230,7 @@ def _exchange_and_store_refresh_token(
             "vault_write_performed": False,
             "blocked_by": identity_mapping.get("blocked_by") or ["ebay_identity_mapping_failed"],
             "token_response_summary": _token_response_summary(token_response),
-            "next_step": "retry_oauth_authorization_after_ebay_identity_api_recovers",
+            "next_step": "manual_reconcile_then_start_a_new_authorization_after_identity_api_recovers_only_if_explicitly_approved",
             "access_token_returned_to_frontend": False,
             "refresh_token_returned_to_frontend": False,
             "secret_exposed": False,
@@ -315,6 +361,18 @@ def _exchange_and_store_refresh_token(
             },
         },
     )
+    backend_connection_binding = {
+        "contract_version": "2026-08-10-oauth-callback-connection-binding-v1",
+        "oauth_request_id": request_record["oauth_request_id"],
+        "connection_id": connection["connection_id"],
+        "connection_id_sha256": hashlib.sha256(str(connection["connection_id"]).encode("utf-8")).hexdigest(),
+        "credential_ref_sha256": hashlib.sha256(str(updated_ref["secret_ref"]).encode("utf-8")).hexdigest(),
+        "seller_identity_sha256": hashlib.sha256(
+            str(identity_mapping.get("ebay_user_id_hash") or "").encode("utf-8")
+        ).hexdigest(),
+        "created_by_backend_callback": True,
+        "secret_exposed": False,
+    }
     return {
         **callback_result,
         "status": "callback_exchange_completed",
@@ -326,6 +384,7 @@ def _exchange_and_store_refresh_token(
         "secret_storage": _public_storage(storage),
         "secret_ref": updated_ref,
         "connection": connection,
+        "backend_connection_binding": backend_connection_binding,
         "account_deletion_identity_mapping": {
             "status": identity_mapping.get("status"),
             "immutable_selector_ready": bool(identity_mapping.get("ebay_user_id_hash")),

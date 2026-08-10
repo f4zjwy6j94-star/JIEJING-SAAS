@@ -53,7 +53,7 @@ from .billing_wechat_pay import (
     process_wechat_pay_notification_from_env,
     process_wechat_pay_refund_notification_from_env,
 )
-from .commercial_launch_gate import build_commercial_launch_gate
+from .commercial_launch_gate import build_commercial_launch_gate, build_current_store_ebay_evidence
 from .config import SaaSSettings
 from .controlled_bridges import build_controlled_bridge_contract
 from .database_adapter import build_database_adapter_contract
@@ -125,7 +125,12 @@ from .product_feedback import (
     ProductFeedbackValidationError,
 )
 from .readiness import build_degraded_product_readiness, build_product_readiness_or_degraded
-from .repository import HIGH_RISK_ACTIONS, SaaSRepository
+from .repository import (
+    EXTERNAL_EXECUTION_PROCESSING_STATUS,
+    ConfirmationDecisionConflict,
+    HIGH_RISK_ACTIONS,
+    SaaSRepository,
+)
 from .runtime_bridge import RuntimeBridge
 from .security import SessionManager
 from .secret_store import SecretStoreBoundary
@@ -1199,6 +1204,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
     ebay_account_deletion_signature_verifier: EbayNotificationSignatureVerifier
     media_source_asset_store: MediaSourceAssetStore
     settings: SaaSSettings
+    ebay_write_adapter_factory = EbayWriteHttpAdapter
     repository_startup_error: Exception | None = None
     auth_rate_limit_lock = threading.Lock()
     auth_rate_limit_buckets: dict[str, list[float]] = {}
@@ -1330,7 +1336,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if self._wants_html_response():
                 self._send_html(self._oauth_callback_public_html(result), status=status)
             else:
-                self._send_json({"oauth_callback": result}, status=status)
+                self._send_json({"oauth_callback": self._oauth_callback_public_result(result)}, status=status)
             return
 
         if len(parts) == 3 and parts[0] == "media-source-assets" and parts[2] == "content":
@@ -1442,7 +1448,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not self._is_platform_internal_admin(identity):
                 self._send_error(HTTPStatus.FORBIDDEN, "production release gate is platform-internal admin only")
                 return
-            self._send_json({"production_release_gate": build_production_release_gate(self.settings, self.repository)})
+            store_id = query.get("store_id", [None])[0]
+            if store_id and not self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id):
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            self._send_json(
+                {
+                    "production_release_gate": build_production_release_gate(
+                        self.settings,
+                        self.repository,
+                        company_id=identity["company_id"],
+                        store_id=store_id,
+                    )
+                }
+            )
             return
 
         if path == "owner/production-evidence-ledger":
@@ -1470,7 +1489,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not self._is_platform_internal_admin(identity):
                 self._send_error(HTTPStatus.FORBIDDEN, "paid launch approval packet is platform-internal admin only")
                 return
-            self._send_json({"paid_launch_approval_packet": build_paid_launch_approval_packet(self.settings, self.repository)})
+            store_id = query.get("store_id", [None])[0]
+            if store_id and not self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id):
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            self._send_json(
+                {
+                    "paid_launch_approval_packet": build_paid_launch_approval_packet(
+                        self.settings,
+                        self.repository,
+                        company_id=identity["company_id"],
+                        store_id=store_id,
+                    )
+                }
+            )
             return
 
         if path in {"owner/edge-cutover-preflight", "domain/edge-cutover-preflight"}:
@@ -1710,7 +1742,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "commercial/launch-gate":
-            self._send_json({"commercial_launch_gate": build_commercial_launch_gate(self.settings, self.repository)})
+            store_id = query.get("store_id", [None])[0]
+            if store_id and not self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id):
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            self._send_json(
+                {
+                    "commercial_launch_gate": build_commercial_launch_gate(
+                        self.settings,
+                        self.repository,
+                        company_id=identity["company_id"],
+                        store_id=store_id,
+                    )
+                }
+            )
             return
 
         if path == "post-publish/cockpit":
@@ -1884,6 +1929,22 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 {
                     "account_health": build_account_health_snapshot(
                         self.repository,
+                        company_id=identity["company_id"],
+                        store_id=store_id,
+                    )
+                }
+            )
+            return
+
+        if len(parts) == 4 and parts[0] == "stores" and parts[2] == "ebay-oauth" and parts[3] == "read-only-status":
+            store_id = parts[1]
+            store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
+            if not store:
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            self._send_json(
+                {
+                    "ebay_oauth_read_only_status": self.repository.ebay_read_only_oauth_boundary(
                         company_id=identity["company_id"],
                         store_id=store_id,
                     )
@@ -2440,7 +2501,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 code=str(body.get("code") or ""),
                 error=str(body.get("error") or ""),
             )
-            self._send_json({"oauth_callback": result}, status=self._oauth_callback_http_status(result))
+            self._send_json(
+                {"oauth_callback": self._oauth_callback_public_result(result)},
+                status=self._oauth_callback_http_status(result),
+            )
             return
 
         if path == "monitoring/cls/callback":
@@ -3184,8 +3248,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found")
                 return
             draft_save_intake = parts[2] == "ebay-draft-confirmation"
+            workflow_scope = str(body.get("workflow_scope") or "").strip()
+            smoke_contract_version = "2026-06-18-new-ebay-account-low-risk-smoke"
+            if workflow_scope and workflow_scope != "new_ebay_account_low_risk_smoke":
+                self._send_error(HTTPStatus.BAD_REQUEST, "unsupported publish workflow scope")
+                return
+            new_account_smoke = bool(not draft_save_intake and workflow_scope == "new_ebay_account_low_risk_smoke")
             action_type = "save_ebay_listing_draft" if draft_save_intake else "publish_listing"
-            intake_source = "merchant_ebay_draft_save_intake" if draft_save_intake else "merchant_listing_publish_intake"
+            intake_source = (
+                "merchant_ebay_draft_save_intake"
+                if draft_save_intake
+                else "new_ebay_account_low_risk_smoke"
+                if new_account_smoke
+                else "merchant_listing_publish_intake"
+            )
             latest_packets = self.repository.list_platform_data_packets(
                 company_id=identity["company_id"],
                 store_id=parts[1],
@@ -3267,6 +3343,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 title=(f"保存到 eBay 草稿确认 · {task_title}" if draft_save_intake else f"发布确认 · {task_title}"),
                 item={
                     "source": intake_source,
+                    **(
+                        {
+                            "workflow_scope": "new_ebay_account_low_risk_smoke",
+                            "runbook_contract_version": smoke_contract_version,
+                            "company_id": identity["company_id"],
+                            "store_id": parts[1],
+                            "publish_health_ready": _publish_health_ready_for_confirmation(
+                                readiness=readiness,
+                                preflight=preflight,
+                            ),
+                        }
+                        if new_account_smoke
+                        else {}
+                    ),
                     "reason": (
                         "商家希望先把完整商品资料保存为 eBay 未发布草稿；这仍会写入卖家账号，必须由确认中心批准。"
                         if draft_save_intake
@@ -3341,6 +3431,27 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 return
             body = self._read_json_body()
             store_id = parts[1]
+            connection_metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+            backend_only_metadata_keys = {
+                "oauth_request_id",
+                "credential_source",
+                "account_deletion_identity_mapping_status",
+                "ebay_user_id_hash",
+                "ebay_username_hash",
+                "backend_connection_binding",
+                "created_by_backend_callback",
+            }
+            if (
+                str(body.get("platform") or "ebay").strip().lower() == "ebay"
+                and str(body.get("connection_type") or "oauth").strip().lower() == "oauth"
+                and (
+                    str(body.get("status") or "").strip().lower()
+                    in {"authorized", "read_only_authorized", "publish_authorized"}
+                    or bool(backend_only_metadata_keys.intersection(connection_metadata))
+                )
+            ):
+                self._send_error(HTTPStatus.BAD_REQUEST, "backend_owned_oauth_connection_state_required")
+                return
             try:
                 connection = self.repository.create_platform_connection(
                     company_id=identity["company_id"],
@@ -3555,9 +3666,57 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if len(parts) == 4 and parts[0] == "stores" and parts[2] == "ebay-oauth" and parts[3] == "read-only-confirmation":
+            if not self._require_permission(identity, "manage_connections"):
+                return
+            body = self._read_json_body()
+            requested_scope_profile = str(body.get("scope_profile") or "seller_read_only").strip()
+            if requested_scope_profile != "seller_read_only":
+                self._send_error(HTTPStatus.BAD_REQUEST, "oauth_confirmation_scope_profile_not_allowed")
+                return
+            store_id = parts[1]
+            try:
+                confirmation = self.repository.create_read_only_oauth_confirmation(
+                    company_id=identity["company_id"],
+                    store_id=store_id,
+                    user_id=identity["user_id"],
+                )
+            except KeyError:
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            except ValueError:
+                self._send_error(HTTPStatus.CONFLICT, "oauth_confirmation_already_active")
+                return
+            item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+            self._send_json(
+                {
+                    "oauth_confirmation": {
+                        "confirmation_id": str(confirmation.get("confirmation_id") or ""),
+                        "status": str(confirmation.get("status") or "pending"),
+                        "action_type": "ebay_oauth_scope_change",
+                        "requested_step": str(item.get("requested_step") or ""),
+                        "scope_profile": str(item.get("scope_profile") or ""),
+                        "decision_required": True,
+                        "oauth_state_created": False,
+                        "authorization_url_created": False,
+                        "oauth_request_created": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    }
+                },
+                status=HTTPStatus.CREATED,
+            )
+            return
+
         if len(parts) == 4 and parts[0] == "stores" and parts[2] == "ebay-oauth" and parts[3] == "read-only-plan":
+            if not self._require_permission(identity, "manage_connections"):
+                return
             body = self._read_json_body()
             store_id = parts[1]
+            confirmation_id = str(body.get("confirmation_id") or "").strip()
+            if not confirmation_id:
+                self._send_error(HTTPStatus.CONFLICT, "oauth_plan_exact_approval_required")
+                return
             store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
             if not store:
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
@@ -3570,12 +3729,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 marketplace_id=str(body.get("marketplace_id") or store.get("marketplace") or "EBAY_US"),
                 requested_scopes=requested_scopes,
             )
-            request_record = self.repository.create_oauth_authorization_request(
-                company_id=identity["company_id"],
-                store_id=store_id,
-                user_id=identity["user_id"],
-                plan=plan,
-            )
+            try:
+                request_record = self.repository.create_approved_read_only_oauth_authorization_request(
+                    company_id=identity["company_id"],
+                    store_id=store_id,
+                    user_id=identity["user_id"],
+                    confirmation_id=confirmation_id,
+                    plan=plan,
+                )
+            except KeyError:
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            except ValueError as exc:
+                self._send_error(HTTPStatus.CONFLICT, str(exc))
+                return
             self._send_json(
                 {
                     "oauth_plan": plan,
@@ -3699,15 +3866,32 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not store:
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
                 return
-            secret_refs = self.repository.list_secret_refs(company_id=identity["company_id"], store_id=store_id)
-            secret_ref = next(
+            oauth_boundary = self.repository.ebay_read_only_oauth_boundary(
+                company_id=identity["company_id"],
+                store_id=store_id,
+            )
+            expected_connection_hash = str(oauth_boundary.get("connection_id_sha256") or "")
+            connections = self.repository.list_connections(company_id=identity["company_id"], store_id=store_id)
+            bound_connection = next(
                 (
                     item
-                    for item in secret_refs
-                    if str(item.get("provider") or "").lower() == "ebay"
-                    and str(item.get("purpose") or "").lower() == "ebay_refresh_token"
+                    for item in connections
+                    if str(item.get("connection_id") or "")
+                    and expected_connection_hash
+                    and hashlib.sha256(str(item.get("connection_id") or "").encode("utf-8")).hexdigest()
+                    == expected_connection_hash
                 ),
                 None,
+            )
+            bound_secret_ref_id = str((bound_connection or {}).get("secret_ref") or "")
+            secret_ref = (
+                self.repository.get_secret_ref(
+                    company_id=identity["company_id"],
+                    store_id=store_id,
+                    secret_ref=bound_secret_ref_id,
+                )
+                if oauth_boundary.get("authorized") is True and bound_secret_ref_id
+                else None
             )
             refresh = EbayVaultTokenRefreshAdapter(self.settings).refresh_access_token_from_secret_ref(
                 secret_ref=secret_ref,
@@ -3725,7 +3909,17 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 target_type="store",
                 target_id=store_id,
                 summary="eBay access token refresh executed through backend Vault-backed adapter. Token values were not returned or stored.",
-                details=public_refresh,
+                details={
+                    **public_refresh,
+                    "connection_id_sha256": expected_connection_hash if refresh.get("ok") else "",
+                    "credential_ref_sha256": (
+                        hashlib.sha256(bound_secret_ref_id.encode("utf-8")).hexdigest()
+                        if refresh.get("ok") and bound_secret_ref_id
+                        else ""
+                    ),
+                    "backend_strong_oauth_boundary_ready": oauth_boundary.get("authorized") is True,
+                    "secret_exposed": False,
+                },
             )
             status = HTTPStatus.OK if refresh.get("ok") else HTTPStatus.ACCEPTED
             self._send_json(
@@ -3955,16 +4149,88 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if len(parts) == 4 and parts[0] == "stores" and parts[2] == "ebay-read-only" and parts[3] == "sync-confirmation":
+            if not self._require_permission(identity, "create_task"):
+                return
+            body = self._read_json_body()
+            requested_scope_profile = str(body.get("scope_profile") or "seller_read_only_official_sync").strip()
+            if requested_scope_profile != "seller_read_only_official_sync":
+                self._send_error(HTTPStatus.BAD_REQUEST, "sync_confirmation_scope_profile_not_allowed")
+                return
+            store_id = parts[1]
+            try:
+                confirmation = self.repository.create_read_only_sync_confirmation(
+                    company_id=identity["company_id"],
+                    store_id=store_id,
+                    user_id=identity["user_id"],
+                )
+            except KeyError:
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            except ValueError:
+                self._send_error(HTTPStatus.CONFLICT, "sync_confirmation_already_active")
+                return
+            item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+            self._send_json(
+                {
+                    "sync_confirmation": {
+                        "confirmation_id": str(confirmation.get("confirmation_id") or ""),
+                        "status": str(confirmation.get("status") or "pending"),
+                        "action_type": "ebay_read_only_sync",
+                        "requested_step": str(item.get("requested_step") or ""),
+                        "scope_profile": str(item.get("scope_profile") or ""),
+                        "decision_required": True,
+                        "sync_started": False,
+                        "task_created": False,
+                        "queue_job_created": False,
+                        "live_request_performed": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    }
+                },
+                status=HTTPStatus.CREATED,
+            )
+            return
+
         if len(parts) == 4 and parts[0] == "stores" and parts[2] == "ebay-read-only" and parts[3] == "sync":
             if not self._require_permission(identity, "create_task"):
                 return
             if not self._require_quota(identity, "official_ebay_sync"):
                 return
             body = self._read_json_body()
+            confirmation_id = str(body.get("confirmation_id") or "").strip()
             store_id = parts[1]
             store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
             if not store:
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            current_store_evidence = build_current_store_ebay_evidence(
+                repository=self.repository,
+                company_id=identity["company_id"],
+                store_id=store_id,
+            )
+            if (
+                current_store_evidence.get("status") == "ready"
+                and current_store_evidence.get("current_store_selected") is True
+                and current_store_evidence.get("official_packet_ready") is True
+                and current_store_evidence.get("backend_worker_provenance_ready") is True
+                and current_store_evidence.get("same_oauth_connection_ready") is True
+                and current_store_evidence.get("account_health_ready") is True
+                and str(current_store_evidence.get("store_id_sha256") or "")
+                and str(current_store_evidence.get("connection_id_sha256") or "")
+                and str(current_store_evidence.get("packet_id_sha256") or "")
+            ):
+                self._send_error(HTTPStatus.CONFLICT, "sync_fresh_current_store_evidence_exists")
+                return
+            if not confirmation_id:
+                self._send_error(HTTPStatus.CONFLICT, "sync_exact_approval_required")
+                return
+            if not self.repository.approved_read_only_sync_confirmation(
+                company_id=identity["company_id"],
+                store_id=store_id,
+                confirmation_id=confirmation_id,
+            ):
+                self._send_error(HTTPStatus.CONFLICT, "sync_exact_approval_required")
                 return
             requested_resources = body.get("resources") if isinstance(body.get("resources"), list) else None
             secret_refs = self.repository.list_secret_refs(company_id=identity["company_id"], store_id=store_id)
@@ -4004,6 +4270,94 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     )
                 }
             )
+            sync_ready_to_queue = bool(
+                live_read_plan.get("status") == "ready_to_queue_live_read_job"
+                and credential_preflight.get("can_queue_sync") is True
+                and not blocked_by
+            )
+            if sync_ready_to_queue:
+                try:
+                    atomic_sync = self.repository.create_approved_read_only_sync_task_and_job(
+                        company_id=identity["company_id"],
+                        store_id=store_id,
+                        user_id=identity["user_id"],
+                        confirmation_id=confirmation_id,
+                        title=f"Official eBay read-only sync: {store.get('store_name') or store_id}",
+                        input_data={
+                            "resources": live_read_plan.get("resources_requested") or [],
+                            "live_read_plan": live_read_plan,
+                            "http_client_contract": http_client_contract,
+                            "credential_preflight": credential_preflight,
+                            "confirmation_id": confirmation_id,
+                            "real_platform_writes_enabled": False,
+                        },
+                        job_data={
+                            "kind": "ebay_read_only_live_plan",
+                            "platform": "ebay",
+                            "store_id": store_id,
+                            "resources": live_read_plan.get("resources_requested") or [],
+                            "live_read_plan": live_read_plan,
+                            "live_read_performed": False,
+                            "run_mode": body.get("run_mode") or "queued",
+                            "created_from": "ebay_read_only_sync",
+                            "confirmation_id": confirmation_id,
+                        },
+                    )
+                except ValueError:
+                    self._send_error(HTTPStatus.CONFLICT, "sync_exact_approval_required")
+                    return
+                task = atomic_sync.get("task") or {}
+                job = atomic_sync.get("queue_job") or {}
+                dispatch = publish_redis_queue_job_if_configured(job)
+                if dispatch.get("required") and dispatch.get("status") != "published":
+                    self.repository.update_queue_job(
+                        job_id=str(job.get("job_id") or ""),
+                        company_id=identity["company_id"],
+                        status="failed",
+                        details={"queue_dispatch": dispatch, "error": "Redis queue dispatch failed."},
+                    )
+                    self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "sync_queue_dispatch_failed")
+                    return
+                if dispatch.get("status") == "published":
+                    job = self.repository.update_queue_job(
+                        job_id=str(job.get("job_id") or ""),
+                        company_id=identity["company_id"],
+                        status="queued",
+                        details={"queue_dispatch": dispatch},
+                    )
+                worker_result = None
+                run_mode = str(body.get("run_mode") or "queued")
+                if run_mode in {"inline", "enqueue_and_wait", "local_worker_now"}:
+                    worker_result = self.queue_worker.run_next(company_id=identity["company_id"], job_id=job["job_id"])
+                    task = worker_result.get("task") or self.repository.get_task(
+                        company_id=identity["company_id"], task_id=task["task_id"]
+                    ) or task
+                    job = worker_result.get("queue_job") or self.repository.get_queue_job(
+                        job_id=job["job_id"], company_id=identity["company_id"]
+                    ) or job
+                self._send_json(
+                    {
+                        "sync": {
+                            "status": "queued" if worker_result is None else str(worker_result.get("status") or "completed"),
+                            "summary": "Official eBay read-only sync entered the backend queue after exact approval.",
+                            "merchant_next_step": "Wait for the sanitized current-store data packet and account-health evidence.",
+                            "blocked_by": [],
+                            "live_read_plan": live_read_plan,
+                            "http_client_contract": http_client_contract,
+                            "credential_preflight": credential_preflight,
+                            "live_read_performed": bool(worker_result and worker_result.get("live_read_result", {}).get("live_read_performed")),
+                            "real_platform_writes_enabled": False,
+                            "secret_exposed": False,
+                        },
+                        "credential_preflight": credential_preflight,
+                        "task": task,
+                        "queue_job": job,
+                        "worker_result": worker_result,
+                        "real_platform_writes_enabled": False,
+                    },
+                    status=HTTPStatus.ACCEPTED,
+                )
+                return
             task = self.repository.create_task(
                 company_id=identity["company_id"],
                 store_id=store_id,
@@ -4018,7 +4372,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "real_platform_writes_enabled": False,
                 },
             )
-            if live_read_plan.get("status") != "ready_to_queue_live_read_job" or not credential_preflight.get("can_queue_sync") or blocked_by:
+            if not sync_ready_to_queue:
                 blocked_output = {
                     "status": "blocked_before_queue",
                     "summary": "eBay 只读同步还不能执行。后端没有读取到可用的只读授权或运行开关，系统不会假装已经同步。",
@@ -5615,6 +5969,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             except KeyError:
                 self._send_error(HTTPStatus.NOT_FOUND, "confirmation not found")
                 return
+            except ConfirmationDecisionConflict:
+                self._send_error(HTTPStatus.CONFLICT, "confirmation_decision_conflict")
+                return
             except ValueError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
                 return
@@ -5708,7 +6065,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             preflight = ExecutionService(demo_mode=True).preflight(execution_request)
             store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=confirmation["store_id"]) or {}
-            publish_recovery = EbayWriteHttpAdapter(self.settings).inspect_publish_state(
+            publish_recovery = self.ebay_write_adapter_factory(self.settings).inspect_publish_state(
                 request=execution_request,
                 connections=self.repository.list_connections(company_id=identity["company_id"], store_id=confirmation["store_id"]),
                 secret_refs=self.repository.list_secret_refs(company_id=identity["company_id"], store_id=confirmation["store_id"]),
@@ -5848,6 +6205,16 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 summary="Created a confirmation item for live test listing cleanup; no eBay cleanup write was executed.",
                 details={
                     "source_publish_confirmation_id": confirmation["confirmation_id"],
+                    **(
+                        {
+                            "source": "new_ebay_account_low_risk_smoke",
+                            "runbook_contract_version": "2026-06-18-new-ebay-account-low-risk-smoke",
+                            "company_id": identity["company_id"],
+                            "store_id": confirmation["store_id"],
+                        }
+                        if _new_account_smoke_contract_from_confirmation(confirmation)
+                        else {}
+                    ),
                     "sku": publish_recovery.get("sku"),
                     "operation_count": len(operations),
                     "secret_exposed": False,
@@ -5871,6 +6238,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_error(HTTPStatus.NOT_FOUND, "confirmation not found")
                 return
             if confirmation["status"] != "approved":
+                if confirmation["status"] in {EXTERNAL_EXECUTION_PROCESSING_STATUS, "executed"}:
+                    self._send_error(HTTPStatus.CONFLICT, EXTERNAL_EXECUTION_PROCESSING_STATUS)
+                    return
                 self._send_error(HTTPStatus.BAD_REQUEST, "confirmation must be approved before execution service handoff")
                 return
             payload = _execution_payload_from_context(
@@ -5879,25 +6249,39 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 confirmation=confirmation,
                 body_payload=body.get("payload") if isinstance(body.get("payload"), dict) else {},
             )
+            confirmation_store = self.repository.get_store_for_company(
+                company_id=identity["company_id"],
+                store_id=confirmation["store_id"],
+            ) or {}
             execution_request = ExecutionRequest(
                 action_type=confirmation["action_type"],
                 task_id=confirmation["task_id"],
                 user_id=identity["user_id"],
                 company_id=identity["company_id"],
                 store_id=confirmation["store_id"],
-                platform=str(body.get("platform") or "ebay"),
+                platform=str(confirmation_store.get("platform") or "ebay"),
                 payload=payload,
                 confirmation_id=confirmation["confirmation_id"],
                 confirmed_by=confirmation["decided_by"] or identity["user_id"],
                 confirmed_at=confirmation["decided_at"],
                 idempotency_key=str(body.get("idempotency_key") or ""),
             )
-            live_ebay_write_actions = {"publish_listing", "save_ebay_listing_draft"}
+            live_ebay_write_actions = {"publish_listing", "save_ebay_listing_draft", "cleanup_test_listing"}
             if self.settings.effective_real_platform_writes_enabled and confirmation["action_type"] in live_ebay_write_actions:
                 boundary_result = ExecutionService(demo_mode=False).execute(execution_request).to_dict()
                 if boundary_result.get("status") == "ready_for_platform_adapter":
-                    store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=confirmation["store_id"]) or {}
-                    adapter = EbayWriteHttpAdapter(self.settings)
+                    if confirmation["action_type"] in {"publish_listing", "cleanup_test_listing"}:
+                        try:
+                            confirmation = self.repository.claim_external_execution(
+                                company_id=identity["company_id"],
+                                confirmation_id=confirmation["confirmation_id"],
+                                user_id=identity["user_id"],
+                            )
+                        except ConfirmationDecisionConflict:
+                            self._send_error(HTTPStatus.CONFLICT, EXTERNAL_EXECUTION_PROCESSING_STATUS)
+                            return
+                    store = confirmation_store
+                    adapter = self.ebay_write_adapter_factory(self.settings)
                     adapter_kwargs = {
                         "request": execution_request,
                         "preflight": boundary_result.get("audit", {}).get("preflight") if isinstance(boundary_result.get("audit"), dict) else {},
@@ -5905,11 +6289,34 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "secret_refs": self.repository.list_secret_refs(company_id=identity["company_id"], store_id=confirmation["store_id"]),
                         "marketplace_id": str(store.get("marketplace") or "EBAY_US"),
                     }
-                    write_result = (
-                        adapter.save_listing_draft(**adapter_kwargs)
-                        if confirmation["action_type"] == "save_ebay_listing_draft"
-                        else adapter.publish_listing(**adapter_kwargs)
-                    )
+                    try:
+                        if confirmation["action_type"] == "save_ebay_listing_draft":
+                            write_result = adapter.save_listing_draft(**adapter_kwargs)
+                        elif confirmation["action_type"] == "cleanup_test_listing":
+                            write_result = adapter.execute_cleanup_plan(**adapter_kwargs)
+                        else:
+                            write_result = adapter.publish_listing(**adapter_kwargs)
+                    except Exception:
+                        if confirmation.get("external_execution_claimed") is not True:
+                            raise
+                        self.repository.write_audit(
+                            company_id=identity["company_id"],
+                            store_id=confirmation["store_id"],
+                            user_id=identity["user_id"],
+                            actor_type="system",
+                            action_type="external_execution.manual_reconcile_required",
+                            target_type="confirmation",
+                            target_id=confirmation["confirmation_id"],
+                            summary="The external adapter result is uncertain and requires manual reconciliation; no automatic retry is allowed.",
+                            details={
+                                "action_type": confirmation["action_type"],
+                                "status": EXTERNAL_EXECUTION_PROCESSING_STATUS,
+                                "automatic_retry_allowed": False,
+                                "secret_exposed": False,
+                            },
+                        )
+                        self._send_error(HTTPStatus.CONFLICT, EXTERNAL_EXECUTION_PROCESSING_STATUS)
+                        return
                     write_result.setdefault("created_at", boundary_result.get("created_at"))
                     write_audit = write_result.get("audit") if isinstance(write_result.get("audit"), dict) else {}
                     boundary_audit = boundary_result.get("audit") if isinstance(boundary_result.get("audit"), dict) else {}
@@ -5923,6 +6330,14 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     result = boundary_result
             else:
                 result = ExecutionService(demo_mode=True).execute(execution_request).to_dict()
+            smoke_contract = _new_account_smoke_contract_from_confirmation(confirmation)
+            if smoke_contract:
+                result = {
+                    **result,
+                    **smoke_contract,
+                    "confirmation_id": confirmation["confirmation_id"],
+                    "secret_exposed": False,
+                }
             stored = self.repository.save_execution_result(confirmation=confirmation, result=result)
             self._send_json({"execution": stored, "real_platform_writes_enabled": self.settings.effective_real_platform_writes_enabled}, status=HTTPStatus.CREATED)
             return
@@ -7876,7 +8291,37 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         accept = str(self.headers.get("accept") or "").lower()
         return "text/html" in accept and "application/json" not in accept
 
+    def _oauth_callback_public_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        raw_status = str(result.get("status") or "")
+        if raw_status == "callback_exchange_completed":
+            status = "completed"
+            next_step = "return_to_jiejing_and_refresh_connection_status"
+        elif raw_status.startswith("blocked_replayed"):
+            status = "already_processed"
+            next_step = "return_to_jiejing_and_review_connection_status"
+        elif raw_status.startswith("blocked_invalid") or raw_status == "blocked_missing_code":
+            status = "invalid_or_expired"
+            next_step = "return_to_jiejing_and_start_a_new_authorization_if_needed"
+        elif raw_status == "seller_declined_or_ebay_error":
+            status = "seller_not_authorized"
+            next_step = "return_to_jiejing_and_review_authorization"
+        else:
+            status = "manual_reconcile_required"
+            next_step = "return_to_jiejing_for_manual_reconcile"
+        completed = status == "completed"
+        return {
+            "status": status,
+            "authorization_kind": "publish" if _oauth_callback_is_publish(result) else "read_only",
+            "completed": completed,
+            "token_exchange_performed": completed,
+            "vault_write_performed": completed,
+            "real_platform_writes_enabled": False,
+            "next_step": next_step,
+            "secret_exposed": False,
+        }
+
     def _oauth_callback_public_html(self, result: dict[str, Any]) -> str:
+        result = SaaSBackendHandler._oauth_callback_public_result(self, result)
         raw_status = str(result.get("status") or "unknown")
         title, tone, description, next_step = SaaSBackendHandler._oauth_callback_public_copy(self, raw_status, result)
         authorization_label = "eBay 发布授权" if _oauth_callback_is_publish(result) else "eBay 只读授权"
@@ -7886,9 +8331,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         safe_tone = html.escape(tone)
         safe_description = html.escape(description)
         safe_next_step = html.escape(next_step)
-        safe_summary = html.escape(str(result.get("summary") or "捷境已收到 eBay 授权回调。"))
-        safe_store_id = html.escape(str(result.get("store_id") or ""))
-        store_line = f'<div class="meta-row"><span>店铺记录</span><strong>{safe_store_id}</strong></div>' if safe_store_id else ""
         exchange_done = "是" if result.get("token_exchange_performed") else "否"
         vault_done = "是" if result.get("vault_write_performed") else "否"
         writes_enabled = "是" if result.get("real_platform_writes_enabled") else "否"
@@ -8008,9 +8450,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
     <h1>{safe_title}</h1>
     <div class="status {safe_tone}">{safe_status}</div>
     <p>{safe_description}</p>
-    <p>{safe_summary}</p>
     <section class="meta" aria-label="授权处理状态">
-      {store_line}
       <div class="meta-row"><span>后端交换授权码</span><strong>{exchange_done}</strong></div>
       <div class="meta-row"><span>凭证写入 Vault/KMS 边界</span><strong>{vault_done}</strong></div>
       <div class="meta-row"><span>真实平台写入</span><strong>{writes_enabled}</strong></div>
@@ -8025,7 +8465,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 </html>"""
 
     def _oauth_callback_public_copy(self, status: str, result: dict[str, Any] | None = None) -> tuple[str, str, str, str]:
-        if status == "callback_exchange_completed":
+        if status == "completed":
             if _oauth_callback_is_publish(result or {}):
                 return (
                     "eBay 发布授权已完成",
@@ -8039,21 +8479,21 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "捷境后端已完成授权码交换，并把卖家 refresh 凭证写入受控的 Vault/KMS 边界。",
                 "回到捷境工作台，执行 eBay 只读同步，生成标准数据包和 AI CEO 工作记录。",
             )
-        if status.startswith("blocked_replayed"):
+        if status == "already_processed":
             return (
                 "这个授权链接已经处理过",
                 "error",
                 "为了防止重复 callback，捷境已经拦截这次重复返回。",
                 "回到工作台查看店铺连接状态；如果仍未授权，重新发起 eBay 连接。",
             )
-        if status.startswith("blocked_invalid") or status == "blocked_missing_code":
+        if status == "invalid_or_expired":
             return (
                 "这次授权链接已失效",
                 "error",
                 "捷境没有继续交换凭证，原始授权码不会被保存。",
                 "回到工作台重新发起 eBay 只读授权。",
             )
-        if status == "seller_declined_or_ebay_error":
+        if status == "seller_not_authorized":
             return (
                 "eBay 授权未完成",
                 "error",
@@ -8255,18 +8695,79 @@ def _execution_payload_from_context(
     body_payload: dict[str, Any],
 ) -> dict[str, Any]:
     payload = dict(body_payload or {})
+    if confirmation.get("action_type") == "cleanup_test_listing":
+        item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+        cleanup_plan = item.get("cleanup_plan") if isinstance(item.get("cleanup_plan"), dict) else {}
+        return {"cleanup_plan": cleanup_plan} if cleanup_plan else {}
     if confirmation.get("action_type") not in {"publish_listing", "save_ebay_listing_draft"}:
         return payload
     item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
     confirmation_payload = item.get("publish_payload") if isinstance(item.get("publish_payload"), dict) else {}
-    inferred = _publish_payload_from_reports(repository=repository, company_id=company_id, confirmation=confirmation)
-    merged = _deep_merge(_deep_merge(inferred, confirmation_payload), payload)
-    account_health = build_account_health_snapshot(
-        repository,
-        company_id=company_id,
-        store_id=confirmation["store_id"],
-    )
-    return merge_account_health_into_payload(merged, account_health)
+    # The confirmation item is the approved business snapshot. Execute bodies
+    # may carry transport metadata (for example idempotency), but may never
+    # replace SKU, price, title, policy, store, cleanup target or other facts.
+    return _deep_merge({}, confirmation_payload)
+
+
+def _publish_health_ready_for_confirmation(
+    *,
+    readiness: dict[str, Any],
+    preflight: dict[str, Any],
+) -> bool:
+    """Accept a complete publish health package before the confirmation exists.
+
+    The intake preflight necessarily reports ``confirmation_record`` missing;
+    every other blocking fact must already be clear before the confirmation is
+    allowed to carry the smoke-contract readiness marker.
+    """
+
+    missing = {
+        str(item).strip()
+        for item in preflight.get("missing_fields", [])
+        if str(item).strip() and str(item).strip() != "confirmation_record"
+    }
+    issues = [
+        item
+        for item in preflight.get("issues", [])
+        if isinstance(item, dict) and str(item.get("key") or "") != "confirmation_record"
+    ]
+    checks = readiness.get("checks") if isinstance(readiness.get("checks"), list) else []
+    blocking_checks = [
+        item
+        for item in checks
+        if isinstance(item, dict)
+        and item.get("blocking") is True
+        and not (
+            str(item.get("key") or "") == "field_completeness"
+            and set(str(value).strip() for value in (item.get("details") or {}).get("missing_fields", []))
+            <= {"confirmation_record"}
+        )
+    ]
+    return not missing and not issues and not blocking_checks
+
+
+def _new_account_smoke_contract_from_confirmation(confirmation: dict[str, Any]) -> dict[str, str]:
+    item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+    company_id = str(confirmation.get("company_id") or "")
+    store_id = str(confirmation.get("store_id") or "")
+    version = "2026-06-18-new-ebay-account-low-risk-smoke"
+    if not (
+        company_id
+        and store_id
+        and str(item.get("source") or "") == "new_ebay_account_low_risk_smoke"
+        and str(item.get("workflow_scope") or "") == "new_ebay_account_low_risk_smoke"
+        and str(item.get("runbook_contract_version") or "") == version
+        and str(item.get("company_id") or "") == company_id
+        and str(item.get("store_id") or "") == store_id
+    ):
+        return {}
+    return {
+        "source": "new_ebay_account_low_risk_smoke",
+        "workflow_scope": "new_ebay_account_low_risk_smoke",
+        "runbook_contract_version": version,
+        "company_id": company_id,
+        "store_id": store_id,
+    }
 
 
 def _publish_confirmation_payload_from_body(
@@ -8502,8 +9003,10 @@ def _cleanup_confirmation_item(
 ) -> dict[str, Any]:
     published = publish_recovery.get("published_offer") if isinstance(publish_recovery.get("published_offer"), dict) else {}
     operations = cleanup_plan.get("operations") if isinstance(cleanup_plan.get("operations"), list) else []
+    smoke_contract = _new_account_smoke_contract_from_confirmation(publish_confirmation)
     return {
-        "source": "publish_recovery_cleanup_plan",
+        "source": "new_ebay_account_low_risk_smoke" if smoke_contract else "publish_recovery_cleanup_plan",
+        **smoke_contract,
         "source_publish_confirmation_id": publish_confirmation.get("confirmation_id"),
         "action_type": "cleanup_test_listing",
         "title": _cleanup_confirmation_title(publish_recovery),
@@ -8524,6 +9027,8 @@ def _cleanup_confirmation_item(
 
 
 def _oauth_callback_is_publish(result: dict[str, Any]) -> bool:
+    if str(result.get("authorization_kind") or "") == "publish":
+        return True
     if bool(result.get("publish_scope_authorized")):
         return True
     if str(result.get("connection_status") or "") == "publish_authorized":

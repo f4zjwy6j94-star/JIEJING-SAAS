@@ -32,7 +32,13 @@ from .repository import SaaSRepository
 PRODUCTION_RELEASE_GATE_VERSION = "2026-07-27-production-release-gate-v2"
 
 
-def build_production_release_gate(settings: SaaSSettings, repository: SaaSRepository) -> dict[str, Any]:
+def build_production_release_gate(
+    settings: SaaSSettings,
+    repository: SaaSRepository,
+    *,
+    company_id: str | None = None,
+    store_id: str | None = None,
+) -> dict[str, Any]:
     """Build a production launch packet that is safe for internal automation."""
 
     readiness = build_product_readiness_or_degraded(settings, repository)
@@ -45,9 +51,19 @@ def build_production_release_gate(settings: SaaSSettings, repository: SaaSReposi
     billing = build_billing_plan(settings, repository)
     rehearsal = build_billing_domain_cutover_rehearsal(settings, repository)
     provider_register = build_billing_provider_evidence_register(settings, repository)
-    approval_packet = build_paid_launch_approval_packet(settings, repository)
+    approval_packet = build_paid_launch_approval_packet(
+        settings,
+        repository,
+        company_id=company_id,
+        store_id=store_id,
+    )
     mainland_payment = build_mainland_payment_launch_status(settings, repository)
     validated_mainland_payment = validate_mainland_payment_launch_for_public(mainland_payment)
+    current_store_ebay_evidence = (
+        approval_packet.get("current_store_ebay_evidence")
+        if isinstance(approval_packet.get("current_store_ebay_evidence"), dict)
+        else {}
+    )
 
     sections = [
         _deployment_section(),
@@ -78,7 +94,7 @@ def build_production_release_gate(settings: SaaSSettings, repository: SaaSReposi
             "beta_ready": bool(readiness.get("beta_ready")),
             "production_ready": bool(readiness.get("production_ready")),
             "can_accept_real_customers": bool(readiness.get("can_accept_real_customers")),
-            "ebay_token_refresh_success_count": _as_int(evidence.get("ebay_token_refresh_success_count")),
+            "ebay_token_refresh_success_count": _as_int(current_store_ebay_evidence.get("refresh_success_count")),
             "mainland_payment_provider": "wechat_pay_native",
             "mainland_payment_ready_for_owner_approval": (
                 validated_mainland_payment.get("mainland_payment_ready_for_owner_approval") is True
@@ -357,22 +373,64 @@ def _billing_section(
 
 
 def _ebay_section(*, evidence: dict[str, Any], approval_packet: dict[str, Any]) -> dict[str, Any]:
-    refresh_success = _as_int(evidence.get("ebay_token_refresh_success_count"))
+    current_store_evidence = (
+        approval_packet.get("current_store_ebay_evidence")
+        if isinstance(approval_packet.get("current_store_ebay_evidence"), dict)
+        else {}
+    )
+    refresh_success = _as_int(current_store_evidence.get("refresh_success_count"))
+    oauth_boundary = (
+        approval_packet.get("current_store_oauth_boundary")
+        if isinstance(approval_packet.get("current_store_oauth_boundary"), dict)
+        else {}
+    )
+    oauth_store_hash = str(oauth_boundary.get("store_id_sha256") or "")
+    oauth_connection_hash = str(oauth_boundary.get("connection_id_sha256") or "")
+    evidence_store_hash = str(current_store_evidence.get("store_id_sha256") or "")
+    evidence_connection_hash = str(current_store_evidence.get("connection_id_sha256") or "")
+    store_binding_matches = bool(oauth_store_hash and oauth_store_hash == evidence_store_hash)
+    connection_binding_matches = bool(
+        oauth_connection_hash and oauth_connection_hash == evidence_connection_hash
+    )
+    action_evidence = (
+        current_store_evidence.get("new_account_action_evidence")
+        if isinstance(current_store_evidence.get("new_account_action_evidence"), dict)
+        else {}
+    )
+    current_store_actions_ready = bool(
+        current_store_evidence.get("current_store_selected") is True
+        and action_evidence.get("company_store_bound") is True
+        and action_evidence.get("publish_health_confirmation_ready") is True
+        and action_evidence.get("controlled_real_publish_ready") is True
+        and action_evidence.get("post_publish_cleanup_ready") is True
+        and store_binding_matches
+        and connection_binding_matches
+    )
     checks = {
-        "official_packet_present": bool(evidence.get("latest_ebay_packet_status") == "created"),
-        "official_packet_source": evidence.get("latest_ebay_packet_source_mode") == "official_api",
-        "backend_refresh_success_proven": refresh_success > 0,
+        "official_packet_present": current_store_evidence.get("official_packet_ready") is True,
+        "official_packet_source": current_store_evidence.get("backend_worker_provenance_ready") is True,
+        "official_packet_same_oauth_connection": current_store_evidence.get("same_oauth_connection_ready") is True,
+        "account_health_safe_for_current_store": current_store_evidence.get("account_health_ready") is True,
+        "oauth_store_binding_matches_current_evidence": store_binding_matches,
+        "oauth_connection_binding_matches_current_evidence": connection_binding_matches,
+        "backend_refresh_success_proven": (
+            refresh_success > 0
+            and current_store_evidence.get("refresh_success_ready") is True
+            and current_store_evidence.get("refresh_same_connection_ready") is True
+        ),
         "clean_new_account_confirmed": _env_all(
             [
                 "JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN",
                 "JIEJING_NEW_EBAY_OLD_FROZEN_ACCOUNT_REJECTED",
             ]
         ),
-        "new_account_oauth_completed_with_owner_approval": _env_all(
-            [
-                "JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED",
-                "JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED",
-            ]
+        "new_account_oauth_completed_with_owner_approval": (
+            oauth_boundary.get("authorized") is True
+            and oauth_boundary.get("current_store_selected") is True
+            and oauth_boundary.get("strong_identity_ready") is True
+            and oauth_boundary.get("backend_provenance_ready") is True
+            and store_binding_matches
+            and connection_binding_matches
         ),
         "fresh_product_sku_assets_declared": _env_all(
             [
@@ -383,15 +441,7 @@ def _ebay_section(*, evidence: dict[str, Any], approval_packet: dict[str, Any]) 
                 "JIEJING_NEW_EBAY_PRODUCT_DUPLICATE_GUARD_PASSED",
             ]
         ),
-        "controlled_publish_and_cleanup_recorded": _env_all(
-            [
-                "JIEJING_NEW_EBAY_PUBLISH_HEALTH_CONFIRMATION_READY",
-                "JIEJING_NEW_EBAY_PUBLISH_CONFIRMATION_APPROVED",
-                "JIEJING_NEW_EBAY_ACCOUNT_REAL_PUBLISH_PASSED",
-                "JIEJING_NEW_EBAY_CLEANUP_CONFIRMATION_APPROVED",
-                "JIEJING_NEW_EBAY_TEST_CLEANUP_CONFIRMED",
-            ]
-        ),
+        "controlled_publish_and_cleanup_recorded": current_store_actions_ready,
         "old_frozen_account_reuse_forbidden": approval_packet.get("old_frozen_ebay_account_reuse_allowed") is False,
         "old_demo_product_or_sku_forbidden": approval_packet.get("old_demo_product_or_sku_allowed") is False,
         "real_write_still_confirmation_gated": approval_packet.get("triggers_real_platform_write") is False,
@@ -403,14 +453,18 @@ def _ebay_section(*, evidence: dict[str, Any], approval_packet: dict[str, Any]) 
         env_keys=[
             "JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN",
             "JIEJING_NEW_EBAY_OLD_FROZEN_ACCOUNT_REJECTED",
-            "JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED",
             "JIEJING_NEW_EBAY_FRESH_PRODUCT_DECLARED",
             "JIEJING_NEW_EBAY_ACCOUNT_REAL_PUBLISH_PASSED",
         ],
         next_action="Use only a clean new eBay account and fresh product/SKU/assets; prove backend Vault-backed token refresh success before real customer launch.",
         verification=["/readiness/product-saas", "tools/jiejing_new_ebay_account_low_risk_check.py --checklist-only", "audit_logs.oauth.token_refresh.executed"],
         external_resource_required=True,
-        evidence_summary=f"refresh_success={refresh_success}; latest_packet={evidence.get('latest_ebay_packet_status') or 'missing'}",
+        evidence_summary=(
+            f"refresh_success={refresh_success}; "
+            f"official_packet_ready={current_store_evidence.get('official_packet_ready') is True}; "
+            f"account_health_ready={current_store_evidence.get('account_health_ready') is True}; "
+            f"same_connection={current_store_evidence.get('same_oauth_connection_ready') is True}"
+        ),
     )
 
 
@@ -645,10 +699,7 @@ def _by_key(items: Any) -> dict[str, dict[str, Any]]:
 
 
 def _as_int(value: Any) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
+    return value if type(value) is int and value >= 0 else 0
 
 
 def _env_bool(name: str) -> bool:

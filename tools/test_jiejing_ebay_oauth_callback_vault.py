@@ -4,10 +4,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sqlite3
 import sys
+import threading
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas.config import SaaSSettings  # noqa: E402
+from jiejing_saas.commercial_launch_gate import build_commercial_launch_gate  # noqa: E402
 from jiejing_saas.ebay_oauth import EbayOAuthPlanner  # noqa: E402
 from jiejing_saas.ebay_oauth_callback import process_ebay_oauth_callback  # noqa: E402
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
@@ -41,6 +46,8 @@ ENV_KEYS = (
     "JIEJING_VAULT_MOUNT",
     "JIEJING_VAULT_KEYSPACE",
     "JIEJING_VAULT_KV_VERSION",
+    "JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED",
+    "JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED",
 )
 FORBIDDEN = (
     "CALLBACK-ACCESS-TOKEN-MUST-NOT-LEAK",
@@ -72,6 +79,16 @@ def main() -> int:
         local_result = _run_local_secret_resolver_callback(local_secret_path=local_secret_path)
         if local_result != "ok":
             return fail(local_result)
+
+        concurrent_result = _run_same_state_callback_exactly_once(
+            local_secret_path=OUT / "concurrent-local-secret-resolver.json"
+        )
+        if concurrent_result != "ok":
+            return fail(concurrent_result)
+
+        crash_result = _run_exchange_crash_requires_manual_reconcile()
+        if crash_result != "ok":
+            return fail(crash_result)
 
         expired_result = _run_expired_state_blocked(local_secret_path=local_secret_path)
         if expired_result != "ok":
@@ -149,6 +166,360 @@ def _run_local_secret_resolver_callback(*, local_secret_path: Path) -> str:
     connections = repo.list_connections(company_id=store["company_id"], store_id=store["store_id"])
     if not connections or connections[0].get("secret_ref") != secret_ref.get("secret_ref"):
         return "platform connection should reference the stored secret_ref"
+    oauth_boundary = repo.ebay_read_only_oauth_boundary(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+    )
+    if oauth_boundary.get("authorized") is not True:
+        return "completed backend OAuth callback should satisfy the strong current-store authorization boundary"
+    if oauth_boundary.get("strong_identity_ready") is not True or oauth_boundary.get("backend_provenance_ready") is not True:
+        return "strong OAuth boundary must bind immutable identity and backend callback provenance"
+    for index in range(501):
+        repo.write_audit(
+            company_id=store["company_id"],
+            store_id=store["store_id"],
+            user_id=request["created_by"],
+            actor_type="system",
+            action_type="unit.unrelated.audit",
+            target_type="unit_noise",
+            target_id=f"noise-{index}",
+            summary="Unrelated audit volume must not hide the OAuth callback proof.",
+            details={"secret_exposed": False},
+        )
+    boundary_after_unrelated_audits = repo.ebay_read_only_oauth_boundary(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+    )
+    if boundary_after_unrelated_audits.get("authorized") is not True:
+        return "OAuth boundary must use targeted callback audit evidence beyond the newest 500 unrelated audits"
+    os.environ.pop("JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED", None)
+    os.environ.pop("JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED", None)
+    gate = build_commercial_launch_gate(
+        settings,
+        repo,
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+    )
+    oauth_step = _oauth_launch_step(gate)
+    if oauth_step.get("status") != "ready":
+        return "current-store backend strong proof should satisfy the commercial OAuth gate without env flags"
+    other_store = repo.create_store(
+        company_id=store["company_id"],
+        user_id=request["created_by"],
+        payload={"platform": "ebay", "store_name": "unproved-current-store", "marketplace": "EBAY_US"},
+    )
+    repo.create_platform_data_packet(
+        company_id=store["company_id"],
+        store_id=other_store["store_id"],
+        user_id=request["created_by"],
+        packet={
+            "platform": "ebay",
+            "packet_type": "ebay_read_only_snapshot",
+            "source_mode": "official_api",
+            "source_label": "official_api",
+            "status": "created",
+            "company_id": store["company_id"],
+            "store_id": other_store["store_id"],
+            "present_resource_keys": [
+                "store_profile",
+                "account_business_policies",
+                "inventory_and_offers",
+                "orders_and_fulfillment",
+                "finances",
+                "taxonomy_listing_metadata",
+            ],
+            "missing_resource_keys": [],
+            "sections": [
+                {"key": "store_profile", "data": {"seller_account_status": "active"}},
+                {
+                    "key": "account_business_policies",
+                    "data": {
+                        "payment_policy_id": "other-payment",
+                        "fulfillment_policy_id": "other-fulfillment",
+                        "return_policy_id": "other-return",
+                    },
+                },
+            ],
+            "freshness": {
+                "official_request_count": 5,
+                "route_success_count": 5,
+                "route_failure_count": 0,
+            },
+            "lineage": {
+                "probe_live_read_performed": True,
+                "access_token_used": True,
+                "access_token_returned_to_frontend": False,
+                "raw_ebay_response_stored": False,
+            },
+            "safe_for_real_platform_write": False,
+            "secret_exposed": False,
+        },
+    )
+    repo.write_audit(
+        company_id=store["company_id"],
+        store_id=other_store["store_id"],
+        user_id=request["created_by"],
+        actor_type="system",
+        action_type="oauth.token_refresh.executed",
+        target_type="store",
+        target_id=other_store["store_id"],
+        summary="Other-store refresh proof must not satisfy the selected store.",
+        details={
+            "ok": True,
+            "status": "refreshed",
+            "source": "backend_vault_secret_ref_refresh",
+            "secret_ref_present": True,
+            "secret_exposed": False,
+        },
+    )
+    cross_store_gate = build_commercial_launch_gate(
+        settings,
+        repo,
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+    )
+    cross_store_steps = {
+        item.get("key"): item
+        for item in cross_store_gate.get("new_ebay_account_smoke_runbook") or []
+        if isinstance(item, dict)
+    }
+    if (cross_store_steps.get("official_packet_account_health_snapshot") or {}).get("status") != "blocked":
+        return "another store's packet/account-health proof must not satisfy the current-store launch gate"
+    current_store_evidence = cross_store_gate.get("current_store_ebay_evidence") or {}
+    if current_store_evidence.get("official_packet_ready") is not False:
+        return "commercial launch evidence must explicitly fail closed on a cross-store official packet"
+    if current_store_evidence.get("refresh_success_ready") is not False:
+        return "commercial launch evidence must explicitly fail closed on a cross-store refresh audit"
+    other_gate = build_commercial_launch_gate(
+        settings,
+        repo,
+        company_id=store["company_id"],
+        store_id=other_store["store_id"],
+    )
+    if _oauth_launch_step(other_gate).get("status") != "blocked":
+        return "a strong OAuth proof from another store must not satisfy the selected current-store gate"
+    real_connection_id = str(result.get("connection", {}).get("connection_id") or "")
+    now = datetime.now(timezone.utc).isoformat()
+    current_packet = repo.create_platform_data_packet(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+        user_id=request["created_by"],
+        packet={
+            "platform": "ebay",
+            "packet_type": "ebay_read_only_snapshot",
+            "source_mode": "official_api",
+            "source_label": "official_api",
+            "status": "created",
+            "company_id": store["company_id"],
+            "store_id": store["store_id"],
+            "created_at": now,
+            "present_resource_keys": [
+                "store_profile",
+                "account_business_policies",
+                "inventory_and_offers",
+                "orders_and_fulfillment",
+                "finances",
+                "taxonomy_listing_metadata",
+            ],
+            "missing_resource_keys": [],
+            "sections": [
+                {"key": "store_profile", "data": {"seller_account_status": "active"}},
+                {
+                    "key": "account_business_policies",
+                    "data": {
+                        "payment_policy_id": "current-payment",
+                        "fulfillment_policy_id": "current-fulfillment",
+                        "return_policy_id": "current-return",
+                    },
+                },
+            ],
+            "freshness": {
+                "official_request_count": 5,
+                "route_success_count": 5,
+                "route_failure_count": 0,
+            },
+            "lineage": {
+                "probe_live_read_performed": True,
+                "access_token_used": True,
+                "access_token_returned_to_frontend": False,
+                "raw_ebay_response_stored": False,
+            },
+            "safe_for_real_platform_write": False,
+            "secret_exposed": False,
+        },
+    )
+    current_task = repo.create_task(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+        user_id=request["created_by"],
+        task_type="ebay_read_only_live_plan",
+        title="Current-store official evidence",
+        input_data={},
+    )
+    current_job = repo.create_queue_job(
+        company_id=store["company_id"],
+        task_id=current_task["task_id"],
+        job_data={
+            "kind": "ebay_read_only_live_plan",
+            "store_id": store["store_id"],
+            "live_read_plan": {
+                "store_id": store["store_id"],
+                "token_boundary": {"connection_id": real_connection_id},
+            },
+        },
+    )
+    repo.update_queue_job(
+        job_id=current_job["job_id"],
+        company_id=store["company_id"],
+        status="completed",
+        details={
+            "live_read_performed": True,
+            "request_count": 5,
+            "data_packet_id": current_packet["packet_id"],
+            "secret_exposed": False,
+        },
+    )
+    repo.write_audit(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+        user_id=request["created_by"],
+        actor_type="system",
+        action_type="ebay.read_only.live.completed",
+        target_type="queue_job",
+        target_id=current_job["job_id"],
+        summary="Current-store packet completed through backend worker.",
+        details={
+            "request_count": 5,
+            "data_packet_id": current_packet["packet_id"],
+            "raw_response_stored": False,
+            "secret_exposed": False,
+        },
+    )
+    repo.write_audit(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+        user_id=request["created_by"],
+        actor_type="system",
+        action_type="oauth.token_refresh.executed",
+        target_type="store",
+        target_id=store["store_id"],
+        summary="Current-store refresh proof bound to the callback-owned connection.",
+        details={
+            "ok": True,
+            "status": "refreshed",
+            "source": "backend_vault_secret_ref_refresh",
+            "secret_ref_present": True,
+            "connection_id_sha256": hashlib.sha256(real_connection_id.encode("utf-8")).hexdigest(),
+            "credential_ref_sha256": hashlib.sha256(str(secret_ref["secret_ref"]).encode("utf-8")).hexdigest(),
+            "secret_exposed": False,
+        },
+    )
+    bound_gate = build_commercial_launch_gate(
+        settings,
+        repo,
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+    )
+    bound_evidence = bound_gate.get("current_store_ebay_evidence") or {}
+    if bound_evidence.get("official_packet_ready") is not True:
+        return f"current-store packet must become ready only with exact worker/audit/OAuth connection binding: {bound_evidence.get('blockers')}"
+    if bound_evidence.get("account_health_ready") is not True:
+        return "current-store safe account health must bind to the same official packet"
+    if bound_evidence.get("refresh_success_ready") is not True:
+        return "current-store refresh proof must bind to the callback-owned OAuth connection"
+    bound_steps = {
+        item.get("key"): item
+        for item in bound_gate.get("new_ebay_account_smoke_runbook") or []
+        if isinstance(item, dict)
+    }
+    if (bound_steps.get("official_packet_account_health_snapshot") or {}).get("status") != "ready":
+        return "fully bound current-store packet/account-health evidence should satisfy the smoke phase"
+    duplicate_confirmation = repo.create_confirmation(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+        task_id=None,
+        runtime_run_id="new_ebay_account_oauth_authorization_gate",
+        action_type="ebay_oauth_scope_change",
+        title="Strong callback must block another OAuth plan",
+        item={
+            "source": "new_ebay_account_low_risk_smoke",
+            "requested_step": "new_account_oauth_authorization_gate",
+            "scope_profile": "seller_read_only",
+            "secret_exposed": False,
+        },
+        created_by=request["created_by"],
+        default_action="hold",
+    )
+    duplicate_confirmation = repo.decide_confirmation(
+        company_id=store["company_id"],
+        confirmation_id=duplicate_confirmation["confirmation_id"],
+        decision="approve",
+        decided_by=request["created_by"],
+        note="Regression only: a real strong boundary must win before approval consumption.",
+    )
+    oauth_request_count_before_duplicate = len(
+        repo.list_oauth_authorization_requests(company_id=store["company_id"], store_id=store["store_id"])
+    )
+    duplicate_plan = EbayOAuthPlanner(settings).read_only_authorization_plan(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+        user_id=request["created_by"],
+        marketplace_id="EBAY_US",
+    )
+    try:
+        repo.create_approved_read_only_oauth_authorization_request(
+            company_id=store["company_id"],
+            store_id=store["store_id"],
+            user_id=request["created_by"],
+            confirmation_id=duplicate_confirmation["confirmation_id"],
+            plan=duplicate_plan,
+        )
+    except ValueError as exc:
+        if str(exc) != "oauth_plan_already_authorized":
+            return "strong callback duplicate plan must fail with the authorized boundary"
+    else:
+        return "strong callback evidence must block a duplicate OAuth plan"
+    if len(repo.list_oauth_authorization_requests(company_id=store["company_id"], store_id=store["store_id"])) != oauth_request_count_before_duplicate:
+        return "strong callback duplicate plan rejection must not persist another request/state"
+    forged_connection = repo.create_platform_connection(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+        user_id=request["created_by"],
+        payload={
+            "platform": "ebay",
+            "connection_type": "oauth",
+            "status": "read_only_authorized",
+            "secret_ref": secret_ref["secret_ref"],
+            "metadata": {
+                "oauth_request_id": request["oauth_request_id"],
+                "scope_profile": "seller_read_only",
+                "credential_source": "jiejing_vault_secret_ref",
+                "account_deletion_identity_mapping_status": "identity_mapping_ready",
+                "ebay_user_id_hash": "x",
+                "token_values_returned_to_public_response": False,
+                "secret_exposed": False,
+            },
+        },
+    )
+    forged_conn = sqlite3.connect(settings.db_path)
+    try:
+        with forged_conn:
+            forged_conn.execute(
+                "delete from platform_connections where connection_id = ?",
+                (real_connection_id,),
+            )
+    finally:
+        forged_conn.close()
+    forged_boundary = repo.ebay_read_only_oauth_boundary(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+    )
+    if forged_boundary.get("authorized") is not False:
+        return "a forged connection borrowing real request/secret/audit evidence must remain blocked"
+    if forged_boundary.get("connection_id_sha256") == hashlib.sha256(
+        str(forged_connection.get("connection_id") or "").encode("utf-8")
+    ).hexdigest():
+        return "strong boundary must not identify a merchant-created forged connection as callback-owned"
     db_text = _sqlite_public_dump(settings.db_path)
     if any(value in db_text for value in FORBIDDEN):
         return "SaaS database leaked a raw OAuth token or client secret"
@@ -180,6 +551,133 @@ def _run_local_secret_resolver_callback(*, local_secret_path: Path) -> str:
     if not refetched or refetched.get("status") != "callback_exchange_completed":
         return "replayed callback must not overwrite the original completed OAuth request"
     return "ok"
+
+
+def _run_same_state_callback_exactly_once(*, local_secret_path: Path) -> str:
+    _clear_env()
+    _base_oauth_env(environment="local_dev")
+    os.environ["JIEJING_EBAY_CLIENT_SECRET"] = "CALLBACK-CLIENT-SECRET-MUST-NOT-LEAK"
+    os.environ["JIEJING_VAULT_LOCAL_SECRET_RESOLVER_ENABLED"] = "true"
+    os.environ["JIEJING_VAULT_LOCAL_SECRET_STORE_PATH"] = str(local_secret_path)
+    local_secret_path.unlink(missing_ok=True)
+    settings, repo, store, request = _seed_oauth_request(case_key="concurrent-callback", port=8826)
+    initial_get = repo.get_oauth_authorization_request_by_state
+    initial_read_barrier = threading.Barrier(2)
+    initial_read_count = 0
+    initial_read_lock = threading.Lock()
+
+    def synchronized_initial_get(*, state_nonce: str):
+        nonlocal initial_read_count
+        value = initial_get(state_nonce=state_nonce)
+        with initial_read_lock:
+            initial_read_count += 1
+            should_wait = initial_read_count <= 2
+        if should_wait:
+            initial_read_barrier.wait(timeout=5)
+        return value
+
+    repo.get_oauth_authorization_request_by_state = synchronized_initial_get  # type: ignore[method-assign]
+    base_transport = _fake_oauth_transport(
+        access_token="CALLBACK-ACCESS-TOKEN-MUST-NOT-LEAK",
+        refresh_token="CALLBACK-REFRESH-TOKEN-MUST-NOT-LEAK",
+    )
+    exchange_entry_count = 0
+    exchange_entry_lock = threading.Lock()
+
+    def counted_transport(request_obj: Any, timeout: float) -> tuple[int, dict[str, str], bytes]:
+        nonlocal exchange_entry_count
+        if request_obj.get_method() == "POST" and "/identity/v1/oauth2/token" in request_obj.full_url:
+            with exchange_entry_lock:
+                exchange_entry_count += 1
+        return base_transport(request_obj, timeout)
+
+    def invoke_callback(_index: int) -> dict[str, Any]:
+        return process_ebay_oauth_callback(
+            repository=repo,
+            settings=settings,
+            secret_store_boundary=SecretStoreBoundary(settings),
+            ebay_oauth_planner=EbayOAuthPlanner(settings),
+            state=request["state_nonce"],
+            code="UNIT_AUTH_CODE_CONCURRENT",
+            error="",
+            oauth_transport=counted_transport,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(invoke_callback, range(2)))
+    if exchange_entry_count != 1:
+        return "same-state concurrent callbacks must enter token exchange exactly once"
+    statuses = [str(item.get("status") or "") for item in results]
+    if statuses.count("callback_exchange_completed") != 1:
+        return "same-state concurrent callbacks must produce exactly one completed exchange"
+    if not any(status in {"blocked_callback_exchange_in_progress", "blocked_replayed_state"} for status in statuses):
+        return "the losing same-state callback must fail closed before token exchange"
+    refetched = initial_get(state_nonce=request["state_nonce"])
+    if not refetched or refetched.get("status") != "callback_exchange_completed":
+        return "the winning same-state callback must persist the completed terminal state"
+    if len(repo.list_connections(company_id=store["company_id"], store_id=store["store_id"])) != 1:
+        return "same-state concurrent callbacks must create exactly one platform connection"
+    return "ok"
+
+
+def _run_exchange_crash_requires_manual_reconcile() -> str:
+    _clear_env()
+    _base_oauth_env(environment="local_dev")
+    os.environ["JIEJING_EBAY_CLIENT_SECRET"] = "CALLBACK-CLIENT-SECRET-MUST-NOT-LEAK"
+    os.environ["JIEJING_VAULT_LOCAL_SECRET_RESOLVER_ENABLED"] = "true"
+    os.environ["JIEJING_VAULT_LOCAL_SECRET_STORE_PATH"] = str(OUT / "crashed-callback-secrets.json")
+    settings, repo, _store, request = _seed_oauth_request(case_key="crashed-callback", port=8827)
+    exchange_entry_count = 0
+
+    def crashing_transport(request_obj: Any, timeout: float) -> tuple[int, dict[str, str], bytes]:
+        nonlocal exchange_entry_count
+        if request_obj.get_method() == "POST" and "/identity/v1/oauth2/token" in request_obj.full_url:
+            exchange_entry_count += 1
+            raise RuntimeError("simulated transport crash")
+        return 404, {"content-type": "application/json"}, b'{}'
+
+    first = process_ebay_oauth_callback(
+        repository=repo,
+        settings=settings,
+        secret_store_boundary=SecretStoreBoundary(settings),
+        ebay_oauth_planner=EbayOAuthPlanner(settings),
+        state=request["state_nonce"],
+        code="UNIT_AUTH_CODE_CRASH",
+        error="",
+        oauth_transport=crashing_transport,
+    )
+    if first.get("status") != "callback_received_exchange_failed":
+        return "a transport crash after claim must terminate fail-closed"
+
+    claimed = repo.get_oauth_authorization_request_by_state(state_nonce=request["state_nonce"])
+    if not claimed or claimed.get("status") != "callback_received_exchange_failed":
+        return "a callback crash after claim must persist a terminal failure for manual reconcile"
+
+    retry = process_ebay_oauth_callback(
+        repository=repo,
+        settings=settings,
+        secret_store_boundary=SecretStoreBoundary(settings),
+        ebay_oauth_planner=EbayOAuthPlanner(settings),
+        state=request["state_nonce"],
+        code="UNIT_AUTH_CODE_CRASH",
+        error="",
+        oauth_transport=crashing_transport,
+    )
+    if exchange_entry_count != 1:
+        return "a claimed callback crash must never automatically repeat token exchange"
+    if retry.get("status") != "blocked_replayed_state":
+        return "a retry after callback crash must remain blocked for manual reconcile"
+    if retry.get("record_callback_event") is not False:
+        return "a callback crash retry must not overwrite the terminal failure"
+    return "ok"
+
+
+def _oauth_launch_step(gate: dict[str, Any]) -> dict[str, Any]:
+    action_plan = gate.get("launch_action_plan") if isinstance(gate.get("launch_action_plan"), dict) else {}
+    for item in action_plan.get("new_ebay_account_smoke_runbook") or []:
+        if isinstance(item, dict) and item.get("key") == "new_account_oauth_authorization_gate":
+            return item
+    return {}
 
 
 def _run_expired_state_blocked(*, local_secret_path: Path) -> str:

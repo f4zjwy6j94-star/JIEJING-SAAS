@@ -9,6 +9,7 @@ tokens, or raw Authorization headers.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -96,13 +97,36 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--register-if-needed", action="store_true", help="Register the operator account if login fails.")
     parser.add_argument("--resources", default=",".join(DEFAULT_RESOURCES))
+    parser.add_argument(
+        "--confirmation-id",
+        default="",
+        help="Explicit existing approval for this exact current-store read-only OAuth step; prepare never creates or approves it.",
+    )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("check-env", help="Check local staging environment shape without printing secret values.")
     subparsers.add_parser("doctor", help="Check the running staging backend guardrails before seller OAuth.")
-    subparsers.add_parser("prepare", help="Create or reuse a store and generate an eBay read-only authorization URL.")
+    subparsers.add_parser(
+        "request-confirmation",
+        help="Create a pending decision-center card for current-store read-only OAuth without creating OAuth state.",
+    )
+    subparsers.add_parser(
+        "request-sync-confirmation",
+        help="Create a pending decision-center card for one current-store official read-only sync without creating work.",
+    )
+    prepare = subparsers.add_parser("prepare", help="Create or reuse a store and generate an eBay read-only authorization URL.")
+    prepare.add_argument(
+        "--confirmation-id",
+        default=argparse.SUPPRESS,
+        help="Exact approved current-store OAuth card; place this option after the prepare subcommand.",
+    )
     subparsers.add_parser("status", help="Inspect OAuth callback result, secret_ref/connection state, and preflight.")
     sync = subparsers.add_parser("sync", help="Run eBay read-only sync after OAuth callback has completed.")
+    sync.add_argument(
+        "--confirmation-id",
+        default=argparse.SUPPRESS,
+        help="Exact approved current-store sync card; place this option after the sync subcommand.",
+    )
     sync.add_argument("--run-mode", default="local_worker_now", choices=["queued", "local_worker_now", "inline", "enqueue_and_wait"])
     return parser.parse_args()
 
@@ -127,6 +151,76 @@ def main() -> int:
         _write_json(output_root / "staging_backend_doctor_latest.json", result)
         _print_doctor(result)
         return 0 if result["ready_for_oauth_prepare"] else 2
+
+    if args.command == "request-confirmation":
+        token = _login_or_register(args)
+        store = _get_or_create_store(args, token=token)
+        response = _post_json(
+            f"{args.base_url.rstrip('/')}/stores/{store['store_id']}/ebay-oauth/read-only-confirmation",
+            {"scope_profile": "seller_read_only"},
+            token=token,
+        )
+        confirmation = response.get("oauth_confirmation") if isinstance(response.get("oauth_confirmation"), dict) else {}
+        pending = bool(
+            confirmation.get("status") == "pending"
+            and confirmation.get("action_type") == "ebay_oauth_scope_change"
+            and confirmation.get("requested_step") == "new_account_oauth_authorization_gate"
+            and confirmation.get("scope_profile") == "seller_read_only"
+            and confirmation.get("oauth_state_created") is False
+            and confirmation.get("authorization_url_created") is False
+            and confirmation.get("oauth_request_created") is False
+        )
+        result = {
+            "status": "pending" if pending else "blocked",
+            "decision_center_review_required": True,
+            "oauth_state_created": False,
+            "authorization_url_created": False,
+            "oauth_request_created": False,
+            "next_operator_action": (
+                "Review this pending current-store OAuth card in the decision center. "
+                "After explicit approval, rerun prepare with its confirmation_id."
+            ),
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        }
+        _write_json(output_root / "staging_oauth_confirmation_latest.json", result)
+        _print_confirmation_request(result)
+        return 2
+
+    if args.command == "request-sync-confirmation":
+        token = _login_or_register(args)
+        store = _get_or_create_store(args, token=token)
+        response = _post_json(
+            f"{args.base_url.rstrip('/')}/stores/{store['store_id']}/ebay-read-only/sync-confirmation",
+            {"scope_profile": "seller_read_only_official_sync"},
+            token=token,
+        )
+        confirmation = response.get("sync_confirmation") if isinstance(response.get("sync_confirmation"), dict) else {}
+        pending = bool(
+            confirmation.get("status") == "pending"
+            and confirmation.get("action_type") == "ebay_read_only_sync"
+            and confirmation.get("requested_step") == "official_packet_account_health_snapshot"
+            and confirmation.get("scope_profile") == "seller_read_only_official_sync"
+            and confirmation.get("sync_started") is False
+            and confirmation.get("task_created") is False
+            and confirmation.get("queue_job_created") is False
+        )
+        result = {
+            "status": "pending" if pending else "blocked",
+            "decision_center_review_required": True,
+            "sync_started": False,
+            "task_created": False,
+            "queue_job_created": False,
+            "next_operator_action": (
+                "Review this pending current-store official-sync card in the decision center. "
+                "After the decision center records its decision, copy the card reference into the sync command."
+            ),
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        }
+        _write_json(output_root / "staging_sync_confirmation_latest.json", result)
+        _print_sync_confirmation_request(result)
+        return 2
 
     if args.command == "prepare":
         token = _login_or_register(args)
@@ -153,9 +247,32 @@ def main() -> int:
             _write_json(context_path, _context_from_status(args=args, store=store, status=existing))
             _print_prepare(result)
             return 0
+        confirmation_id = str(args.confirmation_id or "").strip()
+        if not confirmation_id:
+            result = {
+                "status": "blocked_missing_approved_confirmation",
+                "base_url": args.base_url.rstrip("/"),
+                "callback_url_expected": f"{args.base_url.rstrip('/')}/oauth/ebay/callback",
+                "store_id": store.get("store_id"),
+                "store_name": store.get("store_name"),
+                "oauth_request_id": None,
+                "state_nonce": None,
+                "authorization_url": None,
+                "missing_config": ["approved_confirmation_id_required"],
+                "blocked_by": ["missing_explicit_approved_confirmation_id"],
+                "next_operator_action": (
+                    "Obtain an approved confirmation bound to this exact current-store read-only OAuth step, "
+                    "then rerun prepare with --confirmation-id. The tool never creates or approves confirmations."
+                ),
+                "real_platform_writes_enabled": False,
+                "secret_exposed": False,
+            }
+            _write_json(output_root / "staging_oauth_prepare_latest.json", result)
+            _print_prepare(result)
+            return 2
         plan_payload = _post_json(
             f"{args.base_url.rstrip('/')}/stores/{store['store_id']}/ebay-oauth/read-only-plan",
-            {"marketplace_id": args.marketplace},
+            {"marketplace_id": args.marketplace, "confirmation_id": confirmation_id},
             token=token,
         )
         plan = plan_payload.get("oauth_plan") if isinstance(plan_payload.get("oauth_plan"), dict) else {}
@@ -195,10 +312,20 @@ def main() -> int:
     if args.command == "sync":
         context = _load_context(context_path)
         token = _login_or_register(args)
-        result = _sync(args=args, token=token, context=context, resources=resources, run_mode=args.run_mode)
+        result = _sync(
+            args=args,
+            token=token,
+            context=context,
+            resources=resources,
+            run_mode=args.run_mode,
+            confirmation_id=str(args.confirmation_id or "").strip(),
+        )
         _write_json(output_root / "staging_readonly_sync_latest.json", result)
         _print_sync(result)
-        return 0 if result.get("sync_completed") and result.get("data_packet_id") else 2
+        return 0 if (
+            result.get("reused_fresh_evidence") is True
+            or (result.get("sync_completed") and result.get("data_packet_id"))
+        ) else 2
 
     return 2
 
@@ -457,12 +584,84 @@ def _status(*, args: argparse.Namespace, token: str, context: dict[str, Any], re
     }
 
 
-def _sync(*, args: argparse.Namespace, token: str, context: dict[str, Any], resources: list[str], run_mode: str) -> dict[str, Any]:
+def _sync(
+    *,
+    args: argparse.Namespace,
+    token: str,
+    context: dict[str, Any],
+    resources: list[str],
+    run_mode: str,
+    confirmation_id: str,
+) -> dict[str, Any]:
     base = args.base_url.rstrip("/")
     store_id = _context_store_id(context)
+    gate_payload = _fetch_json(
+        f"{base}/commercial/launch-gate?store_id={urllib.parse.quote(store_id, safe='')}",
+        token=token,
+    )
+    gate = gate_payload.get("commercial_launch_gate") if isinstance(gate_payload.get("commercial_launch_gate"), dict) else {}
+    current_evidence = (
+        gate.get("current_store_ebay_evidence")
+        if isinstance(gate.get("current_store_ebay_evidence"), dict)
+        else {}
+    )
+    fresh_current_store_evidence = bool(
+        current_evidence.get("status") == "ready"
+        and current_evidence.get("current_store_selected") is True
+        and str(current_evidence.get("store_id_sha256") or "") == hashlib.sha256(store_id.encode("utf-8")).hexdigest()
+        and str(current_evidence.get("connection_id_sha256") or "")
+        and current_evidence.get("official_packet_ready") is True
+        and current_evidence.get("backend_worker_provenance_ready") is True
+        and current_evidence.get("same_oauth_connection_ready") is True
+        and current_evidence.get("account_health_ready") is True
+        and str(current_evidence.get("packet_id_sha256") or "")
+        and current_evidence.get("secret_exposed") is False
+    )
+    if fresh_current_store_evidence:
+        return {
+            "status": "fresh_current_store_evidence_reused",
+            "store_id": store_id,
+            "sync_status": "not_started_existing_evidence_is_fresh",
+            "worker_status": None,
+            "live_read_status": "not_started",
+            "live_request_performed": False,
+            "sync_started": False,
+            "sync_completed": True,
+            "reused_fresh_evidence": True,
+            "existing_packet_id_sha256": str(current_evidence.get("packet_id_sha256") or ""),
+            "data_packet_id": None,
+            "blocked_by": [],
+            "next_operator_action": "Use the existing fresh current-store packet; do not repeat official sync.",
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        }
+    if not str(confirmation_id or "").strip():
+        return {
+            "status": "blocked_missing_approved_confirmation",
+            "store_id": store_id,
+            "sync_status": "blocked",
+            "worker_status": None,
+            "live_read_status": "not_started",
+            "live_request_performed": False,
+            "sync_started": False,
+            "sync_completed": False,
+            "data_packet_id": None,
+            "blocked_by": ["missing_explicit_approved_sync_confirmation_id"],
+            "next_operator_action": (
+                "Create and approve one exact current-store official read-only sync confirmation, "
+                "then rerun sync with --confirmation-id."
+            ),
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        }
     sync = _post_json(
         f"{base}/stores/{store_id}/ebay-read-only/sync",
-        {"resources": resources, "run_mode": run_mode, "product": "Jiejing staging official eBay read-only validation"},
+        {
+            "resources": resources,
+            "run_mode": run_mode,
+            "product": "Jiejing staging official eBay read-only validation",
+            "confirmation_id": str(confirmation_id).strip(),
+        },
         token=token,
         timeout=300,
     )
@@ -765,6 +964,28 @@ def _print_prepare(result: dict[str, Any]) -> None:
     else:
         print(f"MISSING_CONFIG={','.join(result.get('missing_config') or []) or '-'}")
     print(f"NEXT={result.get('next_operator_action')}")
+
+
+def _print_confirmation_request(result: dict[str, Any]) -> None:
+    print(f"CONFIRMATION_STATUS={result.get('status')}")
+    print(f"DECISION_CENTER_REVIEW_REQUIRED={str(bool(result.get('decision_center_review_required'))).lower()}")
+    print(f"OAUTH_STATE_CREATED={str(bool(result.get('oauth_state_created'))).lower()}")
+    print(f"AUTHORIZATION_URL_CREATED={str(bool(result.get('authorization_url_created'))).lower()}")
+    print(f"OAUTH_REQUEST_CREATED={str(bool(result.get('oauth_request_created'))).lower()}")
+    print(f"NEXT={result.get('next_operator_action')}")
+    print(f"REAL_PLATFORM_WRITES_ENABLED={str(bool(result.get('real_platform_writes_enabled'))).lower()}")
+    print(f"SECRET_EXPOSED={str(bool(result.get('secret_exposed'))).lower()}")
+
+
+def _print_sync_confirmation_request(result: dict[str, Any]) -> None:
+    print(f"SYNC_CONFIRMATION_STATUS={result.get('status')}")
+    print(f"DECISION_CENTER_REVIEW_REQUIRED={str(bool(result.get('decision_center_review_required'))).lower()}")
+    print(f"SYNC_STARTED={str(bool(result.get('sync_started'))).lower()}")
+    print(f"TASK_CREATED={str(bool(result.get('task_created'))).lower()}")
+    print(f"QUEUE_JOB_CREATED={str(bool(result.get('queue_job_created'))).lower()}")
+    print(f"NEXT={result.get('next_operator_action')}")
+    print(f"REAL_PLATFORM_WRITES_ENABLED={str(bool(result.get('real_platform_writes_enabled'))).lower()}")
+    print(f"SECRET_EXPOSED={str(bool(result.get('secret_exposed'))).lower()}")
 
 
 def _print_status(result: dict[str, Any]) -> None:

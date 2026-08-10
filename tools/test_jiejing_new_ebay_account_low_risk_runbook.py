@@ -30,13 +30,21 @@ def main() -> int:
         "Post-publish cockpit",
         "Test cleanup",
         "JIEJING_NEW_EBAY_OLD_FROZEN_ACCOUNT_REJECTED",
-        "JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED",
         "JIEJING_NEW_EBAY_FRESH_PRODUCT_DECLARED",
         "JIEJING_NEW_EBAY_FRESH_SKU_DECLARED",
         "JIEJING_NEW_EBAY_FRESH_ASSETS_DECLARED",
         "JIEJING_NEW_EBAY_NO_OLD_LISTING_OR_REPORT_REUSE",
         "JIEJING_NEW_EBAY_PUBLISH_CONFIRMATION_APPROVED",
         "JIEJING_NEW_EBAY_CLEANUP_CONFIRMATION_APPROVED",
+        "Do not create a new OAuth plan",
+        "/stores/{store_id}/ebay-oauth/read-only-plan",
+        "/connections?store_id={store_id}",
+        "/stores/{store_id}/ebay-oauth/read-only-status",
+        "/health/deep",
+        "/data-packets?store_id={store_id}&platform=ebay&limit=1",
+        "/queue-jobs?status=completed&limit=200",
+        "/audit-logs?limit=200",
+        "backend worker completion",
     ]:
         if marker not in text:
             return fail(f"runbook missing marker: {marker}")
@@ -87,7 +95,6 @@ def main() -> int:
     required_flags = payload.get("required_operator_flags") if isinstance(payload.get("required_operator_flags"), dict) else {}
     expected_required_flags = {
         "account_boundary": {"JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN", "JIEJING_NEW_EBAY_OLD_FROZEN_ACCOUNT_REJECTED"},
-        "oauth_boundary": {"JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED", "JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED"},
         "fresh_product_boundary": {
             "JIEJING_NEW_EBAY_FRESH_PRODUCT_DECLARED",
             "JIEJING_NEW_EBAY_FRESH_SKU_DECLARED",
@@ -103,6 +110,8 @@ def main() -> int:
         actual = set(required_flags.get(key) or [])
         if actual != expected:
             return fail(f"checklist required flags mismatch for {key}: {sorted(actual)}")
+    if "oauth_boundary" in required_flags:
+        return fail("checklist-only contract must not require stale OAuth-completed/operator flags")
     for key, phase in phases.items():
         if phase.get("secret_exposed") is not False:
             return fail(f"phase must not expose secrets: {key}")
@@ -116,8 +125,24 @@ def main() -> int:
         return fail("OAuth phase must not start OAuth from checklist/checker")
     if phases["new_account_oauth_authorization_gate"].get("repeat_oauth_allowed") is not False:
         return fail("OAuth phase must forbid silent OAuth repeat")
-    if "owner approval to start new-account OAuth" not in phases["new_account_oauth_authorization_gate"].get("required_evidence", []):
-        return fail("OAuth phase must require owner approval before any new-account OAuth")
+    oauth_evidence = phases["new_account_oauth_authorization_gate"].get("required_evidence", [])
+    if "/connections?store_id={store_id}" not in oauth_evidence:
+        return fail("OAuth phase must inspect the authenticated current-store connection first")
+    if "/stores/{store_id}/ebay-oauth/read-only-status" not in oauth_evidence:
+        return fail("OAuth phase must require the backend-derived current-store identity/provenance status")
+    if "read-only-plan only when missing and explicitly approved" not in oauth_evidence:
+        return fail("OAuth phase must keep a new plan behind exact-step approval when evidence is missing")
+    official_evidence = phases["official_packet_account_health_snapshot"].get("required_evidence", [])
+    for required in (
+        "/stores/{store_id}/account-health",
+        "/connections?store_id={store_id}",
+        "/stores/{store_id}/ebay-oauth/read-only-status",
+        "/data-packets?store_id={store_id}&platform=ebay&limit=1",
+        "/queue-jobs?status=completed&limit=200",
+        "/audit-logs?limit=200",
+    ):
+        if required not in official_evidence:
+            return fail(f"official evidence phase missing authenticated source: {required}")
     for evidence_marker in ["fresh product", "fresh SKU", "fresh images", "no old listing/report reuse", "duplicate guard proof"]:
         if evidence_marker not in phases["new_product_duplicate_guard"].get("required_evidence", []):
             return fail(f"product duplicate guard must require {evidence_marker}")
@@ -126,8 +151,16 @@ def main() -> int:
     if phases["post_publish_cockpit_cleanup_gate"].get("confirmation_center_required") is not True:
         return fail("cleanup gate must require confirmation center")
     sequence = payload.get("sequence") or []
-    if "new eBay account OAuth" not in sequence or "real publish" not in sequence:
-        return fail(f"checklist should include new-account OAuth and real publish gates: {payload}")
+    if "verify authenticated current-store eBay connection evidence" not in sequence or "real publish" not in sequence:
+        return fail(f"checklist should inspect current-store authorization before the real publish gate: {payload}")
+    if "new eBay account OAuth" in sequence:
+        return fail("checklist must not prescribe OAuth before inspecting current-store authorization")
+    if "create read-only OAuth plan only if evidence is missing and this step is explicitly approved" not in sequence:
+        return fail("checklist must keep the OAuth plan as an explicitly approved missing-evidence fallback")
+    if "official read-only sync" in sequence:
+        return fail("checklist must not prescribe an unconditional read-only sync")
+    if "run official read-only sync only if current-store evidence is missing and this exact step is approved" not in sequence:
+        return fail("checklist must condition sync on missing current-store evidence and exact-step approval")
     if payload.get("secret_exposed") is not False:
         return fail("checklist output should keep secret_exposed=false")
     print("PASS jiejing_new_ebay_account_low_risk_runbook")

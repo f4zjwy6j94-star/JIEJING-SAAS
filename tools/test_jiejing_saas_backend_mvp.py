@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import http.client
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -13,6 +14,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +24,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-_TEMP_ROOT = tempfile.TemporaryDirectory(prefix="jiejing-saas-backend-test-")
+_TEMP_ROOT = tempfile.TemporaryDirectory(prefix="jiejing-saas-backend-test-", ignore_cleanup_errors=True)
 OUT = Path(_TEMP_ROOT.name)
 SAAS_DB = OUT / "saas-test.sqlite"
 RUNTIME_DB = OUT / "runtime-test.sqlite"
@@ -41,6 +43,7 @@ def find_free_port() -> int:
 
 def main() -> int:
     from jiejing_saas.api_server import SaaSBackendHandler
+    from jiejing_saas.repository import SaaSRepository
 
     internal_plan = {
         "contract_version": "merchant-plan-test-v1",
@@ -826,18 +829,579 @@ def main() -> int:
         if "UNIT-REFRESH-TOKEN-MUST-NOT-PERSIST" in serialized_refresh_execution or "UNIT-CLIENT-SECRET-MUST-NOT-PERSIST" in serialized_refresh_execution:
             return fail("token refresh execution plan leaked a raw secret")
 
-        oauth_plan = post_json(
+        oauth_requests_before_plan = fetch_json(
+            f"{base_url}/oauth/requests?store_id={store_id}", token=token
+        ).get("oauth_requests") or []
+        operator_plan_status, _operator_plan_error = post_json_expect_error(
+            f"{base_url}/stores/{store_id}/ebay-oauth/read-only-plan",
+            {"marketplace_id": "EBAY_US"},
+            token=operator_company_token,
+        )
+        if operator_plan_status != 403:
+            return fail("ordinary members without manage_connections must not create OAuth plans")
+        oauth_requests_after_operator = fetch_json(
+            f"{base_url}/oauth/requests?store_id={store_id}", token=token
+        ).get("oauth_requests") or []
+        if len(oauth_requests_after_operator) != len(oauth_requests_before_plan):
+            return fail("forbidden OAuth plan attempts must not persist request/state records")
+
+        unapproved_plan_status, _unapproved_plan_error = post_json_expect_error(
+            f"{base_url}/stores/{store_id}/ebay-oauth/read-only-plan",
+            {"marketplace_id": "EBAY_US"},
+            token=token,
+        )
+        if unapproved_plan_status != 409:
+            return fail("manage_connections alone must not create an OAuth plan without exact-step approval")
+        oauth_requests_after_unapproved = fetch_json(
+            f"{base_url}/oauth/requests?store_id={store_id}", token=token
+        ).get("oauth_requests") or []
+        if len(oauth_requests_after_unapproved) != len(oauth_requests_before_plan):
+            return fail("unapproved OAuth plan attempts must not persist request/state records")
+
+        oauth_confirmation_url = f"{base_url}/stores/{store_id}/ebay-oauth/read-only-confirmation"
+        confirmations_before_http_intake = fetch_json(f"{base_url}/confirmations", token=token).get("confirmations") or []
+        forbidden_intake_status, forbidden_intake_error = post_json_expect_error(
+            oauth_confirmation_url,
+            {"scope_profile": "seller_read_only"},
+            token=operator_company_token,
+        )
+        if forbidden_intake_status != 403:
+            return fail("ordinary members without manage_connections must not create OAuth confirmation cards")
+        if any(key in json.dumps(forbidden_intake_error, ensure_ascii=False) for key in ("confirmation_id", "state_nonce", "authorization_url")):
+            return fail("forbidden OAuth confirmation intake must not expose confirmation or OAuth details")
+        confirmations_after_forbidden_intake = fetch_json(f"{base_url}/confirmations", token=token).get("confirmations") or []
+        if len(confirmations_after_forbidden_intake) != len(confirmations_before_http_intake):
+            return fail("forbidden OAuth confirmation intake must not persist a confirmation")
+
+        wrong_scope_sentinel = "seller_publish_SCOPE_SENTINEL_MUST_NOT_ECHO"
+        wrong_scope_intake_status, wrong_scope_intake_error = post_json_expect_error(
+            oauth_confirmation_url,
+            {"scope_profile": wrong_scope_sentinel},
+            token=token,
+        )
+        if wrong_scope_intake_status != 400:
+            return fail("OAuth confirmation intake must reject a non-read-only scope profile")
+        wrong_scope_serialized = json.dumps(wrong_scope_intake_error, ensure_ascii=False)
+        if wrong_scope_sentinel in wrong_scope_serialized or any(
+            key in wrong_scope_serialized for key in ("confirmation_id", "state_nonce", "authorization_url")
+        ):
+            return fail("wrong-scope OAuth confirmation rejection must stay value-free")
+        confirmations_after_wrong_scope = fetch_json(f"{base_url}/confirmations", token=token).get("confirmations") or []
+        if len(confirmations_after_wrong_scope) != len(confirmations_before_http_intake):
+            return fail("wrong-scope OAuth confirmation intake must not persist a confirmation")
+
+        oauth_confirmation_intake = post_json(
+            oauth_confirmation_url,
+            {"scope_profile": "seller_read_only"},
+            token=token,
+        ).get("oauth_confirmation", {})
+        oauth_confirmation_id = str(oauth_confirmation_intake.get("confirmation_id") or "")
+        if not oauth_confirmation_id or oauth_confirmation_intake.get("status") != "pending":
+            return fail("manage_connections HTTP intake must create a pending OAuth confirmation card")
+        if oauth_confirmation_intake.get("action_type") != "ebay_oauth_scope_change":
+            return fail("OAuth confirmation intake must bind the exact high-risk action")
+        if oauth_confirmation_intake.get("requested_step") != "new_account_oauth_authorization_gate":
+            return fail("OAuth confirmation intake must bind the exact authorization step")
+        if oauth_confirmation_intake.get("scope_profile") != "seller_read_only":
+            return fail("OAuth confirmation intake must bind the seller-read-only scope profile")
+        if any(
+            oauth_confirmation_intake.get(key) not in (None, False)
+            for key in ("oauth_state_created", "authorization_url_created", "oauth_request_created")
+        ):
+            return fail("pending OAuth confirmation intake must not create OAuth state, URL, or request")
+        if oauth_confirmation_intake.get("secret_exposed") is not False:
+            return fail("pending OAuth confirmation intake must preserve secret_exposed=false")
+        oauth_requests_after_http_intake = fetch_json(
+            f"{base_url}/oauth/requests?store_id={store_id}", token=token
+        ).get("oauth_requests") or []
+        if len(oauth_requests_after_http_intake) != len(oauth_requests_before_plan):
+            return fail("pending OAuth confirmation intake must not persist OAuth request/state records")
+
+        duplicate_intake_status, duplicate_intake_error = post_json_expect_error(
+            oauth_confirmation_url,
+            {"scope_profile": "seller_read_only"},
+            token=token,
+        )
+        if duplicate_intake_status != 409:
+            return fail("duplicate pending OAuth confirmation intake must be rejected")
+        duplicate_intake_serialized = json.dumps(duplicate_intake_error, ensure_ascii=False)
+        if any(key in duplicate_intake_serialized for key in (oauth_confirmation_id, "state_nonce", "authorization_url")):
+            return fail("duplicate OAuth confirmation rejection must not expose confirmation or OAuth details")
+
+        approved_http_confirmation = post_json(
+            f"{base_url}/confirmations/{oauth_confirmation_id}/decision",
+            {"decision": "approve", "note": "Approve this exact local read-only OAuth plan regression."},
+            token=token,
+        ).get("confirmation", {})
+        if approved_http_confirmation.get("status") != "approved":
+            return fail("decision center must approve the HTTP-created OAuth confirmation card")
+        oauth_confirmation = approved_http_confirmation
+
+        approval_repo = SaaSRepository(SAAS_DB, database_engine="sqlite", database_url="")
+        state_unique_db = OUT / "oauth-state-unique-regression.sqlite"
+        state_unique_repo = SaaSRepository(state_unique_db, database_engine="sqlite", database_url="")
+        state_unique_repo.initialize()
+        oauth_insert_sql = """
+            insert into oauth_authorization_requests (
+              oauth_request_id, company_id, store_id, platform, status, state_nonce, scopes_json,
+              auth_url, created_by, created_at, updated_at, request_json
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        oauth_insert_base = (
+            "company-state-unique",
+            "store-state-unique",
+            "ebay",
+            "created",
+            "state-nonce-must-be-unique",
+            "[]",
+            None,
+            "user-state-unique",
+            "2026-08-11T00:00:00+00:00",
+            "2026-08-11T00:00:00+00:00",
+            "{}",
+        )
+        with state_unique_repo._connect() as conn:
+            conn.execute(oauth_insert_sql, ("oauth-state-unique-first", *oauth_insert_base))
+        try:
+            with state_unique_repo._connect() as conn:
+                conn.execute(oauth_insert_sql, ("oauth-state-unique-second", *oauth_insert_base))
+        except sqlite3.IntegrityError:
+            pass
+        else:
+            return fail("SQLite OAuth state_nonce must reject a duplicate across different request IDs")
+        legacy_duplicate_db = OUT / "oauth-state-legacy-duplicate.sqlite"
+        with sqlite3.connect(legacy_duplicate_db) as conn:
+            conn.executescript(
+                """
+                create table oauth_authorization_requests (
+                  oauth_request_id text primary key, company_id text not null, store_id text not null,
+                  platform text not null, status text not null, state_nonce text not null,
+                  scopes_json text not null, auth_url text, created_by text not null,
+                  created_at text not null, updated_at text not null, request_json text not null
+                );
+                insert into oauth_authorization_requests values
+                  ('legacy-first', 'company', 'store', 'ebay', 'created', 'legacy-duplicate-state', '[]', null, 'user', '2026-08-11', '2026-08-11', '{}'),
+                  ('legacy-second', 'company', 'store', 'ebay', 'created', 'legacy-duplicate-state', '[]', null, 'user', '2026-08-11', '2026-08-11', '{}');
+                """
+            )
+        legacy_duplicate_repo = SaaSRepository(legacy_duplicate_db, database_engine="sqlite", database_url="")
+        try:
+            legacy_duplicate_repo.initialize()
+        except RuntimeError as exc:
+            if str(exc) != "oauth_state_nonce_duplicate_migration_blocked":
+                return fail("legacy duplicate OAuth state migration must use a fixed value-free blocker")
+        else:
+            return fail("SQLite migration must fail closed instead of deleting or merging duplicate OAuth states")
+        with sqlite3.connect(legacy_duplicate_db) as conn:
+            legacy_count = conn.execute(
+                "select count(*) from oauth_authorization_requests where state_nonce = 'legacy-duplicate-state'"
+            ).fetchone()[0]
+        if legacy_count != 2:
+            return fail("failed OAuth state migration must preserve both conflicting legacy rows for manual reconciliation")
+        terminal_confirmation = approval_repo.create_confirmation(
+            company_id=owner_company_id,
+            store_id=store_id,
+            task_id=None,
+            runtime_run_id="confirmation_state_machine_regression",
+            action_type="change_price",
+            title="Terminal confirmation decision regression",
+            item={"source": "confirmation_state_machine_regression", "secret_exposed": False},
+            created_by=me["user"]["user_id"],
+            default_action="hold",
+        )
+        rejected_decision = post_json(
+            f"{base_url}/confirmations/{terminal_confirmation['confirmation_id']}/decision",
+            {"decision": "reject", "note": "Reject this state-machine regression item."},
+            token=token,
+        )
+        if (rejected_decision.get("confirmation") or {}).get("status") != "rejected":
+            return fail("a pending confirmation should allow one terminal rejection")
+        rejected_reapprove_status, _rejected_reapprove_error = post_json_expect_error(
+            f"{base_url}/confirmations/{terminal_confirmation['confirmation_id']}/decision",
+            {"decision": "approve", "note": "Rejected confirmations must not be revived."},
+            token=token,
+        )
+        if rejected_reapprove_status != 409:
+            return fail("a rejected confirmation must not be approved later")
+        rejected_terminal = approval_repo.get_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=terminal_confirmation["confirmation_id"],
+        ) or {}
+        if rejected_terminal.get("status") != "rejected":
+            return fail("a second decision must preserve the original terminal rejection")
+        try:
+            approval_repo.create_confirmation(
+                company_id=owner_company_id,
+                store_id=store_id,
+                task_id=None,
+                runtime_run_id="confirmation_state_machine_recreate_attack",
+                action_type="change_price",
+                title="Attempt to revive rejected confirmation",
+                item={"source": "confirmation_state_machine_recreate_attack", "secret_exposed": False},
+                created_by=me["user"]["user_id"],
+                confirmation_id=terminal_confirmation["confirmation_id"],
+                default_action="hold",
+            )
+        except ValueError:
+            pass
+        else:
+            return fail("create_confirmation must reject a caller-supplied ID that already belongs to a terminal confirmation")
+        rejected_after_recreate = approval_repo.get_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=terminal_confirmation["confirmation_id"],
+        ) or {}
+        if rejected_after_recreate.get("status") != "rejected":
+            return fail("duplicate create must preserve the existing terminal confirmation")
+
+        runtime_bridge_task = approval_repo.create_task(
+            company_id=owner_company_id,
+            store_id=store_id,
+            user_id=me["user"]["user_id"],
+            task_type="confirmation_state_machine_regression",
+            title="Runtime confirmation terminal replay regression",
+            input_data={"secret_exposed": False},
+        )
+        runtime_confirmation_item = {
+            "confirmation_id": "runtime-terminal-replay",
+            "action_type": "change_price",
+            "title": "Runtime terminal replay confirmation",
+            "default_action": "hold",
+            "source_packet_id": "packet-runtime-terminal-replay",
+            "secret_exposed": False,
+        }
+        runtime_output = {
+            "run": {"run_id": "runtime-terminal-replay-run"},
+            "results": [],
+            "confirmations": [runtime_confirmation_item],
+        }
+        approval_repo.save_runtime_outputs(task=runtime_bridge_task, runtime_result=runtime_output)
+        runtime_confirmation_id = f"{runtime_bridge_task['task_id']}::runtime-terminal-replay"
+        approval_repo.decide_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=runtime_confirmation_id,
+            decision="reject",
+            decided_by=me["user"]["user_id"],
+            note="Terminal runtime confirmation replay regression.",
+        )
+        approval_repo.save_runtime_outputs(task=runtime_bridge_task, runtime_result=runtime_output)
+        runtime_terminal = approval_repo.get_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=runtime_confirmation_id,
+        ) or {}
+        if runtime_terminal.get("status") != "rejected":
+            return fail("same runtime confirmation replay must preserve the existing terminal decision")
+        conflicting_runtime_output = {
+            **runtime_output,
+            "confirmations": [{**runtime_confirmation_item, "title": "Conflicting replay payload"}],
+        }
+        try:
+            approval_repo.save_runtime_outputs(task=runtime_bridge_task, runtime_result=conflicting_runtime_output)
+        except ValueError:
+            pass
+        else:
+            return fail("conflicting runtime confirmation replay must fail closed")
+        runtime_terminal_after_conflict = approval_repo.get_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=runtime_confirmation_id,
+        ) or {}
+        if runtime_terminal_after_conflict.get("status") != "rejected":
+            return fail("conflicting runtime replay must not overwrite the terminal decision")
+
+        other_company_id = str((operator.get("company") or {}).get("company_id") or "")
+        approval_mismatch_cases = [
+            {
+                "label": "wrong company",
+                "company_id": other_company_id,
+                "store_id": store_id,
+                "action_type": "ebay_oauth_scope_change",
+                "requested_step": "new_account_oauth_authorization_gate",
+                "scope_profile": "seller_read_only",
+            },
+            {
+                "label": "wrong store",
+                "company_id": owner_company_id,
+                "store_id": "wrong-approval-store-sentinel",
+                "action_type": "ebay_oauth_scope_change",
+                "requested_step": "new_account_oauth_authorization_gate",
+                "scope_profile": "seller_read_only",
+            },
+            {
+                "label": "wrong action type",
+                "company_id": owner_company_id,
+                "store_id": store_id,
+                "action_type": "change_price",
+                "requested_step": "new_account_oauth_authorization_gate",
+                "scope_profile": "seller_read_only",
+            },
+            {
+                "label": "wrong scope profile",
+                "company_id": owner_company_id,
+                "store_id": store_id,
+                "action_type": "ebay_oauth_scope_change",
+                "requested_step": "new_account_oauth_authorization_gate",
+                "scope_profile": "seller_publish",
+            },
+        ]
+        if not other_company_id or other_company_id == owner_company_id:
+            return fail("OAuth approval matrix requires a distinct wrong company fixture")
+        for mismatch in approval_mismatch_cases:
+            mismatch_confirmation = approval_repo.create_confirmation(
+                company_id=str(mismatch["company_id"]),
+                store_id=str(mismatch["store_id"]),
+                task_id=None,
+                runtime_run_id="new_ebay_account_oauth_authorization_gate",
+                action_type=str(mismatch["action_type"]),
+                title=f"{mismatch['label']} must not authorize OAuth",
+                item={
+                    "source": "new_ebay_account_low_risk_smoke",
+                    "requested_step": mismatch["requested_step"],
+                    "scope_profile": mismatch["scope_profile"],
+                    "secret_exposed": False,
+                },
+                created_by=me["user"]["user_id"],
+                default_action="hold",
+            )
+            mismatch_confirmation = approval_repo.decide_confirmation(
+                company_id=str(mismatch["company_id"]),
+                confirmation_id=mismatch_confirmation["confirmation_id"],
+                decision="approve",
+                decided_by=me["user"]["user_id"],
+                note="This intentionally does not match the exact OAuth approval boundary.",
+            )
+            mismatch_status, mismatch_error = post_json_expect_error(
+                f"{base_url}/stores/{store_id}/ebay-oauth/read-only-plan",
+                {
+                    "marketplace_id": "EBAY_US",
+                    "confirmation_id": mismatch_confirmation["confirmation_id"],
+                },
+                token=token,
+            )
+            if mismatch_status != 409:
+                return fail(f"OAuth plan approval must reject {mismatch['label']}")
+            mismatch_serialized = json.dumps(mismatch_error, ensure_ascii=False)
+            if any(
+                marker in mismatch_serialized
+                for marker in (
+                    "state_nonce",
+                    "authorization_url",
+                    "oauth_request_id",
+                    mismatch_confirmation["confirmation_id"],
+                )
+            ):
+                return fail(f"{mismatch['label']} OAuth rejection must not expose plan or confirmation details")
+            oauth_requests_after_mismatch = fetch_json(
+                f"{base_url}/oauth/requests?store_id={store_id}", token=token
+            ).get("oauth_requests") or []
+            if len(oauth_requests_after_mismatch) != len(oauth_requests_before_plan):
+                return fail(f"{mismatch['label']} OAuth approval must not persist request/state records")
+
+        unapproved_confirmation = approval_repo.create_confirmation(
+            company_id=owner_company_id,
+            store_id=store_id,
+            task_id=None,
+            runtime_run_id="new_ebay_account_oauth_authorization_gate",
+            action_type="ebay_oauth_scope_change",
+            title="Unapproved OAuth confirmation must remain unusable",
+            item={
+                "source": "new_ebay_account_low_risk_smoke",
+                "requested_step": "new_account_oauth_authorization_gate",
+                "scope_profile": "seller_read_only",
+                "secret_exposed": False,
+            },
+            created_by=me["user"]["user_id"],
+            default_action="hold",
+        )
+        forbidden_decision_status, forbidden_decision_error = post_json_expect_error(
+            f"{base_url}/confirmations/{unapproved_confirmation['confirmation_id']}/decision",
+            {"decision": "approve", "note": "Operator must not approve this high-risk OAuth step."},
+            token=operator_company_token,
+        )
+        if forbidden_decision_status != 403:
+            return fail("an actor without approve_high_risk must not approve an OAuth scope change")
+        forbidden_decision_serialized = json.dumps(forbidden_decision_error, ensure_ascii=False)
+        if unapproved_confirmation["confirmation_id"] in forbidden_decision_serialized:
+            return fail("forbidden OAuth approval decisions must not expose confirmation details")
+        not_approved_status, not_approved_error = post_json_expect_error(
             f"{base_url}/stores/{store_id}/ebay-oauth/read-only-plan",
             {
                 "marketplace_id": "EBAY_US",
-                "scopes": [
-                    "https://api.ebay.com/oauth/api_scope/sell.inventory",
-                    "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
-                    "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
-                ],
+                "confirmation_id": unapproved_confirmation["confirmation_id"],
             },
             token=token,
         )
+        if not_approved_status != 409:
+            return fail("a not-approved OAuth confirmation must not create a plan")
+        not_approved_serialized = json.dumps(not_approved_error, ensure_ascii=False)
+        if any(
+            marker in not_approved_serialized
+            for marker in (
+                "state_nonce",
+                "authorization_url",
+                "oauth_request_id",
+                unapproved_confirmation["confirmation_id"],
+            )
+        ):
+            return fail("not-approved OAuth rejection must not expose plan or confirmation details")
+        oauth_requests_after_not_approved = fetch_json(
+            f"{base_url}/oauth/requests?store_id={store_id}", token=token
+        ).get("oauth_requests") or []
+        if len(oauth_requests_after_not_approved) != len(oauth_requests_before_plan):
+            return fail("not-approved OAuth attempts must not persist request/state records")
+
+        wrong_step_confirmation = approval_repo.create_confirmation(
+            company_id=owner_company_id,
+            store_id=store_id,
+            task_id=None,
+            runtime_run_id="new_ebay_account_oauth_authorization_gate",
+            action_type="ebay_oauth_scope_change",
+            title="Wrong-step approval must not authorize OAuth",
+            item={
+                "source": "new_ebay_account_low_risk_smoke",
+                "requested_step": "controlled_real_publish_probe",
+                "scope_profile": "seller_read_only",
+                "secret_exposed": False,
+            },
+            created_by=me["user"]["user_id"],
+            default_action="hold",
+        )
+        wrong_step_confirmation = approval_repo.decide_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=wrong_step_confirmation["confirmation_id"],
+            decision="approve",
+            decided_by=me["user"]["user_id"],
+            note="This intentionally approves the wrong step.",
+        )
+        wrong_step_status, _wrong_step_error = post_json_expect_error(
+            f"{base_url}/stores/{store_id}/ebay-oauth/read-only-plan",
+            {
+                "marketplace_id": "EBAY_US",
+                "confirmation_id": wrong_step_confirmation["confirmation_id"],
+            },
+            token=token,
+        )
+        if wrong_step_status != 409:
+            return fail("OAuth plan approval must bind the exact new-account OAuth step")
+        oauth_requests_after_wrong_step = fetch_json(
+            f"{base_url}/oauth/requests?store_id={store_id}", token=token
+        ).get("oauth_requests") or []
+        if len(oauth_requests_after_wrong_step) != len(oauth_requests_before_plan):
+            return fail("wrong-step OAuth approval must not persist request/state records")
+
+        expired_confirmation = approval_repo.create_confirmation(
+            company_id=owner_company_id,
+            store_id=store_id,
+            task_id=None,
+            runtime_run_id="new_ebay_account_oauth_authorization_gate",
+            action_type="ebay_oauth_scope_change",
+            title="Expired approval must not authorize OAuth",
+            item={
+                "source": "new_ebay_account_low_risk_smoke",
+                "requested_step": "new_account_oauth_authorization_gate",
+                "scope_profile": "seller_read_only",
+                "secret_exposed": False,
+            },
+            created_by=me["user"]["user_id"],
+            default_action="hold",
+        )
+        expired_confirmation = approval_repo.decide_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=expired_confirmation["confirmation_id"],
+            decision="approve",
+            decided_by=me["user"]["user_id"],
+            note="This approval is intentionally expired.",
+        )
+        expiry_conn = sqlite3.connect(SAAS_DB)
+        try:
+            with expiry_conn:
+                expiry_conn.execute(
+                    "update confirmations set decided_at = ? where confirmation_id = ?",
+                    ("2000-01-01T00:00:00+00:00", expired_confirmation["confirmation_id"]),
+                )
+        finally:
+            expiry_conn.close()
+        expired_status, _expired_error = post_json_expect_error(
+            f"{base_url}/stores/{store_id}/ebay-oauth/read-only-plan",
+            {
+                "marketplace_id": "EBAY_US",
+                "confirmation_id": expired_confirmation["confirmation_id"],
+            },
+            token=token,
+        )
+        if expired_status != 409:
+            return fail("expired exact-step approval must not create an OAuth plan")
+        oauth_requests_after_expired = fetch_json(
+            f"{base_url}/oauth/requests?store_id={store_id}", token=token
+        ).get("oauth_requests") or []
+        if len(oauth_requests_after_expired) != len(oauth_requests_before_plan):
+            return fail("expired OAuth approval must not persist request/state records")
+
+        connections_before_forgery = approval_repo.list_connections(
+            company_id=owner_company_id,
+            store_id=store_id,
+        )
+        forged_connection_status, forged_connection_error = post_json_expect_error(
+            f"{base_url}/stores/{store_id}/connections",
+            {
+                "platform": "ebay",
+                "connection_type": "oauth",
+                "status": "read_only_authorized",
+                "scopes": ["sell.inventory.readonly", "sell.account.readonly"],
+                "refresh_token": "NEVER-ACCEPT-MERCHANT-OAUTH-REFRESH-TOKEN",
+                "metadata": {
+                    "credential_source": "jiejing_vault_secret_ref",
+                    "account_deletion_identity_mapping_status": "identity_mapping_ready",
+                    "ebay_user_id_hash": "merchant-forged-identity-hash",
+                },
+            },
+            token=token,
+        )
+        if forged_connection_status != 400:
+            return fail("merchant connection API must reject backend-only OAuth authorized state and identity metadata")
+        forged_error_text = json.dumps(forged_connection_error, ensure_ascii=False)
+        if "NEVER-ACCEPT-MERCHANT-OAUTH-REFRESH-TOKEN" in forged_error_text:
+            return fail("rejected merchant OAuth connection must not echo credential input")
+        if len(approval_repo.list_connections(company_id=owner_company_id, store_id=store_id)) != len(connections_before_forgery):
+            return fail("rejected merchant OAuth connection must not persist a connection or secret reference")
+
+        approval_repo.create_platform_connection(
+            company_id=owner_company_id,
+            store_id=store_id,
+            user_id=me["user"]["user_id"],
+            payload={
+                "platform": "ebay",
+                "connection_type": "oauth",
+                "status": "read_only_authorized",
+                "scopes": ["sell.inventory.readonly", "sell.account.readonly"],
+                "metadata": {"legacy_record": True},
+            },
+        )
+
+        oauth_plan_url = f"{base_url}/stores/{store_id}/ebay-oauth/read-only-plan"
+        oauth_plan_payload = {
+            "marketplace_id": "EBAY_US",
+            "confirmation_id": oauth_confirmation["confirmation_id"],
+            "scopes": [
+                "https://api.ebay.com/oauth/api_scope/sell.inventory",
+                "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
+                "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
+            ],
+        }
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            concurrent_results = list(
+                executor.map(
+                    lambda _index: post_json_expect_error(
+                        oauth_plan_url,
+                        oauth_plan_payload,
+                        token=token,
+                    ),
+                    range(4),
+                )
+            )
+        success_results = [body for status, body in concurrent_results if status == 200]
+        conflict_results = [body for status, body in concurrent_results if status == 409]
+        if len(success_results) != 1 or len(conflict_results) != 3:
+            return fail(f"concurrent OAuth plan POSTs must yield one success and three conflicts: {concurrent_results}")
+        oauth_plan = success_results[0]
         plan = oauth_plan.get("oauth_plan", {})
         if plan.get("status") != "blocked_missing_oauth_config":
             return fail("OAuth plan should be blocked until eBay app config is supplied")
@@ -850,36 +1414,116 @@ def main() -> int:
         oauth_requests = fetch_json(f"{base_url}/oauth/requests?store_id={store_id}", token=token)
         if not oauth_requests.get("oauth_requests"):
             return fail("OAuth authorization request should be persisted for audit")
+        reapprove_consumed_status, _reapprove_consumed_error = post_json_expect_error(
+            f"{base_url}/confirmations/{oauth_confirmation['confirmation_id']}/decision",
+            {"decision": "approve", "note": "A consumed OAuth approval must never be revived."},
+            token=token,
+        )
+        if reapprove_consumed_status != 409:
+            return fail("a consumed OAuth confirmation must not be re-approved")
+        consumed_confirmation = approval_repo.get_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=oauth_confirmation["confirmation_id"],
+        ) or {}
+        if consumed_confirmation.get("status") != "executed":
+            return fail("a rejected re-approval must preserve the consumed confirmation state")
+        duplicate_plan_status, duplicate_plan_error = post_json_expect_error(
+            f"{base_url}/stores/{store_id}/ebay-oauth/read-only-plan",
+            {
+                "marketplace_id": "EBAY_US",
+                "confirmation_id": oauth_confirmation["confirmation_id"],
+            },
+            token=token,
+        )
+        if duplicate_plan_status != 409 or "oauth_plan_already_pending" not in json.dumps(duplicate_plan_error):
+            return fail("read-only OAuth plan must idempotently reject an existing current-store pending plan")
+        oauth_requests_after_duplicate = fetch_json(f"{base_url}/oauth/requests?store_id={store_id}", token=token)
+        if len(oauth_requests_after_duplicate.get("oauth_requests") or []) != len(oauth_requests.get("oauth_requests") or []):
+            return fail("duplicate read-only OAuth request must not persist another plan")
+        pending_oauth_status = fetch_json(
+            f"{base_url}/stores/{store_id}/ebay-oauth/read-only-status",
+            token=token,
+        ).get("ebay_oauth_read_only_status", {})
+        if pending_oauth_status.get("pending") is not True or pending_oauth_status.get("authorized") is not False:
+            return fail("authenticated OAuth status must expose the backend-derived current-store pending boundary")
         callback = fetch_json(f"{base_url}/oauth/ebay/callback?state={plan.get('state_nonce')}&code=TEST_AUTH_CODE")
         callback_body = callback.get("oauth_callback", {})
-        if callback_body.get("status") != "callback_received_exchange_blocked":
-            return fail("OAuth callback should be recorded but block token exchange without config/Vault")
-        if callback_body.get("code_stored") is not False or callback_body.get("token_exchange_performed") is not False:
-            return fail("OAuth callback must not store code or exchange tokens in local MVP")
+        if callback_body.get("status") != "manual_reconcile_required":
+            return fail("public OAuth callback should safely report manual reconcile without config/Vault")
+        if "code_stored" in callback_body or callback_body.get("token_exchange_performed") is not False:
+            return fail("public OAuth callback must omit code state and report no completed exchange in local MVP")
         oauth_requests_after_callback = fetch_json(f"{base_url}/oauth/requests?store_id={store_id}", token=token)
         if oauth_requests_after_callback.get("oauth_requests", [{}])[0].get("status") != "callback_received_exchange_blocked":
             return fail("OAuth callback status should be persisted for audit")
+        consumed_approval_status, _consumed_approval_error = post_json_expect_error(
+            f"{base_url}/stores/{store_id}/ebay-oauth/read-only-plan",
+            {
+                "marketplace_id": "EBAY_US",
+                "confirmation_id": oauth_confirmation["confirmation_id"],
+            },
+            token=token,
+        )
+        if consumed_approval_status != 409:
+            return fail("a consumed exact-step approval must not create a second OAuth request")
+        oauth_requests_after_consumed_approval = fetch_json(
+            f"{base_url}/oauth/requests?store_id={store_id}", token=token
+        ).get("oauth_requests") or []
+        if len(oauth_requests_after_consumed_approval) != len(oauth_requests_after_callback.get("oauth_requests") or []):
+            return fail("reused OAuth approval must not persist another request/state record")
         invalid_state_status, _ = fetch_json_expect_error(f"{base_url}/oauth/ebay/callback?state=invalid-state&code=TEST_AUTH_CODE")
         if invalid_state_status != 400:
             return fail("OAuth callback with invalid state should be rejected")
 
-        connection = post_json(
-            f"{base_url}/stores/{store_id}/connections",
-            {
+        missing_code_state = "oauth-missing-code-replay-state"
+        missing_code_request = approval_repo.create_oauth_authorization_request(
+            company_id=owner_company_id,
+            store_id=store_id,
+            user_id=me["user"]["user_id"],
+            plan={
                 "platform": "ebay",
-                "connection_type": "oauth",
-                "status": "read_only_authorized",
-                "scopes": ["sell.inventory.readonly", "sell.account.readonly"],
-                "refresh_token": "NEVER_STORE_THIS_REFRESH_TOKEN",
-                "metadata": {"seller_username": "northvalesource", "token_note": "should redact"},
+                "status": "ready_to_redirect",
+                "state_nonce": missing_code_state,
+                "scopes": ["https://api.ebay.com/oauth/api_scope"],
+                "scope_profile": "seller_read_only",
+                "secret_exposed": False,
             },
-            token=token,
         )
-        if not connection.get("connection", {}).get("secret_ref"):
-            return fail("connection with token input should create a secret_ref")
-        if "NEVER_STORE_THIS_REFRESH_TOKEN" in json.dumps(connection, ensure_ascii=False):
-            return fail("raw token leaked in connection response")
-        if "NEVER_STORE_THIS_REFRESH_TOKEN" in json.dumps(fetch_json(f"{base_url}/readiness/product-saas"), ensure_ascii=False):
+        first_missing_code = fetch_json(f"{base_url}/oauth/ebay/callback?state={missing_code_state}")
+        if (first_missing_code.get("oauth_callback") or {}).get("status") != "invalid_or_expired":
+            return fail("first missing-code OAuth callback must terminate safely")
+        missing_code_after_first = approval_repo.get_oauth_authorization_request_by_state(
+            state_nonce=missing_code_state
+        ) or {}
+        first_events = (
+            (missing_code_after_first.get("request") or {}).get("callback_events")
+            if isinstance(missing_code_after_first.get("request"), dict)
+            else []
+        )
+        if missing_code_after_first.get("status") != "blocked_missing_code":
+            return fail("first missing-code callback must persist one terminal internal state")
+        replay_missing_code_status, replay_missing_code_body = fetch_json_expect_error(
+            f"{base_url}/oauth/ebay/callback?state={missing_code_state}"
+        )
+        if replay_missing_code_status != 409 or (replay_missing_code_body.get("oauth_callback") or {}).get("status") != "already_processed":
+            return fail("missing-code callback replay must return the fixed replay blocker")
+        missing_code_after_replay = approval_repo.get_oauth_authorization_request_by_state(
+            state_nonce=missing_code_state
+        ) or {}
+        replay_events = (
+            (missing_code_after_replay.get("request") or {}).get("callback_events")
+            if isinstance(missing_code_after_replay.get("request"), dict)
+            else []
+        )
+        if missing_code_after_replay.get("status") != missing_code_after_first.get("status") or len(replay_events) != len(first_events):
+            return fail("nonpending OAuth callback replay must not mutate status or append callback events")
+
+        generic_oauth_status = fetch_json(
+            f"{base_url}/stores/{store_id}/ebay-oauth/read-only-status",
+            token=token,
+        ).get("ebay_oauth_read_only_status", {})
+        if generic_oauth_status.get("authorized") is not False:
+            return fail("merchant-created generic connection status must not satisfy backend OAuth authorization")
+        if "NEVER-ACCEPT-MERCHANT-OAUTH-REFRESH-TOKEN" in json.dumps(fetch_json(f"{base_url}/readiness/product-saas"), ensure_ascii=False):
             return fail("raw token leaked in readiness response")
         read_catalog = fetch_json(f"{base_url}/ebay-read-only/catalog", token=token).get("ebay_read_only_catalog", {})
         catalog_keys = {item.get("key") for item in read_catalog.get("resources", [])}
@@ -1030,9 +1674,51 @@ def main() -> int:
             return fail("read-only live-plan worker must not perform live eBay reads in MVP")
         if read_worker.get("task", {}).get("output", {}).get("status") != "completed_no_live_read":
             return fail("read-only live-plan worker should mark task completed without live read")
-        sync_response = post_json(
+        tasks_before_unapproved_sync = fetch_json(f"{base_url}/tasks", token=token).get("tasks") or []
+        unapproved_sync_status, unapproved_sync_error = post_json_expect_error(
             f"{base_url}/stores/{store_id}/ebay-read-only/sync",
             {"resources": ["store_profile", "account_business_policies"], "run_mode": "inline"},
+            token=token,
+        )
+        if unapproved_sync_status != 409:
+            return fail("official eBay sync must require an exact approved confirmation before creating work")
+        unapproved_sync_serialized = json.dumps(unapproved_sync_error, ensure_ascii=False)
+        if any(marker in unapproved_sync_serialized for marker in ("confirmation_id", "job_id", "task_id", "state_nonce")):
+            return fail("unapproved sync rejection must not expose confirmation, task, job, or OAuth details")
+        tasks_after_unapproved_sync = fetch_json(f"{base_url}/tasks", token=token).get("tasks") or []
+        if len(tasks_after_unapproved_sync) != len(tasks_before_unapproved_sync):
+            return fail("unapproved official eBay sync must not persist a task")
+
+        sync_confirmation_intake = post_json(
+            f"{base_url}/stores/{store_id}/ebay-read-only/sync-confirmation",
+            {"scope_profile": "seller_read_only_official_sync"},
+            token=token,
+        ).get("sync_confirmation", {})
+        sync_confirmation_id = str(sync_confirmation_intake.get("confirmation_id") or "")
+        if not sync_confirmation_id or sync_confirmation_intake.get("status") != "pending":
+            return fail("official sync HTTP intake must create an exact pending confirmation")
+        if sync_confirmation_intake.get("requested_step") != "official_packet_account_health_snapshot":
+            return fail("official sync confirmation must bind the current-store packet step")
+        if any(
+            sync_confirmation_intake.get(key) not in (None, False)
+            for key in ("sync_started", "task_created", "queue_job_created", "live_request_performed")
+        ):
+            return fail("sync confirmation intake must not create task, queue job, or live request")
+        approved_sync_confirmation = post_json(
+            f"{base_url}/confirmations/{sync_confirmation_id}/decision",
+            {"decision": "approve", "note": "Approve this exact current-store official read-only sync step."},
+            token=token,
+        ).get("confirmation", {})
+        if approved_sync_confirmation.get("status") != "approved":
+            return fail("decision center must approve the exact official sync confirmation")
+
+        sync_response = post_json(
+            f"{base_url}/stores/{store_id}/ebay-read-only/sync",
+            {
+                "resources": ["store_profile", "account_business_policies"],
+                "run_mode": "inline",
+                "confirmation_id": sync_confirmation_id,
+            },
             token=token,
         )
         sync_body = sync_response.get("sync", {})
@@ -1053,6 +1739,90 @@ def main() -> int:
         serialized_sync = json.dumps(sync_response, ensure_ascii=False)
         if "UNIT-REFRESH-TOKEN-MUST-NOT-PERSIST" in serialized_sync or "UNIT-CLIENT-SECRET-MUST-NOT-PERSIST" in serialized_sync:
             return fail("product-level eBay sync leaked a raw secret")
+        blocked_sync_confirmation = approval_repo.get_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=sync_confirmation_id,
+        ) or {}
+        if blocked_sync_confirmation.get("status") != "approved":
+            return fail("preflight-blocked sync must preserve the exact approval for a later safe retry")
+
+        sync_tasks_before_atomic = approval_repo.list_tasks(company_id=owner_company_id, store_id=store_id)
+        sync_jobs_before_atomic = approval_repo.list_queue_jobs(company_id=owner_company_id, limit=500)
+        try:
+            approval_repo.create_approved_read_only_sync_task_and_job(
+                company_id=owner_company_id,
+                store_id=store_id,
+                user_id=me["user"]["user_id"],
+                confirmation_id=sync_confirmation_id,
+                title="Fault-injected atomic official sync",
+                input_data={"resources": ["store_profile"], "secret_exposed": False},
+                job_data={"unserializable_after_confirmation_consume": object()},
+            )
+            return fail("fault-injected atomic sync creation should fail")
+        except TypeError:
+            pass
+        rolled_back_sync_confirmation = approval_repo.get_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=sync_confirmation_id,
+        ) or {}
+        if rolled_back_sync_confirmation.get("status") != "approved":
+            return fail("consume-to-task fault must roll the exact sync approval back to approved")
+        if len(approval_repo.list_tasks(company_id=owner_company_id, store_id=store_id)) != len(sync_tasks_before_atomic):
+            return fail("consume-to-task fault must roll back the sync task")
+        if len(approval_repo.list_queue_jobs(company_id=owner_company_id, limit=500)) != len(sync_jobs_before_atomic):
+            return fail("consume-to-task fault must roll back the sync queue job")
+
+        def consume_sync_approval_once(_index: int) -> str:
+            try:
+                created_sync = approval_repo.create_approved_read_only_sync_task_and_job(
+                    company_id=owner_company_id,
+                    store_id=store_id,
+                    user_id=me["user"]["user_id"],
+                    confirmation_id=sync_confirmation_id,
+                    title="Atomic official eBay read-only sync",
+                    input_data={"resources": ["store_profile"], "secret_exposed": False},
+                    job_data={
+                        "kind": "ebay_read_only_live_plan",
+                        "platform": "ebay",
+                        "store_id": store_id,
+                        "resources": ["store_profile"],
+                        "live_read_performed": False,
+                        "run_mode": "queued",
+                    },
+                )
+                return f"consumed:{created_sync.get('queue_job', {}).get('job_id') or ''}"
+            except ValueError:
+                return "conflict"
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            sync_consume_results = list(executor.map(consume_sync_approval_once, range(4)))
+        consumed_sync_results = [item for item in sync_consume_results if item.startswith("consumed:")]
+        if len(consumed_sync_results) != 1 or sync_consume_results.count("conflict") != 3:
+            return fail(f"exact sync approval must be consumed once under concurrency: {sync_consume_results}")
+        consumed_sync_confirmation = approval_repo.get_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=sync_confirmation_id,
+        ) or {}
+        if consumed_sync_confirmation.get("status") != "executed":
+            return fail("exact sync approval consumption must persist the terminal executed state")
+        if len(approval_repo.list_tasks(company_id=owner_company_id, store_id=store_id)) != len(sync_tasks_before_atomic) + 1:
+            return fail("atomic sync approval consumption must create exactly one task")
+        if len(approval_repo.list_queue_jobs(company_id=owner_company_id, limit=500)) != len(sync_jobs_before_atomic) + 1:
+            return fail("atomic sync approval consumption must create exactly one queue job")
+        atomic_sync_job_id = consumed_sync_results[0].split(":", 1)[1]
+        atomic_sync_job = approval_repo.get_queue_job(job_id=atomic_sync_job_id, company_id=owner_company_id) or {}
+        approval_repo.update_queue_job(
+            job_id=atomic_sync_job_id,
+            company_id=owner_company_id,
+            status="cancelled",
+            details={"message": "Local atomic-boundary regression completed without worker execution."},
+        )
+        approval_repo.update_task_status(
+            task_id=str(atomic_sync_job.get("task_id") or ""),
+            company_id=owner_company_id,
+            status="cancelled",
+            audit_summary="Local atomic sync boundary regression closed before unrelated worker tests.",
+        )
         data_packet = post_json(
             f"{base_url}/stores/{store_id}/ebay-read-only/data-packet",
             {
@@ -1126,7 +1896,9 @@ def main() -> int:
         fetched_packet = fetch_json(f"{base_url}/data-packets/{packet_record.get('packet_id')}", token=token)
         if fetched_packet.get("data_packet", {}).get("packet_id") != packet_record.get("packet_id"):
             return fail("data packet detail endpoint should return the packet")
-        commercial_launch_gate = fetch_json(f"{base_url}/commercial/launch-gate", token=token).get("commercial_launch_gate", {})
+        commercial_launch_gate = fetch_json(
+            f"{base_url}/commercial/launch-gate?store_id={store_id}", token=token
+        ).get("commercial_launch_gate", {})
         if commercial_launch_gate.get("paid_commercial_launch_ready") is not False:
             return fail("commercial launch gate must not claim paid launch readiness in local MVP")
         launch_group_keys = {item.get("key") for item in commercial_launch_gate.get("groups", [])}
@@ -1135,6 +1907,11 @@ def main() -> int:
                 return fail(f"commercial launch gate missing {required_launch_group}")
         if commercial_launch_gate.get("real_platform_writes_enabled") is not False or commercial_launch_gate.get("secret_exposed") is not False:
             return fail("commercial launch gate must not expose secrets or enable writes")
+        oauth_boundary = commercial_launch_gate.get("current_store_oauth_boundary", {})
+        if oauth_boundary.get("current_store_selected") is not True:
+            return fail("authenticated commercial launch gate must evaluate the explicitly selected current store")
+        if oauth_boundary.get("authorized") is not False:
+            return fail("selected store without backend callback proof must remain OAuth blocked")
         provider_register_status, _ = fetch_json_expect_error(f"{base_url}/commercial/billing-provider-evidence-register")
         if provider_register_status != 401:
             return fail("billing provider evidence register must require authentication")
@@ -1347,7 +2124,10 @@ def main() -> int:
         pending = confirmations.get("confirmations", [])
         if not pending:
             return fail("confirmations endpoint should return pending items")
-        high_risk_confirmation = next((item for item in pending if item.get("high_risk")), None)
+        high_risk_confirmation = next(
+            (item for item in pending if item.get("action_type") == "publish_listing"),
+            None,
+        )
         if not high_risk_confirmation:
             return fail("workflow should create at least one high-risk confirmation item")
         confirmation_id = high_risk_confirmation["confirmation_id"]

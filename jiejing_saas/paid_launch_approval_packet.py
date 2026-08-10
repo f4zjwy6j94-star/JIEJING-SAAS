@@ -25,23 +25,95 @@ PRIMARY_SEQUENCE = [
 ]
 
 
-def build_paid_launch_approval_packet(settings: SaaSSettings, repository: SaaSRepository) -> dict[str, Any]:
+def build_paid_launch_approval_packet(
+    settings: SaaSSettings,
+    repository: SaaSRepository,
+    *,
+    company_id: str | None = None,
+    store_id: str | None = None,
+) -> dict[str, Any]:
     """Build a read-only packet that shows exactly what blocks public charging."""
 
-    readiness = build_product_readiness_or_degraded(settings, repository)
+    raw_readiness = build_product_readiness_or_degraded(settings, repository)
+    readiness = raw_readiness if isinstance(raw_readiness, dict) else {}
+    readiness_contract_valid = isinstance(raw_readiness, dict) and all(
+        type(readiness.get(key)) is bool
+        for key in ("production_ready", "beta_ready", "can_accept_real_customers")
+    )
     domain = build_domain_readiness(settings)
-    launch_gate = build_commercial_launch_gate(settings, repository)
+    launch_gate = build_commercial_launch_gate(
+        settings,
+        repository,
+        company_id=company_id,
+        store_id=store_id,
+    )
     rehearsal = build_billing_domain_cutover_rehearsal(settings, repository)
     mainland_payment = build_mainland_payment_launch_status(settings, repository)
     no_charge = _no_charge_launch_rehearsal_status()
     action_plan = launch_gate.get("launch_action_plan") if isinstance(launch_gate.get("launch_action_plan"), dict) else {}
     new_account = action_plan.get("new_ebay_account_smoke_runbook") if isinstance(action_plan.get("new_ebay_account_smoke_runbook"), list) else []
+    current_store_oauth_boundary = (
+        launch_gate.get("current_store_oauth_boundary")
+        if isinstance(launch_gate.get("current_store_oauth_boundary"), dict)
+        else {}
+    )
+    current_store_ebay_evidence = (
+        launch_gate.get("current_store_ebay_evidence")
+        if isinstance(launch_gate.get("current_store_ebay_evidence"), dict)
+        else {}
+    )
+    oauth_store_hash = str(current_store_oauth_boundary.get("store_id_sha256") or "")
+    oauth_connection_hash = str(current_store_oauth_boundary.get("connection_id_sha256") or "")
+    current_store_hashes_match = bool(
+        oauth_store_hash
+        and oauth_connection_hash
+        and oauth_store_hash == str(current_store_ebay_evidence.get("store_id_sha256") or "")
+        and oauth_connection_hash == str(current_store_ebay_evidence.get("connection_id_sha256") or "")
+    )
     steps = _build_steps(
         domain=domain,
         mainland_payment=mainland_payment,
         no_charge=no_charge,
         new_account=new_account,
     )
+    if not readiness_contract_valid:
+        steps = [
+            {
+                **step,
+                "status": "blocked",
+                "severity": "blocker",
+                "blocked_by": [
+                    *(
+                        [str(item) for item in step.get("blocked_by", []) if isinstance(item, str)]
+                        if isinstance(step.get("blocked_by"), list)
+                        else []
+                    ),
+                    "readiness_contract_invalid",
+                ],
+            }
+            if step.get("key") == "no_charge_launch_rehearsal"
+            else step
+            for step in steps
+        ]
+    if not current_store_hashes_match:
+        steps = [
+            {
+                **step,
+                "status": "blocked",
+                "severity": "blocker",
+                "blocked_by": [
+                    *(
+                        [str(item) for item in step.get("blocked_by", []) if isinstance(item, str)]
+                        if isinstance(step.get("blocked_by"), list)
+                        else []
+                    ),
+                    "current_store_oauth_evidence_binding_mismatch",
+                ],
+            }
+            if step.get("key") == "new_ebay_account_low_risk_smoke"
+            else step
+            for step in steps
+        ]
     blocked = [step for step in steps if step.get("status") != "ready"]
     user_items = _external_configuration_items(
         steps=steps,
@@ -93,6 +165,9 @@ def build_paid_launch_approval_packet(settings: SaaSSettings, repository: SaaSRe
             "external_configuration_needed_count": len([item for item in user_items if item.get("status") != "ready"]),
         },
         "steps": steps,
+        "new_ebay_account_smoke_runbook": new_account,
+        "current_store_oauth_boundary": current_store_oauth_boundary,
+        "current_store_ebay_evidence": current_store_ebay_evidence,
         "external_configuration_needed": user_items,
         "future_international_payment": future_international_payment,
         "agent_completed_before_user_intervention": [
@@ -340,8 +415,6 @@ def _external_configuration_items(
             env_keys=[
                 "JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN",
                 "JIEJING_NEW_EBAY_OLD_FROZEN_ACCOUNT_REJECTED",
-                "JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED",
-                "JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED",
                 "JIEJING_NEW_EBAY_FRESH_PRODUCT_DECLARED",
                 "JIEJING_NEW_EBAY_FRESH_SKU_DECLARED",
                 "JIEJING_NEW_EBAY_FRESH_ASSETS_DECLARED",

@@ -5,19 +5,20 @@ This runbook is for the next clean eBay account test. It must not reuse the froz
 ## Hard Rules
 
 - Do not repeat OAuth for the old frozen account.
+- Do not create a new OAuth plan when the current store already has an authorized eBay connection. Inspect authenticated, store-scoped evidence first.
 - Do not use old demo products, old test images, or old SKUs.
-- Do not publish when account health is `unknown`, `restricted`, `suspended`, `payout_hold`, or `quota_limited`.
+- Treat account health as safe only when status is exactly `normal`, `incident_mode=false`, and `can_execute_real_writes=true`; missing fields and every other status, including `suspended`, fail closed.
 - Do not execute real publish, price change, inventory change, refund, ad spend, policy edit, or sensitive buyer promise outside confirmation center.
 - Do not write passwords, eBay refresh tokens, model keys, Stripe keys, or provider tokens into files.
 - Do not mark the smoke ready with one broad flag. Each account, OAuth, product, publish and cleanup boundary needs its own audit flag.
 
 ## Low-Risk Sequence
 
-1. Public health: `/health` must be `ok`, database startup must be `ready`.
-2. Product readiness: `/readiness/product-saas` must show no database, queue, account-health, token-refresh, or model-value blocker that affects the test.
+1. Public health: `/health` must be `ok` with `database_startup_status=ready`; `/health/deep` must report the database, queue and worker as `ready`.
+2. Product readiness: public `/readiness/product-saas` must show no platform blocker, but its global packet or refresh count never proves the selected store is connected.
 3. New account login: create or select the new merchant account in Jiejing.
-4. eBay authorization: connect only the new eBay account through the normal SaaS backend OAuth path.
-5. Store sync: run official read-only sync and generate a sanitized eBay data packet.
+4. eBay authorization: first verify authenticated `/connections?store_id={store_id}` and backend-derived `/stores/{store_id}/ebay-oauth/read-only-status`. Only a completed backend callback, stored secret reference, immutable account identity and matching system audit prove authorization; merchant-written connection status does not. If the current store is already authorized, do not repeat OAuth. If it is not authorized or pending and the owner explicitly approves this external step, use `POST /stores/{store_id}/ebay-oauth/read-only-plan` through the backend secret boundary with the exact approved `confirmation_id`; the backend idempotently rejects an existing authorized or pending plan. The staging operator tool never creates or approves that confirmation and only calls the plan endpoint when the approved ID is passed explicitly in the real CLI order `python tools/jiejing_staging_ebay_oauth_readonly_flow.py prepare --confirmation-id <approved-card-reference>`.
+5. Store evidence: verify authenticated `/data-packets?store_id={store_id}&platform=ebay&limit=1`, `/stores/{store_id}/account-health`, `/queue-jobs?status=completed&limit=200`, and `/audit-logs?limit=200`. Official evidence requires a packet no more than six hours old, bound to the current company, store, OAuth connection and account-health packet ID, plus non-empty IDs and a matching backend worker completion and system audit within five minutes. Packet-reported TTL, merchant-supplied metadata, or `source_mode=official_api` alone is not proof. Only when this evidence is missing, run `python tools/jiejing_staging_ebay_oauth_readonly_flow.py request-sync-confirmation` to create a pending decision-center card. After a human decision center approval, pass its reference explicitly with `sync --confirmation-id ...`. The tool never creates or approves its own card and never starts sync from the request command; never sync merely to check progress.
 6. Account health: show store name, account status, payout/limit signals, policy count, product/offer/order counts, latest packet ID, and last sync time.
 7. New product check: reject if title, SKU, image hash, old listing ID, old report ID, or old asset manifest matches a previous test.
 8. Publish health report: category, item specifics, image rules, VeRO/IP, prohibited terms, GPSR/regulatory fields, inventory location, business policies, seller quota, expected fees, contribution margin and account health must be red/yellow/green.
@@ -40,6 +41,7 @@ This runbook is for the next clean eBay account test. It must not reuse the froz
 - readiness packet ID and blocker list
 - new store display name and marketplace
 - packet ID, source mode and resource coverage
+- matching backend worker completion and system audit IDs
 - account health snapshot
 - publish health report
 - confirmation ID and decision
@@ -54,9 +56,6 @@ The operator may only mark a phase ready when all flags in that phase have audit
 - Account boundary:
   - `JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN`
   - `JIEJING_NEW_EBAY_OLD_FROZEN_ACCOUNT_REJECTED`
-- OAuth boundary:
-  - `JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED`
-  - `JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED`
 - Fresh product boundary:
   - `JIEJING_NEW_EBAY_FRESH_PRODUCT_DECLARED`
   - `JIEJING_NEW_EBAY_FRESH_SKU_DECLARED`

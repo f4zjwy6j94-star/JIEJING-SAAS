@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+from datetime import datetime, timezone
 from typing import Any
 
+from .account_health import build_account_health_snapshot
 from .backup_plan import build_backup_plan
 from .billing_plan import STRIPE_CURRENT_API_VERSION, build_billing_plan, stripe_webhook_api_version, stripe_webhook_api_version_aligned
 from .config import SaaSSettings
@@ -20,10 +23,6 @@ from .vault_adapter import build_vault_adapter_contract
 NEW_EBAY_ACCOUNT_BOUNDARY_FLAGS = [
     "JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN",
     "JIEJING_NEW_EBAY_OLD_FROZEN_ACCOUNT_REJECTED",
-]
-NEW_EBAY_OAUTH_BOUNDARY_FLAGS = [
-    "JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED",
-    "JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED",
 ]
 NEW_EBAY_FRESH_PRODUCT_FLAGS = [
     "JIEJING_NEW_EBAY_FRESH_PRODUCT_DECLARED",
@@ -46,7 +45,13 @@ NEW_EBAY_CLEANUP_FLAGS = [
 ]
 
 
-def build_commercial_launch_gate(settings: SaaSSettings, repository: SaaSRepository) -> dict[str, Any]:
+def build_commercial_launch_gate(
+    settings: SaaSSettings,
+    repository: SaaSRepository,
+    *,
+    company_id: str | None = None,
+    store_id: str | None = None,
+) -> dict[str, Any]:
     readiness = build_product_readiness(settings, repository)
     evidence = readiness.get("product_evidence") if isinstance(readiness.get("product_evidence"), dict) else repository.product_readiness_evidence()
     counts = readiness.get("counts") if isinstance(readiness.get("counts"), dict) else repository.system_counts()
@@ -57,18 +62,49 @@ def build_commercial_launch_gate(settings: SaaSSettings, repository: SaaSReposit
     monitoring = build_monitoring_status(settings, repository)
     domain = build_domain_readiness(settings)
     vault = build_vault_adapter_contract(settings)
+    current_store_ebay_evidence = build_current_store_ebay_evidence(
+        repository=repository,
+        company_id=company_id,
+        store_id=store_id,
+    )
+    current_store_oauth = (
+        current_store_ebay_evidence.get("oauth_boundary")
+        if isinstance(current_store_ebay_evidence.get("oauth_boundary"), dict)
+        else {}
+    )
+    current_store_action_evidence = (
+        current_store_ebay_evidence.get("new_account_action_evidence")
+        if isinstance(current_store_ebay_evidence.get("new_account_action_evidence"), dict)
+        else {}
+    )
+    current_store_action_context_ready = bool(
+        current_store_ebay_evidence.get("current_store_selected") is True
+        and current_store_action_evidence.get("company_store_bound") is True
+    )
+    current_store_publish_health_ready = bool(
+        current_store_action_context_ready
+        and current_store_action_evidence.get("publish_health_confirmation_ready") is True
+    )
+    current_store_controlled_publish_ready = bool(
+        current_store_action_context_ready
+        and current_store_action_evidence.get("controlled_real_publish_ready") is True
+    )
+    current_store_cleanup_ready = bool(
+        current_store_action_context_ready
+        and current_store_action_evidence.get("post_publish_cleanup_ready") is True
+    )
     groups = [
         _group(
             "official_ebay_read_loop",
             "Official eBay read-only loop",
-            _official_packet_ready(evidence),
+            current_store_ebay_evidence.get("official_packet_ready") is True,
             "Connect seller account, keep OAuth callback complete, and preserve the six-resource official packet.",
             evidence={
-                "latest_ebay_packet_id": evidence.get("latest_ebay_packet_id"),
-                "present_resource_keys": evidence.get("latest_ebay_packet_present_resource_keys", []),
-                "missing_resource_keys": evidence.get("latest_ebay_packet_missing_resource_keys", []),
-                "optional_missing_resource_keys": _official_packet_optional_missing(evidence),
-                "read_only_authorized_connections": evidence.get("read_only_authorized_connections"),
+                "packet_id_sha256": current_store_ebay_evidence.get("packet_id_sha256") or "",
+                "present_resource_keys": current_store_ebay_evidence.get("present_resource_keys", []),
+                "missing_resource_keys": current_store_ebay_evidence.get("missing_resource_keys", []),
+                "backend_worker_provenance_ready": current_store_ebay_evidence.get("backend_worker_provenance_ready") is True,
+                "same_oauth_connection_ready": current_store_ebay_evidence.get("same_oauth_connection_ready") is True,
             },
         ),
         _group(
@@ -134,37 +170,54 @@ def build_commercial_launch_gate(settings: SaaSSettings, repository: SaaSReposit
         _group(
             "publish_safety_system",
             "Publishing safety report",
-            _publish_safety_ready(evidence, counts),
+            current_store_publish_health_ready,
             "Keep category, item specifics, images, VeRO/IP, prohibited terms, GPSR, location, policy, seller limits, fees and profit in the merchant-visible publish health report.",
             evidence={
-                "confirmation_count": counts.get("confirmations", 0),
-                "execution_result_count": counts.get("execution_results", 0),
+                "confirmation_count": _safe_nonnegative_int(counts.get("confirmations")),
+                "execution_result_count": _safe_nonnegative_int(counts.get("execution_results")),
                 "official_packet_ready": _official_packet_ready(evidence),
                 "red_items_block_publish": True,
                 "real_writes_confirmation_gated": True,
+                "current_store_action_evidence_required": True,
+                "current_store_publish_health_ready": current_store_publish_health_ready,
+            },
+        ),
+        _group(
+            "account_health_incident_mode",
+            "Account health incident mode",
+            current_store_ebay_evidence.get("account_health_ready") is True,
+            "Use the current-store official packet and fail closed on restricted, suspended, payout-hold, quota-limited, or unknown seller health.",
+            evidence={
+                "status": current_store_ebay_evidence.get("account_health_status") or "unknown",
+                "incident_mode": current_store_ebay_evidence.get("incident_mode") is True,
+                "can_execute_real_writes": current_store_ebay_evidence.get("can_execute_real_writes") is True,
+                "same_packet_ready": current_store_ebay_evidence.get("account_health_same_packet_ready") is True,
             },
         ),
         _group(
             "store_sync_visibility",
             "Store sync visibility",
-            _official_packet_ready(evidence),
+            current_store_ebay_evidence.get("official_packet_ready") is True,
             "Show store name, product/offer/order/policy counts, latest sync time and packet id before any IP or publishing claim.",
             evidence={
-                "latest_ebay_packet_id": evidence.get("latest_ebay_packet_id"),
-                "present_resource_keys": evidence.get("latest_ebay_packet_present_resource_keys", []),
-                "store_count": counts.get("stores", 0),
-                "platform_connection_count": counts.get("platform_connections", 0),
+                "packet_id_sha256": current_store_ebay_evidence.get("packet_id_sha256") or "",
+                "present_resource_keys": current_store_ebay_evidence.get("present_resource_keys", []),
+                "store_count": _safe_nonnegative_int(counts.get("stores")),
+                "platform_connection_count": _safe_nonnegative_int(counts.get("platform_connections")),
             },
         ),
         _group(
             "post_publish_cockpit",
             "Post-publish cockpit",
-            int(counts.get("execution_results") or 0) > 0,
+            current_store_controlled_publish_ready and current_store_cleanup_ready,
             "After publish, run 1h, 24h and 7d reviews for exposure, clicks, watchers, sales, fees, profit and support risk; price, inventory, end listing and ads still require confirmation.",
             evidence={
-                "execution_result_count": counts.get("execution_results", 0),
+                "execution_result_count": _safe_nonnegative_int(counts.get("execution_results")),
                 "review_windows": ["1h", "24h", "7d"],
                 "real_changes_confirmation_gated": True,
+                "current_store_action_evidence_required": True,
+                "current_store_controlled_publish_ready": current_store_controlled_publish_ready,
+                "current_store_cleanup_ready": current_store_cleanup_ready,
             },
         ),
         _group(
@@ -180,14 +233,18 @@ def build_commercial_launch_gate(settings: SaaSSettings, repository: SaaSReposit
         _group(
             "ebay_token_refresh_vault_adapter",
             "eBay Vault-backed token refresh",
-            _readiness_status_ready(readiness, "ebay_token_refresh", {"vault_backed_refresh_adapter_ready"}),
+            (
+                _readiness_status_ready(readiness, "ebay_token_refresh", {"vault_backed_refresh_adapter_ready"})
+                and current_store_ebay_evidence.get("refresh_success_ready") is True
+            ),
             "Prove backend-only refresh through the Vault/KMS secret_ref adapter; never expose access or refresh tokens to frontend, Runtime, reports or memory.",
             evidence={
                 "readiness_status": _readiness_item(readiness, "ebay_token_refresh").get("status", ""),
                 "readiness_severity": _readiness_item(readiness, "ebay_token_refresh").get("severity", ""),
                 "secret_refs_present": bool(evidence.get("ebay_secret_refs")),
-                "successful_refresh_probe_count": int(evidence.get("ebay_token_refresh_success_count") or 0),
-                "latest_successful_refresh_probe_at": evidence.get("latest_ebay_token_refresh_success_at") or "",
+                "successful_refresh_probe_count": _safe_nonnegative_int(current_store_ebay_evidence.get("refresh_success_count")),
+                "latest_successful_refresh_probe_at": current_store_ebay_evidence.get("latest_refresh_success_at") or "",
+                "same_oauth_connection_ready": current_store_ebay_evidence.get("refresh_same_connection_ready") is True,
                 "frontend_gets_raw_token": False,
                 "runtime_gets_raw_token": False,
             },
@@ -195,12 +252,23 @@ def build_commercial_launch_gate(settings: SaaSSettings, repository: SaaSReposit
         _group(
             "new_ebay_account_low_risk_smoke",
             "Clean new eBay account smoke",
-            _env_bool("JIEJING_NEW_EBAY_ACCOUNT_LOW_RISK_SMOKE_PASSED"),
+            (
+                current_store_publish_health_ready
+                and current_store_controlled_publish_ready
+                and current_store_cleanup_ready
+            ),
             "After the merchant has a clean new eBay seller account, run the low-risk sequence: new OAuth, official packet, account health, publish health, confirmation center, real publish, cockpit and cleanup.",
             evidence={
                 "old_frozen_account_reuse_allowed": False,
-                "new_account_smoke_passed": _env_bool("JIEJING_NEW_EBAY_ACCOUNT_LOW_RISK_SMOKE_PASSED"),
-                "smoke_evidence_id": os.environ.get("JIEJING_NEW_EBAY_ACCOUNT_LOW_RISK_SMOKE_EVIDENCE_ID", "").strip(),
+                "new_account_smoke_passed": bool(
+                    current_store_publish_health_ready
+                    and current_store_controlled_publish_ready
+                    and current_store_cleanup_ready
+                ),
+                "current_store_action_evidence_required": True,
+                "publish_confirmation_id_sha256": current_store_action_evidence.get("publish_confirmation_id_sha256") or "",
+                "publish_execution_id_sha256": current_store_action_evidence.get("publish_execution_id_sha256") or "",
+                "cleanup_execution_id_sha256": current_store_action_evidence.get("cleanup_execution_id_sha256") or "",
                 "checklist_tool": "tools/jiejing_new_ebay_account_low_risk_check.py",
             },
         ),
@@ -238,6 +306,8 @@ def build_commercial_launch_gate(settings: SaaSSettings, repository: SaaSReposit
         evidence=evidence,
         counts=counts,
         paid_launch_ready=paid_launch_ready,
+        current_store_oauth=current_store_oauth,
+        current_store_ebay_evidence=current_store_ebay_evidence,
     )
     return {
         "contract_version": "2026-05-18-c-class-commercial-launch-gate",
@@ -247,10 +317,12 @@ def build_commercial_launch_gate(settings: SaaSSettings, repository: SaaSReposit
         "readiness": {
             "production_ready": readiness.get("production_ready"),
             "beta_ready": readiness.get("beta_ready"),
-            "blocker_count": readiness.get("blocker_count"),
-            "warning_count": readiness.get("warning_count"),
+            "blocker_count": _safe_nonnegative_int(readiness.get("blocker_count")),
+            "warning_count": _safe_nonnegative_int(readiness.get("warning_count")),
         },
         "groups": groups,
+        "current_store_oauth_boundary": current_store_oauth,
+        "current_store_ebay_evidence": current_store_ebay_evidence,
         "launch_action_plan": action_plan,
         "prelaunch_deferred_strategy": action_plan.get("prelaunch_deferred_strategy", {}),
         "commercial_hardening_drills": action_plan.get("commercial_hardening_drills", []),
@@ -295,6 +367,463 @@ def _group(key: str, label: str, ready: bool, next_action: str, *, evidence: dic
         "evidence": evidence,
         "secret_exposed": False,
     }
+
+
+def build_current_store_ebay_evidence(
+    *,
+    repository: SaaSRepository,
+    company_id: str | None,
+    store_id: str | None,
+) -> dict[str, Any]:
+    oauth_boundary = (
+        repository.current_ebay_read_only_oauth_boundary(company_id=company_id, store_id=store_id)
+        if company_id
+        else {
+            "status": "current_store_unselected",
+            "authorized": False,
+            "current_store_selected": False,
+            "strong_identity_ready": False,
+            "backend_provenance_ready": False,
+            "connection_id_sha256": "",
+            "secret_exposed": False,
+        }
+    )
+    return {
+        **_build_current_store_ebay_evidence(
+            repository=repository,
+            company_id=company_id,
+            store_id=store_id,
+            oauth_boundary=oauth_boundary,
+        ),
+        "oauth_boundary": oauth_boundary,
+        "secret_exposed": False,
+    }
+
+
+def _build_current_store_ebay_evidence(
+    *,
+    repository: SaaSRepository,
+    company_id: str | None,
+    store_id: str | None,
+    oauth_boundary: dict[str, Any],
+) -> dict[str, Any]:
+    base = {
+        "status": "blocked",
+        "current_store_selected": False,
+        "store_id_sha256": "",
+        "connection_id_sha256": str(oauth_boundary.get("connection_id_sha256") or ""),
+        "official_packet_ready": False,
+        "packet_id_sha256": "",
+        "present_resource_keys": [],
+        "missing_resource_keys": [],
+        "backend_worker_provenance_ready": False,
+        "same_oauth_connection_ready": False,
+        "account_health_ready": False,
+        "account_health_status": "unknown",
+        "account_health_same_packet_ready": False,
+        "incident_mode": True,
+        "can_execute_real_writes": False,
+        "refresh_success_ready": False,
+        "refresh_same_connection_ready": False,
+        "refresh_success_count": 0,
+        "latest_refresh_success_at": "",
+        "new_account_action_evidence": {
+            "publish_health_confirmation_ready": False,
+            "controlled_real_publish_ready": False,
+            "post_publish_cleanup_ready": False,
+            "secret_exposed": False,
+        },
+        "blockers": ["current_store_unselected"],
+        "secret_exposed": False,
+    }
+    normalized_company_id = str(company_id or "").strip()
+    selected_store_id = str(store_id or "").strip()
+    if normalized_company_id and not selected_store_id:
+        onboarding = repository.get_merchant_onboarding_state(company_id=normalized_company_id) or {}
+        selected_store_id = str(onboarding.get("store_id") or "").strip()
+    store = (
+        repository.get_store_for_company(company_id=normalized_company_id, store_id=selected_store_id)
+        if normalized_company_id and selected_store_id
+        else None
+    )
+    if not store or str(store.get("platform") or "").strip().lower() != "ebay":
+        return base
+
+    store_hash = hashlib.sha256(selected_store_id.encode("utf-8")).hexdigest()
+    connection_hash = str(oauth_boundary.get("connection_id_sha256") or "")
+    oauth_ready = bool(
+        oauth_boundary.get("authorized") is True
+        and oauth_boundary.get("current_store_selected") is True
+        and oauth_boundary.get("strong_identity_ready") is True
+        and oauth_boundary.get("backend_provenance_ready") is True
+        and str(oauth_boundary.get("store_id_sha256") or "") == store_hash
+        and connection_hash
+    )
+    packets = repository.list_platform_data_packets(
+        company_id=normalized_company_id,
+        store_id=selected_store_id,
+        platform="ebay",
+        limit=1,
+    )
+    latest = packets[0] if packets else {}
+    packet = latest.get("packet") if isinstance(latest.get("packet"), dict) else {}
+    packet_id = str(latest.get("packet_id") or "")
+    present = _safe_string_list(packet.get("present_resource_keys"))
+    missing = _safe_string_list(packet.get("missing_resource_keys"))
+    required = {
+        "store_profile",
+        "account_business_policies",
+        "inventory_and_offers",
+        "orders_and_fulfillment",
+        "finances",
+        "taxonomy_listing_metadata",
+    }
+    packet_time = _launch_timestamp(latest.get("created_at"))
+    inner_packet_time = _launch_timestamp(packet.get("created_at"))
+    freshness = packet.get("freshness") if isinstance(packet.get("freshness"), dict) else {}
+    lineage = packet.get("lineage") if isinstance(packet.get("lineage"), dict) else {}
+    packet_shape_ready = bool(
+        oauth_ready
+        and packet_id
+        and str(latest.get("company_id") or "") == normalized_company_id
+        and str(latest.get("store_id") or "") == selected_store_id
+        and str(latest.get("platform") or "").lower() == "ebay"
+        and str(latest.get("source_mode") or "") == "official_api"
+        and str(packet.get("company_id") or "") == normalized_company_id
+        and str(packet.get("store_id") or "") == selected_store_id
+        and str(packet.get("platform") or "").lower() == "ebay"
+        and str(packet.get("source_mode") or "") == "official_api"
+        and str(packet.get("source_label") or "") == "official_api"
+        and required.issubset(set(present))
+        and _launch_fresh(packet_time)
+        and inner_packet_time is not None
+        and _launch_times_close(packet_time, inner_packet_time)
+        and _strict_positive_int(freshness.get("official_request_count"))
+        and _strict_positive_int(freshness.get("route_success_count"))
+        and _strict_zero_int(freshness.get("route_failure_count"))
+        and lineage.get("probe_live_read_performed") is True
+        and lineage.get("access_token_returned_to_frontend") is False
+        and lineage.get("raw_ebay_response_stored") is False
+        and packet.get("safe_for_real_platform_write") is False
+        and packet.get("secret_exposed") is False
+    )
+
+    worker_ready = False
+    same_connection_ready = False
+    if packet_shape_ready:
+        for job in repository.list_queue_jobs(company_id=normalized_company_id, status="completed", limit=200):
+            job_id = str(job.get("job_id") or "")
+            job_body = job.get("job") if isinstance(job.get("job"), dict) else {}
+            live_plan = job_body.get("live_read_plan") if isinstance(job_body.get("live_read_plan"), dict) else {}
+            token_boundary = live_plan.get("token_boundary") if isinstance(live_plan.get("token_boundary"), dict) else {}
+            bound_connection_id = str(token_boundary.get("connection_id") or "")
+            if not (
+                job_id
+                and str(job.get("company_id") or "") == normalized_company_id
+                and str(job.get("status") or "") == "completed"
+                and str(job_body.get("kind") or "") == "ebay_read_only_live_plan"
+                and str(job_body.get("store_id") or live_plan.get("store_id") or "") == selected_store_id
+                and bound_connection_id
+                and hashlib.sha256(bound_connection_id.encode("utf-8")).hexdigest() == connection_hash
+            ):
+                continue
+            updates = job_body.get("updates") if isinstance(job_body.get("updates"), list) else []
+            matching_update = next(
+                (
+                    update
+                    for update in reversed(updates)
+                    if isinstance(update, dict)
+                    and str(update.get("data_packet_id") or "") == packet_id
+                    and update.get("live_read_performed") is True
+                    and _strict_positive_int(update.get("request_count"))
+                    and _launch_times_close(packet_time, _launch_timestamp(update.get("created_at")))
+                ),
+                {},
+            )
+            audit = repository.find_latest_audit_log_by_target(
+                company_id=normalized_company_id,
+                store_id=selected_store_id,
+                action_type="ebay.read_only.live.completed",
+                target_type="queue_job",
+                target_id=job_id,
+            )
+            audit_details = audit.get("details") if isinstance(audit, dict) and isinstance(audit.get("details"), dict) else {}
+            audit_ready = bool(
+                audit
+                and str(audit.get("company_id") or "") == normalized_company_id
+                and str(audit.get("store_id") or "") == selected_store_id
+                and str(audit.get("actor_type") or "") == "system"
+                and str(audit.get("target_id") or "") == job_id
+                and str(audit_details.get("data_packet_id") or "") == packet_id
+                and _strict_positive_int(audit_details.get("request_count"))
+                and audit_details.get("raw_response_stored") is False
+                and audit_details.get("secret_exposed") is False
+                and _launch_times_close(packet_time, _launch_timestamp(audit.get("created_at")))
+            )
+            same_connection_ready = True
+            worker_ready = bool(matching_update and audit_ready)
+            if worker_ready:
+                break
+
+    account_health = build_account_health_snapshot(
+        repository,
+        company_id=normalized_company_id,
+        store_id=selected_store_id,
+    )
+    health_package = account_health.get("evidence_package") if isinstance(account_health.get("evidence_package"), dict) else {}
+    account_health_same_packet_ready = bool(
+        packet_id
+        and str(account_health.get("company_id") or "") == normalized_company_id
+        and str(account_health.get("store_id") or "") == selected_store_id
+        and str(health_package.get("packet_id") or "") == packet_id
+        and health_package.get("official_packet_present") is True
+    )
+    account_health_ready = bool(
+        packet_shape_ready
+        and worker_ready
+        and account_health_same_packet_ready
+        and str(account_health.get("status") or "") == "normal"
+        and account_health.get("incident_mode") is False
+        and account_health.get("can_execute_real_writes") is True
+    )
+
+    refresh_audit = repository.find_latest_audit_log_by_target(
+        company_id=normalized_company_id,
+        store_id=selected_store_id,
+        action_type="oauth.token_refresh.executed",
+        target_type="store",
+        target_id=selected_store_id,
+    )
+    refresh_details = (
+        refresh_audit.get("details")
+        if isinstance(refresh_audit, dict) and isinstance(refresh_audit.get("details"), dict)
+        else {}
+    )
+    refresh_same_connection_ready = bool(
+        oauth_ready
+        and refresh_audit
+        and str(refresh_audit.get("company_id") or "") == normalized_company_id
+        and str(refresh_audit.get("store_id") or "") == selected_store_id
+        and str(refresh_audit.get("actor_type") or "") == "system"
+        and str(refresh_audit.get("target_id") or "") == selected_store_id
+        and str(refresh_details.get("connection_id_sha256") or "") == connection_hash
+        and str(refresh_details.get("credential_ref_sha256") or "")
+    )
+    refresh_ready = bool(
+        refresh_same_connection_ready
+        and refresh_details.get("ok") is True
+        and str(refresh_details.get("status") or "") == "refreshed"
+        and str(refresh_details.get("source") or "") == "backend_vault_secret_ref_refresh"
+        and refresh_details.get("secret_exposed") is False
+        and _launch_fresh(_launch_timestamp(refresh_audit.get("created_at") if refresh_audit else None))
+    )
+    official_packet_ready = bool(packet_shape_ready and worker_ready and same_connection_ready)
+    new_account_action_evidence = _build_current_store_new_account_action_evidence(
+        repository=repository,
+        company_id=normalized_company_id,
+        store_id=selected_store_id,
+    )
+    blockers = []
+    if not oauth_ready:
+        blockers.append("current_store_strong_oauth_missing")
+    if not packet_shape_ready:
+        blockers.append("current_store_official_packet_missing_or_invalid")
+    elif not worker_ready:
+        blockers.append("current_store_packet_worker_provenance_missing")
+    if not account_health_ready:
+        blockers.append("current_store_account_health_not_safe")
+    if not refresh_ready:
+        blockers.append("current_store_refresh_proof_missing")
+    return {
+        **base,
+        "status": "ready" if official_packet_ready and account_health_ready and refresh_ready else "blocked",
+        "current_store_selected": True,
+        "store_id_sha256": store_hash,
+        "connection_id_sha256": connection_hash,
+        "official_packet_ready": official_packet_ready,
+        "packet_id_sha256": hashlib.sha256(packet_id.encode("utf-8")).hexdigest() if packet_id else "",
+        "present_resource_keys": present,
+        "missing_resource_keys": missing,
+        "backend_worker_provenance_ready": worker_ready,
+        "same_oauth_connection_ready": same_connection_ready,
+        "account_health_ready": account_health_ready,
+        "account_health_status": str(account_health.get("status") or "unknown"),
+        "account_health_same_packet_ready": account_health_same_packet_ready,
+        "incident_mode": account_health.get("incident_mode") is True,
+        "can_execute_real_writes": account_health.get("can_execute_real_writes") is True,
+        "refresh_success_ready": refresh_ready,
+        "refresh_same_connection_ready": refresh_same_connection_ready,
+        "refresh_success_count": 1 if refresh_ready else 0,
+        "latest_refresh_success_at": str(refresh_audit.get("created_at") or "") if refresh_ready and refresh_audit else "",
+        "new_account_action_evidence": new_account_action_evidence,
+        "blockers": blockers,
+        "secret_exposed": False,
+    }
+
+
+def _build_current_store_new_account_action_evidence(
+    *,
+    repository: SaaSRepository,
+    company_id: str,
+    store_id: str,
+) -> dict[str, Any]:
+    contract_version = "2026-06-18-new-ebay-account-low-risk-smoke"
+    confirmations = [
+        item
+        for item in repository.list_confirmations(company_id=company_id, limit=200)
+        if str(item.get("store_id") or "") == store_id
+    ]
+    executions = repository.list_execution_results(company_id=company_id, limit=200)
+    audits = [
+        item
+        for item in repository.list_audit_logs(company_id=company_id, limit=500)
+        if str(item.get("store_id") or "") == store_id
+    ]
+
+    def exact_confirmation(action_type: str, statuses: set[str]) -> dict[str, Any]:
+        return next(
+            (
+                item
+                for item in confirmations
+                if str(item.get("action_type") or "") == action_type
+                and str(item.get("status") or "") in statuses
+                and str(item.get("confirmation_id") or "")
+                and str(item.get("decided_by") or "")
+                and isinstance(item.get("item"), dict)
+                and str(item["item"].get("source") or "") == "new_ebay_account_low_risk_smoke"
+                and str(item["item"].get("runbook_contract_version") or "") == contract_version
+                and str(item["item"].get("store_id") or store_id) == store_id
+            ),
+            {},
+        )
+
+    def exact_execution(
+        confirmation: dict[str, Any],
+        *,
+        allowed_statuses: set[str],
+        real_execution_flag: str,
+    ) -> dict[str, Any]:
+        confirmation_id = str(confirmation.get("confirmation_id") or "")
+        candidate = next(
+            (
+                item
+                for item in executions
+                if confirmation_id
+                and str(item.get("confirmation_id") or "") == confirmation_id
+                and str(item.get("execution_id") or "")
+                and str(item.get("status") or "") in allowed_statuses
+                and isinstance(item.get("result"), dict)
+                and str(item["result"].get("runbook_contract_version") or "") == contract_version
+                and str(item["result"].get("store_id") or "") == store_id
+                and item["result"].get("secret_exposed") is False
+            ),
+            {},
+        )
+        if not candidate:
+            return {}
+        audit = next(
+            (
+                item
+                for item in audits
+                if str(item.get("actor_type") or "") == "system"
+                and str(item.get("action_type") or "") == "execution_service.result"
+                and str(item.get("target_type") or "") == "execution"
+                and str(item.get("target_id") or "") == str(candidate.get("execution_id") or "")
+                and isinstance(item.get("details"), dict)
+                and isinstance(item["details"].get("real_execution"), dict)
+                and item["details"]["real_execution"].get(real_execution_flag) is True
+            ),
+            {},
+        )
+        return candidate if audit else {}
+
+    publish_confirmation = exact_confirmation("publish_listing", {"approved", "executed"})
+    publish_item = publish_confirmation.get("item") if isinstance(publish_confirmation.get("item"), dict) else {}
+    publish_health_ready = bool(publish_confirmation and publish_item.get("publish_health_ready") is True)
+    publish_execution = exact_execution(
+        publish_confirmation,
+        allowed_statuses={"published_to_ebay"},
+        real_execution_flag="published_to_ebay",
+    )
+    publish_result = publish_execution.get("result") if isinstance(publish_execution.get("result"), dict) else {}
+    platform_result = publish_result.get("platform_result") if isinstance(publish_result.get("platform_result"), dict) else {}
+    controlled_publish_ready = bool(
+        publish_execution
+        and str(platform_result.get("listing_id") or platform_result.get("listingId") or "")
+        and str(platform_result.get("offer_id") or platform_result.get("offerId") or "")
+    )
+    cleanup_confirmation = exact_confirmation("cleanup_test_listing", {"executed"})
+    cleanup_execution = exact_execution(
+        cleanup_confirmation,
+        allowed_statuses={"completed", "cleanup_completed", "ended_listing", "deleted_test_listing"},
+        real_execution_flag="cleanup_test_listing",
+    )
+    cleanup_ready = bool(controlled_publish_ready and cleanup_execution)
+    return {
+        "contract_version": contract_version,
+        "company_store_bound": True,
+        "publish_health_confirmation_ready": publish_health_ready,
+        "controlled_real_publish_ready": controlled_publish_ready,
+        "post_publish_cleanup_ready": cleanup_ready,
+        "publish_confirmation_id_sha256": (
+            hashlib.sha256(str(publish_confirmation.get("confirmation_id") or "").encode("utf-8")).hexdigest()
+            if publish_confirmation
+            else ""
+        ),
+        "publish_execution_id_sha256": (
+            hashlib.sha256(str(publish_execution.get("execution_id") or "").encode("utf-8")).hexdigest()
+            if publish_execution
+            else ""
+        ),
+        "cleanup_execution_id_sha256": (
+            hashlib.sha256(str(cleanup_execution.get("execution_id") or "").encode("utf-8")).hexdigest()
+            if cleanup_execution
+            else ""
+        ),
+        "secret_exposed": False,
+    }
+
+
+def _launch_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _launch_fresh(value: datetime | None) -> bool:
+    if value is None:
+        return False
+    age_seconds = (datetime.now(timezone.utc) - value).total_seconds()
+    return -300 <= age_seconds <= 6 * 60 * 60
+
+
+def _launch_times_close(left: datetime | None, right: datetime | None) -> bool:
+    return bool(left and right and abs((left - right).total_seconds()) <= 10 * 60)
+
+
+def _strict_positive_int(value: Any) -> bool:
+    return type(value) is int and value > 0
+
+
+def _strict_zero_int(value: Any) -> bool:
+    return type(value) is int and value == 0
+
+
+def _safe_nonnegative_int(value: Any) -> int:
+    return value if type(value) is int and value >= 0 else 0
+
+
+def _safe_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if isinstance(item, str) and item.strip()][:30]
 
 
 def _official_packet_ready(evidence: dict[str, Any]) -> bool:
@@ -402,7 +931,7 @@ def _seed_beta_ready(groups: list[dict[str, Any]]) -> bool:
 def _publish_safety_ready(evidence: dict[str, Any], counts: dict[str, Any]) -> bool:
     return (
         _official_packet_ready(evidence)
-        and int(counts.get("confirmations") or 0) > 0
+        and _strict_positive_int(counts.get("confirmations"))
         and evidence.get("latest_ebay_packet_source_mode") == "official_api"
     )
 
@@ -439,6 +968,8 @@ def _build_launch_action_plan(
     evidence: dict[str, Any],
     counts: dict[str, Any],
     paid_launch_ready: bool,
+    current_store_oauth: dict[str, Any],
+    current_store_ebay_evidence: dict[str, Any],
 ) -> dict[str, Any]:
     by_key = {item["key"]: item for item in groups}
     ordered_keys = [
@@ -474,12 +1005,15 @@ def _build_launch_action_plan(
         domain=domain,
         evidence=evidence,
         counts=counts,
+        current_store_ebay_evidence=current_store_ebay_evidence,
     )
     new_account_smoke_runbook = _build_new_ebay_account_smoke_runbook(
         action_items=action_items,
         readiness=readiness,
         evidence=evidence,
         counts=counts,
+        current_store_oauth=current_store_oauth,
+        current_store_ebay_evidence=current_store_ebay_evidence,
     )
     cutover_checklist = _build_paid_launch_cutover_checklist(
         groups_by_key=by_key,
@@ -487,6 +1021,7 @@ def _build_launch_action_plan(
         billing=billing,
         domain=domain,
         evidence=evidence,
+        current_store_ebay_evidence=current_store_ebay_evidence,
     )
     cutover_decision = _build_paid_launch_cutover_decision(
         cutover_checklist=cutover_checklist,
@@ -616,7 +1151,9 @@ def _build_prelaunch_deferred_strategy(
     no_charge_ready = bool(billing_test.get("ready")) or bool(quota_shutdown.get("ready_for_no_charge_rehearsal"))
     readiness_snapshot_ready = (
         readiness.get("beta_ready") is True
-        and int(readiness.get("blocker_count") or 0) == 0
+        and _strict_zero_int(readiness.get("blocker_count"))
+        and type(readiness.get("warning_count")) is int
+        and readiness.get("warning_count") >= 0
         and _readiness_item(readiness, "database_live_probe").get("status") == "ready"
         and _readiness_item(readiness, "queue_runtime_health").get("status") == "ready"
         and _readiness_item(readiness, "worker_runtime_health").get("status") == "ready"
@@ -644,7 +1181,7 @@ def _build_prelaunch_deferred_strategy(
             next_action="Do not repeat OAuth or run any real eBay write until a clean new seller account and fresh real test product assets are ready.",
             evidence_summary=_compact_drill_evidence(
                 old_frozen_account_reuse_allowed=False,
-                refresh_probe_success=int(evidence.get("ebay_token_refresh_success_count") or 0),
+                refresh_probe_success=_safe_nonnegative_int(evidence.get("ebay_token_refresh_success_count")),
                 low_risk_smoke_status=(drills.get("new_ebay_account_low_risk_smoke") or {}).get("status") or "blocked",
                 real_publish_requires_confirmation_center=True,
             ),
@@ -730,9 +1267,9 @@ def _build_prelaunch_deferred_strategy(
             category="data_governance",
             next_action="Review smoke/demo markers and keep deletion disabled by default; real cleanup remains confirmation-gated and data-safe.",
             evidence_summary=_compact_drill_evidence(
-                users=int(counts.get("users") or 0),
-                stores=int(counts.get("stores") or 0),
-                tasks=int(counts.get("tasks") or 0),
+                users=_safe_nonnegative_int(counts.get("users")),
+                stores=_safe_nonnegative_int(counts.get("stores")),
+                tasks=_safe_nonnegative_int(counts.get("tasks")),
                 reviewed=_env_bool("JIEJING_TEST_DATA_GOVERNANCE_REVIEWED"),
             ),
             verification=["/owner/launch-control", "repository smoke data governance report"],
@@ -741,12 +1278,12 @@ def _build_prelaunch_deferred_strategy(
         _prelaunch_internal_work_item(
             "confirmation_center_copy_and_rollback",
             "Confirmation center, rollback, and audit packet",
-            int(counts.get("confirmations") or 0) > 0 and bool((cutover_decision.get("rollback_plan") or [])),
+            _strict_positive_int(counts.get("confirmations")) and bool((cutover_decision.get("rollback_plan") or [])),
             owner="release_manager",
             category="release",
             next_action="Keep every real publish, cleanup, refund, pricing, inventory, ad, policy or sensitive customer promise behind confirmation and rollback evidence.",
             evidence_summary=_compact_drill_evidence(
-                confirmations=int(counts.get("confirmations") or 0),
+                confirmations=_safe_nonnegative_int(counts.get("confirmations")),
                 rollback_steps=len(cutover_decision.get("rollback_plan") or []),
                 publish_safety=(action_items.get("publish_safety_system") or {}).get("status") or "blocked",
             ),
@@ -762,7 +1299,7 @@ def _build_prelaunch_deferred_strategy(
             next_action="After each important deploy, record /health, /health/deep, readiness, secret scan and browser smoke evidence on app.jiejing.shop.",
             evidence_summary=_compact_drill_evidence(
                 beta_ready=bool(readiness.get("beta_ready")),
-                blocker_count=int(readiness.get("blocker_count") or 0),
+                blocker_count=_safe_nonnegative_int(readiness.get("blocker_count")),
                 browser_smoke=_env_bool("JIEJING_BROWSER_SMOKE_PASSED"),
             ),
             verification=["/health", "/health/deep", "/readiness/product-saas", "browser smoke output"],
@@ -889,6 +1426,7 @@ def _build_commercial_hardening_drills(
     domain: dict[str, Any],
     evidence: dict[str, Any],
     counts: dict[str, Any],
+    current_store_ebay_evidence: dict[str, Any],
 ) -> list[dict[str, Any]]:
     _ = groups_by_key
     provider = billing.get("provider") if isinstance(billing.get("provider"), dict) else {}
@@ -968,13 +1506,14 @@ def _build_commercial_hardening_drills(
             evidence_summary=_compact_drill_evidence(
                 readiness=(_readiness_item(readiness, "ebay_token_refresh") or {}).get("status") or "missing",
                 secret_refs=bool(evidence.get("ebay_secret_refs")),
-                refresh_success=int(evidence.get("ebay_token_refresh_success_count") or 0),
+                refresh_success=_safe_nonnegative_int(current_store_ebay_evidence.get("refresh_success_count")),
             ),
             evidence={
                 "readiness_status": (_readiness_item(readiness, "ebay_token_refresh") or {}).get("status") or "",
                 "secret_refs_present": bool(evidence.get("ebay_secret_refs")),
-                "successful_refresh_probe_count": int(evidence.get("ebay_token_refresh_success_count") or 0),
-                "latest_successful_refresh_probe_at": evidence.get("latest_ebay_token_refresh_success_at") or "",
+                "successful_refresh_probe_count": _safe_nonnegative_int(current_store_ebay_evidence.get("refresh_success_count")),
+                "latest_successful_refresh_probe_at": current_store_ebay_evidence.get("latest_refresh_success_at") or "",
+                "same_oauth_connection_ready": current_store_ebay_evidence.get("refresh_same_connection_ready") is True,
                 "repeat_oauth_allowed": False,
                 "frontend_gets_raw_token": False,
                 "runtime_gets_raw_token": False,
@@ -990,7 +1529,8 @@ def _build_commercial_hardening_drills(
             evidence_summary=(action_items.get("account_health_incident_mode") or {}).get("evidence_summary") or "account_health_snapshot_missing",
             evidence={
                 "readiness_status": (_readiness_item(readiness, "account_health_incident_mode") or {}).get("status") or "",
-                "latest_packet_id": evidence.get("latest_ebay_packet_id") or "",
+                "packet_id_sha256": current_store_ebay_evidence.get("packet_id_sha256") or "",
+                "same_oauth_connection_ready": current_store_ebay_evidence.get("same_oauth_connection_ready") is True,
                 "incident_mode_blocks_real_writes": True,
                 "confirmation_center_still_required_when_clear": True,
                 "blocked_real_actions": [
@@ -1031,8 +1571,8 @@ def _build_commercial_hardening_drills(
             next_action=(action_items.get("publish_safety_system") or {}).get("next_action") or "Keep category, item specifics, images, policy, seller limits, fees, profit, and account health in the red/yellow/green report.",
             evidence_summary=(action_items.get("publish_safety_system") or {}).get("evidence_summary") or "waiting_for_publish_health_evidence",
             evidence={
-                "confirmation_count": int(counts.get("confirmations") or 0),
-                "execution_result_count": int(counts.get("execution_results") or 0),
+                "confirmation_count": _safe_nonnegative_int(counts.get("confirmations")),
+                "execution_result_count": _safe_nonnegative_int(counts.get("execution_results")),
                 "official_packet_ready": _official_packet_ready(evidence),
                 "red_items_block_publish": True,
                 "real_writes_confirmation_gated": True,
@@ -1062,14 +1602,22 @@ def _build_new_ebay_account_smoke_runbook(
     readiness: dict[str, Any],
     evidence: dict[str, Any],
     counts: dict[str, Any],
+    current_store_oauth: dict[str, Any],
+    current_store_ebay_evidence: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    account_health_ready = (action_items.get("account_health_incident_mode") or {}).get("status") == "ready"
-    publish_safety_ready = (action_items.get("publish_safety_system") or {}).get("status") == "ready"
-    post_publish_ready = (action_items.get("post_publish_cockpit") or {}).get("status") == "ready"
-    official_packet_ready = _official_packet_ready(evidence)
+    account_health_ready = current_store_ebay_evidence.get("account_health_ready") is True
+    official_packet_ready = current_store_ebay_evidence.get("official_packet_ready") is True
+    action_evidence = current_store_ebay_evidence.get("new_account_action_evidence")
+    if not isinstance(action_evidence, dict):
+        action_evidence = {}
+    publish_health_confirmation_ready = action_evidence.get("publish_health_confirmation_ready") is True
+    controlled_real_publish_ready = action_evidence.get("controlled_real_publish_ready") is True
+    post_publish_cleanup_ready = action_evidence.get("post_publish_cleanup_ready") is True
     health_public_ready = (
         readiness.get("beta_ready") is True
-        and int(readiness.get("blocker_count") or 0) == 0
+        and _strict_zero_int(readiness.get("blocker_count"))
+        and type(readiness.get("warning_count")) is int
+        and readiness.get("warning_count") >= 0
         and _readiness_item(readiness, "database_live_probe").get("status") == "ready"
         and _readiness_item(readiness, "queue_runtime_health").get("status") == "ready"
         and _readiness_item(readiness, "worker_runtime_health").get("status") == "ready"
@@ -1084,8 +1632,8 @@ def _build_new_ebay_account_smoke_runbook(
             next_action="Verify /health, /health/deep and /readiness/product-saas immediately before starting any clean-account test.",
             evidence_summary=_compact_drill_evidence(
                 beta_ready=bool(readiness.get("beta_ready")),
-                blocker_count=int(readiness.get("blocker_count") or 0),
-                warning_count=int(readiness.get("warning_count") or 0),
+                blocker_count=_safe_nonnegative_int(readiness.get("blocker_count")),
+                warning_count=_safe_nonnegative_int(readiness.get("warning_count")),
             ),
             verification=["/health", "/health/deep", "/readiness/product-saas", "tools/jiejing_new_ebay_account_low_risk_check.py"],
         ),
@@ -1107,17 +1655,30 @@ def _build_new_ebay_account_smoke_runbook(
         _new_account_smoke_step(
             "new_account_oauth_authorization_gate",
             "New-account OAuth authorization gate",
-            _env_all(NEW_EBAY_OAUTH_BOUNDARY_FLAGS),
+            (
+                current_store_oauth.get("authorized") is True
+                and current_store_oauth.get("current_store_selected") is True
+                and current_store_oauth.get("strong_identity_ready") is True
+                and current_store_oauth.get("backend_provenance_ready") is True
+            ),
             owner="backend_secret_boundary",
             category="oauth",
-            next_action="Only after the owner explicitly starts the clean-account test, run OAuth through the SaaS backend and store refresh capability behind Vault/KMS secret_ref.",
+            next_action="First verify the authenticated current-store connection. If it is already authorized, do not create another plan or repeat OAuth. Only when evidence is missing and the owner approves this exact external step may the backend create a read-only plan.",
             evidence_summary=_compact_drill_evidence(
-                oauth_operator_approved=_env_bool("JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED"),
-                oauth_completed=_env_bool("JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED"),
+                backend_status=current_store_oauth.get("status") or "missing",
+                current_store_selected=current_store_oauth.get("current_store_selected") is True,
+                strong_identity_ready=current_store_oauth.get("strong_identity_ready") is True,
+                backend_provenance_ready=current_store_oauth.get("backend_provenance_ready") is True,
                 repeat_oauth_allowed=False,
                 raw_token_visible=False,
             ),
-            verification=["/stores/{store_id}/ebay-oauth/start", "audit log", "Vault/KMS secret_ref metadata", *NEW_EBAY_OAUTH_BOUNDARY_FLAGS],
+            verification=[
+                "/connections?store_id={store_id}",
+                "/stores/{store_id}/ebay-oauth/read-only-status",
+                "/stores/{store_id}/ebay-oauth/read-only-plan",
+                "audit log",
+                "Vault/KMS secret_ref metadata",
+            ],
             triggers_ebay_oauth=False,
             repeat_oauth_allowed=False,
         ),
@@ -1127,13 +1688,22 @@ def _build_new_ebay_account_smoke_runbook(
             official_packet_ready and account_health_ready,
             owner="publishing_safety",
             category="account_health",
-            next_action="Run official read-only sync, then show store, policy, inventory/offer/order, finance, taxonomy and account-health evidence before any publish attempt.",
+            next_action="Verify the existing current-store packet, account health, OAuth identity, completed backend worker job and system audit. Run an official read-only sync only when that evidence is missing and this exact external step is approved.",
             evidence_summary=_compact_drill_evidence(
-                packet=evidence.get("latest_ebay_packet_id") or "missing",
+                packet_sha256=current_store_ebay_evidence.get("packet_id_sha256") or "missing",
                 official_packet_ready=official_packet_ready,
                 account_health_ready=account_health_ready,
+                same_oauth_connection_ready=current_store_ebay_evidence.get("same_oauth_connection_ready") is True,
             ),
-            verification=["/readiness/product-saas", "/stores/{store_id}/account-health"],
+            verification=[
+                "/readiness/product-saas",
+                "/stores/{store_id}/account-health",
+                "/connections?store_id={store_id}",
+                "/stores/{store_id}/ebay-oauth/read-only-status",
+                "/data-packets?store_id={store_id}&platform=ebay&limit=1",
+                "/queue-jobs?status=completed&limit=200",
+                "/audit-logs?limit=200",
+            ],
         ),
         _new_account_smoke_step(
             "new_product_duplicate_guard",
@@ -1156,50 +1726,46 @@ def _build_new_ebay_account_smoke_runbook(
         _new_account_smoke_step(
             "publish_health_confirmation_gate",
             "Publish health report and confirmation gate",
-            publish_safety_ready and _env_all(NEW_EBAY_PUBLISH_CONFIRMATION_FLAGS),
+            official_packet_ready and account_health_ready and publish_health_confirmation_ready,
             owner="publishing_safety",
             category="publish_health",
             next_action="Generate the red/yellow/green publish report; red blocks publish, yellow requires review, and real publish must enter confirmation center.",
             evidence_summary=_compact_drill_evidence(
-                publish_safety_ready=publish_safety_ready,
-                publish_health_confirmation_ready=_env_bool("JIEJING_NEW_EBAY_PUBLISH_HEALTH_CONFIRMATION_READY"),
-                publish_confirmation_approved=_env_bool("JIEJING_NEW_EBAY_PUBLISH_CONFIRMATION_APPROVED"),
-                confirmation_count=int(counts.get("confirmations") or 0),
+                publish_health_confirmation_ready=publish_health_confirmation_ready,
+                publish_confirmation_id_sha256=action_evidence.get("publish_confirmation_id_sha256") or "missing",
                 red_items_block_publish=True,
             ),
-            verification=["/stores/{store_id}/publish-confirmation", "/confirmations", "/confirmations/{id}/preflight", *NEW_EBAY_PUBLISH_CONFIRMATION_FLAGS],
+            verification=["/stores/{store_id}/publish-confirmation", "/confirmations", "/confirmations/{id}/preflight", "/audit-logs?limit=200"],
             confirmation_center_required=True,
         ),
         _new_account_smoke_step(
             "controlled_real_publish_probe",
             "Controlled real publish probe",
-            _env_all(NEW_EBAY_REAL_PUBLISH_FLAGS),
+            controlled_real_publish_ready,
             owner="founder_operator",
             category="real_publish",
             next_action="After confirmation approval, execute one low-risk real publish, then record listing ID, offer ID, SKU, platform result and audit evidence.",
             evidence_summary=_compact_drill_evidence(
-                publish_confirmation_approved=_env_bool("JIEJING_NEW_EBAY_PUBLISH_CONFIRMATION_APPROVED"),
-                real_publish_passed=_env_bool("JIEJING_NEW_EBAY_ACCOUNT_REAL_PUBLISH_PASSED"),
+                controlled_real_publish_ready=controlled_real_publish_ready,
+                publish_execution_id_sha256=action_evidence.get("publish_execution_id_sha256") or "missing",
                 platform_write_confirmation_gated=True,
             ),
-            verification=["/confirmations/{id}/decision", "/confirmations/{id}/execute", "/execution-results", *NEW_EBAY_REAL_PUBLISH_FLAGS],
+            verification=["/confirmations/{id}/decision", "/confirmations/{id}/execute", "/execution-results", "/audit-logs?limit=200"],
             confirmation_center_required=True,
             real_platform_write_step=True,
         ),
         _new_account_smoke_step(
             "post_publish_cockpit_cleanup_gate",
             "Post-publish cockpit and test cleanup gate",
-            post_publish_ready and _env_all(NEW_EBAY_CLEANUP_FLAGS),
+            post_publish_cleanup_ready,
             owner="release_manager",
             category="post_publish",
             next_action="Run 1h/24h/7d cockpit checks and create a confirmation-gated cleanup plan for any live test listing; do not silently end or delete live eBay state.",
             evidence_summary=_compact_drill_evidence(
-                post_publish_ready=post_publish_ready,
-                cleanup_confirmation_approved=_env_bool("JIEJING_NEW_EBAY_CLEANUP_CONFIRMATION_APPROVED"),
-                cleanup_confirmed=_env_bool("JIEJING_NEW_EBAY_TEST_CLEANUP_CONFIRMED"),
-                execution_results=int(counts.get("execution_results") or 0),
+                post_publish_cleanup_ready=post_publish_cleanup_ready,
+                cleanup_execution_id_sha256=action_evidence.get("cleanup_execution_id_sha256") or "missing",
             ),
-            verification=["post-publish cockpit", "/confirmations/{id}/publish-cleanup-plan", "/execution-results", *NEW_EBAY_CLEANUP_FLAGS],
+            verification=["post-publish cockpit", "/confirmations/{id}/publish-cleanup-plan", "/execution-results", "/audit-logs?limit=200"],
             confirmation_center_required=True,
             real_platform_write_step=True,
         ),
@@ -1213,6 +1779,7 @@ def _build_paid_launch_cutover_checklist(
     billing: dict[str, Any],
     domain: dict[str, Any],
     evidence: dict[str, Any],
+    current_store_ebay_evidence: dict[str, Any],
 ) -> list[dict[str, Any]]:
     provider = billing.get("provider") if isinstance(billing.get("provider"), dict) else {}
     checkout_contract = provider.get("checkout_portal_contract") if isinstance(provider.get("checkout_portal_contract"), dict) else {}
@@ -1349,12 +1916,18 @@ def _build_paid_launch_cutover_checklist(
         _cutover_item(
             "ebay_refresh_probe_after_new_account",
             "eBay refresh proof after clean new account",
-            token_drill.get("status") == "ready" and int((token_drill.get("evidence") or {}).get("successful_refresh_probe_count") or 0) > 0,
+            token_drill.get("status") == "ready"
+            and _strict_positive_int(
+                token_drill.get("evidence", {}).get("successful_refresh_probe_count")
+                if isinstance(token_drill.get("evidence"), dict)
+                else None
+            ),
             owner="backend_secret_boundary",
             category="ebay",
             next_action="After a clean new eBay seller account is connected, run one backend-only refresh probe through Vault/KMS secret_ref and record audit evidence.",
             evidence_summary=_compact_drill_evidence(
-                refresh_success=int(evidence.get("ebay_token_refresh_success_count") or 0),
+                refresh_success=_safe_nonnegative_int(current_store_ebay_evidence.get("refresh_success_count")),
+                same_oauth_connection_ready=current_store_ebay_evidence.get("refresh_same_connection_ready") is True,
                 repeat_oauth_allowed=False,
             ),
             environment_keys=[
@@ -1614,7 +2187,9 @@ def _build_paid_launch_cutover_decision(
         "contract_version": "2026-06-18-paid-launch-cutover-decision",
         "source": "paid_launch_cutover_checklist",
         "status": "ready_for_owner_approval" if ready_for_owner_approval else "blocked",
-        "public_paid_launch_allowed": ready_for_owner_approval,
+        "public_paid_launch_allowed": False,
+        "final_owner_approval_recorded": False,
+        "public_charging_gate_open": False,
         "charge_now_allowed": False,
         "platform_write_now_allowed": False,
         "repeat_ebay_oauth_allowed": False,
@@ -1937,18 +2512,18 @@ def _action_evidence_summary(
         return (
             f"readiness={readiness_item.get('status') or 'missing'}; "
             f"secret_refs_present={bool(evidence.get('ebay_secret_refs'))}; "
-            f"refresh_probe_success={int(evidence.get('ebay_token_refresh_success_count') or 0)}"
+            f"refresh_probe_success={_safe_nonnegative_int(evidence.get('ebay_token_refresh_success_count'))}"
         )
     if key == "account_health_incident_mode":
         return f"readiness={readiness_item.get('status') or 'missing'}; packet={evidence.get('latest_ebay_packet_id') or 'missing'}"
     if key == "new_ebay_account_low_risk_smoke":
         return "old_frozen_account_reuse_allowed=false"
     if key == "publish_safety_system":
-        return f"confirmations={int(counts.get('confirmations') or 0)}; official_packet={_official_packet_ready(evidence)}"
+        return f"confirmations={_safe_nonnegative_int(counts.get('confirmations'))}; official_packet={_official_packet_ready(evidence)}"
     if key == "store_sync_visibility":
-        return f"packet={evidence.get('latest_ebay_packet_id') or 'missing'}; stores={int(counts.get('stores') or 0)}"
+        return f"packet={evidence.get('latest_ebay_packet_id') or 'missing'}; stores={_safe_nonnegative_int(counts.get('stores'))}"
     if key == "post_publish_cockpit":
-        return f"execution_results={int(counts.get('execution_results') or 0)}"
+        return f"execution_results={_safe_nonnegative_int(counts.get('execution_results'))}"
     if key == "legal_risk_boundary":
         return "privacy/terms/risk/confirmation flags required"
     if key == "final_commercial_smoke":

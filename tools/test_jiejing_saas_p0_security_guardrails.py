@@ -276,8 +276,16 @@ def _check_oauth_callback_html_surface() -> str:
         return "API clients should keep the JSON OAuth callback response"
     result = {
         "status": "callback_exchange_completed",
-        "summary": "OAuth callback completed.",
-        "store_id": "store_html_surface",
+        "summary": "SUMMARY-INTERNAL-MUST-NOT-LEAK",
+        "company_id": "COMPANY-ID-MUST-NOT-LEAK",
+        "store_id": "STORE-ID-MUST-NOT-LEAK",
+        "oauth_request_id": "OAUTH-REQUEST-ID-MUST-NOT-LEAK",
+        "connection_id": "CONNECTION-ID-MUST-NOT-LEAK",
+        "secret_ref": {"secret_ref": "SECRET-REF-MUST-NOT-LEAK"},
+        "backend_connection_binding": {
+            "connection_id": "BINDING-CONNECTION-ID-MUST-NOT-LEAK",
+            "connection_id_sha256": "BINDING-HASH-MUST-NOT-LEAK",
+        },
         "token_exchange_performed": True,
         "vault_write_performed": True,
         "real_platform_writes_enabled": False,
@@ -294,6 +302,14 @@ def _check_oauth_callback_html_surface() -> str:
         "ACCESS-TOKEN-MUST-NOT-LEAK",
         "REFRESH-TOKEN-MUST-NOT-LEAK",
         "CLIENT-SECRET-MUST-NOT-LEAK",
+        "SUMMARY-INTERNAL-MUST-NOT-LEAK",
+        "COMPANY-ID-MUST-NOT-LEAK",
+        "STORE-ID-MUST-NOT-LEAK",
+        "OAUTH-REQUEST-ID-MUST-NOT-LEAK",
+        "CONNECTION-ID-MUST-NOT-LEAK",
+        "SECRET-REF-MUST-NOT-LEAK",
+        "BINDING-CONNECTION-ID-MUST-NOT-LEAK",
+        "BINDING-HASH-MUST-NOT-LEAK",
     ):
         if forbidden in html:
             return f"OAuth callback HTML leaked sensitive value: {forbidden}"
@@ -301,6 +317,34 @@ def _check_oauth_callback_html_surface() -> str:
         return "OAuth callback HTML should be a merchant-facing completion page"
     if "access token、refresh token、授权码或 state" not in html:
         return "OAuth callback HTML should explain the no-token browser boundary"
+    public_result_builder = getattr(SaaSBackendHandler, "_oauth_callback_public_result", None)
+    if not callable(public_result_builder):
+        return "OAuth callback JSON must pass through a fixed public allowlist"
+    public_result = public_result_builder(fake, result)
+    public_json = json.dumps(public_result, ensure_ascii=False)
+    for forbidden in (
+        "SUMMARY-INTERNAL-MUST-NOT-LEAK",
+        "COMPANY-ID-MUST-NOT-LEAK",
+        "STORE-ID-MUST-NOT-LEAK",
+        "OAUTH-REQUEST-ID-MUST-NOT-LEAK",
+        "CONNECTION-ID-MUST-NOT-LEAK",
+        "SECRET-REF-MUST-NOT-LEAK",
+        "BINDING-CONNECTION-ID-MUST-NOT-LEAK",
+        "BINDING-HASH-MUST-NOT-LEAK",
+    ):
+        if forbidden in public_json:
+            return f"OAuth callback JSON leaked internal identifier: {forbidden}"
+    if set(public_result) - {
+        "status",
+        "authorization_kind",
+        "completed",
+        "token_exchange_performed",
+        "vault_write_performed",
+        "real_platform_writes_enabled",
+        "next_step",
+        "secret_exposed",
+    }:
+        return "OAuth callback JSON must expose only the fixed public allowlist"
     return "ok"
 
 

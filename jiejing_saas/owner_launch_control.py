@@ -51,7 +51,16 @@ def build_owner_launch_control(
         lambda: build_operational_health(settings, repository, company_id=company_id),
         {},
     )
-    launch_gate = _safe_call("commercial_launch_gate", lambda: build_commercial_launch_gate(settings, repository), {})
+    launch_gate = _safe_call(
+        "commercial_launch_gate",
+        lambda: build_commercial_launch_gate(
+            settings,
+            repository,
+            company_id=company_id,
+            store_id=store_id,
+        ),
+        {},
+    )
     billing = _safe_call("billing_plan", lambda: build_billing_plan(settings, repository), {})
     billing_usage = _safe_call("billing_usage", lambda: build_billing_usage(settings, repository, company_id=company_id), {})
     backup = _safe_call("backup_plan", lambda: build_backup_plan(settings, repository), {})
@@ -62,7 +71,16 @@ def build_owner_launch_control(
         {},
     )
     edge = _safe_call("edge_cutover_preflight", lambda: build_edge_cutover_preflight(settings), {})
-    paid_packet = _safe_call("paid_launch_approval_packet", lambda: build_paid_launch_approval_packet(settings, repository), {})
+    paid_packet = _safe_call(
+        "paid_launch_approval_packet",
+        lambda: build_paid_launch_approval_packet(
+            settings,
+            repository,
+            company_id=company_id,
+            store_id=store_id,
+        ),
+        {},
+    )
     edge = _owner_mainland_edge_view(edge=edge, paid_packet=paid_packet)
     billing = _owner_mainland_billing_view(billing=billing, paid_packet=paid_packet)
     billing_cutover = _owner_mainland_cutover_view(

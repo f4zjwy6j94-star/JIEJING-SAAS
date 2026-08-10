@@ -942,6 +942,132 @@ class EbayWriteHttpAdapter:
             "secret_exposed": False,
         }
 
+    def execute_cleanup_plan(
+        self,
+        *,
+        request: Any,
+        preflight: dict[str, Any],
+        connections: list[dict[str, Any]],
+        secret_refs: list[dict[str, Any]],
+        marketplace_id: str,
+    ) -> dict[str, Any]:
+        """Execute only an explicitly confirmed, fixed-shape publish cleanup plan."""
+
+        if not self.settings.effective_real_platform_writes_enabled:
+            return _cleanup_blocked("real_platform_writes_disabled", ["real_platform_writes_not_enabled"], preflight=preflight)
+        if str(getattr(request, "action_type", "") or "") != "cleanup_test_listing":
+            return _cleanup_blocked("unsupported_write_action", ["only_cleanup_test_listing_supported"], preflight=preflight)
+        if preflight.get("status") != "ready_for_platform_adapter":
+            return _cleanup_blocked(
+                "preflight_not_ready",
+                preflight.get("missing_fields") or ["execution_preflight_not_ready"],
+                preflight=preflight,
+            )
+        payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
+        plan = payload.get("cleanup_plan") if isinstance(payload.get("cleanup_plan"), dict) else {}
+        operations = plan.get("operations") if isinstance(plan.get("operations"), list) else []
+        if plan.get("confirmation_required") is not True or not operations:
+            return _cleanup_blocked("cleanup_plan_invalid", ["exact_confirmed_cleanup_plan_required"], preflight=preflight)
+        normalized = [item for item in operations if isinstance(item, dict)]
+        if len(normalized) != len(operations) or any(
+            str(item.get("operation") or "") not in {"end_listing", "withdraw_offer", "delete_offer", "delete_inventory_item"}
+            for item in normalized
+        ):
+            return _cleanup_blocked("cleanup_plan_invalid", ["unsupported_cleanup_operation"], preflight=preflight)
+
+        connection = _find_publish_connection(connections)
+        if not connection:
+            return _cleanup_blocked("ebay_publish_scope_missing", ["seller_must_authorize_sell.inventory_scope"], preflight=preflight)
+        secret_ref_id = str(connection.get("secret_ref") or _first_secret_ref(secret_refs) or "")
+        token = self._resolve_access_token(
+            secret_ref_id=secret_ref_id,
+            company_id=str(getattr(request, "company_id", "") or ""),
+            store_id=str(getattr(request, "store_id", "") or ""),
+        )
+        if not token.get("ok"):
+            return _cleanup_blocked("token_resolution_failed", token.get("blocked_by") or ["access_token_unavailable"], preflight=preflight)
+
+        offer_id = next((str(item.get("offer_id") or "").strip() for item in normalized if str(item.get("offer_id") or "").strip()), "")
+        access_token = str(token["access_token"])
+        base_url = _base_url(self.settings)
+        steps: list[dict[str, Any]] = []
+        for item in normalized:
+            operation = str(item.get("operation") or "")
+            if operation in {"end_listing", "withdraw_offer"}:
+                target = str(item.get("offer_id") or offer_id).strip()
+                if not target:
+                    return _cleanup_blocked("cleanup_plan_invalid", ["withdraw_offer_id_missing"], preflight=preflight)
+                path = f"/sell/inventory/v1/offer/{urllib.parse.quote(target, safe='')}/withdraw"
+                result = self._send_json(
+                    method="POST",
+                    url=f"{base_url}{path}",
+                    access_token=access_token,
+                    marketplace_id=marketplace_id,
+                    body={},
+                )
+            elif operation == "delete_offer":
+                target = str(item.get("offer_id") or "").strip()
+                if not target:
+                    return _cleanup_blocked("cleanup_plan_invalid", ["delete_offer_id_missing"], preflight=preflight)
+                path = f"/sell/inventory/v1/offer/{urllib.parse.quote(target, safe='')}"
+                result = self._send_json(
+                    method="DELETE",
+                    url=f"{base_url}{path}",
+                    access_token=access_token,
+                    marketplace_id=marketplace_id,
+                    body={},
+                )
+            else:
+                target = str(item.get("sku") or "").strip()
+                if not target:
+                    return _cleanup_blocked("cleanup_plan_invalid", ["delete_inventory_sku_missing"], preflight=preflight)
+                path = f"/sell/inventory/v1/inventory_item/{urllib.parse.quote(target, safe='')}"
+                result = self._send_json(
+                    method="DELETE",
+                    url=f"{base_url}{path}",
+                    access_token=access_token,
+                    marketplace_id=marketplace_id,
+                    body={},
+                )
+            steps.append(_step_summary(operation, path, result))
+            if result.get("status") != "ok":
+                return _cleanup_write_result(
+                    "blocked_platform_error",
+                    "eBay test listing cleanup stopped after a platform error.",
+                    steps,
+                    preflight=preflight,
+                )
+
+        audit = _audit(
+            request=request,
+            preflight=preflight,
+            real_execution={
+                "cleanup_test_listing": True,
+                "published_to_ebay": False,
+                "procurement_paid": False,
+                "refund_executed": False,
+                "ad_budget_changed": False,
+                "store_policy_changed": False,
+            },
+            platform_result={
+                "operation_count": len(steps),
+                "token_source": token.get("source"),
+                "access_token_returned_to_frontend": False,
+                "access_token_returned_to_runtime": False,
+                "raw_response_stored": False,
+            },
+        )
+        return {
+            "status": "cleanup_completed",
+            "action_type": "cleanup_test_listing",
+            "task_id": getattr(request, "task_id", ""),
+            "message": "Confirmed eBay test listing cleanup completed through the backend write adapter.",
+            "steps": steps,
+            "platform_result": audit["platform_result"],
+            "audit": audit,
+            "secret_exposed": False,
+        }
+
     def _resolve_access_token(self, *, secret_ref_id: str, company_id: str, store_id: str) -> dict[str, Any]:
         return EbayReadOnlyHttpClient(self.settings, transport=self.transport)._resolve_access_token(
             secret_ref_id=secret_ref_id,
@@ -1791,6 +1917,59 @@ def _draft_blocked(status: str, blockers: list[Any], *, preflight: dict[str, Any
             },
             "access_token_returned_to_frontend": False,
             "access_token_returned_to_runtime": False,
+        },
+        "secret_exposed": False,
+    }
+
+
+def _cleanup_blocked(status: str, blockers: list[Any], *, preflight: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "status": status,
+        "action_type": "cleanup_test_listing",
+        "message": "eBay test listing cleanup is blocked before any platform write.",
+        "blocked_by": [str(item) for item in blockers],
+        "audit": {
+            "preflight": preflight or {},
+            "real_execution": {
+                "cleanup_test_listing": False,
+                "published_to_ebay": False,
+                "procurement_paid": False,
+                "refund_executed": False,
+                "ad_budget_changed": False,
+                "store_policy_changed": False,
+            },
+            "access_token_returned_to_frontend": False,
+            "access_token_returned_to_runtime": False,
+        },
+        "secret_exposed": False,
+    }
+
+
+def _cleanup_write_result(
+    status: str,
+    message: str,
+    steps: list[dict[str, Any]],
+    *,
+    preflight: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "action_type": "cleanup_test_listing",
+        "message": message,
+        "steps": steps,
+        "audit": {
+            "preflight": preflight,
+            "real_execution": {
+                "cleanup_test_listing": False,
+                "published_to_ebay": False,
+                "procurement_paid": False,
+                "refund_executed": False,
+                "ad_budget_changed": False,
+                "store_policy_changed": False,
+            },
+            "access_token_returned_to_frontend": False,
+            "access_token_returned_to_runtime": False,
+            "raw_response_stored": False,
         },
         "secret_exposed": False,
     }

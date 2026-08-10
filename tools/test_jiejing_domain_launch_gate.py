@@ -6,7 +6,10 @@ from __future__ import annotations
 import os
 import sys
 import json
+import hashlib
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,7 +19,11 @@ if str(ROOT) not in sys.path:
 from jiejing_saas.config import SaaSSettings  # noqa: E402
 from jiejing_saas.domain_readiness import build_domain_readiness  # noqa: E402
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
-from jiejing_saas.commercial_launch_gate import build_commercial_launch_gate  # noqa: E402
+from jiejing_saas.commercial_launch_gate import (  # noqa: E402
+    _build_paid_launch_cutover_decision,
+    build_commercial_launch_gate,
+    build_current_store_ebay_evidence,
+)
 
 
 OUT = ROOT / "output" / "jiejing-domain-launch-gate-test"
@@ -28,6 +35,17 @@ def fail(message: str) -> int:
 
 
 def main() -> int:
+    with patch("jiejing_saas.commercial_launch_gate._build_billing_domain_cutover_runbook", return_value=[]):
+        owner_ready_decision = _build_paid_launch_cutover_decision(
+            cutover_checklist=[],
+            billing={},
+            domain={},
+            paid_launch_ready=True,
+        )
+    if owner_ready_decision.get("status") != "ready_for_owner_approval":
+        return fail("complete cutover evidence should reach owner approval state")
+    if owner_ready_decision.get("public_paid_launch_allowed") is not False:
+        return fail("ready_for_owner_approval must never directly enable public paid launch")
     OUT.mkdir(parents=True, exist_ok=True)
     db_path = OUT / "saas.sqlite"
     db_path.unlink(missing_ok=True)
@@ -58,6 +76,14 @@ def main() -> int:
             if required_group not in groups:
                 return fail(f"commercial launch gate must include {required_group} group")
         action_plan = gate.get("launch_action_plan") if isinstance(gate.get("launch_action_plan"), dict) else {}
+        smoke_by_key = {
+            item.get("key"): item
+            for item in action_plan.get("new_ebay_account_smoke_runbook", [])
+            if isinstance(item, dict)
+        }
+        oauth_step = smoke_by_key.get("new_account_oauth_authorization_gate") or {}
+        if oauth_step.get("status") != "blocked":
+            return fail("OAuth completion env flags must not satisfy the commercial gate without current-store backend proof")
         if action_plan.get("contract_version") != "2026-06-18-launch-action-plan":
             return fail("commercial launch gate should expose the structured launch action plan")
         action_items = {
@@ -146,6 +172,26 @@ def main() -> int:
             return fail("new-account OAuth gate must forbid silent/repeated OAuth")
         if smoke_runbook["new_account_oauth_authorization_gate"].get("triggers_ebay_oauth") is not False:
             return fail("new-account OAuth gate must not start OAuth from the launch gate")
+        oauth_verification = smoke_runbook["new_account_oauth_authorization_gate"].get("verification") or []
+        if "/connections?store_id={store_id}" not in oauth_verification:
+            return fail("new-account OAuth gate must verify current-store connections before any fallback plan")
+        if "/stores/{store_id}/ebay-oauth/read-only-status" not in oauth_verification:
+            return fail("new-account OAuth gate must verify backend-derived identity/provenance status")
+        if "/stores/{store_id}/ebay-oauth/read-only-plan" not in oauth_verification:
+            return fail("new-account OAuth gate must reference the implemented read-only-plan API")
+        if "/stores/{store_id}/ebay-oauth/start" in oauth_verification:
+            return fail("new-account OAuth gate must not reference the nonexistent ebay-oauth/start API")
+        official_verification = smoke_runbook["official_packet_account_health_snapshot"].get("verification") or []
+        for required in (
+            "/stores/{store_id}/account-health",
+            "/connections?store_id={store_id}",
+            "/stores/{store_id}/ebay-oauth/read-only-status",
+            "/data-packets?store_id={store_id}&platform=ebay&limit=1",
+            "/queue-jobs?status=completed&limit=200",
+            "/audit-logs?limit=200",
+        ):
+            if required not in official_verification:
+                return fail(f"official evidence phase must include authenticated provenance endpoint: {required}")
         if smoke_runbook["controlled_real_publish_probe"].get("confirmation_center_required") is not True:
             return fail("controlled real publish probe must require confirmation center")
         if smoke_runbook["controlled_real_publish_probe"].get("real_platform_write_step") is not True:
@@ -154,6 +200,98 @@ def main() -> int:
             return fail("post-publish cleanup gate must require confirmation center")
         if smoke_runbook["post_publish_cockpit_cleanup_gate"].get("real_platform_write_step") is not True:
             return fail("post-publish cleanup gate should be marked as a real-write step")
+        misleading_new_account_flags = {
+            "JIEJING_NEW_EBAY_ACCOUNT_LOW_RISK_SMOKE_PASSED": "1",
+            "JIEJING_NEW_EBAY_PUBLISH_HEALTH_CONFIRMATION_READY": "1",
+            "JIEJING_NEW_EBAY_PUBLISH_CONFIRMATION_APPROVED": "1",
+            "JIEJING_NEW_EBAY_ACCOUNT_REAL_PUBLISH_PASSED": "1",
+            "JIEJING_NEW_EBAY_CLEANUP_CONFIRMATION_APPROVED": "1",
+            "JIEJING_NEW_EBAY_TEST_CLEANUP_CONFIRMED": "1",
+        }
+        previous_misleading_flags = {key: os.environ.get(key) for key in misleading_new_account_flags}
+        os.environ.update(misleading_new_account_flags)
+        try:
+            no_current_store_evidence_gate = build_commercial_launch_gate(settings, repo)
+        finally:
+            _restore_env(previous_misleading_flags)
+        unbound_smoke = {
+            item.get("key"): item
+            for item in no_current_store_evidence_gate.get("new_ebay_account_smoke_runbook", [])
+            if isinstance(item, dict)
+        }
+        for key in (
+            "publish_health_confirmation_gate",
+            "controlled_real_publish_probe",
+            "post_publish_cockpit_cleanup_gate",
+        ):
+            if (unbound_smoke.get(key) or {}).get("status") != "blocked":
+                return fail(f"global/env new-account evidence must not satisfy current-store step: {key}")
+        global_only_readiness = {
+            "beta_ready": True,
+            "production_ready": True,
+            "can_accept_real_customers": True,
+            "blocker_count": 0,
+            "warning_count": 0,
+            "counts": {"confirmations": 9, "execution_results": 9, "stores": 1, "platform_connections": 1},
+            "items": [],
+            "product_evidence": {
+                "latest_ebay_packet_id": "global-history-packet",
+                "latest_ebay_packet_source_mode": "official_api",
+                "latest_ebay_packet_present_resource_keys": [
+                    "store_profile",
+                    "account_business_policies",
+                    "inventory_and_offers",
+                    "orders_and_fulfillment",
+                    "finances",
+                    "taxonomy_listing_metadata",
+                ],
+            },
+        }
+        with patch("jiejing_saas.commercial_launch_gate.build_product_readiness", return_value=global_only_readiness):
+            global_only_gate = build_commercial_launch_gate(settings, repo)
+        global_only_groups = {
+            item.get("key"): item
+            for item in global_only_gate.get("groups", [])
+            if isinstance(item, dict)
+        }
+        for key in ("publish_safety_system", "post_publish_cockpit", "new_ebay_account_low_risk_smoke"):
+            if (global_only_groups.get(key) or {}).get("status") != "blocked":
+                return fail(f"top-level commercial group must reject global/env action evidence without current store: {key}")
+        attention_evidence = _attention_account_health_evidence()
+        if attention_evidence.get("account_health_ready") is not False:
+            return fail("current-store account health must require strict normal status; attention must remain blocked")
+        malformed_sentinel = "commercial-malformed-count-must-not-leak"
+        malformed_readiness = {
+            "beta_ready": True,
+            "production_ready": False,
+            "can_accept_real_customers": False,
+            "blocker_count": {"nested": malformed_sentinel},
+            "warning_count": float("nan"),
+            "counts": {
+                "confirmations": True,
+                "execution_results": float("inf"),
+                "users": [malformed_sentinel],
+                "stores": malformed_sentinel,
+                "tasks": {"nested": malformed_sentinel},
+            },
+            "items": [],
+            "product_evidence": {"ebay_token_refresh_success_count": float("inf")},
+        }
+        try:
+            with patch("jiejing_saas.commercial_launch_gate.build_product_readiness", return_value=malformed_readiness):
+                malformed_gate = build_commercial_launch_gate(settings, repo)
+            malformed_serialized = json.dumps(malformed_gate, ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError, OverflowError) as exc:
+            return fail(f"commercial gate malformed counts/readiness must return stable fail-closed JSON: {type(exc).__name__}")
+        malformed_smoke = {
+            item.get("key"): item
+            for item in malformed_gate.get("new_ebay_account_smoke_runbook", [])
+            if isinstance(item, dict)
+        }
+        if (malformed_smoke.get("public_preflight_ready") or {}).get("status") != "blocked":
+            return fail("malformed commercial readiness counts must fail closed")
+        if malformed_sentinel in malformed_serialized:
+            return fail("malformed commercial count values must not be reflected in public gate JSON")
         deferred_strategy = action_plan.get("prelaunch_deferred_strategy") if isinstance(action_plan.get("prelaunch_deferred_strategy"), dict) else {}
         if gate.get("prelaunch_deferred_strategy") != deferred_strategy:
             return fail("commercial launch gate should expose top-level prelaunch deferred strategy for settings UI")
@@ -309,10 +447,59 @@ def main() -> int:
         for forbidden in ("access_token", "refresh_token=", "client_secret=", "api_key=", "password="):
             if forbidden in serialized:
                 return fail(f"launch action plan leaked secret-shaped marker: {forbidden}")
-        print("PASS jiejing_domain_launch_gate")
-        return 0
     finally:
         _restore_env(previous)
+    print("PASS jiejing_domain_launch_gate")
+    return 0
+
+
+def _attention_account_health_evidence() -> dict[str, object]:
+    company_id = "company-attention"
+    store_id = "store-attention"
+    connection_id = "connection-attention"
+    packet_id = "packet-attention"
+    job_id = "job-attention"
+    now = datetime.now(timezone.utc).isoformat()
+    connection_hash = hashlib.sha256(connection_id.encode("utf-8")).hexdigest()
+
+    class RepositoryFixture:
+        def current_ebay_read_only_oauth_boundary(self, **_kwargs: object) -> dict[str, object]:
+            return {
+                "authorized": True,
+                "current_store_selected": True,
+                "strong_identity_ready": True,
+                "backend_provenance_ready": True,
+                "store_id_sha256": hashlib.sha256(store_id.encode("utf-8")).hexdigest(),
+                "connection_id_sha256": connection_hash,
+            }
+
+        def get_store_for_company(self, **_kwargs: object) -> dict[str, object]:
+            return {"store_id": store_id, "company_id": company_id, "platform": "ebay"}
+
+        def list_platform_data_packets(self, **_kwargs: object) -> list[dict[str, object]]:
+            resources = ["store_profile", "account_business_policies", "inventory_and_offers", "orders_and_fulfillment", "finances", "taxonomy_listing_metadata"]
+            return [{"packet_id": packet_id, "company_id": company_id, "store_id": store_id, "platform": "ebay", "source_mode": "official_api", "created_at": now, "packet": {"company_id": company_id, "store_id": store_id, "platform": "ebay", "source_mode": "official_api", "source_label": "official_api", "created_at": now, "present_resource_keys": resources, "missing_resource_keys": [], "freshness": {"official_request_count": 5, "route_success_count": 5, "route_failure_count": 0}, "lineage": {"probe_live_read_performed": True, "access_token_returned_to_frontend": False, "raw_ebay_response_stored": False}, "safe_for_real_platform_write": False, "secret_exposed": False}}]
+
+        def list_queue_jobs(self, **_kwargs: object) -> list[dict[str, object]]:
+            return [{"job_id": job_id, "company_id": company_id, "status": "completed", "job": {"kind": "ebay_read_only_live_plan", "store_id": store_id, "live_read_plan": {"token_boundary": {"connection_id": connection_id}}, "updates": [{"data_packet_id": packet_id, "live_read_performed": True, "request_count": 5, "created_at": now}]}}]
+
+        def find_latest_audit_log_by_target(self, **kwargs: object) -> dict[str, object]:
+            if kwargs.get("action_type") != "ebay.read_only.live.completed":
+                return {}
+            return {"company_id": company_id, "store_id": store_id, "actor_type": "system", "target_id": job_id, "created_at": now, "details": {"data_packet_id": packet_id, "request_count": 5, "raw_response_stored": False, "secret_exposed": False}}
+
+        def list_confirmations(self, **_kwargs: object) -> list[dict[str, object]]:
+            return []
+
+        def list_execution_results(self, **_kwargs: object) -> list[dict[str, object]]:
+            return []
+
+        def list_audit_logs(self, **_kwargs: object) -> list[dict[str, object]]:
+            return []
+
+    snapshot = {"company_id": company_id, "store_id": store_id, "status": "attention", "incident_mode": False, "can_execute_real_writes": True, "evidence_package": {"packet_id": packet_id, "official_packet_present": True}}
+    with patch("jiejing_saas.commercial_launch_gate.build_account_health_snapshot", return_value=snapshot):
+        return build_current_store_ebay_evidence(repository=RepositoryFixture(), company_id=company_id, store_id=store_id)
 
 
 def _set_blocked_env() -> dict[str, str | None]:
@@ -348,7 +535,8 @@ def _set_ready_env() -> dict[str, str | None]:
             "JIEJING_CLS_TOPIC_ID": "topic-saas-backend",
             "JIEJING_CLS_ALERT_POLICY_CONFIGURED": "1",
             "JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN": "0",
-            "JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED": "0",
+            "JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED": "1",
+            "JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED": "1",
             "JIEJING_NEW_EBAY_PRODUCT_DUPLICATE_GUARD_PASSED": "0",
             "JIEJING_NEW_EBAY_ACCOUNT_REAL_PUBLISH_PASSED": "0",
             "JIEJING_NEW_EBAY_TEST_CLEANUP_CONFIRMED": "0",
@@ -395,6 +583,7 @@ def _keys() -> list[str]:
         "JIEJING_CLS_TOPIC_ID",
         "JIEJING_CLS_ALERT_POLICY_CONFIGURED",
         "JIEJING_NEW_EBAY_ACCOUNT_CONFIRMED_CLEAN",
+        "JIEJING_NEW_EBAY_OAUTH_OPERATOR_APPROVED",
         "JIEJING_NEW_EBAY_ACCOUNT_OAUTH_COMPLETED",
         "JIEJING_NEW_EBAY_PRODUCT_DUPLICATE_GUARD_PASSED",
         "JIEJING_NEW_EBAY_ACCOUNT_REAL_PUBLISH_PASSED",

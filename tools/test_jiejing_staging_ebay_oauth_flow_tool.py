@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import importlib.util
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 import time
@@ -16,6 +18,8 @@ from tempfile import TemporaryDirectory
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 OUT = ROOT / "output" / "test-staging-ebay-oauth-flow-tool"
 PASSWORD_SENTINEL = "FLOW-TOOL-PASSWORD-MUST-NOT-PERSIST"
 
@@ -26,6 +30,10 @@ def fail(message: str) -> int:
 
 
 def main() -> int:
+    subcommand_confirmation_error = _test_confirmation_id_after_subcommand_contract()
+    if subcommand_confirmation_error:
+        return fail(subcommand_confirmation_error)
+
     placeholder_error = _test_placeholder_detection()
     if placeholder_error:
         return fail(placeholder_error)
@@ -37,6 +45,14 @@ def main() -> int:
     idempotent_error = _test_prepare_reuses_completed_oauth_without_new_authorization()
     if idempotent_error:
         return fail(idempotent_error)
+
+    sync_approval_error = _test_sync_requires_explicit_confirmation_without_post()
+    if sync_approval_error:
+        return fail(sync_approval_error)
+
+    fresh_sync_error = _test_sync_reuses_fresh_current_store_evidence_without_post()
+    if fresh_sync_error:
+        return fail(fresh_sync_error)
 
     OUT.mkdir(parents=True, exist_ok=True)
     for path in (OUT / "saas.sqlite", OUT / "runtime.sqlite", OUT / "context.json"):
@@ -84,10 +100,129 @@ def main() -> int:
         if PASSWORD_SENTINEL in doctor_stdout or PASSWORD_SENTINEL in doctor_stderr:
             return fail("doctor leaked the operator password")
 
-        prepare = _run_tool(
+        confirmation_request = _run_tool(
+            port=port,
+            command="request-confirmation",
+            extra_args=["--register-if-needed"],
+        )
+        confirmation_request_stdout = confirmation_request.stdout or ""
+        confirmation_request_stderr = confirmation_request.stderr or ""
+        if confirmation_request.returncode != 2:
+            return fail("request-confirmation must stop at a pending decision-center card")
+        if "CONFIRMATION_STATUS=pending" not in confirmation_request_stdout:
+            return fail("request-confirmation must display a safe pending status")
+        if any(
+            marker in confirmation_request_stdout or marker in confirmation_request_stderr
+            for marker in ("AUTHORIZATION_URL=", "STATE_NONCE=", "approved", "oauth_request_id")
+        ):
+            return fail("request-confirmation must not create or imply OAuth state, URL, request, or approval")
+        if (OUT / "context.json").exists():
+            return fail("request-confirmation must not create OAuth context")
+        if PASSWORD_SENTINEL in confirmation_request_stdout or PASSWORD_SENTINEL in confirmation_request_stderr:
+            return fail("request-confirmation leaked the operator password")
+
+        sync_confirmation_request = _run_tool(
+            port=port,
+            command="request-sync-confirmation",
+            extra_args=["--register-if-needed"],
+        )
+        sync_confirmation_stdout = sync_confirmation_request.stdout or ""
+        sync_confirmation_stderr = sync_confirmation_request.stderr or ""
+        if sync_confirmation_request.returncode != 2:
+            return fail("request-sync-confirmation must stop at a pending decision-center card")
+        if "SYNC_CONFIRMATION_STATUS=pending" not in sync_confirmation_stdout:
+            return fail("request-sync-confirmation must display a safe pending status")
+        if any(
+            marker in sync_confirmation_stdout or marker in sync_confirmation_stderr
+            for marker in ("approved", "confirmation_id", "task_id", "job_id", "STATE_NONCE=", "AUTHORIZATION_URL=")
+        ):
+            return fail("request-sync-confirmation must not create or imply approval, task, job, OAuth state or URL")
+        if PASSWORD_SENTINEL in sync_confirmation_stdout or PASSWORD_SENTINEL in sync_confirmation_stderr:
+            return fail("request-sync-confirmation leaked the operator password")
+
+        missing_approval_prepare = _run_tool(
             port=port,
             command="prepare",
             extra_args=["--register-if-needed"],
+        )
+        missing_approval_stdout = missing_approval_prepare.stdout or ""
+        missing_approval_stderr = missing_approval_prepare.stderr or ""
+        if missing_approval_prepare.returncode != 2:
+            return fail("prepare without an explicit approved confirmation_id must fail closed")
+        if "PREPARE_STATUS=blocked_missing_approved_confirmation" not in missing_approval_stdout:
+            return fail("prepare without approval must report a fixed missing-confirmation blocker")
+        if "AUTHORIZATION_URL=" in missing_approval_stdout or (OUT / "context.json").exists():
+            return fail("prepare without approval must not create an OAuth state, URL or context")
+        if PASSWORD_SENTINEL in missing_approval_stdout or PASSWORD_SENTINEL in missing_approval_stderr:
+            return fail("blocked prepare leaked the operator password")
+
+        from jiejing_saas.repository import SaaSRepository
+
+        identity_connection = sqlite3.connect(OUT / "saas.sqlite")
+        identity_connection.row_factory = sqlite3.Row
+        try:
+            identity = identity_connection.execute(
+                """
+                select u.user_id, tm.company_id, s.store_id
+                from users u
+                join team_members tm on tm.user_id = u.user_id
+                join stores s on s.company_id = tm.company_id
+                where u.email = ?
+                order by s.created_at desc
+                limit 1
+                """,
+                ("flow-tool@example.com",),
+            ).fetchone()
+        finally:
+            identity_connection.close()
+        if not identity:
+            return fail("prepare approval fixture could not resolve the local current-store identity")
+        approval_repo = SaaSRepository(OUT / "saas.sqlite", database_engine="sqlite", database_url="")
+        oauth_confirmation = next(
+            (
+                item
+                for item in approval_repo.list_confirmations(company_id=identity["company_id"], status="pending", limit=100)
+                if item.get("store_id") == identity["store_id"]
+                and item.get("action_type") == "ebay_oauth_scope_change"
+                and isinstance(item.get("item"), dict)
+                and item["item"].get("source") == "new_ebay_account_low_risk_smoke"
+                and item["item"].get("requested_step") == "new_account_oauth_authorization_gate"
+                and item["item"].get("scope_profile") == "seller_read_only"
+            ),
+            {},
+        )
+        if not oauth_confirmation:
+            return fail("operator confirmation request must persist the exact pending decision-center card")
+        sync_confirmation = next(
+            (
+                item
+                for item in approval_repo.list_confirmations(company_id=identity["company_id"], status="pending", limit=100)
+                if item.get("store_id") == identity["store_id"]
+                and item.get("action_type") == "ebay_read_only_sync"
+                and isinstance(item.get("item"), dict)
+                and item["item"].get("source") == "new_ebay_account_low_risk_smoke"
+                and item["item"].get("requested_step") == "official_packet_account_health_snapshot"
+                and item["item"].get("scope_profile") == "seller_read_only_official_sync"
+            ),
+            {},
+        )
+        if not sync_confirmation:
+            return fail("operator sync confirmation request must persist the exact pending decision-center card")
+        oauth_confirmation = approval_repo.decide_confirmation(
+            company_id=identity["company_id"],
+            confirmation_id=oauth_confirmation["confirmation_id"],
+            decision="approve",
+            decided_by=identity["user_id"],
+            note="Local regression approval for this exact current-store read-only OAuth plan.",
+        )
+        prepare = _run_tool(
+            port=port,
+            command="prepare",
+            extra_args=[
+                "--register-if-needed",
+                "--confirmation-id",
+                oauth_confirmation["confirmation_id"],
+            ],
         )
         prepare_stdout = prepare.stdout or ""
         prepare_stderr = prepare.stderr or ""
@@ -97,6 +232,8 @@ def main() -> int:
             return fail("prepare should print an eBay authorization URL")
         if PASSWORD_SENTINEL in prepare_stdout or PASSWORD_SENTINEL in prepare_stderr:
             return fail("prepare leaked the operator password")
+        if oauth_confirmation["confirmation_id"] in prepare_stdout or oauth_confirmation["confirmation_id"] in prepare_stderr:
+            return fail("prepare output must not echo the approved confirmation identity")
         context = json.loads((OUT / "context.json").read_text(encoding="utf-8"))
         if not context.get("store_id") or not context.get("state_nonce"):
             return fail("prepare should persist store_id and state_nonce in context")
@@ -134,14 +271,51 @@ def main() -> int:
             return fail("example env file should not pass because placeholders are not real staging secrets")
         if "placeholder" not in (env_check.stdout or ""):
             return fail("env check should identify placeholder values")
-        print("PASS jiejing_staging_ebay_oauth_flow_tool")
-        return 0
     finally:
         process.terminate()
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
+    print("PASS jiejing_staging_ebay_oauth_flow_tool")
+    return 0
+
+
+def _test_confirmation_id_after_subcommand_contract() -> str:
+    tool_path = ROOT / "tools" / "jiejing_staging_ebay_oauth_readonly_flow.py"
+    spec = importlib.util.spec_from_file_location("jiejing_staging_ebay_oauth_readonly_flow_cli_contract", tool_path)
+    if spec is None or spec.loader is None:
+        return "could not load OAuth flow tool for CLI parser checks"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    original_argv = list(sys.argv)
+    try:
+        for command in ("prepare", "sync"):
+            sys.argv = [str(tool_path), command, "--confirmation-id", f"approved-{command}-card"]
+            try:
+                args = module.parse_args()
+            except SystemExit:
+                return f"{command} must accept --confirmation-id after the subcommand"
+            if args.command != command or args.confirmation_id != f"approved-{command}-card":
+                return f"{command} must preserve its exact after-subcommand confirmation reference"
+            help_result = subprocess.run(
+                [sys.executable, str(tool_path), command, "--help"],
+                cwd=str(ROOT),
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+            if help_result.returncode != 0 or "--confirmation-id" not in (help_result.stdout or ""):
+                return f"{command} help must document its after-subcommand confirmation option"
+    finally:
+        sys.argv = original_argv
+    runbook = (ROOT / "docs" / "JIEJING_NEW_EBAY_ACCOUNT_LOW_RISK_RUNBOOK_20260617.md").read_text(encoding="utf-8")
+    if "prepare --confirmation-id" not in runbook or "sync --confirmation-id" not in runbook:
+        return "runbook must show the real prepare/sync after-subcommand confirmation order"
+    return ""
 
 
 def _test_placeholder_detection() -> str:
@@ -365,6 +539,97 @@ def _test_prepare_reuses_completed_oauth_without_new_authorization() -> str:
     context = json.loads((out / "context.json").read_text(encoding="utf-8"))
     if context.get("reused_completed_oauth") is not True:
         return "context should record that completed OAuth was reused"
+    return ""
+
+
+def _test_sync_requires_explicit_confirmation_without_post() -> str:
+    spec = importlib.util.spec_from_file_location(
+        "jiejing_staging_ebay_oauth_readonly_flow_sync_approval_test",
+        ROOT / "tools" / "jiejing_staging_ebay_oauth_readonly_flow.py",
+    )
+    if not spec or not spec.loader:
+        return "could not load OAuth flow tool module for sync approval checks"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def forbidden_post(*args, **kwargs):
+        raise AssertionError("sync without explicit confirmation_id must not POST")
+
+    module._fetch_json = lambda *args, **kwargs: {
+        "commercial_launch_gate": {
+            "current_store_ebay_evidence": {
+                "status": "blocked",
+                "current_store_selected": True,
+                "official_packet_ready": False,
+                "secret_exposed": False,
+            }
+        }
+    }
+    module._post_json = forbidden_post
+    args = type("Args", (), {"base_url": "https://app.example.test"})()
+    result = module._sync(
+        args=args,
+        token="test-token",
+        context={"store_id": "store_sync_approval"},
+        resources=["store_profile"],
+        run_mode="queued",
+        confirmation_id="",
+    )
+    if result.get("status") != "blocked_missing_approved_confirmation":
+        return "operator sync without explicit approval must fail closed"
+    if result.get("sync_started") is not False or result.get("live_request_performed") is not False:
+        return "blocked operator sync must not start sync or a live request"
+    return ""
+
+
+def _test_sync_reuses_fresh_current_store_evidence_without_post() -> str:
+    spec = importlib.util.spec_from_file_location(
+        "jiejing_staging_ebay_oauth_readonly_flow_fresh_sync_test",
+        ROOT / "tools" / "jiejing_staging_ebay_oauth_readonly_flow.py",
+    )
+    if not spec or not spec.loader:
+        return "could not load OAuth flow tool module for fresh sync checks"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def fake_fetch(url, *, token=None, timeout=30):
+        if "/commercial/launch-gate?" not in url:
+            raise AssertionError(f"fresh evidence check used an unexpected GET: {url}")
+        return {
+            "commercial_launch_gate": {
+                "current_store_ebay_evidence": {
+                    "status": "ready",
+                    "current_store_selected": True,
+                    "store_id_sha256": hashlib.sha256(b"store_fresh_evidence").hexdigest(),
+                    "connection_id_sha256": "connection-sha256-safe-marker",
+                    "official_packet_ready": True,
+                    "backend_worker_provenance_ready": True,
+                    "same_oauth_connection_ready": True,
+                    "account_health_ready": True,
+                    "packet_id_sha256": "packet-sha256-safe-marker",
+                    "secret_exposed": False,
+                }
+            }
+        }
+
+    def forbidden_post(*args, **kwargs):
+        raise AssertionError("fresh current-store composite evidence must suppress sync POST")
+
+    module._fetch_json = fake_fetch
+    module._post_json = forbidden_post
+    args = type("Args", (), {"base_url": "https://app.example.test"})()
+    result = module._sync(
+        args=args,
+        token="test-token",
+        context={"store_id": "store_fresh_evidence"},
+        resources=["store_profile"],
+        run_mode="queued",
+        confirmation_id="",
+    )
+    if result.get("status") != "fresh_current_store_evidence_reused":
+        return "operator sync must reuse fresh current-store composite evidence"
+    if result.get("sync_started") is not False or result.get("reused_fresh_evidence") is not True:
+        return "fresh evidence reuse must explicitly report zero sync execution"
     return ""
 
 
