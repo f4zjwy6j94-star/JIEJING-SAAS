@@ -430,6 +430,16 @@ def main() -> int:
         ):
             if marker not in document:
                 return fail(f"{document_name} missing resolution apply safety marker: {marker}")
+        for marker in (
+            "--production-release-charge-flag-reviewed",
+            "--production-release-real-write-flag-reviewed",
+            "--production-support-refund-policy-reviewed",
+            "--production-merchant-surface-copy-scan-passed",
+            "does not enable public charging",
+            "does not grant final owner approval",
+        ):
+            if marker not in document:
+                return fail(f"{document_name} missing production review evidence marker: {marker}")
     for marker in (
         'TRUSTED_RUNTIME_ENV_GUARD="${JIEJING_TRUSTED_RUNTIME_ENV_GUARD:-/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py}"',
         "REFUSE_UNTRUSTED_RUNTIME_ENV_GUARD=1",

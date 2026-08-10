@@ -347,6 +347,28 @@ If `sudo -n true` fails, do not weaken the whole server. Add only the minimum no
    curl -fsS https://app.jiejing.shop/readiness/product-saas
    ```
 
+9. In a separate evidence-recording maintenance step, and only after the live
+   public-charging and real-write switches are independently confirmed off,
+   the support/refund pages are verified, and the merchant-surface copy scan
+   passes, record the four reviewed facts:
+
+   ```bash
+   cd /opt/jiejing-staging/app
+   sudo -n python3 tools/jiejing_configure_tencent_runtime_env.py \
+     --env-file /opt/jiejing-staging/private/tencent-managed.env \
+     --apply \
+     --production-release-charge-flag-reviewed \
+     --production-release-real-write-flag-reviewed \
+     --production-support-refund-policy-reviewed \
+     --production-merchant-surface-copy-scan-passed
+   ```
+
+   This records review evidence only: it does not enable public charging,
+   payment/refund execution, or eBay writes, and it does not grant final owner approval.
+   Rerun the trusted runtime ownership guard, Runner Doctor, deploy
+   dry-run, and separately approved deploy apply before treating the new env as
+   loaded. Never combine this step with a final owner-approval or live switch.
+
 ## Rollback flow
 
 1. Find the backup name printed by the deploy workflow:
@@ -430,6 +452,11 @@ Use this when dry-runs or deploy attempts have created many release candidate fo
 
 ## Current remaining external blockers
 
-- Apply-mode staging deploy has not been run through GitHub Actions yet. Keep using dry-run until an explicit apply window is chosen.
-- Formal paid launch still needs production managed Postgres/Redis, Vault/KMS, monitoring, backups, domain/billing cutover, Stripe live provider, and new eBay account validation.
+- Apply-mode staging deploy has been proven through GitHub Actions, but every
+  new change must still follow Doctor -> dry-run -> explicit apply.
+- Formal paid launch still needs the owner's authenticated single-account
+  merchant workflow acceptance, a clean new eBay account authorization and
+  controlled proof, production WeChat payment/refund cutover evidence, and
+  explicit final owner approval. The future three-merchant scale-validation
+  target does not block the single-owner private pilot.
 - Current state remains beta/public-staging oriented, not paid commercial launch.

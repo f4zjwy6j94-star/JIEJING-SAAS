@@ -269,6 +269,26 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--backup-alerts-configured", action="store_true")
     parser.add_argument("--vault-backup-policy-configured", action="store_true")
     parser.add_argument("--record-restore-drill-now", action="store_true")
+    parser.add_argument(
+        "--production-release-charge-flag-reviewed",
+        action="store_true",
+        help="Record that the public charging switch was reviewed; this does not enable charging.",
+    )
+    parser.add_argument(
+        "--production-release-real-write-flag-reviewed",
+        action="store_true",
+        help="Record that the real-platform-write switch was reviewed; this does not enable writes.",
+    )
+    parser.add_argument(
+        "--production-support-refund-policy-reviewed",
+        action="store_true",
+        help="Record review of the published support and refund policy surfaces.",
+    )
+    parser.add_argument(
+        "--production-merchant-surface-copy-scan-passed",
+        action="store_true",
+        help="Record a passed merchant-surface internal-copy scan.",
+    )
     return parser.parse_args(argv)
 
 
@@ -384,6 +404,14 @@ def _build_updates(args: argparse.Namespace, existing: dict[str, str]) -> dict[s
         updates["JIEJING_VAULT_BACKUP_POLICY_CONFIGURED"] = "true"
     if args.record_restore_drill_now:
         updates["JIEJING_RESTORE_DRILL_LAST_AT"] = now
+    if args.production_release_charge_flag_reviewed:
+        updates["JIEJING_PRODUCTION_RELEASE_CHARGE_FLAG_REVIEWED"] = "true"
+    if args.production_release_real_write_flag_reviewed:
+        updates["JIEJING_PRODUCTION_RELEASE_REAL_WRITE_FLAG_REVIEWED"] = "true"
+    if args.production_support_refund_policy_reviewed:
+        updates["JIEJING_PRODUCTION_SUPPORT_REFUND_POLICY_REVIEWED"] = "true"
+    if args.production_merchant_surface_copy_scan_passed:
+        updates["JIEJING_PRODUCTION_MERCHANT_SURFACE_COPY_SCAN_PASSED"] = "true"
 
     return {key: value for key, value in updates.items() if value != existing.get(key)}
 

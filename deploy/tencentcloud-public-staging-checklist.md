@@ -272,6 +272,29 @@ python tools/jiejing_staging_ebay_oauth_readonly_flow.py sync \
   --run-mode local_worker_now
 ```
 
+8. After independently verifying that public charging and real-platform writes
+   remain disabled, the published support/refund pages return successfully, and
+   the merchant-facing copy scan has passed, record those four review facts in
+   the managed env. This command does not enable public charging, payment or
+   refund execution, or eBay writes, and it does not grant final owner approval:
+
+```bash
+cd /opt/jiejing-staging/app
+sudo -n python3 tools/jiejing_configure_tencent_runtime_env.py \
+  --env-file /opt/jiejing-staging/private/tencent-managed.env \
+  --apply \
+  --production-release-charge-flag-reviewed \
+  --production-release-real-write-flag-reviewed \
+  --production-support-refund-policy-reviewed \
+  --production-merchant-surface-copy-scan-passed
+```
+
+After recording the evidence, rerun the trusted runtime-env guard and use the
+normal Doctor -> deployment dry-run -> separately approved deployment apply
+sequence before accepting the refreshed container state. Never set the final
+owner-approval, public-charging, refund, or eBay-write flags as part of this
+evidence-only step.
+
 ## Do Not Change These For First Staging
 
 ```text

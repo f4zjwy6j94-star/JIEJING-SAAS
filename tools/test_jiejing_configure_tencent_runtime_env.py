@@ -103,6 +103,10 @@ def main() -> int:
         "--backup-alerts-configured",
         "--vault-backup-policy-configured",
         "--record-restore-drill-now",
+        "--production-release-charge-flag-reviewed",
+        "--production-release-real-write-flag-reviewed",
+        "--production-support-refund-policy-reviewed",
+        "--production-merchant-surface-copy-scan-passed",
         "--enable-managed-db-queue-live-checks",
     ]
     applied = subprocess.run(apply_cmd, cwd=ROOT, env=env, text=True, capture_output=True, check=False)
@@ -140,6 +144,14 @@ def main() -> int:
         return fail("configurator did not persist the explicit CLS evidence freshness threshold")
     if "JIEJING_POSTGRES_DRIVER_CHECK_LIVE=true" not in text or "JIEJING_REDIS_DRIVER_CHECK_LIVE=true" not in text:
         return fail("configurator did not write managed database/queue live-check flags")
+    for reviewed_key in (
+        "JIEJING_PRODUCTION_RELEASE_CHARGE_FLAG_REVIEWED",
+        "JIEJING_PRODUCTION_RELEASE_REAL_WRITE_FLAG_REVIEWED",
+        "JIEJING_PRODUCTION_SUPPORT_REFUND_POLICY_REVIEWED",
+        "JIEJING_PRODUCTION_MERCHANT_SURFACE_COPY_SCAN_PASSED",
+    ):
+        if f"{reviewed_key}=true" not in text:
+            return fail(f"configurator did not persist reviewed production evidence: {reviewed_key}")
     before_invalid_cli = env_path.read_text(encoding="utf-8")
     invalid_cli = subprocess.run(
         [
