@@ -12,6 +12,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -197,6 +198,9 @@ def main() -> int:
     repository_error = _test_repository_behavior()
     if repository_error:
         return fail(repository_error)
+    postgres_binding_error = _test_postgres_boolean_binding()
+    if postgres_binding_error:
+        return fail(postgres_binding_error)
     health_retry_error = _test_health_wait_retry_behavior()
     if health_retry_error:
         return fail(health_retry_error)
@@ -282,6 +286,95 @@ def _test_repository_behavior() -> str:
         for forbidden in ("choice_0", "choice_2", "onboarding-test-password", "seller_returned\": true"):
             if forbidden in audit_text:
                 return f"onboarding audit persisted raw answers or sensitive input: {forbidden}"
+    return ""
+
+
+def _test_postgres_boolean_binding() -> str:
+    class Cursor:
+        def __init__(self, row: dict[str, object] | None = None) -> None:
+            self.row = row
+
+        def fetchone(self) -> dict[str, object] | None:
+            return self.row
+
+    class RecordingConnection:
+        def __init__(self) -> None:
+            self.state: dict[str, object] | None = None
+            self.bound_seller_returned: list[object] = []
+
+        def execute(self, query: str, params: tuple[object, ...] = ()) -> Cursor:
+            normalized_query = " ".join(query.lower().split())
+            if normalized_query.startswith("select") and "from merchant_onboarding_states" in normalized_query:
+                return Cursor(dict(self.state) if self.state else None)
+            if normalized_query.startswith("insert into merchant_onboarding_states"):
+                seller_returned = params[6]
+                self.bound_seller_returned.append(seller_returned)
+                self.state = {
+                    "company_id": params[0],
+                    "onboarding_key": params[1],
+                    "store_id": params[2],
+                    "path_key": params[3],
+                    "current_step_key": params[4],
+                    "work_mode": params[5],
+                    "seller_returned": seller_returned,
+                    "answers_json": params[7],
+                    "completed_step_keys_json": params[8],
+                    "version": params[9],
+                    "created_at": params[11],
+                    "updated_at": params[12],
+                }
+                return Cursor({"company_id": params[0]})
+            if normalized_query.startswith("update merchant_onboarding_states"):
+                seller_returned = params[4]
+                self.bound_seller_returned.append(seller_returned)
+                assert self.state is not None
+                self.state.update(
+                    {
+                        "store_id": params[0],
+                        "path_key": params[1],
+                        "current_step_key": params[2],
+                        "work_mode": params[3],
+                        "seller_returned": seller_returned,
+                        "answers_json": params[5],
+                        "completed_step_keys_json": params[6],
+                        "version": params[7],
+                        "updated_at": params[9],
+                    }
+                )
+                return Cursor({"company_id": params[10]})
+            return Cursor()
+
+    connection = RecordingConnection()
+
+    @contextmanager
+    def connect() -> object:
+        yield connection
+
+    repository = SaaSRepository(
+        Path("unused-postgres-repository-test.sqlite"),
+        database_engine="postgres",
+        database_url="postgresql://redacted.invalid/jiejing",
+    )
+    repository.initialize = lambda: None  # type: ignore[method-assign]
+    repository._connect = connect  # type: ignore[method-assign]
+    repository._insert_audit = lambda *args, **kwargs: {}  # type: ignore[method-assign]
+
+    repository.upsert_merchant_onboarding_state(
+        company_id="company_boolean_binding",
+        user_id="user_boolean_binding",
+        progress={"seller_returned": True},
+        expected_version=0,
+    )
+    repository.upsert_merchant_onboarding_state(
+        company_id="company_boolean_binding",
+        user_id="user_boolean_binding",
+        progress={"seller_returned": False},
+        expected_version=1,
+    )
+    if connection.bound_seller_returned != [True, False]:
+        return f"Postgres onboarding boolean values changed semantics: {connection.bound_seller_returned}"
+    if any(type(value) is not bool for value in connection.bound_seller_returned):
+        return "Postgres onboarding must bind seller_returned as bool rather than SQLite integer"
     return ""
 
 
