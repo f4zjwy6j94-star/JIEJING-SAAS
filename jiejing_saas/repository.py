@@ -6920,6 +6920,8 @@ class SaaSRepository:
             "remaining_merchant_count": remaining_merchants,
             "remaining_path_count": remaining_paths,
             "synthetic_accounts_excluded": True,
+            "validation_scope": "future_scale_validation",
+            "blocks_owner_private_pilot": False,
             "decision_required": True,
             "customer_visible": False,
             "read_only": True,
@@ -6932,6 +6934,89 @@ class SaaSRepository:
                     f"Complete the core workflow with {remaining_merchants} more independent merchant(s) "
                     f"and {remaining_paths} more decided path(s)."
                 )
+            ),
+        }
+
+    def owner_pilot_workflow_validation_snapshot(self, *, company_id: str) -> dict[str, Any]:
+        """Return owner-only proof that one real account completed one safe core path.
+
+        This is the minimum acceptance evidence for the founder's own private
+        pilot.  It deliberately does not replace the separate three-merchant
+        scale-validation score and never enables charging or platform writes.
+        """
+
+        self.initialize()
+        with self._connect() as conn:
+            account_row = conn.execute(
+                """
+                select count(*) as eligible_account_count
+                from users
+                where default_company_id = ?
+                  and account_classification = ?
+                """,
+                (company_id, ACCOUNT_CLASSIFICATION_MERCHANT),
+            ).fetchone()
+            evidence_row = conn.execute(
+                """
+                select count(*) as validated_path_count
+                from tasks t
+                where t.company_id = ?
+                  and t.task_type = ?
+                  and t.status = ?
+                  and exists (
+                    select 1
+                    from users u
+                    where u.default_company_id = t.company_id
+                      and u.account_classification = ?
+                  )
+                  and exists (
+                    select 1
+                    from reports r
+                    where r.task_id = t.task_id
+                  )
+                  and exists (
+                    select 1
+                    from confirmations c
+                    where c.company_id = t.company_id
+                      and c.task_id = t.task_id
+                      and c.status in (?, ?, ?)
+                      and c.decided_at is not null
+                  )
+                """,
+                (
+                    company_id,
+                    "product_workflow",
+                    "completed",
+                    ACCOUNT_CLASSIFICATION_MERCHANT,
+                    "approved",
+                    "rejected",
+                    "needs_revision",
+                ),
+            ).fetchone()
+
+        eligible_accounts = int((account_row or {})["eligible_account_count"] or 0)
+        validated_paths = int((evidence_row or {})["validated_path_count"] or 0)
+        passed = eligible_accounts >= 1 and validated_paths >= 1
+        return {
+            "contract_version": "2026-08-10-owner-pilot-workflow-validation-v1",
+            "status": "owner_pilot_path_verified" if passed else "pending_owner_pilot_path",
+            "passed": passed,
+            "required_account_count": 1,
+            "required_path_count": 1,
+            "eligible_account_count": min(eligible_accounts, 1),
+            "validated_path_count": validated_paths,
+            "remaining_path_count": max(1 - validated_paths, 0),
+            "synthetic_accounts_excluded": True,
+            "scale_validation_replaced": False,
+            "blocks_owner_private_pilot": not passed,
+            "customer_visible": False,
+            "read_only": True,
+            "triggers_real_platform_write": False,
+            "triggers_charge": False,
+            "next_action": (
+                "Owner pilot core path verified; keep public charging and scale-validation claims separate."
+                if passed
+                else "Use the owner account to complete one product workflow, report, and explicit safe confirmation decision."
             ),
         }
 

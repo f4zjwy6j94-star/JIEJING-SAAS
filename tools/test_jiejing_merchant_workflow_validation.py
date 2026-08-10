@@ -101,6 +101,27 @@ def main() -> int:
     if initial.get("passed") is not False or initial.get("validated_path_count") != 0:
         return fail(f"empty evidence must stay pending: {initial}")
 
+    pilot_repository = SaaSRepository(OUT / "owner-pilot.sqlite")
+    pilot_repository.initialize()
+    pilot_fixture = _create_path(pilot_repository, email="owner-pilot@jiejing.shop", path_count=1)
+    owner_pilot = pilot_repository.owner_pilot_workflow_validation_snapshot(
+        company_id=pilot_fixture["company_id"]
+    )
+    if owner_pilot.get("contract_version") != "2026-08-10-owner-pilot-workflow-validation-v1":
+        return fail(f"unexpected owner pilot contract: {owner_pilot}")
+    if owner_pilot.get("passed") is not True or owner_pilot.get("status") != "owner_pilot_path_verified":
+        return fail(f"one real owner path should satisfy private owner-pilot acceptance: {owner_pilot}")
+    if owner_pilot.get("required_account_count") != 1 or owner_pilot.get("required_path_count") != 1:
+        return fail(f"owner pilot must use an explicit one-account one-path threshold: {owner_pilot}")
+    if owner_pilot.get("scale_validation_replaced") is not False:
+        return fail(f"owner pilot must not pretend to replace future scale validation: {owner_pilot}")
+    if owner_pilot.get("blocks_owner_private_pilot") is not False:
+        return fail(f"a verified owner path must not block the private owner pilot: {owner_pilot}")
+    if owner_pilot.get("customer_visible") is not False or owner_pilot.get("read_only") is not True:
+        return fail(f"owner pilot evidence must stay owner-only and read-only: {owner_pilot}")
+    if owner_pilot.get("triggers_real_platform_write") is not False or owner_pilot.get("triggers_charge") is not False:
+        return fail(f"owner pilot snapshot must not trigger real actions: {owner_pilot}")
+
     _create_path(repository, email="merchant-one@shop-one.cn", path_count=7)
     _create_path(repository, email="merchant-two@shop-two.cn", path_count=7)
     _create_path(repository, email="merchant-three@shop-three.cn", path_count=6)

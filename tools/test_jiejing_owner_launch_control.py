@@ -89,7 +89,7 @@ def main() -> int:
     finally:
         _restore_env(previous)
 
-    if packet.get("contract_version") != "2026-07-27-owner-launch-control-v8":
+    if packet.get("contract_version") != "2026-08-10-owner-launch-control-v9":
         return fail("owner launch control contract version missing")
     if packet.get("audience") != "platform_internal_admin" or packet.get("customer_visible") is not False:
         return fail("owner launch control must stay platform-internal")
@@ -109,6 +109,15 @@ def main() -> int:
         return fail("real merchant workflow validation contract missing from owner control")
     if merchant_validation.get("passed") is not False or merchant_validation.get("customer_visible") is not False:
         return fail("synthetic owner fixture must not earn real merchant validation evidence")
+    if merchant_validation.get("blocks_owner_private_pilot") is not False:
+        return fail("future scale validation must not block the founder's private owner pilot")
+    owner_pilot = packet.get("owner_pilot_workflow_validation") if isinstance(packet.get("owner_pilot_workflow_validation"), dict) else {}
+    if owner_pilot.get("contract_version") != "2026-08-10-owner-pilot-workflow-validation-v1":
+        return fail("owner pilot validation contract missing from owner control")
+    if owner_pilot.get("passed") is not False or owner_pilot.get("blocks_owner_private_pilot") is not True:
+        return fail("synthetic owner fixture must still require one real owner pilot path")
+    if owner_pilot.get("required_account_count") != 1 or owner_pilot.get("required_path_count") != 1:
+        return fail("owner pilot acceptance must stay one account and one complete path")
     for marker in (
         "charge_now_allowed",
         "calls_stripe_api",

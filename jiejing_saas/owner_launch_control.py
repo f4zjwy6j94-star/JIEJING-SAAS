@@ -29,7 +29,7 @@ from .readiness import build_product_readiness_or_degraded
 from .repository import SaaSRepository
 
 
-OWNER_LAUNCH_CONTROL_VERSION = "2026-07-27-owner-launch-control-v8"
+OWNER_LAUNCH_CONTROL_VERSION = "2026-08-10-owner-launch-control-v9"
 FIXED_PROGRESS_RELEASE_EVIDENCE_CONTRACT = "2026-07-14-version-bound-release-evidence-v1"
 
 
@@ -78,6 +78,11 @@ def build_owner_launch_control(
     merchant_workflow_validation = _safe_call(
         "merchant_workflow_validation",
         repository.merchant_workflow_validation_snapshot,
+        {},
+    )
+    owner_pilot_workflow_validation = _safe_call(
+        "owner_pilot_workflow_validation",
+        lambda: repository.owner_pilot_workflow_validation_snapshot(company_id=company_id),
         {},
     )
     fixed_progress_release_evidence = _load_fixed_progress_release_evidence()
@@ -350,6 +355,7 @@ def build_owner_launch_control(
         "feasibility_review": feasibility_review,
         "test_data_governance": test_data_governance,
         "merchant_workflow_validation": merchant_workflow_validation,
+        "owner_pilot_workflow_validation": owner_pilot_workflow_validation,
         "operations_observability": operations_observability,
         "resilience_war_room": resilience_war_room,
         "subscription_shutdown_control": subscription_shutdown_control,

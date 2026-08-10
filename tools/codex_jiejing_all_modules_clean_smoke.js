@@ -14,13 +14,14 @@ const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const outDir = path.join("output", "browser-smoke", `${stamp}-all-modules-clean-ui`);
 fs.mkdirSync(outDir, { recursive: true });
 
-async function api(pathname, { token = "", method = "GET", body } = {}) {
+async function api(pathname, { token = "", cookie = "", method = "GET", body } = {}) {
   const res = await fetch(`${base}${pathname}`, {
     method,
     cache: "no-store",
     headers: {
       "content-type": "application/json",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(cookie ? { cookie } : {}),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
@@ -31,7 +32,7 @@ async function api(pathname, { token = "", method = "GET", body } = {}) {
   } catch (_error) {
     json = { raw: text.slice(0, 500) };
   }
-  return { ok: res.ok, status: res.status, json };
+  return { ok: res.ok, status: res.status, json, setCookie: res.headers.get("set-cookie") || "" };
 }
 
 async function makeSession() {
@@ -49,11 +50,18 @@ async function makeSession() {
   if (!registered.ok) {
     throw new Error(`register failed: ${registered.status} ${JSON.stringify(registered.json).slice(0, 300)}`);
   }
-  const token = registered.json.token;
+  const sessionCookie = String(registered.setCookie || "")
+    .split(";", 1)[0]
+    .trim();
+  const token = registered.json.token || (sessionCookie.startsWith("jiejing_saas_session=") ? sessionCookie.slice("jiejing_saas_session=".length) : "");
+  if (!token || !sessionCookie) {
+    throw new Error("register did not establish the backend-only browser session cookie");
+  }
   const user = registered.json.user || {};
   const company = registered.json.company || {};
   const activatedBilling = await api("/billing/test-event", {
     token,
+    cookie: sessionCookie,
     method: "POST",
     body: {
       plan_key: "operator",
@@ -65,6 +73,7 @@ async function makeSession() {
   }
   const created = await api("/stores", {
     token,
+    cookie: sessionCookie,
     method: "POST",
     body: {
       platform: "ebay",

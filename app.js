@@ -40894,6 +40894,10 @@ function renderSaasOwnerLaunchControlPanel() {
     control.merchant_workflow_validation && typeof control.merchant_workflow_validation === "object"
       ? control.merchant_workflow_validation
       : {};
+  const ownerPilotValidation =
+    control.owner_pilot_workflow_validation && typeof control.owner_pilot_workflow_validation === "object"
+      ? control.owner_pilot_workflow_validation
+      : {};
   const lanes = Array.isArray(control.lanes) ? control.lanes : [];
   const external = Array.isArray(control.external_blockers) ? control.external_blockers : [];
   const internal = Array.isArray(control.internal_work_queue) ? control.internal_work_queue : [];
@@ -40990,10 +40994,15 @@ function renderSaasOwnerLaunchControlPanel() {
           <strong>${escapeHtml(fixedProgressNext?.label || "当前内部自动队列已清空")}</strong>
           <small>${escapeHtml(fixedProgressNext?.next_action || "等待外部条件或双方确认，不会擅自触发真实收费、OAuth 或平台写入。")}</small>
         </div>
+        <div class="saas-owner-fixed-progress-next" data-owner-pilot-validation="owner_pilot_workflow_validation_v1">
+          <span>单主理人上线验收</span>
+          <strong>${escapeHtml(`${ownerPilotValidation.validated_path_count || 0}/${ownerPilotValidation.required_path_count || 1} 条完整路径`)}</strong>
+          <small>${escapeHtml(ownerPilotValidation.next_action || "使用你的真实账号完成一次 AI CEO、经营任务、报告和明确的安全确认决定。")}</small>
+        </div>
         <div class="saas-owner-fixed-progress-next" data-owner-merchant-validation="real_merchant_workflow_validation_v1">
-          <span>真实商家闭环验收</span>
+          <span>未来规模化验证</span>
           <strong>${escapeHtml(`${merchantValidation.validated_merchant_count || 0}/${merchantValidation.required_merchant_count || 3} 个商家 · ${merchantValidation.validated_path_count || 0}/${merchantValidation.required_path_count || 20} 条完整路径`)}</strong>
-          <small>${escapeHtml(merchantValidation.next_action || "等待真实商家完成 AI CEO、报告、Listing 确认和决策中心闭环。测试账号不会计入。")}</small>
+          <small>${escapeHtml(`${merchantValidation.next_action || "等待未来真实商家规模化验证。"} 该项不阻挡你的单账号私测上线，也不会被单主理人验收冒充。`)}</small>
         </div>
         <div class="saas-owner-fixed-progress-queue">
           ${fixedProgressActions
