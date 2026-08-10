@@ -29,6 +29,7 @@ def _create_path(
     email: str,
     path_count: int,
     decided: bool = True,
+    task_status: str = "completed",
 ) -> dict[str, str]:
     fixture = repository.create_user_with_company(
         email=email,
@@ -54,7 +55,7 @@ def _create_path(
         task = repository.update_task_status(
             task_id=task["task_id"],
             company_id=company_id,
-            status="completed",
+            status=task_status,
             output={"validation_fixture": True},
         )
         repository.save_runtime_outputs(
@@ -103,14 +104,19 @@ def main() -> int:
 
     pilot_repository = SaaSRepository(OUT / "owner-pilot.sqlite")
     pilot_repository.initialize()
-    pilot_fixture = _create_path(pilot_repository, email="owner-pilot@jiejing.shop", path_count=1)
+    pilot_fixture = _create_path(
+        pilot_repository,
+        email="owner-pilot@jiejing.shop",
+        path_count=1,
+        task_status="completed_with_blocks",
+    )
     owner_pilot = pilot_repository.owner_pilot_workflow_validation_snapshot(
         company_id=pilot_fixture["company_id"]
     )
     if owner_pilot.get("contract_version") != "2026-08-10-owner-pilot-workflow-validation-v1":
         return fail(f"unexpected owner pilot contract: {owner_pilot}")
     if owner_pilot.get("passed") is not True or owner_pilot.get("status") != "owner_pilot_path_verified":
-        return fail(f"one real owner path should satisfy private owner-pilot acceptance: {owner_pilot}")
+        return fail(f"one safely blocked owner path should satisfy private owner-pilot acceptance: {owner_pilot}")
     if owner_pilot.get("required_account_count") != 1 or owner_pilot.get("required_path_count") != 1:
         return fail(f"owner pilot must use an explicit one-account one-path threshold: {owner_pilot}")
     if owner_pilot.get("scale_validation_replaced") is not False:

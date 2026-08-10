@@ -6962,7 +6962,7 @@ class SaaSRepository:
                 from tasks t
                 where t.company_id = ?
                   and t.task_type = ?
-                  and t.status = ?
+                  and t.status in (?, ?)
                   and exists (
                     select 1
                     from users u
@@ -6987,6 +6987,7 @@ class SaaSRepository:
                     company_id,
                     "product_workflow",
                     "completed",
+                    "completed_with_blocks",
                     ACCOUNT_CLASSIFICATION_MERCHANT,
                     "approved",
                     "rejected",
