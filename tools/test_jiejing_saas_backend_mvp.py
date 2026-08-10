@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import http.client
 import socket
 import subprocess
 import sys
@@ -519,12 +520,14 @@ def main() -> int:
         array_json_status, array_json_body = post_raw_expect_error(f"{base_url}/auth/login", b"[]")
         if array_json_status != 400 or "json body must be an object" not in array_json_body.get("error", ""):
             return fail("non-object JSON request bodies should return a stable 400 response")
-        large_json_status, large_json_body = post_raw_expect_error(
+        large_json_status, large_json_body = post_declared_oversized_expect_error(
             f"{base_url}/auth/login",
-            b'{"payload":"' + (b"a" * (1024 * 1024 + 4096)) + b'"}',
+            declared_length=1024 * 1024 + 4096,
         )
         if large_json_status != 413:
             return fail("oversized JSON request bodies should return a stable 413 response")
+        if fetch_json(f"{base_url}/health").get("status") != "ok":
+            return fail("backend must remain healthy after rejecting an oversized JSON request")
 
         demo_session_first = post_json(
             f"{base_url}/auth/demo-session",
@@ -1507,6 +1510,30 @@ def post_raw_expect_error(
         if not body_bytes:
             return exc.code, {}
         return exc.code, json.loads(body_bytes.decode("utf-8"))
+
+
+def post_declared_oversized_expect_error(url: str, *, declared_length: int) -> tuple[int, dict[str, Any]]:
+    """Verify the server rejects an oversized request before reading its body.
+
+    Sending the entire payload races the server's intentional early close and
+    produces a client-side BrokenPipeError on Linux.  Declaring the oversized
+    Content-Length exercises the actual boundary without depending on socket
+    buffer behavior or allocating an unnecessary megabyte-scale fixture.
+    """
+
+    parsed = urllib.parse.urlsplit(url)
+    connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=20)
+    try:
+        target = urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+        connection.putrequest("POST", target)
+        connection.putheader("Content-Type", "application/json")
+        connection.putheader("Content-Length", str(declared_length))
+        connection.endheaders()
+        response = connection.getresponse()
+        body = response.read()
+        return response.status, json.loads(body.decode("utf-8")) if body else {}
+    finally:
+        connection.close()
 
 
 if __name__ == "__main__":
