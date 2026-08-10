@@ -492,6 +492,14 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     require(app_js, "刷新待办", "rendered decision center non-technical refresh copy")
     require(app_js, "saas-confirm-card-decision", "rendered decision card frontloads merchant choice")
     require(app_js, "saas-confirm-safety-detail", "rendered decision card folds backend evidence")
+    require(app_js, 'data-saas-action="revise-confirmation"', "decision center offers a real revise action")
+    require(app_js, "async function reviseSaasConfirmation", "decision center revise handler")
+    require(app_js, 'decision: "modify"', "decision center revise records needs-revision semantics")
+    revision_start = app_js.index("async function reviseSaasConfirmation")
+    revision_end = app_js.index("async function approveFirstSaasConfirmation", revision_start)
+    revision_block = app_js[revision_start:revision_end]
+    if "/preflight" in revision_block or "/execute" in revision_block:
+        return fail("decision center revise action must never enter preflight or execution")
     require(app_js, "为什么停住", "rendered decision card keeps evidence behind plain-language disclosure")
     require(app_js, "普通商家只看 5 个入口", "settings map merchant entrance boundary")
     require(app_js, "这里处理账号、店铺数据、AI、权限、订阅与安全", "settings home low-learning-cost copy")

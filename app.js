@@ -20642,6 +20642,7 @@ function renderSaasConfirmPanel() {
                       status === "pending"
                         ? `<div class="runtime-confirm-actions">
                             <button class="secondary-action" type="button" data-saas-action="refresh">稍后处理</button>
+                            <button class="secondary-action" type="button" data-saas-action="revise-confirmation" data-saas-confirmation="${escapeHtml(card.confirmation_id)}">回去补资料</button>
                             <button class="primary-action" type="button" data-saas-action="approve-confirmation" data-saas-confirmation="${escapeHtml(card.confirmation_id)}">${escapeHtml(saasConfirmationApproveButtonLabel(card))}</button>
                           </div>`
                         : `<div class="runtime-confirm-actions">
@@ -27857,6 +27858,34 @@ function continueSaasMvpAfterAuth() {
   window.setTimeout(() => openOnboarding(), 0);
 }
 
+async function reviseSaasConfirmation(confirmationId = "") {
+  const confirmation =
+    (confirmationId && (state.saasConfirmations || []).find((item) => item.confirmation_id === confirmationId)) ||
+    (state.saasConfirmations || []).find((item) => item.status === "pending");
+  if (!confirmation || confirmation.status !== "pending") {
+    showActionToast("当前没有可退回补资料的确认项。");
+    return false;
+  }
+  try {
+    await saasFetch(`/confirmations/${encodeURIComponent(confirmation.confirmation_id)}/decision`, {
+      method: "POST",
+      body: JSON.stringify({
+        decision: "modify",
+        note: "Merchant returned this item for more facts. No preflight or execution was requested.",
+      }),
+    });
+    await refreshSaasState({ silent: true });
+    renderSaasBackendPanel();
+    showActionToast("已退回补资料；没有执行发布、付款或其他平台动作。");
+    return true;
+  } catch (error) {
+    state.saasError = `退回补资料失败：${error.message}`;
+    renderSaasBackendPanel();
+    showActionToast("退回补资料失败，已停止；没有执行平台动作。");
+    return false;
+  }
+}
+
 async function approveFirstSaasConfirmation(confirmationId = "") {
   const confirmation =
     (confirmationId && (state.saasConfirmations || []).find((item) => item.confirmation_id === confirmationId)) ||
@@ -30074,6 +30103,7 @@ function handleSaasAction(button) {
     "create-ebay-draft-confirmation",
     "approve-first",
     "approve-confirmation",
+    "revise-confirmation",
     "recover-publish",
     "create-cleanup-plan",
     "billing-test-event",
@@ -30250,6 +30280,10 @@ function handleSaasAction(button) {
   }
   if (action === "approve-first" || action === "approve-confirmation") {
     approveFirstSaasConfirmation(button.dataset.saasConfirmation || "");
+    return;
+  }
+  if (action === "revise-confirmation") {
+    reviseSaasConfirmation(button.dataset.saasConfirmation || "");
     return;
   }
   if (action === "recover-publish") {
