@@ -992,14 +992,19 @@ async function main() {
     confirmations = [exactOAuthConfirmation("rejected")];
     const rejectedCounts = { confirmation: counters.confirmation, plan: counters.plan };
     const rejectedPage = await openAccountSettingsPage(context, base, consoleErrors);
-    await rejectedPage.locator('[data-saas-action="plan-ebay-oauth"]').first().click();
-    await rejectedPage.waitForTimeout(150);
+    await rejectedPage.evaluate(async () => {
+      await planSaasEbayReadOnlyOAuth();
+    });
     if (counters.confirmation !== rejectedCounts.confirmation || counters.plan !== rejectedCounts.plan) {
       throw new Error("rejected exact confirmation must fail closed without intake or plan");
     }
     await rejectedPage.close();
 
-    confirmations = [exactOAuthConfirmation("approved", store.store_id, "2026-01-01T00:00:00Z")];
+    confirmations = [
+      exactOAuthConfirmation("approved", store.store_id, "2026-01-01T00:00:00Z"),
+      exactOAuthConfirmation("expired", store.store_id, "2025-12-31T23:58:00Z", "confirm-oauth-history-expired-fixture"),
+      exactOAuthConfirmation("rejected", store.store_id, "2025-12-31T23:57:00Z", "confirm-oauth-history-rejected-fixture"),
+    ];
     const expiredCounts = { confirmation: counters.confirmation, plan: counters.plan };
     const expiredPage = await openAccountSettingsPage(context, base, consoleErrors);
     await expiredPage.locator('[data-saas-action="plan-ebay-oauth"]').first().click();
@@ -1009,7 +1014,7 @@ async function main() {
       counters.confirmation !== expiredCounts.confirmation + 1 ||
       confirmations[0]?.status !== "pending"
     ) {
-      throw new Error("expired exact confirmation must atomically request one replacement pending card without creating an OAuth plan");
+      throw new Error("expired exact confirmation must ignore historical terminal OAuth cards and atomically request one replacement pending card without creating an OAuth plan");
     }
     await expiredPage.close();
 

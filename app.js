@@ -28767,10 +28767,19 @@ async function planSaasEbayReadOnlyOAuth() {
     }
     const activeConfirmations = saasCurrentStoreActiveReadOnlyOAuthConfirmations(store.store_id);
     const suspiciousCurrentStoreConfirmation = (state.saasConfirmations || []).some(
-      (card) =>
-        isSaasReadOnlyOAuthSensitiveConfirmation(card) &&
-        ["", String(store.store_id)].includes(String(card?.store_id || "").trim()) &&
-        !activeConfirmations.includes(card),
+      (card) => {
+        const status = String(card?.status || "");
+        return (
+          isSaasReadOnlyOAuthSensitiveConfirmation(card) &&
+          ["", String(store.store_id)].includes(String(card?.store_id || "").trim()) &&
+          !activeConfirmations.includes(card) &&
+          (
+            ["pending", "approved"].includes(status) ||
+            !["expired", "rejected"].includes(status) ||
+            (status === "rejected" && activeConfirmations.length === 0)
+          )
+        );
+      },
     );
     if (activeConfirmations.length > 1 || suspiciousCurrentStoreConfirmation) {
       openSaasReadOnlyOAuthConfirmationCenter();
