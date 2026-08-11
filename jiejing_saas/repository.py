@@ -5272,7 +5272,7 @@ class SaaSRepository:
                 if len(exact_active) != 1:
                     raise ValueError("oauth_confirmation_already_active")
                 existing = exact_active[0]
-                decided_at = _parse_explicit_timezone_iso_datetime(str(existing.get("decided_at") or ""))
+                decided_at = _parse_explicit_timezone_iso_datetime(existing.get("decided_at"))
                 expired_approval = bool(
                     str(existing.get("status") or "") == "approved"
                     and str(existing.get("decided_by") or "")
@@ -5703,7 +5703,7 @@ class SaaSRepository:
             ).fetchone()
             confirmation = self._confirmation_row_to_dict(confirmation_row) if confirmation_row else {}
             item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
-            decided_at = _parse_explicit_timezone_iso_datetime(str(confirmation.get("decided_at") or ""))
+            decided_at = _parse_explicit_timezone_iso_datetime(confirmation.get("decided_at"))
             exact_approval = bool(
                 confirmation
                 and str(confirmation.get("store_id") or "") == store_id
@@ -5716,7 +5716,7 @@ class SaaSRepository:
                 and _timestamp_not_future_within_seconds(decided_at, now_utc, 15 * 60)
             )
             if not exact_approval:
-                raise ValueError("oauth_plan_exact_approval_required")
+                raise OAuthPlanExactApprovalError("approval_predicate_rejected")
 
             consumed = conn.execute(
                 """
@@ -5726,7 +5726,7 @@ class SaaSRepository:
                 (company_id, confirmation_id),
             ).rowcount
             if consumed != 1:
-                raise ValueError("oauth_plan_exact_approval_required")
+                raise OAuthPlanExactApprovalError("approval_consume_conflict")
             safe_plan = _redact_secret_like({**plan, "confirmation_id": confirmation_id})
             record = {
                 "oauth_request_id": request_id,
@@ -11029,7 +11029,11 @@ def _timestamp_within_seconds(left: datetime | None, right: datetime | None, max
     )
 
 
-def _parse_explicit_timezone_iso_datetime(value: str) -> datetime | None:
+def _parse_explicit_timezone_iso_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        if value.tzinfo is None or value.utcoffset() is None:
+            return None
+        return value.astimezone(timezone.utc)
     text = str(value or "").strip()
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})", text):
         return None
@@ -11168,6 +11172,21 @@ def _runtime_confirmation_matches(
 
 class ConfirmationDecisionConflict(ValueError):
     """Raised when a terminal confirmation is asked to transition again."""
+
+
+class OAuthPlanExactApprovalError(ValueError):
+    """Fixed public rejection with a value-free internal diagnostic branch."""
+
+    _ALLOWED_DIAGNOSTIC_CODES = {
+        "approval_predicate_rejected",
+        "approval_consume_conflict",
+    }
+
+    def __init__(self, diagnostic_code: str) -> None:
+        super().__init__("oauth_plan_exact_approval_required")
+        self.diagnostic_code = (
+            diagnostic_code if diagnostic_code in self._ALLOWED_DIAGNOSTIC_CODES else "approval_predicate_rejected"
+        )
 
 
 

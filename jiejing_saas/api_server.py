@@ -130,6 +130,7 @@ from .repository import (
     EXTERNAL_EXECUTION_PROCESSING_STATUS,
     ConfirmationDecisionConflict,
     HIGH_RISK_ACTIONS,
+    OAuthPlanExactApprovalError,
     SaaSRepository,
 )
 from .runtime_bridge import RuntimeBridge
@@ -3816,6 +3817,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 )
             except KeyError:
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            except OAuthPlanExactApprovalError as exc:
+                self._log_oauth_plan_exact_approval_rejection(exc.diagnostic_code)
+                self._send_error(HTTPStatus.CONFLICT, str(exc))
                 return
             except ValueError as exc:
                 self._send_error(HTTPStatus.CONFLICT, str(exc))
@@ -8684,6 +8689,22 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "route_class": route_class,
                 "error_type": error_type,
                 "sqlstate": sqlstate,
+                "secret_exposed": False,
+            }
+            sys.stderr.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+        except Exception:
+            return
+
+    def _log_oauth_plan_exact_approval_rejection(self, diagnostic_code: str) -> None:
+        try:
+            safe_code = (
+                diagnostic_code
+                if diagnostic_code in {"approval_predicate_rejected", "approval_consume_conflict"}
+                else "unknown"
+            )
+            event = {
+                "event": "oauth_plan_exact_approval_rejected",
+                "diagnostic_code": safe_code,
                 "secret_exposed": False,
             }
             sys.stderr.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
