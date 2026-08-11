@@ -515,7 +515,8 @@ async function main() {
         },
       });
       return {
-        future: isSaasFreshApprovedReadOnlyOAuthConfirmation(card(new Date(referenceNow + 1000).toISOString()), storeId, referenceNow),
+        futureWithinClockSkew: isSaasFreshApprovedReadOnlyOAuthConfirmation(card(new Date(referenceNow + 60 * 1000).toISOString()), storeId, referenceNow),
+        futureBeyondClockSkew: isSaasFreshApprovedReadOnlyOAuthConfirmation(card(new Date(referenceNow + 60 * 1000 + 1).toISOString()), storeId, referenceNow),
         invalid: isSaasFreshApprovedReadOnlyOAuthConfirmation(card("not-a-time"), storeId, referenceNow),
         naive: isSaasFreshApprovedReadOnlyOAuthConfirmation(card(new Date(referenceNow - 1000).toISOString().replace(/Z$/, "")), storeId, referenceNow),
         exactBoundary: isSaasFreshApprovedReadOnlyOAuthConfirmation(card(new Date(referenceNow - 15 * 60 * 1000).toISOString()), storeId, referenceNow),
@@ -523,13 +524,14 @@ async function main() {
       };
     }, { storeId: store.store_id });
     if (
-      approvalTimeContract.future ||
+      !approvalTimeContract.futureWithinClockSkew ||
+      approvalTimeContract.futureBeyondClockSkew ||
       approvalTimeContract.invalid ||
       approvalTimeContract.naive ||
       !approvalTimeContract.exactBoundary ||
       approvalTimeContract.overBoundary
     ) {
-      throw new Error(`OAuth approval timestamp contract must reject future/invalid/naive and enforce 15m inclusive boundary; result=${JSON.stringify(approvalTimeContract)}`);
+      throw new Error(`OAuth approval timestamp contract must allow only 60s server/browser clock skew, reject larger future/invalid/naive timestamps, and enforce the 15m inclusive age boundary; result=${JSON.stringify(approvalTimeContract)}`);
     }
     await showAccountSettings(page);
     await page.locator('[data-saas-action="plan-ebay-oauth"]').first().click();

@@ -17696,7 +17696,7 @@ function isSaasFreshApprovedReadOnlyOAuthConfirmation(card = {}, storeId = "", r
   const now = Number(referenceNow);
   if (!Number.isFinite(decidedAt) || !Number.isFinite(now)) return false;
   const ageMs = now - decidedAt;
-  return ageMs >= 0 && ageMs <= 15 * 60 * 1000;
+  return ageMs >= -60 * 1000 && ageMs <= 15 * 60 * 1000;
 }
 
 function rememberSaasReadOnlyOAuthConfirmation(storeId = "", confirmation = {}) {
