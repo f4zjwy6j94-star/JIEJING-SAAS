@@ -5258,6 +5258,7 @@ class SaaSRepository:
                 """,
                 (company_id, store_id, action_type),
             ).fetchall()
+            exact_active: list[dict[str, Any]] = []
             for row in active_rows:
                 existing = self._confirmation_row_to_dict(row)
                 existing_item = existing.get("item") if isinstance(existing.get("item"), dict) else {}
@@ -5266,7 +5267,71 @@ class SaaSRepository:
                     and str(existing_item.get("requested_step") or "") == "new_account_oauth_authorization_gate"
                     and str(existing_item.get("scope_profile") or "") == "seller_read_only"
                 ):
+                    exact_active.append(existing)
+            if exact_active:
+                if len(exact_active) != 1:
                     raise ValueError("oauth_confirmation_already_active")
+                existing = exact_active[0]
+                decided_at = _parse_explicit_timezone_iso_datetime(str(existing.get("decided_at") or ""))
+                expired_approval = bool(
+                    str(existing.get("status") or "") == "approved"
+                    and str(existing.get("decided_by") or "")
+                    and _timestamp_strictly_older_than_seconds(decided_at, datetime.now(timezone.utc), 15 * 60)
+                )
+                if not expired_approval:
+                    raise ValueError("oauth_confirmation_already_active")
+                request_rows = conn.execute(
+                    """
+                    select request_json from oauth_authorization_requests
+                    where company_id = ? and store_id = ? and lower(platform) = 'ebay'
+                    """,
+                    (company_id, store_id),
+                ).fetchall()
+                has_related_or_malformed_request = False
+                for request_row in request_rows:
+                    try:
+                        request_body = _load_json_field(request_row["request_json"])
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        has_related_or_malformed_request = True
+                        break
+                    if not isinstance(request_body, dict):
+                        has_related_or_malformed_request = True
+                        break
+                    if str(request_body.get("confirmation_id") or "") == str(existing.get("confirmation_id") or ""):
+                        has_related_or_malformed_request = True
+                        break
+                if has_related_or_malformed_request:
+                    raise ValueError("oauth_confirmation_already_active")
+                expired = conn.execute(
+                    """
+                    update confirmations set status = 'expired', decision_note = ?
+                    where company_id = ? and confirmation_id = ? and status = 'approved'
+                    """,
+                    (
+                        "Expired before OAuth state creation; superseded by a new exact pending confirmation.",
+                        company_id,
+                        existing["confirmation_id"],
+                    ),
+                ).rowcount
+                if expired != 1:
+                    raise ValueError("oauth_confirmation_already_active")
+                self._insert_audit(
+                    conn,
+                    company_id=company_id,
+                    store_id=store_id,
+                    user_id=user_id,
+                    actor_type="system",
+                    action_type="oauth.confirmation.expired_superseded",
+                    target_type="confirmation",
+                    target_id=str(existing["confirmation_id"]),
+                    summary="An expired exact read-only OAuth approval with no OAuth request was superseded.",
+                    details={
+                        "scope_profile": "seller_read_only",
+                        "oauth_request_existed": False,
+                        "replacement_pending_created_in_same_transaction": True,
+                        "secret_exposed": False,
+                    },
+                )
             conn.execute(
                 """
                 insert into confirmations (
@@ -5638,7 +5703,7 @@ class SaaSRepository:
             ).fetchone()
             confirmation = self._confirmation_row_to_dict(confirmation_row) if confirmation_row else {}
             item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
-            decided_at = _parse_iso_datetime(str(confirmation.get("decided_at") or ""))
+            decided_at = _parse_explicit_timezone_iso_datetime(str(confirmation.get("decided_at") or ""))
             exact_approval = bool(
                 confirmation
                 and str(confirmation.get("store_id") or "") == store_id
@@ -5648,7 +5713,7 @@ class SaaSRepository:
                 and str(item.get("source") or "") == "new_ebay_account_low_risk_smoke"
                 and str(item.get("requested_step") or "") == "new_account_oauth_authorization_gate"
                 and str(item.get("scope_profile") or "") == "seller_read_only"
-                and _timestamp_within_seconds(decided_at, now_utc, 15 * 60)
+                and _timestamp_not_future_within_seconds(decided_at, now_utc, 15 * 60)
             )
             if not exact_approval:
                 raise ValueError("oauth_plan_exact_approval_required")
@@ -5676,6 +5741,7 @@ class SaaSRepository:
                 "created_at": created_at,
                 "updated_at": created_at,
                 "request": safe_plan,
+                "real_platform_writes_enabled": False,
                 "secret_exposed": False,
             }
             conn.execute(
@@ -10961,6 +11027,32 @@ def _timestamp_within_seconds(left: datetime | None, right: datetime | None, max
         and maximum >= 0
         and abs((left - right).total_seconds()) <= maximum
     )
+
+
+def _parse_explicit_timezone_iso_datetime(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})", text):
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _timestamp_not_future_within_seconds(left: datetime | None, right: datetime | None, maximum: int) -> bool:
+    if left is None or right is None or maximum < 0:
+        return False
+    age_seconds = (right - left).total_seconds()
+    return 0 <= age_seconds <= maximum
+
+
+def _timestamp_strictly_older_than_seconds(left: datetime | None, right: datetime | None, maximum: int) -> bool:
+    if left is None or right is None or maximum < 0:
+        return False
+    return (right - left).total_seconds() > maximum
 
 
 def _is_exact_read_only_sync_confirmation(

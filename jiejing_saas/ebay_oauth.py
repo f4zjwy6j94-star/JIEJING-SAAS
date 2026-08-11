@@ -522,21 +522,20 @@ class EbayOAuthPlanner:
         return "https://api.ebay.com/identity/v1/oauth2/token"
 
     def _normalize_scopes(self, requested_scopes: list[str] | None) -> list[str]:
-        if not requested_scopes:
+        if requested_scopes is None:
             return list(READ_ONLY_SCOPES)
-        scopes = []
+        if not requested_scopes:
+            raise ValueError("oauth_read_only_scopes_not_allowed")
+        allowed = set(READ_ONLY_SCOPES)
+        scopes: list[str] = []
         for scope in requested_scopes:
-            text = str(scope).strip()
-            if not text:
-                continue
-            if self._looks_high_risk_write_scope(text):
-                continue
-            scopes.append(text)
-        if "https://api.ebay.com/oauth/api_scope" not in scopes:
-            scopes.insert(0, "https://api.ebay.com/oauth/api_scope")
-        identity_scope = "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly"
-        if identity_scope not in scopes:
-            scopes.append(identity_scope)
+            if type(scope) is not str or scope not in allowed:
+                raise ValueError("oauth_read_only_scopes_not_allowed")
+            if scope not in scopes:
+                scopes.append(scope)
+        for required_scope in READ_ONLY_SCOPES[:2]:
+            if required_scope not in scopes:
+                scopes.append(required_scope)
         return scopes or list(READ_ONLY_SCOPES)
 
     def _normalize_publish_scopes(self, requested_scopes: list[str] | None) -> list[str]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import http.client
+import io
 import socket
 import sqlite3
 import subprocess
@@ -14,6 +15,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import redirect_stderr
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -44,6 +46,27 @@ def find_free_port() -> int:
 def main() -> int:
     from jiejing_saas.api_server import SaaSBackendHandler
     from jiejing_saas.repository import SaaSRepository
+
+    access_log_sentinel = "OAUTH_CONFIRMATION_LOG_SENTINEL"
+    access_log_handler = object.__new__(SaaSBackendHandler)
+    access_log_handler.path = f"/confirmations/{access_log_sentinel}/decision"
+    access_log_handler.command = "POST"
+    access_log_handler._safe_access_log_enabled = lambda: True
+    access_log_stderr = io.StringIO()
+    with redirect_stderr(access_log_stderr):
+        access_log_handler.log_message(
+            "%s",
+            f"POST /confirmations/{access_log_sentinel}/decision HTTP/1.1",
+            "200",
+            "-",
+        )
+    safe_access_event = access_log_stderr.getvalue()
+    if access_log_sentinel in safe_access_event:
+        return fail("OAuth confirmation decision access logs must redact the exact confirmation ID")
+    if '"path":"/confirmations/:confirmation_id/decision"' not in safe_access_event:
+        return fail("redacted confirmation access logs must preserve the fixed route shape")
+    if '"method":"POST"' not in safe_access_event or '"status":"200"' not in safe_access_event:
+        return fail("redacted confirmation access logs must preserve method and status")
 
     internal_plan = {
         "contract_version": "merchant-plan-test-v1",
@@ -938,6 +961,180 @@ def main() -> int:
         oauth_confirmation = approved_http_confirmation
 
         approval_repo = SaaSRepository(SAAS_DB, database_engine="sqlite", database_url="")
+        recovery_store = approval_repo.create_store(
+            company_id=owner_company_id,
+            user_id=me["user"]["user_id"],
+            payload={"platform": "ebay", "store_name": "OAuth approval recovery fixture", "marketplace": "EBAY_US"},
+        )
+        recovery_url = f"{base_url}/stores/{recovery_store['store_id']}/ebay-oauth/read-only-confirmation"
+        recovery_pending = post_json(
+            recovery_url,
+            {"scope_profile": "seller_read_only"},
+            token=token,
+        ).get("oauth_confirmation", {})
+        recovery_confirmation_id = str(recovery_pending.get("confirmation_id") or "")
+        if not recovery_confirmation_id:
+            return fail("OAuth recovery fixture must start with one pending confirmation")
+        recovery_approved = post_json(
+            f"{base_url}/confirmations/{recovery_confirmation_id}/decision",
+            {"decision": "approve", "note": "Approval intentionally expires before OAuth state is created."},
+            token=token,
+        ).get("confirmation", {})
+        if recovery_approved.get("status") != "approved":
+            return fail("OAuth recovery fixture approval must become approved")
+        with sqlite3.connect(SAAS_DB) as recovery_conn:
+            recovery_conn.execute(
+                "update confirmations set decided_at = ? where company_id = ? and confirmation_id = ?",
+                ("2000-01-01T00:00:00+00:00", owner_company_id, recovery_confirmation_id),
+            )
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            recovery_results = list(
+                executor.map(
+                    lambda _index: post_json_expect_error(
+                        recovery_url,
+                        {"scope_profile": "seller_read_only"},
+                        token=token,
+                    ),
+                    range(4),
+                )
+            )
+        recovery_successes = [body for status, body in recovery_results if status == 200]
+        recovery_conflicts = [body for status, body in recovery_results if status == 409]
+        if len(recovery_successes) != 1 or len(recovery_conflicts) != 3:
+            return fail(f"expired OAuth approval replacement must atomically create one pending card: {recovery_results}")
+        expired_recovery = approval_repo.get_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=recovery_confirmation_id,
+        ) or {}
+        if expired_recovery.get("status") != "expired":
+            return fail("an exact expired OAuth approval with no request must become terminal before replacement")
+        recovery_store_confirmations = [
+            item
+            for item in approval_repo.list_confirmations(company_id=owner_company_id, limit=200)
+            if item.get("store_id") == recovery_store["store_id"]
+            and item.get("action_type") == "ebay_oauth_scope_change"
+        ]
+        if len([item for item in recovery_store_confirmations if item.get("status") == "pending"]) != 1:
+            return fail("concurrent OAuth recovery must leave exactly one new pending confirmation")
+        recovery_audits = approval_repo.list_audit_logs(company_id=owner_company_id, limit=200)
+        if not any(
+            audit.get("action_type") == "oauth.confirmation.expired_superseded"
+            and audit.get("store_id") == recovery_store["store_id"]
+            for audit in recovery_audits
+        ):
+            return fail("expired OAuth approval replacement must write a value-free system audit")
+
+        rollback_store = approval_repo.create_store(
+            company_id=owner_company_id,
+            user_id=me["user"]["user_id"],
+            payload={"platform": "ebay", "store_name": "OAuth recovery rollback fixture", "marketplace": "EBAY_US"},
+        )
+        rollback_confirmation = approval_repo.create_read_only_oauth_confirmation(
+            company_id=owner_company_id,
+            store_id=rollback_store["store_id"],
+            user_id=me["user"]["user_id"],
+        )
+        rollback_confirmation = approval_repo.decide_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=rollback_confirmation["confirmation_id"],
+            decision="approve",
+            decided_by=me["user"]["user_id"],
+            note="Rollback fixture",
+        )
+        with sqlite3.connect(SAAS_DB) as rollback_conn:
+            rollback_conn.execute(
+                "update confirmations set decided_at = ? where company_id = ? and confirmation_id = ?",
+                ("2000-01-01T00:00:00+00:00", owner_company_id, rollback_confirmation["confirmation_id"]),
+            )
+        original_insert_audit = approval_repo._insert_audit
+        approval_repo._insert_audit = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("audit_fixture_failure"))
+        try:
+            approval_repo.create_read_only_oauth_confirmation(
+                company_id=owner_company_id,
+                store_id=rollback_store["store_id"],
+                user_id=me["user"]["user_id"],
+            )
+        except RuntimeError as exc:
+            if str(exc) != "audit_fixture_failure":
+                return fail("OAuth approval replacement rollback fixture raised the wrong error")
+        else:
+            return fail("OAuth approval replacement must surface transactional audit failure")
+        finally:
+            approval_repo._insert_audit = original_insert_audit
+        rollback_after_failure = approval_repo.get_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=rollback_confirmation["confirmation_id"],
+        ) or {}
+        rollback_store_confirmations = [
+            item
+            for item in approval_repo.list_confirmations(company_id=owner_company_id, limit=200)
+            if item.get("store_id") == rollback_store["store_id"]
+            and item.get("action_type") == "ebay_oauth_scope_change"
+        ]
+        if rollback_after_failure.get("status") != "approved" or len(rollback_store_confirmations) != 1:
+            return fail("OAuth approval replacement failure must roll back expiration and pending insertion together")
+
+        linked_request_store = approval_repo.create_store(
+            company_id=owner_company_id,
+            user_id=me["user"]["user_id"],
+            payload={"platform": "ebay", "store_name": "OAuth linked request fixture", "marketplace": "EBAY_US"},
+        )
+        linked_request_confirmation = approval_repo.create_read_only_oauth_confirmation(
+            company_id=owner_company_id,
+            store_id=linked_request_store["store_id"],
+            user_id=me["user"]["user_id"],
+        )
+        linked_request_confirmation = approval_repo.decide_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=linked_request_confirmation["confirmation_id"],
+            decision="approve",
+            decided_by=me["user"]["user_id"],
+            note="Linked request fixture",
+        )
+        with sqlite3.connect(SAAS_DB) as linked_request_conn:
+            linked_request_conn.execute(
+                "update confirmations set decided_at = ? where company_id = ? and confirmation_id = ?",
+                ("2000-01-01T00:00:00+00:00", owner_company_id, linked_request_confirmation["confirmation_id"]),
+            )
+        approval_repo.create_oauth_authorization_request(
+            company_id=owner_company_id,
+            store_id=linked_request_store["store_id"],
+            user_id=me["user"]["user_id"],
+            plan={
+                "platform": "ebay",
+                "status": "ready_to_redirect",
+                "state_nonce": "linked-request-state-nonce-fixture",
+                "scopes": ["https://api.ebay.com/oauth/api_scope"],
+                "scope_profile": "seller_read_only",
+                "confirmation_id": linked_request_confirmation["confirmation_id"],
+                "authorization_url": None,
+                "secret_exposed": False,
+            },
+        )
+        try:
+            approval_repo.create_read_only_oauth_confirmation(
+                company_id=owner_company_id,
+                store_id=linked_request_store["store_id"],
+                user_id=me["user"]["user_id"],
+            )
+        except ValueError as exc:
+            if str(exc) != "oauth_confirmation_already_active":
+                return fail("linked OAuth request replacement must use the fixed active blocker")
+        else:
+            return fail("an expired OAuth approval with a related request must not be superseded")
+        linked_request_after = approval_repo.get_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=linked_request_confirmation["confirmation_id"],
+        ) or {}
+        linked_request_store_confirmations = [
+            item
+            for item in approval_repo.list_confirmations(company_id=owner_company_id, limit=300)
+            if item.get("store_id") == linked_request_store["store_id"]
+            and item.get("action_type") == "ebay_oauth_scope_change"
+        ]
+        if linked_request_after.get("status") != "approved" or len(linked_request_store_confirmations) != 1:
+            return fail("linked OAuth request evidence must preserve the original approval and create no replacement")
+
         state_unique_db = OUT / "oauth-state-unique-regression.sqlite"
         state_unique_repo = SaaSRepository(state_unique_db, database_engine="sqlite", database_url="")
         state_unique_repo.initialize()
@@ -1335,6 +1532,57 @@ def main() -> int:
         if len(oauth_requests_after_expired) != len(oauth_requests_before_plan):
             return fail("expired OAuth approval must not persist request/state records")
 
+        for invalid_time_label, invalid_decided_at in (
+            ("future", "2999-01-01T00:00:00+00:00"),
+            ("naive timezone", "2026-08-11T00:00:00"),
+            ("invalid", "not-an-iso-timestamp"),
+        ):
+            invalid_time_confirmation = approval_repo.create_confirmation(
+                company_id=owner_company_id,
+                store_id=store_id,
+                task_id=None,
+                runtime_run_id="new_ebay_account_oauth_authorization_gate",
+                action_type="ebay_oauth_scope_change",
+                title=f"{invalid_time_label} approval must not authorize OAuth",
+                item={
+                    "source": "new_ebay_account_low_risk_smoke",
+                    "requested_step": "new_account_oauth_authorization_gate",
+                    "scope_profile": "seller_read_only",
+                    "secret_exposed": False,
+                },
+                created_by=me["user"]["user_id"],
+                default_action="hold",
+            )
+            invalid_time_confirmation = approval_repo.decide_confirmation(
+                company_id=owner_company_id,
+                confirmation_id=invalid_time_confirmation["confirmation_id"],
+                decision="approve",
+                decided_by=me["user"]["user_id"],
+                note="This approval timestamp is intentionally invalid for the OAuth boundary.",
+            )
+            with sqlite3.connect(SAAS_DB) as invalid_time_conn:
+                invalid_time_conn.execute(
+                    "update confirmations set decided_at = ? where confirmation_id = ?",
+                    (invalid_decided_at, invalid_time_confirmation["confirmation_id"]),
+                )
+            invalid_time_status, invalid_time_error = post_json_expect_error(
+                f"{base_url}/stores/{store_id}/ebay-oauth/read-only-plan",
+                {
+                    "marketplace_id": "EBAY_US",
+                    "confirmation_id": invalid_time_confirmation["confirmation_id"],
+                },
+                token=token,
+            )
+            if invalid_time_status != 409:
+                return fail(f"{invalid_time_label} OAuth approval timestamp must fail closed")
+            invalid_time_serialized = json.dumps(invalid_time_error, ensure_ascii=False)
+            if invalid_time_confirmation["confirmation_id"] in invalid_time_serialized:
+                return fail(f"{invalid_time_label} OAuth rejection must stay value-free")
+            if len(
+                fetch_json(f"{base_url}/oauth/requests?store_id={store_id}", token=token).get("oauth_requests") or []
+            ) != len(oauth_requests_before_plan):
+                return fail(f"{invalid_time_label} OAuth approval must not persist request/state records")
+
         connections_before_forgery = approval_repo.list_connections(
             company_id=owner_company_id,
             store_id=store_id,
@@ -1377,11 +1625,52 @@ def main() -> int:
         )
 
         oauth_plan_url = f"{base_url}/stores/{store_id}/ebay-oauth/read-only-plan"
+        invalid_scope_cases = (
+            ("write scope", ["https://api.ebay.com/oauth/api_scope/sell.inventory"]),
+            (
+                "mixed unknown scope",
+                [
+                    "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
+                    "https://api.ebay.com/oauth/api_scope/unknown.readonly",
+                ],
+            ),
+            ("non-string bool scope", [True]),
+            ("string instead of list", "https://api.ebay.com/oauth/api_scope/sell.account.readonly"),
+            ("empty list", []),
+            ("null", None),
+        )
+        for invalid_scope_label, invalid_scopes in invalid_scope_cases:
+            invalid_scope_status, invalid_scope_error = post_json_expect_error(
+                oauth_plan_url,
+                {
+                    "marketplace_id": "EBAY_US",
+                    "confirmation_id": oauth_confirmation["confirmation_id"],
+                    "scopes": invalid_scopes,
+                },
+                token=token,
+            )
+            if invalid_scope_status != 400 or invalid_scope_error.get("error") != "oauth_read_only_scopes_not_allowed":
+                return fail(f"{invalid_scope_label} must be rejected before OAuth plan creation")
+            invalid_scope_serialized = json.dumps(invalid_scope_error, ensure_ascii=False)
+            if oauth_confirmation["confirmation_id"] in invalid_scope_serialized or str(invalid_scopes) in invalid_scope_serialized:
+                return fail(f"{invalid_scope_label} OAuth scope rejection must stay value-free")
+            invalid_scope_approval = approval_repo.get_confirmation(
+                company_id=owner_company_id,
+                confirmation_id=oauth_confirmation["confirmation_id"],
+            ) or {}
+            if invalid_scope_approval.get("status") != "approved":
+                return fail(f"{invalid_scope_label} must not consume the exact OAuth approval")
+            invalid_scope_requests = fetch_json(
+                f"{base_url}/oauth/requests?store_id={store_id}",
+                token=token,
+            ).get("oauth_requests") or []
+            if len(invalid_scope_requests) != len(oauth_requests_before_plan):
+                return fail(f"{invalid_scope_label} must not persist OAuth request/state/URL records")
         oauth_plan_payload = {
             "marketplace_id": "EBAY_US",
             "confirmation_id": oauth_confirmation["confirmation_id"],
             "scopes": [
-                "https://api.ebay.com/oauth/api_scope/sell.inventory",
+                "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
                 "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
                 "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
             ],
@@ -1403,12 +1692,32 @@ def main() -> int:
             return fail(f"concurrent OAuth plan POSTs must yield one success and three conflicts: {concurrent_results}")
         oauth_plan = success_results[0]
         plan = oauth_plan.get("oauth_plan", {})
+        request_record = oauth_plan.get("oauth_request", {})
+        nested_request = request_record.get("request", {}) if isinstance(request_record.get("request"), dict) else {}
+        if any(
+            value is not False
+            for value in (
+                oauth_plan.get("real_platform_writes_enabled"),
+                oauth_plan.get("secret_exposed"),
+                plan.get("real_platform_writes_enabled"),
+                plan.get("secret_exposed"),
+                request_record.get("real_platform_writes_enabled"),
+                request_record.get("secret_exposed"),
+                nested_request.get("real_platform_writes_enabled"),
+                nested_request.get("secret_exposed"),
+            )
+        ):
+            return fail("OAuth plan, request, and response security flags must all be explicit strict false")
         if plan.get("status") != "blocked_missing_oauth_config":
             return fail("OAuth plan should be blocked until eBay app config is supplied")
         if plan.get("authorization_url") is not None:
             return fail("OAuth plan must not create redirect URL without client_id and RuName")
         if any(str(scope).endswith("/sell.inventory") for scope in plan.get("scopes", [])):
             return fail("OAuth plan should filter high-risk write scopes from read-only plan")
+        if "https://api.ebay.com/oauth/api_scope/unknown.readonly" in plan.get("scopes", []):
+            return fail("OAuth plan must filter unknown scopes through the strict read-only allowlist")
+        if len(plan.get("scopes", [])) != len(set(plan.get("scopes", []))):
+            return fail("OAuth read-only scope normalization must preserve order while removing duplicates")
         if "JIEJING_EBAY_CLIENT_ID" not in plan.get("missing_config", []):
             return fail("OAuth plan should report missing client id")
         oauth_requests = fetch_json(f"{base_url}/oauth/requests?store_id={store_id}", token=token)

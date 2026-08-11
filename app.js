@@ -115,6 +115,7 @@ const state = {
   saasActiveMediaPreviewKey: "",
   saasReports: [],
   saasConfirmations: [],
+  saasConfirmationsLiveLoaded: false,
   saasMerchantMemory: [],
   saasMerchantFeedback: [],
   saasExecutionResults: [],
@@ -177,6 +178,7 @@ const state = {
   saasEbaySyncLastCompletedAt: "",
   saasEbayWriteAdapter: null,
   saasLatestOAuthUrl: "",
+  saasEbayReadOnlyOAuthFlow: null,
   saasDemoBootstrapEnabled: resolveJiejingBooleanConfig("saasDemoBootstrapEnabled", defaultJiejingDemoBootstrapEnabled()),
   saasTaskSteps: [],
   saasLastWorkflowTaskId: "",
@@ -4390,6 +4392,10 @@ const planDetails = {
     ],
   },
 };
+
+const saasExactReadOnlyOAuthConfirmationButtonBindings = new WeakMap();
+let saasExactReadOnlyOAuthConfirmationRenderGeneration = 0;
+const saasReadOnlyOAuthPlanAttemptKeys = new Set();
 
 const manualActionDetails = {
   ebay_account: {
@@ -16699,6 +16705,7 @@ function buildSaasProtectedStateSnapshot() {
         ]),
       ),
     confirmations: (state.saasConfirmations || [])
+      .filter((confirmation) => !isSaasReadOnlyOAuthSensitiveConfirmation(confirmation))
       .slice(0, 40)
       .map((confirmation) =>
         pickSaasSnapshotFields(confirmation, [
@@ -16761,7 +16768,7 @@ function hydrateSaasProtectedStateFromCache() {
   if (!hasSaasProtectedSessionCandidate()) return false;
   clearSaasProductFeedbackLiveIdentity();
   try {
-    const snapshot = readSaasProtectedStateSnapshotFromStorage();
+    let snapshot = readSaasProtectedStateSnapshotFromStorage();
     if (
       !snapshot ||
       !["2026-07-10-minimal-fast-restore-v2", "2026-07-12-listing-media-restore-v3"].includes(snapshot.version)
@@ -16769,6 +16776,17 @@ function hydrateSaasProtectedStateFromCache() {
     if (!saasAccountStorageAliases().includes(String(snapshot.account_key || "").toLowerCase())) return false;
     const savedAt = Date.parse(snapshot.saved_at || "");
     if (!Number.isFinite(savedAt) || Date.now() - savedAt > 1000 * 60 * 60 * 24 * 14) return false;
+    const restoredConfirmations = Array.isArray(snapshot.confirmations) ? snapshot.confirmations : [];
+    const safeRestoredConfirmations = restoredConfirmations.filter(
+      (confirmation) => !isSaasReadOnlyOAuthSensitiveConfirmation(confirmation),
+    );
+    if (safeRestoredConfirmations.length !== restoredConfirmations.length) {
+      snapshot = { ...snapshot, confirmations: safeRestoredConfirmations };
+      for (const key of new Set([...saasProtectedSnapshotStorageKeys(), saasStorageKeys.protectedSnapshot])) {
+        localStorage.removeItem(key);
+      }
+      localStorage.setItem(saasProtectedSnapshotStorageKey(), JSON.stringify(snapshot));
+    }
     state.saasIdentity = snapshot.identity || state.saasIdentity || null;
     state.saasUser = snapshot.user || state.saasUser || null;
     state.saasCompany = snapshot.company || state.saasCompany || null;
@@ -16788,6 +16806,7 @@ function hydrateSaasProtectedStateFromCache() {
     state.saasMediaAssetJobs = Array.isArray(snapshot.media_asset_jobs) ? snapshot.media_asset_jobs : state.saasMediaAssetJobs || [];
     state.saasReports = Array.isArray(snapshot.reports) ? snapshot.reports : state.saasReports || [];
     state.saasConfirmations = Array.isArray(snapshot.confirmations) ? snapshot.confirmations : state.saasConfirmations || [];
+    state.saasConfirmationsLiveLoaded = false;
     state.saasModelValueGate = snapshot.model_value_gate || state.saasModelValueGate || null;
     state.saasModelSettings = snapshot.model_settings || state.saasModelSettings || null;
     state.saasAccountHealth = snapshot.account_health || state.saasAccountHealth || null;
@@ -17135,6 +17154,7 @@ function resetSaasProtectedWorkbenchState() {
   state.saasEbaySync = null;
   state.saasEbayWriteAdapter = null;
   state.saasOauthRequests = [];
+  state.saasEbayReadOnlyOAuthFlow = null;
   state.saasTasks = [];
   state.saasTaskSteps = [];
   state.saasQueueJobs = [];
@@ -17142,6 +17162,7 @@ function resetSaasProtectedWorkbenchState() {
   state.saasQueueHealth = null;
   state.saasReports = [];
   state.saasConfirmations = [];
+  state.saasConfirmationsLiveLoaded = false;
   state.saasMerchantMemory = [];
   state.saasMerchantFeedback = [];
   state.saasExecutionResults = [];
@@ -17466,6 +17487,310 @@ function safeEbayOAuthAuthorizationUrl(value = "") {
   }
 }
 
+const saasEbayReadOnlyOAuthScopeAllowlist = new Set([
+  "https://api.ebay.com/oauth/api_scope",
+  "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
+  "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
+  "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
+  "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly",
+  "https://api.ebay.com/oauth/api_scope/sell.finances",
+]);
+
+function validatedSaasReadOnlyOAuthAuthorizationUrl(value = "", expectedScopes = [], expectedState = "") {
+  if (typeof value !== "string" || !value || !Array.isArray(expectedScopes) || !expectedScopes.length) return "";
+  try {
+    const url = new URL(value);
+    const allowedHosts = new Set(["auth.ebay.com", "auth.sandbox.ebay.com"]);
+    const requiredQueryKeys = new Set(["client_id", "redirect_uri", "response_type", "scope", "state", "prompt"]);
+    const queryKeys = [...url.searchParams.keys()];
+    if (
+      url.protocol !== "https:" ||
+      !allowedHosts.has(url.hostname) ||
+      url.port ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/oauth2/authorize" ||
+      url.hash ||
+      queryKeys.length !== requiredQueryKeys.size ||
+      queryKeys.some((key) => !requiredQueryKeys.has(key)) ||
+      [...requiredQueryKeys].some((key) => url.searchParams.getAll(key).length !== 1) ||
+      !String(url.searchParams.get("client_id") || "").trim() ||
+      !String(url.searchParams.get("redirect_uri") || "").trim() ||
+      url.searchParams.get("response_type") !== "code" ||
+      url.searchParams.get("prompt") !== "login"
+    ) return "";
+    const urlScopes = String(url.searchParams.get("scope") || "").split(" ");
+    if (
+      !urlScopes.length ||
+      urlScopes.some((scope) => !scope || !saasEbayReadOnlyOAuthScopeAllowlist.has(scope)) ||
+      new Set(urlScopes).size !== urlScopes.length ||
+      JSON.stringify(urlScopes) !== JSON.stringify(expectedScopes)
+    ) return "";
+    const urlState = String(url.searchParams.get("state") || "");
+    if (!urlState || urlState !== String(expectedState || "")) return "";
+    return url.toString();
+  } catch (error) {
+    return "";
+  }
+}
+
+function validatedSaasReadOnlyOAuthPlanResponse(payload = {}, store = {}, confirmation = {}) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const plan = payload.oauth_plan;
+  const request = payload.oauth_request;
+  const requestBody = request?.request;
+  if (
+    !plan || typeof plan !== "object" || Array.isArray(plan) ||
+    !request || typeof request !== "object" || Array.isArray(request) ||
+    !requestBody || typeof requestBody !== "object" || Array.isArray(requestBody)
+  ) return null;
+  const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const currentStoreId = String(store?.store_id || "").trim();
+  const confirmationId = String(confirmation?.confirmation_id || "").trim();
+  const status = String(plan.status || "");
+  if (
+    !currentCompanyId || !currentStoreId || !confirmationId ||
+    String(plan.company_id || "") !== currentCompanyId ||
+    String(request.company_id || "") !== currentCompanyId ||
+    String(plan.store_id || "") !== currentStoreId ||
+    String(request.store_id || "") !== currentStoreId ||
+    String(requestBody.confirmation_id || "") !== confirmationId ||
+    String(plan.scope_profile || "") !== "seller_read_only" ||
+    String(requestBody.scope_profile || "") !== "seller_read_only" ||
+    !["ready_to_redirect", "blocked_missing_oauth_config"].includes(status) ||
+    String(request.status || "") !== status ||
+    payload.real_platform_writes_enabled !== false ||
+    payload.secret_exposed !== false ||
+    plan.real_platform_writes_enabled !== false ||
+    plan.secret_exposed !== false ||
+    request.real_platform_writes_enabled !== false ||
+    request.secret_exposed !== false ||
+    requestBody.real_platform_writes_enabled !== false ||
+    requestBody.secret_exposed !== false
+  ) return null;
+  const planScopes = Array.isArray(plan.scopes) ? plan.scopes : null;
+  const requestScopes = Array.isArray(request.scopes) ? request.scopes : null;
+  const requestBodyScopes = Array.isArray(requestBody.scopes) ? requestBody.scopes : null;
+  if (
+    !planScopes || !requestScopes || !requestBodyScopes || !planScopes.length ||
+    planScopes.some((scope) => typeof scope !== "string" || !saasEbayReadOnlyOAuthScopeAllowlist.has(scope)) ||
+    requestScopes.some((scope) => typeof scope !== "string" || !saasEbayReadOnlyOAuthScopeAllowlist.has(scope)) ||
+    requestBodyScopes.some((scope) => typeof scope !== "string" || !saasEbayReadOnlyOAuthScopeAllowlist.has(scope)) ||
+    new Set(planScopes).size !== planScopes.length ||
+    JSON.stringify(planScopes) !== JSON.stringify(requestScopes) ||
+    JSON.stringify(planScopes) !== JSON.stringify(requestBodyScopes)
+  ) return null;
+  const planState = typeof plan.state_nonce === "string" ? plan.state_nonce : "";
+  if (
+    !planState ||
+    typeof request.state_nonce !== "string" || request.state_nonce !== planState ||
+    typeof requestBody.state_nonce !== "string" || requestBody.state_nonce !== planState
+  ) return null;
+  const rawUrl = typeof plan.authorization_url === "string" ? plan.authorization_url : "";
+  const requestRawUrl = typeof request.auth_url === "string" ? request.auth_url : "";
+  const requestAliasUrl = typeof request.authorization_url === "string" ? request.authorization_url : "";
+  const requestBodyRawUrl = typeof requestBody.authorization_url === "string" ? requestBody.authorization_url : "";
+  let authorizationUrl = "";
+  if (status === "ready_to_redirect") {
+    authorizationUrl = validatedSaasReadOnlyOAuthAuthorizationUrl(rawUrl, planScopes, planState);
+    const normalizedRequestUrl = validatedSaasReadOnlyOAuthAuthorizationUrl(requestRawUrl, planScopes, planState);
+    const normalizedRequestBodyUrl = validatedSaasReadOnlyOAuthAuthorizationUrl(requestBodyRawUrl, planScopes, planState);
+    const normalizedRequestAliasUrl = requestAliasUrl
+      ? validatedSaasReadOnlyOAuthAuthorizationUrl(requestAliasUrl, planScopes, planState)
+      : authorizationUrl;
+    if (
+      !authorizationUrl ||
+      !normalizedRequestUrl ||
+      !normalizedRequestBodyUrl ||
+      !normalizedRequestAliasUrl ||
+      normalizedRequestUrl !== authorizationUrl ||
+      normalizedRequestBodyUrl !== authorizationUrl ||
+      normalizedRequestAliasUrl !== authorizationUrl
+    ) return null;
+  }
+  if (status === "blocked_missing_oauth_config" && (rawUrl || requestRawUrl || requestAliasUrl || requestBodyRawUrl)) return null;
+  return {
+    status,
+    authorizationUrl,
+    missingConfig: Array.isArray(plan.missing_config)
+      ? plan.missing_config.filter((item) => typeof item === "string")
+      : [],
+  };
+}
+
+function isSaasExactReadOnlyOAuthConfirmation(card = {}, storeId = "") {
+  card = card && typeof card === "object" ? card : {};
+  const item = card.item && typeof card.item === "object" ? card.item : {};
+  const targetStoreId = String(storeId || "").trim();
+  return Boolean(
+    targetStoreId &&
+      String(card.store_id || "").trim() === targetStoreId &&
+      String(card.action_type || item.action_type || "") === "ebay_oauth_scope_change" &&
+      String(item.source || "") === "new_ebay_account_low_risk_smoke" &&
+      String(item.requested_step || "") === "new_account_oauth_authorization_gate" &&
+      String(item.scope_profile || "") === "seller_read_only"
+  );
+}
+
+function isSaasReadOnlyOAuthSensitiveConfirmation(card = {}) {
+  card = card && typeof card === "object" ? card : {};
+  const item = card.item && typeof card.item === "object" ? card.item : {};
+  return String(card.action_type || item.action_type || "") === "ebay_oauth_scope_change";
+}
+
+function isSaasUniqueCurrentReadOnlyOAuthConfirmation(card = {}, cards = state.saasConfirmations || []) {
+  const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const currentStoreId = String(activeSaasStore()?.store_id || "").trim();
+  if (
+    !currentCompanyId ||
+    !currentStoreId ||
+    String(card?.company_id || "").trim() !== currentCompanyId ||
+    String(card?.store_id || "").trim() !== currentStoreId ||
+    String(card?.status || "") !== "pending" ||
+    !isSaasExactReadOnlyOAuthConfirmation(card, currentStoreId)
+  ) return false;
+  const matches = (Array.isArray(cards) ? cards : []).filter(
+    (candidate) =>
+      String(candidate?.company_id || "").trim() === currentCompanyId &&
+      String(candidate?.store_id || "").trim() === currentStoreId &&
+      ["pending", "approved"].includes(String(candidate?.status || "")) &&
+      isSaasExactReadOnlyOAuthConfirmation(candidate, currentStoreId),
+  );
+  return matches.length === 1 && String(matches[0]?.confirmation_id || "") === String(card.confirmation_id || "");
+}
+
+function saasExactReadOnlyOAuthConfirmationForStore(storeId = "") {
+  const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const targetStoreId = String(storeId || "").trim();
+  if (!currentCompanyId || !targetStoreId) return null;
+  const matches = (state.saasConfirmations || []).filter(
+    (card) =>
+      String(card?.company_id || "").trim() === currentCompanyId &&
+      isSaasExactReadOnlyOAuthConfirmation(card, targetStoreId),
+  );
+  const active = matches.filter((card) => ["pending", "approved"].includes(String(card?.status || "")));
+  if (active.length === 1) return active[0];
+  if (active.length > 1) return null;
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function saasCurrentStoreActiveReadOnlyOAuthConfirmations(storeId = "") {
+  const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const targetStoreId = String(storeId || activeSaasStore()?.store_id || "").trim();
+  if (!currentCompanyId || !targetStoreId) return [];
+  return (state.saasConfirmations || []).filter(
+    (card) =>
+      String(card?.company_id || "").trim() === currentCompanyId &&
+      String(card?.store_id || "").trim() === targetStoreId &&
+      ["pending", "approved"].includes(String(card?.status || "")) &&
+      isSaasExactReadOnlyOAuthConfirmation(card, targetStoreId),
+  );
+}
+
+function isSaasFreshApprovedReadOnlyOAuthConfirmation(card = {}, storeId = "", referenceNow = Date.now()) {
+  if (!isSaasExactReadOnlyOAuthConfirmation(card, storeId) || String(card.status || "") !== "approved") return false;
+  if (!String(card.decided_by || "").trim()) return false;
+  const decidedAtText = String(card.decided_at || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(decidedAtText)) return false;
+  const decidedAt = Date.parse(decidedAtText);
+  const now = Number(referenceNow);
+  if (!Number.isFinite(decidedAt) || !Number.isFinite(now)) return false;
+  const ageMs = now - decidedAt;
+  return ageMs >= 0 && ageMs <= 15 * 60 * 1000;
+}
+
+function rememberSaasReadOnlyOAuthConfirmation(storeId = "", confirmation = {}) {
+  const confirmationId = String(confirmation.confirmation_id || "").trim();
+  if (!confirmationId || !isSaasExactReadOnlyOAuthConfirmation(confirmation, storeId)) return false;
+  state.saasEbayReadOnlyOAuthFlow = {
+    storeId: String(storeId),
+    confirmationId,
+    status: String(confirmation.status || "pending"),
+  };
+  return true;
+}
+
+function openSaasReadOnlyOAuthConfirmationCenter() {
+  state.confirmFilter = "immediate";
+  setView("confirm");
+  renderConfirmations();
+}
+
+function saasConfirmationActionAttributes(card = {}) {
+  if (isSaasReadOnlyOAuthSensitiveConfirmation(card)) {
+    return isSaasExactReadOnlyOAuthConfirmation(card, card.store_id)
+      ? 'data-saas-confirmation-flow="ebay-read-only-oauth-current-store"'
+      : 'data-saas-confirmation-flow="ebay-read-only-oauth-blocked"';
+  }
+  return `data-saas-confirmation="${escapeHtml(card.confirmation_id || "")}"`;
+}
+
+function normalizeSaasExactReadOnlyOAuthConfirmationBinding(card = {}) {
+  card = card && typeof card === "object" ? card : {};
+  const item = card.item && typeof card.item === "object" ? card.item : {};
+  const companyId = String(card.company_id || "").trim();
+  const storeId = String(card.store_id || "").trim();
+  const confirmationId = String(card.confirmation_id || "").trim();
+  if (!companyId || !storeId || !confirmationId || String(card.status || "") !== "pending") return null;
+  if (!isSaasExactReadOnlyOAuthConfirmation(card, storeId)) return null;
+  return Object.freeze({
+    companyId,
+    storeId,
+    confirmationId,
+    actionType: String(card.action_type || item.action_type || ""),
+    source: String(item.source || ""),
+    requestedStep: String(item.requested_step || ""),
+    scopeProfile: String(item.scope_profile || ""),
+    status: "pending",
+  });
+}
+
+function bindSaasExactReadOnlyOAuthConfirmationButtons(root, renderedCards = [], allCards = state.saasConfirmations || []) {
+  const generation = ++saasExactReadOnlyOAuthConfirmationRenderGeneration;
+  const articles = Array.from(root?.querySelectorAll?.(".saas-confirm-card") || []);
+  (Array.isArray(renderedCards) ? renderedCards : []).forEach((card, index) => {
+    const button = articles[index]?.querySelector?.('[data-saas-confirmation-flow="ebay-read-only-oauth-current-store"]');
+    if (!button || !isSaasUniqueCurrentReadOnlyOAuthConfirmation(card, allCards)) return;
+    const binding = normalizeSaasExactReadOnlyOAuthConfirmationBinding(card);
+    if (binding) saasExactReadOnlyOAuthConfirmationButtonBindings.set(button, Object.freeze({ ...binding, generation }));
+  });
+}
+
+function saasConfirmationIdFromActionButton(button) {
+  if (button?.dataset?.saasConfirmationFlow === "ebay-read-only-oauth-current-store") {
+    const binding = saasExactReadOnlyOAuthConfirmationButtonBindings.get(button);
+    const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+    const currentStoreId = String(activeSaasStore()?.store_id || "").trim();
+    if (
+      !binding ||
+      binding.generation !== saasExactReadOnlyOAuthConfirmationRenderGeneration ||
+      !button.isConnected ||
+      !button.closest("#saasConfirmPanel") ||
+      !currentCompanyId ||
+      binding.companyId !== currentCompanyId ||
+      binding.storeId !== currentStoreId ||
+      binding.status !== "pending"
+    ) return "";
+    const confirmation = (state.saasConfirmations || []).find(
+      (card) => String(card?.confirmation_id || "").trim() === binding.confirmationId,
+    );
+    const item = confirmation?.item && typeof confirmation.item === "object" ? confirmation.item : {};
+    if (
+      !confirmation ||
+      String(confirmation.company_id || "").trim() !== binding.companyId ||
+      String(confirmation.store_id || "").trim() !== binding.storeId ||
+      String(confirmation.status || "") !== "pending" ||
+      String(confirmation.action_type || item.action_type || "") !== binding.actionType ||
+      String(item.source || "") !== binding.source ||
+      String(item.requested_step || "") !== binding.requestedStep ||
+      String(item.scope_profile || "") !== binding.scopeProfile ||
+      !isSaasExactReadOnlyOAuthConfirmation(confirmation, binding.storeId)
+    ) return "";
+    return binding.confirmationId;
+  }
+  return String(button?.dataset?.saasConfirmation || "").trim();
+}
+
 function latestSaasOAuthAuthorizationUrl() {
   const latest = latestSaasOAuthRequest() || {};
   const request = latest.request && typeof latest.request === "object" ? latest.request : {};
@@ -17596,6 +17921,10 @@ function preferredSaasStore(stores = state.saasStores || [], options = {}) {
   const storeList = saasKnownStoreCandidates(stores, options);
   if (!storeList.length) return null;
   const preferredStoreId = options.preferredStoreId || storedSaasStoreId();
+  const explicitlySelectedStore = preferredStoreId
+    ? storeList.find((store) => String(store?.store_id || "") === String(preferredStoreId))
+    : null;
+  if (explicitlySelectedStore) return explicitlySelectedStore;
   const connections = options.connections || state.saasConnections || [];
   const secretRefs = options.secretRefs || state.saasSecretRefs || [];
   const packets = options.dataPackets || state.saasDataPackets || [];
@@ -17616,15 +17945,21 @@ function preferredSaasStore(stores = state.saasStores || [], options = {}) {
   return scored[0]?.store || null;
 }
 
-function isSaasEbayReadOnlyAuthorized() {
-  const oauth = latestSaasOAuthRequest();
-  const connection = latestSaasConnection();
+function isSaasEbayReadOnlyAuthorized(store = activeSaasStore()) {
+  const storeId = String(store?.store_id || "").trim();
+  if (!storeId) return false;
+  const oauth = (state.saasOauthRequests || []).find((request) => {
+    const requestBody = request?.request && typeof request.request === "object" ? request.request : {};
+    return String(request?.store_id || requestBody.store_id || "").trim() === storeId;
+  }) || null;
+  const connection = saasConnectionForStore(store);
   const preflight = state.saasEbayCredentialPreflight || {};
+  const preflightStoreId = String(preflight.store_id || preflight.store?.store_id || "").trim();
   return (
     oauth?.status === "callback_exchange_completed" ||
     isSaasAuthorizedConnectionStatus(connection?.status) ||
-    preflight?.can_queue_sync === true ||
-    preflight?.status === "ready_for_official_read"
+    (preflightStoreId === storeId && preflight?.can_queue_sync === true) ||
+    (preflightStoreId === storeId && preflight?.status === "ready_for_official_read")
   );
 }
 
@@ -17633,10 +17968,10 @@ function activeSaasStore() {
 }
 
 function saasConnectionForStore(store) {
-  if (!store) return latestSaasConnection();
+  if (!store?.store_id) return null;
   return saasConnectionsForStoreId(store.store_id).find((item) => isSaasAuthorizedConnectionStatus(item.status)) ||
     saasConnectionsForStoreId(store.store_id)[0] ||
-    latestSaasConnection();
+    null;
 }
 
 function saasStoreStatusLabel(status = "") {
@@ -18211,6 +18546,14 @@ function saasConfirmationsForDisplay(confirmations = []) {
 }
 
 function saasConfirmationCanonicalKey(card = {}) {
+  if (isSaasExactReadOnlyOAuthConfirmation(card, card?.store_id)) {
+    return [
+      "ebay-read-only-oauth",
+      String(card.company_id || "").trim(),
+      String(card.store_id || "").trim(),
+      String(card.confirmation_id || "").trim(),
+    ].join("::");
+  }
   const product =
     saasProductLabelForConfirmation(card) ||
     saasWorkflowProductLabel(card) ||
@@ -19206,8 +19549,9 @@ function saasWorkbenchConfirmationDetailMarkup(card = {}) {
   const realWriteLabel = isSaasRealPlatformWritesEnabled()
     ? "已开启，但发布前必须通过确认中心和发布体检"
     : "关闭，批准后也只进入受控交接";
+  const exactReadOnlyOAuth = isSaasReadOnlyOAuthSensitiveConfirmation(card);
   const fields = [
-    ["确认编号", card.confirmation_id || card.id || "后端未返回"],
+    ...(exactReadOnlyOAuth ? [] : [["确认编号", card.confirmation_id || card.id || "后端未返回"]]),
     ["动作类型", saasWorkbenchActionLabel(card.action_type || item.action_type)],
     ["默认决策", saasWorkbenchDefaultActionLabel(card.default_action || item.default_action)],
     ["风险边界", card.high_risk || item.high_risk ? "高风险，必须商家确认" : "普通确认，仍保留审计"],
@@ -19321,6 +19665,7 @@ function saasConfirmationImpactRows(card = {}) {
   const buyerPromise = ["buyer_message_send", "sensitive_buyer_commitment"].includes(actionType);
   const payload = item.publish_payload && typeof item.publish_payload === "object" ? item.publish_payload : {};
   const title = payload.title || item.title || card.title || saasWorkbenchActionLabel(actionType);
+  const exactReadOnlyOAuth = isSaasReadOnlyOAuthSensitiveConfirmation(card);
   return [
     {
       label: "影响范围",
@@ -19331,7 +19676,7 @@ function saasConfirmationImpactRows(card = {}) {
     {
       label: "对象",
       value: publicRuntimeText(title),
-      detail: item.sku || item.listing_id || item.offer_id || card.confirmation_id || "",
+      detail: exactReadOnlyOAuth ? "当前 eBay 店铺" : item.sku || item.listing_id || item.offer_id || card.confirmation_id || "",
       tone: "green",
     },
     {
@@ -19744,7 +20089,9 @@ function renderSaasAiCeoOutputPanel() {
                         ${saasWorkbenchConfirmationDetailMarkup(item)}
                         ${
                           status === "pending"
-                            ? `<button class="secondary-action" type="button" data-saas-action="approve-confirmation" data-saas-confirmation="${escapeHtml(item.confirmation_id || "")}">${escapeHtml(saasConfirmationApproveButtonLabel(item))}</button>`
+                            ? isSaasReadOnlyOAuthSensitiveConfirmation(item)
+                              ? `<button class="secondary-action" type="button" data-saas-action="open-confirm">去确认中心</button>`
+                              : `<button class="secondary-action" type="button" data-saas-action="approve-confirmation" ${saasConfirmationActionAttributes(item)}>${escapeHtml(saasConfirmationApproveButtonLabel(item))}</button>`
                             : ""
                         }
                       </article>
@@ -20642,8 +20989,14 @@ function renderSaasConfirmPanel() {
                       status === "pending"
                         ? `<div class="runtime-confirm-actions">
                             <button class="secondary-action" type="button" data-saas-action="refresh">稍后处理</button>
-                            <button class="secondary-action" type="button" data-saas-action="revise-confirmation" data-saas-confirmation="${escapeHtml(card.confirmation_id)}">回去补资料</button>
-                            <button class="primary-action" type="button" data-saas-action="approve-confirmation" data-saas-confirmation="${escapeHtml(card.confirmation_id)}">${escapeHtml(saasConfirmationApproveButtonLabel(card))}</button>
+                            ${
+                              isSaasReadOnlyOAuthSensitiveConfirmation(card)
+                                ? isSaasUniqueCurrentReadOnlyOAuthConfirmation(card, cards)
+                                  ? `<button class="primary-action" type="button" data-saas-action="approve-confirmation" ${saasConfirmationActionAttributes(card)}>${escapeHtml(saasConfirmationApproveButtonLabel(card))}</button>`
+                                  : '<button class="secondary-action" type="button" data-saas-action="approve-confirmation" data-saas-confirmation-flow="ebay-read-only-oauth-blocked" disabled>确认信息异常，请刷新</button>'
+                                : `<button class="secondary-action" type="button" data-saas-action="revise-confirmation" data-saas-confirmation="${escapeHtml(card.confirmation_id)}">回去补资料</button>
+                                   <button class="primary-action" type="button" data-saas-action="approve-confirmation" ${saasConfirmationActionAttributes(card)}>${escapeHtml(saasConfirmationApproveButtonLabel(card))}</button>`
+                            }
                           </div>`
                         : `<div class="runtime-confirm-actions">
                             <small>决策：${escapeHtml(card.decision_note || saasWorkbenchStatusLabel(status))}</small>
@@ -20657,6 +21010,7 @@ function renderSaasConfirmPanel() {
         : `<article class="runtime-confirm-empty"><strong>现在没有需要你拍板的事</strong><p>AI 可以继续整理草稿、素材和报告；一旦涉及发布、付款、退款、广告或客服承诺，会回到这里。</p></article>`
     }
   `;
+  bindSaasExactReadOnlyOAuthConfirmationButtons(panel, visible, allCards);
 }
 
 function saasRealBackendBindingStatus() {
@@ -21040,7 +21394,9 @@ function sanitizeSaasWorkflowFeedbackContext(context = {}) {
 function buildSaasWorkflowFeedbackContext(reason = state.saasWorkflowFeedbackReason || "") {
   const ctx = saasMerchantWorkbenchContext();
   const latestReport = latestSaasMerchantReport();
-  const latestConfirmation = (ctx.pendingConfirmations || [])[0] || (ctx.confirmations || [])[0] || null;
+  const latestConfirmation = [...(ctx.pendingConfirmations || []), ...(ctx.confirmations || [])].find(
+    (card) => !isSaasReadOnlyOAuthSensitiveConfirmation(card),
+  ) || null;
   const override = state.saasWorkflowFeedbackContextOverride || {};
   const moduleKey = sanitizeSaasWorkflowFeedbackText(override.module_key || state.view || "cockpit", 80);
   const moduleLabel = sanitizeSaasWorkflowFeedbackText(override.module_label || workflowFeedbackViewLabel(moduleKey), 80);
@@ -25655,7 +26011,9 @@ function renderSaasMerchantAiValuePanel(ctx = saasMerchantWorkbenchContext()) {
                         ${saasWorkbenchConfirmationDetailMarkup(item)}
                         ${
                           status === "pending"
-                            ? `<button class="secondary-action" type="button" data-saas-action="approve-confirmation" data-saas-confirmation="${escapeHtml(item.confirmation_id || "")}">${escapeHtml(saasConfirmationApproveButtonLabel(item))}</button>`
+                            ? isSaasReadOnlyOAuthSensitiveConfirmation(item)
+                              ? `<button class="secondary-action" type="button" data-saas-action="open-confirm">去确认中心</button>`
+                              : `<button class="secondary-action" type="button" data-saas-action="approve-confirmation" ${saasConfirmationActionAttributes(item)}>${escapeHtml(saasConfirmationApproveButtonLabel(item))}</button>`
                             : ""
                         }
                       </article>
@@ -26270,6 +26628,36 @@ function merchantSafeSaasBillingPlan(plan) {
   return safePlan;
 }
 
+function merchantSafeSaasOAuthRequest(record) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return null;
+  const safe = {};
+  ["status", "store_id", "company_id", "scope_profile", "marketplace", "created_at", "updated_at"].forEach((key) => {
+    if (["string", "number", "boolean"].includes(typeof record[key])) safe[key] = record[key];
+  });
+  if (Array.isArray(record.scopes)) {
+    safe.scopes = record.scopes.filter((scope) => typeof scope === "string");
+  }
+  const request = record.request;
+  if (request && typeof request === "object" && !Array.isArray(request)) {
+    const safeRequest = {};
+    ["status", "store_id", "scope_profile", "marketplace"].forEach((key) => {
+      if (["string", "number", "boolean"].includes(typeof request[key])) safeRequest[key] = request[key];
+    });
+    if (Array.isArray(request.scopes)) {
+      safeRequest.scopes = request.scopes.filter((scope) => typeof scope === "string");
+    }
+    if (Array.isArray(request.missing_config)) {
+      safeRequest.missing_config = request.missing_config.filter((item) => typeof item === "string");
+    }
+    safe.request = safeRequest;
+  }
+  return safe;
+}
+
+function merchantSafeSaasOAuthRequests(records) {
+  return (Array.isArray(records) ? records : []).map(merchantSafeSaasOAuthRequest).filter(Boolean);
+}
+
 function saasCanViewPlatformInternalFromPermissions(payload) {
   if (!payload || typeof payload !== "object") return false;
   return payload.platform_internal_admin === true;
@@ -26669,7 +27057,7 @@ async function refreshSaasState(options = {}) {
     state.saasEbayLiveAdapter = ebayLiveAdapter.ebay_live_read_adapter || null;
     state.saasEbayHttpClient = ebayHttpClient.ebay_http_client || null;
     state.saasEbayWriteAdapter = ebayWriteAdapter.ebay_write_adapter || null;
-    state.saasOauthRequests = oauthRequests.oauth_requests || [];
+    state.saasOauthRequests = merchantSafeSaasOAuthRequests(oauthRequests.oauth_requests);
     state.saasTasks = tasks.tasks || [];
     state.saasLastPublicSearchHandoff =
       (state.saasTasks || []).find((task) => task && typeof task === "object" && task.task_type === "product_workflow" && task.input?.public_search_provider_handoff)
@@ -26680,6 +27068,7 @@ async function refreshSaasState(options = {}) {
     state.saasReports = reports.reports || [];
     restoreSaasListingComposerDraftFromBackendReports();
     state.saasConfirmations = confirmations.confirmations || [];
+    state.saasConfirmationsLiveLoaded = true;
     state.saasMerchantMemory = merchantMemory.merchant_memory || [];
     state.saasExecutionResults = executions.execution_results || state.saasExecutionResults || [];
     state.saasAuditLogs = audit.audit_logs || state.saasAuditLogs || [];
@@ -27895,7 +28284,20 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
     showActionToast("当前没有需要确认的动作。");
     return;
   }
+  if (
+    isSaasReadOnlyOAuthSensitiveConfirmation(confirmation) &&
+    (!confirmationId || String(confirmation.confirmation_id || "") !== String(confirmationId))
+  ) {
+    showActionToast("只读连接确认缺少精确绑定；系统没有执行批准，请刷新确认中心。");
+    return;
+  }
   try {
+    const currentStoreId = String(activeSaasStore()?.store_id || "").trim();
+    const isExactReadOnlyOAuth = isSaasUniqueCurrentReadOnlyOAuthConfirmation(confirmation, state.saasConfirmations || []);
+    if (isSaasReadOnlyOAuthSensitiveConfirmation(confirmation) && !isExactReadOnlyOAuth) {
+      showActionToast("只读连接确认不唯一或不属于当前店铺；系统没有执行批准，请刷新确认中心。");
+      return;
+    }
     const idempotencyKey = `saas-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const executionPayload = {
       platform: "ebay",
@@ -27909,9 +28311,21 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
       method: "POST",
       body: JSON.stringify({
         decision: "approve",
-        note: "Merchant confirmation recorded from the SaaS workbench. Backend must run execution preflight before any eBay write.",
+        note: isExactReadOnlyOAuth
+          ? "Owner approved the exact current-store seller_read_only OAuth confirmation. No OAuth plan is created by this decision."
+          : "Merchant confirmation recorded from the SaaS workbench. Backend must run execution preflight before any eBay write.",
       }),
     });
+    if (isExactReadOnlyOAuth) {
+      await refreshSaasState({ silent: true });
+      const approved = saasExactReadOnlyOAuthConfirmationForStore(currentStoreId);
+      if (!approved || approved.status !== "approved" || !rememberSaasReadOnlyOAuthConfirmation(currentStoreId, approved)) {
+        throw new Error("oauth_confirmation_approval_not_current");
+      }
+      renderSaasBackendPanel();
+      showActionToast("只读连接确认已批准。返回“账号与店铺”继续时，系统才会生成这一次 eBay 官方授权。");
+      return;
+    }
     const preflight = await saasFetch(`/confirmations/${encodeURIComponent(confirmation.confirmation_id)}/preflight`, {
       method: "POST",
       body: JSON.stringify(executionPayload),
@@ -28306,7 +28720,7 @@ async function retryLatestSaasQueueJob() {
 
 async function planSaasEbayReadOnlyOAuth() {
   let oauthPopup = null;
-  const store = state.saasStores[0] || (await ensureSaasDemoStoreAndConnection());
+  let store = activeSaasStore() || (await ensureSaasDemoStoreAndConnection());
   if (!store?.store_id) {
     if (oauthPopup && !oauthPopup.closed) oauthPopup.close();
     showActionToast("还没有可用的 eBay 店铺工作区。");
@@ -28327,10 +28741,89 @@ async function planSaasEbayReadOnlyOAuth() {
   state.saasError = "";
   renderSaasBackendPanel();
   try {
+    state.saasConfirmationsLiveLoaded = false;
+    await refreshSaasState({ silent: true });
+    store = activeSaasStore();
+    if (!state.saasConfirmationsLiveLoaded || !store?.store_id) {
+      throw new Error("oauth_confirmation_live_state_required");
+    }
+    const activeConfirmations = saasCurrentStoreActiveReadOnlyOAuthConfirmations(store.store_id);
+    const suspiciousCurrentStoreConfirmation = (state.saasConfirmations || []).some(
+      (card) =>
+        isSaasReadOnlyOAuthSensitiveConfirmation(card) &&
+        ["", String(store.store_id)].includes(String(card?.store_id || "").trim()) &&
+        !activeConfirmations.includes(card),
+    );
+    if (activeConfirmations.length > 1 || suspiciousCurrentStoreConfirmation) {
+      openSaasReadOnlyOAuthConfirmationCenter();
+      showActionToast("当前店铺的只读连接确认不唯一或信息异常；系统没有生成 eBay 授权，请刷新确认中心。");
+      return;
+    }
+    const existingConfirmation = activeConfirmations.length === 1 ? activeConfirmations[0] : null;
+    if (!existingConfirmation) {
+      const intake = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/ebay-oauth/read-only-confirmation`, {
+        method: "POST",
+        body: JSON.stringify({ scope_profile: "seller_read_only" }),
+      });
+      const pendingConfirmation = intake.oauth_confirmation && typeof intake.oauth_confirmation === "object"
+        ? { ...intake.oauth_confirmation, store_id: store.store_id, item: {
+            source: "new_ebay_account_low_risk_smoke",
+            requested_step: intake.oauth_confirmation.requested_step,
+            scope_profile: intake.oauth_confirmation.scope_profile,
+          } }
+        : {};
+      if (
+        pendingConfirmation.status !== "pending" ||
+        pendingConfirmation.action_type !== "ebay_oauth_scope_change" ||
+        pendingConfirmation.item.requested_step !== "new_account_oauth_authorization_gate" ||
+        pendingConfirmation.item.scope_profile !== "seller_read_only" ||
+        intake.oauth_confirmation?.decision_required !== true ||
+        intake.oauth_confirmation?.oauth_state_created !== false ||
+        intake.oauth_confirmation?.authorization_url_created !== false ||
+        intake.oauth_confirmation?.oauth_request_created !== false
+      ) {
+        throw new Error("oauth_confirmation_contract_invalid");
+      }
+      rememberSaasReadOnlyOAuthConfirmation(store.store_id, pendingConfirmation);
+      await refreshSaasState({ silent: true });
+      const refreshed = saasExactReadOnlyOAuthConfirmationForStore(store.store_id);
+      if (refreshed) rememberSaasReadOnlyOAuthConfirmation(store.store_id, refreshed);
+      openSaasReadOnlyOAuthConfirmationCenter();
+      showActionToast("只读连接确认已创建，待你在确认中心同意后再进入 eBay 官方授权；现在没有生成授权链接。");
+      return;
+    }
+    rememberSaasReadOnlyOAuthConfirmation(store.store_id, existingConfirmation);
+    if (existingConfirmation.status !== "approved") {
+      openSaasReadOnlyOAuthConfirmationCenter();
+      showActionToast("只读连接仍在确认中心等待处理；不会重复创建确认单或提前打开 eBay 授权。");
+      return;
+    }
+    if (!isSaasFreshApprovedReadOnlyOAuthConfirmation(existingConfirmation, store.store_id)) {
+      await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/ebay-oauth/read-only-confirmation`, {
+        method: "POST",
+        body: JSON.stringify({ scope_profile: "seller_read_only" }),
+      });
+      await refreshSaasState({ silent: true });
+      openSaasReadOnlyOAuthConfirmationCenter();
+      showActionToast("这次只读连接确认已失效；系统已安全创建一条新的待确认记录，并且没有生成 eBay 授权。");
+      return;
+    }
+    const attemptCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+    const attemptStoreId = String(store.store_id || "").trim();
+    const attemptConfirmationId = String(existingConfirmation.confirmation_id || "").trim();
+    if (!attemptCompanyId || !attemptStoreId || !attemptConfirmationId) {
+      throw new Error("oauth_plan_attempt_binding_invalid");
+    }
+    const planAttemptKey = [attemptCompanyId, attemptStoreId, attemptConfirmationId].join("\u0000");
+    if (saasReadOnlyOAuthPlanAttemptKeys.has(planAttemptKey)) {
+      throw new Error("oauth_plan_already_attempted_in_this_page");
+    }
+    saasReadOnlyOAuthPlanAttemptKeys.add(planAttemptKey);
     const payload = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/ebay-oauth/read-only-plan`, {
       method: "POST",
       body: JSON.stringify({
         marketplace_id: store.marketplace || "EBAY_US",
+        confirmation_id: existingConfirmation.confirmation_id,
         scopes: [
           "https://api.ebay.com/oauth/api_scope",
           "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
@@ -28340,26 +28833,24 @@ async function planSaasEbayReadOnlyOAuth() {
         ],
       }),
     });
-    const rawPlannedOAuthUrl = payload.oauth_plan?.authorization_url || payload.oauth_request?.auth_url || "";
-    const plannedOAuthUrl = safeEbayOAuthAuthorizationUrl(rawPlannedOAuthUrl);
-    state.saasLatestOAuthUrl = plannedOAuthUrl;
-    const planStatus = payload.oauth_plan?.status || "unknown";
-    if (state.saasLatestOAuthUrl) {
-      renderSaasBackendPanel();
-      if (state.view === "connect") renderConnect();
+    const validatedPlan = validatedSaasReadOnlyOAuthPlanResponse(payload, store, existingConfirmation);
+    if (!validatedPlan) throw new Error("oauth_plan_response_contract_invalid");
+    const plannedOAuthUrl = validatedPlan.authorizationUrl;
+    state.saasLatestOAuthUrl = "";
+    const planStatus = validatedPlan.status;
+    if (plannedOAuthUrl) {
       try {
-        window.location.assign(state.saasLatestOAuthUrl);
+        window.location.assign(plannedOAuthUrl);
         return;
       } catch (error) {
-        // If navigation is blocked, the settings panel keeps a manual link.
+        state.saasError = "eBay 官方授权页未能打开；系统没有保留授权地址，请刷新后再核对确认状态。";
       }
       await refreshSaasState({ silent: true });
-      state.saasLatestOAuthUrl = state.saasLatestOAuthUrl || plannedOAuthUrl || latestSaasOAuthAuthorizationUrl();
       if (state.view === "connect") renderConnect();
     } else {
       if (oauthPopup && !oauthPopup.closed) oauthPopup.close();
-      const missing = Array.isArray(payload.oauth_plan?.missing_config)
-        ? payload.oauth_plan.missing_config.join(" / ")
+      const missing = validatedPlan.missingConfig.length
+        ? validatedPlan.missingConfig.join(" / ")
         : "eBay 授权配置";
       state.saasError = `eBay 授权链接未生成：缺少 ${missing}`;
       await refreshSaasState({ silent: true });
@@ -30279,7 +30770,12 @@ function handleSaasAction(button) {
     return;
   }
   if (action === "approve-first" || action === "approve-confirmation") {
-    approveFirstSaasConfirmation(button.dataset.saasConfirmation || "");
+    const confirmationId = saasConfirmationIdFromActionButton(button);
+    if (String(button.dataset.saasConfirmationFlow || "").startsWith("ebay-read-only-oauth") && !confirmationId) {
+      showActionToast("这张只读连接确认已失效或不属于当前店铺；系统没有执行批准，请刷新确认中心。");
+      return;
+    }
+    approveFirstSaasConfirmation(confirmationId);
     return;
   }
   if (action === "revise-confirmation") {
@@ -39998,10 +40494,27 @@ function renderSaasSettingsGeneralPanel(ctx = saasMerchantWorkbenchContext()) {
   `;
 }
 
+function saasReadOnlyConnectionConfirmationView(ctx = {}, ebayAuthorized = false) {
+  const storeId = String(ctx.store?.store_id || "").trim();
+  const confirmation = saasExactReadOnlyOAuthConfirmationForStore(storeId);
+  const status = ebayAuthorized ? "authorized" : String(confirmation?.status || "not_started");
+  const copy = {
+    pending: { label: "去确认中心", detail: "待你确认 · 现在不会生成 eBay 授权链接" },
+    approved: isSaasFreshApprovedReadOnlyOAuthConfirmation(confirmation, storeId)
+      ? { label: "继续 eBay 授权", detail: "已确认 · 点击后才会打开 eBay 官方只读授权" }
+      : { label: "确认已失效", detail: "这次确认已失效 · 不会生成授权，请联系管理员核对" },
+    rejected: { label: "查看未通过原因", detail: "未获批准 · 不会打开 eBay 授权" },
+    authorized: { label: "只读已连接", detail: "官方只读连接已完成 · 不会重复授权" },
+    not_started: { label: "连接只读数据", detail: "先创建待确认单 · 同意后才进入 eBay 官方授权" },
+  }[status] || { label: "查看确认状态", detail: "当前状态不完整 · 不会生成 eBay 授权" };
+  return { status, copy };
+}
+
 function renderSaasSettingsAccountPanel(ctx = saasMerchantWorkbenchContext(), options = {}) {
   const ebayAuthorized = options.ebayAuthorized === true;
   const ebayPublishAuthorized = options.ebayPublishAuthorized === true;
   const hasSessionCandidate = hasSaasProtectedSessionCandidate();
+  const readOnlyConfirmationView = saasReadOnlyConnectionConfirmationView(ctx, ebayAuthorized);
   return `
     <section class="saas-settings-card">
       <div class="saas-settings-card-head">
@@ -40025,8 +40538,9 @@ function renderSaasSettingsAccountPanel(ctx = saasMerchantWorkbenchContext(), op
             <span>eBay 店铺连接</span>
             <strong>${escapeHtml(saasStoreStatusLabel(ctx.connection?.status || ctx.store?.status || "not_connected"))}</strong>
             <small>${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</small>
+            <small class="saas-oauth-confirmation-guidance is-${escapeHtml(readOnlyConfirmationView.status)}" data-ebay-oauth-confirmation-status="${escapeHtml(readOnlyConfirmationView.status)}">${escapeHtml(readOnlyConfirmationView.copy.detail)}</small>
           </div>
-          <button class="secondary-action compact-action" type="button" data-saas-action="plan-ebay-oauth" ${!hasSessionCandidate || ebayAuthorized ? "disabled" : ""}>${ebayAuthorized ? "只读已连接" : "连接只读数据"}</button>
+          <button class="secondary-action compact-action" type="button" data-saas-action="plan-ebay-oauth" ${!hasSessionCandidate || ebayAuthorized ? "disabled" : ""}>${escapeHtml(readOnlyConfirmationView.copy.label)}</button>
           <button class="secondary-action compact-action" type="button" data-saas-action="plan-ebay-publish-oauth" ${!hasSessionCandidate || ebayPublishAuthorized ? "disabled" : ""}>${ebayPublishAuthorized ? "发布权限已开通" : "开通发布权限"}</button>
         </article>
         <article>

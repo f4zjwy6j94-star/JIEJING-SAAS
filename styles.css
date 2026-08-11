@@ -40723,6 +40723,31 @@ body.saas-public-mvp .saas-settings-row-list article {
   gap: 10px;
 }
 
+body.saas-public-mvp .saas-settings-row-list .saas-oauth-confirmation-guidance {
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 8px;
+  padding: 5px 8px;
+  border: 1px solid rgba(214, 142, 43, 0.24);
+  border-radius: 999px;
+  background: #fffaf1;
+  color: #7b5419;
+  font-weight: 800;
+}
+
+body.saas-public-mvp .saas-settings-row-list .saas-oauth-confirmation-guidance.is-approved,
+body.saas-public-mvp .saas-settings-row-list .saas-oauth-confirmation-guidance.is-authorized {
+  border-color: rgba(8, 118, 110, 0.2);
+  background: #f3faf8;
+  color: #08766e;
+}
+
+body.saas-public-mvp .saas-settings-row-list .saas-oauth-confirmation-guidance.is-rejected {
+  border-color: rgba(194, 65, 45, 0.22);
+  background: #fff6f2;
+  color: #9d3828;
+}
+
 body.saas-public-mvp .saas-settings-focus-panel {
   border: 1px solid rgba(15, 45, 40, 0.1);
   border-radius: 10px;

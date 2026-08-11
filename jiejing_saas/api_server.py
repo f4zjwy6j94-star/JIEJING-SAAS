@@ -71,7 +71,7 @@ from .ebay_account_deletion import (
 from .ebay_data_packet import build_ebay_read_only_data_packet
 from .ebay_http_client import build_ebay_http_client_contract, build_http_dry_run_from_live_plan
 from .ebay_live_read_adapter import EbayLiveReadPlanBuilder, build_live_read_adapter_status
-from .ebay_oauth import EbayOAuthPlanner
+from .ebay_oauth import EbayOAuthPlanner, READ_ONLY_SCOPES
 from .ebay_oauth_callback import process_ebay_oauth_callback
 from .ebay_oauth_token_store import build_local_oauth_token_store_status
 from .ebay_read_contract import build_field_contract_catalog
@@ -3747,7 +3747,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not store:
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
                 return
-            requested_scopes = body.get("scopes") if isinstance(body.get("scopes"), list) else None
+            requested_scopes = None
+            if "scopes" in body:
+                raw_scopes = body.get("scopes")
+                allowed_scopes = set(READ_ONLY_SCOPES)
+                if (
+                    not isinstance(raw_scopes, list)
+                    or not raw_scopes
+                    or any(type(scope) is not str or scope not in allowed_scopes for scope in raw_scopes)
+                ):
+                    self._send_error(HTTPStatus.BAD_REQUEST, "oauth_read_only_scopes_not_allowed")
+                    return
+                requested_scopes = raw_scopes
             plan = self.ebay_oauth_planner.read_only_authorization_plan(
                 company_id=identity["company_id"],
                 store_id=store_id,
@@ -3775,6 +3786,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "oauth_request": request_record,
                     "vault": self.secret_store_boundary.status(),
                     "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
                 },
                 status=HTTPStatus.CREATED,
             )
@@ -6375,10 +6387,15 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
         status_code = str(args[1]) if len(args) >= 2 else ""
         parsed = urlparse(self.path)
+        safe_path = re.sub(
+            r"^/confirmations/[^/]+(?=/|$)",
+            "/confirmations/:confirmation_id",
+            parsed.path,
+        )
         event = {
             "event": "http_access",
             "method": self.command,
-            "path": parsed.path,
+            "path": safe_path,
             "status": status_code,
             "secret_exposed": False,
         }
