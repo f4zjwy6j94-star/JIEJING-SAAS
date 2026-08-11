@@ -19,6 +19,7 @@ const counters = { confirmation: 0, decision: 0, preflight: 0, execute: 0, plan:
 const planBodies = [];
 let confirmations = [];
 let connections = [];
+let tasks = [];
 let confirmationReadDelayMs = 0;
 let planResponseMode = "valid";
 
@@ -91,7 +92,7 @@ function apiPayload(pathname) {
     };
   }
   if (pathname === "/confirmations") return { confirmations };
-  if (pathname === "/tasks") return { tasks: [] };
+  if (pathname === "/tasks") return { tasks };
   if (pathname === "/reports") return { reports: [] };
   if (pathname === "/health") return { status: "ok" };
   if (pathname === "/health/deep") return { operational_health: { status: "ready" } };
@@ -138,7 +139,10 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "POST" && url.pathname === `/stores/${store.store_id}/ebay-oauth/read-only-confirmation`) {
     counters.confirmation += 1;
-    confirmations = [exactOAuthConfirmation()];
+    confirmations = [
+      exactOAuthConfirmation(),
+      ...confirmations.filter((card) => card.action_type !== "ebay_oauth_scope_change"),
+    ];
     sendJson(res, 201, {
       oauth_confirmation: {
         confirmation_id: confirmations[0].confirmation_id,
@@ -455,6 +459,22 @@ async function main() {
     window.__JIEJING_FORCE_PUBLIC_MVP__ = true;
   }, { apiBase: base });
   confirmationReadDelayMs = 700;
+  tasks = [{
+    task_id: "latest-product-task-fixture",
+    task_type: "product_workflow",
+    created_at: "2026-08-11T01:00:00Z",
+    input: { product: "Fixture product" },
+  }];
+  confirmations = [{
+    confirmation_id: "latest-task-confirmation-fixture",
+    company_id: "company-oauth-ui-fixture",
+    store_id: store.store_id,
+    task_id: tasks[0].task_id,
+    action_type: "listing_publish",
+    status: "approved",
+    created_at: "2026-08-11T01:01:00Z",
+    item: { product: "Fixture product" },
+  }];
   const page = await context.newPage();
   const consoleErrors = [];
   page.on("console", (message) => {
@@ -525,6 +545,13 @@ async function main() {
     await page.locator("#saasConfirmPanel").waitFor({ state: "visible" });
     if ((await page.locator('#saasConfirmPanel [data-saas-action="approve-confirmation"]').count()) !== 1) {
       throw new Error("pending OAuth confirmation must be visible in the confirmation center");
+    }
+    if (
+      !(await page.locator('#saasConfirmPanel [data-saas-confirmation-flow="ebay-read-only-oauth-current-store"]').isVisible()) ||
+      counters.confirmation !== 1 ||
+      counters.plan !== 0
+    ) {
+      throw new Error("latest product task must not hide or duplicate the exact current-store OAuth pending confirmation");
     }
     const sensitiveConfirmationId = "confirm-oauth-ui-fixture";
     const pendingDom = await page.content();

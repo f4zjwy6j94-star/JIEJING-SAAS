@@ -18542,7 +18542,25 @@ function saasConfirmationsForDisplay(confirmations = []) {
   const latestTask = saasLatestProductWorkflowTask();
   if (!latestTask?.task_id) return dedupeSaasConfirmations(confirmations);
   const latest = confirmations.filter((card) => card.task_id === latestTask.task_id);
-  return dedupeSaasConfirmations(latest.length ? latest : confirmations);
+  if (!latest.length) return dedupeSaasConfirmations(confirmations);
+  const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const currentStoreId = String(activeSaasStore()?.store_id || "").trim();
+  const currentStoreOauth = dedupeSaasConfirmations(
+    confirmations.filter(
+      (card) =>
+        currentCompanyId &&
+        currentStoreId &&
+        String(card?.company_id || "").trim() === currentCompanyId &&
+        String(card?.store_id || "").trim() === currentStoreId &&
+        ["pending", "approved"].includes(String(card?.status || "")) &&
+        isSaasExactReadOnlyOAuthConfirmation(card, currentStoreId),
+    ),
+  );
+  const oauthIds = new Set(currentStoreOauth.map((card) => String(card?.confirmation_id || "").trim()));
+  return [
+    ...currentStoreOauth,
+    ...dedupeSaasConfirmations(latest).filter((card) => !oauthIds.has(String(card?.confirmation_id || "").trim())),
+  ];
 }
 
 function saasConfirmationCanonicalKey(card = {}) {
