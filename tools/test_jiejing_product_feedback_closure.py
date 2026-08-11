@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import contextlib
 from concurrent.futures import ThreadPoolExecutor
+import io
 import inspect
 import json
 import os
@@ -1247,6 +1249,137 @@ def _test_product_feedback_persistence_failures_return_503() -> str:
         sqlite3.IntegrityError("unique constraint failed")
     ):
         return "ordinary SQLite integrity violations must not be misclassified as infrastructure outages"
+
+    postgres_error_type = type(
+        "OperationalError",
+        (Exception,),
+        {"__module__": "psycopg.errors"},
+    )
+    postgres_error = postgres_error_type(
+        "select * from oauth_authorization_requests where state_nonce = "
+        "'SENTINEL_STATE_VALUE' params=SENTINEL_PARAMS "
+        "dsn=postgresql://SENTINEL_USER:SENTINEL_PASSWORD@SENTINEL_HOST/db"
+    )
+    postgres_error.sqlstate = "08006"
+    handler = FakeHandler(
+        path="/product-feedback?confirmation_id=SENTINEL_CONFIRMATION_ID",
+        body={},
+        exc=postgres_error,
+    )
+    handler.command = "GET"
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        SaaSBackendHandler.do_GET(handler)
+    log_lines = [line for line in stderr.getvalue().splitlines() if line.strip()]
+    if len(log_lines) != 1:
+        return f"Postgres 503 must emit one fixed value-free diagnostic event: count={len(log_lines)}"
+    try:
+        log_event = json.loads(log_lines[0])
+    except json.JSONDecodeError:
+        return "Postgres 503 diagnostic must be structured JSON"
+    expected_log = {
+        "event": "database_dependency_error",
+        "route_class": "read_request",
+        "error_type": "OperationalError",
+        "sqlstate": "08006",
+        "secret_exposed": False,
+    }
+    if log_event != expected_log:
+        return f"Postgres 503 diagnostic did not use the fixed allowlisted contract: {log_event}"
+    exposed = (stderr.getvalue() + json.dumps(handler.sent, ensure_ascii=False)).lower()
+    for forbidden in (
+        "sentinel_state_value",
+        "sentinel_params",
+        "sentinel_user",
+        "sentinel_password",
+        "sentinel_host",
+        "sentinel_confirmation_id",
+        "oauth_authorization_requests",
+        "select *",
+        "postgresql://",
+    ):
+        if forbidden in exposed:
+            return f"Postgres 503 diagnostic leaked a forbidden sentinel category: {forbidden}"
+
+    unknown_error_type = type(
+        "SENTINEL_ERROR_TYPE",
+        (Exception,),
+        {"__module__": "psycopg.errors"},
+    )
+    unknown_error = unknown_error_type("SENTINEL_EXCEPTION_MESSAGE")
+    unknown_error.sqlstate = "SENTINEL_SQLSTATE"
+    unknown_handler = FakeHandler(
+        path="/product-feedback?trace=SENTINEL_QUERY_VALUE",
+        body={},
+        exc=unknown_error,
+    )
+    unknown_handler.command = "GET"
+    unknown_stderr = io.StringIO()
+    with contextlib.redirect_stderr(unknown_stderr):
+        SaaSBackendHandler.do_GET(unknown_handler)
+    unknown_lines = [line for line in unknown_stderr.getvalue().splitlines() if line.strip()]
+    if len(unknown_lines) != 1:
+        return "unknown Postgres diagnostics must still emit exactly one fixed event"
+    try:
+        unknown_event = json.loads(unknown_lines[0])
+    except json.JSONDecodeError:
+        return "unknown Postgres diagnostic must remain structured JSON"
+    if unknown_event.get("error_type") != "unknown" or unknown_event.get("sqlstate") != "unknown":
+        return f"unallowlisted Postgres diagnostics must fail closed: {unknown_event}"
+    unknown_serialized = (
+        unknown_stderr.getvalue() + json.dumps(unknown_handler.sent, ensure_ascii=False)
+    ).lower()
+    if "sentinel" in unknown_serialized:
+        return "unallowlisted Postgres diagnostics leaked a sentinel value"
+
+    for representative_path, method, expected_route_class in (
+        ("/health/deep?trace=SENTINEL_PUBLIC_PATH", "GET", "read_request"),
+        ("/auth/register?trace=SENTINEL_PUBLIC_MUTATION", "POST", "write_request"),
+        ("/product-feedback?trace=SENTINEL_AUTHENTICATED_PATH", "GET", "read_request"),
+    ):
+        route_handler = FakeHandler(path=representative_path, body={}, exc=postgres_error)
+        route_handler.command = method
+        route_stderr = io.StringIO()
+        with contextlib.redirect_stderr(route_stderr):
+            SaaSBackendHandler._log_database_dependency_error(route_handler, postgres_error)
+        try:
+            route_event = json.loads(route_stderr.getvalue())
+        except json.JSONDecodeError:
+            return "database dependency route classification must emit one structured event"
+        if route_event.get("route_class") != expected_route_class:
+            return f"database dependency route classification was misleading: {route_event}"
+        if "sentinel" in route_stderr.getvalue().lower() or "path" in route_event:
+            return "database dependency route classification must not record request paths"
+
+    class ThrowingStderr:
+        @staticmethod
+        def write(_: str) -> int:
+            raise OSError("SENTINEL_STDERR_FAILURE")
+
+    stderr_failure_handler = FakeHandler(
+        path="/product-feedback",
+        body={},
+        exc=postgres_error_type("SENTINEL_DATABASE_FAILURE"),
+    )
+    stderr_failure_handler.command = "GET"
+    try:
+        with contextlib.redirect_stderr(ThrowingStderr()):
+            SaaSBackendHandler.do_GET(stderr_failure_handler)
+    except Exception as exc:
+        return (
+            "diagnostic stderr failure must not interrupt the fixed public 503 response: "
+            f"{exc.__class__.__name__}"
+        )
+    if len(stderr_failure_handler.sent) != 1:
+        return "diagnostic stderr failure must still return exactly one public response"
+    failure_payload, failure_status = stderr_failure_handler.sent[0]
+    if (
+        int(failure_status) != 503
+        or failure_payload.get("error") != "database_unavailable"
+        or failure_payload.get("retryable") is not True
+        or stderr_failure_handler.close_connection is not True
+    ):
+        return "diagnostic stderr failure changed the fixed public 503 contract"
     return ""
 
 

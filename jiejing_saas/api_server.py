@@ -246,6 +246,46 @@ class RequestBodyError(ValueError):
         self.message = message
 
 
+_DATABASE_DEPENDENCY_ERROR_TYPES = frozenset(
+    {
+        "DatabaseError",
+        "DataError",
+        "IntegrityError",
+        "InterfaceError",
+        "InternalError",
+        "NotSupportedError",
+        "OperationalError",
+        "ProgrammingError",
+    }
+)
+_DATABASE_DEPENDENCY_SQLSTATES = frozenset(
+    {
+        "08000",
+        "08001",
+        "08003",
+        "08004",
+        "08006",
+        "08007",
+        "08P01",
+        "23505",
+        "40001",
+        "40P01",
+        "42501",
+        "42601",
+        "42703",
+        "42P01",
+        "53300",
+        "55P03",
+        "57P01",
+        "57P02",
+        "57P03",
+        "XX000",
+        "XX001",
+        "XX002",
+    }
+)
+
+
 class JiejingSafeThreadingHTTPServer(ThreadingHTTPServer):
     """Emit a bounded event for unhandled handlers without request or exception details."""
 
@@ -8598,6 +8638,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
     def _handle_service_dependency_exception(self, exc: Exception) -> bool:
         if not self._is_database_unavailable_exception(exc):
             return False
+        SaaSBackendHandler._log_database_dependency_error(self, exc)
         self.close_connection = True
         self._send_json(
             {
@@ -8610,6 +8651,44 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             status=HTTPStatus.SERVICE_UNAVAILABLE,
         )
         return True
+
+    def _log_database_dependency_error(self, exc: Exception) -> None:
+        try:
+            method = str(getattr(self, "command", "") or "").upper()
+            route_class = {
+                "GET": "read_request",
+                "HEAD": "read_request",
+                "POST": "write_request",
+                "PUT": "write_request",
+                "PATCH": "write_request",
+                "DELETE": "write_request",
+            }.get(method, "unknown")
+            error_type_candidate = exc.__class__.__name__
+            error_type = (
+                error_type_candidate
+                if error_type_candidate in _DATABASE_DEPENDENCY_ERROR_TYPES
+                else "unknown"
+            )
+            try:
+                sqlstate_candidate = getattr(exc, "sqlstate", None)
+            except Exception:
+                sqlstate_candidate = None
+            sqlstate = (
+                sqlstate_candidate
+                if isinstance(sqlstate_candidate, str)
+                and sqlstate_candidate in _DATABASE_DEPENDENCY_SQLSTATES
+                else "unknown"
+            )
+            event = {
+                "event": "database_dependency_error",
+                "route_class": route_class,
+                "error_type": error_type,
+                "sqlstate": sqlstate,
+                "secret_exposed": False,
+            }
+            sys.stderr.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+        except Exception:
+            return
 
     @staticmethod
     def _is_database_unavailable_exception(exc: Exception) -> bool:
