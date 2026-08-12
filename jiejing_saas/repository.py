@@ -5444,15 +5444,63 @@ class SaaSRepository:
                 """,
                 (company_id, store_id, action_type),
             ).fetchall()
-            if any(
-                _is_exact_read_only_sync_confirmation(
+            exact_active = [
+                self._confirmation_row_to_dict(row)
+                for row in active_rows
+                if _is_exact_read_only_sync_confirmation(
                     self._confirmation_row_to_dict(row),
                     store_id=store_id,
                     require_approved=False,
                 )
-                for row in active_rows
-            ):
+            ]
+            if len(exact_active) != len(active_rows):
                 raise ValueError("sync_confirmation_already_active")
+            if exact_active:
+                if len(exact_active) != 1:
+                    raise ValueError("sync_confirmation_already_active")
+                existing = exact_active[0]
+                decided_at = _parse_explicit_timezone_iso_datetime(existing.get("decided_at"))
+                expired_approval = bool(
+                    str(existing.get("status") or "") == "approved"
+                    and str(existing.get("decided_by") or "")
+                    and _timestamp_strictly_older_than_seconds(
+                        decided_at,
+                        datetime.now(timezone.utc),
+                        15 * 60,
+                    )
+                )
+                if not expired_approval:
+                    raise ValueError("sync_confirmation_already_active")
+                expired = conn.execute(
+                    """
+                    update confirmations set status = 'expired', decision_note = ?
+                    where company_id = ? and confirmation_id = ? and status = 'approved'
+                    """,
+                    (
+                        "Expired before official sync execution; superseded by a new exact pending confirmation.",
+                        company_id,
+                        existing["confirmation_id"],
+                    ),
+                ).rowcount
+                if expired != 1:
+                    raise ValueError("sync_confirmation_already_active")
+                self._insert_audit(
+                    conn,
+                    company_id=company_id,
+                    store_id=store_id,
+                    user_id=user_id,
+                    actor_type="system",
+                    action_type="ebay.read_only.sync.confirmation.expired_superseded",
+                    target_type="confirmation",
+                    target_id=str(existing["confirmation_id"]),
+                    summary="An expired exact read-only sync approval was superseded before execution.",
+                    details={
+                        "scope_profile": "seller_read_only_official_sync",
+                        "sync_started": False,
+                        "replacement_pending_created_in_same_transaction": True,
+                        "secret_exposed": False,
+                    },
+                )
             conn.execute(
                 """
                 insert into confirmations (
@@ -11081,8 +11129,8 @@ def _is_exact_read_only_sync_confirmation(
     return bool(
         status == "approved"
         and str(confirmation.get("decided_by") or "")
-        and _timestamp_within_seconds(
-            _parse_iso_datetime(str(confirmation.get("decided_at") or "")),
+        and _timestamp_not_future_within_seconds(
+            _parse_explicit_timezone_iso_datetime(confirmation.get("decided_at")),
             datetime.now(timezone.utc),
             15 * 60,
         )

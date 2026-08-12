@@ -17638,6 +17638,53 @@ function isSaasReadOnlyOAuthSensitiveConfirmation(card = {}) {
   return String(card.action_type || item.action_type || "") === "ebay_oauth_scope_change";
 }
 
+function isSaasExactReadOnlySyncConfirmation(card = {}, storeId = "") {
+  card = card && typeof card === "object" ? card : {};
+  const item = card.item && typeof card.item === "object" ? card.item : {};
+  const targetStoreId = String(storeId || "").trim();
+  return Boolean(
+    targetStoreId &&
+      String(card.store_id || "").trim() === targetStoreId &&
+      String(card.action_type || item.action_type || "") === "ebay_read_only_sync" &&
+      String(item.source || "") === "new_ebay_account_low_risk_smoke" &&
+      String(item.requested_step || "") === "official_packet_account_health_snapshot" &&
+      String(item.scope_profile || "") === "seller_read_only_official_sync"
+  );
+}
+
+function isSaasUniqueCurrentReadOnlySyncConfirmation(card = {}, cards = state.saasConfirmations || []) {
+  const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const currentStoreId = String(activeSaasStore()?.store_id || "").trim();
+  if (
+    !currentCompanyId ||
+    !currentStoreId ||
+    String(card?.company_id || "").trim() !== currentCompanyId ||
+    String(card?.store_id || "").trim() !== currentStoreId ||
+    !["pending", "approved"].includes(String(card?.status || "")) ||
+    !isSaasExactReadOnlySyncConfirmation(card, currentStoreId)
+  ) return false;
+  const matches = (Array.isArray(cards) ? cards : []).filter(
+    (candidate) =>
+      String(candidate?.company_id || "").trim() === currentCompanyId &&
+      String(candidate?.store_id || "").trim() === currentStoreId &&
+      ["pending", "approved"].includes(String(candidate?.status || "")) &&
+      isSaasExactReadOnlySyncConfirmation(candidate, currentStoreId),
+  );
+  return matches.length === 1 && String(matches[0]?.confirmation_id || "") === String(card.confirmation_id || "");
+}
+
+function isSaasFreshApprovedReadOnlySyncConfirmation(card = {}, storeId = "", referenceNow = Date.now()) {
+  if (!isSaasExactReadOnlySyncConfirmation(card, storeId) || String(card.status || "") !== "approved") return false;
+  if (!String(card.decided_by || "").trim()) return false;
+  const decidedAtText = String(card.decided_at || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(decidedAtText)) return false;
+  const decidedAt = Date.parse(decidedAtText);
+  const now = Number(referenceNow);
+  if (!Number.isFinite(decidedAt) || !Number.isFinite(now)) return false;
+  const ageMs = now - decidedAt;
+  return ageMs >= -60 * 1000 && ageMs <= 15 * 60 * 1000;
+}
+
 function isSaasUniqueCurrentReadOnlyOAuthConfirmation(card = {}, cards = state.saasConfirmations || []) {
   const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
   const currentStoreId = String(activeSaasStore()?.store_id || "").trim();
@@ -17756,6 +17803,9 @@ function saasConfirmationActionAttributes(card = {}) {
     return isSaasExactReadOnlyOAuthConfirmation(card, card.store_id)
       ? 'data-saas-confirmation-flow="ebay-read-only-oauth-current-store"'
       : 'data-saas-confirmation-flow="ebay-read-only-oauth-blocked"';
+  }
+  if (isSaasExactReadOnlySyncConfirmation(card, card.store_id)) {
+    return `data-saas-confirmation="${escapeHtml(card.confirmation_id || "")}"`;
   }
   return `data-saas-confirmation="${escapeHtml(card.confirmation_id || "")}"`;
 }
@@ -18591,10 +18641,24 @@ function saasConfirmationsForDisplay(confirmations = []) {
         isSaasExactReadOnlyOAuthConfirmation(card, currentStoreId),
     ),
   );
-  const oauthIds = new Set(currentStoreOauth.map((card) => String(card?.confirmation_id || "").trim()));
+  const currentStoreSync = dedupeSaasConfirmations(
+    confirmations.filter(
+      (card) =>
+        currentCompanyId &&
+        currentStoreId &&
+        String(card?.company_id || "").trim() === currentCompanyId &&
+        String(card?.store_id || "").trim() === currentStoreId &&
+        ["pending", "approved"].includes(String(card?.status || "")) &&
+        isSaasExactReadOnlySyncConfirmation(card, currentStoreId),
+    ),
+  );
+  const protectedIds = new Set(
+    [...currentStoreOauth, ...currentStoreSync].map((card) => String(card?.confirmation_id || "").trim()),
+  );
   return [
     ...currentStoreOauth,
-    ...dedupeSaasConfirmations(latest).filter((card) => !oauthIds.has(String(card?.confirmation_id || "").trim())),
+    ...currentStoreSync,
+    ...dedupeSaasConfirmations(latest).filter((card) => !protectedIds.has(String(card?.confirmation_id || "").trim())),
   ];
 }
 
@@ -28347,6 +28411,7 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
   try {
     const currentStoreId = String(activeSaasStore()?.store_id || "").trim();
     const isExactReadOnlyOAuth = isSaasUniqueCurrentReadOnlyOAuthConfirmation(confirmation, state.saasConfirmations || []);
+    const isExactReadOnlySync = isSaasUniqueCurrentReadOnlySyncConfirmation(confirmation, state.saasConfirmations || []);
     if (isSaasReadOnlyOAuthSensitiveConfirmation(confirmation) && !isExactReadOnlyOAuth) {
       showActionToast("只读连接确认不唯一或不属于当前店铺；系统没有执行批准，请刷新确认中心。");
       return;
@@ -28366,7 +28431,9 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
         decision: "approve",
         note: isExactReadOnlyOAuth
           ? "Owner approved the exact current-store seller_read_only OAuth confirmation. No OAuth plan is created by this decision."
-          : "Merchant confirmation recorded from the SaaS workbench. Backend must run execution preflight before any eBay write.",
+          : isExactReadOnlySync
+            ? "Owner approved one exact current-store official read-only sync. No sync, task, queue job, or live request is created by this decision."
+            : "Merchant confirmation recorded from the SaaS workbench. Backend must run execution preflight before any eBay write.",
       }),
     });
     if (isExactReadOnlyOAuth) {
@@ -28377,6 +28444,12 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
       }
       renderSaasBackendPanel();
       showActionToast("只读连接确认已批准。返回“账号与店铺”继续时，系统才会生成这一次 eBay 官方授权。");
+      return;
+    }
+    if (isExactReadOnlySync) {
+      await refreshSaasState({ silent: true });
+      renderSaasBackendPanel();
+      showActionToast("只读同步确认已批准。返回店铺数据后，再由同一确认单启动一次官方只读同步。");
       return;
     }
     const preflight = await saasFetch(`/confirmations/${encodeURIComponent(confirmation.confirmation_id)}/preflight`, {
@@ -29000,7 +29073,7 @@ async function planSaasEbayPublishOAuth() {
 }
 
 async function syncSaasEbayReadOnlyData() {
-  const store = state.saasStores[0] || (await ensureSaasDemoStoreAndConnection());
+  let store = activeSaasStore() || state.saasStores[0] || (await ensureSaasDemoStoreAndConnection());
   if (!store?.store_id) {
     showActionToast("还没有可同步的 eBay 店铺。");
     return;
@@ -29009,11 +29082,111 @@ async function syncSaasEbayReadOnlyData() {
   state.saasError = "";
   renderSaasBackendPanel();
   try {
+    state.saasConfirmationsLiveLoaded = false;
+    await refreshSaasState({ silent: true });
+    store = activeSaasStore() || store;
+    if (!state.saasConfirmationsLiveLoaded || !store?.store_id) {
+      throw new Error("sync_confirmation_live_state_required");
+    }
+    const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+    const currentStoreId = String(store.store_id || "").trim();
+    const activeSyncConfirmations = (state.saasConfirmations || []).filter(
+      (card) =>
+        String(card?.company_id || "").trim() === currentCompanyId &&
+        String(card?.store_id || "").trim() === currentStoreId &&
+        ["pending", "approved"].includes(String(card?.status || "")) &&
+        isSaasExactReadOnlySyncConfirmation(card, currentStoreId),
+    );
+    const malformedActiveSyncConfirmation = (state.saasConfirmations || []).some(
+      (card) =>
+        String(card?.company_id || "").trim() === currentCompanyId &&
+        String(card?.store_id || "").trim() === currentStoreId &&
+        String(card?.action_type || card?.item?.action_type || "") === "ebay_read_only_sync" &&
+        ["pending", "approved"].includes(String(card?.status || "")) &&
+        !isSaasExactReadOnlySyncConfirmation(card, currentStoreId),
+    );
+    if (!currentCompanyId || activeSyncConfirmations.length > 1 || malformedActiveSyncConfirmation) {
+      openSaasReadOnlyOAuthConfirmationCenter();
+      showActionToast("当前店铺的只读同步确认不唯一或信息异常；系统没有启动同步，请刷新确认中心。");
+      return;
+    }
+    let syncConfirmation = activeSyncConfirmations[0] || null;
+    if (!syncConfirmation) {
+      const intake = await saasFetch(`/stores/${encodeURIComponent(currentStoreId)}/ebay-read-only/sync-confirmation`, {
+        method: "POST",
+        body: JSON.stringify({ scope_profile: "seller_read_only_official_sync" }),
+      });
+      const pending = intake.sync_confirmation && typeof intake.sync_confirmation === "object"
+        ? {
+            ...intake.sync_confirmation,
+            company_id: currentCompanyId,
+            store_id: currentStoreId,
+            item: {
+              source: "new_ebay_account_low_risk_smoke",
+              requested_step: intake.sync_confirmation.requested_step,
+              scope_profile: intake.sync_confirmation.scope_profile,
+              sync_started: false,
+              task_created: false,
+              queue_job_created: false,
+              live_request_performed: false,
+              real_platform_writes_enabled: false,
+              secret_exposed: false,
+            },
+          }
+        : {};
+      if (
+        pending.status !== "pending" ||
+        pending.action_type !== "ebay_read_only_sync" ||
+        pending.item.requested_step !== "official_packet_account_health_snapshot" ||
+        pending.item.scope_profile !== "seller_read_only_official_sync" ||
+        intake.sync_confirmation?.decision_required !== true ||
+        ["sync_started", "task_created", "queue_job_created", "live_request_performed"].some(
+          (key) => intake.sync_confirmation?.[key] !== false,
+        )
+      ) {
+        throw new Error("sync_confirmation_contract_invalid");
+      }
+      await refreshSaasState({ silent: true });
+      openSaasReadOnlyOAuthConfirmationCenter();
+      showActionToast("官方只读同步确认已创建；批准前不会启动同步、任务或队列。");
+      return;
+    }
+    if (String(syncConfirmation.status || "") !== "approved") {
+      openSaasReadOnlyOAuthConfirmationCenter();
+      showActionToast("官方只读同步仍在确认中心等待处理；不会重复创建或提前同步。");
+      return;
+    }
+    if (!isSaasFreshApprovedReadOnlySyncConfirmation(syncConfirmation, currentStoreId)) {
+      const replacement = await saasFetch(`/stores/${encodeURIComponent(currentStoreId)}/ebay-read-only/sync-confirmation`, {
+        method: "POST",
+        body: JSON.stringify({ scope_profile: "seller_read_only_official_sync" }),
+      });
+      const pending = replacement.sync_confirmation && typeof replacement.sync_confirmation === "object"
+        ? replacement.sync_confirmation
+        : {};
+      if (
+        pending.status !== "pending" ||
+        pending.action_type !== "ebay_read_only_sync" ||
+        pending.requested_step !== "official_packet_account_health_snapshot" ||
+        pending.scope_profile !== "seller_read_only_official_sync" ||
+        pending.decision_required !== true ||
+        ["sync_started", "task_created", "queue_job_created", "live_request_performed"].some(
+          (key) => pending[key] !== false,
+        )
+      ) {
+        throw new Error("sync_confirmation_replacement_contract_invalid");
+      }
+      await refreshSaasState({ silent: true });
+      openSaasReadOnlyOAuthConfirmationCenter();
+      showActionToast("这次官方只读同步确认已失效；系统已安全创建一个新待确认单，不会启动同步。");
+      return;
+    }
     const payload = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/ebay-read-only/sync`, {
       method: "POST",
       body: JSON.stringify({
         resources: saasEbayReadOnlyResourcePayload().resources,
         run_mode: "inline",
+        confirmation_id: String(syncConfirmation.confirmation_id || ""),
       }),
     });
     state.saasEbaySync = payload.sync

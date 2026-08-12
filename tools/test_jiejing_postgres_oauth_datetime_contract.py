@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from jiejing_saas.repository import SaaSRepository  # noqa: E402
+from jiejing_saas.repository import SaaSRepository, _is_exact_read_only_sync_confirmation  # noqa: E402
 from jiejing_saas.api_server import SaaSBackendHandler  # noqa: E402
 
 
@@ -192,6 +192,29 @@ class _PostgresShapedRepository(SaaSRepository):
 
 
 def main() -> int:
+    sync_card = {
+        "store_id": "store-fixture",
+        "action_type": "ebay_read_only_sync",
+        "status": "approved",
+        "decided_by": "owner-fixture",
+        "item": {
+            "source": "new_ebay_account_low_risk_smoke",
+            "requested_step": "official_packet_account_health_snapshot",
+            "scope_profile": "seller_read_only_official_sync",
+        },
+    }
+    fresh_sync_card = {**sync_card, "decided_at": datetime.now(timezone(timedelta(hours=8))) - timedelta(minutes=5)}
+    future_sync_card = {**sync_card, "decided_at": datetime.now(timezone.utc) + timedelta(minutes=5)}
+    naive_sync_card = {**sync_card, "decided_at": datetime.now() - timedelta(minutes=5)}
+    expired_sync_card = {**sync_card, "decided_at": datetime.now(timezone.utc) - timedelta(minutes=16)}
+    if not _is_exact_read_only_sync_confirmation(fresh_sync_card, store_id="store-fixture", require_approved=True):
+        raise AssertionError("fresh Postgres timestamptz official sync approval must be accepted")
+    if any(
+        _is_exact_read_only_sync_confirmation(card, store_id="store-fixture", require_approved=True)
+        for card in (future_sync_card, naive_sync_card, expired_sync_card)
+    ):
+        raise AssertionError("future, naive, and expired official sync approvals must fail closed")
+
     boundary = _ApprovedOAuthPostgresBoundary(
         decided_at=datetime.now(timezone(timedelta(hours=8))) - timedelta(minutes=5)
     )

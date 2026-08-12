@@ -15,8 +15,18 @@ const store = {
   status: "read_only_pending",
   store_name: "Waiting for eBay authorization",
 };
-const counters = { confirmation: 0, decision: 0, preflight: 0, execute: 0, plan: 0, connectionsGet: 0 };
+const counters = {
+  confirmation: 0,
+  decision: 0,
+  preflight: 0,
+  execute: 0,
+  plan: 0,
+  connectionsGet: 0,
+  syncConfirmation: 0,
+  sync: 0,
+};
 const planBodies = [];
+const syncBodies = [];
 let confirmations = [];
 let connections = [];
 let tasks = [];
@@ -46,6 +56,30 @@ function exactOAuthConfirmation(status = "pending", storeId = store.store_id, de
       source: "new_ebay_account_low_risk_smoke",
       requested_step: "new_account_oauth_authorization_gate",
       scope_profile: "seller_read_only",
+      real_platform_writes_enabled: false,
+      secret_exposed: false,
+    },
+  };
+}
+
+function exactSyncConfirmation(status = "pending", storeId = store.store_id, decidedAt = "", confirmationId = "confirm-sync-ui-fixture") {
+  return {
+    confirmation_id: confirmationId,
+    company_id: "company-oauth-ui-fixture",
+    store_id: storeId,
+    action_type: "ebay_read_only_sync",
+    status,
+    default_action: "hold",
+    created_at: new Date().toISOString(),
+    ...(decidedAt ? { decided_at: decidedAt, decided_by: "user-oauth-ui-fixture" } : {}),
+    item: {
+      source: "new_ebay_account_low_risk_smoke",
+      requested_step: "official_packet_account_health_snapshot",
+      scope_profile: "seller_read_only_official_sync",
+      sync_started: false,
+      task_created: false,
+      queue_job_created: false,
+      live_request_performed: false,
       real_platform_writes_enabled: false,
       secret_exposed: false,
     },
@@ -167,6 +201,51 @@ const server = http.createServer(async (req, res) => {
         real_platform_writes_enabled: false,
         secret_exposed: false,
       },
+    });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === `/stores/${store.store_id}/ebay-read-only/sync-confirmation`) {
+    counters.syncConfirmation += 1;
+    confirmations = [
+      exactSyncConfirmation(),
+      ...confirmations.filter((card) => card.action_type !== "ebay_read_only_sync"),
+    ];
+    sendJson(res, 201, {
+      sync_confirmation: {
+        confirmation_id: confirmations[0].confirmation_id,
+        status: "pending",
+        action_type: "ebay_read_only_sync",
+        requested_step: "official_packet_account_health_snapshot",
+        scope_profile: "seller_read_only_official_sync",
+        decision_required: true,
+        sync_started: false,
+        task_created: false,
+        queue_job_created: false,
+        live_request_performed: false,
+        real_platform_writes_enabled: false,
+        secret_exposed: false,
+      },
+    });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === `/stores/${store.store_id}/ebay-read-only/sync`) {
+    counters.sync += 1;
+    const body = await readBody(req);
+    syncBodies.push(body);
+    const approved = confirmations.find(
+      (card) => card.confirmation_id === body.confirmation_id && card.action_type === "ebay_read_only_sync" && card.status === "approved",
+    );
+    if (!approved) {
+      sendJson(res, 409, { error: "sync_exact_approval_required" });
+      return;
+    }
+    confirmations = confirmations.map((card) =>
+      card.confirmation_id === approved.confirmation_id ? { ...card, status: "executed" } : card,
+    );
+    sendJson(res, 202, {
+      sync: { status: "completed", real_platform_writes_enabled: false, secret_exposed: false },
+      worker_result: { status: "completed", live_read_result: { live_read_performed: true }, data_packet: { status: "ready" } },
+      real_platform_writes_enabled: false,
     });
     return;
   }
@@ -354,6 +433,21 @@ const server = http.createServer(async (req, res) => {
       decided_by: "user-oauth-ui-fixture",
     }));
     sendJson(res, 200, { confirmation: confirmations[0] });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/confirmations/confirm-sync-ui-fixture/decision") {
+    counters.decision += 1;
+    const body = await readBody(req);
+    if (body.decision !== "approve") {
+      sendJson(res, 409, { error: "sync_confirmation_decision_invalid" });
+      return;
+    }
+    confirmations = confirmations.map((card) =>
+      card.confirmation_id === "confirm-sync-ui-fixture"
+        ? { ...card, status: "approved", decided_at: new Date().toISOString(), decided_by: "user-oauth-ui-fixture" }
+        : card,
+    );
+    sendJson(res, 200, { confirmation: confirmations.find((card) => card.confirmation_id === "confirm-sync-ui-fixture") });
     return;
   }
   if (req.method === "POST" && url.pathname === "/confirmations/confirm-oauth-ui-fixture/preflight") {
@@ -999,6 +1093,78 @@ async function main() {
       throw new Error("authorized current store must not create another confirmation or OAuth plan");
     }
     await authorizedPage.close();
+
+    confirmations = [];
+    const syncDecisionBaseline = counters.decision;
+    const syncPreflightBaseline = counters.preflight;
+    const syncExecuteBaseline = counters.execute;
+    const syncPage = await openAccountSettingsPage(context, base, consoleErrors);
+    await syncPage.locator('[data-saas-settings-tab="data"]:visible').click();
+    await syncPage.locator('[data-saas-action="sync-ebay-readonly"]:visible').first().click();
+    await syncPage.waitForTimeout(800);
+    await syncPage.waitForFunction(() => state.saasLoading === false, null, { timeout: 5000 });
+    if (counters.syncConfirmation !== 1 || counters.sync !== 0) {
+      const stateShape = await syncPage.evaluate(() => ({ error: state.saasError, view: document.body?.dataset?.view || "", confirmations: (state.saasConfirmations || []).map((card) => ({ action: card.action_type, status: card.status })) }));
+      throw new Error(`first official sync click must create one pending exact confirmation and perform zero syncs; confirmation=${counters.syncConfirmation} sync=${counters.sync} state=${JSON.stringify(stateShape)}`);
+    }
+    const exactSyncCard = syncPage.locator("#saasConfirmPanel .saas-confirm-card").filter({ hasText: "ebay_read_only_sync" });
+    if (!(await exactSyncCard.isVisible())) {
+      throw new Error("pending exact official sync confirmation must be visible in the confirmation center");
+    }
+    await exactSyncCard.locator('[data-saas-action="approve-confirmation"]').click();
+    await syncPage.waitForFunction(
+      () => (state.saasConfirmations || []).some((card) => card.action_type === "ebay_read_only_sync" && card.status === "approved"),
+      null,
+      { timeout: 5000 },
+    );
+    if (
+      counters.decision !== syncDecisionBaseline + 1 ||
+      counters.preflight !== syncPreflightBaseline ||
+      counters.execute !== syncExecuteBaseline ||
+      counters.sync !== 0
+    ) {
+      throw new Error("sync approval must record only the exact decision and must not run generic preflight, execute, or sync");
+    }
+    await showAccountSettings(syncPage);
+    await syncPage.locator('[data-saas-settings-tab="data"]:visible').click();
+    await syncPage.locator('[data-saas-action="sync-ebay-readonly"]:visible').first().click();
+    await syncPage.waitForFunction(() => state.saasLoading === false, null, { timeout: 5000 });
+    await syncPage.waitForTimeout(500);
+    if (
+      counters.syncConfirmation !== 1 ||
+      counters.sync !== 1 ||
+      syncBodies.length !== 1 ||
+      syncBodies[0].confirmation_id !== "confirm-sync-ui-fixture"
+    ) {
+      throw new Error(`approved official sync must consume one exact confirmation exactly once; confirmation=${counters.syncConfirmation} sync=${counters.sync} bodies=${JSON.stringify(syncBodies)}`);
+    }
+    await syncPage.close();
+
+    confirmations = [
+      exactSyncConfirmation(
+        "approved",
+        store.store_id,
+        new Date(Date.now() - 16 * 60 * 1000).toISOString(),
+        "confirm-sync-expired-ui-fixture",
+      ),
+    ];
+    const expiredSyncIntakeBaseline = counters.syncConfirmation;
+    const expiredSyncExecutionBaseline = counters.sync;
+    const expiredSyncPage = await openAccountSettingsPage(context, base, consoleErrors);
+    await expiredSyncPage.locator('[data-saas-settings-tab="data"]:visible').click();
+    await expiredSyncPage.locator('[data-saas-action="sync-ebay-readonly"]:visible').first().click();
+    await expiredSyncPage.waitForFunction(() => state.saasLoading === false, null, { timeout: 5000 });
+    await expiredSyncPage.waitForTimeout(500);
+    if (
+      counters.syncConfirmation !== expiredSyncIntakeBaseline + 1 ||
+      counters.sync !== expiredSyncExecutionBaseline ||
+      !confirmations.some((card) => card.action_type === "ebay_read_only_sync" && card.status === "pending")
+    ) {
+      throw new Error(
+        `expired official sync approval must create one replacement pending without starting sync; confirmation=${counters.syncConfirmation - expiredSyncIntakeBaseline} sync=${counters.sync - expiredSyncExecutionBaseline}`,
+      );
+    }
+    await expiredSyncPage.close();
 
     connections = [];
     confirmations = [exactOAuthConfirmation("rejected")];

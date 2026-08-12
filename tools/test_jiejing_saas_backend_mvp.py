@@ -1983,6 +1983,44 @@ def main() -> int:
             return fail("read-only live-plan worker must not perform live eBay reads in MVP")
         if read_worker.get("task", {}).get("output", {}).get("status") != "completed_no_live_read":
             return fail("read-only live-plan worker should mark task completed without live read")
+
+        sync_recovery_store = approval_repo.create_store(
+            company_id=owner_company_id,
+            user_id=me["user"]["user_id"],
+            payload={"platform": "ebay", "store_name": "Sync approval recovery fixture", "marketplace": "EBAY_US"},
+        )
+        sync_recovery_pending = approval_repo.create_read_only_sync_confirmation(
+            company_id=owner_company_id,
+            store_id=sync_recovery_store["store_id"],
+            user_id=me["user"]["user_id"],
+        )
+        sync_recovery_approved = approval_repo.decide_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=sync_recovery_pending["confirmation_id"],
+            decision="approve",
+            decided_by=me["user"]["user_id"],
+            note="Approval intentionally expires before an official sync starts.",
+        )
+        with sqlite3.connect(SAAS_DB) as sync_recovery_conn:
+            sync_recovery_conn.execute(
+                "update confirmations set decided_at = ? where company_id = ? and confirmation_id = ?",
+                ("2000-01-01T00:00:00+00:00", owner_company_id, sync_recovery_approved["confirmation_id"]),
+            )
+        try:
+            sync_replacement = approval_repo.create_read_only_sync_confirmation(
+                company_id=owner_company_id,
+                store_id=sync_recovery_store["store_id"],
+                user_id=me["user"]["user_id"],
+            )
+        except ValueError as exc:
+            return fail(f"expired exact sync approval must be replaceable without starting work: {exc}")
+        expired_sync_recovery = approval_repo.get_confirmation(
+            company_id=owner_company_id,
+            confirmation_id=sync_recovery_approved["confirmation_id"],
+        ) or {}
+        if expired_sync_recovery.get("status") != "expired" or sync_replacement.get("status") != "pending":
+            return fail("expired exact sync approval replacement must atomically terminalize the old card and create one pending card")
+
         tasks_before_unapproved_sync = fetch_json(f"{base_url}/tasks", token=token).get("tasks") or []
         unapproved_sync_status, unapproved_sync_error = post_json_expect_error(
             f"{base_url}/stores/{store_id}/ebay-read-only/sync",
