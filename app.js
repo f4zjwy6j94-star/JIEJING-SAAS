@@ -10968,6 +10968,10 @@ function saasIsInvalidMarketProductLabel(value = "") {
   if (/^(?:新)?(?:产品|商品)名(?:称)?(?:和|及|与).+$/.test(text)) return true;
   if (/^(商品|产品|品类|品|候选商品|候选品|方向|方案)\s*[一二三四五六七八九十\dA-Z]+$/i.test(text)) return true;
   if (/^e?bay\s*(us|美国站)?$/i.test(text)) return true;
+  if (
+    /^(?:先)?(?:划掉|排除|剔除|避开|不要|不做|暂时不做|不建议|不推荐|停止|放弃)/i.test(text) ||
+    /(?:不建议|不推荐|不要|暂缓|暂停).*(?:上架|刊登|发布|铺货|商品|产品|品类|方向)/i.test(text)
+  ) return true;
   if (text.length > 70 && /帮我|应该|卖什么|不知道|你觉得|市场调研|报告/.test(text)) return true;
   return false;
 }
@@ -12842,8 +12846,21 @@ function renderSaasListingMinimalWorkspace({
 }
 
 function renderSaasProductListingCenter(view) {
+  const safeListingDraft = saasListingDraftHasConcreteProduct(state.saasListingComposerDraft)
+    ? state.saasListingComposerDraft
+    : null;
+  if (state.saasListingComposerDraft && !safeListingDraft) {
+    state.saasListingComposerDraft = null;
+    state.saasListingSourceMode = "";
+  }
   const ctx = saasMerchantWorkbenchContext();
   const listingReport = latestSaasActionableProductReportByTypes(["listing.package", "product.listing"]);
+  const safeListingReportDraft = listingReport
+    ? saasListingDraftFromReport(listingReport, "listing_render_gate")
+    : null;
+  const safeListingReport = saasListingDraftHasConcreteProduct(safeListingReportDraft)
+    ? listingReport
+    : null;
   const marketReport = latestSaasActionableProductReportByTypes(["ai_ceo.market_research", "market.report", "market.data_packet"]);
   const pendingConfirmations = (state.saasConfirmations || []).filter((item) => item.status === "pending");
   const activeStore = activeSaasStore();
@@ -12851,8 +12868,8 @@ function renderSaasProductListingCenter(view) {
   const storeName = saasStoreDisplayName(activeStore, activeConnection);
   const resourceRows = saasEbayPacketResourceRows(ctx.packetBody);
   const liveTypes = new Set((state.saasModelValueGate?.evidence || {}).live_model_report_types || []);
-  const hasLiveListing = liveTypes.has("listing.package") || Boolean(listingReport);
-  const showPublishFlow = Boolean(state.saasListingComposerDraft || hasLiveListing);
+  const hasLiveListing = Boolean((liveTypes.has("listing.package") || listingReport) && safeListingReport);
+  const showPublishFlow = Boolean(safeListingDraft || hasLiveListing);
   const canRunModel = state.saasConnected && ctx.hasPacket && isSaasModelConfigured();
   const primaryAction = !state.saasConnected
     ? ["refresh", "读取登录状态", "secondary-action"]
@@ -12891,7 +12908,7 @@ function renderSaasProductListingCenter(view) {
         <span class="pill ${ctx.official ? "green" : "amber"}">${ctx.official ? "官方只读资料" : "等待官方资料"}</span>
       </header>
 
-      ${renderSaasListingComposerWorkspace({ listingReport, marketReport, pendingConfirmations, hasLiveListing, ctx })}
+      ${renderSaasListingComposerWorkspace({ listingReport: safeListingReport, marketReport, pendingConfirmations, hasLiveListing, ctx })}
 
       ${showPublishFlow ? `
       <details class="saas-listing-publish-flow" data-listing-publish-flow-details="publish_intake_collapsed_v1" aria-label="Listing 发布资料补全">
@@ -12991,7 +13008,7 @@ function renderSaasProductListingCenter(view) {
           <article class="${hasLiveListing ? "is-green" : "is-amber"}">
             <span>Listing 草稿</span>
             <strong>${hasLiveListing ? "已写回" : "等待生成"}</strong>
-            <small>${listingReport ? escapeHtml(saasTimestampLabel(listingReport.created_at || "")) : "只接受模型输出或系统报告"}</small>
+            <small>${safeListingReport ? escapeHtml(saasTimestampLabel(safeListingReport.created_at || "")) : "只接受模型输出或系统报告"}</small>
           </article>
           <article>
             <span>确认中心</span>
@@ -16551,13 +16568,17 @@ function sanitizeSaasPacketSnapshot(packet = {}) {
 }
 
 function restoreSaasListingComposerDraftFromBackendReports() {
-  if (state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object") return state.saasListingComposerDraft;
+  if (state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object") {
+    if (saasListingDraftHasConcreteProduct(state.saasListingComposerDraft)) return state.saasListingComposerDraft;
+    state.saasListingComposerDraft = null;
+    state.saasListingSourceMode = "";
+  }
   const report =
     latestSaasActionableProductReportByTypes(["listing.package", "product.listing"]) ||
     latestSaasActionableProductReportByTypes(["ai_ceo.market_research", "market.report"]);
   if (!report) return null;
   const restored = saasListingDraftFromReport(report, report.report_type === "ai_ceo.market_research" ? "ai_ceo_market_report" : "ai_report");
-  if (!restored) return null;
+  if (!restored || !saasListingDraftHasConcreteProduct(restored)) return null;
   const identity = saasCurrentListingProjectIdentity(restored);
   state.saasListingComposerDraft = { ...restored, listing_project_key: identity.key };
   state.saasListingSourceMode = "backend_report_restore";
@@ -16796,10 +16817,15 @@ function hydrateSaasProtectedStateFromCache() {
     state.saasStores = Array.isArray(snapshot.stores) ? snapshot.stores : state.saasStores || [];
     state.saasConnections = Array.isArray(snapshot.connections) ? snapshot.connections : state.saasConnections || [];
     state.saasDataPackets = Array.isArray(snapshot.data_packets) ? snapshot.data_packets : state.saasDataPackets || [];
-    state.saasListingComposerDraft =
+    const restoredListingDraft =
       snapshot.listing_composer_draft && typeof snapshot.listing_composer_draft === "object"
         ? snapshot.listing_composer_draft
         : state.saasListingComposerDraft || null;
+    state.saasListingComposerDraft = saasListingDraftHasConcreteProduct(restoredListingDraft) ? restoredListingDraft : null;
+    if (restoredListingDraft && !state.saasListingComposerDraft) {
+      snapshot = { ...snapshot, listing_composer_draft: null, listing_source_mode: "" };
+      localStorage.setItem(saasProtectedSnapshotStorageKey(), JSON.stringify(snapshot));
+    }
     state.saasListingSourceMode = publicRuntimeText(snapshot.listing_source_mode || state.saasListingSourceMode || "").slice(0, 80);
     state.activeMediaDraft = publicRuntimeText(snapshot.active_media_draft || state.activeMediaDraft || "").slice(0, 160);
     state.mediaTaskEntry = snapshot.media_task_entry === "single" ? "single" : state.mediaTaskEntry || "project";
@@ -18545,6 +18571,17 @@ function saasIsConcreteProductLabel(value = "") {
   if (/^(?:AI\s*CEO\s*)?(?:市场调研|市场调研报告|产品刊登报告|Listing|上架草稿|等待选择商品|待选择商品方向|商品方向|选品)$/i.test(text)) return false;
   if (/(?:帮我|给我|请|做个|做一份|应该).*(?:选品|卖什么|市场调研|调研报告)/i.test(text)) return false;
   return !/(?:还没有|尚未|等待|待选择|待确认).*(?:商品|产品|方向)/i.test(text);
+}
+
+function saasListingDraftHasConcreteProduct(draft = null) {
+  if (!draft || typeof draft !== "object") return false;
+  const selected = draft.selected_product_candidate && typeof draft.selected_product_candidate === "object"
+    ? draft.selected_product_candidate
+    : {};
+  const identityLabels = [selected.name, draft.product, draft.title, draft.fields?.title]
+    .map((value) => publicRuntimeText(value).trim())
+    .filter(Boolean);
+  return identityLabels.length > 0 && identityLabels.every((value) => saasIsConcreteProductLabel(value));
 }
 
 function saasProductLabelForRecord(record = {}) {

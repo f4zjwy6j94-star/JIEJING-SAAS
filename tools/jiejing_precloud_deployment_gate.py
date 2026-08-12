@@ -41,6 +41,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("ai_ceo_answer_rendering", [sys.executable, "tools/test_jiejing_ai_ceo_answer_rendering.py"]),
     ("ai_ceo_listing_fact_boundary", [sys.executable, "tools/test_jiejing_ai_ceo_listing_fact_boundary.py"]),
     ("ai_ceo_listing_buyer_copy_boundary", [sys.executable, "tools/test_jiejing_ai_ceo_listing_buyer_copy_boundary.py"]),
+    ("listing_concrete_product_gate", [sys.executable, "tools/test_jiejing_listing_concrete_product_gate.py"]),
     ("ai_ceo_product_label_extraction", [sys.executable, "tools/test_jiejing_ai_ceo_product_label_extraction.py"]),
     ("ai_ceo_candidate_fact_consistency", [sys.executable, "tools/test_jiejing_ai_ceo_frontend_candidate_consistency.py"]),
     ("ai_ceo_listing_import_target", [sys.executable, "tools/test_jiejing_ai_ceo_listing_import_target.py"]),

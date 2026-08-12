@@ -545,6 +545,13 @@ async function main() {
       company: { company_id: "company-oauth-ui-fixture" },
       user: { user_id: "user-oauth-ui-fixture" },
       stores: [{ store_id: "store-oauth-ui-fixture", platform: "ebay", marketplace: "EBAY_US" }],
+      listing_composer_draft: {
+        source_type: "ai_ceo_market_report",
+        product: "先划掉这些高合规/高售后/红海方向",
+        title: "先划掉这些高合规/高售后/红海方向",
+        fields: { title: "先划掉这些高合规/高售后/红海方向" },
+      },
+      listing_source_mode: "backend_report_restore",
       confirmations: [{
         confirmation_id: "oauth-old-snapshot-sentinel",
         company_id: "company-oauth-ui-fixture",
@@ -603,6 +610,25 @@ async function main() {
     confirmationReadDelayMs = 0;
     if (legacySnapshotContract.sensitiveStatePresent || legacySnapshotContract.sensitiveStoragePresent) {
       throw new Error(`legacy protected snapshot must be removed before exact OAuth state can hydrate; result=${JSON.stringify(legacySnapshotContract)}`);
+    }
+    const poisonedListingContract = await page.evaluate(() => {
+      const sentinel = "先划掉这些高合规/高售后/红海方向";
+      return {
+        statePresent: JSON.stringify(state.saasListingComposerDraft || {}).includes(sentinel),
+        storagePresent: Object.keys(localStorage).some((key) => String(localStorage.getItem(key) || "").includes(sentinel)),
+      };
+    });
+    await page.locator('button[data-view="product"]:visible').click();
+    await page.waitForTimeout(100);
+    poisonedListingContract.publishFlowCount = await page.locator(".saas-listing-publish-flow").count();
+    poisonedListingContract.domPresent = (await page.locator("body").innerText()).includes("先划掉这些高合规/高售后/红海方向");
+    if (
+      poisonedListingContract.statePresent ||
+      poisonedListingContract.storagePresent ||
+      poisonedListingContract.domPresent ||
+      poisonedListingContract.publishFlowCount !== 0
+    ) {
+      throw new Error(`negative market decision must not restore or render as a Listing product; result=${JSON.stringify(poisonedListingContract)}`);
     }
     const approvalTimeContract = await page.evaluate(({ storeId }) => {
       const referenceNow = Date.now();
