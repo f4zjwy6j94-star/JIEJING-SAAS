@@ -1036,7 +1036,14 @@ async function main() {
       platform: "ebay",
       status: "blocked_invalid_expired_state",
       scopes: sellerReadOnlyScopes,
-      request: { status: "ready_to_redirect", store_id: store.store_id, scope_profile: "seller_read_only", scopes: sellerReadOnlyScopes },
+      request: {
+        status: "ready_to_redirect",
+        store_id: store.store_id,
+        scope_profile: "seller_read_only",
+        scopes: sellerReadOnlyScopes,
+        real_platform_writes_enabled: false,
+        secret_exposed: false,
+      },
     }];
     confirmations = [exactOAuthConfirmation("executed", store.store_id, new Date().toISOString(), "confirm-oauth-history-executed-fixture")];
     const executedTerminalCounts = { confirmation: counters.confirmation, plan: counters.plan };
@@ -1065,6 +1072,55 @@ async function main() {
       throw new Error("duplicate executed exact confirmations must remain fail closed without intake or plan");
     }
     await duplicateExecutedPage.close();
+
+    oauthRequestsOverride = [
+      {
+        company_id: "company-oauth-ui-fixture",
+        store_id: store.store_id,
+        platform: "ebay",
+        status: "blocked_invalid_expired_state",
+        scopes: sellerReadOnlyScopes,
+        request: {
+          status: "ready_to_redirect",
+          store_id: store.store_id,
+          scope_profile: "seller_read_only",
+          scopes: sellerReadOnlyScopes,
+          real_platform_writes_enabled: false,
+          secret_exposed: false,
+        },
+      },
+      {
+        company_id: "company-oauth-ui-fixture",
+        store_id: store.store_id,
+        platform: "ebay",
+        status: "callback_exchange_vault_write_failed",
+        scopes: sellerReadOnlyScopes,
+        request: {
+          status: "ready_to_redirect",
+          store_id: store.store_id,
+          scope_profile: "seller_read_only",
+          scopes: sellerReadOnlyScopes,
+          real_platform_writes_enabled: false,
+          secret_exposed: false,
+        },
+      },
+    ];
+    confirmations = [
+      exactOAuthConfirmation("executed", store.store_id, new Date().toISOString(), "confirm-oauth-history-expired-executed-fixture"),
+      exactOAuthConfirmation("executed", store.store_id, new Date().toISOString(), "confirm-oauth-history-vault-failed-executed-fixture"),
+    ];
+    const accumulatedTerminalCounts = { confirmation: counters.confirmation, plan: counters.plan };
+    const accumulatedTerminalPage = await openAccountSettingsPage(context, base, consoleErrors);
+    await accumulatedTerminalPage.locator('[data-saas-action="plan-ebay-oauth"]').first().click();
+    await accumulatedTerminalPage.waitForTimeout(800);
+    if (
+      counters.plan !== accumulatedTerminalCounts.plan ||
+      counters.confirmation !== accumulatedTerminalCounts.confirmation + 1 ||
+      confirmations[0]?.status !== "pending"
+    ) {
+      throw new Error("multiple exact terminal OAuth confirmation-request pairs must allow one replacement pending card without creating an OAuth plan");
+    }
+    await accumulatedTerminalPage.close();
 
     oauthRequestsOverride = [{
       company_id: "company-oauth-ui-fixture",

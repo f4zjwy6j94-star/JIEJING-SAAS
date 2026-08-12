@@ -17687,7 +17687,7 @@ function saasCurrentStoreActiveReadOnlyOAuthConfirmations(storeId = "") {
   );
 }
 
-function isSaasTerminalInvalidExpiredReadOnlyOAuthRequest(request = {}, storeId = "") {
+function isSaasRecoverableTerminalReadOnlyOAuthRequest(request = {}, storeId = "") {
   if (!request || typeof request !== "object" || Array.isArray(request)) return false;
   const requestBody = request.request && typeof request.request === "object" && !Array.isArray(request.request)
     ? request.request
@@ -17701,15 +17701,24 @@ function isSaasTerminalInvalidExpiredReadOnlyOAuthRequest(request = {}, storeId 
       targetStoreId &&
       String(request.company_id || "").trim() === currentCompanyId &&
       String(request.store_id || requestBody.store_id || "").trim() === targetStoreId &&
-      String(request.status || "") === "blocked_invalid_expired_state" &&
+      ["blocked_invalid_expired_state", "callback_exchange_vault_write_failed"].includes(String(request.status || "")) &&
       String(requestBody.status || "") === "ready_to_redirect" &&
       String(requestBody.scope_profile || "") === "seller_read_only" &&
+      requestBody.real_platform_writes_enabled === false &&
+      requestBody.secret_exposed === false &&
       scopes.length === saasEbayReadOnlyOAuthScopeAllowlist.size &&
       bodyScopes.length === saasEbayReadOnlyOAuthScopeAllowlist.size &&
       new Set(scopes).size === scopes.length &&
       new Set(bodyScopes).size === bodyScopes.length &&
       scopes.every((scope) => saasEbayReadOnlyOAuthScopeAllowlist.has(scope)) &&
       bodyScopes.every((scope) => saasEbayReadOnlyOAuthScopeAllowlist.has(scope))
+  );
+}
+
+function isSaasTerminalInvalidExpiredReadOnlyOAuthRequest(request = {}, storeId = "") {
+  return (
+    String(request?.status || "") === "blocked_invalid_expired_state" &&
+    isSaasRecoverableTerminalReadOnlyOAuthRequest(request, storeId)
   );
 }
 
@@ -26684,7 +26693,7 @@ function merchantSafeSaasOAuthRequest(record) {
   const request = record.request;
   if (request && typeof request === "object" && !Array.isArray(request)) {
     const safeRequest = {};
-    ["status", "store_id", "scope_profile", "marketplace"].forEach((key) => {
+    ["status", "store_id", "scope_profile", "marketplace", "real_platform_writes_enabled", "secret_exposed"].forEach((key) => {
       if (["string", "number", "boolean"].includes(typeof request[key])) safeRequest[key] = request[key];
     });
     if (Array.isArray(request.scopes)) {
@@ -28792,8 +28801,8 @@ async function planSaasEbayReadOnlyOAuth() {
       throw new Error("oauth_confirmation_live_state_required");
     }
     const activeConfirmations = saasCurrentStoreActiveReadOnlyOAuthConfirmations(store.store_id);
-    const terminalInvalidExpiredRequests = (state.saasOauthRequests || []).filter((request) =>
-      isSaasTerminalInvalidExpiredReadOnlyOAuthRequest(request, store.store_id),
+    const recoverableTerminalRequests = (state.saasOauthRequests || []).filter((request) =>
+      isSaasRecoverableTerminalReadOnlyOAuthRequest(request, store.store_id),
     );
     const terminalExecutedConfirmations = (state.saasConfirmations || []).filter(
       (card) =>
@@ -28805,7 +28814,7 @@ async function planSaasEbayReadOnlyOAuth() {
     const anyOtherCurrentStoreOAuthRequest = (state.saasOauthRequests || []).some((request) => {
       const requestBody = request?.request && typeof request.request === "object" ? request.request : {};
       const requestStoreId = String(request?.store_id || requestBody.store_id || "").trim();
-      return requestStoreId === String(store.store_id) && !terminalInvalidExpiredRequests.includes(request);
+      return requestStoreId === String(store.store_id) && !recoverableTerminalRequests.includes(request);
     });
     const suspiciousCurrentStoreConfirmation = (state.saasConfirmations || []).some(
       (card) => {
@@ -28819,8 +28828,8 @@ async function planSaasEbayReadOnlyOAuth() {
             !["expired", "rejected", "executed"].includes(status) ||
             (status === "rejected" && activeConfirmations.length === 0)
             || (status === "executed" && (
-              terminalInvalidExpiredRequests.length !== 1 ||
-              terminalExecutedConfirmations.length !== 1 ||
+              recoverableTerminalRequests.length < 1 ||
+              terminalExecutedConfirmations.length !== recoverableTerminalRequests.length ||
               anyOtherCurrentStoreOAuthRequest ||
               !isSaasExactReadOnlyOAuthConfirmation(card, store.store_id)
             ))
