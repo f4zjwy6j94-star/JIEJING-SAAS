@@ -17687,6 +17687,32 @@ function saasCurrentStoreActiveReadOnlyOAuthConfirmations(storeId = "") {
   );
 }
 
+function isSaasTerminalInvalidExpiredReadOnlyOAuthRequest(request = {}, storeId = "") {
+  if (!request || typeof request !== "object" || Array.isArray(request)) return false;
+  const requestBody = request.request && typeof request.request === "object" && !Array.isArray(request.request)
+    ? request.request
+    : {};
+  const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const targetStoreId = String(storeId || activeSaasStore()?.store_id || "").trim();
+  const scopes = Array.isArray(request.scopes) ? request.scopes : [];
+  const bodyScopes = Array.isArray(requestBody.scopes) ? requestBody.scopes : [];
+  return Boolean(
+    currentCompanyId &&
+      targetStoreId &&
+      String(request.company_id || "").trim() === currentCompanyId &&
+      String(request.store_id || requestBody.store_id || "").trim() === targetStoreId &&
+      String(request.status || "") === "blocked_invalid_expired_state" &&
+      String(requestBody.status || "") === "ready_to_redirect" &&
+      String(requestBody.scope_profile || "") === "seller_read_only" &&
+      scopes.length === saasEbayReadOnlyOAuthScopeAllowlist.size &&
+      bodyScopes.length === saasEbayReadOnlyOAuthScopeAllowlist.size &&
+      new Set(scopes).size === scopes.length &&
+      new Set(bodyScopes).size === bodyScopes.length &&
+      scopes.every((scope) => saasEbayReadOnlyOAuthScopeAllowlist.has(scope)) &&
+      bodyScopes.every((scope) => saasEbayReadOnlyOAuthScopeAllowlist.has(scope))
+  );
+}
+
 function isSaasFreshApprovedReadOnlyOAuthConfirmation(card = {}, storeId = "", referenceNow = Date.now()) {
   if (!isSaasExactReadOnlyOAuthConfirmation(card, storeId) || String(card.status || "") !== "approved") return false;
   if (!String(card.decided_by || "").trim()) return false;
@@ -28766,6 +28792,21 @@ async function planSaasEbayReadOnlyOAuth() {
       throw new Error("oauth_confirmation_live_state_required");
     }
     const activeConfirmations = saasCurrentStoreActiveReadOnlyOAuthConfirmations(store.store_id);
+    const terminalInvalidExpiredRequests = (state.saasOauthRequests || []).filter((request) =>
+      isSaasTerminalInvalidExpiredReadOnlyOAuthRequest(request, store.store_id),
+    );
+    const terminalExecutedConfirmations = (state.saasConfirmations || []).filter(
+      (card) =>
+        String(card?.company_id || "").trim() === String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim() &&
+        String(card?.store_id || "").trim() === String(store.store_id) &&
+        String(card?.status || "") === "executed" &&
+        isSaasExactReadOnlyOAuthConfirmation(card, store.store_id),
+    );
+    const anyOtherCurrentStoreOAuthRequest = (state.saasOauthRequests || []).some((request) => {
+      const requestBody = request?.request && typeof request.request === "object" ? request.request : {};
+      const requestStoreId = String(request?.store_id || requestBody.store_id || "").trim();
+      return requestStoreId === String(store.store_id) && !terminalInvalidExpiredRequests.includes(request);
+    });
     const suspiciousCurrentStoreConfirmation = (state.saasConfirmations || []).some(
       (card) => {
         const status = String(card?.status || "");
@@ -28775,8 +28816,14 @@ async function planSaasEbayReadOnlyOAuth() {
           !activeConfirmations.includes(card) &&
           (
             ["pending", "approved"].includes(status) ||
-            !["expired", "rejected"].includes(status) ||
+            !["expired", "rejected", "executed"].includes(status) ||
             (status === "rejected" && activeConfirmations.length === 0)
+            || (status === "executed" && (
+              terminalInvalidExpiredRequests.length !== 1 ||
+              terminalExecutedConfirmations.length !== 1 ||
+              anyOtherCurrentStoreOAuthRequest ||
+              !isSaasExactReadOnlyOAuthConfirmation(card, store.store_id)
+            ))
           )
         );
       },

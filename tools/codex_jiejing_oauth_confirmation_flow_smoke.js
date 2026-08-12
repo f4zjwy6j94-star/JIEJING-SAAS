@@ -22,6 +22,15 @@ let connections = [];
 let tasks = [];
 let confirmationReadDelayMs = 0;
 let planResponseMode = "valid";
+let oauthRequestsOverride = null;
+const sellerReadOnlyScopes = [
+  "https://api.ebay.com/oauth/api_scope",
+  "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
+  "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
+  "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
+  "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly",
+  "https://api.ebay.com/oauth/api_scope/sell.finances",
+];
 
 function exactOAuthConfirmation(status = "pending", storeId = store.store_id, decidedAt = "", confirmationId = "confirm-oauth-ui-fixture") {
   return {
@@ -73,6 +82,7 @@ function apiPayload(pathname) {
     return { connections };
   }
   if (pathname === "/oauth/requests") {
+    if (Array.isArray(oauthRequestsOverride)) return { oauth_requests: oauthRequestsOverride };
     return {
       oauth_requests: [{
         oauth_request_id: "oauth-request-ui-fixture",
@@ -1019,6 +1029,63 @@ async function main() {
       throw new Error("expired exact confirmation must ignore historical terminal OAuth cards and atomically request one replacement pending card without creating an OAuth plan");
     }
     await expiredPage.close();
+
+    oauthRequestsOverride = [{
+      company_id: "company-oauth-ui-fixture",
+      store_id: store.store_id,
+      platform: "ebay",
+      status: "blocked_invalid_expired_state",
+      scopes: sellerReadOnlyScopes,
+      request: { status: "ready_to_redirect", store_id: store.store_id, scope_profile: "seller_read_only", scopes: sellerReadOnlyScopes },
+    }];
+    confirmations = [exactOAuthConfirmation("executed", store.store_id, new Date().toISOString(), "confirm-oauth-history-executed-fixture")];
+    const executedTerminalCounts = { confirmation: counters.confirmation, plan: counters.plan };
+    const executedTerminalPage = await openAccountSettingsPage(context, base, consoleErrors);
+    await executedTerminalPage.locator('[data-saas-action="plan-ebay-oauth"]').first().click();
+    await executedTerminalPage.waitForTimeout(800);
+    if (
+      counters.plan !== executedTerminalCounts.plan ||
+      counters.confirmation !== executedTerminalCounts.confirmation + 1 ||
+      confirmations[0]?.status !== "pending"
+    ) {
+      throw new Error("executed exact confirmation with one exact invalid-expired OAuth request must allow one replacement pending card without creating an OAuth plan");
+    }
+    await executedTerminalPage.close();
+
+    confirmations = [
+      exactOAuthConfirmation("executed", store.store_id, new Date().toISOString(), "confirm-oauth-history-executed-first-fixture"),
+      exactOAuthConfirmation("executed", store.store_id, new Date().toISOString(), "confirm-oauth-history-executed-second-fixture"),
+    ];
+    const duplicateExecutedCounts = { confirmation: counters.confirmation, plan: counters.plan };
+    const duplicateExecutedPage = await openAccountSettingsPage(context, base, consoleErrors);
+    await duplicateExecutedPage.evaluate(async () => {
+      await planSaasEbayReadOnlyOAuth();
+    });
+    if (counters.confirmation !== duplicateExecutedCounts.confirmation || counters.plan !== duplicateExecutedCounts.plan) {
+      throw new Error("duplicate executed exact confirmations must remain fail closed without intake or plan");
+    }
+    await duplicateExecutedPage.close();
+
+    oauthRequestsOverride = [{
+      company_id: "company-oauth-ui-fixture",
+      store_id: store.store_id,
+      platform: "ebay",
+      status: "ready_to_redirect",
+      scope_profile: "seller_read_only",
+      scopes: sellerReadOnlyScopes,
+      request: { store_id: store.store_id, scope_profile: "seller_read_only", scopes: sellerReadOnlyScopes },
+    }];
+    confirmations = [exactOAuthConfirmation("executed", store.store_id, new Date().toISOString(), "confirm-oauth-active-executed-fixture")];
+    const activeExecutedCounts = { confirmation: counters.confirmation, plan: counters.plan };
+    const activeExecutedPage = await openAccountSettingsPage(context, base, consoleErrors);
+    await activeExecutedPage.evaluate(async () => {
+      await planSaasEbayReadOnlyOAuth();
+    });
+    if (counters.confirmation !== activeExecutedCounts.confirmation || counters.plan !== activeExecutedCounts.plan) {
+      throw new Error("executed exact confirmation with an active OAuth request must remain fail closed without intake or plan");
+    }
+    await activeExecutedPage.close();
+    oauthRequestsOverride = null;
 
     confirmations = [exactOAuthConfirmation("pending", "store-wrong-oauth-ui-fixture")];
     const wrongStoreCounts = { confirmation: counters.confirmation, plan: counters.plan };
