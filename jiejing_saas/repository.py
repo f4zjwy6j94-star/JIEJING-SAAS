@@ -109,6 +109,7 @@ _OPERATIONS_ANALYTICS_TIMEZONE = timezone(timedelta(hours=8))
 ACCOUNT_CLASSIFICATION_MERCHANT = "merchant"
 ACCOUNT_CLASSIFICATION_SYNTHETIC_TEST = "synthetic_test"
 _SYNTHETIC_ACCOUNT_DOMAINS = {"example.com", "example.test", "jiejing.local", "local.invalid"}
+SYNTHETIC_EBAY_IDENTITY_RETIREMENT_CONFIRMATION = "RETIRE_SYNTHETIC_EBAY_IDENTITY_CONFLICTS"
 REAL_MERCHANT_VALIDATION_REQUIRED_COMPANIES = 3
 REAL_MERCHANT_VALIDATION_REQUIRED_PATHS = 20
 _NON_COMMERCIAL_BILLING_PROVIDERS = {"manual_beta", "stripe_test_mock"}
@@ -7086,7 +7087,33 @@ class SaaSRepository:
                     "secret_exposed": False,
                 }
 
-            match = self._find_ebay_connection_for_deletion(conn, event=safe_event)
+            matches = self._find_ebay_connections_for_deletion(conn, event=safe_event)
+            owners = {(str(row["company_id"]), str(row["store_id"])) for row in matches}
+            if len(owners) > 1:
+                record = {
+                    **safe_event,
+                    "status": "ambiguous_identity_review_required",
+                    "matched_connection": False,
+                    "candidate_owner_count": len(owners),
+                    "data_mutated": False,
+                    "duplicate": False,
+                    "secret_exposed": False,
+                }
+                conn.execute(
+                    """
+                    insert into ebay_account_deletion_events (
+                      event_key, company_id, store_id, connection_id, task_id, job_id,
+                      status, created_at, updated_at, deletion_event_json
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event_key, None, None, None, None, None, record["status"],
+                        created_at, created_at, json.dumps(record, ensure_ascii=False),
+                    ),
+                )
+                return record
+
+            match = matches[0] if matches else None
             if not match:
                 record = {
                     **safe_event,
@@ -7402,8 +7429,261 @@ class SaaSRepository:
             )
         return result
 
+    def plan_synthetic_ebay_identity_conflict_retirement(self) -> dict[str, Any]:
+        """Return a value-free dry-run for narrowly eligible synthetic OAuth fixtures."""
+
+        self.initialize()
+        with self._connect() as conn:
+            candidates, metrics = self._synthetic_ebay_identity_conflict_candidates(conn)
+        return {
+            "contract_version": "2026-08-12-synthetic-ebay-identity-retirement-v1",
+            "status": "eligible_synthetic_conflicts_found" if candidates else "no_eligible_synthetic_conflicts",
+            "eligible_connection_count": len(candidates),
+            "eligible_secret_ref_count": len(
+                {str(candidate.get("secret_ref") or "") for candidate in candidates if candidate.get("secret_ref")}
+            ),
+            **metrics,
+            "would_mutate": False,
+            "secret_exposed": False,
+        }
+
+    def retire_synthetic_ebay_identity_conflicts(self, *, confirmation_phrase: str) -> dict[str, Any]:
+        """Retire only proven synthetic OAuth fixtures that collide with one merchant owner."""
+
+        self.initialize()
+        if str(confirmation_phrase or "") != SYNTHETIC_EBAY_IDENTITY_RETIREMENT_CONFIRMATION:
+            raise ValueError("synthetic_ebay_identity_retirement_confirmation_required")
+        retired_at = now_iso()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            candidates, metrics = self._synthetic_ebay_identity_conflict_candidates(conn, lock_rows=True)
+            if not candidates:
+                return {
+                    "contract_version": "2026-08-12-synthetic-ebay-identity-retirement-v1",
+                    "status": "no_eligible_synthetic_conflicts",
+                    "retired_connection_count": 0,
+                    "revoked_secret_ref_count": 0,
+                    **metrics,
+                    "data_mutated": False,
+                    "secret_exposed": False,
+                }
+
+            retired_connections = 0
+            revoked_secret_refs: set[str] = set()
+            for candidate in candidates:
+                metadata = dict(candidate["metadata"])
+                for key in (
+                    "ebay_user_id_hash",
+                    "ebay_username_hash",
+                    "ebay_eias_identity_hash",
+                    "identity_mapping_status",
+                    "identity_mapping_ready",
+                ):
+                    metadata.pop(key, None)
+                metadata.update(
+                    {
+                        "retirement_status": "retired_synthetic_test",
+                        "retirement_reason": "synthetic_identity_conflict_closed",
+                        "retired_at": retired_at,
+                        "secret_exposed": False,
+                    }
+                )
+                update = conn.execute(
+                    """
+                    update platform_connections
+                    set status = ?, scopes_json = ?, metadata_json = ?
+                    where connection_id = ? and company_id = ? and store_id = ?
+                      and status in ('read_only_authorized', 'publish_authorized')
+                    """,
+                    (
+                        "retired_synthetic_test",
+                        json.dumps([], ensure_ascii=False),
+                        json.dumps(_redact_secret_like(metadata), ensure_ascii=False),
+                        candidate["connection_id"],
+                        candidate["company_id"],
+                        candidate["store_id"],
+                    ),
+                )
+                if int(update.rowcount or 0) != 1:
+                    raise RuntimeError("synthetic_ebay_identity_retirement_conflict")
+                retired_connections += 1
+
+                secret_ref = str(candidate.get("secret_ref") or "")
+                if secret_ref and secret_ref not in revoked_secret_refs:
+                    secret_row = conn.execute(
+                        """
+                        select metadata_json from secret_refs
+                        where secret_ref = ? and company_id = ? and store_id = ?
+                          and provider = 'ebay' and purpose = 'ebay_refresh_token'
+                        """,
+                        (secret_ref, candidate["company_id"], candidate["store_id"]),
+                    ).fetchone()
+                    secret_metadata = _load_json_field(secret_row["metadata_json"]) if secret_row else {}
+                    if not isinstance(secret_metadata, dict):
+                        secret_metadata = {}
+                    secret_metadata.update(
+                        {
+                            "retirement_status": "revoked_synthetic_test",
+                            "retirement_reason": "synthetic_identity_conflict_closed",
+                            "retired_at": retired_at,
+                            "secret_value_stored": False,
+                            "secret_exposed": False,
+                        }
+                    )
+                    secret_update = conn.execute(
+                        """
+                        update secret_refs set status = ?, metadata_json = ?
+                        where secret_ref = ? and company_id = ? and store_id = ?
+                          and provider = 'ebay' and purpose = 'ebay_refresh_token'
+                          and status in ({})
+                        """.format(", ".join("?" for _ in ACTIVE_SECRET_REF_STATUSES)),
+                        (
+                            "revoked_synthetic_test",
+                            json.dumps(_redact_secret_like(secret_metadata), ensure_ascii=False),
+                            secret_ref,
+                            candidate["company_id"],
+                            candidate["store_id"],
+                            *tuple(sorted(ACTIVE_SECRET_REF_STATUSES)),
+                        ),
+                    )
+                    if int(secret_update.rowcount or 0) != 1:
+                        raise RuntimeError("synthetic_ebay_identity_retirement_conflict")
+                    revoked_secret_refs.add(secret_ref)
+
+                self._insert_audit(
+                    conn,
+                    company_id=candidate["company_id"],
+                    store_id=candidate["store_id"],
+                    user_id=None,
+                    actor_type="platform_internal_admin",
+                    action_type="ebay.synthetic_identity_conflict.retired",
+                    target_type="platform_connection",
+                    target_id=candidate["connection_id"],
+                    summary="Synthetic eBay OAuth fixture retired after a unique merchant identity conflict was verified.",
+                    details={
+                        "connection_retired": True,
+                        "credential_reference_revoked": secret_ref in revoked_secret_refs,
+                        "identity_selectors_removed": True,
+                        "merchant_connection_mutated": False,
+                        "real_platform_write_performed": False,
+                        "secret_exposed": False,
+                    },
+                )
+        return {
+            "contract_version": "2026-08-12-synthetic-ebay-identity-retirement-v1",
+            "status": "synthetic_ebay_identity_conflicts_retired",
+            "retired_connection_count": retired_connections,
+            "revoked_secret_ref_count": len(revoked_secret_refs),
+            **metrics,
+            "data_mutated": True,
+            "secret_exposed": False,
+        }
+
     @staticmethod
-    def _find_ebay_connection_for_deletion(conn: sqlite3.Connection, *, event: dict[str, Any]) -> sqlite3.Row | None:
+    def _synthetic_ebay_identity_conflict_candidates(
+        conn: sqlite3.Connection,
+        *,
+        lock_rows: bool = False,
+    ) -> tuple[list[dict[str, Any]], dict[str, int]]:
+        lock_suffix = " for update of pc" if lock_rows and not isinstance(conn, sqlite3.Connection) else ""
+        active_secret_placeholders = ", ".join("?" for _ in ACTIVE_SECRET_REF_STATUSES)
+        rows = conn.execute(
+            f"""
+            select pc.connection_id, pc.company_id, pc.store_id, pc.secret_ref,
+                   pc.metadata_json, pc.created_by, s.stage,
+                   creator.account_classification as creator_classification,
+                   (select count(*) from users merchant_user
+                    where merchant_user.account_classification = 'merchant'
+                      and (
+                        merchant_user.default_company_id = pc.company_id
+                        or exists (
+                          select 1 from team_members merchant_membership
+                          where merchant_membership.company_id = pc.company_id
+                            and merchant_membership.user_id = merchant_user.user_id
+                        )
+                      )) as merchant_user_count,
+                   (select count(*) from users synthetic_user
+                    where synthetic_user.default_company_id = pc.company_id
+                      and synthetic_user.account_classification = 'synthetic_test') as synthetic_user_count,
+                   (select count(*) from secret_refs active_secret
+                    where active_secret.secret_ref = pc.secret_ref
+                      and active_secret.company_id = pc.company_id
+                      and active_secret.store_id = pc.store_id
+                      and lower(active_secret.provider) = 'ebay'
+                      and active_secret.purpose = 'ebay_refresh_token'
+                      and active_secret.status in ({active_secret_placeholders})) as active_secret_ref_count
+            from platform_connections pc
+            join stores s on s.company_id = pc.company_id and s.store_id = pc.store_id
+            left join users creator on creator.user_id = pc.created_by
+            where lower(pc.platform) = 'ebay'
+              and pc.status in ('read_only_authorized', 'publish_authorized')
+            order by pc.created_at, pc.connection_id
+            {lock_suffix}
+            """,
+            tuple(sorted(ACTIVE_SECRET_REF_STATUSES)),
+        ).fetchall()
+        selector_keys = ("ebay_user_id_hash", "ebay_username_hash", "ebay_eias_identity_hash")
+        prepared: list[dict[str, Any]] = []
+        selector_owners: dict[str, set[tuple[str, str]]] = {}
+        for row in rows:
+            metadata = _load_json_field(row["metadata_json"])
+            if not isinstance(metadata, dict):
+                metadata = {}
+            selectors = {
+                f"{key}:{str(metadata.get(key) or '').strip()}"
+                for key in selector_keys
+                if str(metadata.get(key) or "").strip()
+            }
+            owner = (str(row["company_id"]), str(row["store_id"]))
+            is_merchant_owner = int(row["merchant_user_count"] or 0) > 0
+            is_synthetic_owner = (
+                int(row["merchant_user_count"] or 0) == 0
+                and int(row["synthetic_user_count"] or 0) > 0
+                and str(row["creator_classification"] or "") == ACCOUNT_CLASSIFICATION_SYNTHETIC_TEST
+                and str(row["stage"] or "") == "oauth_staging_validation"
+                and int(row["active_secret_ref_count"] or 0) == 1
+            )
+            for selector in selectors:
+                selector_owners.setdefault(selector, set()).add(owner)
+            prepared.append(
+                {
+                    "connection_id": str(row["connection_id"]),
+                    "company_id": owner[0],
+                    "store_id": owner[1],
+                    "secret_ref": str(row["secret_ref"] or ""),
+                    "created_by": str(row["created_by"] or ""),
+                    "metadata": metadata,
+                    "selectors": selectors,
+                    "owner": owner,
+                    "is_merchant_owner": is_merchant_owner,
+                    "is_synthetic_owner": is_synthetic_owner,
+                }
+            )
+
+        owner_is_merchant = {item["owner"] for item in prepared if item["is_merchant_owner"]}
+        candidates: list[dict[str, Any]] = []
+        merchant_conflicts: set[tuple[str, str]] = set()
+        tied_merchant_owners: set[tuple[str, str]] = set()
+        for item in prepared:
+            if not item["is_synthetic_owner"] or not item["selectors"]:
+                continue
+            matching_merchant_owners: set[tuple[str, str]] = set()
+            for selector in item["selectors"]:
+                matching_merchant_owners.update(selector_owners.get(selector, set()) & owner_is_merchant)
+            if len(matching_merchant_owners) == 1:
+                candidates.append(item)
+                tied_merchant_owners.update(matching_merchant_owners)
+            elif len(matching_merchant_owners) > 1:
+                merchant_conflicts.add(item["owner"])
+        return candidates, {
+            "merchant_owner_count": len(tied_merchant_owners),
+            "merchant_conflict_count": len(merchant_conflicts),
+            "synthetic_owner_count": len({item["owner"] for item in candidates}),
+        }
+
+    @staticmethod
+    def _find_ebay_connections_for_deletion(conn: sqlite3.Connection, *, event: dict[str, Any]) -> list[sqlite3.Row]:
         selectors = {
             "ebay_user_id_hash": str(event.get("user_id_hash") or ""),
             "ebay_username_hash": str(event.get("username_hash") or ""),
@@ -7415,11 +7695,17 @@ class SaaSRepository:
             from platform_connections where lower(platform) = 'ebay' order by created_at desc
             """
         ).fetchall()
+        matches: list[sqlite3.Row] = []
         for row in rows:
             metadata = _load_json_field(row["metadata_json"])
             if any(expected and str(metadata.get(key) or "") == expected for key, expected in selectors.items()):
-                return row
-        return None
+                matches.append(row)
+        return matches
+
+    @staticmethod
+    def _find_ebay_connection_for_deletion(conn: sqlite3.Connection, *, event: dict[str, Any]) -> sqlite3.Row | None:
+        matches = SaaSRepository._find_ebay_connections_for_deletion(conn, event=event)
+        return matches[0] if matches else None
 
     def list_audit_logs(self, *, company_id: str, limit: int = 100) -> list[dict[str, Any]]:
         self.initialize()

@@ -106,6 +106,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("ebay_live_read_http_client", [sys.executable, "tools/test_jiejing_ebay_live_read_http_client.py"]),
     ("execution_draft_boundary", [sys.executable, "tools/test_jiejing_execution_draft_boundary.py"]),
     ("ebay_draft_save_adapter", [sys.executable, "tools/test_jiejing_ebay_draft_save_adapter.py"]),
+    ("synthetic_ebay_identity_retirement", [sys.executable, "tools/test_jiejing_synthetic_ebay_identity_retirement.py"]),
     ("publish_confirmation_intake", [sys.executable, "tools/test_jiejing_publish_confirmation_intake.py"]),
     ("saas_backend_mvp", [sys.executable, "tools/test_jiejing_saas_backend_mvp.py"]),
     ("infrastructure_drivers", [sys.executable, "tools/test_jiejing_infrastructure_drivers.py"]),
