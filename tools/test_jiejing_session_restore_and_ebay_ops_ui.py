@@ -94,7 +94,7 @@ def main() -> int:
         return fail("login should not ask for company/store name or route repeated users back to onboarding copy")
 
     for marker in [
-        "const saasAuthorizedConnectionStatuses = new Set([\"read_only_authorized\", \"publish_authorized\", \"authorized\", \"connected\"])",
+        "const saasAuthorizedConnectionStatuses = new Set([\"read_only_authorized\", \"draft_save_authorized\", \"publish_authorized\", \"authorized\", \"connected\"])",
         "isSaasAuthorizedConnectionStatus(connection?.status)",
         "saasStoreDisplayName(store, connection)",
         "renderSaasEbayOperationsSnapshotPanel",
