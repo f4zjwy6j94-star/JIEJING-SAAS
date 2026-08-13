@@ -292,16 +292,46 @@ sudo -n python3 tools/jiejing_configure_tencent_runtime_env.py \
 After recording the evidence, rerun the trusted runtime-env guard and use the
 normal Doctor -> deployment dry-run -> separately approved deployment apply
 sequence before accepting the refreshed container state. Never set the final
-owner-approval, public-charging, refund, or eBay-write flags as part of this
-evidence-only step.
+owner-approval, public-charging, refund, or broad eBay-write flags as part of
+this evidence-only step. The only production-adjacent exception is the
+Compose-owned unpublished-draft capability described below; it must never be
+copied into a private env file.
 
 ## Do Not Change These For First Staging
 
 ```text
 JIEJING_ENABLE_REAL_PLATFORM_WRITES=false
+JIEJING_EBAY_WRITE_LIVE=false
 JIEJING_ENABLE_HERMES_EBAY_BRIDGE=false
 JIEJING_EBAY_ACCESS_TOKEN=
 JIEJING_EBAY_REFRESH_TOKEN=
 ```
+
+`docker-compose.public-https-staging.yml` owns the narrow exception as an
+API/worker pair, but the code-first deployment must keep it disabled:
+
+```text
+JIEJING_EBAY_DRAFT_SAVE_LIVE=false
+JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY=disabled_public_staging
+```
+
+After the code-only release passes pre-Doctor, dry-run, apply, post-Doctor and
+the authenticated zero-write checks, a second reviewed commit may change both
+API and worker declarations to `true` plus
+`controlled_unpublished_draft_only`. That narrow exception permits only a
+confirmation-gated eBay offer left in `UNPUBLISHED` state. The OAuth-only and
+non-HTTPS public-staging profiles keep the draft switch `false` and policy
+`disabled_public_staging`. The runtime-env
+guard must pass before deployment; private env overlap, missing read/refresh
+prerequisites, mixed API/worker values, any broad-write flag, or a resource
+overlay attempting to alter the switch is a deployment blocker.
+
+Before the first deployment of this contract, separately review and install the
+matching guard source at the root-controlled
+`/usr/local/libexec/jiejing/jiejing_runtime_env_overlap_guard.py`. The normal
+bundle, Doctor and deployment workflow intentionally cannot update their own
+trusted guard. An older installed guard will reject the new draft switch and
+policy; treat that as a safe stop, never bypass it or fall back to the candidate
+copy in the workspace.
 
 Runtime/Agents must receive only sanitized standard data packets. They must not receive eBay tokens.

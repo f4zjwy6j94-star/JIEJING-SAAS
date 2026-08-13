@@ -32,6 +32,7 @@ def add_ebay_connection(
     company_name: str,
     store_name: str,
     stage: str,
+    connection_status: str = "read_only_authorized",
 ) -> tuple[dict, dict, dict, dict]:
     account = repo.create_user_with_company(
         email=email,
@@ -69,7 +70,7 @@ def add_ebay_connection(
         payload={
             "platform": "ebay",
             "connection_type": "oauth",
-            "status": "read_only_authorized",
+            "status": connection_status,
             "secret_ref": secret_ref["secret_ref"],
             "scopes": ["https://api.ebay.com/oauth/api_scope/sell.account.readonly"],
             "metadata": {
@@ -100,6 +101,7 @@ def main() -> int:
             company_name="Synthetic OAuth Fixture",
             store_name="oauth-staging-store",
             stage="oauth_staging_validation",
+            connection_status="draft_save_authorized",
         )
 
         before = repo.product_readiness_evidence()

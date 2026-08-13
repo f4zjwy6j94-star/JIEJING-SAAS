@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hmac
 import json
 import hashlib
 import os
@@ -53,6 +54,7 @@ from .workflow_plan import step_status_from_runtime
 
 HIGH_RISK_ACTIONS = {
     "ebay_oauth_scope_change",
+    "save_ebay_listing_draft",
     "publish_listing",
     "bulk_publish_listing",
     "revise_listing",
@@ -73,6 +75,10 @@ HIGH_RISK_ACTIONS = {
 
 
 EXTERNAL_EXECUTION_PROCESSING_STATUS = "external_execution_processing_manual_reconcile"
+
+EBAY_UNPUBLISHED_DRAFT_OAUTH_SOURCE = "controlled_ebay_unpublished_draft_save"
+EBAY_UNPUBLISHED_DRAFT_OAUTH_STEP = "unpublished_draft_oauth_authorization_gate"
+EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE = "seller_unpublished_draft"
 
 
 ACTIVE_SECRET_REF_STATUSES = {
@@ -554,6 +560,21 @@ class SaaSRepository:
                   status text not null,
                   created_at text not null,
                   billing_event_json text not null
+                );
+
+                create table if not exists external_execution_claims (
+                  claim_id text primary key,
+                  company_id text not null,
+                  store_id text not null,
+                  confirmation_id text not null unique,
+                  action_type text not null,
+                  status text not null,
+                  nonce_sha256 text not null,
+                  binding_json text not null,
+                  claimed_by text not null,
+                  claimed_at text not null,
+                  expires_at text not null,
+                  consumed_at text
                 );
 
                 create table if not exists billing_orders (
@@ -1680,7 +1701,7 @@ class SaaSRepository:
             if not (
                 str(connection.get("connection_id") or "")
                 and str(connection.get("connection_type") or "").lower() == "oauth"
-                and str(connection.get("status") or "") in {"read_only_authorized", "publish_authorized"}
+                and str(connection.get("status") or "") in {"read_only_authorized", "draft_save_authorized", "publish_authorized"}
                 and oauth_request_id
                 and secret_ref
                 and str(metadata.get("credential_source") or "") == "jiejing_vault_secret_ref"
@@ -4442,6 +4463,7 @@ class SaaSRepository:
         company_id: str,
         confirmation_id: str,
         user_id: str,
+        expected_binding: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Claim one approved external write before its platform adapter runs.
 
@@ -4464,6 +4486,13 @@ class SaaSRepository:
             confirmation = self._confirmation_row_to_dict(row)
             if str(confirmation.get("status") or "") != "approved":
                 raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            if str(confirmation.get("action_type") or "") == "save_ebay_listing_draft":
+                # Draft writes have a stronger two-phase protocol.  Keeping the
+                # legacy claim path available, even with an expected binding,
+                # would let an internal caller bypass the one-shot capability
+                # and the final read-only offer-state recheck.
+                raise ConfirmationDecisionConflict("unpublished_draft_claim_capability_required")
+            claim_binding: dict[str, str] = {}
             transitioned = conn.execute(
                 """
                 update confirmations set status = ?
@@ -4490,7 +4519,508 @@ class SaaSRepository:
                     "secret_exposed": False,
                 },
             )
-        return {**confirmation, "external_execution_claimed": True}
+        return {
+            **confirmation,
+            "status": EXTERNAL_EXECUTION_PROCESSING_STATUS,
+            "external_execution_claimed": True,
+            **({"external_execution_claim_binding": claim_binding} if claim_binding else {}),
+        }
+
+    def claim_unpublished_draft_execution(
+        self,
+        *,
+        company_id: str,
+        confirmation_id: str,
+        user_id: str,
+        expected_binding: dict[str, str],
+    ) -> tuple[dict[str, Any], UnpublishedDraftClaimCapability]:
+        """Atomically claim exact draft execution and mint a process-local nonce capability."""
+
+        self.initialize()
+        claim_id = _id("draftclaim")
+        nonce = secrets.token_bytes(32)
+        nonce_sha256 = hashlib.sha256(nonce).hexdigest()
+        claimed_at = datetime.now(timezone.utc)
+        expires_at = claimed_at + timedelta(seconds=60)
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
+                (company_id, confirmation_id),
+            ).fetchone()
+            confirmation = self._confirmation_row_to_dict(row) if row else {}
+            if str(confirmation.get("status") or "") != "approved":
+                raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            if not _is_exact_fresh_draft_execution_confirmation(confirmation=confirmation, company_id=company_id):
+                raise ConfirmationDecisionConflict("external_execution_confirmation_not_fresh")
+            binding = _exact_draft_execution_claim_binding(
+                confirmation=confirmation,
+                expected_binding=expected_binding,
+            )
+            if not binding:
+                raise ConfirmationDecisionConflict("external_execution_claim_binding_invalid")
+            credential = self._unpublished_draft_execution_credential_boundary_conn(
+                conn,
+                company_id=company_id,
+                store_id=str(confirmation.get("store_id") or ""),
+                include_private=False,
+                lock_rows=True,
+            )
+            if credential.get("ready") is not True or any(
+                str(credential.get(key) or "") != binding[key]
+                for key in (
+                    "connection_id_sha256",
+                    "credential_ref_sha256",
+                    "oauth_request_id_sha256",
+                    "seller_identity_sha256",
+                )
+            ):
+                raise ConfirmationDecisionConflict("external_execution_claim_binding_invalid")
+            store_row = conn.execute(
+                f"""
+                select platform, marketplace from stores
+                where company_id = ? and store_id = ?{lock_suffix}
+                """,
+                (company_id, binding["store_id"]),
+            ).fetchone()
+            if not (
+                store_row
+                and str(store_row["platform"] or "").lower() == "ebay"
+                and str(store_row["marketplace"] or "") == binding["marketplace_id"]
+            ):
+                raise ConfirmationDecisionConflict("external_execution_claim_binding_invalid")
+            prior_claim = conn.execute(
+                f"select status from external_execution_claims where confirmation_id = ?{lock_suffix}",
+                (confirmation_id,),
+            ).fetchone()
+            if prior_claim and str(prior_claim["status"] or "") != "aborted":
+                raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            transitioned = conn.execute(
+                "update confirmations set status = ? where company_id = ? and confirmation_id = ? and status = 'approved'",
+                ("external_execution_claimed_prewrite", company_id, confirmation_id),
+            ).rowcount
+            if transitioned != 1:
+                raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            claim_values = (
+                claim_id,
+                company_id,
+                binding["store_id"],
+                confirmation_id,
+                binding["action_type"],
+                nonce_sha256,
+                json.dumps(binding, ensure_ascii=False, sort_keys=True),
+                user_id,
+                claimed_at.isoformat(),
+                expires_at.isoformat(),
+            )
+            if prior_claim:
+                renewed = conn.execute(
+                    """
+                    update external_execution_claims
+                    set claim_id = ?, company_id = ?, store_id = ?, action_type = ?, status = 'claimed',
+                        nonce_sha256 = ?, binding_json = ?, claimed_by = ?, claimed_at = ?,
+                        expires_at = ?, consumed_at = null
+                    where confirmation_id = ? and status = 'aborted'
+                    """,
+                    (
+                        claim_id,
+                        company_id,
+                        binding["store_id"],
+                        binding["action_type"],
+                        nonce_sha256,
+                        claim_values[6],
+                        user_id,
+                        claim_values[8],
+                        claim_values[9],
+                        confirmation_id,
+                    ),
+                ).rowcount
+                if renewed != 1:
+                    raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            else:
+                conn.execute(
+                    """
+                    insert into external_execution_claims (
+                      claim_id, company_id, store_id, confirmation_id, action_type, status,
+                      nonce_sha256, binding_json, claimed_by, claimed_at, expires_at, consumed_at
+                    ) values (?, ?, ?, ?, ?, 'claimed', ?, ?, ?, ?, ?, null)
+                    """,
+                    claim_values,
+                )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=binding["store_id"],
+                user_id=user_id,
+                actor_type="system",
+                action_type="external_execution.prewrite_claimed",
+                target_type="confirmation",
+                target_id=confirmation_id,
+                summary="Exact unpublished-draft execution was claimed before the final read-only recheck.",
+                details={
+                    "action_type": binding["action_type"],
+                    "payload_sha256": binding["payload_sha256"],
+                    "credential_binding_ready": True,
+                    "writes_to_ebay": False,
+                    "secret_exposed": False,
+                },
+            )
+        claimed = {
+            **confirmation,
+            "status": "external_execution_claimed_prewrite",
+            "external_execution_prewrite_claimed": True,
+            "external_execution_claim_binding": binding,
+        }
+        capability = UnpublishedDraftClaimCapability(
+            claim_id=claim_id,
+            nonce=nonce,
+            binding=binding,
+            repository=self,
+            mint_token=_UNPUBLISHED_DRAFT_CLAIM_MINT_TOKEN,
+        )
+        return claimed, capability
+
+    def consume_unpublished_draft_execution_claim(
+        self,
+        *,
+        capability: UnpublishedDraftClaimCapability,
+    ) -> dict[str, Any]:
+        """One-shot CAS immediately before the first eBay Inventory write."""
+
+        if not (
+            isinstance(capability, UnpublishedDraftClaimCapability)
+            and capability._minted is True
+        ):
+            raise ConfirmationDecisionConflict("external_execution_claim_capability_invalid")
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                f"select * from external_execution_claims where claim_id = ?{lock_suffix}",
+                (capability._claim_id,),
+            ).fetchone()
+            if not row:
+                raise ConfirmationDecisionConflict("external_execution_claim_capability_invalid")
+            binding = _load_json_field(row["binding_json"])
+            binding = binding if isinstance(binding, dict) else {}
+            expected_nonce = str(row["nonce_sha256"] or "")
+            actual_nonce = hashlib.sha256(capability._nonce).hexdigest()
+            expires_at = _parse_explicit_timezone_iso_datetime(row["expires_at"])
+            if not (
+                str(row["status"] or "") == "claimed"
+                and hmac.compare_digest(expected_nonce, actual_nonce)
+                and binding == capability._binding
+                and expires_at is not None
+                and datetime.now(timezone.utc) <= expires_at
+            ):
+                raise ConfirmationDecisionConflict("external_execution_claim_capability_invalid")
+            confirmation_row = conn.execute(
+                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
+                (row["company_id"], row["confirmation_id"]),
+            ).fetchone()
+            confirmation = self._confirmation_row_to_dict(confirmation_row) if confirmation_row else {}
+            current_binding = _exact_draft_execution_claim_binding(
+                confirmation=confirmation,
+                expected_binding=binding,
+            )
+            if not (
+                str(confirmation.get("status") or "") == "external_execution_claimed_prewrite"
+                and current_binding == binding
+            ):
+                raise ConfirmationDecisionConflict("external_execution_claim_binding_invalid")
+            credential = self._unpublished_draft_execution_credential_boundary_conn(
+                conn,
+                company_id=str(row["company_id"] or ""),
+                store_id=str(row["store_id"] or ""),
+                include_private=False,
+                lock_rows=True,
+            )
+            if credential.get("ready") is not True or any(
+                str(credential.get(key) or "") != str(binding.get(key) or "")
+                for key in (
+                    "connection_id_sha256",
+                    "credential_ref_sha256",
+                    "oauth_request_id_sha256",
+                    "seller_identity_sha256",
+                )
+            ):
+                raise ConfirmationDecisionConflict("external_execution_claim_binding_invalid")
+            store_row = conn.execute(
+                f"""
+                select platform, marketplace from stores
+                where company_id = ? and store_id = ?{lock_suffix}
+                """,
+                (row["company_id"], row["store_id"]),
+            ).fetchone()
+            if not (
+                store_row
+                and str(store_row["platform"] or "").lower() == "ebay"
+                and str(store_row["marketplace"] or "") == str(binding.get("marketplace_id") or "")
+            ):
+                raise ConfirmationDecisionConflict("external_execution_claim_binding_invalid")
+            consumed_at = now_iso()
+            updated = conn.execute(
+                "update external_execution_claims set status = 'consumed', consumed_at = ? where claim_id = ? and status = 'claimed'",
+                (consumed_at, capability._claim_id),
+            ).rowcount
+            transitioned = conn.execute(
+                "update confirmations set status = ? where company_id = ? and confirmation_id = ? and status = 'external_execution_claimed_prewrite'",
+                (EXTERNAL_EXECUTION_PROCESSING_STATUS, row["company_id"], row["confirmation_id"]),
+            ).rowcount
+            if updated != 1 or transitioned != 1:
+                raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+        return {
+            "status": EXTERNAL_EXECUTION_PROCESSING_STATUS,
+            "external_execution_claimed": True,
+            "external_execution_claim_binding": dict(capability._binding),
+            "secret_exposed": False,
+        }
+
+    def abort_unpublished_draft_execution_claim(
+        self,
+        *,
+        capability: UnpublishedDraftClaimCapability,
+        reason_code: str = "prewrite_check_blocked",
+    ) -> dict[str, Any]:
+        """One-shot zero-write abort for a claim that was never consumed.
+
+        An unchanged confirmation is restored to ``approved`` so the merchant
+        is not trapped by a deterministic pre-write failure.  If its approved
+        payload changed after claim, it is moved to ``needs_revision`` instead
+        of silently approving different business facts.
+        """
+
+        if not (
+            isinstance(capability, UnpublishedDraftClaimCapability)
+            and capability._minted is True
+        ):
+            raise ConfirmationDecisionConflict("external_execution_claim_capability_invalid")
+        safe_reasons = {
+            "offer_state_changed",
+            "prepared_binding_invalid",
+            "claim_consume_failed",
+            "adapter_prewrite_exception",
+            "prewrite_check_blocked",
+        }
+        safe_reason = reason_code if reason_code in safe_reasons else "prewrite_check_blocked"
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                f"select * from external_execution_claims where claim_id = ?{lock_suffix}",
+                (capability._claim_id,),
+            ).fetchone()
+            if not row:
+                raise ConfirmationDecisionConflict("external_execution_claim_capability_invalid")
+            binding = _load_json_field(row["binding_json"])
+            binding = binding if isinstance(binding, dict) else {}
+            nonce_matches = hmac.compare_digest(
+                str(row["nonce_sha256"] or ""),
+                hashlib.sha256(capability._nonce).hexdigest(),
+            )
+            if not (
+                str(row["status"] or "") == "claimed"
+                and nonce_matches
+                and binding == capability._binding
+            ):
+                raise ConfirmationDecisionConflict("external_execution_claim_capability_invalid")
+            confirmation_row = conn.execute(
+                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
+                (row["company_id"], row["confirmation_id"]),
+            ).fetchone()
+            confirmation = self._confirmation_row_to_dict(confirmation_row) if confirmation_row else {}
+            unchanged = bool(
+                str(confirmation.get("status") or "") == "external_execution_claimed_prewrite"
+                and _exact_draft_execution_claim_binding(
+                    confirmation=confirmation,
+                    expected_binding=binding,
+                )
+                == binding
+            )
+            restored_status = "approved" if unchanged else "needs_revision"
+            aborted = conn.execute(
+                "update external_execution_claims set status = 'aborted' where claim_id = ? and status = 'claimed'",
+                (capability._claim_id,),
+            ).rowcount
+            transitioned = conn.execute(
+                """
+                update confirmations set status = ?
+                where company_id = ? and confirmation_id = ? and status = 'external_execution_claimed_prewrite'
+                """,
+                (restored_status, row["company_id"], row["confirmation_id"]),
+            ).rowcount
+            if aborted != 1 or transitioned != 1:
+                raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            self._insert_audit(
+                conn,
+                company_id=str(row["company_id"] or ""),
+                store_id=str(row["store_id"] or ""),
+                user_id=str(row["claimed_by"] or "") or None,
+                actor_type="system",
+                action_type="external_execution.prewrite_aborted",
+                target_type="confirmation",
+                target_id=str(row["confirmation_id"] or ""),
+                summary="Unpublished-draft execution stopped before any eBay write.",
+                details={
+                    "reason_code": safe_reason,
+                    "restored_status": restored_status,
+                    "writes_to_ebay": False,
+                    "automatic_retry_allowed": restored_status == "approved",
+                    "secret_exposed": False,
+                },
+            )
+        return {
+            "status": restored_status,
+            "writes_to_ebay": False,
+            "secret_exposed": False,
+        }
+
+    def recover_expired_unpublished_draft_execution_claim(
+        self,
+        *,
+        company_id: str,
+        confirmation_id: str,
+        user_id: str,
+    ) -> dict[str, Any]:
+        """Recover a crashed pre-write claim only after its one-shot lease expires.
+
+        A ``claimed`` row proves that the adapter had not crossed the first
+        eBay-write boundary: consumption changes both the claim and the
+        confirmation in the same transaction.  Recovery therefore invalidates
+        the abandoned nonce and restores only the exact approved snapshot.  A
+        stale approval goes back to ``pending`` and must be approved again;
+        changed business facts remain ``needs_revision``.
+        """
+
+        self.initialize()
+        recovered_at = datetime.now(timezone.utc)
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                f"""
+                select * from external_execution_claims
+                where company_id = ? and confirmation_id = ?{lock_suffix}
+                """,
+                (company_id, confirmation_id),
+            ).fetchone()
+            expires_at = _parse_explicit_timezone_iso_datetime(row["expires_at"]) if row else None
+            if not (
+                row
+                and str(row["status"] or "") == "claimed"
+                and expires_at is not None
+                and recovered_at > expires_at
+            ):
+                raise ConfirmationDecisionConflict("external_execution_prewrite_claim_not_expired")
+            confirmation_row = conn.execute(
+                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
+                (company_id, confirmation_id),
+            ).fetchone()
+            confirmation = self._confirmation_row_to_dict(confirmation_row) if confirmation_row else {}
+            if str(confirmation.get("status") or "") != "external_execution_claimed_prewrite":
+                raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            try:
+                binding_value = _load_json_field(row["binding_json"])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                binding_value = {}
+            binding = binding_value if isinstance(binding_value, dict) else {}
+            unchanged = bool(
+                binding
+                and _exact_draft_execution_claim_binding(
+                    confirmation=confirmation,
+                    expected_binding=binding,
+                )
+                == binding
+            )
+            if unchanged and _is_exact_fresh_draft_execution_confirmation(
+                confirmation=confirmation,
+                company_id=company_id,
+            ):
+                restored_status = "approved"
+            elif unchanged:
+                restored_status = "pending"
+            else:
+                restored_status = "needs_revision"
+            aborted = conn.execute(
+                """
+                update external_execution_claims set status = 'aborted'
+                where claim_id = ? and company_id = ? and confirmation_id = ? and status = 'claimed'
+                """,
+                (row["claim_id"], company_id, confirmation_id),
+            ).rowcount
+            if restored_status == "pending":
+                transitioned = conn.execute(
+                    """
+                    update confirmations
+                    set status = 'pending', decided_by = null, decided_at = null,
+                        decision_note = ?
+                    where company_id = ? and confirmation_id = ?
+                      and status = 'external_execution_claimed_prewrite'
+                    """,
+                    (
+                        "The pre-write execution lease expired before any eBay write; a fresh approval is required.",
+                        company_id,
+                        confirmation_id,
+                    ),
+                ).rowcount
+            else:
+                transitioned = conn.execute(
+                    """
+                    update confirmations set status = ?
+                    where company_id = ? and confirmation_id = ?
+                      and status = 'external_execution_claimed_prewrite'
+                    """,
+                    (restored_status, company_id, confirmation_id),
+                ).rowcount
+            if aborted != 1 or transitioned != 1:
+                raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=str(row["store_id"] or ""),
+                user_id=user_id,
+                actor_type="system",
+                action_type="external_execution.prewrite_claim_expired_recovered",
+                target_type="confirmation",
+                target_id=confirmation_id,
+                summary="An expired unpublished-draft pre-write claim was recovered without an eBay write.",
+                details={
+                    "restored_status": restored_status,
+                    "writes_to_ebay": False,
+                    "automatic_retry_allowed": restored_status == "approved",
+                    "reapproval_required": restored_status == "pending",
+                    "secret_exposed": False,
+                },
+            )
+        return {
+            "status": restored_status,
+            "writes_to_ebay": False,
+            "automatic_retry_allowed": restored_status == "approved",
+            "reapproval_required": restored_status == "pending",
+            "secret_exposed": False,
+        }
+
+    def draft_external_execution_confirmation_ready(
+        self,
+        *,
+        company_id: str,
+        confirmation_id: str,
+    ) -> bool:
+        """Read-only preclaim predicate; the transaction rechecks before CAS."""
+
+        confirmation = self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {}
+        return bool(
+            str(confirmation.get("status") or "") == "approved"
+            and str(confirmation.get("action_type") or "") == "save_ebay_listing_draft"
+            and _is_exact_fresh_draft_execution_confirmation(confirmation=confirmation, company_id=company_id)
+        )
 
     def save_execution_result(self, *, confirmation: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
         self.initialize()
@@ -5397,6 +5927,132 @@ class SaaSRepository:
             )
         return self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {}
 
+    def create_unpublished_draft_oauth_confirmation(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        user_id: str,
+    ) -> dict[str, Any]:
+        """Create one exact draft-scope confirmation without creating OAuth state."""
+
+        self.initialize()
+        confirmation_id = _id("confirm")
+        created_at = now_iso()
+        action_type = "ebay_oauth_scope_change"
+        title = "Approve eBay access to save unpublished drafts"
+        item = {
+            "confirmation_id": confirmation_id,
+            "action_type": action_type,
+            "title": title,
+            "default_action": "hold",
+            "source": EBAY_UNPUBLISHED_DRAFT_OAUTH_SOURCE,
+            "requested_step": EBAY_UNPUBLISHED_DRAFT_OAUTH_STEP,
+            "scope_profile": EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE,
+            "oauth_state_created": False,
+            "authorization_url_created": False,
+            "oauth_request_created": False,
+            "draft_save_capability_requested": True,
+            "public_publish_enabled": False,
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        }
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            store_row = conn.execute(
+                f"select store_id, platform from stores where company_id = ? and store_id = ?{lock_suffix}",
+                (company_id, store_id),
+            ).fetchone()
+            if not store_row or str(store_row["platform"] or "").strip().lower() != "ebay":
+                raise KeyError("store not found")
+            active_rows = conn.execute(
+                f"""
+                select * from confirmations
+                where company_id = ? and store_id = ? and action_type = ?
+                  and status in ('pending', 'approved')
+                {lock_suffix}
+                """,
+                (company_id, store_id, action_type),
+            ).fetchall()
+            exact_active = []
+            for row in active_rows:
+                existing = self._confirmation_row_to_dict(row)
+                existing_item = existing.get("item") if isinstance(existing.get("item"), dict) else {}
+                if (
+                    str(existing_item.get("source") or "") == EBAY_UNPUBLISHED_DRAFT_OAUTH_SOURCE
+                    and str(existing_item.get("requested_step") or "") == EBAY_UNPUBLISHED_DRAFT_OAUTH_STEP
+                    and str(existing_item.get("scope_profile") or "") == EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE
+                ):
+                    exact_active.append(existing)
+            if exact_active:
+                raise ValueError("oauth_confirmation_already_active")
+            conn.execute(
+                """
+                insert into confirmations (
+                  confirmation_id, company_id, store_id, task_id, runtime_run_id, action_type, title, status,
+                  default_action, created_at, item_json, decided_by, decided_at, decision_note
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    confirmation_id,
+                    company_id,
+                    store_id,
+                    None,
+                    EBAY_UNPUBLISHED_DRAFT_OAUTH_STEP,
+                    action_type,
+                    title,
+                    "pending",
+                    "hold",
+                    created_at,
+                    json.dumps(item, ensure_ascii=False, default=json_default),
+                    None,
+                    None,
+                    None,
+                ),
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                user_id=user_id,
+                actor_type="user",
+                action_type="confirmation.created",
+                target_type="confirmation",
+                target_id=confirmation_id,
+                summary="A pending current-store unpublished-draft OAuth confirmation was created; no OAuth request was created.",
+                details={
+                    "action_type": action_type,
+                    "source": item["source"],
+                    "requested_step": item["requested_step"],
+                    "scope_profile": item["scope_profile"],
+                    "oauth_request_created": False,
+                    "public_publish_enabled": False,
+                    "secret_exposed": False,
+                },
+            )
+            self._insert_merchant_memory(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                memory_type="confirmation_boundary",
+                source_type="confirmation",
+                source_id=confirmation_id,
+                title=title,
+                summary=_memory_summary_from_confirmation(item),
+                importance=90,
+                tags=[action_type, "confirmation_center", "risk_control", "unpublished_draft"],
+                memory={
+                    "confirmation_id": confirmation_id,
+                    "action_type": action_type,
+                    "high_risk": True,
+                    "secret_exposed": False,
+                },
+                created_by=user_id,
+            )
+        return self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {}
+
     def create_read_only_sync_confirmation(
         self,
         *,
@@ -5779,6 +6435,7 @@ class SaaSRepository:
             safe_plan = _redact_secret_like({**plan, "confirmation_id": confirmation_id})
             record = {
                 "oauth_request_id": request_id,
+                "confirmation_id": confirmation_id,
                 "company_id": company_id,
                 "store_id": store_id,
                 "platform": str(safe_plan.get("platform") or "ebay"),
@@ -5836,6 +6493,595 @@ class SaaSRepository:
             )
         return record
 
+    def create_approved_unpublished_draft_oauth_authorization_request(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        user_id: str,
+        confirmation_id: str,
+        plan: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Atomically consume exact draft-scope approval and create one OAuth request."""
+
+        from .ebay_oauth import UNPUBLISHED_DRAFT_SCOPES
+
+        self.initialize()
+        safe_plan = _redact_secret_like({**plan, "confirmation_id": confirmation_id})
+        if not (
+            str(safe_plan.get("company_id") or "") == company_id
+            and str(safe_plan.get("store_id") or "") == store_id
+            and str(safe_plan.get("user_id") or "") == user_id
+            and str(safe_plan.get("platform") or "").lower() == "ebay"
+            and str(safe_plan.get("scope_profile") or "") == EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE
+            and safe_plan.get("scopes") == UNPUBLISHED_DRAFT_SCOPES
+            and str(safe_plan.get("state_nonce") or "")
+            and safe_plan.get("draft_save_capability_requested") is True
+            and safe_plan.get("public_publish_enabled") is False
+            and safe_plan.get("real_platform_writes_enabled") is False
+            and safe_plan.get("secret_exposed") is False
+        ):
+            raise OAuthPlanExactApprovalError("approval_predicate_rejected")
+
+        created_at = now_iso()
+        now_utc = datetime.now(timezone.utc)
+        request_id = _id("oauth")
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            store_row = conn.execute(
+                f"select store_id, platform from stores where company_id = ? and store_id = ?{lock_suffix}",
+                (company_id, store_id),
+            ).fetchone()
+            if not store_row or str(store_row["platform"] or "").strip().lower() != "ebay":
+                raise KeyError("store not found")
+            if self._strong_ebay_oauth_connection_exists(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                lock_rows=self.database_engine == "postgres",
+                required_scope="https://api.ebay.com/oauth/api_scope/sell.inventory",
+            ):
+                raise ValueError("oauth_unpublished_draft_scope_already_authorized")
+            pending_rows = conn.execute(
+                """
+                select updated_at, request_json from oauth_authorization_requests
+                where company_id = ? and store_id = ? and lower(platform) = 'ebay'
+                  and status in ('ready_to_redirect', 'blocked_missing_oauth_config')
+                """,
+                (company_id, store_id),
+            ).fetchall()
+            if any(
+                str((_load_json_field(row["request_json"]) or {}).get("scope_profile") or "")
+                == EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE
+                and _timestamp_within_seconds(_parse_iso_datetime(str(row["updated_at"] or "")), now_utc, 15 * 60)
+                for row in pending_rows
+            ):
+                raise ValueError("oauth_unpublished_draft_plan_already_pending")
+            confirmation_row = conn.execute(
+                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
+                (company_id, confirmation_id),
+            ).fetchone()
+            confirmation = self._confirmation_row_to_dict(confirmation_row) if confirmation_row else {}
+            item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+            decided_at = _parse_explicit_timezone_iso_datetime(confirmation.get("decided_at"))
+            exact_approval = bool(
+                confirmation
+                and str(confirmation.get("store_id") or "") == store_id
+                and str(confirmation.get("action_type") or "") == "ebay_oauth_scope_change"
+                and str(confirmation.get("status") or "") == "approved"
+                and str(confirmation.get("decided_by") or "")
+                and str(item.get("source") or "") == EBAY_UNPUBLISHED_DRAFT_OAUTH_SOURCE
+                and str(item.get("requested_step") or "") == EBAY_UNPUBLISHED_DRAFT_OAUTH_STEP
+                and str(item.get("scope_profile") or "") == EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE
+                and _timestamp_not_future_within_seconds(decided_at, now_utc, 15 * 60)
+            )
+            if not exact_approval:
+                raise OAuthPlanExactApprovalError("approval_predicate_rejected")
+
+            consumed = conn.execute(
+                """
+                update confirmations set status = 'executed'
+                where company_id = ? and confirmation_id = ? and status = 'approved'
+                """,
+                (company_id, confirmation_id),
+            ).rowcount
+            if consumed != 1:
+                raise OAuthPlanExactApprovalError("approval_consume_conflict")
+            record = {
+                "oauth_request_id": request_id,
+                "confirmation_id": confirmation_id,
+                "company_id": company_id,
+                "store_id": store_id,
+                "platform": "ebay",
+                "status": str(safe_plan.get("status") or "created"),
+                "state_nonce": str(safe_plan.get("state_nonce") or ""),
+                "scopes": list(UNPUBLISHED_DRAFT_SCOPES),
+                "auth_url": safe_plan.get("authorization_url") if isinstance(safe_plan.get("authorization_url"), str) else None,
+                "created_by": user_id,
+                "created_at": created_at,
+                "updated_at": created_at,
+                "request": safe_plan,
+                "draft_save_capability_requested": True,
+                "public_publish_enabled": False,
+                "real_platform_writes_enabled": False,
+                "secret_exposed": False,
+            }
+            conn.execute(
+                """
+                insert into oauth_authorization_requests (
+                  oauth_request_id, company_id, store_id, platform, status, state_nonce, scopes_json,
+                  auth_url, created_by, created_at, updated_at, request_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    request_id,
+                    company_id,
+                    store_id,
+                    record["platform"],
+                    record["status"],
+                    record["state_nonce"],
+                    json.dumps(record["scopes"], ensure_ascii=False),
+                    record["auth_url"],
+                    user_id,
+                    created_at,
+                    created_at,
+                    json.dumps(record["request"], ensure_ascii=False),
+                ),
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                user_id=user_id,
+                actor_type="user",
+                action_type="oauth.unpublished_draft.plan_created",
+                target_type="oauth_authorization_request",
+                target_id=request_id,
+                summary="eBay unpublished-draft OAuth plan created from exact approval.",
+                details={
+                    "status": record["status"],
+                    "scope_profile": EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE,
+                    "scope_count": len(record["scopes"]),
+                    "authorization_url_created": bool(record["auth_url"]),
+                    "confirmation_id": confirmation_id,
+                    "draft_save_capability_requested": True,
+                    "public_publish_enabled": False,
+                    "secret_exposed": False,
+                },
+            )
+        return record
+
+    def ebay_oauth_scope_upgrade_identity_boundary(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        ebay_user_id_hash: str,
+    ) -> dict[str, Any]:
+        """Return the exact callback-owned connection eligible for a scope replacement."""
+
+        self.initialize()
+        immutable_identity = str(ebay_user_id_hash or "")
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select connection_id, status, secret_ref, metadata_json
+                from platform_connections
+                where company_id = ? and store_id = ? and lower(platform) = 'ebay'
+                  and status in ('read_only_authorized', 'draft_save_authorized', 'publish_authorized')
+                order by created_at desc
+                """,
+                (company_id, store_id),
+            ).fetchall()
+        if not rows:
+            return {
+                "allowed": bool(immutable_identity),
+                "existing_connection": False,
+                "seller_identity_exact": bool(immutable_identity),
+                "secret_exposed": False,
+            }
+        if len(rows) != 1:
+            return {
+                "allowed": False,
+                "existing_connection": True,
+                "seller_identity_exact": False,
+                "blocked_by": ["oauth_active_connection_not_unique"],
+                "secret_exposed": False,
+            }
+        row = rows[0]
+        metadata = _load_json_field(row["metadata_json"])
+        metadata = metadata if isinstance(metadata, dict) else {}
+        strong_boundary = self.ebay_read_only_oauth_boundary(company_id=company_id, store_id=store_id)
+        connection_id = str(row["connection_id"] or "")
+        secret_ref = str(row["secret_ref"] or "")
+        identity_exact = bool(immutable_identity and str(metadata.get("ebay_user_id_hash") or "") == immutable_identity)
+        backend_owned = bool(
+            strong_boundary.get("authorized") is True
+            and str(strong_boundary.get("connection_id_sha256") or "")
+            == hashlib.sha256(connection_id.encode("utf-8")).hexdigest()
+        )
+        return {
+            "allowed": bool(identity_exact and backend_owned and secret_ref),
+            "existing_connection": True,
+            "seller_identity_exact": identity_exact,
+            "backend_provenance_ready": backend_owned,
+            "previous_connection_id": connection_id if identity_exact and backend_owned else "",
+            "previous_secret_ref": secret_ref if identity_exact and backend_owned else "",
+            "blocked_by": [] if identity_exact and backend_owned and secret_ref else ["oauth_seller_identity_or_provenance_mismatch"],
+            "secret_exposed": False,
+        }
+
+    def finalize_unpublished_draft_oauth_connection(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        user_id: str,
+        oauth_request_id: str,
+        secret_ref: str,
+        scopes: list[str],
+        metadata: dict[str, Any],
+        previous_connection_id: str = "",
+        previous_secret_ref: str = "",
+        final_secret_status: str,
+    ) -> dict[str, Any]:
+        """Atomically install the draft connection and retire its exact predecessor."""
+
+        from .ebay_oauth import UNPUBLISHED_DRAFT_SCOPES
+
+        self.initialize()
+        if scopes != UNPUBLISHED_DRAFT_SCOPES:
+            raise ValueError("oauth_unpublished_draft_scopes_not_allowed")
+        if final_secret_status not in {"local_secret_resolver_stored", "managed_vault_stored"}:
+            raise ValueError("oauth_unpublished_draft_secret_not_exact")
+        connection_id = _id("conn")
+        created_at = now_iso()
+        stored_metadata = _redact_secret_like(metadata)
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            store_row = conn.execute(
+                f"select store_id, platform from stores where company_id = ? and store_id = ?{lock_suffix}",
+                (company_id, store_id),
+            ).fetchone()
+            if not store_row or str(store_row["platform"] or "").lower() != "ebay":
+                raise KeyError("store not found")
+            new_secret = conn.execute(
+                f"""
+                select status, metadata_json from secret_refs
+                where company_id = ? and store_id = ? and secret_ref = ?{lock_suffix}
+                """,
+                (company_id, store_id, secret_ref),
+            ).fetchone()
+            new_secret_metadata = _load_json_field(new_secret["metadata_json"]) if new_secret else {}
+            new_secret_metadata = new_secret_metadata if isinstance(new_secret_metadata, dict) else {}
+            if not (
+                new_secret
+                and str(new_secret["status"] or "") == "oauth_scope_upgrade_vault_stored_pending_connection"
+                and str(new_secret_metadata.get("oauth_request_id") or "") == oauth_request_id
+            ):
+                raise ValueError("oauth_unpublished_draft_secret_not_exact")
+            active_rows = conn.execute(
+                f"""
+                select connection_id, secret_ref, metadata_json from platform_connections
+                where company_id = ? and store_id = ? and lower(platform) = 'ebay'
+                  and status in ('read_only_authorized', 'draft_save_authorized', 'publish_authorized')
+                {lock_suffix}
+                """,
+                (company_id, store_id),
+            ).fetchall()
+            if previous_connection_id:
+                if len(active_rows) != 1:
+                    raise ValueError("oauth_unpublished_draft_connection_replace_conflict")
+                previous = active_rows[0]
+                previous_metadata = _load_json_field(previous["metadata_json"])
+                previous_metadata = previous_metadata if isinstance(previous_metadata, dict) else {}
+                if not (
+                    str(previous["connection_id"] or "") == previous_connection_id
+                    and str(previous["secret_ref"] or "") == previous_secret_ref
+                    and str(previous_metadata.get("ebay_user_id_hash") or "")
+                    == str(stored_metadata.get("ebay_user_id_hash") or "")
+                ):
+                    raise ValueError("oauth_unpublished_draft_connection_replace_conflict")
+            elif active_rows:
+                raise ValueError("oauth_unpublished_draft_connection_replace_conflict")
+
+            conn.execute(
+                """
+                insert into platform_connections (
+                  connection_id, company_id, store_id, platform, connection_type, status, scopes_json,
+                  secret_ref, metadata_json, created_by, created_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    connection_id,
+                    company_id,
+                    store_id,
+                    "ebay",
+                    "oauth",
+                    "draft_save_authorized",
+                    json.dumps(scopes, ensure_ascii=False),
+                    secret_ref,
+                    json.dumps(stored_metadata, ensure_ascii=False),
+                    user_id,
+                    created_at,
+                ),
+            )
+            activated_secret = conn.execute(
+                """
+                update secret_refs set status = ?
+                where company_id = ? and store_id = ? and secret_ref = ?
+                  and status = 'oauth_scope_upgrade_vault_stored_pending_connection'
+                """,
+                (final_secret_status, company_id, store_id, secret_ref),
+            ).rowcount
+            if activated_secret != 1:
+                raise ValueError("oauth_unpublished_draft_secret_not_exact")
+            if previous_connection_id:
+                retired_connection = conn.execute(
+                    """
+                    update platform_connections set status = 'oauth_scope_superseded'
+                    where company_id = ? and store_id = ? and connection_id = ?
+                      and status in ('read_only_authorized', 'draft_save_authorized', 'publish_authorized')
+                    """,
+                    (company_id, store_id, previous_connection_id),
+                ).rowcount
+                retired_secret = conn.execute(
+                    """
+                    update secret_refs set status = 'oauth_scope_superseded'
+                    where company_id = ? and store_id = ? and secret_ref = ?
+                      and status in ('local_secret_resolver_stored', 'managed_vault_stored')
+                    """,
+                    (company_id, store_id, previous_secret_ref),
+                ).rowcount
+                if retired_connection != 1 or retired_secret != 1:
+                    raise ValueError("oauth_unpublished_draft_connection_replace_conflict")
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                user_id=user_id,
+                actor_type="system",
+                action_type="oauth.unpublished_draft.connection_replaced",
+                target_type="platform_connection",
+                target_id=connection_id,
+                summary="The exact seller connection was upgraded for unpublished draft save.",
+                details={
+                    "oauth_request_id": oauth_request_id,
+                    "previous_connection_retired": bool(previous_connection_id),
+                    "previous_secret_ref_retired": bool(previous_secret_ref),
+                    "active_connection_count_after": 1,
+                    "public_publish_enabled": False,
+                    "secret_exposed": False,
+                },
+            )
+        return {
+            "connection_id": connection_id,
+            "company_id": company_id,
+            "store_id": store_id,
+            "platform": "ebay",
+            "connection_type": "oauth",
+            "status": "draft_save_authorized",
+            "scopes": list(scopes),
+            "secret_ref": secret_ref,
+            "metadata": _public_connection_metadata(stored_metadata),
+            "created_by": user_id,
+            "created_at": created_at,
+            "secret_exposed": False,
+        }
+
+    def unpublished_draft_execution_credential_boundary(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+    ) -> dict[str, Any]:
+        """Return backend-only exact credential joins for an unpublished draft execution."""
+
+        self.initialize()
+        with self._connect() as conn:
+            return self._unpublished_draft_execution_credential_boundary_conn(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                include_private=True,
+            )
+
+    def _unpublished_draft_execution_credential_boundary_conn(
+        self,
+        conn: Any,
+        *,
+        company_id: str,
+        store_id: str,
+        include_private: bool,
+        lock_rows: bool = False,
+    ) -> dict[str, Any]:
+        from .ebay_oauth import UNPUBLISHED_DRAFT_SCOPES
+
+        def blocked(code: str) -> dict[str, Any]:
+            return {"ready": False, "code": code, "secret_exposed": False}
+        lock_suffix = " for update" if lock_rows and self.database_engine == "postgres" else ""
+        try:
+            rows = conn.execute(
+                f"""
+                select connection_id, status, scopes_json, secret_ref, metadata_json
+                from platform_connections
+                where company_id = ? and store_id = ? and lower(platform) = 'ebay'
+                  and status in ('read_only_authorized', 'draft_save_authorized', 'publish_authorized')
+                order by created_at desc
+                {lock_suffix}
+                """,
+                (company_id, store_id),
+            ).fetchall()
+        except Exception:
+            return blocked("ebay_unpublished_draft_evidence_malformed")
+        if len(rows) != 1:
+            return blocked("ebay_unpublished_draft_connection_not_exact")
+        try:
+            connection = rows[0]
+            connection_id = str(connection["connection_id"] or "")
+            secret_ref = str(connection["secret_ref"] or "")
+            scopes = _load_json_field(connection["scopes_json"])
+            metadata = _load_json_field(connection["metadata_json"])
+            metadata = metadata if isinstance(metadata, dict) else {}
+            oauth_request_id = str(metadata.get("oauth_request_id") or "")
+            confirmation_id = str(metadata.get("confirmation_id") or "")
+            seller_identity_hash = str(metadata.get("ebay_user_id_hash") or "")
+            if not (
+                connection_id
+                and str(connection["status"] or "") == "draft_save_authorized"
+                and secret_ref
+                and scopes == UNPUBLISHED_DRAFT_SCOPES
+                and oauth_request_id
+                and confirmation_id
+                and seller_identity_hash
+                and str(metadata.get("scope_profile") or "") == EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE
+                and str(metadata.get("authorization_kind") or "") == "unpublished_draft"
+                and metadata.get("draft_save_scope_authorized") is True
+                and metadata.get("publish_scope_authorized") is False
+                and metadata.get("public_publish_enabled") is False
+                and metadata.get("real_platform_writes_enabled") is False
+            ):
+                return blocked("ebay_unpublished_draft_connection_binding_invalid")
+            request_row = conn.execute(
+                f"""
+                select status, state_nonce, scopes_json, request_json
+                from oauth_authorization_requests
+                where company_id = ? and store_id = ? and oauth_request_id = ?
+                {lock_suffix}
+                """,
+                (company_id, store_id, oauth_request_id),
+            ).fetchone()
+            request_payload = _load_json_field(request_row["request_json"]) if request_row else {}
+            request_payload = request_payload if isinstance(request_payload, dict) else {}
+            callback_events = request_payload.get("callback_events") if isinstance(request_payload.get("callback_events"), list) else []
+            callback_binding = next(
+                (
+                    event.get("backend_connection_binding")
+                    for event in callback_events
+                    if isinstance(event, dict)
+                    and str(event.get("status") or "") == "callback_exchange_completed"
+                    and isinstance(event.get("backend_connection_binding"), dict)
+                    and str(event["backend_connection_binding"].get("oauth_request_id") or "") == oauth_request_id
+                    and str(event["backend_connection_binding"].get("connection_id") or "") == connection_id
+                ),
+                {},
+            )
+            confirmation_row = conn.execute(
+                f"""
+                select status, action_type, store_id, item_json
+                from confirmations
+                where company_id = ? and confirmation_id = ?
+                {lock_suffix}
+                """,
+                (company_id, confirmation_id),
+            ).fetchone()
+            confirmation_item = _load_json_field(confirmation_row["item_json"]) if confirmation_row else {}
+            confirmation_item = confirmation_item if isinstance(confirmation_item, dict) else {}
+            request_scopes = _load_json_field(request_row["scopes_json"]) if request_row else []
+            if not (
+                request_row
+                and str(request_row["status"] or "") == "callback_exchange_completed"
+                and str(request_row["state_nonce"] or "")
+                and request_scopes == UNPUBLISHED_DRAFT_SCOPES
+                and str(request_payload.get("confirmation_id") or "") == confirmation_id
+                and str(request_payload.get("scope_profile") or "") == EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE
+                and confirmation_row
+                and str(confirmation_row["status"] or "") == "executed"
+                and str(confirmation_row["action_type"] or "") == "ebay_oauth_scope_change"
+                and str(confirmation_row["store_id"] or "") == store_id
+                and str(confirmation_item.get("source") or "") == EBAY_UNPUBLISHED_DRAFT_OAUTH_SOURCE
+                and str(confirmation_item.get("requested_step") or "") == EBAY_UNPUBLISHED_DRAFT_OAUTH_STEP
+                and str(confirmation_item.get("scope_profile") or "") == EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE
+                and isinstance(callback_binding, dict)
+                and str(callback_binding.get("contract_version") or "")
+                == "2026-08-10-oauth-callback-connection-binding-v1"
+                and str(callback_binding.get("connection_id_sha256") or "")
+                == hashlib.sha256(connection_id.encode("utf-8")).hexdigest()
+                and str(callback_binding.get("credential_ref_sha256") or "")
+                == hashlib.sha256(secret_ref.encode("utf-8")).hexdigest()
+                and str(callback_binding.get("seller_identity_sha256") or "")
+                == hashlib.sha256(seller_identity_hash.encode("utf-8")).hexdigest()
+                and callback_binding.get("created_by_backend_callback") is True
+            ):
+                return blocked("ebay_unpublished_draft_request_binding_invalid")
+            secret_row = conn.execute(
+                f"""
+                select status, metadata_json from secret_refs
+                where company_id = ? and store_id = ? and secret_ref = ?
+                  and provider = 'ebay' and purpose = 'ebay_refresh_token'
+                {lock_suffix}
+                """,
+                (company_id, store_id, secret_ref),
+            ).fetchone()
+            secret_metadata = _load_json_field(secret_row["metadata_json"]) if secret_row else {}
+            secret_metadata = secret_metadata if isinstance(secret_metadata, dict) else {}
+            if not (
+                secret_row
+                and str(secret_row["status"] or "") in {"local_secret_resolver_stored", "managed_vault_stored"}
+                and str(secret_metadata.get("oauth_request_id") or "") == oauth_request_id
+                and str(secret_metadata.get("credential_owner") or "") == "jiejing_saas_backend"
+            ):
+                return blocked("ebay_unpublished_draft_secret_binding_invalid")
+        except Exception:
+            return blocked("ebay_unpublished_draft_evidence_malformed")
+        public_binding = {
+            "ready": True,
+            "code": "ebay_unpublished_draft_credential_boundary_ready",
+            "contract_version": "2026-08-13-unpublished-draft-credential-v1",
+            "company_id": company_id,
+            "store_id": store_id,
+            "connection_status": "draft_save_authorized",
+            "authorization_kind": "unpublished_draft",
+            "oauth_request_status": "callback_exchange_completed",
+            "scope_profile": EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE,
+            "scopes": list(UNPUBLISHED_DRAFT_SCOPES),
+            "connection_id_sha256": hashlib.sha256(connection_id.encode("utf-8")).hexdigest(),
+            "credential_ref_sha256": hashlib.sha256(secret_ref.encode("utf-8")).hexdigest(),
+            "oauth_request_id_sha256": hashlib.sha256(oauth_request_id.encode("utf-8")).hexdigest(),
+            "seller_identity_sha256": hashlib.sha256(seller_identity_hash.encode("utf-8")).hexdigest(),
+            "draft_save_authorized": True,
+            "public_publish_enabled": False,
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        }
+        if not include_private:
+            return public_binding
+        return {
+            **public_binding,
+            "connection_id": connection_id,
+            "secret_ref": secret_ref,
+            "oauth_request_id": oauth_request_id,
+            "confirmation_id": confirmation_id,
+            "state_nonce": str(request_row["state_nonce"] or ""),
+            "seller_identity_hash": seller_identity_hash,
+            "connection": {
+                "connection_id": connection_id,
+                "company_id": company_id,
+                "store_id": store_id,
+                "platform": "ebay",
+                "connection_type": "oauth",
+                "status": "draft_save_authorized",
+                "scopes": list(UNPUBLISHED_DRAFT_SCOPES),
+                "secret_ref": secret_ref,
+                "metadata": metadata,
+                "secret_exposed": False,
+            },
+            "secret_reference": {
+                "secret_ref": secret_ref,
+                "company_id": company_id,
+                "store_id": store_id,
+                "provider": "ebay",
+                "purpose": "ebay_refresh_token",
+                "status": str(secret_row["status"] or ""),
+                "metadata": secret_metadata,
+                "secret_exposed": False,
+            },
+        }
+
     def _strong_ebay_oauth_connection_exists(
         self,
         conn: sqlite3.Connection,
@@ -5843,11 +7089,12 @@ class SaaSRepository:
         company_id: str,
         store_id: str,
         lock_rows: bool,
+        required_scope: str | None = None,
     ) -> bool:
         lock_suffix = " for update" if lock_rows else ""
         connections = conn.execute(
             f"""
-            select connection_id, status, secret_ref, metadata_json
+            select connection_id, status, scopes_json, secret_ref, metadata_json
             from platform_connections
             where company_id = ? and store_id = ? and lower(platform) = 'ebay'
             order by created_at desc{lock_suffix}
@@ -5859,15 +7106,18 @@ class SaaSRepository:
             secret_ref = str(connection["secret_ref"] or "")
             metadata = _load_json_field(connection["metadata_json"])
             metadata = metadata if isinstance(metadata, dict) else {}
+            scopes = _load_json_field(connection["scopes_json"])
+            scopes = scopes if isinstance(scopes, list) else []
             oauth_request_id = str(metadata.get("oauth_request_id") or "")
             if not (
                 connection_id
-                and str(connection["status"] or "") in {"read_only_authorized", "publish_authorized"}
+                and str(connection["status"] or "") in {"read_only_authorized", "draft_save_authorized", "publish_authorized"}
                 and secret_ref
                 and oauth_request_id
                 and str(metadata.get("credential_source") or "") == "jiejing_vault_secret_ref"
                 and str(metadata.get("account_deletion_identity_mapping_status") or "") == "identity_mapping_ready"
                 and str(metadata.get("ebay_user_id_hash") or "")
+                and (not required_scope or required_scope in scopes)
             ):
                 continue
             request_row = conn.execute(
@@ -7494,7 +8744,7 @@ class SaaSRepository:
                     update platform_connections
                     set status = ?, scopes_json = ?, metadata_json = ?
                     where connection_id = ? and company_id = ? and store_id = ?
-                      and status in ('read_only_authorized', 'publish_authorized')
+                      and status in ('read_only_authorized', 'draft_save_authorized', 'publish_authorized')
                     """,
                     (
                         "retired_synthetic_test",
@@ -7617,7 +8867,7 @@ class SaaSRepository:
             join stores s on s.company_id = pc.company_id and s.store_id = pc.store_id
             left join users creator on creator.user_id = pc.created_by
             where lower(pc.platform) = 'ebay'
-              and pc.status in ('read_only_authorized', 'publish_authorized')
+              and pc.status in ('read_only_authorized', 'draft_save_authorized', 'publish_authorized')
             order by pc.created_at, pc.connection_id
             {lock_suffix}
             """,
@@ -8540,7 +9790,7 @@ class SaaSRepository:
                     where u.default_company_id = s.company_id and u.account_classification = 'merchant'
                   )) as stores_created,
                   (select count(distinct pc.store_id) from platform_connections pc where
-                    pc.status in ('read_only_authorized', 'publish_authorized') and exists (
+                    pc.status in ('read_only_authorized', 'draft_save_authorized', 'publish_authorized') and exists (
                       select 1 from users u
                       where u.default_company_id = pc.company_id and u.account_classification = 'merchant'
                     )
@@ -9729,7 +10979,8 @@ class SaaSRepository:
                 conn.execute(
                     """
                     select count(*) as count from platform_connections
-                    where platform = 'ebay' and status = 'read_only_authorized'
+                    where lower(platform) = 'ebay'
+                      and status in ('read_only_authorized', 'draft_save_authorized')
                     """
                 ).fetchone()["count"]
             )
@@ -9778,13 +11029,151 @@ class SaaSRepository:
             ).fetchone()
             report_count = int(conn.execute("select count(*) as count from reports").fetchone()["count"])
             confirmation_count = int(conn.execute("select count(*) as count from confirmations").fetchone()["count"])
+            draft_execution_rows = conn.execute(
+                """
+                select
+                  e.created_at as execution_created_at,
+                  e.confirmation_id as execution_confirmation_id,
+                  e.task_id as execution_task_id,
+                  e.action_type as execution_action_type,
+                  e.status as execution_status,
+                  e.result_json,
+                  c.company_id,
+                  c.store_id,
+                  c.task_id as confirmation_task_id,
+                  c.runtime_run_id,
+                  c.action_type as confirmation_action_type,
+                  c.status as confirmation_status,
+                  c.item_json,
+                  c.decided_by,
+                  c.decided_at,
+                  t.company_id as task_company_id,
+                  t.store_id as task_store_id,
+                  t.user_id as task_user_id,
+                  t.task_type
+                from execution_results e
+                join confirmations c on c.confirmation_id = e.confirmation_id
+                join tasks t on t.task_id = c.task_id
+                where e.action_type = 'save_ebay_listing_draft'
+                  and e.status = 'saved_to_ebay_draft'
+                  and c.action_type = 'save_ebay_listing_draft'
+                  and c.status = 'executed'
+                order by e.created_at desc
+                limit 100
+                """
+            ).fetchall()
             ebay_identity_rows = conn.execute(
                 """
                 select company_id, store_id, status, metadata_json from platform_connections
                 where lower(platform) = 'ebay'
-                  and status in ('read_only_authorized', 'publish_authorized')
+                  and status in ('read_only_authorized', 'draft_save_authorized', 'publish_authorized')
                 """
             ).fetchall()
+            valid_draft_save_proofs: list[dict[str, Any]] = []
+            for proof_row in draft_execution_rows:
+                try:
+                    result = _load_json_field(proof_row["result_json"])
+                    confirmation_item = _load_json_field(proof_row["item_json"])
+                except Exception:
+                    # Readiness is an availability boundary. Corrupt historical
+                    # evidence is ignored instead of escaping as a 500 or being
+                    # treated as proof.
+                    continue
+                if not isinstance(result, dict) or not isinstance(confirmation_item, dict):
+                    continue
+                platform_result = result.get("platform_result") if isinstance(result.get("platform_result"), dict) else {}
+                audit = result.get("audit") if isinstance(result.get("audit"), dict) else {}
+                idempotency = audit.get("idempotency") if isinstance(audit.get("idempotency"), dict) else {}
+                real_execution = audit.get("real_execution") if isinstance(audit.get("real_execution"), dict) else {}
+                publish_payload = (
+                    confirmation_item.get("publish_payload")
+                    if isinstance(confirmation_item.get("publish_payload"), dict)
+                    else {}
+                )
+                payload_sha256 = _canonical_payload_sha256(publish_payload) if publish_payload else ""
+                confirmation_id = str(proof_row["execution_confirmation_id"] or "")
+                company_id = str(proof_row["company_id"] or "")
+                store_id = str(proof_row["store_id"] or "")
+                task_id = str(proof_row["execution_task_id"] or "")
+                idempotency_key = str(idempotency.get("idempotency_key") or "")
+                if not (
+                    confirmation_id
+                    and company_id
+                    and store_id
+                    and task_id
+                    and str(proof_row["execution_action_type"] or "") == "save_ebay_listing_draft"
+                    and str(proof_row["execution_status"] or "") == "saved_to_ebay_draft"
+                    and str(proof_row["confirmation_action_type"] or "") == "save_ebay_listing_draft"
+                    and str(proof_row["confirmation_status"] or "") == "executed"
+                    and str(proof_row["confirmation_task_id"] or "") == task_id
+                    and str(proof_row["runtime_run_id"] or "") == "merchant_ebay_draft_save_intake"
+                    and str(proof_row["decided_by"] or "")
+                    and str(proof_row["decided_at"] or "")
+                    and str(proof_row["task_company_id"] or "") == company_id
+                    and str(proof_row["task_store_id"] or "") == store_id
+                    and str(proof_row["task_user_id"] or "")
+                    and str(proof_row["task_type"] or "") == "ebay_draft_save_intake"
+                    and str(confirmation_item.get("source") or "") == "merchant_ebay_draft_save_intake"
+                    and str(confirmation_item.get("company_id") or "") == company_id
+                    and str(confirmation_item.get("store_id") or "") == store_id
+                    and confirmation_item.get("draft_save_capability_requested") is True
+                    and confirmation_item.get("writes_to_ebay_after_approval") is True
+                    and confirmation_item.get("public_publish_enabled") is False
+                    and confirmation_item.get("real_platform_writes_enabled") is False
+                    and confirmation_item.get("secret_exposed") is False
+                    and payload_sha256
+                    and str(confirmation_item.get("publish_payload_sha256") or "") == payload_sha256
+                    and str(result.get("status") or "") == "saved_to_ebay_draft"
+                    and str(result.get("action_type") or "") == "save_ebay_listing_draft"
+                    and str(result.get("task_id") or "") == task_id
+                    and str(platform_result.get("offer_status") or "").upper() == "UNPUBLISHED"
+                    and platform_result.get("writes_to_ebay") is True
+                    and platform_result.get("published_to_ebay") is False
+                    and platform_result.get("public_listing_created") is False
+                    and str(platform_result.get("authorization_kind") or "") == "unpublished_draft"
+                    and str(platform_result.get("scope_profile") or "") == EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE
+                    and idempotency_key
+                    and str(idempotency.get("duplicate_prevention_key") or "") == idempotency_key
+                    and str(idempotency.get("payload_hash") or "") == payload_sha256
+                    and real_execution.get("ebay_draft_saved") is True
+                    and real_execution.get("published_to_ebay") is False
+                    and result.get("secret_exposed") is False
+                ):
+                    continue
+                credential_boundary = self._unpublished_draft_execution_credential_boundary_conn(
+                    conn,
+                    company_id=company_id,
+                    store_id=store_id,
+                    include_private=False,
+                )
+                receipt_hash_keys = (
+                    "connection_id_sha256",
+                    "credential_ref_sha256",
+                    "oauth_request_id_sha256",
+                    "seller_identity_sha256",
+                )
+                if not (
+                    credential_boundary.get("ready") is True
+                    and credential_boundary.get("contract_version")
+                    == "2026-08-13-unpublished-draft-credential-v1"
+                    and str(credential_boundary.get("company_id") or "") == company_id
+                    and str(credential_boundary.get("store_id") or "") == store_id
+                    and str(credential_boundary.get("connection_status") or "") == "draft_save_authorized"
+                    and str(credential_boundary.get("authorization_kind") or "") == "unpublished_draft"
+                    and str(credential_boundary.get("oauth_request_status") or "") == "callback_exchange_completed"
+                    and str(credential_boundary.get("scope_profile") or "") == EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE
+                    and credential_boundary.get("draft_save_authorized") is True
+                    and credential_boundary.get("public_publish_enabled") is False
+                    and credential_boundary.get("real_platform_writes_enabled") is False
+                    and credential_boundary.get("secret_exposed") is False
+                    and all(
+                        re.fullmatch(r"[0-9a-f]{64}", str(credential_boundary.get(key) or ""))
+                        and str(platform_result.get(key) or "") == str(credential_boundary.get(key) or "")
+                        for key in receipt_hash_keys
+                    )
+                ):
+                    continue
+                valid_draft_save_proofs.append({"created_at": str(proof_row["execution_created_at"] or "")})
             latest_packet_connection_count = 0
             latest_packet_secret_ref_count = 0
             if latest_packet:
@@ -9795,7 +11184,7 @@ class SaaSRepository:
                         where lower(platform) = 'ebay'
                           and company_id = ?
                           and store_id = ?
-                          and status in ('read_only_authorized', 'publish_authorized')
+                          and status in ('read_only_authorized', 'draft_save_authorized', 'publish_authorized')
                         """,
                         (latest_packet["company_id"], latest_packet["store_id"]),
                     ).fetchone()["count"]
@@ -9857,6 +11246,10 @@ class SaaSRepository:
             "latest_ebay_token_refresh_success_at": latest_ebay_token_refresh_success["created_at"] if latest_ebay_token_refresh_success else "",
             "report_count": report_count,
             "confirmation_count": confirmation_count,
+            "ebay_unpublished_draft_save_proof_count": len(valid_draft_save_proofs),
+            "latest_ebay_unpublished_draft_save_proof_at": (
+                valid_draft_save_proofs[0]["created_at"] if valid_draft_save_proofs else ""
+            ),
             "active_ebay_identity_connections": len(ebay_identity_rows),
             "mapped_ebay_identity_connections": mapped_ebay_identities,
             "duplicate_ebay_identity_store_count": duplicate_identity_store_count,
@@ -11329,10 +12722,105 @@ def _load_json_field(value: Any) -> Any:
     return json.loads(value)
 
 
+def _canonical_payload_sha256(value: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _exact_draft_execution_claim_binding(
+    *,
+    confirmation: dict[str, Any],
+    expected_binding: dict[str, str] | None,
+) -> dict[str, str]:
+    if not isinstance(expected_binding, dict):
+        return {}
+    item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+    publish_payload = item.get("publish_payload") if isinstance(item.get("publish_payload"), dict) else {}
+    payload_sha256 = _canonical_payload_sha256(publish_payload) if publish_payload else ""
+    required_hashes = (
+        "connection_id_sha256",
+        "credential_ref_sha256",
+        "oauth_request_id_sha256",
+        "seller_identity_sha256",
+    )
+    binding = {
+        "confirmation_id": str(confirmation.get("confirmation_id") or ""),
+        "company_id": str(confirmation.get("company_id") or ""),
+        "store_id": str(confirmation.get("store_id") or ""),
+        "action_type": str(confirmation.get("action_type") or ""),
+        "task_id": str(confirmation.get("task_id") or ""),
+        "idempotency_key": str(expected_binding.get("idempotency_key") or ""),
+        "marketplace_id": str(expected_binding.get("marketplace_id") or ""),
+        "payload_sha256": payload_sha256,
+        "preparation_sha256": str(expected_binding.get("preparation_sha256") or ""),
+        "contract_version": str(expected_binding.get("contract_version") or ""),
+        **{key: str(expected_binding.get(key) or "") for key in required_hashes},
+    }
+    if not (
+        binding["confirmation_id"]
+        and binding["company_id"]
+        and binding["store_id"]
+        and binding["action_type"] == "save_ebay_listing_draft"
+        and binding["task_id"]
+        and binding["idempotency_key"]
+        and re.fullmatch(r"EBAY_[A-Z]{2}", binding["marketplace_id"])
+        and binding["payload_sha256"]
+        and re.fullmatch(r"[0-9a-f]{64}", binding["preparation_sha256"])
+        and binding["contract_version"] == "2026-08-13-unpublished-draft-credential-v1"
+        and str(item.get("publish_payload_sha256") or "") == binding["payload_sha256"]
+        and all(re.fullmatch(r"[0-9a-f]{64}", binding[key]) for key in required_hashes)
+        and all(str(expected_binding.get(key) or "") == value for key, value in binding.items())
+    ):
+        return {}
+    return binding
+
+
+def _is_exact_fresh_draft_execution_confirmation(*, confirmation: dict[str, Any], company_id: str) -> bool:
+    item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+    publish_payload = item.get("publish_payload") if isinstance(item.get("publish_payload"), dict) else {}
+    expected_payload_hash = _canonical_payload_sha256(publish_payload) if publish_payload else ""
+    return bool(
+        str(confirmation.get("store_id") or "")
+        and str(confirmation.get("decided_by") or "")
+        and _timestamp_not_future_within_seconds(
+            _parse_explicit_timezone_iso_datetime(confirmation.get("decided_at")),
+            datetime.now(timezone.utc),
+            15 * 60,
+        )
+        and str(confirmation.get("runtime_run_id") or "") == "merchant_ebay_draft_save_intake"
+        and str(item.get("source") or "") == "merchant_ebay_draft_save_intake"
+        and str(item.get("company_id") or "") == company_id
+        and str(item.get("store_id") or "") == str(confirmation.get("store_id") or "")
+        and item.get("draft_save_capability_requested") is True
+        and item.get("writes_to_ebay_after_approval") is True
+        and item.get("public_publish_enabled") is False
+        and item.get("real_platform_writes_enabled") is False
+        and expected_payload_hash
+        and str(item.get("publish_payload_sha256") or "") == expected_payload_hash
+    )
+
+
 def _public_connection_metadata(value: Any) -> dict[str, Any]:
     metadata = value if isinstance(value, dict) else {}
-    hidden = {"ebay_user_id_hash", "ebay_username_hash", "ebay_eias_identity_hash"}
-    return {key: item for key, item in metadata.items() if key not in hidden}
+    hidden = {
+        "ebay_user_id_hash",
+        "ebay_username_hash",
+        "ebay_eias_identity_hash",
+        "oauth_request_id",
+        "confirmation_id",
+    }
+    public = {key: item for key, item in metadata.items() if key not in hidden}
+    if str(metadata.get("oauth_request_id") or ""):
+        public["oauth_request_bound"] = True
+    if str(metadata.get("confirmation_id") or ""):
+        public["confirmation_bound"] = True
+    return public
 
 
 def _safe_int(value: Any, *, default: int = 0) -> int:
@@ -11478,6 +12966,79 @@ SAFE_SECRET_FLAG_KEYS = {
     "frontend_gets_payment_secret",
     "raw_provider_response_persisted",
 }
+
+
+_UNPUBLISHED_DRAFT_CLAIM_MINT_TOKEN = object()
+
+
+class UnpublishedDraftClaimCapability:
+    """Opaque process-local proof that a DB-backed claim was created."""
+
+    __slots__ = (
+        "_claim_id",
+        "_nonce",
+        "_binding",
+        "_repository",
+        "_minted",
+        "_terminal_status",
+    )
+
+    def __init__(
+        self,
+        *,
+        claim_id: str,
+        nonce: bytes,
+        binding: dict[str, str],
+        repository: SaaSRepository | None = None,
+        mint_token: object | None = None,
+    ) -> None:
+        self._claim_id = claim_id
+        self._nonce = bytes(nonce)
+        self._binding = dict(binding)
+        self._repository = repository
+        self._minted = mint_token is _UNPUBLISHED_DRAFT_CLAIM_MINT_TOKEN
+        self._terminal_status = "active"
+
+    def claim_binding(self) -> dict[str, str]:
+        """Return value-free binding fields for backend adapter validation."""
+
+        return dict(self._binding) if self._minted else {}
+
+    def consume(self) -> dict[str, Any]:
+        """Consume this DB-backed capability exactly once."""
+
+        if not self._minted or self._repository is None:
+            raise ConfirmationDecisionConflict("external_execution_claim_capability_invalid")
+        consumed = self._repository.consume_unpublished_draft_execution_claim(capability=self)
+        self._terminal_status = "consumed"
+        return consumed
+
+    def abort(self, *, reason_code: str = "prewrite_check_blocked") -> dict[str, Any]:
+        """Abort a still-unconsumed claim without recording an eBay write."""
+
+        if not self._minted or self._repository is None:
+            raise ConfirmationDecisionConflict("external_execution_claim_capability_invalid")
+        aborted = self._repository.abort_unpublished_draft_execution_claim(
+            capability=self,
+            reason_code=reason_code,
+        )
+        self._terminal_status = "aborted"
+        return aborted
+
+    def was_consumed(self) -> bool:
+        """Return only the value-free terminal state of this process-local capability."""
+
+        return bool(self._minted and self._terminal_status == "consumed")
+
+    def __repr__(self) -> str:
+        return "UnpublishedDraftClaimCapability(<redacted>)"
+
+    def __reduce__(self) -> Any:
+        raise TypeError("unpublished_draft_claim_capability_not_serializable")
+
+    def __reduce_ex__(self, protocol: int) -> Any:
+        del protocol
+        raise TypeError("unpublished_draft_claim_capability_not_serializable")
 
 
 def _runtime_confirmation_matches(
@@ -12990,6 +14551,7 @@ def _is_successful_claimed_external_execution(
 ) -> bool:
     terminal_statuses = {
         "publish_listing": {"published_to_ebay"},
+        "save_ebay_listing_draft": {"saved_to_ebay_draft"},
         "cleanup_test_listing": {"completed", "cleanup_completed", "ended_listing", "deleted_test_listing"},
     }
     action_type = str(confirmation.get("action_type") or "")

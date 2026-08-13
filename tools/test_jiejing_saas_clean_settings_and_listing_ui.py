@@ -41,7 +41,7 @@ def main() -> None:
     require(app_js, "renderSaasSettingsCleanLayout(ctx", "settings render path")
     require(app_js, 'read_only_pending: "等待只读连接"', "merchant-readable pending eBay state")
     require(app_js, "连接只读数据", "clear eBay read-only connection action")
-    require(app_js, "开通发布权限", "clear eBay publish permission action")
+    require(app_js, "开通草稿权限", "clear eBay unpublished-draft permission action")
     require(app_js, 'detail: "角色 / 审批"', "team permissions navigation label")
     require(app_js, 'const connectionReady = isSaasAuthorizedConnectionStatus(connectionStatus);', "store data connection gate")
     require(app_js, "function trustedJiejingHtml", "trusted HTML sink guard")

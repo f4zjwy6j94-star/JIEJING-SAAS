@@ -49,7 +49,7 @@ ALLOWED_STEP_KEYS = {
     "storeMap",
     "teamPermission",
 }
-AUTHORIZED_CONNECTION_STATUSES = {"read_only_authorized", "publish_authorized", "authorized", "connected"}
+AUTHORIZED_CONNECTION_STATUSES = {"read_only_authorized", "draft_save_authorized", "publish_authorized", "authorized", "connected"}
 ACCOUNT_REVIEW_STATUSES = {"unknown", "restricted", "suspended", "payout_hold", "quota_limited"}
 DERIVED_INPUT_KEYS = {
     "contract_version",

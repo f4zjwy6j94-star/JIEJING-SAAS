@@ -45,6 +45,11 @@ def _authorized_connection() -> list[dict[str, object]]:
     ]
 
 
+def _draft_authorized_connection() -> list[dict[str, object]]:
+    connection = _authorized_connection()[0]
+    return [{**connection, "status": "draft_save_authorized"}]
+
+
 def _health(
     *,
     status: str = "normal",
@@ -95,6 +100,18 @@ def main() -> int:
         return fail(f"authorized connection without account evidence should request a read-only check: {needs_snapshot}")
     if needs_snapshot.get("oauth_required") is not False:
         return fail(f"authorized connection must suppress repeat OAuth: {needs_snapshot}")
+    draft_upgrade_snapshot = build_merchant_onboarding_read_model(
+        progress=returned,
+        connections=_draft_authorized_connection(),
+    )
+    if (
+        draft_upgrade_snapshot.get("effective_stage") != "read_only_check_required"
+        or draft_upgrade_snapshot.get("oauth_required") is not False
+    ):
+        return fail(
+            "a draft-save authorization upgrade must preserve the existing onboarding connection: "
+            f"{draft_upgrade_snapshot}"
+        )
 
     registration_incomplete = build_merchant_onboarding_read_model(
         progress=returned,

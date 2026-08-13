@@ -11,7 +11,7 @@ import sys
 import threading
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +22,8 @@ if str(ROOT) not in sys.path:
 
 from jiejing_saas.config import SaaSSettings  # noqa: E402
 from jiejing_saas.commercial_launch_gate import build_commercial_launch_gate  # noqa: E402
-from jiejing_saas.ebay_oauth import EbayOAuthPlanner  # noqa: E402
+from jiejing_saas.api_server import SaaSBackendHandler  # noqa: E402
+from jiejing_saas.ebay_oauth import EbayOAuthPlanner, UNPUBLISHED_DRAFT_SCOPES  # noqa: E402
 from jiejing_saas.ebay_oauth_callback import process_ebay_oauth_callback  # noqa: E402
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
 from jiejing_saas.secret_store import SecretStoreBoundary  # noqa: E402
@@ -79,6 +80,18 @@ def main() -> int:
         local_result = _run_local_secret_resolver_callback(local_secret_path=local_secret_path)
         if local_result != "ok":
             return fail(local_result)
+
+        draft_scope_result = _run_unpublished_draft_actual_scope_boundary()
+        if draft_scope_result != "ok":
+            return fail(draft_scope_result)
+
+        draft_upgrade_result = _run_unpublished_draft_same_seller_upgrade()
+        if draft_upgrade_result != "ok":
+            return fail(draft_upgrade_result)
+
+        retired_publish_result = _run_retired_publish_profile_callback_blocked()
+        if retired_publish_result != "ok":
+            return fail(retired_publish_result)
 
         concurrent_result = _run_same_state_callback_exactly_once(
             local_secret_path=OUT / "concurrent-local-secret-resolver.json"
@@ -620,6 +633,269 @@ def _run_same_state_callback_exactly_once(*, local_secret_path: Path) -> str:
     return "ok"
 
 
+def _run_unpublished_draft_actual_scope_boundary() -> str:
+    _clear_env()
+    _base_oauth_env(environment="local_dev")
+    os.environ["JIEJING_EBAY_CLIENT_SECRET"] = "CALLBACK-CLIENT-SECRET-MUST-NOT-LEAK"
+    os.environ["JIEJING_VAULT_LOCAL_SECRET_RESOLVER_ENABLED"] = "true"
+    missing_secret_path = OUT / "draft-missing-scope-secrets.json"
+    os.environ["JIEJING_VAULT_LOCAL_SECRET_STORE_PATH"] = str(missing_secret_path)
+    missing_secret_path.unlink(missing_ok=True)
+    settings, repo, store, request = _seed_unpublished_draft_oauth_request(
+        case_key="draft-missing-granted-scope",
+        port=8831,
+    )
+    missing = process_ebay_oauth_callback(
+        repository=repo,
+        settings=settings,
+        secret_store_boundary=SecretStoreBoundary(settings),
+        ebay_oauth_planner=EbayOAuthPlanner(settings),
+        state=request["state_nonce"],
+        code="UNIT_DRAFT_AUTH_CODE_MISSING_SCOPE",
+        error="",
+        oauth_transport=_fake_oauth_transport(
+            access_token="CALLBACK-ACCESS-TOKEN-MUST-NOT-LEAK",
+            refresh_token="CALLBACK-REFRESH-TOKEN-MUST-NOT-LEAK",
+        ),
+    )
+    if missing.get("status") != "callback_exchange_granted_scope_blocked":
+        return "draft OAuth callback must fail closed when token response omits actual granted scope"
+    if repo.list_secret_refs(company_id=store["company_id"], store_id=store["store_id"]):
+        return "missing draft granted scope must block before secret_ref/Vault persistence"
+    if repo.list_connections(company_id=store["company_id"], store_id=store["store_id"]):
+        return "missing draft granted scope must block before connection creation"
+
+    granted_secret_path = OUT / "draft-granted-scope-secrets.json"
+    os.environ["JIEJING_VAULT_LOCAL_SECRET_STORE_PATH"] = str(granted_secret_path)
+    granted_secret_path.unlink(missing_ok=True)
+    settings, repo, store, request = _seed_unpublished_draft_oauth_request(
+        case_key="draft-exact-granted-scope",
+        port=8832,
+    )
+    granted = process_ebay_oauth_callback(
+        repository=repo,
+        settings=settings,
+        secret_store_boundary=SecretStoreBoundary(settings),
+        ebay_oauth_planner=EbayOAuthPlanner(settings),
+        state=request["state_nonce"],
+        code="UNIT_DRAFT_AUTH_CODE_EXACT_SCOPE",
+        error="",
+        oauth_transport=_fake_oauth_transport(
+            access_token="CALLBACK-ACCESS-TOKEN-MUST-NOT-LEAK",
+            refresh_token="CALLBACK-REFRESH-TOKEN-MUST-NOT-LEAK",
+            granted_scopes=UNPUBLISHED_DRAFT_SCOPES,
+        ),
+    )
+    if granted.get("status") != "callback_exchange_completed":
+        return "exact actual draft scope must complete callback"
+    connection = granted.get("connection") if isinstance(granted.get("connection"), dict) else {}
+    metadata = connection.get("metadata") if isinstance(connection.get("metadata"), dict) else {}
+    public_result = SaaSBackendHandler._oauth_callback_public_result(object(), granted)
+    persisted_request = repo.get_oauth_authorization_request_by_state(state_nonce=request["state_nonce"]) or {}
+    internal_boundary = repo.unpublished_draft_execution_credential_boundary(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+    )
+    if connection.get("status") != "draft_save_authorized":
+        return "draft OAuth callback must create draft_save_authorized, never publish_authorized"
+    if not (
+        granted.get("draft_save_scope_authorized") is True
+        and granted.get("publish_scope_authorized") is False
+        and metadata.get("authorization_kind") == "unpublished_draft"
+        and metadata.get("scope_profile") == "seller_unpublished_draft"
+        and "confirmation_id" not in metadata
+        and "oauth_request_id" not in metadata
+        and metadata.get("confirmation_bound") is True
+        and metadata.get("oauth_request_bound") is True
+        and connection.get("secret_ref")
+        and persisted_request.get("status") == "callback_exchange_completed"
+        and (persisted_request.get("request") or {}).get("confirmation_id")
+        and (persisted_request.get("request") or {}).get("scope_profile") == "seller_unpublished_draft"
+        and internal_boundary.get("ready") is True
+        and internal_boundary.get("connection_status") == "draft_save_authorized"
+        and internal_boundary.get("authorization_kind") == "unpublished_draft"
+        and internal_boundary.get("connection_id") == connection.get("connection_id")
+        and internal_boundary.get("secret_ref") == connection.get("secret_ref")
+        and internal_boundary.get("oauth_request_id") == request.get("oauth_request_id")
+        and internal_boundary.get("confirmation_id") == (request.get("request") or {}).get("confirmation_id")
+        and internal_boundary.get("seller_identity_hash")
+        and internal_boundary.get("state_nonce") == request.get("state_nonce")
+        and internal_boundary.get("oauth_request_status") == "callback_exchange_completed"
+        and public_result.get("authorization_kind") == "unpublished_draft"
+        and metadata.get("public_publish_enabled") is False
+        and metadata.get("real_platform_writes_enabled") is False
+    ):
+        return (
+            "draft callback result/connection metadata must preserve draft-only authorization semantics; "
+            f"public_kind={public_result.get('authorization_kind')}; "
+            f"boundary_ready={internal_boundary.get('ready')}; "
+            f"boundary_code={internal_boundary.get('code')}; "
+            f"request_status={persisted_request.get('status')}; "
+            f"public_request_hidden={'oauth_request_id' not in metadata}; "
+            f"public_confirmation_hidden={'confirmation_id' not in metadata}"
+        )
+    return "ok"
+
+
+def _run_unpublished_draft_same_seller_upgrade() -> str:
+    _clear_env()
+    _base_oauth_env(environment="local_dev")
+    os.environ["JIEJING_EBAY_CLIENT_SECRET"] = "CALLBACK-CLIENT-SECRET-MUST-NOT-LEAK"
+    secret_path = OUT / "draft-same-seller-upgrade-secrets.json"
+    os.environ["JIEJING_VAULT_LOCAL_SECRET_RESOLVER_ENABLED"] = "true"
+    os.environ["JIEJING_VAULT_LOCAL_SECRET_STORE_PATH"] = str(secret_path)
+    secret_path.unlink(missing_ok=True)
+    settings, repo, store, read_request = _seed_oauth_request(case_key="draft-same-seller-upgrade", port=8834)
+    read_result = process_ebay_oauth_callback(
+        repository=repo,
+        settings=settings,
+        secret_store_boundary=SecretStoreBoundary(settings),
+        ebay_oauth_planner=EbayOAuthPlanner(settings),
+        state=read_request["state_nonce"],
+        code="UNIT_READ_AUTH_CODE_BEFORE_DRAFT",
+        error="",
+        oauth_transport=_fake_oauth_transport(
+            access_token="CALLBACK-ACCESS-TOKEN-MUST-NOT-LEAK",
+            refresh_token="CALLBACK-REFRESH-TOKEN-MUST-NOT-LEAK",
+        ),
+    )
+    if read_result.get("status") != "callback_exchange_completed":
+        return "read-only callback fixture must complete before draft upgrade"
+    old_connection_id = str((read_result.get("connection") or {}).get("connection_id") or "")
+    old_secret_ref = str((read_result.get("secret_ref") or {}).get("secret_ref") or "")
+
+    draft_plan = EbayOAuthPlanner(settings).unpublished_draft_authorization_plan(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+        user_id=store["user_id"],
+        marketplace_id="EBAY_US",
+        requested_scopes=UNPUBLISHED_DRAFT_SCOPES,
+    )
+    draft_request = repo.create_oauth_authorization_request(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+        user_id=store["user_id"],
+        plan=draft_plan,
+    )
+    upgraded = process_ebay_oauth_callback(
+        repository=repo,
+        settings=settings,
+        secret_store_boundary=SecretStoreBoundary(settings),
+        ebay_oauth_planner=EbayOAuthPlanner(settings),
+        state=draft_request["state_nonce"],
+        code="UNIT_DRAFT_AUTH_CODE_SAME_SELLER",
+        error="",
+        oauth_transport=_fake_oauth_transport(
+            access_token="CALLBACK-ACCESS-TOKEN-MUST-NOT-LEAK",
+            refresh_token="CALLBACK-REFRESH-TOKEN-MUST-NOT-LEAK",
+            granted_scopes=UNPUBLISHED_DRAFT_SCOPES,
+        ),
+    )
+    if upgraded.get("status") != "callback_exchange_completed":
+        return "same-store same-seller draft upgrade must complete"
+    connections = repo.list_connections(company_id=store["company_id"], store_id=store["store_id"])
+    active = [
+        item
+        for item in connections
+        if item.get("status") in {"read_only_authorized", "draft_save_authorized", "publish_authorized"}
+    ]
+    if len(active) != 1 or active[0].get("status") != "draft_save_authorized":
+        return "same-seller scope upgrade must leave exactly one active draft connection"
+    retired = next((item for item in connections if item.get("connection_id") == old_connection_id), {})
+    if retired.get("status") != "oauth_scope_superseded":
+        return "same-seller scope upgrade must atomically retire the old read-only connection"
+    old_ref = repo.get_secret_ref(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+        secret_ref=old_secret_ref,
+    ) or {}
+    if old_ref.get("status") != "oauth_scope_superseded":
+        return "same-seller scope upgrade must atomically retire the old refresh secret reference"
+
+    second_plan = EbayOAuthPlanner(settings).unpublished_draft_authorization_plan(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+        user_id=store["user_id"],
+        marketplace_id="EBAY_US",
+        requested_scopes=UNPUBLISHED_DRAFT_SCOPES,
+    )
+    second_request = repo.create_oauth_authorization_request(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+        user_id=store["user_id"],
+        plan=second_plan,
+    )
+    ref_count_before = len(repo.list_secret_refs(company_id=store["company_id"], store_id=store["store_id"]))
+    wrong_seller = process_ebay_oauth_callback(
+        repository=repo,
+        settings=settings,
+        secret_store_boundary=SecretStoreBoundary(settings),
+        ebay_oauth_planner=EbayOAuthPlanner(settings),
+        state=second_request["state_nonce"],
+        code="UNIT_DRAFT_AUTH_CODE_WRONG_SELLER",
+        error="",
+        oauth_transport=_fake_oauth_transport(
+            access_token="CALLBACK-ACCESS-TOKEN-MUST-NOT-LEAK",
+            refresh_token="CALLBACK-REFRESH-TOKEN-MUST-NOT-LEAK",
+            granted_scopes=UNPUBLISHED_DRAFT_SCOPES,
+            ebay_user_id="DIFFERENT-CALLBACK-USER-MUST-NOT-LEAK",
+        ),
+    )
+    if wrong_seller.get("status") != "callback_exchange_seller_identity_blocked":
+        return "draft upgrade must fail closed when the seller identity differs from the current store connection"
+    if len(repo.list_secret_refs(company_id=store["company_id"], store_id=store["store_id"])) != ref_count_before:
+        return "wrong-seller draft upgrade must block before new secret_ref/Vault persistence"
+    return "ok"
+
+
+def _run_retired_publish_profile_callback_blocked() -> str:
+    _clear_env()
+    _base_oauth_env(environment="local_dev")
+    settings, repo, store, _request = _seed_oauth_request(case_key="retired-publish-profile", port=8828)
+    with sqlite3.connect(settings.db_path) as conn:
+        conn.execute("delete from audit_logs")
+        conn.execute("delete from oauth_authorization_requests")
+    plan = EbayOAuthPlanner(settings).publish_authorization_plan(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+        user_id=store["user_id"],
+        marketplace_id="EBAY_US",
+    )
+    request = repo.create_oauth_authorization_request(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+        user_id=store["user_id"],
+        plan=plan,
+    )
+    exchange_seen = {"value": False}
+
+    def forbidden_transport(request_obj: Any, timeout: float) -> tuple[int, dict[str, str], bytes]:
+        del request_obj, timeout
+        exchange_seen["value"] = True
+        return 500, {}, b""
+
+    result = process_ebay_oauth_callback(
+        repository=repo,
+        settings=settings,
+        secret_store_boundary=SecretStoreBoundary(settings),
+        ebay_oauth_planner=EbayOAuthPlanner(settings),
+        state=request["state_nonce"],
+        code="RETIRED_PUBLISH_CODE_MUST_NOT_EXCHANGE",
+        error="",
+        oauth_transport=forbidden_transport,
+    )
+    if (
+        result.get("status") != "blocked_retired_oauth_profile"
+        or exchange_seen["value"]
+        or result.get("token_exchange_performed") is not False
+        or result.get("vault_write_performed") is not False
+    ):
+        return "a historical seller_publish_listing callback must be retired before token/Vault work"
+    if repo.list_connections(company_id=store["company_id"], store_id=store["store_id"]):
+        return "a retired publish callback must never create a platform connection"
+    return "ok"
+
+
 def _run_exchange_crash_requires_manual_reconcile() -> str:
     _clear_env()
     _base_oauth_env(environment="local_dev")
@@ -722,6 +998,39 @@ def _run_expired_state_blocked(*, local_secret_path: Path) -> str:
     refetched = repo.get_oauth_authorization_request_by_state(state_nonce=request["state_nonce"])
     if not refetched or refetched.get("status") != "blocked_invalid_expired_state":
         return "expired callback state should be recorded as expired"
+
+    invalid_times = {
+        "naive": datetime.now().replace(microsecond=0).isoformat(),
+        "future": (datetime.now(timezone.utc) + timedelta(minutes=5)).replace(microsecond=0).isoformat(),
+    }
+    for label, created_at in invalid_times.items():
+        settings, repo, _store, request = _seed_oauth_request(case_key=f"{label}-state", port=8833)
+        with sqlite3.connect(settings.db_path) as conn:
+            conn.execute(
+                "update oauth_authorization_requests set created_at = ?, updated_at = ? where oauth_request_id = ?",
+                (created_at, created_at, request["oauth_request_id"]),
+            )
+        exchange_seen = {"value": False}
+
+        def invalid_state_transport(request_obj: Any, timeout: float) -> tuple[int, dict[str, str], bytes]:
+            exchange_seen["value"] = True
+            return _oauth_response(
+                access_token="CALLBACK-ACCESS-TOKEN-MUST-NOT-LEAK",
+                refresh_token="CALLBACK-REFRESH-TOKEN-MUST-NOT-LEAK",
+            )
+
+        invalid = process_ebay_oauth_callback(
+            repository=repo,
+            settings=settings,
+            secret_store_boundary=SecretStoreBoundary(settings),
+            ebay_oauth_planner=EbayOAuthPlanner(settings),
+            state=request["state_nonce"],
+            code=f"UNIT_AUTH_CODE_{label.upper()}",
+            error="",
+            oauth_transport=invalid_state_transport,
+        )
+        if invalid.get("status") != "blocked_invalid_expired_state" or exchange_seen["value"]:
+            return f"{label} callback state must fail closed before token exchange"
     return "ok"
 
 
@@ -920,6 +1229,45 @@ def _seed_oauth_request(*, case_key: str, port: int) -> tuple[SaaSSettings, SaaS
     return settings, repo, {**store, "company_id": company_id, "user_id": user_id}, request
 
 
+def _seed_unpublished_draft_oauth_request(
+    *,
+    case_key: str,
+    port: int,
+) -> tuple[SaaSSettings, SaaSRepository, dict[str, Any], dict[str, Any]]:
+    settings, repo, store, _request = _seed_oauth_request(case_key=case_key, port=port)
+    with sqlite3.connect(settings.db_path) as conn:
+        conn.execute("delete from audit_logs")
+        conn.execute("delete from oauth_authorization_requests")
+    plan = EbayOAuthPlanner(settings).unpublished_draft_authorization_plan(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+        user_id=store["user_id"],
+        marketplace_id="EBAY_US",
+        requested_scopes=UNPUBLISHED_DRAFT_SCOPES,
+    )
+    confirmation = repo.create_unpublished_draft_oauth_confirmation(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+        user_id=store["user_id"],
+    )
+    confirmation = repo.decide_confirmation(
+        company_id=store["company_id"],
+        confirmation_id=confirmation["confirmation_id"],
+        decided_by=store["user_id"],
+        decision="approve",
+        note="Focused exact draft OAuth callback fixture.",
+    )
+    plan["confirmation_id"] = confirmation["confirmation_id"]
+    request = repo.create_approved_unpublished_draft_oauth_authorization_request(
+        company_id=store["company_id"],
+        store_id=store["store_id"],
+        user_id=store["user_id"],
+        confirmation_id=confirmation["confirmation_id"],
+        plan=plan,
+    )
+    return settings, repo, store, request
+
+
 def _base_oauth_env(*, environment: str) -> None:
     os.environ["JIEJING_SAAS_ENV"] = environment
     os.environ["JIEJING_EBAY_CLIENT_ID"] = "CALLBACK-CLIENT-ID"
@@ -927,7 +1275,13 @@ def _base_oauth_env(*, environment: str) -> None:
     os.environ["JIEJING_EBAY_OAUTH_EXCHANGE_LIVE"] = "true"
 
 
-def _fake_oauth_transport(*, access_token: str, refresh_token: str) -> Any:
+def _fake_oauth_transport(
+    *,
+    access_token: str,
+    refresh_token: str,
+    granted_scopes: list[str] | None = None,
+    ebay_user_id: str = "CALLBACK-IMMUTABLE-USER-MUST-NOT-LEAK",
+) -> Any:
     def transport(request_obj: Any, timeout: float) -> tuple[int, dict[str, str], bytes]:
         if request_obj.get_method() == "GET" and request_obj.full_url.endswith("/commerce/identity/v1/user/"):
             if request_obj.get_header("Authorization") != f"Bearer {access_token}":
@@ -937,7 +1291,7 @@ def _fake_oauth_transport(*, access_token: str, refresh_token: str) -> Any:
                 {"content-type": "application/json"},
                 json.dumps(
                     {
-                        "userId": "CALLBACK-IMMUTABLE-USER-MUST-NOT-LEAK",
+                        "userId": ebay_user_id,
                         "username": "CALLBACK-USERNAME-MUST-NOT-LEAK",
                         "registrationMarketplaceId": "EBAY_US",
                         "accountType": "INDIVIDUAL",
@@ -947,23 +1301,33 @@ def _fake_oauth_transport(*, access_token: str, refresh_token: str) -> Any:
             )
         if request_obj.get_method() != "POST" or "/identity/v1/oauth2/token" not in request_obj.full_url:
             return 404, {"content-type": "application/json"}, b'{"error":"missing"}'
-        return _oauth_response(access_token=access_token, refresh_token=refresh_token)
+        return _oauth_response(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            granted_scopes=granted_scopes,
+        )
 
     return transport
 
 
-def _oauth_response(*, access_token: str, refresh_token: str) -> tuple[int, dict[str, str], bytes]:
+def _oauth_response(
+    *,
+    access_token: str,
+    refresh_token: str,
+    granted_scopes: list[str] | None = None,
+) -> tuple[int, dict[str, str], bytes]:
+    payload = {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "expires_in": 7200,
+        "refresh_token_expires_in": 47304000,
+    }
+    if granted_scopes is not None:
+        payload["scope"] = " ".join(granted_scopes)
     return (
         200,
         {"content-type": "application/json"},
-        json.dumps(
-            {
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-                "expires_in": 7200,
-                "refresh_token_expires_in": 47304000,
-            }
-        ).encode("utf-8"),
+        json.dumps(payload).encode("utf-8"),
     )
 
 

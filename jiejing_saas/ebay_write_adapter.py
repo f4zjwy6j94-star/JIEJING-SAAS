@@ -9,8 +9,11 @@ get their own adapter and tests.
 from __future__ import annotations
 
 import html
+import hashlib
 import json
 import re
+import secrets
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -18,6 +21,7 @@ from typing import Any
 
 from .config import SaaSSettings
 from .ebay_http_client import EbayReadOnlyHttpClient, HttpTransport, _urlopen_transport
+from .ebay_oauth import UNPUBLISHED_DRAFT_SCOPES
 
 
 WRITE_ACTIONS = [
@@ -153,6 +157,7 @@ WRITE_ACTIONS = [
 def build_ebay_write_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
     requested_enabled = bool(settings.requested_real_platform_writes)
     live_enabled = bool(settings.effective_real_platform_writes_enabled)
+    draft_live_enabled = bool(settings.effective_ebay_draft_save_enabled)
     blockers = []
     if not requested_enabled:
         blockers.append("JIEJING_ENABLE_REAL_PLATFORM_WRITES")
@@ -169,12 +174,19 @@ def build_ebay_write_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
         "version": "2026-07-14-draft-save-v2",
         "enabled": live_enabled,
         "real_platform_writes_enabled": live_enabled,
+        "draft_save_live_enabled": draft_live_enabled,
         "requested_enabled": requested_enabled,
-        "writes_supported": live_enabled,
-        "contract_only": not live_enabled,
+        "writes_supported": live_enabled or draft_live_enabled,
+        "contract_only": not (live_enabled or draft_live_enabled),
         "blocked_by": blockers,
         "actions": WRITE_ACTIONS,
-        "live_actions_supported": ["save_ebay_listing_draft", "publish_listing"] if live_enabled else [],
+        "live_actions_supported": (
+            ["save_ebay_listing_draft", "publish_listing"]
+            if live_enabled
+            else ["save_ebay_listing_draft"]
+            if draft_live_enabled
+            else []
+        ),
         "live_actions_not_supported": [
             "revise_listing",
             "change_price",
@@ -576,12 +588,77 @@ def build_publish_readiness(
     }
 
 
+class _DraftPreparationState:
+    """Private request-local state; deliberately not a dataclass/serializer."""
+
+    __slots__ = (
+        "company_id",
+        "store_id",
+        "marketplace_id",
+        "sku",
+        "access_token",
+        "token_source",
+        "inventory_body_json",
+        "offer_body_json",
+        "expected_offer_id",
+        "expected_offer_fingerprint",
+        "inspection_steps",
+        "payload_sha256",
+        "confirmation_id",
+        "task_id",
+        "idempotency_key",
+        "prepared_at_epoch",
+        "credential_binding_items",
+        "preparation_sha256",
+    )
+
+    def __init__(self, **values: Any) -> None:
+        for name in self.__slots__:
+            object.__setattr__(self, name, values[name])
+
+    def __repr__(self) -> str:
+        return "_DraftPreparationState(<redacted>)"
+
+    def __reduce__(self) -> Any:
+        raise TypeError("prepared_ebay_draft_state_not_serializable")
+
+    def __reduce_ex__(self, protocol: int) -> Any:
+        del protocol
+        raise TypeError("prepared_ebay_draft_state_not_serializable")
+
+
+class _DraftPreparationHandle:
+    """Opaque process-local handle; prepared token and bodies stay in adapter memory."""
+
+    __slots__ = ("_handle", "_safe_binding")
+
+    def __init__(self, *, handle: str, safe_binding: dict[str, str]) -> None:
+        self._handle = handle
+        self._safe_binding = dict(safe_binding)
+
+    def claim_binding(self) -> dict[str, str]:
+        return dict(self._safe_binding)
+
+    def __repr__(self) -> str:
+        return "_DraftPreparationHandle(<redacted>)"
+
+    def __reduce__(self) -> Any:
+        raise TypeError("prepared_ebay_draft_save_not_serializable")
+
+    def __reduce_ex__(self, protocol: int) -> Any:
+        del protocol
+        raise TypeError("prepared_ebay_draft_save_not_serializable")
+
+
 class EbayWriteHttpAdapter:
     """Executes confirmed eBay publish writes behind the SaaS backend."""
 
     def __init__(self, settings: SaaSSettings, *, transport: HttpTransport | None = None) -> None:
         self.settings = settings
         self.transport = transport or _urlopen_transport
+        self._draft_prepare_nonce = secrets.token_urlsafe(32)
+        self._draft_prepare_lock = __import__("threading").Lock()
+        self._draft_prepared_registry: dict[str, _DraftPreparationState] = {}
 
     def publish_listing(
         self,
@@ -706,12 +783,35 @@ class EbayWriteHttpAdapter:
         secret_refs: list[dict[str, Any]],
         marketplace_id: str,
     ) -> dict[str, Any]:
-        """Save an unpublished Inventory API offer; never calls publishOffer."""
+        """Retired unsafe seam: callers must use prepare -> repository claim -> execute."""
+
+        del request, connections, secret_refs, marketplace_id
+        return _draft_blocked(
+            "draft_prepare_claim_execute_required",
+            ["repository_claim_capability_required"],
+            preflight=preflight,
+        )
+
+    def prepare_listing_draft(
+        self,
+        *,
+        request: Any,
+        preflight: dict[str, Any],
+        credential_boundary: dict[str, Any],
+        marketplace_id: str,
+    ) -> _DraftPreparationHandle | dict[str, Any]:
+        """Perform every deterministic check and the read-only offer lookup."""
 
         action_type = str(getattr(request, "action_type", "") or "")
-        if not self.settings.effective_real_platform_writes_enabled:
-            return _draft_blocked("real_platform_writes_disabled", ["JIEJING_ENABLE_REAL_PLATFORM_WRITES_OR_JIEJING_EBAY_WRITE_LIVE"])
-        if action_type not in {"save_ebay_listing_draft", "save_ebay_draft"}:
+        if not (
+            self.settings.effective_ebay_draft_save_enabled
+            or self.settings.effective_real_platform_writes_enabled
+        ):
+            return _draft_blocked(
+                "ebay_draft_save_disabled",
+                ["JIEJING_EBAY_DRAFT_SAVE_LIVE"],
+            )
+        if action_type != "save_ebay_listing_draft":
             return _draft_blocked("unsupported_write_action", ["only_save_ebay_listing_draft_supported"])
         if preflight.get("status") != "ready_for_platform_adapter":
             return _draft_blocked(
@@ -720,11 +820,20 @@ class EbayWriteHttpAdapter:
                 preflight=preflight,
             )
 
-        connection = _find_publish_connection(connections)
-        if not connection:
-            return _draft_blocked("ebay_inventory_scope_missing", ["seller_must_authorize_sell.inventory_scope"], preflight=preflight)
+        credential = _validated_unpublished_draft_credential_boundary(
+            credential_boundary=credential_boundary,
+            company_id=str(getattr(request, "company_id", "") or ""),
+            store_id=str(getattr(request, "store_id", "") or ""),
+        )
+        if not credential:
+            return _draft_blocked(
+                "ebay_draft_connection_boundary_not_ready",
+                ["exact_unique_unpublished_draft_connection_and_secret_required"],
+                preflight=preflight,
+            )
 
-        secret_ref_id = str(connection.get("secret_ref") or _first_secret_ref(secret_refs) or "")
+        connection = credential["connection"]
+        secret_ref_id = str(connection["secret_ref"])
         token = self._resolve_access_token(
             secret_ref_id=secret_ref_id,
             company_id=str(getattr(request, "company_id", "") or ""),
@@ -778,6 +887,162 @@ class EbayWriteHttpAdapter:
             )
 
         existing_offer = _unpublished_offer(offers, marketplace_id=marketplace_id)
+        existing_offer_id = str((existing_offer or {}).get("offer_id") or "")
+        binding_items = tuple(sorted({
+            "contract_version": "2026-08-13-unpublished-draft-credential-v1",
+            "connection_id_sha256": credential["connection_id_sha256"],
+            "credential_ref_sha256": credential["credential_ref_sha256"],
+            "oauth_request_id_sha256": credential["oauth_request_id_sha256"],
+            "seller_identity_sha256": credential["seller_identity_sha256"],
+        }.items()))
+        preparation_data = {
+            "company_id": str(getattr(request, "company_id", "") or ""),
+            "store_id": str(getattr(request, "store_id", "") or ""),
+            "marketplace_id": marketplace_id,
+            "sku": sku,
+            "payload_sha256": _draft_payload_sha256(payload),
+            "confirmation_id": str(getattr(request, "confirmation_id", "") or ""),
+            "task_id": str(getattr(request, "task_id", "") or ""),
+            "idempotency_key": str(getattr(request, "idempotency_key", "") or ""),
+            "credential_binding": binding_items,
+            "offer_fingerprint": _offer_snapshot_fingerprint(offers),
+        }
+        preparation_sha256 = hashlib.sha256(_canonical_json_bytes(preparation_data)).hexdigest()
+        handle = secrets.token_urlsafe(32)
+        state = _DraftPreparationState(
+            company_id=str(getattr(request, "company_id", "") or ""),
+            store_id=str(getattr(request, "store_id", "") or ""),
+            marketplace_id=marketplace_id,
+            sku=sku,
+            access_token=access_token,
+            token_source=str(token.get("source") or ""),
+            inventory_body_json=_canonical_json_bytes(inventory_body),
+            offer_body_json=_canonical_json_bytes(offer_body),
+            expected_offer_id=existing_offer_id,
+            expected_offer_fingerprint=_offer_snapshot_fingerprint(offers),
+            inspection_steps=tuple(steps),
+            payload_sha256=_draft_payload_sha256(payload),
+            confirmation_id=str(getattr(request, "confirmation_id", "") or ""),
+            task_id=str(getattr(request, "task_id", "") or ""),
+            idempotency_key=str(getattr(request, "idempotency_key", "") or ""),
+            prepared_at_epoch=time.time(),
+            credential_binding_items=binding_items,
+            preparation_sha256=preparation_sha256,
+        )
+        with self._draft_prepare_lock:
+            self._draft_prepared_registry[handle] = state
+        return _DraftPreparationHandle(
+            handle=handle,
+            safe_binding={
+                "confirmation_id": state.confirmation_id,
+                "company_id": state.company_id,
+                "store_id": state.store_id,
+                "action_type": "save_ebay_listing_draft",
+                "task_id": state.task_id,
+                "idempotency_key": state.idempotency_key,
+                "marketplace_id": state.marketplace_id,
+                "payload_sha256": state.payload_sha256,
+                "preparation_sha256": state.preparation_sha256,
+                **dict(state.credential_binding_items),
+            },
+        )
+
+    def execute_prepared_listing_draft(
+        self,
+        *,
+        request: Any,
+        preflight: dict[str, Any],
+        prepared: _DraftPreparationHandle,
+        claim_capability: Any,
+        marketplace_id: str,
+    ) -> dict[str, Any]:
+        """Write only with a repository-minted, one-shot claim capability."""
+
+        with self._draft_prepare_lock:
+            state = self._draft_prepared_registry.pop(getattr(prepared, "_handle", ""), None)
+        payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
+        binding_valid = bool(
+            isinstance(prepared, _DraftPreparationHandle)
+            and isinstance(state, _DraftPreparationState)
+            and str(getattr(request, "action_type", "") or "") == "save_ebay_listing_draft"
+            and state.company_id == str(getattr(request, "company_id", "") or "")
+            and state.store_id == str(getattr(request, "store_id", "") or "")
+            and state.marketplace_id == marketplace_id
+            and state.payload_sha256 == _draft_payload_sha256(payload)
+            and state.confirmation_id == str(getattr(request, "confirmation_id", "") or "")
+            and state.task_id == str(getattr(request, "task_id", "") or "")
+            and state.idempotency_key == str(getattr(request, "idempotency_key", "") or "")
+            and 0 <= time.time() - state.prepared_at_epoch <= 30
+            and _valid_draft_claim_capability(
+                capability=claim_capability,
+                request=request,
+                prepared=state,
+            )
+            and preflight.get("status") == "ready_for_platform_adapter"
+        )
+        if not binding_valid:
+            abort = getattr(claim_capability, "abort", None)
+            if callable(abort):
+                try:
+                    abort(reason_code="prepared_binding_invalid")
+                except Exception:
+                    pass
+            return _draft_blocked("prepared_draft_binding_invalid", ["prepare_claim_write_binding_mismatch"], preflight=preflight)
+
+        sku = state.sku
+        access_token = state.access_token
+        inventory_body = json.loads(state.inventory_body_json.decode("utf-8"))
+        offer_body = json.loads(state.offer_body_json.decode("utf-8"))
+        steps = list(state.inspection_steps)
+        base_url = _base_url(self.settings)
+        offers_path = f"/sell/inventory/v1/offer?sku={urllib.parse.quote(sku, safe='')}"
+        recheck_result = self._get_json(
+            url=f"{base_url}{offers_path}",
+            access_token=access_token,
+            marketplace_id=marketplace_id,
+        )
+        steps.append(_step_summary("recheck_offers_by_sku", offers_path, recheck_result))
+        recheck_json = recheck_result.get("json") if isinstance(recheck_result.get("json"), dict) else {}
+        recheck_offers = recheck_json.get("offers") if isinstance(recheck_json.get("offers"), list) else []
+        if (
+            recheck_result.get("status") != "ok"
+            or _published_offer(recheck_offers)
+            or _offer_snapshot_fingerprint(recheck_offers) != state.expected_offer_fingerprint
+        ):
+            try:
+                claim_capability.abort(reason_code="offer_state_changed")
+            except Exception:
+                pass
+            return _draft_write_result(
+                "blocked_offer_state_changed_before_write",
+                "The eBay offer state changed after preparation; no write was attempted.",
+                steps,
+                preflight=preflight,
+                platform_result={"sku": sku, "writes_to_ebay": False, "published_to_ebay": False, "public_listing_created": False},
+            )
+        try:
+            consumed_claim = claim_capability.consume()
+        except Exception:
+            try:
+                claim_capability.abort(reason_code="claim_consume_failed")
+            except Exception:
+                pass
+            return _draft_blocked(
+                "draft_claim_consume_failed",
+                ["database_claim_capability_not_consumed"],
+                preflight=preflight,
+            )
+        if not _valid_consumed_draft_execution_claim(
+            claim=consumed_claim,
+            request=request,
+            prepared=state,
+        ):
+            return _draft_blocked(
+                "draft_claim_consume_failed",
+                ["database_claim_capability_not_consumed"],
+                preflight=preflight,
+            )
+        existing_offer = _unpublished_offer(recheck_offers, marketplace_id=marketplace_id)
         inventory_path = f"/sell/inventory/v1/inventory_item/{urllib.parse.quote(sku, safe='')}"
         inventory_result = self._send_json(
             method="PUT",
@@ -828,10 +1093,13 @@ class EbayWriteHttpAdapter:
             "published_to_ebay": False,
             "public_listing_created": False,
             "writes_to_ebay": True,
-            "token_source": token.get("source"),
+            "token_source": state.token_source,
             "access_token_returned_to_frontend": False,
             "access_token_returned_to_runtime": False,
             "raw_response_stored": False,
+            **dict(state.credential_binding_items),
+            "authorization_kind": "unpublished_draft",
+            "scope_profile": "seller_unpublished_draft",
         }
         audit = _audit(
             request=request,
@@ -1228,6 +1496,206 @@ def _find_publish_connection(connections: list[dict[str, Any]]) -> dict[str, Any
         if any(scope.endswith("/sell.inventory") for scope in scopes):
             return item
     return None
+
+
+def _exact_unpublished_draft_credential(
+    *,
+    connections: list[dict[str, Any]],
+    secret_refs: list[dict[str, Any]],
+    company_id: str,
+    store_id: str,
+) -> dict[str, Any] | None:
+    """Resolve one callback-proven draft credential without a fallback secret."""
+
+    if not company_id or not store_id:
+        return None
+    active_statuses = {"read_only_authorized", "draft_save_authorized", "publish_authorized"}
+    active = [
+        item
+        for item in connections
+        if str(item.get("platform") or "").lower() == "ebay"
+        and str(item.get("connection_type") or "").lower() == "oauth"
+        and str(item.get("status") or "") in active_statuses
+    ]
+    if len(active) != 1:
+        return None
+    connection = active[0]
+    metadata = connection.get("metadata") if isinstance(connection.get("metadata"), dict) else {}
+    scopes = connection.get("scopes") if isinstance(connection.get("scopes"), list) else []
+    connection_id = str(connection.get("connection_id") or "")
+    secret_ref_id = str(connection.get("secret_ref") or "")
+    oauth_request_id = str(metadata.get("oauth_request_id") or "")
+    seller_identity_hash = str(metadata.get("ebay_user_id_hash") or "")
+    if not (
+        connection_id
+        and str(connection.get("company_id") or "") == company_id
+        and str(connection.get("store_id") or "") == store_id
+        and str(connection.get("status") or "") == "draft_save_authorized"
+        and scopes == UNPUBLISHED_DRAFT_SCOPES
+        and secret_ref_id
+        and oauth_request_id
+        and seller_identity_hash
+        and str(metadata.get("confirmation_id") or "")
+        and str(metadata.get("scope_profile") or "") == "seller_unpublished_draft"
+        and str(metadata.get("authorization_kind") or "") == "unpublished_draft"
+        and metadata.get("draft_save_scope_authorized") is True
+        and metadata.get("publish_scope_authorized") is False
+        and metadata.get("public_publish_enabled") is False
+        and metadata.get("real_platform_writes_enabled") is False
+        and str(metadata.get("credential_source") or "") == "jiejing_vault_secret_ref"
+        and str(metadata.get("account_deletion_identity_mapping_status") or "") == "identity_mapping_ready"
+        and metadata.get("secret_exposed") is False
+    ):
+        return None
+    exact_secret_rows = [item for item in secret_refs if str(item.get("secret_ref") or "") == secret_ref_id]
+    if len(exact_secret_rows) != 1:
+        return None
+    secret = exact_secret_rows[0]
+    secret_metadata = secret.get("metadata") if isinstance(secret.get("metadata"), dict) else {}
+    if not (
+        str(secret.get("company_id") or "") == company_id
+        and str(secret.get("store_id") or "") == store_id
+        and str(secret.get("provider") or "").lower() == "ebay"
+        and str(secret.get("purpose") or "").lower() == "ebay_refresh_token"
+        and str(secret.get("status") or "") in {"local_secret_resolver_stored", "managed_vault_stored"}
+        and str(secret_metadata.get("oauth_request_id") or "") == oauth_request_id
+        and str(secret_metadata.get("credential_owner") or "") == "jiejing_saas_backend"
+        and secret_metadata.get("secret_exposed") is False
+    ):
+        return None
+    return {
+        "connection": connection,
+        "connection_id_sha256": hashlib.sha256(connection_id.encode("utf-8")).hexdigest(),
+        "credential_ref_sha256": hashlib.sha256(secret_ref_id.encode("utf-8")).hexdigest(),
+        "oauth_request_id_sha256": hashlib.sha256(oauth_request_id.encode("utf-8")).hexdigest(),
+        "seller_identity_sha256": hashlib.sha256(seller_identity_hash.encode("utf-8")).hexdigest(),
+    }
+
+
+def _validated_unpublished_draft_credential_boundary(
+    *,
+    credential_boundary: dict[str, Any],
+    company_id: str,
+    store_id: str,
+) -> dict[str, Any] | None:
+    """Validate a private repository resolver result without exposing raw bindings."""
+
+    if not isinstance(credential_boundary, dict) or credential_boundary.get("ready") is not True:
+        return None
+    if (
+        str(credential_boundary.get("contract_version") or "")
+        != "2026-08-13-unpublished-draft-credential-v1"
+        or str(credential_boundary.get("company_id") or "") != company_id
+        or str(credential_boundary.get("store_id") or "") != store_id
+        or credential_boundary.get("secret_exposed") is not False
+    ):
+        return None
+    connection = credential_boundary.get("connection") if isinstance(credential_boundary.get("connection"), dict) else {}
+    secret = credential_boundary.get("secret_reference") if isinstance(credential_boundary.get("secret_reference"), dict) else {}
+    exact = _exact_unpublished_draft_credential(
+        connections=[connection] if connection else [],
+        secret_refs=[secret] if secret else [],
+        company_id=company_id,
+        store_id=store_id,
+    )
+    if not exact:
+        return None
+    expected = {
+        "connection_id_sha256": exact["connection_id_sha256"],
+        "credential_ref_sha256": exact["credential_ref_sha256"],
+        "oauth_request_id_sha256": exact["oauth_request_id_sha256"],
+        "seller_identity_sha256": exact["seller_identity_sha256"],
+    }
+    if any(str(credential_boundary.get(key) or "") != value for key, value in expected.items()):
+        return None
+    return exact
+
+
+def _draft_payload_sha256(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _offer_snapshot_fingerprint(offers: list[Any]) -> str:
+    safe = [item for item in offers if isinstance(item, dict)]
+    return hashlib.sha256(_canonical_json_bytes(safe)).hexdigest()
+
+
+def _expected_draft_claim_binding(*, prepared: _DraftPreparationState) -> dict[str, str]:
+    binding = dict(prepared.credential_binding_items)
+    return {
+        "confirmation_id": prepared.confirmation_id,
+        "company_id": prepared.company_id,
+        "store_id": prepared.store_id,
+        "action_type": "save_ebay_listing_draft",
+        "task_id": prepared.task_id,
+        "idempotency_key": prepared.idempotency_key,
+        "marketplace_id": prepared.marketplace_id,
+        "payload_sha256": prepared.payload_sha256,
+        "preparation_sha256": prepared.preparation_sha256,
+        "contract_version": binding.get("contract_version", ""),
+        "connection_id_sha256": binding.get("connection_id_sha256", ""),
+        "credential_ref_sha256": binding.get("credential_ref_sha256", ""),
+        "oauth_request_id_sha256": binding.get("oauth_request_id_sha256", ""),
+        "seller_identity_sha256": binding.get("seller_identity_sha256", ""),
+    }
+
+
+def _valid_draft_claim_capability(*, capability: Any, request: Any, prepared: _DraftPreparationState) -> bool:
+    # Import locally to keep the adapter's module dependency one-way while
+    # requiring the repository's opaque DB-backed capability type.  A dict or
+    # look-alike object with ``consume`` methods must never authorize a write.
+    from .repository import UnpublishedDraftClaimCapability
+
+    if not (
+        isinstance(capability, UnpublishedDraftClaimCapability)
+        and getattr(capability, "_minted", False) is True
+    ):
+        return False
+    claim_binding_reader = getattr(capability, "claim_binding", None)
+    consume = getattr(capability, "consume", None)
+    abort = getattr(capability, "abort", None)
+    if not callable(claim_binding_reader) or not callable(consume) or not callable(abort):
+        return False
+    try:
+        claim_binding = claim_binding_reader()
+    except Exception:
+        return False
+    expected = _expected_draft_claim_binding(prepared=prepared)
+    return bool(
+        isinstance(claim_binding, dict)
+        and all(str(claim_binding.get(key) or "") == str(value or "") for key, value in expected.items())
+        and len(claim_binding) == len(expected)
+        and str(getattr(request, "confirmation_id", "") or "") == prepared.confirmation_id
+    )
+
+
+def _valid_consumed_draft_execution_claim(
+    *,
+    claim: dict[str, Any],
+    request: Any,
+    prepared: _DraftPreparationState,
+) -> bool:
+    if not isinstance(claim, dict) or claim.get("external_execution_claimed") is not True:
+        return False
+    expected = _expected_draft_claim_binding(prepared=prepared)
+    claim_binding = claim.get("external_execution_claim_binding")
+    return bool(
+        isinstance(claim_binding, dict)
+        and claim.get("status") == "external_execution_processing_manual_reconcile"
+        and all(str(claim_binding.get(key) or "") == str(value or "") for key, value in expected.items())
+        and len(claim_binding) == len(expected)
+        and str(getattr(request, "confirmation_id", "") or "") == prepared.confirmation_id
+    )
 
 
 def _first_secret_ref(secret_refs: list[dict[str, Any]]) -> str | None:

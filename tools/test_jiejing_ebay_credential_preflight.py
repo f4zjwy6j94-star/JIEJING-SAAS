@@ -118,6 +118,29 @@ def main() -> int:
         if any(value in refresh_serialized for value in forbidden):
             return fail("refresh token preflight leaked a secret or authorization header")
 
+        draft_upgrade_refresh = _build(
+            secret_refs=[
+                {
+                    "secret_ref": "secret_refresh",
+                    "provider": "ebay",
+                    "purpose": "ebay_refresh_token",
+                    "status": "external_vault_required",
+                }
+            ],
+            connections=[
+                {
+                    "connection_id": "conn_refresh",
+                    "platform": "ebay",
+                    "connection_type": "oauth",
+                    "status": "draft_save_authorized",
+                    "scopes": ["sell.account.readonly", "sell.inventory.readonly", "sell.inventory"],
+                    "secret_ref": "secret_refresh",
+                }
+            ],
+        )
+        if draft_upgrade_refresh.get("status") != "ready_for_official_read":
+            return fail("a draft-save scope upgrade must preserve backend read-only credential preflight")
+
         _clear_env()
         os.environ["JIEJING_SAAS_ENV"] = "local_dev"
         os.environ["JIEJING_ENABLE_HERMES_EBAY_BRIDGE"] = "false"

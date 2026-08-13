@@ -117,6 +117,7 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
     environment:
       JIEJING_ENABLE_REAL_PLATFORM_WRITES: \"false\"
       JIEJING_EBAY_WRITE_LIVE: \"false\"
+      JIEJING_EBAY_DRAFT_SAVE_LIVE: \"false\"
       JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: \"disabled_public_staging\"
       JIEJING_BILLING_PROVIDER: \"stripe_test_mock\"
   jiejing-worker:
@@ -127,6 +128,7 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
     environment:
       JIEJING_ENABLE_REAL_PLATFORM_WRITES: \"false\"
       JIEJING_EBAY_WRITE_LIVE: \"false\"
+      JIEJING_EBAY_DRAFT_SAVE_LIVE: \"false\"
       JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: \"disabled_public_staging\"
       JIEJING_BILLING_PROVIDER: \"stripe_test_mock\"
 """,
@@ -199,23 +201,30 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
                     if candidate.strip() and len(candidate) - len(candidate.lstrip(" ")) <= line_indent:
                         break
                     block_end += 1
-                has_billing_pin = any("JIEJING_BILLING_PROVIDER" in candidate for candidate in lines[cursor + 1 : block_end])
-                if not has_billing_pin:
-                    entries = [candidate for candidate in lines[cursor + 1 : block_end] if candidate.strip()]
-                    entry_indent = (
-                        len(entries[0]) - len(entries[0].lstrip(" "))
-                        if entries
-                        else property_indent + max(2, property_indent - service_indent)
+                entries = [candidate for candidate in lines[cursor + 1 : block_end] if candidate.strip()]
+                entry_indent = (
+                    len(entries[0]) - len(entries[0].lstrip(" "))
+                    if entries
+                    else property_indent + max(2, property_indent - service_indent)
+                )
+                list_form = bool(entries and entries[0].lstrip().startswith("- "))
+                additions: list[str] = []
+                if not any("JIEJING_EBAY_DRAFT_SAVE_LIVE" in candidate for candidate in entries):
+                    additions.append(
+                        f"{' ' * entry_indent}- JIEJING_EBAY_DRAFT_SAVE_LIVE=false"
+                        if list_form
+                        else f"{' ' * entry_indent}JIEJING_EBAY_DRAFT_SAVE_LIVE: \"false\""
                     )
-                    list_form = bool(entries and entries[0].lstrip().startswith("- "))
-                    billing = (
+                if not any("JIEJING_BILLING_PROVIDER" in candidate for candidate in entries):
+                    additions.append(
                         f"{' ' * entry_indent}- JIEJING_BILLING_PROVIDER=stripe_test_mock"
                         if list_form
                         else f"{' ' * entry_indent}JIEJING_BILLING_PROVIDER: \"stripe_test_mock\""
                     )
-                    lines[cursor + 1 : cursor + 1] = [billing]
-                    end += 1
-                    block_end += 1
+                if additions:
+                    lines[cursor + 1 : cursor + 1] = additions
+                    end += len(additions)
+                    block_end += len(additions)
                 cursor = block_end
             index = end
         self.compose_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -6256,6 +6265,238 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
         self.assertEqual(report["summary"]["unsafe_compose_override_count"], 0)
         self.assertEqual(report["summary"]["illegal_compose_override_count"], 0)
 
+    def test_controlled_unpublished_draft_compose_contract_passes(self) -> None:
+        self._write_legal_fixture()
+        compose = self.compose_path.read_text(encoding="utf-8")
+        compose = compose.replace(
+            '      JIEJING_EBAY_DRAFT_SAVE_LIVE: "false"\n',
+            '      JIEJING_EBAY_DRAFT_SAVE_LIVE: "true"\n',
+        ).replace(
+            '      JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "disabled_public_staging"\n',
+            '      JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "controlled_unpublished_draft_only"\n',
+        )
+        self.compose_path.write_text(compose, encoding="utf-8")
+        self.secret_path.write_text(
+            "JIEJING_EBAY_CLIENT_SECRET=LEGAL_SECRET_SENTINEL\n"
+            "JIEJING_EBAY_TOKEN_REFRESH_LIVE=true\n"
+            "JIEJING_EBAY_READ_ONLY_LIVE=true\n",
+            encoding="utf-8",
+        )
+
+        completed = self._run_check()
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ok"])
+        self.assertFalse(report["secret_exposed"])
+        self.assertFalse(report["blockers"])
+
+    def test_draft_save_switch_and_public_write_policy_must_agree(self) -> None:
+        for draft_value, policy_value in (
+            ("true", "disabled_public_staging"),
+            ("false", "controlled_unpublished_draft_only"),
+        ):
+            with self.subTest(draft_value=draft_value, policy_value=policy_value):
+                self._write_legal_fixture()
+                compose = self.compose_path.read_text(encoding="utf-8")
+                compose = compose.replace(
+                    'JIEJING_EBAY_DRAFT_SAVE_LIVE: "false"',
+                    f'JIEJING_EBAY_DRAFT_SAVE_LIVE: "{draft_value}"',
+                ).replace(
+                    'JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "disabled_public_staging"',
+                    f'JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "{policy_value}"',
+                )
+                self.compose_path.write_text(compose, encoding="utf-8")
+                self.secret_path.write_text(
+                    "JIEJING_EBAY_CLIENT_SECRET=LEGAL_SECRET_SENTINEL\n"
+                    "JIEJING_EBAY_TOKEN_REFRESH_LIVE=true\n"
+                    "JIEJING_EBAY_READ_ONLY_LIVE=true\n",
+                    encoding="utf-8",
+                )
+
+                completed = self._run_check()
+
+                self.assertNotEqual(completed.returncode, 0)
+                report = json.loads(completed.stdout)
+                self.assertFalse(report["secret_exposed"])
+                self.assertTrue(
+                    any(
+                        blocker.get("code") == "inconsistent_ebay_draft_save_policy"
+                        for blocker in report["blockers"]
+                    )
+                )
+
+    def test_enabled_draft_save_requires_backend_read_and_refresh_prerequisites(self) -> None:
+        for prerequisite in (
+            "JIEJING_EBAY_TOKEN_REFRESH_LIVE",
+            "JIEJING_EBAY_READ_ONLY_LIVE",
+        ):
+            for private_value in (None, "false"):
+                with self.subTest(prerequisite=prerequisite, private_value=private_value):
+                    self._write_legal_fixture()
+                    compose = self.compose_path.read_text(encoding="utf-8").replace(
+                        'JIEJING_EBAY_DRAFT_SAVE_LIVE: "false"',
+                        'JIEJING_EBAY_DRAFT_SAVE_LIVE: "true"',
+                    ).replace(
+                        'JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "disabled_public_staging"',
+                        'JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "controlled_unpublished_draft_only"',
+                    )
+                    self.compose_path.write_text(compose, encoding="utf-8")
+                    prerequisites = {
+                        "JIEJING_EBAY_TOKEN_REFRESH_LIVE": "true",
+                        "JIEJING_EBAY_READ_ONLY_LIVE": "true",
+                    }
+                    if private_value is None:
+                        prerequisites.pop(prerequisite)
+                    else:
+                        prerequisites[prerequisite] = private_value
+                    self.secret_path.write_text(
+                        "JIEJING_EBAY_CLIENT_SECRET=LEGAL_SECRET_SENTINEL\n"
+                        + "".join(f"{key}={value}\n" for key, value in prerequisites.items()),
+                        encoding="utf-8",
+                    )
+
+                    completed = self._run_check()
+
+                    self.assertNotEqual(completed.returncode, 0)
+                    report = json.loads(completed.stdout)
+                    self.assertFalse(report["secret_exposed"])
+                    self.assertTrue(
+                        any(
+                            blocker.get("code") == "ebay_draft_save_prerequisite_not_enabled"
+                            and blocker.get("key") == prerequisite
+                            for blocker in report["blockers"]
+                        )
+                    )
+
+    def test_api_and_worker_cannot_disagree_on_draft_save_capability(self) -> None:
+        self._write_legal_fixture()
+        compose = self.compose_path.read_text(encoding="utf-8").replace(
+            'JIEJING_EBAY_DRAFT_SAVE_LIVE: "false"',
+            'JIEJING_EBAY_DRAFT_SAVE_LIVE: "true"',
+            1,
+        ).replace(
+            'JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "disabled_public_staging"',
+            'JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "controlled_unpublished_draft_only"',
+            1,
+        )
+        self.compose_path.write_text(compose, encoding="utf-8")
+        self.secret_path.write_text(
+            "JIEJING_EBAY_CLIENT_SECRET=LEGAL_SECRET_SENTINEL\n"
+            "JIEJING_EBAY_TOKEN_REFRESH_LIVE=true\n"
+            "JIEJING_EBAY_READ_ONLY_LIVE=true\n",
+            encoding="utf-8",
+        )
+
+        completed = self._run_check()
+
+        self.assertNotEqual(completed.returncode, 0)
+        report = json.loads(completed.stdout)
+        self.assertFalse(report["secret_exposed"])
+        self.assertTrue(
+            any(
+                blocker.get("code") == "inconsistent_runtime_ebay_draft_save_value"
+                for blocker in report["blockers"]
+            )
+        )
+
+    def test_draft_save_switch_is_compose_owned_and_cannot_overlap_private_env(self) -> None:
+        self._write_legal_fixture()
+        self.secret_path.write_text(
+            "JIEJING_EBAY_CLIENT_SECRET=LEGAL_SECRET_SENTINEL\n"
+            "JIEJING_EBAY_DRAFT_SAVE_LIVE=true\n",
+            encoding="utf-8",
+        )
+
+        completed = self._run_check()
+
+        self.assertNotEqual(completed.returncode, 0)
+        report = json.loads(completed.stdout)
+        self.assertFalse(report["secret_exposed"])
+        self.assertTrue(
+            any(
+                blocker.get("code") == "cross_source_duplicate"
+                and blocker.get("key") == "JIEJING_EBAY_DRAFT_SAVE_LIVE"
+                for blocker in report["blockers"]
+            )
+        )
+        self.assertTrue(
+            any(
+                blocker.get("code") == "wrong_source"
+                and blocker.get("key") == "JIEJING_EBAY_DRAFT_SAVE_LIVE"
+                and blocker.get("owner") == "compose"
+                for blocker in report["blockers"]
+            )
+        )
+
+    def test_cost_saver_overlay_cannot_override_draft_save_switch(self) -> None:
+        self._write_legal_fixture()
+        override_path = self.fixture_root / "cost-saver.yml"
+        override_path.write_text(
+            """services:
+  jiejing-saas:
+    environment:
+      JIEJING_EBAY_DRAFT_SAVE_LIVE: "false"
+""",
+            encoding="utf-8",
+        )
+
+        report = check_runtime_env_ownership(
+            compose_path=self.compose_path,
+            compose_override_paths=(override_path,),
+            managed_env_path=self.managed_path,
+            secret_env_path=self.secret_path,
+            postgres_env_path=self.postgres_path,
+        )
+
+        self.assertFalse(report["ok"])
+        self.assertFalse(report["secret_exposed"])
+        self.assertTrue(
+            any(
+                blocker.get("code") == "unsafe_compose_override"
+                and blocker.get("source") == "compose-override:1"
+                for blocker in report["blockers"]
+            )
+        )
+
+    def test_narrow_draft_save_never_allows_broad_platform_write_flags(self) -> None:
+        for broad_key in (
+            "JIEJING_ENABLE_REAL_PLATFORM_WRITES",
+            "JIEJING_EBAY_WRITE_LIVE",
+        ):
+            with self.subTest(broad_key=broad_key):
+                self._write_legal_fixture()
+                compose = self.compose_path.read_text(encoding="utf-8").replace(
+                    f'{broad_key}: "false"',
+                    f'{broad_key}: "true"',
+                ).replace(
+                    'JIEJING_EBAY_DRAFT_SAVE_LIVE: "false"',
+                    'JIEJING_EBAY_DRAFT_SAVE_LIVE: "true"',
+                ).replace(
+                    'JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "disabled_public_staging"',
+                    'JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "controlled_unpublished_draft_only"',
+                )
+                self.compose_path.write_text(compose, encoding="utf-8")
+                self.secret_path.write_text(
+                    "JIEJING_EBAY_CLIENT_SECRET=LEGAL_SECRET_SENTINEL\n"
+                    "JIEJING_EBAY_TOKEN_REFRESH_LIVE=true\n"
+                    "JIEJING_EBAY_READ_ONLY_LIVE=true\n",
+                    encoding="utf-8",
+                )
+
+                completed = self._run_check()
+
+                self.assertNotEqual(completed.returncode, 0)
+                report = json.loads(completed.stdout)
+                self.assertFalse(report["secret_exposed"])
+                self.assertTrue(
+                    any(
+                        blocker.get("key") == broad_key
+                        and blocker.get("code") in {"forbidden_staging_value", "unsafe_compose_override"}
+                        for blocker in report["blockers"]
+                    )
+                )
+
     def test_true_compose_safety_mapping_fails(self) -> None:
         self._write_legal_fixture()
         self.compose_path.write_text(
@@ -6451,7 +6692,7 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
             if blocker.get("code") == "missing_required_compose_clamp"
             and blocker.get("service") == "jiejing-saas"
         ]
-        self.assertEqual(len(missing), 3)
+        self.assertEqual(len(missing), 4)
         self.assertFalse(
             any(
                 blocker.get("code") == "missing_required_compose_clamp"
@@ -6577,6 +6818,7 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
         for key in (
             "JIEJING_DOMESTIC_PAYMENT_LIVE_CUTOVER_APPROVED",
             "JIEJING_MANUAL_QR_COLLECTION_ENABLED",
+            "JIEJING_WECHAT_PAY_LIVE_API_ENABLED",
             "JIEJING_WECHAT_PAY_REFUND_ALLOWED",
             "JIEJING_MEDIA_CREDIT_PURCHASE_ENABLED",
             "JIEJING_MEDIA_GENERATION_LIVE",
@@ -6964,6 +7206,7 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
         direct_block = """    environment:
       JIEJING_ENABLE_REAL_PLATFORM_WRITES: \"false\"
       JIEJING_EBAY_WRITE_LIVE: \"false\"
+      JIEJING_EBAY_DRAFT_SAVE_LIVE: \"false\"
       JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: \"disabled_public_staging\"
       JIEJING_BILLING_PROVIDER: \"stripe_test_mock\"
 """
@@ -7002,6 +7245,7 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
         direct_block = """    environment:
       JIEJING_ENABLE_REAL_PLATFORM_WRITES: \"false\"
       JIEJING_EBAY_WRITE_LIVE: \"false\"
+      JIEJING_EBAY_DRAFT_SAVE_LIVE: \"false\"
       JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: \"disabled_public_staging\"
       JIEJING_BILLING_PROVIDER: \"stripe_test_mock\"
 """
@@ -7033,6 +7277,7 @@ class RuntimeEnvOverlapGuardTest(unittest.TestCase):
         direct_block = """    environment:
       JIEJING_ENABLE_REAL_PLATFORM_WRITES: \"false\"
       JIEJING_EBAY_WRITE_LIVE: \"false\"
+      JIEJING_EBAY_DRAFT_SAVE_LIVE: \"false\"
       JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: \"disabled_public_staging\"
       JIEJING_BILLING_PROVIDER: \"stripe_test_mock\"
 """

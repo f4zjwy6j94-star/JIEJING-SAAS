@@ -202,7 +202,7 @@ def build_product_readiness(settings: SaaSSettings, repository: SaaSRepository) 
         _ebay_read_item(ebay, evidence),
         _account_health_incident_item(evidence),
         _ebay_policy_item(ebay, evidence),
-        _execution_item(settings),
+        _execution_item(settings, evidence),
         _tenant_audit_item(counts),
     ]
     critical_blockers = [item for item in items if item.severity == "blocker" and item.status != "ready"]
@@ -233,6 +233,7 @@ def build_product_readiness(settings: SaaSSettings, repository: SaaSRepository) 
             else "readiness_blocked"
         ),
         "real_platform_writes_enabled": settings.effective_real_platform_writes_enabled,
+        "ebay_draft_save_enabled": settings.effective_ebay_draft_save_enabled,
         "requested_real_platform_writes": settings.requested_real_platform_writes,
         "blocker_count": len(critical_blockers),
         "warning_count": len(warnings),
@@ -1408,7 +1409,7 @@ def _ebay_policy_item(ebay: dict[str, Any], evidence: dict[str, Any]) -> Readine
     return ReadinessItem("ebay_business_policies", "eBay 三类政策", "ready", "info", "后端可读取到业务政策快照。", "继续把 policyId 写入产品刊登校验。")
 
 
-def _execution_item(settings: SaaSSettings) -> ReadinessItem:
+def _execution_item(settings: SaaSSettings, evidence: dict[str, Any]) -> ReadinessItem:
     if settings.effective_real_platform_writes_enabled:
         return ReadinessItem(
             "execution_service",
@@ -1417,6 +1418,24 @@ def _execution_item(settings: SaaSSettings) -> ReadinessItem:
             "info",
             "Real eBay writes are enabled only behind the confirmation center, execution preflight, idempotency and audit boundary.",
             "Continue low-volume real publish tests with recovery checks and cleanup confirmations; keep payments, refunds, ads, policy edits and buyer promises confirmation-gated.",
+        )
+    if settings.effective_ebay_draft_save_enabled and int(evidence.get("ebay_unpublished_draft_save_proof_count") or 0) > 0:
+        return ReadinessItem(
+            "execution_service",
+            "Controlled eBay draft save",
+            "unpublished_ebay_draft_save_proven",
+            "info",
+            "One confirmation-gated eBay Inventory API draft was saved with an UNPUBLISHED offer receipt; public publish remains disabled.",
+            "Keep publishOffer disabled. Review the merchant-visible draft and retain the one-shot execution and manual-reconcile boundary.",
+        )
+    if settings.effective_ebay_draft_save_enabled:
+        return ReadinessItem(
+            "execution_service",
+            "Controlled eBay draft save",
+            "ebay_draft_save_live_proof_pending",
+            "warning",
+            "The draft-only adapter is enabled, but no current-store UNPUBLISHED eBay receipt has passed the evidence contract yet.",
+            "Create one exact draft confirmation, let the merchant approve it, save it once, and verify no public listing exists.",
         )
     if settings.requested_real_platform_writes:
         return ReadinessItem(

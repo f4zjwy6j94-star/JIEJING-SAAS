@@ -493,7 +493,7 @@ def _safe_endpoint_summary(path: str, payload: dict) -> dict:
                 if isinstance(item, dict)
                 and str(item.get("platform") or "").strip().lower() == "ebay"
                 and str(item.get("status") or "").strip().lower()
-                in {"read_only_authorized", "publish_authorized", "read_write_authorized", "authorized", "connected"}
+                in {"read_only_authorized", "draft_save_authorized", "publish_authorized", "read_write_authorized", "authorized", "connected"}
             ),
             "connection_values_withheld": True,
             "secret_exposed": False,
@@ -748,7 +748,7 @@ def _current_store_evidence(
             and str(item.get("store_id") or "") == expected_store_id
             and str(item.get("platform") or "").strip().lower() == "ebay"
             and str(item.get("status") or "").strip().lower()
-            in {"read_only_authorized", "publish_authorized", "read_write_authorized", "authorized", "connected"}
+            in {"read_only_authorized", "draft_save_authorized", "publish_authorized", "read_write_authorized", "authorized", "connected"}
             and str(item.get("connection_id") or "")
             and expected_connection_id_sha256
             == hashlib.sha256(str(item.get("connection_id") or "").encode("utf-8")).hexdigest()

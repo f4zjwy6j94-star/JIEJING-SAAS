@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 import sqlite3
 import sys
 import tempfile
@@ -12,9 +14,11 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,8 +32,11 @@ from jiejing_saas.commercial_launch_gate import (  # noqa: E402
     build_commercial_launch_gate,
 )
 from jiejing_saas.config import SaaSSettings  # noqa: E402
-from jiejing_saas.repository import SaaSRepository  # noqa: E402
+from jiejing_saas.ebay_oauth import EbayOAuthPlanner, UNPUBLISHED_DRAFT_SCOPES  # noqa: E402
+from jiejing_saas.ebay_oauth_callback import process_ebay_oauth_callback  # noqa: E402
+from jiejing_saas.repository import ConfirmationDecisionConflict, SaaSRepository  # noqa: E402
 from jiejing_saas.security import SessionManager  # noqa: E402
+from jiejing_saas.secret_store import SecretStoreBoundary  # noqa: E402
 
 
 CONTRACT_VERSION = "2026-06-18-new-ebay-account-low-risk-smoke"
@@ -91,15 +98,137 @@ def _publish_payload() -> dict[str, Any]:
     }
 
 
+def _draft_oauth_transport(request: Any, timeout: float) -> tuple[int, dict[str, str], bytes]:
+    del timeout
+    if request.get_method() == "GET" and request.full_url.endswith("/commerce/identity/v1/user/"):
+        return (
+            200,
+            {"content-type": "application/json"},
+            json.dumps(
+                {
+                    "userId": "HTTP-CHAIN-DRAFT-SELLER-DO-NOT-LEAK",
+                    "username": "http-chain-draft-seller",
+                    "registrationMarketplaceId": "EBAY_US",
+                    "accountType": "BUSINESS",
+                    "status": "CONFIRMED",
+                }
+            ).encode("utf-8"),
+        )
+    if request.get_method() == "POST" and "/identity/v1/oauth2/token" in request.full_url:
+        return (
+            200,
+            {"content-type": "application/json"},
+            json.dumps(
+                {
+                    "access_token": "HTTP-CHAIN-DRAFT-ACCESS-TOKEN-DO-NOT-LEAK",
+                    "refresh_token": "HTTP-CHAIN-DRAFT-REFRESH-TOKEN-DO-NOT-LEAK",
+                    "expires_in": 7200,
+                    "refresh_token_expires_in": 47304000,
+                    "scope": " ".join(UNPUBLISHED_DRAFT_SCOPES),
+                }
+            ).encode("utf-8"),
+        )
+    return 404, {"content-type": "application/json"}, b'{"error":"missing"}'
+
+
+def _draft_vault_transport(request: Any, timeout: float) -> tuple[int, dict[str, str], bytes]:
+    del timeout
+    if request.get_method() != "POST":
+        return 405, {"content-type": "application/json"}, b'{"errors":["method"]}'
+    return 204, {"content-type": "application/json"}, b""
+
+
+def _seed_exact_draft_callback(
+    settings: SaaSSettings,
+    repo: SaaSRepository,
+    *,
+    company_id: str,
+    store_id: str,
+    user_id: str,
+) -> dict[str, Any]:
+    settings.ebay_client_id = "HTTP-CHAIN-CLIENT-ID"
+    settings.ebay_ru_name = "Jiejing_HTTP_Chain_RuName"
+    settings.ebay_client_secret_configured = True
+    settings.ebay_oauth_live_exchange_enabled = True
+    settings.vault_enabled = True
+    settings.vault_provider = "vault"
+    planner = EbayOAuthPlanner(settings)
+    confirmation = repo.create_unpublished_draft_oauth_confirmation(
+        company_id=company_id,
+        store_id=store_id,
+        user_id=user_id,
+    )
+    confirmation = repo.decide_confirmation(
+        company_id=company_id,
+        confirmation_id=confirmation["confirmation_id"],
+        decision="approve",
+        decided_by=user_id,
+        note="Exact HTTP-chain draft callback fixture.",
+    )
+    plan = planner.unpublished_draft_authorization_plan(
+        company_id=company_id,
+        store_id=store_id,
+        user_id=user_id,
+        marketplace_id="EBAY_US",
+        requested_scopes=UNPUBLISHED_DRAFT_SCOPES,
+    )
+    plan["confirmation_id"] = confirmation["confirmation_id"]
+    oauth_request = repo.create_approved_unpublished_draft_oauth_authorization_request(
+        company_id=company_id,
+        store_id=store_id,
+        user_id=user_id,
+        confirmation_id=confirmation["confirmation_id"],
+        plan=plan,
+    )
+    with patch.dict(
+        os.environ,
+        {
+            "JIEJING_EBAY_CLIENT_SECRET": "HTTP-CHAIN-CLIENT-SECRET-DO-NOT-LEAK",
+            "JIEJING_VAULT_LIVE_RESOLVE_ENABLED": "true",
+            "JIEJING_VAULT_ADDR": "https://vault.example.test",
+            "JIEJING_VAULT_TOKEN": "HTTP-CHAIN-VAULT-TOKEN-DO-NOT-LEAK",
+            "JIEJING_VAULT_MOUNT": "secret",
+            "JIEJING_VAULT_KEYSPACE": "http-chain",
+            "JIEJING_VAULT_KV_VERSION": "v2",
+        },
+        clear=False,
+    ):
+        callback = process_ebay_oauth_callback(
+            repository=repo,
+            settings=settings,
+            secret_store_boundary=SecretStoreBoundary(settings),
+            ebay_oauth_planner=planner,
+            state=oauth_request["state_nonce"],
+            code="HTTP_CHAIN_EXACT_DRAFT_AUTH_CODE",
+            error="",
+            oauth_transport=_draft_oauth_transport,
+            vault_transport=_draft_vault_transport,
+        )
+    if callback.get("status") != "callback_exchange_completed":
+        raise AssertionError(
+            "exact draft OAuth callback did not complete: "
+            f"{callback.get('status')} blocked_by={callback.get('blocked_by')}"
+        )
+    boundary = repo.unpublished_draft_execution_credential_boundary(
+        company_id=company_id,
+        store_id=store_id,
+    )
+    if boundary.get("ready") is not True or boundary.get("connection_status") != "draft_save_authorized":
+        raise AssertionError(f"exact draft credential boundary not ready: {boundary.get('code')}")
+    return boundary
+
+
 class FakeWriteAdapter:
     """No-network adapter used only to exercise the real HTTP producer chain."""
 
     last_publish_payload: dict[str, Any] = {}
     last_cleanup_payload: dict[str, Any] = {}
+    last_draft_payload: dict[str, Any] = {}
     last_publish_platform = ""
     call_lock = threading.Lock()
     publish_call_count = 0
     cleanup_call_count = 0
+    draft_call_count = 0
     block_publish = False
     block_cleanup = False
     publish_started = threading.Event()
@@ -107,6 +236,9 @@ class FakeWriteAdapter:
     release_publish = threading.Event()
     release_cleanup = threading.Event()
     fail_publish = False
+    fail_draft_before_consume = False
+    fail_draft_after_consume = False
+    draft_execute_attempt_count = 0
     fail_cleanup = False
 
     @classmethod
@@ -114,9 +246,13 @@ class FakeWriteAdapter:
         with cls.call_lock:
             cls.publish_call_count = 0
             cls.cleanup_call_count = 0
+            cls.draft_call_count = 0
         cls.block_publish = False
         cls.block_cleanup = False
         cls.fail_publish = False
+        cls.fail_draft_before_consume = False
+        cls.fail_draft_after_consume = False
+        cls.draft_execute_attempt_count = 0
         cls.fail_cleanup = False
         cls.publish_started.clear()
         cls.cleanup_started.clear()
@@ -125,6 +261,7 @@ class FakeWriteAdapter:
 
     def __init__(self, settings: SaaSSettings) -> None:
         self.settings = settings
+        self._prepared: dict[int, tuple[Any, dict[str, Any]]] = {}
 
     def publish_listing(self, *, request: Any, preflight: dict[str, Any], **_: Any) -> dict[str, Any]:
         with type(self).call_lock:
@@ -172,6 +309,97 @@ class FakeWriteAdapter:
             },
             "secret_exposed": False,
         }
+
+    def save_listing_draft(self, *, request: Any, preflight: dict[str, Any], **_: Any) -> dict[str, Any]:
+        with type(self).call_lock:
+            type(self).draft_call_count += 1
+        type(self).last_draft_payload = json.loads(json.dumps(request.payload))
+        type(self).publish_started.set()
+        if type(self).block_publish:
+            type(self).release_publish.wait(timeout=5)
+        if type(self).fail_publish:
+            raise RuntimeError("fake draft adapter failure sentinel")
+        return {
+            "status": "saved_to_ebay_draft",
+            "action_type": "save_ebay_listing_draft",
+            "task_id": request.task_id,
+            "platform_result": {
+                "offer_id": "offer-draft-001",
+                "sku": str(request.payload.get("listing", {}).get("sku") or ""),
+                "offer_status": "UNPUBLISHED",
+                "writes_to_ebay": True,
+                "published_to_ebay": False,
+                "public_listing_created": False,
+            },
+            "audit": {
+                "preflight": preflight,
+                "real_execution": {
+                    "ebay_draft_saved": True,
+                    "published_to_ebay": False,
+                },
+            },
+            "secret_exposed": False,
+        }
+
+    def prepare_listing_draft(self, *, request: Any, preflight: dict[str, Any], **_: Any) -> Any:
+        class _DraftPreparationHandle:
+            def __init__(self, safe: dict[str, str]) -> None:
+                self._safe = safe
+
+            def claim_binding(self) -> dict[str, str]:
+                return dict(self._safe)
+
+        boundary = _.get("credential_boundary") if isinstance(_.get("credential_boundary"), dict) else {}
+        safe = {
+            "confirmation_id": str(request.confirmation_id or ""),
+            "company_id": str(request.company_id or ""),
+            "store_id": str(request.store_id or ""),
+            "action_type": "save_ebay_listing_draft",
+            "task_id": str(request.task_id or ""),
+            "idempotency_key": str(request.idempotency_key or ""),
+            "marketplace_id": str(_.get("marketplace_id") or ""),
+            "payload_sha256": hashlib.sha256(
+                json.dumps(request.payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
+            "preparation_sha256": hashlib.sha256(
+                f"fake-http-preparation:{request.confirmation_id}:{request.idempotency_key}".encode("utf-8")
+            ).hexdigest(),
+            "contract_version": "2026-08-13-unpublished-draft-credential-v1",
+            **{
+                key: str(boundary.get(key) or "")
+                for key in (
+                    "connection_id_sha256",
+                    "credential_ref_sha256",
+                    "oauth_request_id_sha256",
+                    "seller_identity_sha256",
+                )
+            },
+        }
+        handle = _DraftPreparationHandle(safe)
+        self._prepared[id(handle)] = (request, preflight)
+        return handle
+
+    def execute_prepared_listing_draft(
+        self,
+        *,
+        request: Any,
+        preflight: dict[str, Any],
+        prepared: Any,
+        claim_capability: Any,
+        **_: Any,
+    ) -> dict[str, Any]:
+        if id(prepared) not in self._prepared:
+            raise RuntimeError("fake prepared handle missing")
+        with type(self).call_lock:
+            type(self).draft_execute_attempt_count += 1
+        if type(self).fail_draft_before_consume:
+            raise RuntimeError("fake deterministic draft prewrite failure sentinel")
+        consumed = claim_capability.consume()
+        if consumed.get("external_execution_claimed") is not True:
+            raise RuntimeError("fake claim not consumed")
+        if type(self).fail_draft_after_consume:
+            raise RuntimeError("fake uncertain draft post-consume failure sentinel")
+        return self.save_listing_draft(request=request, preflight=preflight)
 
     def execute_cleanup_plan(self, *, request: Any, preflight: dict[str, Any], **_: Any) -> dict[str, Any]:
         with type(self).call_lock:
@@ -223,7 +451,9 @@ def main() -> int:
         settings.environment = "staging"
         settings.requested_real_platform_writes = True
         settings.ebay_write_live_enabled = True
+        settings.ebay_draft_save_live_enabled = True
         settings.ebay_token_refresh_live_enabled = True
+        settings.ebay_read_only_live_enabled = True
         sessions = SessionManager(secret="new-ebay-publish-http-secret")
 
         class TestHandler(SaaSBackendHandler):
@@ -252,6 +482,27 @@ def main() -> int:
             user_id=user["user_id"],
             company_id=user["default_company_id"],
             email=user["email"],
+        )
+        restricted_account = repo.create_user_with_company(
+            email="draft-permissions-http@example.com",
+            password="Password123!",
+            company_name="Draft Permissions Fixture",
+        )
+        restricted_user = restricted_account["user"]
+        with repo._connect() as conn:
+            conn.execute(
+                "insert into team_members (company_id, user_id, role, created_at) values (?, ?, ?, ?)",
+                (
+                    user["default_company_id"],
+                    restricted_user["user_id"],
+                    "support",
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+        restricted_token = sessions.create_token(
+            user_id=restricted_user["user_id"],
+            company_id=user["default_company_id"],
+            email=restricted_user["email"],
         )
         try:
             ordinary = _post(
@@ -647,6 +898,351 @@ def main() -> int:
             ]
             if len(cleanup_records) != 1:
                 return fail("concurrent cleanup execute must persist exactly one execution result")
+
+            try:
+                _seed_exact_draft_callback(
+                    settings,
+                    repo,
+                    company_id=user["default_company_id"],
+                    store_id=store["store_id"],
+                    user_id=user["user_id"],
+                )
+            except AssertionError as exc:
+                return fail(str(exc))
+
+            settings.requested_real_platform_writes = False
+            settings.ebay_write_live_enabled = False
+            approval_guard_body = _publish_payload()
+            approval_guard_body.pop("workflow_scope", None)
+            approval_guard_body["listing"] = {
+                **approval_guard_body["listing"],
+                "sku": "DRAFT-PERMISSION-APPROVAL-001",
+                "title": "Draft approval permission guard",
+            }
+            approval_guard = _post(
+                base_url,
+                f"/stores/{store['store_id']}/ebay-draft-confirmation",
+                approval_guard_body,
+                token,
+            )["confirmation"]
+            approval_status, _approval_payload = _post_status(
+                base_url,
+                f"/confirmations/{approval_guard['confirmation_id']}/decision",
+                {"decision": "approve", "note": "A support member must not approve a real draft write."},
+                restricted_token,
+            )
+            approval_after = repo.get_confirmation(
+                company_id=user["default_company_id"], confirmation_id=approval_guard["confirmation_id"]
+            ) or {}
+            if approval_status != 403 or approval_after.get("status") != "pending":
+                return fail("a role without approve_high_risk must not approve an eBay draft write")
+
+            execute_guard_body = _publish_payload()
+            execute_guard_body.pop("workflow_scope", None)
+            execute_guard_body["listing"] = {
+                **execute_guard_body["listing"],
+                "sku": "DRAFT-PERMISSION-EXECUTE-001",
+                "title": "Draft execute permission guard",
+            }
+            execute_guard = _post(
+                base_url,
+                f"/stores/{store['store_id']}/ebay-draft-confirmation",
+                execute_guard_body,
+                token,
+            )["confirmation"]
+            _post(
+                base_url,
+                f"/confirmations/{execute_guard['confirmation_id']}/decision",
+                {"decision": "approve", "note": "Owner approves the exact execution permission guard."},
+                token,
+            )
+            FakeWriteAdapter.reset_control()
+            execute_status, _execute_payload = _post_status(
+                base_url,
+                f"/confirmations/{execute_guard['confirmation_id']}/execute",
+                {"idempotency_key": "draft-permission-execute-v1"},
+                restricted_token,
+            )
+            execute_after = repo.get_confirmation(
+                company_id=user["default_company_id"], confirmation_id=execute_guard["confirmation_id"]
+            ) or {}
+            if (
+                execute_status != 403
+                or execute_after.get("status") != "approved"
+                or FakeWriteAdapter.draft_execute_attempt_count != 0
+            ):
+                return fail("a role without execute_confirmed_action must not execute an approved eBay draft write")
+
+            crash_recovery_body = _publish_payload()
+            crash_recovery_body.pop("workflow_scope", None)
+            crash_recovery_body["listing"] = {
+                **crash_recovery_body["listing"],
+                "sku": "DRAFT-EXPIRED-PREWRITE-001",
+                "title": "Expired prewrite recovery guard",
+            }
+            crash_recovery = _post(
+                base_url,
+                f"/stores/{store['store_id']}/ebay-draft-confirmation",
+                crash_recovery_body,
+                token,
+            )["confirmation"]
+            crash_recovery = _post(
+                base_url,
+                f"/confirmations/{crash_recovery['confirmation_id']}/decision",
+                {"decision": "approve", "note": "Approve the exact expired prewrite recovery guard."},
+                token,
+            )["confirmation"]
+            crash_idempotency_key = "draft-expired-prewrite-recovery-v1"
+            crash_payload = crash_recovery.get("item", {}).get("publish_payload") or {}
+            crash_boundary = repo.unpublished_draft_execution_credential_boundary(
+                company_id=user["default_company_id"],
+                store_id=store["store_id"],
+            )
+            crash_binding = {
+                "confirmation_id": str(crash_recovery["confirmation_id"]),
+                "company_id": str(user["default_company_id"]),
+                "store_id": str(store["store_id"]),
+                "action_type": "save_ebay_listing_draft",
+                "task_id": str(crash_recovery["task_id"]),
+                "idempotency_key": crash_idempotency_key,
+                "marketplace_id": "EBAY_US",
+                "payload_sha256": hashlib.sha256(
+                    json.dumps(crash_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                ).hexdigest(),
+                "preparation_sha256": hashlib.sha256(
+                    f"fake-http-preparation:{crash_recovery['confirmation_id']}:{crash_idempotency_key}".encode("utf-8")
+                ).hexdigest(),
+                "contract_version": "2026-08-13-unpublished-draft-credential-v1",
+                **{
+                    key: str(crash_boundary.get(key) or "")
+                    for key in (
+                        "connection_id_sha256",
+                        "credential_ref_sha256",
+                        "oauth_request_id_sha256",
+                        "seller_identity_sha256",
+                    )
+                },
+            }
+            _crash_claimed, abandoned_capability = repo.claim_unpublished_draft_execution(
+                company_id=user["default_company_id"],
+                confirmation_id=crash_recovery["confirmation_id"],
+                user_id=user["user_id"],
+                expected_binding=crash_binding,
+            )
+            with repo._connect() as conn:
+                conn.execute(
+                    "update external_execution_claims set expires_at = ? where confirmation_id = ?",
+                    (
+                        (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+                        crash_recovery["confirmation_id"],
+                    ),
+                )
+            FakeWriteAdapter.reset_control()
+            crash_status, _crash_response = _post_status(
+                base_url,
+                f"/confirmations/{crash_recovery['confirmation_id']}/execute",
+                {"idempotency_key": crash_idempotency_key},
+                token,
+            )
+            crash_terminal = repo.get_confirmation(
+                company_id=user["default_company_id"],
+                confirmation_id=crash_recovery["confirmation_id"],
+            ) or {}
+            if (
+                crash_status != 200
+                or crash_terminal.get("status") != "executed"
+                or FakeWriteAdapter.draft_call_count != 1
+            ):
+                return fail("an expired zero-write prewrite claim must recover and execute through one freshly minted claim")
+            try:
+                abandoned_capability.consume()
+            except ConfirmationDecisionConflict:
+                pass
+            else:
+                return fail("the abandoned prewrite capability must remain invalid after HTTP recovery")
+
+            FakeWriteAdapter.reset_control()
+            draft_body = _publish_payload()
+            draft_body.pop("workflow_scope", None)
+            draft_body["listing"] = {
+                **draft_body["listing"],
+                "sku": "DRAFT-ONLY-001",
+                "title": "Draft only smoke widget",
+            }
+            draft_confirmation = _post(
+                base_url,
+                f"/stores/{store['store_id']}/ebay-draft-confirmation",
+                draft_body,
+                token,
+            )["confirmation"]
+            _post(
+                base_url,
+                f"/confirmations/{draft_confirmation['confirmation_id']}/decision",
+                {"decision": "approve", "note": "Approve exactly one unpublished draft write."},
+                token,
+            )
+            with repo._connect() as conn:
+                conn.execute(
+                    "update confirmations set decided_at = ? where company_id = ? and confirmation_id = ?",
+                    (
+                        "2000-01-01T00:00:00+00:00",
+                        user["default_company_id"],
+                        draft_confirmation["confirmation_id"],
+                    ),
+                )
+            stale_status, stale_payload = _post_status(
+                base_url,
+                f"/confirmations/{draft_confirmation['confirmation_id']}/execute",
+                {"idempotency_key": "draft-stale-must-not-claim"},
+                token,
+            )
+            if stale_status != 409 or stale_payload.get("error") != "external_execution_confirmation_not_fresh":
+                return fail(f"expired draft execution approval must fail closed before claim: {stale_status} {stale_payload}")
+            stale_confirmation = repo.get_confirmation(
+                company_id=user["default_company_id"],
+                confirmation_id=draft_confirmation["confirmation_id"],
+            ) or {}
+            if stale_confirmation.get("status") != "approved" or FakeWriteAdapter.draft_call_count != 0:
+                return fail("expired draft execution approval must remain unconsumed and make zero adapter calls")
+            with repo._connect() as conn:
+                conn.execute(
+                    "update confirmations set decided_at = ? where company_id = ? and confirmation_id = ?",
+                    (
+                        datetime.now(timezone.utc).isoformat(),
+                        user["default_company_id"],
+                        draft_confirmation["confirmation_id"],
+                    ),
+                )
+            draft_path = f"/confirmations/{draft_confirmation['confirmation_id']}/execute"
+            draft_execute_body = {"idempotency_key": "draft-only-execute-v1"}
+            FakeWriteAdapter.reset_control()
+            FakeWriteAdapter.block_publish = True
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first_draft = pool.submit(_post_status, base_url, draft_path, draft_execute_body, token)
+                if not FakeWriteAdapter.publish_started.wait(timeout=5):
+                    return fail("first draft execution did not reach the fake adapter")
+                second_draft = pool.submit(_post_status, base_url, draft_path, draft_execute_body, token)
+                time.sleep(0.2)
+                FakeWriteAdapter.release_publish.set()
+                draft_results = [first_draft.result(timeout=10), second_draft.result(timeout=10)]
+            if FakeWriteAdapter.draft_call_count != 1:
+                return fail("concurrent draft execute must claim before exactly one adapter call")
+            if sorted(status for status, _payload in draft_results) != [200, 409]:
+                return fail(f"concurrent draft execute must return one success and one 409: {draft_results}")
+            stored_draft = repo.get_confirmation(
+                company_id=user["default_company_id"],
+                confirmation_id=draft_confirmation["confirmation_id"],
+            ) or {}
+            if stored_draft.get("status") != "executed":
+                return fail(
+                    "successful draft execution must durably become executed: "
+                    f"stored_status={stored_draft.get('status')} results={[status for status, _payload in draft_results]}"
+                )
+            if FakeWriteAdapter.last_draft_payload != draft_confirmation.get("item", {}).get("publish_payload"):
+                return fail("draft execution body must not override the approved payload snapshot")
+
+            FakeWriteAdapter.reset_control()
+            prewrite_body = _publish_payload()
+            prewrite_body.pop("workflow_scope", None)
+            prewrite_body["listing"] = {
+                **prewrite_body["listing"],
+                "sku": "DRAFT-PREWRITE-001",
+                "title": "Prewrite retry smoke widget",
+            }
+            prewrite_confirmation = _post(
+                base_url,
+                f"/stores/{store['store_id']}/ebay-draft-confirmation",
+                prewrite_body,
+                token,
+            )["confirmation"]
+            _post(
+                base_url,
+                f"/confirmations/{prewrite_confirmation['confirmation_id']}/decision",
+                {"decision": "approve", "note": "Approve the deterministic prewrite abort regression."},
+                token,
+            )
+            prewrite_path = f"/confirmations/{prewrite_confirmation['confirmation_id']}/execute"
+            FakeWriteAdapter.fail_draft_before_consume = True
+            prewrite_status, _prewrite_payload = _post_status(
+                base_url,
+                prewrite_path,
+                {"idempotency_key": "draft-prewrite-execute-v1"},
+                token,
+            )
+            prewrite_restored = repo.get_confirmation(
+                company_id=user["default_company_id"],
+                confirmation_id=prewrite_confirmation["confirmation_id"],
+            ) or {}
+            if (
+                prewrite_status != 409
+                or prewrite_restored.get("status") != "approved"
+                or FakeWriteAdapter.draft_call_count != 0
+            ):
+                return fail("a deterministic prewrite exception must restore approval with zero draft writes")
+            FakeWriteAdapter.fail_draft_before_consume = False
+            recovered_status, _recovered_payload = _post_status(
+                base_url,
+                prewrite_path,
+                {"idempotency_key": "draft-prewrite-execute-v1"},
+                token,
+            )
+            recovered_terminal = repo.get_confirmation(
+                company_id=user["default_company_id"],
+                confirmation_id=prewrite_confirmation["confirmation_id"],
+            ) or {}
+            if recovered_status != 200 or recovered_terminal.get("status") != "executed":
+                return fail("a safely aborted prewrite failure must permit exactly one fresh claimed retry")
+
+            FakeWriteAdapter.reset_control()
+            uncertain_body = _publish_payload()
+            uncertain_body.pop("workflow_scope", None)
+            uncertain_body["listing"] = {
+                **uncertain_body["listing"],
+                "sku": "DRAFT-UNCERTAIN-001",
+                "title": "Uncertain draft smoke widget",
+            }
+            uncertain_confirmation = _post(
+                base_url,
+                f"/stores/{store['store_id']}/ebay-draft-confirmation",
+                uncertain_body,
+                token,
+            )["confirmation"]
+            _post(
+                base_url,
+                f"/confirmations/{uncertain_confirmation['confirmation_id']}/decision",
+                {"decision": "approve", "note": "Approve the post-consume failure regression."},
+                token,
+            )
+            FakeWriteAdapter.fail_draft_after_consume = True
+            uncertain_path = f"/confirmations/{uncertain_confirmation['confirmation_id']}/execute"
+            uncertain_status, uncertain_payload = _post_status(
+                base_url,
+                uncertain_path,
+                {"idempotency_key": "draft-uncertain-execute-v1"},
+                token,
+            )
+            if (
+                uncertain_status != 409
+                or uncertain_payload.get("error") != "external_execution_processing_manual_reconcile"
+            ):
+                return fail(
+                    "a post-consume draft failure must return the fixed manual-reconcile response: "
+                    f"{uncertain_status} {uncertain_payload}"
+                )
+            uncertain_terminal = repo.get_confirmation(
+                company_id=user["default_company_id"],
+                confirmation_id=uncertain_confirmation["confirmation_id"],
+            ) or {}
+            if uncertain_terminal.get("status") != "external_execution_processing_manual_reconcile":
+                return fail("a post-consume draft failure must retain the durable manual-reconcile state")
+            retry_status, _retry_payload = _post_status(
+                base_url,
+                uncertain_path,
+                {"idempotency_key": "draft-uncertain-execute-v1"},
+                token,
+            )
+            if retry_status != 409 or FakeWriteAdapter.draft_execute_attempt_count != 1:
+                return fail("a post-consume draft failure must never retry the adapter automatically")
         finally:
             server.shutdown()
             server.server_close()

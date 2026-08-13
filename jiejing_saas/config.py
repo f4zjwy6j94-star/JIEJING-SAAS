@@ -37,6 +37,7 @@ class SaaSSettings:
     ebay_token_refresh_live_enabled: bool
     ebay_read_only_live_enabled: bool
     ebay_write_live_enabled: bool
+    ebay_draft_save_live_enabled: bool
     allow_hermes_adapters: bool
     cors_origin: str
     internal_admin_emails: tuple[str, ...]
@@ -88,6 +89,7 @@ class SaaSSettings:
             ebay_token_refresh_live_enabled=_env_bool("JIEJING_EBAY_TOKEN_REFRESH_LIVE", default=False),
             ebay_read_only_live_enabled=_env_bool("JIEJING_EBAY_READ_ONLY_LIVE", default=False),
             ebay_write_live_enabled=_env_bool("JIEJING_EBAY_WRITE_LIVE", default=False),
+            ebay_draft_save_live_enabled=_env_bool("JIEJING_EBAY_DRAFT_SAVE_LIVE", default=False),
             allow_hermes_adapters=_env_bool("JIEJING_ALLOW_HERMES_ADAPTERS", default=False),
             cors_origin=os.environ.get("JIEJING_CORS_ORIGIN", "*"),
             internal_admin_emails=_env_csv_lower("JIEJING_INTERNAL_ADMIN_EMAILS"),
@@ -131,6 +133,15 @@ class SaaSSettings:
             and self.is_production_like
         )
 
+    @property
+    def effective_ebay_draft_save_enabled(self) -> bool:
+        return bool(
+            self.ebay_draft_save_live_enabled
+            and self.ebay_token_refresh_live_enabled
+            and self.ebay_read_only_live_enabled
+            and self.is_production_like
+        )
+
     def public_dict(self) -> dict[str, Any]:
         return {
             "environment": self.environment,
@@ -160,6 +171,7 @@ class SaaSSettings:
             "ebay_token_refresh_live_enabled": self.ebay_token_refresh_live_enabled,
             "ebay_read_only_live_enabled": self.ebay_read_only_live_enabled,
             "ebay_write_live_enabled": self.ebay_write_live_enabled,
+            "ebay_draft_save_live_enabled": self.ebay_draft_save_live_enabled,
             "allow_hermes_adapters": self.allow_hermes_adapters,
             "internal_admin_allowlist_configured": bool(self.internal_admin_emails),
             "cors_origin_configured": bool(self.cors_origin),
@@ -167,6 +179,7 @@ class SaaSSettings:
             "runtime_independent_from_hermes": not self.allow_hermes_adapters,
             "requested_real_platform_writes": self.requested_real_platform_writes,
             "effective_real_platform_writes_enabled": self.effective_real_platform_writes_enabled,
+            "effective_ebay_draft_save_enabled": self.effective_ebay_draft_save_enabled,
             "session_secret_configured": self.session_secret_configured,
             "session_secret_is_default": self.session_secret_is_default,
             "secret_exposed": False,

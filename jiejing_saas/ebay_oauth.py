@@ -35,6 +35,11 @@ PUBLISH_SCOPES = [
     "https://api.ebay.com/oauth/api_scope/sell.finances",
 ]
 
+# eBay's Inventory API uses sell.inventory for both unpublished offer drafts
+# and public publishing. Jiejing requests that technical scope here while the
+# server capability remains explicitly draft-only.
+UNPUBLISHED_DRAFT_SCOPES = list(PUBLISH_SCOPES)
+
 HIGH_RISK_WRITE_SCOPE_MARKERS = (
     "/sell.inventory",
     "/sell.account",
@@ -150,6 +155,67 @@ class EbayOAuthPlanner:
                 "The browser still receives only an authorization URL and state, never access_token or refresh_token.",
                 "The first live write supported by Jiejing is single publish_listing after confirmation, not bulk publish or account mutation.",
                 "Publishing remains blocked unless listing facts, business policies, item specifics, assets, finance review, and confirmation preflight pass.",
+            ],
+            "secret_exposed": False,
+        }
+
+    def unpublished_draft_authorization_plan(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        user_id: str,
+        marketplace_id: str = "EBAY_US",
+        requested_scopes: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Build seller consent for saving Inventory API offers as drafts only."""
+
+        scopes = self._normalize_unpublished_draft_scopes(requested_scopes)
+        missing_config = []
+        if not self.settings.ebay_client_id:
+            missing_config.append("JIEJING_EBAY_CLIENT_ID")
+        if not self.settings.ebay_ru_name:
+            missing_config.append("JIEJING_EBAY_RU_NAME")
+
+        state_nonce = secrets.token_urlsafe(24)
+        configured = not missing_config
+        authorization_url = self._authorization_url(scopes, state_nonce) if configured else None
+        return {
+            "status": "ready_to_redirect" if configured else "blocked_missing_oauth_config",
+            "platform": "ebay",
+            "environment": self.settings.ebay_oauth_environment,
+            "company_id": company_id,
+            "store_id": store_id,
+            "user_id": user_id,
+            "marketplace_id": marketplace_id,
+            "scopes": scopes,
+            "scope_profile": "seller_unpublished_draft",
+            "state_nonce": state_nonce,
+            "authorization_url": authorization_url,
+            "missing_config": missing_config,
+            "human_login_required": True,
+            "callback_next_step": "backend_exchange_code_for_token_then_store_refresh_token_in_vault",
+            "will_store_raw_token_in_frontend": False,
+            "will_store_raw_token_in_database": False,
+            "confirmation_required_for_scope_upgrade": True,
+            "draft_save_capability_requested": True,
+            "public_publish_enabled": False,
+            "real_platform_writes_enabled": False,
+            "write_actions_requested": ["save_ebay_listing_draft"],
+            "write_actions_not_requested": [
+                "publish_listing",
+                "change_price",
+                "change_inventory",
+                "refund",
+                "ad_budget",
+                "procurement_payment",
+                "policy_edit",
+                "tracking_write",
+            ],
+            "notes": [
+                "This authorization requests sell.inventory only for saving an unpublished Inventory API offer.",
+                "The browser receives only an authorization URL and state, never access_token or refresh_token.",
+                "Public publish remains disabled and requires a separate future product approval.",
             ],
             "secret_exposed": False,
         }
@@ -551,6 +617,15 @@ class EbayOAuthPlanner:
             if scope not in scopes:
                 scopes.append(scope)
         return scopes
+
+    def _normalize_unpublished_draft_scopes(self, requested_scopes: list[str] | None) -> list[str]:
+        if requested_scopes is None:
+            return list(UNPUBLISHED_DRAFT_SCOPES)
+        if type(requested_scopes) is not list or requested_scopes != UNPUBLISHED_DRAFT_SCOPES:
+            raise ValueError("oauth_unpublished_draft_scopes_not_allowed")
+        if any(type(scope) is not str for scope in requested_scopes):
+            raise ValueError("oauth_unpublished_draft_scopes_not_allowed")
+        return list(requested_scopes)
 
     def _looks_high_risk_write_scope(self, scope: str) -> bool:
         normalized = scope.lower()

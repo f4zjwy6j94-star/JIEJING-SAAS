@@ -143,7 +143,7 @@ def main() -> int:
         company_id=company_id,
         store_id=store["store_id"],
         user_id=user_id,
-        payload={"platform": "ebay", "connection_type": "oauth", "status": "read_only_authorized"},
+        payload={"platform": "ebay", "connection_type": "oauth", "status": "draft_save_authorized"},
     )
     for index, event_key in enumerate(("page_view", "pricing_view", "signup_started", "signup_completed"), start=1):
         repo.record_platform_analytics_event(
@@ -278,6 +278,7 @@ def main() -> int:
             }
         },
     )
+    fixture_paid_at = datetime.now(timezone.utc).isoformat()
     repo.create_domestic_billing_order_record(
         order_id="acceptance-order-one",
         company_id=company_id,
@@ -290,7 +291,7 @@ def main() -> int:
         status="paid",
         idempotency_key_hash="acceptance-order-one-hash",
         order={"live_acceptance_test": True, "display_name": "controlled acceptance"},
-        paid_at="2026-07-14T00:00:00+00:00",
+        paid_at=fixture_paid_at,
     )
     repo.create_domestic_billing_order_record(
         order_id="commercial-order-one",
@@ -304,7 +305,7 @@ def main() -> int:
         status="paid",
         idempotency_key_hash="commercial-order-one-hash",
         order={"live_acceptance_test": False, "display_name": "Jiejing Starter"},
-        paid_at="2026-07-14T00:00:00+00:00",
+        paid_at=fixture_paid_at,
     )
     repo.apply_billing_webhook_event(
         event={

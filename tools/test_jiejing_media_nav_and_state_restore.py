@@ -90,7 +90,7 @@ def main() -> int:
         "const ebayAuthorized = isSaasAuthorizedConnectionStatus",
         "不需要重新打开授权链接",
         'data-saas-action="plan-ebay-oauth" ${!hasSessionCandidate || ebayAuthorized ? "disabled" : ""}',
-        'data-saas-action="plan-ebay-publish-oauth" ${!hasSessionCandidate || ebayPublishAuthorized ? "disabled" : ""}',
+        'data-saas-action="plan-ebay-draft-oauth" ${!hasSessionCandidate || !ebayAuthorized || ebayDraftAuthorized ? "disabled" : ""}',
     ]:
         if marker not in app_js:
             return fail(f"settings must not prompt repeat eBay OAuth after authorization is restored: {marker}")

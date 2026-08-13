@@ -20,7 +20,7 @@ def main() -> None:
     app = APP_JS.read_text(encoding="utf-8")
     styles = STYLES.read_text(encoding="utf-8")
     flow_start = app.index("async function planSaasEbayReadOnlyOAuth()")
-    flow_end = app.index("async function planSaasEbayPublishOAuth()", flow_start)
+    flow_end = app.index("async function planSaasEbayUnpublishedDraftOAuth()", flow_start)
     flow = app[flow_start:flow_end]
     approve_start = app.index("async function approveFirstSaasConfirmation")
     approve_end = app.index("async function loginSaasBackendSession", approve_start)

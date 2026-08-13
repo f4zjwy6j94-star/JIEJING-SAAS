@@ -192,11 +192,13 @@ POSTGRES_EXACT_KEYS = {
 COMPOSE_SAFETY_VALUES = {
     "JIEJING_ENABLE_REAL_PLATFORM_WRITES": "false",
     "JIEJING_EBAY_WRITE_LIVE": "false",
+    "JIEJING_EBAY_DRAFT_SAVE_LIVE": "false",
     "JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY": "disabled_public_staging",
 }
 COMPOSE_BILLING_PROVIDER_VALUE = "stripe_test_mock"
 COMPOSE_REQUIRED_VALUES = {
-    **COMPOSE_SAFETY_VALUES,
+    "JIEJING_ENABLE_REAL_PLATFORM_WRITES": "false",
+    "JIEJING_EBAY_WRITE_LIVE": "false",
     "JIEJING_BILLING_PROVIDER": COMPOSE_BILLING_PROVIDER_VALUE,
 }
 COMPOSE_STATIC_KEYS = frozenset(
@@ -208,7 +210,7 @@ COMPOSE_STATIC_KEYS = frozenset(
         "JIEJING_SAAS_ENV",
     }
 )
-COMPOSE_OWNED_KEYS = frozenset(COMPOSE_REQUIRED_VALUES) | COMPOSE_STATIC_KEYS
+COMPOSE_OWNED_KEYS = frozenset(COMPOSE_SAFETY_VALUES) | frozenset(COMPOSE_REQUIRED_VALUES) | COMPOSE_STATIC_KEYS
 PUBLIC_SOURCE_ROLES = frozenset({"managed", "secret", "postgres", "compose"})
 ROLE_TO_SOURCE = {
     "managed": MANAGED_SOURCE,
@@ -222,7 +224,10 @@ FALSE_OR_DISABLED_VALUES = frozenset({"false", "0", "no", "off", "disabled"})
 STAGING_VALUE_CONSTRAINTS: dict[str, frozenset[str]] = {
     "JIEJING_ENABLE_REAL_PLATFORM_WRITES": FALSE_OR_DISABLED_VALUES,
     "JIEJING_EBAY_WRITE_LIVE": FALSE_OR_DISABLED_VALUES,
-    "JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY": frozenset({"disabled_public_staging"}),
+    "JIEJING_EBAY_DRAFT_SAVE_LIVE": frozenset({"false", "true"}),
+    "JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY": frozenset(
+        {"disabled_public_staging", "controlled_unpublished_draft_only"}
+    ),
     "JIEJING_BILLING_PROVIDER": frozenset({COMPOSE_BILLING_PROVIDER_VALUE}),
     "JIEJING_PUBLIC_CHARGING_ALLOWED": FALSE_OR_DISABLED_VALUES,
     "JIEJING_DOMESTIC_PAYMENT_LIVE_CUTOVER_APPROVED": FALSE_OR_DISABLED_VALUES,
@@ -2155,6 +2160,73 @@ def analyze_runtime_env_ownership(
     warnings: list[dict[str, object]] = []
     analyzed_declarations: list[AnalyzedDeclaration] = []
     key_analysis_by_key = {key_analysis.key: key_analysis for key_analysis in key_analyses}
+
+    def exact_runtime_compose_values(key: str) -> dict[str, str] | None:
+        key_analysis = key_analysis_by_key.get(key)
+        if key_analysis is None:
+            return None
+        values: dict[str, str] = {}
+        for service_name in required_services:
+            service_declarations = [
+                declaration
+                for declaration in key_analysis.declarations
+                if declaration.source == f"{COMPOSE_SOURCE}:{service_name}"
+            ]
+            if len(service_declarations) != 1:
+                return None
+            values[service_name] = service_declarations[0].private_value.strip().casefold()
+        return values
+
+    draft_save_values = exact_runtime_compose_values("JIEJING_EBAY_DRAFT_SAVE_LIVE")
+    real_write_policy_values = exact_runtime_compose_values("JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY")
+    if draft_save_values is not None and real_write_policy_values is not None:
+        if len(set(draft_save_values.values())) != 1:
+            blockers.append(
+                {
+                    "code": "inconsistent_runtime_ebay_draft_save_value",
+                    "source": COMPOSE_SOURCE,
+                }
+            )
+        for service_name in sorted(required_services):
+            expected_policy = (
+                "controlled_unpublished_draft_only"
+                if draft_save_values[service_name] == "true"
+                else "disabled_public_staging"
+            )
+            if real_write_policy_values[service_name] != expected_policy:
+                blockers.append(
+                    {
+                        "code": "inconsistent_ebay_draft_save_policy",
+                        "key": "JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY",
+                        "source": f"{COMPOSE_SOURCE}:{service_name}",
+                        "service": service_name,
+                    }
+                )
+        if any(value == "true" for value in draft_save_values.values()):
+            for prerequisite_key in (
+                "JIEJING_EBAY_TOKEN_REFRESH_LIVE",
+                "JIEJING_EBAY_READ_ONLY_LIVE",
+            ):
+                prerequisite_analysis = key_analysis_by_key.get(prerequisite_key)
+                prerequisite_declarations = (
+                    [
+                        declaration
+                        for declaration in prerequisite_analysis.declarations
+                        if declaration.source == SECRET_SOURCE
+                    ]
+                    if prerequisite_analysis is not None
+                    else []
+                )
+                if len(prerequisite_declarations) != 1 or (
+                    prerequisite_declarations[0].private_value.strip().casefold() != "true"
+                ):
+                    blockers.append(
+                        {
+                            "code": "ebay_draft_save_prerequisite_not_enabled",
+                            "key": prerequisite_key,
+                            "source": SECRET_SOURCE,
+                        }
+                    )
     for declaration in declarations:
         owner = key_analysis_by_key[declaration.key].owner
         source_role = _source_role(declaration.source)
@@ -2259,11 +2331,14 @@ COMPOSE_STRUCTURE_BLOCKER_CODES = frozenset(
         "duplicate_compose_override_service",
         "duplicate_compose_service",
         "duplicate_top_level_services",
+        "ebay_draft_save_prerequisite_not_enabled",
         "invalid_compose_environment_syntax",
         "invalid_compose_indentation",
         "invalid_compose_override_services",
         "invalid_compose_override_resources",
         "invalid_compose_service_syntax",
+        "inconsistent_ebay_draft_save_policy",
+        "inconsistent_runtime_ebay_draft_save_value",
         "missing_compose_service_declaration",
         "missing_compose_services_section",
         "missing_required_billing_provider_pin",

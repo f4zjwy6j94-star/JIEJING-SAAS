@@ -401,6 +401,21 @@ create table if not exists billing_webhook_events (
   billing_event_json jsonb not null
 );
 
+create table if not exists external_execution_claims (
+  claim_id text primary key,
+  company_id text not null references companies(company_id),
+  store_id text not null references stores(store_id),
+  confirmation_id text not null unique references confirmations(confirmation_id),
+  action_type text not null,
+  status text not null,
+  nonce_sha256 text not null,
+  binding_json jsonb not null,
+  claimed_by text not null references users(user_id),
+  claimed_at timestamptz not null,
+  expires_at timestamptz not null,
+  consumed_at timestamptz
+);
+
 alter table confirmations alter column store_id drop not null;
 alter table confirmations alter column task_id drop not null;
 

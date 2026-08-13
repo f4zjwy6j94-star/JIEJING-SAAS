@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import datetime, timezone
 from typing import Any
 
 from .config import SaaSSettings
 from .ebay_account_deletion import fetch_ebay_identity_hashes
-from .ebay_oauth import EbayOAuthPlanner
+from .ebay_oauth import EbayOAuthPlanner, UNPUBLISHED_DRAFT_SCOPES
 from .ebay_oauth_token_store import EbayLocalOAuthTokenStore, OAuthTransport
 from .repository import SaaSRepository
 from .secret_store import SecretStoreBoundary
@@ -135,6 +136,16 @@ def _oauth_state_blocker(*, request_record: dict[str, Any] | None, code: str) ->
         "real_platform_writes_enabled": False,
         "secret_exposed": False,
     }
+    request_payload = request_record.get("request") if isinstance(request_record.get("request"), dict) else {}
+    scope_profile = str(request_payload.get("scope_profile") or "")
+    if scope_profile not in {"seller_read_only", "seller_unpublished_draft"}:
+        return {
+            **base,
+            "status": "blocked_retired_oauth_profile",
+            "summary": "This legacy OAuth authorization profile is retired and cannot exchange credentials.",
+            "blocked_by": ["oauth_legacy_publish_profile_retired"],
+            "record_callback_event": True,
+        }
     if status.startswith(OAUTH_CALLBACK_TERMINAL_PREFIXES):
         return {
             **base,
@@ -169,15 +180,21 @@ def _oauth_state_blocker(*, request_record: dict[str, Any] | None, code: str) ->
 
 def _oauth_state_age_seconds(request_record: dict[str, Any]) -> int | None:
     created_at = str(request_record.get("created_at") or "")
-    if not created_at:
+    if not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
+        created_at,
+    ):
         return None
     try:
-        created = datetime.fromisoformat(created_at)
+        created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
     except ValueError:
         return None
-    if created.tzinfo is None:
-        created = created.replace(tzinfo=timezone.utc)
-    return max(0, int((datetime.now(timezone.utc) - created.astimezone(timezone.utc)).total_seconds()))
+    if created.tzinfo is None or created.utcoffset() is None:
+        return None
+    age_seconds = (datetime.now(timezone.utc) - created.astimezone(timezone.utc)).total_seconds()
+    if age_seconds < 0:
+        return None
+    return int(age_seconds)
 
 
 def _exchange_and_store_refresh_token(
@@ -204,6 +221,27 @@ def _exchange_and_store_refresh_token(
         }
 
     token_response = exchange.get("token_response") if isinstance(exchange.get("token_response"), dict) else {}
+    request_payload = request_record.get("request") if isinstance(request_record.get("request"), dict) else {}
+    scope_profile = str(request_payload.get("scope_profile") or "seller_read_only")
+    draft_scope_upgrade = scope_profile == "seller_unpublished_draft"
+    actual_granted_scopes = _actual_granted_scopes(token_response)
+    if draft_scope_upgrade and actual_granted_scopes != UNPUBLISHED_DRAFT_SCOPES:
+        return {
+            **callback_result,
+            "status": "callback_exchange_granted_scope_blocked",
+            "token_exchange_performed": True,
+            "vault_write_performed": False,
+            "blocked_by": ["oauth_actual_granted_scope_not_exact"],
+            "token_response_summary": _token_response_summary(token_response),
+            "draft_save_scope_authorized": False,
+            "publish_scope_authorized": False,
+            "manual_reconcile_required": True,
+            "automatic_retry_allowed": False,
+            "next_step": "manual_reconcile_granted_scope_before_new_authorization",
+            "access_token_returned_to_frontend": False,
+            "refresh_token_returned_to_frontend": False,
+            "secret_exposed": False,
+        }
     refresh_token = str(token_response.get("refresh_token") or "")
     if not refresh_token:
         return {
@@ -235,6 +273,32 @@ def _exchange_and_store_refresh_token(
             "refresh_token_returned_to_frontend": False,
             "secret_exposed": False,
         }
+
+    draft_upgrade_boundary: dict[str, Any] = {}
+    if draft_scope_upgrade:
+        draft_upgrade_boundary = repository.ebay_oauth_scope_upgrade_identity_boundary(
+            company_id=request_record["company_id"],
+            store_id=request_record["store_id"],
+            ebay_user_id_hash=str(identity_mapping.get("ebay_user_id_hash") or ""),
+        )
+        if draft_upgrade_boundary.get("allowed") is not True:
+            return {
+                **callback_result,
+                "status": "callback_exchange_seller_identity_blocked",
+                "token_exchange_performed": True,
+                "vault_write_performed": False,
+                "blocked_by": draft_upgrade_boundary.get("blocked_by")
+                or ["oauth_seller_identity_or_provenance_mismatch"],
+                "token_response_summary": _token_response_summary(token_response),
+                "draft_save_scope_authorized": False,
+                "publish_scope_authorized": False,
+                "manual_reconcile_required": True,
+                "automatic_retry_allowed": False,
+                "next_step": "manual_reconcile_seller_identity_before_new_authorization",
+                "access_token_returned_to_frontend": False,
+                "refresh_token_returned_to_frontend": False,
+                "secret_exposed": False,
+            }
 
     secret_ref = repository.create_secret_reference(
         company_id=request_record["company_id"],
@@ -299,7 +363,8 @@ def _exchange_and_store_refresh_token(
             "secret_exposed": False,
         }
 
-    stored_status = "local_secret_resolver_stored" if storage.get("local_development_write_performed") else "managed_vault_stored"
+    terminal_stored_status = "local_secret_resolver_stored" if storage.get("local_development_write_performed") else "managed_vault_stored"
+    stored_status = "oauth_scope_upgrade_vault_stored_pending_connection" if draft_scope_upgrade else terminal_stored_status
     updated_ref = repository.update_secret_reference_status(
         company_id=request_record["company_id"],
         store_id=request_record["store_id"],
@@ -321,46 +386,72 @@ def _exchange_and_store_refresh_token(
         },
     )
     request_scopes = request_record.get("scopes") if isinstance(request_record.get("scopes"), list) else []
-    publish_scope_authorized = _has_ebay_publish_scope(request_scopes)
-    connection_status = "publish_authorized" if publish_scope_authorized else "read_only_authorized"
-    request_payload = request_record.get("request") if isinstance(request_record.get("request"), dict) else {}
-    connection = repository.create_platform_connection(
-        company_id=request_record["company_id"],
-        store_id=request_record["store_id"],
-        user_id=request_record["created_by"],
-        payload={
-            "platform": "ebay",
-            "connection_type": "oauth",
-            "status": connection_status,
-            "purpose": "ebay_refresh_token",
-            "scopes": request_scopes,
-            "secret_ref": updated_ref["secret_ref"],
-            "metadata": {
-                "oauth_request_id": request_record["oauth_request_id"],
-                "scope_profile": request_payload.get("scope_profile") or ("seller_publish_listing" if publish_scope_authorized else "seller_read_only"),
-                "publish_scope_authorized": publish_scope_authorized,
-                "credential_source": "jiejing_vault_secret_ref",
-                "storage_adapter": storage.get("storage_adapter"),
-                "marketplace": request_payload.get("marketplace_id") or "EBAY_US",
-                "environment": settings.ebay_oauth_environment,
-                "token_endpoint": callback_result.get("token_endpoint"),
-                "token_exchange_http_status": exchange.get("http_status"),
-                "access_token_ttl_seconds": _safe_int(token_response.get("expires_in")),
-                "seller_refresh_credential_ttl_seconds": _safe_int(token_response.get("refresh_token_expires_in")),
-                "account_deletion_identity_mapping_status": identity_mapping.get("status"),
-                "ebay_user_id_hash": identity_mapping.get("ebay_user_id_hash") or "",
-                "ebay_username_hash": identity_mapping.get("ebay_username_hash") or "",
-                "registration_marketplace_id": identity_mapping.get("registration_marketplace_id") or "",
-                "ebay_account_type": identity_mapping.get("account_type") or "",
-                "ebay_account_status": identity_mapping.get("account_status") or "",
-                "token_values_returned_to_public_response": False,
-                "access_token_stored_in_database": False,
-                "refresh_token_stored_in_database": False,
-                "real_platform_writes_enabled": False,
-                "secret_exposed": False,
-            },
-        },
+    connection_scopes = actual_granted_scopes if draft_scope_upgrade else request_scopes
+    draft_save_scope_authorized = bool(draft_scope_upgrade and actual_granted_scopes == UNPUBLISHED_DRAFT_SCOPES)
+    publish_scope_authorized = bool(not draft_scope_upgrade and _has_ebay_publish_scope(connection_scopes))
+    connection_status = (
+        "draft_save_authorized"
+        if draft_save_scope_authorized
+        else "publish_authorized"
+        if publish_scope_authorized
+        else "read_only_authorized"
     )
+    connection_metadata = {
+        "oauth_request_id": request_record["oauth_request_id"],
+        "confirmation_id": str(request_payload.get("confirmation_id") or ""),
+        "scope_profile": scope_profile or ("seller_publish_listing" if publish_scope_authorized else "seller_read_only"),
+        "authorization_kind": "unpublished_draft" if draft_save_scope_authorized else "publish" if publish_scope_authorized else "read_only",
+        "draft_save_scope_authorized": draft_save_scope_authorized,
+        "publish_scope_authorized": publish_scope_authorized,
+        "public_publish_enabled": False if draft_save_scope_authorized else publish_scope_authorized,
+        "credential_source": "jiejing_vault_secret_ref",
+        "storage_adapter": storage.get("storage_adapter"),
+        "marketplace": request_payload.get("marketplace_id") or "EBAY_US",
+        "environment": settings.ebay_oauth_environment,
+        "token_endpoint": callback_result.get("token_endpoint"),
+        "token_exchange_http_status": exchange.get("http_status"),
+        "access_token_ttl_seconds": _safe_int(token_response.get("expires_in")),
+        "seller_refresh_credential_ttl_seconds": _safe_int(token_response.get("refresh_token_expires_in")),
+        "account_deletion_identity_mapping_status": identity_mapping.get("status"),
+        "ebay_user_id_hash": identity_mapping.get("ebay_user_id_hash") or "",
+        "ebay_username_hash": identity_mapping.get("ebay_username_hash") or "",
+        "registration_marketplace_id": identity_mapping.get("registration_marketplace_id") or "",
+        "ebay_account_type": identity_mapping.get("account_type") or "",
+        "ebay_account_status": identity_mapping.get("account_status") or "",
+        "token_values_returned_to_public_response": False,
+        "access_token_stored_in_database": False,
+        "refresh_token_stored_in_database": False,
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+    if draft_save_scope_authorized:
+        connection = repository.finalize_unpublished_draft_oauth_connection(
+            company_id=request_record["company_id"],
+            store_id=request_record["store_id"],
+            user_id=request_record["created_by"],
+            oauth_request_id=request_record["oauth_request_id"],
+            secret_ref=str(updated_ref["secret_ref"]),
+            scopes=connection_scopes,
+            metadata=connection_metadata,
+            previous_connection_id=str(draft_upgrade_boundary.get("previous_connection_id") or ""),
+            previous_secret_ref=str(draft_upgrade_boundary.get("previous_secret_ref") or ""),
+            final_secret_status=terminal_stored_status,
+        )
+    else:
+        connection = repository.create_platform_connection(
+            company_id=request_record["company_id"],
+            store_id=request_record["store_id"],
+            user_id=request_record["created_by"],
+            payload={
+                "platform": "ebay",
+                "connection_type": "oauth",
+                "status": connection_status,
+                "purpose": "ebay_refresh_token",
+                "scopes": connection_scopes,
+                "secret_ref": updated_ref["secret_ref"],
+                "metadata": connection_metadata,
+            },
+        )
     backend_connection_binding = {
         "contract_version": "2026-08-10-oauth-callback-connection-binding-v1",
         "oauth_request_id": request_record["oauth_request_id"],
@@ -377,6 +468,7 @@ def _exchange_and_store_refresh_token(
         **callback_result,
         "status": "callback_exchange_completed",
         "connection_status": connection_status,
+        "draft_save_scope_authorized": draft_save_scope_authorized,
         "publish_scope_authorized": publish_scope_authorized,
         "token_exchange_performed": True,
         "vault_write_performed": True,
@@ -405,6 +497,18 @@ def _exchange_and_store_refresh_token(
 
 def _has_ebay_publish_scope(scopes: list[Any]) -> bool:
     return any(str(scope).strip().lower().endswith("/sell.inventory") for scope in scopes)
+
+
+def _actual_granted_scopes(token_response: dict[str, Any]) -> list[str]:
+    raw_scope = token_response.get("scope")
+    if type(raw_scope) is not str or not raw_scope.strip():
+        return []
+    scopes = raw_scope.split()
+    if not scopes or len(scopes) != len(set(scopes)):
+        return []
+    if set(scopes) != set(UNPUBLISHED_DRAFT_SCOPES):
+        return []
+    return list(UNPUBLISHED_DRAFT_SCOPES)
 
 
 def _token_response_summary(token_response: dict[str, Any]) -> dict[str, Any]:

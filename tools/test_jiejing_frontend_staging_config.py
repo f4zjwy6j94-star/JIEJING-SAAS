@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -269,17 +272,79 @@ def main() -> int:
     managed_env_template = (ROOT / "deploy/jiejing-saas.tencent-managed.env.example").read_text(encoding="utf-8")
     deploy_script = (ROOT / "tools/jiejing_deploy_frontend_staging_with_key.ps1").read_text(encoding="utf-8")
     prelaunch_runbook = (ROOT / "docs/JIEJING_PRELAUNCH_INTERNAL_HARDENING_RUNBOOK_20260620.md").read_text(encoding="utf-8")
-    for compose_name, compose_text in [
-        ("docker-compose.public-staging.yml", compose_public),
-        ("docker-compose.public-https-staging.yml", compose_https),
-    ]:
+    public_staging_contracts = [
+        (
+            "docker-compose.public-staging.yml",
+            compose_public,
+            'JIEJING_EBAY_DRAFT_SAVE_LIVE: "false"',
+            'JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "disabled_public_staging"',
+        ),
+        (
+            "docker-compose.public-https-staging.yml",
+            compose_https,
+            'JIEJING_EBAY_DRAFT_SAVE_LIVE: "false"',
+            'JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "disabled_public_staging"',
+        ),
+    ]
+    for compose_name, compose_text, draft_marker, policy_marker in public_staging_contracts:
         for marker in [
             'JIEJING_ENABLE_REAL_PLATFORM_WRITES: "false"',
             'JIEJING_EBAY_WRITE_LIVE: "false"',
-            'JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "disabled_public_staging"',
+            draft_marker,
+            policy_marker,
         ]:
-            if marker not in compose_text:
-                return fail(f"public staging compose must override live write env from private env file: {compose_name} missing {marker}")
+            if compose_text.count(marker) != 2:
+                return fail(
+                    "public staging API and worker must own the same narrow write contract: "
+                    f"{compose_name} expected two declarations of {marker}"
+                )
+    with TemporaryDirectory() as temp_dir:
+        candidate_deploy = Path(temp_dir) / "workspace" / "deploy"
+        private_root = Path(temp_dir) / "private"
+        candidate_deploy.mkdir(parents=True)
+        private_root.mkdir()
+        compose_path = candidate_deploy / "docker-compose.public-https-staging.yml"
+        managed_path = private_root / "tencent-managed.env"
+        secret_path = private_root / "jiejing-saas.staging-oauth.env"
+        postgres_path = private_root / "postgres-localqueue.env"
+        compose_path.write_text(compose_https, encoding="utf-8")
+        managed_path.write_text(
+            (ROOT / "deploy/jiejing-saas.tencent-managed.env.example").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        secret_path.write_text(
+            (ROOT / "deploy/jiejing-saas.staging-oauth.env.example").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        postgres_path.write_text(
+            (ROOT / "deploy/jiejing-saas.postgres-localqueue.env.example").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "tools/jiejing_runtime_env_overlap_guard.py"),
+                "check",
+                "--compose",
+                str(compose_path),
+                "--managed-env",
+                str(managed_path),
+                "--secret-env",
+                str(secret_path),
+                "--postgres-env",
+                str(postgres_path),
+                "--json",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            return fail(f"public HTTPS narrow draft-save ownership guard failed: {completed.stderr or completed.stdout}")
+        guard_report = json.loads(completed.stdout)
+        if not guard_report["ok"] or guard_report["blockers"] or guard_report["secret_exposed"]:
+            return fail("public HTTPS narrow draft-save ownership guard did not pass safely")
     if "../privacy.html:/usr/share/nginx/html/privacy.html:ro" not in compose_https:
         return fail("public HTTPS staging frontend must serve privacy.html for eBay OAuth developer configuration")
     for mounted_page in [
@@ -396,7 +461,9 @@ def main() -> int:
         "url.port",
         "url.username",
         "url.password",
-        "safeEbayOAuthAuthorizationUrl(rawPlannedOAuthUrl)",
+        "validatedSaasReadOnlyOAuthAuthorizationUrl(rawUrl, planScopes, planState)",
+        "validatedSaasUnpublishedDraftOAuthAuthorizationUrl(value = \"\", expectedState = \"\")",
+        "validatedSaasUnpublishedDraftOAuthPlanResponse(payload, store, existingConfirmation)",
         "window.JIEJING_CONFIG",
         "__JIEJING_CONFIG__",
         "jiejing_saas_api_base",

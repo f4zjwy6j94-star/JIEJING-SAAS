@@ -485,7 +485,7 @@ def _find_ebay_connection(connections: list[dict[str, Any]]) -> dict[str, Any] |
         if str(item.get("connection_type") or "").lower() != "oauth":
             continue
         status = str(item.get("status") or "").lower()
-        if status in {"read_only_authorized", "publish_authorized", "read_write_authorized", "authorized", "connected"}:
+        if status in {"read_only_authorized", "draft_save_authorized", "publish_authorized", "read_write_authorized", "authorized", "connected"}:
             return item
     return None
 

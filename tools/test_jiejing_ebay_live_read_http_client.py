@@ -89,6 +89,17 @@ def main() -> int:
         )
         if live_read_plan.get("status") != "ready_to_queue_live_read_job":
             return fail("direct backend access token should allow the read-only plan to queue")
+        draft_upgrade_plan = EbayLiveReadPlanBuilder(settings).build_execution_plan(
+            company_id="company_live_test",
+            store=store,
+            user_id="user_live_test",
+            requested_resources=["inventory_and_offers"],
+            secret_refs=[{"secret_ref": "secret_live_ebay", "provider": "ebay", "purpose": "ebay_refresh_token", "status": "external_vault_required"}],
+            connections=[{"connection_id": "conn_live_ebay", "platform": "ebay", "connection_type": "oauth", "status": "draft_save_authorized", "scopes": ["sell.inventory.readonly", "sell.inventory"]}],
+            token_refresh_plan=token_refresh_plan,
+        )
+        if draft_upgrade_plan.get("status") != "ready_to_queue_live_read_job":
+            return fail("draft-save authorization must preserve the existing read-only data path")
         routed_root_plan = EbayLiveReadPlanBuilder(settings).build_execution_plan(
             company_id="company_live_test",
             store=store,

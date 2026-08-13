@@ -114,7 +114,10 @@ docker compose -f deploy/docker-compose.staging.yml up
 - eBay read-only adapter reads live store/listing/order/fee/policy data.
 - Provider jobs for 1688, logistics, search and media use backend-only credentials.
 - ExecutionService remains the only write boundary.
-- Real writes stay disabled until sandbox publish/revise/refund tests pass.
+- Public publish/revise/refund and broad platform writes stay disabled. The
+  public HTTPS profile may enable only confirmation-gated eBay unpublished
+  draft save with `JIEJING_EBAY_DRAFT_SAVE_LIVE=true`, both broad flags false,
+  and policy `controlled_unpublished_draft_only`.
 
 ## eBay Read-Only Connection Path
 
@@ -154,6 +157,11 @@ a `secret_ref` in Vault/KMS. The SaaS backend resolves that `secret_ref`,
 refreshes a short-lived access token, calls official eBay APIs, redacts raw
 responses, persists only normalized data packets, and passes sanitized facts to
 Runtime. Frontend and agents never receive tokens.
+
+The later unpublished-draft capability does not weaken this token boundary.
+Its switch and policy are owned by the public HTTPS Compose file for both API
+and worker; OAuth/private env files own only the backend read and refresh
+prerequisites. OAuth-only validation keeps draft save disabled.
 
 ### First Real Staging OAuth Loop
 

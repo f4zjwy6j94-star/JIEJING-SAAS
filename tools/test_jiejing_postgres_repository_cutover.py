@@ -213,6 +213,17 @@ def main() -> int:
         return fail("domestic billing entitlement mutations must use a Postgres company advisory lock")
 
     migration_text = (ROOT / "jiejing_saas" / "migrations" / "001_initial_schema_postgres.sql").read_text(encoding="utf-8")
+    lowered_migration = migration_text.lower()
+    for marker in (
+        "create table if not exists external_execution_claims",
+        "confirmation_id text not null unique references confirmations(confirmation_id)",
+        "nonce_sha256 text not null",
+        "binding_json jsonb not null",
+        "expires_at timestamptz not null",
+        "consumed_at timestamptz",
+    ):
+        if marker not in lowered_migration:
+            return fail(f"Postgres migration must ship one-shot unpublished-draft claim state: {marker}")
     if "idx_billing_orders_provider_transaction_unique" not in migration_text:
         return fail("one provider transaction must not activate more than one domestic billing order")
     for marker in (

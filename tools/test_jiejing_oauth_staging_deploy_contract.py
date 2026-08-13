@@ -26,6 +26,23 @@ def main() -> int:
     runbook = (ROOT / "docs" / "JIEJING_INDEPENDENT_SAAS_DEPLOYMENT_RUNBOOK.md").read_text(encoding="utf-8")
     bootstrap = (ROOT / "deploy" / "bootstrap.public-staging.ubuntu.sh").read_text(encoding="utf-8")
     checklist = (ROOT / "deploy" / "tencentcloud-public-staging-checklist.md").read_text(encoding="utf-8")
+    precloud = (ROOT / "tools" / "jiejing_precloud_deployment_gate.py").read_text(encoding="utf-8")
+
+    for marker in (
+        "frontend_read_only_oauth_confirmation",
+        "frontend_unpublished_draft_oauth",
+        "browser_read_only_oauth_confirmation",
+        "browser_unpublished_draft_oauth",
+        "ebay_unpublished_draft_oauth",
+        "unpublished_draft_claim_capability",
+        "ebay_draft_save_readiness",
+        "new_ebay_account_publish_http_chain",
+        "postgres_oauth_datetime_contract",
+    ):
+        if marker not in precloud:
+            return fail(f"precloud gate must permanently include the controlled-draft regression: {marker}")
+    if 'timeout=300 if key.startswith("browser_") else 180' not in precloud:
+        return fail("browser OAuth gates need a bounded timeout that accommodates the full attack matrix")
 
     env_file_contract = """    env_file:
       - ../../private/tencent-managed.env
@@ -39,6 +56,7 @@ def main() -> int:
         'JIEJING_CORS_ORIGIN: "https://app.jiejing.shop"',
         'JIEJING_ENABLE_REAL_PLATFORM_WRITES: "false"',
         'JIEJING_EBAY_WRITE_LIVE: "false"',
+        'JIEJING_EBAY_DRAFT_SAVE_LIVE: "false"',
         'JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "disabled_public_staging"',
         'JIEJING_BILLING_PROVIDER: "stripe_test_mock"',
     ):
@@ -94,13 +112,30 @@ def main() -> int:
                 return fail("OAuth ownership migration rehearsal must remain a dry-run")
     if "JIEJING_VAULT_ENABLED=true" not in managed_example or "JIEJING_VAULT_PROVIDER=tencent_ssm" not in managed_example:
         return fail("managed env example should own the active Vault enable/provider selection")
-    for forbidden in ("JIEJING_VAULT_ENABLED=", "JIEJING_VAULT_PROVIDER=", "JIEJING_SAAS_ENV=", "JIEJING_CORS_ORIGIN="):
+    for forbidden in (
+        "JIEJING_VAULT_ENABLED=",
+        "JIEJING_VAULT_PROVIDER=",
+        "JIEJING_SAAS_ENV=",
+        "JIEJING_CORS_ORIGIN=",
+        "JIEJING_EBAY_DRAFT_SAVE_LIVE=",
+    ):
         if forbidden in secret_example:
             return fail(f"secret env example must not own managed/static setting: {forbidden}")
     if "JIEJING_DATABASE_URL=<inject-private-postgres-url>" not in postgres_example:
         return fail("postgres env example should own the private database connection placeholder")
     if "JIEJING_EBAY_OAUTH_EXCHANGE_LIVE=true" not in secret_example:
         return fail("staging OAuth env example should enable live OAuth exchange")
+    for disabled_sensitive_capability in (
+        "JIEJING_MEDIA_CREDIT_PURCHASE_ENABLED=false",
+        "JIEJING_WECHAT_PAY_LIVE_API_ENABLED=false",
+        "JIEJING_WECHAT_PAY_CHARGE_ALLOWED=false",
+        "JIEJING_WECHAT_PAY_REFUND_ALLOWED=false",
+    ):
+        if disabled_sensitive_capability not in secret_example:
+            return fail(
+                "staging backend-secret template must keep charge/refund/purchase capabilities disabled: "
+                f"{disabled_sensitive_capability}"
+            )
     if "JIEJING_EBAY_REFRESH_TOKEN=" not in secret_example:
         return fail("staging OAuth env example should explicitly keep env refresh token empty")
     if "JIEJING_ENABLE_HERMES_EBAY_BRIDGE=false" not in secret_example:
