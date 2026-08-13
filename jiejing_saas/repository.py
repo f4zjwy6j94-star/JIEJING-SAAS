@@ -12940,6 +12940,8 @@ SAFE_SECRET_FLAG_KEYS = {
     "secret_value_stored",
     "runtime_gets_raw_secret",
     "frontend_gets_raw_secret",
+    "frontend_gets_token",
+    "runtime_gets_token",
     "access_token_present",
     "refresh_token_present",
     "token_values_returned_to_public_response",

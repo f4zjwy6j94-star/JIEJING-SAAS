@@ -206,6 +206,12 @@ def main() -> int:
             return fail(f"draft confirmation must explicitly prove it cannot create a public listing: {draft_confirmation}")
         if draft_confirmation.get("item", {}).get("requires_publish_offer_call") is not False:
             return fail(f"draft confirmation must explicitly prohibit publishOffer: {draft_confirmation}")
+        for safe_flag in ("frontend_gets_token", "runtime_gets_token"):
+            if draft_confirmation.get("item", {}).get(safe_flag) is not False:
+                return fail(
+                    f"draft confirmation must preserve the value-free {safe_flag}=false safety proof: "
+                    f"{draft_confirmation.get('item', {}).get(safe_flag)!r}"
+                )
         if draft_result.get("real_platform_writes_enabled") is not False:
             return fail("local draft intake must not enable real external writes")
         draft_serialized = json.dumps(draft_result, ensure_ascii=False).lower()
