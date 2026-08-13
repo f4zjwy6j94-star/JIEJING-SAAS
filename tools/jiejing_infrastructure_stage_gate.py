@@ -166,13 +166,13 @@ def _check_runtime_driver_dependency_shape() -> dict[str, Any]:
     dockerfile = ROOT / "Dockerfile.saas"
     requirements_text = requirements.read_text(encoding="utf-8") if requirements.exists() else ""
     dockerfile_text = dockerfile.read_text(encoding="utf-8") if dockerfile.exists() else ""
-    requirements_copy_index = dockerfile_text.find("COPY requirements.saas.txt /app/requirements.saas.txt")
-    pip_install_index = dockerfile_text.find("RUN pip install --no-cache-dir -r requirements.saas.txt")
+    requirements_copy_index = dockerfile_text.find("COPY requirements.saas.lock.txt /app/requirements.saas.lock.txt")
+    pip_install_index = dockerfile_text.find("RUN pip install --no-cache-dir --no-index /wheels/*.whl")
     source_copy_index = dockerfile_text.find("COPY . /app")
     required = {
         "requirements_psycopg": "psycopg[binary]" in requirements_text,
         "requirements_redis": "redis" in requirements_text,
-        "docker_installs_requirements": "pip install --no-cache-dir -r requirements.saas.txt" in dockerfile_text,
+        "docker_installs_requirements": "pip install --no-cache-dir --no-index /wheels/*.whl" in dockerfile_text,
         "docker_requirements_cache_before_source_copy": (
             requirements_copy_index >= 0
             and pip_install_index > requirements_copy_index

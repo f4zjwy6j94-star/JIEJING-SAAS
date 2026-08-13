@@ -1,0 +1,9 @@
+# Exact top-level build tools for the disposable production wheel stage.
+# Transitive versions and artifact hashes are compiled into
+# requirements.saas-build.lock.txt.
+pip==26.2.1
+setuptools==80.9.0
+wheel==0.45.1
+setuptools-scm==10.2.1
+vcs-versioning==2.1.0
+pkgconfig==1.5.5

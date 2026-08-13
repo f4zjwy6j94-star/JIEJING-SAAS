@@ -271,11 +271,11 @@ def main() -> int:
     if "tencentcloud-cls-sdk-python>=1.0.4,<2" not in requirements:
         return fail("runtime must ship the official protobuf-capable Tencent CLS upload SDK")
     dockerfile = (ROOT / "Dockerfile.saas").read_text(encoding="utf-8")
-    runtime_stage = dockerfile.find("FROM python:3.12-slim AS jiejing-runtime")
+    runtime_stage = dockerfile.find(" AS jiejing-runtime")
     if min(
-        dockerfile.find("FROM python:3.12-slim AS jiejing-wheel-builder"),
+        dockerfile.find(" AS jiejing-wheel-builder"),
         dockerfile.find("apt-get install -y --no-install-recommends build-essential"),
-        dockerfile.find("pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.saas.txt"),
+        dockerfile.find("pip wheel --use-pep517 --no-build-isolation --require-hashes --no-cache-dir --wheel-dir /wheels -r requirements.saas.lock.txt"),
         dockerfile.find("COPY --from=jiejing-wheel-builder /wheels /wheels"),
         runtime_stage,
     ) < 0:

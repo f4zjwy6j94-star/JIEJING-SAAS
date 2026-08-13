@@ -1,4 +1,4 @@
-FROM python:3.12-slim AS jiejing-wheel-builder
+FROM python:3.12.13-slim-trixie@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36 AS jiejing-wheel-builder
 
 ENV PIP_DEFAULT_TIMEOUT=120
 ENV PIP_INDEX_URL=https://mirrors.tencent.com/pypi/simple/
@@ -6,16 +6,18 @@ ENV PIP_TRUSTED_HOST=mirrors.tencent.com
 
 WORKDIR /build
 
-COPY requirements.saas.txt /build/requirements.saas.txt
+COPY requirements.saas.lock.txt /build/requirements.saas.lock.txt
+COPY requirements.saas-build.lock.txt /build/requirements.saas-build.lock.txt
 
 # The official CLS uploader currently constrains lz4 to a source-only release
 # on Python 3.12. Keep compilation tools in this disposable wheel stage only.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential \
-    && pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.saas.txt \
+    && pip install --require-hashes --no-cache-dir -r requirements.saas-build.lock.txt \
+    && pip wheel --use-pep517 --no-build-isolation --require-hashes --no-cache-dir --wheel-dir /wheels -r requirements.saas.lock.txt \
     && rm -rf /var/lib/apt/lists/*
 
-FROM python:3.12-slim AS jiejing-runtime
+FROM python:3.12.13-slim-trixie@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36 AS jiejing-runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -25,11 +27,11 @@ ENV PIP_TRUSTED_HOST=mirrors.tencent.com
 
 WORKDIR /app
 
-COPY requirements.saas.txt /app/requirements.saas.txt
+COPY requirements.saas.lock.txt /app/requirements.saas.lock.txt
 
 COPY --from=jiejing-wheel-builder /wheels /wheels
 
-RUN pip install --no-cache-dir -r requirements.saas.txt --no-index --find-links=/wheels \
+RUN pip install --no-cache-dir --no-index /wheels/*.whl \
     && rm -rf /wheels
 
 COPY . /app

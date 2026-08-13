@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "source": "Docker Hub official tag API",
+  "verified_at": "2026-08-14",
+  "images": {
+    "jiejing-python-runtime": {
+      "repository": "python",
+      "tag": "3.12.13-slim-trixie",
+      "digest": "sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36"
+    },
+    "jiejing-vault": {
+      "repository": "hashicorp/vault",
+      "tag": "1.21.4",
+      "digest": "sha256:4e33b126a59c0c333b76fb4e894722462659a6bec7c48c9ee8cea56fccfd2569"
+    },
+    "jiejing-frontend": {
+      "repository": "nginx",
+      "tag": "1.30.4-alpine",
+      "digest": "sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46"
+    },
+    "jiejing-edge": {
+      "repository": "caddy",
+      "tag": "2.11.4-alpine",
+      "digest": "sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648"
+    }
+  }
+}

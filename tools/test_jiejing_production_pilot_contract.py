@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import re
 from pathlib import Path
 
@@ -11,6 +12,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION_ENV = ROOT / "deploy" / "jiejing-saas.production.env.example"
 PRODUCTION_COMPOSE = ROOT / "deploy" / "docker-compose.production-pilot.yml"
+PRODUCTION_IMAGES_LOCK = ROOT / "deploy" / "production-images.lock.json"
+PRODUCTION_REQUIREMENTS_LOCK = ROOT / "requirements.saas.lock.txt"
+PRODUCTION_BUILD_REQUIREMENTS_LOCK = ROOT / "requirements.saas-build.lock.txt"
+STAGING_PATCH_APPLY = ROOT / "deploy" / "apply-staging-patch.sh"
+CI_WORKFLOWS = (
+    ROOT / ".github" / "workflows" / "jiejing-ci.yml",
+    ROOT / ".github" / "workflows" / "jiejing-cloud-fallback-self-check.yml",
+    ROOT / ".github" / "workflows" / "jiejing-staging-manual-deploy.yml",
+)
 PRODUCTION_CADDY = ROOT / "deploy" / "Caddyfile.production"
 PRODUCTION_ROBOTS = ROOT / "deploy" / "robots.production.txt"
 PRODUCTION_NGINX = ROOT / "deploy" / "nginx.production.conf"
@@ -91,6 +101,82 @@ def main() -> int:
         return fail("production pilot must not retain the obsolete Stripe launch lane")
 
     compose = PRODUCTION_COMPOSE.read_text(encoding="utf-8")
+    if not PRODUCTION_REQUIREMENTS_LOCK.exists():
+        return fail("production Python dependencies must have an exact hash lock")
+    if not PRODUCTION_BUILD_REQUIREMENTS_LOCK.exists():
+        return fail("production Python wheel toolchain must have an exact hash lock")
+    requirements_lock = PRODUCTION_REQUIREMENTS_LOCK.read_text(encoding="utf-8")
+    if "--hash=sha256:" not in requirements_lock or re.search(r"(?m)^[a-zA-Z0-9_.-]+\s*[><~]", requirements_lock):
+        return fail("production Python dependency lock must use exact versions and package hashes")
+    build_requirements_lock = PRODUCTION_BUILD_REQUIREMENTS_LOCK.read_text(encoding="utf-8")
+    for build_tool in ("pip==", "setuptools==", "wheel==", "setuptools-scm==", "vcs-versioning==", "pkgconfig=="):
+        if build_tool not in build_requirements_lock:
+            return fail(f"production Python wheel toolchain lock is incomplete: {build_tool}")
+    for workflow in CI_WORKFLOWS:
+        workflow_text = workflow.read_text(encoding="utf-8")
+        if (
+            'python-version: "3.12"' not in workflow_text
+            or "--require-hashes -r requirements.saas-build.lock.txt" not in workflow_text
+            or "--no-build-isolation --require-hashes -r requirements.saas.lock.txt" not in workflow_text
+            or "pip install --upgrade pip" in workflow_text
+        ):
+            return fail(f"CI/deploy must install the reviewed lock under production Python 3.12: {workflow.name}")
+    if not PRODUCTION_IMAGES_LOCK.exists():
+        return fail("production images must have one reviewed immutable digest lock")
+    staging_patch_text = STAGING_PATCH_APPLY.read_text(encoding="utf-8")
+    for release_lock in (
+        '"deploy/production-images.lock.json"',
+        '"requirements.saas.lock.txt"',
+        '"requirements.saas-build.txt"',
+        '"requirements.saas-build.lock.txt"',
+    ):
+        if release_lock not in staging_patch_text:
+            return fail(f"production supply-chain lock must travel through the controlled release whitelist: {release_lock}")
+    image_lock = json.loads(PRODUCTION_IMAGES_LOCK.read_text(encoding="utf-8"))
+    locked_images = image_lock.get("images") if isinstance(image_lock, dict) else None
+    if not isinstance(locked_images, dict) or set(locked_images) != {
+        "jiejing-python-runtime",
+        "jiejing-vault",
+        "jiejing-frontend",
+        "jiejing-edge",
+    }:
+        return fail("production image lock must cover the exact four runtime image boundaries")
+    locked_refs: dict[str, str] = {}
+    for name, record in locked_images.items():
+        if not isinstance(record, dict):
+            return fail(f"production image lock entry must be an object: {name}")
+        repository = record.get("repository")
+        tag = record.get("tag")
+        digest = record.get("digest")
+        if not isinstance(repository, str) or not isinstance(tag, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(digest)):
+            return fail(f"production image lock entry must use an exact tag and sha256 digest: {name}")
+        locked_refs[name] = f"{repository}:{tag}@{digest}"
+    dockerfile = (ROOT / "Dockerfile.saas").read_text(encoding="utf-8")
+    for marker in (
+        "COPY requirements.saas.lock.txt /build/requirements.saas.lock.txt",
+        "COPY requirements.saas-build.lock.txt /build/requirements.saas-build.lock.txt",
+        "pip install --require-hashes --no-cache-dir -r requirements.saas-build.lock.txt",
+        "pip wheel --use-pep517 --no-build-isolation --require-hashes --no-cache-dir --wheel-dir /wheels -r requirements.saas.lock.txt",
+        "COPY requirements.saas.lock.txt /app/requirements.saas.lock.txt",
+        "pip install --no-cache-dir --no-index /wheels/*.whl",
+    ):
+        if marker not in dockerfile:
+            return fail(f"production image must install only from the reviewed dependency lock: {marker}")
+    python_from_refs = re.findall(r"(?m)^FROM\s+(\S+)\s+AS\s+", dockerfile)
+    if python_from_refs != [locked_refs["jiejing-python-runtime"]] * 2:
+        return fail("every production Python stage must use the reviewed immutable image digest")
+    expected_compose_refs = {
+        "jiejing-vault": 2,
+        "jiejing-frontend": 1,
+        "jiejing-edge": 1,
+    }
+    for name, expected_count in expected_compose_refs.items():
+        if compose.count(f'image: {locked_refs[name]}') != expected_count:
+            return fail(f"production Compose must use the reviewed immutable digest for {name}")
+    for service in ("jiejing-saas", "jiejing-worker"):
+        build_block = _compose_service_block(compose, service)
+        if "sbom: true" not in build_block or "provenance: mode=max" not in build_block:
+            return fail(f"{service} production image must emit native SBOM and provenance attestations")
     for service in (
         "jiejing-saas:",
         "jiejing-worker:",
@@ -124,7 +210,7 @@ def main() -> int:
     if values.get("JIEJING_VAULT_ADDR") != "http://jiejing-vault:8200":
         return fail("budget production must use the private self-hosted Vault service instead of requiring paid KMS")
     for marker in (
-        "hashicorp/vault:1.17",
+        "hashicorp/vault:1.21.4@sha256:",
         "vault.production.hcl",
         "jiejing_production_vault_data:/vault/file",
         "IPC_LOCK",

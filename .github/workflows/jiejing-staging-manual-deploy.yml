@@ -41,7 +41,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -52,7 +52,9 @@ jobs:
         run: npm install --prefix output/codex-playwright-deps --no-save --no-package-lock --ignore-scripts playwright-core@1.59.1
 
       - name: Install Python dependencies
-        run: python -m pip install --upgrade pip && pip install -r requirements.saas.txt
+        run: |
+          python -m pip install --require-hashes -r requirements.saas-build.lock.txt
+          python -m pip install --use-pep517 --no-build-isolation --require-hashes -r requirements.saas.lock.txt
 
       - name: Secret scan
         run: python tools/jiejing_secret_scan.py

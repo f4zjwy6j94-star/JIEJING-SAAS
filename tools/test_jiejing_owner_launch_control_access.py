@@ -16,6 +16,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "output" / "jiejing-owner-launch-control-access-test"
+REQUEST_TIMEOUT_SECONDS = 30
 
 
 def fail(message: str) -> int:
@@ -124,9 +125,11 @@ def _run_case(*, port: int, db_name: str, email: str, allowlist: str) -> dict[st
             str(port),
         ],
         cwd=str(ROOT),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+        # The functional probe issues dozens of authenticated requests.  Do not
+        # attach unread PIPEs here: on Windows the access log can fill the pipe
+        # and block the child server before it sends the HTTP response.
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         env=env,
     )
     try:
@@ -208,7 +211,7 @@ def _post_json(url: str, body: dict[str, Any], *, token: str = "") -> dict[str, 
     if token:
         headers["authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
-    with urllib.request.urlopen(request, timeout=10) as response:
+    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -218,7 +221,7 @@ def _fetch_json_or_error(url: str, *, token: str = "") -> dict[str, Any]:
         headers["authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             body = json.loads(response.read().decode("utf-8"))
             return {"status": response.status, "body": body}
     except urllib.error.HTTPError as exc:

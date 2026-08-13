@@ -9,6 +9,8 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.saas
+      sbom: true
+      provenance: mode=max
     env_file:
       - ../../private/jiejing-saas.production.env
     depends_on:
@@ -48,6 +50,8 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.saas
+      sbom: true
+      provenance: mode=max
     depends_on:
       jiejing-saas:
         condition: service_healthy
@@ -87,7 +91,7 @@ services:
     restart: unless-stopped
 
   jiejing-vault:
-    image: hashicorp/vault:1.17.6
+    image: hashicorp/vault:1.21.4@sha256:4e33b126a59c0c333b76fb4e894722462659a6bec7c48c9ee8cea56fccfd2569
     command: ["vault", "server", "-config=/vault/config/vault.production.hcl"]
     cap_add:
       - IPC_LOCK
@@ -116,7 +120,7 @@ services:
     restart: unless-stopped
 
   jiejing-vault-token-renewer:
-    image: hashicorp/vault:1.17.6
+    image: hashicorp/vault:1.21.4@sha256:4e33b126a59c0c333b76fb4e894722462659a6bec7c48c9ee8cea56fccfd2569
     depends_on:
       jiejing-vault:
         condition: service_healthy
@@ -146,7 +150,7 @@ services:
     restart: unless-stopped
 
   jiejing-frontend:
-    image: nginx:1.27.5-alpine
+    image: nginx:1.30.4-alpine@sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46
     depends_on:
       - jiejing-saas
     expose:
@@ -172,7 +176,7 @@ services:
     restart: unless-stopped
 
   jiejing-edge:
-    image: caddy:2.8.4-alpine
+    image: caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
     depends_on:
       - jiejing-frontend
       - jiejing-saas

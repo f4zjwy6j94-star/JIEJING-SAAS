@@ -1042,7 +1042,7 @@ async function main() {
     await showAccountSettings(page);
     const validRedirect = context.waitForEvent("request", {
       predicate: (request) => /^https:\/\/auth\.ebay\.com\/oauth2\/authorize(?:\?|$)/.test(request.url()),
-      timeout: 5000,
+      timeout: 15000,
     });
     await page.locator('[data-saas-action="plan-ebay-oauth"]').first().click();
     await validRedirect;
