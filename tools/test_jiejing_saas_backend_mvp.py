@@ -451,6 +451,15 @@ def main() -> int:
         health = fetch_json(f"{base_url}/health")
         if health.get("real_platform_writes_enabled") is not False:
             return fail("SaaS backend must not enable real platform writes in MVP")
+        startup_health = fetch_json(f"{base_url}/health/startup")
+        if startup_health != {
+            "status": "ready",
+            "database_ready": True,
+            "queue_ready": True,
+            "vault_ready": True,
+            "secret_exposed": False,
+        }:
+            return fail(f"startup dependency probe must return a value-free ready contract: {startup_health}")
         chain = fetch_json(f"{base_url}/schema/chain")
         if "ExecutionService" not in chain.get("chain", {}).get("layers", []):
             return fail("chain schema should expose ExecutionService boundary")

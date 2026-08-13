@@ -32,22 +32,29 @@ FILES=(
   "deploy/apply-cloudflare-origin-ufw.sh"
   "deploy/docker-compose.public-staging.yml"
   "deploy/docker-compose.public-https-staging.yml"
+  "deploy/docker-compose.production-pilot.yml"
   "deploy/docker-compose.staging-infra.yml"
   "deploy/jiejing-saas.postgres-localqueue.env.example"
   "deploy/jiejing-staging-runtime-env-resolution-manifest.example.json"
   "deploy/nginx.public-staging.conf"
+  "deploy/nginx.production.conf"
+  "deploy/nginx-security-headers.production.conf"
+  "deploy/vault.production.hcl"
+  "deploy/vault-policy.production.hcl"
   "deploy/Caddyfile.public-staging"
   "deploy/Caddyfile.public-staging.systemd"
   "deploy/Caddyfile.route-a-edge"
   "deploy/Caddyfile.production"
   "deploy/jiejing-saas.env.example"
   "deploy/jiejing-saas.production.env.example"
+  "deploy/robots.production.txt"
   "deploy/jiejing-route-a-edge.env.example"
   "deploy/jiejing-saas.infra.env.example"
   "deploy/jiejing-saas.tencent-managed.env.example"
   "deploy/tencentcloud-install-jiejing-ssh-key.sh"
   "deploy/tencentcloud-public-staging-checklist.md"
   "docs/JIEJING_INDEPENDENT_SAAS_DEPLOYMENT_RUNBOOK.md"
+  "docs/JIEJING_LOW_COST_PRODUCTION_SECRET_BOUNDARY_20260814.md"
   "docs/JIEJING_COMMERCIAL_LAUNCH_RUNBOOK_20260526.md"
   "docs/JIEJING_DOMAIN_PENDING_PURCHASE_PREP_20260618.md"
   "docs/JIEJING_EDGE_WAF_ORIGIN_CALLBACK_PREP_20260618.md"
@@ -313,6 +320,7 @@ FILES=(
   "tools/test_jiejing_paid_launch_approval_packet.py"
   "tools/test_jiejing_production_evidence_ledger.py"
   "tools/test_jiejing_production_release_gate.py"
+  "tools/test_jiejing_production_pilot_contract.py"
   "tools/test_jiejing_domain_pending_purchase_preflight.py"
   "tools/test_jiejing_registered_domain_cutover_status.py"
   "tools/test_jiejing_edge_cutover_preflight.py"
@@ -651,6 +659,7 @@ python3 -m py_compile \
   tools/test_jiejing_paid_launch_approval_packet.py \
   tools/test_jiejing_production_evidence_ledger.py \
   tools/test_jiejing_production_release_gate.py \
+  tools/test_jiejing_production_pilot_contract.py \
   tools/test_jiejing_domain_pending_purchase_preflight.py \
   tools/test_jiejing_registered_domain_cutover_status.py \
   tools/test_jiejing_edge_cutover_preflight.py \

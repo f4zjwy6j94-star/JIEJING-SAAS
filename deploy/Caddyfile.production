@@ -1,46 +1,49 @@
 {
-  email ops@example.com
+	email {$JIEJING_ACME_EMAIL}
 }
 
-app.example.com {
-  encode zstd gzip
+{$JIEJING_PRODUCTION_HOST} {
+	encode zstd gzip
 
-  header {
-    X-Frame-Options "DENY"
-    X-Content-Type-Options "nosniff"
-    Referrer-Policy "strict-origin-when-cross-origin"
-    Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=()"
-    X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
-  }
+	header {
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=()"
+	}
 
-  @blockedInternalPath {
-    path /.git* /.github* /deploy* /tools* /docs* /tests* /jiejing_saas* /jiejing_runtime* /schemas* /output* /private*
-  }
-  handle @blockedInternalPath {
-    respond "Not found" 404
-  }
+	@blockedInternalPath {
+		path /.git* /.github* /deploy* /tools* /docs* /tests* /jiejing_saas* /jiejing_runtime* /schemas* /output* /private*
+	}
+	handle @blockedInternalPath {
+		respond "Not found" 404
+	}
 
-  @blockedInternalFile {
-    path_regexp blockedInternalFile .*\.(env|pem|key|sqlite|db|py|pyc|md|ya?ml|toml|ini|log|bak|zip|tar|gz|ps1|sh|conf)$
-  }
-  handle @blockedInternalFile {
-    respond "Not found" 404
-  }
+	@blockedInternalFile {
+		path_regexp blockedInternalFile .*\.(env|pem|key|sqlite|db|py|pyc|md|ya?ml|toml|ini|log|bak|zip|tar|gz|ps1|sh|conf)$
+	}
+	handle @blockedInternalFile {
+		respond "Not found" 404
+	}
 
-  @api path /health /readiness/* /auth/* /me /owner/* /stores* /connections* /secret-refs* /vault/* /database/* /domain/* /queue/* /backup/* /monitoring/* /billing/* /model/* /commercial/* /post-publish/* /provider-job-contracts /independence/* /ebay-read-only/* /ebay-write/* /oauth/* /tasks* /queue-jobs* /media-asset-jobs* /reports* /confirmations* /execution-results* /audit-logs* /webhooks/*
-  reverse_proxy @api jiejing-saas:8788 {
-    header_down -X-Frame-Options
-    header_down -X-Content-Type-Options
-    header_down -Referrer-Policy
-    header_down -Permissions-Policy
-    header_down -X-Robots-Tag
-  }
+	@api path /health /health/deep /operational-health /schema /schema/chain /platforms /platforms/* /infrastructure /infrastructure/drivers /infrastructure/* /product-feedback /product-feedback/* /readiness /readiness/* /auth/* /analytics/* /me /companies* /permissions/* /team/* /owner /owner/* /stores* /connections* /secret-refs* /vault/* /database/* /domain/* /queue/* /backup/* /monitoring/* /billing /billing/* /model/* /commercial/* /post-publish/* /provider-job-contracts /independence/* /controlled-bridges /controlled-bridges/* /security/* /ebay-read-only/* /ebay-oauth/* /ebay-write/* /execution/* /oauth/* /data-packets /data-packets/* /ip-risk-screening /ip-risk-screening/* /merchant-memory /merchant-memory/* /merchant-onboarding/* /ai-ceo/* /tasks* /queue-jobs* /media-asset-jobs* /media-source-assets /media-source-assets/* /reports* /confirmations* /execution-results* /audit-logs* /workers/* /webhooks/*
+	header @api X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
+	reverse_proxy @api jiejing-saas:8788 {
+		header_down -X-Frame-Options
+		header_down -X-Content-Type-Options
+		header_down -Referrer-Policy
+		header_down -Permissions-Policy
+		header_down -X-Robots-Tag
+	}
 
-  reverse_proxy jiejing-frontend:80 {
-    header_down -X-Frame-Options
-    header_down -X-Content-Type-Options
-    header_down -Referrer-Policy
-    header_down -Permissions-Policy
-    header_down -X-Robots-Tag
-  }
+	@privateUi path /app.html
+	header @privateUi X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
+
+	reverse_proxy jiejing-frontend:80 {
+		header_down -X-Frame-Options
+		header_down -X-Content-Type-Options
+		header_down -Referrer-Policy
+		header_down -Permissions-Policy
+		header_down -X-Robots-Tag
+	}
 }

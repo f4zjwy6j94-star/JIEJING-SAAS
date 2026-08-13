@@ -18,9 +18,10 @@ CADDY_FILES = [
 COMPOSE_FILES = [
     ROOT / "deploy" / "docker-compose.public-staging.yml",
     ROOT / "deploy" / "docker-compose.public-https-staging.yml",
-    ROOT / "deploy" / "docker-compose.production-pilot.yml",
     ROOT / "deploy" / "docker-compose.staging-infra.yml",
 ]
+PRODUCTION_COMPOSE = ROOT / "deploy" / "docker-compose.production-pilot.yml"
+PRODUCTION_ROBOTS = ROOT / "deploy" / "robots.production.txt"
 BUNDLE = ROOT / "tools" / "jiejing_prepare_public_staging_bundle.py"
 PATCH_SCRIPT = ROOT / "deploy" / "apply-staging-patch.sh"
 API_SERVER = ROOT / "jiejing_saas" / "api_server.py"
@@ -116,7 +117,14 @@ def main() -> int:
     for path in COMPOSE_FILES:
         content = _read(path)
         if "../robots.txt:/usr/share/nginx/html/robots.txt:ro" not in content:
-            return fail(f"{path.name} should mount robots.txt into the public frontend")
+            return fail(f"{path.name} should mount the staging no-index robots policy")
+    production_compose = _read(PRODUCTION_COMPOSE)
+    if "./robots.production.txt:/usr/share/nginx/html/robots.txt:ro" not in production_compose:
+        return fail("production compose should mount its public-index/private-surface robots policy")
+    production_robots = _read(PRODUCTION_ROBOTS)
+    for marker in ("User-agent: *", "Allow: /", "Disallow: /app.html", "Disallow: /owner/", "GPTBot", "Disallow: /"):
+        if marker not in production_robots:
+            return fail(f"production robots policy missing marker: {marker}")
 
     for path in PUBLIC_HTML_FILES:
         if "static.cloudflareinsights.com/beacon.min.js" in _read(path):

@@ -52,7 +52,7 @@ def main() -> int:
     combined = (completed.stdout or "") + (completed.stderr or "")
     if completed.returncode == 0:
         return fail("production backend should refuse to start with local sqlite/queue/vault blockers")
-    if "Refusing to start production" not in combined:
+    if "Refusing to start a blocked production candidate" not in combined:
         return fail("production refusal should explain readiness blockers")
 
     env = os.environ.copy()
@@ -131,8 +131,56 @@ def main() -> int:
     combined = (completed.stdout or "") + (completed.stderr or "")
     if completed.returncode == 0:
         return fail("production backend should still refuse managed DB/queue config until drivers are implemented")
-    if "Refusing to start production" not in combined:
+    if not any(
+        marker in combined
+        for marker in (
+            "Refusing to start a blocked production candidate",
+            "Refusing to start production Jiejing SaaS backend while repository readiness has blockers",
+        )
+    ):
         return fail("managed driver-pending production refusal should be explicit")
+
+    candidate_env = os.environ.copy()
+    candidate_env.update(
+        {
+            "JIEJING_SAAS_ENV": "production",
+            "JIEJING_SAAS_SESSION_SECRET": "production-candidate-test-secret-that-is-long-enough",
+            "JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED": "true",
+            "JIEJING_EBAY_TOKEN_REFRESH_LIVE": "true",
+            "JIEJING_EBAY_READ_ONLY_LIVE": "true",
+            "JIEJING_EBAY_DRAFT_SAVE_LIVE": "true",
+        }
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "jiejing_saas_backend_cli.py"),
+            "serve",
+            "--db",
+            str(OUT / "candidate-draft-guard.sqlite"),
+            "--runtime-db",
+            str(OUT / "candidate-draft-runtime.sqlite"),
+            "--output-root",
+            str(OUT),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8797",
+        ],
+        cwd=str(ROOT),
+        env=candidate_env,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    combined = (completed.stdout or "") + (completed.stderr or "")
+    if completed.returncode == 0:
+        return fail("production candidate boot must refuse the controlled eBay draft-save write lane")
+    if "requires payment and platform writes to remain disabled" not in combined:
+        return fail("production candidate draft-save refusal should be explicit")
 
     print("PASS jiejing_saas_production_guardrails")
     return 0

@@ -788,6 +788,12 @@ def _hashicorp_vault_config(settings: SaaSSettings) -> dict[str, Any]:
 
 
 def _hashicorp_vault_token() -> str:
+    token_file = os.environ.get("JIEJING_VAULT_TOKEN_FILE") or os.environ.get("VAULT_TOKEN_FILE") or ""
+    if token_file:
+        try:
+            return Path(token_file).read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
     return os.environ.get("JIEJING_VAULT_TOKEN") or os.environ.get("VAULT_TOKEN") or ""
 
 

@@ -154,6 +154,11 @@ def _should_scan_assignment_rules(path: Path) -> bool:
 
 
 def _assignment_is_path_metadata(line: str) -> bool:
+    stripped = line.strip().strip('"\'')
+    if stripped.startswith("-") and ":/" in stripped and any(
+        marker in stripped.lower() for marker in ("/run/secrets/", "/private/", "\\private\\")
+    ):
+        return True
     match = re.match(r"\s*([A-Za-z0-9_]+)\s*[:=]", line)
     if not match:
         return False

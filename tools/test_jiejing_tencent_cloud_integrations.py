@@ -46,6 +46,10 @@ ENV_KEYS = (
     "JIEJING_RESTORE_DRILL_LAST_AT",
     "JIEJING_BACKUP_ALERTS_CONFIGURED",
     "JIEJING_VAULT_BACKUP_POLICY_CONFIGURED",
+    "JIEJING_VAULT_BACKUP_ARTIFACT_ID",
+    "JIEJING_VAULT_RESTORE_DRILL_LAST_AT",
+    "JIEJING_VAULT_RESTORE_MANUAL_UNSEAL_VERIFIED",
+    "JIEJING_VAULT_RESTORE_SENTINEL_RESOLVE_VERIFIED",
     "JIEJING_COS_BACKUP_ENABLED",
     "JIEJING_COS_REGION",
     "JIEJING_COS_BUCKET",
@@ -121,6 +125,10 @@ def main() -> int:
                 "JIEJING_RESTORE_DRILL_LAST_AT": (now - timedelta(days=1)).isoformat(),
                 "JIEJING_BACKUP_ALERTS_CONFIGURED": "true",
                 "JIEJING_VAULT_BACKUP_POLICY_CONFIGURED": "true",
+                "JIEJING_VAULT_BACKUP_ARTIFACT_ID": "vault-backup-artifact-fixture",
+                "JIEJING_VAULT_RESTORE_DRILL_LAST_AT": (now - timedelta(days=1)).isoformat(),
+                "JIEJING_VAULT_RESTORE_MANUAL_UNSEAL_VERIFIED": "true",
+                "JIEJING_VAULT_RESTORE_SENTINEL_RESOLVE_VERIFIED": "true",
                 "JIEJING_COS_BACKUP_ENABLED": "true",
                 "JIEJING_COS_REGION": "ap-guangzhou",
                 "JIEJING_COS_BUCKET": "jiejing-private-backups-1250000000",
@@ -161,6 +169,18 @@ def main() -> int:
         _seed_provider_monitoring_state(repo, now)
 
         backup = build_backup_plan(settings, repo)
+        os.environ["JIEJING_VAULT_PROVIDER"] = "vault"
+        vault_settings = _settings(db_path)
+        os.environ.pop("JIEJING_VAULT_BACKUP_ARTIFACT_ID")
+        missing_vault_artifact = build_backup_plan(vault_settings, repo)
+        os.environ["JIEJING_VAULT_BACKUP_ARTIFACT_ID"] = "vault-backup-artifact-fixture"
+        os.environ["JIEJING_VAULT_RESTORE_SENTINEL_RESOLVE_VERIFIED"] = "false"
+        missing_vault_sentinel = build_backup_plan(vault_settings, repo)
+        os.environ["JIEJING_VAULT_RESTORE_SENTINEL_RESOLVE_VERIFIED"] = "true"
+        os.environ["JIEJING_VAULT_RESTORE_DRILL_LAST_AT"] = (now - timedelta(days=31)).isoformat()
+        stale_vault_restore = build_backup_plan(vault_settings, repo)
+        os.environ["JIEJING_VAULT_RESTORE_DRILL_LAST_AT"] = (now - timedelta(days=1)).isoformat()
+        os.environ["JIEJING_VAULT_PROVIDER"] = "tencent_ssm"
         monitoring = build_monitoring_status(settings, repo, now_utc=now)
         vault_adapter = build_vault_adapter_contract(settings)
         launch_gate = build_commercial_launch_gate(settings, repo)
@@ -236,6 +256,14 @@ def main() -> int:
         return fail("Tencent SSM/KMS adapter should allow backend-only secret storage")
     if backup.get("backup_ready_for_paid_launch") is not True:
         return fail(f"COS backup plan should be ready when managed policy and restore drill are configured: {backup.get('blockers')}")
+    if backup.get("vault", {}).get("recovery_proof_ready") is not True:
+        return fail(f"Vault recovery must require artifact, manual unseal and sentinel proof: {backup.get('vault')}")
+    if missing_vault_artifact.get("backup_ready_for_paid_launch") is not False or "vault_backup_artifact_not_recorded" not in (missing_vault_artifact.get("blockers") or []):
+        return fail("missing Vault backup artifact evidence must block paid launch")
+    if missing_vault_sentinel.get("backup_ready_for_paid_launch") is not False or "vault_restore_sentinel_resolve_not_verified" not in (missing_vault_sentinel.get("blockers") or []):
+        return fail("missing Vault sentinel resolution proof must block paid launch")
+    if stale_vault_restore.get("backup_ready_for_paid_launch") is not False or "vault_restore_drill_overdue" not in (stale_vault_restore.get("blockers") or []):
+        return fail("stale Vault recovery drill evidence must block paid launch")
     if backup.get("object_storage", {}).get("target_ready") is not True:
         return fail("COS backup target should be ready when bucket, region and probe are configured")
     if stale_cos_backup.get("backup_ready_for_paid_launch") is not False:

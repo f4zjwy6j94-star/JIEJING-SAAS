@@ -8,10 +8,13 @@ visibility, and worker telemetry. It never returns raw credentials.
 from __future__ import annotations
 
 import os
+import json
+import urllib.request
 from typing import Any
 
 from .config import SaaSSettings
 from .infrastructure_drivers import run_postgres_live_probe
+from .infrastructure_drivers import _redis_live_check
 from .repository import SaaSRepository
 
 
@@ -29,7 +32,13 @@ def build_operational_health(
         else repository.global_queue_health_summary(stale_after_seconds=stale_after_seconds)
     )
     worker = _worker_runtime_status(settings, queue, repository.latest_worker_heartbeat())
+    redis = _redis_runtime_probe(settings)
+    vault = _vault_runtime_probe(settings)
     blockers = _blockers(settings=settings, database=database, queue=queue, worker=worker)
+    if redis.get("status") != "ready":
+        blockers.append("queue_live_probe_failed")
+    if vault.get("status") != "ready":
+        blockers.append("vault_live_probe_failed")
     warnings = _warnings(settings=settings, database=database, queue=queue, worker=worker)
     status = "ready"
     if blockers:
@@ -43,8 +52,65 @@ def build_operational_health(
         "database_live_probe": database,
         "queue_runtime": queue,
         "worker_runtime": worker,
+        "redis_live_probe": redis,
+        "vault_live_probe": vault,
         "blockers": blockers,
         "warnings": warnings,
+        "secret_exposed": False,
+    }
+
+
+def _redis_runtime_probe(settings: SaaSSettings) -> dict[str, Any]:
+    if settings.queue_provider != "redis_streams":
+        return {"status": "ready", "required": False, "secret_exposed": False}
+    live_check = _redis_live_check(settings)
+    return {
+        "status": "ready" if live_check.get("status") == "ok" else "blocked",
+        "required": True,
+        "secret_exposed": False,
+    }
+
+
+def _vault_runtime_probe(settings: SaaSSettings) -> dict[str, Any]:
+    if not settings.vault_enabled or settings.vault_provider != "vault":
+        return {"status": "ready", "required": False, "secret_exposed": False}
+    addr = str(os.environ.get("JIEJING_VAULT_ADDR") or "").rstrip("/")
+    token_file = str(os.environ.get("JIEJING_VAULT_TOKEN_FILE") or "")
+    try:
+        if token_file:
+            with open(token_file, "r", encoding="utf-8") as token_handle:
+                token = token_handle.read().strip()
+        else:
+            token = str(os.environ.get("JIEJING_VAULT_TOKEN") or "")
+    except OSError:
+        token = ""
+    if not addr or not token:
+        return {"status": "blocked", "required": True, "secret_exposed": False}
+    try:
+        health_request = urllib.request.Request(f"{addr}/v1/sys/health")
+        with urllib.request.urlopen(health_request, timeout=3) as response:
+            health = json.loads(response.read().decode("utf-8"))
+        lookup_request = urllib.request.Request(
+            f"{addr}/v1/auth/token/lookup-self",
+            headers={"X-Vault-Token": token},
+        )
+        with urllib.request.urlopen(lookup_request, timeout=3) as response:
+            lookup = json.loads(response.read().decode("utf-8"))
+        ready = bool(
+            health.get("initialized") is True
+            and health.get("sealed") is False
+            and isinstance(lookup.get("data"), dict)
+            and lookup.get("data", {}).get("id")
+            and lookup.get("data", {}).get("renewable") is True
+            and int(lookup.get("data", {}).get("period") or 0) > 0
+        )
+    except Exception:
+        ready = False
+    return {
+        "status": "ready" if ready else "blocked",
+        "required": True,
+        "initialized_unsealed": ready,
+        "token_authenticated": ready,
         "secret_exposed": False,
     }
 

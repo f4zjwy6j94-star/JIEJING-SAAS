@@ -43,6 +43,18 @@ def build_backup_plan(settings: SaaSSettings, repository: SaaSRepository) -> dic
     )
     alerts_configured = _env_bool("JIEJING_BACKUP_ALERTS_CONFIGURED")
     vault_backup_configured = _env_bool("JIEJING_VAULT_BACKUP_POLICY_CONFIGURED")
+    vault_backup_artifact_id = os.environ.get("JIEJING_VAULT_BACKUP_ARTIFACT_ID", "").strip()
+    vault_restore_at = os.environ.get("JIEJING_VAULT_RESTORE_DRILL_LAST_AT", "").strip()
+    vault_restore_age_hours = _timestamp_age_hours(vault_restore_at)
+    vault_restore_fresh = bool(
+        vault_restore_at
+        and vault_restore_age_hours is not None
+        and vault_restore_age_hours >= -(EVIDENCE_MAX_FUTURE_SKEW_MINUTES / 60)
+        and vault_restore_age_hours <= restore_drill_max_age_days * 24
+    )
+    vault_manual_unseal_verified = _env_bool("JIEJING_VAULT_RESTORE_MANUAL_UNSEAL_VERIFIED")
+    vault_sentinel_resolve_verified = _env_bool("JIEJING_VAULT_RESTORE_SENTINEL_RESOLVE_VERIFIED")
+    vault_recovery_required = settings.vault_enabled and settings.vault_provider == "vault"
     blockers: list[str] = []
     if not database_managed:
         blockers.append("managed_postgres_not_selected")
@@ -67,6 +79,21 @@ def build_backup_plan(settings: SaaSSettings, repository: SaaSRepository) -> dic
         blockers.append("backup_alerts_not_configured")
     if settings.vault_enabled and settings.vault_provider != "secret_ref_only" and not vault_backup_configured:
         blockers.append("vault_backup_policy_not_configured")
+    if vault_recovery_required:
+        if not vault_backup_artifact_id:
+            blockers.append("vault_backup_artifact_not_recorded")
+        if not vault_restore_at:
+            blockers.append("vault_restore_drill_not_recorded")
+        elif vault_restore_age_hours is None:
+            blockers.append("vault_restore_drill_timestamp_invalid")
+        elif vault_restore_age_hours < -(EVIDENCE_MAX_FUTURE_SKEW_MINUTES / 60):
+            blockers.append("vault_restore_drill_timestamp_in_future")
+        elif not vault_restore_fresh:
+            blockers.append("vault_restore_drill_overdue")
+        if not vault_manual_unseal_verified:
+            blockers.append("vault_restore_manual_unseal_not_verified")
+        if not vault_sentinel_resolve_verified:
+            blockers.append("vault_restore_sentinel_resolve_not_verified")
     for item in cos_target["blocked_by"]:
         if item not in blockers:
             blockers.append(item)
@@ -93,6 +120,22 @@ def build_backup_plan(settings: SaaSSettings, repository: SaaSRepository) -> dic
             "provider": settings.vault_provider,
             "vault_enabled": settings.vault_enabled,
             "backup_policy_configured": vault_backup_configured,
+            "backup_artifact_recorded": bool(vault_backup_artifact_id),
+            "backup_artifact_id_sha256": _evidence_id_sha256(vault_backup_artifact_id),
+            "restore_drill_at": vault_restore_at,
+            "restore_drill_fresh": vault_restore_fresh,
+            "manual_unseal_verified": vault_manual_unseal_verified,
+            "sentinel_resolve_verified": vault_sentinel_resolve_verified,
+            "recovery_proof_ready": bool(
+                not vault_recovery_required
+                or (
+                    vault_backup_configured
+                    and vault_backup_artifact_id
+                    and vault_restore_fresh
+                    and vault_manual_unseal_verified
+                    and vault_sentinel_resolve_verified
+                )
+            ),
             "raw_secret_export_allowed": False,
         },
         "restore": {
@@ -160,6 +203,8 @@ def _next_actions(blockers: list[str]) -> list[str]:
         actions.append("wire_backup_failure_and_restore_overdue_alerts")
     if "vault_backup_policy_not_configured" in blockers:
         actions.append("configure_vault_snapshot_or_managed_kms_recovery_policy")
+    if any(item.startswith("vault_restore_") or item == "vault_backup_artifact_not_recorded" for item in blockers):
+        actions.append("run_isolated_vault_restore_unseal_and_sentinel_drill")
     if "cos_backup_target_not_configured" in blockers:
         actions.append("configure_private_cos_bucket_for_backup_artifacts")
     if any(
@@ -173,6 +218,14 @@ def _next_actions(blockers: list[str]) -> list[str]:
     ):
         actions.append("run_non_secret_cos_backup_probe_and_record_success_time")
     return actions
+
+
+def _evidence_id_sha256(value: str) -> str:
+    if not value:
+        return ""
+    import hashlib
+
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _cos_backup_target_status(*, require_fresh_probe: bool = False) -> dict[str, Any]:

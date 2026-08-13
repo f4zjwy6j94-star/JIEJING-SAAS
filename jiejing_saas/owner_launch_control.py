@@ -33,6 +33,14 @@ OWNER_LAUNCH_CONTROL_VERSION = "2026-08-10-owner-launch-control-v9"
 FIXED_PROGRESS_RELEASE_EVIDENCE_CONTRACT = "2026-07-14-version-bound-release-evidence-v1"
 
 
+def _owner_public_base_url() -> str:
+    return str(
+        os.environ.get("JIEJING_PUBLIC_BASE_URL")
+        or os.environ.get("JIEJING_PUBLIC_APP_URL")
+        or "https://app.jiejing.shop"
+    ).strip().rstrip("/")
+
+
 def build_owner_launch_control(
     settings: SaaSSettings,
     repository: SaaSRepository,
@@ -1719,7 +1727,7 @@ def _continuity_handoff_digest(
             "public_entry",
             "Public app entry",
             "ready",
-            "https://app.jiejing.shop",
+            _owner_public_base_url(),
             "Keep this as the stable HTTPS entry for app, health, callbacks and browser smoke.",
         ),
         _handoff_line(
@@ -1771,15 +1779,15 @@ def _continuity_handoff_digest(
         "Do not automatically delete smoke/test data; keep cleanup as a reviewed plan.",
     ]
     proof_links = [
-        {"label": "health", "url": "https://app.jiejing.shop/health"},
-        {"label": "deep_health", "url": "https://app.jiejing.shop/health/deep"},
-        {"label": "readiness", "url": "https://app.jiejing.shop/readiness/product-saas"},
+        {"label": "health", "url": f"{_owner_public_base_url()}/health"},
+        {"label": "deep_health", "url": f"{_owner_public_base_url()}/health/deep"},
+        {"label": "readiness", "url": f"{_owner_public_base_url()}/readiness/product-saas"},
         {"label": "owner_launch_control", "url": "/owner/launch-control"},
     ]
     handoff_lines = [
         "Jiejing owner continuity handoff",
         f"environment={settings.environment}",
-        "public_app=https://app.jiejing.shop",
+        f"public_app={_owner_public_base_url()}",
         f"beta_ready={bool(summary.get('beta_ready'))}",
         f"production_ready={bool(summary.get('production_ready'))}",
         f"can_accept_real_customers={bool(summary.get('can_accept_real_customers'))}",
@@ -2032,9 +2040,9 @@ def _cutover_decision_checklist(
         "codex_internal_actions": [_cutover_action(item, source="internal_work_queue") for item in (pending_internal or internal_work_queue)[:8]],
         "forbidden_actions": forbidden_actions,
         "proof_links": [
-            {"label": "health", "url": "https://app.jiejing.shop/health"},
-            {"label": "deep_health", "url": "https://app.jiejing.shop/health/deep"},
-            {"label": "readiness", "url": "https://app.jiejing.shop/readiness/product-saas"},
+            {"label": "health", "url": f"{_owner_public_base_url()}/health"},
+            {"label": "deep_health", "url": f"{_owner_public_base_url()}/health/deep"},
+            {"label": "readiness", "url": f"{_owner_public_base_url()}/readiness/product-saas"},
             {"label": "owner_launch_control", "url": "/owner/launch-control"},
         ],
         "safety": _cutover_decision_safety_flags(),
@@ -2231,7 +2239,7 @@ def _final_launch_rehearsal_execution_record(
             "browser_smoke_snapshot",
             "Browser smoke snapshot",
             "ready" if _env_bool("JIEJING_BROWSER_SMOKE_PASSED") else "attention_required",
-            f"browser_smoke_passed={_env_bool('JIEJING_BROWSER_SMOKE_PASSED')}; app=https://app.jiejing.shop",
+            f"browser_smoke_passed={_env_bool('JIEJING_BROWSER_SMOKE_PASSED')}; app={_owner_public_base_url()}",
             "Run browser smoke for app shell, owner/admin gating, publish health and billing guardrails.",
             source_endpoint="tools/codex_jiejing_owner_launch_control_smoke.js",
         ),
@@ -2395,9 +2403,9 @@ def _final_launch_rehearsal_execution_record(
             },
         ],
         "proof_links": [
-            {"label": "health", "url": "https://app.jiejing.shop/health"},
-            {"label": "deep_health", "url": "https://app.jiejing.shop/health/deep"},
-            {"label": "readiness", "url": "https://app.jiejing.shop/readiness/product-saas"},
+            {"label": "health", "url": f"{_owner_public_base_url()}/health"},
+            {"label": "deep_health", "url": f"{_owner_public_base_url()}/health/deep"},
+            {"label": "readiness", "url": f"{_owner_public_base_url()}/readiness/product-saas"},
             {"label": "owner_launch_control", "url": "/owner/launch-control"},
             {"label": "release_history", "url": "/owner/launch-control release_history"},
         ],
@@ -2708,9 +2716,9 @@ def _owner_paid_launch_approval_dossier(
         "remaining_external_blockers": [_final_rehearsal_action(item, source="external_blocker") for item in blocked_external[:8]],
         "remaining_internal_actions": [_final_rehearsal_action(item, source="internal_work_queue") for item in (pending_internal or internal_work_queue)[:8]],
         "proof_links": [
-            {"label": "health", "url": "https://app.jiejing.shop/health"},
-            {"label": "deep_health", "url": "https://app.jiejing.shop/health/deep"},
-            {"label": "readiness", "url": "https://app.jiejing.shop/readiness/product-saas"},
+            {"label": "health", "url": f"{_owner_public_base_url()}/health"},
+            {"label": "deep_health", "url": f"{_owner_public_base_url()}/health/deep"},
+            {"label": "readiness", "url": f"{_owner_public_base_url()}/readiness/product-saas"},
             {"label": "mainland_payment_approval", "url": "/owner/paid-launch-approval-packet"},
             {"label": "paid_launch_approval_packet", "url": "/owner/paid-launch-approval-packet"},
             {"label": "owner_launch_control", "url": "/owner/launch-control"},
@@ -2880,7 +2888,7 @@ def _prelaunch_acceptance_report(
             "public_entry_and_domain",
             "Public entry and stable domain",
             "ready" if bool(summary.get("stable_domain_ready") or edge.get("callbacks_ready")) else "attention_required",
-            f"app=https://app.jiejing.shop; edge_status={edge.get('status') or 'unknown'}; waf_ready={bool(edge.get('waf_ready'))}; callbacks_ready={bool(edge.get('callbacks_ready'))}; origin_locked={bool(edge.get('origin_locked'))}",
+            f"app={_owner_public_base_url()}; edge_status={edge.get('status') or 'unknown'}; waf_ready={bool(edge.get('waf_ready'))}; callbacks_ready={bool(edge.get('callbacks_ready'))}; origin_locked={bool(edge.get('origin_locked'))}",
             "Keep app.jiejing.shop as the stable HTTPS entry and verify WAF/origin-lock posture before paid launch.",
         ),
         _prelaunch_report_item(
@@ -3021,9 +3029,9 @@ def _prelaunch_acceptance_report(
             "secret_exposed": False,
         },
         "proof_links": [
-            {"label": "health", "url": "https://app.jiejing.shop/health"},
-            {"label": "deep_health", "url": "https://app.jiejing.shop/health/deep"},
-            {"label": "readiness", "url": "https://app.jiejing.shop/readiness/product-saas"},
+            {"label": "health", "url": f"{_owner_public_base_url()}/health"},
+            {"label": "deep_health", "url": f"{_owner_public_base_url()}/health/deep"},
+            {"label": "readiness", "url": f"{_owner_public_base_url()}/readiness/product-saas"},
             {"label": "owner_launch_control", "url": "/owner/launch-control"},
         ],
         "report_markdown": report_markdown,

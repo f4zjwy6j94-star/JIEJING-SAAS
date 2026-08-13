@@ -522,8 +522,27 @@ class SaaSBackendServer:
             if startup_repository_error is not None
             else build_product_readiness_or_degraded(backend_settings, repo)
         )
-        if backend_settings.environment == "production" and not readiness.get("production_ready"):
-            raise RuntimeError("Refusing to start production Jiejing SaaS backend while readiness has blockers.")
+        production_candidate_boot_allowed = str(
+            os.environ.get("JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED") or ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if (
+            backend_settings.environment == "production"
+            and not readiness.get("production_ready")
+            and not production_candidate_boot_allowed
+        ):
+            raise RuntimeError(
+                "Refusing to start a blocked production candidate without "
+                "JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED=true."
+            )
+        if production_candidate_boot_allowed and (
+            backend_settings.requested_real_platform_writes
+            or backend_settings.effective_real_platform_writes_enabled
+            or backend_settings.ebay_draft_save_live_enabled
+            or backend_settings.effective_ebay_draft_save_enabled
+            or os.environ.get("JIEJING_WECHAT_PAY_CHARGE_ALLOWED", "").strip().lower() in {"1", "true", "yes", "on"}
+            or os.environ.get("JIEJING_WECHAT_PAY_REFUND_ALLOWED", "").strip().lower() in {"1", "true", "yes", "on"}
+        ):
+            raise RuntimeError("Production candidate boot mode requires payment and platform writes to remain disabled.")
         if backend_settings.requested_real_platform_writes and not backend_settings.ebay_write_live_enabled:
             raise RuntimeError("Refusing to enable real platform writes without JIEJING_EBAY_WRITE_LIVE=true.")
 
@@ -1279,6 +1298,26 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         path = parsed.path.strip("/")
         query = parse_qs(parsed.query)
         parts = [unquote(part) for part in path.split("/")] if path else []
+
+        if path == "health/startup":
+            operational_health = build_operational_health(self.settings, self.repository)
+            startup_ready = bool(
+                self.repository_startup_error is None
+                and (operational_health.get("database_live_probe") or {}).get("status") == "ready"
+                and (operational_health.get("redis_live_probe") or {}).get("status") == "ready"
+                and (operational_health.get("vault_live_probe") or {}).get("status") == "ready"
+            )
+            self._send_json(
+                {
+                    "status": "ready" if startup_ready else "blocked",
+                    "database_ready": (operational_health.get("database_live_probe") or {}).get("status") == "ready",
+                    "queue_ready": (operational_health.get("redis_live_probe") or {}).get("status") == "ready",
+                    "vault_ready": (operational_health.get("vault_live_probe") or {}).get("status") == "ready",
+                    "secret_exposed": False,
+                },
+                status=HTTPStatus.OK if startup_ready else HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
 
         if path in {"", "health"}:
             self._send_json(
