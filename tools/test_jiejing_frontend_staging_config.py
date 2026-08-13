@@ -35,7 +35,7 @@ def main() -> int:
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
     frontend_asset_version = "20260803-product-feedback-v1"
-    app_js_asset_version = "20260813-confirmation-core-load-v7"
+    app_js_asset_version = "20260813-unpublished-draft-entry-v8"
     for expected_asset in [
         f"./app.js?v={app_js_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -62,6 +62,8 @@ def main() -> int:
         return fail("frontend entry files must not retain the pre-listing-product-gate app.js cache version")
     if "./app.js?v=20260812-listing-concrete-product-gate-v6" in index_html + app_html:
         return fail("frontend entry files must not retain the pre-confirmation-core-load app.js cache version")
+    if "./app.js?v=20260813-confirmation-core-load-v7" in index_html + app_html:
+        return fail("frontend entry files must not retain the pre-draft-entry app.js cache version")
     if "./app.js?v=20260803-product-feedback-v1" in index_html + app_html:
         return fail("frontend entry files must not retain the stale app.js cache version")
     for stale_asset_version in [

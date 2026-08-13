@@ -27,6 +27,9 @@ def main() -> None:
     approve_start = app.index("async function approveFirstSaasConfirmation")
     approve_end = app.index("async function loginSaasBackendSession", approve_start)
     approve = app[approve_start:approve_end]
+    listing_intake_start = app.index("function renderSaasPublishConfirmationIntakePanel")
+    listing_intake_end = app.index("function saasListingSafeMaterialValue", listing_intake_start)
+    listing_intake = app[listing_intake_start:listing_intake_end]
 
     intake = "/ebay-oauth/unpublished-draft-confirmation"
     plan = "/ebay-oauth/unpublished-draft-plan"
@@ -52,6 +55,17 @@ def main() -> None:
         ("saasEbayUnpublishedDraftOAuthScopeAllowlist", "the actual OAuth URL must use the exact draft scope allowlist"),
     ]:
         require(app, marker, message)
+
+    require(
+        listing_intake,
+        'data-saas-action="create-ebay-draft-confirmation"',
+        "the merchant Listing intake must expose the dedicated unpublished-draft confirmation action",
+    )
+    require(
+        listing_intake,
+        "生成未发布 eBay 草稿确认单",
+        "the merchant Listing intake must name the safe draft-only outcome instead of public publishing",
+    )
 
     if "state.saasStores[0]" in flow:
         raise AssertionError("draft OAuth must bind activeSaasStore, never the first tenant store")

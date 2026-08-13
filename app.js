@@ -10699,6 +10699,7 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
         </div>
         <div class="saas-publish-intake-actions">
           <button class="secondary-action" type="button" data-saas-action="run-pretest-check">检测当前资料</button>
+          <button class="primary-action" type="button" data-saas-action="create-ebay-draft-confirmation" ${disabled ? "disabled" : ""}>生成未发布 eBay 草稿确认单</button>
           <button class="primary-action" type="button" data-saas-action="create-publish-confirmation" ${disabled ? "disabled" : ""}>生成发布确认单</button>
         </div>
       </div>
