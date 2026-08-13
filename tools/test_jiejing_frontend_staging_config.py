@@ -282,8 +282,8 @@ def main() -> int:
         (
             "docker-compose.public-https-staging.yml",
             compose_https,
-            'JIEJING_EBAY_DRAFT_SAVE_LIVE: "false"',
-            'JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "disabled_public_staging"',
+            'JIEJING_EBAY_DRAFT_SAVE_LIVE: "true"',
+            'JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "controlled_unpublished_draft_only"',
         ),
     ]
     for compose_name, compose_text, draft_marker, policy_marker in public_staging_contracts:
