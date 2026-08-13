@@ -663,6 +663,120 @@ async function main() {
     ) {
       throw new Error(`OAuth approval timestamp contract must allow only 60s server/browser clock skew, reject larger future/invalid/naive timestamps, and enforce the 15m inclusive age boundary; result=${JSON.stringify(approvalTimeContract)}`);
     }
+    const draftSaveDisplayContract = await page.evaluate(({ companyId, storeId }) => {
+      const draftCard = {
+        confirmation_id: "draft-save-display-fixture",
+        company_id: companyId,
+        store_id: storeId,
+        task_id: "draft-save-intake-task-fixture",
+        action_type: "save_ebay_listing_draft",
+        title: "Save one unpublished eBay draft",
+        status: "pending",
+        created_at: "2026-08-11T01:02:00Z",
+        item: {
+          source: "merchant_ebay_draft_save_intake",
+          company_id: companyId,
+          store_id: storeId,
+          publish_payload_sha256: "",
+          high_risk: true,
+          draft_save_capability_requested: true,
+          writes_to_ebay_after_approval: true,
+          public_publish_enabled: false,
+          creates_public_listing: false,
+          real_platform_writes_enabled: false,
+          requires_publish_offer_call: false,
+          frontend_gets_token: false,
+          runtime_gets_token: false,
+          secret_exposed: false,
+          publish_payload: {
+            listing: {
+              sku: "JJ-DRAFT-DISPLAY-FIXTURE",
+              title: "Unbranded Blue Fitted Case for Apple iPhone 13 - New",
+            },
+          },
+        },
+      };
+      draftCard.item.publish_payload_sha256 = "pending-browser-digest";
+      const before = [...(state.saasConfirmations || [])];
+      const wrongStore = { ...draftCard, confirmation_id: "draft-save-wrong-store-fixture", task_id: "latest-product-task-fixture", store_id: "wrong-store", item: { ...draftCard.item, store_id: "wrong-store" } };
+      const publicPublish = { ...draftCard, confirmation_id: "draft-save-public-publish-fixture", task_id: "latest-product-task-fixture", item: { ...draftCard.item, public_publish_enabled: true } };
+      const malformed = { ...draftCard, confirmation_id: "draft-save-malformed-fixture", task_id: "latest-product-task-fixture", item: { ...draftCard.item, publish_payload: null } };
+      return saasSha256Hex(JSON.stringify(saasCanonicalJsonValue(draftCard.item.publish_payload))).then(async (payloadSha256) => {
+        draftCard.item.publish_payload_sha256 = payloadSha256;
+        wrongStore.item.publish_payload_sha256 = payloadSha256;
+        publicPublish.item.publish_payload_sha256 = payloadSha256;
+        malformed.item.publish_payload_sha256 = payloadSha256;
+        state.saasConfirmations = [...before, draftCard, wrongStore, publicPublish, malformed];
+        await verifySaasUnpublishedDraftSaveConfirmations(state.saasConfirmations);
+        const uniqueDisplayed = saasConfirmationsForDisplay(state.saasConfirmations);
+        const uniqueCount = uniqueDisplayed.filter((card) => card.confirmation_id === draftCard.confirmation_id).length;
+        const unsafeCount = uniqueDisplayed.filter((card) => [wrongStore, publicPublish, malformed].some((unsafe) => unsafe.confirmation_id === card.confirmation_id)).length;
+        state.saasConfirmations = [
+          ...state.saasConfirmations,
+          { ...draftCard, task_id: "latest-product-task-fixture", action_type: "publish_listing", item: { source: "ordinary-latest-task" } },
+        ];
+        await verifySaasUnpublishedDraftSaveConfirmations(state.saasConfirmations);
+        const duplicateCount = saasConfirmationsForDisplay(state.saasConfirmations).filter((card) => card.confirmation_id === draftCard.confirmation_id).length;
+        const savedTasks = state.saasTasks;
+        state.saasTasks = [{ ...savedTasks[0], task_id: "latest-task-with-no-confirmations", created_at: "2026-08-11T02:00:00Z" }];
+        const malformedSync = {
+          confirmation_id: "malformed-sync-latest-fallback",
+          task_id: "latest-task-with-no-confirmations",
+          action_type: "ebay_read_only_sync",
+          status: "pending",
+          item: { source: "wrong-sync-source", requested_step: "wrong-step" },
+        };
+        const emptyId = {
+          confirmation_id: "",
+          task_id: "latest-task-with-no-confirmations",
+          action_type: "change_price",
+          status: "pending",
+          item: { source: "ordinary-latest-task" },
+        };
+        const conflictingSyncAction = {
+          confirmation_id: "conflicting-sync-sensitive-action",
+          task_id: "latest-task-with-no-confirmations",
+          action_type: "change_price",
+          status: "pending",
+          item: { action_type: "ebay_read_only_sync", source: "wrong-sync-source" },
+        };
+        const conflictingOauthAction = {
+          confirmation_id: "conflicting-oauth-sensitive-action",
+          task_id: "latest-task-with-no-confirmations",
+          action_type: "change_price",
+          status: "pending",
+          item: { action_type: "ebay_oauth_scope_change", source: "wrong-oauth-source" },
+        };
+        const conflictingDraftAction = {
+          confirmation_id: "conflicting-draft-sensitive-action",
+          task_id: "latest-task-with-no-confirmations",
+          action_type: "change_price",
+          status: "pending",
+          item: { action_type: "save_ebay_listing_draft", source: "ordinary-latest-task" },
+        };
+        const noLatestFallbackUnsafeCount = saasConfirmationsForDisplay([
+          wrongStore,
+          publicPublish,
+          malformed,
+          malformedSync,
+          emptyId,
+          conflictingSyncAction,
+          conflictingOauthAction,
+          conflictingDraftAction,
+        ]).length;
+        state.saasTasks = savedTasks;
+        state.saasConfirmations = before;
+        return { uniqueCount, duplicateCount, unsafeCount, noLatestFallbackUnsafeCount };
+      });
+    }, { companyId: "company-oauth-ui-fixture", storeId: store.store_id });
+    if (
+      draftSaveDisplayContract.uniqueCount !== 1 ||
+      draftSaveDisplayContract.duplicateCount !== 0 ||
+      draftSaveDisplayContract.unsafeCount !== 0 ||
+      draftSaveDisplayContract.noLatestFallbackUnsafeCount !== 0
+    ) {
+      throw new Error(`latest product task must not hide or duplicate the exact current-store unpublished draft confirmation; result=${JSON.stringify(draftSaveDisplayContract)}`);
+    }
     await showAccountSettings(page);
     await page.locator('[data-saas-action="plan-ebay-oauth"]').first().click();
     await page.waitForFunction(() =>

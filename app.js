@@ -4394,6 +4394,7 @@ const planDetails = {
 };
 
 const saasExactReadOnlyOAuthConfirmationButtonBindings = new WeakMap();
+let saasVerifiedUnpublishedDraftSaveConfirmations = new WeakSet();
 let saasExactReadOnlyOAuthConfirmationRenderGeneration = 0;
 const saasReadOnlyOAuthPlanAttemptKeys = new Set();
 const saasUnpublishedDraftOAuthPlanAttemptKeys = new Set();
@@ -17822,10 +17823,100 @@ function isSaasExactUnpublishedDraftOAuthConfirmation(card = {}, storeId = "") {
   );
 }
 
+function isSaasExactUnpublishedDraftSaveConfirmation(card = {}, companyId = "", storeId = "") {
+  card = card && typeof card === "object" ? card : {};
+  const item = card.item && typeof card.item === "object" ? card.item : {};
+  const publishPayload = item.publish_payload && typeof item.publish_payload === "object" && !Array.isArray(item.publish_payload)
+    ? item.publish_payload
+    : {};
+  const listing = publishPayload.listing && typeof publishPayload.listing === "object" && !Array.isArray(publishPayload.listing)
+    ? publishPayload.listing
+    : {};
+  const targetCompanyId = String(companyId || "").trim();
+  const targetStoreId = String(storeId || "").trim();
+  return Boolean(
+    targetCompanyId &&
+      targetStoreId &&
+      String(card.confirmation_id || "").trim() &&
+      String(card.company_id || "").trim() === targetCompanyId &&
+      String(card.store_id || "").trim() === targetStoreId &&
+      String(card.action_type || "") === "save_ebay_listing_draft" &&
+      saasVerifiedUnpublishedDraftSaveConfirmations.has(card) &&
+      String(item.source || "") === "merchant_ebay_draft_save_intake" &&
+      String(item.company_id || "").trim() === targetCompanyId &&
+      String(item.store_id || "").trim() === targetStoreId &&
+      /^[a-f0-9]{64}$/i.test(String(item.publish_payload_sha256 || "").trim()) &&
+      String(listing.sku || "").trim() &&
+      String(listing.title || "").trim() &&
+      item.high_risk === true &&
+      item.draft_save_capability_requested === true &&
+      item.writes_to_ebay_after_approval === true &&
+      item.public_publish_enabled === false &&
+      item.creates_public_listing === false &&
+      item.real_platform_writes_enabled === false &&
+      item.requires_publish_offer_call === false &&
+      item.frontend_gets_token === false &&
+      item.runtime_gets_token === false
+  );
+}
+
+function isSaasUnpublishedDraftSaveSensitiveConfirmation(card = {}) {
+  card = card && typeof card === "object" ? card : {};
+  const item = card.item && typeof card.item === "object" ? card.item : {};
+  return Boolean(
+    String(card.action_type || "") === "save_ebay_listing_draft" ||
+      String(item.action_type || "") === "save_ebay_listing_draft" ||
+      String(item.source || "") === "merchant_ebay_draft_save_intake" ||
+      item.draft_save_capability_requested === true ||
+      item.writes_to_ebay_after_approval === true
+  );
+}
+
+function saasCanonicalJsonValue(value) {
+  if (Array.isArray(value)) return value.map((item) => saasCanonicalJsonValue(item));
+  if (value && typeof value === "object") {
+    return Object.keys(value)
+      .sort()
+      .reduce((result, key) => {
+        if (value[key] !== undefined) result[key] = saasCanonicalJsonValue(value[key]);
+        return result;
+      }, {});
+  }
+  return value;
+}
+
+async function saasSha256Hex(value = "") {
+  if (!globalThis.crypto?.subtle || typeof TextEncoder !== "function") return "";
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(value)));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function verifySaasUnpublishedDraftSaveConfirmations(confirmations = []) {
+  const verified = new WeakSet();
+  for (const card of Array.isArray(confirmations) ? confirmations : []) {
+    const item = card?.item && typeof card.item === "object" && !Array.isArray(card.item) ? card.item : {};
+    const payload = item.publish_payload && typeof item.publish_payload === "object" && !Array.isArray(item.publish_payload)
+      ? item.publish_payload
+      : null;
+    const expected = String(item.publish_payload_sha256 || "").trim().toLowerCase();
+    if (String(card?.action_type || "") !== "save_ebay_listing_draft" || !payload || !/^[a-f0-9]{64}$/.test(expected)) continue;
+    try {
+      const actual = await saasSha256Hex(JSON.stringify(saasCanonicalJsonValue(payload)));
+      if (actual && actual === expected) verified.add(card);
+    } catch (_error) {
+      // A malformed payload or unavailable digest implementation is never display-safe.
+    }
+  }
+  saasVerifiedUnpublishedDraftSaveConfirmations = verified;
+}
+
 function isSaasReadOnlyOAuthSensitiveConfirmation(card = {}) {
   card = card && typeof card === "object" ? card : {};
   const item = card.item && typeof card.item === "object" ? card.item : {};
-  return String(card.action_type || item.action_type || "") === "ebay_oauth_scope_change";
+  return (
+    String(card.action_type || "") === "ebay_oauth_scope_change" ||
+    String(item.action_type || "") === "ebay_oauth_scope_change"
+  );
 }
 
 function isSaasExactReadOnlySyncConfirmation(card = {}, storeId = "") {
@@ -17839,6 +17930,15 @@ function isSaasExactReadOnlySyncConfirmation(card = {}, storeId = "") {
       String(item.source || "") === "new_ebay_account_low_risk_smoke" &&
       String(item.requested_step || "") === "official_packet_account_health_snapshot" &&
       String(item.scope_profile || "") === "seller_read_only_official_sync"
+  );
+}
+
+function isSaasReadOnlySyncSensitiveConfirmation(card = {}) {
+  card = card && typeof card === "object" ? card : {};
+  const item = card.item && typeof card.item === "object" ? card.item : {};
+  return (
+    String(card.action_type || "") === "ebay_read_only_sync" ||
+    String(item.action_type || "") === "ebay_read_only_sync"
   );
 }
 
@@ -18899,15 +18999,28 @@ function saasReportsForDisplay(reports = []) {
 }
 
 function saasConfirmationsForDisplay(confirmations = []) {
+  confirmations = Array.isArray(confirmations) ? confirmations : [];
   const latestTask = saasLatestProductWorkflowTask();
-  if (!latestTask?.task_id) return dedupeSaasConfirmations(confirmations);
-  const latest = confirmations.filter((card) => card.task_id === latestTask.task_id);
-  if (!latest.length) return dedupeSaasConfirmations(confirmations);
+  const latest = latestTask?.task_id ? confirmations.filter((card) => card.task_id === latestTask.task_id) : confirmations;
+  const ordinarySource = latest.length ? latest : confirmations;
   const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
   const currentStoreId = String(activeSaasStore()?.store_id || "").trim();
+  const confirmationIdCounts = (confirmations || []).reduce((counts, card) => {
+    const id = String(card?.confirmation_id || "").trim();
+    if (id) counts.set(id, Number(counts.get(id) || 0) + 1);
+    return counts;
+  }, new Map());
+  const blockedConfirmationIds = new Set(
+    [...confirmationIdCounts.entries()].filter(([, count]) => count !== 1).map(([id]) => id),
+  );
+  const isUniqueConfirmation = (card) => {
+    const id = String(card?.confirmation_id || "").trim();
+    return Boolean(id && confirmationIdCounts.get(id) === 1 && !blockedConfirmationIds.has(id));
+  };
   const currentStoreOauth = dedupeSaasConfirmations(
     confirmations.filter(
       (card) =>
+        isUniqueConfirmation(card) &&
         currentCompanyId &&
         currentStoreId &&
         String(card?.company_id || "").trim() === currentCompanyId &&
@@ -18922,6 +19035,7 @@ function saasConfirmationsForDisplay(confirmations = []) {
   const currentStoreSync = dedupeSaasConfirmations(
     confirmations.filter(
       (card) =>
+        isUniqueConfirmation(card) &&
         currentCompanyId &&
         currentStoreId &&
         String(card?.company_id || "").trim() === currentCompanyId &&
@@ -18930,13 +19044,31 @@ function saasConfirmationsForDisplay(confirmations = []) {
         isSaasExactReadOnlySyncConfirmation(card, currentStoreId),
     ),
   );
+  const currentStoreDraftSaves = confirmations
+    .filter(
+      (card) =>
+        ["pending", "approved"].includes(String(card?.status || "")) &&
+        isUniqueConfirmation(card) &&
+        isSaasExactUnpublishedDraftSaveConfirmation(card, currentCompanyId, currentStoreId),
+    )
+    .sort((a, b) => saasTimestampMillis(b.created_at || b.updated_at) - saasTimestampMillis(a.created_at || a.updated_at));
   const protectedIds = new Set(
-    [...currentStoreOauth, ...currentStoreSync].map((card) => String(card?.confirmation_id || "").trim()),
+    [...currentStoreOauth, ...currentStoreSync, ...currentStoreDraftSaves].map((card) => String(card?.confirmation_id || "").trim()),
   );
   return [
     ...currentStoreOauth,
     ...currentStoreSync,
-    ...dedupeSaasConfirmations(latest).filter((card) => !protectedIds.has(String(card?.confirmation_id || "").trim())),
+    ...currentStoreDraftSaves,
+    ...dedupeSaasConfirmations(ordinarySource).filter((card) => {
+      const confirmationId = String(card?.confirmation_id || "").trim();
+      return (
+        isUniqueConfirmation(card) &&
+        !protectedIds.has(confirmationId) &&
+        !isSaasReadOnlyOAuthSensitiveConfirmation(card) &&
+        !isSaasReadOnlySyncSensitiveConfirmation(card) &&
+        !isSaasUnpublishedDraftSaveSensitiveConfirmation(card)
+      );
+    }),
   ];
 }
 
@@ -27473,7 +27605,9 @@ async function refreshSaasState(options = {}) {
     state.saasQueueHealth = queueHealth.queue_health || null;
     state.saasReports = reports.reports || [];
     restoreSaasListingComposerDraftFromBackendReports();
-    state.saasConfirmations = confirmations.confirmations || [];
+    const liveConfirmations = confirmations.confirmations || [];
+    await verifySaasUnpublishedDraftSaveConfirmations(liveConfirmations);
+    state.saasConfirmations = liveConfirmations;
     state.saasConfirmationsLiveLoaded = true;
     state.saasMerchantMemory = merchantMemory.merchant_memory || [];
     state.saasExecutionResults = executions.execution_results || state.saasExecutionResults || [];
