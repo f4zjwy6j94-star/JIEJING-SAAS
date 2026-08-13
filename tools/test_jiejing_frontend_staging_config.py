@@ -35,7 +35,7 @@ def main() -> int:
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
     frontend_asset_version = "20260803-product-feedback-v1"
-    app_js_asset_version = "20260812-listing-concrete-product-gate-v6"
+    app_js_asset_version = "20260813-confirmation-core-load-v7"
     for expected_asset in [
         f"./app.js?v={app_js_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -60,6 +60,8 @@ def main() -> int:
         return fail("frontend entry files must not retain the pre-sync-confirmation app.js cache version")
     if "./app.js?v=20260812-ebay-readonly-sync-confirmation-v5" in index_html + app_html:
         return fail("frontend entry files must not retain the pre-listing-product-gate app.js cache version")
+    if "./app.js?v=20260812-listing-concrete-product-gate-v6" in index_html + app_html:
+        return fail("frontend entry files must not retain the pre-confirmation-core-load app.js cache version")
     if "./app.js?v=20260803-product-feedback-v1" in index_html + app_html:
         return fail("frontend entry files must not retain the stale app.js cache version")
     for stale_asset_version in [
