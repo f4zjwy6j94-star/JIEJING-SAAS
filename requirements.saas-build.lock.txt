@@ -7,23 +7,19 @@
 packaging==26.3 \
     --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
     --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
-    # via
-    #   setuptools-scm
-    #   vcs-versioning
+    # via setuptools-scm
 pkgconfig==1.5.5 \
     --hash=sha256:d20023bbeb42ee6d428a0fac6e0904631f545985a10cdd71a20aa58bc47a4209 \
     --hash=sha256:deb4163ef11f75b520d822d9505c1f462761b4309b1bb713d08689759ea8b899
     # via -r requirements.saas-build.txt
-setuptools-scm==10.2.1 \
-    --hash=sha256:4fa7dd82cf8c800df59c9a288c90299b1657ff1ecfc3f5cc00287c5dbf5e27a9 \
-    --hash=sha256:b7c82f4102d389ee57dc66ccdb4f9b4bca3c40ba83b43f1f63d68ccd72db2580
+setuptools-scm==7.1.0 \
+    --hash=sha256:6c508345a771aad7d56ebff0e70628bf2b0ec7573762be9960214730de278f27 \
+    --hash=sha256:73988b6d848709e2af142aa48c986ea29592bbcfca5375678064708205253d8e
     # via -r requirements.saas-build.txt
-vcs-versioning==2.1.0 \
-    --hash=sha256:118bf4b9f86f92e9ec33a94ec24aca0eed8f880fc88736697914d3a876758551 \
-    --hash=sha256:66d9e2c2afd792090bc381aec985d6cd82cb935be35910a742e0af31ca4be61e
-    # via
-    #   -r requirements.saas-build.txt
-    #   setuptools-scm
+typing-extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \
+    --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
+    # via setuptools-scm
 wheel==0.45.1 \
     --hash=sha256:661e1abd9198507b1409a20c02106d9670b2576e916d58f520316666abca6729 \
     --hash=sha256:708e7481cc80179af0e556bbf0cc00b8444c7321e2700b8d8580231d13017248

@@ -109,15 +109,15 @@ def main() -> int:
     if "--hash=sha256:" not in requirements_lock or re.search(r"(?m)^[a-zA-Z0-9_.-]+\s*[><~]", requirements_lock):
         return fail("production Python dependency lock must use exact versions and package hashes")
     build_requirements_lock = PRODUCTION_BUILD_REQUIREMENTS_LOCK.read_text(encoding="utf-8")
-    for build_tool in ("pip==", "setuptools==", "wheel==", "setuptools-scm==", "vcs-versioning==", "pkgconfig=="):
+    for build_tool in ("pip==", "setuptools==", "wheel==", "setuptools-scm==7.1.0", "pkgconfig=="):
         if build_tool not in build_requirements_lock:
             return fail(f"production Python wheel toolchain lock is incomplete: {build_tool}")
     for workflow in CI_WORKFLOWS:
         workflow_text = workflow.read_text(encoding="utf-8")
         if (
             'python-version: "3.12"' not in workflow_text
-            or "--require-hashes -r requirements.saas-build.lock.txt" not in workflow_text
-            or "--no-build-isolation --require-hashes -r requirements.saas.lock.txt" not in workflow_text
+            or "--no-cache-dir --require-hashes -r requirements.saas-build.lock.txt" not in workflow_text
+            or "--no-cache-dir --use-pep517 --no-build-isolation --require-hashes -r requirements.saas.lock.txt" not in workflow_text
             or "pip install --upgrade pip" in workflow_text
         ):
             return fail(f"CI/deploy must install the reviewed lock under production Python 3.12: {workflow.name}")
