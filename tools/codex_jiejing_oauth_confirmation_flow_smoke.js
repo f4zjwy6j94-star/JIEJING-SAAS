@@ -1018,7 +1018,13 @@ async function main() {
     }
     await showAccountSettings(page);
     const pendingGuidanceNode = page.locator('[data-ebay-oauth-confirmation-status="pending"]');
-    const pendingGuidance = (await pendingGuidanceNode.count()) ? await pendingGuidanceNode.textContent() : "";
+    await page.waitForFunction(
+      () => Array.from(document.querySelectorAll('[data-ebay-oauth-confirmation-status="pending"]'))
+        .some((node) => String(node.textContent || "").includes("待你确认")),
+      null,
+      { timeout: 5000 },
+    ).catch(() => {});
+    const pendingGuidance = (await pendingGuidanceNode.count()) ? await pendingGuidanceNode.first().textContent() : "";
     if (!pendingGuidance.includes("待你确认")) {
       throw new Error("pending OAuth UI must explain that owner confirmation comes before eBay authorization");
     }
