@@ -31,6 +31,7 @@ let confirmations = [];
 let connections = [];
 let tasks = [];
 let confirmationReadDelayMs = 0;
+let extendedOptionalDelayMs = 0;
 let planResponseMode = "valid";
 let oauthRequestsOverride = null;
 const sellerReadOnlyScopes = [
@@ -483,6 +484,9 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && url.pathname === "/confirmations" && confirmationReadDelayMs > 0) {
     await new Promise((resolve) => setTimeout(resolve, confirmationReadDelayMs));
   }
+  if (req.method === "GET" && url.pathname === "/billing/plans" && extendedOptionalDelayMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, extendedOptionalDelayMs));
+  }
   sendJson(res, 200, apiPayload(url.pathname));
 });
 
@@ -570,6 +574,7 @@ async function main() {
     window.__JIEJING_FORCE_PUBLIC_MVP__ = true;
   }, { apiBase: base });
   confirmationReadDelayMs = 700;
+  extendedOptionalDelayMs = 6000;
   tasks = [{
     task_id: "latest-product-task-fixture",
     task_type: "product_workflow",
@@ -600,6 +605,14 @@ async function main() {
       const shell = page.locator("#appShell");
       throw new Error(`app shell did not open; count=${await shell.count()} class=${await shell.getAttribute("class")} console=${consoleErrors[0] || "none"}`);
     }
+    await page.waitForFunction(
+      () => state.saasConfirmationsLiveLoaded === true && (state.saasConfirmations || []).length === 1,
+      null,
+      { timeout: 2500 },
+    ).catch(() => {
+      throw new Error("confirmation center core data must load before slow optional diagnostics");
+    });
+    extendedOptionalDelayMs = 0;
     const legacySnapshotContract = await page.evaluate(() => {
       const sentinel = "oauth-old-snapshot-sentinel";
       return {

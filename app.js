@@ -27256,6 +27256,8 @@ async function refreshSaasState(options = {}) {
       coreDataPackets,
       coreCeoCommandMemory,
       coreCeoChatHistory,
+      coreTasks,
+      coreConfirmations,
       coreReadiness,
     ] = await Promise.all([
       saasFetch("/me"),
@@ -27277,6 +27279,8 @@ async function refreshSaasState(options = {}) {
       optionalSaasFetchFast("/ai-ceo/chat-history?limit=30", {
         ai_ceo_chat_history: { scope: "unavailable", cross_store: false, turns: [] },
       }, 10000),
+      saasFetch("/tasks?limit=20"),
+      saasFetch("/confirmations?limit=40"),
       optionalSaasFetchFast("/readiness/product-saas", { readiness: state.saasReadiness || null }, 10000),
     ]);
     state.saasIdentity = coreMe.identity || null;
@@ -27297,6 +27301,11 @@ async function refreshSaasState(options = {}) {
     state.saasModelSettings = coreModelSettings.model_settings || null;
     state.saasDataPackets = coreDataPackets.data_packets || [];
     state.saasExecutionResults = coreExecutions.execution_results || [];
+    state.saasTasks = coreTasks.tasks || [];
+    const coreLiveConfirmations = coreConfirmations.confirmations || [];
+    await verifySaasUnpublishedDraftSaveConfirmations(coreLiveConfirmations);
+    state.saasConfirmations = coreLiveConfirmations;
+    state.saasConfirmationsLiveLoaded = true;
     state.saasReadiness = coreReadiness.readiness || state.saasReadiness || null;
     state.saasProtectedStateFromCache = false;
     state.saasProtectedStateCachedAt = "";
@@ -27472,12 +27481,12 @@ async function refreshSaasState(options = {}) {
       optionalSaasFetchFast("/ebay-read-only/http-client/status", { ebay_http_client: null }),
       optionalSaasFetchFast("/ebay-write/adapter/status", { ebay_write_adapter: null }),
       optionalSaasFetchFast(`/oauth/requests?store_id=${encodeURIComponent(store.store_id)}`, { oauth_requests: [] }),
-      saasFetch("/tasks?limit=20"),
+      Promise.resolve(coreTasks),
       optionalSaasFetchFast("/queue-jobs?limit=20", { queue_jobs: [] }),
       optionalSaasFetchFast(`/stores/${encodeURIComponent(store.store_id)}/media-asset-jobs?limit=8`, { media_asset_jobs: [] }, 10000),
       optionalSaasFetchFast("/queue/health", { queue_health: null }),
       saasFetch("/reports?limit=24"),
-      saasFetch("/confirmations?limit=40"),
+      Promise.resolve(coreConfirmations),
       optionalSaasFetchFast(`/merchant-memory?store_id=${encodeURIComponent(store.store_id)}&limit=30`, {
         merchant_memory: [],
         status: "unavailable",
