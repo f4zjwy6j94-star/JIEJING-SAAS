@@ -283,6 +283,23 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--vault-backup-artifact-id-env",
         help="Read the verified private backup artifact identifier from this process env var.",
     )
+    parser.add_argument(
+        "--vault-unseal-key-shares",
+        type=int,
+        default=0,
+        help="Value-free evidence of the initialized Vault key-share count; paid launch requires at least 3.",
+    )
+    parser.add_argument(
+        "--vault-unseal-key-threshold",
+        type=int,
+        default=0,
+        help="Value-free evidence of the Vault unseal threshold; paid launch requires at least 2.",
+    )
+    parser.add_argument(
+        "--vault-offline-share-custody-verified",
+        action="store_true",
+        help="Confirm that unseal shares are split across operator-controlled encrypted offline storage.",
+    )
     parser.add_argument("--record-restore-drill-now", action="store_true")
     parser.add_argument(
         "--production-release-charge-flag-reviewed",
@@ -421,6 +438,13 @@ def _build_updates(args: argparse.Namespace, existing: dict[str, str]) -> dict[s
         artifact_id = _read_named_env(args.vault_backup_artifact_id_env)
         if not _valid_vault_backup_artifact_id(artifact_id):
             raise SystemExit("Vault backup artifact evidence is missing or invalid.")
+        if (
+            args.vault_unseal_key_shares < 3
+            or args.vault_unseal_key_threshold < 2
+            or args.vault_unseal_key_threshold > args.vault_unseal_key_shares
+            or not args.vault_offline_share_custody_verified
+        ):
+            raise SystemExit("Vault recovery evidence requires 3-or-more shares, a 2-or-more threshold, and offline custody.")
         updates.update(
             {
                 "JIEJING_VAULT_BACKUP_POLICY_CONFIGURED": "true",
@@ -428,6 +452,9 @@ def _build_updates(args: argparse.Namespace, existing: dict[str, str]) -> dict[s
                 "JIEJING_VAULT_RESTORE_DRILL_LAST_AT": now,
                 "JIEJING_VAULT_RESTORE_MANUAL_UNSEAL_VERIFIED": "true",
                 "JIEJING_VAULT_RESTORE_SENTINEL_RESOLVE_VERIFIED": "true",
+                "JIEJING_VAULT_UNSEAL_KEY_SHARES": str(args.vault_unseal_key_shares),
+                "JIEJING_VAULT_UNSEAL_KEY_THRESHOLD": str(args.vault_unseal_key_threshold),
+                "JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED": "true",
             }
         )
     if args.record_restore_drill_now:

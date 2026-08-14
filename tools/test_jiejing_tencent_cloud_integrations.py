@@ -50,6 +50,9 @@ ENV_KEYS = (
     "JIEJING_VAULT_RESTORE_DRILL_LAST_AT",
     "JIEJING_VAULT_RESTORE_MANUAL_UNSEAL_VERIFIED",
     "JIEJING_VAULT_RESTORE_SENTINEL_RESOLVE_VERIFIED",
+    "JIEJING_VAULT_UNSEAL_KEY_SHARES",
+    "JIEJING_VAULT_UNSEAL_KEY_THRESHOLD",
+    "JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED",
     "JIEJING_COS_BACKUP_ENABLED",
     "JIEJING_COS_REGION",
     "JIEJING_COS_BUCKET",
@@ -129,6 +132,9 @@ def main() -> int:
                 "JIEJING_VAULT_RESTORE_DRILL_LAST_AT": (now - timedelta(days=1)).isoformat(),
                 "JIEJING_VAULT_RESTORE_MANUAL_UNSEAL_VERIFIED": "true",
                 "JIEJING_VAULT_RESTORE_SENTINEL_RESOLVE_VERIFIED": "true",
+                "JIEJING_VAULT_UNSEAL_KEY_SHARES": "3",
+                "JIEJING_VAULT_UNSEAL_KEY_THRESHOLD": "2",
+                "JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED": "true",
                 "JIEJING_COS_BACKUP_ENABLED": "true",
                 "JIEJING_COS_REGION": "ap-guangzhou",
                 "JIEJING_COS_BUCKET": "jiejing-private-backups-1250000000",
@@ -180,6 +186,13 @@ def main() -> int:
         os.environ["JIEJING_VAULT_RESTORE_DRILL_LAST_AT"] = (now - timedelta(days=31)).isoformat()
         stale_vault_restore = build_backup_plan(vault_settings, repo)
         os.environ["JIEJING_VAULT_RESTORE_DRILL_LAST_AT"] = (now - timedelta(days=1)).isoformat()
+        os.environ["JIEJING_VAULT_UNSEAL_KEY_SHARES"] = "1"
+        os.environ["JIEJING_VAULT_UNSEAL_KEY_THRESHOLD"] = "1"
+        os.environ["JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED"] = "false"
+        weak_vault_unseal_boundary = build_backup_plan(vault_settings, repo)
+        os.environ["JIEJING_VAULT_UNSEAL_KEY_SHARES"] = "3"
+        os.environ["JIEJING_VAULT_UNSEAL_KEY_THRESHOLD"] = "2"
+        os.environ["JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED"] = "true"
         os.environ["JIEJING_VAULT_PROVIDER"] = "tencent_ssm"
         monitoring = build_monitoring_status(settings, repo, now_utc=now)
         vault_adapter = build_vault_adapter_contract(settings)
@@ -264,6 +277,14 @@ def main() -> int:
         return fail("missing Vault sentinel resolution proof must block paid launch")
     if stale_vault_restore.get("backup_ready_for_paid_launch") is not False or "vault_restore_drill_overdue" not in (stale_vault_restore.get("blockers") or []):
         return fail("stale Vault recovery drill evidence must block paid launch")
+    weak_blockers = weak_vault_unseal_boundary.get("blockers") or []
+    if (
+        weak_vault_unseal_boundary.get("backup_ready_for_paid_launch") is not False
+        or "vault_unseal_key_shares_below_production_minimum" not in weak_blockers
+        or "vault_unseal_key_threshold_below_production_minimum" not in weak_blockers
+        or "vault_offline_share_custody_not_verified" not in weak_blockers
+    ):
+        return fail(f"1-of-1 or server-resident Vault shares must block paid launch: {weak_blockers}")
     if backup.get("object_storage", {}).get("target_ready") is not True:
         return fail("COS backup target should be ready when bucket, region and probe are configured")
     if stale_cos_backup.get("backup_ready_for_paid_launch") is not False:

@@ -54,6 +54,15 @@ def build_backup_plan(settings: SaaSSettings, repository: SaaSRepository) -> dic
     )
     vault_manual_unseal_verified = _env_bool("JIEJING_VAULT_RESTORE_MANUAL_UNSEAL_VERIFIED")
     vault_sentinel_resolve_verified = _env_bool("JIEJING_VAULT_RESTORE_SENTINEL_RESOLVE_VERIFIED")
+    vault_unseal_key_shares = _env_nonnegative_int("JIEJING_VAULT_UNSEAL_KEY_SHARES")
+    vault_unseal_key_threshold = _env_nonnegative_int("JIEJING_VAULT_UNSEAL_KEY_THRESHOLD")
+    vault_offline_share_custody_verified = _env_bool("JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED")
+    vault_production_unseal_boundary_ready = bool(
+        vault_unseal_key_shares >= 3
+        and vault_unseal_key_threshold >= 2
+        and vault_unseal_key_threshold <= vault_unseal_key_shares
+        and vault_offline_share_custody_verified
+    )
     vault_recovery_required = settings.vault_enabled and settings.vault_provider == "vault"
     blockers: list[str] = []
     if not database_managed:
@@ -94,6 +103,12 @@ def build_backup_plan(settings: SaaSSettings, repository: SaaSRepository) -> dic
             blockers.append("vault_restore_manual_unseal_not_verified")
         if not vault_sentinel_resolve_verified:
             blockers.append("vault_restore_sentinel_resolve_not_verified")
+        if vault_unseal_key_shares < 3:
+            blockers.append("vault_unseal_key_shares_below_production_minimum")
+        if vault_unseal_key_threshold < 2 or vault_unseal_key_threshold > vault_unseal_key_shares:
+            blockers.append("vault_unseal_key_threshold_below_production_minimum")
+        if not vault_offline_share_custody_verified:
+            blockers.append("vault_offline_share_custody_not_verified")
     for item in cos_target["blocked_by"]:
         if item not in blockers:
             blockers.append(item)
@@ -126,6 +141,10 @@ def build_backup_plan(settings: SaaSSettings, repository: SaaSRepository) -> dic
             "restore_drill_fresh": vault_restore_fresh,
             "manual_unseal_verified": vault_manual_unseal_verified,
             "sentinel_resolve_verified": vault_sentinel_resolve_verified,
+            "unseal_key_shares": vault_unseal_key_shares,
+            "unseal_key_threshold": vault_unseal_key_threshold,
+            "offline_share_custody_verified": vault_offline_share_custody_verified,
+            "production_unseal_boundary_ready": vault_production_unseal_boundary_ready,
             "recovery_proof_ready": bool(
                 not vault_recovery_required
                 or (
@@ -134,6 +153,7 @@ def build_backup_plan(settings: SaaSSettings, repository: SaaSRepository) -> dic
                     and vault_restore_fresh
                     and vault_manual_unseal_verified
                     and vault_sentinel_resolve_verified
+                    and vault_production_unseal_boundary_ready
                 )
             ),
             "raw_secret_export_allowed": False,
@@ -203,7 +223,13 @@ def _next_actions(blockers: list[str]) -> list[str]:
         actions.append("wire_backup_failure_and_restore_overdue_alerts")
     if "vault_backup_policy_not_configured" in blockers:
         actions.append("configure_vault_snapshot_or_managed_kms_recovery_policy")
-    if any(item.startswith("vault_restore_") or item == "vault_backup_artifact_not_recorded" for item in blockers):
+    if any(
+        item.startswith("vault_restore_")
+        or item.startswith("vault_unseal_")
+        or item == "vault_backup_artifact_not_recorded"
+        or item == "vault_offline_share_custody_not_verified"
+        for item in blockers
+    ):
         actions.append("run_isolated_vault_restore_unseal_and_sentinel_drill")
     if "cos_backup_target_not_configured" in blockers:
         actions.append("configure_private_cos_bucket_for_backup_artifacts")
@@ -305,6 +331,15 @@ def _tencent_secret_key() -> str:
 
 def _env_bool(name: str) -> bool:
     return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_nonnegative_int(name: str) -> int:
+    raw = str(os.environ.get(name) or "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 0
+    return value if value >= 0 else 0
 
 
 def _env_bounded_float(name: str, default: float, *, minimum: float, maximum: float) -> float:

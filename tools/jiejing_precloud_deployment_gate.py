@@ -151,6 +151,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("cos_backup_probe", [sys.executable, "tools/test_jiejing_cos_backup_probe.py"]),
     ("production_release_gate", [sys.executable, "tools/test_jiejing_production_release_gate.py"]),
     ("production_pilot_contract", [sys.executable, "tools/test_jiejing_production_pilot_contract.py"]),
+    ("vault_recovery_drill", [sys.executable, "tools/test_jiejing_vault_recovery_drill.py"]),
     ("production_evidence_ledger", [sys.executable, "tools/test_jiejing_production_evidence_ledger.py"]),
     ("fixed_launch_progress", [sys.executable, "tools/test_jiejing_fixed_launch_progress.py"]),
     ("merchant_workflow_validation", [sys.executable, "tools/test_jiejing_merchant_workflow_validation.py"]),

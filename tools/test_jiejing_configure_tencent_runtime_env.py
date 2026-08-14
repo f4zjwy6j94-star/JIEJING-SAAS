@@ -155,6 +155,28 @@ def main() -> int:
 
     vault_artifact_id = "vault-backups/20260814/isolated-restore-proof.enc"
     env["JIEJING_TEST_VAULT_BACKUP_ARTIFACT_ID"] = vault_artifact_id
+    before_incomplete_vault_evidence = env_path.read_text(encoding="utf-8")
+    incomplete_vault_evidence = subprocess.run(
+        [
+            sys.executable,
+            str(TOOL),
+            "--env-file",
+            str(env_path),
+            "--apply",
+            "--record-vault-recovery-evidence",
+            "--vault-backup-artifact-id-env",
+            "JIEJING_TEST_VAULT_BACKUP_ARTIFACT_ID",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if incomplete_vault_evidence.returncode == 0:
+        return fail("Vault recovery evidence must require an explicit 3-of-2 and offline-custody proof")
+    if env_path.read_text(encoding="utf-8") != before_incomplete_vault_evidence:
+        return fail("incomplete Vault recovery evidence changed the private env")
     vault_evidence = subprocess.run(
         [
             sys.executable,
@@ -165,6 +187,11 @@ def main() -> int:
             "--record-vault-recovery-evidence",
             "--vault-backup-artifact-id-env",
             "JIEJING_TEST_VAULT_BACKUP_ARTIFACT_ID",
+            "--vault-unseal-key-shares",
+            "3",
+            "--vault-unseal-key-threshold",
+            "2",
+            "--vault-offline-share-custody-verified",
         ],
         cwd=ROOT,
         env=env,
@@ -183,6 +210,9 @@ def main() -> int:
         "JIEJING_VAULT_BACKUP_POLICY_CONFIGURED=true",
         "JIEJING_VAULT_RESTORE_MANUAL_UNSEAL_VERIFIED=true",
         "JIEJING_VAULT_RESTORE_SENTINEL_RESOLVE_VERIFIED=true",
+        "JIEJING_VAULT_UNSEAL_KEY_SHARES=3",
+        "JIEJING_VAULT_UNSEAL_KEY_THRESHOLD=2",
+        "JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED=true",
         "JIEJING_VAULT_RESTORE_DRILL_LAST_AT=",
     ):
         if marker not in vault_text:

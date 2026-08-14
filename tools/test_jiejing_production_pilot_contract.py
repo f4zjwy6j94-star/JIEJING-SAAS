@@ -89,6 +89,9 @@ def main() -> int:
         "JIEJING_VAULT_RESTORE_DRILL_LAST_AT": "",
         "JIEJING_VAULT_RESTORE_MANUAL_UNSEAL_VERIFIED": "false",
         "JIEJING_VAULT_RESTORE_SENTINEL_RESOLVE_VERIFIED": "false",
+        "JIEJING_VAULT_UNSEAL_KEY_SHARES": "0",
+        "JIEJING_VAULT_UNSEAL_KEY_THRESHOLD": "0",
+        "JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED": "false",
     }
     mismatches = {
         key: {"expected": expected_value, "actual": values.get(key)}
