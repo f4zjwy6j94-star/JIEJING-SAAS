@@ -35,7 +35,7 @@ def main() -> int:
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
     frontend_asset_version = "20260803-product-feedback-v1"
-    app_js_asset_version = "20260814-draft-oauth-resume-v10"
+    app_js_asset_version = "20260814-ebay-inventory-location-v11"
     for expected_asset in [
         f"./app.js?v={app_js_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -68,6 +68,8 @@ def main() -> int:
         return fail("frontend entry files must not retain the pre-server-clock draft OAuth cache version")
     if "./app.js?v=20260814-server-clock-draft-oauth-v9" in index_html + app_html:
         return fail("frontend entry files must not retain the pre-resumable-draft-oauth cache version")
+    if "./app.js?v=20260814-draft-oauth-resume-v10" in index_html + app_html:
+        return fail("frontend entry files must not retain the pre-inventory-location cache version")
     if "./app.js?v=20260803-product-feedback-v1" in index_html + app_html:
         return fail("frontend entry files must not retain the stale app.js cache version")
     for stale_asset_version in [

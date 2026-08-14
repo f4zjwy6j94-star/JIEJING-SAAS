@@ -3839,6 +3839,160 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if (
+            len(parts) == 4
+            and parts[0] == "stores"
+            and parts[2] == "ebay-inventory-location"
+            and parts[3] == "confirmation"
+        ):
+            if not self._require_permission(identity, "manage_connections"):
+                return
+            body = self._read_json_body()
+            store_id = parts[1]
+            store = self.repository.get_store_for_company(
+                company_id=identity["company_id"],
+                store_id=store_id,
+            )
+            if not store or str(store.get("platform") or "").strip().lower() != "ebay":
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            try:
+                location_payload = _normalize_ebay_inventory_location_input(body)
+            except ValueError:
+                self._send_error(HTTPStatus.BAD_REQUEST, "ebay_inventory_location_payload_invalid")
+                return
+            location_key = location_payload["merchantLocationKey"]
+            try:
+                created = self.repository.create_ebay_inventory_location_confirmation(
+                    company_id=identity["company_id"],
+                    store_id=store_id,
+                    user_id=identity["user_id"],
+                    location_payload=location_payload,
+                    payload_sha256=_draft_publish_payload_sha256(location_payload),
+                )
+            except ConfirmationDecisionConflict:
+                self._send_error(HTTPStatus.CONFLICT, "ebay_inventory_location_confirmation_already_active")
+                return
+            confirmation = created["confirmation"]
+            self._send_json(
+                {
+                    "inventory_location_confirmation": {
+                        "confirmation_id": str(confirmation.get("confirmation_id") or ""),
+                        "company_id": identity["company_id"],
+                        "store_id": store_id,
+                        "status": str(confirmation.get("status") or "pending"),
+                        "action_type": "create_ebay_inventory_location",
+                        "source": "merchant_ebay_inventory_location_setup",
+                        "requested_step": "inventory_location_confirmation_gate",
+                        "merchant_location_key": location_key,
+                        "country": location_payload["location"]["address"]["country"],
+                        "location_write_started": False,
+                        "public_listing_created": False,
+                        "secret_exposed": False,
+                    }
+                },
+                status=HTTPStatus.CREATED,
+            )
+            return
+
+        if (
+            len(parts) == 4
+            and parts[0] == "stores"
+            and parts[2] == "ebay-inventory-location"
+            and parts[3] == "execute"
+        ):
+            if not self._require_permission(identity, "manage_connections"):
+                return
+            if not self._require_permission(identity, "execute_confirmed_action"):
+                return
+            body = self._read_json_body()
+            store_id = parts[1]
+            confirmation_id = str(body.get("confirmation_id") or "").strip()
+            if not confirmation_id:
+                self._send_error(HTTPStatus.CONFLICT, "ebay_inventory_location_approval_required")
+                return
+            confirmation = self.repository.get_confirmation(
+                company_id=identity["company_id"],
+                confirmation_id=confirmation_id,
+            )
+            item = confirmation.get("item") if isinstance(confirmation, dict) and isinstance(confirmation.get("item"), dict) else {}
+            location_payload = item.get("location_payload") if isinstance(item.get("location_payload"), dict) else {}
+            expected_payload_sha256 = _draft_publish_payload_sha256(location_payload) if location_payload else ""
+            store = self.repository.get_store_for_company(
+                company_id=identity["company_id"],
+                store_id=store_id,
+            )
+            if not store or str(store.get("platform") or "").strip().lower() != "ebay":
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            credential_boundary = self.repository.unpublished_draft_execution_credential_boundary(
+                company_id=identity["company_id"],
+                store_id=store_id,
+            )
+            prepared = self.ebay_write_adapter.prepare_inventory_location(
+                confirmation=confirmation if isinstance(confirmation, dict) else {},
+                location_payload=location_payload,
+                credential_boundary=credential_boundary,
+                marketplace_id=str(store.get("marketplace") or "EBAY_US"),
+            )
+            if isinstance(prepared, dict):
+                self._send_json(
+                    {
+                        "inventory_location_execution": {
+                            "status": str(prepared.get("status") or "inventory_location_preflight_blocked"),
+                            "location_write_started": False,
+                            "automatic_retry_allowed": False,
+                            "public_listing_created": False,
+                            "secret_exposed": False,
+                        }
+                    },
+                    status=HTTPStatus.CONFLICT,
+                )
+                return
+            claim_binding = prepared.claim_binding() if hasattr(prepared, "claim_binding") else {}
+            try:
+                claimed = self.repository.claim_ebay_inventory_location_execution(
+                    company_id=identity["company_id"],
+                    store_id=store_id,
+                    confirmation_id=confirmation_id,
+                    user_id=identity["user_id"],
+                    expected_payload_sha256=expected_payload_sha256,
+                    expected_claim_binding=claim_binding,
+                    marketplace_id=str(store.get("marketplace") or "EBAY_US"),
+                )
+            except ConfirmationDecisionConflict:
+                self.ebay_write_adapter.discard_inventory_location_preparation(prepared)
+                self._send_error(HTTPStatus.CONFLICT, "ebay_inventory_location_approval_required")
+                return
+            result = self.ebay_write_adapter.execute_prepared_inventory_location(
+                confirmation=claimed,
+                prepared=prepared,
+                marketplace_id=str(store.get("marketplace") or "EBAY_US"),
+            )
+            if not (
+                isinstance(result, dict)
+                and result.get("status") == "inventory_location_created"
+                and result.get("action_type") == "create_ebay_inventory_location"
+                and result.get("location_write_completed") is True
+                and result.get("public_listing_created") is False
+                and result.get("secret_exposed") is False
+            ):
+                self._send_json(
+                    {
+                        "inventory_location_execution": {
+                            "status": "inventory_location_manual_reconcile",
+                            "automatic_retry_allowed": False,
+                            "public_listing_created": False,
+                            "secret_exposed": False,
+                        }
+                    },
+                    status=HTTPStatus.BAD_GATEWAY,
+                )
+                return
+            stored_result = self.repository.save_execution_result(confirmation=claimed, result=result)
+            self._send_json({"inventory_location_execution": stored_result}, status=HTTPStatus.OK)
+            return
+
         if len(parts) == 4 and parts[0] == "stores" and parts[2] == "ebay-oauth" and parts[3] == "read-only-confirmation":
             if not self._require_permission(identity, "manage_connections"):
                 return
@@ -9320,6 +9474,38 @@ def _execution_payload_from_context(
 def _draft_publish_payload_sha256(payload: dict[str, Any]) -> str:
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _normalize_ebay_inventory_location_input(body: dict[str, Any]) -> dict[str, Any]:
+    """Return the exact minimal provider payload for one warehouse location."""
+
+    location_key = str(body.get("merchant_location_key") or "").strip()
+    name = str(body.get("name") or "").strip()
+    raw_types = body.get("location_types")
+    raw_address = body.get("address") if isinstance(body.get("address"), dict) else {}
+    city = str(raw_address.get("city") or "").strip()
+    state = str(raw_address.get("state_or_province") or "").strip()
+    country = str(raw_address.get("country") or "").strip().upper()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,49}", location_key):
+        raise ValueError("invalid merchant location key")
+    if not name or len(name) > 100 or any(ord(char) < 32 for char in name):
+        raise ValueError("invalid inventory location name")
+    if raw_types != ["WAREHOUSE"]:
+        raise ValueError("only the controlled warehouse location type is allowed")
+    if not city or len(city) > 80 or not state or len(state) > 80 or not re.fullmatch(r"[A-Z]{2}", country):
+        raise ValueError("city, state and ISO country are required")
+    return {
+        "merchantLocationKey": location_key,
+        "name": name,
+        "locationTypes": ["WAREHOUSE"],
+        "location": {
+            "address": {
+                "city": city,
+                "stateOrProvince": state,
+                "country": country,
+            }
+        },
+    }
 
 
 def _publish_health_ready_for_confirmation(

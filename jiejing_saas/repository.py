@@ -54,6 +54,7 @@ from .workflow_plan import step_status_from_runtime
 
 HIGH_RISK_ACTIONS = {
     "ebay_oauth_scope_change",
+    "create_ebay_inventory_location",
     "save_ebay_listing_draft",
     "publish_listing",
     "bulk_publish_listing",
@@ -4316,6 +4317,180 @@ class SaaSRepository:
             ).fetchone()
         return self._confirmation_row_to_dict(row) if row else None
 
+    def create_ebay_inventory_location_confirmation(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        user_id: str,
+        location_payload: dict[str, Any],
+        payload_sha256: str,
+    ) -> dict[str, Any]:
+        """Create one active location confirmation and its task atomically."""
+
+        self.initialize()
+        location_key = str(location_payload.get("merchantLocationKey") or "").strip()
+        address = (
+            location_payload.get("location", {}).get("address", {})
+            if isinstance(location_payload.get("location"), dict)
+            and isinstance(location_payload.get("location", {}).get("address"), dict)
+            else {}
+        )
+        if not location_key or not payload_sha256:
+            raise ValueError("ebay_inventory_location_payload_invalid")
+        task_id = _id("task")
+        confirmation_id = _id("confirm")
+        created_at = now_iso()
+        task_title = f"eBay inventory location setup - {location_key}"
+        confirmation_title = f"创建 eBay 库存位置 · {location_key}"
+        task_input = {
+            "source": "merchant_ebay_inventory_location_setup",
+            "merchant_location_key": location_key,
+            "country": str(address.get("country") or ""),
+            "secret_exposed": False,
+        }
+        safe_item = _redact_secret_like(
+            {
+                "source": "merchant_ebay_inventory_location_setup",
+                "requested_step": "inventory_location_confirmation_gate",
+                "company_id": company_id,
+                "store_id": store_id,
+                "merchant_location_key": location_key,
+                "country": str(address.get("country") or ""),
+                "location_payload": location_payload,
+                "location_payload_sha256": payload_sha256,
+                "reason": "当前 eBay 账号没有 Inventory API 库存位置；保存未发布 Offer 前必须先创建一个真实位置。",
+                "expected_result": "只创建一个未承诺公开发布的 eBay 库存位置；不会创建 Listing、Offer、付款或广告。",
+                "high_risk": True,
+                "writes_to_ebay_after_approval": True,
+                "public_publish_enabled": False,
+                "public_listing_created": False,
+                "confirmation_id": confirmation_id,
+                "action_type": "create_ebay_inventory_location",
+                "title": confirmation_title,
+                "default_action": "hold",
+                "secret_exposed": False,
+            }
+        )
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            store_row = conn.execute(
+                f"select store_id from stores where company_id = ? and store_id = ?{lock_suffix}",
+                (company_id, store_id),
+            ).fetchone()
+            if not store_row:
+                raise ConfirmationDecisionConflict("ebay_inventory_location_store_required")
+            active = conn.execute(
+                f"""
+                select confirmation_id from confirmations
+                where company_id = ? and store_id = ? and action_type = 'create_ebay_inventory_location'
+                  and status in ('pending', 'approved', ?)
+                {lock_suffix}
+                """,
+                (company_id, store_id, EXTERNAL_EXECUTION_PROCESSING_STATUS),
+            ).fetchall()
+            if active:
+                raise ConfirmationDecisionConflict("ebay_inventory_location_confirmation_already_active")
+            conn.execute(
+                """
+                insert into tasks (
+                  task_id, company_id, store_id, user_id, runtime_run_id, task_type, title,
+                  status, created_at, updated_at, input_json, output_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    company_id,
+                    store_id,
+                    user_id,
+                    None,
+                    "ebay_inventory_location_setup",
+                    task_title,
+                    "queued",
+                    created_at,
+                    created_at,
+                    json.dumps(task_input, ensure_ascii=False),
+                    "{}",
+                ),
+            )
+            conn.execute(
+                """
+                insert into confirmations (
+                  confirmation_id, company_id, store_id, task_id, runtime_run_id, action_type, title, status,
+                  default_action, created_at, item_json, decided_by, decided_at, decision_note
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    confirmation_id,
+                    company_id,
+                    store_id,
+                    task_id,
+                    "merchant_ebay_inventory_location_setup",
+                    "create_ebay_inventory_location",
+                    confirmation_title,
+                    "pending",
+                    "hold",
+                    created_at,
+                    json.dumps(safe_item, ensure_ascii=False, default=json_default),
+                    None,
+                    None,
+                    None,
+                ),
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                user_id=user_id,
+                actor_type="user",
+                action_type="task.create",
+                target_type="task",
+                target_id=task_id,
+                summary="SaaS task created.",
+                details={"task_type": "ebay_inventory_location_setup", "title": task_title},
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                user_id=user_id,
+                actor_type="system",
+                action_type="confirmation.created",
+                target_type="confirmation",
+                target_id=confirmation_id,
+                summary="A new confirmation item was created from a controlled SaaS workflow.",
+                details={
+                    "action_type": "create_ebay_inventory_location",
+                    "source": "merchant_ebay_inventory_location_setup",
+                    "secret_exposed": False,
+                },
+            )
+            self._insert_merchant_memory(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                memory_type="confirmation_boundary",
+                source_type="confirmation",
+                source_id=confirmation_id,
+                title=confirmation_title,
+                summary=_memory_summary_from_confirmation(safe_item),
+                importance=90,
+                tags=["create_ebay_inventory_location", "confirmation_center", "risk_control"],
+                memory={
+                    "confirmation_id": confirmation_id,
+                    "action_type": "create_ebay_inventory_location",
+                    "high_risk": True,
+                    "secret_exposed": False,
+                },
+                created_by=user_id,
+            )
+        return {
+            "task": self.get_task(company_id=company_id, task_id=task_id) or {},
+            "confirmation": self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {},
+        }
+
     def create_confirmation(
         self,
         *,
@@ -4524,6 +4699,127 @@ class SaaSRepository:
             "status": EXTERNAL_EXECUTION_PROCESSING_STATUS,
             "external_execution_claimed": True,
             **({"external_execution_claim_binding": claim_binding} if claim_binding else {}),
+        }
+
+    def claim_ebay_inventory_location_execution(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        confirmation_id: str,
+        user_id: str,
+        expected_payload_sha256: str,
+        expected_claim_binding: dict[str, Any],
+        marketplace_id: str,
+    ) -> dict[str, Any]:
+        """Atomically consume one fresh exact inventory-location approval."""
+
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
+                (company_id, confirmation_id),
+            ).fetchone()
+            if not row:
+                raise ConfirmationDecisionConflict("ebay_inventory_location_approval_required")
+            confirmation = self._confirmation_row_to_dict(row)
+            item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+            location_payload = item.get("location_payload") if isinstance(item.get("location_payload"), dict) else {}
+            actual_payload_sha256 = _canonical_payload_sha256(location_payload) if location_payload else ""
+            decided_at = _parse_explicit_timezone_iso_datetime(confirmation.get("decided_at"))
+            store_row = conn.execute(
+                f"select platform, marketplace from stores where company_id = ? and store_id = ?{lock_suffix}",
+                (company_id, store_id),
+            ).fetchone()
+            credential_boundary = self._unpublished_draft_execution_credential_boundary_conn(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                include_private=False,
+                lock_rows=True,
+            )
+            binding = expected_claim_binding if isinstance(expected_claim_binding, dict) else {}
+            credential_hash_keys = (
+                "connection_id_sha256",
+                "credential_ref_sha256",
+                "oauth_request_id_sha256",
+                "seller_identity_sha256",
+            )
+            exact_credential_binding = bool(
+                credential_boundary.get("ready") is True
+                and all(
+                    re.fullmatch(r"[a-f0-9]{64}", str(binding.get(key) or ""))
+                    and str(binding.get(key) or "") == str(credential_boundary.get(key) or "")
+                    for key in credential_hash_keys
+                )
+            )
+            exact = bool(
+                str(confirmation.get("status") or "") == "approved"
+                and store_row
+                and str(store_row["platform"] or "").strip().lower() == "ebay"
+                and str(store_row["marketplace"] or "") == str(marketplace_id or "")
+                and str(confirmation.get("store_id") or "") == str(store_id or "")
+                and str(confirmation.get("action_type") or "") == "create_ebay_inventory_location"
+                and str(confirmation.get("runtime_run_id") or "") == "merchant_ebay_inventory_location_setup"
+                and str(confirmation.get("decided_by") or "")
+                and _timestamp_not_future_within_seconds(decided_at, datetime.now(timezone.utc), 15 * 60)
+                and str(item.get("source") or "") == "merchant_ebay_inventory_location_setup"
+                and str(item.get("requested_step") or "") == "inventory_location_confirmation_gate"
+                and str(item.get("company_id") or "") == str(company_id or "")
+                and str(item.get("store_id") or "") == str(store_id or "")
+                and str(item.get("merchant_location_key") or "")
+                == str(location_payload.get("merchantLocationKey") or "")
+                and str(item.get("location_payload_sha256") or "") == actual_payload_sha256
+                and str(expected_payload_sha256 or "") == actual_payload_sha256
+                and exact_credential_binding
+                and str(binding.get("action_type") or "") == "create_ebay_inventory_location"
+                and str(binding.get("company_id") or "") == str(company_id or "")
+                and str(binding.get("store_id") or "") == str(store_id or "")
+                and str(binding.get("confirmation_id") or "") == str(confirmation_id or "")
+                and str(binding.get("task_id") or "") == str(confirmation.get("task_id") or "")
+                and str(binding.get("marketplace_id") or "") == str(marketplace_id or "")
+                and str(binding.get("payload_sha256") or "") == actual_payload_sha256
+                and item.get("writes_to_ebay_after_approval") is True
+                and item.get("public_publish_enabled") is False
+                and item.get("public_listing_created") is False
+                and item.get("secret_exposed") is False
+            )
+            if not exact:
+                raise ConfirmationDecisionConflict("ebay_inventory_location_approval_required")
+            transitioned = conn.execute(
+                """
+                update confirmations set status = ?
+                where company_id = ? and confirmation_id = ? and status = 'approved'
+                """,
+                (EXTERNAL_EXECUTION_PROCESSING_STATUS, company_id, confirmation_id),
+            ).rowcount
+            if transitioned != 1:
+                raise ConfirmationDecisionConflict("ebay_inventory_location_claim_conflict")
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                user_id=user_id,
+                actor_type="system",
+                action_type="ebay.inventory_location.execution_claimed",
+                target_type="confirmation",
+                target_id=confirmation_id,
+                summary="An exact inventory-location approval was consumed before the provider write.",
+                details={
+                    "action_type": "create_ebay_inventory_location",
+                    "payload_sha256": actual_payload_sha256,
+                    **{key: str(binding.get(key) or "") for key in credential_hash_keys},
+                    "automatic_retry_allowed": False,
+                    "secret_exposed": False,
+                },
+            )
+        return {
+            **confirmation,
+            "status": EXTERNAL_EXECUTION_PROCESSING_STATUS,
+            "external_execution_claimed": True,
         }
 
     def claim_unpublished_draft_execution(
@@ -14706,6 +15002,7 @@ def _is_terminal_new_account_smoke_execution(
     version = "2026-06-18-new-ebay-account-low-risk-smoke"
     action_type = str(confirmation.get("action_type") or "")
     terminal_statuses = {
+        "create_ebay_inventory_location": {"inventory_location_created"},
         "publish_listing": {"published_to_ebay"},
         "cleanup_test_listing": {"completed", "cleanup_completed", "ended_listing", "deleted_test_listing"},
     }
@@ -14733,6 +15030,7 @@ def _is_successful_claimed_external_execution(
     result: dict[str, Any],
 ) -> bool:
     terminal_statuses = {
+        "create_ebay_inventory_location": {"inventory_location_created"},
         "publish_listing": {"published_to_ebay"},
         "save_ebay_listing_draft": {"saved_to_ebay_draft"},
         "cleanup_test_listing": {"completed", "cleanup_completed", "ended_listing", "deleted_test_listing"},

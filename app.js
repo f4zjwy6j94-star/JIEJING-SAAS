@@ -4397,9 +4397,12 @@ const planDetails = {
 
 const saasExactReadOnlyOAuthConfirmationButtonBindings = new WeakMap();
 let saasVerifiedUnpublishedDraftSaveConfirmations = new WeakSet();
+let saasVerifiedInventoryLocationConfirmations = new WeakSet();
 let saasExactReadOnlyOAuthConfirmationRenderGeneration = 0;
 const saasReadOnlyOAuthPlanAttemptKeys = new Set();
 const saasUnpublishedDraftOAuthPlanAttemptKeys = new Set();
+const saasInventoryLocationExecutionAttemptKeys = new Set();
+let saasPendingPublishIntakeFormValues = null;
 
 const manualActionDetails = {
   ebay_account: {
@@ -10580,7 +10583,8 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
   const imageUrls = mediaWritebackUrls.length
     ? mediaWritebackUrls.join("\n")
     : (imageText.match(/https?:\/\/[^\s,，；;]+/gi) || clean.match(/https?:\/\/[^\s,，；;]+/gi) || []).join("\n");
-  return {
+  const inventoryCountryCandidate = String(publishPrefill.item_location || itemLocation || "").trim().toUpperCase();
+  const values = {
     product: draft?.product || draft?.title || "",
     sku: publishPrefill.sku || "",
     title: String(fields.title || draft?.title || "").slice(0, 80),
@@ -10591,6 +10595,11 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
     quantity: publishPrefill.quantity || "",
     condition: publishPrefill.condition || "",
     merchant_location_key: publishPrefill.merchant_location_key || "",
+    inventory_location_key: "",
+    inventory_location_name: "",
+    inventory_location_city: "",
+    inventory_location_state: "",
+    inventory_location_country: /^[A-Z]{2}$/.test(inventoryCountryCandidate) ? inventoryCountryCandidate : "CN",
     item_location: publishPrefill.item_location || itemLocation,
     package_weight_g: publishPrefill.package_weight_g || packageWeightG,
     package_length_cm: publishPrefill.package_length_cm || dimensionMatch?.[1] || "",
@@ -10615,6 +10624,7 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
     payment_policy_id: publishPrefill.payment_policy_id || "",
     return_policy_id: publishPrefill.return_policy_id || "",
   };
+  return { ...values, ...(saasPendingPublishIntakeFormValues || {}) };
 }
 
 function renderSaasPublishInputField(label, name, options = {}) {
@@ -10691,6 +10701,7 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
   const includeGuide = options.includeGuide !== false;
   const formValues = saasPublishIntakePrefillValues();
   const condition = formValues.condition || "";
+  const approvedInventoryLocation = saasExactApprovedInventoryLocationConfirmation();
   return `
     <section class="saas-publish-intake-panel" aria-label="新商品发布确认单">
       <div class="saas-publish-intake-head">
@@ -10701,6 +10712,8 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
         </div>
         <div class="saas-publish-intake-actions">
           <button class="secondary-action" type="button" data-saas-action="run-pretest-check">检测当前资料</button>
+          <button class="secondary-action" type="button" data-saas-action="create-ebay-inventory-location-confirmation" ${disabled ? "disabled" : ""}>生成库存位置确认单</button>
+          <button class="secondary-action" type="button" data-saas-action="execute-ebay-inventory-location" ${disabled || !approvedInventoryLocation ? "disabled" : ""}>执行已批准的库存位置创建</button>
           <button class="primary-action" type="button" data-saas-action="create-ebay-draft-confirmation" ${disabled ? "disabled" : ""}>生成未发布 eBay 草稿确认单</button>
           <button class="primary-action" type="button" data-saas-action="create-publish-confirmation" ${disabled ? "disabled" : ""}>生成发布确认单</button>
         </div>
@@ -10758,6 +10771,11 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
           renderSaasPublishInputField("类目 ID", "category_id", { value: formValues.category_id, placeholder: "eBay leaf category id" }),
           renderSaasPublishInputField("类目名", "category_leaf", { value: formValues.category_leaf, placeholder: "用于类目相关性体检" }),
           renderSaasPublishInputField("库存位置 key", "merchant_location_key", { value: formValues.merchant_location_key, placeholder: "从店铺资料 / eBay location 读取" }),
+          renderSaasPublishInputField("新库存位置 key", "inventory_location_key", { value: formValues.inventory_location_key, placeholder: "例如 shenzhen-warehouse" }),
+          renderSaasPublishInputField("新库存位置名称", "inventory_location_name", { value: formValues.inventory_location_name, placeholder: "例如 Shenzhen Warehouse" }),
+          renderSaasPublishInputField("城市", "inventory_location_city", { value: formValues.inventory_location_city, placeholder: "例如 Shenzhen" }),
+          renderSaasPublishInputField("省/州", "inventory_location_state", { value: formValues.inventory_location_state, placeholder: "例如 Guangdong" }),
+          renderSaasPublishInputField("国家代码", "inventory_location_country", { value: formValues.inventory_location_country, placeholder: "CN" }),
           renderSaasPublishTextareaField("Item specifics", "item_specifics", {
             value: formValues.item_specifics,
             rows: 4,
@@ -16760,7 +16778,9 @@ function buildSaasProtectedStateSnapshot() {
         ]),
       ),
     confirmations: (state.saasConfirmations || [])
-      .filter((confirmation) => !isSaasReadOnlyOAuthSensitiveConfirmation(confirmation))
+      .filter((confirmation) => !isSaasReadOnlyOAuthSensitiveConfirmation(confirmation) &&
+          !isSaasInventoryLocationSensitiveConfirmation(confirmation),
+      )
       .slice(0, 40)
       .map((confirmation) =>
         pickSaasSnapshotFields(confirmation, [
@@ -16833,7 +16853,9 @@ function hydrateSaasProtectedStateFromCache() {
     if (!Number.isFinite(savedAt) || Date.now() - savedAt > 1000 * 60 * 60 * 24 * 14) return false;
     const restoredConfirmations = Array.isArray(snapshot.confirmations) ? snapshot.confirmations : [];
     const safeRestoredConfirmations = restoredConfirmations.filter(
-      (confirmation) => !isSaasReadOnlyOAuthSensitiveConfirmation(confirmation),
+      (confirmation) =>
+        !isSaasReadOnlyOAuthSensitiveConfirmation(confirmation) &&
+        !isSaasInventoryLocationSensitiveConfirmation(confirmation),
     );
     if (safeRestoredConfirmations.length !== restoredConfirmations.length) {
       snapshot = { ...snapshot, confirmations: safeRestoredConfirmations };
@@ -17942,6 +17964,117 @@ async function verifySaasUnpublishedDraftSaveConfirmations(confirmations = []) {
   saasVerifiedUnpublishedDraftSaveConfirmations = verified;
 }
 
+function isSaasInventoryLocationSensitiveConfirmation(card = {}) {
+  card = card && typeof card === "object" ? card : {};
+  const item = card.item && typeof card.item === "object" ? card.item : {};
+  return Boolean(
+    String(card.action_type || "") === "create_ebay_inventory_location" ||
+      String(item.action_type || "") === "create_ebay_inventory_location" ||
+      String(item.source || "") === "merchant_ebay_inventory_location_setup" ||
+      String(item.requested_step || "") === "inventory_location_confirmation_gate" ||
+      item.location_payload !== undefined
+  );
+}
+
+async function verifySaasInventoryLocationConfirmations(confirmations = []) {
+  const verified = new WeakSet();
+  for (const card of Array.isArray(confirmations) ? confirmations : []) {
+    const item = card?.item && typeof card.item === "object" && !Array.isArray(card.item) ? card.item : {};
+    const payload = item.location_payload && typeof item.location_payload === "object" && !Array.isArray(item.location_payload)
+      ? item.location_payload
+      : null;
+    const expected = String(item.location_payload_sha256 || "").trim().toLowerCase();
+    if (String(card?.action_type || "") !== "create_ebay_inventory_location" || !payload || !/^[a-f0-9]{64}$/.test(expected)) continue;
+    try {
+      const actual = await saasSha256Hex(JSON.stringify(saasCanonicalJsonValue(payload)));
+      if (actual && actual === expected) verified.add(card);
+    } catch (_error) {
+      // A malformed payload or unavailable digest implementation is never display-safe.
+    }
+  }
+  saasVerifiedInventoryLocationConfirmations = verified;
+}
+
+function isSaasExactInventoryLocationConfirmation(card = {}, companyId = "", storeId = "") {
+  card = card && typeof card === "object" ? card : {};
+  const item = card.item && typeof card.item === "object" && !Array.isArray(card.item) ? card.item : {};
+  const payload = item.location_payload && typeof item.location_payload === "object" && !Array.isArray(item.location_payload)
+    ? item.location_payload
+    : {};
+  const address = payload.location?.address && typeof payload.location.address === "object" && !Array.isArray(payload.location.address)
+    ? payload.location.address
+    : {};
+  const targetCompanyId = String(companyId || "").trim();
+  const targetStoreId = String(storeId || "").trim();
+  const locationTypes = Array.isArray(payload.locationTypes) ? payload.locationTypes : [];
+  return Boolean(
+    targetCompanyId &&
+      targetStoreId &&
+      String(card.confirmation_id || "").trim() &&
+      String(card.company_id || "").trim() === targetCompanyId &&
+      String(card.store_id || "").trim() === targetStoreId &&
+      String(card.action_type || "") === "create_ebay_inventory_location" &&
+      String(card.runtime_run_id || "") === "merchant_ebay_inventory_location_setup" &&
+      ["pending", "approved"].includes(String(card.status || "")) &&
+      saasVerifiedInventoryLocationConfirmations.has(card) &&
+      String(item.source || "") === "merchant_ebay_inventory_location_setup" &&
+      String(item.requested_step || "") === "inventory_location_confirmation_gate" &&
+      String(item.company_id || "").trim() === targetCompanyId &&
+      String(item.store_id || "").trim() === targetStoreId &&
+      String(item.merchant_location_key || "").trim() === String(payload.merchantLocationKey || "").trim() &&
+      /^[a-z0-9](?:[a-z0-9_-]{0,48}[a-z0-9])?$/i.test(String(payload.merchantLocationKey || "").trim()) &&
+      String(payload.name || "").trim() &&
+      locationTypes.length === 1 &&
+      locationTypes[0] === "WAREHOUSE" &&
+      String(address.city || "").trim() &&
+      String(address.stateOrProvince || "").trim() &&
+      /^[A-Z]{2}$/.test(String(address.country || "").trim()) &&
+      String(item.country || "").trim() === String(address.country || "").trim() &&
+      /^[a-f0-9]{64}$/i.test(String(item.location_payload_sha256 || "").trim()) &&
+      item.high_risk === true &&
+      item.writes_to_ebay_after_approval === true &&
+      item.public_publish_enabled === false &&
+      item.public_listing_created === false &&
+      item.secret_exposed === false
+  );
+}
+
+function isSaasUniqueCurrentInventoryLocationConfirmation(card = {}, cards = state.saasConfirmations || []) {
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const storeId = String(activeSaasStore()?.store_id || "").trim();
+  const confirmationId = String(card?.confirmation_id || "").trim();
+  if (!isSaasExactInventoryLocationConfirmation(card, companyId, storeId)) return false;
+  const allCards = Array.isArray(cards) ? cards : [];
+  if (allCards.filter((candidate) => String(candidate?.confirmation_id || "").trim() === confirmationId).length !== 1) return false;
+  const activeSensitive = allCards.filter(
+    (candidate) =>
+      String(candidate?.company_id || "").trim() === companyId &&
+      String(candidate?.store_id || "").trim() === storeId &&
+      ["pending", "approved"].includes(String(candidate?.status || "")) &&
+      isSaasInventoryLocationSensitiveConfirmation(candidate),
+  );
+  return activeSensitive.length === 1 && String(activeSensitive[0]?.confirmation_id || "").trim() === confirmationId;
+}
+
+function isSaasFreshApprovedInventoryLocationConfirmation(card = {}, referenceNow = saasServerNowMs()) {
+  if (!isSaasUniqueCurrentInventoryLocationConfirmation(card, state.saasConfirmations || []) || String(card.status || "") !== "approved") return false;
+  if (!String(card.decided_by || "").trim()) return false;
+  const decidedAtText = String(card.decided_at || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(decidedAtText)) return false;
+  const decidedAt = Date.parse(decidedAtText);
+  const now = Number(referenceNow);
+  if (!Number.isFinite(decidedAt) || !Number.isFinite(now)) return false;
+  const ageMs = now - decidedAt;
+  return ageMs >= -60 * 1000 && ageMs <= 15 * 60 * 1000;
+}
+
+function saasExactApprovedInventoryLocationConfirmation() {
+  const matches = (state.saasConfirmations || []).filter(
+    (card) => String(card?.status || "") === "approved" && isSaasFreshApprovedInventoryLocationConfirmation(card),
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function isSaasReadOnlyOAuthSensitiveConfirmation(card = {}) {
   card = card && typeof card === "object" ? card : {};
   const item = card.item && typeof card.item === "object" ? card.item : {};
@@ -18197,6 +18330,11 @@ function openSaasReadOnlyOAuthConfirmationCenter() {
 }
 
 function saasConfirmationActionAttributes(card = {}) {
+  if (isSaasInventoryLocationSensitiveConfirmation(card)) {
+    return isSaasUniqueCurrentInventoryLocationConfirmation(card, state.saasConfirmations || [])
+      ? 'data-saas-confirmation-flow="ebay-inventory-location-current-store"'
+      : 'data-saas-confirmation-flow="ebay-inventory-location-blocked"';
+  }
   if (isSaasReadOnlyOAuthSensitiveConfirmation(card)) {
     if (isSaasExactReadOnlyOAuthConfirmation(card, card.store_id)) {
       return 'data-saas-confirmation-flow="ebay-read-only-oauth-current-store"';
@@ -18219,7 +18357,9 @@ function normalizeSaasExactReadOnlyOAuthConfirmationBinding(card = {}) {
   const storeId = String(card.store_id || "").trim();
   const confirmationId = String(card.confirmation_id || "").trim();
   if (!companyId || !storeId || !confirmationId || String(card.status || "") !== "pending") return null;
-  const flowKind = isSaasExactReadOnlyOAuthConfirmation(card, storeId)
+  const flowKind = isSaasExactInventoryLocationConfirmation(card, companyId, storeId)
+    ? "inventory_location"
+    : isSaasExactReadOnlyOAuthConfirmation(card, storeId)
     ? "read_only"
     : isSaasExactUnpublishedDraftOAuthConfirmation(card, storeId)
       ? "unpublished_draft"
@@ -18244,7 +18384,10 @@ function bindSaasExactReadOnlyOAuthConfirmationButtons(root, renderedCards = [],
   (Array.isArray(renderedCards) ? renderedCards : []).forEach((card, index) => {
     const readOnly = isSaasUniqueCurrentReadOnlyOAuthConfirmation(card, allCards);
     const unpublishedDraft = isSaasUniqueCurrentUnpublishedDraftOAuthConfirmation(card, allCards);
-    const selector = readOnly
+    const inventoryLocation = isSaasUniqueCurrentInventoryLocationConfirmation(card, allCards);
+    const selector = inventoryLocation
+      ? '[data-saas-confirmation-flow="ebay-inventory-location-current-store"]'
+      : readOnly
       ? '[data-saas-confirmation-flow="ebay-read-only-oauth-current-store"]'
       : unpublishedDraft
         ? '[data-saas-confirmation-flow="ebay-unpublished-draft-oauth-current-store"]'
@@ -18257,7 +18400,7 @@ function bindSaasExactReadOnlyOAuthConfirmationButtons(root, renderedCards = [],
 }
 
 function saasConfirmationIdFromActionButton(button) {
-  if (["ebay-read-only-oauth-current-store", "ebay-unpublished-draft-oauth-current-store"].includes(button?.dataset?.saasConfirmationFlow)) {
+  if (["ebay-read-only-oauth-current-store", "ebay-unpublished-draft-oauth-current-store", "ebay-inventory-location-current-store"].includes(button?.dataset?.saasConfirmationFlow)) {
     const binding = saasExactReadOnlyOAuthConfirmationButtonBindings.get(button);
     const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
     const currentStoreId = String(activeSaasStore()?.store_id || "").trim();
@@ -18283,10 +18426,11 @@ function saasConfirmationIdFromActionButton(button) {
       String(confirmation.action_type || item.action_type || "") !== binding.actionType ||
       String(item.source || "") !== binding.source ||
       String(item.requested_step || "") !== binding.requestedStep ||
-      String(item.scope_profile || "") !== binding.scopeProfile ||
+      (binding.flowKind !== "inventory_location" && String(item.scope_profile || "") !== binding.scopeProfile) ||
       !(
         (binding.flowKind === "read_only" && isSaasExactReadOnlyOAuthConfirmation(confirmation, binding.storeId)) ||
-        (binding.flowKind === "unpublished_draft" && isSaasExactUnpublishedDraftOAuthConfirmation(confirmation, binding.storeId))
+        (binding.flowKind === "unpublished_draft" && isSaasExactUnpublishedDraftOAuthConfirmation(confirmation, binding.storeId)) ||
+        (binding.flowKind === "inventory_location" && isSaasUniqueCurrentInventoryLocationConfirmation(confirmation, state.saasConfirmations || []))
       )
     ) return "";
     return binding.confirmationId;
@@ -19107,13 +19251,23 @@ function saasConfirmationsForDisplay(confirmations = []) {
         isSaasExactUnpublishedDraftSaveConfirmation(card, currentCompanyId, currentStoreId),
     )
     .sort((a, b) => saasTimestampMillis(b.created_at || b.updated_at) - saasTimestampMillis(a.created_at || a.updated_at));
+  const currentStoreInventoryLocations = confirmations
+    .filter(
+      (card) =>
+        ["pending", "approved"].includes(String(card?.status || "")) &&
+        isUniqueConfirmation(card) &&
+        isSaasUniqueCurrentInventoryLocationConfirmation(card, confirmations),
+    )
+    .sort((a, b) => saasTimestampMillis(b.created_at || b.updated_at) - saasTimestampMillis(a.created_at || a.updated_at));
   const protectedIds = new Set(
-    [...currentStoreOauth, ...currentStoreSync, ...currentStoreDraftSaves].map((card) => String(card?.confirmation_id || "").trim()),
+    [...currentStoreOauth, ...currentStoreSync, ...currentStoreDraftSaves, ...currentStoreInventoryLocations]
+      .map((card) => String(card?.confirmation_id || "").trim()),
   );
   return [
     ...currentStoreOauth,
     ...currentStoreSync,
     ...currentStoreDraftSaves,
+    ...currentStoreInventoryLocations,
     ...dedupeSaasConfirmations(ordinarySource).filter((card) => {
       const confirmationId = String(card?.confirmation_id || "").trim();
       return (
@@ -19121,7 +19275,8 @@ function saasConfirmationsForDisplay(confirmations = []) {
         !protectedIds.has(confirmationId) &&
         !isSaasReadOnlyOAuthSensitiveConfirmation(card) &&
         !isSaasReadOnlySyncSensitiveConfirmation(card) &&
-        !isSaasUnpublishedDraftSaveSensitiveConfirmation(card)
+        !isSaasUnpublishedDraftSaveSensitiveConfirmation(card) &&
+        !isSaasInventoryLocationSensitiveConfirmation(card)
       );
     }),
   ];
@@ -20140,8 +20295,9 @@ function saasWorkbenchConfirmationDetailMarkup(card = {}) {
     ? "已开启，但发布前必须通过确认中心和发布体检"
     : "关闭，批准后也只进入受控交接";
   const exactReadOnlyOAuth = isSaasReadOnlyOAuthSensitiveConfirmation(card);
+  const exactInventoryLocation = isSaasInventoryLocationSensitiveConfirmation(card);
   const fields = [
-    ...(exactReadOnlyOAuth ? [] : [["确认编号", card.confirmation_id || card.id || "后端未返回"]]),
+    ...(exactReadOnlyOAuth || exactInventoryLocation ? [] : [["确认编号", card.confirmation_id || card.id || "后端未返回"]]),
     ["动作类型", saasWorkbenchActionLabel(card.action_type || item.action_type)],
     ["默认决策", saasWorkbenchDefaultActionLabel(card.default_action || item.default_action)],
     ["风险边界", card.high_risk || item.high_risk ? "高风险，必须商家确认" : "普通确认，仍保留审计"],
@@ -20235,7 +20391,7 @@ function saasConfirmationApprovalLevel(card = {}) {
   if (["refund", "partial_refund", "procurement_payment", "ad_budget", "store_subscription"].includes(actionType)) {
     return { label: "资金/预算动作", detail: "资金、广告预算或订阅动作必须人工确认；不能自动扣费或代付款。" };
   }
-  if (["publish_listing", "cleanup_test_listing", "change_price", "change_inventory", "policy_edit"].includes(actionType)) {
+  if (["publish_listing", "cleanup_test_listing", "create_ebay_inventory_location", "change_price", "change_inventory", "policy_edit"].includes(actionType)) {
     return { label: "平台动作", detail: "会改变 eBay 或店铺状态；必须先看依据、发布体检和可回退方式。" };
   }
   if (["buyer_message_send", "sensitive_buyer_commitment"].includes(actionType)) {
@@ -20250,12 +20406,13 @@ function saasConfirmationApprovalLevel(card = {}) {
 function saasConfirmationImpactRows(card = {}) {
   const item = card.item && typeof card.item === "object" ? card.item : {};
   const actionType = card.action_type || item.action_type || "";
-  const platformWrite = ["publish_listing", "cleanup_test_listing", "change_price", "change_inventory", "policy_edit"].includes(actionType);
+  const platformWrite = ["publish_listing", "cleanup_test_listing", "create_ebay_inventory_location", "change_price", "change_inventory", "policy_edit"].includes(actionType);
   const money = ["refund", "partial_refund", "procurement_payment", "ad_budget", "store_subscription"].includes(actionType);
   const buyerPromise = ["buyer_message_send", "sensitive_buyer_commitment"].includes(actionType);
   const payload = item.publish_payload && typeof item.publish_payload === "object" ? item.publish_payload : {};
   const title = payload.title || item.title || card.title || saasWorkbenchActionLabel(actionType);
   const exactReadOnlyOAuth = isSaasReadOnlyOAuthSensitiveConfirmation(card);
+  const exactInventoryLocation = isSaasInventoryLocationSensitiveConfirmation(card);
   return [
     {
       label: "影响范围",
@@ -20266,7 +20423,11 @@ function saasConfirmationImpactRows(card = {}) {
     {
       label: "对象",
       value: publicRuntimeText(title),
-      detail: exactReadOnlyOAuth ? "当前 eBay 店铺" : item.sku || item.listing_id || item.offer_id || card.confirmation_id || "",
+      detail: exactReadOnlyOAuth
+        ? "当前 eBay 店铺"
+        : exactInventoryLocation
+          ? String(item.merchant_location_key || "")
+          : item.sku || item.listing_id || item.offer_id || card.confirmation_id || "",
       tone: "green",
     },
     {
@@ -20398,6 +20559,7 @@ function saasWorkbenchActionLabel(action = "") {
       policy_edit: "店铺政策",
       publish_listing: "真实发布",
       cleanup_test_listing: "测试 Listing 清理",
+      create_ebay_inventory_location: "创建 eBay 库存位置",
       change_price: "改价",
       change_inventory: "改库存",
       ad_budget: "广告预算",
@@ -20416,6 +20578,9 @@ function saasWorkbenchActionLabel(action = "") {
 
 function saasConfirmationApproveButtonLabel(card = {}) {
   const actionType = card.action_type || card.item?.action_type || "";
+  if (actionType === "create_ebay_inventory_location") {
+    return "同意创建这个库存位置";
+  }
   if (actionType === "publish_listing" && isSaasRealPlatformWritesEnabled()) {
     return "同意，继续发布体检";
   }
@@ -20438,6 +20603,7 @@ function saasWorkbenchConfirmationReason(card = {}) {
   const merchantReasons = {
     publish_listing: "发布会创建真实 eBay Listing。必须先确认标题、类目、价格、库存、政策、素材和额度，再进入执行服务。",
     cleanup_test_listing: "这是一次真实 eBay 测试刊登的清理计划。下架、删除 offer 和删除库存项都会改变平台状态，必须由商家确认后才能进入执行服务。",
+    create_ebay_inventory_location: "这会在当前 eBay 店铺创建一个真实 Inventory API 库存位置。它不会创建 Offer 或公开 Listing；批准后仍需回到 Listing 显式执行一次。",
     procurement_payment: "采购付款会影响资金、履约和收货地址，AI 只能整理建议，不能自动付款或代你下单。",
     policy_edit: "物流、付款、退货政策会影响费用、到货承诺和售后责任，必须由商家确认后才能写回或套用。",
     change_price: "价格会影响利润、转化和账号额度占用，必须由商家确认后才能改价。",
@@ -20679,7 +20845,7 @@ function renderSaasAiCeoOutputPanel() {
                         ${saasWorkbenchConfirmationDetailMarkup(item)}
                         ${
                           status === "pending"
-                            ? isSaasReadOnlyOAuthSensitiveConfirmation(item)
+                            ? isSaasReadOnlyOAuthSensitiveConfirmation(item) || isSaasInventoryLocationSensitiveConfirmation(item)
                               ? `<button class="secondary-action" type="button" data-saas-action="open-confirm">去确认中心</button>`
                               : `<button class="secondary-action" type="button" data-saas-action="approve-confirmation" ${saasConfirmationActionAttributes(item)}>${escapeHtml(saasConfirmationApproveButtonLabel(item))}</button>`
                             : ""
@@ -21580,10 +21746,11 @@ function renderSaasConfirmPanel() {
                         ? `<div class="runtime-confirm-actions">
                             <button class="secondary-action" type="button" data-saas-action="refresh">稍后处理</button>
                             ${
-                              isSaasReadOnlyOAuthSensitiveConfirmation(card)
+                              isSaasReadOnlyOAuthSensitiveConfirmation(card) || isSaasInventoryLocationSensitiveConfirmation(card)
                                 ? (
                                     isSaasUniqueCurrentReadOnlyOAuthConfirmation(card, cards) ||
-                                    isSaasUniqueCurrentUnpublishedDraftOAuthConfirmation(card, cards)
+                                    isSaasUniqueCurrentUnpublishedDraftOAuthConfirmation(card, cards) ||
+                                    isSaasUniqueCurrentInventoryLocationConfirmation(card, cards)
                                   )
                                   ? `<button class="primary-action" type="button" data-saas-action="approve-confirmation" ${saasConfirmationActionAttributes(card)}>${escapeHtml(saasConfirmationApproveButtonLabel(card))}</button>`
                                   : '<button class="secondary-action" type="button" data-saas-action="approve-confirmation" data-saas-confirmation-flow="ebay-oauth-blocked" disabled>确认信息异常，请刷新</button>'
@@ -21988,7 +22155,9 @@ function buildSaasWorkflowFeedbackContext(reason = state.saasWorkflowFeedbackRea
   const ctx = saasMerchantWorkbenchContext();
   const latestReport = latestSaasMerchantReport();
   const latestConfirmation = [...(ctx.pendingConfirmations || []), ...(ctx.confirmations || [])].find(
-    (card) => !isSaasReadOnlyOAuthSensitiveConfirmation(card),
+    (card) =>
+      !isSaasReadOnlyOAuthSensitiveConfirmation(card) &&
+      !isSaasInventoryLocationSensitiveConfirmation(card),
   ) || null;
   const override = state.saasWorkflowFeedbackContextOverride || {};
   const moduleKey = sanitizeSaasWorkflowFeedbackText(override.module_key || state.view || "cockpit", 80);
@@ -26604,7 +26773,7 @@ function renderSaasMerchantAiValuePanel(ctx = saasMerchantWorkbenchContext()) {
                         ${saasWorkbenchConfirmationDetailMarkup(item)}
                         ${
                           status === "pending"
-                            ? isSaasReadOnlyOAuthSensitiveConfirmation(item)
+                            ? isSaasReadOnlyOAuthSensitiveConfirmation(item) || isSaasInventoryLocationSensitiveConfirmation(item)
                               ? `<button class="secondary-action" type="button" data-saas-action="open-confirm">去确认中心</button>`
                               : `<button class="secondary-action" type="button" data-saas-action="approve-confirmation" ${saasConfirmationActionAttributes(item)}>${escapeHtml(saasConfirmationApproveButtonLabel(item))}</button>`
                             : ""
@@ -27371,6 +27540,7 @@ async function refreshSaasState(options = {}) {
     state.saasTasks = coreTasks.tasks || [];
     const coreLiveConfirmations = coreConfirmations.confirmations || [];
     await verifySaasUnpublishedDraftSaveConfirmations(coreLiveConfirmations);
+    await verifySaasInventoryLocationConfirmations(coreLiveConfirmations);
     state.saasConfirmations = coreLiveConfirmations;
     state.saasConfirmationsLiveLoaded = true;
     state.saasReadiness = coreReadiness.readiness || state.saasReadiness || null;
@@ -27683,6 +27853,7 @@ async function refreshSaasState(options = {}) {
     restoreSaasListingComposerDraftFromBackendReports();
     const liveConfirmations = confirmations.confirmations || [];
     await verifySaasUnpublishedDraftSaveConfirmations(liveConfirmations);
+    await verifySaasInventoryLocationConfirmations(liveConfirmations);
     state.saasConfirmations = liveConfirmations;
     state.saasConfirmationsLiveLoaded = true;
     state.saasMerchantMemory = merchantMemory.merchant_memory || [];
@@ -28771,6 +28942,158 @@ async function createSaasProductWorkflowFromBackend(options = {}) {
   }
 }
 
+function snapshotSaasPublishIntakeFormValues() {
+  const form = document.querySelector("#saasPublishIntakeForm");
+  if (!form || typeof FormData !== "function") return saasPendingPublishIntakeFormValues || null;
+  return Object.fromEntries(Array.from(new FormData(form).entries(), ([key, value]) => [String(key), String(value)]));
+}
+
+function readSaasInventoryLocationInput() {
+  const form = document.querySelector("#saasPublishIntakeForm");
+  if (!form) return null;
+  const value = (name) => String(form.querySelector(`[name="${name}"]`)?.value || "").trim();
+  return {
+    merchant_location_key: value("inventory_location_key").toLowerCase(),
+    name: value("inventory_location_name"),
+    location_types: ["WAREHOUSE"],
+    address: {
+      city: value("inventory_location_city"),
+      state_or_province: value("inventory_location_state"),
+      country: value("inventory_location_country").toUpperCase(),
+    },
+  };
+}
+
+async function createSaasInventoryLocationConfirmation() {
+  if (!requireSaasProtectedSessionForAction()) return false;
+  const store = activeSaasStore();
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const storeId = String(store?.store_id || "").trim();
+  const input = readSaasInventoryLocationInput();
+  if (!companyId || !storeId || String(store?.platform || "").toLowerCase() !== "ebay") {
+    showActionToast("当前没有精确绑定的 eBay 店铺，不能创建库存位置确认单。");
+    return false;
+  }
+  if (
+    !input ||
+    !/^[a-z0-9](?:[a-z0-9_-]{0,48}[a-z0-9])?$/.test(input.merchant_location_key) ||
+    !input.name ||
+    input.name.length > 100 ||
+    !input.address.city ||
+    !input.address.state_or_province ||
+    !/^[A-Z]{2}$/.test(input.address.country)
+  ) {
+    showActionToast("请完整填写库存位置 key、名称、城市、省/州和两位国家代码；系统尚未创建确认单。");
+    return false;
+  }
+  saasPendingPublishIntakeFormValues = snapshotSaasPublishIntakeFormValues();
+  state.saasLoading = true;
+  state.saasError = "";
+  renderSaasBackendPanel();
+  try {
+    const payload = await saasFetch(`/stores/${encodeURIComponent(storeId)}/ebay-inventory-location/confirmation`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    const safe = payload.inventory_location_confirmation || {};
+    if (
+      !String(safe.confirmation_id || "").trim() ||
+      String(safe.company_id || "").trim() !== companyId ||
+      String(safe.store_id || "").trim() !== storeId ||
+      String(safe.status || "") !== "pending" ||
+      String(safe.action_type || "") !== "create_ebay_inventory_location" ||
+      String(safe.source || "") !== "merchant_ebay_inventory_location_setup" ||
+      String(safe.requested_step || "") !== "inventory_location_confirmation_gate" ||
+      String(safe.merchant_location_key || "") !== input.merchant_location_key ||
+      String(safe.country || "") !== input.address.country ||
+      safe.location_write_started !== false ||
+      safe.public_listing_created !== false ||
+      safe.secret_exposed !== false
+    ) {
+      throw new Error("inventory_location_confirmation_response_invalid");
+    }
+    await refreshSaasState({ silent: true });
+    const pending = (state.saasConfirmations || []).filter(
+      (card) => String(card?.status || "") === "pending" && isSaasUniqueCurrentInventoryLocationConfirmation(card, state.saasConfirmations || []),
+    );
+    if (pending.length !== 1 || String(pending[0]?.item?.merchant_location_key || "") !== input.merchant_location_key) {
+      throw new Error("inventory_location_confirmation_not_live_exact");
+    }
+    state.confirmFilter = "immediate";
+    setView("confirm");
+    renderSaasConfirmPanel();
+    showActionToast("库存位置确认单已创建。批准只记录决定，不会立即写入 eBay。");
+    return true;
+  } catch (error) {
+    state.saasError = `创建库存位置确认单失败：${error.message}`;
+    showActionToast("库存位置确认单创建失败，已停止；没有写入 eBay。");
+    return false;
+  } finally {
+    state.saasLoading = false;
+    renderSaasBackendPanel();
+  }
+}
+
+async function executeSaasApprovedInventoryLocation() {
+  if (!requireSaasProtectedSessionForAction()) return false;
+  const store = activeSaasStore();
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const storeId = String(store?.store_id || "").trim();
+  const confirmation = saasExactApprovedInventoryLocationConfirmation();
+  if (!companyId || !storeId || !confirmation || !isSaasFreshApprovedInventoryLocationConfirmation(confirmation)) {
+    showActionToast("当前没有唯一、有效且仍在时限内的库存位置批准；系统没有写入 eBay。");
+    return false;
+  }
+  const confirmationId = String(confirmation.confirmation_id || "").trim();
+  const expectedKey = String(confirmation.item?.merchant_location_key || "").trim();
+  const attemptKey = `${companyId}:${storeId}:${confirmationId}`;
+  if (!confirmationId || !expectedKey || saasInventoryLocationExecutionAttemptKeys.has(attemptKey)) {
+    showActionToast("这次库存位置批准已在本页尝试过；为防止重复写入，系统不会再次执行。");
+    return false;
+  }
+  saasInventoryLocationExecutionAttemptKeys.add(attemptKey);
+  saasPendingPublishIntakeFormValues = snapshotSaasPublishIntakeFormValues() || saasPendingPublishIntakeFormValues;
+  state.saasLoading = true;
+  state.saasError = "";
+  renderSaasBackendPanel();
+  try {
+    const payload = await saasFetch(`/stores/${encodeURIComponent(storeId)}/ebay-inventory-location/execute`, {
+      method: "POST",
+      body: JSON.stringify({ confirmation_id: confirmationId }),
+    });
+    const execution = payload.inventory_location_execution || {};
+    if (
+      String(execution.status || "") !== "inventory_location_created" ||
+      String(execution.action_type || "") !== "create_ebay_inventory_location" ||
+      String(execution.merchant_location_key || "") !== expectedKey ||
+      execution.location_write_completed !== true ||
+      execution.public_listing_created !== false ||
+      execution.secret_exposed !== false
+    ) {
+      throw new Error("inventory_location_execution_response_invalid");
+    }
+    saasPendingPublishIntakeFormValues = {
+      ...(saasPendingPublishIntakeFormValues || {}),
+      merchant_location_key: expectedKey,
+    };
+    state.saasConfirmations = (state.saasConfirmations || []).map((card) =>
+      String(card?.confirmation_id || "") === confirmationId ? { ...card, status: "executed" } : card,
+    );
+    const locationInput = document.querySelector('#saasPublishIntakeForm [name="merchant_location_key"]');
+    if (locationInput) locationInput.value = expectedKey;
+    runSaasPreTestFormCheck();
+    showActionToast("eBay 库存位置已创建并回填。现在可以继续生成未发布草稿确认单。");
+    return true;
+  } catch (error) {
+    state.saasError = `库存位置执行未确认成功：${error.message}`;
+    showActionToast("库存位置执行未确认成功。为避免重复写入，本页不会自动重试；请先只读核对 eBay 状态。");
+    return false;
+  } finally {
+    state.saasLoading = false;
+    renderSaasBackendPanel();
+  }
+}
+
 async function createSaasPublishConfirmationFromIntakeForm(mode = "publish") {
   if (!requireSaasProtectedSessionForAction()) return false;
   const draftSave = mode === "ebay-draft";
@@ -28901,10 +29224,10 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
     return;
   }
   if (
-    isSaasReadOnlyOAuthSensitiveConfirmation(confirmation) &&
+    (isSaasReadOnlyOAuthSensitiveConfirmation(confirmation) || isSaasInventoryLocationSensitiveConfirmation(confirmation)) &&
     (!confirmationId || String(confirmation.confirmation_id || "") !== String(confirmationId))
   ) {
-    showActionToast("eBay 授权确认缺少精确绑定；系统没有执行批准，请刷新确认中心。");
+    showActionToast("eBay 敏感确认缺少精确绑定；系统没有执行批准，请刷新确认中心。");
     return;
   }
   try {
@@ -28912,8 +29235,13 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
     const isExactReadOnlyOAuth = isSaasUniqueCurrentReadOnlyOAuthConfirmation(confirmation, state.saasConfirmations || []);
     const isExactUnpublishedDraftOAuth = isSaasUniqueCurrentUnpublishedDraftOAuthConfirmation(confirmation, state.saasConfirmations || []);
     const isExactReadOnlySync = isSaasUniqueCurrentReadOnlySyncConfirmation(confirmation, state.saasConfirmations || []);
+    const isExactInventoryLocation = isSaasUniqueCurrentInventoryLocationConfirmation(confirmation, state.saasConfirmations || []);
     if (isSaasReadOnlyOAuthSensitiveConfirmation(confirmation) && !isExactReadOnlyOAuth && !isExactUnpublishedDraftOAuth) {
       showActionToast("eBay 授权确认不唯一、格式异常或不属于当前店铺；系统没有执行批准，请刷新确认中心。");
+      return;
+    }
+    if (isSaasInventoryLocationSensitiveConfirmation(confirmation) && !isExactInventoryLocation) {
+      showActionToast("eBay 库存位置确认不唯一、格式异常或不属于当前店铺；系统没有执行批准。");
       return;
     }
     const idempotencyKey = `saas-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -28935,6 +29263,8 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
             ? "Owner approved the exact current-store seller_unpublished_draft OAuth confirmation. This decision creates no OAuth plan and performs no platform write."
           : isExactReadOnlySync
             ? "Owner approved one exact current-store official read-only sync. No sync, task, queue job, or live request is created by this decision."
+          : isExactInventoryLocation
+            ? "Owner approved one exact current-store inventory location. This decision performs no provider write; execution remains a separate explicit step."
             : "Merchant confirmation recorded from the SaaS workbench. Backend must run execution preflight before any eBay write.",
       }),
     });
@@ -28966,6 +29296,16 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
       await refreshSaasState({ silent: true });
       renderSaasBackendPanel();
       showActionToast("只读同步确认已批准。返回店铺数据后，再由同一确认单启动一次官方只读同步。");
+      return;
+    }
+    if (isExactInventoryLocation) {
+      await refreshSaasState({ silent: true });
+      const approved = saasExactApprovedInventoryLocationConfirmation();
+      if (!approved || !isSaasFreshApprovedInventoryLocationConfirmation(approved)) {
+        throw new Error("inventory_location_confirmation_approval_not_current");
+      }
+      renderSaasBackendPanel();
+      showActionToast("库存位置确认已批准。返回 Listing 后再点一次“执行已批准的库存位置创建”，系统才会写入 eBay。");
       return;
     }
     const preflight = await saasFetch(`/confirmations/${encodeURIComponent(confirmation.confirmation_id)}/preflight`, {
@@ -31603,6 +31943,8 @@ function handleSaasAction(button) {
     "listing-start-backend-workflow",
     "create-publish-confirmation",
     "create-ebay-draft-confirmation",
+    "create-ebay-inventory-location-confirmation",
+    "execute-ebay-inventory-location",
     "approve-first",
     "approve-confirmation",
     "revise-confirmation",
@@ -31650,6 +31992,14 @@ function handleSaasAction(button) {
   }
   if (action === "create-ebay-draft-confirmation") {
     createSaasPublishConfirmationFromIntakeForm("ebay-draft");
+    return;
+  }
+  if (action === "create-ebay-inventory-location-confirmation") {
+    createSaasInventoryLocationConfirmation();
+    return;
+  }
+  if (action === "execute-ebay-inventory-location") {
+    executeSaasApprovedInventoryLocation();
     return;
   }
   if (action === "run-next-job") {
@@ -31782,8 +32132,8 @@ function handleSaasAction(button) {
   }
   if (action === "approve-first" || action === "approve-confirmation") {
     const confirmationId = saasConfirmationIdFromActionButton(button);
-    if (String(button.dataset.saasConfirmationFlow || "").startsWith("ebay-read-only-oauth") && !confirmationId) {
-      showActionToast("这张只读连接确认已失效或不属于当前店铺；系统没有执行批准，请刷新确认中心。");
+    if (String(button.dataset.saasConfirmationFlow || "").startsWith("ebay-") && !confirmationId) {
+      showActionToast("这张 eBay 敏感确认已失效或不属于当前店铺；系统没有执行批准，请刷新确认中心。");
       return;
     }
     approveFirstSaasConfirmation(confirmationId);

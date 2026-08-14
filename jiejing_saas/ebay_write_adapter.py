@@ -650,6 +650,51 @@ class _DraftPreparationHandle:
         raise TypeError("prepared_ebay_draft_save_not_serializable")
 
 
+class _InventoryLocationPreparationState:
+    """Private one-request state for a confirmed inventory-location write."""
+
+    __slots__ = (
+        "company_id",
+        "store_id",
+        "confirmation_id",
+        "task_id",
+        "marketplace_id",
+        "merchant_location_key",
+        "access_token",
+        "location_payload_json",
+        "payload_sha256",
+        "prepared_at_epoch",
+        "credential_binding_items",
+    )
+
+    def __init__(self, **values: Any) -> None:
+        for name in self.__slots__:
+            object.__setattr__(self, name, values[name])
+
+    def __repr__(self) -> str:
+        return "_InventoryLocationPreparationState(<redacted>)"
+
+    def __reduce__(self) -> Any:
+        raise TypeError("prepared_ebay_inventory_location_not_serializable")
+
+
+class _InventoryLocationPreparationHandle:
+    __slots__ = ("_handle", "_safe_binding")
+
+    def __init__(self, *, handle: str, safe_binding: dict[str, str]) -> None:
+        self._handle = handle
+        self._safe_binding = dict(safe_binding)
+
+    def claim_binding(self) -> dict[str, str]:
+        return dict(self._safe_binding)
+
+    def __repr__(self) -> str:
+        return "_InventoryLocationPreparationHandle(<redacted>)"
+
+    def __reduce__(self) -> Any:
+        raise TypeError("prepared_ebay_inventory_location_not_serializable")
+
+
 class EbayWriteHttpAdapter:
     """Executes confirmed eBay publish writes behind the SaaS backend."""
 
@@ -659,6 +704,179 @@ class EbayWriteHttpAdapter:
         self._draft_prepare_nonce = secrets.token_urlsafe(32)
         self._draft_prepare_lock = __import__("threading").Lock()
         self._draft_prepared_registry: dict[str, _DraftPreparationState] = {}
+        self._inventory_location_registry: dict[str, _InventoryLocationPreparationState] = {}
+
+    def prepare_inventory_location(
+        self,
+        *,
+        confirmation: dict[str, Any],
+        location_payload: dict[str, Any],
+        credential_boundary: dict[str, Any],
+        marketplace_id: str,
+    ) -> _InventoryLocationPreparationHandle | dict[str, Any]:
+        """Resolve the exact credential and prove the location is absent."""
+
+        if not (
+            self.settings.effective_ebay_draft_save_enabled
+            or self.settings.effective_real_platform_writes_enabled
+        ):
+            return _inventory_location_blocked("inventory_location_write_disabled")
+        if not _exact_inventory_location_confirmation(
+            confirmation=confirmation,
+            location_payload=location_payload,
+            required_status="approved",
+        ):
+            return _inventory_location_blocked("inventory_location_approval_invalid")
+        company_id = str(confirmation.get("company_id") or "")
+        store_id = str(confirmation.get("store_id") or "")
+        credential = _validated_unpublished_draft_credential_boundary(
+            credential_boundary=credential_boundary,
+            company_id=company_id,
+            store_id=store_id,
+        )
+        if not credential:
+            return _inventory_location_blocked("inventory_location_credential_boundary_not_ready")
+        token = self._resolve_access_token(
+            secret_ref_id=str(credential["connection"]["secret_ref"]),
+            company_id=company_id,
+            store_id=store_id,
+        )
+        if not token.get("ok"):
+            return _inventory_location_blocked("inventory_location_token_resolution_failed")
+        location_key = str(location_payload.get("merchantLocationKey") or "")
+        base_url = _base_url(self.settings)
+        location_path = f"/sell/inventory/v1/location/{urllib.parse.quote(location_key, safe='')}"
+        inspection = self._get_json(
+            url=f"{base_url}{location_path}",
+            access_token=str(token["access_token"]),
+            marketplace_id=marketplace_id,
+        )
+        if inspection.get("status") == "ok":
+            existing = inspection.get("json") if isinstance(inspection.get("json"), dict) else {}
+            if str(existing.get("merchantLocationKey") or "") == location_key:
+                return {
+                    "status": "inventory_location_already_exists",
+                    "merchant_location_key": location_key,
+                    "writes_to_ebay": False,
+                    "public_listing_created": False,
+                    "secret_exposed": False,
+                }
+            return _inventory_location_blocked("inventory_location_existing_response_mismatch")
+        if not _is_exact_missing_inventory_location(inspection):
+            return _inventory_location_blocked("inventory_location_preflight_blocked")
+        credential_items = tuple(sorted({
+            "connection_id_sha256": credential["connection_id_sha256"],
+            "credential_ref_sha256": credential["credential_ref_sha256"],
+            "oauth_request_id_sha256": credential["oauth_request_id_sha256"],
+            "seller_identity_sha256": credential["seller_identity_sha256"],
+        }.items()))
+        payload_sha256 = hashlib.sha256(_canonical_json_bytes(location_payload)).hexdigest()
+        handle = secrets.token_urlsafe(32)
+        state = _InventoryLocationPreparationState(
+            company_id=company_id,
+            store_id=store_id,
+            confirmation_id=str(confirmation.get("confirmation_id") or ""),
+            task_id=str(confirmation.get("task_id") or ""),
+            marketplace_id=marketplace_id,
+            merchant_location_key=location_key,
+            access_token=str(token["access_token"]),
+            location_payload_json=_canonical_json_bytes(location_payload),
+            payload_sha256=payload_sha256,
+            prepared_at_epoch=time.time(),
+            credential_binding_items=credential_items,
+        )
+        with self._draft_prepare_lock:
+            self._inventory_location_registry[handle] = state
+        return _InventoryLocationPreparationHandle(
+            handle=handle,
+            safe_binding={
+                "confirmation_id": state.confirmation_id,
+                "company_id": state.company_id,
+                "store_id": state.store_id,
+                "action_type": "create_ebay_inventory_location",
+                "task_id": state.task_id,
+                "marketplace_id": state.marketplace_id,
+                "payload_sha256": state.payload_sha256,
+                **dict(state.credential_binding_items),
+            },
+        )
+
+    def execute_prepared_inventory_location(
+        self,
+        *,
+        confirmation: dict[str, Any],
+        prepared: _InventoryLocationPreparationHandle,
+        marketplace_id: str,
+    ) -> dict[str, Any]:
+        """Create one location from a process-local, one-shot preparation."""
+
+        with self._draft_prepare_lock:
+            state = self._inventory_location_registry.pop(getattr(prepared, "_handle", ""), None)
+        item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+        location_payload = item.get("location_payload") if isinstance(item.get("location_payload"), dict) else {}
+        valid = bool(
+            isinstance(prepared, _InventoryLocationPreparationHandle)
+            and isinstance(state, _InventoryLocationPreparationState)
+            and _exact_inventory_location_confirmation(
+                confirmation=confirmation,
+                location_payload=location_payload,
+                required_status="external_execution_processing_manual_reconcile",
+            )
+            and confirmation.get("external_execution_claimed") is True
+            and state.company_id == str(confirmation.get("company_id") or "")
+            and state.store_id == str(confirmation.get("store_id") or "")
+            and state.confirmation_id == str(confirmation.get("confirmation_id") or "")
+            and state.task_id == str(confirmation.get("task_id") or "")
+            and state.marketplace_id == marketplace_id
+            and state.payload_sha256 == hashlib.sha256(_canonical_json_bytes(location_payload)).hexdigest()
+            and 0 <= time.time() - state.prepared_at_epoch <= 30
+        )
+        if not valid:
+            return _inventory_location_blocked("inventory_location_preparation_invalid")
+        provider_payload = json.loads(state.location_payload_json.decode("utf-8"))
+        provider_payload.pop("merchantLocationKey", None)
+        location_path = f"/sell/inventory/v1/location/{urllib.parse.quote(state.merchant_location_key, safe='')}"
+        write_result = self._send_json(
+            method="POST",
+            url=f"{_base_url(self.settings)}{location_path}",
+            access_token=state.access_token,
+            marketplace_id=marketplace_id,
+            body=provider_payload,
+        )
+        if write_result.get("status") != "ok":
+            return {
+                "status": "inventory_location_manual_reconcile",
+                "action_type": "create_ebay_inventory_location",
+                "task_id": state.task_id,
+                "automatic_retry_allowed": False,
+                "location_write_completed": False,
+                "public_listing_created": False,
+                "secret_exposed": False,
+            }
+        return {
+            "status": "inventory_location_created",
+            "action_type": "create_ebay_inventory_location",
+            "task_id": state.task_id,
+            "merchant_location_key": state.merchant_location_key,
+            "location_write_completed": True,
+            "public_listing_created": False,
+            "audit": {
+                "real_execution": {
+                    "inventory_location_created": True,
+                    "published_to_ebay": False,
+                    "public_listing_created": False,
+                },
+                "credential_binding": dict(state.credential_binding_items),
+                "secret_exposed": False,
+            },
+            "secret_exposed": False,
+        }
+
+    def discard_inventory_location_preparation(self, prepared: Any) -> None:
+        """Best-effort removal when the database claim loses a race."""
+
+        with self._draft_prepare_lock:
+            self._inventory_location_registry.pop(getattr(prepared, "_handle", ""), None)
 
     def publish_listing(
         self,
@@ -1625,6 +1843,66 @@ def _canonical_json_bytes(value: Any) -> bytes:
         separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8")
+
+
+def _inventory_location_blocked(status: str) -> dict[str, Any]:
+    return {
+        "status": status,
+        "action_type": "create_ebay_inventory_location",
+        "location_write_completed": False,
+        "writes_to_ebay": False,
+        "public_listing_created": False,
+        "secret_exposed": False,
+    }
+
+
+def _exact_inventory_location_confirmation(
+    *,
+    confirmation: dict[str, Any],
+    location_payload: dict[str, Any],
+    required_status: str,
+) -> bool:
+    item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+    stored_payload = item.get("location_payload") if isinstance(item.get("location_payload"), dict) else {}
+    try:
+        payload_sha256 = hashlib.sha256(_canonical_json_bytes(location_payload)).hexdigest()
+        payload_exact = _canonical_json_bytes(stored_payload) == _canonical_json_bytes(location_payload)
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        str(confirmation.get("status") or "") == required_status
+        and str(confirmation.get("action_type") or "") == "create_ebay_inventory_location"
+        and str(confirmation.get("runtime_run_id") or "") == "merchant_ebay_inventory_location_setup"
+        and str(confirmation.get("company_id") or "")
+        and str(confirmation.get("store_id") or "")
+        and str(confirmation.get("confirmation_id") or "")
+        and str(confirmation.get("task_id") or "")
+        and str(item.get("source") or "") == "merchant_ebay_inventory_location_setup"
+        and str(item.get("requested_step") or "") == "inventory_location_confirmation_gate"
+        and str(item.get("company_id") or "") == str(confirmation.get("company_id") or "")
+        and str(item.get("store_id") or "") == str(confirmation.get("store_id") or "")
+        and str(item.get("merchant_location_key") or "") == str(location_payload.get("merchantLocationKey") or "")
+        and str(item.get("location_payload_sha256") or "") == payload_sha256
+        and payload_exact
+        and item.get("writes_to_ebay_after_approval") is True
+        and item.get("public_publish_enabled") is False
+        and item.get("public_listing_created") is False
+        and item.get("secret_exposed") is False
+    )
+
+
+def _is_exact_missing_inventory_location(result: dict[str, Any]) -> bool:
+    body = result.get("json") if isinstance(result.get("json"), dict) else {}
+    errors = body.get("errors") if isinstance(body.get("errors"), list) else []
+    error = errors[0] if len(errors) == 1 and isinstance(errors[0], dict) else {}
+    return bool(
+        result.get("status") == "not_found"
+        and result.get("http_status") == 404
+        and str(error.get("errorId") or "") == "25805"
+        and str(error.get("domain") or "") == "API_INVENTORY"
+        and str(error.get("category") or "") == "REQUEST"
+        and not str(error.get("subdomain") or "")
+    )
 
 
 def _offer_snapshot_fingerprint(offers: list[Any]) -> str:
