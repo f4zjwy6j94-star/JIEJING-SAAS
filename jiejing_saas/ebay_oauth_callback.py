@@ -229,6 +229,33 @@ def _exchange_and_store_refresh_token(
     scope_profile = str(request_payload.get("scope_profile") or "seller_read_only")
     draft_scope_upgrade = scope_profile == "seller_unpublished_draft"
     actual_granted_scopes = _actual_granted_scopes(token_response)
+    granted_scope_verification: dict[str, Any] = {}
+    if draft_scope_upgrade:
+        raw_scope = token_response.get("scope")
+        if type(raw_scope) is str and raw_scope.strip():
+            granted_scope_verification = {
+                "source": "token_response",
+                "active": True,
+                "client_id_matched": True,
+                "exact_scope_matched": actual_granted_scopes == UNPUBLISHED_DRAFT_SCOPES,
+                "secret_exposed": False,
+            }
+        else:
+            introspection = exchanger.introspect_access_token(
+                access_token=str(token_response.get("access_token") or "")
+            )
+            actual_granted_scopes = (
+                _exact_unpublished_draft_scopes(introspection.get("scopes"))
+                if introspection.get("ok") is True
+                else []
+            )
+            granted_scope_verification = {
+                "source": "ebay_token_introspection",
+                "active": introspection.get("active") is True,
+                "client_id_matched": introspection.get("client_id_matched") is True,
+                "exact_scope_matched": actual_granted_scopes == UNPUBLISHED_DRAFT_SCOPES,
+                "secret_exposed": False,
+            }
     if draft_scope_upgrade and actual_granted_scopes != UNPUBLISHED_DRAFT_SCOPES:
         return {
             **callback_result,
@@ -237,6 +264,7 @@ def _exchange_and_store_refresh_token(
             "vault_write_performed": False,
             "blocked_by": ["oauth_actual_granted_scope_not_exact"],
             "token_response_summary": _token_response_summary(token_response),
+            "granted_scope_verification": granted_scope_verification,
             "draft_save_scope_authorized": False,
             "publish_scope_authorized": False,
             "manual_reconcile_required": True,
@@ -417,6 +445,8 @@ def _exchange_and_store_refresh_token(
         "access_token_ttl_seconds": _safe_int(token_response.get("expires_in")),
         "seller_refresh_credential_ttl_seconds": _safe_int(token_response.get("refresh_token_expires_in")),
         "account_deletion_identity_mapping_status": identity_mapping.get("status"),
+        "granted_scope_verification_source": str(granted_scope_verification.get("source") or ""),
+        "actual_granted_scope_verified": bool(granted_scope_verification.get("exact_scope_matched")),
         "ebay_user_id_hash": identity_mapping.get("ebay_user_id_hash") or "",
         "ebay_username_hash": identity_mapping.get("ebay_username_hash") or "",
         "registration_marketplace_id": identity_mapping.get("registration_marketplace_id") or "",
@@ -477,6 +507,7 @@ def _exchange_and_store_refresh_token(
         "token_exchange_performed": True,
         "vault_write_performed": True,
         "token_response_summary": _token_response_summary(token_response),
+        "granted_scope_verification": granted_scope_verification,
         "secret_storage": _public_storage(storage),
         "secret_ref": updated_ref,
         "connection": connection,
@@ -507,8 +538,14 @@ def _actual_granted_scopes(token_response: dict[str, Any]) -> list[str]:
     raw_scope = token_response.get("scope")
     if type(raw_scope) is not str or not raw_scope.strip():
         return []
-    scopes = raw_scope.split()
-    if not scopes or len(scopes) != len(set(scopes)):
+    return _exact_unpublished_draft_scopes(raw_scope.split())
+
+
+def _exact_unpublished_draft_scopes(raw_scopes: Any) -> list[str]:
+    if not isinstance(raw_scopes, list) or not raw_scopes or any(type(scope) is not str for scope in raw_scopes):
+        return []
+    scopes = [scope.strip() for scope in raw_scopes]
+    if any(not scope for scope in scopes) or len(scopes) != len(set(scopes)):
         return []
     if set(scopes) != set(UNPUBLISHED_DRAFT_SCOPES):
         return []

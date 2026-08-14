@@ -152,6 +152,42 @@ def main() -> int:
     ):
         if f"{reviewed_key}=true" not in text:
             return fail(f"configurator did not persist reviewed production evidence: {reviewed_key}")
+
+    vault_artifact_id = "vault-backups/20260814/isolated-restore-proof.enc"
+    env["JIEJING_TEST_VAULT_BACKUP_ARTIFACT_ID"] = vault_artifact_id
+    vault_evidence = subprocess.run(
+        [
+            sys.executable,
+            str(TOOL),
+            "--env-file",
+            str(env_path),
+            "--apply",
+            "--record-vault-recovery-evidence",
+            "--vault-backup-artifact-id-env",
+            "JIEJING_TEST_VAULT_BACKUP_ARTIFACT_ID",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if vault_evidence.returncode != 0:
+        return fail(vault_evidence.stderr or vault_evidence.stdout)
+    vault_evidence_output = vault_evidence.stdout + vault_evidence.stderr
+    if vault_artifact_id in vault_evidence_output:
+        return fail("Vault recovery evidence recording must not print the private backup artifact identifier")
+    vault_text = env_path.read_text(encoding="utf-8")
+    for marker in (
+        f"JIEJING_VAULT_BACKUP_ARTIFACT_ID={vault_artifact_id}",
+        "JIEJING_VAULT_BACKUP_POLICY_CONFIGURED=true",
+        "JIEJING_VAULT_RESTORE_MANUAL_UNSEAL_VERIFIED=true",
+        "JIEJING_VAULT_RESTORE_SENTINEL_RESOLVE_VERIFIED=true",
+        "JIEJING_VAULT_RESTORE_DRILL_LAST_AT=",
+    ):
+        if marker not in vault_text:
+            return fail(f"configurator did not persist completed Vault recovery evidence: {marker}")
+
     before_invalid_cli = env_path.read_text(encoding="utf-8")
     invalid_cli = subprocess.run(
         [

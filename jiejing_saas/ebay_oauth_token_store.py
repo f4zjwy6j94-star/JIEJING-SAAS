@@ -187,6 +187,72 @@ class EbayLocalOAuthTokenStore:
             "secret_exposed": False,
         }
 
+    def introspect_access_token(self, *, access_token: str) -> dict[str, Any]:
+        """Verify one transient eBay access token without returning the token."""
+
+        blockers = []
+        if not self.settings.ebay_oauth_live_exchange_enabled:
+            blockers.append("JIEJING_EBAY_OAUTH_EXCHANGE_LIVE")
+        if not self.settings.ebay_client_id:
+            blockers.append("JIEJING_EBAY_CLIENT_ID")
+        if not self.settings.ebay_client_secret_configured:
+            blockers.append("JIEJING_EBAY_CLIENT_SECRET")
+        if not access_token:
+            blockers.append("oauth_access_token_missing")
+        if blockers:
+            return {"ok": False, "blocked_by": blockers, "secret_exposed": False}
+
+        client_secret = os.environ.get("JIEJING_EBAY_CLIENT_SECRET") or os.environ.get("EBAY_CLIENT_SECRET") or ""
+        basic = base64.b64encode(f"{self.settings.ebay_client_id}:{client_secret}".encode("utf-8")).decode("ascii")
+        body = urllib.parse.urlencode(
+            {
+                "token": access_token,
+                "token_type_hint": "access_token",
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            _token_introspection_endpoint(self.settings),
+            data=body,
+            headers={
+                "Authorization": f"Basic {basic}",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            status, _headers, raw = self.transport(request, 20)
+            data = json.loads(raw.decode("utf-8")) if raw else {}
+        except Exception as exc:  # pragma: no cover - live provider dependent
+            return {
+                "ok": False,
+                "blocked_by": ["oauth_token_introspection_http_error"],
+                "error_type": type(exc).__name__,
+                "secret_exposed": False,
+            }
+        if status >= 400 or not isinstance(data, dict):
+            return {
+                "ok": False,
+                "blocked_by": ["oauth_token_introspection_failed"],
+                "http_status": status,
+                "secret_exposed": False,
+            }
+        raw_scope = data.get("scope")
+        scopes = raw_scope.split() if type(raw_scope) is str and raw_scope.strip() else []
+        active = data.get("active") is True
+        client_id_matched = type(data.get("client_id")) is str and data.get("client_id") == self.settings.ebay_client_id
+        return {
+            "ok": bool(active and client_id_matched),
+            "active": active,
+            "client_id_matched": client_id_matched,
+            "scopes": scopes,
+            "scope_present": bool(scopes),
+            "http_status": status,
+            "blocked_by": [] if active and client_id_matched else ["oauth_token_introspection_identity_mismatch"],
+            "access_token_returned": False,
+            "secret_exposed": False,
+        }
+
     def _refresh_record(self, record: dict[str, Any]) -> dict[str, Any]:
         body = urllib.parse.urlencode(
             {
@@ -299,6 +365,10 @@ def _token_endpoint(settings: SaaSSettings) -> str:
     if settings.ebay_oauth_environment == "sandbox":
         return "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
     return "https://api.ebay.com/identity/v1/oauth2/token"
+
+
+def _token_introspection_endpoint(settings: SaaSSettings) -> str:
+    return f"{_token_endpoint(settings)}/introspect"
 
 
 def _is_expired(record: dict[str, Any]) -> bool:

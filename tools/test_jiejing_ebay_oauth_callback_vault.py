@@ -645,7 +645,7 @@ def _run_unpublished_draft_actual_scope_boundary() -> str:
         case_key="draft-missing-granted-scope",
         port=8831,
     )
-    missing = process_ebay_oauth_callback(
+    omitted = process_ebay_oauth_callback(
         repository=repo,
         settings=settings,
         secret_store_boundary=SecretStoreBoundary(settings),
@@ -656,14 +656,53 @@ def _run_unpublished_draft_actual_scope_boundary() -> str:
         oauth_transport=_fake_oauth_transport(
             access_token="CALLBACK-ACCESS-TOKEN-MUST-NOT-LEAK",
             refresh_token="CALLBACK-REFRESH-TOKEN-MUST-NOT-LEAK",
+            introspected_scopes=UNPUBLISHED_DRAFT_SCOPES,
         ),
     )
-    if missing.get("status") != "callback_exchange_granted_scope_blocked":
-        return "draft OAuth callback must fail closed when token response omits actual granted scope"
+    if omitted.get("status") != "callback_exchange_completed":
+        return "official eBay scope omission must complete only after exact token introspection"
+    scope_verification = omitted.get("granted_scope_verification") or {}
+    if not (
+        scope_verification.get("source") == "ebay_token_introspection"
+        and scope_verification.get("active") is True
+        and scope_verification.get("client_id_matched") is True
+        and scope_verification.get("exact_scope_matched") is True
+        and scope_verification.get("secret_exposed") is False
+    ):
+        return f"omitted token-response scope must retain exact value-free introspection proof: {scope_verification}"
+    if len(repo.list_secret_refs(company_id=store["company_id"], store_id=store["store_id"])) != 1:
+        return "exactly introspected draft scope must persist exactly one Vault secret reference"
+    if len(repo.list_connections(company_id=store["company_id"], store_id=store["store_id"])) != 1:
+        return "exactly introspected draft scope must create exactly one draft connection"
+
+    inactive_secret_path = OUT / "draft-inactive-introspection-secrets.json"
+    os.environ["JIEJING_VAULT_LOCAL_SECRET_STORE_PATH"] = str(inactive_secret_path)
+    inactive_secret_path.unlink(missing_ok=True)
+    settings, repo, store, request = _seed_unpublished_draft_oauth_request(
+        case_key="draft-inactive-introspection",
+        port=8833,
+    )
+    inactive = process_ebay_oauth_callback(
+        repository=repo,
+        settings=settings,
+        secret_store_boundary=SecretStoreBoundary(settings),
+        ebay_oauth_planner=EbayOAuthPlanner(settings),
+        state=request["state_nonce"],
+        code="UNIT_DRAFT_AUTH_CODE_INACTIVE_INTROSPECTION",
+        error="",
+        oauth_transport=_fake_oauth_transport(
+            access_token="CALLBACK-ACCESS-TOKEN-MUST-NOT-LEAK",
+            refresh_token="CALLBACK-REFRESH-TOKEN-MUST-NOT-LEAK",
+            introspected_scopes=UNPUBLISHED_DRAFT_SCOPES,
+            introspection_active=False,
+        ),
+    )
+    if inactive.get("status") != "callback_exchange_granted_scope_blocked":
+        return "inactive introspection must fail closed even when its scope text looks exact"
     if repo.list_secret_refs(company_id=store["company_id"], store_id=store["store_id"]):
-        return "missing draft granted scope must block before secret_ref/Vault persistence"
+        return "inactive introspection must block before secret_ref/Vault persistence"
     if repo.list_connections(company_id=store["company_id"], store_id=store["store_id"]):
-        return "missing draft granted scope must block before connection creation"
+        return "inactive introspection must block before connection creation"
 
     granted_secret_path = OUT / "draft-granted-scope-secrets.json"
     os.environ["JIEJING_VAULT_LOCAL_SECRET_STORE_PATH"] = str(granted_secret_path)
@@ -1280,6 +1319,8 @@ def _fake_oauth_transport(
     access_token: str,
     refresh_token: str,
     granted_scopes: list[str] | None = None,
+    introspected_scopes: list[str] | None = None,
+    introspection_active: bool = True,
     ebay_user_id: str = "CALLBACK-IMMUTABLE-USER-MUST-NOT-LEAK",
 ) -> Any:
     def transport(request_obj: Any, timeout: float) -> tuple[int, dict[str, str], bytes]:
@@ -1296,6 +1337,24 @@ def _fake_oauth_transport(
                         "registrationMarketplaceId": "EBAY_US",
                         "accountType": "INDIVIDUAL",
                         "status": "CONFIRMED",
+                    }
+                ).encode("utf-8"),
+            )
+        if request_obj.get_method() == "POST" and request_obj.full_url.endswith("/identity/v1/oauth2/token/introspect"):
+            if introspected_scopes is None:
+                return 404, {"content-type": "application/json"}, b'{"error":"missing"}'
+            form = urllib.parse.parse_qs((request_obj.data or b"").decode("utf-8"), keep_blank_values=True)
+            if form.get("token") != [access_token] or form.get("token_type_hint") != ["access_token"]:
+                raise AssertionError("introspection must bind the transient access token without returning it")
+            return (
+                200,
+                {"content-type": "application/json"},
+                json.dumps(
+                    {
+                        "active": introspection_active,
+                        "scope": " ".join(introspected_scopes),
+                        "client_id": "CALLBACK-CLIENT-ID",
+                        "token_type": "User Access Token",
                     }
                 ).encode("utf-8"),
             )

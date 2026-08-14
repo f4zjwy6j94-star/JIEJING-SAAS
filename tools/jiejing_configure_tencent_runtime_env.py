@@ -16,6 +16,7 @@ import getpass
 import json
 import math
 import os
+import re
 import stat
 import sys
 import time
@@ -52,6 +53,7 @@ PROVIDER_ALARM_QUERY_WINDOW_MINUTES = 5
 PROVIDER_ALARM_REPEAT_MINUTES = 15
 PROVIDER_ALARM_PAGE_LIMIT = 100
 PROVIDER_ALARM_MAX_PAGES = 5
+VAULT_BACKUP_ARTIFACT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{15,239}$")
 PROVIDER_CONTROL_ENV_KEYS = (
     "JIEJING_SAAS_ENV",
     "JIEJING_TENCENT_REGION",
@@ -93,6 +95,10 @@ KNOWN_KEYS = (
     "JIEJING_BACKUP_POLICY_CONFIGURED",
     "JIEJING_BACKUP_ALERTS_CONFIGURED",
     "JIEJING_VAULT_BACKUP_POLICY_CONFIGURED",
+    "JIEJING_VAULT_BACKUP_ARTIFACT_ID",
+    "JIEJING_VAULT_RESTORE_DRILL_LAST_AT",
+    "JIEJING_VAULT_RESTORE_MANUAL_UNSEAL_VERIFIED",
+    "JIEJING_VAULT_RESTORE_SENTINEL_RESOLVE_VERIFIED",
     "JIEJING_RESTORE_DRILL_LAST_AT",
     "JIEJING_RESTORE_DRILL_MAX_AGE_DAYS",
     "JIEJING_CLS_ENABLED",
@@ -268,6 +274,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--backup-policy-configured", action="store_true")
     parser.add_argument("--backup-alerts-configured", action="store_true")
     parser.add_argument("--vault-backup-policy-configured", action="store_true")
+    parser.add_argument(
+        "--record-vault-recovery-evidence",
+        action="store_true",
+        help="Record a completed encrypted Vault backup and isolated restore/unseal/sentinel drill.",
+    )
+    parser.add_argument(
+        "--vault-backup-artifact-id-env",
+        help="Read the verified private backup artifact identifier from this process env var.",
+    )
     parser.add_argument("--record-restore-drill-now", action="store_true")
     parser.add_argument(
         "--production-release-charge-flag-reviewed",
@@ -402,6 +417,19 @@ def _build_updates(args: argparse.Namespace, existing: dict[str, str]) -> dict[s
         updates["JIEJING_BACKUP_ALERTS_CONFIGURED"] = "true"
     if args.vault_backup_policy_configured:
         updates["JIEJING_VAULT_BACKUP_POLICY_CONFIGURED"] = "true"
+    if args.record_vault_recovery_evidence:
+        artifact_id = _read_named_env(args.vault_backup_artifact_id_env)
+        if not _valid_vault_backup_artifact_id(artifact_id):
+            raise SystemExit("Vault backup artifact evidence is missing or invalid.")
+        updates.update(
+            {
+                "JIEJING_VAULT_BACKUP_POLICY_CONFIGURED": "true",
+                "JIEJING_VAULT_BACKUP_ARTIFACT_ID": artifact_id,
+                "JIEJING_VAULT_RESTORE_DRILL_LAST_AT": now,
+                "JIEJING_VAULT_RESTORE_MANUAL_UNSEAL_VERIFIED": "true",
+                "JIEJING_VAULT_RESTORE_SENTINEL_RESOLVE_VERIFIED": "true",
+            }
+        )
     if args.record_restore_drill_now:
         updates["JIEJING_RESTORE_DRILL_LAST_AT"] = now
     if args.production_release_charge_flag_reviewed:
@@ -434,6 +462,15 @@ def _read_named_env(name: str | None) -> str:
     if not name:
         return ""
     return os.environ.get(name, "").strip()
+
+
+def _valid_vault_backup_artifact_id(value: str) -> bool:
+    return bool(
+        VAULT_BACKUP_ARTIFACT_ID_PATTERN.fullmatch(value)
+        and ".." not in value
+        and "//" not in value
+        and not value.endswith("/")
+    )
 
 
 def _write_env_file(path: Path, original_lines: list[str], updates: dict[str, str]) -> Path:
