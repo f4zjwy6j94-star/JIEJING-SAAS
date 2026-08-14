@@ -179,16 +179,20 @@ def _oauth_state_blocker(*, request_record: dict[str, Any] | None, code: str) ->
 
 
 def _oauth_state_age_seconds(request_record: dict[str, Any]) -> int | None:
-    created_at = str(request_record.get("created_at") or "")
-    if not re.fullmatch(
-        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
-        created_at,
-    ):
-        return None
-    try:
-        created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+    raw_created_at = request_record.get("created_at")
+    if isinstance(raw_created_at, datetime):
+        created = raw_created_at
+    else:
+        created_at = str(raw_created_at or "")
+        if not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
+            created_at,
+        ):
+            return None
+        try:
+            created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        except ValueError:
+            return None
     if created.tzinfo is None or created.utcoffset() is None:
         return None
     age_seconds = (datetime.now(timezone.utc) - created.astimezone(timezone.utc)).total_seconds()

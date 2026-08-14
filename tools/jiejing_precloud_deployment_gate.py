@@ -109,6 +109,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("session_revocation", [sys.executable, "tools/test_jiejing_session_revocation.py"]),
     ("monitoring_runbook_gate", [sys.executable, "tools/test_jiejing_monitoring_runbook_gate.py"]),
     ("oauth_callback_vault", [sys.executable, "tools/test_jiejing_ebay_oauth_callback_vault.py"]),
+    ("oauth_callback_postgres_datetime", [sys.executable, "tools/test_jiejing_ebay_oauth_callback_postgres_datetime.py"]),
     ("ebay_unpublished_draft_oauth", [sys.executable, "tools/test_jiejing_ebay_unpublished_draft_oauth.py"]),
     ("unpublished_draft_claim_capability", [sys.executable, "tools/test_jiejing_unpublished_draft_claim_capability.py"]),
     ("ebay_draft_save_readiness", [sys.executable, "tools/test_jiejing_ebay_draft_save_readiness.py"]),
