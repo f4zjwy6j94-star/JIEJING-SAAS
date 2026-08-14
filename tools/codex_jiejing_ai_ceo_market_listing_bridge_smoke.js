@@ -31,7 +31,7 @@ function fail(message, extra = {}) {
   process.exit(1);
 }
 
-async function api(pathname, { token = "", method = "GET", body, timeoutMs = 120000 } = {}) {
+async function api(pathname, { token = "", cookie = "", method = "GET", body, timeoutMs = 120000 } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -42,6 +42,7 @@ async function api(pathname, { token = "", method = "GET", body, timeoutMs = 120
       headers: {
         "content-type": "application/json",
         ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...(cookie ? { cookie } : {}),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
@@ -52,7 +53,7 @@ async function api(pathname, { token = "", method = "GET", body, timeoutMs = 120
     } catch (_error) {
       json = { raw: text.slice(0, 500) };
     }
-    return { ok: res.ok, status: res.status, json };
+    return { ok: res.ok, status: res.status, json, setCookie: res.headers.get("set-cookie") || "" };
   } finally {
     clearTimeout(timer);
   }
@@ -73,11 +74,19 @@ async function makeSession() {
   if (!registered.ok) {
     throw new Error(`register failed: ${registered.status} ${JSON.stringify(registered.json).slice(0, 400)}`);
   }
-  const token = registered.json.token;
+  const sessionCookie = String(registered.setCookie || "").split(";", 1)[0].trim();
+  const token =
+    registered.json.token ||
+    (sessionCookie.startsWith("jiejing_saas_session=")
+      ? sessionCookie.slice("jiejing_saas_session=".length)
+      : "");
+  if (!sessionCookie || !token) {
+    throw new Error("register did not establish the backend-owned session cookie");
+  }
   const user = registered.json.user || {};
   const company = registered.json.company || {};
   const activatedBilling = await api("/billing/test-event", {
-    token,
+    cookie: sessionCookie,
     method: "POST",
     body: {
       plan_key: "operator",
@@ -88,7 +97,7 @@ async function makeSession() {
     throw new Error(`billing test activation failed: ${activatedBilling.status} ${JSON.stringify(activatedBilling.json).slice(0, 400)}`);
   }
   const created = await api("/stores", {
-    token,
+    cookie: sessionCookie,
     method: "POST",
     body: {
       platform: "ebay",
@@ -106,6 +115,8 @@ async function makeSession() {
   }
   return {
     token,
+    sessionCookie,
+    tokenReturnedToFrontend: Boolean(registered.json.token),
     email,
     userId: user.user_id || "",
     companyId: company.company_id || user.default_company_id || "",
@@ -244,11 +255,30 @@ async function fetchAppHtml() {
 
 async function main() {
   const session = await makeSession();
+  if (String(process.env.JIEJING_AUTH_SESSION_SMOKE_ONLY || "").toLowerCase() === "true") {
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          status: "backend_session_cookie_ready",
+          session_cookie_used: Boolean(session.sessionCookie),
+          token_returned_to_frontend: session.tokenReturnedToFrontend,
+          real_platform_writes_enabled: false,
+          triggers_real_charge: false,
+          triggers_ebay_oauth: false,
+          secret_exposed: false,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
   const message = process.env.JIEJING_AI_CEO_MARKET_BRIDGE_MESSAGE ||
     "帮我找个小众品，市场有需求，适合 eBay 美国站，轻小件，不带电。请给我一份市场调研报告、候选商品名称、推荐度评分、风险和 Listing 草稿字段建议。";
 
   const chatResponse = await api(`/stores/${session.store.store_id}/merchant-ceo/chat`, {
-    token: session.token,
+    cookie: session.sessionCookie,
     method: "POST",
     timeoutMs: Number(process.env.JIEJING_AI_CEO_MARKET_BRIDGE_CHAT_TIMEOUT_MS || 150000),
     body: {
@@ -270,7 +300,10 @@ async function main() {
   }
 
   const directReport = chatResponse.json?.ai_ceo_market_report || null;
-  const reportsResponse = await api("/reports?limit=30", { token: session.token, timeoutMs: 30000 });
+  const reportsResponse = await api("/reports?limit=30", {
+    cookie: session.sessionCookie,
+    timeoutMs: 30000,
+  });
   if (!reportsResponse.ok) {
     fail("reports endpoint failed after AI CEO chat", { status: reportsResponse.status, response: redact(reportsResponse.json) });
   }

@@ -40,6 +40,10 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("frontend_performance_analytics", [sys.executable, "tools/test_jiejing_frontend_performance_analytics.py"]),
     ("workbench_subscription_entry", [sys.executable, "tools/test_jiejing_workbench_subscription_entry.py"]),
     ("product_grade_journey_contract", [sys.executable, "tools/test_jiejing_product_grade_journey_contract.py"]),
+    (
+        "product_grade_journey_session_cookie",
+        [sys.executable, "tools/test_jiejing_product_grade_journey_session_cookie.py"],
+    ),
     ("ai_ceo_browser_streaming", [sys.executable, "tools/test_jiejing_ai_ceo_browser_streaming_contract.py"]),
     ("ai_ceo_source_quality", [sys.executable, "tools/test_jiejing_ai_ceo_source_quality.py"]),
     ("ai_ceo_answer_rendering", [sys.executable, "tools/test_jiejing_ai_ceo_answer_rendering.py"]),
