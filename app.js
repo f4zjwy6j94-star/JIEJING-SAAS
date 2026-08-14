@@ -91,6 +91,8 @@ const state = {
   activityFilter: "all",
   runtimeApiBase: resolveJiejingApiBase("runtime", defaultJiejingRuntimeApiBase()),
   saasApiBase: resolveJiejingApiBase("saas", "http://127.0.0.1:8788"),
+  saasServerClockOffsetMs: null,
+  saasServerClockObservedAtMs: 0,
   saasConnected: false,
   saasLoading: false,
   saasProtectedStateReady: false,
@@ -16347,6 +16349,33 @@ async function runtimeFetch(path, options = {}) {
   return response.json();
 }
 
+function recordSaasServerClock(response, requestStartedAtMs, requestFinishedAtMs = Date.now()) {
+  const dateHeader = String(response?.headers?.get?.("date") || "").trim();
+  if (!/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(dateHeader)) return false;
+  const serverAtResponseMs = Date.parse(dateHeader);
+  const startedAtMs = Number(requestStartedAtMs);
+  const finishedAtMs = Number(requestFinishedAtMs);
+  const elapsedMs = finishedAtMs - startedAtMs;
+  if (!Number.isFinite(serverAtResponseMs) || !Number.isFinite(elapsedMs) || elapsedMs < 0 || elapsedMs > 30 * 1000) return false;
+  state.saasServerClockOffsetMs = serverAtResponseMs - (startedAtMs + elapsedMs / 2);
+  state.saasServerClockObservedAtMs = finishedAtMs;
+  return true;
+}
+
+function saasServerNowMs(referenceLocalNow = Date.now()) {
+  const localNowMs = Number(referenceLocalNow);
+  const observedAtMs = Number(state.saasServerClockObservedAtMs);
+  const offsetMs = Number(state.saasServerClockOffsetMs);
+  if (
+    Number.isFinite(localNowMs) &&
+    Number.isFinite(observedAtMs) &&
+    Number.isFinite(offsetMs) &&
+    observedAtMs > 0 &&
+    Math.abs(localNowMs - observedAtMs) <= 5 * 60 * 1000
+  ) return localNowMs + offsetMs;
+  return localNowMs;
+}
+
 async function saasFetch(path, options = {}) {
   const headers = {
     accept: "application/json",
@@ -16355,12 +16384,14 @@ async function saasFetch(path, options = {}) {
   };
   if (state.saasToken && shouldAttachSaasBearerToken()) headers.authorization = `Bearer ${state.saasToken}`;
   const url = `${state.saasApiBase}${path}`;
+  const requestStartedAtMs = Date.now();
   const response = await fetch(url, {
     ...options,
     cache: options.cache || "no-store",
     credentials: options.credentials || "include",
     headers,
   });
+  recordSaasServerClock(response, requestStartedAtMs, Date.now());
   if (!response.ok) {
     const detail = await response.text();
     let payload = null;
@@ -17964,7 +17995,7 @@ function isSaasUniqueCurrentReadOnlySyncConfirmation(card = {}, cards = state.sa
   return matches.length === 1 && String(matches[0]?.confirmation_id || "") === String(card.confirmation_id || "");
 }
 
-function isSaasFreshApprovedReadOnlySyncConfirmation(card = {}, storeId = "", referenceNow = Date.now()) {
+function isSaasFreshApprovedReadOnlySyncConfirmation(card = {}, storeId = "", referenceNow = saasServerNowMs()) {
   if (!isSaasExactReadOnlySyncConfirmation(card, storeId) || String(card.status || "") !== "approved") return false;
   if (!String(card.decided_by || "").trim()) return false;
   const decidedAtText = String(card.decided_at || "").trim();
@@ -18038,7 +18069,7 @@ function saasExactUnpublishedDraftOAuthConfirmationForStore(storeId = "") {
   return matches.length === 1 ? matches[0] : null;
 }
 
-function isSaasFreshApprovedUnpublishedDraftOAuthConfirmation(card = {}, storeId = "", referenceNow = Date.now()) {
+function isSaasFreshApprovedUnpublishedDraftOAuthConfirmation(card = {}, storeId = "", referenceNow = saasServerNowMs()) {
   if (!isSaasExactUnpublishedDraftOAuthConfirmation(card, storeId) || String(card.status || "") !== "approved") return false;
   if (!String(card.decided_by || "").trim()) return false;
   const decidedAtText = String(card.decided_at || "").trim();
@@ -18048,6 +18079,17 @@ function isSaasFreshApprovedUnpublishedDraftOAuthConfirmation(card = {}, storeId
   if (!Number.isFinite(decidedAt) || !Number.isFinite(now)) return false;
   const ageMs = now - decidedAt;
   return ageMs >= -60 * 1000 && ageMs <= 15 * 60 * 1000;
+}
+
+function isSaasExpiredApprovedUnpublishedDraftOAuthConfirmation(card = {}, storeId = "", referenceNow = saasServerNowMs()) {
+  if (!isSaasExactUnpublishedDraftOAuthConfirmation(card, storeId) || String(card.status || "") !== "approved") return false;
+  if (!String(card.decided_by || "").trim()) return false;
+  const decidedAtText = String(card.decided_at || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(decidedAtText)) return false;
+  const decidedAt = Date.parse(decidedAtText);
+  const now = Number(referenceNow);
+  if (!Number.isFinite(decidedAt) || !Number.isFinite(now)) return false;
+  return now - decidedAt > 15 * 60 * 1000;
 }
 
 function saasExactReadOnlyOAuthConfirmationForStore(storeId = "") {
@@ -18113,7 +18155,7 @@ function isSaasTerminalInvalidExpiredReadOnlyOAuthRequest(request = {}, storeId 
   );
 }
 
-function isSaasFreshApprovedReadOnlyOAuthConfirmation(card = {}, storeId = "", referenceNow = Date.now()) {
+function isSaasFreshApprovedReadOnlyOAuthConfirmation(card = {}, storeId = "", referenceNow = saasServerNowMs()) {
   if (!isSaasExactReadOnlyOAuthConfirmation(card, storeId) || String(card.status || "") !== "approved") return false;
   if (!String(card.decided_by || "").trim()) return false;
   const decidedAtText = String(card.decided_at || "").trim();
@@ -29606,6 +29648,46 @@ async function planSaasEbayUnpublishedDraftOAuth() {
     if (String(existingConfirmation.status || "") === "pending") {
       openSaasUnpublishedDraftOAuthConfirmationCenter();
       showActionToast("未公开草稿权限仍在决策中心等待处理；不会重复创建确认或提前生成授权链接。");
+      return;
+    }
+    if (isSaasExpiredApprovedUnpublishedDraftOAuthConfirmation(existingConfirmation, storeId)) {
+      const intake = await saasFetch(`/stores/${encodeURIComponent(storeId)}/ebay-oauth/unpublished-draft-confirmation`, {
+        method: "POST",
+        body: JSON.stringify({ scope_profile: "seller_unpublished_draft" }),
+      });
+      const pending = intake?.oauth_confirmation;
+      if (
+        !pending || typeof pending !== "object" || Array.isArray(pending) ||
+        String(pending.company_id || "") !== companyId ||
+        String(pending.store_id || "") !== storeId ||
+        String(pending.status || "") !== "pending" ||
+        String(pending.action_type || "") !== "ebay_oauth_scope_change" ||
+        String(pending.source || "") !== "controlled_ebay_unpublished_draft_save" ||
+        String(pending.requested_step || "") !== "unpublished_draft_oauth_authorization_gate" ||
+        String(pending.scope_profile || "") !== "seller_unpublished_draft" ||
+        !String(pending.confirmation_id || "").trim() ||
+        pending.decision_required !== true ||
+        pending.oauth_state_created !== false ||
+        pending.authorization_url_created !== false ||
+        pending.oauth_request_created !== false ||
+        pending.draft_save_capability_requested !== true ||
+        pending.public_publish_enabled !== false ||
+        pending.real_platform_writes_enabled !== false ||
+        pending.secret_exposed !== false
+      ) {
+        throw new Error("unpublished_draft_oauth_replacement_confirmation_contract_invalid");
+      }
+      await refreshSaasState({ silent: true });
+      const refreshed = saasExactUnpublishedDraftOAuthConfirmationForStore(storeId);
+      if (
+        !refreshed ||
+        String(refreshed.status || "") !== "pending" ||
+        !isSaasUniqueCurrentUnpublishedDraftOAuthConfirmation(refreshed, state.saasConfirmations || [])
+      ) {
+        throw new Error("unpublished_draft_oauth_replacement_confirmation_refresh_mismatch");
+      }
+      openSaasUnpublishedDraftOAuthConfirmationCenter();
+      showActionToast("上一条未公开草稿授权确认已安全过期；系统只创建了一条新的待确认单，没有生成 OAuth 链接。");
       return;
     }
     if (!isSaasFreshApprovedUnpublishedDraftOAuthConfirmation(existingConfirmation, storeId)) {

@@ -5987,7 +5987,70 @@ class SaaSRepository:
                 ):
                     exact_active.append(existing)
             if exact_active:
-                raise ValueError("oauth_confirmation_already_active")
+                if len(exact_active) != 1:
+                    raise ValueError("oauth_confirmation_already_active")
+                existing = exact_active[0]
+                decided_at = _parse_explicit_timezone_iso_datetime(existing.get("decided_at"))
+                expired_approval = bool(
+                    str(existing.get("status") or "") == "approved"
+                    and str(existing.get("decided_by") or "")
+                    and _timestamp_strictly_older_than_seconds(decided_at, datetime.now(timezone.utc), 15 * 60)
+                )
+                if not expired_approval:
+                    raise ValueError("oauth_confirmation_already_active")
+                request_rows = conn.execute(
+                    """
+                    select request_json from oauth_authorization_requests
+                    where company_id = ? and store_id = ? and lower(platform) = 'ebay'
+                    """,
+                    (company_id, store_id),
+                ).fetchall()
+                has_related_or_malformed_request = False
+                for request_row in request_rows:
+                    try:
+                        request_body = _load_json_field(request_row["request_json"])
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        has_related_or_malformed_request = True
+                        break
+                    if not isinstance(request_body, dict):
+                        has_related_or_malformed_request = True
+                        break
+                    if str(request_body.get("confirmation_id") or "") == str(existing.get("confirmation_id") or ""):
+                        has_related_or_malformed_request = True
+                        break
+                if has_related_or_malformed_request:
+                    raise ValueError("oauth_confirmation_already_active")
+                expired = conn.execute(
+                    """
+                    update confirmations set status = 'expired', decision_note = ?
+                    where company_id = ? and confirmation_id = ? and status = 'approved'
+                    """,
+                    (
+                        "Expired before draft OAuth state creation; superseded by a new exact pending confirmation.",
+                        company_id,
+                        existing["confirmation_id"],
+                    ),
+                ).rowcount
+                if expired != 1:
+                    raise ValueError("oauth_confirmation_already_active")
+                self._insert_audit(
+                    conn,
+                    company_id=company_id,
+                    store_id=store_id,
+                    user_id=user_id,
+                    actor_type="system",
+                    action_type="oauth.confirmation.expired_superseded",
+                    target_type="confirmation",
+                    target_id=str(existing["confirmation_id"]),
+                    summary="An expired exact unpublished-draft OAuth approval with no OAuth request was superseded.",
+                    details={
+                        "scope_profile": EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE,
+                        "oauth_request_existed": False,
+                        "replacement_pending_created_in_same_transaction": True,
+                        "public_publish_enabled": False,
+                        "secret_exposed": False,
+                    },
+                )
             conn.execute(
                 """
                 insert into confirmations (

@@ -38,6 +38,7 @@ const planBodies = [];
 let confirmations = [];
 let connections = [readOnlyConnection()];
 let responseMode = "valid";
+let serverClockOffsetMs = 0;
 
 function readOnlyConnection(status = "read_only_authorized") {
   return {
@@ -82,7 +83,11 @@ function exactConfirmation({
 }
 
 function sendJson(res, status, payload) {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    date: new Date(Date.now() + serverClockOffsetMs).toUTCString(),
+  });
   res.end(JSON.stringify(payload));
 }
 
@@ -245,7 +250,7 @@ const server = http.createServer(async (req, res) => {
     }
     confirmations = confirmations.map((candidate) =>
       candidate.confirmation_id === confirmationId
-        ? { ...candidate, status: "approved", decided_at: new Date().toISOString(), decided_by: userId }
+        ? { ...candidate, status: "approved", decided_at: new Date(Date.now() + serverClockOffsetMs).toISOString(), decided_by: userId }
         : candidate,
     );
     sendJson(res, 201, { confirmation: confirmations.find((candidate) => candidate.confirmation_id === confirmationId) });
@@ -317,10 +322,11 @@ async function openPage(context, base, consoleErrors) {
   return page;
 }
 
-function resetFixture({ cards = [], connectionStatus = "read_only_authorized", mode = "valid" } = {}) {
+function resetFixture({ cards = [], connectionStatus = "read_only_authorized", mode = "valid", clockOffsetMs = 0 } = {}) {
   confirmations = cards;
   connections = [readOnlyConnection(connectionStatus)];
   responseMode = mode;
+  serverClockOffsetMs = clockOffsetMs;
 }
 
 async function assertNoSensitiveConfirmationLeak(page, confirmationId, consoleErrors) {
@@ -401,13 +407,30 @@ async function main() {
     ) throw new Error("draft plan request did not bind the exact confirmation/profile/scopes");
     await page.close();
 
+    const sixMinuteServerLeadMs = 6 * 60 * 1000;
+    resetFixture({
+      cards: [exactConfirmation({
+        status: "approved",
+        decidedAt: new Date(Date.now() + sixMinuteServerLeadMs).toISOString(),
+      })],
+      clockOffsetMs: sixMinuteServerLeadMs,
+    });
+    const serverClockBefore = { ...counters, redirects: oauthRedirects };
+    const serverClockPage = await openPage(context, base, consoleErrors);
+    await serverClockPage.evaluate(async () => planSaasEbayUnpublishedDraftOAuth());
+    await serverClockPage.waitForTimeout(300);
+    if (counters.plan !== serverClockBefore.plan + 1 || oauthRedirects !== serverClockBefore.redirects + 1) {
+      throw new Error("a fresh approval must use the trusted response server clock when the browser clock is six minutes behind");
+    }
+    await serverClockPage.close();
+
     for (const [name, cards, expectedIntakeDelta] of [
       ["malformed", [exactConfirmation({ item: { public_publish_enabled: true } })], 0],
       ["unbound", [exactConfirmation({ storeId: "" })], 0],
       ["duplicate", [exactConfirmation(), exactConfirmation({ confirmationId: "confirm-draft-oauth-duplicate" })], 0],
       ["wrong-store", [exactConfirmation({ storeId: wrongStore.store_id })], 1],
       ["future", [exactConfirmation({ status: "approved", decidedAt: new Date(Date.now() + 5 * 60 * 1000).toISOString() })], 0],
-      ["expired", [exactConfirmation({ status: "approved", decidedAt: new Date(Date.now() - 20 * 60 * 1000).toISOString() })], 0],
+      ["expired", [exactConfirmation({ status: "approved", decidedAt: new Date(Date.now() - 20 * 60 * 1000).toISOString() })], 1],
     ]) {
       resetFixture({ cards });
       const before = { ...counters, redirects: oauthRedirects };
@@ -418,7 +441,10 @@ async function main() {
         counters.intake !== before.intake + expectedIntakeDelta ||
         counters.plan !== before.plan ||
         oauthRedirects !== before.redirects
-      ) throw new Error(`${name} confirmation must fail closed before OAuth planning`);
+      ) throw new Error(`${name} confirmation must preserve the exact intake/plan boundary`);
+      if (name === "expired" && (confirmations.length !== 1 || confirmations[0]?.status !== "pending")) {
+        throw new Error("an expired exact draft OAuth approval must become one replacement pending confirmation");
+      }
       await attackPage.close();
     }
 

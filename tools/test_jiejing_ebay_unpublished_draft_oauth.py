@@ -361,6 +361,35 @@ def main() -> int:
                     raise AssertionError(f"{label} draft approval must fail closed without OAuth state")
                 if repository.list_oauth_authorization_requests(company_id=company_id, store_id=invalid_store["store_id"]):
                     raise AssertionError(f"{label} draft approval must not persist OAuth request/state")
+                replacement_status, replacement_body = _post(
+                    base_url,
+                    f"/stores/{invalid_store['store_id']}/ebay-oauth/unpublished-draft-confirmation",
+                    {"scope_profile": PROFILE},
+                    token,
+                )
+                if label == "expired":
+                    replacement = replacement_body.get("oauth_confirmation") or {}
+                    if not (
+                        replacement_status == 201
+                        and replacement.get("status") == "pending"
+                        and replacement.get("confirmation_id")
+                        and replacement.get("confirmation_id") != invalid_confirmation_id
+                        and repository.get_confirmation(
+                            company_id=company_id,
+                            confirmation_id=invalid_confirmation_id,
+                        ).get("status") == "expired"
+                    ):
+                        raise AssertionError("expired draft OAuth approval must be atomically superseded by one new pending confirmation")
+                    if repository.list_oauth_authorization_requests(company_id=company_id, store_id=invalid_store["store_id"]):
+                        raise AssertionError("expired draft OAuth replacement must not create OAuth request/state")
+                elif (
+                    replacement_status != 409
+                    or repository.get_confirmation(
+                        company_id=company_id,
+                        confirmation_id=invalid_confirmation_id,
+                    ).get("status") != "approved"
+                ):
+                    raise AssertionError(f"{label} draft OAuth approval must not be replaced")
 
             concurrent_store = repository.create_store(
                 company_id=company_id,
