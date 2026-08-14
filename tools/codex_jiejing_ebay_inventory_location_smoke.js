@@ -270,6 +270,10 @@ async function openPage(context, base, consoleErrors, requireListing = true) {
 
 async function openConfirm(page) {
   await page.locator('button[data-view="confirm"]:visible').click();
+  await page.evaluate(() => {
+    state.saasStartupRequestedView = "cockpit";
+    setView(activeSaasRefreshView("cockpit"), { preserveFlowKey: true });
+  });
   await page.locator("#saasConfirmPanel").waitFor({ state: "visible", timeout: 5000 });
 }
 

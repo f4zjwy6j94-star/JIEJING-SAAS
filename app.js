@@ -576,7 +576,7 @@ function rememberSaasStartupRequestedView(view = "") {
 }
 
 function activeSaasRefreshView(fallback = "cockpit") {
-  return normalizeSaasProtectedView(state.saasStartupRequestedView || state.view || fallback);
+  return normalizeSaasProtectedView(state.view || state.saasStartupRequestedView || fallback);
 }
 
 function redirectToSaasLogin(reason = "login_required") {
