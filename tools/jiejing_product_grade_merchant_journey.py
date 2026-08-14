@@ -67,6 +67,14 @@ def _structured_payload(output: str) -> dict[str, Any]:
     return {}
 
 
+def _ai_bridge_failure_status(ai_bridge: dict[str, Any]) -> str:
+    payload = ai_bridge.get("payload") if isinstance(ai_bridge.get("payload"), dict) else {}
+    blocked_by = payload.get("blocked_by") if isinstance(payload.get("blocked_by"), list) else []
+    if payload.get("status") == 402 and blocked_by == ["platform_trial_activation_required"]:
+        return "blocked_external_registration_challenge"
+    return "failed_ai_ceo_to_listing"
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
@@ -79,7 +87,7 @@ def main() -> int:
     )
     product = str(ai_bridge.get("payload", {}).get("report", {}).get("product") or "").strip()
     if not ai_bridge["pass"] or not product:
-        return _finish([ai_bridge], product=product, status="failed_ai_ceo_to_listing")
+        return _finish([ai_bridge], product=product, status=_ai_bridge_failure_status(ai_bridge))
 
     shared_env = {**env, "JIEJING_ACCEPTANCE_PRODUCT": product}
     bulk_media = _run(

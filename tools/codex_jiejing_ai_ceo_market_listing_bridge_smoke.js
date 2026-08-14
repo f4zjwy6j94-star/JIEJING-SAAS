@@ -296,7 +296,16 @@ async function main() {
     },
   });
   if (!chatResponse.ok) {
-    fail("AI CEO chat request failed", { status: chatResponse.status, response: redact(chatResponse.json) });
+    const safeBlockedBy = Array.isArray(chatResponse.json?.ai_ceo_chat?.blocked_by)
+      ? chatResponse.json.ai_ceo_chat.blocked_by.filter((item) =>
+          ["platform_trial_activation_required", "platform_default_model_trial_exhausted"].includes(String(item || "")),
+        )
+      : [];
+    fail("AI CEO chat request failed", {
+      status: chatResponse.status,
+      blocked_by: safeBlockedBy,
+      response: redact(chatResponse.json),
+    });
   }
 
   const directReport = chatResponse.json?.ai_ceo_market_report || null;

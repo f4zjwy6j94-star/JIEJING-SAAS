@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import runpy
 from pathlib import Path
 
 
@@ -10,7 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> None:
-    runner = (ROOT / "tools" / "jiejing_product_grade_merchant_journey.py").read_text(encoding="utf-8")
+    runner_path = ROOT / "tools" / "jiejing_product_grade_merchant_journey.py"
+    runner = runner_path.read_text(encoding="utf-8")
     bulk = (ROOT / "tools" / "codex_jiejing_bulk_media_handoff_smoke.js").read_text(encoding="utf-8")
     publish = (ROOT / "tools" / "codex_jiejing_publish_confirmation_loop_smoke.js").read_text(encoding="utf-8")
     app = (ROOT / "app.js").read_text(encoding="utf-8")
@@ -39,10 +41,35 @@ def main() -> None:
     assert "ui_has_truthful_listing_handoff" in (
         ROOT / "tools" / "codex_jiejing_ai_ceo_market_listing_bridge_smoke.js"
     ).read_text(encoding="utf-8")
+    bridge_smoke = (ROOT / "tools" / "codex_jiejing_ai_ceo_market_listing_bridge_smoke.js").read_text(
+        encoding="utf-8"
+    )
+    assert '"platform_trial_activation_required"' in bridge_smoke
+    assert "blocked_by: safeBlockedBy" in bridge_smoke
     assert "payload = _structured_payload(completed.stderr)" in runner
     assert 'state: "attached"' in publish
     assert "uploading_grounded_media_source" in bulk
     assert "grounded_source_upload_ready" in bulk
+
+    namespace = runpy.run_path(str(runner_path), run_name="jiejing_product_grade_journey_contract_test")
+    classify = namespace["_ai_bridge_failure_status"]
+    assert classify(
+        {
+            "payload": {
+                "status": 402,
+                "blocked_by": ["platform_trial_activation_required"],
+            }
+        }
+    ) == "blocked_external_registration_challenge"
+    assert classify(
+        {
+            "payload": {
+                "status": 500,
+                "blocked_by": ["platform_trial_activation_required"],
+            }
+        }
+    ) == "failed_ai_ceo_to_listing"
+    assert classify({"payload": {"status": 402, "blocked_by": ["unknown"]}}) == "failed_ai_ceo_to_listing"
     print("PASS jiejing_product_grade_journey_contract")
 
 
