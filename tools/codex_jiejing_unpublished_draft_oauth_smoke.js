@@ -33,10 +33,11 @@ const scopes = [
   "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly",
   "https://api.ebay.com/oauth/api_scope/sell.finances",
 ];
-const counters = { intake: 0, decision: 0, preflight: 0, execute: 0, plan: 0 };
+const counters = { intake: 0, decision: 0, preflight: 0, execute: 0, plan: 0, resume: 0 };
 const planBodies = [];
 let confirmations = [];
 let connections = [readOnlyConnection()];
+let oauthRequests = [];
 let responseMode = "valid";
 let serverClockOffsetMs = 0;
 
@@ -124,7 +125,7 @@ function getPayload(pathname) {
   if (pathname === "/stores") return { stores: [wrongStore, store] };
   if (pathname === "/connections") return { connections };
   if (pathname === "/confirmations") return { confirmations };
-  if (pathname === "/oauth/requests") return { oauth_requests: [] };
+  if (pathname === "/oauth/requests") return { oauth_requests: oauthRequests };
   if (pathname === "/tasks") return { tasks: [] };
   if (pathname === "/reports") return { reports: [] };
   if (pathname === "/health") return { status: "ok" };
@@ -152,6 +153,7 @@ function authorizationUrl(stateNonce = "draft-oauth-state-local") {
 function planResponse(body) {
   const stateNonce = "draft-oauth-state-local";
   const url = authorizationUrl(stateNonce);
+  const observedAt = new Date().toISOString();
   const security = {
     draft_save_capability_requested: true,
     public_publish_enabled: false,
@@ -182,6 +184,8 @@ function planResponse(body) {
     scopes: [...scopes],
     state_nonce: stateNonce,
     auth_url: url,
+    created_at: observedAt,
+    updated_at: observedAt,
     request: requestBody,
     ...security,
   };
@@ -285,7 +289,28 @@ const server = http.createServer(async (req, res) => {
     confirmations = confirmations.map((candidate) =>
       candidate.confirmation_id === card.confirmation_id ? { ...candidate, status: "executed" } : candidate,
     );
-    sendJson(res, 201, planResponse(body));
+    const payload = planResponse(body);
+    oauthRequests = [payload.oauth_request];
+    sendJson(res, 201, payload);
+    return;
+  }
+  if (req.method === "POST" && url.pathname === `/stores/${store.store_id}/ebay-oauth/unpublished-draft-resume`) {
+    counters.resume += 1;
+    const body = await readBody(req);
+    const card = confirmations.find((candidate) => candidate.confirmation_id === body.confirmation_id);
+    if (
+      !card ||
+      card.status !== "executed" ||
+      body.scope_profile !== "seller_unpublished_draft" ||
+      JSON.stringify(body.scopes) !== JSON.stringify(scopes) ||
+      oauthRequests.length !== 1
+    ) {
+      sendJson(res, 409, { error: "exact_draft_resume_required" });
+      return;
+    }
+    const payload = { ...planResponse(body), oauth_request_reused: true };
+    if (responseMode === "not_reused") payload.oauth_request_reused = false;
+    sendJson(res, 200, payload);
     return;
   }
   if (req.method === "POST") {
@@ -325,6 +350,7 @@ async function openPage(context, base, consoleErrors) {
 function resetFixture({ cards = [], connectionStatus = "read_only_authorized", mode = "valid", clockOffsetMs = 0 } = {}) {
   confirmations = cards;
   connections = [readOnlyConnection(connectionStatus)];
+  oauthRequests = [];
   responseMode = mode;
   serverClockOffsetMs = clockOffsetMs;
 }
@@ -423,6 +449,93 @@ async function main() {
       throw new Error("a fresh approval must use the trusted response server clock when the browser clock is six minutes behind");
     }
     await serverClockPage.close();
+
+    resetFixture({ cards: [exactConfirmation({ status: "executed", decidedAt: new Date().toISOString() })] });
+    oauthRequests = [planResponse({ confirmation_id: "confirm-draft-oauth-ui" }).oauth_request];
+    const resumeBefore = { ...counters, redirects: oauthRedirects };
+    const resumePage = await openPage(context, base, consoleErrors);
+    await resumePage.evaluate(async () => planSaasEbayUnpublishedDraftOAuth());
+    await resumePage.waitForTimeout(300);
+    if (
+      counters.resume !== resumeBefore.resume + 1 ||
+      counters.intake !== resumeBefore.intake ||
+      counters.plan !== resumeBefore.plan ||
+      oauthRequests.length !== 1 ||
+      oauthRedirects !== resumeBefore.redirects + 1
+    ) {
+      throw new Error("a page reload must resume one exact unconsumed draft OAuth request without creating another plan");
+    }
+    await assertNoSensitiveConfirmationLeak(resumePage, "confirm-draft-oauth-ui", consoleErrors);
+    await resumePage.close();
+
+    resetFixture({ cards: [exactConfirmation({ status: "executed", decidedAt: new Date(Date.now() - 20 * 60 * 1000).toISOString() })] });
+    const expiredRequest = planResponse({ confirmation_id: "confirm-draft-oauth-ui" }).oauth_request;
+    expiredRequest.created_at = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    expiredRequest.updated_at = expiredRequest.created_at;
+    oauthRequests = [expiredRequest];
+    const expiredResumeBefore = { ...counters, redirects: oauthRedirects };
+    const expiredResumePage = await openPage(context, base, consoleErrors);
+    await expiredResumePage.evaluate(async () => planSaasEbayUnpublishedDraftOAuth());
+    await expiredResumePage.waitForTimeout(300);
+    if (
+      counters.intake !== expiredResumeBefore.intake + 1 ||
+      counters.resume !== expiredResumeBefore.resume ||
+      counters.plan !== expiredResumeBefore.plan ||
+      oauthRedirects !== expiredResumeBefore.redirects
+    ) {
+      throw new Error("an explicitly expired unconsumed draft OAuth request must allow one new confirmation without reusing the stale plan");
+    }
+    await expiredResumePage.close();
+
+    for (const [name, mutateRequests] of [
+      ["future-dated", (request) => [{ ...request, updated_at: new Date(Date.now() + 5 * 60 * 1000).toISOString() }]],
+      ["malformed-time", (request) => [{ ...request, updated_at: "2026-08-14 12:00:00" }]],
+      ["duplicate", (request) => [request, { ...request }]],
+    ]) {
+      resetFixture({ cards: [exactConfirmation({ status: "executed", decidedAt: new Date().toISOString() })] });
+      const request = planResponse({ confirmation_id: "confirm-draft-oauth-ui" }).oauth_request;
+      oauthRequests = mutateRequests(request);
+      const before = { ...counters, redirects: oauthRedirects };
+      const attackPage = await openPage(context, base, consoleErrors);
+      await attackPage.evaluate(async () => planSaasEbayUnpublishedDraftOAuth());
+      await attackPage.waitForTimeout(300);
+      if (
+        counters.intake !== before.intake ||
+        counters.resume !== before.resume ||
+        counters.plan !== before.plan ||
+        oauthRedirects !== before.redirects
+      ) {
+        throw new Error(`${name} active draft OAuth request evidence must fail closed without intake, reuse, or redirect`);
+      }
+      await attackPage.close();
+    }
+
+    for (const mode of [
+      "wrong_company",
+      "wrong_store",
+      "wrong_plan_confirmation",
+      "wrong_request_confirmation",
+      "wrong_nested_confirmation",
+      "bad_flags",
+      "bad_scopes",
+      "bad_url_state",
+      "not_reused",
+    ]) {
+      resetFixture({ cards: [exactConfirmation({ status: "executed", decidedAt: new Date().toISOString() })] });
+      oauthRequests = [planResponse({ confirmation_id: "confirm-draft-oauth-ui" }).oauth_request];
+      responseMode = mode;
+      const before = { ...counters, redirects: oauthRedirects };
+      const attackPage = await openPage(context, base, consoleErrors);
+      await attackPage.evaluate(async () => {
+        await planSaasEbayUnpublishedDraftOAuth();
+        await planSaasEbayUnpublishedDraftOAuth();
+      });
+      await attackPage.waitForTimeout(250);
+      if (counters.resume !== before.resume + 1 || counters.intake !== before.intake || counters.plan !== before.plan || oauthRedirects !== before.redirects) {
+        throw new Error(`${mode} resume response must be attempted once then fail closed before redirect`);
+      }
+      await attackPage.close();
+    }
 
     for (const [name, cards, expectedIntakeDelta] of [
       ["malformed", [exactConfirmation({ item: { public_publish_enabled: true } })], 0],

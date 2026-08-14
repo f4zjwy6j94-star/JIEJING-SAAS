@@ -306,6 +306,73 @@ def main() -> int:
             requests = repository.list_oauth_authorization_requests(company_id=company_id, store_id=store["store_id"])
             if len(requests) != 1:
                 raise AssertionError("exact draft OAuth approval must create exactly one request")
+            resume_status, resume_body = _post(
+                base_url,
+                f"/stores/{store['store_id']}/ebay-oauth/unpublished-draft-resume",
+                {"confirmation_id": confirmation_id, "scope_profile": PROFILE, "scopes": SCOPES},
+                token,
+            )
+            resumed_plan = resume_body.get("oauth_plan") or {}
+            resumed_request = resume_body.get("oauth_request") or {}
+            if not (
+                resume_status == 200
+                and resumed_plan == request.get("request")
+                and resumed_request.get("request") == request.get("request")
+                and resumed_request.get("confirmation_id") == confirmation_id
+                and resumed_request.get("auth_url") == request.get("auth_url")
+                and resumed_request.get("state_nonce") == request.get("state_nonce")
+                and resumed_request.get("draft_save_capability_requested") is True
+                and resumed_request.get("public_publish_enabled") is False
+                and resumed_request.get("real_platform_writes_enabled") is False
+                and resumed_request.get("secret_exposed") is False
+                and len(repository.list_oauth_authorization_requests(company_id=company_id, store_id=store["store_id"])) == 1
+            ):
+                raise AssertionError("an exact unconsumed draft OAuth request must resume without creating another request")
+            viewer_resume_status, viewer_resume_body = _post(
+                base_url,
+                f"/stores/{store['store_id']}/ebay-oauth/unpublished-draft-resume",
+                {"confirmation_id": confirmation_id, "scope_profile": PROFILE, "scopes": SCOPES},
+                viewer_token,
+            )
+            if viewer_resume_status != 403 or set(viewer_resume_body) & {
+                "oauth_plan",
+                "oauth_request",
+                "authorization_url",
+                "state_nonce",
+            }:
+                raise AssertionError("member without manage_connections must not resume a draft OAuth request")
+            resume_attacks = [
+                ({"confirmation_id": "wrong-confirmation", "scope_profile": PROFILE, "scopes": SCOPES}, 409),
+                ({"confirmation_id": confirmation_id, "scope_profile": "seller_read_only", "scopes": SCOPES}, 400),
+                ({"confirmation_id": confirmation_id, "scope_profile": PROFILE, "scopes": list(reversed(SCOPES))}, 400),
+            ]
+            for resume_payload, expected_resume_status in resume_attacks:
+                attacked_status, attacked_body = _post(
+                    base_url,
+                    f"/stores/{store['store_id']}/ebay-oauth/unpublished-draft-resume",
+                    resume_payload,
+                    token,
+                )
+                if attacked_status != expected_resume_status or set(attacked_body) & {
+                    "oauth_plan",
+                    "oauth_request",
+                    "authorization_url",
+                    "state_nonce",
+                }:
+                    raise AssertionError("malformed or mismatched draft OAuth resume must fail closed and value-free")
+            wrong_store_resume_status, wrong_store_resume_body = _post(
+                base_url,
+                f"/stores/{other_store['store_id']}/ebay-oauth/unpublished-draft-resume",
+                {"confirmation_id": confirmation_id, "scope_profile": PROFILE, "scopes": SCOPES},
+                token,
+            )
+            if wrong_store_resume_status != 409 or set(wrong_store_resume_body) & {
+                "oauth_plan",
+                "oauth_request",
+                "authorization_url",
+                "state_nonce",
+            }:
+                raise AssertionError("a different store must not resume the current store draft OAuth request")
             retry_status, _ = _post(
                 base_url,
                 f"/stores/{store['store_id']}/ebay-oauth/unpublished-draft-plan",
@@ -314,6 +381,27 @@ def main() -> int:
             )
             if retry_status != 409 or len(repository.list_oauth_authorization_requests(company_id=company_id, store_id=store["store_id"])) != 1:
                 raise AssertionError("consumed draft approval must never create a second OAuth request")
+            import sqlite3
+
+            expired_request_time = (datetime.now(timezone.utc) - timedelta(minutes=16)).isoformat()
+            with sqlite3.connect(settings.db_path) as conn:
+                conn.execute(
+                    "update oauth_authorization_requests set updated_at = ? where company_id = ? and store_id = ?",
+                    (expired_request_time, company_id, store["store_id"]),
+                )
+            expired_resume_status, expired_resume_body = _post(
+                base_url,
+                f"/stores/{store['store_id']}/ebay-oauth/unpublished-draft-resume",
+                {"confirmation_id": confirmation_id, "scope_profile": PROFILE, "scopes": SCOPES},
+                token,
+            )
+            if expired_resume_status != 409 or set(expired_resume_body) & {
+                "oauth_plan",
+                "oauth_request",
+                "authorization_url",
+                "state_nonce",
+            }:
+                raise AssertionError("an expired draft OAuth request must not resume or disclose authorization state")
 
             invalid_times = {
                 "expired": (datetime.now(timezone.utc) - timedelta(minutes=16)).isoformat(),
@@ -344,8 +432,6 @@ def main() -> int:
                 )
                 if decision_status != 201:
                     raise AssertionError(f"{label} approval fixture decision failed")
-                import sqlite3
-
                 with sqlite3.connect(settings.db_path) as conn:
                     conn.execute(
                         "update confirmations set decided_at = ? where confirmation_id = ?",

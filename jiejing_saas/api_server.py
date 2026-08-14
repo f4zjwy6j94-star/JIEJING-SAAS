@@ -4023,6 +4023,61 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if len(parts) == 4 and parts[0] == "stores" and parts[2] == "ebay-oauth" and parts[3] == "unpublished-draft-resume":
+            store_id = parts[1]
+            if not self._require_permission(identity, "manage_connections"):
+                return
+            body = self._read_json_body()
+            confirmation_id = str(body.get("confirmation_id") or "").strip()
+            if (
+                not confirmation_id
+                or body.get("scope_profile") != EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE
+                or type(body.get("scopes")) is not list
+                or body.get("scopes") != UNPUBLISHED_DRAFT_SCOPES
+            ):
+                self._send_error(HTTPStatus.BAD_REQUEST, "oauth_unpublished_draft_resume_contract_invalid")
+                return
+            try:
+                request_record = self.repository.resume_unpublished_draft_oauth_authorization_request(
+                    company_id=identity["company_id"],
+                    store_id=store_id,
+                    confirmation_id=confirmation_id,
+                )
+            except KeyError:
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            except ValueError as exc:
+                self._send_error(HTTPStatus.CONFLICT, str(exc))
+                return
+            plan = request_record.get("request") if isinstance(request_record.get("request"), dict) else {}
+            self._send_json(
+                {
+                    "oauth_plan": plan,
+                    "oauth_request": request_record,
+                    "draft_oauth_boundary": {
+                        "company_id": identity["company_id"],
+                        "store_id": store_id,
+                        "confirmation_id": confirmation_id,
+                        "scope_profile": EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE,
+                        "scopes": list(plan.get("scopes") or []),
+                        "state_nonce": str(plan.get("state_nonce") or ""),
+                        "authorization_url": str(plan.get("authorization_url") or ""),
+                        "draft_save_capability_requested": True,
+                        "public_publish_enabled": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    "vault": self.secret_store_boundary.status(),
+                    "draft_save_capability_requested": True,
+                    "public_publish_enabled": False,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                    "oauth_request_reused": True,
+                },
+                status=HTTPStatus.OK,
+            )
+            return
+
         if len(parts) == 4 and parts[0] == "stores" and parts[2] == "ebay-oauth" and parts[3] == "publish-plan":
             if not self._require_permission(identity, "manage_connections"):
                 return

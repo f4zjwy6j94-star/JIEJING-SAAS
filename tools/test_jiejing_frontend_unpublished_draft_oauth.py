@@ -30,11 +30,16 @@ def main() -> None:
     listing_intake_start = app.index("function renderSaasPublishConfirmationIntakePanel")
     listing_intake_end = app.index("function saasListingSafeMaterialValue", listing_intake_start)
     listing_intake = app[listing_intake_start:listing_intake_end]
+    safe_request_start = app.index("function merchantSafeSaasOAuthRequest(record)")
+    safe_request_end = app.index("function merchantSafeSaasOAuthRequests(records)", safe_request_start)
+    safe_request = app[safe_request_start:safe_request_end]
 
     intake = "/ebay-oauth/unpublished-draft-confirmation"
     plan = "/ebay-oauth/unpublished-draft-plan"
+    resume = "/ebay-oauth/unpublished-draft-resume"
     require(flow, intake, "first click must create the dedicated draft-scope confirmation")
     require(flow, plan, "only an approved exact confirmation may create the draft-scope OAuth plan")
+    require(flow, resume, "a reload may resume only the exact existing unconsumed draft OAuth request")
     if flow.index(intake) >= flow.index(plan):
         raise AssertionError("draft confirmation intake must precede draft OAuth planning")
 
@@ -43,6 +48,9 @@ def main() -> None:
         ("controlled_ebay_unpublished_draft_save", "draft confirmation must use the exact backend source"),
         ("unpublished_draft_oauth_authorization_gate", "draft confirmation must use the exact backend step"),
         ("isSaasFreshApprovedUnpublishedDraftOAuthConfirmation", "expired or malformed approvals must fail closed"),
+        ("isSaasFreshExecutedUnpublishedDraftOAuthConfirmation", "resume must require one fresh executed approval"),
+        ("saasUnpublishedDraftOAuthRequestFreshness", "resume must reject malformed and future request timestamps while ignoring explicit expiry"),
+        ("payload.oauth_request_reused !== true", "resume must require backend proof that no second OAuth request was created"),
         ("saasUnpublishedDraftOAuthPlanAttemptKeys.has(planAttemptKey)", "one page may attempt an exact draft plan only once"),
         ("validatedSaasUnpublishedDraftOAuthPlanResponse(payload, store, existingConfirmation)", "the redirect must validate the exact draft plan response"),
         ("confirmation_id: existingConfirmation.confirmation_id", "the plan must carry the exact in-memory confirmation"),
@@ -78,6 +86,20 @@ def main() -> None:
         raise AssertionError("draft OAuth authorization URL must never persist in frontend state")
     if flow.index("saasUnpublishedDraftOAuthPlanAttemptKeys.add(planAttemptKey)") >= flow.index(plan):
         raise AssertionError("the one-shot draft plan claim must happen before the plan POST")
+    if flow.index("saasUnpublishedDraftOAuthPlanAttemptKeys.add(resumeAttemptKey)") >= flow.index(resume):
+        raise AssertionError("the one-shot draft resume claim must happen before the resume POST")
+
+    for marker in [
+        "draft_save_capability_requested",
+        "public_publish_enabled",
+        "real_platform_writes_enabled",
+        "secret_exposed",
+        "write_actions_requested",
+    ]:
+        require(safe_request, marker, f"safe OAuth request ingress must retain {marker} for exact fail-closed validation")
+    for forbidden in ["authorization_url", "auth_url", "state_nonce", "confirmation_id"]:
+        if forbidden in safe_request:
+            raise AssertionError(f"safe OAuth request ingress must never retain {forbidden}")
 
     require(approve, "isExactUnpublishedDraftOAuth", "draft approval must have a dedicated decision-only branch")
     branch_start = approve.index("if (isExactUnpublishedDraftOAuth")

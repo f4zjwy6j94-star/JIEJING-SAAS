@@ -18092,6 +18092,18 @@ function isSaasExpiredApprovedUnpublishedDraftOAuthConfirmation(card = {}, store
   return now - decidedAt > 15 * 60 * 1000;
 }
 
+function isSaasFreshExecutedUnpublishedDraftOAuthConfirmation(card = {}, storeId = "", referenceNow = saasServerNowMs()) {
+  if (!isSaasExactUnpublishedDraftOAuthConfirmation(card, storeId) || String(card.status || "") !== "executed") return false;
+  if (!String(card.decided_by || "").trim()) return false;
+  const decidedAtText = String(card.decided_at || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(decidedAtText)) return false;
+  const decidedAt = Date.parse(decidedAtText);
+  const now = Number(referenceNow);
+  if (!Number.isFinite(decidedAt) || !Number.isFinite(now)) return false;
+  const ageMs = now - decidedAt;
+  return ageMs >= -60 * 1000 && ageMs <= 15 * 60 * 1000;
+}
+
 function saasExactReadOnlyOAuthConfirmationForStore(storeId = "") {
   const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
   const targetStoreId = String(storeId || "").trim();
@@ -27221,7 +27233,16 @@ function merchantSafeSaasOAuthRequest(record) {
   const request = record.request;
   if (request && typeof request === "object" && !Array.isArray(request)) {
     const safeRequest = {};
-    ["status", "store_id", "scope_profile", "marketplace", "real_platform_writes_enabled", "secret_exposed"].forEach((key) => {
+    [
+      "status",
+      "store_id",
+      "scope_profile",
+      "marketplace",
+      "draft_save_capability_requested",
+      "public_publish_enabled",
+      "real_platform_writes_enabled",
+      "secret_exposed",
+    ].forEach((key) => {
       if (["string", "number", "boolean"].includes(typeof request[key])) safeRequest[key] = request[key];
     });
     if (Array.isArray(request.scopes)) {
@@ -27229,6 +27250,9 @@ function merchantSafeSaasOAuthRequest(record) {
     }
     if (Array.isArray(request.missing_config)) {
       safeRequest.missing_config = request.missing_config.filter((item) => typeof item === "string");
+    }
+    if (Array.isArray(request.write_actions_requested)) {
+      safeRequest.write_actions_requested = request.write_actions_requested.filter((item) => typeof item === "string");
     }
     safe.request = safeRequest;
   }
@@ -29532,7 +29556,18 @@ function openSaasUnpublishedDraftOAuthConfirmationCenter() {
   renderConfirmations();
 }
 
-function saasCurrentStoreActiveUnpublishedDraftOAuthRequests(storeId = "") {
+function saasUnpublishedDraftOAuthRequestFreshness(request = {}, referenceNow = saasServerNowMs()) {
+  const observedAtText = String(request?.updated_at || request?.created_at || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(observedAtText)) return "invalid";
+  const observedAt = Date.parse(observedAtText);
+  const now = Number(referenceNow);
+  if (!Number.isFinite(observedAt) || !Number.isFinite(now)) return "invalid";
+  const ageMs = now - observedAt;
+  if (ageMs < -60 * 1000) return "invalid";
+  return ageMs > 15 * 60 * 1000 ? "expired" : "fresh";
+}
+
+function saasCurrentStoreUnpublishedDraftOAuthRequests(storeId = "") {
   const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
   const targetStoreId = String(storeId || "").trim();
   if (!companyId || !targetStoreId) return [];
@@ -29547,6 +29582,12 @@ function saasCurrentStoreActiveUnpublishedDraftOAuthRequests(storeId = "") {
       ["ready_to_redirect", "blocked_missing_oauth_config", "created"].includes(String(request?.status || requestBody.status || ""))
     );
   });
+}
+
+function saasCurrentStoreActiveUnpublishedDraftOAuthRequests(storeId = "") {
+  return saasCurrentStoreUnpublishedDraftOAuthRequests(storeId).filter(
+    (request) => saasUnpublishedDraftOAuthRequestFreshness(request) === "fresh",
+  );
 }
 
 async function planSaasEbayUnpublishedDraftOAuth() {
@@ -29584,17 +29625,73 @@ async function planSaasEbayUnpublishedDraftOAuth() {
         ["pending", "approved"].includes(String(card?.status || "")) &&
         isSaasReadOnlyOAuthSensitiveConfirmation(card),
     );
-    const activeDraftRequests = saasCurrentStoreActiveUnpublishedDraftOAuthRequests(storeId);
+    const currentDraftRequests = saasCurrentStoreUnpublishedDraftOAuthRequests(storeId);
+    const activeDraftRequests = currentDraftRequests.filter(
+      (request) => saasUnpublishedDraftOAuthRequestFreshness(request) === "fresh",
+    );
+    const invalidDraftRequests = currentDraftRequests.filter(
+      (request) => saasUnpublishedDraftOAuthRequestFreshness(request) === "invalid",
+    );
     const malformedOrDuplicate =
       activeExact.length > 1 ||
       activeSensitive.length > 1 ||
-      activeSensitive.some((card) => !isSaasExactUnpublishedDraftOAuthConfirmation(card, storeId));
+      activeSensitive.some((card) => !isSaasExactUnpublishedDraftOAuthConfirmation(card, storeId)) ||
+      activeDraftRequests.length > 1 ||
+      invalidDraftRequests.length > 0;
     if (malformedOrDuplicate) {
       openSaasUnpublishedDraftOAuthConfirmationCenter();
       showActionToast("当前店铺存在重复、格式异常或其他授权确认；系统没有生成授权链接。");
       return;
     }
     if (activeDraftRequests.length) {
+      const request = activeDraftRequests.length === 1 ? activeDraftRequests[0] : null;
+      const requestBody = request?.request && typeof request.request === "object" && !Array.isArray(request.request)
+        ? request.request
+        : {};
+      const resumableConfirmations = exactConfirmations.filter((card) =>
+        isSaasFreshExecutedUnpublishedDraftOAuthConfirmation(card, storeId),
+      );
+      const exactResumableRequest = Boolean(
+        request &&
+          String(request.company_id || "").trim() === companyId &&
+          String(request.store_id || requestBody.store_id || "").trim() === storeId &&
+          String(request.status || "") === "ready_to_redirect" &&
+          String(requestBody.status || "") === "ready_to_redirect" &&
+          String(requestBody.scope_profile || "") === "seller_unpublished_draft" &&
+          isExactSaasUnpublishedDraftOAuthScopes(request.scopes) &&
+          isExactSaasUnpublishedDraftOAuthScopes(requestBody.scopes) &&
+          JSON.stringify(request.scopes) === JSON.stringify(requestBody.scopes) &&
+          requestBody.write_actions_requested?.length === 1 &&
+          requestBody.write_actions_requested[0] === "save_ebay_listing_draft" &&
+          requestBody.draft_save_capability_requested === true &&
+          requestBody.public_publish_enabled === false &&
+          requestBody.real_platform_writes_enabled === false &&
+          requestBody.secret_exposed === false &&
+          resumableConfirmations.length === 1
+      );
+      if (exactResumableRequest) {
+        const executedConfirmation = resumableConfirmations[0];
+        const confirmationId = String(executedConfirmation.confirmation_id || "").trim();
+        const resumeAttemptKey = [companyId, storeId, confirmationId, "resume"].join("\u0000");
+        if (!confirmationId || saasUnpublishedDraftOAuthPlanAttemptKeys.has(resumeAttemptKey)) {
+          throw new Error("unpublished_draft_oauth_resume_already_attempted_in_this_page");
+        }
+        saasUnpublishedDraftOAuthPlanAttemptKeys.add(resumeAttemptKey);
+        const payload = await saasFetch(`/stores/${encodeURIComponent(storeId)}/ebay-oauth/unpublished-draft-resume`, {
+          method: "POST",
+          body: JSON.stringify({
+            confirmation_id: confirmationId,
+            scope_profile: "seller_unpublished_draft",
+            scopes: [...saasEbayUnpublishedDraftOAuthScopes],
+          }),
+        });
+        const validatedResume = validatedSaasUnpublishedDraftOAuthPlanResponse(payload, store, executedConfirmation);
+        if (!validatedResume?.authorizationUrl || payload.oauth_request_reused !== true) {
+          throw new Error("unpublished_draft_oauth_resume_response_contract_invalid");
+        }
+        window.location.assign(validatedResume.authorizationUrl);
+        return;
+      }
       showActionToast("当前店铺已有一次未公开草稿 OAuth 授权计划；系统不会重复创建确认或授权链接。");
       return;
     }

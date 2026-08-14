@@ -6716,6 +6716,124 @@ class SaaSRepository:
             )
         return record
 
+    def resume_unpublished_draft_oauth_authorization_request(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        confirmation_id: str,
+    ) -> dict[str, Any]:
+        """Return one still-fresh draft OAuth request without creating or mutating state."""
+
+        from .ebay_oauth import UNPUBLISHED_DRAFT_SCOPES
+
+        self.initialize()
+        now_utc = datetime.now(timezone.utc)
+        with self._connect() as conn:
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            store_row = conn.execute(
+                f"select store_id, platform from stores where company_id = ? and store_id = ?{lock_suffix}",
+                (company_id, store_id),
+            ).fetchone()
+            if not store_row or str(store_row["platform"] or "").strip().lower() != "ebay":
+                raise KeyError("store not found")
+            if self._strong_ebay_oauth_connection_exists(
+                conn,
+                company_id=company_id,
+                store_id=store_id,
+                lock_rows=self.database_engine == "postgres",
+                required_scope="https://api.ebay.com/oauth/api_scope/sell.inventory",
+            ):
+                raise ValueError("oauth_unpublished_draft_scope_already_authorized")
+            rows = conn.execute(
+                f"""
+                select * from oauth_authorization_requests
+                where company_id = ? and store_id = ? and lower(platform) = 'ebay'
+                  and status = 'ready_to_redirect'
+                order by created_at desc{lock_suffix}
+                """,
+                (company_id, store_id),
+            ).fetchall()
+            candidates: list[tuple[Any, dict[str, Any]]] = []
+            for row in rows:
+                try:
+                    request_body = _load_json_field(row["request_json"])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    raise ValueError("oauth_unpublished_draft_resume_exact_request_required")
+                if not isinstance(request_body, dict):
+                    raise ValueError("oauth_unpublished_draft_resume_exact_request_required")
+                if str(request_body.get("scope_profile") or "") == EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE:
+                    candidates.append((row, request_body))
+            if len(candidates) != 1:
+                raise ValueError("oauth_unpublished_draft_resume_exact_request_required")
+            request_row, request_body = candidates[0]
+            request_updated_at = _parse_explicit_timezone_iso_datetime(request_row["updated_at"])
+            try:
+                persisted_scopes = _load_json_field(request_row["scopes_json"])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                raise ValueError("oauth_unpublished_draft_resume_exact_request_required")
+            exact_request = bool(
+                str(request_row["status"] or "") == "ready_to_redirect"
+                and str(request_row["state_nonce"] or "")
+                and str(request_row["state_nonce"] or "") == str(request_body.get("state_nonce") or "")
+                and str(request_row["auth_url"] or "")
+                and str(request_row["auth_url"] or "") == str(request_body.get("authorization_url") or "")
+                and persisted_scopes == UNPUBLISHED_DRAFT_SCOPES
+                and request_body.get("scopes") == UNPUBLISHED_DRAFT_SCOPES
+                and str(request_body.get("company_id") or "") == company_id
+                and str(request_body.get("store_id") or "") == store_id
+                and str(request_body.get("confirmation_id") or "") == confirmation_id
+                and str(request_body.get("platform") or "").lower() == "ebay"
+                and str(request_body.get("status") or "") == "ready_to_redirect"
+                and request_body.get("write_actions_requested") == ["save_ebay_listing_draft"]
+                and request_body.get("draft_save_capability_requested") is True
+                and request_body.get("public_publish_enabled") is False
+                and request_body.get("real_platform_writes_enabled") is False
+                and request_body.get("secret_exposed") is False
+                and _timestamp_not_future_within_seconds(request_updated_at, now_utc, 15 * 60)
+            )
+            confirmation_row = conn.execute(
+                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
+                (company_id, confirmation_id),
+            ).fetchone()
+            try:
+                confirmation = self._confirmation_row_to_dict(confirmation_row) if confirmation_row else {}
+            except (TypeError, ValueError, json.JSONDecodeError):
+                raise ValueError("oauth_unpublished_draft_resume_exact_request_required")
+            item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+            decided_at = _parse_explicit_timezone_iso_datetime(confirmation.get("decided_at"))
+            exact_confirmation = bool(
+                confirmation
+                and str(confirmation.get("store_id") or "") == store_id
+                and str(confirmation.get("action_type") or "") == "ebay_oauth_scope_change"
+                and str(confirmation.get("status") or "") == "executed"
+                and str(confirmation.get("decided_by") or "")
+                and str(item.get("source") or "") == EBAY_UNPUBLISHED_DRAFT_OAUTH_SOURCE
+                and str(item.get("requested_step") or "") == EBAY_UNPUBLISHED_DRAFT_OAUTH_STEP
+                and str(item.get("scope_profile") or "") == EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE
+                and item.get("draft_save_capability_requested") is True
+                and item.get("public_publish_enabled") is False
+                and item.get("real_platform_writes_enabled") is False
+                and item.get("secret_exposed") is False
+                and _timestamp_not_future_within_seconds(decided_at, now_utc, 15 * 60)
+            )
+            if not exact_request or not exact_confirmation:
+                raise ValueError("oauth_unpublished_draft_resume_exact_request_required")
+            try:
+                record = self._oauth_request_row_to_dict(request_row)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                raise ValueError("oauth_unpublished_draft_resume_exact_request_required")
+            record.update(
+                {
+                    "confirmation_id": confirmation_id,
+                    "draft_save_capability_requested": True,
+                    "public_publish_enabled": False,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                }
+            )
+            return record
+
     def ebay_oauth_scope_upgrade_identity_boundary(
         self,
         *,
