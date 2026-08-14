@@ -1029,11 +1029,20 @@ async function main() {
       throw new Error("pending OAuth UI must explain that owner confirmation comes before eBay authorization");
     }
     await page.locator('[data-saas-action="plan-ebay-oauth"]').first().click();
-    await page.waitForTimeout(150);
+    await page.waitForFunction(
+      () => state.saasLoading === false &&
+        (state.saasConfirmations || []).some((card) => card.status === "pending" && card.action_type === "ebay_oauth_scope_change"),
+      null,
+      { timeout: 5000 },
+    );
     if (counters.confirmation !== 1 || counters.plan !== 0) {
       throw new Error(`pending confirmation must be idempotent in the UI; confirmation=${counters.confirmation} plan=${counters.plan}`);
     }
-    await page.locator('#saasConfirmPanel [data-saas-action="approve-confirmation"]').click();
+    const stablePendingApproval = page.locator(
+      '#saasConfirmPanel [data-saas-confirmation-flow="ebay-read-only-oauth-current-store"][data-saas-action="approve-confirmation"]',
+    );
+    await stablePendingApproval.waitFor({ state: "visible", timeout: 5000 });
+    await stablePendingApproval.click();
     await page.waitForFunction(() => document.querySelector("#saasConfirmPanel"));
     await page.waitForTimeout(200);
     if (counters.decision !== 1 || counters.preflight !== 0 || counters.execute !== 0) {
