@@ -859,6 +859,7 @@ class EbayWriteHttpAdapter:
             access_token=access_token,
             marketplace_id=marketplace_id,
         )
+        offers_result = _normalize_missing_offer_inspection(offers_result)
         steps.append(_step_summary("inspect_offers_by_sku", offers_path, offers_result))
         if offers_result.get("status") != "ok":
             return _draft_write_result(
@@ -1001,6 +1002,7 @@ class EbayWriteHttpAdapter:
             access_token=access_token,
             marketplace_id=marketplace_id,
         )
+        recheck_result = _normalize_missing_offer_inspection(recheck_result)
         steps.append(_step_summary("recheck_offers_by_sku", offers_path, recheck_result))
         recheck_json = recheck_result.get("json") if isinstance(recheck_result.get("json"), dict) else {}
         recheck_offers = recheck_json.get("offers") if isinstance(recheck_json.get("offers"), list) else []
@@ -2534,6 +2536,35 @@ def _step_summary(name: str, path: str, result: dict[str, Any]) -> dict[str, Any
     if platform_error:
         summary["platform_error"] = platform_error
     return summary
+
+
+def _normalize_missing_offer_inspection(result: dict[str, Any]) -> dict[str, Any]:
+    """Treat only eBay's exact new-SKU/no-offer response as an empty offer set."""
+    if result.get("http_status") != 404 or result.get("status") not in {"http_error", "not_found"}:
+        return result
+    payload = result.get("json")
+    if not isinstance(payload, dict):
+        return result
+    errors = payload.get("errors")
+    if not isinstance(errors, list) or len(errors) != 1 or not isinstance(errors[0], dict):
+        return result
+    error = errors[0]
+    if (
+        str(error.get("errorId") or "") != "25713"
+        or error.get("domain") != "API_INVENTORY"
+        or error.get("subdomain") != "Selling"
+        or error.get("category") != "Request"
+    ):
+        return result
+    normalized = dict(result)
+    normalized.update(
+        {
+            "status": "ok",
+            "json": {"offers": []},
+            "normalized_outcome": "sku_has_no_offer",
+        }
+    )
+    return normalized
 
 
 def _safe_platform_error(value: Any) -> dict[str, Any]:

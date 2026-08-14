@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import json
 import hashlib
+import io
 import os
 import pickle
 import sys
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request
 
 
@@ -222,6 +224,100 @@ def main() -> int:
         return fail(f"complete confirmed draft should be ready for the eBay adapter: {preflight}")
     if preflight.get("platform_adapter_required") is not True:
         return fail(f"eBay draft save is an external write and must require an adapter: {preflight}")
+
+    missing_offer_calls: list[dict[str, object]] = []
+
+    def missing_offer_transport(http_request: Request, timeout: float) -> tuple[int, dict[str, str], bytes]:
+        del timeout
+        missing_offer_calls.append({"method": http_request.get_method(), "url": http_request.full_url})
+        if "/offer?sku=" in http_request.full_url:
+            body = json.dumps(
+                {
+                    "errors": [
+                        {
+                            "errorId": 25713,
+                            "domain": "API_INVENTORY",
+                            "subdomain": "Selling",
+                            "category": "Request",
+                            "message": "This Offer is not available.",
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+            raise HTTPError(http_request.full_url, 404, "Not Found", {}, io.BytesIO(body))
+        if "/inventory_item/" in http_request.full_url:
+            return 204, {"content-type": "application/json"}, b""
+        if http_request.full_url.endswith("/offer"):
+            return 201, {"content-type": "application/json"}, json.dumps({"offerId": "offer_missing_001"}).encode("utf-8")
+        raise AssertionError(f"unexpected missing-offer draft request: {http_request.get_method()} {http_request.full_url}")
+
+    missing_offer_adapter = EbayWriteHttpAdapter(settings, transport=missing_offer_transport)
+    missing_offer_adapter._resolve_access_token = lambda **_: {  # type: ignore[attr-defined]
+        "ok": True,
+        "access_token": "backend-only-test-token",
+        "source": "vault",
+    }
+    missing_offer_prepared = missing_offer_adapter.prepare_listing_draft(
+        request=request,
+        preflight=preflight,
+        credential_boundary=_credential_boundary(),
+        marketplace_id="EBAY_US",
+    )
+    if missing_offer_prepared.__class__.__name__ != "_DraftPreparationHandle":
+        return fail(
+            "eBay getOffers 404/errorId 25713 must mean an exact new SKU has no offers and may continue to the claim boundary: "
+            f"{missing_offer_prepared}"
+        )
+    if [call.get("method") for call in missing_offer_calls] != ["GET"]:
+        return fail(f"missing-offer normalization may perform one GET and zero writes: {missing_offer_calls}")
+    missing_offer_created = missing_offer_adapter.execute_prepared_listing_draft(
+        request=request,
+        preflight=preflight,
+        prepared=missing_offer_prepared,
+        claim_capability=_capability_for(missing_offer_prepared),
+        marketplace_id="EBAY_US",
+    )
+    if missing_offer_created.get("status") != "saved_to_ebay_draft":
+        return fail(f"exact missing-offer response must remain empty on recheck and save one unpublished draft: {missing_offer_created}")
+    if [call.get("method") for call in missing_offer_calls] != ["GET", "GET", "PUT", "POST"]:
+        return fail(f"missing-offer draft must recheck before the first write: {missing_offer_calls}")
+
+    missing_offer_attacks = [
+        ("wrong error id", [{"errorId": 25714, "domain": "API_INVENTORY", "subdomain": "Selling", "category": "Request"}]),
+        ("wrong domain", [{"errorId": 25713, "domain": "API_ACCOUNT", "subdomain": "Selling", "category": "Request"}]),
+        ("wrong subdomain", [{"errorId": 25713, "domain": "API_INVENTORY", "subdomain": "Inventory", "category": "Request"}]),
+        ("wrong category", [{"errorId": 25713, "domain": "API_INVENTORY", "subdomain": "Selling", "category": "Business"}]),
+        (
+            "mixed provider errors",
+            [
+                {"errorId": 25713, "domain": "API_INVENTORY", "subdomain": "Selling", "category": "Request"},
+                {"errorId": 99999, "domain": "API_INVENTORY", "subdomain": "Selling", "category": "Request"},
+            ],
+        ),
+    ]
+    for label, provider_errors in missing_offer_attacks:
+        attack_calls: list[str] = []
+
+        def attack_transport(http_request: Request, timeout: float, errors: list[dict[str, object]] = provider_errors) -> tuple[int, dict[str, str], bytes]:
+            del timeout
+            attack_calls.append(http_request.get_method())
+            body = json.dumps({"errors": errors}).encode("utf-8")
+            raise HTTPError(http_request.full_url, 404, "Not Found", {}, io.BytesIO(body))
+
+        attack_adapter = EbayWriteHttpAdapter(settings, transport=attack_transport)
+        attack_adapter._resolve_access_token = lambda **_: {  # type: ignore[attr-defined]
+            "ok": True,
+            "access_token": "backend-only-test-token",
+            "source": "vault",
+        }
+        attack_result = attack_adapter.prepare_listing_draft(
+            request=request,
+            preflight=preflight,
+            credential_boundary=_credential_boundary(),
+            marketplace_id="EBAY_US",
+        )
+        if attack_result.get("status") != "blocked_offer_inspection_failed" or attack_calls != ["GET"]:
+            return fail(f"{label} must remain fail-closed before every eBay write: result={attack_result} calls={attack_calls}")
 
     calls: list[dict[str, object]] = []
 
