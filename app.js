@@ -4402,6 +4402,7 @@ let saasExactReadOnlyOAuthConfirmationRenderGeneration = 0;
 const saasReadOnlyOAuthPlanAttemptKeys = new Set();
 const saasUnpublishedDraftOAuthPlanAttemptKeys = new Set();
 const saasInventoryLocationExecutionAttemptKeys = new Set();
+const saasInventoryLocationReconciliationAttemptKeys = new Set();
 let saasPendingPublishIntakeFormValues = null;
 
 const manualActionDetails = {
@@ -10702,6 +10703,7 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
   const formValues = saasPublishIntakePrefillValues();
   const condition = formValues.condition || "";
   const approvedInventoryLocation = saasExactApprovedInventoryLocationConfirmation();
+  const manualInventoryLocation = saasExactManualReconcileInventoryLocationConfirmation();
   return `
     <section class="saas-publish-intake-panel" aria-label="新商品发布确认单">
       <div class="saas-publish-intake-head">
@@ -10713,7 +10715,8 @@ function renderSaasPublishConfirmationIntakePanel(ctx = saasMerchantWorkbenchCon
         <div class="saas-publish-intake-actions">
           <button class="secondary-action" type="button" data-saas-action="run-pretest-check">检测当前资料</button>
           <button class="secondary-action" type="button" data-saas-action="create-ebay-inventory-location-confirmation" ${disabled ? "disabled" : ""}>生成库存位置确认单</button>
-          <button class="secondary-action" type="button" data-saas-action="execute-ebay-inventory-location" ${disabled || !approvedInventoryLocation ? "disabled" : ""}>执行已批准的库存位置创建</button>
+          <button class="secondary-action" type="button" data-saas-action="execute-ebay-inventory-location" ${disabled || !approvedInventoryLocation || manualInventoryLocation ? "disabled" : ""}>执行已批准的库存位置创建</button>
+          ${manualInventoryLocation ? `<button class="secondary-action" type="button" data-saas-action="reconcile-ebay-inventory-location" ${disabled ? "disabled" : ""}>只读核对 eBay 库存位置</button>` : ""}
           <button class="primary-action" type="button" data-saas-action="create-ebay-draft-confirmation" ${disabled ? "disabled" : ""}>生成未发布 eBay 草稿确认单</button>
           <button class="primary-action" type="button" data-saas-action="create-publish-confirmation" ${disabled ? "disabled" : ""}>生成发布确认单</button>
         </div>
@@ -17995,7 +17998,7 @@ async function verifySaasInventoryLocationConfirmations(confirmations = []) {
   saasVerifiedInventoryLocationConfirmations = verified;
 }
 
-function isSaasExactInventoryLocationConfirmation(card = {}, companyId = "", storeId = "") {
+function isSaasExactInventoryLocationConfirmation(card = {}, companyId = "", storeId = "", allowedStatuses = ["pending", "approved"]) {
   card = card && typeof card === "object" ? card : {};
   const item = card.item && typeof card.item === "object" && !Array.isArray(card.item) ? card.item : {};
   const payload = item.location_payload && typeof item.location_payload === "object" && !Array.isArray(item.location_payload)
@@ -18015,7 +18018,7 @@ function isSaasExactInventoryLocationConfirmation(card = {}, companyId = "", sto
       String(card.store_id || "").trim() === targetStoreId &&
       String(card.action_type || "") === "create_ebay_inventory_location" &&
       String(card.runtime_run_id || "") === "merchant_ebay_inventory_location_setup" &&
-      ["pending", "approved"].includes(String(card.status || "")) &&
+      (Array.isArray(allowedStatuses) ? allowedStatuses : []).includes(String(card.status || "")) &&
       saasVerifiedInventoryLocationConfirmations.has(card) &&
       String(item.source || "") === "merchant_ebay_inventory_location_setup" &&
       String(item.requested_step || "") === "inventory_location_confirmation_gate" &&
@@ -18073,6 +18076,37 @@ function saasExactApprovedInventoryLocationConfirmation() {
     (card) => String(card?.status || "") === "approved" && isSaasFreshApprovedInventoryLocationConfirmation(card),
   );
   return matches.length === 1 ? matches[0] : null;
+}
+
+function saasExactManualReconcileInventoryLocationConfirmation() {
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const storeId = String(activeSaasStore()?.store_id || "").trim();
+  const cards = Array.isArray(state.saasConfirmations) ? state.saasConfirmations : [];
+  const matches = cards.filter((card) => {
+    const confirmationId = String(card?.confirmation_id || "").trim();
+    const decidedAt = String(card?.decided_at || "").trim();
+    return Boolean(
+      isSaasExactInventoryLocationConfirmation(
+        card,
+        companyId,
+        storeId,
+        ["external_execution_processing_manual_reconcile"],
+      ) &&
+        confirmationId &&
+        cards.filter((candidate) => String(candidate?.confirmation_id || "").trim() === confirmationId).length === 1 &&
+        String(card?.decided_by || "").trim() &&
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(decidedAt) &&
+        Number.isFinite(Date.parse(decidedAt))
+    );
+  });
+  const activeSensitive = cards.filter(
+    (card) =>
+      String(card?.company_id || "").trim() === companyId &&
+      String(card?.store_id || "").trim() === storeId &&
+      String(card?.status || "") === "external_execution_processing_manual_reconcile" &&
+      isSaasInventoryLocationSensitiveConfirmation(card),
+  );
+  return matches.length === 1 && activeSensitive.length === 1 ? matches[0] : null;
 }
 
 function isSaasReadOnlyOAuthSensitiveConfirmation(card = {}) {
@@ -29086,7 +29120,74 @@ async function executeSaasApprovedInventoryLocation() {
     return true;
   } catch (error) {
     state.saasError = `库存位置执行未确认成功：${error.message}`;
+    await refreshSaasState({ silent: true }).catch(() => false);
     showActionToast("库存位置执行未确认成功。为避免重复写入，本页不会自动重试；请先只读核对 eBay 状态。");
+    return false;
+  } finally {
+    state.saasLoading = false;
+    renderSaasBackendPanel();
+  }
+}
+
+async function reconcileSaasInventoryLocation() {
+  if (!requireSaasProtectedSessionForAction()) return false;
+  const store = activeSaasStore();
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const storeId = String(store?.store_id || "").trim();
+  const confirmation = saasExactManualReconcileInventoryLocationConfirmation();
+  if (!companyId || !storeId || !confirmation || String(store?.platform || "").toLowerCase() !== "ebay") {
+    showActionToast("当前没有唯一、精确且属于当前店铺的待核对库存位置；系统没有重试写入。");
+    return false;
+  }
+  const confirmationId = String(confirmation.confirmation_id || "").trim();
+  const expectedKey = String(confirmation.item?.merchant_location_key || "").trim();
+  const attemptKey = `${companyId}:${storeId}:${confirmationId}`;
+  if (!confirmationId || !expectedKey || saasInventoryLocationReconciliationAttemptKeys.has(attemptKey)) {
+    showActionToast("本页已经核对过这次库存位置结果；系统不会重复请求或重新写入。");
+    return false;
+  }
+  saasInventoryLocationReconciliationAttemptKeys.add(attemptKey);
+  saasPendingPublishIntakeFormValues = snapshotSaasPublishIntakeFormValues() || saasPendingPublishIntakeFormValues;
+  state.saasLoading = true;
+  state.saasError = "";
+  renderSaasBackendPanel();
+  try {
+    const payload = await saasFetch(`/stores/${encodeURIComponent(storeId)}/ebay-inventory-location/reconcile`, {
+      method: "POST",
+      body: JSON.stringify({ confirmation_id: confirmationId }),
+    });
+    const reconciliation = payload.inventory_location_reconciliation || {};
+    if (
+      String(reconciliation.status || "") !== "inventory_location_created" ||
+      String(reconciliation.action_type || "") !== "create_ebay_inventory_location" ||
+      String(reconciliation.confirmation_id || "") !== confirmationId ||
+      String(reconciliation.company_id || "") !== companyId ||
+      String(reconciliation.store_id || "") !== storeId ||
+      String(reconciliation.merchant_location_key || "") !== expectedKey ||
+      reconciliation.location_write_completed !== true ||
+      reconciliation.reconciled_from_provider_read !== true ||
+      reconciliation.writes_to_ebay !== false ||
+      reconciliation.public_listing_created !== false ||
+      reconciliation.secret_exposed !== false
+    ) {
+      throw new Error("inventory_location_reconciliation_response_invalid");
+    }
+    saasPendingPublishIntakeFormValues = {
+      ...(saasPendingPublishIntakeFormValues || {}),
+      merchant_location_key: expectedKey,
+    };
+    state.saasConfirmations = (state.saasConfirmations || []).map((card) =>
+      String(card?.confirmation_id || "") === confirmationId ? { ...card, status: "executed" } : card,
+    );
+    const locationInput = document.querySelector('#saasPublishIntakeForm [name="merchant_location_key"]');
+    if (locationInput) locationInput.value = expectedKey;
+    runSaasPreTestFormCheck();
+    showActionToast("已通过 eBay 只读查询确认库存位置存在并回填；没有发起第二次写入。");
+    return true;
+  } catch (error) {
+    state.saasError = `库存位置只读核对未能确认：${error.message}`;
+    await refreshSaasState({ silent: true }).catch(() => false);
+    showActionToast("只读核对仍无法确认库存位置。系统保持暂停，不会自动重试写入。");
     return false;
   } finally {
     state.saasLoading = false;
@@ -31945,6 +32046,7 @@ function handleSaasAction(button) {
     "create-ebay-draft-confirmation",
     "create-ebay-inventory-location-confirmation",
     "execute-ebay-inventory-location",
+    "reconcile-ebay-inventory-location",
     "approve-first",
     "approve-confirmation",
     "revise-confirmation",
@@ -32000,6 +32102,10 @@ function handleSaasAction(button) {
   }
   if (action === "execute-ebay-inventory-location") {
     executeSaasApprovedInventoryLocation();
+    return;
+  }
+  if (action === "reconcile-ebay-inventory-location") {
+    reconcileSaasInventoryLocation();
     return;
   }
   if (action === "run-next-job") {

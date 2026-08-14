@@ -115,7 +115,9 @@ def main() -> int:
 
             def __init__(self) -> None:
                 self.calls: list[dict[str, Any]] = []
+                self.reconcile_calls: list[dict[str, Any]] = []
                 self.prepare_mode = "ready"
+                self.execute_mode = "success"
 
             def prepare_inventory_location(
                 self,
@@ -150,6 +152,16 @@ def main() -> int:
                         "location_payload": location_payload,
                     }
                 )
+                if self.execute_mode == "manual_reconcile":
+                    return {
+                        "status": "inventory_location_manual_reconcile",
+                        "action_type": ACTION,
+                        "task_id": confirmation.get("task_id"),
+                        "automatic_retry_allowed": False,
+                        "location_write_completed": False,
+                        "public_listing_created": False,
+                        "secret_exposed": False,
+                    }
                 return {
                     "status": "inventory_location_created",
                     "action_type": ACTION,
@@ -161,6 +173,48 @@ def main() -> int:
                     "audit": {
                         "real_execution": {
                             "inventory_location_created": True,
+                            "published_to_ebay": False,
+                        }
+                    },
+                }
+
+            def reconcile_inventory_location(
+                self,
+                *,
+                confirmation: dict[str, Any],
+                location_payload: dict[str, Any],
+                credential_boundary: dict[str, Any],
+                marketplace_id: str,
+            ) -> dict[str, Any]:
+                del credential_boundary, marketplace_id
+                if confirmation.get("status") != "external_execution_processing_manual_reconcile":
+                    return {
+                        "status": "inventory_location_reconcile_confirmation_invalid",
+                        "automatic_retry_allowed": False,
+                        "writes_to_ebay": False,
+                        "public_listing_created": False,
+                        "secret_exposed": False,
+                    }
+                self.reconcile_calls.append(
+                    {
+                        "confirmation_id": confirmation.get("confirmation_id"),
+                        "location_payload": location_payload,
+                    }
+                )
+                return {
+                    "status": "inventory_location_created",
+                    "action_type": ACTION,
+                    "task_id": confirmation.get("task_id"),
+                    "merchant_location_key": location_payload.get("merchantLocationKey"),
+                    "location_write_completed": True,
+                    "reconciled_from_provider_read": True,
+                    "writes_to_ebay": False,
+                    "public_listing_created": False,
+                    "secret_exposed": False,
+                    "audit": {
+                        "real_execution": {
+                            "inventory_location_created": True,
+                            "reconciled_from_provider_read": True,
                             "published_to_ebay": False,
                         }
                     },
@@ -482,6 +536,87 @@ def main() -> int:
             binding_stored = repository.get_confirmation(company_id=company_id, confirmation_id=deterministic_id) or {}
             if binding_execute_status != 409 or binding_stored.get("status") != "approved" or len(adapter.calls) != calls_before:
                 raise AssertionError("credential binding drift must fail in the atomic claim and preserve the approval")
+
+            reconcile_store = repository.create_store(
+                company_id=company_id,
+                user_id=user["user_id"],
+                payload={"platform": "ebay", "store_name": "Reconcile fixture", "marketplace": "EBAY_US"},
+            )
+            reconcile_intake_status, reconcile_intake_body = _post(
+                base_url,
+                f"/stores/{reconcile_store['store_id']}/ebay-inventory-location/confirmation",
+                {**_location_payload(), "merchant_location_key": "reconcile-location"},
+                token,
+            )
+            reconcile_id = str(
+                (reconcile_intake_body.get("inventory_location_confirmation") or {}).get("confirmation_id") or ""
+            )
+            if reconcile_intake_status != 201 or not reconcile_id:
+                raise AssertionError("reconciliation fixture must create one confirmation")
+            reconcile_approval_status, _ = _post(
+                base_url,
+                f"/confirmations/{reconcile_id}/decision",
+                {"decision": "approve", "note": "reconciliation fixture"},
+                token,
+            )
+            if reconcile_approval_status != 201:
+                raise AssertionError("reconciliation fixture approval failed")
+            adapter.execute_mode = "manual_reconcile"
+            uncertain_status, _ = _post(
+                base_url,
+                f"/stores/{reconcile_store['store_id']}/ebay-inventory-location/execute",
+                {"confirmation_id": reconcile_id},
+                token,
+            )
+            adapter.execute_mode = "success"
+            uncertain_confirmation = repository.get_confirmation(
+                company_id=company_id,
+                confirmation_id=reconcile_id,
+            ) or {}
+            if uncertain_status != 502 or uncertain_confirmation.get("status") != "external_execution_processing_manual_reconcile":
+                raise AssertionError("an uncertain location write must remain in manual reconcile without automatic retry")
+            write_count_before_reconcile = len(adapter.calls)
+            viewer_reconcile_status, _ = _post(
+                base_url,
+                f"/stores/{reconcile_store['store_id']}/ebay-inventory-location/reconcile",
+                {"confirmation_id": reconcile_id},
+                viewer_token,
+            )
+            if viewer_reconcile_status != 403 or adapter.reconcile_calls:
+                raise AssertionError("a viewer must not reconcile an uncertain provider write")
+            reconcile_status, reconcile_body = _post(
+                base_url,
+                f"/stores/{reconcile_store['store_id']}/ebay-inventory-location/reconcile",
+                {"confirmation_id": reconcile_id},
+                token,
+            )
+            reconcile_result = reconcile_body.get("inventory_location_reconciliation") or {}
+            if not (
+                reconcile_status == 200
+                and reconcile_result.get("status") == "inventory_location_created"
+                and reconcile_result.get("merchant_location_key") == "reconcile-location"
+                and reconcile_result.get("reconciled_from_provider_read") is True
+                and reconcile_result.get("writes_to_ebay") is False
+                and reconcile_result.get("public_listing_created") is False
+                and reconcile_result.get("secret_exposed") is False
+                and len(adapter.calls) == write_count_before_reconcile
+                and len(adapter.reconcile_calls) == 1
+                and (repository.get_confirmation(company_id=company_id, confirmation_id=reconcile_id) or {}).get("status")
+                == "executed"
+            ):
+                raise AssertionError(
+                    "read-only reconciliation must finalize one exact uncertain location without a second provider write: "
+                    f"status={reconcile_status} result={reconcile_result.get('status')} "
+                    f"writes={len(adapter.calls) - write_count_before_reconcile} reads={len(adapter.reconcile_calls)}"
+                )
+            replay_reconcile_status, _ = _post(
+                base_url,
+                f"/stores/{reconcile_store['store_id']}/ebay-inventory-location/reconcile",
+                {"confirmation_id": reconcile_id},
+                token,
+            )
+            if replay_reconcile_status != 409 or len(adapter.reconcile_calls) != 1:
+                raise AssertionError("an executed location reconciliation must be one-shot and issue no second provider read")
         finally:
             server.shutdown()
             server.server_close()

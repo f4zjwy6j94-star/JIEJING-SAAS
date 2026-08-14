@@ -872,6 +872,86 @@ class EbayWriteHttpAdapter:
             "secret_exposed": False,
         }
 
+    def reconcile_inventory_location(
+        self,
+        *,
+        confirmation: dict[str, Any],
+        location_payload: dict[str, Any],
+        credential_boundary: dict[str, Any],
+        marketplace_id: str,
+    ) -> dict[str, Any]:
+        """Read the exact location after an uncertain write; never retry it."""
+
+        if not _exact_inventory_location_confirmation(
+            confirmation=confirmation,
+            location_payload=location_payload,
+            required_status="external_execution_processing_manual_reconcile",
+        ):
+            return _inventory_location_blocked("inventory_location_reconcile_confirmation_invalid")
+        company_id = str(confirmation.get("company_id") or "")
+        store_id = str(confirmation.get("store_id") or "")
+        credential = _validated_unpublished_draft_credential_boundary(
+            credential_boundary=credential_boundary,
+            company_id=company_id,
+            store_id=store_id,
+        )
+        if not credential:
+            return _inventory_location_blocked("inventory_location_credential_boundary_not_ready")
+        token = self._resolve_access_token(
+            secret_ref_id=str(credential["connection"]["secret_ref"]),
+            company_id=company_id,
+            store_id=store_id,
+        )
+        if not token.get("ok"):
+            return _inventory_location_blocked("inventory_location_token_resolution_failed")
+        location_key = str(location_payload.get("merchantLocationKey") or "")
+        location_path = f"/sell/inventory/v1/location/{urllib.parse.quote(location_key, safe='')}"
+        inspection = self._get_json(
+            url=f"{_base_url(self.settings)}{location_path}",
+            access_token=str(token["access_token"]),
+            marketplace_id=marketplace_id,
+        )
+        if inspection.get("status") != "ok":
+            return {
+                **_inventory_location_blocked("inventory_location_reconcile_unconfirmed"),
+                "automatic_retry_allowed": False,
+                "reconciled_from_provider_read": True,
+            }
+        existing = inspection.get("json") if isinstance(inspection.get("json"), dict) else {}
+        if not _is_exact_inventory_location_match(existing=existing, expected=location_payload):
+            return {
+                **_inventory_location_blocked("inventory_location_reconcile_response_mismatch"),
+                "automatic_retry_allowed": False,
+                "reconciled_from_provider_read": True,
+            }
+        credential_binding = {
+            "connection_id_sha256": credential["connection_id_sha256"],
+            "credential_ref_sha256": credential["credential_ref_sha256"],
+            "oauth_request_id_sha256": credential["oauth_request_id_sha256"],
+            "seller_identity_sha256": credential["seller_identity_sha256"],
+        }
+        return {
+            "status": "inventory_location_created",
+            "action_type": "create_ebay_inventory_location",
+            "task_id": str(confirmation.get("task_id") or ""),
+            "merchant_location_key": location_key,
+            "location_write_completed": True,
+            "reconciled_from_provider_read": True,
+            "writes_to_ebay": False,
+            "public_listing_created": False,
+            "audit": {
+                "real_execution": {
+                    "inventory_location_created": True,
+                    "reconciled_from_provider_read": True,
+                    "published_to_ebay": False,
+                    "public_listing_created": False,
+                },
+                "credential_binding": credential_binding,
+                "secret_exposed": False,
+            },
+            "secret_exposed": False,
+        }
+
     def discard_inventory_location_preparation(self, prepared: Any) -> None:
         """Best-effort removal when the database claim loses a race."""
 
@@ -1902,6 +1982,22 @@ def _is_exact_missing_inventory_location(result: dict[str, Any]) -> bool:
         and str(error.get("domain") or "") == "API_INVENTORY"
         and str(error.get("category") or "") == "REQUEST"
         and not str(error.get("subdomain") or "")
+    )
+
+
+def _is_exact_inventory_location_match(*, existing: dict[str, Any], expected: dict[str, Any]) -> bool:
+    existing_location = existing.get("location") if isinstance(existing.get("location"), dict) else {}
+    expected_location = expected.get("location") if isinstance(expected.get("location"), dict) else {}
+    existing_address = existing_location.get("address") if isinstance(existing_location.get("address"), dict) else {}
+    expected_address = expected_location.get("address") if isinstance(expected_location.get("address"), dict) else {}
+    return bool(
+        str(existing.get("merchantLocationKey") or "") == str(expected.get("merchantLocationKey") or "")
+        and str(existing.get("name") or "") == str(expected.get("name") or "")
+        and existing.get("locationTypes") == expected.get("locationTypes") == ["WAREHOUSE"]
+        and str(existing_address.get("city") or "") == str(expected_address.get("city") or "")
+        and str(existing_address.get("stateOrProvince") or "")
+        == str(expected_address.get("stateOrProvince") or "")
+        and str(existing_address.get("country") or "") == str(expected_address.get("country") or "")
     )
 
 

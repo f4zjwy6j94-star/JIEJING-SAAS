@@ -3993,6 +3993,97 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._send_json({"inventory_location_execution": stored_result}, status=HTTPStatus.OK)
             return
 
+        if (
+            len(parts) == 4
+            and parts[0] == "stores"
+            and parts[2] == "ebay-inventory-location"
+            and parts[3] == "reconcile"
+        ):
+            if not self._require_permission(identity, "manage_connections"):
+                return
+            if not self._require_permission(identity, "execute_confirmed_action"):
+                return
+            body = self._read_json_body()
+            store_id = parts[1]
+            confirmation_id = str(body.get("confirmation_id") or "").strip()
+            if not confirmation_id:
+                self._send_error(HTTPStatus.CONFLICT, "ebay_inventory_location_reconciliation_required")
+                return
+            confirmation = self.repository.get_confirmation(
+                company_id=identity["company_id"],
+                confirmation_id=confirmation_id,
+            )
+            if not (
+                isinstance(confirmation, dict)
+                and str(confirmation.get("store_id") or "") == store_id
+                and str(confirmation.get("status") or "") == "external_execution_processing_manual_reconcile"
+                and str(confirmation.get("action_type") or "") == "create_ebay_inventory_location"
+            ):
+                self._send_error(HTTPStatus.CONFLICT, "ebay_inventory_location_reconciliation_required")
+                return
+            item = confirmation.get("item") if isinstance(confirmation, dict) and isinstance(confirmation.get("item"), dict) else {}
+            location_payload = item.get("location_payload") if isinstance(item.get("location_payload"), dict) else {}
+            store = self.repository.get_store_for_company(
+                company_id=identity["company_id"],
+                store_id=store_id,
+            )
+            if not store or str(store.get("platform") or "").strip().lower() != "ebay":
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            credential_boundary = self.repository.unpublished_draft_execution_credential_boundary(
+                company_id=identity["company_id"],
+                store_id=store_id,
+            )
+            result = self.ebay_write_adapter.reconcile_inventory_location(
+                confirmation=confirmation if isinstance(confirmation, dict) else {},
+                location_payload=location_payload,
+                credential_boundary=credential_boundary,
+                marketplace_id=str(store.get("marketplace") or "EBAY_US"),
+            )
+            if not (
+                isinstance(result, dict)
+                and result.get("status") == "inventory_location_created"
+                and result.get("action_type") == "create_ebay_inventory_location"
+                and result.get("merchant_location_key") == str(location_payload.get("merchantLocationKey") or "")
+                and result.get("location_write_completed") is True
+                and result.get("reconciled_from_provider_read") is True
+                and result.get("writes_to_ebay") is False
+                and result.get("public_listing_created") is False
+                and result.get("secret_exposed") is False
+            ):
+                self._send_json(
+                    {
+                        "inventory_location_reconciliation": {
+                            "status": str(result.get("status") or "inventory_location_reconcile_unconfirmed")
+                            if isinstance(result, dict)
+                            else "inventory_location_reconcile_unconfirmed",
+                            "automatic_retry_allowed": False,
+                            "writes_to_ebay": False,
+                            "public_listing_created": False,
+                            "secret_exposed": False,
+                        }
+                    },
+                    status=HTTPStatus.CONFLICT,
+                )
+                return
+            claimed_confirmation = {**confirmation, "external_execution_claimed": True}
+            stored_result = self.repository.save_execution_result(
+                confirmation=claimed_confirmation,
+                result=result,
+            )
+            self._send_json(
+                {
+                    "inventory_location_reconciliation": {
+                        **stored_result,
+                        "confirmation_id": confirmation_id,
+                        "company_id": identity["company_id"],
+                        "store_id": store_id,
+                    }
+                },
+                status=HTTPStatus.OK,
+            )
+            return
+
         if len(parts) == 4 and parts[0] == "stores" and parts[2] == "ebay-oauth" and parts[3] == "read-only-confirmation":
             if not self._require_permission(identity, "manage_connections"):
                 return

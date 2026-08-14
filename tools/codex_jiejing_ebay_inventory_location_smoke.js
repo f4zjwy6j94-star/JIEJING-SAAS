@@ -25,7 +25,7 @@ const locationInput = {
   location_types: ["WAREHOUSE"],
   address: { city: "Shenzhen", state_or_province: "Guangdong", country: "CN" },
 };
-const counters = { intake: 0, decision: 0, execute: 0, preflight: 0, genericExecute: 0 };
+const counters = { intake: 0, decision: 0, execute: 0, reconcile: 0, preflight: 0, genericExecute: 0 };
 let confirmations = [];
 
 function canonical(value) {
@@ -234,6 +234,32 @@ const server = http.createServer(async (req, res) => {
     } });
     return;
   }
+  if (req.method === "POST" && url.pathname === `/stores/${store.store_id}/ebay-inventory-location/reconcile`) {
+    counters.reconcile += 1;
+    const body = await readBody(req);
+    const card = confirmations.find((candidate) => candidate.confirmation_id === body.confirmation_id);
+    if (!card || card.status !== "external_execution_processing_manual_reconcile") {
+      sendJson(res, 409, { error: "exact_manual_reconcile_required" });
+      return;
+    }
+    confirmations = confirmations.map((candidate) => candidate.confirmation_id === body.confirmation_id
+      ? { ...candidate, status: "executed" }
+      : candidate);
+    sendJson(res, 200, { inventory_location_reconciliation: {
+      status: "inventory_location_created",
+      action_type: "create_ebay_inventory_location",
+      confirmation_id: body.confirmation_id,
+      company_id: companyId,
+      store_id: store.store_id,
+      merchant_location_key: locationInput.merchant_location_key,
+      location_write_completed: true,
+      reconciled_from_provider_read: true,
+      writes_to_ebay: false,
+      public_listing_created: false,
+      secret_exposed: false,
+    } });
+    return;
+  }
   if (req.method === "POST" && /\/preflight$/.test(url.pathname)) counters.preflight += 1;
   if (req.method === "POST" && /\/execute$/.test(url.pathname)) counters.genericExecute += 1;
   if (req.method === "POST") {
@@ -376,6 +402,29 @@ async function main() {
     }
     await assertNoConfirmationLeak(page, "confirmation-inventory-location-ui", consoleErrors);
     await page.close();
+
+    confirmations = [{
+      ...exactCard({ status: "external_execution_processing_manual_reconcile" }),
+      decided_by: userId,
+      decided_at: new Date().toISOString(),
+    }];
+    const reconcilePage = await openPage(context, base, consoleErrors);
+    const blockedExecute = reconcilePage.locator('[data-saas-action="execute-ebay-inventory-location"]:visible');
+    if (!(await blockedExecute.isDisabled())) {
+      throw new Error("manual-reconcile state must disable the provider execution action");
+    }
+    const reconcile = reconcilePage.locator('[data-saas-action="reconcile-ebay-inventory-location"]:visible');
+    await reconcile.waitFor({ state: "visible", timeout: 5000 });
+    if (await reconcile.isDisabled()) throw new Error("one exact manual-reconcile location must enable a read-only check");
+    const executeBeforeReconcile = counters.execute;
+    await reconcile.click();
+    await reconcilePage.waitForFunction(() => document.querySelector('#saasPublishIntakeForm [name="merchant_location_key"]')?.value === "shenzhen-warehouse", null, { timeout: 5000 });
+    await reconcilePage.evaluate(async () => reconcileSaasInventoryLocation());
+    if (counters.reconcile !== 1 || counters.execute !== executeBeforeReconcile) {
+      throw new Error("read-only reconciliation must run once without repeating the provider write");
+    }
+    await assertNoConfirmationLeak(reconcilePage, "confirmation-inventory-location-ui", consoleErrors);
+    await reconcilePage.close();
 
     for (const [name, cards] of [
       ["wrong-store", [exactCard({ storeId: wrongStoreId })]],

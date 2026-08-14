@@ -177,6 +177,20 @@ class LocationTransport:
         raise AssertionError(f"unexpected provider call: {method} {request.full_url}")
 
 
+class ExistingLocationTransport:
+    def __init__(self, payload: dict[str, Any] | None = None) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self.payload = payload or _payload()
+
+    def __call__(self, request: Any, timeout: float) -> tuple[int, dict[str, str], bytes]:
+        del timeout
+        method = request.get_method()
+        self.calls.append((method, request.full_url))
+        if method != "GET" or "/sell/inventory/v1/location/shenzhen-warehouse" not in request.full_url:
+            raise AssertionError(f"read-only reconciliation must never write: {method} {request.full_url}")
+        return 200, {"content-type": "application/json"}, json.dumps(self.payload).encode()
+
+
 def main() -> int:
     transport = LocationTransport()
     adapter = EbayWriteHttpAdapter(_settings(), transport=transport)
@@ -221,6 +235,64 @@ def main() -> int:
     )
     if replay.get("status") != "inventory_location_preparation_invalid" or len(transport.calls) != 2:
         raise AssertionError("the opaque inventory-location preparation must be one-shot")
+
+    reconcile_transport = ExistingLocationTransport()
+    reconcile_adapter = EbayWriteHttpAdapter(_settings(), transport=reconcile_transport)
+    reconcile_adapter._resolve_access_token = adapter._resolve_access_token  # type: ignore[method-assign]
+    reconciled = reconcile_adapter.reconcile_inventory_location(
+        confirmation=_confirmation("external_execution_processing_manual_reconcile"),
+        location_payload=_payload(),
+        credential_boundary=_credential_boundary(),
+        marketplace_id="EBAY_US",
+    )
+    if not (
+        reconciled.get("status") == "inventory_location_created"
+        and reconciled.get("action_type") == "create_ebay_inventory_location"
+        and reconciled.get("merchant_location_key") == "shenzhen-warehouse"
+        and reconciled.get("location_write_completed") is True
+        and reconciled.get("reconciled_from_provider_read") is True
+        and reconciled.get("writes_to_ebay") is False
+        and reconciled.get("public_listing_created") is False
+        and reconciled.get("secret_exposed") is False
+        and [method for method, _ in reconcile_transport.calls] == ["GET"]
+    ):
+        raise AssertionError("manual-reconcile recovery must prove the exact location using one GET and zero writes")
+
+    absent_transport = LocationTransport()
+    absent_adapter = EbayWriteHttpAdapter(_settings(), transport=absent_transport)
+    absent_adapter._resolve_access_token = adapter._resolve_access_token  # type: ignore[method-assign]
+    absent = absent_adapter.reconcile_inventory_location(
+        confirmation=_confirmation("external_execution_processing_manual_reconcile"),
+        location_payload=_payload(),
+        credential_boundary=_credential_boundary(),
+        marketplace_id="EBAY_US",
+    )
+    if not (
+        absent.get("status") == "inventory_location_reconcile_unconfirmed"
+        and absent.get("automatic_retry_allowed") is False
+        and absent.get("writes_to_ebay") is False
+        and absent.get("public_listing_created") is False
+        and absent.get("secret_exposed") is False
+        and [method for method, _ in absent_transport.calls] == ["GET"]
+    ):
+        raise AssertionError("an absent or unknown location must remain paused with one GET and zero writes")
+
+    mismatch_transport = ExistingLocationTransport({**_payload(), "name": "Another Warehouse"})
+    mismatch_adapter = EbayWriteHttpAdapter(_settings(), transport=mismatch_transport)
+    mismatch_adapter._resolve_access_token = adapter._resolve_access_token  # type: ignore[method-assign]
+    mismatch = mismatch_adapter.reconcile_inventory_location(
+        confirmation=_confirmation("external_execution_processing_manual_reconcile"),
+        location_payload=_payload(),
+        credential_boundary=_credential_boundary(),
+        marketplace_id="EBAY_US",
+    )
+    if not (
+        mismatch.get("status") == "inventory_location_reconcile_response_mismatch"
+        and mismatch.get("automatic_retry_allowed") is False
+        and mismatch.get("writes_to_ebay") is False
+        and [method for method, _ in mismatch_transport.calls] == ["GET"]
+    ):
+        raise AssertionError("a same-key location with different business fields must remain blocked without writes")
 
     attacked_transport = LocationTransport(missing_error_id=25713)
     attacked_adapter = EbayWriteHttpAdapter(_settings(), transport=attacked_transport)

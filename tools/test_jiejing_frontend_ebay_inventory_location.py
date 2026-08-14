@@ -28,6 +28,10 @@ def main() -> None:
             "Listing must expose a separate approved execution action",
         ),
         (
+            'data-saas-action="reconcile-ebay-inventory-location"',
+            "Listing must expose a read-only reconciliation action after an uncertain write",
+        ),
+        (
             'async function createSaasInventoryLocationConfirmation()',
             "the frontend must implement the dedicated confirmation intake",
         ),
@@ -42,6 +46,14 @@ def main() -> None:
         (
             '/ebay-inventory-location/execute',
             "the second action must call the one-shot execution route",
+        ),
+        (
+            'async function reconcileSaasInventoryLocation()',
+            "the frontend must implement the read-only reconciliation step",
+        ),
+        (
+            '/ebay-inventory-location/reconcile',
+            "the reconciliation action must call the dedicated backend route",
         ),
         (
             'isSaasExactInventoryLocationConfirmation',
@@ -72,6 +84,10 @@ def main() -> None:
             "one page may attempt an exact approved location only once",
         ),
         (
+            'saasInventoryLocationReconciliationAttemptKeys',
+            "one page may reconcile an exact uncertain location only once",
+        ),
+        (
             'activeSaasStore()',
             "the inventory-location flow must bind the active store",
         ),
@@ -91,6 +107,23 @@ def main() -> None:
         "/ebay-inventory-location/execute"
     ):
         raise AssertionError("the page-local one-shot claim must happen before the execution POST")
+
+    reconcile_start = app.index("async function reconcileSaasInventoryLocation()")
+    reconcile_end = app.index("async function", reconcile_start + 20)
+    reconcile_flow = app[reconcile_start:reconcile_end]
+    if "/ebay-inventory-location/execute" in reconcile_flow:
+        raise AssertionError("read-only reconciliation must never call the provider execution route")
+    if reconcile_flow.index("saasInventoryLocationReconciliationAttemptKeys.add(attemptKey)") >= reconcile_flow.index(
+        "/ebay-inventory-location/reconcile"
+    ):
+        raise AssertionError("the page-local reconciliation claim must happen before the read-only request")
+    for marker in [
+        'reconciliation.reconciled_from_provider_read !== true',
+        'reconciliation.writes_to_ebay !== false',
+        'reconciliation.public_listing_created !== false',
+        'reconciliation.secret_exposed !== false',
+    ]:
+        require(reconcile_flow, marker, "read-only reconciliation must validate every no-write response flag")
 
     approve_start = app.index("async function approveFirstSaasConfirmation")
     approve_end = app.index("async function loginSaasBackendSession", approve_start)
