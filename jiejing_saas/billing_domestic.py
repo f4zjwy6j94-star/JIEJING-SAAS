@@ -1405,10 +1405,10 @@ def build_domestic_billing_operations_snapshot(
                 continue
             expected_until = _billing_order_entitlement_until(order)
             entitlement_covers_order = bool(
-                entitlement_active
-                and expected_until is not None
+                expected_until is not None
                 and subscription_active_until is not None
                 and subscription_active_until >= expected_until
+                and (entitlement_active or expected_until <= current)
             )
             if not entitlement_covers_order:
                 incidents.append(

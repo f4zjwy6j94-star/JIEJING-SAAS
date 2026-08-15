@@ -51,6 +51,81 @@ def main() -> int:
     other_user_id = str(other["user"]["user_id"])
     now = datetime(2026, 7, 14, 4, 0, tzinfo=timezone.utc)
 
+    historical = repository.create_user_with_company(
+        email="billing-operations-historical@example.test",
+        password="Billing-operations-historical-2026",
+        company_name="Billing Operations Historical",
+    )
+    historical_company_id = str(historical["company"]["company_id"])
+    historical_user_id = str(historical["user"]["user_id"])
+    historical_active_until = datetime.now(timezone.utc) + timedelta(days=1)
+    _create_paid_order(
+        repository,
+        order_id="domestic_historical_fulfilled_1",
+        company_id=historical_company_id,
+        user_id=historical_user_id,
+        active_until=historical_active_until,
+        verified_payment=True,
+    )
+    historical_applied = repository.apply_billing_webhook_event(
+        event={
+            "provider": "wechat_pay_native",
+            "event_id": "domestic-historical-fulfilled-event-1",
+            "event_type": "payment_succeeded",
+            "supported_event": True,
+            "company_id": historical_company_id,
+            "provider_customer_id": "historical-merchant-fixture",
+            "provider_subscription_id": "domestic_historical_fulfilled_1",
+            "provider_plan_id": "wechat_native_starter_9900_30d",
+            "plan_key": "starter",
+            "subscription_status": "active",
+            "duration_days": 30,
+            "active_until": historical_active_until.isoformat(),
+            "quota_recalculation_required": True,
+            "raw_payload_persisted": False,
+            "raw_signature_persisted": False,
+            "secret_exposed": False,
+        }
+    )
+    if historical_applied.get("status") != "applied":
+        return fail(f"historical paid entitlement fixture was not applied: {historical_applied}")
+    historical_expired = repository.apply_billing_webhook_event(
+        event={
+            "provider": "wechat_pay_native",
+            "event_id": "domestic-historical-expired-event-1",
+            "event_type": "subscription_expired",
+            "supported_event": True,
+            "company_id": historical_company_id,
+            "provider_customer_id": "historical-merchant-fixture",
+            "provider_subscription_id": "domestic_historical_fulfilled_1",
+            "provider_plan_id": "wechat_native_starter_9900_30d",
+            "plan_key": "starter",
+            "subscription_status": "expired",
+            "duration_days": 30,
+            "active_until": historical_active_until.isoformat(),
+            "quota_recalculation_required": True,
+            "raw_payload_persisted": False,
+            "raw_signature_persisted": False,
+            "secret_exposed": False,
+        }
+    )
+    if historical_expired.get("status") != "applied":
+        return fail(f"historical entitlement expiry fixture was not applied: {historical_expired}")
+    historical_snapshot = build_domestic_billing_operations_snapshot(
+        repository,
+        company_id=historical_company_id,
+        now=historical_active_until + timedelta(days=1),
+    )
+    if (
+        historical_snapshot.get("status") != "healthy"
+        or historical_snapshot.get("action_required_count") != 0
+        or historical_snapshot.get("incidents")
+    ):
+        return fail(
+            "a paid order whose full entitlement window elapsed must remain fulfilled without a recovery incident: "
+            f"{historical_snapshot}"
+        )
+
     expired_order = _create_order(
         repository,
         order_id="domestic_expired_ops_1",
@@ -194,6 +269,7 @@ def _create_paid_order(
     company_id: str,
     user_id: str,
     active_until: datetime,
+    verified_payment: bool = False,
 ) -> dict[str, Any]:
     created = _create_order(
         repository,
@@ -217,6 +293,8 @@ def _create_paid_order(
             "currency": "CNY",
             "entitlement_active_from": active_from.isoformat(),
             "entitlement_active_until": active_until.isoformat(),
+            "signature_verified": True if verified_payment else False,
+            "verification_source": "signed_callback" if verified_payment else "",
             "secret_exposed": False,
         },
     )
