@@ -534,7 +534,11 @@ async function openAccountSettingsPage(context, base, consoleErrors) {
   );
   await showAccountSettings(page);
   await page.locator('[data-saas-action="refresh"]').first().click();
-  await page.waitForTimeout(150);
+  await page.waitForFunction(
+    () => state.saasLoading === false && state.saasConfirmationsLiveLoaded === true,
+    null,
+    { timeout: 10000 },
+  );
   return page;
 }
 
