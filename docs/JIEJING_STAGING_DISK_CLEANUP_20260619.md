@@ -99,13 +99,16 @@ deployment passes its local container health check:
 - keep the newest `8` `output/staging-patch-backups/[timestamp]` directories
 - keep the newest `5` `github-action-backups/pre-github-*` directories
 - keep the newest `5` `github-action-releases/github-*` directories
+- keep the newest `20` `github-action-release-archives/github-*.tar.gz` files;
+  older release archives are reproducible from the immutable Git commit and are
+  outside the bounded local rollback window
 - remove only unused Docker builder cache older than `1` hour; current staging
   builds already use `--no-cache`, so retaining older build cache has no runtime
   or build-speed value
 - retain the existing newest `4` `/tmp/jiejing-public-staging-*` artifacts
 
 The cleanup resolves and validates every deletion candidate beneath one of the
-three exact deployment roots. It refuses non-canonical app roots and reports
+four exact deployment roots. It refuses non-canonical app roots and reports
 before/after filesystem evidence in the deploy result.
 
 Explicit exclusions remain unchanged: no Docker volume prune, no Docker system

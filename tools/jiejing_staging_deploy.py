@@ -57,6 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--remote-patch-backup-keep", type=int, default=8)
     parser.add_argument("--remote-runner-backup-keep", type=int, default=5)
     parser.add_argument("--remote-runner-release-keep", type=int, default=5)
+    parser.add_argument("--remote-runner-archive-keep", type=int, default=20)
     parser.add_argument("--remote-build-cache-until-hours", type=int, default=1)
     parser.add_argument("--skip-remote-temp-cleanup", action="store_true")
     parser.add_argument("--skip-remote-deploy-artifact-cleanup", action="store_true")
@@ -72,7 +73,12 @@ def main() -> int:
         return fail(f"ssh_key_not_found: {args.ssh_key}")
     if args.remote_temp_keep < 1:
         return fail("remote_temp_keep_must_be_positive")
-    if min(args.remote_patch_backup_keep, args.remote_runner_backup_keep, args.remote_runner_release_keep) < 1:
+    if min(
+        args.remote_patch_backup_keep,
+        args.remote_runner_backup_keep,
+        args.remote_runner_release_keep,
+        args.remote_runner_archive_keep,
+    ) < 1:
         return fail("remote_deploy_artifact_keep_must_be_positive")
     if not 1 <= args.remote_build_cache_until_hours <= 168:
         return fail("remote_build_cache_until_hours_out_of_range")
@@ -427,11 +433,13 @@ def build_remote_deploy_artifact_cleanup_script(args: argparse.Namespace) -> str
     patch_root = f"{app_path}/output/staging-patch-backups"
     runner_backup_root = "/opt/jiejing-staging/github-action-backups"
     runner_release_root = "/opt/jiejing-staging/github-action-releases"
+    runner_archive_root = "/opt/jiejing-staging/github-action-release-archives"
     patch_keep = int(args.remote_patch_backup_keep)
     runner_backup_keep = int(args.remote_runner_backup_keep)
     runner_release_keep = int(args.remote_runner_release_keep)
+    runner_archive_keep = int(args.remote_runner_archive_keep)
     cache_hours = int(args.remote_build_cache_until_hours)
-    if min(patch_keep, runner_backup_keep, runner_release_keep, cache_hours) < 1 or cache_hours > 168:
+    if min(patch_keep, runner_backup_keep, runner_release_keep, runner_archive_keep, cache_hours) < 1 or cache_hours > 168:
         raise ValueError("remote deploy artifact cleanup limits are invalid")
 
     return f"""
@@ -482,11 +490,55 @@ retain_newest() {{
   printf 'REMOTE_DEPLOY_CLEANUP_%s_BYTES_CANDIDATE=%s\\n' "$label" "$bytes_candidate"
 }}
 
+retain_newest_file() {{
+  label="$1"
+  root="$2"
+  name_pattern="$3"
+  keep="$4"
+  if [[ ! -d "$root" ]]; then
+    printf 'REMOTE_DEPLOY_CLEANUP_%s_TOTAL=0\\n' "$label"
+    printf 'REMOTE_DEPLOY_CLEANUP_%s_DELETED=0\\n' "$label"
+    return 0
+  fi
+  resolved_root="$(readlink -f -- "$root" 2>/dev/null || true)"
+  if [[ "$resolved_root" != "{runner_archive_root}" ]]; then
+    echo "REFUSE_DEPLOY_CLEANUP_FILE_ROOT=$resolved_root" >&2
+    exit 34
+  fi
+  mapfile -t entries < <(find "$resolved_root" -mindepth 1 -maxdepth 1 -type f -name "$name_pattern" -printf '%T@ %p\\n' 2>/dev/null | sort -nr | awk '{{ $1=""; sub(/^ /,""); print }}')
+  count="${{#entries[@]}}"
+  deleted=0
+  bytes_candidate=0
+  if (( count > keep )); then
+    for ((i=keep; i<count; i++)); do
+      candidate="${{entries[$i]}}"
+      candidate_real="$(readlink -f -- "$candidate" 2>/dev/null || true)"
+      case "$label:$candidate_real" in
+        runner_archives:"$resolved_root"/github-*.tar.gz) ;;
+        *) echo "REFUSE_DEPLOY_CLEANUP_FILE_CANDIDATE=$label:$candidate_real" >&2; exit 35 ;;
+      esac
+      if [[ -z "$candidate_real" || ! -f "$candidate_real" ]]; then
+        echo "REFUSE_DEPLOY_CLEANUP_FILE_MISSING=$candidate_real" >&2
+        exit 36
+      fi
+      size="$(stat -c '%s' -- "$candidate_real" 2>/dev/null || true)"
+      bytes_candidate=$((bytes_candidate + ${{size:-0}}))
+      rm -f -- "$candidate_real"
+      deleted=$((deleted + 1))
+    done
+  fi
+  printf 'REMOTE_DEPLOY_CLEANUP_%s_TOTAL=%s\\n' "$label" "$count"
+  printf 'REMOTE_DEPLOY_CLEANUP_%s_KEEP=%s\\n' "$label" "$keep"
+  printf 'REMOTE_DEPLOY_CLEANUP_%s_DELETED=%s\\n' "$label" "$deleted"
+  printf 'REMOTE_DEPLOY_CLEANUP_%s_BYTES_CANDIDATE=%s\\n' "$label" "$bytes_candidate"
+}}
+
 echo "REMOTE_DEPLOY_CLEANUP_DISK_BEFORE"
 df -hPT -- / /tmp {app_path}
 retain_newest "patch_backups" "{patch_root}" "[0-9]*" "{patch_keep}"
 retain_newest "runner_backups" "{runner_backup_root}" "pre-github-*" "{runner_backup_keep}"
 retain_newest "runner_releases" "{runner_release_root}" "github-*" "{runner_release_keep}"
+retain_newest_file "runner_archives" "{runner_archive_root}" "github-*.tar.gz" "{runner_archive_keep}"
 if command -v docker >/dev/null 2>&1; then
   docker builder prune --all --force --filter 'until={cache_hours}h'
   echo "REMOTE_DEPLOY_CLEANUP_BUILD_CACHE=pruned_unused_older_than_{cache_hours}h"
@@ -536,6 +588,7 @@ def _cleanup_remote_deploy_artifacts(args: argparse.Namespace) -> dict[str, Any]
         "patch_backup_keep": args.remote_patch_backup_keep,
         "runner_backup_keep": args.remote_runner_backup_keep,
         "runner_release_keep": args.remote_runner_release_keep,
+        "runner_archive_keep": args.remote_runner_archive_keep,
         "build_cache_until_hours": args.remote_build_cache_until_hours,
         "stdout_tail": completed.stdout[-5000:],
         "stderr_tail": completed.stderr[-2000:],

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
+import subprocess
 from argparse import Namespace
 from pathlib import Path
 
@@ -75,6 +77,8 @@ def main() -> int:
         return fail("successful deploy output must preserve the disk preflight evidence")
     if '"--remote-build-cache-until-hours", type=int, default=1' not in source:
         return fail("staging deploy must prune unused build cache older than one hour by default")
+    if '"--remote-runner-archive-keep", type=int, default=20' not in source:
+        return fail("staging deploy must keep a bounded set of compressed runner release archives")
     if module._operation_timeout_seconds(Namespace(timeout=30)) < 600:
         return fail("remote no-cache image builds must have at least ten minutes without weakening the SSH connect timeout")
 
@@ -84,6 +88,7 @@ def main() -> int:
             remote_patch_backup_keep=8,
             remote_runner_backup_keep=5,
             remote_runner_release_keep=5,
+            remote_runner_archive_keep=20,
             remote_build_cache_until_hours=1,
         )
     )
@@ -91,9 +96,12 @@ def main() -> int:
         "/opt/jiejing-staging/app/output/staging-patch-backups",
         "/opt/jiejing-staging/github-action-backups",
         "/opt/jiejing-staging/github-action-releases",
+        "/opt/jiejing-staging/github-action-release-archives",
         'retain_newest "patch_backups"',
         'retain_newest "runner_backups"',
         'retain_newest "runner_releases"',
+        'retain_newest_file "runner_archives"',
+        '"github-*.tar.gz" "20"',
         "docker builder prune --all --force --filter 'until=1h'",
         "REMOTE_DEPLOY_CLEANUP_STATUS=completed",
         "REMOTE_DEPLOY_CLEANUP_DISK_AFTER",
@@ -101,6 +109,18 @@ def main() -> int:
     missing_cleanup_markers = [marker for marker in required_cleanup_markers if marker not in cleanup_script]
     if missing_cleanup_markers:
         return fail("deploy artifact cleanup is incomplete: " + ",".join(missing_cleanup_markers))
+    bash = shutil.which("bash")
+    if bash:
+        syntax = subprocess.run(
+            [bash, "-n"],
+            input=cleanup_script.encode("utf-8"),
+            capture_output=True,
+            check=False,
+        )
+        if syntax.returncode != 0:
+            safe_stderr = (syntax.stderr or b"").decode("utf-8", "backslashreplace").strip()
+            safe_stderr = safe_stderr.encode("ascii", "backslashreplace").decode("ascii")
+            return fail(f"deploy artifact cleanup must be valid bash: {safe_stderr}")
     forbidden_cleanup_markers = [
         "docker system prune",
         "docker volume prune",
@@ -118,6 +138,7 @@ def main() -> int:
                 remote_patch_backup_keep=8,
                 remote_runner_backup_keep=5,
                 remote_runner_release_keep=5,
+                remote_runner_archive_keep=20,
                 remote_build_cache_until_hours=1,
             )
         )
