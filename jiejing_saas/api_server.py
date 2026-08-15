@@ -3925,16 +3925,34 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not store or str(store.get("platform") or "").strip().lower() != "ebay":
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
                 return
-            credential_boundary = self.repository.unpublished_draft_execution_credential_boundary(
-                company_id=identity["company_id"],
-                store_id=store_id,
-            )
-            prepared = self.ebay_write_adapter.prepare_inventory_location(
-                confirmation=confirmation if isinstance(confirmation, dict) else {},
-                location_payload=location_payload,
-                credential_boundary=credential_boundary,
-                marketplace_id=str(store.get("marketplace") or "EBAY_US"),
-            )
+            try:
+                credential_boundary = self.repository.unpublished_draft_execution_credential_boundary(
+                    company_id=identity["company_id"],
+                    store_id=store_id,
+                )
+                prepared = self.ebay_write_adapter.prepare_inventory_location(
+                    confirmation=confirmation if isinstance(confirmation, dict) else {},
+                    location_payload=location_payload,
+                    credential_boundary=credential_boundary,
+                    marketplace_id=str(store.get("marketplace") or "EBAY_US"),
+                )
+            except Exception as exc:
+                if self._handle_service_dependency_exception(exc):
+                    return
+                self._log_ebay_inventory_location_execution_error("preflight", exc)
+                self._send_json(
+                    {
+                        "inventory_location_execution": {
+                            "status": "inventory_location_preflight_error",
+                            "location_write_started": False,
+                            "automatic_retry_allowed": False,
+                            "public_listing_created": False,
+                            "secret_exposed": False,
+                        }
+                    },
+                    status=HTTPStatus.BAD_GATEWAY,
+                )
+                return
             if isinstance(prepared, dict):
                 self._send_json(
                     {
@@ -9370,6 +9388,35 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             event = {
                 "event": "oauth_plan_exact_approval_rejected",
                 "diagnostic_code": safe_code,
+                "secret_exposed": False,
+            }
+            sys.stderr.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+        except Exception:
+            return
+
+    def _log_ebay_inventory_location_execution_error(self, stage: str, exc: Exception) -> None:
+        try:
+            safe_stage = stage if stage in {"preflight", "claim", "provider_write"} else "unknown"
+            candidate = exc.__class__.__name__
+            safe_error_type = (
+                candidate
+                if candidate
+                in {
+                    "AttributeError",
+                    "KeyError",
+                    "OSError",
+                    "RuntimeError",
+                    "TypeError",
+                    "ValueError",
+                }
+                else "unknown"
+            )
+            event = {
+                "event": "ebay_inventory_location_execution_error",
+                "stage": safe_stage,
+                "error_type": safe_error_type,
+                "request_data_logged": False,
+                "exception_message_logged": False,
                 "secret_exposed": False,
             }
             sys.stderr.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")

@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import json
 import hashlib
+import io
 import sys
 import tempfile
 import threading
 import urllib.error
 import urllib.request
+from contextlib import redirect_stderr
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
@@ -130,6 +132,8 @@ def main() -> int:
                 del location_payload, credential_boundary, marketplace_id
                 if confirmation.get("status") != "approved":
                     return {"status": "inventory_location_approval_invalid", "secret_exposed": False}
+                if self.prepare_mode == "raise_sentinel":
+                    raise RuntimeError("inventory-location-preflight-secret-sentinel")
                 if self.prepare_mode == "blocked":
                     return {"status": "inventory_location_preflight_blocked", "secret_exposed": False}
                 return self.Handle(confirmation, bad_binding=self.prepare_mode == "bad_binding")
@@ -380,6 +384,38 @@ def main() -> int:
             )
             if viewer_execute_status != 403 or adapter.calls:
                 raise AssertionError("a viewer without execute_confirmed_action must not reach the provider adapter")
+
+            adapter.prepare_mode = "raise_sentinel"
+            diagnostic_stderr = io.StringIO()
+            with redirect_stderr(diagnostic_stderr):
+                diagnostic_status, diagnostic_body = _post(
+                    base_url,
+                    f"/stores/{store['store_id']}/ebay-inventory-location/execute",
+                    {"confirmation_id": confirmation_id},
+                    token,
+                )
+            diagnostic = diagnostic_body.get("inventory_location_execution") or {}
+            diagnostic_log = diagnostic_stderr.getvalue()
+            if not (
+                diagnostic_status == 502
+                and diagnostic.get("status") == "inventory_location_preflight_error"
+                and diagnostic.get("location_write_started") is False
+                and diagnostic.get("automatic_retry_allowed") is False
+                and diagnostic.get("public_listing_created") is False
+                and diagnostic.get("secret_exposed") is False
+                and repository.get_confirmation(company_id=company_id, confirmation_id=confirmation_id).get("status")
+                == "approved"
+                and not adapter.calls
+                and diagnostic_log.count('"event":"ebay_inventory_location_execution_error"') == 1
+                and '"stage":"preflight"' in diagnostic_log
+                and '"error_type":"RuntimeError"' in diagnostic_log
+                and "inventory-location-preflight-secret-sentinel" not in diagnostic_log
+                and "inventory-location-preflight-secret-sentinel" not in json.dumps(diagnostic_body)
+            ):
+                raise AssertionError(
+                    "an unexpected preflight exception must preserve the approval and emit one value-free 502 diagnostic"
+                )
+            adapter.prepare_mode = "ready"
 
             with ThreadPoolExecutor(max_workers=4) as pool:
                 execute_results = list(
