@@ -483,7 +483,7 @@ def _run_production_completion(temp_root: Path) -> int:
     provider_disconnected = copy.deepcopy(canonical_launch)
     provider_disconnected["provider_checkout_ready"] = False
     precedence_cases.append(
-        ("provider", provider_disconnected, "merchant_payment_provider_connection_not_ready")
+        ("provider", provider_disconnected, "merchant_payment_provider_runtime_activation_pending")
     )
     nonproduction = copy.deepcopy(canonical_launch)
     nonproduction["production_environment"] = False
@@ -512,6 +512,38 @@ def _run_production_completion(temp_root: Path) -> int:
     configuration_public = _public_status_for_launch(settings, repository, plan, configuration_incomplete)
     if configuration_public.get("payment_path_status") != "configuration_in_progress":
         return fail(f"historical proof must not hide current provider configuration loss: {configuration_public}")
+
+    provider_activation_public = _public_status_for_launch(settings, repository, plan, provider_disconnected)
+    if (
+        provider_activation_public.get("payment_path_status") != "provider_activation_pending"
+        or provider_activation_public.get("next_paid_launch_blocker")
+        != "merchant_payment_provider_runtime_activation_pending"
+        or provider_activation_public.get("provider_configured") is not True
+        or provider_activation_public.get("mainland_payment_ready_for_owner_approval") is not False
+        or provider_activation_public.get("charge_now_allowed") is not False
+    ):
+        return fail(
+            "a fully configured provider with controlled acceptance must report runtime activation pending, "
+            f"not a broken merchant connection: {provider_activation_public}"
+        )
+
+    unverified_provider = copy.deepcopy(provider_disconnected)
+    unverified_provider["controlled_acceptance_proven"] = False
+    unverified_provider["acceptance_evidence"]["controlled_acceptance_proven"] = False
+    unverified_provider["acceptance_evidence"]["verified_paid_order_count"] = 0
+    unverified_provider_public = _public_status_for_launch(settings, repository, plan, unverified_provider)
+    if (
+        unverified_provider_public.get("payment_path_status") != "provider_connection_in_progress"
+        or unverified_provider_public.get("next_paid_launch_blocker")
+        != "merchant_payment_provider_connection_not_ready"
+        or unverified_provider_public.get("provider_configured") is not False
+        or unverified_provider_public.get("mainland_payment_ready_for_owner_approval") is not False
+        or unverified_provider_public.get("charge_now_allowed") is not False
+    ):
+        return fail(
+            "configuration without controlled acceptance must remain an unverified provider connection: "
+            f"{unverified_provider_public}"
+        )
 
     ready_public = _public_status_for_launch(settings, repository, plan, canonical_launch)
     if ready_public.get("next_paid_launch_blocker") != "merchant_payment_public_cutover_not_approved":

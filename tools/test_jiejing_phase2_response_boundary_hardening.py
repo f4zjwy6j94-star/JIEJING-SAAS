@@ -205,6 +205,7 @@ def isolated_product_readiness(plan: dict[str, Any]) -> dict[str, Any]:
         environment="staging",
         is_production_like=True,
         effective_real_platform_writes_enabled=False,
+        effective_ebay_draft_save_enabled=False,
         requested_real_platform_writes=False,
     )
     with ExitStack() as stack:

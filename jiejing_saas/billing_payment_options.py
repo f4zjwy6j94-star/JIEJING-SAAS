@@ -319,7 +319,9 @@ def validate_mainland_payment_launch_for_public(value: Any) -> dict[str, Any]:
     if not canonical_valid:
         return unavailable
 
-    provider_configured = configuration_complete and provider_checkout_marker is True
+    provider_configured = configuration_complete and (
+        provider_checkout_marker is True or controlled_acceptance_proven
+    )
     if not configuration_complete:
         blocker = "merchant_payment_provider_configuration_incomplete"
         payment_status = "configuration_in_progress"
@@ -330,6 +332,11 @@ def validate_mainland_payment_launch_for_public(value: Any) -> dict[str, Any]:
         payment_status = "backend_safety_controls_in_progress"
         domestic_status = "backend_safety_controls_in_progress"
         merchant_status = "backend_safety_controls_in_progress"
+    elif provider_checkout_marker is not True and controlled_acceptance_proven:
+        blocker = "merchant_payment_provider_runtime_activation_pending"
+        payment_status = "provider_activation_pending"
+        domestic_status = "provider_activation_pending"
+        merchant_status = "provider_activation_pending"
     elif provider_checkout_marker is not True:
         blocker = "merchant_payment_provider_connection_not_ready"
         payment_status = "provider_connection_in_progress"

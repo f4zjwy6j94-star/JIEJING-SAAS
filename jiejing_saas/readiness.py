@@ -36,6 +36,7 @@ from .vault_adapter import build_vault_adapter_contract
 _PRIVATE_BETA_PAID_LAUNCH_ONLY_BLOCKERS = frozenset(
     {
         "merchant_payment_provider_connection_not_ready",
+        "merchant_payment_provider_runtime_activation_pending",
         "merchant_payment_production_environment_required",
         "merchant_payment_refund_not_ready",
         "merchant_payment_controlled_acceptance_not_proven",

@@ -995,6 +995,7 @@ def _public_safe_billing_summary(value: Any) -> dict[str, Any]:
         "configuration_in_progress",
         "backend_safety_controls_in_progress",
         "provider_connection_in_progress",
+        "provider_activation_pending",
         "production_environment_pending",
         "refund_controls_pending",
         "controlled_acceptance_pending",
@@ -1005,6 +1006,7 @@ def _public_safe_billing_summary(value: Any) -> dict[str, Any]:
         "configuration_in_progress",
         "backend_safety_controls_in_progress",
         "provider_connection_in_progress",
+        "provider_activation_pending",
         "production_environment_pending",
         "refund_controls_pending",
         "controlled_acceptance_pending",
@@ -1029,6 +1031,12 @@ def _public_safe_billing_summary(value: Any) -> dict[str, Any]:
             "merchant_payment_provider_connection_not_ready",
             False,
             False,
+        ),
+        "provider_activation_pending": (
+            "provider_activation_pending",
+            "merchant_payment_provider_runtime_activation_pending",
+            False,
+            True,
         ),
         "production_environment_pending": (
             "production_environment_pending",
