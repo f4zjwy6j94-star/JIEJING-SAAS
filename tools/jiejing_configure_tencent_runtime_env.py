@@ -280,6 +280,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Record a completed encrypted Vault backup and isolated restore/unseal/sentinel drill.",
     )
     parser.add_argument(
+        "--record-vault-restore-drill-evidence",
+        action="store_true",
+        help=(
+            "Record an actually completed encrypted Vault backup and isolated restore/unseal/sentinel drill "
+            "without claiming the production 3-share/2-threshold offline-custody boundary."
+        ),
+    )
+    parser.add_argument(
         "--vault-backup-artifact-id-env",
         help="Read the verified private backup artifact identifier from this process env var.",
     )
@@ -434,17 +442,24 @@ def _build_updates(args: argparse.Namespace, existing: dict[str, str]) -> dict[s
         updates["JIEJING_BACKUP_ALERTS_CONFIGURED"] = "true"
     if args.vault_backup_policy_configured:
         updates["JIEJING_VAULT_BACKUP_POLICY_CONFIGURED"] = "true"
-    if args.record_vault_recovery_evidence:
+    if args.record_vault_restore_drill_evidence or args.record_vault_recovery_evidence:
         artifact_id = _read_named_env(args.vault_backup_artifact_id_env)
         if not _valid_vault_backup_artifact_id(artifact_id):
             raise SystemExit("Vault backup artifact evidence is missing or invalid.")
-        if (
-            args.vault_unseal_key_shares < 3
-            or args.vault_unseal_key_threshold < 2
+        if args.record_vault_recovery_evidence:
+            if (
+                args.vault_unseal_key_shares < 3
+                or args.vault_unseal_key_threshold < 2
+                or args.vault_unseal_key_threshold > args.vault_unseal_key_shares
+                or not args.vault_offline_share_custody_verified
+            ):
+                raise SystemExit("Vault recovery evidence requires 3-or-more shares, a 2-or-more threshold, and offline custody.")
+        elif (
+            args.vault_unseal_key_shares < 1
+            or args.vault_unseal_key_threshold < 1
             or args.vault_unseal_key_threshold > args.vault_unseal_key_shares
-            or not args.vault_offline_share_custody_verified
         ):
-            raise SystemExit("Vault recovery evidence requires 3-or-more shares, a 2-or-more threshold, and offline custody.")
+            raise SystemExit("Vault restore-drill evidence requires the actual positive share count and threshold.")
         updates.update(
             {
                 "JIEJING_VAULT_BACKUP_POLICY_CONFIGURED": "true",
@@ -454,7 +469,9 @@ def _build_updates(args: argparse.Namespace, existing: dict[str, str]) -> dict[s
                 "JIEJING_VAULT_RESTORE_SENTINEL_RESOLVE_VERIFIED": "true",
                 "JIEJING_VAULT_UNSEAL_KEY_SHARES": str(args.vault_unseal_key_shares),
                 "JIEJING_VAULT_UNSEAL_KEY_THRESHOLD": str(args.vault_unseal_key_threshold),
-                "JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED": "true",
+                "JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED": (
+                    "true" if args.vault_offline_share_custody_verified else "false"
+                ),
             }
         )
     if args.record_restore_drill_now:

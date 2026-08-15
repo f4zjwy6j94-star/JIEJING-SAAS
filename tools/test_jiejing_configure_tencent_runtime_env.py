@@ -155,6 +155,45 @@ def main() -> int:
 
     vault_artifact_id = "vault-backups/20260814/isolated-restore-proof.enc"
     env["JIEJING_TEST_VAULT_BACKUP_ARTIFACT_ID"] = vault_artifact_id
+    partial_vault_evidence = subprocess.run(
+        [
+            sys.executable,
+            str(TOOL),
+            "--env-file",
+            str(env_path),
+            "--apply",
+            "--record-vault-restore-drill-evidence",
+            "--vault-backup-artifact-id-env",
+            "JIEJING_TEST_VAULT_BACKUP_ARTIFACT_ID",
+            "--vault-unseal-key-shares",
+            "1",
+            "--vault-unseal-key-threshold",
+            "1",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if partial_vault_evidence.returncode != 0:
+        return fail(partial_vault_evidence.stderr or partial_vault_evidence.stdout)
+    if vault_artifact_id in (partial_vault_evidence.stdout + partial_vault_evidence.stderr):
+        return fail("partial Vault restore-drill evidence must not print the private backup artifact identifier")
+    partial_vault_text = env_path.read_text(encoding="utf-8")
+    for marker in (
+        f"JIEJING_VAULT_BACKUP_ARTIFACT_ID={vault_artifact_id}",
+        "JIEJING_VAULT_BACKUP_POLICY_CONFIGURED=true",
+        "JIEJING_VAULT_RESTORE_MANUAL_UNSEAL_VERIFIED=true",
+        "JIEJING_VAULT_RESTORE_SENTINEL_RESOLVE_VERIFIED=true",
+        "JIEJING_VAULT_UNSEAL_KEY_SHARES=1",
+        "JIEJING_VAULT_UNSEAL_KEY_THRESHOLD=1",
+        "JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED=false",
+        "JIEJING_VAULT_RESTORE_DRILL_LAST_AT=",
+    ):
+        if marker not in partial_vault_text:
+            return fail(f"configurator did not persist truthful partial Vault restore-drill evidence: {marker}")
+
     before_incomplete_vault_evidence = env_path.read_text(encoding="utf-8")
     incomplete_vault_evidence = subprocess.run(
         [
