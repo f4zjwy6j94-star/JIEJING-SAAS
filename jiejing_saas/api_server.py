@@ -3926,11 +3926,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
                 return
             try:
+                inventory_location_adapter = self.ebay_write_adapter_factory(self.settings)
                 credential_boundary = self.repository.unpublished_draft_execution_credential_boundary(
                     company_id=identity["company_id"],
                     store_id=store_id,
                 )
-                prepared = self.ebay_write_adapter.prepare_inventory_location(
+                prepared = inventory_location_adapter.prepare_inventory_location(
                     confirmation=confirmation if isinstance(confirmation, dict) else {},
                     location_payload=location_payload,
                     credential_boundary=credential_boundary,
@@ -3979,10 +3980,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     marketplace_id=str(store.get("marketplace") or "EBAY_US"),
                 )
             except ConfirmationDecisionConflict:
-                self.ebay_write_adapter.discard_inventory_location_preparation(prepared)
+                inventory_location_adapter.discard_inventory_location_preparation(prepared)
                 self._send_error(HTTPStatus.CONFLICT, "ebay_inventory_location_approval_required")
                 return
-            result = self.ebay_write_adapter.execute_prepared_inventory_location(
+            result = inventory_location_adapter.execute_prepared_inventory_location(
                 confirmation=claimed,
                 prepared=prepared,
                 marketplace_id=str(store.get("marketplace") or "EBAY_US"),
@@ -4052,7 +4053,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 company_id=identity["company_id"],
                 store_id=store_id,
             )
-            result = self.ebay_write_adapter.reconcile_inventory_location(
+            result = self.ebay_write_adapter_factory(self.settings).reconcile_inventory_location(
                 confirmation=confirmation if isinstance(confirmation, dict) else {},
                 location_payload=location_payload,
                 credential_boundary=credential_boundary,

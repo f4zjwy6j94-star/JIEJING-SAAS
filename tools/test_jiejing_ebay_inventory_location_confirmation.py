@@ -228,7 +228,7 @@ def main() -> int:
         TestHandler.settings = settings
         TestHandler.sessions = sessions
         adapter = FakeInventoryLocationAdapter()
-        TestHandler.ebay_write_adapter = adapter
+        TestHandler.ebay_write_adapter_factory = staticmethod(lambda _settings: adapter)
         repository._unpublished_draft_execution_credential_boundary_conn = (  # type: ignore[method-assign] # noqa: SLF001
             lambda _conn, **_kwargs: {
                 "ready": True,
