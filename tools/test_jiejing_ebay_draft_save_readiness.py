@@ -21,6 +21,7 @@ from jiejing_saas.ebay_oauth_callback import process_ebay_oauth_callback  # noqa
 from jiejing_saas.readiness import build_product_readiness  # noqa: E402
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
 from jiejing_saas.secret_store import SecretStoreBoundary  # noqa: E402
+from jiejing_runtime.execution import ExecutionRequest, ExecutionService  # noqa: E402
 
 
 def fail(message: str) -> int:
@@ -196,12 +197,25 @@ def _seed_draft_execution(
     boundary: dict[str, Any],
 ) -> str:
     publish_payload = {
+        "account_health": {"status": "ready"},
         "listing": {
             "sku": "READINESS-EXACT-DRAFT-001",
             "title": "Readiness exact unpublished draft",
+            "description_html": "Exact unpublished draft readiness proof.",
+            "category_id": "20349",
+            "category_leaf": "Cases, Covers & Skins",
+            "condition": "NEW",
             "price": 9.99,
             "quantity": 1,
+            "item_specifics": {"Brand": "Unbranded", "Type": "Fitted Case/Skin"},
+            "merchant_location_key": "readiness-warehouse",
         },
+        "business_policies": {
+            "fulfillment_policy_id": "readiness-fulfillment",
+            "payment_policy_id": "readiness-payment",
+            "return_policy_id": "readiness-return",
+        },
+        "asset_manifest": {"assets": [{"url": "https://i.ebayimg.com/images/g/example/s-l1600.webp"}]},
         "marketplace_id": "EBAY_US",
     }
     task = repo.create_task(
@@ -284,6 +298,36 @@ def _seed_draft_execution(
         **claimed,
         **consumed,
     }
+    execution_request = ExecutionRequest(
+        action_type="save_ebay_listing_draft",
+        task_id=task["task_id"],
+        user_id=context["user_id"],
+        company_id=context["company_id"],
+        store_id=context["store_id"],
+        platform="ebay",
+        payload=publish_payload,
+        confirmation_id=confirmation["confirmation_id"],
+        confirmed_by=context["user_id"],
+        confirmed_at=claimed["decided_at"],
+        idempotency_key="readiness-exact-draft",
+    )
+    boundary_audit = ExecutionService(demo_mode=False).execute(execution_request).to_dict()["audit"]
+    execution_audit = {
+        "user_id": context["user_id"],
+        "company_id": context["company_id"],
+        "store_id": context["store_id"],
+        "platform": "ebay",
+        "confirmation_id": confirmation["confirmation_id"],
+        "confirmed_by": context["user_id"],
+        "confirmed_at": claimed["decided_at"],
+        "idempotency_key_present": True,
+        "execution_mode": "ebay_inventory_draft_save_adapter",
+        "platform_adapter_called": True,
+        "preflight": boundary_audit["preflight"],
+        "idempotency": boundary_audit["idempotency"],
+        "execution_intent": boundary_audit["execution_intent"],
+        "real_execution": {"ebay_draft_saved": True, "published_to_ebay": False},
+    }
     result = {
         "status": "saved_to_ebay_draft",
         "action_type": "save_ebay_listing_draft",
@@ -298,14 +342,7 @@ def _seed_draft_execution(
             "scope_profile": "seller_unpublished_draft",
             **binding,
         },
-        "audit": {
-            "idempotency": {
-                "idempotency_key": "readiness-exact-draft",
-                "duplicate_prevention_key": "readiness-exact-draft",
-                "payload_hash": _canonical_sha256(publish_payload),
-            },
-            "real_execution": {"ebay_draft_saved": True, "published_to_ebay": False},
-        },
+        "audit": execution_audit,
         "secret_exposed": False,
     }
     repo.save_execution_result(confirmation=claimed, result=result)
@@ -508,6 +545,95 @@ def _case_seller_hash_mismatch_rejected(root: Path) -> None:
         raise AssertionError("receipt seller identity hash mismatch must fail closed")
 
 
+def _case_idempotency_digest_mismatch_rejected(root: Path) -> None:
+    _settings, repo, _context, _boundary, confirmation_id = _seed_exact_case(
+        root,
+        "idempotency-digest-mismatch",
+    )
+    _require_exact_baseline(repo, "idempotency digest")
+    _mutate_execution_result(
+        repo,
+        confirmation_id,
+        lambda result: result["audit"]["idempotency"].update(
+            {"duplicate_prevention_key": hashlib.sha256(b"wrong-idempotency-boundary").hexdigest()}
+        ),
+    )
+    if _proof_count(repo) != 0:
+        raise AssertionError("wrong tenant/action-bound duplicate digest must fail closed")
+
+
+def _case_execution_payload_digest_mismatch_rejected(root: Path) -> None:
+    _settings, repo, _context, _boundary, confirmation_id = _seed_exact_case(
+        root,
+        "execution-payload-digest-mismatch",
+    )
+    _require_exact_baseline(repo, "execution payload digest")
+    _mutate_execution_result(
+        repo,
+        confirmation_id,
+        lambda result: result["audit"]["idempotency"].update(
+            {"payload_hash": hashlib.sha256(b"wrong-execution-payload").hexdigest()}
+        ),
+    )
+    if _proof_count(repo) != 0:
+        raise AssertionError("wrong execution request payload digest must fail closed")
+
+
+def _case_execution_intent_mismatch_rejected(root: Path) -> None:
+    _settings, repo, _context, _boundary, confirmation_id = _seed_exact_case(
+        root,
+        "execution-intent-mismatch",
+    )
+    _require_exact_baseline(repo, "execution intent")
+    _mutate_execution_result(
+        repo,
+        confirmation_id,
+        lambda result: result["audit"]["execution_intent"].update(
+            {"intent_id": hashlib.sha256(b"wrong-execution-intent").hexdigest()}
+        ),
+    )
+    if _proof_count(repo) != 0:
+        raise AssertionError("execution intent detached from the duplicate digest must fail closed")
+
+
+def _case_legacy_minimal_execution_intent_verified(root: Path) -> None:
+    _settings, repo, _context, _boundary, confirmation_id = _seed_exact_case(
+        root,
+        "legacy-minimal-execution-intent",
+    )
+    _require_exact_baseline(repo, "legacy minimal execution intent")
+
+    def remove_extended_fields(result: dict[str, Any]) -> None:
+        intent = result["audit"]["execution_intent"]
+        for key in (
+            "creates_public_listing",
+            "writes_to_ebay",
+            "requires_publish_offer_call",
+            "stores_internal_draft_only",
+            "confirmation_center_required_before_public_publish",
+        ):
+            intent.pop(key, None)
+
+    _mutate_execution_result(repo, confirmation_id, remove_extended_fields)
+    if _proof_count(repo) != 1:
+        raise AssertionError("the deployed minimal intent contract must remain valid without repeating an eBay write")
+
+
+def _case_extended_execution_intent_publish_flag_rejected(root: Path) -> None:
+    _settings, repo, _context, _boundary, confirmation_id = _seed_exact_case(
+        root,
+        "extended-intent-publish-flag",
+    )
+    _require_exact_baseline(repo, "extended execution intent publish flag")
+    _mutate_execution_result(
+        repo,
+        confirmation_id,
+        lambda result: result["audit"]["execution_intent"].update({"creates_public_listing": True}),
+    )
+    if _proof_count(repo) != 0:
+        raise AssertionError("an extended execution intent that permits public listing creation must fail closed")
+
+
 def _case_read_only_upgrade_never_falls_back(root: Path) -> None:
     _settings, repo, _context, boundary, _confirmation_id = _seed_exact_case(
         root,
@@ -566,6 +692,11 @@ def main() -> int:
                 ("rotated secret", _case_rotated_secret_rejected),
                 ("receipt credential hash mismatch", _case_receipt_hash_mismatch_rejected),
                 ("receipt seller hash mismatch", _case_seller_hash_mismatch_rejected),
+                ("idempotency digest mismatch", _case_idempotency_digest_mismatch_rejected),
+                ("execution payload digest mismatch", _case_execution_payload_digest_mismatch_rejected),
+                ("execution intent mismatch", _case_execution_intent_mismatch_rejected),
+                ("legacy minimal execution intent", _case_legacy_minimal_execution_intent_verified),
+                ("extended execution intent publish flag", _case_extended_execution_intent_publish_flag_rejected),
                 ("read-only upgrade no fallback", _case_read_only_upgrade_never_falls_back),
             )
             failures: list[str] = []

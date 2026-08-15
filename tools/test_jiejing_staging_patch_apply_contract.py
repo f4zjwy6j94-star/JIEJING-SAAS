@@ -308,6 +308,10 @@ def main() -> int:
             "patch apply whitelist must carry the complete SaaS Python package: "
             + ",".join(missing_package_modules)
         )
+    if text.count("jiejing_runtime/execution.py") < 2:
+        return fail(
+            "patch apply must whitelist and syntax-check the ExecutionService implementation used by the SaaS API"
+        )
     if "*.sh text eol=lf" not in gitattributes:
         return fail("shell scripts must be pinned to LF in .gitattributes")
     for shell_script in (

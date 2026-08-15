@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from jiejing_runtime.execution import execution_duplicate_prevention_key, execution_payload_hash
 from jiejing_runtime.models import now_iso
 
 from .json_safe import json_default
@@ -11641,6 +11642,10 @@ class SaaSRepository:
                 platform_result = result.get("platform_result") if isinstance(result.get("platform_result"), dict) else {}
                 audit = result.get("audit") if isinstance(result.get("audit"), dict) else {}
                 idempotency = audit.get("idempotency") if isinstance(audit.get("idempotency"), dict) else {}
+                execution_intent = (
+                    audit.get("execution_intent") if isinstance(audit.get("execution_intent"), dict) else {}
+                )
+                execution_preflight = audit.get("preflight") if isinstance(audit.get("preflight"), dict) else {}
                 real_execution = audit.get("real_execution") if isinstance(audit.get("real_execution"), dict) else {}
                 publish_payload = (
                     confirmation_item.get("publish_payload")
@@ -11653,6 +11658,21 @@ class SaaSRepository:
                 store_id = str(proof_row["store_id"] or "")
                 task_id = str(proof_row["execution_task_id"] or "")
                 idempotency_key = str(idempotency.get("idempotency_key") or "")
+                expected_execution_payload_hash = execution_payload_hash(publish_payload) if publish_payload else ""
+                expected_duplicate_prevention_key = (
+                    execution_duplicate_prevention_key(
+                        company_id=company_id,
+                        store_id=store_id,
+                        platform="ebay",
+                        canonical_action="save_ebay_listing_draft",
+                        confirmation_id=confirmation_id,
+                        idempotency_key=idempotency_key,
+                    )
+                    if company_id and store_id and confirmation_id and idempotency_key
+                    else ""
+                )
+                decided_at_value = _parse_explicit_timezone_iso_datetime(proof_row["decided_at"])
+                audit_confirmed_at_value = _parse_explicit_timezone_iso_datetime(audit.get("confirmed_at"))
                 if not (
                     confirmation_id
                     and company_id
@@ -11689,9 +11709,35 @@ class SaaSRepository:
                     and platform_result.get("public_listing_created") is False
                     and str(platform_result.get("authorization_kind") or "") == "unpublished_draft"
                     and str(platform_result.get("scope_profile") or "") == EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE
+                    and str(audit.get("user_id") or "") == str(proof_row["task_user_id"] or "")
+                    and str(audit.get("company_id") or "") == company_id
+                    and str(audit.get("store_id") or "") == store_id
+                    and str(audit.get("platform") or "").lower() == "ebay"
+                    and str(audit.get("confirmation_id") or "") == confirmation_id
+                    and str(audit.get("confirmed_by") or "") == str(proof_row["decided_by"] or "")
+                    and decided_at_value is not None
+                    and audit_confirmed_at_value is not None
+                    and audit_confirmed_at_value == decided_at_value
+                    and audit.get("idempotency_key_present") is True
+                    and ("demo_mode" not in audit or audit.get("demo_mode") is False)
+                    and ("blocked_reason" not in audit or audit.get("blocked_reason") is None)
+                    and str(audit.get("execution_mode") or "") == "ebay_inventory_draft_save_adapter"
+                    and audit.get("platform_adapter_called") is True
+                    and str(execution_preflight.get("status") or "") == "ready_for_platform_adapter"
+                    and str(execution_preflight.get("canonical_action_type") or "") == "save_ebay_listing_draft"
                     and idempotency_key
-                    and str(idempotency.get("duplicate_prevention_key") or "") == idempotency_key
-                    and str(idempotency.get("payload_hash") or "") == payload_sha256
+                    and expected_execution_payload_hash
+                    and expected_duplicate_prevention_key
+                    and str(idempotency.get("duplicate_prevention_key") or "")
+                    == expected_duplicate_prevention_key
+                    and str(idempotency.get("payload_hash") or "") == expected_execution_payload_hash
+                    and _exact_unpublished_draft_execution_intent(
+                        execution_intent,
+                        expected_duplicate_prevention_key=expected_duplicate_prevention_key,
+                        task_id=task_id,
+                        store_id=store_id,
+                        confirmation_id=confirmation_id,
+                    )
                     and real_execution.get("ebay_draft_saved") is True
                     and real_execution.get("published_to_ebay") is False
                     and result.get("secret_exposed") is False
@@ -13288,6 +13334,42 @@ def _canonical_payload_sha256(value: dict[str, Any]) -> str:
         allow_nan=False,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _exact_unpublished_draft_execution_intent(
+    intent: dict[str, Any],
+    *,
+    expected_duplicate_prevention_key: str,
+    task_id: str,
+    store_id: str,
+    confirmation_id: str,
+) -> bool:
+    """Validate both the original and extended value-free execution intent contracts."""
+
+    if not (
+        isinstance(intent, dict)
+        and expected_duplicate_prevention_key
+        and str(intent.get("intent_id") or "") == expected_duplicate_prevention_key
+        and str(intent.get("canonical_action_type") or "") == "save_ebay_listing_draft"
+        and str(intent.get("platform") or "").lower() == "ebay"
+        and str(intent.get("task_id") or "") == task_id
+        and str(intent.get("store_id") or "") == store_id
+        and str(intent.get("confirmation_id") or "") == confirmation_id
+        and str(intent.get("platform_adapter") or "") == "ebay.save_ebay_listing_draft"
+        and intent.get("platform_adapter_called") is False
+        and str(intent.get("requires_preflight_status") or "") == "ready_for_platform_adapter"
+        and intent.get("requires_confirmation") is True
+        and intent.get("audit_log_required") is True
+    ):
+        return False
+    extended_contract = {
+        "creates_public_listing": False,
+        "writes_to_ebay": True,
+        "requires_publish_offer_call": False,
+        "stores_internal_draft_only": False,
+        "confirmation_center_required_before_public_publish": True,
+    }
+    return all(key not in intent or intent.get(key) is expected for key, expected in extended_contract.items())
 
 
 def _exact_draft_execution_claim_binding(

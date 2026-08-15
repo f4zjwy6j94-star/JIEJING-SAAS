@@ -220,9 +220,40 @@ def _idempotency_key(request: ExecutionRequest) -> str | None:
     return text or None
 
 
-def _payload_hash(payload: dict[str, Any]) -> str:
+def execution_payload_hash(payload: dict[str, Any]) -> str:
+    """Return the exact digest recorded by the execution audit boundary."""
+
     serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def execution_duplicate_prevention_key(
+    *,
+    company_id: str,
+    store_id: str,
+    platform: str,
+    canonical_action: str,
+    confirmation_id: str | None,
+    idempotency_key: str | None,
+) -> str:
+    """Return the tenant/action-bound one-shot execution digest."""
+
+    stable_key = idempotency_key or "missing_idempotency_key"
+    raw = "|".join(
+        [
+            company_id,
+            store_id,
+            platform,
+            canonical_action,
+            confirmation_id or "unconfirmed",
+            stable_key,
+        ]
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _payload_hash(payload: dict[str, Any]) -> str:
+    return execution_payload_hash(payload)
 
 
 def _duplicate_prevention_key(
@@ -231,15 +262,11 @@ def _duplicate_prevention_key(
     canonical_action: str,
     idempotency_key: str | None,
 ) -> str:
-    stable_key = idempotency_key or "missing_idempotency_key"
-    raw = "|".join(
-        [
-            request.company_id,
-            request.store_id,
-            request.platform,
-            canonical_action,
-            request.confirmation_id or "unconfirmed",
-            stable_key,
-        ]
+    return execution_duplicate_prevention_key(
+        company_id=request.company_id,
+        store_id=request.store_id,
+        platform=request.platform,
+        canonical_action=canonical_action,
+        confirmation_id=request.confirmation_id,
+        idempotency_key=idempotency_key,
     )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()

@@ -191,6 +191,7 @@ FILES=(
   "jiejing_saas/ebay_write_adapter.py"
   "jiejing_saas/workflow_plan.py"
   "jiejing_saas/migrations/001_initial_schema_postgres.sql"
+  "jiejing_runtime/execution.py"
   "jiejing_runtime/execution_preflight.py"
   "jiejing_runtime/__init__.py"
   "jiejing_runtime/agent_provider_plan.py"
@@ -541,6 +542,7 @@ python3 -m py_compile \
   jiejing_saas/ebay_oauth_callback.py \
   jiejing_saas/ebay_write_adapter.py \
   jiejing_saas/workflow_plan.py \
+  jiejing_runtime/execution.py \
   jiejing_runtime/execution_preflight.py \
   jiejing_runtime/__init__.py \
   jiejing_runtime/agent_provider_plan.py \
