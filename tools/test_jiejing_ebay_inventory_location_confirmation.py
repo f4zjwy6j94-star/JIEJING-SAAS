@@ -472,6 +472,111 @@ def main() -> int:
                     raise AssertionError(
                         "future, naive, and expired inventory-location approvals must fail closed without consumption"
                     )
+                if index < 3:
+                    replacement_status, _ = _post(
+                        base_url,
+                        f"/stores/{time_store['store_id']}/ebay-inventory-location/confirmation",
+                        {**_location_payload(), "merchant_location_key": f"time-guard-{index}"},
+                        token,
+                    )
+                    if replacement_status != 409 or (repository.get_confirmation(
+                        company_id=company_id,
+                        confirmation_id=time_confirmation_id,
+                    ) or {}).get("status") != "approved":
+                        raise AssertionError("future and naive approvals must block replacement intake without mutation")
+                else:
+                    with ThreadPoolExecutor(max_workers=4) as pool:
+                        replacement_results = list(
+                            pool.map(
+                                lambda _index: _post(
+                                    base_url,
+                                    f"/stores/{time_store['store_id']}/ebay-inventory-location/confirmation",
+                                    {**_location_payload(), "merchant_location_key": f"time-guard-{index}"},
+                                    token,
+                                ),
+                                range(4),
+                            )
+                        )
+                    replacement_statuses = sorted(status for status, _body in replacement_results)
+                    if replacement_statuses != [201, 409, 409, 409]:
+                        raise AssertionError(
+                            "concurrent expired replacement must create exactly one pending confirmation; "
+                            f"statuses={replacement_statuses}"
+                        )
+                    replacement_status, replacement_body = next(
+                        result for result in replacement_results if result[0] == 201
+                    )
+                    replacement = replacement_body.get("inventory_location_confirmation") or {}
+                    if not (
+                        replacement_status == 201
+                        and replacement.get("status") == "pending"
+                        and replacement.get("store_id") == time_store["store_id"]
+                        and (repository.get_confirmation(
+                            company_id=company_id,
+                            confirmation_id=time_confirmation_id,
+                        ) or {}).get("status") == "expired"
+                    ):
+                        raise AssertionError(
+                            "an exact expired unclaimed inventory-location approval must be atomically replaced"
+                        )
+
+            claimed_store = repository.create_store(
+                company_id=company_id,
+                user_id=user["user_id"],
+                payload={"platform": "ebay", "store_name": "Claim evidence guard", "marketplace": "EBAY_US"},
+            )
+            claimed_status, claimed_body = _post(
+                base_url,
+                f"/stores/{claimed_store['store_id']}/ebay-inventory-location/confirmation",
+                {**_location_payload(), "merchant_location_key": "claim-evidence-guard"},
+                token,
+            )
+            claimed_id = str(
+                (claimed_body.get("inventory_location_confirmation") or {}).get("confirmation_id") or ""
+            )
+            if claimed_status != 201 or not claimed_id:
+                raise AssertionError("claim-evidence replacement fixture must create one confirmation")
+            claimed_approval_status, _ = _post(
+                base_url,
+                f"/confirmations/{claimed_id}/decision",
+                {"decision": "approve", "note": "claim evidence guard"},
+                token,
+            )
+            if claimed_approval_status != 201:
+                raise AssertionError("claim-evidence replacement fixture approval failed")
+            with repository._connect() as conn:  # noqa: SLF001 - inject durable claim evidence at the DB boundary.
+                conn.execute(
+                    "update confirmations set decided_at = ? where company_id = ? and confirmation_id = ?",
+                    ((datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat(), company_id, claimed_id),
+                )
+                repository._insert_audit(  # noqa: SLF001 - exact historical claim sentinel for fail-closed proof.
+                    conn,
+                    company_id=company_id,
+                    store_id=claimed_store["store_id"],
+                    user_id=user["user_id"],
+                    actor_type="system",
+                    action_type="ebay.inventory_location.execution_claimed",
+                    target_type="confirmation",
+                    target_id=claimed_id,
+                    summary="Claim evidence fixture.",
+                    details={"provider_write_observed": False, "secret_exposed": False},
+                )
+            confirmations_before = len(repository.list_confirmations(company_id=company_id))
+            claimed_replacement_status, _ = _post(
+                base_url,
+                f"/stores/{claimed_store['store_id']}/ebay-inventory-location/confirmation",
+                {**_location_payload(), "merchant_location_key": "claim-evidence-guard"},
+                token,
+            )
+            if not (
+                claimed_replacement_status == 409
+                and (repository.get_confirmation(company_id=company_id, confirmation_id=claimed_id) or {}).get("status")
+                == "approved"
+                and len(repository.list_confirmations(company_id=company_id)) == confirmations_before
+            ):
+                raise AssertionError(
+                    "an expired approval with any execution-claim evidence must never be replaced or retried"
+                )
 
             deterministic_store = repository.create_store(
                 company_id=company_id,

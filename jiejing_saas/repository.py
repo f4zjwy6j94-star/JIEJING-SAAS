@@ -4384,7 +4384,7 @@ class SaaSRepository:
                 raise ConfirmationDecisionConflict("ebay_inventory_location_store_required")
             active = conn.execute(
                 f"""
-                select confirmation_id from confirmations
+                select * from confirmations
                 where company_id = ? and store_id = ? and action_type = 'create_ebay_inventory_location'
                   and status in ('pending', 'approved', ?)
                 {lock_suffix}
@@ -4392,7 +4392,87 @@ class SaaSRepository:
                 (company_id, store_id, EXTERNAL_EXECUTION_PROCESSING_STATUS),
             ).fetchall()
             if active:
-                raise ConfirmationDecisionConflict("ebay_inventory_location_confirmation_already_active")
+                if len(active) != 1:
+                    raise ConfirmationDecisionConflict("ebay_inventory_location_confirmation_already_active")
+                existing = self._confirmation_row_to_dict(active[0])
+                existing_item = existing.get("item") if isinstance(existing.get("item"), dict) else {}
+                existing_payload = (
+                    existing_item.get("location_payload")
+                    if isinstance(existing_item.get("location_payload"), dict)
+                    else {}
+                )
+                decided_at = _parse_explicit_timezone_iso_datetime(existing.get("decided_at"))
+                exact_expired_approval = bool(
+                    str(existing.get("status") or "") == "approved"
+                    and str(existing.get("runtime_run_id") or "") == "merchant_ebay_inventory_location_setup"
+                    and str(existing.get("decided_by") or "")
+                    and _timestamp_strictly_older_than_seconds(
+                        decided_at,
+                        datetime.now(timezone.utc),
+                        15 * 60,
+                    )
+                    and str(existing_item.get("source") or "") == "merchant_ebay_inventory_location_setup"
+                    and str(existing_item.get("requested_step") or "") == "inventory_location_confirmation_gate"
+                    and str(existing_item.get("company_id") or "") == company_id
+                    and str(existing_item.get("store_id") or "") == store_id
+                    and str(existing_item.get("merchant_location_key") or "") == location_key
+                    and str(existing_item.get("location_payload_sha256") or "") == payload_sha256
+                    and _canonical_payload_sha256(existing_payload) == payload_sha256
+                    and existing_item.get("high_risk") is True
+                    and existing_item.get("writes_to_ebay_after_approval") is True
+                    and existing_item.get("public_publish_enabled") is False
+                    and existing_item.get("public_listing_created") is False
+                    and existing_item.get("secret_exposed") is False
+                )
+                existing_confirmation_id = str(existing.get("confirmation_id") or "")
+                execution_count = conn.execute(
+                    "select count(*) as count from execution_results where confirmation_id = ?",
+                    (existing_confirmation_id,),
+                ).fetchone()
+                claim_audit_count = conn.execute(
+                    """
+                    select count(*) as count from audit_logs
+                    where company_id = ? and action_type = 'ebay.inventory_location.execution_claimed'
+                      and target_id = ?
+                    """,
+                    (company_id, existing_confirmation_id),
+                ).fetchone()
+                if not (
+                    exact_expired_approval
+                    and int(execution_count["count"] if execution_count else 0) == 0
+                    and int(claim_audit_count["count"] if claim_audit_count else 0) == 0
+                ):
+                    raise ConfirmationDecisionConflict("ebay_inventory_location_confirmation_already_active")
+                expired = conn.execute(
+                    """
+                    update confirmations set status = 'expired', decision_note = ?
+                    where company_id = ? and confirmation_id = ? and status = 'approved'
+                    """,
+                    (
+                        "Expired system-side after the exact unclaimed inventory-location approval exceeded 15 minutes.",
+                        company_id,
+                        existing_confirmation_id,
+                    ),
+                ).rowcount
+                if expired != 1:
+                    raise ConfirmationDecisionConflict("ebay_inventory_location_confirmation_already_active")
+                self._insert_audit(
+                    conn,
+                    company_id=company_id,
+                    store_id=store_id,
+                    user_id=user_id,
+                    actor_type="system",
+                    action_type="ebay.inventory_location.approval_expired",
+                    target_type="confirmation",
+                    target_id=existing_confirmation_id,
+                    summary="An expired unclaimed inventory-location approval was replaced.",
+                    details={
+                        "action_type": "create_ebay_inventory_location",
+                        "automatic_retry_allowed": False,
+                        "provider_write_observed": False,
+                        "secret_exposed": False,
+                    },
+                )
             conn.execute(
                 """
                 insert into tasks (
