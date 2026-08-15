@@ -24,6 +24,7 @@ const counters = {
   connectionsGet: 0,
   syncConfirmation: 0,
   sync: 0,
+  wechatZeroChargeRehearsal: 0,
 };
 const planBodies = [];
 const syncBodies = [];
@@ -109,7 +110,7 @@ function apiPayload(pathname) {
     };
   }
   if (pathname === "/permissions/me") {
-    return { permissions: ["manage_connections", "approve_high_risk", "create_task"], roles: ["owner"], team_member: { role: "owner" } };
+    return { permissions: ["manage_connections", "approve_high_risk", "create_task", "manage_billing"], roles: ["owner"], team_member: { role: "owner" } };
   }
   if (pathname === "/stores") return { stores: [store] };
   if (pathname === "/connections") {
@@ -180,6 +181,35 @@ const server = http.createServer(async (req, res) => {
     const body = await readBody(req);
     planResponseMode = String(body.mode || "valid");
     sendJson(res, 200, { status: "ok" });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/billing/wechat-pay/zero-charge-rehearsal") {
+    counters.wechatZeroChargeRehearsal += 1;
+    const body = await readBody(req);
+    if (body.exact_confirmation !== "RUN WECHAT ZERO CHARGE REHEARSAL") {
+      sendJson(res, 409, { error: "exact_rehearsal_confirmation_required" });
+      return;
+    }
+    sendJson(res, 200, {
+      wechat_pay_zero_charge_rehearsal: {
+        contract_version: "2026-08-11-wechat-pay-zero-charge-rehearsal-v1",
+        mode: "isolated_fake_transport_zero_charge",
+        status: "ready",
+        reason: "",
+        evidence_recorded: true,
+        ready_for_owner_review: true,
+        fake_transport_call_count: 1,
+        creates_real_order: false,
+        calls_external_api: false,
+        calls_external_payment_api: false,
+        triggers_real_charge: false,
+        triggers_real_refund: false,
+        charge_allowed: false,
+        public_charging_allowed: false,
+        secret_exposed: false,
+        unexpected_sentinel: "wechat-zero-charge-response-sentinel",
+      },
+    });
     return;
   }
   if (req.method === "POST" && url.pathname === `/stores/${store.store_id}/ebay-oauth/read-only-confirmation`) {
@@ -1455,6 +1485,51 @@ async function main() {
       throw new Error("multiple exact terminal OAuth confirmation-request pairs must allow one replacement pending card without creating an OAuth plan");
     }
     await accumulatedTerminalPage.close();
+
+    const wechatRehearsalPage = await openAccountSettingsPage(context, base, consoleErrors);
+    await wechatRehearsalPage.locator('[data-saas-settings-tab="billing"]:visible').click();
+    const wechatRehearsalButton = wechatRehearsalPage.locator('[data-saas-action="wechat-zero-charge-rehearsal"]:visible');
+    await wechatRehearsalButton.waitFor({ state: "visible", timeout: 5000 });
+    if ((await wechatRehearsalButton.count()) !== 1 || counters.wechatZeroChargeRehearsal !== 0) {
+      throw new Error("owner manage_billing must see exactly one zero-charge rehearsal action before any request");
+    }
+    await wechatRehearsalButton.click();
+    await wechatRehearsalPage.waitForFunction(
+      () => state.saasWechatPayZeroChargeRehearsal?.status === "ready" && state.saasLoading === false,
+      null,
+      { timeout: 10000 },
+    );
+    await wechatRehearsalPage.evaluate(async () => {
+      await runSaasWechatZeroChargeRehearsal();
+    });
+    const wechatRehearsalSafety = await wechatRehearsalPage.evaluate(() => {
+      const sentinel = "wechat-zero-charge-response-sentinel";
+      return {
+        result: state.saasWechatPayZeroChargeRehearsal,
+        domHasSentinel: document.documentElement.innerHTML.includes(sentinel),
+        storageHasSentinel: [...Object.keys(localStorage), ...Object.keys(sessionStorage)].some((key) =>
+          `${localStorage.getItem(key) || ""}${sessionStorage.getItem(key) || ""}`.includes(sentinel),
+        ),
+        urlHasSentinel: location.href.includes(sentinel),
+        completedCopy: document.body.innerText.includes("当前部署构建已完成零扣费演练"),
+      };
+    });
+    if (
+      counters.wechatZeroChargeRehearsal !== 1 ||
+      wechatRehearsalSafety.domHasSentinel ||
+      wechatRehearsalSafety.storageHasSentinel ||
+      wechatRehearsalSafety.urlHasSentinel ||
+      !wechatRehearsalSafety.completedCopy ||
+      wechatRehearsalSafety.result?.unexpected_sentinel !== undefined ||
+      wechatRehearsalSafety.result?.creates_real_order !== false ||
+      wechatRehearsalSafety.result?.calls_external_payment_api !== false ||
+      wechatRehearsalSafety.result?.triggers_real_charge !== false ||
+      wechatRehearsalSafety.result?.triggers_real_refund !== false ||
+      wechatRehearsalSafety.result?.secret_exposed !== false
+    ) {
+      throw new Error(`zero-charge rehearsal must be one-shot, value-free and safe; result=${JSON.stringify(wechatRehearsalSafety)} count=${counters.wechatZeroChargeRehearsal}`);
+    }
+    await wechatRehearsalPage.close();
 
     oauthRequestsOverride = [{
       company_id: "company-oauth-ui-fixture",

@@ -141,6 +141,7 @@ const state = {
   saasPaymentOptions: null,
   saasBillingTestEvent: null,
   saasBillingProviderRehearsal: null,
+  saasWechatPayZeroChargeRehearsal: null,
   saasManualBetaPaymentOrders: [],
   saasBillingDomainCutoverRehearsal: null,
   saasPaidLaunchApprovalPacket: null,
@@ -4403,6 +4404,7 @@ const saasReadOnlyOAuthPlanAttemptKeys = new Set();
 const saasUnpublishedDraftOAuthPlanAttemptKeys = new Set();
 const saasInventoryLocationExecutionAttemptKeys = new Set();
 const saasInventoryLocationReconciliationAttemptKeys = new Set();
+let saasWechatZeroChargeRehearsalAttempted = false;
 let saasPendingPublishIntakeFormValues = null;
 
 const manualActionDetails = {
@@ -31613,6 +31615,76 @@ async function runSaasBillingTestEvent(button) {
   }
 }
 
+function merchantSafeWechatZeroChargeRehearsal(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const allowedReasons = new Set(["", "isolated_rehearsal_check_failed", "isolated_rehearsal_internal_failure", "deployment_build_artifact_unavailable"]);
+  return {
+    contract_version:
+      source.contract_version === "2026-08-11-wechat-pay-zero-charge-rehearsal-v1"
+        ? source.contract_version
+        : "",
+    mode: source.mode === "isolated_fake_transport_zero_charge" ? source.mode : "",
+    status: source.status === "ready" ? "ready" : "blocked",
+    reason: allowedReasons.has(source.reason) ? source.reason : "unrecognized_rehearsal_result",
+    evidence_recorded: source.evidence_recorded === true,
+    ready_for_owner_review: source.ready_for_owner_review === true,
+    fake_transport_call_count: Number.isSafeInteger(source.fake_transport_call_count)
+      ? Math.max(0, Math.min(source.fake_transport_call_count, 20))
+      : 0,
+    creates_real_order: source.creates_real_order === true,
+    calls_external_api: source.calls_external_api === true,
+    calls_external_payment_api: source.calls_external_payment_api === true,
+    triggers_real_charge: source.triggers_real_charge === true,
+    triggers_real_refund: source.triggers_real_refund === true,
+    charge_allowed: source.charge_allowed === true,
+    public_charging_allowed: source.public_charging_allowed === true,
+    secret_exposed: source.secret_exposed === true,
+  };
+}
+
+function saasCanRunWechatZeroChargeRehearsal() {
+  const role = String(state.saasTeamMember?.role || "").trim().toLowerCase();
+  const permissions = Array.isArray(state.saasPermissions) ? state.saasPermissions : [];
+  return role === "owner" && permissions.includes("manage_billing");
+}
+
+async function runSaasWechatZeroChargeRehearsal() {
+  if (!saasCanRunWechatZeroChargeRehearsal()) {
+    showActionToast("只有当前 Owner 且具备账单管理权限时才能运行零扣费演练。");
+    return;
+  }
+  if (saasWechatZeroChargeRehearsalAttempted) {
+    showActionToast("本页已经发起过一次零扣费演练；系统不会自动重试。");
+    return;
+  }
+  saasWechatZeroChargeRehearsalAttempted = true;
+  state.saasLoading = true;
+  renderSaasConnectCenter(document.querySelector("#view-connect"));
+  try {
+    const payload = await saasFetch("/billing/wechat-pay/zero-charge-rehearsal", {
+      method: "POST",
+      body: JSON.stringify({ exact_confirmation: "RUN WECHAT ZERO CHARGE REHEARSAL" }),
+    });
+    const result = merchantSafeWechatZeroChargeRehearsal(payload.wechat_pay_zero_charge_rehearsal);
+    state.saasWechatPayZeroChargeRehearsal = result;
+    await refreshSaasState({ silent: true, refreshLaunchGate: true });
+    showActionToast(
+      result.status === "ready" && result.evidence_recorded
+        ? "微信零扣费演练已完成并写入审计；没有创建真实订单、调用微信、扣款或退款。"
+        : "零扣费演练未形成有效证据；没有创建真实订单、调用微信、扣款或退款，也不会自动重试。",
+    );
+  } catch (_error) {
+    state.saasWechatPayZeroChargeRehearsal = merchantSafeWechatZeroChargeRehearsal({
+      status: "blocked",
+      reason: "isolated_rehearsal_internal_failure",
+    });
+    showActionToast("零扣费演练请求未完成；没有创建真实订单、调用微信、扣款或退款，也不会自动重试。");
+  } finally {
+    state.saasLoading = false;
+    renderSaasConnectCenter(document.querySelector("#view-connect"));
+  }
+}
+
 async function runSaasBillingProviderRehearsal(button) {
   const action = String(button?.dataset?.billingProviderAction || "activate").trim().toLowerCase();
   const planKey = String(
@@ -32054,6 +32126,7 @@ function handleSaasAction(button) {
     "create-cleanup-plan",
     "billing-test-event",
     "billing-provider-rehearsal",
+    "wechat-zero-charge-rehearsal",
     "manual-beta-create-order",
     "manual-beta-confirm-order",
     "domestic-billing-create-order",
@@ -32263,6 +32336,10 @@ function handleSaasAction(button) {
   }
   if (action === "billing-provider-rehearsal") {
     runSaasBillingProviderRehearsal(button);
+    return;
+  }
+  if (action === "wechat-zero-charge-rehearsal") {
+    runSaasWechatZeroChargeRehearsal();
     return;
   }
   if (action === "manual-beta-create-order") {
@@ -35588,6 +35665,76 @@ function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext
         <span>renewal_mode=${escapeHtml(domesticBilling.configuredPath ? "merchant_confirmed_one_time_30_day" : "provider_subscription")}</span>
         <span>triggers_real_charge=false</span>
         <span>frontend_gets_payment_secret=false</span>
+        <span>secret_exposed=false</span>
+        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
+      </div>
+    </section>
+  `;
+}
+
+function renderSaasWechatZeroChargeRehearsalPanel(ctx = saasMerchantWorkbenchContext()) {
+  if (!saasCanRunWechatZeroChargeRehearsal()) return "";
+  const result =
+    state.saasWechatPayZeroChargeRehearsal && typeof state.saasWechatPayZeroChargeRehearsal === "object"
+      ? state.saasWechatPayZeroChargeRehearsal
+      : {};
+  const completed = result.status === "ready" && result.evidence_recorded === true;
+  const unsafe = [
+    result.creates_real_order,
+    result.calls_external_api,
+    result.calls_external_payment_api,
+    result.triggers_real_charge,
+    result.triggers_real_refund,
+    result.charge_allowed,
+    result.public_charging_allowed,
+    result.secret_exposed,
+  ].some((value) => value === true);
+  const statusLabel = completed && !unsafe
+    ? "证据已记录"
+    : saasWechatZeroChargeRehearsalAttempted
+      ? state.saasLoading
+        ? "演练进行中"
+        : "本页已停止"
+      : "等待 Owner 发起";
+  const buttonLabel = completed ? "本页已完成" : saasWechatZeroChargeRehearsalAttempted ? "本页不再重试" : "运行一次隔离演练";
+  const disabled = state.saasLoading || saasWechatZeroChargeRehearsalAttempted ? "disabled" : "";
+  return `
+    <section class="saas-settings-card saas-billing-provider-rehearsal" data-wechat-zero-charge-rehearsal="wechat_pay_zero_charge_control_room_v1" aria-label="微信支付零扣费上线证据">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>微信支付上线前证据</span>
+          <strong>只运行隔离假支付方，不接触真实订单和资金</strong>
+          <p>仅当前 Owner 且具备账单管理权限时可运行一次。后端会在临时隔离数据库里验证 Native 下单合同、签名回调、权益生效、退款确认和账务恢复；不会调用微信 API，不会生成可付款二维码，也不会改变当前账号的套餐或额度。</p>
+        </div>
+        <em>${escapeHtml(statusLabel)}</em>
+      </div>
+      <div class="saas-billing-provider-rehearsal-result">
+        <article class="${completed && !unsafe ? "is-green" : result.status ? "is-amber" : "is-neutral"}">
+          <span>审计证据</span>
+          <strong>${escapeHtml(completed && !unsafe ? "当前部署构建已完成零扣费演练" : "尚未形成当前部署的有效证据")}</strong>
+          <small>${escapeHtml(
+            completed && !unsafe
+              ? `隔离假传输调用 ${Number(result.fake_transport_call_count || 0)} 次；真实支付调用、订单、扣款、退款和密钥暴露均为 0。`
+              : "该动作不会开放公开收费，也不会把浏览器结果当作支付成功。",
+          )}</small>
+        </article>
+      </div>
+      <div class="saas-billing-provider-rehearsal-actions" aria-label="微信零扣费演练动作">
+        <button class="secondary-action compact-action" type="button" data-saas-action="wechat-zero-charge-rehearsal" ${disabled}>
+          <strong>${escapeHtml(buttonLabel)}</strong>
+          <small>一次性、无外联、无订单、无扣款、无退款</small>
+        </button>
+      </div>
+      <div class="saas-billing-provider-rehearsal-safety" hidden aria-hidden="true">
+        <span>wechat_pay_zero_charge_control_room_v1</span>
+        <span>owner_and_manage_billing_only</span>
+        <span>isolated_fake_transport_zero_charge</span>
+        <span>creates_real_order=false</span>
+        <span>calls_external_payment_api=false</span>
+        <span>triggers_real_charge=false</span>
+        <span>triggers_real_refund=false</span>
+        <span>changes_subscription_or_quota=false</span>
+        <span>public_charging_allowed=false</span>
         <span>secret_exposed=false</span>
         <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
       </div>
@@ -44443,6 +44590,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
         renderSaasMerchantBillingPlainSummaryPanel(ctx),
         renderSaasMerchantMediaCreditsPanel(),
         renderSaasMerchantDomesticPaymentPanel(ctx),
+        renderSaasWechatZeroChargeRehearsalPanel(ctx),
         renderSaasSettingsSectionGroup({
           title: "计费与安全说明",
           detail: "需要了解额度发放、续费停用、退款客服和凭证安全时再展开。",
