@@ -432,6 +432,20 @@ def _backup_item(settings: SaaSSettings, repository: SaaSRepository) -> Readines
             "Managed backup controls remain configured, but the latest backup and restore evidence is outside the paid-launch freshness windows.",
             "Record a recent successful backup probe and run a new restore drill before paid launch.",
         )
+    vault_share_custody_blockers = {
+        "vault_unseal_key_shares_below_production_minimum",
+        "vault_unseal_key_threshold_below_production_minimum",
+        "vault_offline_share_custody_not_verified",
+    }
+    if blockers and blockers.issubset(vault_share_custody_blockers):
+        return ReadinessItem(
+            "backup_restore",
+            "Backup and restore",
+            "blocked_vault_unseal_custody_not_ready",
+            "blocker" if settings.is_production_like else "warning",
+            "Managed database backup and restore controls are ready; Vault recovery shares and offline custody remain incomplete.",
+            "Create at least three Vault recovery shares with a two-share threshold and verify offline custody before paid launch.",
+        )
     return ReadinessItem(
         "backup_restore",
         "Backup and restore",

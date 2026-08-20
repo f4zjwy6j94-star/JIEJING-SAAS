@@ -190,6 +190,7 @@ def main() -> int:
         os.environ["JIEJING_VAULT_UNSEAL_KEY_THRESHOLD"] = "1"
         os.environ["JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED"] = "false"
         weak_vault_unseal_boundary = build_backup_plan(vault_settings, repo)
+        weak_vault_readiness = build_product_readiness(vault_settings, repo)
         os.environ["JIEJING_VAULT_UNSEAL_KEY_SHARES"] = "3"
         os.environ["JIEJING_VAULT_UNSEAL_KEY_THRESHOLD"] = "2"
         os.environ["JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED"] = "true"
@@ -285,6 +286,14 @@ def main() -> int:
         or "vault_offline_share_custody_not_verified" not in weak_blockers
     ):
         return fail(f"1-of-1 or server-resident Vault shares must block paid launch: {weak_blockers}")
+    weak_vault_items = {item.get("key"): item for item in weak_vault_readiness.get("items") or []}
+    weak_vault_public = weak_vault_items.get("backup_restore") or {}
+    if weak_vault_public.get("status") != "blocked_vault_unseal_custody_not_ready":
+        return fail(f"public readiness must identify the remaining Vault share custody blocker: {weak_vault_public}")
+    if "Vault recovery shares" not in str(weak_vault_public.get("detail") or ""):
+        return fail(f"public readiness must describe the Vault recovery boundary truthfully: {weak_vault_public}")
+    if "managed Postgres" in str(weak_vault_public.get("next_action") or ""):
+        return fail(f"Vault-only debt must not direct the operator back to completed Postgres work: {weak_vault_public}")
     if backup.get("object_storage", {}).get("target_ready") is not True:
         return fail("COS backup target should be ready when bucket, region and probe are configured")
     if stale_cos_backup.get("backup_ready_for_paid_launch") is not False:
