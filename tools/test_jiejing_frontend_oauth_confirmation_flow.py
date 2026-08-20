@@ -58,6 +58,13 @@ def main() -> None:
     require(app, "payload.secret_exposed !== false", "OAuth response secret flags must be strict false")
     require(app, 'String(requestBody.confirmation_id || "") !== confirmationId', "OAuth plan response must bind the in-memory exact confirmation")
     require(app, 'data-ebay-oauth-confirmation-status=', "settings must expose a safe merchant status without the confirmation ID")
+    require(app, 'ebay_read_only_sync: "eBay 官方只读同步"', "the confirmation center must not expose the raw sync action key")
+    require(app, 'return "同意这次只读同步";', "the sync confirmation button must describe the exact approved action")
+    require(
+        app,
+        'ebay_read_only_sync: "只读取当前店铺的店铺、商品、订单、费用、政策和类目资料，不修改 eBay。批准后仍需回到店铺数据页再次启动。"',
+        "the sync confirmation reason must state the read-only and two-step boundary",
+    )
     require(styles, ".saas-oauth-confirmation-guidance", "pending/approved status needs bounded responsive styling")
 
     print("PASS test_jiejing_frontend_oauth_confirmation_flow")

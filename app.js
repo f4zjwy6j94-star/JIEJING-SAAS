@@ -20676,6 +20676,7 @@ function saasWorkbenchActionLabel(action = "") {
       partial_refund: "部分退款",
       sensitive_buyer_commitment: "敏感客服承诺",
       oauth_scope_change: "授权范围变更",
+      ebay_read_only_sync: "eBay 官方只读同步",
       buyer_message_send: "发送买家消息",
       store_subscription: "店铺订阅",
     }[action] ||
@@ -20687,6 +20688,9 @@ function saasWorkbenchActionLabel(action = "") {
 
 function saasConfirmationApproveButtonLabel(card = {}) {
   const actionType = card.action_type || card.item?.action_type || "";
+  if (actionType === "ebay_read_only_sync") {
+    return "同意这次只读同步";
+  }
   if (actionType === "create_ebay_inventory_location") {
     return "同意创建这个库存位置";
   }
@@ -20710,6 +20714,7 @@ function saasWorkbenchConfirmationReason(card = {}) {
   const item = card.item && typeof card.item === "object" ? card.item : {};
   const actionType = card.action_type || item.action_type;
   const merchantReasons = {
+    ebay_read_only_sync: "只读取当前店铺的店铺、商品、订单、费用、政策和类目资料，不修改 eBay。批准后仍需回到店铺数据页再次启动。",
     publish_listing: "发布会创建真实 eBay Listing。必须先确认标题、类目、价格、库存、政策、素材和额度，再进入执行服务。",
     cleanup_test_listing: "这是一次真实 eBay 测试刊登的清理计划。下架、删除 offer 和删除库存项都会改变平台状态，必须由商家确认后才能进入执行服务。",
     create_ebay_inventory_location: "这会在当前 eBay 店铺创建一个真实 Inventory API 库存位置。它不会创建 Offer 或公开 Listing；批准后仍需回到 Listing 显式执行一次。",

@@ -1391,8 +1391,16 @@ async function main() {
       const stateShape = await syncPage.evaluate(() => ({ error: state.saasError, view: document.body?.dataset?.view || "", confirmations: (state.saasConfirmations || []).map((card) => ({ action: card.action_type, status: card.status })) }));
       throw new Error(`first official sync click must create one pending exact confirmation and perform zero syncs; confirmation=${counters.syncConfirmation} sync=${counters.sync} state=${JSON.stringify(stateShape)}`);
     }
-    const exactSyncCard = syncPage.locator("#saasConfirmPanel .saas-confirm-card").filter({ hasText: "ebay_read_only_sync" });
+    const exactSyncCard = syncPage.locator("#saasConfirmPanel .saas-confirm-card").filter({ hasText: "eBay 官方只读同步" });
     await waitForUniqueVisibleConfirmation(syncPage, exactSyncCard, "pending exact official sync confirmation");
+    const exactSyncCardText = String(await exactSyncCard.textContent());
+    if (
+      exactSyncCardText.includes("ebay_read_only_sync") ||
+      !exactSyncCardText.includes("只读取当前店铺的店铺、商品、订单、费用、政策和类目资料，不修改 eBay。批准后仍需回到店铺数据页再次启动。") ||
+      (await exactSyncCard.locator('[data-saas-action="approve-confirmation"]').textContent()).trim() !== "同意这次只读同步"
+    ) {
+      throw new Error(`official sync confirmation must use bounded merchant-facing copy; text=${JSON.stringify(exactSyncCardText)}`);
+    }
     await exactSyncCard.locator('[data-saas-action="approve-confirmation"]').click();
     await syncPage.waitForFunction(
       () => (state.saasConfirmations || []).some((card) => card.action_type === "ebay_read_only_sync" && card.status === "approved"),
