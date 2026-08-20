@@ -54,7 +54,11 @@ from .billing_wechat_pay import (
     process_wechat_pay_refund_notification_from_env,
 )
 from .billing_wechat_pay_rehearsal import run_wechat_pay_zero_charge_rehearsal
-from .commercial_launch_gate import build_commercial_launch_gate, build_current_store_ebay_evidence
+from .commercial_launch_gate import (
+    build_commercial_launch_gate,
+    build_current_store_ebay_evidence,
+    build_current_store_ebay_refresh_evidence,
+)
 from .config import SaaSSettings
 from .controlled_bridges import build_controlled_bridge_contract
 from .database_adapter import build_database_adapter_contract
@@ -1297,6 +1301,33 @@ def _merchant_safe_ebay_refresh_probe_result(result: dict[str, Any]) -> dict[str
     }
 
 
+def _merchant_safe_current_store_ebay_refresh_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    """Whitelist the small current-store proof returned to the merchant UI."""
+
+    source = evidence if isinstance(evidence, dict) else {}
+
+    def safe_sha256(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        return text if len(text) == 64 and all(character in "0123456789abcdef" for character in text) else ""
+
+    status = str(source.get("status") or "blocked")
+    if status not in {"blocked", "pending", "verified"}:
+        status = "blocked"
+    return {
+        "status": status,
+        "current_store_selected": source.get("current_store_selected") is True,
+        "authorized": source.get("authorized") is True,
+        "strong_identity_ready": source.get("strong_identity_ready") is True,
+        "backend_provenance_ready": source.get("backend_provenance_ready") is True,
+        "store_id_sha256": safe_sha256(source.get("store_id_sha256")),
+        "connection_id_sha256": safe_sha256(source.get("connection_id_sha256")),
+        "refresh_success_ready": source.get("refresh_success_ready") is True,
+        "refresh_same_connection_ready": source.get("refresh_same_connection_ready") is True,
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+
+
 def _resolve_merchant_visible_ebay_refresh_probe(
     repository: SaaSRepository,
     *,
@@ -1305,8 +1336,8 @@ def _resolve_merchant_visible_ebay_refresh_probe(
 ) -> dict[str, Any]:
     """Resolve one exact current-store OAuth/Vault binding before token refresh."""
 
-    current_evidence = build_current_store_ebay_evidence(
-        repository,
+    current_evidence = build_current_store_ebay_refresh_evidence(
+        repository=repository,
         company_id=company_id,
         store_id=store_id,
     )
@@ -2167,12 +2198,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not store:
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
                 return
+            refresh_evidence = build_current_store_ebay_refresh_evidence(
+                repository=self.repository,
+                company_id=identity["company_id"],
+                store_id=store_id,
+            )
             self._send_json(
                 {
                     "ebay_oauth_read_only_status": self.repository.ebay_read_only_oauth_boundary(
                         company_id=identity["company_id"],
                         store_id=store_id,
-                    )
+                    ),
+                    "ebay_refresh_proof": _merchant_safe_current_store_ebay_refresh_evidence(refresh_evidence),
                 }
             )
             return

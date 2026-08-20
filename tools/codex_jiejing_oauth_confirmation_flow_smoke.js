@@ -156,17 +156,36 @@ function apiPayload(pathname) {
   if (pathname === "/health") return { status: "ok" };
   if (pathname === "/health/deep") return { operational_health: { status: "ready" } };
   if (pathname === "/readiness/product-saas") return { readiness: { beta_ready: true, production_ready: false, public_charging_allowed: false } };
+  if (pathname === `/stores/${store.store_id}/ebay-oauth/read-only-status`) {
+    return {
+      ebay_oauth_read_only_status: {
+        status: "authorized",
+        authorized: true,
+        pending: false,
+        strong_identity_ready: true,
+        backend_provenance_ready: true,
+        connection_id_sha256: crypto.createHash("sha256").update("connection-oauth-ui-fixture").digest("hex"),
+        repeat_oauth_allowed: false,
+        secret_exposed: false,
+      },
+      ebay_refresh_proof: {
+        status: refreshProofReady ? "verified" : "pending",
+        current_store_selected: true,
+        authorized: true,
+        strong_identity_ready: true,
+        backend_provenance_ready: true,
+        store_id_sha256: crypto.createHash("sha256").update(store.store_id).digest("hex"),
+        connection_id_sha256: crypto.createHash("sha256").update("connection-oauth-ui-fixture").digest("hex"),
+        refresh_success_ready: refreshProofReady,
+        refresh_same_connection_ready: refreshProofReady,
+        real_platform_writes_enabled: false,
+        secret_exposed: false,
+      },
+    };
+  }
   if (pathname === "/commercial/launch-gate") {
     return {
       commercial_launch_gate: {
-        current_store_ebay_evidence: {
-          current_store_selected: true,
-          store_id_sha256: crypto.createHash("sha256").update(store.store_id).digest("hex"),
-          connection_id_sha256: crypto.createHash("sha256").update("connection-oauth-ui-fixture").digest("hex"),
-          refresh_success_ready: refreshProofReady,
-          refresh_same_connection_ready: refreshProofReady,
-          secret_exposed: false,
-        },
         secret_exposed: false,
       },
     };
@@ -1427,11 +1446,22 @@ async function main() {
       throw new Error("authorized current store with no proof must expose one plain-language explicit validation action");
     }
     await refreshProofButton.click();
-    await authorizedPage.waitForFunction(
-      () => document.querySelector('[data-ebay-refresh-proof-status="verified"]') && state.saasLoading === false,
-      null,
-      { timeout: 10000 },
-    );
+    try {
+      await authorizedPage.waitForFunction(
+        () => document.querySelector('[data-ebay-refresh-proof-status="verified"]') && state.saasLoading === false,
+        null,
+        { timeout: 10000 },
+      );
+    } catch (_error) {
+      const diagnostic = await authorizedPage.evaluate(() => ({
+        error: String(state.saasError || ""),
+        loading: state.saasLoading,
+        status: document.querySelector('[data-ebay-refresh-proof-status]:not([hidden])')?.getAttribute("data-ebay-refresh-proof-status") || "",
+        proofStatus: state.saasEbayRefreshProofStatus?.status || "",
+        proofStoreBound: Boolean(state.saasEbayRefreshProofStatusStoreId),
+      }));
+      throw new Error(`credential proof did not reach verified state: ${JSON.stringify(diagnostic)} refresh=${counters.refreshProof}`);
+    }
     if (counters.refreshProof !== 1 || counters.confirmation !== authorizedCounts.confirmation || counters.plan !== authorizedCounts.plan || counters.sync !== authorizedCounts.sync) {
       throw new Error(`credential proof must perform one refresh only and no OAuth/sync; refresh=${counters.refreshProof} confirmation=${counters.confirmation} plan=${counters.plan} sync=${counters.sync}`);
     }

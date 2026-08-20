@@ -433,6 +433,102 @@ def build_current_store_ebay_evidence(
     }
 
 
+def build_current_store_ebay_refresh_evidence(
+    *,
+    repository: SaaSRepository,
+    company_id: str | None,
+    store_id: str | None,
+) -> dict[str, Any]:
+    """Build the small merchant-safe proof used by the explicit refresh action.
+
+    The full commercial launch gate joins every launch domain and can be slow on
+    a live store.  This proof deliberately reads only the selected OAuth
+    boundary and its latest backend refresh audit.
+    """
+
+    base = {
+        "status": "blocked",
+        "current_store_selected": False,
+        "authorized": False,
+        "strong_identity_ready": False,
+        "backend_provenance_ready": False,
+        "store_id_sha256": "",
+        "connection_id_sha256": "",
+        "refresh_success_ready": False,
+        "refresh_same_connection_ready": False,
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+    normalized_company_id = str(company_id or "").strip()
+    selected_store_id = str(store_id or "").strip()
+    if not normalized_company_id or not selected_store_id:
+        return base
+    store = repository.get_store_for_company(
+        company_id=normalized_company_id,
+        store_id=selected_store_id,
+    )
+    if not store or str(store.get("platform") or "").strip().lower() != "ebay":
+        return base
+
+    store_hash = hashlib.sha256(selected_store_id.encode("utf-8")).hexdigest()
+    oauth_boundary = repository.current_ebay_read_only_oauth_boundary(
+        company_id=normalized_company_id,
+        store_id=selected_store_id,
+    )
+    connection_hash = str(oauth_boundary.get("connection_id_sha256") or "").strip().lower()
+    oauth_ready = bool(
+        oauth_boundary.get("authorized") is True
+        and oauth_boundary.get("current_store_selected") is True
+        and oauth_boundary.get("strong_identity_ready") is True
+        and oauth_boundary.get("backend_provenance_ready") is True
+        and str(oauth_boundary.get("store_id_sha256") or "").strip().lower() == store_hash
+        and _is_sha256(connection_hash)
+        and oauth_boundary.get("secret_exposed") is False
+    )
+    refresh_audit = repository.find_latest_audit_log_by_target(
+        company_id=normalized_company_id,
+        store_id=selected_store_id,
+        action_type="oauth.token_refresh.executed",
+        target_type="store",
+        target_id=selected_store_id,
+    )
+    refresh_details = (
+        refresh_audit.get("details")
+        if isinstance(refresh_audit, dict) and isinstance(refresh_audit.get("details"), dict)
+        else {}
+    )
+    refresh_same_connection_ready = bool(
+        oauth_ready
+        and refresh_audit
+        and str(refresh_audit.get("company_id") or "") == normalized_company_id
+        and str(refresh_audit.get("store_id") or "") == selected_store_id
+        and str(refresh_audit.get("actor_type") or "") == "system"
+        and str(refresh_audit.get("target_id") or "") == selected_store_id
+        and str(refresh_details.get("connection_id_sha256") or "").strip().lower() == connection_hash
+        and _is_sha256(refresh_details.get("credential_ref_sha256"))
+    )
+    refresh_ready = bool(
+        refresh_same_connection_ready
+        and refresh_details.get("ok") is True
+        and str(refresh_details.get("status") or "") == "refreshed"
+        and str(refresh_details.get("source") or "") == "backend_vault_secret_ref_refresh"
+        and refresh_details.get("secret_exposed") is False
+        and _launch_fresh(_launch_timestamp(refresh_audit.get("created_at") if refresh_audit else None))
+    )
+    return {
+        **base,
+        "status": "verified" if refresh_ready else "pending" if oauth_ready else "blocked",
+        "current_store_selected": True,
+        "authorized": oauth_ready,
+        "strong_identity_ready": oauth_ready,
+        "backend_provenance_ready": oauth_ready,
+        "store_id_sha256": store_hash,
+        "connection_id_sha256": connection_hash if oauth_ready else "",
+        "refresh_success_ready": refresh_ready,
+        "refresh_same_connection_ready": refresh_same_connection_ready,
+    }
+
+
 def _build_current_store_ebay_evidence(
     *,
     repository: SaaSRepository,

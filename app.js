@@ -159,6 +159,8 @@ const state = {
   saasIpRiskScreening: null,
   saasCommercialLaunchGate: null,
   saasCommercialLaunchGateStoreId: "",
+  saasEbayRefreshProofStatus: null,
+  saasEbayRefreshProofStatusStoreId: "",
   saasDatabasePlan: null,
   saasDatabaseAdapters: null,
   saasDatabaseInventory: null,
@@ -17294,6 +17296,8 @@ function resetSaasProtectedWorkbenchState() {
   state.saasIpRiskScreening = null;
   state.saasCommercialLaunchGate = null;
   state.saasCommercialLaunchGateStoreId = "";
+  state.saasEbayRefreshProofStatus = null;
+  state.saasEbayRefreshProofStatusStoreId = "";
   state.saasEdgeCutoverPreflight = null;
   state.saasDataPackets = [];
   state.saasQueuePlan = null;
@@ -28068,6 +28072,8 @@ async function refreshSaasState(options = {}) {
     state.saasModelValueGate = null;
     state.saasCommercialLaunchGate = null;
     state.saasCommercialLaunchGateStoreId = "";
+    state.saasEbayRefreshProofStatus = null;
+    state.saasEbayRefreshProofStatusStoreId = "";
     state.saasPostPublishCockpit = null;
     state.saasOwnerLaunchControl = null;
     state.saasEdgeCutoverPreflight = null;
@@ -30434,6 +30440,81 @@ function validatedSaasEbayRefreshProofResponse(payload, store) {
   return refresh;
 }
 
+function validatedSaasEbayRefreshProofStatusResponse(payload, expectedStoreHash) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const topAllowed = new Set(["ebay_oauth_read_only_status", "ebay_refresh_proof"]);
+  if (Object.keys(payload).some((key) => !topAllowed.has(key))) return null;
+  const oauth = payload.ebay_oauth_read_only_status;
+  const proof = payload.ebay_refresh_proof;
+  if (!oauth || typeof oauth !== "object" || Array.isArray(oauth)) return null;
+  if (!proof || typeof proof !== "object" || Array.isArray(proof)) return null;
+  const oauthAllowed = new Set([
+    "status",
+    "authorized",
+    "pending",
+    "strong_identity_ready",
+    "backend_provenance_ready",
+    "connection_id_sha256",
+    "repeat_oauth_allowed",
+    "secret_exposed",
+  ]);
+  const proofAllowed = new Set([
+    "status",
+    "current_store_selected",
+    "authorized",
+    "strong_identity_ready",
+    "backend_provenance_ready",
+    "store_id_sha256",
+    "connection_id_sha256",
+    "refresh_success_ready",
+    "refresh_same_connection_ready",
+    "real_platform_writes_enabled",
+    "secret_exposed",
+  ]);
+  if (Object.keys(oauth).some((key) => !oauthAllowed.has(key))) return null;
+  if (Object.keys(proof).some((key) => !proofAllowed.has(key))) return null;
+  const connectionHash = String(proof.connection_id_sha256 || "").toLowerCase();
+  const verified = proof.status === "verified";
+  const pending = proof.status === "pending";
+  if (
+    (!verified && !pending) ||
+    oauth.status !== "authorized" ||
+    oauth.authorized !== true ||
+    oauth.pending !== false ||
+    oauth.strong_identity_ready !== true ||
+    oauth.backend_provenance_ready !== true ||
+    oauth.repeat_oauth_allowed !== false ||
+    oauth.secret_exposed !== false ||
+    !/^[a-f0-9]{64}$/i.test(connectionHash) ||
+    String(oauth.connection_id_sha256 || "").toLowerCase() !== connectionHash ||
+    proof.current_store_selected !== true ||
+    proof.authorized !== true ||
+    proof.strong_identity_ready !== true ||
+    proof.backend_provenance_ready !== true ||
+    !expectedStoreHash ||
+    String(proof.store_id_sha256 || "").toLowerCase() !== String(expectedStoreHash).toLowerCase() ||
+    (verified && (proof.refresh_success_ready !== true || proof.refresh_same_connection_ready !== true)) ||
+    (pending && (proof.refresh_success_ready !== false || proof.refresh_same_connection_ready !== false)) ||
+    proof.real_platform_writes_enabled !== false ||
+    proof.secret_exposed !== false
+  ) {
+    return null;
+  }
+  return proof;
+}
+
+async function fetchSaasEbayRefreshProofStatus(store) {
+  const storeId = String(store?.store_id || "").trim();
+  const expectedStoreHash = storeId ? await saasSha256Hex(storeId) : "";
+  if (!storeId || !expectedStoreHash) throw new Error("ebay_refresh_proof_store_binding_missing");
+  const payload = await saasFetch(`/stores/${encodeURIComponent(storeId)}/ebay-oauth/read-only-status`);
+  const proof = validatedSaasEbayRefreshProofStatusResponse(payload, expectedStoreHash);
+  if (!proof) throw new Error("ebay_refresh_proof_status_contract_invalid");
+  state.saasEbayRefreshProofStatus = proof;
+  state.saasEbayRefreshProofStatusStoreId = storeId;
+  return proof;
+}
+
 async function verifySaasEbayCredentialProof() {
   const store = activeSaasStore();
   const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
@@ -30446,19 +30527,10 @@ async function verifySaasEbayCredentialProof() {
   state.saasError = "";
   renderSaasBackendPanel();
   try {
-    await refreshSaasState({ silent: true, refreshLaunchGate: true });
     const refreshedStore = activeSaasStore();
     if (String(refreshedStore?.store_id || "") !== storeId) throw new Error("ebay_refresh_proof_store_changed");
-    const expectedStoreHash = await saasSha256Hex(storeId);
-    const evidence = state.saasCommercialLaunchGate?.current_store_ebay_evidence || {};
-    const exactEvidence =
-      String(state.saasCommercialLaunchGateStoreId || "") === storeId &&
-      evidence.current_store_selected === true &&
-      expectedStoreHash &&
-      String(evidence.store_id_sha256 || "").toLowerCase() === expectedStoreHash.toLowerCase() &&
-      evidence.secret_exposed === false;
-    if (!exactEvidence) throw new Error("ebay_refresh_proof_current_store_evidence_invalid");
-    if (evidence.refresh_success_ready === true && evidence.refresh_same_connection_ready === true) {
+    const initialProof = await fetchSaasEbayRefreshProofStatus(refreshedStore);
+    if (initialProof.refresh_success_ready === true && initialProof.refresh_same_connection_ready === true) {
       showActionToast("当前 eBay 店铺连接已经验证可用，不需要重复检查或重新授权。");
       return;
     }
@@ -30478,14 +30550,10 @@ async function verifySaasEbayCredentialProof() {
     if (!validatedSaasEbayRefreshProofResponse(payload, refreshedStore)) {
       throw new Error("ebay_refresh_proof_response_contract_invalid");
     }
-    await refreshSaasState({ silent: true, refreshLaunchGate: true });
-    const verifiedEvidence = state.saasCommercialLaunchGate?.current_store_ebay_evidence || {};
-    const verifiedStoreHash = await saasSha256Hex(String(activeSaasStore()?.store_id || ""));
+    const verifiedEvidence = await fetchSaasEbayRefreshProofStatus(activeSaasStore());
     if (
       String(activeSaasStore()?.store_id || "") !== storeId ||
-      String(state.saasCommercialLaunchGateStoreId || "") !== storeId ||
-      !verifiedStoreHash ||
-      String(verifiedEvidence.store_id_sha256 || "").toLowerCase() !== verifiedStoreHash.toLowerCase() ||
+      String(state.saasEbayRefreshProofStatusStoreId || "") !== storeId ||
       verifiedEvidence.refresh_success_ready !== true ||
       verifiedEvidence.refresh_same_connection_ready !== true ||
       verifiedEvidence.secret_exposed !== false
@@ -30499,6 +30567,7 @@ async function verifySaasEbayCredentialProof() {
   } finally {
     state.saasLoading = false;
     renderSaasBackendPanel();
+    renderSaasConnectCenter(document.querySelector("#view-connect"));
   }
 }
 
@@ -42379,13 +42448,23 @@ function saasUnpublishedDraftConnectionConfirmationView(ctx = {}, draftSaveAutho
 }
 
 function saasCurrentStoreEbayRefreshProofView(ebayAuthorized = false) {
-  const evidence = state.saasCommercialLaunchGate?.current_store_ebay_evidence;
-  const exactEvidence = evidence && typeof evidence === "object" && !Array.isArray(evidence) ? evidence : {};
   const currentStoreId = String(activeSaasStore()?.store_id || "");
+  const directEvidence =
+    String(state.saasEbayRefreshProofStatusStoreId || "") === currentStoreId &&
+    state.saasEbayRefreshProofStatus &&
+    typeof state.saasEbayRefreshProofStatus === "object" &&
+    !Array.isArray(state.saasEbayRefreshProofStatus)
+      ? state.saasEbayRefreshProofStatus
+      : null;
+  const launchEvidence = state.saasCommercialLaunchGate?.current_store_ebay_evidence;
+  const exactEvidence = directEvidence || (launchEvidence && typeof launchEvidence === "object" && !Array.isArray(launchEvidence) ? launchEvidence : {});
+  const evidenceBound = directEvidence
+    ? String(state.saasEbayRefreshProofStatusStoreId || "") === currentStoreId
+    : String(state.saasCommercialLaunchGateStoreId || "") === currentStoreId;
   const ready = Boolean(
     ebayAuthorized &&
       currentStoreId &&
-      String(state.saasCommercialLaunchGateStoreId || "") === currentStoreId &&
+      evidenceBound &&
       exactEvidence.current_store_selected === true &&
       exactEvidence.refresh_success_ready === true &&
       exactEvidence.refresh_same_connection_ready === true &&
