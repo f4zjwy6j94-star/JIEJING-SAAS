@@ -520,8 +520,14 @@ async function main() {
   fs.rmSync(OUT, { recursive: true, force: true });
   fs.mkdirSync(OUT, { recursive: true });
   const { server, base } = await startServer();
-  const executablePath = process.env.JIEJING_PLAYWRIGHT_EXECUTABLE || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-  const browser = await chromium.launch({ headless: true, executablePath });
+  const executablePath = String(process.env.JIEJING_PLAYWRIGHT_EXECUTABLE || "").trim();
+  const launchOptions = { headless: true };
+  if (executablePath) {
+    launchOptions.executablePath = executablePath;
+  } else {
+    launchOptions.channel = process.env.JIEJING_PLAYWRIGHT_CHANNEL || "chrome";
+  }
+  const browser = await chromium.launch(launchOptions);
   try {
     await runAccessStates(browser, base);
     await runRotatingSessionRecovery(browser, base);

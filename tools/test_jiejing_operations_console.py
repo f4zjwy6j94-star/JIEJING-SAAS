@@ -434,6 +434,7 @@ def main() -> int:
 
         ops_html = (ROOT / "ops.html").read_text(encoding="utf-8")
         ops_js = (ROOT / "ops.js").read_text(encoding="utf-8")
+        browser_smoke = (ROOT / "tools" / "codex_jiejing_operations_console_smoke.js").read_text(encoding="utf-8")
         nginx = (ROOT / "deploy" / "nginx.public-staging.conf").read_text(encoding="utf-8")
         caddy_systemd = (ROOT / "deploy" / "Caddyfile.public-staging.systemd").read_text(encoding="utf-8")
         if "noindex,nofollow" not in ops_html or "/owner/auth/login" not in ops_js:
@@ -502,6 +503,11 @@ def main() -> int:
             return fail("systemd edge is missing the isolated operations hostname")
         if any(name in ops_js.lower() for name in ("fal.ai", "fal_api", "runway")):
             return fail("operations frontend exposed a media supplier brand")
+        if "Program Files\\\\Google\\\\Chrome" in browser_smoke:
+            return fail("operations browser smoke hard-codes a Windows-only Chrome executable")
+        for marker in ("JIEJING_PLAYWRIGHT_EXECUTABLE", "JIEJING_PLAYWRIGHT_CHANNEL", 'launchOptions.channel ='):
+            if marker not in browser_smoke:
+                return fail(f"operations browser smoke is missing its cross-platform launch contract: {marker}")
 
         print("PASS jiejing_operations_console")
         return 0
