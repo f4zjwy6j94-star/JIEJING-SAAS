@@ -4405,6 +4405,7 @@ const saasExactReadOnlyOAuthConfirmationButtonBindings = new WeakMap();
 let saasVerifiedUnpublishedDraftSaveConfirmations = new WeakSet();
 let saasVerifiedInventoryLocationConfirmations = new WeakSet();
 let saasExactReadOnlyOAuthConfirmationRenderGeneration = 0;
+let saasStateRefreshGeneration = 0;
 const saasReadOnlyOAuthPlanAttemptKeys = new Set();
 const saasUnpublishedDraftOAuthPlanAttemptKeys = new Set();
 const saasInventoryLocationExecutionAttemptKeys = new Set();
@@ -27547,6 +27548,8 @@ function saasCanViewPlatformInternalFromPermissions(payload) {
 
 async function refreshSaasState(options = {}) {
   const { silent = false, refreshLaunchGate = true } = options;
+  const refreshGeneration = ++saasStateRefreshGeneration;
+  const isCurrentRefresh = () => refreshGeneration === saasStateRefreshGeneration;
   const canFetchProtectedState = hasSaasProtectedSessionCandidate();
   const activeAccountAliasesBeforeRefresh = new Set(saasAccountStorageAliases());
   const restoredCachedState = canFetchProtectedState && hydrateSaasProtectedStateFromCache();
@@ -27573,7 +27576,9 @@ async function refreshSaasState(options = {}) {
   try {
     if (!canFetchProtectedState) {
       await saasFetch("/health");
+      if (!isCurrentRefresh()) return;
       const readinessPayload = await saasFetch("/readiness/product-saas");
+      if (!isCurrentRefresh()) return;
       state.saasReadiness = readinessPayload.readiness || null;
       resetSaasProtectedWorkbenchState();
       state.saasError = "";
@@ -27582,6 +27587,7 @@ async function refreshSaasState(options = {}) {
       return;
     }
     const store = await ensureSaasDemoStoreAndConnection();
+    if (!isCurrentRefresh()) return;
     state.saasConnected = true;
     syncSaasPublicMvpMode();
     renderStoreContext();
@@ -27629,6 +27635,7 @@ async function refreshSaasState(options = {}) {
       optionalSaasFetchFast("/auth/sessions", { sessions: [] }, 10000),
       optionalSaasFetchFast("/readiness/product-saas", { readiness: state.saasReadiness || null }, 10000),
     ]);
+    if (!isCurrentRefresh()) return;
     state.saasIdentity = coreMe.identity || null;
     state.saasUser = coreMe.user || null;
     state.saasCompany = coreMe.company || null;
@@ -27652,6 +27659,7 @@ async function refreshSaasState(options = {}) {
     const coreLiveConfirmations = coreConfirmations.confirmations || [];
     await verifySaasUnpublishedDraftSaveConfirmations(coreLiveConfirmations);
     await verifySaasInventoryLocationConfirmations(coreLiveConfirmations);
+    if (!isCurrentRefresh()) return;
     state.saasConfirmations = coreLiveConfirmations;
     state.saasConfirmationsLiveLoaded = true;
     state.saasReadiness = coreReadiness.readiness || state.saasReadiness || null;
@@ -27850,6 +27858,7 @@ async function refreshSaasState(options = {}) {
       optionalSaasFetchFast("/execution-results?limit=20", { execution_results: state.saasExecutionResults || [] }, 12000),
       optionalSaasFetchFast("/audit-logs?limit=80", { audit_logs: state.saasAuditLogs || [] }, 12000),
     ]);
+    if (!isCurrentRefresh()) return;
     state.saasConnected = true;
     state.saasIdentity = me.identity || null;
     state.saasUser = me.user || null;
@@ -27884,12 +27893,14 @@ async function refreshSaasState(options = {}) {
     state.saasOwnerLaunchControl = canViewPlatformInternal ? ownerLaunchControl.owner_launch_control || state.saasOwnerLaunchControl || null : null;
     if (canViewPlatformInternal) {
       const rateLimitStatus = await optionalSaasFetchFast("/security/rate-limit/status", { rate_limit_status: state.saasRateLimitStatus || null }, 10000);
+      if (!isCurrentRefresh()) return;
       state.saasRateLimitStatus = rateLimitStatus.rate_limit_status || state.saasRateLimitStatus || null;
       const operationsOverview = await optionalSaasFetchFast(
         "/owner/operations-overview",
         { operations_overview: state.saasOperationsOverview || null },
         10000,
       );
+      if (!isCurrentRefresh()) return;
       state.saasOperationsOverview = operationsOverview.operations_overview || state.saasOperationsOverview || null;
     } else {
       state.saasRateLimitStatus = null;
@@ -27928,6 +27939,7 @@ async function refreshSaasState(options = {}) {
       const refreshedAccountHealth = await optionalSaasFetchFast(`/stores/${encodeURIComponent(refreshedActiveStore.store_id)}/account-health`, {
         account_health: state.saasAccountHealth || null,
       }, 10000);
+      if (!isCurrentRefresh()) return;
       state.saasAccountHealth = refreshedAccountHealth.account_health || state.saasAccountHealth;
     }
     state.saasIpRiskScreening = ipRiskScreening.ip_risk_screening || null;
@@ -27941,6 +27953,7 @@ async function refreshSaasState(options = {}) {
           secret_exposed: false,
         },
       });
+      if (!isCurrentRefresh()) return;
       state.saasIpRiskScreening = refreshedIpRisk.ip_risk_screening || state.saasIpRiskScreening;
     }
     state.saasQueuePlan = canViewPlatformInternal ? queuePlan.queue_plan || null : null;
@@ -27965,6 +27978,7 @@ async function refreshSaasState(options = {}) {
     const liveConfirmations = confirmations.confirmations || [];
     await verifySaasUnpublishedDraftSaveConfirmations(liveConfirmations);
     await verifySaasInventoryLocationConfirmations(liveConfirmations);
+    if (!isCurrentRefresh()) return;
     state.saasConfirmations = liveConfirmations;
     state.saasConfirmationsLiveLoaded = true;
     state.saasMerchantMemory = merchantMemory.merchant_memory || [];
@@ -27981,6 +27995,7 @@ async function refreshSaasState(options = {}) {
     state.saasLastCeoCommandHydratePromise = hydrateSaasCeoCommandFromBackend(refreshedActiveStore?.store_id || store.store_id);
     if (options.includeEbayDiagnostics === true) {
       await refreshSaasEbayDiagnostics({ silent: true });
+      if (!isCurrentRefresh()) return;
     }
     const latestTaskId =
       state.saasLastWorkflowTaskId ||
@@ -27988,10 +28003,13 @@ async function refreshSaasState(options = {}) {
       "";
     if (latestTaskId) {
       const stepsPayload = await saasFetch(`/tasks/${encodeURIComponent(latestTaskId)}/steps`);
+      if (!isCurrentRefresh()) return;
       state.saasTaskSteps = stepsPayload.steps || [];
       const providerPlanPayload = await saasFetch(`/tasks/${encodeURIComponent(latestTaskId)}/provider-job-plan`);
+      if (!isCurrentRefresh()) return;
       state.saasProviderJobPlan = providerPlanPayload.provider_job_plan || null;
       const secretGrantPayload = await saasFetch(`/tasks/${encodeURIComponent(latestTaskId)}/secret-grant-plan`);
+      if (!isCurrentRefresh()) return;
       state.saasSecretGrantPlan = secretGrantPayload.secret_grant_plan || null;
     } else {
       state.saasTaskSteps = [];
@@ -28002,6 +28020,7 @@ async function refreshSaasState(options = {}) {
     applySaasDataPacketsToActivities();
     if (!silent) showActionToast("SaaS 后端状态已刷新：账号、店铺、任务、报告、确认和审计已同步。");
   } catch (error) {
+    if (!isCurrentRefresh()) return;
     if (/401|403|missing bearer|invalid token|expired/i.test(String(error.message || ""))) {
       clearSaasSessionFromStorage({ preserveCeoThread: true });
       if (isSaasPublicMvpMode() && isProtectedSaasAppRoute()) {
@@ -28016,6 +28035,7 @@ async function refreshSaasState(options = {}) {
       state.saasError = `工作台部分状态读取失败：${error.message}`;
       if (!state.saasReadiness) {
         await refreshSaasPublicReadiness({ render: false });
+        if (!isCurrentRefresh()) return;
       }
       if (!silent) showActionToast("工作台已保持登录；部分状态读取失败，请刷新重试。");
       return;
@@ -28063,9 +28083,11 @@ async function refreshSaasState(options = {}) {
     state.saasMediaAssetJobs = [];
     if (!state.saasReadiness) {
       await refreshSaasPublicReadiness({ render: false });
+      if (!isCurrentRefresh()) return;
     }
     if (!silent) showActionToast("工作台后端未连接：请登录后读取真实店铺结果。");
   } finally {
+    if (!isCurrentRefresh()) return;
     state.saasLoading = false;
     syncSaasPublicMvpMode();
     renderSaasBackendPanel();

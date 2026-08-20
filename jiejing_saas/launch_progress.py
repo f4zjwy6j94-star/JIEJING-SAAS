@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 
-FIXED_LAUNCH_PROGRESS_VERSION = "2026-07-14-fixed-public-launch-progress-v1"
+FIXED_LAUNCH_PROGRESS_VERSION = "2026-08-20-fixed-public-launch-progress-v2"
 
 FIXED_LAUNCH_CATEGORY_WEIGHTS: dict[str, int] = {
     "merchant_product": 20,
@@ -125,6 +125,7 @@ def build_fixed_launch_progress(
         "execution_service",
         "safe_demo_boundary",
         "ebay_draft_save_adapter_ready_disabled",
+        "unpublished_ebay_draft_save_proven",
         "confirmation_gated",
         "ready",
     )
@@ -143,6 +144,11 @@ def build_fixed_launch_progress(
         "ready",
     )
     backup_restore_ready = _item_status(item_statuses, "backup_restore", "ready")
+    backup_restore_requires_offline_custody = _item_status(
+        item_statuses,
+        "backup_restore",
+        "blocked_vault_unseal_custody_not_ready",
+    )
     monitoring_alerting_ready = _item_status(
         item_statuses,
         "monitoring_alerting",
@@ -218,9 +224,10 @@ def build_fixed_launch_progress(
                     label="发布后经营回路完整",
                     points=2,
                     passed=_group_ready(groups, "post_publish_cockpit"),
-                    executor="codex_internal",
+                    executor="joint_confirmation",
                     priority=30,
                     next_action="补齐发布回执、异常和后续经营反馈。",
+                    actionable_now=False,
                 ),
                 _check(
                     key="real_merchant_workflow_validation",
@@ -269,9 +276,10 @@ def build_fixed_launch_progress(
                     label="备份与恢复",
                     points=3,
                     passed=backup_restore_ready,
-                    executor="codex_internal",
+                    executor=("joint_confirmation" if backup_restore_requires_offline_custody else "codex_internal"),
                     priority=22,
                     next_action="完成备份恢复演练并归档证据。",
+                    actionable_now=not backup_restore_requires_offline_custody,
                 ),
                 _check(
                     key="monitoring_alerting_ready",

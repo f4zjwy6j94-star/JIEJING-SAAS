@@ -35,6 +35,7 @@ let confirmationReadDelayMs = 0;
 let extendedOptionalDelayMs = 0;
 let planResponseMode = "valid";
 let oauthRequestsOverride = null;
+let heldConfirmationSnapshot = null;
 const sellerReadOnlyScopes = [
   "https://api.ebay.com/oauth/api_scope",
   "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
@@ -86,6 +87,15 @@ function exactSyncConfirmation(status = "pending", storeId = store.store_id, dec
       secret_exposed: false,
     },
   };
+}
+
+function holdNextConfirmationSnapshot() {
+  let release;
+  let seen;
+  const releasePromise = new Promise((resolve) => { release = resolve; });
+  const seenPromise = new Promise((resolve) => { seen = resolve; });
+  heldConfirmationSnapshot = { releasePromise, seen };
+  return { release, seenPromise };
 }
 
 function sendJson(res, status, payload) {
@@ -511,6 +521,15 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 200, {});
     return;
   }
+  if (req.method === "GET" && url.pathname === "/confirmations" && heldConfirmationSnapshot) {
+    const hold = heldConfirmationSnapshot;
+    heldConfirmationSnapshot = null;
+    const snapshot = JSON.parse(JSON.stringify(apiPayload(url.pathname)));
+    hold.seen();
+    await hold.releasePromise;
+    sendJson(res, 200, snapshot);
+    return;
+  }
   if (req.method === "GET" && url.pathname === "/confirmations" && confirmationReadDelayMs > 0) {
     await new Promise((resolve) => setTimeout(resolve, confirmationReadDelayMs));
   }
@@ -540,6 +559,33 @@ async function openAccountSettingsPage(context, base, consoleErrors) {
     { timeout: 10000 },
   );
   return page;
+}
+
+async function waitForUniqueVisibleConfirmation(page, locator, label, timeout = 15000) {
+  const readShape = () => page.evaluate(() => ({
+    loading: state.saasLoading,
+    liveLoaded: state.saasConfirmationsLiveLoaded,
+    view: document.body?.dataset?.view || "",
+    confirmations: (state.saasConfirmations || []).map((card) => ({
+      action: String(card?.action_type || card?.item?.action_type || ""),
+      status: String(card?.status || ""),
+    })),
+    visibleCards: Array.from(document.querySelectorAll("#saasConfirmPanel .saas-confirm-card"))
+      .filter((card) => card instanceof HTMLElement && card.offsetParent !== null)
+      .map((card) => String(card.textContent || "").trim().slice(0, 120)),
+  }));
+  try {
+    await locator.waitFor({ state: "visible", timeout });
+  } catch (error) {
+    const shape = await readShape();
+    throw new Error(`${label} must become visible after the live confirmation refresh; state=${JSON.stringify(shape)}`);
+  }
+  const count = await locator.count();
+  if (count !== 1) {
+    const shape = await readShape();
+    throw new Error(`${label} must be unique; count=${count} state=${JSON.stringify(shape)}`);
+  }
+  return locator;
 }
 
 async function showAccountSettings(page) {
@@ -657,6 +703,26 @@ async function main() {
     confirmationReadDelayMs = 0;
     if (legacySnapshotContract.sensitiveStatePresent || legacySnapshotContract.sensitiveStoragePresent) {
       throw new Error(`legacy protected snapshot must be removed before exact OAuth state can hydrate; result=${JSON.stringify(legacySnapshotContract)}`);
+    }
+    await page.waitForTimeout(6500);
+    const stableListingConfirmations = confirmations;
+    const staleRefreshHold = holdNextConfirmationSnapshot();
+    const staleRefresh = page.evaluate(() => refreshSaasState({ silent: true }));
+    await staleRefreshHold.seenPromise;
+    confirmations = [exactOAuthConfirmation()];
+    await page.evaluate(() => refreshSaasState({ silent: true }));
+    const freshRefreshApplied = await page.evaluate(() =>
+      (state.saasConfirmations || []).some((card) => card.action_type === "ebay_oauth_scope_change" && card.status === "pending"),
+    );
+    staleRefreshHold.release();
+    await staleRefresh;
+    const staleRefreshIgnored = await page.evaluate(() =>
+      (state.saasConfirmations || []).some((card) => card.action_type === "ebay_oauth_scope_change" && card.status === "pending"),
+    );
+    confirmations = stableListingConfirmations;
+    await page.evaluate(() => refreshSaasState({ silent: true }));
+    if (!freshRefreshApplied || !staleRefreshIgnored) {
+      throw new Error(`older overlapping refresh must not overwrite newer confirmation state; fresh=${freshRefreshApplied} stale_ignored=${staleRefreshIgnored}`);
     }
     const poisonedListingContract = await page.evaluate(() => {
       const sentinel = "先划掉这些高合规/高售后/红海方向";
@@ -836,11 +902,13 @@ async function main() {
       throw new Error(`first click must create exactly one pending confirmation and zero OAuth plans; confirmation=${counters.confirmation} plan=${counters.plan}`);
     }
     await page.locator("#saasConfirmPanel").waitFor({ state: "visible" });
-    if ((await page.locator('#saasConfirmPanel [data-saas-action="approve-confirmation"]').count()) !== 1) {
-      throw new Error("pending OAuth confirmation must be visible in the confirmation center");
-    }
+    const firstPendingOauthApproval = await waitForUniqueVisibleConfirmation(
+      page,
+      page.locator('#saasConfirmPanel [data-saas-confirmation-flow="ebay-read-only-oauth-current-store"][data-saas-action="approve-confirmation"]'),
+      "pending OAuth confirmation",
+    );
     if (
-      !(await page.locator('#saasConfirmPanel [data-saas-confirmation-flow="ebay-read-only-oauth-current-store"]').isVisible()) ||
+      !(await firstPendingOauthApproval.isVisible()) ||
       counters.confirmation !== 1 ||
       counters.plan !== 0
     ) {
@@ -1034,6 +1102,13 @@ async function main() {
     }
     const duplicatePlanCount = counters.plan;
     const pendingServerConfirmations = confirmations;
+    if (
+      pendingServerConfirmations.filter(
+        (card) => card.action_type === "ebay_oauth_scope_change" && card.status === "pending",
+      ).length !== 1
+    ) {
+      throw new Error(`fixture must retain one pending OAuth confirmation before duplicate-plan attack; actions=${JSON.stringify(pendingServerConfirmations.map((card) => ({ action: card.action_type, status: card.status })))}`);
+    }
     const approvedServerConfirmation = exactOAuthConfirmation("approved", store.store_id, new Date().toISOString());
     confirmations = [
       approvedServerConfirmation,
@@ -1043,6 +1118,13 @@ async function main() {
       await planSaasEbayReadOnlyOAuth();
     });
     confirmations = pendingServerConfirmations;
+    if (
+      confirmations.filter(
+        (card) => card.action_type === "ebay_oauth_scope_change" && card.status === "pending",
+      ).length !== 1
+    ) {
+      throw new Error("fixture must restore the pending OAuth confirmation after duplicate-plan attack");
+    }
     await page.evaluate(async () => {
       await refreshSaasState({ silent: true });
       renderSaasConfirmPanel();
@@ -1075,7 +1157,7 @@ async function main() {
     const stablePendingApproval = page.locator(
       '#saasConfirmPanel [data-saas-confirmation-flow="ebay-read-only-oauth-current-store"][data-saas-action="approve-confirmation"]',
     );
-    await stablePendingApproval.waitFor({ state: "visible", timeout: 5000 });
+    await waitForUniqueVisibleConfirmation(page, stablePendingApproval, "stable pending OAuth confirmation");
     await stablePendingApproval.click();
     await page.waitForFunction(() => document.querySelector("#saasConfirmPanel"));
     await page.waitForTimeout(200);
@@ -1310,9 +1392,7 @@ async function main() {
       throw new Error(`first official sync click must create one pending exact confirmation and perform zero syncs; confirmation=${counters.syncConfirmation} sync=${counters.sync} state=${JSON.stringify(stateShape)}`);
     }
     const exactSyncCard = syncPage.locator("#saasConfirmPanel .saas-confirm-card").filter({ hasText: "ebay_read_only_sync" });
-    if (!(await exactSyncCard.isVisible())) {
-      throw new Error("pending exact official sync confirmation must be visible in the confirmation center");
-    }
+    await waitForUniqueVisibleConfirmation(syncPage, exactSyncCard, "pending exact official sync confirmation");
     await exactSyncCard.locator('[data-saas-action="approve-confirmation"]').click();
     await syncPage.waitForFunction(
       () => (state.saasConfirmations || []).some((card) => card.action_type === "ebay_read_only_sync" && card.status === "approved"),

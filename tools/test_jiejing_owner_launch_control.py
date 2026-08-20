@@ -96,7 +96,7 @@ def main() -> int:
     if packet.get("public_paid_launch_allowed") is not False:
         return fail("owner launch control must not directly allow paid public launch")
     fixed_progress = packet.get("fixed_launch_progress") if isinstance(packet.get("fixed_launch_progress"), dict) else {}
-    if fixed_progress.get("contract_version") != "2026-07-14-fixed-public-launch-progress-v1":
+    if fixed_progress.get("contract_version") != "2026-08-20-fixed-public-launch-progress-v2":
         return fail("fixed launch progress contract missing from owner control")
     if fixed_progress.get("fixed_denominator") is not True or fixed_progress.get("total_points") != 100:
         return fail("owner progress must use the fixed 100-point denominator")
