@@ -75,6 +75,8 @@ def main() -> int:
     values = _values(PRODUCTION_ENV.read_text(encoding="utf-8"))
     expected = {
         "JIEJING_SAAS_ENV": "production",
+        "JIEJING_SAAS_SESSION_TTL_SECONDS": "1800",
+        "JIEJING_SAAS_REFRESH_TTL_SECONDS": "2592000",
         "JIEJING_PRIMARY_CUSTOMER_REGION": "mainland_china",
         "JIEJING_DOMESTIC_PAYMENT_PROVIDER": "wechat_pay_native",
         "JIEJING_BILLING_PROVIDER": "wechat_pay_native",

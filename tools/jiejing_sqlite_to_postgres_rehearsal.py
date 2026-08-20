@@ -26,6 +26,9 @@ DEFAULT_SUMMARY = ROOT / "output" / "jiejing-infrastructure-stage-gate" / "sqlit
 TABLE_ORDER = (
     "companies",
     "users",
+    "user_refresh_sessions",
+    "user_refresh_token_history",
+    "user_sessions",
     "team_members",
     "team_invitations",
     "stores",

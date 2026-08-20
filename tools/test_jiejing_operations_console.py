@@ -438,7 +438,7 @@ def main() -> int:
         caddy_systemd = (ROOT / "deploy" / "Caddyfile.public-staging.systemd").read_text(encoding="utf-8")
         if "noindex,nofollow" not in ops_html or "/owner/auth/login" not in ops_js:
             return fail("operations frontend security markers are missing")
-        cache_version = "20260803-product-feedback-v1"
+        cache_version = "20260820-ops-rotating-session-v2"
         if ops_html.count(cache_version) != 2:
             return fail("operations feedback cache version is not exact for CSS and JS")
         for marker in (
@@ -470,7 +470,7 @@ def main() -> int:
             return fail("merchant application is not the explicit default virtual host")
         if "location ~ ^/(auth|permissions|owner)(/|$)" in nginx:
             return fail("operations hostname exposes broad backend route prefixes")
-        for allowed_route in ("auth/logout", "permissions/me", "owner/auth/login", "owner/operations-overview"):
+        for allowed_route in ("auth/logout", "auth/refresh", "permissions/me", "owner/auth/login", "owner/operations-overview"):
             if allowed_route not in nginx:
                 return fail(f"operations hostname is missing required route: {allowed_route}")
         app_server_start = nginx.find("server {\n    listen 80 default_server;")
@@ -478,6 +478,11 @@ def main() -> int:
             return fail("merchant application default server block is missing")
         ops_server = nginx[:app_server_start]
         app_server = nginx[app_server_start:]
+        refresh_start = ops_server.find("location = /auth/refresh")
+        refresh_end = ops_server.find("\n    location ", refresh_start + len("location = /auth/refresh"))
+        refresh_block = ops_server[refresh_start : refresh_end if refresh_end >= 0 else len(ops_server)]
+        if refresh_start < 0 or "$request_method != POST" not in refresh_block or "return 405" not in refresh_block or "proxy_pass" not in refresh_block:
+            return fail("operations refresh proxy must be an exact POST-only route")
         for exact_location, method_guard in (
             ("location = /owner/operations/feedback", "$request_method != GET"),
             ("location = /owner/product-feedback/review", "$request_method != POST"),

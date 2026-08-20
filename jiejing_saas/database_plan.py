@@ -11,6 +11,9 @@ from .repository import SaaSRepository
 
 CRITICAL_TABLES = [
     "users",
+    "user_refresh_sessions",
+    "user_refresh_token_history",
+    "user_sessions",
     "companies",
     "team_members",
     "team_invitations",
@@ -31,6 +34,10 @@ CRITICAL_TABLES = [
 
 
 CRITICAL_INDEXES = [
+    "idx_user_refresh_sessions_owner",
+    "idx_user_refresh_token_history_session",
+    "idx_user_sessions_refresh_session",
+    "idx_user_sessions_user_expiry",
     "idx_stores_company_platform_created",
     "idx_team_members_company_role",
     "idx_team_invitations_company_status_created",

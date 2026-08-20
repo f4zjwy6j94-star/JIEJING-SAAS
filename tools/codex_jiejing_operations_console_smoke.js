@@ -5,7 +5,7 @@ const fs = require("fs");
 const http = require("http");
 const os = require("os");
 const path = require("path");
-const { chromium } = require("playwright");
+const { chromium } = require("../output/codex-playwright-deps/node_modules/playwright-core");
 
 const ROOT = path.resolve(__dirname, "..");
 const OUT = process.env.JIEJING_OPERATIONS_SMOKE_OUT || path.join(os.tmpdir(), "jiejing-operations-console-browser-smoke");
@@ -356,6 +356,57 @@ async function runAccessStates(browser, base) {
   await deniedContext.close();
 }
 
+async function runRotatingSessionRecovery(browser, base) {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const pages = [await context.newPage(), await context.newPage()];
+  let initialIdentityResponsesRemaining = 2;
+  let initialOverviewResponsesRemaining = 2;
+  let refreshCompleted = false;
+  let refreshCount = 0;
+  let feedbackPostCount = 0;
+  const routeIdentity = (route) => {
+    if (initialIdentityResponsesRemaining > 0 || refreshCompleted) {
+      initialIdentityResponsesRemaining = Math.max(0, initialIdentityResponsesRemaining - 1);
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ role: "owner", platform_internal_admin: true, secret_exposed: false }) });
+    }
+    return route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "authentication required" }) });
+  };
+  const routeOverview = (route) => {
+    if (initialOverviewResponsesRemaining > 0 || refreshCompleted) {
+      initialOverviewResponsesRemaining = Math.max(0, initialOverviewResponsesRemaining - 1);
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ operations_overview: overviewFixture(30) }) });
+    }
+    return route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "authentication required" }) });
+  };
+  for (const page of pages) {
+    page.setDefaultTimeout(5000);
+    await page.route("**/permissions/me", routeIdentity);
+    await page.route("**/owner/operations-overview**", routeOverview);
+    await page.route("**/auth/refresh", async (route) => {
+      refreshCount += 1;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      refreshCompleted = true;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, session_refreshed: true, secret_exposed: false }) });
+    });
+    await page.route("**/owner/operations/feedback**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ operations_detail: detailFixture("feedback", 30) }) }));
+    await page.route("**/owner/product-feedback/review", (route) => {
+      feedbackPostCount += 1;
+      return route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "authentication required" }) });
+    });
+  }
+  await Promise.all(pages.map((page) => page.goto(`${base}/ops.html`, { waitUntil: "networkidle" })));
+  await Promise.all(pages.map((page) => page.waitForSelector("#ops-app:not([hidden])")));
+  await Promise.all(pages.map((page) => page.locator("#ops-refresh").click()));
+  await Promise.all(pages.map((page) => page.waitForFunction(() => document.querySelector("#ops-data-status")?.textContent === "真实数据已更新")));
+  if (refreshCount !== 1) throw new Error(`cross-tab operations session refresh must happen exactly once: ${refreshCount}`);
+  await pages[0].click('[data-view="feedback"]');
+  await pages[0].locator('[data-feedback-action="review"]').first().click();
+  await pages[0].locator("#ops-alert").getByText("authentication required", { exact: true }).waitFor();
+  if (feedbackPostCount !== 1) throw new Error(`operations mutation must never be replayed after 401: ${feedbackPostCount}`);
+  if (refreshCount !== 1) throw new Error(`operations mutation incorrectly triggered session refresh: ${refreshCount}`);
+  await context.close();
+}
+
 async function runFailureRecoveryStates(browser, base) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
@@ -473,6 +524,7 @@ async function main() {
   const browser = await chromium.launch({ headless: true, executablePath });
   try {
     await runAccessStates(browser, base);
+    await runRotatingSessionRecovery(browser, base);
     const screenshots = [];
     screenshots.push(...await runFailureRecoveryStates(browser, base));
     screenshots.push(...await runViewport(browser, base, "desktop", { width: 1440, height: 960 }));

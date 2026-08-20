@@ -38,6 +38,8 @@ The fixes do not enable eBay writes, external payment calls, public charging, re
 
 Production-like auth responses use a shared response helper that omits the bearer token. Cookies are `HttpOnly`, `SameSite`, and unconditionally `Secure` in staging/production. Local/test compatibility remains available without changing the public contract.
 
+The paid-launch session P1 is now closed in the 2026-08-20 follow-up. Production-like access cookies are capped at 30 minutes and bind to a backend refresh-session family. The refresh cookie is `HttpOnly`, `Secure`, `SameSite=Strict`, scoped to the actual public `/auth` route, rotated atomically, stored only as SHA-256, and revokes the full family on replay. Issuance requires an exact user-company membership; settings exposes only value-free device summaries with exact single-device and revoke-others controls. A same-origin Web Locks guard serializes refresh across browser tabs in both the merchant workbench and isolated operations console, so legitimate concurrent expiry does not look like token theft; only safe reads are replayed. Failed access persistence revokes the newly-created refresh family, and expired family history is lifecycle-bounded. Legacy access cookies without a refresh family cannot refresh and age out within their existing maximum seven-day window.
+
 ### Cross-origin mutation boundary
 
 Production-like POST requests with an `Origin` must use HTTPS and match the configured or same-origin host. The check runs before body handling. Non-browser callbacks without an `Origin` remain accepted only subject to their existing route-specific signature or authentication controls.
@@ -49,16 +51,15 @@ Production-like POST requests with an `Origin` must use HTTPS and match the conf
 - Public model/search text is escaped before HTML insertion; AI markdown rendering escapes first and adds only bounded formatting tags.
 - Billing return URLs must match configured safe URLs; public charging and real payment/refund calls remain disabled.
 - Real eBay writes remain confirmation-gated and disabled in public staging.
-- `pip check`, Python/Node syntax, focused security contracts and repository secret scan pass.
+- Exact hash-locked runtime/build dependencies, `pip check`, Python/Node syntax, focused security contracts and repository secret scan pass.
 
 ## Open hardening work
 
 | Priority | Item | Current risk and next acceptance gate |
 | --- | --- | --- |
-| P1 before paid launch | Short access sessions plus rotating refresh sessions | Current signed sessions are revocable but still long-lived. Require device/session inventory and revocation tests before paid launch. |
 | P1 before paid launch | Production application server | `ThreadingHTTPServer` remains a bounded beta implementation. Move to a hardened multi-process server and rerun slow-body/concurrency tests. |
 | P2 | Remove public CSP `unsafe-inline` | Existing escaping and CSP still reduce risk, but hashes/nonces or externalized code improve browser defense in depth. |
-| P2 | Reproducible dependency lock | Generate an exact, hashed production lock/constraints file; run an advisory scanner in CI and fail on unresolved High/Critical findings. |
+| P2 | Automated dependency advisory enforcement | Exact hashed runtime/build locks are enforced in CI and deploy. Add an advisory scanner that fails on unresolved High/Critical findings. |
 | Operational | Refresh monitoring and backup/restore evidence | Current public readiness warns that evidence is incomplete/stale. Refresh evidence without changing payment/eBay write gates. |
 
 ## Release recommendation

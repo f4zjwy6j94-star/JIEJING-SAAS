@@ -207,6 +207,8 @@ EXPENSIVE_API_RATE_LIMIT_EXACT_PATHS = {
     "billing/wechat-pay/zero-charge-rehearsal",
 }
 SESSION_COOKIE_NAME = "jiejing_saas_session"
+REFRESH_COOKIE_NAME = "jiejing_saas_refresh"
+REFRESH_TTL_SECONDS_DEFAULT = 30 * 24 * 60 * 60
 MEDIA_PROVIDER_JOB_KEYS = {"media.asset_generation", "media.fal_asset_generation"}
 PLATFORM_MODEL_TRIAL_MONTHLY_LIMIT_ENV = "JIEJING_AI_CEO_PLATFORM_MODEL_TRIAL_MONTHLY_LIMIT"
 PLATFORM_MODEL_TRIAL_DEFAULT_MONTHLY_LIMIT = 20
@@ -1487,11 +1489,24 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._send_json({"rate_limit_status": self._rate_limit_status()})
             return
 
+        if path == "auth/sessions":
+            sessions = self.repository.list_browser_sessions(
+                user_id=str(identity["user_id"]),
+                company_id=str(identity["company_id"]),
+                current_session_id=str(identity.get("sid") or ""),
+            )
+            self._send_json({"sessions": sessions, "secret_exposed": False})
+            return
+
         if path == "me":
             member = self.repository.get_team_member(company_id=identity["company_id"], user_id=identity["user_id"])
             self._send_json(
                 {
-                    "identity": identity,
+                    "identity": {
+                        "user_id": identity["user_id"],
+                        "company_id": identity["company_id"],
+                        "email": identity["email"],
+                    },
                     "user": self.repository.get_user(identity["user_id"]),
                     "company": self.repository.get_company(identity["company_id"]),
                     "team_member": member,
@@ -2355,7 +2370,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 user = record["user"]
                 company = record["company"]
                 created = True
-            token = self._issue_session_token(
+            token, refresh_token, _browser_session = self._issue_browser_session(
                 user_id=user["user_id"],
                 company_id=user["default_company_id"],
                 email=user["email"],
@@ -2370,7 +2385,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "secret_exposed": False,
                 },
                 status=HTTPStatus.CREATED,
-                headers=[("set-cookie", self._session_cookie_header(token))],
+                headers=self._browser_session_cookie_headers(token, refresh_token),
             )
             return
 
@@ -2385,7 +2400,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     company_name=str(body.get("company_name") or "Jiejing Demo Company"),
                 )
                 user = record["user"]
-                token = self._issue_session_token(
+                token, refresh_token, _browser_session = self._issue_browser_session(
                     user_id=user["user_id"],
                     company_id=user["default_company_id"],
                     email=user["email"],
@@ -2484,7 +2499,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "secret_exposed": False,
                 },
                 status=HTTPStatus.CREATED,
-                headers=[("set-cookie", self._session_cookie_header(token))],
+                headers=self._browser_session_cookie_headers(token, refresh_token),
             )
             return
 
@@ -2508,7 +2523,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not self._is_platform_internal_admin(preflight_identity):
                 self._send_error(HTTPStatus.FORBIDDEN, "operations console is platform-internal admin only")
                 return
-            token = self._issue_session_token(
+            token, refresh_token, _browser_session = self._issue_browser_session(
                 user_id=user["user_id"],
                 company_id=user["default_company_id"],
                 email=user["email"],
@@ -2520,7 +2535,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "token_returned_to_frontend": False,
                     "secret_exposed": False,
                 },
-                headers=[("set-cookie", self._session_cookie_header(token))],
+                headers=self._browser_session_cookie_headers(token, refresh_token),
             )
             return
 
@@ -2530,7 +2545,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 return
             try:
                 user = self.repository.authenticate_user(email=str(body.get("email") or ""), password=str(body.get("password") or ""))
-                token = self._issue_session_token(
+                token, refresh_token, _browser_session = self._issue_browser_session(
                     user_id=user["user_id"],
                     company_id=user["default_company_id"],
                     email=user["email"],
@@ -2540,12 +2555,60 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(
                 {**self._browser_session_response(token), "user": user, "secret_exposed": False},
-                headers=[("set-cookie", self._session_cookie_header(token))],
+                headers=self._browser_session_cookie_headers(token, refresh_token),
+            )
+            return
+
+        if path == "auth/refresh":
+            body = self._read_json_body()
+            if body or self.headers.get("authorization"):
+                self._send_error(HTTPStatus.BAD_REQUEST, "session_refresh_cookie_required")
+                return
+            refresh_token = self._refresh_cookie_token()
+            if not refresh_token:
+                self._send_error(HTTPStatus.UNAUTHORIZED, "session_refresh_required")
+                return
+            try:
+                try:
+                    refresh_identity = self.repository.browser_refresh_session_identity(refresh_token=refresh_token)
+                except ValueError as exc:
+                    if str(exc) == "session_refresh_replay_blocked":
+                        self.repository.rotate_browser_refresh_session(refresh_token=refresh_token)
+                    raise
+                session_ref = str(refresh_identity.get("session_ref") or "")
+                token = self.sessions.create_token(
+                    user_id=str(refresh_identity.get("user_id") or ""),
+                    company_id=str(refresh_identity.get("company_id") or ""),
+                    email=str(refresh_identity.get("email") or ""),
+                    refresh_session_id=session_ref,
+                )
+                access_identity = self.sessions.verify_token(token)
+                rotated = self.repository.rotate_browser_refresh_session(
+                    refresh_token=refresh_token,
+                    access_identity=access_identity,
+                )
+                next_refresh_token = str(rotated.get("refresh_token") or "")
+                if not session_ref or not next_refresh_token:
+                    raise ValueError("session_refresh_invalid")
+            except ValueError as exc:
+                error_code = str(exc)
+                if error_code not in {"session_refresh_replay_blocked", "session_refresh_invalid"}:
+                    error_code = "session_refresh_invalid"
+                self._send_json(
+                    {"error": error_code, "status": int(HTTPStatus.UNAUTHORIZED), "secret_exposed": False},
+                    status=HTTPStatus.UNAUTHORIZED,
+                    headers=self._expired_browser_session_cookie_headers(),
+                )
+                return
+            self._send_json(
+                {"ok": True, "session_refreshed": True, "secret_exposed": False},
+                headers=self._browser_session_cookie_headers(token, next_refresh_token),
             )
             return
 
         if path == "auth/logout":
             token = self._request_session_token()
+            refresh_token = self._refresh_cookie_token()
             session_revoked = False
             if token:
                 try:
@@ -2555,12 +2618,83 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         jti=str(identity.get("jti") or ""),
                         user_id=str(identity.get("user_id") or ""),
                     )
+                    refresh_session_id = str(identity.get("sid") or "")
+                    if refresh_session_id:
+                        session_revoked = self.repository.revoke_browser_session(
+                            user_id=str(identity.get("user_id") or ""),
+                            company_id=str(identity.get("company_id") or ""),
+                            session_id=refresh_session_id,
+                        ) or session_revoked
                 except ValueError:
                     session_revoked = False
+            if refresh_token:
+                session_revoked = self.repository.revoke_browser_session_by_refresh_token(
+                    refresh_token=refresh_token,
+                ) or session_revoked
             self._send_json(
                 {"ok": True, "session_revoked": session_revoked, "secret_exposed": False},
-                headers=[("set-cookie", self._expired_session_cookie_header())],
+                headers=self._expired_browser_session_cookie_headers(),
             )
+            return
+
+        if len(parts) == 4 and parts[0] == "auth" and parts[1] == "sessions" and parts[3] == "revoke":
+            self._read_json_body()
+            identity = self._require_auth()
+            if identity is None:
+                return
+            target_session_id = str(parts[2] or "")
+            current_session_id = str(identity.get("sid") or "")
+            if not current_session_id or not target_session_id:
+                self._send_error(HTTPStatus.NOT_FOUND, "session_revoke_not_allowed")
+                return
+            revoked = self.repository.revoke_browser_session(
+                user_id=str(identity["user_id"]),
+                company_id=str(identity["company_id"]),
+                session_id=target_session_id,
+            )
+            if not revoked:
+                self._send_error(HTTPStatus.NOT_FOUND, "session_revoke_not_allowed")
+                return
+            is_current = hmac.compare_digest(target_session_id, current_session_id)
+            self.repository.write_audit(
+                company_id=str(identity["company_id"]),
+                user_id=str(identity["user_id"]),
+                action_type="auth.device_session_revoked",
+                target_type="user_session",
+                target_id=str(identity["user_id"]),
+                summary="A browser session was revoked.",
+                details={"current_device": is_current, "revoked_count": 1, "secret_exposed": False},
+            )
+            self._send_json(
+                {"ok": True, "session_revoked": True, "current_device": is_current, "secret_exposed": False},
+                headers=self._expired_browser_session_cookie_headers() if is_current else None,
+            )
+            return
+
+        if path == "auth/sessions/revoke-others":
+            self._read_json_body()
+            identity = self._require_auth()
+            if identity is None:
+                return
+            current_session_id = str(identity.get("sid") or "")
+            if not current_session_id:
+                self._send_error(HTTPStatus.CONFLICT, "session_revoke_not_allowed")
+                return
+            revoked_count = self.repository.revoke_other_browser_sessions(
+                user_id=str(identity["user_id"]),
+                company_id=str(identity["company_id"]),
+                current_session_id=current_session_id,
+            )
+            self.repository.write_audit(
+                company_id=str(identity["company_id"]),
+                user_id=str(identity["user_id"]),
+                action_type="auth.other_device_sessions_revoked",
+                target_type="user_session",
+                target_id=str(identity["user_id"]),
+                summary="Other browser sessions were revoked.",
+                details={"current_device": False, "revoked_count": revoked_count, "secret_exposed": False},
+            )
+            self._send_json({"ok": True, "revoked_count": revoked_count, "secret_exposed": False})
             return
 
         if path == "auth/switch-company":
@@ -2577,7 +2711,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not user:
                 self._send_error(HTTPStatus.UNAUTHORIZED, "user not found")
                 return
-            token = self._issue_session_token(user_id=user["user_id"], company_id=company_id, email=user["email"])
+            token, refresh_token, _browser_session = self._issue_browser_session(
+                user_id=user["user_id"],
+                company_id=company_id,
+                email=user["email"],
+            )
+            previous_refresh_session_id = str(identity.get("sid") or "")
+            if previous_refresh_session_id:
+                self.repository.revoke_browser_session(
+                    user_id=str(identity["user_id"]),
+                    company_id=str(identity["company_id"]),
+                    session_id=previous_refresh_session_id,
+                )
             self._send_json(
                 {
                     **self._browser_session_response(token),
@@ -2585,7 +2730,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "team_member": member,
                     "secret_exposed": False,
                 },
-                headers=[("set-cookie", self._session_cookie_header(token))],
+                headers=self._browser_session_cookie_headers(token, refresh_token),
             )
             return
 
@@ -7122,6 +7267,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             "/confirmations/:confirmation_id",
             parsed.path,
         )
+        safe_path = re.sub(
+            r"^/(?:api/)?auth/sessions/[^/]+(?=/revoke$)",
+            lambda match: "/api/auth/sessions/:session_ref" if match.group(0).startswith("/api/") else "/auth/sessions/:session_ref",
+            safe_path,
+        )
         event = {
             "event": "http_access",
             "method": self.command,
@@ -7231,8 +7381,57 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         except ValueError:
             return None
 
-    def _issue_session_token(self, *, user_id: str, company_id: str, email: str) -> str:
-        token = self.sessions.create_token(user_id=user_id, company_id=company_id, email=email)
+    def _issue_browser_session(
+        self,
+        *,
+        user_id: str,
+        company_id: str,
+        email: str,
+    ) -> tuple[str, str, dict[str, Any]]:
+        issued = self.repository.create_browser_refresh_session(
+            user_id=user_id,
+            company_id=company_id,
+            device_class=self._browser_device_class_from_request(),
+            ttl_seconds=self._refresh_ttl_seconds(),
+        )
+        public_session = issued.get("session") if isinstance(issued.get("session"), dict) else {}
+        refresh_token = str(issued.get("refresh_token") or "")
+        session_ref = str(public_session.get("session_ref") or "")
+        if not refresh_token or not session_ref:
+            raise RuntimeError("browser refresh session could not be created")
+        try:
+            token = self._issue_session_token(
+                user_id=user_id,
+                company_id=company_id,
+                email=email,
+                refresh_session_id=session_ref,
+            )
+        except Exception:
+            try:
+                self.repository.revoke_browser_session(
+                    user_id=user_id,
+                    company_id=company_id,
+                    session_id=session_ref,
+                )
+            except Exception:
+                pass
+            raise
+        return token, refresh_token, public_session
+
+    def _issue_session_token(
+        self,
+        *,
+        user_id: str,
+        company_id: str,
+        email: str,
+        refresh_session_id: str = "",
+    ) -> str:
+        token = self.sessions.create_token(
+            user_id=user_id,
+            company_id=company_id,
+            email=email,
+            refresh_session_id=refresh_session_id,
+        )
         identity = self.sessions.verify_token(token)
         state = self.repository.ensure_user_session(identity)
         if state.get("active") is not True:
@@ -7269,6 +7468,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         morsel = cookie.get(SESSION_COOKIE_NAME)
         return str(morsel.value or "").strip() if morsel else ""
 
+    def _refresh_cookie_token(self) -> str:
+        raw = self.headers.get("cookie", "")
+        if not raw:
+            return ""
+        cookie = SimpleCookie()
+        try:
+            cookie.load(raw)
+        except Exception:
+            return ""
+        morsel = cookie.get(REFRESH_COOKIE_NAME)
+        return str(morsel.value or "").strip() if morsel else ""
+
     def _session_cookie_header(self, token: str) -> str:
         same_site = "Strict" if self._operations_console_cookie_context() else "Lax"
         parts = [
@@ -7281,6 +7492,24 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         if self._secure_cookie_context():
             parts.append("Secure")
         return "; ".join(parts)
+
+    def _refresh_cookie_header(self, refresh_token: str) -> str:
+        parts = [
+            f"{REFRESH_COOKIE_NAME}={refresh_token}",
+            "Path=/auth",
+            f"Max-Age={self._refresh_ttl_seconds()}",
+            "HttpOnly",
+            "SameSite=Strict",
+        ]
+        if self._secure_cookie_context():
+            parts.append("Secure")
+        return "; ".join(parts)
+
+    def _browser_session_cookie_headers(self, token: str, refresh_token: str) -> list[tuple[str, str]]:
+        return [
+            ("set-cookie", self._session_cookie_header(token)),
+            ("set-cookie", self._refresh_cookie_header(refresh_token)),
+        ]
 
     def _browser_session_response(self, token: str) -> dict[str, Any]:
         if self.settings.is_production_like:
@@ -7299,6 +7528,46 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         if self._secure_cookie_context():
             parts.append("Secure")
         return "; ".join(parts)
+
+    def _expired_refresh_cookie_header(self) -> str:
+        parts = [
+            f"{REFRESH_COOKIE_NAME}=",
+            "Path=/auth",
+            "Max-Age=0",
+            "HttpOnly",
+            "SameSite=Strict",
+        ]
+        if self._secure_cookie_context():
+            parts.append("Secure")
+        return "; ".join(parts)
+
+    def _expired_browser_session_cookie_headers(self) -> list[tuple[str, str]]:
+        return [
+            ("set-cookie", self._expired_session_cookie_header()),
+            ("set-cookie", self._expired_refresh_cookie_header()),
+        ]
+
+    def _refresh_ttl_seconds(self) -> int:
+        raw = str(os.environ.get("JIEJING_SAAS_REFRESH_TTL_SECONDS") or "").strip()
+        try:
+            configured = int(raw) if raw else REFRESH_TTL_SECONDS_DEFAULT
+        except ValueError:
+            configured = REFRESH_TTL_SECONDS_DEFAULT
+        if configured <= 0:
+            configured = REFRESH_TTL_SECONDS_DEFAULT
+        return min(configured, REFRESH_TTL_SECONDS_DEFAULT) if self.settings.is_production_like else configured
+
+    def _browser_device_class_from_request(self) -> str:
+        user_agent = str(self.headers.get("user-agent") or "").lower()
+        if "mobile" in user_agent or "android" in user_agent or "iphone" in user_agent or "ipad" in user_agent:
+            return "mobile"
+        if "edg/" in user_agent:
+            return "edge_windows"
+        if "chrome/" in user_agent and "windows" in user_agent:
+            return "chrome_windows"
+        if "safari/" in user_agent and "mac os" in user_agent:
+            return "safari_macos"
+        return "unknown"
 
     def _secure_cookie_context(self) -> bool:
         if self.settings.is_production_like:

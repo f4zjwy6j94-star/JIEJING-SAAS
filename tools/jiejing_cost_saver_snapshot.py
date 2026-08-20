@@ -30,6 +30,9 @@ CONTRACT_VERSION = "2026-05-21-cost-saver-snapshot-v1"
 TABLE_ORDER = (
     "companies",
     "users",
+    "user_refresh_sessions",
+    "user_refresh_token_history",
+    "user_sessions",
     "team_members",
     "team_invitations",
     "stores",
@@ -51,6 +54,9 @@ TABLE_ORDER = (
 REQUIRED_TABLES = (
     "companies",
     "users",
+    "user_refresh_sessions",
+    "user_refresh_token_history",
+    "user_sessions",
     "stores",
     "secret_refs",
     "platform_connections",

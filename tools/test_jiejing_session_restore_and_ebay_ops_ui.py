@@ -23,7 +23,8 @@ def main() -> int:
 
     for marker in [
         "SESSION_COOKIE_NAME = \"jiejing_saas_session\"",
-        "headers=[(\"set-cookie\", self._session_cookie_header(token))]",
+        "REFRESH_COOKIE_NAME = \"jiejing_saas_refresh\"",
+        "headers=self._browser_session_cookie_headers(token, refresh_token)",
         "def _session_cookie_token(self) -> str:",
         "missing bearer token or session cookie",
         "auth/logout",

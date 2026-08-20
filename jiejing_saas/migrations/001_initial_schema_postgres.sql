@@ -49,11 +49,63 @@ create table if not exists user_sessions (
   jti text primary key,
   user_id text not null references users(user_id),
   company_id text not null,
+  refresh_session_id text,
   issued_at_epoch bigint not null,
   expires_epoch bigint not null,
   revoked_at timestamptz,
   created_at timestamptz not null
 );
+
+create table if not exists user_refresh_sessions (
+  session_id text primary key,
+  current_token_hash text not null unique,
+  user_id text not null references users(user_id),
+  company_id text not null references companies(company_id),
+  device_class text not null,
+  status text not null check (status in ('active', 'revoked', 'expired', 'replay_revoked')),
+  created_at timestamptz not null,
+  last_seen_at timestamptz not null,
+  expires_epoch bigint not null,
+  revoked_at timestamptz
+);
+
+create table if not exists user_refresh_token_history (
+  token_hash text primary key,
+  session_id text not null references user_refresh_sessions(session_id),
+  generation bigint not null,
+  status text not null check (status in ('active', 'rotated', 'expired', 'replay_revoked')),
+  issued_at timestamptz not null,
+  rotated_at timestamptz,
+  replayed_at timestamptz,
+  expires_epoch bigint not null,
+  unique (session_id, generation)
+);
+
+create index if not exists idx_user_refresh_sessions_owner
+  on user_refresh_sessions (user_id, company_id, status, last_seen_at);
+
+create index if not exists idx_user_refresh_token_history_session
+  on user_refresh_token_history (session_id, generation);
+
+alter table user_sessions
+  add column if not exists refresh_session_id text references user_refresh_sessions(session_id);
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'user_sessions_refresh_session_id_fkey'
+      and conrelid = 'user_sessions'::regclass
+  ) then
+    alter table user_sessions
+      add constraint user_sessions_refresh_session_id_fkey
+      foreign key (refresh_session_id) references user_refresh_sessions(session_id);
+  end if;
+end $$;
+
+create index if not exists idx_user_sessions_refresh_session
+  on user_sessions (refresh_session_id);
 
 create table if not exists team_members (
   company_id text not null references companies(company_id),

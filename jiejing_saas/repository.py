@@ -251,11 +251,43 @@ class SaaSRepository:
                   jti text primary key,
                   user_id text not null,
                   company_id text not null,
+                  refresh_session_id text,
                   issued_at_epoch integer not null,
                   expires_epoch integer not null,
                   revoked_at text,
                   created_at text not null
                 );
+
+                create table if not exists user_refresh_sessions (
+                  session_id text primary key,
+                  current_token_hash text not null unique,
+                  user_id text not null,
+                  company_id text not null,
+                  device_class text not null,
+                  status text not null check (status in ('active', 'revoked', 'expired', 'replay_revoked')),
+                  created_at text not null,
+                  last_seen_at text not null,
+                  expires_epoch integer not null,
+                  revoked_at text
+                );
+
+                create table if not exists user_refresh_token_history (
+                  token_hash text primary key,
+                  session_id text not null,
+                  generation integer not null,
+                  status text not null check (status in ('active', 'rotated', 'expired', 'replay_revoked')),
+                  issued_at text not null,
+                  rotated_at text,
+                  replayed_at text,
+                  expires_epoch integer not null,
+                  unique (session_id, generation)
+                );
+
+                create index if not exists idx_user_refresh_sessions_owner
+                on user_refresh_sessions (user_id, company_id, status, last_seen_at);
+
+                create index if not exists idx_user_refresh_token_history_session
+                on user_refresh_token_history (session_id, generation);
 
                 create table if not exists companies (
                   company_id text primary key,
@@ -753,6 +785,7 @@ class SaaSRepository:
             self._ensure_user_account_classification(conn)
             self._ensure_ai_ceo_chat_merge_score_column(conn)
             self._ensure_account_scoped_confirmations(conn)
+            self._ensure_user_session_refresh_column(conn)
             self._ensure_indexes(conn)
             self._record_schema_migration(
                 conn,
@@ -868,6 +901,12 @@ class SaaSRepository:
                 checksum="jiejing-merchant-product-feedback-v20260803",
                 summary="Adds tenant-scoped, idempotent and auditable merchant product feedback.",
             )
+            self._record_schema_migration(
+                conn,
+                migration_id="20260820_rotating_browser_sessions",
+                checksum="jiejing-rotating-browser-sessions-v20260820",
+                summary="Adds short access-session binding, rotating refresh generations and device-level revocation.",
+            )
 
     def _initialize_postgres(self) -> None:
         if self._postgres_initialized:
@@ -965,6 +1004,7 @@ class SaaSRepository:
         company_id = str(identity.get("company_id") or "")
         issued_at = int(identity.get("iat") or 0)
         expires_epoch = int(identity.get("exp") or 0)
+        refresh_session_id = str(identity.get("sid") or "")
         if not jti or not user_id or not company_id or expires_epoch <= 0:
             return {"active": False, "status": "invalid_session_identity", "secret_exposed": False}
         with self._connect() as conn:
@@ -972,21 +1012,43 @@ class SaaSRepository:
             conn.execute(
                 """
                 insert or ignore into user_sessions (
-                  jti, user_id, company_id, issued_at_epoch, expires_epoch, revoked_at, created_at
-                ) values (?, ?, ?, ?, ?, null, ?)
+                  jti, user_id, company_id, refresh_session_id, issued_at_epoch, expires_epoch, revoked_at, created_at
+                ) values (?, ?, ?, ?, ?, ?, null, ?)
                 """,
-                (jti, user_id, company_id, issued_at, expires_epoch, now_iso()),
+                (jti, user_id, company_id, refresh_session_id or None, issued_at, expires_epoch, now_iso()),
             )
             row = conn.execute(
-                "select user_id, company_id, expires_epoch, revoked_at from user_sessions where jti = ?",
+                "select user_id, company_id, refresh_session_id, expires_epoch, revoked_at from user_sessions where jti = ?",
                 (jti,),
             ).fetchone()
+            refresh_row = (
+                conn.execute(
+                    """
+                    select user_id, company_id, status, expires_epoch
+                    from user_refresh_sessions where session_id = ?
+                    """,
+                    (refresh_session_id,),
+                ).fetchone()
+                if refresh_session_id
+                else None
+            )
         active = bool(
             row
             and str(row["user_id"]) == user_id
             and str(row["company_id"]) == company_id
             and int(row["expires_epoch"] or 0) > int(time.time())
             and not str(row["revoked_at"] or "")
+            and (
+                not refresh_session_id
+                or (
+                    str(row["refresh_session_id"] or "") == refresh_session_id
+                    and refresh_row
+                    and str(refresh_row["user_id"] or "") == user_id
+                    and str(refresh_row["company_id"] or "") == company_id
+                    and str(refresh_row["status"] or "") == "active"
+                    and int(refresh_row["expires_epoch"] or 0) > int(time.time())
+                )
+            )
         )
         return {
             "active": active,
@@ -1006,6 +1068,508 @@ class SaaSRepository:
                 (now_iso(), str(jti or "")[:160], user_id),
             )
         return int(getattr(cursor, "rowcount", 0) or 0) > 0
+
+    def create_browser_refresh_session(
+        self,
+        *,
+        user_id: str,
+        company_id: str,
+        device_class: str,
+        ttl_seconds: int,
+    ) -> dict[str, Any]:
+        self.initialize()
+        normalized_device_class = self._browser_device_class(device_class)
+        normalized_ttl = int(ttl_seconds or 0)
+        if not user_id or not company_id or normalized_ttl <= 0:
+            raise ValueError("session_refresh_invalid")
+        refresh_token = secrets.token_urlsafe(48)
+        token_hash = self._browser_refresh_token_hash(refresh_token)
+        session_id = f"browser_session_{secrets.token_urlsafe(24)}"
+        created_at = now_iso()
+        now_epoch = int(time.time())
+        expires_epoch = now_epoch + normalized_ttl
+        with self._connect() as conn:
+            membership = conn.execute(
+                "select 1 from team_members where user_id = ? and company_id = ?",
+                (user_id, company_id),
+            ).fetchone()
+            if not membership:
+                raise ValueError("session_refresh_invalid")
+            conn.execute("delete from user_sessions where expires_epoch <= ?", (now_epoch,))
+            conn.execute("delete from user_refresh_token_history where expires_epoch <= ?", (now_epoch,))
+            conn.execute(
+                """
+                delete from user_refresh_sessions
+                where expires_epoch <= ?
+                  and not exists (
+                    select 1 from user_sessions us
+                    where us.refresh_session_id = user_refresh_sessions.session_id
+                  )
+                """,
+                (now_epoch,),
+            )
+            conn.execute(
+                """
+                insert into user_refresh_sessions (
+                  session_id, current_token_hash, user_id, company_id, device_class,
+                  status, created_at, last_seen_at, expires_epoch, revoked_at
+                ) values (?, ?, ?, ?, ?, 'active', ?, ?, ?, null)
+                """,
+                (
+                    session_id,
+                    token_hash,
+                    user_id,
+                    company_id,
+                    normalized_device_class,
+                    created_at,
+                    created_at,
+                    expires_epoch,
+                ),
+            )
+            conn.execute(
+                """
+                insert into user_refresh_token_history (
+                  token_hash, session_id, generation, status, issued_at,
+                  rotated_at, replayed_at, expires_epoch
+                ) values (?, ?, 1, 'active', ?, null, null, ?)
+                """,
+                (token_hash, session_id, created_at, expires_epoch),
+            )
+        return {
+            "session": self._public_browser_session(
+                session_id=session_id,
+                device_class=normalized_device_class,
+                created_at=created_at,
+                last_seen_at=created_at,
+                current=True,
+            ),
+            "refresh_token": refresh_token,
+        }
+
+    def browser_refresh_session_identity(self, *, refresh_token: str) -> dict[str, Any]:
+        self.initialize()
+        presented_token = str(refresh_token or "")
+        if len(presented_token) < 32:
+            raise ValueError("session_refresh_invalid")
+        presented_hash = self._browser_refresh_token_hash(presented_token)
+        now_epoch = int(time.time())
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select h.token_hash, h.status as token_status, h.expires_epoch as token_expires_epoch,
+                       s.session_id, s.current_token_hash, s.user_id, s.company_id,
+                       s.status as session_status, s.expires_epoch as session_expires_epoch,
+                       u.email, tm.role
+                from user_refresh_token_history h
+                join user_refresh_sessions s on s.session_id = h.session_id
+                join users u on u.user_id = s.user_id
+                join team_members tm on tm.user_id = s.user_id and tm.company_id = s.company_id
+                where h.token_hash = ?
+                """,
+                (presented_hash,),
+            ).fetchone()
+        if (
+            row
+            and hmac.compare_digest(str(row["token_hash"] or ""), presented_hash)
+            and str(row["token_status"] or "") in {"rotated", "replay_revoked"}
+        ):
+            raise ValueError("session_refresh_replay_blocked")
+        if (
+            not row
+            or not hmac.compare_digest(str(row["token_hash"] or ""), presented_hash)
+            or not hmac.compare_digest(str(row["current_token_hash"] or ""), presented_hash)
+            or str(row["token_status"] or "") != "active"
+            or str(row["session_status"] or "") != "active"
+            or int(row["token_expires_epoch"] or 0) <= now_epoch
+            or int(row["session_expires_epoch"] or 0) <= now_epoch
+            or not str(row["email"] or "")
+            or not str(row["role"] or "")
+        ):
+            raise ValueError("session_refresh_invalid")
+        return {
+            "user_id": str(row["user_id"]),
+            "company_id": str(row["company_id"]),
+            "email": str(row["email"]),
+            "session_ref": str(row["session_id"]),
+            "secret_exposed": False,
+        }
+
+    def rotate_browser_refresh_session(
+        self,
+        *,
+        refresh_token: str,
+        access_identity: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        presented_token = str(refresh_token or "")
+        if len(presented_token) < 32:
+            raise ValueError("session_refresh_invalid")
+        presented_hash = self._browser_refresh_token_hash(presented_token)
+        now_epoch = int(time.time())
+        observed_at = now_iso()
+        next_token = ""
+        public_session: dict[str, Any] | None = None
+        error_code = ""
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            history = conn.execute(
+                f"select * from user_refresh_token_history where token_hash = ?{lock_suffix}",
+                (presented_hash,),
+            ).fetchone()
+            if not history or not hmac.compare_digest(str(history["token_hash"] or ""), presented_hash):
+                error_code = "session_refresh_invalid"
+            else:
+                session = conn.execute(
+                    f"""
+                    select s.*, u.email from user_refresh_sessions s
+                    join users u on u.user_id = s.user_id
+                    where s.session_id = ?{lock_suffix}
+                    """,
+                    (str(history["session_id"] or ""),),
+                ).fetchone()
+                history_status = str(history["status"] or "")
+                session_status = str(session["status"] or "") if session else ""
+                if history_status in {"rotated", "replay_revoked"}:
+                    session_id = str(history["session_id"] or "")
+                    conn.execute(
+                        """
+                        update user_refresh_sessions
+                        set status = 'replay_revoked', revoked_at = ?
+                        where session_id = ? and status in ('active', 'expired')
+                        """,
+                        (observed_at, session_id),
+                    )
+                    conn.execute(
+                        """
+                        update user_refresh_token_history
+                        set status = 'replay_revoked', replayed_at = ?
+                        where session_id = ? and status in ('active', 'rotated')
+                        """,
+                        (observed_at, session_id),
+                    )
+                    conn.execute(
+                        "update user_sessions set revoked_at = ? where refresh_session_id = ? and revoked_at is null",
+                        (observed_at, session_id),
+                    )
+                    error_code = "session_refresh_replay_blocked"
+                elif (
+                    not session
+                    or history_status != "active"
+                    or session_status != "active"
+                    or int(history["expires_epoch"] or 0) <= now_epoch
+                    or int(session["expires_epoch"] or 0) <= now_epoch
+                    or not hmac.compare_digest(str(session["current_token_hash"] or ""), presented_hash)
+                ):
+                    if session and session_status == "active" and int(session["expires_epoch"] or 0) <= now_epoch:
+                        conn.execute(
+                            "update user_refresh_sessions set status = 'expired', revoked_at = ? where session_id = ?",
+                            (observed_at, str(session["session_id"] or "")),
+                        )
+                        conn.execute(
+                            "update user_refresh_token_history set status = 'expired' where session_id = ? and status = 'active'",
+                            (str(session["session_id"] or ""),),
+                        )
+                    error_code = "session_refresh_invalid"
+                else:
+                    if access_identity is not None and not self._valid_rotated_access_identity(
+                        access_identity,
+                        session=session,
+                        now_epoch=now_epoch,
+                    ):
+                        error_code = "session_refresh_invalid"
+                        session = None
+                if not error_code and session:
+                    next_token = secrets.token_urlsafe(48)
+                    next_hash = self._browser_refresh_token_hash(next_token)
+                    next_generation = int(history["generation"] or 0) + 1
+                    conn.execute(
+                        """
+                        update user_refresh_token_history
+                        set status = 'rotated', rotated_at = ?
+                        where token_hash = ? and status = 'active'
+                        """,
+                        (observed_at, presented_hash),
+                    )
+                    conn.execute(
+                        """
+                        insert into user_refresh_token_history (
+                          token_hash, session_id, generation, status, issued_at,
+                          rotated_at, replayed_at, expires_epoch
+                        ) values (?, ?, ?, 'active', ?, null, null, ?)
+                        """,
+                        (
+                            next_hash,
+                            str(session["session_id"]),
+                            next_generation,
+                            observed_at,
+                            int(session["expires_epoch"]),
+                        ),
+                    )
+                    cursor = conn.execute(
+                        """
+                        update user_refresh_sessions
+                        set current_token_hash = ?, last_seen_at = ?
+                        where session_id = ? and status = 'active' and current_token_hash = ?
+                        """,
+                        (next_hash, observed_at, str(session["session_id"]), presented_hash),
+                    )
+                    if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+                        raise ValueError("session_refresh_conflict")
+                    if access_identity is not None:
+                        conn.execute(
+                            """
+                            insert into user_sessions (
+                              jti, user_id, company_id, refresh_session_id,
+                              issued_at_epoch, expires_epoch, revoked_at, created_at
+                            ) values (?, ?, ?, ?, ?, ?, null, ?)
+                            """,
+                            (
+                                str(access_identity["jti"]),
+                                str(access_identity["user_id"]),
+                                str(access_identity["company_id"]),
+                                str(access_identity["sid"]),
+                                int(access_identity["iat"]),
+                                int(access_identity["exp"]),
+                                observed_at,
+                            ),
+                        )
+                    public_session = self._public_browser_session(
+                        session_id=str(session["session_id"]),
+                        device_class=str(session["device_class"]),
+                        created_at=str(session["created_at"]),
+                        last_seen_at=observed_at,
+                        current=True,
+                    )
+                    public_session["_identity"] = {
+                        "user_id": str(session["user_id"]),
+                        "company_id": str(session["company_id"]),
+                        "email": str(session["email"]),
+                    }
+        if error_code:
+            raise ValueError(error_code)
+        if not public_session or not next_token:
+            raise ValueError("session_refresh_conflict")
+        identity = public_session.pop("_identity", {})
+        return {"session": public_session, "refresh_token": next_token, "identity": identity}
+
+    def list_browser_sessions(
+        self,
+        *,
+        user_id: str,
+        company_id: str = "",
+        current_session_id: str = "",
+    ) -> list[dict[str, Any]]:
+        self.initialize()
+        now_epoch = int(time.time())
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                select session_id, device_class, created_at, last_seen_at
+                from user_refresh_sessions
+                where user_id = ? and status = 'active' and expires_epoch > ?
+                {"and company_id = ?" if company_id else ""}
+                order by last_seen_at desc, created_at desc
+                """,
+                (user_id, now_epoch, company_id) if company_id else (user_id, now_epoch),
+            ).fetchall()
+        return [
+            self._public_browser_session(
+                session_id=str(row["session_id"]),
+                device_class=str(row["device_class"]),
+                created_at=str(row["created_at"]),
+                last_seen_at=str(row["last_seen_at"]),
+                current=hmac.compare_digest(str(row["session_id"]), str(current_session_id or "")),
+            )
+            for row in rows
+        ]
+
+    def revoke_browser_session(self, *, user_id: str, company_id: str, session_id: str) -> bool:
+        self.initialize()
+        normalized_session_id = str(session_id or "")
+        if not user_id or not company_id or not normalized_session_id:
+            return False
+        revoked_at = now_iso()
+        revoked = False
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                f"""
+                select session_id from user_refresh_sessions
+                where session_id = ? and user_id = ? and company_id = ? and status = 'active'{lock_suffix}
+                """,
+                (normalized_session_id, user_id, company_id),
+            ).fetchone()
+            if row:
+                cursor = conn.execute(
+                    """
+                    update user_refresh_sessions
+                    set status = 'revoked', revoked_at = ?
+                    where session_id = ? and user_id = ? and company_id = ? and status = 'active'
+                    """,
+                    (revoked_at, normalized_session_id, user_id, company_id),
+                )
+                revoked = int(getattr(cursor, "rowcount", 0) or 0) == 1
+                if revoked:
+                    conn.execute(
+                        """
+                        update user_refresh_token_history
+                        set status = 'expired'
+                        where session_id = ? and status = 'active'
+                        """,
+                        (normalized_session_id,),
+                    )
+                    conn.execute(
+                        """
+                        update user_sessions set revoked_at = ?
+                        where refresh_session_id = ? and user_id = ? and company_id = ? and revoked_at is null
+                        """,
+                        (revoked_at, normalized_session_id, user_id, company_id),
+                    )
+        return revoked
+
+    def revoke_browser_session_by_refresh_token(self, *, refresh_token: str) -> bool:
+        self.initialize()
+        presented_token = str(refresh_token or "")
+        if len(presented_token) < 32:
+            return False
+        presented_hash = self._browser_refresh_token_hash(presented_token)
+        revoked_at = now_iso()
+        revoked = False
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                f"""
+                select h.token_hash, h.session_id, s.status
+                from user_refresh_token_history h
+                join user_refresh_sessions s on s.session_id = h.session_id
+                where h.token_hash = ?{lock_suffix}
+                """,
+                (presented_hash,),
+            ).fetchone()
+            if (
+                row
+                and hmac.compare_digest(str(row["token_hash"] or ""), presented_hash)
+                and str(row["status"] or "") == "active"
+            ):
+                session_id = str(row["session_id"] or "")
+                cursor = conn.execute(
+                    "update user_refresh_sessions set status = 'revoked', revoked_at = ? where session_id = ? and status = 'active'",
+                    (revoked_at, session_id),
+                )
+                revoked = int(getattr(cursor, "rowcount", 0) or 0) == 1
+                if revoked:
+                    conn.execute(
+                        "update user_refresh_token_history set status = 'expired' where session_id = ? and status = 'active'",
+                        (session_id,),
+                    )
+                    conn.execute(
+                        "update user_sessions set revoked_at = ? where refresh_session_id = ? and revoked_at is null",
+                        (revoked_at, session_id),
+                    )
+        return revoked
+
+    def revoke_other_browser_sessions(
+        self,
+        *,
+        user_id: str,
+        company_id: str,
+        current_session_id: str,
+    ) -> int:
+        self.initialize()
+        if not user_id or not company_id or not current_session_id:
+            return 0
+        revoked_at = now_iso()
+        revoked_session_ids: list[str] = []
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            rows = conn.execute(
+                f"""
+                select session_id from user_refresh_sessions
+                where user_id = ? and company_id = ? and status = 'active' and session_id <> ?{lock_suffix}
+                """,
+                (user_id, company_id, current_session_id),
+            ).fetchall()
+            revoked_session_ids = [str(row["session_id"]) for row in rows]
+            for revoked_session_id in revoked_session_ids:
+                conn.execute(
+                    "update user_refresh_sessions set status = 'revoked', revoked_at = ? where session_id = ? and status = 'active'",
+                    (revoked_at, revoked_session_id),
+                )
+                conn.execute(
+                    "update user_refresh_token_history set status = 'expired' where session_id = ? and status = 'active'",
+                    (revoked_session_id,),
+                )
+                conn.execute(
+                    "update user_sessions set revoked_at = ? where refresh_session_id = ? and revoked_at is null",
+                    (revoked_at, revoked_session_id),
+                )
+        return len(revoked_session_ids)
+
+    @staticmethod
+    def _browser_refresh_token_hash(refresh_token: str) -> str:
+        return hashlib.sha256(str(refresh_token).encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _valid_rotated_access_identity(
+        identity: dict[str, Any],
+        *,
+        session: Any,
+        now_epoch: int,
+    ) -> bool:
+        try:
+            return bool(
+                session
+                and str(identity.get("token_type") or "") == "access"
+                and str(identity.get("jti") or "")
+                and hmac.compare_digest(str(identity.get("sid") or ""), str(session["session_id"] or ""))
+                and hmac.compare_digest(str(identity.get("user_id") or ""), str(session["user_id"] or ""))
+                and hmac.compare_digest(str(identity.get("company_id") or ""), str(session["company_id"] or ""))
+                and int(identity.get("iat") or 0) <= now_epoch + 5
+                and int(identity.get("exp") or 0) > now_epoch
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _browser_device_class(device_class: str) -> str:
+        normalized = str(device_class or "").strip().lower()
+        return normalized if normalized in {"chrome_windows", "edge_windows", "safari_macos", "mobile", "unknown"} else "unknown"
+
+    @classmethod
+    def _public_browser_session(
+        cls,
+        *,
+        session_id: str,
+        device_class: str,
+        created_at: str,
+        last_seen_at: str,
+        current: bool,
+    ) -> dict[str, Any]:
+        labels = {
+            "chrome_windows": "Chrome · Windows",
+            "edge_windows": "Edge · Windows",
+            "safari_macos": "Safari · macOS",
+            "mobile": "移动设备",
+            "unknown": "未知设备",
+        }
+        normalized_device_class = cls._browser_device_class(device_class)
+        return {
+            "session_ref": session_id,
+            "device_label": labels[normalized_device_class],
+            "created_at": created_at,
+            "last_seen_at": last_seen_at,
+            "current": bool(current),
+            "status": "active",
+            "secret_exposed": False,
+        }
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
         self.initialize()
@@ -12473,6 +13037,8 @@ class SaaSRepository:
               on team_members(company_id, role);
             create index if not exists idx_user_sessions_user_expiry
               on user_sessions(user_id, expires_epoch);
+            create index if not exists idx_user_sessions_refresh_session
+              on user_sessions(refresh_session_id);
             create index if not exists idx_team_invitations_company_status_created
               on team_invitations(company_id, status, created_at);
             create index if not exists idx_secret_refs_company_store_provider_purpose
@@ -12598,6 +13164,12 @@ class SaaSRepository:
         columns = {str(row["name"]) for row in conn.execute("pragma table_info(ai_ceo_chat_turns)").fetchall()}
         if "merge_score" not in columns:
             conn.execute("alter table ai_ceo_chat_turns add column merge_score integer not null default 0")
+
+    @staticmethod
+    def _ensure_user_session_refresh_column(conn: sqlite3.Connection) -> None:
+        columns = {str(row["name"]) for row in conn.execute("pragma table_info(user_sessions)").fetchall()}
+        if "refresh_session_id" not in columns:
+            conn.execute("alter table user_sessions add column refresh_session_id text")
 
     @staticmethod
     def _ensure_account_scoped_confirmations(conn: sqlite3.Connection) -> None:

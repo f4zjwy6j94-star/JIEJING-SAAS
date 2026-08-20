@@ -57,6 +57,9 @@
    - `revoke_browser_session(...)`、`revoke_other_browser_sessions(...)`、
      `revoke_current_browser_session(...)`。
 4. 所有 token 比对使用 SHA-256 lookup + `hmac.compare_digest`；轮换/重放/撤销在同一事务完成。
+5. 签发前验证精确 user/company 成员关系，并为 `user_sessions.refresh_session_id` 建立撤销索引。
+6. 合法新签发时有界清理已到期 access、token history 和无引用 refresh family；access 持久化失败
+   则 best-effort 撤销刚创建的 family，禁止留下可用孤儿会话。
 
 ### Tracer RED→GREEN
 
@@ -88,7 +91,7 @@
 ### Verification
 
 - production cookie 属性精确：access `HttpOnly/Secure/Lax`，refresh
-  `HttpOnly/Secure/Strict/Path=/auth`。
+  `HttpOnly/Secure/Strict/Path=/auth`，并与公网 Caddy/Nginx 路由一致。
 - refresh body/query/Authorization 注入均被忽略或拒绝。
 - Origin mismatch 在读取/轮换 token 前阻断。
 - refresh 失败不返回新 cookie，不把数据库异常替换成包含值的错误。
@@ -118,16 +121,19 @@
 
 ### What to implement
 
-1. 在 `saasFetch()` 内增加单一共享 refresh Promise；只对非 auth 请求的一次 401 生效，
-   成功后原请求最多重放一次。
+1. 在 `saasFetch()` 内增加单一共享 refresh Promise 和同源 Web Locks 跨标签页锁；只对非 auth
+   请求的一次 401 生效，成功后原请求最多重放一次。锁内先探测 `/me`，避免其它标签完成轮换
+   后再次使用旧代 cookie。
 2. NDJSON 流式请求不自动重放已发送 body；到期时显示重新连接提示，避免模型请求重复计费。
 3. 设置 -> 账号与店铺读取 `/auth/sessions`，显示设备类别、创建/最近活动和当前设备。
 4. 撤销按钮通过 `WeakMap<HTMLButtonElement, session_ref>` 绑定；DOM/storage/log 无 ref。
+5. `ops.js` 复用同一跨标签 refresh 锁；运营只读 GET/HEAD 最多恢复并重放一次，任何运营 POST
+   不触发 refresh、不自动重放。
 
 ### Tracer RED→GREEN
 
-新增 127 浏览器 fixture：两个并发 GET 同时 401 只触发一次 refresh；两个 GET 各重放一次；
-POST/NDJSON 不被隐式重复；撤销按钮发送一次精确请求；sentinel 在 DOM、URL、storage、console 为 0。
+新增 127 浏览器 fixture：两个标签同时恢复只触发一次 refresh；两个调用均成功；POST/NDJSON
+不被隐式重复；撤销按钮发送一次精确请求；sentinel 在 DOM、URL、storage、console 为 0。
 
 ### Verification
 

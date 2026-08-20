@@ -51,9 +51,9 @@ paid-launch P1：设备丢失或 cookie 被复制后，缺少短期访问凭证�
 - `session_id`：随机不可猜测的公开会话引用，不具备认证能力；主键。
 - `current_token_hash`：当前代刷新 token 的 SHA-256；唯一且不得返回。
 - `user_id`、`company_id`：租户和用户边界。
-- `device_class`：服务端 allowlist 分类，如 `chrome_windows`、`edge_windows`、`mobile_safari`、
-  `unknown_browser`；不保存原始 User-Agent。
-- `status`：严格枚举 `active`、`rotated`、`revoked`、`expired`、`replay_revoked`。
+- `device_class`：服务端 allowlist 分类，如 `chrome_windows`、`edge_windows`、`safari_macos`、
+  `mobile`、`unknown`；不保存原始 User-Agent。
+- `status`：严格枚举 `active`、`revoked`、`expired`、`replay_revoked`。
 - `created_at`、`last_seen_at`、`expires_epoch`、`revoked_at`。
 
 新增 `user_refresh_token_history`（保留到会话族过期）：
@@ -65,9 +65,12 @@ paid-launch P1：设备丢失或 cookie 被复制后，缺少短期访问凭证�
 
 轮换时同一事务更新 `current_token_hash`、把旧 generation 标为 `rotated` 并插入下一代。
 任意历史 generation 再出现都能命中历史表并撤销整个 `session_id`，不是只识别上一代。
+会话族到期后，下一次合法签发会先删除已过期 access 行，再清理同一到期族的历史哈希和
+无引用会话行；过期前保留完整重放证据，过期后不让历史表无限增长。
 
-访问会话的 `user_sessions` 增加可空 `refresh_session_id`，使 access `jti` 可关联到设备会话。
-外键不是授权来源；每次读取仍精确校验 `user_id`、`company_id` 和状态。
+访问会话的 `user_sessions` 增加可空 `refresh_session_id`，使 access `jti` 可关联到设备会话，
+并为按 family 撤销建立专用索引。外键/索引都不是授权来源；签发前必须存在精确
+`user_id + company_id` 成员关系，每次读取仍精确校验用户、租户和状态。
 
 SQLite 使用 `BEGIN IMMEDIATE`，Postgres 使用事务和行锁。轮换/撤销必须单赢家，不能先返回
 新 cookie 再落库。
@@ -85,7 +88,7 @@ SQLite 使用 `BEGIN IMMEDIATE`，Postgres 使用事务和行锁。轮换/撤销
 ### 6.2 刷新 cookie
 
 - 名称 `jiejing_saas_refresh`。
-- `HttpOnly; Secure; SameSite=Strict; Path=/auth`。
+- `HttpOnly; Secure; SameSite=Strict; Path=/auth`，精确匹配 Caddy/Nginx 暴露的公网认证路由。
 - 默认 `Max-Age=2592000`，production-like 最大 30 天。
 - value 为高熵随机不透明 token；不编码用户、租户或时间。
 
@@ -109,7 +112,8 @@ SQLite 使用 `BEGIN IMMEDIATE`，Postgres 使用事务和行锁。轮换/撤销
 
 - 需要有效访问会话。
 - 仅返回 `session_ref`、`device_label`、`created_at`、`last_seen_at`、`current`、`status=active`。
-- 只返回当前 `user_id` 的会话；company 切换不改变账号设备边界。
+- 只返回当前 `user_id + company_id` 的会话。company 切换签发新 family，并撤销切换前 family，
+  防止旧租户上下文继续存活。
 
 ### `POST /auth/sessions/{session_ref}/revoke`
 
@@ -120,7 +124,7 @@ SQLite 使用 `BEGIN IMMEDIATE`，Postgres 使用事务和行锁。轮换/撤销
 
 ### `POST /auth/sessions/revoke-others`
 
-- 保留当前 `sid`，撤销同一用户的其他 active family。
+- 保留当前 `sid`，撤销同一用户、同一 company 的其他 active family。
 - 返回仅包含撤销数量和安全布尔值。
 
 现有 `POST /auth/logout` 同时撤销当前 access `jti` 和 refresh family，并清除两枚 cookie。
@@ -129,8 +133,12 @@ SQLite 使用 `BEGIN IMMEDIATE`，Postgres 使用事务和行锁。轮换/撤销
 
 - `saasFetch` 遇到一次 401 时，可对非 auth 请求执行一次 `POST /auth/refresh`，成功后只重放
   原请求一次；刷新失败立即进入登录页，禁止递归重试。
-- 同一页面并发 401 共享一个 refresh Promise，避免刷新 token 并发轮换导致误判重放。
+- 同一页面并发 401 共享一个 refresh Promise；Chrome/Edge 等支持 Web Locks 的浏览器还使用
+  同源跨标签页独占锁。获得锁后先以 cookie 探测 `/me`：若其它标签已恢复则直接复用，只有
+  仍为 401 才轮换 refresh，避免合法多标签页被误判为 token 重放。
 - 设置 -> 账号与店铺增加“登录设备”区；只显示设备类别和时间。
+- 独立运营后台使用同一跨标签锁和 cookie-only refresh；只读 GET/HEAD 可恢复一次，反馈处理等
+  POST 永不自动重放。商家工作台与运营后台因此不会在 30 分钟后无故中断，也不会扩大写入面。
 - 撤销按钮通过页面内 `WeakMap` 绑定 `session_ref`，不得把 ref 写入 DOM 属性或浏览器存储。
 - UI 不显示 IP、城市、原始 User-Agent、cookie、token 或哈希。
 
@@ -148,12 +156,14 @@ SQLite 使用 `BEGIN IMMEDIATE`，Postgres 使用事务和行锁。轮换/撤销
 
 1. 登录签发短 access + refresh cookie；JSON/DOM/storage/log 无 token。
 2. access 过期后 refresh 成功并轮换；旧 refresh 再用触发 family 撤销。
-3. 两个并发 refresh 只有一个成功，另一个固定阻断且不会产生第二个 active generation。
+3. 后端同一 generation 的并发 refresh 只有一个成功，其余固定阻断并撤销 family；浏览器
+   两标签同时恢复时通过跨页锁只发起一次轮换，两个标签均恢复。
 4. logout 同时使 access 和 refresh 失效。
 5. 两设备登录后清单为 2；撤销另一设备后其 access/refresh 均 401，当前设备仍有效。
 6. 错用户、错 company、畸形 ref、过期/未来/重复行全部 fail closed。
 7. 原始 token、cookie、哈希、UA、IP 在响应、异常、审计、DOM、local/session storage 中零命中。
 8. Postgres migration、SQLite migration、session revocation、Origin/CSRF、登录恢复和设置页回归通过。
+9. 若 access 持久化失败，刚创建的 refresh family 必须立即撤销；到期 family 的历史记录被有界清理。
 
 ## 11. 发布与回滚
 

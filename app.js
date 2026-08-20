@@ -1,5 +1,9 @@
 const JIEJING_SETTINGS_PANELS_SRC = "./assets/jiejing-settings-panels.js?v=20260715-owner-traffic-analytics-v104";
 let jiejingSettingsPanelsLoadPromise = null;
+let saasBrowserSessionRefreshPromise = null;
+const SAAS_BROWSER_SESSION_REFRESH_LOCK = "jiejing-browser-session-refresh-v1";
+const SAAS_BROWSER_SESSION_REFRESH_TIMEOUT_MS = 10000;
+const saasBrowserSessionButtonBindings = new WeakMap();
 
 function ensureJiejingSettingsPanelsLoaded() {
   if (window.JiejingSettingsPanels) return Promise.resolve(window.JiejingSettingsPanels);
@@ -101,6 +105,7 @@ const state = {
   saasError: "",
   saasToken: "",
   saasManualLogout: false,
+  saasBrowserSessions: [],
   saasIdentity: null,
   saasUser: null,
   saasCompany: null,
@@ -16400,21 +16405,30 @@ function saasServerNowMs(referenceLocalNow = Date.now()) {
 }
 
 async function saasFetch(path, options = {}) {
+  const { saasRequestRetriedAfterRefresh = false, ...fetchOptions } = options;
   const headers = {
     accept: "application/json",
     "content-type": "application/json",
-    ...(options.headers || {}),
+    ...(fetchOptions.headers || {}),
   };
   if (state.saasToken && shouldAttachSaasBearerToken()) headers.authorization = `Bearer ${state.saasToken}`;
   const url = `${state.saasApiBase}${path}`;
   const requestStartedAtMs = Date.now();
   const response = await fetch(url, {
-    ...options,
-    cache: options.cache || "no-store",
-    credentials: options.credentials || "include",
+    ...fetchOptions,
+    cache: fetchOptions.cache || "no-store",
+    credentials: fetchOptions.credentials || "include",
     headers,
   });
   recordSaasServerClock(response, requestStartedAtMs, Date.now());
+  if (
+    response.status === 401 &&
+    !saasRequestRetriedAfterRefresh &&
+    saasRequestCanRetryAfterSessionRefresh(path, fetchOptions) &&
+    (await refreshSaasBrowserSession())
+  ) {
+    return saasFetch(path, { ...fetchOptions, saasRequestRetriedAfterRefresh: true });
+  }
   if (!response.ok) {
     const detail = await response.text();
     let payload = null;
@@ -16436,6 +16450,63 @@ async function saasFetch(path, options = {}) {
     throw new Error(`捷境后端接口返回了非 JSON 内容，请刷新重试。接口：${url}；返回：${detail.slice(0, 80)}`);
   }
   return response.json();
+}
+
+function saasRequestCanRetryAfterSessionRefresh(path, options = {}) {
+  const method = String(options.method || "GET").toUpperCase();
+  return (
+    (method === "GET" || method === "HEAD") &&
+    !String(path || "").startsWith("/auth/") &&
+    !state.saasManualLogout &&
+    isSaasPublicMvpMode()
+  );
+}
+
+async function refreshSaasBrowserSession() {
+  if (saasBrowserSessionRefreshPromise) return saasBrowserSessionRefreshPromise;
+  saasBrowserSessionRefreshPromise = (async () => {
+    try {
+      if (globalThis.navigator?.locks?.request) {
+        return navigator.locks.request(SAAS_BROWSER_SESSION_REFRESH_LOCK, refreshSaasBrowserSessionInsideLock);
+      }
+      return refreshSaasBrowserSessionInsideLock();
+    } catch {
+      return false;
+    } finally {
+      saasBrowserSessionRefreshPromise = null;
+    }
+  })();
+  return saasBrowserSessionRefreshPromise;
+}
+
+async function refreshSaasBrowserSessionInsideLock() {
+  const sessionProbe = await saasBrowserSessionRefreshFetch(`${state.saasApiBase}/me`, {
+    method: "GET",
+    cache: "no-store",
+    credentials: "include",
+    headers: { accept: "application/json" },
+  });
+  if (sessionProbe.ok) return true;
+  if (sessionProbe.status !== 401) return false;
+  const response = await saasBrowserSessionRefreshFetch(`${state.saasApiBase}/auth/refresh`, {
+    method: "POST",
+    cache: "no-store",
+    credentials: "include",
+    headers: { accept: "application/json", "content-type": "application/json" },
+  });
+  if (!response.ok) return false;
+  const payload = await response.json();
+  return payload?.ok === true && payload?.session_refreshed === true && payload?.secret_exposed === false;
+}
+
+async function saasBrowserSessionRefreshFetch(url, options) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SAAS_BROWSER_SESSION_REFRESH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function shouldAttachSaasBearerToken() {
@@ -17203,6 +17274,7 @@ function resetSaasProtectedWorkbenchState() {
   state.saasRoles = [];
   state.saasStores = [];
   state.saasConnections = [];
+  state.saasBrowserSessions = [];
   state.saasSecurityGate = null;
   state.saasSecretRefs = [];
   state.saasVaultStatus = null;
@@ -27530,6 +27602,7 @@ async function refreshSaasState(options = {}) {
       coreCeoChatHistory,
       coreTasks,
       coreConfirmations,
+      coreBrowserSessions,
       coreReadiness,
     ] = await Promise.all([
       saasFetch("/me"),
@@ -27553,6 +27626,7 @@ async function refreshSaasState(options = {}) {
       }, 10000),
       saasFetch("/tasks?limit=20"),
       saasFetch("/confirmations?limit=40"),
+      optionalSaasFetchFast("/auth/sessions", { sessions: [] }, 10000),
       optionalSaasFetchFast("/readiness/product-saas", { readiness: state.saasReadiness || null }, 10000),
     ]);
     state.saasIdentity = coreMe.identity || null;
@@ -27574,6 +27648,7 @@ async function refreshSaasState(options = {}) {
     state.saasDataPackets = coreDataPackets.data_packets || [];
     state.saasExecutionResults = coreExecutions.execution_results || [];
     state.saasTasks = coreTasks.tasks || [];
+    state.saasBrowserSessions = Array.isArray(coreBrowserSessions.sessions) ? coreBrowserSessions.sessions : [];
     const coreLiveConfirmations = coreConfirmations.confirmations || [];
     await verifySaasUnpublishedDraftSaveConfirmations(coreLiveConfirmations);
     await verifySaasInventoryLocationConfirmations(coreLiveConfirmations);
@@ -44455,6 +44530,115 @@ function renderSaasMerchantSecurityBoundaryPanel() {
   `;
 }
 
+function safeSaasBrowserSessionsForDisplay() {
+  const sessions = Array.isArray(state.saasBrowserSessions) ? state.saasBrowserSessions : [];
+  const counts = new Map();
+  sessions.forEach((session) => {
+    const sessionRef = String(session?.session_ref || "");
+    if (sessionRef) counts.set(sessionRef, (counts.get(sessionRef) || 0) + 1);
+  });
+  return sessions.filter((session) => {
+    const sessionRef = String(session?.session_ref || "");
+    return Boolean(
+      sessionRef &&
+        counts.get(sessionRef) === 1 &&
+        session?.status === "active" &&
+        session?.secret_exposed === false &&
+        ["Chrome · Windows", "Edge · Windows", "Safari · macOS", "移动设备", "未知设备"].includes(
+          String(session?.device_label || ""),
+        ),
+    );
+  });
+}
+
+function saasBrowserSessionTime(value = "") {
+  const parsed = new Date(String(value || ""));
+  if (!Number.isFinite(parsed.getTime())) return "时间待刷新";
+  return parsed.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function renderSaasBrowserSessionsPanel() {
+  const sessions = safeSaasBrowserSessionsForDisplay();
+  return `
+    <section class="saas-settings-card saas-browser-sessions" aria-label="登录设备">
+      <div class="saas-settings-card-head">
+        <div>
+          <span>登录设备</span>
+          <strong>${sessions.length ? `${sessions.length} 台设备保持登录` : "正在读取安全会话"}</strong>
+          <p>访问凭证每 30 分钟更新；页面只显示设备类别和时间，不保存 IP、原始浏览器标识或登录令牌。</p>
+        </div>
+        ${sessions.length > 1 ? '<button class="secondary-action compact-action" type="button" data-saas-session-revoke-others>退出其它设备</button>' : ""}
+      </div>
+      <div class="saas-settings-status-list">
+        ${
+          sessions.length
+            ? sessions
+                .map(
+                  (session) => `
+                    <article class="is-green" data-saas-browser-session>
+                      <span>${session.current === true ? "当前设备" : "其它设备"}</span>
+                      <strong>${escapeHtml(session.device_label)}</strong>
+                      <small>最近使用 ${escapeHtml(saasBrowserSessionTime(session.last_seen_at))} · 登录于 ${escapeHtml(saasBrowserSessionTime(session.created_at))}</small>
+                      <button class="secondary-action compact-action" type="button" data-saas-session-revoke>${session.current === true ? "退出当前设备" : "退出此设备"}</button>
+                    </article>
+                  `,
+                )
+                .join("")
+            : '<article class="is-amber"><span>设备清单</span><strong>等待后端确认</strong><small>不会因为清单读取失败而放宽登录边界。</small></article>'
+        }
+      </div>
+    </section>
+  `;
+}
+
+function bindSaasBrowserSessionControls(root) {
+  const sessions = safeSaasBrowserSessionsForDisplay();
+  root?.querySelectorAll?.("[data-saas-session-revoke]").forEach((button, index) => {
+    const sessionRef = String(sessions[index]?.session_ref || "");
+    if (sessionRef) saasBrowserSessionButtonBindings.set(button, sessionRef);
+  });
+}
+
+async function revokeSaasBrowserSession(button) {
+  const sessionRef = saasBrowserSessionButtonBindings.get(button);
+  if (!sessionRef || button.disabled) return false;
+  button.disabled = true;
+  try {
+    const result = await saasFetch(`/auth/sessions/${encodeURIComponent(sessionRef)}/revoke`, {
+      method: "POST",
+      body: "{}",
+    });
+    if (result?.current_device === true) {
+      state.saasManualLogout = true;
+      resetSaasAccountShellState();
+      redirectToSaasLogin("logout");
+      return true;
+    }
+    await refreshSaasState({ silent: true });
+    showActionToast("该设备已退出，当前设备继续保持登录。");
+    return true;
+  } catch {
+    button.disabled = false;
+    showActionToast("设备退出没有完成，请刷新后重试。");
+    return false;
+  }
+}
+
+async function revokeOtherSaasBrowserSessions(button) {
+  if (!button || button.disabled) return false;
+  button.disabled = true;
+  try {
+    await saasFetch("/auth/sessions/revoke-others", { method: "POST", body: "{}" });
+    await refreshSaasState({ silent: true });
+    showActionToast("其它设备已全部退出。");
+    return true;
+  } catch {
+    button.disabled = false;
+    showActionToast("其它设备退出没有完成，请刷新后重试。");
+    return false;
+  }
+}
+
 function renderSaasBillingProviderPanel() {
   if (window.JiejingSettingsPanels?.renderBillingProviderPanel) {
     return window.JiejingSettingsPanels.renderBillingProviderPanel(state);
@@ -44546,6 +44730,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       panels: [
         renderSaasMerchantOnboardingPanel(),
         renderSaasSettingsAccountAccessPanel(),
+        renderSaasBrowserSessionsPanel(),
         renderSaasSettingsPlatformPanel(ctx),
         renderSaasSettingsAccountPanel(ctx, options),
       ],
@@ -44725,6 +44910,7 @@ function renderSaasConnectCenter(view) {
     view,
     trustedJiejingHtml(renderSaasSettingsCleanLayout(ctx, { ebayAuthorized, ebayDraftAuthorized, securityGateReady }), "settings.clean_layout"),
   );
+  bindSaasBrowserSessionControls(view);
   return;
   view.innerHTML = `
     <section class="panel full product-manager-module saas-real-settings-center" aria-label="真实账号和安全设置">
@@ -46507,6 +46693,18 @@ function bindEvents() {
     if (accountActionButton && !accountActionButton.closest("#accountMenuPopover")) {
       event.preventDefault();
       handleAccountMenuAction(accountActionButton);
+      return;
+    }
+    const revokeBrowserSessionButton = event.target.closest("[data-saas-session-revoke]");
+    if (revokeBrowserSessionButton) {
+      event.preventDefault();
+      revokeSaasBrowserSession(revokeBrowserSessionButton);
+      return;
+    }
+    const revokeOtherBrowserSessionsButton = event.target.closest("[data-saas-session-revoke-others]");
+    if (revokeOtherBrowserSessionsButton) {
+      event.preventDefault();
+      revokeOtherSaasBrowserSessions(revokeOtherBrowserSessionsButton);
       return;
     }
     const workflowFeedbackButton = event.target.closest(

@@ -43,6 +43,8 @@ class SessionPayload:
     jti: str
     iat: int
     exp: int
+    sid: str = ""
+    token_type: str = "access"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -52,19 +54,22 @@ class SessionPayload:
             "jti": self.jti,
             "iat": self.iat,
             "exp": self.exp,
+            "sid": self.sid,
+            "token_type": self.token_type,
         }
 
 
 def _session_ttl_from_env() -> int:
     raw = str(os.environ.get("JIEJING_SAAS_SESSION_TTL_SECONDS") or "").strip()
+    production_like = str(os.environ.get("JIEJING_SAAS_ENV") or "").strip().lower() in {"staging", "production"}
     if raw:
         try:
             value = int(raw)
             if value > 0:
-                return value
+                return min(value, 30 * 60) if production_like else value
         except ValueError:
             pass
-    return 60 * 60 * 24 * 7
+    return 30 * 60 if production_like else 60 * 60 * 24 * 7
 
 
 class SessionManager:
@@ -74,7 +79,7 @@ class SessionManager:
         )
         self.ttl_seconds = ttl_seconds if ttl_seconds is not None else _session_ttl_from_env()
 
-    def create_token(self, *, user_id: str, company_id: str, email: str) -> str:
+    def create_token(self, *, user_id: str, company_id: str, email: str, refresh_session_id: str = "") -> str:
         issued_at = int(time.time())
         payload = SessionPayload(
             user_id=user_id,
@@ -83,6 +88,8 @@ class SessionManager:
             jti=f"session_{secrets.token_urlsafe(24)}",
             iat=issued_at,
             exp=issued_at + self.ttl_seconds,
+            sid=str(refresh_session_id or ""),
+            token_type="access",
         )
         payload_b64 = _b64(json.dumps(payload.to_dict(), ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
         signature = _b64(hmac.new(self.secret, payload_b64.encode("ascii"), hashlib.sha256).digest())
@@ -105,6 +112,8 @@ class SessionManager:
         required = {"user_id", "company_id", "email"}
         if not required.issubset(payload):
             raise ValueError("bearer token missing identity fields")
+        if payload.get("token_type") not in {None, "", "access"}:
+            raise ValueError("invalid bearer token type")
         if not str(payload.get("jti") or ""):
             payload["jti"] = f"legacy_{hashlib.sha256(token.encode('utf-8')).hexdigest()[:40]}"
             payload["legacy_session"] = True

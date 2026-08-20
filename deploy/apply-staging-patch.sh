@@ -68,6 +68,7 @@ FILES=(
   "docs/JIEJING_NO_CHARGE_BILLING_REHEARSAL_20260618.md"
   "docs/JIEJING_MAINLAND_PAYMENT_COLLECTION_PLAN_20260629.md"
   "docs/JIEJING_PRELAUNCH_INTERNAL_HARDENING_RUNBOOK_20260620.md"
+  "docs/JIEJING_SECURITY_BEST_PRACTICES_AUDIT_20260810.md"
   "docs/JIEJING_GITHUB_SELF_HOSTED_RUNNER_DEPLOY_RUNBOOK_20260622.md"
   "docs/JIEJING_GITHUB_CI_STATUS_20260617.md"
   "docs/JIEJING_FRONTEND_SPLIT_STATUS_20260617.md"
@@ -83,6 +84,8 @@ FILES=(
   "docs/superpowers/plans/2026-08-03-real-merchant-feedback-closure-implementation-plan.md"
   "docs/superpowers/specs/2026-08-04-runtime-env-single-source-and-overlap-guard-design.md"
   "docs/superpowers/plans/2026-08-04-runtime-env-overlap-guard-implementation-plan.md"
+  "docs/superpowers/specs/2026-08-20-session-rotation-and-device-control-design.md"
+  "docs/superpowers/plans/2026-08-20-session-rotation-and-device-control-implementation-plan.md"
   "favicon.ico"
   "index.html"
   "app.html"
@@ -336,6 +339,11 @@ FILES=(
   "tools/test_jiejing_ai_ceo_history_pagination.py"
   "tools/test_jiejing_billing_quota_guardrail.py"
   "tools/test_jiejing_session_revocation.py"
+  "tools/test_jiejing_rotating_browser_sessions.py"
+  "tools/test_jiejing_rotating_browser_session_http.py"
+  "tools/test_jiejing_frontend_rotating_browser_sessions.py"
+  "tools/codex_jiejing_rotating_browser_session_smoke.js"
+  "tools/test_jiejing_session_restore_and_ebay_ops_ui.py"
   "tools/test_jiejing_public_anti_scrape_hardening.py"
   "tools/test_jiejing_public_security_status_ui.py"
   "tools/test_jiejing_saas_readable_decision_service_settings_ui.py"
@@ -676,6 +684,10 @@ python3 -m py_compile \
   tools/test_jiejing_ai_ceo_history_pagination.py \
   tools/test_jiejing_billing_quota_guardrail.py \
   tools/test_jiejing_session_revocation.py \
+  tools/test_jiejing_rotating_browser_sessions.py \
+  tools/test_jiejing_rotating_browser_session_http.py \
+  tools/test_jiejing_frontend_rotating_browser_sessions.py \
+  tools/test_jiejing_session_restore_and_ebay_ops_ui.py \
   tools/test_jiejing_public_anti_scrape_hardening.py \
   tools/test_jiejing_public_security_status_ui.py \
   tools/test_jiejing_saas_readable_decision_service_settings_ui.py \
@@ -693,6 +705,7 @@ NODE_BIN="${JIEJING_NODE_BIN:-node}"
 "$NODE_BIN" --check ops.js
 "$NODE_BIN" --check tools/codex_jiejing_operations_console_smoke.js
 "$NODE_BIN" --check tools/codex_jiejing_product_feedback_smoke.js
+"$NODE_BIN" --check tools/codex_jiejing_rotating_browser_session_smoke.js
 
 COMPOSE_FILE="deploy/docker-compose.public-https-staging.yml"
 if [[ ! -f "$COMPOSE_FILE" ]]; then

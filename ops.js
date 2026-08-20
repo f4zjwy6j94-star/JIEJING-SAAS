@@ -15,6 +15,9 @@
   };
 
   const DETAIL_VIEWS = new Set(["traffic", "merchants", "transactions", "costs", "workflows", "feedback", "audit"]);
+  const OPS_BROWSER_SESSION_REFRESH_LOCK = "jiejing-browser-session-refresh-v1";
+  const OPS_BROWSER_SESSION_REFRESH_TIMEOUT_MS = 10000;
+  let opsBrowserSessionRefreshPromise = null;
   const state = {
     view: "overview",
     period: 30,
@@ -22,6 +25,7 @@
     details: new Map(),
     loading: false,
     identity: null,
+    manualLogout: false,
   };
 
   const elements = {
@@ -144,6 +148,14 @@
       });
       let payload = {};
       try { payload = await response.json(); } catch (_) { payload = {}; }
+      if (
+        response.status === 401 &&
+        options.opsRequestRetriedAfterRefresh !== true &&
+        opsRequestCanRetryAfterSessionRefresh(path, options) &&
+        (await refreshOpsBrowserSession())
+      ) {
+        return api(path, { ...options, opsRequestRetriedAfterRefresh: true });
+      }
       if (!response.ok) {
         const error = new Error(payload.error || payload.message || `请求失败 (${response.status})`);
         error.status = response.status;
@@ -153,6 +165,62 @@
     } catch (error) {
       if (error?.name === "AbortError") throw new Error("请求超时，请稍后重试");
       throw error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
+  function opsRequestCanRetryAfterSessionRefresh(path, options = {}) {
+    const method = String(options.method || "GET").toUpperCase();
+    return (
+      (method === "GET" || method === "HEAD") &&
+      !String(path || "").startsWith("/auth/") &&
+      state.manualLogout !== true
+    );
+  }
+
+  async function refreshOpsBrowserSession() {
+    if (opsBrowserSessionRefreshPromise) return opsBrowserSessionRefreshPromise;
+    opsBrowserSessionRefreshPromise = (async () => {
+      try {
+        if (globalThis.navigator?.locks?.request) {
+          return navigator.locks.request(OPS_BROWSER_SESSION_REFRESH_LOCK, refreshOpsBrowserSessionInsideLock);
+        }
+        return refreshOpsBrowserSessionInsideLock();
+      } catch {
+        return false;
+      } finally {
+        opsBrowserSessionRefreshPromise = null;
+      }
+    })();
+    return opsBrowserSessionRefreshPromise;
+  }
+
+  async function refreshOpsBrowserSessionInsideLock() {
+    const sessionProbe = await opsBrowserSessionRefreshFetch("/permissions/me", {
+      method: "GET",
+      cache: "no-store",
+      credentials: "include",
+      headers: { accept: "application/json" },
+    });
+    if (sessionProbe.ok) return true;
+    if (sessionProbe.status !== 401) return false;
+    const response = await opsBrowserSessionRefreshFetch("/auth/refresh", {
+      method: "POST",
+      cache: "no-store",
+      credentials: "include",
+      headers: { accept: "application/json", "content-type": "application/json" },
+    });
+    if (!response.ok) return false;
+    const payload = await response.json();
+    return payload?.ok === true && payload?.session_refreshed === true && payload?.secret_exposed === false;
+  }
+
+  async function opsBrowserSessionRefreshFetch(url, options) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), OPS_BROWSER_SESSION_REFRESH_TIMEOUT_MS);
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
     } finally {
       window.clearTimeout(timeout);
     }
@@ -219,6 +287,7 @@
     elements.loginStatus.textContent = "正在验证账号";
     const form = new FormData(elements.loginForm);
     try {
+      state.manualLogout = false;
       await api("/owner/auth/login", {
         method: "POST",
         body: { email: form.get("email"), password: form.get("password") },
@@ -235,6 +304,7 @@
   }
 
   async function logout() {
+    state.manualLogout = true;
     try { await api("/auth/logout", { method: "POST", timeoutMs: 6000 }); } catch (_) { /* local state still clears */ }
     state.overview = null;
     state.details.clear();

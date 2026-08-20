@@ -21,6 +21,7 @@ from .repository import SaaSRepository
 CONTROLLED_STAGING_VERSION = "2026-05-20-controlled-staging-security"
 
 REQUIRED_TENANT_TABLES = {
+    "user_refresh_sessions": ("company_id", "user_id"),
     "stores": ("company_id",),
     "team_members": ("company_id", "user_id"),
     "secret_refs": ("company_id",),
@@ -194,8 +195,8 @@ def _session_secret_check(settings: SaaSSettings) -> dict[str, Any]:
         "登录会话签名",
         "ready",
         "info",
-        "会话 token 使用后端签名；当前环境没有使用默认生产相近密钥。",
-        "上线前接入托管身份、MFA 和短会话策略。",
+        "会话 token 使用后端签名；生产相近环境采用短访问会话、后端轮换刷新和设备级撤销。",
+        "付费公开上线后继续接入托管身份、MFA 或 passkey 作为纵深防护。",
     )
 
 

@@ -41,7 +41,7 @@ def _request_json(
     payload: dict[str, Any] | None = None,
     origin: str = "",
     cookie: str = "",
-) -> tuple[int, dict[str, Any], dict[str, str]]:
+) -> tuple[int, dict[str, Any], dict[str, Any]]:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers = {"accept": "application/json", "content-type": "application/json"}
     if origin:
@@ -52,10 +52,14 @@ def _request_json(
     try:
         with opener.open(request, timeout=20) as response:
             raw = response.read().decode("utf-8")
-            return int(response.status), json.loads(raw) if raw else {}, dict(response.headers.items())
+            response_headers: dict[str, Any] = dict(response.headers.items())
+            response_headers["set-cookie-all"] = response.headers.get_all("Set-Cookie", [])
+            return int(response.status), json.loads(raw) if raw else {}, response_headers
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8")
-        return int(exc.code), json.loads(raw) if raw else {}, dict(exc.headers.items())
+        response_headers = dict(exc.headers.items())
+        response_headers["set-cookie-all"] = exc.headers.get_all("Set-Cookie", [])
+        return int(exc.code), json.loads(raw) if raw else {}, response_headers
 
 
 def _wait_for_health(opener: urllib.request.OpenerDirector, base_url: str) -> bool:
@@ -132,10 +136,11 @@ def _test_production_like_cookie_and_token_boundary() -> None:
             assert register_status == 201, registered
             if "token" in registered:
                 failures.append("production-like registration returned a browser-readable bearer token")
-            register_cookie_header = str(register_headers.get("Set-Cookie") or register_headers.get("set-cookie") or "")
-            assert "httponly" in register_cookie_header.lower()
-            assert "secure" in register_cookie_header.lower(), "production-like session cookie was not pinned to HTTPS"
-            session_cookie = str(register_headers.get("Set-Cookie") or register_headers.get("set-cookie") or "").split(";", 1)[0]
+            register_cookie_headers = register_headers.get("set-cookie-all", [])
+            assert len(register_cookie_headers) == 2
+            assert all("httponly" in header.lower() for header in register_cookie_headers)
+            assert all("secure" in header.lower() for header in register_cookie_headers), "production-like cookies were not pinned to HTTPS"
+            session_cookie = next(header for header in register_cookie_headers if header.startswith("jiejing_saas_session=")).split(";", 1)[0]
             assert session_cookie
             company_id = str((registered.get("company") or {}).get("company_id") or "")
             assert company_id
@@ -149,9 +154,10 @@ def _test_production_like_cookie_and_token_boundary() -> None:
             assert login_status == 200, login
             if "token" in login:
                 failures.append("production-like login returned a browser-readable bearer token")
-            login_cookie_header = str(login_headers.get("Set-Cookie") or login_headers.get("set-cookie") or "")
-            assert "secure" in login_cookie_header.lower(), "production-like session cookie depended on a forwarded HTTPS hint"
-            session_cookie = login_cookie_header.split(";", 1)[0]
+            login_cookie_headers = login_headers.get("set-cookie-all", [])
+            assert len(login_cookie_headers) == 2
+            assert all("secure" in header.lower() for header in login_cookie_headers), "production-like cookies depended on a forwarded HTTPS hint"
+            session_cookie = next(header for header in login_cookie_headers if header.startswith("jiejing_saas_session=")).split(";", 1)[0]
             assert session_cookie
 
             blocked_status, blocked, _headers = _request_json(
