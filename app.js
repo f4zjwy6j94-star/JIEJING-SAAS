@@ -158,6 +158,7 @@ const state = {
   saasLastModelValueRehearsal: null,
   saasIpRiskScreening: null,
   saasCommercialLaunchGate: null,
+  saasCommercialLaunchGateStoreId: "",
   saasDatabasePlan: null,
   saasDatabaseAdapters: null,
   saasDatabaseInventory: null,
@@ -4408,6 +4409,7 @@ let saasExactReadOnlyOAuthConfirmationRenderGeneration = 0;
 let saasStateRefreshGeneration = 0;
 const saasReadOnlyOAuthPlanAttemptKeys = new Set();
 const saasUnpublishedDraftOAuthPlanAttemptKeys = new Set();
+const saasEbayRefreshProofAttemptKeys = new Set();
 const saasInventoryLocationExecutionAttemptKeys = new Set();
 const saasInventoryLocationReconciliationAttemptKeys = new Set();
 let saasWechatZeroChargeRehearsalAttempted = false;
@@ -17291,6 +17293,7 @@ function resetSaasProtectedWorkbenchState() {
   state.saasLastModelValueRehearsal = null;
   state.saasIpRiskScreening = null;
   state.saasCommercialLaunchGate = null;
+  state.saasCommercialLaunchGateStoreId = "";
   state.saasEdgeCutoverPreflight = null;
   state.saasDataPackets = [];
   state.saasQueuePlan = null;
@@ -27811,7 +27814,7 @@ async function refreshSaasState(options = {}) {
       optionalSaasFetchFast("/model/providers/catalog", { model_provider_catalog: null }),
       optionalSaasFetchFast(`/stores/${encodeURIComponent(store.store_id)}/model/settings`, { model_settings: state.saasModelSettings || null }, 10000),
       refreshLaunchGate
-        ? optionalSaasFetchFast("/commercial/launch-gate", { commercial_launch_gate: state.saasCommercialLaunchGate || null }, 20000)
+        ? optionalSaasFetchFast(`/commercial/launch-gate?store_id=${encodeURIComponent(store.store_id)}`, { commercial_launch_gate: state.saasCommercialLaunchGate || null }, 20000)
         : Promise.resolve({ commercial_launch_gate: state.saasCommercialLaunchGate || null }),
       optionalSaasFetchFast("/post-publish/cockpit", { post_publish_cockpit: state.saasPostPublishCockpit || null }, 12000),
       optionalSaasFetchFast(`/data-packets?platform=ebay&limit=5`, { data_packets: state.saasDataPackets || [] }, 12000),
@@ -27933,7 +27936,10 @@ async function refreshSaasState(options = {}) {
     state.saasModelValueGate = modelValueGate.model_value_gate || null;
     state.saasModelProviderCatalog = modelProviderCatalog.model_provider_catalog || null;
     state.saasModelSettings = modelSettings.model_settings || null;
-    state.saasCommercialLaunchGate = commercialLaunchGate.commercial_launch_gate || null;
+    if (refreshLaunchGate) {
+      state.saasCommercialLaunchGate = commercialLaunchGate.commercial_launch_gate || null;
+      state.saasCommercialLaunchGateStoreId = state.saasCommercialLaunchGate ? String(store.store_id || "") : "";
+    }
     state.saasPostPublishCockpit = postPublishCockpit.post_publish_cockpit || state.saasPostPublishCockpit || null;
     state.saasDataPackets = dataPackets.data_packets || [];
     state.saasAccountHealth = accountHealth.account_health || state.saasAccountHealth || null;
@@ -28061,6 +28067,7 @@ async function refreshSaasState(options = {}) {
     state.saasSecurityGate = null;
     state.saasModelValueGate = null;
     state.saasCommercialLaunchGate = null;
+    state.saasCommercialLaunchGateStoreId = "";
     state.saasPostPublishCockpit = null;
     state.saasOwnerLaunchControl = null;
     state.saasEdgeCutoverPreflight = null;
@@ -30372,6 +30379,129 @@ async function planSaasEbayUnpublishedDraftOAuth() {
   }
 }
 
+function validatedSaasEbayRefreshProofResponse(payload, store) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const topAllowed = new Set(["token_refresh", "fresh_proof_reused", "real_platform_writes_enabled", "secret_exposed"]);
+  if (Object.keys(payload).some((key) => !topAllowed.has(key))) return null;
+  const refresh = payload.token_refresh;
+  if (!refresh || typeof refresh !== "object" || Array.isArray(refresh)) return null;
+  const refreshAllowed = new Set([
+    "ok",
+    "status",
+    "source",
+    "company_id",
+    "store_id",
+    "secret_ref_present",
+    "expires_in",
+    "refreshed_at",
+    "blocked_by",
+    "access_token_returned_to_frontend",
+    "access_token_returned_to_runtime",
+    "access_token_stored_in_database",
+    "refresh_token_returned_to_frontend",
+    "real_platform_writes_enabled",
+    "secret_exposed",
+  ]);
+  if (Object.keys(refresh).some((key) => !refreshAllowed.has(key))) return null;
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const storeId = String(store?.store_id || "").trim();
+  const status = String(refresh.status || "");
+  const source = String(refresh.source || "");
+  const statusSourceReady =
+    (status === "refreshed" && source === "backend_vault_secret_ref_refresh" && payload.fresh_proof_reused !== true) ||
+    (status === "already_verified" && source === "fresh_current_store_vault_refresh_proof" && payload.fresh_proof_reused === true);
+  if (
+    !companyId ||
+    !storeId ||
+    refresh.ok !== true ||
+    !statusSourceReady ||
+    String(refresh.company_id || "") !== companyId ||
+    String(refresh.store_id || "") !== storeId ||
+    refresh.secret_ref_present !== true ||
+    !Array.isArray(refresh.blocked_by) ||
+    refresh.blocked_by.length !== 0 ||
+    refresh.access_token_returned_to_frontend !== false ||
+    refresh.access_token_returned_to_runtime !== false ||
+    refresh.access_token_stored_in_database !== false ||
+    refresh.refresh_token_returned_to_frontend !== false ||
+    refresh.real_platform_writes_enabled !== false ||
+    refresh.secret_exposed !== false ||
+    payload.real_platform_writes_enabled !== false ||
+    payload.secret_exposed !== false
+  ) {
+    return null;
+  }
+  return refresh;
+}
+
+async function verifySaasEbayCredentialProof() {
+  const store = activeSaasStore();
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const storeId = String(store?.store_id || "").trim();
+  if (!companyId || !storeId || !isSaasAuthorizedConnectionStatus(saasConnectionForStore(store)?.status || store?.status || "")) {
+    showActionToast("当前店铺还没有可验证的 eBay 官方连接；系统没有重新授权或发起同步。");
+    return;
+  }
+  state.saasLoading = true;
+  state.saasError = "";
+  renderSaasBackendPanel();
+  try {
+    await refreshSaasState({ silent: true, refreshLaunchGate: true });
+    const refreshedStore = activeSaasStore();
+    if (String(refreshedStore?.store_id || "") !== storeId) throw new Error("ebay_refresh_proof_store_changed");
+    const expectedStoreHash = await saasSha256Hex(storeId);
+    const evidence = state.saasCommercialLaunchGate?.current_store_ebay_evidence || {};
+    const exactEvidence =
+      String(state.saasCommercialLaunchGateStoreId || "") === storeId &&
+      evidence.current_store_selected === true &&
+      expectedStoreHash &&
+      String(evidence.store_id_sha256 || "").toLowerCase() === expectedStoreHash.toLowerCase() &&
+      evidence.secret_exposed === false;
+    if (!exactEvidence) throw new Error("ebay_refresh_proof_current_store_evidence_invalid");
+    if (evidence.refresh_success_ready === true && evidence.refresh_same_connection_ready === true) {
+      showActionToast("当前 eBay 店铺连接已经验证可用，不需要重复检查或重新授权。");
+      return;
+    }
+    const attemptKey = [companyId, storeId].join("\u0000");
+    if (saasEbayRefreshProofAttemptKeys.has(attemptKey)) {
+      throw new Error("ebay_refresh_proof_already_attempted_in_this_page");
+    }
+    saasEbayRefreshProofAttemptKeys.add(attemptKey);
+    const payload = await saasFetch(`/stores/${encodeURIComponent(storeId)}/ebay-oauth/refresh-now`, {
+      method: "POST",
+      body: JSON.stringify({
+        probe_type: "merchant_visible_vault_refresh",
+        real_platform_writes_enabled: false,
+        secret_exposed: false,
+      }),
+    });
+    if (!validatedSaasEbayRefreshProofResponse(payload, refreshedStore)) {
+      throw new Error("ebay_refresh_proof_response_contract_invalid");
+    }
+    await refreshSaasState({ silent: true, refreshLaunchGate: true });
+    const verifiedEvidence = state.saasCommercialLaunchGate?.current_store_ebay_evidence || {};
+    const verifiedStoreHash = await saasSha256Hex(String(activeSaasStore()?.store_id || ""));
+    if (
+      String(activeSaasStore()?.store_id || "") !== storeId ||
+      String(state.saasCommercialLaunchGateStoreId || "") !== storeId ||
+      !verifiedStoreHash ||
+      String(verifiedEvidence.store_id_sha256 || "").toLowerCase() !== verifiedStoreHash.toLowerCase() ||
+      verifiedEvidence.refresh_success_ready !== true ||
+      verifiedEvidence.refresh_same_connection_ready !== true ||
+      verifiedEvidence.secret_exposed !== false
+    ) {
+      throw new Error("ebay_refresh_proof_not_persisted_for_current_store");
+    }
+    showActionToast("当前 eBay 店铺连接已验证可用；没有重新授权、同步商品或修改 eBay。");
+  } catch (error) {
+    state.saasError = `eBay 连接验证失败：${error.message}`;
+    showActionToast("eBay 连接验证已安全停住；没有重新授权、同步商品或修改 eBay。");
+  } finally {
+    state.saasLoading = false;
+    renderSaasBackendPanel();
+  }
+}
+
 async function syncSaasEbayReadOnlyData() {
   let store = activeSaasStore() || state.saasStores[0] || (await ensureSaasDemoStoreAndConnection());
   if (!store?.store_id) {
@@ -32187,6 +32317,7 @@ function handleSaasAction(button) {
     "retry-latest-job",
     "plan-ebay-oauth",
     "plan-ebay-draft-oauth",
+    "verify-ebay-credential-proof",
     "sync-ebay-readonly",
     "save-model-api-key",
     "verify-model-connection",
@@ -32297,6 +32428,10 @@ function handleSaasAction(button) {
   }
   if (action === "plan-ebay-draft-oauth") {
     planSaasEbayUnpublishedDraftOAuth();
+    return;
+  }
+  if (action === "verify-ebay-credential-proof") {
+    verifySaasEbayCredentialProof();
     return;
   }
   if (action === "sync-ebay-readonly") {
@@ -42243,12 +42378,38 @@ function saasUnpublishedDraftConnectionConfirmationView(ctx = {}, draftSaveAutho
   return { status, copy };
 }
 
+function saasCurrentStoreEbayRefreshProofView(ebayAuthorized = false) {
+  const evidence = state.saasCommercialLaunchGate?.current_store_ebay_evidence;
+  const exactEvidence = evidence && typeof evidence === "object" && !Array.isArray(evidence) ? evidence : {};
+  const currentStoreId = String(activeSaasStore()?.store_id || "");
+  const ready = Boolean(
+    ebayAuthorized &&
+      currentStoreId &&
+      String(state.saasCommercialLaunchGateStoreId || "") === currentStoreId &&
+      exactEvidence.current_store_selected === true &&
+      exactEvidence.refresh_success_ready === true &&
+      exactEvidence.refresh_same_connection_ready === true &&
+      /^[a-f0-9]{64}$/i.test(String(exactEvidence.store_id_sha256 || "")) &&
+      /^[a-f0-9]{64}$/i.test(String(exactEvidence.connection_id_sha256 || "")) &&
+      exactEvidence.secret_exposed === false
+  );
+  return {
+    status: !ebayAuthorized ? "unavailable" : ready ? "verified" : "pending",
+    ready,
+    label: ready ? "eBay 连接已验证" : "验证 eBay 连接",
+    detail: ready
+      ? "当前店铺的后台连接凭证已验证可用；不需要重新授权。"
+      : "仅由捷境后端安全检查连接凭证；不重新授权、不同步商品、不修改 eBay。",
+  };
+}
+
 function renderSaasSettingsAccountPanel(ctx = saasMerchantWorkbenchContext(), options = {}) {
   const ebayAuthorized = options.ebayAuthorized === true;
   const ebayDraftAuthorized = options.ebayDraftAuthorized === true;
   const hasSessionCandidate = hasSaasProtectedSessionCandidate();
   const readOnlyConfirmationView = saasReadOnlyConnectionConfirmationView(ctx, ebayAuthorized);
   const draftConfirmationView = saasUnpublishedDraftConnectionConfirmationView(ctx, ebayDraftAuthorized);
+  const refreshProofView = saasCurrentStoreEbayRefreshProofView(ebayAuthorized);
   return `
     <section class="saas-settings-card">
       <div class="saas-settings-card-head">
@@ -42274,9 +42435,11 @@ function renderSaasSettingsAccountPanel(ctx = saasMerchantWorkbenchContext(), op
             <small>${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</small>
             <small class="saas-oauth-confirmation-guidance is-${escapeHtml(readOnlyConfirmationView.status)}" data-ebay-oauth-confirmation-status="${escapeHtml(readOnlyConfirmationView.status)}">${escapeHtml(readOnlyConfirmationView.copy.detail)}</small>
             <small class="saas-oauth-confirmation-guidance is-${escapeHtml(draftConfirmationView.status)}" data-ebay-draft-oauth-confirmation-status="${escapeHtml(draftConfirmationView.status)}">${escapeHtml(draftConfirmationView.copy.detail)}</small>
+            <small class="saas-oauth-confirmation-guidance is-${escapeHtml(refreshProofView.status)}" data-ebay-refresh-proof-status="${escapeHtml(refreshProofView.status)}">${escapeHtml(refreshProofView.detail)}</small>
           </div>
           <button class="secondary-action compact-action" type="button" data-saas-action="plan-ebay-oauth" ${!hasSessionCandidate || ebayAuthorized ? "disabled" : ""}>${escapeHtml(readOnlyConfirmationView.copy.label)}</button>
           <button class="secondary-action compact-action" type="button" data-saas-action="plan-ebay-draft-oauth" ${!hasSessionCandidate || !ebayAuthorized || ebayDraftAuthorized ? "disabled" : ""}>${escapeHtml(draftConfirmationView.copy.label)}</button>
+          <button class="secondary-action compact-action" type="button" data-saas-action="verify-ebay-credential-proof" ${!hasSessionCandidate || !ebayAuthorized || refreshProofView.ready || state.saasLoading ? "disabled" : ""}>${escapeHtml(refreshProofView.label)}</button>
         </article>
         <article>
           <div>

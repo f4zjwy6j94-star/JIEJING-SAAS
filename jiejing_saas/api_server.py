@@ -127,6 +127,7 @@ from .product_feedback import (
 )
 from .readiness import build_degraded_product_readiness, build_product_readiness_or_degraded
 from .repository import (
+    ACTIVE_SECRET_REF_STATUSES,
     EBAY_UNPUBLISHED_DRAFT_OAUTH_SOURCE,
     EBAY_UNPUBLISHED_DRAFT_OAUTH_STEP,
     EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE,
@@ -1265,6 +1266,120 @@ def _public_safe_billing_summary(value: Any) -> dict[str, Any]:
         "real_platform_writes_enabled": False,
         "frontend_gets_payment_secret": False,
         "frontend_can_grant_quota": False,
+        "secret_exposed": False,
+    }
+
+
+def _merchant_safe_ebay_refresh_probe_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Expose refresh evidence without provider errors, token values, or secret references."""
+
+    public = public_token_refresh_result(result if isinstance(result, dict) else {})
+    return {
+        "ok": public.get("ok") is True,
+        "status": str(public.get("status") or "unknown"),
+        "source": str(public.get("source") or ""),
+        "company_id": str(public.get("company_id") or ""),
+        "store_id": str(public.get("store_id") or ""),
+        "secret_ref_present": public.get("secret_ref_present") is True,
+        "expires_in": public.get("expires_in") if isinstance(public.get("expires_in"), int) else None,
+        "refreshed_at": public.get("refreshed_at") if isinstance(public.get("refreshed_at"), int) else None,
+        "blocked_by": [
+            str(item)[:120]
+            for item in (public.get("blocked_by") if isinstance(public.get("blocked_by"), list) else [])
+            if isinstance(item, str) and item
+        ][:12],
+        "access_token_returned_to_frontend": False,
+        "access_token_returned_to_runtime": False,
+        "access_token_stored_in_database": False,
+        "refresh_token_returned_to_frontend": False,
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+
+
+def _resolve_merchant_visible_ebay_refresh_probe(
+    repository: SaaSRepository,
+    *,
+    company_id: str,
+    store_id: str,
+) -> dict[str, Any]:
+    """Resolve one exact current-store OAuth/Vault binding before token refresh."""
+
+    current_evidence = build_current_store_ebay_evidence(
+        repository,
+        company_id=company_id,
+        store_id=store_id,
+    )
+    if (
+        current_evidence.get("current_store_selected") is True
+        and current_evidence.get("refresh_success_ready") is True
+        and current_evidence.get("refresh_same_connection_ready") is True
+    ):
+        return {
+            "status": "already_verified",
+            "already_verified": True,
+            "connection_id_sha256": str(current_evidence.get("connection_id_sha256") or ""),
+            "secret_exposed": False,
+        }
+
+    oauth_boundary = repository.ebay_read_only_oauth_boundary(company_id=company_id, store_id=store_id)
+    expected_connection_hash = str(oauth_boundary.get("connection_id_sha256") or "")
+    if not (
+        oauth_boundary.get("authorized") is True
+        and oauth_boundary.get("strong_identity_ready") is True
+        and oauth_boundary.get("backend_provenance_ready") is True
+        and len(expected_connection_hash) == 64
+    ):
+        return {
+            "status": "blocked",
+            "blocked_by": "oauth_refresh_strong_boundary_required",
+            "secret_exposed": False,
+        }
+
+    connections = repository.list_connections(company_id=company_id, store_id=store_id)
+    bound_connections = [
+        item
+        for item in connections
+        if str(item.get("connection_id") or "")
+        and hmac.compare_digest(
+            hashlib.sha256(str(item.get("connection_id") or "").encode("utf-8")).hexdigest(),
+            expected_connection_hash,
+        )
+    ]
+    if len(bound_connections) != 1:
+        return {
+            "status": "blocked",
+            "blocked_by": "oauth_refresh_connection_binding_invalid",
+            "secret_exposed": False,
+        }
+
+    bound_connection = bound_connections[0]
+    secret_ref_id = str(bound_connection.get("secret_ref") or "")
+    secret_ref = (
+        repository.get_secret_ref(company_id=company_id, store_id=store_id, secret_ref=secret_ref_id)
+        if secret_ref_id
+        else None
+    )
+    if not (
+        isinstance(secret_ref, dict)
+        and str(secret_ref.get("secret_ref") or "") == secret_ref_id
+        and str(secret_ref.get("company_id") or "") == company_id
+        and str(secret_ref.get("store_id") or "") == store_id
+        and str(secret_ref.get("provider") or "").lower() == "ebay"
+        and str(secret_ref.get("purpose") or "").lower() == "ebay_refresh_token"
+        and str(secret_ref.get("status") or "") in ACTIVE_SECRET_REF_STATUSES
+    ):
+        return {
+            "status": "blocked",
+            "blocked_by": "oauth_refresh_secret_binding_invalid",
+            "secret_exposed": False,
+        }
+    return {
+        "status": "ready",
+        "already_verified": False,
+        "connection_id_sha256": expected_connection_hash,
+        "secret_ref_id": secret_ref_id,
+        "secret_ref": secret_ref,
         "secret_exposed": False,
     }
 
@@ -4577,45 +4692,60 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         if len(parts) == 4 and parts[0] == "stores" and parts[2] == "ebay-oauth" and parts[3] == "refresh-now":
             if not self._require_permission(identity, "manage_connections"):
                 return
+            body = self._read_json_body()
+            if set(body) != {"probe_type", "real_platform_writes_enabled", "secret_exposed"} or not (
+                body.get("probe_type") == "merchant_visible_vault_refresh"
+                and body.get("real_platform_writes_enabled") is False
+                and body.get("secret_exposed") is False
+            ):
+                self._send_error(HTTPStatus.BAD_REQUEST, "oauth_refresh_probe_contract_invalid")
+                return
             store_id = parts[1]
             store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
             if not store:
                 self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
                 return
-            oauth_boundary = self.repository.ebay_read_only_oauth_boundary(
+            refresh_boundary = _resolve_merchant_visible_ebay_refresh_probe(
+                self.repository,
                 company_id=identity["company_id"],
                 store_id=store_id,
             )
-            expected_connection_hash = str(oauth_boundary.get("connection_id_sha256") or "")
-            connections = self.repository.list_connections(company_id=identity["company_id"], store_id=store_id)
-            bound_connection = next(
-                (
-                    item
-                    for item in connections
-                    if str(item.get("connection_id") or "")
-                    and expected_connection_hash
-                    and hashlib.sha256(str(item.get("connection_id") or "").encode("utf-8")).hexdigest()
-                    == expected_connection_hash
-                ),
-                None,
-            )
-            bound_secret_ref_id = str((bound_connection or {}).get("secret_ref") or "")
-            secret_ref = (
-                self.repository.get_secret_ref(
-                    company_id=identity["company_id"],
-                    store_id=store_id,
-                    secret_ref=bound_secret_ref_id,
+            if refresh_boundary.get("status") == "already_verified":
+                public_refresh = _merchant_safe_ebay_refresh_probe_result(
+                    {
+                        "ok": True,
+                        "status": "already_verified",
+                        "source": "fresh_current_store_vault_refresh_proof",
+                        "company_id": identity["company_id"],
+                        "store_id": store_id,
+                        "secret_ref": "present",
+                        "secret_exposed": False,
+                    }
                 )
-                if oauth_boundary.get("authorized") is True and bound_secret_ref_id
-                else None
-            )
+                self._send_json(
+                    {
+                        "token_refresh": public_refresh,
+                        "fresh_proof_reused": True,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    }
+                )
+                return
+            if refresh_boundary.get("status") != "ready":
+                self._send_error(
+                    HTTPStatus.CONFLICT,
+                    str(refresh_boundary.get("blocked_by") or "oauth_refresh_exact_binding_required"),
+                )
+                return
+            expected_connection_hash = str(refresh_boundary.get("connection_id_sha256") or "")
+            bound_secret_ref_id = str(refresh_boundary.get("secret_ref_id") or "")
             refresh = EbayVaultTokenRefreshAdapter(self.settings).refresh_access_token_from_secret_ref(
-                secret_ref=secret_ref,
+                secret_ref=refresh_boundary.get("secret_ref"),
                 company_id=identity["company_id"],
                 store_id=store_id,
                 task_scope="merchant_visible_refresh_probe",
             )
-            public_refresh = public_token_refresh_result(refresh)
+            public_refresh = _merchant_safe_ebay_refresh_probe_result(refresh)
             audit = self.repository.write_audit(
                 company_id=identity["company_id"],
                 store_id=store_id,
@@ -4633,7 +4763,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         if refresh.get("ok") and bound_secret_ref_id
                         else ""
                     ),
-                    "backend_strong_oauth_boundary_ready": oauth_boundary.get("authorized") is True,
+                    "backend_strong_oauth_boundary_ready": True,
                     "secret_exposed": False,
                 },
             )
@@ -4641,9 +4771,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._send_json(
                 {
                     "token_refresh": public_refresh,
-                    "audit": audit,
-                    "vault": self.secret_store_boundary.status(),
                     "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
                 },
                 status=status,
             )

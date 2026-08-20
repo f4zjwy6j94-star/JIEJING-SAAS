@@ -33,6 +33,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("frontend_staging_config", [sys.executable, "tools/test_jiejing_frontend_staging_config.py"]),
     ("frontend_wechat_zero_charge_rehearsal", [sys.executable, "tools/test_jiejing_frontend_wechat_zero_charge_rehearsal.py"]),
     ("frontend_read_only_oauth_confirmation", [sys.executable, "tools/test_jiejing_frontend_oauth_confirmation_flow.py"]),
+    ("ebay_current_store_refresh_proof", [sys.executable, "tools/test_jiejing_ebay_refresh_proof_ui.py"]),
     ("frontend_unpublished_draft_oauth", [sys.executable, "tools/test_jiejing_frontend_unpublished_draft_oauth.py"]),
     ("frontend_ebay_inventory_location", [sys.executable, "tools/test_jiejing_frontend_ebay_inventory_location.py"]),
     ("browser_read_only_oauth_confirmation", ["node", "tools/codex_jiejing_oauth_confirmation_flow_smoke.js"]),

@@ -5,6 +5,7 @@
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
+const crypto = require("crypto");
 const { chromium } = require("../output/codex-playwright-deps/node_modules/playwright-core");
 
 const root = path.resolve(__dirname, "..");
@@ -24,6 +25,7 @@ const counters = {
   connectionsGet: 0,
   syncConfirmation: 0,
   sync: 0,
+  refreshProof: 0,
   wechatZeroChargeRehearsal: 0,
 };
 const planBodies = [];
@@ -36,6 +38,7 @@ let extendedOptionalDelayMs = 0;
 let planResponseMode = "valid";
 let oauthRequestsOverride = null;
 let heldConfirmationSnapshot = null;
+let refreshProofReady = false;
 const sellerReadOnlyScopes = [
   "https://api.ebay.com/oauth/api_scope",
   "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
@@ -153,6 +156,21 @@ function apiPayload(pathname) {
   if (pathname === "/health") return { status: "ok" };
   if (pathname === "/health/deep") return { operational_health: { status: "ready" } };
   if (pathname === "/readiness/product-saas") return { readiness: { beta_ready: true, production_ready: false, public_charging_allowed: false } };
+  if (pathname === "/commercial/launch-gate") {
+    return {
+      commercial_launch_gate: {
+        current_store_ebay_evidence: {
+          current_store_selected: true,
+          store_id_sha256: crypto.createHash("sha256").update(store.store_id).digest("hex"),
+          connection_id_sha256: crypto.createHash("sha256").update("connection-oauth-ui-fixture").digest("hex"),
+          refresh_success_ready: refreshProofReady,
+          refresh_same_connection_ready: refreshProofReady,
+          secret_exposed: false,
+        },
+        secret_exposed: false,
+      },
+    };
+  }
   if (pathname === "/merchant-onboarding/primary-ebay") {
     const connectionCurrent = connections.some((connection) => connection.store_id === store.store_id && connection.status === "read_only_authorized");
     return {
@@ -219,6 +237,32 @@ const server = http.createServer(async (req, res) => {
         secret_exposed: false,
         unexpected_sentinel: "wechat-zero-charge-response-sentinel",
       },
+    });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === `/stores/${store.store_id}/ebay-oauth/refresh-now`) {
+    counters.refreshProof += 1;
+    refreshProofReady = true;
+    sendJson(res, 200, {
+      token_refresh: {
+        ok: true,
+        status: "refreshed",
+        source: "backend_vault_secret_ref_refresh",
+        company_id: "company-oauth-ui-fixture",
+        store_id: store.store_id,
+        secret_ref_present: true,
+        expires_in: 7200,
+        refreshed_at: 1787155200,
+        blocked_by: [],
+        access_token_returned_to_frontend: false,
+        access_token_returned_to_runtime: false,
+        access_token_stored_in_database: false,
+        refresh_token_returned_to_frontend: false,
+        real_platform_writes_enabled: false,
+        secret_exposed: false,
+      },
+      real_platform_writes_enabled: false,
+      secret_exposed: false,
     });
     return;
   }
@@ -1359,7 +1403,8 @@ async function main() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ mode: "valid" }),
     });
-    const authorizedCounts = { confirmation: counters.confirmation, plan: counters.plan };
+    const authorizedCounts = { confirmation: counters.confirmation, plan: counters.plan, sync: counters.sync };
+    refreshProofReady = false;
     connections = [{
       connection_id: "connection-oauth-ui-fixture",
       store_id: store.store_id,
@@ -1375,6 +1420,34 @@ async function main() {
     }
     if (counters.confirmation !== authorizedCounts.confirmation || counters.plan !== authorizedCounts.plan) {
       throw new Error("authorized current store must not create another confirmation or OAuth plan");
+    }
+    const refreshProofButton = authorizedPage.locator('[data-saas-action="verify-ebay-credential-proof"]:visible').first();
+    const refreshProofStatus = authorizedPage.locator('[data-ebay-refresh-proof-status]:visible').first();
+    if ((await refreshProofButton.textContent()).trim() !== "验证 eBay 连接" || (await refreshProofStatus.getAttribute("data-ebay-refresh-proof-status")) !== "pending") {
+      throw new Error("authorized current store with no proof must expose one plain-language explicit validation action");
+    }
+    await refreshProofButton.click();
+    await authorizedPage.waitForFunction(
+      () => document.querySelector('[data-ebay-refresh-proof-status="verified"]') && state.saasLoading === false,
+      null,
+      { timeout: 10000 },
+    );
+    if (counters.refreshProof !== 1 || counters.confirmation !== authorizedCounts.confirmation || counters.plan !== authorizedCounts.plan || counters.sync !== authorizedCounts.sync) {
+      throw new Error(`credential proof must perform one refresh only and no OAuth/sync; refresh=${counters.refreshProof} confirmation=${counters.confirmation} plan=${counters.plan} sync=${counters.sync}`);
+    }
+    if (!(await refreshProofButton.isDisabled()) || (await refreshProofButton.textContent()).trim() !== "eBay 连接已验证") {
+      throw new Error("verified current-store proof must disable repeated validation in the same page");
+    }
+    const refreshSurface = await authorizedPage.evaluate(() => ({
+      dom: document.documentElement.innerHTML,
+      local: JSON.stringify(localStorage),
+      session: JSON.stringify(sessionStorage),
+      url: location.href,
+    }));
+    for (const forbidden of ["ACCESS-TOKEN-SENTINEL", "REFRESH-TOKEN-SENTINEL", "SECRET-REF-SENTINEL"]) {
+      if (Object.values(refreshSurface).some((value) => String(value).includes(forbidden))) {
+        throw new Error(`credential proof leaked a private marker to browser state: ${forbidden}`);
+      }
     }
     await authorizedPage.close();
 

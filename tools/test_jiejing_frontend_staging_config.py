@@ -35,7 +35,7 @@ def main() -> int:
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
     frontend_asset_version = "20260803-product-feedback-v1"
-    app_js_asset_version = "20260820-rotating-browser-sessions-v14"
+    app_js_asset_version = "20260820-ebay-refresh-proof-v15"
     for expected_asset in [
         f"./app.js?v={app_js_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -76,6 +76,8 @@ def main() -> int:
         return fail("frontend entry files must not retain the pre-WeChat-zero-charge-rehearsal cache version")
     if "./app.js?v=20260816-wechat-zero-charge-rehearsal-v13" in index_html + app_html:
         return fail("frontend entry files must not retain the pre-rotating-session cache version")
+    if "./app.js?v=20260820-rotating-browser-sessions-v14" in index_html + app_html:
+        return fail("frontend entry files must not retain the pre-current-store-refresh-proof cache version")
     if "./app.js?v=20260803-product-feedback-v1" in index_html + app_html:
         return fail("frontend entry files must not retain the stale app.js cache version")
     for stale_asset_version in [
@@ -575,6 +577,7 @@ def main() -> int:
             f'saasFetch("{endpoint}")' not in app_js + app_html
             and f'optionalSaasFetch("{endpoint}"' not in app_js + app_html
             and f'optionalSaasFetchFast("{endpoint}"' not in app_js + app_html
+            and f'optionalSaasFetchFast(`{endpoint}?' not in app_js + app_html
         ):
             return fail(f"missing frontend staging config marker: {endpoint} fetch")
     if 'if (!hasSaasProtectedSessionCandidate()) {\n    refreshSaasPublicReadiness({ render: true });' in app_js:

@@ -172,7 +172,7 @@ def main() -> int:
         "saasPaidLaunchApprovalPacket",
         "/owner/paid-launch-approval-packet",
         '"/owner/billing-domain-cutover-rehearsal", { billing_domain_cutover_rehearsal: null }, 15000',
-        '"/commercial/launch-gate", { commercial_launch_gate: state.saasCommercialLaunchGate || null }, 20000',
+        '`/commercial/launch-gate?store_id=${encodeURIComponent(store.store_id)}`, { commercial_launch_gate: state.saasCommercialLaunchGate || null }, 20000',
         "paid_launch_approval_packet: state.saasPaidLaunchApprovalPacket || null",
         "refreshLaunchGate = true",
     ]:
