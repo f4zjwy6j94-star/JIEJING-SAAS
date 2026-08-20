@@ -53,6 +53,8 @@ ENV_KEYS = (
     "JIEJING_VAULT_UNSEAL_KEY_SHARES",
     "JIEJING_VAULT_UNSEAL_KEY_THRESHOLD",
     "JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED",
+    "JIEJING_VAULT_OFFLINE_CUSTODY_UNIT_COUNT",
+    "JIEJING_VAULT_OFFLINE_MAX_SHARES_PER_CUSTODY_UNIT",
     "JIEJING_COS_BACKUP_ENABLED",
     "JIEJING_COS_REGION",
     "JIEJING_COS_BUCKET",
@@ -135,6 +137,8 @@ def main() -> int:
                 "JIEJING_VAULT_UNSEAL_KEY_SHARES": "3",
                 "JIEJING_VAULT_UNSEAL_KEY_THRESHOLD": "2",
                 "JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED": "true",
+                "JIEJING_VAULT_OFFLINE_CUSTODY_UNIT_COUNT": "3",
+                "JIEJING_VAULT_OFFLINE_MAX_SHARES_PER_CUSTODY_UNIT": "1",
                 "JIEJING_COS_BACKUP_ENABLED": "true",
                 "JIEJING_COS_REGION": "ap-guangzhou",
                 "JIEJING_COS_BUCKET": "jiejing-private-backups-1250000000",
@@ -177,6 +181,11 @@ def main() -> int:
         backup = build_backup_plan(settings, repo)
         os.environ["JIEJING_VAULT_PROVIDER"] = "vault"
         vault_settings = _settings(db_path)
+        os.environ["JIEJING_VAULT_OFFLINE_CUSTODY_UNIT_COUNT"] = "2"
+        os.environ["JIEJING_VAULT_OFFLINE_MAX_SHARES_PER_CUSTODY_UNIT"] = "2"
+        concentrated_vault_custody = build_backup_plan(vault_settings, repo)
+        os.environ["JIEJING_VAULT_OFFLINE_CUSTODY_UNIT_COUNT"] = "3"
+        os.environ["JIEJING_VAULT_OFFLINE_MAX_SHARES_PER_CUSTODY_UNIT"] = "1"
         os.environ.pop("JIEJING_VAULT_BACKUP_ARTIFACT_ID")
         missing_vault_artifact = build_backup_plan(vault_settings, repo)
         os.environ["JIEJING_VAULT_BACKUP_ARTIFACT_ID"] = "vault-backup-artifact-fixture"
@@ -275,6 +284,16 @@ def main() -> int:
         return fail(f"COS backup plan should be ready when managed policy and restore drill are configured: {backup.get('blockers')}")
     if backup.get("vault", {}).get("recovery_proof_ready") is not True:
         return fail(f"Vault recovery must require artifact, manual unseal and sentinel proof: {backup.get('vault')}")
+    concentrated_blockers = concentrated_vault_custody.get("blockers") or []
+    if (
+        concentrated_vault_custody.get("backup_ready_for_paid_launch") is not False
+        or "vault_offline_share_custody_distribution_unsafe" not in concentrated_blockers
+        or concentrated_vault_custody.get("vault", {}).get("production_unseal_boundary_ready") is not False
+    ):
+        return fail(
+            "one custody unit must never hold enough shares to meet the unseal threshold: "
+            f"{concentrated_vault_custody.get('vault')} {concentrated_blockers}"
+        )
     if missing_vault_artifact.get("backup_ready_for_paid_launch") is not False or "vault_backup_artifact_not_recorded" not in (missing_vault_artifact.get("blockers") or []):
         return fail("missing Vault backup artifact evidence must block paid launch")
     if missing_vault_sentinel.get("backup_ready_for_paid_launch") is not False or "vault_restore_sentinel_resolve_not_verified" not in (missing_vault_sentinel.get("blockers") or []):
@@ -295,6 +314,8 @@ def main() -> int:
         return fail(f"public readiness must identify the remaining Vault share custody blocker: {weak_vault_public}")
     if "Vault recovery shares" not in str(weak_vault_public.get("detail") or ""):
         return fail(f"public readiness must describe the Vault recovery boundary truthfully: {weak_vault_public}")
+    if "three independent custody units" not in str(weak_vault_public.get("next_action") or "").lower():
+        return fail(f"public readiness must prevent threshold shares from being concentrated: {weak_vault_public}")
     if "managed Postgres" in str(weak_vault_public.get("next_action") or ""):
         return fail(f"Vault-only debt must not direct the operator back to completed Postgres work: {weak_vault_public}")
     weak_vault_stale_items = {
@@ -309,6 +330,11 @@ def main() -> int:
     if "managed Postgres" in str(weak_vault_stale_public.get("next_action") or ""):
         return fail(
             "combined Vault and freshness debt must not direct the operator to completed Postgres work: "
+            f"{weak_vault_stale_public}"
+        )
+    if "three independent custody units" not in str(weak_vault_stale_public.get("next_action") or "").lower():
+        return fail(
+            "combined readiness must still describe the independent Vault custody requirement: "
             f"{weak_vault_stale_public}"
         )
     if backup.get("object_storage", {}).get("target_ready") is not True:

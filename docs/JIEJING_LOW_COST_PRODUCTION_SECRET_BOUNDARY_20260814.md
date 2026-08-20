@@ -8,8 +8,14 @@ Managed KMS remains the later high-availability upgrade, not a paid launch block
 ## Non-negotiable boundary
 
 - Initialize Vault once with three key shares and a two-share threshold.
+- Use three independent custody units for the 3-share/2-threshold layout. No single custody unit or custodian may hold two shares. A practical low-cost
+  layout is one share on encrypted USB A, one on encrypted USB B, and one
+  separately sealed offline copy held by another custodian or stored in a
+  different physical safe. Two USB drives alone are not sufficient if either
+  one also contains the third share.
 - Perform manual unseal after a planned Vault or host restart.
-- Keep the shares offline, split across two operator-controlled encrypted devices.
+- Keep the shares offline across three independent operator-controlled custody units;
+  no unit may contain enough shares to meet the unseal threshold.
 - Apply the reviewed `deploy/vault-policy.production.hcl`: data access is limited
   to `secret/data/jiejing-production/*`, KV v2 permanent revocation is limited to
   `secret/metadata/jiejing-production/*`, and the token may only look up/renew itself.
@@ -27,7 +33,9 @@ Managed KMS remains the later high-availability upgrade, not a paid launch block
 1. Provision the dedicated production host and private env file with mode `0600`.
 2. Start only `jiejing-vault` and run `vault operator init` inside that container.
 3. Move the three returned shares and initial root token directly to offline encrypted
-   operator storage. Do not leave the initialization JSON on the server.
+   operator storage. Use three independent custody units and keep the maximum at one
+   share per unit for this 3-share/2-threshold layout. Do not leave the initialization
+   JSON on the server.
 4. Use two shares for manual unseal, enable KV v2 at `secret/`, create the scoped
    `jiejing-production` policy from `deploy/vault-policy.production.hcl`, issue the
    periodic backend token, verify it is renewable with a positive period, then revoke root.
@@ -35,6 +43,26 @@ Managed KMS remains the later high-availability upgrade, not a paid launch block
    owner-only permissions, and start Vault, renewer, API and worker in that order.
 6. Verify `/health/deep` and a backend-only secret resolver probe without printing a
    secret value.
+
+After the encrypted backup, isolated restore, manual unseal and sentinel resolve have
+all actually succeeded, record only the value-free custody geometry and evidence:
+
+```powershell
+python tools/jiejing_configure_tencent_runtime_env.py `
+  --env-file <server-private-env-file> `
+  --apply `
+  --record-vault-recovery-evidence `
+  --vault-backup-artifact-id-env JIEJING_OPERATOR_VAULT_BACKUP_ARTIFACT_ID `
+  --vault-unseal-key-shares 3 `
+  --vault-unseal-key-threshold 2 `
+  --vault-offline-share-custody-verified `
+  --vault-offline-custody-unit-count 3 `
+  --vault-offline-max-shares-per-custody-unit 1
+```
+
+The artifact identifier must enter through the named process environment variable.
+Never put any share, root token or backend token in this command, evidence output or
+runtime database.
 
 ## Backup and recovery
 

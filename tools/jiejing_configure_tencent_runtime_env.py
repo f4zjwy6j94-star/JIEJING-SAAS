@@ -99,6 +99,11 @@ KNOWN_KEYS = (
     "JIEJING_VAULT_RESTORE_DRILL_LAST_AT",
     "JIEJING_VAULT_RESTORE_MANUAL_UNSEAL_VERIFIED",
     "JIEJING_VAULT_RESTORE_SENTINEL_RESOLVE_VERIFIED",
+    "JIEJING_VAULT_UNSEAL_KEY_SHARES",
+    "JIEJING_VAULT_UNSEAL_KEY_THRESHOLD",
+    "JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED",
+    "JIEJING_VAULT_OFFLINE_CUSTODY_UNIT_COUNT",
+    "JIEJING_VAULT_OFFLINE_MAX_SHARES_PER_CUSTODY_UNIT",
     "JIEJING_RESTORE_DRILL_LAST_AT",
     "JIEJING_RESTORE_DRILL_MAX_AGE_DAYS",
     "JIEJING_CLS_ENABLED",
@@ -308,6 +313,18 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help="Confirm that unseal shares are split across operator-controlled encrypted offline storage.",
     )
+    parser.add_argument(
+        "--vault-offline-custody-unit-count",
+        type=int,
+        default=0,
+        help="Number of independent offline custody units that each hold at least one unseal share.",
+    )
+    parser.add_argument(
+        "--vault-offline-max-shares-per-custody-unit",
+        type=int,
+        default=0,
+        help="Maximum number of unseal shares stored in any one offline custody unit.",
+    )
     parser.add_argument("--record-restore-drill-now", action="store_true")
     parser.add_argument(
         "--production-release-charge-flag-reviewed",
@@ -447,13 +464,26 @@ def _build_updates(args: argparse.Namespace, existing: dict[str, str]) -> dict[s
         if not _valid_vault_backup_artifact_id(artifact_id):
             raise SystemExit("Vault backup artifact evidence is missing or invalid.")
         if args.record_vault_recovery_evidence:
+            offline_distribution_safe = bool(
+                args.vault_offline_max_shares_per_custody_unit >= 1
+                and args.vault_offline_max_shares_per_custody_unit < args.vault_unseal_key_threshold
+                and args.vault_offline_custody_unit_count
+                >= math.ceil(
+                    args.vault_unseal_key_shares / args.vault_offline_max_shares_per_custody_unit
+                )
+                and args.vault_offline_custody_unit_count <= args.vault_unseal_key_shares
+            )
             if (
                 args.vault_unseal_key_shares < 3
                 or args.vault_unseal_key_threshold < 2
                 or args.vault_unseal_key_threshold > args.vault_unseal_key_shares
                 or not args.vault_offline_share_custody_verified
+                or not offline_distribution_safe
             ):
-                raise SystemExit("Vault recovery evidence requires 3-or-more shares, a 2-or-more threshold, and offline custody.")
+                raise SystemExit(
+                    "Vault recovery evidence requires 3-or-more shares, a 2-or-more threshold, and an "
+                    "independent offline distribution where no custody unit holds the threshold number of shares."
+                )
         elif (
             args.vault_unseal_key_shares < 1
             or args.vault_unseal_key_threshold < 1
@@ -471,6 +501,10 @@ def _build_updates(args: argparse.Namespace, existing: dict[str, str]) -> dict[s
                 "JIEJING_VAULT_UNSEAL_KEY_THRESHOLD": str(args.vault_unseal_key_threshold),
                 "JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED": (
                     "true" if args.vault_offline_share_custody_verified else "false"
+                ),
+                "JIEJING_VAULT_OFFLINE_CUSTODY_UNIT_COUNT": str(args.vault_offline_custody_unit_count),
+                "JIEJING_VAULT_OFFLINE_MAX_SHARES_PER_CUSTODY_UNIT": str(
+                    args.vault_offline_max_shares_per_custody_unit
                 ),
             }
         )

@@ -94,6 +94,8 @@ def main() -> int:
         "JIEJING_VAULT_UNSEAL_KEY_SHARES": "0",
         "JIEJING_VAULT_UNSEAL_KEY_THRESHOLD": "0",
         "JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED": "false",
+        "JIEJING_VAULT_OFFLINE_CUSTODY_UNIT_COUNT": "0",
+        "JIEJING_VAULT_OFFLINE_MAX_SHARES_PER_CUSTODY_UNIT": "0",
     }
     mismatches = {
         key: {"expected": expected_value, "actual": values.get(key)}
@@ -276,6 +278,9 @@ def main() -> int:
         "offline",
         "encrypted off-host backup",
         "never store the unseal key",
+        "no single custody unit",
+        "three independent custody units",
+        "--vault-offline-custody-unit-count",
     ):
         if marker not in secret_runbook.lower():
             return fail(f"low-cost production secret runbook is missing {marker}")

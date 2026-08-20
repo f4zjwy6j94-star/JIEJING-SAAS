@@ -211,6 +211,22 @@ def main() -> int:
         for key in EXPECTED_SECTIONS:
             if sections.get(key, {}).get("status") != "ready":
                 return fail(f"ready section should be ready: {key} {sections.get(key)}")
+        os.environ["JIEJING_VAULT_OFFLINE_CUSTODY_UNIT_COUNT"] = "2"
+        os.environ["JIEJING_VAULT_OFFLINE_MAX_SHARES_PER_CUSTODY_UNIT"] = "2"
+        unsafe_custody = _build("unsafe-vault-custody.sqlite", seed_ready_data=True)
+        unsafe_custody_sections = {
+            item.get("key"): item
+            for item in unsafe_custody.get("sections", [])
+            if isinstance(item, dict)
+        }
+        if (
+            unsafe_custody.get("ready_for_owner_approval") is not False
+            or unsafe_custody_sections.get("backup_restore_dr_and_secret_recovery", {}).get("status")
+            != "blocked"
+        ):
+            return fail("a single custody unit holding the unseal threshold must block production release")
+        os.environ["JIEJING_VAULT_OFFLINE_CUSTODY_UNIT_COUNT"] = "3"
+        os.environ["JIEJING_VAULT_OFFLINE_MAX_SHARES_PER_CUSTODY_UNIT"] = "1"
         readiness_blocked = _build(
             "product-readiness-blocked.sqlite",
             seed_ready_data=True,
@@ -751,6 +767,8 @@ def _set_ready_env() -> dict[str, str | None]:
             "JIEJING_VAULT_UNSEAL_KEY_SHARES": "3",
             "JIEJING_VAULT_UNSEAL_KEY_THRESHOLD": "2",
             "JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED": "1",
+            "JIEJING_VAULT_OFFLINE_CUSTODY_UNIT_COUNT": "3",
+            "JIEJING_VAULT_OFFLINE_MAX_SHARES_PER_CUSTODY_UNIT": "1",
             "JIEJING_COS_BACKUP_ENABLED": "1",
             "JIEJING_COS_BUCKET": "jiejing-release-backup",
             "JIEJING_COS_BACKUP_LAST_SUCCESS_AT": (now - timedelta(hours=1)).isoformat(),

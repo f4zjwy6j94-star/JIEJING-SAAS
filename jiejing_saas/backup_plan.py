@@ -57,11 +57,25 @@ def build_backup_plan(settings: SaaSSettings, repository: SaaSRepository) -> dic
     vault_unseal_key_shares = _env_nonnegative_int("JIEJING_VAULT_UNSEAL_KEY_SHARES")
     vault_unseal_key_threshold = _env_nonnegative_int("JIEJING_VAULT_UNSEAL_KEY_THRESHOLD")
     vault_offline_share_custody_verified = _env_bool("JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED")
+    vault_offline_custody_unit_count = _env_nonnegative_int("JIEJING_VAULT_OFFLINE_CUSTODY_UNIT_COUNT")
+    vault_offline_max_shares_per_custody_unit = _env_nonnegative_int(
+        "JIEJING_VAULT_OFFLINE_MAX_SHARES_PER_CUSTODY_UNIT"
+    )
+    vault_offline_share_distribution_safe = bool(
+        vault_unseal_key_shares >= 3
+        and vault_unseal_key_threshold >= 2
+        and 1 <= vault_offline_max_shares_per_custody_unit < vault_unseal_key_threshold
+        and vault_offline_custody_unit_count >= math.ceil(
+            vault_unseal_key_shares / vault_offline_max_shares_per_custody_unit
+        )
+        and vault_offline_custody_unit_count <= vault_unseal_key_shares
+    )
     vault_production_unseal_boundary_ready = bool(
         vault_unseal_key_shares >= 3
         and vault_unseal_key_threshold >= 2
         and vault_unseal_key_threshold <= vault_unseal_key_shares
         and vault_offline_share_custody_verified
+        and vault_offline_share_distribution_safe
     )
     vault_recovery_required = settings.vault_enabled and settings.vault_provider == "vault"
     blockers: list[str] = []
@@ -109,6 +123,8 @@ def build_backup_plan(settings: SaaSSettings, repository: SaaSRepository) -> dic
             blockers.append("vault_unseal_key_threshold_below_production_minimum")
         if not vault_offline_share_custody_verified:
             blockers.append("vault_offline_share_custody_not_verified")
+        if not vault_offline_share_distribution_safe:
+            blockers.append("vault_offline_share_custody_distribution_unsafe")
     for item in cos_target["blocked_by"]:
         if item not in blockers:
             blockers.append(item)
@@ -144,6 +160,9 @@ def build_backup_plan(settings: SaaSSettings, repository: SaaSRepository) -> dic
             "unseal_key_shares": vault_unseal_key_shares,
             "unseal_key_threshold": vault_unseal_key_threshold,
             "offline_share_custody_verified": vault_offline_share_custody_verified,
+            "offline_custody_unit_count": vault_offline_custody_unit_count,
+            "offline_max_shares_per_custody_unit": vault_offline_max_shares_per_custody_unit,
+            "offline_share_distribution_safe": vault_offline_share_distribution_safe,
             "production_unseal_boundary_ready": vault_production_unseal_boundary_ready,
             "recovery_proof_ready": bool(
                 not vault_recovery_required
@@ -228,6 +247,7 @@ def _next_actions(blockers: list[str]) -> list[str]:
         or item.startswith("vault_unseal_")
         or item == "vault_backup_artifact_not_recorded"
         or item == "vault_offline_share_custody_not_verified"
+        or item == "vault_offline_share_custody_distribution_unsafe"
         for item in blockers
     ):
         actions.append("run_isolated_vault_restore_unseal_and_sentinel_drill")

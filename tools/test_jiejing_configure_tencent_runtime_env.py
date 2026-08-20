@@ -189,6 +189,8 @@ def main() -> int:
         "JIEJING_VAULT_UNSEAL_KEY_SHARES=1",
         "JIEJING_VAULT_UNSEAL_KEY_THRESHOLD=1",
         "JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED=false",
+        "JIEJING_VAULT_OFFLINE_CUSTODY_UNIT_COUNT=0",
+        "JIEJING_VAULT_OFFLINE_MAX_SHARES_PER_CUSTODY_UNIT=0",
         "JIEJING_VAULT_RESTORE_DRILL_LAST_AT=",
     ):
         if marker not in partial_vault_text:
@@ -216,7 +218,8 @@ def main() -> int:
         return fail("Vault recovery evidence must require an explicit 3-of-2 and offline-custody proof")
     if env_path.read_text(encoding="utf-8") != before_incomplete_vault_evidence:
         return fail("incomplete Vault recovery evidence changed the private env")
-    vault_evidence = subprocess.run(
+    before_unsafe_vault_evidence = env_path.read_text(encoding="utf-8")
+    unsafe_vault_evidence = subprocess.run(
         [
             sys.executable,
             str(TOOL),
@@ -238,6 +241,66 @@ def main() -> int:
         capture_output=True,
         check=False,
     )
+    if unsafe_vault_evidence.returncode == 0:
+        return fail("Vault recovery evidence must reject an unspecified or concentrated custody distribution")
+    if env_path.read_text(encoding="utf-8") != before_unsafe_vault_evidence:
+        return fail("unsafe Vault custody evidence changed the private env")
+    concentrated_vault_evidence = subprocess.run(
+        [
+            sys.executable,
+            str(TOOL),
+            "--env-file",
+            str(env_path),
+            "--apply",
+            "--record-vault-recovery-evidence",
+            "--vault-backup-artifact-id-env",
+            "JIEJING_TEST_VAULT_BACKUP_ARTIFACT_ID",
+            "--vault-unseal-key-shares",
+            "3",
+            "--vault-unseal-key-threshold",
+            "2",
+            "--vault-offline-share-custody-verified",
+            "--vault-offline-custody-unit-count",
+            "2",
+            "--vault-offline-max-shares-per-custody-unit",
+            "2",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if concentrated_vault_evidence.returncode == 0:
+        return fail("one custody unit holding the threshold number of shares must be rejected")
+    if env_path.read_text(encoding="utf-8") != before_unsafe_vault_evidence:
+        return fail("concentrated Vault custody evidence changed the private env")
+    vault_evidence = subprocess.run(
+        [
+            sys.executable,
+            str(TOOL),
+            "--env-file",
+            str(env_path),
+            "--apply",
+            "--record-vault-recovery-evidence",
+            "--vault-backup-artifact-id-env",
+            "JIEJING_TEST_VAULT_BACKUP_ARTIFACT_ID",
+            "--vault-unseal-key-shares",
+            "3",
+            "--vault-unseal-key-threshold",
+            "2",
+            "--vault-offline-share-custody-verified",
+            "--vault-offline-custody-unit-count",
+            "3",
+            "--vault-offline-max-shares-per-custody-unit",
+            "1",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
     if vault_evidence.returncode != 0:
         return fail(vault_evidence.stderr or vault_evidence.stdout)
     vault_evidence_output = vault_evidence.stdout + vault_evidence.stderr
@@ -252,6 +315,8 @@ def main() -> int:
         "JIEJING_VAULT_UNSEAL_KEY_SHARES=3",
         "JIEJING_VAULT_UNSEAL_KEY_THRESHOLD=2",
         "JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED=true",
+        "JIEJING_VAULT_OFFLINE_CUSTODY_UNIT_COUNT=3",
+        "JIEJING_VAULT_OFFLINE_MAX_SHARES_PER_CUSTODY_UNIT=1",
         "JIEJING_VAULT_RESTORE_DRILL_LAST_AT=",
     ):
         if marker not in vault_text:
