@@ -85,6 +85,10 @@ As of 2026-06-22, the Tencent Cloud self-hosted runner path has been installed a
   - Read-only server-side runner check.
   - Prints `JIEJING_RUNNER_DOCTOR_STATUS=ready` when the host is ready for deploy dry-run.
   - Prints `PUBLIC_HEALTH=ready` when the formal staging domain answers `/health`.
+  - Probes `http://127.0.0.1:18080/health` for local health. This is the
+    Compose-published frontend path and traverses the local Nginx-to-API route;
+    API port `8788` remains container-only and must not be published merely for
+    the Doctor check.
   - `local_health_unreachable` is a warning when localhost health is not reachable from the runner host; compare it with public health before treating staging as broken.
   - Common blockers include `docker_cli_missing`, `sudo_noninteractive_unavailable`, `app_dir_missing`, and `disk_usage_at_or_above_95_percent`.
   - Disk usage at or above 90 percent reports `disk_usage_at_or_above_90_percent` as a warning so we can clean up before it becomes a hard failure.
@@ -295,6 +299,7 @@ If `sudo -n true` fails, do not weaken the whole server. Add only the minimum no
    ```text
    JIEJING_RUNNER_DOCTOR_STATUS=ready
    JIEJING_RUNNER_DOCTOR_BLOCKERS=none
+   LOCAL_HEALTH=ready
    PUBLIC_HEALTH=ready
    SECRET_EXPOSED=false
    ```

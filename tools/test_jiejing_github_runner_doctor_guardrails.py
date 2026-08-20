@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -10,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "deploy" / "github-actions" / "jiejing-runner-doctor.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "jiejing-staging-runner-doctor.yml"
 RUNBOOK = ROOT / "docs" / "JIEJING_GITHUB_SELF_HOSTED_RUNNER_DEPLOY_RUNBOOK_20260622.md"
+COMPOSE = ROOT / "deploy" / "docker-compose.public-https-staging.yml"
 
 
 def fail(message: str) -> int:
@@ -18,11 +20,34 @@ def fail(message: str) -> int:
 
 
 def main() -> int:
-    if not SCRIPT.exists() or not WORKFLOW.exists() or not RUNBOOK.exists():
+    if not SCRIPT.exists() or not WORKFLOW.exists() or not RUNBOOK.exists() or not COMPOSE.exists():
         return fail("runner doctor file missing")
     script = SCRIPT.read_text(encoding="utf-8")
     workflow = WORKFLOW.read_text(encoding="utf-8")
     runbook = RUNBOOK.read_text(encoding="utf-8")
+    compose = COMPOSE.read_text(encoding="utf-8")
+
+    health_default = re.search(
+        r'HEALTH_URL="\$\{JIEJING_RUNNER_DOCTOR_HEALTH_URL:-([^}]+)\}"',
+        script,
+    )
+    frontend_block = re.search(
+        r"(?ms)^  jiejing-frontend:\n(?P<body>.*?)(?=^  [a-zA-Z0-9_-]+:\n|^volumes:\n)",
+        compose,
+    )
+    frontend_host_port = (
+        re.search(r'"127\.0\.0\.1:(\d+):80"', frontend_block.group("body"))
+        if frontend_block is not None
+        else None
+    )
+    if health_default is None or frontend_host_port is None:
+        return fail("runner doctor local health contract is not parseable")
+    expected_local_health = f"http://127.0.0.1:{frontend_host_port.group(1)}/health"
+    if health_default.group(1) != expected_local_health:
+        return fail(
+            "runner doctor must probe the Compose-published localhost frontend health path: "
+            f"expected={expected_local_health} actual={health_default.group(1)}"
+        )
 
     required_script = [
         "/opt/jiejing-staging/app",
@@ -87,6 +112,8 @@ def main() -> int:
     required_runbook = [
         "Jiejing Staging Runner Doctor",
         "JIEJING_RUNNER_DOCTOR_STATUS=ready",
+        "http://127.0.0.1:18080/health",
+        "API port `8788` remains container-only",
         "PUBLIC_HEALTH=ready",
         "local_health_unreachable",
         "docker_cli_missing",
