@@ -9186,6 +9186,110 @@ class SaaSRepository:
             "secret_exposed": False,
         }
 
+    def domestic_payment_provider_connection_evidence(self) -> dict[str, Any]:
+        """Return a fresh, value-free proof of signed WeChat provider access.
+
+        The proof is written only by the backend operator probe after WeChat
+        accepts a signed read-only order query and the response signature is
+        verified. Reading this evidence never calls the provider and never
+        enables checkout, refunds, or another platform write.
+        """
+
+        self.initialize()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select company_id, store_id, user_id, actor_type, action_type,
+                       target_type, target_id, summary, created_at, audit_json
+                from audit_logs
+                where action_type = ? and target_type = ? and target_id = ?
+                order by created_at desc
+                limit 100
+                """,
+                (
+                    "billing.wechat_pay.provider_connection.proven",
+                    "billing_provider",
+                    "wechat_pay_native",
+                ),
+            ).fetchall()
+        now_utc = datetime.now(timezone.utc)
+        verified_at: list[datetime] = []
+        for row in rows:
+            try:
+                audit = _load_json_field(row["audit_json"])
+            except (TypeError, ValueError, json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if not isinstance(audit, dict):
+                continue
+            details = audit.get("details") if isinstance(audit.get("details"), dict) else {}
+            row_created_at = _parse_explicit_timezone_iso_datetime(row["created_at"])
+            audit_created_at = _parse_explicit_timezone_iso_datetime(audit.get("created_at"))
+            exact_identity = all(
+                (
+                    bool(str(row["company_id"] or "").strip()),
+                    row["store_id"] is None,
+                    row["user_id"] is None,
+                    str(row["actor_type"] or "") == "platform_internal_admin",
+                    str(row["action_type"] or "") == "billing.wechat_pay.provider_connection.proven",
+                    str(row["target_type"] or "") == "billing_provider",
+                    str(row["target_id"] or "") == "wechat_pay_native",
+                    str(row["summary"] or "")
+                    == "WeChat Pay provider connection proven by signed read-only query",
+                    str(audit.get("company_id") or "") == str(row["company_id"] or ""),
+                    audit.get("store_id") is None,
+                    audit.get("user_id") is None,
+                    str(audit.get("actor_type") or "") == "platform_internal_admin",
+                    str(audit.get("action_type") or "") == "billing.wechat_pay.provider_connection.proven",
+                    str(audit.get("target_type") or "") == "billing_provider",
+                    str(audit.get("target_id") or "") == "wechat_pay_native",
+                    str(audit.get("summary") or "")
+                    == "WeChat Pay provider connection proven by signed read-only query",
+                    row_created_at is not None,
+                    audit_created_at is not None,
+                    row_created_at == audit_created_at,
+                    _timestamp_not_future_within_seconds(row_created_at, now_utc, 24 * 60 * 60),
+                )
+            )
+            exact_contract = all(
+                (
+                    details.get("contract_version")
+                    == "2026-08-21-wechat-pay-provider-connection-proof-v1",
+                    details.get("provider") == "wechat_pay_native",
+                    details.get("query_authenticated") is True,
+                    details.get("provider_query_accepted") is True,
+                    details.get("provider_response_signature_verified") is True,
+                    details.get("provider_order_found") is False,
+                    details.get("calls_external_payment_api") is True,
+                    details.get("creates_payable_order") is False,
+                    details.get("triggers_real_charge") is False,
+                    details.get("triggers_real_refund") is False,
+                    details.get("public_charging_allowed") is False,
+                    details.get("real_platform_writes_enabled") is False,
+                    details.get("secret_exposed") is False,
+                )
+            )
+            if exact_identity and exact_contract and row_created_at is not None:
+                verified_at.append(row_created_at)
+        verified_at.sort(reverse=True)
+        return {
+            "contract_version": "2026-08-21-wechat-pay-provider-connection-evidence-v1",
+            "provider": "wechat_pay_native",
+            "proof_kind": "signed_read_only_order_query",
+            "provider_connection_proof_ready": bool(verified_at),
+            "verified_proof_count": len(verified_at),
+            "latest_verified_at": verified_at[0].isoformat() if verified_at else "",
+            "freshness_window_seconds": 24 * 60 * 60,
+            "proof_query_called_external_api": bool(verified_at),
+            "calls_external_payment_api": False,
+            "creates_payable_order": False,
+            "public_charging_allowed": False,
+            "charge_now_allowed": False,
+            "triggers_real_charge": False,
+            "triggers_real_refund": False,
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        }
+
     def apply_billing_webhook_event(self, *, event: dict[str, Any]) -> dict[str, Any]:
         """Persist a signed, normalized billing event and update entitlement state.
 

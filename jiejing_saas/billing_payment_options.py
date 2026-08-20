@@ -8,6 +8,8 @@ creating a charge.
 from __future__ import annotations
 
 import os
+import re
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from . import billing_domestic, billing_wechat_pay as wechat_pay
@@ -21,6 +23,7 @@ MAINLAND_PAYMENT_CONTRACT_VERSION = "2026-06-29-mainland-payment-strategy"
 FORMAL_PAYMENT_ARCHITECTURE_VERSION = "2026-06-29-formal-payment-collection-architecture"
 MERCHANT_APPLICATION_PACKET_VERSION = "2026-07-01-merchant-payment-application-packet"
 MAINLAND_PAYMENT_LAUNCH_CONTRACT_VERSION = "2026-07-27-mainland-payment-launch-v1"
+WECHAT_PAY_PROVIDER_CONNECTION_EVIDENCE_VERSION = "2026-08-21-wechat-pay-provider-connection-evidence-v1"
 MAINLAND_WECHAT_CONFIGURATION_KEYS = (
     "appid",
     "mchid",
@@ -173,12 +176,20 @@ def build_mainland_payment_launch_status(
         strategy = build_mainland_payment_strategy(settings)
         wechat = wechat_pay.build_wechat_pay_native_contract()
         acceptance = repository.domestic_payment_acceptance_evidence()
-        if not isinstance(strategy, dict) or not isinstance(wechat, dict) or not isinstance(acceptance, dict):
+        proof_builder = getattr(repository, "domestic_payment_provider_connection_evidence", None)
+        provider_connection_evidence = (
+            proof_builder() if callable(proof_builder) else _unavailable_provider_connection_evidence()
+        )
+        if not all(
+            isinstance(value, dict)
+            for value in (strategy, wechat, acceptance, provider_connection_evidence)
+        ):
             raise TypeError("payment launch dependency returned an invalid contract")
         return _build_mainland_payment_launch_status(
             strategy=strategy,
             wechat=wechat,
             acceptance=acceptance,
+            provider_connection_evidence=provider_connection_evidence,
         )
     except Exception:
         return _unavailable_mainland_payment_launch_status()
@@ -203,6 +214,7 @@ def validate_mainland_payment_launch_for_public(value: Any) -> dict[str, Any]:
         "required_component_count": 0,
         "controlled_acceptance_proven": False,
         "verified_paid_order_count": 0,
+        "provider_connection_proof_ready": False,
         "next_paid_launch_blocker": "merchant_payment_status_unavailable",
     }
     safety_fields = (
@@ -276,6 +288,49 @@ def validate_mainland_payment_launch_for_public(value: Any) -> dict[str, Any]:
     )
     outer_acceptance_marker = mainland.get("controlled_acceptance_proven")
     provider_checkout_marker = mainland.get("provider_checkout_ready")
+    provider_runtime_marker = mainland.get("provider_runtime_activation_enabled")
+    provider_connection_evidence = (
+        mainland.get("provider_connection_evidence")
+        if isinstance(mainland.get("provider_connection_evidence"), dict)
+        else {}
+    )
+    provider_proof_count = provider_connection_evidence.get("verified_proof_count")
+    provider_proof_ready_marker = provider_connection_evidence.get("provider_connection_proof_ready")
+    provider_proof_shape_valid = all(
+        (
+            provider_connection_evidence.get("contract_version")
+            == WECHAT_PAY_PROVIDER_CONNECTION_EVIDENCE_VERSION,
+            provider_connection_evidence.get("provider") == "wechat_pay_native",
+            provider_connection_evidence.get("proof_kind") == "signed_read_only_order_query",
+            type(provider_proof_count) is int,
+            type(provider_proof_count) is int and 0 <= provider_proof_count <= 100,
+            type(provider_proof_ready_marker) is bool,
+            type(provider_proof_count) is int
+            and provider_proof_ready_marker is (provider_proof_count > 0),
+            type(provider_connection_evidence.get("latest_verified_at")) is str,
+            bool(provider_connection_evidence.get("latest_verified_at")) is provider_proof_ready_marker,
+            _provider_connection_proof_timestamp_valid(
+                provider_connection_evidence.get("latest_verified_at"),
+                proof_ready=provider_proof_ready_marker is True,
+            ),
+            provider_connection_evidence.get("freshness_window_seconds") == 24 * 60 * 60,
+            provider_connection_evidence.get("proof_query_called_external_api") is provider_proof_ready_marker,
+            all(
+                provider_connection_evidence.get(key) is False
+                for key in (
+                    "calls_external_payment_api",
+                    "creates_payable_order",
+                    "public_charging_allowed",
+                    "charge_now_allowed",
+                    "triggers_real_charge",
+                    "triggers_real_refund",
+                    "real_platform_writes_enabled",
+                    "secret_exposed",
+                )
+            ),
+        )
+    )
+    provider_proof_ready = provider_proof_shape_valid and provider_proof_ready_marker is True
     production_environment_marker = mainland.get("production_environment")
     refund_ready_marker = mainland.get("refund_now_allowed")
     canonical_owner_marker = mainland.get("mainland_payment_ready_for_owner_approval")
@@ -284,6 +339,9 @@ def validate_mainland_payment_launch_for_public(value: Any) -> dict[str, Any]:
             type(outer_acceptance_marker) is bool,
             outer_acceptance_marker is acceptance_marker,
             type(provider_checkout_marker) is bool,
+            type(provider_runtime_marker) is bool,
+            provider_checkout_marker
+            is (configuration_complete and (provider_runtime_marker is True or provider_proof_ready)),
             type(production_environment_marker) is bool,
             type(refund_ready_marker) is bool,
             type(canonical_owner_marker) is bool,
@@ -314,6 +372,7 @@ def validate_mainland_payment_launch_for_public(value: Any) -> dict[str, Any]:
             acceptance_shape_valid,
             dynamic_shape_valid,
             owner_shape_valid,
+            provider_proof_shape_valid,
         )
     )
     if not canonical_valid:
@@ -374,6 +433,7 @@ def validate_mainland_payment_launch_for_public(value: Any) -> dict[str, Any]:
         "required_component_count": required_count,
         "controlled_acceptance_proven": controlled_acceptance_proven,
         "verified_paid_order_count": verified_count,
+        "provider_connection_proof_ready": provider_proof_ready,
         "next_paid_launch_blocker": blocker,
     }
 
@@ -383,6 +443,7 @@ def _build_mainland_payment_launch_status(
     strategy: dict[str, Any],
     wechat: dict[str, Any],
     acceptance: dict[str, Any],
+    provider_connection_evidence: dict[str, Any],
 ) -> dict[str, Any]:
     mainland_payment_strategy_contract_valid = all(
         (
@@ -408,11 +469,54 @@ def _build_mainland_payment_launch_status(
             wechat.get("secret_exposed") is False,
         )
     )
+    provider_runtime_activation_enabled = wechat.get("provider_connection_ready") is True
+    provider_proof_count = provider_connection_evidence.get("verified_proof_count")
+    provider_connection_proof_valid = all(
+        (
+            provider_connection_evidence.get("contract_version")
+            == WECHAT_PAY_PROVIDER_CONNECTION_EVIDENCE_VERSION,
+            provider_connection_evidence.get("provider") == "wechat_pay_native",
+            provider_connection_evidence.get("proof_kind") == "signed_read_only_order_query",
+            type(provider_proof_count) is int,
+            type(provider_proof_count) is int and 0 <= provider_proof_count <= 100,
+            type(provider_connection_evidence.get("provider_connection_proof_ready")) is bool,
+            type(provider_proof_count) is int
+            and provider_connection_evidence.get("provider_connection_proof_ready")
+            is (provider_proof_count > 0),
+            type(provider_connection_evidence.get("latest_verified_at")) is str,
+            bool(provider_connection_evidence.get("latest_verified_at"))
+            is provider_connection_evidence.get("provider_connection_proof_ready"),
+            _provider_connection_proof_timestamp_valid(
+                provider_connection_evidence.get("latest_verified_at"),
+                proof_ready=provider_connection_evidence.get("provider_connection_proof_ready") is True,
+            ),
+            provider_connection_evidence.get("freshness_window_seconds") == 24 * 60 * 60,
+            provider_connection_evidence.get("proof_query_called_external_api")
+            is provider_connection_evidence.get("provider_connection_proof_ready"),
+            all(
+                provider_connection_evidence.get(key) is False
+                for key in (
+                    "calls_external_payment_api",
+                    "creates_payable_order",
+                    "public_charging_allowed",
+                    "charge_now_allowed",
+                    "triggers_real_charge",
+                    "triggers_real_refund",
+                    "real_platform_writes_enabled",
+                    "secret_exposed",
+                )
+            ),
+        )
+    )
+    provider_connection_proof_ready = bool(
+        provider_connection_proof_valid
+        and provider_connection_evidence.get("provider_connection_proof_ready") is True
+    )
     provider_checkout_ready = (
         mainland_payment_strategy_contract_valid
         and wechat_native_contract_valid
         and configuration_complete
-        and wechat.get("provider_connection_ready") is True
+        and (provider_runtime_activation_enabled or provider_connection_proof_ready)
     )
     verified_paid_order_count = _safe_verified_payment_count(acceptance.get("verified_paid_order_count"))
     acceptance_source_flag = acceptance.get("controlled_acceptance_proven") is True
@@ -486,6 +590,8 @@ def _build_mainland_payment_launch_status(
     )
     if configuration_complete and not provider_checkout_ready:
         blockers.append("wechat_pay_live_api_disabled")
+    if not provider_connection_proof_valid:
+        blockers.append("wechat_pay_provider_connection_evidence_invalid")
     if not acceptance_identity_contract_valid:
         blockers.append("controlled_wechat_pay_acceptance_identity_contract_invalid")
     if not acceptance_safety_contract_valid:
@@ -558,8 +664,14 @@ def _build_mainland_payment_launch_status(
             "secret_values_included": False,
         },
         "acceptance_evidence": acceptance_evidence,
+        "provider_connection_evidence": (
+            provider_connection_evidence
+            if provider_connection_proof_valid
+            else _unavailable_provider_connection_evidence()
+        ),
         "controlled_acceptance_proven": controlled_acceptance_proven,
         "provider_checkout_ready": provider_checkout_ready,
+        "provider_runtime_activation_enabled": provider_runtime_activation_enabled,
         "production_environment": production_environment,
         "refund_now_allowed": wechat.get("refund_now_allowed") is True,
         "owner_approval_recorded": owner_approval_recorded,
@@ -629,8 +741,10 @@ def _unavailable_mainland_payment_launch_status() -> dict[str, Any]:
             "calls_external_payment_api": False,
             "secret_exposed": False,
         },
+        "provider_connection_evidence": _unavailable_provider_connection_evidence(),
         "controlled_acceptance_proven": False,
         "provider_checkout_ready": False,
+        "provider_runtime_activation_enabled": False,
         "production_environment": False,
         "refund_now_allowed": False,
         "owner_approval_recorded": False,
@@ -647,6 +761,46 @@ def _unavailable_mainland_payment_launch_status() -> dict[str, Any]:
         "frontend_gets_payment_secret": False,
         "secret_exposed": False,
     }
+
+
+def _unavailable_provider_connection_evidence() -> dict[str, Any]:
+    return {
+        "contract_version": WECHAT_PAY_PROVIDER_CONNECTION_EVIDENCE_VERSION,
+        "provider": "wechat_pay_native",
+        "proof_kind": "signed_read_only_order_query",
+        "provider_connection_proof_ready": False,
+        "verified_proof_count": 0,
+        "latest_verified_at": "",
+        "freshness_window_seconds": 24 * 60 * 60,
+        "proof_query_called_external_api": False,
+        "calls_external_payment_api": False,
+        "creates_payable_order": False,
+        "public_charging_allowed": False,
+        "charge_now_allowed": False,
+        "triggers_real_charge": False,
+        "triggers_real_refund": False,
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+
+
+def _provider_connection_proof_timestamp_valid(value: Any, *, proof_ready: bool) -> bool:
+    text = value if isinstance(value, str) else ""
+    if not proof_ready:
+        return text == ""
+    if not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
+        text,
+    ):
+        return False
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return False
+    age_seconds = (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()
+    return 0 <= age_seconds <= 24 * 60 * 60
 
 
 def _merchant_application_packet(

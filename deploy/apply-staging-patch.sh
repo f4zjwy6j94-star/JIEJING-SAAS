@@ -276,6 +276,7 @@ FILES=(
   "tools/test_jiejing_billing_domain_cutover_rehearsal.py"
   "tools/test_jiejing_billing_webhook_subscription_state.py"
   "tools/test_jiejing_mainland_payment_strategy.py"
+  "tools/test_jiejing_wechat_pay_provider_connection_proof.py"
   "tools/test_jiejing_manual_beta_payment_flow.py"
   "tools/test_jiejing_billing_provider_evidence_register.py"
   "tools/test_jiejing_billing_provider_rehearsal.py"
@@ -623,6 +624,7 @@ python3 -m py_compile \
   tools/test_jiejing_billing_test_provider.py \
   tools/test_jiejing_billing_webhook_subscription_state.py \
   tools/test_jiejing_mainland_payment_strategy.py \
+  tools/test_jiejing_wechat_pay_provider_connection_proof.py \
   tools/test_jiejing_manual_beta_payment_flow.py \
   tools/test_jiejing_billing_provider_evidence_register.py \
   tools/test_jiejing_ebay_vault_token_refresh_adapter.py \

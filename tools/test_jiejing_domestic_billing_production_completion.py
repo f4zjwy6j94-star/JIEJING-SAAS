@@ -472,6 +472,7 @@ def _run_production_completion(temp_root: Path) -> int:
         "complete": False,
         "completed_count": 8,
     }
+    configuration_incomplete["provider_checkout_ready"] = False
     precedence_cases.append(
         ("configuration", configuration_incomplete, "merchant_payment_provider_configuration_incomplete")
     )
@@ -482,6 +483,14 @@ def _run_production_completion(temp_root: Path) -> int:
     )
     provider_disconnected = copy.deepcopy(canonical_launch)
     provider_disconnected["provider_checkout_ready"] = False
+    provider_disconnected["provider_runtime_activation_enabled"] = False
+    provider_disconnected["provider_connection_evidence"] = {
+        **provider_disconnected["provider_connection_evidence"],
+        "provider_connection_proof_ready": False,
+        "verified_proof_count": 0,
+        "latest_verified_at": "",
+        "proof_query_called_external_api": False,
+    }
     precedence_cases.append(
         ("provider", provider_disconnected, "merchant_payment_provider_runtime_activation_pending")
     )
