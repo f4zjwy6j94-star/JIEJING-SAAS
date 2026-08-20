@@ -191,6 +191,9 @@ def main() -> int:
         os.environ["JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED"] = "false"
         weak_vault_unseal_boundary = build_backup_plan(vault_settings, repo)
         weak_vault_readiness = build_product_readiness(vault_settings, repo)
+        os.environ["JIEJING_COS_BACKUP_LAST_SUCCESS_AT"] = (now - timedelta(hours=37)).isoformat()
+        weak_vault_stale_backup_readiness = build_product_readiness(vault_settings, repo)
+        os.environ["JIEJING_COS_BACKUP_LAST_SUCCESS_AT"] = (now - timedelta(hours=1)).isoformat()
         os.environ["JIEJING_VAULT_UNSEAL_KEY_SHARES"] = "3"
         os.environ["JIEJING_VAULT_UNSEAL_KEY_THRESHOLD"] = "2"
         os.environ["JIEJING_VAULT_OFFLINE_SHARE_CUSTODY_VERIFIED"] = "true"
@@ -294,6 +297,20 @@ def main() -> int:
         return fail(f"public readiness must describe the Vault recovery boundary truthfully: {weak_vault_public}")
     if "managed Postgres" in str(weak_vault_public.get("next_action") or ""):
         return fail(f"Vault-only debt must not direct the operator back to completed Postgres work: {weak_vault_public}")
+    weak_vault_stale_items = {
+        item.get("key"): item for item in weak_vault_stale_backup_readiness.get("items") or []
+    }
+    weak_vault_stale_public = weak_vault_stale_items.get("backup_restore") or {}
+    if weak_vault_stale_public.get("status") != "blocked_vault_unseal_custody_and_backup_evidence_stale":
+        return fail(
+            "public readiness must identify both Vault custody and stale backup evidence: "
+            f"{weak_vault_stale_public}"
+        )
+    if "managed Postgres" in str(weak_vault_stale_public.get("next_action") or ""):
+        return fail(
+            "combined Vault and freshness debt must not direct the operator to completed Postgres work: "
+            f"{weak_vault_stale_public}"
+        )
     if backup.get("object_storage", {}).get("target_ready") is not True:
         return fail("COS backup target should be ready when bucket, region and probe are configured")
     if stale_cos_backup.get("backup_ready_for_paid_launch") is not False:

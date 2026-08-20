@@ -437,7 +437,22 @@ def _backup_item(settings: SaaSSettings, repository: SaaSRepository) -> Readines
         "vault_unseal_key_threshold_below_production_minimum",
         "vault_offline_share_custody_not_verified",
     }
-    if blockers and blockers.issubset(vault_share_custody_blockers):
+    vault_share_custody_debt = blockers.intersection(vault_share_custody_blockers)
+    backup_freshness_debt = blockers.intersection(freshness_only_blockers)
+    if (
+        vault_share_custody_debt
+        and backup_freshness_debt
+        and blockers.issubset(vault_share_custody_blockers | freshness_only_blockers)
+    ):
+        return ReadinessItem(
+            "backup_restore",
+            "Backup and restore",
+            "blocked_vault_unseal_custody_and_backup_evidence_stale",
+            "blocker" if settings.is_production_like else "warning",
+            "Managed database backup controls are configured; Vault recovery shares and offline custody remain incomplete, and the latest backup evidence is outside its paid-launch freshness window.",
+            "Create at least three Vault recovery shares with a two-share threshold, verify offline custody, and record fresh backup and restore evidence before paid launch.",
+        )
+    if vault_share_custody_debt and blockers.issubset(vault_share_custody_blockers):
         return ReadinessItem(
             "backup_restore",
             "Backup and restore",
