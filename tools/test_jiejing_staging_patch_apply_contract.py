@@ -57,6 +57,7 @@ def main() -> int:
         "deploy/bootstrap.public-staging.ubuntu.sh",
         "deploy/staging-vault-init-unseal.sh",
         "deploy/github-actions/jiejing-runner-doctor.sh",
+        "deploy/github-actions/jiejing-cls-probe-auto-refresh.sh",
         "deploy/github-actions/jiejing-staging-deploy.sh",
         "deploy/github-actions/jiejing-staging-rollback.sh",
         "deploy/apply-cloudflare-origin-ufw.sh",
@@ -97,6 +98,8 @@ def main() -> int:
         "docs/superpowers/plans/2026-08-03-real-merchant-feedback-closure-implementation-plan.md",
         "docs/superpowers/specs/2026-08-04-runtime-env-single-source-and-overlap-guard-design.md",
         "docs/superpowers/plans/2026-08-04-runtime-env-overlap-guard-implementation-plan.md",
+        "docs/superpowers/specs/2026-08-21-cls-probe-auto-refresh-design.md",
+        "docs/superpowers/plans/2026-08-21-cls-probe-auto-refresh-implementation-plan.md",
         "favicon.ico",
         "index.html",
         "app.html",
@@ -218,6 +221,7 @@ def main() -> int:
         "tools/test_jiejing_agents_md_guardrails.py",
         "tools/test_jiejing_github_actions_deploy_guardrails.py",
         "tools/test_jiejing_github_runner_doctor_guardrails.py",
+        "tools/test_jiejing_cls_probe_auto_refresh_guardrails.py",
         "tools/jiejing_billing_provider_evidence_register.py",
         "tools/jiejing_paid_launch_approval_packet.py",
         "tools/jiejing_production_evidence_ledger.py",
@@ -318,6 +322,7 @@ def main() -> int:
         SCRIPT,
         ROOT / "deploy" / "github-actions" / "jiejing-staging-deploy.sh",
         ROOT / "deploy" / "github-actions" / "jiejing-runner-doctor.sh",
+        ROOT / "deploy" / "github-actions" / "jiejing-cls-probe-auto-refresh.sh",
     ):
         if b"\r" in shell_script.read_bytes():
             return fail(f"shell script contains CR bytes: {shell_script.name}")
@@ -516,6 +521,7 @@ def main() -> int:
         '("product_feedback_browser_smoke", ["node", "tools/codex_jiejing_product_feedback_smoke.js"])',
         '("runtime_env_overlap_guard", [sys.executable, "tools/test_jiejing_runtime_env_overlap_guard.py"])',
         '("runtime_env_public_contract", [sys.executable, "tools/test_jiejing_runtime_env_public_contract.py"])',
+        '("cls_probe_auto_refresh_guardrails", [sys.executable, "tools/test_jiejing_cls_probe_auto_refresh_guardrails.py"])',
     ]:
         if marker not in precloud_gate:
             return fail(f"precloud gate missing product-feedback closure check: {marker}")

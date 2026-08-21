@@ -93,6 +93,17 @@ As of 2026-06-22, the Tencent Cloud self-hosted runner path has been installed a
   - Common blockers include `docker_cli_missing`, `sudo_noninteractive_unavailable`, `app_dir_missing`, and `disk_usage_at_or_above_95_percent`.
   - Disk usage at or above 90 percent reports `disk_usage_at_or_above_90_percent` as a warning so we can clean up before it becomes a hard failure.
 
+- `.github/workflows/jiejing-cls-probe-auto-refresh.yml`
+  - `Jiejing CLS Probe Auto-Refresh` runs every 12 hours and also supports a no-input manual dispatch.
+  - It accepts only the exact already-deployed `main` commit and exact live Compose/image identity; it never deploys a candidate commit.
+  - The server-private Tencent env remains a root-owned `0600` file. The exact deployed application image receives the private directory only for the single probe command so the existing tool can atomically update the three evidence fields; the directory is never copied into the Actions workspace or printed.
+
+- `deploy/github-actions/jiejing-cls-probe-auto-refresh.sh`
+  - Runs the existing CLS provider probe from the exact deployed application image without installing packages on the host.
+  - A successful run emits `LIVE_RELEASE_GUARD_STATUS=ready`, `CLS_PROBE_STATUS=verified`, `API_RELOAD_STATUS=ready`, `WORKER_RELOAD_STATUS=ready`, `READINESS_STATUS=verified`, and `JIEJING_CLS_PROBE_AUTO_REFRESH_STATUS=success`.
+  - Probe or guard failure does not restart any service. After a verified probe, only the API is recreated and health-checked before the worker is recreated; Vault, frontend, Cloudflare, databases, volumes, eBay OAuth, sync and payment flows are untouched.
+  - The job refreshes value-free monitoring evidence only; it does not enable public charging or real platform writes and always reports `SECRET_EXPOSED=false`.
+
 - `.github/workflows/jiejing-staging-runner-maintenance.yml`
   - Manual workflow only.
   - Runs on the Tencent Cloud self-hosted runner.

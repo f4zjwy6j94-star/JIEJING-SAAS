@@ -1,0 +1,27 @@
+name: Jiejing CLS Probe Auto-Refresh
+
+on:
+  schedule:
+    - cron: "17 */12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jiejing-cls-probe-auto-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh-cls-probe:
+    name: Refresh Tencent CLS probe evidence
+    runs-on: [self-hosted, jiejing-staging]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Refresh CLS evidence
+        run: bash deploy/github-actions/jiejing-cls-probe-auto-refresh.sh

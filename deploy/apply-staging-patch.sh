@@ -30,6 +30,7 @@ FILES=(
   "deploy/bootstrap.public-staging.ubuntu.sh"
   "deploy/staging-vault-init-unseal.sh"
   "deploy/github-actions/jiejing-runner-doctor.sh"
+  "deploy/github-actions/jiejing-cls-probe-auto-refresh.sh"
   "deploy/github-actions/jiejing-staging-deploy.sh"
   "deploy/github-actions/jiejing-staging-rollback.sh"
   "deploy/apply-cloudflare-origin-ufw.sh"
@@ -86,6 +87,8 @@ FILES=(
   "docs/superpowers/plans/2026-08-04-runtime-env-overlap-guard-implementation-plan.md"
   "docs/superpowers/specs/2026-08-20-session-rotation-and-device-control-design.md"
   "docs/superpowers/plans/2026-08-20-session-rotation-and-device-control-implementation-plan.md"
+  "docs/superpowers/specs/2026-08-21-cls-probe-auto-refresh-design.md"
+  "docs/superpowers/plans/2026-08-21-cls-probe-auto-refresh-implementation-plan.md"
   "favicon.ico"
   "index.html"
   "app.html"
@@ -243,6 +246,7 @@ FILES=(
   "tools/test_jiejing_agents_md_guardrails.py"
   "tools/test_jiejing_github_actions_deploy_guardrails.py"
   "tools/test_jiejing_github_runner_doctor_guardrails.py"
+  "tools/test_jiejing_cls_probe_auto_refresh_guardrails.py"
   "tools/jiejing_precloud_deployment_gate.py"
   "tools/test_jiejing_current_state_guard.py"
   "tools/test_jiejing_external_launch_blocker_gate.py"
@@ -597,6 +601,7 @@ python3 -m py_compile \
   tools/test_jiejing_agents_md_guardrails.py \
   tools/test_jiejing_github_actions_deploy_guardrails.py \
   tools/test_jiejing_github_runner_doctor_guardrails.py \
+  tools/test_jiejing_cls_probe_auto_refresh_guardrails.py \
   tools/jiejing_precloud_deployment_gate.py \
   tools/test_jiejing_current_state_guard.py \
   tools/test_jiejing_external_launch_blocker_gate.py \
@@ -701,6 +706,8 @@ python3 -m py_compile \
   tools/test_jiejing_fixed_launch_progress.py \
   tools/test_jiejing_merchant_workflow_validation.py \
   tools/test_jiejing_version_bound_release_evidence.py
+
+bash -n deploy/github-actions/jiejing-cls-probe-auto-refresh.sh
 
 NODE_BIN="${JIEJING_NODE_BIN:-node}"
 "$NODE_BIN" --check app.js
