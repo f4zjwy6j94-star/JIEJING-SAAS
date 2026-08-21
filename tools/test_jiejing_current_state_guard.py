@@ -50,6 +50,11 @@ def main() -> int:
         return fail("completed OAuth state must block repeated prepare/open authorization actions")
     if payload.get("sync_completed") and not any("Do not run a fresh eBay read-only sync" in item for item in payload.get("no_repeat_actions", [])):
         return fail("completed sync state must block repeated progress-check syncs")
+    safe_next_actions = payload.get("safe_next_actions", [])
+    if any("Redis" in item for item in safe_next_actions):
+        return fail("current-state guidance must not recommend paid Redis after the production queue moved to Postgres durable")
+    if not any("Postgres durable" in item for item in safe_next_actions):
+        return fail("current-state guidance must name the selected Postgres durable production queue")
     with tempfile.TemporaryDirectory(prefix="jiejing-current-state-stale-") as tmp:
         workspace = Path(tmp)
         artifact_root = workspace / "output" / "jiejing-saas-backend" / "staging-ebay-oauth-readonly"

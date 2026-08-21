@@ -30,6 +30,7 @@ PRODUCTION_VAULT_POLICY = ROOT / "deploy" / "vault-policy.production.hcl"
 LOW_COST_SECRET_RUNBOOK = ROOT / "docs" / "JIEJING_LOW_COST_PRODUCTION_SECRET_BOUNDARY_20260814.md"
 API_SERVER = ROOT / "jiejing_saas" / "api_server.py"
 OWNER_LAUNCH_CONTROL = ROOT / "jiejing_saas" / "owner_launch_control.py"
+PRECLOUD_GATE = ROOT / "tools" / "jiejing_precloud_deployment_gate.py"
 
 
 def fail(message: str) -> int:
@@ -208,6 +209,11 @@ def main() -> int:
         return fail("low-cost production must run the proven Postgres durable queue worker")
     if values.get("JIEJING_QUEUE_URL", "").strip():
         return fail("Postgres durable production must not require a separate paid Redis queue")
+    precloud_gate = PRECLOUD_GATE.read_text(encoding="utf-8")
+    if "provision_managed_postgres_and_redis" in precloud_gate:
+        return fail("precloud next steps must not recommend paid Redis after the production queue moved to Postgres durable")
+    if "provision_managed_postgres_and_postgres_durable_queue" not in precloud_gate:
+        return fail("precloud next steps must name the selected Postgres durable production queue")
     if compose.count("../../private/jiejing-saas.production.env") != 2 or "./jiejing-saas.production.env" in compose.replace("../../private/jiejing-saas.production.env", ""):
         return fail("production credentials must be injected from the server-private env boundary")
     if compose.count("jiejing_production_data:/data") != 2:

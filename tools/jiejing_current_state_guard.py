@@ -151,7 +151,9 @@ def build_state(workspace: Path, *, output_root: Path | None = None, db_path: Pa
       blockers.append("Stable SSH deploy channel is not proven usable by latest deploy doctor artifact.")
 
     if not _infra_paid_ready(infra):
-      safe_next.append("Keep Postgres/Redis/Vault/KMS work in rehearsal/contract mode until managed resources are provisioned.")
+      safe_next.append(
+          "Keep the managed Postgres database, Postgres durable queue, and private Vault recovery boundary in rehearsal/contract mode until production resources and custody are verified."
+      )
 
     progress = {
       "frontend_productization": "continue",

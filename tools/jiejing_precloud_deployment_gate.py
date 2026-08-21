@@ -240,7 +240,7 @@ def _latest_staging_verification() -> dict[str, Any]:
 def _next_external_steps(staging_verification: dict[str, Any]) -> list[str]:
     steps = [
         "use_current_state_guard_before_any_future_oauth_sync_or_deploy_action",
-        "provision_managed_postgres_and_redis_when_the_operator_approves_paid_infra",
+        "provision_managed_postgres_and_postgres_durable_queue_when_the_operator_approves_paid_infra",
         "configure_production_vault_kms_monitoring_backups_domain_and_billing_before_paid_launch",
         "do_not_repeat_seller_oauth_or_live_sync_unless_current_state_guard_says_the_artifact_is_missing_or_stale",
     ]
