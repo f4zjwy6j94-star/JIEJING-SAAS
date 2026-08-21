@@ -48,15 +48,18 @@ Managed KMS remains the later high-availability upgrade, not a paid launch block
 
 1. Provision the dedicated production host and private env file with mode `0600`.
 2. Start only `jiejing-vault` and run `vault operator init` inside that container.
-3. Move the three returned shares and initial root token directly to offline encrypted
-   operator storage. Use three independent custody units and keep the maximum at one
-   share per unit for this 3-share/2-threshold layout. Do not leave the initialization
-   JSON on the server.
+3. Move the three returned shares directly to offline operator custody. Use three
+   independent custody units and keep the maximum at one share per unit for this
+   3-share/2-threshold layout. The initial root token is never displayed: the protected
+   controller keeps it only in locked process memory, creates the scoped orphan periodic
+   backend token, then revokes root in the same session. Do not leave initialization JSON
+   or any token on the server outside the reviewed backend-token file.
 4. Use two shares for manual unseal, enable KV v2 at `secret/`, create the scoped
    `jiejing-production` policy from `deploy/vault-policy.production.hcl`, issue the
    periodic backend token, verify it is renewable with a positive period, then revoke root.
-5. Write only the scoped backend token to `../../private/jiejing-vault-token`, set
-   owner-only permissions, and start Vault, renewer, API and worker in that order.
+5. Write only the scoped backend token to
+   `../../private/jiejing-vault-token.d/jiejing-vault-token`, set the directory to
+   `0700` and the file to `0600`, and start Vault, renewer, API and worker in that order.
 6. Verify `/health/deep` and a backend-only secret resolver probe without printing a
    secret value.
 
@@ -89,6 +92,44 @@ independent digital media. It is a human-only ceremony, not an automation step.
 7. Move envelopes A, B, and C immediately to three independent physical custody
    units. No custodian or location may hold two envelopes. Record only the
    value-free geometry and witnessed pass/fail facts after an isolated restore.
+
+### Reviewed operator-only command path
+
+Run this only after the dedicated production host and its private production env exist.
+Use a local Windows Terminal or another direct trusted terminal with recording,
+scrollback persistence, clipboard history, screen sharing and cameras disabled. Do not
+use OrcaTerm, a browser terminal, Codex computer control, a cloud shell, `script`, `tee`,
+tmux or screen. Codex may prepare the host before this point but must relinquish screen
+control before the command below starts.
+
+From the production release root, prepare the empty write-once output directory and
+start only the new production Vault:
+
+```bash
+install -d -m 0700 ../private/jiejing-vault-token.d
+test ! -e ../private/jiejing-vault-token.d/jiejing-vault-token
+docker compose -f deploy/docker-compose.production-pilot.yml up -d jiejing-vault
+```
+
+Then the owner runs the sole secret-bearing entry point by hand:
+
+```bash
+docker compose -f deploy/docker-compose.production-pilot.yml --profile operator-only run --rm jiejing-vault-paper-controller
+```
+
+The controller accepts no secret-bearing command-line arguments. It requires a direct
+TTY, root inside the isolated operator container, disabled core dumps, a non-dumpable
+process and successful `mlockall`. It shows only one share at a time, immediately clears
+the display and terminal scrollback, requires two hidden read-backs per paper share,
+proves that one share remains sealed and two shares unseal, installs the exact reviewed
+policy, writes one `0600` orphan periodic backend token atomically, renews it, and revokes
+the never-displayed initial root token. It has no application env file, public port or app
+network, and its read-only container is removed at exit.
+
+Only after the controller returns a value-free `status=verified` object may the operator
+start the renewer and application services. If it stops after Vault initialization, do not
+run initialization again; keep every completed paper envelope sealed and follow the
+documented root-regeneration recovery path with the two-share quorum.
 
 If a direct non-recording console cannot be established, stop. Do not weaken the
 ceremony by using a browser-controlled terminal or by storing a temporary copy on

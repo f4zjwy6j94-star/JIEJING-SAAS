@@ -27,6 +27,7 @@ PRODUCTION_NGINX = ROOT / "deploy" / "nginx.production.conf"
 PRODUCTION_NGINX_SECURITY_HEADERS = ROOT / "deploy" / "nginx-security-headers.production.conf"
 PRODUCTION_VAULT = ROOT / "deploy" / "vault.production.hcl"
 PRODUCTION_VAULT_POLICY = ROOT / "deploy" / "vault-policy.production.hcl"
+PRODUCTION_PAPER_CONTROLLER = ROOT / "tools" / "jiejing_vault_sealed_paper_ceremony.py"
 LOW_COST_SECRET_RUNBOOK = ROOT / "docs" / "JIEJING_LOW_COST_PRODUCTION_SECRET_BOUNDARY_20260814.md"
 VAULT_RECOVERY_DESIGN = (
     ROOT
@@ -144,6 +145,8 @@ def main() -> int:
         '"requirements.saas.lock.txt"',
         '"requirements.saas-build.txt"',
         '"requirements.saas-build.lock.txt"',
+        '"tools/jiejing_vault_sealed_paper_ceremony.py"',
+        '"tools/test_jiejing_vault_sealed_paper_ceremony.py"',
     ):
         if release_lock not in staging_patch_text:
             return fail(f"production supply-chain lock must travel through the controlled release whitelist: {release_lock}")
@@ -188,7 +191,7 @@ def main() -> int:
     for name, expected_count in expected_compose_refs.items():
         if compose.count(f'image: {locked_refs[name]}') != expected_count:
             return fail(f"production Compose must use the reviewed immutable digest for {name}")
-    for service in ("jiejing-saas", "jiejing-worker"):
+    for service in ("jiejing-saas", "jiejing-worker", "jiejing-vault-paper-controller"):
         build_block = _compose_service_block(compose, service)
         if "sbom: true" not in build_block or "provenance: mode=max" not in build_block:
             return fail(f"{service} production image must emit native SBOM and provenance attestations")
@@ -197,6 +200,7 @@ def main() -> int:
         "jiejing-worker:",
         "jiejing-vault:",
         "jiejing-vault-token-renewer:",
+        "jiejing-vault-paper-controller:",
         "jiejing-frontend:",
         "jiejing-edge:",
     ):
@@ -217,6 +221,15 @@ def main() -> int:
     if values.get("JIEJING_QUEUE_URL", "").strip():
         return fail("Postgres durable production must not require a separate paid Redis queue")
     precloud_gate = PRECLOUD_GATE.read_text(encoding="utf-8")
+    if "tools/test_jiejing_vault_sealed_paper_ceremony.py" not in precloud_gate:
+        return fail("precloud must execute the production paper ceremony contract")
+    for workflow in CI_WORKFLOWS:
+        workflow_text = workflow.read_text(encoding="utf-8")
+        if (
+            "tools/test_jiejing_vault_sealed_paper_ceremony.py" not in workflow_text
+            and "tools/jiejing_precloud_deployment_gate.py" not in workflow_text
+        ):
+            return fail(f"CI/deploy workflow must execute the paper ceremony contract: {workflow.name}")
     if "provision_managed_postgres_and_redis" in precloud_gate:
         return fail("precloud next steps must not recommend paid Redis after the production queue moved to Postgres durable")
     if "provision_managed_postgres_and_postgres_durable_queue" not in precloud_gate:
@@ -255,9 +268,10 @@ def main() -> int:
     renewer_block = _compose_service_block(compose, "jiejing-vault-token-renewer")
     if "vault token renew" not in renewer_block or "vault token lookup -field=renewable" not in renewer_block or "vault token lookup -field=period" not in renewer_block:
         return fail("periodic backend Vault token must be renewed and monitored")
-    if "../../private/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro" not in compose:
+    token_mount = "../../private/jiejing-vault-token.d/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro"
+    if token_mount not in compose:
         return fail("API, worker and renewer must share one read-only Vault token file")
-    if compose.count("../../private/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro") != 3:
+    if compose.count(token_mount) != 3:
         return fail("exactly API, worker and renewer must receive the single Vault token file")
     if 'JIEJING_VAULT_TOKEN_FILE: "/run/secrets/jiejing-vault-token"' not in compose:
         return fail("application services must resolve the shared Vault token file")
@@ -265,6 +279,35 @@ def main() -> int:
         return fail("Vault renewer must not receive application, eBay, model, database or payment secrets")
     if "cat /run/secrets/jiejing-vault-token" not in renewer_block:
         return fail("Vault renewer must read the same token file as API and worker")
+    controller = _compose_service_block(compose, "jiejing-vault-paper-controller")
+    for marker in (
+        'profiles: ["operator-only"]',
+        "stdin_open: true",
+        "tty: true",
+        'restart: "no"',
+        "read_only: true",
+        "no-new-privileges:true",
+        "- ALL",
+        "- IPC_LOCK",
+        "memlock:",
+        "soft: -1",
+        "hard: -1",
+        'driver: "none"',
+        'VAULT_ADDR: "http://jiejing-vault:8200"',
+        "python",
+        "tools/jiejing_vault_sealed_paper_ceremony.py",
+        "./vault-policy.production.hcl:/run/jiejing-vault-policy/vault-policy.production.hcl:ro",
+        "../../private/jiejing-vault-token.d:/run/jiejing-vault-token-output",
+        "- jiejing_secrets",
+    ):
+        if marker not in controller:
+            return fail(f"operator-only paper ceremony controller is missing {marker}")
+    if any(marker in controller for marker in ("env_file:", "ports:", "expose:", "jiejing_app", "*jiejing-logging")):
+        return fail("paper ceremony controller must receive no application env, public port or app network")
+    if not PRODUCTION_PAPER_CONTROLLER.exists():
+        return fail("production paper ceremony controller source is missing")
+    if "tools/jiejing_vault_sealed_paper_ceremony.py" not in dockerfile:
+        return fail("production image build must compile the paper ceremony controller")
     if "http://127.0.0.1:8788/health/startup" not in compose:
         return fail("API container health must use the non-2xx dependency startup probe")
     for marker in ('storage "file"', 'path = "/vault/file"', 'address = "0.0.0.0:8200"', "tls_disable = true"):
@@ -312,6 +355,11 @@ def main() -> int:
         "double transcription check",
         "clear the terminal scrollback",
         "must not pass through codex",
+        "jiejing-vault-token.d",
+        "--profile operator-only run --rm jiejing-vault-paper-controller",
+        "initial root token is never displayed",
+        "orphan periodic backend token",
+        "do not use orcaterm",
     ):
         if marker not in normalized_secret_runbook:
             return fail(f"sealed-paper custody ceremony is missing {marker}")

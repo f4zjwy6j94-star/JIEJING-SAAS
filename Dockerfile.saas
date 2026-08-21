@@ -66,6 +66,7 @@ RUN python -m py_compile \
     tools/jiejing_current_state_guard.py \
     tools/jiejing_cos_backup_probe.py \
     tools/jiejing_precloud_deployment_gate.py \
+    tools/jiejing_vault_sealed_paper_ceremony.py \
     jiejing_runtime/runtime.py
 
 RUN python -c "import jiejing_saas.api_server; import jiejing_saas.repository"

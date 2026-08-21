@@ -236,6 +236,7 @@ FILES=(
   "tools/jiejing_current_state_guard.py"
   "tools/jiejing_external_launch_blocker_gate.py"
   "tools/jiejing_configure_tencent_runtime_env.py"
+  "tools/jiejing_vault_sealed_paper_ceremony.py"
   "tools/jiejing_runtime_env_overlap_guard.py"
   "tools/jiejing_cos_backup_probe.py"
   "tools/jiejing_a_class_unattended_gate.py"
@@ -335,6 +336,7 @@ FILES=(
   "tools/test_jiejing_production_evidence_ledger.py"
   "tools/test_jiejing_production_release_gate.py"
   "tools/test_jiejing_production_pilot_contract.py"
+  "tools/test_jiejing_vault_sealed_paper_ceremony.py"
   "tools/test_jiejing_domain_pending_purchase_preflight.py"
   "tools/test_jiejing_registered_domain_cutover_status.py"
   "tools/test_jiejing_edge_cutover_preflight.py"
@@ -591,6 +593,7 @@ python3 -m py_compile \
   tools/jiejing_current_state_guard.py \
   tools/jiejing_external_launch_blocker_gate.py \
   tools/jiejing_configure_tencent_runtime_env.py \
+  tools/jiejing_vault_sealed_paper_ceremony.py \
   tools/jiejing_runtime_env_overlap_guard.py \
   tools/jiejing_cos_backup_probe.py \
   tools/jiejing_a_class_unattended_gate.py \
@@ -683,6 +686,7 @@ python3 -m py_compile \
   tools/test_jiejing_production_evidence_ledger.py \
   tools/test_jiejing_production_release_gate.py \
   tools/test_jiejing_production_pilot_contract.py \
+  tools/test_jiejing_vault_sealed_paper_ceremony.py \
   tools/test_jiejing_domain_pending_purchase_preflight.py \
   tools/test_jiejing_registered_domain_cutover_status.py \
   tools/test_jiejing_edge_cutover_preflight.py \

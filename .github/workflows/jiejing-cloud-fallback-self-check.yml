@@ -55,3 +55,6 @@ jobs:
 
       - name: Runner maintenance guardrails
         run: python tools/test_jiejing_github_runner_maintenance_guardrails.py
+
+      - name: Production paper ceremony contract
+        run: python tools/test_jiejing_vault_sealed_paper_ceremony.py

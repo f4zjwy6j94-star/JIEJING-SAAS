@@ -170,6 +170,10 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("cos_backup_probe", [sys.executable, "tools/test_jiejing_cos_backup_probe.py"]),
     ("production_release_gate", [sys.executable, "tools/test_jiejing_production_release_gate.py"]),
     ("production_pilot_contract", [sys.executable, "tools/test_jiejing_production_pilot_contract.py"]),
+    (
+        "vault_sealed_paper_ceremony_contract",
+        [sys.executable, "tools/test_jiejing_vault_sealed_paper_ceremony.py"],
+    ),
     ("vault_recovery_drill", [sys.executable, "tools/test_jiejing_vault_recovery_drill.py"]),
     (
         "vault_production_grade_rehearsal_contract",

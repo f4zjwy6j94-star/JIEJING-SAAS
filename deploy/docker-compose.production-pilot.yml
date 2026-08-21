@@ -32,7 +32,7 @@ services:
     volumes:
       - jiejing_production_data:/data
       - jiejing_production_media:/var/lib/jiejing/media-assets
-      - ../../private/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro
+      - ../../private/jiejing-vault-token.d/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro
     networks:
       - jiejing_app
       - jiejing_secrets
@@ -71,7 +71,7 @@ services:
     volumes:
       - jiejing_production_data:/data
       - jiejing_production_media:/var/lib/jiejing/media-assets
-      - ../../private/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro
+      - ../../private/jiejing-vault-token.d/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro
     networks:
       - jiejing_app
       - jiejing_secrets
@@ -119,6 +119,45 @@ services:
     logging: *jiejing-logging
     restart: unless-stopped
 
+  jiejing-vault-paper-controller:
+    profiles: ["operator-only"]
+    build:
+      context: ..
+      dockerfile: Dockerfile.saas
+      sbom: true
+      provenance: mode=max
+    depends_on:
+      jiejing-vault:
+        condition: service_started
+    environment:
+      VAULT_ADDR: "http://jiejing-vault:8200"
+    command:
+      - python
+      - tools/jiejing_vault_sealed_paper_ceremony.py
+    volumes:
+      - ./vault-policy.production.hcl:/run/jiejing-vault-policy/vault-policy.production.hcl:ro
+      - ../../private/jiejing-vault-token.d:/run/jiejing-vault-token-output
+    networks:
+      - jiejing_secrets
+    stdin_open: true
+    tty: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop:
+      - ALL
+    cap_add:
+      - IPC_LOCK
+    security_opt:
+      - no-new-privileges:true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    restart: "no"
+    logging:
+      driver: "none"
+
   jiejing-vault-token-renewer:
     image: hashicorp/vault:1.21.4@sha256:4e33b126a59c0c333b76fb4e894722462659a6bec7c48c9ee8cea56fccfd2569
     depends_on:
@@ -140,7 +179,7 @@ services:
     networks:
       - jiejing_secrets
     volumes:
-      - ../../private/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro
+      - ../../private/jiejing-vault-token.d/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro
     healthcheck:
       test: ["CMD-SHELL", "export VAULT_TOKEN=$$(cat /run/secrets/jiejing-vault-token); test $$(vault token lookup -field=renewable) = true && test $$(vault token lookup -field=period) -gt 0"]
       interval: 30s
