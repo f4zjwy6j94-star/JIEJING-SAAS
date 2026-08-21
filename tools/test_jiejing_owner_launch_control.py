@@ -176,6 +176,7 @@ def main() -> int:
     external_keys = {item.get("key") for item in packet.get("external_blockers", []) if isinstance(item, dict)}
     for key in {
         "stable_domain_waf_callbacks",
+        "vault_offline_custody",
         "wechat_pay_native_production_cutover",
         "clean_new_ebay_account",
         "fresh_real_test_product_assets",
@@ -183,6 +184,21 @@ def main() -> int:
     }:
         if key not in external_keys:
             return fail(f"external blocker missing: {key}")
+
+    vault_custody = next(
+        (
+            item
+            for item in packet.get("external_blockers", [])
+            if isinstance(item, dict) and item.get("key") == "vault_offline_custody"
+        ),
+        {},
+    )
+    if vault_custody.get("status") != "blocked":
+        return fail(f"missing independent Vault media must remain an explicit external blocker: {vault_custody}")
+    if vault_custody.get("owner") != "founder_operator":
+        return fail(f"Vault custody must be presented as a founder-owned physical action: {vault_custody}")
+    if vault_custody.get("triggers_real_charge") is not False or vault_custody.get("secret_exposed") is not False:
+        return fail(f"Vault custody guidance must stay value-free and non-financial: {vault_custody}")
 
     work_keys = {item.get("key") for item in packet.get("internal_work_queue", []) if isinstance(item, dict)}
     for key in {

@@ -215,6 +215,7 @@ def build_owner_launch_control(
         test_data_governance=test_data_governance,
     )
     external_blockers = _external_blockers(
+        readiness=readiness,
         billing=billing,
         billing_cutover=billing_cutover,
         edge=edge,
@@ -752,6 +753,7 @@ def _lanes(
 
 def _external_blockers(
     *,
+    readiness: dict[str, Any],
     billing: dict[str, Any],
     billing_cutover: dict[str, Any],
     edge: dict[str, Any],
@@ -761,6 +763,16 @@ def _external_blockers(
     groups = _by_key(launch_gate.get("groups"))
     edge_summary = edge.get("summary") if isinstance(edge.get("summary"), dict) else {}
     paid_summary = paid_packet.get("summary") if isinstance(paid_packet.get("summary"), dict) else {}
+    readiness_items = readiness.get("items") if isinstance(readiness.get("items"), list) else []
+    backup_restore = next(
+        (
+            item
+            for item in readiness_items
+            if isinstance(item, dict) and item.get("key") == "backup_restore"
+        ),
+        {},
+    )
+    vault_custody_ready = backup_restore.get("status") == "ready"
     return [
         _external_item(
             "stable_domain_waf_callbacks",
@@ -768,6 +780,16 @@ def _external_blockers(
             edge.get("status") == "ready_for_owner_approval",
             "Finish DNS/TLS/WAF/origin/callback verification for Cloudflare, Tencent, WeChat Pay and eBay.",
             evidence=f"edge_ready={edge_summary.get('ready_count', 0)}/{edge_summary.get('total_count', 0)}; next={edge_summary.get('next_step') or 'none'}",
+        ),
+        _external_item(
+            "vault_offline_custody",
+            "Vault 三份独立离线保管介质",
+            vault_custody_ready,
+            str(
+                backup_restore.get("next_action")
+                or "准备三个彼此独立的离线保管介质，再执行三份密钥、两份解封阈值的正式保管仪式。"
+            ),
+            evidence=f"readiness_status={backup_restore.get('status') or 'missing'}; independent_custody_required=true",
         ),
         _external_item(
             "wechat_pay_native_production_cutover",
