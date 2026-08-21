@@ -204,6 +204,17 @@ def main() -> int:
     if missing_reload:
         return fail("ordered API/worker reload contract missing markers: " + ",".join(missing_reload))
 
+    no_healthcheck_fallback = """if [[ "$state" == "running" && "$health_status" == "none" ]] \\
+        && health_contract_ready 'http://127.0.0.1:18080/health'; then"""
+    if no_healthcheck_fallback not in script:
+        return fail(
+            "API containers without a Docker healthcheck must wait for the exact local health contract"
+        )
+    if '[[ "$state" == "running" && "$health_status" == "none" ]]' in script and (
+        no_healthcheck_fallback not in script
+    ):
+        return fail("Docker health status none must never be accepted without the local health contract")
+
     api_command_index = script.index(
         'docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps --force-recreate jiejing-saas'
     )

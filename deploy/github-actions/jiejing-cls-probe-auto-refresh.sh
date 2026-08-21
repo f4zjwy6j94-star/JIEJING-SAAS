@@ -174,6 +174,10 @@ wait_for_api_container_health() {
       if [[ "$state" == "running" && "$health_status" == "healthy" ]]; then
         return 0
       fi
+      if [[ "$state" == "running" && "$health_status" == "none" ]] \
+        && health_contract_ready 'http://127.0.0.1:18080/health'; then
+        return 0
+      fi
     fi
     sleep 2
   done
