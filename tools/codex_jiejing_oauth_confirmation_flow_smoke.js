@@ -605,7 +605,7 @@ const server = http.createServer(async (req, res) => {
 async function openAccountSettingsPage(context, base, consoleErrors) {
   const page = await context.newPage();
   page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text());
+    recordBrowserConsoleError(message, consoleErrors);
   });
   page.on("pageerror", (error) => consoleErrors.push(String(error.message || error)));
   await page.goto(`${base}/app.html?start=app`, { waitUntil: "domcontentloaded" });
@@ -622,6 +622,17 @@ async function openAccountSettingsPage(context, base, consoleErrors) {
     { timeout: 10000 },
   );
   return page;
+}
+
+function recordBrowserConsoleError(message, consoleErrors) {
+  if (message.type() !== "error") return;
+  const text = message.text();
+  // Chromium reports an HTTP 409 fail-closed fixture response as a console
+  // resource error. Every possible 409 path is already asserted by request
+  // counters and state/redirect invariants below, so keep JavaScript/page
+  // errors strict while excluding only this browser-generated transport noise.
+  if (text === "Failed to load resource: the server responded with a status of 409 (Conflict)") return;
+  consoleErrors.push(text);
 }
 
 async function waitForUniqueVisibleConfirmation(page, locator, label, timeout = 15000) {
@@ -737,7 +748,7 @@ async function main() {
   const page = await context.newPage();
   const consoleErrors = [];
   page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text());
+    recordBrowserConsoleError(message, consoleErrors);
   });
   page.on("pageerror", (error) => consoleErrors.push(String(error.message || error)));
   try {

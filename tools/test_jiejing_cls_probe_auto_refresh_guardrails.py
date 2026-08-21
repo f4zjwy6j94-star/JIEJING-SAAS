@@ -3,12 +3,16 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import subprocess
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "jiejing-cls-probe-auto-refresh.yml"
 SCRIPT = ROOT / "deploy" / "github-actions" / "jiejing-cls-probe-auto-refresh.sh"
+PUBLIC_READINESS_CONTRACT = ROOT / "tools" / "jiejing_cls_public_readiness_contract.py"
 PATCH_SCRIPT = ROOT / "deploy" / "apply-staging-patch.sh"
 PRECLOUD_GATE = ROOT / "tools" / "jiejing_precloud_deployment_gate.py"
 RUNBOOK = ROOT / "docs" / "JIEJING_GITHUB_SELF_HOSTED_RUNNER_DEPLOY_RUNBOOK_20260622.md"
@@ -20,7 +24,14 @@ def fail(message: str) -> int:
 
 
 def main() -> int:
-    required_paths = (WORKFLOW, SCRIPT, PATCH_SCRIPT, PRECLOUD_GATE, RUNBOOK)
+    required_paths = (
+        WORKFLOW,
+        SCRIPT,
+        PUBLIC_READINESS_CONTRACT,
+        PATCH_SCRIPT,
+        PRECLOUD_GATE,
+        RUNBOOK,
+    )
     if any(not path.exists() for path in required_paths):
         return fail("CLS auto-refresh workflow, script and release integration files must exist")
 
@@ -29,6 +40,60 @@ def main() -> int:
     patch_script = PATCH_SCRIPT.read_text(encoding="utf-8")
     precloud_gate = PRECLOUD_GATE.read_text(encoding="utf-8")
     runbook = RUNBOOK.read_text(encoding="utf-8")
+
+    public_summary = {
+        "readiness": {
+            "production_ready": False,
+            "can_accept_real_customers": False,
+            "real_platform_writes_enabled": False,
+            "requested_real_platform_writes": False,
+            "secret_exposed": False,
+            "items": [
+                {
+                    "key": "billing_quota",
+                    "status": "private_beta_ready_paid_launch_pending",
+                    "severity": "warning",
+                }
+            ],
+            "provider_status": {
+                "billing": {
+                    "public_charging_allowed": False,
+                    "charge_now_allowed": False,
+                    "triggers_real_charge": False,
+                    "triggers_real_refund": False,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                }
+            },
+        }
+    }
+    public_contract = subprocess.run(
+        [sys.executable, str(PUBLIC_READINESS_CONTRACT)],
+        input=json.dumps(public_summary),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if public_contract.returncode != 0:
+        return fail(
+            "verified CLS evidence must accept the public readiness summary that omits info-only monitoring items"
+        )
+    public_summary["readiness"]["items"].append(
+        {
+            "key": "monitoring_alerting",
+            "status": "managed_monitoring_pending",
+            "severity": "warning",
+        }
+    )
+    monitoring_blocked_contract = subprocess.run(
+        [sys.executable, str(PUBLIC_READINESS_CONTRACT)],
+        input=json.dumps(public_summary),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if monitoring_blocked_contract.returncode == 0:
+        return fail("a public monitoring warning or blocker must fail the post-refresh readiness contract")
 
     required_workflow = [
         "name: Jiejing CLS Probe Auto-Refresh",
@@ -187,16 +252,7 @@ def main() -> int:
         'operational.get("database", {}).get("status") == "ready"',
         'operational.get("queue", {}).get("status") == "ready"',
         'operational.get("worker", {}).get("status") == "ready"',
-        'item_by_key.get("monitoring_alerting", {}).get("status") == "cloud_monitoring_ready"',
-        'item_by_key.get("billing_quota", {}).get("status") == "private_beta_ready_paid_launch_pending"',
-        'billing.get("public_charging_allowed") is False',
-        'billing.get("charge_now_allowed") is False',
-        'billing.get("triggers_real_charge") is False',
-        'billing.get("triggers_real_refund") is False',
-        'billing.get("real_platform_writes_enabled") is False',
-        'billing.get("secret_exposed") is False',
-        'readiness.get("production_ready") is False',
-        'readiness.get("can_accept_real_customers") is False',
+        'python3 tools/jiejing_cls_public_readiness_contract.py',
         'READINESS_STATUS=verified',
         'JIEJING_CLS_PROBE_AUTO_REFRESH_STATUS=success',
     ]
@@ -250,6 +306,7 @@ def main() -> int:
 
     required_release_markers = [
         "deploy/github-actions/jiejing-cls-probe-auto-refresh.sh",
+        "tools/jiejing_cls_public_readiness_contract.py",
         "tools/test_jiejing_cls_probe_auto_refresh_guardrails.py",
         "docs/superpowers/specs/2026-08-21-cls-probe-auto-refresh-design.md",
         "docs/superpowers/plans/2026-08-21-cls-probe-auto-refresh-implementation-plan.md",

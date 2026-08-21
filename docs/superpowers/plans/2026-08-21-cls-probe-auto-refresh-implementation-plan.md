@@ -105,7 +105,7 @@
    - localhost/public `/health` 和 `/health/deep` value-free 检查
    - `docker compose ... up -d --no-deps --force-recreate jiejing-worker`
    - worker heartbeat/deep health ready
-   - `/readiness/product-saas` 的 `monitoring_alerting.status=cloud_monitoring_ready`
+   - CLS 探针独立证明监控就绪；公网 `/readiness/product-saas` 按脱敏合同不返回 info 级就绪项，因此必须不存在 `monitoring_alerting` warning/blocker
 2. 检查 health/readiness 的 database、queue、worker、real/requested writes、public charging 和 secret 字段。
 3. API recreate 或 health 失败时 worker 命令不得可达。
 4. worker 或 final readiness 失败时 run 非零，不重放探针。

@@ -229,37 +229,8 @@ readiness_contract_ready() {
   local payload_json
   payload_json="$(curl -fsS --max-time 18 -A 'Mozilla/5.0 Jiejing-CLS-Probe-Maintenance' \
     'https://app.jiejing.shop/readiness/product-saas' 2>/dev/null)" || return 1
-  python3 -c '
-import json
-import sys
-
-payload = json.load(sys.stdin)
-readiness = payload.get("readiness") or {}
-provider_status = readiness.get("provider_status") or {}
-billing = provider_status.get("billing") or {}
-items = readiness.get("items") if isinstance(readiness.get("items"), list) else []
-item_by_key = {
-    item.get("key"): item
-    for item in items
-    if isinstance(item, dict) and isinstance(item.get("key"), str)
-}
-ready = (
-    item_by_key.get("monitoring_alerting", {}).get("status") == "cloud_monitoring_ready"
-    and item_by_key.get("billing_quota", {}).get("status") == "private_beta_ready_paid_launch_pending"
-    and billing.get("public_charging_allowed") is False
-    and billing.get("charge_now_allowed") is False
-    and billing.get("triggers_real_charge") is False
-    and billing.get("triggers_real_refund") is False
-    and billing.get("real_platform_writes_enabled") is False
-    and billing.get("secret_exposed") is False
-    and readiness.get("production_ready") is False
-    and readiness.get("can_accept_real_customers") is False
-    and readiness.get("real_platform_writes_enabled") is False
-    and readiness.get("requested_real_platform_writes") is False
-    and readiness.get("secret_exposed") is False
-)
-sys.exit(0 if ready else 2)
-' <<<"$payload_json" >/dev/null 2>&1
+  python3 tools/jiejing_cls_public_readiness_contract.py \
+    <<<"$payload_json" >/dev/null 2>&1
 }
 
 sudo -n docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps --force-recreate jiejing-saas \

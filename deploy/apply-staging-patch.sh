@@ -31,6 +31,7 @@ FILES=(
   "deploy/staging-vault-init-unseal.sh"
   "deploy/github-actions/jiejing-runner-doctor.sh"
   "deploy/github-actions/jiejing-cls-probe-auto-refresh.sh"
+  "tools/jiejing_cls_public_readiness_contract.py"
   "deploy/github-actions/jiejing-staging-deploy.sh"
   "deploy/github-actions/jiejing-staging-rollback.sh"
   "deploy/apply-cloudflare-origin-ufw.sh"
@@ -601,6 +602,7 @@ python3 -m py_compile \
   tools/test_jiejing_agents_md_guardrails.py \
   tools/test_jiejing_github_actions_deploy_guardrails.py \
   tools/test_jiejing_github_runner_doctor_guardrails.py \
+  tools/jiejing_cls_public_readiness_contract.py \
   tools/test_jiejing_cls_probe_auto_refresh_guardrails.py \
   tools/jiejing_precloud_deployment_gate.py \
   tools/test_jiejing_current_state_guard.py \

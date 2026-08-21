@@ -83,7 +83,7 @@ Finally verify:
 
 - `/health` is HTTP 200 with database startup ready;
 - `/health/deep` is HTTP 200 with database, queue and worker ready;
-- `/readiness/product-saas` reports its `monitoring_alerting` item as `cloud_monitoring_ready` and remains otherwise truthful;
+- the independent CLS probe proves monitoring readiness; the public `/readiness/product-saas` summary intentionally omits info-only ready items, so it must contain no `monitoring_alerting` warning/blocker and must remain otherwise truthful;
 - real and requested platform writes are false;
 - public charging is not enabled;
 - `secret_exposed=false`.
