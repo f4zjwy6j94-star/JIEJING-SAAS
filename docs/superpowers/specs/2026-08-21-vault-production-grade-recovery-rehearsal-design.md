@@ -41,10 +41,10 @@ The rehearsal is **production-grade** because it uses the exact algorithms,
 version, policy, token lifecycle, offline-backup sequence, restore isolation,
 failure handling, and evidence schema intended for production.
 
-The rehearsal is **not production-certified** because all simulated custody
-units ultimately reside on one physical E drive. This drive cannot satisfy the
-three-independent-custody-unit requirement, regardless of directory separation,
-ACLs, encryption, or a later copy to USB media.
+The rehearsal is **not production-certified** because the simulated custody
+units reside on the E and F volumes of one physical disk 0. Those volumes cannot
+satisfy the three-independent-custody-unit requirement, regardless of directory
+separation, ACLs, encryption, or a later copy to USB media.
 
 No rehearsal result may set or imply any of the following:
 
@@ -134,6 +134,13 @@ The production ceremony will replace these simulated identities with public
 keys created and retained on three genuinely independent custody units. It will
 use the same `-pgp-keys` mechanism so plaintext production shares never pass
 through the Windows workstation or remain on the production host.
+
+The WSL GnuPG clock was observed up to roughly three minutes ahead of the
+Windows Vault process. Disposable rehearsal keys are therefore generated with a
+fixed five-minute creation-time offset into the past and a one-day expiry. This
+keeps Vault's future-key check strict while bounding the compatibility offset;
+the production ceremony must use synchronized operator clocks rather than rely
+on this rehearsal-only offset.
 
 ## Vault lifecycle
 
