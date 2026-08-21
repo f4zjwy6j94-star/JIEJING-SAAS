@@ -316,6 +316,10 @@ def main() -> int:
         return fail(f"public readiness must describe the Vault recovery boundary truthfully: {weak_vault_public}")
     if "three independent custody units" not in str(weak_vault_public.get("next_action") or "").lower():
         return fail(f"public readiness must prevent threshold shares from being concentrated: {weak_vault_public}")
+    medium_neutral_next_action = str(weak_vault_public.get("next_action") or "").lower()
+    for marker in ("usb is optional", "sealed paper share", "offline device"):
+        if marker not in medium_neutral_next_action:
+            return fail(f"public readiness must explain the medium-neutral custody options ({marker}): {weak_vault_public}")
     if "managed Postgres" in str(weak_vault_public.get("next_action") or ""):
         return fail(f"Vault-only debt must not direct the operator back to completed Postgres work: {weak_vault_public}")
     weak_vault_stale_items = {

@@ -244,6 +244,13 @@ def main() -> int:
         return fail(f"missing independent Vault media must remain an explicit external blocker: {vault_custody}")
     if vault_custody.get("owner") != "founder_operator":
         return fail(f"Vault custody must be presented as a founder-owned physical action: {vault_custody}")
+    vault_custody_label = str(vault_custody.get("label") or "")
+    vault_custody_next_action = str(vault_custody.get("next_action") or "")
+    if "不限 U 盘" not in vault_custody_label:
+        return fail(f"Vault custody must say that USB media is not mandatory: {vault_custody}")
+    for marker in ("加密 U 盘", "密封纸质份额", "独立离线设备", "每个单元只能保存一份"):
+        if marker not in vault_custody_next_action:
+            return fail(f"Vault custody must expose a medium-neutral low-cost option ({marker}): {vault_custody}")
     if vault_custody.get("triggers_real_charge") is not False or vault_custody.get("secret_exposed") is not False:
         return fail(f"Vault custody guidance must stay value-free and non-financial: {vault_custody}")
 

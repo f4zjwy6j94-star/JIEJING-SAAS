@@ -451,7 +451,7 @@ def _backup_item(settings: SaaSSettings, repository: SaaSRepository) -> Readines
             "blocked_vault_unseal_custody_and_backup_evidence_stale",
             "blocker" if settings.is_production_like else "warning",
             "Managed database backup controls are configured; Vault recovery shares and offline custody remain incomplete, and the latest backup evidence is outside its paid-launch freshness window.",
-            "Create at least three Vault recovery shares with a two-share threshold across three independent custody units, keep every unit below the threshold, verify offline custody, and record fresh backup and restore evidence before paid launch.",
+            "Create at least three Vault recovery shares with a two-share threshold across three independent custody units, keep every unit below the threshold, verify offline custody, and record fresh backup and restore evidence before paid launch. USB is optional: an encrypted USB drive, sealed paper share, or independent offline device in a different physical location are acceptable, but partitions on one physical disk are not independent.",
         )
     if vault_share_custody_debt and blockers.issubset(vault_share_custody_blockers):
         return ReadinessItem(
@@ -460,7 +460,7 @@ def _backup_item(settings: SaaSSettings, repository: SaaSRepository) -> Readines
             "blocked_vault_unseal_custody_not_ready",
             "blocker" if settings.is_production_like else "warning",
             "Managed database backup and restore controls are ready; Vault recovery shares and offline custody remain incomplete.",
-            "Create at least three Vault recovery shares with a two-share threshold across three independent custody units, keep every unit below the threshold, and verify offline custody before paid launch.",
+            "Create at least three Vault recovery shares with a two-share threshold across three independent custody units, keep every unit below the threshold, and verify offline custody before paid launch. USB is optional: an encrypted USB drive, sealed paper share, or independent offline device in a different physical location are acceptable, but partitions on one physical disk are not independent.",
         )
     return ReadinessItem(
         "backup_restore",

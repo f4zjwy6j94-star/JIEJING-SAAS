@@ -280,6 +280,7 @@ def main() -> int:
     if any(marker in vault_policy for marker in ('path "secret/*"', 'path "*"', 'capabilities = ["sudo"]')):
         return fail("production Vault policy must not grant wildcard or sudo access")
     secret_runbook = LOW_COST_SECRET_RUNBOOK.read_text(encoding="utf-8") if LOW_COST_SECRET_RUNBOOK.exists() else ""
+    normalized_secret_runbook = " ".join(secret_runbook.lower().split())
     for marker in (
         "kms is optional",
         "manual unseal",
@@ -288,9 +289,14 @@ def main() -> int:
         "never store the unseal key",
         "no single custody unit",
         "three independent custody units",
+        "usb is optional",
+        "sealed paper share",
+        "independent offline device",
+        "same physical disk",
+        "16 gb",
         "--vault-offline-custody-unit-count",
     ):
-        if marker not in secret_runbook.lower():
+        if marker not in normalized_secret_runbook:
             return fail(f"low-cost production secret runbook is missing {marker}")
 
     caddy = PRODUCTION_CADDY.read_text(encoding="utf-8")

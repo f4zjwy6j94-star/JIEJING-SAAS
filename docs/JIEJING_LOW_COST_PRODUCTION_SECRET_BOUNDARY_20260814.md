@@ -13,6 +13,22 @@ Managed KMS remains the later high-availability upgrade, not a paid launch block
   separately sealed offline copy held by another custodian or stored in a
   different physical safe. Two USB drives alone are not sufficient if either
   one also contains the third share.
+- USB is optional. A custody unit may instead be a sealed paper share, a
+  write-once optical disc, or an independent offline device such as an encrypted
+  external SSD/HDD, provided it is physically separate, remains offline, and
+  contains only one share. A different partition or drive letter on the same
+  physical disk is not an independent custody unit. A cloud drive, email,
+  ordinary password manager, synced folder, screenshot, or phone photo does not
+  count as an offline custody unit.
+- The share payload is tiny. If buying removable media, even 8 GB is technically
+  ample; choose a reputable 16 GB encrypted USB drive for availability and
+  reliability, not capacity. Larger capacity does not improve the custody
+  boundary.
+- Lowest-cost acceptable combinations include: one encrypted USB plus one sealed
+  paper share plus one independent offline device, or three sealed paper shares
+  held in tamper-evident envelopes by three separate custodians/physical safes.
+  Prepare paper without a network-connected printer or camera, verify it
+  privately, and keep each copy in a different location.
 - Perform manual unseal after a planned Vault or host restart.
 - Keep the shares offline across three independent operator-controlled custody units;
   no unit may contain enough shares to meet the unseal threshold.

@@ -840,11 +840,13 @@ def _external_blockers(
         ),
         _external_item(
             "vault_offline_custody",
-            "Vault 三份独立离线保管介质",
+            "Vault 三份独立离线保管单元（不限 U 盘）",
             vault_custody_ready,
-            str(
-                backup_restore.get("next_action")
-                or "准备三个彼此独立的离线保管介质，再执行三份密钥、两份解封阈值的正式保管仪式。"
+            (
+                "三个独立保管单元已经核验；继续按既定恢复演练周期维护。"
+                if vault_custody_ready
+                else "准备三个彼此独立的离线保管单元：可组合使用加密 U 盘、密封纸质份额或独立离线设备，"
+                "也可由另一保管人放在不同物理位置；每个单元只能保存一份，电脑同一块硬盘的不同盘符不算独立。"
             ),
             evidence=f"readiness_status={backup_restore.get('status') or 'missing'}; independent_custody_required=true",
         ),
