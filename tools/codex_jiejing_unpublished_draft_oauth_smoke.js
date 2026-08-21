@@ -40,6 +40,7 @@ let connections = [readOnlyConnection()];
 let oauthRequests = [];
 let responseMode = "valid";
 let serverClockOffsetMs = 0;
+let confirmationReadDelayMs = 0;
 
 function readOnlyConnection(status = "read_only_authorized") {
   return {
@@ -318,6 +319,9 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 200, {});
     return;
   }
+  if (req.method === "GET" && url.pathname === "/confirmations" && confirmationReadDelayMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, confirmationReadDelayMs));
+  }
   sendJson(res, 200, getPayload(url.pathname));
 });
 
@@ -407,13 +411,27 @@ async function main() {
     const firstCounts = { ...counters };
     const page = await openPage(context, base, consoleErrors);
     const draftButton = page.locator('[data-saas-action="plan-ebay-draft-oauth"]:visible').first();
+    confirmationReadDelayMs = 700;
+    const intakeRequest = page.waitForRequest(
+      (request) =>
+        request.method() === "POST" &&
+        new URL(request.url()).pathname === `/stores/${store.store_id}/ebay-oauth/unpublished-draft-confirmation`,
+      { timeout: 5000 },
+    );
     await draftButton.click();
-    await page.waitForTimeout(400);
+    await intakeRequest;
+    await page.waitForFunction(
+      () => typeof state !== "undefined" && state.saasLoading === false,
+      null,
+      { timeout: 5000 },
+    );
+    confirmationReadDelayMs = 0;
     if (counters.intake !== firstCounts.intake + 1 || counters.plan !== firstCounts.plan || oauthRedirects !== 0) {
       throw new Error("first click must create exactly one pending confirmation and no plan/redirect");
     }
     await assertNoSensitiveConfirmationLeak(page, "confirm-draft-oauth-ui", consoleErrors);
     const approve = page.locator('[data-saas-action="approve-confirmation"]:not([disabled])').first();
+    await approve.waitFor({ state: "visible", timeout: 5000 });
     await approve.click();
     await page.waitForTimeout(400);
     if (counters.decision !== firstCounts.decision + 1 || counters.preflight !== 0 || counters.execute !== 0 || counters.plan !== firstCounts.plan) {
