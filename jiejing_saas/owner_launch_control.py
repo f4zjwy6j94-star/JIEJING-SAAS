@@ -386,6 +386,7 @@ def build_owner_launch_control(
         "operations_observability": operations_observability,
         "resilience_war_room": resilience_war_room,
         "subscription_shutdown_control": subscription_shutdown_control,
+        "mainland_payment_cutover": billing_cutover,
         "fixed_launch_progress": fixed_launch_progress,
         "lanes": lanes,
         "external_blockers": external_blockers,
@@ -528,19 +529,70 @@ def _owner_mainland_cutover_view(
         "frontend_gets_secret": False,
         "secret_exposed": False,
     }
+    payment_section = {
+        "key": "wechat_pay_native_cutover",
+        "title": "WeChat Pay Native production prerequisites",
+        "status": "ready" if payment_ready else "blocked",
+        "blocked_by": payment_blocked,
+        "next_action": payment.get("next_action") or "Complete the WeChat Native production prerequisites.",
+        "public_paid_launch_allowed": False,
+        "charge_now_allowed": False,
+        "calls_external_payment_api": False,
+        "triggers_real_charge": False,
+        "triggers_real_refund": False,
+        "triggers_ebay_oauth": False,
+        "triggers_real_platform_write": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+    no_charge_section = {
+        "key": "no_charge_launch_rehearsal",
+        "title": "Zero-charge launch rehearsal and rollback evidence",
+        "status": "ready" if no_charge_ready else "blocked",
+        "blocked_by": no_charge_blocked,
+        "next_action": no_charge.get("next_action") or "Complete the final zero-charge rehearsal and rollback packet.",
+        "public_paid_launch_allowed": False,
+        "charge_now_allowed": False,
+        "calls_external_payment_api": False,
+        "triggers_real_charge": False,
+        "triggers_real_refund": False,
+        "triggers_ebay_oauth": False,
+        "triggers_real_platform_write": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+    ready_count = sum(1 for ready in (payment_ready, no_charge_ready) if ready)
+    all_ready = ready_count == 2
+    blocked_keys = [
+        key
+        for key, ready in (
+            ("wechat_pay_native_cutover", payment_ready),
+            ("no_charge_launch_rehearsal", no_charge_ready),
+        )
+        if not ready
+    ]
     return {
-        "contract_version": "2026-07-27-mainland-payment-owner-cutover-view-v1",
+        "contract_version": "2026-08-21-mainland-payment-cutover-v2",
         "provider": "wechat_pay_native",
-        "status": "ready_for_owner_approval" if payment_ready else "blocked",
+        "status": "ready_for_owner_approval" if all_ready else "blocked",
         "summary": {
-            "ready_count": 1 if payment_ready else 0,
-            "total_count": 1,
-            "blocked_count": 0 if payment_ready else 1,
-            "blocked_keys": payment_blocked,
-            "next_step": "" if payment_ready else "wechat_pay_native_cutover",
-            "next_action": payment.get("next_action") or "Complete the WeChat Native production prerequisites.",
+            "ready_count": ready_count,
+            "total_count": 2,
+            "blocked_count": 2 - ready_count,
+            "blocked_keys": blocked_keys,
+            "next_step": blocked_keys[0] if blocked_keys else "",
+            "next_action": (
+                ""
+                if all_ready
+                else (
+                    payment_section["next_action"]
+                    if not payment_ready
+                    else no_charge_section["next_action"]
+                )
+            ),
             "provider": "wechat_pay_native",
         },
+        "sections": [payment_section, no_charge_section],
         "no_charge_live_domain_evidence_packet": {
             "contract_version": "2026-07-27-no-charge-mainland-payment-evidence-v1",
             "status": "ready" if no_charge_ready else "blocked",
@@ -562,8 +614,13 @@ def _owner_mainland_cutover_view(
         ),
         "public_paid_launch_allowed": False,
         "charge_now_allowed": False,
+        "calls_external_payment_api": False,
         "calls_stripe_api": False,
         "triggers_real_charge": False,
+        "triggers_real_refund": False,
+        "triggers_ebay_oauth": False,
+        "triggers_real_platform_write": False,
+        "frontend_gets_payment_secret": False,
         "secret_exposed": False,
     }
 

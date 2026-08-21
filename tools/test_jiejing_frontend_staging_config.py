@@ -35,7 +35,7 @@ def main() -> int:
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
     frontend_asset_version = "20260803-product-feedback-v1"
-    app_js_asset_version = "20260821-ebay-refresh-proof-fast-v16"
+    app_js_asset_version = "20260821-mainland-payment-cutover-v17"
     for expected_asset in [
         f"./app.js?v={app_js_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -80,6 +80,8 @@ def main() -> int:
         return fail("frontend entry files must not retain the pre-current-store-refresh-proof cache version")
     if "./app.js?v=20260820-ebay-refresh-proof-v15" in index_html + app_html:
         return fail("frontend entry files must not retain the slow commercial-launch-gate refresh proof cache version")
+    if "./app.js?v=20260821-ebay-refresh-proof-fast-v16" in index_html + app_html:
+        return fail("frontend entry files must not retain the pre-mainland-payment-cutover cache version")
     if "./app.js?v=20260803-product-feedback-v1" in index_html + app_html:
         return fail("frontend entry files must not retain the stale app.js cache version")
     for stale_asset_version in [
@@ -700,12 +702,14 @@ def main() -> int:
         "calls_stripe_api=false",
         "triggers_real_charge=false",
         "function renderSaasBillingDomainCutoverReviewPanel",
-        "billing_domain_cutover_review_v1",
-        "stable_domain_checkout_portal_webhook_review_v1",
-        "billing_domain_cutover_rehearsal",
+        "mainland_payment_cutover_v2",
+        "wechat_pay_native_cutover",
+        "no_charge_launch_rehearsal",
+        "微信 Native 二维码",
+        "签名支付 / 退款回调",
+        "后端鉴权查单",
+        "零扣款演练与回滚证据",
         "payment_provider_secret_boundary=backend_env_or_vault_only",
-        "checkout_success_cancel_urls_on_stable_domain",
-        "customer_portal_return_url_on_stable_domain",
         "rollback_secret_scan_readiness_browser_smoke_required",
         "public_paid_launch_allowed=false",
         "owner_approval_required_for_reenable=true",
@@ -714,6 +718,52 @@ def main() -> int:
     ]:
         if billing_guardrail_marker not in app_js + app_html + styles_css:
             return fail(f"missing merchant billing guardrail marker: {billing_guardrail_marker}")
+    cutover_start = app_js.index("function saasBillingDomainCutoverReviewState")
+    cutover_end = app_js.index("function saasMainlandPaymentStrategyState", cutover_start)
+    cutover_body = app_js[cutover_start:cutover_end]
+    for legacy_mainland_marker in (
+        "Stripe",
+        "Checkout",
+        "Customer Portal",
+        "Price ID",
+        "stripe_",
+        "subscription_records",
+        "webhook_event_records",
+    ):
+        if legacy_mainland_marker in cutover_body:
+            return fail(f"mainland payment cutover card still exposes retired Stripe truth: {legacy_mainland_marker}")
+    blocker_start = app_js.index("function saasPaidLaunchBlockerCopy")
+    blocker_end = app_js.index("function saasBillingDomainCutoverReviewState", blocker_start)
+    blocker_body = app_js[blocker_start:blocker_end]
+    for required_mainland_marker in (
+        "微信 Native 正式通道",
+        "零扣款上线演练",
+        "签名回调或后端鉴权查单",
+        "mainland_payment_cutover_v2",
+    ):
+        if required_mainland_marker not in blocker_body:
+            return fail(f"paid launch blocker card missing canonical mainland marker: {required_mainland_marker}")
+    for legacy_mainland_marker in (
+        "Stripe",
+        "Checkout",
+        "Customer Portal",
+        "Price ID",
+        "stripe_",
+        "subscription Checkout",
+    ):
+        if legacy_mainland_marker in blocker_body:
+            return fail(f"paid launch blocker card still exposes retired Stripe truth: {legacy_mainland_marker}")
+    settings_tabs_start = app_js.index("function saasSettingsTabDefinitions")
+    owner_tabs_start = app_js.index('if (saasOwnerLaunchCanView())', settings_tabs_start)
+    owner_tabs_end = app_js.index("return tabs;", owner_tabs_start)
+    owner_tabs_body = app_js[owner_tabs_start:owner_tabs_end]
+    for retired_panel in (
+        "renderSaasBillingProviderPanel()",
+        "renderSaasBillingProviderRehearsalPanel(ctx)",
+        "Stripe live、WAF",
+    ):
+        if retired_panel in owner_tabs_body:
+            return fail(f"owner control room still renders retired Stripe launch truth: {retired_panel}")
     snapshot_start = app_js.index("function buildSaasProtectedStateSnapshot")
     snapshot_end = app_js.index("function saveSaasProtectedStateSnapshot", snapshot_start)
     snapshot_body = app_js[snapshot_start:snapshot_end]

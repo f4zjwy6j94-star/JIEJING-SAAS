@@ -49,8 +49,18 @@ def main() -> int:
         return fail(f"platform allowlisted admin permissions should mark platform admin: {platform_admin['permissions_body']}")
     if platform_admin["owner_status"] != 200 or platform_admin["production_status"] != 200 or platform_admin["ledger_status"] != 200:
         return fail(f"platform allowlisted admin should receive 200: {platform_admin}")
-    if any(status != 200 for status in platform_admin["protected_launch_statuses"].values()):
-        return fail(f"platform allowlisted admin should receive protected launch evidence: {platform_admin['protected_launch_statuses']}")
+    legacy_keys = {
+        "owner_billing_domain",
+        "owner_billing_provider",
+        "legacy_commercial_billing_domain",
+        "legacy_commercial_billing_provider",
+    }
+    for key, status in platform_admin["protected_launch_statuses"].items():
+        expected = 410 if key in legacy_keys else 200
+        if status != expected:
+            return fail(f"platform admin protected launch status mismatch: {key}={status}, expected={expected}")
+    if any(status != 401 for status in platform_admin["anonymous_legacy_statuses"].values()):
+        return fail(f"legacy retirement routes must remain authenticated: {platform_admin['anonymous_legacy_statuses']}")
     packet = platform_admin["owner_body"].get("owner_launch_control") or {}
     if packet.get("audience") != "platform_internal_admin" or packet.get("customer_visible") is not False:
         return fail(f"platform admin packet should stay internal: {packet}")
@@ -71,10 +81,20 @@ def main() -> int:
     if "platform-admin@example.test" in json.dumps(ledger, ensure_ascii=False).lower():
         return fail("production evidence ledger must not echo internal admin emails")
     protected_bodies = platform_admin["protected_launch_bodies"]
-    if (protected_bodies.get("owner_billing_domain") or {}).get("billing_domain_cutover_rehearsal", {}).get("contract_version") != "2026-06-18-stripe-domain-cutover-rehearsal":
-        return fail("owner billing domain cutover rehearsal contract missing")
-    if (protected_bodies.get("owner_billing_provider") or {}).get("billing_provider_evidence_register", {}).get("contract_version") != "2026-07-02-live-billing-provider-evidence-register":
-        return fail("owner billing provider evidence register contract missing")
+    expected_legacy_codes = {
+        "owner_billing_domain": "legacy_stripe_billing_cutover_retired",
+        "legacy_commercial_billing_domain": "legacy_stripe_billing_cutover_retired",
+        "owner_billing_provider": "legacy_stripe_billing_evidence_retired",
+        "legacy_commercial_billing_provider": "legacy_stripe_billing_evidence_retired",
+    }
+    for key, code in expected_legacy_codes.items():
+        body = protected_bodies.get(key) or {}
+        if body.get("error") != code:
+            return fail(f"legacy billing route must return a fixed retirement code: {key} {body}")
+        serialized = json.dumps(body, ensure_ascii=False).lower()
+        for forbidden in ("stripe", "checkout", "portal", "price_", "sk_live", "whsec_"):
+            if forbidden in serialized and forbidden not in code:
+                return fail(f"legacy retirement body leaked stale provider detail: {key} {forbidden}")
     if (protected_bodies.get("owner_edge_cutover") or {}).get("edge_cutover_preflight", {}).get("contract_version") != "2026-06-18-edge-waf-origin-callback-preflight":
         return fail("owner edge cutover preflight contract missing")
     if (protected_bodies.get("owner_paid_launch") or {}).get("paid_launch_approval_packet", {}).get("contract_version") != "2026-07-27-paid-launch-approval-packet-v2":
@@ -172,6 +192,15 @@ def _run_case(*, port: int, db_name: str, email: str, allowlist: str) -> dict[st
             "backup_plan": "/backup/plan",
             "provider_job_contracts": "/provider-job-contracts",
         }
+        anonymous_legacy = {
+            key: _fetch_json_or_error(f"{base}{protected_routes[key]}")["status"]
+            for key in (
+                "owner_billing_domain",
+                "owner_billing_provider",
+                "legacy_commercial_billing_domain",
+                "legacy_commercial_billing_provider",
+            )
+        }
         protected = {key: _fetch_json_or_error(f"{base}{route}", token=token) for key, route in protected_routes.items()}
         return {
             "owner_status": owner["status"],
@@ -184,6 +213,7 @@ def _run_case(*, port: int, db_name: str, email: str, allowlist: str) -> dict[st
             "ledger_body": ledger["body"],
             "protected_launch_statuses": {key: value["status"] for key, value in protected.items()},
             "protected_launch_bodies": {key: value["body"] for key, value in protected.items()},
+            "anonymous_legacy_statuses": anonymous_legacy,
         }
     finally:
         process.terminate()

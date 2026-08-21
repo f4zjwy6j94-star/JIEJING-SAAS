@@ -41,10 +41,8 @@ from .billing_domestic import (
     reconcile_domestic_billing_orders,
     request_domestic_billing_refund_review,
 )
-from .billing_domain_cutover_rehearsal import build_billing_domain_cutover_rehearsal
 from .billing_manual_beta import create_manual_beta_payment_order, confirm_manual_beta_payment_order, list_manual_beta_payment_orders
 from .billing_payment_options import build_mainland_payment_strategy, validate_mainland_payment_launch_for_public
-from .billing_provider_evidence_register import build_billing_provider_evidence_register
 from .billing_provider_rehearsal import run_billing_provider_rehearsal
 from .billing_test_provider import apply_test_billing_event
 from .billing_webhook import handle_billing_webhook
@@ -1731,14 +1729,14 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not self._is_platform_internal_admin(identity):
                 self._send_error(HTTPStatus.FORBIDDEN, "billing domain cutover rehearsal is platform-internal admin only")
                 return
-            self._send_json({"billing_domain_cutover_rehearsal": build_billing_domain_cutover_rehearsal(self.settings, self.repository)})
+            self._send_error(HTTPStatus.GONE, "legacy_stripe_billing_cutover_retired")
             return
 
         if path in {"owner/billing-provider-evidence-register", "commercial/billing-provider-evidence-register"}:
             if not self._is_platform_internal_admin(identity):
                 self._send_error(HTTPStatus.FORBIDDEN, "billing provider evidence register is platform-internal admin only")
                 return
-            self._send_json({"billing_provider_evidence_register": build_billing_provider_evidence_register(self.settings, self.repository)})
+            self._send_error(HTTPStatus.GONE, "legacy_stripe_billing_evidence_retired")
             return
 
         if path in {"owner/paid-launch-approval-packet", "commercial/paid-launch-approval-packet"}:
@@ -8377,8 +8375,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "owner",
                 "platform-internal launch and payment cutover evidence",
                 [
-                    "GET /owner/billing-domain-cutover-rehearsal",
-                    "GET /owner/billing-provider-evidence-register",
+                    "GET /owner/launch-control",
                     "GET /owner/edge-cutover-preflight",
                     "GET /owner/paid-launch-approval-packet",
                 ],

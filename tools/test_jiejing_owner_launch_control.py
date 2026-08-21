@@ -69,6 +69,46 @@ def main() -> int:
     )
     if cutover_view.get("status") != "ready_for_owner_approval":
         return fail(f"legacy Stripe rehearsal must not block mainland owner view: {cutover_view}")
+    cutover_sections = {
+        item.get("key"): item
+        for item in cutover_view.get("sections", [])
+        if isinstance(item, dict)
+    }
+    if set(cutover_sections) != {"wechat_pay_native_cutover", "no_charge_launch_rehearsal"}:
+        return fail(f"mainland cutover must expose exactly the two canonical WeChat sections: {cutover_view}")
+    partial_packet = {
+        **canonical_packet,
+        "steps": [
+            {"key": "wechat_pay_native_cutover", "status": "ready", "blocked_by": []},
+            {
+                "key": "no_charge_launch_rehearsal",
+                "status": "blocked",
+                "blocked_by": ["final_commercial_smoke_not_verified"],
+            },
+        ],
+    }
+    partial_cutover = _owner_mainland_cutover_view(
+        paid_packet=partial_packet,
+        legacy_billing_cutover={"status": "ready_for_owner_approval"},
+    )
+    if partial_cutover.get("status") != "blocked":
+        return fail(f"payment readiness must not hide a missing zero-charge rehearsal: {partial_cutover}")
+    for marker in (
+        "public_paid_launch_allowed",
+        "charge_now_allowed",
+        "calls_external_payment_api",
+        "triggers_real_charge",
+        "triggers_real_refund",
+        "triggers_ebay_oauth",
+        "triggers_real_platform_write",
+        "frontend_gets_payment_secret",
+        "secret_exposed",
+    ):
+        if cutover_view.get(marker) is not False:
+            return fail(f"mainland cutover unsafe flag should be false: {marker}")
+        for section in cutover_view.get("sections") or []:
+            if not isinstance(section, dict) or section.get(marker) is not False:
+                return fail(f"mainland cutover section unsafe flag should be false: {marker} {section}")
     edge_view = _owner_mainland_edge_view(
         edge={
             "status": "blocked_by_stripe_callback",
@@ -95,6 +135,13 @@ def main() -> int:
         return fail("owner launch control must stay platform-internal")
     if packet.get("public_paid_launch_allowed") is not False:
         return fail("owner launch control must not directly allow paid public launch")
+    mainland_cutover = (
+        packet.get("mainland_payment_cutover")
+        if isinstance(packet.get("mainland_payment_cutover"), dict)
+        else {}
+    )
+    if mainland_cutover.get("contract_version") != "2026-08-21-mainland-payment-cutover-v2":
+        return fail(f"canonical mainland payment cutover is missing from owner control: {mainland_cutover}")
     fixed_progress = packet.get("fixed_launch_progress") if isinstance(packet.get("fixed_launch_progress"), dict) else {}
     if fixed_progress.get("contract_version") != "2026-08-20-fixed-public-launch-progress-v2":
         return fail("fixed launch progress contract missing from owner control")

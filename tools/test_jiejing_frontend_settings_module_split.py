@@ -171,13 +171,21 @@ def main() -> int:
         "edge_cutover_preflight: state.saasEdgeCutoverPreflight || null",
         "saasPaidLaunchApprovalPacket",
         "/owner/paid-launch-approval-packet",
-        '"/owner/billing-domain-cutover-rehearsal", { billing_domain_cutover_rehearsal: null }, 15000',
+        "mainland_payment_cutover",
         '`/commercial/launch-gate?store_id=${encodeURIComponent(store.store_id)}`, { commercial_launch_gate: state.saasCommercialLaunchGate || null }, 20000',
         "paid_launch_approval_packet: state.saasPaidLaunchApprovalPacket || null",
         "refreshLaunchGate = true",
     ]:
         if marker not in app_js:
             return fail(f"app.js wrapper should delegate to settings module: {marker}")
+    for retired in (
+        "/owner/billing-domain-cutover-rehearsal",
+        "/commercial/billing-domain-cutover-rehearsal",
+        "/owner/billing-provider-evidence-register",
+        "/commercial/billing-provider-evidence-register",
+    ):
+        if retired in app_js:
+            return fail(f"current Settings flow must not fetch retired Stripe launch truth: {retired}")
     print("PASS jiejing_frontend_settings_module_split")
     return 0
 

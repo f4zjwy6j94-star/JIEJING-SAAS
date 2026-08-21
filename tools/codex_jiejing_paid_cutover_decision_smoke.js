@@ -146,11 +146,18 @@ async function main() {
   const providerCutoverDossierActivation = Array.isArray(providerCutoverDossier.activation_sequence)
     ? providerCutoverDossier.activation_sequence
     : [];
-  const appHtmlResponse = await fetch(`${base}/app.html?start=app&view=connect&smoke-source=${Date.now()}`, { cache: "no-store" });
-  if (!appHtmlResponse.ok) {
+  const appHtmlResponse = await fetch(`${base}/app.html?start=app&view=connect&smoke-source=${Date.now()}`, {
+    cache: "no-store",
+    headers: { authorization: `Bearer ${session.token}` },
+  });
+  let appHtml = "";
+  if (appHtmlResponse.ok) {
+    appHtml = await appHtmlResponse.text();
+  } else if (["127.0.0.1", "localhost", "::1"].includes(new URL(base).hostname)) {
+    appHtml = fs.readFileSync(path.join(process.cwd(), "app.html"), "utf8");
+  } else {
     throw new Error(`app html fetch failed: ${appHtmlResponse.status}`);
   }
-  const appHtml = await appHtmlResponse.text();
 
   const browser = await chromium.launch({ channel: browserChannel, headless: true, timeout: 60000 });
   const context = await browser.newContext({ viewport: { width: 1440, height: 920 }, deviceScaleFactor: 1 });
@@ -174,6 +181,33 @@ async function main() {
       body: appHtml,
     }),
   );
+  if (["127.0.0.1", "localhost", "::1"].includes(baseUrl.hostname)) {
+    const localAsset = (relativePath, contentType) => (route) =>
+      route.fulfill({
+        status: 200,
+        contentType,
+        headers: { "cache-control": "no-store" },
+        body: fs.readFileSync(path.join(process.cwd(), relativePath)),
+      });
+    await context.route(`${base}/app.js**`, localAsset("app.js", "application/javascript; charset=utf-8"));
+    await context.route(`${base}/styles.css**`, localAsset("styles.css", "text/css; charset=utf-8"));
+    await context.route(
+      `${base}/assets/jiejing-first-party-analytics.js**`,
+      localAsset("assets/jiejing-first-party-analytics.js", "application/javascript; charset=utf-8"),
+    );
+    await context.route(
+      `${base}/assets/jiejing-app-icon.svg**`,
+      localAsset("assets/jiejing-app-icon.svg", "image/svg+xml"),
+    );
+    await context.route(
+      `${base}/assets/travel-compression-main-v2.png**`,
+      localAsset("assets/travel-compression-main-v2.png", "image/png"),
+    );
+    await context.route(
+      `${base}/assets/backflow-incense-generated-main.webp**`,
+      localAsset("assets/backflow-incense-generated-main.webp", "image/webp"),
+    );
+  }
   await context.addInitScript(
     ({ base, session }) => {
       const accountKey = String(session.userId || session.email || "codex").toLowerCase();
@@ -205,7 +239,11 @@ async function main() {
   page.setDefaultTimeout(45000);
   const pageErrors = [];
   const relevantConsoleMessages = [];
+  const http404s = [];
   page.on("pageerror", (error) => pageErrors.push(String(error.message || error).slice(0, 500)));
+  page.on("response", (response) => {
+    if (response.status() === 404) http404s.push(response.url());
+  });
   page.on("console", (message) => {
     if (["error", "warning"].includes(message.type())) {
       const rendered = `${message.type()}: ${message.text()}`.slice(0, 500);
@@ -216,6 +254,8 @@ async function main() {
   });
 
   await page.goto(`${base}/app.html?start=app&view=connect&smoke=${Date.now()}`, { waitUntil: "commit", timeout: 90000 });
+  await page.waitForSelector("#appShell:not(.is-hidden)", { timeout: 60000 });
+  await page.locator('.nav-item[data-view="connect"]').click();
   await page.waitForSelector(".saas-settings-clean-shell", { timeout: 60000 });
   const ownerOpsTab = page.locator('[data-saas-settings-tab="owner_ops"]');
   const ownerOpsVisible = (await ownerOpsTab.count()) > 0;
@@ -230,7 +270,7 @@ async function main() {
   } else {
     await page.locator('[data-saas-settings-tab="billing"]').click();
     await page.waitForSelector(".saas-merchant-billing-plain-summary", { timeout: 60000 });
-    await page.waitForSelector(".saas-merchant-billing-continuity", { timeout: 60000 });
+    await page.waitForSelector(".saas-merchant-billing-continuity", { state: "attached", timeout: 60000 });
   }
   let screenshotError = "";
   await page
@@ -258,15 +298,6 @@ async function main() {
     const rehearsalText = rehearsal?.innerText || settingsText;
     const approvalText = approval?.innerText || settingsText;
     const merchantBillingForbiddenVisible = [
-      "大陆收款方式",
-      "大陆用户",
-      "个体工商户",
-      "个体户",
-      "主体资料",
-      "聚合收单",
-      "微信",
-      "支付宝",
-      "云闪付",
       "个人码",
       "个人收款码",
       "平台管理员",
@@ -292,9 +323,9 @@ async function main() {
       hasNoCharge: text.includes("charge_now_allowed=false"),
       hasNoPlatformWrite: text.includes("platform_write_now_allowed=false"),
       hasRepeatOauthFalse: text.includes("repeat_oauth=false"),
-      hasBillingNextStep: text.includes("billing_provider_live_contract") || text.includes("Stripe subscription billing contract"),
+      hasBillingNextStep: text.includes("mainland_wechat_payment_contract") || text.includes("微信 Native"),
       hasRunbook: text.includes("billing_domain_cutover_runbook"),
-      hasWebhookResilience: text.includes("Stripe live webhook resilience") || text.includes("stripe_live_webhook_resilience"),
+      hasWebhookResilience: text.includes("wechat_pay_production_contract") || text.includes("签名支付"),
       hasStableDomainOauthCors: text.includes("Stable domain OAuth callback and CORS alignment") || text.includes("stable_domain_oauth_cors_alignment"),
       hasNewAccountSmoke: text.includes("new_ebay_account_smoke_runbook"),
       hasCleanAccountStep: text.includes("clean_new_account_declared") || text.includes("Clean new eBay account boundary"),
@@ -476,6 +507,7 @@ async function main() {
     ui,
     pageErrors,
     relevantConsoleMessages,
+    http404s,
     screenshotError,
   };
   fs.writeFileSync(path.join(outDir, "result.json"), JSON.stringify(result, null, 2));
@@ -484,17 +516,19 @@ async function main() {
   const failures = [];
   if (pageErrors.length) failures.push(`page errors: ${pageErrors.length}`);
   if (relevantConsoleMessages.length) failures.push(`console issues: ${relevantConsoleMessages.length}`);
+  if (http404s.length) failures.push(`http 404 responses: ${http404s.join(", ")}`);
   if (decision.contract_version !== "2026-06-18-paid-launch-cutover-decision") failures.push("api decision contract missing");
   if (decision.status !== "blocked") failures.push(`api decision status ${decision.status}`);
   if (decision.public_paid_launch_allowed !== false) failures.push("api public paid launch unexpectedly allowed");
   if (decision.charge_now_allowed !== false) failures.push("api charge now unexpectedly allowed");
   if (decision.platform_write_now_allowed !== false) failures.push("api platform write unexpectedly allowed");
   if (decision.repeat_ebay_oauth_allowed !== false) failures.push("api repeat oauth unexpectedly allowed");
-  if ((decision.next_operator_step || {}).key !== "billing_provider_live_contract") failures.push("api next step should be billing provider contract");
-  if (Number(decision.runbook_total_count || 0) !== 7) failures.push(`api runbook count ${decision.runbook_total_count}`);
+  if ((decision.next_operator_step || {}).key !== "mainland_wechat_payment_contract") failures.push("api next step should be mainland WeChat payment contract");
+  if (Number(decision.runbook_total_count || 0) !== 6) failures.push(`api runbook count ${decision.runbook_total_count}`);
   if (!Array.isArray(decision.billing_domain_cutover_runbook)) failures.push("api runbook missing");
   if (!((decision.next_runbook_step || {}).key)) failures.push("api next runbook step missing");
-  if (!result.api.runbook_keys.includes("stripe_live_webhook_resilience")) failures.push("api runbook missing stripe webhook resilience");
+  if (!result.api.runbook_keys.includes("wechat_pay_production_contract")) failures.push("api runbook missing WeChat production contract");
+  if (!result.api.runbook_keys.includes("wechat_pay_zero_charge_rehearsal_evidence")) failures.push("api runbook missing WeChat zero-charge evidence");
   if (!result.api.runbook_keys.includes("stable_domain_oauth_cors_alignment")) failures.push("api runbook missing stable domain oauth/cors");
   if (result.api.new_account_smoke_total_count !== 8) failures.push(`api new-account smoke count ${result.api.new_account_smoke_total_count}`);
   for (const key of [

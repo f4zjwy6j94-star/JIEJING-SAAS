@@ -179,6 +179,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("fixed_launch_progress", [sys.executable, "tools/test_jiejing_fixed_launch_progress.py"]),
     ("merchant_workflow_validation", [sys.executable, "tools/test_jiejing_merchant_workflow_validation.py"]),
     ("version_bound_release_evidence", [sys.executable, "tools/test_jiejing_version_bound_release_evidence.py"]),
+    ("owner_launch_control", [sys.executable, "tools/test_jiejing_owner_launch_control.py"]),
     ("owner_launch_control_access", [sys.executable, "tools/test_jiejing_owner_launch_control_access.py"]),
     ("billing_provider_webhook", [sys.executable, "tools/test_jiejing_billing_provider_webhook.py"]),
     ("billing_webhook_subscription_state", [sys.executable, "tools/test_jiejing_billing_webhook_subscription_state.py"]),

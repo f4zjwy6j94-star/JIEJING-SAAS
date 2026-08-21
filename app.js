@@ -27745,7 +27745,6 @@ async function refreshSaasState(options = {}) {
       domesticBillingOrders,
       paymentOptions,
       manualBetaPaymentOrders,
-      billingDomainCutoverRehearsal,
       edgeCutoverPreflight,
       paidLaunchApprovalPacket,
       modelValueGate,
@@ -27805,9 +27804,6 @@ async function refreshSaasState(options = {}) {
         ? optionalSaasFetchFast("/billing/payment-options", { payment_options: null })
         : Promise.resolve({ payment_options: null, skipped: "owner_admin_only_payment_options" }),
       optionalSaasFetchFast("/billing/manual-beta/orders", { manual_beta_payment_orders: [] }),
-      canViewPlatformInternal
-        ? optionalSaasFetchFast("/owner/billing-domain-cutover-rehearsal", { billing_domain_cutover_rehearsal: null }, 15000)
-        : Promise.resolve({ billing_domain_cutover_rehearsal: null, skipped: "owner_admin_only_billing_cutover" }),
       canViewPlatformInternal
         ? optionalSaasFetchFast("/owner/edge-cutover-preflight", { edge_cutover_preflight: state.saasEdgeCutoverPreflight || null }, 15000)
         : Promise.resolve({ edge_cutover_preflight: null, skipped: "owner_admin_only_edge_cutover" }),
@@ -27934,7 +27930,9 @@ async function refreshSaasState(options = {}) {
     state.saasDomesticBillingOrders = domesticBillingOrders.domestic_billing_orders || [];
     state.saasPaymentOptions = canViewPlatformInternal ? paymentOptions.payment_options || rawBillingPlan?.payment_strategy || null : null;
     state.saasManualBetaPaymentOrders = manualBetaPaymentOrders.manual_beta_payment_orders || [];
-    state.saasBillingDomainCutoverRehearsal = canViewPlatformInternal ? billingDomainCutoverRehearsal.billing_domain_cutover_rehearsal || null : null;
+    state.saasBillingDomainCutoverRehearsal = canViewPlatformInternal
+      ? state.saasOwnerLaunchControl?.mainland_payment_cutover || null
+      : null;
     state.saasEdgeCutoverPreflight = canViewPlatformInternal ? edgeCutoverPreflight.edge_cutover_preflight || state.saasEdgeCutoverPreflight || null : null;
     state.saasPaidLaunchApprovalPacket = canViewPlatformInternal ? paidLaunchApprovalPacket.paid_launch_approval_packet || null : null;
     state.saasModelValueGate = modelValueGate.model_value_gate || null;
@@ -36202,83 +36200,59 @@ function renderSaasBillingProviderRehearsalPanel(ctx = saasMerchantWorkbenchCont
 
 function saasPaidLaunchBlockerCopy(key = "") {
   const labels = {
-    billing_provider_not_selected: ["选择正式 provider", "选择 Stripe、Paddle、Lemon Squeezy 或国内商户支付通道。"],
-    billing_plans_not_published: ["发布正式套餐", "正式收费必须使用可审计的套餐和价格 ID，不能靠手填金额。"],
-    external_paid_subscription_provider_not_configured: ["接入正式收款通道", "手动或测试通道只能内测，不能作为公开收费入口。"],
-    test_billing_provider_not_allowed_for_paid_launch: ["关闭测试通道", "测试通道只能证明流程，不能收真实客户的钱。"],
-    billing_webhook_not_configured: ["配置签名 webhook", "订阅、续费、失败和取消必须由 provider 签名事件回写。"],
-    billing_plan_ids_missing: ["补齐 live Price ID", "公开订阅要绑定真实 Price，不使用废弃 plan object。"],
-    stripe_checkout_not_ready: ["验证 subscription Checkout", "首笔订阅支付走 Checkout Sessions mode=subscription。"],
-    stripe_customer_portal_not_ready: ["验证 Customer Portal", "升级、降级、取消、付款方式修改走自助订阅门户。"],
-    quota_enforcement_not_enabled: ["启用 quota hard-stop", "欠费、取消或超额时只能停高成本任务，不能删资料。"],
+    wechat_pay_native_cutover: ["微信 Native 正式通道", "补齐商户配置、签名支付/退款回调、后端鉴权查单和受控验收。"],
+    no_charge_launch_rehearsal: ["零扣款上线演练", "完成隔离演练、回滚、readiness、浏览器 smoke 和 secret scan。"],
     payment_merchant_entity_not_ready: ["准备商户主体", "正式收款需要结算主体、服务说明、客服和退款入口。"],
     mainland_payment_icp_subject_not_ready: ["对齐域名和主体", "国内支付审核常看域名、备案和商户主体一致性。"],
-    domestic_payment_provider_not_ready: ["开通正式收款通道", "公开收费必须使用可签约、可回调、可对账的商户通道。"],
-    domestic_payment_provider_not_selected: ["选择正式收款通道", "人工收款不能作为公开收费入口。"],
-    domestic_payment_adapter_not_enabled: ["接入后端订单适配器", "浏览器不能直接开通权益，必须后端创建订单。"],
-    domestic_signed_webhook_not_configured: ["配置签名回调/查单", "只有签名回调或主动查单通过后才发放订阅和额度。"],
+    domestic_payment_provider_not_ready: ["开通微信商户通道", "公开收费必须使用可签约、可回调、可对账的微信商户通道。"],
+    domestic_payment_provider_not_selected: ["选择微信 Native", "人工收款不能作为公开收费入口。"],
+    domestic_payment_adapter_not_enabled: ["接入后端订单适配器", "浏览器不能直接开通权益，必须由后端创建订单。"],
+    domestic_signed_webhook_not_configured: ["配置签名回调或后端鉴权查单", "只有签名回调或后端鉴权查单通过后才发放权益和额度。"],
     domestic_live_cutover_not_approved: ["主理人批准 live cutover", "真实收款不能由代码部署自动打开。"],
     manual_qr_collection_not_paid_launch_ready: ["人工收款仅限内测", "人工收款只可人工对账，不能自动续费、停用和发票审计。"],
     paid_launch_owner_approval_required: ["等待主理人最终评审", "即使技术证据齐全，真实收费也必须由主理人确认后才能打开。"],
+    final_commercial_smoke_not_verified: ["完成最终商业 smoke", "在收费开关保持关闭时验证注册、支付回调、readiness 和回滚路径。"],
   };
-  return labels[key] || [String(key || "unknown_blocker").replace(/_/g, " "), "保留为正式上线前阻断项，先补齐后端证据再评审。"];
+  return labels[key] || ["待补生产证据", "未知或畸形阻断项不会直接显示；请从后端安全证据包重新核对。"];
 }
 
 function saasPaidCutoverMatrixCopy(item = {}) {
   const key = String(item.key || "");
   const labels = {
-    stripe_subscription_checkout_contract: ["订阅 Checkout", "首笔订阅支付走 Checkout Sessions mode=subscription，并绑定 live Price ID。"],
-    stripe_customer_portal_contract: ["订阅自助管理", "升级、降级、取消和付款方式修改走 Customer Portal，不让前端接触支付密钥。"],
-    stripe_signed_webhook_contract: ["签名 webhook", "订阅、invoice paid、payment failed 和取消事件必须签名验证后才能改权益。"],
-    stripe_api_webhook_version_alignment: ["API / webhook 版本", "后端 Stripe-Version 和 live webhook endpoint API version 必须一致。"],
-    stripe_webhook_failure_paths: ["webhook 异常路径", "重复、延迟、乱序事件要可幂等处理，不能重复发放额度。"],
-    stripe_entitlement_quota_lifecycle: ["权益与 quota lifecycle", "invoice paid、取消、付款失败和 portal 变更都要正确更新订阅和 hard-stop。"],
+    wechat_pay_native_cutover: ["微信 Native 正式通道", "商户配置、签名回调或后端鉴权查单、受控付款和退款边界必须同时成立。"],
+    no_charge_launch_rehearsal: ["零扣款上线演练", "只在隔离环境验证订单、回调、权益、回滚和安全门禁，不调用真实支付接口。"],
   };
   if (labels[key]) return labels[key];
-  return [String(item.title || item.label || key || "cutover step").replace(/_/g, " "), item.next_action || "补齐这一步证据后再评审。"];
+  return ["未识别的切换证据", "未知或重复证据会按阻断处理，不会自动进入收费评审。"];
 }
 
 function renderSaasBillingPaidLaunchBlockersPanel(ctx = saasMerchantWorkbenchContext()) {
-  const billing = saasMerchantBillingGuardrailState();
-  const payment = saasMainlandPaymentStrategyState();
-  const plan = billing.plan || {};
-  const provider = billing.provider || {};
-  const quota = billing.quota || {};
-  const summary = plan.billing_live_cutover_summary && typeof plan.billing_live_cutover_summary === "object" ? plan.billing_live_cutover_summary : {};
-  const matrix = Array.isArray(plan.billing_live_cutover_matrix) ? plan.billing_live_cutover_matrix : [];
-  const paidBlockers = Array.isArray(plan.paid_launch_blockers) ? plan.paid_launch_blockers : [];
-  const paymentBlockers = Array.isArray(payment.blockers) ? payment.blockers : [];
-  const blockers = Array.from(new Set([...paidBlockers, ...paymentBlockers].filter(Boolean)));
-  const blockedMatrix = matrix.filter((item) => item && item.status !== "ready");
-  const nextMatrix = blockedMatrix[0] || {};
-  const paidReady = Boolean(plan.billing_ready_for_paid_launch && payment.paidLaunchReady);
-  const ownerReviewReady = Boolean(summary.ready_for_owner_approval && !blockedMatrix.length && !blockers.length);
+  const review = saasBillingDomainCutoverReviewState();
+  const matrixRows = review.sections;
+  const blockedMatrix = matrixRows.filter((item) => item.status !== "ready");
+  const blockerKeys = Array.isArray(review.summary.blocked_keys)
+    ? review.summary.blocked_keys.filter((key) => typeof key === "string").slice(0, 4)
+    : [];
+  const visibleBlockers = blockerKeys.length ? blockerKeys : blockedMatrix.map((item) => item.key);
+  const ownerReviewReady = review.readyForOwnerApproval;
   const phaseRows = [
     {
       label: "Provider",
-      title: provider.external_paid_provider_configured ? "正式 provider 已选" : "仍是内测 / 测试 provider",
-      detail: provider.external_paid_provider_configured
-        ? "继续核对 live key、正式 Price、Checkout、Portal 和 webhook。"
-        : "当前不能公开收费；正式收款必须切到商户 provider。",
-      tone: provider.external_paid_provider_configured ? "green" : "amber",
+      title: "微信 Native",
+      detail: "大陆正式收款只认微信商户后端配置，不使用人工二维码作为公开收费入口。",
+      tone: review.sectionByKey.wechat_pay_native_cutover?.status === "ready" ? "green" : "amber",
     },
     {
-      label: "Checkout",
-      title: billing.checkoutSessions.ready ? "subscription Checkout ready" : "Checkout 待验证",
-      detail: "首笔订阅支付走 Checkout Sessions mode=subscription，并使用 Price ID。",
-      tone: billing.checkoutSessions.ready ? "green" : "amber",
+      label: "Payment proof",
+      title: "签名回调或后端鉴权查单",
+      detail: "支付状态必须由后端官方证据确认，浏览器不能自行发放权益。",
+      tone: review.sectionByKey.wechat_pay_native_cutover?.status === "ready" ? "green" : "amber",
     },
     {
-      label: "Webhook",
-      title: provider.webhook_configured ? "签名回调已配置" : "签名回调缺失",
-      detail: "续费、付款失败、取消和退款争议必须先经过签名验证或后端查单。",
-      tone: provider.webhook_configured ? "green" : "red",
-    },
-    {
-      label: "Quota",
-      title: quota.enabled ? "hard-stop 已启用" : "额度强停未启用",
-      detail: "公开收费前必须证明欠费/取消只停高成本任务，历史资料和审计保留。",
-      tone: quota.enabled ? "green" : "amber",
+      label: "Release proof",
+      title: "零扣款、回滚与 smoke",
+      detail: "收费前必须在零扣款模式完成 readiness、浏览器、secret scan 和回滚证据。",
+      tone: review.sectionByKey.no_charge_launch_rehearsal?.status === "ready" ? "green" : "amber",
     },
     {
       label: "Owner",
@@ -36287,39 +36261,14 @@ function renderSaasBillingPaidLaunchBlockersPanel(ctx = saasMerchantWorkbenchCon
       tone: ownerReviewReady ? "green" : "red",
     },
   ];
-  const matrixRows = (matrix.length ? matrix : [
-    {
-      key: "stripe_subscription_checkout_contract",
-      title: "Subscription Checkout contract",
-      status: billing.checkoutSessions.ready ? "ready" : "blocked",
-      next_action: "Use Billing APIs with Checkout Sessions mode=subscription and live Price IDs.",
-    },
-    {
-      key: "stripe_signed_webhook_contract",
-      title: "Signed webhook contract",
-      status: provider.webhook_configured ? "ready" : "blocked",
-      next_action: "Verify provider-signed subscription, invoice paid and payment failure events.",
-    },
-    {
-      key: "stripe_entitlement_quota_lifecycle",
-      title: "Entitlement and quota lifecycle",
-      status: quota.enabled ? "ready" : "blocked",
-      next_action: "Prove invoice paid, cancellation and payment failure update entitlement and quota.",
-    },
-  ]).slice(0, 6);
-  const visibleBlockers = blockers.length ? blockers.slice(0, 8) : ["paid_launch_owner_approval_required"];
-  const statusLabel = paidReady
-    ? "证据待主理人批准"
-    : ownerReviewReady
-      ? "可准备评审"
-      : "公开收费仍阻塞";
+  const statusLabel = ownerReviewReady ? "可准备评审" : "公开收费仍阻塞";
   return `
     <section class="saas-settings-card saas-paid-cutover-blockers" data-paid-cutover-blockers="paid_launch_cutover_blockers_control_room_v1" aria-label="公开收费 cutover 阻断项">
       <div class="saas-settings-card-head">
         <div>
           <span>公开收费 cutover 清单</span>
-          <strong>正式收款、订阅自助管理、签名回调和 quota 证据缺一不可</strong>
-          <p>这张卡把“为什么还不能公开收费”拆成可执行证据。当前可以继续做内测和 no-charge 演练，但真实客户扣费必须等 live provider、正式套餐、签名 webhook、Customer Portal、quota lifecycle 和主理人批准都齐备。</p>
+          <strong>微信 Native 正式通道与零扣款上线演练缺一不可</strong>
+          <p>这张卡只使用大陆微信支付证据：当前可以继续内测和零扣款演练，但真实客户扣费必须等签名回调或后端鉴权查单、退款边界、回滚证据和主理人批准全部齐备。</p>
         </div>
         <em>${escapeHtml(statusLabel)}</em>
       </div>
@@ -36336,7 +36285,7 @@ function renderSaasBillingPaidLaunchBlockersPanel(ctx = saasMerchantWorkbenchCon
           )
           .join("")}
       </div>
-      <div class="saas-paid-cutover-matrix" aria-label="billing live cutover matrix">
+      <div class="saas-paid-cutover-matrix" aria-label="mainland payment cutover matrix">
         ${matrixRows
           .map((item) => {
             const [matrixTitle, matrixDetail] = saasPaidCutoverMatrixCopy(item);
@@ -36351,7 +36300,7 @@ function renderSaasBillingPaidLaunchBlockersPanel(ctx = saasMerchantWorkbenchCon
           .join("")}
       </div>
       <div class="saas-paid-cutover-blocker-list" aria-label="paid launch blockers">
-        ${visibleBlockers
+        ${(visibleBlockers.length ? visibleBlockers : ["paid_launch_owner_approval_required"])
           .map((key) => {
             const [title, detail] = saasPaidLaunchBlockerCopy(key);
             return `
@@ -36370,19 +36319,21 @@ function renderSaasBillingPaidLaunchBlockersPanel(ctx = saasMerchantWorkbenchCon
       </div>
       <div class="saas-paid-cutover-safety" hidden aria-hidden="true">
         <span>paid_launch_cutover_blockers_control_room_v1</span>
-        <span>stripe_billing_checkout_sessions_mode_subscription</span>
-        <span>billing_uses_price_ids_not_deprecated_plan_object</span>
-        <span>customer_portal_before_self_service_subscription_management</span>
-        <span>signed_webhook_before_quota_grant</span>
+        <span>mainland_payment_cutover_v2</span>
+        <span>wechat_pay_native_cutover</span>
+        <span>no_charge_launch_rehearsal</span>
+        <span>signed_wechat_callback_or_authenticated_query_before_entitlement</span>
         <span>owner_live_cutover_required_before_public_charge</span>
         <span>invited_beta_manual_confirmation_not_paid_launch_provider</span>
-        <span>ready_for_paid_launch=${Boolean(paidReady)}</span>
+        <span>ready_for_owner_approval=${Boolean(ownerReviewReady)}</span>
         <span>charge_now_allowed=false</span>
         <span>triggers_real_charge=false</span>
-        <span>repeat_ebay_oauth_allowed=false</span>
+        <span>triggers_real_refund=false</span>
+        <span>calls_external_payment_api=false</span>
+        <span>triggers_real_platform_write=false</span>
         <span>frontend_gets_payment_secret=false</span>
         <span>secret_exposed=false</span>
-        <span>next_blocker=${escapeHtml(nextMatrix.key || blockers[0] || "owner_review")}</span>
+        <span>next_blocker=${escapeHtml(visibleBlockers[0] || "owner_review")}</span>
         <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
       </div>
     </section>
@@ -36390,157 +36341,153 @@ function renderSaasBillingPaidLaunchBlockersPanel(ctx = saasMerchantWorkbenchCon
 }
 
 function saasBillingDomainCutoverReviewState() {
-  const rehearsal =
+  const cutover =
     state.saasBillingDomainCutoverRehearsal && typeof state.saasBillingDomainCutoverRehearsal === "object"
       ? state.saasBillingDomainCutoverRehearsal
       : {};
-  const summary = rehearsal.summary && typeof rehearsal.summary === "object" ? rehearsal.summary : {};
-  const stages = Array.isArray(rehearsal.stages) ? rehearsal.stages : [];
-  const stageByKey = Object.fromEntries(
-    stages.filter((item) => item && typeof item === "object").map((item) => [String(item.key || ""), item]),
-  );
-  const requiredUrls = rehearsal.required_urls && typeof rehearsal.required_urls === "object" ? rehearsal.required_urls : {};
-  const readyCount = Number(summary.ready_count || stages.filter((item) => item && item.status === "ready").length || 0);
-  const totalCount = Number(summary.total_count || stages.length || 0);
-  const blockedCount = Number(summary.blocked_count || stages.filter((item) => item && item.status !== "ready").length || 0);
-  const readyForOwnerApproval = Boolean(rehearsal.ready_for_owner_approval);
-  const urlShape = (value) => {
-    if (!value) return "waiting_for_stable_domain";
-    if (typeof value === "string") return value.replace(/\?.*$/, "");
-    if (typeof value !== "object") return "not_configured";
-    if (!value.configured && !value.host) return "not_configured";
-    return `${value.scheme || "no-scheme"}://${value.host || "missing"}${value.path || ""}`;
-  };
+  const summary = cutover.summary && typeof cutover.summary === "object" ? cutover.summary : {};
+  const expectedKeys = ["wechat_pay_native_cutover", "no_charge_launch_rehearsal"];
+  const safetyKeys = [
+    "public_paid_launch_allowed",
+    "charge_now_allowed",
+    "calls_external_payment_api",
+    "triggers_real_charge",
+    "triggers_real_refund",
+    "triggers_ebay_oauth",
+    "triggers_real_platform_write",
+    "frontend_gets_payment_secret",
+    "secret_exposed",
+  ];
+  const rawSections = Array.isArray(cutover.sections) ? cutover.sections : [];
+  const normalizedSections = expectedKeys.map((key) => {
+    const matches = rawSections.filter((item) => item && typeof item === "object" && String(item.key || "") === key);
+    const source = matches.length === 1 ? matches[0] : {};
+    const blockedByValid = Array.isArray(source.blocked_by) && source.blocked_by.every((item) => typeof item === "string" && item);
+    const statusValid = ["ready", "blocked"].includes(source.status);
+    const safetyValid = safetyKeys.every((safetyKey) => source[safetyKey] === false);
+    const readyValid = source.status !== "ready" || (Array.isArray(source.blocked_by) && source.blocked_by.length === 0);
+    return {
+      key,
+      status: matches.length === 1 && statusValid && source.status === "ready" ? "ready" : "blocked",
+      valid: matches.length === 1 && blockedByValid && statusValid && safetyValid && readyValid,
+    };
+  });
+  const preliminaryReadyCount = normalizedSections.filter((item) => item.status === "ready").length;
+  const expectedBlockedKeys = normalizedSections.filter((item) => item.status !== "ready").map((item) => item.key);
+  const summaryBlockedKeys = Array.isArray(summary.blocked_keys) ? summary.blocked_keys : [];
+  const summaryValid =
+    summary.provider === "wechat_pay_native" &&
+    summary.ready_count === preliminaryReadyCount &&
+    summary.total_count === 2 &&
+    summary.blocked_count === 2 - preliminaryReadyCount &&
+    summaryBlockedKeys.length === expectedBlockedKeys.length &&
+    summaryBlockedKeys.every((key, index) => key === expectedBlockedKeys[index]) &&
+    summary.next_step === (expectedBlockedKeys[0] || "");
+  const contractValid =
+    cutover.contract_version === "2026-08-21-mainland-payment-cutover-v2" &&
+    cutover.provider === "wechat_pay_native" &&
+    rawSections.length === 2 &&
+    expectedKeys.every((key) => rawSections.filter((item) => item && typeof item === "object" && item.key === key).length === 1) &&
+    normalizedSections.every((item) => item.valid) &&
+    safetyKeys.every((key) => cutover[key] === false) &&
+    summaryValid &&
+    cutover.status === (preliminaryReadyCount === 2 ? "ready_for_owner_approval" : "blocked");
+  const sections = normalizedSections.map((item) => ({ key: item.key, status: contractValid ? item.status : "blocked" }));
+  const sectionByKey = Object.fromEntries(sections.map((item) => [item.key, item]));
+  const readyCount = sections.filter((item) => item.status === "ready").length;
+  const totalCount = 2;
+  const blockedCount = totalCount - readyCount;
+  const readyForOwnerApproval = contractValid && cutover.status === "ready_for_owner_approval" && readyCount === totalCount;
   return {
-    rehearsal,
+    cutover,
     summary,
-    stages,
-    stageByKey,
-    requiredUrls,
+    sections,
+    sectionByKey,
+    contractValid,
     readyCount,
     totalCount,
     blockedCount,
     readyForOwnerApproval,
-    stableDomain: rehearsal.stable_domain || requiredUrls.stable_origin || "waiting_for_stable_domain",
     statusLabel: readyForOwnerApproval
       ? "可交主理人复核，不会自动收费"
       : blockedCount
-        ? "正式支付域名证据仍未齐"
-        : "等待后端演练证据",
-    nextAction: summary.next_action || summary.next_step || "继续收集 Checkout、Portal、webhook、回滚和 smoke 证据",
-    urlShape,
+        ? "微信正式切换证据仍未齐"
+        : "等待微信切换证据",
   };
 }
 
 function renderSaasBillingDomainCutoverReviewPanel(ctx = saasMerchantWorkbenchContext()) {
   const review = saasBillingDomainCutoverReviewState();
-  const stageTone = (key) => (review.stageByKey[key]?.status === "ready" ? "green" : "amber");
-  const stageDetail = (key, fallback) => review.stageByKey[key]?.evidence_summary || fallback;
-  const stageNext = (key, fallback) => review.stageByKey[key]?.next_action || fallback;
-  const urlRows = [
+  const stageTone = (key) => (review.sectionByKey[key]?.status === "ready" ? "green" : "amber");
+  const boundaryRows = [
     {
-      label: "Stable domain",
-      title: review.urlShape(review.requiredUrls.stable_origin || review.stableDomain),
-      detail: "正式 Checkout、Customer Portal、webhook 和 eBay callback 都必须落在稳定 HTTPS 域名上。",
-      tone: review.stageByKey.stable_domain_dns_tls_headers?.status === "ready" ? "green" : "amber",
+      label: "支付入口",
+      title: "微信 Native 二维码",
+      detail: "二维码由后端按订单生成；本页不创建订单，也不读取商户密钥。",
+      tone: stageTone("wechat_pay_native_cutover"),
     },
     {
-      label: "Checkout",
-      title: `${review.urlShape(review.requiredUrls.stripe_success_url)} / ${review.urlShape(review.requiredUrls.stripe_cancel_url)}`,
-      detail: "成功和取消回跳只展示 URL 形状，不在浏览器创建真实 Checkout Session。",
-      tone: stageTone("stripe_checkout_return_urls_on_stable_domain"),
+      label: "回调边界",
+      title: "签名支付 / 退款回调",
+      detail: "只有后端验签成功的支付或退款结果可以改变订单与权益。",
+      tone: stageTone("wechat_pay_native_cutover"),
     },
     {
-      label: "Customer Portal",
-      title: review.urlShape(review.requiredUrls.stripe_portal_return_url),
-      detail: "升级、降级、取消和付款方式修改应走 provider Portal，前端不接触支付密钥。",
-      tone: stageTone("stripe_customer_portal_return_url_on_stable_domain"),
+      label: "查单边界",
+      title: "后端鉴权查单",
+      detail: "历史页面状态不能发放额度；必须以签名回调或后端官方查单为准。",
+      tone: stageTone("wechat_pay_native_cutover"),
     },
     {
-      label: "Signed webhook",
-      title: review.urlShape(review.requiredUrls.stripe_webhook_url),
-      detail: "订阅、续费、失败付款和取消事件必须先通过签名验证，再改权益和 quota。",
-      tone: stageTone("stripe_signed_webhook_on_stable_domain"),
-    },
-    {
-      label: "eBay callback",
-      title: review.urlShape(review.requiredUrls.ebay_oauth_callback_url),
-      detail: "支付切换不能顺手重跑 eBay OAuth；callback 只用于域名一致性检查。",
-      tone: review.stageByKey.stable_domain_dns_tls_headers?.status === "ready" ? "green" : "amber",
+      label: "上线门禁",
+      title: "零扣款演练与回滚证据",
+      detail: "正式收费前必须完成零扣款、secret scan、readiness、浏览器 smoke 和回滚证据。",
+      tone: stageTone("no_charge_launch_rehearsal"),
     },
   ];
   const stageRows = [
     {
-      key: "stripe_live_provider_selected",
-      label: "Provider",
-      title: "正式收款通道",
-      fallback: "仍在 manual/test 阶段，不能公开收费。",
+      key: "wechat_pay_native_cutover",
+      label: "微信正式通道",
+      title: "商户配置、支付/退款验签、查单和受控验收",
+      detail: "必须由后端证明 9 项配置、官方查单、支付回调和退款边界；浏览器不能自行认定付款。",
     },
     {
-      key: "stripe_live_price_ids_verified",
-      label: "Plans",
-      title: "正式商品和 Price ID",
-      fallback: "需要 live 套餐、价格和无测试对象证明。",
-    },
-    {
-      key: "stripe_api_webhook_version_pinned",
-      label: "API version",
-      title: "API / webhook 版本固定",
-      fallback: "后端 API version 和 webhook endpoint version 需要记录一致。",
-    },
-    {
-      key: "stripe_webhook_resilience_rehearsed",
-      label: "Webhook chaos",
-      title: "重复、延迟、乱序事件演练",
-      fallback: "webhook 乱序不能重复发放额度，也不能漏停高成本任务。",
-    },
-    {
-      key: "subscription_state_and_quota_lifecycle_rehearsed",
-      label: "Entitlement",
-      title: "订阅状态和 quota 生命周期",
-      fallback: "invoice paid、取消、失败付款都要能驱动权益和 hard-stop。",
-    },
-    {
-      key: "cutover_rollback_audit_packet_recorded",
-      label: "Release proof",
-      title: "回滚、secret scan、readiness、browser smoke",
-      fallback: "正式切换前必须留下可回滚和可审计证据。",
+      key: "no_charge_launch_rehearsal",
+      label: "零扣款上线演练",
+      title: "隔离演练、回滚、readiness、浏览器 smoke",
+      detail: "所有步骤只产生无值证据；不下单、不扣款、不退款，也不触发 eBay OAuth。",
     },
   ];
   const evidenceRows = [
-    ["演练状态", `${review.readyCount}/${review.totalCount || "?"} ready`, review.nextAction],
-    ["Provider", review.summary.billing_provider || "not_selected", "provider secret 只允许在后端 env/Vault 边界内处理。"],
-    ["API version", review.summary.stripe_api_version || "waiting", "不要使用废弃 plan object；订阅应使用 Billing + Checkout Sessions。"],
-    [
-      "后端记录",
-      `subscriptions=${Number(review.summary.subscription_records || 0)} / webhooks=${Number(review.summary.webhook_event_records || 0)}`,
-      "只有后端证明和签名事件能发放或停止权益。",
-    ],
+    ["证据状态", `${review.readyCount}/${review.totalCount} ready`, review.readyForOwnerApproval ? "等待主理人最终书面复核。" : "继续补齐被阻断的微信或零扣款证据。"],
+    ["Provider", "wechat_pay_native", "商户凭证只允许在后端 Vault 边界内处理。"],
+    ["计费模型", "一次支付 · 30 天权益", "只有后端验签或鉴权查单可以激活权益。"],
+    ["当前动作", "只读核对", "公开收费、立即扣款、退款和平台写入全部保持关闭。"],
   ];
   const flags = [
-    `mode=${review.rehearsal.mode || "dry_run_no_charge"}`,
-    `public_paid_launch_allowed=${Boolean(review.rehearsal.public_paid_launch_allowed)}`,
-    `charge_now_allowed=${Boolean(review.rehearsal.charge_now_allowed)}`,
-    `creates_checkout_session=${Boolean(review.rehearsal.creates_checkout_session)}`,
-    `calls_stripe_api=${Boolean(review.rehearsal.calls_stripe_api)}`,
-    `triggers_real_charge=${Boolean(review.rehearsal.triggers_real_charge)}`,
-    `triggers_ebay_oauth=${Boolean(review.rehearsal.triggers_ebay_oauth)}`,
-    `repeat_ebay_oauth_allowed=${Boolean(review.rehearsal.repeat_ebay_oauth_allowed)}`,
-    `frontend_gets_payment_secret=${Boolean(review.rehearsal.frontend_gets_payment_secret)}`,
-    `secret_exposed=${Boolean(review.rehearsal.secret_exposed)}`,
+    `contract_valid=${Boolean(review.contractValid)}`,
+    `public_paid_launch_allowed=${Boolean(review.cutover.public_paid_launch_allowed)}`,
+    `charge_now_allowed=${Boolean(review.cutover.charge_now_allowed)}`,
+    `calls_external_payment_api=${Boolean(review.cutover.calls_external_payment_api)}`,
+    `triggers_real_charge=${Boolean(review.cutover.triggers_real_charge)}`,
+    `triggers_real_refund=${Boolean(review.cutover.triggers_real_refund)}`,
+    `triggers_ebay_oauth=${Boolean(review.cutover.triggers_ebay_oauth)}`,
+    `triggers_real_platform_write=${Boolean(review.cutover.triggers_real_platform_write)}`,
+    `secret_exposed=${Boolean(review.cutover.secret_exposed)}`,
   ];
   return `
-    <section class="saas-settings-card saas-billing-domain-review" data-billing-domain-cutover-review="stable_domain_checkout_portal_webhook_review_v1" aria-label="正式支付域名和回调演练">
+    <section class="saas-settings-card saas-billing-domain-review" data-billing-domain-cutover-review="mainland_payment_cutover_v2" aria-label="微信支付正式切换证据">
       <div class="saas-settings-card-head">
         <div>
-          <span>正式支付域名演练</span>
-          <strong>Checkout、Portal、签名 webhook、回滚证据必须先在稳定域名上对齐</strong>
-          <p>这张卡把“人工核对”迁移到“正式收款”的证据摆清楚：现在只读检查回调地址、额度发放和回滚链路，不创建支付单、不触发真实扣费，也不重新打开 eBay 授权。</p>
+          <span>微信支付正式切换</span>
+          <strong>微信 Native、签名回调、后端查单和零扣款回滚证据必须同时成立</strong>
+          <p>这里只读核对大陆正式收款链路，不创建支付单、不触发真实扣费或退款，也不重新打开 eBay 授权。</p>
         </div>
         <em>${escapeHtml(review.statusLabel)}</em>
       </div>
-      <div class="saas-billing-domain-url-grid" aria-label="支付域名 URL 形状">
-        ${urlRows
+      <div class="saas-billing-domain-url-grid" aria-label="微信支付安全边界">
+        ${boundaryRows
           .map(
             (row) => `
               <article class="is-${escapeHtml(row.tone)}">
@@ -36559,8 +36506,8 @@ function renderSaasBillingDomainCutoverReviewPanel(ctx = saasMerchantWorkbenchCo
               <article class="is-${escapeHtml(stageTone(row.key))}">
                 <span>${escapeHtml(row.label)}</span>
                 <strong>${escapeHtml(row.title)}</strong>
-                <small>${escapeHtml(stageDetail(row.key, row.fallback))}</small>
-                <small>${escapeHtml(stageNext(row.key, "补齐证据后再进入主理人复核"))}</small>
+                <small>${escapeHtml(row.detail)}</small>
+                <small>${review.sectionByKey[row.key]?.status === "ready" ? "证据已闭合" : "证据未齐，保持收费关闭"}</small>
               </article>
             `,
           )
@@ -36584,32 +36531,29 @@ function renderSaasBillingDomainCutoverReviewPanel(ctx = saasMerchantWorkbenchCo
         <button class="secondary-action compact-action" type="button" data-global-flow-view="confirm">查看确认中心</button>
       </div>
       <div class="saas-billing-domain-safety" hidden aria-hidden="true">
-        <span>billing_domain_cutover_review_v1</span>
-        <span>stable_domain_checkout_portal_webhook_review_v1</span>
-        <span>billing_domain_cutover_rehearsal</span>
+        <span>mainland_payment_cutover_v2</span>
+        <span>wechat_pay_native_cutover</span>
+        <span>no_charge_launch_rehearsal</span>
         <span>payment_provider_secret_boundary=backend_env_or_vault_only</span>
-        <span>checkout_success_cancel_urls_on_stable_domain</span>
-        <span>customer_portal_return_url_on_stable_domain</span>
-        <span>signed_webhook_before_quota_grant</span>
+        <span>signed_wechat_callback_or_authenticated_query_before_entitlement</span>
         <span>rollback_secret_scan_readiness_browser_smoke_required</span>
         <span>public_paid_launch_allowed=false</span>
         <span>charge_now_allowed=false</span>
-        <span>creates_checkout_session=false</span>
-        <span>calls_stripe_api=false</span>
+        <span>calls_external_payment_api=false</span>
         <span>triggers_real_charge=false</span>
+        <span>triggers_real_refund=false</span>
         <span>triggers_ebay_oauth=false</span>
-        <span>repeat_ebay_oauth_allowed=false</span>
+        <span>triggers_real_platform_write=false</span>
         <span>frontend_gets_payment_secret=false</span>
         <span>secret_exposed=false</span>
-        <span>public_paid_launch_allowed=${Boolean(review.rehearsal.public_paid_launch_allowed)}</span>
-        <span>charge_now_allowed=${Boolean(review.rehearsal.charge_now_allowed)}</span>
-        <span>creates_checkout_session=${Boolean(review.rehearsal.creates_checkout_session)}</span>
-        <span>calls_stripe_api=${Boolean(review.rehearsal.calls_stripe_api)}</span>
-        <span>triggers_real_charge=${Boolean(review.rehearsal.triggers_real_charge)}</span>
-        <span>triggers_ebay_oauth=${Boolean(review.rehearsal.triggers_ebay_oauth)}</span>
-        <span>repeat_ebay_oauth_allowed=${Boolean(review.rehearsal.repeat_ebay_oauth_allowed)}</span>
-        <span>frontend_gets_payment_secret=${Boolean(review.rehearsal.frontend_gets_payment_secret)}</span>
-        <span>secret_exposed=${Boolean(review.rehearsal.secret_exposed)}</span>
+        <span>public_paid_launch_allowed=${Boolean(review.cutover.public_paid_launch_allowed)}</span>
+        <span>charge_now_allowed=${Boolean(review.cutover.charge_now_allowed)}</span>
+        <span>calls_external_payment_api=${Boolean(review.cutover.calls_external_payment_api)}</span>
+        <span>triggers_real_charge=${Boolean(review.cutover.triggers_real_charge)}</span>
+        <span>triggers_real_refund=${Boolean(review.cutover.triggers_real_refund)}</span>
+        <span>triggers_ebay_oauth=${Boolean(review.cutover.triggers_ebay_oauth)}</span>
+        <span>triggers_real_platform_write=${Boolean(review.cutover.triggers_real_platform_write)}</span>
+        <span>secret_exposed=${Boolean(review.cutover.secret_exposed)}</span>
         <span>${escapeHtml(flags.join(" / "))}</span>
         <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
       </div>
@@ -45072,15 +45016,13 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
         renderSaasOwnerOperationsOverviewPanel(),
         renderSaasSettingsSectionGroup({
           title: "正式收费和公网安全",
-          detail: "Stripe live、WAF、Bot、限流、稳定域名和回调域名只给上线前检查使用。",
+          detail: "微信 Native、WAF、Bot、限流、稳定域名和回调域名只给上线前检查使用。",
           badge: "内部",
           open: true,
           panels: [
             renderSaasBillingTransitionPathPanel(ctx),
             renderSaasMerchantFormalPaymentOpeningChecklistPanel(ctx),
             renderSaasManualBetaPaymentOrderPanel(),
-            renderSaasBillingProviderPanel(),
-            renderSaasBillingProviderRehearsalPanel(ctx),
             renderSaasBillingDomainCutoverReviewPanel(ctx),
             renderSaasBillingPaidLaunchBlockersPanel(ctx),
             renderSaasMerchantBillingIncidentRunbookPanel(ctx),
