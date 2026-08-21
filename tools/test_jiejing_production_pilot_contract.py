@@ -204,8 +204,10 @@ def main() -> int:
     ):
         if required_mount not in compose:
             return fail(f"production frontend is missing required customer surface {required_mount}")
-    if "tools/jiejing_worker_cli.py" not in compose or "redis_streams" not in values.get("JIEJING_QUEUE_PROVIDER", ""):
-        return fail("production pilot must run the durable queue worker")
+    if "tools/jiejing_worker_cli.py" not in compose or values.get("JIEJING_QUEUE_PROVIDER") != "postgres_durable":
+        return fail("low-cost production must run the proven Postgres durable queue worker")
+    if values.get("JIEJING_QUEUE_URL", "").strip():
+        return fail("Postgres durable production must not require a separate paid Redis queue")
     if compose.count("../../private/jiejing-saas.production.env") != 2 or "./jiejing-saas.production.env" in compose.replace("../../private/jiejing-saas.production.env", ""):
         return fail("production credentials must be injected from the server-private env boundary")
     if compose.count("jiejing_production_data:/data") != 2:
