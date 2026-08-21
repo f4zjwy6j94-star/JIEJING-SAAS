@@ -28,6 +28,13 @@ PRODUCTION_NGINX_SECURITY_HEADERS = ROOT / "deploy" / "nginx-security-headers.pr
 PRODUCTION_VAULT = ROOT / "deploy" / "vault.production.hcl"
 PRODUCTION_VAULT_POLICY = ROOT / "deploy" / "vault-policy.production.hcl"
 LOW_COST_SECRET_RUNBOOK = ROOT / "docs" / "JIEJING_LOW_COST_PRODUCTION_SECRET_BOUNDARY_20260814.md"
+VAULT_RECOVERY_DESIGN = (
+    ROOT
+    / "docs"
+    / "superpowers"
+    / "specs"
+    / "2026-08-21-vault-production-grade-recovery-rehearsal-design.md"
+)
 API_SERVER = ROOT / "jiejing_saas" / "api_server.py"
 OWNER_LAUNCH_CONTROL = ROOT / "jiejing_saas" / "owner_launch_control.py"
 PRECLOUD_GATE = ROOT / "tools" / "jiejing_precloud_deployment_gate.py"
@@ -298,6 +305,26 @@ def main() -> int:
     ):
         if marker not in normalized_secret_runbook:
             return fail(f"low-cost production secret runbook is missing {marker}")
+    for marker in (
+        "direct trusted local console",
+        "no screen recording",
+        "one share at a time",
+        "double transcription check",
+        "clear the terminal scrollback",
+        "must not pass through codex",
+    ):
+        if marker not in normalized_secret_runbook:
+            return fail(f"sealed-paper custody ceremony is missing {marker}")
+    recovery_design = " ".join(VAULT_RECOVERY_DESIGN.read_text(encoding="utf-8").lower().split())
+    for marker in (
+        "pgp media custody",
+        "sealed-paper custody",
+        "production custody credit",
+        "does not prove the paper ceremony",
+        "no plaintext digital residue",
+    ):
+        if marker not in recovery_design:
+            return fail(f"production recovery design is missing the media-neutral custody contract: {marker}")
 
     caddy = PRODUCTION_CADDY.read_text(encoding="utf-8")
     if "{$JIEJING_PRODUCTION_HOST}" not in caddy or "app.example.com" in caddy:

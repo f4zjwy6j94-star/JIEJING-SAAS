@@ -60,6 +60,41 @@ Managed KMS remains the later high-availability upgrade, not a paid launch block
 6. Verify `/health/deep` and a backend-only secret resolver probe without printing a
    secret value.
 
+## Sealed-paper production ceremony
+
+Use this profile when the owner selects three sealed paper shares and has no
+independent digital media. It is a human-only ceremony, not an automation step.
+
+1. Prepare three opaque tamper-evident envelopes labelled only `A`, `B`, and `C`,
+   three separate custody locations/custodians, and a pen. Do not put a company,
+   Vault, domain, account, or threshold label on the outside.
+2. Use a direct trusted local console with no screen recording. Shell recording,
+   remote assistance, browser automation, screen sharing, clipboard history, and
+   cloud-shell transcript must all be disabled. The ceremony must not pass through
+   Codex, chat, a phone, a screenshot, a camera, a synced printer, or a network
+   print queue.
+3. Initialize exactly three Vault shares with threshold two. Keep the response
+   only in the foreground process memory and reveal one share at a time to the
+   owner. Never write the initialization JSON, shares, or root token to a file.
+4. Hand-copy share A, B, and C onto their matching paper sheets. For each sheet,
+   perform a double transcription check by reading every character twice before
+   sealing it. Do not create a second working copy or photograph the sheet.
+5. Verify the threshold through protected interactive input: one share must leave
+   Vault sealed and a second distinct share must unseal it. Never place a share in
+   a command argument, shell history, evidence output, or operator note.
+6. Complete policy and periodic-token setup in the same protected session, revoke
+   the initialization root token, close the process, clear the terminal scrollback,
+   disable any temporary clipboard, and verify that no plaintext digital residue
+   or initialization file remains.
+7. Move envelopes A, B, and C immediately to three independent physical custody
+   units. No custodian or location may hold two envelopes. Record only the
+   value-free geometry and witnessed pass/fail facts after an isolated restore.
+
+If a direct non-recording console cannot be established, stop. Do not weaken the
+ceremony by using a browser-controlled terminal or by storing a temporary copy on
+the workstation; use the PGP media custody profile after independent offline media
+becomes available instead.
+
 After the encrypted backup, isolated restore, manual unseal and sentinel resolve have
 all actually succeeded, record only the value-free custody geometry and evidence:
 

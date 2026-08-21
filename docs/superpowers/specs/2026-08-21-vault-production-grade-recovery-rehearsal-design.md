@@ -7,11 +7,13 @@ It produces production-grade procedural evidence with disposable credentials. It
 does not create or certify the real production unseal shares and must not change
 Jiejing public readiness.
 
-The real production ceremony remains a separate event. Its three encrypted
-Shamir shares must be independently controlled from the instant they are
-generated. A share may never be written in plaintext to the Windows workstation,
-the Jiejing repository, the production host, logs, chat, or ordinary application
-state.
+The real production ceremony remains a separate event. Its three Shamir shares
+must be independently controlled from the instant they are generated. The PGP
+media profile retains encrypted shares on independent offline units. The
+sealed-paper profile permits plaintext only on the three final paper sheets and
+inside the protected ceremony process while it is running; a share may never be
+written as plaintext digital data to the Windows workstation, Jiejing repository,
+production host storage, logs, chat, or ordinary application state.
 
 ## Objective
 
@@ -130,10 +132,30 @@ in memory by the rehearsal controller and split immediately into the target
 simulated units. The controller must never print the JSON response, unseal share,
 root token, backend token, backup key, or sentinel value.
 
-The production ceremony will replace these simulated identities with public
-keys created and retained on three genuinely independent custody units. It will
-use the same `-pgp-keys` mechanism so plaintext production shares never pass
-through the Windows workstation or remain on the production host.
+The production ceremony supports two explicit profiles. **PGP media custody**
+replaces the simulated identities with public keys whose private keys are created
+and retained on three genuinely independent offline digital units. It uses the
+same `-pgp-keys` mechanism so plaintext production shares never pass through the
+Windows workstation or remain on the production host.
+
+**Sealed-paper custody** is the no-device profile. It must use a direct trusted
+local console with every recording, automation, remote-assistance, clipboard,
+camera, and print-spool path disabled. A protected human-only controller keeps
+the initialization response in process memory, reveals one share at a time for
+a double transcription check, proves one-share-sealed and two-share-unsealed by
+protected interactive input, completes setup, revokes root, clears scrollback,
+and exits without an initialization file or any other plaintext digital residue.
+The three paper shares are sealed immediately and moved to three independent
+physical custody units, with no unit or custodian holding two shares.
+
+The rehearsal remains deliberately PGP-only: it proves the Vault lifecycle,
+threshold, backup, restore, policy and cleanup contracts, but does not prove the
+paper ceremony or grant production custody credit. Production custody credit is
+issued only after the selected real-media profile is witnessed, an independent
+restore is manually unsealed, the sentinel is resolved value-free, and the
+existing distribution evidence is recorded. A browser-controlled terminal,
+Codex session, cloud transcript, screenshot, phone photo or synced print queue
+can never satisfy the sealed-paper profile.
 
 The WSL GnuPG clock was observed up to roughly three minutes ahead of the
 Windows Vault process. Disposable rehearsal keys are therefore generated with a
@@ -288,10 +310,15 @@ The rehearsal is complete only when all of the following pass:
 After the rehearsal passes and three real custody units are available, the
 production ceremony repeats the validated sequence with these changes:
 
-- each PGP private key is created and kept on a different offline unit;
-- only the three public keys are presented to production initialization;
-- encrypted share A, B, and C are transferred directly to their matching units;
-- the root token is separately encrypted, used briefly, and revoked;
+- for PGP media custody, each PGP private key is created and kept on a different
+  offline unit, only the three public keys are presented to initialization, and
+  encrypted shares A, B, and C are transferred directly to their matching units;
+- for sealed-paper custody, the direct trusted local console reveals one share at
+  a time for double-checked hand transcription, then proves the threshold and
+  leaves no plaintext digital residue before the envelopes are distributed;
+- for PGP media custody, the root token is separately encrypted; for sealed-paper
+  custody it remains only in the protected ceremony process; in both profiles it
+  is used briefly and revoked before the session ends;
 - the encrypted backup is moved off-host and its key is held separately;
 - an independent restore is manually unsealed and resolves a production
   sentinel without exposing its value;
