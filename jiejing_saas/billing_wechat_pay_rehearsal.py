@@ -130,7 +130,14 @@ def current_deployment_build_artifact_id() -> str:
 
 
 def _run_isolated_rehearsal(root: Path) -> dict[str, Any]:
-    repository = SaaSRepository(root / "isolated.sqlite")
+    # This route runs inside the production API process, whose environment is
+    # intentionally configured for Postgres.  Pin the disposable repository to
+    # SQLite so the rehearsal can never inherit or mutate the production DB.
+    repository = SaaSRepository(
+        root / "isolated.sqlite",
+        database_engine="sqlite",
+        database_url="",
+    )
     account = repository.create_user_with_company(
         email="wechat-zero-charge-rehearsal@example.test",
         password="WeChat-zero-charge-rehearsal-2026",

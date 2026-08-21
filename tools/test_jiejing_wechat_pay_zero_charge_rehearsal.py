@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 from copy import deepcopy
@@ -43,6 +44,50 @@ def main() -> int:
     if blocked.get("transport_invoked") is not False:
         return fail("blocked rehearsal must not touch even the injected fake transport")
     _assert_always_safe(blocked)
+
+    isolated_repository_calls: list[dict[str, object]] = []
+
+    def isolated_repository_factory(
+        db_path: Path,
+        *,
+        database_engine: str | None = None,
+        database_url: str | None = None,
+    ) -> SaaSRepository:
+        isolated_repository_calls.append(
+            {
+                "db_path": db_path,
+                "database_engine": database_engine,
+                "database_url": database_url,
+            }
+        )
+        if database_engine != "sqlite" or database_url != "":
+            raise AssertionError("isolated rehearsal inherited the production database")
+        return SaaSRepository(
+            db_path,
+            database_engine=database_engine,
+            database_url=database_url,
+        )
+
+    with patch.dict(
+        os.environ,
+        {
+            "JIEJING_DATABASE_ENGINE": "postgres",
+            "JIEJING_DATABASE_URL": "postgresql://production-database-must-not-be-used.invalid/jiejing",
+        },
+    ), patch(
+        "jiejing_saas.billing_wechat_pay_rehearsal.SaaSRepository",
+        side_effect=isolated_repository_factory,
+    ):
+        production_shaped_environment = run_wechat_pay_zero_charge_rehearsal(
+            exact_confirmation=WECHAT_PAY_ZERO_CHARGE_REHEARSAL_CONFIRMATION
+        )
+    if production_shaped_environment.get("status") != "ready":
+        return fail(
+            "production environment variables must not escape the isolated SQLite rehearsal: "
+            f"{production_shaped_environment} calls={isolated_repository_calls}"
+        )
+    if len(isolated_repository_calls) != 1:
+        return fail(f"isolated rehearsal must create exactly one private repository: {isolated_repository_calls}")
 
     ready = run_wechat_pay_zero_charge_rehearsal(
         exact_confirmation=WECHAT_PAY_ZERO_CHARGE_REHEARSAL_CONFIRMATION
