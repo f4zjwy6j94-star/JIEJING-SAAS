@@ -73,11 +73,27 @@ function overviewFixture(days, feedbackStatus = "open") {
     },
     performance_analytics: { sample_count: 126, status: "instrumented" },
     provider_reliability_analytics: {
-      model: { status: "instrumented", request_count: 214, success_count: 207, timeout_count: 3, p75_duration_ms: 4200 },
+      model: { status: "instrumented", request_count: 214, success_count: 207, timeout_count: 3, p75_duration_ms: 25202 },
       public_search: { status: "instrumented", request_count: 96, success_count: 90, timeout_count: 2, p75_duration_ms: 980 },
       media_generation: { status: "instrumented", request_count: 38, success_count: 35, timeout_count: 1, p75_duration_ms: 12400 },
       payment: { status: "instrumented", request_count: 18, success_count: 18, timeout_count: 0, p75_duration_ms: 620 },
-      alerts: { critical_count: 0, attention_count: 1 },
+      alerts: {
+        critical_count: 0,
+        attention_count: 1,
+        items: [
+          {
+            scope: "model",
+            status: "attention",
+            request_count: 214,
+            p75_duration_ms: 25202,
+            failure_rate_percent: 3.27,
+            timeout_rate_percent: 1.4,
+            reason_codes: ["high_latency", "ops-reliability-reason-sentinel"],
+            action_key: "review_model_routing_and_timeout",
+            raw_error: "ops-reliability-secret-sentinel",
+          },
+        ],
+      },
     },
     model_cost_analytics: { current_metering_health: "ready" },
     unit_economics: {
@@ -241,6 +257,16 @@ async function runViewport(browser, base, name, viewport) {
     await page.click(`[data-view="${view}"]`);
     await page.waitForFunction((title) => document.querySelector("#ops-title")?.textContent === title, ({ overview: "经营总览", traffic: "流量与转化", merchants: "商家与订阅", transactions: "交易与退款", costs: "AI 与素材成本", workflows: "任务与工作流", feedback: "产品反馈", reliability: "系统可靠性", audit: "安全与审计", settings: "内部设置" })[view]);
     await page.waitForTimeout(60);
+    if (view === "reliability") {
+      const alertDetail = await page.locator(".ops-reliability-alert-detail").innerText();
+      for (const expected of ["告警明细", "模型能力", "关注", "高延迟", "检查模型路由与超时策略", "样本 214"]) {
+        if (!alertDetail.includes(expected)) throw new Error(`${name}/reliability alert detail is incomplete: ${alertDetail}`);
+      }
+      const reliabilityContent = await page.locator("#ops-content").innerText();
+      if (["ops-reliability-secret-sentinel", "ops-reliability-reason-sentinel"].some((sentinel) => reliabilityContent.includes(sentinel))) {
+        throw new Error(`${name}/reliability alert detail leaked an unapproved backend field`);
+      }
+    }
     if (view === "feedback") {
       const initialXss = await page.evaluate(() => ({ executed: window.__opsFeedbackXss === 1, injected: Boolean(document.querySelector('img[src="x"]')) }));
       if (initialXss.executed || initialXss.injected) throw new Error(`${name}/feedback XSS boundary failed: ${JSON.stringify(initialXss)}`);

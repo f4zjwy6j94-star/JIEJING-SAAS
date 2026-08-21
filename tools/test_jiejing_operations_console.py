@@ -439,9 +439,9 @@ def main() -> int:
         caddy_systemd = (ROOT / "deploy" / "Caddyfile.public-staging.systemd").read_text(encoding="utf-8")
         if "noindex,nofollow" not in ops_html or "/owner/auth/login" not in ops_js:
             return fail("operations frontend security markers are missing")
-        cache_version = "20260820-ops-rotating-session-v2"
+        cache_version = "20260821-ops-reliability-alert-detail-v3"
         if ops_html.count(cache_version) != 2:
-            return fail("operations feedback cache version is not exact for CSS and JS")
+            return fail("operations asset cache version is not exact for CSS and JS")
         for marker in (
             'data-view="feedback">产品反馈',
             "经营数据只读，反馈处理只更新内部状态",

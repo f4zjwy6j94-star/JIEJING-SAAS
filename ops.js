@@ -553,6 +553,50 @@
     }), detail);
   }
 
+  function reliabilityAlertDetails(alerts) {
+    const scopeLabels = {
+      model: "模型能力",
+      public_search: "联网搜索",
+      media_generation: "素材生成",
+      payment: "支付链路",
+    };
+    const reasonLabels = {
+      high_latency: "高延迟",
+      high_failure_rate: "失败率偏高",
+      high_timeout_rate: "超时率偏高",
+    };
+    const actionLabels = {
+      review_model_routing_and_timeout: "检查模型路由与超时策略",
+      review_search_health_and_fallback: "检查联网搜索健康状态与降级策略",
+      review_media_queue_and_quality_gate: "检查素材队列与质量门禁",
+      review_payment_provider_health_and_reconciliation: "检查支付通道健康状态与对账结果",
+    };
+    const safePercent = (value) => {
+      const number = Number(value);
+      if (!Number.isFinite(number) || number < 0 || number > 100) return "-";
+      return `${new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(number)}%`;
+    };
+    const items = Array.isArray(alerts?.items)
+      ? alerts.items.filter((item) => item && (item.status === "critical" || item.status === "attention"))
+      : [];
+    if (!items.length) {
+      const summaryCount = Number(alerts?.critical_count || 0) + Number(alerts?.attention_count || 0);
+      return `<section class="ops-panel ops-reliability-alert-detail"><div class="ops-section-head"><div><h2>告警明细</h2><p>只展示供应商中性、无原始请求内容的安全诊断。</p></div></div><div class="ops-empty">${summaryCount > 0 ? "告警摘要尚未返回可验证明细，请刷新数据或按内部告警流程排查。" : "当前没有达到关注或严重阈值的链路。"}</div></section>`;
+    }
+    const cards = items.map((item) => {
+      const scope = Object.hasOwn(scopeLabels, item.scope) ? scopeLabels[item.scope] : "未分类链路";
+      const reasons = Array.isArray(item.reason_codes)
+        ? [...new Set(item.reason_codes.map((reason) => reasonLabels[reason]).filter(Boolean))]
+        : [];
+      const action = Object.hasOwn(actionLabels, item.action_key)
+        ? actionLabels[item.action_key]
+        : "按内部可靠性流程排查并保留无值证据";
+      const status = item.status === "critical" ? "严重" : "关注";
+      return `<article class="ops-reliability-item"><header><strong>${escapeHtml(scope)}</strong>${pill(item.status, status)}</header><dl><div><dt>触发原因</dt><dd>${escapeHtml(reasons.join("、") || "未分类原因")}</dd></div><div><dt>建议动作</dt><dd>${escapeHtml(action)}</dd></div><div><dt>安全指标</dt><dd>样本 ${formatNumber(item.request_count)} · P75 ${formatNumber(item.p75_duration_ms)} ms · 失败 ${escapeHtml(safePercent(item.failure_rate_percent))} · 超时 ${escapeHtml(safePercent(item.timeout_rate_percent))}</dd></div></dl></article>`;
+    }).join("");
+    return `<section class="ops-panel ops-reliability-alert-detail"><div class="ops-section-head"><div><h2>告警明细</h2><p>只展示供应商中性、无原始请求内容的安全诊断。</p></div></div><div class="ops-reliability-list">${cards}</div></section>`;
+  }
+
   function renderReliability() {
     const overview = state.overview || {};
     const reliability = overview.provider_reliability_analytics || {};
@@ -565,7 +609,7 @@
       return `<article class="ops-reliability-item"><header><strong>${escapeHtml(label)}</strong>${pill(item.status, item.status === "instrumented" ? "已采集" : "暂无样本")}</header><dl><div><dt>成功率</dt><dd>${escapeHtml(successRate)}</dd></div><div><dt>P75</dt><dd>${item.p75_duration_ms == null ? "-" : `${formatNumber(item.p75_duration_ms)} ms`}</dd></div><div><dt>超时</dt><dd>${formatNumber(item.timeout_count)}</dd></div></dl></article>`;
     }).join("");
     const alerts = reliability.alerts || {};
-    elements.content.innerHTML = `<div class="ops-metrics">${metric("严重告警", formatNumber(alerts.critical_count), "达到严重阈值的链路", Number(alerts.critical_count) ? "is-critical" : "")}${metric("关注告警", formatNumber(alerts.attention_count), "需要观察或处理", Number(alerts.attention_count) ? "is-attention" : "")}${metric("模型计量健康", statusLabel(overview.model_cost_analytics?.current_metering_health), "只统计当前计量窗口")}${metric("页面性能样本", formatNumber(overview.performance_analytics?.sample_count), "真实浏览器性能采样")}</div><section class="ops-panel"><div class="ops-section-head"><div><h2>核心链路</h2><p>供应商中性指标；不记录原始错误、查询或回复。</p></div></div><div class="ops-reliability-list">${cards}</div></section>`;
+    elements.content.innerHTML = `<div class="ops-metrics">${metric("严重告警", formatNumber(alerts.critical_count), "达到严重阈值的链路", Number(alerts.critical_count) ? "is-critical" : "")}${metric("关注告警", formatNumber(alerts.attention_count), "需要观察或处理", Number(alerts.attention_count) ? "is-attention" : "")}${metric("模型计量健康", statusLabel(overview.model_cost_analytics?.current_metering_health), "只统计当前计量窗口")}${metric("页面性能样本", formatNumber(overview.performance_analytics?.sample_count), "真实浏览器性能采样")}</div>${reliabilityAlertDetails(alerts)}<section class="ops-panel"><div class="ops-section-head"><div><h2>核心链路</h2><p>供应商中性指标；不记录原始错误、查询或回复。</p></div></div><div class="ops-reliability-list">${cards}</div></section>`;
   }
 
   function renderSettings() {
