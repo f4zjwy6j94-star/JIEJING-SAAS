@@ -25,7 +25,7 @@ from jiejing_saas.postgres_repository_runtime import (  # noqa: E402
     postgres_pool_wait_timeout_seconds,
     translate_sqlite_query_to_postgres,
 )
-from jiejing_saas.repository import SaaSRepository  # noqa: E402
+from jiejing_saas.repository import SaaSRepository, _model_usage_required_sql  # noqa: E402
 
 
 OUT = ROOT / "output" / "jiejing-postgres-repository-cutover-test"
@@ -63,6 +63,15 @@ def main() -> int:
         return fail("Postgres operations analytics must group in Beijing time and compare timestamptz instants")
     if analytics_params != (analytics_start,) or not isinstance(analytics_params[0], datetime):
         return fail("Postgres operations analytics must preserve an aware UTC datetime parameter")
+
+    postgres_model_usage_predicate = _model_usage_required_sql(database_engine="postgres", alias="t")
+    sqlite_model_usage_predicate = _model_usage_required_sql(database_engine="sqlite", alias="t")
+    if "input_json ->> 'provider_key'" not in postgres_model_usage_predicate:
+        return fail("Postgres model metering must inspect the exact top-level provider route")
+    if "json_extract(t.input_json, '$.provider_key')" not in sqlite_model_usage_predicate:
+        return fail("SQLite model metering must inspect the exact top-level provider route")
+    if "cast(t.input_json as text)" in postgres_model_usage_predicate + sqlite_model_usage_predicate:
+        return fail("model-free fast route detection must not use message-sensitive JSON substring matching")
 
     ignore_sql, _ = translate_sqlite_query_to_postgres(
         "insert or ignore into team_members (company_id, user_id, role, created_at) values (?, ?, ?, ?)",

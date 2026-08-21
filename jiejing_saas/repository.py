@@ -11278,12 +11278,17 @@ class SaaSRepository:
                 if hasattr(metering_started_at_value, "isoformat")
                 else str(metering_started_at_value or "")
             )
+            model_usage_required = _model_usage_required_sql(
+                database_engine=self.database_engine,
+                alias="t",
+            )
             unmetered_model_row = conn.execute(
-                """
+                f"""
                 select count(*) as count
                 from tasks t
                 left join model_usage_ledger m on m.task_id = t.task_id
                 where t.task_type = 'merchant_ceo_chat' and t.created_at >= ? and m.usage_id is null
+                  and {model_usage_required}
                   and exists (
                     select 1 from users u
                     where u.default_company_id = t.company_id and u.account_classification = 'merchant'
@@ -11293,12 +11298,13 @@ class SaaSRepository:
             ).fetchone()
             current_unmetered_model_row = (
                 conn.execute(
-                    """
+                    f"""
                     select count(*) as count
                     from tasks t
                     left join model_usage_ledger m on m.task_id = t.task_id
                     where t.task_type = 'merchant_ceo_chat'
                       and t.created_at >= ? and t.created_at >= ? and m.usage_id is null
+                      and {model_usage_required}
                       and exists (
                         select 1 from users u
                         where u.default_company_id = t.company_id and u.account_classification = 'merchant'
@@ -12883,6 +12889,10 @@ class SaaSRepository:
                 """,
                 (cost_started_at,),
             ).fetchall()
+            model_usage_required = _model_usage_required_sql(
+                database_engine=self.database_engine,
+                alias="t",
+            )
             current_unmetered_row = conn.execute(
                 f"""
                 select count(*) as count
@@ -12890,6 +12900,7 @@ class SaaSRepository:
                 left join model_usage_ledger m on m.task_id = t.task_id
                 where t.task_type = 'merchant_ceo_chat'
                   and t.created_at >= ? and m.usage_id is null
+                  and {model_usage_required}
                   and {merchant_company_predicate.format(alias='t')}
                   and {merchant_actor_predicate.format(alias='t')}
                 """,
@@ -13999,6 +14010,18 @@ def _load_json_field(value: Any) -> Any:
     if isinstance(value, (bytes, bytearray)):
         return json.loads(value.decode("utf-8"))
     return json.loads(value)
+
+
+def _model_usage_required_sql(*, database_engine: str, alias: str) -> str:
+    """Count actual model work while excluding the backend-only fast route."""
+
+    if database_engine == "postgres":
+        return f"coalesce({alias}.input_json ->> 'provider_key', '') <> 'fast_route'"
+    return (
+        f"case when json_valid({alias}.input_json) "
+        f"then coalesce(json_extract({alias}.input_json, '$.provider_key'), '') "
+        "else '' end <> 'fast_route'"
+    )
 
 
 def _canonical_payload_sha256(value: dict[str, Any]) -> str:

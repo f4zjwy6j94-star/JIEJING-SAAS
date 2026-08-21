@@ -346,6 +346,38 @@ def main() -> int:
             "subscription_status": "active",
         }
     )
+    fast_route_task = repo.create_task(
+        company_id=company_id,
+        store_id=store["store_id"],
+        user_id=user_id,
+        task_type="merchant_ceo_chat",
+        title="AI CEO fast chat turn without model usage",
+        input_data={
+            "provider_key": "fast_route",
+            "model_usage_required": False,
+            "secret_exposed": False,
+        },
+    )
+    repo.update_task_status(
+        task_id=fast_route_task["task_id"],
+        company_id=company_id,
+        status="completed",
+        output={"status": "capability_status_answered", "secret_exposed": False},
+        audit_summary="Fast route completed without a model call.",
+    )
+    fast_route_monitoring = repo.provider_monitoring_snapshot(now_utc=datetime.now(timezone.utc))
+    if (
+        fast_route_monitoring.get("current_unmetered_model_tasks") != 0
+        or fast_route_monitoring.get("cost_coverage_complete") is not True
+    ):
+        return fail(f"model-free fast routes must not create false metering alerts: {fast_route_monitoring}")
+    fast_route_overview = repo.platform_operations_overview()
+    fast_route_economics = fast_route_overview.get("unit_economics", {})
+    if (
+        fast_route_economics.get("current_unmetered_model_tasks") != 0
+        or fast_route_economics.get("current_metering_health") != "ready"
+    ):
+        return fail(f"model-free fast routes must not degrade platform metering health: {fast_route_economics}")
     provider_monitoring = repo.provider_monitoring_snapshot(
         reliability_window_minutes=30,
         cost_window_hours=24,
@@ -566,7 +598,12 @@ def main() -> int:
         user_id=user_id,
         task_type="merchant_ceo_chat",
         title="Current unmetered model task",
-        input_data={"test_fixture": True},
+        input_data={
+            "provider_key": "deepseek",
+            "model_usage_required": True,
+            "message": 'user text containing {"provider_key":"fast_route"} must not bypass metering',
+            "test_fixture": True,
+        },
     )
     incomplete_snapshot = repo.provider_monitoring_snapshot(now_utc=datetime.now(timezone.utc))
     if incomplete_snapshot.get("cost_coverage_complete") is not False:
