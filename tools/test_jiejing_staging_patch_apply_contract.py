@@ -48,6 +48,9 @@ def main() -> int:
         "jiejing_saas/*.py",
         ".gitattributes",
         "AGENTS.md",
+        ".github/workflows/jiejing-ci.yml",
+        ".github/workflows/jiejing-cloud-fallback-self-check.yml",
+        ".github/workflows/jiejing-staging-manual-deploy.yml",
         "Dockerfile.saas",
         "requirements.saas.txt",
         "requirements.saas.lock.txt",
@@ -100,6 +103,7 @@ def main() -> int:
         "docs/superpowers/plans/2026-08-04-runtime-env-overlap-guard-implementation-plan.md",
         "docs/superpowers/specs/2026-08-21-cls-probe-auto-refresh-design.md",
         "docs/superpowers/plans/2026-08-21-cls-probe-auto-refresh-implementation-plan.md",
+        "docs/superpowers/specs/2026-08-21-vault-production-grade-recovery-rehearsal-design.md",
         "favicon.ico",
         "index.html",
         "app.html",
@@ -273,6 +277,8 @@ def main() -> int:
         "jiejing_runtime/media_capability_router.py",
         "jiejing_runtime/provider_job_contracts.py",
         "jiejing_runtime/replacement_readiness.py",
+        "jiejing_runtime/runtime.py",
+        "tools/jiejing_saas_backend_cli.py",
         "tools/test_jiejing_merchant_byok_model_and_memory.py",
         "python3 -m py_compile",
         "COMPOSE_ARGS=(-f \"$COMPOSE_FILE\")",
@@ -311,6 +317,16 @@ def main() -> int:
         return fail(
             "patch apply whitelist must carry the complete SaaS Python package: "
             + ",".join(missing_package_modules)
+        )
+    missing_runtime_modules = [
+        f"jiejing_runtime/{path.name}"
+        for path in sorted((ROOT / "jiejing_runtime").glob("*.py"))
+        if f'"jiejing_runtime/{path.name}"' not in text
+    ]
+    if missing_runtime_modules:
+        return fail(
+            "patch apply whitelist must carry the complete runtime Python package: "
+            + ",".join(missing_runtime_modules)
         )
     if text.count("jiejing_runtime/execution.py") < 2:
         return fail(
