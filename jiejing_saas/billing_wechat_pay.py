@@ -33,6 +33,60 @@ WECHAT_PAY_ORDER_ID_PATTERN = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVW
 WECHAT_PAY_REFUND_STATUSES = {"SUCCESS", "CLOSED", "PROCESSING", "ABNORMAL"}
 
 
+def build_public_commercial_release_contract() -> dict[str, Any]:
+    """Return the exact deploy-time approval state without exposing packet IDs.
+
+    A paid-launch packet alone is deliberately insufficient. The production
+    release packet, reviewed charge/write flags, reviewed customer-facing
+    policy/copy, a non-candidate boot, and closed broad eBay publishing must all
+    agree before the real checkout route can become available.
+    """
+
+    checks = {
+        "paid_launch_owner_approval_recorded": bool(
+            os.environ.get("JIEJING_PAID_LAUNCH_OWNER_APPROVAL_PACKET_ID", "").strip()
+        ),
+        "production_release_owner_approval_recorded": bool(
+            os.environ.get("JIEJING_PRODUCTION_RELEASE_OWNER_APPROVAL_PACKET_ID", "").strip()
+        ),
+        "public_charge_flag_reviewed": _env_true(
+            "JIEJING_PRODUCTION_RELEASE_CHARGE_FLAG_REVIEWED"
+        ),
+        "real_write_flag_reviewed": _env_true(
+            "JIEJING_PRODUCTION_RELEASE_REAL_WRITE_FLAG_REVIEWED"
+        ),
+        "support_refund_policy_reviewed": _env_true(
+            "JIEJING_PRODUCTION_SUPPORT_REFUND_POLICY_REVIEWED"
+        ),
+        "merchant_surface_copy_scan_passed": _env_true(
+            "JIEJING_PRODUCTION_MERCHANT_SURFACE_COPY_SCAN_PASSED"
+        ),
+        "production_environment": os.environ.get("JIEJING_SAAS_ENV", "").strip().lower()
+        == "production",
+        "production_candidate_boot_disabled": _env_false(
+            "JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED"
+        ),
+        "wechat_charge_enabled": _env_true("JIEJING_WECHAT_PAY_CHARGE_ALLOWED"),
+        "wechat_refund_enabled": _env_true("JIEJING_WECHAT_PAY_REFUND_ALLOWED"),
+        "broad_platform_writes_disabled": _env_false(
+            "JIEJING_ENABLE_REAL_PLATFORM_WRITES"
+        ),
+        "ebay_public_publish_disabled": _env_false("JIEJING_EBAY_WRITE_LIVE"),
+    }
+    approved = all(checks.values())
+    return {
+        "contract_version": "2026-08-22-public-commercial-release-v1",
+        "approved": approved,
+        "checks": checks,
+        "blocked_by": [key for key, ready in checks.items() if not ready],
+        "public_charging_allowed": approved,
+        "broad_platform_writes_enabled": False,
+        "ebay_public_publish_enabled": False,
+        "frontend_gets_payment_secret": False,
+        "secret_exposed": False,
+    }
+
+
 @dataclass(frozen=True)
 class WeChatPayTransportResponse:
     status_code: int
@@ -65,6 +119,7 @@ def build_wechat_pay_native_contract() -> dict[str, Any]:
     refund_allowed = _env_true("JIEJING_WECHAT_PAY_REFUND_ALLOWED")
     production_environment = os.environ.get("JIEJING_SAAS_ENV", "").strip().lower() == "production"
     owner_approval_recorded = bool(os.environ.get("JIEJING_PAID_LAUNCH_OWNER_APPROVAL_PACKET_ID", "").strip())
+    commercial_release = build_public_commercial_release_contract()
     public_checkout_allowed = (
         all(configured.values())
         and live_api_enabled
@@ -72,6 +127,7 @@ def build_wechat_pay_native_contract() -> dict[str, Any]:
         and refund_allowed
         and production_environment
         and owner_approval_recorded
+        and commercial_release.get("approved") is True
     )
     blockers = [f"{key}_not_configured" for key, ready in configured.items() if not ready]
     if not live_api_enabled:
@@ -82,6 +138,11 @@ def build_wechat_pay_native_contract() -> dict[str, Any]:
         blockers.append("wechat_pay_refund_not_approved")
     if not owner_approval_recorded:
         blockers.append("paid_launch_owner_approval_packet_missing")
+    blockers.extend(
+        f"commercial_release_{key}_missing"
+        for key in commercial_release.get("blocked_by", [])
+        if key != "paid_launch_owner_approval_recorded"
+    )
     if not production_environment:
         blockers.append("public_checkout_requires_production_environment")
     return {
@@ -102,6 +163,8 @@ def build_wechat_pay_native_contract() -> dict[str, Any]:
         "real_order_creation_implemented": True,
         "provider_connection_ready": all(configured.values()) and live_api_enabled,
         "owner_approval_recorded": owner_approval_recorded,
+        "public_commercial_release_approved": commercial_release.get("approved") is True,
+        "commercial_release_contract_version": commercial_release.get("contract_version"),
         "production_environment": production_environment,
         "real_checkout_ready": public_checkout_allowed,
         "charge_now_allowed": public_checkout_allowed,
@@ -841,6 +904,10 @@ def _valid_wechat_order_id(value: str) -> bool:
 
 def _env_true(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_false(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"0", "false", "no", "off"}
 
 
 def _refund_notify_url_from_env() -> str:

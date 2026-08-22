@@ -104,7 +104,13 @@ def main() -> int:
         if marker in trust_renderer:
             print(f"FAIL merchant billing trust panel contains stale provider copy: {marker}")
             return 1
-    for marker in ["微信扫码付款可用", "到期自主续购", "merchant_confirmed_one_time_30_day"]:
+    for marker in [
+        "微信扫码付款可用",
+        "到期自主续购",
+        "merchant_confirmed_one_time_30_day",
+        "正式公开收费已开放",
+        "eBay 公开发布仍保持关闭",
+    ]:
         if marker not in settings_panels:
             print(f"FAIL settings billing panel missing WeChat Pay marker: {marker}")
             return 1

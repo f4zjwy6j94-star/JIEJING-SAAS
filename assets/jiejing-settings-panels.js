@@ -232,7 +232,7 @@
       : privateBetaReady
         ? "当前只支持受邀试用和人工确认，不会在前台发起真实扣费。"
         : "当前只展示套餐、额度和停用规则；不会创建真实付款，也不会自动扣款。";
-    const billingAttention = shutdownState.payment_attention_required || blockers.length > 0;
+    const billingAttention = shutdownState.payment_attention_required || (!domesticOnline && blockers.length > 0);
     const subscriptionStatusLabel = subscription.entitlement_active ? "权益可用" : billingAttention ? "需要处理" : "待开通";
     const paymentStatusLabel = billingAttention ? "需要处理" : "正常";
     const billingPauseDetail = billingAttention
@@ -287,7 +287,7 @@
           <article class="${domesticOnline || paidReady ? "is-green" : "is-amber"}">
             <span>在线付款开放</span>
             <strong>${domesticOnline ? "微信支付可用" : paidReady ? "可开放" : "暂不开放"}</strong>
-            <small>${domesticOnline ? "正式公开收费仍需独立上线批准；当前链路不会影响 eBay 或经营确认中心。" : paidReady ? "开放后仍会保留确认中心和操作记录。" : "当前仅展示试用和订阅说明；在线付款开放前不会收取订阅费用。"}</small>
+            <small>${domesticOnline ? "正式公开收费已开放；商家主动创建订单并扫码付款，退款继续走人工确认，eBay 公开发布仍保持关闭。" : paidReady ? "开放后仍会保留确认中心和操作记录。" : "当前仅展示试用和订阅说明；在线付款开放前不会收取订阅费用。"}</small>
           </article>
         </div>
         <div class="saas-settings-row-list">

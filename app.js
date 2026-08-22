@@ -1,4 +1,4 @@
-const JIEJING_SETTINGS_PANELS_SRC = "./assets/jiejing-settings-panels.js?v=20260715-owner-traffic-analytics-v104";
+const JIEJING_SETTINGS_PANELS_SRC = "./assets/jiejing-settings-panels.js?v=20260822-public-commercial-release-v105";
 let jiejingSettingsPanelsLoadPromise = null;
 let saasBrowserSessionRefreshPromise = null;
 const SAAS_BROWSER_SESSION_REFRESH_LOCK = "jiejing-browser-session-refresh-v1";

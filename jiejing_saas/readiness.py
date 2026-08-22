@@ -15,6 +15,7 @@ from jiejing_runtime.provider_job_contracts import build_provider_job_contract_c
 from .backup_plan import build_backup_plan
 from .billing_plan import build_billing_plan
 from .billing_payment_options import validate_mainland_payment_launch_for_public
+from .billing_wechat_pay import build_wechat_pay_native_contract
 from .config import SaaSSettings
 from .controlled_bridges import build_controlled_bridge_contract
 from .database_adapter import build_database_adapter_contract
@@ -480,6 +481,20 @@ def _billing_item(settings: SaaSSettings, repository: SaaSRepository) -> Readine
     required_count = payment["required_component_count"]
     private_beta_ready = plan.get("billing_ready_for_private_beta") is True
     if payment["mainland_payment_ready_for_owner_approval"] is True:
+        wechat_contract = build_wechat_pay_native_contract()
+        if (
+            wechat_contract.get("public_commercial_release_approved") is True
+            and wechat_contract.get("real_checkout_ready") is True
+            and wechat_contract.get("charge_now_allowed") is True
+        ):
+            return ReadinessItem(
+                "billing_quota",
+                "Billing and quota",
+                "ready",
+                "info",
+                "WeChat Pay Native public checkout is enabled by the exact owner and production-release contract; signed callbacks, refunds and backend quota grants remain enforced.",
+                "Monitor the first invited paid merchants, payment callbacks, refunds and quota grants; keep payment secrets backend-only.",
+            )
         return ReadinessItem(
             "billing_quota",
             "Billing and quota",
