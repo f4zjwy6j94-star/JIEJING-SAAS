@@ -170,12 +170,35 @@ wait_container_healthy() {
 }
 
 wait_public_json() {
-  local path="$1" marker="$2" attempts="${3:-45}" body
+  local path="$1" attempts="${2:-45}" body
   for ((i=1; i<=attempts; i++)); do
     body="$(curl -fsS --max-time 10 -A 'Mozilla/5.0 JiejingProductionDeploy/1.0' "$PUBLIC_URL$path" 2>/dev/null || true)"
-    [[ "$body" == *"$marker"* ]] && return 0
+    if printf '%s' "$body" | python3 -c '
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except (json.JSONDecodeError, OSError):
+    raise SystemExit(1)
+
+if path == "/health":
+    ok = data.get("status") == "ok" and data.get("secret_exposed") is False
+elif path == "/health/deep":
+    health = data.get("operational_health") or {}
+    ok = health.get("status") == "ready" and health.get("secret_exposed") is False
+elif path == "/readiness/product-saas":
+    ok = data.get("secret_exposed") is False and bool(data.get("contract_version"))
+else:
+    ok = False
+raise SystemExit(0 if ok else 1)
+' "$path"; then
+      return 0
+    fi
     sleep 2
   done
+  printf 'PRODUCTION_PUBLIC_CHECK_FAILED=%s\n' "$path" >&2
   return 1
 }
 
@@ -207,9 +230,9 @@ wait_container_healthy deploy-jiejing-worker-1 30
 "${candidate_compose[@]}" up -d --no-deps --force-recreate jiejing-edge
 wait_container_healthy deploy-jiejing-frontend-1 30
 wait_container_healthy deploy-jiejing-edge-1 30
-wait_public_json "/health" '"status":"ok"' 45
-wait_public_json "/health/deep" '"status":"ready"' 45
-wait_public_json "/readiness/product-saas" '"secret_exposed":false' 45
+wait_public_json "/health" 45
+wait_public_json "/health/deep" 45
+wait_public_json "/readiness/product-saas" 45
 ln -sfnT "$candidate_app" "$ACTIVE_LINK"
 mutation_started=0
 trap - ERR
