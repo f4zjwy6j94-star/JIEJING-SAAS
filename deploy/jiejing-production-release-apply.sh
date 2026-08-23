@@ -122,7 +122,6 @@ chmod -R go-w "$release_dir"
     jiejing_saas/monitoring.py \
     jiejing_saas/repository.py \
     jiejing_saas/worker.py
-  node --check app.js
 )
 
 cat > "$release_dir/JIEJING_PRODUCTION_RELEASE_MANIFEST.txt" <<EOF

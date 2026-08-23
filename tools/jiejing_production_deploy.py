@@ -7,8 +7,10 @@ import argparse
 import hashlib
 import json
 import shlex
+import shutil
 import stat
 import subprocess
+import tempfile
 import time
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -68,6 +70,7 @@ def main() -> int:
         return fail("manifest_real_write_state_unsafe")
     try:
         validate_zip(bundle)
+        validate_bundle_javascript(bundle)
     except ValueError as exc:
         return fail(f"bundle_archive_invalid: {exc}")
 
@@ -155,6 +158,29 @@ def validate_zip(path: Path) -> None:
             unix_mode = info.external_attr >> 16
             if stat.S_ISLNK(unix_mode):
                 raise ValueError(f"symlink:{info.filename}")
+
+
+def validate_bundle_javascript(path: Path) -> None:
+    """Syntax-check the exact bundled frontend before any production upload."""
+    node = shutil.which("node")
+    if not node:
+        raise ValueError("local_node_unavailable")
+    with tempfile.TemporaryDirectory(prefix="jiejing-production-js-") as temp_dir:
+        app_js = Path(temp_dir) / "app.js"
+        with zipfile.ZipFile(path, "r") as archive:
+            app_js.write_bytes(archive.read("app.js"))
+        completed = subprocess.run(
+            [node, "--check", str(app_js)],
+            cwd=ROOT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+        if completed.returncode != 0:
+            raise ValueError("bundle_javascript_invalid")
 
 
 def upload(args: argparse.Namespace, source: Path, remote_path: str) -> None:
