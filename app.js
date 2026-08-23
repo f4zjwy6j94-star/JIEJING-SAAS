@@ -276,6 +276,7 @@ const state = {
   supplierFactsStatus: "idle",
   manualSourceFacts: {},
   manualProductFacts: {},
+  saasAiCeoSupplierFactAttestation: null,
   taxonomyStatus: "pending",
   ebayPolicyStatus: "ready",
   activeFlowKey: "",
@@ -8303,6 +8304,108 @@ function collectManualSourceFacts() {
     ...state.manualSourceFacts,
     ...fields,
     saved_at: formatDecisionTime(new Date()),
+  };
+}
+
+function buildSaasAiCeoSupplierFactIntake(facts = {}) {
+  const source = facts && typeof facts === "object" ? facts : {};
+  const cleanText = (value, limit) => {
+    const text = String(value || "").trim();
+    if (!isFilledOperationalValue(text) || text.length > limit || /[\u0000-\u001f<>]/.test(text)) return "";
+    return text;
+  };
+  const parsePositive = (value, maximum) => {
+    const number = Number(value);
+    return Number.isFinite(number) && number > 0 && number <= maximum ? number : null;
+  };
+
+  let packageWeightG = null;
+  const weightMatch = String(source.package_weight || "")
+    .trim()
+    .match(/^([0-9]+(?:\.[0-9]+)?)\s*(kg|千克|公斤|g|克)?$/i);
+  if (weightMatch) {
+    const multiplier = /^(kg|千克|公斤)$/i.test(weightMatch[2] || "") ? 1000 : 1;
+    packageWeightG = parsePositive(Number(weightMatch[1]) * multiplier, 100000);
+  }
+
+  let packageDimensionsCm = null;
+  const dimensionsMatch = String(source.package_dimensions || "")
+    .trim()
+    .match(/^([0-9]+(?:\.[0-9]+)?)\s*[x×*]\s*([0-9]+(?:\.[0-9]+)?)\s*[x×*]\s*([0-9]+(?:\.[0-9]+)?)\s*(?:cm|厘米)?$/i);
+  if (dimensionsMatch) {
+    const values = dimensionsMatch.slice(1, 4).map((value) => parsePositive(value, 1000));
+    if (values.every((value) => value !== null)) {
+      packageDimensionsCm = { length: values[0], width: values[1], height: values[2] };
+    }
+  }
+
+  let unitCost = "";
+  const rawCost = String(source.purchase_price || "").trim();
+  const codedCost = rawCost.match(/^(CNY|RMB|USD|EUR|GBP|AUD|CAD|HKD|JPY|SGD)\s+([0-9]+(?:\.[0-9]{1,2})?)$/i);
+  const symbolCost = rawCost.match(/^(¥|￥|\$|€|£)\s*([0-9]+(?:\.[0-9]{1,2})?)$/);
+  if (codedCost && parsePositive(codedCost[2], 1000000000) !== null) {
+    unitCost = `${codedCost[1].toUpperCase()} ${codedCost[2]}`;
+  } else if (symbolCost && parsePositive(symbolCost[2], 1000000000) !== null) {
+    const currency = { "¥": "CNY", "￥": "CNY", "$": "USD", "€": "EUR", "£": "GBP" }[symbolCost[1]];
+    unitCost = `${currency} ${symbolCost[2]}`;
+  }
+
+  const supplierFacts = {};
+  const material = cleanText(source.material, 120);
+  const itemLocation = cleanText(source.source_location, 160);
+  if (material) supplierFacts.material = material;
+  if (packageWeightG !== null) supplierFacts.package_weight_g = packageWeightG;
+  if (packageDimensionsCm) supplierFacts.package_dimensions_cm = packageDimensionsCm;
+  if (itemLocation) supplierFacts.item_location = itemLocation;
+  if (unitCost) supplierFacts.unit_cost = unitCost;
+  const requiredKeys = ["material", "package_weight_g", "package_dimensions_cm", "item_location", "unit_cost"];
+  const missingSupplierFactKeys = requiredKeys.filter((key) => !Object.prototype.hasOwnProperty.call(supplierFacts, key));
+  return {
+    supplier_facts: supplierFacts,
+    missing_supplier_fact_keys: missingSupplierFactKeys,
+    complete: missingSupplierFactKeys.length === 0,
+  };
+}
+
+function confirmManualSourceFactsForAiCeo(facts = {}) {
+  const intake = buildSaasAiCeoSupplierFactIntake(facts);
+  const merchantConfirmed =
+    intake.complete &&
+    window.confirm(
+      "请核对：材质、包裹重量、包装尺寸、发货地和单件采购成本均来自你的真实供应商资料。确认后只允许生成可审核的 Listing 草稿，不会自动发布、付款或写入 eBay。",
+    );
+  const attestation = {
+    contract_version: "jiejing_ai_ceo_supplier_fact_form_v1",
+    source: "manual_supplier_form",
+    supplier_facts: intake.supplier_facts,
+    supplier_facts_verified: merchantConfirmed === true,
+    merchant_confirmation_received: merchantConfirmed === true,
+    missing_supplier_fact_keys: intake.missing_supplier_fact_keys,
+    confirmed_at: merchantConfirmed === true ? new Date().toISOString() : "",
+  };
+  state.saasAiCeoSupplierFactAttestation = attestation;
+  return attestation;
+}
+
+function supplierFactsForSaasAiCeoCommand(command = {}) {
+  const text = String(command?.text || "").toLowerCase();
+  const explicitlyEbay = text.includes("ebay");
+  const namesOtherPlatform = /淘宝|天猫|京东|拼多多|亚马逊|amazon|shopify|shopee|lazada|temu|tiktok shop|抖音小店|快手小店|微信小店/i.test(text);
+  if (namesOtherPlatform && !explicitlyEbay) return {};
+  const route = String(command?.route || command?.intent || "").toLowerCase();
+  const isEbayWorkflow = explicitlyEbay || ["listing", "ebay_workflow"].includes(route) || /listing|刊登|上架/.test(text);
+  if (!isEbayWorkflow) return {};
+  const attestation = state.saasAiCeoSupplierFactAttestation;
+  if (!attestation || typeof attestation !== "object") return {};
+  const raw = attestation.supplier_facts && typeof attestation.supplier_facts === "object" ? attestation.supplier_facts : {};
+  const supplierFacts = {};
+  for (const key of ["material", "package_weight_g", "package_dimensions_cm", "item_location", "unit_cost"]) {
+    if (raw[key] !== undefined && raw[key] !== null && raw[key] !== "") supplierFacts[key] = raw[key];
+  }
+  return {
+    supplier_facts: supplierFacts,
+    supplier_facts_verified:
+      attestation.supplier_facts_verified === true && attestation.merchant_confirmation_received === true,
   };
 }
 
@@ -17354,7 +17457,11 @@ async function saasFetchNdjsonWithTimeout(path, options = {}, timeoutMs = 60000,
       } else if (event.type === "accepted") {
         hooks.onStage?.(event.stage || "model", event);
       } else if (event.type === "final" && event.payload && typeof event.payload === "object") {
-        finalPayload = event.payload;
+        const logicalHttpStatus = Number(event.http_status || event.payload.http_status || 0) || 0;
+        finalPayload = {
+          ...event.payload,
+          ...(logicalHttpStatus ? { _http_status: logicalHttpStatus } : {}),
+        };
       }
       hooks.onEvent?.(event);
     };
@@ -23402,8 +23509,30 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
     (saasIsConcreteProductLabel(delivery.product) ? delivery.product : "") ||
     delivery.title ||
     "这次市场调研";
-  rememberSaasAiCeoMarketImportTarget(latest, title);
   const sourceCopy = delivery.source_record_count ? `已带 ${delivery.source_record_count} 条公开来源；` : "";
+  if (delivery.listing_import_ready !== true) {
+    return `
+      <div class="saas-ai-ceo-market-report-delivery" data-ai-ceo-market-report-delivery="ai_ceo_market_report_delivery_v1" data-report-id="${escapeHtml(delivery.report_id)}">
+        <div>
+          <span>市场调研已保存</span>
+          <strong>${escapeHtml(title)}</strong>
+          <small>${sourceCopy}这份工作记录还不能导入 Listing。请先补齐候选商品和商家核对项。</small>
+        </div>
+      </div>
+    `;
+  }
+  if (!saasAuthoritativeAiCeoMarketReportForTurn(latest)) {
+    return `
+      <div class="saas-ai-ceo-market-report-delivery" data-ai-ceo-market-report-delivery="ai_ceo_market_report_delivery_v1" data-report-id="${escapeHtml(delivery.report_id)}">
+        <div>
+          <span>市场调研已保存</span>
+          <strong>${escapeHtml(title)}</strong>
+          <small>${sourceCopy}正在恢复后端工作记录，恢复完成前不能导入 Listing。</small>
+        </div>
+      </div>
+    `;
+  }
+  rememberSaasAiCeoMarketImportTarget(latest, title);
   return `
     <div class="saas-ai-ceo-market-report-delivery" data-ai-ceo-market-report-delivery="ai_ceo_market_report_delivery_v1" data-report-id="${escapeHtml(delivery.report_id)}">
       <div>
@@ -23718,6 +23847,7 @@ async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = 
     };
   }
   try {
+    const supplierFactPayload = supplierFactsForSaasAiCeoCommand(current);
     return await saasFetchNdjsonWithTimeout(
       `/stores/${encodeURIComponent(current.store_id)}/merchant-ceo/chat?stream=1&fresh=${Date.now()}`,
       {
@@ -23739,6 +23869,7 @@ async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = 
           client_now: new Date().toISOString(),
           client_timezone: Intl?.DateTimeFormat?.().resolvedOptions?.().timeZone || "",
           real_platform_writes_enabled: isSaasRealPlatformWritesEnabled(),
+          ...supplierFactPayload,
         }),
       },
       60000,
@@ -23905,7 +24036,6 @@ function handleSaasCeoCommandSubmit(text) {
     refreshSaasCeoRoutingTaskCard(instantCommand || command);
     return instantCommand || command;
   }
-  syncSaasCeoCommandToListing(command);
   addCeoMessage(text, "正在思考", {
     assistantId: pendingMessageId,
     pending: true,
@@ -23950,7 +24080,13 @@ function handleSaasCeoCommandSubmit(text) {
       let aiCeoMarketReport =
         payload?.ai_ceo_market_report && typeof payload.ai_ceo_market_report === "object" ? payload.ai_ceo_market_report : null;
       let aiCeoMarketReportDelivery = normalizeSaasAiCeoMarketReportDelivery(payload?.ai_ceo_market_report_delivery || null);
-      const answer = saasAiCeoProductizedAnswerText(chat?.answer || "", chat?.status || "");
+      const logicalHttpStatus = Number(payload?._http_status || payload?.http_status || 0) || 0;
+      const dependencyBlockedWithoutUsage =
+        logicalHttpStatus >= 500 && payload?.usage_consumed === false && payload?.listing_created === false;
+      const rawAnswer = saasAiCeoProductizedAnswerText(chat?.answer || "", chat?.status || "");
+      const answer = dependencyBlockedWithoutUsage
+        ? `${rawAnswer ? `${rawAnswer}\n\n` : ""}本次未调用模型、未消耗次数、未生成草稿。`
+        : rawAnswer;
       const sourceRecords = normalizeSaasAiCeoSourceRecords(chat?.source_records || chat?.realtime_search?.source_records || []);
       const workRecords = normalizeSaasAiCeoWorkRecords(chat?.work_records || chat?.workflow_handoff?.work_records || []);
       const confirmationItems = normalizeSaasAiCeoConfirmationItems(chat?.confirmation_items || chat?.workflow_handoff?.confirmation_items || []);
@@ -24019,7 +24155,6 @@ function handleSaasCeoCommandSubmit(text) {
         state.saasLastCeoCommand = newestSaasCeoCommand(mergedCommand, state.saasLastCeoCommand);
         persistSaasLastCeoCommand(state.saasLastCeoCommand);
         recordSaasCeoCommandSourceRecord(state.saasLastCeoCommand);
-        syncSaasCeoCommandToListing(mergedCommand);
       }
       updateCeoAssistantMessage(pendingMessageId, answer, chat?.status || "", chat?.model_client || null, sourceRecords, {
         work_records: workRecords,
@@ -31002,6 +31137,7 @@ function saasAiCeoMarketImportProductKey(value = "") {
 
 function saasAiCeoMarketResearchTurnMatchesClickedProduct(turn = {}, expectedProduct = "") {
   const latest = normalizeSaasAiCeoLatestTurn(turn);
+  if (!saasAuthoritativeAiCeoMarketReportForTurn(latest)) return false;
   const expectedKey = saasAiCeoMarketImportProductKey(expectedProduct);
   const actualKey = saasAiCeoMarketImportProductKey(latest?.rendered_product || saasAiCeoMarketProductLabel(latest));
   if (!latest || !expectedKey || !actualKey || expectedKey !== actualKey) return false;
@@ -31031,13 +31167,13 @@ function saasAiCeoMarketResearchTurnForImport(source = null) {
   }
   candidates.push(...saasAiCeoMarketResearchCandidates());
   const normalized = candidates.map(normalizeSaasAiCeoLatestTurn).filter(Boolean);
-  const assistantMatches = assistantId ? normalized.filter((turn) => turn.assistant_id === assistantId) : [];
-  const reportMatches = reportId
-    ? normalized.filter(
-        (turn) => turn.market_report_id === reportId && !assistantMatches.some((item) => item.assistant_id === turn.assistant_id),
-      )
+  const assistantMatches = !reportId && assistantId
+    ? normalized.filter((turn) => turn.assistant_id === assistantId)
     : [];
-  const orderedMatches = [...assistantMatches, ...reportMatches];
+  const reportMatches = reportId
+    ? normalized.filter((turn) => turn.market_report_id === reportId)
+    : [];
+  const orderedMatches = reportId ? reportMatches : assistantMatches;
   const eligibility = orderedMatches
     .map((turn) => saasAiCeoMarketResearchEligibility(turn))
     .find((eligibility) => eligibility.eligible);
@@ -31102,6 +31238,34 @@ function saasAiCeoMarketReportDeliveryFromRecord(record = null) {
     runtime_gets_raw_ebay_token: false,
     secret_exposed: false,
   });
+}
+
+function saasAuthoritativeAiCeoMarketReportForTurn(turn = {}) {
+  const latest = normalizeSaasAiCeoLatestTurn(turn);
+  const reportId = String(latest?.market_report_id || "").trim();
+  const delivery = latest?.market_report_delivery;
+  if (
+    !reportId ||
+    delivery?.report_id !== reportId ||
+    delivery?.report_type !== "ai_ceo.market_research" ||
+    delivery?.listing_import_ready !== true
+  ) {
+    return null;
+  }
+  const record = (state.saasReports || []).find(
+    (item) => item?.report_id === reportId && item?.report_type === "ai_ceo.market_research",
+  );
+  const body = record?.report && typeof record.report === "object" ? record.report : {};
+  if (
+    record?.frontend_generated_from_ai_ceo_chat === true ||
+    record?.safe_local_only === true ||
+    body.frontend_generated_from_ai_ceo_chat === true ||
+    body.safe_local_only === true
+  ) {
+    return null;
+  }
+  const handoff = body.listing_handoff && typeof body.listing_handoff === "object" ? body.listing_handoff : {};
+  return handoff.ready_for_listing_draft === true ? record : null;
 }
 
 function saasAiCeoMarketReportRecordIdFromTurn(turn = {}) {
@@ -31192,9 +31356,18 @@ function saasAiCeoMarketListingFieldsFromTurn(turn = {}) {
   };
 }
 
-function saasAiCeoMarketReportRecordFromTurn(turn = {}) {
+function buildLocalQaSaasAiCeoBackendReportFixture(turn = {}) {
+  if (!isLocalJiejingQaOrigin()) return null;
   const latest = normalizeSaasAiCeoLatestTurn(turn);
-  if (!latest || !saasAiCeoMarketResearchEligibility(latest).eligible) return null;
+  if (
+    !latest ||
+    latest.pending ||
+    !latest.assistant_text ||
+    ["model_answer_rejected", "model_call_failed", "source_backed_market_report_draft", "market_report_recovery_draft"].includes(latest.status) ||
+    latest.answer_quality?.accepted === false
+  ) {
+    return null;
+  }
   const reportId = latest.market_report_id || saasAiCeoMarketReportRecordIdFromTurn(latest);
   if (!reportId) return null;
   const sourceRecords = normalizeSaasAiCeoSourceRecords(latest.source_records || []);
@@ -31231,13 +31404,14 @@ function saasAiCeoMarketReportRecordFromTurn(turn = {}) {
         ready_for_listing_draft: true,
         requires_human_review_before_publish: true,
         triggers_real_platform_write: false,
+        real_platform_writes_enabled: false,
         listing_fields: listingFields,
       },
       frontend_gets_model_api_key: false,
       runtime_gets_raw_ebay_token: false,
       secret_exposed: false,
     },
-    frontend_generated_from_ai_ceo_chat: true,
+    qa_backend_fixture: true,
     safe_local_only: true,
     triggers_real_platform_write: false,
     secret_exposed: false,
@@ -31247,8 +31421,14 @@ function saasAiCeoMarketReportRecordFromTurn(turn = {}) {
 function ensureSaasAiCeoMarketReportRecordFromTurn(turn = {}, existingRecord = null) {
   const latest = normalizeSaasAiCeoLatestTurn(turn);
   if (!latest || latest.pending) return latest;
-  const report = existingRecord?.report_id ? existingRecord : saasAiCeoMarketReportRecordFromTurn(latest);
-  if (!report?.report_id) return latest;
+  const report =
+    existingRecord?.report_id &&
+    existingRecord?.report_type === "ai_ceo.market_research" &&
+    existingRecord?.report &&
+    typeof existingRecord.report === "object"
+      ? existingRecord
+      : null;
+  if (!report) return latest;
   upsertSaasReportRecord(report);
   const delivery = saasAiCeoMarketReportDeliveryFromRecord(report);
   return normalizeSaasAiCeoLatestTurn({
@@ -31285,29 +31465,27 @@ function applySaasAiCeoMarketTurnToListing(marketTurn = null, options = {}) {
   const clickedProductMatches = saasAiCeoMarketResearchTurnMatchesClickedProduct(latest, options.expectedProduct || "");
   if (!latest || (!saasAiCeoMarketResearchEligibility(latest).eligible && !clickedProductMatches)) return false;
   rememberLatestSaasAiCeoMarketResearchTurn(latest);
-  const sourceReport =
-    (latest.market_report_id
-      ? (state.saasReports || []).find((record) => record?.report_id === latest.market_report_id && record.report_type === "ai_ceo.market_research")
-      : null) || latestSaasReportByTypes(["ai_ceo.market_research"]);
-  const hasConcreteSourceReport = Boolean(sourceReport && saasProductLabelForRecord(sourceReport));
-  const sourceReportProduct = hasConcreteSourceReport ? saasProductLabelForRecord(sourceReport) : "";
-  const structuredSourceReport =
-    sourceReportProduct &&
-    (!options.expectedProduct || saasAiCeoMarketImportProductKey(sourceReportProduct) === saasAiCeoMarketImportProductKey(options.expectedProduct))
-      ? sourceReport
-      : null;
-  state.saasListingComposerDraft = structuredSourceReport
-    ? saasListingDraftFromReport(structuredSourceReport, "ai_ceo_market_report")
-    : saasListingDraftFromAiCeoMarketTurn(latest);
+  const sourceReport = saasAuthoritativeAiCeoMarketReportForTurn(latest);
+  const sourceReportProduct = sourceReport ? saasProductLabelForRecord(sourceReport) : "";
+  if (
+    !sourceReport ||
+    !sourceReportProduct ||
+    (options.expectedProduct &&
+      saasAiCeoMarketImportProductKey(sourceReportProduct) !== saasAiCeoMarketImportProductKey(options.expectedProduct))
+  ) {
+    showActionToast("这份调研还没有可验证的后端工作记录，不能导入 Listing。请刷新 AI CEO 对话后重试。");
+    return false;
+  }
+  state.saasListingComposerDraft = saasListingDraftFromReport(sourceReport, "ai_ceo_market_report");
   if (!state.saasListingComposerDraft) {
     showActionToast("这次调研还没有形成可导入的具体商品。请回到 AI CEO 重新生成候选商品卡。");
     return false;
   }
   resetSaasListingPublishEvidenceForNewProject();
   resetSaasBulkWorkspaceForListingProject();
-  state.saasListingComposerInput = saasListingImportedAiCeoMarketInput(state.saasListingComposerDraft, structuredSourceReport, latest);
-  state.saasListingSourceMode = structuredSourceReport ? "ai_ceo_market_report" : "ai_ceo_market_chat";
-  const importedHandoff = saasListingImportedAiCeoMarketHandoff(state.saasListingComposerDraft, structuredSourceReport, latest);
+  state.saasListingComposerInput = saasListingImportedAiCeoMarketInput(state.saasListingComposerDraft, sourceReport, latest);
+  state.saasListingSourceMode = "ai_ceo_market_report";
+  const importedHandoff = saasListingImportedAiCeoMarketHandoff(state.saasListingComposerDraft, sourceReport, latest);
   state.saasListingCeoHandoff = {
     id: latest.assistant_id || `ai-ceo-market-${Date.now()}`,
     title: importedHandoff.title,
@@ -31449,6 +31627,9 @@ function saasAiCeoMarketResearchEligibility(turn = {}) {
   }
   if (latest.answer_quality?.accepted === false || latest.market_report_delivery?.listing_import_ready === false) {
     return { eligible: false, reason: "answer_quality_rejected", latest };
+  }
+  if (!saasAuthoritativeAiCeoMarketReportForTurn(latest)) {
+    return { eligible: false, reason: "backend_report_required", latest };
   }
   const text = `${latest.user_text || ""}\n${latest.assistant_text || ""}`;
   const hasEbayListingSignal = /eBay|ebay|Listing|listing|刊登|上架|SKU|item specifics|类目|主图|标题|描述/i.test(text);
@@ -40649,6 +40830,7 @@ function handleSourceIntakeAction(action) {
     const missing = manualSourceMissingLabels(facts);
     const draft = activeListingDraft();
     state.manualSourceFacts = facts;
+    const supplierFactAttestation = confirmManualSourceFactsForAiCeo(facts);
     state.manualProductFacts = {
       ...state.manualProductFacts,
       [draft.id]: {
@@ -40657,7 +40839,11 @@ function handleSourceIntakeAction(action) {
       },
     };
     state.sourceManualStatus = "saved";
-    state.supplierFactsStatus = missing.length ? "partial" : "saved";
+    state.supplierFactsStatus = missing.length
+      ? "partial"
+      : supplierFactAttestation.supplier_facts_verified
+        ? "verified"
+        : "saved";
     if (!missing.length) {
       state.taxonomyStatus = "checked";
     }
@@ -45473,7 +45659,7 @@ function normalizeSaasAiCeoMarketReportDelivery(delivery = null) {
     contract_version: publicRuntimeText(delivery.contract_version || "").slice(0, 100),
     mode: publicRuntimeText(delivery.mode || "").slice(0, 80),
     report_id: String(delivery.report_id || "").replace(/[^A-Za-z0-9_-]/g, ""),
-    report_type: publicRuntimeText(delivery.report_type || "ai_ceo.market_research").slice(0, 80),
+    report_type: publicRuntimeText(delivery.report_type || "").slice(0, 80),
     status: publicRuntimeText(delivery.status || "saved").slice(0, 80),
     title: publicRuntimeText(delivery.title || "AI CEO 市场调研").slice(0, 180),
     product: publicRuntimeText(delivery.product || "").slice(0, 120),
@@ -48440,7 +48626,7 @@ function exposeLocalJiejingTestHooks() {
       getLatestSaasEbaySyncSummary,
       syncSaasEbayReadOnlyData,
       ensureSaasAiCeoMarketReportRecordFromTurn,
-      saasAiCeoMarketReportRecordFromTurn,
+      buildLocalQaSaasAiCeoBackendReportFixture,
       saasAiCeoMarketListingFieldsFromTurn,
       updateSaasAiCeoLatestReply,
       handleSaasAiCeoImportMarketToListing,
@@ -48519,7 +48705,9 @@ function runLocalJiejingQaScenarioFromUrl() {
     };
     state.saasLoading = false;
     state.saasProtectedStateReady = true;
-    const savedTurn = ensureSaasAiCeoMarketReportRecordFromTurn(qaTurn) || normalizeSaasAiCeoLatestTurn(qaTurn);
+    const qaBackendReport = buildLocalQaSaasAiCeoBackendReportFixture(qaTurn);
+    const savedTurn =
+      ensureSaasAiCeoMarketReportRecordFromTurn(qaTurn, qaBackendReport) || normalizeSaasAiCeoLatestTurn(qaTurn);
     updateSaasAiCeoLatestReply(savedTurn);
     Promise.resolve(handleSaasAiCeoImportMarketToListing()).then((imported) => {
       openApp("product");

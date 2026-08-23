@@ -220,6 +220,21 @@ def main() -> int:
         if not FakeModelHandler.calls:
             return fail("platform fallback should call the backend model provider")
         first_call_count = len(FakeModelHandler.calls)
+        tasks_after_success = fetch_json(f"{base_url}/tasks?store_id={store_id}&limit=30", token=token).get("tasks", [])
+        successful_attempts = [item for item in tasks_after_success if item.get("task_type") == "merchant_ceo_chat_attempt"]
+        model_tasks = [item for item in tasks_after_success if item.get("task_type") == "merchant_ceo_chat"]
+        if len(successful_attempts) != 1 or len(model_tasks) != 1:
+            return fail(f"one model request should create one attempt and one metered model task: {tasks_after_success}")
+        successful_attempt = successful_attempts[0]
+        successful_output = successful_attempt.get("output") if isinstance(successful_attempt.get("output"), dict) else {}
+        if successful_attempt.get("status") != "completed" or successful_output.get("attempt_state") != "completed":
+            return fail(f"successful model request should complete its single attempt: {successful_attempt}")
+        if successful_output.get("actual_task_id") != model_tasks[0].get("task_id"):
+            return fail(f"successful attempt must link the actual metered model task: {successful_attempt}")
+        if successful_output.get("artifact_outcome") != "not_requested":
+            return fail(f"general chat should record artifact_outcome=not_requested: {successful_attempt}")
+        if successful_attempt.get("input", {}).get("model_usage_required") is not False:
+            return fail(f"attempt itself must remain non-metered: {successful_attempt}")
 
         settings_after_first = fetch_json(f"{base_url}/stores/{store_id}/model/settings", token=token).get("model_settings", {})
         quota_after_first = (
@@ -249,6 +264,21 @@ def main() -> int:
             return fail(f"blocked platform fallback should expose exhausted backend quota: {blocked_quota}")
         if len(FakeModelHandler.calls) != first_call_count:
             return fail("exhausted platform fallback should not call the backend model provider again")
+        tasks_after_quota_block = fetch_json(f"{base_url}/tasks?store_id={store_id}&limit=30", token=token).get("tasks", [])
+        attempts_after_quota_block = [item for item in tasks_after_quota_block if item.get("task_type") == "merchant_ceo_chat_attempt"]
+        model_tasks_after_quota_block = [item for item in tasks_after_quota_block if item.get("task_type") == "merchant_ceo_chat"]
+        blocked_attempts = [
+            item
+            for item in attempts_after_quota_block
+            if item.get("status") == "blocked" and item.get("output", {}).get("attempt_state") == "blocked_quota"
+        ]
+        if len(attempts_after_quota_block) != 2 or len(blocked_attempts) != 1:
+            return fail(f"quota rejection should update exactly one additional non-metered attempt: {tasks_after_quota_block}")
+        if len(model_tasks_after_quota_block) != 1:
+            return fail(f"quota rejection must not create another metered model task: {tasks_after_quota_block}")
+        blocked_attempt_input = blocked_attempts[0].get("input") if isinstance(blocked_attempts[0].get("input"), dict) else {}
+        if blocked_attempt_input.get("model_usage_required") is not False:
+            return fail(f"quota-blocked attempt must remain non-metered: {blocked_attempts[0]}")
 
         merchant_key = "unit-merchant-model-key-not-returned"
         saved_model = post_json(

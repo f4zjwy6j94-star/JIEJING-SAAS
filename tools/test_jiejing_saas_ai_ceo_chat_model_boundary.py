@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -149,11 +150,32 @@ def fetch_json(url: str, *, token: str | None = None) -> dict[str, Any]:
         return json.loads(response.read().decode("utf-8"))
 
 
-def post_json(url: str, payload: dict[str, Any], *, token: str | None = None) -> dict[str, Any]:
+def post_json(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    token: str | None = None,
+    expected_status: int | tuple[int, ...] | None = None,
+) -> dict[str, Any]:
     body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=body, headers=_headers(token=token), method="POST")
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            parsed = json.loads(response.read().decode("utf-8"))
+            parsed["_http_status"] = int(response.status)
+            allowed = (expected_status,) if isinstance(expected_status, int) else expected_status
+            if allowed is not None and int(response.status) not in allowed:
+                raise AssertionError(f"expected HTTP {allowed}, got {response.status}: {parsed}")
+            if allowed is None and not 200 <= int(response.status) < 300:
+                raise AssertionError(f"expected HTTP 2xx, got {response.status}: {parsed}")
+            return parsed
+    except urllib.error.HTTPError as exc:
+        parsed = json.loads(exc.read().decode("utf-8"))
+        parsed["_http_status"] = int(exc.code)
+        allowed = (expected_status,) if isinstance(expected_status, int) else expected_status
+        if allowed is not None and int(exc.code) in allowed:
+            return parsed
+        raise AssertionError(f"expected HTTP {allowed or '2xx'}, got {exc.code}: {parsed}") from exc
 
 
 def _headers(*, token: str | None = None) -> dict[str, str]:
@@ -508,13 +530,13 @@ def main() -> int:
             return fail(f"pre-model realtime market research should be saved as a structured Listing report: {pre_model_ai_market_report}")
         pre_model_report_body = pre_model_ai_market_report.get("report") if isinstance(pre_model_ai_market_report.get("report"), dict) else {}
         pre_model_handoff = pre_model_report_body.get("listing_handoff") if isinstance(pre_model_report_body.get("listing_handoff"), dict) else {}
-        if pre_model_handoff.get("ready_for_listing_draft") is not True or pre_model_handoff.get("triggers_real_platform_write") is not False:
-            return fail(f"pre-model realtime market report should be importable but never execute eBay writes: {pre_model_handoff}")
+        if pre_model_handoff.get("ready_for_listing_draft") is not False or pre_model_handoff.get("triggers_real_platform_write") is not False:
+            return fail(f"pre-model realtime market report must wait for a concrete selection and supplier facts: {pre_model_handoff}")
         pre_model_delivery = pre_model_market_report_response.get("ai_ceo_market_report_delivery", {})
         if pre_model_delivery.get("contract_version") != "2026-07-04-ai-ceo-market-report-delivery-v1":
             return fail(f"pre-model realtime market report should return the Listing delivery contract: {pre_model_delivery}")
-        if pre_model_delivery.get("structured_report_saved") is not True or pre_model_delivery.get("listing_import_ready") is not True:
-            return fail(f"pre-model realtime market report should be saved and import-ready: {pre_model_delivery}")
+        if pre_model_delivery.get("structured_report_saved") is not True or pre_model_delivery.get("listing_import_ready") is not False:
+            return fail(f"pre-model realtime market report should be saved but not import-ready before facts are complete: {pre_model_delivery}")
         for forbidden_key in ("frontend_gets_model_api_key", "runtime_gets_raw_ebay_token", "secret_exposed", "triggers_real_platform_write"):
             if pre_model_delivery.get(forbidden_key) is not False:
                 return fail(f"pre-model report delivery should keep {forbidden_key}=False: {pre_model_delivery}")
@@ -639,8 +661,11 @@ def main() -> int:
                 "client_timezone": "Asia/Shanghai",
             },
             token=other_token,
+            expected_status=503,
         )
         other_chat = other_response.get("ai_ceo_chat", {})
+        if other_response.get("_http_status") != 503:
+            return fail(f"missing model dependency must return HTTP 503: {other_response}")
         if other_chat.get("status") != "blocked_before_model_chat":
             return fail(f"other company must not inherit another company's model connection: {other_chat}")
         if set(other_chat.get("blocked_by") or []) != {"merchant_model_api_key_not_saved", "platform_model_default_not_configured"}:
@@ -909,8 +934,8 @@ def main() -> int:
         if report_body.get("contract_version") != "2026-07-04-ai-ceo-market-report-frontstage-v2":
             return fail(f"AI CEO market report should carry the current contract version: {report_body}")
         handoff = report_body.get("listing_handoff") if isinstance(report_body.get("listing_handoff"), dict) else {}
-        if handoff.get("ready_for_listing_draft") is not True or handoff.get("real_platform_writes_enabled") is not False:
-            return fail(f"AI CEO market report should be ready for Listing draft but keep real writes disabled: {handoff}")
+        if handoff.get("ready_for_listing_draft") is not False or handoff.get("real_platform_writes_enabled") is not False:
+            return fail(f"AI CEO market report must remain non-importable until supplier facts are verified: {handoff}")
         if handoff.get("source_mode") != "ai_ceo_chat_structured_handoff":
             return fail(f"AI CEO market report should use the shared chat-to-Listing handoff source mode: {handoff}")
         listing_fields = handoff.get("listing_fields") if isinstance(handoff.get("listing_fields"), dict) else {}
@@ -918,8 +943,8 @@ def main() -> int:
             return fail(f"AI CEO market report should expose structured Listing handoff fields: {listing_fields}")
         if listing_fields.get("ebay_listing_field_map_contract") != "ai_ceo_market_research_to_ebay_inventory_offer_v1":
             return fail(f"AI CEO market report should expose eBay Inventory/Offer field mapping: {listing_fields}")
-        if listing_fields.get("ready_for_listing_draft") is not True or listing_fields.get("triggers_real_platform_write") is not False:
-            return fail(f"AI CEO listing fields should remain draft-only and confirmation-gated: {listing_fields}")
+        if listing_fields.get("ready_for_listing_draft") is not False or listing_fields.get("triggers_real_platform_write") is not False:
+            return fail(f"AI CEO listing fields should remain non-importable and confirmation-gated: {listing_fields}")
         if not listing_fields.get("market_rationale") or listing_fields.get("selling_points") or listing_fields.get("description_seed"):
             return fail(f"AI CEO market rationale must stay separate from buyer-facing Listing copy: {listing_fields}")
         if listing_fields.get("buyer_copy_status") != "waiting_for_merchant_product_facts":
@@ -944,8 +969,8 @@ def main() -> int:
             return fail(f"AI CEO market report should return the frontend delivery contract: {market_delivery}")
         if market_delivery.get("report_id") != ai_ceo_market_report.get("report_id"):
             return fail(f"AI CEO market delivery should point to the saved report: {market_delivery}")
-        if market_delivery.get("structured_report_saved") is not True or market_delivery.get("listing_import_ready") is not True:
-            return fail(f"AI CEO market delivery should make Listing import explicit: {market_delivery}")
+        if market_delivery.get("structured_report_saved") is not True or market_delivery.get("listing_import_ready") is not False:
+            return fail(f"AI CEO market delivery should expose saved-but-not-importable truth: {market_delivery}")
         for forbidden_key in ("frontend_gets_model_api_key", "runtime_gets_raw_ebay_token", "secret_exposed", "triggers_real_platform_write"):
             if market_delivery.get(forbidden_key) is not False:
                 return fail(f"AI CEO market delivery should keep {forbidden_key}=False: {market_delivery}")
@@ -997,8 +1022,8 @@ def main() -> int:
             return fail(f"safe no-publish market research should still be saved as a structured report: {safe_non_publish_report}")
         safe_non_publish_body = safe_non_publish_report.get("report") if isinstance(safe_non_publish_report.get("report"), dict) else {}
         safe_non_publish_handoff = safe_non_publish_body.get("listing_handoff") if isinstance(safe_non_publish_body.get("listing_handoff"), dict) else {}
-        if safe_non_publish_handoff.get("ready_for_listing_draft") is not True or safe_non_publish_handoff.get("triggers_real_platform_write") is not False:
-            return fail(f"safe no-publish market report should remain a draft-only handoff: {safe_non_publish_handoff}")
+        if safe_non_publish_handoff.get("ready_for_listing_draft") is not False or safe_non_publish_handoff.get("triggers_real_platform_write") is not False:
+            return fail(f"safe no-publish market report should remain saved but non-importable until facts are verified: {safe_non_publish_handoff}")
         reports_after_safe_non_publish = fetch_json(f"{base_url}/reports?limit=30", token=token).get("reports", [])
         if not any(item.get("report_id") == safe_non_publish_report.get("report_id") for item in reports_after_safe_non_publish):
             return fail("safe no-publish market report should be queryable from /reports")

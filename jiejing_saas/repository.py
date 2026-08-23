@@ -6,6 +6,7 @@ import base64
 import hmac
 import json
 import hashlib
+import math
 import os
 import re
 import secrets
@@ -117,6 +118,15 @@ AI_CEO_RULE_MEMORY_POLICY = "merchant_rule"
 AI_CEO_MARKET_REPORT_CONTRACT_VERSION = "2026-07-04-ai-ceo-market-report-frontstage-v2"
 AI_CEO_MARKET_LISTING_HANDOFF_CONTRACT_VERSION = "2026-07-04-ai-ceo-market-to-listing-handoff-v2"
 AI_CEO_MARKET_EBAY_FIELD_MAP_CONTRACT = "ai_ceo_market_research_to_ebay_inventory_offer_v1"
+AI_CEO_SUPPLIER_FACT_ATTESTATION_CONTRACT_VERSION = "jiejing_ai_ceo_supplier_fact_attestation_v1"
+AI_CEO_SUPPLIER_FACT_ATTESTATION_SOURCE = "authenticated_merchant_request"
+AI_CEO_REQUIRED_SUPPLIER_FACT_KEYS = (
+    "material",
+    "package_weight_g",
+    "package_dimensions_cm",
+    "item_location",
+    "unit_cost",
+)
 _DOMESTIC_BILLING_COMPANY_LOCKS = tuple(threading.Lock() for _ in range(128))
 _MEDIA_CREDIT_COMPANY_LOCKS = tuple(threading.Lock() for _ in range(128))
 _PLATFORM_RELIABILITY_ALERT_LOCK = threading.Lock()
@@ -2708,14 +2718,27 @@ class SaaSRepository:
         refreshed = self.get_oauth_authorization_request_by_state(state_nonce=existing["state_nonce"])
         return refreshed or {}
 
-    def create_task(self, *, company_id: str, store_id: str, user_id: str, task_type: str, title: str, input_data: dict[str, Any]) -> dict[str, Any]:
+    def create_task(
+        self,
+        *,
+        company_id: str,
+        store_id: str,
+        user_id: str,
+        task_type: str,
+        title: str,
+        input_data: dict[str, Any],
+        task_id: str | None = None,
+    ) -> dict[str, Any]:
         self.initialize()
-        task_id = _id("task")
+        requested_task_id = str(task_id or "").strip()
+        if requested_task_id and not re.fullmatch(r"task_[A-Za-z0-9_-]{8,96}", requested_task_id):
+            raise ValueError("invalid task id")
+        task_id = requested_task_id or _id("task")
         created_at = now_iso()
         with self._connect() as conn:
-            conn.execute(
+            inserted = conn.execute(
                 """
-                insert into tasks (
+                insert or ignore into tasks (
                   task_id, company_id, store_id, user_id, runtime_run_id, task_type, title,
                   status, created_at, updated_at, input_json, output_json
                 ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -2735,19 +2758,23 @@ class SaaSRepository:
                     "{}",
                 ),
             )
-            self._insert_audit(
-                conn,
-                company_id=company_id,
-                store_id=store_id,
-                user_id=user_id,
-                actor_type="user",
-                action_type="task.create",
-                target_type="task",
-                target_id=task_id,
-                summary="SaaS task created.",
-                details={"task_type": task_type, "title": title},
-            )
-        return self.get_task(company_id=company_id, task_id=task_id) or {}
+            if int(inserted.rowcount or 0) == 1:
+                self._insert_audit(
+                    conn,
+                    company_id=company_id,
+                    store_id=store_id,
+                    user_id=user_id,
+                    actor_type="user",
+                    action_type="task.create",
+                    target_type="task",
+                    target_id=task_id,
+                    summary="SaaS task created.",
+                    details={"task_type": task_type, "title": title},
+                )
+        task = self.get_task(company_id=company_id, task_id=task_id)
+        if not task:
+            raise KeyError("task id collision")
+        return task
 
     def create_queue_job(self, *, company_id: str, task_id: str, job_data: dict[str, Any], max_attempts: int = 2) -> dict[str, Any]:
         self.initialize()
@@ -3888,6 +3915,11 @@ class SaaSRepository:
                 (status, updated_at, output_json, task_id, company_id),
             )
             if audit_summary:
+                audit_details = {"status": status}
+                if isinstance(output, dict):
+                    for key in ("attempt_state", "failure_code", "actual_task_id", "artifact_outcome", "artifact_report_id"):
+                        if output.get(key) not in (None, ""):
+                            audit_details[key] = output.get(key)
                 self._insert_audit(
                     conn,
                     company_id=company_id,
@@ -3898,7 +3930,7 @@ class SaaSRepository:
                     target_type="task",
                     target_id=task_id,
                     summary=audit_summary,
-                    details={"status": status},
+                    details=audit_details,
                 )
         return self.get_task(company_id=company_id, task_id=task_id) or {}
 
@@ -4128,22 +4160,102 @@ class SaaSRepository:
                 answer=answer,
                 candidates=product_candidates,
             )
-        listing_import_ready = bool(product and answer_accepted)
         question = _sanitize_merchant_ceo_text(message, limit=900)
         source_count = len(source_records) if isinstance(source_records, list) else 0
-        title = f"AI CEO 市场调研：{product}"[:180] if product else "AI CEO 市场调研"
-        summary = (
-            f"AI CEO 已把“{product}”整理成可导入 Listing 的市场调研。"
-            if product
-            else "AI CEO 已把本次选品/市场调研整理成可导入 Listing 的工作记录。"
+        selected_candidate_id = str(selected_candidate.get("candidate_id") or "")
+        candidate_count = len(product_candidates)
+        merchant_intent = "ebay_product_research"
+        evidence_status = "source_backed" if source_count else "missing_sources"
+        submitted_attestation = (
+            chat.get("supplier_fact_attestation")
+            if isinstance(chat.get("supplier_fact_attestation"), dict)
+            else {}
         )
+        attestation_is_server_issued = bool(
+            submitted_attestation.get("contract_version") == AI_CEO_SUPPLIER_FACT_ATTESTATION_CONTRACT_VERSION
+            and submitted_attestation.get("source") == AI_CEO_SUPPLIER_FACT_ATTESTATION_SOURCE
+        )
+        supplier_fact_attestation = normalize_ai_ceo_supplier_fact_attestation(
+            supplier_facts=(
+                submitted_attestation.get("supplier_facts")
+                if attestation_is_server_issued
+                else chat.get("supplier_facts")
+            ),
+            supplier_facts_verified=(
+                submitted_attestation.get("merchant_confirmation_received") is True
+                if attestation_is_server_issued
+                else False
+            ),
+            source=(
+                AI_CEO_SUPPLIER_FACT_ATTESTATION_SOURCE
+                if attestation_is_server_issued
+                else "untrusted_chat_output"
+            ),
+        )
+        supplier_facts = supplier_fact_attestation["supplier_facts"]
+        missing_supplier_fact_keys = supplier_fact_attestation["missing_supplier_fact_keys"]
+        supplier_facts_verified = supplier_fact_attestation["supplier_facts_verified"] is True
+        supplier_fact_status = (
+            "verified"
+            if supplier_facts_verified and not missing_supplier_fact_keys
+            else "unverified"
+            if not missing_supplier_fact_keys
+            else "incomplete"
+        )
+        selected_candidate_count = sum(1 for candidate in product_candidates if candidate.get("selected") is True)
+        blocked_by: list[str] = []
+        if not answer_accepted:
+            blocked_by.append("answer_quality_not_ready_for_listing")
+        if not product_candidates:
+            blocked_by.append("concrete_candidate_required")
+        if not selected_candidate_id or selected_candidate_count != 1:
+            blocked_by.append("selected_candidate_required")
+        if not source_count:
+            blocked_by.append("source_evidence_required")
+        if missing_supplier_fact_keys:
+            blocked_by.append("supplier_facts_incomplete")
+        elif not supplier_facts_verified:
+            blocked_by.append("supplier_facts_unverified")
+        listing_import_ready = bool(
+            answer_accepted
+            and product
+            and candidate_count >= 1
+            and selected_candidate_id
+            and selected_candidate_count == 1
+            and source_count >= 1
+            and supplier_fact_status == "verified"
+            and bool(report_id)
+            and not blocked_by
+        )
+        title = f"AI CEO 市场调研：{product}"[:180] if product else "AI CEO 市场调研"
+        if listing_import_ready:
+            summary = f"AI CEO 已把“{product}”整理成可导入 Listing 的市场调研。"
+        elif product:
+            summary = f"AI CEO 已把“{product}”整理成市场调研工作记录；完成来源与供应商事实核验后再进入 Listing 草稿。"
+        else:
+            summary = "AI CEO 已保存本次选品/市场调研工作记录；形成唯一候选并完成事实核验后再进入 Listing 草稿。"
         report_payload = {
             "contract_version": AI_CEO_MARKET_REPORT_CONTRACT_VERSION,
+            "artifact_type": "ai_ceo.market_research",
+            "artifact_version": AI_CEO_MARKET_REPORT_CONTRACT_VERSION,
+            "merchant_intent": merchant_intent,
             "source_type": "ai_ceo_chat",
             "source_command_id": command_id or "",
             "product": product,
             "product_candidates": product_candidates,
+            "candidate_products": product_candidates,
+            "candidate_count": candidate_count,
             "selected_product_candidate": selected_candidate,
+            "selected_candidate_id": selected_candidate_id,
+            "evidence_status": evidence_status,
+            "supplier_fact_status": supplier_fact_status,
+            "supplier_facts": supplier_facts,
+            "supplier_facts_verified": supplier_facts_verified,
+            "supplier_fact_attestation": supplier_fact_attestation,
+            "supplier_fact_source": supplier_fact_attestation["source"],
+            "missing_supplier_fact_keys": missing_supplier_fact_keys,
+            "listing_import_ready": listing_import_ready,
+            "blocked_by": blocked_by,
             "conversation_context": {
                 "contract_version": "2026-07-11-ai-ceo-product-context-v1",
                 "selection_mode": selection_mode,
@@ -4176,10 +4288,10 @@ class SaaSRepository:
                         selected_candidate=selected_candidate,
                         product_candidates=product_candidates,
                     )
-                    if listing_import_ready
+                    if product and answer_accepted
                     else {}
                 ),
-                "blocked_by": [] if listing_import_ready else ["answer_quality_not_ready_for_listing"],
+                "blocked_by": list(blocked_by),
                 "requires_human_review_before_publish": True,
                 "real_platform_writes_enabled": False,
                 "triggers_real_platform_write": False,
@@ -4190,6 +4302,10 @@ class SaaSRepository:
             "real_platform_writes_enabled": False,
             "secret_exposed": False,
         }
+        listing_fields_payload = report_payload["listing_handoff"].get("listing_fields")
+        if isinstance(listing_fields_payload, dict) and listing_fields_payload:
+            listing_fields_payload["ready_for_listing_draft"] = listing_import_ready
+            listing_fields_payload["artifact_blocked_by"] = list(blocked_by)
         with self._connect() as conn:
             conn.execute(
                 """
@@ -4247,7 +4363,7 @@ class SaaSRepository:
                     "task_id": task["task_id"],
                     "command_id": command_id or "",
                     "source_record_count": source_count,
-                    "ready_for_listing_draft": True,
+                    "ready_for_listing_draft": listing_import_ready,
                     "frontend_gets_model_api_key": False,
                     "runtime_gets_raw_ebay_token": False,
                     "real_platform_writes_enabled": False,
@@ -15439,6 +15555,130 @@ def _sanitize_merchant_ceo_text(value: Any, *, limit: int = 600) -> str:
     return text[:limit]
 
 
+def _safe_ai_ceo_supplier_text(value: Any, *, limit: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    raw = value.strip()
+    if not raw or len(raw) > limit or re.search(r"[\x00-\x1f<>]", raw):
+        return ""
+    safe = _sanitize_merchant_ceo_text(raw, limit=limit)
+    if safe != raw or "redacted" in safe.lower():
+        return ""
+    compact = re.sub(r"\s+", "", safe).lower()
+    if compact in {"-", "--", "n/a", "na", "none", "null", "unknown", "pending", "tbd"}:
+        return ""
+    if any(marker in compact for marker in ("待确认", "未确认", "不清楚", "不知道")):
+        return ""
+    return safe
+
+
+def _safe_ai_ceo_supplier_number(value: Any, *, maximum: float, unit_suffix: str = "") -> int | float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        suffix = rf"(?:\s*(?:{unit_suffix}))?" if unit_suffix else ""
+        if not re.fullmatch(rf"[0-9]+(?:\.[0-9]+)?{suffix}", text, flags=re.IGNORECASE):
+            return None
+        numeric_text = re.match(r"[0-9]+(?:\.[0-9]+)?", text)
+        number = float(numeric_text.group(0)) if numeric_text else float("nan")
+    else:
+        return None
+    if not math.isfinite(number) or number <= 0 or number > maximum:
+        return None
+    return int(number) if number.is_integer() else number
+
+
+def _safe_ai_ceo_supplier_dimensions(value: Any) -> dict[str, int | float] | None:
+    if isinstance(value, dict):
+        dimensions = {
+            key: _safe_ai_ceo_supplier_number(value.get(key), maximum=1_000, unit_suffix=r"cm|厘米")
+            for key in ("length", "width", "height")
+        }
+    elif isinstance(value, str):
+        match = re.fullmatch(
+            r"\s*([0-9]+(?:\.[0-9]+)?)\s*[x×*]\s*([0-9]+(?:\.[0-9]+)?)\s*[x×*]\s*"
+            r"([0-9]+(?:\.[0-9]+)?)\s*(?:cm|厘米)?\s*",
+            value,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return None
+        dimensions = {
+            key: _safe_ai_ceo_supplier_number(raw, maximum=1_000)
+            for key, raw in zip(("length", "width", "height"), match.groups())
+        }
+    else:
+        return None
+    if any(dimensions[key] is None for key in ("length", "width", "height")):
+        return None
+    return {key: dimensions[key] for key in ("length", "width", "height") if dimensions[key] is not None}
+
+
+def _safe_ai_ceo_supplier_unit_cost(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    match = re.fullmatch(
+        r"(?i)(CNY|RMB|USD|EUR|GBP|AUD|CAD|HKD|JPY|SGD)\s+([0-9]+(?:\.[0-9]{1,2})?)",
+        text,
+    )
+    if not match:
+        return ""
+    amount = float(match.group(2))
+    if not math.isfinite(amount) or amount <= 0 or amount > 1_000_000_000:
+        return ""
+    return f"{match.group(1).upper()} {match.group(2)}"
+
+
+def normalize_ai_ceo_supplier_fact_attestation(
+    *,
+    supplier_facts: Any,
+    supplier_facts_verified: Any,
+    source: str,
+) -> dict[str, Any]:
+    """Allowlist and attest merchant-supplied facts without trusting model output."""
+
+    raw = supplier_facts if isinstance(supplier_facts, dict) else {}
+    cleaned: dict[str, Any] = {}
+    material = _safe_ai_ceo_supplier_text(raw.get("material"), limit=120)
+    if material:
+        cleaned["material"] = material
+    weight = _safe_ai_ceo_supplier_number(raw.get("package_weight_g"), maximum=100_000, unit_suffix=r"g|克")
+    if weight is not None:
+        cleaned["package_weight_g"] = weight
+    dimensions = _safe_ai_ceo_supplier_dimensions(raw.get("package_dimensions_cm"))
+    if dimensions:
+        cleaned["package_dimensions_cm"] = dimensions
+    location = _safe_ai_ceo_supplier_text(raw.get("item_location"), limit=160)
+    if location:
+        cleaned["item_location"] = location
+    unit_cost = _safe_ai_ceo_supplier_unit_cost(raw.get("unit_cost"))
+    if unit_cost:
+        cleaned["unit_cost"] = unit_cost
+
+    present_keys = {key for key in AI_CEO_REQUIRED_SUPPLIER_FACT_KEYS if raw.get(key) not in (None, "", {}, [])}
+    valid_keys = set(cleaned)
+    unresolved_keys = [key for key in AI_CEO_REQUIRED_SUPPLIER_FACT_KEYS if key not in valid_keys]
+    invalid_keys = sorted(present_keys - valid_keys)
+    trusted_source = str(source or "") == AI_CEO_SUPPLIER_FACT_ATTESTATION_SOURCE
+    merchant_confirmation_received = bool(trusted_source and supplier_facts_verified is True)
+    verified = bool(trusted_source and merchant_confirmation_received and not unresolved_keys)
+    return {
+        "contract_version": AI_CEO_SUPPLIER_FACT_ATTESTATION_CONTRACT_VERSION,
+        "source": AI_CEO_SUPPLIER_FACT_ATTESTATION_SOURCE if trusted_source else "untrusted_chat_output",
+        "supplier_facts": cleaned,
+        "supplier_facts_verified": verified,
+        "merchant_confirmation_received": merchant_confirmation_received,
+        "missing_supplier_fact_keys": unresolved_keys,
+        "invalid_supplier_fact_keys": invalid_keys,
+        "unknown_field_count": len(set(str(key) for key in raw) - set(AI_CEO_REQUIRED_SUPPLIER_FACT_KEYS)),
+        "secret_exposed": False,
+    }
+
+
 def _scoped_ai_ceo_chat_turn_id(*, company_id: str, user_id: str, assistant_id: str) -> str:
     digest = hashlib.sha256(f"{company_id}|{user_id}|{assistant_id}".encode("utf-8")).hexdigest()[:32]
     return f"ceo_turn_{digest}"
@@ -15568,10 +15808,8 @@ def _ai_ceo_chat_turn_merge_score(turn: Any) -> int:
 
 
 def _looks_like_ai_ceo_market_research_turn(*, message: str, chat: dict[str, Any]) -> bool:
-    answer = str(chat.get("answer") or "")
     route = str(chat.get("route") or "")
     status = str(chat.get("status") or "")
-    combined = f"{message}\n{answer}\n{route}\n{chat.get('route_label') or ''}".lower()
     if status not in {
         "model_answered",
         "model_answered_non_live",
@@ -15581,26 +15819,33 @@ def _looks_like_ai_ceo_market_research_turn(*, message: str, chat: dict[str, Any
         "market_report_recovery_draft",
     }:
         return False
-    finance_only = any(
-        marker in combined
-        for marker in (
-            "stock",
-            "nasdaq",
-            "nyse",
-            "eps",
-            "earnings",
-            "美股",
-            "股票",
-            "股价",
-            "财报",
-            "营收",
-            "利润指引",
-        )
-    ) and not any(marker in combined for marker in ("ebay", "listing", "sku", "商品", "产品", "选品", "货源", "上架", "刊登"))
-    if finance_only:
+    if route not in {"ebay_workflow", "external_realtime", "confirmation_required", "general_chat", ""}:
         return False
-    has_market_signal = any(
-        marker in combined
+    request = _sanitize_merchant_ceo_text(message, limit=900).lower()
+    # Listing/刊登/上架 are shared by every marketplace.  They must not turn a
+    # request naming Shopify, Amazon, Taobao, etc. into an eBay artifact.
+    has_explicit_ebay_context = "ebay" in request
+    has_other_platform_context = any(
+        marker in request
+        for marker in (
+            "淘宝",
+            "天猫",
+            "京东",
+            "拼多多",
+            "亚马逊",
+            "amazon",
+            "shopify",
+            "shopee",
+            "lazada",
+            "temu",
+            "tiktok shop",
+            "抖音小店",
+            "快手小店",
+            "微信小店",
+        )
+    )
+    has_market_request = any(
+        marker in request
         for marker in (
             "market research",
             "market report",
@@ -15621,30 +15866,50 @@ def _looks_like_ai_ceo_market_research_turn(*, message: str, chat: dict[str, Any
             "需求",
         )
     )
-    has_product_signal = any(
-        marker in combined
+    has_selection_request = any(
+        marker in request
         for marker in (
-            "ebay",
-            "listing",
-            "sku",
-            "item specific",
-            "product",
-            "supplier",
-            "sourcing",
-            "1688",
-            "商品",
-            "产品",
-            "品类",
-            "货源",
             "选品",
-            "上架",
-            "刊登",
-            "标题",
-            "主图",
-            "类目",
+            "候选商品",
+            "候选产品",
+            "候选品",
+            "推荐商品",
+            "推荐产品",
+            "推荐品类",
+            "建议商品",
+            "建议产品",
+            "建议品类",
+            "商品方向",
+            "产品方向",
+            "卖什么",
+            "最值得测试",
+            "优先测试",
+            "小众品",
+            "货源",
+            "供应商",
+            "1688",
+            "recommend one product",
+            "recommend products",
+            "product candidate",
+            "product candidates",
+            "sourcing",
         )
     )
-    return bool(has_market_signal and has_product_signal and route in {"ebay_workflow", "external_realtime", "confirmation_required", ""})
+    has_explicit_selection_intent = "选品" in request or "product research" in request
+    has_artifact_context = bool(
+        has_explicit_ebay_context
+        or (
+            not has_other_platform_context
+            and (route == "ebay_workflow" or has_explicit_selection_intent)
+        )
+    )
+    return bool(has_artifact_context and (has_selection_request or has_market_request))
+
+
+def ai_ceo_market_artifact_eligible(*, message: str, chat: dict[str, Any]) -> bool:
+    """Public policy boundary used by the API before persisting a market artifact."""
+
+    return _looks_like_ai_ceo_market_research_turn(message=message, chat=chat)
 
 
 def _is_invalid_ai_ceo_market_product_label(value: Any) -> bool:

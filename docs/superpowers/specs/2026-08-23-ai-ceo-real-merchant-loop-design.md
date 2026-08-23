@@ -115,11 +115,15 @@ Chrome 扩展可以正常控制浏览器；此前 `setFiles: Not allowed` 发生
 ## 7. 路由与前端交接
 
 - eBay 工作流必须出现明确 eBay、Listing、刊登、选品或当前结构化工件上下文，通用“费用”“市场”“产品”不再单独触发。
+- 淘宝、Shopify、Amazon 等明确非 eBay 平台语境不得误入 eBay 工作流；只有同一请求又明确包含 eBay 时，才按 eBay 意图继续判断，通用 `Listing/刊登/上架` 不能覆盖其他平台。
 - 普通实时研究可以保存普通工作记录，但不能生成 `ai_ceo.market_research`。
 - 删除发送消息时的无条件 Listing 同步。
 - Listing CTA 仅在后端 delivery 明确 `listing_import_ready=true` 且带有效 artifact ID 时渲染。
 - 后端无工件时，前端不得根据回答文本自行创建权威市场报告。
-- HTTP 503 等依赖失败显示“本次未调用模型、未消耗次数、未生成草稿”，并保留可重试入口。
+- 点击某份报告携带 `reportId` 时只能导入同一后端 report，不得以 assistant id、商品名或最新记录替代。
+- 模型调用前的 HTTP 503 显示“本次未调用模型、未消耗次数、未生成草稿”；若模型已经调用而后续内部持久化失败，则必须显示 `usage_consumed=true`、不生成草稿并阻止立即盲目重试。
+- `merchant_ceo_chat_attempt` 是每次模型路径的非计量状态外壳；未预期异常必须进入 `failed_internal_dependency` 终态，实际模型任务与用量事实在后续命令/报告持久化之前保存，公共响应和日志不得包含原始异常或秘密。
+- 市场报告只有在来源证据、唯一候选和供应商事实均完成核验后才可导入；事实齐全但未核验时使用 `supplier_facts_unverified` 阻断，商家摘要不得写“可导入”。
 
 ## 8. 素材点与真实生图
 

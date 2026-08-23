@@ -31,7 +31,10 @@ from jiejing_saas.ai_ceo_chat import (  # noqa: E402
     _classify_ai_ceo_route,
     _classify_external_realtime_request,
 )
-from jiejing_saas.api_server import build_ai_ceo_market_report_delivery  # noqa: E402
+from jiejing_saas.api_server import (  # noqa: E402
+    build_ai_ceo_market_report_delivery,
+    build_ai_ceo_pre_model_attempt_input,
+)
 from jiejing_saas.repository import SaaSRepository, _looks_like_ai_ceo_market_research_turn  # noqa: E402
 
 
@@ -212,7 +215,369 @@ def isolated_backend_env(*, port: int) -> dict[str, str]:
     return env
 
 
+def request_json_without_transport_error(
+    url: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, Any] | None = None,
+    token: str | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """Turn an unhandled-handler disconnect into an assertion-friendly result."""
+
+    try:
+        return request_json(url, method=method, payload=payload, token=token)
+    except Exception as exc:  # The RED contract must fail assertions, never error in the test harness.
+        return 0, {"transport_error_type": exc.__class__.__name__, "secret_exposed": False}
+
+
+def fault_injection_sitecustomize(fault_mode: str) -> str:
+    """Build a hermetic child-only fault injector for attempt-terminalization tests."""
+
+    return f'''\
+from jiejing_saas import api_server as _api
+from jiejing_saas.repository import SaaSRepository as _Repository
+
+_FAULT_MODE = {fault_mode!r}
+_SENTINEL = "private raw internal failure text must never escape"
+
+class _SuccessfulModelClient:
+    name = "unit_model_client"
+    model = "unit-model"
+    endpoint = ""
+
+    def generate_text(self, **kwargs):
+        callback = kwargs.get("on_text_delta")
+        text = "捷境帮助跨境电商商家整理经营信息并形成可审核的工作草稿。"
+        if callable(callback):
+            callback(text)
+        return {{
+            "text": text,
+            "finish_reason": "stop",
+            "model": self.model,
+            "_usage": {{"input_tokens": 11, "output_tokens": 17, "total_tokens": 28}},
+        }}
+
+def _resolved_model(self, **kwargs):
+    return {{
+        "status": "resolved",
+        "mode": "account_byok",
+        "secret_ref": "ref_unit_only",
+        "secret_ref_scope": "account",
+        "provider_key": "unit_provider",
+        "provider_label": "Unit provider",
+        "model": "unit-model",
+        "merchant_pays_provider_directly": True,
+        "jiejing_pays_provider_usage": False,
+        "model_client": _SuccessfulModelClient(),
+        "frontend_gets_model_api_key": False,
+        "secret_exposed": False,
+    }}
+
+_api.SaaSBackendHandler._resolve_model_client_for_store = _resolved_model
+
+if _FAULT_MODE in {{"provider_execution_exception", "model_task_creation_exception"}}:
+    _original_resolved_model = _resolved_model
+    def _platform_resolved_model(self, **kwargs):
+        resolved = _original_resolved_model(self, **kwargs)
+        return {{
+            **resolved,
+            "mode": "platform_managed_default",
+            "secret_ref": "",
+            "secret_ref_scope": "platform",
+            "merchant_pays_provider_directly": False,
+            "jiejing_pays_provider_usage": True,
+        }}
+    _api.SaaSBackendHandler._resolve_model_client_for_store = _platform_resolved_model
+
+if _FAULT_MODE == "provider_execution_exception":
+    class _FailingModelClient:
+        name = "unit_failing_model_client"
+        model = "unit-model"
+        endpoint = ""
+
+        def generate_text(self, **kwargs):
+            raise TimeoutError(_SENTINEL)
+
+    def _provider_failure_model(self, **kwargs):
+        resolved = _platform_resolved_model(self, **kwargs)
+        return {{**resolved, "model_client": _FailingModelClient()}}
+    _api.SaaSBackendHandler._resolve_model_client_for_store = _provider_failure_model
+
+if _FAULT_MODE == "model_task_creation_exception":
+    _original_create_task = _Repository.create_task
+    def _fail_first_metered_task_create(self, *args, **kwargs):
+        if kwargs.get("task_type") == "merchant_ceo_chat" and not getattr(self, "_red_model_task_create_failed", False):
+            self._red_model_task_create_failed = True
+            raise RuntimeError(_SENTINEL)
+        return _original_create_task(self, *args, **kwargs)
+    _Repository.create_task = _fail_first_metered_task_create
+
+if _FAULT_MODE == "quota_exception":
+    def _quota_exception(self, identity, action_unit, *args, **kwargs):
+        if action_unit == "ai_ceo_task":
+            raise RuntimeError(_SENTINEL)
+        return True
+    _api.SaaSBackendHandler._require_quota = _quota_exception
+else:
+    def _quota_allowed(self, *args, **kwargs):
+        return True
+    _api.SaaSBackendHandler._require_quota = _quota_allowed
+
+if _FAULT_MODE == "command_persistence_exception":
+    _original_save_command = _Repository.save_merchant_ceo_command
+    def _save_command_then_fail(self, *args, **kwargs):
+        call_count = int(getattr(self, "_red_command_save_count", 0)) + 1
+        self._red_command_save_count = call_count
+        if call_count >= 2:
+            raise RuntimeError(_SENTINEL)
+        return _original_save_command(self, *args, **kwargs)
+    _Repository.save_merchant_ceo_command = _save_command_then_fail
+
+if _FAULT_MODE == "metering_persistence_exception":
+    def _record_model_usage_failure(self, *args, **kwargs):
+        raise RuntimeError(_SENTINEL)
+    _Repository.record_model_usage = _record_model_usage_failure
+'''
+
+
+def run_attempt_fault_fixture(fault_mode: str) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix=f"jiejing-ai-ceo-{fault_mode}-", ignore_cleanup_errors=True) as temp:
+        temp_root = Path(temp)
+        hook_root = temp_root / "python-hook"
+        hook_root.mkdir(parents=True, exist_ok=True)
+        (hook_root / "sitecustomize.py").write_text(
+            fault_injection_sitecustomize(fault_mode),
+            encoding="utf-8",
+        )
+        db_path = temp_root / "saas.sqlite"
+        runtime_db_path = temp_root / "runtime.sqlite"
+        stdout_path = temp_root / "backend-stdout.log"
+        stderr_path = temp_root / "backend-stderr.log"
+        port = free_port()
+        env = isolated_backend_env(port=port)
+        env["PYTHONPATH"] = os.pathsep.join((str(hook_root), str(ROOT)))
+        with stdout_path.open("w", encoding="utf-8") as child_stdout, stderr_path.open(
+            "w", encoding="utf-8"
+        ) as child_stderr:
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(ROOT / "tools" / "jiejing_saas_backend_cli.py"),
+                    "serve",
+                    "--db",
+                    str(db_path),
+                    "--runtime-db",
+                    str(runtime_db_path),
+                    "--output-root",
+                    str(temp_root / "output"),
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                ],
+                cwd=ROOT,
+                env=env,
+                stdout=child_stdout,
+                stderr=child_stderr,
+                text=True,
+            )
+            try:
+                base_url = f"http://127.0.0.1:{port}"
+                wait_for_health(base_url)
+                register_status, registered = request_json(
+                    f"{base_url}/auth/register",
+                    method="POST",
+                    payload={
+                        "email": f"{fault_mode}@example.test",
+                        "password": LOCAL_TEST_PASSWORD,
+                        "company_name": f"AI CEO {fault_mode}",
+                    },
+                )
+                if register_status != 201:
+                    raise AssertionError(f"fault fixture registration failed: {register_status}")
+                token = str(registered.get("token") or "")
+                company_id = str((registered.get("company") or {}).get("company_id") or "")
+                store_status, store_payload = request_json(
+                    f"{base_url}/stores",
+                    method="POST",
+                    payload={"platform": "ebay", "store_name": "Fault RED Store", "marketplace": "EBAY_US"},
+                    token=token,
+                )
+                if store_status != 201:
+                    raise AssertionError(f"fault fixture store creation failed: {store_status}")
+                store_id = str((store_payload.get("store") or {}).get("store_id") or "")
+                response_status, response_payload = request_json_without_transport_error(
+                    f"{base_url}/stores/{store_id}/merchant-ceo/chat",
+                    method="POST",
+                    payload={
+                        "message": "请用一句话介绍捷境平台。",
+                        "command": {"id": f"cmd-{fault_mode}", "text": "请用一句话介绍捷境平台。"},
+                        "client_now": "2026-08-23T12:00:00+08:00",
+                        "client_timezone": "Asia/Shanghai",
+                    },
+                    token=token,
+                )
+                repository = SaaSRepository(db_path, database_engine="sqlite", database_url="")
+                tasks = repository.list_tasks(company_id=company_id, store_id=store_id, limit=30)
+                audit_logs = repository.list_audit_logs(company_id=company_id, limit=100)
+                with repository._connect() as conn:
+                    model_usage_rows = [
+                        dict(row)
+                        for row in conn.execute(
+                            "select * from model_usage_ledger where company_id = ? order by created_at",
+                            (company_id,),
+                        ).fetchall()
+                    ]
+                settings_status, settings_payload = request_json(
+                    f"{base_url}/stores/{store_id}/model/settings",
+                    token=token,
+                )
+                platform_trial_quota = (
+                    (settings_payload.get("model_settings") or {}).get("platform_trial_quota") or {}
+                    if settings_status == 200
+                    else {}
+                )
+            finally:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+        logs = stdout_path.read_text(encoding="utf-8") + stderr_path.read_text(encoding="utf-8")
+        attempts = [item for item in tasks if item.get("task_type") == "merchant_ceo_chat_attempt"]
+        return {
+            "response_status": response_status,
+            "response_payload": response_payload,
+            "attempts": attempts,
+            "tasks": tasks,
+            "audit_logs": audit_logs,
+            "model_usage_rows": model_usage_rows,
+            "platform_trial_quota": platform_trial_quota,
+            "logs": logs,
+        }
+
+
 class AiCeoBackendAuthorityRedTests(unittest.TestCase):
+    def _assert_safe_attempt_failure_audit(
+        self,
+        *,
+        result: dict[str, Any],
+        attempt_id: str,
+        expected_stage: str,
+        expected_error_type: str,
+    ) -> None:
+        matching = [
+            item
+            for item in result.get("audit_logs") or []
+            if item.get("target_id") == attempt_id
+            and (item.get("details") or {}).get("stage") == expected_stage
+            and (item.get("details") or {}).get("error_type") == expected_error_type
+        ]
+        self.assertTrue(
+            matching,
+            "attempt failure audit must preserve a fixed failure stage and a sanitized error category",
+        )
+        serialized = json.dumps(matching, ensure_ascii=False, sort_keys=True)
+        self.assertNotIn("private raw internal failure text must never escape", serialized)
+        self.assertNotIn("exception_message", serialized.lower())
+
+    def test_provider_call_failure_is_metered_and_trial_counted(self) -> None:
+        result = run_attempt_fault_fixture("provider_execution_exception")
+        self.assertTrue(500 <= int(result.get("response_status") or 0) < 600)
+        attempts = result.get("attempts") or []
+        model_tasks = [item for item in result.get("tasks") or [] if item.get("task_type") == "merchant_ceo_chat"]
+        usage_rows = result.get("model_usage_rows") or []
+        self.assertEqual(1, len(attempts))
+        self.assertEqual(1, len(model_tasks), "a provider call that reached the network still needs one metered task fact")
+        self.assertEqual(1, len(usage_rows), "provider-call telemetry must survive the provider exception")
+        attempt = attempts[0]
+        attempt_output = attempt.get("output") if isinstance(attempt.get("output"), dict) else {}
+        self.assertIs(result.get("response_payload", {}).get("usage_consumed"), True)
+        self.assertIs(attempt_output.get("usage_consumed"), True)
+        self.assertEqual(model_tasks[0].get("task_id"), attempt_output.get("actual_task_id"))
+        self.assertEqual(model_tasks[0].get("task_id"), usage_rows[0].get("task_id"))
+        self.assertGreaterEqual(int(usage_rows[0].get("request_count") or 0), 1)
+        self.assertEqual(1, int((result.get("platform_trial_quota") or {}).get("used") or 0))
+        self._assert_safe_attempt_failure_audit(
+            result=result,
+            attempt_id=str(attempt.get("task_id") or ""),
+            expected_stage="model_provider",
+            expected_error_type="model_network_or_timeout",
+        )
+
+    def test_first_metered_task_create_failure_recovers_one_trial_fact(self) -> None:
+        result = run_attempt_fault_fixture("model_task_creation_exception")
+        self.assertTrue(500 <= int(result.get("response_status") or 0) < 600)
+        attempts = result.get("attempts") or []
+        model_tasks = [item for item in result.get("tasks") or [] if item.get("task_type") == "merchant_ceo_chat"]
+        usage_rows = result.get("model_usage_rows") or []
+        self.assertEqual(1, len(attempts))
+        self.assertEqual(1, len(model_tasks), "recovery must create exactly one idempotent metered task after the first create fault")
+        self.assertEqual(1, len(usage_rows), "recovered task must retain one model usage ledger fact")
+        attempt = attempts[0]
+        attempt_output = attempt.get("output") if isinstance(attempt.get("output"), dict) else {}
+        self.assertIs(result.get("response_payload", {}).get("usage_consumed"), True)
+        self.assertIs(attempt_output.get("usage_consumed"), True)
+        self.assertEqual(model_tasks[0].get("task_id"), attempt_output.get("actual_task_id"))
+        self.assertEqual(model_tasks[0].get("task_id"), usage_rows[0].get("task_id"))
+        self.assertEqual(1, int((result.get("platform_trial_quota") or {}).get("used") or 0))
+        self._assert_safe_attempt_failure_audit(
+            result=result,
+            attempt_id=str(attempt.get("task_id") or ""),
+            expected_stage="model_task_persistence",
+            expected_error_type="RuntimeError",
+        )
+
+    def test_unexpected_attempt_failure_audit_is_stage_categorized(self) -> None:
+        result = run_attempt_fault_fixture("quota_exception")
+        attempts = result.get("attempts") or []
+        self.assertEqual(1, len(attempts))
+        self._assert_safe_attempt_failure_audit(
+            result=result,
+            attempt_id=str(attempts[0].get("task_id") or ""),
+            expected_stage="quota_check",
+            expected_error_type="RuntimeError",
+        )
+
+    def test_internal_dependency_faults_terminalize_the_single_attempt(self) -> None:
+        cases = (
+            ("quota_exception", False),
+            ("command_persistence_exception", True),
+            ("metering_persistence_exception", True),
+        )
+        nonterminal_states = {
+            "accepted",
+            "resolving_dependencies",
+            "quota_checked",
+            "model_running",
+            "artifact_validating",
+        }
+        sentinel = "private raw internal failure text must never escape"
+        for fault_mode, expected_usage_consumed in cases:
+            with self.subTest(fault_mode=fault_mode):
+                result = run_attempt_fault_fixture(fault_mode)
+                response_status = int(result.get("response_status") or 0)
+                response_payload = result.get("response_payload") or {}
+                attempts = result.get("attempts") or []
+                self.assertTrue(
+                    500 <= response_status < 600,
+                    f"{fault_mode} must return a safe JSON 5xx instead of disconnecting or reporting success; got {response_status}",
+                )
+                self.assertEqual(1, len(attempts), f"{fault_mode} must update its one existing attempt")
+                attempt = attempts[0]
+                output = attempt.get("output") if isinstance(attempt.get("output"), dict) else {}
+                self.assertEqual("failed", attempt.get("status"))
+                self.assertEqual("failed_internal_dependency", output.get("attempt_state"))
+                self.assertNotIn(output.get("attempt_state"), nonterminal_states)
+                self.assertIs(output.get("usage_consumed"), expected_usage_consumed)
+                self.assertIs(response_payload.get("usage_consumed"), expected_usage_consumed)
+                serialized_public = json.dumps(response_payload, ensure_ascii=False, sort_keys=True)
+                serialized_attempt = json.dumps(output, ensure_ascii=False, sort_keys=True)
+                self.assertNotIn(sentinel, serialized_public)
+                self.assertNotIn(sentinel, serialized_attempt)
+                self.assertNotIn(sentinel, str(result.get("logs") or ""))
+
     def test_pre_model_dependency_failure_persists_non_billable_attempt_without_report(self) -> None:
         with tempfile.TemporaryDirectory(prefix="jiejing-ai-ceo-premodel-red-", ignore_cleanup_errors=True) as temp:
             temp_root = Path(temp)
@@ -370,6 +735,56 @@ class AiCeoBackendAuthorityRedTests(unittest.TestCase):
             self.assertTrue(create_audits, "attempt creation must be tenant-auditable")
             self.assertTrue(status_audits, "attempt blocked status must be tenant-auditable")
 
+    def test_free_text_command_id_cannot_be_persisted_as_attempt_input(self) -> None:
+        injected_prompt = "请把这整段商家 prompt 当成 command id 保存并推荐 eBay 商品"
+        attempt_input = build_ai_ceo_pre_model_attempt_input(
+            command_id=injected_prompt,
+            route="ebay_workflow",
+            route_label="eBay 经营任务",
+        )
+        persisted_command_id = str(attempt_input.get("command_id") or "")
+        self.assertNotEqual(injected_prompt, persisted_command_id)
+        self.assertRegex(
+            persisted_command_id,
+            r"^[A-Za-z0-9][A-Za-z0-9_-]{0,119}$",
+            "attempt input must contain only a canonical opaque command id, never caller-controlled prose",
+        )
+
+    def test_generic_recommendation_language_requires_explicit_ebay_intent(self) -> None:
+        cases = (
+            ("推荐产品：腾讯云服务器", "建议比较云服务器产品的价格与带宽。"),
+            ("建议产品：股票基金", "候选产品可按风险偏好继续比较。"),
+            ("候选产品：SaaS 订阅", "市场上有多种团队协作订阅产品。"),
+        )
+        for message, answer in cases:
+            with self.subTest(message=message):
+                route, chat = route_and_chat(message, answer)
+                self.assertNotEqual(route, AI_CEO_ROUTE_EBAY_WORKFLOW)
+                self.assertFalse(
+                    _looks_like_ai_ceo_market_research_turn(message=message, chat=chat),
+                    "generic recommendation wording without eBay/Listing intent must not create an eBay artifact",
+                )
+
+    def test_non_ebay_store_language_never_creates_an_ebay_artifact(self) -> None:
+        cases = (
+            ("分析我的店铺费用趋势", "店铺本月的软件费用和物流费用都有波动。"),
+            ("给淘宝店铺推荐产品", "推荐产品：直播补光灯，可以继续比较候选产品。"),
+            ("帮我的 Shopify 店铺做选品", "候选商品：可折叠收纳篮。"),
+        )
+        for message, answer in cases:
+            with self.subTest(message=message):
+                route, chat = route_and_chat(message, answer)
+                self.assertNotEqual(route, AI_CEO_ROUTE_EBAY_WORKFLOW)
+                self.assertFalse(
+                    _looks_like_ai_ceo_market_research_turn(message=message, chat=chat),
+                    "a non-eBay shop request must never be persisted as an eBay market artifact",
+                )
+
+        ebay_message = "给我的 eBay 店铺推荐一个商品并整理 Listing 选品报告"
+        ebay_route, ebay_chat = route_and_chat(ebay_message, "候选商品：可折叠硅胶漏斗。")
+        self.assertEqual(AI_CEO_ROUTE_EBAY_WORKFLOW, ebay_route)
+        self.assertTrue(_looks_like_ai_ceo_market_research_turn(message=ebay_message, chat=ebay_chat))
+
     def test_ticker_company_research_is_not_an_ebay_market_report(self) -> None:
         message = "帮我查一下 AAOI 这家公司产品和市场怎么样"
         answer = "公开来源显示，AAOI 的产品在目标市场增长。"
@@ -460,8 +875,149 @@ class AiCeoBackendAuthorityRedTests(unittest.TestCase):
                 "audit readiness must match the persisted non-importable Listing handoff",
             )
 
+    def test_market_report_contract_blocks_zero_evidence_and_supplier_fact_gaps(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="jiejing-ai-ceo-artifact-red-", ignore_cleanup_errors=True) as temp:
+            repository = SaaSRepository(Path(temp) / "saas.sqlite", database_engine="sqlite", database_url="")
+            fixture = repository.create_user_with_company(
+                email="ai-ceo-artifact-red@example.test",
+                password=LOCAL_TEST_PASSWORD,
+                company_name="AI CEO artifact RED",
+            )
+            company_id = fixture["company"]["company_id"]
+            user_id = fixture["user"]["user_id"]
+            store = repository.create_store(
+                company_id=company_id,
+                user_id=user_id,
+                payload={"platform": "ebay", "store_name": "Artifact RED Store", "marketplace": "EBAY_US"},
+            )
+            task = repository.create_task(
+                company_id=company_id,
+                store_id=store["store_id"],
+                user_id=user_id,
+                task_type="merchant_ceo_chat",
+                title="Artifact completeness contract",
+                input_data={"model_usage_required": True},
+            )
+            saved = repository.save_ai_ceo_market_research_report(
+                task=task,
+                message="请为我的 eBay 美国店铺选一个商品并整理 Listing 市场调研。",
+                chat={
+                    "answer": "### 候选商品卡\n#### 候选商品 1: 可折叠硅胶漏斗\n推荐度评分：88/100",
+                    "route": "ebay_workflow",
+                    "route_label": "eBay 经营任务",
+                    "status": "model_answered",
+                    "answer_quality": {"accepted": True},
+                    "source_records": [],
+                    "work_records": [],
+                    "confirmation_items": [],
+                },
+            )
+            self.assertIsNotNone(saved)
+            report = saved.get("report") if isinstance(saved, dict) else {}
+            required_fields = {
+                "artifact_type",
+                "artifact_version",
+                "merchant_intent",
+                "candidate_products",
+                "candidate_count",
+                "selected_candidate_id",
+                "evidence_status",
+                "supplier_fact_status",
+                "listing_import_ready",
+                "blocked_by",
+                "source_records",
+                "secret_exposed",
+            }
+            self.assertFalse(required_fields - set(report), f"missing authoritative artifact fields: {required_fields - set(report)}")
+            self.assertEqual("ai_ceo.market_research", report.get("artifact_type"))
+            self.assertEqual("ebay_product_research", report.get("merchant_intent"))
+            self.assertIs(report.get("listing_import_ready"), False)
+            self.assertTrue(report.get("blocked_by"), "zero evidence and supplier fact gaps must remain explicit")
+            handoff = report.get("listing_handoff") if isinstance(report.get("listing_handoff"), dict) else {}
+            delivery = build_ai_ceo_market_report_delivery(saved)
+            matching_audits = [
+                item
+                for item in repository.list_audit_logs(company_id=company_id, limit=50)
+                if item.get("action_type") == "ai_ceo.market_research.saved" and item.get("target_id") == saved.get("report_id")
+            ]
+            self.assertTrue(matching_audits)
+            self.assertIs(handoff.get("ready_for_listing_draft"), False)
+            self.assertIs(delivery.get("listing_import_ready"), False)
+            self.assertIs(matching_audits[0].get("details", {}).get("ready_for_listing_draft"), False)
+
+    def test_complete_but_unverified_supplier_facts_are_explicitly_blocked(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="jiejing-ai-ceo-unverified-supplier-red-", ignore_cleanup_errors=True) as temp:
+            repository = SaaSRepository(Path(temp) / "saas.sqlite", database_engine="sqlite", database_url="")
+            task = repository.create_task(
+                company_id="company_unverified_supplier",
+                store_id="store_unverified_supplier",
+                user_id="user_unverified_supplier",
+                task_type="merchant_ceo_chat",
+                title="Unverified supplier fact contract",
+                input_data={"model_usage_required": True},
+            )
+            saved = repository.save_ai_ceo_market_research_report(
+                task=task,
+                message="请为我的 eBay 店铺选一个商品并整理 Listing 市场调研。",
+                chat={
+                    "answer": (
+                        "### 候选商品卡\n"
+                        "候选商品 1：可折叠硅胶漏斗\n"
+                        "推荐度评分：88/100\n"
+                        "### 最值得测试：可折叠硅胶漏斗"
+                    ),
+                    "route": "ebay_workflow",
+                    "route_label": "eBay 经营任务",
+                    "status": "model_answered",
+                    "answer_quality": {"accepted": True},
+                    "source_records": [{"title": "公开市场来源", "url": "https://example.test/source"}],
+                    "supplier_facts": {
+                        "material": "food-grade silicone",
+                        "package_weight_g": 120,
+                        "package_dimensions_cm": "12 x 10 x 4",
+                        "item_location": "Shenzhen, China",
+                        "unit_cost": "CNY 8.50",
+                    },
+                    "supplier_facts_verified": False,
+                },
+            )
+            self.assertIsNotNone(saved)
+            report = saved.get("report") if isinstance(saved, dict) else {}
+            self.assertEqual("unverified", report.get("supplier_fact_status"))
+            self.assertIs(report.get("listing_import_ready"), False)
+            self.assertIn("supplier_facts_unverified", report.get("blocked_by") or [])
+            self.assertNotIn("可导入", str(report.get("merchant_readable_summary") or ""))
+            handoff = report.get("listing_handoff") if isinstance(report.get("listing_handoff"), dict) else {}
+            self.assertIn("supplier_facts_unverified", handoff.get("blocked_by") or [])
+
 
 class AiCeoFrontendAuthorityRedTests(unittest.TestCase):
+    def test_clicked_report_id_never_falls_back_to_same_assistant_or_latest_report(self) -> None:
+        resolver = function_body(APP_JS, "saasAiCeoMarketResearchTurnForImport")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const wrongRemembered = { assistant_id: 'assistant-shared', market_report_id: 'report-other', assistant_text: 'other report' };",
+                    "const wrongLatest = { assistant_id: 'assistant-latest', market_report_id: 'report-latest', assistant_text: 'latest report' };",
+                    "const saasAiCeoMarketImportTargets = new Map([['assistant:assistant-shared', wrongRemembered]]);",
+                    "const state = { saasReports: [] };",
+                    "const normalizeSaasAiCeoLatestTurn = (value) => value && typeof value === 'object' ? value : null;",
+                    "const saasAiCeoMarketTurnFromReport = (record) => record;",
+                    "const saasAiCeoMarketResearchCandidates = () => [wrongLatest];",
+                    "const saasAiCeoMarketResearchEligibility = (turn) => ({ eligible: Boolean(turn), latest: turn });",
+                    "const saasAiCeoMarketResearchTurnMatchesClickedProduct = () => true;",
+                    resolver,
+                    "const selected = saasAiCeoMarketResearchTurnForImport({ dataset: { reportId: 'report-wanted', aiCeoAssistantId: 'assistant-shared', productName: 'Wanted' } });",
+                    "console.log(JSON.stringify({ selectedReportId: selected?.market_report_id || '' }));",
+                ]
+            )
+        )
+        self.assertEqual(
+            "",
+            result["selectedReportId"],
+            "when a click carries reportId, neither a same-assistant report nor remembered/latest state may substitute for it",
+        )
+
     def test_non_importable_delivery_does_not_render_listing_cta(self) -> None:
         render_delivery = function_body(APP_JS, "renderSaasAiCeoMarketReportDeliveryMarkup")
         result = run_node_json(
@@ -549,6 +1105,71 @@ class AiCeoFrontendAuthorityRedTests(unittest.TestCase):
             ["backend-request"],
             "submitting a chat may contact the backend, but must not pre-route unvalidated text into the Listing workspace",
         )
+
+    def test_logical_503_does_not_sync_listing_and_states_no_usage_or_draft(self) -> None:
+        submit_command = function_body(APP_JS, "handleSaasCeoCommandSubmit")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "(async () => {",
+                    "let syncCount = 0; let renderedAnswer = '';",
+                    "const state = { saasLastCeoCommand: null, saasCeoCommandChatVisible: false, saasAiCeoLatestTurn: null, saasReports: [], view: 'other' };",
+                    "const saasMerchantWorkbenchContext = () => ({});",
+                    "const buildSaasCeoCommand = (text) => ({ id: 'cmd-503', text, route: 'ebay_workflow', memory_policy: 'transient_no_long_term_memory' });",
+                    "const persistSaasLastCeoCommand = () => null; const recordSaasCeoCommandSourceRecord = () => null;",
+                    "const hashString = () => 1; const buildSaasLocalClockAnswer = () => null; const addCeoMessage = () => null;",
+                    "const scheduleSaasAiCeoPendingWatchdog = () => null; const updateCeoAssistantStreamingMessage = () => null;",
+                    "const requestSaasAiCeoChat = () => Promise.resolve({ _http_status: 503, usage_consumed: false, listing_created: false, ai_ceo_market_report: null, ai_ceo_market_report_delivery: null, ai_ceo_chat: { status: 'blocked_before_model_chat', answer: 'AI 连接暂时不可用。', route: 'ebay_workflow', blocked_by: ['platform_model_default_not_configured'] } });",
+                    "const normalizeSaasAiCeoLatestTurn = (value) => value && typeof value === 'object' ? value : null;",
+                    "const normalizeSaasAiCeoMarketReportDelivery = () => null; const saasAiCeoProductizedAnswerText = (value) => String(value || '');",
+                    "const normalizeSaasAiCeoSourceRecords = () => []; const normalizeSaasAiCeoWorkRecords = () => []; const normalizeSaasAiCeoConfirmationItems = () => [];",
+                    "const ensureSaasAiCeoMarketReportRecordFromTurn = (turn) => turn; const backendSaasCeoCommandFromPayload = () => null;",
+                    "const normalizeSaasCeoCommand = (value) => value; const newestSaasCeoCommand = (value) => value;",
+                    "const syncSaasCeoCommandToListing = () => { syncCount += 1; return true; };",
+                    "const updateCeoAssistantMessage = (_id, answer) => { renderedAnswer = answer; }; const updateSaasAiCeoLatestReply = (turn) => { state.saasAiCeoLatestTurn = turn; }; const upsertSaasAiCeoThreadTurn = () => null;",
+                    "const document = { querySelector: () => null }; const replaceJiejingTrustedHtml = () => null; const trustedJiejingHtml = (value) => value; const renderSaasCeoCommandConsole = () => ''; const refreshSaasCeoRoutingTaskCard = () => null;",
+                    submit_command,
+                    "handleSaasCeoCommandSubmit('请为 eBay 店铺选品');",
+                    "await state.saasLastCeoCommandPersistPromise;",
+                    "console.log(JSON.stringify({ syncCount, renderedAnswer }));",
+                    "})().catch((error) => { console.error(error); process.exit(1); });",
+                ]
+            )
+        )
+        self.assertEqual(0, result["syncCount"], "a logical HTTP 503 must never populate the Listing workspace")
+        for expected in ("未调用模型", "未消耗次数", "未生成草稿"):
+            self.assertIn(expected, result["renderedAnswer"])
+
+    def test_legacy_local_or_untyped_reports_never_become_authoritative(self) -> None:
+        normalize_delivery = function_body(APP_JS, "normalizeSaasAiCeoMarketReportDelivery")
+        authoritative_report = function_body(APP_JS, "saasAuthoritativeAiCeoMarketReportForTurn")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const publicRuntimeText = (value) => String(value ?? '');",
+                    "const normalizeSaasAiCeoLatestTurn = (value) => value;",
+                    normalize_delivery,
+                    authoritative_report,
+                    "const checks = [];",
+                    "for (const marker of ['frontend_generated_from_ai_ceo_chat', 'safe_local_only']) {",
+                    "  const record = { report_id: `legacy-${marker}`, report_type: 'ai_ceo.market_research', report: { [marker]: true, listing_handoff: { ready_for_listing_draft: true } } };",
+                    "  globalThis.state = { saasReports: [record] };",
+                    "  const delivery = normalizeSaasAiCeoMarketReportDelivery({ report_id: record.report_id, report_type: 'ai_ceo.market_research', structured_report_saved: true, listing_import_ready: true });",
+                    "  checks.push({ marker, authoritative: Boolean(saasAuthoritativeAiCeoMarketReportForTurn({ market_report_id: record.report_id, market_report_delivery: delivery })) });",
+                    "}",
+                    "const backendRecord = { report_id: 'untyped-report', report_type: 'ai_ceo.market_research', report: { listing_handoff: { ready_for_listing_draft: true } } };",
+                    "globalThis.state = { saasReports: [backendRecord] };",
+                    "const untyped = normalizeSaasAiCeoMarketReportDelivery({ report_id: backendRecord.report_id, structured_report_saved: true, listing_import_ready: true });",
+                    "checks.push({ marker: 'missing_report_type', normalizedType: untyped?.report_type || '', authoritative: Boolean(saasAuthoritativeAiCeoMarketReportForTurn({ market_report_id: backendRecord.report_id, market_report_delivery: untyped })) });",
+                    "console.log(JSON.stringify({ checks }));",
+                ]
+            )
+        )
+        for check in result["checks"]:
+            with self.subTest(marker=check["marker"]):
+                self.assertFalse(check["authoritative"], f"{check['marker']} must never establish backend artifact authority")
+        missing_type = next(item for item in result["checks"] if item["marker"] == "missing_report_type")
+        self.assertEqual("", missing_type["normalizedType"], "missing report_type must not default to market research")
 
 
 if __name__ == "__main__":

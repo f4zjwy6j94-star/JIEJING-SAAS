@@ -19,7 +19,7 @@ from http.cookies import SimpleCookie
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
 from jiejing_runtime.execution import ExecutionRequest, ExecutionService
@@ -139,6 +139,8 @@ from .repository import (
     HIGH_RISK_ACTIONS,
     OAuthPlanExactApprovalError,
     SaaSRepository,
+    ai_ceo_market_artifact_eligible,
+    normalize_ai_ceo_supplier_fact_attestation,
 )
 from .runtime_bridge import RuntimeBridge
 from .security import SessionManager
@@ -234,7 +236,7 @@ def build_ai_ceo_market_report_delivery(report: dict[str, Any] | None) -> dict[s
         "contract_version": "2026-07-04-ai-ceo-market-report-delivery-v1",
         "mode": "quick_then_structured_report",
         "report_id": str(report.get("report_id") or ""),
-        "report_type": str(report.get("report_type") or "ai_ceo.market_research"),
+        "report_type": str(report.get("report_type") or ""),
         "status": str(report.get("status") or "saved"),
         "title": str(report.get("title") or body.get("merchant_readable_summary") or "AI CEO 市场调研")[:180],
         "product": str(body.get("product") or "")[:120],
@@ -249,6 +251,91 @@ def build_ai_ceo_market_report_delivery(report: dict[str, Any] | None) -> dict[s
         "runtime_gets_raw_ebay_token": False,
         "secret_exposed": False,
     }
+
+
+def build_ai_ceo_pre_model_attempt_input(
+    *,
+    command_id: str,
+    route: str,
+    route_label: str,
+) -> dict[str, Any]:
+    """Build the positive allowlist persisted for a non-metered dependency attempt."""
+
+    command_reference = "cmdref_" + hashlib.sha256(str(command_id or "").encode("utf-8")).hexdigest()[:32]
+    return {
+        "attempt_state": "accepted",
+        "command_id": command_reference,
+        "model_usage_required": False,
+        "route": str(route or "")[:80],
+        "route_label": str(route_label or "")[:120],
+        "frontend_gets_model_api_key": False,
+        "runtime_gets_raw_ebay_token": False,
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+
+
+AI_CEO_ARTIFACT_OUTCOMES = {
+    "not_requested",
+    "not_eligible",
+    "saved_not_importable",
+    "saved_import_ready",
+    "artifact_save_failed",
+}
+
+
+def build_ai_ceo_attempt_output(
+    *,
+    attempt_state: str,
+    failure_code: str = "",
+    actual_task_id: str = "",
+    artifact_outcome: str = "not_requested",
+    artifact_report_id: str = "",
+    usage_consumed: bool = False,
+) -> dict[str, Any]:
+    """Return the strict, secret-free output contract for an AI CEO attempt."""
+
+    safe_state = re.sub(r"[^a-z0-9_]", "", str(attempt_state or "").lower())[:80] or "accepted"
+    safe_failure = re.sub(r"[^a-z0-9_]", "", str(failure_code or "").lower())[:120]
+    safe_task_id = re.sub(r"[^A-Za-z0-9_-]", "", str(actual_task_id or ""))[:120]
+    safe_report_id = re.sub(r"[^A-Za-z0-9_-]", "", str(artifact_report_id or ""))[:120]
+    safe_outcome = artifact_outcome if artifact_outcome in AI_CEO_ARTIFACT_OUTCOMES else "not_requested"
+    return {
+        "attempt_state": safe_state,
+        "failure_code": safe_failure,
+        "actual_task_id": safe_task_id,
+        "artifact_outcome": safe_outcome,
+        "artifact_report_id": safe_report_id,
+        "usage_consumed": usage_consumed is True,
+        "model_usage_required": False,
+        "frontend_gets_model_api_key": False,
+        "runtime_gets_raw_ebay_token": False,
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+
+
+def _ai_ceo_attempt_failure_code(blockers: Any, fallback: str) -> str:
+    values: list[str] = []
+
+    def collect(value: Any) -> None:
+        if value in (None, "", {}, []):
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                collect(item)
+            return
+        if isinstance(value, str):
+            values.append(value)
+
+    collect(blockers)
+    if "platform_model_default_not_configured" in values:
+        return "platform_model_default_not_configured"
+    for value in values:
+        safe = re.sub(r"[^a-z0-9_]", "", value.lower())[:120]
+        if safe:
+            return safe
+    return re.sub(r"[^a-z0-9_]", "", fallback.lower())[:120]
 
 
 class RequestBodyError(ValueError):
@@ -2585,9 +2672,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         except RequestBodyError as exc:
             self._send_error(exc.status, exc.message)
         except Exception as exc:
+            recover_ai_ceo_attempt = getattr(self, "_active_ai_ceo_attempt_recovery", None)
+            if callable(recover_ai_ceo_attempt):
+                try:
+                    if recover_ai_ceo_attempt(exc):
+                        return
+                except Exception:
+                    # The ordinary dependency handler below remains the final
+                    # safe boundary if even the attempt-recovery write fails.
+                    pass
             if self._handle_service_dependency_exception(exc):
                 return
             raise
+        finally:
+            self._active_ai_ceo_attempt_recovery = None
 
     def _handle_post(self) -> None:
         parsed = urlparse(self.path)
@@ -5893,6 +5991,22 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             command_body = body.get("command") if isinstance(body.get("command"), dict) else {}
             message = str(body.get("message") or command_body.get("text") or command_body.get("command_text") or "")
             route_meta = ai_ceo_route_metadata(message)
+            supplier_fact_attestation = normalize_ai_ceo_supplier_fact_attestation(
+                supplier_facts=body.get("supplier_facts"),
+                supplier_facts_verified=body.get("supplier_facts_verified"),
+                source="authenticated_merchant_request",
+            )
+
+            def attach_supplier_fact_attestation(chat_payload: dict[str, Any]) -> dict[str, Any]:
+                # The authenticated request, never provider/model prose, owns
+                # the merchant verification bit and the allowlisted values.
+                return {
+                    **chat_payload,
+                    "supplier_facts": supplier_fact_attestation["supplier_facts"],
+                    "supplier_facts_verified": supplier_fact_attestation["supplier_facts_verified"],
+                    "supplier_fact_attestation": supplier_fact_attestation,
+                }
+
             stream_requested = str((query.get("stream") or [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
             stream_started = False
             last_stream_stage = ""
@@ -5959,6 +6073,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 client_timezone=str(body.get("client_timezone") or ""),
             )
             if fast_chat:
+                fast_chat = attach_supplier_fact_attestation(fast_chat)
                 if command_body and fast_chat.get("answer"):
                     command_response = self.repository.save_merchant_ceo_command(
                         company_id=identity["company_id"],
@@ -6039,21 +6154,283 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     status=HTTPStatus.CREATED if fast_chat.get("status") in completed_statuses else HTTPStatus.ACCEPTED,
                 )
                 return
-            model_secret_resolution = self._resolve_model_client_for_store(identity=identity, store_id=store_id, body=body)
+            command_id = (
+                (command_response or {}).get("command", {}).get("id")
+                if isinstance(command_response, dict)
+                else command_body.get("id")
+            )
+            attempt = self.repository.create_task(
+                company_id=identity["company_id"],
+                store_id=store_id,
+                user_id=identity["user_id"],
+                task_type="merchant_ceo_chat_attempt",
+                title="AI CEO model request attempt",
+                input_data=build_ai_ceo_pre_model_attempt_input(
+                    command_id=str(command_id or ""),
+                    route=str(route_meta.get("route") or ""),
+                    route_label=str(route_meta.get("route_label") or ""),
+                ),
+            )
+            attempt_recovery_state: dict[str, Any] = {
+                "terminal": False,
+                "actual_task_id": "",
+                "usage_consumed": False,
+                "metered_model_client": None,
+                "model_usage": {},
+                "chat": {},
+                "metered_task_factory": None,
+                "model_usage_persister": None,
+                "failure_stage": "dependency_resolution",
+                "attempt_failure_state": "failed_internal_dependency",
+                "attempt_failure_code": "internal_dependency_failed",
+            }
+
+            def update_model_attempt(
+                *,
+                attempt_state: str,
+                task_status: str = "running",
+                failure_code: str = "",
+                actual_task_id: str = "",
+                artifact_outcome: str = "not_requested",
+                artifact_report_id: str = "",
+                usage_consumed: bool = False,
+                summary: str,
+            ) -> dict[str, Any]:
+                updated_attempt = self.repository.update_task_status(
+                    task_id=attempt["task_id"],
+                    company_id=identity["company_id"],
+                    status=task_status,
+                    output=build_ai_ceo_attempt_output(
+                        attempt_state=attempt_state,
+                        failure_code=failure_code,
+                        actual_task_id=actual_task_id,
+                        artifact_outcome=artifact_outcome,
+                        artifact_report_id=artifact_report_id,
+                        usage_consumed=usage_consumed,
+                    ),
+                    audit_summary=summary,
+                )
+                if actual_task_id:
+                    attempt_recovery_state["actual_task_id"] = actual_task_id
+                if usage_consumed:
+                    attempt_recovery_state["usage_consumed"] = True
+                if task_status in {"blocked", "completed", "failed"}:
+                    attempt_recovery_state["terminal"] = True
+                return updated_attempt
+
+            def recover_unexpected_model_attempt(_exc: Exception) -> bool:
+                """Fail closed without leaking an internal exception or stranding the attempt."""
+
+                if attempt_recovery_state.get("terminal") is True:
+                    return True
+                model_usage = (
+                    attempt_recovery_state.get("model_usage")
+                    if isinstance(attempt_recovery_state.get("model_usage"), dict)
+                    else {}
+                )
+                metered_client = attempt_recovery_state.get("metered_model_client")
+                if not model_usage and metered_client is not None:
+                    try:
+                        model_usage = metered_client.usage_summary()
+                    except Exception:
+                        model_usage = {}
+                usage_consumed = bool(
+                    attempt_recovery_state.get("usage_consumed")
+                    or int((model_usage or {}).get("request_count") or 0) > 0
+                )
+                actual_task_id = str(attempt_recovery_state.get("actual_task_id") or "")
+                actual_task: dict[str, Any] | None = None
+                if usage_consumed and not actual_task_id:
+                    metered_task_factory = attempt_recovery_state.get("metered_task_factory")
+                    if callable(metered_task_factory):
+                        try:
+                            actual_task = metered_task_factory()
+                            actual_task_id = str((actual_task or {}).get("task_id") or "")
+                            if actual_task_id:
+                                attempt_recovery_state["actual_task_id"] = actual_task_id
+                        except Exception:
+                            actual_task = None
+                elif actual_task_id:
+                    try:
+                        actual_task = self.repository.get_task(
+                            company_id=identity["company_id"],
+                            task_id=actual_task_id,
+                        )
+                    except Exception:
+                        actual_task = None
+                if usage_consumed and actual_task_id:
+                    model_usage_persister = attempt_recovery_state.get("model_usage_persister")
+                    if callable(model_usage_persister):
+                        try:
+                            model_usage_persister(actual_task or {"task_id": actual_task_id})
+                        except Exception:
+                            pass
+                failure_stage = re.sub(
+                    r"[^a-z0-9_]",
+                    "",
+                    str(attempt_recovery_state.get("failure_stage") or "internal_dependency").lower(),
+                )[:80] or "internal_dependency"
+                error_type = (
+                    "model_network_or_timeout"
+                    if failure_stage == "model_provider"
+                    else re.sub(r"[^A-Za-z0-9_]", "", _exc.__class__.__name__)[:80] or "InternalError"
+                )
+                try:
+                    self.repository.write_audit(
+                        company_id=identity["company_id"],
+                        store_id=store_id,
+                        user_id=identity["user_id"],
+                        actor_type="system",
+                        action_type="ai_ceo.attempt.internal_failure",
+                        target_type="task",
+                        target_id=attempt["task_id"],
+                        summary="AI CEO attempt failed at a categorized internal boundary.",
+                        details={
+                            "stage": failure_stage,
+                            "error_type": error_type,
+                            "usage_consumed": usage_consumed,
+                            "secret_exposed": False,
+                        },
+                    )
+                except Exception:
+                    pass
+                if actual_task_id:
+                    try:
+                        self.repository.update_task_status(
+                            task_id=actual_task_id,
+                            company_id=identity["company_id"],
+                            status="failed",
+                            output={
+                                "ai_ceo_chat": {
+                                    "status": "internal_dependency_failed",
+                                    "blocked_by": ["internal_dependency_failed"],
+                                    "secret_exposed": False,
+                                },
+                                "usage_consumed": usage_consumed,
+                                "secret_exposed": False,
+                            },
+                            audit_summary="AI CEO model task failed during internal persistence after the provider boundary.",
+                        )
+                    except Exception:
+                        pass
+                try:
+                    attempt_failure_state = str(
+                        attempt_recovery_state.get("attempt_failure_state") or "failed_internal_dependency"
+                    )
+                    attempt_failure_code = str(
+                        attempt_recovery_state.get("attempt_failure_code") or "internal_dependency_failed"
+                    )
+                    update_model_attempt(
+                        attempt_state=attempt_failure_state,
+                        task_status="failed",
+                        failure_code=attempt_failure_code,
+                        actual_task_id=actual_task_id,
+                        usage_consumed=usage_consumed,
+                        summary="AI CEO attempt failed at an internal dependency boundary.",
+                    )
+                except Exception:
+                    pass
+                answer = (
+                    "模型调用已经发生，但没有返回可用结果或后续内部记录没有完成；本次未生成草稿，请勿立即重复提交，稍后查看任务记录。"
+                    if usage_consumed
+                    else "内部依赖暂时不可用；本次未调用模型、未消耗次数、未生成草稿，请稍后重试。"
+                )
+                public_failure_status = (
+                    "model_call_failed"
+                    if attempt_failure_state == "failed_model_provider"
+                    else "internal_dependency_failed"
+                )
+                try:
+                    send_chat_payload(
+                        {
+                            "ai_ceo_chat": {
+                                "status": public_failure_status,
+                                "blocked_by": [attempt_failure_code],
+                                "answer": answer,
+                                **route_meta,
+                                "frontend_gets_model_api_key": False,
+                                "runtime_gets_raw_ebay_token": False,
+                                "secret_exposed": False,
+                            },
+                            "merchant_ceo_command": command_response,
+                            "usage_consumed": usage_consumed,
+                            "listing_created": False,
+                            "ai_ceo_market_report": None,
+                            "ai_ceo_market_report_delivery": None,
+                            "real_platform_writes_enabled": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.SERVICE_UNAVAILABLE,
+                    )
+                except Exception:
+                    pass
+                return True
+
+            self._active_ai_ceo_attempt_recovery = recover_unexpected_model_attempt
+
+            def send_database_schema_blocked_attempt() -> None:
+                update_model_attempt(
+                    attempt_state="blocked_database_schema",
+                    task_status="blocked",
+                    failure_code="database_schema_unavailable",
+                    summary="AI CEO attempt was blocked by the database schema dependency.",
+                )
+                send_chat_payload(
+                    {
+                        "ai_ceo_chat": {
+                            "status": "blocked_before_model_chat",
+                            "blocked_by": ["database_schema_unavailable"],
+                            "answer": "数据库结构检查未通过，本次未调用模型、未消耗次数、未生成草稿。请稍后重试。",
+                            **route_meta,
+                            "frontend_gets_model_api_key": False,
+                            "runtime_gets_raw_ebay_token": False,
+                            "secret_exposed": False,
+                        },
+                        "merchant_ceo_command": command_response,
+                        "usage_consumed": False,
+                        "listing_created": False,
+                        "ai_ceo_market_report": None,
+                        "ai_ceo_market_report_delivery": None,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+
+            update_model_attempt(
+                attempt_state="resolving_dependencies",
+                summary="AI CEO attempt is resolving backend model dependencies.",
+            )
+            attempt_recovery_state["failure_stage"] = "model_connection"
+            try:
+                model_secret_resolution = self._resolve_model_client_for_store(identity=identity, store_id=store_id, body=body)
+            except Exception as exc:
+                if not self._is_database_unavailable_exception(exc):
+                    raise
+                send_database_schema_blocked_attempt()
+                return
             if model_secret_resolution.get("status") != "resolved":
                 blockers = model_secret_resolution.get("blocked_by") or [model_secret_resolution.get("status") or "model_secret_not_resolved"]
                 blocker_set = set(str(item) for item in blockers)
+                update_model_attempt(
+                    attempt_state="blocked_model_connection",
+                    task_status="blocked",
+                    failure_code=_ai_ceo_attempt_failure_code(blockers, "model_secret_not_resolved"),
+                    summary="AI CEO model dependency attempt blocked before model usage.",
+                )
                 if {"merchant_model_api_key_not_saved", "platform_model_default_not_configured"}.issubset(blocker_set):
                     blocked_answer = (
                         "AI CEO 这次还不能生成完整回复：当前账号还没有保存自己的 AI 连接，"
                         "捷境试用 AI 当前也未开通。你可以到设置里的 AI 与素材保存 DeepSeek/OpenAI 连接；"
                         "普通公开来源搜索已接入，但没有可用文本 AI 时不会冒充完整模型回答。"
+                        "本次未调用模型、未消耗次数、未生成草稿。"
                     )
                 else:
                     blocked_answer = (
                         "AI 连接暂时不可用。这次没有拿到可展示回复。"
                         "你可以稍后重试，或到设置里的 AI 与素材查看连接状态；"
                         "不要重复保存连接信息，除非页面明确提示连接已失效。"
+                        "本次未调用模型、未消耗次数、未生成草稿。"
                     )
                 send_chat_payload(
                     {
@@ -6073,9 +6450,14 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         },
                         "merchant_ceo_command": command_response,
                         "platform_model_resolution": model_secret_resolution.get("platform_model_resolution") or {},
+                        "usage_consumed": False,
+                        "listing_created": False,
+                        "ai_ceo_market_report": None,
+                        "ai_ceo_market_report_delivery": None,
                         "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
                     },
-                    status=HTTPStatus.ACCEPTED,
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
                 )
                 return
             model_resolution_mode = str(model_secret_resolution.get("mode") or "")
@@ -6084,10 +6466,51 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 if model_resolution_mode == "platform_managed_default"
                 else "ai_ceo_task"
             )
-            if not self._require_quota(identity, quota_action):
+            def block_model_attempt_for_subscription_quota(evaluation: dict[str, Any]) -> None:
+                update_model_attempt(
+                    attempt_state="blocked_quota",
+                    task_status="blocked",
+                    failure_code=_ai_ceo_attempt_failure_code(
+                        [evaluation.get("reason"), evaluation.get("blocked_by")],
+                        "subscription_quota_blocked",
+                    ),
+                    summary="AI CEO attempt was blocked by subscription quota before model usage.",
+                )
+
+            attempt_recovery_state["failure_stage"] = "quota_check"
+            try:
+                quota_allowed = self._require_quota(
+                    identity,
+                    quota_action,
+                    on_block=block_model_attempt_for_subscription_quota,
+                    extra_response={
+                        "message": "当前套餐或额度暂时不能继续。本次未调用模型、未消耗次数、未生成草稿。",
+                        "usage_consumed": False,
+                        "listing_created": False,
+                        "ai_ceo_market_report": None,
+                        "ai_ceo_market_report_delivery": None,
+                    },
+                )
+            except Exception as exc:
+                if not self._is_database_unavailable_exception(exc):
+                    raise
+                send_database_schema_blocked_attempt()
                 return
+            if not quota_allowed:
+                return
+            update_model_attempt(
+                attempt_state="quota_checked",
+                summary="AI CEO attempt passed subscription quota checks.",
+            )
             if model_secret_resolution.get("mode") == "platform_managed_default":
-                platform_trial_quota = self._platform_model_trial_quota(identity=identity)
+                attempt_recovery_state["failure_stage"] = "platform_trial_quota"
+                try:
+                    platform_trial_quota = self._platform_model_trial_quota(identity=identity)
+                except Exception as exc:
+                    if not self._is_database_unavailable_exception(exc):
+                        raise
+                    send_database_schema_blocked_attempt()
+                    return
                 model_secret_resolution["platform_trial_quota"] = platform_trial_quota
                 if not platform_trial_quota.get("allowed"):
                     trial_blocker = str(
@@ -6108,6 +6531,13 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             "当前账号的 20 次捷境 AI 免费体验额度已用完。"
                             "你可以在设置中连接自己的 DeepSeek 或 OpenAI；软件套餐和素材点仍分别管理。"
                         )
+                    trial_answer = f"{trial_answer} 本次未调用模型、未消耗次数、未生成草稿。"
+                    update_model_attempt(
+                        attempt_state="blocked_quota",
+                        task_status="blocked",
+                        failure_code=trial_blocker,
+                        summary="AI CEO attempt was blocked by platform trial quota before model usage.",
+                    )
                     send_chat_payload(
                         {
                             "ai_ceo_chat": {
@@ -6131,33 +6561,261 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                                 for key, value in model_secret_resolution.items()
                                 if key not in {"model_client", "secret_value"}
                             },
+                            "usage_consumed": False,
+                            "listing_created": False,
+                            "ai_ceo_market_report": None,
+                            "ai_ceo_market_report_delivery": None,
                             "real_platform_writes_enabled": False,
                             "secret_exposed": False,
                         },
                         status=HTTPStatus.PAYMENT_REQUIRED,
                     )
                     return
-            metered_model_client = MeteredModelClient(model_secret_resolution["model_client"])
-            chat = run_ai_ceo_chat(
-                repository=self.repository,
-                company_id=identity["company_id"],
-                store_id=store_id,
-                user_id=identity["user_id"],
-                message=message,
-                model_client=metered_model_client,
-                client_now=str(body.get("client_now") or ""),
-                client_timezone=str(body.get("client_timezone") or ""),
-                command=command_body,
-                conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
-                model_resolution={
-                    key: value
-                    for key, value in model_secret_resolution.items()
-                    if key not in {"model_client", "secret_value"}
-                },
-                on_stage=emit_chat_stage if stream_requested else None,
-                on_text_delta=emit_text_delta if stream_requested else None,
+            metered_task_id = "task_" + hashlib.sha256(
+                f"ai-ceo-model-task|{identity['company_id']}|{attempt['task_id']}".encode("utf-8")
+            ).hexdigest()[:24]
+
+            def ensure_metered_model_task() -> dict[str, Any]:
+                chat_for_task = (
+                    attempt_recovery_state.get("chat")
+                    if isinstance(attempt_recovery_state.get("chat"), dict)
+                    else {}
+                )
+                return self.repository.create_task(
+                    company_id=identity["company_id"],
+                    store_id=store_id,
+                    user_id=identity["user_id"],
+                    task_type="merchant_ceo_chat",
+                    title="AI CEO chat turn",
+                    task_id=metered_task_id,
+                    input_data={
+                        "message": message,
+                        "command_id": (
+                            (command_response or {}).get("command", {}).get("id")
+                            if isinstance(command_response, dict)
+                            else ""
+                        ),
+                        "attempt_task_id": attempt["task_id"],
+                        "route": chat_for_task.get("route") or route_meta.get("route"),
+                        "route_label": chat_for_task.get("route_label") or route_meta.get("route_label"),
+                        "memory_policy": chat_for_task.get("memory_policy") or "transient_no_long_term_memory",
+                        "decision_center_required": bool(chat_for_task.get("decision_center_required")),
+                        "model_secret_ref": model_secret_resolution.get("secret_ref"),
+                        "model_resolution_mode": model_secret_resolution.get("mode"),
+                        "model_secret_ref_scope": model_secret_resolution.get("secret_ref_scope"),
+                        "model_usage_owner": (
+                            "merchant_account_byok"
+                            if model_secret_resolution.get("merchant_pays_provider_directly")
+                            else "jiejing_platform_trial"
+                            if model_secret_resolution.get("mode") == "platform_managed_default"
+                            else "unknown"
+                        ),
+                        "platform_trial_quota": model_secret_resolution.get("platform_trial_quota") or {},
+                        "provider_key": model_secret_resolution.get("provider_key"),
+                        "model_usage_required": True,
+                        "frontend_gets_model_api_key": False,
+                        "runtime_gets_raw_ebay_token": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                )
+
+            def persist_metered_model_usage(task_for_usage: dict[str, Any]) -> None:
+                model_usage_for_task = (
+                    attempt_recovery_state.get("model_usage")
+                    if isinstance(attempt_recovery_state.get("model_usage"), dict)
+                    else {}
+                )
+                if int(model_usage_for_task.get("request_count") or 0) <= 0:
+                    return
+                metered_client_for_task = attempt_recovery_state.get("metered_model_client")
+                reliability = (
+                    metered_client_for_task.reliability_summary()
+                    if metered_client_for_task is not None
+                    else {}
+                )
+                usage_owner = (
+                    "merchant_account_byok"
+                    if model_secret_resolution.get("merchant_pays_provider_directly")
+                    else "jiejing_platform_trial"
+                    if model_secret_resolution.get("mode") == "platform_managed_default"
+                    else "unknown"
+                )
+                cost_measurement = model_cost_measurement(usage_owner=usage_owner, usage=model_usage_for_task)
+                self.repository.record_model_usage(
+                    company_id=identity["company_id"],
+                    user_id=identity["user_id"],
+                    task_id=task_for_usage["task_id"],
+                    usage_owner=usage_owner,
+                    model_family=str(model_secret_resolution.get("provider_key") or "provider_neutral"),
+                    model_label=str(
+                        model_secret_resolution.get("model")
+                        or getattr(metered_client_for_task, "model", "")
+                    ),
+                    request_count=int(model_usage_for_task.get("request_count") or 0),
+                    input_tokens=int(model_usage_for_task.get("input_tokens") or 0),
+                    output_tokens=int(model_usage_for_task.get("output_tokens") or 0),
+                    total_tokens=int(model_usage_for_task.get("total_tokens") or 0),
+                    cost_minor=int(cost_measurement.get("cost_minor") or 0),
+                    currency=str(cost_measurement.get("currency") or "CNY"),
+                    cost_status=str(cost_measurement.get("cost_status") or "unavailable"),
+                    idempotency_key=f"{task_for_usage['task_id']}:model-usage:v1",
+                    details={
+                        "provider_reported_tokens": bool(model_usage_for_task.get("total_tokens")),
+                        "retry_calls_included": True,
+                        "reliability": reliability,
+                    },
+                )
+
+            attempt_recovery_state["metered_task_factory"] = ensure_metered_model_task
+            attempt_recovery_state["model_usage_persister"] = persist_metered_model_usage
+            update_model_attempt(
+                attempt_state="model_running",
+                summary="AI CEO attempt entered the backend model boundary.",
             )
+            attempt_recovery_state["failure_stage"] = "model_provider"
+            try:
+                metered_model_client = MeteredModelClient(model_secret_resolution["model_client"])
+                attempt_recovery_state["metered_model_client"] = metered_model_client
+                chat = attach_supplier_fact_attestation(
+                    run_ai_ceo_chat(
+                        repository=self.repository,
+                        company_id=identity["company_id"],
+                        store_id=store_id,
+                        user_id=identity["user_id"],
+                        message=message,
+                        model_client=metered_model_client,
+                        client_now=str(body.get("client_now") or ""),
+                        client_timezone=str(body.get("client_timezone") or ""),
+                        command=command_body,
+                        conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
+                        model_resolution={
+                            key: value
+                            for key, value in model_secret_resolution.items()
+                            if key not in {"model_client", "secret_value"}
+                        },
+                        on_stage=emit_chat_stage if stream_requested else None,
+                        on_text_delta=emit_text_delta if stream_requested else None,
+                    )
+                )
+                attempt_recovery_state["chat"] = chat
+            except Exception as exc:
+                metered_client = attempt_recovery_state.get("metered_model_client")
+                model_usage_after_failure = (
+                    metered_client.usage_summary()
+                    if metered_client is not None
+                    else {}
+                )
+                attempt_recovery_state["model_usage"] = model_usage_after_failure
+                attempt_recovery_state["usage_consumed"] = bool(
+                    int(model_usage_after_failure.get("request_count") or 0) > 0
+                )
+                if attempt_recovery_state["usage_consumed"]:
+                    attempt_recovery_state["failure_stage"] = "model_provider"
+                    attempt_recovery_state["attempt_failure_state"] = "failed_model_provider"
+                    attempt_recovery_state["attempt_failure_code"] = "model_runtime_failed"
+                    raise
+                if self._is_database_unavailable_exception(exc):
+                    send_database_schema_blocked_attempt()
+                    return
+                update_model_attempt(
+                    attempt_state="failed_model_provider",
+                    task_status="failed",
+                    failure_code="model_runtime_failed",
+                    summary="AI CEO attempt failed inside the backend model provider boundary.",
+                )
+                send_chat_payload(
+                    {
+                        "ai_ceo_chat": {
+                            "status": "model_call_failed",
+                            "blocked_by": ["model_runtime_failed"],
+                            "answer": "模型服务本次没有返回可用结果，未消耗次数、未生成草稿。请稍后重试。",
+                            **route_meta,
+                            "frontend_gets_model_api_key": False,
+                            "runtime_gets_raw_ebay_token": False,
+                            "secret_exposed": False,
+                        },
+                        "merchant_ceo_command": command_response,
+                        "usage_consumed": False,
+                        "listing_created": False,
+                        "ai_ceo_market_report": None,
+                        "ai_ceo_market_report_delivery": None,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+                return
+            provider_failure_code = str(chat.get("provider_error_type") or "")
+            if provider_failure_code:
+                provider_failure_usage = metered_model_client.usage_summary()
+                if int(provider_failure_usage.get("request_count") or 0) > 0:
+                    attempt_recovery_state["model_usage"] = provider_failure_usage
+                    attempt_recovery_state["usage_consumed"] = True
+                    attempt_recovery_state["failure_stage"] = "model_provider"
+                    attempt_recovery_state["attempt_failure_state"] = "failed_model_provider"
+                    attempt_recovery_state["attempt_failure_code"] = provider_failure_code
+                    raise RuntimeError("categorized_model_provider_failure")
+                update_model_attempt(
+                    attempt_state="failed_model_provider",
+                    task_status="failed",
+                    failure_code=provider_failure_code,
+                    summary="AI CEO attempt ended at the model provider boundary without billable task creation.",
+                )
+                chat = {
+                    **chat,
+                    "answer": (
+                        f"{str(chat.get('answer') or '').strip()}\n\n"
+                        "本次未获得可用模型结果、未消耗次数、未生成草稿。"
+                    ).strip(),
+                }
+                send_chat_payload(
+                    {
+                        "ai_ceo_chat": chat,
+                        "merchant_ceo_command": command_response,
+                        "model_secret_resolution": {
+                            key: value
+                            for key, value in model_secret_resolution.items()
+                            if key not in {"model_client", "secret_value"}
+                        },
+                        "usage_consumed": False,
+                        "listing_created": False,
+                        "ai_ceo_market_report": None,
+                        "ai_ceo_market_report_delivery": None,
+                        "frontend_gets_model_api_key": False,
+                        "runtime_gets_raw_ebay_token": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+                return
+            model_usage = metered_model_client.usage_summary()
+            usage_consumed = bool(model_usage.get("request_count"))
+            attempt_recovery_state["model_usage"] = model_usage
+            attempt_recovery_state["usage_consumed"] = usage_consumed
+            attempt_recovery_state["failure_stage"] = "model_task_persistence"
+            task = ensure_metered_model_task()
+            attempt_recovery_state["actual_task_id"] = task["task_id"]
+            if model_usage.get("request_count"):
+                attempt_recovery_state["failure_stage"] = "model_usage_persistence"
+                try:
+                    persist_metered_model_usage(task)
+                except Exception as exc:
+                    self.repository.write_audit(
+                        company_id=identity["company_id"],
+                        store_id=store_id,
+                        user_id=identity["user_id"],
+                        actor_type="system",
+                        action_type="operations.model_usage_metering.failed",
+                        target_type="task",
+                        target_id=task["task_id"],
+                        summary="Model answer was preserved but internal usage metering did not persist.",
+                        details={"error_type": exc.__class__.__name__, "secret_exposed": False},
+                    )
+                    raise
             if command_body and chat.get("answer"):
+                attempt_recovery_state["failure_stage"] = "command_persistence"
                 command_response = self.repository.save_merchant_ceo_command(
                     company_id=identity["company_id"],
                     store_id=store_id,
@@ -6175,83 +6833,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "decision_center_required": chat.get("decision_center_required"),
                     },
                 )
-            task = self.repository.create_task(
-                company_id=identity["company_id"],
-                store_id=store_id,
-                user_id=identity["user_id"],
-                task_type="merchant_ceo_chat",
-                title="AI CEO chat turn",
-                input_data={
-                    "message": message,
-                    "command_id": (command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
-                    "route": chat.get("route"),
-                    "route_label": chat.get("route_label"),
-                    "memory_policy": chat.get("memory_policy"),
-                    "decision_center_required": bool(chat.get("decision_center_required")),
-                    "model_secret_ref": model_secret_resolution.get("secret_ref"),
-                    "model_resolution_mode": model_secret_resolution.get("mode"),
-                    "model_secret_ref_scope": model_secret_resolution.get("secret_ref_scope"),
-                    "model_usage_owner": (
-                        "merchant_account_byok"
-                        if model_secret_resolution.get("merchant_pays_provider_directly")
-                        else "jiejing_platform_trial"
-                        if model_secret_resolution.get("mode") == "platform_managed_default"
-                        else "unknown"
-                    ),
-                    "platform_trial_quota": model_secret_resolution.get("platform_trial_quota") or {},
-                    "provider_key": model_secret_resolution.get("provider_key"),
-                    "model_usage_required": True,
-                    "frontend_gets_model_api_key": False,
-                    "runtime_gets_raw_ebay_token": False,
-                    "real_platform_writes_enabled": False,
-                    "secret_exposed": False,
-                },
-            )
-            model_usage = metered_model_client.usage_summary()
-            model_reliability = metered_model_client.reliability_summary()
-            if model_usage.get("request_count"):
-                usage_owner = (
-                    "merchant_account_byok"
-                    if model_secret_resolution.get("merchant_pays_provider_directly")
-                    else "jiejing_platform_trial"
-                    if model_secret_resolution.get("mode") == "platform_managed_default"
-                    else "unknown"
-                )
-                cost_measurement = model_cost_measurement(usage_owner=usage_owner, usage=model_usage)
-                try:
-                    self.repository.record_model_usage(
-                        company_id=identity["company_id"],
-                        user_id=identity["user_id"],
-                        task_id=task["task_id"],
-                        usage_owner=usage_owner,
-                        model_family=str(model_secret_resolution.get("provider_key") or "provider_neutral"),
-                        model_label=str(model_secret_resolution.get("model") or getattr(metered_model_client, "model", "")),
-                        request_count=int(model_usage.get("request_count") or 0),
-                        input_tokens=int(model_usage.get("input_tokens") or 0),
-                        output_tokens=int(model_usage.get("output_tokens") or 0),
-                        total_tokens=int(model_usage.get("total_tokens") or 0),
-                        cost_minor=int(cost_measurement.get("cost_minor") or 0),
-                        currency=str(cost_measurement.get("currency") or "CNY"),
-                        cost_status=str(cost_measurement.get("cost_status") or "unavailable"),
-                        idempotency_key=f"{task['task_id']}:model-usage:v1",
-                        details={
-                            "provider_reported_tokens": bool(model_usage.get("total_tokens")),
-                            "retry_calls_included": True,
-                            "reliability": model_reliability,
-                        },
-                    )
-                except Exception as exc:
-                    self.repository.write_audit(
-                        company_id=identity["company_id"],
-                        store_id=store_id,
-                        user_id=identity["user_id"],
-                        actor_type="system",
-                        action_type="operations.model_usage_metering.failed",
-                        target_type="task",
-                        target_id=task["task_id"],
-                        summary="Model answer was preserved but internal usage metering did not persist.",
-                        details={"error_type": exc.__class__.__name__, "secret_exposed": False},
-                    )
             self.repository.update_task_status(
                 task_id=task["task_id"],
                 company_id=identity["company_id"],
@@ -6271,14 +6852,76 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 output={"ai_ceo_chat": chat, "secret_exposed": False},
                 audit_summary="AI CEO chat turn completed through backend model boundary.",
             )
-            ai_ceo_market_report = self.repository.save_ai_ceo_market_research_report(
-                task=task,
-                message=message,
-                chat=chat,
-                command_id=(command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
-                conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
+            update_model_attempt(
+                attempt_state="artifact_validating",
+                actual_task_id=task["task_id"],
+                usage_consumed=usage_consumed,
+                summary="AI CEO attempt is validating the authoritative backend artifact outcome.",
             )
+            artifact_requested = ai_ceo_market_artifact_eligible(message=message, chat=chat)
+            try:
+                ai_ceo_market_report = self.repository.save_ai_ceo_market_research_report(
+                    task=task,
+                    message=message,
+                    chat=chat,
+                    command_id=(command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
+                    conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
+                )
+            except Exception as exc:
+                update_model_attempt(
+                    attempt_state="failed_artifact_validation",
+                    task_status="failed",
+                    failure_code=(
+                        "database_schema_unavailable"
+                        if self._is_database_unavailable_exception(exc)
+                        else "artifact_save_failed"
+                    ),
+                    actual_task_id=task["task_id"],
+                    artifact_outcome="artifact_save_failed",
+                    usage_consumed=usage_consumed,
+                    summary="AI CEO attempt could not persist the authoritative backend artifact.",
+                )
+                send_chat_payload(
+                    {
+                        "ai_ceo_chat": {
+                            **chat,
+                            "answer": (
+                                f"{str(chat.get('answer') or '').strip()}\n\n"
+                                "模型回复已保留，但市场调研工作记录保存失败，因此未生成可导入 Listing 的草稿。"
+                            ).strip(),
+                        },
+                        "merchant_ceo_command": command_response,
+                        "usage_consumed": usage_consumed,
+                        "listing_created": False,
+                        "ai_ceo_market_report": None,
+                        "ai_ceo_market_report_delivery": None,
+                        "frontend_gets_model_api_key": False,
+                        "runtime_gets_raw_ebay_token": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+                return
             ai_ceo_market_report_delivery = build_ai_ceo_market_report_delivery(ai_ceo_market_report)
+            if ai_ceo_market_report:
+                artifact_outcome = (
+                    "saved_import_ready"
+                    if ai_ceo_market_report_delivery
+                    and ai_ceo_market_report_delivery.get("listing_import_ready") is True
+                    else "saved_not_importable"
+                )
+            else:
+                artifact_outcome = "not_eligible" if artifact_requested else "not_requested"
+            update_model_attempt(
+                attempt_state="completed",
+                task_status="completed",
+                actual_task_id=task["task_id"],
+                artifact_outcome=artifact_outcome,
+                artifact_report_id=str((ai_ceo_market_report or {}).get("report_id") or ""),
+                usage_consumed=usage_consumed,
+                summary="AI CEO attempt completed with a recorded model task and artifact outcome.",
+            )
             status = (
                 HTTPStatus.CREATED
                 if chat.get("status")
@@ -6305,6 +6948,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     },
                     "ai_ceo_market_report": ai_ceo_market_report,
                     "ai_ceo_market_report_delivery": ai_ceo_market_report_delivery,
+                    "usage_consumed": usage_consumed,
+                    "listing_created": False,
                     "frontend_gets_model_api_key": False,
                     "runtime_gets_raw_ebay_token": False,
                     "real_platform_writes_enabled": False,
@@ -9002,7 +9647,14 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             decision_reason=reason,
         )
 
-    def _require_quota(self, identity: dict[str, Any], action_unit: str) -> bool:
+    def _require_quota(
+        self,
+        identity: dict[str, Any],
+        action_unit: str,
+        *,
+        on_block: Callable[[dict[str, Any]], None] | None = None,
+        extra_response: dict[str, Any] | None = None,
+    ) -> bool:
         evaluation = evaluate_quota_action(
             self.settings,
             self.repository,
@@ -9022,6 +9674,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if evaluation.get("allowed") is True:
                 return True
             evaluation = {**evaluation, "private_beta_entitlement_recovery": recovery}
+        if on_block is not None:
+            on_block(evaluation)
         self._send_json(
             {
                 "error": "quota exhausted",
@@ -9029,6 +9683,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "quota": evaluation,
                 "real_platform_writes_enabled": False,
                 "secret_exposed": False,
+                **(extra_response if isinstance(extra_response, dict) else {}),
             },
             status=HTTPStatus.PAYMENT_REQUIRED,
         )

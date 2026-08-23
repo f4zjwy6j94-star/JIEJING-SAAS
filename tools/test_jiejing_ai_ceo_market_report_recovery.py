@@ -134,7 +134,13 @@ def main() -> None:
     assert "needs_more_sources" in memories[0]["tags"], memories
     assert listing_handoff["ready_for_listing_draft"] is False, listing_handoff
     assert listing_handoff["listing_fields"] == {}, listing_handoff
-    assert listing_handoff["blocked_by"] == ["answer_quality_not_ready_for_listing"], listing_handoff
+    assert set(listing_handoff["blocked_by"]) == {
+        "answer_quality_not_ready_for_listing",
+        "concrete_candidate_required",
+        "selected_candidate_required",
+        "source_evidence_required",
+        "supplier_facts_incomplete",
+    }, listing_handoff
     assert listing_handoff["requires_human_review_before_publish"] is True, listing_handoff
     assert listing_handoff["triggers_real_platform_write"] is False, listing_handoff
 

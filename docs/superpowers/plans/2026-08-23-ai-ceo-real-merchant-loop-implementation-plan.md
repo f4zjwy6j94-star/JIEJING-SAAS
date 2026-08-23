@@ -108,10 +108,10 @@
 ### What to implement
 
 1. 在聊天入口保存命令后创建 `merchant_ceo_chat_attempt` 任务，输入只含脱敏 route、command id 和安全状态。
-2. 连接、schema、quota、provider 和 artifact 失败分别更新 attempt task；不创建实际模型使用任务。
-3. 实际模型成功后仍使用现有 `merchant_ceo_chat` 任务作为计量事实，并在 attempt output 记录 artifact outcome 和实际 task id。
+2. 连接、schema、quota 等模型调用前失败分别更新 attempt task，且不创建实际模型使用任务；模型调用后 artifact 或内部持久化失败则保留实际用量事实，不得伪报“未调用”。
+3. 实际模型成功后立即使用现有 `merchant_ceo_chat` 任务和 model-usage ledger 固化计量事实，再保存命令回复和 artifact；在 attempt output 记录 usage、artifact outcome 和实际 task id。
 4. 统一 artifact outcome：`not_requested`、`not_eligible`、`saved_not_importable`、`saved_import_ready`、`artifact_save_failed`。
-5. 错误响应增加准确中文说明及 `usage_consumed=false`、`listing_created=false`。
+5. attempt 创建后的任何未预期异常都必须经全局恢复边界进入 `failed_internal_dependency`，不能断线、返回假 2xx 或停在 running；错误响应以模型是否真实被调用决定 `usage_consumed`，始终保持 `listing_created=false`，且不回显内部异常文本。
 
 ### Documentation references
 
@@ -123,16 +123,17 @@
 
 - 模型前阻断在任务列表可见。
 - 平台 trial `used` 不因 attempt 增加。
+- quota、模型调用后命令保存、用量台账三类故障注入均安全返回 5xx，唯一 attempt 为终态；模型已调用的两类故障保留 `usage_consumed=true`。
 - 后端日志不包含用户完整 prompt 或 secret。
 
 ## Phase 4：收紧路由并确立后端唯一工件
 
 ### What to implement
 
-1. 把 route 与 artifact intent 拆开；只有用户明确 eBay/Listing/刊登/选品意图或已有后端工件上下文时，才具备 eBay market artifact eligibility。
+1. 把 route 与 artifact intent 拆开；只有用户明确 eBay/Listing/刊登/上架/选品意图或已有后端工件上下文时，才具备 eBay market artifact eligibility；淘宝、Shopify、Amazon 等明确非 eBay 平台语境优先排除，除非同一请求又明确要求 eBay。
 2. 从通用 workflow marker 中移除单独的“费用”等非电商触发词。
 3. `_looks_like_ai_ceo_market_research_turn(...)` 不再跨问题+回答凭“市场+产品”判权威工件，也不把所有 `external_realtime` 当选品。
-4. 报告 `listing_import_ready` 至少要求明确意图、具体候选、已选择候选、权威后端 report id；事实缺口继续显示但保持不可导入。
+4. 报告 `listing_import_ready` 至少要求明确意图、具体候选、已选择候选、来源证据、供应商事实完整且已核验、权威后端 report id；供应商事实完整但未核验时显式加入 `supplier_facts_unverified`，摘要不得声称可导入。
 5. 修复审计中硬编码 `ready_for_listing_draft=True`，改为实际值。
 
 ### Verification
@@ -150,6 +151,7 @@
 3. `renderSaasAiCeoMarketReportDeliveryMarkup(...)` 必须同时检查：后端 report id、`listing_import_ready=true`、具体商品。
 4. delivery 缺少 `report_type` 时不默认成市场调研。
 5. 503/blocked UI 明确显示本次未调用模型、未扣次数、未生成草稿。
+6. 点击携带 `reportId` 时只能选择同一 `market_report_id` 的权威后端报告；不得按 assistant id、商品名或最新报告回退到另一份工件。
 
 ### Documentation references
 

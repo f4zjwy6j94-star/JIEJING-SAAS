@@ -2900,6 +2900,29 @@ def _looks_like_high_risk_action(text: str) -> bool:
 
 
 def _looks_like_ebay_workflow(text: str) -> bool:
+    # "listing", "刊登" and "上架" are platform-neutral commerce terms.  Only
+    # an explicit eBay mention may override another named platform.
+    explicit_ebay_markers = ("ebay",)
+    non_ebay_platform_markers = (
+        "淘宝",
+        "天猫",
+        "京东",
+        "拼多多",
+        "亚马逊",
+        "amazon",
+        "shopify",
+        "shopee",
+        "lazada",
+        "temu",
+        "tiktok shop",
+        "抖音小店",
+        "快手小店",
+        "微信小店",
+    )
+    if any(marker in text for marker in non_ebay_platform_markers) and not any(
+        marker in text for marker in explicit_ebay_markers
+    ):
+        return False
     concrete_verbs = (
         "生成",
         "创建",
@@ -2943,6 +2966,7 @@ def _looks_like_ebay_workflow(text: str) -> bool:
         "ip 防侵权",
         "侵权",
         "刊登",
+        "上架",
         "上架资料",
         "铺货",
         "选品",
@@ -2969,10 +2993,30 @@ def _looks_like_ebay_workflow(text: str) -> bool:
         "确认中心",
         "决策中心",
         "利润模型",
-        "费用",
-        "毛利",
     )
     if any(marker in text for marker in workflow_markers) and any(verb in text for verb in concrete_verbs):
+        return True
+    finance_markers = ("费用", "毛利", "利润", "cost", "fee", "margin")
+    merchant_finance_context = (
+        "ebay",
+        "listing",
+        "店铺",
+        "订单",
+        "商品",
+        "sku",
+        "平台费",
+        "成交费",
+        "广告费",
+        "采购成本",
+        "商品成本",
+        "运费",
+        "履约",
+    )
+    if (
+        any(marker in text for marker in finance_markers)
+        and any(marker in text for marker in merchant_finance_context)
+        and any(verb in text for verb in concrete_verbs)
+    ):
         return True
     if "基于当前" in text and any(marker in text for marker in workflow_markers):
         return True
