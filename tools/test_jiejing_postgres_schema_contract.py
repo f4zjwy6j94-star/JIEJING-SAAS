@@ -13,6 +13,7 @@ import time
 import types
 import unittest
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -30,9 +31,14 @@ from jiejing_saas.infrastructure_drivers import (  # noqa: E402
 
 INITIAL_MIGRATION = ROOT / "jiejing_saas" / "migrations" / "001_initial_schema_postgres.sql"
 BUCKET_MIGRATION = ROOT / "jiejing_saas" / "migrations" / "002_media_credit_buckets_postgres.sql"
+RUNTIME_RECONCILIATION_MIGRATION = (
+    ROOT / "jiejing_saas" / "migrations" / "003_runtime_schema_reconciliation_postgres.sql"
+)
 INITIAL_MIGRATION_CANONICAL_SHA256 = "d76293f426d20cdcc0a2667284900c8cb91606f26e464ff1a4e1b96e409444f6"
 BUCKET_MIGRATION_ID = "20260823_002_media_credit_buckets_postgres"
 BUCKET_MIGRATION_CHECKSUM = "jiejing-media-credit-buckets-postgres-v20260823"
+RUNTIME_RECONCILIATION_MIGRATION_ID = "20260823_003_runtime_schema_reconciliation_postgres"
+RUNTIME_RECONCILIATION_MIGRATION_CHECKSUM = "jiejing-runtime-schema-reconciliation-postgres-v20260823"
 DATABASE_URL = "postgresql://jiejing:red-light-secret@postgres:5432/jiejing"
 # Signed int64 from sha256("jiejing-postgres-schema-migration-v1")[:8].
 POSTGRES_MIGRATION_ADVISORY_LOCK_KEY = -1280677561506917264
@@ -49,6 +55,185 @@ SESSION_ADVISORY_UNLOCK_SQL = re.compile(
     flags=re.IGNORECASE,
 )
 AdvisoryLockKey = tuple[int, ...]
+
+MEDIA_BUCKET_COMPANY_FK_CONTRACT_ID = "media_credit_buckets.company_fk"
+MEDIA_BUCKET_IDEMPOTENCY_UNIQUE_CONTRACT_ID = "media_credit_buckets.company_source_reference_unique"
+USER_SESSION_REFRESH_FK_CONTRACT_ID = "user_sessions_refresh_session_id_fkey"
+
+
+@dataclass(frozen=True)
+class _FakeIndexDefinition:
+    table_name: str
+    columns: tuple[str, ...]
+    access_method: str = "btree"
+    is_unique: bool = False
+    is_valid: bool = True
+    is_ready: bool = True
+    is_live: bool = True
+
+    def catalog_definition(self, index_name: str) -> str:
+        columns = ", ".join(self.columns)
+        unique = "UNIQUE " if self.is_unique else ""
+        return (
+            f"CREATE {unique}INDEX {index_name} ON public.{self.table_name} "
+            f"USING {self.access_method} ({columns})"
+        )
+
+
+@dataclass(frozen=True)
+class _FakeColumnDefinition:
+    data_type: str
+    nullable: bool
+
+    @property
+    def information_schema_data_type(self) -> str:
+        return {
+            "timestamptz": "timestamp with time zone",
+        }.get(self.data_type, self.data_type)
+
+    @property
+    def udt_name(self) -> str:
+        return {
+            "integer": "int4",
+            "bigint": "int8",
+        }.get(self.data_type, self.data_type)
+
+
+@dataclass(frozen=True)
+class _FakeConstraintDefinition:
+    constraint_type: str
+    table_name: str
+    columns: tuple[str, ...]
+    referenced_table: str | None = None
+    referenced_columns: tuple[str, ...] = ()
+
+    def catalog_definition(self) -> str:
+        columns = ", ".join(self.columns)
+        if self.constraint_type == "f":
+            referenced_columns = ", ".join(self.referenced_columns)
+            return f"FOREIGN KEY ({columns}) REFERENCES {self.referenced_table}({referenced_columns})"
+        if self.constraint_type == "u":
+            return f"UNIQUE ({columns})"
+        return f"UNSUPPORTED ({columns})"
+
+
+def _expected_index_definitions() -> dict[str, _FakeIndexDefinition]:
+    return {
+        "idx_media_credit_buckets_company_status": _FakeIndexDefinition(
+            "media_credit_buckets",
+            ("company_id", "status", "expires_at"),
+        ),
+        "idx_user_refresh_sessions_owner": _FakeIndexDefinition(
+            "user_refresh_sessions",
+            ("user_id", "company_id", "status", "last_seen_at"),
+        ),
+        "idx_user_refresh_token_history_session": _FakeIndexDefinition(
+            "user_refresh_token_history",
+            ("session_id", "generation"),
+        ),
+        "idx_user_sessions_refresh_session": _FakeIndexDefinition(
+            "user_sessions",
+            ("refresh_session_id",),
+        ),
+    }
+
+
+def _fake_index_matches_migration_contract(
+    candidate: _FakeIndexDefinition | None,
+    expected: _FakeIndexDefinition,
+) -> bool:
+    return bool(
+        candidate is not None
+        and candidate.table_name == expected.table_name
+        and candidate.columns == expected.columns
+        and candidate.access_method == "btree"
+        and not candidate.is_unique
+        and candidate.is_valid
+        and candidate.is_ready
+    )
+
+
+def _expected_constraint_definitions() -> dict[str, _FakeConstraintDefinition]:
+    return {
+        MEDIA_BUCKET_COMPANY_FK_CONTRACT_ID: _FakeConstraintDefinition(
+            "f",
+            "media_credit_buckets",
+            ("company_id",),
+            "companies",
+            ("company_id",),
+        ),
+        MEDIA_BUCKET_IDEMPOTENCY_UNIQUE_CONTRACT_ID: _FakeConstraintDefinition(
+            "u",
+            "media_credit_buckets",
+            ("company_id", "source_type", "source_reference_id"),
+        ),
+        USER_SESSION_REFRESH_FK_CONTRACT_ID: _FakeConstraintDefinition(
+            "f",
+            "user_sessions",
+            ("refresh_session_id",),
+            "user_refresh_sessions",
+            ("session_id",),
+        ),
+    }
+
+
+def _expected_column_definitions() -> dict[str, dict[str, _FakeColumnDefinition]]:
+    required = _FakeColumnDefinition
+    return {
+        "media_credit_buckets": {
+            "bucket_id": required("text", False),
+            "company_id": required("text", False),
+            "source_type": required("text", False),
+            "source_reference_id": required("text", False),
+            "granted_points": required("integer", False),
+            "remaining_points": required("integer", False),
+            "reserved_points": required("integer", False),
+            "expires_at": required("timestamptz", True),
+            "status": required("text", False),
+            "created_at": required("timestamptz", False),
+            "updated_at": required("timestamptz", False),
+            "bucket_json": required("jsonb", False),
+        },
+        "external_execution_claims": {
+            "claim_id": required("text", False),
+            "company_id": required("text", False),
+            "store_id": required("text", False),
+            "confirmation_id": required("text", False),
+            "action_type": required("text", False),
+            "status": required("text", False),
+            "nonce_sha256": required("text", False),
+            "binding_json": required("jsonb", False),
+            "claimed_by": required("text", False),
+            "claimed_at": required("timestamptz", False),
+            "expires_at": required("timestamptz", False),
+            "consumed_at": required("timestamptz", True),
+        },
+        "user_refresh_sessions": {
+            "session_id": required("text", False),
+            "current_token_hash": required("text", False),
+            "user_id": required("text", False),
+            "company_id": required("text", False),
+            "device_class": required("text", False),
+            "status": required("text", False),
+            "created_at": required("timestamptz", False),
+            "last_seen_at": required("timestamptz", False),
+            "expires_epoch": required("bigint", False),
+            "revoked_at": required("timestamptz", True),
+        },
+        "user_refresh_token_history": {
+            "token_hash": required("text", False),
+            "session_id": required("text", False),
+            "generation": required("bigint", False),
+            "status": required("text", False),
+            "issued_at": required("timestamptz", False),
+            "rotated_at": required("timestamptz", True),
+            "replayed_at": required("timestamptz", True),
+            "expires_epoch": required("bigint", False),
+        },
+        "user_sessions": {
+            "refresh_session_id": required("text", True),
+        },
+    }
 
 
 def _advisory_lock_key(sql: str, params: tuple[Any, ...]) -> AdvisoryLockKey | None:
@@ -81,10 +266,34 @@ class _FakePostgresState:
         *,
         relations: set[str] | None = None,
         migration_checksums: dict[str, str] | None = None,
+        relation_columns: dict[str, set[str]] | None = None,
+        column_definitions: dict[str, dict[str, _FakeColumnDefinition]] | None = None,
+        indexes: dict[str, _FakeIndexDefinition] | None = None,
+        constraints: dict[str, _FakeConstraintDefinition] | None = None,
         simulate_migration_work: bool = False,
     ) -> None:
         self.relations = set(relations or set())
         self.migration_checksums = dict(migration_checksums or {})
+        self.relation_columns = {
+            str(relation): set(columns)
+            for relation, columns in (relation_columns or {}).items()
+        }
+        expected_column_definitions = _expected_column_definitions()
+        self.column_definitions = {
+            relation: {
+                column: expected_column_definitions.get(relation, {}).get(
+                    column,
+                    _FakeColumnDefinition("text", True),
+                )
+                for column in columns
+            }
+            for relation, columns in self.relation_columns.items()
+        }
+        for relation, definitions in (column_definitions or {}).items():
+            self.column_definitions.setdefault(str(relation), {}).update(definitions)
+            self.relation_columns.setdefault(str(relation), set()).update(definitions)
+        self.indexes = dict(indexes or {})
+        self.constraints = dict(constraints or {})
         self.simulate_migration_work = simulate_migration_work
         self.session_advisory_locks: dict[AdvisoryLockKey, threading.Lock] = {}
         self.state_lock = threading.Lock()
@@ -108,6 +317,19 @@ class _FakePostgresState:
                 lock = threading.Lock()
                 self.session_advisory_locks[key] = lock
             return lock
+
+
+def _catalog_projection(sql: str, from_clause: str) -> list[str]:
+    projection = sql.split(from_clause, 1)[0]
+    projection = re.sub(r"^\s*select\s+", "", projection, flags=re.IGNORECASE)
+    return [field.strip() for field in projection.split(",") if field.strip()]
+
+
+def _requested_catalog_names(params: tuple[Any, ...]) -> set[str] | None:
+    for value in params:
+        if isinstance(value, (list, tuple, set, frozenset)):
+            return {str(item) for item in value}
+    return None
 
 
 class _FakeCursor:
@@ -186,6 +408,111 @@ class _FakeCursor:
             self._rows = [(f"public.{relation}" if relation in self.state.relations else None,)]
             return self
 
+        if normalized.startswith("select") and "information_schema.columns" in normalized:
+            fields = _catalog_projection(normalized, "from information_schema.columns")
+            requested_relation = str(safe_params[0]) if safe_params and isinstance(safe_params[0], str) else ""
+            requested_names = _requested_catalog_names(safe_params)
+            definitions = [
+                (relation, column, definition)
+                for relation, columns in sorted(self.state.column_definitions.items())
+                if (not requested_relation or relation == requested_relation)
+                and (requested_names is None or relation in requested_names)
+                for column, definition in sorted(columns.items())
+            ]
+            self._rows = [
+                tuple(
+                    relation
+                    if "table_name" in field
+                    else column
+                    if "column_name" in field
+                    else definition.information_schema_data_type
+                    if "data_type" in field
+                    else definition.udt_name
+                    if "udt_name" in field
+                    else "YES" if "is_nullable" in field and definition.nullable
+                    else "NO" if "is_nullable" in field
+                    else None
+                    for field in fields
+                )
+                for relation, column, definition in definitions
+            ]
+            return self
+
+        if normalized.startswith("select") and (
+            "pg_indexes" in normalized
+            or "from pg_index" in normalized
+            or ("from pg_class" in normalized and "relkind" in normalized and "'i'" in normalized)
+        ):
+            requested_names = _requested_catalog_names(safe_params)
+            definitions = [
+                (name, definition)
+                for name, definition in sorted(self.state.indexes.items())
+                if requested_names is None or name in requested_names
+            ]
+            if "pg_indexes" in normalized or "from pg_index" in normalized:
+                from_clause = "from pg_indexes" if "pg_indexes" in normalized else "from pg_index"
+                fields = _catalog_projection(normalized, from_clause)
+                self._rows = [
+                    tuple(
+                        name
+                        if "indexname" in field or "idx_rel.relname" in field or "index_name" in field
+                        else definition.table_name
+                        if "tablename" in field or "table_rel.relname" in field or "table_name" in field
+                        else definition.access_method
+                        if "amname" in field or "access_method" in field
+                        else definition.is_unique
+                        if "indisunique" in field or "is_unique" in field
+                        else definition.is_valid
+                        if "indisvalid" in field or "is_valid" in field
+                        else definition.is_ready
+                        if "indisready" in field or "is_ready" in field
+                        else definition.is_live
+                        if "indislive" in field or "is_live" in field
+                        else list(definition.columns)
+                        if "array_agg" in field or "column_names" in field or "columns" in field
+                        else definition.catalog_definition(name)
+                        if "indexdef" in field or "pg_get_indexdef" in field
+                        else None
+                        for field in fields
+                    )
+                    for name, definition in definitions
+                ]
+            else:
+                self._rows = [(name,) for name, _definition in definitions]
+            return self
+
+        if normalized.startswith("select") and "pg_constraint" in normalized:
+            requested_names = _requested_catalog_names(safe_params)
+            definitions = [
+                (name, definition)
+                for name, definition in sorted(self.state.constraints.items())
+                if requested_names is None
+                or (
+                    definition.table_name in requested_names
+                    if "rel.relname::text = any" in normalized
+                    else name in requested_names
+                )
+            ]
+            fields = _catalog_projection(normalized, "from pg_constraint")
+            self._rows = [
+                tuple(
+                    name
+                    if "conname" in field
+                    else definition.referenced_table
+                    if "ref_rel.relname" in field
+                    else definition.table_name
+                    if "rel.relname" in field
+                    else definition.constraint_type
+                    if "contype" in field
+                    else definition.catalog_definition()
+                    if "pg_get_constraintdef" in field
+                    else None
+                    for field in fields
+                )
+                for name, definition in definitions
+            ]
+            return self
+
         if normalized.startswith("select") and (
             "information_schema.tables" in normalized or "from pg_class" in normalized
         ):
@@ -194,6 +521,8 @@ class _FakeCursor:
 
         if "create table" in normalized:
             self._record_migration_execution(sql)
+        self._apply_schema_ddl(sql)
+        self._enforce_inline_schema_postconditions(sql)
         self._apply_migration_record(sql)
         self._rows = []
         return self
@@ -226,6 +555,162 @@ class _FakeCursor:
         if match:
             with self.state.state_lock:
                 self.state.migration_checksums.setdefault(match.group(1), match.group(2))
+
+    def _apply_schema_ddl(self, sql: str) -> None:
+        relations: set[str] = set()
+        created_column_definitions: dict[str, dict[str, _FakeColumnDefinition]] = {}
+        for match in re.finditer(
+            r"create\s+table\s+if\s+not\s+exists\s+([a-z_]+)\s*\((.*?)\)\s*;",
+            str(sql),
+            flags=re.IGNORECASE | re.DOTALL,
+        ):
+            relation = match.group(1).lower()
+            relations.add(relation)
+            created_column_definitions[relation] = _column_definitions_from_table_body(match.group(2))
+        altered_column_definitions: dict[str, dict[str, _FakeColumnDefinition]] = {}
+        for match in re.finditer(
+            r"alter\s+table\s+([a-z_]+)\s+add\s+column\s+if\s+not\s+exists\s+"
+            r"([a-z_]+)\s+([a-z_]+)(\s+not\s+null)?",
+            str(sql),
+            flags=re.IGNORECASE,
+        ):
+            altered_column_definitions.setdefault(match.group(1).lower(), {})[match.group(2).lower()] = (
+                _FakeColumnDefinition(match.group(3).lower(), not bool(match.group(4)))
+            )
+        indexes: dict[str, _FakeIndexDefinition] = {}
+        for match in re.finditer(
+            r"create\s+(?:unique\s+)?index\s+if\s+not\s+exists\s+([a-z_]+)\s+"
+            r"on\s+([a-z_]+)\s*\(([^)]+)\)",
+            str(sql),
+            flags=re.IGNORECASE,
+        ):
+            indexes[match.group(1).lower()] = _FakeIndexDefinition(
+                match.group(2).lower(),
+                tuple(part.strip().lower() for part in match.group(3).split(",")),
+            )
+        constraints: dict[str, _FakeConstraintDefinition] = {}
+        for match in re.finditer(
+            r"alter\s+table\s+([a-z_]+).*?add\s+constraint\s+([a-z_]+)\s+"
+            r"foreign\s+key\s*\(([^)]+)\)\s+references\s+([a-z_]+)\s*\(([^)]+)\)",
+            str(sql),
+            flags=re.IGNORECASE | re.DOTALL,
+        ):
+            constraints[match.group(2).lower()] = _FakeConstraintDefinition(
+                "f",
+                match.group(1).lower(),
+                tuple(part.strip().lower() for part in match.group(3).split(",")),
+                match.group(4).lower(),
+                tuple(part.strip().lower() for part in match.group(5).split(",")),
+            )
+        with self.state.state_lock:
+            new_relations = relations - self.state.relations
+            self.state.relations.update(relations)
+            for relation in new_relations:
+                definitions = created_column_definitions.get(relation, {})
+                self.state.relation_columns.setdefault(relation, set()).update(definitions)
+                self.state.column_definitions.setdefault(relation, {}).update(definitions)
+            for relation, definitions in altered_column_definitions.items():
+                existing_columns = self.state.relation_columns.setdefault(relation, set())
+                existing_definitions = self.state.column_definitions.setdefault(relation, {})
+                for column, definition in definitions.items():
+                    if column not in existing_columns:
+                        existing_columns.add(column)
+                        existing_definitions[column] = definition
+            for name, definition in indexes.items():
+                self.state.indexes.setdefault(name, definition)
+            for name, definition in constraints.items():
+                self.state.constraints.setdefault(name, definition)
+            if "media_credit_buckets" in new_relations:
+                expected_constraints = _expected_constraint_definitions()
+                self.state.constraints.setdefault(
+                    MEDIA_BUCKET_COMPANY_FK_CONTRACT_ID,
+                    expected_constraints[MEDIA_BUCKET_COMPANY_FK_CONTRACT_ID],
+                )
+                self.state.constraints.setdefault(
+                    MEDIA_BUCKET_IDEMPOTENCY_UNIQUE_CONTRACT_ID,
+                    expected_constraints[MEDIA_BUCKET_IDEMPOTENCY_UNIQUE_CONTRACT_ID],
+                )
+
+    def _enforce_inline_schema_postconditions(self, sql: str) -> None:
+        marker_match = re.search(
+            r"insert\s+into\s+schema_migrations.*?values\s*\(\s*'([^']+)'",
+            str(sql),
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if marker_match is None:
+            return
+        before_marker = str(sql)[: marker_match.start()]
+        if not re.search(r"\braise\s+exception\b", before_marker, flags=re.IGNORECASE):
+            return
+
+        migration_id = marker_match.group(1)
+        expected_indexes = _expected_index_definitions()
+        expected_constraints = _expected_constraint_definitions()
+        expected_columns = _expected_column_definitions()
+        if migration_id == BUCKET_MIGRATION_ID:
+            required_columns = {
+                "media_credit_buckets": expected_columns["media_credit_buckets"],
+            }
+            required_indexes = {
+                "idx_media_credit_buckets_company_status": expected_indexes[
+                    "idx_media_credit_buckets_company_status"
+                ]
+            }
+            required_constraints = {
+                key: expected_constraints[key]
+                for key in (
+                    MEDIA_BUCKET_COMPANY_FK_CONTRACT_ID,
+                    MEDIA_BUCKET_IDEMPOTENCY_UNIQUE_CONTRACT_ID,
+                )
+            }
+        elif migration_id == RUNTIME_RECONCILIATION_MIGRATION_ID:
+            required_columns = {
+                relation: expected_columns[relation]
+                for relation in (
+                    "external_execution_claims",
+                    "user_refresh_sessions",
+                    "user_refresh_token_history",
+                    "user_sessions",
+                )
+            }
+            required_indexes = {
+                key: expected_indexes[key]
+                for key in (
+                    "idx_user_refresh_sessions_owner",
+                    "idx_user_refresh_token_history_session",
+                    "idx_user_sessions_refresh_session",
+                )
+            }
+            required_constraints = {
+                USER_SESSION_REFRESH_FK_CONTRACT_ID: expected_constraints[USER_SESSION_REFRESH_FK_CONTRACT_ID]
+            }
+        else:
+            return
+
+        has_column_type_guard = bool(
+            re.search(r"\b(?:format_type|atttypid|udt_name|data_type)\b", before_marker, re.IGNORECASE)
+        )
+        has_column_nullability_guard = bool(
+            re.search(r"\b(?:attnotnull|is_nullable)\b", before_marker, re.IGNORECASE)
+        )
+        invalid_columns = []
+        if has_column_type_guard and has_column_nullability_guard:
+            invalid_columns = [
+                f"{relation}.{column}"
+                for relation, definitions in required_columns.items()
+                for column, expected in definitions.items()
+                if self.state.column_definitions.get(relation, {}).get(column) != expected
+            ]
+        invalid_indexes = [
+            name
+            for name, expected in required_indexes.items()
+            if not _fake_index_matches_migration_contract(self.state.indexes.get(name), expected)
+        ]
+        invalid_constraints = [
+            name for name, expected in required_constraints.items() if self.state.constraints.get(name) != expected
+        ]
+        if invalid_columns or invalid_indexes or invalid_constraints:
+            raise RuntimeError("fake_postgres_schema_postcondition_failed")
 
 
 class _FakeConnection:
@@ -311,6 +796,63 @@ def _initial_relations_and_migrations() -> tuple[set[str], dict[str, str]]:
     return relations, migrations
 
 
+def _column_names_from_table_body(table_body: str) -> set[str]:
+    columns: set[str] = set()
+    for raw_line in str(table_body).splitlines():
+        line = raw_line.strip().rstrip(",")
+        if not line:
+            continue
+        first_token = line.split(None, 1)[0].lower()
+        if first_token in {"check", "constraint", "foreign", "primary", "unique"}:
+            continue
+        if re.fullmatch(r"[a-z_][a-z0-9_]*", first_token):
+            columns.add(first_token)
+    return columns
+
+
+def _column_definitions_from_table_body(table_body: str) -> dict[str, _FakeColumnDefinition]:
+    definitions: dict[str, _FakeColumnDefinition] = {}
+    for raw_line in str(table_body).splitlines():
+        line = raw_line.strip().rstrip(",")
+        match = re.match(
+            r"([a-z_][a-z0-9_]*)\s+(text|integer|bigint|timestamptz|jsonb)\b(.*)",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if match is None:
+            continue
+        tail = match.group(3).lower()
+        definitions[match.group(1).lower()] = _FakeColumnDefinition(
+            match.group(2).lower(),
+            not ("not null" in tail or "primary key" in tail),
+        )
+    return definitions
+
+
+def _intended_schema_state(
+    *,
+    include_runtime_reconciliation_marker: bool = True,
+) -> tuple[
+    set[str],
+    dict[str, str],
+    dict[str, set[str]],
+    dict[str, _FakeIndexDefinition],
+    dict[str, _FakeConstraintDefinition],
+]:
+    relations, migrations = _initial_relations_and_migrations()
+    relations.add("media_credit_buckets")
+    migrations[BUCKET_MIGRATION_ID] = BUCKET_MIGRATION_CHECKSUM
+    if include_runtime_reconciliation_marker:
+        migrations[RUNTIME_RECONCILIATION_MIGRATION_ID] = RUNTIME_RECONCILIATION_MIGRATION_CHECKSUM
+    relation_columns = {
+        relation: set(definitions)
+        for relation, definitions in _expected_column_definitions().items()
+    }
+    indexes = _expected_index_definitions()
+    constraints = _expected_constraint_definitions()
+    return relations, migrations, relation_columns, indexes, constraints
+
+
 def _to_regclass_literal(sql: str) -> str:
     match = re.search(r"to_regclass\(\s*'([^']+)'\s*\)", sql, flags=re.IGNORECASE)
     return match.group(1) if match else ""
@@ -328,6 +870,19 @@ def _create_table_body(sql: str, table_name: str) -> str:
         flags=re.IGNORECASE | re.DOTALL,
     )
     return match.group(1) if match else ""
+
+
+def _fail_closed_guard_before_marker(sql: str) -> str:
+    marker = re.search(r"insert\s+into\s+schema_migrations", sql, flags=re.IGNORECASE)
+    if marker is None:
+        return ""
+    before_marker = sql[: marker.start()]
+    guards = re.findall(
+        r"do\s+\$\$(.*?)end\s+\$\$\s*;",
+        before_marker,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return "\n".join(guard for guard in guards if re.search(r"\braise\s+exception\b", guard, re.IGNORECASE))
 
 
 class PostgresSchemaContractRedLightTests(unittest.TestCase):
@@ -385,10 +940,530 @@ class PostgresSchemaContractRedLightTests(unittest.TestCase):
         self.assertEqual(BUCKET_MIGRATION_CHECKSUM, migration_records.get(BUCKET_MIGRATION_ID))
         self.assertRegex(migration_sql, r"(?is)on\s+conflict\s*\(\s*migration_id\s*\)\s+do\s+nothing")
 
+    def test_003_is_an_independent_runtime_schema_reconciliation_migration(self) -> None:
+        self.assertEqual(
+            INITIAL_MIGRATION_CANONICAL_SHA256,
+            _canonical_text_sha256(INITIAL_MIGRATION),
+            "published migration 001 must remain byte-for-byte canonical",
+        )
+        self.assertTrue(
+            RUNTIME_RECONCILIATION_MIGRATION.is_file(),
+            "independent PostgreSQL 003 runtime-schema reconciliation migration is missing",
+        )
+        migration_sql = RUNTIME_RECONCILIATION_MIGRATION.read_text(encoding="utf-8")
+        self.assertRegex(migration_sql, r"(?is)^\s*begin\s*;")
+        self.assertRegex(migration_sql, r"(?is)commit\s*;\s*$")
+
+        required_table_columns = {
+            "external_execution_claims": {
+                "claim_id",
+                "company_id",
+                "store_id",
+                "confirmation_id",
+                "action_type",
+                "status",
+                "nonce_sha256",
+                "binding_json",
+                "claimed_by",
+                "claimed_at",
+                "expires_at",
+                "consumed_at",
+            },
+            "user_refresh_sessions": {
+                "session_id",
+                "current_token_hash",
+                "user_id",
+                "company_id",
+                "device_class",
+                "status",
+                "created_at",
+                "last_seen_at",
+                "expires_epoch",
+                "revoked_at",
+            },
+            "user_refresh_token_history": {
+                "token_hash",
+                "session_id",
+                "generation",
+                "status",
+                "issued_at",
+                "rotated_at",
+                "replayed_at",
+                "expires_epoch",
+            },
+        }
+        for table_name, expected_columns in required_table_columns.items():
+            table_body = _create_table_body(migration_sql, table_name)
+            self.assertTrue(table_body, f"003 must independently reconcile missing table: {table_name}")
+            self.assertTrue(
+                expected_columns.issubset(_column_names_from_table_body(table_body)),
+                f"003 has an incomplete column contract for {table_name}",
+            )
+
+        self.assertRegex(
+            migration_sql,
+            r"(?is)alter\s+table\s+user_sessions\s+add\s+column\s+if\s+not\s+exists\s+"
+            r"refresh_session_id\s+text\b",
+        )
+        index_contracts = {
+            "idx_user_refresh_sessions_owner": (
+                "user_refresh_sessions",
+                r"user_id\s*,\s*company_id\s*,\s*status\s*,\s*last_seen_at",
+            ),
+            "idx_user_refresh_token_history_session": (
+                "user_refresh_token_history",
+                r"session_id\s*,\s*generation",
+            ),
+            "idx_user_sessions_refresh_session": ("user_sessions", "refresh_session_id"),
+        }
+        for index_name, (table_name, columns_pattern) in index_contracts.items():
+            self.assertRegex(
+                migration_sql,
+                rf"(?is)create\s+index\s+if\s+not\s+exists\s+{index_name}\s+"
+                rf"on\s+{table_name}\s*\(\s*{columns_pattern}\s*\)",
+            )
+        self.assertRegex(
+            migration_sql,
+            r"(?is)add\s+constraint\s+user_sessions_refresh_session_id_fkey\s+"
+            r"foreign\s+key\s*\(\s*refresh_session_id\s*\)\s+"
+            r"references\s+user_refresh_sessions\s*\(\s*session_id\s*\)",
+        )
+        migration_records = dict(
+            re.findall(
+                r"insert\s+into\s+schema_migrations.*?values\s*\(\s*'([^']+)'\s*,\s*'([^']+)'",
+                migration_sql,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+        )
+        self.assertEqual(
+            {RUNTIME_RECONCILIATION_MIGRATION_ID: RUNTIME_RECONCILIATION_MIGRATION_CHECKSUM},
+            migration_records,
+            "003 must own exactly one immutable migration marker",
+        )
+        self.assertRegex(migration_sql, r"(?is)on\s+conflict\s*\(\s*migration_id\s*\)\s+do\s+nothing")
+
+    def test_002_and_003_fail_closed_validate_physical_definitions_before_marker(self) -> None:
+        contracts = {
+            BUCKET_MIGRATION: (
+                "idx_media_credit_buckets_company_status",
+                "media_credit_buckets",
+                "company_id",
+                "source_type",
+                "source_reference_id",
+                "companies",
+            ),
+            RUNTIME_RECONCILIATION_MIGRATION: (
+                "idx_user_refresh_sessions_owner",
+                "idx_user_refresh_token_history_session",
+                "idx_user_sessions_refresh_session",
+                USER_SESSION_REFRESH_FK_CONTRACT_ID,
+                "user_sessions",
+                "refresh_session_id",
+                "user_refresh_sessions",
+                "session_id",
+            ),
+        }
+        for migration_path, required_tokens in contracts.items():
+            with self.subTest(migration=migration_path.name):
+                migration_sql = migration_path.read_text(encoding="utf-8")
+                guard = _fail_closed_guard_before_marker(migration_sql)
+                self.assertTrue(
+                    guard,
+                    f"{migration_path.name} must fail closed on wrong physical definitions before its marker",
+                )
+                self.assertRegex(guard, r"(?is)\bpg_constraint\b")
+                self.assertRegex(guard, r"(?is)\b(?:pg_indexes|pg_index)\b")
+                for token in required_tokens:
+                    self.assertIn(token.lower(), guard.lower())
+
+    def test_migration_003_does_not_record_marker_over_wrong_same_name_refresh_fk(self) -> None:
+        relations, migrations, relation_columns, indexes, constraints = _intended_schema_state(
+            include_runtime_reconciliation_marker=False
+        )
+        constraints[USER_SESSION_REFRESH_FK_CONTRACT_ID] = _FakeConstraintDefinition(
+            "f",
+            "user_sessions",
+            ("wrong_source_column",),
+            "wrong_target_table",
+            ("wrong_target_column",),
+        )
+        state = _FakePostgresState(
+            relations=relations,
+            migration_checksums=migrations,
+            relation_columns=relation_columns,
+            indexes=indexes,
+            constraints=constraints,
+        )
+
+        with _fake_psycopg(state):
+            result = run_postgres_migration(database_url=DATABASE_URL)
+
+        self.assertNotIn(
+            result.get("status"),
+            {"ok", "already_applied"},
+            "a same-name but structurally wrong refresh FK must fail closed instead of recording 003",
+        )
+        self.assertNotIn(
+            RUNTIME_RECONCILIATION_MIGRATION_ID,
+            state.migration_checksums,
+            "003 marker must remain absent when its exact refresh-session FK postcondition is false",
+        )
+        self.assertNotIn("wrong_source_column", str(result))
+        self.assertNotIn("wrong_target_table", str(result))
+        self.assertNotIn("wrong_target_column", str(result))
+        self.assertNotIn("red-light-secret", str(result))
+        self.assertIs(False, result.get("secret_exposed"))
+
+    def test_default_manifest_reconciles_legacy_marker_database_once_then_probes_clean(self) -> None:
+        relations, migrations, relation_columns, indexes, constraints = _intended_schema_state(
+            include_runtime_reconciliation_marker=False
+        )
+        relations.difference_update(
+            {"external_execution_claims", "user_refresh_sessions", "user_refresh_token_history"}
+        )
+        relation_columns["user_sessions"].discard("refresh_session_id")
+        for index_name in (
+            "idx_user_refresh_sessions_owner",
+            "idx_user_refresh_token_history_session",
+            "idx_user_sessions_refresh_session",
+        ):
+            indexes.pop(index_name)
+        constraints.pop(USER_SESSION_REFRESH_FK_CONTRACT_ID)
+        state = _FakePostgresState(
+            relations=relations,
+            migration_checksums=migrations,
+            relation_columns=relation_columns,
+            indexes=indexes,
+            constraints=constraints,
+        )
+
+        with _fake_psycopg(state):
+            first = run_postgres_migration(database_url=DATABASE_URL)
+            second = run_postgres_migration(database_url=DATABASE_URL)
+        with _postgres_settings() as settings, _fake_psycopg(state):
+            probe = run_postgres_live_probe(settings)
+
+        self.assertEqual("ok", first.get("status"), first)
+        self.assertEqual(
+            [RUNTIME_RECONCILIATION_MIGRATION_ID],
+            first.get("applied_migration_ids"),
+            "a legacy marker database must execute only the additive reconciliation migration",
+        )
+        self.assertEqual("ok", second.get("status"), second)
+        self.assertIn(
+            RUNTIME_RECONCILIATION_MIGRATION_ID,
+            second.get("skipped_migration_ids", []),
+            "a second runner must observe the 003 marker and skip DDL",
+        )
+        self.assertEqual(1, state.migration_execution_count, "003 DDL must execute exactly once")
+        self.assertEqual("ok", probe.get("status"), probe)
+        self.assertIs(False, probe.get("secret_exposed"))
+
+    def test_live_probe_blocks_missing_critical_schema_postconditions_without_secrets(self) -> None:
+        relations, migrations, relation_columns, indexes, constraints = _intended_schema_state()
+        relation_columns["media_credit_buckets"].discard("bucket_json")
+        relation_columns["user_sessions"].discard("refresh_session_id")
+        indexes.clear()
+        constraints.pop(USER_SESSION_REFRESH_FK_CONTRACT_ID)
+        state = _FakePostgresState(
+            relations=relations,
+            migration_checksums=migrations,
+            relation_columns=relation_columns,
+            indexes=indexes,
+            constraints=constraints,
+        )
+        with _postgres_settings() as settings, _fake_psycopg(state):
+            result = run_postgres_live_probe(settings)
+
+        self.assertEqual("blocked", result.get("status"), result)
+        self.assertIn("postgres_schema_missing_postconditions", result.get("blocked_by", []))
+        contract = result.get("schema_contract") or {}
+        self.assertEqual("blocked", contract.get("status"))
+        self.assertEqual(
+            ["media_credit_buckets.bucket_json", "user_sessions.refresh_session_id"],
+            contract.get("missing_columns"),
+        )
+        self.assertEqual(
+            [
+                "idx_media_credit_buckets_company_status",
+                "idx_user_refresh_sessions_owner",
+                "idx_user_refresh_token_history_session",
+                "idx_user_sessions_refresh_session",
+            ],
+            contract.get("missing_indexes"),
+        )
+        self.assertEqual(
+            ["user_sessions_refresh_session_id_fkey"],
+            contract.get("missing_constraints"),
+        )
+        self.assertNotIn("database_url_public", result)
+        self.assertNotIn("red-light-secret", str(result))
+        self.assertNotIn(RUNTIME_RECONCILIATION_MIGRATION_CHECKSUM, str(result))
+        self.assertIs(False, result.get("secret_exposed"))
+
+    def test_live_probe_blocks_same_name_wrong_physical_definitions_without_echoing_them(self) -> None:
+        relations, migrations, relation_columns, indexes, constraints = _intended_schema_state()
+        indexes["idx_media_credit_buckets_company_status"] = _FakeIndexDefinition(
+            "wrong_index_table",
+            ("wrong_index_column", "status", "expires_at"),
+        )
+        constraints[USER_SESSION_REFRESH_FK_CONTRACT_ID] = _FakeConstraintDefinition(
+            "f",
+            "wrong_fk_source_table",
+            ("wrong_fk_source_column",),
+            "wrong_fk_target_table",
+            ("wrong_fk_target_column",),
+        )
+        constraints[MEDIA_BUCKET_COMPANY_FK_CONTRACT_ID] = _FakeConstraintDefinition(
+            "f",
+            "media_credit_buckets",
+            ("company_id",),
+            "wrong_company_target_table",
+            ("wrong_company_target_column",),
+        )
+        constraints[MEDIA_BUCKET_IDEMPOTENCY_UNIQUE_CONTRACT_ID] = _FakeConstraintDefinition(
+            "u",
+            "media_credit_buckets",
+            ("company_id", "source_type"),
+        )
+        state = _FakePostgresState(
+            relations=relations,
+            migration_checksums=migrations,
+            relation_columns=relation_columns,
+            indexes=indexes,
+            constraints=constraints,
+        )
+
+        with _postgres_settings() as settings, _fake_psycopg(state):
+            result = run_postgres_live_probe(settings)
+
+        self.assertEqual("blocked", result.get("status"), result)
+        self.assertIn("postgres_schema_missing_postconditions", result.get("blocked_by", []))
+        contract = result.get("schema_contract") or {}
+        self.assertEqual("blocked", contract.get("status"))
+        self.assertEqual(
+            ["idx_media_credit_buckets_company_status"],
+            contract.get("missing_indexes"),
+        )
+        self.assertEqual(
+            [
+                MEDIA_BUCKET_COMPANY_FK_CONTRACT_ID,
+                MEDIA_BUCKET_IDEMPOTENCY_UNIQUE_CONTRACT_ID,
+                USER_SESSION_REFRESH_FK_CONTRACT_ID,
+            ],
+            contract.get("missing_constraints"),
+        )
+        self.assertLessEqual(
+            len(state.executed_sql),
+            6,
+            f"definition-aware live probe must remain bounded, got: {state.executed_sql}",
+        )
+        for forbidden in (
+            "wrong_index_table",
+            "wrong_index_column",
+            "wrong_fk_source_table",
+            "wrong_fk_source_column",
+            "wrong_fk_target_table",
+            "wrong_fk_target_column",
+            "wrong_company_target_table",
+            "wrong_company_target_column",
+            "red-light-secret",
+        ):
+            self.assertNotIn(forbidden, str(result), "physical catalog definitions are internal evidence")
+        self.assertIs(False, result.get("secret_exposed"))
+
+    def test_live_probe_blocks_same_name_indexes_that_are_not_btree_valid_ready_and_live(self) -> None:
+        scenarios = {
+            "wrong_access_method": _FakeIndexDefinition(
+                "user_sessions",
+                ("refresh_session_id",),
+                access_method="hash",
+            ),
+            "invalid": _FakeIndexDefinition(
+                "user_sessions",
+                ("refresh_session_id",),
+                is_valid=False,
+            ),
+            "not_ready": _FakeIndexDefinition(
+                "user_sessions",
+                ("refresh_session_id",),
+                is_ready=False,
+            ),
+            "not_live": _FakeIndexDefinition(
+                "user_sessions",
+                ("refresh_session_id",),
+                is_live=False,
+            ),
+        }
+
+        for scenario, wrong_definition in scenarios.items():
+            relations, migrations, relation_columns, indexes, constraints = _intended_schema_state()
+            indexes["idx_user_sessions_refresh_session"] = wrong_definition
+            state = _FakePostgresState(
+                relations=relations,
+                migration_checksums=migrations,
+                relation_columns=relation_columns,
+                indexes=indexes,
+                constraints=constraints,
+            )
+            with _postgres_settings() as settings, _fake_psycopg(state):
+                result = run_postgres_live_probe(settings)
+
+            with self.subTest(scenario=scenario):
+                contract = result.get("schema_contract") or {}
+                self.assertEqual("blocked", result.get("status"), result)
+                self.assertIn("postgres_schema_missing_postconditions", result.get("blocked_by", []))
+                self.assertEqual(
+                    ["idx_user_sessions_refresh_session"],
+                    contract.get("missing_indexes"),
+                )
+                self.assertLessEqual(len(state.executed_sql), 6, state.executed_sql)
+                self.assertNotIn(wrong_definition.catalog_definition("internal_index_name"), str(result))
+                self.assertNotIn("red-light-secret", str(result))
+                self.assertNotIn(RUNTIME_RECONCILIATION_MIGRATION_CHECKSUM, str(result))
+                self.assertIs(False, result.get("secret_exposed"))
+
+    def test_existing_wrong_table_column_contracts_block_marker_and_live_readiness(self) -> None:
+        scenarios = (
+            {
+                "name": "002_media_bucket_partial_wrong_type_and_nullable",
+                "migration_path": BUCKET_MIGRATION,
+                "marker": BUCKET_MIGRATION_ID,
+                "missing": {("media_credit_buckets", "reserved_points")},
+                "overrides": {
+                    "media_credit_buckets": {
+                        "bucket_json": _FakeColumnDefinition("text", True),
+                    }
+                },
+                "expected_missing": [
+                    "media_credit_buckets.bucket_json",
+                    "media_credit_buckets.reserved_points",
+                ],
+            },
+            {
+                "name": "003_external_claims_partial",
+                "migration_path": RUNTIME_RECONCILIATION_MIGRATION,
+                "marker": RUNTIME_RECONCILIATION_MIGRATION_ID,
+                "missing": {("external_execution_claims", "binding_json")},
+                "overrides": {},
+                "expected_missing": ["external_execution_claims.binding_json"],
+            },
+            {
+                "name": "003_refresh_sessions_wrong_type",
+                "migration_path": RUNTIME_RECONCILIATION_MIGRATION,
+                "marker": RUNTIME_RECONCILIATION_MIGRATION_ID,
+                "missing": set(),
+                "overrides": {
+                    "user_refresh_sessions": {
+                        "expires_epoch": _FakeColumnDefinition("text", False),
+                    }
+                },
+                "expected_missing": ["user_refresh_sessions.expires_epoch"],
+            },
+            {
+                "name": "003_refresh_history_wrong_nullability",
+                "migration_path": RUNTIME_RECONCILIATION_MIGRATION,
+                "marker": RUNTIME_RECONCILIATION_MIGRATION_ID,
+                "missing": set(),
+                "overrides": {
+                    "user_refresh_token_history": {
+                        "issued_at": _FakeColumnDefinition("timestamptz", True),
+                    }
+                },
+                "expected_missing": ["user_refresh_token_history.issued_at"],
+            },
+        )
+
+        for scenario in scenarios:
+            relations, migrations, relation_columns, indexes, constraints = _intended_schema_state()
+            migrations.pop(str(scenario["marker"]), None)
+            for relation, column in scenario["missing"]:
+                relation_columns[relation].discard(column)
+            migration_state = _FakePostgresState(
+                relations=relations,
+                migration_checksums=migrations,
+                relation_columns=relation_columns,
+                column_definitions=scenario["overrides"],
+                indexes=indexes,
+                constraints=constraints,
+            )
+            with _fake_psycopg(migration_state):
+                migration_result = run_postgres_migration(
+                    database_url=DATABASE_URL,
+                    migration_path=scenario["migration_path"],
+                )
+
+            with self.subTest(scenario=scenario["name"], phase="migration"):
+                self.assertTrue(
+                    migration_result.get("status") not in {"ok", "already_applied"}
+                    and scenario["marker"] not in migration_state.migration_checksums,
+                    f"wrong pre-existing table contract must fail before marker: {migration_result}",
+                )
+                self.assertNotIn("red-light-secret", str(migration_result))
+                self.assertIs(False, migration_result.get("secret_exposed"))
+
+            probe_relations, probe_migrations, probe_columns, probe_indexes, probe_constraints = (
+                _intended_schema_state()
+            )
+            for relation, column in scenario["missing"]:
+                probe_columns[relation].discard(column)
+            probe_state = _FakePostgresState(
+                relations=probe_relations,
+                migration_checksums=probe_migrations,
+                relation_columns=probe_columns,
+                column_definitions=scenario["overrides"],
+                indexes=probe_indexes,
+                constraints=probe_constraints,
+            )
+            with _postgres_settings() as settings, _fake_psycopg(probe_state):
+                probe_result = run_postgres_live_probe(settings)
+
+            with self.subTest(scenario=scenario["name"], phase="live_probe"):
+                contract = probe_result.get("schema_contract") or {}
+                self.assertEqual("blocked", probe_result.get("status"), probe_result)
+                self.assertIn("postgres_schema_missing_postconditions", probe_result.get("blocked_by", []))
+                self.assertEqual(scenario["expected_missing"], contract.get("missing_columns"))
+                self.assertLessEqual(len(probe_state.executed_sql), 6, probe_state.executed_sql)
+                self.assertNotIn("red-light-secret", str(probe_result))
+                self.assertNotIn("create table", str(probe_result).lower())
+                self.assertNotIn(RUNTIME_RECONCILIATION_MIGRATION_CHECKSUM, str(probe_result))
+                self.assertIs(False, probe_result.get("secret_exposed"))
+
+    def test_live_probe_uses_bounded_bulk_catalog_queries_for_correct_schema(self) -> None:
+        relations, migrations, relation_columns, indexes, constraints = _intended_schema_state()
+        state = _FakePostgresState(
+            relations=relations,
+            migration_checksums=migrations,
+            relation_columns=relation_columns,
+            indexes=indexes,
+            constraints=constraints,
+        )
+        with _postgres_settings() as settings, _fake_psycopg(state):
+            result = run_postgres_live_probe(settings)
+
+        self.assertEqual("ok", result.get("status"), result)
+        self.assertLessEqual(
+            len(state.executed_sql),
+            6,
+            f"live schema probe must use bounded bulk catalog queries, got: {state.executed_sql}",
+        )
+        self.assertFalse(
+            [sql for sql in state.executed_sql if "to_regclass" in sql],
+            "live probe must not issue one to_regclass query per required relation",
+        )
+        self.assertNotIn("red-light-secret", str(result))
+        self.assertIs(False, result.get("secret_exposed"))
+
     def test_live_probe_blocks_and_names_missing_required_relation(self) -> None:
-        relations, migrations = _initial_relations_and_migrations()
-        migrations[BUCKET_MIGRATION_ID] = BUCKET_MIGRATION_CHECKSUM
-        state = _FakePostgresState(relations=relations, migration_checksums=migrations)
+        relations, migrations, relation_columns, indexes, constraints = _intended_schema_state()
+        relations.discard("media_credit_buckets")
+        state = _FakePostgresState(
+            relations=relations,
+            migration_checksums=migrations,
+            relation_columns=relation_columns,
+            indexes=indexes,
+            constraints=constraints,
+        )
         with _postgres_settings() as settings, _fake_psycopg(state):
             result = run_postgres_live_probe(settings)
 
@@ -402,10 +1477,15 @@ class PostgresSchemaContractRedLightTests(unittest.TestCase):
         self.assertIs(False, result.get("secret_exposed"))
 
     def test_live_probe_blocks_and_names_migration_checksum_drift(self) -> None:
-        relations, migrations = _initial_relations_and_migrations()
-        relations.add("media_credit_buckets")
+        relations, migrations, relation_columns, indexes, constraints = _intended_schema_state()
         migrations[BUCKET_MIGRATION_ID] = "unexpected-drifted-checksum"
-        state = _FakePostgresState(relations=relations, migration_checksums=migrations)
+        state = _FakePostgresState(
+            relations=relations,
+            migration_checksums=migrations,
+            relation_columns=relation_columns,
+            indexes=indexes,
+            constraints=constraints,
+        )
         with _postgres_settings() as settings, _fake_psycopg(state):
             result = run_postgres_live_probe(settings)
 
@@ -418,7 +1498,11 @@ class PostgresSchemaContractRedLightTests(unittest.TestCase):
             contract.get("checksum_drift_migration_ids"),
         )
         self.assertNotIn("database_url_public", result, "blocked schema probe must not return connection details")
-        self.assertNotIn("unexpected-drifted-checksum", str(result), "probe must expose only drift code and migration id")
+        self.assertNotIn(
+            "unexpected-drifted-checksum",
+            str(result),
+            "probe must expose only drift code and migration id",
+        )
         self.assertNotIn("red-light-secret", str(result))
         self.assertIs(False, result.get("secret_exposed"))
 
@@ -452,7 +1536,11 @@ commit;
             self.assertNotIn(forbidden_key, result)
         self.assertNotIn("red-light-secret", str(result))
         self.assertNotIn(drifted_checksum, str(result), "the stored checksum is internal evidence, not response data")
-        self.assertNotIn(BUCKET_MIGRATION_CHECKSUM, str(result), "the expected checksum is internal evidence, not response data")
+        self.assertNotIn(
+            BUCKET_MIGRATION_CHECKSUM,
+            str(result),
+            "the expected checksum is internal evidence, not response data",
+        )
         self.assertIs(False, result.get("secret_exposed"))
 
     def test_two_migration_runners_serialize_with_session_advisory_lock(self) -> None:

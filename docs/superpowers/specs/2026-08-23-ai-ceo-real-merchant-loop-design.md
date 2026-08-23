@@ -92,6 +92,12 @@ Chrome 扩展可以正常控制浏览器；此前 `setFiles: Not allowed` 发生
 
 在 PostgreSQL 迁移中新增 `media_credit_buckets` 及 `idx_media_credit_buckets_company_status (company_id, status, expires_at)`。字段合同固定为 `bucket_id`、`company_id`、`source_type`、`source_reference_id`、`granted_points`、`remaining_points`、`reserved_points`、`expires_at`、`status`、`created_at`、`updated_at`、`bucket_json`；时间/JSON 使用 PostgreSQL `timestamptz/jsonb`，`company_id` 外键指向 `companies(company_id)`。bucket 的业务唯一键固定为 `(company_id, source_type, source_reference_id)`，同一公司同一来源引用不得重复建 bucket。迁移必须幂等、事务化，并以 migration id `20260823_002_media_credit_buckets_postgres`、checksum `jiejing-media-credit-buckets-postgres-v20260823` 记录新的 `schema_migrations` 条目；已经上线的 `001_initial_schema_postgres.sql` 全文件内容保持不变。
 
+历史上 `001_initial_schema_postgres.sql` 曾在发布后被原地扩展。数据库只保存迁移 marker，已运行旧版本 001 的实例不会因仓库文件后来增加 DDL 而自动重放，因此可能出现“001 marker 已存在，但 `external_execution_claims`、刷新会话结构或相关索引并不存在”的物理结构漂移。为修复该遗留风险，固定新增独立、事务化、幂等的 `003_runtime_schema_reconciliation_postgres.sql`：补齐 `external_execution_claims`、`user_refresh_sessions`、`user_refresh_token_history`、`user_sessions.refresh_session_id`、`idx_user_refresh_sessions_owner`、`idx_user_refresh_token_history_session`、`idx_user_sessions_refresh_session` 和 `user_sessions_refresh_session_id_fkey`。003 的 migration id 固定为 `20260823_003_runtime_schema_reconciliation_postgres`，checksum 固定为 `jiejing-runtime-schema-reconciliation-postgres-v20260823`。
+
+002/003 必须在同一事务内、写入 migration marker 之前验证关键物理定义：索引需匹配所属表、列及顺序，外键需匹配源表/源列与目标表/目标列，bucket 还需匹配 company 外键和三列唯一约束。同名但定义错误不得视为幂等成功，必须抛出固定、无定义回显的错误并回滚整次迁移。
+
+从 003 起执行不可逆的迁移纪律：001、002、003 一旦进入可信 manifest 就按 canonical SHA-256 校验并永久只读；未来任何结构变化必须新增更高编号迁移，禁止修改旧 SQL、复用旧 migration id 或用 `ON CONFLICT` 掩盖 checksum drift。
+
 迁移互斥固定使用 PostgreSQL session advisory lock：lock key 为有符号 int64 `-1280677561506917264`，它由 `SHA-256('jiejing-postgres-schema-migration-v1')` 的前 8 字节按有符号 64 位整数解释得到。API 与 Worker 启动的 migration runner 必须使用同一 key，并在结束路径上执行与之匹配的显式 `pg_advisory_unlock`；事务级 `pg_advisory_xact_lock` 不能代替该跨 runner 合同。
 
 现有 `media_credit_accounts` 余额通过后端现有 legacy bucket 映射规则惰性映射；迁移本身不改变总余额、已预留点数、累计赠送或累计消耗。
@@ -99,6 +105,7 @@ Chrome 扩展可以正常控制浏览器；此前 `setFiles: Not allowed` 发生
 部署前后必须验证：
 
 - 所有仓库要求的生产表均存在；
+- 固定白名单中的关键列、四个索引、刷新会话外键、bucket company 外键和三列唯一约束均按真实物理定义匹配，而不是只检查名称；live probe 使用批量 catalog 查询，总 execute 不超过 6，不得按 relation 逐次执行 `to_regclass`；同名错误定义仅返回安全 identifier，不回显 catalog definition；
 - 素材点余额读取、reserve、release、settle 的零外部调用探针通过；
 - AI CEO 额度读取不会再触发 `42P01`；
 - `/health/deep` 或产品 readiness 暴露数据库 schema contract，不再只证明“数据库能连接”。

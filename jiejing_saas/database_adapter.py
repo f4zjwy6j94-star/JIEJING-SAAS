@@ -69,7 +69,17 @@ def build_database_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
                 "adapter": "postgres-managed",
                 "path": "jiejing_saas/migrations/001_initial_schema_postgres.sql",
                 "status": "prepared_not_applied",
-            }
+            },
+            {
+                "adapter": "postgres-managed",
+                "path": "jiejing_saas/migrations/002_media_credit_buckets_postgres.sql",
+                "status": "prepared_not_applied",
+            },
+            {
+                "adapter": "postgres-managed",
+                "path": "jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql",
+                "status": "prepared_not_applied",
+            },
         ],
         "runtime_rules": {
             "frontend_never_connects_to_database": True,

@@ -27,8 +27,10 @@ CRITICAL_TABLES = [
     "task_steps",
     "reports",
     "confirmations",
+    "external_execution_claims",
     "execution_results",
     "audit_logs",
+    "media_credit_buckets",
     "schema_migrations",
 ]
 
@@ -55,6 +57,7 @@ CRITICAL_INDEXES = [
     "idx_execution_results_task_created",
     "idx_audit_logs_company_created",
     "idx_audit_logs_target",
+    "idx_media_credit_buckets_company_status",
 ]
 
 
@@ -144,7 +147,17 @@ def build_database_plan(settings: SaaSSettings, repository: SaaSRepository) -> d
                 "database": "postgres",
                 "path": "jiejing_saas/migrations/001_initial_schema_postgres.sql",
                 "status": "prepared_not_applied",
-            }
+            },
+            {
+                "database": "postgres",
+                "path": "jiejing_saas/migrations/002_media_credit_buckets_postgres.sql",
+                "status": "prepared_not_applied",
+            },
+            {
+                "database": "postgres",
+                "path": "jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql",
+                "status": "prepared_not_applied",
+            },
         ],
         "production_steps": PRODUCTION_DATABASE_STEPS,
         "tenant_isolation_contract": {

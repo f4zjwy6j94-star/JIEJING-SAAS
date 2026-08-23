@@ -9,7 +9,7 @@
 ### 已确认的允许接口与复制来源
 
 1. PostgreSQL 迁移
-   - `jiejing_saas.infrastructure_drivers.run_postgres_migration(...)` 从 `jiejing_saas/migrations/001_initial_schema_postgres.sql` 读取并在 psycopg 事务中执行。
+   - `jiejing_saas.infrastructure_drivers.run_postgres_migration(...)` 从固定可信 manifest 按 `001 -> 002 -> 003` 顺序读取并在 psycopg 事务中执行。
    - `SaaSRepository._initialize_postgres()` 是应用启动迁移入口。
    - `jiejing_saas.operational_health._database_live_probe(...)` 调用 `run_postgres_live_probe(...)`，是 `/health/deep` 的数据库证明来源。
    - 复制 `tools/test_jiejing_postgres_repository_cutover.py` 的迁移合同和假 psycopg 模式，不另造数据库驱动 API。
@@ -80,13 +80,17 @@
 
 1. 保持已经上线的 `001_initial_schema_postgres.sql` 全文件内容不变，新增独立、不可变的 `002_media_credit_buckets_postgres.sql`；表字段合同固定为 `bucket_id`、`company_id`、`source_type`、`source_reference_id`、`granted_points`、`remaining_points`、`reserved_points`、`expires_at`、`status`、`created_at`、`updated_at`、`bucket_json`，其中时间/JSON 使用 PostgreSQL `timestamptz/jsonb`，`company_id` 外键指向 `companies(company_id)`。
 2. 新增 `idx_media_credit_buckets_company_status (company_id, status, expires_at)` 和 `(company_id, source_type, source_reference_id)` 唯一约束；migration id 固定为 `20260823_002_media_credit_buckets_postgres`，checksum 固定为 `jiejing-media-credit-buckets-postgres-v20260823`；已存在同 ID 但 checksum 不同必须 fail closed。
-3. `run_postgres_migration(...)` 按固定 manifest 顺序执行增量迁移，并使用 PostgreSQL session advisory lock 防止 API/Worker 跨进程并发迁移。lock key 固定为有符号 int64 `-1280677561506917264`，即 `SHA-256('jiejing-postgres-schema-migration-v1')` 前 8 字节的有符号 64 位整数。API 与 Worker runner 必须使用同一 key，且在结束路径上使用同 key 显式调用 `pg_advisory_unlock`；不接受 `pg_advisory_xact_lock` 代替。显式参数传入单文件的测试兼容路径保留。
-4. 扩展 Postgres live probe：在 `select 1` 后查询固定 allowlist 的 required relations 和期望 migration id/checksum；只返回缺失/漂移代码，不返回连接信息。
-5. `/health/deep` 在缺表或 migration drift 时返回 blocked，产品 readiness 同步阻断 database schema contract。
+3. 修复历史 001 曾被发布后原地扩展造成的遗留库漂移：新增独立、不可变的 `003_runtime_schema_reconciliation_postgres.sql`，幂等补齐 `external_execution_claims`、`user_refresh_sessions`、`user_refresh_token_history`、`user_sessions.refresh_session_id`、三个刷新会话索引及命名外键 `user_sessions_refresh_session_id_fkey`。003 migration id 固定为 `20260823_003_runtime_schema_reconciliation_postgres`，checksum 固定为 `jiejing-runtime-schema-reconciliation-postgres-v20260823`。
+4. `run_postgres_migration(...)` 按固定 `001 -> 002 -> 003` manifest 顺序执行增量迁移，并使用 PostgreSQL session advisory lock 防止 API/Worker 跨进程并发迁移。lock key 固定为有符号 int64 `-1280677561506917264`，即 `SHA-256('jiejing-postgres-schema-migration-v1')` 前 8 字节的有符号 64 位整数。API 与 Worker runner 必须使用同一 key，且在结束路径上使用同 key 显式调用 `pg_advisory_unlock`；不接受 `pg_advisory_xact_lock` 代替。显式参数传入单文件的测试兼容路径保留。
+5. 001、002、003 均以固定 canonical SHA-256 和 migration record 进入可信 manifest；已发布文件永久只读。未来结构变化只能新增更高编号迁移，禁止修改旧文件、复用旧 id 或用冲突忽略掩盖 drift。
+6. 扩展 Postgres live probe：在 `select 1` 后，以固定静态 allowlist 批量查询 required relations、migration id/checksum、关键 columns/indexes/constraints；四个索引必须匹配所属表和列顺序，外键必须匹配源表/源列和目标表/目标列，bucket company 外键与三列 UNIQUE 也必须验证。总 execute 不超过 6，不得对每个 relation 单独执行 `to_regclass`。缺失或同名错误 postcondition 返回 `postgres_schema_missing_postconditions` 及安全 identifier 列表，不返回实际 definition、连接信息、checksum 或 SQL。
+7. 002/003 在写入各自 migration marker 前，以事务内 `DO` postcondition 验证关键 index/constraint 的真实 catalog 定义；同名错误对象必须 raise 并回滚，不得静默跳过后落 marker。
+8. `/health/deep` 在缺表、migration drift 或关键 postcondition 缺失时返回 blocked，产品 readiness 同步阻断 database schema contract。
 
 ### Verification
 
 - Phase 1 数据库测试转绿。
+- 旧 marker 库仅执行 003 一次，第二次幂等跳过；随后 live probe 转绿。
 - 现有 `test_jiejing_postgres_repository_cutover.py`、`test_jiejing_operational_health_readiness.py` 转绿。
 - `rg` 确认 SQLite/002 两份 bucket 字段一致。
 - 两个并发 migration runner 使用固定 key `-1280677561506917264`，只能有一个持锁执行，另一方等待后验证同一结果；两方都必须留下匹配的显式 unlock 证据。
@@ -94,7 +98,9 @@
 ### Anti-pattern guards
 
 - 不继续修改已发布的 001 来伪装版本化迁移。
+- 不修改已经进入可信 manifest 的 002/003；任何后续变化新增迁移。
 - 不把 required table 名称取自用户输入。
+- 不对 required relations 执行逐表 catalog 往返。
 - 不在 public summary 暴露数据库 URL、schema owner 或 SQL 原文。
 
 ## Phase 3：建立 AI CEO 尝试任务和准确失败状态
@@ -218,7 +224,7 @@ python tools/jiejing_precloud_deployment_gate.py
 ### What to implement/do
 
 1. 检查 dirty worktree，只提交本方案相关文件。
-2. 构建白名单 bundle 和 manifest，先执行 deploy dry-run；把 002 migration、受控验收 CLI 和新增测试加入发布白名单。
+2. 构建白名单 bundle 和 manifest，先执行 deploy dry-run；把 002/003 migrations、受控验收 CLI 和新增测试加入发布白名单。
 3. 生产变更前从 owner-only `/backup/plan` 核验最新 managed backup/PITR 与恢复演练；保存 schema/受影响表恢复证据，禁止输出数据库 URL。若恢复证据过期则先阻断部署，不把旧容器回滚冒充数据库回滚。
 4. 为生产 deploy apply 增加独占锁，避免两个发布同时替换同一 Compose project。
 5. 使用现有确认门执行原子部署；让应用启动迁移在事务和 advisory lock 内补表。
