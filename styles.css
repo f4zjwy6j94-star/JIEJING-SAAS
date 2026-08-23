@@ -2562,7 +2562,7 @@ button {
 
 .pricing-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -40788,7 +40788,7 @@ body.saas-public-mvp .saas-merchant-media-credits .saas-settings-card-head em {
 
 body.saas-public-mvp .saas-media-credit-balance-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 8px;
 }
 
@@ -42100,7 +42100,7 @@ body.saas-public-mvp .saas-subscription-plan-choice-head small {
 
 body.saas-public-mvp .saas-subscription-plan-choice-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 

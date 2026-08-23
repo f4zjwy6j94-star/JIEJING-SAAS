@@ -77,6 +77,13 @@ HIGH_RISK_ACTIONS = {
 
 
 EXTERNAL_EXECUTION_PROCESSING_STATUS = "external_execution_processing_manual_reconcile"
+CONFIRMATION_MANAGED_TASK_TYPES = frozenset(
+    {
+        "ebay_draft_save_intake",
+        "publish_confirmation_intake",
+        "ebay_inventory_location_setup",
+    }
+)
 
 EBAY_UNPUBLISHED_DRAFT_OAUTH_SOURCE = "controlled_ebay_unpublished_draft_save"
 EBAY_UNPUBLISHED_DRAFT_OAUTH_STEP = "unpublished_draft_oauth_authorization_gate"
@@ -121,6 +128,41 @@ SYNTHETIC_EBAY_IDENTITY_RETIREMENT_CONFIRMATION = "RETIRE_SYNTHETIC_EBAY_IDENTIT
 REAL_MERCHANT_VALIDATION_REQUIRED_COMPANIES = 3
 REAL_MERCHANT_VALIDATION_REQUIRED_PATHS = 20
 _NON_COMMERCIAL_BILLING_PROVIDERS = {"manual_beta", "stripe_test_mock"}
+
+
+def _transition_confirmation_task_status(
+    conn: Any,
+    *,
+    company_id: str,
+    task_id: Any,
+    status: str,
+    expected_statuses: set[str],
+) -> bool:
+    """Keep confirmation-owned intake tasks aligned without touching worker jobs."""
+
+    normalized_task_id = str(task_id or "").strip()
+    if not normalized_task_id:
+        return False
+    row = conn.execute(
+        "select task_type, status from tasks where company_id = ? and task_id = ?",
+        (company_id, normalized_task_id),
+    ).fetchone()
+    if not row:
+        return False
+    task_type = str(row["task_type"] or "")
+    current_status = str(row["status"] or "")
+    if task_type not in CONFIRMATION_MANAGED_TASK_TYPES or current_status not in expected_statuses:
+        return False
+    return (
+        conn.execute(
+            """
+            update tasks set status = ?, updated_at = ?
+            where company_id = ? and task_id = ? and status = ?
+            """,
+            (status, now_iso(), company_id, normalized_task_id, current_status),
+        ).rowcount
+        == 1
+    )
 
 
 def _operations_short_ref(scope: str, value: Any) -> str:
@@ -657,6 +699,25 @@ class SaaSRepository:
                   ledger_json text not null,
                   unique (company_id, idempotency_key_hash)
                 );
+
+                create table if not exists media_credit_buckets (
+                  bucket_id text primary key,
+                  company_id text not null,
+                  source_type text not null,
+                  source_reference_id text not null,
+                  granted_points integer not null,
+                  remaining_points integer not null,
+                  reserved_points integer not null,
+                  expires_at text,
+                  status text not null,
+                  created_at text not null,
+                  updated_at text not null,
+                  bucket_json text not null,
+                  unique (company_id, source_type, source_reference_id)
+                );
+
+                create index if not exists idx_media_credit_buckets_company_status
+                  on media_credit_buckets (company_id, status, expires_at);
 
                 create table if not exists platform_analytics_events (
                   analytics_event_id text primary key,
@@ -5053,7 +5114,7 @@ class SaaSRepository:
                     None,
                     "ebay_inventory_location_setup",
                     task_title,
-                    "queued",
+                    "waiting_confirmation",
                     created_at,
                     created_at,
                     json.dumps(task_input, ensure_ascii=False),
@@ -5193,6 +5254,13 @@ class SaaSRepository:
                 if isinstance(exc, sqlite3.IntegrityError) or str(getattr(exc, "sqlstate", "")) == "23505":
                     raise ConfirmationDecisionConflict("confirmation_create_conflict") from None
                 raise
+            _transition_confirmation_task_status(
+                conn,
+                company_id=company_id,
+                task_id=task_id,
+                status="waiting_confirmation",
+                expected_statuses={"queued", "waiting_confirmation"},
+            )
             self._insert_audit(
                 conn,
                 company_id=company_id,
@@ -5263,6 +5331,17 @@ class SaaSRepository:
             ).rowcount
             if transitioned != 1:
                 raise ConfirmationDecisionConflict("confirmation_decision_conflict")
+            _transition_confirmation_task_status(
+                conn,
+                company_id=company_id,
+                task_id=existing.get("task_id"),
+                status={
+                    "approve": "approved_waiting_execution",
+                    "reject": "rejected",
+                    "modify": "needs_revision",
+                }[decision],
+                expected_statuses={"queued", "waiting_confirmation"},
+            )
             self._insert_audit(
                 conn,
                 company_id=company_id,
@@ -5276,6 +5355,127 @@ class SaaSRepository:
                 details={"action_type": existing["action_type"], "note": note},
             )
         return self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {}
+
+    def reconcile_confirmation_managed_tasks(
+        self,
+        *,
+        apply: bool = False,
+        company_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Repair stale intake task labels from confirmation/execution truth.
+
+        The operation changes Jiejing task metadata only. It never calls a
+        provider, never retries an execution, and never performs an eBay write.
+        """
+
+        self.initialize()
+        task_types = sorted(CONFIRMATION_MANAGED_TASK_TYPES)
+        placeholders = ", ".join("?" for _ in task_types)
+        params: list[Any] = [*task_types]
+        company_filter = ""
+        if company_id:
+            company_filter = " and t.company_id = ?"
+            params.append(company_id)
+        changes: list[dict[str, Any]] = []
+        eligible_statuses = {
+            "queued",
+            "waiting_confirmation",
+            "approved_waiting_execution",
+            "manual_reconcile_required",
+        }
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                select
+                  t.task_id, t.company_id, t.store_id, t.user_id, t.task_type, t.status as task_status,
+                  c.confirmation_id, c.status as confirmation_status,
+                  case when exists (
+                    select 1 from execution_results e where e.confirmation_id = c.confirmation_id
+                  ) then 1 else 0 end as has_execution
+                from tasks t
+                left join confirmations c on c.task_id = t.task_id and c.company_id = t.company_id
+                where t.task_type in ({placeholders}){company_filter}
+                order by t.created_at asc
+                """,
+                tuple(params),
+            ).fetchall()
+            for row in rows:
+                current_status = str(row["task_status"] or "")
+                confirmation_status = str(row["confirmation_status"] or "")
+                if current_status not in eligible_statuses or not confirmation_status:
+                    continue
+                if bool(row["has_execution"]):
+                    expected_status = "completed"
+                else:
+                    expected_status = {
+                        "pending": "waiting_confirmation",
+                        "approved": "approved_waiting_execution",
+                        "rejected": "rejected",
+                        "needs_revision": "needs_revision",
+                        "executed": "completed",
+                        "external_execution_claimed_prewrite": "approved_waiting_execution",
+                        EXTERNAL_EXECUTION_PROCESSING_STATUS: "manual_reconcile_required",
+                    }.get(confirmation_status, "")
+                if not expected_status or expected_status == current_status:
+                    continue
+                change = {
+                    "task_id": str(row["task_id"] or ""),
+                    "company_id": str(row["company_id"] or ""),
+                    "task_type": str(row["task_type"] or ""),
+                    "from_status": current_status,
+                    "to_status": expected_status,
+                    "confirmation_status": confirmation_status,
+                    "provider_write_attempted": False,
+                    "secret_exposed": False,
+                }
+                changes.append(change)
+                if apply:
+                    updated = conn.execute(
+                        """
+                        update tasks set status = ?, updated_at = ?
+                        where task_id = ? and company_id = ? and status = ?
+                        """,
+                        (
+                            expected_status,
+                            now_iso(),
+                            row["task_id"],
+                            row["company_id"],
+                            current_status,
+                        ),
+                    ).rowcount
+                    if updated == 1:
+                        self._insert_audit(
+                            conn,
+                            company_id=str(row["company_id"] or ""),
+                            store_id=str(row["store_id"] or "") or None,
+                            user_id=str(row["user_id"] or "") or None,
+                            actor_type="system",
+                            action_type="task.confirmation_status.reconciled",
+                            target_type="task",
+                            target_id=str(row["task_id"] or ""),
+                            summary="A stale confirmation-owned task label was reconciled from durable state.",
+                            details={
+                                "from_status": current_status,
+                                "to_status": expected_status,
+                                "confirmation_status": confirmation_status,
+                                "provider_write_attempted": False,
+                                "secret_exposed": False,
+                            },
+                        )
+        transition_counts: dict[str, int] = {}
+        for change in changes:
+            key = f"{change['from_status']}->{change['to_status']}"
+            transition_counts[key] = transition_counts.get(key, 0) + 1
+        return {
+            "contract_version": "2026-08-22-confirmation-task-reconcile-v1",
+            "mode": "apply" if apply else "dry_run",
+            "candidate_count": len(changes),
+            "transition_counts": transition_counts,
+            "changes": changes,
+            "provider_write_attempted": False,
+            "external_payment_called": False,
+            "secret_exposed": False,
+        }
 
     def claim_external_execution(
         self,
@@ -5322,6 +5522,13 @@ class SaaSRepository:
             ).rowcount
             if transitioned != 1:
                 raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            _transition_confirmation_task_status(
+                conn,
+                company_id=company_id,
+                task_id=confirmation.get("task_id"),
+                status="manual_reconcile_required",
+                expected_statuses={"approved_waiting_execution", "approved"},
+            )
             self._insert_audit(
                 conn,
                 company_id=company_id,
@@ -5443,6 +5650,13 @@ class SaaSRepository:
             ).rowcount
             if transitioned != 1:
                 raise ConfirmationDecisionConflict("ebay_inventory_location_claim_conflict")
+            _transition_confirmation_task_status(
+                conn,
+                company_id=company_id,
+                task_id=confirmation.get("task_id"),
+                status="manual_reconcile_required",
+                expected_statuses={"approved_waiting_execution", "approved"},
+            )
             self._insert_audit(
                 conn,
                 company_id=company_id,
@@ -5714,6 +5928,13 @@ class SaaSRepository:
             ).rowcount
             if updated != 1 or transitioned != 1:
                 raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            _transition_confirmation_task_status(
+                conn,
+                company_id=str(row["company_id"] or ""),
+                task_id=confirmation.get("task_id"),
+                status="manual_reconcile_required",
+                expected_statuses={"approved_waiting_execution", "approved"},
+            )
         return {
             "status": EXTERNAL_EXECUTION_PROCESSING_STATUS,
             "external_execution_claimed": True,
@@ -5798,6 +6019,13 @@ class SaaSRepository:
             ).rowcount
             if aborted != 1 or transitioned != 1:
                 raise ConfirmationDecisionConflict("external_execution_claim_conflict")
+            _transition_confirmation_task_status(
+                conn,
+                company_id=str(row["company_id"] or ""),
+                task_id=confirmation.get("task_id"),
+                status="approved_waiting_execution" if restored_status == "approved" else "needs_revision",
+                expected_statuses={"approved_waiting_execution", "manual_reconcile_required"},
+            )
             self._insert_audit(
                 conn,
                 company_id=str(row["company_id"] or ""),
@@ -6085,6 +6313,25 @@ class SaaSRepository:
                 ).rowcount
                 if transitioned != 1:
                     raise ConfirmationDecisionConflict("confirmation_execution_conflict")
+            result_status = str(result.get("status") or "unknown")
+            if terminal_smoke_execution or successful_claimed_external_execution:
+                task_status = "completed"
+            elif result_status == "simulated_no_platform_write":
+                task_status = "completed_no_platform_write"
+            else:
+                task_status = "execution_blocked"
+            _transition_confirmation_task_status(
+                conn,
+                company_id=confirmation["company_id"],
+                task_id=confirmation.get("task_id"),
+                status=task_status,
+                expected_statuses={
+                    "queued",
+                    "waiting_confirmation",
+                    "approved_waiting_execution",
+                    "manual_reconcile_required",
+                },
+            )
         return {"execution_id": execution_id, **result}
 
     def list_execution_results(self, *, company_id: str, limit: int | None = None) -> list[dict[str, Any]]:
@@ -6174,27 +6421,326 @@ class SaaSRepository:
 
     def get_media_credit_account(self, *, company_id: str) -> dict[str, Any]:
         self.initialize()
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                select company_id, balance_points, reserved_points, lifetime_granted_points,
-                       lifetime_spent_points, updated_at, account_json
-                from media_credit_accounts where company_id = ?
-                """,
-                (company_id,),
-            ).fetchone()
+        with self.media_credit_company_lock(company_id=company_id):
+            with self._connect() as conn:
+                row = conn.execute(
+                    """
+                    select company_id, balance_points, reserved_points, lifetime_granted_points,
+                           lifetime_spent_points, updated_at, account_json
+                    from media_credit_accounts where company_id = ?
+                    """,
+                    (company_id,),
+                ).fetchone()
+                if row:
+                    expired_points = self._expire_media_credit_buckets(conn, company_id=company_id)
+                    if expired_points:
+                        conn.execute(
+                            """
+                            update media_credit_accounts
+                            set balance_points = balance_points - ?, updated_at = ?
+                            where company_id = ?
+                            """,
+                            (expired_points, now_iso(), company_id),
+                        )
+                        row = conn.execute(
+                            """
+                            select company_id, balance_points, reserved_points, lifetime_granted_points,
+                                   lifetime_spent_points, updated_at, account_json
+                            from media_credit_accounts where company_id = ?
+                            """,
+                            (company_id,),
+                        ).fetchone()
+                bucket_summary = self._media_credit_bucket_summary(conn, company_id=company_id)
         if row:
-            return self._media_credit_account_row_to_dict(row)
+            return self._media_credit_account_row_to_dict(row, bucket_summary=bucket_summary)
         return {
             "balance_points": 0,
             "reserved_points": 0,
             "available_points": 0,
             "lifetime_granted_points": 0,
             "lifetime_spent_points": 0,
+            **bucket_summary,
             "updated_at": "",
             "provider_neutral": True,
             "secret_exposed": False,
         }
+
+    def revoke_media_credit_source(
+        self,
+        *,
+        company_id: str,
+        user_id: str | None,
+        source_type: str,
+        source_reference_id: str,
+        idempotency_key: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Idempotently deactivate one exact grant source without touching other balances."""
+
+        self.initialize()
+        normalized_source = str(source_type or "").strip().lower()
+        normalized_reference = str(source_reference_id or "").strip()[:160]
+        raw_idempotency = str(idempotency_key or "").strip()
+        if normalized_source not in {"plan_included", "purchased", "legacy"}:
+            raise ValueError("unsupported media credit source")
+        if not normalized_reference or len(raw_idempotency) < 8 or len(raw_idempotency) > 200:
+            raise ValueError("media credit source revocation evidence is invalid")
+        idempotency_hash = hashlib.sha256(f"{company_id}|{raw_idempotency}".encode("utf-8")).hexdigest()
+        with self.media_credit_company_lock(company_id=company_id):
+            with self._connect() as conn:
+                existing = conn.execute(
+                    """
+                    select ledger_id, company_id, user_id, operation_type, points, status,
+                           reference_type, reference_id, reservation_id, created_at, updated_at, ledger_json
+                    from media_credit_ledger
+                    where company_id = ? and idempotency_key_hash = ?
+                    """,
+                    (company_id, idempotency_hash),
+                ).fetchone()
+                account_row = self._ensure_media_credit_account_row(conn, company_id=company_id)
+                if existing:
+                    return {
+                        "account": self._media_credit_account_row_to_dict(
+                            account_row,
+                            bucket_summary=self._media_credit_bucket_summary(conn, company_id=company_id),
+                        ),
+                        "ledger_entry": self._media_credit_ledger_row_to_dict(existing),
+                        "points_revoked": int(existing["points"] or 0),
+                        "duplicate_request": True,
+                        "secret_exposed": False,
+                    }
+                bucket = conn.execute(
+                    """
+                    select bucket_id, remaining_points, reserved_points, status
+                    from media_credit_buckets
+                    where company_id = ? and source_type = ? and source_reference_id = ?
+                    """,
+                    (company_id, normalized_source, normalized_reference),
+                ).fetchone()
+                if not bucket or str(bucket["status"] or "") in {"revoked", "expired", "consumed"}:
+                    return {
+                        "account": self._media_credit_account_row_to_dict(
+                            account_row,
+                            bucket_summary=self._media_credit_bucket_summary(conn, company_id=company_id),
+                        ),
+                        "ledger_entry": {},
+                        "points_revoked": 0,
+                        "duplicate_request": bool(bucket),
+                        "secret_exposed": False,
+                    }
+                remaining = max(0, int(bucket["remaining_points"] or 0))
+                reserved = max(0, int(bucket["reserved_points"] or 0))
+                available = max(0, remaining - reserved)
+                status = "revoking" if reserved > 0 else "revoked"
+                now = now_iso()
+                conn.execute(
+                    """
+                    update media_credit_buckets
+                    set remaining_points = ?, status = ?, updated_at = ?
+                    where company_id = ? and bucket_id = ?
+                    """,
+                    (reserved, status, now, company_id, bucket["bucket_id"]),
+                )
+                if available:
+                    conn.execute(
+                        """
+                        update media_credit_accounts
+                        set balance_points = balance_points - ?, updated_at = ?
+                        where company_id = ?
+                        """,
+                        (available, now, company_id),
+                    )
+                ledger_row = None
+                if remaining > 0:
+                    ledger_id = _id("mcredit")
+                    conn.execute(
+                        """
+                        insert into media_credit_ledger (
+                          ledger_id, company_id, user_id, operation_type, points, status,
+                          reference_type, reference_id, reservation_id, idempotency_key_hash,
+                          created_at, updated_at, ledger_json
+                        ) values (?, ?, ?, 'revoke', ?, ?, 'billing_order', ?, null, ?, ?, ?, ?)
+                        """,
+                        (
+                            ledger_id,
+                            company_id,
+                            user_id,
+                            remaining,
+                            "pending" if reserved > 0 else "completed",
+                            normalized_reference,
+                            idempotency_hash,
+                            now,
+                            now,
+                            json.dumps(
+                                {
+                                    "contract_version": "2026-08-23-media-points-ledger-v2",
+                                    "operation_type": "revoke",
+                                    "source_type": normalized_source,
+                                    "reason": str(reason or "")[:160],
+                                    "provider_neutral": True,
+                                    "secret_exposed": False,
+                                },
+                                ensure_ascii=False,
+                            ),
+                        ),
+                    )
+                    ledger_row = conn.execute(
+                        """
+                        select ledger_id, company_id, user_id, operation_type, points, status,
+                               reference_type, reference_id, reservation_id, created_at, updated_at, ledger_json
+                        from media_credit_ledger where company_id = ? and ledger_id = ?
+                        """,
+                        (company_id, ledger_id),
+                    ).fetchone()
+                account_row = self._ensure_media_credit_account_row(conn, company_id=company_id)
+                return {
+                    "account": self._media_credit_account_row_to_dict(
+                        account_row,
+                        bucket_summary=self._media_credit_bucket_summary(conn, company_id=company_id),
+                    ),
+                    "ledger_entry": self._media_credit_ledger_row_to_dict(ledger_row) if ledger_row else {},
+                    "points_revoked": remaining,
+                    "duplicate_request": False,
+                    "pending_reserved_points": reserved,
+                    "secret_exposed": False,
+                }
+
+    def reserve_media_credit_source(
+        self,
+        *,
+        company_id: str,
+        user_id: str | None,
+        source_type: str,
+        source_reference_id: str,
+        points: int,
+        idempotency_key: str,
+        reference_type: str,
+        reference_id: str,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Reserve points from one exact grant source before a source-specific refund."""
+
+        self.initialize()
+        normalized_source = str(source_type or "").strip().lower()
+        normalized_source_reference = str(source_reference_id or "").strip()[:160]
+        safe_points = int(points)
+        raw_idempotency = str(idempotency_key or "").strip()
+        if normalized_source not in {"plan_included", "purchased", "legacy"}:
+            raise ValueError("unsupported media credit source")
+        if not normalized_source_reference or safe_points <= 0:
+            raise ValueError("media credit source reservation evidence is invalid")
+        if len(raw_idempotency) < 8 or len(raw_idempotency) > 200:
+            raise ValueError("media credit source reservation idempotency key is invalid")
+        idempotency_hash = hashlib.sha256(f"{company_id}|{raw_idempotency}".encode("utf-8")).hexdigest()
+        safe_reference_type = str(reference_type or "billing_refund").strip()[:64]
+        safe_reference_id = str(reference_id or "").strip()[:160]
+        safe_details = _redact_secret_like(details or {})
+        with self.media_credit_company_lock(company_id=company_id):
+            with self._connect() as conn:
+                existing = conn.execute(
+                    """
+                    select ledger_id, company_id, user_id, operation_type, points, status,
+                           reference_type, reference_id, reservation_id, created_at, updated_at, ledger_json
+                    from media_credit_ledger
+                    where company_id = ? and idempotency_key_hash = ?
+                    """,
+                    (company_id, idempotency_hash),
+                ).fetchone()
+                account_row = self._ensure_media_credit_account_row(conn, company_id=company_id)
+                if existing:
+                    return {
+                        "account": self._media_credit_account_row_to_dict(
+                            account_row,
+                            bucket_summary=self._media_credit_bucket_summary(conn, company_id=company_id),
+                        ),
+                        "ledger_entry": self._media_credit_ledger_row_to_dict(existing),
+                        "duplicate_request": True,
+                        "secret_exposed": False,
+                    }
+                bucket = conn.execute(
+                    """
+                    select bucket_id, remaining_points, reserved_points, status
+                    from media_credit_buckets
+                    where company_id = ? and source_type = ? and source_reference_id = ?
+                    """,
+                    (company_id, normalized_source, normalized_source_reference),
+                ).fetchone()
+                available = (
+                    max(0, int(bucket["remaining_points"] or 0) - int(bucket["reserved_points"] or 0))
+                    if bucket and str(bucket["status"] or "") == "active"
+                    else 0
+                )
+                if available < safe_points:
+                    raise ValueError("insufficient available media points in source bucket")
+                now = now_iso()
+                conn.execute(
+                    """
+                    update media_credit_buckets
+                    set reserved_points = reserved_points + ?, updated_at = ?
+                    where company_id = ? and bucket_id = ?
+                    """,
+                    (safe_points, now, company_id, bucket["bucket_id"]),
+                )
+                conn.execute(
+                    """
+                    update media_credit_accounts
+                    set reserved_points = reserved_points + ?, updated_at = ?
+                    where company_id = ?
+                    """,
+                    (safe_points, now, company_id),
+                )
+                ledger_id = _id("mcredit")
+                ledger_payload = {
+                    "contract_version": "2026-08-23-media-points-ledger-v2",
+                    "operation_type": "reserve",
+                    "reference_type": safe_reference_type,
+                    "reference_id": safe_reference_id,
+                    "details": {
+                        **safe_details,
+                        "allocations": [{"bucket_id": str(bucket["bucket_id"]), "points": safe_points}],
+                    },
+                    "provider_neutral": True,
+                    "secret_exposed": False,
+                }
+                conn.execute(
+                    """
+                    insert into media_credit_ledger (
+                      ledger_id, company_id, user_id, operation_type, points, status,
+                      reference_type, reference_id, reservation_id, idempotency_key_hash,
+                      created_at, updated_at, ledger_json
+                    ) values (?, ?, ?, 'reserve', ?, 'reserved', ?, ?, null, ?, ?, ?, ?)
+                    """,
+                    (
+                        ledger_id,
+                        company_id,
+                        user_id,
+                        safe_points,
+                        safe_reference_type,
+                        safe_reference_id,
+                        idempotency_hash,
+                        now,
+                        now,
+                        json.dumps(ledger_payload, ensure_ascii=False),
+                    ),
+                )
+                account_row = self._ensure_media_credit_account_row(conn, company_id=company_id)
+                ledger_row = conn.execute(
+                    """
+                    select ledger_id, company_id, user_id, operation_type, points, status,
+                           reference_type, reference_id, reservation_id, created_at, updated_at, ledger_json
+                    from media_credit_ledger where company_id = ? and ledger_id = ?
+                    """,
+                    (company_id, ledger_id),
+                ).fetchone()
+                return {
+                    "account": self._media_credit_account_row_to_dict(
+                        account_row,
+                        bucket_summary=self._media_credit_bucket_summary(conn, company_id=company_id),
+                    ),
+                    "ledger_entry": self._media_credit_ledger_row_to_dict(ledger_row),
+                    "duplicate_request": False,
+                    "secret_exposed": False,
+                }
 
     def get_merchant_onboarding_state(
         self,
@@ -8402,8 +8948,9 @@ class SaaSRepository:
                 ).fetchone()
                 if existing:
                     account_row = self._ensure_media_credit_account_row(conn, company_id=company_id)
+                    bucket_summary = self._media_credit_bucket_summary(conn, company_id=company_id)
                     return {
-                        "account": self._media_credit_account_row_to_dict(account_row),
+                        "account": self._media_credit_account_row_to_dict(account_row, bucket_summary=bucket_summary),
                         "ledger_entry": self._media_credit_ledger_row_to_dict(existing),
                         "duplicate_request": True,
                         "secret_exposed": False,
@@ -8414,12 +8961,21 @@ class SaaSRepository:
                 reserved = int(account_row["reserved_points"] or 0)
                 lifetime_granted = int(account_row["lifetime_granted_points"] or 0)
                 lifetime_spent = int(account_row["lifetime_spent_points"] or 0)
+                expired_points = self._expire_media_credit_buckets(conn, company_id=company_id)
+                if expired_points:
+                    balance -= expired_points
+                self._ensure_legacy_media_credit_bucket(
+                    conn,
+                    company_id=company_id,
+                    balance_points=balance,
+                    reserved_points=reserved,
+                )
                 if operation in {"settle", "release"} or (operation == "revoke" and safe_reservation_id):
                     if not safe_reservation_id:
                         raise ValueError("reservation_id is required")
                     reservation = conn.execute(
                         """
-                        select ledger_id, operation_type, points, status
+                        select ledger_id, operation_type, points, status, ledger_json
                         from media_credit_ledger
                         where company_id = ? and ledger_id = ?
                         """,
@@ -8431,13 +8987,38 @@ class SaaSRepository:
                     if operation in {"settle", "revoke"} and safe_points > reserved_by_entry:
                         raise ValueError("settlement exceeds reserved media points")
                     reserved = max(0, reserved - reserved_by_entry)
+                    reservation_payload = _load_json_field(reservation["ledger_json"])
+                    reservation_details = (
+                        reservation_payload.get("details")
+                        if isinstance(reservation_payload.get("details"), dict)
+                        else {}
+                    )
+                    allocations = (
+                        reservation_details.get("allocations")
+                        if isinstance(reservation_details.get("allocations"), list)
+                        else []
+                    )
+                    if not allocations:
+                        allocations = self._fallback_media_credit_allocations(
+                            conn,
+                            company_id=company_id,
+                            points=reserved_by_entry,
+                        )
+                    post_outcome_debit = self._apply_media_credit_bucket_outcome(
+                        conn,
+                        company_id=company_id,
+                        allocations=allocations,
+                        settled_points=safe_points if operation in {"settle", "revoke"} else 0,
+                    )
                     if operation == "settle":
                         if balance < safe_points:
                             raise ValueError("insufficient media point balance")
-                        balance -= safe_points
+                        balance -= safe_points + post_outcome_debit
                         lifetime_spent += safe_points
                     elif operation == "revoke":
-                        balance -= safe_points
+                        balance -= safe_points + post_outcome_debit
+                    else:
+                        balance -= post_outcome_debit
                     conn.execute(
                         "update media_credit_ledger set status = ?, updated_at = ? where company_id = ? and ledger_id = ?",
                         (
@@ -8450,6 +9031,14 @@ class SaaSRepository:
                 elif operation == "grant":
                     balance += safe_points
                     lifetime_granted += safe_points
+                    self._grant_media_credit_bucket(
+                        conn,
+                        company_id=company_id,
+                        points=safe_points,
+                        reference_id=safe_reference_id,
+                        idempotency_hash=idempotency_hash,
+                        details=safe_details,
+                    )
                 elif operation == "revoke":
                     # A provider-confirmed refund must remove its purchased points even
                     # when they were already consumed. A negative balance prevents more
@@ -8458,6 +9047,12 @@ class SaaSRepository:
                 else:
                     if safe_points > balance - reserved:
                         raise ValueError("insufficient available media points")
+                    allocations = self._reserve_media_credit_buckets(
+                        conn,
+                        company_id=company_id,
+                        points=safe_points,
+                    )
+                    safe_details = {**safe_details, "allocations": allocations}
                     reserved += safe_points
 
                 now = now_iso()
@@ -8534,8 +9129,9 @@ class SaaSRepository:
                     """,
                     (company_id, ledger_id),
                 ).fetchone()
+                bucket_summary = self._media_credit_bucket_summary(conn, company_id=company_id)
         return {
-            "account": self._media_credit_account_row_to_dict(account_row),
+            "account": self._media_credit_account_row_to_dict(account_row, bucket_summary=bucket_summary),
             "ledger_entry": self._media_credit_ledger_row_to_dict(ledger_row),
             "duplicate_request": False,
             "secret_exposed": False,
@@ -8567,6 +9163,313 @@ class SaaSRepository:
         if not row:
             raise RuntimeError("media credit account was not persisted")
         return row
+
+    @staticmethod
+    def _ensure_legacy_media_credit_bucket(
+        conn: Any,
+        *,
+        company_id: str,
+        balance_points: int,
+        reserved_points: int,
+    ) -> None:
+        totals = conn.execute(
+            """
+            select coalesce(sum(remaining_points), 0) as remaining_points,
+                   coalesce(sum(reserved_points), 0) as reserved_points
+            from media_credit_buckets
+            where company_id = ? and status = 'active'
+            """,
+            (company_id,),
+        ).fetchone()
+        mapped_remaining = int(totals["remaining_points"] or 0) if totals else 0
+        mapped_reserved = int(totals["reserved_points"] or 0) if totals else 0
+        missing_remaining = max(0, int(balance_points) - mapped_remaining)
+        missing_reserved = max(0, int(reserved_points) - mapped_reserved)
+        if missing_remaining <= 0 and missing_reserved <= 0:
+            return
+        now = now_iso()
+        existing = conn.execute(
+            """
+            select bucket_id, remaining_points, reserved_points
+            from media_credit_buckets
+            where company_id = ? and source_type = 'legacy' and source_reference_id = 'aggregate-balance-v1'
+            """,
+            (company_id,),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                update media_credit_buckets
+                set remaining_points = ?, reserved_points = ?, status = 'active', updated_at = ?
+                where company_id = ? and bucket_id = ?
+                """,
+                (
+                    int(existing["remaining_points"] or 0) + missing_remaining,
+                    int(existing["reserved_points"] or 0) + min(missing_reserved, missing_remaining),
+                    now,
+                    company_id,
+                    existing["bucket_id"],
+                ),
+            )
+            return
+        bucket_id = _id("mcbucket")
+        conn.execute(
+            """
+            insert into media_credit_buckets (
+              bucket_id, company_id, source_type, source_reference_id, granted_points,
+              remaining_points, reserved_points, expires_at, status, created_at, updated_at, bucket_json
+            ) values (?, ?, 'legacy', 'aggregate-balance-v1', ?, ?, ?, null, 'active', ?, ?, ?)
+            """,
+            (
+                bucket_id,
+                company_id,
+                missing_remaining,
+                missing_remaining,
+                min(missing_reserved, missing_remaining),
+                now,
+                now,
+                json.dumps({"contract_version": "2026-08-23-media-credit-bucket-v1", "source_type": "legacy"}),
+            ),
+        )
+
+    @staticmethod
+    def _grant_media_credit_bucket(
+        conn: Any,
+        *,
+        company_id: str,
+        points: int,
+        reference_id: str,
+        idempotency_hash: str,
+        details: dict[str, Any],
+    ) -> None:
+        source_type = str(details.get("credit_source") or "legacy").strip().lower()
+        if source_type not in {"plan_included", "purchased", "legacy"}:
+            source_type = "legacy"
+        source_reference_id = str(details.get("source_reference_id") or reference_id or idempotency_hash).strip()[:160]
+        expires_at = str(details.get("expires_at") or "").strip()[:64] or None
+        if source_type == "plan_included" and not expires_at:
+            raise ValueError("plan included media points require an expiry")
+        now = now_iso()
+        conn.execute(
+            """
+            insert into media_credit_buckets (
+              bucket_id, company_id, source_type, source_reference_id, granted_points,
+              remaining_points, reserved_points, expires_at, status, created_at, updated_at, bucket_json
+            ) values (?, ?, ?, ?, ?, ?, 0, ?, 'active', ?, ?, ?)
+            """,
+            (
+                _id("mcbucket"),
+                company_id,
+                source_type,
+                source_reference_id,
+                points,
+                points,
+                expires_at,
+                now,
+                now,
+                json.dumps(
+                    {
+                        "contract_version": "2026-08-23-media-credit-bucket-v1",
+                        "source_type": source_type,
+                        "secret_exposed": False,
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+
+    @staticmethod
+    def _reserve_media_credit_buckets(conn: Any, *, company_id: str, points: int) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            """
+            select bucket_id, source_type, remaining_points, reserved_points, expires_at
+            from media_credit_buckets
+            where company_id = ? and status = 'active'
+            order by case source_type when 'plan_included' then 0 when 'purchased' then 1 else 2 end,
+                     case when expires_at is null or expires_at = '' then 1 else 0 end,
+                     expires_at asc, created_at asc, bucket_id asc
+            """,
+            (company_id,),
+        ).fetchall()
+        needed = int(points)
+        allocations: list[dict[str, Any]] = []
+        now = now_iso()
+        for row in rows:
+            available = max(0, int(row["remaining_points"] or 0) - int(row["reserved_points"] or 0))
+            take = min(available, needed)
+            if take <= 0:
+                continue
+            conn.execute(
+                """
+                update media_credit_buckets set reserved_points = reserved_points + ?, updated_at = ?
+                where company_id = ? and bucket_id = ?
+                """,
+                (take, now, company_id, row["bucket_id"]),
+            )
+            allocations.append({"bucket_id": str(row["bucket_id"]), "points": take})
+            needed -= take
+            if needed <= 0:
+                break
+        if needed > 0:
+            raise ValueError("insufficient available media points")
+        return allocations
+
+    @staticmethod
+    def _fallback_media_credit_allocations(conn: Any, *, company_id: str, points: int) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            """
+            select bucket_id, reserved_points from media_credit_buckets
+            where company_id = ? and status = 'active' and reserved_points > 0
+            order by updated_at asc, bucket_id asc
+            """,
+            (company_id,),
+        ).fetchall()
+        needed = int(points)
+        allocations: list[dict[str, Any]] = []
+        for row in rows:
+            take = min(int(row["reserved_points"] or 0), needed)
+            if take > 0:
+                allocations.append({"bucket_id": str(row["bucket_id"]), "points": take})
+                needed -= take
+            if needed <= 0:
+                break
+        if needed > 0:
+            raise ValueError("media credit reservation bucket allocation is incomplete")
+        return allocations
+
+    @staticmethod
+    def _apply_media_credit_bucket_outcome(
+        conn: Any,
+        *,
+        company_id: str,
+        allocations: list[Any],
+        settled_points: int,
+    ) -> int:
+        remaining_settlement = max(0, int(settled_points))
+        post_outcome_debit = 0
+        now = now_iso()
+        for raw in allocations:
+            if not isinstance(raw, dict):
+                continue
+            bucket_id = str(raw.get("bucket_id") or "")
+            allocated = max(0, int(raw.get("points") or 0))
+            if not bucket_id or allocated <= 0:
+                continue
+            row = conn.execute(
+                """
+                select remaining_points, reserved_points, status from media_credit_buckets
+                where company_id = ? and bucket_id = ?
+                """,
+                (company_id, bucket_id),
+            ).fetchone()
+            if not row or int(row["reserved_points"] or 0) < allocated:
+                raise ValueError("media credit bucket reservation is not available")
+            charged = min(allocated, remaining_settlement)
+            new_remaining = max(0, int(row["remaining_points"] or 0) - charged)
+            new_reserved = max(0, int(row["reserved_points"] or 0) - allocated)
+            prior_status = str(row["status"] or "active")
+            if prior_status in {"expiring", "revoking"} and new_reserved == 0:
+                post_outcome_debit += new_remaining
+                new_remaining = 0
+                status = "expired" if prior_status == "expiring" else "revoked"
+            elif prior_status in {"expiring", "revoking"}:
+                status = prior_status
+            else:
+                status = "consumed" if new_remaining == 0 and new_reserved == 0 else "active"
+            conn.execute(
+                """
+                update media_credit_buckets
+                set remaining_points = ?, reserved_points = ?, status = ?, updated_at = ?
+                where company_id = ? and bucket_id = ?
+                """,
+                (new_remaining, new_reserved, status, now, company_id, bucket_id),
+            )
+            remaining_settlement -= charged
+        if remaining_settlement > 0:
+            raise ValueError("media credit bucket settlement is incomplete")
+        return post_outcome_debit
+
+    @staticmethod
+    def _expire_media_credit_buckets(conn: Any, *, company_id: str) -> int:
+        rows = conn.execute(
+            """
+            select bucket_id, remaining_points, reserved_points, expires_at
+            from media_credit_buckets
+            where company_id = ? and source_type = 'plan_included' and status in ('active', 'expiring')
+            """,
+            (company_id,),
+        ).fetchall()
+        expired_points = 0
+        now = datetime.now(timezone.utc)
+        updated_at = now_iso()
+        for row in rows:
+            expires_at = str(row["expires_at"] or "").strip()
+            if not expires_at:
+                continue
+            try:
+                expires = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                if expires.tzinfo is None:
+                    expires = expires.replace(tzinfo=timezone.utc)
+                expires = expires.astimezone(timezone.utc)
+            except ValueError:
+                continue
+            if expires > now:
+                continue
+            remaining = max(0, int(row["remaining_points"] or 0))
+            reserved = max(0, int(row["reserved_points"] or 0))
+            available_to_expire = max(0, remaining - reserved)
+            if available_to_expire <= 0:
+                if reserved > 0:
+                    conn.execute(
+                        """
+                        update media_credit_buckets set status = 'expiring', updated_at = ?
+                        where company_id = ? and bucket_id = ?
+                        """,
+                        (updated_at, company_id, row["bucket_id"]),
+                    )
+                continue
+            new_remaining = reserved
+            new_status = "expiring" if reserved > 0 else "expired"
+            conn.execute(
+                """
+                update media_credit_buckets
+                set remaining_points = ?, status = ?, updated_at = ?
+                where company_id = ? and bucket_id = ?
+                """,
+                (new_remaining, new_status, updated_at, company_id, row["bucket_id"]),
+            )
+            idempotency_hash = hashlib.sha256(
+                f"{company_id}|media-credit-expire:{row['bucket_id']}:v1".encode("utf-8")
+            ).hexdigest()
+            conn.execute(
+                """
+                insert or ignore into media_credit_ledger (
+                  ledger_id, company_id, user_id, operation_type, points, status,
+                  reference_type, reference_id, reservation_id, idempotency_key_hash,
+                  created_at, updated_at, ledger_json
+                ) values (?, ?, null, 'expire', ?, 'completed', 'media_credit_bucket', ?, null, ?, ?, ?, ?)
+                """,
+                (
+                    _id("mcredit"),
+                    company_id,
+                    available_to_expire,
+                    str(row["bucket_id"]),
+                    idempotency_hash,
+                    updated_at,
+                    updated_at,
+                    json.dumps(
+                        {
+                            "contract_version": "2026-08-23-media-points-ledger-v2",
+                            "operation_type": "expire",
+                            "provider_neutral": True,
+                            "secret_exposed": False,
+                        },
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+            expired_points += available_to_expire
+        return expired_points
 
     def create_domestic_billing_order_record(
         self,
@@ -11516,6 +12419,7 @@ class SaaSRepository:
                 "partial_count": 0,
                 "blocked_count": 0,
                 "durations": [],
+                "first_outputs": [],
                 "error_classes": {},
             }
             for scope in ("model", "public_search", "media_generation", "payment")
@@ -11542,6 +12446,13 @@ class SaaSRepository:
                 duration = bounded_duration(value)
                 if duration is not None:
                     bucket["durations"].append(duration)
+            first_output_samples = reliability.get("first_output_samples_ms") if isinstance(reliability.get("first_output_samples_ms"), list) else []
+            if not first_output_samples and reliability.get("p75_first_output_ms") is not None:
+                first_output_samples = [reliability.get("p75_first_output_ms")]
+            for value in first_output_samples[:50]:
+                first_output = bounded_duration(value)
+                if first_output is not None:
+                    bucket["first_outputs"].append(first_output)
             error_classes = reliability.get("error_classes") if isinstance(reliability.get("error_classes"), dict) else {}
             for error_class, count in error_classes.items():
                 normalized_error = str(error_class or "")
@@ -11576,12 +12487,16 @@ class SaaSRepository:
         def reliability_summary(scope: str) -> dict[str, Any]:
             bucket = reliability_buckets[scope]
             durations = sorted(bucket.pop("durations"))
+            first_outputs = sorted(bucket.pop("first_outputs"))
             return {
                 "status": "instrumented" if bucket["request_count"] else "ready_no_samples",
                 "sample_count": len(durations),
                 **bucket,
                 "p75_duration_ms": durations[max(0, ((len(durations) * 3 + 3) // 4) - 1)] if durations else None,
                 "max_duration_ms": max(durations) if durations else None,
+                "streamed_request_count": len(first_outputs),
+                "p75_first_output_ms": first_outputs[max(0, ((len(first_outputs) * 3 + 3) // 4) - 1)] if first_outputs else None,
+                "max_first_output_ms": max(first_outputs) if first_outputs else None,
             }
 
         provider_reliability_analytics = {
@@ -12929,6 +13844,7 @@ class SaaSRepository:
                 "partial_count": 0,
                 "blocked_count": 0,
                 "durations": [],
+                "first_outputs": [],
                 "error_classes": {},
             }
             for scope in ("model", "public_search", "media_generation", "payment")
@@ -12953,6 +13869,13 @@ class SaaSRepository:
                 duration = bounded_duration(value)
                 if duration is not None:
                     bucket["durations"].append(duration)
+            first_output_samples = telemetry.get("first_output_samples_ms") if isinstance(telemetry.get("first_output_samples_ms"), list) else []
+            if not first_output_samples and telemetry.get("p75_first_output_ms") is not None:
+                first_output_samples = [telemetry.get("p75_first_output_ms")]
+            for value in first_output_samples[:50]:
+                first_output = bounded_duration(value)
+                if first_output is not None:
+                    bucket["first_outputs"].append(first_output)
         for row in provider_reliability_rows:
             packet = _load_json_field(row["cost_json"])
             details = packet.get("details") if isinstance(packet, dict) and isinstance(packet.get("details"), dict) else {}
@@ -12977,12 +13900,16 @@ class SaaSRepository:
         def reliability_summary(scope: str) -> dict[str, Any]:
             bucket = buckets[scope]
             durations = sorted(bucket.pop("durations"))
+            first_outputs = sorted(bucket.pop("first_outputs"))
             return {
                 "status": "instrumented" if bucket["request_count"] else "ready_no_samples",
                 "sample_count": len(durations),
                 **bucket,
                 "p75_duration_ms": durations[max(0, ((len(durations) * 3 + 3) // 4) - 1)] if durations else None,
                 "max_duration_ms": max(durations) if durations else None,
+                "streamed_request_count": len(first_outputs),
+                "p75_first_output_ms": first_outputs[max(0, ((len(first_outputs) * 3 + 3) // 4) - 1)] if first_outputs else None,
+                "max_first_output_ms": max(first_outputs) if first_outputs else None,
             }
 
         reliability = {scope: reliability_summary(scope) for scope in buckets}
@@ -13853,7 +14780,49 @@ class SaaSRepository:
             "secret_exposed": False,
         }
 
-    def _media_credit_account_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+    @staticmethod
+    def _media_credit_bucket_summary(conn: Any, *, company_id: str) -> dict[str, Any]:
+        rows = conn.execute(
+            """
+            select source_type, remaining_points, reserved_points, expires_at
+            from media_credit_buckets
+            where company_id = ? and status = 'active'
+            """,
+            (company_id,),
+        ).fetchall()
+        included_points = 0
+        included_reserved = 0
+        purchased_points = 0
+        purchased_reserved = 0
+        included_expiries: list[str] = []
+        for item in rows:
+            remaining = max(0, int(item["remaining_points"] or 0))
+            reserved = max(0, int(item["reserved_points"] or 0))
+            available = max(0, remaining - reserved)
+            source_type = str(item["source_type"] or "legacy")
+            if source_type == "plan_included":
+                included_points += available
+                included_reserved += reserved
+                expires_at = str(item["expires_at"] or "").strip()
+                if expires_at:
+                    included_expiries.append(expires_at)
+            else:
+                purchased_points += available
+                purchased_reserved += reserved
+        return {
+            "included_points": included_points,
+            "included_reserved_points": included_reserved,
+            "included_expires_at": min(included_expiries) if included_expiries else "",
+            "purchased_points": purchased_points,
+            "purchased_reserved_points": purchased_reserved,
+        }
+
+    def _media_credit_account_row_to_dict(
+        self,
+        row: sqlite3.Row,
+        *,
+        bucket_summary: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         balance = int(row["balance_points"] or 0)
         reserved = int(row["reserved_points"] or 0)
         return {
@@ -13862,6 +14831,7 @@ class SaaSRepository:
             "available_points": max(0, balance - reserved),
             "lifetime_granted_points": int(row["lifetime_granted_points"] or 0),
             "lifetime_spent_points": int(row["lifetime_spent_points"] or 0),
+            **(bucket_summary or {}),
             "updated_at": row["updated_at"],
             "provider_neutral": True,
             "secret_exposed": False,

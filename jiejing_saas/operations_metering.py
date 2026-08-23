@@ -665,6 +665,11 @@ class MeteredModelClient:
 
     def reliability_summary(self) -> dict[str, Any]:
         durations = sorted(max(0, _safe_int(item.get("duration_ms"))) for item in self._calls)
+        first_outputs = sorted(
+            max(0, _safe_int(item.get("first_output_ms")))
+            for item in self._calls
+            if item.get("first_output_ms") is not None
+        )
         errors: dict[str, int] = {}
         for item in self._calls:
             error_class = str(item.get("error_class") or "")
@@ -681,6 +686,10 @@ class MeteredModelClient:
             "p75_duration_ms": _p75(durations),
             "max_duration_ms": max(durations) if durations else None,
             "duration_samples_ms": durations[-50:],
+            "streamed_request_count": len(first_outputs),
+            "p75_first_output_ms": _p75(first_outputs),
+            "max_first_output_ms": max(first_outputs) if first_outputs else None,
+            "first_output_samples_ms": first_outputs[-50:],
             "error_classes": errors,
             "prompts_stored": False,
             "responses_stored": False,
@@ -689,6 +698,16 @@ class MeteredModelClient:
 
     def _run(self, operation: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
         started_at = time.perf_counter()
+        first_output_ms: int | None = None
+        original_delta_callback = kwargs.get("on_text_delta")
+        if callable(original_delta_callback):
+            def _metered_delta_callback(fragment: Any) -> Any:
+                nonlocal first_output_ms
+                if first_output_ms is None and str(fragment or ""):
+                    first_output_ms = int(round((time.perf_counter() - started_at) * 1000))
+                return original_delta_callback(fragment)
+
+            kwargs["on_text_delta"] = _metered_delta_callback
         try:
             result = operation(*args, **kwargs)
         except Exception as exc:
@@ -699,6 +718,8 @@ class MeteredModelClient:
                 duration_ms=duration_ms,
                 error_class=exc,
             )
+            if first_output_ms is not None:
+                telemetry["first_output_ms"] = min(120000, max(0, first_output_ms))
             self._capture(None, telemetry=telemetry)
             raise
         duration_ms = int(round((time.perf_counter() - started_at) * 1000))
@@ -715,6 +736,8 @@ class MeteredModelClient:
             duration_ms=duration_ms,
             error_class=error_class,
         )
+        if first_output_ms is not None:
+            telemetry["first_output_ms"] = min(120000, max(0, first_output_ms))
         self._capture(result, telemetry=telemetry)
         return result
 

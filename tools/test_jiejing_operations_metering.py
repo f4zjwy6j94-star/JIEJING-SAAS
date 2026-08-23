@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -52,6 +53,21 @@ class FailingUsageClient:
 
     def generate_text(self, **_kwargs):  # noqa: ANN003, ANN201
         raise TimeoutError("raw provider timeout detail must never be stored")
+
+
+class StreamingUsageClient:
+    model = "streaming-model"
+
+    def generate_text(self, **kwargs):  # noqa: ANN003, ANN201
+        callback = kwargs.get("on_text_delta")
+        time.sleep(0.005)
+        if callable(callback):
+            callback("first private model fragment")
+        time.sleep(0.005)
+        return {
+            "text": "first private model fragment and the rest",
+            "_usage": {"input_tokens": 12, "output_tokens": 8, "total_tokens": 20},
+        }
 
 
 class CapturingRepository:
@@ -191,6 +207,21 @@ def main() -> int:
     assert reliability["failure_count"] == 0
     assert reliability["p75_duration_ms"] >= 0
     assert "prompt" not in reliability and "response" not in reliability
+
+    streamed_client = MeteredModelClient(StreamingUsageClient())
+    forwarded_fragments = []
+    streamed_client.generate_text(
+        system_prompt="not stored",
+        user_prompt="not stored",
+        on_text_delta=forwarded_fragments.append,
+    )
+    streamed_reliability = streamed_client.reliability_summary()
+    assert forwarded_fragments == ["first private model fragment"]
+    assert streamed_reliability["streamed_request_count"] == 1
+    assert streamed_reliability["p75_first_output_ms"] is not None
+    assert 0 <= streamed_reliability["p75_first_output_ms"] <= streamed_reliability["p75_duration_ms"]
+    assert streamed_reliability["first_output_samples_ms"] == [streamed_reliability["p75_first_output_ms"]]
+    assert "fragment" not in str(streamed_reliability)
 
     failing_client = MeteredModelClient(FailingUsageClient())
     try:

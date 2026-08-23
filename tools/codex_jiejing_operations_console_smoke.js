@@ -427,7 +427,12 @@ async function runRotatingSessionRecovery(browser, base) {
   if (refreshCount !== 1) throw new Error(`cross-tab operations session refresh must happen exactly once: ${refreshCount}`);
   await pages[0].click('[data-view="feedback"]');
   await pages[0].locator('[data-feedback-action="review"]').first().click();
-  await pages[0].locator("#ops-alert").getByText("authentication required", { exact: true }).waitFor();
+  await pages[0].locator("#ops-login").waitFor({ state: "visible" });
+  await pages[0].waitForFunction(() => document.querySelector("#ops-data-status")?.textContent === "登录已过期，请重新登录");
+  const expiredContent = await pages[0].locator("#ops-content").innerText();
+  if (!expiredContent.includes("旧经营数据已从当前页面清除")) {
+    throw new Error(`expired operations session must clear stale content: ${expiredContent}`);
+  }
   if (feedbackPostCount !== 1) throw new Error(`operations mutation must never be replayed after 401: ${feedbackPostCount}`);
   if (refreshCount !== 1) throw new Error(`operations mutation incorrectly triggered session refresh: ${refreshCount}`);
   await context.close();

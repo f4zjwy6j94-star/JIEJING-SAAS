@@ -205,6 +205,9 @@ def main() -> int:
     subscription = repository.get_billing_subscription(company_id=company_id)
     if not subscription or subscription.get("entitlement_active") is not True or subscription.get("plan_key") != "starter":
         return fail(f"valid callback should activate the reviewed plan: {subscription}")
+    media_account = repository.get_media_credit_account(company_id=company_id)
+    if media_account.get("included_points") != 1000 or media_account.get("purchased_points") != 0:
+        return fail(f"a paid starter order must grant exactly one included media-point bucket: {media_account}")
     first_active_until = str(subscription.get("subscription", {}).get("active_until") or "")
     stored = repository.get_domestic_billing_order(company_id=company_id, order_id=order_id)
     if not stored or stored.get("status") != "paid" or stored.get("provider_order_id") != "wx-transaction-valid-1":
@@ -286,6 +289,9 @@ def main() -> int:
     renewed_active_until = str(renewed_subscription.get("subscription", {}).get("active_until") or "") if renewed_subscription else ""
     if not first_active_until or not renewed_active_until or renewed_active_until <= first_active_until:
         return fail(f"a second paid order must add time instead of replacing the remaining term: {renewed_subscription}")
+    renewed_media_account = repository.get_media_credit_account(company_id=company_id)
+    if renewed_media_account.get("included_points") != 2000:
+        return fail(f"each paid starter renewal must grant one separate included point bucket: {renewed_media_account}")
 
     refund_latest = apply_verified_domestic_refund(
         repository,
@@ -302,6 +308,9 @@ def main() -> int:
         return fail(f"refunding the latest renewal must restore the earlier paid term: {refund_latest}")
     if not fallback_subscription or fallback_subscription.get("entitlement_active") is not True or fallback_active_until != first_active_until:
         return fail(f"the earlier paid entitlement must remain active after latest-order refund: {fallback_subscription}")
+    refunded_media_account = repository.get_media_credit_account(company_id=company_id)
+    if refunded_media_account.get("included_points") != 1000:
+        return fail(f"refunding the latest renewal must revoke only that order's unused included points: {refunded_media_account}")
 
     query_audits = [
         item

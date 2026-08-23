@@ -439,7 +439,7 @@ def main() -> int:
         caddy_systemd = (ROOT / "deploy" / "Caddyfile.public-staging.systemd").read_text(encoding="utf-8")
         if "noindex,nofollow" not in ops_html or "/owner/auth/login" not in ops_js:
             return fail("operations frontend security markers are missing")
-        cache_version = "20260821-ops-reliability-alert-detail-v3"
+        cache_version = "20260822-ops-session-ttft-v4"
         if ops_html.count(cache_version) != 2:
             return fail("operations asset cache version is not exact for CSS and JS")
         for marker in (
@@ -465,6 +465,15 @@ def main() -> int:
                 return fail(f"operations feedback interaction contract is missing: {marker}")
         if "localStorage" in ops_js or "sessionStorage" in ops_js:
             return fail("operations frontend persists a session token in browser storage")
+        for marker in (
+            "expireOpsSession(response.status)",
+            "state.overview = null",
+            "state.details.clear()",
+            'setScreen(status === 403 ? "denied" : "login")',
+            'elements.dataStatus.textContent = "登录已过期，请重新登录"',
+        ):
+            if marker not in ops_js:
+                return fail(f"expired operations sessions must clear stale data: {marker}")
         if "server_name ops.jiejing.shop" not in nginx or "location = /ops.html { return 404; }" not in nginx:
             return fail("operations hostname isolation is missing")
         if "listen 80 default_server;" not in nginx or "server_name app.jiejing.shop jiejing.shop" not in nginx:

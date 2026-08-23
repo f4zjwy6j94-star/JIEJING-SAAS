@@ -410,8 +410,9 @@ def _check_public_diagnostics_are_summarized() -> str:
                 "status": "ready",
                 "provider": "deepseek",
                 "model": "deepseek-v4-pro",
-                "trial_monthly_limit": 20,
-                "trial_quota_scope": "account_month",
+                "trial_request_limit": 20,
+                "trial_duration_days": 7,
+                "trial_quota_scope": "account_trial_window",
                 "usage_owner": "jiejing_platform_trial",
                 "quota_checked_by_backend": True,
                 "hard_stop_on_exhaustion": True,
@@ -520,8 +521,9 @@ def _check_public_diagnostics_are_summarized() -> str:
     platform_model_summary = unauth.get("provider_status", {}).get("ai_ceo_platform_model", {})
     if (
         platform_model_summary.get("configured") is not True
-        or platform_model_summary.get("trial_monthly_limit") != 20
-        or platform_model_summary.get("trial_quota_scope") != "account_month"
+        or platform_model_summary.get("trial_request_limit") != 20
+        or platform_model_summary.get("trial_duration_days") != 7
+        or platform_model_summary.get("trial_quota_scope") != "account_trial_window"
         or platform_model_summary.get("usage_owner") != "jiejing_platform_trial"
         or platform_model_summary.get("quota_checked_by_backend") is not True
         or platform_model_summary.get("hard_stop_on_exhaustion") is not True

@@ -191,6 +191,16 @@ def main() -> int:
         reference_id="spent-pack-job",
         reservation_id=str(reservation["ledger_entry"]["ledger_id"]),
     )
+    repository.apply_media_credit_operation(
+        company_id=company_id,
+        user_id=user_id,
+        operation_type="grant",
+        points=1000,
+        idempotency_key="spent-pack-unrelated-plan-grant-v1",
+        reference_type="billing_order",
+        reference_id="spent-pack-unrelated-plan-order",
+        details={"credit_source": "plan_included", "expires_at": "2099-01-01T00:00:00+00:00"},
+    )
     review = request_domestic_billing_refund_review(
         repository,
         company_id=company_id,

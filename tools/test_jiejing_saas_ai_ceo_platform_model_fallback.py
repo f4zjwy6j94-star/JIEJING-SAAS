@@ -181,9 +181,10 @@ def main() -> int:
             else {}
         )
         if (
-            quota_before.get("scope") != "account_month"
+            quota_before.get("scope") != "account_trial_window"
             or quota_before.get("usage_owner") != "jiejing_platform_trial"
             or quota_before.get("monthly_limit") != 1
+            or quota_before.get("trial_duration_days") != 7
             or quota_before.get("used") != 0
             or quota_before.get("allowed") is not True
             or quota_before.get("frontend_can_grant_quota") is not False

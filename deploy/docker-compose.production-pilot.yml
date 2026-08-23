@@ -12,7 +12,7 @@ services:
       sbom: true
       provenance: mode=max
     env_file:
-      - ../../private/jiejing-saas.production.env
+      - ${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-saas.production.env
     depends_on:
       jiejing-vault:
         condition: service_healthy
@@ -32,7 +32,7 @@ services:
     volumes:
       - jiejing_production_data:/data
       - jiejing_production_media:/var/lib/jiejing/media-assets
-      - ../../private/jiejing-vault-token.d/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro
+      - ${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-vault-token.d/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro
     networks:
       - jiejing_app
       - jiejing_secrets
@@ -56,7 +56,7 @@ services:
       jiejing-saas:
         condition: service_healthy
     env_file:
-      - ../../private/jiejing-saas.production.env
+      - ${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-saas.production.env
     environment:
       JIEJING_PUBLIC_BASE_URL: "https://${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
       JIEJING_PUBLIC_APP_URL: "https://${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
@@ -71,7 +71,7 @@ services:
     volumes:
       - jiejing_production_data:/data
       - jiejing_production_media:/var/lib/jiejing/media-assets
-      - ../../private/jiejing-vault-token.d/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro
+      - ${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-vault-token.d/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro
     networks:
       - jiejing_app
       - jiejing_secrets
@@ -109,9 +109,9 @@ services:
         - CMD-SHELL
         - >-
           vault status -format=json 2>/dev/null |
-          grep -q '"initialized":true' &&
+          grep -Eq '"initialized"[[:space:]]*:[[:space:]]*true' &&
           vault status -format=json 2>/dev/null |
-          grep -q '"sealed":false'
+          grep -Eq '"sealed"[[:space:]]*:[[:space:]]*false'
       interval: 10s
       timeout: 5s
       retries: 12
@@ -136,7 +136,7 @@ services:
       - tools/jiejing_vault_sealed_paper_ceremony.py
     volumes:
       - ./vault-policy.production.hcl:/run/jiejing-vault-policy/vault-policy.production.hcl:ro
-      - ../../private/jiejing-vault-token.d:/run/jiejing-vault-token-output
+      - ${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-vault-token.d:/run/jiejing-vault-token-output
     networks:
       - jiejing_secrets
     stdin_open: true
@@ -171,17 +171,18 @@ services:
       - >-
         while true; do
           export VAULT_TOKEN="$$(cat /run/secrets/jiejing-vault-token)";
-          test "$$(vault token lookup -field=renewable)" = "true";
-          test "$$(vault token lookup -field=period)" -gt 0;
+          token_json="$$(vault token lookup -format=json)";
+          printf '%s' "$$token_json" | grep -Eq '"renewable"[[:space:]]*:[[:space:]]*true';
+          printf '%s' "$$token_json" | grep -Eq '"period"[[:space:]]*:[[:space:]]*[1-9][0-9]*';
           vault token renew -increment=720h -format=json >/dev/null;
           sleep 21600;
         done
     networks:
       - jiejing_secrets
     volumes:
-      - ../../private/jiejing-vault-token.d/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro
+      - ${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-vault-token.d/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro
     healthcheck:
-      test: ["CMD-SHELL", "export VAULT_TOKEN=$$(cat /run/secrets/jiejing-vault-token); test $$(vault token lookup -field=renewable) = true && test $$(vault token lookup -field=period) -gt 0"]
+      test: ["CMD-SHELL", "export VAULT_TOKEN=$$(cat /run/secrets/jiejing-vault-token); token_json=$$(vault token lookup -format=json) && printf '%s' \"$$token_json\" | grep -Eq '\"renewable\"[[:space:]]*:[[:space:]]*true' && printf '%s' \"$$token_json\" | grep -Eq '\"period\"[[:space:]]*:[[:space:]]*[1-9][0-9]*'"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -205,6 +206,7 @@ services:
       - ../support.html:/usr/share/nginx/html/support.html:ro
       - ../risk-disclosure.html:/usr/share/nginx/html/risk-disclosure.html:ro
       - ./robots.production.txt:/usr/share/nginx/html/robots.txt:ro
+      - ../sitemap.xml:/usr/share/nginx/html/sitemap.xml:ro
       - ../app.js:/usr/share/nginx/html/app.js:ro
       - ../styles.css:/usr/share/nginx/html/styles.css:ro
       - ../favicon.ico:/usr/share/nginx/html/favicon.ico:ro

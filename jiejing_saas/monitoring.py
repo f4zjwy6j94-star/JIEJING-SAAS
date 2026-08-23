@@ -199,13 +199,40 @@ def export_provider_monitoring_aggregate_to_cls(
     access_key = _tencent_secret_key()
     if not re.fullmatch(r"[a-z0-9-]{3,64}", region) or not topic_id or not access_id or not access_key:
         return False
+    return upload_provider_monitoring_aggregate_to_cls(
+        event,
+        region=region,
+        topic_id=topic_id,
+        access_id=access_id,
+        access_key=access_key,
+        client_factory=client_factory,
+        message_factory=message_factory,
+    )
+
+
+def upload_provider_monitoring_aggregate_to_cls(
+    event: dict[str, Any],
+    *,
+    region: str,
+    topic_id: str,
+    access_id: str,
+    access_key: str,
+    client_factory: Any = None,
+    message_factory: Any = None,
+) -> bool:
+    """Upload one allowlisted aggregate through Tencent CloudAPI UploadLog."""
+
+    if set(event) != PROVIDER_MONITOR_AGGREGATE_KEYS or event.get("event_type") != PROVIDER_MONITOR_EVENT_TYPE:
+        return False
+    if not re.fullmatch(r"[a-z0-9-]{3,64}", str(region or "")) or not all(
+        str(value or "").strip() for value in (topic_id, access_id, access_key)
+    ):
+        return False
     try:
         if client_factory is None:
-            from tencentcloud.log.logclient import LogClient  # type: ignore[import-not-found]
-
-            client_factory = LogClient
+            client_factory = _tencent_cloudapi_cls_upload_client
         if message_factory is None:
-            from tencentcloud.log.cls_pb2 import LogGroupList  # type: ignore[import-not-found]
+            from .cls_log_pb2 import LogGroupList
 
             message_factory = LogGroupList
         packet = message_factory()
@@ -224,6 +251,40 @@ def export_provider_monitoring_aggregate_to_cls(
         return True
     except Exception:
         return False
+
+
+class _TencentCloudApiClsUploadClient:
+    def __init__(self, client: Any, request_factory: Any) -> None:
+        self._client = client
+        self._request_factory = request_factory
+        self.timeout = 5
+
+    def put_log_raw(self, topic_id: str, packet: Any) -> Any:
+        request = self._request_factory()
+        request.TopicId = str(topic_id)
+        return self._client.UploadLog(request, packet.SerializeToString())
+
+
+def _tencent_cloudapi_cls_upload_client(endpoint: str, access_id: str, access_key: str) -> Any:
+    from tencentcloud.common import credential
+    from tencentcloud.common.profile.client_profile import ClientProfile
+    from tencentcloud.common.profile.http_profile import HttpProfile
+    from tencentcloud.cls.v20201016 import cls_client, models
+
+    hostname = str(endpoint or "").removeprefix("https://").removeprefix("http://").strip("/")
+    region = hostname.split(".cls.tencentcs.com", 1)[0]
+    if not re.fullmatch(r"[a-z0-9-]{3,64}", region):
+        raise ValueError("invalid CLS region endpoint")
+    http_profile = HttpProfile()
+    http_profile.endpoint = hostname
+    http_profile.reqTimeout = 5
+    client_profile = ClientProfile(httpProfile=http_profile)
+    client = cls_client.ClsClient(
+        credential.Credential(str(access_id), str(access_key)),
+        region,
+        client_profile,
+    )
+    return _TencentCloudApiClsUploadClient(client, models.UploadLogRequest)
 
 
 ALERT_CONTRACTS = [

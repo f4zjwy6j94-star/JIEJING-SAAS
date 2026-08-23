@@ -234,7 +234,8 @@ def main() -> int:
         return fail("precloud next steps must not recommend paid Redis after the production queue moved to Postgres durable")
     if "provision_managed_postgres_and_postgres_durable_queue" not in precloud_gate:
         return fail("precloud next steps must name the selected Postgres durable production queue")
-    if compose.count("../../private/jiejing-saas.production.env") != 2 or "./jiejing-saas.production.env" in compose.replace("../../private/jiejing-saas.production.env", ""):
+    private_env = "${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-saas.production.env"
+    if compose.count(private_env) != 2 or "./jiejing-saas.production.env" in compose.replace(private_env, ""):
         return fail("production credentials must be injected from the server-private env boundary")
     if compose.count("jiejing_production_data:/data") != 2:
         return fail("production API and worker must share one durable application-data volume")
@@ -265,17 +266,35 @@ def main() -> int:
             return fail(f"{public_service} must not be able to reach the Vault network")
     if "vault status -format=json" not in vault_service or "condition: service_healthy" not in compose:
         return fail("API startup must wait for initialized and unsealed Vault health")
+    caddy = (ROOT / "deploy" / "Caddyfile.production").read_text(encoding="utf-8")
+    api_proxy = caddy.split("reverse_proxy @api", 1)[1].split("}", 1)[0] if "reverse_proxy @api" in caddy else ""
+    if "flush_interval -1" not in api_proxy:
+        return fail("streaming API proxy must flush NDJSON immediately")
+    for marker in (
+        "'\"initialized\"[[:space:]]*:[[:space:]]*true'",
+        "'\"sealed\"[[:space:]]*:[[:space:]]*false'",
+    ):
+        if marker not in vault_service:
+            return fail("Vault health must tolerate normal JSON whitespace")
     renewer_block = _compose_service_block(compose, "jiejing-vault-token-renewer")
-    if "vault token renew" not in renewer_block or "vault token lookup -field=renewable" not in renewer_block or "vault token lookup -field=period" not in renewer_block:
+    if "vault token renew" not in renewer_block or "vault token lookup -format=json" not in renewer_block:
         return fail("periodic backend Vault token must be renewed and monitored")
-    token_mount = "../../private/jiejing-vault-token.d/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro"
+    if "-field=renewable" in renewer_block or "-field=period" in renewer_block:
+        return fail("Vault token monitoring must not use unsupported token lookup field flags")
+    for marker in (
+        "'\"renewable\"[[:space:]]*:[[:space:]]*true'",
+        "'\"period\"[[:space:]]*:[[:space:]]*[1-9][0-9]*'",
+    ):
+        if marker not in renewer_block:
+            return fail("Vault token monitoring must validate renewable periodic-token JSON")
+    token_mount = "${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-vault-token.d/jiejing-vault-token:/run/secrets/jiejing-vault-token:ro"
     if token_mount not in compose:
         return fail("API, worker and renewer must share one read-only Vault token file")
     if compose.count(token_mount) != 3:
         return fail("exactly API, worker and renewer must receive the single Vault token file")
     if 'JIEJING_VAULT_TOKEN_FILE: "/run/secrets/jiejing-vault-token"' not in compose:
         return fail("application services must resolve the shared Vault token file")
-    if "../../private/jiejing-saas.production.env" in renewer_block:
+    if private_env in renewer_block:
         return fail("Vault renewer must not receive application, eBay, model, database or payment secrets")
     if "cat /run/secrets/jiejing-vault-token" not in renewer_block:
         return fail("Vault renewer must read the same token file as API and worker")
@@ -297,7 +316,7 @@ def main() -> int:
         "python",
         "tools/jiejing_vault_sealed_paper_ceremony.py",
         "./vault-policy.production.hcl:/run/jiejing-vault-policy/vault-policy.production.hcl:ro",
-        "../../private/jiejing-vault-token.d:/run/jiejing-vault-token-output",
+        "${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-vault-token.d:/run/jiejing-vault-token-output",
         "- jiejing_secrets",
     ):
         if marker not in controller:
@@ -430,6 +449,10 @@ def main() -> int:
         return fail("internal dependency startup probe must not be exposed by the public edge")
     if "./robots.production.txt:/usr/share/nginx/html/robots.txt:ro" not in compose:
         return fail("production frontend must use a production-specific robots policy")
+    if "../sitemap.xml:/usr/share/nginx/html/sitemap.xml:ro" not in compose:
+        return fail("production frontend must mount the real public sitemap")
+    if "pilot.jiejing.shop {" not in caddy or "redir https://app.jiejing.shop{uri} permanent" not in caddy:
+        return fail("pilot domain must permanently redirect to the canonical production domain")
     if "./nginx.production.conf:/etc/nginx/conf.d/default.conf:ro" not in compose or "nginx.public-staging.conf" in compose:
         return fail("production frontend must not reuse the staging host allowlist")
     if "./nginx-security-headers.production.conf:/etc/nginx/snippets/jiejing-security-headers.conf:ro" not in compose:
@@ -443,6 +466,7 @@ def main() -> int:
     for marker in (
         "server_name _;",
         "location = /app.html",
+        "location = /sitemap.xml",
         "return 302 https://$host/index.html?source=direct_app_entry&start=site",
         "location = /ops.html { return 404; }",
         "location ~* \\.map$",
@@ -500,8 +524,10 @@ def main() -> int:
     if owner_launch_control.count("https://app.jiejing.shop") != 1 or "JIEJING_PUBLIC_BASE_URL" not in owner_launch_control:
         return fail("production owner proof links must derive from JIEJING_PUBLIC_BASE_URL, with staging only as the default fallback")
     api_server_source = API_SERVER.read_text(encoding="utf-8")
-    if 'environment == "production" and not readiness.get("production_ready")' in api_server_source:
-        return fail("safe-held production candidates must boot before paid/public readiness is approved")
+    if 'and _readiness_has_startup_blockers(readiness)' not in api_server_source:
+        return fail("production startup must block on actual blockers instead of warning-only readiness")
+    if 'and not readiness.get("production_ready")' in api_server_source:
+        return fail("warning-only readiness must not turn a production restart into an outage")
     if "JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED" not in api_server_source:
         return fail("production candidate boot must require an explicit fail-closed deployment flag")
     if "effective_ebay_draft_save_enabled" not in api_server_source:

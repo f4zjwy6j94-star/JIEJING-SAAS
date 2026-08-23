@@ -7,6 +7,7 @@ Disallow: /billing/
 Disallow: /confirmations
 Disallow: /execution-results
 Disallow: /audit-logs
+Sitemap: https://app.jiejing.shop/sitemap.xml
 
 User-agent: GPTBot
 Disallow: /

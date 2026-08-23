@@ -37,6 +37,7 @@ ENV_KEYS = (
     "JIEJING_VAULT_TOKEN",
     "JIEJING_VAULT_MOUNT",
     "JIEJING_VAULT_KEYSPACE",
+    "JIEJING_VAULT_LIVE_PROBE_PASSED",
     "JIEJING_CLS_ENABLED",
     "JIEJING_CLS_REGION",
     "JIEJING_CLS_LOGSET_ID",
@@ -137,6 +138,27 @@ def main() -> int:
         vault_adapter = build_vault_adapter_contract(settings)
         readiness = build_product_readiness(settings, repo)
         launch_gate = build_commercial_launch_gate(settings, repo)
+        os.environ["JIEJING_SAAS_ENV"] = "production"
+        os.environ.pop("JIEJING_VAULT_LIVE_PROBE_PASSED", None)
+        production_vault_pending = build_vault_adapter_contract(
+            SaaSSettings.from_env(
+                db_path=db_path,
+                runtime_db_path=runtime_db_path,
+                output_root=OUT,
+                host="127.0.0.1",
+                port=8788,
+            )
+        )
+        os.environ["JIEJING_VAULT_LIVE_PROBE_PASSED"] = "true"
+        production_vault_verified = build_vault_adapter_contract(
+            SaaSSettings.from_env(
+                db_path=db_path,
+                runtime_db_path=runtime_db_path,
+                output_root=OUT,
+                host="127.0.0.1",
+                port=8788,
+            )
+        )
     finally:
         _restore_env(previous)
 
@@ -163,6 +185,12 @@ def main() -> int:
         return fail("Configured backend Vault resolver should satisfy the Vault contract readiness field")
     if vault_adapter.get("production_blockers"):
         return fail(f"staging Vault contract should not keep production blockers: {vault_adapter.get('production_blockers')}")
+    if "secret_rotation_revoke_live_client_pending" not in production_vault_pending.get("production_blockers", []):
+        return fail("production Vault must remain blocked before a value-free live write/resolve/rotate/revoke probe")
+    if production_vault_verified.get("production_blockers"):
+        return fail(f"verified production Vault probe should close the adapter blocker: {production_vault_verified.get('production_blockers')}")
+    if production_vault_verified.get("live_rotation_revoke_probe_passed") is not True:
+        return fail("production Vault contract must expose only the boolean live probe result")
 
     readiness_items = {item.get("key"): item for item in readiness.get("items") or []}
     if readiness_items.get("database_adapter_contract", {}).get("status") != "managed_adapter_live":

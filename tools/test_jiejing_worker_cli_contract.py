@@ -268,8 +268,10 @@ def main() -> int:
     if set(contents) != set(exported_events[0]):
         return fail(f"CLS upload added or dropped aggregate keys: {contents}")
     requirements = (ROOT / "requirements.saas.txt").read_text(encoding="utf-8")
-    if "tencentcloud-cls-sdk-python>=1.0.4,<2" not in requirements:
-        return fail("runtime must ship the official protobuf-capable Tencent CLS upload SDK")
+    if "tencentcloud-cls-sdk-python" in requirements:
+        return fail("runtime must not retain the legacy CLS SDK that pins vulnerable protobuf 3.x")
+    if "tencentcloud-sdk-python-cls>=3.0,<4" not in requirements or "protobuf>=5.29.5,<6" not in requirements:
+        return fail("runtime must use Tencent CloudAPI CLS with a patched protobuf runtime")
     dockerfile = (ROOT / "Dockerfile.saas").read_text(encoding="utf-8")
     runtime_stage = dockerfile.find(" AS jiejing-runtime")
     if min(

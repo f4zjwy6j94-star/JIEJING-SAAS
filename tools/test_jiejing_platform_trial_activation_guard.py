@@ -57,8 +57,8 @@ def main() -> int:
     first = activated.get("first") if isinstance(activated.get("first"), dict) else {}
     second = activated.get("second") if isinstance(activated.get("second"), dict) else {}
     third = activated.get("third") if isinstance(activated.get("third"), dict) else {}
-    if first.get("status") != "active" or first.get("welcome_media_points_granted") != 300:
-        return fail(f"first server-verified registration should receive the welcome trial: {first}")
+    if first.get("status") != "active" or first.get("welcome_media_points_granted") != 0:
+        return fail(f"server-verified registration may receive managed AI trial calls but not free media points: {first}")
     if first.get("decision_reason") != "server_verified_challenge_and_daily_budget_passed":
         return fail(f"successful activation must prove server verification, not an environment flag: {first}")
     if missing.get("status") != "verification_required" or missing.get("platform_trial_allowed") is not False:

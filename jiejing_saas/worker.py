@@ -24,6 +24,7 @@ from .provider_job_runner import ProviderJobRunner
 from .media_source_assets import MediaSourceAssetError, MediaSourceAssetStore
 from .operations_metering import media_cost_measurement, provider_telemetry_from_result
 from .repository import SaaSRepository
+from .media_credits import actual_media_points_from_output
 from .runtime_bridge import RuntimeBridge
 from .vault_secret_resolver import VaultSecretResolver
 
@@ -680,7 +681,7 @@ class LocalQueueWorker:
         manifest = output_packet.get("asset_manifest") if isinstance(output_packet.get("asset_manifest"), list) else []
         usable_result = live_provider_called and bool(manifest) and not str(provider_output.get("status") or "").startswith("failed")
         operation = "settle" if usable_result else "release"
-        points, points_source = self._reported_media_points(provider_output, reserved_points=reserved_points)
+        points, points_source = actual_media_points_from_output(quote, provider_output)
         if not usable_result:
             points = reserved_points
             points_source = "full_reservation_release"

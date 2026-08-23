@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas import readiness
+from jiejing_saas import api_server
 from jiejing_saas.billing_wechat_pay import (
     build_public_commercial_release_contract,
     build_wechat_pay_native_contract,
@@ -121,9 +122,15 @@ def _configure_wechat_and_release() -> None:
 
 def _payment_summary() -> dict[str, object]:
     return {
+        "merchant_status": "controlled_acceptance_proven",
+        "domestic_payment_status": "controlled_acceptance_proven",
+        "payment_path_status": "controlled_acceptance_proven_public_charging_closed",
         "mainland_payment_ready_for_owner_approval": True,
+        "provider_configured": True,
         "configured_component_count": 9,
         "required_component_count": 9,
+        "controlled_acceptance_proven": True,
+        "verified_paid_order_count": 1,
         "next_paid_launch_blocker": "public_charging_owner_approval_required",
     }
 
@@ -167,6 +174,55 @@ def main() -> int:
         if item.status != "ready" or item.severity != "info":
             return fail(f"approved public commercial release must close billing warning: {item}")
 
+        original_plan = readiness.build_billing_plan
+        original_validator = readiness._validated_public_mainland_payment
+        try:
+            readiness.build_billing_plan = lambda *_args, **_kwargs: {
+                "contract_version": "billing-plan-test-v1",
+                "billing_ready_for_private_beta": True,
+                "mainland_payment_launch": {},
+                "quota_contract": {"enabled": True},
+                "plan_catalog": [{"key": "starter"}],
+            }
+            readiness._validated_public_mainland_payment = lambda _value: _payment_summary()
+            public_billing = readiness._public_billing_status(object(), object())
+        finally:
+            readiness.build_billing_plan = original_plan
+            readiness._validated_public_mainland_payment = original_validator
+        if not all(
+            public_billing.get(key) is True
+            for key in ("billing_ready_for_paid_launch", "public_charging_allowed", "charge_now_allowed")
+        ):
+            return fail(f"public readiness must reflect the exact active release: {public_billing}")
+        if public_billing.get("paid_launch_blockers") != [] or public_billing.get("triggers_real_charge") is not False:
+            return fail(f"public billing read model must be active without charging on GET: {public_billing}")
+        safe_public_billing = api_server._public_safe_billing_summary(public_billing)
+        if not all(
+            safe_public_billing.get(key) is True
+            for key in ("billing_ready_for_paid_launch", "public_charging_allowed", "charge_now_allowed")
+        ):
+            return fail(f"public billing sanitizer drifted from the exact release: {safe_public_billing}")
+        original_api_validator = api_server.validate_mainland_payment_launch_for_public
+        try:
+            api_server.validate_mainland_payment_launch_for_public = lambda _value: _payment_summary()
+            merchant_billing = api_server.SaaSBackendHandler._merchant_safe_billing_plan(
+                {
+                    "contract_version": "billing-plan-test-v1",
+                    "billing_ready_for_private_beta": True,
+                    "mainland_payment_launch": {},
+                    "quota_contract": {"enabled": True, "metered_units": []},
+                    "plan_catalog": [],
+                    "add_on_catalog": [],
+                }
+            )
+        finally:
+            api_server.validate_mainland_payment_launch_for_public = original_api_validator
+        if not all(
+            merchant_billing.get(key) is True
+            for key in ("billing_ready_for_paid_launch", "public_charging_allowed", "charge_now_allowed")
+        ) or merchant_billing.get("provider", {}).get("available") is not True:
+            return fail(f"merchant billing control room drifted from the exact release: {merchant_billing}")
+
         fail_closed_cases = {
             "JIEJING_PRODUCTION_RELEASE_OWNER_APPROVAL_PACKET_ID": "",
             "JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED": "true",
@@ -180,12 +236,16 @@ def main() -> int:
             try:
                 blocked_release = build_public_commercial_release_contract()
                 blocked_wechat = build_wechat_pay_native_contract()
+                blocked_public = api_server._public_safe_billing_summary(public_billing)
             finally:
                 os.environ[key] = previous
             if blocked_release.get("approved") is not False:
                 return fail(f"unsafe release mutation must fail closed: {key}")
             if blocked_wechat.get("charge_now_allowed") is not False:
                 return fail(f"unsafe release mutation must close real checkout: {key}")
+
+            if blocked_public.get("public_charging_allowed") is not False:
+                return fail(f"public billing read model must fail closed with the release: {key}")
 
     print("PASS jiejing_public_commercial_release_state")
     return 0

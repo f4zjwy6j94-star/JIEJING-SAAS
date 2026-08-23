@@ -2,6 +2,10 @@
 	email {$JIEJING_ACME_EMAIL}
 }
 
+pilot.jiejing.shop {
+	redir https://app.jiejing.shop{uri} permanent
+}
+
 {$JIEJING_PRODUCTION_HOST} {
 	encode zstd gzip
 
@@ -30,6 +34,9 @@
 	@api path /health /health/deep /operational-health /schema /schema/chain /platforms /platforms/* /infrastructure /infrastructure/drivers /infrastructure/* /product-feedback /product-feedback/* /readiness /readiness/* /auth/* /analytics/* /me /companies* /permissions/* /team/* /owner /owner/* /stores* /connections* /secret-refs* /vault/* /database/* /domain/* /queue/* /backup/* /monitoring/* /billing /billing/* /model/* /commercial/* /post-publish/* /provider-job-contracts /independence/* /controlled-bridges /controlled-bridges/* /security/* /ebay-read-only/* /ebay-oauth/* /ebay-write/* /execution/* /oauth/* /data-packets /data-packets/* /ip-risk-screening /ip-risk-screening/* /merchant-memory /merchant-memory/* /merchant-onboarding/* /ai-ceo/* /tasks* /queue-jobs* /media-asset-jobs* /media-source-assets /media-source-assets/* /reports* /confirmations* /execution-results* /audit-logs* /workers/* /webhooks/*
 	header @api X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
 	reverse_proxy @api jiejing-saas:8788 {
+		# AI CEO uses NDJSON streaming. Disable proxy response buffering so the
+		# first safe model fragment reaches the browser as soon as it is emitted.
+		flush_interval -1
 		header_down -X-Frame-Options
 		header_down -X-Content-Type-Options
 		header_down -Referrer-Policy

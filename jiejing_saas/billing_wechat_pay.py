@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from .repository import SaaSRepository
+from .media_credits import grant_plan_media_points
 
 
 WECHAT_PAY_PROVIDER = "wechat_pay_native"
@@ -1433,7 +1434,12 @@ def _apply_verified_transaction_locked(
                 idempotency_key=f"wechat-paid:{order_id}:media-points:v1",
                 reference_type="billing_order",
                 reference_id=order_id,
-                details={"purchase_type": "media_points", "pack_key": str(order.get("plan_key") or "")},
+                details={
+                    "credit_source": "purchased",
+                    "source_reference_id": order_id,
+                    "purchase_type": "media_points",
+                    "pack_key": str(order.get("plan_key") or ""),
+                },
             )
         except (RuntimeError, ValueError):
             return _blocked("media_credit_grant_not_applied", http_status=500)
@@ -1466,6 +1472,17 @@ def _apply_verified_transaction_locked(
     blockers = entitlement.get("entitlement_apply_blockers") if isinstance(entitlement.get("entitlement_apply_blockers"), list) else []
     if blockers:
         return _blocked("billing_entitlement_not_applied", http_status=500, blocked_by=blockers)
+    try:
+        plan_media_points = grant_plan_media_points(
+            repository,
+            company_id=str(order["company_id"]),
+            user_id=str(order.get("user_id") or "") or None,
+            plan_key=str(order["plan_key"]),
+            order_id=order_id,
+            expires_at=entitlement_active_until,
+        )
+    except (RuntimeError, ValueError):
+        return _blocked("plan_media_credit_grant_not_applied", http_status=500)
     return {
         "ok": True,
         "status": "payment_confirmed",
@@ -1475,6 +1492,7 @@ def _apply_verified_transaction_locked(
         "amount_minor": received_amount,
         "currency": received_currency,
         "entitlement_active": True,
+        "media_points_granted": int(plan_media_points.get("points_granted") or 0),
         "duplicate_notification": duplicate_notification or bool(entitlement.get("duplicate_event")),
         "verification_source": verification_source,
         "raw_payload_persisted": False,
@@ -1532,7 +1550,12 @@ def recover_paid_wechat_pay_entitlement(
                     idempotency_key=f"wechat-paid:{normalized_order}:media-points:v1",
                     reference_type="billing_order",
                     reference_id=normalized_order,
-                    details={"purchase_type": "media_points", "pack_key": str(order.get("plan_key") or "")},
+                    details={
+                        "credit_source": "purchased",
+                        "source_reference_id": normalized_order,
+                        "purchase_type": "media_points",
+                        "pack_key": str(order.get("plan_key") or ""),
+                    },
                 )
             except (RuntimeError, ValueError):
                 return _blocked("media_credit_grant_not_applied", http_status=500)
@@ -1556,6 +1579,17 @@ def recover_paid_wechat_pay_entitlement(
             return _blocked("paid_order_entitlement_evidence_incomplete", http_status=500)
 
         _, entitlement_active_until = window
+        try:
+            grant_plan_media_points(
+                repository,
+                company_id=normalized_company,
+                user_id=str(order.get("user_id") or "") or None,
+                plan_key=str(order.get("plan_key") or ""),
+                order_id=normalized_order,
+                expires_at=entitlement_active_until,
+            )
+        except (RuntimeError, ValueError):
+            return _blocked("plan_media_credit_grant_not_applied", http_status=500)
         subscription = repository.get_billing_subscription(company_id=normalized_company)
         subscription_payload = (
             subscription.get("subscription")

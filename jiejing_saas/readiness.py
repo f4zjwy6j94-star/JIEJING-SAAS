@@ -1628,17 +1628,35 @@ def _public_billing_status(settings: SaaSSettings, repository: SaaSRepository) -
             legacy_launch_path.get("secret_exposed") is False,
         )
     )
-    public_paid_launch_blockers = [payment["next_paid_launch_blocker"]]
+    wechat_contract = build_wechat_pay_native_contract()
+    public_checkout_active = all(
+        (
+            payment["mainland_payment_ready_for_owner_approval"] is True,
+            wechat_contract.get("public_commercial_release_approved") is True,
+            wechat_contract.get("real_checkout_ready") is True,
+            wechat_contract.get("charge_now_allowed") is True,
+        )
+    )
+    payment_path_status = (
+        "public_checkout_available" if public_checkout_active else payment["payment_path_status"]
+    )
+    domestic_payment_status = (
+        "public_checkout_available" if public_checkout_active else payment["domestic_payment_status"]
+    )
+    public_paid_launch_blockers = [] if public_checkout_active else [payment["next_paid_launch_blocker"]]
     return {
         "contract_version": plan.get("contract_version"),
         "billing_ready_for_private_beta": plan.get("billing_ready_for_private_beta") is True,
-        "billing_ready_for_paid_launch": False,
+        "billing_ready_for_paid_launch": public_checkout_active,
+        "public_commercial_release_contract_version": wechat_contract.get(
+            "commercial_release_contract_version"
+        ),
         "mainland_payment_ready_for_owner_approval": payment["mainland_payment_ready_for_owner_approval"],
         "provider": "wechat_pay_native",
         "checkout_mode": "native_qr",
         "billing_mode": "one_time_30_day_plan",
         "provider_configured": payment["provider_configured"],
-        "payment_path_status": payment["payment_path_status"],
+        "payment_path_status": payment_path_status,
         "configured_component_count": payment["configured_component_count"],
         "required_component_count": payment["required_component_count"],
         "verified_paid_order_count": payment["verified_paid_order_count"],
@@ -1654,12 +1672,14 @@ def _public_billing_status(settings: SaaSSettings, repository: SaaSRepository) -
                 else "2026-07-27-merchant-mainland-payment-path-v1"
             ),
             "current_stage": (
-                "invited_beta_no_real_charge" if private_beta_test_active else payment["payment_path_status"]
+                "public_checkout_available"
+                if public_checkout_active
+                else "invited_beta_no_real_charge" if private_beta_test_active else payment["payment_path_status"]
             ),
             "headline": "merchant_payment_status_available_in_billing_control_room",
-            "current_charge_status": "no_real_charge_now",
-            "public_paid_launch_allowed": False,
-            "charge_now_allowed": False,
+            "current_charge_status": "checkout_available" if public_checkout_active else "no_real_charge_now",
+            "public_paid_launch_allowed": public_checkout_active,
+            "charge_now_allowed": public_checkout_active,
             "triggers_real_charge": False,
             "checkout_mode": "native_qr",
             "billing_mode": "one_time_30_day_plan",
@@ -1676,21 +1696,21 @@ def _public_billing_status(settings: SaaSSettings, repository: SaaSRepository) -
             "provider": "wechat_pay_native",
             "checkout_mode": "native_qr",
             "billing_mode": "one_time_30_day_plan",
-            "status": payment["domestic_payment_status"],
+            "status": domestic_payment_status,
             "configured_component_count": payment["configured_component_count"],
             "required_component_count": payment["required_component_count"],
             "controlled_acceptance_proven": payment["controlled_acceptance_proven"],
             "verified_paid_order_count": payment["verified_paid_order_count"],
-            "public_charging_allowed": False,
-            "charge_now_allowed": False,
+            "public_charging_allowed": public_checkout_active,
+            "charge_now_allowed": public_checkout_active,
             "triggers_real_charge": False,
             "triggers_real_refund": False,
             "calls_external_payment_api": False,
             "frontend_gets_payment_secret": False,
             "secret_exposed": False,
         },
-        "public_charging_allowed": False,
-        "charge_now_allowed": False,
+        "public_charging_allowed": public_checkout_active,
+        "charge_now_allowed": public_checkout_active,
         "triggers_real_charge": False,
         "triggers_real_refund": False,
         "calls_external_payment_api": False,
@@ -1835,11 +1855,14 @@ def _public_search_status() -> dict[str, Any]:
 def _ai_ceo_platform_model_status(platform_model_status: dict[str, Any] | None = None) -> dict[str, Any]:
     safe_status = dict(platform_model_status or build_platform_default_model_status())
     monthly_limit = _nonnegative_int_env("JIEJING_AI_CEO_PLATFORM_MODEL_TRIAL_MONTHLY_LIMIT", 20)
+    trial_duration_days = max(1, _nonnegative_int_env("JIEJING_AI_CEO_PLATFORM_MODEL_TRIAL_DURATION_DAYS", 7))
     safe_status.update({
-        "contract_version": "2026-07-10-ai-ceo-platform-model-trial",
+        "contract_version": "2026-08-22-ai-ceo-platform-model-seven-day-trial",
+        "trial_request_limit": monthly_limit,
         "trial_monthly_limit": monthly_limit,
+        "trial_duration_days": trial_duration_days,
         "trial_quota_source": "backend_task_audit",
-        "trial_quota_scope": "account_month",
+        "trial_quota_scope": "account_trial_window",
         "usage_owner": "jiejing_platform_trial",
         "usage_owner_label": "捷境试用 AI",
         "quota_checked_by_backend": True,

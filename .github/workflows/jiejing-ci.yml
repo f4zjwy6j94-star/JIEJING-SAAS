@@ -82,6 +82,7 @@ jobs:
           python tools/test_jiejing_production_pilot_contract.py
           python tools/test_jiejing_vault_sealed_paper_ceremony.py
           python tools/test_jiejing_staging_deploy_channel_contract.py
+          python tools/test_jiejing_production_deploy_channel.py
           python tools/test_jiejing_staging_patch_apply_contract.py
           python tools/test_jiejing_agents_md_guardrails.py
           python tools/test_jiejing_github_actions_deploy_guardrails.py

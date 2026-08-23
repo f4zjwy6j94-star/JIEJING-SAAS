@@ -157,6 +157,9 @@
         return api(path, { ...options, opsRequestRetriedAfterRefresh: true });
       }
       if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          expireOpsSession(response.status);
+        }
         const error = new Error(payload.error || payload.message || `请求失败 (${response.status})`);
         error.status = response.status;
         throw error;
@@ -230,6 +233,18 @@
     elements.login.hidden = screen !== "login";
     elements.denied.hidden = screen !== "denied";
     elements.app.hidden = screen !== "app";
+  }
+
+  function expireOpsSession(status) {
+    state.overview = null;
+    state.details.clear();
+    state.identity = null;
+    state.loading = false;
+    elements.identity.textContent = "";
+    elements.content.innerHTML = '<div class="ops-empty">登录已过期，旧经营数据已从当前页面清除。</div>';
+    elements.dataStatus.textContent = "登录已过期，请重新登录";
+    elements.updatedAt.textContent = "";
+    setScreen(status === 403 ? "denied" : "login");
   }
 
   function setLoading(loading, copy = "正在读取真实数据") {
@@ -606,7 +621,9 @@
       const total = Number(item.request_count || 0);
       const success = Number(item.success_count || 0);
       const successRate = total ? `${((success / total) * 100).toFixed(1)}%` : "暂无样本";
-      return `<article class="ops-reliability-item"><header><strong>${escapeHtml(label)}</strong>${pill(item.status, item.status === "instrumented" ? "已采集" : "暂无样本")}</header><dl><div><dt>成功率</dt><dd>${escapeHtml(successRate)}</dd></div><div><dt>P75</dt><dd>${item.p75_duration_ms == null ? "-" : `${formatNumber(item.p75_duration_ms)} ms`}</dd></div><div><dt>超时</dt><dd>${formatNumber(item.timeout_count)}</dd></div></dl></article>`;
+      const firstOutput = item.p75_first_output_ms == null ? "-" : `${formatNumber(item.p75_first_output_ms)} ms`;
+      const fullDuration = item.p75_duration_ms == null ? "-" : `${formatNumber(item.p75_duration_ms)} ms`;
+      return `<article class="ops-reliability-item"><header><strong>${escapeHtml(label)}</strong>${pill(item.status, item.status === "instrumented" ? "已采集" : "暂无样本")}</header><dl><div><dt>成功率</dt><dd>${escapeHtml(successRate)}</dd></div><div><dt>首段 P75</dt><dd>${firstOutput}</dd></div><div><dt>完整 P75</dt><dd>${fullDuration}</dd></div><div><dt>超时</dt><dd>${formatNumber(item.timeout_count)}</dd></div></dl></article>`;
     }).join("");
     const alerts = reliability.alerts || {};
     elements.content.innerHTML = `<div class="ops-metrics">${metric("严重告警", formatNumber(alerts.critical_count), "达到严重阈值的链路", Number(alerts.critical_count) ? "is-critical" : "")}${metric("关注告警", formatNumber(alerts.attention_count), "需要观察或处理", Number(alerts.attention_count) ? "is-attention" : "")}${metric("模型计量健康", statusLabel(overview.model_cost_analytics?.current_metering_health), "只统计当前计量窗口")}${metric("页面性能样本", formatNumber(overview.performance_analytics?.sample_count), "真实浏览器性能采样")}</div>${reliabilityAlertDetails(alerts)}<section class="ops-panel"><div class="ops-section-head"><div><h2>核心链路</h2><p>供应商中性指标；不记录原始错误、查询或回复。</p></div></div><div class="ops-reliability-list">${cards}</div></section>`;
@@ -747,6 +764,7 @@
         try {
           await api(path, { method: "POST", body: { feedback_id: feedbackId } });
         } catch (error) {
+          if (error?.status === 401 || error?.status === 403) return;
           showAlert(error.message || "反馈状态更新失败");
           button.disabled = false;
           setLoading(false, "反馈状态更新失败");

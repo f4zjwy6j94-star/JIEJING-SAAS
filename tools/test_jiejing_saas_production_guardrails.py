@@ -8,9 +8,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "output" / "jiejing-saas-backend" / "guardrail-test"
+sys.path.insert(0, str(ROOT))
+
+from jiejing_saas.api_server import _readiness_has_startup_blockers
 
 
 def fail(message: str) -> int:
@@ -20,6 +22,21 @@ def fail(message: str) -> int:
 
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
+
+    warning_only_readiness = {
+        "production_ready": False,
+        "blocker_count": 0,
+        "warning_count": 1,
+        "items": [{"severity": "warning", "status": "blocked_provider_monitoring_evidence"}],
+    }
+    if _readiness_has_startup_blockers(warning_only_readiness):
+        return fail("warning-only readiness must not turn a production restart into an outage")
+    if not _readiness_has_startup_blockers({"production_ready": False, "blocker_count": 1}):
+        return fail("a real readiness blocker must still refuse normal production startup")
+    if not _readiness_has_startup_blockers({"production_ready": False}):
+        return fail("missing blocker counts must fail closed")
+    if not _readiness_has_startup_blockers({"production_ready": False, "blocker_count": True}):
+        return fail("malformed blocker counts must fail closed")
 
     env = os.environ.copy()
     env["JIEJING_SAAS_ENV"] = "production"

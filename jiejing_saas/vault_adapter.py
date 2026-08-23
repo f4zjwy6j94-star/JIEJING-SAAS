@@ -8,6 +8,7 @@ Tencent Cloud KMS, Alibaba Cloud KMS, or HashiCorp Vault.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from .config import SaaSSettings
@@ -161,6 +162,7 @@ def build_vault_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
         and resolver_status.get("managed_client_implemented")
         and resolver_status.get("managed_live_resolution_ready")
     )
+    live_rotation_revoke_probe_passed = _env_bool("JIEJING_VAULT_LIVE_PROBE_PASSED")
     if live_adapter_implemented:
         selected.update(
             {
@@ -189,7 +191,7 @@ def build_vault_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
             blockers.append("live_tencent_ssm_client_not_ready")
     elif live_enabled and not live_adapter_implemented:
         blockers.append("live_vault_client_not_implemented")
-    if settings.environment == "production" and live_adapter_implemented:
+    if settings.environment == "production" and live_adapter_implemented and not live_rotation_revoke_probe_passed:
         blockers.append("secret_rotation_revoke_live_client_pending")
     return {
         "selected_adapter": selected,
@@ -199,6 +201,7 @@ def build_vault_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
         "live_adapter_implemented": live_adapter_implemented,
         "contract_ready": bool(live_enabled and live_adapter_implemented and not blockers),
         "managed_live_resolution_ready": bool(resolver_status.get("managed_live_resolution_ready")),
+        "live_rotation_revoke_probe_passed": live_rotation_revoke_probe_passed,
         "resolver_status": {
             "provider": resolver_status.get("provider"),
             "status": resolver_status.get("status"),
@@ -229,6 +232,10 @@ def build_vault_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
         },
         "secret_exposed": False,
     }
+
+
+def _env_bool(name: str) -> bool:
+    return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def build_secret_resolution_plan(

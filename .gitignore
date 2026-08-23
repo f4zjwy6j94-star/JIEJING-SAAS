@@ -4,6 +4,7 @@ screenshots/
 test-results/
 external_references/
 .playwright-cli/
+.superpowers/
 CC-desktop-zh-cn-WIN-portable-main/
 .cache/
 .venv/

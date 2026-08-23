@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import sys
 import time
@@ -16,6 +17,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from jiejing_saas.repository import SaaSRepository  # noqa: E402
 
 OUT = ROOT / "output" / "test-jiejing-publish-confirmation-intake"
 SAAS_DB = OUT / "saas.sqlite"
@@ -129,6 +132,13 @@ def main() -> int:
         confirmation = result.get("confirmation", {})
         if confirmation.get("action_type") != "publish_listing" or confirmation.get("status") != "pending":
             return fail(f"publish intake should create a pending publish confirmation: {result}")
+        with sqlite3.connect(SAAS_DB) as conn:
+            publish_task_status = conn.execute(
+                "select status from tasks where task_id = ?",
+                (confirmation.get("task_id"),),
+            ).fetchone()[0]
+        if publish_task_status != "waiting_confirmation":
+            return fail(f"publish intake task must show its real waiting state: {publish_task_status}")
         if result.get("real_platform_writes_enabled") is not False:
             return fail("local publish intake must not enable real writes")
         if confirmation.get("item", {}).get("listing_project_identity", {}).get("key") != "listing-project-unit-fresh-bumper":
@@ -202,6 +212,13 @@ def main() -> int:
         draft_confirmation = draft_result.get("confirmation", {})
         if draft_confirmation.get("action_type") != "save_ebay_listing_draft" or draft_confirmation.get("status") != "pending":
             return fail(f"draft intake should create a distinct pending eBay draft confirmation: {draft_result}")
+        with sqlite3.connect(SAAS_DB) as conn:
+            draft_task_status = conn.execute(
+                "select status from tasks where task_id = ?",
+                (draft_confirmation.get("task_id"),),
+            ).fetchone()[0]
+        if draft_task_status != "waiting_confirmation":
+            return fail(f"draft intake task must show its real waiting state: {draft_task_status}")
         if draft_confirmation.get("item", {}).get("creates_public_listing") is not False:
             return fail(f"draft confirmation must explicitly prove it cannot create a public listing: {draft_confirmation}")
         if draft_confirmation.get("item", {}).get("requires_publish_offer_call") is not False:
@@ -225,6 +242,13 @@ def main() -> int:
         )
         if draft_decision.get("confirmation", {}).get("status") != "approved":
             return fail(f"merchant should be able to approve the distinct draft-save confirmation: {draft_decision}")
+        with sqlite3.connect(SAAS_DB) as conn:
+            approved_task_status = conn.execute(
+                "select status from tasks where task_id = ?",
+                (draft_confirmation.get("task_id"),),
+            ).fetchone()[0]
+        if approved_task_status != "approved_waiting_execution":
+            return fail(f"approved draft task must show its real execution state: {approved_task_status}")
         draft_execution = post_json(
             f"{base_url}/confirmations/{draft_confirmation_id}/execute",
             {"platform": "ebay", "idempotency_key": "draft-intake-unit-fresh-bumper"},
@@ -240,6 +264,32 @@ def main() -> int:
             return fail(f"draft intent must distinguish an external draft write from public publish: {draft_intent}")
         if draft_intent.get("requires_publish_offer_call") is not False:
             return fail(f"draft intent must explicitly prohibit publishOffer: {draft_intent}")
+        with sqlite3.connect(SAAS_DB) as conn:
+            completed_task_status = conn.execute(
+                "select status from tasks where task_id = ?",
+                (draft_confirmation.get("task_id"),),
+            ).fetchone()[0]
+        if completed_task_status != "completed_no_platform_write":
+            return fail(f"simulated draft task must close instead of remaining queued: {completed_task_status}")
+        with sqlite3.connect(SAAS_DB) as conn:
+            conn.execute(
+                "update tasks set status = 'queued' where task_id = ?",
+                (draft_confirmation.get("task_id"),),
+            )
+        repository = SaaSRepository(SAAS_DB)
+        dry_run = repository.reconcile_confirmation_managed_tasks(apply=False)
+        if dry_run.get("candidate_count") != 1 or dry_run.get("provider_write_attempted") is not False:
+            return fail(f"task reconciliation dry-run must be exact and value-free: {dry_run}")
+        with sqlite3.connect(SAAS_DB) as conn:
+            still_queued = conn.execute(
+                "select status from tasks where task_id = ?",
+                (draft_confirmation.get("task_id"),),
+            ).fetchone()[0]
+        if still_queued != "queued":
+            return fail("task reconciliation dry-run mutated data")
+        applied = repository.reconcile_confirmation_managed_tasks(apply=True)
+        if applied.get("transition_counts") != {"queued->completed": 1}:
+            return fail(f"task reconciliation apply result is wrong: {applied}")
         print("PASS jiejing_publish_confirmation_intake")
         return 0
     finally:

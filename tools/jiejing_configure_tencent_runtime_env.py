@@ -1451,8 +1451,7 @@ def verify_provider_cls_probe(
 
 def _upload_provider_probe_to_cls(event: dict[str, Any], values: dict[str, str]) -> bool:
     try:
-        from tencentcloud.log.cls_pb2 import LogGroupList
-        from tencentcloud.log.logclient import LogClient
+        from jiejing_saas.monitoring import upload_provider_monitoring_aggregate_to_cls
 
         if set(event) != PROVIDER_MONITOR_AGGREGATE_KEYS or event.get("probe") is not True:
             return False
@@ -1462,19 +1461,13 @@ def _upload_provider_probe_to_cls(event: dict[str, Any], values: dict[str, str])
         secret_key = values.get("JIEJING_TENCENT_SECRET_KEY") or ""
         if not all((region, topic_id, secret_id, secret_key)):
             return False
-        packet = LogGroupList()
-        group = packet.logGroupList.add()
-        log = group.logs.add()
-        log.time = int(time.time() * 1_000_000)
-        for key in sorted(PROVIDER_MONITOR_AGGREGATE_KEYS):
-            content = log.contents.add()
-            content.key = key
-            value = event[key]
-            content.value = str(value).lower() if isinstance(value, bool) else str(value)
-        client = LogClient(f"https://{region}.cls.tencentcs.com", secret_id, secret_key)
-        client.timeout = 5
-        client.put_log_raw(topic_id, packet)
-        return True
+        return upload_provider_monitoring_aggregate_to_cls(
+            event,
+            region=region,
+            topic_id=topic_id,
+            access_id=secret_id,
+            access_key=secret_key,
+        )
     except Exception:
         return False
 

@@ -14,6 +14,7 @@ import sqlite3
 import sys
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -215,6 +216,8 @@ REFRESH_TTL_SECONDS_DEFAULT = 30 * 24 * 60 * 60
 MEDIA_PROVIDER_JOB_KEYS = {"media.asset_generation", "media.fal_asset_generation"}
 PLATFORM_MODEL_TRIAL_MONTHLY_LIMIT_ENV = "JIEJING_AI_CEO_PLATFORM_MODEL_TRIAL_MONTHLY_LIMIT"
 PLATFORM_MODEL_TRIAL_DEFAULT_MONTHLY_LIMIT = 20
+PLATFORM_MODEL_TRIAL_DURATION_DAYS_ENV = "JIEJING_AI_CEO_PLATFORM_MODEL_TRIAL_DURATION_DAYS"
+PLATFORM_MODEL_TRIAL_DEFAULT_DURATION_DAYS = 7
 PLATFORM_TRIAL_ACTIVATION_WINDOW_SECONDS = 24 * 60 * 60
 PLATFORM_TRIAL_ACTIVATION_MAX_PER_IP_DEFAULT = 3
 PLATFORM_TRIAL_ACTIVATION_MAX_GLOBAL_DEFAULT = 200
@@ -389,6 +392,19 @@ def _nonnegative_int_env(name: str, default: int) -> int:
     return value if value >= 0 else default
 
 
+def _parse_utc_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _media_asset_idempotency_key(*, store_id: str, provider_job_key: str, inputs: dict[str, Any], supplied: Any = None) -> str:
     supplied_text = str(supplied or "").strip()
     if supplied_text:
@@ -447,6 +463,16 @@ def _is_signed_media_source_url(value: Any) -> bool:
     except (TypeError, ValueError):
         return False
     return parsed.path.startswith("/media-source-assets/") and parsed.path.endswith("/content") and bool(query.get("signature"))
+
+
+def _readiness_has_startup_blockers(readiness: object) -> bool:
+    """Fail closed on malformed readiness, but do not turn warnings into outages."""
+    if not isinstance(readiness, dict):
+        return True
+    blocker_count = readiness.get("blocker_count")
+    if type(blocker_count) is not int or blocker_count < 0:
+        return True
+    return blocker_count > 0
 
 
 class SaaSBackendServer:
@@ -532,7 +558,7 @@ class SaaSBackendServer:
         ).strip().lower() in {"1", "true", "yes", "on"}
         if (
             backend_settings.environment == "production"
-            and not readiness.get("production_ready")
+            and _readiness_has_startup_blockers(readiness)
             and not production_candidate_boot_allowed
         ):
             raise RuntimeError(
@@ -725,21 +751,23 @@ def _merchant_safe_metered_units(value: Any) -> list[str]:
     return [item for item in value if isinstance(item, str) and item in _MERCHANT_METERED_UNITS]
 
 
-def _merchant_safe_mainland_payment(launch: dict[str, Any]) -> dict[str, Any]:
+def _merchant_safe_mainland_payment(
+    launch: dict[str, Any], *, public_checkout_active: bool = False
+) -> dict[str, Any]:
     payment = validate_mainland_payment_launch_for_public(launch)
     return {
         "provider": "wechat_pay_native",
         "checkout_mode": "native_qr",
         "billing_mode": "one_time_30_day_plan",
-        "status": payment["merchant_status"],
-        "next_blocker": payment["next_paid_launch_blocker"],
+        "status": "public_checkout_available" if public_checkout_active else payment["merchant_status"],
+        "next_blocker": "" if public_checkout_active else payment["next_paid_launch_blocker"],
         "mainland_payment_ready_for_owner_approval": payment["mainland_payment_ready_for_owner_approval"],
         "provider_configured": payment["provider_configured"],
         "configured_component_count": payment["configured_component_count"],
         "required_component_count": payment["required_component_count"],
         "verified_paid_order_count": payment["verified_paid_order_count"],
-        "public_charging_allowed": False,
-        "charge_now_allowed": False,
+        "public_charging_allowed": public_checkout_active,
+        "charge_now_allowed": public_checkout_active,
         "triggers_real_charge": False,
         "triggers_real_refund": False,
         "calls_external_payment_api": False,
@@ -748,7 +776,13 @@ def _merchant_safe_mainland_payment(launch: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _merchant_safe_launch_path(value: Any, *, mainland_payment: dict[str, Any], quota_enabled: bool) -> dict[str, Any]:
+def _merchant_safe_launch_path(
+    value: Any,
+    *,
+    mainland_payment: dict[str, Any],
+    quota_enabled: bool,
+    public_checkout_active: bool = False,
+) -> dict[str, Any]:
     source = value if isinstance(value, dict) else {}
     private_beta_active = all(
         (
@@ -779,21 +813,27 @@ def _merchant_safe_launch_path(value: Any, *, mainland_payment: dict[str, Any], 
             )
     return {
         "contract_version": (
-            "2026-07-03-merchant-billing-launch-path-v1"
+            "2026-08-22-public-commercial-release-v1"
+            if public_checkout_active
+            else "2026-07-03-merchant-billing-launch-path-v1"
             if private_beta_active
             else "2026-07-27-merchant-mainland-payment-path-v1"
         ),
-        "current_stage": "invited_beta_no_real_charge" if private_beta_active else mainland_payment["status"],
+        "current_stage": (
+            "public_checkout_available"
+            if public_checkout_active
+            else "invited_beta_no_real_charge" if private_beta_active else mainland_payment["status"]
+        ),
         "headline": (
             _safe_public_text(source.get("headline"), 1024)
             if private_beta_active
             else "merchant_payment_status_available_in_billing_control_room"
         ),
-        "current_charge_status": "no_real_charge_now",
+        "current_charge_status": "checkout_available" if public_checkout_active else "no_real_charge_now",
         "merchant_visible": True,
         "internal_launch_evidence_visible": False,
-        "public_paid_launch_allowed": False,
-        "charge_now_allowed": False,
+        "public_paid_launch_allowed": public_checkout_active,
+        "charge_now_allowed": public_checkout_active,
         "triggers_real_charge": False,
         "frontend_gets_payment_secret": False,
         "frontend_can_grant_entitlement": False,
@@ -995,6 +1035,106 @@ def _public_safe_billing_summary(value: Any) -> dict[str, Any]:
     configured_count = billing.get("configured_component_count")
     required_count = billing.get("required_component_count")
     verified_count = billing.get("verified_paid_order_count")
+    live_contract = build_wechat_pay_native_contract()
+    public_checkout_active = all(
+        (
+            live_contract.get("public_commercial_release_approved") is True,
+            live_contract.get("real_checkout_ready") is True,
+            live_contract.get("charge_now_allowed") is True,
+            billing.get("public_commercial_release_contract_version")
+            == live_contract.get("commercial_release_contract_version"),
+            billing.get("billing_ready_for_paid_launch") is True,
+            billing.get("public_charging_allowed") is True,
+            billing.get("charge_now_allowed") is True,
+            billing.get("triggers_real_charge") is False,
+            billing.get("triggers_real_refund") is False,
+            billing.get("calls_external_payment_api") is False,
+            billing.get("real_platform_writes_enabled") is False,
+            billing.get("frontend_gets_payment_secret") is False,
+            billing.get("frontend_can_grant_quota") is False,
+            billing.get("secret_exposed") is False,
+            billing.get("provider") == "wechat_pay_native",
+            billing.get("checkout_mode") == "native_qr",
+            billing.get("billing_mode") == "one_time_30_day_plan",
+            billing.get("payment_path_status") == "public_checkout_available",
+            type(configured_count) is int,
+            configured_count == 9,
+            type(required_count) is int,
+            required_count == 9,
+            type(verified_count) is int and verified_count > 0,
+            domestic.get("status") == "public_checkout_available",
+            domestic.get("public_charging_allowed") is True,
+            domestic.get("charge_now_allowed") is True,
+            domestic.get("triggers_real_charge") is False,
+            domestic.get("triggers_real_refund") is False,
+            domestic.get("calls_external_payment_api") is False,
+            domestic.get("frontend_gets_payment_secret") is False,
+            domestic.get("secret_exposed") is False,
+            launch_path.get("current_stage") == "public_checkout_available",
+            launch_path.get("public_paid_launch_allowed") is True,
+            launch_path.get("charge_now_allowed") is True,
+            launch_path.get("triggers_real_charge") is False,
+            launch_path.get("backend_confirmation_required_before_entitlement") is True,
+            launch_path.get("frontend_can_grant_entitlement") is False,
+            launch_path.get("frontend_can_grant_quota") is False,
+            launch_path.get("secret_exposed") is False,
+        )
+    )
+    if public_checkout_active:
+        return {
+            "provider": "wechat_pay_native",
+            "checkout_mode": "native_qr",
+            "billing_mode": "one_time_30_day_plan",
+            "provider_configured": True,
+            "payment_path_status": "public_checkout_available",
+            "mainland_payment_ready_for_owner_approval": True,
+            "billing_ready_for_private_beta": billing.get("billing_ready_for_private_beta") is True,
+            "billing_ready_for_paid_launch": True,
+            "configured_component_count": configured_count,
+            "required_component_count": required_count,
+            "verified_paid_order_count": verified_count,
+            "quota_enforcement_enabled": billing.get("quota_enforcement_enabled") is True,
+            "paid_launch_blocker_count": 0,
+            "next_paid_launch_blocker": "",
+            "merchant_launch_path": {
+                "contract_version": "2026-08-22-public-commercial-release-v1",
+                "current_stage": "public_checkout_available",
+                "current_charge_status": "checkout_available",
+                "public_paid_launch_allowed": True,
+                "charge_now_allowed": True,
+                "triggers_real_charge": False,
+                "backend_confirmation_required_before_entitlement": True,
+                "frontend_can_grant_entitlement": False,
+                "frontend_can_grant_quota": False,
+                "quota_grant_source": "backend_subscription_state",
+                "secret_exposed": False,
+            },
+            "domestic_payment": {
+                "provider": "wechat_pay_native",
+                "checkout_mode": "native_qr",
+                "billing_mode": "one_time_30_day_plan",
+                "status": "public_checkout_available",
+                "configured_component_count": configured_count,
+                "required_component_count": required_count,
+                "verified_paid_order_count": verified_count,
+                "public_charging_allowed": True,
+                "charge_now_allowed": True,
+                "triggers_real_charge": False,
+                "triggers_real_refund": False,
+                "calls_external_payment_api": False,
+                "frontend_gets_payment_secret": False,
+                "secret_exposed": False,
+            },
+            "public_charging_allowed": True,
+            "charge_now_allowed": True,
+            "triggers_real_charge": False,
+            "triggers_real_refund": False,
+            "calls_external_payment_api": False,
+            "real_platform_writes_enabled": False,
+            "frontend_gets_payment_secret": False,
+            "frontend_can_grant_quota": False,
+            "secret_exposed": False,
+        }
     payment_statuses = {
         "payment_status_unavailable",
         "configuration_in_progress",
@@ -2596,26 +2736,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     user=user,
                     challenge_verification=challenge_verification,
                 )
-                if platform_trial_activation.get("platform_trial_allowed") is True:
-                    media_welcome = self.repository.apply_media_credit_operation(
-                        company_id=user["default_company_id"],
-                        user_id=user["user_id"],
-                        operation_type="grant",
-                        points=300,
-                        idempotency_key="account-welcome-media-points-v1",
-                        reference_type="onboarding",
-                        reference_id="account_welcome",
-                        details={"reason": "new_account_product_trial"},
-                    )
-                else:
-                    media_welcome = {
-                        "status": "platform_trial_activation_required",
-                        "account": self.repository.get_media_credit_account(company_id=user["default_company_id"]),
-                        "points_granted": 0,
-                        "merchant_byok_unaffected": True,
-                        "triggers_real_charge": False,
-                        "secret_exposed": False,
-                    }
+                media_welcome = {
+                    "status": (
+                        "not_included_in_free_trial"
+                        if platform_trial_activation.get("platform_trial_allowed") is True
+                        else "platform_trial_activation_required"
+                    ),
+                    "account": self.repository.get_media_credit_account(company_id=user["default_company_id"]),
+                    "points_granted": 0,
+                    "merchant_byok_unaffected": True,
+                    "triggers_real_charge": False,
+                    "secret_exposed": False,
+                }
                 analytics_input = body.get("analytics") if isinstance(body.get("analytics"), dict) else {}
                 try:
                     signup_event = sanitize_analytics_event(
@@ -5547,6 +5679,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "secret_exposed": False,
                 }
                 if media_credit_state["enforcement_enabled"] and bool(safe_inputs.get("live_provider_requested")):
+                    if media_quote.get("chargeable") is not True:
+                        self._send_json(
+                            {
+                                "error": "视频素材点价格尚未开放，本次任务没有进入生成队列。",
+                                "status": int(HTTPStatus.CONFLICT),
+                                "media_quote": media_quote,
+                                "triggers_real_charge": False,
+                                "secret_exposed": False,
+                            },
+                            status=HTTPStatus.CONFLICT,
+                        )
+                        return
                     try:
                         media_credit_state["reservation"] = self.repository.apply_media_credit_operation(
                             company_id=identity["company_id"],
@@ -5954,10 +6098,15 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             "当前账号已注册，但捷境提供的 AI 试用尚未激活。"
                             "你仍可在设置中连接自己的 DeepSeek 或 OpenAI，连接后不占用捷境试用额度。"
                         )
+                    elif trial_blocker == "platform_default_model_trial_expired":
+                        trial_answer = (
+                            "当前账号的 7 天捷境 AI 免费体验已经结束。"
+                            "你可以在设置中连接自己的 DeepSeek 或 OpenAI；账号资料和历史工作记录不会删除。"
+                        )
                     else:
                         trial_answer = (
-                            "当前账号本月的捷境 AI 试用额度已用完。"
-                            "你可以在设置中连接自己的 DeepSeek 或 OpenAI，或升级套餐后继续使用。"
+                            "当前账号的 20 次捷境 AI 免费体验额度已用完。"
+                            "你可以在设置中连接自己的 DeepSeek 或 OpenAI；软件套餐和素材点仍分别管理。"
                         )
                     send_chat_payload(
                         {
@@ -6434,6 +6583,23 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "secret_exposed": False,
             }
             if media_credit_state["enforcement_enabled"] and bool(safe_inputs.get("live_provider_requested")):
+                if media_quote.get("chargeable") is not True:
+                    self.repository.release_media_rework_reservation(
+                        company_id=identity["company_id"],
+                        parent_media_job_id=original["media_job_id"],
+                        version=version,
+                    )
+                    self._send_json(
+                        {
+                            "error": "视频素材点价格尚未开放，重做任务没有进入生成队列。",
+                            "status": int(HTTPStatus.CONFLICT),
+                            "media_quote": media_quote,
+                            "triggers_real_charge": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.CONFLICT,
+                    )
+                    return
                 try:
                     media_credit_state["reservation"] = self.repository.apply_media_credit_operation(
                         company_id=identity["company_id"],
@@ -8175,8 +8341,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         allowed=_PUBLIC_MODEL_PROVIDERS,
                     ),
                     "model": _safe_public_token(platform_model.get("model")),
-                    "trial_monthly_limit": _strict_nonnegative_int(platform_model.get("trial_monthly_limit")),
-                    "trial_quota_scope": "account_month",
+                    "trial_request_limit": _strict_nonnegative_int(platform_model.get("trial_request_limit")),
+                    "trial_duration_days": _strict_nonnegative_int(platform_model.get("trial_duration_days")),
+                    "trial_quota_scope": "account_trial_window",
                     "usage_owner": "jiejing_platform_trial",
                     "quota_checked_by_backend": platform_model.get("quota_checked_by_backend") is True,
                     "hard_stop_on_exhaustion": platform_model.get("hard_stop_on_exhaustion") is True,
@@ -8568,20 +8735,33 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         """
 
         launch = plan.get("mainland_payment_launch") if isinstance(plan.get("mainland_payment_launch"), dict) else {}
-        mainland_payment = _merchant_safe_mainland_payment(launch)
+        validated_payment = validate_mainland_payment_launch_for_public(launch)
+        native_contract = build_wechat_pay_native_contract()
+        public_checkout_active = all(
+            (
+                validated_payment["mainland_payment_ready_for_owner_approval"] is True,
+                native_contract.get("public_commercial_release_approved") is True,
+                native_contract.get("real_checkout_ready") is True,
+                native_contract.get("charge_now_allowed") is True,
+            )
+        )
+        mainland_payment = _merchant_safe_mainland_payment(
+            launch,
+            public_checkout_active=public_checkout_active,
+        )
         quota = plan.get("quota_contract") if isinstance(plan.get("quota_contract"), dict) else {}
         return {
             "contract_version": _safe_bounded_text(plan.get("contract_version"), 128),
             "billing_ready_for_private_beta": plan.get("billing_ready_for_private_beta") is True,
-            "billing_ready_for_paid_launch": False,
+            "billing_ready_for_paid_launch": public_checkout_active,
             "provider": {
                 "provider": "wechat_pay_native",
                 "checkout_mode": "native_qr",
                 "billing_mode": "one_time_30_day_plan",
-                "available": False,
+                "available": public_checkout_active,
                 "provider_configured": mainland_payment["provider_configured"],
                 "customer_visible": True,
-                "charge_now_allowed": False,
+                "charge_now_allowed": public_checkout_active,
                 "triggers_real_charge": False,
                 "frontend_gets_payment_secret": False,
                 "secret_exposed": False,
@@ -8608,8 +8788,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 plan.get("merchant_launch_path"),
                 mainland_payment=mainland_payment,
                 quota_enabled=quota.get("enabled") is True,
+                public_checkout_active=public_checkout_active,
             ),
-            "paid_launch_blockers": [mainland_payment["next_blocker"]],
+            "paid_launch_blockers": [] if public_checkout_active else [mainland_payment["next_blocker"]],
             "billing_test_rehearsal_summary": _merchant_safe_rehearsal_summary(
                 plan.get("billing_test_rehearsal_summary")
             ),
@@ -8625,8 +8806,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "real_platform_writes_not_included_in_any_current_plan": True,
                 "refunds_and_payment_disputes_need_human_operator": True,
             },
-            "public_charging_allowed": False,
-            "charge_now_allowed": False,
+            "public_charging_allowed": public_checkout_active,
+            "charge_now_allowed": public_checkout_active,
             "triggers_real_charge": False,
             "triggers_real_refund": False,
             "calls_external_payment_api": False,
@@ -8648,11 +8829,17 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 PLATFORM_MODEL_TRIAL_DEFAULT_MONTHLY_LIMIT,
             )
         )
+        duration_days = _positive_int_env(
+            PLATFORM_MODEL_TRIAL_DURATION_DAYS_ENV,
+            PLATFORM_MODEL_TRIAL_DEFAULT_DURATION_DAYS,
+        )
         return {
-            "trial_quota_scope": "account_month",
+            "trial_quota_scope": "account_trial_window",
             "usage_owner": "jiejing_platform_trial",
             "usage_owner_label": "捷境试用 AI",
             "quota_checked_by_backend": True,
+            "trial_limit": monthly_limit,
+            "trial_duration_days": duration_days,
             "monthly_limit": monthly_limit,
             "hard_stop_on_exhaustion": True,
             "exhaustion_blocker": "platform_default_model_trial_exhausted",
@@ -8674,10 +8861,19 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             PLATFORM_MODEL_TRIAL_DEFAULT_MONTHLY_LIMIT,
         )
         guardrail = self._platform_model_trial_guardrail(limit=limit)
-        period = time.strftime("%Y-%m", time.gmtime())
+        duration_days = int(guardrail.get("trial_duration_days") or PLATFORM_MODEL_TRIAL_DEFAULT_DURATION_DAYS)
+        now = datetime.now(timezone.utc)
+        activation = self.repository.get_platform_trial_activation(company_id=identity["company_id"])
+        activated_at = _parse_utc_datetime((activation or {}).get("activated_at"))
+        legacy_grandfathered = activation is None
+        expires_at = activated_at + timedelta(days=duration_days) if activated_at else None
+        trial_expired = bool(expires_at and now >= expires_at)
         used = 0
         for task in self.repository.list_tasks(company_id=identity["company_id"]):
-            if str(task.get("created_at") or "")[:7] != period:
+            task_created_at = _parse_utc_datetime(task.get("created_at"))
+            if activated_at and (task_created_at is None or task_created_at < activated_at):
+                continue
+            if legacy_grandfathered and str(task.get("created_at") or "")[:7] != now.strftime("%Y-%m"):
                 continue
             if str(task.get("task_type") or "") != "merchant_ceo_chat":
                 continue
@@ -8695,7 +8891,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             if platform_used:
                 used += 1
-        activation = self.repository.get_platform_trial_activation(company_id=identity["company_id"])
         if activation is None:
             activation_status = "grandfathered_active"
             activation_allowed = True
@@ -8704,26 +8899,38 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             activation_allowed = activation.get("platform_trial_allowed") is True
         remaining = max(0, limit - used) if limit > 0 else 0
         quota_available = limit <= 0 or used < limit
-        allowed = activation_allowed and quota_available
+        allowed = activation_allowed and not trial_expired and quota_available
+        seconds_remaining = max(0, int((expires_at - now).total_seconds())) if expires_at else 0
         return {
-            "contract_version": "2026-07-03-ai-ceo-platform-model-trial-quota",
+            "contract_version": "2026-08-22-ai-ceo-platform-model-seven-day-trial",
             **guardrail,
-            "scope": "account_month",
-            "period": period,
+            "scope": "account_trial_window" if not legacy_grandfathered else "legacy_account_month",
+            "period": now.strftime("%Y-%m") if legacy_grandfathered else "seven_day_trial",
+            "trial_limit": limit,
             "monthly_limit": limit,
             "used": used,
             "remaining": remaining,
             "allowed": allowed,
             "activation_status": activation_status,
             "platform_trial_activated": activation_allowed,
+            "trial_duration_days": duration_days,
+            "trial_started_at": activated_at.isoformat() if activated_at else "",
+            "trial_expires_at": expires_at.isoformat() if expires_at else "",
+            "trial_expired": trial_expired,
+            "seconds_remaining": seconds_remaining,
+            "legacy_grandfathered": legacy_grandfathered,
             "merchant_byok_unaffected": True,
             "blocked_by": (
                 "platform_trial_activation_required"
                 if not activation_allowed
-                else ("platform_default_model_trial_exhausted" if not quota_available else "")
+                else (
+                    "platform_default_model_trial_expired"
+                    if trial_expired
+                    else ("platform_default_model_trial_exhausted" if not quota_available else "")
+                )
             ),
             "unlimited_when_limit_zero": limit <= 0,
-            "quota_source": "backend_task_audit",
+            "quota_source": "backend_task_audit_and_activation_window",
             "account_space_id_present": bool(identity.get("company_id")),
             "requires_merchant_byok_or_plan_upgrade_when_exhausted": True,
             "secret_exposed": False,
@@ -8789,7 +8996,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             user_id=str(user["user_id"]),
             status=status,
             platform_trial_allowed=allowed,
-            welcome_media_points_granted=300 if allowed else 0,
+            welcome_media_points_granted=0,
             requires_challenge=required,
             challenge_attested=challenge_attested,
             decision_reason=reason,

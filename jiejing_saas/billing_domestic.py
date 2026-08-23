@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 from .permissions import has_permission
 from .repository import SaaSRepository
-from .media_credits import media_credit_pack_terms, media_credit_purchase_enabled
+from .media_credits import media_credit_pack_terms, media_credit_purchase_enabled, revoke_plan_media_points
 from .operations_metering import sanitize_provider_telemetry
 
 
@@ -846,10 +846,11 @@ def execute_approved_domestic_billing_refund(
     refund_reservation: dict[str, Any] | None = None
     if purchase_type == "media_points":
         try:
-            refund_reservation = repository.apply_media_credit_operation(
+            refund_reservation = repository.reserve_media_credit_source(
                 company_id=normalized_company,
                 user_id=str(user_id or "") or None,
-                operation_type="reserve",
+                source_type="purchased",
+                source_reference_id=normalized_order,
                 points=media_points,
                 idempotency_key=f"wechat-refund:{normalized_order}:media-points-reserve:v1",
                 reference_type="billing_refund",
@@ -1227,6 +1228,16 @@ def _apply_verified_domestic_refund_locked(
         )
         if media_credit_result.get("ok") is not True:
             return media_credit_result
+    else:
+        try:
+            media_credit_result = revoke_plan_media_points(
+                repository,
+                company_id=normalized_company,
+                user_id=str(order.get("user_id") or "") or None,
+                order_id=normalized_order,
+            )
+        except (RuntimeError, ValueError):
+            return _blocked("plan_media_credit_revoke_not_applied", http_status=500)
     refund_event_id = hashlib.sha256(f"wechat-refund-v1:{normalized_refund}".encode("utf-8")).hexdigest()
     try:
         updated = repository.update_domestic_billing_order_state(
@@ -1325,6 +1336,7 @@ def _apply_verified_domestic_refund_locked(
         "duplicate_refund_result": bool(updated.get("duplicate_transition")) or bool(entitlement_result and entitlement_result.get("duplicate_event")),
         "entitlement_unchanged_for_newer_order": entitlement_unchanged,
         "remaining_paid_entitlement_restored": bool(not entitlement_unchanged and fallback),
+        "media_points_revoked": int((media_credit_result or {}).get("points_revoked") or 0),
         "calls_external_payment_api": bool(calls_external_payment_api),
         "triggers_real_refund": bool(triggers_real_refund),
         "frontend_gets_payment_secret": False,
