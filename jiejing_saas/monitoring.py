@@ -244,8 +244,8 @@ def upload_provider_monitoring_aggregate_to_cls(
             content = log.contents.add()
             content.key = key
             content.value = str(value).lower() if isinstance(value, bool) else str(value)
-        endpoint = f"https://{region}.cls.tencentcs.com"
-        client = client_factory(endpoint, access_id, access_key)
+        endpoint = "https://cls.tencentcloudapi.com"
+        client = client_factory(endpoint, region, access_id, access_key)
         client.timeout = 5
         client.put_log_raw(topic_id, packet)
         return True
@@ -265,16 +265,17 @@ class _TencentCloudApiClsUploadClient:
         return self._client.UploadLog(request, packet.SerializeToString())
 
 
-def _tencent_cloudapi_cls_upload_client(endpoint: str, access_id: str, access_key: str) -> Any:
+def _tencent_cloudapi_cls_upload_client(endpoint: str, region: str, access_id: str, access_key: str) -> Any:
     from tencentcloud.common import credential
     from tencentcloud.common.profile.client_profile import ClientProfile
     from tencentcloud.common.profile.http_profile import HttpProfile
     from tencentcloud.cls.v20201016 import cls_client, models
 
     hostname = str(endpoint or "").removeprefix("https://").removeprefix("http://").strip("/")
-    region = hostname.split(".cls.tencentcs.com", 1)[0]
+    if hostname != "cls.tencentcloudapi.com":
+        raise ValueError("invalid CLS CloudAPI endpoint")
     if not re.fullmatch(r"[a-z0-9-]{3,64}", region):
-        raise ValueError("invalid CLS region endpoint")
+        raise ValueError("invalid CLS region")
     http_profile = HttpProfile()
     http_profile.endpoint = hostname
     http_profile.reqTimeout = 5

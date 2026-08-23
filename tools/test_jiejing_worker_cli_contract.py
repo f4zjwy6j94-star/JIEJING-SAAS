@@ -237,8 +237,9 @@ def main() -> int:
             captured_cls["packet"] = packet
             return object()
 
-    def fake_client_factory(endpoint, _access_id, _access_key):  # noqa: ANN001, ANN202
+    def fake_client_factory(endpoint, region, _access_id, _access_key):  # noqa: ANN001, ANN202
         captured_cls["endpoint"] = endpoint
+        captured_cls["region"] = region
         captured_cls["client"] = FakeLogClient()
         return captured_cls["client"]
 
@@ -257,8 +258,12 @@ def main() -> int:
                 os.environ[key] = value
     if getattr(captured_cls.get("client"), "timeout", None) != 5:
         return fail(f"CLS uploader must use a bounded request timeout: {captured_cls}")
-    if exported is not True or captured_cls.get("endpoint") != "https://ap-guangzhou.cls.tencentcs.com":
-        return fail(f"official CLS upload adapter was not called with the regional endpoint: {captured_cls}")
+    if (
+        exported is not True
+        or captured_cls.get("endpoint") != "https://cls.tencentcloudapi.com"
+        or captured_cls.get("region") != "ap-guangzhou"
+    ):
+        return fail(f"official CLS upload adapter did not separate the CloudAPI endpoint and region: {captured_cls}")
     packet = captured_cls.get("packet")
     groups = packet.logGroupList.items if packet is not None else []
     logs = groups[0].logs.items if groups else []
