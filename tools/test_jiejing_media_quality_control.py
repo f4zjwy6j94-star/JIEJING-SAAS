@@ -36,9 +36,10 @@ def main() -> int:
 
     required_html = (
         'id="mediaGenerationTierSelect"',
-        "快速样图（低成本）",
-        "标准质量（推荐）",
-        "精细质量（最终候选）",
+        "快速样图 · 20 点/张",
+        "标准图（推荐） · 80 点/张",
+        "高清图（最终候选） · 250 点/张",
+        'id="mediaGenerationPointQuote"',
         "商品事实锁定",
         "默认开启，不可关闭",
         "6 秒产品展示视频",
@@ -69,6 +70,8 @@ def main() -> int:
         'motion_and_usage_consistency_confirmed: true',
         'const groundingGate = saasMediaGenerationGroundingGate(productFacts, config)',
         'groundingGate.conceptOnly ? "concept_reference_only" : "reference_grounded_listing_draft"',
+        "const mediaPointsByGenerationTier = { draft: 20, standard: 80, high_quality: 250 }",
+        'setText("#mediaGenerationPointQuote"',
     )
     for marker in required_js:
         if marker not in app_js:

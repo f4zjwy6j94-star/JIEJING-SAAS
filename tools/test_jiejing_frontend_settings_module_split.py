@@ -24,7 +24,7 @@ def main() -> int:
     app_js = APP_JS.read_text(encoding="utf-8")
     index_html = INDEX_HTML.read_text(encoding="utf-8")
     module_js = MODULE.read_text(encoding="utf-8")
-    module_marker = "./assets/jiejing-settings-panels.js?v=20260715-owner-traffic-analytics-v104"
+    module_marker = "./assets/jiejing-settings-panels.js?v=20260822-public-commercial-release-v105"
     billing_panel_start = module_js.index("function renderBillingProviderPanel")
     billing_panel_end = module_js.index("function _renderBillingTestRehearsal")
     merchant_billing_panel = module_js[billing_panel_start:billing_panel_end]

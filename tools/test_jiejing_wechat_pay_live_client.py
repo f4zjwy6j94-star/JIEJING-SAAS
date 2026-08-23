@@ -83,6 +83,14 @@ def main() -> int:
         "JIEJING_WECHAT_PAY_CHARGE_ALLOWED": "true",
         "JIEJING_WECHAT_PAY_REFUND_ALLOWED": "true",
         "JIEJING_PAID_LAUNCH_OWNER_APPROVAL_PACKET_ID": "owner-approved-payment-cutover-test",
+        "JIEJING_PRODUCTION_RELEASE_OWNER_APPROVAL_PACKET_ID": "production-owner-payment-cutover-test",
+        "JIEJING_PRODUCTION_RELEASE_CHARGE_FLAG_REVIEWED": "true",
+        "JIEJING_PRODUCTION_RELEASE_REAL_WRITE_FLAG_REVIEWED": "true",
+        "JIEJING_PRODUCTION_SUPPORT_REFUND_POLICY_REVIEWED": "true",
+        "JIEJING_PRODUCTION_MERCHANT_SURFACE_COPY_SCAN_PASSED": "true",
+        "JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED": "false",
+        "JIEJING_ENABLE_REAL_PLATFORM_WRITES": "false",
+        "JIEJING_EBAY_WRITE_LIVE": "false",
     }
     with temporary_env(**contract_env, JIEJING_SAAS_ENV="staging"):
         staging_contract = build_wechat_pay_native_contract()
