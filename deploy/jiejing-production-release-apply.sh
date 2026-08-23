@@ -189,7 +189,12 @@ elif path == "/health/deep":
     health = data.get("operational_health") or {}
     ok = health.get("status") == "ready" and health.get("secret_exposed") is False
 elif path == "/readiness/product-saas":
-    ok = data.get("secret_exposed") is False and bool(data.get("contract_version"))
+    readiness = data.get("readiness") or {}
+    ok = (
+        readiness.get("secret_exposed") is False
+        and readiness.get("environment") == "production"
+        and bool(readiness.get("public_contract_version"))
+    )
 else:
     ok = False
 raise SystemExit(0 if ok else 1)
