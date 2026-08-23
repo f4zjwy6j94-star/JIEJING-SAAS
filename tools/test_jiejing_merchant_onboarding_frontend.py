@@ -17,7 +17,58 @@ def fail(message: str) -> int:
 
 def main() -> int:
     index_text = (ROOT / "index.html").read_text(encoding="utf-8")
+    app_html = (ROOT / "app.html").read_text(encoding="utf-8")
     app_text = (ROOT / "app.js").read_text(encoding="utf-8")
+
+    for marker in [
+        "旅行压缩收纳袋",
+        "便携首饰盒",
+        "香薰蜡烛套装",
+        "倒流香炉",
+        "Backflow Incense",
+        "backflow incense",
+        "IP 防侵权",
+        "侵权检测通过",
+        "Home Decor / Incense",
+        "Waterfall smoke effect",
+        "JJ-BFI-001",
+    ]:
+        if marker.lower() in app_html.lower():
+            return fail(f"merchant app shell must not expose fixed product fixtures or unsafe claims: {marker}")
+
+    cockpit_start = app_html.find('<section class="view is-active" id="view-cockpit"')
+    cockpit_end = app_html.find('<section class="view" id="view-dna"', cockpit_start)
+    if cockpit_start < 0 or cockpit_end < 0:
+        return fail("merchant workbench static cockpit boundary is missing")
+    merchant_static_workbench = app_html[cockpit_start:cockpit_end]
+    for marker in [
+        "倒流香炉",
+        "Backflow Incense",
+        "backflow-incense",
+        "旅行压缩收纳袋",
+        "便携首饰盒",
+        "香薰蜡烛套装",
+        "Ceramic / Resin style finish",
+        "Bronze / Brown",
+        "Incense burner only",
+        "是否含香粒",
+    ]:
+        if marker in merchant_static_workbench:
+            return fail(f"merchant static workbench must not seed a fixed product: {marker}")
+    if 'data-merchant-blank-workbench="merchant_blank_workbench_v1"' not in merchant_static_workbench:
+        return fail("merchant static workbench must expose the approved blank-state contract")
+
+    entry_start = app_html.find('<div class="entry-shell" id="entryShell">')
+    entry_end = app_html.find('<div class="site-shell is-hidden" id="siteShell">', entry_start)
+    if entry_start < 0 or entry_end < 0:
+        return fail("merchant entry shell boundary is missing")
+    merchant_entry_shell = app_html[entry_start:entry_end]
+    for marker in ["旅行压缩收纳袋", "倒流香炉", "Backflow Incense", "新手商家，还没开店", "IP 防侵权"]:
+        if marker in merchant_entry_shell:
+            return fail(f"merchant entry shell must not seed a fixed product or retired promise: {marker}")
+    for marker in ["免费生成第一条草稿", "已有 eBay 店铺", "多店铺", "侵权风险初筛，仍需商家核对"]:
+        if marker not in merchant_entry_shell:
+            return fail(f"merchant entry shell is missing approved merchant copy: {marker}")
 
     for marker in (
         'const ENTRY_MERCHANT_ONBOARDING_PATH = "/merchant-onboarding/primary-ebay"',

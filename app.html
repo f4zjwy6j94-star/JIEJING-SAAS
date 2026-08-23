@@ -119,7 +119,7 @@
       }
     </style>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
-    <link rel="stylesheet" href="./styles.css?v=20260803-product-feedback-v1" />
+    <link rel="stylesheet" href="./styles.css?v=20260822-merchant-trial-pricing-v2" />
     <style id="jiejing-cockpit-layout-guard">
       body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-chatgpt-shell {
         display: grid !important;
@@ -305,7 +305,7 @@
               <p class="eyebrow">eBay-first AI CEO 工作台</p>
               <h1>捷境</h1>
               <p>
-                捷境是给 eBay 卖家的 AI CEO 自动化工作台：商家只给 AI CEO 下文字指令，系统把市场调研、批量选品、IP 防侵权、Listing、素材工坊、客服订单、财务统计和决策中心串成一条可追溯闭环。
+                捷境是给 eBay 卖家的 AI CEO 工作台：商家提交商品资料后，系统协助整理市场信息、Listing 草稿、素材建议、利润参考和经营风险；侵权风险初筛，仍需商家核对。
               </p>
               <div class="entry-proof" aria-label="捷境工作方式">
                 <span>不虚构客户</span>
@@ -313,7 +313,7 @@
                 <span>关键动作人工确认</span>
               </div>
               <div class="entry-actions">
-                <button class="primary-action" id="entryNext">选择身份，开始自动化</button>
+                <button class="primary-action" id="entryNext">免费生成第一条草稿</button>
                 <button class="secondary-action" id="entryStoryDirect">浏览产品页</button>
               </div>
             </div>
@@ -322,7 +322,7 @@
                 <div class="audit-board-header">
                   <div>
                     <span>第一条商品自动化板</span>
-                    <strong>“旅行压缩收纳袋这条线能不能跑通？”</strong>
+                    <strong>“这份商品资料还缺什么，能否生成 eBay 草稿？”</strong>
                   </div>
         <em>只读验证中</em>
                 </div>
@@ -344,7 +344,7 @@
                   </article>
                 </div>
                 <div class="audit-trace">
-                  <span>资料：市场、批量、IP 和 Listing 先整理</span>
+                  <span>资料：市场信息、侵权风险和 Listing 字段先整理</span>
                   <span>素材：流程导入或外部来源图生成草稿</span>
                   <span>确认：发布、付款、退款、广告和承诺不自动执行</span>
                 </div>
@@ -369,12 +369,12 @@
               <article>
                 <span>01</span>
                 <strong>AI CEO 接指令</strong>
-                <p>商家只需要用文字说目标。捷境先拆任务、记来源、分配市场、Listing、批量、素材、客服、财务和决策岗位。</p>
+            <p>商家只需要说明目标并提供商品资料。捷境先整理来源和缺口，再推进市场信息、Listing、素材、客服、财务和决策任务。</p>
               </article>
               <article>
                 <span>02</span>
-                <strong>市场 / 批量 / IP</strong>
-                <p>市场调研、批量候选、IP 防侵权、货源图、价格带、供应商信息和退货风险先按真实来源推进。</p>
+                <strong>市场 / 批量 / 风险</strong>
+                <p>市场调研、批量候选、侵权风险初筛、价格带、供应商信息和退货风险按真实来源推进，最终仍由商家核对。</p>
               </article>
               <article>
                 <span>03</span>
@@ -401,7 +401,7 @@
           <div class="entry-route-copy">
             <p class="eyebrow">第二步</p>
             <h2>你现在最像哪一种卖家？</h2>
-            <p>先点一个类型，看清楚这类商家的完整流程；确认后再注册/登录继续。</p>
+            <p>选择免费体验、已有 eBay 店铺或多店铺路径，看清楚对应流程后再注册或登录继续。</p>
           </div>
           <div class="entry-route-layout">
             <div class="entry-choice-grid" id="entryChoiceGrid" aria-label="卖家路径选择"></div>
@@ -428,7 +428,7 @@
         <main class="entry-flow-main">
           <div class="entry-flow-copy">
             <p class="eyebrow" id="entryFlowEyebrow">卖家路径</p>
-            <h2 id="entryFlowTitle">新手商家，还没开店</h2>
+            <h2 id="entryFlowTitle">先免费生成第一条草稿</h2>
             <p id="entryFlowIntro"></p>
           </div>
           <div class="entry-flow-steps" id="entryFlowSteps"></div>
@@ -464,7 +464,7 @@
             <p class="eyebrow">eBay 从 0 到第一条可确认 Listing</p>
             <h1>先把一个商品跑通，再让 AI CEO 托管重复动作。</h1>
             <p class="hero-subtitle">
-              捷境当前只做 eBay。商家先给 AI CEO 下文字指令，系统再把任务分配给市场调研、批量选品、IP 防侵权、Listing、素材工坊、客服订单、财务履约和决策中心；所有来源、缺口、确认和复盘都会回流到 AI CEO。
+              捷境当前专注 eBay。商家上传商品资料并说明目标后，系统会整理资料缺口、生成刊登草稿和素材建议，并把发布、付款、退款等高风险动作留给商家确认。
             </p>
             <div class="hero-actions">
               <button class="primary-action" id="heroStart">从我的身份开始</button>
@@ -483,13 +483,13 @@
             </div>
             <div class="hero-command-card" id="heroCommandCard">
               <div>
-                <span>主线体验只围绕一句话</span>
-              <strong id="heroCommandText">“帮我选一款适合 eBay 的商品，做 IP 筛查、Listing、素材和确认清单。”</strong>
+                <span>从第一份商品资料开始</span>
+              <strong id="heroCommandText">“上传商品图片、货源链接或文字说明，我会先检查缺失信息，再生成 eBay 草稿。”</strong>
               </div>
               <div class="hero-command-pills" id="heroCommandPills" aria-label="选择经营指令">
-                <button class="is-active" type="button" data-command="newbie">新店闭环</button>
-                <button type="button" data-command="listing">上架草稿</button>
-                <button type="button" data-command="orders">订单售后</button>
+                <button class="is-active" type="button" data-command="newbie">免费体验</button>
+                <button type="button" data-command="listing">已有店铺</button>
+                <button type="button" data-command="orders">多店铺</button>
               </div>
             </div>
             <div class="trust-row" aria-label="产品信任点">
@@ -502,44 +502,44 @@
             <div class="audit-board">
               <div class="audit-board-header">
                 <div>
-                  <span>当前主线项目</span>
-                  <strong>旅行压缩收纳袋 · 从选品到可确认 Listing</strong>
+                  <span>当前商品项目</span>
+                  <strong>尚未添加商品 · 上传资料后生成草稿</strong>
                 </div>
-                <em>只读验证中</em>
+                <em>等待商品资料</em>
               </div>
               <div class="audit-score-row">
                 <article>
-                  <span>自动化准备度</span>
-                  <strong>72</strong>
-                  <p>先看资料缺口、费用和退货风险。</p>
+                  <span>资料完整度</span>
+                  <strong>—</strong>
+                  <p>上传图片、链接或文字后开始检查。</p>
                 </article>
                 <article>
-                  <span>利润安全线</span>
-                  <strong>18.6%</strong>
-                  <p>高于 15%，仍需确认运费。</p>
+                  <span>预计利润</span>
+                  <strong>—</strong>
+                  <p>补齐售价、成本和运费后计算。</p>
                 </article>
                 <article>
-                  <span>风险等级</span>
-                  <strong>中</strong>
-                  <p>材质、尺寸、香粒和烟雾效果待核对。</p>
+                  <span>风险初筛</span>
+                  <strong>待开始</strong>
+                  <p>系统先做侵权风险初筛，仍需商家核对。</p>
                 </article>
               </div>
               <div class="audit-checklist">
                 <div>
                   <span>01</span>
-                  <p>AI CEO 先拆分市场调研、批量候选、IP 风险、货源资料和确认边界。</p>
+                  <p>系统先整理商品事实、资料缺口、风险疑点和需要商家确认的事项。</p>
                 </div>
                 <div>
                   <span>02</span>
-                  <p>产品经理生成标题、描述、商品参数、类目、价格、政策和字段完整度。</p>
+                  <p>根据真实资料生成标题、描述、商品参数、类目和价格建议。</p>
                 </div>
                 <div>
                   <span>03</span>
-                  <p>素材工坊从流程导入或外部来源图生成主图、详情页、短视频脚本和一致性审核。</p>
+                  <p>基于商家提供的素材生成主图、详情页和短视频脚本建议。</p>
                 </div>
                 <div>
                   <span>04</span>
-                  <p>客服学习、财务统计和高风险动作推入决策中心，再回流 AI CEO 复盘。</p>
+                  <p>利润、履约和风险结果集中展示，需要真实执行时再由商家确认。</p>
                 </div>
               </div>
               <div class="audit-confirm-card">
@@ -569,8 +569,8 @@
           </article>
           <article>
             <span>02</span>
-            <strong>市场 / 批量 / IP</strong>
-            <p>市场调研销量和价格带，批量候选先质检，IP 防侵权筛掉品牌词、Logo、角色图案和同款外观风险。</p>
+            <strong>市场 / 批量 / 风险</strong>
+            <p>查看价格带和候选商品，并做侵权风险初筛；结果仅供参考，仍需商家核对品牌、授权和外观风险。</p>
           </article>
           <article>
             <span>03</span>
@@ -639,7 +639,7 @@
               <span>动作</span>
             </div>
             <h3>再分给工作环节推进</h3>
-          <p>市场调研、批量选品、IP 防侵权、Listing 资料、流程导入素材、外部独立生成、客服学习和财务履约分别产出草稿、依据和风险。</p>
+          <p>系统按经营流程整理调研、候选商品、侵权风险初筛、刊登资料、素材建议、客服与履约信息，并保留每一步依据。</p>
           </article>
           <article>
             <div class="story-visual confirm-visual">
@@ -668,8 +668,8 @@
             <p>商家用文字下达目标。AI CEO 先转成岗位任务、来源记录、缺口清单和确认边界。</p>
           </article>
           <article>
-            <span>02 · 调研选品与 IP</span>
-            <strong>市场调研、批量候选和防侵权筛查先判断能不能做。</strong>
+            <span>02 · 调研选品与风险</span>
+            <strong>先看市场依据、资料完整度和侵权风险初筛结果。</strong>
                 <p>销量、价格带、供应商、退货风险、Logo、品牌词和外观风险都有来源记录。</p>
           </article>
           <article>
@@ -751,38 +751,33 @@
           <div>
             <p class="eyebrow">订阅</p>
             <h2>先免费用起来，再按店铺数量和自动化深度升级。</h2>
-          <p class="section-note">四档套餐只收软件使用费。商家自带模型，文本模型费用由商家承担；图片和视频生成使用素材点，和订阅分开结算。平台广告费、成交费、物流和退款不是捷境代扣。</p>
+          <p class="section-note">免费体验含 7 天和 20 次捷境托管 AI；单店版含 1,000 素材点，多店铺版含 3,000 素材点。套餐内点数用完后再按需购买，商家自己的模型与平台经营成本分别核算。</p>
           </div>
           <button class="primary-action" id="openPlans">查看订阅方案</button>
         </div>
         <div class="pricing-layout">
           <div class="pricing-grid" id="pricingGrid" aria-label="订阅方案选择">
             <article class="plan-card" data-plan-choice="free">
-              <span>免费版</span>
-              <strong>¥0</strong>
-              <p>基础功能可用，适合先跑通一条商品线。</p>
+              <span>免费体验</span>
+              <strong>¥0 / 7 天</strong>
+              <p>1 个店铺、1 个席位、20 次捷境托管 AI 和 1 条未发布草稿。</p>
             </article>
             <article class="plan-card is-featured is-selected" data-plan-choice="starter">
-              <span>起步版</span>
+              <span>单店版</span>
               <strong>¥99 / 30 天</strong>
-              <p>1 个店铺、2 个席位、100 个经营任务；素材点另购。</p>
+              <p>1 个店铺、2 个席位、100 个经营任务；含 1,000 素材点。</p>
             </article>
             <article class="plan-card" data-plan-choice="operator">
-              <span>经营版</span>
+              <span>多店铺版</span>
               <strong>¥199 / 30 天</strong>
-              <p>3 个店铺、5 个席位、500 个经营任务。</p>
-            </article>
-            <article class="plan-card" data-plan-choice="team">
-              <span>团队版</span>
-              <strong>¥299 / 30 天</strong>
-              <p>5 个店铺、5 个席位、1500 个经营任务。</p>
+              <p>3 个店铺、5 个席位、500 个经营任务；含 3,000 素材点。</p>
             </article>
           </div>
           <aside class="pricing-detail" id="pricingDetail" aria-live="polite">
             <p class="eyebrow">当前选择</p>
-            <h3 id="pricingDetailTitle">起步版</h3>
+            <h3 id="pricingDetailTitle">单店版</h3>
             <strong id="pricingDetailPrice">¥99 / 30 天</strong>
-        <p id="pricingDetailDesc">单次购买 30 天软件使用权，不会自动续费；商家自带模型不消耗素材点，图片和视频生成使用素材点。</p>
+        <p id="pricingDetailDesc">单次购买 30 天软件使用权，不会自动续费；先使用套餐内素材点，用完后再按需购买。</p>
             <ul id="pricingDetailList"></ul>
             <div class="button-row">
               <button class="primary-action" id="pricingStart">登录后选择方案</button>
@@ -893,12 +888,12 @@
           data-global-flow-view="connect"
           data-global-flow-key="billing"
           aria-label="查看订阅套餐、素材额度和账单"
-          title="订阅与额度"
+          title="套餐与付款"
         >
           <span class="sidebar-subscription-icon" aria-hidden="true">¥</span>
           <span>
             <strong>
-              <span class="subscription-entry-full-label">订阅与额度</span>
+              <span class="subscription-entry-full-label">套餐与付款</span>
               <span class="subscription-entry-compact-label" aria-hidden="true">订阅</span>
             </strong>
             <small>套餐 · 素材 · 账单</small>
@@ -944,13 +939,13 @@
           <div class="global-loop-workbench" id="globalLoopWorkbench" aria-label="真实闭环任务板"></div>
         </section>
 
-        <section class="view is-active" id="view-cockpit" data-title="AI CEO">
+        <section class="view is-active" id="view-cockpit" data-title="AI CEO" data-merchant-blank-workbench="merchant_blank_workbench_v1">
           <div class="cockpit-grid cockpit-v2 cockpit-minimal-home">
             <section class="mission-strip cockpit-command-center" aria-label="AI CEO 今日经营总览">
               <div class="mission-copy cockpit-command-copy">
                 <p class="eyebrow">今日主线</p>
                 <h2>商家给 AI CEO 下指令，捷境按岗位推进</h2>
-                <p>上传图片、链接或输入文字目标后，AI CEO 先拆任务，再推进市场调研、批量选品、IP 防侵权、Listing、素材、客服学习、财务统计和复盘；涉及发布、付款、退款、广告预算和买家承诺时，再交给你确认。</p>
+                <p>上传图片、链接或文字资料后，系统会整理缺口并生成调研、刊登和素材草稿；涉及发布、付款、退款、广告预算和买家承诺时，再交给商家确认。</p>
                 <div class="mission-progress" aria-label="当前项目进度">
                   <span class="is-done">AI CEO 指令</span>
                   <span class="is-done">市场/IP</span>
@@ -1032,7 +1027,7 @@
               <div class="ceo-priority-grid">
                 <article class="ceo-priority-card is-urgent">
                   <span>1 · 先补关键资料</span>
-                  <strong>尺寸、包装重量、材质、是否含香粒</strong>
+                  <strong>尺寸、包装重量、材质和包装内容</strong>
                   <p>这些会影响 eBay 字段、运费、利润和退货。AI 不能猜，必须让你确认一次。</p>
                   <button class="primary-action" type="button" data-ceo-action="confirm-info">去确认资料</button>
                 </article>
@@ -1055,7 +1050,7 @@
               <div class="section-heading">
                 <div>
                   <p class="eyebrow">当前项目推进</p>
-                  <h2>倒流香炉现在卡在哪</h2>
+                  <h2>上传第一份商品资料</h2>
                   <p class="section-note">把商品从货源图推进到 eBay 上架草稿。资料不清楚时停在确认中心，其他整理工作继续自动走。</p>
                 </div>
                 <button class="secondary-action compact-action" type="button" data-ceo-action="open-optimization">打开项目</button>
@@ -1073,7 +1068,7 @@
                 </article>
                 <article>
                   <span>需要你补</span>
-                  <strong>尺寸、重量、材质、是否含香粒</strong>
+                  <strong>尺寸、重量、材质和包装内容</strong>
                   <p>这些信息会影响运费、利润、退货、平台字段和买家预期，AI 不能乱填。</p>
                 </article>
                 <article>
@@ -1095,11 +1090,11 @@
               <div class="chat-log" id="ceoChat">
           <article class="message user">
             <span>我</span>
-            <p>我刚看到一款倒流香炉，感觉画面感挺强，想先试试看。我的货源一般从 1688 找，再走供应商发货或中转履约。你先帮我看看，这个品放到 eBay 上有没有必要继续做。</p>
+            <p>这是我的商品图片和货源链接。请先整理商品事实、资料缺口和风险疑点，再生成一份待我核对的 eBay 草稿。</p>
           </article>
           <article class="message ai">
             <span>AI CEO</span>
-            <p>可以。我们先把“倒流香炉”当成一个候选品来跑，不急着上架。我会先判断 eBay 上有没有需求、价格带是否合理、竞品怎么展示、差评集中在哪里，再看 1688 供货和海外履约有没有明显风险。</p>
+            <p>可以。我会先整理标题、属性、描述、来源和缺口；资料不足时不会替你猜测。草稿生成后由商家核对，再决定是否连接店铺或进入下一步。</p>
           </article>
           <article class="message ai">
             <span>AI CEO</span>
@@ -1107,14 +1102,14 @@
           </article>
           <article class="message user">
             <span>我</span>
-            <p>我找到了一张接近的 1688 货源图。你先按这张图重做主图、详情页和场景图，顺便把尺寸、重量、材质、是否配香粒这些要问供应商的问题列出来。</p>
+            <p>这是我的商品图片和货源链接。请先整理商品事实、来源缺口和风险疑点，并列出需要向供应商确认的问题。</p>
           </article>
           <article class="message user message-media-only">
             <span>我</span>
             <figure class="message-attachment">
-              <a class="message-attachment-preview" href="assets/backflow-incense-burner-hero.webp" target="_blank" rel="noopener" title="点击查看原图">
-                <img src="assets/backflow-incense-burner-hero.webp" alt="倒流香炉原图" loading="lazy" />
-              </a>
+              <div class="message-attachment-preview" aria-label="商品图片占位">
+                <span class="media-empty-placeholder" aria-hidden="true">商品图片</span>
+              </div>
               <figcaption>
                 <strong>货源图附件</strong>
                 <small>点击查看原图</small>
@@ -1123,7 +1118,7 @@
           </article>
           <article class="message ai">
             <span>AI CEO</span>
-            <p>收到。我会把它推进成一个发布前项目：先生成白底主图、茶室/家居场景图、详情页长图和视频脚本；同时把尺寸、重量、材质、香粒说明、采购价和发货方式留作确认项。没有确认前，不会进入发布或采购。</p>
+            <p>收到。我会先整理标题、属性、描述、素材需求和资料缺口；尺寸、重量、材质、包装内容、采购价和发货方式仍由商家确认。没有确认前，不会进入发布或采购。</p>
           </article>
               </div>
               <form class="chat-compose" id="ceoForm">
@@ -1159,7 +1154,7 @@
                 <div class="market-report-head">
                   <div>
                     <p class="eyebrow">市场经理工作记录</p>
-                    <h3>倒流香炉 eBay 市场快报</h3>
+                    <h3>商品资料与市场判断</h3>
                     <span>当前估算口径 · 接入 eBay 店铺、Listing 和成交数据后自动重算</span>
                   </div>
                   <span class="pill amber">可小单验证</span>
@@ -1168,8 +1163,8 @@
                 <div class="market-decision-band" aria-label="综合机会判断">
                   <article class="market-score-card">
                     <span>综合机会分</span>
-                    <strong>72<small>/100</small></strong>
-                    <p>有视觉卖点，但同款竞争多，先测素材点击和真实利润。</p>
+                    <strong>—</strong>
+                    <p>上传商品资料后，根据市场依据、成本和履约信息生成判断。</p>
                   </article>
                   <div class="market-score-bars">
                     <span><b>需求匹配</b><em><i style="width: 76%"></i></em><small>76</small></span>
@@ -1240,7 +1235,7 @@
                       <article>
                         <span>买家画像 B</span>
                         <strong>礼品场景买家</strong>
-                        <p>节日、乔迁、禅意礼品需求，关注包装、尺寸、是否含香粒和到手完整度。</p>
+                        <p>礼品场景买家通常关注包装、尺寸、包装内容和到手完整度。</p>
                       </article>
                     </div>
 
@@ -1248,19 +1243,19 @@
                       <div>
                         <strong>搜索方向</strong>
                         <div class="market-keywords">
-                          <span>backflow incense burner</span>
-                          <span>waterfall incense burner</span>
-                          <span>zen home decor</span>
-                          <span>incense holder</span>
-                          <span>ceramic incense burner</span>
+                          <span>等待商品关键词</span>
+                          <span>等待类目建议</span>
+                          <span>等待买家搜索词</span>
+                          <span>等待属性词</span>
+                          <span>等待长尾词</span>
                         </div>
                       </div>
                       <div>
                         <strong>价格带判断</strong>
                         <div class="market-price-ladder">
-                          <span><em style="width: 26%"></em><b>$9.99-14.99</b><small>低价走量，质量预期低</small></span>
-                          <span><em style="width: 58%"></em><b>$15.99-24.99</b><small>主测试带，适合单品</small></span>
-                          <span><em style="width: 38%"></em><b>$25.99-39.99</b><small>套装/礼品包装才支撑</small></span>
+                          <span><em style="width: 0%"></em><b>待计算</b><small>上传商品资料后生成价格带</small></span>
+                          <span><em style="width: 0%"></em><b>待计算</b><small>补齐成本与运费后测算</small></span>
+                          <span><em style="width: 0%"></em><b>待计算</b><small>结合真实竞品数据判断</small></span>
                         </div>
                       </div>
                     </div>
@@ -1268,17 +1263,17 @@
                     <div class="market-report-grid">
                       <article>
                         <span>竞品痛点</span>
-                        <strong>烟雾效果、尺寸偏小、易碎、是否含香粒</strong>
-                        <p>详情页必须提前讲清楚效果、实物尺寸、材质、包装和是否附带香粒，减少售后争议。</p>
+                        <strong>等待商品资料后分析</strong>
+                        <p>系统会根据真实商品、竞品和售后信息整理需要提前说明的内容。</p>
                       </article>
                       <article>
                         <span>差异化机会</span>
-                        <strong>不要只卖“香炉”，要卖使用场景</strong>
-                        <p>主图保真，副图做茶室、书桌、礼品包装和尺寸对比，用素材把低价同款拉开。</p>
+                        <strong>等待真实商品和竞品依据</strong>
+                        <p>系统会提出可验证的差异化方向，商家核对后再用于刊登和素材。</p>
                       </article>
                       <article>
                         <span>资料缺口</span>
-                        <strong>尺寸、重量、材质、采购价、包装、香粒安全说明</strong>
+                        <strong>尺寸、重量、材质、采购价、包装和安全说明</strong>
                         <p>这些字段会影响运费、利润、退货和买家预期，必须向供应商确认后再写进 Listing。</p>
                       </article>
                     </div>
@@ -1293,7 +1288,7 @@
                 <div class="listing-report-head">
                   <div>
                     <p class="eyebrow">产品经理工作记录</p>
-                    <h3>倒流香炉 eBay 刊登工作单</h3>
+                    <h3>eBay 刊登草稿工作单</h3>
                     <span>受控草稿 · 接入真实店铺、类目和政策数据后自动校验字段</span>
                   </div>
                   <span class="pill amber">资料待补齐</span>
@@ -1302,8 +1297,8 @@
                 <div class="listing-readiness-band" aria-label="刊登准备度">
                   <article class="listing-readiness-score">
                     <span>刊登准备度</span>
-                    <strong>68<small>/100</small></strong>
-                    <p>标题、图片方向和描述结构已成型；尺寸、重量、材质、包装和是否含香粒需要确认。</p>
+                    <strong>—</strong>
+                    <p>上传商品资料后生成刊登准备度和待补字段。</p>
                   </article>
                   <div class="listing-stage-stack">
                     <span class="is-done"><b>01</b><strong>接收市场结论</strong><small>可进入小单测试，不建议直接铺量</small></span>
@@ -1321,10 +1316,10 @@
                     </div>
                   </div>
                   <div class="listing-field-grid">
-                    <article><span>Title</span><strong>Oriental Backflow Incense Burner Zen Waterfall Smoke Holder Home Decor Gift</strong><small>控制在 80 字符内，先放核心词和场景词。</small></article>
-                    <article><span>Category</span><strong>Home Decor / Incense Holders</strong><small>后续用 eBay 类目规则校验 Category ID。</small></article>
+                    <article><span>Title</span><strong>等待商家提交商品事实后生成</strong><small>控制在 80 字符内，先放核心词和规格信息。</small></article>
+                    <article><span>Category</span><strong>等待商品资料后建议</strong><small>后续用 eBay 类目规则校验 Category ID。</small></article>
                     <article><span>Format / Condition</span><strong>Fixed Price · New</strong><small>一口价新品，发布前确认库存和店铺政策。</small></article>
-                    <article><span>Price / Quantity</span><strong>US $22.99 · 首批 20</strong><small>价格要等利润测算和运费确认后再锁定。</small></article>
+                    <article><span>Price / Quantity</span><strong>等待商家补充</strong><small>价格与库存要等利润测算和运费确认后再锁定。</small></article>
                   </div>
                 </section>
 
@@ -1339,19 +1334,19 @@
                   <div class="listing-media-layout">
                     <div class="listing-picture-order" aria-label="图片顺序">
                       <article><b>1</b><strong>白底主图</strong><small>真实商品为主，背景干净，不能改变器型。</small></article>
-                      <article><b>2</b><strong>茶室场景图</strong><small>突出家居、书桌、禅意摆件的使用场景。</small></article>
-                      <article><b>3</b><strong>烟雾效果图</strong><small>展示倒流效果，但不能夸大实际烟量。</small></article>
+                      <article><b>2</b><strong>使用场景图</strong><small>根据商品真实用途展示买家可理解的使用场景。</small></article>
+                      <article><b>3</b><strong>效果展示图</strong><small>展示真实功能和使用效果，不夸大商品表现。</small></article>
                       <article><b>4</b><strong>尺寸图</strong><small>等供应商确认长宽高和包装尺寸后生成。</small></article>
-                      <article><b>5</b><strong>细节图</strong><small>鸟枝、纹理、底座、香粒托盘和材质质感。</small></article>
-                      <article><b>6</b><strong>包装清单</strong><small>是否含香粒、是否含托盘、是否含防碎包装。</small></article>
+                      <article><b>5</b><strong>细节图</strong><small>展示材质、结构、接口和做工细节。</small></article>
+                      <article><b>6</b><strong>包装清单</strong><small>明确主商品、配件、说明书和保护包装。</small></article>
                     </div>
                     <div class="listing-video-card">
                       <div class="listing-video-thumb">
-                        <img src="assets/backflow-incense-video-cover.webp" alt="倒流香炉短视频封面" loading="lazy" />
+                        <span class="media-empty-placeholder" aria-hidden="true">视频封面位置</span>
                         <span class="video-play" aria-hidden="true"></span>
                       </div>
                       <strong>15-30 秒产品短视频脚本</strong>
-                      <p>开头 3 秒展示烟雾下流效果，中段切细节和摆放场景，结尾提示适合家居装饰和礼品场景。脚本、字幕和封面先生成草稿，不自动发布。</p>
+                      <p>开头展示核心卖点，中段切换细节和使用场景，结尾说明适用人群与包装内容。脚本、字幕和封面先生成草稿，不自动发布。</p>
                     </div>
                   </div>
                 </section>
@@ -1366,14 +1361,14 @@
                   </div>
                   <div class="listing-spec-grid">
                     <article><span>商品参数</span><strong>Brand / Type / Material / Color / MPN / UPC</strong><p>这些是 eBay 刊登会用到的商品参数。品牌可先用 Unbranded；UPC、MPN、材质和颜色按供应商确认填写。</p></article>
-                    <article><span>Description</span><strong>卖点 + 参数 + 使用提醒 + FAQ</strong><p>强调装饰、礼品、桌面氛围；删除医疗、助眠、宗教功效等容易出问题的表达。</p></article>
-                    <article><span>客服档案</span><strong>买前问题、售后问题、易碎与是否含香粒</strong><p>上架前把尺寸、包装、使用方式、破损处理和退换货边界同步给客服。</p></article>
+                    <article><span>Description</span><strong>卖点 + 参数 + 使用提醒 + FAQ</strong><p>只使用可核对的商品事实，删除无法证明或容易误导买家的表达。</p></article>
+                    <article><span>客服档案</span><strong>买前问题、售后问题、易碎和包装内容</strong><p>上架前把尺寸、包装、使用方式、破损处理和退换货边界同步给客服。</p></article>
                   </div>
                 </section>
 
                 <div class="listing-blocker-card">
                   <strong>现在卡住的不是 AI 能不能写，而是真实资料还没齐</strong>
-                  <p>需要向供应商确认：长宽高、裸重、包装重量、材质、颜色差异、是否含香粒、是否有防碎包装、发货地、采购价和售后补发规则。补齐后才进入利润测算和发布确认。</p>
+                  <p>需要向供应商确认：长宽高、裸重、包装重量、材质、颜色差异、包装内容、保护包装、发货地、采购价和售后补发规则。补齐后才进入利润测算和发布确认。</p>
                 </div>
               </article>
                 </div>
@@ -1388,7 +1383,7 @@
             <div class="product-manager-nav" aria-label="产品经理工作项">
               <button class="product-manager-tab is-active" type="button" data-product-jump="queue" aria-selected="true">
                 <span>刊登队列</span>
-                <strong>12 个商品</strong>
+                <strong>0 个商品</strong>
               </button>
               <button class="product-manager-tab" type="button" data-product-jump="report" aria-selected="false">
                 <span>产品经理</span>
@@ -1409,9 +1404,9 @@
                 <div>
                   <p class="eyebrow">产品经理刊登模块</p>
                   <h2>产品刊登中枢：同时管理多个 eBay 草稿，不是一件一件手填</h2>
-                  <p class="section-note">十几个商品同时开始时，先进入刊登队列。AI CEO 把市场筛选、上架字段、素材包、政策套用、缺口问询和确认中心串成一条线；当前页面展示的是队列中选中的倒流香炉。</p>
+                  <p class="section-note">商品资料进入后才创建刊登任务。AI CEO 会整理上架字段、素材建议、政策缺口和确认事项；没有真实商品时保持空白，不使用预置案例。</p>
                 </div>
-                <span class="pill amber">12 个商品 · 工作批次</span>
+                <span class="pill amber">等待商品资料</span>
               </header>
 
               <section class="product-batch-dashboard" data-product-section="queue" aria-label="产品刊登队列">
@@ -1423,36 +1418,36 @@
                   </div>
                 </div>
                 <div class="product-queue-metrics" aria-label="刊登队列概览">
-                  <article><span>队列商品</span><strong>12</strong><p>先生成草稿，不直接发布</p></article>
-                  <article><span>可继续推进</span><strong>5</strong><p>字段和素材基本齐</p></article>
-                  <article><span>待补资料</span><strong>4</strong><p>重量、尺寸、材质、发货地</p></article>
-                  <article><span>先拦住</span><strong>3</strong><p>侵权、利润、履约风险</p></article>
+                  <article><span>队列商品</span><strong>0</strong><p>先上传商品资料</p></article>
+                  <article><span>可继续推进</span><strong>0</strong><p>生成草稿后显示</p></article>
+                  <article><span>待补资料</span><strong>0</strong><p>检查后显示资料缺口</p></article>
+                  <article><span>先拦住</span><strong>0</strong><p>风险初筛后显示</p></article>
                 </div>
                 <div class="product-queue-layout">
                   <article class="product-queue-list-card">
                     <div class="product-card-title">
                       <span>当前批次</span>
-                      <strong>建议先做 5 个测试草稿</strong>
+                      <strong>上传商品资料后创建草稿</strong>
                     </div>
                     <div class="product-queue-list" aria-label="商品刊登队列">
                       <button class="product-queue-row is-active" type="button" data-product-row-jump="report">
-                        <img src="assets/backflow-incense-generated-main.webp" alt="">
-                        <span><b>倒流香炉</b><small>Listing 草稿中 · 素材已生成</small></span>
+                        <span class="media-empty-placeholder" aria-hidden="true">商品图片</span>
+                        <span><b>等待商品资料</b><small>上传后生成 Listing 草稿</small></span>
                         <em>68</em>
                       </button>
                       <button class="product-queue-row" type="button" data-product-row-jump="queue">
-                        <img src="assets/travel-compression-main-v2.png" alt="">
-                        <span><b>旅行压缩收纳袋</b><small>市场通过 · 等待标题和规格</small></span>
+                        <span class="media-empty-placeholder" aria-hidden="true">商品图片</span>
+                        <span><b>等待商品资料</b><small>上传后生成标题和规格草稿</small></span>
                         <em>74</em>
                       </button>
                       <button class="product-queue-row" type="button" data-product-row-jump="queue">
                         <span class="queue-text-thumb">J</span>
-                        <span><b>便携首饰盒</b><small>低风险 · 可生成素材方向</small></span>
+                        <span><b>候选商品</b><small>资料补齐后生成素材方向</small></span>
                         <em>71</em>
                       </button>
                       <button class="product-queue-row is-waiting" type="button" data-product-row-jump="blocker">
                         <span class="queue-text-thumb">C</span>
-                        <span><b>香薰蜡烛套装</b><small>先补易碎包装和重量</small></span>
+                        <span><b>候选商品</b><small>先补包装和重量</small></span>
                         <em>待补</em>
                       </button>
                       <button class="product-queue-row is-blocked" type="button" data-product-row-jump="queue">
@@ -1465,10 +1460,10 @@
                   <aside class="product-transfer-card">
                     <div class="product-card-title">
                       <span>当前选中</span>
-                      <strong>倒流香炉</strong>
+                      <strong>当前商品</strong>
                     </div>
                     <div class="product-transfer-list">
-                      <article><span>市场结论</span><strong>建议小批量测试</strong><p>视觉卖点明确，但尺寸、重量、材质和是否含香粒要先补齐。</p></article>
+                      <article><span>市场结论</span><strong>等待商品资料</strong><p>提交商品后再判断市场、尺寸、重量、材质和包装内容。</p></article>
                       <article><span>刊登骨架</span><strong>Fixed Price · New</strong><p>类目、商品参数、价格库存和三类业务政策会在发布前校验。</p></article>
                       <article><span>素材状态</span><strong>主图和详情页已有草稿</strong><p>素材深度编辑放在素材工坊，产品刊登页展示是否可用于 Listing。</p></article>
                       <article><span>下一步</span><strong>补资料后送确认中心</strong><p>发布、改价、库存和政策不自动执行。</p></article>
@@ -1481,7 +1476,7 @@
                 <div class="product-report-head">
                   <div>
                     <p class="eyebrow">产品经理工作记录</p>
-                    <h3>倒流香炉 eBay 刊登资料报告</h3>
+                    <h3>eBay 刊登资料报告</h3>
                     <span>当前口径 · 接入 eBay 类目、业务政策和店铺授权后自动重算</span>
                   </div>
                   <span class="pill amber">可生成草稿 · 不自动发布</span>
@@ -1489,8 +1484,8 @@
                 <div class="product-report-summary">
                   <article>
                     <span>刊登准备度</span>
-                    <strong>68<small>/100</small></strong>
-                    <p>可进入 Listing 草稿，但尺寸、重量、材质、包装、是否含香粒和类目 specifics 还要补齐。</p>
+                        <strong>—</strong>
+                    <p>上传商品资料后生成准备度和待补字段。</p>
                   </article>
                   <article>
                     <span>模板结论</span>
@@ -1507,7 +1502,7 @@
                   <div class="product-filled-head">
                     <div>
                       <p class="eyebrow">eBay 已填写刊登草稿</p>
-                      <strong>倒流香炉 · Fixed Price 单品刊登</strong>
+                      <strong>当前商品 · Fixed Price 草稿</strong>
                       <span>这些是 AI 已经替商家写好的上架资料；带“待确认”的字段不会直接发布。</span>
                     </div>
                     <span class="pill amber">发布前需确认</span>
@@ -1515,48 +1510,48 @@
                   <div class="product-title-box">
                     <article>
                       <span>主标题 Title</span>
-                      <strong>Backflow Incense Burner Waterfall Smoke Holder Zen Home Decor Gift</strong>
+                      <strong>等待商品事实完整后生成标题</strong>
                       <small>66 / 80 字符 · 放核心关键词，不用全大写，不写夸大功效。</small>
                     </article>
                     <article class="is-paid-option">
                       <span>副标题 Subtitle</span>
-                      <strong>Zen waterfall smoke decor gift, cones not included</strong>
-                      <small>50 / 55 字符 · 可选付费升级项，默认关闭；只有商家确认愿意承担费用才启用。</small>
+                      <strong>等待商品事实完整后生成副标题</strong>
+                      <small>可选付费升级项，默认关闭；只有商家确认愿意承担费用才启用。</small>
                     </article>
                   </div>
                   <div class="product-form-grid">
-                    <article><span>SKU</span><strong>JJ-BFI-001</strong><small>商品追踪编号</small></article>
+                    <article><span>SKU</span><strong>等待商家补充</strong><small>商品追踪编号</small></article>
                     <article><span>Marketplace</span><strong>eBay US</strong><small>目标站点</small></article>
-                    <article><span>eBay 类目</span><strong>Home Decor / Incense Burners</strong><small>类目编号待 eBay 正式校验</small></article>
+                    <article><span>eBay 类目</span><strong>等待商品资料后建议</strong><small>类目编号待 eBay 正式校验</small></article>
                     <article><span>Condition</span><strong>New</strong><small>新品，需确认供应商是否全新包装</small></article>
                     <article><span>Format</span><strong>Fixed Price</strong><small>一口价，不走拍卖</small></article>
                     <article><span>Listing duration</span><strong>Good Til Cancelled</strong><small>固定价常用口径，按店铺规则确认</small></article>
-                    <article><span>Price</span><strong>US $22.99</strong><small>待利润测算后确认</small></article>
-                    <article><span>Quantity</span><strong>20</strong><small>先小单测试，不直接铺量</small></article>
+                    <article><span>Price</span><strong>等待商家补充</strong><small>待利润测算后确认</small></article>
+                    <article><span>Quantity</span><strong>等待商家补充</strong><small>库存由商家确认</small></article>
                   </div>
                   <div class="product-specifics-table" aria-label="商品参数 已填写草稿">
                     <div><span>Brand</span><strong>Unbranded</strong><small>无品牌时使用，若供应商有品牌需授权</small></div>
-                    <div><span>Type</span><strong>Backflow Incense Burner</strong><small>类目字段，待 aspects 校验</small></div>
-                    <div><span>Material</span><strong>Ceramic / Resin style finish</strong><small>材质必须向供应商确认，当前为草稿</small></div>
-                    <div><span>Color</span><strong>Bronze / Brown</strong><small>按实物色差确认</small></div>
-                    <div><span>Style</span><strong>Zen / Oriental-inspired Home Decor</strong><small>避免宗教功效承诺</small></div>
-                    <div><span>Room</span><strong>Living Room, Study, Office</strong><small>场景词用于买家理解</small></div>
+                    <div><span>Type</span><strong>待商家补充</strong><small>类目字段，待 aspects 校验</small></div>
+                    <div><span>Material</span><strong>待商家补充</strong><small>材质必须向供应商确认，当前为草稿</small></div>
+                    <div><span>Color</span><strong>待商家补充</strong><small>按实物色差确认</small></div>
+                    <div><span>Style</span><strong>待商家补充</strong><small>按真实商品和类目要求填写</small></div>
+                    <div><span>Room</span><strong>待商家补充</strong><small>适用场景需符合商品事实</small></div>
                     <div><span>MPN</span><strong>Does Not Apply</strong><small>无厂家编号时使用</small></div>
                     <div><span>UPC</span><strong>Does Not Apply</strong><small>无 UPC 时使用，需按类目规则校验</small></div>
-                    <div><span>Included</span><strong>Incense burner only</strong><small>是否含香粒必须确认，当前默认不含</small></div>
-                    <div><span>Features</span><strong>Waterfall smoke effect, decorative holder</strong><small>只描述效果，不写疗愈/净化/助眠</small></div>
+                    <div><span>Included</span><strong>待商家补充</strong><small>包装内容必须按供应商清单确认</small></div>
+                    <div><span>Features</span><strong>待商家补充</strong><small>只描述可核对的真实功能</small></div>
                   </div>
                   <div class="product-description-draft">
                     <span>Description HTML 草稿</span>
-                    <p><b>Overview:</b> Add a calm decorative accent to a tea table, study, office, or living room with this backflow incense burner. The raised holder and basin-style base are designed for backflow incense cones and a waterfall-style smoke effect.</p>
-                    <p><b>Highlights:</b> decorative home accent; suitable for desk, shelf, tea room, and gift scenes; works with backflow incense cones; compact display size; easy to place and clean.</p>
-                    <p><b>Package note:</b> Incense cones are not included unless confirmed by the supplier. Size, weight, material, package dimensions, and color may need final confirmation before publishing.</p>
+                    <p><b>Overview:</b> 等待商家提交商品图片、货源链接或文字说明后生成。</p>
+                    <p><b>Highlights:</b> 只根据真实商品资料整理可验证的卖点和使用场景。</p>
+                    <p><b>Package note:</b> 包装内容、尺寸、重量、材质和颜色需由商家确认后再发布。</p>
                   </div>
                   <div class="product-policy-grid">
-                    <article><span>Picture 1-12</span><strong>主图、茶室场景、家居场景、烟雾效果、尺寸图、细节图、包装清单</strong><small>素材在下方板块预览</small></article>
+                    <article><span>Picture 1-12</span><strong>主图、使用场景、效果展示、尺寸图、细节图和包装清单</strong><small>素材在下方板块预览</small></article>
                     <article><span>Video</span><strong>15-30 秒产品展示 / 短视频草稿</strong><small>脚本和授权发布前确认</small></article>
-                    <article><span>Package weight</span><strong>650 g</strong><small>估算值，待实测</small></article>
-                    <article><span>Package dimensions</span><strong>26 × 20 × 14 cm</strong><small>估算值，待供应商确认</small></article>
+                    <article><span>Package weight</span><strong>等待商家补充</strong><small>真实重量会影响运费和利润</small></article>
+                    <article><span>Package dimensions</span><strong>等待商家补充</strong><small>真实尺寸需在发布前确认</small></article>
                     <article><span>Handling time</span><strong>3 business days</strong><small>按实际履约方式确认</small></article>
                     <article><span>Item location</span><strong>China / route pending</strong><small>发货地会影响物流模板、运费和买家承诺</small></article>
                     <article><span>Merchant location key</span><strong>CN_WAREHOUSE_01</strong><small>待校验字段，真实发布前由店铺库存地址生成</small></article>
@@ -1615,15 +1610,15 @@
                         </article>
                       </div>
                       <aside class="policy-product-delta">
-                        <span>本次倒流香炉需要商家补的不是政策全文</span>
+                        <span>当前商品需要商家补的不是政策全文</span>
                         <strong>只补 4 个会改变政策结果的点</strong>
                         <ul>
                           <li><b>发货路线</b><small>供应商代发、先入仓、中转或橙联，会决定 item location 和物流模板。</small></li>
-                          <li><b>包装重量</b><small>当前 650 g 是估算，真实重量会改运费和利润。</small></li>
+                          <li><b>包装重量</b><small>真实重量会改变运费和利润。</small></li>
                           <li><b>处理时间</b><small>供应商备货慢就不能承诺 1 天处理。</small></li>
                           <li><b>退货地址</b><small>退回国内、海外仓、供应商或不接收部分场景，要提前定规则。</small></li>
                         </ul>
-                        <p>确认后可保存为“同类小件默认模板”，以后香炉、摆件、家居装饰类商品自动套用。</p>
+                        <p>确认后可保存为“同类商品默认模板”，以后相近商品可直接复用并再次核对。</p>
                       </aside>
                     </div>
                   </div>
@@ -1644,7 +1639,7 @@
                   <article>
                     <span>价格库存</span>
                     <strong>Format / Price / Quantity / Variations</strong>
-                    <p>倒流香炉先按 Fixed Price 单品草稿；若后续有颜色、尺寸、套装，需要转成变体刊登。</p>
+                    <p>当前商品先按 Fixed Price 单品草稿；若后续有颜色、尺寸、套装，需要转成变体刊登。</p>
                     <em>状态：价格等利润测算后确认</em>
                   </article>
                   <article>
@@ -1675,8 +1670,8 @@
               <div class="product-manager-grid">
                 <article class="product-readiness-card">
                   <span>刊登准备度</span>
-                  <strong>68<small>/100</small></strong>
-                  <p>标题、描述结构和素材方向已可预览；尺寸、重量、材质、包装、是否含香粒还需要供应商确认。</p>
+                  <strong>—</strong>
+                  <p>上传商品资料后生成刊登准备度和待补字段。</p>
                 </article>
 
                 <article class="product-listing-card" data-product-section="listing">
@@ -1685,8 +1680,8 @@
                     <strong>eBay 刊登字段草稿</strong>
                   </div>
                   <div class="product-field-list">
-                    <p><b>Title</b><span>Oriental Backflow Incense Burner Zen Waterfall Smoke Holder Home Decor Gift</span></p>
-                    <p><b>Category</b><span>Home Decor / Incense Holders，后续用 eBay 类目规则校验 ID。</span></p>
+                    <p><b>Title</b><span>等待商品事实完整后生成标题</span></p>
+                    <p><b>Category</b><span>等待商品资料后建议，并用 eBay 类目规则校验 ID。</span></p>
                     <p><b>Format</b><span>Fixed Price · New，库存和价格等利润测算后再确认。</span></p>
                     <p><b>商品参数</b><span>Brand、Type、Material、Color、MPN、UPC 按供应商资料补齐。</span></p>
                   </div>
@@ -1718,7 +1713,7 @@
                   </div>
                   <div class="product-picture-order">
                     <span>图片顺序</span>
-                    <p>1 白底主图 · 2 场景图 · 3 烟雾效果 · 4 尺寸图 · 5 细节图 · 6 包装清单</p>
+                    <p>1 白底主图 · 2 场景图 · 3 效果展示 · 4 尺寸图 · 5 细节图 · 6 包装清单</p>
                   </div>
                   <div class="media-canvas-grid product-listing-media-grid" aria-label="产品刊登素材模板">
                     <article class="media-canvas-card media-status-card is-pending">
@@ -1755,8 +1750,8 @@
                   </div>
                   <div class="product-copy-grid">
                     <p><b>Description</b><span>卖点、参数、使用提醒、FAQ，避免医疗、助眠、宗教功效等高风险表达。</span></p>
-                    <p><b>Video Script</b><span>开头展示烟雾下流，中段切细节与摆放场景，结尾回到家居装饰和礼品场景。</span></p>
-                    <p><b>客服档案</b><span>把尺寸、包装、是否含香粒、破损处理、退换货边界同步给客服。</span></p>
+                    <p><b>Video Script</b><span>开头展示核心卖点，中段切细节与使用场景，结尾说明包装内容和适用边界。</span></p>
+                    <p><b>客服档案</b><span>把尺寸、包装内容、破损处理和退换货边界同步给客服。</span></p>
                   </div>
                 </article>
 
@@ -1765,7 +1760,7 @@
                     <span>04</span>
                     <strong>现在必须向供应商确认</strong>
                   </div>
-                  <p>长宽高、裸重、包装重量、材质、颜色差异、是否含香粒、是否有防碎包装、发货地、采购价和售后补发规则。补齐后才进入利润测算和发布确认。</p>
+                  <p>长宽高、裸重、包装重量、材质、颜色差异、包装内容、保护包装、发货地、采购价和售后补发规则。补齐后才进入利润测算和发布确认。</p>
                 </article>
               </div>
             </div>
@@ -2310,11 +2305,12 @@
                     <label>
                       <span>生成质量</span>
                       <select id="mediaGenerationTierSelect">
-                        <option>快速样图（低成本）</option>
-                        <option selected>标准质量（推荐）</option>
-                        <option>精细质量（最终候选）</option>
+                        <option>快速样图 · 20 点/张</option>
+                        <option selected>标准图（推荐） · 80 点/张</option>
+                        <option>高清图（最终候选） · 250 点/张</option>
                       </select>
-                      <small id="mediaGenerationTierNote">标准质量适合大多数商品；先确认方向，再决定是否生成精细候选</small>
+                      <small id="mediaGenerationTierNote">标准图适合大多数商品；先确认方向，再决定是否生成高清候选</small>
+                      <small id="mediaGenerationPointQuote">标准图 80 点/张 · 当前 4 张预计 320 点；提交时由服务端再次校验</small>
                     </label>
                     <label>
                       <span>文字规则</span>
@@ -2668,7 +2664,7 @@
                 <p>这一步不是让你处理复杂配置，只是定一条边界：AI 可以继续补资料、做素材和写 Listing 草稿；真实发布、采购付款、退款、广告和客服承诺必须先问你。</p>
                 <div class="confirm-product-gap">
                   <span>发布前还缺</span>
-                  <strong>尺寸、包装重量、材质、是否含香粒</strong>
+                  <strong>尺寸、包装重量、材质和包装内容</strong>
                   <p>这些会影响运费、退货、标题参数和买家预期，不能让 AI 乱填。</p>
                 </div>
               </div>
@@ -3210,29 +3206,24 @@
         <div class="modal-pricing-layout">
           <div class="pricing-grid modal-plans" id="modalPricingGrid">
             <article class="plan-card" data-plan-choice="free">
-              <span>免费版</span>
-              <strong>¥0</strong>
-              <p>基础功能可用，先跑通一条商品线。</p>
+              <span>免费体验</span>
+              <strong>¥0 / 7 天</strong>
+              <p>1 个店铺、1 个席位、20 次捷境托管 AI 和 1 条未发布草稿。</p>
             </article>
             <article class="plan-card is-featured is-selected" data-plan-choice="starter">
-              <span>起步版</span>
+              <span>单店版</span>
               <strong>¥99 / 30 天</strong>
-              <p>1 个店铺、2 个席位、100 个经营任务；素材点另购。</p>
+              <p>1 个店铺、2 个席位、100 个经营任务；含 1,000 素材点。</p>
             </article>
             <article class="plan-card" data-plan-choice="operator">
-              <span>经营版</span>
+              <span>多店铺版</span>
               <strong>¥199 / 30 天</strong>
-              <p>3 个店铺、5 个席位、500 个经营任务。</p>
-            </article>
-            <article class="plan-card" data-plan-choice="team">
-              <span>团队版</span>
-              <strong>¥299 / 30 天</strong>
-              <p>5 个店铺、5 个席位、1500 个经营任务。</p>
+              <p>3 个店铺、5 个席位、500 个经营任务；含 3,000 素材点。</p>
             </article>
           </div>
           <aside class="pricing-detail modal-pricing-detail" id="modalPricingDetail" aria-live="polite">
             <p class="eyebrow">方案详情</p>
-            <h3 id="modalPricingTitle">起步版</h3>
+            <h3 id="modalPricingTitle">单店版</h3>
             <strong id="modalPricingPrice">¥99 / 30 天</strong>
             <p id="modalPricingDesc"></p>
             <ul id="modalPricingList"></ul>
@@ -3316,7 +3307,7 @@
     <div class="modal-backdrop" id="assetModal" hidden>
       <section class="modal wide asset-modal" role="dialog" aria-modal="true" aria-labelledby="assetModalTitle">
         <button class="icon-button modal-close" data-close-modal title="关闭">×</button>
-        <p class="eyebrow" id="assetModalRole">倒流香炉生成结果</p>
+        <p class="eyebrow" id="assetModalRole">当前商品素材生成结果</p>
         <h2 id="assetModalTitle">生成预览</h2>
         <p class="auth-note" id="assetModalIntro"></p>
         <div class="asset-modal-layout">
@@ -3406,6 +3397,6 @@
       })();
     </script>
     <script src="./assets/jiejing-first-party-analytics.js?v=20260715-owner-traffic-analytics-v104"></script>
-    <script src="./app.js?v=20260821-mainland-payment-cutover-v17"></script>
+    <script src="./app.js?v=20260822-merchant-trial-pricing-v18"></script>
 </body>
 </html>

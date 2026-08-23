@@ -72,7 +72,7 @@ const state = {
   pageState: "normal",
   wizardStep: 0,
   preselectedFromLanding: false,
-  entryPreviewStage: "newbie",
+  entryPreviewStage: "trial",
   activeStore: "us-main",
   activeProject: "backflow-incense",
   activeRule: "profit",
@@ -82,7 +82,7 @@ const state = {
   serviceFilter: "all",
   confirmFilter: "immediate",
   savedDecisionDefaults: {},
-  selectedPlan: "starter",
+  selectedPlan: "free",
   mediaGenerationStatus: "idle",
   mediaGenerationCount: 0,
   mediaTaskEntry: "project",
@@ -289,7 +289,7 @@ const state = {
   lastPdfTitle: "",
   renderedCockpitStage: "",
   dna: {
-    merchantStage: "newbie",
+    merchantStage: "store_opened",
     ebaySetup: "need_seller_account",
     ebayApiMode: "oauth_ready",
     fulfillmentMode: "dropship_supplier",
@@ -4310,12 +4310,12 @@ const mockData = {
 
 const landingProfiles = [
   {
-    value: "newbie",
-    tag: "从 0 到可确认上架",
-    title: "新手商家，还没开店",
-    detail: "先选身份和边界，再用一张货源图跑通第一条 eBay Listing 草稿。",
-    entry: "从 eBay 开店和第一件商品开始",
-    steps: ["准备 eBay 开店资料", "上传货源图/实拍图", "生成 Listing、素材和利润判断"],
+    value: "trial",
+    tag: "7 天免费体验",
+    title: "先免费生成第一条草稿",
+    detail: "无需绑卡，也不会自动扣费。上传商品图片、货源链接或文字说明，先体验一条可核对的 eBay 草稿。",
+    entry: "从第一份商品资料开始",
+    steps: ["上传商品图片、链接或文字说明", "生成标题、属性与风险初筛", "核对草稿后再决定是否继续"],
   },
   {
     value: "store_opened",
@@ -4324,14 +4324,6 @@ const landingProfiles = [
     detail: "先把 Seller Hub、Listing、费用、订单和业务政策接进捷境，减少重复整理、复制、核算和确认工作。",
     entry: "从 eBay 店铺/API 状态开始",
     steps: ["连接或导入店铺资料", "整理重复流程", "形成可确认自动化任务"],
-  },
-  {
-    value: "has_orders",
-    tag: "先压住订单风险",
-    title: "已有订单，需要减少人工",
-    detail: "先处理会伤账号表现的订单、客服、发货、退货和亏损风险，再谈自动化。",
-    entry: "从订单和 API 授权状态开始",
-    steps: ["识别订单和客服风险", "生成履约与利润复盘", "把高风险动作推给商家确认"],
   },
   {
     value: "multi_store",
@@ -4344,49 +4336,49 @@ const landingProfiles = [
 ];
 
 const heroCommands = {
-  newbie: "“我有一张倒流香炉货源图，请整理资料缺口，并推进到可确认上架。”",
-  listing: "“把倒流香炉做成 eBay Listing 草稿：标题、描述、图片、视频脚本、利润和风险一起给我。”",
+  newbie: "“我有一份商品资料，请整理缺失信息，并推进到可以核对的 eBay 草稿。”",
+  listing: "“把这份商品资料整理成 eBay 草稿：标题、属性、描述、利润参考和风险提醒一起给我。”",
   orders: "“先把会影响账号表现的订单、物流延迟、退款和低利润风险整理出来，只提醒我必须判断的事。”",
 };
 
 const planDetails = {
   free: {
-    title: "免费版",
-    price: "¥0",
-    desc: "适合第一次体验捷境的商家。可进行基础咨询、整理一个店铺的只读资料，并完成少量经营任务；不会触发真实平台写入或自动收费。",
-    cta: "登录后选择方案",
+    title: "免费体验",
+    price: "¥0 / 7 天",
+    desc: "适合先验证捷境价值的商家。注册并完成安全验证后体验 7 天，包含 20 次捷境托管 AI 对话；不绑卡、不自动扣费。",
+    cta: "免费开始体验",
     items: [
       "1 个账号空间 · 1 个席位 · 1 个店铺只读连接",
-      "每 30 天 10 个经营任务，适合体验 AI CEO 与 Listing 草稿",
-      "不开放批量铺货；真实发布等高风险动作仍需确认",
-      "商家自带模型；捷境不重复收取文本模型费用",
-      "新账号获得一次性体验素材点，后续素材点单独购买",
+      "7 天内最多 20 次捷境托管 AI 对话",
+      "完成 1 套市场分析、Listing、利润和风险检查",
+      "可保存 1 条未发布 Listing 草稿；真实发布等高风险动作仍需确认",
+      "商家自己的模型 API 不占试用次数；免费体验不赠送生图素材点",
     ],
   },
   starter: {
-    title: "起步版",
+    title: "单店版",
     price: "¥99 / 30 天",
-    desc: "适合单店起步。单次购买 30 天软件使用权，不会自动续费；商家自带模型不消耗素材点，图片和视频生成使用素材点。",
+    desc: "适合单店起步。单次购买 30 天软件使用权，不会自动续费；含 1,000 素材点，先用套餐内点数，用完后再按需购买。",
     cta: "登录后选择方案",
     items: [
       "1 个店铺 · 2 个席位 · 100 个经营任务",
       "单次批量最多 20 行，覆盖 AI CEO、Listing、素材工坊和客服订单",
       "确认中心、来源记录、工作记录和按需报告",
       "商家自带模型；模型费用由商家直接承担",
-      "素材生成按素材点结算，不随订阅赠送循环额度",
+      "含 1,000 素材点；套餐内点数当期有效，用完后可按需购买",
     ],
   },
   operator: {
-    title: "经营版",
+    title: "多店铺版",
     price: "¥199 / 30 天",
-    desc: "适合已进入稳定经营期的商家。支持多店铺、多项目和更大批量，软件订阅与素材点继续分开核算。",
+    desc: "适合已进入稳定经营期的商家。支持多店铺、多项目和更大批量；含 3,000 素材点，先用套餐内点数。",
     cta: "登录后选择方案",
     items: [
       "3 个店铺 · 5 个席位 · 500 个经营任务",
       "单次批量最多 200 行，支持失败重试和部分成功",
       "店铺级流程模板、确认规则、履约方式和利润底线",
       "跨店复用模板，同时保留每个店铺的例外规则",
-      "商家自带模型；素材点按实际生成任务单独结算",
+      "含 3,000 素材点；套餐内点数当期有效，用完后可按需购买",
     ],
   },
   team: {
@@ -5313,56 +5305,6 @@ function productizeJiejingProductCopy(value = "") {
   return output;
 }
 
-let jiejingProductModeObserver = null;
-let jiejingProductModeScheduled = false;
-
-function applyJiejingProductModeCopy(root = document.body) {
-  if (!root) return;
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      const parent = node.parentElement;
-      if (!parent || ["SCRIPT", "STYLE", "NOSCRIPT"].includes(parent.tagName)) return NodeFilter.FILTER_REJECT;
-      return NodeFilter.FILTER_ACCEPT;
-    },
-  });
-  const nodes = [];
-  while (walker.nextNode()) nodes.push(walker.currentNode);
-  nodes.forEach((node) => {
-    const next = productizeJiejingProductCopy(node.nodeValue);
-    if (next !== node.nodeValue) node.nodeValue = next;
-  });
-  root.querySelectorAll?.("[aria-label], [title], [placeholder]").forEach((element) => {
-    ["aria-label", "title", "placeholder"].forEach((name) => {
-      const value = element.getAttribute(name);
-      if (!value) return;
-      const next = productizeJiejingProductCopy(value);
-      if (next !== value) element.setAttribute(name, next);
-    });
-  });
-}
-
-function scheduleJiejingProductModeCopy() {
-  if (jiejingProductModeScheduled) return;
-  jiejingProductModeScheduled = true;
-  window.requestAnimationFrame(() => {
-    jiejingProductModeScheduled = false;
-    applyJiejingProductModeCopy();
-  });
-}
-
-function initJiejingProductModeCopyObserver() {
-  if (jiejingProductModeObserver || !document.body) return;
-  jiejingProductModeObserver = new MutationObserver(scheduleJiejingProductModeCopy);
-  jiejingProductModeObserver.observe(document.body, {
-    childList: true,
-    subtree: true,
-    characterData: true,
-    attributes: true,
-    attributeFilter: ["aria-label", "title", "placeholder"],
-  });
-  scheduleJiejingProductModeCopy();
-}
-
 function showActionToast(text) {
   const toast = document.querySelector("#actionToast");
   if (!toast) return;
@@ -5427,14 +5369,19 @@ const cockpitMarketProfiles = {
 };
 
 function cockpitMarketProfile(draft) {
-  return cockpitMarketProfiles[draft.id] || cockpitMarketProfiles.incense;
+  if (isSaasPublicMvpMode() && (!draft || isLegacySampleMediaDraftKey(draft.id))) return null;
+  return cockpitMarketProfiles[draft?.id] || cockpitMarketProfiles.incense;
 }
 function activeListingDraft() {
-  return listingDraftCatalog.find((draft) => draft.id === state.activeListingDraft) || listingDraftCatalog[0];
+  const matched = listingDraftCatalog.find((draft) => draft.id === state.activeListingDraft) || null;
+  if (isSaasPublicMvpMode() && (!matched || isLegacySampleMediaDraftKey(matched.id))) return null;
+  return matched || listingDraftCatalog[0];
 }
 
 function activeCockpitMarketDraft() {
-  return listingDraftCatalog.find((draft) => draft.id === state.activeCockpitMarketDraft) || listingDraftCatalog[0];
+  const matched = listingDraftCatalog.find((draft) => draft.id === state.activeCockpitMarketDraft) || null;
+  if (isSaasPublicMvpMode() && (!matched || isLegacySampleMediaDraftKey(matched.id))) return null;
+  return matched || listingDraftCatalog[0];
 }
 
 function cockpitMarketReportItem(draft, keywords = [], fallbackIndex = 0) {
@@ -6686,7 +6633,10 @@ function selectCockpitMarketDraft(id) {
 }
 
 function listingCategoryProfile(draft) {
-  return listingCategoryProfiles[draft.id] || listingCategoryProfiles.incense;
+  const draftId = String(draft?.id || "");
+  const matched = listingCategoryProfiles[draftId] || null;
+  if (isSaasPublicMvpMode() && (!matched || isLegacySampleMediaDraftKey(draftId))) return null;
+  return matched || listingCategoryProfiles.incense;
 }
 
 function listingDraftStatusClass(draft) {
@@ -14381,7 +14331,7 @@ function handleGlobalFlowNavigation(button) {
     confirm: "已打开确认中心：发布、付款、退款和广告等高风险动作在这里确认。",
     account: "已打开设置：先恢复登录、店铺和 eBay 连接状态。",
     model: "已打开设置：AI 连接、商家记忆、来源和上线状态都在这里。",
-    billing: "已打开订阅与额度：这里查看当前套餐、素材额度、账单和续费状态。",
+    billing: "已打开套餐与付款：这里查看免费体验、软件套餐、素材点、订单和续购状态。",
     audit: "已打开 AI CEO 汇报：查看报告、来源、确认记录和长期记忆的回写。",
   };
   if (key === "goal") {
@@ -14853,7 +14803,7 @@ const MEDIA_FACT_LOCKS = Object.freeze([
 
 function mediaGenerationTierKey(value = "") {
   if (/快速|低成本/.test(String(value))) return "draft";
-  if (/精细|最终候选/.test(String(value))) return "high_quality";
+  if (/高清|精细|最终候选/.test(String(value))) return "high_quality";
   return "standard";
 }
 
@@ -14874,7 +14824,7 @@ function readMediaGenerationConfig(overrides = {}) {
   const activeTemplate = document.querySelector(".media-template-card.is-active");
   const fidelity = overrides.fidelity || document.querySelector("#mediaFidelitySelect")?.value || "严格保留实物结构";
   const generationTier =
-    overrides.generationTier || document.querySelector("#mediaGenerationTierSelect")?.value || "标准质量（推荐）";
+    overrides.generationTier || document.querySelector("#mediaGenerationTierSelect")?.value || "标准图（推荐） · 80 点/张";
   const videoPreset = overrides.videoPreset || document.querySelector("#mediaVideoPresetSelect")?.value || "不生成视频";
   return {
     entry,
@@ -14904,19 +14854,23 @@ function readMediaGenerationConfig(overrides = {}) {
 
 function syncMediaRequirementSummary() {
   const config = readMediaGenerationConfig();
+  const imageCount = Math.max(1, Number.parseInt(String(config.count || "1"), 10) || 1);
+  const unitPoints = mediaPointsByGenerationTier[config.generationTierKey] || mediaPointsByGenerationTier.standard;
+  const tierLabel = config.generationTierKey === "draft" ? "快速样图" : config.generationTierKey === "high_quality" ? "高清图" : "标准图";
   setText("#mediaOutputStatus", `${config.count} · ${config.template}`);
   setText("#mediaOutputNote", `${config.platform} / ${config.size} / ${config.scene}`);
   setText("#mediaChoiceType", config.template);
   setText("#mediaChoiceCount", `${config.count} · ${config.size}`);
   setText("#mediaChoiceScene", config.scene);
   setText("#mediaAdvancedSummary", `${config.platform} · ${config.generationTier} · ${config.videoPreset}`);
+  setText("#mediaGenerationPointQuote", `${tierLabel} ${unitPoints} 点/张 · 当前 ${imageCount} 张预计 ${(unitPoints * imageCount).toLocaleString("zh-CN")} 点；提交时由服务端再次校验，失败自动退点`);
   setText(
     "#mediaGenerationTierNote",
     config.generationTierKey === "draft"
       ? "快速样图用于确认构图和场景方向，不建议直接作为最终刊登素材"
       : config.generationTierKey === "high_quality"
-        ? "精细质量适合已经确认方向的最终候选，耗时和用量会高于标准质量"
-        : "标准质量适合大多数商品；先确认方向，再决定是否生成精细候选",
+        ? "高清图适合已经确认方向的最终候选，耗时和点数会高于标准图"
+        : "标准图适合大多数商品；先确认方向，再决定是否生成高清候选",
   );
   setText(
     "#mediaDecisionSummary",
@@ -17654,6 +17608,15 @@ function safeEbayOAuthAuthorizationUrl(value = "") {
   }
 }
 
+function syncSaasOnboardingCompletionFromBackend(model = state.saasMerchantOnboarding) {
+  const progress = model?.progress && typeof model.progress === "object" ? model.progress : {};
+  if (progress.preferences_saved === true) {
+    markSaasOnboardingCompleted();
+    return true;
+  }
+  return false;
+}
+
 const saasEbayReadOnlyOAuthScopeAllowlist = new Set([
   "https://api.ebay.com/oauth/api_scope",
   "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
@@ -17662,6 +17625,8 @@ const saasEbayReadOnlyOAuthScopeAllowlist = new Set([
   "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly",
   "https://api.ebay.com/oauth/api_scope/sell.finances",
 ]);
+
+const mediaPointsByGenerationTier = { draft: 20, standard: 80, high_quality: 250 };
 
 function validatedSaasReadOnlyOAuthAuthorizationUrl(value = "", expectedScopes = [], expectedState = "") {
   if (typeof value !== "string" || !value || !Array.isArray(expectedScopes) || !expectedScopes.length) return "";
@@ -19774,7 +19739,7 @@ function renderAccountMenu() {
       </article>
     </div>
     <div class="account-menu-actions" aria-label="账号操作">
-      <button type="button" data-account-action="subscription">订阅与额度</button>
+      <button type="button" data-account-action="subscription">套餐与付款</button>
       <button type="button" data-account-action="settings">账号与安全设置</button>
       <button type="button" data-account-action="refresh">刷新账号状态</button>
       <button type="button" data-account-action="switch-account">切换账号</button>
@@ -19859,7 +19824,7 @@ function handleAccountMenuAction(button) {
     state.saasSettingsTab = "billing";
     setView("connect");
     renderConnect();
-    showActionToast("已打开订阅与额度，可查看套餐、素材额度和账单状态。");
+    showActionToast("已打开套餐与付款，可查看免费体验、软件套餐、素材点和订单状态。");
     return;
   }
   if (action === "settings") {
@@ -26079,10 +26044,11 @@ function saasPlatformTrialModelState() {
   const merchantModelConfigured = isSaasMerchantModelConfigured();
   const enabled = status.enabled === true;
   const configured = status.configured === true;
-  const monthlyLimit = Math.max(0, Number(quota.monthly_limit || status.trial_monthly_limit || 0));
+  const trialLimit = Math.max(0, Number(quota.trial_limit || quota.monthly_limit || status.trial_request_limit || status.trial_monthly_limit || 0));
+  const trialDurationDays = Math.max(0, Number(quota.trial_duration_days || status.trial_duration_days || 7));
   const used = Math.max(0, Number(quota.used || 0));
   const hasExplicitRemaining = Object.prototype.hasOwnProperty.call(quota, "remaining");
-  const remaining = Math.max(0, Number(hasExplicitRemaining ? quota.remaining : monthlyLimit ? monthlyLimit - used : 0));
+  const remaining = Math.max(0, Number(hasExplicitRemaining ? quota.remaining : trialLimit ? trialLimit - used : 0));
   const allowed = quota.allowed === false ? false : configured;
   const hasUsage = Boolean(quota.contract_version);
   const providerLabel = status.provider ? String(status.provider).replace(/_/g, " ") : "捷境试用 AI";
@@ -26091,10 +26057,10 @@ function saasPlatformTrialModelState() {
     ? "不消耗捷境试用额度"
     : !configured
       ? "暂未开放"
-    : monthlyLimit
+    : trialLimit
       ? hasUsage
-        ? `${remaining}/${monthlyLimit} 次可用`
-        : `每月约 ${monthlyLimit} 次`
+        ? `${remaining}/${trialLimit} 次可用`
+        : `${trialDurationDays} 天内 ${trialLimit} 次`
       : "有限额度";
   const guardrailDetail = merchantModelConfigured
     ? "当前对话优先使用账号自己的 AI，由商家向模型服务商承担用量；捷境试用额度不会扣减。"
@@ -26103,13 +26069,17 @@ function saasPlatformTrialModelState() {
     : allowed === false
       ? remaining > 0
         ? "试用 AI 当前不可用，但额度记录尚未耗尽；这是连接状态，不应显示成额度已用完。账号自己的 DeepSeek/OpenAI 连接不受影响。"
-        : "试用额度已用完；超出后只暂停捷境试用 AI，不影响账号自己的 DeepSeek/OpenAI 连接。"
-    : "试用额度按当前捷境账号统计；商家自己的 AI 连接不占试用额度。";
+        : quota.trial_expired
+          ? "7 天免费体验已经结束；只暂停捷境托管 AI，不影响账号自己的 DeepSeek/OpenAI 连接。"
+          : "试用额度已用完；只暂停捷境托管 AI，不影响账号自己的 DeepSeek/OpenAI 连接。"
+    : `免费体验按当前捷境账号统计，有效期 ${trialDurationDays} 天；商家自己的 AI 连接不占试用次数。`;
   return {
     merchantModelConfigured,
     enabled,
     configured,
-    monthlyLimit,
+    monthlyLimit: trialLimit,
+    trialLimit,
+    trialDurationDays,
     used,
     remaining,
     allowed,
@@ -26135,7 +26105,7 @@ function saasPlatformTrialModelState() {
     detail: merchantModelConfigured
       ? "账号绑定的 DeepSeek/OpenAI 优先用于 AI CEO 对话；切换店铺仍沿用当前账号连接。"
       : configured
-        ? `${quotaLabel}；可用于基础对话。超出后请保存自己的 DeepSeek/OpenAI 连接，或升级套餐后继续使用捷境试用 AI。`
+        ? `${quotaLabel}；免费体验共 ${trialDurationDays} 天。到期或用完后可保存自己的 DeepSeek/OpenAI 连接，软件套餐和素材点仍分别管理。`
       : enabled
         ? "新账号试用入口已预留，但当前线上试用 AI 还未开通；保存自己的账号 AI 后可正常使用。"
         : "新账号试用入口暂未开放；保存自己的账号 AI 后可使用。",
@@ -27125,6 +27095,7 @@ function renderSaasWorkbenchTruthPanel() {
 }
 
 function renderSaasBackendPanel() {
+  if (isSaasPublicMvpMode()) return;
   const anchor =
     document.querySelector("#view-activity #taskSplitStatusBoard") ||
     document.querySelector("#view-activity .activity-command-board") ||
@@ -27661,6 +27632,7 @@ async function refreshSaasState(options = {}) {
     state.saasStores = coreStores.stores || [];
     state.saasConnections = coreConnections.connections || [];
     state.saasMerchantOnboarding = coreMerchantOnboarding.merchant_onboarding || null;
+    syncSaasOnboardingCompletionFromBackend(state.saasMerchantOnboarding);
     state.saasEbayWriteAdapter = coreEbayWriteAdapter.ebay_write_adapter || null;
     state.saasSecretRefs = coreSecretRefs.secret_refs || [];
     state.saasModelSettings = coreModelSettings.model_settings || null;
@@ -27946,6 +27918,7 @@ async function refreshSaasState(options = {}) {
     state.saasDataPackets = dataPackets.data_packets || [];
     state.saasAccountHealth = accountHealth.account_health || state.saasAccountHealth || null;
     state.saasMerchantOnboarding = merchantOnboarding.merchant_onboarding || state.saasMerchantOnboarding || null;
+    syncSaasOnboardingCompletionFromBackend(state.saasMerchantOnboarding);
     const refreshedActiveStore = activeSaasStore();
     if (refreshedActiveStore?.store_id) saveSaasSessionToStorage(refreshedActiveStore.store_id);
     if (refreshedActiveStore?.store_id && refreshedActiveStore.store_id !== store.store_id) {
@@ -33698,16 +33671,27 @@ function selectActivityPreview(index, options = {}) {
 
 function getLandingProfile() {
   return (
-    landingProfiles.find((profile) => profile.value === state.dna.merchantStage) ||
+    landingProfiles.find((profile) => profile.value === normalizeLandingProfileValue(state.entryPreviewStage)) ||
+    landingProfiles.find((profile) => profile.value === normalizeLandingProfileValue(state.dna.merchantStage)) ||
     landingProfiles[0]
   );
 }
 
 function getEntryPreviewProfile() {
   return (
-    landingProfiles.find((profile) => profile.value === state.entryPreviewStage) ||
+    landingProfiles.find((profile) => profile.value === normalizeLandingProfileValue(state.entryPreviewStage)) ||
     landingProfiles[0]
   );
+}
+
+function normalizeLandingProfileValue(value) {
+  if (value === "multi_store" || value === "multi") return "multi_store";
+  if (value === "trial") return "trial";
+  return "store_opened";
+}
+
+function merchantStageForLandingProfile(value) {
+  return normalizeLandingProfileValue(value) === "multi_store" ? "multi_store" : "store_opened";
 }
 
 function getActiveStore() {
@@ -33715,10 +33699,9 @@ function getActiveStore() {
 }
 
 function getActiveProject() {
-  return (
-    listingProjects.find((project) => project.id === state.activeProject) ||
-    listingProjects[0]
-  );
+  const matched = listingProjects.find((project) => project.id === state.activeProject) || null;
+  if (isSaasPublicMvpMode() && (!matched || isLegacySampleMediaDraftKey(matched.id))) return null;
+  return matched || listingProjects[0];
 }
 
 function renderEntryChoices() {
@@ -33748,7 +33731,7 @@ function syncEntryPreview() {
 }
 
 function renderEntryFlow(value) {
-  const flow = sellerFlowDetails[value] || sellerFlowDetails.newbie;
+  const flow = sellerFlowDetails[merchantStageForLandingProfile(value)] || sellerFlowDetails.store_opened;
   document.querySelector("#entryFlowEyebrow").textContent = flow.eyebrow;
   document.querySelector("#entryFlowTitle").textContent = flow.title;
   document.querySelector("#entryFlowIntro").textContent = flow.intro;
@@ -33783,7 +33766,7 @@ function renderLandingPreselect() {
   grid.innerHTML = landingProfiles
     .map(
       (profile) => `
-        <button class="preselect-card ${profile.value === state.dna.merchantStage ? "is-selected" : ""}" data-stage-choice="${profile.value}">
+        <button class="preselect-card ${profile.value === normalizeLandingProfileValue(state.entryPreviewStage) ? "is-selected" : ""}" data-stage-choice="${profile.value}">
           <span>${profile.tag}</span>
           <strong>${profile.title}</strong>
           <small>${profile.detail}</small>
@@ -33846,9 +33829,11 @@ function openCurrentPublicHomepage() {
 }
 
 function selectLandingProfile(value, fromLanding = true) {
-  state.dna.merchantStage = value;
+  const profileValue = normalizeLandingProfileValue(value);
+  state.dna.merchantStage = merchantStageForLandingProfile(profileValue);
   state.preselectedFromLanding = fromLanding;
-  state.entryPreviewStage = value;
+  state.entryPreviewStage = profileValue;
+  if (profileValue === "trial") state.selectedPlan = "free";
   renderEntryChoices();
   renderLandingPreselect();
   renderWizard();
@@ -35170,7 +35155,7 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
     {
       label: "软件套餐",
       title: `${currentPlanLabel} · ${currentPlanPrice}`,
-      detail: "套餐只决定店铺数、席位数、经营任务和批量上限，不包含文本模型或素材生成成本。",
+      detail: "套餐决定店铺数、席位数、经营任务和批量上限；单店版含 1,000 素材点，多店铺版含 3,000 素材点。",
       tone: "green",
     },
     {
@@ -35180,9 +35165,9 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
       tone: "green",
     },
     {
-      label: "图片 / 视频",
+      label: "图片生成",
       title: "使用素材点",
-      detail: "生成前显示预计点数，任务完成后按实际结算；生成失败或质量门禁未通过会返还预占点数。",
+      detail: "生成前显示预计点数：快速样图 20 点/张、标准图 80 点/张、高清图 250 点/张；套餐点优先，按成功张数结算，失败返还。",
       tone: "amber",
     },
     {
@@ -35197,8 +35182,8 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
       <div class="saas-settings-card-head">
         <div>
           <span>订阅和用量总览</span>
-          <strong>软件套餐、商家模型、素材点和平台成本分开</strong>
-          <p>捷境不把不同成本混在一起：套餐是软件使用权，文本模型由商家自带，图片和视频使用素材点，电商平台经营成本仍由商家在对应平台结算。</p>
+          <strong>套餐权益、商家模型、素材点和平台成本清楚可查</strong>
+          <p>付费套餐包含当期生图素材点；点数用完后才需加购。文本模型由商家自带，电商平台经营成本仍由商家在对应平台结算。</p>
         </div>
         <em>${escapeHtml(stageLabel)}</em>
       </div>
@@ -35217,13 +35202,14 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
       </div>
       <div class="saas-merchant-billing-plain-note">
         <strong>停用规则</strong>
-        <p>订阅取消或欠费时暂停新增经营任务；素材点不足时只暂停素材生成。历史报告、确认记录、操作记录和账号设置继续保留。</p>
+        <p>订阅取消或欠费时暂停新增经营任务；套餐点到期失效，已购买点数保留；素材点不足时只暂停图片生成。历史报告、确认记录、操作记录和账号设置继续保留。</p>
       </div>
       <div class="saas-merchant-billing-plain-safety" hidden aria-hidden="true">
         <span>merchant_billing_plain_summary_v1</span>
         <span>billing_now_no_real_charge=${!hasExternalProvider}</span>
         <span>base_subscription_is_feature_fee=true</span>
-        <span>ai_media_usage_is_separate=true</span>
+        <span>ai_media_usage_has_plan_allowance=true</span>
+        <span>purchased_media_points_separate=true</span>
         <span>platform_cost_not_collected_by_jiejing=true</span>
         <span>subscription_metering_clarity_v2</span>
         <span>triggers_real_charge=false</span>
@@ -35378,8 +35364,11 @@ function renderSaasMerchantMediaCreditsPanel() {
   const packs = Array.isArray(mediaCredits.packs) ? mediaCredits.packs : [];
   const recent = Array.isArray(mediaCredits.recent_activity) ? mediaCredits.recent_activity.slice(0, 5) : [];
   const available = Number(account.available_points || 0);
+  const included = Number(account.included_points || 0);
+  const purchased = Number(account.purchased_points || 0);
   const reserved = Number(account.reserved_points || 0);
   const spent = Number(account.lifetime_spent_points || 0);
+  const includedExpiryLabel = saasDomesticBillingDateLabel(account.included_expires_at);
   const purchaseOpen = purchase.purchase_enabled === true && purchase.status === "available";
   const operationLabels = {
     grant: "入账",
@@ -35387,6 +35376,7 @@ function renderSaasMerchantMediaCreditsPanel() {
     settle: "任务结算",
     release: "失败返还",
     revoke: "退款收回",
+    expire: "套餐点到期",
   };
   const mediaOrders = (Array.isArray(state.saasDomesticBillingOrders) ? state.saasDomesticBillingOrders : []).filter(
     (item) => item?.purchase_type === "media_points",
@@ -35396,12 +35386,12 @@ function renderSaasMerchantMediaCreditsPanel() {
     : null;
   const purchaseAvailable = purchaseOpen && !checkout && !state.saasLoading;
   return `
-    <section class="saas-settings-card saas-merchant-media-credits" data-media-credit-contract="merchant_media_points_v1" aria-label="素材点余额与记录">
+    <section class="saas-settings-card saas-merchant-media-credits" data-media-credit-contract="merchant_media_points_v2" aria-label="素材点余额与记录">
       <div class="saas-settings-card-head">
         <div>
           <span>素材点</span>
           <strong>素材点余额 ${available.toLocaleString("zh-CN")}</strong>
-          <p>素材点只用于图片和视频生成。生成前预估，完成后按实际结算；失败、超时或真实性与权利门禁未通过时返还预占点数。</p>
+          <p>当前素材点用于图片生成：优先使用套餐内点数，再使用已购买点数。生成前预估，完成后按实际结算；图片按成功张数扣点，失败、超时或门禁未通过会返还。视频点数计价尚未开放。</p>
         </div>
         <em>${purchaseOpen ? "可购买" : "购买入口准备中"}</em>
       </div>
@@ -35409,7 +35399,17 @@ function renderSaasMerchantMediaCreditsPanel() {
         <article class="is-green">
           <span>可用</span>
           <strong>${available.toLocaleString("zh-CN")}</strong>
-          <small>可用于新的素材任务</small>
+          <small>套餐内与已购买点数合计</small>
+        </article>
+        <article class="is-green">
+          <span>套餐内</span>
+          <strong>${included.toLocaleString("zh-CN")}</strong>
+          <small>${includedExpiryLabel ? `${escapeHtml(includedExpiryLabel)} 到期 · 优先使用` : "当前套餐未含点数或尚未入账"}</small>
+        </article>
+        <article>
+          <span>已购买</span>
+          <strong>${purchased.toLocaleString("zh-CN")}</strong>
+          <small>套餐点用完后使用 · 不随套餐到期</small>
         </article>
         <article class="${reserved ? "is-amber" : "is-green"}">
           <span>处理中</span>
@@ -35432,7 +35432,7 @@ function renderSaasMerchantMediaCreditsPanel() {
                   <article>
                     <div>
                       <strong>${escapeHtml(pack.label || `${points} 素材点`)}</strong>
-                      <small>¥${escapeHtml(amount)} · 充值后进入当前账号空间</small>
+                      <small>¥${escapeHtml(amount)} · 充值后进入当前账号空间，不随套餐到期</small>
                     </div>
                     <button class="secondary-action compact-action" type="button" ${purchaseAvailable ? `data-saas-action="media-credit-purchase" data-media-credit-pack-key="${escapeHtml(pack.key || "")}"` : "disabled"}>购买素材点</button>
                   </article>
@@ -35499,7 +35499,7 @@ function renderSaasMerchantMediaCreditsPanel() {
         `
         : ""}
       <div class="saas-settings-safety" hidden aria-hidden="true">
-        <span>merchant_media_points_v1</span>
+        <span>merchant_media_points_v2</span>
         <span>frontend_can_grant_points=false</span>
         <span>purchase_open=${purchaseOpen}</span>
         <span>replaceable_media_service_hidden=true</span>
@@ -35523,7 +35523,7 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
     ? state.saasBillingUsage.subscription
     : {};
   const subscriptionPlanKey = normalizePlanKey(subscription.plan_key || "");
-  const selectedCheckoutPlanKey = ["starter", "operator", "team"].includes(normalizePlanKey(state.selectedPlan))
+  const selectedCheckoutPlanKey = ["starter", "operator"].includes(normalizePlanKey(state.selectedPlan))
     ? normalizePlanKey(state.selectedPlan)
     : "starter";
   const checkoutPlanKey = billing.entitlementActive && ["starter", "operator", "team"].includes(subscriptionPlanKey)
@@ -35617,9 +35617,6 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
             </button>
             <button class="${checkoutPlanKey === "operator" ? "is-selected" : ""}" type="button" data-saas-action="domestic-billing-select-plan" data-domestic-plan-key="operator" aria-pressed="${checkoutPlanKey === "operator"}">
               <span>运营版</span><strong>¥199 / 30 天</strong><small>3 店铺 · 5 席位 · 500 个经营任务</small>
-            </button>
-            <button class="${checkoutPlanKey === "team" ? "is-selected" : ""}" type="button" data-saas-action="domestic-billing-select-plan" data-domestic-plan-key="team" aria-pressed="${checkoutPlanKey === "team"}">
-              <span>团队版</span><strong>¥299 / 30 天</strong><small>5 店铺 · 5 席位 · 1500 个经营任务</small>
             </button>
           </div>
         </div>
@@ -37508,9 +37505,9 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
   const domesticBilling = saasMerchantDomesticBillingState();
   const billingModeLabel = domesticBilling.online ? "微信扫码付款" : billing.provider.external_paid_provider_configured ? "在线付款已接入" : "试用模式";
   const splitRows = [
-    ["01", "软件套餐", "¥0 / ¥99 / ¥199 / ¥299", "套餐只决定店铺数、席位数、经营任务和批量上限，单次购买 30 天。"],
+    ["01", "软件套餐", "¥0 / ¥99 / ¥199", "免费体验不含生图点数；单店版含 1,000 素材点，多店铺版含 3,000 素材点。付费套餐单次购买 30 天。"],
     ["02", "商家自带模型", "费用由商家承担", "普通问答、Listing 文案、联网总结和长报告使用商家账号绑定的模型，不消耗素材点。"],
-    ["03", "图片 / 视频", "使用素材点", "主图、场景图、详情图、视频封面和视频生成统一按素材点预估、预占和结算。"],
+    ["03", "图片生成", "使用素材点", "快速样图、标准图和高清图分别按 20、80、250 点/张预估；套餐内点数优先，失败自动返还。视频点数计价尚未开放。"],
     ["04", "平台经营成本", "捷境不代扣", "eBay 成交费、广告费、物流、退款和店铺订阅只进入利润测算与确认中心。"],
   ];
   const usageRouteRows = [
@@ -37521,8 +37518,8 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
   const pricingRows = [
     {
       label: "软件套餐",
-      title: "四档按业务规模选择",
-      detail: "免费、起步、经营、团队四档只收软件使用费，不把文本模型和素材成本藏进套餐。",
+      title: "三个公开方案按业务规模选择",
+      detail: "免费体验不赠送生图点数；单店版含 1,000 素材点，多店铺版含 3,000 素材点。套餐点用完后再购买。",
       tone: "green",
     },
     {
@@ -37532,9 +37529,9 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
       tone: "green",
     },
     {
-      label: "生图 / 生视频",
+      label: "生图",
       title: "按素材点结算",
-      detail: "主图、场景图、详情图、短视频脚本或生成任务先显示预计点数；成功结算，失败返还。",
+      detail: "快速样图 20 点/张、标准图 80 点/张、高清图 250 点/张；按成功图片结算，失败返还。视频点数计价尚未开放。",
       tone: "amber",
     },
     {
@@ -37555,7 +37552,7 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
         <div>
           <span>计费模型</span>
           <strong>软件套餐、商家模型、素材点和平台成本互不混账</strong>
-          <p>商家只需要分清四件事：四档套餐是 30 天软件使用权；文本模型由商家自带；图片和视频使用素材点；电商平台、物流、广告和退款仍由商家在对应平台结算。</p>
+          <p>商家只需要分清四件事：免费体验有 7 天和 20 次捷境托管 AI；付费套餐是 30 天软件使用权；图片和视频使用素材点；电商平台、物流、广告和退款仍由商家在对应平台结算。</p>
         </div>
         <em>${escapeHtml(billingModeLabel)}</em>
       </div>
@@ -37811,38 +37808,43 @@ function renderSaasAiCeoFirstRunHandoff() {
     ? state.saasMerchantOnboarding
     : {};
   const onboardingStage = String(onboardingModel.effective_stage || "");
-  const onboardingNeedsAction = Boolean(onboardingStage && onboardingStage !== "ready_for_publish_preflight");
+  const blankTrialFirstDraft =
+    normalizePlanKey(state.selectedPlan) === "free" ||
+    String(onboardingModel.progress?.work_mode || "") === "draft_only";
+  const onboardingNeedsAction = Boolean(
+    !blankTrialFirstDraft && onboardingStage && onboardingStage !== "ready_for_publish_preflight",
+  );
   const prompts = [
-    "帮我从一个商品做 Listing",
-    "帮我先筛 10 个小商品",
-    "我还没接 eBay，先用资料跑草稿",
+    "我有商品图片，请先整理资料缺口",
+    "我有货源链接，请生成一份待核对草稿",
+    "我先用文字说明商品，请告诉我还缺什么",
   ];
   const firstDaySteps = [
-    ["01", "先说目标", "像聊天一样说商品、图片、订单或普通问题。"],
-    ["02", "看判断", "JIEJING 会告诉你该去 Listing、批量、素材、客服还是决策中心。"],
-    ["03", "再确认", "发布、付款、退款、广告和敏感承诺必须等你点头。"],
+    ["01", "提交资料", "添加商品图片、货源链接或文字说明。"],
+    ["02", "核对草稿", "查看标题、属性、描述、资料缺口和风险疑点。"],
+    ["03", "决定下一步", "商家核对后再连接店铺或进入未发布草稿。"],
   ];
   const focusOptions = [
-    ["有商品想上架", "先把标题、卖点、图片或链接发进来，生成 Listing 草稿。", "帮我从一个商品做 Listing"],
-    ["只有图片或链接", "先整理资料，再决定要不要进入 Listing 或素材工坊。", "我只有图片或链接，先帮我整理商品资料"],
-    ["不知道下一步", "直接说现状，AI CEO 会判断该去哪个模块。", "我不知道下一步该做什么，帮我判断"],
+    ["上传商品图片", "先识别商品信息，再列出不能猜测的资料缺口。", "我有商品图片，请先整理资料缺口"],
+    ["粘贴货源链接", "整理可用字段、来源和待商家确认的事实。", "我有货源链接，请生成一份待核对草稿"],
+    ["输入文字说明", "先形成商品资料骨架，再告诉商家还需要补什么。", "我先用文字说明商品，请告诉我还缺什么"],
   ];
   return `
-    <section class="saas-ai-ceo-first-run-handoff" data-ai-ceo-first-run-handoff="first_run_ai_ceo_handoff_v1" data-does-not-trigger-real-write="true" aria-label="AI CEO 开口建议">
+    <section class="saas-ai-ceo-first-run-handoff" data-ai-ceo-first-run-handoff="first_run_ai_ceo_handoff_v1" data-merchant-blank-workbench="merchant_blank_workbench_v1" data-does-not-trigger-real-write="true" aria-label="上传第一份商品资料">
       ${onboardingNeedsAction
         ? renderSaasMerchantOnboardingPanel({ compact: true })
         : `
           <div class="saas-ai-ceo-first-run-copy">
-            <span>可以这样开始</span>
-            <strong>首日只做一条主线：先说目标，再看 AI CEO 带你去哪</strong>
-            <p>直接说经营目标，不用先找功能。点一句只会填入输入框；你确认发送后，AI CEO 再判断去 Listing、批量、素材、客服或决策中心。连接和计费问题以后回设置补。</p>
+            <span>第一步</span>
+            <strong>上传第一份商品资料</strong>
+            <p>添加商品图片、货源链接或文字说明。捷境先生成草稿和资料缺口，商家核对后再决定是否连接店铺或执行下一步。</p>
           </div>
           ${renderSaasMerchantLaunchReadinessPath()}
         `}
       <div class="saas-ai-ceo-one-task-focus" data-ai-ceo-one-task-focus="first_day_one_task_focus_v1" aria-label="首日聚焦">
         <div class="saas-ai-ceo-one-task-head">
-          <span>现在只做一件事</span>
-          <strong>把手上的商品、链接、图片或订单问题发给 AI CEO</strong>
+          <span>默认空白工作台</span>
+          <strong>先提交自己的商品资料，不使用预置商品</strong>
         </div>
         <div class="saas-ai-ceo-one-task-grid">
           ${focusOptions
@@ -41992,9 +41994,9 @@ function renderSaasAccountHealthTrafficPanel({ compact = false } = {}) {
       tone,
     },
     {
-      label: "快照来源",
-      value: evidence.packet_id || "等待 packet",
-      detail: evidence.official_packet_present ? "来自 eBay 官方只读数据包" : "缺 store_profile 或官方 packet",
+      label: "店铺资料",
+      value: evidence.official_packet_present ? "已更新" : "等待更新",
+      detail: evidence.official_packet_present ? "来自 eBay 官方只读资料" : "缺少店铺资料或官方同步结果",
       tone: evidence.official_packet_present ? "green" : "amber",
     },
     {
@@ -42018,7 +42020,7 @@ function renderSaasAccountHealthTrafficPanel({ compact = false } = {}) {
         <div>
           <span>账号健康 / 事故模式</span>
           <strong>${escapeHtml(health.incident_mode ? "真实写入已暂停" : health.label || "等待账号健康快照")}</strong>
-          <p>${escapeHtml(health.summary || "新 eBay 账号 smoke 前，先用官方只读 packet 生成账号健康快照。没有快照就不进入真实发布。")}</p>
+          <p>${escapeHtml(health.summary || "首次执行真实动作前，先更新 eBay 官方只读资料并检查账号状态。资料不足时不会进入真实发布。")}</p>
         </div>
         <span class="pill ${escapeHtml(tone)}">${health.incident_mode ? "事故模式" : "红黄绿报告"}</span>
       </div>
@@ -42800,7 +42802,7 @@ function renderSaasSettingsGovernanceFocusPanel() {
 function renderSaasSettingsBillingFocusPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
   return renderSaasSettingsFocusPanel({
-    eyebrow: "订阅与安全",
+    eyebrow: "套餐与付款",
     title: "基础订阅保留工作台，AI 用量和素材生成单独核算",
     detail: "订阅负责打开核心经营功能；大模型、生图生视频和高成本联网任务按实际消耗或套餐额度计算。收款密钥和上线检查不会出现在日常工作流里。",
     rows: [
@@ -44583,14 +44585,14 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
     ["model", "AI 与素材", "模型连接、素材额度、成本口径"],
     ["data", "店铺数据", "商品、订单、政策、费用来源"],
     ["governance", "团队权限", "谁能确认发布、退款、广告"],
-    ["billing", "订阅与安全", "套餐、额度、隐私和安全"],
+    ["billing", "套餐与付款", "试用、套餐、素材点和订单"],
   ];
   const routes = [
     ["继续处理商品", "回工作台"],
     ["连接或断开店铺", "账号与店铺"],
     ["AI 不回复或素材异常", "AI 与素材"],
     ["查订单/政策来源", "店铺数据"],
-    ["额度、套餐、安全", "订阅与安全"],
+    ["试用、套餐、付款、素材点", "套餐与付款"],
   ];
   return `
     <section class="saas-settings-simple-map saas-settings-home-hub" aria-label="设置总览">
@@ -44598,7 +44600,7 @@ function renderSaasSettingsReadableMap(activeTabId = "general") {
         <div>
           <span>设置总览</span>
           <strong>普通商家只看 5 个入口</strong>
-          <p>这里处理账号、店铺数据、AI、权限、订阅与安全；只显示商家需要知道的设置，不展示技术排查和部署细节。</p>
+          <p>这里处理账号、店铺数据、AI、权限、套餐付款与安全；只显示商家需要知道的设置，不展示技术排查和部署细节。</p>
         </div>
       </div>
       <div class="saas-settings-home-status" aria-label="当前设置状态">
@@ -44673,7 +44675,7 @@ function saasSettingsOneGlanceRows(activeTabId = "general") {
     ],
     billing: [
       ["当前阶段", domesticBilling.online ? "微信扫码付款可用" : "试用模式，不自动扣费", domesticBilling.online ? "单次购买 30 天，到账后自动开通；不会自动续费。" : "在线付款开放前不会生成付款二维码。"],
-      ["软件套餐", "¥0 / ¥99 / ¥199 / ¥299", "按店铺、席位、经营任务和批量上限选择，付费套餐单次购买 30 天。"],
+      ["软件套餐", "¥0 / ¥99 / ¥199", "公开方案按免费体验、单店和多店铺选择；更大团队单独评估，付费套餐单次购买 30 天。"],
       ["模型与素材", "BYOK / 素材点", "商家模型由商家承担；图片和视频使用素材点，失败任务返还预占点数。"],
     ],
     owner_ops: [
@@ -44980,10 +44982,10 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
     },
     {
       id: "billing",
-      label: "订阅与安全",
-      detail: "套餐 / 安全",
-      title: "订阅与安全",
-      intro: "查看基础订阅、AI 用量、素材生成、欠费停用和账号安全边界。",
+      label: "套餐与付款",
+      detail: "试用 / 付款",
+      title: "套餐与付款",
+      intro: "查看免费体验、软件套餐、微信付款、素材点、订单和停用规则。",
       panels: [
         renderSaasMerchantBillingPlainSummaryPanel(ctx),
         renderSaasMerchantMediaCreditsPanel(),
@@ -45331,7 +45333,6 @@ function renderConnect() {
     ),
   );
   dataModelPreviewEl.textContent = JSON.stringify(productDataModelSnapshot(), null, 2);
-  scheduleJiejingProductModeCopy();
 }
 
 function riskText(value) {
@@ -47855,8 +47856,8 @@ function bindEvents() {
 
   document.querySelector("#resetDna").addEventListener("click", () => {
     Object.assign(state.dna, {
-      merchantStage: "newbie",
-      ebaySetup: "need_seller_account",
+      merchantStage: "store_opened",
+      ebaySetup: "store_connected",
       ebayApiMode: "oauth_ready",
       fulfillmentMode: "dropship_supplier",
       sourceApiMode: "api_1688_readonly",
@@ -47869,6 +47870,8 @@ function bindEvents() {
       watchMetric: "profit",
       feeInsightMode: "fees_readonly",
     });
+    state.entryPreviewStage = "trial";
+    state.selectedPlan = "free";
     renderRuleOutput();
     syncDnaInputs();
     renderLandingPreselect();
@@ -48276,7 +48279,6 @@ function init() {
     state.saasLoading = true;
     state.saasConnected = true;
   }
-  initJiejingProductModeCopyObserver();
   if (!state.bulkApprovedCount) detachBulkHandoffDrafts();
   bindEvents();
   window.addEventListener("online", () => {
@@ -48308,7 +48310,6 @@ function init() {
   syncDnaInputs();
   applyStartupRoute();
   renderWorkflowFeedbackWidget();
-  scheduleJiejingProductModeCopy();
   refreshSaasPublicReadiness({ render: true });
   refreshSaasState({ silent: true });
   refreshRuntimeState({ silent: true });
@@ -48325,20 +48326,21 @@ function applyStartupRoute() {
   if (!start && !onboarded) return;
 
   const stageMap = {
-    newbie: "newbie",
+    trial: "trial",
+    newbie: "store_opened",
     opened: "store_opened",
     store_opened: "store_opened",
-    orders: "has_orders",
-    has_orders: "has_orders",
+    orders: "store_opened",
+    has_orders: "store_opened",
     multi: "multi_store",
     multi_store: "multi_store",
   };
   const stage = stageMap[params.get("stage") || ""];
   if (stage) {
-    state.dna.merchantStage = stage;
     state.entryPreviewStage = stage;
+    state.dna.merchantStage = merchantStageForLandingProfile(stage);
     state.preselectedFromLanding = true;
-    if (stage !== "newbie") {
+    if (state.dna.merchantStage !== "newbie") {
       state.dna.ebaySetup = "store_connected";
       state.dna.ebayApiMode = "oauth_ready";
     }
@@ -48346,6 +48348,7 @@ function applyStartupRoute() {
 
   const plan = params.get("plan");
   if (plan) state.selectedPlan = normalizePlanKey(plan);
+  if (params.get("settings") === "billing") state.saasSettingsTab = "billing";
 
   renderEntryChoices();
   renderLandingPreselect();

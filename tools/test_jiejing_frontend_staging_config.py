@@ -34,8 +34,8 @@ def main() -> int:
         return fail("frontend must not use document.write for report export or public rendering")
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
-    frontend_asset_version = "20260803-product-feedback-v1"
-    app_js_asset_version = "20260821-mainland-payment-cutover-v17"
+    frontend_asset_version = "20260822-merchant-trial-pricing-v2"
+    app_js_asset_version = "20260822-merchant-trial-pricing-v18"
     for expected_asset in [
         f"./app.js?v={app_js_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -82,6 +82,8 @@ def main() -> int:
         return fail("frontend entry files must not retain the slow commercial-launch-gate refresh proof cache version")
     if "./app.js?v=20260821-ebay-refresh-proof-fast-v16" in index_html + app_html:
         return fail("frontend entry files must not retain the pre-mainland-payment-cutover cache version")
+    if "./app.js?v=20260821-mainland-payment-cutover-v17" in index_html + app_html:
+        return fail("frontend entry files must not retain the pre-merchant-trial-pricing cache version")
     if "./app.js?v=20260803-product-feedback-v1" in index_html + app_html:
         return fail("frontend entry files must not retain the stale app.js cache version")
     for stale_asset_version in [
@@ -419,7 +421,7 @@ def main() -> int:
             return fail(f"prelaunch hardening runbook missing marker: {marker}")
     for marker in [
         "隐私与数据边界说明",
-        "当前在线付款尚未向所有商家开放",
+        "在线付款已开放为一次性 30 天订阅，不会自动续费",
         "eBay 授权凭证、模型连接凭证和支付连接密钥",
         "服务条款",
         "风险披露与确认中心边界",
@@ -428,32 +430,32 @@ def main() -> int:
             return fail(f"privacy page missing staging data-boundary marker: {marker}")
     for marker in [
         "捷境服务条款",
-        "当前在线付款尚未向所有商家开放",
+        "在线付款已开放为一次性 30 天订阅，不会自动续费或自动扣款",
         "禁止自动执行的动作",
         "试用数据默认只标记和报告，不自动删除",
         "基础订阅是软件功能费",
         "eBay 费用、广告费、物流和退款不是捷境代扣",
-        "更新日期：2026-07-02",
+        "更新日期：2026-08-22",
     ]:
         if marker not in terms_html:
             return fail(f"terms page missing launch-boundary marker: {marker}")
     for marker in [
         "捷境退款政策",
-        "当前在线付款尚未向所有商家开放",
-        "受邀试用的订阅开通需要客服或后台确认",
+        "在线付款已经开放，不会自动续费或自动扣款",
+        "退款必须由人工审核并在后端执行",
         "eBay 成交费、广告费、店铺订阅费、物流费、采购款、买家退款",
-        "后续会补充公开客服邮箱、工单和投诉升级路径",
-        "更新日期：2026-07-02",
+        "当前尚未提供匿名客服入口",
+        "更新日期：2026-08-22",
     ]:
         if marker not in refund_html:
             return fail(f"refund policy page missing payment-review marker: {marker}")
     for marker in [
         "捷境客服与反馈入口",
-        "在线付款和公开工单入口会按实际开放状态展示",
+        "在线付款已经开放",
         "意见箱只记录流程意见和上下文编号，不保存密钥、平台凭证或身份资料",
         "不会替商家直接发布商品、改价、改库存、退款、投广告",
-        "后续会补充的客服信息",
-        "更新日期：2026-07-02",
+        "提交前请准备",
+        "更新日期：2026-08-22",
     ]:
         if marker not in support_html:
             return fail(f"support page missing payment-review marker: {marker}")
@@ -465,6 +467,21 @@ def main() -> int:
     ]:
         if marker not in risk_html:
             return fail(f"risk disclosure page missing confirmation-boundary marker: {marker}")
+    for marker in (
+        '<meta name="description"',
+        '<link rel="canonical" href="https://app.jiejing.shop/"',
+        'property="og:title"',
+        'name="twitter:card"',
+        'href="./terms.html"',
+        'href="./privacy.html"',
+        'href="./refund-policy.html"',
+        'href="./support.html"',
+    ):
+        if marker not in index_html:
+            return fail(f"public landing discovery/trust marker is missing: {marker}")
+    sitemap = (ROOT / "sitemap.xml").read_text(encoding="utf-8")
+    if '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' not in sitemap or "<loc>https://app.jiejing.shop/</loc>" not in sitemap:
+        return fail("public sitemap must be real XML with the canonical production domain")
 
     if 'runtimeApiBase: "http://127.0.0.1:8765"' in app_js:
         return fail("runtime API base is still hardcoded in initial state")
@@ -613,14 +630,15 @@ def main() -> int:
     ]:
         if stale_public_copy in index_html + app_html:
             return fail(f"public product copy should avoid abstract internal positioning: {stale_public_copy}")
-    for owner_grade_copy in [
-        "从一个商品目标开始",
-        "先把 eBay 真实经营做深，再把同一套经营能力扩展到 Amazon",
+    for merchant_outcome_copy in [
+        "把商品资料，变成商家可以核对的 eBay 草稿。",
+        "商品资料不足时，捷境会明确标出缺口",
+        "侵权风险初筛，仍需商家核对。",
     ]:
-        if owner_grade_copy not in index_html + app_html:
-            return fail(f"public product copy should explain the operating outcome: {owner_grade_copy}")
-    if "真实工作流以你的 eBay 只读数据和商家资料为准" not in index_html:
-        return fail("homepage onboarding copy should point real testing at merchant eBay read-only data")
+        if merchant_outcome_copy not in index_html + app_html:
+            return fail(f"public product copy should explain the merchant outcome: {merchant_outcome_copy}")
+    if "免费体验先帮商家验证一条商品资料是否能整理成可用草稿" not in index_html:
+        return fail("homepage onboarding copy should explain the blank first-draft trial")
     for onboarding_control_marker in [
         "onboardingDeferredSettingsFields",
         "onboarding-lite-path",
@@ -650,12 +668,12 @@ def main() -> int:
     for billing_guardrail_marker in [
         "function renderSaasMerchantPricingModelPanel",
         "saas-merchant-pricing-model",
-        "四档套餐只收软件使用费",
+        "免费体验不含生图点数；单店版含 1,000 素材点，多店铺版含 3,000 素材点",
         "subscription_ai_media_platform_v1",
         "saas-merchant-pricing-split",
         "用量计费路线",
         "¥99 / 30 天",
-        "¥0 / ¥99 / ¥199 / ¥299",
+        "¥0 / ¥99 / ¥199",
         "商家自带模型",
         "图片 / 视频",
         "eBay 费用、广告费、物流和退款不是捷境代扣",
@@ -663,13 +681,14 @@ def main() -> int:
         "function renderSaasMerchantBillingPlainSummaryPanel",
         "merchant_billing_plain_summary_v1",
         "订阅和用量总览",
-        "软件套餐、商家模型、素材点和平台成本分开",
-        "套餐只决定店铺数、席位数、经营任务和批量上限",
+        "套餐权益、商家模型、素材点和平台成本清楚可查",
+        "单店版含 1,000 素材点，多店铺版含 3,000 素材点",
         "不消耗素材点",
         "生成前显示预计点数",
         "billing_now_no_real_charge",
         "base_subscription_is_feature_fee=true",
-        "ai_media_usage_is_separate=true",
+        "ai_media_usage_has_plan_allowance=true",
+        "purchased_media_points_separate=true",
         "platform_cost_not_collected_by_jiejing=true",
         "saas-merchant-billing-current",
         "当前计费状态",

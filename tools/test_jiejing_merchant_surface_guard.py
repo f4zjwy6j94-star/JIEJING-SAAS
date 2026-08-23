@@ -9,6 +9,7 @@ merchant workbench render paths must stay focused on seller value.
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -221,8 +222,81 @@ def main() -> int:
 
     if "捷境 JIEJING / eBay 自动化工作台" not in public_text:
         return fail("public homepage should lead with the merchant product positioning")
-    if "登录后按四种商家身份进入向导" not in public_text:
-        return fail("public homepage should explain the login-to-onboarding flow")
+    if "把商品资料，变成商家可以核对的 eBay 草稿" not in public_text:
+        return fail("public homepage must lead with the first merchant outcome")
+    primary_ctas = re.findall(
+        r'<button\b(?=[^>]*data-home-primary-cta="merchant_first_draft_v1")[^>]*>\s*免费生成第一条草稿\s*</button>',
+        index_html,
+        flags=re.I,
+    )
+    if len(primary_ctas) != 1:
+        return fail(f"public homepage must expose exactly one merchant first-draft primary CTA: {len(primary_ctas)}")
+    homepage_source = source_between(index_html, '<nav class="topbar">', '<footer class="footer">')
+    filled_home_buttons = re.findall(r'<button\b[^>]*class="button"[^>]*>', homepage_source, flags=re.I)
+    if len(filled_home_buttons) != 1:
+        return fail(f"public homepage must keep one filled primary button: {len(filled_home_buttons)}")
+    home_sections = re.findall(
+        r'<(?:header|section)\b(?=[^>]*data-home-section="([^"]+)")[^>]*>',
+        index_html,
+        flags=re.I,
+    )
+    expected_home_sections = ["hero", "outcome", "workflow", "trust", "plans", "faq"]
+    if home_sections != expected_home_sections:
+        return fail(f"public homepage must expose six ordered merchant sections: {home_sections}")
+    for marker in ["IP 防侵权", "完整体验路径", "eBay 自动化系统架构", "先把 eBay 真实经营做深，再把同一套经营能力扩展到 Amazon"]:
+        if marker in homepage_source:
+            return fail(f"public homepage must not expose an overclaim or internal architecture narrative: {marker}")
+    for section_id in ["merchant-guide", "ai-ceo-workbench-technical", "ai-ceo-workbench"]:
+        section_match = re.search(rf'<section\b[^>]*id="{re.escape(section_id)}"[^>]*>', homepage_source)
+        if section_match and " hidden" not in section_match.group(0):
+            return fail(f"legacy homepage section must not remain visible: {section_id}")
+    outcome_start = index_html.find('data-home-section="outcome"')
+    workflow_start = index_html.find('data-home-section="workflow"', outcome_start)
+    trust_start = index_html.find('data-home-section="trust"', workflow_start)
+    outcome_source = index_html[outcome_start:workflow_start]
+    workflow_source = index_html[workflow_start:trust_start]
+    if len(re.findall(r'class="signal-card"', outcome_source)) > 4:
+        return fail("merchant outcome section must stay concise with at most four result cards")
+    if 'class="operating-stack"' in workflow_source:
+        return fail("merchant workflow section must not expose the retired internal architecture stack")
+    if len(re.findall(r'class="flow-tab(?:\s|\")', workflow_source)) != 3:
+        return fail("merchant workflow section must expose exactly three steps")
+    plans_start = index_html.find('data-home-section="plans"')
+    faq_start = index_html.find('data-home-section="faq"', plans_start)
+    footer_start = index_html.find('<footer class="footer">', faq_start)
+    if plans_start < 0 or faq_start < 0 or footer_start < 0:
+        return fail("public homepage plan/FAQ section boundaries are missing")
+    plans_source = index_html[plans_start:faq_start]
+    faq_source = index_html[faq_start:footer_start]
+    for marker in ['data-plan="free"', 'data-plan="single"', 'data-plan="multi"']:
+        if marker not in plans_source:
+            return fail(f"merchant plan card must live in the plans section: {marker}")
+        if marker in faq_source:
+            return fail(f"merchant plan card must not be duplicated in the FAQ section: {marker}")
+    for marker in [
+        "旅行压缩收纳袋",
+        "桌面线缆收纳盒",
+        "抽屉分隔收纳板",
+        "1688 货源图",
+        "IP 初筛通过",
+        "侵权检测通过",
+    ]:
+        if marker in public_text:
+            return fail(f"public homepage must not expose a fixed product or overclaim risk screening: {marker}")
+    if "侵权风险初筛，仍需商家核对" not in public_text:
+        return fail("public homepage must explain the merchant IP risk review boundary")
+    for marker in ["会自动发布商品吗？", "免费体验会自动扣费吗？", "在哪里管理套餐和 AI 设置？"]:
+        if marker not in public_text:
+            return fail(f"public homepage FAQ is missing a merchant question: {marker}")
+    for marker in ["模型 API", "BYOK", "应用 Key", "API Base", "Vault", "Runtime"]:
+        if marker in homepage_source:
+            return fail(f"public homepage must keep complex configuration in settings: {marker}")
+    for marker in ["有店铺", "多店铺", "免费体验", "7 天", "20 次"]:
+        if marker not in public_text:
+            return fail(f"public homepage should expose the simplified merchant entry: {marker}")
+    for marker in ["小白起步", "已有订单处理", "登录后按四种商家身份进入向导"]:
+        if marker in public_text:
+            return fail(f"public homepage should not expose the retired merchant path: {marker}")
 
     for function_name in MERCHANT_SCOPE_FUNCTIONS:
         scope = function_scope(app_js, function_name)
@@ -241,6 +315,146 @@ def main() -> int:
     for marker in ["读取账号状态中", "根据 eBay 连接、店铺资料、AI 状态、报告和待确认项", 'label: "数据"', "凭证安全", "连接、店铺资料、AI 和订阅状态集中到设置页"]:
         if marker not in cockpit_scope:
             return fail(f"renderSaasCockpitRealWorkbench missing merchant-readable cockpit copy: {marker}")
+
+    first_run_scope = function_scope(app_js, "renderSaasAiCeoFirstRunHandoff")
+    for marker in ["上传第一份商品资料", "商品图片、货源链接或文字说明", "merchant_blank_workbench_v1"]:
+        if marker not in first_run_scope:
+            return fail(f"new merchant workbench is missing the approved blank-state behavior: {marker}")
+    for marker in ["倒流香炉", "Backflow Incense", "旅行压缩收纳袋"]:
+        if marker in first_run_scope:
+            return fail(f"new merchant workbench must not seed a fixed product: {marker}")
+
+    public_empty_listing_contract = f"""
+const state = {{ activeListingDraft: "incense" }};
+const listingDraftCatalog = [{{ id: "incense", title: "legacy fixture" }}];
+function isSaasPublicMvpMode() {{ return true; }}
+function isLegacySampleMediaDraftKey(value) {{ return value === "incense"; }}
+{function_scope(app_js, "activeListingDraft")}
+if (activeListingDraft() !== null) {{
+  throw new Error("public merchant mode fell back to a seeded listing");
+}}
+"""
+    public_empty_listing_result = subprocess.run(
+        ["node", "-e", public_empty_listing_contract],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if public_empty_listing_result.returncode != 0:
+        return fail("public merchant mode must return an empty listing instead of a seeded fixture")
+
+    public_empty_market_contract = f"""
+const state = {{ activeCockpitMarketDraft: "incense" }};
+const listingDraftCatalog = [{{ id: "incense", title: "legacy fixture" }}];
+function isSaasPublicMvpMode() {{ return true; }}
+function isLegacySampleMediaDraftKey(value) {{ return value === "incense"; }}
+{function_scope(app_js, "activeCockpitMarketDraft")}
+if (activeCockpitMarketDraft() !== null) {{
+  throw new Error("public merchant mode fell back to a seeded market draft");
+}}
+"""
+    public_empty_market_result = subprocess.run(
+        ["node", "-e", public_empty_market_contract],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if public_empty_market_result.returncode != 0:
+        return fail("public merchant mode must return an empty market draft instead of a seeded fixture")
+
+    public_empty_market_profile_contract = f"""
+const cockpitMarketProfiles = {{ incense: {{ title: "legacy fixture" }} }};
+function isSaasPublicMvpMode() {{ return true; }}
+function isLegacySampleMediaDraftKey(value) {{ return value === "incense"; }}
+{function_scope(app_js, "cockpitMarketProfile")}
+if (cockpitMarketProfile(null) !== null) {{
+  throw new Error("public merchant mode fell back to a seeded market profile");
+}}
+"""
+    public_empty_market_profile_result = subprocess.run(
+        ["node", "-e", public_empty_market_profile_contract],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if public_empty_market_profile_result.returncode != 0:
+        return fail("public merchant mode must return an empty market profile instead of a seeded fixture")
+
+    public_empty_project_contract = f"""
+const state = {{ activeProject: "backflow-incense" }};
+const listingProjects = [{{ id: "backflow-incense", title: "legacy fixture" }}];
+function isSaasPublicMvpMode() {{ return true; }}
+function isLegacySampleMediaDraftKey(value) {{ return value === "backflow-incense"; }}
+{function_scope(app_js, "getActiveProject")}
+if (getActiveProject() !== null) {{
+  throw new Error("public merchant mode fell back to a seeded project");
+}}
+"""
+    public_empty_project_result = subprocess.run(
+        ["node", "-e", public_empty_project_contract],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if public_empty_project_result.returncode != 0:
+        return fail("public merchant mode must return an empty project instead of a seeded fixture")
+
+    public_empty_category_contract = f"""
+const listingCategoryProfiles = {{ incense: {{ title: "legacy fixture" }} }};
+function isSaasPublicMvpMode() {{ return true; }}
+function isLegacySampleMediaDraftKey(value) {{ return value === "incense"; }}
+{function_scope(app_js, "listingCategoryProfile")}
+if (listingCategoryProfile({{ id: "incense" }}) !== null) {{
+  throw new Error("public merchant mode fell back to a seeded category profile");
+}}
+"""
+    public_empty_category_result = subprocess.run(
+        ["node", "-e", public_empty_category_contract],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if public_empty_category_result.returncode != 0:
+        return fail("public merchant mode must return an empty category profile instead of a seeded fixture")
+
+    public_activity_boundary_contract = f"""
+let merchantPanelRenderCount = 0;
+const panel = {{ innerHTML: "" }};
+const anchor = {{ id: "view-activity", insertAdjacentHTML() {{}} }};
+const document = {{
+  querySelector(selector) {{
+    if (selector === "#saasBackendPanel") return panel;
+    return anchor;
+  }},
+}};
+function isSaasPublicMvpMode() {{ return true; }}
+function renderSaasMerchantWorkbenchPanel() {{ merchantPanelRenderCount += 1; return "settings panel"; }}
+{function_scope(app_js, "renderSaasBackendPanel")}
+renderSaasBackendPanel();
+if (merchantPanelRenderCount !== 0 || panel.innerHTML) {{
+  throw new Error("public activity page received a settings/backend panel");
+}}
+"""
+    public_activity_boundary_result = subprocess.run(
+        ["node", "-e", public_activity_boundary_contract],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if public_activity_boundary_result.returncode != 0:
+        return fail("public merchant activity page must not receive settings/backend panels")
 
     executive_scope = function_scope(app_js, "renderSaasMerchantExecutiveCockpit")
     for marker in ["<b>packet</b>", "<b>source_records</b>", "<b>secret</b>", "frontend_never_gets_token"]:
@@ -294,6 +508,9 @@ def main() -> int:
         if required_guard not in app_js:
             return fail(f"real SaaS route/onboarding guard missing: {required_guard}")
 
+    if "new MutationObserver(scheduleJiejingProductModeCopy)" in app_js:
+        return fail("merchant copy must be corrected at the source instead of by a global DOM observer")
+
     for required in [
         "AI CEO 经营价值核对",
         "eBay 经营数据同步",
@@ -304,6 +521,11 @@ def main() -> int:
     ]:
         if required not in app_js:
             return fail(f"merchant workbench is missing required product copy: {required}")
+
+    account_health_scope = function_scope(app_js, "renderSaasAccountHealthTrafficPanel")
+    for marker in ["等待 packet", "官方 packet", "smoke", "Runtime", "Vault", "provider", "preflight"]:
+        if marker in account_health_scope:
+            return fail(f"merchant account health panel exposes an owner-only engineering term: {marker}")
 
     print("PASS jiejing_merchant_surface_guard")
     return 0

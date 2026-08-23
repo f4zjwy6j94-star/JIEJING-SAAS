@@ -68,7 +68,7 @@ def main() -> None:
     require(app_html, "店铺连接、AI 连接和经营资料会按账号空间显示状态，缺少资料会提示补齐", "merchant-facing login credential copy")
     require(app_html, "有真实任务、订单或确认事项后会自动出现在这里", "merchant-facing empty state copy")
     require(app_html, "请稍后重试，或回到设置查看连接状态；系统不会自动执行高风险动作", "merchant-facing error state copy")
-    require(index_html, "正式接入会经过安全连接、权限、操作记录和确认中心", "merchant-facing homepage footer copy")
+    require(index_html, "高风险动作必须经过确认中心", "merchant-facing homepage footer trust boundary")
     require(index_html, "未连接前不会读取店铺数据，也不会执行高风险动作", "merchant-facing homepage auth copy")
     require(app_html, "不保存敏感凭证或平台账号资料", "merchant-facing feedback privacy copy")
     require(app_js, "不保存敏感凭证或平台账号资料", "workflow feedback avoids token/key wording")
@@ -78,7 +78,7 @@ def main() -> None:
     require(app_js, "已隔离且停止自动重试", "idempotency conflict copy")
     require(app_html, "data-workflow-feedback-retry", "manual product feedback retry action")
     require(styles, "body.saas-public-mvp[data-view=\"cockpit\"] .workflow-feedback-shell", "mobile-safe feedback placement")
-    require(app_js, "软件套餐、商家模型、素材点和平台成本分开", "billing pricing keeps software, BYOK, media, and platform costs separate")
+    require(app_js, "套餐权益、商家模型、素材点和平台成本清楚可查", "billing pricing keeps software, BYOK, media, and platform costs separate")
     settings_data_body = app_js[app_js.index("function renderSaasSettingsDataPanel") : app_js.index("function renderSaasSettingsFocusPanel")]
     if "后端" in settings_data_body or "浏览器不能" in settings_data_body:
         raise AssertionError("merchant store data settings should not explain browser/backend implementation")
@@ -360,7 +360,7 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     require(app_js, "first_day_ai_ceo_path_v2", "AI CEO first-day path marker")
     require(app_js, "比如：帮我调研这个商品，整理 Listing 草稿", "AI CEO low-learning-cost composer example")
     require(app_js, "也可以直接问普通问题。", "AI CEO low-learning-cost plain chat hint")
-    require(app_js, "直接说经营目标，不用先找功能", "AI CEO first-run direct goal copy")
+    require(app_js, "上传第一份商品资料", "AI CEO first-run blank workbench copy")
     require(app_js, "current.intent !== \"listing\"", "AI CEO prevents non-Listing intents from being hijacked by Listing")
     if "AI CEO 已收到，Listing 已接住这个目标。" in app_js:
         raise AssertionError("AI CEO Listing handoff should use the route card, not a mobile-covering toast")
@@ -503,7 +503,7 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
         return fail("decision center revise action must never enter preflight or execution")
     require(app_js, "为什么停住", "rendered decision card keeps evidence behind plain-language disclosure")
     require(app_js, "普通商家只看 5 个入口", "settings map merchant entrance boundary")
-    require(app_js, "这里处理账号、店铺数据、AI、权限、订阅与安全", "settings home low-learning-cost copy")
+    require(app_js, "这里处理账号、店铺数据、AI、权限、套餐付款与安全", "settings home low-learning-cost copy")
     require(app_js, "不展示技术排查和部署细节", "settings home hides technical diagnostics")
     require(app_js, "商品、订单、政策、费用等来源可追溯", "settings status merchant-facing data copy")
     require(app_js, "店铺数据、来源记录和同步缺口", "settings data panel merchant-facing title")
@@ -899,20 +899,20 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
         "subscription_ai_media_platform_v1",
         "saas-merchant-pricing-split",
         "用量计费路线",
-        "基础订阅不包含无限模型",
+        "套餐权益、商家模型、素材点和平台成本清楚可查",
         "eBay 费用、广告费、物流和退款不是捷境代扣",
         "高成本联网任务",
         "付款前显示套餐、金额、30 天期限和用量边界",
         "订阅和用量总览",
-        "软件套餐、商家模型、素材点和平台成本分开",
+        "付费套餐包含当期生图素材点",
         "当前是否扣费",
-        "套餐是软件使用权",
-        "文本模型由商家自带，图片和视频使用素材点",
+        "套餐决定店铺数、席位数、经营任务和批量上限",
+        "DeepSeek、OpenAI 等文本模型由商家账号连接并直接承担模型费用",
         "merchant_billing_plain_summary_v1",
         "subscription_metering_clarity_v2",
         "billing_now_no_real_charge",
         "base_subscription_is_feature_fee=true",
-        "ai_media_usage_is_separate=true",
+        "merchant_media_points_v2",
         "platform_cost_not_collected_by_jiejing=true",
         "订阅开通路径",
         "试用先提交申请，正式付款开放后走安全支付页",

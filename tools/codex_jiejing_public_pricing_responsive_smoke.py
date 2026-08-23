@@ -22,7 +22,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Verify public pricing cards remain readable across merchant viewports."
     )
-    parser.add_argument("--url", default="https://app.jiejing.shop/#pricing")
+    parser.add_argument("--url", default="https://app.jiejing.shop/#paths")
     parser.add_argument(
         "--output-dir",
         default="output/jiejing-public-pricing-smoke",
@@ -57,9 +57,9 @@ def main() -> int:
                 page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
                 pass
-            pricing = page.locator("#pricing")
-            pricing.wait_for(state="visible", timeout=10000)
-            pricing.scroll_into_view_if_needed()
+            plans = page.locator("#paths")
+            plans.wait_for(state="visible", timeout=10000)
+            plans.scroll_into_view_if_needed()
             page.wait_for_timeout(300)
 
             if local_static_target:
@@ -70,7 +70,7 @@ def main() -> int:
                     and "status of 501" not in error
                 ]
 
-            prices = page.locator(".price").evaluate_all(
+            prices = page.locator("#paths .path-card .price").evaluate_all(
                 """
                 (elements) => elements.map((element) => {
                   const range = document.createRange();
@@ -88,22 +88,46 @@ def main() -> int:
                 })
                 """
             )
+            home_sections = page.locator("[data-home-section]").evaluate_all(
+                "(elements) => elements.map((element) => element.dataset.homeSection)"
+            )
+            primary_cta_count = page.locator(
+                '[data-home-primary-cta="merchant_first_draft_v1"]'
+            ).count()
+            horizontal_overflow = page.evaluate(
+                "document.documentElement.scrollWidth > window.innerWidth + 1"
+            )
+            visible_legacy_sections = page.locator(
+                "#merchant-guide:visible, #ai-ceo-workbench-technical:visible, #ai-ceo-workbench:visible"
+            ).count()
             screenshot = output_dir / f"pricing-{key}-{width}x{height}.png"
-            pricing.screenshot(path=str(screenshot))
+            plans.screenshot(path=str(screenshot))
             result = {
                 "viewport": key,
                 "width": width,
                 "height": height,
                 "url": page.url,
                 "prices": prices,
+                "home_sections": home_sections,
+                "primary_cta_count": primary_cta_count,
+                "horizontal_overflow": horizontal_overflow,
+                "visible_legacy_sections": visible_legacy_sections,
                 "console_errors": console_errors,
                 "page_errors": page_errors,
                 "screenshot": str(screenshot),
             }
             results.append(result)
 
-            if len(prices) != 4:
-                failures.append(f"{key}: expected 4 prices, found {len(prices)}")
+            if len(prices) != 3:
+                failures.append(f"{key}: expected 3 prices, found {len(prices)}")
+            if home_sections != ["hero", "outcome", "workflow", "trust", "plans", "faq"]:
+                failures.append(f"{key}: unexpected homepage sections: {home_sections}")
+            if primary_cta_count != 1:
+                failures.append(f"{key}: expected one primary CTA, found {primary_cta_count}")
+            if horizontal_overflow:
+                failures.append(f"{key}: homepage has horizontal overflow")
+            if visible_legacy_sections:
+                failures.append(f"{key}: legacy homepage sections remain visible")
             for price in prices:
                 if price["lineCount"] != 1 or not price["fits"]:
                     failures.append(f"{key}: price does not fit one line: {price}")
