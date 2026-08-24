@@ -18,6 +18,7 @@ from jiejing_saas.ai_ceo_chat import (  # noqa: E402
     _model_answer_rejected_fallback,
     _should_retry_initial_model_failure,
     _realtime_search_query,
+    build_ai_ceo_chat_context,
     run_ai_ceo_chat,
     validate_ai_ceo_answer_quality,
 )
@@ -29,7 +30,17 @@ OUT = ROOT / "output" / "jiejing-ai-ceo-answer-quality-gate"
 
 class MinimalRepository:
     def get_store_for_company(self, **_: Any) -> dict[str, Any]:
-        return {"platform": "ebay", "store_name": "Quality Gate Store", "marketplace": "EBAY_US"}
+        return {"platform": "ebay", "store_name": "等待 eBay 授权", "marketplace": "EBAY_US"}
+
+    def list_connections(self, **_: Any) -> list[dict[str, Any]]:
+        return [
+            {
+                "connection_id": "conn_quality",
+                "platform": "ebay",
+                "status": "draft_save_authorized",
+                "connection_type": "oauth",
+            }
+        ]
 
     def list_platform_data_packets(self, **_: Any) -> list[dict[str, Any]]:
         return []
@@ -96,6 +107,62 @@ def main() -> None:
         "候选商品 3：软木杯垫收纳套装\n推荐度评分：79/100\n为什么有需求：桌面防护和礼品场景。\n"
         "适合 eBay/轻小件：低售后、无电池。\n主要风险：图案权利待核。\nListing 草稿字段建议：Material / Shape / Set Includes。"
     )
+
+    context = build_ai_ceo_chat_context(
+        repository=MinimalRepository(),
+        company_id="company_quality",
+        store_id="store_quality",
+        user_id="user_quality",
+    )
+    assert context["store"]["connection_status"] == "draft_save_authorized", context
+    assert context["store"]["connection_authorized"] is True, context
+    assert context["store"]["draft_save_authorized"] is True, context
+    assert "等待" not in context["store"]["store_name"], context
+
+    strict_message = (
+        "请给我三个轻小件、不带电的 eBay 选品方向。现在没有供应商、实物和商品参数，"
+        "重量、尺寸、材质、采购价都未知，不要编造；本轮只做候选筛选，先不要 Listing 草稿。"
+    )
+    unsafe_discovery_answer = (
+        "当前店铺尚未授权 eBay，请先重新授权。\n"
+        "### 候选商品卡\n"
+        "候选商品 1：重型订书机\n推荐度评分：86/100\n为什么有需求：办公需求稳定。\n"
+        "适合 eBay/轻小件：重量约 300-600g。\n主要风险：低。\nListing 草稿字段建议：Material=Steel。\n"
+        "候选商品 2：3M 胶粘理线器\n推荐度评分：82/100\n为什么有需求：桌面整理。\n"
+        "适合 eBay/轻小件：采用 3M 胶。\n主要风险：低。\nListing 草稿字段建议：Brand=3M。\n"
+        "候选商品 3：机械计时器\n推荐度评分：79/100\n为什么有需求：厨房使用。\n"
+        "适合 eBay/轻小件：重量 450g。\n主要风险：低。\nListing 草稿字段建议：USPS First Class。"
+    )
+    unsafe_discovery_quality = validate_ai_ceo_answer_quality(
+        message=strict_message,
+        route="ebay_workflow",
+        answer=unsafe_discovery_answer,
+        context=context,
+    )
+    assert unsafe_discovery_quality["accepted"] is False, unsafe_discovery_quality
+    assert "connected_store_reported_as_unauthorized" in unsafe_discovery_quality["blocked_by"], unsafe_discovery_quality
+    assert "listing_scope_exceeded" in unsafe_discovery_quality["blocked_by"], unsafe_discovery_quality
+    assert "invented_unknown_product_facts" in unsafe_discovery_quality["blocked_by"], unsafe_discovery_quality
+
+    safe_discovery_answer = (
+        "### 候选商品卡\n"
+        "候选商品 1：无品牌行李箱拉链固定夹\n推荐度评分：84/100\n为什么有需求：适合继续核验旅行收纳需求。\n"
+        "适合 eBay/轻小件：这是待验证的选品假设，不是商品参数。\n主要风险：承重与尺寸未知。\n"
+        "已证实事实：当前没有供应商或实物资料。\n推断依据：按非带电、结构简单方向初筛。\n待补资料：材质、重量、尺寸、成本、权利信息。\n"
+        "候选商品 2：无品牌抽屉标签夹\n推荐度评分：81/100\n为什么有需求：适合继续核验家庭整理需求。\n"
+        "适合 eBay/轻小件：这是待验证的选品假设，不是商品参数。\n主要风险：适配尺寸未知。\n"
+        "已证实事实：当前没有供应商或实物资料。\n推断依据：按非带电、结构简单方向初筛。\n待补资料：材质、重量、尺寸、成本、权利信息。\n"
+        "候选商品 3：无品牌缝纫线轴固定夹\n推荐度评分：78/100\n为什么有需求：适合继续核验手工收纳需求。\n"
+        "适合 eBay/轻小件：这是待验证的选品假设，不是商品参数。\n主要风险：适配规格未知。\n"
+        "已证实事实：当前没有供应商或实物资料。\n推断依据：按非带电、结构简单方向初筛。\n待补资料：材质、重量、尺寸、成本、权利信息。"
+    )
+    safe_discovery_quality = validate_ai_ceo_answer_quality(
+        message=strict_message,
+        route="ebay_workflow",
+        answer=safe_discovery_answer,
+        context=context,
+    )
+    assert safe_discovery_quality["accepted"] is True, safe_discovery_quality
 
     rejected = validate_ai_ceo_answer_quality(message=message, route="ebay_workflow", answer=unrelated)
     assert rejected["accepted"] is False, rejected

@@ -50,6 +50,15 @@ MEMORY_POLICY_MERCHANT_RULE = "merchant_rule"
 
 _DEFAULT_WEB_CONTEXT_CACHE: dict[str, tuple[datetime, dict[str, Any]]] = {}
 
+_AUTHORIZED_EBAY_CONNECTION_STATUSES = {
+    "read_only_authorized",
+    "draft_save_authorized",
+    "publish_authorized",
+    "read_write_authorized",
+    "authorized",
+    "connected",
+}
+
 
 def run_ai_ceo_chat(
     *,
@@ -520,6 +529,7 @@ def run_ai_ceo_chat(
         route=route,
         answer=answer,
         source_records=source_records,
+        context=prompt_context,
     )
     repair_retry_count = 0
     if not answer_quality.get("accepted") and _env_enabled("JIEJING_AI_CEO_MODEL_REPAIR_RETRY_ENABLED", default=True):
@@ -548,6 +558,7 @@ def run_ai_ceo_chat(
                 route=route,
                 answer=repair_answer,
                 source_records=source_records,
+                context=prompt_context,
             )
             if repair_answer and repair_quality.get("accepted"):
                 result = repair_result
@@ -793,6 +804,12 @@ def build_ai_ceo_chat_context(
     client_timezone: str = "",
 ) -> dict[str, Any]:
     store = repository.get_store_for_company(company_id=company_id, store_id=store_id) or {}
+    connection = _ai_ceo_store_connection_context(
+        repository=repository,
+        company_id=company_id,
+        store_id=store_id,
+        store=store,
+    )
     packets = repository.list_platform_data_packets(company_id=company_id, store_id=store_id, platform="ebay", limit=1)
     latest_packet = packets[0] if packets else {}
     confirmations = repository.list_confirmations(company_id=company_id, status="pending", limit=50)
@@ -806,12 +823,9 @@ def build_ai_ceo_chat_context(
         "store": {
             "store_id": store_id,
             "platform": _safe_text(store.get("platform") or "ebay", limit=40),
-            "store_name": _safe_text(store.get("store_name") or "", limit=160),
+            "store_name": _ai_ceo_store_name_for_model(store.get("store_name"), connection),
             "marketplace": _safe_text(store.get("marketplace") or "", limit=60),
-            "connection_status": _safe_text(
-                store.get("connection_status") or store.get("status") or "",
-                limit=80,
-            ),
+            **connection,
         },
         "latest_packet": {
             "packet_id": _safe_text(latest_packet.get("packet_id") or "", limit=120),
@@ -834,6 +848,64 @@ def build_ai_ceo_chat_context(
         "user_id_present": bool(user_id),
         "secret_exposed": False,
     }
+
+
+def _ai_ceo_store_connection_context(
+    *,
+    repository: Any,
+    company_id: str,
+    store_id: str,
+    store: dict[str, Any],
+) -> dict[str, Any]:
+    """Return an authorization-only, no-secret connection summary for the model."""
+
+    connections: list[dict[str, Any]] = []
+    list_connections = getattr(repository, "list_connections", None)
+    if callable(list_connections):
+        try:
+            rows = list_connections(company_id=company_id, store_id=store_id)
+            connections = [item for item in rows if isinstance(item, dict)] if isinstance(rows, list) else []
+        except Exception:
+            connections = []
+    ebay_connections = [
+        item for item in connections if _safe_text(item.get("platform") or "ebay", limit=40).lower() == "ebay"
+    ]
+    active = next(
+        (
+            item
+            for item in ebay_connections
+            if _safe_text(item.get("status") or "", limit=80).lower() in _AUTHORIZED_EBAY_CONNECTION_STATUSES
+        ),
+        None,
+    )
+    selected = active or (ebay_connections[0] if ebay_connections else {})
+    status = _safe_text(
+        selected.get("status") or store.get("connection_status") or store.get("status") or "",
+        limit=80,
+    ).lower()
+    authorized = status in _AUTHORIZED_EBAY_CONNECTION_STATUSES
+    return {
+        "connection_status": status,
+        "connection_authorized": authorized,
+        "read_only_authorized": authorized,
+        "draft_save_authorized": status in {"draft_save_authorized", "publish_authorized", "read_write_authorized"},
+        "publish_authorized": status in {"publish_authorized", "read_write_authorized"},
+        "oauth_required": not authorized,
+        "connection_status_source": "platform_connections" if selected else "store_record_fallback",
+    }
+
+
+def _ai_ceo_store_name_for_model(value: Any, connection: dict[str, Any]) -> str:
+    name = _safe_text(value or "", limit=160)
+    lowered = name.lower()
+    stale_pending_label = (
+        ("等待" in name and "授权" in name)
+        or "pending authorization" in lowered
+        or "disconnected ebay store" in lowered
+    )
+    if connection.get("connection_authorized") and stale_pending_label:
+        return "已连接 eBay 店铺"
+    return name
 
 
 def build_ai_ceo_chat_prompts(
@@ -867,16 +939,19 @@ def build_ai_ceo_chat_prompts(
     elif route == AI_CEO_ROUTE_EBAY_WORKFLOW:
         system_prompt += (
             " 当前路由是 eBay 经营任务：输出目标、计划、来源/缺口、风险、需要确认的动作、下一步，并保持真实写入确认边界。"
-            "如果商家问“卖什么”“帮我选品”“不知道卖什么”，必须先给市场调研报告，再给 2-4 个候选商品卡；每张卡包含商品名、推荐度评分、为什么有需求、为什么适合 eBay/轻小件、风险和待补资料。"
+            "如果商家问“卖什么”“帮我选品”“不知道卖什么”，必须基于市场调研给出 2-4 个候选商品卡；每张卡包含商品名、推荐度评分、为什么有需求、为什么适合 eBay/轻小件、风险和待补资料。"
             "选品类回答必须先输出“候选商品卡”，再写市场调研正文；不要先写长篇市场机会概述，候选商品名必须出现在回答前 500 字内，避免后续 Listing 无法识别具体商品。"
             "不要把“市场调研报告”本身当成商品名；后续 Listing 草稿只能基于某个具体候选商品。"
             "这类回答必须包含一个清晰小节，标题写“候选商品卡”，并用固定格式逐条输出："
-            "“候选商品 1：具体商品名”“推荐度评分：数字/100”“为什么有需求：...”“适合 eBay/轻小件：...”“主要风险：...”“Listing 草稿字段建议：...”。"
-            "不能只写“名称、推荐度评分、风险和 Listing 草稿字段建议”这类字段清单，必须给出真实可理解的商品名。"
+            "“候选商品 1：具体商品名”“推荐度评分：数字/100”“为什么有需求：...”“适合 eBay/轻小件：...”“主要风险：...”“已证实事实：...”“推断依据：...”“待补资料：...”。"
+            "只有商家明确要求进入 Listing 时，才增加“Listing 草稿字段建议”；商家说本轮不要、先不做或暂缓 Listing 时，严禁输出 Listing 标题、字段、SKU、Item specifics 或类目映射。"
+            "不能只写字段清单，必须给出真实可理解的商品名。"
             "禁止把“商品 1”“商品 2”“候选品 A”“方向一”这类占位符当成商品名；如果模型只能想到占位符，就要明确让商家补充或重新选择。"
             "如果商家只是泛泛说“热销小商品”“批量筛品”“小众品”，且没有明确要求电子、带电、品牌或高客单方向，默认优先推荐不带电、非液体/粉末、非医疗、非大牌侵权、低售后风险的轻小件；"
             "不要把蓝牙耳机、充电器、电池、化妆品、保健品、强品牌配件等高合规/高售后/红海类目作为默认候选。"
             "没有可展示来源支撑时，不要写“月销过万”“搜索量很高”等精确热度话术；只能写“需用 eBay 竞品和真实店铺数据复核”。"
+            "当商家说明没有供应商、实物或商品参数时，只能提出待验证的产品方向；不得编造材质、重量、尺寸、成本、品牌、型号、包装、物流服务或类目编号。"
+            "current_context.store 中 connection_status、connection_authorized、oauth_required 是授权状态的唯一权威依据；store_name 只是展示名称，绝不能根据名称推断授权状态。"
         )
     elif route == AI_CEO_ROUTE_CONFIRMATION:
         system_prompt += " 当前路由是高风险动作：不要声称已执行，只说明需要进入决策中心确认，并列出发布/改价/库存/退款/广告/政策等执行前检查项。"
@@ -902,6 +977,9 @@ def build_ai_ceo_chat_prompts(
             "只有明确要求记住规则时才写商家规则。",
             "经营任务体现来源记录、确认中心和审计回流。",
             "没有实时来源记录时不要编造最新外部数据。",
+            "把 current_context.store 的连接布尔值视为权威状态；不要从 store_name 猜测是否授权。",
+            "严格遵守 merchant_message 的阶段边界；商家暂缓 Listing 时只做选品，不扩展到 Listing 字段。",
+            "商品事实必须来自 merchant_message、current_context 或明确 source_records；未知参数写待核，不得补写成事实。",
         ],
     }
     return system_prompt, json.dumps(payload, ensure_ascii=False, default=str)
@@ -3103,6 +3181,7 @@ def validate_ai_ceo_answer_quality(
     route: str,
     answer: str,
     source_records: list[dict[str, Any]] | None = None,
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Reject workflow answers that cannot become the merchant's requested work item."""
 
@@ -3138,21 +3217,113 @@ def validate_ai_ceo_answer_quality(
         candidates
         and any(_safe_text(item.get("name") or "", limit=140) in first_window for item in candidates[:required_count])
     )
-    accepted = candidate_count >= required_count and first_candidate_visible
+    constraint_violations = _selection_answer_constraint_violations(
+        message=message,
+        answer=answer,
+        context=context or {},
+    )
+    accepted = candidate_count >= required_count and first_candidate_visible and not constraint_violations
     blocked_by = []
     if candidate_count < required_count:
         blocked_by.append("missing_concrete_product_candidates")
     if candidates and not first_candidate_visible:
         blocked_by.append("candidate_products_not_visible_early")
+    blocked_by.extend(constraint_violations)
     return {
         "accepted": accepted,
-        "quality_gate": "ebay_product_selection_answer_v1",
+        "quality_gate": "ebay_product_selection_answer_v2",
         "candidate_count": candidate_count,
         "required_candidate_count": required_count,
         "first_candidate_visible": first_candidate_visible,
+        "constraint_violation_count": len(constraint_violations),
         "blocked_by": blocked_by or (["model_answer_not_grounded_to_request"] if not accepted else []),
         "secret_exposed": False,
     }
+
+
+def _selection_answer_constraint_violations(
+    *,
+    message: str,
+    answer: str,
+    context: dict[str, Any],
+) -> list[str]:
+    merchant_text = _normalized_text(message)
+    answer_text = _safe_text(answer, limit=12000)
+    answer_lower = answer_text.lower()
+    blocked_by: list[str] = []
+
+    store_context = context.get("store") if isinstance(context.get("store"), dict) else {}
+    if store_context.get("connection_authorized") is True and _answer_claims_store_unauthorized(answer_text):
+        blocked_by.append("connected_store_reported_as_unauthorized")
+
+    listing_deferred = _merchant_defers_listing(merchant_text)
+    actionable_listing_markers = (
+        r"listing\s*(?:草稿\s*)?(?:字段|标题|建议|package)",
+        r"item\s+specifics",
+        r"(?:^|\n)\s*sku\s*[:：=]",
+        r"类目(?:编号|映射)\s*[:：=]?",
+        r"刊登(?:标题|字段|草稿)\s*[:：=]?",
+    )
+    if listing_deferred and any(re.search(pattern, answer_lower, flags=re.IGNORECASE) for pattern in actionable_listing_markers):
+        blocked_by.append("listing_scope_exceeded")
+
+    unknown_facts_explicit = any(
+        marker in merchant_text
+        for marker in (
+            "不要编造",
+            "不得编造",
+            "不能编造",
+            "没有供应商",
+            "无供应商",
+            "没有实物",
+            "商品参数未知",
+            "都未知",
+        )
+    )
+    if unknown_facts_explicit and _answer_invents_unknown_product_facts(answer_text):
+        blocked_by.append("invented_unknown_product_facts")
+    return list(dict.fromkeys(blocked_by))
+
+
+def _merchant_defers_listing(message: str) -> bool:
+    return bool(
+        re.search(
+            r"(?:本轮|这轮|当前|现在|先|暂时|暂缓)?\s*(?:不要|不做|无需|不进入|先不|暂不).{0,18}(?:listing|上架|刊登|草稿)",
+            _normalized_text(message),
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _answer_claims_store_unauthorized(answer: str) -> bool:
+    markers = ("未授权", "尚未授权", "没有授权", "等待授权", "未连接", "重新授权", "完成授权")
+    for clause in re.split(r"(?<=[。！？；])|\n+", answer):
+        compact = clause.strip()
+        if not compact or not any(marker in compact for marker in markers):
+            continue
+        if any(marker in compact for marker in ("无需", "不需要", "不用", "并非", "不是", "已经授权", "已授权", "已连接")):
+            continue
+        return True
+    return False
+
+
+def _answer_invents_unknown_product_facts(answer: str) -> bool:
+    speculative_markers = ("待核", "待确认", "未知", "未提供", "假设", "示例", "预计", "需供应商", "不是商品参数")
+    numeric_spec = re.compile(
+        r"(?<![/\d])\d+(?:\.\d+)?(?:\s*[-~至到]\s*\d+(?:\.\d+)?)?\s*"
+        r"(?:mg|g|kg|oz|lb|lbs|mm|cm|m|inch|inches|克|公斤|千克|磅|毫米|厘米|英寸)\b",
+        flags=re.IGNORECASE,
+    )
+    fact_field = re.compile(r"(?:材质|重量|尺寸|采购价|采购成本|成本|包装|品牌|型号|物流服务)\s*[:：=]\s*\S+", flags=re.IGNORECASE)
+    asserted_composition = re.compile(r"(?:采用|使用|配备|由).{0,35}(?:制成|材质|胶|钢|硅胶|塑料|金属)", flags=re.IGNORECASE)
+    asserted_shipping = re.compile(r"(?:USPS|UPS|FedEx)\s+[A-Za-z ]{2,40}", flags=re.IGNORECASE)
+    for clause in re.split(r"(?<=[。！？；])|\n+", answer):
+        compact = clause.strip()
+        if not compact or any(marker in compact for marker in speculative_markers):
+            continue
+        if numeric_spec.search(compact) or fact_field.search(compact) or asserted_composition.search(compact) or asserted_shipping.search(compact):
+            return True
+    return False
 
 
 def _platform_rule_answer_quality(
@@ -3396,6 +3567,11 @@ def _market_report_recovery_draft_answer(
         source_note = f"这次联网搜索状态：{search_status}；{source_note}"
     if blocked_by:
         source_note += f" 缺口：{', '.join(_safe_text(item, limit=80) for item in blocked_by[:3])}。"
+    next_step = (
+        "重新生成具体候选商品卡；每个候选必须有商品名、推荐度、需求依据、eBay 适配、主要风险、已证实事实、推断依据和待补资料。"
+        if _merchant_defers_listing(message)
+        else "重新生成具体候选商品卡；每个候选必须有商品名、推荐度、需求依据、eBay 适配、主要风险和待补资料；进入 Listing 前再补字段建议。"
+    )
     return (
         "### AI CEO 市场调研待继续\n\n"
         f"{failure_reason}我已保留你的选品目标，但不会用固定样例补成商品，也不会把不完整结果导入 Listing。"
@@ -3403,7 +3579,7 @@ def _market_report_recovery_draft_answer(
         "**目标市场：** eBay 美国站（EBAY_US）\n"
         f"**本次目标：** {_safe_text(message, limit=500)}\n"
         f"**来源状态：** {source_note}\n\n"
-        "**下一步：** 重新生成具体候选商品卡；每个候选必须有商品名、推荐度、需求依据、eBay 适配、主要风险和 Listing 字段建议。"
+        f"**下一步：** {next_step}"
         "在这些内容对上之前，系统不会把本记录标记为可导入 Listing。"
     )
 
