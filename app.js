@@ -10618,11 +10618,34 @@ function renderSaasPublishPretestResultSlot(ctx = saasMerchantWorkbenchContext()
   `;
 }
 
+const SAAS_ACCOUNT_SCOPED_EBAY_PUBLISH_PREFILL_CONTRACT = "account_scoped_ebay_publish_prefill_v1";
+
+function saasAccountScopedEbayPublishPrefillFromPacket() {
+  const ctx = saasMerchantWorkbenchContext();
+  if (!ctx.official || !ctx.hasPacket) {
+    return {
+      merchant_location_key: "",
+      fulfillment_policy_id: "",
+      payment_policy_id: "",
+      return_policy_id: "",
+    };
+  }
+  const policies = saasPacketSectionData(ctx.packetBody, "account_business_policies");
+  const inventory = saasPacketSectionData(ctx.packetBody, "inventory_and_offers");
+  return {
+    merchant_location_key: publicRuntimeText(inventory.item_location || inventory.merchant_location_key || "").slice(0, 80),
+    fulfillment_policy_id: publicRuntimeText(policies.fulfillment_policy_id || "").slice(0, 80),
+    payment_policy_id: publicRuntimeText(policies.payment_policy_id || "").slice(0, 80),
+    return_policy_id: publicRuntimeText(policies.return_policy_id || "").slice(0, 80),
+  };
+}
+
 function saasPublishIntakePrefillValues(text = state.saasListingComposerInput || "") {
   const clean = sanitizeSaasWorkflowFeedbackText(text, 1200);
   const draft = state.saasListingComposerDraft || (clean.trim() ? saasListingComposerDraftFromText(clean) : null);
   const fields = draft?.fields || {};
   const publishPrefill = draft?.publish_prefill && typeof draft.publish_prefill === "object" ? draft.publish_prefill : {};
+  const accountPrefill = saasAccountScopedEbayPublishPrefillFromPacket();
   const buyerCopyRequiresMerchantFacts = ["ai_ceo_market_chat", "ai_ceo_market_report", "bulk_handoff"].includes(
     String(draft?.source_type || state.saasListingSourceMode || ""),
   );
@@ -10666,7 +10689,7 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
     currency: publishPrefill.currency || currency,
     quantity: publishPrefill.quantity || "",
     condition: publishPrefill.condition || "",
-    merchant_location_key: publishPrefill.merchant_location_key || "",
+    merchant_location_key: publishPrefill.merchant_location_key || accountPrefill.merchant_location_key,
     inventory_location_key: "",
     inventory_location_name: "",
     inventory_location_city: "",
@@ -10692,9 +10715,9 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
       publishPrefill.description_html ||
       [fields.selling_points, fields.description].filter(Boolean).join("\n\n") ||
       (buyerCopyRequiresMerchantFacts ? "" : clean),
-    fulfillment_policy_id: publishPrefill.fulfillment_policy_id || "",
-    payment_policy_id: publishPrefill.payment_policy_id || "",
-    return_policy_id: publishPrefill.return_policy_id || "",
+    fulfillment_policy_id: publishPrefill.fulfillment_policy_id || accountPrefill.fulfillment_policy_id,
+    payment_policy_id: publishPrefill.payment_policy_id || accountPrefill.payment_policy_id,
+    return_policy_id: publishPrefill.return_policy_id || accountPrefill.return_policy_id,
   };
   return { ...values, ...(saasPendingPublishIntakeFormValues || {}) };
 }

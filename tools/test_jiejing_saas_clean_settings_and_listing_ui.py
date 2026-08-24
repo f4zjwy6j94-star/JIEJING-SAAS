@@ -391,13 +391,33 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     )
     require(
         app_html,
-        "app.js?v=20260824-ai-ceo-listing-import-v1",
+        "app.js?v=20260824-listing-account-prefill-v1",
         "workspace loads the AI CEO candidate import fix with a fresh asset version",
     )
     require(
         index_html,
-        "app.js?v=20260824-ai-ceo-listing-import-v1",
+        "app.js?v=20260824-listing-account-prefill-v1",
         "public entry preloads the same fresh Listing asset version",
+    )
+    require(
+        app_js,
+        "function saasAccountScopedEbayPublishPrefillFromPacket",
+        "new Listing reuses account-scoped eBay policies and location from the official packet",
+    )
+    require(
+        app_js,
+        "account_scoped_ebay_publish_prefill_v1",
+        "account-scoped publish prefill contract marker",
+    )
+    require(
+        app_js,
+        "publishPrefill.merchant_location_key || accountPrefill.merchant_location_key",
+        "official account inventory location prefills the new Listing form",
+    )
+    require(
+        app_js,
+        "publishPrefill.fulfillment_policy_id || accountPrefill.fulfillment_policy_id",
+        "official fulfillment policy prefills the new Listing form",
     )
     require(app_js, "function selectSaasListingMarketCandidate", "merchant can select one AI CEO candidate")
     require(app_js, 'data-saas-listing-candidate-id="${escapeHtml(candidate.candidate_id)}"', "candidate selection control")
