@@ -33977,6 +33977,18 @@ body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-answer-markdown strong {
   font-weight: 800;
 }
 
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-answer-markdown a {
+  color: #0a7a6d;
+  font-weight: 750;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-answer-markdown a:hover {
+  color: #075e54;
+}
+
 body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-answer-markdown code {
   padding: 1px 5px;
   border-radius: 5px;

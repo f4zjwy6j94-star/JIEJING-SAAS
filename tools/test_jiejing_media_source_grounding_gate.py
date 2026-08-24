@@ -63,6 +63,15 @@ for (const [facts, config, allowed, conceptOnly] of cases) {{
         handler.index("config.commercialRightsConfirmed = true")
         < handler.index("queueSaasMediaAssetJobFromStudio")
     ), "the confirmed rights flag must be set before the queue payload is built"
+    assert "不可刊登的概念参考图" in handler, "concept-only media must receive its own merchant acceptance copy"
+    assert "config.conceptOnlyAccepted = groundingGate.conceptOnly === true" in handler
+
+    action_state_start = app_js.index("function syncMediaGenerationActionState")
+    action_state_end = app_js.index("\nfunction buildSaasMediaAssetJobPayload", action_state_start)
+    action_state = app_js[action_state_start:action_state_end]
+    assert 'button.disabled = !groundingGate.allowed' in action_state
+    assert '"先上传来源图或选择概念探索"' in action_state
+    assert '"生成概念参考图"' in action_state
 
     payload_start = app_js.index("function buildSaasMediaAssetJobPayload")
     payload_end = app_js.index("\nasync function pollSaasMediaAssetJobUntilReview", payload_start)

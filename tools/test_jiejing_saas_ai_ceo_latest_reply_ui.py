@@ -115,6 +115,8 @@ def main() -> int:
         'const primaryKey = isAccountBlock ? "account" : "model";',
         'const primaryLabel = isAccountBlock ? "去账号与店铺" : "去 AI 与素材";',
         "function renderSaasAiCeoLatestReplyMarkup",
+        'target="_blank" rel="noopener noreferrer"',
+        '/\\[([^\\]]+?)\\]\\((https:\\/\\/[^\\s)]+)\\)/g',
         'id="ceoChat"',
         "updateSaasAiCeoLatestReply({",
         "function renderSaasAiCeoChatTurnMarkup",

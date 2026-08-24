@@ -7892,6 +7892,7 @@ function syncSaasMediaProjectDraft(button) {
     `当前商品：${title}。本轮生成：${note}。待补资料：${gap}。只产出素材草稿，不会自动发布、投广告或替你承诺。`,
   );
   renderMediaQualityBoard(config);
+  syncMediaGenerationActionState(config);
 }
 
 function saasMediaTaskLabel(report = {}) {
@@ -14819,6 +14820,7 @@ function setMediaNewTaskMode() {
   setText("#mediaEntryNote", "未经过市场和刊登流程，只处理本次图片。");
   setText("#mediaOutputNote", "拖入图片后按你选择的图片要求生成。");
   setText("#mediaDecisionSummary", "当前是独立上传素材单。生成结果只作为素材草稿；如果要变成正式商品，需要再进入市场报告、产品刊登和确认中心。");
+  syncMediaGenerationActionState(readMediaGenerationConfig({ entry: "single" }));
 }
 
 async function uploadSaasMediaSourceFile(file) {
@@ -14888,12 +14890,14 @@ async function handleMediaSourceFile(file, sourceEvent) {
     setText("#mediaDropHint", "真实来源图已上传，可以开始生成素材");
     setText("#mediaProductionStatus", "真实来源图已进入安全暂存 · 选择要求后点击生成素材");
     setText("#mediaSourceNote", "素材服务只读取短时签名来源图；生成结果仍需核对实物一致性和图片权利。");
+    syncMediaGenerationActionState();
     showActionToast("商品来源图已上传。请确认素材要求后点击“生成素材”，不会自动发布。");
   } catch (error) {
     state.saasMediaSourceUpload = null;
     setText("#mediaDropHint", "图片上传失败，请重试");
     setText("#mediaProductionStatus", "真实来源图尚未上传 · 没有调用素材生成服务");
     setText("#mediaSourceNote", "本机预览不会冒充已上传素材；请检查网络或图片格式后重试。");
+    syncMediaGenerationActionState();
     showActionToast(`图片没有上传成功：${publicRuntimeText(error?.message || error).slice(0, 120)}`);
   }
 }
@@ -14983,6 +14987,7 @@ function syncMediaRequirementSummary() {
     `当前任务：${config.entryLabel}，素材包「${config.template}」，生成 ${config.count}，${config.generationTier}。场景：${config.scene}。商品事实锁定始终开启；生成结果只作为草稿预览，通过后再回写 Listing。`,
   );
   renderMediaQualityBoard(config);
+  syncMediaGenerationActionState(config);
   return config;
 }
 
@@ -15414,6 +15419,29 @@ function saasMediaGenerationGroundingGate(productFacts = {}, config = {}) {
   };
 }
 
+function syncMediaGenerationActionState(config = readMediaGenerationConfig()) {
+  const button = document.querySelector("#mediaGenerateImagesDraft");
+  if (!button) return null;
+  const groundingGate = saasMediaGenerationGroundingGate(currentMediaStudioProductFacts(config), config);
+  button.disabled = !groundingGate.allowed;
+  button.textContent = groundingGate.allowed
+    ? groundingGate.conceptOnly
+      ? "生成概念参考图"
+      : "按当前设置生成"
+    : "先上传来源图或选择概念探索";
+  button.title = groundingGate.allowed
+    ? groundingGate.conceptOnly
+      ? "只生成不可刊登的概念参考图，不会回写 Listing"
+      : "基于真实来源图生成待审核素材"
+    : "默认刊登素材必须先上传有权使用的真实商品图；无来源图时只能选择创意场景探索";
+  button.dataset.mediaGenerationGate = groundingGate.allowed
+    ? groundingGate.conceptOnly
+      ? "concept_only"
+      : "source_grounded"
+    : "needs_source";
+  return groundingGate;
+}
+
 function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
   const store = activeSaasStore();
   const imageCount = Math.max(1, Math.min(Number.parseInt(config.count, 10) || 4, 4));
@@ -15679,17 +15707,29 @@ function handleMediaGenerateImagesDraftClick() {
     showActionToast("先上传真实商品图：本次没有调用付费素材服务。只有明确选择“创意场景探索”时，才允许生成不可刊登的概念参考图。");
     return;
   }
-  const commercialRightsConfirmed = window.confirm(
-    "请确认：你拥有本次实拍图或供应商来源图的商业使用和 AI 再生成权限。确认只允许创建待审核素材，不会自动发布、付款或写入 eBay。",
+  const acceptanceConfirmed = window.confirm(
+    groundingGate.conceptOnly && !groundingGate.hasGroundedSource
+      ? "请确认：当前没有真实商品来源图，本次只生成不可刊登的概念参考图。结果不能回写 Listing，不能代表供应商实物，也不会自动发布、付款或写入 eBay。"
+      : "请确认：你拥有本次实拍图或供应商来源图的商业使用和 AI 再生成权限。确认只允许创建待审核素材，不会自动发布、付款或写入 eBay。",
   );
-  if (!commercialRightsConfirmed) {
+  if (!acceptanceConfirmed) {
     state.mediaGenerationStatus = "needs_rights_confirmation";
-    setText("#mediaProductionStatus", "图片权利尚未确认 · 未调用生成服务");
-    setText("#mediaPreviewNote", "请先确认你有权把这张商品图用于商业素材和 AI 再生成；未确认前不会预留或消耗素材点。");
+    if (groundingGate.conceptOnly) state.mediaGenerationStatus = "needs_concept_acceptance";
+    setText(
+      "#mediaProductionStatus",
+      groundingGate.conceptOnly ? "概念参考边界尚未确认 · 未调用生成服务" : "图片权利尚未确认 · 未调用生成服务",
+    );
+    setText(
+      "#mediaPreviewNote",
+      groundingGate.conceptOnly
+        ? "请先确认当前结果只作概念参考、不可刊登；未确认前不会预留或消耗素材点。"
+        : "请先确认你有权把这张商品图用于商业素材和 AI 再生成；未确认前不会预留或消耗素材点。",
+    );
     showActionToast("已停止：本次没有调用付费素材服务，也没有消耗素材点。");
     return;
   }
   config.commercialRightsConfirmed = true;
+  config.conceptOnlyAccepted = groundingGate.conceptOnly === true;
   const text =
     config.entry === "single"
       ? `请基于本次商品图，使用「${config.template}」，按 ${config.platform} 生成 ${config.count} ${config.type}，尺寸使用 ${config.size}，场景为 ${config.scene}，质量为 ${config.generationTier}，还原要求为 ${config.fidelity}，并列出正式发布前需要补充的资料。`
@@ -46517,6 +46557,10 @@ function renderSaasAiCeoPerformanceSummaryMarkup(turn = {}) {
 
 function renderSaasAiCeoInlineMarkdown(value = "") {
   return escapeHtml(value)
+    .replace(
+      /\[([^\]]+?)\]\((https:\/\/[^\s)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
+    )
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+?)\*\*/g, "<strong>$1</strong>");
 }
