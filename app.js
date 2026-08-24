@@ -22930,7 +22930,7 @@ function saasCeoCommandIntent(text = "") {
     (has(/Listing|listing|刊登草稿|上架草稿|导入\s*Listing|生成.{0,12}(?:Listing|刊登|上架)草稿|可导入.{0,12}(?:Listing|刊登|上架)/i) ||
     (has(/市场调研|市场报告|结构化报告/i) && has(/一个最值得|选出一个|推荐一个|一个品|一个商品/i)));
   const asksForProductResearch =
-    has(/选品|候选商品|候选品|商品候选|产品候选|找品|筛选.{0,12}(?:商品|产品|候选)|产品方向|商品方向|卖什么|市场调研|市场报告|成交证据|三选一|相对赢家|赢家|sold\s*&?\s*completed|已售.{0,12}(?:数量|结果|item)|在售.{0,12}(?:数量|竞争)/i) &&
+    has(/选品|候选商品|候选品|商品候选|产品候选|找品|筛选.{0,12}(?:商品|产品|候选)|产品方向|商品方向|卖什么|市场调研|市场报告|成交证据|三选一|相对赢家|赢家|供应商事实核验|供应商核验|货源核验|sold\s*&?\s*completed|已售.{0,12}(?:数量|结果|item)|在售.{0,12}(?:数量|竞争)/i) &&
     !asksForListingHandoff;
   const asksForBulkWorkspace = has(/批量铺货|批量筛|批量导入|批量发布|批量生成|多款|多品|商品清单|商品列表|货盘|前五|前十|前\s*\d+|top\s*\d+/i);
   if (asksForListingHandoff) return "listing";
@@ -22947,12 +22947,16 @@ function saasCeoCommandIntent(text = "") {
 function isSaasCeoHighRiskCommand(text = "") {
   const raw = String(text || "").trim();
   if (!raw) return false;
+  const actionable = raw.replace(
+    /(?:本轮|这轮|当前|现在|此次|这次)?\s*(?:不|不要|无需|不用|不做|不执行|不触发|不允许|不能|不得|暂不|先不|禁止)\s*(?:(?:自动|擅自|公开|最终|真实|正式|直接|立即|立刻|任何|进行|执行|触发|实际|平台)\s*){0,3}(?:发布|上架|刊登|改价|改库存|退款|付款|采购(?:下单)?|投广告|开广告|修改政策|承诺买家|补偿(?:买家)?|重发(?:订单)?|真实写入)/gi,
+    "",
+  );
   const informational = /发布前|上架前|刊登前|核对项|规则|要求|规范|说明|介绍|区别|区分|为什么|是什么|如何|怎么|是否|能否|可以吗|最佳实践/i.test(raw);
-  const explicitExecution = /(?:现在|马上|直接|立即|立刻|真实|正式).{0,12}(?:发布|上架|刊登|改价|改库存|退款|付款|采购下单|投广告|开广告|修改政策|承诺买家|补偿|重发)/i.test(raw);
+  const explicitExecution = /(?:现在|马上|直接|立即|立刻|真实|正式).{0,12}(?:发布|上架|刊登|改价|改库存|退款|付款|采购下单|投广告|开广告|修改政策|承诺买家|补偿|重发)/i.test(actionable);
   if (explicitExecution) return true;
   if (informational) return false;
-  if (/(?:替我|帮我|请).{0,8}(?:发布|上架|刊登|改价|改库存|退款|付款|采购下单|投广告|开广告|修改政策|承诺买家|补偿|重发)/i.test(raw)) return true;
-  return /(?:改价|改库存|退款|付款|采购下单|投广告|开广告|修改政策|承诺买家|补偿买家|重发订单|真实写入)/i.test(raw);
+  if (/(?:替我|帮我|请).{0,8}(?:发布|上架|刊登|改价|改库存|退款|付款|采购下单|投广告|开广告|修改政策|承诺买家|补偿|重发)/i.test(actionable)) return true;
+  return /(?:改价|改库存|退款|付款|采购下单|投广告|开广告|修改政策|承诺买家|补偿买家|重发订单|真实写入)/i.test(actionable);
 }
 
 function uniqueSaasCeoRoutes(routes = []) {

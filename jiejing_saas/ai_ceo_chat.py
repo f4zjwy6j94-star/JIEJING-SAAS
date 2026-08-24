@@ -1646,7 +1646,8 @@ def _classify_external_realtime_request(message: str) -> str:
     if _looks_like_market_news_request(text):
         return "news_search"
     current_markers = ("现在", "当前", "实时", "最新", "今天", "此刻", "刚刚", "now", "current", "latest", "today")
-    stock_markers = ("股价", "股票", "行情", "报价", "盘前", "盘后", "涨跌", "收盘", "市值", "share price", "stock price", "quote")
+    stock_markers = ("股价", "股票", "行情", "盘前", "盘后", "涨跌", "收盘", "市值", "share price", "stock price")
+    ambiguous_quote_markers = ("报价", "quote")
     market_entities = (
         "英伟达",
         "nvidia",
@@ -1664,6 +1665,8 @@ def _classify_external_realtime_request(message: str) -> str:
     if any(marker in text for marker in stock_markers) and (
         any(entity in text for entity in market_entities) or any(marker in text for marker in current_markers)
     ):
+        return "stock_quote"
+    if any(marker in text for marker in ambiguous_quote_markers) and any(entity in text for entity in market_entities):
         return "stock_quote"
     if any(marker in text for marker in ("最新新闻", "今天新闻", "实时新闻", "刚刚发生", "热搜", "news today", "latest news")):
         return "news_search"

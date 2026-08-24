@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas.ai_ceo_chat import (  # noqa: E402
+    _classify_external_realtime_request,
     _looks_like_product_selection_request,
     _looks_like_platform_rule_request,
     _model_answer_rejected_fallback,
@@ -431,6 +432,14 @@ def main() -> None:
     assert "eBay US" in compact_query, compact_query
     assert "lightweight" in compact_query and "non-electric" in compact_query, compact_query
     assert "请给市场调研报告" not in compact_query, compact_query
+
+    supplier_fact_message = (
+        "继续候选商品的真实供应商事实核验。页面显示材质和尺寸；"
+        "实时库存、最终报价、图片商用许可仍未得到供应商确认。"
+        "本轮不采购、不付款、不建 Listing、不生图、不写 eBay。"
+    )
+    assert _classify_external_realtime_request(supplier_fact_message) == "", supplier_fact_message
+    assert _classify_external_realtime_request("特斯拉现在的报价是多少？") == "stock_quote"
 
     previous_search = os.environ.get("JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_ENABLED")
     previous_retry = os.environ.get("JIEJING_AI_CEO_MODEL_REPAIR_RETRY_ENABLED")
