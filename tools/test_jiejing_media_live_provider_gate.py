@@ -229,6 +229,20 @@ def main() -> int:
         concept_body["inputs"]["product_facts"].pop("reference_images", None)
         concept_body["inputs"].pop("reference_image_url", None)
         concept_body["inputs"]["creative_job_spec"]["output_safety_mode"] = "concept_reference_only"
+        concept_body["inputs"]["commercial_rights_confirmed"] = False
+        missing_concept_acceptance = ProviderJobRunner().run(
+            company_id="co_test",
+            store_id="store_test",
+            user_id="user_test",
+            task_id="task_test_concept_unaccepted",
+            job_id="job_test_concept_unaccepted",
+            job_body=concept_body,
+        )
+        if "concept_only_usage_acceptance" not in missing_concept_acceptance.get("missing_inputs", []):
+            raise AssertionError("source-free concept generation must fail closed until its usage boundary is accepted")
+        if missing_concept_acceptance.get("safety", {}).get("live_provider_called") is not False:
+            raise AssertionError("missing concept acceptance must block before a billable provider call")
+        concept_body["inputs"]["concept_only_accepted"] = True
         with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="false"):
             concept = ProviderJobRunner().run(
                 company_id="co_test",

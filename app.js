@@ -15388,6 +15388,8 @@ function currentMediaStudioProductFacts(config = {}) {
       package_dimensions_cm: dimensions,
       logistics: activeDraft?.logistics || composer.logistics || "待补",
     },
+    material_pending_label: ["待补", "待确认"].includes(material),
+    dimensions_pending_label: !dimensions,
     allowed_claims: allowedClaims,
     forbidden_claims: ["未验证认证", "医疗功效", "未经授权品牌词", "夸大性能承诺"],
     reference_images: referenceImages,
@@ -15518,6 +15520,7 @@ function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
     video_intent: videoIntent,
     motion_constraints: motionConstraints,
     commercial_rights_confirmed: config.commercialRightsConfirmed === true,
+    concept_only_accepted: config.conceptOnlyAccepted === true,
   });
   return {
     provider_job_key: "media.asset_generation",
@@ -15551,6 +15554,7 @@ function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
       },
       product_facts: productFacts,
       commercial_rights_confirmed: config.commercialRightsConfirmed === true,
+      concept_only_accepted: config.conceptOnlyAccepted === true,
       live_provider_requested: true,
       video_generation_requested: videoRequested,
       image_count: imageCount,
@@ -15750,7 +15754,7 @@ async function handleMediaGenerateImagesDraftClick() {
     showActionToast("已停止：本次没有调用付费素材服务，也没有消耗素材点。");
     return;
   }
-  config.commercialRightsConfirmed = true;
+  config.commercialRightsConfirmed = groundingGate.hasGroundedSource === true;
   config.conceptOnlyAccepted = groundingGate.conceptOnly === true;
   const text =
     config.entry === "single"

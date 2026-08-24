@@ -6393,7 +6393,30 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         safe_inputs["product_facts"] = product_facts
                         safe_inputs["private_media_source_preflight_validated"] = True
                 preflight_missing = missing_media_product_fact_keys(safe_inputs)
-                if safe_inputs.get("commercial_rights_confirmed") is not True:
+                creative_job_spec = (
+                    safe_inputs.get("creative_job_spec")
+                    if isinstance(safe_inputs.get("creative_job_spec"), dict)
+                    else {}
+                )
+                concept_only = is_concept_only_media_spec(creative_job_spec)
+                product_facts = (
+                    safe_inputs.get("product_facts")
+                    if isinstance(safe_inputs.get("product_facts"), dict)
+                    else {}
+                )
+                reference_images = (
+                    product_facts.get("reference_images")
+                    if isinstance(product_facts.get("reference_images"), list)
+                    else []
+                )
+                has_grounded_source = bool(
+                    product_facts.get("source_asset_id")
+                    or str(safe_inputs.get("reference_image_url") or "").strip().startswith("https://")
+                    or any(str(item or "").strip().startswith("https://") for item in reference_images)
+                )
+                if concept_only and safe_inputs.get("concept_only_accepted") is not True:
+                    preflight_missing.append("concept_only_usage_acceptance")
+                if (not concept_only or has_grounded_source) and safe_inputs.get("commercial_rights_confirmed") is not True:
                     preflight_missing.append("commercial_use_rights_authorization")
                 preflight_missing = list(dict.fromkeys(preflight_missing))
                 if live_media_requested and preflight_missing:

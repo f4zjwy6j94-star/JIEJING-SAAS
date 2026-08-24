@@ -886,7 +886,18 @@ def _media_live_preflight_blockers(inputs: dict[str, Any]) -> list[str]:
     """Fail closed before a potentially billable media-provider call."""
 
     blockers = missing_media_product_fact_keys(inputs)
-    if inputs.get("commercial_rights_confirmed") is not True:
+    creative_job_spec = inputs.get("creative_job_spec") if isinstance(inputs.get("creative_job_spec"), dict) else {}
+    product_facts = inputs.get("product_facts") if isinstance(inputs.get("product_facts"), dict) else {}
+    reference_images = product_facts.get("reference_images") if isinstance(product_facts.get("reference_images"), list) else []
+    concept_only = is_concept_only_media_spec(creative_job_spec)
+    has_grounded_source = bool(
+        product_facts.get("source_asset_id")
+        or str(inputs.get("reference_image_url") or "").strip().startswith("https://")
+        or any(str(item or "").strip().startswith("https://") for item in reference_images)
+    )
+    if concept_only and inputs.get("concept_only_accepted") is not True:
+        blockers.append("concept_only_usage_acceptance")
+    if (not concept_only or has_grounded_source) and inputs.get("commercial_rights_confirmed") is not True:
         blockers.append("commercial_use_rights_authorization")
     return list(dict.fromkeys(blockers))
 

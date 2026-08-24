@@ -59,10 +59,10 @@ for (const [facts, config, allowed, conceptOnly] of cases) {{
         'state.mediaGenerationStatus = "needs_rights_confirmation"' in handler
     ), "declining commercial rights must leave an explicit non-generated state"
     assert (
-        "config.commercialRightsConfirmed = true" in handler
-    ), "the queue payload may only receive the rights flag after an affirmative confirmation"
+        "config.commercialRightsConfirmed = groundingGate.hasGroundedSource === true" in handler
+    ), "source-free concept acceptance must not claim commercial rights to a nonexistent source image"
     assert (
-        handler.index("config.commercialRightsConfirmed = true")
+        handler.index("config.commercialRightsConfirmed = groundingGate.hasGroundedSource === true")
         < handler.index("queueSaasMediaAssetJobFromStudio")
     ), "the confirmed rights flag must be set before the queue payload is built"
     assert "不可刊登的概念参考图" in handler, "concept-only media must receive its own merchant acceptance copy"
@@ -90,6 +90,12 @@ for (const [facts, config, allowed, conceptOnly] of cases) {{
     assert (
         "commercial_rights_confirmed: config.commercialRightsConfirmed === true" in payload_source
     ), "the backend payload must carry the strict commercial-rights confirmation boolean"
+    assert "concept_only_accepted: config.conceptOnlyAccepted === true" in payload_source
+    product_facts_start = app_js.index("function currentMediaStudioProductFacts")
+    product_facts_end = app_js.index("\nfunction saasMediaGenerationGroundingGate", product_facts_start)
+    product_facts_source = app_js[product_facts_start:product_facts_end]
+    assert 'material_pending_label: ["待补", "待确认"].includes(material)' in product_facts_source
+    assert "dimensions_pending_label: !dimensions" in product_facts_source
     print("PASS jiejing_media_source_grounding_gate")
 
 

@@ -540,7 +540,21 @@ def main() -> int:
         concept_payload = json.loads(json.dumps(payload))
         concept_payload["idempotency_key"] = "unit-media-job-concept-only-001"
         concept_payload["inputs"]["product_facts"]["reference_images"] = []
+        concept_payload["inputs"]["product_facts"]["source_asset_id"] = ""
+        concept_payload["inputs"]["product_facts"]["source_image_sha256"] = ""
+        concept_payload["inputs"].pop("reference_image_url", None)
         concept_payload["inputs"]["creative_job_spec"]["output_safety_mode"] = "concept_reference_only"
+        concept_payload["inputs"]["commercial_rights_confirmed"] = False
+        unaccepted_concept_payload = json.loads(json.dumps(concept_payload))
+        unaccepted_concept_payload["idempotency_key"] = "unit-media-job-concept-unaccepted-001"
+        unaccepted_status, unaccepted_concept = post_json_with_status(
+            f"{base_url}/stores/{store_id}/provider-jobs/queue",
+            unaccepted_concept_payload,
+            token=token,
+        )
+        if unaccepted_status != 422 or "concept_only_usage_acceptance" not in unaccepted_concept.get("missing_inputs", []):
+            return fail(f"source-free concept generation must require its explicit usage boundary: {unaccepted_status}, {unaccepted_concept}")
+        concept_payload["inputs"]["concept_only_accepted"] = True
         concept_job = post_json(f"{base_url}/stores/{store_id}/provider-jobs/queue", concept_payload, token=token).get("media_asset_job", {})
         concept_status, concept_review = post_json_with_status(
             f"{base_url}/media-asset-jobs/{concept_job.get('media_job_id')}/review",
