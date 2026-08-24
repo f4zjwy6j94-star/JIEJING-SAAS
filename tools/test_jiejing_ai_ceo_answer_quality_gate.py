@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 from jiejing_saas.ai_ceo_chat import (  # noqa: E402
     _looks_like_platform_rule_request,
     _model_answer_rejected_fallback,
+    _selection_response_contract,
     _should_retry_initial_model_failure,
     _realtime_search_query,
     build_ai_ceo_chat_context,
@@ -64,8 +65,10 @@ class SequenceModel:
     def __init__(self, answers: list[str | Exception]) -> None:
         self.answers = list(answers)
         self.calls = 0
+        self.system_prompts: list[str] = []
 
-    def generate_text(self, **_: Any) -> dict[str, Any]:
+    def generate_text(self, **kwargs: Any) -> dict[str, Any]:
+        self.system_prompts.append(str(kwargs.get("system_prompt") or ""))
         answer = self.answers[min(self.calls, len(self.answers) - 1)]
         self.calls += 1
         if isinstance(answer, Exception):
@@ -164,6 +167,82 @@ def main() -> None:
         context=context,
     )
     assert safe_discovery_quality["accepted"] is True, safe_discovery_quality
+
+    acceptance_message = (
+        "继续纠正上一轮选品：淘汰金属吸管、U型锁、机械计时器。重新给3个结构简单、被动式、"
+        "无食品或人体接触、真正轻小、非易碎、无电无液体、无尺码或机型适配的全新候选。"
+        "每个候选必须给可点击的 eBay US 搜索链接或真实 Item ID；拿不到实时成交证据就明确写成交证据不足，"
+        "不要把常识当需求证据。当前没有供应商、实物或商品参数，重量、尺寸、材质、采购价都未知，严禁编造。"
+        "只读，本轮只做候选筛选，先不要 Listing 草稿、不要生图、不要写 eBay。"
+    )
+    previous_bad_answer = (
+        "候选商品 1：重型订书机\n候选商品 2：自粘式线缆管理夹\n候选商品 3：钥匙整理扣"
+    )
+    acceptance_history = [
+        {
+            "user_text": "给我三个选品",
+            "assistant_text": previous_bad_answer,
+            "route": "ebay_workflow",
+        }
+    ]
+    acceptance_contract = _selection_response_contract(
+        message=acceptance_message,
+        route="ebay_workflow",
+        conversation_history=acceptance_history,
+    )
+    assert acceptance_contract["required_candidate_count"] == 3, acceptance_contract
+    assert acceptance_contract["listing_deferred"] is True, acceptance_contract
+    assert acceptance_contract["candidate_evidence_entry_required"] is True, acceptance_contract
+    assert acceptance_contract["common_sense_demand_claims_forbidden"] is True, acceptance_contract
+    for excluded_name in ("金属吸管", "U型锁", "机械计时器", "重型订书机", "自粘式线缆管理夹", "钥匙整理扣"):
+        assert excluded_name in acceptance_contract["excluded_candidate_names"], acceptance_contract
+
+    acceptance_context = {**context, "selection_contract": acceptance_contract}
+    repeated_candidate_answer = (
+        "### 候选商品卡\n"
+        "候选商品 1：重型订书机\n推荐度评分：72/100\n为什么有需求：长期稳定需求。\n"
+        "eBay US 搜索链接：https://www.ebay.com/sch/i.html?_nkw=heavy+duty+stapler\n成交证据不足。\n"
+        "已证实事实：当前没有商品事实。\n推断依据：待验证。\n待补资料：全部商品参数。\n"
+        "候选商品 2：抽屉标签夹\n推荐度评分：70/100\n为什么有需求：成交证据不足。\n"
+        "eBay US 搜索链接：https://www.ebay.com/sch/i.html?_nkw=drawer+label+clip\n"
+        "已证实事实：当前没有商品事实。\n推断依据：待验证。\n待补资料：全部商品参数。\n"
+        "候选商品 3：缝纫线轴固定夹\n推荐度评分：68/100\n为什么有需求：成交证据不足。\n"
+        "eBay US 搜索链接：https://www.ebay.com/sch/i.html?_nkw=sewing+spool+clip\n"
+        "已证实事实：当前没有商品事实。\n推断依据：待验证。\n待补资料：全部商品参数。"
+    )
+    repeated_quality = validate_ai_ceo_answer_quality(
+        message=acceptance_message,
+        route="ebay_workflow",
+        answer=repeated_candidate_answer,
+        context=acceptance_context,
+    )
+    assert repeated_quality["accepted"] is False, repeated_quality
+    assert "excluded_previous_candidate_reused" in repeated_quality["blocked_by"], repeated_quality
+    assert "unsupported_common_sense_demand_claim" in repeated_quality["blocked_by"], repeated_quality
+
+    accepted_acceptance_answer = (
+        "### 候选商品卡\n"
+        "候选商品 1：无品牌抽屉标签夹\n推荐度评分：74/100\n为什么有需求：成交证据不足，只进入下一轮核验。\n"
+        "eBay US 搜索链接：https://www.ebay.com/sch/i.html?_nkw=drawer+label+clip\n"
+        "已证实事实：当前没有供应商或实物资料。\n推断依据：按商家约束形成待验证方向。\n"
+        "待补资料：材质、重量、尺寸、成本、权利信息均未知。\n"
+        "候选商品 2：无品牌窗帘拉绳收纳钩\n推荐度评分：71/100\n为什么有需求：成交证据不足，只进入下一轮核验。\n"
+        "eBay US 搜索链接：https://www.ebay.com/sch/i.html?_nkw=curtain+cord+tidy+hook\n"
+        "已证实事实：当前没有供应商或实物资料。\n推断依据：按商家约束形成待验证方向。\n"
+        "待补资料：材质、重量、尺寸、成本、权利信息均未知。\n"
+        "候选商品 3：无品牌缝纫线轴固定夹\n推荐度评分：69/100\n为什么有需求：成交证据不足，只进入下一轮核验。\n"
+        "eBay US 搜索链接：https://www.ebay.com/sch/i.html?_nkw=sewing+spool+clip\n"
+        "已证实事实：当前没有供应商或实物资料。\n推断依据：按商家约束形成待验证方向。\n"
+        "待补资料：材质、重量、尺寸、成本、权利信息均未知。\n"
+        "结论：三个方向均只进入下一轮实物与供应商核验。"
+    )
+    accepted_acceptance_quality = validate_ai_ceo_answer_quality(
+        message=acceptance_message,
+        route="ebay_workflow",
+        answer=accepted_acceptance_answer,
+        context=acceptance_context,
+    )
+    assert accepted_acceptance_quality["accepted"] is True, accepted_acceptance_quality
     selection_with_policy_risk = (
         "请筛选三个 eBay 候选商品，每个候选说明平台政策风险、合规要求和资料缺口；"
         "只做选品，不建 Listing。"
@@ -298,6 +377,22 @@ def main() -> None:
         assert repaired["answer_quality"]["accepted"] is True, repaired
         assert repaired["answer_quality"]["repair_retry_count"] == 1, repaired
         assert repaired_model.calls == 2, repaired_model.calls
+
+        strict_repaired_model = SequenceModel([repeated_candidate_answer, accepted_acceptance_answer])
+        strict_repaired = run_ai_ceo_chat(
+            repository=MinimalRepository(),
+            company_id="company_quality",
+            store_id="store_quality",
+            user_id="user_quality",
+            message=acceptance_message,
+            model_client=strict_repaired_model,
+            conversation_history=acceptance_history,
+        )
+        assert strict_repaired["status"] == "model_answered", strict_repaired
+        assert strict_repaired["answer_quality"]["accepted"] is True, strict_repaired
+        assert strict_repaired_model.calls == 2, strict_repaired_model.calls
+        assert "excluded_previous_candidate_reused" in strict_repaired_model.system_prompts[1], strict_repaired_model.system_prompts[1]
+        assert "重型订书机" in strict_repaired_model.system_prompts[1], strict_repaired_model.system_prompts[1]
 
         transient_model = SequenceModel([TimeoutError("provider timed out"), valid])
         transient_recovered = run_ai_ceo_chat(

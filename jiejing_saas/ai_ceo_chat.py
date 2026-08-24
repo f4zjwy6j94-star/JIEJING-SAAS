@@ -113,6 +113,13 @@ def run_ai_ceo_chat(
         realtime_kind = _classify_external_realtime_request(route_message)
     route = previous_route if contextual_followup and previous_route else direct_route
     route_meta = ai_ceo_route_metadata(safe_message, route=route, realtime_kind=realtime_kind)
+    selection_contract = _selection_response_contract(
+        message=safe_message,
+        route=route,
+        conversation_history=safe_history,
+    )
+    if selection_contract:
+        context = {**context, "selection_contract": selection_contract}
     local_clock_kind = _classify_local_clock_request(safe_message)
     if local_clock_kind:
         return {
@@ -544,6 +551,10 @@ def run_ai_ceo_chat(
                     "每条外部事实使用已有 source_records 的 [S1]、[S2] 等编号引用。"
                     "没有官方来源支撑时，不得使用‘必须’‘一律’‘绝对’‘禁止’‘会被下架’等断言。"
                     "回答必须以完整句子结束；如果上一版停在半句话，改写成更短的完整答案。"
+                    + _model_answer_repair_instruction(
+                        answer_quality=answer_quality,
+                        selection_contract=selection_contract,
+                    )
                 ),
                 user_prompt=user_prompt,
                 temperature=0.1,
@@ -575,6 +586,7 @@ def run_ai_ceo_chat(
             "answer": _model_answer_rejected_fallback(
                 message=safe_message,
                 source_records=source_records,
+                blocked_by=answer_quality.get("blocked_by") or [],
             ),
             "answer_quality": {
                 **answer_quality,
@@ -962,6 +974,7 @@ def build_ai_ceo_chat_prompts(
         "merchant_message": message,
         "route": route,
         "route_meta": route_meta or {},
+        "selection_contract": context.get("selection_contract") or {},
         "current_context": _prompt_context_for_route(context, route),
         "web_context": _prompt_web_context(context),
         "current_model_client": model_context or {},
@@ -980,6 +993,9 @@ def build_ai_ceo_chat_prompts(
             "把 current_context.store 的连接布尔值视为权威状态；不要从 store_name 猜测是否授权。",
             "严格遵守 merchant_message 的阶段边界；商家暂缓 Listing 时只做选品，不扩展到 Listing 字段。",
             "商品事实必须来自 merchant_message、current_context 或明确 source_records；未知参数写待核，不得补写成事实。",
+            "有 selection_contract 时逐项执行；excluded_candidate_names 中的旧候选不得再次成为候选商品。",
+            "selection_contract 要求候选证据入口时，每个候选分别给 eBay US 搜索链接或真实 Item ID；搜索入口不等于成交证据，拿不到具体成交证据时逐项写‘成交证据不足’。",
+            "不要主动改写 current_context.store.connection_status；如果确需提及，必须逐字使用上下文中的真实值。",
         ],
     }
     return system_prompt, json.dumps(payload, ensure_ascii=False, default=str)
@@ -3221,6 +3237,7 @@ def validate_ai_ceo_answer_quality(
         message=message,
         answer=answer,
         context=context or {},
+        candidates=candidates,
     )
     accepted = candidate_count >= required_count and first_candidate_visible and not constraint_violations
     blocked_by = []
@@ -3246,6 +3263,7 @@ def _selection_answer_constraint_violations(
     message: str,
     answer: str,
     context: dict[str, Any],
+    candidates: list[dict[str, Any]],
 ) -> list[str]:
     merchant_text = _normalized_text(message)
     answer_text = _safe_text(answer, limit=12000)
@@ -3255,6 +3273,9 @@ def _selection_answer_constraint_violations(
     store_context = context.get("store") if isinstance(context.get("store"), dict) else {}
     if store_context.get("connection_authorized") is True and _answer_claims_store_unauthorized(answer_text):
         blocked_by.append("connected_store_reported_as_unauthorized")
+    expected_connection_status = _safe_text(store_context.get("connection_status") or "", limit=80).lower()
+    if expected_connection_status and _answer_claims_different_connection_status(answer_text, expected_connection_status):
+        blocked_by.append("connection_status_mismatch")
 
     listing_deferred = _merchant_defers_listing(merchant_text)
     actionable_listing_markers = (
@@ -3282,6 +3303,39 @@ def _selection_answer_constraint_violations(
     )
     if unknown_facts_explicit and _answer_invents_unknown_product_facts(answer_text):
         blocked_by.append("invented_unknown_product_facts")
+
+    selection_contract = context.get("selection_contract") if isinstance(context.get("selection_contract"), dict) else {}
+    excluded_names = [
+        _safe_text(name, limit=80)
+        for name in selection_contract.get("excluded_candidate_names", [])
+        if _safe_text(name, limit=80)
+    ]
+    candidate_names = [_safe_text(item.get("name") or "", limit=120) for item in candidates if isinstance(item, dict)]
+    if any(
+        _normalized_candidate_name(excluded) in _normalized_candidate_name(candidate)
+        or _normalized_candidate_name(candidate) in _normalized_candidate_name(excluded)
+        for excluded in excluded_names
+        for candidate in candidate_names
+        if len(_normalized_candidate_name(excluded)) >= 2 and len(_normalized_candidate_name(candidate)) >= 2
+    ):
+        blocked_by.append("excluded_previous_candidate_reused")
+
+    if selection_contract.get("candidate_evidence_entry_required"):
+        candidate_blocks = _selection_candidate_blocks(answer_text)
+        required_count = max(1, _safe_int(selection_contract.get("required_candidate_count") or len(candidates) or 1))
+        inspected_blocks = candidate_blocks[:required_count]
+        if len(inspected_blocks) < required_count or any(not _candidate_block_has_ebay_evidence_entry(block) for block in inspected_blocks):
+            blocked_by.append("missing_candidate_ebay_evidence_entry")
+        if any(
+            _candidate_block_has_search_entry(block)
+            and "成交证据不足" not in block
+            and not _candidate_block_has_real_item_id(block)
+            for block in inspected_blocks
+        ):
+            blocked_by.append("search_entry_presented_as_demand_evidence")
+
+    if selection_contract.get("common_sense_demand_claims_forbidden") and _answer_uses_unsupported_demand_shortcuts(answer_text):
+        blocked_by.append("unsupported_common_sense_demand_claim")
     return list(dict.fromkeys(blocked_by))
 
 
@@ -3305,6 +3359,15 @@ def _answer_claims_store_unauthorized(answer: str) -> bool:
             continue
         return True
     return False
+
+
+def _answer_claims_different_connection_status(answer: str, expected_status: str) -> bool:
+    mentioned = {
+        status
+        for status in _AUTHORIZED_EBAY_CONNECTION_STATUSES
+        if re.search(rf"(?<![a-z_]){re.escape(status)}(?![a-z_])", answer, flags=re.IGNORECASE)
+    }
+    return bool(mentioned and expected_status not in mentioned)
 
 
 def _answer_invents_unknown_product_facts(answer: str) -> bool:
@@ -3454,6 +3517,134 @@ def _looks_like_product_selection_request(*, message: str, route: str) -> bool:
     return any(marker in text for marker in markers)
 
 
+def _selection_response_contract(
+    *,
+    message: str,
+    route: str,
+    conversation_history: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    if not _looks_like_product_selection_request(message=message, route=route):
+        return {}
+    text = _normalized_text(message)
+    excluded_names = _explicitly_excluded_candidate_names(message)
+    wants_new_candidates = any(marker in text for marker in ("全新候选", "重新给", "重新筛", "更换", "禁止复用", "不要复用"))
+    if wants_new_candidates:
+        for item in _sanitize_ai_ceo_conversation_history(conversation_history):
+            for candidate_name in _selection_candidate_names_from_text(item.get("assistant_text") or ""):
+                if candidate_name not in excluded_names:
+                    excluded_names.append(candidate_name)
+    unknown_product_facts = any(
+        marker in text
+        for marker in (
+            "不要编造",
+            "不得编造",
+            "不能编造",
+            "严禁编造",
+            "没有供应商",
+            "无供应商",
+            "没有实物",
+            "商品参数未知",
+            "都未知",
+        )
+    )
+    evidence_entry_required = any(marker in text for marker in ("可点击", "搜索链接", "ebay us 链接", "item id"))
+    return {
+        "contract_version": "ai_ceo_selection_acceptance_v1",
+        "required_candidate_count": _requested_product_candidate_count(message),
+        "excluded_candidate_names": excluded_names[:20],
+        "must_be_new_vs_recent_conversation": wants_new_candidates,
+        "listing_deferred": _merchant_defers_listing(message),
+        "unknown_product_facts": unknown_product_facts,
+        "candidate_evidence_entry_required": evidence_entry_required,
+        "common_sense_demand_claims_forbidden": "不要把常识当需求证据" in text,
+        "evidence_rule": (
+            "每个候选分别给 https://www.ebay.com/sch/i.html?_nkw=... 搜索入口或真实 Item ID；"
+            "搜索入口只用于商家复核，不是成交证据；没有具体成交记录时逐项写成交证据不足。"
+            if evidence_entry_required
+            else "没有候选级成交来源时明确写证据不足。"
+        ),
+        "unknown_fact_rule": (
+            "材质、重量、尺寸、成本、品牌、型号、包装和物流服务全部写未知或待核，不给示例数值。"
+            if unknown_product_facts
+            else "只陈述商家资料或来源记录能支持的商品事实。"
+        ),
+        "secret_exposed": False,
+    }
+
+
+def _explicitly_excluded_candidate_names(message: str) -> list[str]:
+    text = _safe_text(message, limit=900)
+    values: list[str] = []
+    for match in re.finditer(
+        r"(?:淘汰|禁止复用|不要复用|不再使用)(.{1,140}?)(?=重新|更换|[。；;\n]|$)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        segment = match.group(1).strip(" ：:，,（）()[]【】")
+        segment = re.sub(r"^(?:掉|上一轮(?:的)?|这些?|以下|候选\s*\d*)", "", segment, flags=re.IGNORECASE)
+        for part in re.split(r"[、，,/]|\s+(?:和|与|及)\s+", segment):
+            candidate = re.sub(r"^(?:候选(?:商品|品)?\s*\d*[:：]?|商品\s*\d*[:：]?)", "", part.strip())
+            candidate = candidate.strip(" ：:，,。；;（）()[]【】")
+            if 2 <= len(candidate) <= 60 and candidate not in values:
+                values.append(candidate)
+    return values
+
+
+def _selection_candidate_names_from_text(answer: str) -> list[str]:
+    names: list[str] = []
+    for match in re.finditer(
+        r"(?:^|\n)\s*(?:[-*]\s*)?(?:#{1,6}\s*)?(?:候选商品|候选品|候选)\s*[一二三四五六七八九十\dA-Z]*\s*[:：.)、-]\s*([^\n]+)",
+        _safe_text(answer, limit=12000),
+        flags=re.IGNORECASE,
+    ):
+        name = re.split(r"[（(]|\s+[—–-]\s+", match.group(1).strip())[0].strip(" *#：:，,。")
+        if 2 <= len(name) <= 80 and name not in names:
+            names.append(name)
+    return names
+
+
+def _normalized_candidate_name(value: str) -> str:
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(value or "").lower())
+
+
+def _selection_candidate_blocks(answer: str) -> list[str]:
+    text = _safe_text(answer, limit=12000)
+    pattern = re.compile(
+        r"(?:^|\n)\s*(?:[-*]\s*)?(?:#{1,6}\s*)?(?:候选商品|候选品|候选)\s*[一二三四五六七八九十\dA-Z]*\s*[:：.)、-]",
+        flags=re.IGNORECASE,
+    )
+    matches = list(pattern.finditer(text))
+    return [text[match.start() : matches[index + 1].start() if index + 1 < len(matches) else len(text)] for index, match in enumerate(matches)]
+
+
+def _candidate_block_has_real_item_id(block: str) -> bool:
+    return bool(
+        re.search(r"ebay\.com/itm/(?:[^\s/)]+/)?\d{9,15}", block, flags=re.IGNORECASE)
+        or re.search(r"item\s*id\s*[:：#]?\s*\d{9,15}", block, flags=re.IGNORECASE)
+    )
+
+
+def _candidate_block_has_search_entry(block: str) -> bool:
+    return bool(re.search(r"https?://(?:www\.)?ebay\.com/sch/(?:i\.html)?[^\s)\]，。]*", block, flags=re.IGNORECASE))
+
+
+def _candidate_block_has_ebay_evidence_entry(block: str) -> bool:
+    return _candidate_block_has_search_entry(block) or _candidate_block_has_real_item_id(block)
+
+
+def _answer_uses_unsupported_demand_shortcuts(answer: str) -> bool:
+    shortcuts = (
+        "长期稳定需求",
+        "需求长期稳定",
+        "持续痛点",
+        "常青需求",
+        "需求持续存在",
+        "替换和备用需求",
+        "需求稳定",
+    )
+    return any(marker in answer for marker in shortcuts)
+
+
 def _requested_product_candidate_count(message: str) -> int:
     text = _normalized_text(message)
     arabic_match = re.search(r"(?:给我|找|推荐|筛|选)?\s*([1-4])\s*(?:个|款|种|条)", text)
@@ -3466,7 +3657,38 @@ def _requested_product_candidate_count(message: str) -> int:
     return 2
 
 
-def _model_answer_rejected_fallback(*, message: str, source_records: list[dict[str, Any]]) -> str:
+def _model_answer_repair_instruction(
+    *,
+    answer_quality: dict[str, Any],
+    selection_contract: dict[str, Any],
+) -> str:
+    blocked_by = [str(item) for item in answer_quality.get("blocked_by", []) if str(item)]
+    if not blocked_by:
+        return ""
+    instructions = [f" 本轮修复必须消除这些失败代码：{', '.join(blocked_by)}。"]
+    if "connected_store_reported_as_unauthorized" in blocked_by or "connection_status_mismatch" in blocked_by:
+        instructions.append("不要声称店铺未授权，也不要改写连接状态；这轮选品无需主动讨论 OAuth。")
+    if "listing_scope_exceeded" in blocked_by:
+        instructions.append("删除所有 Listing 标题、字段、SKU、Item specifics、类目映射和刊登建议。")
+    if "invented_unknown_product_facts" in blocked_by:
+        instructions.append("删除所有重量、尺寸、材质、成本、品牌、型号、包装和物流服务的数值或断言；逐项写未知或待核。")
+    if "excluded_previous_candidate_reused" in blocked_by:
+        excluded = "、".join(str(item) for item in selection_contract.get("excluded_candidate_names", []) if str(item))
+        instructions.append(f"不得再次推荐这些旧候选：{excluded}。" if excluded else "不得复用上一轮候选。")
+    if "missing_candidate_ebay_evidence_entry" in blocked_by:
+        instructions.append("每个候选分别给一个可点击的 eBay US /sch/i.html?_nkw= 搜索入口或真实 Item ID。")
+    if "search_entry_presented_as_demand_evidence" in blocked_by or "unsupported_common_sense_demand_claim" in blocked_by:
+        instructions.append("搜索入口不等于成交证明；没有候选级成交记录时，每个候选分别写‘成交证据不足’，不要用常识声称需求稳定。")
+    instructions.append("严格按 selection_contract 输出，不要解释上一版，也不要复制 recent_conversation 里的旧答案。")
+    return "".join(instructions)
+
+
+def _model_answer_rejected_fallback(
+    *,
+    message: str,
+    source_records: list[dict[str, Any]],
+    blocked_by: list[str] | None = None,
+) -> str:
     if _looks_like_platform_rule_request(message=message, route=AI_CEO_ROUTE_EBAY_WORKFLOW):
         official_sources = []
         for index, source in enumerate(source_records[:8], start=1):
@@ -3492,9 +3714,25 @@ def _model_answer_rejected_fallback(*, message: str, source_records: list[dict[s
         domain = _safe_text(source.get("domain") or "", limit=80)
         source_lines.append(f"[{citation_id}] {title}{f'（{domain}）' if domain else ''}")
     source_text = "\n".join(source_lines) if source_lines else "这次还没有拿到足够的可核验公开来源。"
+    blocked = {str(item) for item in (blocked_by or [])}
+    reason_lines = []
+    reason_map = (
+        ("connected_store_reported_as_unauthorized", "错误判断了店铺授权状态"),
+        ("connection_status_mismatch", "改写了真实连接状态"),
+        ("listing_scope_exceeded", "越过了本轮只做选品的范围"),
+        ("invented_unknown_product_facts", "把未知的重量、材质、成本或物流信息写成了事实"),
+        ("excluded_previous_candidate_reused", "复用了已经淘汰的旧候选"),
+        ("missing_candidate_ebay_evidence_entry", "没有为每个候选提供可复核的 eBay US 入口或 Item ID"),
+        ("search_entry_presented_as_demand_evidence", "把搜索入口误当成了成交证据"),
+        ("unsupported_common_sense_demand_claim", "用常识代替了候选级需求证据"),
+    )
+    for code, label in reason_map:
+        if code in blocked:
+            reason_lines.append(label)
+    reason_text = "、".join(reason_lines) if reason_lines else "没有完整对应本轮选品要求"
     return (
-        "### 这次结果没有进入 Listing\n\n"
-        "这次回答没有对应你刚才的选品要求，我已经拦住，没有把无关内容当成商品，也没有生成可发布草稿。\n\n"
+        "### 这次选品没有通过质量门\n\n"
+        f"系统已拦住：{reason_text}。没有把不合格内容送入 Listing，也没有生成可发布草稿。\n\n"
         f"**你的目标：** {_safe_text(message, limit=500)}\n\n"
         f"**已找到的公开来源：**\n{source_text}\n\n"
         "**下一步：** 可以直接重试同一句；也可以补一个目标类目、价格带或采购限制，我会重新生成具体候选商品卡。"
