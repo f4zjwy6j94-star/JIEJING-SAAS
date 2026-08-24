@@ -499,6 +499,8 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "const manual = { material: 'food-grade silicone', package_weight: '120 g', package_dimensions: '12 x 10 x 4 cm', source_location: 'Shenzhen, China', purchase_price: 'CNY 8.50' };",
                     "const confirmed = confirmManualSourceFactsForAiCeo(manual);",
                     "const ebayPayload = supplierFactsForSaasAiCeoCommand({ text: '为 eBay 生成 Listing', route: 'listing', intent: 'listing' });",
+                    "state.saasAiCeoSupplierFactAttestation = confirmed;",
+                    "const unknownFactsPayload = supplierFactsForSaasAiCeoCommand({ text: '当前没有供应商和实物，重量尺寸材质采购价都未知，只做选品', route: 'research', intent: 'research' });",
                     "const shopifyPayload = supplierFactsForSaasAiCeoCommand({ text: '帮我在 Shopify 店铺上架', route: 'listing', intent: 'listing' });",
                     "confirmationResult = false;",
                     "const declined = confirmManualSourceFactsForAiCeo(manual);",
@@ -512,7 +514,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "(async () => {",
                     "  state.saasAiCeoSupplierFactAttestation = confirmed;",
                     "  await requestSaasAiCeoChat({ store_id: 'store_unit', text: '为 eBay 生成 Listing', route: 'listing', intent: 'listing', summary: '', title: '' });",
-                    "  console.log(JSON.stringify({ confirmed, declined, ebayPayload, shopifyPayload, capturedBody, confirmationCount }));",
+                    "  console.log(JSON.stringify({ confirmed, declined, ebayPayload, unknownFactsPayload, shopifyPayload, capturedBody, confirmationCount }));",
                     "})().catch((error) => { console.error(error); process.exit(1); });",
                 ]
             )
@@ -529,6 +531,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertIs(result.get("confirmed", {}).get("supplier_facts_verified"), True)
         self.assertIs(result.get("declined", {}).get("supplier_facts_verified"), False)
         self.assertEqual(expected_facts, result.get("ebayPayload", {}).get("supplier_facts"))
+        self.assertEqual({}, result.get("unknownFactsPayload"))
         self.assertEqual({}, result.get("shopifyPayload"))
         self.assertEqual(expected_facts, result.get("capturedBody", {}).get("supplier_facts"))
         self.assertIs(result.get("capturedBody", {}).get("supplier_facts_verified"), True)

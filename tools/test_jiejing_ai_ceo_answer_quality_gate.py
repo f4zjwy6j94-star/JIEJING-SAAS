@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas.ai_ceo_chat import (  # noqa: E402
+    _looks_like_platform_rule_request,
     _model_answer_rejected_fallback,
     _should_retry_initial_model_failure,
     _realtime_search_query,
@@ -163,6 +164,14 @@ def main() -> None:
         context=context,
     )
     assert safe_discovery_quality["accepted"] is True, safe_discovery_quality
+    selection_with_policy_risk = (
+        "请筛选三个 eBay 候选商品，每个候选说明平台政策风险、合规要求和资料缺口；"
+        "只做选品，不建 Listing。"
+    )
+    assert _looks_like_platform_rule_request(
+        message=selection_with_policy_risk,
+        route="ebay_workflow",
+    ) is False, "candidate requirements must not turn the whole selection answer into a platform-rule-only response"
 
     rejected = validate_ai_ceo_answer_quality(message=message, route="ebay_workflow", answer=unrelated)
     assert rejected["accepted"] is False, rejected

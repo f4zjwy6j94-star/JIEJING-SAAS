@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
 from pathlib import Path
 
 
@@ -52,10 +54,36 @@ def main() -> None:
     require(candidate_parser, "saasSelectMarketProductCandidateFromText", "explicit recommendation selection")
 
     intent_router = function_body(app_js, "saasCeoCommandIntent")
+    risk_router = function_body(app_js, "isSaasCeoHighRiskCommand")
     require(intent_router, "asksForListingHandoff", "Listing handoff priority")
+    require(intent_router, "listingDeferred", "negative Listing intent guard")
+    require(intent_router, "asksForProductResearch", "AI CEO product-research route")
+    require(intent_router, "if (asksForProductResearch)", "product research before generic Listing routing")
     require(intent_router, "asksForBulkWorkspace", "explicit bulk-workspace routing")
     require(intent_router, "批量筛", "natural bulk screening phrase")
     require(intent_router, "if (asksForListingHandoff)", "Listing routing before generic selection words")
+    intent_probe = subprocess.run(
+        ["node"],
+        input=(
+            risk_router
+            + "\n"
+            + intent_router
+            + "\nconsole.log(JSON.stringify(["
+            + "saasCeoCommandIntent('筛选3个全新低风险候选，只读，先不要 Listing 草稿'),"
+            + "saasCeoCommandIntent('为这个商品生成 Listing 草稿'),"
+            + "saasCeoCommandIntent('批量筛选20个商品')"
+            + "]));\n"
+        ),
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=True,
+    )
+    assert json.loads(intent_probe.stdout.strip()) == ["research", "listing", "bulk"], intent_probe.stdout
+
+    command_builder = function_body(app_js, "buildSaasCeoCommand")
+    require(command_builder, "research:", "research route contract")
+    require(command_builder, 'label: "AI CEO 选品调研"', "research route merchant label")
 
     print("PASS jiejing_ai_ceo_product_label_extraction")
 

@@ -8389,6 +8389,9 @@ function confirmManualSourceFactsForAiCeo(facts = {}) {
 
 function supplierFactsForSaasAiCeoCommand(command = {}) {
   const text = String(command?.text || "").toLowerCase();
+  const explicitlyUnknownProductFacts =
+    /没有供应商|无供应商|没有实物|无实物|商品参数.{0,8}(?:未知|没有|未提供)|(?:重量|尺寸|材质|采购价).{0,20}(?:都|均)?未知|严禁编造|不要编造|不得编造/i.test(text);
+  if (explicitlyUnknownProductFacts) return {};
   const explicitlyEbay = text.includes("ebay");
   const namesOtherPlatform = /淘宝|天猫|京东|拼多多|亚马逊|amazon|shopify|shopee|lazada|temu|tiktok shop|抖音小店|快手小店|微信小店/i.test(text);
   if (namesOtherPlatform && !explicitlyEbay) return {};
@@ -22810,12 +22813,20 @@ function saasCeoCommandIntent(text = "") {
   const has = (pattern) => pattern.test(raw);
   if (!raw.trim()) return "general_chat";
   if (isSaasCeoHighRiskCommand(raw)) return "confirm";
+  const listingDeferred =
+    has(/(?:本轮|这轮|当前|现在|只读|先|暂时|暂缓)?\s*(?:不要|不做|不建|不生成|无需|不进入|先不|暂不).{0,18}(?:Listing|刊登|上架|草稿)/i) ||
+    has(/(?:Listing|刊登|上架|草稿).{0,10}(?:不要|不做|不建|不生成|先不|暂不)/i);
   const asksForListingHandoff =
-    has(/Listing|listing|刊登草稿|上架草稿|导入\s*Listing|生成.{0,12}(?:Listing|刊登|上架)草稿|可导入.{0,12}(?:Listing|刊登|上架)/i) ||
-    (has(/市场调研|市场报告|结构化报告/i) && has(/一个最值得|选出一个|推荐一个|一个品|一个商品/i));
+    !listingDeferred &&
+    (has(/Listing|listing|刊登草稿|上架草稿|导入\s*Listing|生成.{0,12}(?:Listing|刊登|上架)草稿|可导入.{0,12}(?:Listing|刊登|上架)/i) ||
+    (has(/市场调研|市场报告|结构化报告/i) && has(/一个最值得|选出一个|推荐一个|一个品|一个商品/i)));
+  const asksForProductResearch =
+    has(/选品|候选商品|候选品|商品候选|产品候选|找品|筛选.{0,12}(?:商品|产品|候选)|产品方向|商品方向|卖什么|市场调研|市场报告/i) &&
+    !asksForListingHandoff;
   const asksForBulkWorkspace = has(/批量铺货|批量筛|批量导入|批量发布|批量生成|多款|多品|商品清单|商品列表|货盘|前五|前十|前\s*\d+|top\s*\d+/i);
   if (asksForListingHandoff) return "listing";
   if (asksForBulkWorkspace) return "bulk";
+  if (asksForProductResearch) return "research";
   if (has(/素材|主图|图片|视频|详情|详情页|货源图|场景图|字幕|脚本|封面|抠图|改图|生成图/)) return "media";
   if (has(/客服|订单|物流|退货|买家|消息|纠纷|售后|履约|tracking|评价|差评/)) return "service";
   if (has(/eBay|ebay|Listing|listing|商品|产品|货源|选品|候选|机会|找品|SKU|1688|上架草稿|刊登|标题|描述|价格|利润|类目|item|市场|调研|竞品|热销/i)) {
@@ -22887,6 +22898,12 @@ function buildSaasCeoCommand(text, ctx = saasMerchantWorkbenchContext()) {
         : "等待 AI 连接状态恢复";
   const routeStatus = ready ? "可开始" : statusLabel;
   const routeByIntent = {
+    research: {
+      view: "cockpit",
+      key: "research",
+      label: "AI CEO 选品调研",
+      note: "留在 AI CEO 完成候选筛选、证据缺口和下一轮核验，不提前创建 Listing。",
+    },
     listing: {
       view: "product",
       key: "product",
@@ -22943,7 +22960,7 @@ function buildSaasCeoCommand(text, ctx = saasMerchantWorkbenchContext()) {
   return normalizeSaasCeoCommand({
     id: `ceo-command-${Date.now().toString(16)}-${Math.abs(hashString(cleanText)).toString(16)}`,
     text: cleanText,
-    title: intent === "bulk" ? "批量铺货任务" : intent === "media" ? "素材任务" : intent === "service" ? "客服订单任务" : intent === "confirm" ? "决策确认任务" : "Listing 经营任务",
+    title: intent === "research" ? "选品调研任务" : intent === "bulk" ? "批量铺货任务" : intent === "media" ? "素材任务" : intent === "service" ? "客服订单任务" : intent === "confirm" ? "决策确认任务" : "Listing 经营任务",
     summary: ready
       ? "AI CEO 已接单，并把任务分发到市场、批量、IP、Listing、素材、客服、财务和决策模块。"
       : `AI CEO 已接单，但执行前先展示当前缺口：${statusLabel}。`,
@@ -23062,6 +23079,7 @@ function saasCeoTaskGoalLabel(command = state.saasLastCeoCommand) {
   return (
     {
       listing: "你想整理一个商品或 Listing 项目",
+      research: "你想先完成候选商品筛选和证据核验",
       bulk: "你想先小批量筛一批候选商品",
       media: "你想处理图片、视频或详情页素材",
       service: "你想处理订单、物流、买家消息或售后",
@@ -23077,6 +23095,7 @@ function saasCeoTaskNextCopy(route = null, command = state.saasLastCeoCommand) {
   return (
     {
       product: "去 Listing 继续整理市场结论、草稿、素材/利润和发布确认。",
+      cockpit: "留在 AI CEO 完成选品调研；证据和商品事实过关后，再决定是否进入 Listing。",
       bulk: "去小批量实验台，先选数量、货源和边界，再看三类候选。",
       media: "去素材工坊整理主图、详情页、场景图和视频脚本。",
       service: "去客服与订单处理消息、订单、物流和售后草稿。",
@@ -23089,6 +23108,7 @@ function saasCeoRouteSimpleReason(route = null) {
   return (
     {
       product: "整理刊登资料",
+      cockpit: "先完成选品核验",
       bulk: "先小批量验证",
       media: "处理图片视频",
       service: "处理消息订单",
@@ -23104,7 +23124,9 @@ function saasCeoRoutingWhyRows(route = null, command = state.saasLastCeoCommand)
   const boundaryCopy =
     current.high_risk || route.view === "confirm"
       ? "先确认，未点头不执行"
-      : "只整理草稿，真实动作仍确认";
+      : route.view === "cockpit"
+        ? "只做调研，不执行真实动作"
+        : "只整理草稿，真实动作仍确认";
   return [
     ["我理解", saasCeoTaskGoalLabel(current)],
     ["推荐去", `${route.label || "推荐模块"} · ${saasCeoRouteSimpleReason(route)}`],
@@ -23127,7 +23149,7 @@ function saasCeoFirstDayClosureRows(route = null, command = state.saasLastCeoCom
   const target = route.view === "confirm" ? "决策中心" : route.label || "推荐模块";
   return [
     ["01", "先说目标", "一句话、图片、链接或订单问题都可以。"],
-    ["02", "系统判断", `AI CEO 判断这是咨询、Listing、批量、素材、客服还是高风险动作。`],
+    ["02", "系统判断", `AI CEO 判断这是咨询、选品调研、Listing、批量、素材、客服还是高风险动作。`],
     ["03", "去推荐模块", `本次建议进入：${target}。`],
     ["04", "回设置补连接", "eBay、模型、素材额度和订阅只在需要时再补。"],
   ];
@@ -23144,13 +23166,17 @@ function renderSaasCeoRoutingTaskCard(command = state.saasLastCeoCommand) {
       ? "去决策中心"
       : route.view === "product"
         ? "继续 Listing"
+        : route.view === "cockpit"
+          ? "继续选品调研"
         : route.view === "bulk"
           ? "继续小批量实验台"
           : `继续${route.label || "推荐模块"}`;
   const handoffTitle =
     route.view === "confirm"
       ? "先去决策中心确认"
-      : `去 ${route.label || "推荐模块"} 继续`;
+      : route.view === "cockpit"
+        ? "留在 AI CEO 继续选品调研"
+        : `去 ${route.label || "推荐模块"} 继续`;
   return `
     <section class="saas-ceo-routing-task-card ${current.high_risk ? "is-risk" : ""}" data-ai-ceo-route-task-card="ai_ceo_route_task_card_v2" aria-label="AI CEO 下一步任务卡">
       <div class="saas-ceo-routing-main">

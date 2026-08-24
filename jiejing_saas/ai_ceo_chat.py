@@ -3406,6 +3406,8 @@ def _looks_like_platform_rule_request(*, message: str, route: str) -> bool:
     text = _normalized_text(message)
     if "ebay" not in text and "listing" not in text:
         return False
+    if _looks_like_product_selection_request(message=message, route=route):
+        return False
     rule_markers = (
         "规则",
         "政策",
