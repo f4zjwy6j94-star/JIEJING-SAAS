@@ -389,6 +389,16 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
         "候选商品已导入为待补资料草稿",
         "merchant sees that candidate import succeeded while publish facts remain blocked",
     )
+    require(
+        app_html,
+        "app.js?v=20260824-ai-ceo-listing-import-v1",
+        "workspace loads the AI CEO candidate import fix with a fresh asset version",
+    )
+    require(
+        index_html,
+        "app.js?v=20260824-ai-ceo-listing-import-v1",
+        "public entry preloads the same fresh Listing asset version",
+    )
     require(app_js, "function selectSaasListingMarketCandidate", "merchant can select one AI CEO candidate")
     require(app_js, 'data-saas-listing-candidate-id="${escapeHtml(candidate.candidate_id)}"', "candidate selection control")
     require(app_js, 'aria-pressed="${candidate.name === opportunity.product ? "true" : "false"}"', "candidate selected state")
