@@ -47,11 +47,13 @@ for (const [facts, config, allowed, conceptOnly] of cases) {{
     handler_start = app_js.index("function handleMediaGenerateImagesDraftClick")
     handler_end = app_js.index("\nasync function handleMediaScriptDraftClick", handler_start)
     handler = app_js[handler_start:handler_end]
+    assert "if (pendingMediaGenerationAcceptance) return;" in handler, "duplicate click handlers must share one acceptance point"
     assert "saasMediaGenerationGroundingGate" in handler, "generate action must fail closed before queueing a provider job"
     assert handler.index("saasMediaGenerationGroundingGate") < handler.index("queueSaasMediaAssetJobFromStudio")
-    assert "window.confirm" in handler, "merchant must explicitly confirm commercial and AI-generation rights"
+    assert "await requestMediaGenerationAcceptance(groundingGate)" in handler, "merchant must explicitly confirm commercial and AI-generation rights"
+    assert "window.confirm" not in handler, "media acceptance must use an in-page confirmation instead of a blocking browser dialog"
     assert (
-        handler.index("window.confirm") < handler.index("queueSaasMediaAssetJobFromStudio")
+        handler.index("await requestMediaGenerationAcceptance(groundingGate)") < handler.index("queueSaasMediaAssetJobFromStudio")
     ), "commercial-rights confirmation must happen before the paid media job is queued"
     assert (
         'state.mediaGenerationStatus = "needs_rights_confirmation"' in handler
@@ -72,6 +74,15 @@ for (const [facts, config, allowed, conceptOnly] of cases) {{
     assert 'button.disabled = !groundingGate.allowed' in action_state
     assert '"先上传来源图或选择概念探索"' in action_state
     assert '"生成概念参考图"' in action_state
+    assert 'writebackButton.disabled = !listingWritebackAllowed' in action_state
+    assert '"概念图不可回写 Listing"' in action_state
+    assert '"只作概念方向参考，不进入产品刊登"' in action_state
+
+    acceptance_start = app_js.index("function requestMediaGenerationAcceptance")
+    acceptance_end = app_js.index("\nfunction openManualAction", acceptance_start)
+    acceptance_source = app_js[acceptance_start:acceptance_end]
+    assert '"确认生成概念参考图"' in acceptance_source
+    assert '"不会回写 Listing，不会自动发布、付款或写入 eBay。"' in acceptance_source
 
     payload_start = app_js.index("function buildSaasMediaAssetJobPayload")
     payload_end = app_js.index("\nasync function pollSaasMediaAssetJobUntilReview", payload_start)

@@ -4872,6 +4872,8 @@ const plansModal = document.querySelector("#plansModal");
 const evidenceModal = document.querySelector("#evidenceModal");
 const manualModal = document.querySelector("#manualModal");
 const assetModal = document.querySelector("#assetModal");
+const mediaAcceptanceModal = document.querySelector("#mediaAcceptanceModal");
+let pendingMediaGenerationAcceptance = null;
 const registrationChallengeState = {
   config: null,
   widgetId: null,
@@ -15439,6 +15441,29 @@ function syncMediaGenerationActionState(config = readMediaGenerationConfig()) {
       ? "concept_only"
       : "source_grounded"
     : "needs_source";
+  const writebackButton = document.querySelector("#mediaConfirmDraft");
+  if (writebackButton) {
+    const listingWritebackAllowed = groundingGate.allowed && !groundingGate.conceptOnly;
+    writebackButton.disabled = !listingWritebackAllowed;
+    writebackButton.textContent = groundingGate.conceptOnly ? "概念图不可回写 Listing" : "回写产品刊登";
+    writebackButton.title = groundingGate.conceptOnly
+      ? "概念探索没有真实商品来源图，只能用于判断方向，不能作为刊登素材"
+      : listingWritebackAllowed
+        ? "审核素材与实物一致后，回写产品刊登草稿"
+        : "先上传有权使用的真实商品来源图";
+    writebackButton.dataset.mediaWritebackGate = listingWritebackAllowed ? "source_grounded" : "blocked";
+  }
+  if (groundingGate.conceptOnly) {
+    setText(
+      "#mediaDecisionSummary",
+      `当前任务：${config.entryLabel}，${config.count}概念参考图。没有真实商品来源图；结果只用于判断构图和场景方向，不可回写 Listing。`,
+    );
+    setText("#mediaProductionTarget", "只作概念方向参考，不进入产品刊登");
+  } else if (!groundingGate.allowed) {
+    setText("#mediaProductionTarget", "上传真实来源图后再生成待审核素材");
+  } else {
+    setText("#mediaProductionTarget", "审核实物一致性后回写产品刊登草稿");
+  }
   return groundingGate;
 }
 
@@ -15690,7 +15715,8 @@ async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}) {
   }
 }
 
-function handleMediaGenerateImagesDraftClick() {
+async function handleMediaGenerateImagesDraftClick() {
+  if (pendingMediaGenerationAcceptance) return;
   const config = readMediaGenerationConfig();
   const productFacts = currentMediaStudioProductFacts(config);
   const groundingGate = saasMediaGenerationGroundingGate(productFacts, config);
@@ -15707,11 +15733,7 @@ function handleMediaGenerateImagesDraftClick() {
     showActionToast("先上传真实商品图：本次没有调用付费素材服务。只有明确选择“创意场景探索”时，才允许生成不可刊登的概念参考图。");
     return;
   }
-  const acceptanceConfirmed = window.confirm(
-    groundingGate.conceptOnly && !groundingGate.hasGroundedSource
-      ? "请确认：当前没有真实商品来源图，本次只生成不可刊登的概念参考图。结果不能回写 Listing，不能代表供应商实物，也不会自动发布、付款或写入 eBay。"
-      : "请确认：你拥有本次实拍图或供应商来源图的商业使用和 AI 再生成权限。确认只允许创建待审核素材，不会自动发布、付款或写入 eBay。",
-  );
+  const acceptanceConfirmed = await requestMediaGenerationAcceptance(groundingGate);
   if (!acceptanceConfirmed) {
     state.mediaGenerationStatus = "needs_rights_confirmation";
     if (groundingGate.conceptOnly) state.mediaGenerationStatus = "needs_concept_acceptance";
@@ -34232,6 +34254,7 @@ function openPlans() {
 }
 
 function closeModals() {
+  settleMediaGenerationAcceptance(false);
   resetRegistrationChallenge();
   authModal.hidden = true;
   plansModal.hidden = true;
@@ -34239,7 +34262,48 @@ function closeModals() {
   manualModal.hidden = true;
   assetModal.hidden = true;
   assetModal.classList.remove("is-video-preview");
+  if (mediaAcceptanceModal) mediaAcceptanceModal.hidden = true;
   document.body.classList.remove("site-locked");
+}
+
+function settleMediaGenerationAcceptance(accepted) {
+  const resolve = pendingMediaGenerationAcceptance;
+  pendingMediaGenerationAcceptance = null;
+  if (mediaAcceptanceModal) mediaAcceptanceModal.hidden = true;
+  document.body.classList.remove("site-locked");
+  if (resolve) resolve(accepted === true);
+}
+
+function requestMediaGenerationAcceptance(groundingGate = {}) {
+  closeModals();
+  const conceptOnly = groundingGate.conceptOnly === true;
+  setText("#mediaAcceptanceRole", conceptOnly ? "概念探索确认" : "图片权利确认");
+  setText("#mediaAcceptanceTitle", conceptOnly ? "确认只生成概念参考图" : "确认图片使用与再生成权限");
+  setText(
+    "#mediaAcceptanceIntro",
+    conceptOnly
+      ? "当前没有真实商品来源图。本次结果只用于判断构图和场景方向，不能代表供应商实物，也不能回写 Listing。"
+      : "请确认你拥有本次实拍图或供应商来源图的商业使用和 AI 再生成权限。",
+  );
+  setText("#mediaAcceptanceBoundary", conceptOnly ? "仅生成不可刊登的概念参考图" : "仅创建待审核的来源图素材");
+  setText(
+    "#mediaAcceptanceSafety",
+    conceptOnly
+      ? "不会回写 Listing，不会自动发布、付款或写入 eBay。"
+      : "生成后仍需审核实物一致性；不会自动发布、付款或写入 eBay。",
+  );
+  const confirmButton = document.querySelector("#mediaAcceptanceConfirm");
+  if (confirmButton) {
+    confirmButton.textContent = conceptOnly ? "确认生成概念参考图" : "确认拥有权限并生成";
+    confirmButton.onclick = () => settleMediaGenerationAcceptance(true);
+  }
+  if (!mediaAcceptanceModal) return Promise.resolve(false);
+  mediaAcceptanceModal.hidden = false;
+  document.body.classList.add("site-locked");
+  return new Promise((resolve) => {
+    pendingMediaGenerationAcceptance = resolve;
+    window.setTimeout(() => confirmButton?.focus(), 0);
+  });
 }
 
 function openManualAction(key) {
