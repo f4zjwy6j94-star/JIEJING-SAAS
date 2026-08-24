@@ -48,6 +48,8 @@ def main() -> int:
         "validate_bundle_javascript(bundle)",
         "local_node_unavailable",
         "bundle_javascript_invalid",
+        '"jiejing_saas/migrations/002_media_credit_buckets_postgres.sql"',
+        '"jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql"',
         "StrictHostKeyChecking=yes",
         "IdentitiesOnly=yes",
         "BatchMode=yes",
@@ -103,6 +105,8 @@ def main() -> int:
         '"tools/jiejing_production_deploy.py"',
         '"tools/test_jiejing_production_deploy_channel.py"',
         '"docs/JIEJING_PRODUCTION_DEPLOY_RUNBOOK_20260823.md"',
+        '"jiejing_saas/migrations/002_media_credit_buckets_postgres.sql"',
+        '"jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql"',
     ]
     required_ci = ["python tools/test_jiejing_production_deploy_channel.py"]
     required_runbook = [

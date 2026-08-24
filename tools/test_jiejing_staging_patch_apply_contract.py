@@ -168,6 +168,8 @@ def main() -> int:
         "jiejing_saas/worker.py",
         "jiejing_saas/workflow_plan.py",
         "jiejing_saas/migrations/001_initial_schema_postgres.sql",
+        "jiejing_saas/migrations/002_media_credit_buckets_postgres.sql",
+        "jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql",
         "tools/jiejing_current_state_guard.py",
         "tools/jiejing_external_launch_blocker_gate.py",
         "tools/jiejing_configure_tencent_runtime_env.py",

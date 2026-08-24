@@ -206,6 +206,8 @@ FILES=(
   "jiejing_saas/ebay_write_adapter.py"
   "jiejing_saas/workflow_plan.py"
   "jiejing_saas/migrations/001_initial_schema_postgres.sql"
+  "jiejing_saas/migrations/002_media_credit_buckets_postgres.sql"
+  "jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql"
   "jiejing_runtime/execution.py"
   "jiejing_runtime/execution_preflight.py"
   "jiejing_runtime/__init__.py"
