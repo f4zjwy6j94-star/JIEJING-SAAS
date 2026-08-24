@@ -23311,18 +23311,20 @@ function saasCeoCommandIntent(text = "") {
     !asksForInternalListingDraft &&
     (has(/(?:本轮|这轮|当前|现在|只读|先|暂时|暂缓)?\s*(?:不要|不做|不建|不生成|无需|不进入|先不|暂不).{0,18}(?:Listing|刊登|上架|草稿)/i) ||
       has(/(?:Listing|刊登|上架|草稿).{0,10}(?:不要|不做|不建|不生成|先不|暂不)/i));
+  const hasProductResearchIntent = has(
+    /选品|候选商品|候选品|商品候选|产品候选|找品|筛选.{0,12}(?:商品|产品|候选)|产品方向|商品方向|卖什么|市场调研|市场报告|成交证据|三选一|相对赢家|赢家|供应商事实核验|供应商核验|货源核验|sold\s*&?\s*completed|已售.{0,12}(?:数量|结果|item)|在售.{0,12}(?:数量|竞争)/i,
+  );
   const asksForListingHandoff =
     asksForInternalListingDraft ||
     (!listingDeferred &&
       (has(/Listing|listing|刊登草稿|上架草稿|导入\s*Listing|生成.{0,12}(?:Listing|刊登|上架)草稿|可导入.{0,12}(?:Listing|刊登|上架)/i) ||
         (has(/市场调研|市场报告|结构化报告/i) && has(/一个最值得|选出一个|推荐一个|一个品|一个商品/i))));
-  const asksForProductResearch =
-    has(/选品|候选商品|候选品|商品候选|产品候选|找品|筛选.{0,12}(?:商品|产品|候选)|产品方向|商品方向|卖什么|市场调研|市场报告|成交证据|三选一|相对赢家|赢家|供应商事实核验|供应商核验|货源核验|sold\s*&?\s*completed|已售.{0,12}(?:数量|结果|item)|在售.{0,12}(?:数量|竞争)/i) &&
-    !asksForListingHandoff;
+  const asksForProductResearch = hasProductResearchIntent && !asksForInternalListingDraft;
   const asksForBulkWorkspace = has(/批量铺货|批量筛|批量导入|批量发布|批量生成|多款|多品|商品清单|商品列表|货盘|前五|前十|前\s*\d+|top\s*\d+/i);
-  if (asksForListingHandoff) return "listing";
+  if (asksForInternalListingDraft) return "listing";
   if (asksForBulkWorkspace) return "bulk";
   if (asksForProductResearch) return "research";
+  if (asksForListingHandoff) return "listing";
   if (has(/素材|主图|图片|视频|详情|详情页|货源图|场景图|字幕|脚本|封面|抠图|改图|生成图/)) return "media";
   if (has(/客服|订单|物流|退货|买家|消息|纠纷|售后|履约|tracking|评价|差评/)) return "service";
   if (has(/eBay|ebay|Listing|listing|商品|产品|货源|选品|候选|机会|找品|SKU|1688|上架草稿|刊登|标题|描述|价格|利润|类目|item|市场|调研|竞品|热销/i)) {
