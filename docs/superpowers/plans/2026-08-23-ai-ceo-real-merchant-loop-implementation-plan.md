@@ -175,6 +175,11 @@
 5. 将 `controlled_acceptance` 加入明确的 bucket source allowlist、到期、撤销和余额投影；保证 `(company_id, source_type, source_reference_id)` 唯一，绝不静默降级成 `legacy`。商家余额摘要可单列或省略验收点，但绝不得归入 `plan_included` 或 `purchased`；精确来源、预留和到期以 bucket/ledger 为权威证据。
 6. 受控验收任务必须经认证商家实际调用 `POST /stores/{store_id}/provider-jobs/queue`，入队时使用 `reserve_media_credit_source(...)` 精确预留服务端绑定的 acceptance bucket；在 plan/purchased/controlled 并存时只改变 controlled bucket，验收额度不足、过期或缺失即阻断，绝不回退消耗套餐点或购买点；queued 验收不触发 provider。
 7. public/free plan 保持 0 素材点；仓库的公共路由表与 `do_POST`/路由分派器都不得注册 controlled acceptance grant 端点，常见伪路径本地 HTTP 探针必须 404 且账本/审计无变化。
+8. 媒体任务创建与重做统一使用 `preparing -> link -> activate` 队列 saga。队列发布前必须已有 task、media job、queue link 和 reservation；worker 在真实 provider 前再次核验 reservation ledger、reference、points 与每个 backing bucket。任何缺失或不一致均 fail closed。
+9. Redis 发布证据只能追加到当前状态，绝不得把已被 worker 推进到 `running/completed` 的任务覆盖回 `queued`；发布结果不确定时不得释放 reservation，必须进入人工对账。重做入口不得绕开同一 saga。
+10. watchdog 必须识别历史 `preparing/compensating` 媒体队列，以不可执行的补偿态幂等 release reservation，再把任务转为可重做；补偿中途崩溃可由下一轮继续，健康检查必须将历史 setup 显示为异常。
+11. 资产类型由统一分类器同时使用 `asset_type`、URL 与标准化 MIME。extensionless `video/*` 不能按图片结算；显式类型冲突必须阻断结算和 Listing 复核。
+12. 真实素材 provider 必须同时满足 `JIEJING_MEDIA_CREDIT_ENFORCEMENT_ENABLED=true`。API 入队和 worker 成本边界分别独立校验；扣点保护关闭或缺失时返回 `media_credit_enforcement_required`，不得把关闭 enforcement 解释为免费真实生成。
 
 ### Documentation references
 
@@ -213,6 +218,7 @@ python tools/test_jiejing_listing_concrete_product_gate.py
 python tools/test_jiejing_media_source_upload_http.py
 python tools/test_jiejing_media_asset_jobs.py
 python tools/test_jiejing_commercial_entitlements.py
+python tools/test_jiejing_media_queue_setup_recovery.py
 python tools/test_jiejing_media_credit_purchase.py
 python tools/jiejing_secret_scan.py
 node --check app.js

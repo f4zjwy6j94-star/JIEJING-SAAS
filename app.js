@@ -15358,6 +15358,13 @@ function currentMediaStudioProductFacts(config = {}) {
   const referenceImages = [config.referenceImageUrl]
     .map((url) => String(url || "").trim())
     .filter((url, index, values) => /^https:\/\//i.test(url) && values.indexOf(url) === index);
+  const material = publicRuntimeText(activeDraft?.material || composer.material || "待补");
+  const dimensions = activeDraft?.dimensions || composer.dimensions || null;
+  const allowedClaims = [
+    productName && productName !== "当前商品" ? `商品名称：${productName}` : "",
+    material && !["待补", "待确认"].includes(material) ? `材质：${material}` : "",
+    dimensions ? `尺寸：${publicRuntimeText(dimensions)}` : "",
+  ].filter(Boolean);
   return {
     product: productName,
     listing_project_key: listingProject.key,
@@ -15367,11 +15374,11 @@ function currentMediaStudioProductFacts(config = {}) {
     marketplace: store?.marketplace || "EBAY_US",
     source: config.entry === "single" ? "merchant_upload_or_local_image" : "listing_or_ai_ceo_workflow",
     supplier_facts: {
-      material: activeDraft?.material || composer.material || "待补",
-      package_dimensions_cm: activeDraft?.dimensions || composer.dimensions || null,
+      material,
+      package_dimensions_cm: dimensions,
       logistics: activeDraft?.logistics || composer.logistics || "待补",
     },
-    allowed_claims: [],
+    allowed_claims: allowedClaims,
     forbidden_claims: ["未验证认证", "医疗功效", "未经授权品牌词", "夸大性能承诺"],
     reference_images: referenceImages,
     source_asset_id: uploadMatchesProject ? upload.asset_id || "" : "",
@@ -15437,6 +15444,9 @@ function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
   const idempotencySource = JSON.stringify({
     store_id: store?.store_id || "",
     listing_project_key: productFacts.listing_project_key || "",
+    source_asset_id: String(productFacts.source_asset_id || "").trim(),
+    source_image_sha256: String(productFacts.source_image_sha256 || "").trim().toLowerCase(),
+    reference_images: [...groundedReferenceImages].sort(),
     sourceText,
     platform: config.platform || "",
     count: imageCount,
@@ -15451,6 +15461,7 @@ function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
     video_requested: videoRequested,
     video_intent: videoIntent,
     motion_constraints: motionConstraints,
+    commercial_rights_confirmed: config.commercialRightsConfirmed === true,
   });
   return {
     provider_job_key: "media.asset_generation",
@@ -15483,6 +15494,7 @@ function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
         blocked_claims: ["unverified_certification", "medical_claim", "brand_authorization_without_proof"],
       },
       product_facts: productFacts,
+      commercial_rights_confirmed: config.commercialRightsConfirmed === true,
       live_provider_requested: true,
       video_generation_requested: videoRequested,
       image_count: imageCount,
@@ -15664,6 +15676,17 @@ function handleMediaGenerateImagesDraftClick() {
     showActionToast("先上传真实商品图：本次没有调用付费素材服务。只有明确选择“创意场景探索”时，才允许生成不可刊登的概念参考图。");
     return;
   }
+  const commercialRightsConfirmed = window.confirm(
+    "请确认：你拥有本次实拍图或供应商来源图的商业使用和 AI 再生成权限。确认只允许创建待审核素材，不会自动发布、付款或写入 eBay。",
+  );
+  if (!commercialRightsConfirmed) {
+    state.mediaGenerationStatus = "needs_rights_confirmation";
+    setText("#mediaProductionStatus", "图片权利尚未确认 · 未调用生成服务");
+    setText("#mediaPreviewNote", "请先确认你有权把这张商品图用于商业素材和 AI 再生成；未确认前不会预留或消耗素材点。");
+    showActionToast("已停止：本次没有调用付费素材服务，也没有消耗素材点。");
+    return;
+  }
+  config.commercialRightsConfirmed = true;
   const text =
     config.entry === "single"
       ? `请基于本次商品图，使用「${config.template}」，按 ${config.platform} 生成 ${config.count} ${config.type}，尺寸使用 ${config.size}，场景为 ${config.scene}，质量为 ${config.generationTier}，还原要求为 ${config.fidelity}，并列出正式发布前需要补充的资料。`

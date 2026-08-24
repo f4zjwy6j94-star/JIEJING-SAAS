@@ -49,6 +49,27 @@ for (const [facts, config, allowed, conceptOnly] of cases) {{
     handler = app_js[handler_start:handler_end]
     assert "saasMediaGenerationGroundingGate" in handler, "generate action must fail closed before queueing a provider job"
     assert handler.index("saasMediaGenerationGroundingGate") < handler.index("queueSaasMediaAssetJobFromStudio")
+    assert "window.confirm" in handler, "merchant must explicitly confirm commercial and AI-generation rights"
+    assert (
+        handler.index("window.confirm") < handler.index("queueSaasMediaAssetJobFromStudio")
+    ), "commercial-rights confirmation must happen before the paid media job is queued"
+    assert (
+        'state.mediaGenerationStatus = "needs_rights_confirmation"' in handler
+    ), "declining commercial rights must leave an explicit non-generated state"
+    assert (
+        "config.commercialRightsConfirmed = true" in handler
+    ), "the queue payload may only receive the rights flag after an affirmative confirmation"
+    assert (
+        handler.index("config.commercialRightsConfirmed = true")
+        < handler.index("queueSaasMediaAssetJobFromStudio")
+    ), "the confirmed rights flag must be set before the queue payload is built"
+
+    payload_start = app_js.index("function buildSaasMediaAssetJobPayload")
+    payload_end = app_js.index("\nasync function pollSaasMediaAssetJobUntilReview", payload_start)
+    payload_source = app_js[payload_start:payload_end]
+    assert (
+        "commercial_rights_confirmed: config.commercialRightsConfirmed === true" in payload_source
+    ), "the backend payload must carry the strict commercial-rights confirmation boolean"
     print("PASS jiejing_media_source_grounding_gate")
 
 

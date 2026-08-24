@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .repository import SaaSRepository
+from .media_asset_pipeline import (
+    media_asset_is_image,
+    media_asset_is_settlement_eligible,
+    media_manifest_matches_approved_quote,
+)
+from .repository import CONTROLLED_MEDIA_CREDIT_SOURCE, SaaSRepository
 
 
 MEDIA_CREDIT_PACKS = [
@@ -15,6 +21,223 @@ MEDIA_CREDIT_PACKS = [
 ]
 _MEDIA_CREDIT_PACKS_BY_KEY = {str(item["key"]): dict(item) for item in MEDIA_CREDIT_PACKS}
 PLAN_MEDIA_POINTS_INCLUDED = {"free": 0, "starter": 1000, "operator": 3000, "team": 0}
+CONTROLLED_MEDIA_ACCEPTANCE_POINTS = 320
+CONTROLLED_MEDIA_ACCEPTANCE_TTL_HOURS = 24
+CONTROLLED_MEDIA_ACCEPTANCE_APPROVAL = "I_APPROVE_CONTROLLED_MEDIA_ACCEPTANCE_POINTS"
+CONTROLLED_MEDIA_ACCEPTANCE_SOURCE_REFERENCE_PREFIX = "controlled-media-acceptance-v1"
+_MEDIA_GENERATION_TIER_ALIASES = {
+    "draft": "draft",
+    "low": "draft",
+    "standard": "standard",
+    "medium": "standard",
+    "high_quality": "high_quality",
+    "high": "high_quality",
+}
+def _media_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def media_live_provider_requested(inputs: dict[str, Any], job_body: dict[str, Any] | None = None) -> bool:
+    body = job_body if isinstance(job_body, dict) else {}
+    return bool(
+        _media_truthy(inputs.get("live_provider_requested"))
+        or _media_truthy(body.get("live_provider_requested"))
+        or str(body.get("run_mode") or "").strip() == "live_provider_now"
+    )
+
+
+def media_video_requested(inputs: dict[str, Any]) -> bool:
+    creative = inputs.get("creative_job_spec") if isinstance(inputs.get("creative_job_spec"), dict) else {}
+    return any(
+        _media_truthy(value)
+        for value in (
+            inputs.get("video_requested"),
+            inputs.get("generate_video"),
+            inputs.get("video_generation_requested"),
+            creative.get("video_requested"),
+            creative.get("generate_video"),
+            creative.get("video_generation_requested"),
+        )
+    )
+
+
+def normalize_media_generation_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    """Return one canonical quote/execution contract and reject conflicting tier aliases."""
+
+    normalized = dict(inputs or {})
+    creative = dict(normalized.get("creative_job_spec")) if isinstance(normalized.get("creative_job_spec"), dict) else {}
+    raw_tiers = [
+        normalized.get("generation_tier"),
+        creative.get("generation_tier"),
+        normalized.get("image_quality"),
+        normalized.get("quality"),
+    ]
+    tier_candidates = [
+        _MEDIA_GENERATION_TIER_ALIASES.get(str(value).strip().lower(), "standard")
+        for value in raw_tiers
+        if str(value or "").strip()
+    ]
+    if len(set(tier_candidates)) > 1:
+        raise ValueError("conflicting media generation tier fields")
+    generation_tier = tier_candidates[0] if tier_candidates else "standard"
+    try:
+        requested_count = int(normalized.get("image_count"))
+    except (TypeError, ValueError):
+        requested_count = 1
+    image_count = min(max(requested_count, 1), 4)
+    video_requested = media_video_requested(normalized)
+    normalized["image_count"] = image_count
+    normalized["generation_tier"] = generation_tier
+    normalized["video_requested"] = video_requested
+    normalized["video_generation_requested"] = video_requested
+    creative["generation_tier"] = generation_tier
+    normalized["creative_job_spec"] = creative
+    return normalized
+
+
+def controlled_media_acceptance_enabled() -> bool:
+    return _env_bool("JIEJING_CONTROLLED_MEDIA_ACCEPTANCE_ENABLED")
+
+
+def controlled_media_acceptance_company_allowed(company_id: str) -> bool:
+    normalized_company = str(company_id or "").strip()
+    if not normalized_company:
+        return False
+    raw = os.environ.get("JIEJING_CONTROLLED_MEDIA_ACCEPTANCE_COMPANY_ALLOWLIST", "")
+    allowed = {
+        item.strip()
+        for item in raw.replace(";", ",").split(",")
+        if item.strip()
+    }
+    return normalized_company in allowed
+
+
+def controlled_media_acceptance_source_reference(company_id: str) -> str:
+    normalized_company = str(company_id or "").strip()
+    if not normalized_company:
+        raise ValueError("controlled acceptance company is required")
+    return f"{CONTROLLED_MEDIA_ACCEPTANCE_SOURCE_REFERENCE_PREFIX}:{normalized_company}"
+
+
+def grant_controlled_media_acceptance_points(
+    repository: SaaSRepository,
+    *,
+    account_email: str,
+    expected_company_id: str,
+    owner_confirmation_phrase: str,
+) -> dict[str, Any]:
+    """Grant the single owner-controlled, expiring media acceptance bucket."""
+
+    if str(owner_confirmation_phrase or "") != CONTROLLED_MEDIA_ACCEPTANCE_APPROVAL:
+        return _controlled_acceptance_blocked(
+            "controlled_acceptance_owner_approval_required",
+            required_approval=CONTROLLED_MEDIA_ACCEPTANCE_APPROVAL,
+        )
+    if not controlled_media_acceptance_enabled():
+        return _controlled_acceptance_blocked("controlled_acceptance_disabled")
+    normalized_email = str(account_email or "").strip().lower()
+    normalized_expected_company = str(expected_company_id or "").strip()
+    user = repository.get_user_by_email(normalized_email) if normalized_email else None
+    if not user:
+        return _controlled_acceptance_blocked("controlled_acceptance_account_not_found")
+    company_id = str(user.get("default_company_id") or "").strip()
+    if not normalized_expected_company or company_id != normalized_expected_company:
+        return _controlled_acceptance_blocked("controlled_acceptance_account_company_mismatch")
+    if not controlled_media_acceptance_company_allowed(company_id):
+        return _controlled_acceptance_blocked("controlled_acceptance_company_not_allowlisted")
+    if str(user.get("status") or "").strip().lower() != "active":
+        return _controlled_acceptance_blocked("controlled_acceptance_account_not_active")
+
+    source_reference_id = controlled_media_acceptance_source_reference(company_id)
+    expires_at = (datetime.now(timezone.utc) + timedelta(hours=CONTROLLED_MEDIA_ACCEPTANCE_TTL_HOURS)).isoformat()
+    result = repository.apply_media_credit_operation(
+        company_id=company_id,
+        user_id=str(user.get("user_id") or "") or None,
+        operation_type="grant",
+        points=CONTROLLED_MEDIA_ACCEPTANCE_POINTS,
+        idempotency_key=f"{source_reference_id}:grant",
+        reference_type=CONTROLLED_MEDIA_CREDIT_SOURCE,
+        reference_id=source_reference_id,
+        details={
+            "credit_source": CONTROLLED_MEDIA_CREDIT_SOURCE,
+            "source_reference_id": source_reference_id,
+            "expires_at": expires_at,
+            "ttl_hours": CONTROLLED_MEDIA_ACCEPTANCE_TTL_HOURS,
+            "external_provider_action_triggered": False,
+            "real_platform_write_performed": False,
+            "secret_exposed": False,
+        },
+    )
+    bucket = repository.get_media_credit_source(
+        company_id=company_id,
+        source_type=CONTROLLED_MEDIA_CREDIT_SOURCE,
+        source_reference_id=source_reference_id,
+    )
+    if not bucket:
+        raise RuntimeError("controlled acceptance media-credit bucket was not persisted")
+    existing_audit = repository.find_latest_audit_log_by_target(
+        company_id=company_id,
+        store_id=None,
+        action_type="media_credit.controlled_acceptance.granted",
+        target_type="media_credit_bucket",
+        target_id=source_reference_id,
+    )
+    if not existing_audit:
+        repository.write_audit(
+            company_id=company_id,
+            user_id=str(user.get("user_id") or "") or None,
+            actor_type="platform_internal_admin",
+            action_type="media_credit.controlled_acceptance.granted",
+            target_type="media_credit_bucket",
+            target_id=source_reference_id,
+            summary="Controlled media acceptance points granted to one allowlisted merchant company.",
+            details={
+                "contract_version": "2026-08-23-controlled-media-acceptance-points-v1",
+                "credit_source": CONTROLLED_MEDIA_CREDIT_SOURCE,
+                "points": CONTROLLED_MEDIA_ACCEPTANCE_POINTS,
+                "ttl_hours": CONTROLLED_MEDIA_ACCEPTANCE_TTL_HOURS,
+                "expires_at": str(bucket.get("expires_at") or ""),
+                "external_provider_action_triggered": False,
+                "real_platform_write_performed": False,
+                "public_charging_allowed": False,
+                "secret_exposed": False,
+            },
+        )
+    return {
+        "ok": True,
+        "status": "granted",
+        "reason": "",
+        "company_id": company_id,
+        "account_email": normalized_email,
+        "credit_source": CONTROLLED_MEDIA_CREDIT_SOURCE,
+        "source_reference_id": source_reference_id,
+        "points_granted": CONTROLLED_MEDIA_ACCEPTANCE_POINTS,
+        "ttl_hours": CONTROLLED_MEDIA_ACCEPTANCE_TTL_HOURS,
+        "expires_at": str(bucket.get("expires_at") or ""),
+        "duplicate_request": bool(result.get("duplicate_request")),
+        "external_provider_action_triggered": False,
+        "real_platform_write_performed": False,
+        "public_charging_allowed": False,
+        "secret_exposed": False,
+    }
+
+
+def _controlled_acceptance_blocked(reason: str, **extra: Any) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "status": "blocked",
+        "reason": str(reason or "controlled_acceptance_blocked"),
+        **extra,
+        "points_granted": 0,
+        "external_provider_action_triggered": False,
+        "real_platform_write_performed": False,
+        "public_charging_allowed": False,
+        "secret_exposed": False,
+    }
 
 
 def media_credit_purchase_enabled() -> bool:
@@ -105,27 +328,14 @@ def revoke_plan_media_points(
 def estimate_media_points(inputs: dict[str, Any]) -> dict[str, Any]:
     """Quote a provider-neutral upper bound before a media job is queued."""
 
-    image_count = min(max(int(inputs.get("image_count") or 0), 0), 12)
-    raw_tier = str(
-        inputs.get("generation_tier")
-        or inputs.get("image_quality")
-        or inputs.get("quality")
-        or "standard"
-    ).strip().lower()
-    generation_tier = {
-        "draft": "draft",
-        "low": "draft",
-        "standard": "standard",
-        "medium": "standard",
-        "high_quality": "high_quality",
-        "high": "high_quality",
-    }.get(raw_tier, "standard")
+    normalized = normalize_media_generation_inputs(inputs)
+    image_count = int(normalized["image_count"])
+    generation_tier = str(normalized["generation_tier"])
     image_unit = {"draft": 20, "standard": 80, "high_quality": 250}[generation_tier]
     provider_quality = {"draft": "low", "standard": "medium", "high_quality": "high"}[generation_tier]
-    video_requested = bool(inputs.get("video_requested") or inputs.get("generate_video"))
-    creative = inputs.get("creative_job_spec") if isinstance(inputs.get("creative_job_spec"), dict) else {}
-    video_requested = video_requested or bool(creative.get("video_requested"))
-    video_seconds = min(max(int(inputs.get("video_duration_seconds") or creative.get("video_duration_seconds") or 5), 3), 30)
+    video_requested = bool(normalized["video_requested"])
+    creative = normalized.get("creative_job_spec") if isinstance(normalized.get("creative_job_spec"), dict) else {}
+    video_seconds = min(max(int(normalized.get("video_duration_seconds") or creative.get("video_duration_seconds") or 5), 3), 30)
     video_points = (video_seconds * 60) if video_requested else 0
     estimated = max(20, image_count * image_unit + video_points)
     chargeable = not video_requested
@@ -154,6 +364,19 @@ def actual_media_points_from_output(
 
     reserved_points = max(0, int(quote.get("estimated_points") or 0))
     output_packet = provider_output.get("output_packet") if isinstance(provider_output.get("output_packet"), dict) else {}
+    manifest = output_packet.get("asset_manifest") if isinstance(output_packet.get("asset_manifest"), list) else []
+    if not media_manifest_matches_approved_quote(quote, manifest):
+        return 0, "unpriced_video_output"
+    successful_images = sum(
+        1
+        for item in manifest
+        if isinstance(item, dict)
+        and media_asset_is_settlement_eligible(item, require_https=True)
+        and media_asset_is_image(item)
+    )
+    points_per_image = max(0, int(quote.get("points_per_image") or 0))
+    if successful_images > 0 and points_per_image > 0 and quote.get("video_requested") is not True:
+        return min(reserved_points, successful_images * points_per_image), "successful_asset_count"
     for usage in (
         provider_output.get("usage") if isinstance(provider_output.get("usage"), dict) else {},
         output_packet.get("usage") if isinstance(output_packet.get("usage"), dict) else {},
@@ -165,19 +388,6 @@ def actual_media_points_from_output(
                 reported = 0
             if reported > 0:
                 return min(reserved_points, reported), "provider_usage"
-    manifest = output_packet.get("asset_manifest") if isinstance(output_packet.get("asset_manifest"), list) else []
-    successful_images = sum(
-        1
-        for item in manifest
-        if isinstance(item, dict)
-        and (
-            "image" in str(item.get("asset_type") or item.get("media_type") or item.get("type") or "").lower()
-            or str(item.get("mime_type") or "").lower().startswith("image/")
-        )
-    )
-    points_per_image = max(0, int(quote.get("points_per_image") or 0))
-    if successful_images > 0 and points_per_image > 0 and quote.get("video_requested") is not True:
-        return min(reserved_points, successful_images * points_per_image), "successful_asset_count"
     return reserved_points, "reserved_quote"
 
 

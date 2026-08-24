@@ -129,6 +129,10 @@ AI_CEO_REQUIRED_SUPPLIER_FACT_KEYS = (
 )
 _DOMESTIC_BILLING_COMPANY_LOCKS = tuple(threading.Lock() for _ in range(128))
 _MEDIA_CREDIT_COMPANY_LOCKS = tuple(threading.Lock() for _ in range(128))
+CONTROLLED_MEDIA_CREDIT_SOURCE = "controlled_acceptance"
+MEDIA_CREDIT_SOURCE_ALLOWLIST = frozenset(
+    {"plan_included", "purchased", "legacy", CONTROLLED_MEDIA_CREDIT_SOURCE}
+)
 _PLATFORM_RELIABILITY_ALERT_LOCK = threading.Lock()
 _OPERATIONS_ANALYTICS_TIMEZONE = timezone(timedelta(hours=8))
 ACCOUNT_CLASSIFICATION_MERCHANT = "merchant"
@@ -2776,8 +2780,20 @@ class SaaSRepository:
             raise KeyError("task id collision")
         return task
 
-    def create_queue_job(self, *, company_id: str, task_id: str, job_data: dict[str, Any], max_attempts: int = 2) -> dict[str, Any]:
+    def create_queue_job(
+        self,
+        *,
+        company_id: str,
+        task_id: str,
+        job_data: dict[str, Any],
+        max_attempts: int = 2,
+        initial_status: str = "queued",
+        publish: bool = True,
+    ) -> dict[str, Any]:
         self.initialize()
+        normalized_initial_status = str(initial_status or "queued").strip().lower()
+        if normalized_initial_status not in {"queued", "preparing"}:
+            raise ValueError("invalid initial queue status")
         job_id = _id("job")
         created_at = now_iso()
         queue_provider = os.environ.get("JIEJING_QUEUE_PROVIDER", "local_worker").strip().lower() or "local_worker"
@@ -2785,7 +2801,7 @@ class SaaSRepository:
             "job_id": job_id,
             "task_id": task_id,
             "company_id": company_id,
-            "status": "queued",
+            "status": normalized_initial_status,
             "attempts": 0,
             "max_attempts": max_attempts,
             "created_at": created_at,
@@ -2823,23 +2839,85 @@ class SaaSRepository:
                 summary="SaaS task was queued for worker execution.",
                 details={"task_id": task_id, "queue_provider": queue_provider, "job_kind": job_data.get("kind")},
             )
+        if not publish:
+            return record
+
         from .redis_queue_runtime import publish_redis_queue_job_if_configured
 
         dispatch = publish_redis_queue_job_if_configured(record)
         if dispatch.get("required") and dispatch.get("status") != "published":
-            self.update_queue_job(
+            self.mark_queue_dispatch_uncertain(
                 job_id=job_id,
                 company_id=company_id,
-                status="failed",
-                details={"queue_dispatch": dispatch, "error": "Redis queue dispatch failed."},
+                dispatch=dispatch,
             )
             raise RuntimeError(f"Redis queue dispatch failed: {dispatch.get('message') or dispatch.get('error') or dispatch.get('status')}")
         if dispatch.get("status") == "published":
             record["queue_dispatch"] = dispatch
-            return self.update_queue_job(
+            return self.append_queue_job_details(
                 job_id=job_id,
                 company_id=company_id,
-                status="queued",
+                details={"queue_dispatch": dispatch},
+            )
+        return record
+
+    def activate_prepared_queue_job(self, *, job_id: str, company_id: str) -> dict[str, Any]:
+        """Commit a prepared queue record after all linked state is durable, then publish it."""
+
+        self.initialize()
+        updated_at = now_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                "select * from queue_jobs where job_id = ? and company_id = ?",
+                (job_id, company_id),
+            ).fetchone()
+            if not row:
+                raise KeyError("queue job not found")
+            if str(row["status"] or "") != "preparing":
+                raise RuntimeError("prepared queue job is not activatable")
+            job_json = _load_json_field(row["job_json"])
+            if not isinstance(job_json, dict):
+                job_json = {}
+            job_json["setup_committed"] = True
+            job_json.setdefault("updates", []).append(
+                {"created_at": updated_at, "event": "queue_setup_committed", "provider_call_triggered": False}
+            )
+            activated = conn.execute(
+                "update queue_jobs set status = 'queued', updated_at = ?, job_json = ? where job_id = ? and company_id = ? and status = 'preparing'",
+                (updated_at, json.dumps(job_json, ensure_ascii=False), job_id, company_id),
+            )
+            if int(activated.rowcount or 0) != 1:
+                raise RuntimeError("prepared queue activation lost its compare-and-set")
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=self._task_store_id(conn, row["task_id"]),
+                user_id=self._task_user_id(conn, row["task_id"]),
+                actor_type="system",
+                action_type="queue.job.setup_committed",
+                target_type="queue_job",
+                target_id=job_id,
+                summary="Prepared queue job was activated after linked state became durable.",
+                details={"task_id": row["task_id"], "provider_call_triggered": False},
+            )
+        record = self.get_queue_job(job_id=job_id, company_id=company_id) or {}
+        from .redis_queue_runtime import publish_redis_queue_job_if_configured
+
+        dispatch = publish_redis_queue_job_if_configured(record)
+        if dispatch.get("required") and dispatch.get("status") != "published":
+            self.mark_queue_dispatch_uncertain(
+                job_id=job_id,
+                company_id=company_id,
+                dispatch=dispatch,
+            )
+            raise RuntimeError(
+                f"Redis queue dispatch failed: {dispatch.get('message') or dispatch.get('error') or dispatch.get('status')}"
+            )
+        if dispatch.get("status") == "published":
+            record["queue_dispatch"] = dispatch
+            return self.append_queue_job_details(
+                job_id=job_id,
+                company_id=company_id,
                 details={"queue_dispatch": dispatch},
             )
         return record
@@ -2864,6 +2942,135 @@ class SaaSRepository:
                 where job_id = ? and company_id = ?
                 """,
                 (status, attempts, updated_at, json.dumps(job_json, ensure_ascii=False), job_id, company_id),
+            )
+        return self.get_queue_job(job_id=job_id, company_id=company_id) or {}
+
+    def mark_queue_dispatch_uncertain(
+        self,
+        *,
+        job_id: str,
+        company_id: str,
+        dispatch: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Quarantine an uncertain Redis publish without racing a worker claim."""
+
+        self.initialize()
+        updated_at = now_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                "select * from queue_jobs where job_id = ? and company_id = ?",
+                (job_id, company_id),
+            ).fetchone()
+            if not row:
+                raise KeyError("queue job not found")
+            if str(row["status"] or "") == "queued":
+                job_json = _load_json_field(row["job_json"])
+                if not isinstance(job_json, dict):
+                    job_json = {}
+                job_json.setdefault("updates", []).append(
+                    {
+                        "created_at": updated_at,
+                        "event": "queue_dispatch_result_uncertain",
+                        "queue_dispatch": dispatch,
+                        "provider_call_triggered": None,
+                        "manual_reconcile_required": True,
+                    }
+                )
+                conn.execute(
+                    """
+                    update queue_jobs set status = 'dispatch_uncertain', updated_at = ?, job_json = ?
+                    where job_id = ? and company_id = ? and status = 'queued' and updated_at = ?
+                    """,
+                    (
+                        updated_at,
+                        json.dumps(job_json, ensure_ascii=False),
+                        job_id,
+                        company_id,
+                        row["updated_at"],
+                    ),
+                )
+        return self.get_queue_job(job_id=job_id, company_id=company_id) or {}
+
+    def fail_close_queue_job_before_provider(self, *, job_id: str, company_id: str, error_code: str) -> dict[str, Any]:
+        """CAS a setup-stage queue to failed without overwriting a completed terminal state."""
+
+        self.initialize()
+        updated_at = now_iso()
+        applied = False
+        with self._connect() as conn:
+            row = conn.execute(
+                "select * from queue_jobs where job_id = ? and company_id = ?",
+                (job_id, company_id),
+            ).fetchone()
+            if not row:
+                raise KeyError("queue job not found")
+            current_status = str(row["status"] or "")
+            if current_status in {"preparing", "queued"}:
+                job_json = _load_json_field(row["job_json"])
+                if not isinstance(job_json, dict):
+                    job_json = {}
+                job_json.setdefault("updates", []).append(
+                    {
+                        "created_at": updated_at,
+                        "event": "queue_fail_closed_before_provider",
+                        "error_code": str(error_code or "queue_setup_failed")[:120],
+                        "provider_call_triggered": False,
+                    }
+                )
+                failed = conn.execute(
+                    "update queue_jobs set status = 'failed', updated_at = ?, job_json = ? where job_id = ? and company_id = ? and status = ?",
+                    (updated_at, json.dumps(job_json, ensure_ascii=False), job_id, company_id, current_status),
+                )
+                applied = int(failed.rowcount or 0) == 1
+        record = self.get_queue_job(job_id=job_id, company_id=company_id) or {}
+        updates = record.get("job", {}).get("updates", []) if isinstance(record.get("job"), dict) else []
+        record["fail_close_applied"] = applied
+        record["fail_closed_before_provider"] = bool(
+            record.get("status") == "failed"
+            and any(
+                isinstance(item, dict)
+                and item.get("event") == "queue_fail_closed_before_provider"
+                and item.get("provider_call_triggered") is False
+                for item in updates
+            )
+        )
+        return record
+
+    def append_queue_job_details(
+        self,
+        *,
+        job_id: str,
+        company_id: str,
+        details: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Append queue evidence without changing or reviving the worker-owned status."""
+
+        self.initialize()
+        updated_at = now_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                "select * from queue_jobs where job_id = ? and company_id = ?",
+                (job_id, company_id),
+            ).fetchone()
+            if not row:
+                raise KeyError("queue job not found")
+            job_json = _load_json_field(row["job_json"])
+            if not isinstance(job_json, dict):
+                job_json = {}
+            job_json.setdefault("updates", []).append({"created_at": updated_at, **details})
+            conn.execute(
+                """
+                update queue_jobs set updated_at = ?, job_json = ?
+                where job_id = ? and company_id = ? and status = ? and updated_at = ?
+                """,
+                (
+                    updated_at,
+                    json.dumps(job_json, ensure_ascii=False),
+                    job_id,
+                    company_id,
+                    str(row["status"] or ""),
+                    row["updated_at"],
+                ),
             )
         return self.get_queue_job(job_id=job_id, company_id=company_id) or {}
 
@@ -3088,6 +3295,7 @@ class SaaSRepository:
         retry_delta: int = 0,
         details: dict[str, Any] | None = None,
         review_update: dict[str, Any] | None = None,
+        expected_status: str | None = None,
     ) -> dict[str, Any]:
         self.initialize()
         updated_at = now_iso()
@@ -3098,6 +3306,8 @@ class SaaSRepository:
             ).fetchone()
             if not row:
                 raise KeyError("media asset job not found")
+            if expected_status is not None and str(row["status"] or "") != str(expected_status):
+                return self._media_asset_job_row_to_dict(row)
             payload = _load_json_field(row["media_job_json"])
             if not isinstance(payload, dict):
                 payload = {}
@@ -3372,6 +3582,570 @@ class SaaSRepository:
             "secret_exposed": False,
         }
 
+    def media_credit_reservation_attempt_idempotency_key(
+        self,
+        *,
+        company_id: str,
+        reference_type: str,
+        reference_id: str,
+        base_idempotency_key: str,
+    ) -> str:
+        """Resolve a stable reserve key after a watchdog-released orphan."""
+
+        self.initialize()
+        clean_type = str(reference_type or "").strip()[:64]
+        clean_reference = str(reference_id or "").strip()[:160]
+        clean_base = str(base_idempotency_key or "").strip()
+        if clean_type not in {"media_job", "media_rework"}:
+            raise ValueError("unsupported media reservation reference type")
+        if not clean_reference or len(clean_base) < 8:
+            raise ValueError("media reservation attempt evidence is invalid")
+        with self._connect() as conn:
+            reserve_rows = conn.execute(
+                """
+                select ledger_id from media_credit_ledger
+                where company_id = ? and operation_type = 'reserve'
+                  and reference_type = ? and reference_id = ?
+                """,
+                (company_id, clean_type, clean_reference),
+            ).fetchall()
+            reservation_ids = {str(row["ledger_id"] or "") for row in reserve_rows}
+            release_rows = conn.execute(
+                """
+                select reservation_id, ledger_json from media_credit_ledger
+                where company_id = ? and operation_type = 'release'
+                  and reservation_id is not null
+                """,
+                (company_id,),
+            ).fetchall()
+        recovered_count = 0
+        for row in release_rows:
+            if str(row["reservation_id"] or "") not in reservation_ids:
+                continue
+            payload = _load_json_field(row["ledger_json"])
+            details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+            if str(details.get("reason") or "") == "stale_orphan_media_reservation_recovered":
+                recovered_count += 1
+        if recovered_count <= 0:
+            if len(clean_base) > 200:
+                raise ValueError("media credit idempotency key is invalid")
+            return clean_base
+        attempt_number = recovered_count + 1
+        candidate = f"{clean_base}:orphan-recovery:{attempt_number}"
+        if len(candidate) <= 200:
+            return candidate
+        return f"media-orphan-retry:{hashlib.sha256(clean_base.encode('utf-8')).hexdigest()}:{attempt_number}"
+
+    def recover_stale_orphan_media_credit_reservations(
+        self,
+        *,
+        company_id: str | None = None,
+        reference_id: str | None = None,
+        stale_after_seconds: int = 900,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Release stale media reserves that never reached any queue record.
+
+        Recovery and the worker's pre-provider reservation validation share the
+        existing company credit lock.  The intermediate ``recovering`` state is
+        deliberately not provider-authoritative, so a crash or race always
+        fails closed and a later watchdog pass can resume the idempotent release.
+        """
+
+        self.initialize()
+        stale_seconds = max(30, int(stale_after_seconds))
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_seconds)
+        params: list[Any] = []
+        where = (
+            "operation_type = 'reserve' and status in ('reserved', 'recovering') "
+            "and reference_type in ('media_job', 'media_rework')"
+        )
+        if company_id:
+            where += " and company_id = ?"
+            params.append(str(company_id))
+        clean_reference = str(reference_id or "").strip()[:160]
+        if clean_reference:
+            where += " and reference_id = ?"
+            params.append(clean_reference)
+        params.append(max(1, min(int(limit), 200)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                select ledger_id, company_id, user_id, operation_type, points, status,
+                       reference_type, reference_id, reservation_id, created_at, updated_at, ledger_json
+                from media_credit_ledger
+                where {where}
+                order by updated_at asc, ledger_id asc
+                limit ?
+                """,
+                tuple(params),
+            ).fetchall()
+            candidates = [
+                {
+                    **self._media_credit_ledger_row_to_dict(row),
+                    "company_id": str(row["company_id"] or ""),
+                    "user_id": str(row["user_id"] or ""),
+                }
+                for row in rows
+            ]
+
+        recovered: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        manual_reconcile: list[dict[str, Any]] = []
+        for candidate in candidates:
+            reservation_id = str(candidate.get("ledger_id") or "")
+            candidate_company = str(candidate.get("company_id") or "")
+            reservation_for_release: dict[str, Any] | None = None
+            with self._connect() as conn:
+                with self.media_credit_company_lock(company_id=candidate_company, conn=conn):
+                    row = conn.execute(
+                        """
+                        select ledger_id, company_id, user_id, operation_type, points, status,
+                               reference_type, reference_id, reservation_id, created_at, updated_at, ledger_json
+                        from media_credit_ledger
+                        where company_id = ? and ledger_id = ?
+                        """,
+                        (candidate_company, reservation_id),
+                    ).fetchone()
+                    if not row or str(row["status"] or "") not in {"reserved", "recovering"}:
+                        skipped.append({"reservation_id": reservation_id, "reason": "reservation_not_active"})
+                        continue
+                    last_seen = _parse_iso_datetime(str(row["updated_at"] or row["created_at"] or ""))
+                    if not last_seen:
+                        manual_reconcile.append(
+                            {
+                                "reservation_id": reservation_id,
+                                "company_id": candidate_company,
+                                "failure_code": "stale_orphan_reservation_timestamp_invalid",
+                            }
+                        )
+                        continue
+                    if last_seen > cutoff:
+                        skipped.append({"reservation_id": reservation_id, "reason": "reservation_not_stale"})
+                        continue
+                    terminal = conn.execute(
+                        """
+                        select ledger_id from media_credit_ledger
+                        where company_id = ? and reservation_id = ?
+                          and operation_type in ('settle', 'release', 'revoke')
+                        limit 1
+                        """,
+                        (candidate_company, reservation_id),
+                    ).fetchone()
+                    if terminal:
+                        skipped.append({"reservation_id": reservation_id, "reason": "reservation_has_terminal"})
+                        continue
+
+                    reference = str(row["reference_id"] or "")
+                    linked_task_ids: set[str] = set()
+                    task_rows = conn.execute(
+                        "select task_id, input_json from tasks where company_id = ? and task_type = 'provider_job'",
+                        (candidate_company,),
+                    ).fetchall()
+                    for task_row in task_rows:
+                        task_input = _load_json_field(task_row["input_json"])
+                        if str(task_input.get("media_asset_idempotency_key") or "") == reference:
+                            linked_task_ids.add(str(task_row["task_id"] or ""))
+                    linked_media_rows = conn.execute(
+                        """
+                        select media_job_id, queue_job_id from media_asset_jobs
+                        where company_id = ? and idempotency_key = ?
+                        """,
+                        (candidate_company, reference),
+                    ).fetchall()
+                    linked_media_queue_ids = {
+                        str(asset_row["queue_job_id"] or "")
+                        for asset_row in linked_media_rows
+                        if str(asset_row["queue_job_id"] or "")
+                    }
+                    linked_queue: dict[str, str] | None = None
+                    for queue_row in conn.execute(
+                        "select job_id, task_id, status, job_json from queue_jobs where company_id = ?",
+                        (candidate_company,),
+                    ).fetchall():
+                        job_payload = _load_json_field(queue_row["job_json"])
+                        credit_state = (
+                            job_payload.get("media_credits")
+                            if isinstance(job_payload.get("media_credits"), dict)
+                            else {}
+                        )
+                        reservation_result = (
+                            credit_state.get("reservation")
+                            if isinstance(credit_state.get("reservation"), dict)
+                            else {}
+                        )
+                        reservation_entry = (
+                            reservation_result.get("ledger_entry")
+                            if isinstance(reservation_result.get("ledger_entry"), dict)
+                            else {}
+                        )
+                        if (
+                            str(reservation_entry.get("ledger_id") or "") == reservation_id
+                            or (reference and str(job_payload.get("idempotency_key") or "") == reference)
+                            or str(queue_row["task_id"] or "") in linked_task_ids
+                            or str(queue_row["job_id"] or "") in linked_media_queue_ids
+                        ):
+                            linked_queue = {
+                                "job_id": str(queue_row["job_id"] or ""),
+                                "status": str(queue_row["status"] or ""),
+                            }
+                            break
+                    if linked_queue:
+                        entry = {
+                            "reservation_id": reservation_id,
+                            "reason": "reservation_has_persisted_queue",
+                            "queue_status": linked_queue["status"],
+                        }
+                        if str(row["status"] or "") == "recovering":
+                            manual_reconcile.append(
+                                {
+                                    **entry,
+                                    "company_id": candidate_company,
+                                    "failure_code": "orphan_recovery_raced_with_queue_persistence",
+                                }
+                            )
+                        else:
+                            skipped.append(entry)
+                        continue
+                    if linked_task_ids or linked_media_rows:
+                        manual_reconcile.append(
+                            {
+                                "reservation_id": reservation_id,
+                                "company_id": candidate_company,
+                                "failure_code": "stale_media_reservation_partial_setup_requires_reconcile",
+                                "task_persisted": bool(linked_task_ids),
+                                "media_job_persisted": bool(linked_media_rows),
+                                "queue_persisted": False,
+                            }
+                        )
+                        continue
+                    if str(row["status"] or "") == "reserved":
+                        claimed = conn.execute(
+                            """
+                            update media_credit_ledger set status = 'recovering'
+                            where company_id = ? and ledger_id = ? and status = 'reserved'
+                            """,
+                            (candidate_company, reservation_id),
+                        )
+                        if int(claimed.rowcount or 0) != 1:
+                            skipped.append({"reservation_id": reservation_id, "reason": "reservation_claim_lost"})
+                            continue
+                    reservation_for_release = {
+                        **self._media_credit_ledger_row_to_dict(row),
+                        "user_id": str(row["user_id"] or ""),
+                    }
+
+            if not reservation_for_release:
+                continue
+            try:
+                self.apply_media_credit_operation(
+                    company_id=candidate_company,
+                    user_id=str(reservation_for_release.get("user_id") or "") or None,
+                    operation_type="release",
+                    points=int(reservation_for_release.get("points") or 0),
+                    idempotency_key=f"{reservation_id}:terminal:v2",
+                    reference_type=str(reservation_for_release.get("reference_type") or "media_job"),
+                    reference_id=str(reservation_for_release.get("reference_id") or ""),
+                    reservation_id=reservation_id,
+                    details={
+                        "reason": "stale_orphan_media_reservation_recovered",
+                        "stale_after_seconds": stale_seconds,
+                        "provider_call_triggered": False,
+                    },
+                )
+                terminal = self.get_media_credit_terminal_for_reservation(
+                    company_id=candidate_company,
+                    reservation_id=reservation_id,
+                )
+                if not terminal or terminal.get("operation_type") != "release":
+                    raise RuntimeError("orphan reservation release was not persisted")
+                recovered.append(
+                    {
+                        "reservation_id": reservation_id,
+                        "company_id": candidate_company,
+                        "reference_type": str(reservation_for_release.get("reference_type") or ""),
+                        "reference_id": str(reservation_for_release.get("reference_id") or ""),
+                        "status": "released",
+                        "provider_call_triggered": False,
+                    }
+                )
+            except Exception:
+                manual_reconcile.append(
+                    {
+                        "reservation_id": reservation_id,
+                        "company_id": candidate_company,
+                        "failure_code": "stale_orphan_reservation_release_failed",
+                    }
+                )
+        return {
+            "status": "attention_required" if manual_reconcile else "completed",
+            "inspected_count": len(candidates),
+            "recovered_count": len(recovered),
+            "skipped_count": len(skipped),
+            "manual_reconcile_count": len(manual_reconcile),
+            "recovered": recovered,
+            "skipped": skipped,
+            "manual_reconcile": manual_reconcile,
+            "stale_after_seconds": stale_seconds,
+            "provider_call_triggered": False,
+            "secret_exposed": False,
+        }
+
+    def recover_stale_media_queue_setups(
+        self,
+        *,
+        company_id: str | None = None,
+        stale_after_seconds: int = 900,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Release stale pre-provider reservations left by a crashed setup process.
+
+        ``preparing`` queue rows are never claimable. Moving them through a
+        dedicated ``compensating`` state makes this recovery crash-safe: a
+        later watchdog pass can finish the idempotent release without ever
+        making the provider job runnable.
+        """
+
+        self.initialize()
+        orphan_reservation_recovery = self.recover_stale_orphan_media_credit_reservations(
+            company_id=company_id,
+            stale_after_seconds=stale_after_seconds,
+            limit=limit,
+        )
+        recovered_at = now_iso()
+        stale_seconds = max(30, int(stale_after_seconds))
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_seconds)
+        params: list[Any] = []
+        where = "status in ('preparing', 'compensating')"
+        if company_id:
+            where += " and company_id = ?"
+            params.append(company_id)
+        params.append(max(1, min(int(limit), 200)))
+        candidates: list[dict[str, Any]] = []
+        inspected = 0
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                select * from queue_jobs
+                where {where}
+                order by updated_at asc
+                limit ?
+                """,
+                tuple(params),
+            ).fetchall()
+            for row in rows:
+                job_json = _load_json_field(row["job_json"])
+                if not isinstance(job_json, dict):
+                    job_json = {}
+                if str(job_json.get("queue_setup_protocol") or "") != "media_queue_saga_v1":
+                    continue
+                inspected += 1
+                last_seen = _parse_iso_datetime(str(row["updated_at"] or row["created_at"] or ""))
+                if last_seen and last_seen > cutoff:
+                    continue
+                if str(row["status"] or "") == "preparing":
+                    job_json.setdefault("updates", []).append(
+                        {
+                            "created_at": recovered_at,
+                            "event": "stale_media_queue_setup_compensation_started",
+                            "stale_after_seconds": stale_seconds,
+                            "provider_call_triggered": False,
+                        }
+                    )
+                    changed = conn.execute(
+                        """
+                        update queue_jobs set status = 'compensating', updated_at = ?, job_json = ?
+                        where job_id = ? and company_id = ? and status = 'preparing'
+                        """,
+                        (
+                            recovered_at,
+                            json.dumps(job_json, ensure_ascii=False, default=json_default),
+                            row["job_id"],
+                            row["company_id"],
+                        ),
+                    )
+                    if int(changed.rowcount or 0) != 1:
+                        continue
+                candidates.append(
+                    {
+                        "job_id": str(row["job_id"]),
+                        "task_id": str(row["task_id"]),
+                        "company_id": str(row["company_id"]),
+                        "job": job_json,
+                    }
+                )
+
+        recovered: list[dict[str, Any]] = []
+        manual_reconcile: list[dict[str, Any]] = []
+        for candidate in candidates:
+            candidate_company_id = candidate["company_id"]
+            job_json = candidate["job"]
+            credit_state = job_json.get("media_credits") if isinstance(job_json.get("media_credits"), dict) else {}
+            reservation_result = (
+                credit_state.get("reservation") if isinstance(credit_state.get("reservation"), dict) else {}
+            )
+            reservation = (
+                reservation_result.get("ledger_entry")
+                if isinstance(reservation_result.get("ledger_entry"), dict)
+                else {}
+            )
+            reservation_id = str(reservation.get("ledger_id") or "").strip()
+            release_required = bool(credit_state.get("enforcement_enabled"))
+            release_complete = not release_required
+            failure_code = ""
+            if release_required and not reservation_id:
+                failure_code = "stale_setup_reservation_missing"
+            elif reservation_id:
+                try:
+                    terminal = self.get_media_credit_terminal_for_reservation(
+                        company_id=candidate_company_id,
+                        reservation_id=reservation_id,
+                    )
+                    if terminal is None:
+                        self.apply_media_credit_operation(
+                            company_id=candidate_company_id,
+                            user_id=str(reservation.get("user_id") or "") or None,
+                            operation_type="release",
+                            points=int(reservation.get("points") or 0),
+                            idempotency_key=f"{reservation_id}:terminal:v2",
+                            reference_type="media_job",
+                            reference_id=str(job_json.get("idempotency_key") or reservation.get("reference_id") or ""),
+                            reservation_id=reservation_id,
+                            details={
+                                "reason": "stale_media_queue_setup_recovered_before_provider",
+                                "provider_call_triggered": False,
+                            },
+                        )
+                        terminal = self.get_media_credit_terminal_for_reservation(
+                            company_id=candidate_company_id,
+                            reservation_id=reservation_id,
+                        )
+                    release_complete = bool(
+                        isinstance(terminal, dict) and terminal.get("operation_type") == "release"
+                    )
+                    if not release_complete:
+                        failure_code = "stale_setup_reservation_terminal_conflict"
+                except Exception:
+                    failure_code = "stale_setup_reservation_release_failed"
+
+            if not release_complete:
+                manual_reconcile.append(
+                    {
+                        "job_id": candidate["job_id"],
+                        "task_id": candidate["task_id"],
+                        "company_id": candidate_company_id,
+                        "failure_code": failure_code or "stale_setup_compensation_incomplete",
+                    }
+                )
+                continue
+
+            metadata_complete = True
+            media_job_id = str(job_json.get("media_job_id") or "")
+            if media_job_id:
+                try:
+                    media_job = self.get_media_asset_job(
+                        company_id=candidate_company_id,
+                        media_job_id=media_job_id,
+                    )
+                    if media_job:
+                        self.update_media_asset_job(
+                            company_id=candidate_company_id,
+                            media_job_id=media_job_id,
+                            status="needs_rework",
+                            error_reason="stale_media_queue_setup_recovered",
+                            details={
+                                "event": "stale_queue_setup_recovered_before_provider",
+                                "provider_call_triggered": False,
+                                "secret_exposed": False,
+                            },
+                        )
+                except Exception:
+                    metadata_complete = False
+            try:
+                task = self.get_task(company_id=candidate_company_id, task_id=candidate["task_id"])
+                if task:
+                    self.update_task_status(
+                        task_id=candidate["task_id"],
+                        company_id=candidate_company_id,
+                        status="failed",
+                        output={
+                            "error_code": "stale_media_queue_setup_recovered",
+                            "provider_call_triggered": False,
+                            "secret_exposed": False,
+                        },
+                        audit_summary="Stale media queue setup was compensated before any provider call.",
+                    )
+            except Exception:
+                metadata_complete = False
+            if not metadata_complete:
+                manual_reconcile.append(
+                    {
+                        "job_id": candidate["job_id"],
+                        "task_id": candidate["task_id"],
+                        "company_id": candidate_company_id,
+                        "failure_code": "stale_setup_metadata_reconcile_failed",
+                    }
+                )
+                continue
+
+            with self._connect() as conn:
+                row = conn.execute(
+                    "select * from queue_jobs where job_id = ? and company_id = ?",
+                    (candidate["job_id"], candidate_company_id),
+                ).fetchone()
+                if not row or str(row["status"] or "") != "compensating":
+                    continue
+                persisted_job = _load_json_field(row["job_json"])
+                if not isinstance(persisted_job, dict):
+                    persisted_job = {}
+                persisted_job.setdefault("updates", []).append(
+                    {
+                        "created_at": now_iso(),
+                        "event": "stale_media_queue_setup_compensated",
+                        "reservation_released": bool(reservation_id),
+                        "provider_call_triggered": False,
+                    }
+                )
+                finalized_at = now_iso()
+                finalized = conn.execute(
+                    """
+                    update queue_jobs set status = 'failed', updated_at = ?, job_json = ?
+                    where job_id = ? and company_id = ? and status = 'compensating'
+                    """,
+                    (
+                        finalized_at,
+                        json.dumps(persisted_job, ensure_ascii=False, default=json_default),
+                        candidate["job_id"],
+                        candidate_company_id,
+                    ),
+                )
+                if int(finalized.rowcount or 0) == 1:
+                    recovered.append(
+                        {
+                            "job_id": candidate["job_id"],
+                            "task_id": candidate["task_id"],
+                            "company_id": candidate_company_id,
+                            "status": "failed",
+                            "reservation_released": bool(reservation_id),
+                        }
+                    )
+        return {
+            "status": (
+                "attention_required"
+                if manual_reconcile or orphan_reservation_recovery.get("status") == "attention_required"
+                else "completed"
+            ),
+            "orphan_reservation_recovery": orphan_reservation_recovery,
+            "inspected_preparing_jobs": inspected,
+            "recovered_count": len(recovered),
+            "manual_reconcile_count": len(manual_reconcile),
+            "recovered": recovered,
+            "manual_reconcile": manual_reconcile,
+            "stale_after_seconds": stale_seconds,
+            "provider_call_triggered": False,
+            "secret_exposed": False,
+        }
+
     def recover_stale_queue_jobs(
         self,
         *,
@@ -3380,6 +4154,11 @@ class SaaSRepository:
         limit: int = 50,
     ) -> dict[str, Any]:
         self.initialize()
+        setup_recovery = self.recover_stale_media_queue_setups(
+            company_id=company_id,
+            stale_after_seconds=stale_after_seconds,
+            limit=limit,
+        )
         recovered_at = now_iso()
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(30, int(stale_after_seconds)))
         params: list[Any] = []
@@ -3451,7 +4230,8 @@ class SaaSRepository:
                     )
                     dead_lettered.append({"job_id": row["job_id"], "task_id": row["task_id"], "status": "dead_letter"})
         return {
-            "status": "completed",
+            "status": "attention_required" if setup_recovery.get("status") == "attention_required" else "completed",
+            "stale_setup_recovery": setup_recovery,
             "inspected_running_jobs": inspected,
             "recovered_count": len(recovered),
             "dead_letter_count": len(dead_lettered),
@@ -3483,6 +4263,15 @@ class SaaSRepository:
                 """,
                 (company_id,),
             ).fetchall()
+            setup_rows = conn.execute(
+                """
+                select * from queue_jobs
+                where company_id = ? and status in ('preparing', 'compensating')
+                order by updated_at asc
+                limit 100
+                """,
+                (company_id,),
+            ).fetchall()
         counts = {str(row["status"]): int(row["count"]) for row in rows}
         stale_running: list[dict[str, Any]] = []
         for row in running:
@@ -3498,15 +4287,37 @@ class SaaSRepository:
                         "heartbeat_at": heartbeat.get("heartbeat_at"),
                     }
                 )
+        stale_setup: list[dict[str, Any]] = []
+        for row in setup_rows:
+            job_json = _load_json_field(row["job_json"])
+            if str(job_json.get("queue_setup_protocol") or "") != "media_queue_saga_v1":
+                continue
+            last_seen = _parse_iso_datetime(str(row["updated_at"] or row["created_at"] or ""))
+            if last_seen and last_seen <= cutoff:
+                stale_setup.append(
+                    {
+                        "job_id": row["job_id"],
+                        "task_id": row["task_id"],
+                        "status": row["status"],
+                        "updated_at": row["updated_at"],
+                    }
+                )
         return {
-            "status": "attention_required" if stale_running or counts.get("dead_letter", 0) else "ready",
+            "status": (
+                "attention_required"
+                if stale_running or stale_setup or counts.get("dead_letter", 0) or counts.get("dispatch_uncertain", 0)
+                else "ready"
+            ),
             "queue_provider": os.environ.get("JIEJING_QUEUE_PROVIDER", "local_worker").strip().lower() or "local_worker",
             "counts": counts,
             "stale_running_count": len(stale_running),
             "stale_running_jobs": stale_running,
+            "stale_setup_count": len(stale_setup),
+            "stale_setup_jobs": stale_setup,
             "stale_after_seconds": max(30, int(stale_after_seconds)),
             "worker_heartbeat_required": True,
             "dead_letter_visible": True,
+            "dispatch_uncertain_requires_manual_reconcile": bool(counts.get("dispatch_uncertain", 0)),
             "secret_exposed": False,
         }
 
@@ -3525,6 +4336,14 @@ class SaaSRepository:
                 """
                 select * from queue_jobs
                 where status = 'running'
+                order by updated_at asc
+                limit 100
+                """
+            ).fetchall()
+            setup_rows = conn.execute(
+                """
+                select * from queue_jobs
+                where status in ('preparing', 'compensating')
                 order by updated_at asc
                 limit 100
                 """
@@ -3569,18 +4388,41 @@ class SaaSRepository:
             latest_job_json = _load_json_field(latest_running["job_json"])
             latest_heartbeat = latest_job_json.get("worker_heartbeat") if isinstance(latest_job_json.get("worker_heartbeat"), dict) else {}
             latest_heartbeat_at = str(latest_heartbeat.get("heartbeat_at") or latest_running["updated_at"] or "")
+        stale_setup: list[dict[str, Any]] = []
+        for row in setup_rows:
+            job_json = _load_json_field(row["job_json"])
+            if str(job_json.get("queue_setup_protocol") or "") != "media_queue_saga_v1":
+                continue
+            last_seen = _parse_iso_datetime(str(row["updated_at"] or row["created_at"] or ""))
+            if last_seen and last_seen <= cutoff:
+                stale_setup.append(
+                    {
+                        "job_id": row["job_id"],
+                        "task_id": row["task_id"],
+                        "company_id": row["company_id"],
+                        "status": row["status"],
+                        "updated_at": row["updated_at"],
+                    }
+                )
         return {
-            "status": "attention_required" if stale_running or counts.get("dead_letter", 0) else "ready",
+            "status": (
+                "attention_required"
+                if stale_running or stale_setup or counts.get("dead_letter", 0) or counts.get("dispatch_uncertain", 0)
+                else "ready"
+            ),
             "queue_provider": os.environ.get("JIEJING_QUEUE_PROVIDER", "local_worker").strip().lower() or "local_worker",
             "counts": counts,
             "stale_running_count": len(stale_running),
             "stale_running_jobs": stale_running,
+            "stale_setup_count": len(stale_setup),
+            "stale_setup_jobs": stale_setup,
             "stale_after_seconds": max(30, int(stale_after_seconds)),
             "latest_worker_heartbeat_at": latest_heartbeat_at,
             "oldest_queued_at": oldest_queued["created_at"] if oldest_queued else "",
             "timeout_recovery_available": True,
             "worker_heartbeat_required": True,
             "dead_letter_visible": True,
+            "dispatch_uncertain_requires_manual_reconcile": bool(counts.get("dispatch_uncertain", 0)),
             "scope": "all_companies",
             "secret_exposed": False,
         }
@@ -6515,7 +7357,7 @@ class SaaSRepository:
         return self._billing_subscription_row_to_dict(row) if row else None
 
     @contextmanager
-    def media_credit_company_lock(self, *, company_id: str) -> Iterator[None]:
+    def media_credit_company_lock(self, *, company_id: str, conn: Any | None = None) -> Iterator[Any]:
         """Serialize one tenant's media-point balance mutations."""
 
         normalized_company = str(company_id or "").strip()
@@ -6524,21 +7366,30 @@ class SaaSRepository:
         digest = hashlib.sha256(f"jiejing-media-credit:{normalized_company}".encode("utf-8")).digest()
         if self.database_engine == "postgres":
             advisory_key = int.from_bytes(digest[:8], "big", signed=True)
-            with self._connect() as conn:
-                conn.execute("select pg_advisory_lock(?)", (advisory_key,)).fetchone()
-                try:
-                    yield
-                finally:
-                    conn.execute("select pg_advisory_unlock(?)", (advisory_key,)).fetchone()
+            if conn is not None:
+                conn.execute("select pg_advisory_xact_lock(?)", (advisory_key,)).fetchone()
+                yield conn
+                return
+            with self._connect() as owned_conn:
+                owned_conn.execute("select pg_advisory_xact_lock(?)", (advisory_key,)).fetchone()
+                yield owned_conn
             return
         lock = _MEDIA_CREDIT_COMPANY_LOCKS[int.from_bytes(digest[:2], "big") % len(_MEDIA_CREDIT_COMPANY_LOCKS)]
         with lock:
-            yield
+            try:
+                yield conn
+            except Exception:
+                if conn is not None:
+                    conn.rollback()
+                raise
+            else:
+                if conn is not None:
+                    conn.commit()
 
     def get_media_credit_account(self, *, company_id: str) -> dict[str, Any]:
         self.initialize()
-        with self.media_credit_company_lock(company_id=company_id):
-            with self._connect() as conn:
+        with self._connect() as conn:
+            with self.media_credit_company_lock(company_id=company_id, conn=conn):
                 row = conn.execute(
                     """
                     select company_id, balance_points, reserved_points, lifetime_granted_points,
@@ -6581,6 +7432,75 @@ class SaaSRepository:
             "secret_exposed": False,
         }
 
+    def get_media_credit_source(
+        self,
+        *,
+        company_id: str,
+        source_type: str,
+        source_reference_id: str = "",
+    ) -> dict[str, Any] | None:
+        """Return one allowlisted source bucket after applying source expiry."""
+
+        self.initialize()
+        normalized_source = str(source_type or "").strip().lower()
+        normalized_reference = str(source_reference_id or "").strip()[:160]
+        if normalized_source not in MEDIA_CREDIT_SOURCE_ALLOWLIST:
+            raise ValueError("unsupported media credit source")
+        with self._connect() as conn:
+            with self.media_credit_company_lock(company_id=company_id, conn=conn):
+                account_row = self._ensure_media_credit_account_row(conn, company_id=company_id)
+                expired_points = self._expire_media_credit_buckets(conn, company_id=company_id)
+                if expired_points:
+                    conn.execute(
+                        """
+                        update media_credit_accounts
+                        set balance_points = balance_points - ?, updated_at = ?
+                        where company_id = ?
+                        """,
+                        (expired_points, now_iso(), company_id),
+                    )
+                if normalized_reference:
+                    row = conn.execute(
+                        """
+                        select bucket_id, company_id, source_type, source_reference_id,
+                               granted_points, remaining_points, reserved_points, expires_at,
+                               status, created_at, updated_at
+                        from media_credit_buckets
+                        where company_id = ? and source_type = ? and source_reference_id = ?
+                        """,
+                        (company_id, normalized_source, normalized_reference),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        """
+                        select bucket_id, company_id, source_type, source_reference_id,
+                               granted_points, remaining_points, reserved_points, expires_at,
+                               status, created_at, updated_at
+                        from media_credit_buckets
+                        where company_id = ? and source_type = ? and status = 'active'
+                        order by case when expires_at is null or expires_at = '' then 1 else 0 end,
+                                 expires_at asc, created_at asc, bucket_id asc
+                        limit 1
+                        """,
+                        (company_id, normalized_source),
+                    ).fetchone()
+        if not row:
+            return None
+        return {
+            "bucket_id": str(row["bucket_id"]),
+            "company_id": str(row["company_id"]),
+            "source_type": str(row["source_type"]),
+            "source_reference_id": str(row["source_reference_id"]),
+            "granted_points": int(row["granted_points"] or 0),
+            "remaining_points": int(row["remaining_points"] or 0),
+            "reserved_points": int(row["reserved_points"] or 0),
+            "expires_at": str(row["expires_at"] or ""),
+            "status": str(row["status"] or ""),
+            "created_at": str(row["created_at"] or ""),
+            "updated_at": str(row["updated_at"] or ""),
+            "secret_exposed": False,
+        }
+
     def revoke_media_credit_source(
         self,
         *,
@@ -6597,13 +7517,13 @@ class SaaSRepository:
         normalized_source = str(source_type or "").strip().lower()
         normalized_reference = str(source_reference_id or "").strip()[:160]
         raw_idempotency = str(idempotency_key or "").strip()
-        if normalized_source not in {"plan_included", "purchased", "legacy"}:
+        if normalized_source not in MEDIA_CREDIT_SOURCE_ALLOWLIST:
             raise ValueError("unsupported media credit source")
         if not normalized_reference or len(raw_idempotency) < 8 or len(raw_idempotency) > 200:
             raise ValueError("media credit source revocation evidence is invalid")
         idempotency_hash = hashlib.sha256(f"{company_id}|{raw_idempotency}".encode("utf-8")).hexdigest()
-        with self.media_credit_company_lock(company_id=company_id):
-            with self._connect() as conn:
+        with self._connect() as conn:
+            with self.media_credit_company_lock(company_id=company_id, conn=conn):
                 existing = conn.execute(
                     """
                     select ledger_id, company_id, user_id, operation_type, points, status,
@@ -6625,6 +7545,17 @@ class SaaSRepository:
                         "duplicate_request": True,
                         "secret_exposed": False,
                     }
+                expired_points = self._expire_media_credit_buckets(conn, company_id=company_id)
+                if expired_points:
+                    conn.execute(
+                        """
+                        update media_credit_accounts
+                        set balance_points = balance_points - ?, updated_at = ?
+                        where company_id = ?
+                        """,
+                        (expired_points, now_iso(), company_id),
+                    )
+                    account_row = self._ensure_media_credit_account_row(conn, company_id=company_id)
                 bucket = conn.execute(
                     """
                     select bucket_id, remaining_points, reserved_points, status
@@ -6741,7 +7672,7 @@ class SaaSRepository:
         normalized_source_reference = str(source_reference_id or "").strip()[:160]
         safe_points = int(points)
         raw_idempotency = str(idempotency_key or "").strip()
-        if normalized_source not in {"plan_included", "purchased", "legacy"}:
+        if normalized_source not in MEDIA_CREDIT_SOURCE_ALLOWLIST:
             raise ValueError("unsupported media credit source")
         if not normalized_source_reference or safe_points <= 0:
             raise ValueError("media credit source reservation evidence is invalid")
@@ -6751,8 +7682,8 @@ class SaaSRepository:
         safe_reference_type = str(reference_type or "billing_refund").strip()[:64]
         safe_reference_id = str(reference_id or "").strip()[:160]
         safe_details = _redact_secret_like(details or {})
-        with self.media_credit_company_lock(company_id=company_id):
-            with self._connect() as conn:
+        with self._connect() as conn:
+            with self.media_credit_company_lock(company_id=company_id, conn=conn):
                 existing = conn.execute(
                     """
                     select ledger_id, company_id, user_id, operation_type, points, status,
@@ -6773,6 +7704,17 @@ class SaaSRepository:
                         "duplicate_request": True,
                         "secret_exposed": False,
                     }
+                expired_points = self._expire_media_credit_buckets(conn, company_id=company_id)
+                if expired_points:
+                    conn.execute(
+                        """
+                        update media_credit_accounts
+                        set balance_points = balance_points - ?, updated_at = ?
+                        where company_id = ?
+                        """,
+                        (expired_points, now_iso(), company_id),
+                    )
+                    account_row = self._ensure_media_credit_account_row(conn, company_id=company_id)
                 bucket = conn.execute(
                     """
                     select bucket_id, remaining_points, reserved_points, status
@@ -9020,6 +9962,150 @@ class SaaSRepository:
             ).fetchall()
         return [self._media_credit_ledger_row_to_dict(row) for row in rows]
 
+    def get_media_credit_terminal_for_reservation(
+        self,
+        *,
+        company_id: str,
+        reservation_id: str,
+    ) -> dict[str, Any] | None:
+        """Return the authoritative settle/release outcome for one reservation."""
+
+        self.initialize()
+        clean_reservation_id = str(reservation_id or "").strip()[:80]
+        if not clean_reservation_id:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select ledger_id, company_id, user_id, operation_type, points, status,
+                       reference_type, reference_id, reservation_id, created_at, updated_at, ledger_json
+                from media_credit_ledger
+                where company_id = ? and reservation_id = ?
+                  and operation_type in ('settle', 'release', 'revoke')
+                order by created_at asc, ledger_id asc
+                limit 1
+                """,
+                (company_id, clean_reservation_id),
+            ).fetchone()
+        return self._media_credit_ledger_row_to_dict(row) if row else None
+
+    def get_media_credit_reservation_authority(
+        self,
+        *,
+        company_id: str,
+        reservation_id: str,
+        expected_points: int | None = None,
+        expected_reference_id: str = "",
+        allowed_reference_types: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        """Verify the live reservation row and every backing bucket before provider spend."""
+
+        self.initialize()
+        clean_reservation_id = str(reservation_id or "").strip()[:80]
+        clean_reference_id = str(expected_reference_id or "").strip()[:160]
+        clean_reference_types = {
+            str(value or "").strip()[:64]
+            for value in allowed_reference_types
+            if str(value or "").strip()
+        }
+        blocked_by: list[str] = []
+        ledger_entry: dict[str, Any] = {}
+        allocations: list[dict[str, Any]] = []
+        with self._connect() as conn:
+            with self.media_credit_company_lock(company_id=company_id, conn=conn):
+                account_row = self._ensure_media_credit_account_row(conn, company_id=company_id)
+                expired_points = self._expire_media_credit_buckets(conn, company_id=company_id)
+                if expired_points:
+                    conn.execute(
+                        "update media_credit_accounts set balance_points = balance_points - ?, updated_at = ? where company_id = ?",
+                        (expired_points, now_iso(), company_id),
+                    )
+                    account_row = self._ensure_media_credit_account_row(conn, company_id=company_id)
+                row = (
+                    conn.execute(
+                        """
+                        select ledger_id, company_id, user_id, operation_type, points, status,
+                               reference_type, reference_id, reservation_id, created_at, updated_at, ledger_json
+                        from media_credit_ledger
+                        where company_id = ? and ledger_id = ?
+                        """,
+                        (company_id, clean_reservation_id),
+                    ).fetchone()
+                    if clean_reservation_id
+                    else None
+                )
+                if not row:
+                    blocked_by.append("reservation_not_found")
+                else:
+                    ledger_entry = self._media_credit_ledger_row_to_dict(row)
+                    if str(row["operation_type"] or "") != "reserve":
+                        blocked_by.append("reservation_operation_invalid")
+                    if str(row["status"] or "") != "reserved":
+                        blocked_by.append("reservation_not_active")
+                    if expected_points is not None and int(row["points"] or 0) != int(expected_points):
+                        blocked_by.append("reservation_points_mismatch")
+                    if clean_reference_id and str(row["reference_id"] or "") != clean_reference_id:
+                        blocked_by.append("reservation_reference_mismatch")
+                    if clean_reference_types and str(row["reference_type"] or "") not in clean_reference_types:
+                        blocked_by.append("reservation_reference_type_mismatch")
+                    payload = _load_json_field(row["ledger_json"])
+                    details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+                    raw_allocations = details.get("allocations") if isinstance(details.get("allocations"), list) else []
+                    allocation_total = 0
+                    now = datetime.now(timezone.utc)
+                    for raw_allocation in raw_allocations:
+                        if not isinstance(raw_allocation, dict):
+                            blocked_by.append("reservation_bucket_allocation_invalid")
+                            continue
+                        bucket_id = str(raw_allocation.get("bucket_id") or "")
+                        points = max(0, _safe_int(raw_allocation.get("points"), default=0))
+                        if not bucket_id or points <= 0:
+                            blocked_by.append("reservation_bucket_allocation_invalid")
+                            continue
+                        allocation_total += points
+                        bucket = conn.execute(
+                            """
+                            select bucket_id, source_type, source_reference_id, reserved_points, status, expires_at
+                            from media_credit_buckets
+                            where company_id = ? and bucket_id = ?
+                            """,
+                            (company_id, bucket_id),
+                        ).fetchone()
+                        if not bucket:
+                            blocked_by.append("reservation_bucket_not_found")
+                            continue
+                        expires_at = _parse_iso_datetime(str(bucket["expires_at"] or ""))
+                        if str(bucket["status"] or "") != "active":
+                            blocked_by.append("reservation_bucket_not_active")
+                        if int(bucket["reserved_points"] or 0) < points:
+                            blocked_by.append("reservation_bucket_points_missing")
+                        if expires_at and expires_at <= now:
+                            blocked_by.append("reservation_bucket_expired")
+                        allocations.append(
+                            {
+                                "bucket_id": bucket_id,
+                                "source_type": str(bucket["source_type"] or ""),
+                                "source_reference_id": str(bucket["source_reference_id"] or ""),
+                                "points": points,
+                                "status": str(bucket["status"] or ""),
+                                "expires_at": str(bucket["expires_at"] or ""),
+                            }
+                        )
+                    if not raw_allocations or allocation_total != int(row["points"] or 0):
+                        blocked_by.append("reservation_bucket_allocation_incomplete")
+                account = self._media_credit_account_row_to_dict(
+                    account_row,
+                    bucket_summary=self._media_credit_bucket_summary(conn, company_id=company_id),
+                )
+        return {
+            "valid_for_provider": not blocked_by,
+            "blocked_by": list(dict.fromkeys(blocked_by)),
+            "reservation": ledger_entry,
+            "allocations": allocations,
+            "account": account,
+            "secret_exposed": False,
+        }
+
     def apply_media_credit_operation(
         self,
         *,
@@ -9050,9 +10136,14 @@ class SaaSRepository:
         safe_reservation_id = str(reservation_id or "").strip()[:80]
         idempotency_hash = hashlib.sha256(f"{company_id}|{raw_idempotency}".encode("utf-8")).hexdigest()
         safe_details = _redact_secret_like(details or {})
+        orphan_watchdog_release = bool(
+            operation == "release"
+            and str(safe_details.get("reason") or "") == "stale_orphan_media_reservation_recovered"
+            and safe_details.get("provider_call_triggered") is False
+        )
 
-        with self.media_credit_company_lock(company_id=company_id):
-            with self._connect() as conn:
+        with self._connect() as conn:
+            with self.media_credit_company_lock(company_id=company_id, conn=conn):
                 existing = conn.execute(
                     """
                     select ledger_id, company_id, user_id, operation_type, points, status,
@@ -9097,7 +10188,14 @@ class SaaSRepository:
                         """,
                         (company_id, safe_reservation_id),
                     ).fetchone()
-                    if not reservation or reservation["operation_type"] != "reserve" or reservation["status"] != "reserved":
+                    reservation_status = str(reservation["status"] or "") if reservation else ""
+                    if (
+                        not reservation
+                        or reservation["operation_type"] != "reserve"
+                        or reservation_status not in (
+                            {"reserved", "recovering"} if orphan_watchdog_release else {"reserved"}
+                        )
+                    ):
                         raise ValueError("media credit reservation is not available")
                     reserved_by_entry = int(reservation["points"] or 0)
                     if operation in {"settle", "revoke"} and safe_points > reserved_by_entry:
@@ -9359,12 +10457,12 @@ class SaaSRepository:
         details: dict[str, Any],
     ) -> None:
         source_type = str(details.get("credit_source") or "legacy").strip().lower()
-        if source_type not in {"plan_included", "purchased", "legacy"}:
-            source_type = "legacy"
+        if source_type not in MEDIA_CREDIT_SOURCE_ALLOWLIST:
+            raise ValueError("unsupported media credit source")
         source_reference_id = str(details.get("source_reference_id") or reference_id or idempotency_hash).strip()[:160]
         expires_at = str(details.get("expires_at") or "").strip()[:64] or None
-        if source_type == "plan_included" and not expires_at:
-            raise ValueError("plan included media points require an expiry")
+        if source_type in {"plan_included", CONTROLLED_MEDIA_CREDIT_SOURCE} and not expires_at:
+            raise ValueError("expiring media credit source requires an expiry")
         now = now_iso()
         conn.execute(
             """
@@ -9400,7 +10498,7 @@ class SaaSRepository:
             """
             select bucket_id, source_type, remaining_points, reserved_points, expires_at
             from media_credit_buckets
-            where company_id = ? and status = 'active'
+            where company_id = ? and status = 'active' and source_type != 'controlled_acceptance'
             order by case source_type when 'plan_included' then 0 when 'purchased' then 1 else 2 end,
                      case when expires_at is null or expires_at = '' then 1 else 0 end,
                      expires_at asc, created_at asc, bucket_id asc
@@ -9511,7 +10609,9 @@ class SaaSRepository:
             """
             select bucket_id, remaining_points, reserved_points, expires_at
             from media_credit_buckets
-            where company_id = ? and source_type = 'plan_included' and status in ('active', 'expiring')
+            where company_id = ?
+              and source_type in ('plan_included', 'controlled_acceptance')
+              and status in ('active', 'expiring')
             """,
             (company_id,),
         ).fetchall()
@@ -14714,6 +15814,8 @@ class SaaSRepository:
             "asset_manifest": payload.get("asset_manifest") if isinstance(payload.get("asset_manifest"), list) else [],
             "asset_manifest_validation": payload.get("asset_manifest_validation") if isinstance(payload.get("asset_manifest_validation"), dict) else {},
             "asset_review": payload.get("asset_review") if isinstance(payload.get("asset_review"), dict) else {},
+            "product_fact_gate": payload.get("product_fact_gate") if isinstance(payload.get("product_fact_gate"), dict) else {},
+            "media_router": payload.get("media_router") if isinstance(payload.get("media_router"), dict) else {},
             "asset_version": payload.get("asset_version") if isinstance(payload.get("asset_version"), dict) else {},
             "merchant_review": payload.get("merchant_review") if isinstance(payload.get("merchant_review"), dict) else {},
             "cost_guard": payload.get("cost_guard") if isinstance(payload.get("cost_guard"), dict) else {},
@@ -14910,7 +16012,10 @@ class SaaSRepository:
         included_reserved = 0
         purchased_points = 0
         purchased_reserved = 0
+        controlled_acceptance_points = 0
+        controlled_acceptance_reserved = 0
         included_expiries: list[str] = []
+        controlled_acceptance_expiries: list[str] = []
         for item in rows:
             remaining = max(0, int(item["remaining_points"] or 0))
             reserved = max(0, int(item["reserved_points"] or 0))
@@ -14922,6 +16027,12 @@ class SaaSRepository:
                 expires_at = str(item["expires_at"] or "").strip()
                 if expires_at:
                     included_expiries.append(expires_at)
+            elif source_type == CONTROLLED_MEDIA_CREDIT_SOURCE:
+                controlled_acceptance_points += available
+                controlled_acceptance_reserved += reserved
+                expires_at = str(item["expires_at"] or "").strip()
+                if expires_at:
+                    controlled_acceptance_expiries.append(expires_at)
             else:
                 purchased_points += available
                 purchased_reserved += reserved
@@ -14931,6 +16042,11 @@ class SaaSRepository:
             "included_expires_at": min(included_expiries) if included_expiries else "",
             "purchased_points": purchased_points,
             "purchased_reserved_points": purchased_reserved,
+            "controlled_acceptance_points": controlled_acceptance_points,
+            "controlled_acceptance_reserved_points": controlled_acceptance_reserved,
+            "controlled_acceptance_expires_at": (
+                min(controlled_acceptance_expiries) if controlled_acceptance_expiries else ""
+            ),
         }
 
     def _media_credit_account_row_to_dict(
@@ -14954,6 +16070,8 @@ class SaaSRepository:
         }
 
     def _media_credit_ledger_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        ledger_payload = _load_json_field(row["ledger_json"])
+        details = ledger_payload.get("details") if isinstance(ledger_payload.get("details"), dict) else {}
         return {
             "ledger_id": row["ledger_id"],
             "operation_type": row["operation_type"],
@@ -14964,6 +16082,7 @@ class SaaSRepository:
             "reservation_id": row["reservation_id"] or "",
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
+            "details": _redact_secret_like(details),
             "provider_neutral": True,
             "secret_exposed": False,
         }

@@ -143,6 +143,11 @@ Chrome 扩展可以正常控制浏览器；此前 `setFiles: Not allowed` 发生
 - provider 未调用或调用失败，以及 provider 刚返回时 manifest/fact/right 校验为真实 `blocked_*` 或 `failed*` 状态时，全额 release。
 - 部分资产正常返回时只按实际资产数 settle，释放其余预留。
 - 重试、超时、重复或矛盾回调必须保持幂等，每个 reservation 只能有一个终态 settle/release 结果；终态后的商家复核不属于账本回调。
+- 初次生成与重做共享同一队列 saga：先以不可 claim 的 `preparing` 状态持久化 task、media job 和 queue link，再原子激活并发布。worker 在跨越真实 provider 成本边界前，必须从权威账本重新核验 reservation 的公司、状态、点数、reference 与全部 bucket 分配，而不是只相信 queue JSON。
+- Redis 发布成功后的 dispatch 证据只允许保留当前任务状态，不能把并发 worker 已推进的 `running/completed` 覆盖回 `queued`。发布结果不确定、任务已运行或 CAS 失效时均禁止自动 release，转入人工对账。
+- 进程在激活前崩溃时，watchdog 将历史 setup 先转为不可执行的 `compensating`，幂等释放 reservation 后再标记 failed/needs_rework；补偿再次崩溃可续跑，健康检查不得把历史 `preparing/compensating` 报为 ready。
+- 资产分类同时使用标准化 MIME、显式类型与 URL。无扩展名的 `video/*` 仍属于视频；MIME 与显式类型冲突时必须 fail closed，不能按图片价格结算或进入图片复核。
+- 真实素材 provider 不能在素材点 enforcement 关闭时运行。API 必须在入队前阻断，worker 必须在 provider 调用前再次独立阻断；生产配置缺失或为 false 均返回 `media_credit_enforcement_required`，而不是绕过预留把真实生成变成免费调用。
 
 为本次生产闭环新增非公开 `controlled_acceptance` 验收点来源：
 

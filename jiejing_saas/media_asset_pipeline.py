@@ -16,6 +16,150 @@ from jiejing_runtime.media_capability_router import build_media_capability_route
 
 MEDIA_ASSET_PIPELINE_VERSION = "2026-07-01-media-asset-pipeline-v1"
 
+_IMAGE_ASSET_TYPES = frozenset(
+    {
+        *AssetManifestValidator.IMAGE_TYPES,
+        "image",
+        "photo",
+        "product_image",
+        "concept_reference_image",
+    }
+)
+_VIDEO_SUFFIXES = (".mp4", ".webm", ".mov")
+_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif")
+
+
+def is_concept_only_media_spec(creative_job_spec: dict[str, Any] | None) -> bool:
+    """Keep source-free concept policy identical before and after provider execution."""
+
+    return bool(
+        isinstance(creative_job_spec, dict)
+        and creative_job_spec.get("output_safety_mode") == "concept_reference_only"
+    )
+
+
+def normalized_media_mime_type(asset: dict[str, Any]) -> str:
+    """Return a value-free canonical MIME type supplied by the provider."""
+
+    if not isinstance(asset, dict):
+        return ""
+    value = str(
+        asset.get("mime_type")
+        or asset.get("content_type")
+        or asset.get("content-type")
+        or ""
+    ).strip().lower()
+    return value.split(";", 1)[0].strip()
+
+
+def media_asset_resource_type(asset: dict[str, Any]) -> str:
+    """Classify one asset from type, MIME, and URL; conflicting signals fail closed."""
+
+    if not isinstance(asset, dict):
+        return "unknown"
+    signals: set[str] = set()
+    asset_type = str(
+        asset.get("asset_type") or asset.get("media_type") or asset.get("type") or ""
+    ).strip().lower()
+    if "video" in asset_type:
+        signals.add("video")
+    elif asset_type in _IMAGE_ASSET_TYPES or "image" in asset_type or "photo" in asset_type:
+        signals.add("image")
+    mime_type = normalized_media_mime_type(asset)
+    if mime_type.startswith("video/"):
+        signals.add("video")
+    elif mime_type.startswith("image/"):
+        signals.add("image")
+    reference = str(
+        asset.get("url") or asset.get("url_or_file_path") or asset.get("path") or asset.get("file_path") or ""
+    ).strip().lower().split("?", 1)[0]
+    if reference.endswith(_VIDEO_SUFFIXES):
+        signals.add("video")
+    elif reference.endswith(_IMAGE_SUFFIXES):
+        signals.add("image")
+    if len(signals) > 1:
+        return "conflict"
+    return next(iter(signals), "unknown")
+
+
+def media_asset_is_settlement_eligible(asset: dict[str, Any], *, require_https: bool = True) -> bool:
+    """Reject failed, blocked, placeholder, or non-deliverable provider assets."""
+
+    if not isinstance(asset, dict):
+        return False
+    reference = str(
+        asset.get("url") or asset.get("url_or_file_path") or asset.get("path") or asset.get("file_path") or ""
+    ).strip()
+    if require_https and not reference.startswith("https://"):
+        return False
+    if media_asset_resource_type(asset) not in {"image", "video"}:
+        return False
+    allowed_states = {
+        "status": {"generated", "ready", "returned", "completed", "success", "succeeded", "available", "ok"},
+        "commercial_use_status": {"needs_review", "needs_rights_review"},
+        "fact_review_status": {"needs_review"},
+        "listing_use_status": {
+            "not_ready_for_listing_until_review",
+            "concept_only_not_eligible_for_listing",
+        },
+    }
+    defaults = {
+        "status": "generated",
+        "commercial_use_status": "needs_rights_review",
+        "fact_review_status": "needs_review",
+        "listing_use_status": "not_ready_for_listing_until_review",
+    }
+    return all(
+        str(asset.get(key) or defaults[key]).strip().lower() in allowed
+        for key, allowed in allowed_states.items()
+    )
+
+
+def media_asset_is_video(asset: dict[str, Any]) -> bool:
+    """Return true only when all available type signals agree that this is video."""
+
+    return media_asset_resource_type(asset) == "video"
+
+
+def media_asset_is_image(asset: dict[str, Any]) -> bool:
+    """Return true only when all available type signals agree that this is an image."""
+
+    return media_asset_resource_type(asset) == "image"
+
+
+def media_manifest_matches_approved_quote(quote: dict[str, Any], manifest: list[dict[str, Any]]) -> bool:
+    """Fail closed when a provider returns video that the merchant quote did not approve."""
+
+    resource_types = {
+        media_asset_resource_type(asset)
+        for asset in manifest
+        if isinstance(asset, dict)
+    }
+    if resource_types.intersection({"conflict", "unknown"}):
+        return False
+    video_present = "video" in resource_types
+    if not video_present:
+        return True
+    return bool(
+        isinstance(quote, dict)
+        and quote.get("video_requested") is True
+        and quote.get("chargeable") is True
+    )
+
+
+def media_asset_is_listing_review_eligible(asset: dict[str, Any]) -> bool:
+    """Require the exact pre-approval states produced by the authoritative manifest pipeline."""
+
+    if not media_asset_is_settlement_eligible(asset, require_https=True):
+        return False
+    return bool(
+        str(asset.get("commercial_use_status") or "").strip().lower()
+        in {"needs_review", "needs_rights_review"}
+        and str(asset.get("fact_review_status") or "").strip().lower() == "needs_review"
+        and str(asset.get("listing_use_status") or "").strip().lower()
+        == "not_ready_for_listing_until_review"
+    )
+
 
 def build_media_asset_generation_packet(
     *,
@@ -51,8 +195,11 @@ def build_media_asset_generation_packet(
         version_context=version_context,
     )
     live_provider_called = False
-    if isinstance(live_media_snapshot, dict) and live_media_snapshot.get("assets"):
-        concept_only = creative_job_spec.get("output_safety_mode") == "concept_reference_only"
+    live_snapshot_has_assets = bool(
+        isinstance(live_media_snapshot, dict) and live_media_snapshot.get("assets")
+    )
+    if live_snapshot_has_assets:
+        concept_only = is_concept_only_media_spec(creative_job_spec)
         live_assets = _live_provider_assets(live_media_snapshot, version_context=version_context, concept_only=concept_only)
         if live_assets:
             assets = live_assets
@@ -65,7 +212,14 @@ def build_media_asset_generation_packet(
         "secret_exposed": False,
     }
     validation = _validate_manifest(manifest_packet)
-    missing_fact_keys = _missing_product_fact_keys(product_facts=product_facts, creative_job_spec=creative_job_spec)
+    if live_snapshot_has_assets and not live_provider_called:
+        validation = {
+            **validation,
+            "status": "blocked_incomplete_manifest",
+            "blocked_by": ["unsupported_live_asset_reference"],
+            "secret_exposed": False,
+        }
+    missing_fact_keys = missing_media_product_fact_keys(inputs)
     review_gates = _review_gates(
         validation=validation,
         missing_fact_keys=missing_fact_keys,
@@ -111,7 +265,7 @@ def build_media_asset_generation_packet(
             "review_gates": review_gates,
             "listing_use_status": (
                 "concept_only_not_eligible_for_listing"
-                if creative_job_spec.get("output_safety_mode") == "concept_reference_only"
+                if is_concept_only_media_spec(creative_job_spec)
                 else "not_ready_for_listing_until_review"
                 if live_provider_called
                 else "blocked_missing_live_provider"
@@ -143,8 +297,14 @@ def build_media_asset_generation_packet(
         "video_script_status": "received" if video_script else "missing",
         "safety": {
             "live_provider_called": live_provider_called,
-            "calls_image_provider": bool(live_provider_called and any(str(item.get("asset_type", "")).startswith("product_") or "image" in str(item.get("asset_type", "")) for item in assets)),
-            "calls_video_provider": bool(live_provider_called and any("video" in str(item.get("asset_type", "")) for item in assets)),
+            "calls_image_provider": bool(
+                live_provider_called
+                and any(media_asset_is_image(item) for item in assets if isinstance(item, dict))
+            ),
+            "calls_video_provider": bool(
+                live_provider_called
+                and any(media_asset_is_video(item) for item in assets if isinstance(item, dict))
+            ),
             "raw_secret_read": False,
             "raw_provider_response_stored": False,
             "real_platform_writes_enabled": False,
@@ -168,9 +328,17 @@ def _live_provider_assets(
         if not isinstance(item, dict):
             continue
         url_or_path = str(item.get("url") or item.get("url_or_file_path") or item.get("path") or "").strip()
-        if not url_or_path:
+        if not media_asset_is_settlement_eligible(item, require_https=True):
             continue
-        asset_type = "concept_reference_image" if concept_only else str(item.get("asset_type") or item.get("type") or "product_image").strip() or "product_image"
+        resource_type = media_asset_resource_type(item)
+        raw_asset_type = str(item.get("asset_type") or item.get("type") or "").strip()
+        if concept_only and resource_type == "image":
+            asset_type = "concept_reference_image"
+        elif raw_asset_type:
+            asset_type = raw_asset_type
+        else:
+            asset_type = "product_video" if resource_type == "video" else "product_image"
+        mime_type = normalized_media_mime_type(item)
         duration = item.get("duration_seconds") or item.get("duration")
         dimensions = item.get("dimensions") or item.get("dimensions_or_duration") or (f"{duration}s" if duration else "provider_returned")
         assets.append(
@@ -180,6 +348,7 @@ def _live_provider_assets(
                 "parent_media_job_id": version_context["parent_media_job_id"],
                 "generation_reason": version_context["generation_reason"],
                 "asset_type": asset_type,
+                "mime_type": mime_type,
                 "url": url_or_path,
                 "url_or_file_path": url_or_path,
                 "dimensions": dimensions,
@@ -267,26 +436,60 @@ def _validate_manifest(manifest_packet: dict[str, Any]) -> dict[str, Any]:
     return AssetManifestValidator().validate_text(text)
 
 
-def _missing_product_fact_keys(*, product_facts: dict[str, Any], creative_job_spec: dict[str, Any]) -> list[str]:
+def missing_media_product_fact_keys(inputs: dict[str, Any]) -> list[str]:
+    """Return the server-authoritative fact blockers shared by preflight and postflight."""
+
+    product_facts = inputs.get("product_facts") if isinstance(inputs.get("product_facts"), dict) else {}
+    creative_job_spec = inputs.get("creative_job_spec") if isinstance(inputs.get("creative_job_spec"), dict) else {}
     supplier = product_facts.get("supplier_facts") if isinstance(product_facts.get("supplier_facts"), dict) else {}
+    reference_images = (
+        product_facts.get("reference_images")
+        if isinstance(product_facts.get("reference_images"), list)
+        else []
+    )
+    reference_image_url = str(inputs.get("reference_image_url") or "").strip()
+    hydrated_private_source = bool(
+        product_facts.get("source_asset_id")
+        and (
+            (
+                inputs.get("private_media_source_hydrated") is True
+                and reference_image_url.startswith("data:image/")
+            )
+            or inputs.get("private_media_source_preflight_validated") is True
+        )
+    )
+    grounded_reference = bool(
+        reference_image_url.startswith("https://")
+        or any(str(item or "").strip().startswith("https://") for item in reference_images)
+        or hydrated_private_source
+    )
     checks = {
-        "product_identity": bool(product_facts.get("product") or product_facts.get("product_identity")),
+        "product_identity": _has_confirmed_fact(product_facts.get("product") or product_facts.get("product_identity")),
         "confirmed_dimensions_or_pending_label": _has_confirmed_fact(supplier.get("package_dimensions_cm") or supplier.get("dimensions")) or bool(product_facts.get("dimensions_pending_label")),
         "confirmed_material_or_pending_label": _has_confirmed_fact(supplier.get("material")) or bool(product_facts.get("material_pending_label")),
         "allowed_claims": bool(product_facts.get("allowed_claims") or product_facts.get("listing_context")),
         "forbidden_claims": bool(product_facts.get("forbidden_claims") or creative_job_spec.get("blocked_claims")),
-        "reference_images_or_source_notes": bool(
-            product_facts.get("reference_images")
-            or product_facts.get("source_asset_id")
-            or product_facts.get("source_notes")
+        "reference_images_or_source_notes": grounded_reference,
+        "target_marketplace_rules": bool(
+            product_facts.get("target_marketplace_rules")
             or product_facts.get("listing_context")
+            or creative_job_spec.get("platform")
         ),
-        "target_marketplace_rules": bool(product_facts.get("target_marketplace_rules") or product_facts.get("listing_context")),
     }
-    required = creative_job_spec.get("product_facts_required")
-    if not isinstance(required, list) or not required:
-        required = list(checks.keys())
-    return [key for key in required if checks.get(str(key)) is False]
+    concept_only = is_concept_only_media_spec(creative_job_spec)
+    requested = creative_job_spec.get("product_facts_required")
+    requested_keys = [str(key) for key in requested] if isinstance(requested, list) else []
+    server_required = ["product_identity", "confirmed_material_or_pending_label", "allowed_claims"]
+    if concept_only:
+        server_required.append("forbidden_claims")
+        requested_keys = [key for key in requested_keys if key != "reference_images_or_source_notes"]
+    else:
+        server_required.extend(["reference_images_or_source_notes", "target_marketplace_rules"])
+    scene_types = inputs.get("scene_types") if isinstance(inputs.get("scene_types"), list) else []
+    if any("dimension" in str(scene).lower() or "size" in str(scene).lower() for scene in scene_types):
+        server_required.append("confirmed_dimensions_or_pending_label")
+    required = list(dict.fromkeys([*server_required, *requested_keys]))
+    return [key for key in required if checks.get(key) is False]
 
 
 def _has_confirmed_fact(value: Any) -> bool:
@@ -295,7 +498,17 @@ def _has_confirmed_fact(value: Any) -> bool:
     if isinstance(value, (list, tuple)):
         return bool(value) and all(_has_confirmed_fact(item) for item in value)
     text = str(value or "").strip().lower()
-    return bool(text) and text not in {"待补", "待确认", "unknown", "todo", "pending", "n/a"}
+    return bool(text) and text not in {
+        "待补",
+        "待补充",
+        "待确认",
+        "当前商品",
+        "未填写",
+        "unknown",
+        "todo",
+        "pending",
+        "n/a",
+    }
 
 
 def _review_gates(

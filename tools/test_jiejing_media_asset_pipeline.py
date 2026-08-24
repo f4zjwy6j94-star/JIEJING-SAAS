@@ -10,7 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from jiejing_saas.media_asset_pipeline import MEDIA_ASSET_PIPELINE_VERSION, build_media_asset_generation_packet  # noqa: E402
+from jiejing_saas.media_asset_pipeline import (  # noqa: E402
+    MEDIA_ASSET_PIPELINE_VERSION,
+    build_media_asset_generation_packet,
+    media_asset_is_listing_review_eligible,
+    media_asset_is_settlement_eligible,
+)
 
 
 def fail(message: str) -> int:
@@ -62,7 +67,7 @@ def main() -> int:
                 },
                 "allowed_claims": ["keeps drinks cold"],
                 "forbidden_claims": ["medical"],
-                "reference_images": ["merchant_upload://reference-1"],
+                "reference_images": ["https://merchant.example.test/reference-1.jpg"],
                 "target_marketplace_rules": {"platform": "ebay"},
             },
             "image_count": 3,
@@ -134,6 +139,83 @@ def main() -> int:
         return fail(f"ungrounded live output must be labelled concept reference: {concept_asset}")
     if concept_asset.get("listing_use_status") != "concept_only_not_eligible_for_listing":
         return fail("concept reference must not become Listing eligible")
+
+    local_only_packet = build_media_asset_generation_packet(
+        base=base,
+        contract_key="media.asset_generation",
+        captured_at="2026-07-01T00:00:00Z",
+        inputs={"product_facts": {"product": "Server-local output"}},
+        live_media_snapshot={
+            "provider": "configured_media_provider",
+            "assets": [
+                {
+                    "asset_type": "product_image",
+                    "path": str((ROOT / "output" / "jiejing-media-assets" / "provider-output.png").resolve()),
+                }
+            ],
+        },
+    )
+    if local_only_packet.get("asset_manifest_validation", {}).get("status") != "blocked_incomplete_manifest":
+        return fail("a local path without an authenticated HTTPS delivery URL must never be charged or reviewed")
+
+    mixed_status_packet = build_media_asset_generation_packet(
+        base=base,
+        contract_key="media.asset_generation",
+        captured_at="2026-07-01T00:00:00Z",
+        inputs={"product_facts": {"product": "Mixed provider output"}},
+        live_media_snapshot={
+            "provider": "configured_media_provider",
+            "assets": [
+                {
+                    "asset_id": "valid-1",
+                    "asset_type": "product_image",
+                    "url": "https://cdn.example.test/valid.jpg",
+                    "status": "generated",
+                },
+                {
+                    "asset_id": "failed-1",
+                    "asset_type": "product_image",
+                    "url": "https://cdn.example.test/failed.jpg",
+                    "status": "failed",
+                },
+                {
+                    "asset_id": "rights-1",
+                    "asset_type": "product_image",
+                    "url": "https://cdn.example.test/blocked.jpg",
+                    "commercial_use_status": "blocked_rights",
+                },
+                {
+                    "asset_id": "fact-blocked-1",
+                    "asset_type": "detail_page",
+                    "url": "https://cdn.example.test/fact-blocked.jpg",
+                    "fact_review_status": "blocked_unverified_claim",
+                },
+                {
+                    "asset_id": "listing-blocked-1",
+                    "asset_type": "size_chart",
+                    "url": "https://cdn.example.test/listing-blocked.jpg",
+                    "listing_use_status": "blocked_policy",
+                },
+            ],
+        },
+    )
+    mixed_manifest = mixed_status_packet.get("asset_manifest", [])
+    if [item.get("asset_id") for item in mixed_manifest] != ["valid-1"]:
+        return fail(f"failed, rights-blocked, fact-blocked, or listing-blocked assets must be excluded before settlement: {mixed_manifest}")
+    if not media_asset_is_listing_review_eligible(mixed_manifest[0]):
+        return fail(f"the authoritative pending-review state should be reviewable: {mixed_manifest[0]}")
+    forged_listing_state = {**mixed_manifest[0], "listing_use_status": "provider_says_ready"}
+    if media_asset_is_listing_review_eligible(forged_listing_state):
+        return fail("a provider-supplied Listing-ready state must never bypass merchant review")
+    for field, unsafe_state in (
+        ("commercial_use_status", "rights_denied"),
+        ("commercial_use_status", "not_authorized"),
+        ("commercial_use_status", "expired_rights"),
+        ("commercial_use_status", "unknown"),
+        ("status", "unknown"),
+    ):
+        if media_asset_is_settlement_eligible({**mixed_manifest[0], field: unsafe_state}):
+            return fail(f"unknown or non-authorized provider state must fail closed before settlement: {field}={unsafe_state}")
 
     for checked in (packet, missing):
         if checked.get("secret_exposed") is not False:

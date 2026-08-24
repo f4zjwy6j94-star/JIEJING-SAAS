@@ -197,14 +197,25 @@ def _check_runtime_driver_dependency_shape() -> dict[str, Any]:
 
 
 def _check_postgres_migration_shape() -> dict[str, Any]:
-    path = ROOT / "jiejing_saas" / "migrations" / "001_initial_schema_postgres.sql"
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    migration_root = ROOT / "jiejing_saas" / "migrations"
+    migration_paths = [
+        migration_root / "001_initial_schema_postgres.sql",
+        migration_root / "002_media_credit_buckets_postgres.sql",
+        migration_root / "003_runtime_schema_reconciliation_postgres.sql",
+    ]
+    text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in migration_paths
+        if path.exists()
+    )
     missing_tables = [table for table in CRITICAL_TABLES if f"create table if not exists {table}" not in text]
     missing_indexes = [index for index in CRITICAL_INDEXES if f"create index if not exists {index}" not in text]
     return {
         "key": "postgres_migration_shape",
-        "pass": not missing_tables and not missing_indexes,
-        "path": str(path.relative_to(ROOT)),
+        "pass": all(path.exists() for path in migration_paths) and not missing_tables and not missing_indexes,
+        "path": str(migration_root.relative_to(ROOT)),
+        "migration_paths": [str(path.relative_to(ROOT)) for path in migration_paths],
+        "missing_migration_files": [str(path.relative_to(ROOT)) for path in migration_paths if not path.exists()],
         "missing_tables": missing_tables,
         "missing_indexes": missing_indexes,
     }

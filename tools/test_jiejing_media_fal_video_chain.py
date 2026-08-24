@@ -58,7 +58,8 @@ class FakeFalAdapter(MediaGenerationAdapter):
             return {"status": "COMPLETED"}
         return {
             "video": {
-                "url": "https://cdn.example.test/jiejing/product-demo.mp4",
+                "url": "https://cdn.example.test/jiejing/object?id=product-demo",
+                "mime_type": "video/mp4; charset=binary",
                 "duration": 6,
             }
         }
@@ -90,6 +91,8 @@ def main() -> int:
     video_assets = [asset for asset in assets if "video" in str(asset.get("asset_type") or "")]
     if len(image_assets) != 1 or len(video_assets) != 1:
         raise AssertionError(f"expected one image and one video asset, got: {assets}")
+    if video_assets[0].get("mime_type") != "video/mp4":
+        raise AssertionError(f"extensionless FAL video MIME was not preserved canonically: {video_assets[0]}")
     if adapter.queue_payload.get("image_url") != image_assets[0].get("url"):
         raise AssertionError("video generation did not inherit the generated image URL")
     if "prompt" not in adapter.queue_payload or "safety" in adapter.queue_payload or "product" in adapter.queue_payload:

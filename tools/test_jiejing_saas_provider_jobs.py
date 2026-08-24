@@ -81,8 +81,10 @@ def main() -> int:
 
         catalog = fetch_json(f"{base_url}/provider-job-contracts", token=token).get("provider_job_contracts", {})
         keys = {item.get("key") for item in catalog.get("contracts", [])}
-        if "sourcing.1688_availability" not in keys or "media.asset_generation" not in keys or "media.fal_asset_generation" not in keys:
+        if "sourcing.1688_availability" not in keys or "media.asset_generation" not in keys:
             return fail("SaaS backend should expose provider job contracts")
+        if "media.fal_asset_generation" in keys:
+            return fail("merchant provider catalog must not expose a replaceable media provider")
         if catalog.get("secret_exposed") is not False:
             return fail("provider catalog must not expose secrets")
 
@@ -186,8 +188,8 @@ def main() -> int:
             },
             token=token,
         )
-        if status != 422 or "真实文件" not in str(rejected_review.get("error") or ""):
-            return fail("dry-run media review must fail closed with a merchant-readable real-file blocker")
+        if status != 422 or "不能审核" not in str(rejected_review.get("error") or ""):
+            return fail("dry-run media review must fail closed with a merchant-readable review blocker")
 
         blocked = post_json(
             f"{base_url}/stores/{store_id}/provider-jobs/queue",

@@ -101,7 +101,8 @@ def main() -> int:
                     "image_count": 1,
                     "image_sizes": ["1:1"],
                     "scene_types": ["white_background"],
-                    "live_provider_requested": True,
+                    "live_provider_requested": False,
+                    "commercial_rights_confirmed": True,
                 },
                 "run_mode": "local_worker_now",
             },
@@ -123,7 +124,7 @@ def main() -> int:
             },
             token,
         )
-        if status != 422 or "真实文件" not in str(rejected.get("error") or ""):
+        if status != 422 or "不能审核" not in str(rejected.get("error") or ""):
             raise AssertionError(f"placeholder approval must be rejected with a merchant-readable reason: {status}, {rejected}")
         print("PASS jiejing_media_placeholder_review_gate")
         return 0

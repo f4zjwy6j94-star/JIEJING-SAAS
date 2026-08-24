@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from jiejing_saas.media_credits import estimate_media_points  # noqa: E402
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
 
 
@@ -88,6 +89,7 @@ def main() -> int:
             "JIEJING_BILLING_PLANS_PUBLISHED": "1",
             "JIEJING_QUOTA_ENFORCEMENT_ENABLED": "1",
             "JIEJING_MEDIA_CREDIT_ENFORCEMENT_ENABLED": "1",
+            "JIEJING_MEDIA_QUEUE_SETUP_STALE_AFTER_SECONDS": "30",
             "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED": "true",
             "JIEJING_MEDIA_LIVE_VIDEO_ENABLED": "false",
             "JIEJING_IMAGE_GENERATION_ENDPOINT": f"http://127.0.0.1:{provider_port}/generate",
@@ -201,12 +203,50 @@ def main() -> int:
                 "scene_types": ["white_background", "detail_page"],
                 "video_script": "15 second product demo script",
                 "live_provider_requested": True,
+                "commercial_rights_confirmed": True,
                 "merchant_notes": f"Supplier note {hidden_note_credential}",
                 "api_key": "UNIT-MEDIA-KEY-MUST-NOT-PERSIST",
             },
             "run_mode": "local_worker_now",
         }
+        # Reproduce a process exit immediately after reserve, before task/media/
+        # queue persistence.  The same merchant key must recover locally and
+        # continue with a new reservation attempt, without an extra provider call.
+        orphan_quote = estimate_media_points(payload["inputs"])
+        orphan_reservation = repository.apply_media_credit_operation(
+            company_id=company_id,
+            user_id=user_id,
+            operation_type="reserve",
+            points=int(orphan_quote["estimated_points"]),
+            idempotency_key=f"{payload['idempotency_key']}:reserve:v1",
+            reference_type="media_job",
+            reference_id=str(payload["idempotency_key"]),
+            details={"quote": orphan_quote},
+        )
+        orphan_reservation_id = str(orphan_reservation["ledger_entry"]["ledger_id"])
+        with repository._connect() as conn:  # noqa: SLF001 - isolated crash fixture
+            conn.execute(
+                "update media_credit_ledger set created_at = ?, updated_at = ? where company_id = ? and ledger_id = ?",
+                ("2020-01-01T00:00:00+00:00", "2020-01-01T00:00:00+00:00", company_id, orphan_reservation_id),
+            )
         queued = post_json(f"{base_url}/stores/{store_id}/provider-jobs/queue", payload, token=token)
+        orphan_terminal = repository.get_media_credit_terminal_for_reservation(
+            company_id=company_id,
+            reservation_id=orphan_reservation_id,
+        )
+        active_reservation_id = str(
+            queued.get("media_asset_job", {})
+            .get("job", {})
+            .get("job_spec", {})
+            .get("media_credits", {})
+            .get("reservation", {})
+            .get("ledger_entry", {})
+            .get("ledger_id", "")
+        )
+        if not orphan_terminal or orphan_terminal.get("operation_type") != "release":
+            return fail(f"stale pre-persistence reservation was not safely released: {orphan_terminal}")
+        if not active_reservation_id or active_reservation_id == orphan_reservation_id:
+            return fail("same logical media key did not advance to a fresh reservation attempt")
         provider_payload = FakeMediaProviderHandler.captured_payloads[-1] if FakeMediaProviderHandler.captured_payloads else {}
         provider_references = provider_payload.get("image_urls") if isinstance(provider_payload.get("image_urls"), list) else []
         if len(provider_references) != 1 or not str(provider_references[0]).startswith("data:image/png;base64,"):
@@ -270,6 +310,102 @@ def main() -> int:
         after_replay = fetch_json(f"{base_url}/stores/{store_id}/media-asset-jobs", token=token).get("media_asset_jobs", [])
         if len(after_replay) != 1:
             return fail(f"idempotent replay must not create a second media asset job: {after_replay}")
+
+        provider_calls_before_conflict = len(FakeMediaProviderHandler.captured_payloads)
+        changed_source_payload = json.loads(json.dumps(payload))
+        changed_source_payload["inputs"]["product_facts"]["source_image_sha256"] = "f" * 64
+        conflict_status, conflict = post_json_with_status(
+            f"{base_url}/stores/{store_id}/provider-jobs/queue",
+            changed_source_payload,
+            token=token,
+        )
+        if conflict_status != 409 or conflict.get("idempotency_conflict") is not True:
+            return fail(f"a client-supplied key must not replay another source image: {conflict_status}, {conflict}")
+        if len(FakeMediaProviderHandler.captured_payloads) != provider_calls_before_conflict:
+            return fail("an idempotency/source conflict must be rejected before another provider call")
+
+        credits_before_preflight_blocks = repository.get_media_credit_account(company_id=company_id).get("available_points")
+        integrity_payload = json.loads(json.dumps(changed_source_payload))
+        integrity_payload["idempotency_key"] = "unit-media-source-integrity-conflict-001"
+        integrity_status, integrity_block = post_json_with_status(
+            f"{base_url}/stores/{store_id}/provider-jobs/queue",
+            integrity_payload,
+            token=token,
+        )
+        if integrity_status != 409 or integrity_block.get("source_integrity_conflict") is not True:
+            return fail(f"a changed source digest must fail before reserve or provider execution: {integrity_status}, {integrity_block}")
+
+        missing_claims_payload = json.loads(json.dumps(payload))
+        missing_claims_payload["idempotency_key"] = "unit-media-missing-allowed-claims-001"
+        missing_claims_payload["inputs"]["product_facts"]["allowed_claims"] = []
+        claims_status, claims_block = post_json_with_status(
+            f"{base_url}/stores/{store_id}/provider-jobs/queue",
+            missing_claims_payload,
+            token=token,
+        )
+        if claims_status != 422 or "allowed_claims" not in claims_block.get("missing_inputs", []):
+            return fail(f"missing allowed claims must fail before reserve or provider execution: {claims_status}, {claims_block}")
+        credits_after_preflight_blocks = repository.get_media_credit_account(company_id=company_id).get("available_points")
+        if credits_after_preflight_blocks != credits_before_preflight_blocks:
+            return fail("source integrity or product-fact preflight failures must not reserve media points")
+        if len(FakeMediaProviderHandler.captured_payloads) != provider_calls_before_conflict:
+            return fail("source integrity or product-fact preflight failures must not call the provider")
+
+        video_payload = json.loads(json.dumps(payload))
+        video_payload["idempotency_key"] = "unit-media-job-unpriced-video-001"
+        video_payload["inputs"]["video_generation_requested"] = True
+        video_payload["inputs"]["video_duration_seconds"] = 10
+        provider_calls_before_video = len(FakeMediaProviderHandler.captured_payloads)
+        video_status, video_block = post_json_with_status(
+            f"{base_url}/stores/{store_id}/provider-jobs/queue",
+            video_payload,
+            token=token,
+        )
+        if video_status != 409 or video_block.get("media_quote", {}).get("chargeable") is not False:
+            return fail(f"the frontend video flag must be blocked before an unpriced provider call: {video_status}, {video_block}")
+        if len(FakeMediaProviderHandler.captured_payloads) != provider_calls_before_video:
+            return fail("an unpriced video request must not reach the provider")
+
+        no_credit_user = post_json(
+            f"{base_url}/auth/register",
+            {
+                "email": "media-run-mode-reservation@example.com",
+                "password": "local-test-password",
+                "company_name": "Media Run Mode Reservation Test",
+            },
+        )
+        no_credit_token = str(no_credit_user.get("token") or "")
+        no_credit_store = post_json(
+            f"{base_url}/stores",
+            {"platform": "ebay", "store_name": "runmodegate", "marketplace": "EBAY_US"},
+            token=no_credit_token,
+        ).get("store", {})
+        run_mode_payload = {
+            "provider_job_key": "media.asset_generation",
+            "idempotency_key": "unit-media-run-mode-reservation-001",
+            "inputs": {
+                "image_count": 1,
+                "generation_tier": "standard",
+                "creative_job_spec": {"blocked_claims": ["unverified_certification"]},
+                "product_facts": {
+                    "product": "unbranded cable organizer",
+                    "supplier_facts": {"material": "silicone"},
+                    "allowed_claims": ["merchant-confirmed silicone cable organizer"],
+                    "forbidden_claims": ["medical"],
+                    "reference_images": ["https://merchant-source.example.test/cable-organizer.png"],
+                    "target_marketplace_rules": {"platform": "ebay", "marketplace": "EBAY_US"},
+                },
+                "commercial_rights_confirmed": True,
+            },
+            "run_mode": "live_provider_now",
+        }
+        run_mode_status, run_mode_block = post_json_with_status(
+            f"{base_url}/stores/{no_credit_store.get('store_id')}/provider-jobs/queue",
+            run_mode_payload,
+            token=no_credit_token,
+        )
+        if run_mode_status != 402 or run_mode_block.get("triggers_real_charge") is not False:
+            return fail(f"run_mode=live_provider_now must reserve points before queueing: {run_mode_status}, {run_mode_block}")
 
         rework_review = post_json(
             f"{base_url}/media-asset-jobs/{media_job_id}/review",
@@ -357,6 +493,19 @@ def main() -> int:
                 f"{replay_v2_with_changed_client_key}"
             )
 
+        stale_status, stale_review = post_json_with_status(
+            f"{base_url}/media-asset-jobs/{media_job_id}/review",
+            {
+                "decision": "approve_for_listing_draft",
+                "fact_consistency_confirmed": True,
+                "commercial_rights_confirmed": True,
+                "platform_rules_checked": True,
+            },
+            token=token,
+        )
+        if stale_status != 422:
+            return fail(f"a needs-rework version must never be approved through a stale review request: {stale_status}, {stale_review}")
+
         approved_v2 = post_json(
             f"{base_url}/media-asset-jobs/{media_v2_id}/review",
             {
@@ -412,15 +561,13 @@ def main() -> int:
         missing_source_payload["inputs"].pop("reference_image_url", None)
         missing_source_payload["inputs"]["product_facts"]["reference_images"] = []
         missing_source_payload["inputs"]["product_facts"]["source_asset_id"] = "media_src_aaaaaaaaaaaaaaaa"
-        missing_source = post_json(
+        missing_source_status, missing_source = post_json_with_status(
             f"{base_url}/stores/{store_id}/provider-jobs/queue",
             missing_source_payload,
             token=token,
-        ).get("media_asset_job", {})
-        if missing_source.get("status") != "needs_rework" or "private_media_source_asset_not_found" not in str(
-            missing_source.get("error_reason") or ""
-        ):
-            return fail(f"missing private source must fail closed as a merchant-visible rework state: {missing_source}")
+        )
+        if missing_source_status != 422 or "private_media_source_asset_not_found" not in missing_source.get("missing_inputs", []):
+            return fail(f"missing private source must fail closed before queueing: {missing_source_status}, {missing_source}")
         if len(FakeMediaProviderHandler.captured_payloads) != provider_calls_before_missing_source:
             return fail("missing private source must not call or spend external media provider quota")
 

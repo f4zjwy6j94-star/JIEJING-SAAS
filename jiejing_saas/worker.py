@@ -20,11 +20,16 @@ from .config import SaaSSettings
 from .ebay_data_packet import build_ebay_read_only_data_packet
 from .ebay_http_client import EbayReadOnlyHttpClient
 from .ebay_read_adapter import EbayReadOnlyAdapter
-from .provider_job_runner import ProviderJobRunner
+from .media_asset_pipeline import (
+    media_asset_is_settlement_eligible,
+    media_asset_resource_type,
+    media_manifest_matches_approved_quote,
+)
+from .media_credits import actual_media_points_from_output, media_live_provider_requested
 from .media_source_assets import MediaSourceAssetError, MediaSourceAssetStore
 from .operations_metering import media_cost_measurement, provider_telemetry_from_result
+from .provider_job_runner import ProviderJobRunner
 from .repository import SaaSRepository
-from .media_credits import actual_media_points_from_output
 from .runtime_bridge import RuntimeBridge
 from .vault_secret_resolver import VaultSecretResolver
 
@@ -485,6 +490,11 @@ class LocalQueueWorker:
         task: dict[str, Any],
         job_body: dict[str, Any],
     ) -> dict[str, Any]:
+        self._assert_media_queue_setup_ready(job=job, task=task, job_body=job_body)
+        self._assert_media_credit_reservation_has_no_terminal(
+            company_id=str(task["company_id"]),
+            job_body=job_body,
+        )
         self.repository.update_task_status(
             task_id=task["task_id"],
             company_id=task["company_id"],
@@ -540,12 +550,37 @@ class LocalQueueWorker:
             job_body=job_body,
             provider_output=provider_output,
             current=media_asset_job,
+            review_ready=False,
+            settlement_final=False,
         )
         media_credit_result = self._settle_media_credit_reservation(
             task=task,
             job_body=job_body,
             provider_output=provider_output,
             live_provider_called=live_provider_called,
+        )
+        credit_state = job_body.get("media_credits") if isinstance(job_body.get("media_credits"), dict) else {}
+        reservation_result = credit_state.get("reservation") if isinstance(credit_state.get("reservation"), dict) else {}
+        reservation_entry = (
+            reservation_result.get("ledger_entry")
+            if isinstance(reservation_result.get("ledger_entry"), dict)
+            else {}
+        )
+        reservation_required = bool(reservation_entry.get("ledger_id"))
+        media_asset_job = self._complete_media_asset_job(
+            task=task,
+            job=job,
+            job_body=job_body,
+            provider_output=provider_output,
+            current=media_asset_job,
+            review_ready=(
+                not reservation_required
+                or (
+                    isinstance(media_credit_result, dict)
+                    and media_credit_result.get("status") == "settled"
+                )
+            ),
+            settlement_final=True,
         )
         if live_provider_called:
             output_packet = provider_output.get("output_packet") if isinstance(provider_output.get("output_packet"), dict) else {}
@@ -679,9 +714,45 @@ class LocalQueueWorker:
             return None
         output_packet = provider_output.get("output_packet") if isinstance(provider_output.get("output_packet"), dict) else {}
         manifest = output_packet.get("asset_manifest") if isinstance(output_packet.get("asset_manifest"), list) else []
-        usable_result = live_provider_called and bool(manifest) and not str(provider_output.get("status") or "").startswith("failed")
+        manifest_matches_quote = media_manifest_matches_approved_quote(quote, manifest)
+        eligible_manifest = [
+            asset
+            for asset in manifest
+            if isinstance(asset, dict) and media_asset_is_settlement_eligible(asset, require_https=True)
+        ]
+        validation = (
+            output_packet.get("asset_manifest_validation")
+            if isinstance(output_packet.get("asset_manifest_validation"), dict)
+            else {}
+        )
+        asset_review = (
+            output_packet.get("asset_review")
+            if isinstance(output_packet.get("asset_review"), dict)
+            else {}
+        )
+        review_gates = (
+            asset_review.get("review_gates")
+            if isinstance(asset_review.get("review_gates"), list)
+            else []
+        )
+        provider_status = str(provider_output.get("status") or "").strip().lower()
+        usable_result = bool(
+            live_provider_called
+            and manifest_matches_quote
+            and bool(eligible_manifest)
+            and validation.get("status") == "manifest_ready"
+            and asset_review.get("status") == "waiting_for_human_asset_review"
+            and review_gates
+            and all(
+                isinstance(gate, dict) and gate.get("status") == "needs_review"
+                for gate in review_gates
+            )
+            and not provider_status.startswith(("failed", "blocked"))
+        )
         operation = "settle" if usable_result else "release"
-        points, points_source = actual_media_points_from_output(quote, provider_output)
+        settlement_packet = {**output_packet, "asset_manifest": eligible_manifest}
+        settlement_output = {**provider_output, "output_packet": settlement_packet}
+        points, points_source = actual_media_points_from_output(quote, settlement_output)
         if not usable_result:
             points = reserved_points
             points_source = "full_reservation_release"
@@ -690,7 +761,7 @@ class LocalQueueWorker:
             user_id=str(task.get("user_id") or "") or None,
             operation_type=operation,
             points=points,
-            idempotency_key=f"{reservation_id}:{operation}:v1",
+            idempotency_key=f"{reservation_id}:terminal:v2",
             reference_type="media_job",
             reference_id=str(job_body.get("media_job_id") or job_body.get("idempotency_key") or ""),
             reservation_id=reservation_id,
@@ -698,17 +769,85 @@ class LocalQueueWorker:
                 "reason": "usable_assets_returned" if usable_result else "no_usable_assets_returned",
                 "points_source": points_source,
                 "reserved_points": reserved_points,
+                "manifest_matches_approved_quote": manifest_matches_quote,
             },
         )
+        terminal_entry = result.get("ledger_entry") if isinstance(result.get("ledger_entry"), dict) else {}
+        terminal_operation = str(terminal_entry.get("operation_type") or operation)
+        terminal_points = int(terminal_entry.get("points") or points)
+        terminal_details = (
+            terminal_entry.get("details")
+            if isinstance(terminal_entry.get("details"), dict)
+            else {}
+        )
+        terminal_points_source = str(terminal_details.get("points_source") or points_source)
         return {
-            "status": "settled" if usable_result else "released",
-            "points": points,
+            "status": "settled" if terminal_operation == "settle" else "released",
+            "points": terminal_points,
             "reserved_points": reserved_points,
-            "points_source": points_source,
+            "points_source": terminal_points_source,
             "account": result.get("account") or {},
             "provider_neutral": True,
             "secret_exposed": False,
         }
+
+    def _assert_media_queue_setup_ready(
+        self,
+        *,
+        job: dict[str, Any],
+        task: dict[str, Any],
+        job_body: dict[str, Any],
+    ) -> None:
+        if str(job_body.get("queue_setup_protocol") or "") != "media_queue_saga_v1":
+            return
+        if job_body.get("setup_committed") is not True:
+            raise RuntimeError("media queue setup is not committed")
+        media_job_id = str(job_body.get("media_job_id") or "")
+        if not media_job_id:
+            raise RuntimeError("media queue setup has no linked media job")
+        media_job = self.repository.get_media_asset_job(
+            company_id=str(task.get("company_id") or job.get("company_id") or ""),
+            media_job_id=media_job_id,
+        )
+        if not media_job or str(media_job.get("queue_job_id") or "") != str(job.get("job_id") or ""):
+            raise RuntimeError("media queue setup link is not committed")
+
+    def _assert_media_credit_reservation_has_no_terminal(
+        self,
+        *,
+        company_id: str,
+        job_body: dict[str, Any],
+    ) -> None:
+        credit_state = job_body.get("media_credits") if isinstance(job_body.get("media_credits"), dict) else {}
+        reservation_result = credit_state.get("reservation") if isinstance(credit_state.get("reservation"), dict) else {}
+        reservation = reservation_result.get("ledger_entry") if isinstance(reservation_result.get("ledger_entry"), dict) else {}
+        reservation_id = str(reservation.get("ledger_id") or "")
+        inputs = job_body.get("inputs") if isinstance(job_body.get("inputs"), dict) else {}
+        live_provider_requested = media_live_provider_requested(inputs, job_body)
+        if live_provider_requested and credit_state.get("enforcement_enabled") is not True:
+            raise RuntimeError("media credit enforcement is required before live provider execution")
+        if live_provider_requested and not reservation_id:
+            raise RuntimeError("media credit enforcement requires an active reservation")
+        if not live_provider_requested or not reservation_id:
+            return
+        quote = credit_state.get("quote") if isinstance(credit_state.get("quote"), dict) else {}
+        expected_points = int(quote.get("estimated_points") or reservation.get("points") or 0)
+        expected_reference_id = str(job_body.get("idempotency_key") or "")
+        authority = self.repository.get_media_credit_reservation_authority(
+            company_id=company_id,
+            reservation_id=reservation_id,
+            expected_points=expected_points,
+            expected_reference_id=expected_reference_id,
+            allowed_reference_types=("media_job", "media_rework"),
+        )
+        if authority.get("valid_for_provider") is not True:
+            raise RuntimeError("media credit reservation authority rejected before provider execution")
+        terminal = self.repository.get_media_credit_terminal_for_reservation(
+            company_id=company_id,
+            reservation_id=reservation_id,
+        )
+        if terminal:
+            raise RuntimeError("media credit reservation is already terminal before provider execution")
 
     @staticmethod
     def _reported_media_points(provider_output: dict[str, Any], *, reserved_points: int) -> tuple[int, str]:
@@ -736,17 +875,7 @@ class LocalQueueWorker:
         for item in manifest:
             if not isinstance(item, dict):
                 continue
-            value = str(
-                item.get("asset_type")
-                or item.get("media_type")
-                or item.get("type")
-                or item.get("mime_type")
-                or ""
-            ).lower()
-            if "video" in value:
-                kinds.add("video")
-            elif "image" in value or value in {"photo", "product_photo"}:
-                kinds.add("image")
+            kinds.add(media_asset_resource_type(item))
         if len(kinds) == 1:
             return next(iter(kinds))
         return "mixed"
@@ -772,11 +901,11 @@ class LocalQueueWorker:
                 user_id=str(task.get("user_id") or "") or None,
                 operation_type="release",
                 points=points,
-                idempotency_key=f"{reservation_id}:release:v1",
+                idempotency_key=f"{reservation_id}:terminal:v2",
                 reference_type="media_job",
                 reference_id=str(job_body.get("media_job_id") or job_body.get("idempotency_key") or ""),
                 reservation_id=reservation_id,
-                details={"reason": reason},
+                details={"reason": reason, "points_source": "full_reservation_release"},
             )
         except ValueError:
             return None
@@ -822,21 +951,18 @@ class LocalQueueWorker:
         media_job_id = str(job_body.get("media_job_id") or "").strip()
         if not media_job_id:
             return None
-        try:
-            return self.repository.update_media_asset_job(
-                company_id=task["company_id"],
-                media_job_id=media_job_id,
-                status="running",
-                queue_job_id=job["job_id"],
-                details={
-                    "message": "Local worker started provider-neutral media asset pipeline.",
-                    "provider_job_key": job_body.get("provider_job_key"),
-                    "live_provider_called": False,
-                    "secret_exposed": False,
-                },
-            )
-        except Exception:
-            return None
+        return self.repository.update_media_asset_job(
+            company_id=task["company_id"],
+            media_job_id=media_job_id,
+            status="running",
+            queue_job_id=job["job_id"],
+            details={
+                "message": "Local worker started provider-neutral media asset pipeline.",
+                "provider_job_key": job_body.get("provider_job_key"),
+                "live_provider_called": False,
+                "secret_exposed": False,
+            },
+        )
 
     def _complete_media_asset_job(
         self,
@@ -846,6 +972,8 @@ class LocalQueueWorker:
         job_body: dict[str, Any],
         provider_output: dict[str, Any],
         current: dict[str, Any] | None,
+        review_ready: bool,
+        settlement_final: bool,
     ) -> dict[str, Any] | None:
         if str(provider_output.get("provider_job_key") or job_body.get("provider_job_key") or "") not in {"media.asset_generation", "media.fal_asset_generation"}:
             return current
@@ -853,6 +981,10 @@ class LocalQueueWorker:
         if not media_job_id:
             return current
         output_packet = provider_output.get("output_packet") if isinstance(provider_output.get("output_packet"), dict) else {}
+        manifest = output_packet.get("asset_manifest") if isinstance(output_packet.get("asset_manifest"), list) else []
+        credit_state = job_body.get("media_credits") if isinstance(job_body.get("media_credits"), dict) else {}
+        quote = credit_state.get("quote") if isinstance(credit_state.get("quote"), dict) else {}
+        manifest_matches_quote = media_manifest_matches_approved_quote(quote, manifest)
         validation = output_packet.get("asset_manifest_validation") if isinstance(output_packet.get("asset_manifest_validation"), dict) else {}
         safety = provider_output.get("safety") if isinstance(provider_output.get("safety"), dict) else {}
         cost_guard = output_packet.get("cost_guard") if isinstance(output_packet.get("cost_guard"), dict) else {}
@@ -869,32 +1001,41 @@ class LocalQueueWorker:
         elif not live_provider_called:
             status = "needs_rework"
             error_reason = "live_media_provider_not_called"
+        elif not manifest_matches_quote:
+            status = "needs_rework"
+            error_reason = "unpriced_video_output"
         elif validation.get("status") != "manifest_ready":
             status = "validation_failed"
             error_reason = "asset_manifest_validation_failed"
-        else:
+        elif review_ready:
             status = "waiting_review"
             error_reason = ""
-        try:
-            return self.repository.update_media_asset_job(
-                company_id=task["company_id"],
-                media_job_id=media_job_id,
-                status=status,
-                queue_job_id=job["job_id"],
-                provider_output=provider_output,
-                error_reason=error_reason,
-                details={
-                    "message": (
-                        "Live media provider returned assets; AssetManifest is waiting for review."
-                        if live_provider_called
-                        else "Media provider did not return real files; placeholder output is blocked from review and Listing writeback."
-                    ),
-                    "provider_job_key": provider_output.get("provider_job_key"),
-                    "listing_use_status": output_packet.get("asset_review", {}).get("listing_use_status") if isinstance(output_packet.get("asset_review"), dict) else "",
-                    "live_provider_called": live_provider_called,
-                    "spend_now_allowed": bool(cost_guard.get("spend_now_allowed")),
-                    "secret_exposed": False,
-                },
-            )
-        except Exception:
-            return current
+        elif settlement_final:
+            status = "needs_rework"
+            error_reason = "media_credit_settlement_not_completed"
+        else:
+            status = "provider_returned"
+            error_reason = "media_credit_settlement_pending"
+        return self.repository.update_media_asset_job(
+            company_id=task["company_id"],
+            media_job_id=media_job_id,
+            status=status,
+            queue_job_id=job["job_id"],
+            provider_output=provider_output,
+            error_reason=error_reason,
+            details={
+                "message": (
+                    "Live media provider returned assets; AssetManifest is waiting for review."
+                    if status == "waiting_review"
+                    else "Media output is not eligible for review until validation and media-credit settlement both complete."
+                ),
+                "provider_job_key": provider_output.get("provider_job_key"),
+                "listing_use_status": output_packet.get("asset_review", {}).get("listing_use_status") if isinstance(output_packet.get("asset_review"), dict) else "",
+                "live_provider_called": live_provider_called,
+                "media_credit_review_ready": review_ready,
+                "media_credit_settlement_final": settlement_final,
+                "manifest_matches_approved_quote": manifest_matches_quote,
+                "spend_now_allowed": bool(cost_guard.get("spend_now_allowed")),
+                "secret_exposed": False,
+            },
+        )

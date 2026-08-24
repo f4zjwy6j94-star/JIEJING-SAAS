@@ -84,7 +84,22 @@ from .ebay_token_refresh_adapter import EbayVaultTokenRefreshAdapter, public_tok
 from .ebay_write_adapter import EbayWriteHttpAdapter, build_ebay_write_adapter_contract, build_publish_readiness
 from .independence import build_independence_status
 from .infrastructure_drivers import build_infrastructure_driver_status
-from .media_credits import build_media_credit_summary, estimate_media_points
+from .media_asset_pipeline import (
+    is_concept_only_media_spec,
+    media_asset_is_listing_review_eligible,
+    media_asset_is_video,
+    media_manifest_matches_approved_quote,
+    missing_media_product_fact_keys,
+)
+from .media_credits import (
+    build_media_credit_summary,
+    controlled_media_acceptance_company_allowed,
+    controlled_media_acceptance_enabled,
+    controlled_media_acceptance_source_reference,
+    estimate_media_points,
+    media_live_provider_requested,
+    normalize_media_generation_inputs,
+)
 from .merchant_onboarding import (
     AUTHORIZED_CONNECTION_STATUSES,
     MerchantOnboardingValidationError,
@@ -131,6 +146,7 @@ from .product_feedback import (
 from .readiness import build_degraded_product_readiness, build_product_readiness_or_degraded
 from .repository import (
     ACTIVE_SECRET_REF_STATUSES,
+    CONTROLLED_MEDIA_CREDIT_SOURCE,
     EBAY_UNPUBLISHED_DRAFT_OAUTH_SOURCE,
     EBAY_UNPUBLISHED_DRAFT_OAUTH_STEP,
     EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE,
@@ -406,6 +422,60 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _media_orphan_reservation_stale_after_seconds() -> int:
+    raw = str(os.environ.get("JIEJING_MEDIA_QUEUE_SETUP_STALE_AFTER_SECONDS") or "900").strip()
+    try:
+        return max(30, int(raw))
+    except ValueError:
+        return 900
+
+
+def _reserve_ops_media_points(
+    repository: SaaSRepository,
+    *,
+    company_id: str,
+    user_id: str,
+    media_idempotency_key: str,
+    media_quote: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Use the private acceptance bucket when this tenant is explicitly enabled."""
+
+    if not (
+        controlled_media_acceptance_enabled()
+        and controlled_media_acceptance_company_allowed(company_id)
+    ):
+        return None
+    source_bucket = repository.get_media_credit_source(
+        company_id=company_id,
+        source_type=CONTROLLED_MEDIA_CREDIT_SOURCE,
+    )
+    source_reference = str(
+        (source_bucket or {}).get("source_reference_id")
+        or controlled_media_acceptance_source_reference(company_id)
+    )
+    reserve_operation_key = repository.media_credit_reservation_attempt_idempotency_key(
+        company_id=company_id,
+        reference_type="media_job",
+        reference_id=media_idempotency_key,
+        base_idempotency_key=f"{media_idempotency_key}:controlled-acceptance-reserve:v1",
+    )
+    return repository.reserve_media_credit_source(
+        company_id=company_id,
+        user_id=user_id,
+        source_type=CONTROLLED_MEDIA_CREDIT_SOURCE,
+        source_reference_id=source_reference,
+        points=int(media_quote["estimated_points"]),
+        idempotency_key=reserve_operation_key,
+        reference_type="media_job",
+        reference_id=media_idempotency_key,
+        details={
+            "quote": media_quote,
+            "credit_source": CONTROLLED_MEDIA_CREDIT_SOURCE,
+            "source_reference_id": source_reference,
+        },
+    )
+
+
 def initialize_repository_for_startup(repository: SaaSRepository, settings: SaaSSettings) -> Exception | None:
     try:
         repository.initialize()
@@ -492,17 +562,401 @@ def _parse_utc_datetime(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _media_asset_request_fingerprint(*, store_id: str, provider_job_key: str, inputs: dict[str, Any]) -> str:
+    """Bind a media request to its authoritative source evidence and normalized generation spec."""
+
+    canonical_inputs = _redact_secret_like(inputs)
+    if isinstance(canonical_inputs, dict):
+        canonical_inputs = dict(canonical_inputs)
+        canonical_inputs.pop("private_media_source_preflight_validated", None)
+        canonical_inputs.pop("private_media_source_hydrated", None)
+        for container in (
+            canonical_inputs,
+            canonical_inputs.get("product_facts") if isinstance(canonical_inputs.get("product_facts"), dict) else None,
+        ):
+            if not isinstance(container, dict) or not isinstance(container.get("reference_images"), list):
+                continue
+            container["reference_images"] = sorted(
+                {
+                    str(reference).strip()
+                    for reference in container["reference_images"]
+                    if str(reference or "").strip()
+                }
+            )
+    fingerprint_payload = {
+        "store_id": store_id,
+        "provider_job_key": provider_job_key,
+        "inputs": canonical_inputs,
+    }
+    return hashlib.sha256(
+        json.dumps(
+            fingerprint_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=json_default,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def _media_asset_idempotency_key(*, store_id: str, provider_job_key: str, inputs: dict[str, Any], supplied: Any = None) -> str:
     supplied_text = str(supplied or "").strip()
     if supplied_text:
         return supplied_text[:160]
-    fingerprint_payload = {
-        "store_id": store_id,
-        "provider_job_key": provider_job_key,
-        "inputs": _redact_secret_like(inputs),
+    fingerprint = _media_asset_request_fingerprint(
+        store_id=store_id,
+        provider_job_key=provider_job_key,
+        inputs=inputs,
+    )
+    return f"media:{store_id}:{fingerprint[:24]}"
+
+
+def _reconcile_media_asset_job_review_readiness(
+    repository: SaaSRepository,
+    *,
+    company_id: str,
+    media_job: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Repair the durable state after credit settlement succeeded but the final media update failed."""
+
+    if not isinstance(media_job, dict) or media_job.get("status") != "provider_returned":
+        return media_job
+    manifest = media_job.get("asset_manifest") if isinstance(media_job.get("asset_manifest"), list) else []
+    validation = media_job.get("asset_manifest_validation") if isinstance(media_job.get("asset_manifest_validation"), dict) else {}
+    asset_review = media_job.get("asset_review") if isinstance(media_job.get("asset_review"), dict) else {}
+    review_gates = asset_review.get("review_gates") if isinstance(asset_review.get("review_gates"), list) else []
+    product_fact_gate = media_job.get("product_fact_gate") if isinstance(media_job.get("product_fact_gate"), dict) else {}
+    missing_fact_keys = product_fact_gate.get("missing_fact_keys") if isinstance(product_fact_gate.get("missing_fact_keys"), list) else []
+    job_payload = media_job.get("job") if isinstance(media_job.get("job"), dict) else {}
+    job_spec = job_payload.get("job_spec") if isinstance(job_payload.get("job_spec"), dict) else {}
+    credit_state = job_spec.get("media_credits") if isinstance(job_spec.get("media_credits"), dict) else {}
+    quote = credit_state.get("quote") if isinstance(credit_state.get("quote"), dict) else {}
+    reservation_result = credit_state.get("reservation") if isinstance(credit_state.get("reservation"), dict) else {}
+    reservation_entry = reservation_result.get("ledger_entry") if isinstance(reservation_result.get("ledger_entry"), dict) else {}
+    reservation_id = str(reservation_entry.get("ledger_id") or "")
+    if credit_state.get("enforcement_enabled") is True and not reservation_id:
+        return media_job
+    if reservation_id:
+        terminal = repository.get_media_credit_terminal_for_reservation(
+            company_id=company_id,
+            reservation_id=reservation_id,
+        )
+        if not (
+            isinstance(terminal, dict)
+            and terminal.get("operation_type") == "settle"
+            and terminal.get("status") in {"completed", "settled"}
+        ):
+            return media_job
+    if not (
+        media_job.get("live_provider_called") is True
+        and manifest
+        and validation.get("status") == "manifest_ready"
+        and asset_review.get("status") == "waiting_for_human_asset_review"
+        and review_gates
+        and all(isinstance(gate, dict) and gate.get("status") == "needs_review" for gate in review_gates)
+        and not missing_fact_keys
+        and media_manifest_matches_approved_quote(quote, manifest)
+        and all(isinstance(asset, dict) and media_asset_is_listing_review_eligible(asset) for asset in manifest)
+    ):
+        return media_job
+    return repository.update_media_asset_job(
+        company_id=company_id,
+        media_job_id=str(media_job.get("media_job_id") or ""),
+        status="waiting_review",
+        error_reason="",
+        expected_status="provider_returned",
+        details={
+            "event": "media_credit_settlement_read_repair",
+            "message": "Authoritative settled credit ledger restored the final media review state.",
+            "reservation_id_present": bool(reservation_id),
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        },
+    )
+
+
+class _CanonicalMediaQueueAlreadyExists(RuntimeError):
+    def __init__(self, media_job: dict[str, Any]) -> None:
+        super().__init__("canonical media queue already exists")
+        self.media_job = media_job
+
+
+def _prepare_link_activate_media_queue(
+    repository: SaaSRepository,
+    *,
+    company_id: str,
+    task: dict[str, Any],
+    media_asset_job: dict[str, Any],
+    provider_job_key: str,
+    contract: dict[str, Any],
+    safe_inputs: dict[str, Any],
+    media_idempotency_key: str,
+    media_credit_state: dict[str, Any] | None,
+    secret_ref: str,
+    run_mode: str,
+    creation_state: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Durably prepare, link, then activate one chargeable media queue graph."""
+
+    creation_state["stage"] = "create_queue_job"
+    job = repository.create_queue_job(
+        company_id=company_id,
+        task_id=task["task_id"],
+        max_attempts=int(contract.get("max_attempts") or 1),
+        initial_status="preparing",
+        publish=False,
+        job_data={
+            "kind": "provider_job",
+            "provider_job_key": provider_job_key,
+            "provider_family": contract.get("provider_family"),
+            "queue": contract.get("queue"),
+            "contract": contract,
+            "inputs": safe_inputs,
+            "secret_ref": secret_ref,
+            "media_job_id": media_asset_job.get("media_job_id") or "",
+            "idempotency_key": media_idempotency_key,
+            "media_credits": media_credit_state,
+            "run_mode": run_mode,
+            "queue_setup_protocol": "media_queue_saga_v1",
+            "setup_committed": False,
+            "live_provider_called": False,
+            "real_platform_writes_enabled": False,
+        },
+    )
+    creation_state["queue_job"] = job
+    creation_state["stage"] = "link_media_queue"
+    media_asset_job = repository.update_media_asset_job(
+        company_id=company_id,
+        media_job_id=media_asset_job["media_job_id"],
+        status="queued",
+        queue_job_id=job["job_id"],
+        details={
+            "message": "Media asset job linked to SaaS queue job.",
+            "queue": contract.get("queue"),
+            "live_provider_called": False,
+            "spend_now_allowed": False,
+            "secret_exposed": False,
+        },
+    )
+    creation_state["media_asset_job"] = media_asset_job
+    creation_state["stage"] = "activate_queue"
+    job = repository.activate_prepared_queue_job(job_id=job["job_id"], company_id=company_id)
+    creation_state["queue_job"] = job
+    return media_asset_job, job
+
+
+def _create_provider_job_queue_records(
+    repository: SaaSRepository,
+    *,
+    company_id: str,
+    store_id: str,
+    user_id: str,
+    title: str,
+    provider_job_key: str,
+    contract: dict[str, Any],
+    contract_version: str,
+    safe_inputs: dict[str, Any],
+    media_idempotency_key: str,
+    media_request_fingerprint: str,
+    media_credit_state: dict[str, Any] | None,
+    is_media_provider_job: bool,
+    secret_ref: str,
+    run_mode: str,
+    creation_state: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any]]:
+    """Create the local task graph while exposing partial state to the compensating saga."""
+
+    creation_state["stage"] = "create_task"
+    task = repository.create_task(
+        company_id=company_id,
+        store_id=store_id,
+        user_id=user_id,
+        task_type="provider_job",
+        title=title,
+        input_data={
+            "provider_job_key": provider_job_key,
+            "provider_family": contract.get("provider_family"),
+            "store_id": store_id,
+            "inputs": safe_inputs,
+            "contract_version": contract_version,
+            "media_asset_idempotency_key": media_idempotency_key,
+            "media_credits": media_credit_state,
+            "real_platform_writes_enabled": False,
+        },
+    )
+    creation_state["task"] = task
+    media_asset_job = None
+    if is_media_provider_job:
+        creation_state["stage"] = "create_media_asset_job"
+        media_asset_job = repository.create_media_asset_job(
+            company_id=company_id,
+            store_id=store_id,
+            task_id=task["task_id"],
+            user_id=user_id,
+            provider_job_key=provider_job_key,
+            idempotency_key=media_idempotency_key,
+            job_spec={
+                "provider_job_key": provider_job_key,
+                "contract_version": contract_version,
+                "inputs": safe_inputs,
+                "request_fingerprint": media_request_fingerprint,
+                "merchant_visible_provider_name": False,
+                "live_media_provider_call_allowed": False,
+                "spend_now_allowed": False,
+                "media_credits": media_credit_state,
+                "secret_exposed": False,
+            },
+            status="pending",
+        )
+        if str(media_asset_job.get("task_id") or "") != str(task.get("task_id") or ""):
+            creation_state["canonical_media_asset_job"] = media_asset_job
+            raise _CanonicalMediaQueueAlreadyExists(media_asset_job)
+        creation_state["media_asset_job"] = media_asset_job
+    if media_asset_job:
+        media_asset_job, job = _prepare_link_activate_media_queue(
+            repository,
+            company_id=company_id,
+            task=task,
+            media_asset_job=media_asset_job,
+            provider_job_key=provider_job_key,
+            contract=contract,
+            safe_inputs=safe_inputs,
+            media_idempotency_key=media_idempotency_key,
+            media_credit_state=media_credit_state,
+            secret_ref=secret_ref,
+            run_mode=run_mode,
+            creation_state=creation_state,
+        )
+    else:
+        creation_state["stage"] = "create_queue_job"
+        job = repository.create_queue_job(
+            company_id=company_id,
+            task_id=task["task_id"],
+            max_attempts=int(contract.get("max_attempts") or 1),
+            job_data={
+                "kind": "provider_job",
+                "provider_job_key": provider_job_key,
+                "provider_family": contract.get("provider_family"),
+                "queue": contract.get("queue"),
+                "contract": contract,
+                "inputs": safe_inputs,
+                "secret_ref": secret_ref,
+                "media_job_id": "",
+                "idempotency_key": media_idempotency_key,
+                "media_credits": media_credit_state,
+                "run_mode": run_mode,
+                "queue_setup_protocol": "",
+                "setup_committed": True,
+                "live_provider_called": False,
+                "real_platform_writes_enabled": False,
+            },
+        )
+        creation_state["queue_job"] = job
+    creation_state["stage"] = "committed"
+    return task, media_asset_job, job
+
+
+def _compensate_provider_queue_creation_failure(
+    repository: SaaSRepository,
+    *,
+    company_id: str,
+    user_id: str,
+    creation_state: dict[str, Any],
+    media_credit_state: dict[str, Any] | None,
+    media_idempotency_key: str,
+) -> dict[str, Any]:
+    """Fail closed and release a pre-provider reservation after partial queue creation."""
+
+    result = {
+        "queue_disabled": False,
+        "media_job_blocked": False,
+        "task_failed": False,
+        "reservation_released": False,
+        "manual_reconcile_required": False,
+        "provider_call_triggered": False,
+        "secret_exposed": False,
     }
-    fingerprint = hashlib.sha256(json.dumps(fingerprint_payload, ensure_ascii=False, sort_keys=True, default=json_default).encode("utf-8")).hexdigest()[:24]
-    return f"media:{store_id}:{fingerprint}"
+    queue_job = creation_state.get("queue_job") if isinstance(creation_state.get("queue_job"), dict) else {}
+    if queue_job.get("job_id"):
+        try:
+            failed_queue = repository.fail_close_queue_job_before_provider(
+                job_id=str(queue_job["job_id"]),
+                company_id=company_id,
+                error_code="media_queue_creation_failed_before_provider",
+            )
+            result["queue_disabled"] = failed_queue.get("fail_closed_before_provider") is True
+        except Exception:
+            pass
+        if not result["queue_disabled"]:
+            result["manual_reconcile_required"] = True
+            result["provider_call_triggered"] = None
+            return result
+    media_job = creation_state.get("media_asset_job") if isinstance(creation_state.get("media_asset_job"), dict) else {}
+    if media_job.get("media_job_id"):
+        try:
+            blocked_media_job = repository.update_media_asset_job(
+                company_id=company_id,
+                media_job_id=str(media_job["media_job_id"]),
+                status="needs_rework",
+                error_reason="media_queue_creation_failed_before_provider",
+                details={"provider_call_triggered": False, "real_platform_writes_enabled": False, "secret_exposed": False},
+            )
+            result["media_job_blocked"] = blocked_media_job.get("status") == "needs_rework"
+        except Exception:
+            pass
+    task = creation_state.get("task") if isinstance(creation_state.get("task"), dict) else {}
+    if task.get("task_id"):
+        try:
+            repository.update_task_status(
+                task_id=str(task["task_id"]),
+                company_id=company_id,
+                status="failed",
+                output={"error_code": "media_queue_creation_failed_before_provider", "provider_call_triggered": False},
+                audit_summary="Provider job queue creation failed before any provider call.",
+            )
+            result["task_failed"] = True
+        except Exception:
+            pass
+    credit_state = media_credit_state if isinstance(media_credit_state, dict) else {}
+    reservation_result = credit_state.get("reservation") if isinstance(credit_state.get("reservation"), dict) else {}
+    reservation = reservation_result.get("ledger_entry") if isinstance(reservation_result.get("ledger_entry"), dict) else {}
+    reservation_id = str(reservation.get("ledger_id") or "")
+    if reservation_id:
+        try:
+            terminal = repository.get_media_credit_terminal_for_reservation(
+                company_id=company_id,
+                reservation_id=reservation_id,
+            )
+            if not terminal:
+                repository.apply_media_credit_operation(
+                    company_id=company_id,
+                    user_id=user_id or None,
+                    operation_type="release",
+                    points=int(reservation.get("points") or 0),
+                    idempotency_key=f"{reservation_id}:terminal:v2",
+                    reference_type="media_job",
+                    reference_id=media_idempotency_key,
+                    reservation_id=reservation_id,
+                    details={
+                        "reason": "media_queue_creation_failed_before_provider",
+                        "points_source": "full_reservation_release",
+                    },
+                )
+                terminal = repository.get_media_credit_terminal_for_reservation(
+                    company_id=company_id,
+                    reservation_id=reservation_id,
+                )
+            result["reservation_released"] = bool(
+                isinstance(terminal, dict) and terminal.get("operation_type") == "release"
+            )
+        except Exception:
+            pass
+    result["manual_reconcile_required"] = bool(
+        (queue_job.get("job_id") and not result["queue_disabled"])
+        or (media_job.get("media_job_id") and not result["media_job_blocked"])
+        or (task.get("task_id") and not result["task_failed"])
+        or (reservation_id and not result["reservation_released"])
+    )
+    return result
 
 
 def _sanitize_media_source_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
@@ -2558,6 +3012,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not media_job:
                 self._send_error(HTTPStatus.NOT_FOUND, "media asset job not found")
                 return
+            media_job = _reconcile_media_asset_job_review_readiness(
+                self.repository,
+                company_id=identity["company_id"],
+                media_job=media_job,
+            )
             self._send_json({"media_asset_job": media_job, "secret_exposed": False})
             return
 
@@ -3503,10 +3962,22 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not media_job:
                 self._send_error(HTTPStatus.NOT_FOUND, "media asset job not found")
                 return
+            media_job = _reconcile_media_asset_job_review_readiness(
+                self.repository,
+                company_id=identity["company_id"],
+                media_job=media_job,
+            )
             manifest = media_job.get("asset_manifest") if isinstance(media_job.get("asset_manifest"), list) else []
             if not manifest:
                 self._send_error(HTTPStatus.BAD_REQUEST, "media asset job has no asset manifest to review")
                 return
+            validation = (
+                media_job.get("asset_manifest_validation")
+                if isinstance(media_job.get("asset_manifest_validation"), dict)
+                else {}
+            )
+            asset_review = media_job.get("asset_review") if isinstance(media_job.get("asset_review"), dict) else {}
+            review_gates = asset_review.get("review_gates") if isinstance(asset_review.get("review_gates"), list) else []
             live_provider_called = media_job.get("live_provider_called") is True
             real_asset_references = [
                 str(item.get("url_or_file_path") or item.get("url") or item.get("file_path") or "").strip()
@@ -3517,8 +3988,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 reference.startswith("https://") for reference in real_asset_references
             )
             video_assets_present = any(
-                "video" in str(item.get("asset_type") or item.get("type") or "").lower()
-                or str(item.get("url_or_file_path") or item.get("url") or "").lower().split("?", 1)[0].endswith((".mp4", ".webm", ".mov"))
+                media_asset_is_video(item)
                 for item in manifest
                 if isinstance(item, dict)
             )
@@ -3532,18 +4002,84 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             job_inputs = job_spec.get("inputs") if isinstance(job_spec.get("inputs"), dict) else {}
             creative_job_spec = job_inputs.get("creative_job_spec") if isinstance(job_inputs.get("creative_job_spec"), dict) else {}
             product_fact_gate = media_job.get("product_fact_gate") if isinstance(media_job.get("product_fact_gate"), dict) else {}
-            concept_only = creative_job_spec.get("output_safety_mode") == "concept_reference_only"
+            concept_only = bool(
+                is_concept_only_media_spec(creative_job_spec)
+                or any(
+                    str(item.get("asset_type") or "").strip().lower() == "concept_reference_image"
+                    or str(item.get("listing_use_status") or "").strip().lower()
+                    == "concept_only_not_eligible_for_listing"
+                    for item in manifest
+                    if isinstance(item, dict)
+                )
+            )
             missing_fact_keys = product_fact_gate.get("missing_fact_keys") if isinstance(product_fact_gate.get("missing_fact_keys"), list) else []
-            if decision == "approve_for_listing_draft" and (not live_provider_called or not has_only_reviewable_asset_references):
+            reservation_state = job_spec.get("media_credits") if isinstance(job_spec.get("media_credits"), dict) else {}
+            media_quote = reservation_state.get("quote") if isinstance(reservation_state.get("quote"), dict) else {}
+            manifest_matches_quote = media_manifest_matches_approved_quote(media_quote, manifest)
+            reservation_result = (
+                reservation_state.get("reservation")
+                if isinstance(reservation_state.get("reservation"), dict)
+                else {}
+            )
+            reservation_entry = (
+                reservation_result.get("ledger_entry")
+                if isinstance(reservation_result.get("ledger_entry"), dict)
+                else {}
+            )
+            reservation_id = str(reservation_entry.get("ledger_id") or "")
+            credit_terminal = (
+                self.repository.get_media_credit_terminal_for_reservation(
+                    company_id=identity["company_id"],
+                    reservation_id=reservation_id,
+                )
+                if reservation_id
+                else None
+            )
+            credit_settled = bool(
+                not reservation_id
+                or (
+                    isinstance(credit_terminal, dict)
+                    and credit_terminal.get("operation_type") == "settle"
+                    and credit_terminal.get("status") in {"completed", "settled"}
+                )
+            )
+            if decision == "approve_for_listing_draft" and media_job.get("status") != "waiting_review":
                 self._send_error(
                     HTTPStatus.UNPROCESSABLE_ENTITY,
-                    "素材服务没有返回可核验的真实文件，本次结果不能审核或回写 Listing",
+                    "素材任务尚未同时完成文件校验与素材点结算，当前不能审核或回写 Listing",
+                )
+                return
+            if decision == "approve_for_listing_draft" and (
+                validation.get("status") != "manifest_ready"
+                or asset_review.get("status") != "waiting_for_human_asset_review"
+                or not review_gates
+                or not all(isinstance(gate, dict) and gate.get("status") == "needs_review" for gate in review_gates)
+                or bool(missing_fact_keys)
+                or not credit_settled
+                or not manifest_matches_quote
+            ):
+                self._send_error(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "素材清单、商品事实或素材点结算尚未通过，当前不能审核或回写 Listing",
                 )
                 return
             if decision == "approve_for_listing_draft" and (concept_only or "reference_images_or_source_notes" in missing_fact_keys):
                 self._send_error(
                     HTTPStatus.UNPROCESSABLE_ENTITY,
                     "concept reference needs a real product source image before Listing draft approval",
+                )
+                return
+            if decision == "approve_for_listing_draft" and (
+                not live_provider_called
+                or not has_only_reviewable_asset_references
+                or not all(
+                    isinstance(item, dict) and media_asset_is_listing_review_eligible(item)
+                    for item in manifest
+                )
+            ):
+                self._send_error(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "素材服务没有返回可核验的真实文件，本次结果不能审核或回写 Listing",
                 )
                 return
             required_confirmations = [
@@ -5732,9 +6268,25 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 return
             if is_media_provider_job:
                 safe_inputs = _sanitize_media_source_inputs(safe_inputs)
+                try:
+                    safe_inputs = normalize_media_generation_inputs(safe_inputs)
+                except ValueError as exc:
+                    self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                    return
+            live_media_requested = bool(
+                is_media_provider_job and media_live_provider_requested(safe_inputs, body)
+            )
+            if is_media_provider_job:
+                safe_inputs["live_provider_requested"] = live_media_requested
             media_idempotency_key = ""
+            media_request_fingerprint = ""
             media_credit_state: dict[str, Any] | None = None
             if is_media_provider_job:
+                media_request_fingerprint = _media_asset_request_fingerprint(
+                    store_id=store_id,
+                    provider_job_key=provider_job_key,
+                    inputs=safe_inputs,
+                )
                 media_idempotency_key = _media_asset_idempotency_key(
                     store_id=store_id,
                     provider_job_key=provider_job_key,
@@ -5746,6 +6298,34 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     idempotency_key=media_idempotency_key,
                 )
                 if existing_media_job:
+                    existing_media_job = _reconcile_media_asset_job_review_readiness(
+                        self.repository,
+                        company_id=identity["company_id"],
+                        media_job=existing_media_job,
+                    ) or existing_media_job
+                    existing_job = existing_media_job.get("job") if isinstance(existing_media_job.get("job"), dict) else {}
+                    existing_job_spec = existing_job.get("job_spec") if isinstance(existing_job.get("job_spec"), dict) else {}
+                    existing_inputs = existing_job_spec.get("inputs") if isinstance(existing_job_spec.get("inputs"), dict) else {}
+                    existing_fingerprint = str(existing_job_spec.get("request_fingerprint") or "").strip()
+                    if not existing_fingerprint:
+                        existing_fingerprint = _media_asset_request_fingerprint(
+                            store_id=str(existing_media_job.get("store_id") or store_id),
+                            provider_job_key=str(existing_job_spec.get("provider_job_key") or existing_media_job.get("provider_job_key") or provider_job_key),
+                            inputs=existing_inputs,
+                        )
+                    if existing_fingerprint != media_request_fingerprint:
+                        self._send_json(
+                            {
+                                "error": "这个任务键已经绑定到另一份商品素材或生成规格，请刷新后重新发起。",
+                                "status": int(HTTPStatus.CONFLICT),
+                                "idempotency_conflict": True,
+                                "provider_call_triggered": False,
+                                "triggers_real_charge": False,
+                                "secret_exposed": False,
+                            },
+                            status=HTTPStatus.CONFLICT,
+                        )
+                        return
                     existing_task = self.repository.get_task(company_id=identity["company_id"], task_id=existing_media_job["task_id"])
                     existing_queue = None
                     if existing_media_job.get("queue_job_id"):
@@ -5768,6 +6348,67 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         status=HTTPStatus.ACCEPTED,
                     )
                     return
+                if live_media_requested:
+                    product_facts = (
+                        dict(safe_inputs.get("product_facts"))
+                        if isinstance(safe_inputs.get("product_facts"), dict)
+                        else {}
+                    )
+                    source_asset_id = str(product_facts.get("source_asset_id") or "").strip()
+                    if source_asset_id:
+                        try:
+                            source_asset, _source_content = self.media_source_asset_store.read_for_provider(
+                                asset_id=source_asset_id,
+                                company_id=identity["company_id"],
+                                store_id=store_id,
+                            )
+                        except MediaSourceAssetError as exc:
+                            self._send_json(
+                                {
+                                    "error": "商品来源图片不可用，请重新上传后再生成。",
+                                    "status": int(HTTPStatus.UNPROCESSABLE_ENTITY),
+                                    "missing_inputs": [f"private_media_source_{exc.code}"],
+                                    "provider_call_triggered": False,
+                                    "triggers_real_charge": False,
+                                    "secret_exposed": False,
+                                },
+                                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                            )
+                            return
+                        supplied_sha256 = str(product_facts.get("source_image_sha256") or "").strip().lower()
+                        if supplied_sha256 and supplied_sha256 != source_asset.sha256:
+                            self._send_json(
+                                {
+                                    "error": "商品来源图片指纹不一致，请重新上传后再生成。",
+                                    "status": int(HTTPStatus.CONFLICT),
+                                    "source_integrity_conflict": True,
+                                    "provider_call_triggered": False,
+                                    "triggers_real_charge": False,
+                                    "secret_exposed": False,
+                                },
+                                status=HTTPStatus.CONFLICT,
+                            )
+                            return
+                        product_facts["source_image_sha256"] = source_asset.sha256
+                        safe_inputs["product_facts"] = product_facts
+                        safe_inputs["private_media_source_preflight_validated"] = True
+                preflight_missing = missing_media_product_fact_keys(safe_inputs)
+                if safe_inputs.get("commercial_rights_confirmed") is not True:
+                    preflight_missing.append("commercial_use_rights_authorization")
+                preflight_missing = list(dict.fromkeys(preflight_missing))
+                if live_media_requested and preflight_missing:
+                    self._send_json(
+                        {
+                            "error": "商品事实、来源图片或商用权确认尚未完整，本次没有进入生成队列。",
+                            "status": int(HTTPStatus.UNPROCESSABLE_ENTITY),
+                            "missing_inputs": preflight_missing,
+                            "provider_call_triggered": False,
+                            "triggers_real_charge": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                    )
+                    return
                 media_quote = estimate_media_points(safe_inputs)
                 media_credit_state = {
                     "quote": media_quote,
@@ -5776,30 +6417,80 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "provider_neutral": True,
                     "secret_exposed": False,
                 }
-                if media_credit_state["enforcement_enabled"] and bool(safe_inputs.get("live_provider_requested")):
-                    if media_quote.get("chargeable") is not True:
+                if live_media_requested and media_credit_state["enforcement_enabled"] is not True:
+                    self._send_json(
+                        {
+                            "error": "真实素材生成的扣点保护尚未开启，本次没有调用生成服务。",
+                            "status": int(HTTPStatus.SERVICE_UNAVAILABLE),
+                            "failure_code": "media_credit_enforcement_required",
+                            "retryable": False,
+                            "provider_call_triggered": False,
+                            "triggers_real_charge": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.SERVICE_UNAVAILABLE,
+                    )
+                    return
+                if live_media_requested and media_quote.get("chargeable") is not True:
+                    self._send_json(
+                        {
+                            "error": "视频素材点价格尚未开放，本次任务没有进入生成队列。",
+                            "status": int(HTTPStatus.CONFLICT),
+                            "media_quote": media_quote,
+                            "triggers_real_charge": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.CONFLICT,
+                    )
+                    return
+                if media_credit_state["enforcement_enabled"] and live_media_requested:
+                    orphan_recovery = self.repository.recover_stale_orphan_media_credit_reservations(
+                        company_id=identity["company_id"],
+                        reference_id=media_idempotency_key,
+                        stale_after_seconds=_media_orphan_reservation_stale_after_seconds(),
+                        limit=5,
+                    )
+                    if orphan_recovery.get("status") == "attention_required":
                         self._send_json(
                             {
-                                "error": "视频素材点价格尚未开放，本次任务没有进入生成队列。",
-                                "status": int(HTTPStatus.CONFLICT),
-                                "media_quote": media_quote,
+                                "error": "上一次素材任务的预占记录需要后台安全对账，本次没有进入生成队列。",
+                                "status": int(HTTPStatus.SERVICE_UNAVAILABLE),
+                                "failure_code": "media_reservation_recovery_required",
+                                "retryable": True,
+                                "provider_call_triggered": False,
                                 "triggers_real_charge": False,
                                 "secret_exposed": False,
                             },
-                            status=HTTPStatus.CONFLICT,
+                            status=HTTPStatus.SERVICE_UNAVAILABLE,
                         )
                         return
                     try:
-                        media_credit_state["reservation"] = self.repository.apply_media_credit_operation(
+                        ops_reservation = _reserve_ops_media_points(
+                            self.repository,
                             company_id=identity["company_id"],
                             user_id=identity["user_id"],
-                            operation_type="reserve",
-                            points=int(media_quote["estimated_points"]),
-                            idempotency_key=f"{media_idempotency_key}:reserve:v1",
-                            reference_type="media_job",
-                            reference_id=media_idempotency_key,
-                            details={"quote": media_quote},
+                            media_idempotency_key=media_idempotency_key,
+                            media_quote=media_quote,
                         )
+                        if ops_reservation is None:
+                            reserve_operation_key = self.repository.media_credit_reservation_attempt_idempotency_key(
+                                company_id=identity["company_id"],
+                                reference_type="media_job",
+                                reference_id=media_idempotency_key,
+                                base_idempotency_key=f"{media_idempotency_key}:reserve:v1",
+                            )
+                            media_credit_state["reservation"] = self.repository.apply_media_credit_operation(
+                                company_id=identity["company_id"],
+                                user_id=identity["user_id"],
+                                operation_type="reserve",
+                                points=int(media_quote["estimated_points"]),
+                                idempotency_key=reserve_operation_key,
+                                reference_type="media_job",
+                                reference_id=media_idempotency_key,
+                                details={"quote": media_quote},
+                            )
+                        else:
+                            media_credit_state["reservation"] = ops_reservation
                     except ValueError as exc:
                         if "insufficient" not in str(exc).lower():
                             raise
@@ -5818,79 +6509,152 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             status=HTTPStatus.PAYMENT_REQUIRED,
                         )
                         return
-            task = self.repository.create_task(
-                company_id=identity["company_id"],
-                store_id=store_id,
-                user_id=identity["user_id"],
-                task_type="provider_job",
-                title=str(body.get("title") or f"Provider job: {contract.get('label') or provider_job_key}"),
-                input_data={
-                    "provider_job_key": provider_job_key,
-                    "provider_family": contract.get("provider_family"),
-                    "store_id": store_id,
-                    "inputs": safe_inputs,
-                    "contract_version": catalog.get("contract_version"),
-                    "media_asset_idempotency_key": media_idempotency_key,
-                    "media_credits": media_credit_state,
-                    "real_platform_writes_enabled": False,
-                },
-            )
-            media_asset_job = None
-            if is_media_provider_job:
-                media_asset_job = self.repository.create_media_asset_job(
+                reservation_result = (
+                    media_credit_state.get("reservation")
+                    if isinstance(media_credit_state.get("reservation"), dict)
+                    else {}
+                )
+                if reservation_result.get("duplicate_request") is True:
+                    canonical_media_job = self.repository.get_media_asset_job_by_idempotency(
+                        company_id=identity["company_id"],
+                        idempotency_key=media_idempotency_key,
+                    )
+                    if not canonical_media_job:
+                        self._send_json(
+                            {
+                                "error": "同一素材任务正在建立安全队列，请稍后读取原任务状态。",
+                                "status": int(HTTPStatus.CONFLICT),
+                                "failure_code": "media_queue_setup_in_progress",
+                                "retryable": True,
+                                "provider_call_triggered": False,
+                                "triggers_real_charge": False,
+                                "secret_exposed": False,
+                            },
+                            status=HTTPStatus.CONFLICT,
+                        )
+                        return
+                    canonical_task = self.repository.get_task(
+                        company_id=identity["company_id"],
+                        task_id=canonical_media_job["task_id"],
+                    )
+                    canonical_queue = (
+                        self.repository.get_queue_job(
+                            job_id=canonical_media_job["queue_job_id"],
+                            company_id=identity["company_id"],
+                        )
+                        if canonical_media_job.get("queue_job_id")
+                        else None
+                    )
+                    self._send_json(
+                        {
+                            "task": canonical_task,
+                            "queue_job": canonical_queue,
+                            "provider_job_contract": contract,
+                            "worker_result": None,
+                            "provider_job": (canonical_task or {}).get("output") if isinstance((canonical_task or {}).get("output"), dict) else None,
+                            "media_asset_job": canonical_media_job,
+                            "idempotent_replay": True,
+                            "real_platform_writes_enabled": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.ACCEPTED,
+                    )
+                    return
+            creation_state: dict[str, Any] = {}
+            try:
+                task, media_asset_job, job = _create_provider_job_queue_records(
+                    self.repository,
                     company_id=identity["company_id"],
                     store_id=store_id,
-                    task_id=task["task_id"],
                     user_id=identity["user_id"],
+                    title=str(body.get("title") or f"Provider job: {contract.get('label') or provider_job_key}"),
                     provider_job_key=provider_job_key,
-                    idempotency_key=media_idempotency_key,
-                    job_spec={
-                        "provider_job_key": provider_job_key,
-                        "contract_version": catalog.get("contract_version"),
-                        "inputs": safe_inputs,
-                        "merchant_visible_provider_name": False,
-                        "live_media_provider_call_allowed": False,
-                        "spend_now_allowed": False,
-                        "media_credits": media_credit_state,
-                        "secret_exposed": False,
-                    },
-                    status="pending",
+                    contract=contract,
+                    contract_version=str(catalog.get("contract_version") or ""),
+                    safe_inputs=safe_inputs,
+                    media_idempotency_key=media_idempotency_key,
+                    media_request_fingerprint=media_request_fingerprint,
+                    media_credit_state=media_credit_state,
+                    is_media_provider_job=is_media_provider_job,
+                    secret_ref=str(body.get("secret_ref") or ""),
+                    run_mode=str(body.get("run_mode") or "queued"),
+                    creation_state=creation_state,
                 )
-            max_attempts = int(contract.get("max_attempts") or 1)
-            job = self.repository.create_queue_job(
-                company_id=identity["company_id"],
-                task_id=task["task_id"],
-                max_attempts=max_attempts,
-                job_data={
-                    "kind": "provider_job",
-                    "provider_job_key": provider_job_key,
-                    "provider_family": contract.get("provider_family"),
-                    "queue": contract.get("queue"),
-                    "contract": contract,
-                    "inputs": safe_inputs,
-                    "secret_ref": str(body.get("secret_ref") or ""),
-                    "media_job_id": media_asset_job.get("media_job_id") if media_asset_job else "",
-                    "idempotency_key": media_idempotency_key,
-                    "media_credits": media_credit_state,
-                    "run_mode": body.get("run_mode") or "queued",
-                    "live_provider_called": False,
-                    "real_platform_writes_enabled": False,
-                },
-            )
-            if media_asset_job:
-                media_asset_job = self.repository.update_media_asset_job(
+            except _CanonicalMediaQueueAlreadyExists as conflict:
+                duplicate_task = creation_state.get("task") if isinstance(creation_state.get("task"), dict) else {}
+                if duplicate_task.get("task_id"):
+                    try:
+                        self.repository.update_task_status(
+                            task_id=str(duplicate_task["task_id"]),
+                            company_id=identity["company_id"],
+                            status="failed",
+                            output={"error_code": "duplicate_media_queue_setup_loser", "provider_call_triggered": False},
+                            audit_summary="Duplicate media queue setup stopped before queue creation.",
+                        )
+                    except Exception:
+                        pass
+                canonical_media_job = conflict.media_job
+                canonical_task = self.repository.get_task(
                     company_id=identity["company_id"],
-                    media_job_id=media_asset_job["media_job_id"],
-                    status="queued",
-                    queue_job_id=job["job_id"],
-                    details={
-                        "message": "Media asset job linked to SaaS queue job.",
-                        "queue": contract.get("queue"),
-                        "live_provider_called": False,
-                        "spend_now_allowed": False,
+                    task_id=str(canonical_media_job.get("task_id") or ""),
+                )
+                canonical_queue = (
+                    self.repository.get_queue_job(
+                        job_id=str(canonical_media_job.get("queue_job_id") or ""),
+                        company_id=identity["company_id"],
+                    )
+                    if canonical_media_job.get("queue_job_id")
+                    else None
+                )
+                self._send_json(
+                    {
+                        "task": canonical_task,
+                        "queue_job": canonical_queue,
+                        "provider_job_contract": contract,
+                        "worker_result": None,
+                        "provider_job": None,
+                        "media_asset_job": canonical_media_job,
+                        "idempotent_replay": True,
+                        "provider_call_triggered": False,
+                        "real_platform_writes_enabled": False,
                         "secret_exposed": False,
                     },
+                    status=HTTPStatus.ACCEPTED,
                 )
+                return
+            except Exception:
+                compensation = _compensate_provider_queue_creation_failure(
+                    self.repository,
+                    company_id=identity["company_id"],
+                    user_id=identity["user_id"],
+                    creation_state=creation_state,
+                    media_credit_state=media_credit_state,
+                    media_idempotency_key=media_idempotency_key,
+                )
+                compensation_complete = compensation.get("manual_reconcile_required") is not True
+                self._send_json(
+                    {
+                        "error": (
+                            "任务没有安全进入队列，已阻止外部调用并回滚素材点预占。"
+                            if compensation_complete
+                            else "任务队列结果需要后台对账；为避免重复调用，素材点预占暂不释放。"
+                        ),
+                        "status": int(HTTPStatus.SERVICE_UNAVAILABLE),
+                        "failure_code": "media_queue_setup_failed",
+                        "failure_stage": str(creation_state.get("stage") or "create_task"),
+                        "retryable": False,
+                        "retry_requires_new_attempt_key": True,
+                        "compensation": compensation,
+                        "provider_call_triggered": compensation.get("provider_call_triggered"),
+                        "triggers_real_charge": (
+                            False if compensation.get("provider_call_triggered") is False else None
+                        ),
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+                return
             worker_result = None
             run_mode = str(body.get("run_mode") or "queued")
             if run_mode in {"inline", "enqueue_and_wait", "local_worker_now"}:
@@ -7132,6 +7896,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not original:
                 self._send_error(HTTPStatus.NOT_FOUND, "media asset job not found")
                 return
+            original = _reconcile_media_asset_job_review_readiness(
+                self.repository,
+                company_id=identity["company_id"],
+                media_job=original,
+            ) or original
             if str(original.get("status") or "") in {"pending", "queued", "running", "provider_returned"}:
                 self._send_error(HTTPStatus.CONFLICT, "media asset job is still running and cannot be retried")
                 return
@@ -7173,6 +7942,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "immutable_prior_versions": True,
                 "secret_exposed": False,
             }
+            try:
+                safe_inputs = normalize_media_generation_inputs(safe_inputs)
+            except ValueError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
             provider_job_key = str(original.get("provider_job_key") or "media.asset_generation")
             catalog = build_provider_job_contract_catalog()
             contracts = {item.get("key"): item for item in catalog.get("contracts", [])}
@@ -7190,6 +7964,26 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             existing = self.repository.get_media_asset_job_by_idempotency(company_id=identity["company_id"], idempotency_key=retry_key)
             if existing:
                 self._send_json({"media_asset_job": existing, "idempotent_replay": True, "secret_exposed": False}, status=HTTPStatus.ACCEPTED)
+                return
+            orphan_recovery = self.repository.recover_stale_orphan_media_credit_reservations(
+                company_id=identity["company_id"],
+                reference_id=retry_key,
+                stale_after_seconds=_media_orphan_reservation_stale_after_seconds(),
+                limit=5,
+            )
+            if orphan_recovery.get("status") == "attention_required":
+                self._send_json(
+                    {
+                        "error": "上一次素材重做的预占记录需要后台安全对账，本次没有进入生成队列。",
+                        "status": int(HTTPStatus.SERVICE_UNAVAILABLE),
+                        "failure_code": "media_reservation_recovery_required",
+                        "retryable": True,
+                        "provider_call_triggered": False,
+                        "triggers_real_charge": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
                 return
             reservation = self.repository.reserve_media_rework(
                 company_id=identity["company_id"],
@@ -7227,31 +8021,57 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "provider_neutral": True,
                 "secret_exposed": False,
             }
-            if media_credit_state["enforcement_enabled"] and bool(safe_inputs.get("live_provider_requested")):
-                if media_quote.get("chargeable") is not True:
-                    self.repository.release_media_rework_reservation(
-                        company_id=identity["company_id"],
-                        parent_media_job_id=original["media_job_id"],
-                        version=version,
-                    )
-                    self._send_json(
-                        {
-                            "error": "视频素材点价格尚未开放，重做任务没有进入生成队列。",
-                            "status": int(HTTPStatus.CONFLICT),
-                            "media_quote": media_quote,
-                            "triggers_real_charge": False,
-                            "secret_exposed": False,
-                        },
-                        status=HTTPStatus.CONFLICT,
-                    )
-                    return
+            live_media_requested = media_live_provider_requested(safe_inputs, body)
+            if live_media_requested and media_credit_state["enforcement_enabled"] is not True:
+                self.repository.release_media_rework_reservation(
+                    company_id=identity["company_id"],
+                    parent_media_job_id=original["media_job_id"],
+                    version=version,
+                )
+                self._send_json(
+                    {
+                        "error": "真实素材重做的扣点保护尚未开启，本次没有调用生成服务。",
+                        "status": int(HTTPStatus.SERVICE_UNAVAILABLE),
+                        "failure_code": "media_credit_enforcement_required",
+                        "retryable": False,
+                        "provider_call_triggered": False,
+                        "triggers_real_charge": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+                return
+            if live_media_requested and media_quote.get("chargeable") is not True:
+                self.repository.release_media_rework_reservation(
+                    company_id=identity["company_id"],
+                    parent_media_job_id=original["media_job_id"],
+                    version=version,
+                )
+                self._send_json(
+                    {
+                        "error": "视频素材点价格尚未开放，重做任务没有进入生成队列。",
+                        "status": int(HTTPStatus.CONFLICT),
+                        "media_quote": media_quote,
+                        "triggers_real_charge": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.CONFLICT,
+                )
+                return
+            if media_credit_state["enforcement_enabled"] and live_media_requested:
                 try:
+                    reserve_operation_key = self.repository.media_credit_reservation_attempt_idempotency_key(
+                        company_id=identity["company_id"],
+                        reference_type="media_rework",
+                        reference_id=retry_key,
+                        base_idempotency_key=f"{retry_key}:reserve:v1",
+                    )
                     media_credit_state["reservation"] = self.repository.apply_media_credit_operation(
                         company_id=identity["company_id"],
                         user_id=identity["user_id"],
                         operation_type="reserve",
                         points=int(media_quote["estimated_points"]),
-                        idempotency_key=f"{retry_key}:reserve:v1",
+                        idempotency_key=reserve_operation_key,
                         reference_type="media_rework",
                         reference_id=retry_key,
                         details={"quote": media_quote, "parent_media_job_id": original["media_job_id"], "version": version},
@@ -7279,89 +8099,122 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         status=HTTPStatus.PAYMENT_REQUIRED,
                     )
                     return
-            task = self.repository.create_task(
-                company_id=identity["company_id"],
-                store_id=original["store_id"],
-                user_id=identity["user_id"],
-                task_type="provider_job",
-                title=f"素材重做 v{version}",
-                input_data={
-                    "provider_job_key": provider_job_key,
-                    "provider_family": contract.get("provider_family"),
-                    "store_id": original["store_id"],
-                    "inputs": safe_inputs,
-                    "contract_version": catalog.get("contract_version"),
-                    "media_asset_idempotency_key": retry_key,
-                    "media_credits": media_credit_state,
-                    "real_platform_writes_enabled": False,
-                },
-            )
             version_context = safe_inputs["asset_version"]
-            media_job = self.repository.create_media_asset_job(
-                company_id=identity["company_id"],
-                store_id=original["store_id"],
-                task_id=task["task_id"],
-                user_id=identity["user_id"],
-                provider_job_key=provider_job_key,
-                idempotency_key=retry_key,
-                job_spec={
-                    "provider_job_key": provider_job_key,
-                    "contract_version": catalog.get("contract_version"),
-                    "inputs": safe_inputs,
-                    "merchant_visible_provider_name": False,
-                    "live_media_provider_call_allowed": False,
-                    "spend_now_allowed": False,
-                    "media_credits": media_credit_state,
-                    "secret_exposed": False,
-                },
-                status="pending",
-                version_context=version_context,
-            )
-            self.repository.complete_media_rework_reservation(
-                company_id=identity["company_id"],
-                parent_media_job_id=original["media_job_id"],
-                version=version,
-                media_job_id=media_job["media_job_id"],
-            )
-            queue_job = self.repository.create_queue_job(
-                company_id=identity["company_id"],
-                task_id=task["task_id"],
-                max_attempts=int(contract.get("max_attempts") or 1),
-                job_data={
-                    "kind": "provider_job",
-                    "provider_job_key": provider_job_key,
-                    "provider_family": contract.get("provider_family"),
-                    "queue": contract.get("queue"),
-                    "contract": contract,
-                    "inputs": safe_inputs,
-                    "media_job_id": media_job["media_job_id"],
-                    "idempotency_key": retry_key,
-                    "run_mode": body.get("run_mode") or "queued",
-                    "live_provider_called": False,
-                    "media_credits": media_credit_state,
-                    "real_platform_writes_enabled": False,
-                },
-            )
-            media_job = self.repository.update_media_asset_job(
-                company_id=identity["company_id"],
-                media_job_id=media_job["media_job_id"],
-                status="queued",
-                queue_job_id=queue_job["job_id"],
-                details={"event": "merchant_media_rework_queued", "reason": reason, "secret_exposed": False},
-            )
-            self.repository.update_media_asset_job(
-                company_id=identity["company_id"],
-                media_job_id=original["media_job_id"],
-                status=str(original.get("status") or "needs_rework"),
-                retry_delta=1,
-                details={
-                    "event": "merchant_media_rework_created",
-                    "child_media_job_id": media_job["media_job_id"],
-                    "child_version": version,
-                    "reason": reason,
-                    "secret_exposed": False,
-                },
-            )
+            creation_state: dict[str, Any] = {}
+            try:
+                creation_state["stage"] = "create_task"
+                task = self.repository.create_task(
+                    company_id=identity["company_id"],
+                    store_id=original["store_id"],
+                    user_id=identity["user_id"],
+                    task_type="provider_job",
+                    title=f"素材重做 v{version}",
+                    input_data={
+                        "provider_job_key": provider_job_key,
+                        "provider_family": contract.get("provider_family"),
+                        "store_id": original["store_id"],
+                        "inputs": safe_inputs,
+                        "contract_version": catalog.get("contract_version"),
+                        "media_asset_idempotency_key": retry_key,
+                        "media_credits": media_credit_state,
+                        "real_platform_writes_enabled": False,
+                    },
+                )
+                creation_state["task"] = task
+                creation_state["stage"] = "create_media_asset_job"
+                media_job = self.repository.create_media_asset_job(
+                    company_id=identity["company_id"],
+                    store_id=original["store_id"],
+                    task_id=task["task_id"],
+                    user_id=identity["user_id"],
+                    provider_job_key=provider_job_key,
+                    idempotency_key=retry_key,
+                    job_spec={
+                        "provider_job_key": provider_job_key,
+                        "contract_version": catalog.get("contract_version"),
+                        "inputs": safe_inputs,
+                        "merchant_visible_provider_name": False,
+                        "live_media_provider_call_allowed": False,
+                        "spend_now_allowed": False,
+                        "media_credits": media_credit_state,
+                        "secret_exposed": False,
+                    },
+                    status="pending",
+                    version_context=version_context,
+                )
+                creation_state["media_asset_job"] = media_job
+                media_job, queue_job = _prepare_link_activate_media_queue(
+                    self.repository,
+                    company_id=identity["company_id"],
+                    task=task,
+                    media_asset_job=media_job,
+                    provider_job_key=provider_job_key,
+                    contract=contract,
+                    safe_inputs=safe_inputs,
+                    media_idempotency_key=retry_key,
+                    media_credit_state=media_credit_state,
+                    secret_ref="",
+                    run_mode=str(body.get("run_mode") or "queued"),
+                    creation_state=creation_state,
+                )
+                creation_state["stage"] = "complete_media_rework_reservation"
+                self.repository.complete_media_rework_reservation(
+                    company_id=identity["company_id"],
+                    parent_media_job_id=original["media_job_id"],
+                    version=version,
+                    media_job_id=media_job["media_job_id"],
+                )
+                self.repository.update_media_asset_job(
+                    company_id=identity["company_id"],
+                    media_job_id=original["media_job_id"],
+                    status=str(original.get("status") or "needs_rework"),
+                    retry_delta=1,
+                    details={
+                        "event": "merchant_media_rework_created",
+                        "child_media_job_id": media_job["media_job_id"],
+                        "child_version": version,
+                        "reason": reason,
+                        "secret_exposed": False,
+                    },
+                )
+                creation_state["stage"] = "committed"
+            except Exception:
+                compensation = _compensate_provider_queue_creation_failure(
+                    self.repository,
+                    company_id=identity["company_id"],
+                    user_id=identity["user_id"],
+                    creation_state=creation_state,
+                    media_credit_state=media_credit_state,
+                    media_idempotency_key=retry_key,
+                )
+                if compensation.get("manual_reconcile_required") is not True:
+                    self.repository.release_media_rework_reservation(
+                        company_id=identity["company_id"],
+                        parent_media_job_id=original["media_job_id"],
+                        version=version,
+                    )
+                self._send_json(
+                    {
+                        "error": (
+                            "素材重做任务没有安全进入队列，已回滚素材点预占。"
+                            if compensation.get("manual_reconcile_required") is not True
+                            else "素材重做任务的队列结果需要后台对账，素材点暂未释放。"
+                        ),
+                        "status": int(HTTPStatus.SERVICE_UNAVAILABLE),
+                        "failure_code": "media_queue_setup_failed",
+                        "failure_stage": str(creation_state.get("stage") or "create_task"),
+                        "retryable": False,
+                        "compensation": compensation,
+                        "provider_call_triggered": compensation.get("provider_call_triggered"),
+                        "triggers_real_charge": (
+                            False if compensation.get("provider_call_triggered") is False else None
+                        ),
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+                return
             worker_result = None
             if str(body.get("run_mode") or "queued") in {"inline", "enqueue_and_wait", "local_worker_now"}:
                 worker_result = self.queue_worker.run_next(company_id=identity["company_id"], job_id=queue_job["job_id"])

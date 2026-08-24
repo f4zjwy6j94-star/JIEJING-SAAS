@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_runtime.provider_job_contracts import build_provider_job_contract_catalog  # noqa: E402
+from jiejing_saas.api_server import _media_asset_request_fingerprint  # noqa: E402
 from jiejing_saas.billing_plan import PLAN_CATALOG  # noqa: E402
 from jiejing_saas.media_credits import (  # noqa: E402
     MEDIA_CREDIT_PACKS,
@@ -46,6 +47,32 @@ def main() -> int:
     company_id = fixture["company"]["company_id"]
     user_id = fixture["user"]["user_id"]
 
+    first_fingerprint = _media_asset_request_fingerprint(
+        store_id="store-fingerprint",
+        provider_job_key="media.asset_generation",
+        inputs={
+            "product_facts": {
+                "reference_images": ["https://cdn.example.test/b.jpg", "https://cdn.example.test/a.jpg"],
+            }
+        },
+    )
+    reordered_fingerprint = _media_asset_request_fingerprint(
+        store_id="store-fingerprint",
+        provider_job_key="media.asset_generation",
+        inputs={
+            "product_facts": {
+                "reference_images": [
+                    "https://cdn.example.test/a.jpg",
+                    "https://cdn.example.test/b.jpg",
+                    "https://cdn.example.test/a.jpg",
+                ],
+            },
+            "private_media_source_preflight_validated": True,
+        },
+    )
+    if first_fingerprint != reordered_fingerprint:
+        return fail("backend media fingerprint must canonicalize reference-image order and internal preflight markers")
+
     plan_rows = {item["key"]: item for item in PLAN_CATALOG}
     if list(plan_rows) != ["free", "starter", "operator", "team"]:
         return fail(f"plan catalog should expose exactly four ordered plans: {list(plan_rows)}")
@@ -66,11 +93,37 @@ def main() -> int:
         quote = estimate_media_points({"image_count": 2, "generation_tier": generation_tier})
         if quote.get("estimated_points") != expected_points or quote.get("generation_tier") != generation_tier:
             return fail(f"generation tier {generation_tier} has the wrong quote: {quote}")
+    for invalid_count in (None, 0, -1, "invalid"):
+        quote = estimate_media_points({"image_count": invalid_count, "generation_tier": "standard"})
+        if quote.get("image_count") != 1 or quote.get("estimated_points") != 80:
+            return fail(f"provider minimum image count and quote must remain aligned: {invalid_count}, {quote}")
+    alias_quotes = (
+        estimate_media_points({"image_count": 1, "creative_job_spec": {"generation_tier": "high_quality"}}),
+        estimate_media_points({"image_count": 1, "image_quality": "high"}),
+    )
+    if any(item.get("generation_tier") != "high_quality" or item.get("estimated_points") != 250 for item in alias_quotes):
+        return fail(f"quality aliases must normalize to the same quote and execution tier: {alias_quotes}")
+    try:
+        estimate_media_points({"image_count": 1, "generation_tier": "standard", "image_quality": "high"})
+    except ValueError:
+        pass
+    else:
+        return fail("conflicting quality aliases must be rejected before quote or provider execution")
     video_quote = estimate_media_points(
         {"image_count": 1, "generation_tier": "standard", "video_requested": True, "video_duration_seconds": 6}
     )
     if video_quote.get("chargeable") is not False or video_quote.get("blocked_by") != ["video_media_points_pricing_not_approved"]:
         return fail(f"video media points must stay blocked until separately priced: {video_quote}")
+    ui_video_quote = estimate_media_points(
+        {
+            "image_count": 1,
+            "generation_tier": "standard",
+            "video_generation_requested": True,
+            "video_duration_seconds": 10,
+        }
+    )
+    if ui_video_quote.get("video_requested") is not True or ui_video_quote.get("chargeable") is not False:
+        return fail(f"the frontend video flag must never bypass the unopened video price gate: {ui_video_quote}")
     partial_quote = estimate_media_points({"image_count": 4, "generation_tier": "standard"})
     partial_points, partial_source = actual_media_points_from_output(
         partial_quote,

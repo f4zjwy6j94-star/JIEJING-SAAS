@@ -89,6 +89,7 @@ def media_job_body(*, live_requested: bool = True, video_requested: bool = True)
             },
             "product_facts": {
                 "product": "foldable silicone drying mat",
+                "allowed_claims": ["merchant-confirmed foldable silicone drying mat"],
                 "forbidden_claims": ["medical"],
                 "supplier_facts": {"material": "silicone", "package_dimensions_cm": {"length": 30, "width": 8, "height": 8}},
                 "target_marketplace_rules": {"platform": "ebay", "marketplace": "EBAY_US"},
@@ -104,6 +105,7 @@ def media_job_body(*, live_requested: bool = True, video_requested: bool = True)
             "generation_tier": "high_quality",
             "quality_mode": "fidelity_first",
             "live_provider_requested": live_requested,
+            "commercial_rights_confirmed": True,
             "media_provider": "fal",
         },
         "run_mode": "local_worker_now",
@@ -125,6 +127,51 @@ def main() -> int:
     original_adapter = runner_module.MediaGenerationAdapter
     try:
         runner_module.MediaGenerationAdapter = FakeMediaGenerationAdapter
+        explicit_openai_body = media_job_body(video_requested=False)
+        explicit_openai_body["inputs"]["media_provider"] = "openai"
+        calls_before_openai = len(FakeMediaGenerationAdapter.configs)
+        with patched_env(
+            JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true",
+            JIEJING_MEDIA_LIVE_VIDEO_ENABLED="false",
+            JIEJING_IMAGE_GENERATION_ENDPOINT="",
+        ):
+            explicit_openai = ProviderJobRunner().run(
+                company_id="co_test",
+                store_id="store_test",
+                user_id="user_test",
+                task_id="task_openai_blocked",
+                job_id="job_openai_blocked",
+                job_body=explicit_openai_body,
+            )
+        if explicit_openai.get("status") != "blocked_live_media_provider":
+            raise AssertionError(f"OpenAI local-artifact output must fail before provider spend: {explicit_openai}")
+        if "media_provider_https_artifact_delivery_not_configured" not in explicit_openai.get("missing_inputs", []):
+            raise AssertionError("OpenAI pre-call blocker must name the missing HTTPS artifact publisher")
+        if len(FakeMediaGenerationAdapter.configs) != calls_before_openai:
+            raise AssertionError("OpenAI must not be called before durable tenant-scoped HTTPS delivery exists")
+
+        env_openai_body = media_job_body(video_requested=False)
+        env_openai_body["inputs"].pop("media_provider", None)
+        calls_before_env_openai = len(FakeMediaGenerationAdapter.configs)
+        with patched_env(
+            JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true",
+            JIEJING_MEDIA_LIVE_VIDEO_ENABLED="false",
+            JIEJING_MEDIA_GENERATION_PROVIDER="openai-images",
+            JIEJING_IMAGE_GENERATION_ENDPOINT="",
+        ):
+            env_openai = ProviderJobRunner().run(
+                company_id="co_test",
+                store_id="store_test",
+                user_id="user_test",
+                task_id="task_env_openai_blocked",
+                job_id="job_env_openai_blocked",
+                job_body=env_openai_body,
+            )
+        if env_openai.get("status") != "blocked_live_media_provider":
+            raise AssertionError(f"environment-selected OpenAI must also fail before provider spend: {env_openai}")
+        if len(FakeMediaGenerationAdapter.configs) != calls_before_env_openai:
+            raise AssertionError("environment-selected OpenAI must not call the provider")
+
         with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="true"):
             live = ProviderJobRunner().run(
                 company_id="co_test",
@@ -160,6 +207,24 @@ def main() -> int:
         if "Locked facts that must not be changed or invented" not in live_config.image_prompt:
             raise AssertionError("grounded image prompt must preserve immutable product facts")
 
+        quality_alias_body = media_job_body(video_requested=False)
+        quality_alias_body["inputs"].pop("generation_tier", None)
+        quality_alias_body["inputs"]["creative_job_spec"].pop("generation_tier", None)
+        quality_alias_body["inputs"]["image_quality"] = "high"
+        with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="false"):
+            quality_alias = ProviderJobRunner().run(
+                company_id="co_test",
+                store_id="store_test",
+                user_id="user_test",
+                task_id="task_quality_alias",
+                job_id="job_quality_alias",
+                job_body=quality_alias_body,
+            )
+        if quality_alias.get("status") != "completed_live_media_provider":
+            raise AssertionError(f"normalized quality alias should remain executable: {quality_alias}")
+        if FakeMediaGenerationAdapter.configs[-1].image_quality != "high":
+            raise AssertionError("quote and provider execution must share the normalized high-quality tier")
+
         concept_body = media_job_body(video_requested=False)
         concept_body["inputs"]["product_facts"].pop("reference_images", None)
         concept_body["inputs"].pop("reference_image_url", None)
@@ -178,6 +243,13 @@ def main() -> int:
             raise AssertionError(f"ungrounded generation must remain concept-only: {concept_manifest}")
         if concept_manifest[0].get("listing_use_status") != "concept_only_not_eligible_for_listing":
             raise AssertionError("concept-only media must never be Listing eligible")
+        concept_packet = concept.get("output_packet", {})
+        if concept_packet.get("product_fact_gate", {}).get("missing_fact_keys"):
+            raise AssertionError(
+                f"the deliberate source-free concept contract must not spend provider quota and then fail postflight: {concept_packet}"
+            )
+        if concept_packet.get("asset_review", {}).get("status") != "waiting_for_human_asset_review":
+            raise AssertionError("a returned concept asset must settle as generated while remaining permanently non-Listing")
         if "No text, letters, numbers" not in FakeMediaGenerationAdapter.configs[-1].image_prompt:
             raise AssertionError("concept generation prompt must prohibit text and unsupported labels")
 

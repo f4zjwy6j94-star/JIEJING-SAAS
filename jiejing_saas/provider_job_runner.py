@@ -20,7 +20,17 @@ from jiejing_runtime.media_generation import MediaGenerationAdapter, MediaGenera
 from jiejing_runtime.provider_job_contracts import build_provider_job_contract_catalog
 
 from .config import SaaSSettings
-from .media_asset_pipeline import build_media_asset_generation_packet
+from .media_asset_pipeline import (
+    build_media_asset_generation_packet,
+    is_concept_only_media_spec,
+    media_asset_is_video,
+    missing_media_product_fact_keys,
+)
+from .media_credits import (
+    media_live_provider_requested,
+    media_video_requested,
+    normalize_media_generation_inputs,
+)
 from .vault_secret_resolver import VaultSecretResolver
 
 
@@ -59,10 +69,12 @@ class ProviderJobRunner:
             "user_id": user_id,
             **raw_inputs,
         }
+        if key in {"media.asset_generation", "media.fal_asset_generation"}:
+            effective_inputs = normalize_media_generation_inputs(effective_inputs)
         required_inputs = [str(item) for item in contract.get("required_inputs", [])]
         missing_inputs = [name for name in required_inputs if _is_missing(effective_inputs.get(name))]
         if key in {"media.asset_generation", "media.fal_asset_generation"}:
-            video_requested = _truthy(effective_inputs.get("video_generation_requested"))
+            video_requested = media_video_requested(effective_inputs)
             if video_requested and _is_missing(effective_inputs.get("video_script")):
                 missing_inputs.append("video_script")
             if video_requested:
@@ -81,6 +93,9 @@ class ProviderJobRunner:
                     missing_inputs.append("video_intent")
                 elif video_intent == "functional_demo" and not _has_verified_usage_evidence(product_facts):
                     missing_inputs.append("verified_usage_evidence")
+            live_media_requested = media_live_provider_requested(effective_inputs, job_body)
+            if live_media_requested:
+                missing_inputs.extend(_media_live_preflight_blockers(effective_inputs))
         missing_inputs = list(dict.fromkeys(missing_inputs))
         captured_at = _now_iso()
         live_result = self._maybe_run_live_provider(
@@ -187,7 +202,7 @@ class ProviderJobRunner:
     ) -> dict[str, Any] | None:
         if _env_bool("JIEJING_MEDIA_LIVE_PROVIDER_ENABLED", default=False) is not True:
             return None
-        if not _truthy(inputs.get("live_provider_requested") or job_body.get("live_provider_requested") or str(job_body.get("run_mode") or "") == "live_provider_now"):
+        if not media_live_provider_requested(inputs, job_body):
             return None
         if missing_inputs:
             return None
@@ -199,6 +214,41 @@ class ProviderJobRunner:
             provider = ""
         if key == "media.fal_asset_generation" and not provider:
             provider = "fal"
+        configured_provider = provider or str(os.environ.get("JIEJING_MEDIA_GENERATION_PROVIDER") or "").strip()
+        provider_identity = _normalized_media_provider_identity(configured_provider)
+        image_endpoint_host = urllib.parse.urlparse(
+            str(os.environ.get("JIEJING_IMAGE_GENERATION_ENDPOINT") or "").strip()
+        ).hostname or ""
+        if provider_identity == "openai" or image_endpoint_host.lower() == "api.openai.com":
+            output_packet = build_media_asset_generation_packet(
+                base=_output_base(contract, captured_at),
+                contract_key=key,
+                inputs=inputs,
+                captured_at=captured_at,
+            )
+            output_packet["live_media_provider_status"] = {
+                "status": "blocked_https_artifact_delivery_not_configured",
+                "provider_identity": "backend_media_driver",
+                "secret_exposed": False,
+            }
+            return self._provider_result(
+                contract=contract,
+                status="blocked_live_media_provider",
+                inputs=inputs,
+                missing_inputs=["media_provider_https_artifact_delivery_not_configured"],
+                output_packet=output_packet,
+                source_record={
+                    "source_record_type": contract.get("source_record_type"),
+                    "source_mode": "blocked_before_live_media_provider",
+                    "captured_at": captured_at,
+                    "raw_provider_response_stored": False,
+                    "normalized_output_stored": False,
+                },
+                merchant_visible_summary="This media driver cannot yet return a durable HTTPS asset, so no provider call was made.",
+                live_provider_called=False,
+                raw_secret_read=False,
+                next_action="Use the configured FAL HTTPS delivery path or configure a tenant-scoped HTTPS artifact publisher.",
+            )
         image_count = max(1, min(_safe_int(inputs.get("image_count"), default=1), 4))
         image_sizes = _list_or_default(inputs.get("image_sizes"), ["1600x1600"])
         scene_types = _list_or_default(inputs.get("scene_types"), ["white_background"])
@@ -223,9 +273,8 @@ class ProviderJobRunner:
         if not reference_image_url:
             reference_image_url = next((str(item).strip() for item in reference_images if str(item).strip().startswith("https://")), "")
         concept_only = (
-            creative_job_spec.get("output_safety_mode") == "concept_reference_only"
+            is_concept_only_media_spec(creative_job_spec)
             or quality_mode == "creative_exploration"
-            or not reference_image_url
         )
         creative_job_spec["output_safety_mode"] = "concept_reference_only" if concept_only else "reference_grounded_listing_draft"
         fidelity_instruction = {
@@ -246,7 +295,7 @@ class ProviderJobRunner:
                 f"Do not add new text, letters, numbers, labels, logos, certification icons, or unsupported claims. Preserve existing visible product branding exactly; do not invent or remove it. Avoid: {', '.join(blocked_claims)}."
             )
         )
-        video_requested = _truthy(inputs.get("video_generation_requested"))
+        video_requested = media_video_requested(inputs)
         video_intent = str(creative_job_spec.get("video_intent") or "appearance_showcase").strip().lower()
         motion_constraints = _list_or_default(
             creative_job_spec.get("motion_constraints"),
@@ -339,7 +388,11 @@ class ProviderJobRunner:
             live_media_snapshot=snapshot,
         )
         provider_errors = snapshot.get("provider_errors") if isinstance(snapshot.get("provider_errors"), list) else []
-        video_asset_returned = any("video" in str(asset.get("asset_type") or "").lower() for asset in assets if isinstance(asset, dict))
+        video_asset_returned = any(
+            media_asset_is_video(asset)
+            for asset in assets
+            if isinstance(asset, dict)
+        )
         missing_requested_outputs: list[str] = []
         if video_requested and not video_provider_enabled:
             missing_requested_outputs.append("video_provider_disabled")
@@ -361,7 +414,7 @@ class ProviderJobRunner:
             "secret_exposed": False,
         }
         for asset in output_packet.get("asset_manifest", []):
-            if isinstance(asset, dict) and "video" in str(asset.get("asset_type") or "").lower():
+            if isinstance(asset, dict) and media_asset_is_video(asset):
                 asset["video_intent"] = video_intent
                 asset["usage_evidence_status"] = (
                     "verified" if _has_verified_usage_evidence(product_facts) else "not_required_for_appearance_showcase"
@@ -754,6 +807,18 @@ def _is_missing(value: Any) -> bool:
     return False
 
 
+def _normalized_media_provider_identity(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    return {
+        "fal-ai": "fal",
+        "falai": "fal",
+        "fal-run": "fal",
+        "openai-images": "openai",
+        "openai-image": "openai",
+        "gpt-image": "openai",
+    }.get(normalized, normalized)
+
+
 def _merchant_summary(*, contract: dict[str, Any], status: str, missing_inputs: list[str]) -> str:
     if status == "blocked_missing_input":
         return f"{contract.get('label')} cannot run yet. Missing: {', '.join(missing_inputs)}."
@@ -815,6 +880,15 @@ def _has_verified_usage_evidence(product_facts: dict[str, Any]) -> bool:
     confirmed_steps = evidence.get("confirmed_steps") if isinstance(evidence.get("confirmed_steps"), list) else []
     instruction_source = str(evidence.get("instruction_source") or "").strip()
     return bool(reference_video_url.startswith("https://") or confirmed_steps or instruction_source)
+
+
+def _media_live_preflight_blockers(inputs: dict[str, Any]) -> list[str]:
+    """Fail closed before a potentially billable media-provider call."""
+
+    blockers = missing_media_product_fact_keys(inputs)
+    if inputs.get("commercial_rights_confirmed") is not True:
+        blockers.append("commercial_use_rights_authorization")
+    return list(dict.fromkeys(blockers))
 
 
 def _safe_int(value: Any, *, default: int) -> int:
