@@ -315,6 +315,8 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     require(app_js, "function saasSafeListingAssetUrl", "safe same-origin media URL restore")
     require(app_js, "new URL(raw, window.location.origin)", "relative media URL canonicalization")
     require(app_js, "saveSaasProtectedStateSnapshot();", "media task updates persist account-scoped refresh state")
+    require(app_js, "function scheduleSaasListingDraftSnapshotSave", "edited Listing drafts schedule account-scoped snapshot persistence")
+    require(app_js, "可以导入为待补资料草稿", "fact-blocked AI CEO reports remain importable as blocked Listing drafts")
     require(app_js, "function resetSaasBulkWorkspaceForListingProject", "Listing product switch resets stale bulk state")
     require(app_js, "listing_project_key:", "media job snapshot keeps Listing project identity")
 
@@ -391,12 +393,12 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     )
     require(
         app_html,
-        "app.js?v=20260824-ai-ceo-sourcing-routing-v1",
+        "app.js?v=20260824-ai-ceo-listing-continuity-v1",
         "workspace loads the AI CEO candidate import fix with a fresh asset version",
     )
     require(
         index_html,
-        "app.js?v=20260824-ai-ceo-sourcing-routing-v1",
+        "app.js?v=20260824-ai-ceo-listing-continuity-v1",
         "public entry preloads the same fresh Listing asset version",
     )
     require(

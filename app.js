@@ -22922,13 +22922,21 @@ function saasCeoCommandIntent(text = "") {
   const has = (pattern) => pattern.test(raw);
   if (!raw.trim()) return "general_chat";
   if (isSaasCeoHighRiskCommand(raw)) return "confirm";
+  const explicitlyDefersInternalListingDraft = has(
+    /(?:不要|不做|不建|不生成|不创建|先不|暂不).{0,18}(?:内部|本地|被事实阻断).{0,24}(?:Listing|刊登|上架).{0,8}草稿/i,
+  );
+  const asksForInternalListingDraft =
+    !explicitlyDefersInternalListingDraft &&
+    has(/(?:创建|生成|整理|导入).{0,36}(?:内部|本地|被事实阻断).{0,24}(?:Listing|刊登|上架).{0,8}草稿|(?:内部|本地|被事实阻断).{0,24}(?:Listing|刊登|上架).{0,8}草稿/i);
   const listingDeferred =
-    has(/(?:本轮|这轮|当前|现在|只读|先|暂时|暂缓)?\s*(?:不要|不做|不建|不生成|无需|不进入|先不|暂不).{0,18}(?:Listing|刊登|上架|草稿)/i) ||
-    has(/(?:Listing|刊登|上架|草稿).{0,10}(?:不要|不做|不建|不生成|先不|暂不)/i);
+    !asksForInternalListingDraft &&
+    (has(/(?:本轮|这轮|当前|现在|只读|先|暂时|暂缓)?\s*(?:不要|不做|不建|不生成|无需|不进入|先不|暂不).{0,18}(?:Listing|刊登|上架|草稿)/i) ||
+      has(/(?:Listing|刊登|上架|草稿).{0,10}(?:不要|不做|不建|不生成|先不|暂不)/i));
   const asksForListingHandoff =
-    !listingDeferred &&
-    (has(/Listing|listing|刊登草稿|上架草稿|导入\s*Listing|生成.{0,12}(?:Listing|刊登|上架)草稿|可导入.{0,12}(?:Listing|刊登|上架)/i) ||
-    (has(/市场调研|市场报告|结构化报告/i) && has(/一个最值得|选出一个|推荐一个|一个品|一个商品/i)));
+    asksForInternalListingDraft ||
+    (!listingDeferred &&
+      (has(/Listing|listing|刊登草稿|上架草稿|导入\s*Listing|生成.{0,12}(?:Listing|刊登|上架)草稿|可导入.{0,12}(?:Listing|刊登|上架)/i) ||
+        (has(/市场调研|市场报告|结构化报告/i) && has(/一个最值得|选出一个|推荐一个|一个品|一个商品/i))));
   const asksForProductResearch =
     has(/选品|候选商品|候选品|商品候选|产品候选|找品|筛选.{0,12}(?:商品|产品|候选)|产品方向|商品方向|卖什么|市场调研|市场报告|成交证据|三选一|相对赢家|赢家|供应商事实核验|供应商核验|货源核验|sold\s*&?\s*completed|已售.{0,12}(?:数量|结果|item)|在售.{0,12}(?:数量|竞争)/i) &&
     !asksForListingHandoff;
@@ -23667,12 +23675,16 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
   if (!delivery?.structured_report_saved || delivery.report_type !== "ai_ceo.market_research") return "";
   const answerProduct = saasAiCeoMarketProductLabel(latest);
   const title =
-    answerProduct ||
     (saasIsConcreteProductLabel(delivery.product) ? delivery.product : "") ||
+    answerProduct ||
     delivery.title ||
     "这次市场调研";
   const sourceCopy = delivery.source_record_count ? `已带 ${delivery.source_record_count} 条公开来源；` : "";
-  if (delivery.listing_import_ready !== true) {
+  const authoritativeReport = saasAuthoritativeAiCeoMarketReportForTurn(latest);
+  const blockedDraftAvailable =
+    delivery.listing_import_ready !== true &&
+    Boolean(authoritativeReport && saasAiCeoMarketReportCanStartBlockedListingDraft(authoritativeReport));
+  if (delivery.listing_import_ready !== true && !blockedDraftAvailable) {
     return `
       <div class="saas-ai-ceo-market-report-delivery" data-ai-ceo-market-report-delivery="ai_ceo_market_report_delivery_v1" data-report-id="${escapeHtml(delivery.report_id)}">
         <div>
@@ -23683,7 +23695,7 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
       </div>
     `;
   }
-  if (!saasAuthoritativeAiCeoMarketReportForTurn(latest)) {
+  if (!authoritativeReport) {
     return `
       <div class="saas-ai-ceo-market-report-delivery" data-ai-ceo-market-report-delivery="ai_ceo_market_report_delivery_v1" data-report-id="${escapeHtml(delivery.report_id)}">
         <div>
@@ -23700,7 +23712,7 @@ function renderSaasAiCeoMarketReportDeliveryMarkup(turn = {}) {
       <div>
         <span>市场调研已保存</span>
         <strong>${escapeHtml(title)}</strong>
-        <small>${sourceCopy}可以导入 Listing 草稿。真实发布、改价、库存、广告、退款、付款和政策修改仍要经过确认中心。</small>
+        <small>${sourceCopy}${blockedDraftAvailable ? "可以导入为待补资料草稿；缺失事实继续阻断发布。" : "可以导入 Listing 草稿。"}真实发布、改价、库存、广告、退款、付款和政策修改仍要经过确认中心。</small>
       </div>
       <button class="primary-action compact-action" type="button" data-saas-action="ai-ceo-import-market-to-listing" data-report-id="${escapeHtml(delivery.report_id)}" data-ai-ceo-assistant-id="${escapeHtml(latest.assistant_id || "")}" data-product-name="${escapeHtml(title)}">导入 Listing 草稿</button>
     </div>
@@ -31207,6 +31219,19 @@ function setSaasListingDraftField(field = "", value = "") {
     state.saasListingComposerDraft.title = safeValue.slice(0, 90) || state.saasListingComposerDraft.title;
     state.saasListingComposerDraft.product = state.saasListingComposerDraft.product || state.saasListingComposerDraft.title;
   }
+  scheduleSaasListingDraftSnapshotSave();
+  return true;
+}
+
+let saasListingDraftSnapshotSaveTimer = null;
+
+function scheduleSaasListingDraftSnapshotSave() {
+  if (typeof window === "undefined" || !isSaasPublicMvpMode() || !hasSaasProtectedBackendState()) return false;
+  if (saasListingDraftSnapshotSaveTimer) window.clearTimeout(saasListingDraftSnapshotSaveTimer);
+  saasListingDraftSnapshotSaveTimer = window.setTimeout(() => {
+    saasListingDraftSnapshotSaveTimer = null;
+    saveSaasProtectedStateSnapshot();
+  }, 250);
   return true;
 }
 

@@ -74,6 +74,7 @@ def main() -> None:
             + "saasCeoCommandIntent('批量筛选20个商品'),"
             + "saasCeoCommandIntent('继续 report_5eaf36a405de7331，只补 eBay US Sold & Completed 成交证据并做三选一；不能复用品牌或图片，不生成 Listing、不生图、不写 eBay。')"
             + ",saasCeoCommandIntent('继续候选商品的真实供应商事实核验；实时库存和最终报价未确认。本轮不采购、不付款、不建 Listing、不生图、不写 eBay。')"
+            + ",saasCeoCommandIntent('现在只创建捷境内部的、被事实阻断的 Listing 草稿；不采购、不付款、不生图、不保存 eBay 草稿、不公开发布。')"
             + "]));\n"
         ),
         text=True,
@@ -81,7 +82,7 @@ def main() -> None:
         capture_output=True,
         check=True,
     )
-    assert json.loads(intent_probe.stdout.strip()) == ["research", "listing", "bulk", "research", "research"], intent_probe.stdout
+    assert json.loads(intent_probe.stdout.strip()) == ["research", "listing", "bulk", "research", "research", "listing"], intent_probe.stdout
 
     risk_probe = subprocess.run(
         ["node"],
