@@ -370,6 +370,25 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     require(app_js, "function saasListingComposerDraftFromText", "Listing Composer local draft builder")
     require(app_js, 'String(priceMatch[1] || priceMatch[0] || "").trim()', "Listing price parser fallback without capture group")
     require(app_js, "function saasListingDraftFromReport", "AI CEO report import into Listing")
+    require(
+        app_js,
+        "function saasAiCeoMarketReportCanStartBlockedListingDraft",
+        "AI CEO candidate reports can enter Listing as blocked drafts before supplier facts are complete",
+    )
+    require(
+        app_js,
+        "ai_ceo_candidate_report_to_blocked_listing_draft_v1",
+        "AI CEO candidate-to-blocked-Listing contract marker",
+    )
+    if 'if (handoff.ready_for_listing_draft !== true) return null;' in app_js:
+        raise AssertionError(
+            "AI CEO candidate reports must not be rejected from Listing only because publish facts are incomplete"
+        )
+    require(
+        app_js,
+        "候选商品已导入为待补资料草稿",
+        "merchant sees that candidate import succeeded while publish facts remain blocked",
+    )
     require(app_js, "function selectSaasListingMarketCandidate", "merchant can select one AI CEO candidate")
     require(app_js, 'data-saas-listing-candidate-id="${escapeHtml(candidate.candidate_id)}"', "candidate selection control")
     require(app_js, 'aria-pressed="${candidate.name === opportunity.product ? "true" : "false"}"', "candidate selected state")

@@ -11335,13 +11335,33 @@ function saasAiCeoListingHandoffFieldsFromReport(record = null) {
   };
 }
 
+const SAAS_AI_CEO_CANDIDATE_TO_BLOCKED_LISTING_DRAFT_CONTRACT =
+  "ai_ceo_candidate_report_to_blocked_listing_draft_v1";
+
+function saasAiCeoMarketReportCanStartBlockedListingDraft(record = null) {
+  if (!record || record.report_type !== "ai_ceo.market_research") return false;
+  const body = record.report && typeof record.report === "object" ? record.report : {};
+  if (
+    record.frontend_generated_from_ai_ceo_chat === true ||
+    record.safe_local_only === true ||
+    body.frontend_generated_from_ai_ceo_chat === true ||
+    body.safe_local_only === true ||
+    body.answer_quality?.accepted === false ||
+    ["model_answer_rejected", "model_call_failed", "source_backed_market_report_draft", "market_report_recovery_draft"].includes(
+      String(body.status || record.status || ""),
+    )
+  ) {
+    return false;
+  }
+  const handoffFields = saasAiCeoListingHandoffFieldsFromReport(record);
+  const productCandidates = Array.isArray(handoffFields.product_candidates) ? handoffFields.product_candidates : [];
+  const selectedCandidate = handoffFields.selected_product_candidate || saasSelectedMarketProductCandidate(productCandidates);
+  return Boolean(productCandidates.length && selectedCandidate && saasIsConcreteProductLabel(selectedCandidate.name));
+}
+
 function saasListingDraftFromReport(record = null, sourceType = "ai_report") {
   if (!record) return null;
-  if (record.report_type === "ai_ceo.market_research") {
-    const body = record.report && typeof record.report === "object" ? record.report : {};
-    const handoff = body.listing_handoff && typeof body.listing_handoff === "object" ? body.listing_handoff : {};
-    if (handoff.ready_for_listing_draft !== true) return null;
-  }
+  if (record.report_type === "ai_ceo.market_research" && !saasAiCeoMarketReportCanStartBlockedListingDraft(record)) return null;
   const handoffFields = saasAiCeoListingHandoffFieldsFromReport(record);
   const selectedCandidate = handoffFields.selected_product_candidate || null;
   const product =
@@ -31242,7 +31262,13 @@ async function handleSaasListingSourceAiReport() {
   resetSaasBulkWorkspaceForListingProject();
   state.saasListingSourceMode = "ai_report";
   renderProductListingCenter();
-  showActionToast("已把 AI CEO 报告导入 Listing 草稿；不会写入 eBay。");
+  const reportBody = report.report && typeof report.report === "object" ? report.report : {};
+  const reportHandoff = reportBody.listing_handoff && typeof reportBody.listing_handoff === "object" ? reportBody.listing_handoff : {};
+  showActionToast(
+    report.report_type === "ai_ceo.market_research" && reportHandoff.ready_for_listing_draft !== true
+      ? "候选商品已导入为待补资料草稿；货源事实、图片和发布字段补齐前不会写入 eBay。"
+      : "已把 AI CEO 报告导入 Listing 草稿；不会写入 eBay。",
+  );
   return true;
 }
 
@@ -31260,7 +31286,6 @@ function saasAiCeoMarketResearchTurnMatchesClickedProduct(turn = {}, expectedPro
   if (["model_answer_rejected", "model_call_failed", "source_backed_market_report_draft", "market_report_recovery_draft"].includes(latest.status)) {
     return false;
   }
-  if (latest.market_report_delivery?.listing_import_ready === false) return false;
   return true;
 }
 
@@ -31362,8 +31387,7 @@ function saasAuthoritativeAiCeoMarketReportForTurn(turn = {}) {
   if (
     !reportId ||
     delivery?.report_id !== reportId ||
-    delivery?.report_type !== "ai_ceo.market_research" ||
-    delivery?.listing_import_ready !== true
+    delivery?.report_type !== "ai_ceo.market_research"
   ) {
     return null;
   }
@@ -31380,7 +31404,7 @@ function saasAuthoritativeAiCeoMarketReportForTurn(turn = {}) {
     return null;
   }
   const handoff = body.listing_handoff && typeof body.listing_handoff === "object" ? body.listing_handoff : {};
-  return handoff.ready_for_listing_draft === true ? record : null;
+  return handoff.ready_for_listing_draft === true || saasAiCeoMarketReportCanStartBlockedListingDraft(record) ? record : null;
 }
 
 function saasAiCeoMarketReportRecordIdFromTurn(turn = {}) {
@@ -31740,7 +31764,7 @@ function saasAiCeoMarketResearchEligibility(turn = {}) {
   if (["model_answer_rejected", "model_call_failed", "source_backed_market_report_draft", "market_report_recovery_draft"].includes(latest.status)) {
     return { eligible: false, reason: "answer_quality_rejected", latest };
   }
-  if (latest.answer_quality?.accepted === false || latest.market_report_delivery?.listing_import_ready === false) {
+  if (latest.answer_quality?.accepted === false) {
     return { eligible: false, reason: "answer_quality_rejected", latest };
   }
   if (!saasAuthoritativeAiCeoMarketReportForTurn(latest)) {
