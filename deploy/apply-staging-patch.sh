@@ -311,6 +311,9 @@ FILES=(
   "tools/test_jiejing_frontend_staging_config.py"
   "tools/test_jiejing_media_nav_and_state_restore.py"
   "tools/test_jiejing_saas_clean_settings_and_listing_ui.py"
+  "tools/test_jiejing_ai_ceo_open_domain_turn_plan.py"
+  "tools/test_jiejing_ai_ceo_routing_supplier_http_red.py"
+  "tools/test_jiejing_ai_ceo_phase0_red_contracts.py"
   "tools/test_jiejing_product_feedback_closure.py"
   "tools/test_jiejing_platform_operations_overview.py"
   "tools/test_jiejing_public_staging_proxy_contract.py"
@@ -669,6 +672,9 @@ python3 -m py_compile \
   tools/test_jiejing_frontend_staging_config.py \
   tools/test_jiejing_media_nav_and_state_restore.py \
   tools/test_jiejing_saas_clean_settings_and_listing_ui.py \
+  tools/test_jiejing_ai_ceo_open_domain_turn_plan.py \
+  tools/test_jiejing_ai_ceo_routing_supplier_http_red.py \
+  tools/test_jiejing_ai_ceo_phase0_red_contracts.py \
   tools/test_jiejing_product_feedback_closure.py \
   tools/test_jiejing_platform_operations_overview.py \
   tools/test_jiejing_public_staging_proxy_contract.py \
