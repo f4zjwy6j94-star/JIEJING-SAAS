@@ -492,6 +492,11 @@ async function main() {
 
   const routeScenarioDefs = [
     { label: "bulk", text: "帮我批量筛 10 个 eBay 热销小商品", target: "bulk" },
+    {
+      label: "research-evidence-followup",
+      text: "继续 report_5eaf36a405de7331，只补 eBay US Sold & Completed 成交证据并做三选一；不能复用品牌或图片，不生成 Listing、不生图、不写 eBay。",
+      target: "cockpit",
+    },
     { label: "media", text: "帮我把这张货源图生成主图和详情页", target: "media" },
     { label: "service", text: "帮我整理买家消息和订单物流回复草稿", target: "service" },
     { label: "confirm", text: "帮我直接发布并开广告预算", target: "confirm" },

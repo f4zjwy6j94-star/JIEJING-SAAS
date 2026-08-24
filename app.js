@@ -22930,7 +22930,7 @@ function saasCeoCommandIntent(text = "") {
     (has(/Listing|listing|刊登草稿|上架草稿|导入\s*Listing|生成.{0,12}(?:Listing|刊登|上架)草稿|可导入.{0,12}(?:Listing|刊登|上架)/i) ||
     (has(/市场调研|市场报告|结构化报告/i) && has(/一个最值得|选出一个|推荐一个|一个品|一个商品/i)));
   const asksForProductResearch =
-    has(/选品|候选商品|候选品|商品候选|产品候选|找品|筛选.{0,12}(?:商品|产品|候选)|产品方向|商品方向|卖什么|市场调研|市场报告/i) &&
+    has(/选品|候选商品|候选品|商品候选|产品候选|找品|筛选.{0,12}(?:商品|产品|候选)|产品方向|商品方向|卖什么|市场调研|市场报告|成交证据|三选一|相对赢家|赢家|sold\s*&?\s*completed|已售.{0,12}(?:数量|结果|item)|在售.{0,12}(?:数量|竞争)/i) &&
     !asksForListingHandoff;
   const asksForBulkWorkspace = has(/批量铺货|批量筛|批量导入|批量发布|批量生成|多款|多品|商品清单|商品列表|货盘|前五|前十|前\s*\d+|top\s*\d+/i);
   if (asksForListingHandoff) return "listing";
@@ -22966,7 +22966,7 @@ function uniqueSaasCeoRoutes(routes = []) {
 }
 
 function buildSaasCeoCommand(text, ctx = saasMerchantWorkbenchContext()) {
-  const cleanText = sanitizeSaasCeoCommandSourceText(text || "").slice(0, 600);
+  const cleanText = sanitizeSaasCeoCommandSourceText(text || "").slice(0, 900);
   const intent = saasCeoCommandIntent(cleanText);
   const highRisk = isSaasCeoHighRiskCommand(cleanText) || intent === "confirm";
   const store = activeSaasStore();
@@ -23882,7 +23882,7 @@ function sanitizeSaasCeoCommandSourceText(text = "") {
     .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, "[model_key_redacted]")
     .replace(/\b(AIAK|AKID|ASIA)[A-Za-z0-9]{12,}\b/g, "[cloud_key_redacted]")
     .replace(/\b(access[_-]?token|refresh[_-]?token|api[_-]?key|password|secret)\s*[:=]\s*[^,\s;，；]+/gi, "$1=[redacted]")
-    .slice(0, 600);
+    .slice(0, 900);
 }
 
 function saasAiCeoConversationHistoryForRequest() {

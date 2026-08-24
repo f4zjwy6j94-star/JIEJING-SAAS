@@ -262,6 +262,33 @@ def main() -> None:
         route="ebay_workflow",
     ) is False, "candidate requirements must not turn the whole selection answer into a platform-rule-only response"
 
+    evidence_followup_message = (
+        "继续现有市场调研 report_5eaf36a405de7331，只补 eBay US Sold & Completed 成交证据并做三选一结论。"
+        "已核验真实 Item ID、价格和在售数量；部分结果含品牌或图片，只能作为需求可比证据。"
+        "下一步进入供应商事实核验，不生成 Listing、不生图、不写 eBay。"
+    )
+    assert _looks_like_platform_rule_request(
+        message=evidence_followup_message,
+        route="ebay_workflow",
+    ) is False, "market evidence follow-up must not be treated as a platform-rule answer merely because it mentions images"
+    evidence_followup_quality = validate_ai_ceo_answer_quality(
+        message=evidence_followup_message,
+        route="ebay_workflow",
+        answer=(
+            "相对赢家：竹制桌面手机支架。已售样本和在售竞争均高于另外两个候选；"
+            "这只是商品方向证据，供应商、库存、材质、尺寸和图片权利仍待核验。"
+        ),
+        source_records=[
+            {
+                "citation_id": "S1",
+                "title": "eBay sold results",
+                "domain": "ebay.com",
+                "url": "https://www.ebay.com/sch/i.html?_nkw=bamboo+phone+stand&LH_Sold=1&LH_Complete=1",
+            }
+        ],
+    )
+    assert evidence_followup_quality["accepted"] is True, evidence_followup_quality
+
     rejected = validate_ai_ceo_answer_quality(message=message, route="ebay_workflow", answer=unrelated)
     assert rejected["accepted"] is False, rejected
     assert rejected["candidate_count"] == 0, rejected

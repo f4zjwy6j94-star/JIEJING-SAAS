@@ -71,7 +71,8 @@ def main() -> None:
             + "\nconsole.log(JSON.stringify(["
             + "saasCeoCommandIntent('筛选3个全新低风险候选，只读，先不要 Listing 草稿'),"
             + "saasCeoCommandIntent('为这个商品生成 Listing 草稿'),"
-            + "saasCeoCommandIntent('批量筛选20个商品')"
+            + "saasCeoCommandIntent('批量筛选20个商品'),"
+            + "saasCeoCommandIntent('继续 report_5eaf36a405de7331，只补 eBay US Sold & Completed 成交证据并做三选一；不能复用品牌或图片，不生成 Listing、不生图、不写 eBay。')"
             + "]));\n"
         ),
         text=True,
@@ -79,11 +80,27 @@ def main() -> None:
         capture_output=True,
         check=True,
     )
-    assert json.loads(intent_probe.stdout.strip()) == ["research", "listing", "bulk"], intent_probe.stdout
+    assert json.loads(intent_probe.stdout.strip()) == ["research", "listing", "bulk", "research"], intent_probe.stdout
+
+    command_sanitizer = function_body(app_js, "sanitizeSaasCeoCommandSourceText")
+    sanitizer_probe = subprocess.run(
+        ["node"],
+        input=(
+            "const publicRuntimeText = (value) => String(value || '');\n"
+            + command_sanitizer
+            + "\nconsole.log(sanitizeSaasCeoCommandSourceText('x'.repeat(850)).length);\n"
+        ),
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=True,
+    )
+    assert int(sanitizer_probe.stdout.strip()) == 850, sanitizer_probe.stdout
 
     command_builder = function_body(app_js, "buildSaasCeoCommand")
     require(command_builder, "research:", "research route contract")
     require(command_builder, 'label: "AI CEO 选品调研"', "research route merchant label")
+    require(command_builder, ".slice(0, 900)", "AI CEO model request keeps the backend-supported instruction length")
 
     print("PASS jiejing_ai_ceo_product_label_extraction")
 

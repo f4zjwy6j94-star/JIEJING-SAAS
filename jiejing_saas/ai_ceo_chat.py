@@ -3494,7 +3494,10 @@ def _looks_like_platform_rule_request(*, message: str, route: str) -> bool:
     text = _normalized_text(message)
     if "ebay" not in text and "listing" not in text:
         return False
-    if _looks_like_product_selection_request(message=message, route=route):
+    if _looks_like_product_selection_request(message=message, route=route) or _looks_like_market_evidence_followup(
+        message=message,
+        route=route,
+    ):
         return False
     rule_markers = (
         "规则",
@@ -3515,6 +3518,15 @@ def _looks_like_platform_rule_request(*, message: str, route: str) -> bool:
     return route in {AI_CEO_ROUTE_EBAY_WORKFLOW, AI_CEO_ROUTE_EXTERNAL_REALTIME, AI_CEO_ROUTE_GENERAL} and any(
         marker in text for marker in rule_markers
     )
+
+
+def _looks_like_market_evidence_followup(*, message: str, route: str) -> bool:
+    if route != AI_CEO_ROUTE_EBAY_WORKFLOW:
+        return False
+    text = _normalized_text(message)
+    evidence_markers = ("成交证据", "sold & completed", "已售", "item id", "在售数量", "价格中位数")
+    decision_markers = ("三选一", "赢家", "相对赢家", "只补", "继续现有市场调研", "report_")
+    return any(marker in text for marker in evidence_markers) and any(marker in text for marker in decision_markers)
 
 
 def _is_official_ebay_domain(domain: str) -> bool:
