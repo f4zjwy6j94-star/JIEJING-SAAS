@@ -539,6 +539,7 @@ def run_ai_ceo_chat(
         context=prompt_context,
     )
     repair_retry_count = 0
+    repair_candidate_answer = ""
     if not answer_quality.get("accepted") and _env_enabled("JIEJING_AI_CEO_MODEL_REPAIR_RETRY_ENABLED", default=True):
         repair_started_at = time.monotonic()
         try:
@@ -564,6 +565,7 @@ def run_ai_ceo_chat(
             repair_retry_count = 1
             model_latency_ms += _elapsed_ms(repair_started_at)
             repair_answer = _clean_answer(repair_result.get("text") if isinstance(repair_result, dict) else "")
+            repair_candidate_answer = repair_answer
             repair_quality = validate_ai_ceo_answer_quality(
                 message=safe_message,
                 route=route,
@@ -579,6 +581,27 @@ def run_ai_ceo_chat(
             repair_retry_count = 1
             model_latency_ms += _elapsed_ms(repair_started_at)
 
+    contract_projection_used = False
+    if not answer_quality.get("accepted"):
+        projected_answer = _project_selection_answer_to_contract(
+            message=safe_message,
+            answer=repair_candidate_answer or answer,
+            context=prompt_context,
+            blocked_by=answer_quality.get("blocked_by") or [],
+        )
+        if projected_answer:
+            projected_quality = validate_ai_ceo_answer_quality(
+                message=safe_message,
+                route=route,
+                answer=projected_answer,
+                source_records=source_records,
+                context=prompt_context,
+            )
+            if projected_quality.get("accepted"):
+                answer = projected_answer
+                answer_quality = projected_quality
+                contract_projection_used = True
+
     if not answer_quality.get("accepted"):
         return {
             "status": "model_answer_rejected",
@@ -592,6 +615,7 @@ def run_ai_ceo_chat(
                 **answer_quality,
                 "initial_retry_count": model_initial_retry_count,
                 "repair_retry_count": repair_retry_count,
+                "contract_projection_used": contract_projection_used,
             },
             "context": prompt_context,
             "model_client": _public_model_context(result, model_client, model_resolution),
@@ -622,6 +646,7 @@ def run_ai_ceo_chat(
             **answer_quality,
             "initial_retry_count": model_initial_retry_count,
             "repair_retry_count": repair_retry_count,
+            "contract_projection_used": contract_projection_used,
         },
         "context": prompt_context,
         "model_client": _public_model_context(result, model_client, model_resolution),
@@ -3655,6 +3680,80 @@ def _requested_product_candidate_count(message: str) -> int:
         if marker in text:
             return count
     return 2
+
+
+def _project_selection_answer_to_contract(
+    *,
+    message: str,
+    answer: str,
+    context: dict[str, Any],
+    blocked_by: list[str],
+) -> str:
+    """Convert usable candidate names into an honest, fact-minimal merchant answer."""
+
+    selection_contract = context.get("selection_contract") if isinstance(context.get("selection_contract"), dict) else {}
+    if not selection_contract or not answer:
+        return ""
+    unprojectable = {
+        "missing_concrete_product_candidates",
+        "excluded_previous_candidate_reused",
+        "empty_model_answer",
+        "model_answer_not_grounded_to_request",
+    }
+    if unprojectable.intersection(str(item) for item in blocked_by):
+        return ""
+    try:
+        from .repository import _ai_ceo_market_product_candidates
+
+        candidates = _ai_ceo_market_product_candidates(message=message, answer=answer)
+    except Exception:
+        candidates = []
+    required_count = max(1, _safe_int(selection_contract.get("required_candidate_count") or 1))
+    if len(candidates) < required_count:
+        return ""
+    excluded_names = [
+        _normalized_candidate_name(_safe_text(item, limit=80))
+        for item in selection_contract.get("excluded_candidate_names", [])
+        if _safe_text(item, limit=80)
+    ]
+    chosen: list[str] = []
+    for item in candidates:
+        name = _safe_text(item.get("name") or "", limit=120) if isinstance(item, dict) else ""
+        normalized = _normalized_candidate_name(name)
+        if not normalized or any(
+            excluded in normalized or normalized in excluded
+            for excluded in excluded_names
+            if len(excluded) >= 2
+        ):
+            continue
+        if name not in chosen:
+            chosen.append(name)
+        if len(chosen) >= required_count:
+            break
+    if len(chosen) < required_count:
+        return ""
+
+    blocks = ["### 候选商品卡"]
+    for index, name in enumerate(chosen, start=1):
+        search_url = "https://www.ebay.com/sch/i.html?_nkw=" + urllib.parse.quote_plus(name)
+        blocks.append(
+            "\n".join(
+                (
+                    f"候选商品 {index}：{name}",
+                    "为什么进入核验：这是 AI CEO 按商家约束提出的待验证方向，不代表已经证实市场需求。",
+                    f"eBay US 复核入口：[打开 eBay US 搜索]({search_url})",
+                    "成交证据：成交证据不足；搜索入口只用于商家复核，不等于成交记录。",
+                    "已证实事实：当前只证实这是本轮新提出的产品方向；没有供应商、实物或商品参数资料。",
+                    "推断依据：仅按本轮结构、接触、电池、液体、易碎和适配约束形成初筛方向。",
+                    "待补资料：材质、重量、尺寸、采购成本、包装、权利信息、合规要求和可追踪履约方案均未知。",
+                    "本轮结论：进入下一轮实物与供应商核验。",
+                )
+            )
+        )
+    blocks.append(
+        "本轮只保留候选方向和复核入口，不生成 Listing、不生图、不写入 eBay；任何候选在证据或实物核验不通过时直接淘汰。"
+    )
+    return "\n\n".join(blocks)
 
 
 def _model_answer_repair_instruction(

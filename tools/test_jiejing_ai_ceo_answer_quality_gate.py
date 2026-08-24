@@ -243,6 +243,16 @@ def main() -> None:
         context=acceptance_context,
     )
     assert accepted_acceptance_quality["accepted"] is True, accepted_acceptance_quality
+
+    projectable_new_answer = (
+        "### 候选商品卡\n"
+        "候选商品 1：桌面理线套管\n推荐度评分：73/100\n为什么有需求：家庭办公是持续场景。\n"
+        "适合 eBay/轻小件：重量 80g，采用塑料制成。\n"
+        "候选商品 2：窗帘拉绳收纳钩\n推荐度评分：70/100\n为什么有需求：需求稳定。\n"
+        "适合 eBay/轻小件：重量 30g，USPS First Class 发货。\n"
+        "候选商品 3：园艺标签固定夹\n推荐度评分：68/100\n为什么有需求：常青需求。\n"
+        "适合 eBay/轻小件：重量 20g，材质：金属。"
+    )
     selection_with_policy_risk = (
         "请筛选三个 eBay 候选商品，每个候选说明平台政策风险、合规要求和资料缺口；"
         "只做选品，不建 Listing。"
@@ -393,6 +403,25 @@ def main() -> None:
         assert strict_repaired_model.calls == 2, strict_repaired_model.calls
         assert "excluded_previous_candidate_reused" in strict_repaired_model.system_prompts[1], strict_repaired_model.system_prompts[1]
         assert "重型订书机" in strict_repaired_model.system_prompts[1], strict_repaired_model.system_prompts[1]
+
+        projected_model = SequenceModel([projectable_new_answer, projectable_new_answer])
+        projected_chat = run_ai_ceo_chat(
+            repository=MinimalRepository(),
+            company_id="company_quality",
+            store_id="store_quality",
+            user_id="user_quality",
+            message=acceptance_message,
+            model_client=projected_model,
+            conversation_history=acceptance_history,
+        )
+        assert projected_chat["status"] == "model_answered", projected_chat
+        assert projected_chat["answer_quality"]["accepted"] is True, projected_chat
+        assert projected_chat["answer_quality"]["contract_projection_used"] is True, projected_chat
+        assert projected_model.calls == 2, projected_model.calls
+        assert "80g" not in projected_chat["answer"] and "USPS First Class" not in projected_chat["answer"], projected_chat
+        assert projected_chat["answer"].count("打开 eBay US 搜索") == 3, projected_chat
+        assert projected_chat["answer"].count("成交证据不足") == 3, projected_chat
+        assert "不生成 Listing、不生图、不写入 eBay" in projected_chat["answer"], projected_chat
 
         transient_model = SequenceModel([TimeoutError("provider timed out"), valid])
         transient_recovered = run_ai_ceo_chat(
