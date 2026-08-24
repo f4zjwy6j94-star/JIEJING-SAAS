@@ -1027,6 +1027,8 @@ class AiCeoFrontendAuthorityRedTests(unittest.TestCase):
                     "const saasAiCeoMarketProductLabel = () => '';",
                     "const saasIsConcreteProductLabel = () => false;",
                     "const rememberSaasAiCeoMarketImportTarget = () => null;",
+                    "const saasAuthoritativeAiCeoMarketReportForTurn = () => null;",
+                    "const saasAiCeoMarketReportCanStartBlockedListingDraft = () => false;",
                     "const escapeHtml = (value) => String(value ?? '');",
                     render_delivery,
                     "const html = renderSaasAiCeoMarketReportDeliveryMarkup({",

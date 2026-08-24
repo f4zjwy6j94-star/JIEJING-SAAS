@@ -271,7 +271,7 @@ _api.run_ai_ceo_chat = _model_self_reporting_chat
 '''
 
 
-def run_supplier_http_cases() -> list[dict[str, Any]]:
+def run_supplier_http_cases() -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="jiejing-ai-ceo-supplier-http-red-", ignore_cleanup_errors=True) as temp:
         temp_root = Path(temp)
         hook_root = temp_root / "python-hook"
@@ -338,13 +338,13 @@ def run_supplier_http_cases() -> list[dict[str, Any]]:
                     "unit_cost": "CNY 8.50",
                 }
                 cases = (
-                    ("verified", supplier_facts, True),
-                    ("unverified", supplier_facts, False),
-                    ("missing", {}, False),
+                    ("verified", supplier_facts, True, "请为我的 eBay 美国店铺调研三个全新候选商品，并生成可审计的选品报告。"),
+                    ("unverified", supplier_facts, False, "请为我的 eBay 美国店铺调研三个全新候选商品，并生成可审计的选品报告。"),
+                    ("missing", {}, False, "请为我的 eBay 美国店铺调研三个全新候选商品，并生成可审计的选品报告。"),
+                    ("no_source", {}, False, "请为我的 eBay 美国店铺调研三个轻小不带电的候选商品，我现在没有货源。"),
                 )
                 results: list[dict[str, Any]] = []
-                for label, facts, verified in cases:
-                    message = "请为我的 eBay 美国店铺调研三个全新候选商品，并生成可审计的选品报告。"
+                for label, facts, verified, message in cases:
                     response_status, response_payload = request_json(
                         f"{base_url}/stores/{store_id}/merchant-ceo/chat",
                         method="POST",
@@ -367,6 +367,36 @@ def run_supplier_http_cases() -> list[dict[str, Any]]:
                             "requested_verified": verified,
                         }
                     )
+                product_fact_status, product_fact_payload = request_json(
+                    f"{base_url}/stores/{store_id}/product-facts",
+                    method="POST",
+                    payload={
+                        "merchant_product_fact_packet": {
+                            "contract_version": "merchant_product_fact_packet_v1",
+                            "source_confirmed_facts": {
+                                "material": "MODEL_OR_BROWSER_CANNOT_ASSERT_SOURCE_FACTS"
+                            },
+                            "merchant_confirmed_facts": {
+                                "product_name": "Silicone Cable Organizer",
+                                "source_url": "https://supplier.example/item/123",
+                                "sku": "JJ-CABLE-001",
+                                "material": "Silicone",
+                                "package_weight_g": 90,
+                                "package_length_cm": 10,
+                                "package_width_cm": 6,
+                                "package_height_cm": 2,
+                                "unit_cost": 1.2,
+                                "selling_price": 9.99,
+                                "currency": "USD",
+                                "quantity": 10,
+                                "item_location": "Shenzhen, China",
+                                "image_urls": ["https://supplier.example/item/123/main.jpg"],
+                                "image_rights_confirmed": True,
+                            },
+                        }
+                    },
+                    token=token,
+                )
             finally:
                 process.terminate()
                 try:
@@ -374,7 +404,11 @@ def run_supplier_http_cases() -> list[dict[str, Any]]:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=5)
-        return results
+        return {
+            "chat_results": results,
+            "product_fact_status": product_fact_status,
+            "product_fact_payload": product_fact_payload,
+        }
 
 
 class AiCeoCrossPlatformRoutingRedTests(unittest.TestCase):
@@ -407,8 +441,9 @@ class AiCeoCrossPlatformRoutingRedTests(unittest.TestCase):
 
 class AiCeoSupplierFactsHttpRedTests(unittest.TestCase):
     def test_authenticated_chat_intake_controls_authoritative_listing_readiness(self) -> None:
-        results = run_supplier_http_cases()
-        self.assertEqual(["verified", "unverified", "missing"], [item.get("label") for item in results])
+        fixture = run_supplier_http_cases()
+        results = fixture["chat_results"]
+        self.assertEqual(["verified", "unverified", "missing", "no_source"], [item.get("label") for item in results])
         for item in results:
             label = str(item.get("label") or "")
             with self.subTest(label=label):
@@ -437,8 +472,24 @@ class AiCeoSupplierFactsHttpRedTests(unittest.TestCase):
                     self.assertEqual("incomplete", report.get("supplier_fact_status"))
                     self.assertIs(report.get("listing_import_ready"), False)
                     self.assertIn("supplier_facts_incomplete", report.get("blocked_by") or [])
+                    if label == "no_source":
+                        self.assertEqual("merchant_has_no_source", report.get("source_mode"))
+                        self.assertIs(report.get("merchant_product_source_required"), True)
+                        self.assertIn("merchant_product_source_required", report.get("blocked_by") or [])
                 serialized = json.dumps(payload, ensure_ascii=False)
                 self.assertNotIn("MODEL_FORGED", serialized)
+
+        self.assertEqual(201, fixture["product_fact_status"])
+        product_payload = fixture["product_fact_payload"]
+        packet = product_payload.get("merchant_product_fact_packet") or {}
+        report = (product_payload.get("report") or {}).get("report") or {}
+        self.assertEqual("merchant_product_fact_packet_v1", packet.get("contract_version"))
+        self.assertEqual({}, packet.get("source_confirmed_facts"))
+        self.assertEqual("JJ-CABLE-001", (packet.get("merchant_confirmed_facts") or {}).get("sku"))
+        self.assertEqual("merchant.product_facts", report.get("artifact_type"))
+        self.assertIs(product_payload.get("model_called"), False)
+        self.assertIs(product_payload.get("real_platform_writes_enabled"), False)
+        self.assertIs(product_payload.get("secret_exposed"), False)
 
     def test_supplier_fact_normalizer_fails_closed_and_never_echoes_unknown_values(self) -> None:
         normalized = normalize_ai_ceo_supplier_fact_attestation(

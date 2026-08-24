@@ -599,12 +599,12 @@ def main() -> int:
         company_default_chat = company_default_response.get("ai_ceo_chat", {})
         if company_default_chat.get("status") != "model_answered":
             return fail(f"second store should inherit the same-account model default: {company_default_chat}")
-        if not FakeSearchHandler.calls:
-            return fail("default account model chat should attach backend web context before model synthesis")
-        if company_default_chat.get("default_web_search", {}).get("used_for_model_prompt") is not True:
-            return fail(f"default account model chat should mark web context as used: {company_default_chat}")
-        if not company_default_chat.get("source_records"):
-            return fail("default account model chat should return sanitized source_records")
+        if FakeSearchHandler.calls:
+            return fail("a timeless direct-answer turn should not spend a live-search request")
+        if company_default_chat.get("default_web_search", {}).get("status") != "not_requested":
+            return fail(f"a timeless direct-answer turn should mark web search not requested: {company_default_chat}")
+        if company_default_chat.get("source_records"):
+            return fail("a timeless direct-answer turn should not fabricate source_records")
         company_default_model_messages = json.dumps(FakeModelHandler.calls[-1]["body"].get("messages", []), ensure_ascii=False)
         if "web_context" not in company_default_model_messages:
             return fail("default account model prompt should include web_context")
@@ -616,14 +616,10 @@ def main() -> int:
             return fail(f"default account model chat should expose latency budget evidence: {company_default_chat}")
         if company_default_performance.get("model_timeout_seconds") != 16 or company_default_performance.get("model_max_output_tokens") != 1200:
             return fail(f"default account model chat should expose the general-chat model budget: {company_default_performance}")
-        if (
-            company_default_performance.get("search_budget_seconds") != 1
-            or company_default_performance.get("search_max_results") != 3
-            or company_default_performance.get("source_record_count", -1) < 1
-        ):
-            return fail(f"default account model chat should expose sanitized web-search budget and source count: {company_default_performance}")
-        if company_default_performance.get("search_used_for_model_prompt") is not True:
-            return fail(f"default account model chat should tell frontend that source context was used: {company_default_performance}")
+        if company_default_performance.get("source_record_count") != 0:
+            return fail(f"a timeless direct-answer turn should expose zero source records: {company_default_performance}")
+        if company_default_performance.get("search_used_for_model_prompt") is not False:
+            return fail(f"a timeless direct-answer turn should expose search_used_for_model_prompt=false: {company_default_performance}")
         if not isinstance(company_default_chat.get("latency_ms"), int) or company_default_chat.get("latency_ms", -1) < 0:
             return fail(f"default account model chat should expose sanitized total latency: {company_default_chat}")
         recovered_subscription = legacy_missing_entitlement_repo.get_billing_subscription(company_id=company_id)

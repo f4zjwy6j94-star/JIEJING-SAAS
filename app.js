@@ -10685,7 +10685,7 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
     title: String(fields.title || draft?.title || "").slice(0, 80),
     category_id: publishPrefill.category_id || "",
     category_leaf: publishPrefill.category_leaf || categoryText,
-    price: priceValue,
+    price: publishPrefill.price || priceValue,
     currency: publishPrefill.currency || currency,
     quantity: publishPrefill.quantity || "",
     condition: publishPrefill.condition || "",
@@ -10700,8 +10700,8 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
     package_length_cm: publishPrefill.package_length_cm || dimensionMatch?.[1] || "",
     package_width_cm: publishPrefill.package_width_cm || dimensionMatch?.[2] || "",
     package_height_cm: publishPrefill.package_height_cm || dimensionMatch?.[3] || "",
-    material: String(material || "").trim(),
-    procurement_cost: "",
+    material: String(publishPrefill.material || material || "").trim(),
+    procurement_cost: publishPrefill.procurement_cost || "",
     shipping_cost: "",
     ebay_fee: "",
     ad_budget: "",
@@ -11829,6 +11829,249 @@ function renderSaasListingDraftField(label, field, value = "", options = {}) {
   `;
 }
 
+const SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT = "merchant_product_fact_packet_v1";
+
+function saasMerchantProductFactDefinitions() {
+  return [
+    {
+      key: "identity",
+      label: "商品身份",
+      help: "确认你实际准备销售的是哪个版本。",
+      fields: [
+        ["product_name", "商品名称", "例如：Silicone Cable Organizer", "text"],
+        ["source_url", "货源或自有商品链接", "真实供应商链接；自有商品可留空", "url", true],
+        ["sku", "SKU", "当前账号内唯一", "text"],
+        ["brand", "品牌", "无品牌也请明确填写 Unbranded", "text"],
+        ["mpn", "MPN", "没有可填写 Does Not Apply", "text"],
+        ["condition", "商品状态", "NEW / USED", "text"],
+      ],
+    },
+    {
+      key: "specification",
+      label: "实物规格",
+      help: "只填来源或实物能确认的参数，不让 AI 猜。",
+      fields: [
+        ["material", "材质", "例如：Silicone", "text"],
+        ["product_dimensions_cm", "商品尺寸 cm", "长 x 宽 x 高", "text"],
+        ["package_weight_g", "包装重量 g", "例如：120", "number"],
+        ["package_length_cm", "包装长 cm", "", "number"],
+        ["package_width_cm", "包装宽 cm", "", "number"],
+        ["package_height_cm", "包装高 cm", "", "number"],
+      ],
+    },
+    {
+      key: "commercial",
+      label: "价格与库存",
+      help: "成本和供货能力由商家确认，AI 只做利润建议。",
+      fields: [
+        ["unit_cost", "单件成本", "例如：7.80", "number"],
+        ["selling_price", "计划售价", "例如：14.99", "number"],
+        ["currency", "币种", "USD / CNY", "text"],
+        ["quantity", "真实可售数量", "例如：5", "number"],
+      ],
+    },
+    {
+      key: "fulfillment",
+      label: "履约与图片权利",
+      help: "发货承诺和图片商业使用权不能从市场调研推断。",
+      fields: [
+        ["item_location", "实际发货地", "国家/城市或仓库", "text"],
+        ["handling_time_days", "处理时间（天）", "例如：3", "number"],
+        ["image_urls", "图片 URL", "每行一个；也可以先去素材工坊处理", "textarea", true],
+        ["image_rights_confirmed", "图片商业使用权", "勾选表示你确认这些图片可用于该商品 Listing", "checkbox", true],
+      ],
+    },
+  ];
+}
+
+function saasMerchantProductFactRequiredKeys() {
+  return [
+    "product_name",
+    "sku",
+    "condition",
+    "material",
+    "package_weight_g",
+    "package_length_cm",
+    "package_width_cm",
+    "package_height_cm",
+    "unit_cost",
+    "selling_price",
+    "currency",
+    "quantity",
+    "item_location",
+    "image_urls",
+    "image_rights_confirmed",
+  ];
+}
+
+function saasMerchantProductFactValuePresent(key = "", value = "") {
+  if (key === "image_rights_confirmed") return value === true;
+  const text = publicRuntimeText(value).trim();
+  return Boolean(text) && !/^(待补|待确认|待发布|等待|unknown|todo|n\/a)$/i.test(text);
+}
+
+function saasMerchantProductFactPacket(draft = state.saasListingComposerDraft) {
+  if (!draft) return null;
+  const existing = draft.merchant_product_fact_packet && typeof draft.merchant_product_fact_packet === "object"
+    ? draft.merchant_product_fact_packet
+    : {};
+  const sourceConfirmed = existing.source_confirmed_facts && typeof existing.source_confirmed_facts === "object"
+    ? { ...existing.source_confirmed_facts }
+    : {};
+  const merchantConfirmed = existing.merchant_confirmed_facts && typeof existing.merchant_confirmed_facts === "object"
+    ? { ...existing.merchant_confirmed_facts }
+    : {};
+  const fields = draft.fields || {};
+  const publishPrefill = draft.publish_prefill && typeof draft.publish_prefill === "object" ? draft.publish_prefill : {};
+  const specifics = parseSaasKeyValueLines(fields.item_specifics || "");
+  const sourceText = [state.saasListingComposerInput, fields.description].filter(Boolean).join("\n");
+  const sourceUrl = (sourceText.match(/https?:\/\/[^\s,，；;]+/i) || [""])[0];
+  const derivedSuggestions = {
+    product_name: draft.product || draft.title || fields.title || "",
+    source_url: sourceUrl,
+    sku: publishPrefill.sku || "",
+    brand: specifics.Brand || specifics.brand || specifics["品牌"] || "",
+    mpn: specifics.MPN || specifics.mpn || "",
+    condition: publishPrefill.condition || "NEW",
+    material: publishPrefill.material || specifics.Material || specifics.material || specifics["材质"] || "",
+    product_dimensions_cm: publishPrefill.product_dimensions_cm || "",
+    package_weight_g: publishPrefill.package_weight_g || "",
+    package_length_cm: publishPrefill.package_length_cm || "",
+    package_width_cm: publishPrefill.package_width_cm || "",
+    package_height_cm: publishPrefill.package_height_cm || "",
+    unit_cost: publishPrefill.procurement_cost || fields.cost_price || "",
+    selling_price: publishPrefill.price || fields.price || "",
+    currency: publishPrefill.currency || "USD",
+    quantity: publishPrefill.quantity || "",
+    item_location: publishPrefill.item_location || "",
+    handling_time_days: publishPrefill.handling_time_days || "",
+    image_urls: publishPrefill.image_urls || "",
+    image_rights_confirmed: false,
+    ...(existing.derived_listing_suggestions && typeof existing.derived_listing_suggestions === "object"
+      ? existing.derived_listing_suggestions
+      : {}),
+  };
+  const values = { ...derivedSuggestions, ...sourceConfirmed, ...merchantConfirmed };
+  const requiredKeys = saasMerchantProductFactRequiredKeys();
+  const unknownFacts = requiredKeys.filter((key) => !saasMerchantProductFactValuePresent(key, {
+    ...sourceConfirmed,
+    ...merchantConfirmed,
+  }[key]));
+  const total = requiredKeys.length;
+  const ready = total - unknownFacts.length;
+  const sourceRecords = Array.isArray(existing.source_records) ? existing.source_records.slice(0, 12) : [];
+  if (values.source_url && !sourceRecords.some((item) => item?.url === values.source_url)) {
+    sourceRecords.push({ type: "merchant_product_link", url: values.source_url, rights_status: "not_applicable" });
+  }
+  return {
+    contract_version: SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT,
+    source_mode: existing.source_mode || (values.source_url ? "merchant_source_supplied" : "merchant_owned_product"),
+    product_name: values.product_name || draft.product || draft.title || "",
+    source_confirmed_facts: sourceConfirmed,
+    merchant_confirmed_facts: merchantConfirmed,
+    derived_listing_suggestions: derivedSuggestions,
+    unknown_facts: unknownFacts,
+    source_records: sourceRecords,
+    values,
+    listing_readiness: {
+      ready_fact_count: ready,
+      total_fact_count: total,
+      completion_percent: total ? Math.round((ready / total) * 100) : 0,
+      ready_for_listing_generation: unknownFacts.length === 0,
+      ready_for_real_publish: false,
+      reason: unknownFacts.length ? "仍有商品事实待商家确认" : "商品事实已补齐，仍需 eBay 体检和发布确认",
+    },
+    blocked_by: unknownFacts.map((key) => `merchant_product_fact_missing:${key}`),
+    secret_exposed: false,
+  };
+}
+
+function saasMerchantProductFactOrigin(packet = {}, key = "") {
+  if (Object.prototype.hasOwnProperty.call(packet.merchant_confirmed_facts || {}, key)) {
+    return { label: "商家确认", tone: "green" };
+  }
+  if (Object.prototype.hasOwnProperty.call(packet.source_confirmed_facts || {}, key)) {
+    return { label: "来源资料", tone: "green" };
+  }
+  if (saasMerchantProductFactValuePresent(key, (packet.derived_listing_suggestions || {})[key])) {
+    return { label: "AI 建议", tone: "amber" };
+  }
+  return { label: "待补资料", tone: "neutral" };
+}
+
+function renderSaasMerchantProductFactField(packet = {}, definition = []) {
+  const [key, label, placeholder, type = "text", wide = false] = definition;
+  const value = (packet.values || {})[key];
+  const origin = saasMerchantProductFactOrigin(packet, key);
+  const classes = ["saas-product-fact-field", wide ? "is-wide" : "", type === "checkbox" ? "is-checkbox" : ""]
+    .filter(Boolean)
+    .join(" ");
+  const control = type === "textarea"
+    ? `<textarea data-saas-product-fact-field="${escapeHtml(key)}" rows="3" placeholder="${escapeHtml(placeholder)}">${escapeHtml(value || "")}</textarea>`
+    : type === "checkbox"
+      ? `<label class="saas-product-fact-check"><input data-saas-product-fact-field="${escapeHtml(key)}" type="checkbox" ${value === true ? "checked" : ""}><span>${escapeHtml(placeholder)}</span></label>`
+      : `<input data-saas-product-fact-field="${escapeHtml(key)}" type="${escapeHtml(type)}" value="${escapeHtml(value || "")}" placeholder="${escapeHtml(placeholder)}" ${type === "number" ? 'min="0" step="0.01"' : ""}>`;
+  return `
+    <div class="${classes}" data-product-fact-key="${escapeHtml(key)}">
+      <div class="saas-product-fact-label">
+        <span>${escapeHtml(label)}</span>
+        <em class="is-${escapeHtml(origin.tone)}" data-product-fact-origin>${escapeHtml(origin.label)}</em>
+      </div>
+      ${control}
+      ${type === "checkbox" ? "" : `<button type="button" data-saas-action="mark-product-fact-unknown" data-product-fact-key="${escapeHtml(key)}">暂时不知道</button>`}
+    </div>
+  `;
+}
+
+function renderSaasMerchantProductFactsModule(draft = state.saasListingComposerDraft) {
+  if (!draft) return "";
+  const packet = saasMerchantProductFactPacket(draft);
+  const readiness = packet.listing_readiness || {};
+  const missingLabels = saasMerchantProductFactDefinitions()
+    .flatMap((group) => group.fields)
+    .filter(([key]) => packet.unknown_facts.includes(key))
+    .map(([, label]) => label);
+  return `
+    <section class="saas-product-facts-module" data-product-fact-packet="merchant_product_fact_packet_v1" aria-label="商品资料补全">
+      <div class="saas-product-facts-head">
+        <div>
+          <span>商品资料</span>
+          <strong>AI 先填能整理的，你只确认真实缺口</strong>
+          <p>材质、成本、库存、发货和图片权利以你的真实资料为准。保存后 JIEJING 会继续生成和体检 Listing，不用去 eBay 手工填写。</p>
+        </div>
+        <div class="saas-product-facts-score">
+          <b>${escapeHtml(String(readiness.completion_percent || 0))}%</b>
+          <small>${missingLabels.length ? `还差 ${missingLabels.length} 项` : "商品事实已补齐"}</small>
+        </div>
+      </div>
+      <div class="saas-product-fact-legend" aria-label="字段来源说明">
+        <span class="is-green">来源资料</span><span class="is-green">商家确认</span><span class="is-amber">AI 建议</span><span>待补资料</span>
+      </div>
+      <div class="saas-product-facts-groups">
+        ${saasMerchantProductFactDefinitions()
+          .map(
+            (group) => `
+              <section class="saas-product-fact-group">
+                <header><span>${escapeHtml(group.label)}</span><p>${escapeHtml(group.help)}</p></header>
+                <div class="saas-product-fact-grid">
+                  ${group.fields.map((field) => renderSaasMerchantProductFactField(packet, field)).join("")}
+                </div>
+              </section>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="saas-product-facts-footer">
+        <div>
+          <strong>${missingLabels.length ? `仍待补：${escapeHtml(missingLabels.slice(0, 6).join("、"))}` : "可以继续生成 Listing 文案和发布体检"}</strong>
+          <p>留空或选择“暂时不知道”不会阻止保存，但真实发布会继续停住，AI CEO 只会概括这些缺口，不重复询问已填字段。</p>
+        </div>
+        <button class="primary-action" type="button" data-saas-action="save-merchant-product-facts">保存我确认的商品资料</button>
+      </div>
+    </section>
+  `;
+}
+
 function renderSaasListingDraftEditor(draft = state.saasListingComposerDraft) {
   if (!draft) {
     return "";
@@ -12916,6 +13159,7 @@ function renderSaasListingComposerWorkspace({
             : ""
         }
         ${draft ? renderSaasListingSourceIntake({ draft, inputValue, inputChips, marketReport, listingReport, syncedRows }) : renderSaasListingSourceIntake({ draft: null, inputValue, inputChips, marketReport, listingReport, syncedRows })}
+        ${renderSaasMerchantProductFactsModule(draft)}
         ${renderSaasListingDraftEditor(draft)}
         ${renderSaasListingMediaWritebackPanel(draft)}
         ${draft ? renderSaasListingNextActionPanel(draft, ctx, pendingConfirmations) : ""}
@@ -16905,12 +17149,137 @@ function restoreSaasListingComposerDraftFromBackendReports() {
   const restored = saasListingDraftFromReport(report, report.report_type === "ai_ceo.market_research" ? "ai_ceo_market_report" : "ai_report");
   if (!restored || !saasListingDraftHasConcreteProduct(restored)) return null;
   const identity = saasCurrentListingProjectIdentity(restored);
-  state.saasListingComposerDraft = { ...restored, listing_project_key: identity.key };
+  const restoredWithIdentity = { ...restored, listing_project_key: identity.key };
+  const factReports = (state.saasReports || []).filter((item) => item?.report_type === "merchant.product_facts");
+  const restoredProductKey = saasMarketCandidateMatchKey(restoredWithIdentity.product || restoredWithIdentity.title || "");
+  const factReport = factReports.find((item) => {
+    const body = item?.report && typeof item.report === "object" ? item.report : {};
+    return saasMarketCandidateMatchKey(body.product || body.merchant_product_fact_packet?.product_name || "") === restoredProductKey;
+  });
+  const factBody = factReport?.report && typeof factReport.report === "object" ? factReport.report : {};
+  state.saasListingComposerDraft = applySaasMerchantProductFactPacketToDraft(
+    restoredWithIdentity,
+    factBody.merchant_product_fact_packet,
+  );
   state.saasListingSourceMode = "backend_report_restore";
   if (!state.activeMediaDraft || isLegacySampleMediaDraftKey(state.activeMediaDraft)) {
     state.activeMediaDraft = identity.key || "";
   }
   return state.saasListingComposerDraft;
+}
+
+function applySaasMerchantProductFactPacketToDraft(draft = null, packet = null) {
+  if (!draft || !packet || typeof packet !== "object") return draft;
+  const facts = {
+    ...(packet.source_confirmed_facts && typeof packet.source_confirmed_facts === "object" ? packet.source_confirmed_facts : {}),
+    ...(packet.merchant_confirmed_facts && typeof packet.merchant_confirmed_facts === "object" ? packet.merchant_confirmed_facts : {}),
+  };
+  const dimensions = [facts.package_length_cm, facts.package_width_cm, facts.package_height_cm].filter(Boolean);
+  const projected = { ...draft, merchant_product_fact_packet: packet };
+  projected.product = facts.product_name || packet.product_name || projected.product || projected.title;
+  projected.publish_prefill = {
+    ...(projected.publish_prefill || {}),
+    sku: facts.sku || projected.publish_prefill?.sku || "",
+    condition: facts.condition || projected.publish_prefill?.condition || "",
+    quantity: facts.quantity || projected.publish_prefill?.quantity || "",
+    item_location: facts.item_location || projected.publish_prefill?.item_location || "",
+    handling_time_days: facts.handling_time_days || projected.publish_prefill?.handling_time_days || "",
+    material: facts.material || projected.publish_prefill?.material || "",
+    product_dimensions_cm: facts.product_dimensions_cm || projected.publish_prefill?.product_dimensions_cm || "",
+    package_weight_g: facts.package_weight_g || projected.publish_prefill?.package_weight_g || "",
+    package_length_cm: facts.package_length_cm || projected.publish_prefill?.package_length_cm || "",
+    package_width_cm: facts.package_width_cm || projected.publish_prefill?.package_width_cm || "",
+    package_height_cm: facts.package_height_cm || projected.publish_prefill?.package_height_cm || "",
+    procurement_cost: facts.unit_cost || projected.publish_prefill?.procurement_cost || "",
+    price: facts.selling_price || projected.publish_prefill?.price || "",
+    currency: facts.currency || projected.publish_prefill?.currency || "USD",
+    image_urls: facts.image_urls || projected.publish_prefill?.image_urls || "",
+    image_rights_confirmed: facts.image_rights_confirmed === true,
+  };
+  projected.fields = {
+    ...(projected.fields || {}),
+    item_specifics: saasListingItemSpecificsWithMerchantFacts(projected.fields?.item_specifics || "", facts),
+    price: facts.selling_price || projected.fields?.price || "",
+    cost_price: facts.unit_cost || projected.fields?.cost_price || "",
+    images: facts.image_urls
+      ? `${facts.image_urls}\n图片商业使用权：${facts.image_rights_confirmed === true ? "商家已确认" : "待确认"}`
+      : projected.fields?.images || "",
+    logistics: [
+      facts.item_location ? `发货地: ${facts.item_location}` : "",
+      facts.handling_time_days ? `处理时间: ${facts.handling_time_days} 天` : "",
+      facts.package_weight_g ? `包装重量: ${facts.package_weight_g} g` : "",
+      dimensions.length === 3 ? `包装尺寸: ${dimensions.join(" x ")} cm` : "",
+      facts.product_dimensions_cm ? `商品尺寸: ${facts.product_dimensions_cm}` : "",
+    ].filter(Boolean).join("\n") || projected.fields?.logistics || "",
+  };
+  projected.merchant_required_answers = Array.isArray(packet.unknown_facts)
+    ? packet.unknown_facts.map(saasMerchantProductFactLabel)
+    : [];
+  projected.publish_preflight_gaps = projected.merchant_required_answers.map((label) => `待确认：${label}`);
+  return projected;
+}
+
+function sanitizeSaasMerchantProductFactValues(values = {}) {
+  if (!values || typeof values !== "object") return {};
+  const allowedKeys = saasMerchantProductFactDefinitions().flatMap((group) => group.fields.map((field) => field[0]));
+  return Object.fromEntries(
+    allowedKeys
+      .filter((key) => values[key] !== undefined && values[key] !== null)
+      .map((key) => [
+        key,
+        key === "image_rights_confirmed"
+          ? values[key] === true
+          : sanitizeSaasWorkflowFeedbackText(values[key], key === "image_urls" ? 2400 : key === "source_url" ? 700 : 240),
+      ]),
+  );
+}
+
+function sanitizeSaasMerchantProductFactPacketSnapshot(packet = null) {
+  if (!packet || typeof packet !== "object") return null;
+  return {
+    contract_version: SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT,
+    source_mode: publicRuntimeText(packet.source_mode || "").slice(0, 80),
+    product_name: publicRuntimeText(packet.product_name || "").slice(0, 120),
+    source_confirmed_facts: sanitizeSaasMerchantProductFactValues(packet.source_confirmed_facts),
+    merchant_confirmed_facts: sanitizeSaasMerchantProductFactValues(packet.merchant_confirmed_facts),
+    derived_listing_suggestions: sanitizeSaasMerchantProductFactValues(packet.derived_listing_suggestions),
+    unknown_facts: Array.isArray(packet.unknown_facts)
+      ? packet.unknown_facts.map((item) => publicRuntimeText(item).slice(0, 80)).filter(Boolean).slice(0, 30)
+      : [],
+    source_records: Array.isArray(packet.source_records)
+      ? packet.source_records
+          .filter((item) => item && typeof item === "object")
+          .slice(0, 12)
+          .map((item) => ({
+            type: publicRuntimeText(item.type || "merchant_product_source").slice(0, 80),
+            url: publicRuntimeText(item.url || "").slice(0, 700),
+            rights_status: publicRuntimeText(item.rights_status || "").slice(0, 80),
+          }))
+      : [],
+    saved_at: publicRuntimeText(packet.saved_at || "").slice(0, 80),
+    secret_exposed: false,
+  };
+}
+
+function sanitizeSaasListingPublishPrefillSnapshot(values = {}) {
+  if (!values || typeof values !== "object") return {};
+  const allowedKeys = [
+    "sku", "condition", "quantity", "category_id", "category_leaf", "merchant_location_key",
+    "item_location", "handling_time_days", "material", "product_dimensions_cm", "package_weight_g",
+    "package_length_cm", "package_width_cm", "package_height_cm", "procurement_cost", "price", "currency",
+    "image_urls", "image_rights_confirmed", "description_html", "fulfillment_policy_id", "payment_policy_id",
+    "return_policy_id",
+  ];
+  return Object.fromEntries(
+    allowedKeys
+      .filter((key) => values[key] !== undefined && values[key] !== null)
+      .map((key) => [
+        key,
+        key === "image_rights_confirmed"
+          ? values[key] === true
+          : sanitizeSaasWorkflowFeedbackText(values[key], ["image_urls", "description_html"].includes(key) ? 3000 : 240),
+      ]),
+  );
 }
 
 function sanitizeSaasListingComposerDraftSnapshot(draft = null) {
@@ -16950,6 +17319,14 @@ function sanitizeSaasListingComposerDraftSnapshot(draft = null) {
       "logistics",
       "risk_notes",
     ]),
+    publish_prefill: sanitizeSaasListingPublishPrefillSnapshot(draft.publish_prefill),
+    merchant_product_fact_packet: sanitizeSaasMerchantProductFactPacketSnapshot(draft.merchant_product_fact_packet),
+    merchant_required_answers: Array.isArray(draft.merchant_required_answers)
+      ? draft.merchant_required_answers.map((item) => publicRuntimeText(item).slice(0, 160)).filter(Boolean).slice(0, 30)
+      : [],
+    publish_preflight_gaps: Array.isArray(draft.publish_preflight_gaps)
+      ? draft.publish_preflight_gaps.map((item) => publicRuntimeText(item).slice(0, 180)).filter(Boolean).slice(0, 30)
+      : [],
     gaps: Array.isArray(draft.gaps) ? draft.gaps.slice(0, 40) : [],
     risks: Array.isArray(draft.risks) ? draft.risks.slice(0, 40) : [],
     media_writeback:
@@ -19356,6 +19733,7 @@ function saasReportTypeLabel(type = "") {
     {
       "ceo.intake": "AI CEO 接单",
       "ai_ceo.market_research": "AI CEO 市场调研",
+      "merchant.product_facts": "商品资料",
       "market.data_packet": "市场数据包",
       "market.report": "市场报告",
       "listing.package": "产品刊登报告",
@@ -20465,6 +20843,7 @@ function saasWorkbenchPrimaryReports(reports = []) {
   const preferred = [
     "ceo.final_report",
     "ai_ceo.market_research",
+    "merchant.product_facts",
     "market.report",
     "listing.package",
     "asset.brief",
@@ -31241,6 +31620,185 @@ function captureSaasListingDraftEditor() {
   });
 }
 
+function saasMerchantProductFactLabel(key = "") {
+  for (const group of saasMerchantProductFactDefinitions()) {
+    const field = group.fields.find((item) => item[0] === key);
+    if (field) return field[1];
+  }
+  return key;
+}
+
+function saasListingItemSpecificsWithMerchantFacts(current = "", facts = {}) {
+  const rows = parseSaasKeyValueLines(current || "");
+  if (facts.brand) rows.Brand = facts.brand;
+  if (facts.mpn) rows.MPN = facts.mpn;
+  if (facts.material) rows.Material = facts.material;
+  return Object.entries(rows)
+    .filter(([key, value]) => key && value)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join("\n");
+}
+
+function collectSaasMerchantProductFacts() {
+  const merchantConfirmed = {};
+  const unknownFacts = [];
+  document.querySelectorAll("[data-saas-product-fact-field]").forEach((field) => {
+    const key = String(field.dataset.saasProductFactField || "").trim();
+    if (!key) return;
+    const value = field.type === "checkbox"
+      ? field.checked === true
+      : sanitizeSaasWorkflowFeedbackText(field.value || "", key === "image_urls" ? 2400 : key === "source_url" ? 700 : 240);
+    if (field.dataset.productFactUnknown === "true" || !saasMerchantProductFactValuePresent(key, value)) {
+      unknownFacts.push(key);
+      return;
+    }
+    merchantConfirmed[key] = value;
+  });
+  return { merchantConfirmed, unknownFacts };
+}
+
+async function saveSaasMerchantProductFacts() {
+  const draft = state.saasListingComposerDraft;
+  if (!draft) return false;
+  const current = saasMerchantProductFactPacket(draft);
+  const collected = collectSaasMerchantProductFacts();
+  const sourceRecords = Array.isArray(current.source_records) ? current.source_records.slice(0, 12) : [];
+  const sourceUrl = collected.merchantConfirmed.source_url || "";
+  if (sourceUrl && !sourceRecords.some((item) => item?.url === sourceUrl)) {
+    sourceRecords.push({ type: "merchant_product_link", url: sourceUrl, rights_status: "not_applicable" });
+  }
+  draft.merchant_product_fact_packet = {
+    contract_version: SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT,
+    source_mode: sourceUrl ? "merchant_source_supplied" : "merchant_owned_product",
+    product_name: collected.merchantConfirmed.product_name || current.product_name || draft.product || draft.title || "",
+    source_confirmed_facts: current.source_confirmed_facts || {},
+    merchant_confirmed_facts: collected.merchantConfirmed,
+    derived_listing_suggestions: current.derived_listing_suggestions || {},
+    unknown_facts: collected.unknownFacts,
+    source_records: sourceRecords,
+    saved_at: new Date().toISOString(),
+    secret_exposed: false,
+  };
+  const packet = saasMerchantProductFactPacket(draft);
+  const facts = packet.merchant_confirmed_facts || {};
+  const dimensions = [facts.package_length_cm, facts.package_width_cm, facts.package_height_cm].filter(Boolean);
+  draft.product = facts.product_name || draft.product || draft.title;
+  draft.publish_prefill = {
+    ...(draft.publish_prefill || {}),
+    sku: facts.sku || draft.publish_prefill?.sku || "",
+    condition: facts.condition || draft.publish_prefill?.condition || "",
+    quantity: facts.quantity || draft.publish_prefill?.quantity || "",
+    item_location: facts.item_location || draft.publish_prefill?.item_location || "",
+    handling_time_days: facts.handling_time_days || draft.publish_prefill?.handling_time_days || "",
+    material: facts.material || draft.publish_prefill?.material || "",
+    product_dimensions_cm: facts.product_dimensions_cm || draft.publish_prefill?.product_dimensions_cm || "",
+    package_weight_g: facts.package_weight_g || draft.publish_prefill?.package_weight_g || "",
+    package_length_cm: facts.package_length_cm || draft.publish_prefill?.package_length_cm || "",
+    package_width_cm: facts.package_width_cm || draft.publish_prefill?.package_width_cm || "",
+    package_height_cm: facts.package_height_cm || draft.publish_prefill?.package_height_cm || "",
+    procurement_cost: facts.unit_cost || draft.publish_prefill?.procurement_cost || "",
+    price: facts.selling_price || draft.publish_prefill?.price || "",
+    currency: facts.currency || draft.publish_prefill?.currency || "USD",
+    image_urls: facts.image_urls || draft.publish_prefill?.image_urls || "",
+    image_rights_confirmed: facts.image_rights_confirmed === true,
+  };
+  draft.fields = {
+    ...(draft.fields || {}),
+    item_specifics: saasListingItemSpecificsWithMerchantFacts(draft.fields?.item_specifics || "", facts),
+    price: facts.selling_price || draft.fields?.price || "",
+    cost_price: facts.unit_cost || draft.fields?.cost_price || "",
+    images: facts.image_urls
+      ? `${facts.image_urls}\n图片商业使用权：${facts.image_rights_confirmed === true ? "商家已确认" : "待确认"}`
+      : draft.fields?.images || "待补图片来源和商业使用权。",
+    logistics: [
+      facts.item_location ? `发货地: ${facts.item_location}` : "",
+      facts.handling_time_days ? `处理时间: ${facts.handling_time_days} 天` : "",
+      facts.package_weight_g ? `包装重量: ${facts.package_weight_g} g` : "",
+      dimensions.length === 3 ? `包装尺寸: ${dimensions.join(" x ")} cm` : "",
+      facts.product_dimensions_cm ? `商品尺寸: ${facts.product_dimensions_cm}` : "",
+    ].filter(Boolean).join("\n") || draft.fields?.logistics || "待补发货、重量和包装尺寸。",
+  };
+  draft.merchant_product_fact_packet = packet;
+  draft.merchant_required_answers = packet.unknown_facts.map(saasMerchantProductFactLabel);
+  draft.publish_preflight_gaps = packet.unknown_facts.map((key) => `待确认：${saasMerchantProductFactLabel(key)}`);
+  draft.buyer_copy_status = packet.listing_readiness?.ready_for_listing_generation
+    ? "merchant_product_facts_ready_for_listing_review"
+    : "waiting_for_merchant_product_facts";
+  const supplierFacts = {};
+  if (facts.material) supplierFacts.material = facts.material;
+  if (Number(facts.package_weight_g) > 0) supplierFacts.package_weight_g = Number(facts.package_weight_g);
+  if (dimensions.length === 3 && dimensions.every((value) => Number(value) > 0)) {
+    supplierFacts.package_dimensions_cm = {
+      length: Number(facts.package_length_cm),
+      width: Number(facts.package_width_cm),
+      height: Number(facts.package_height_cm),
+    };
+  }
+  if (facts.item_location) supplierFacts.item_location = facts.item_location;
+  if (Number(facts.unit_cost) > 0) supplierFacts.unit_cost = `${facts.currency || "USD"} ${facts.unit_cost}`;
+  const supplierRequired = ["material", "package_weight_g", "package_dimensions_cm", "item_location", "unit_cost"];
+  const supplierMissing = supplierRequired.filter((key) => supplierFacts[key] === undefined);
+  state.saasAiCeoSupplierFactAttestation = {
+    contract_version: "jiejing_ai_ceo_supplier_fact_form_v1",
+    source: "merchant_product_fact_packet",
+    supplier_facts: supplierFacts,
+    supplier_facts_verified: supplierMissing.length === 0,
+    merchant_confirmation_received: true,
+    missing_supplier_fact_keys: supplierMissing,
+    confirmed_at: new Date().toISOString(),
+  };
+  state.supplierFactsStatus = packet.unknown_facts.length ? "partial" : "verified";
+  saveSaasProtectedStateSnapshot();
+  renderProductListingCenter();
+  const localMessage = packet.unknown_facts.length
+    ? `商品资料已保存；还缺 ${packet.unknown_facts.slice(0, 4).map(saasMerchantProductFactLabel).join("、")}，不会编造或真实发布。`
+    : "商品资料已保存；可以继续审核 Listing，真实发布仍需确认中心。";
+  const store = activeSaasStore();
+  if (!state.saasConnected || !store?.store_id) {
+    showActionToast(`${localMessage} 登录后会写入账号工作记录。`);
+    return true;
+  }
+  try {
+    state.saasListingProductFactSaveStatus = "saving";
+    const response = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/product-facts`, {
+      method: "POST",
+      body: JSON.stringify({
+        merchant_product_fact_packet: sanitizeSaasMerchantProductFactPacketSnapshot(packet),
+      }),
+    });
+    if (response.merchant_product_fact_packet) {
+      draft.merchant_product_fact_packet = response.merchant_product_fact_packet;
+    }
+    if (response.task) state.saasTasks = [response.task, ...(state.saasTasks || []).filter((item) => item.task_id !== response.task.task_id)];
+    if (response.report) state.saasReports = [response.report, ...(state.saasReports || []).filter((item) => item.report_id !== response.report.report_id)];
+    state.saasListingProductFactSaveStatus = "saved";
+    saveSaasProtectedStateSnapshot();
+    showActionToast(`${localMessage} 已写入当前账号的工作记录。`);
+  } catch (error) {
+    state.saasListingProductFactSaveStatus = "local_only";
+    showActionToast(`${localMessage} 当前账号记录写入失败，资料仍保留在本机，可稍后再保存。`);
+  }
+  return true;
+}
+
+function markSaasMerchantProductFactUnknown(button) {
+  const key = String(button?.dataset?.productFactKey || "").trim();
+  if (!key) return false;
+  const field = document.querySelector(`[data-saas-product-fact-field="${key}"]`);
+  if (!field) return false;
+  if (field.type === "checkbox") field.checked = false;
+  else field.value = "";
+  field.dataset.productFactUnknown = "true";
+  const wrapper = button.closest("[data-product-fact-key]");
+  const origin = wrapper?.querySelector("[data-product-fact-origin]");
+  if (origin) {
+    origin.textContent = "待补资料";
+    origin.className = "is-neutral";
+  }
+  showActionToast(`已把“${saasMerchantProductFactLabel(key)}”标为暂时不知道；可以先保存，真实发布会继续停住。`);
+  return true;
+}
+
 function prefillSaasPublishIntakeFromListingComposer(text = state.saasListingComposerInput || "") {
   const clean = sanitizeSaasWorkflowFeedbackText(text, 1200);
   captureSaasListingDraftEditor();
@@ -32087,6 +32645,7 @@ function buildSaasListingBackendWorkflowPayload(store = {}, text = "", draft = s
       draft_title: sanitizeSaasListingWorkflowField(draft?.title || product, 120),
       source_type: sanitizeSaasListingWorkflowField(draft?.source_type || state.saasListingSourceMode || "merchant_input", 80),
       fields: safeFields,
+      merchant_product_fact_packet: sanitizeSaasMerchantProductFactPacketSnapshot(draft?.merchant_product_fact_packet),
       no_real_platform_write: true,
       real_platform_writes_enabled: false,
       requires_confirmation_center: true,
@@ -32668,6 +33227,14 @@ function handleSaasAction(button) {
   }
   if (action === "focus-publish-intake") {
     focusSaasPublishIntakeForm();
+    return;
+  }
+  if (action === "save-merchant-product-facts") {
+    saveSaasMerchantProductFacts();
+    return;
+  }
+  if (action === "mark-product-fact-unknown") {
+    markSaasMerchantProductFactUnknown(button);
     return;
   }
   if (action === "listing-source-ai-report") {

@@ -59,6 +59,307 @@ _AUTHORIZED_EBAY_CONNECTION_STATUSES = {
     "connected",
 }
 
+AI_CEO_TURN_PLAN_CONTRACT_VERSION = "ai_ceo_turn_plan_v1"
+AI_CEO_WORKING_STATE_CONTRACT_VERSION = "ai_ceo_working_state_v1"
+
+_AI_CEO_NON_TICKER_TOKENS = {
+    "AI",
+    "CEO",
+    "EBAY",
+    "GPT",
+    "HTTP",
+    "SKU",
+    "USD",
+    "USA",
+    "US",
+}
+
+
+def build_ai_ceo_turn_plan(
+    message: str,
+    *,
+    conversation_history: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build the backend-authoritative, no-write plan for one AI CEO turn.
+
+    This is deliberately a bounded safety planner. It does not try to encode
+    every possible topic. It decides whether a turn needs current evidence,
+    which read-only capability is appropriate, how much model capacity is
+    justified, and whether the message belongs to a Jiejing workflow. The
+    answer model still handles the open-ended language and domain reasoning.
+    """
+
+    safe_message = _safe_text(message, limit=900)
+    safe_history = _sanitize_ai_ceo_conversation_history(conversation_history)
+    direct_entities = _ai_ceo_turn_entities(safe_message)
+    previous_entities = _ai_ceo_recent_entities(safe_history)
+    contextual_followup = bool(
+        safe_history and _looks_like_contextual_followup(safe_message) and not direct_entities
+    )
+    entities = direct_entities or (previous_entities if contextual_followup else [])
+    effective_query = safe_message
+    if contextual_followup and entities:
+        effective_query = _safe_text(
+            f"当前延续实体：{', '.join(entities)}\n本轮问题：{safe_message}",
+            limit=1200,
+        )
+    previous_route = ""
+    if safe_history:
+        previous_route = _safe_text(safe_history[-1].get("route") or "", limit=80)
+
+    normalized = _normalized_text(effective_query)
+    direct_normalized = _normalized_text(safe_message)
+    ebay_workflow = _looks_like_ebay_workflow(direct_normalized) or bool(
+        contextual_followup and previous_route == AI_CEO_ROUTE_EBAY_WORKFLOW
+    )
+    high_risk = _looks_like_high_risk_action(direct_normalized)
+    explicit_rule = _looks_like_explicit_rule_memory(direct_normalized)
+    ticker = next((entity for entity in entities if re.fullmatch(r"[A-Z]{1,5}", entity)), "")
+
+    weather_request = any(marker in normalized for marker in ("天气", "气温", "降雨", "下雨", "weather", "forecast"))
+    quote_request = bool(ticker) and any(
+        marker in normalized
+        for marker in ("股价", "股票", "行情", "盘前", "盘后", "涨跌", "收盘", "quote", "stock price")
+    )
+    company_research_markers = (
+        "基本面",
+        "财报",
+        "营收",
+        "利润",
+        "现金流",
+        "资产负债",
+        "估值",
+        "风险",
+        "竞争力",
+        "为什么波动",
+        "为何波动",
+        "波动这么大",
+        "最近波动",
+        "为什么跌",
+        "为什么涨",
+        "fundamental",
+        "earnings",
+        "revenue",
+        "valuation",
+        "cash flow",
+        "why did",
+        "volatility",
+    )
+    company_research = bool(ticker) and any(marker in normalized for marker in company_research_markers)
+    classified_realtime = _classify_external_realtime_request(effective_query)
+
+    realtime_kind = ""
+    required_tools: list[str] = []
+    freshness_required = False
+    research_depth = "none"
+    if not ebay_workflow and weather_request:
+        realtime_kind = "weather"
+        required_tools = ["weather"]
+        freshness_required = True
+        research_depth = "quick"
+    elif not ebay_workflow and quote_request:
+        realtime_kind = "stock_quote"
+        required_tools = ["stock_quote"]
+        freshness_required = True
+        research_depth = "quick"
+    elif not ebay_workflow and company_research:
+        realtime_kind = "company_research"
+        required_tools = ["company_fundamentals", "web_search"]
+        freshness_required = True
+        research_depth = "deep"
+    elif not ebay_workflow and classified_realtime:
+        realtime_kind = classified_realtime
+        required_tools = [classified_realtime]
+        freshness_required = True
+        research_depth = "quick" if classified_realtime != "news_search" else "deep"
+
+    product_selection_request = _looks_like_product_selection_request(
+        message=safe_message,
+        route=AI_CEO_ROUTE_EBAY_WORKFLOW,
+    ) or (
+        ebay_workflow
+        and any(marker in direct_normalized for marker in ("商品", "产品", "品类", "product"))
+        and any(marker in direct_normalized for marker in ("帮我找", "推荐", "筛选", "选择", "research", "recommend"))
+    )
+
+    if explicit_rule:
+        route = AI_CEO_ROUTE_MERCHANT_RULE
+        response_mode = "jiejing_workflow"
+    elif high_risk:
+        route = AI_CEO_ROUTE_CONFIRMATION
+        response_mode = "confirmation_required"
+    elif ebay_workflow:
+        route = AI_CEO_ROUTE_EBAY_WORKFLOW
+        response_mode = "jiejing_workflow"
+        # Preserve the existing read-only search fallback: an explicit web
+        # research request can still return sourced work evidence before a
+        # merchant model is connected. When a model is configured the fast
+        # route yields back to the model-backed workflow below.
+        realtime_kind = classified_realtime
+        required_tools = ["ebay_public_research"]
+        freshness_required = True
+        research_depth = "deep" if product_selection_request else "quick"
+    elif realtime_kind:
+        route = AI_CEO_ROUTE_EXTERNAL_REALTIME
+        response_mode = "research_answer"
+    else:
+        route = AI_CEO_ROUTE_GENERAL
+        response_mode = "direct_answer"
+
+    workflow_target = ""
+    source_mode = ""
+    blocked_by: list[str] = []
+    if route == AI_CEO_ROUTE_EBAY_WORKFLOW:
+        workflow_target = "market_research" if product_selection_request else "ebay_operation"
+        no_source_markers = (
+            "没有货源",
+            "无货源",
+            "没有供应商",
+            "不知道卖什么",
+            "no source",
+            "no supplier",
+        )
+        if workflow_target == "market_research" and any(marker in direct_normalized for marker in no_source_markers):
+            source_mode = "merchant_has_no_source"
+            blocked_by.append("merchant_product_source_required")
+
+    complexity_markers = (
+        "分析",
+        "调研",
+        "比较",
+        "对比",
+        "方案",
+        "规划",
+        "基本面",
+        "财报",
+        "估值",
+        "为什么",
+        "风险",
+        "analyze",
+        "research",
+        "compare",
+        "strategy",
+        "fundamental",
+        "earnings",
+    )
+    multi_step = len(safe_message) >= 120 or sum(marker in direct_normalized for marker in complexity_markers) >= 2
+    if research_depth == "deep" or workflow_target == "market_research" or multi_step:
+        model_tier = "pro"
+    elif research_depth == "quick" and any(marker in direct_normalized for marker in complexity_markers):
+        model_tier = "thinking"
+    else:
+        model_tier = "fast"
+
+    continuation_key = f"ticker:{ticker}" if ticker else ""
+    topic = (
+        "weather"
+        if realtime_kind == "weather"
+        else "company_research"
+        if realtime_kind == "company_research"
+        else "market_quote"
+        if realtime_kind == "stock_quote"
+        else workflow_target
+        or ("external_research" if realtime_kind else "open_domain")
+    )
+    working_state = {
+        "contract_version": AI_CEO_WORKING_STATE_CONTRACT_VERSION,
+        "current_topic": topic,
+        "current_entities": entities,
+        "continuation_key": continuation_key,
+        "workflow_target": workflow_target,
+        "confirmed_facts": [],
+        "inferences": [],
+        "unknown_facts": blocked_by,
+        "last_tool_summaries": [],
+        "secret_exposed": False,
+    }
+    return {
+        "contract_version": AI_CEO_TURN_PLAN_CONTRACT_VERSION,
+        "response_mode": response_mode,
+        "route": route,
+        "topic": topic,
+        "entities": entities,
+        "freshness_required": freshness_required,
+        "research_depth": research_depth,
+        "required_tools": required_tools,
+        "realtime_kind": realtime_kind,
+        "workflow_target": workflow_target,
+        "source_mode": source_mode,
+        "risk_level": "high" if high_risk else "low",
+        "confirmation_required": high_risk,
+        "model_tier": model_tier,
+        "continuation_key": continuation_key,
+        "effective_query": effective_query,
+        "blocked_by": blocked_by,
+        "working_state": working_state,
+        "planner_policy": "backend_bounded_open_domain_planner",
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+
+
+def _ai_ceo_turn_entities(message: str) -> list[str]:
+    safe_message = _safe_text(message, limit=1200)
+    entities: list[str] = []
+    aliases = (
+        (("英伟达", "nvidia"), "NVDA"),
+        (("特斯拉", "tesla"), "TSLA"),
+        (("苹果公司", "apple stock"), "AAPL"),
+    )
+    lowered = safe_message.lower()
+    for markers, symbol in aliases:
+        if any(marker in lowered for marker in markers):
+            entities.append(symbol)
+    for token in re.findall(r"(?<![A-Za-z0-9])\$?([A-Z]{1,5})(?![A-Za-z0-9])", safe_message):
+        symbol = token.upper()
+        if symbol not in _AI_CEO_NON_TICKER_TOKENS and symbol not in entities:
+            entities.append(symbol)
+    return entities[:8]
+
+
+def _ai_ceo_recent_entities(history: list[dict[str, Any]]) -> list[str]:
+    for turn in reversed(history[-4:]):
+        entities = _ai_ceo_turn_entities(str(turn.get("user_text") or ""))
+        if entities:
+            return entities
+    return []
+
+
+def _public_ai_ceo_turn_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    """Project only auditable, merchant-safe planner fields."""
+
+    return {
+        "contract_version": AI_CEO_TURN_PLAN_CONTRACT_VERSION,
+        "response_mode": _safe_text(plan.get("response_mode") or "direct_answer", limit=40),
+        "route": _safe_text(plan.get("route") or AI_CEO_ROUTE_GENERAL, limit=60),
+        "topic": _safe_text(plan.get("topic") or "open_domain", limit=80),
+        "entities": [
+            _safe_text(item, limit=80)
+            for item in (plan.get("entities") if isinstance(plan.get("entities"), list) else [])[:8]
+            if _safe_text(item, limit=80)
+        ],
+        "freshness_required": plan.get("freshness_required") is True,
+        "research_depth": _safe_text(plan.get("research_depth") or "none", limit=20),
+        "required_tools": [
+            _safe_text(item, limit=80)
+            for item in (plan.get("required_tools") if isinstance(plan.get("required_tools"), list) else [])[:8]
+            if _safe_text(item, limit=80)
+        ],
+        "workflow_target": _safe_text(plan.get("workflow_target") or "", limit=80),
+        "source_mode": _safe_text(plan.get("source_mode") or "", limit=80),
+        "risk_level": _safe_text(plan.get("risk_level") or "low", limit=20),
+        "confirmation_required": plan.get("confirmation_required") is True,
+        "model_tier": _safe_text(plan.get("model_tier") or "fast", limit=20),
+        "continuation_key": _safe_text(plan.get("continuation_key") or "", limit=100),
+        "blocked_by": [
+            _safe_text(item, limit=100)
+            for item in (plan.get("blocked_by") if isinstance(plan.get("blocked_by"), list) else [])[:12]
+            if _safe_text(item, limit=100)
+        ],
+        "real_platform_writes_enabled": False,
+        "secret_exposed": False,
+    }
+
 
 def run_ai_ceo_chat(
     *,
@@ -73,6 +374,7 @@ def run_ai_ceo_chat(
     command: dict[str, Any] | None = None,
     conversation_history: list[dict[str, Any]] | None = None,
     model_resolution: dict[str, Any] | None = None,
+    turn_plan: dict[str, Any] | None = None,
     on_stage: Callable[[str], None] | None = None,
     on_text_delta: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
@@ -89,6 +391,12 @@ def run_ai_ceo_chat(
             "secret_exposed": False,
         }
     safe_history = _sanitize_ai_ceo_conversation_history(conversation_history)
+    authoritative_turn_plan = (
+        turn_plan
+        if isinstance(turn_plan, dict)
+        and turn_plan.get("contract_version") == AI_CEO_TURN_PLAN_CONTRACT_VERSION
+        else build_ai_ceo_turn_plan(safe_message, conversation_history=safe_history)
+    )
     context = build_ai_ceo_chat_context(
         repository=repository,
         company_id=company_id,
@@ -97,22 +405,20 @@ def run_ai_ceo_chat(
         client_now=client_now,
         client_timezone=client_timezone,
     )
+    context = {
+        **context,
+        "working_state": authoritative_turn_plan.get("working_state") or {},
+        "secret_exposed": False,
+    }
     model_context = _public_model_context(None, model_client, model_resolution)
-    direct_realtime_kind = _classify_external_realtime_request(safe_message)
-    direct_route = _classify_ai_ceo_route(safe_message, realtime_kind=direct_realtime_kind)
-    contextual_followup = bool(
-        safe_history
-        and not direct_realtime_kind
-        and direct_route == AI_CEO_ROUTE_GENERAL
-        and _looks_like_contextual_followup(safe_message)
-    )
-    route_message = _conversation_followup_query(safe_message, safe_history) if contextual_followup else safe_message
-    previous_route = str(safe_history[-1].get("route") or "") if contextual_followup else ""
-    realtime_kind = direct_realtime_kind
-    if contextual_followup and previous_route == AI_CEO_ROUTE_EXTERNAL_REALTIME:
-        realtime_kind = _classify_external_realtime_request(route_message)
-    route = previous_route if contextual_followup and previous_route else direct_route
-    route_meta = ai_ceo_route_metadata(safe_message, route=route, realtime_kind=realtime_kind)
+    route_message = _safe_text(authoritative_turn_plan.get("effective_query") or safe_message, limit=1200)
+    realtime_kind = _safe_text(authoritative_turn_plan.get("realtime_kind") or "", limit=80)
+    route = _safe_text(authoritative_turn_plan.get("route") or AI_CEO_ROUTE_GENERAL, limit=80)
+    route_meta = {
+        **ai_ceo_route_metadata(safe_message, route=route, realtime_kind=realtime_kind),
+        "turn_plan": _public_ai_ceo_turn_plan(authoritative_turn_plan),
+        "working_state": authoritative_turn_plan.get("working_state") or {},
+    }
     selection_contract = _selection_response_contract(
         message=safe_message,
         route=route,
@@ -321,9 +627,23 @@ def run_ai_ceo_chat(
             "secret_exposed": False,
         }
 
-    if on_stage is not None and _default_web_context_enabled(route=route, message=safe_message):
+    if on_stage is not None and _default_web_context_enabled(
+        route=route,
+        message=safe_message,
+        turn_plan=authoritative_turn_plan,
+    ):
         on_stage("sources")
-    default_web_search = _run_default_web_context_search(route=route, message=safe_message)
+    default_web_search = (
+        _run_default_web_context_search(route=route, message=safe_message)
+        if _default_web_context_enabled(route=route, message=safe_message, turn_plan=authoritative_turn_plan)
+        else {
+            "status": "not_requested",
+            "source_records": [],
+            "search_latency_ms": 0,
+            "frontend_gets_search_api_key": False,
+            "secret_exposed": False,
+        }
+    )
     prompt_context = _context_with_default_web_search(context, default_web_search)
     source_records = _source_records_from_default_web_context(default_web_search)
 
@@ -335,6 +655,7 @@ def run_ai_ceo_chat(
         route=route,
         route_meta=route_meta,
         conversation_history=safe_history,
+        turn_plan=authoritative_turn_plan,
     )
     if on_stage is not None:
         on_stage("model")
@@ -692,6 +1013,8 @@ def run_ai_ceo_fast_turn(
     message: str,
     client_now: str = "",
     client_timezone: str = "",
+    conversation_history: list[dict[str, Any]] | None = None,
+    turn_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Answer routes that do not need merchant model secret resolution."""
     safe_message = _safe_text(message, limit=900)
@@ -715,9 +1038,19 @@ def run_ai_ceo_fast_turn(
             "merchant_pays_provider_directly": False,
         },
     )
-    realtime_kind = _classify_external_realtime_request(safe_message)
-    route = _classify_ai_ceo_route(safe_message, realtime_kind=realtime_kind)
-    route_meta = ai_ceo_route_metadata(safe_message, route=route, realtime_kind=realtime_kind)
+    authoritative_turn_plan = (
+        turn_plan
+        if isinstance(turn_plan, dict)
+        and turn_plan.get("contract_version") == AI_CEO_TURN_PLAN_CONTRACT_VERSION
+        else build_ai_ceo_turn_plan(safe_message, conversation_history=conversation_history)
+    )
+    realtime_kind = _safe_text(authoritative_turn_plan.get("realtime_kind") or "", limit=80)
+    route = _safe_text(authoritative_turn_plan.get("route") or AI_CEO_ROUTE_GENERAL, limit=80)
+    route_meta = {
+        **ai_ceo_route_metadata(safe_message, route=route, realtime_kind=realtime_kind),
+        "turn_plan": _public_ai_ceo_turn_plan(authoritative_turn_plan),
+        "working_state": authoritative_turn_plan.get("working_state") or {},
+    }
     local_clock_kind = _classify_local_clock_request(safe_message)
     if local_clock_kind:
         return {
@@ -764,7 +1097,10 @@ def run_ai_ceo_fast_turn(
         )
         if model_connection.get("configured"):
             return None
-    realtime_search = _run_realtime_search(kind=realtime_kind, message=safe_message)
+    realtime_search = _run_realtime_search(
+        kind=realtime_kind,
+        message=_safe_text(authoritative_turn_plan.get("effective_query") or safe_message, limit=1200),
+    )
     if realtime_search.get("status") == "ready":
         return {
             "status": "realtime_search_answered_without_model",
@@ -963,6 +1299,7 @@ def build_ai_ceo_chat_prompts(
     route: str = AI_CEO_ROUTE_GENERAL,
     route_meta: dict[str, Any] | None = None,
     conversation_history: list[dict[str, Any]] | None = None,
+    turn_plan: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     system_prompt = (
         "你是捷境 Jiejing 的 AI CEO，产品定位是 eBay-first AI 经营工作台，不是通用 ERP、Agent 市场或普通聊天机器人。"
@@ -1008,6 +1345,8 @@ def build_ai_ceo_chat_prompts(
         "merchant_message": message,
         "route": route,
         "route_meta": route_meta or {},
+        "turn_plan": _public_ai_ceo_turn_plan(turn_plan or {}),
+        "working_state": (turn_plan or {}).get("working_state") or context.get("working_state") or {},
         "selection_contract": context.get("selection_contract") or {},
         "current_context": _prompt_context_for_route(context, route),
         "web_context": _prompt_web_context(context),
@@ -1030,6 +1369,8 @@ def build_ai_ceo_chat_prompts(
             "有 selection_contract 时逐项执行；excluded_candidate_names 中的旧候选不得再次成为候选商品。",
             "selection_contract 要求候选证据入口时，每个候选分别给 eBay US 搜索链接或真实 Item ID；搜索入口不等于成交证据，拿不到具体成交证据时逐项写‘成交证据不足’。",
             "不要主动改写 current_context.store.connection_status；如果确需提及，必须逐字使用上下文中的真实值。",
+            "把 turn_plan 和 working_state 当作本轮权威任务状态；代词或继续追问优先沿用 continuation_key 和 entities。",
+            "普通开放域问题先完整回答问题本身，不要附加不相关的 eBay 推销或经营任务卡。",
         ],
     }
     return system_prompt, json.dumps(payload, ensure_ascii=False, default=str)
@@ -1122,17 +1463,32 @@ def _prompt_web_context(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _default_web_context_enabled(*, route: str, message: str) -> bool:
+def _default_web_context_enabled(
+    *,
+    route: str,
+    message: str,
+    turn_plan: dict[str, Any] | None = None,
+) -> bool:
     if not _env_enabled("JIEJING_AI_CEO_DEFAULT_WEB_CONTEXT_ENABLED", default=True):
         return False
     if route not in {AI_CEO_ROUTE_GENERAL, AI_CEO_ROUTE_EBAY_WORKFLOW}:
         return False
-    return bool(_safe_text(message, limit=900))
+    if not _safe_text(message, limit=900):
+        return False
+    if isinstance(turn_plan, dict):
+        tools = turn_plan.get("required_tools") if isinstance(turn_plan.get("required_tools"), list) else []
+        return bool(turn_plan.get("freshness_required") or tools)
+    return True
 
 
-def _run_default_web_context_search(*, route: str, message: str) -> dict[str, Any]:
+def _run_default_web_context_search(
+    *,
+    route: str,
+    message: str,
+    turn_plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     search_started_at = time.monotonic()
-    if not _default_web_context_enabled(route=route, message=message):
+    if not _default_web_context_enabled(route=route, message=message, turn_plan=turn_plan):
         return {
             "status": "not_requested",
             "source_records": [],
@@ -1943,6 +2299,13 @@ def _workflow_handoff_id(*parts: Any) -> str:
 def _realtime_search_query(*, kind: str, message: str) -> str:
     text = _safe_text(message, limit=260)
     lowered = text.lower()
+    if kind == "company_research":
+        symbol = _stock_symbol_from_message(text)
+        entity = symbol or text
+        return (
+            f"{entity} latest fundamentals earnings revenue margin cash flow debt valuation risks "
+            "SEC filings investor relations reliable sources"
+        )
     if kind == "stock_quote":
         if any(marker in lowered for marker in ("英伟达", "nvidia", "nvda")):
             return "NVDA NVIDIA current stock price today quote official market source"
@@ -2684,7 +3047,9 @@ def _elapsed_ms(started_at: float) -> int:
 
 
 def _ai_ceo_model_timeout_seconds(*, route: str, realtime_kind: str = "") -> int:
-    if realtime_kind or route == AI_CEO_ROUTE_EXTERNAL_REALTIME:
+    if realtime_kind == "company_research":
+        default = _env_int("JIEJING_AI_CEO_RESEARCH_MODEL_TIMEOUT_SECONDS", default=30, minimum=8, maximum=90)
+    elif realtime_kind or route == AI_CEO_ROUTE_EXTERNAL_REALTIME:
         default = _env_int("JIEJING_AI_CEO_REALTIME_MODEL_TIMEOUT_SECONDS", default=18, minimum=5, maximum=60)
     elif route == AI_CEO_ROUTE_GENERAL:
         default = _env_int("JIEJING_AI_CEO_GENERAL_MODEL_TIMEOUT_SECONDS", default=16, minimum=5, maximum=60)
@@ -2694,7 +3059,9 @@ def _ai_ceo_model_timeout_seconds(*, route: str, realtime_kind: str = "") -> int
 
 
 def _ai_ceo_model_max_output_tokens(*, route: str, realtime_kind: str = "") -> int:
-    if realtime_kind or route == AI_CEO_ROUTE_EXTERNAL_REALTIME:
+    if realtime_kind == "company_research":
+        default = _env_int("JIEJING_AI_CEO_RESEARCH_MAX_OUTPUT_TOKENS", default=2200, minimum=512, maximum=4096)
+    elif realtime_kind or route == AI_CEO_ROUTE_EXTERNAL_REALTIME:
         default = _env_int("JIEJING_AI_CEO_REALTIME_MAX_OUTPUT_TOKENS", default=1000, minimum=128, maximum=2400)
     elif route == AI_CEO_ROUTE_GENERAL:
         default = _env_int("JIEJING_AI_CEO_GENERAL_MAX_OUTPUT_TOKENS", default=1200, minimum=128, maximum=2400)
@@ -4182,6 +4549,15 @@ def _public_model_context(
             "endpoint_host": _safe_text(model_resolution.get("endpoint_host") or urlparse(endpoint).netloc, limit=160),
             "mode": _safe_text(model_resolution.get("mode") or "", limit=80),
             "secret_ref_scope": _safe_text(model_resolution.get("secret_ref_scope") or "", limit=80),
+            "model_tier": _safe_text(
+                model_resolution.get("model_tier") or getattr(model_client, "jiejing_model_tier", "fast"),
+                limit=20,
+            ),
+            "reasoning_mode": _safe_text(
+                model_resolution.get("reasoning_mode") or getattr(model_client, "jiejing_reasoning_mode", "disabled"),
+                limit=20,
+            ),
+            "complexity_upgrade": model_resolution.get("complexity_upgrade") is True,
             "merchant_pays_provider_directly": bool(model_resolution.get("merchant_pays_provider_directly", True)),
             "jiejing_pays_provider_usage": bool(model_resolution.get("jiejing_pays_provider_usage", False)),
             "frontend_gets_model_api_key": False,

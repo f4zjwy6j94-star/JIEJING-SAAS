@@ -315,13 +315,11 @@ class OpenAICompatibleModelClient(ModelClient):
             "max_tokens": token_budget,
             "stream": stream_enabled,
         }
-        # DeepSeek V4 enables thinking mode by default. Merchant-facing chat
-        # needs the final answer within a bounded latency/token budget; leaving
-        # thinking enabled can spend the full budget on reasoning_content and
-        # return no displayable content. Keep that private reasoning channel
-        # disabled for the official DeepSeek Chat Completions endpoint.
+        # The backend planner selects this attribute from task complexity. It
+        # is never accepted from the browser as an authoritative override.
         if urlparse(self.endpoint).netloc.lower() == "api.deepseek.com":
-            payload["thinking"] = {"type": "disabled"}
+            reasoning_mode = str(getattr(self, "jiejing_reasoning_mode", "disabled") or "disabled").lower()
+            payload["thinking"] = {"type": "enabled" if reasoning_mode == "thinking" else "disabled"}
         if stream_enabled:
             payload["stream_options"] = {"include_usage": True}
         request = urllib.request.Request(

@@ -26,7 +26,12 @@ from jiejing_runtime.execution import ExecutionRequest, ExecutionService
 from jiejing_runtime.provider_job_contracts import build_provider_job_contract_catalog
 
 from .account_health import build_account_health_snapshot, merge_account_health_into_payload
-from .ai_ceo_chat import ai_ceo_route_metadata, run_ai_ceo_chat, run_ai_ceo_fast_turn
+from .ai_ceo_chat import (
+    ai_ceo_route_metadata,
+    build_ai_ceo_turn_plan,
+    run_ai_ceo_chat,
+    run_ai_ceo_fast_turn,
+)
 from .backup_plan import build_backup_plan
 from .billing_plan import build_billing_plan, build_billing_usage, evaluate_quota_action
 from .billing_checkout import build_billing_checkout_contract, create_stripe_checkout_session, create_stripe_customer_portal_session
@@ -125,7 +130,7 @@ from .operations_metering import MeteredModelClient, model_cost_measurement, san
 from .media_source_assets import MAX_MEDIA_SOURCE_BYTES, MediaSourceAssetError, MediaSourceAssetStore
 from .operational_health import build_operational_health
 from .owner_launch_control import build_owner_launch_control
-from .platform_model_status import platform_default_serving_model
+from .platform_model_status import platform_default_serving_model, platform_model_for_tier
 from .paid_launch_approval_packet import build_paid_launch_approval_packet
 from .platform_registry import build_platform_connection_plan, get_platform_definition, registry_summary
 from .platform_data_packet_handoff import build_runtime_handoff_from_platform_packet, merge_runtime_handoff_input
@@ -157,6 +162,7 @@ from .repository import (
     SaaSRepository,
     ai_ceo_market_artifact_eligible,
     normalize_ai_ceo_supplier_fact_attestation,
+    normalize_merchant_product_fact_packet,
 )
 from .runtime_bridge import RuntimeBridge
 from .security import SessionManager
@@ -6807,7 +6813,13 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 return
             command_body = body.get("command") if isinstance(body.get("command"), dict) else {}
             message = str(body.get("message") or command_body.get("text") or command_body.get("command_text") or "")
-            route_meta = ai_ceo_route_metadata(message)
+            conversation_history = body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else []
+            turn_plan = build_ai_ceo_turn_plan(message, conversation_history=conversation_history)
+            route_meta = ai_ceo_route_metadata(
+                message,
+                route=str(turn_plan.get("route") or ""),
+                realtime_kind=str(turn_plan.get("realtime_kind") or ""),
+            )
             supplier_fact_attestation = normalize_ai_ceo_supplier_fact_attestation(
                 supplier_facts=body.get("supplier_facts"),
                 supplier_facts_verified=body.get("supplier_facts_verified"),
@@ -6888,6 +6900,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 message=message,
                 client_now=str(body.get("client_now") or ""),
                 client_timezone=str(body.get("client_timezone") or ""),
+                conversation_history=conversation_history,
+                turn_plan=turn_plan,
             )
             if fast_chat:
                 fast_chat = attach_supplier_fact_attestation(fast_chat)
@@ -6920,6 +6934,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "command_id": (command_response or {}).get("command", {}).get("id") if isinstance(command_response, dict) else "",
                         "route": fast_chat.get("route"),
                         "route_label": fast_chat.get("route_label"),
+                        "turn_plan": _redact_secret_like(turn_plan),
                         "memory_policy": fast_chat.get("memory_policy"),
                         "decision_center_required": bool(fast_chat.get("decision_center_required")),
                         "model_secret_ref": "",
@@ -7220,7 +7235,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             attempt_recovery_state["failure_stage"] = "model_connection"
             try:
-                model_secret_resolution = self._resolve_model_client_for_store(identity=identity, store_id=store_id, body=body)
+                model_secret_resolution = self._resolve_model_client_for_store(
+                    identity=identity,
+                    store_id=store_id,
+                    body={**body, "ai_ceo_turn_plan": turn_plan},
+                )
             except Exception as exc:
                 if not self._is_database_unavailable_exception(exc):
                     raise
@@ -7415,6 +7434,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "attempt_task_id": attempt["task_id"],
                         "route": chat_for_task.get("route") or route_meta.get("route"),
                         "route_label": chat_for_task.get("route_label") or route_meta.get("route_label"),
+                        "turn_plan": _redact_secret_like(turn_plan),
                         "memory_policy": chat_for_task.get("memory_policy") or "transient_no_long_term_memory",
                         "decision_center_required": bool(chat_for_task.get("decision_center_required")),
                         "model_secret_ref": model_secret_resolution.get("secret_ref"),
@@ -7429,6 +7449,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         ),
                         "platform_trial_quota": model_secret_resolution.get("platform_trial_quota") or {},
                         "provider_key": model_secret_resolution.get("provider_key"),
+                        "model_tier": model_secret_resolution.get("model_tier") or turn_plan.get("model_tier"),
+                        "reasoning_mode": model_secret_resolution.get("reasoning_mode") or "disabled",
                         "model_usage_required": True,
                         "frontend_gets_model_api_key": False,
                         "runtime_gets_raw_ebay_token": False,
@@ -7506,6 +7528,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         client_timezone=str(body.get("client_timezone") or ""),
                         command=command_body,
                         conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
+                        turn_plan=turn_plan,
                         model_resolution={
                             key: value
                             for key, value in model_secret_resolution.items()
@@ -8381,6 +8404,62 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "real_platform_writes_enabled": False,
                         "secret_exposed": False,
                     }
+                },
+                status=HTTPStatus.CREATED,
+            )
+            return
+
+        if len(parts) == 3 and parts[0] == "stores" and parts[2] == "product-facts":
+            if not self._require_permission(identity, "create_task"):
+                return
+            body = self._read_json_body()
+            store_id = parts[1]
+            store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
+            if not store:
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            packet = normalize_merchant_product_fact_packet(
+                body.get("merchant_product_fact_packet"),
+                source="authenticated_merchant_request",
+            )
+            if not packet.get("product_name"):
+                self._send_error(HTTPStatus.BAD_REQUEST, "商品名称还没有确认，不能保存商品资料。")
+                return
+            task = self.repository.create_task(
+                company_id=identity["company_id"],
+                store_id=store_id,
+                user_id=identity["user_id"],
+                task_type="merchant_product_facts",
+                title=f"商品资料：{str(packet.get('product_name') or '')[:120]}",
+                input_data={
+                    "merchant_product_fact_packet": packet,
+                    "model_usage_required": False,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                },
+            )
+            report = self.repository.save_merchant_product_fact_report(task=task, packet=packet)
+            task = self.repository.update_task_status(
+                task_id=task["task_id"],
+                company_id=identity["company_id"],
+                status="completed",
+                output={
+                    "report_id": report.get("report_id"),
+                    "unknown_fact_count": len(packet.get("unknown_facts") or []),
+                    "ready_for_listing_generation": bool(packet.get("listing_readiness", {}).get("ready_for_listing_generation")),
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                },
+                audit_summary="Merchant product fact checkpoint completed without a model or platform write.",
+            )
+            self._send_json(
+                {
+                    "task": task,
+                    "report": report,
+                    "merchant_product_fact_packet": packet,
+                    "model_called": False,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
                 },
                 status=HTTPStatus.CREATED,
             )
@@ -10704,6 +10783,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         return copied
 
     def _resolve_model_client_for_store(self, *, identity: dict[str, Any], store_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        turn_plan = body.get("ai_ceo_turn_plan") if isinstance(body.get("ai_ceo_turn_plan"), dict) else {}
+        model_tier = str(turn_plan.get("model_tier") or "fast").strip().lower()
+        if model_tier not in {"fast", "thinking", "pro"}:
+            model_tier = "fast"
         requested_secret_ref = str(body.get("model_secret_ref") or "").strip()
         use_byok = body.get("use_merchant_byok") is not False
         if not requested_secret_ref and not use_byok:
@@ -10866,6 +10949,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "secret_ref": selected.get("secret_ref"),
                 "secret_exposed": False,
             }
+        setattr(model_client, "jiejing_model_tier", model_tier)
+        setattr(
+            model_client,
+            "jiejing_reasoning_mode",
+            "thinking" if definition.provider_key == "deepseek" and model_tier in {"thinking", "pro"} else "disabled",
+        )
         return {
             "status": "resolved",
             "mode": selected_mode,
@@ -10873,6 +10962,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             "provider_label": definition.label,
             "api_style": definition.api_style,
             "model": getattr(model_client, "model", "") or metadata.get("model") or definition.default_model,
+            "model_tier": model_tier,
+            "reasoning_mode": getattr(model_client, "jiejing_reasoning_mode", "disabled"),
+            "complexity_upgrade": model_tier != "fast",
             "endpoint_host": urlparse(getattr(model_client, "endpoint", "") or "").netloc,
             "secret_ref": selected.get("secret_ref"),
             "secret_ref_scope": selected_scope,
@@ -10885,6 +10977,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         }
 
     def _resolve_platform_default_model_client(self, *, body: dict[str, Any]) -> dict[str, Any]:
+        turn_plan = body.get("ai_ceo_turn_plan") if isinstance(body.get("ai_ceo_turn_plan"), dict) else {}
+        model_tier = str(turn_plan.get("model_tier") or "fast").strip().lower()
+        if model_tier not in {"fast", "thinking", "pro"}:
+            model_tier = "fast"
         provider_key = (
             os.environ.get("JIEJING_AI_CEO_PLATFORM_MODEL_PROVIDER")
             or os.environ.get("JIEJING_MODEL_PROVIDER")
@@ -10930,7 +11026,13 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             or (os.environ.get("JIEJING_MODEL") or "").strip()
             or definition.default_model
         )
-        model = platform_default_serving_model(provider=definition.provider_key, configured_model=configured_model)
+        serving_model = platform_default_serving_model(provider=definition.provider_key, configured_model=configured_model)
+        model = platform_model_for_tier(
+            provider=definition.provider_key,
+            configured_model=configured_model,
+            serving_model=serving_model,
+            model_tier=model_tier,
+        )
         base_url = normalize_model_api_base_url(
             provider_key=definition.provider_key,
             base_url=(
@@ -10967,6 +11069,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             }
         fallback_model = (
             os.environ.get("JIEJING_AI_CEO_PLATFORM_FALLBACK_MODEL")
+            or (serving_model if model_tier == "pro" and serving_model != model else "")
             or (configured_model if configured_model != model else "")
         ).strip()
         if fallback_model and fallback_model != model:
@@ -10977,6 +11080,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     model=fallback_model,
                     base_url=base_url,
                 )
+                setattr(fallback_model_client, "jiejing_model_tier", "fast")
+                setattr(fallback_model_client, "jiejing_reasoning_mode", "disabled")
                 setattr(model_client, "jiejing_fallback_model_client", fallback_model_client)
             except ValueError:
                 fallback_model = ""
@@ -10990,6 +11095,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "model": model,
                 "secret_exposed": False,
             }
+        setattr(model_client, "jiejing_model_tier", model_tier)
+        setattr(
+            model_client,
+            "jiejing_reasoning_mode",
+            "thinking" if definition.provider_key == "deepseek" and model_tier in {"thinking", "pro"} else "disabled",
+        )
         return {
             "status": "resolved",
             "mode": "platform_managed_default",
@@ -10997,6 +11108,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             "provider_label": definition.label,
             "api_style": definition.api_style,
             "model": getattr(model_client, "model", "") or model,
+            "serving_model": serving_model,
+            "model_tier": model_tier,
+            "reasoning_mode": getattr(model_client, "jiejing_reasoning_mode", "disabled"),
+            "complexity_upgrade": model_tier != "fast",
             "configured_model": configured_model,
             "fallback_model": fallback_model,
             "fallback_policy": "platform_default_transient_failover" if fallback_model else "disabled",

@@ -127,6 +127,34 @@ AI_CEO_REQUIRED_SUPPLIER_FACT_KEYS = (
     "item_location",
     "unit_cost",
 )
+MERCHANT_PRODUCT_FACT_PACKET_CONTRACT_VERSION = "merchant_product_fact_packet_v1"
+MERCHANT_PRODUCT_FACT_KEYS = (
+    "product_name",
+    "source_url",
+    "sku",
+    "brand",
+    "mpn",
+    "condition",
+    "material",
+    "product_dimensions_cm",
+    "package_weight_g",
+    "package_length_cm",
+    "package_width_cm",
+    "package_height_cm",
+    "unit_cost",
+    "selling_price",
+    "currency",
+    "quantity",
+    "item_location",
+    "handling_time_days",
+    "image_urls",
+    "image_rights_confirmed",
+)
+MERCHANT_PRODUCT_FACT_REQUIRED_KEYS = tuple(
+    key
+    for key in MERCHANT_PRODUCT_FACT_KEYS
+    if key not in {"source_url", "brand", "mpn", "product_dimensions_cm", "handling_time_days"}
+)
 _DOMESTIC_BILLING_COMPANY_LOCKS = tuple(threading.Lock() for _ in range(128))
 _MEDIA_CREDIT_COMPANY_LOCKS = tuple(threading.Lock() for _ in range(128))
 CONTROLLED_MEDIA_CREDIT_SOURCE = "controlled_acceptance"
@@ -5008,6 +5036,9 @@ class SaaSRepository:
         candidate_count = len(product_candidates)
         merchant_intent = "ebay_product_research"
         evidence_status = "source_backed" if source_count else "missing_sources"
+        turn_plan = chat.get("turn_plan") if isinstance(chat.get("turn_plan"), dict) else {}
+        source_mode = str(turn_plan.get("source_mode") or "").strip()
+        merchant_product_source_required = source_mode == "merchant_has_no_source"
         submitted_attestation = (
             chat.get("supplier_fact_attestation")
             if isinstance(chat.get("supplier_fact_attestation"), dict)
@@ -5054,6 +5085,8 @@ class SaaSRepository:
             blocked_by.append("selected_candidate_required")
         if not source_count:
             blocked_by.append("source_evidence_required")
+        if merchant_product_source_required:
+            blocked_by.append("merchant_product_source_required")
         if missing_supplier_fact_keys:
             blocked_by.append("supplier_facts_incomplete")
         elif not supplier_facts_verified:
@@ -5081,6 +5114,8 @@ class SaaSRepository:
             "artifact_type": "ai_ceo.market_research",
             "artifact_version": AI_CEO_MARKET_REPORT_CONTRACT_VERSION,
             "merchant_intent": merchant_intent,
+            "source_mode": source_mode,
+            "merchant_product_source_required": merchant_product_source_required,
             "source_type": "ai_ceo_chat",
             "source_command_id": command_id or "",
             "product": product,
@@ -5120,7 +5155,7 @@ class SaaSRepository:
             "confirmation_items": confirmation_items,
             "listing_handoff": {
                 "ready_for_listing_draft": listing_import_ready,
-                "source_mode": "ai_ceo_chat_structured_handoff",
+                "source_mode": source_mode or "ai_ceo_chat_structured_handoff",
                 "target_report_type": "ai_ceo.market_research",
                 "listing_fields": (
                     _ai_ceo_listing_handoff_fields(
@@ -5217,6 +5252,109 @@ class SaaSRepository:
             "task_id": task["task_id"],
             "runtime_run_id": runtime_run_id,
             "report_type": "ai_ceo.market_research",
+            "title": title,
+            "status": "saved",
+            "created_at": created_at,
+            "report": report_payload,
+            "secret_exposed": False,
+        }
+
+    def save_merchant_product_fact_report(
+        self,
+        *,
+        task: dict[str, Any],
+        packet: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Persist one authenticated merchant product-fact checkpoint."""
+
+        self.initialize()
+        safe_packet = _redact_secret_like(packet if isinstance(packet, dict) else {})
+        product = _sanitize_merchant_ceo_text(safe_packet.get("product_name"), limit=120) or "待确认商品"
+        created_at = now_iso()
+        report_id = _id("report")
+        title = f"商品资料：{product}"[:180]
+        unknown = safe_packet.get("unknown_facts") if isinstance(safe_packet.get("unknown_facts"), list) else []
+        summary = (
+            f"“{product}”的商品事实已由商家确认，仍需 eBay 体检和发布确认。"
+            if not unknown
+            else f"“{product}”的商品资料已保存，仍有 {len(unknown)} 项待补。"
+        )
+        report_payload = {
+            "contract_version": MERCHANT_PRODUCT_FACT_PACKET_CONTRACT_VERSION,
+            "artifact_type": "merchant.product_facts",
+            "product": product,
+            "merchant_readable_summary": summary,
+            "merchant_product_fact_packet": safe_packet,
+            "listing_import_ready": not unknown,
+            "blocked_by": safe_packet.get("blocked_by") if isinstance(safe_packet.get("blocked_by"), list) else [],
+            "requires_human_review_before_publish": True,
+            "real_platform_writes_enabled": False,
+            "secret_exposed": False,
+        }
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into reports (
+                  report_id, task_id, runtime_run_id, report_type, title, status, created_at, report_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    report_id,
+                    task["task_id"],
+                    "merchant_product_facts",
+                    "merchant.product_facts",
+                    title,
+                    "saved",
+                    created_at,
+                    json.dumps(report_payload, ensure_ascii=False, default=json_default),
+                ),
+            )
+            self._insert_merchant_memory(
+                conn,
+                company_id=task["company_id"],
+                store_id=task["store_id"],
+                memory_type="merchant_product_facts",
+                source_type="report",
+                source_id=report_id,
+                title=title,
+                summary=summary,
+                importance=85,
+                tags=["merchant.product_facts", "listing_handoff", "merchant_confirmed"],
+                memory={
+                    "report_id": report_id,
+                    "task_id": task["task_id"],
+                    "report_type": "merchant.product_facts",
+                    "product": product,
+                    "unknown_fact_count": len(unknown),
+                    "ready_for_listing_generation": not unknown,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                },
+                created_by=task.get("user_id"),
+            )
+            self._insert_audit(
+                conn,
+                company_id=task["company_id"],
+                store_id=task["store_id"],
+                user_id=task.get("user_id"),
+                actor_type="merchant",
+                action_type="merchant.product_facts.saved",
+                target_type="report",
+                target_id=report_id,
+                summary="Authenticated merchant product facts saved for the Listing workflow.",
+                details={
+                    "task_id": task["task_id"],
+                    "unknown_fact_count": len(unknown),
+                    "ready_for_listing_generation": not unknown,
+                    "real_platform_writes_enabled": False,
+                    "secret_exposed": False,
+                },
+            )
+        return {
+            "report_id": report_id,
+            "task_id": task["task_id"],
+            "runtime_run_id": "merchant_product_facts",
+            "report_type": "merchant.product_facts",
             "title": title,
             "status": "saved",
             "created_at": created_at,
@@ -16794,6 +16932,106 @@ def normalize_ai_ceo_supplier_fact_attestation(
         "missing_supplier_fact_keys": unresolved_keys,
         "invalid_supplier_fact_keys": invalid_keys,
         "unknown_field_count": len(set(str(key) for key in raw) - set(AI_CEO_REQUIRED_SUPPLIER_FACT_KEYS)),
+        "secret_exposed": False,
+    }
+
+
+def normalize_merchant_product_fact_packet(
+    value: Any,
+    *,
+    source: str,
+) -> dict[str, Any]:
+    """Normalize an authenticated merchant fact form without trusting AI labels."""
+
+    raw = value if isinstance(value, dict) else {}
+    trusted_merchant_request = str(source or "") == "authenticated_merchant_request"
+    submitted = raw.get("merchant_confirmed_facts") if isinstance(raw.get("merchant_confirmed_facts"), dict) else {}
+    derived_submitted = raw.get("derived_listing_suggestions") if isinstance(raw.get("derived_listing_suggestions"), dict) else {}
+
+    def clean_values(items: dict[str, Any], *, allow_confirmation: bool) -> dict[str, Any]:
+        cleaned: dict[str, Any] = {}
+        for key in MERCHANT_PRODUCT_FACT_KEYS:
+            raw_value = items.get(key)
+            if key == "image_rights_confirmed":
+                if allow_confirmation and raw_value is True:
+                    cleaned[key] = True
+                continue
+            limit = 2400 if key == "image_urls" else 700 if key == "source_url" else 240
+            text = _safe_ai_ceo_supplier_text(raw_value, limit=limit)
+            if not text:
+                continue
+            redacted = _redact_secret_like(text)
+            if not isinstance(redacted, str) or redacted != text:
+                continue
+            if key == "source_url" and not re.match(r"^https?://", text, flags=re.IGNORECASE):
+                continue
+            if key in {
+                "package_weight_g",
+                "package_length_cm",
+                "package_width_cm",
+                "package_height_cm",
+                "unit_cost",
+                "selling_price",
+                "quantity",
+                "handling_time_days",
+            }:
+                try:
+                    numeric = float(text)
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(numeric) or numeric <= 0 or numeric > 1_000_000_000:
+                    continue
+            cleaned[key] = text
+        return cleaned
+
+    merchant_confirmed = clean_values(submitted, allow_confirmation=trusted_merchant_request) if trusted_merchant_request else {}
+    derived = clean_values(derived_submitted, allow_confirmation=False)
+    unknown = [key for key in MERCHANT_PRODUCT_FACT_REQUIRED_KEYS if key not in merchant_confirmed]
+    source_records: list[dict[str, Any]] = []
+    source_url = str(merchant_confirmed.get("source_url") or "")
+    if source_url:
+        source_records.append(
+            {
+                "type": "merchant_product_link",
+                "url": source_url,
+                "rights_status": "not_applicable",
+                "secret_exposed": False,
+            }
+        )
+    image_urls = str(merchant_confirmed.get("image_urls") or "")
+    for image_url in re.findall(r"https?://[^\s,，；;]+", image_urls, flags=re.IGNORECASE)[:10]:
+        source_records.append(
+            {
+                "type": "merchant_product_image",
+                "url": image_url[:700],
+                "rights_status": "merchant_confirmed" if merchant_confirmed.get("image_rights_confirmed") is True else "pending",
+                "secret_exposed": False,
+            }
+        )
+    total = len(MERCHANT_PRODUCT_FACT_REQUIRED_KEYS)
+    ready_count = total - len(unknown)
+    return {
+        "contract_version": MERCHANT_PRODUCT_FACT_PACKET_CONTRACT_VERSION,
+        "source": "authenticated_merchant_request" if trusted_merchant_request else "untrusted_input",
+        "source_mode": "merchant_source_supplied" if source_url else "merchant_owned_product",
+        "product_name": str(merchant_confirmed.get("product_name") or derived.get("product_name") or "")[:120],
+        # Source-confirmed facts require a separate extractor/provenance step;
+        # the browser cannot award that status to its own values.
+        "source_confirmed_facts": {},
+        "merchant_confirmed_facts": merchant_confirmed,
+        "derived_listing_suggestions": derived,
+        "unknown_facts": unknown,
+        "source_records": source_records,
+        "listing_readiness": {
+            "ready_fact_count": ready_count,
+            "total_fact_count": total,
+            "completion_percent": round((ready_count / total) * 100) if total else 0,
+            "ready_for_listing_generation": not unknown,
+            "ready_for_real_publish": False,
+            "reason": "商品事实已补齐，仍需 eBay 体检和发布确认" if not unknown else "仍有商品事实待商家确认",
+        },
+        "blocked_by": [f"merchant_product_fact_missing:{key}" for key in unknown],
+        "real_platform_writes_enabled": False,
         "secret_exposed": False,
     }
 
