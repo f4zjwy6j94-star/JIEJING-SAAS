@@ -38,6 +38,7 @@ from jiejing_saas.api_server import (  # noqa: E402
     SaaSBackendHandler,
     _compensate_provider_queue_creation_failure,
     _create_provider_job_queue_records,
+    _merchant_safe_replaceable_media_provider,
     _reconcile_media_asset_job_review_readiness,
 )
 from jiejing_saas.config import SaaSSettings  # noqa: E402
@@ -263,6 +264,37 @@ class MediaSettlementContractTest(unittest.TestCase):
             .get("created_at")
         )
         self.assertEqual("2026-08-24T08:18:52+00:00", persisted_timestamp)
+
+    def test_browser_media_redaction_preserves_safe_manifest_transport_url(self) -> None:
+        asset_url = "https://v3b.fal.media/files/b/fixture/generated.jpg"
+        browser_payload = _merchant_safe_replaceable_media_provider(
+            {
+                "media_provider": "fal",
+                "asset_manifest": [
+                    {
+                        "url": asset_url,
+                        "url_or_file_path": asset_url,
+                        "source_provider_or_upload": "fal",
+                    }
+                ],
+                "diagnostic": "fal driver is replaceable",
+            }
+        )
+
+        self.assertEqual("jiejing_media_router", browser_payload.get("media_provider"))
+        self.assertEqual("jiejing_media_router driver is replaceable", browser_payload.get("diagnostic"))
+        asset = browser_payload.get("asset_manifest", [{}])[0]
+        self.assertEqual(asset_url, asset.get("url"))
+        self.assertEqual(asset_url, asset.get("url_or_file_path"))
+        self.assertEqual("jiejing_media_router", asset.get("source_provider_or_upload"))
+
+    def test_browser_media_redaction_rejects_capability_bearing_manifest_url(self) -> None:
+        unsafe_url = "https://v3b.fal.media/files/generated.jpg?signature=do-not-return"
+        browser_payload = _merchant_safe_replaceable_media_provider(
+            {"asset_manifest": [{"url": unsafe_url}]}
+        )
+
+        self.assertEqual("", browser_payload.get("asset_manifest", [{}])[0].get("url"))
 
     def _reservation(
         self,

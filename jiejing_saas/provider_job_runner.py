@@ -295,6 +295,21 @@ class ProviderJobRunner:
                 f"Do not add new text, letters, numbers, labels, logos, certification icons, or unsupported claims. Preserve existing visible product branding exactly; do not invent or remove it. Avoid: {', '.join(blocked_claims)}."
             )
         )
+        primary_image_intent = " ".join(
+            [
+                str(creative_job_spec.get("output_type") or ""),
+                *(str(scene) for scene in scene_types),
+            ]
+        ).casefold()
+        if image_count == 1 and any(
+            marker in primary_image_intent
+            for marker in ("主图", "white_background", "white background", "main image")
+        ):
+            image_prompt = (
+                f"{image_prompt} Return exactly one coherent single-view product composition in this image: one centered product, "
+                "one camera angle, and one continuous background. Do not create a collage, contact sheet, comparison grid, "
+                "multi-panel layout, packaging breakdown, repeated copies, or multiple camera angles."
+            )
         video_requested = media_video_requested(inputs)
         video_intent = str(creative_job_spec.get("video_intent") or "appearance_showcase").strip().lower()
         motion_constraints = _list_or_default(

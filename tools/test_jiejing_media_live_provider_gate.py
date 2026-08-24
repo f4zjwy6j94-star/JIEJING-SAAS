@@ -229,6 +229,9 @@ def main() -> int:
         concept_body["inputs"]["product_facts"].pop("reference_images", None)
         concept_body["inputs"].pop("reference_image_url", None)
         concept_body["inputs"]["creative_job_spec"]["output_safety_mode"] = "concept_reference_only"
+        concept_body["inputs"]["creative_job_spec"]["output_type"] = "只做 eBay 主图：白底 / 干净背景 / 主体清晰"
+        concept_body["inputs"]["image_count"] = 1
+        concept_body["inputs"]["scene_types"] = ["white_background"]
         concept_body["inputs"]["commercial_rights_confirmed"] = False
         missing_concept_acceptance = ProviderJobRunner().run(
             company_id="co_test",
@@ -266,6 +269,15 @@ def main() -> int:
             raise AssertionError("a returned concept asset must settle as generated while remaining permanently non-Listing")
         if "No text, letters, numbers" not in FakeMediaGenerationAdapter.configs[-1].image_prompt:
             raise AssertionError("concept generation prompt must prohibit text and unsupported labels")
+        concept_prompt = FakeMediaGenerationAdapter.configs[-1].image_prompt
+        for required_primary_image_constraint in (
+            "exactly one coherent single-view product composition",
+            "Do not create a collage, contact sheet, comparison grid, multi-panel layout",
+        ):
+            if required_primary_image_constraint not in concept_prompt:
+                raise AssertionError(
+                    f"single eBay main-image generation must forbid contact sheets and multi-angle panels: {concept_prompt}"
+                )
 
         with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="true"):
             image_only = ProviderJobRunner().run(

@@ -975,26 +975,56 @@ def _sanitize_media_source_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
     return sanitized
 
 
-def _merchant_safe_replaceable_media_provider(value: Any) -> Any:
-    """Remove replaceable media driver names from every browser JSON response."""
+def _merchant_safe_replaceable_media_provider(value: Any, *, _inside_asset_manifest: bool = False) -> Any:
+    """Hide replaceable driver labels without corrupting browser-loadable asset URLs."""
 
     if isinstance(value, dict):
         safe: dict[str, Any] = {}
         for raw_key, raw_value in value.items():
             key = str(raw_key)
-            if key.lower() in {"media_provider", "preferred_media_provider", "source_provider_or_upload"}:
+            lower_key = key.lower()
+            child_inside_manifest = _inside_asset_manifest or lower_key == "asset_manifest"
+            if child_inside_manifest and lower_key in {"url", "url_or_file_path"}:
+                safe[key] = raw_value if _is_safe_public_media_asset_url(raw_value) else ""
+            elif lower_key in {"media_provider", "preferred_media_provider", "source_provider_or_upload"}:
                 safe[key] = "jiejing_media_router"
             else:
-                safe[key] = _merchant_safe_replaceable_media_provider(raw_value)
+                safe[key] = _merchant_safe_replaceable_media_provider(
+                    raw_value,
+                    _inside_asset_manifest=child_inside_manifest,
+                )
         return safe
     if isinstance(value, list):
-        return [_merchant_safe_replaceable_media_provider(item) for item in value]
+        return [
+            _merchant_safe_replaceable_media_provider(item, _inside_asset_manifest=_inside_asset_manifest)
+            for item in value
+        ]
     if isinstance(value, tuple):
-        return [_merchant_safe_replaceable_media_provider(item) for item in value]
+        return [
+            _merchant_safe_replaceable_media_provider(item, _inside_asset_manifest=_inside_asset_manifest)
+            for item in value
+        ]
     if isinstance(value, str):
         safe_text = re.sub(r"media\.fal_asset_generation", "media.asset_generation", value, flags=re.IGNORECASE)
         return re.sub(r"\bfal(?:\.ai)?\b", "jiejing_media_router", safe_text, flags=re.IGNORECASE)
     return value
+
+
+def _is_safe_public_media_asset_url(value: Any) -> bool:
+    """Allow an HTTPS media transport URL through only when it carries no URL capability secret."""
+
+    try:
+        parsed = urlparse(str(value or ""))
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        parsed.scheme == "https"
+        and parsed.hostname
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.query
+        and not parsed.fragment
+    )
 
 
 def _is_signed_media_source_url(value: Any) -> bool:
