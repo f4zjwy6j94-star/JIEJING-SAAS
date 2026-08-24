@@ -49,6 +49,7 @@ CHECKS: list[tuple[str, list[str]]] = [
         [sys.executable, "tools/test_jiejing_product_grade_journey_session_cookie.py"],
     ),
     ("ai_ceo_browser_streaming", [sys.executable, "tools/test_jiejing_ai_ceo_browser_streaming_contract.py"]),
+    ("model_streaming_client", [sys.executable, "tools/test_jiejing_model_streaming_client.py"]),
     ("ai_ceo_source_quality", [sys.executable, "tools/test_jiejing_ai_ceo_source_quality.py"]),
     ("ai_ceo_answer_rendering", [sys.executable, "tools/test_jiejing_ai_ceo_answer_rendering.py"]),
     ("ai_ceo_listing_fact_boundary", [sys.executable, "tools/test_jiejing_ai_ceo_listing_fact_boundary.py"]),

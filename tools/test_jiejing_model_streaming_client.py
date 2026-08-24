@@ -62,6 +62,7 @@ def main() -> None:
 
     assert captured["payload"]["stream"] is True, captured
     assert captured["payload"]["stream_options"] == {"include_usage": True}, captured
+    assert captured["payload"]["thinking"] == {"type": "disabled"}, captured
     assert result["text"] == "候选商品卡片", result
     assert result["finish_reason"] == "stop", result
     assert result["model_mode"] == "live_http_model_text_stream", result
