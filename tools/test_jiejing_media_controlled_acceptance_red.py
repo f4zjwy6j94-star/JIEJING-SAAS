@@ -203,6 +203,67 @@ class MediaSettlementContractTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def test_postgres_shaped_credit_timestamps_survive_media_queue_persistence(self) -> None:
+        """Postgres returns timestamptz values as datetimes; the queue graph must persist them safely."""
+
+        store = self.repository.create_store(
+            company_id=self.company_id,
+            user_id=self.user_id,
+            payload={"platform": "ebay", "store_name": "postgres-shaped-media-credit", "marketplace": "EBAY_US"},
+        )
+        credit_state = {
+            "enforcement_enabled": True,
+            "quote": {
+                "estimated_points": 20,
+                "points_per_image": 20,
+                "image_count": 1,
+                "generation_tier": "fast",
+                "video_requested": False,
+            },
+            "reservation": {
+                "status": "reserved",
+                "ledger_entry": {
+                    "ledger_id": "mcredit_postgres_timestamp_contract",
+                    "operation_type": "reserve",
+                    "points": 20,
+                    "created_at": datetime(2026, 8, 24, 8, 18, 52, tzinfo=timezone.utc),
+                },
+            },
+        }
+        creation_state: dict[str, Any] = {}
+        task, media_job, queue_job = _create_provider_job_queue_records(
+            self.repository,
+            company_id=self.company_id,
+            store_id=store["store_id"],
+            user_id=self.user_id,
+            title="Postgres-shaped controlled media acceptance",
+            provider_job_key="media.asset_generation",
+            contract={"provider_family": "media", "queue": "media", "max_attempts": 1},
+            contract_version="postgres-shaped-media-credit-v1",
+            safe_inputs=self._canonical_inputs(),
+            media_idempotency_key="postgres-shaped-media-credit-v1",
+            media_request_fingerprint="postgres-shaped-media-credit-fingerprint-v1",
+            media_credit_state=credit_state,
+            is_media_provider_job=True,
+            secret_ref="",
+            run_mode="queued",
+            creation_state=creation_state,
+        )
+
+        self.assertEqual("committed", creation_state.get("stage"))
+        self.assertEqual("queued", task.get("status"))
+        self.assertIsInstance(media_job, dict)
+        self.assertEqual("queued", (media_job or {}).get("status"))
+        self.assertEqual("queued", queue_job.get("status"))
+        persisted_timestamp = (
+            task.get("input", {})
+            .get("media_credits", {})
+            .get("reservation", {})
+            .get("ledger_entry", {})
+            .get("created_at")
+        )
+        self.assertEqual("2026-08-24T08:18:52+00:00", persisted_timestamp)
+
     def _reservation(
         self,
         *,

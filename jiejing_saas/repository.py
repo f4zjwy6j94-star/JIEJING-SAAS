@@ -2758,7 +2758,7 @@ class SaaSRepository:
                     "queued",
                     created_at,
                     created_at,
-                    json.dumps(input_data, ensure_ascii=False),
+                    json.dumps(input_data, ensure_ascii=False, default=json_default),
                     "{}",
                 ),
             )
@@ -2824,7 +2824,7 @@ class SaaSRepository:
                     record["max_attempts"],
                     created_at,
                     created_at,
-                    json.dumps(job_data, ensure_ascii=False),
+                    json.dumps(job_data, ensure_ascii=False, default=json_default),
                 ),
             )
             self._insert_audit(
