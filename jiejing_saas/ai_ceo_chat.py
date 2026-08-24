@@ -543,12 +543,18 @@ def run_ai_ceo_chat(
     if not answer_quality.get("accepted") and _env_enabled("JIEJING_AI_CEO_MODEL_REPAIR_RETRY_ENABLED", default=True):
         repair_started_at = time.monotonic()
         try:
+            repair_scope_instruction = (
+                "本轮是既有市场报告的成交证据补证：必须吸收 merchant_message 中的新数字、Item ID 和相对赢家，"
+                "不得重放旧候选卡；明确这不是供应商或可发布证明，并进入供应商事实核验。"
+                if _looks_like_market_evidence_followup(message=safe_message, route=route)
+                else "选品问题必须按要求给出足量的具体候选商品卡，不得回答其他历史问题。"
+            )
             repair_result = model_client.generate_text(
                 system_prompt=(
                     system_prompt
                     + " 上一版回复没有通过本轮问题一致性检查。只回答当前 merchant_message；"
-                    "选品问题必须按要求给出足量的具体候选商品卡，不得回答其他历史问题。"
-                    "涉及 eBay 规则、政策、图片或发布要求时，必须区分官方强制要求、平台建议和商家最佳实践；"
+                    + repair_scope_instruction
+                    + "涉及 eBay 规则、政策、图片或发布要求时，必须区分官方强制要求、平台建议和商家最佳实践；"
                     "每条外部事实使用已有 source_records 的 [S1]、[S2] 等编号引用。"
                     "没有官方来源支撑时，不得使用‘必须’‘一律’‘绝对’‘禁止’‘会被下架’等断言。"
                     "回答必须以完整句子结束；如果上一版停在半句话，改写成更短的完整答案。"
@@ -583,12 +589,15 @@ def run_ai_ceo_chat(
 
     contract_projection_used = False
     if not answer_quality.get("accepted"):
-        projected_answer = _project_selection_answer_to_contract(
-            message=safe_message,
-            answer=repair_candidate_answer or answer,
-            context=prompt_context,
-            blocked_by=answer_quality.get("blocked_by") or [],
-        )
+        if _looks_like_market_evidence_followup(message=safe_message, route=route):
+            projected_answer = _project_market_evidence_followup_answer(safe_message)
+        else:
+            projected_answer = _project_selection_answer_to_contract(
+                message=safe_message,
+                answer=repair_candidate_answer or answer,
+                context=prompt_context,
+                blocked_by=answer_quality.get("blocked_by") or [],
+            )
         if projected_answer:
             projected_quality = validate_ai_ceo_answer_quality(
                 message=safe_message,
@@ -3236,6 +3245,8 @@ def validate_ai_ceo_answer_quality(
         return source_quality
     if _looks_like_platform_rule_request(message=message, route=route) and source_records:
         return source_quality
+    if _looks_like_market_evidence_followup(message=message, route=route):
+        return _market_evidence_followup_answer_quality(message=message, answer=answer)
     if not _looks_like_product_selection_request(message=message, route=route):
         return {
             "accepted": bool(_safe_text(answer, limit=6000)),
@@ -3529,6 +3540,56 @@ def _looks_like_market_evidence_followup(*, message: str, route: str) -> bool:
     return any(marker in text for marker in evidence_markers) and any(marker in text for marker in decision_markers)
 
 
+def _market_evidence_followup_expected_winner(message: str) -> str:
+    text = _safe_text(message, limit=900)
+    match = re.search(
+        r"(?:相对赢家|最终赢家|赢家)\s*(?:应为|为|是|[:：])\s*([^。；;\n，,]{2,80})",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    winner = re.split(r"(?:请|下一步|这只是|仅)", match.group(1), maxsplit=1)[0]
+    return winner.strip(" ：:，,。；;（）()[]【】")[:80]
+
+
+def _market_evidence_followup_answer_quality(*, message: str, answer: str) -> dict[str, Any]:
+    text = _safe_text(answer, limit=12000)
+    expected_winner = _market_evidence_followup_expected_winner(message)
+    normalized_answer = _normalized_candidate_name(text)
+    normalized_winner = _normalized_candidate_name(expected_winner)
+    submitted_item_ids = list(dict.fromkeys(re.findall(r"(?<!\d)\d{9,15}(?!\d)", message)))
+    has_winner_conclusion = bool(
+        re.search(r"(?:相对赢家|最终赢家|赢家|三选一结论|市场成交证据结论)", text, flags=re.IGNORECASE)
+    )
+    winner_preserved = not normalized_winner or normalized_winner in normalized_answer
+    submitted_evidence_preserved = (
+        any(item_id in text for item_id in submitted_item_ids)
+        if submitted_item_ids
+        else bool(re.search(r"(?:已售样本|sold\s*(?:&|and)?\s*completed|在售(?:数量|竞争)?|中位价)", text, flags=re.IGNORECASE))
+    )
+    supplier_step_required = "供应商" in message
+    supplier_step_preserved = not supplier_step_required or "供应商" in text
+    blocked_by = []
+    if not text:
+        blocked_by.append("empty_model_answer")
+    if not has_winner_conclusion or not winner_preserved:
+        blocked_by.append("missing_market_evidence_winner")
+    if not submitted_evidence_preserved:
+        blocked_by.append("missing_submitted_market_evidence")
+    if not supplier_step_preserved:
+        blocked_by.append("missing_supplier_fact_next_step")
+    return {
+        "accepted": bool(text) and not blocked_by,
+        "quality_gate": "market_evidence_followup_grounding_v1",
+        "expected_winner": expected_winner,
+        "submitted_item_id_count": len(submitted_item_ids),
+        "submitted_evidence_preserved": submitted_evidence_preserved,
+        "blocked_by": blocked_by,
+        "secret_exposed": False,
+    }
+
+
 def _is_official_ebay_domain(domain: str) -> bool:
     normalized = _safe_text(domain, limit=120).lower().removeprefix("www.")
     return normalized == "ebay.com" or normalized.endswith(".ebay.com") or normalized.endswith(".ebaystatic.com")
@@ -3536,6 +3597,8 @@ def _is_official_ebay_domain(domain: str) -> bool:
 
 def _looks_like_product_selection_request(*, message: str, route: str) -> bool:
     if route != AI_CEO_ROUTE_EBAY_WORKFLOW:
+        return False
+    if _looks_like_market_evidence_followup(message=message, route=route):
         return False
     text = _normalized_text(message)
     markers = (
@@ -3692,6 +3755,48 @@ def _requested_product_candidate_count(message: str) -> int:
         if marker in text:
             return count
     return 2
+
+
+def _project_market_evidence_followup_answer(message: str) -> str:
+    """Preserve merchant-verified market evidence when the model replays stale context."""
+
+    winner = _market_evidence_followup_expected_winner(message)
+    if not winner:
+        return ""
+    evidence_clauses: list[str] = []
+    for raw_clause in re.split(r"[；;\n]+", _safe_text(message, limit=900)):
+        clause = raw_clause.strip(" ：:，,。")
+        if not clause or not re.search(
+            r"(?:sold\s*(?:&|and|/)?\s*completed|已售|item\s*ids?|在售|中位价)",
+            clause,
+            flags=re.IGNORECASE,
+        ):
+            continue
+        clause = re.sub(
+            r"^继续\s+report_[0-9a-z]+[^：:]{0,100}[：:]\s*",
+            "",
+            clause,
+            flags=re.IGNORECASE,
+        )
+        evidence_clauses.append(_safe_text(clause, limit=360))
+        if len(evidence_clauses) >= 4:
+            break
+    item_ids = list(dict.fromkeys(re.findall(r"(?<!\d)\d{9,15}(?!\d)", message)))
+    evidence_lines = [f"- {clause}" for clause in evidence_clauses]
+    if item_ids and not any(any(item_id in line for item_id in item_ids) for line in evidence_lines):
+        evidence_lines.append(f"- 人工核验样本 Item IDs：{' / '.join(item_ids[:6])}")
+    if not evidence_lines:
+        return ""
+    return "\n\n".join(
+        (
+            "### 市场成交证据结论",
+            f"候选商品 1：{winner}\n**相对赢家：** {winner}",
+            "**记录依据：** 以下是商家本轮提交并标记为已核验的 eBay US 市场数据，不是模型推测。\n"
+            + "\n".join(evidence_lines),
+            "**证据边界：** 这只能证明该商品方向在本轮三个候选中相对更强；不证明真实供应商、库存、材质、尺寸、重量、成本、图片权利或已经具备发布条件。",
+            "**下一步：** 进入真实供应商事实核验。当前不生成 Listing、不生图、不写入 eBay，也不要求重复 OAuth。",
+        )
+    )
 
 
 def _project_selection_answer_to_contract(

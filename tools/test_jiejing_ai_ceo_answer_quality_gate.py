@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_saas.ai_ceo_chat import (  # noqa: E402
+    _looks_like_product_selection_request,
     _looks_like_platform_rule_request,
     _model_answer_rejected_fallback,
     _selection_response_contract,
@@ -271,6 +272,10 @@ def main() -> None:
         message=evidence_followup_message,
         route="ebay_workflow",
     ) is False, "market evidence follow-up must not be treated as a platform-rule answer merely because it mentions images"
+    assert _looks_like_product_selection_request(
+        message=evidence_followup_message,
+        route="ebay_workflow",
+    ) is False, "market evidence follow-up must update the existing report instead of regenerating candidate cards"
     evidence_followup_quality = validate_ai_ceo_answer_quality(
         message=evidence_followup_message,
         route="ebay_workflow",
@@ -288,6 +293,39 @@ def main() -> None:
         ],
     )
     assert evidence_followup_quality["accepted"] is True, evidence_followup_quality
+
+    verified_evidence_followup = (
+        "继续 report_5eaf36a405de7331，只处理已核验市场数据并做三选一："
+        "竹制手机支架 Sold/Completed 16、在售67，样本 Item IDs 155898688458/298493684620/318495642696，"
+        "中位价 RMB53.56；硅胶理线座 Sold 2、在售20；便签夹 Sold 0、在售4。"
+        "相对赢家为竹制手机支架。请保存结论并进入真实供应商事实核验；"
+        "不要重跑选品，不建 Listing、不生图、不写 eBay、不要求 OAuth。"
+    )
+    stale_candidate_card = (
+        "### 候选商品卡\n"
+        "候选商品 1：竹制桌面手机支架\n成交证据不足。\n"
+        "候选商品 2：硅胶桌面线缆固定座\n成交证据不足。"
+    )
+    stale_evidence_quality = validate_ai_ceo_answer_quality(
+        message=verified_evidence_followup,
+        route="ebay_workflow",
+        answer=stale_candidate_card,
+    )
+    assert stale_evidence_quality["accepted"] is False, stale_evidence_quality
+    assert "missing_submitted_market_evidence" in stale_evidence_quality["blocked_by"], stale_evidence_quality
+
+    grounded_evidence_quality = validate_ai_ceo_answer_quality(
+        message=verified_evidence_followup,
+        route="ebay_workflow",
+        answer=(
+            "### 市场成交证据结论\n"
+            "相对赢家：竹制手机支架。人工核验样本 Item ID 155898688458；"
+            "Sold/Completed 16、在售 67，中位价 RMB 53.56。"
+            "这只是商品方向证据，不证明供应商、库存、材质、尺寸或图片权利。"
+            "下一步进入真实供应商事实核验。"
+        ),
+    )
+    assert grounded_evidence_quality["accepted"] is True, grounded_evidence_quality
 
     rejected = validate_ai_ceo_answer_quality(message=message, route="ebay_workflow", answer=unrelated)
     assert rejected["accepted"] is False, rejected
@@ -430,6 +468,23 @@ def main() -> None:
         assert strict_repaired_model.calls == 2, strict_repaired_model.calls
         assert "excluded_previous_candidate_reused" in strict_repaired_model.system_prompts[1], strict_repaired_model.system_prompts[1]
         assert "重型订书机" in strict_repaired_model.system_prompts[1], strict_repaired_model.system_prompts[1]
+
+        evidence_projection_model = SequenceModel([stale_candidate_card, stale_candidate_card])
+        evidence_projection = run_ai_ceo_chat(
+            repository=MinimalRepository(),
+            company_id="company_quality",
+            store_id="store_quality",
+            user_id="user_quality",
+            message=verified_evidence_followup,
+            model_client=evidence_projection_model,
+        )
+        assert evidence_projection["status"] == "model_answered", evidence_projection
+        assert evidence_projection["answer_quality"]["accepted"] is True, evidence_projection
+        assert evidence_projection["answer_quality"]["contract_projection_used"] is True, evidence_projection
+        assert "竹制手机支架" in evidence_projection["answer"], evidence_projection
+        assert "155898688458" in evidence_projection["answer"], evidence_projection
+        assert "真实供应商事实核验" in evidence_projection["answer"], evidence_projection
+        assert "成交证据不足" not in evidence_projection["answer"], evidence_projection
 
         projected_model = SequenceModel([projectable_new_answer, projectable_new_answer])
         projected_chat = run_ai_ceo_chat(
