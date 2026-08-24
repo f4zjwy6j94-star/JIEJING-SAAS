@@ -116,6 +116,10 @@ def main() -> int:
     repository_text = (ROOT / "jiejing_saas" / "repository.py").read_text(encoding="utf-8")
     if "rowid desc" in repository_text.lower():
         return fail("repository queries used by the Postgres adapter must not depend on SQLite rowid ordering")
+    if repository_text.count("cast(expires_at as text) = ''") < 2:
+        return fail("media credit expiry ordering must compare text safely across SQLite and Postgres timestamptz columns")
+    if re.search(r"expires_at\s*=\s*''", repository_text):
+        return fail("Postgres timestamptz columns must never be compared directly with an empty string")
     for analytics_marker in (
         "to_char(occurred_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')",
         'analytics_period_parameter: datetime | str = analytics_period_started_utc',

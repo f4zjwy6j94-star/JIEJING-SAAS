@@ -7478,7 +7478,7 @@ class SaaSRepository:
                                status, created_at, updated_at
                         from media_credit_buckets
                         where company_id = ? and source_type = ? and status = 'active'
-                        order by case when expires_at is null or expires_at = '' then 1 else 0 end,
+                        order by case when expires_at is null or cast(expires_at as text) = '' then 1 else 0 end,
                                  expires_at asc, created_at asc, bucket_id asc
                         limit 1
                         """,
@@ -10500,7 +10500,7 @@ class SaaSRepository:
             from media_credit_buckets
             where company_id = ? and status = 'active' and source_type != 'controlled_acceptance'
             order by case source_type when 'plan_included' then 0 when 'purchased' then 1 else 2 end,
-                     case when expires_at is null or expires_at = '' then 1 else 0 end,
+                     case when expires_at is null or cast(expires_at as text) = '' then 1 else 0 end,
                      expires_at asc, created_at asc, bucket_id asc
             """,
             (company_id,),
