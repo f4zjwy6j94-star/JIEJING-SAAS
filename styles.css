@@ -30799,6 +30799,70 @@ body.saas-public-mvp .saas-listing-v2-field textarea {
   resize: vertical;
 }
 
+/* AI CEO merchant product image intake. */
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-attachment-input {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-attachment-button {
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #334155;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 0 2px 8px;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-attachment-list[hidden] {
+  display: none;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-attachment-chip,
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-attachment-uploading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(240px, 100%);
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 999px;
+  background: rgba(239, 246, 255, 0.92);
+  color: #1e3a8a;
+  font-size: 12px;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-attachment-chip small {
+  overflow: hidden;
+  color: #475569;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-attachment-chip button {
+  border: 0;
+  background: transparent;
+  color: #64748b;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
 body.saas-public-mvp .saas-product-facts-module {
   display: grid;
   gap: 14px;

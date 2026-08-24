@@ -128,6 +128,13 @@ from .model_provider_catalog import (
 from .monitoring import build_monitoring_status
 from .operations_metering import MeteredModelClient, model_cost_measurement, sanitize_analytics_event
 from .media_source_assets import MAX_MEDIA_SOURCE_BYTES, MediaSourceAssetError, MediaSourceAssetStore
+from .product_vision import (
+    MAX_AI_CEO_SOURCE_IMAGES,
+    ProductVisionError,
+    build_product_vision_fact_packet,
+    fal_product_vision_client_from_env,
+    product_vision_prompt_context,
+)
 from .operational_health import build_operational_health
 from .owner_launch_control import build_owner_launch_control
 from .platform_model_status import platform_default_serving_model, platform_model_for_tier
@@ -6813,6 +6820,44 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 return
             command_body = body.get("command") if isinstance(body.get("command"), dict) else {}
             message = str(body.get("message") or command_body.get("text") or command_body.get("command_text") or "")
+            raw_source_asset_ids = body.get("source_asset_ids")
+            if raw_source_asset_ids is not None and not isinstance(raw_source_asset_ids, list):
+                self._send_error(HTTPStatus.BAD_REQUEST, "商品图片附件格式不正确。")
+                return
+            source_asset_ids: list[str] = []
+            for value in (raw_source_asset_ids or [])[: MAX_AI_CEO_SOURCE_IMAGES + 1]:
+                asset_id = str(value or "").strip()
+                if asset_id and asset_id not in source_asset_ids:
+                    source_asset_ids.append(asset_id)
+            if len(source_asset_ids) > MAX_AI_CEO_SOURCE_IMAGES:
+                self._send_error(HTTPStatus.BAD_REQUEST, f"AI CEO 每次最多识别 {MAX_AI_CEO_SOURCE_IMAGES} 张商品图片。")
+                return
+            product_vision_assets: list[dict[str, Any]] = []
+            product_vision_signed_urls: list[str] = []
+            try:
+                for asset_id in source_asset_ids:
+                    asset, _content = self.media_source_asset_store.read_for_provider(
+                        asset_id=asset_id,
+                        company_id=identity["company_id"],
+                        store_id=store_id,
+                    )
+                    product_vision_assets.append(
+                        {
+                            "asset_id": asset.asset_id,
+                            "sha256": asset.sha256,
+                            "original_filename": asset.original_filename,
+                            "content_type": asset.content_type,
+                            "size_bytes": asset.size_bytes,
+                            "width": asset.width,
+                            "height": asset.height,
+                        }
+                    )
+                    product_vision_signed_urls.append(self.media_source_asset_store.signed_url(asset.asset_id))
+            except MediaSourceAssetError:
+                self._send_error(HTTPStatus.NOT_FOUND, "商品图片不存在、已过期或不属于当前店铺。")
+                return
+            if source_asset_ids and not message.strip():
+                message = "请识别这些商品图片，整理来源事实、冲突项和待核对 Listing 草稿。"
             conversation_history = body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else []
             turn_plan = build_ai_ceo_turn_plan(message, conversation_history=conversation_history)
             route_meta = ai_ceo_route_metadata(
@@ -6892,7 +6937,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     user_id=identity["user_id"],
                     command={**command_body, **route_meta},
                 )
-            fast_chat = run_ai_ceo_fast_turn(
+            fast_chat = None if source_asset_ids else run_ai_ceo_fast_turn(
                 repository=self.repository,
                 company_id=identity["company_id"],
                 store_id=store_id,
@@ -7407,6 +7452,104 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         status=HTTPStatus.PAYMENT_REQUIRED,
                     )
                     return
+            product_vision_fact_packet: dict[str, Any] | None = None
+            product_vision_report: dict[str, Any] | None = None
+            product_vision_task: dict[str, Any] | None = None
+            if source_asset_ids:
+                emit_chat_stage("sources")
+                product_vision_task = self.repository.create_task(
+                    company_id=identity["company_id"],
+                    store_id=store_id,
+                    user_id=identity["user_id"],
+                    task_type="ai_ceo_product_vision",
+                    title=f"AI CEO 商品图片识别（{len(source_asset_ids)} 张）",
+                    input_data={
+                        "contract_version": "jiejing_ai_ceo_product_vision_intake_v1",
+                        "source_assets": product_vision_assets,
+                        "source_asset_count": len(source_asset_ids),
+                        "merchant_message": message[:900],
+                        "provider_key": "fal_vision_backend",
+                        "signed_source_urls_persisted": False,
+                        "frontend_gets_provider_key": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                )
+                try:
+                    vision_analysis = fal_product_vision_client_from_env().analyze(
+                        image_urls=product_vision_signed_urls,
+                        merchant_message=message,
+                    )
+                    product_vision_fact_packet = build_product_vision_fact_packet(
+                        analysis=vision_analysis,
+                        merchant_message=message,
+                        source_assets=product_vision_assets,
+                    )
+                    product_vision_report = self.repository.save_merchant_product_fact_report(
+                        task=product_vision_task,
+                        packet=product_vision_fact_packet,
+                    )
+                    product_vision_task = self.repository.update_task_status(
+                        task_id=product_vision_task["task_id"],
+                        company_id=identity["company_id"],
+                        status="completed",
+                        output={
+                            "status": "completed",
+                            "report_id": product_vision_report.get("report_id"),
+                            "source_asset_count": len(source_asset_ids),
+                            "product_name": product_vision_fact_packet.get("product_name"),
+                            "conflict_count": len(product_vision_fact_packet.get("fact_conflicts") or []),
+                            "unknown_fact_count": len(product_vision_fact_packet.get("unknown_facts") or []),
+                            "usage": vision_analysis.get("usage") or {},
+                            "signed_source_urls_persisted": False,
+                            "real_platform_writes_enabled": False,
+                            "secret_exposed": False,
+                        },
+                        audit_summary="AI CEO extracted a source-grounded product fact packet from merchant images without a platform write.",
+                    )
+                except ProductVisionError as exc:
+                    product_vision_task = self.repository.update_task_status(
+                        task_id=product_vision_task["task_id"],
+                        company_id=identity["company_id"],
+                        status="failed",
+                        output={
+                            "status": "failed",
+                            "failure_code": exc.code,
+                            "source_asset_count": len(source_asset_ids),
+                            "provider_call_may_have_occurred": exc.code != "vision_provider_not_configured",
+                            "signed_source_urls_persisted": False,
+                            "real_platform_writes_enabled": False,
+                            "secret_exposed": False,
+                        },
+                        audit_summary="AI CEO product image understanding failed at the backend vision boundary.",
+                    )
+                    update_model_attempt(
+                        attempt_state="failed_internal_dependency",
+                        task_status="failed",
+                        failure_code=exc.code,
+                        summary="AI CEO attempt stopped because product image understanding did not complete.",
+                    )
+                    send_chat_payload(
+                        {
+                            "ai_ceo_chat": {
+                                "status": "product_vision_failed",
+                                "blocked_by": [exc.code],
+                                "answer": "商品图片已经安全收到，但本次视觉识别没有完成；没有生成 Listing 草稿，也没有写入 eBay。请稍后重试本轮，不需要重新授权 eBay。",
+                                **route_meta,
+                                "frontend_gets_provider_key": False,
+                                "real_platform_writes_enabled": False,
+                                "secret_exposed": False,
+                            },
+                            "product_vision_task": product_vision_task,
+                            "usage_consumed": False,
+                            "listing_created": False,
+                            "real_platform_writes_enabled": False,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.BAD_GATEWAY,
+                    )
+                    return
+
             metered_task_id = "task_" + hashlib.sha256(
                 f"ai-ceo-model-task|{identity['company_id']}|{attempt['task_id']}".encode("utf-8")
             ).hexdigest()[:24]
@@ -7451,6 +7594,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "provider_key": model_secret_resolution.get("provider_key"),
                         "model_tier": model_secret_resolution.get("model_tier") or turn_plan.get("model_tier"),
                         "reasoning_mode": model_secret_resolution.get("reasoning_mode") or "disabled",
+                        "product_vision_task_id": str((product_vision_task or {}).get("task_id") or ""),
+                        "product_vision_report_id": str((product_vision_report or {}).get("report_id") or ""),
+                        "product_vision_source_asset_count": len(source_asset_ids),
+                        "signed_source_urls_persisted": False,
                         "model_usage_required": True,
                         "frontend_gets_model_api_key": False,
                         "runtime_gets_raw_ebay_token": False,
@@ -7529,6 +7676,11 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         command=command_body,
                         conversation_history=body.get("conversation_history") if isinstance(body.get("conversation_history"), list) else [],
                         turn_plan=turn_plan,
+                        product_intake_context=(
+                            product_vision_prompt_context(product_vision_fact_packet)
+                            if product_vision_fact_packet
+                            else None
+                        ),
                         model_resolution={
                             key: value
                             for key, value in model_secret_resolution.items()
@@ -7538,6 +7690,26 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         on_text_delta=emit_text_delta if stream_requested else None,
                     )
                 )
+                if product_vision_fact_packet:
+                    chat = {
+                        **chat,
+                        "product_intake": product_vision_prompt_context(product_vision_fact_packet),
+                        "source_records": [
+                            *(chat.get("source_records") if isinstance(chat.get("source_records"), list) else []),
+                            *[
+                                {
+                                    "title": f"商家商品图片 {item.get('source_index') or ''}".strip(),
+                                    "url": "",
+                                    "domain": "merchant_upload",
+                                    "snippet": "AI CEO 已读取该图片并形成来源事实；图片商业使用权仍待商家确认。",
+                                    "captured_at": "",
+                                    "source_type": "merchant_product_image",
+                                }
+                                for item in (product_vision_fact_packet.get("source_records") or [])
+                                if item.get("type") == "merchant_product_image"
+                            ],
+                        ][:12],
+                    }
                 attempt_recovery_state["chat"] = chat
             except Exception as exc:
                 metered_client = attempt_recovery_state.get("metered_model_client")
@@ -7788,6 +7960,12 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     },
                     "ai_ceo_market_report": ai_ceo_market_report,
                     "ai_ceo_market_report_delivery": ai_ceo_market_report_delivery,
+                    "product_vision_task": product_vision_task,
+                    "product_vision_report": product_vision_report,
+                    "product_vision_fact_packet": product_vision_fact_packet,
+                    "listing_draft_prefill_ready": bool(
+                        product_vision_fact_packet and product_vision_fact_packet.get("ready_for_listing_draft")
+                    ),
                     "usage_consumed": usage_consumed,
                     "listing_created": False,
                     "frontend_gets_model_api_key": False,

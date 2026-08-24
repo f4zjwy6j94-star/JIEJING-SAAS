@@ -88,6 +88,8 @@ const state = {
   mediaTaskEntry: "project",
   mediaSourceObjectUrl: "",
   saasMediaSourceUpload: null,
+  saasAiCeoPendingAttachments: [],
+  saasAiCeoAttachmentUploading: false,
   activeListingDraft: "incense",
   activeCockpitMarketDraft: "incense",
   marketReportMode: "single",
@@ -11844,6 +11846,8 @@ function saasMerchantProductFactDefinitions() {
         ["brand", "品牌", "无品牌也请明确填写 Unbranded", "text"],
         ["mpn", "MPN", "没有可填写 Does Not Apply", "text"],
         ["condition", "商品状态", "NEW / USED", "text"],
+        ["supplier_item_number", "供应商货号", "来源中的货号，不等于你店铺 SKU", "text"],
+        ["supplier_brand", "供应商品牌线索", "仅作来源线索，使用品牌前仍需授权", "text"],
       ],
     },
     {
@@ -11853,6 +11857,12 @@ function saasMerchantProductFactDefinitions() {
       fields: [
         ["material", "材质", "例如：Silicone", "text"],
         ["product_dimensions_cm", "商品尺寸 cm", "长 x 宽 x 高", "text"],
+        ["net_weight_g", "商品净重 g", "净重不等于包装重量", "number"],
+        ["product_origin", "商品产地", "产地不等于实际发货地", "text"],
+        ["craft", "工艺", "例如：半手工半机械", "text"],
+        ["style", "风格", "例如：禅意 / 东南亚", "text"],
+        ["packaging_type", "供应商包装说明", "例如：纸盒 / 安全包装", "text"],
+        ["included_items", "包装清单", "香锥、底座等；未看到就留空", "text"],
         ["package_weight_g", "包装重量 g", "例如：120", "number"],
         ["package_length_cm", "包装长 cm", "", "number"],
         ["package_width_cm", "包装宽 cm", "", "number"],
@@ -17175,6 +17185,7 @@ function applySaasMerchantProductFactPacketToDraft(draft = null, packet = null) 
     ...(packet.merchant_confirmed_facts && typeof packet.merchant_confirmed_facts === "object" ? packet.merchant_confirmed_facts : {}),
   };
   const dimensions = [facts.package_length_cm, facts.package_width_cm, facts.package_height_cm].filter(Boolean);
+  const listingCopy = packet.listing_copy && typeof packet.listing_copy === "object" ? packet.listing_copy : {};
   const projected = { ...draft, merchant_product_fact_packet: packet };
   projected.product = facts.product_name || packet.product_name || projected.product || projected.title;
   projected.publish_prefill = {
@@ -17198,6 +17209,11 @@ function applySaasMerchantProductFactPacketToDraft(draft = null, packet = null) 
   };
   projected.fields = {
     ...(projected.fields || {}),
+    title: listingCopy.title || projected.fields?.title || projected.title || "",
+    selling_points: Array.isArray(listingCopy.selling_points)
+      ? listingCopy.selling_points.filter(Boolean).slice(0, 5).join("\n")
+      : projected.fields?.selling_points || "",
+    description: listingCopy.description || projected.fields?.description || "",
     item_specifics: saasListingItemSpecificsWithMerchantFacts(projected.fields?.item_specifics || "", facts),
     price: facts.selling_price || projected.fields?.price || "",
     cost_price: facts.unit_cost || projected.fields?.cost_price || "",
@@ -17208,8 +17224,10 @@ function applySaasMerchantProductFactPacketToDraft(draft = null, packet = null) 
       facts.item_location ? `发货地: ${facts.item_location}` : "",
       facts.handling_time_days ? `处理时间: ${facts.handling_time_days} 天` : "",
       facts.package_weight_g ? `包装重量: ${facts.package_weight_g} g` : "",
+      facts.net_weight_g ? `商品净重: ${facts.net_weight_g} g（不等于包装重量）` : "",
       dimensions.length === 3 ? `包装尺寸: ${dimensions.join(" x ")} cm` : "",
       facts.product_dimensions_cm ? `商品尺寸: ${facts.product_dimensions_cm}` : "",
+      facts.product_origin ? `商品产地: ${facts.product_origin}（不等于发货地）` : "",
     ].filter(Boolean).join("\n") || projected.fields?.logistics || "",
   };
   projected.merchant_required_answers = Array.isArray(packet.unknown_facts)
@@ -17217,6 +17235,32 @@ function applySaasMerchantProductFactPacketToDraft(draft = null, packet = null) 
     : [];
   projected.publish_preflight_gaps = projected.merchant_required_answers.map((label) => `待确认：${label}`);
   return projected;
+}
+
+function applySaasAiCeoProductFactPacket(packet = null, merchantText = "", report = null) {
+  if (!packet || typeof packet !== "object") return null;
+  const seed = [packet.product_name || "商品图片识别", merchantText].filter(Boolean).join("\n");
+  let draft = saasListingComposerDraftFromText(seed);
+  draft = applySaasMerchantProductFactPacketToDraft(draft, packet);
+  const listingCopy = packet.listing_copy && typeof packet.listing_copy === "object" ? packet.listing_copy : {};
+  draft.source_type = "ai_ceo_product_vision";
+  draft.source_label = "AI CEO 图片与链接识别";
+  draft.source_report_id = String(report?.report_id || "");
+  draft.title = listingCopy.title || draft.title;
+  draft.product = packet.product_name || draft.product;
+  draft.summary = "AI CEO 已从商家提交的图片和链接整理来源事实；冲突项和发布必填项仍需商家核对。";
+  draft.safe_local_only = false;
+  draft.buyer_copy_status = "ai_vision_prefilled_waiting_for_merchant_review";
+  state.saasListingComposerDraft = draft;
+  state.saasListingComposerInput = merchantText;
+  state.saasListingSourceMode = "ai_ceo_product_vision";
+  const identity = saasCurrentListingProjectIdentity(draft);
+  if (identity?.key) state.activeMediaDraft = identity.key;
+  if (report && typeof report === "object") {
+    state.saasReports = [report, ...(state.saasReports || []).filter((item) => item.report_id !== report.report_id)];
+  }
+  saveSaasProtectedStateSnapshot();
+  return draft;
 }
 
 function sanitizeSaasMerchantProductFactValues(values = {}) {
@@ -17243,6 +17287,23 @@ function sanitizeSaasMerchantProductFactPacketSnapshot(packet = null) {
     source_confirmed_facts: sanitizeSaasMerchantProductFactValues(packet.source_confirmed_facts),
     merchant_confirmed_facts: sanitizeSaasMerchantProductFactValues(packet.merchant_confirmed_facts),
     derived_listing_suggestions: sanitizeSaasMerchantProductFactValues(packet.derived_listing_suggestions),
+    listing_copy: packet.listing_copy && typeof packet.listing_copy === "object"
+      ? {
+          title: sanitizeSaasWorkflowFeedbackText(packet.listing_copy.title || "", 80),
+          selling_points: Array.isArray(packet.listing_copy.selling_points)
+            ? packet.listing_copy.selling_points.map((item) => sanitizeSaasWorkflowFeedbackText(item, 240)).filter(Boolean).slice(0, 5)
+            : [],
+          description: sanitizeSaasWorkflowFeedbackText(packet.listing_copy.description || "", 2400),
+        }
+      : {},
+    fact_conflicts: Array.isArray(packet.fact_conflicts)
+      ? packet.fact_conflicts.slice(0, 12).map((item) => ({
+          field: publicRuntimeText(item?.field || "").slice(0, 80),
+          values: Array.isArray(item?.values) ? item.values.map((value) => publicRuntimeText(value).slice(0, 160)).slice(0, 6) : [],
+          reason: publicRuntimeText(item?.reason || "").slice(0, 300),
+          requires_merchant_confirmation: true,
+        }))
+      : [],
     unknown_facts: Array.isArray(packet.unknown_facts)
       ? packet.unknown_facts.map((item) => publicRuntimeText(item).slice(0, 80)).filter(Boolean).slice(0, 30)
       : [],
@@ -24383,8 +24444,19 @@ async function persistSaasCeoCommandToBackend(command = state.saasLastCeoCommand
   }
 }
 
-async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = {}) {
+function saasAiCeoPendingSourceAssetIds(attachments = state.saasAiCeoPendingAttachments) {
+  return (Array.isArray(attachments) ? attachments : [])
+    .map((item) => String(item?.asset_id || "").trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = {}, sourceAssetIds = []) {
   const current = normalizeSaasCeoCommand(command);
+  const safeSourceAssetIds = (Array.isArray(sourceAssetIds) ? sourceAssetIds : [])
+    .map((assetId) => String(assetId || "").trim())
+    .filter(Boolean)
+    .slice(0, 8);
   if (!current || !current.store_id) {
     return {
       ai_ceo_chat: {
@@ -24423,6 +24495,7 @@ async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = 
           conversation_history: saasAiCeoConversationHistoryForRequest(),
           client_now: new Date().toISOString(),
           client_timezone: Intl?.DateTimeFormat?.().resolvedOptions?.().timeZone || "",
+          source_asset_ids: safeSourceAssetIds,
           real_platform_writes_enabled: isSaasRealPlatformWritesEnabled(),
           ...supplierFactPayload,
         }),
@@ -24542,7 +24615,7 @@ async function hydrateSaasCeoCommandFromBackend(storeId = activeSaasStore()?.sto
   }
 }
 
-function handleSaasCeoCommandSubmit(text) {
+function handleSaasCeoCommandSubmit(text, options = {}) {
   const ctx = saasMerchantWorkbenchContext();
   const command = buildSaasCeoCommand(text, ctx);
   state.saasLastCeoCommand = command;
@@ -24610,6 +24683,7 @@ function handleSaasCeoCommandSubmit(text) {
     streamRenderTimer = null;
     if (streamRenderText) updateCeoAssistantStreamingMessage(pendingMessageId, streamRenderText);
   };
+  const submittedSourceAssetIds = Array.isArray(options.sourceAssetIds) ? options.sourceAssetIds.slice(0, 8) : [];
   state.saasLastCeoCommandPersistPromise = requestSaasAiCeoChat(command, {
     onStage: (stage) => {
       const latest = normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn);
@@ -24625,13 +24699,20 @@ function handleSaasCeoCommandSubmit(text) {
       streamRenderText = fullText;
       if (!streamRenderTimer) streamRenderTimer = setTimeout(flushStreamRender, 48);
     },
-  })
+  }, submittedSourceAssetIds)
     .then((payload) => {
       if (streamRenderTimer) clearTimeout(streamRenderTimer);
       streamRenderTimer = null;
       const latestTurnAtResponse = normalizeSaasAiCeoLatestTurn(state.saasAiCeoLatestTurn);
       const isCurrentChatTurn = !latestTurnAtResponse?.assistant_id || latestTurnAtResponse.assistant_id === pendingMessageId;
       const chat = payload?.ai_ceo_chat && typeof payload.ai_ceo_chat === "object" ? payload.ai_ceo_chat : null;
+      const productVisionFactPacket =
+        payload?.product_vision_fact_packet && typeof payload.product_vision_fact_packet === "object"
+          ? payload.product_vision_fact_packet
+          : null;
+      if (productVisionFactPacket) {
+        applySaasAiCeoProductFactPacket(productVisionFactPacket, text, payload?.product_vision_report || null);
+      }
       let aiCeoMarketReport =
         payload?.ai_ceo_market_report && typeof payload.ai_ceo_market_report === "object" ? payload.ai_ceo_market_report : null;
       let aiCeoMarketReportDelivery = normalizeSaasAiCeoMarketReportDelivery(payload?.ai_ceo_market_report_delivery || null);
@@ -31635,6 +31716,8 @@ function saasListingItemSpecificsWithMerchantFacts(current = "", facts = {}) {
   if (facts.brand) rows.Brand = facts.brand;
   if (facts.mpn) rows.MPN = facts.mpn;
   if (facts.material) rows.Material = facts.material;
+  if (facts.product_origin) rows.Origin = facts.product_origin;
+  if (facts.style) rows.Style = facts.style;
   return Object.entries(rows)
     .filter(([key, value]) => key && value)
     .map(([key, value]) => `${key}: ${value}`)
@@ -38766,7 +38849,10 @@ function renderSaasCockpitRealWorkbench() {
             <div class="chat-log saas-ai-ceo-chat-stream" id="ceoChat" aria-live="polite">${visibleCommandChat}</div>
             <div class="saas-ceo-route-task-slot" id="saasCeoRouteTaskSlot">${renderSaasCeoRoutingTaskCard(visibleRoutingCommand)}</div>
             <div class="saas-ai-ceo-composer-dock">
+              <div class="saas-ai-ceo-attachment-list" id="ceoAttachmentList" aria-live="polite"></div>
               <form class="chat-compose saas-ai-ceo-composer" id="ceoForm">
+                <button type="button" class="saas-ai-ceo-attachment-button" id="ceoAttachmentButton" aria-label="添加商品图片" title="添加商品图片">＋</button>
+                <input id="ceoAttachmentInput" class="saas-ai-ceo-attachment-input" type="file" multiple accept="image/png,image/jpeg,image/webp" tabindex="-1" aria-hidden="true" />
                 <input id="ceoInput" type="text" placeholder="比如：帮我调研这个商品，整理 Listing 草稿" autocomplete="off" />
                 <button type="submit" class="primary-action" aria-label="发送给 AI CEO">发送</button>
               </form>
@@ -47739,11 +47825,18 @@ function isMediaGenerationRequest(text) {
 function handleCeoFormSubmit(event) {
   event.preventDefault();
   const input = document.querySelector("#ceoInput");
-  if (!input?.value?.trim()) return;
-  const text = input.value.trim();
+  const sourceAssetIds = saasAiCeoPendingSourceAssetIds();
+  if (state.saasAiCeoAttachmentUploading) {
+    showActionToast("商品图片还在安全上传，请等上传完成后再发送。");
+    return;
+  }
+  if (!input?.value?.trim() && !sourceAssetIds.length) return;
+  const text = input?.value?.trim() || "请识别这些商品图片，整理来源事实、冲突项和待核对 Listing 草稿。";
   if (isSaasPublicMvpMode()) {
-    handleSaasCeoCommandSubmit(text);
-    input.value = "";
+    handleSaasCeoCommandSubmit(text, { sourceAssetIds });
+    state.saasAiCeoPendingAttachments = [];
+    renderSaasAiCeoPendingAttachments();
+    if (input) input.value = "";
     return;
   }
   if (isMediaGenerationRequest(text)) {
@@ -47764,6 +47857,14 @@ function bindCeoForm(root = document) {
   form.dataset.bound = "true";
   form.addEventListener("submit", handleCeoFormSubmit);
   const input = form.querySelector("#ceoInput");
+  const attachmentButton = form.querySelector("#ceoAttachmentButton");
+  const attachmentInput = form.querySelector("#ceoAttachmentInput");
+  attachmentButton?.addEventListener("click", () => attachmentInput?.click());
+  attachmentInput?.addEventListener("change", async () => {
+    const files = Array.from(attachmentInput.files || []);
+    attachmentInput.value = "";
+    await handleSaasAiCeoAttachmentFiles(files);
+  });
   input?.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return;
     event.preventDefault();
@@ -47781,6 +47882,71 @@ function bindCeoForm(root = document) {
       input.focus();
     });
   });
+  renderSaasAiCeoPendingAttachments();
+}
+
+function renderSaasAiCeoPendingAttachments() {
+  const slot = document.querySelector("#ceoAttachmentList");
+  if (!slot) return;
+  const attachments = Array.isArray(state.saasAiCeoPendingAttachments) ? state.saasAiCeoPendingAttachments : [];
+  if (!attachments.length && !state.saasAiCeoAttachmentUploading) {
+    slot.replaceChildren();
+    slot.hidden = true;
+    return;
+  }
+  slot.hidden = false;
+  setJiejingTrustedHtml(
+    slot,
+    trustedJiejingHtml(
+      `${attachments
+        .map(
+          (item, index) => `<span class="saas-ai-ceo-attachment-chip"><b>图片 ${index + 1}</b><small>${escapeHtml(item.original_filename || "商品图")}</small><button type="button" data-ceo-remove-attachment="${escapeHtml(item.asset_id || "")}" aria-label="移除这张图片">×</button></span>`,
+        )
+        .join("")}${state.saasAiCeoAttachmentUploading ? '<span class="saas-ai-ceo-attachment-uploading">正在安全上传…</span>' : ""}`,
+      "ai_ceo.pending_attachments",
+    ),
+  );
+  slot.querySelectorAll("[data-ceo-remove-attachment]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const assetId = String(button.dataset.ceoRemoveAttachment || "");
+      state.saasAiCeoPendingAttachments = attachments.filter((item) => item.asset_id !== assetId);
+      renderSaasAiCeoPendingAttachments();
+    });
+  });
+}
+
+async function handleSaasAiCeoAttachmentFiles(files = []) {
+  const current = Array.isArray(state.saasAiCeoPendingAttachments) ? state.saasAiCeoPendingAttachments : [];
+  const selected = Array.from(files || []).slice(0, Math.max(0, 8 - current.length));
+  if (!selected.length) {
+    showActionToast(current.length >= 8 ? "AI CEO 每次最多识别 8 张商品图片。" : "请选择商品图片。");
+    return false;
+  }
+  for (const file of selected) {
+    if (!/^image\/(png|jpeg|webp)$/i.test(file.type || "")) {
+      showActionToast("AI CEO 只接受 PNG、JPG 或 WEBP 商品图片。");
+      return false;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      showActionToast(`${file.name || "图片"} 超过 5 MB，请压缩后重试。`);
+      return false;
+    }
+  }
+  state.saasAiCeoAttachmentUploading = true;
+  renderSaasAiCeoPendingAttachments();
+  try {
+    const uploaded = [];
+    for (const file of selected) uploaded.push(await uploadSaasMediaSourceFile(file));
+    state.saasAiCeoPendingAttachments = [...current, ...uploaded].slice(0, 8);
+    showActionToast(`已添加 ${uploaded.length} 张商品图；发送后 AI CEO 会真实识别并带入 Listing。`);
+    return true;
+  } catch (error) {
+    showActionToast(error?.message || "商品图片上传失败，请稍后重试。");
+    return false;
+  } finally {
+    state.saasAiCeoAttachmentUploading = false;
+    renderSaasAiCeoPendingAttachments();
+  }
 }
 
 function updateHeroCommand(key) {

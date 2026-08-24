@@ -375,6 +375,7 @@ def run_ai_ceo_chat(
     conversation_history: list[dict[str, Any]] | None = None,
     model_resolution: dict[str, Any] | None = None,
     turn_plan: dict[str, Any] | None = None,
+    product_intake_context: dict[str, Any] | None = None,
     on_stage: Callable[[str], None] | None = None,
     on_text_delta: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
@@ -408,6 +409,7 @@ def run_ai_ceo_chat(
     context = {
         **context,
         "working_state": authoritative_turn_plan.get("working_state") or {},
+        "merchant_product_intake": product_intake_context if isinstance(product_intake_context, dict) else {},
         "secret_exposed": False,
     }
     model_context = _public_model_context(None, model_client, model_resolution)
@@ -1316,6 +1318,8 @@ def build_ai_ceo_chat_prompts(
         "商家可见回答不要出现“正在调用模型”“后端模型已返回”“BYOK 模型已返回”等实现过程文案；只展示直接回答、经营任务、实时数据缺口或等待确认等产品状态。"
         "商家可见回答必须使用简体中文；eBay、SKU、Listing、Market Report、Listing Package 等专有名词可以保留英文。"
         "回答要像产品级 SaaS 工作台里的 AI CEO：清楚、具体、可执行，不空泛。"
+        "如果 current_context.merchant_product_intake 存在，它是后端视觉层从商家本轮图片提取的来源证据："
+        "可以据此整理待核对 Listing，但不得把来源识别写成商家已确认；冲突必须保留，净重不得写成包装重量，商品产地不得写成实际发货地。"
     )
     if route == AI_CEO_ROUTE_GENERAL:
         system_prompt += " 当前路由是普通咨询：像 DeepSeek 一样直接回答，不创建经营任务，不写长期经营记忆。"
@@ -1366,6 +1370,7 @@ def build_ai_ceo_chat_prompts(
             "把 current_context.store 的连接布尔值视为权威状态；不要从 store_name 猜测是否授权。",
             "严格遵守 merchant_message 的阶段边界；商家暂缓 Listing 时只做选品，不扩展到 Listing 字段。",
             "商品事实必须来自 merchant_message、current_context 或明确 source_records；未知参数写待核，不得补写成事实。",
+            "merchant_product_intake 中的 source_confirmed_facts 是带来源的图片提取结果，不等于商家确认；fact_conflicts 不得自行二选一。",
             "有 selection_contract 时逐项执行；excluded_candidate_names 中的旧候选不得再次成为候选商品。",
             "selection_contract 要求候选证据入口时，每个候选分别给 eBay US 搜索链接或真实 Item ID；搜索入口不等于成交证据，拿不到具体成交证据时逐项写‘成交证据不足’。",
             "不要主动改写 current_context.store.connection_status；如果确需提及，必须逐字使用上下文中的真实值。",

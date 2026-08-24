@@ -135,8 +135,16 @@ MERCHANT_PRODUCT_FACT_KEYS = (
     "brand",
     "mpn",
     "condition",
+    "supplier_item_number",
+    "supplier_brand",
     "material",
     "product_dimensions_cm",
+    "net_weight_g",
+    "product_origin",
+    "craft",
+    "style",
+    "packaging_type",
+    "included_items",
     "package_weight_g",
     "package_length_cm",
     "package_width_cm",
@@ -153,7 +161,21 @@ MERCHANT_PRODUCT_FACT_KEYS = (
 MERCHANT_PRODUCT_FACT_REQUIRED_KEYS = tuple(
     key
     for key in MERCHANT_PRODUCT_FACT_KEYS
-    if key not in {"source_url", "brand", "mpn", "product_dimensions_cm", "handling_time_days"}
+    if key not in {
+        "source_url",
+        "brand",
+        "mpn",
+        "supplier_item_number",
+        "supplier_brand",
+        "product_dimensions_cm",
+        "net_weight_g",
+        "product_origin",
+        "craft",
+        "style",
+        "packaging_type",
+        "included_items",
+        "handling_time_days",
+    }
 )
 _DOMESTIC_BILLING_COMPANY_LOCKS = tuple(threading.Lock() for _ in range(128))
 _MEDIA_CREDIT_COMPANY_LOCKS = tuple(threading.Lock() for _ in range(128))
@@ -5274,11 +5296,18 @@ class SaaSRepository:
         report_id = _id("report")
         title = f"商品资料：{product}"[:180]
         unknown = safe_packet.get("unknown_facts") if isinstance(safe_packet.get("unknown_facts"), list) else []
-        summary = (
-            f"“{product}”的商品事实已由商家确认，仍需 eBay 体检和发布确认。"
-            if not unknown
-            else f"“{product}”的商品资料已保存，仍有 {len(unknown)} 项待补。"
-        )
+        vision_extracted = str(safe_packet.get("source") or "") == "backend_product_vision_extraction"
+        if vision_extracted:
+            summary = (
+                f"AI CEO 已从商家提交的图片和链接提取“{product}”的来源事实；"
+                f"仍有 {len(unknown)} 项待商家核对，未触发 eBay 写入。"
+            )
+        else:
+            summary = (
+                f"“{product}”的商品事实已由商家确认，仍需 eBay 体检和发布确认。"
+                if not unknown
+                else f"“{product}”的商品资料已保存，仍有 {len(unknown)} 项待补。"
+            )
         report_payload = {
             "contract_version": MERCHANT_PRODUCT_FACT_PACKET_CONTRACT_VERSION,
             "artifact_type": "merchant.product_facts",
@@ -5319,7 +5348,11 @@ class SaaSRepository:
                 title=title,
                 summary=summary,
                 importance=85,
-                tags=["merchant.product_facts", "listing_handoff", "merchant_confirmed"],
+                tags=[
+                    "merchant.product_facts",
+                    "listing_handoff",
+                    "ai_extracted_from_merchant_image" if vision_extracted else "merchant_confirmed",
+                ],
                 memory={
                     "report_id": report_id,
                     "task_id": task["task_id"],
@@ -16967,6 +17000,7 @@ def normalize_merchant_product_fact_packet(
                 continue
             if key in {
                 "package_weight_g",
+                "net_weight_g",
                 "package_length_cm",
                 "package_width_cm",
                 "package_height_cm",

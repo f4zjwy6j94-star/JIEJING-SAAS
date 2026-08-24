@@ -170,6 +170,7 @@ FILES=(
   "jiejing_saas/media_asset_pipeline.py"
   "jiejing_saas/media_credits.py"
   "jiejing_saas/media_source_assets.py"
+  "jiejing_saas/product_vision.py"
   "jiejing_saas/provider_job_runner.py"
   "jiejing_saas/public_search_handoff.py"
   "jiejing_saas/provider_workflow_plan.py"
@@ -312,6 +313,7 @@ FILES=(
   "tools/test_jiejing_media_nav_and_state_restore.py"
   "tools/test_jiejing_saas_clean_settings_and_listing_ui.py"
   "tools/test_jiejing_ai_ceo_open_domain_turn_plan.py"
+  "tools/test_jiejing_ai_ceo_product_image_intake.py"
   "tools/test_jiejing_ai_ceo_routing_supplier_http_red.py"
   "tools/test_jiejing_ai_ceo_phase0_red_contracts.py"
   "tools/test_jiejing_product_feedback_closure.py"
@@ -585,6 +587,7 @@ python3 -m py_compile \
   jiejing_saas/media_asset_pipeline.py \
   jiejing_saas/media_credits.py \
   jiejing_saas/media_source_assets.py \
+  jiejing_saas/product_vision.py \
   jiejing_saas/provider_job_runner.py \
   jiejing_saas/public_search_handoff.py \
   jiejing_saas/provider_workflow_plan.py \
