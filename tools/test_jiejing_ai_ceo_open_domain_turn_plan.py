@@ -207,6 +207,20 @@ class AiCeoOpenDomainTurnPlanTest(unittest.TestCase):
         self.assertEqual(plan["model_tier"], "pro")
         self.assertFalse(plan["confirmation_required"])
 
+    def test_explicit_listing_intake_overrides_supplier_and_recommendation_words(self) -> None:
+        plan = build_ai_ceo_turn_plan(
+            "这是我的真实供货商品，请新建 Listing。货源链接已经提供，商品参数也已确认；"
+            "不要重新选品，随后推荐进入素材工坊生成新图。"
+        )
+
+        self.assertEqual(plan["route"], AI_CEO_ROUTE_EBAY_WORKFLOW)
+        self.assertEqual(plan["workflow_target"], "listing_draft")
+        self.assertEqual(plan["topic"], "listing_draft")
+        self.assertEqual(plan["required_tools"], [])
+        self.assertFalse(plan["freshness_required"])
+        self.assertEqual(plan["research_depth"], "none")
+        self.assertNotIn("merchant_product_source_required", plan["blocked_by"])
+
 
 if __name__ == "__main__":
     unittest.main()

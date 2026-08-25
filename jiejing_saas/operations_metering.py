@@ -642,9 +642,16 @@ def safe_metering_json(value: Any, *, limit: int = 2000) -> str:
 class MeteredModelClient:
     """Accumulate provider-reported usage across retries without collecting content."""
 
-    def __init__(self, client: Any) -> None:
+    def __init__(self, client: Any, *, _shared_calls: list[dict[str, Any]] | None = None, _wrap_fallback: bool = True) -> None:
         self._client = client
-        self._calls: list[dict[str, Any]] = []
+        self._calls = _shared_calls if _shared_calls is not None else []
+        fallback_client = getattr(client, "jiejing_fallback_model_client", None)
+        if _wrap_fallback and fallback_client is not None:
+            self.jiejing_fallback_model_client = MeteredModelClient(
+                fallback_client,
+                _shared_calls=self._calls,
+                _wrap_fallback=False,
+            )
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._client, name)

@@ -52,6 +52,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("model_streaming_client", [sys.executable, "tools/test_jiejing_model_streaming_client.py"]),
     ("ai_ceo_source_quality", [sys.executable, "tools/test_jiejing_ai_ceo_source_quality.py"]),
     ("ai_ceo_answer_rendering", [sys.executable, "tools/test_jiejing_ai_ceo_answer_rendering.py"]),
+    ("ai_ceo_answer_quality_gate", [sys.executable, "tools/test_jiejing_ai_ceo_answer_quality_gate.py"]),
     ("ai_ceo_open_domain_turn_plan", [sys.executable, "tools/test_jiejing_ai_ceo_open_domain_turn_plan.py"]),
     ("ai_ceo_frontend_intent", ["node", "tools/test_jiejing_ai_ceo_frontend_intent.js"]),
     ("ai_ceo_product_image_intake", [sys.executable, "tools/test_jiejing_ai_ceo_product_image_intake.py"]),

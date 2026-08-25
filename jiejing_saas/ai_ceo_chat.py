@@ -173,13 +173,17 @@ def build_ai_ceo_turn_plan(
         freshness_required = True
         research_depth = "quick" if classified_realtime != "news_search" else "deep"
 
-    product_selection_request = _looks_like_product_selection_request(
-        message=safe_message,
-        route=AI_CEO_ROUTE_EBAY_WORKFLOW,
-    ) or (
-        ebay_workflow
-        and any(marker in direct_normalized for marker in ("商品", "产品", "品类", "product"))
-        and any(marker in direct_normalized for marker in ("帮我找", "推荐", "筛选", "选择", "research", "recommend"))
+    explicit_listing_intake = _looks_like_explicit_listing_intake(safe_message)
+    product_selection_request = not explicit_listing_intake and (
+        _looks_like_product_selection_request(
+            message=safe_message,
+            route=AI_CEO_ROUTE_EBAY_WORKFLOW,
+        )
+        or (
+            ebay_workflow
+            and any(marker in direct_normalized for marker in ("商品", "产品", "品类", "product"))
+            and any(marker in direct_normalized for marker in ("帮我找", "推荐", "筛选", "选择", "research", "recommend"))
+        )
     )
 
     if explicit_rule:
@@ -195,10 +199,10 @@ def build_ai_ceo_turn_plan(
         # research request can still return sourced work evidence before a
         # merchant model is connected. When a model is configured the fast
         # route yields back to the model-backed workflow below.
-        realtime_kind = classified_realtime
-        required_tools = ["ebay_public_research"]
-        freshness_required = True
-        research_depth = "deep" if product_selection_request else "quick"
+        realtime_kind = "" if explicit_listing_intake else classified_realtime
+        required_tools = [] if explicit_listing_intake else ["ebay_public_research"]
+        freshness_required = not explicit_listing_intake
+        research_depth = "none" if explicit_listing_intake else "deep" if product_selection_request else "quick"
     elif realtime_kind:
         route = AI_CEO_ROUTE_EXTERNAL_REALTIME
         response_mode = "research_answer"
@@ -210,7 +214,7 @@ def build_ai_ceo_turn_plan(
     source_mode = ""
     blocked_by: list[str] = []
     if route == AI_CEO_ROUTE_EBAY_WORKFLOW:
-        workflow_target = "market_research" if product_selection_request else "ebay_operation"
+        workflow_target = "listing_draft" if explicit_listing_intake else "market_research" if product_selection_request else "ebay_operation"
         no_source_markers = (
             "没有货源",
             "无货源",
@@ -3106,6 +3110,47 @@ def _generate_model_text_with_initial_retry(
             realtime_kind=realtime_kind,
             on_text_delta=on_text_delta,
         )
+        if _empty_answer_exhausted_output_budget(result) and fallback_model_client is not None:
+            fallback_timeout = _env_int(
+                "JIEJING_AI_CEO_EMPTY_ANSWER_FALLBACK_TIMEOUT_SECONDS",
+                default=min(timeout_seconds, 10),
+                minimum=5,
+                maximum=20,
+            )
+            fallback_tokens = _env_int(
+                "JIEJING_AI_CEO_EMPTY_ANSWER_FALLBACK_MAX_OUTPUT_TOKENS",
+                default=min(max_output_tokens, 1200),
+                minimum=256,
+                maximum=2048,
+            )
+            fallback_prompt = (
+                system_prompt
+                + " 上一次深度思考耗尽了输出预算但没有生成商家可见正文。"
+                "请直接、简洁地完成当前 merchant_message；未知商品事实继续标为待确认，不得重复分析过程。"
+            )
+            try:
+                fallback_result = fallback_model_client.generate_text(
+                    system_prompt=fallback_prompt,
+                    user_prompt=user_prompt,
+                    temperature=0.1,
+                    max_output_tokens=fallback_tokens,
+                    timeout_seconds=fallback_timeout,
+                    on_text_delta=on_text_delta,
+                )
+                fallback_result = _complete_truncated_model_result(
+                    model_client=fallback_model_client,
+                    result=fallback_result,
+                    system_prompt=fallback_prompt,
+                    user_prompt=user_prompt,
+                    route=route,
+                    realtime_kind=realtime_kind,
+                    on_text_delta=on_text_delta,
+                )
+                fallback_result["empty_answer_failover_used"] = True
+                fallback_result["primary_finish_reason"] = str(result.get("finish_reason") or "")
+                return fallback_result, _elapsed_ms(started_at), 1, None
+            except Exception as fallback_exc:  # pragma: no cover - provider dependent
+                return None, _elapsed_ms(started_at), 1, fallback_exc
         return result, _elapsed_ms(started_at), 0, None
     except Exception as exc:  # pragma: no cover - provider dependent
         failure_code, _failure_reason = _classify_model_failure(exc)
@@ -3181,6 +3226,16 @@ def _should_retry_initial_model_failure(*, failure_code: str, elapsed_ms: int, t
     if failure_code == "model_network_or_timeout" and elapsed_ms >= full_timeout_threshold_ms:
         return False
     return elapsed_ms <= retry_window_ms
+
+
+def _empty_answer_exhausted_output_budget(result: dict[str, Any] | None) -> bool:
+    if not isinstance(result, dict) or str(result.get("text") or "").strip():
+        return False
+    return str(result.get("finish_reason") or "").strip().lower() in {
+        "length",
+        "max_tokens",
+        "max_output_tokens",
+    }
 
 
 def _complete_truncated_model_result(
@@ -3990,6 +4045,19 @@ def _looks_like_product_selection_request(*, message: str, route: str) -> bool:
         "what to sell",
     )
     return any(marker in text for marker in markers)
+
+
+def _looks_like_explicit_listing_intake(message: str) -> bool:
+    if _merchant_defers_listing(message):
+        return False
+    text = _normalized_text(message)
+    patterns = (
+        r"(?:新建|创建|生成|整理|导入|带入|填写|填进|自动填).{0,16}(?:ebay\s*)?listing",
+        r"(?:ebay\s*)?listing.{0,16}(?:草稿|字段|建档|创建|生成|填写|带入|package)",
+        r"(?:新建|创建|生成|整理|导入|带入|填写|填进|自动填).{0,16}(?:刊登草稿|上架资料)",
+        r"(?:刊登草稿|上架资料).{0,16}(?:创建|生成|填写|带入)",
+    )
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
 
 
 def _selection_response_contract(

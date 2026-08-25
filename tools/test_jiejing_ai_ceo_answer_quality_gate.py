@@ -99,6 +99,20 @@ class TruncatedThenTimeoutModel(SequenceModel):
         raise TimeoutError("continuation timed out")
 
 
+class ReasoningExhaustedModel(SequenceModel):
+    def generate_text(self, **_: Any) -> dict[str, Any]:
+        self.calls += 1
+        return {
+            "text": "",
+            "model_mode": "live_http_model_text_stream",
+            "model_client": "quality-gate-test",
+            "model_configured": True,
+            "model": self.model,
+            "finish_reason": "length",
+            "_usage": {"input_tokens": 16819, "output_tokens": 2400, "total_tokens": 19219},
+        }
+
+
 def main() -> None:
     shutil.rmtree(OUT, ignore_errors=True)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -551,6 +565,24 @@ def main() -> None:
         assert failover_recovered["answer_quality"]["initial_retry_count"] == 1, failover_recovered
         assert failover_recovered["model_client"]["model"] == "deepseek-v4-flash", failover_recovered
         assert fast_fallback_model.calls == 1, fast_fallback_model.calls
+
+        reasoning_exhausted_model = ReasoningExhaustedModel([""])
+        reasoning_exhausted_fallback = SequenceModel([valid])
+        reasoning_exhausted_fallback.model = "deepseek-v4-flash"
+        reasoning_exhausted_model.jiejing_fallback_model_client = reasoning_exhausted_fallback
+        reasoning_exhausted_recovered = run_ai_ceo_chat(
+            repository=MinimalRepository(),
+            company_id="company_quality",
+            store_id="store_quality",
+            user_id="user_quality",
+            message=message,
+            model_client=reasoning_exhausted_model,
+        )
+        assert reasoning_exhausted_recovered["status"] == "model_answered", reasoning_exhausted_recovered
+        assert reasoning_exhausted_recovered["answer_quality"]["initial_retry_count"] == 1, reasoning_exhausted_recovered
+        assert reasoning_exhausted_recovered["model_client"]["model"] == "deepseek-v4-flash", reasoning_exhausted_recovered
+        assert reasoning_exhausted_model.calls == 1, reasoning_exhausted_model.calls
+        assert reasoning_exhausted_fallback.calls == 1, reasoning_exhausted_fallback.calls
 
         truncated_model = TruncatedThenTimeoutModel([valid])
         truncated_recovered = run_ai_ceo_chat(
