@@ -393,13 +393,13 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     )
     require(
         app_html,
-        "app.js?v=20260825-vision-report-recovery-v4",
-        "workspace loads the AI CEO candidate import fix with a fresh asset version",
+        "app.js?v=20260825-media-retry-confirm-v1",
+        "workspace retains the AI CEO candidate import fix in the current asset version",
     )
     require(
         index_html,
-        "app.js?v=20260825-vision-report-recovery-v4",
-        "public entry preloads the same fresh Listing asset version",
+        "app.js?v=20260825-media-retry-confirm-v1",
+        "public entry preloads the same current Listing asset version",
     )
     require(
         app_js,

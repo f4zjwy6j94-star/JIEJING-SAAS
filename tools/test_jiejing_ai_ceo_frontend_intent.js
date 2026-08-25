@@ -92,8 +92,8 @@ assert.strictEqual(
   "an affirmative real eBay publish request must still require confirmation",
 );
 assert(
-  appHtml.includes("app.js?v=20260825-vision-report-recovery-v4"),
-  "app.html must refresh the AI CEO intent bundle after a production routing fix",
+  appHtml.includes("app.js?v=20260825-media-retry-confirm-v1"),
+  "app.html must retain the AI CEO intent fix in the current production bundle",
 );
 
 const factPacketSource = extractFunction("saasMerchantProductFactPacket");
