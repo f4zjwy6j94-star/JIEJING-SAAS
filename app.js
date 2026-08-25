@@ -17475,6 +17475,14 @@ function restoreSaasListingComposerDraftFromBackendReports() {
   return state.saasListingComposerDraft;
 }
 
+function saasMerchantProductFactProjectedValue(packet = {}, facts = {}, key = "", currentValue = "") {
+  const unknownFacts = new Set(Array.isArray(packet.unknown_facts) ? packet.unknown_facts.map((item) => String(item || "")) : []);
+  if (unknownFacts.has(key)) return "";
+  const value = facts[key];
+  if (value !== undefined && value !== null && String(value).trim() !== "") return value;
+  return currentValue || "";
+}
+
 function applySaasMerchantProductFactPacketToDraft(draft = null, packet = null) {
   if (!draft || !packet || typeof packet !== "object") return draft;
   const facts = {
@@ -17487,19 +17495,19 @@ function applySaasMerchantProductFactPacketToDraft(draft = null, packet = null) 
   projected.product = facts.product_name || packet.product_name || projected.product || projected.title;
   projected.publish_prefill = {
     ...(projected.publish_prefill || {}),
-    sku: facts.sku || projected.publish_prefill?.sku || "",
-    condition: facts.condition || projected.publish_prefill?.condition || "",
-    quantity: facts.quantity || projected.publish_prefill?.quantity || "",
-    item_location: facts.item_location || projected.publish_prefill?.item_location || "",
-    handling_time_days: facts.handling_time_days || projected.publish_prefill?.handling_time_days || "",
-    material: facts.material || projected.publish_prefill?.material || "",
-    product_dimensions_cm: facts.product_dimensions_cm || projected.publish_prefill?.product_dimensions_cm || "",
-    package_weight_g: facts.package_weight_g || projected.publish_prefill?.package_weight_g || "",
-    package_length_cm: facts.package_length_cm || projected.publish_prefill?.package_length_cm || "",
-    package_width_cm: facts.package_width_cm || projected.publish_prefill?.package_width_cm || "",
-    package_height_cm: facts.package_height_cm || projected.publish_prefill?.package_height_cm || "",
-    procurement_cost: facts.unit_cost || projected.publish_prefill?.procurement_cost || "",
-    price: facts.selling_price || projected.publish_prefill?.price || "",
+    sku: saasMerchantProductFactProjectedValue(packet, facts, "sku", projected.publish_prefill?.sku),
+    condition: saasMerchantProductFactProjectedValue(packet, facts, "condition", projected.publish_prefill?.condition),
+    quantity: saasMerchantProductFactProjectedValue(packet, facts, "quantity", projected.publish_prefill?.quantity),
+    item_location: saasMerchantProductFactProjectedValue(packet, facts, "item_location", projected.publish_prefill?.item_location),
+    handling_time_days: saasMerchantProductFactProjectedValue(packet, facts, "handling_time_days", projected.publish_prefill?.handling_time_days),
+    material: saasMerchantProductFactProjectedValue(packet, facts, "material", projected.publish_prefill?.material),
+    product_dimensions_cm: saasMerchantProductFactProjectedValue(packet, facts, "product_dimensions_cm", projected.publish_prefill?.product_dimensions_cm),
+    package_weight_g: saasMerchantProductFactProjectedValue(packet, facts, "package_weight_g", projected.publish_prefill?.package_weight_g),
+    package_length_cm: saasMerchantProductFactProjectedValue(packet, facts, "package_length_cm", projected.publish_prefill?.package_length_cm),
+    package_width_cm: saasMerchantProductFactProjectedValue(packet, facts, "package_width_cm", projected.publish_prefill?.package_width_cm),
+    package_height_cm: saasMerchantProductFactProjectedValue(packet, facts, "package_height_cm", projected.publish_prefill?.package_height_cm),
+    procurement_cost: saasMerchantProductFactProjectedValue(packet, facts, "unit_cost", projected.publish_prefill?.procurement_cost),
+    price: saasMerchantProductFactProjectedValue(packet, facts, "selling_price", projected.publish_prefill?.price),
     currency: facts.currency || projected.publish_prefill?.currency || "USD",
     image_urls: facts.image_urls || projected.publish_prefill?.image_urls || "",
     image_rights_confirmed: facts.image_rights_confirmed === true,
@@ -32145,19 +32153,19 @@ async function saveSaasMerchantProductFacts() {
   draft.product = facts.product_name || draft.product || draft.title;
   draft.publish_prefill = {
     ...(draft.publish_prefill || {}),
-    sku: facts.sku || draft.publish_prefill?.sku || "",
-    condition: facts.condition || draft.publish_prefill?.condition || "",
-    quantity: facts.quantity || draft.publish_prefill?.quantity || "",
-    item_location: facts.item_location || draft.publish_prefill?.item_location || "",
-    handling_time_days: facts.handling_time_days || draft.publish_prefill?.handling_time_days || "",
-    material: facts.material || draft.publish_prefill?.material || "",
-    product_dimensions_cm: facts.product_dimensions_cm || draft.publish_prefill?.product_dimensions_cm || "",
-    package_weight_g: facts.package_weight_g || draft.publish_prefill?.package_weight_g || "",
-    package_length_cm: facts.package_length_cm || draft.publish_prefill?.package_length_cm || "",
-    package_width_cm: facts.package_width_cm || draft.publish_prefill?.package_width_cm || "",
-    package_height_cm: facts.package_height_cm || draft.publish_prefill?.package_height_cm || "",
-    procurement_cost: facts.unit_cost || draft.publish_prefill?.procurement_cost || "",
-    price: facts.selling_price || draft.publish_prefill?.price || "",
+    sku: saasMerchantProductFactProjectedValue(packet, facts, "sku", draft.publish_prefill?.sku),
+    condition: saasMerchantProductFactProjectedValue(packet, facts, "condition", draft.publish_prefill?.condition),
+    quantity: saasMerchantProductFactProjectedValue(packet, facts, "quantity", draft.publish_prefill?.quantity),
+    item_location: saasMerchantProductFactProjectedValue(packet, facts, "item_location", draft.publish_prefill?.item_location),
+    handling_time_days: saasMerchantProductFactProjectedValue(packet, facts, "handling_time_days", draft.publish_prefill?.handling_time_days),
+    material: saasMerchantProductFactProjectedValue(packet, facts, "material", draft.publish_prefill?.material),
+    product_dimensions_cm: saasMerchantProductFactProjectedValue(packet, facts, "product_dimensions_cm", draft.publish_prefill?.product_dimensions_cm),
+    package_weight_g: saasMerchantProductFactProjectedValue(packet, facts, "package_weight_g", draft.publish_prefill?.package_weight_g),
+    package_length_cm: saasMerchantProductFactProjectedValue(packet, facts, "package_length_cm", draft.publish_prefill?.package_length_cm),
+    package_width_cm: saasMerchantProductFactProjectedValue(packet, facts, "package_width_cm", draft.publish_prefill?.package_width_cm),
+    package_height_cm: saasMerchantProductFactProjectedValue(packet, facts, "package_height_cm", draft.publish_prefill?.package_height_cm),
+    procurement_cost: saasMerchantProductFactProjectedValue(packet, facts, "unit_cost", draft.publish_prefill?.procurement_cost),
+    price: saasMerchantProductFactProjectedValue(packet, facts, "selling_price", draft.publish_prefill?.price),
     currency: facts.currency || draft.publish_prefill?.currency || "USD",
     image_urls: facts.image_urls || draft.publish_prefill?.image_urls || "",
     image_rights_confirmed: facts.image_rights_confirmed === true,
@@ -32174,8 +32182,10 @@ async function saveSaasMerchantProductFacts() {
       facts.item_location ? `发货地: ${facts.item_location}` : "",
       facts.handling_time_days ? `处理时间: ${facts.handling_time_days} 天` : "",
       facts.package_weight_g ? `包装重量: ${facts.package_weight_g} g` : "",
+      facts.net_weight_g ? `商品净重: ${facts.net_weight_g} g（不等于包装重量）` : "",
       dimensions.length === 3 ? `包装尺寸: ${dimensions.join(" x ")} cm` : "",
       facts.product_dimensions_cm ? `商品尺寸: ${facts.product_dimensions_cm}` : "",
+      facts.product_origin ? `商品产地: ${facts.product_origin}（不等于发货地）` : "",
     ].filter(Boolean).join("\n") || draft.fields?.logistics || "待补发货、重量和包装尺寸。",
   };
   draft.merchant_product_fact_packet = packet;

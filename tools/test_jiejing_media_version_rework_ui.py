@@ -48,7 +48,7 @@ def main() -> int:
     if "不会写入 eBay" not in app or "确认创建新版本" not in app:
         print("FAIL media rework must disclose usage and eBay write boundary before queueing")
         return 1
-    if 'app.js?v=20260825-listing-media-restore-v2' not in app_html:
+    if 'app.js?v=20260826-listing-fact-projection-v1' not in app_html:
         print("FAIL media retry fix must advance the browser cache key so deployed clients receive it")
         return 1
     print("PASS jiejing_media_version_rework_ui")

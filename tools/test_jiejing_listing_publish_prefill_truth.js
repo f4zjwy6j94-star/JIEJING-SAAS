@@ -26,6 +26,10 @@ const duplicateGuardSource = extractFunction(
   "function saasPreTestPayloadText",
   "\nfunction saasPreTestFormSummary",
 );
+const factPacketProjectionSource = extractFunction(
+  "function saasMerchantProductFactProjectedValue",
+  "\nfunction applySaasAiCeoProductFactPacket",
+);
 
 function publishPrefill({ input, logistics }) {
   const sandbox = {
@@ -78,6 +82,20 @@ function duplicateSignal(payload) {
   const sandbox = { __payload: payload };
   vm.runInNewContext(
     `${duplicateGuardSource}\nglobalThis.__result = saasPreTestDuplicateSignal(globalThis.__payload);`,
+    sandbox,
+  );
+  return sandbox.__result;
+}
+
+function applyFactPacket(draft, packet) {
+  const sandbox = { __draft: draft, __packet: packet };
+  vm.runInNewContext(
+    `
+const saasListingItemSpecificsWithMerchantFacts = (current) => String(current || "");
+const saasMerchantProductFactLabel = (key) => String(key || "");
+${factPacketProjectionSource}
+globalThis.__result = applySaasMerchantProductFactPacketToDraft(globalThis.__draft, globalThis.__packet);
+`,
     sandbox,
   );
   return sandbox.__result;
@@ -147,4 +165,44 @@ test("exact historical SKU or asset identity remains blocked", () => {
     }),
     "assets/backflow-incense-",
   );
+});
+
+test("confirmed net weight and product dimensions clear stale package logistics", () => {
+  const result = applyFactPacket(
+    {
+      product: "禅意佛手托莲花倒流香炉",
+      publish_prefill: {
+        item_location: "福建德化",
+        package_weight_g: "451",
+        package_length_cm: "16.2",
+        package_width_cm: "7.7",
+        package_height_cm: "17.9",
+      },
+      fields: { item_specifics: "Brand: Unbranded", logistics: "商品净重: 451 g" },
+    },
+    {
+      product_name: "禅意佛手托莲花倒流香炉",
+      merchant_confirmed_facts: {
+        net_weight_g: "451",
+        product_dimensions_cm: "16.2 x 7.7 x 17.9",
+        product_origin: "福建德化",
+      },
+      unknown_facts: [
+        "item_location",
+        "package_weight_g",
+        "package_length_cm",
+        "package_width_cm",
+        "package_height_cm",
+      ],
+    },
+  );
+
+  assert.equal(result.publish_prefill.item_location, "");
+  assert.equal(result.publish_prefill.package_weight_g, "");
+  assert.equal(result.publish_prefill.package_length_cm, "");
+  assert.equal(result.publish_prefill.package_width_cm, "");
+  assert.equal(result.publish_prefill.package_height_cm, "");
+  assert.equal(result.publish_prefill.product_dimensions_cm, "16.2 x 7.7 x 17.9");
+  assert.match(result.fields.logistics, /商品净重: 451 g（不等于包装重量）/);
+  assert.match(result.fields.logistics, /商品产地: 福建德化（不等于发货地）/);
 });
