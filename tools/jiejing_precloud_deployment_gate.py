@@ -74,6 +74,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("media_placeholder_review_gate", [sys.executable, "tools/test_jiejing_media_placeholder_review_gate.py"]),
     ("media_asset_jobs", [sys.executable, "tools/test_jiejing_media_asset_jobs.py"]),
     ("media_controlled_acceptance", [sys.executable, "tools/test_jiejing_media_controlled_acceptance_red.py"]),
+    ("owner_media_testing", [sys.executable, "tools/test_jiejing_owner_media_testing.py"]),
     ("media_queue_setup_recovery", [sys.executable, "tools/test_jiejing_media_queue_setup_recovery.py"]),
     ("media_source_assets", [sys.executable, "tools/test_jiejing_media_source_assets.py"]),
     ("media_source_upload_http", [sys.executable, "tools/test_jiejing_media_source_upload_http.py"]),

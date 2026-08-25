@@ -180,8 +180,15 @@ MERCHANT_PRODUCT_FACT_REQUIRED_KEYS = tuple(
 _DOMESTIC_BILLING_COMPANY_LOCKS = tuple(threading.Lock() for _ in range(128))
 _MEDIA_CREDIT_COMPANY_LOCKS = tuple(threading.Lock() for _ in range(128))
 CONTROLLED_MEDIA_CREDIT_SOURCE = "controlled_acceptance"
+OWNER_MEDIA_TESTING_SOURCE = "internal_owner_testing"
 MEDIA_CREDIT_SOURCE_ALLOWLIST = frozenset(
-    {"plan_included", "purchased", "legacy", CONTROLLED_MEDIA_CREDIT_SOURCE}
+    {
+        "plan_included",
+        "purchased",
+        "legacy",
+        CONTROLLED_MEDIA_CREDIT_SOURCE,
+        OWNER_MEDIA_TESTING_SOURCE,
+    }
 )
 _PLATFORM_RELIABILITY_ALERT_LOCK = threading.Lock()
 _OPERATIONS_ANALYTICS_TIMEZONE = timezone(timedelta(hours=8))
@@ -10648,7 +10655,7 @@ class SaaSRepository:
             raise ValueError("unsupported media credit source")
         source_reference_id = str(details.get("source_reference_id") or reference_id or idempotency_hash).strip()[:160]
         expires_at = str(details.get("expires_at") or "").strip()[:64] or None
-        if source_type in {"plan_included", CONTROLLED_MEDIA_CREDIT_SOURCE} and not expires_at:
+        if source_type in {"plan_included", CONTROLLED_MEDIA_CREDIT_SOURCE, OWNER_MEDIA_TESTING_SOURCE} and not expires_at:
             raise ValueError("expiring media credit source requires an expiry")
         now = now_iso()
         conn.execute(
@@ -10685,7 +10692,8 @@ class SaaSRepository:
             """
             select bucket_id, source_type, remaining_points, reserved_points, expires_at
             from media_credit_buckets
-            where company_id = ? and status = 'active' and source_type != 'controlled_acceptance'
+            where company_id = ? and status = 'active'
+              and source_type not in ('controlled_acceptance', 'internal_owner_testing')
             order by case source_type when 'plan_included' then 0 when 'purchased' then 1 else 2 end,
                      case when expires_at is null or cast(expires_at as text) = '' then 1 else 0 end,
                      expires_at asc, created_at asc, bucket_id asc
@@ -10797,7 +10805,7 @@ class SaaSRepository:
             select bucket_id, remaining_points, reserved_points, expires_at
             from media_credit_buckets
             where company_id = ?
-              and source_type in ('plan_included', 'controlled_acceptance')
+              and source_type in ('plan_included', 'controlled_acceptance', 'internal_owner_testing')
               and status in ('active', 'expiring')
             """,
             (company_id,),
@@ -16201,8 +16209,11 @@ class SaaSRepository:
         purchased_reserved = 0
         controlled_acceptance_points = 0
         controlled_acceptance_reserved = 0
+        owner_testing_points = 0
+        owner_testing_reserved = 0
         included_expiries: list[str] = []
         controlled_acceptance_expiries: list[str] = []
+        owner_testing_expiries: list[str] = []
         for item in rows:
             remaining = max(0, int(item["remaining_points"] or 0))
             reserved = max(0, int(item["reserved_points"] or 0))
@@ -16220,6 +16231,12 @@ class SaaSRepository:
                 expires_at = str(item["expires_at"] or "").strip()
                 if expires_at:
                     controlled_acceptance_expiries.append(expires_at)
+            elif source_type == OWNER_MEDIA_TESTING_SOURCE:
+                owner_testing_points += available
+                owner_testing_reserved += reserved
+                expires_at = str(item["expires_at"] or "").strip()
+                if expires_at:
+                    owner_testing_expiries.append(expires_at)
             else:
                 purchased_points += available
                 purchased_reserved += reserved
@@ -16234,6 +16251,9 @@ class SaaSRepository:
             "controlled_acceptance_expires_at": (
                 min(controlled_acceptance_expiries) if controlled_acceptance_expiries else ""
             ),
+            "owner_testing_points": owner_testing_points,
+            "owner_testing_reserved_points": owner_testing_reserved,
+            "owner_testing_expires_at": min(owner_testing_expiries) if owner_testing_expiries else "",
         }
 
     def _media_credit_account_row_to_dict(

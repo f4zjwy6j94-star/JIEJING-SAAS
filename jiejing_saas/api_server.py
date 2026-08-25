@@ -104,6 +104,8 @@ from .media_credits import (
     estimate_media_points,
     media_live_provider_requested,
     normalize_media_generation_inputs,
+    owner_media_testing_company_allowed,
+    owner_media_testing_enabled,
 )
 from .merchant_onboarding import (
     AUTHORIZED_CONNECTION_STATUSES,
@@ -159,6 +161,7 @@ from .readiness import build_degraded_product_readiness, build_product_readiness
 from .repository import (
     ACTIVE_SECRET_REF_STATUSES,
     CONTROLLED_MEDIA_CREDIT_SOURCE,
+    OWNER_MEDIA_TESTING_SOURCE,
     EBAY_UNPUBLISHED_DRAFT_OAUTH_SOURCE,
     EBAY_UNPUBLISHED_DRAFT_OAUTH_STEP,
     EBAY_UNPUBLISHED_DRAFT_SCOPE_PROFILE,
@@ -451,7 +454,36 @@ def _reserve_ops_media_points(
     media_idempotency_key: str,
     media_quote: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Use the private acceptance bucket when this tenant is explicitly enabled."""
+    """Use an exact private testing bucket when this tenant is explicitly enabled."""
+
+    if owner_media_testing_enabled() and owner_media_testing_company_allowed(company_id):
+        owner_bucket = repository.get_media_credit_source(
+            company_id=company_id,
+            source_type=OWNER_MEDIA_TESTING_SOURCE,
+        )
+        if owner_bucket:
+            owner_source_reference = str(owner_bucket.get("source_reference_id") or "")
+            owner_reserve_key = repository.media_credit_reservation_attempt_idempotency_key(
+                company_id=company_id,
+                reference_type="media_job",
+                reference_id=media_idempotency_key,
+                base_idempotency_key=f"{media_idempotency_key}:owner-media-testing-reserve:v1",
+            )
+            return repository.reserve_media_credit_source(
+                company_id=company_id,
+                user_id=user_id,
+                source_type=OWNER_MEDIA_TESTING_SOURCE,
+                source_reference_id=owner_source_reference,
+                points=int(media_quote["estimated_points"]),
+                idempotency_key=owner_reserve_key,
+                reference_type="media_job",
+                reference_id=media_idempotency_key,
+                details={
+                    "quote": media_quote,
+                    "credit_source": OWNER_MEDIA_TESTING_SOURCE,
+                    "source_reference_id": owner_source_reference,
+                },
+            )
 
     if not (
         controlled_media_acceptance_enabled()

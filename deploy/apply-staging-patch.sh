@@ -261,6 +261,7 @@ FILES=(
   "jiejing_runtime/workflow_templates.py"
   "tools/jiejing_saas_backend_cli.py"
   "tools/jiejing_media_controlled_acceptance.py"
+  "tools/jiejing_owner_media_testing.py"
   "tools/jiejing_production_deploy.py"
   "tools/test_jiejing_production_deploy_channel.py"
   "tools/jiejing_sqlite_to_postgres_rehearsal.py"
@@ -544,6 +545,7 @@ python3 -m py_compile \
   jiejing_runtime/runtime.py \
   tools/jiejing_saas_backend_cli.py \
   tools/jiejing_media_controlled_acceptance.py \
+  tools/jiejing_owner_media_testing.py \
   jiejing_saas/database_adapter.py \
   jiejing_saas/account_health.py \
   jiejing_saas/merchant_onboarding.py \

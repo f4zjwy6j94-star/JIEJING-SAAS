@@ -11,7 +11,7 @@ from .media_asset_pipeline import (
     media_asset_is_settlement_eligible,
     media_manifest_matches_approved_quote,
 )
-from .repository import CONTROLLED_MEDIA_CREDIT_SOURCE, SaaSRepository
+from .repository import CONTROLLED_MEDIA_CREDIT_SOURCE, OWNER_MEDIA_TESTING_SOURCE, SaaSRepository
 
 
 MEDIA_CREDIT_PACKS = [
@@ -25,6 +25,9 @@ CONTROLLED_MEDIA_ACCEPTANCE_POINTS = 320
 CONTROLLED_MEDIA_ACCEPTANCE_TTL_HOURS = 24
 CONTROLLED_MEDIA_ACCEPTANCE_APPROVAL = "I_APPROVE_CONTROLLED_MEDIA_ACCEPTANCE_POINTS"
 CONTROLLED_MEDIA_ACCEPTANCE_SOURCE_REFERENCE_PREFIX = "controlled-media-acceptance-v1"
+OWNER_MEDIA_TESTING_POINTS = 1000
+OWNER_MEDIA_TESTING_TTL_DAYS = 30
+OWNER_MEDIA_TESTING_SOURCE_REFERENCE_PREFIX = "owner-media-testing-v1"
 _MEDIA_GENERATION_TIER_ALIASES = {
     "draft": "draft",
     "low": "draft",
@@ -121,6 +124,140 @@ def controlled_media_acceptance_source_reference(company_id: str) -> str:
     if not normalized_company:
         raise ValueError("controlled acceptance company is required")
     return f"{CONTROLLED_MEDIA_ACCEPTANCE_SOURCE_REFERENCE_PREFIX}:{normalized_company}"
+
+
+def owner_media_testing_enabled() -> bool:
+    return _env_bool("JIEJING_OWNER_MEDIA_TESTING_ENABLED")
+
+
+def owner_media_testing_company_allowed(company_id: str) -> bool:
+    normalized_company = str(company_id or "").strip()
+    if not normalized_company:
+        return False
+    raw = os.environ.get("JIEJING_OWNER_MEDIA_TESTING_COMPANY_ALLOWLIST", "")
+    return normalized_company in {
+        item.strip()
+        for item in raw.replace(";", ",").split(",")
+        if item.strip()
+    }
+
+
+def owner_media_testing_source_reference(company_id: str, *, now: datetime | None = None) -> str:
+    normalized_company = str(company_id or "").strip()
+    if not normalized_company:
+        raise ValueError("owner media testing company is required")
+    observed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    return f"{OWNER_MEDIA_TESTING_SOURCE_REFERENCE_PREFIX}:{normalized_company}:{observed_at:%Y-%m}"
+
+
+def grant_owner_media_testing_points(
+    repository: SaaSRepository,
+    *,
+    account_email: str,
+    expected_company_id: str,
+) -> dict[str, Any]:
+    """Grant one monthly, private owner-testing allowance without calling a provider."""
+
+    if not owner_media_testing_enabled():
+        return _owner_testing_blocked("owner_media_testing_disabled")
+    normalized_email = str(account_email or "").strip().lower()
+    normalized_expected_company = str(expected_company_id or "").strip()
+    user = repository.get_user_by_email(normalized_email) if normalized_email else None
+    if not user:
+        return _owner_testing_blocked("owner_media_testing_account_not_found")
+    company_id = str(user.get("default_company_id") or "").strip()
+    if not normalized_expected_company or company_id != normalized_expected_company:
+        return _owner_testing_blocked("owner_media_testing_account_company_mismatch")
+    if not owner_media_testing_company_allowed(company_id):
+        return _owner_testing_blocked("owner_media_testing_company_not_allowlisted")
+    if str(user.get("status") or "").strip().lower() != "active":
+        return _owner_testing_blocked("owner_media_testing_account_not_active")
+
+    now = datetime.now(timezone.utc)
+    source_reference_id = owner_media_testing_source_reference(company_id, now=now)
+    expires_at = (now + timedelta(days=OWNER_MEDIA_TESTING_TTL_DAYS)).isoformat()
+    result = repository.apply_media_credit_operation(
+        company_id=company_id,
+        user_id=str(user.get("user_id") or "") or None,
+        operation_type="grant",
+        points=OWNER_MEDIA_TESTING_POINTS,
+        idempotency_key=f"{source_reference_id}:grant",
+        reference_type=OWNER_MEDIA_TESTING_SOURCE,
+        reference_id=source_reference_id,
+        details={
+            "credit_source": OWNER_MEDIA_TESTING_SOURCE,
+            "source_reference_id": source_reference_id,
+            "expires_at": expires_at,
+            "ttl_days": OWNER_MEDIA_TESTING_TTL_DAYS,
+            "external_provider_action_triggered": False,
+            "real_platform_write_performed": False,
+            "secret_exposed": False,
+        },
+    )
+    bucket = repository.get_media_credit_source(
+        company_id=company_id,
+        source_type=OWNER_MEDIA_TESTING_SOURCE,
+        source_reference_id=source_reference_id,
+    )
+    if not bucket:
+        raise RuntimeError("owner media testing bucket was not persisted")
+    existing_audit = repository.find_latest_audit_log_by_target(
+        company_id=company_id,
+        store_id=None,
+        action_type="media_credit.owner_testing.granted",
+        target_type="media_credit_bucket",
+        target_id=source_reference_id,
+    )
+    if not existing_audit:
+        repository.write_audit(
+            company_id=company_id,
+            user_id=str(user.get("user_id") or "") or None,
+            actor_type="platform_internal_admin",
+            action_type="media_credit.owner_testing.granted",
+            target_type="media_credit_bucket",
+            target_id=source_reference_id,
+            summary="Private owner media-testing allowance granted to one allowlisted company.",
+            details={
+                "contract_version": "2026-08-25-owner-media-testing-v1",
+                "credit_source": OWNER_MEDIA_TESTING_SOURCE,
+                "points": OWNER_MEDIA_TESTING_POINTS,
+                "ttl_days": OWNER_MEDIA_TESTING_TTL_DAYS,
+                "expires_at": str(bucket.get("expires_at") or ""),
+                "external_provider_action_triggered": False,
+                "real_platform_write_performed": False,
+                "public_charging_allowed": False,
+                "secret_exposed": False,
+            },
+        )
+    return {
+        "ok": True,
+        "status": "granted",
+        "reason": "",
+        "company_id": company_id,
+        "credit_source": OWNER_MEDIA_TESTING_SOURCE,
+        "source_reference_id": source_reference_id,
+        "points_granted": OWNER_MEDIA_TESTING_POINTS,
+        "ttl_days": OWNER_MEDIA_TESTING_TTL_DAYS,
+        "expires_at": str(bucket.get("expires_at") or ""),
+        "duplicate_request": bool(result.get("duplicate_request")),
+        "external_provider_action_triggered": False,
+        "real_platform_write_performed": False,
+        "public_charging_allowed": False,
+        "secret_exposed": False,
+    }
+
+
+def _owner_testing_blocked(reason: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "status": "blocked",
+        "reason": str(reason or "owner_media_testing_blocked"),
+        "points_granted": 0,
+        "external_provider_action_triggered": False,
+        "real_platform_write_performed": False,
+        "public_charging_allowed": False,
+        "secret_exposed": False,
+    }
 
 
 def grant_controlled_media_acceptance_points(

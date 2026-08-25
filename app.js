@@ -36488,9 +36488,11 @@ function renderSaasMerchantMediaCreditsPanel() {
   const available = Number(account.available_points || 0);
   const included = Number(account.included_points || 0);
   const purchased = Number(account.purchased_points || 0);
+  const ownerTesting = Number(account.owner_testing_points || 0);
   const reserved = Number(account.reserved_points || 0);
   const spent = Number(account.lifetime_spent_points || 0);
   const includedExpiryLabel = saasDomesticBillingDateLabel(account.included_expires_at);
+  const ownerTestingExpiryLabel = saasDomesticBillingDateLabel(account.owner_testing_expires_at);
   const purchaseOpen = purchase.purchase_enabled === true && purchase.status === "available";
   const operationLabels = {
     grant: "入账",
@@ -36498,7 +36500,7 @@ function renderSaasMerchantMediaCreditsPanel() {
     settle: "任务结算",
     release: "失败返还",
     revoke: "退款收回",
-    expire: "套餐点到期",
+    expire: "额度到期",
   };
   const mediaOrders = (Array.isArray(state.saasDomesticBillingOrders) ? state.saasDomesticBillingOrders : []).filter(
     (item) => item?.purchase_type === "media_points",
@@ -36513,7 +36515,7 @@ function renderSaasMerchantMediaCreditsPanel() {
         <div>
           <span>素材点</span>
           <strong>素材点余额 ${available.toLocaleString("zh-CN")}</strong>
-          <p>当前素材点用于图片生成：优先使用套餐内点数，再使用已购买点数。生成前预估，完成后按实际结算；图片按成功张数扣点，失败、超时或门禁未通过会返还。视频点数计价尚未开放。</p>
+          <p>当前素材点用于图片生成：套餐、已购买和内部测试额度分别记账。生成前预估，完成后按实际结算；图片按成功张数扣点，失败、超时或门禁未通过会返还。视频点数计价尚未开放。</p>
         </div>
         <em>${purchaseOpen ? "可购买" : "购买入口准备中"}</em>
       </div>
@@ -36521,7 +36523,7 @@ function renderSaasMerchantMediaCreditsPanel() {
         <article class="is-green">
           <span>可用</span>
           <strong>${available.toLocaleString("zh-CN")}</strong>
-          <small>套餐内与已购买点数合计</small>
+          <small>套餐、已购买与内部测试额度合计</small>
         </article>
         <article class="is-green">
           <span>套餐内</span>
@@ -36533,6 +36535,13 @@ function renderSaasMerchantMediaCreditsPanel() {
           <strong>${purchased.toLocaleString("zh-CN")}</strong>
           <small>套餐点用完后使用 · 不随套餐到期</small>
         </article>
+        ${ownerTesting > 0
+          ? `<article class="is-green">
+              <span>内部测试额度</span>
+              <strong>${ownerTesting.toLocaleString("zh-CN")}</strong>
+              <small>${ownerTestingExpiryLabel ? `${escapeHtml(ownerTestingExpiryLabel)} 到期` : "仅限项目所有者验收使用"}</small>
+            </article>`
+          : ""}
         <article class="${reserved ? "is-amber" : "is-green"}">
           <span>处理中</span>
           <strong>${reserved.toLocaleString("zh-CN")}</strong>

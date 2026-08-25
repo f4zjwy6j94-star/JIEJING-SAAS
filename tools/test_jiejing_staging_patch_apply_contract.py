@@ -284,6 +284,7 @@ def main() -> int:
         "jiejing_runtime/runtime.py",
         "tools/jiejing_saas_backend_cli.py",
         "tools/jiejing_media_controlled_acceptance.py",
+        "tools/jiejing_owner_media_testing.py",
         "tools/test_jiejing_merchant_byok_model_and_memory.py",
         "python3 -m py_compile",
         "COMPOSE_ARGS=(-f \"$COMPOSE_FILE\")",
@@ -340,6 +341,10 @@ def main() -> int:
     if text.count("tools/jiejing_media_controlled_acceptance.py") < 2:
         return fail(
             "patch apply must whitelist and syntax-check the owner-only controlled media acceptance CLI"
+        )
+    if text.count("tools/jiejing_owner_media_testing.py") < 2:
+        return fail(
+            "patch apply must whitelist and syntax-check the private owner media-testing CLI"
         )
     if "*.sh text eol=lf" not in gitattributes:
         return fail("shell scripts must be pinned to LF in .gitattributes")
