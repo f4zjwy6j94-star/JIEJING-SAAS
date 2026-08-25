@@ -308,7 +308,10 @@ class ProviderJobRunner:
             image_prompt = (
                 f"{image_prompt} Return exactly one coherent single-view product composition in this image: one centered product, "
                 "one camera angle, and one continuous background. Do not create a collage, contact sheet, comparison grid, "
-                "multi-panel layout, packaging breakdown, repeated copies, or multiple camera angles."
+                "multi-panel layout, packaging breakdown, repeated copies, or multiple camera angles. "
+                "Exclude removable display props and photography supports that are not confirmed as included with the product, "
+                "including tables, trays, display pedestals, platforms, scales, rulers, and staged background objects. "
+                "Keep any base that is structurally part of the product; remove only separable presentation props."
             )
         video_requested = media_video_requested(inputs)
         video_intent = str(creative_job_spec.get("video_intent") or "appearance_showcase").strip().lower()

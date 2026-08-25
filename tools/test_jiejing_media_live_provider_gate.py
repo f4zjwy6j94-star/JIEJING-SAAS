@@ -207,6 +207,26 @@ def main() -> int:
         if "Locked facts that must not be changed or invented" not in live_config.image_prompt:
             raise AssertionError("grounded image prompt must preserve immutable product facts")
 
+        main_image_body = media_job_body(video_requested=False)
+        main_image_body["inputs"]["image_count"] = 1
+        main_image_body["inputs"]["scene_types"] = ["white_background"]
+        with patched_env(JIEJING_MEDIA_LIVE_PROVIDER_ENABLED="true", JIEJING_MEDIA_LIVE_VIDEO_ENABLED="false"):
+            main_image = ProviderJobRunner().run(
+                company_id="co_test",
+                store_id="store_test",
+                user_id="user_test",
+                task_id="task_main_image_prop_cleanup",
+                job_id="job_main_image_prop_cleanup",
+                job_body=main_image_body,
+            )
+        if main_image.get("status") != "completed_live_media_provider":
+            raise AssertionError(f"single eBay main image should remain executable: {main_image}")
+        main_image_prompt = FakeMediaGenerationAdapter.configs[-1].image_prompt
+        if "Exclude removable display props and photography supports" not in main_image_prompt:
+            raise AssertionError("eBay main-image prompt must exclude unconfirmed tables, trays, pedestals and scales")
+        if "Keep any base that is structurally part of the product" not in main_image_prompt:
+            raise AssertionError("main-image prop cleanup must preserve a structural product base")
+
         quality_alias_body = media_job_body(video_requested=False)
         quality_alias_body["inputs"].pop("generation_tier", None)
         quality_alias_body["inputs"]["creative_job_spec"].pop("generation_tier", None)
