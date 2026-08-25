@@ -9401,18 +9401,15 @@ function saasPreTestDuplicateSignal(payload = null) {
   const text = saasPreTestPayloadText(payload);
   if (!text) return "";
   const oldTestNeedles = [
-    "backflow",
-    "incense",
-    "incense-burner",
-    "倒流香",
-    "香炉",
-    "jj-backflow",
-    "adhesive cable",
-    "cable organizer",
-    "线缆收纳",
-    "local-",
-    "demo",
-    "sample",
+    "jj-backflow-20260523-003",
+    "jj-backflow-incense-debug-full",
+    "jj-backflow-incense-debug-min",
+    "jj-bfi-001",
+    "jj-draft-proof-20260815-05",
+    "assets/backflow-incense-",
+    "source-backflow-incense-burner",
+    "jj-dco-005",
+    "assets/cable-organizer",
   ];
   return oldTestNeedles.find((needle) => text.includes(needle)) || "";
 }
@@ -10694,13 +10691,17 @@ function saasPublishIntakePrefillValues(text = state.saasListingComposerInput ||
     (fields.selling_points || fields.description || "").match(/(?:材质|material)\s*[:：]?\s*([^，。；;\n]+)/i)?.[1] ||
     "";
   const itemLocation =
-    evidenceText.match(/(?:发货地|item location|ship from)\s*[:：]?\s*([^，。；;\n]+)/i)?.[1] ||
+    evidenceText.match(/(?:^|[\n。；;])\s*(?:实际发货地|发货地|item location|ship from)\s*[:：]\s*([^，。；;\n]+)/im)?.[1] ||
     "";
-  const weightMatch = evidenceText.match(/(\d+(?:\.\d+)?)\s*(kg|千克|g|克)\b/i);
+  const weightMatch = evidenceText.match(
+    /(?:包装重量|包裹重量|毛重|package\s*weight|gross\s*weight)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(kg|千克|g|克)\b/i,
+  );
   const packageWeightG = weightMatch
     ? String(Math.round(Number(weightMatch[1]) * (/kg|千克/i.test(weightMatch[2]) ? 1000 : 1)))
     : "";
-  const dimensionMatch = evidenceText.match(/(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*cm/i);
+  const dimensionMatch = evidenceText.match(
+    /(?:包装尺寸|包裹尺寸|package\s*dimensions?)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*cm/i,
+  );
   const mediaWritebackUrls = saasListingMediaWritebackImageUrls(draft);
   const imageText = [fields.images, mediaWritebackUrls.join("\n")].filter(Boolean).join("\n");
   const imageUrls = mediaWritebackUrls.length
