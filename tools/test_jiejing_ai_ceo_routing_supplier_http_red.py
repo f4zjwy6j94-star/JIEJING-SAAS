@@ -531,6 +531,77 @@ class AiCeoSupplierFactsHttpRedTests(unittest.TestCase):
 
 
 class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
+    def test_completed_vision_report_recovers_into_the_matching_existing_listing(self) -> None:
+        restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const sourceUrl = 'https://qr.1688.com/s/FqVegjLr';",
+                    "const state = {",
+                    "  saasListingComposerDraft: {",
+                    "    product: '禅意佛手托莲花倒流香炉',",
+                    "    merchant_product_fact_packet: {",
+                    "      merchant_confirmed_facts: { source_url: sourceUrl, supplier_item_number: 'JC2023041300002', product_name: '禅意佛手托莲花倒流香炉' },",
+                    "      source_confirmed_facts: {}, derived_listing_suggestions: {}, source_records: []",
+                    "    }",
+                    "  },",
+                    "  saasReports: [{",
+                    "    report_id: 'report_vision_saved', report_type: 'merchant.product_facts',",
+                    "    report: { product: '禅意佛手莲花倒流香炉', merchant_product_fact_packet: {",
+                    "      product_name: '禅意佛手莲花倒流香炉',",
+                    "      source_confirmed_facts: { source_url: sourceUrl, supplier_item_number: 'JC2023041300002', net_weight_g: '451' },",
+                    "      merchant_confirmed_facts: {}, derived_listing_suggestions: { condition: 'NEW' },",
+                    "      field_evidence: { net_weight_g: { image_indexes: [5], confidence: 0.99 } },",
+                    "      fact_conflicts: [{ field: 'material', values: ['树脂', '紫砂'] }],",
+                    "      unknown_facts: ['sku', 'material'], source_records: [{ type: 'merchant_product_image', asset_id: 'asset_1' }]",
+                    "    }}",
+                    "  }]",
+                    "};",
+                    "const saasListingDraftHasConcreteProduct = () => true;",
+                    "const latestSaasActionableProductReportByTypes = () => null;",
+                    "const saasListingDraftFromReport = () => null;",
+                    "const saasCurrentListingProjectIdentity = () => ({ key: 'incense' });",
+                    "const isLegacySampleMediaDraftKey = () => false;",
+                    "const saasMarketCandidateMatchKey = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9\\u4e00-\\u9fff]+/g, '');",
+                    "const applySaasMerchantProductFactPacketToDraft = (draft, packet) => ({ ...draft, merchant_product_fact_packet: packet });",
+                    restore_listing,
+                    "const restored = restoreSaasListingComposerDraftFromBackendReports();",
+                    "console.log(JSON.stringify({ restored, sourceMode: state.saasListingSourceMode }));",
+                ]
+            )
+        )
+        packet = result.get("restored", {}).get("merchant_product_fact_packet", {})
+        self.assertEqual("report_vision_saved", result.get("restored", {}).get("source_product_fact_report_id"))
+        self.assertEqual("JC2023041300002", packet.get("merchant_confirmed_facts", {}).get("supplier_item_number"))
+        self.assertEqual([5], packet.get("field_evidence", {}).get("net_weight_g", {}).get("image_indexes"))
+        self.assertEqual("backend_product_fact_restore", result.get("sourceMode"))
+
+    def test_product_vision_chat_gets_a_longer_timeout_without_slowing_text_chat(self) -> None:
+        request_chat = function_body(APP_JS, "requestSaasAiCeoChat")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const state = { saasAiCeoSupplierFactAttestation: null };",
+                    "const normalizeSaasCeoCommand = (value) => value;",
+                    "const hasSaasProtectedSessionCandidate = () => true;",
+                    "const sanitizeSaasCeoCommandSourceText = (value) => String(value || '');",
+                    "const saasAiCeoConversationHistoryForRequest = () => [];",
+                    "const isSaasRealPlatformWritesEnabled = () => false;",
+                    "const supplierFactsForSaasAiCeoCommand = () => ({});",
+                    "const capturedTimeouts = [];",
+                    "const saasFetchNdjsonWithTimeout = async (_path, _options, timeoutMs) => { capturedTimeouts.push(timeoutMs); return {}; };",
+                    request_chat,
+                    "(async () => {",
+                    "  const command = { store_id: 'store_unit', text: '整理商品资料', route: 'listing', intent: 'listing', summary: '', title: '' };",
+                    "  await requestSaasAiCeoChat(command, {}, []);",
+                    "  await requestSaasAiCeoChat(command, {}, ['asset_1', 'asset_2', 'asset_3', 'asset_4', 'asset_5', 'asset_6', 'asset_7']);",
+                    "  console.log(JSON.stringify({ capturedTimeouts }));",
+                    "})().catch((error) => { console.error(error); process.exit(1); });",
+                ]
+            )
+        )
+        self.assertEqual([60000, 180000], result.get("capturedTimeouts"))
+
     def test_manual_form_confirmation_is_the_only_frontend_source_of_verified_payload(self) -> None:
         build_intake = function_body(APP_JS, "buildSaasAiCeoSupplierFactIntake")
         confirm_intake = function_body(APP_JS, "confirmManualSourceFactsForAiCeo")

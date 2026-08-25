@@ -17188,8 +17188,103 @@ function sanitizeSaasPacketSnapshot(packet = {}) {
 }
 
 function restoreSaasListingComposerDraftFromBackendReports() {
+  const factReports = (state.saasReports || []).filter((item) => item?.report_type === "merchant.product_facts");
   if (state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object") {
-    if (saasListingDraftHasConcreteProduct(state.saasListingComposerDraft)) return state.saasListingComposerDraft;
+    if (saasListingDraftHasConcreteProduct(state.saasListingComposerDraft)) {
+      const currentDraft = state.saasListingComposerDraft;
+      const currentPacket =
+        currentDraft.merchant_product_fact_packet && typeof currentDraft.merchant_product_fact_packet === "object"
+          ? currentDraft.merchant_product_fact_packet
+          : {};
+      const packetValues = (packet = {}) => ({
+        ...(packet.derived_listing_suggestions && typeof packet.derived_listing_suggestions === "object" ? packet.derived_listing_suggestions : {}),
+        ...(packet.source_confirmed_facts && typeof packet.source_confirmed_facts === "object" ? packet.source_confirmed_facts : {}),
+        ...(packet.merchant_confirmed_facts && typeof packet.merchant_confirmed_facts === "object" ? packet.merchant_confirmed_facts : {}),
+      });
+      const currentValues = packetValues(currentPacket);
+      const matchingFactReport = factReports.find((item) => {
+        const body = item?.report && typeof item.report === "object" ? item.report : {};
+        const incomingPacket =
+          body.merchant_product_fact_packet && typeof body.merchant_product_fact_packet === "object"
+            ? body.merchant_product_fact_packet
+            : {};
+        const incomingValues = packetValues(incomingPacket);
+        const stableKeys = ["supplier_item_number", "source_url"];
+        if (
+          stableKeys.some(
+            (key) =>
+              currentValues[key] &&
+              incomingValues[key] &&
+              String(currentValues[key]).trim().toLowerCase() === String(incomingValues[key]).trim().toLowerCase(),
+          )
+        ) {
+          return true;
+        }
+        const currentProductKey = saasMarketCandidateMatchKey(currentPacket.product_name || currentDraft.product || currentDraft.title || "");
+        const incomingProductKey = saasMarketCandidateMatchKey(incomingPacket.product_name || body.product || "");
+        return Boolean(
+          currentProductKey &&
+          incomingProductKey &&
+          (currentProductKey === incomingProductKey ||
+            (Math.min(currentProductKey.length, incomingProductKey.length) >= 6 &&
+              (currentProductKey.includes(incomingProductKey) || incomingProductKey.includes(currentProductKey)))),
+        );
+      });
+      if (matchingFactReport) {
+        const body = matchingFactReport.report && typeof matchingFactReport.report === "object" ? matchingFactReport.report : {};
+        const incomingPacket = body.merchant_product_fact_packet || {};
+        const mergeUnique = (items = [], keyForItem = (item) => JSON.stringify(item)) => {
+          const seen = new Set();
+          return items.filter((item) => {
+            const key = keyForItem(item);
+            if (!key || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+        };
+        const mergedPacket = {
+          ...currentPacket,
+          ...incomingPacket,
+          source_confirmed_facts: {
+            ...(currentPacket.source_confirmed_facts || {}),
+            ...(incomingPacket.source_confirmed_facts || {}),
+          },
+          merchant_confirmed_facts: {
+            ...(incomingPacket.merchant_confirmed_facts || {}),
+            ...(currentPacket.merchant_confirmed_facts || {}),
+          },
+          derived_listing_suggestions: {
+            ...(currentPacket.derived_listing_suggestions || {}),
+            ...(incomingPacket.derived_listing_suggestions || {}),
+          },
+          listing_copy: {
+            ...(currentPacket.listing_copy || {}),
+            ...(incomingPacket.listing_copy || {}),
+          },
+          field_evidence: {
+            ...(currentPacket.field_evidence || {}),
+            ...(incomingPacket.field_evidence || {}),
+          },
+          fact_conflicts: mergeUnique(
+            [...(incomingPacket.fact_conflicts || []), ...(currentPacket.fact_conflicts || [])],
+            (item) => `${String(item?.field || "")}:${JSON.stringify(item?.values || [])}`,
+          ),
+          unknown_facts: mergeUnique([...(incomingPacket.unknown_facts || []), ...(currentPacket.unknown_facts || [])], (item) => String(item || "")),
+          source_records: mergeUnique(
+            [...(incomingPacket.source_records || []), ...(currentPacket.source_records || [])],
+            (item) => String(item?.asset_id || item?.url || item?.sha256 || JSON.stringify(item || {})),
+          ),
+          blocked_by: mergeUnique([...(incomingPacket.blocked_by || []), ...(currentPacket.blocked_by || [])], (item) => String(item || "")),
+        };
+        state.saasListingComposerDraft = {
+          ...applySaasMerchantProductFactPacketToDraft(currentDraft, mergedPacket),
+          source_product_fact_report_id: String(matchingFactReport.report_id || ""),
+        };
+        state.saasListingSourceMode = "backend_product_fact_restore";
+        return state.saasListingComposerDraft;
+      }
+      return currentDraft;
+    }
     state.saasListingComposerDraft = null;
     state.saasListingSourceMode = "";
   }
@@ -17201,7 +17296,6 @@ function restoreSaasListingComposerDraftFromBackendReports() {
   if (!restored || !saasListingDraftHasConcreteProduct(restored)) return null;
   const identity = saasCurrentListingProjectIdentity(restored);
   const restoredWithIdentity = { ...restored, listing_project_key: identity.key };
-  const factReports = (state.saasReports || []).filter((item) => item?.report_type === "merchant.product_facts");
   const restoredProductKey = saasMarketCandidateMatchKey(restoredWithIdentity.product || restoredWithIdentity.title || "");
   const factReport = factReports.find((item) => {
     const body = item?.report && typeof item.report === "object" ? item.report : {};
@@ -24556,7 +24650,7 @@ async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = 
           ...supplierFactPayload,
         }),
       },
-      60000,
+      safeSourceAssetIds.length ? 180000 : 60000,
       hooks,
     );
   } catch (error) {
