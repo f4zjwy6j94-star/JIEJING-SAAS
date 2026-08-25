@@ -20,6 +20,7 @@ from jiejing_saas.ai_ceo_chat import (  # noqa: E402
     build_ai_ceo_turn_plan,
     _public_model_context,
     _selection_response_contract,
+    validate_ai_ceo_answer_quality,
 )
 from jiejing_saas.platform_model_status import platform_model_for_tier  # noqa: E402
 from jiejing_runtime.model_clients import OpenAICompatibleModelClient  # noqa: E402
@@ -224,7 +225,7 @@ class AiCeoOpenDomainTurnPlanTest(unittest.TestCase):
 
     def test_negated_publish_language_stays_in_internal_listing_intake(self) -> None:
         plan = build_ai_ceo_turn_plan(
-            "这是我的真实供货商品，请新建捷境内部待核对 Listing。"
+            "这是我的真实供货商品，请新建独立商品项目和捷境内部待核对 Listing。"
             "不要上传、复用或发布任何原始图片；本轮不联网选品、不保存 eBay 草稿、不公开发布。"
         )
 
@@ -238,13 +239,23 @@ class AiCeoOpenDomainTurnPlanTest(unittest.TestCase):
         self.assertEqual(
             _selection_response_contract(
                 message=(
-                    "这是我的真实供货商品，请新建捷境内部待核对 Listing。"
+                    "这是我的真实供货商品，请新建独立商品项目和捷境内部待核对 Listing。"
                     "本轮不联网选品、不保存 eBay 草稿、不公开发布。"
                 ),
                 route=plan["route"],
             ),
             {},
         )
+        quality = validate_ai_ceo_answer_quality(
+            message=(
+                "这是我的真实供货商品，请新建独立商品项目和捷境内部待核对 Listing。"
+                "本轮不联网选品、不保存 eBay 草稿、不公开发布。"
+            ),
+            route=AI_CEO_ROUTE_EBAY_WORKFLOW,
+            answer="已创建禅意倒流香炉内部待核对 Listing；未知字段继续阻断，未写入 eBay。",
+        )
+        self.assertTrue(quality["accepted"])
+        self.assertEqual(quality["quality_gate"], "non_selection_answer_present_v1")
 
     def test_positive_public_publish_request_still_requires_confirmation(self) -> None:
         plan = build_ai_ceo_turn_plan("资料已经核对完，现在请真实发布到 eBay。")

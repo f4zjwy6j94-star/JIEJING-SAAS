@@ -8,6 +8,7 @@ const vm = require("vm");
 
 const root = path.resolve(__dirname, "..");
 const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
+const appHtml = fs.readFileSync(path.join(root, "app.html"), "utf8");
 
 function extractFunction(name) {
   const marker = `function ${name}(`;
@@ -74,7 +75,7 @@ assert.strictEqual(
   "an explicit report-to-internal-draft handoff must enter Listing",
 );
 const negatedPublishListingIntake =
-  "这是我的真实供货商品，请新建捷境内部待核对 Listing。不要上传、复用或发布任何原始图片；本轮不联网选品、不保存 eBay 草稿、不公开发布。";
+  "这是我的真实供货商品，请新建独立商品项目和捷境内部待核对 Listing。不要上传、复用或发布任何原始图片；本轮不联网选品、不保存 eBay 草稿、不公开发布。";
 assert.strictEqual(
   highRisk(negatedPublishListingIntake),
   false,
@@ -90,5 +91,9 @@ assert.strictEqual(
   true,
   "an affirmative real eBay publish request must still require confirmation",
 );
+assert(
+  appHtml.includes("app.js?v=20260825-ai-ceo-listing-negation-v1"),
+  "app.html must refresh the AI CEO intent bundle after a production routing fix",
+);
 
-console.log("PASS AI CEO frontend intent routing: 7/7");
+console.log("PASS AI CEO frontend intent routing: 8/8");

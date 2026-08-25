@@ -3713,7 +3713,10 @@ def validate_ai_ceo_answer_quality(
         return source_quality
     if _looks_like_market_evidence_followup(message=message, route=route):
         return _market_evidence_followup_answer_quality(message=message, answer=answer)
-    if not _looks_like_product_selection_request(message=message, route=route):
+    if _looks_like_explicit_listing_intake(message) or not _looks_like_product_selection_request(
+        message=message,
+        route=route,
+    ):
         return {
             "accepted": bool(_safe_text(answer, limit=6000)),
             "quality_gate": "non_selection_answer_present_v1",
