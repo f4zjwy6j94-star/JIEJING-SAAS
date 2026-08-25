@@ -35,7 +35,7 @@ def main() -> int:
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
     frontend_asset_version = "20260824-ai-ceo-listing-continuity-v1"
-    app_js_asset_version = "20260825-listing-media-restore-v1"
+    app_js_asset_version = "20260825-listing-media-restore-v2"
     for expected_asset in [
         f"./app.js?v={app_js_asset_version}",
         f"./styles.css?v={frontend_asset_version}",

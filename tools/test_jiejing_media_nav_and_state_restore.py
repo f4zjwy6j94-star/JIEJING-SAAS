@@ -159,7 +159,7 @@ def main() -> int:
     if "if (isSaasPublicMvpMode())" not in ceo_submit_body:
         return fail("public SaaS AI CEO submit should use the real command routing path before legacy media demo routing")
     for marker in [
-        "20260825-listing-media-restore-v1",
+        "20260825-listing-media-restore-v2",
     ]:
         if marker not in app_html + index_html:
             return fail(f"frontend cache version must retain the current media retry UI bundle: {marker}")
@@ -182,6 +182,7 @@ def main() -> int:
         "20260704-bulk-media-handoff-v20",
         "20260825-media-retry-confirm-v1",
         "20260825-listing-publish-truth-v1",
+        "20260825-listing-media-restore-v1",
     ]:
         if stale_asset_version in app_html + index_html:
             return fail(f"frontend cache version must not keep stale asset after owner publish UI change: {stale_asset_version}")

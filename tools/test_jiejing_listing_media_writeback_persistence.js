@@ -22,6 +22,10 @@ const snapshotSource = extractFunction(
   "function sanitizeSaasListingMediaWritebackSnapshot",
   "\nfunction buildSaasProtectedStateSnapshot",
 );
+const mediaWritebackSource = extractFunction(
+  "function applySaasMediaManifestToListingDraft",
+  "\nfunction renderSaasListingMediaWritebackPanel",
+);
 
 function snapshotDraft(draft) {
   const sandbox = { __draft: draft };
@@ -92,4 +96,16 @@ test("approved Listing media survives the protected snapshot used after reload",
   assert.equal(restored.media_writeback.assets?.[0]?.listing_use_status, "approved_for_listing_draft");
   assert.equal(restored.media_writeback.triggers_real_platform_write, false);
   assert.equal(restored.media_writeback.secret_exposed, false);
+});
+
+test("media writeback saves the protected snapshot before returning", () => {
+  const draftAssignment = mediaWritebackSource.indexOf("state.saasListingComposerDraft = {");
+  const snapshotSave = mediaWritebackSource.indexOf("saveSaasProtectedStateSnapshot();");
+  const returnWriteback = mediaWritebackSource.lastIndexOf("return writeback;");
+
+  assert.notEqual(draftAssignment, -1);
+  assert.notEqual(snapshotSave, -1, "writeback must be persisted immediately instead of waiting for unrelated UI edits");
+  assert.notEqual(returnWriteback, -1);
+  assert.ok(draftAssignment < snapshotSave);
+  assert.ok(snapshotSave < returnWriteback);
 });

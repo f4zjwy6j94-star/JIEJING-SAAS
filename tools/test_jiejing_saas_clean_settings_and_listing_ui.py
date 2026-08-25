@@ -393,12 +393,12 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
     )
     require(
         app_html,
-        "app.js?v=20260825-listing-media-restore-v1",
+        "app.js?v=20260825-listing-media-restore-v2",
         "workspace retains the AI CEO candidate import fix in the current asset version",
     )
     require(
         index_html,
-        "app.js?v=20260825-listing-media-restore-v1",
+        "app.js?v=20260825-listing-media-restore-v2",
         "public entry preloads the same current Listing asset version",
     )
     require(

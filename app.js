@@ -7463,6 +7463,7 @@ function applySaasMediaManifestToListingDraft({ entry = "" } = {}) {
     safe_local_only: true,
   };
   state.saasListingSourceMode = state.saasListingSourceMode || "media_asset_writeback";
+  saveSaasProtectedStateSnapshot();
   return writeback;
 }
 
