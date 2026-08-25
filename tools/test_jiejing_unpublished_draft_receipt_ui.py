@@ -45,7 +45,14 @@ if (receipt.offerStatus !== "UNPUBLISHED") throw new Error("unpublished state mi
 if (receipt.sku !== "JJ-INCENSE-JC2023041300002-01") throw new Error("SKU mismatch");
 if (receipt.publicListingCreated !== false || receipt.publishedToEbay !== false) throw new Error("public publish boundary lost");
 globalThis.state = {{
-  saasListingComposerDraft: {{ fields: {{ sku: "JJ-INCENSE-JC2023041300002-01" }} }},
+  saasListingComposerDraft: {{
+    fields: {{}},
+    publish_prefill: {{}},
+    merchant_product_fact_packet: {{
+      merchant_confirmed_facts: {{ sku: "JJ-INCENSE-JC2023041300002-01" }},
+      derived_listing_suggestions: {{ sku: "OLD-DERIVED-SKU" }},
+    }},
+  }},
   saasConfirmations: [
     {{
       confirmation_id: "confirm_stale",

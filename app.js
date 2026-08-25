@@ -22035,16 +22035,42 @@ function saasUnpublishedDraftReceiptViewModel(record = null) {
   };
 }
 
+function saasListingDraftAuthoritativeSku(draft = state.saasListingComposerDraft) {
+  const current = draft && typeof draft === "object" ? draft : {};
+  const packet =
+    current.merchant_product_fact_packet && typeof current.merchant_product_fact_packet === "object"
+      ? current.merchant_product_fact_packet
+      : {};
+  const merchantFacts =
+    packet.merchant_confirmed_facts && typeof packet.merchant_confirmed_facts === "object"
+      ? packet.merchant_confirmed_facts
+      : {};
+  const sourceFacts =
+    packet.source_confirmed_facts && typeof packet.source_confirmed_facts === "object"
+      ? packet.source_confirmed_facts
+      : {};
+  const packetValues = packet.values && typeof packet.values === "object" ? packet.values : {};
+  const derived =
+    packet.derived_listing_suggestions && typeof packet.derived_listing_suggestions === "object"
+      ? packet.derived_listing_suggestions
+      : {};
+  const candidates = [
+    merchantFacts.sku,
+    sourceFacts.sku,
+    current.publish_prefill?.sku,
+    current.fields?.publish_prefill?.sku,
+    packetValues.sku,
+    derived.sku,
+    current.fields?.sku,
+    current.sku,
+  ];
+  return String(candidates.find((value) => String(value || "").trim()) || "").trim();
+}
+
 function saasCurrentUnpublishedDraftReceipt(draft = state.saasListingComposerDraft) {
   const currentProject = saasCurrentListingProjectIdentity();
   const currentProjectKey = String(currentProject?.key || "").trim();
-  const draftSku = String(
-    draft?.publish_prefill?.sku ||
-      draft?.fields?.publish_prefill?.sku ||
-      draft?.fields?.sku ||
-      draft?.sku ||
-      "",
-  ).trim();
+  const draftSku = saasListingDraftAuthoritativeSku(draft);
   const confirmation = (state.saasConfirmations || []).find((card) => {
     if (String(card?.action_type || "") !== "save_ebay_listing_draft") return false;
     const item = card?.item && typeof card.item === "object" ? card.item : {};
