@@ -8246,6 +8246,37 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not contract:
                 self._send_error(HTTPStatus.NOT_FOUND, "media provider job contract not found")
                 return
+            original_status = str(original.get("status") or "")
+            if original_status != "needs_rework":
+                original = self.repository.update_media_asset_job(
+                    company_id=identity["company_id"],
+                    media_job_id=original["media_job_id"],
+                    status="needs_rework",
+                    details={
+                        "event": "merchant_media_rework_requested",
+                        "reason": reason,
+                        "reviewed_by": identity["user_id"],
+                        "triggers_real_platform_write": False,
+                        "real_platform_writes_enabled": False,
+                        "secret_exposed": False,
+                    },
+                    review_update={
+                        "contract_version": "2026-07-11-media-review-v2",
+                        "decision": "needs_rework",
+                        "confirmations": {
+                            "fact_consistency_confirmed": False,
+                            "commercial_rights_confirmed": False,
+                            "platform_rules_checked": False,
+                            "motion_and_usage_consistency_confirmed": False,
+                        },
+                        "reviewed_by": identity["user_id"],
+                        "note": reason,
+                        "listing_draft_only": True,
+                        "triggers_real_platform_write": False,
+                        "secret_exposed": False,
+                    },
+                    expected_status=original_status,
+                )
             supplied_key = f"media-rework:{original['media_job_id']}:v{version}"
             retry_key = _media_asset_idempotency_key(
                 store_id=original["store_id"],

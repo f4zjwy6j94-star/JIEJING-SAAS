@@ -224,6 +224,10 @@ def main() -> int:
         main_image_prompt = FakeMediaGenerationAdapter.configs[-1].image_prompt
         if "Exclude removable display props and photography supports" not in main_image_prompt:
             raise AssertionError("eBay main-image prompt must exclude unconfirmed tables, trays, pedestals and scales")
+        if "incense cones, incense sticks, fragrances, oils, and other burnable consumables" not in main_image_prompt:
+            raise AssertionError("eBay main-image prompt must exclude unconfirmed incense cones and other consumables")
+        if "explicitly confirmed as included with the shipped product" not in main_image_prompt:
+            raise AssertionError("main-image accessory cleanup must preserve only confirmed shipped contents")
         if "Keep any base that is structurally part of the product" not in main_image_prompt:
             raise AssertionError("main-image prop cleanup must preserve a structural product base")
 

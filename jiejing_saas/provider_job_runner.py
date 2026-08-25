@@ -311,6 +311,8 @@ class ProviderJobRunner:
                 "multi-panel layout, packaging breakdown, repeated copies, or multiple camera angles. "
                 "Exclude removable display props and photography supports that are not confirmed as included with the product, "
                 "including tables, trays, display pedestals, platforms, scales, rulers, and staged background objects. "
+                "Unless they are explicitly confirmed as included with the shipped product, exclude incense cones, incense sticks, "
+                "fragrances, oils, and other burnable consumables. "
                 "Keep any base that is structurally part of the product; remove only separable presentation props."
             )
         video_requested = media_video_requested(inputs)

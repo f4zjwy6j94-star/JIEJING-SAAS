@@ -407,16 +407,6 @@ def main() -> int:
         if run_mode_status != 402 or run_mode_block.get("triggers_real_charge") is not False:
             return fail(f"run_mode=live_provider_now must reserve points before queueing: {run_mode_status}, {run_mode_block}")
 
-        rework_review = post_json(
-            f"{base_url}/media-asset-jobs/{media_job_id}/review",
-            {"decision": "needs_rework", "note": "Product color does not match the merchant reference."},
-            token=token,
-        ).get("media_asset_job", {})
-        if rework_review.get("status") != "needs_rework":
-            return fail(f"merchant should be able to mark a media version for rework: {rework_review}")
-        if any(item.get("listing_use_status") != "needs_rework" for item in rework_review.get("asset_manifest", [])):
-            return fail("rejected media assets must not remain eligible for Listing draft writeback")
-
         retry_payload = {
             "reason": "Correct product color and preserve the previous version.",
             "run_mode": "local_worker_now",
@@ -461,6 +451,17 @@ def main() -> int:
         concurrent_versions = fetch_json(f"{base_url}/stores/{store_id}/media-asset-jobs", token=token).get("media_asset_jobs", [])
         if len(concurrent_versions) != 2:
             return fail(f"concurrent retry must create exactly one new media version: {concurrent_versions}")
+        rejected_parent = fetch_json(
+            f"{base_url}/media-asset-jobs/{media_job_id}",
+            token=token,
+        ).get("media_asset_job", {})
+        if rejected_parent.get("status") != "needs_rework":
+            return fail(f"requesting a new version must mark the rejected parent needs_rework: {rejected_parent}")
+        if any(item.get("listing_use_status") != "needs_rework" for item in rejected_parent.get("asset_manifest", [])):
+            return fail("direct media retry must make every rejected parent asset ineligible for Listing writeback")
+        parent_review = rejected_parent.get("merchant_review") if isinstance(rejected_parent.get("merchant_review"), dict) else {}
+        if parent_review.get("decision") != "needs_rework" or parent_review.get("note") != retry_payload["reason"]:
+            return fail(f"direct media retry must preserve the merchant rejection reason in review evidence: {parent_review}")
         media_v2 = retried.get("media_asset_job") if isinstance(retried.get("media_asset_job"), dict) else {}
         media_v2_id = str(media_v2.get("media_job_id") or "")
         version = media_v2.get("asset_version") if isinstance(media_v2.get("asset_version"), dict) else {}
