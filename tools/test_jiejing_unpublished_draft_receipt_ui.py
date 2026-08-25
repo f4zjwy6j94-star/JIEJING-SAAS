@@ -132,6 +132,83 @@ for (const required of [
         if marker not in app_js:
             raise AssertionError(f"Listing receipt does not expose the controlled publish handoff: {marker}")
 
+    display_start = app_js.index("function saasConfirmationsForDisplay")
+    display_end = app_js.index("function saasConfirmationCanonicalKey", display_start)
+    display_source = app_js[display_start:display_end]
+    display_script = f"""
+globalThis.state = {{
+  saasCompany: {{ company_id: "company-current" }},
+  saasIdentity: {{ company_id: "company-current" }},
+  saasConfirmations: [],
+}};
+function saasLatestProductWorkflowTask() {{ return {{ task_id: "task-old-workflow" }}; }}
+function activeSaasStore() {{ return {{ store_id: "store-current" }}; }}
+function dedupeSaasConfirmations(cards) {{ return [...cards]; }}
+function saasTimestampMillis(value) {{ return Date.parse(value || 0) || 0; }}
+function isSaasExactReadOnlyOAuthConfirmation() {{ return false; }}
+function isSaasExactUnpublishedDraftOAuthConfirmation() {{ return false; }}
+function isSaasExactReadOnlySyncConfirmation() {{ return false; }}
+function isSaasExactUnpublishedDraftSaveConfirmation() {{ return false; }}
+function isSaasUniqueCurrentInventoryLocationConfirmation() {{ return false; }}
+function isSaasReadOnlyOAuthSensitiveConfirmation() {{ return false; }}
+function isSaasReadOnlySyncSensitiveConfirmation() {{ return false; }}
+function isSaasUnpublishedDraftSaveSensitiveConfirmation() {{ return false; }}
+function isSaasInventoryLocationSensitiveConfirmation() {{ return false; }}
+function isSaasControlledExistingDraftPublishConfirmation(card) {{
+  return card?.item?.source === "merchant_existing_ebay_draft_publish_intake";
+}}
+function isSaasUniqueCurrentControlledExistingDraftPublishConfirmation(card) {{
+  return Boolean(
+    card?.confirmation_id === "confirm-controlled" &&
+    card?.company_id === "company-current" &&
+    card?.store_id === "store-current" &&
+    card?.status === "pending" &&
+    isSaasControlledExistingDraftPublishConfirmation(card)
+  );
+}}
+{display_source}
+const cards = [
+  {{
+    confirmation_id: "confirm-controlled",
+    company_id: "company-current",
+    store_id: "store-current",
+    task_id: "task-controlled-publish",
+    status: "pending",
+    action_type: "publish_listing",
+    created_at: "2026-08-25T20:31:31Z",
+    item: {{ source: "merchant_existing_ebay_draft_publish_intake", controlled_existing_draft_publish: true }},
+  }},
+  {{
+    confirmation_id: "confirm-old-generic",
+    company_id: "company-current",
+    store_id: "store-current",
+    task_id: "task-old-workflow",
+    status: "pending",
+    action_type: "publish_listing",
+    created_at: "2026-08-10T19:11:00Z",
+    item: {{ source: "generic_workflow" }},
+  }},
+];
+state.saasConfirmations = cards;
+const visible = saasConfirmationsForDisplay(cards);
+if (!visible.some((card) => card.confirmation_id === "confirm-controlled")) {{
+  throw new Error("current exact controlled publish confirmation was hidden by latest-task filtering");
+}}
+if (visible.filter((card) => card.confirmation_id === "confirm-controlled").length !== 1) {{
+  throw new Error("controlled publish confirmation must be displayed exactly once");
+}}
+"""
+    display_result = subprocess.run(
+        ["node", "-e", display_script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if display_result.returncode != 0:
+        raise AssertionError(display_result.stderr.strip() or "controlled publish confirmation display behavior failed")
+
 
 if __name__ == "__main__":
     main()

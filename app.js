@@ -20443,8 +20443,22 @@ function saasConfirmationsForDisplay(confirmations = []) {
         isSaasUniqueCurrentInventoryLocationConfirmation(card, confirmations),
     )
     .sort((a, b) => saasTimestampMillis(b.created_at || b.updated_at) - saasTimestampMillis(a.created_at || a.updated_at));
+  const currentStoreControlledPublishes = confirmations
+    .filter(
+      (card) =>
+        ["pending", "approved"].includes(String(card?.status || "")) &&
+        isUniqueConfirmation(card) &&
+        isSaasUniqueCurrentControlledExistingDraftPublishConfirmation(card, confirmations),
+    )
+    .sort((a, b) => saasTimestampMillis(b.created_at || b.updated_at) - saasTimestampMillis(a.created_at || a.updated_at));
   const protectedIds = new Set(
-    [...currentStoreOauth, ...currentStoreSync, ...currentStoreDraftSaves, ...currentStoreInventoryLocations]
+    [
+      ...currentStoreOauth,
+      ...currentStoreSync,
+      ...currentStoreDraftSaves,
+      ...currentStoreInventoryLocations,
+      ...currentStoreControlledPublishes,
+    ]
       .map((card) => String(card?.confirmation_id || "").trim()),
   );
   return [
@@ -20452,6 +20466,7 @@ function saasConfirmationsForDisplay(confirmations = []) {
     ...currentStoreSync,
     ...currentStoreDraftSaves,
     ...currentStoreInventoryLocations,
+    ...currentStoreControlledPublishes,
     ...dedupeSaasConfirmations(ordinarySource).filter((card) => {
       const confirmationId = String(card?.confirmation_id || "").trim();
       return (
@@ -20460,7 +20475,8 @@ function saasConfirmationsForDisplay(confirmations = []) {
         !isSaasReadOnlyOAuthSensitiveConfirmation(card) &&
         !isSaasReadOnlySyncSensitiveConfirmation(card) &&
         !isSaasUnpublishedDraftSaveSensitiveConfirmation(card) &&
-        !isSaasInventoryLocationSensitiveConfirmation(card)
+        !isSaasInventoryLocationSensitiveConfirmation(card) &&
+        !isSaasControlledExistingDraftPublishConfirmation(card)
       );
     }),
   ];
