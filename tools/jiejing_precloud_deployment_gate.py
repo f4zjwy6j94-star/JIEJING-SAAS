@@ -62,6 +62,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("ai_ceo_listing_fact_boundary", [sys.executable, "tools/test_jiejing_ai_ceo_listing_fact_boundary.py"]),
     ("listing_publish_prefill_truth", ["node", "--test", "tools/test_jiejing_listing_publish_prefill_truth.js"]),
     ("listing_media_writeback_persistence", ["node", "--test", "tools/test_jiejing_listing_media_writeback_persistence.js"]),
+    ("unpublished_draft_receipt_ui", [sys.executable, "tools/test_jiejing_unpublished_draft_receipt_ui.py"]),
     ("ai_ceo_listing_buyer_copy_boundary", [sys.executable, "tools/test_jiejing_ai_ceo_listing_buyer_copy_boundary.py"]),
     ("listing_concrete_product_gate", [sys.executable, "tools/test_jiejing_listing_concrete_product_gate.py"]),
     ("ai_ceo_product_label_extraction", [sys.executable, "tools/test_jiejing_ai_ceo_product_label_extraction.py"]),

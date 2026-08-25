@@ -13215,6 +13215,7 @@ function renderSaasListingComposerWorkspace({
         ${renderSaasListingDraftEditor(draft)}
         ${renderSaasListingMediaWritebackPanel(draft)}
         ${draft ? renderSaasListingNextActionPanel(draft, ctx, pendingConfirmations) : ""}
+        ${draft ? renderSaasListingUnpublishedDraftReceipt(draft) : ""}
         ${draft ? renderSaasListingAdvancedWorkDetails(draft, ctx, pendingConfirmations, opportunity, marketReport, listingReport) : ""}
       </div>
     </section>
@@ -21996,6 +21997,116 @@ function renderSaasAiCeoOutputPanel() {
               : `<article><span>确认中心</span><strong>暂无待确认项</strong><p>当前后端没有需要商家确认的高风险动作。</p></article>`
           }
         </aside>
+      </div>
+    </section>
+  `;
+}
+
+function saasUnpublishedDraftReceiptViewModel(record = null) {
+  if (!record || typeof record !== "object") return null;
+  const result = record.result && typeof record.result === "object" ? record.result : {};
+  const platform = result.platform_result && typeof result.platform_result === "object" ? result.platform_result : {};
+  const actionType = String(record.action_type || result.action_type || "");
+  const status = String(result.status || record.status || "");
+  const offerId = String(platform.offer_id || platform.offerId || "").trim();
+  const offerStatus = String(platform.offer_status || "").trim().toUpperCase();
+  const sku = String(platform.sku || "").trim();
+  if (
+    actionType !== "save_ebay_listing_draft" ||
+    status !== "saved_to_ebay_draft" ||
+    !offerId ||
+    offerStatus !== "UNPUBLISHED" ||
+    !sku ||
+    platform.writes_to_ebay !== true ||
+    platform.public_listing_created !== false ||
+    platform.published_to_ebay !== false ||
+    result.secret_exposed !== false
+  ) {
+    return null;
+  }
+  return {
+    status,
+    offerId,
+    offerStatus,
+    sku,
+    createdAt: String(record.created_at || result.created_at || ""),
+    publicListingCreated: false,
+    publishedToEbay: false,
+  };
+}
+
+function saasCurrentUnpublishedDraftReceipt(draft = state.saasListingComposerDraft) {
+  const currentProject = saasCurrentListingProjectIdentity();
+  const currentProjectKey = String(currentProject?.key || "").trim();
+  const draftSku = String(
+    draft?.publish_prefill?.sku ||
+      draft?.fields?.publish_prefill?.sku ||
+      draft?.fields?.sku ||
+      draft?.sku ||
+      "",
+  ).trim();
+  const confirmation = (state.saasConfirmations || []).find((card) => {
+    if (String(card?.action_type || "") !== "save_ebay_listing_draft") return false;
+    const item = card?.item && typeof card.item === "object" ? card.item : {};
+    const storedProject = item.listing_project_identity && typeof item.listing_project_identity === "object"
+      ? item.listing_project_identity
+      : {};
+    const storedProjectKey = String(storedProject.key || "").trim();
+    const storedSku = String(item.publish_payload?.listing?.sku || "").trim();
+    if (currentProjectKey) return storedProjectKey === currentProjectKey;
+    return Boolean(draftSku && storedSku === draftSku);
+  });
+  if (!confirmation?.confirmation_id) return null;
+  const execution = (state.saasExecutionResults || []).find((record) =>
+    String(record?.confirmation_id || record?.result?.confirmation_id || record?.result?.audit?.confirmation_id || "").trim() ===
+    String(confirmation.confirmation_id).trim(),
+  );
+  const receipt = saasUnpublishedDraftReceiptViewModel(execution);
+  if (!receipt || (draftSku && receipt.sku !== draftSku)) return null;
+  return {
+    ...receipt,
+    confirmationId: String(confirmation.confirmation_id),
+    executionId: String(execution?.execution_id || ""),
+  };
+}
+
+function renderSaasListingUnpublishedDraftReceipt(draft = state.saasListingComposerDraft) {
+  const receipt = saasCurrentUnpublishedDraftReceipt(draft);
+  if (!receipt) return "";
+  return `
+    <section class="saas-listing-publish-feedback is-green saas-listing-unpublished-draft-receipt" aria-label="eBay 未发布草稿回执" data-listing-unpublished-draft-receipt="ebay_unpublished_draft_receipt_v1">
+      <div class="saas-listing-publish-feedback-head">
+        <div>
+          <span>eBay 草稿回执</span>
+          <strong>已保存到 eBay 未发布草稿</strong>
+          <p>捷境已经把当前商品资料写入你的 eBay 卖家账号；没有创建公开 Listing，也没有向买家展示。</p>
+        </div>
+        <em>真实写入成功 · 未公开</em>
+      </div>
+      <div class="saas-listing-publish-feedback-grid" aria-label="eBay 草稿执行结果">
+        <article class="is-green">
+          <span>eBay 状态</span>
+          <strong>未公开</strong>
+          <small>UNPUBLISHED · 尚未正式发布</small>
+        </article>
+        <article class="is-green">
+          <span>Offer ID</span>
+          <strong>${escapeHtml(receipt.offerId)}</strong>
+          <small>eBay 已返回草稿编号</small>
+        </article>
+        <article class="is-green">
+          <span>SKU</span>
+          <strong>${escapeHtml(receipt.sku)}</strong>
+          <small>与当前 Listing 项目一致</small>
+        </article>
+        <article class="is-green">
+          <span>执行时间</span>
+          <strong>${escapeHtml(saasTimestampLabel(receipt.createdAt))}</strong>
+          <small>执行记录已写回捷境</small>
+        </article>
+      </div>
+      <div class="saas-listing-publish-feedback-actions">
+        <button class="primary-action" type="button" data-saas-action="focus-publish-intake">继续补正式发布资料</button>
       </div>
     </section>
   `;
