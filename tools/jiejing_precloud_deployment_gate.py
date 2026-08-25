@@ -55,6 +55,8 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("ai_ceo_answer_quality_gate", [sys.executable, "tools/test_jiejing_ai_ceo_answer_quality_gate.py"]),
     ("ai_ceo_open_domain_turn_plan", [sys.executable, "tools/test_jiejing_ai_ceo_open_domain_turn_plan.py"]),
     ("ai_ceo_frontend_intent", ["node", "tools/test_jiejing_ai_ceo_frontend_intent.js"]),
+    ("ai_ceo_frontend_stream_error", ["node", "tools/test_jiejing_ai_ceo_frontend_stream_error.js"]),
+    ("ai_ceo_platform_model_fallback", [sys.executable, "tools/test_jiejing_saas_ai_ceo_platform_model_fallback.py"]),
     ("ai_ceo_product_image_intake", [sys.executable, "tools/test_jiejing_ai_ceo_product_image_intake.py"]),
     ("ai_ceo_routing_supplier_http", [sys.executable, "tools/test_jiejing_ai_ceo_routing_supplier_http_red.py"]),
     ("ai_ceo_listing_fact_boundary", [sys.executable, "tools/test_jiejing_ai_ceo_listing_fact_boundary.py"]),

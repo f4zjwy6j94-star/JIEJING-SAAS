@@ -246,7 +246,7 @@ def main() -> int:
             return fail(f"model settings should show exhausted platform trial quota after first use: {quota_after_first}")
 
         blocked_status, blocked_response = post_json_expect_error(
-            f"{base_url}/stores/{store_id}/merchant-ceo/chat",
+            f"{base_url}/stores/{store_id}/merchant-ceo/chat?stream=1",
             {
                 "message": "Answer one more general question.",
                 "client_now": "2026-05-25T10:01:00+08:00",
@@ -255,7 +255,10 @@ def main() -> int:
             token=token,
         )
         if blocked_status != 402:
-            return fail(f"second platform fallback call should be blocked by trial quota, got {blocked_status}: {blocked_response}")
+            return fail(
+                "an immediate streamed platform fallback rejection should use ordinary HTTP 402 JSON, "
+                f"got {blocked_status}: {blocked_response}"
+            )
         blocked_chat = blocked_response.get("ai_ceo_chat", {})
         if "platform_default_model_trial_exhausted" not in set(blocked_chat.get("blocked_by") or []):
             return fail(f"trial quota exhaustion should be explicit: {blocked_chat}")

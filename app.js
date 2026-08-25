@@ -17999,6 +17999,9 @@ async function saasFetchNdjsonWithTimeout(path, options = {}, timeoutMs = 60000,
       } catch {
         payload = null;
       }
+      if (payload?.ai_ceo_chat && typeof payload.ai_ceo_chat === "object") {
+        return { ...payload, _http_status: Number(response.status || 0) || 0 };
+      }
       const error = new Error(saasBackendErrorMessage(response.status, detail, payload));
       error.status = response.status;
       error.payload = payload;
@@ -23368,10 +23371,13 @@ function saasCeoCommandIntent(text = "") {
   const asksForInternalListingDraft =
     !explicitlyDefersInternalListingDraft &&
     has(/(?:创建|生成|整理|导入).{0,36}(?:内部|本地|被事实阻断).{0,24}(?:Listing|刊登|上架).{0,8}草稿|(?:内部|本地|被事实阻断).{0,24}(?:Listing|刊登|上架).{0,8}草稿/i);
+  const listingDeferralScope = raw
+    .replace(/(?:不保存|不要保存|暂不保存|先不保存).{0,12}eBay.{0,8}草稿/gi, "")
+    .replace(/(?:不|不要|暂不|先不).{0,8}(?:公开|真实|正式).{0,4}(?:发布|上架|刊登)/gi, "");
   const listingDeferred =
     !asksForInternalListingDraft &&
-    (has(/(?:本轮|这轮|当前|现在|只读|先|暂时|暂缓)?\s*(?:不要|不做|不建|不生成|无需|不进入|先不|暂不).{0,18}(?:Listing|刊登|上架|草稿)/i) ||
-      has(/(?:Listing|刊登|上架|草稿).{0,10}(?:不要|不做|不建|不生成|先不|暂不)/i));
+    (/(?:本轮|这轮|当前|现在|只读|先|暂时|暂缓)?\s*(?:不要|不做|不建|不生成|无需|不进入|先不|暂不).{0,18}(?:Listing|刊登|上架|草稿)/i.test(listingDeferralScope) ||
+      /(?:Listing|刊登|上架|草稿).{0,8}(?:不要|先不|暂不).{0,8}(?:做|建|创建|生成|进入)/i.test(listingDeferralScope));
   const hasProductResearchIntent = has(
     /选品|候选商品|候选品|商品候选|产品候选|找品|筛选.{0,12}(?:商品|产品|候选)|产品方向|商品方向|卖什么|市场调研|市场报告|成交证据|三选一|相对赢家|赢家|供应商事实核验|供应商核验|货源核验|sold\s*&?\s*completed|已售.{0,12}(?:数量|结果|item)|在售.{0,12}(?:数量|竞争)/i,
   );
@@ -23397,10 +23403,16 @@ function saasCeoCommandIntent(text = "") {
 function isSaasCeoHighRiskCommand(text = "") {
   const raw = String(text || "").trim();
   if (!raw) return false;
+  const coordinatedNegativeConstraint = new RegExp(
+    "(?:本轮|这轮|当前|现在|此次|这次)?\\s*(?:不|不要|无需|不用|不做|不执行|不触发|不允许|不能|不得|暂不|先不|禁止)" +
+      "(?:(?!(?:但|但是|不过|然后|随后|现在|马上|请|帮我|直接|立即|立刻|真实|正式|[，,。；;！？!?])).){0,32}?" +
+      "(?:发布|上架|刊登|publish|list it|改价|调整价格|改库存|调整库存|退款|退钱|refund|付款|采购付款|打款|投广告|开广告|修改政策|承诺买家|保证送达|下架|结束\\s*listing|end\\s*listing|delete\\s*offer|真实写入)",
+    "gi",
+  );
   const actionable = raw.replace(
     /(?:本轮|这轮|当前|现在|此次|这次)?\s*(?:不|不要|无需|不用|不做|不执行|不触发|不允许|不能|不得|暂不|先不|禁止)\s*(?:(?:自动|擅自|公开|最终|真实|正式|直接|立即|立刻|任何|进行|执行|触发|实际|平台)\s*){0,3}(?:发布|上架|刊登|改价|改库存|退款|付款|采购(?:下单)?|投广告|开广告|修改政策|承诺买家|补偿(?:买家)?|重发(?:订单)?|真实写入)/gi,
     "",
-  );
+  ).replace(coordinatedNegativeConstraint, "");
   const informational = /发布前|上架前|刊登前|核对项|规则|要求|规范|说明|介绍|区别|区分|为什么|是什么|如何|怎么|是否|能否|可以吗|最佳实践/i.test(raw);
   const explicitExecution = /(?:现在|马上|直接|立即|立刻|真实|正式).{0,12}(?:发布|上架|刊登|改价|改库存|退款|付款|采购下单|投广告|开广告|修改政策|承诺买家|补偿|重发)/i.test(actionable);
   if (explicitExecution) return true;

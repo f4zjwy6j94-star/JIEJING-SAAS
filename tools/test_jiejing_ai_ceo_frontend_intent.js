@@ -49,6 +49,7 @@ vm.runInContext(
 );
 
 const route = (message) => vm.runInContext(`saasCeoCommandIntent(${JSON.stringify(message)})`, context);
+const highRisk = (message) => vm.runInContext(`isSaasCeoHighRiskCommand(${JSON.stringify(message)})`, context);
 
 assert.strictEqual(
   route(
@@ -72,5 +73,22 @@ assert.strictEqual(
   "listing",
   "an explicit report-to-internal-draft handoff must enter Listing",
 );
+const negatedPublishListingIntake =
+  "这是我的真实供货商品，请新建捷境内部待核对 Listing。不要上传、复用或发布任何原始图片；不保存 eBay 草稿、不公开发布。";
+assert.strictEqual(
+  highRisk(negatedPublishListingIntake),
+  false,
+  "negative image and publish constraints must not become a high-risk execution request",
+);
+assert.strictEqual(
+  route(negatedPublishListingIntake),
+  "listing",
+  "negative publish constraints must preserve the internal Listing intake route",
+);
+assert.strictEqual(
+  highRisk("资料已经核对完，现在请真实发布到 eBay。"),
+  true,
+  "an affirmative real eBay publish request must still require confirmation",
+);
 
-console.log("PASS AI CEO frontend intent routing: 4/4");
+console.log("PASS AI CEO frontend intent routing: 7/7");

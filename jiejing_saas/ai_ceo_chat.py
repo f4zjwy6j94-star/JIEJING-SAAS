@@ -3442,6 +3442,7 @@ def _looks_like_explicit_rule_memory(text: str) -> bool:
 
 
 def _looks_like_high_risk_action(text: str) -> bool:
+    actionable_text = _without_negated_high_risk_actions(text)
     high_risk_patterns = (
         r"(现在|马上|直接|立刻|真实|正式).{0,12}(发布|上架|刊登|publish|list it)",
         r"(发布|上架|刊登|publish).{0,12}(到|去)?\s*ebay",
@@ -3454,7 +3455,41 @@ def _looks_like_high_risk_action(text: str) -> bool:
         r"(承诺买家|保证送达|敏感客服承诺|promise buyer)",
         r"(下架|结束 listing|end listing|delete offer|cleanup test listing)",
     )
-    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in high_risk_patterns)
+    return any(re.search(pattern, actionable_text, flags=re.IGNORECASE) for pattern in high_risk_patterns)
+
+
+def _without_negated_high_risk_actions(text: str) -> str:
+    """Remove explicit no-action constraints before detecting real writes.
+
+    Merchant intake often says things such as ``不要上传、复用或发布原图``
+    followed by ``不保存 eBay 草稿``. Those clauses describe a safety
+    boundary, not an instruction to execute a publish. Sentence pivots and
+    imperative words stop the coordinated-negation match, so an affirmative
+    follow-up still reaches the confirmation route.
+    """
+
+    safe_text = str(text or "")
+    action_terms = (
+        r"发布|上架|刊登|publish|list it|改价|调整价格|改库存|调整库存|退款|退钱|refund|"
+        r"付款|采购付款|打款|投广告|开广告|修改政策|承诺买家|保证送达|下架|结束\s*listing|"
+        r"end\s*listing|delete\s*offer|真实写入"
+    )
+    direct_negation = re.compile(
+        rf"(?:本轮|这轮|当前|现在|此次|这次)?\s*"
+        rf"(?:不|不要|无需|不用|不做|不执行|不触发|不允许|不能|不得|暂不|先不|禁止)\s*"
+        rf"(?:(?:自动|擅自|公开|最终|真实|正式|直接|立即|立刻|任何|进行|执行|触发|实际|平台)\s*){{0,3}}"
+        rf"(?:{action_terms})",
+        flags=re.IGNORECASE,
+    )
+    coordinated_negation = re.compile(
+        rf"(?:本轮|这轮|当前|现在|此次|这次)?\s*"
+        rf"(?:不|不要|无需|不用|不做|不执行|不触发|不允许|不能|不得|暂不|先不|禁止)"
+        rf"(?:(?!(?:但|但是|不过|然后|随后|现在|马上|请|帮我|直接|立即|立刻|真实|正式|[，,。；;！？!?])).){{0,32}}?"
+        rf"(?:{action_terms})",
+        flags=re.IGNORECASE,
+    )
+    cleaned = direct_negation.sub(" ", safe_text)
+    return coordinated_negation.sub(" ", cleaned)
 
 
 def _looks_like_ebay_workflow(text: str) -> bool:
@@ -3482,6 +3517,7 @@ def _looks_like_ebay_workflow(text: str) -> bool:
     ):
         return False
     concrete_verbs = (
+        "新建",
         "生成",
         "创建",
         "跑",
@@ -4048,8 +4084,6 @@ def _looks_like_product_selection_request(*, message: str, route: str) -> bool:
 
 
 def _looks_like_explicit_listing_intake(message: str) -> bool:
-    if _merchant_defers_listing(message):
-        return False
     text = _normalized_text(message)
     patterns = (
         r"(?:新建|创建|生成|整理|导入|带入|填写|填进|自动填).{0,16}(?:ebay\s*)?listing",
@@ -4057,7 +4091,20 @@ def _looks_like_explicit_listing_intake(message: str) -> bool:
         r"(?:新建|创建|生成|整理|导入|带入|填写|填进|自动填).{0,16}(?:刊登草稿|上架资料)",
         r"(?:刊登草稿|上架资料).{0,16}(?:创建|生成|填写|带入)",
     )
-    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+    explicit_intake = any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+    if not explicit_intake:
+        return False
+    if not _merchant_defers_listing(message):
+        return True
+    external_write_deferred = bool(
+        re.search(
+            r"(?:不保存|不要保存|暂不保存|先不保存).{0,12}ebay.{0,8}草稿|"
+            r"(?:不|不要|暂不|先不).{0,8}(?:公开|真实|正式).{0,4}(?:发布|上架|刊登)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    return external_write_deferred
 
 
 def _selection_response_contract(

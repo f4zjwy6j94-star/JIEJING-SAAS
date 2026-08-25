@@ -6890,9 +6890,15 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 if not stream_requested:
                     self._send_json(payload, status=status)
                     return
+                # Before any accepted/delta event the HTTP response is still
+                # uncommitted. Preserve an immediate quota/dependency
+                # rejection as ordinary JSON with its real HTTP status so the
+                # browser can finish the pending turn and show the exact
+                # backend blocker. Once streaming has begun, only an NDJSON
+                # final event can safely close the response.
                 if not stream_started:
-                    self._start_ndjson_stream()
-                    stream_started = True
+                    self._send_json(payload, status=status)
+                    return
                 self._send_ndjson_event(
                     {
                         "type": "final",

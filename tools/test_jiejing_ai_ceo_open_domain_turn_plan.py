@@ -221,6 +221,26 @@ class AiCeoOpenDomainTurnPlanTest(unittest.TestCase):
         self.assertEqual(plan["research_depth"], "none")
         self.assertNotIn("merchant_product_source_required", plan["blocked_by"])
 
+    def test_negated_publish_language_stays_in_internal_listing_intake(self) -> None:
+        plan = build_ai_ceo_turn_plan(
+            "这是我的真实供货商品，请新建捷境内部待核对 Listing。"
+            "不要上传、复用或发布任何原始图片；不保存 eBay 草稿、不公开发布。"
+        )
+
+        self.assertEqual(plan["route"], AI_CEO_ROUTE_EBAY_WORKFLOW)
+        self.assertEqual(plan["workflow_target"], "listing_draft")
+        self.assertEqual(plan["topic"], "listing_draft")
+        self.assertFalse(plan["confirmation_required"])
+        self.assertEqual(plan["required_tools"], [])
+        self.assertFalse(plan["freshness_required"])
+        self.assertEqual(plan["research_depth"], "none")
+
+    def test_positive_public_publish_request_still_requires_confirmation(self) -> None:
+        plan = build_ai_ceo_turn_plan("资料已经核对完，现在请真实发布到 eBay。")
+
+        self.assertTrue(plan["confirmation_required"])
+        self.assertEqual(plan["response_mode"], "confirmation_required")
+
 
 if __name__ == "__main__":
     unittest.main()
