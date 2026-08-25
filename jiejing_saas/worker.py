@@ -923,14 +923,32 @@ class LocalQueueWorker:
         inputs = job_body.get("inputs") if isinstance(job_body.get("inputs"), dict) else {}
         product_facts = inputs.get("product_facts") if isinstance(inputs.get("product_facts"), dict) else {}
         asset_id = str(product_facts.get("source_asset_id") or inputs.get("source_asset_id") or "").strip()
-        if not asset_id or not self.settings:
+        if not asset_id:
             return job_body
-        store = MediaSourceAssetStore(
-            root=self.settings.output_root / "private-media-source-assets",
-            signing_secret=None,
-            public_base_url="",
-        )
-        asset, content = store.read_for_provider(asset_id=asset_id, company_id=company_id, store_id=store_id)
+        store = self.media_source_asset_store
+        if store is None:
+            if not self.settings:
+                return job_body
+            store = MediaSourceAssetStore(
+                root=self.settings.output_root / "private-media-source-assets",
+                signing_secret=None,
+                public_base_url="",
+            )
+        try:
+            asset, content = store.read_for_provider(
+                asset_id=asset_id,
+                company_id=company_id,
+                store_id=store_id,
+            )
+        except MediaSourceAssetError as exc:
+            if exc.code not in {"asset_not_found", "asset_unavailable"}:
+                raise
+            time.sleep(0.1)
+            asset, content = store.read_for_provider(
+                asset_id=asset_id,
+                company_id=company_id,
+                store_id=store_id,
+            )
         hydrated = copy.deepcopy(job_body)
         hydrated_inputs = hydrated.setdefault("inputs", {})
         hydrated_inputs["reference_image_url"] = (

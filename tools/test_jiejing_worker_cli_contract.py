@@ -332,6 +332,8 @@ def main() -> int:
         "ProviderMonitoringScheduler(",
         "provider_monitoring.tick()",
         "provider_monitoring.shutdown()",
+        "MediaSourceAssetStore(",
+        "media_source_asset_store=media_source_assets",
     ):
         if marker not in worker_source:
             return fail(f"worker loop is missing passive monitoring background wiring: {marker}")

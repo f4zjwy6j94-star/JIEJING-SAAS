@@ -8246,6 +8246,51 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             if not contract:
                 self._send_error(HTTPStatus.NOT_FOUND, "media provider job contract not found")
                 return
+            live_media_requested = media_live_provider_requested(safe_inputs, body)
+            if live_media_requested:
+                product_facts = (
+                    dict(safe_inputs.get("product_facts"))
+                    if isinstance(safe_inputs.get("product_facts"), dict)
+                    else {}
+                )
+                source_asset_id = str(product_facts.get("source_asset_id") or "").strip()
+                if source_asset_id:
+                    try:
+                        source_asset, _source_content = self.media_source_asset_store.read_for_provider(
+                            asset_id=source_asset_id,
+                            company_id=identity["company_id"],
+                            store_id=original["store_id"],
+                        )
+                    except MediaSourceAssetError as exc:
+                        self._send_json(
+                            {
+                                "error": "商品来源图片不可用，请重新上传后再重做。",
+                                "status": int(HTTPStatus.UNPROCESSABLE_ENTITY),
+                                "missing_inputs": [f"private_media_source_{exc.code}"],
+                                "provider_call_triggered": False,
+                                "triggers_real_charge": False,
+                                "secret_exposed": False,
+                            },
+                            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                        )
+                        return
+                    supplied_sha256 = str(product_facts.get("source_image_sha256") or "").strip().lower()
+                    if supplied_sha256 and supplied_sha256 != source_asset.sha256:
+                        self._send_json(
+                            {
+                                "error": "商品来源图片指纹不一致，请重新上传后再重做。",
+                                "status": int(HTTPStatus.CONFLICT),
+                                "source_integrity_conflict": True,
+                                "provider_call_triggered": False,
+                                "triggers_real_charge": False,
+                                "secret_exposed": False,
+                            },
+                            status=HTTPStatus.CONFLICT,
+                        )
+                        return
+                    product_facts["source_image_sha256"] = source_asset.sha256
+                    safe_inputs["product_facts"] = product_facts
+                    safe_inputs["private_media_source_preflight_validated"] = True
             original_status = str(original.get("status") or "")
             if original_status != "needs_rework":
                 original = self.repository.update_media_asset_job(
@@ -8344,7 +8389,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "provider_neutral": True,
                 "secret_exposed": False,
             }
-            live_media_requested = media_live_provider_requested(safe_inputs, body)
             if live_media_requested and media_credit_state["enforcement_enabled"] is not True:
                 self.repository.release_media_rework_reservation(
                     company_id=identity["company_id"],

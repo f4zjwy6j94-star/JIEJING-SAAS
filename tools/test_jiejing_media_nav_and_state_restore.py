@@ -129,7 +129,7 @@ def main() -> int:
         "AI CEO 已接单",
         "saas-ceo-route-card",
         "saas-ceo-module-handoff",
-        "handleSaasCeoCommandSubmit(text);",
+        "handleSaasCeoCommandSubmit(text, { sourceAssetIds });",
     ]:
         if marker not in app_js:
             return fail(f"AI CEO command intake must persist and route real SaaS work: {marker}")
@@ -151,10 +151,10 @@ def main() -> int:
     if "if (isSaasPublicMvpMode())" not in ceo_submit_body:
         return fail("public SaaS AI CEO submit should use the real command routing path before legacy media demo routing")
     for marker in [
-        "20260803-product-feedback-v1",
+        "20260825-media-retry-confirm-v1",
     ]:
         if marker not in app_html + index_html:
-            return fail(f"frontend cache version must advance after owner publish UI change: {marker}")
+            return fail(f"frontend cache version must retain the current media retry UI bundle: {marker}")
     for stale_asset_version in [
         "20260525-workflow-feedback-v1",
         "20260526-owner-publish-v1",
@@ -237,8 +237,14 @@ def main() -> int:
     public_nav = index_html[nav_start_public:nav_end_public]
     if 'href="./index.html?auth=login">AI CEO 工作台</a>' in public_nav:
         return fail("public AI CEO workbench nav must not jump directly to the login modal")
-    if 'href="#ai-ceo-workbench">AI CEO 工作台</a>' not in public_nav:
-        return fail("public AI CEO workbench nav should scroll to the real SaaS workbench section")
+    for marker in (
+        'href="#outcome">草稿内容</a>',
+        'href="#logic">使用流程</a>',
+        'href="#trust">安全边界</a>',
+        'href="#paths">套餐方案</a>',
+    ):
+        if marker not in public_nav:
+            return fail(f"public merchant navigation must retain the simplified homepage sections: {marker}")
     if 'href="./index.html?auth=register"' in index_html or 'href="./index.html?auth=login"' in index_html:
         return fail("public homepage must not use URL parameters to auto-open login/register")
     if "function openWorkbenchOrAuth" not in index_html or "function hasEntrySaasSessionCandidate" not in index_html:
@@ -255,7 +261,7 @@ def main() -> int:
         "AI 连接",
         "来源记录",
         "决策中心",
-        'view", "cockpit"',
+        'target.searchParams.set("view", activePlan === "free" ? "cockpit" : "connect")',
     ]:
         if marker not in index_html:
             return fail(f"public AI CEO workbench section missing SaaS-ready marker: {marker}")

@@ -26,6 +26,7 @@ if str(ROOT) not in sys.path:
 from jiejing_saas.billing_operations_maintenance import run_domestic_billing_maintenance  # noqa: E402
 from jiejing_saas.config import SaaSSettings  # noqa: E402
 from jiejing_saas.monitoring import ProviderMonitoringScheduler  # noqa: E402
+from jiejing_saas.media_source_assets import MediaSourceAssetStore  # noqa: E402
 from jiejing_saas.redis_queue_runtime import RedisStreamQueueWorker, redis_runtime_status  # noqa: E402
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
 from jiejing_saas.runtime_bridge import RuntimeBridge  # noqa: E402
@@ -158,9 +159,24 @@ def _build_worker(args: argparse.Namespace) -> tuple[SaaSSettings, SaaSRepositor
         output_root=settings.output_root,
         allow_hermes_adapters=settings.allow_hermes_adapters,
     )
+    media_source_assets = MediaSourceAssetStore(
+        root=settings.output_root / "private-media-source-assets",
+        signing_secret=None,
+        public_base_url="",
+    )
     if settings.queue_provider == "redis_streams":
-        return settings, repository, RedisStreamQueueWorker(repository=repository, runtime_bridge=bridge, settings=settings)
-    return settings, repository, LocalQueueWorker(repository=repository, runtime_bridge=bridge, settings=settings)
+        return settings, repository, RedisStreamQueueWorker(
+            repository=repository,
+            runtime_bridge=bridge,
+            settings=settings,
+            media_source_asset_store=media_source_assets,
+        )
+    return settings, repository, LocalQueueWorker(
+        repository=repository,
+        runtime_bridge=bridge,
+        settings=settings,
+        media_source_asset_store=media_source_assets,
+    )
 
 
 def _run_loop(args: argparse.Namespace, *, settings: SaaSSettings, worker: LocalQueueWorker) -> int:

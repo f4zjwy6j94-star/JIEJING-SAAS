@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Iterator
 from unittest.mock import patch
 
@@ -47,6 +48,7 @@ from jiejing_saas.media_asset_pipeline import (  # noqa: E402
     media_asset_is_video,
     media_manifest_matches_approved_quote,
 )
+from jiejing_saas.media_source_assets import MediaSourceAsset, MediaSourceAssetError  # noqa: E402
 from jiejing_saas.provider_job_runner import ProviderJobRunner  # noqa: E402
 from jiejing_saas.repository import SaaSRepository  # noqa: E402
 from jiejing_saas.secret_store import SecretStoreBoundary  # noqa: E402
@@ -203,6 +205,193 @@ class MediaSettlementContractTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+    def test_worker_retries_one_transient_private_source_read(self) -> None:
+        content = b"merchant-private-source"
+        asset = MediaSourceAsset(
+            asset_id="media_src_aaaaaaaaaaaaaaaa",
+            content_type="image/png",
+            size_bytes=len(content),
+            sha256="a" * 64,
+            original_filename="merchant-source.png",
+            created_at=1,
+            retention_expires_at=2,
+            width=1,
+            height=1,
+            file_path=Path(self.temp.name) / "merchant-source.png",
+        )
+
+        class TransientStore:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def read_for_provider(self, **_kwargs: Any) -> tuple[MediaSourceAsset, bytes]:
+                self.calls += 1
+                if self.calls == 1:
+                    raise MediaSourceAssetError("asset_not_found", "transient mount visibility miss")
+                return asset, content
+
+        source_store = TransientStore()
+        worker = LocalQueueWorker(
+            repository=self.repository,
+            runtime_bridge=object(),
+            settings=SimpleNamespace(output_root=Path(self.temp.name)),
+            media_source_asset_store=source_store,  # type: ignore[arg-type]
+        )
+        with patch("jiejing_saas.worker.time.sleep") as sleep_mock:
+            hydrated = worker._hydrate_private_media_source(
+                company_id=self.company_id,
+                store_id="store_source_retry",
+                job_body={
+                    "provider_job_key": "media.asset_generation",
+                    "inputs": {"product_facts": {"source_asset_id": asset.asset_id}},
+                },
+            )
+
+        self.assertEqual(2, source_store.calls)
+        sleep_mock.assert_called_once()
+        self.assertTrue(hydrated["inputs"].get("private_media_source_hydrated"))
+        self.assertTrue(str(hydrated["inputs"].get("reference_image_url") or "").startswith("data:image/png;base64,"))
+
+    def test_worker_does_not_retry_permanent_private_source_errors(self) -> None:
+        class PermanentFailureStore:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def read_for_provider(self, **_kwargs: Any) -> tuple[MediaSourceAsset, bytes]:
+                self.calls += 1
+                raise MediaSourceAssetError("asset_scope_mismatch", "wrong tenant")
+
+        source_store = PermanentFailureStore()
+        worker = LocalQueueWorker(
+            repository=self.repository,
+            runtime_bridge=object(),
+            settings=SimpleNamespace(output_root=Path(self.temp.name)),
+            media_source_asset_store=source_store,  # type: ignore[arg-type]
+        )
+        with patch("jiejing_saas.worker.time.sleep") as sleep_mock:
+            with self.assertRaisesRegex(MediaSourceAssetError, "wrong tenant"):
+                worker._hydrate_private_media_source(
+                    company_id=self.company_id,
+                    store_id="store_source_retry",
+                    job_body={
+                        "provider_job_key": "media.asset_generation",
+                        "inputs": {"product_facts": {"source_asset_id": "media_src_aaaaaaaaaaaaaaaa"}},
+                    },
+                )
+
+        self.assertEqual(1, source_store.calls)
+        sleep_mock.assert_not_called()
+
+    def test_media_retry_preflights_private_source_before_creating_child(self) -> None:
+        store = self.repository.create_store(
+            company_id=self.company_id,
+            user_id=self.user_id,
+            payload={"platform": "ebay", "store_name": "retry-source-preflight", "marketplace": "EBAY_US"},
+        )
+        inputs = self._canonical_inputs()
+        inputs["product_facts"]["source_asset_id"] = "media_src_aaaaaaaaaaaaaaaa"
+        inputs["product_facts"]["source_image_sha256"] = "a" * 64
+        original_task = self.repository.create_task(
+            company_id=self.company_id,
+            store_id=store["store_id"],
+            user_id=self.user_id,
+            task_type="provider_job",
+            title="Retry source preflight original",
+            input_data={"provider_job_key": "media.asset_generation"},
+        )
+        original = self.repository.create_media_asset_job(
+            company_id=self.company_id,
+            store_id=store["store_id"],
+            task_id=original_task["task_id"],
+            user_id=self.user_id,
+            provider_job_key="media.asset_generation",
+            idempotency_key="retry-source-preflight-original-v1",
+            job_spec={
+                "provider_job_key": "media.asset_generation",
+                "contract_version": "test-contract",
+                "inputs": inputs,
+                "media_credits": None,
+            },
+            status="needs_rework",
+        )
+        safe_root = Path(self.temp.name)
+        with _temporary_safe_process_env(
+            db_path=safe_root / "retry-source-preflight-http.sqlite",
+            runtime_db_path=safe_root / "retry-source-preflight-runtime.sqlite",
+            output_root=safe_root / "retry-source-preflight-output",
+        ):
+            settings = SaaSSettings.from_env(
+                db_path=safe_root / "retry-source-preflight-http.sqlite",
+                runtime_db_path=safe_root / "retry-source-preflight-runtime.sqlite",
+                output_root=safe_root / "retry-source-preflight-output",
+                host="127.0.0.1",
+                port=0,
+            )
+        sessions = SessionManager(secret="retry-source-preflight-local-http-secret")
+
+        class MissingSourceStore:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def read_for_provider(self, **_kwargs: Any) -> tuple[MediaSourceAsset, bytes]:
+                self.calls += 1
+                raise MediaSourceAssetError("asset_not_found", "source no longer retained")
+
+        source_store = MissingSourceStore()
+
+        class TestHandler(SaaSBackendHandler):
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        TestHandler.repository = self.repository
+        TestHandler.settings = settings
+        TestHandler.sessions = sessions
+        TestHandler.secret_store_boundary = SecretStoreBoundary(settings)
+        TestHandler.queue_worker = self.worker
+        TestHandler.media_source_asset_store = source_store  # type: ignore[assignment]
+        server = ThreadingHTTPServer(("127.0.0.1", 0), TestHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        token = sessions.create_token(user_id=self.user_id, company_id=self.company_id, email=self.email)
+        try:
+            with patch.dict(
+                os.environ,
+                {
+                    "JIEJING_MEDIA_CREDIT_ENFORCEMENT_ENABLED": "true",
+                    "JIEJING_MEDIA_LIVE_PROVIDER_ENABLED": "true",
+                    "JIEJING_QUEUE_PROVIDER": "local_worker",
+                },
+                clear=False,
+            ):
+                status, response = _post_local(
+                    f"http://127.0.0.1:{server.server_address[1]}",
+                    f"/media-asset-jobs/{original['media_job_id']}/retry",
+                    {"reason": "merchant requested a corrected image", "run_mode": "queued"},
+                    token,
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        child_key = f"media-rework:{original['media_job_id']}:v2"
+        child = self.repository.get_media_asset_job_by_idempotency(
+            company_id=self.company_id,
+            idempotency_key=child_key,
+        )
+        reserve_entries = [
+            entry
+            for entry in self.repository.list_media_credit_ledger(company_id=self.company_id, limit=100)
+            if entry.get("operation_type") == "reserve" and entry.get("reference_id") == child_key
+        ]
+        self.assertEqual(422, status, response)
+        self.assertEqual(["private_media_source_asset_not_found"], response.get("missing_inputs"))
+        self.assertFalse(response.get("provider_call_triggered"))
+        self.assertFalse(response.get("triggers_real_charge"))
+        self.assertEqual(1, source_store.calls)
+        self.assertIsNone(child)
+        self.assertEqual([], reserve_entries)
 
     def test_postgres_shaped_credit_timestamps_survive_media_queue_persistence(self) -> None:
         """Postgres returns timestamptz values as datetimes; the queue graph must persist them safely."""
