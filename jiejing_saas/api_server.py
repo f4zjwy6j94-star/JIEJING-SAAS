@@ -8352,22 +8352,32 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 return
             if media_credit_state["enforcement_enabled"] and live_media_requested:
                 try:
-                    reserve_operation_key = self.repository.media_credit_reservation_attempt_idempotency_key(
-                        company_id=identity["company_id"],
-                        reference_type="media_rework",
-                        reference_id=retry_key,
-                        base_idempotency_key=f"{retry_key}:reserve:v1",
-                    )
-                    media_credit_state["reservation"] = self.repository.apply_media_credit_operation(
+                    ops_reservation = _reserve_ops_media_points(
+                        self.repository,
                         company_id=identity["company_id"],
                         user_id=identity["user_id"],
-                        operation_type="reserve",
-                        points=int(media_quote["estimated_points"]),
-                        idempotency_key=reserve_operation_key,
-                        reference_type="media_rework",
-                        reference_id=retry_key,
-                        details={"quote": media_quote, "parent_media_job_id": original["media_job_id"], "version": version},
+                        media_idempotency_key=retry_key,
+                        media_quote=media_quote,
                     )
+                    if ops_reservation is None:
+                        reserve_operation_key = self.repository.media_credit_reservation_attempt_idempotency_key(
+                            company_id=identity["company_id"],
+                            reference_type="media_rework",
+                            reference_id=retry_key,
+                            base_idempotency_key=f"{retry_key}:reserve:v1",
+                        )
+                        media_credit_state["reservation"] = self.repository.apply_media_credit_operation(
+                            company_id=identity["company_id"],
+                            user_id=identity["user_id"],
+                            operation_type="reserve",
+                            points=int(media_quote["estimated_points"]),
+                            idempotency_key=reserve_operation_key,
+                            reference_type="media_rework",
+                            reference_id=retry_key,
+                            details={"quote": media_quote, "parent_media_job_id": original["media_job_id"], "version": version},
+                        )
+                    else:
+                        media_credit_state["reservation"] = ops_reservation
                 except ValueError as exc:
                     self.repository.release_media_rework_reservation(
                         company_id=identity["company_id"],

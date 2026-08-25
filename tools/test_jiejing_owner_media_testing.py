@@ -163,6 +163,23 @@ class OwnerMediaTestingContractTest(unittest.TestCase):
                 reference_id="generic-owner-testing-job",
             )
 
+    def test_media_rework_uses_the_same_private_owner_reservation_path_as_initial_generation(self) -> None:
+        api_source = (ROOT / "jiejing_saas" / "api_server.py").read_text(encoding="utf-8")
+        retry_start = api_source.index(
+            'if len(parts) == 3 and parts[0] == "media-asset-jobs" and parts[2] == "retry":'
+        )
+        retry_end = api_source.index(
+            'if len(parts) == 3 and parts[0] == "queue-jobs" and parts[2] == "retry":',
+            retry_start,
+        )
+        retry_source = api_source[retry_start:retry_end]
+        self.assertIn("ops_reservation = _reserve_ops_media_points(", retry_source)
+        self.assertLess(
+            retry_source.index("ops_reservation = _reserve_ops_media_points("),
+            retry_source.index("self.repository.apply_media_credit_operation("),
+            "owner testing points must be considered before the generic purchased/plan bucket path",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
