@@ -22053,7 +22053,8 @@ function saasCurrentUnpublishedDraftReceipt(draft = state.saasListingComposerDra
       : {};
     const storedProjectKey = String(storedProject.key || "").trim();
     const storedSku = String(item.publish_payload?.listing?.sku || "").trim();
-    if (currentProjectKey) return storedProjectKey === currentProjectKey;
+    if (draftSku && storedSku !== draftSku) return false;
+    if (currentProjectKey && storedProjectKey === currentProjectKey) return true;
     return Boolean(draftSku && storedSku === draftSku);
   });
   if (!confirmation?.confirmation_id) return null;

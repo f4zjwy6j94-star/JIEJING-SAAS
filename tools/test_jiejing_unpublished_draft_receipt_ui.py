@@ -81,7 +81,7 @@ globalThis.state = {{
     {json.dumps(execution)},
   ],
 }};
-function saasCurrentListingProjectIdentity() {{ return {{ key: "project-current" }}; }}
+function saasCurrentListingProjectIdentity() {{ return {{ key: "project-current-after-refresh" }}; }}
 const current = saasCurrentUnpublishedDraftReceipt();
 if (!current || current.offerId !== "245675556011") throw new Error("current Listing receipt was not selected");
 if (current.confirmationId !== "confirm_receipt_test") throw new Error("receipt crossed Listing project boundary");
