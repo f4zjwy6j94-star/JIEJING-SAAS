@@ -134,6 +134,44 @@ if (!invalidFacts.statusText.includes(\"资料待补\") || !invalidFacts.note.in
     product_facts_start = app_js.index("function currentMediaStudioProductFacts")
     product_facts_end = app_js.index("\nfunction saasMediaGenerationGroundingGate", product_facts_start)
     product_facts_source = app_js[product_facts_start:product_facts_end]
+    assert "function saasMediaSourceAssetForListingDraft" in app_js
+    source_asset_start = app_js.index("function saasMediaSourceAssetForListingDraft")
+    source_asset_end = app_js.index("\nfunction currentMediaStudioProductFacts", source_asset_start)
+    source_asset_source = app_js[source_asset_start:source_asset_end]
+    source_asset_script = f"""
+{source_asset_source}
+const draft = {{
+  merchant_product_fact_packet: {{
+    source_records: [
+      {{ type: "merchant_product_image", asset_id: "media_src_tall", sha256: "sha-tall", source_index: 2, width: 790, height: 1028, rights_status: "pending_merchant_confirmation" }},
+      {{ type: "merchant_product_image", asset_id: "media_src_primary", sha256: "sha-primary", source_index: 4, width: 800, height: 800, rights_status: "pending_merchant_confirmation" }},
+      {{ type: "merchant_product_link", url: "https://example.test/item" }},
+    ],
+  }},
+}};
+const selected = saasMediaSourceAssetForListingDraft(draft);
+if (selected.asset_id !== "media_src_primary" || selected.sha256 !== "sha-primary") {{
+  throw new Error(`AI CEO source bridge must prefer the clearest square product image: ${{JSON.stringify(selected)}}`);
+}}
+if (selected.rights_status !== "pending_merchant_confirmation") {{
+  throw new Error("source bridge must preserve the rights-review boundary");
+}}
+"""
+    source_asset_completed = subprocess.run(
+        ["node", "-e", source_asset_script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert source_asset_completed.returncode == 0, source_asset_completed.stderr or source_asset_completed.stdout
+    assert "saasMediaSourceAssetForListingDraft(composer)" in product_facts_source
+    assert 'private_source_transport: sourceAssetId ? "backend_asset_id" : ""' in product_facts_source
+    assert 'source_bridge_contract: reportSourceAsset && !uploadMatchesProject ? "ai_ceo_private_source_asset_to_media_v1"' in product_facts_source
+    assert 'source_rights_status: uploadMatchesProject ? upload?.rights_status || "" : reportSourceAsset?.rights_status || ""' in product_facts_source
+    assert "packetFacts.product_dimensions_cm" in product_facts_source
+    assert "packetFacts.net_weight_g" in product_facts_source
     assert 'material_pending_label: ["待补", "待确认"].includes(material)' in product_facts_source
     assert "dimensions_pending_label: !dimensions" in product_facts_source
     print("PASS jiejing_media_source_grounding_gate")

@@ -15651,6 +15651,53 @@ async function retrySaasMediaAssetJob(mediaJobId, button = null) {
   }
 }
 
+function saasMediaSourceAssetForListingDraft(draft = {}) {
+  const packet =
+    draft?.merchant_product_fact_packet && typeof draft.merchant_product_fact_packet === "object"
+      ? draft.merchant_product_fact_packet
+      : {};
+  const records = Array.isArray(packet.source_records) ? packet.source_records : [];
+  const candidates = records
+    .filter(
+      (record) =>
+        record &&
+        typeof record === "object" &&
+        record.type === "merchant_product_image" &&
+        Boolean(String(record.asset_id || "").trim()),
+    )
+    .map((record) => {
+      const width = Math.max(0, Number(record.width || 0));
+      const height = Math.max(0, Number(record.height || 0));
+      const ratio = width && height ? width / height : 0;
+      const squareScore = ratio ? Math.max(0, 120 - Math.abs(Math.log(ratio)) * 100) : 0;
+      const resolutionScore = width && height ? Math.min(80, (width * height) / 10000) : 0;
+      return {
+        asset_id: String(record.asset_id || "").trim(),
+        sha256: String(record.sha256 || "").trim().toLowerCase(),
+        rights_status: String(record.rights_status || "").trim(),
+        source_index: Number(record.source_index || 0),
+        width,
+        height,
+        selection_score: squareScore + resolutionScore,
+      };
+    })
+    .sort(
+      (left, right) =>
+        right.selection_score - left.selection_score ||
+        (left.source_index || Number.MAX_SAFE_INTEGER) - (right.source_index || Number.MAX_SAFE_INTEGER),
+    );
+  if (!candidates.length) return null;
+  const selected = candidates[0];
+  return {
+    asset_id: selected.asset_id,
+    sha256: selected.sha256,
+    rights_status: selected.rights_status,
+    source_index: selected.source_index,
+    width: selected.width,
+    height: selected.height,
+  };
+}
+
 function currentMediaStudioProductFacts(config = {}) {
   const ctx = isSaasPublicMvpMode() ? saasMerchantWorkbenchContext() : {};
   const activeDraftRaw = typeof activeListingDraft === "function" ? activeListingDraft() : null;
@@ -15659,6 +15706,21 @@ function currentMediaStudioProductFacts(config = {}) {
       ? null
       : activeDraftRaw;
   const composer = state.saasListingComposerDraft || {};
+  const merchantPacket =
+    composer.merchant_product_fact_packet && typeof composer.merchant_product_fact_packet === "object"
+      ? composer.merchant_product_fact_packet
+      : {};
+  const packetFacts = {
+    ...(merchantPacket.derived_listing_suggestions && typeof merchantPacket.derived_listing_suggestions === "object"
+      ? merchantPacket.derived_listing_suggestions
+      : {}),
+    ...(merchantPacket.source_confirmed_facts && typeof merchantPacket.source_confirmed_facts === "object"
+      ? merchantPacket.source_confirmed_facts
+      : {}),
+    ...(merchantPacket.merchant_confirmed_facts && typeof merchantPacket.merchant_confirmed_facts === "object"
+      ? merchantPacket.merchant_confirmed_facts
+      : {}),
+  };
   const listingProject = saasCurrentListingProjectIdentity(composer);
   const latestReport = latestSaasReportByTypes(["listing.package", "product.listing", "ai_ceo.market_research", "market.report"]);
   const productName = publicRuntimeText(
@@ -15670,21 +15732,26 @@ function currentMediaStudioProductFacts(config = {}) {
   );
   const store = ctx.store || activeSaasStore();
   const upload = state.saasMediaSourceUpload && typeof state.saasMediaSourceUpload === "object" ? state.saasMediaSourceUpload : null;
+  const reportSourceAsset = saasMediaSourceAssetForListingDraft(composer);
   const uploadMatchesProject =
     upload &&
     (!upload.listing_project_key ||
       !listingProject.key ||
       upload.listing_project_key === listingProject.key ||
       upload.listing_project_key === state.activeMediaDraft);
+  const sourceAssetId = uploadMatchesProject ? upload.asset_id || "" : reportSourceAsset?.asset_id || "";
+  const sourceImageSha256 = uploadMatchesProject ? upload.sha256 || "" : reportSourceAsset?.sha256 || "";
   const referenceImages = [config.referenceImageUrl]
     .map((url) => String(url || "").trim())
     .filter((url, index, values) => /^https:\/\//i.test(url) && values.indexOf(url) === index);
-  const material = publicRuntimeText(activeDraft?.material || composer.material || "待补");
-  const dimensions = activeDraft?.dimensions || composer.dimensions || null;
+  const material = publicRuntimeText(activeDraft?.material || packetFacts.material || composer.material || "待补");
+  const dimensions = activeDraft?.dimensions || packetFacts.product_dimensions_cm || composer.publish_prefill?.product_dimensions_cm || composer.dimensions || null;
+  const netWeightG = packetFacts.net_weight_g || "";
   const allowedClaims = [
     productName && productName !== "当前商品" ? `商品名称：${productName}` : "",
     material && !["待补", "待确认"].includes(material) ? `材质：${material}` : "",
     dimensions ? `尺寸：${publicRuntimeText(dimensions)}` : "",
+    netWeightG ? `商品净重：${publicRuntimeText(netWeightG)} g（不等于包装重量）` : "",
   ].filter(Boolean);
   return {
     product: productName,
@@ -15697,6 +15764,7 @@ function currentMediaStudioProductFacts(config = {}) {
     supplier_facts: {
       material,
       package_dimensions_cm: dimensions,
+      net_weight_g: netWeightG,
       logistics: activeDraft?.logistics || composer.logistics || "待补",
     },
     material_pending_label: ["待补", "待确认"].includes(material),
@@ -15704,8 +15772,11 @@ function currentMediaStudioProductFacts(config = {}) {
     allowed_claims: allowedClaims,
     forbidden_claims: ["未验证认证", "医疗功效", "未经授权品牌词", "夸大性能承诺"],
     reference_images: referenceImages,
-    source_asset_id: uploadMatchesProject ? upload.asset_id || "" : "",
-    source_image_sha256: uploadMatchesProject ? upload.sha256 || "" : "",
+    source_asset_id: sourceAssetId,
+    source_image_sha256: sourceImageSha256,
+    private_source_transport: sourceAssetId ? "backend_asset_id" : "",
+    source_rights_status: uploadMatchesProject ? upload?.rights_status || "" : reportSourceAsset?.rights_status || "",
+    source_bridge_contract: reportSourceAsset && !uploadMatchesProject ? "ai_ceo_private_source_asset_to_media_v1" : "merchant_media_upload_v1",
     target_marketplace_rules: {
       platform: "ebay",
       marketplace: store?.marketplace || "EBAY_US",

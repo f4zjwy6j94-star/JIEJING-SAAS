@@ -35,7 +35,7 @@ def main() -> int:
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
     frontend_asset_version = "20260824-ai-ceo-listing-continuity-v1"
-    app_js_asset_version = "20260825-owner-media-testing-v3"
+    app_js_asset_version = "20260825-vision-report-recovery-v4"
     for expected_asset in [
         f"./app.js?v={app_js_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -44,6 +44,8 @@ def main() -> int:
             return fail(f"frontend entry files must bust owner publish cache with {expected_asset}")
     if f"./app.js?v={app_js_asset_version}" not in app_html or f"./app.js?v={app_js_asset_version}" not in index_html:
         return fail("both public and workbench entry files must reference the current app.js cache version")
+    if "./app.js?v=20260825-owner-media-testing-v3" in index_html + app_html:
+        return fail("frontend entry files must not retain the pre-vision-report-recovery app.js cache version")
     app_html_app_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", app_html)
     index_html_app_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", index_html)
     if app_html_app_versions != [app_js_asset_version]:
