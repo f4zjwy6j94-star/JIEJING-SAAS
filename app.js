@@ -23378,9 +23378,12 @@ function saasCeoCommandIntent(text = "") {
     !asksForInternalListingDraft &&
     (/(?:本轮|这轮|当前|现在|只读|先|暂时|暂缓)?\s*(?:不要|不做|不建|不生成|无需|不进入|先不|暂不).{0,18}(?:Listing|刊登|上架|草稿)/i.test(listingDeferralScope) ||
       /(?:Listing|刊登|上架|草稿).{0,8}(?:不要|先不|暂不).{0,8}(?:做|建|创建|生成|进入)/i.test(listingDeferralScope));
-  const hasProductResearchIntent = has(
-    /选品|候选商品|候选品|商品候选|产品候选|找品|筛选.{0,12}(?:商品|产品|候选)|产品方向|商品方向|卖什么|市场调研|市场报告|成交证据|三选一|相对赢家|赢家|供应商事实核验|供应商核验|货源核验|sold\s*&?\s*completed|已售.{0,12}(?:数量|结果|item)|在售.{0,12}(?:数量|竞争)/i,
+  const productResearchScope = raw.replace(
+    /(?:本轮|这轮|当前|现在|此次|这次)?\s*(?:不|不要|不做|不再|无需|先不|暂不|禁止)\s*(?:(?:联网|重新|继续|再)\s*){0,2}(?:选品|找品|筛选|市场调研|市场报告)/gi,
+    "",
   );
+  const hasProductResearchIntent =
+    /选品|候选商品|候选品|商品候选|产品候选|找品|筛选.{0,12}(?:商品|产品|候选)|产品方向|商品方向|卖什么|市场调研|市场报告|成交证据|三选一|相对赢家|赢家|供应商事实核验|供应商核验|货源核验|sold\s*&?\s*completed|已售.{0,12}(?:数量|结果|item)|在售.{0,12}(?:数量|竞争)/i.test(productResearchScope);
   const asksForListingHandoff =
     asksForInternalListingDraft ||
     (!listingDeferred &&

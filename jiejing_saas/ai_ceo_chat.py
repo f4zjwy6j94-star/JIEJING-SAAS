@@ -4113,6 +4113,12 @@ def _selection_response_contract(
     route: str,
     conversation_history: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    # A merchant may explicitly request an internal Listing and state that
+    # this turn must *not* rerun product selection.  Listing intake owns that
+    # turn; selection acceptance rules would otherwise reject a valid product
+    # draft for not inventing additional candidate products.
+    if _looks_like_explicit_listing_intake(message):
+        return {}
     if not _looks_like_product_selection_request(message=message, route=route):
         return {}
     text = _normalized_text(message)
