@@ -7734,6 +7734,25 @@ function saasMediaAssetJobNextLine(job = {}) {
   return "先接入商品草稿、来源图和图片需求，不会用旧样例冒充真实结果。";
 }
 
+function saasMediaAssetJobFailureDiagnostic(job = {}) {
+  const reason = String(job.error_reason || "").trim();
+  const code = reason
+    .replace(/^missing_inputs:/, "")
+    .split(",")
+    .map((item) => item.trim())
+    .find((item) => item.startsWith("private_media_source_"));
+  const safeLabels = {
+    private_media_source_asset_not_found: "来源图记录不存在",
+    private_media_source_asset_unavailable: "来源图文件暂时不可读取",
+    private_media_source_asset_scope_mismatch: "来源图与当前店铺不匹配",
+    private_media_source_asset_expired: "来源图已超过临时保留期限",
+    private_media_source_asset_integrity_failed: "来源图完整性校验失败",
+    private_media_source_invalid_asset_id: "来源图引用无效",
+  };
+  if (!code || !safeLabels[code]) return "";
+  return `${safeLabels[code]}（${code}）`;
+}
+
 function saasMediaAssetJobVersionLabel(job = {}) {
   const version = Math.max(1, Number.parseInt(job.asset_version?.version, 10) || 1);
   return `版本 ${version}`;
@@ -7788,6 +7807,11 @@ function renderSaasMediaAssetJobsPanel(ctx = saasMerchantWorkbenchContext()) {
                       </div>
                       <strong>${escapeHtml(saasMediaAssetJobOutputLabel(job))}</strong>
                       <p>${escapeHtml(saasMediaAssetJobNextLine(job))}</p>
+                      ${
+                        saasMediaAssetJobFailureDiagnostic(job)
+                          ? `<p class="saas-media-asset-diagnostic">素材来源诊断：${escapeHtml(saasMediaAssetJobFailureDiagnostic(job))}</p>`
+                          : ""
+                      }
                       <p class="saas-media-asset-cost">${escapeHtml(saasMediaAssetJobCostLabel(job))}</p>
                       <small>${escapeHtml(saasTimestampLabel(job.updated_at || job.created_at || ""))} · 不展示密钥，不自动刊登</small>
                       ${
