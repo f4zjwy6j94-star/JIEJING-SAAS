@@ -91,6 +91,8 @@ def main() -> int:
         "JIEJING_PRODUCTION_DEPLOY_APPLIED=1",
         "JIEJING_PRODUCTION_ROLLBACK_APPLIED=1",
         "JIEJING_PRODUCTION_DEPLOY_FAILED_STAGE=",
+        "build_candidate_images_with_retry",
+        "JIEJING_PRODUCTION_BUILD_RETRY=",
         "ln -sfn",
         "trap rollback_on_error ERR",
         "chmod -R go-w",
@@ -134,6 +136,12 @@ def main() -> int:
         missing.extend(f"{prefix}:{marker}" for marker in markers if marker not in text)
     if missing:
         return fail("production deploy channel missing markers: " + ",".join(missing))
+
+    build_stage = apply.index('current_stage="build_candidate_images"')
+    build_call = apply.index("build_candidate_images_with_retry", build_stage)
+    mutation_start = apply.index("mutation_started=1", build_stage)
+    if build_call > mutation_start:
+        return fail("candidate images must finish building before rollback-requiring service mutation starts")
 
     forbidden = [
         "StrictHostKeyChecking=no",

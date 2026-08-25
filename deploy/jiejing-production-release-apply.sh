@@ -208,10 +208,25 @@ raise SystemExit(0 if ok else 1)
   return 1
 }
 
+build_candidate_images_with_retry() {
+  local attempt
+  for attempt in 1 2; do
+    if "${candidate_compose[@]}" build jiejing-saas jiejing-worker; then
+      return 0
+    fi
+    printf 'JIEJING_PRODUCTION_BUILD_RETRY=%s/2\n' "$attempt" >&2
+    if [[ "$attempt" -lt 2 ]]; then
+      sleep 5
+    fi
+  done
+  return 1
+}
+
 rollback_on_error() {
   local code=$?
   trap - ERR
   set +e
+  printf 'JIEJING_PRODUCTION_DEPLOY_FAILED_STAGE=%s\n' "$current_stage" >&2
   if [[ "$mutation_started" == "1" ]]; then
     "${previous_compose[@]}" build jiejing-saas jiejing-worker
     "${previous_compose[@]}" up -d --no-deps jiejing-saas
@@ -220,16 +235,17 @@ rollback_on_error() {
     "${previous_compose[@]}" up -d --no-deps --force-recreate jiejing-frontend
     "${previous_compose[@]}" up -d --no-deps --force-recreate jiejing-edge
     ln -sfnT "$active_app" "$ACTIVE_LINK"
-    printf 'JIEJING_PRODUCTION_DEPLOY_FAILED_STAGE=%s\n' "$current_stage" >&2
     printf '%s\n' "JIEJING_PRODUCTION_ROLLBACK_APPLIED=1" >&2
+  else
+    printf '%s\n' "JIEJING_PRODUCTION_ROLLBACK_NOT_REQUIRED=1" >&2
   fi
   exit "$code"
 }
 trap rollback_on_error ERR
 
-mutation_started=1
 current_stage="build_candidate_images"
-"${candidate_compose[@]}" build jiejing-saas jiejing-worker
+build_candidate_images_with_retry
+mutation_started=1
 current_stage="start_candidate_api"
 "${candidate_compose[@]}" up -d --no-deps jiejing-saas
 wait_container_healthy deploy-jiejing-saas-1 60
