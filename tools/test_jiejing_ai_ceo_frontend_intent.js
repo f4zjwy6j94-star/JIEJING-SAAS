@@ -92,7 +92,7 @@ assert.strictEqual(
   "an affirmative real eBay publish request must still require confirmation",
 );
 assert(
-  appHtml.includes("app.js?v=20260825-listing-publish-truth-v1"),
+  appHtml.includes("app.js?v=20260825-listing-media-restore-v1"),
   "app.html must retain the AI CEO intent fix in the current production bundle",
 );
 

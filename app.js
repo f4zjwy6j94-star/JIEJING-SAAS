@@ -17639,6 +17639,69 @@ function sanitizeSaasListingPublishPrefillSnapshot(values = {}) {
   );
 }
 
+function sanitizeSaasListingMediaWritebackSnapshot(writeback = null) {
+  if (!writeback || typeof writeback !== "object") return null;
+  const safeUrl = (value) => {
+    const url = sanitizeSaasWorkflowFeedbackText(value, 1400).trim();
+    if (/^https:\/\/[^\s]+$/i.test(url)) return url;
+    if (/^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/[^\s]*)?$/i.test(url)) return url;
+    return "";
+  };
+  const safeUrls = (values) =>
+    (Array.isArray(values) ? values : String(values || "").split(/\r?\n|[,，；;]+/))
+      .map(safeUrl)
+      .filter(Boolean)
+      .slice(0, 20);
+  const assets = Array.isArray(writeback.assets)
+    ? writeback.assets
+        .filter((asset) => asset && typeof asset === "object")
+        .slice(0, 20)
+        .map((asset) => ({
+          ...pickSaasSnapshotFields(asset, [
+            "asset_id",
+            "label",
+            "asset_type",
+            "dimensions_or_duration",
+            "review_status",
+            "commercial_use_status",
+            "listing_use_status",
+            "media_job_id",
+          ]),
+          url: safeUrl(asset.url),
+          is_video: asset.is_video === true,
+        }))
+        .filter((asset) => asset.url)
+    : [];
+  const assetUrls = safeUrls(writeback.asset_urls);
+  const imageUrls = safeUrls(writeback.image_urls);
+  return {
+    ...pickSaasSnapshotFields(writeback, [
+      "contract_version",
+      "status",
+      "source",
+      "entry",
+      "media_job_id",
+      "asset_count",
+      "image_count",
+      "asset_manifest_validation_status",
+      "review_status",
+      "rights_status",
+      "listing_use_status",
+      "created_at",
+      "reviewed_at",
+    ]),
+    asset_urls: assetUrls.length ? assetUrls : assets.map((asset) => asset.url),
+    image_urls: imageUrls.length ? imageUrls : assets.filter((asset) => !asset.is_video).map((asset) => asset.url),
+    assets,
+    review_required_before_publish: writeback.review_required_before_publish === true,
+    fact_review_required_before_publish: writeback.fact_review_required_before_publish !== false,
+    confirmation_center_required: writeback.confirmation_center_required !== false,
+    triggers_real_platform_write: writeback.triggers_real_platform_write === true,
+    spend_now_allowed: writeback.spend_now_allowed === true,
+    secret_exposed: writeback.secret_exposed === true,
+  };
+}
+
 function sanitizeSaasListingComposerDraftSnapshot(draft = null) {
   if (!draft || typeof draft !== "object") return null;
   const selected = draft.selected_product_candidate && typeof draft.selected_product_candidate === "object"
@@ -17688,7 +17751,7 @@ function sanitizeSaasListingComposerDraftSnapshot(draft = null) {
     risks: Array.isArray(draft.risks) ? draft.risks.slice(0, 40) : [],
     media_writeback:
       draft.media_writeback && typeof draft.media_writeback === "object"
-        ? pickSaasSnapshotFields(draft.media_writeback, ["status", "media_job_id", "reviewed_at", "asset_count"])
+        ? sanitizeSaasListingMediaWritebackSnapshot(draft.media_writeback)
         : null,
   };
 }
