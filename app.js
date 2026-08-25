@@ -11233,6 +11233,13 @@ function saasAiCeoListingHandoffFieldsFromReport(record = null) {
   const pricingDraft = offerDraft.pricingSummary?.price || {};
   const imageRequirements = fields.image_requirements && typeof fields.image_requirements === "object" ? fields.image_requirements : {};
   const logisticsRequirements = fields.logistics_requirements && typeof fields.logistics_requirements === "object" ? fields.logistics_requirements : {};
+  const rawMerchantProductFactPacket =
+    fields.merchant_product_fact_packet && typeof fields.merchant_product_fact_packet === "object"
+      ? fields.merchant_product_fact_packet
+      : body.merchant_product_fact_packet && typeof body.merchant_product_fact_packet === "object"
+        ? body.merchant_product_fact_packet
+        : null;
+  const merchantProductFactPacket = sanitizeSaasMerchantProductFactPacketSnapshot(rawMerchantProductFactPacket);
   const productCandidates = saasNormalizeMarketProductCandidates(
     fields.product_candidates || body.product_candidates || [],
     [fields.description_seed, body.answer].filter(Boolean).join("\n"),
@@ -11318,6 +11325,7 @@ function saasAiCeoListingHandoffFieldsFromReport(record = null) {
         : "",
       fields.publish_preflight_gaps?.length ? `发布前缺口: ${fields.publish_preflight_gaps.join("；")}` : "",
     ].filter(Boolean).join("\n"),
+    merchant_product_fact_packet: merchantProductFactPacket,
     publish_prefill: {
       sku: publicRuntimeText(inventoryDraft.sku || fields.sku || "").slice(0, 80),
       condition: publicRuntimeText(fields.condition || inventoryDraft.condition || "").slice(0, 40),
@@ -11407,7 +11415,7 @@ function saasListingDraftFromReport(record = null, sourceType = "ai_report") {
   const baseText = product;
   const draft = saasListingComposerDraftFromText(baseText);
   const ebayTitle = saasListingEbayTitleFromProduct(product);
-  return {
+  const importedDraft = {
     ...draft,
     source_type: sourceType,
     source_label: sourceLabel,
@@ -11460,6 +11468,7 @@ function saasListingDraftFromReport(record = null, sourceType = "ai_report") {
     ],
     safe_local_only: true,
   };
+  return applySaasMerchantProductFactPacketToDraft(importedDraft, handoffFields.merchant_product_fact_packet);
 }
 
 function saasListingDraftFromSyncedProduct(row = null) {
@@ -11961,6 +11970,10 @@ function saasMerchantProductFactPacket(draft = state.saasListingComposerDraft) {
       ? existing.derived_listing_suggestions
       : {}),
   };
+  const explicitUnknownFacts = new Set(
+    Array.isArray(existing.unknown_facts) ? existing.unknown_facts.map((key) => String(key || "").trim()).filter(Boolean) : [],
+  );
+  explicitUnknownFacts.forEach((key) => delete derivedSuggestions[key]);
   const values = { ...derivedSuggestions, ...sourceConfirmed, ...merchantConfirmed };
   const requiredKeys = saasMerchantProductFactRequiredKeys();
   const unknownFacts = requiredKeys.filter((key) => !saasMerchantProductFactValuePresent(key, {
@@ -11973,7 +11986,7 @@ function saasMerchantProductFactPacket(draft = state.saasListingComposerDraft) {
   if (values.source_url && !sourceRecords.some((item) => item?.url === values.source_url)) {
     sourceRecords.push({ type: "merchant_product_link", url: values.source_url, rights_status: "not_applicable" });
   }
-  return {
+  const normalizedPacket = {
     contract_version: SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT,
     source_mode: existing.source_mode || (values.source_url ? "merchant_source_supplied" : "merchant_owned_product"),
     product_name: values.product_name || draft.product || draft.title || "",
@@ -11994,6 +12007,7 @@ function saasMerchantProductFactPacket(draft = state.saasListingComposerDraft) {
     blocked_by: unknownFacts.map((key) => `merchant_product_fact_missing:${key}`),
     secret_exposed: false,
   };
+  return normalizedPacket;
 }
 
 function saasMerchantProductFactOrigin(packet = {}, key = "") {
@@ -15932,6 +15946,32 @@ async function pollSaasMediaAssetJobUntilReview({ mediaJobId, sourceText, config
   }
 }
 
+function saasMediaQueueFailureView(error = {}) {
+  const status = Number(error?.status || error?.payload?.status || 0);
+  const backendReason = publicRuntimeText(
+    error?.payload?.error || error?.payload?.message || error?.message || "素材任务暂未创建。",
+  ).slice(0, 180);
+  if (status === 402) {
+    return {
+      statusText: "素材点不足 · 后端任务未创建",
+      note: `${backendReason} 本次没有调用生成服务，也没有消耗素材点；补充素材点后可从当前步骤重试。`,
+      toast: "素材点不足：没有调用生成服务，也没有消耗素材点。",
+    };
+  }
+  if (status === 422) {
+    return {
+      statusText: "商品资料待补 · 后端任务未创建",
+      note: `${backendReason} 补齐页面提示的资料后可从当前步骤重试，本次没有调用生成服务。`,
+      toast: "商品资料尚未通过生成前检查：本次没有调用生成服务。",
+    };
+  }
+  return {
+    statusText: "素材草稿已整理 · 后端任务暂未创建",
+    note: `${backendReason} 本次不会标记为可发布素材，请从当前步骤重试。`,
+    toast: "素材任务暂未创建：本次不会作为可发布素材。",
+  };
+}
+
 async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}) {
   if (!isSaasPublicMvpMode()) return null;
   const store = activeSaasStore();
@@ -15997,6 +16037,7 @@ async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}) {
     return mediaJob;
   } catch (error) {
     console.warn(`[JIEJING media job queue skipped] ${error?.message || error}`);
+    const failure = saasMediaQueueFailureView(error);
     upsertSaasMediaAssetJobForDisplay(
       {
         media_job_id: `local-media-job-error-${Date.now()}`,
@@ -16009,9 +16050,9 @@ async function queueSaasMediaAssetJobFromStudio(sourceText, config = {}) {
       },
       optimisticId,
     );
-    setText("#mediaProductionStatus", "素材草稿已整理 · 后端任务暂未创建");
-    setText("#mediaPreviewNote", "这次只保留本页草稿，不会标记为可发布素材。请稍后重试素材任务。");
-    showActionToast("素材任务暂未创建：本次不会作为可发布素材。");
+    setText("#mediaProductionStatus", failure.statusText);
+    setText("#mediaPreviewNote", failure.note);
+    showActionToast(failure.toast);
     return null;
   }
 }

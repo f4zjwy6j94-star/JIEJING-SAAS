@@ -92,8 +92,25 @@ assert.strictEqual(
   "an affirmative real eBay publish request must still require confirmation",
 );
 assert(
-  appHtml.includes("app.js?v=20260825-ai-ceo-listing-negation-v1"),
+  appHtml.includes("app.js?v=20260825-ai-ceo-text-facts-media-v2"),
   "app.html must refresh the AI CEO intent bundle after a production routing fix",
 );
 
-console.log("PASS AI CEO frontend intent routing: 8/8");
+const factPacketSource = extractFunction("saasMerchantProductFactPacket");
+assert(
+  factPacketSource.includes("return normalizedPacket;"),
+  "merchant product facts must return the normalized packet used by render and save flows",
+);
+const reportDraftSource = extractFunction("saasListingDraftFromReport");
+assert(
+  reportDraftSource.includes("const importedDraft = {") &&
+    reportDraftSource.includes("return applySaasMerchantProductFactPacketToDraft(importedDraft, handoffFields.merchant_product_fact_packet);"),
+  "an AI CEO report import must merge the authenticated merchant fact packet into the Listing draft",
+);
+const chatDraftSource = extractFunction("saasListingDraftFromAiCeoMarketTurn");
+assert(
+  !chatDraftSource.includes("handoffFields.merchant_product_fact_packet"),
+  "the chat-only fallback must not reference report-only handoff variables",
+);
+
+console.log("PASS AI CEO frontend intent routing: 11/11");

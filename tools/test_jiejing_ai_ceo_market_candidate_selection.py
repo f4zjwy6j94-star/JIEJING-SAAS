@@ -79,7 +79,8 @@ def main() -> None:
     assert fields["selected_product_candidate"]["name"] == expected, fields
     assert fields["recommendation_score"] == 65, fields
     assert fields["price_band"] == "$9.99-$13.99", fields
-    assert fields["logistics_requirements"]["package_weight_g"] == "220", fields
+    assert fields["logistics_requirements"]["package_weight_g"] == "", fields
+    assert any("重量、尺寸或发货地待补" in gap for gap in fields["publish_preflight_gaps"]), fields
     assert fields["description_seed"] == "", fields
     assert fields["market_rationale"], fields
     assert "冰箱食品收纳整理架" not in fields["title"], fields

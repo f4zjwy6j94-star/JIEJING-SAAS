@@ -21,6 +21,9 @@ def main() -> None:
     assert "materialValue ? `Material: ${materialValue}` : \"Material: 待补\"" in app_js
     assert 'return material ? `Material: ${material}` : "Material: 待补"' in app_js
     assert "saasListingSafeItemSpecifics(handoffFields.item_specifics" in app_js
+    assert "merchant_product_fact_packet: merchantProductFactPacket" in app_js
+    assert "applySaasMerchantProductFactPacketToDraft(importedDraft, handoffFields.merchant_product_fact_packet)" in app_js
+    assert "explicitUnknownFacts.forEach((key) => delete derivedSuggestions[key])" in app_js
     assert "function saasListingEbayTitleFromProduct" in app_js
     assert 'const marketResearchHandoff = ["ai_ceo.market_research", "market.report"]' in app_js
     assert "selling_points: marketResearchHandoff ? [] : legacySellingPoints" in app_js
@@ -80,6 +83,55 @@ def main() -> None:
     assert any("真实可售数量" in question for question in fields["merchant_required_answers"]), fields
     assert fields["triggers_real_platform_write"] is False, fields
     assert fields["secret_exposed"] is False, fields
+
+    incense_message = (
+        "这是我的真实供货商品，请新建独立商品项目和捷境内部待核对 Listing。"
+        "货源：https://qr.1688.com/s/FqVegjLr；货号 JC2023041300002。"
+        "已知事实：禅意佛手托莲花倒流香炉；约16.2×7.7×17.9cm；净重451g，不是包装重量；"
+        "产地福建德化，不是eBay实际发货地；纸盒安全包装；工艺‘半手工半机械’和‘Handmade’冲突；"
+        "东南亚禅意风格；材质‘树脂’和‘紫砂’冲突，必须待确认。"
+        "不要上传、复用或发布任何原始图片；SKU、售价、库存、实际Item location、包装重量、材质继续阻断。"
+    )
+    incense_fields = _ai_ceo_listing_handoff_fields(
+        product="禅意佛手托莲花倒流香炉",
+        message=incense_message,
+        answer=(
+            "商品：禅意佛手托莲花倒流香炉\n"
+            "货源：https://qr.1688.com/s/FqVegjLr\n"
+            "商品尺寸：16.2 × 7.7 × 17.9 cm\n"
+            "净重：451 g，不是包装重量\n"
+            "包装：纸盒安全包装\n"
+            "不要上传、复用或发布任何原始图片。"
+        ),
+        source_records=[],
+        selected_candidate={
+            "candidate_id": "candidate_1",
+            "name": "禅意佛手托莲花倒流香炉",
+            "score": 88,
+            "selected": True,
+        },
+        product_candidates=[],
+    )
+    assert incense_fields["image_requirements"]["imageUrls"] == [], incense_fields
+    assert incense_fields["item_specifics"]["Type"] == "待补", incense_fields
+    logistics = incense_fields["logistics_requirements"]
+    assert logistics["package_weight_g"] == "", logistics
+    assert logistics["package_length_cm"] == "", logistics
+    assert logistics["package_width_cm"] == "", logistics
+    assert logistics["package_height_cm"] == "", logistics
+    packet = incense_fields["merchant_product_fact_packet"]
+    merchant_facts = packet["merchant_confirmed_facts"]
+    assert merchant_facts["source_url"] == "https://qr.1688.com/s/FqVegjLr", packet
+    assert merchant_facts["supplier_item_number"] == "JC2023041300002", packet
+    assert merchant_facts["product_dimensions_cm"] == "16.2 x 7.7 x 17.9", packet
+    assert merchant_facts["net_weight_g"] == "451", packet
+    assert merchant_facts["product_origin"] == "福建德化", packet
+    assert merchant_facts["packaging_type"] == "纸盒安全包装", packet
+    assert merchant_facts["style"] == "东南亚禅意", packet
+    assert "material" not in merchant_facts, packet
+    assert "craft" not in merchant_facts, packet
+    conflicts = {item["field"] for item in packet["fact_conflicts"]}
+    assert {"material", "craft"}.issubset(conflicts), packet
     print("PASS jiejing_ai_ceo_listing_fact_boundary")
 
 

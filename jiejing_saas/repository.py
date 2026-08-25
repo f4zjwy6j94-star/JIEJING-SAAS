@@ -5053,7 +5053,32 @@ class SaaSRepository:
                 candidates=product_candidates,
             )
         question = _sanitize_merchant_ceo_text(message, limit=900)
+        listing_fields = (
+            _ai_ceo_listing_handoff_fields(
+                product=product,
+                message=message,
+                answer=answer,
+                source_records=source_records if isinstance(source_records, list) else [],
+                selected_candidate=selected_candidate,
+                product_candidates=product_candidates,
+            )
+            if product and answer_accepted
+            else {}
+        )
+        merchant_product_fact_packet = (
+            listing_fields.get("merchant_product_fact_packet")
+            if isinstance(listing_fields.get("merchant_product_fact_packet"), dict)
+            else {}
+        )
+        for record in merchant_product_fact_packet.get("source_records", []):
+            if not isinstance(record, dict) or not record.get("url"):
+                continue
+            if any(existing.get("url") == record.get("url") for existing in source_records if isinstance(existing, dict)):
+                continue
+            source_records.append(_redact_secret_like(record))
         source_count = len(source_records) if isinstance(source_records, list) else 0
+        if listing_fields:
+            listing_fields["source_record_count"] = source_count
         selected_candidate_id = str(selected_candidate.get("candidate_id") or "")
         candidate_count = len(product_candidates)
         merchant_intent = "ebay_product_research"
@@ -5153,6 +5178,7 @@ class SaaSRepository:
             "supplier_fact_attestation": supplier_fact_attestation,
             "supplier_fact_source": supplier_fact_attestation["source"],
             "missing_supplier_fact_keys": missing_supplier_fact_keys,
+            "merchant_product_fact_packet": merchant_product_fact_packet,
             "listing_import_ready": listing_import_ready,
             "blocked_by": blocked_by,
             "conversation_context": {
@@ -5179,17 +5205,7 @@ class SaaSRepository:
                 "ready_for_listing_draft": listing_import_ready,
                 "source_mode": source_mode or "ai_ceo_chat_structured_handoff",
                 "target_report_type": "ai_ceo.market_research",
-                "listing_fields": (
-                    _ai_ceo_listing_handoff_fields(
-                        product=product,
-                        answer=answer,
-                        source_records=source_records if isinstance(source_records, list) else [],
-                        selected_candidate=selected_candidate,
-                        product_candidates=product_candidates,
-                    )
-                    if product and answer_accepted
-                    else {}
-                ),
+                "listing_fields": listing_fields,
                 "blocked_by": list(blocked_by),
                 "requires_human_review_before_publish": True,
                 "real_platform_writes_enabled": False,
@@ -17826,6 +17842,7 @@ def _infer_ai_ceo_market_product(*, message: str, answer: str, candidates: list[
 def _ai_ceo_listing_handoff_fields(
     *,
     product: str,
+    message: str = "",
     answer: str,
     source_records: list[dict[str, Any]],
     selected_candidate: dict[str, Any] | None = None,
@@ -17871,6 +17888,10 @@ def _ai_ceo_listing_handoff_fields(
     item_specifics = _ai_ceo_item_specifics(product=clean_product, answer=selected_context)
     image_plan = _ai_ceo_image_plan(answer=selected_context)
     logistics_plan = _ai_ceo_logistics_plan(answer=selected_context)
+    merchant_product_fact_packet = _ai_ceo_listing_intake_fact_packet(
+        message=message,
+        product=clean_product,
+    )
     publish_gaps = _ai_ceo_listing_publish_gaps(
         item_specifics=item_specifics,
         price_band=price_band,
@@ -17910,6 +17931,7 @@ def _ai_ceo_listing_handoff_fields(
         "item_specifics": item_specifics,
         "image_requirements": image_plan,
         "logistics_requirements": logistics_plan,
+        "merchant_product_fact_packet": merchant_product_fact_packet,
         "risk_notes": risk_notes,
         "description_seed": "",
         "ebay_inventory_item_draft": {
@@ -17999,7 +18021,7 @@ def _ai_ceo_item_specifics(*, product: str, answer: str) -> dict[str, str]:
         specifics["Type"] = "待商家确认：Mosquito Repeller"
     elif "jewelry" in lower_product or "jewelry" in lower_answer or "首饰" in answer:
         specifics["Type"] = "待商家确认：Jewelry Organizer"
-    elif "case" in lower_product or "box" in lower_product or "盒" in answer:
+    elif "case" in lower_product or "box" in lower_product or re.search(r"收纳盒|储物盒|首饰盒", product):
         specifics["Type"] = "待商家确认：Storage Case"
     for key, label in (("Brand", "Brand|品牌"), ("Type", "Type|类型|品类"), ("MPN", "MPN|制造商零件编号")):
         match = re.search(rf"(?:{label})\s*[:：]\s*([A-Za-z0-9\u4e00-\u9fff /_.-]{{2,60}})", answer, flags=re.IGNORECASE)
@@ -18015,7 +18037,13 @@ def _ai_ceo_item_specifics(*, product: str, answer: str) -> dict[str, str]:
 
 
 def _ai_ceo_image_plan(*, answer: str) -> dict[str, Any]:
-    urls = re.findall(r"https?://[^\s,，；;]+", answer)
+    urls = [
+        url
+        for url in re.findall(r"https?://[^\s,，；;]+", answer)
+        if re.search(r"\.(?:avif|gif|jpe?g|png|webp)(?:$|[?#])", url, flags=re.IGNORECASE)
+    ]
+    if re.search(r"(?:不要|不得|禁止)(?:上传|复用|发布|使用)[^。；;\n]{0,50}(?:原始|原图|供应商|这些)?图片", answer):
+        urls = []
     return {
         "imageUrls": urls[:12],
         "main_image": "白底主图，展示真实商品全貌；不可使用旧 demo 图片冒充真实素材。",
@@ -18031,8 +18059,17 @@ def _ai_ceo_image_plan(*, answer: str) -> dict[str, Any]:
 
 
 def _ai_ceo_logistics_plan(*, answer: str) -> dict[str, str]:
-    weight_match = re.search(r"(\d+(?:\.\d+)?)\s*(kg|千克|g|克)\b", answer, flags=re.IGNORECASE)
-    dimension_match = re.search(r"(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*cm", answer, flags=re.IGNORECASE)
+    weight_match = re.search(
+        r"(?:package\s*weight|gross\s*weight|包装重量|毛重)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(kg|千克|g|克)\b",
+        answer,
+        flags=re.IGNORECASE,
+    )
+    dimension_match = re.search(
+        r"(?:package\s*(?:dimensions?|size)|包装尺寸|外箱尺寸)\s*[:：]?\s*"
+        r"(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*cm",
+        answer,
+        flags=re.IGNORECASE,
+    )
     ship_from_match = re.search(r"(?:ship from|item location|发货地)\s*[:：]?\s*([A-Za-z0-9\u4e00-\u9fff /_-]{2,60})", answer, flags=re.IGNORECASE)
     return {
         "merchantLocationKey": "",
@@ -18045,6 +18082,119 @@ def _ai_ceo_logistics_plan(*, answer: str) -> dict[str, str]:
         "payment_policy_id": "",
         "return_policy_id": "",
     }
+
+
+def _ai_ceo_listing_intake_fact_packet(*, message: str, product: str) -> dict[str, Any]:
+    """Extract only explicitly labelled merchant facts from an authenticated AI CEO turn."""
+
+    text = _sanitize_merchant_ceo_text(message, limit=1800)
+    merchant_facts: dict[str, Any] = {}
+    if product and product != "待选择商品方向":
+        merchant_facts["product_name"] = product
+
+    source_match = re.search(
+        r"(?:货源(?:链接)?|供应商链接|source\s*url)\s*[:：]\s*(https?://[^\s,，；;]+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if source_match:
+        merchant_facts["source_url"] = source_match.group(1).rstrip(".)）]")
+
+    item_match = re.search(
+        r"(?:供应商货号|货号(?:/产品编号)?|产品编号)\s*[:：]?\s*([A-Za-z0-9][A-Za-z0-9._-]{2,80})",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if item_match:
+        merchant_facts["supplier_item_number"] = item_match.group(1)
+
+    dimensions_match = re.search(
+        r"(?:外形(?:尺寸)?|商品尺寸|实物尺寸|尺寸|约)\s*[:：]?\s*"
+        r"(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*cm",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if dimensions_match:
+        merchant_facts["product_dimensions_cm"] = " x ".join(dimensions_match.groups())
+
+    net_weight_match = re.search(
+        r"(?:商品)?净重\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(kg|千克|g|克)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if net_weight_match:
+        net_weight = float(net_weight_match.group(1))
+        if re.search(r"kg|千克", net_weight_match.group(2), flags=re.IGNORECASE):
+            net_weight *= 1000
+        merchant_facts["net_weight_g"] = str(int(net_weight) if net_weight.is_integer() else net_weight)
+
+    origin_match = re.search(r"(?:商品)?产地\s*[:：]?\s*([^，,；;。\n]{2,80})", text)
+    if origin_match:
+        origin = re.split(r"\s*(?:不是|不等于|≠)\s*eBay", origin_match.group(1), maxsplit=1, flags=re.IGNORECASE)[0].strip()
+        if origin:
+            merchant_facts["product_origin"] = origin
+
+    if "纸盒安全包装" in text:
+        merchant_facts["packaging_type"] = "纸盒安全包装"
+    else:
+        packaging_match = re.search(r"(?:包装方式|供应商包装)\s*[:：]?\s*([^，,；;。\n]{2,80})", text)
+        if packaging_match:
+            merchant_facts["packaging_type"] = packaging_match.group(1).strip()
+
+    if re.search(r"东南亚[^，,；;。\n]{0,12}禅意", text):
+        merchant_facts["style"] = "东南亚禅意"
+    else:
+        style_match = re.search(r"(?:风格)\s*[:：]?\s*([^，,；;。\n]{2,80})", text)
+        if style_match:
+            merchant_facts["style"] = style_match.group(1).strip()
+
+    conflicts: list[dict[str, Any]] = []
+    material_conflict = bool(
+        re.search(r"材质[^。；;\n]{0,100}(?:冲突|待确认|不能自行定案)", text)
+        or ("树脂" in text and "紫砂" in text)
+    )
+    if material_conflict:
+        conflicts.append(
+            {
+                "field": "material",
+                "values": [value for value in ("树脂", "紫砂") if value in text],
+                "reason": "商家提供的来源资料存在材质冲突，必须人工确认。",
+                "requires_merchant_confirmation": True,
+            }
+        )
+    else:
+        material_match = re.search(r"(?:材质|Material)\s*[:：]\s*([^，,；;。\n]{2,80})", text, flags=re.IGNORECASE)
+        if material_match:
+            merchant_facts["material"] = material_match.group(1).strip()
+
+    craft_conflict = bool(
+        re.search(r"工艺[^。；;\n]{0,120}(?:冲突|待确认|不能自行定案)", text)
+        or ("半手工半机械" in text and "Handmade" in text)
+    )
+    if craft_conflict:
+        conflicts.append(
+            {
+                "field": "craft",
+                "values": [value for value in ("半手工半机械", "Handmade") if value in text],
+                "reason": "商家提供的来源资料存在工艺冲突，必须人工确认。",
+                "requires_merchant_confirmation": True,
+            }
+        )
+    else:
+        craft_match = re.search(r"工艺\s*[:：]\s*([^，,；;。\n]{2,80})", text)
+        if craft_match:
+            merchant_facts["craft"] = craft_match.group(1).strip()
+
+    packet = normalize_merchant_product_fact_packet(
+        {
+            "merchant_confirmed_facts": merchant_facts,
+            "derived_listing_suggestions": {},
+        },
+        source="authenticated_merchant_request",
+    )
+    packet["fact_conflicts"] = conflicts
+    packet["intake_contract"] = "ai_ceo_authenticated_text_to_product_facts_v1"
+    return packet
 
 
 def _ai_ceo_listing_publish_gaps(

@@ -91,6 +91,46 @@ for (const [facts, config, allowed, conceptOnly] of cases) {{
         "commercial_rights_confirmed: config.commercialRightsConfirmed === true" in payload_source
     ), "the backend payload must carry the strict commercial-rights confirmation boolean"
     assert "concept_only_accepted: config.conceptOnlyAccepted === true" in payload_source
+
+    failure_marker = "function saasMediaQueueFailureView"
+    assert failure_marker in app_js, "media queue failures must be translated into merchant-actionable copy"
+    failure_start = app_js.index(failure_marker)
+    failure_end = app_js.index("\nasync function queueSaasMediaAssetJobFromStudio", failure_start)
+    failure_source = app_js[failure_start:failure_end]
+    failure_script = f"""
+function publicRuntimeText(value) {{ return String(value || \"\"); }}
+{failure_source}
+const insufficient = saasMediaQueueFailureView({{
+  status: 402,
+  payload: {{ error: \"素材点不足，当前任务没有进入生成队列。\" }},
+}});
+if (!insufficient.statusText.includes(\"素材点不足\") || !insufficient.note.includes(\"没有调用生成服务\")) {{
+  throw new Error(`402 failure copy must explain the safe no-charge outcome: ${{JSON.stringify(insufficient)}}`);
+}}
+const invalidFacts = saasMediaQueueFailureView({{
+  status: 422,
+  payload: {{ error: \"商品事实尚未完整。\" }},
+}});
+if (!invalidFacts.statusText.includes(\"资料待补\") || !invalidFacts.note.includes(\"商品事实尚未完整\")) {{
+  throw new Error(`422 failure copy must preserve the safe backend reason: ${{JSON.stringify(invalidFacts)}}`);
+}}
+"""
+    failure_completed = subprocess.run(
+        ["node", "-e", failure_script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert failure_completed.returncode == 0, failure_completed.stderr or failure_completed.stdout
+
+    queue_start = app_js.index("async function queueSaasMediaAssetJobFromStudio")
+    queue_end = app_js.index("\nasync function handleMediaGenerateImagesDraftClick", queue_start)
+    queue_source = app_js[queue_start:queue_end]
+    assert "saasMediaQueueFailureView(error)" in queue_source
+    assert 'setText("#mediaProductionStatus", failure.statusText)' in queue_source
+    assert 'setText("#mediaPreviewNote", failure.note)' in queue_source
     product_facts_start = app_js.index("function currentMediaStudioProductFacts")
     product_facts_end = app_js.index("\nfunction saasMediaGenerationGroundingGate", product_facts_start)
     product_facts_source = app_js[product_facts_start:product_facts_end]
