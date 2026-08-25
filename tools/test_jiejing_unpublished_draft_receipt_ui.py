@@ -92,11 +92,21 @@ function saasCurrentListingProjectIdentity() {{ return {{ key: "project-current-
 const current = saasCurrentUnpublishedDraftReceipt();
 if (!current || current.offerId !== "245675556011") throw new Error("current Listing receipt was not selected");
 if (current.confirmationId !== "confirm_receipt_test") throw new Error("receipt crossed Listing project boundary");
+if (current.executionId !== "exec_receipt_test") throw new Error("receipt execution binding missing");
 function escapeHtml(value) {{ return String(value); }}
 function saasTimestampLabel(value) {{ return value ? "08/26 01:28" : "-"; }}
 const markup = renderSaasListingUnpublishedDraftReceipt();
 for (const required of ["已保存到 eBay 未发布草稿", "245675556011", "JJ-INCENSE-JC2023041300002-01", "未公开", "没有创建公开 Listing"]) {{
   if (!markup.includes(required)) throw new Error(`merchant receipt missing: ${{required}}`);
+}}
+for (const required of [
+  'data-saas-action="create-existing-draft-publish-confirmation"',
+  'data-saas-offer-id="245675556011"',
+  'data-saas-execution-id="exec_receipt_test"',
+  'data-saas-sku="JJ-INCENSE-JC2023041300002-01"',
+  "生成正式发布确认单",
+]) {{
+  if (!markup.includes(required)) throw new Error(`controlled publish handoff missing: ${{required}}`);
 }}
 """
     result = subprocess.run(
@@ -114,6 +124,13 @@ for (const required of ["已保存到 eBay 未发布草稿", "245675556011", "JJ
     composer = app_js[composer_start:composer_end]
     if "renderSaasListingUnpublishedDraftReceipt(draft)" not in composer:
         raise AssertionError("Listing workspace does not surface the current unpublished-draft receipt")
+    for marker in [
+        "async function createSaasExistingDraftPublishConfirmation",
+        "existing-draft-publish-confirmation",
+        '"create-existing-draft-publish-confirmation"',
+    ]:
+        if marker not in app_js:
+            raise AssertionError(f"Listing receipt does not expose the controlled publish handoff: {marker}")
 
 
 if __name__ == "__main__":

@@ -39,6 +39,7 @@ def main() -> int:
         "JIEJING_ENABLE_REAL_PLATFORM_WRITES": "false",
         "JIEJING_EBAY_WRITE_LIVE": "false",
         "JIEJING_EBAY_DRAFT_SAVE_LIVE": "true",
+        "JIEJING_EBAY_CONTROLLED_PUBLISH_LIVE": "false",
         "JIEJING_EBAY_TOKEN_REFRESH_LIVE": "true",
         "JIEJING_EBAY_READ_ONLY_LIVE": "true",
         "JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY": "controlled_unpublished_draft_only",
@@ -66,6 +67,19 @@ def main() -> int:
         if _production_controlled_unpublished_draft_boot_allowed(unsafe_write_settings):
             return fail("the controlled draft boot lane must fail closed when broad eBay writes are requested")
         os.environ["JIEJING_EBAY_WRITE_LIVE"] = "false"
+        os.environ["JIEJING_EBAY_CONTROLLED_PUBLISH_LIVE"] = "true"
+        os.environ["JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY"] = "controlled_existing_draft_publish"
+        controlled_publish_settings = SaaSSettings.from_env(
+            db_path=OUT / "controlled-draft.sqlite",
+            runtime_db_path=OUT / "controlled-draft-runtime.sqlite",
+            output_root=OUT,
+            host="127.0.0.1",
+            port=8793,
+        )
+        if not _production_controlled_unpublished_draft_boot_allowed(controlled_publish_settings):
+            return fail("an exact existing-draft publish lane must boot without enabling broad writes")
+        if controlled_publish_settings.effective_real_platform_writes_enabled is not False:
+            return fail("the existing-draft publish lane must keep broad writes disabled")
         controlled_process = subprocess.Popen(
             [
                 sys.executable,

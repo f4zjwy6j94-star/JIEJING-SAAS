@@ -123,7 +123,8 @@ def main() -> int:
         "JIEJING_ENABLE_REAL_PLATFORM_WRITES": "false",
         "JIEJING_EBAY_WRITE_LIVE": "false",
         "JIEJING_EBAY_DRAFT_SAVE_LIVE": "true",
-        "JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY": "controlled_unpublished_draft_only",
+        "JIEJING_EBAY_CONTROLLED_PUBLISH_LIVE": "true",
+        "JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY": "controlled_existing_draft_publish",
     }
     for key, expected_value in controlled_draft_overrides.items():
         marker = f'{key}: "{expected_value}"'

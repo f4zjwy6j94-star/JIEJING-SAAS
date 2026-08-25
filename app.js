@@ -19078,6 +19078,51 @@ function isSaasInventoryLocationSensitiveConfirmation(card = {}) {
   );
 }
 
+function isSaasControlledExistingDraftPublishConfirmation(card = {}) {
+  card = card && typeof card === "object" ? card : {};
+  const item = card.item && typeof card.item === "object" ? card.item : {};
+  return Boolean(
+    String(card.action_type || "") === "publish_listing" &&
+      String(item.source || "") === "merchant_existing_ebay_draft_publish_intake" &&
+      item.controlled_existing_draft_publish === true
+  );
+}
+
+function isSaasUniqueCurrentControlledExistingDraftPublishConfirmation(card = {}, cards = state.saasConfirmations || []) {
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const storeId = String(activeSaasStore()?.store_id || "").trim();
+  const item = card?.item && typeof card.item === "object" ? card.item : {};
+  const draft = item.existing_ebay_draft && typeof item.existing_ebay_draft === "object" ? item.existing_ebay_draft : {};
+  const payload = item.publish_payload && typeof item.publish_payload === "object" ? item.publish_payload : {};
+  const receipt = saasCurrentUnpublishedDraftReceipt();
+  const confirmationId = String(card?.confirmation_id || "").trim();
+  if (!(
+    companyId &&
+    storeId &&
+    confirmationId &&
+    String(card?.company_id || "").trim() === companyId &&
+    String(card?.store_id || "").trim() === storeId &&
+    ["pending", "approved"].includes(String(card?.status || "")) &&
+    isSaasControlledExistingDraftPublishConfirmation(card) &&
+    receipt &&
+    String(draft.offer_id || "").trim() === receipt.offerId &&
+    String(draft.sku || "").trim() === receipt.sku &&
+    String(draft.source_execution_id || "").trim() === receipt.executionId &&
+    String(payload.listing?.sku || "").trim() === receipt.sku &&
+    item.creates_public_listing === true &&
+    item.requires_publish_offer_call === true &&
+    item.secret_exposed === false
+  )) return false;
+  const active = (Array.isArray(cards) ? cards : []).filter(
+    (candidate) =>
+      String(candidate?.company_id || "").trim() === companyId &&
+      String(candidate?.store_id || "").trim() === storeId &&
+      ["pending", "approved"].includes(String(candidate?.status || "")) &&
+      isSaasControlledExistingDraftPublishConfirmation(candidate),
+  );
+  return active.length === 1 && String(active[0]?.confirmation_id || "").trim() === confirmationId;
+}
+
 async function verifySaasInventoryLocationConfirmations(confirmations = []) {
   const verified = new WeakSet();
   for (const card of Array.isArray(confirmations) ? confirmations : []) {
@@ -19463,6 +19508,11 @@ function openSaasReadOnlyOAuthConfirmationCenter() {
 }
 
 function saasConfirmationActionAttributes(card = {}) {
+  if (isSaasControlledExistingDraftPublishConfirmation(card)) {
+    return isSaasUniqueCurrentControlledExistingDraftPublishConfirmation(card, state.saasConfirmations || [])
+      ? `data-saas-confirmation="${escapeHtml(card.confirmation_id || "")}" data-saas-confirmation-flow="ebay-existing-draft-publish-current-store"`
+      : 'data-saas-confirmation-flow="ebay-existing-draft-publish-blocked"';
+  }
   if (isSaasInventoryLocationSensitiveConfirmation(card)) {
     return isSaasUniqueCurrentInventoryLocationConfirmation(card, state.saasConfirmations || [])
       ? 'data-saas-confirmation-flow="ebay-inventory-location-current-store"'
@@ -22133,7 +22183,15 @@ function renderSaasListingUnpublishedDraftReceipt(draft = state.saasListingCompo
         </article>
       </div>
       <div class="saas-listing-publish-feedback-actions">
-        <button class="primary-action" type="button" data-saas-action="focus-publish-intake">继续补正式发布资料</button>
+        <button
+          class="primary-action"
+          type="button"
+          data-saas-action="create-existing-draft-publish-confirmation"
+          data-saas-offer-id="${escapeHtml(receipt.offerId)}"
+          data-saas-sku="${escapeHtml(receipt.sku)}"
+          data-saas-execution-id="${escapeHtml(receipt.executionId)}"
+        >生成正式发布确认单</button>
+        <button class="secondary-action" type="button" data-saas-action="focus-publish-intake">继续补正式发布资料</button>
       </div>
     </section>
   `;
@@ -30575,6 +30633,90 @@ async function reconcileSaasInventoryLocation() {
   }
 }
 
+async function createSaasExistingDraftPublishConfirmation(button = null) {
+  if (!requireSaasProtectedSessionForAction()) return false;
+  const store = activeSaasStore();
+  const receipt = saasCurrentUnpublishedDraftReceipt();
+  const offerId = String(button?.dataset?.saasOfferId || "").trim();
+  const sku = String(button?.dataset?.saasSku || "").trim();
+  const executionId = String(button?.dataset?.saasExecutionId || "").trim();
+  if (
+    !store?.store_id ||
+    !receipt ||
+    offerId !== receipt.offerId ||
+    sku !== receipt.sku ||
+    executionId !== receipt.executionId
+  ) {
+    showActionToast("当前 eBay 草稿回执已变化或不属于这个 Listing；系统没有创建正式发布确认单。");
+    return false;
+  }
+  state.saasLoading = true;
+  state.saasError = "";
+  renderSaasBackendPanel();
+  try {
+    const result = await saasFetch(
+      `/stores/${encodeURIComponent(store.store_id)}/existing-draft-publish-confirmation`,
+      {
+        method: "POST",
+        body: JSON.stringify({ offer_id: offerId, sku, execution_id: executionId }),
+      },
+    );
+    const confirmation = result.confirmation && typeof result.confirmation === "object" ? result.confirmation : {};
+    const item = confirmation.item && typeof confirmation.item === "object" ? confirmation.item : {};
+    const draft = item.existing_ebay_draft && typeof item.existing_ebay_draft === "object" ? item.existing_ebay_draft : {};
+    if (
+      String(confirmation.action_type || "") !== "publish_listing" ||
+      String(confirmation.status || "") !== "pending" ||
+      String(item.source || "") !== "merchant_existing_ebay_draft_publish_intake" ||
+      item.controlled_existing_draft_publish !== true ||
+      String(draft.offer_id || "") !== offerId ||
+      String(draft.sku || "") !== sku ||
+      String(draft.source_execution_id || "") !== executionId ||
+      draft.offer_status !== "UNPUBLISHED" ||
+      draft.public_listing_created !== false ||
+      item.creates_public_listing !== true ||
+      item.requires_publish_offer_call !== true ||
+      result.real_platform_writes_enabled !== false ||
+      result.controlled_existing_draft_publish_enabled !== true ||
+      result.secret_exposed !== false
+    ) {
+      throw new Error("controlled_existing_draft_publish_confirmation_invalid");
+    }
+    state.saasConfirmations = [
+      confirmation,
+      ...(state.saasConfirmations || []).filter((card) => card.confirmation_id !== confirmation.confirmation_id),
+    ].slice(0, 40);
+    state.saasLastPublishReadiness = result.publish_readiness || state.saasLastPublishReadiness || null;
+    state.saasLastPublishConfirmationEvidence = {
+      confirmation_id: confirmation.confirmation_id || "",
+      action_type: "publish_listing",
+      confirmation_status: "pending",
+      preflight_status: result.preflight?.status || "",
+      listing_project_key: item.listing_project_identity?.key || "",
+      offer_id: offerId,
+      sku,
+      source_execution_id: executionId,
+      creates_public_listing: true,
+      controlled_existing_draft_publish: true,
+      secret_exposed: false,
+      captured_at: new Date().toISOString(),
+    };
+    await refreshSaasState({ silent: true });
+    state.confirmFilter = "immediate";
+    setView("confirm");
+    renderSaasConfirmPanel();
+    showActionToast("正式发布确认单已创建：它只绑定当前 Offer；你未明确同意前不会公开发布。");
+    return true;
+  } catch (error) {
+    state.saasError = `创建正式发布确认单失败：${error.message}`;
+    showActionToast("正式发布确认单创建失败，已停住；没有调用 publishOffer。");
+    return false;
+  } finally {
+    state.saasLoading = false;
+    renderSaasBackendPanel();
+  }
+}
+
 async function createSaasPublishConfirmationFromIntakeForm(mode = "publish") {
   if (!requireSaasProtectedSessionForAction()) return false;
   const draftSave = mode === "ebay-draft";
@@ -30717,12 +30859,20 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
     const isExactUnpublishedDraftOAuth = isSaasUniqueCurrentUnpublishedDraftOAuthConfirmation(confirmation, state.saasConfirmations || []);
     const isExactReadOnlySync = isSaasUniqueCurrentReadOnlySyncConfirmation(confirmation, state.saasConfirmations || []);
     const isExactInventoryLocation = isSaasUniqueCurrentInventoryLocationConfirmation(confirmation, state.saasConfirmations || []);
+    const isExactControlledExistingDraftPublish = isSaasUniqueCurrentControlledExistingDraftPublishConfirmation(
+      confirmation,
+      state.saasConfirmations || [],
+    );
     if (isSaasReadOnlyOAuthSensitiveConfirmation(confirmation) && !isExactReadOnlyOAuth && !isExactUnpublishedDraftOAuth) {
       showActionToast("eBay 授权确认不唯一、格式异常或不属于当前店铺；系统没有执行批准，请刷新确认中心。");
       return;
     }
     if (isSaasInventoryLocationSensitiveConfirmation(confirmation) && !isExactInventoryLocation) {
       showActionToast("eBay 库存位置确认不唯一、格式异常或不属于当前店铺；系统没有执行批准。");
+      return;
+    }
+    if (isSaasControlledExistingDraftPublishConfirmation(confirmation) && !isExactControlledExistingDraftPublish) {
+      showActionToast("正式发布确认与当前 eBay 草稿回执不一致；系统没有批准或调用 publishOffer。");
       return;
     }
     const idempotencyKey = `saas-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -30746,6 +30896,8 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
             ? "Owner approved one exact current-store official read-only sync. No sync, task, queue job, or live request is created by this decision."
           : isExactInventoryLocation
             ? "Owner approved one exact current-store inventory location. This decision performs no provider write; execution remains a separate explicit step."
+          : isExactControlledExistingDraftPublish
+            ? "Merchant approved publishing the one exact existing unpublished eBay Offer bound to this confirmation. No second Offer may be created."
             : "Merchant confirmation recorded from the SaaS workbench. Backend must run execution preflight before any eBay write.",
       }),
     });
@@ -30815,7 +30967,12 @@ async function approveFirstSaasConfirmation(confirmationId = "") {
     if (execution.status === "blocked_platform_error") {
       showActionToast("eBay 返回平台错误，已记录到确认中心；先核对平台状态再决定是否重试。");
     } else {
-      showActionToast(state.saasEbayWriteAdapter?.real_platform_writes_enabled === true ? "确认已提交：按发布前检查继续处理 eBay 动作。" : "确认已记录：当前不会操作真实 eBay，只保留受控交接。");
+      showActionToast(
+        state.saasEbayWriteAdapter?.real_platform_writes_enabled === true ||
+          state.saasEbayWriteAdapter?.controlled_existing_draft_publish_enabled === true
+          ? "确认已提交：按发布前检查继续处理绑定的 eBay 动作。"
+          : "确认已记录：当前不会操作真实 eBay，只保留受控交接。",
+      );
     }
   } catch (error) {
     state.saasError = `确认处理失败：${error.message}`;
@@ -33935,6 +34092,7 @@ function handleSaasAction(button) {
     "merchant-feedback-remember-rule",
     "listing-start-backend-workflow",
     "create-publish-confirmation",
+    "create-existing-draft-publish-confirmation",
     "create-ebay-draft-confirmation",
     "create-ebay-inventory-location-confirmation",
     "execute-ebay-inventory-location",
@@ -33983,6 +34141,10 @@ function handleSaasAction(button) {
   }
   if (action === "create-publish-confirmation") {
     createSaasPublishConfirmationFromIntakeForm();
+    return;
+  }
+  if (action === "create-existing-draft-publish-confirmation") {
+    createSaasExistingDraftPublishConfirmation(button);
     return;
   }
   if (action === "create-ebay-draft-confirmation") {

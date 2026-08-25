@@ -63,6 +63,7 @@ def main() -> int:
         ebay_read_only_live_enabled=True,
         ebay_write_live_enabled=False,
         ebay_draft_save_live_enabled=False,
+        ebay_controlled_publish_live_enabled=False,
         allow_hermes_adapters=False,
         cors_origin="https://staging.example.test",
         internal_admin_emails=(),

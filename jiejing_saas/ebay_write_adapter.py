@@ -158,6 +158,7 @@ def build_ebay_write_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
     requested_enabled = bool(settings.requested_real_platform_writes)
     live_enabled = bool(settings.effective_real_platform_writes_enabled)
     draft_live_enabled = bool(settings.effective_ebay_draft_save_enabled)
+    controlled_publish_enabled = bool(settings.effective_ebay_controlled_publish_enabled)
     blockers = []
     if not requested_enabled:
         blockers.append("JIEJING_ENABLE_REAL_PLATFORM_WRITES")
@@ -175,14 +176,17 @@ def build_ebay_write_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
         "enabled": live_enabled,
         "real_platform_writes_enabled": live_enabled,
         "draft_save_live_enabled": draft_live_enabled,
+        "controlled_existing_draft_publish_enabled": controlled_publish_enabled,
         "requested_enabled": requested_enabled,
-        "writes_supported": live_enabled or draft_live_enabled,
-        "contract_only": not (live_enabled or draft_live_enabled),
+        "writes_supported": live_enabled or draft_live_enabled or controlled_publish_enabled,
+        "contract_only": not (live_enabled or draft_live_enabled or controlled_publish_enabled),
         "blocked_by": blockers,
         "actions": WRITE_ACTIONS,
         "live_actions_supported": (
             ["save_ebay_listing_draft", "publish_listing"]
             if live_enabled
+            else ["save_ebay_listing_draft", "publish_listing"]
+            if controlled_publish_enabled
             else ["save_ebay_listing_draft"]
             if draft_live_enabled
             else []
@@ -217,6 +221,7 @@ def build_ebay_write_adapter_contract(settings: SaaSSettings) -> dict[str, Any]:
             "sandbox_first": True,
             "single_publish_only": True,
             "real_write_enabled": live_enabled,
+            "controlled_existing_draft_publish_enabled": controlled_publish_enabled,
         },
         "next_engineering_steps": [
             "Reauthorize the seller with the eBay sell.inventory write scope.",
@@ -1066,6 +1071,176 @@ class EbayWriteHttpAdapter:
             "action_type": "publish_listing",
             "task_id": getattr(request, "task_id", ""),
             "message": "Confirmed listing was published to eBay through the backend write adapter.",
+            "steps": steps,
+            "platform_result": audit["platform_result"],
+            "audit": audit,
+            "secret_exposed": False,
+        }
+
+    def publish_existing_listing_draft(
+        self,
+        *,
+        request: Any,
+        preflight: dict[str, Any],
+        credential_boundary: dict[str, Any],
+        marketplace_id: str,
+        expected_offer_id: str,
+    ) -> dict[str, Any]:
+        """Publish one exact, already saved eBay Offer without recreating it."""
+
+        if not self.settings.effective_ebay_controlled_publish_enabled:
+            return _blocked(
+                "controlled_existing_draft_publish_disabled",
+                ["JIEJING_EBAY_CONTROLLED_PUBLISH_LIVE"],
+            )
+        if str(getattr(request, "action_type", "") or "") != "publish_listing":
+            return _blocked("unsupported_write_action", ["only_publish_listing_supported"])
+        if preflight.get("status") != "ready_for_platform_adapter":
+            return _blocked(
+                "preflight_not_ready",
+                preflight.get("missing_fields") or ["execution_preflight_not_ready"],
+                preflight=preflight,
+            )
+        payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
+        listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
+        draft = payload.get("existing_ebay_draft") if isinstance(payload.get("existing_ebay_draft"), dict) else {}
+        sku = str(listing.get("sku") or "").strip()
+        expected_offer_id = str(expected_offer_id or "").strip()
+        if not (
+            sku
+            and expected_offer_id
+            and str(draft.get("offer_id") or "").strip() == expected_offer_id
+            and str(draft.get("sku") or "").strip() == sku
+            and str(draft.get("offer_status") or "").strip().upper() == "UNPUBLISHED"
+            and draft.get("public_listing_created") is False
+            and str(draft.get("source_execution_id") or "").strip()
+            and str(draft.get("source_confirmation_id") or "").strip()
+        ):
+            return _write_result(
+                "controlled_publish_binding_invalid",
+                "The approved confirmation is not bound to one exact unpublished eBay draft.",
+                [],
+                preflight=preflight,
+            )
+        credential = _validated_unpublished_draft_credential_boundary(
+            credential_boundary=credential_boundary,
+            company_id=str(getattr(request, "company_id", "") or ""),
+            store_id=str(getattr(request, "store_id", "") or ""),
+        )
+        if not credential:
+            return _blocked(
+                "controlled_publish_credential_boundary_blocked",
+                ["exact_unique_unpublished_draft_connection_and_secret_required"],
+                preflight=preflight,
+            )
+        connection = credential["connection"]
+        secret_ref_id = str(connection["secret_ref"])
+        token = self._resolve_access_token(
+            secret_ref_id=secret_ref_id,
+            company_id=str(getattr(request, "company_id", "") or ""),
+            store_id=str(getattr(request, "store_id", "") or ""),
+        )
+        if not token.get("ok"):
+            return _blocked(
+                "token_resolution_failed",
+                token.get("blocked_by") or ["access_token_unavailable"],
+                preflight=preflight,
+            )
+
+        access_token = str(token["access_token"])
+        base_url = _base_url(self.settings)
+        steps: list[dict[str, Any]] = []
+        offers_path = f"/sell/inventory/v1/offer?sku={urllib.parse.quote(sku, safe='')}"
+        offers_result = self._get_json(
+            url=f"{base_url}{offers_path}",
+            access_token=access_token,
+            marketplace_id=marketplace_id,
+        )
+        offers_result = _normalize_missing_offer_inspection(offers_result)
+        steps.append(_step_summary("inspect_existing_offer", offers_path, offers_result))
+        if offers_result.get("status") != "ok":
+            return _write_result(
+                "controlled_publish_offer_inspection_failed",
+                "The existing eBay draft could not be checked, so publishOffer was not called.",
+                steps,
+                preflight=preflight,
+            )
+        offers_json = offers_result.get("json") if isinstance(offers_result.get("json"), dict) else {}
+        offers = offers_json.get("offers") if isinstance(offers_json.get("offers"), list) else []
+        published_offer = _published_offer(offers)
+        if published_offer:
+            return _write_result(
+                "controlled_publish_already_public",
+                "The SKU already has a public eBay listing; the controlled publish stopped.",
+                steps,
+                preflight=preflight,
+            )
+        target_marketplace = str(marketplace_id or "").strip().upper()
+        unpublished = []
+        for raw in offers:
+            candidate = _unpublished_offer([raw], marketplace_id=marketplace_id)
+            if not candidate:
+                continue
+            candidate_marketplace = str(candidate.get("marketplace_id") or "").strip().upper()
+            if target_marketplace and candidate_marketplace and candidate_marketplace != target_marketplace:
+                continue
+            unpublished.append(candidate)
+        exact = [item for item in unpublished if str(item.get("offer_id") or "").strip() == expected_offer_id]
+        if len(unpublished) != 1 or len(exact) != 1:
+            return _write_result(
+                "controlled_publish_offer_mismatch",
+                "The current eBay draft no longer matches the approved Offer ID; publishOffer was not called.",
+                steps,
+                preflight=preflight,
+            )
+
+        publish_path = f"/sell/inventory/v1/offer/{urllib.parse.quote(expected_offer_id, safe='')}/publish"
+        publish_result = self._send_json(
+            method="POST",
+            url=f"{base_url}{publish_path}",
+            access_token=access_token,
+            marketplace_id=marketplace_id,
+            body={},
+        )
+        steps.append(_step_summary("publish_existing_offer", publish_path, publish_result))
+        if publish_result.get("status") != "ok":
+            return _write_result(
+                "blocked_platform_error",
+                "eBay publishOffer failed for the approved existing draft.",
+                steps,
+                preflight=preflight,
+            )
+        publish_json = publish_result.get("json") if isinstance(publish_result.get("json"), dict) else {}
+        listing_id = str(publish_json.get("listingId") or publish_json.get("listing_id") or "").strip()
+        audit = _audit(
+            request=request,
+            preflight=preflight,
+            real_execution={
+                "published_to_ebay": True,
+                "procurement_paid": False,
+                "refund_executed": False,
+                "ad_budget_changed": False,
+                "store_policy_changed": False,
+            },
+            platform_result={
+                "offer_id": expected_offer_id,
+                "listing_id": listing_id,
+                "marketplace_id": marketplace_id,
+                "sku": sku,
+                "published_existing_offer": True,
+                "source_execution_id": str(draft.get("source_execution_id") or ""),
+                "source_confirmation_id": str(draft.get("source_confirmation_id") or ""),
+                "token_source": token.get("source"),
+                "access_token_returned_to_frontend": False,
+                "access_token_returned_to_runtime": False,
+                "raw_response_stored": False,
+            },
+        )
+        return {
+            "status": "published_to_ebay",
+            "action_type": "publish_listing",
+            "task_id": getattr(request, "task_id", ""),
+            "message": "The confirmed existing eBay draft was published without creating another offer.",
             "steps": steps,
             "platform_result": audit["platform_result"],
             "audit": audit,
@@ -2172,10 +2347,23 @@ def _duplicate_product_findings(
     current_title = _normalized_text(listing.get("title"))
     current_images = {_normalized_url(url) for url in _image_urls(assets.get("assets"))}
     current_images.discard("")
+    existing_draft = payload.get("existing_ebay_draft") if isinstance(payload.get("existing_ebay_draft"), dict) else {}
+    source_execution_id = str(existing_draft.get("source_execution_id") or "").strip()
+    source_confirmation_id = str(existing_draft.get("source_confirmation_id") or "").strip()
+    source_draft_binding_valid = bool(
+        source_execution_id
+        and source_confirmation_id
+        and str(existing_draft.get("offer_id") or "").strip()
+        and _normalized_key(existing_draft.get("sku")) == current_sku
+        and str(existing_draft.get("offer_status") or "").strip().upper() == "UNPUBLISHED"
+        and existing_draft.get("public_listing_created") is False
+    )
     blocking_matches: list[dict[str, Any]] = []
     review_matches: list[dict[str, Any]] = []
 
     for record in recent_confirmations[:50]:
+        if source_draft_binding_valid and str(record.get("confirmation_id") or "").strip() == source_confirmation_id:
+            continue
         item = record.get("item") if isinstance(record.get("item"), dict) else {}
         previous_payload = item.get("publish_payload") if isinstance(item.get("publish_payload"), dict) else {}
         previous_listing = previous_payload.get("listing") if isinstance(previous_payload.get("listing"), dict) else {}
@@ -2194,6 +2382,8 @@ def _duplicate_product_findings(
             review_matches.append({"match_type": "similar_title", "source": "confirmation", "source_id": source_id})
 
     for record in latest_execution_results[:50]:
+        if source_draft_binding_valid and str(record.get("execution_id") or "").strip() == source_execution_id:
+            continue
         result = record.get("result") if isinstance(record.get("result"), dict) else record
         platform = result.get("platform_result") if isinstance(result.get("platform_result"), dict) else {}
         previous_sku = _normalized_key(platform.get("sku"))

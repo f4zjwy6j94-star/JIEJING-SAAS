@@ -206,6 +206,7 @@ COMPOSE_STATIC_KEYS = frozenset(
         "JIEJING_ALLOW_HERMES_ADAPTERS",
         "JIEJING_BILLING_PLANS_PUBLISHED",
         "JIEJING_CORS_ORIGIN",
+        "JIEJING_EBAY_CONTROLLED_PUBLISH_LIVE",
         "JIEJING_QUOTA_ENFORCEMENT_ENABLED",
         "JIEJING_SAAS_ENV",
     }
@@ -225,8 +226,13 @@ STAGING_VALUE_CONSTRAINTS: dict[str, frozenset[str]] = {
     "JIEJING_ENABLE_REAL_PLATFORM_WRITES": FALSE_OR_DISABLED_VALUES,
     "JIEJING_EBAY_WRITE_LIVE": FALSE_OR_DISABLED_VALUES,
     "JIEJING_EBAY_DRAFT_SAVE_LIVE": frozenset({"false", "true"}),
+    "JIEJING_EBAY_CONTROLLED_PUBLISH_LIVE": frozenset({"false", "true"}),
     "JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY": frozenset(
-        {"disabled_public_staging", "controlled_unpublished_draft_only"}
+        {
+            "disabled_public_staging",
+            "controlled_unpublished_draft_only",
+            "controlled_existing_draft_publish",
+        }
     ),
     "JIEJING_BILLING_PROVIDER": frozenset({COMPOSE_BILLING_PROVIDER_VALUE}),
     "JIEJING_PUBLIC_CHARGING_ALLOWED": FALSE_OR_DISABLED_VALUES,
@@ -2178,8 +2184,15 @@ def analyze_runtime_env_ownership(
         return values
 
     draft_save_values = exact_runtime_compose_values("JIEJING_EBAY_DRAFT_SAVE_LIVE")
+    controlled_publish_values = exact_runtime_compose_values("JIEJING_EBAY_CONTROLLED_PUBLISH_LIVE")
     real_write_policy_values = exact_runtime_compose_values("JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY")
-    if draft_save_values is not None and real_write_policy_values is not None:
+    if controlled_publish_values is None:
+        controlled_publish_values = {service_name: "false" for service_name in required_services}
+    if (
+        draft_save_values is not None
+        and controlled_publish_values is not None
+        and real_write_policy_values is not None
+    ):
         if len(set(draft_save_values.values())) != 1:
             blockers.append(
                 {
@@ -2189,7 +2202,9 @@ def analyze_runtime_env_ownership(
             )
         for service_name in sorted(required_services):
             expected_policy = (
-                "controlled_unpublished_draft_only"
+                "controlled_existing_draft_publish"
+                if controlled_publish_values[service_name] == "true"
+                else "controlled_unpublished_draft_only"
                 if draft_save_values[service_name] == "true"
                 else "disabled_public_staging"
             )
@@ -2202,6 +2217,16 @@ def analyze_runtime_env_ownership(
                         "service": service_name,
                     }
                 )
+        if any(value == "true" for value in controlled_publish_values.values()) and any(
+            draft_save_values[service_name] != "true" for service_name in required_services
+        ):
+            blockers.append(
+                {
+                    "code": "controlled_publish_requires_draft_save",
+                    "key": "JIEJING_EBAY_CONTROLLED_PUBLISH_LIVE",
+                    "source": COMPOSE_SOURCE,
+                }
+            )
         if any(value == "true" for value in draft_save_values.values()):
             for prerequisite_key in (
                 "JIEJING_EBAY_TOKEN_REFRESH_LIVE",
