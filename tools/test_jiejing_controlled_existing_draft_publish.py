@@ -237,7 +237,10 @@ def main() -> int:
         return fail(f"controlled publish payload should pass execution preflight: {preflight}")
 
     disclosed_gap_payload = json.loads(json.dumps(context["publish_payload"]))
-    disclosed_gap_payload["supplier_facts"] = {"item_location": "shenzhen-warehouse"}
+    disclosed_gap_payload["supplier_facts"] = {
+        "item_location": "shenzhen-warehouse",
+        "package_dimensions_cm": {"length": "", "width": "", "height": ""},
+    }
     disclosed_gap_payload["finance_review"] = {}
     disclosed_gap_request = ExecutionRequest(
         action_type="publish_listing",

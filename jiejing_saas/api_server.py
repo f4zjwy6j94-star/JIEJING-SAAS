@@ -12768,19 +12768,68 @@ def _controlled_existing_draft_publish_preflight(
     payload = request.payload if isinstance(request.payload, dict) else {}
     listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
     draft = payload.get("existing_ebay_draft") if isinstance(payload.get("existing_ebay_draft"), dict) else {}
+    supplier = payload.get("supplier_facts") if isinstance(payload.get("supplier_facts"), dict) else {}
+    finance = payload.get("finance_review") if isinstance(payload.get("finance_review"), dict) else {}
+    package_dimensions = (
+        supplier.get("package_dimensions_cm")
+        if isinstance(supplier.get("package_dimensions_cm"), dict)
+        else {}
+    )
+    net_profit = finance.get("net_profit_money") if isinstance(finance.get("net_profit_money"), dict) else {}
+
+    def positive_number(value: Any) -> bool:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return False
+        return 0 < number < 1_000_000_000
+
+    semantic_disclosed_gaps: set[str] = set()
+    if not positive_number(supplier.get("package_weight_g")):
+        semantic_disclosed_gaps.add("supplier_facts.package_weight_g")
+    if not all(positive_number(package_dimensions.get(axis)) for axis in ("length", "width", "height")):
+        semantic_disclosed_gaps.add("supplier_facts.package_dimensions_cm")
+    if not str(supplier.get("material") or "").strip():
+        semantic_disclosed_gaps.add("supplier_facts.material")
+    if not (
+        positive_number(net_profit.get("value"))
+        and str(net_profit.get("currency") or "").strip()
+    ):
+        semantic_disclosed_gaps.add("finance_review.net_profit_money")
+
+    def disclosed_gap_key(field: Any) -> str | None:
+        normalized = str(field or "")
+        return next(
+            (
+                allowed
+                for allowed in _CONTROLLED_EXISTING_DRAFT_DISCLOSED_FACT_GAPS
+                if normalized == allowed or normalized.startswith(f"{allowed}.")
+            ),
+            None,
+        )
+
     allowed_missing = set(_CONTROLLED_EXISTING_DRAFT_DISCLOSED_FACT_GAPS)
     if not require_confirmation:
         allowed_missing.add("confirmation_record")
     disclosed = sorted(
+        semantic_disclosed_gaps
+        | {
+            canonical
+            for field in generic.get("missing_fields") or []
+            if (canonical := disclosed_gap_key(field))
+        }
+    )
+    missing = [
         field
         for field in generic.get("missing_fields") or []
-        if field in _CONTROLLED_EXISTING_DRAFT_DISCLOSED_FACT_GAPS
-    )
-    missing = [field for field in generic.get("missing_fields") or [] if field not in allowed_missing]
+        if field not in allowed_missing and disclosed_gap_key(field) is None
+    ]
     issues = [
         issue
         for issue in generic.get("issues") or []
-        if isinstance(issue, dict) and str(issue.get("key") or "") not in allowed_missing
+        if isinstance(issue, dict)
+        and str(issue.get("key") or "") not in allowed_missing
+        and disclosed_gap_key(issue.get("key")) is None
     ]
 
     exact_requirements = {
