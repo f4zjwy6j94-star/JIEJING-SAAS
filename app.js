@@ -7239,6 +7239,20 @@ function saasMediaManifestAssetPreview(key) {
   const posterCard = card.isVideo ? cards.find((item) => !item.isVideo && item.url) : null;
   const posterUrl = posterCard?.url || (card.isVideo ? "" : card.url);
   const sourceImage = saasMediaSourceImageForReview(job);
+  const reviewChecklist = [
+    ["product_structure", "商品外形、结构、比例和配件数量与来源图一致"],
+    ["product_appearance", "颜色、材质、Logo 和包装没有被擅自改变"],
+    ["product_claims", "尺寸、容量、认证和效果承诺都有真实资料支持"],
+    ...(card.isVideo
+      ? [
+          ["video_structure", "完整播放视频，确认镜头运动没有改变商品结构和零件"],
+          ["video_usage", "视频没有虚构安装、操作、开合、变形或使用方式"],
+        ]
+      : []),
+    ["commercial_rights", "确认图片或视频有商业使用权"],
+    ["platform_claims", "检查是否含夸大卖点、认证标志或未证实承诺"],
+    ["listing_draft_boundary", "通过后只回写 Listing 草稿，真实发布仍进决策中心"],
+  ];
   return {
     role: conceptOnly ? "创意概念图 · 非商品实拍" : "真实生成素材",
     title: card.title,
@@ -7261,20 +7275,8 @@ function saasMediaManifestAssetPreview(key) {
           "基于来源图重新生成后再核对商业使用权",
           "概念图不会回写 Listing，也不会进入发布确认",
         ]
-      : [
-          "商品外形、结构、比例和配件数量与来源图一致",
-          "颜色、材质、Logo 和包装没有被擅自改变",
-          "尺寸、容量、认证和效果承诺都有真实资料支持",
-          ...(card.isVideo
-            ? [
-                "完整播放视频，确认镜头运动没有改变商品结构和零件",
-                "视频没有虚构安装、操作、开合、变形或使用方式",
-              ]
-            : []),
-          "确认图片或视频有商业使用权",
-          "检查是否含夸大卖点、认证标志或未证实承诺",
-          "通过后只回写 Listing 草稿，真实发布仍进决策中心",
-        ],
+      : reviewChecklist.map(([, label]) => label),
+    reviewChecklistIds: conceptOnly ? [] : reviewChecklist.map(([id]) => id),
     script: card.isVideo ? "视频文件已进入素材清单；正式使用前先确认脚本、字幕、封面、授权和商品事实。" : "",
   };
 }
@@ -15560,6 +15562,38 @@ function upsertSaasMediaAssetJobForDisplay(job = {}, replaceId = "") {
   refreshSaasMediaGeneratedAssetSurfaces();
 }
 
+function readSaasMediaReviewEvidenceFromActiveModal(mediaJobId, hasVideoAsset = false) {
+  const modal = document.querySelector("#assetModal");
+  const boundJobId = String(modal?.dataset?.mediaReviewJobId || "").trim();
+  if (!modal || modal.hidden || !mediaJobId || boundJobId !== mediaJobId) return null;
+  const checks = Array.from(modal.querySelectorAll("[data-media-review-check]"));
+  const checkedIds = new Set(
+    checks
+      .filter((input) => input.checked === true)
+      .map((input) => String(input.dataset.mediaReviewCheck || "").trim())
+      .filter(Boolean),
+  );
+  const requiredIds = [
+    "product_structure",
+    "product_appearance",
+    "product_claims",
+    ...(hasVideoAsset ? ["video_structure", "video_usage"] : []),
+    "commercial_rights",
+    "platform_claims",
+    "listing_draft_boundary",
+  ];
+  if (checks.length !== requiredIds.length || requiredIds.some((id) => !checkedIds.has(id))) return null;
+  return {
+    media_job_id: mediaJobId,
+    acknowledged_review_items: requiredIds,
+    fact_consistency_confirmed: ["product_structure", "product_appearance", "product_claims"].every((id) => checkedIds.has(id)),
+    commercial_rights_confirmed: checkedIds.has("commercial_rights"),
+    platform_rules_checked: ["platform_claims", "listing_draft_boundary"].every((id) => checkedIds.has(id)),
+    motion_and_usage_consistency_confirmed:
+      !hasVideoAsset || ["video_structure", "video_usage"].every((id) => checkedIds.has(id)),
+  };
+}
+
 async function approveLatestSaasMediaAssetJobForListingDraft() {
   const job = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true });
   const latestUnscopedJob = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: false });
@@ -15581,15 +15615,21 @@ async function approveLatestSaasMediaAssetJobForListingDraft() {
     return null;
   }
   const hasVideoAsset = saasMediaManifestAssetCards(job).some((asset) => asset.isVideo);
+  const evidence = readSaasMediaReviewEvidenceFromActiveModal(mediaJobId, hasVideoAsset);
+  if (!evidence || evidence.media_job_id !== mediaJobId) {
+    showActionToast("素材审核未保存：请在当前素材预览中逐项确认，任务切换或少勾一项都会阻止提交。");
+    return null;
+  }
   try {
     const payload = await saasFetch(`/media-asset-jobs/${encodeURIComponent(mediaJobId)}/review`, {
       method: "POST",
       body: JSON.stringify({
         decision: "approve_for_listing_draft",
-        fact_consistency_confirmed: true,
-        commercial_rights_confirmed: true,
-        platform_rules_checked: true,
-        motion_and_usage_consistency_confirmed: true,
+        fact_consistency_confirmed: evidence.fact_consistency_confirmed,
+        commercial_rights_confirmed: evidence.commercial_rights_confirmed,
+        platform_rules_checked: evidence.platform_rules_checked,
+        motion_and_usage_consistency_confirmed: evidence.motion_and_usage_consistency_confirmed,
+        acknowledged_review_items: evidence.acknowledged_review_items,
         note: hasVideoAsset
           ? "商家完整查看视频并确认产品结构、动作与真实用法一致，仅允许回写 Listing 草稿。"
           : "商家在素材预览中逐项确认，仅允许回写 Listing 草稿。",
@@ -35468,7 +35508,7 @@ function openAssetPreview(key) {
   checklist.innerHTML = asset.checklist
     .map((item, index) =>
       asset.requiresReviewConfirmation
-        ? `<li><label><input type="checkbox" data-media-review-check="${index}"><span>${escapeHtml(item)}</span></label></li>`
+        ? `<li><label><input type="checkbox" data-media-review-check="${escapeHtml(asset.reviewChecklistIds?.[index] || `review_item_${index}`)}"><span>${escapeHtml(item)}</span></label></li>`
         : `<li>${escapeHtml(item)}</li>`,
     )
     .join("");
@@ -35479,6 +35519,10 @@ function openAssetPreview(key) {
   const reviewButton = document.querySelector("#assetSendConfirm");
   const reworkButton = document.querySelector("#assetReworkCurrent");
   const manifestAsset = saasMediaManifestAssetPreview(key);
+  const mediaJobId = manifestAsset
+    ? String(latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true })?.media_job_id || "").trim()
+    : "";
+  assetModal.dataset.mediaReviewJobId = mediaJobId;
   if (reworkButton) reworkButton.hidden = !manifestAsset;
   if (reviewButton) {
     reviewButton.textContent = asset.requiresReviewConfirmation ? "完成素材审核" : "保存脚本草稿";
@@ -48427,7 +48471,10 @@ function bindEvents() {
     const reviewed = await approveLatestSaasMediaAssetJobForListingDraft();
     if (reviewed) closeModals();
     else if (button) {
-      button.disabled = false;
+      const job = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true });
+      const mediaJobId = String(job?.media_job_id || "").trim();
+      const hasVideoAsset = saasMediaManifestAssetCards(job).some((asset) => asset.isVideo);
+      button.disabled = !readSaasMediaReviewEvidenceFromActiveModal(mediaJobId, hasVideoAsset);
       button.textContent = "完成素材审核";
     }
   });

@@ -67,7 +67,8 @@ def main() -> int:
         '"camera_motion_only"',
         '"product_remains_static"',
         '"no_use_or_installation_demo"',
-        'motion_and_usage_consistency_confirmed: true',
+        'motion_and_usage_consistency_confirmed: evidence.motion_and_usage_consistency_confirmed',
+        'readSaasMediaReviewEvidenceFromActiveModal(mediaJobId, hasVideoAsset)',
         'const groundingGate = saasMediaGenerationGroundingGate(productFacts, config)',
         'groundingGate.conceptOnly ? "concept_reference_only" : "reference_grounded_listing_draft"',
         "const mediaPointsByGenerationTier = { draft: 20, standard: 80, high_quality: 250 }",
@@ -76,6 +77,11 @@ def main() -> int:
     for marker in required_js:
         if marker not in app_js:
             raise AssertionError(f"media generation payload is missing {marker}")
+    approval_block = app_js.split("async function approveLatestSaasMediaAssetJobForListingDraft", 1)[1].split(
+        "async function retrySaasMediaAssetJob", 1
+    )[0]
+    if "motion_and_usage_consistency_confirmed: true" in approval_block:
+        raise AssertionError("media review must collect motion confirmation from the active checklist")
     active_media_sync = app_js.split("function syncSaasMediaProjectDraft", 1)[1].split("\nfunction ", 1)[0]
     if 'setText("#mediaGapTitle", gap)' not in active_media_sync:
         raise AssertionError("active media project must replace the legacy static gap with current product gaps")
