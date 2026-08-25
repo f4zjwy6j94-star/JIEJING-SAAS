@@ -6,13 +6,21 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "output" / "jiejing-saas-backend" / "guardrail-test"
 sys.path.insert(0, str(ROOT))
 
-from jiejing_saas.api_server import _readiness_has_startup_blockers
+from jiejing_saas.api_server import (
+    _production_controlled_unpublished_draft_boot_allowed,
+    _readiness_has_startup_blockers,
+)
+from jiejing_saas.config import SaaSSettings
 
 
 def fail(message: str) -> int:
@@ -22,6 +30,95 @@ def fail(message: str) -> int:
 
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
+
+    controlled_draft_env = {
+        "JIEJING_SAAS_ENV": "production",
+        "JIEJING_SAAS_SESSION_SECRET": "production-controlled-draft-test-secret-that-is-long-enough",
+        "JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED": "false",
+        "JIEJING_PRODUCTION_CONTROLLED_DRAFT_BOOT_ALLOWED": "true",
+        "JIEJING_ENABLE_REAL_PLATFORM_WRITES": "false",
+        "JIEJING_EBAY_WRITE_LIVE": "false",
+        "JIEJING_EBAY_DRAFT_SAVE_LIVE": "true",
+        "JIEJING_EBAY_TOKEN_REFRESH_LIVE": "true",
+        "JIEJING_EBAY_READ_ONLY_LIVE": "true",
+        "JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY": "controlled_unpublished_draft_only",
+        "JIEJING_WECHAT_PAY_CHARGE_ALLOWED": "false",
+        "JIEJING_WECHAT_PAY_REFUND_ALLOWED": "false",
+    }
+    with patch.dict(os.environ, controlled_draft_env, clear=False):
+        controlled_draft_settings = SaaSSettings.from_env(
+            db_path=OUT / "controlled-draft.sqlite",
+            runtime_db_path=OUT / "controlled-draft-runtime.sqlite",
+            output_root=OUT,
+            host="127.0.0.1",
+            port=8793,
+        )
+        if not _production_controlled_unpublished_draft_boot_allowed(controlled_draft_settings):
+            return fail("an exact unpublished-draft-only production lane must be allowed to boot despite commercial blockers")
+        os.environ["JIEJING_EBAY_WRITE_LIVE"] = "true"
+        unsafe_write_settings = SaaSSettings.from_env(
+            db_path=OUT / "controlled-draft.sqlite",
+            runtime_db_path=OUT / "controlled-draft-runtime.sqlite",
+            output_root=OUT,
+            host="127.0.0.1",
+            port=8793,
+        )
+        if _production_controlled_unpublished_draft_boot_allowed(unsafe_write_settings):
+            return fail("the controlled draft boot lane must fail closed when broad eBay writes are requested")
+        os.environ["JIEJING_EBAY_WRITE_LIVE"] = "false"
+        controlled_process = subprocess.Popen(
+            [
+                sys.executable,
+                str(ROOT / "tools" / "jiejing_saas_backend_cli.py"),
+                "serve",
+                "--db",
+                str(OUT / "controlled-draft-boot.sqlite"),
+                "--runtime-db",
+                str(OUT / "controlled-draft-boot-runtime.sqlite"),
+                "--output-root",
+                str(OUT),
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8793",
+            ],
+            cwd=str(ROOT),
+            env=os.environ.copy(),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        controlled_boot_ready = False
+        controlled_boot_output = ""
+        try:
+            for _ in range(40):
+                if controlled_process.poll() is not None:
+                    break
+                try:
+                    with urllib.request.urlopen("http://127.0.0.1:8793/health", timeout=0.25) as response:
+                        controlled_boot_ready = response.status == 200
+                        if controlled_boot_ready:
+                            break
+                except (urllib.error.URLError, TimeoutError):
+                    time.sleep(0.1)
+            if not controlled_boot_ready:
+                controlled_process.terminate()
+                stdout, stderr = controlled_process.communicate(timeout=5)
+                controlled_boot_output = (stdout or "") + (stderr or "")
+        finally:
+            if controlled_process.poll() is None:
+                controlled_process.terminate()
+                try:
+                    controlled_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    controlled_process.kill()
+        if not controlled_boot_ready:
+            return fail(
+                "the exact controlled draft lane must boot a blocker-held production process: "
+                + controlled_boot_output[-500:].encode("ascii", "backslashreplace").decode("ascii")
+            )
 
     warning_only_readiness = {
         "production_ready": False,

@@ -90,6 +90,7 @@ def main() -> int:
         "JIEJING_PRODUCTION_DEPLOY_DRY_RUN=1",
         "JIEJING_PRODUCTION_DEPLOY_APPLIED=1",
         "JIEJING_PRODUCTION_ROLLBACK_APPLIED=1",
+        "JIEJING_PRODUCTION_DEPLOY_FAILED_STAGE=",
         "ln -sfn",
         "trap rollback_on_error ERR",
         "chmod -R go-w",

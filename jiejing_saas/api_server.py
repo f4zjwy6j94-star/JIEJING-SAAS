@@ -1091,6 +1091,25 @@ def _readiness_has_startup_blockers(readiness: object) -> bool:
     return blocker_count > 0
 
 
+def _production_controlled_unpublished_draft_boot_allowed(settings: SaaSSettings) -> bool:
+    """Allow only the exact unpublished-draft lane to coexist with commercial blockers."""
+
+    return bool(
+        settings.environment == "production"
+        and _env_bool("JIEJING_PRODUCTION_CONTROLLED_DRAFT_BOOT_ALLOWED")
+        and not _env_bool("JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED")
+        and settings.ebay_draft_save_live_enabled
+        and settings.effective_ebay_draft_save_enabled
+        and not settings.requested_real_platform_writes
+        and not settings.effective_real_platform_writes_enabled
+        and not settings.ebay_write_live_enabled
+        and str(os.environ.get("JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY") or "").strip()
+        == "controlled_unpublished_draft_only"
+        and not _env_bool("JIEJING_WECHAT_PAY_CHARGE_ALLOWED")
+        and not _env_bool("JIEJING_WECHAT_PAY_REFUND_ALLOWED")
+    )
+
+
 class SaaSBackendServer:
     def __init__(
         self,
@@ -1172,10 +1191,14 @@ class SaaSBackendServer:
         production_candidate_boot_allowed = str(
             os.environ.get("JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED") or ""
         ).strip().lower() in {"1", "true", "yes", "on"}
+        controlled_unpublished_draft_boot_allowed = _production_controlled_unpublished_draft_boot_allowed(
+            backend_settings
+        )
         if (
             backend_settings.environment == "production"
             and _readiness_has_startup_blockers(readiness)
             and not production_candidate_boot_allowed
+            and not controlled_unpublished_draft_boot_allowed
         ):
             raise RuntimeError(
                 "Refusing to start a blocked production candidate without "

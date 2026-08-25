@@ -119,6 +119,7 @@ def main() -> int:
     compose = PRODUCTION_COMPOSE.read_text(encoding="utf-8")
     controlled_draft_overrides = {
         "JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED": "false",
+        "JIEJING_PRODUCTION_CONTROLLED_DRAFT_BOOT_ALLOWED": "true",
         "JIEJING_ENABLE_REAL_PLATFORM_WRITES": "false",
         "JIEJING_EBAY_WRITE_LIVE": "false",
         "JIEJING_EBAY_DRAFT_SAVE_LIVE": "true",

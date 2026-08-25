@@ -18,6 +18,7 @@ DRY_RUN="${JIEJING_PRODUCTION_DEPLOY_DRY_RUN:-1}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 PUBLIC_URL="https://app.jiejing.shop"
 mutation_started=0
+current_stage="preflight"
 
 refuse() {
   printf '%s\n' "$1" >&2
@@ -219,6 +220,7 @@ rollback_on_error() {
     "${previous_compose[@]}" up -d --no-deps --force-recreate jiejing-frontend
     "${previous_compose[@]}" up -d --no-deps --force-recreate jiejing-edge
     ln -sfnT "$active_app" "$ACTIVE_LINK"
+    printf 'JIEJING_PRODUCTION_DEPLOY_FAILED_STAGE=%s\n' "$current_stage" >&2
     printf '%s\n' "JIEJING_PRODUCTION_ROLLBACK_APPLIED=1" >&2
   fi
   exit "$code"
@@ -226,18 +228,27 @@ rollback_on_error() {
 trap rollback_on_error ERR
 
 mutation_started=1
+current_stage="build_candidate_images"
 "${candidate_compose[@]}" build jiejing-saas jiejing-worker
+current_stage="start_candidate_api"
 "${candidate_compose[@]}" up -d --no-deps jiejing-saas
 wait_container_healthy deploy-jiejing-saas-1 60
+current_stage="start_candidate_worker"
 "${candidate_compose[@]}" up -d --no-deps jiejing-worker
 wait_container_healthy deploy-jiejing-worker-1 30
+current_stage="start_candidate_frontend"
 "${candidate_compose[@]}" up -d --no-deps --force-recreate jiejing-frontend
+current_stage="start_candidate_edge"
 "${candidate_compose[@]}" up -d --no-deps --force-recreate jiejing-edge
 wait_container_healthy deploy-jiejing-frontend-1 30
 wait_container_healthy deploy-jiejing-edge-1 30
+current_stage="verify_public_health"
 wait_public_json "/health" 45
+current_stage="verify_public_deep_health"
 wait_public_json "/health/deep" 45
+current_stage="verify_public_product_readiness"
 wait_public_json "/readiness/product-saas" 45
+current_stage="activate_release"
 ln -sfnT "$candidate_app" "$ACTIVE_LINK"
 mutation_started=0
 trap - ERR
