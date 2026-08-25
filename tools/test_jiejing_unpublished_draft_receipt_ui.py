@@ -209,6 +209,93 @@ if (visible.filter((card) => card.confirmation_id === "confirm-controlled").leng
     if display_result.returncode != 0:
         raise AssertionError(display_result.stderr.strip() or "controlled publish confirmation display behavior failed")
 
+    detail_marker = "function saasControlledExistingDraftPublishDetailMarkup"
+    if detail_marker not in app_js:
+        raise AssertionError("controlled publish confirmation must render exact merchant-reviewable parameters")
+    detail_start = app_js.index(detail_marker)
+    detail_end = app_js.index("function saasWorkbenchConfirmationDetailMarkup", detail_start)
+    detail_source = app_js[detail_start:detail_end]
+    detail_script = f"""
+function escapeHtml(value) {{ return String(value ?? ""); }}
+function publicRuntimeText(value) {{ return String(value ?? ""); }}
+function isSaasControlledExistingDraftPublishConfirmation(card) {{ return card?.item?.controlled_existing_draft_publish === true; }}
+{detail_source}
+const card = {{
+  confirmation_id: "confirm-controlled",
+  action_type: "publish_listing",
+  status: "pending",
+  item: {{
+    source: "merchant_existing_ebay_draft_publish_intake",
+    controlled_existing_draft_publish: true,
+    existing_ebay_draft: {{ offer_id: "245675556011", offer_status: "UNPUBLISHED", sku: "JJ-INCENSE-JC2023041300002-01" }},
+    controlled_publish_preflight: {{
+      status: "ready_for_confirmation",
+      disclosed_missing_facts: [
+        "supplier_facts.package_weight_g",
+        "supplier_facts.package_dimensions_cm",
+        "supplier_facts.material",
+        "finance_review.net_profit_money",
+      ],
+    }},
+    publish_payload: {{
+      marketplace_id: "EBAY_US",
+      listing: {{
+        title: "Backflow Incense Burner with Lotus Flower and Hand Design",
+        sku: "JJ-INCENSE-JC2023041300002-01",
+        price: {{ value: "29.99", currency: "USD" }},
+        quantity: 1,
+        condition: "NEW",
+        category_id: "20552",
+        merchant_location_key: "shenzhen-warehouse",
+        item_specifics: {{ Brand: "Unbranded", Type: "Backflow Incense Burner", MPN: "Does Not Apply", Style: "Asian" }},
+      }},
+      business_policies: {{ fulfillment_policy_id: "252706512026", payment_policy_id: "252706224026", return_policy_id: "252706513026" }},
+      asset_manifest: {{ assets: [{{ url: "https://private.example.test/image.jpg" }}] }},
+    }},
+  }},
+}};
+const markup = saasControlledExistingDraftPublishDetailMarkup(card);
+for (const required of [
+  "245675556011",
+  "JJ-INCENSE-JC2023041300002-01",
+  "Backflow Incense Burner with Lotus Flower and Hand Design",
+  "USD 29.99",
+  "数量 1",
+  "20552",
+  "shenzhen-warehouse",
+  "252706512026",
+  "252706224026",
+  "252706513026",
+  "1 张",
+  "包装重量",
+  "准确材质",
+  "利润测算",
+  "publishOffer",
+]) {{
+  if (!markup.includes(required)) throw new Error(`controlled confirmation detail missing: ${{required}}`);
+}}
+for (const forbidden of ["private.example.test", "token", "secret"]) {{
+  if (markup.toLowerCase().includes(forbidden)) throw new Error(`controlled confirmation leaked internal detail: ${{forbidden}}`);
+}}
+"""
+    detail_result = subprocess.run(
+        ["node", "-e", detail_script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if detail_result.returncode != 0:
+        raise AssertionError(detail_result.stderr.strip() or "controlled publish detail rendering failed")
+
+    if "确认并正式发布这个 Offer" not in app_js:
+        raise AssertionError("controlled publish approval button must say that approval performs the public publish")
+    if "批准后会立即执行一次 publishOffer" not in app_js:
+        raise AssertionError("controlled publish merchant brief must disclose the immediate external write")
+    if "saasControlledExistingDraftPublishDetailMarkup(card)" not in app_js:
+        raise AssertionError("decision center does not render the exact controlled publish parameter summary")
+
 
 if __name__ == "__main__":
     main()

@@ -4614,6 +4614,110 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 or ("Fresh eBay draft save confirmation" if draft_save_intake else "Fresh eBay publish confirmation"),
                 limit=120,
             )
+            controlled_confirmation_matches: list[dict[str, Any]] = []
+            controlled_task_id: str | None = None
+            controlled_confirmation_id: str | None = None
+            if existing_draft_publish_intake:
+                controlled_confirmation_matches = _matching_controlled_existing_draft_publish_confirmations(
+                    confirmations=recent_confirmations,
+                    company_id=identity["company_id"],
+                    store_id=parts[1],
+                    controlled_context=controlled_context,
+                )
+                pending_matches = [
+                    item for item in controlled_confirmation_matches if str(item.get("status") or "") == "pending"
+                ]
+                non_pending_active = [
+                    item
+                    for item in controlled_confirmation_matches
+                    if str(item.get("status") or "")
+                    in {"approved", EXTERNAL_EXECUTION_PROCESSING_STATUS, "executed"}
+                ]
+                if len(pending_matches) > 1:
+                    self._send_error(HTTPStatus.CONFLICT, "controlled_publish_confirmation_not_unique")
+                    return
+                if non_pending_active:
+                    active_status = str(non_pending_active[0].get("status") or "")
+                    self._send_error(
+                        HTTPStatus.CONFLICT,
+                        (
+                            "controlled_publish_already_executed"
+                            if active_status == "executed"
+                            else "controlled_publish_manual_reconcile_required"
+                            if active_status == EXTERNAL_EXECUTION_PROCESSING_STATUS
+                            else "controlled_publish_confirmation_already_approved"
+                        ),
+                    )
+                    return
+                if len(pending_matches) == 1:
+                    existing_confirmation = pending_matches[0]
+                    existing_item = (
+                        existing_confirmation.get("item")
+                        if isinstance(existing_confirmation.get("item"), dict)
+                        else {}
+                    )
+                    existing_payload = (
+                        existing_item.get("publish_payload")
+                        if isinstance(existing_item.get("publish_payload"), dict)
+                        else publish_payload
+                    )
+                    existing_request = ExecutionRequest(
+                        action_type="publish_listing",
+                        task_id=str(existing_confirmation.get("task_id") or ""),
+                        user_id=identity["user_id"],
+                        company_id=identity["company_id"],
+                        store_id=parts[1],
+                        platform="ebay",
+                        payload=existing_payload,
+                        confirmation_id=None,
+                        confirmed_by=None,
+                        confirmed_at=None,
+                        idempotency_key=f"existing-draft-publish-confirmation-{existing_confirmation['confirmation_id']}",
+                    )
+                    existing_general_preflight = ExecutionService(demo_mode=True).preflight(existing_request)
+                    existing_preflight = _controlled_existing_draft_publish_preflight(
+                        existing_request,
+                        require_confirmation=False,
+                    )
+                    existing_readiness = _controlled_existing_draft_publish_readiness(
+                        preflight=existing_preflight,
+                        general_preflight=existing_general_preflight,
+                    )
+                    self._send_json(
+                        {
+                            "task": self.repository.get_task(
+                                company_id=identity["company_id"],
+                                task_id=str(existing_confirmation.get("task_id") or ""),
+                            )
+                            or {},
+                            "confirmation": existing_confirmation,
+                            "preflight": existing_preflight,
+                            "publish_readiness": existing_readiness,
+                            "account_health": account_health,
+                            "real_platform_writes_enabled": self.settings.effective_real_platform_writes_enabled,
+                            "controlled_existing_draft_publish_enabled": self.settings.effective_ebay_controlled_publish_enabled,
+                            "reused_existing_confirmation": True,
+                            "secret_exposed": False,
+                        },
+                        status=HTTPStatus.OK,
+                    )
+                    return
+                controlled_attempt = len(controlled_confirmation_matches) + 1
+                controlled_digest = hashlib.sha256(
+                    "\0".join(
+                        [
+                            identity["company_id"],
+                            parts[1],
+                            str(controlled_context.get("source_execution_id") or ""),
+                            str(controlled_context.get("source_confirmation_id") or ""),
+                            str(controlled_context.get("offer_id") or ""),
+                            str(controlled_context.get("sku") or ""),
+                            str(controlled_attempt),
+                        ]
+                    ).encode("utf-8")
+                ).hexdigest()[:32]
+                controlled_task_id = f"task_existing_draft_publish_{controlled_digest}"
+                controlled_confirmation_id = f"confirm_existing_draft_publish_{controlled_digest}"
             task = self.repository.create_task(
                 company_id=identity["company_id"],
                 store_id=parts[1],
@@ -4633,6 +4737,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "listing_project_identity": listing_project_identity,
                     "secret_exposed": False,
                 },
+                task_id=controlled_task_id,
             )
             execution_request = ExecutionRequest(
                 action_type=action_type,
@@ -4656,7 +4761,15 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     )
                 ),
             )
-            preflight = ExecutionService(demo_mode=True).preflight(execution_request)
+            general_preflight = ExecutionService(demo_mode=True).preflight(execution_request)
+            preflight = (
+                _controlled_existing_draft_publish_preflight(
+                    execution_request,
+                    require_confirmation=False,
+                )
+                if existing_draft_publish_intake
+                else general_preflight
+            )
             latest_execution_results = self.repository.list_execution_results(company_id=identity["company_id"], limit=100)
             recent_confirmations = self.repository.list_confirmations(company_id=identity["company_id"], limit=100)
             readiness_confirmations = (
@@ -4669,13 +4782,22 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 if existing_draft_publish_intake
                 else recent_confirmations
             )
-            readiness = build_publish_readiness(
-                publish_payload,
-                preflight=preflight,
-                latest_execution_results=latest_execution_results,
-                recent_confirmations=readiness_confirmations,
+            readiness = (
+                _controlled_existing_draft_publish_readiness(
+                    preflight=preflight,
+                    general_preflight=general_preflight,
+                )
+                if existing_draft_publish_intake
+                else build_publish_readiness(
+                    publish_payload,
+                    preflight=preflight,
+                    latest_execution_results=latest_execution_results,
+                    recent_confirmations=readiness_confirmations,
+                )
             )
-            confirmation = self.repository.create_confirmation(
+            reused_existing_confirmation = False
+            try:
+                confirmation = self.repository.create_confirmation(
                 company_id=identity["company_id"],
                 store_id=parts[1],
                 task_id=task["task_id"],
@@ -4701,6 +4823,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             "source_execution_id": controlled_context.get("source_execution_id"),
                             "source_confirmation_id": controlled_context.get("source_confirmation_id"),
                             "publish_payload_sha256": _draft_publish_payload_sha256(publish_payload),
+                            "controlled_publish_preflight": _deep_merge({}, preflight),
                             "writes_to_ebay_after_approval": True,
                             "public_publish_enabled": True,
                             "real_platform_writes_enabled": False,
@@ -4781,9 +4904,21 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "frontend_gets_token": False,
                     "runtime_gets_token": False,
                 },
-                created_by=identity["user_id"],
-                default_action="hold",
-            )
+                    created_by=identity["user_id"],
+                    confirmation_id=controlled_confirmation_id,
+                    default_action="hold",
+                )
+            except ConfirmationDecisionConflict:
+                if not existing_draft_publish_intake or not controlled_confirmation_id:
+                    raise
+                confirmation = self.repository.get_confirmation(
+                    company_id=identity["company_id"],
+                    confirmation_id=controlled_confirmation_id,
+                ) or {}
+                if not confirmation or str(confirmation.get("status") or "") != "pending":
+                    self._send_error(HTTPStatus.CONFLICT, "controlled_publish_confirmation_create_conflict")
+                    return
+                reused_existing_confirmation = True
             self._send_json(
                 {
                     "task": task,
@@ -4793,9 +4928,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "account_health": account_health,
                     "real_platform_writes_enabled": self.settings.effective_real_platform_writes_enabled,
                     "controlled_existing_draft_publish_enabled": self.settings.effective_ebay_controlled_publish_enabled,
+                    "reused_existing_confirmation": reused_existing_confirmation,
                     "secret_exposed": False,
                 },
-                status=HTTPStatus.CREATED,
+                status=HTTPStatus.OK if reused_existing_confirmation else HTTPStatus.CREATED,
             )
             return
 
@@ -9113,7 +9249,16 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 confirmed_at=confirmation["decided_at"] if confirmation["status"] == "approved" else None,
                 idempotency_key=str(body.get("idempotency_key") or ""),
             )
-            preflight = ExecutionService(demo_mode=True).preflight(execution_request)
+            general_preflight = ExecutionService(demo_mode=True).preflight(execution_request)
+            controlled_existing_draft_publish = _is_controlled_existing_draft_publish_confirmation(confirmation)
+            preflight = (
+                _controlled_existing_draft_publish_preflight(
+                    execution_request,
+                    require_confirmation=confirmation["status"] == "approved",
+                )
+                if controlled_existing_draft_publish
+                else general_preflight
+            )
             latest_execution_results = self.repository.list_execution_results(company_id=identity["company_id"], limit=20)
             recent_confirmations = [
                 item
@@ -9124,16 +9269,24 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 {
                     "preflight": preflight,
                     "prepared_payload_summary": _publish_payload_summary(payload) if confirmation["action_type"] == "publish_listing" else {},
-                    "publish_readiness": build_publish_readiness(
-                        payload,
-                        preflight=preflight,
-                        latest_execution_results=latest_execution_results,
-                        recent_confirmations=recent_confirmations,
-                    )
-                    if confirmation["action_type"] == "publish_listing"
-                    else {},
+                    "publish_readiness": (
+                        _controlled_existing_draft_publish_readiness(
+                            preflight=preflight,
+                            general_preflight=general_preflight,
+                        )
+                        if controlled_existing_draft_publish
+                        else build_publish_readiness(
+                            payload,
+                            preflight=preflight,
+                            latest_execution_results=latest_execution_results,
+                            recent_confirmations=recent_confirmations,
+                        )
+                        if confirmation["action_type"] == "publish_listing"
+                        else {}
+                    ),
                     "confirmation": confirmation,
                     "real_platform_writes_enabled": self.settings.effective_real_platform_writes_enabled,
+                    "controlled_existing_draft_publish_enabled": self.settings.effective_ebay_controlled_publish_enabled,
                 },
                 status=HTTPStatus.CREATED,
             )
@@ -9417,6 +9570,47 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             if draft_save_live or controlled_existing_draft_publish_live or broad_ebay_write_live:
                 boundary_result = ExecutionService(demo_mode=False).execute(execution_request).to_dict()
+                if controlled_existing_draft_publish_live:
+                    controlled_preflight = _controlled_existing_draft_publish_preflight(
+                        execution_request,
+                        require_confirmation=True,
+                    )
+                    boundary_audit = (
+                        boundary_result.get("audit")
+                        if isinstance(boundary_result.get("audit"), dict)
+                        else {}
+                    )
+                    boundary_audit["preflight"] = controlled_preflight
+                    if controlled_preflight.get("status") == "ready_for_platform_adapter":
+                        boundary_result["status"] = "ready_for_platform_adapter"
+                        boundary_result["message"] = (
+                            "The exact existing eBay Offer passed the controlled publish boundary and is ready for publishOffer."
+                        )
+                        boundary_audit["blocked_reason"] = None
+                        boundary_audit["execution_mode"] = "controlled_existing_draft_platform_adapter_required"
+                        execution_intent = (
+                            boundary_audit.get("execution_intent")
+                            if isinstance(boundary_audit.get("execution_intent"), dict)
+                            else {}
+                        )
+                        execution_intent.update(
+                            {
+                                "platform_adapter": "ebay.publish_existing_listing_draft",
+                                "creates_public_listing": True,
+                                "writes_to_ebay": True,
+                                "requires_publish_offer_call": True,
+                                "creates_second_offer": False,
+                            }
+                        )
+                        boundary_audit["execution_intent"] = execution_intent
+                    else:
+                        boundary_result["status"] = "blocked_preflight_missing"
+                        boundary_result["message"] = (
+                            "The exact existing eBay Offer is blocked because buyer-facing or binding facts are missing."
+                        )
+                        boundary_audit["blocked_reason"] = "controlled_existing_draft_preflight_blocked"
+                        boundary_audit["execution_mode"] = "blocked"
+                    boundary_result["audit"] = boundary_audit
                 if boundary_result.get("status") == "ready_for_platform_adapter":
                     controlled_publish_credential: dict[str, Any] = {}
                     if controlled_existing_draft_publish_live:
@@ -9493,6 +9687,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         confirmation["action_type"] != "save_ebay_listing_draft"
                         and not controlled_existing_draft_publish_live
                     ):
+                        adapter = self.ebay_write_adapter_factory(self.settings)
+                    elif controlled_existing_draft_publish_live:
                         adapter = self.ebay_write_adapter_factory(self.settings)
                     adapter_kwargs = {
                         "request": execution_request,
@@ -12501,6 +12697,201 @@ def _controlled_existing_draft_publish_context(
         "source_confirmation_id": str(confirmation.get("confirmation_id") or ""),
         "listing_project_identity": _deep_merge({}, item.get("listing_project_identity") or {}),
         "publish_payload": payload,
+        "secret_exposed": False,
+    }
+
+
+def _matching_controlled_existing_draft_publish_confirmations(
+    *,
+    confirmations: list[dict[str, Any]],
+    company_id: str,
+    store_id: str,
+    controlled_context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return exact confirmation attempts for one saved Offer binding."""
+
+    expected = {
+        "company_id": str(company_id or "").strip(),
+        "store_id": str(store_id or "").strip(),
+        "offer_id": str(controlled_context.get("offer_id") or "").strip(),
+        "sku": str(controlled_context.get("sku") or "").strip(),
+        "source_execution_id": str(controlled_context.get("source_execution_id") or "").strip(),
+        "source_confirmation_id": str(controlled_context.get("source_confirmation_id") or "").strip(),
+    }
+    matches: list[dict[str, Any]] = []
+    for confirmation in confirmations:
+        if not isinstance(confirmation, dict):
+            continue
+        item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+        draft = item.get("existing_ebay_draft") if isinstance(item.get("existing_ebay_draft"), dict) else {}
+        if (
+            str(confirmation.get("company_id") or "").strip() == expected["company_id"]
+            and str(confirmation.get("store_id") or "").strip() == expected["store_id"]
+            and str(confirmation.get("action_type") or "") == "publish_listing"
+            and str(item.get("source") or "") == "merchant_existing_ebay_draft_publish_intake"
+            and item.get("controlled_existing_draft_publish") is True
+            and str(draft.get("offer_id") or "").strip() == expected["offer_id"]
+            and str(draft.get("sku") or "").strip() == expected["sku"]
+            and str(draft.get("source_execution_id") or "").strip() == expected["source_execution_id"]
+            and str(draft.get("source_confirmation_id") or "").strip() == expected["source_confirmation_id"]
+            and draft.get("secret_exposed") is False
+            and item.get("secret_exposed") is False
+        ):
+            matches.append(confirmation)
+    return matches
+
+
+_CONTROLLED_EXISTING_DRAFT_DISCLOSED_FACT_GAPS = {
+    "supplier_facts.package_weight_g",
+    "supplier_facts.package_dimensions_cm",
+    "supplier_facts.material",
+    "finance_review.net_profit_money",
+}
+
+
+def _controlled_existing_draft_publish_preflight(
+    request: ExecutionRequest,
+    *,
+    require_confirmation: bool,
+) -> dict[str, Any]:
+    """Validate publishing one already-saved Offer without inventing facts.
+
+    A saved eBay Offer has already crossed the inventory-item and offer-create
+    boundary.  The controlled publish lane therefore keeps every buyer-facing,
+    account, policy, asset, idempotency and exact Offer/SKU field blocking, but
+    reports unclaimed supplier packaging/material facts and internal profit
+    analysis as explicit merchant warnings.  Those values are never fabricated
+    merely to make a public-publish rehearsal turn green.
+    """
+
+    generic = ExecutionService(demo_mode=False).preflight(request)
+    payload = request.payload if isinstance(request.payload, dict) else {}
+    listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
+    draft = payload.get("existing_ebay_draft") if isinstance(payload.get("existing_ebay_draft"), dict) else {}
+    allowed_missing = set(_CONTROLLED_EXISTING_DRAFT_DISCLOSED_FACT_GAPS)
+    if not require_confirmation:
+        allowed_missing.add("confirmation_record")
+    disclosed = sorted(
+        field
+        for field in generic.get("missing_fields") or []
+        if field in _CONTROLLED_EXISTING_DRAFT_DISCLOSED_FACT_GAPS
+    )
+    missing = [field for field in generic.get("missing_fields") or [] if field not in allowed_missing]
+    issues = [
+        issue
+        for issue in generic.get("issues") or []
+        if isinstance(issue, dict) and str(issue.get("key") or "") not in allowed_missing
+    ]
+
+    exact_requirements = {
+        "controlled.source": str(payload.get("source") or "").strip()
+        == "merchant_existing_ebay_draft_publish_intake",
+        "controlled.platform": str(request.platform or "").strip().lower() == "ebay",
+        "existing_ebay_draft.offer_id": bool(str(draft.get("offer_id") or "").strip()),
+        "existing_ebay_draft.sku": bool(str(draft.get("sku") or "").strip()),
+        "existing_ebay_draft.source_execution_id": bool(str(draft.get("source_execution_id") or "").strip()),
+        "existing_ebay_draft.source_confirmation_id": bool(str(draft.get("source_confirmation_id") or "").strip()),
+        "existing_ebay_draft.offer_status": str(draft.get("offer_status") or "").strip().upper() == "UNPUBLISHED",
+        "existing_ebay_draft.public_listing_created": draft.get("public_listing_created") is False,
+        "existing_ebay_draft.sku_matches_listing": bool(str(listing.get("sku") or "").strip())
+        and str(draft.get("sku") or "").strip() == str(listing.get("sku") or "").strip(),
+        "payload.secret_exposed": payload.get("secret_exposed") is False,
+        "existing_ebay_draft.secret_exposed": draft.get("secret_exposed") is False,
+    }
+    for field, ready in exact_requirements.items():
+        if not ready and field not in missing:
+            missing.append(field)
+            issues.append(
+                {
+                    "key": field,
+                    "message": "The exact existing eBay draft binding is incomplete or inconsistent.",
+                    "severity": "blocking",
+                }
+            )
+    status = "blocked_controlled_existing_draft_publish" if missing or issues else (
+        "ready_for_platform_adapter" if require_confirmation else "ready_for_confirmation"
+    )
+    warning_issues = [
+        {
+            "key": field,
+            "message": "This fact remains unknown and is not claimed in the buyer-facing Listing payload.",
+            "severity": "warning",
+        }
+        for field in disclosed
+    ]
+    return {
+        **generic,
+        "preflight": "jiejing-controlled-existing-draft-publish-preflight",
+        "preflight_version": "2026-08-26.1",
+        "status": status,
+        "missing_fields": sorted(set(missing)),
+        "issues": issues + warning_issues,
+        "confirmation_record_present": bool(request.confirmation_id and request.confirmed_by and request.confirmed_at),
+        "controlled_existing_draft_publish": True,
+        "creates_public_listing": True,
+        "requires_publish_offer_call": True,
+        "recreates_inventory_item": False,
+        "creates_second_offer": False,
+        "disclosed_missing_facts": disclosed,
+        "merchant_warning_required": bool(disclosed),
+        "real_execution_allowed": False,
+        "secret_exposed": False,
+    }
+
+
+def _controlled_existing_draft_publish_readiness(
+    *,
+    preflight: dict[str, Any],
+    general_preflight: dict[str, Any],
+) -> dict[str, Any]:
+    missing = list(preflight.get("missing_fields") or [])
+    disclosed = list(preflight.get("disclosed_missing_facts") or [])
+    ready_for_confirmation = preflight.get("status") == "ready_for_confirmation"
+    ready_for_platform_adapter = preflight.get("status") == "ready_for_platform_adapter"
+    readiness_status = (
+        "ready_for_platform_adapter"
+        if ready_for_platform_adapter
+        else "ready_for_confirmation"
+        if ready_for_confirmation
+        else "blocked_controlled_existing_draft_publish"
+    )
+    return {
+        "contract_version": "2026-08-26-controlled-existing-draft-publish-readiness-v1",
+        "status": readiness_status,
+        "ready_for_confirmation": ready_for_confirmation,
+        "ready_for_platform_adapter": ready_for_platform_adapter,
+        "blocking_check_count": len(missing),
+        "warning_count": len(disclosed),
+        "checks": [
+            {
+                "key": "exact_existing_offer_binding",
+                "status": "passed" if not missing else "blocked",
+                "blocking": bool(missing),
+                "missing_fields": missing,
+            },
+            {
+                "key": "disclosed_non_buyer_facts",
+                "status": "warning" if disclosed else "passed",
+                "blocking": False,
+                "missing_fields": disclosed,
+            },
+            {
+                "key": "merchant_action_confirmation",
+                "status": "passed" if ready_for_platform_adapter else "pending",
+                "blocking": False,
+                "next_action": (
+                    "The exact merchant approval is present; publishOffer may run once."
+                    if ready_for_platform_adapter
+                    else "The merchant must explicitly approve this exact Offer before publishOffer is called."
+                ),
+            },
+        ],
+        "controlled_existing_draft_publish": True,
+        "creates_public_listing": True,
+        "requires_publish_offer_call": True,
+        "creates_second_offer": False,
+        "general_listing_preflight_status": str(general_preflight.get("status") or ""),
+        "disclosed_missing_facts": disclosed,
         "secret_exposed": False,
     }
 

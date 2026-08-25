@@ -15,7 +15,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from jiejing_runtime.execution import ExecutionRequest, ExecutionService  # noqa: E402
-from jiejing_saas.api_server import _controlled_existing_draft_publish_context  # noqa: E402
+from jiejing_saas.api_server import (  # noqa: E402
+    _controlled_existing_draft_publish_context,
+    _controlled_existing_draft_publish_preflight,
+)
 from jiejing_saas.config import SaaSSettings  # noqa: E402
 from jiejing_saas.ebay_write_adapter import EbayWriteHttpAdapter, build_publish_readiness  # noqa: E402
 from jiejing_saas.ebay_oauth import UNPUBLISHED_DRAFT_SCOPES  # noqa: E402
@@ -232,6 +235,57 @@ def main() -> int:
     preflight = ExecutionService(demo_mode=False).preflight(request)
     if preflight.get("status") != "ready_for_platform_adapter":
         return fail(f"controlled publish payload should pass execution preflight: {preflight}")
+
+    disclosed_gap_payload = json.loads(json.dumps(context["publish_payload"]))
+    disclosed_gap_payload["supplier_facts"] = {"item_location": "shenzhen-warehouse"}
+    disclosed_gap_payload["finance_review"] = {}
+    disclosed_gap_request = ExecutionRequest(
+        action_type="publish_listing",
+        task_id="task_publish_existing_disclosed_gaps",
+        user_id="user_test",
+        company_id="company_test",
+        store_id="store_test",
+        platform="ebay",
+        confirmation_id="confirm_publish_existing_disclosed_gaps",
+        confirmed_by="user_test",
+        confirmed_at="2026-08-26T00:00:00+00:00",
+        idempotency_key="publish-existing-offer-disclosed-gaps-1",
+        payload=disclosed_gap_payload,
+    )
+    controlled_preflight = _controlled_existing_draft_publish_preflight(
+        disclosed_gap_request,
+        require_confirmation=True,
+    )
+    if controlled_preflight.get("status") != "ready_for_platform_adapter":
+        return fail(f"non-buyer-facing supplier/profit gaps should be disclosed warnings: {controlled_preflight}")
+    expected_warnings = {
+        "supplier_facts.package_weight_g",
+        "supplier_facts.package_dimensions_cm",
+        "supplier_facts.material",
+        "finance_review.net_profit_money",
+    }
+    if not expected_warnings.issubset(set(controlled_preflight.get("disclosed_missing_facts") or [])):
+        return fail(f"controlled publish did not disclose every retained fact gap: {controlled_preflight}")
+    blocked_payload = json.loads(json.dumps(disclosed_gap_payload))
+    blocked_payload["listing"]["title"] = ""
+    blocked_request = ExecutionRequest(
+        action_type="publish_listing",
+        task_id="task_publish_existing_missing_title",
+        user_id="user_test",
+        company_id="company_test",
+        store_id="store_test",
+        platform="ebay",
+        confirmation_id="confirm_publish_existing_missing_title",
+        confirmed_by="user_test",
+        confirmed_at="2026-08-26T00:00:00+00:00",
+        idempotency_key="publish-existing-offer-missing-title-1",
+        payload=blocked_payload,
+    )
+    blocked_preflight = _controlled_existing_draft_publish_preflight(blocked_request, require_confirmation=True)
+    if blocked_preflight.get("status") == "ready_for_platform_adapter" or "listing.title" not in (
+        blocked_preflight.get("missing_fields") or []
+    ):
+        return fail(f"buyer-facing listing facts must remain hard blockers: {blocked_preflight}")
 
     calls: list[tuple[str, str, dict]] = []
 

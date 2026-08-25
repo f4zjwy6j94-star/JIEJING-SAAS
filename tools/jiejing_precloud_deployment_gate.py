@@ -139,6 +139,7 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("oauth_callback_postgres_datetime", [sys.executable, "tools/test_jiejing_ebay_oauth_callback_postgres_datetime.py"]),
     ("ebay_unpublished_draft_oauth", [sys.executable, "tools/test_jiejing_ebay_unpublished_draft_oauth.py"]),
     ("controlled_existing_draft_publish", [sys.executable, "tools/test_jiejing_controlled_existing_draft_publish.py"]),
+    ("controlled_existing_draft_publish_http", [sys.executable, "tools/test_jiejing_controlled_existing_draft_publish_http.py"]),
     ("ebay_inventory_location_confirmation", [sys.executable, "tools/test_jiejing_ebay_inventory_location_confirmation.py"]),
     ("unpublished_draft_claim_capability", [sys.executable, "tools/test_jiejing_unpublished_draft_claim_capability.py"]),
     ("ebay_draft_save_readiness", [sys.executable, "tools/test_jiejing_ebay_draft_save_readiness.py"]),

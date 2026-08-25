@@ -21489,6 +21489,67 @@ function saasWorkbenchReportDetailMarkup(record = {}) {
   `;
 }
 
+function saasControlledExistingDraftPublishDetailMarkup(card = {}) {
+  const item = card?.item && typeof card.item === "object" ? card.item : {};
+  if (!isSaasControlledExistingDraftPublishConfirmation(card)) return "";
+  const payload = item.publish_payload && typeof item.publish_payload === "object" ? item.publish_payload : {};
+  const listing = payload.listing && typeof payload.listing === "object" ? payload.listing : {};
+  const policies = payload.business_policies && typeof payload.business_policies === "object" ? payload.business_policies : {};
+  const draft = item.existing_ebay_draft && typeof item.existing_ebay_draft === "object" ? item.existing_ebay_draft : {};
+  const assets = Array.isArray(payload.asset_manifest?.assets) ? payload.asset_manifest.assets : [];
+  const preflight = item.controlled_publish_preflight && typeof item.controlled_publish_preflight === "object"
+    ? item.controlled_publish_preflight
+    : {};
+  const price = listing.price && typeof listing.price === "object" ? listing.price : {};
+  const specifics = listing.item_specifics && typeof listing.item_specifics === "object" ? listing.item_specifics : {};
+  const warningLabels = {
+    "supplier_facts.package_weight_g": "包装重量",
+    "supplier_facts.package_dimensions_cm": "包装尺寸",
+    "supplier_facts.material": "准确材质",
+    "finance_review.net_profit_money": "利润测算",
+  };
+  const disclosedWarnings = (Array.isArray(preflight.disclosed_missing_facts) ? preflight.disclosed_missing_facts : [])
+    .map((field) => warningLabels[String(field || "")] || "")
+    .filter(Boolean);
+  const rows = [
+    ["Offer ID", draft.offer_id || "-"],
+    ["Offer 状态", draft.offer_status || "-"],
+    ["SKU", listing.sku || draft.sku || "-"],
+    ["标题", listing.title || "-"],
+    ["价格与库存", `${price.currency || "USD"} ${price.value || "-"} · 数量 ${listing.quantity ?? "-"}`],
+    ["市场 / 类目 / 状态", `${payload.marketplace_id || listing.marketplace_id || "EBAY_US"} · ${listing.category_id || "-"} · ${listing.condition || "-"}`],
+    ["实际库存位置", listing.merchant_location_key || "-"],
+    ["商品属性", Object.entries(specifics).map(([key, value]) => `${key}: ${value}`).join(" · ") || "-"],
+    ["履约政策", policies.fulfillment_policy_id || "-"],
+    ["付款政策", policies.payment_policy_id || "-"],
+    ["退货政策", policies.return_policy_id || "-"],
+    ["已审核素材", `${assets.length} 张`],
+  ];
+  return `
+    <div class="saas-controlled-publish-detail" aria-label="正式发布完整参数">
+      <div class="saas-confirm-detail-grid">
+        ${rows
+          .map(
+            ([label, value]) => `
+              <article>
+                <span>${escapeHtml(label)}</span>
+                <strong>${escapeHtml(publicRuntimeText(value))}</strong>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <p><strong>执行方式：</strong>批准后先只读核对同一 SKU 下唯一的 UNPUBLISHED Offer，再只调用一次 publishOffer；不会重建库存项，也不会创建第二个 Offer。</p>
+      ${
+        disclosedWarnings.length
+          ? `<p><strong>仍未核验但未向买家声称：</strong>${escapeHtml(disclosedWarnings.join("、"))}。这些缺口不会由 AI 编造；本次价格为商家测试价，利润未验证。</p>`
+          : ""
+      }
+      <p><strong>确认编号：</strong>${escapeHtml(card.confirmation_id || "-")}；敏感凭证保持后端隔离。</p>
+    </div>
+  `;
+}
+
 function saasWorkbenchConfirmationDetailMarkup(card = {}) {
   const item = card.item && typeof card.item === "object" ? card.item : {};
   const sourceIds = Array.isArray(item.source_task_ids) ? item.source_task_ids : [];
@@ -21680,6 +21741,9 @@ function saasConfirmationRollbackPlan(card = {}) {
 
 function saasConfirmationAfterApprovalText(card = {}) {
   const actionType = card.action_type || card.item?.action_type || "";
+  if (actionType === "publish_listing" && isSaasControlledExistingDraftPublishConfirmation(card)) {
+    return "批准后会立即执行一次 publishOffer，把确认单绑定的既有 Offer 公开发布；不会创建第二个 Offer。";
+  }
   if (actionType === "publish_listing") {
     return "先记录你的同意，再做发布体检；没有通过校验不会写入 eBay。";
   }
@@ -21706,6 +21770,7 @@ function saasConfirmationAfterApprovalText(card = {}) {
 
 function saasConfirmationMerchantBriefRows(card = {}, cardProduct = "") {
   const title = saasTitleWithProduct(saasWorkbenchConfirmationTitle(card) || card.title, cardProduct);
+  const controlledPublish = isSaasControlledExistingDraftPublishConfirmation(card);
   return [
     {
       label: "你现在确认",
@@ -21719,7 +21784,7 @@ function saasConfirmationMerchantBriefRows(card = {}, cardProduct = "") {
     },
     {
       label: "点同意后",
-      value: "进入下一步",
+      value: controlledPublish ? "立即正式发布当前 Offer" : "进入下一步",
       detail: saasConfirmationAfterApprovalText(card),
     },
     {
@@ -21785,6 +21850,9 @@ function saasConfirmationApproveButtonLabel(card = {}) {
   }
   if (actionType === "create_ebay_inventory_location") {
     return "同意创建这个库存位置";
+  }
+  if (actionType === "publish_listing" && isSaasControlledExistingDraftPublishConfirmation(card)) {
+    return "确认并正式发布这个 Offer";
   }
   if (actionType === "publish_listing" && isSaasRealPlatformWritesEnabled()) {
     return "同意，继续发布体检";
@@ -23090,7 +23158,11 @@ function renderSaasConfirmPanel() {
                     </details>
                     <details class="confirm-detail">
                       <summary>查看依据</summary>
-                      <p>${escapeHtml(publicRuntimeText(saasWorkbenchConfirmationSource(card)))}</p>
+                      ${
+                        isSaasControlledExistingDraftPublishConfirmation(card)
+                          ? saasControlledExistingDraftPublishDetailMarkup(card)
+                          : `<p>${escapeHtml(publicRuntimeText(saasWorkbenchConfirmationSource(card)))}</p>`
+                      }
                     </details>
                     ${
                       status === "pending"
