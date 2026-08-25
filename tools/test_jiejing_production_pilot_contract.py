@@ -117,6 +117,20 @@ def main() -> int:
         return fail("production pilot must not retain the obsolete Stripe launch lane")
 
     compose = PRODUCTION_COMPOSE.read_text(encoding="utf-8")
+    controlled_draft_overrides = {
+        "JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED": "false",
+        "JIEJING_ENABLE_REAL_PLATFORM_WRITES": "false",
+        "JIEJING_EBAY_WRITE_LIVE": "false",
+        "JIEJING_EBAY_DRAFT_SAVE_LIVE": "true",
+        "JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY": "controlled_unpublished_draft_only",
+    }
+    for key, expected_value in controlled_draft_overrides.items():
+        marker = f'{key}: "{expected_value}"'
+        if compose.count(marker) != 2:
+            return fail(
+                "production API and worker must share the exact controlled unpublished-draft override: "
+                f"{key}={expected_value}"
+            )
     if not PRODUCTION_REQUIREMENTS_LOCK.exists():
         return fail("production Python dependencies must have an exact hash lock")
     if not PRODUCTION_BUILD_REQUIREMENTS_LOCK.exists():

@@ -19,6 +19,11 @@ services:
       jiejing-vault-token-renewer:
         condition: service_healthy
     environment:
+      JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED: "false"
+      JIEJING_ENABLE_REAL_PLATFORM_WRITES: "false"
+      JIEJING_EBAY_WRITE_LIVE: "false"
+      JIEJING_EBAY_DRAFT_SAVE_LIVE: "true"
+      JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "controlled_unpublished_draft_only"
       JIEJING_PUBLIC_BASE_URL: "https://${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
       JIEJING_PUBLIC_APP_URL: "https://${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
       JIEJING_STABLE_DOMAIN: "${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
@@ -58,6 +63,11 @@ services:
     env_file:
       - ${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-saas.production.env
     environment:
+      JIEJING_PRODUCTION_CANDIDATE_BOOT_ALLOWED: "false"
+      JIEJING_ENABLE_REAL_PLATFORM_WRITES: "false"
+      JIEJING_EBAY_WRITE_LIVE: "false"
+      JIEJING_EBAY_DRAFT_SAVE_LIVE: "true"
+      JIEJING_PUBLIC_STAGING_REAL_WRITE_POLICY: "controlled_unpublished_draft_only"
       JIEJING_PUBLIC_BASE_URL: "https://${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
       JIEJING_PUBLIC_APP_URL: "https://${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
       JIEJING_STABLE_DOMAIN: "${JIEJING_PRODUCTION_HOST:?set an isolated production hostname}"
