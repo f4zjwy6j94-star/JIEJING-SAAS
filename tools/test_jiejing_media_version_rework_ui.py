@@ -36,7 +36,16 @@ def main() -> int:
     if missing:
         print(f"FAIL media version/rework UI contract missing: {missing}")
         return 1
-    if "window.confirm" not in app or "不会写入 eBay" not in app:
+    retry_start = app.index("async function retrySaasMediaAssetJob")
+    retry_end = app.index("\nfunction saasMediaSourceAssetForListingDraft", retry_start)
+    retry_source = app[retry_start:retry_end]
+    if "window.confirm" in retry_source:
+        print("FAIL media rework must use an in-page confirmation instead of a blocking browser dialog")
+        return 1
+    if "await requestMediaReworkAcceptance(sourceJob)" not in retry_source:
+        print("FAIL media rework must wait for the merchant-facing in-page acceptance before queueing")
+        return 1
+    if "不会写入 eBay" not in app or "确认创建新版本" not in app:
         print("FAIL media rework must disclose usage and eBay write boundary before queueing")
         return 1
     print("PASS jiejing_media_version_rework_ui")

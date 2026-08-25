@@ -15652,8 +15652,7 @@ async function retrySaasMediaAssetJob(mediaJobId, button = null) {
   const cleanId = String(mediaJobId || "").trim();
   if (!cleanId) return null;
   const sourceJob = (state.saasMediaAssetJobs || []).find((job) => String(job?.media_job_id || "") === cleanId) || {};
-  const estimateText = saasMediaAssetJobCostLabel(sourceJob);
-  if (!window.confirm(`将保留当前版本并创建新版本。${estimateText}；不会写入 eBay。是否继续？`)) return null;
+  if (!(await requestMediaReworkAcceptance(sourceJob))) return null;
   const originalLabel = button?.textContent || "生成新版本";
   if (button) {
     button.disabled = true;
@@ -15689,6 +15688,32 @@ async function retrySaasMediaAssetJob(mediaJobId, button = null) {
       button.textContent = originalLabel;
     }
   }
+}
+
+function requestMediaReworkAcceptance(sourceJob = {}) {
+  if (pendingMediaGenerationAcceptance) return Promise.resolve(false);
+  closeModals();
+  const estimateText = saasMediaAssetJobCostLabel(sourceJob);
+  setText("#mediaAcceptanceRole", "素材重做确认");
+  setText("#mediaAcceptanceTitle", "确认创建新版本");
+  setText(
+    "#mediaAcceptanceIntro",
+    "捷境会保留当前版本，并按原商品、来源图和生成要求创建一个新的待审核版本。",
+  );
+  setText("#mediaAcceptanceBoundary", estimateText);
+  setText("#mediaAcceptanceSafety", "新版本仍需审核实物一致性和图片权利；不会自动发布、付款或写入 eBay。");
+  const confirmButton = document.querySelector("#mediaAcceptanceConfirm");
+  if (confirmButton) {
+    confirmButton.textContent = "确认创建新版本";
+    confirmButton.onclick = () => settleMediaGenerationAcceptance(true);
+  }
+  if (!mediaAcceptanceModal || !confirmButton) return Promise.resolve(false);
+  mediaAcceptanceModal.hidden = false;
+  document.body.classList.add("site-locked");
+  return new Promise((resolve) => {
+    pendingMediaGenerationAcceptance = resolve;
+    window.setTimeout(() => confirmButton.focus(), 0);
+  });
 }
 
 function saasMediaSourceAssetForListingDraft(draft = {}) {
