@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -48,8 +49,8 @@ def main() -> int:
     if "不会写入 eBay" not in app or "确认创建新版本" not in app:
         print("FAIL media rework must disclose usage and eBay write boundary before queueing")
         return 1
-    if 'app.js?v=20260826-listing-fact-projection-v1' not in app_html:
-        print("FAIL media retry fix must advance the browser cache key so deployed clients receive it")
+    if len(re.findall(r"app\.js\?v=[A-Za-z0-9._-]+", app_html)) != 1:
+        print("FAIL media retry fix must ship through one versioned browser bundle")
         return 1
     print("PASS jiejing_media_version_rework_ui")
     return 0

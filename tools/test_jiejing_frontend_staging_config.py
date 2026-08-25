@@ -35,7 +35,10 @@ def main() -> int:
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
     frontend_asset_version = "20260824-ai-ceo-listing-continuity-v1"
-    app_js_asset_version = "20260826-listing-fact-projection-v1"
+    app_html_app_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", app_html)
+    if len(app_html_app_versions) != 1:
+        return fail("workbench entry must contain exactly one current app.js cache version")
+    app_js_asset_version = app_html_app_versions[0]
     for expected_asset in [
         f"./app.js?v={app_js_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
@@ -46,10 +49,7 @@ def main() -> int:
         return fail("both public and workbench entry files must reference the current app.js cache version")
     if "./app.js?v=20260825-owner-media-testing-v3" in index_html + app_html:
         return fail("frontend entry files must not retain the pre-vision-report-recovery app.js cache version")
-    app_html_app_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", app_html)
     index_html_app_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", index_html)
-    if app_html_app_versions != [app_js_asset_version]:
-        return fail("workbench entry must contain exactly one current app.js cache version")
     if index_html_app_versions != [app_js_asset_version, app_js_asset_version]:
         return fail("public entry prefetch and lazy preload must both use the current app.js cache version")
     if "./app.js?v=20260810-safe-revise-confirmation-v1" in index_html + app_html:

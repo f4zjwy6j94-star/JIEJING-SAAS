@@ -1,3 +1,4 @@
+import re
 import subprocess
 from pathlib import Path
 
@@ -391,16 +392,10 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
         "候选商品已导入为待补资料草稿",
         "merchant sees that candidate import succeeded while publish facts remain blocked",
     )
-    require(
-        app_html,
-        "app.js?v=20260826-listing-fact-projection-v1",
-        "workspace retains the AI CEO candidate import fix in the current asset version",
-    )
-    require(
-        index_html,
-        "app.js?v=20260826-listing-fact-projection-v1",
-        "public entry preloads the same current Listing asset version",
-    )
+    app_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", app_html)
+    index_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", index_html)
+    if len(app_versions) != 1 or index_versions != [app_versions[0], app_versions[0]]:
+        raise AssertionError("public and workspace entries must share one current versioned Listing bundle")
     require(
         app_js,
         "function saasAccountScopedEbayPublishPrefillFromPacket",

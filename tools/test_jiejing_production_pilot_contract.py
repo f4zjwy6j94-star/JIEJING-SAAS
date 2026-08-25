@@ -481,6 +481,8 @@ def main() -> int:
     for marker in (
         "server_name _;",
         "location = /app.html",
+        "location = /app.js",
+        "location = /styles.css",
         "location = /sitemap.xml",
         "return 302 https://$host/index.html?source=direct_app_entry&start=site",
         "location = /ops.html { return 404; }",
@@ -489,6 +491,14 @@ def main() -> int:
     ):
         if marker not in nginx:
             return fail(f"production static server is missing safety marker: {marker}")
+    for main_asset in ("app.js", "styles.css"):
+        asset_location = re.search(
+            rf"location = /{re.escape(main_asset)}\s*\{{(?P<body>.*?)\n\s*\}}",
+            nginx,
+            flags=re.DOTALL,
+        )
+        if not asset_location or 'Cache-Control "no-cache, max-age=0, must-revalidate" always' not in asset_location.group("body"):
+            return fail(f"production main asset must revalidate after every release: {main_asset}")
     for security_header in (
         'X-Frame-Options "DENY" always',
         'X-Content-Type-Options "nosniff" always',

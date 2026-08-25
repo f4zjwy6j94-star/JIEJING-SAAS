@@ -158,11 +158,10 @@ def main() -> int:
     ceo_submit_body = function_body(app_js, "handleCeoFormSubmit", "bindCeoForm")
     if "if (isSaasPublicMvpMode())" not in ceo_submit_body:
         return fail("public SaaS AI CEO submit should use the real command routing path before legacy media demo routing")
-    for marker in [
-        "20260826-listing-fact-projection-v1",
-    ]:
-        if marker not in app_html + index_html:
-            return fail(f"frontend cache version must retain the current media retry UI bundle: {marker}")
+    app_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", app_html)
+    index_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", index_html)
+    if len(app_versions) != 1 or index_versions != [app_versions[0], app_versions[0]]:
+        return fail("frontend entries must share one current versioned media UI bundle")
     for stale_asset_version in [
         "20260525-workflow-feedback-v1",
         "20260526-owner-publish-v1",
