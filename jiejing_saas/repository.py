@@ -6746,12 +6746,48 @@ class SaaSRepository:
                 and str(confirmation.get("action_type") or "") == str(action_type or "")
             ):
                 raise ConfirmationDecisionConflict("external_execution_reconciliation_conflict")
-            execution = conn.execute(
-                "select execution_id from execution_results where confirmation_id = ? limit 1",
+            executions = conn.execute(
+                "select execution_id, action_type, status, result_json from execution_results where confirmation_id = ?",
                 (confirmation_id,),
-            ).fetchone()
-            if execution:
-                raise ConfirmationDecisionConflict("external_execution_already_recorded")
+            ).fetchall()
+            recorded_failure_statuses: list[str] = []
+            for execution in executions:
+                try:
+                    result_value = _load_json_field(execution["result_json"])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    result_value = {}
+                result = result_value if isinstance(result_value, dict) else {}
+                audit = result.get("audit") if isinstance(result.get("audit"), dict) else {}
+                real_execution = (
+                    audit.get("real_execution")
+                    if isinstance(audit.get("real_execution"), dict)
+                    else {}
+                )
+                platform_result = (
+                    result.get("platform_result")
+                    if isinstance(result.get("platform_result"), dict)
+                    else {}
+                )
+                steps = result.get("steps") if isinstance(result.get("steps"), list) else []
+                rejected_publish_step = any(
+                    isinstance(step, dict)
+                    and str(step.get("step") or "") == "publish_existing_offer"
+                    and str(step.get("status") or "") == "http_error"
+                    for step in steps
+                )
+                verified_recorded_failure = bool(
+                    str(execution["action_type"] or "") == str(action_type or "")
+                    and str(execution["status"] or "") == "blocked_platform_error"
+                    and str(result.get("status") or "") == "blocked_platform_error"
+                    and real_execution.get("published_to_ebay") is False
+                    and platform_result.get("published_to_ebay") is not True
+                    and platform_result.get("public_listing_created") is not True
+                    and not str(platform_result.get("listing_id") or platform_result.get("item_id") or "")
+                    and rejected_publish_step
+                )
+                if not verified_recorded_failure:
+                    raise ConfirmationDecisionConflict("external_execution_already_recorded")
+                recorded_failure_statuses.append(str(execution["status"] or ""))
             transitioned = conn.execute(
                 """
                 update confirmations set status = 'needs_revision'
@@ -6787,6 +6823,8 @@ class SaaSRepository:
                     "external_state_unchanged": True,
                     "offer_id": str(evidence.get("offer_id") or ""),
                     "sku": str(evidence.get("sku") or ""),
+                    "recorded_execution_count": len(executions),
+                    "recorded_failure_statuses": recorded_failure_statuses,
                     "secret_exposed": False,
                 },
             )

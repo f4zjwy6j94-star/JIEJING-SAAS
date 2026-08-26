@@ -87,6 +87,7 @@ class FakeExactPublishAdapter:
     exact_call_count = 0
     broad_call_count = 0
     fail_before_provider_once = False
+    return_blocked_platform_once = False
     recovery_call_count = 0
     last_request: dict[str, Any] = {}
 
@@ -111,6 +112,37 @@ class FakeExactPublishAdapter:
         if type(self).fail_before_provider_once:
             type(self).fail_before_provider_once = False
             raise TypeError("simulated_pre_provider_adapter_contract_failure")
+        if type(self).return_blocked_platform_once:
+            type(self).return_blocked_platform_once = False
+            return {
+                "status": "blocked_platform_error",
+                "action_type": "publish_listing",
+                "task_id": request.task_id,
+                "message": "eBay rejected publishOffer before creating a public Listing.",
+                "steps": [
+                    {
+                        "step": "inspect_existing_offer",
+                        "status": "ok",
+                        "http_status": 200,
+                        "raw_response_stored": False,
+                    },
+                    {
+                        "step": "publish_existing_offer",
+                        "status": "http_error",
+                        "http_status": 400,
+                        "raw_response_stored": False,
+                    },
+                ],
+                "audit": {
+                    "preflight": preflight,
+                    "real_execution": {
+                        "published_to_ebay": False,
+                        "public_listing_created": False,
+                    },
+                    "raw_response_stored": False,
+                },
+                "secret_exposed": False,
+            }
         if preflight.get("status") != "ready_for_platform_adapter":
             raise AssertionError(f"exact publish adapter received blocked preflight: {preflight}")
         if credential_boundary.get("ready") is not True:
@@ -383,29 +415,81 @@ def main() -> int:
             )
             if replacement_preflight_status != 201 or replacement_preflight.get("preflight", {}).get("status") != "ready_for_platform_adapter":
                 raise AssertionError(f"replacement exact Offer must pass preflight: {replacement_preflight_status} {replacement_preflight}")
-            execute_status, execution = _post(
+            FakeExactPublishAdapter.return_blocked_platform_once = True
+            blocked_status, blocked_execution = _post(
                 base_url,
                 f"/confirmations/{replacement_id}/execute",
                 {"platform": "ebay", "idempotency_key": "controlled-publish-http-002"},
+                token,
+            )
+            blocked_stored = blocked_execution.get("execution") or {}
+            if blocked_status != 201 or blocked_stored.get("status") != "blocked_platform_error":
+                raise AssertionError(f"provider rejection must be recorded without claiming success: {blocked_status} {blocked_execution}")
+            recorded_recovery_status, recorded_recovery = _post(
+                base_url,
+                f"/confirmations/{replacement_id}/publish-recovery",
+                {"platform": "ebay", "idempotency_key": "controlled-publish-http-recovery-002"},
+                token,
+            )
+            if not (
+                recorded_recovery_status == 201
+                and recorded_recovery.get("fresh_confirmation_required") is True
+                and recorded_recovery.get("publish_recovery", {}).get("safe_to_request_fresh_confirmation") is True
+                and recorded_recovery.get("confirmation", {}).get("status") == "needs_revision"
+            ):
+                raise AssertionError(
+                    "official proof that a rejected publish created no Listing must retire the consumed confirmation: "
+                    f"{recorded_recovery_status} {recorded_recovery}"
+                )
+            final_intake_status, final_intake = _post(base_url, intake_path, intake_body, token)
+            final_confirmation = final_intake.get("confirmation") or {}
+            final_confirmation_id = str(final_confirmation.get("confirmation_id") or "")
+            if not (
+                final_intake_status == 201
+                and final_confirmation_id
+                and final_confirmation_id not in {confirmation_id, replacement_id}
+                and final_confirmation.get("status") == "pending"
+            ):
+                raise AssertionError(f"recorded no-op recovery must require one fresh confirmation: {final_intake_status} {final_intake}")
+            final_approval_status, final_approval = _post(
+                base_url,
+                f"/confirmations/{final_confirmation_id}/decision",
+                {"decision": "approve", "note": "Approve exact existing Offer after recorded provider rejection."},
+                token,
+            )
+            if final_approval_status != 201 or (final_approval.get("confirmation") or {}).get("status") != "approved":
+                raise AssertionError(f"final exact approval failed: {final_approval_status} {final_approval}")
+            final_preflight_status, final_preflight = _post(
+                base_url,
+                f"/confirmations/{final_confirmation_id}/preflight",
+                {"platform": "ebay", "idempotency_key": "controlled-publish-http-003"},
+                token,
+            )
+            if final_preflight_status != 201 or final_preflight.get("preflight", {}).get("status") != "ready_for_platform_adapter":
+                raise AssertionError(f"final exact Offer must pass preflight: {final_preflight_status} {final_preflight}")
+            execute_status, execution = _post(
+                base_url,
+                f"/confirmations/{final_confirmation_id}/execute",
+                {"platform": "ebay", "idempotency_key": "controlled-publish-http-003"},
                 token,
             )
             stored = execution.get("execution") or {}
             if execute_status != 201 or stored.get("status") != "published_to_ebay":
                 raise AssertionError(f"exact existing Offer did not reach its dedicated adapter: {execute_status} {execution}")
-            if FakeExactPublishAdapter.exact_call_count != 2 or FakeExactPublishAdapter.broad_call_count != 0:
-                raise AssertionError("controlled HTTP route must isolate the failed pre-provider call and publish only after fresh approval")
+            if FakeExactPublishAdapter.exact_call_count != 3 or FakeExactPublishAdapter.broad_call_count != 0:
+                raise AssertionError("controlled HTTP route must isolate failures and publish only after a fresh approval")
             if FakeExactPublishAdapter.last_request.get("existing_ebay_draft", {}).get("offer_id") != OFFER_ID:
                 raise AssertionError("controlled HTTP route changed the approved existing Offer binding")
-            final_confirmation = repository.get_confirmation(company_id=company_id, confirmation_id=replacement_id) or {}
-            if final_confirmation.get("status") != "executed":
-                raise AssertionError(f"successful public publish must close its confirmation: {final_confirmation}")
+            stored_final_confirmation = repository.get_confirmation(company_id=company_id, confirmation_id=final_confirmation_id) or {}
+            if stored_final_confirmation.get("status") != "executed":
+                raise AssertionError(f"successful public publish must close its confirmation: {stored_final_confirmation}")
             repeat_status, _repeat = _post(
                 base_url,
-                f"/confirmations/{replacement_id}/execute",
-                {"platform": "ebay", "idempotency_key": "controlled-publish-http-002"},
+                f"/confirmations/{final_confirmation_id}/execute",
+                {"platform": "ebay", "idempotency_key": "controlled-publish-http-003"},
                 token,
             )
-            if repeat_status != 409 or FakeExactPublishAdapter.exact_call_count != 2:
+            if repeat_status != 409 or FakeExactPublishAdapter.exact_call_count != 3:
                 raise AssertionError("a repeated execute must fail before a second publishOffer call")
             print("PASS jiejing_controlled_existing_draft_publish_http")
             return 0
