@@ -1391,6 +1391,8 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertEqual("JJ-INCENSE-01", snapshot.get("listing", {}).get("sku"))
         self.assertEqual(1, snapshot.get("media", {}).get("asset_manifest_count"))
         self.assertEqual(1, snapshot.get("media", {}).get("listing_eligible_asset_count"))
+        self.assertIs(snapshot.get("media", {}).get("rights_confirmed_for_listing_draft"), True)
+        self.assertIs(snapshot.get("media", {}).get("product_fact_review_required_before_publish"), True)
         self.assertEqual("245675556011", snapshot.get("ebay_draft", {}).get("offer_id"))
         self.assertIs(snapshot.get("ebay_draft", {}).get("public_listing_created"), False)
         self.assertEqual("restricted", snapshot.get("account_health", {}).get("status"))
@@ -1419,6 +1421,36 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertIs(result.get("current"), True)
         self.assertIs(result.get("stale"), False)
         self.assertIs(result.get("unbound"), False)
+
+    def test_decision_center_recovers_current_listing_scope_before_listing_view_renders(self) -> None:
+        scope_helper = function_body(APP_JS, "saasActiveListingConfirmationScope")
+        matcher = function_body(APP_JS, "saasConfirmationMatchesActiveListingContext")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const state = { saasConfirmations: [] };",
+                    "const saasCurrentListingProjectIdentity = () => ({ key: '', product: '', source_report_id: '', candidate_id: '' });",
+                    "const saasListingDraftAuthoritativeSku = () => '';",
+                    "const saasCurrentUnpublishedDraftReceipt = () => null;",
+                    "const saasNormalizeListingProjectIdentity = (value) => value && value.key ? value : null;",
+                    "const saasTimestampMillis = (value) => Date.parse(value || '') || 0;",
+                    scope_helper,
+                    matcher,
+                    "const cards = [",
+                    "  { confirmation_id: 'confirm-old-price', action_type: 'change_price', created_at: '2026-08-10T19:11:00Z', item: {} },",
+                    "  { confirmation_id: 'confirm-current-publish', action_type: 'publish_listing', status: 'approved', created_at: '2026-08-26T12:17:00Z', item: { controlled_existing_draft_publish: true, listing_project_identity: { key: 'project-incense', source_report_id: 'report-incense', candidate_id: 'candidate-incense' }, existing_ebay_draft: { offer_id: '245675556011', sku: 'JJ-INCENSE-01' } } },",
+                    "  { confirmation_id: 'confirm-old-policy', action_type: 'change_store_policy', created_at: '2026-08-10T19:11:00Z', item: {} },",
+                    "];",
+                    "const scope = saasActiveListingConfirmationScope(cards);",
+                    "console.log(JSON.stringify({ scope, current: saasConfirmationMatchesActiveListingContext(cards[1], scope), oldPrice: saasConfirmationMatchesActiveListingContext(cards[0], scope), oldPolicy: saasConfirmationMatchesActiveListingContext(cards[2], scope) }));",
+                ]
+            )
+        )
+        self.assertEqual("JJ-INCENSE-01", result.get("scope", {}).get("sku"))
+        self.assertEqual("245675556011", result.get("scope", {}).get("offer_id"))
+        self.assertIs(result.get("current"), True)
+        self.assertIs(result.get("oldPrice"), False)
+        self.assertIs(result.get("oldPolicy"), False)
 
     def test_manual_form_confirmation_is_the_only_frontend_source_of_verified_payload(self) -> None:
         build_intake = function_body(APP_JS, "buildSaasAiCeoSupplierFactIntake")

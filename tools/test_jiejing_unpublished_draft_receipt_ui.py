@@ -157,7 +157,7 @@ if (controlledReceipt.executionId !== "exec_receipt_test") throw new Error("cont
         if marker not in app_js:
             raise AssertionError(f"Listing receipt does not expose the controlled publish handoff: {marker}")
 
-    display_start = app_js.index("function saasConfirmationMatchesActiveListingContext")
+    display_start = app_js.index("function saasActiveListingConfirmationScope")
     display_end = app_js.index("function saasConfirmationCanonicalKey", display_start)
     display_source = app_js[display_start:display_end]
     display_script = f"""

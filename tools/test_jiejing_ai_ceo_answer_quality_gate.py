@@ -170,6 +170,8 @@ def main() -> None:
         "media": {
             "asset_manifest_count": 1,
             "listing_eligible_asset_count": 1,
+            "rights_confirmed_for_listing_draft": True,
+            "product_fact_review_required_before_publish": True,
             "review_statuses": ["merchant_review_confirmed"],
         },
         "ebay_draft": {
@@ -193,6 +195,8 @@ def main() -> None:
         }
     )
     assert normalized_active_listing["listing"]["known_facts"] == {"material": "resin"}, normalized_active_listing
+    assert normalized_active_listing["media"]["rights_confirmed_for_listing_draft"] is True, normalized_active_listing
+    assert normalized_active_listing["media"]["product_fact_review_required_before_publish"] is True, normalized_active_listing
     assert "MUST_NOT_LEAK" not in str(normalized_active_listing), normalized_active_listing
     second_pass_context = {**context, "active_listing_context": active_listing_context}
     contradictory_second_pass = (
@@ -222,9 +226,22 @@ def main() -> None:
     assert restored_media_quality["accepted"] is False, restored_media_quality
     assert "existing_media_reported_missing" in restored_media_quality["blocked_by"], restored_media_quality
 
+    contradictory_media_rights = (
+        "现有 1 个素材符合 Listing 草稿要求，但图片发布权：阻断，图片商业使用权仍未确认。"
+    )
+    contradictory_media_rights_quality = validate_ai_ceo_answer_quality(
+        message=second_pass_message,
+        route="ebay_workflow",
+        answer=contradictory_media_rights,
+        context=second_pass_context,
+    )
+    assert contradictory_media_rights_quality["accepted"] is False, contradictory_media_rights_quality
+    assert "existing_media_rights_reported_blocked" in contradictory_media_rights_quality["blocked_by"], contradictory_media_rights_quality
+
     accurate_second_pass = (
         "第二遍检查已读取当前项目：SKU JJ-INCENSE-JC2023041300002-01 已存在；"
-        "AssetManifest 有 1 个可用于 Listing 草稿的已审核素材；"
+        "AssetManifest 有 1 个可用于 Listing 草稿的已审核素材，图片使用权已确认，不是阻断项；"
+        "商品事实和实物一致性仍需独立复核；"
         "Offer 245675556011 仍为 UNPUBLISHED。当前账号受限，先停在只读预检，不创建重复 Offer。"
     )
     accurate_quality = validate_ai_ceo_answer_quality(
@@ -260,6 +277,7 @@ def main() -> None:
     assert "SKU JJ-INCENSE-JC2023041300002-01 已存在" in rejected_second_pass["answer"], rejected_second_pass
     assert "Offer 245675556011 已保存" in rejected_second_pass["answer"], rejected_second_pass
     assert "不会创建第二个 Offer" in rejected_second_pass["answer"], rejected_second_pass
+    assert "Listing 草稿使用权已确认" in rejected_second_pass["answer"], rejected_second_pass
     assert rejected_second_pass["answer_quality"]["repair_retry_count"] == 1, rejected_second_pass
 
     strict_message = (

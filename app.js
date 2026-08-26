@@ -20584,11 +20584,50 @@ function saasReportsForDisplay(reports = []) {
   return [...latest, ...reports.filter((record) => !seen.has(record.report_id))];
 }
 
-function saasConfirmationMatchesActiveListingContext(card = {}) {
+function saasActiveListingConfirmationScope(confirmations = state.saasConfirmations || []) {
   const activeIdentity = saasCurrentListingProjectIdentity();
   const activeSku = String(saasListingDraftAuthoritativeSku() || "").trim();
-  const activeReceipt = saasCurrentUnpublishedDraftReceipt();
+  const activeReceipt = activeIdentity?.key || activeSku ? saasCurrentUnpublishedDraftReceipt() : null;
   const activeOfferId = String(activeReceipt?.offerId || "").trim();
+  if (activeIdentity?.key || activeSku || activeOfferId) {
+    return { identity: activeIdentity || {}, sku: activeSku, offer_id: activeOfferId, source: "active_listing_draft" };
+  }
+
+  const candidates = (Array.isArray(confirmations) ? confirmations : [])
+    .map((card) => {
+      const item = card?.item && typeof card.item === "object" ? card.item : {};
+      const publishPayload = item.publish_payload && typeof item.publish_payload === "object" ? item.publish_payload : {};
+      const listing = publishPayload.listing && typeof publishPayload.listing === "object" ? publishPayload.listing : {};
+      const existingDraft = item.existing_ebay_draft && typeof item.existing_ebay_draft === "object" ? item.existing_ebay_draft : {};
+      const identity = saasNormalizeListingProjectIdentity(
+        item.listing_project_identity || listing.listing_project_identity || card?.listing_project_identity,
+      );
+      const sku = String(existingDraft.sku || listing.sku || item.sku || card?.sku || "").trim();
+      const offerId = String(existingDraft.offer_id || item.offer_id || card?.offer_id || "").trim();
+      const actionType = String(card?.action_type || "").trim();
+      const isListingHandoff =
+        actionType === "save_ebay_listing_draft" ||
+        (actionType === "publish_listing" && item.controlled_existing_draft_publish === true);
+      if (!isListingHandoff || (!identity?.key && !sku && !offerId)) return null;
+      return {
+        identity: identity || {},
+        sku,
+        offer_id: offerId,
+        source: "latest_listing_confirmation",
+        timestamp: saasTimestampMillis(card?.updated_at || card?.created_at),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.timestamp - a.timestamp);
+  return candidates[0] || { identity: {}, sku: "", offer_id: "", source: "none", timestamp: 0 };
+}
+
+function saasConfirmationMatchesActiveListingContext(card = {}, scope = null) {
+  const activeScope = scope && typeof scope === "object" ? scope : null;
+  const activeIdentity = activeScope?.identity || saasCurrentListingProjectIdentity();
+  const activeSku = String(activeScope?.sku || saasListingDraftAuthoritativeSku() || "").trim();
+  const activeReceipt = activeScope ? null : saasCurrentUnpublishedDraftReceipt();
+  const activeOfferId = String(activeScope?.offer_id || activeReceipt?.offerId || "").trim();
   if (!activeIdentity?.key && !activeSku && !activeOfferId) return true;
   const item = card?.item && typeof card.item === "object" ? card.item : {};
   const publishPayload = item.publish_payload && typeof item.publish_payload === "object" ? item.publish_payload : {};
@@ -20617,10 +20656,11 @@ function saasConfirmationMatchesActiveListingContext(card = {}) {
 
 function saasConfirmationsForDisplay(confirmations = []) {
   confirmations = Array.isArray(confirmations) ? confirmations : [];
+  const activeListingScope = saasActiveListingConfirmationScope(confirmations);
   const latestTask = saasLatestProductWorkflowTask();
   const latest = latestTask?.task_id ? confirmations.filter((card) => card.task_id === latestTask.task_id) : confirmations;
   const ordinarySource = (latest.length ? latest : confirmations).filter((card) =>
-    saasConfirmationMatchesActiveListingContext(card),
+    saasConfirmationMatchesActiveListingContext(card, activeListingScope),
   );
   const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
   const currentStoreId = String(activeSaasStore()?.store_id || "").trim();
@@ -20669,7 +20709,7 @@ function saasConfirmationsForDisplay(confirmations = []) {
         ["pending", "approved"].includes(String(card?.status || "")) &&
         isUniqueConfirmation(card) &&
         isSaasExactUnpublishedDraftSaveConfirmation(card, currentCompanyId, currentStoreId) &&
-        saasConfirmationMatchesActiveListingContext(card),
+        saasConfirmationMatchesActiveListingContext(card, activeListingScope),
     )
     .sort((a, b) => saasTimestampMillis(b.created_at || b.updated_at) - saasTimestampMillis(a.created_at || a.updated_at));
   const currentStoreInventoryLocations = confirmations
@@ -20686,7 +20726,7 @@ function saasConfirmationsForDisplay(confirmations = []) {
         ["pending", "approved"].includes(String(card?.status || "")) &&
         isUniqueConfirmation(card) &&
         isSaasUniqueCurrentControlledExistingDraftPublishConfirmation(card, confirmations) &&
-        saasConfirmationMatchesActiveListingContext(card),
+        saasConfirmationMatchesActiveListingContext(card, activeListingScope),
     )
     .sort((a, b) => saasTimestampMillis(b.created_at || b.updated_at) - saasTimestampMillis(a.created_at || a.updated_at));
   const currentStoreControlledPublishRecoveries = confirmations
@@ -20694,7 +20734,7 @@ function saasConfirmationsForDisplay(confirmations = []) {
       (card) =>
         isUniqueConfirmation(card) &&
         isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(card, confirmations) &&
-        saasConfirmationMatchesActiveListingContext(card),
+        saasConfirmationMatchesActiveListingContext(card, activeListingScope),
     )
     .sort((a, b) => saasTimestampMillis(b.created_at || b.updated_at) - saasTimestampMillis(a.created_at || a.updated_at));
   const protectedIds = new Set(
@@ -23365,7 +23405,13 @@ function renderSaasConfirmPanel() {
   const allPendingCount = cards.filter((card) => card.status === "pending").length;
   const latestTask = saasLatestProductWorkflowTask();
   const currentProject = saasCurrentListingProjectIdentity();
-  const productLabel = currentProject.product || saasListingDraftAuthoritativeSku() || saasWorkflowProductLabel(latestTask) || saasModelValueProductLabel();
+  const activeListingScope = saasActiveListingConfirmationScope(allCards);
+  const productLabel =
+    currentProject.product ||
+    saasListingDraftAuthoritativeSku() ||
+    activeListingScope.sku ||
+    saasWorkflowProductLabel(latestTask) ||
+    saasModelValueProductLabel();
   const realWritesEnabled = state.saasEbayWriteAdapter?.real_platform_writes_enabled === true;
   panel.innerHTML = `
     <section class="saas-readable-page-head saas-confirm-readable-head" aria-label="决策中心说明">
@@ -25468,6 +25514,15 @@ function saasAiCeoActiveListingContext() {
   );
   const writebackListingReady = Boolean(mediaWriteback) && saasListingMediaWritebackRightsReady(draft);
   const writebackEligibleAssetCount = writebackListingReady ? writebackAssetCount : 0;
+  const listingEligibleAssetCount = Math.max(listingAssets.length, writebackEligibleAssetCount);
+  const rightsConfirmedForListingDraft = listingEligibleAssetCount > 0 && (
+    writebackListingReady ||
+    listingAssets.some((asset) =>
+      ["approved_for_listing_draft", "merchant_review_confirmed"].includes(
+        String(asset?.listing_use_status || asset?.review_status || ""),
+      ),
+    )
+  );
   const mediaReviewStatuses = [
     ...manifestCards.map((card) => card?.reviewStatus || ""),
     mediaWriteback?.status || "",
@@ -25496,7 +25551,9 @@ function saasAiCeoActiveListingContext() {
     media: {
       media_job_id: String(mediaJob?.media_job_id || mediaWriteback?.media_job_id || "").slice(0, 120),
       asset_manifest_count: Math.max(manifestCards.length, writebackAssetCount),
-      listing_eligible_asset_count: Math.max(listingAssets.length, writebackEligibleAssetCount),
+      listing_eligible_asset_count: listingEligibleAssetCount,
+      rights_confirmed_for_listing_draft: rightsConfirmedForListingDraft,
+      product_fact_review_required_before_publish: missingFactKeys.length > 0 || listingEligibleAssetCount > 0,
       review_statuses: [...new Set(mediaReviewStatuses.map((status) => publicRuntimeText(status).slice(0, 80)).filter(Boolean))].slice(0, 8),
     },
     ebay_draft: receipt ? {

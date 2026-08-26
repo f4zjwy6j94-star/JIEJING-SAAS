@@ -420,6 +420,11 @@ def normalize_ai_ceo_active_listing_context(value: Any) -> dict[str, Any]:
         cleaned for item in raw_media.get("review_statuses", [])[:8]
         if (cleaned := clean(item, limit=80, identifier=True))
     ] if isinstance(raw_media.get("review_statuses"), list) else []
+    asset_manifest_count = max(0, min(_safe_int(raw_media.get("asset_manifest_count") or 0), 100))
+    listing_eligible_asset_count = max(0, min(_safe_int(raw_media.get("listing_eligible_asset_count") or 0), 100))
+    rights_confirmed_for_listing_draft = bool(
+        raw_media.get("rights_confirmed_for_listing_draft") is True and listing_eligible_asset_count > 0
+    )
     raw_draft = raw.get("ebay_draft") if isinstance(raw.get("ebay_draft"), dict) else {}
     offer_status = clean(raw_draft.get("offer_status"), limit=40, identifier=True).upper()
     offer_id = clean(raw_draft.get("offer_id"), limit=120, identifier=True) if offer_status == "UNPUBLISHED" else ""
@@ -441,8 +446,10 @@ def normalize_ai_ceo_active_listing_context(value: Any) -> dict[str, Any]:
         },
         "media": {
             "media_job_id": clean(raw_media.get("media_job_id"), limit=120, identifier=True),
-            "asset_manifest_count": max(0, min(_safe_int(raw_media.get("asset_manifest_count") or 0), 100)),
-            "listing_eligible_asset_count": max(0, min(_safe_int(raw_media.get("listing_eligible_asset_count") or 0), 100)),
+            "asset_manifest_count": asset_manifest_count,
+            "listing_eligible_asset_count": listing_eligible_asset_count,
+            "rights_confirmed_for_listing_draft": rights_confirmed_for_listing_draft,
+            "product_fact_review_required_before_publish": raw_media.get("product_fact_review_required_before_publish") is True,
             "review_statuses": list(dict.fromkeys(review_statuses)),
         },
         "ebay_draft": {
@@ -973,13 +980,15 @@ def run_ai_ceo_chat(
                 item in {
                     "existing_sku_reported_missing",
                     "existing_media_reported_missing",
+                    "existing_media_rights_reported_blocked",
                     "existing_unpublished_offer_reported_missing",
                 }
                 for item in (answer_quality.get("blocked_by") or [])
             )
             repair_scope_instruction = (
                 "本轮必须逐项读取 active_listing_context：已有 SKU、AssetManifest 素材和 UNPUBLISHED Offer 必须原样承认；"
-                "只把 missing_fact_keys 里的字段列为缺口，不得新建重复 SKU 或 Offer。"
+                "media.rights_confirmed_for_listing_draft=true 时不得再把图片发布权写成阻断，"
+                "但商品事实与实物一致性复核仍是独立步骤；只把 missing_fact_keys 里的字段列为缺口，不得新建重复 SKU 或 Offer。"
                 if active_listing_consistency_failed
                 else
                 "本轮是既有市场报告的成交证据补证：必须吸收 merchant_message 中的新数字、Item ID 和相对赢家，"
@@ -1059,6 +1068,7 @@ def run_ai_ceo_chat(
                     item in {
                         "existing_sku_reported_missing",
                         "existing_media_reported_missing",
+                        "existing_media_rights_reported_blocked",
                         "existing_unpublished_offer_reported_missing",
                     }
                     for item in (answer_quality.get("blocked_by") or [])
@@ -1448,6 +1458,8 @@ def build_ai_ceo_chat_prompts(
         "可以据此整理待核对 Listing，但不得把来源识别写成商家已确认；冲突必须保留，净重不得写成包装重量，商品产地不得写成实际发货地。"
         "如果 current_context.active_listing_context 存在，它是当前捷境 Listing 项目的权威快照："
         "已列出的 SKU、AssetManifest 数量、未发布 Offer 和账号状态不得回答为缺失；missing_fact_keys 才是尚待补充的商品事实。"
+        "media.rights_confirmed_for_listing_draft=true 表示现有素材已确认可用于 Listing 草稿，不得再把图片发布权写成阻断；"
+        "商品事实、实物一致性和平台规则复核是另一层发布前检查，不能与素材权利混为一谈。"
         "同一项目复盘不得新建重复 SKU、重复 Offer 或把已保存的 UNPUBLISHED Offer 说成未保存。"
     )
     if route == AI_CEO_ROUTE_GENERAL:
@@ -1500,6 +1512,7 @@ def build_ai_ceo_chat_prompts(
             "严格遵守 merchant_message 的阶段边界；商家暂缓 Listing 时只做选品，不扩展到 Listing 字段。",
             "商品事实必须来自 merchant_message、current_context 或明确 source_records；未知参数写待核，不得补写成事实。",
             "active_listing_context 是当前项目权威状态；不得把其中已有的 SKU、素材或未发布 Offer 回答为缺失。",
+            "active_listing_context.media 中已确认的 Listing 草稿图片权利不得回答为阻断；商品事实和实物一致性复核要单独说明。",
             "merchant_product_intake 中的 source_confirmed_facts 是带来源的图片提取结果，不等于商家确认；fact_conflicts 不得自行二选一。",
             "有 selection_contract 时逐项执行；excluded_candidate_names 中的旧候选不得再次成为候选商品。",
             "selection_contract 要求候选证据入口时，每个候选分别给 eBay US 搜索链接或真实 Item ID；搜索入口不等于成交证据，拿不到具体成交证据时逐项写‘成交证据不足’。",
@@ -3843,6 +3856,8 @@ def _active_listing_consistency_fallback(context: dict[str, Any]) -> str:
     offer_status = _safe_text(draft.get("offer_status") or "", limit=40).upper()
     manifest_count = max(0, _safe_int(media.get("asset_manifest_count") or 0))
     eligible_count = max(0, _safe_int(media.get("listing_eligible_asset_count") or 0))
+    rights_confirmed = media.get("rights_confirmed_for_listing_draft") is True and eligible_count > 0
+    fact_review_required = media.get("product_fact_review_required_before_publish") is True
     missing = [
         _safe_text(item, limit=80)
         for item in (listing.get("missing_fact_keys") if isinstance(listing.get("missing_fact_keys"), list) else [])[:12]
@@ -3853,6 +3868,10 @@ def _active_listing_consistency_fallback(context: dict[str, Any]) -> str:
         lines.append(f"SKU {sku} 已存在，不是缺失项。")
     if manifest_count:
         lines.append(f"AssetManifest 已有 {manifest_count} 个素材，其中 {eligible_count} 个当前标记为可用于 Listing 草稿。")
+    if rights_confirmed:
+        lines.append("现有素材的 Listing 草稿使用权已确认，不是当前阻断项。")
+    if fact_review_required:
+        lines.append("商品事实、实物一致性和平台规则仍需在真实发布前复核；这与素材使用权是两项独立检查。")
     if offer_id and offer_status == "UNPUBLISHED":
         lines.append(f"eBay Offer {offer_id} 已保存，状态为 UNPUBLISHED，尚未公开发布；不会创建第二个 Offer。")
     if missing:
@@ -3894,6 +3913,22 @@ def _active_listing_answer_contradictions(*, answer: str, context: dict[str, Any
         for match in media_claims
     ):
         blockers.append("existing_media_reported_missing")
+    rights_confirmed = media.get("rights_confirmed_for_listing_draft") is True and eligible_count > 0
+    media_rights_claims = list(
+        re.finditer(
+            r"(?:素材|图片)[^。；;\n]{0,36}(?:发布权|商业使用权|图片权利|使用权|授权)[^。；;\n]{0,24}(?:阻断|未确认|缺失|待补)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    if rights_confirmed and any(
+        not re.search(
+            r"(?:不是|并非|不属于|不再是|已确认)[^。；;\n]{0,18}(?:阻断|未确认|缺失|待补)",
+            match.group(0),
+        )
+        for match in media_rights_claims
+    ):
+        blockers.append("existing_media_rights_reported_blocked")
     offer_id = _safe_text(draft.get("offer_id") or "", limit=120)
     offer_status = _safe_text(draft.get("offer_status") or "", limit=40).upper()
     offer_claims = list(

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -42,6 +43,12 @@ def main() -> int:
         return fail("workbench entry must contain exactly one current styles.css cache version")
     app_js_asset_version = app_html_app_versions[0]
     frontend_asset_version = app_html_style_versions[0]
+    app_js_digest = hashlib.sha256(app_js.encode("utf-8")).hexdigest()[:12]
+    if not app_js_asset_version.endswith(app_js_digest):
+        return fail(
+            "workbench app.js cache version must end with the current app.js sha256 prefix "
+            f"{app_js_digest}; update both entry files whenever app.js changes"
+        )
     for expected_asset in [
         f"./app.js?v={app_js_asset_version}",
         f"./styles.css?v={frontend_asset_version}",
