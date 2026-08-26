@@ -172,6 +172,7 @@ from .repository import (
     SaaSRepository,
     ai_ceo_market_artifact_eligible,
     normalize_ai_ceo_supplier_fact_attestation,
+    normalize_listing_project_identity,
     normalize_merchant_product_fact_packet,
 )
 from .runtime_bridge import RuntimeBridge
@@ -8990,23 +8991,31 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 body.get("merchant_product_fact_packet"),
                 source="authenticated_merchant_request",
             )
+            listing_project_identity = normalize_listing_project_identity(body.get("listing_project_identity"))
             if not packet.get("product_name"):
                 self._send_error(HTTPStatus.BAD_REQUEST, "商品名称还没有确认，不能保存商品资料。")
                 return
+            task_input = {
+                "merchant_product_fact_packet": packet,
+                "model_usage_required": False,
+                "real_platform_writes_enabled": False,
+                "secret_exposed": False,
+            }
+            if listing_project_identity:
+                task_input["listing_project_identity"] = listing_project_identity
             task = self.repository.create_task(
                 company_id=identity["company_id"],
                 store_id=store_id,
                 user_id=identity["user_id"],
                 task_type="merchant_product_facts",
                 title=f"商品资料：{str(packet.get('product_name') or '')[:120]}",
-                input_data={
-                    "merchant_product_fact_packet": packet,
-                    "model_usage_required": False,
-                    "real_platform_writes_enabled": False,
-                    "secret_exposed": False,
-                },
+                input_data=task_input,
             )
-            report = self.repository.save_merchant_product_fact_report(task=task, packet=packet)
+            report = self.repository.save_merchant_product_fact_report(
+                task=task,
+                packet=packet,
+                listing_project_identity=listing_project_identity,
+            )
             task = self.repository.update_task_status(
                 task_id=task["task_id"],
                 company_id=identity["company_id"],
@@ -9020,17 +9029,17 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 },
                 audit_summary="Merchant product fact checkpoint completed without a model or platform write.",
             )
-            self._send_json(
-                {
-                    "task": task,
-                    "report": report,
-                    "merchant_product_fact_packet": packet,
-                    "model_called": False,
-                    "real_platform_writes_enabled": False,
-                    "secret_exposed": False,
-                },
-                status=HTTPStatus.CREATED,
-            )
+            response_payload = {
+                "task": task,
+                "report": report,
+                "merchant_product_fact_packet": packet,
+                "model_called": False,
+                "real_platform_writes_enabled": False,
+                "secret_exposed": False,
+            }
+            if listing_project_identity:
+                response_payload["listing_project_identity"] = listing_project_identity
+            self._send_json(response_payload, status=HTTPStatus.CREATED)
             return
 
         if path == "tasks/product-workflow":

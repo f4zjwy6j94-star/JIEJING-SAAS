@@ -5310,11 +5310,13 @@ class SaaSRepository:
         *,
         task: dict[str, Any],
         packet: dict[str, Any],
+        listing_project_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Persist one authenticated merchant product-fact checkpoint."""
 
         self.initialize()
         safe_packet = _redact_secret_like(packet if isinstance(packet, dict) else {})
+        safe_listing_project_identity = normalize_listing_project_identity(listing_project_identity)
         product = _sanitize_merchant_ceo_text(safe_packet.get("product_name"), limit=120) or "待确认商品"
         created_at = now_iso()
         report_id = _id("report")
@@ -5344,6 +5346,8 @@ class SaaSRepository:
             "real_platform_writes_enabled": False,
             "secret_exposed": False,
         }
+        if safe_listing_project_identity:
+            report_payload["listing_project_identity"] = safe_listing_project_identity
         with self._connect() as conn:
             conn.execute(
                 """
@@ -17234,6 +17238,27 @@ def normalize_merchant_product_fact_packet(
         "blocked_by": [f"merchant_product_fact_missing:{key}" for key in unknown],
         "real_platform_writes_enabled": False,
         "secret_exposed": False,
+    }
+
+
+def normalize_listing_project_identity(value: Any) -> dict[str, str]:
+    """Allowlist a non-secret Listing project identity; an empty key is legacy-only."""
+
+    raw = value if isinstance(value, dict) else {}
+
+    def clean(field: str, *, limit: int, alias: str = "") -> str:
+        text = _sanitize_merchant_ceo_text(raw.get(field) or (raw.get(alias) if alias else ""), limit=limit)
+        if not text or not re.fullmatch(r"[A-Za-z0-9._:-]+", text):
+            return ""
+        return text
+
+    key = clean("key", limit=160)
+    if not key:
+        return {}
+    return {
+        "key": key,
+        "source_report_id": clean("source_report_id", alias="source_id", limit=160),
+        "candidate_id": clean("candidate_id", limit=120),
     }
 
 

@@ -371,6 +371,11 @@ def run_supplier_http_cases() -> dict[str, Any]:
                     f"{base_url}/stores/{store_id}/product-facts",
                     method="POST",
                     payload={
+                        "listing_project_identity": {
+                            "key": "listing-project-report-incense-candidate-a",
+                            "source_report_id": "report-incense-market-a",
+                            "candidate_id": "candidate-incense-a",
+                        },
                         "merchant_product_fact_packet": {
                             "contract_version": "merchant_product_fact_packet_v1",
                             "source_confirmed_facts": {
@@ -397,6 +402,27 @@ def run_supplier_http_cases() -> dict[str, Any]:
                     },
                     token=token,
                 )
+                reports_status, reports_payload = request_json(
+                    f"{base_url}/reports",
+                    token=token,
+                )
+                empty_identity_status, empty_identity_payload = request_json(
+                    f"{base_url}/stores/{store_id}/product-facts",
+                    method="POST",
+                    payload={
+                        "listing_project_identity": {
+                            "key": "",
+                            "source_report_id": "must-not-authorize-an-empty-key",
+                            "candidate_id": "must-not-authorize-an-empty-key",
+                        },
+                        "merchant_product_fact_packet": {
+                            "merchant_confirmed_facts": {
+                                "product_name": "Legacy Product Without Exact Identity",
+                            }
+                        },
+                    },
+                    token=token,
+                )
             finally:
                 process.terminate()
                 try:
@@ -408,6 +434,10 @@ def run_supplier_http_cases() -> dict[str, Any]:
             "chat_results": results,
             "product_fact_status": product_fact_status,
             "product_fact_payload": product_fact_payload,
+            "reports_status": reports_status,
+            "reports_payload": reports_payload,
+            "empty_identity_status": empty_identity_status,
+            "empty_identity_payload": empty_identity_payload,
         }
 
 
@@ -487,9 +517,29 @@ class AiCeoSupplierFactsHttpRedTests(unittest.TestCase):
         self.assertEqual({}, packet.get("source_confirmed_facts"))
         self.assertEqual("JJ-CABLE-001", (packet.get("merchant_confirmed_facts") or {}).get("sku"))
         self.assertEqual("merchant.product_facts", report.get("artifact_type"))
+        expected_identity = {
+            "key": "listing-project-report-incense-candidate-a",
+            "source_report_id": "report-incense-market-a",
+            "candidate_id": "candidate-incense-a",
+        }
+        self.assertEqual(expected_identity, product_payload.get("listing_project_identity"))
+        self.assertEqual(expected_identity, (product_payload.get("task") or {}).get("input", {}).get("listing_project_identity"))
+        self.assertEqual(expected_identity, report.get("listing_project_identity"))
+        self.assertEqual(200, fixture.get("reports_status"))
+        saved_reports = (fixture.get("reports_payload") or {}).get("reports") or []
+        saved_product_report = next(item for item in saved_reports if item.get("report_type") == "merchant.product_facts")
+        self.assertEqual(expected_identity, (saved_product_report.get("report") or {}).get("listing_project_identity"))
         self.assertIs(product_payload.get("model_called"), False)
         self.assertIs(product_payload.get("real_platform_writes_enabled"), False)
         self.assertIs(product_payload.get("secret_exposed"), False)
+
+    def test_empty_listing_project_key_cannot_create_an_exact_product_fact_identity(self) -> None:
+        fixture = run_supplier_http_cases()
+        self.assertEqual(201, fixture.get("empty_identity_status"))
+        payload = fixture.get("empty_identity_payload") or {}
+        self.assertNotIn("listing_project_identity", payload)
+        self.assertNotIn("listing_project_identity", (payload.get("task") or {}).get("input") or {})
+        self.assertNotIn("listing_project_identity", ((payload.get("report") or {}).get("report") or {}))
 
     def test_supplier_fact_normalizer_fails_closed_and_never_echoes_unknown_values(self) -> None:
         normalized = normalize_ai_ceo_supplier_fact_attestation(
@@ -531,6 +581,664 @@ class AiCeoSupplierFactsHttpRedTests(unittest.TestCase):
 
 
 class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
+    def test_listing_project_identity_prefers_the_persisted_structured_identity(self) -> None:
+        normalize_identity = function_body(APP_JS, "saasNormalizeListingProjectIdentity")
+        identity_function = function_body(APP_JS, "saasCurrentListingProjectIdentity")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const state = { saasListingComposerDraft: null, activeListingDraft: '' };",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
+                    "const activeListingDraft = () => null;",
+                    "const isSaasPublicMvpMode = () => true;",
+                    "const isLegacySampleMediaDraftKey = () => false;",
+                    "const saasIsConcreteProductLabel = (value) => Boolean(String(value || '').trim());",
+                    "const hashString = (value) => String(value || '').length;",
+                    normalize_identity,
+                    identity_function,
+                    "const identity = saasCurrentListingProjectIdentity({",
+                    "  listing_project_identity: { key: 'project-report-a-candidate-a', source_report_id: 'report-a', candidate_id: 'candidate-a' },",
+                    "  source_report_id: 'stale-report',",
+                    "  selected_product_candidate: { candidate_id: 'stale-candidate', name: 'Same Name Incense Burner' },",
+                    "  product: 'Edited Same Name Incense Burner'",
+                    "});",
+                    "console.log(JSON.stringify(identity));",
+                ]
+            )
+        )
+        self.assertEqual("project-report-a-candidate-a", result.get("key"))
+        self.assertEqual("report-a", result.get("source_report_id"))
+        self.assertEqual("report-a", result.get("source_id"), "publish compatibility alias must remain available")
+        self.assertEqual("candidate-a", result.get("candidate_id"))
+
+    def test_listing_project_identity_survives_the_protected_snapshot(self) -> None:
+        snapshot_function = function_body(APP_JS, "sanitizeSaasListingComposerDraftSnapshot")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const publicRuntimeText = (value = '') => String(value || '');",
+                    "const pickSaasSnapshotFields = (source = {}, fields = []) => Object.fromEntries(fields.filter((key) => source[key] !== undefined).map((key) => [key, source[key]]));",
+                    "const saasCurrentListingProjectIdentity = () => ({ key: 'project-a', source_report_id: 'report-a', source_id: 'report-a', candidate_id: 'candidate-a' });",
+                    "const saasNormalizeListingProjectIdentity = (value) => value && value.key ? ({ key: value.key, source_report_id: value.source_report_id || value.source_id || '', candidate_id: value.candidate_id || '' }) : null;",
+                    "const sanitizeSaasListingPublishPrefillSnapshot = (value) => value || {};",
+                    "const sanitizeSaasMerchantProductFactPacketSnapshot = (value) => value || null;",
+                    "const sanitizeSaasListingMediaWritebackSnapshot = (value) => value || null;",
+                    snapshot_function,
+                    "const snapshot = sanitizeSaasListingComposerDraftSnapshot({",
+                    "  product: 'Same Name Incense Burner',",
+                    "  listing_project_identity: { key: 'project-a', source_report_id: 'report-a', candidate_id: 'candidate-a' },",
+                    "  selected_product_candidate: { candidate_id: 'candidate-a', name: 'Same Name Incense Burner' },",
+                    "  fields: {}, publish_prefill: {}, merchant_product_fact_packet: {},",
+                    "});",
+                    "console.log(JSON.stringify(snapshot));",
+                ]
+            )
+        )
+        self.assertEqual(
+            {"key": "project-a", "source_report_id": "report-a", "candidate_id": "candidate-a"},
+            result.get("listing_project_identity"),
+        )
+
+    def test_ai_ceo_report_import_creates_a_structured_listing_project_identity(self) -> None:
+        import_function = function_body(APP_JS, "saasListingDraftFromReport")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const saasAiCeoMarketReportCanStartBlockedListingDraft = () => true;",
+                    "const saasAiCeoListingHandoffFieldsFromReport = () => ({",
+                    "  selected_product_candidate: { candidate_id: 'candidate-a', name: 'Same Name Incense Burner', reasons: ['grounded'] },",
+                    "  product_candidates: [], market_rationale: [], selling_points: [], keywords: [], risk_notes: [],",
+                    "  recommendation_score: 90, description_seed: '', item_specifics: '', category_id: '', category_suggestion: '',",
+                    "  price_band: '', image_urls: '', image_requirements: '', logistics_requirements: '', publish_prefill: {},",
+                    "  ebay_listing_field_map_contract: '', publish_preflight_required_fields: [], publish_preflight_gaps: [],",
+                    "  merchant_required_answers: [], ebay_publish_field_matrix: [], listing_readiness: {}, merchant_product_fact_packet: null",
+                    "});",
+                    "const saasSelectedMarketProductCandidate = () => null;",
+                    "const saasCleanMarketCandidateName = (value) => String(value || '');",
+                    "const saasProductLabelForRecord = () => '';",
+                    "const saasReportSummary = () => '';",
+                    "const saasWorkbenchReportSections = () => ({});",
+                    "const runtimeSectionTitle = (value) => value;",
+                    "const saasWorkbenchFormatReportSectionValue = () => '';",
+                    "const saasListingMerchantSourceLabel = () => 'AI CEO';",
+                    "const saasListingComposerDraftFromText = () => ({ fields: {}, gaps: [] });",
+                    "const saasListingEbayTitleFromProduct = (value) => value;",
+                    "const saasListingSafeItemSpecifics = (value) => value;",
+                    "const applySaasMerchantProductFactPacketToDraft = (draft) => draft;",
+                    "const saasCurrentListingProjectIdentity = (draft) => ({ key: `project-${draft.source_report_id}-${draft.selected_product_candidate.candidate_id}`, source_report_id: draft.source_report_id, source_id: draft.source_report_id, candidate_id: draft.selected_product_candidate.candidate_id });",
+                    import_function,
+                    "const draft = saasListingDraftFromReport({ report_id: 'report-a', report_type: 'ai_ceo.market_research', report: {} }, 'ai_ceo_market_report');",
+                    "console.log(JSON.stringify(draft));",
+                ]
+            )
+        )
+        self.assertEqual("project-report-a-candidate-a", result.get("listing_project_key"))
+        self.assertEqual(
+            {"key": "project-report-a-candidate-a", "source_report_id": "report-a", "candidate_id": "candidate-a"},
+            result.get("listing_project_identity"),
+        )
+
+    def test_product_vision_handoff_persists_its_structured_listing_project_identity(self) -> None:
+        vision_handoff = function_body(APP_JS, "applySaasAiCeoProductFactPacket")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const state = { saasReports: [], activeMediaDraft: '' };",
+                    "const saasListingComposerDraftFromText = () => ({ product: 'Vision Product', title: 'Vision Product', fields: {} });",
+                    "const applySaasMerchantProductFactPacketToDraft = (draft, packet) => ({ ...draft, merchant_product_fact_packet: packet });",
+                    "const saasCurrentListingProjectIdentity = (draft) => ({ key: `project-${draft.source_report_id}`, source_report_id: draft.source_report_id, source_id: draft.source_report_id, candidate_id: '' });",
+                    "const saveSaasProtectedStateSnapshot = () => {};",
+                    vision_handoff,
+                    "const draft = applySaasAiCeoProductFactPacket({ product_name: 'Vision Product', listing_copy: {} }, 'merchant images', { report_id: 'vision-facts-a' });",
+                    "console.log(JSON.stringify({ draft, activeMediaDraft: state.activeMediaDraft }));",
+                ]
+            )
+        )
+        self.assertEqual("project-vision-facts-a", result.get("draft", {}).get("listing_project_key"))
+        self.assertEqual(
+            {"key": "project-vision-facts-a", "source_report_id": "vision-facts-a", "candidate_id": ""},
+            result.get("draft", {}).get("listing_project_identity"),
+        )
+        self.assertEqual("project-vision-facts-a", result.get("activeMediaDraft"))
+
+    def test_candidate_switch_rekeys_the_project_and_clears_old_media(self) -> None:
+        switch_function = function_body(APP_JS, "selectSaasListingMarketCandidate")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const state = {",
+                    "  saasListingComposerDraft: {",
+                    "    source_report_id: 'report-a', product: 'Same Name Incense Burner', title: 'Same Name Incense Burner',",
+                    "    listing_project_key: 'project-report-a-candidate-a',",
+                    "    listing_project_identity: { key: 'project-report-a-candidate-a', source_report_id: 'report-a', candidate_id: 'candidate-a' },",
+                    "    product_candidates: [",
+                    "      { candidate_id: 'candidate-a', name: 'Same Name Incense Burner', selected: true },",
+                    "      { candidate_id: 'candidate-b', name: 'Same Name Incense Burner', selected: false },",
+                    "    ],",
+                    "    selected_product_candidate: { candidate_id: 'candidate-a', name: 'Same Name Incense Burner' },",
+                    "    source_media_job_id: 'media-a', media_writeback: { media_job_id: 'media-a' },",
+                    "    source_product_fact_report_id: 'facts-a',",
+                    "    merchant_product_fact_packet: { product_name: 'Same Name Incense Burner', merchant_confirmed_facts: { sku: 'STALE-SKU', material: 'STALE-MATERIAL' }, unknown_facts: [] },",
+                    "    fields: {}, publish_prefill: {}",
+                    "  },",
+                    "  saasMediaSourceUpload: { asset_id: 'asset-a', listing_project_key: 'project-report-a-candidate-a' },",
+                    "  activeMediaDraft: 'project-report-a-candidate-a', saasActiveMediaPreviewKey: 'preview-a', saasMediaSourceUploadEpoch: 7,",
+                    "  saasAiCeoSupplierFactAttestation: { supplier_facts: { material: 'STALE-MATERIAL' }, supplier_facts_verified: true }, supplierFactsStatus: 'verified'",
+                    "};",
+                    "const saasNormalizeMarketProductCandidates = (value) => value;",
+                    "const resetSaasListingPublishEvidenceForNewProject = () => {};",
+                    "const saasListingEbayTitleFromProduct = (value) => value;",
+                    "const resetSaasBulkWorkspaceForListingProject = () => {};",
+                    "const saasListingImportedAiCeoMarketInput = () => '';",
+                    "const renderProductListingCenter = () => {};",
+                    "const toasts = []; const showActionToast = (message) => toasts.push(message);",
+                    "const saasCurrentListingProjectIdentity = (draft) => ({ key: `project-${draft.source_report_id}-${draft.selected_product_candidate.candidate_id}`, source_report_id: draft.source_report_id, source_id: draft.source_report_id, candidate_id: draft.selected_product_candidate.candidate_id });",
+                    switch_function,
+                    "const switched = selectSaasListingMarketCandidate('candidate-b');",
+                    "console.log(JSON.stringify({ switched, draft: state.saasListingComposerDraft, activeMediaDraft: state.activeMediaDraft, upload: state.saasMediaSourceUpload, preview: state.saasActiveMediaPreviewKey, supplierAttestation: state.saasAiCeoSupplierFactAttestation, supplierFactsStatus: state.supplierFactsStatus, uploadEpoch: state.saasMediaSourceUploadEpoch, toasts }));",
+                ]
+            )
+        )
+        self.assertIs(result.get("switched"), True)
+        self.assertEqual("project-report-a-candidate-b", result.get("draft", {}).get("listing_project_key"))
+        self.assertEqual(
+            {"key": "project-report-a-candidate-b", "source_report_id": "report-a", "candidate_id": "candidate-b"},
+            result.get("draft", {}).get("listing_project_identity"),
+        )
+        self.assertEqual("", result.get("draft", {}).get("source_media_job_id"))
+        self.assertIsNone(result.get("draft", {}).get("media_writeback"))
+        self.assertIsNone(result.get("draft", {}).get("merchant_product_fact_packet"))
+        self.assertEqual("", result.get("draft", {}).get("source_product_fact_report_id"))
+        self.assertNotIn("STALE-SKU", json.dumps(result.get("draft") or {}, ensure_ascii=False))
+        self.assertNotIn("STALE-MATERIAL", json.dumps(result.get("draft") or {}, ensure_ascii=False))
+        self.assertEqual("project-report-a-candidate-b", result.get("activeMediaDraft"))
+        self.assertIsNone(result.get("upload"))
+        self.assertEqual("", result.get("preview"))
+        self.assertIsNone(result.get("supplierAttestation"))
+        self.assertEqual("idle", result.get("supplierFactsStatus"))
+        self.assertEqual(8, result.get("uploadEpoch"))
+        self.assertTrue(any("商品已切换" in item and "重新上传" in item for item in result.get("toasts") or []))
+
+    def test_media_jobs_require_exact_structured_project_identity(self) -> None:
+        normalize_identity = function_body(APP_JS, "saasNormalizeListingProjectIdentity")
+        product_facts_function = function_body(APP_JS, "saasMediaAssetJobProductFacts")
+        matcher_function = function_body(APP_JS, "saasMediaAssetJobMatchesListingProject")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const state = { saasListingComposerDraft: null };",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
+                    normalize_identity,
+                    "const saasCurrentListingProjectIdentity = (draft) => ({",
+                    "  key: draft.listing_project_identity?.key || draft.listing_project_key || '',",
+                    "  product: draft.product || '',",
+                    "  source_report_id: draft.listing_project_identity?.source_report_id || '',",
+                    "  source_id: draft.listing_project_identity?.source_report_id || '',",
+                    "  candidate_id: draft.listing_project_identity?.candidate_id || '',",
+                    "});",
+                    product_facts_function,
+                    matcher_function,
+                    "const draftA = { product: 'Same Name Incense Burner', listing_project_key: 'project-a', listing_project_identity: { key: 'project-a', source_report_id: 'report-a', candidate_id: 'candidate-a' } };",
+                    "const draftLegacy = { product: 'Legacy Product', listing_project_key: 'legacy-project' };",
+                    "const draftManual = { product: 'Manual Product', listing_project_key: 'project-manual', listing_project_identity: { key: 'project-manual', source_report_id: '', candidate_id: '' } };",
+                    "const job = (facts) => ({ job: { job_spec: { inputs: { product_facts: facts } } } });",
+                    "const results = {",
+                    "  exactA: saasMediaAssetJobMatchesListingProject(job({ product: 'Same Name Incense Burner', listing_project_key: 'project-a', listing_project_identity: { key: 'project-a', source_report_id: 'report-a', candidate_id: 'candidate-a' } }), draftA),",
+                    "  keyOnly: saasMediaAssetJobMatchesListingProject(job({ product: 'Same Name Incense Burner', listing_project_key: 'project-a', listing_project_identity: { key: 'project-a' } }), draftA),",
+                    "  missingSource: saasMediaAssetJobMatchesListingProject(job({ product: 'Same Name Incense Burner', listing_project_key: 'project-a', listing_project_identity: { key: 'project-a', candidate_id: 'candidate-a' } }), draftA),",
+                    "  missingCandidate: saasMediaAssetJobMatchesListingProject(job({ product: 'Same Name Incense Burner', listing_project_key: 'project-a', listing_project_identity: { key: 'project-a', source_report_id: 'report-a' } }), draftA),",
+                    "  candidateB: saasMediaAssetJobMatchesListingProject(job({ product: 'Same Name Incense Burner', listing_project_key: 'project-a', listing_project_identity: { key: 'project-a', source_report_id: 'report-a', candidate_id: 'candidate-b' } }), draftA),",
+                    "  projectB: saasMediaAssetJobMatchesListingProject(job({ product: 'Same Name Incense Burner', listing_project_key: 'project-b', listing_project_identity: { key: 'project-b', source_report_id: 'report-b', candidate_id: 'candidate-b' } }), draftA),",
+                    "  productOnly: saasMediaAssetJobMatchesListingProject(job({ product: 'Same Name Incense Burner' }), draftA),",
+                    "  legacyExactKey: saasMediaAssetJobMatchesListingProject(job({ product: 'Different label', listing_project_key: 'legacy-project' }), draftLegacy),",
+                    "  manualExact: saasMediaAssetJobMatchesListingProject(job({ listing_project_key: 'project-manual', listing_project_identity: { key: 'project-manual', source_report_id: '', candidate_id: '' } }), draftManual),",
+                    "  manualIncomingSource: saasMediaAssetJobMatchesListingProject(job({ listing_project_key: 'project-manual', listing_project_identity: { key: 'project-manual', source_report_id: 'unexpected-report', candidate_id: '' } }), draftManual),",
+                    "  manualIncomingCandidate: saasMediaAssetJobMatchesListingProject(job({ listing_project_key: 'project-manual', listing_project_identity: { key: 'project-manual', source_report_id: '', candidate_id: 'unexpected-candidate' } }), draftManual),",
+                    "};",
+                    "console.log(JSON.stringify(results));",
+                ]
+            )
+        )
+        self.assertIs(result.get("exactA"), True)
+        self.assertIs(result.get("keyOnly"), False)
+        self.assertIs(result.get("missingSource"), False)
+        self.assertIs(result.get("missingCandidate"), False)
+        self.assertIs(result.get("candidateB"), False)
+        self.assertIs(result.get("projectB"), False)
+        self.assertIs(result.get("productOnly"), False)
+        self.assertIs(result.get("legacyExactKey"), True)
+        self.assertIs(result.get("manualExact"), True)
+        self.assertIs(result.get("manualIncomingSource"), False)
+        self.assertIs(result.get("manualIncomingCandidate"), False)
+
+    def test_media_product_facts_bind_structured_identity_and_reject_unbound_uploads(self) -> None:
+        facts_function = function_body(APP_JS, "currentMediaStudioProductFacts")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const state = {",
+                    "  activeListingDraft: '', activeMediaDraft: 'project-a',",
+                    "  mediaTaskEntry: 'single',",
+                    "  saasListingComposerDraft: { product: 'Same Name Incense Burner', listing_project_key: 'project-a', listing_project_identity: { key: 'project-a', source_report_id: 'report-a', candidate_id: 'candidate-a' } },",
+                    "  saasMediaSourceUpload: { asset_id: 'unbound-asset', sha256: 'aa' },",
+                    "};",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
+                    "const isSaasPublicMvpMode = () => true;",
+                    "const saasMerchantWorkbenchContext = () => ({ store: { marketplace: 'EBAY_US' } });",
+                    "const activeListingDraft = () => null;",
+                    "const isLegacySampleMediaDraftKey = () => false;",
+                    "const saasCurrentListingProjectIdentity = () => { const value = state.saasListingComposerDraft.listing_project_identity || {}; return { key: value.key || '', product: state.saasListingComposerDraft.product || '', source_report_id: value.source_report_id || '', source_id: value.source_report_id || '', candidate_id: value.candidate_id || '' }; };",
+                    "const latestSaasReportByTypes = () => null;",
+                    "const activeSaasStore = () => ({ marketplace: 'EBAY_US' });",
+                    "const saasMediaSourceAssetForListingDraft = () => null;",
+                    "const saasNormalizeListingProjectIdentity = (value) => value && value.key ? value : null;",
+                    facts_function,
+                    "const unbound = currentMediaStudioProductFacts({ entry: 'single' });",
+                    "state.saasMediaSourceUpload = { asset_id: 'key-only', listing_project_key: 'project-a', listing_project_identity: { key: 'project-a' } };",
+                    "const keyOnly = currentMediaStudioProductFacts({});",
+                    "state.saasMediaSourceUpload = { asset_id: 'missing-source', listing_project_key: 'project-a', listing_project_identity: { key: 'project-a', candidate_id: 'candidate-a' } };",
+                    "const missingSource = currentMediaStudioProductFacts({});",
+                    "state.saasMediaSourceUpload = { asset_id: 'missing-candidate', listing_project_key: 'project-a', listing_project_identity: { key: 'project-a', source_report_id: 'report-a' } };",
+                    "const missingCandidate = currentMediaStudioProductFacts({});",
+                    "state.saasMediaSourceUpload = { asset_id: 'asset-a', sha256: 'bb', listing_project_key: 'project-a', listing_project_identity: { key: 'project-a', source_report_id: 'report-a', candidate_id: 'candidate-a' } };",
+                    "const bound = currentMediaStudioProductFacts({});",
+                    "state.saasListingComposerDraft = { product: 'Manual Product', listing_project_key: 'project-manual', listing_project_identity: { key: 'project-manual', source_report_id: '', candidate_id: '' } };",
+                    "state.saasMediaSourceUpload = { asset_id: 'manual-source', listing_project_key: 'project-manual', listing_project_identity: { key: 'project-manual', source_report_id: 'unexpected-report', candidate_id: '' } };",
+                    "const manualIncomingSource = currentMediaStudioProductFacts({});",
+                    "state.saasMediaSourceUpload = { asset_id: 'manual-candidate', listing_project_key: 'project-manual', listing_project_identity: { key: 'project-manual', source_report_id: '', candidate_id: 'unexpected-candidate' } };",
+                    "const manualIncomingCandidate = currentMediaStudioProductFacts({});",
+                    "state.saasMediaSourceUpload = { asset_id: 'manual-exact', listing_project_key: 'project-manual', listing_project_identity: { key: 'project-manual', source_report_id: '', candidate_id: '' } };",
+                    "const manualExact = currentMediaStudioProductFacts({});",
+                    "state.saasListingComposerDraft = {}; state.saasMediaSourceUpload = { asset_id: 'standalone-asset', sha256: 'cc', listing_project_key: '', listing_project_identity: null };",
+                    "const standalone = currentMediaStudioProductFacts({ entry: 'single' });",
+                    "console.log(JSON.stringify({ unbound, keyOnly, missingSource, missingCandidate, bound, manualIncomingSource, manualIncomingCandidate, manualExact, standalone }));",
+                ]
+            )
+        )
+        self.assertEqual("", result.get("unbound", {}).get("source_asset_id"))
+        self.assertEqual("", result.get("keyOnly", {}).get("source_asset_id"))
+        self.assertEqual("", result.get("missingSource", {}).get("source_asset_id"))
+        self.assertEqual("", result.get("missingCandidate", {}).get("source_asset_id"))
+        self.assertEqual("asset-a", result.get("bound", {}).get("source_asset_id"))
+        self.assertEqual("", result.get("manualIncomingSource", {}).get("source_asset_id"))
+        self.assertEqual("", result.get("manualIncomingCandidate", {}).get("source_asset_id"))
+        self.assertEqual("manual-exact", result.get("manualExact", {}).get("source_asset_id"))
+        self.assertEqual("standalone-asset", result.get("standalone", {}).get("source_asset_id"))
+        self.assertIsNone(result.get("standalone", {}).get("listing_project_identity"))
+        self.assertEqual(
+            {"key": "project-a", "source_report_id": "report-a", "candidate_id": "candidate-a"},
+            result.get("bound", {}).get("listing_project_identity"),
+        )
+
+    def test_delayed_media_upload_cannot_rebind_from_project_a_to_project_b(self) -> None:
+        handle_upload = function_body(APP_JS, "handleMediaSourceFile")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const identityA = { key: 'project-a', source_report_id: 'report-a', candidate_id: 'candidate-a' };",
+                    "const identityB = { key: 'project-b', source_report_id: 'report-b', candidate_id: 'candidate-b' };",
+                    "const state = { saasListingComposerDraft: { product: 'Product A', listing_project_identity: identityA }, activeMediaDraft: 'project-a', saasMediaSourceUpload: null, mediaSourceObjectUrl: '', saasMediaSourceUploadEpoch: 0 };",
+                    "const document = { querySelector: () => null };",
+                    "const URL = { createObjectURL: () => 'blob:source-a', revokeObjectURL: () => {} };",
+                    "const inferMediaLocalPath = () => ({ path: 'source-a.jpg', note: 'test' });",
+                    "const ui = {}; const setText = (selector, value) => { ui[selector] = value; };",
+                    "const setMediaNewTaskMode = () => {};",
+                    "const syncMediaGenerationActionState = () => {};",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
+                    "const saasCurrentListingProjectIdentity = (draft) => { const value = draft?.listing_project_identity || {}; return { key: value.key || '', source_report_id: value.source_report_id || '', source_id: value.source_report_id || '', candidate_id: value.candidate_id || '' }; };",
+                    "const toasts = []; const showActionToast = (message) => toasts.push(message);",
+                    "let resolveUpload; const delayedUpload = new Promise((resolve) => { resolveUpload = resolve; });",
+                    "const uploadSaasMediaSourceFile = async () => delayedUpload;",
+                    handle_upload,
+                    "(async () => {",
+                    "  const pending = handleMediaSourceFile({ name: 'source-a.jpg', type: 'image/jpeg', size: 1024 }, {});",
+                    "  await Promise.resolve();",
+                    "  state.saasMediaSourceUploadEpoch += 1; state.saasListingComposerDraft = { product: 'Product B', listing_project_identity: identityB }; state.activeMediaDraft = 'project-b'; state.saasMediaSourceUpload = null; ui['#mediaProductionStatus'] = 'B_CURRENT_STATUS'; toasts.push('商品已切换，请为当前商品重新上传来源图。');",
+                    "  resolveUpload({ asset_id: 'asset-from-a', sha256: 'aa' });",
+                    "  await pending;",
+                    "  const raceUpload = state.saasMediaSourceUpload; const raceStatus = ui['#mediaProductionStatus']; const raceToast = toasts[toasts.length - 1];",
+                    "  state.saasListingComposerDraft = { product: 'Product A', listing_project_identity: identityA }; state.activeMediaDraft = 'project-a'; state.saasMediaSourceUpload = null;",
+                    "  await handleMediaSourceFile({ name: 'source-a-stable.jpg', type: 'image/jpeg', size: 1024 }, {});",
+                    "  console.log(JSON.stringify({ raceUpload, raceStatus, raceToast, stableUpload: state.saasMediaSourceUpload, toasts }));",
+                    "})().catch((error) => { console.error(error); process.exit(1); });",
+                ]
+            )
+        )
+        self.assertIsNone(result.get("raceUpload"))
+        self.assertEqual("B_CURRENT_STATUS", result.get("raceStatus"))
+        self.assertEqual("商品已切换，请为当前商品重新上传来源图。", result.get("raceToast"))
+        self.assertEqual("asset-from-a", result.get("stableUpload", {}).get("asset_id"))
+        self.assertEqual(
+            {"key": "project-a", "source_report_id": "report-a", "candidate_id": "candidate-a"},
+            result.get("stableUpload", {}).get("listing_project_identity"),
+        )
+        self.assertTrue(any("商品已切换" in item and "重新上传" in item for item in result.get("toasts") or []))
+
+    def test_newer_same_project_upload_wins_when_older_finishes_last(self) -> None:
+        handle_upload = function_body(APP_JS, "handleMediaSourceFile")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const identityA = { key: 'project-a', source_report_id: 'report-a', candidate_id: 'candidate-a' };",
+                    "const state = { saasListingComposerDraft: { product: 'Product A', listing_project_identity: identityA }, activeMediaDraft: 'project-a', saasMediaSourceUpload: null, mediaSourceObjectUrl: '', saasMediaSourceUploadEpoch: 0 };",
+                    "const document = { querySelector: () => null };",
+                    "let previewCount = 0; const URL = { createObjectURL: () => `blob:source-${++previewCount}`, revokeObjectURL: () => {} };",
+                    "const inferMediaLocalPath = (file) => ({ path: file.name, note: 'test' });",
+                    "const ui = {}; const setText = (selector, value) => { ui[selector] = value; };",
+                    "const setMediaNewTaskMode = () => {};",
+                    "const syncMediaGenerationActionState = () => {};",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
+                    "const saasCurrentListingProjectIdentity = (draft) => { const value = draft?.listing_project_identity || {}; return { key: value.key || '', source_report_id: value.source_report_id || '', source_id: value.source_report_id || '', candidate_id: value.candidate_id || '' }; };",
+                    "const toasts = []; const showActionToast = (message) => toasts.push(message);",
+                    "const deferred = []; const uploadSaasMediaSourceFile = async () => new Promise((resolve, reject) => deferred.push({ resolve, reject }));",
+                    handle_upload,
+                    "(async () => {",
+                    "  const older = handleMediaSourceFile({ name: 'older.jpg', type: 'image/jpeg', size: 1024 }, {}); await Promise.resolve();",
+                    "  const newer = handleMediaSourceFile({ name: 'newer.jpg', type: 'image/jpeg', size: 1024 }, {}); await Promise.resolve();",
+                    "  deferred[1].resolve({ asset_id: 'asset-newer', sha256: 'bb' }); await newer;",
+                    "  const statusAfterNewer = ui['#mediaProductionStatus']; const toastAfterNewer = toasts[toasts.length - 1];",
+                    "  deferred[0].resolve({ asset_id: 'asset-older', sha256: 'aa' }); await older;",
+                    "  console.log(JSON.stringify({ upload: state.saasMediaSourceUpload, status: ui['#mediaProductionStatus'], toast: toasts[toasts.length - 1], statusAfterNewer, toastAfterNewer, epoch: state.saasMediaSourceUploadEpoch }));",
+                    "})().catch((error) => { console.error(error); process.exit(1); });",
+                ]
+            )
+        )
+        self.assertEqual("asset-newer", result.get("upload", {}).get("asset_id"))
+        self.assertEqual(
+            {"key": "project-a", "source_report_id": "report-a", "candidate_id": "candidate-a"},
+            result.get("upload", {}).get("listing_project_identity"),
+        )
+        self.assertEqual(result.get("statusAfterNewer"), result.get("status"))
+        self.assertEqual(result.get("toastAfterNewer"), result.get("toast"))
+        self.assertEqual(2, result.get("epoch"))
+
+    def test_delayed_upload_stays_invalid_after_project_a_to_b_to_a(self) -> None:
+        handle_upload = function_body(APP_JS, "handleMediaSourceFile")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const identityA = { key: 'project-a', source_report_id: 'report-a', candidate_id: 'candidate-a' };",
+                    "const identityB = { key: 'project-b', source_report_id: 'report-b', candidate_id: 'candidate-b' };",
+                    "const state = { saasListingComposerDraft: { product: 'Product A', listing_project_identity: identityA }, activeMediaDraft: 'project-a', saasMediaSourceUpload: null, mediaSourceObjectUrl: '', saasMediaSourceUploadEpoch: 0 };",
+                    "const document = { querySelector: () => null };",
+                    "const URL = { createObjectURL: () => 'blob:source-a', revokeObjectURL: () => {} };",
+                    "const inferMediaLocalPath = () => ({ path: 'source-a.jpg', note: 'test' });",
+                    "const ui = {}; const setText = (selector, value) => { ui[selector] = value; };",
+                    "const setMediaNewTaskMode = () => {};",
+                    "const syncMediaGenerationActionState = () => {};",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
+                    "const saasCurrentListingProjectIdentity = (draft) => { const value = draft?.listing_project_identity || {}; return { key: value.key || '', source_report_id: value.source_report_id || '', source_id: value.source_report_id || '', candidate_id: value.candidate_id || '' }; };",
+                    "const toasts = []; const showActionToast = (message) => toasts.push(message);",
+                    "let resolveUpload; const delayedUpload = new Promise((resolve) => { resolveUpload = resolve; });",
+                    "const uploadSaasMediaSourceFile = async () => delayedUpload;",
+                    handle_upload,
+                    "(async () => {",
+                    "  const pending = handleMediaSourceFile({ name: 'source-a.jpg', type: 'image/jpeg', size: 1024 }, {}); await Promise.resolve();",
+                    "  state.saasMediaSourceUploadEpoch += 1; state.saasListingComposerDraft = { product: 'Product B', listing_project_identity: identityB }; state.activeMediaDraft = 'project-b';",
+                    "  state.saasMediaSourceUploadEpoch += 1; state.saasListingComposerDraft = { product: 'Product A', listing_project_identity: identityA }; state.activeMediaDraft = 'project-a'; state.saasMediaSourceUpload = null; ui['#mediaProductionStatus'] = 'A_RESELECTED_STATUS'; toasts.push('A_RESELECTED_TOAST');",
+                    "  resolveUpload({ asset_id: 'stale-asset-a', sha256: 'aa' }); await pending;",
+                    "  console.log(JSON.stringify({ upload: state.saasMediaSourceUpload, status: ui['#mediaProductionStatus'], toast: toasts[toasts.length - 1], epoch: state.saasMediaSourceUploadEpoch }));",
+                    "})().catch((error) => { console.error(error); process.exit(1); });",
+                ]
+            )
+        )
+        self.assertIsNone(result.get("upload"))
+        self.assertEqual("A_RESELECTED_STATUS", result.get("status"))
+        self.assertEqual("A_RESELECTED_TOAST", result.get("toast"))
+        self.assertEqual(3, result.get("epoch"))
+
+    def test_stale_failed_upload_does_not_clear_current_project_upload_or_ui(self) -> None:
+        handle_upload = function_body(APP_JS, "handleMediaSourceFile")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const identityA = { key: 'project-a', source_report_id: 'report-a', candidate_id: 'candidate-a' };",
+                    "const identityB = { key: 'project-b', source_report_id: 'report-b', candidate_id: 'candidate-b' };",
+                    "const state = { saasListingComposerDraft: { product: 'Product A', listing_project_identity: identityA }, activeMediaDraft: 'project-a', saasMediaSourceUpload: null, mediaSourceObjectUrl: '', saasMediaSourceUploadEpoch: 0 };",
+                    "const document = { querySelector: () => null };",
+                    "const URL = { createObjectURL: () => 'blob:source-a', revokeObjectURL: () => {} };",
+                    "const inferMediaLocalPath = () => ({ path: 'source-a.jpg', note: 'test' });",
+                    "const ui = {}; const setText = (selector, value) => { ui[selector] = value; };",
+                    "const setMediaNewTaskMode = () => {};",
+                    "const syncMediaGenerationActionState = () => {};",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
+                    "const saasCurrentListingProjectIdentity = (draft) => { const value = draft?.listing_project_identity || {}; return { key: value.key || '', source_report_id: value.source_report_id || '', source_id: value.source_report_id || '', candidate_id: value.candidate_id || '' }; };",
+                    "const toasts = []; const showActionToast = (message) => toasts.push(message);",
+                    "let rejectUpload; const delayedUpload = new Promise((resolve, reject) => { rejectUpload = reject; });",
+                    "const uploadSaasMediaSourceFile = async () => delayedUpload;",
+                    handle_upload,
+                    "(async () => {",
+                    "  const pending = handleMediaSourceFile({ name: 'source-a.jpg', type: 'image/jpeg', size: 1024 }, {}); await Promise.resolve();",
+                    "  state.saasMediaSourceUploadEpoch += 1; state.saasListingComposerDraft = { product: 'Product B', listing_project_identity: identityB }; state.activeMediaDraft = 'project-b'; state.saasMediaSourceUpload = { asset_id: 'asset-b', listing_project_key: 'project-b', listing_project_identity: identityB }; ui['#mediaProductionStatus'] = 'B_CURRENT_STATUS'; toasts.push('B_CURRENT_TOAST');",
+                    "  rejectUpload(new Error('old upload failed')); await pending;",
+                    "  console.log(JSON.stringify({ upload: state.saasMediaSourceUpload, status: ui['#mediaProductionStatus'], toast: toasts[toasts.length - 1], epoch: state.saasMediaSourceUploadEpoch }));",
+                    "})().catch((error) => { console.error(error); process.exit(1); });",
+                ]
+            )
+        )
+        self.assertEqual("asset-b", result.get("upload", {}).get("asset_id"))
+        self.assertEqual("project-b", result.get("upload", {}).get("listing_project_key"))
+        self.assertEqual("B_CURRENT_STATUS", result.get("status"))
+        self.assertEqual("B_CURRENT_TOAST", result.get("toast"))
+        self.assertEqual(2, result.get("epoch"))
+
+    def test_failed_upload_from_old_identity_is_stale_even_without_epoch_change(self) -> None:
+        handle_upload = function_body(APP_JS, "handleMediaSourceFile")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const identityA = { key: 'project-a', source_report_id: 'report-a', candidate_id: 'candidate-a' };",
+                    "const identityB = { key: 'project-b', source_report_id: 'report-b', candidate_id: 'candidate-b' };",
+                    "const state = { saasListingComposerDraft: { product: 'Product A', listing_project_identity: identityA }, activeMediaDraft: 'project-a', saasMediaSourceUpload: null, mediaSourceObjectUrl: '', saasMediaSourceUploadEpoch: 0, mediaTaskEntry: 'project' };",
+                    "const document = { querySelector: () => null };",
+                    "const URL = { createObjectURL: () => 'blob:source-a', revokeObjectURL: () => {} };",
+                    "const inferMediaLocalPath = () => ({ path: 'source-a.jpg', note: 'test' });",
+                    "const ui = {}; const setText = (selector, value) => { ui[selector] = value; };",
+                    "const setMediaNewTaskMode = () => { state.mediaTaskEntry = 'single'; };",
+                    "const syncMediaGenerationActionState = () => {};",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
+                    "const saasCurrentListingProjectIdentity = (draft) => { const value = draft?.listing_project_identity || {}; return { key: value.key || '', source_report_id: value.source_report_id || '', source_id: value.source_report_id || '', candidate_id: value.candidate_id || '' }; };",
+                    "const toasts = []; const showActionToast = (message) => toasts.push(message);",
+                    "let rejectUpload; const delayedUpload = new Promise((resolve, reject) => { rejectUpload = reject; });",
+                    "const uploadSaasMediaSourceFile = async () => delayedUpload;",
+                    handle_upload,
+                    "(async () => {",
+                    "  const pending = handleMediaSourceFile({ name: 'source-a.jpg', type: 'image/jpeg', size: 1024 }, {}); await Promise.resolve();",
+                    "  state.saasListingComposerDraft = { product: 'Product B', listing_project_identity: identityB }; state.activeMediaDraft = 'project-b'; state.saasMediaSourceUpload = { asset_id: 'asset-b', listing_project_key: 'project-b', listing_project_identity: identityB }; ui['#mediaProductionStatus'] = 'B_CURRENT_STATUS'; toasts.push('B_CURRENT_TOAST');",
+                    "  rejectUpload(new Error('old upload failed')); await pending;",
+                    "  console.log(JSON.stringify({ upload: state.saasMediaSourceUpload, status: ui['#mediaProductionStatus'], toast: toasts[toasts.length - 1], epoch: state.saasMediaSourceUploadEpoch }));",
+                    "})().catch((error) => { console.error(error); process.exit(1); });",
+                ]
+            )
+        )
+        self.assertEqual("asset-b", result.get("upload", {}).get("asset_id"))
+        self.assertEqual("project-b", result.get("upload", {}).get("listing_project_key"))
+        self.assertEqual("B_CURRENT_STATUS", result.get("status"))
+        self.assertEqual("B_CURRENT_TOAST", result.get("toast"))
+        self.assertEqual(1, result.get("epoch"))
+
+    def test_media_idempotency_changes_when_candidate_identity_changes(self) -> None:
+        payload_function = function_body(APP_JS, "buildSaasMediaAssetJobPayload")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const state = { saasModelSettings: {} };",
+                    "const activeSaasStore = () => ({ store_id: 'store-a' });",
+                    "let currentFacts = {};",
+                    "const currentMediaStudioProductFacts = () => currentFacts;",
+                    "const mediaGenerationTierKey = () => 'standard';",
+                    "const mediaQualityModeKey = () => 'fidelity_first';",
+                    "const MEDIA_FACT_LOCKS = Object.freeze(['product_structure']);",
+                    "const saasMediaGenerationGroundingGate = () => ({ conceptOnly: false });",
+                    "const mediaVideoDurationSeconds = () => 0;",
+                    "const hashString = (value) => Array.from(String(value)).reduce((sum, character, index) => sum + character.charCodeAt(0) * (index + 1), 0);",
+                    payload_function,
+                    "const base = { product: 'Same Name Incense Burner', listing_project_key: 'shared-key', source_asset_id: 'asset-a', source_image_sha256: 'aa', reference_images: [] };",
+                    "currentFacts = { ...base, listing_project_identity: { key: 'shared-key', source_report_id: 'report-a', candidate_id: 'candidate-a' } };",
+                    "const payloadA = buildSaasMediaAssetJobPayload('same request', { count: 1, generationTierKey: 'standard', qualityMode: 'fidelity_first' });",
+                    "currentFacts = { ...base, listing_project_identity: { key: 'shared-key', source_report_id: 'report-a', candidate_id: 'candidate-b' } };",
+                    "const payloadB = buildSaasMediaAssetJobPayload('same request', { count: 1, generationTierKey: 'standard', qualityMode: 'fidelity_first' });",
+                    "console.log(JSON.stringify({ keyA: payloadA.idempotency_key, keyB: payloadB.idempotency_key, identityA: payloadA.inputs.product_facts.listing_project_identity }));",
+                ]
+            )
+        )
+        self.assertNotEqual(result.get("keyA"), result.get("keyB"))
+        self.assertEqual("candidate-a", result.get("identityA", {}).get("candidate_id"))
+
+    def test_exact_project_restore_rejects_same_name_facts_and_does_not_revive_unknowns(self) -> None:
+        restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const identityA = { key: 'project-a', source_report_id: 'report-market-a', candidate_id: 'candidate-a' };",
+                    "const identityB = { key: 'project-b', source_report_id: 'report-market-b', candidate_id: 'candidate-b' };",
+                    "const state = {",
+                    "  saasListingComposerDraft: {",
+                    "    product: 'Same Name Incense Burner', listing_project_key: 'project-a', listing_project_identity: identityA,",
+                    "    merchant_product_fact_packet: { product_name: 'Same Name Incense Burner', source_confirmed_facts: {}, merchant_confirmed_facts: { sku: 'STALE-SKU', material: 'STALE-MATERIAL' }, derived_listing_suggestions: {}, unknown_facts: ['material', 'sku'], blocked_by: ['old-material', 'old-sku'] }",
+                    "  },",
+                    "  saasReports: [",
+                    "    { report_id: 'facts-partial-key', report_type: 'merchant.product_facts', report: { product: 'Same Name Incense Burner', listing_project_identity: { key: 'project-a' }, merchant_product_fact_packet: { product_name: 'Same Name Incense Burner', source_confirmed_facts: {}, merchant_confirmed_facts: { sku: 'PARTIAL-KEY' }, derived_listing_suggestions: {}, unknown_facts: [] } } },",
+                    "    { report_id: 'facts-partial-source', report_type: 'merchant.product_facts', report: { product: 'Same Name Incense Burner', listing_project_identity: { key: 'project-a', candidate_id: 'candidate-a' }, merchant_product_fact_packet: { product_name: 'Same Name Incense Burner', source_confirmed_facts: {}, merchant_confirmed_facts: { sku: 'PARTIAL-SOURCE' }, derived_listing_suggestions: {}, unknown_facts: [] } } },",
+                    "    { report_id: 'facts-partial-candidate', report_type: 'merchant.product_facts', report: { product: 'Same Name Incense Burner', listing_project_identity: { key: 'project-a', source_report_id: 'report-market-a' }, merchant_product_fact_packet: { product_name: 'Same Name Incense Burner', source_confirmed_facts: {}, merchant_confirmed_facts: { sku: 'PARTIAL-CANDIDATE' }, derived_listing_suggestions: {}, unknown_facts: [] } } },",
+                    "    { report_id: 'facts-b', report_type: 'merchant.product_facts', report: { product: 'Same Name Incense Burner', listing_project_identity: identityB, merchant_product_fact_packet: { product_name: 'Same Name Incense Burner', source_confirmed_facts: {}, merchant_confirmed_facts: { sku: 'B-SKU', image_urls: 'https://b.example/image.jpg' }, derived_listing_suggestions: {}, unknown_facts: [], blocked_by: [] } } },",
+                    "    { report_id: 'facts-a', report_type: 'merchant.product_facts', report: { product: 'Same Name Incense Burner', listing_project_identity: identityA, merchant_product_fact_packet: { product_name: 'Same Name Incense Burner', source_confirmed_facts: { material: 'Resin' }, merchant_confirmed_facts: {}, derived_listing_suggestions: {}, unknown_facts: ['sku'], blocked_by: ['merchant_product_fact_missing:sku'] } } },",
+                    "  ],",
+                    "};",
+                    "const saasListingDraftHasConcreteProduct = () => true;",
+                    "const latestSaasActionableProductReportByTypes = () => null;",
+                    "const saasListingDraftFromReport = () => null;",
+                    "const saasCurrentListingProjectIdentity = (draft) => ({ ...(draft.listing_project_identity || {}), source_id: draft.listing_project_identity?.source_report_id || '', product: draft.product || '' });",
+                    "const saasNormalizeListingProjectIdentity = (value) => value && value.key ? value : null;",
+                    "const isLegacySampleMediaDraftKey = () => false;",
+                    "const saasMarketCandidateMatchKey = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9\\u4e00-\\u9fff]+/g, '');",
+                    "const applySaasMerchantProductFactPacketToDraft = (draft, packet) => ({ ...draft, merchant_product_fact_packet: packet });",
+                    restore_listing,
+                    "const restored = restoreSaasListingComposerDraftFromBackendReports();",
+                    "console.log(JSON.stringify(restored));",
+                ]
+            )
+        )
+        packet = result.get("merchant_product_fact_packet") or {}
+        self.assertEqual("facts-a", result.get("source_product_fact_report_id"))
+        self.assertEqual(["sku"], packet.get("unknown_facts"))
+        self.assertEqual(["merchant_product_fact_missing:sku"], packet.get("blocked_by"))
+        self.assertEqual("Resin", (packet.get("source_confirmed_facts") or {}).get("material"))
+        self.assertNotIn("material", packet.get("merchant_confirmed_facts") or {})
+        self.assertNotIn("sku", packet.get("merchant_confirmed_facts") or {})
+        self.assertNotIn("B-SKU", json.dumps(packet, ensure_ascii=False))
+        self.assertNotIn("b.example", json.dumps(packet, ensure_ascii=False))
+        self.assertNotIn("PARTIAL-", json.dumps(packet, ensure_ascii=False))
+
+    def test_manual_structured_restore_rejects_incoming_extra_identity_fields(self) -> None:
+        restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const manualIdentity = { key: 'project-manual', source_report_id: '', candidate_id: '' };",
+                    "const state = {",
+                    "  saasListingComposerDraft: { product: 'Manual Product', listing_project_key: 'project-manual', listing_project_identity: manualIdentity, merchant_product_fact_packet: { product_name: 'Manual Product', source_confirmed_facts: {}, merchant_confirmed_facts: {}, derived_listing_suggestions: {}, unknown_facts: [] } },",
+                    "  saasReports: [",
+                    "    { report_id: 'extra-source', report_type: 'merchant.product_facts', report: { listing_project_identity: { key: 'project-manual', source_report_id: 'unexpected-report', candidate_id: '' }, merchant_product_fact_packet: { product_name: 'Manual Product', merchant_confirmed_facts: { sku: 'EXTRA-SOURCE' } } } },",
+                    "    { report_id: 'extra-candidate', report_type: 'merchant.product_facts', report: { listing_project_identity: { key: 'project-manual', source_report_id: '', candidate_id: 'unexpected-candidate' }, merchant_product_fact_packet: { product_name: 'Manual Product', merchant_confirmed_facts: { sku: 'EXTRA-CANDIDATE' } } } },",
+                    "    { report_id: 'manual-exact', report_type: 'merchant.product_facts', report: { listing_project_identity: manualIdentity, merchant_product_fact_packet: { product_name: 'Manual Product', source_confirmed_facts: {}, merchant_confirmed_facts: { sku: 'MANUAL-EXACT' }, derived_listing_suggestions: {}, unknown_facts: [], blocked_by: [] } } },",
+                    "  ],",
+                    "};",
+                    "const saasListingDraftHasConcreteProduct = () => true;",
+                    "const latestSaasActionableProductReportByTypes = () => null;",
+                    "const saasListingDraftFromReport = () => null;",
+                    "const saasCurrentListingProjectIdentity = (draft) => ({ ...draft.listing_project_identity, source_id: draft.listing_project_identity.source_report_id, product: draft.product });",
+                    "const saasNormalizeListingProjectIdentity = (value) => value && value.key ? ({ key: value.key, source_report_id: value.source_report_id || '', candidate_id: value.candidate_id || '' }) : null;",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
+                    "const isLegacySampleMediaDraftKey = () => false;",
+                    "const saasMarketCandidateMatchKey = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9\\u4e00-\\u9fff]+/g, '');",
+                    "const applySaasMerchantProductFactPacketToDraft = (draft, packet) => ({ ...draft, merchant_product_fact_packet: packet });",
+                    restore_listing,
+                    "const restored = restoreSaasListingComposerDraftFromBackendReports();",
+                    "console.log(JSON.stringify(restored));",
+                ]
+            )
+        )
+        self.assertEqual("manual-exact", result.get("source_product_fact_report_id"))
+        serialized = json.dumps(result, ensure_ascii=False)
+        self.assertIn("MANUAL-EXACT", serialized)
+        self.assertNotIn("EXTRA-SOURCE", serialized)
+        self.assertNotIn("EXTRA-CANDIDATE", serialized)
+
+    def test_ambiguous_same_name_legacy_fact_reports_do_not_restore(self) -> None:
+        restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const state = {",
+                    "  saasListingComposerDraft: { product: 'Legacy Same Name', merchant_product_fact_packet: { product_name: 'Legacy Same Name', source_confirmed_facts: {}, merchant_confirmed_facts: {}, derived_listing_suggestions: {}, unknown_facts: [] } },",
+                    "  saasReports: [",
+                    "    { report_id: 'legacy-a', report_type: 'merchant.product_facts', report: { product: 'Legacy Same Name', merchant_product_fact_packet: { product_name: 'Legacy Same Name', merchant_confirmed_facts: { sku: 'A' } } } },",
+                    "    { report_id: 'legacy-b', report_type: 'merchant.product_facts', report: { product: 'Legacy Same Name', merchant_product_fact_packet: { product_name: 'Legacy Same Name', merchant_confirmed_facts: { sku: 'B' } } } },",
+                    "  ],",
+                    "};",
+                    "const saasListingDraftHasConcreteProduct = () => true;",
+                    "const latestSaasActionableProductReportByTypes = () => null;",
+                    "const saasListingDraftFromReport = () => null;",
+                    "const saasCurrentListingProjectIdentity = () => ({ key: 'legacy-generated', source_report_id: '', source_id: '', candidate_id: '', product: 'Legacy Same Name' });",
+                    "const saasNormalizeListingProjectIdentity = (value) => value && value.key ? value : null;",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
+                    "const isLegacySampleMediaDraftKey = () => false;",
+                    "const saasMarketCandidateMatchKey = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9\\u4e00-\\u9fff]+/g, '');",
+                    "const applySaasMerchantProductFactPacketToDraft = (draft, packet) => ({ ...draft, merchant_product_fact_packet: packet });",
+                    restore_listing,
+                    "const restored = restoreSaasListingComposerDraftFromBackendReports();",
+                    "console.log(JSON.stringify(restored));",
+                ]
+            )
+        )
+        self.assertNotIn("source_product_fact_report_id", result)
+        serialized = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn('"sku": "A"', serialized)
+        self.assertNotIn('"sku": "B"', serialized)
+
+    def test_frontend_product_fact_save_posts_identity_and_applies_the_server_packet(self) -> None:
+        save_function = function_body(APP_JS, "saveSaasMerchantProductFacts")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const identity = { key: 'project-a', source_report_id: 'report-a', candidate_id: 'candidate-a' };",
+                    "const SAAS_MERCHANT_PRODUCT_FACT_PACKET_CONTRACT = 'merchant_product_fact_packet_v1';",
+                    "const state = {",
+                    "  saasConnected: true, saasTasks: [], saasReports: [],",
+                    "  saasListingComposerDraft: { product: 'Incense Burner', title: 'Incense Burner', listing_project_key: 'project-a', listing_project_identity: identity, fields: {}, publish_prefill: {}, merchant_product_fact_packet: { product_name: 'Incense Burner', source_records: [], source_confirmed_facts: {}, merchant_confirmed_facts: {}, derived_listing_suggestions: {}, unknown_facts: ['material'] } },",
+                    "};",
+                    "const collectSaasMerchantProductFacts = () => ({ merchantConfirmed: { product_name: 'Incense Burner' }, unknownFacts: ['material'] });",
+                    "const saasMerchantProductFactPacket = (draft) => ({ ...draft.merchant_product_fact_packet, listing_readiness: { ready_for_listing_generation: false } });",
+                    "const saasMerchantProductFactProjectedValue = (_packet, facts, key, fallback) => facts[key] || fallback || '';",
+                    "const saasListingItemSpecificsWithMerchantFacts = (value) => value;",
+                    "const saasMerchantProductFactLabel = (value) => value;",
+                    "const saveSaasProtectedStateSnapshot = () => {};",
+                    "const renderProductListingCenter = () => {};",
+                    "const activeSaasStore = () => ({ store_id: 'store-a' });",
+                    "const sanitizeSaasMerchantProductFactPacketSnapshot = (packet) => packet;",
+                    "const saasCurrentListingProjectIdentity = () => ({ ...identity, source_id: identity.source_report_id });",
+                    "const saasNormalizeListingProjectIdentity = (value) => value && value.key ? value : null;",
+                    "let capturedBody = null; let applied = false;",
+                    "const saasFetch = async (_path, options) => { capturedBody = JSON.parse(options.body); return {",
+                    "  listing_project_identity: identity,",
+                    "  merchant_product_fact_packet: { product_name: 'Incense Burner', source_confirmed_facts: { material: 'Resin' }, merchant_confirmed_facts: {}, derived_listing_suggestions: {}, unknown_facts: [], blocked_by: [] },",
+                    "  task: { task_id: 'task-a' }, report: { report_id: 'facts-a' },",
+                    "}; };",
+                    "const applySaasMerchantProductFactPacketToDraft = (draft, packet) => { applied = true; return { ...draft, merchant_product_fact_packet: packet, applied_server_packet: true }; };",
+                    "const showActionToast = () => {};",
+                    save_function,
+                    "(async () => { await saveSaasMerchantProductFacts(); console.log(JSON.stringify({ capturedBody, applied, draft: state.saasListingComposerDraft })); })().catch((error) => { console.error(error); process.exit(1); });",
+                ]
+            )
+        )
+        expected_identity = {"key": "project-a", "source_report_id": "report-a", "candidate_id": "candidate-a"}
+        self.assertEqual(expected_identity, result.get("capturedBody", {}).get("listing_project_identity"))
+        self.assertIs(result.get("applied"), True)
+        self.assertIs(result.get("draft", {}).get("applied_server_packet"), True)
+        self.assertEqual([], result.get("draft", {}).get("merchant_product_fact_packet", {}).get("unknown_facts"))
+        self.assertEqual(expected_identity, result.get("draft", {}).get("listing_project_identity"))
+
     def test_completed_vision_report_recovers_into_the_matching_existing_listing(self) -> None:
         restore_listing = function_body(APP_JS, "restoreSaasListingComposerDraftFromBackendReports")
         result = run_node_json(
@@ -561,6 +1269,8 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     "const latestSaasActionableProductReportByTypes = () => null;",
                     "const saasListingDraftFromReport = () => null;",
                     "const saasCurrentListingProjectIdentity = () => ({ key: 'incense' });",
+                    "const saasNormalizeListingProjectIdentity = (value) => value && value.key ? value : null;",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
                     "const isLegacySampleMediaDraftKey = () => false;",
                     "const saasMarketCandidateMatchKey = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9\\u4e00-\\u9fff]+/g, '');",
                     "const applySaasMerchantProductFactPacketToDraft = (draft, packet) => ({ ...draft, merchant_product_fact_packet: packet });",

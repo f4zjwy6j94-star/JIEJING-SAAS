@@ -6922,12 +6922,28 @@ function activeMediaDraftProductNameForDisplay(ctx = saasMerchantWorkbenchContex
 
 const SAAS_MEDIA_LISTING_PROJECT_MATCH_CONTRACT = "media_asset_job_product_mismatch_blocked_v1";
 
+function saasNormalizeListingProjectIdentity(value = null) {
+  const raw = value && typeof value === "object" ? value : {};
+  const clean = (field, limit, alias = "") => {
+    const text = publicRuntimeText(raw[field] || (alias ? raw[alias] : "")).trim().slice(0, limit);
+    return /^[A-Za-z0-9._:-]+$/.test(text) ? text : "";
+  };
+  const key = clean("key", 160);
+  if (!key) return null;
+  return {
+    key,
+    source_report_id: clean("source_report_id", 160, "source_id"),
+    candidate_id: clean("candidate_id", 120),
+  };
+}
+
 function saasCurrentListingProjectIdentity(draft = state.saasListingComposerDraft) {
   const current = draft && typeof draft === "object" ? draft : {};
+  const structuredIdentity = saasNormalizeListingProjectIdentity(current.listing_project_identity);
   const selectedCandidate = current.selected_product_candidate && typeof current.selected_product_candidate === "object"
     ? current.selected_product_candidate
     : {};
-  const explicitKey = publicRuntimeText(current.listing_project_key || "").trim().slice(0, 120);
+  const explicitKey = structuredIdentity?.key || publicRuntimeText(current.listing_project_key || "").trim().slice(0, 160);
   const activeListingRaw = typeof activeListingDraft === "function" ? activeListingDraft() : null;
   const activeListing =
     isSaasPublicMvpMode() && isLegacySampleMediaDraftKey(activeListingRaw?.id || state.activeListingDraft)
@@ -6941,19 +6957,24 @@ function saasCurrentListingProjectIdentity(draft = state.saasListingComposerDraf
     activeListing?.titleCn,
   ];
   const product = productCandidates.find((value) => saasIsConcreteProductLabel(value)) || "";
-  const sourceId = publicRuntimeText(current.source_report_id || current.source_media_job_id || "").slice(0, 120);
-  const candidateId = publicRuntimeText(selectedCandidate.candidate_id || "").slice(0, 100);
+  const sourceReportId = structuredIdentity
+    ? structuredIdentity.source_report_id
+    : publicRuntimeText(current.source_report_id || current.source_media_job_id || "").slice(0, 160);
+  const candidateId = structuredIdentity
+    ? structuredIdentity.candidate_id
+    : publicRuntimeText(selectedCandidate.candidate_id || "").slice(0, 120);
   const normalizedProduct = publicRuntimeText(product).toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
-  if (!sourceId && !candidateId && !normalizedProduct) {
-    return { key: "", product: "", source_id: "", candidate_id: "" };
+  if (!explicitKey && !sourceReportId && !candidateId && !normalizedProduct) {
+    return { key: "", product: "", source_report_id: "", source_id: "", candidate_id: "" };
   }
-  const keySeed = sourceId || candidateId
-    ? [sourceId, candidateId, normalizedProduct].join("|")
+  const keySeed = sourceReportId || candidateId
+    ? [sourceReportId, candidateId].join("|")
     : [current.source_type || "listing", normalizedProduct].join("|");
   return {
     key: explicitKey || `listing-project-${Math.abs(hashString(keySeed)).toString(16)}`,
     product: publicRuntimeText(product).slice(0, 120),
-    source_id: sourceId,
+    source_report_id: sourceReportId,
+    source_id: sourceReportId,
     candidate_id: candidateId,
   };
 }
@@ -7116,6 +7137,11 @@ function prepareSaasMediaStudioForCurrentListing() {
   const identity = saasCurrentListingProjectIdentity();
   if (state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object" && identity.key) {
     state.saasListingComposerDraft.listing_project_key = identity.key;
+    state.saasListingComposerDraft.listing_project_identity = {
+      key: identity.key,
+      source_report_id: identity.source_report_id || identity.source_id || "",
+      candidate_id: identity.candidate_id || "",
+    };
   }
   state.mediaTaskEntry = "project";
   state.activeMediaDraft = identity.key || state.activeMediaDraft || state.activeListingDraft || "saas-media";
@@ -7137,13 +7163,18 @@ function saasMediaAssetJobProductFacts(job = {}) {
 
 function saasMediaAssetJobMatchesListingProject(job = {}, draft = state.saasListingComposerDraft) {
   const current = saasCurrentListingProjectIdentity(draft);
-  if (!current.key) return true;
+  if (!current.key) return false;
   const facts = saasMediaAssetJobProductFacts(job);
+  const currentStructured = saasNormalizeListingProjectIdentity(draft?.listing_project_identity);
+  const jobStructured = saasNormalizeListingProjectIdentity(facts.listing_project_identity);
   const jobProjectKey = publicRuntimeText(facts.listing_project_key || facts.listing_draft_id || "").trim();
-  if (jobProjectKey) return jobProjectKey === current.key;
-  const currentProduct = publicRuntimeText(current.product).toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
-  const jobProduct = publicRuntimeText(facts.product || "").toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
-  return Boolean(currentProduct && jobProduct && currentProduct === jobProduct);
+  if (currentStructured) {
+    if (!jobStructured || jobStructured.key !== currentStructured.key || jobProjectKey !== currentStructured.key) return false;
+    if (currentStructured.source_report_id !== jobStructured.source_report_id) return false;
+    if (currentStructured.candidate_id !== jobStructured.candidate_id) return false;
+    return true;
+  }
+  return Boolean(jobProjectKey && jobProjectKey === current.key);
 }
 
 function latestSaasMediaAssetJobWithManifest(options = {}) {
@@ -11503,6 +11534,15 @@ function saasListingDraftFromReport(record = null, sourceType = "ai_report") {
     ],
     safe_local_only: true,
   };
+  const listingProjectIdentity = saasCurrentListingProjectIdentity(importedDraft);
+  importedDraft.listing_project_key = listingProjectIdentity.key;
+  importedDraft.listing_project_identity = listingProjectIdentity.key
+    ? {
+        key: listingProjectIdentity.key,
+        source_report_id: listingProjectIdentity.source_report_id || listingProjectIdentity.source_id || "",
+        candidate_id: listingProjectIdentity.candidate_id || "",
+      }
+    : null;
   return applySaasMerchantProductFactPacketToDraft(importedDraft, handoffFields.merchant_product_fact_packet);
 }
 
@@ -11656,15 +11696,34 @@ function selectSaasListingMarketCandidate(candidateId = "") {
     },
     source_media_job_id: "",
     media_writeback: null,
+    merchant_product_fact_packet: null,
+    source_product_fact_report_id: "",
     gaps: ["切换候选后需要重新补齐当前商品资料", "需要重新运行发布前体检"],
     risks: ["不能沿用其他候选的参数、图片、SKU、物流或政策", "真实发布仍需确认中心"],
     safe_local_only: true,
   };
+  delete state.saasListingComposerDraft.listing_project_key;
+  delete state.saasListingComposerDraft.listing_project_identity;
+  const listingProjectIdentity = saasCurrentListingProjectIdentity(state.saasListingComposerDraft);
+  state.saasListingComposerDraft.listing_project_key = listingProjectIdentity.key;
+  state.saasListingComposerDraft.listing_project_identity = listingProjectIdentity.key
+    ? {
+        key: listingProjectIdentity.key,
+        source_report_id: listingProjectIdentity.source_report_id || listingProjectIdentity.source_id || "",
+        candidate_id: listingProjectIdentity.candidate_id || "",
+      }
+    : null;
+  state.activeMediaDraft = listingProjectIdentity.key || "";
+  state.saasMediaSourceUploadEpoch = Number(state.saasMediaSourceUploadEpoch || 0) + 1;
+  state.saasMediaSourceUpload = null;
+  state.saasActiveMediaPreviewKey = "";
+  state.saasAiCeoSupplierFactAttestation = null;
+  state.supplierFactsStatus = "idle";
   resetSaasBulkWorkspaceForListingProject();
   state.saasListingComposerInput = saasListingImportedAiCeoMarketInput(state.saasListingComposerDraft, null, {});
   state.saasPreTestCheck = null;
   renderProductListingCenter();
-  showActionToast(`已切换到“${selected.name}”；原候选的专属字段已清空，请补当前商品资料。`);
+  showActionToast(`商品已切换到“${selected.name}”；原候选资料已清空，请补当前商品资料并重新上传来源图。`);
   return true;
 }
 
@@ -15211,8 +15270,34 @@ async function handleMediaSourceFile(file, sourceEvent) {
     showActionToast("图片不能超过 5 MB；请压缩后重新上传。");
     return;
   }
+  const uploadAttemptId = Number(state.saasMediaSourceUploadEpoch || 0) + 1;
+  state.saasMediaSourceUploadEpoch = uploadAttemptId;
+  const uploadAttemptIsCurrent = () => Number(state.saasMediaSourceUploadEpoch || 0) === uploadAttemptId;
   const attachToCurrentProject = Boolean(state.activeMediaDraft || state.saasListingComposerDraft?.product);
   if (!attachToCurrentProject) setMediaNewTaskMode();
+  const uploadStartProject = saasCurrentListingProjectIdentity(state.saasListingComposerDraft || {});
+  const uploadStartedForProject = Boolean(uploadStartProject.key);
+  const uploadStartIdentity = {
+    key: uploadStartProject.key || "",
+    source_report_id: uploadStartProject.source_report_id || uploadStartProject.source_id || "",
+    candidate_id: uploadStartProject.candidate_id || "",
+  };
+  const uploadStartTaskEntry = state.mediaTaskEntry || "project";
+  const uploadProjectIsCurrent = () => {
+    if (!uploadAttemptIsCurrent()) return false;
+    const currentProject = saasCurrentListingProjectIdentity(state.saasListingComposerDraft || {});
+    const currentIdentity = {
+      key: currentProject.key || "",
+      source_report_id: currentProject.source_report_id || currentProject.source_id || "",
+      candidate_id: currentProject.candidate_id || "",
+    };
+    const identityMatches =
+      uploadStartIdentity.key === currentIdentity.key &&
+      uploadStartIdentity.source_report_id === currentIdentity.source_report_id &&
+      uploadStartIdentity.candidate_id === currentIdentity.candidate_id;
+    if (!identityMatches) return false;
+    return uploadStartedForProject || (uploadStartTaskEntry === "single" && state.mediaTaskEntry === "single" && !currentIdentity.key);
+  };
   state.saasMediaSourceUpload = null;
   const localPath = inferMediaLocalPath(file, sourceEvent);
   const previewUrl = URL.createObjectURL(file);
@@ -15230,10 +15315,11 @@ async function handleMediaSourceFile(file, sourceEvent) {
   setText("#mediaProductionGap", "尺寸、重量、材质、套装内容和图片使用权仍需核对");
   try {
     const asset = await uploadSaasMediaSourceFile(file);
-    const listingProject = saasCurrentListingProjectIdentity(state.saasListingComposerDraft || {});
+    if (!uploadProjectIsCurrent()) return;
     state.saasMediaSourceUpload = {
       ...asset,
-      listing_project_key: listingProject.key || state.activeMediaDraft || "",
+      listing_project_key: uploadStartedForProject ? uploadStartIdentity.key : "",
+      listing_project_identity: uploadStartedForProject ? uploadStartIdentity : null,
       local_preview_url: previewUrl,
     };
     setText("#mediaDropHint", "真实来源图已上传，可以开始生成素材");
@@ -15242,6 +15328,7 @@ async function handleMediaSourceFile(file, sourceEvent) {
     syncMediaGenerationActionState();
     showActionToast("商品来源图已上传。请确认素材要求后点击“生成素材”，不会自动发布。");
   } catch (error) {
+    if (!uploadProjectIsCurrent()) return;
     state.saasMediaSourceUpload = null;
     setText("#mediaDropHint", "图片上传失败，请重试");
     setText("#mediaProductionStatus", "真实来源图尚未上传 · 没有调用素材生成服务");
@@ -15832,12 +15919,33 @@ function currentMediaStudioProductFacts(config = {}) {
   const store = ctx.store || activeSaasStore();
   const upload = state.saasMediaSourceUpload && typeof state.saasMediaSourceUpload === "object" ? state.saasMediaSourceUpload : null;
   const reportSourceAsset = saasMediaSourceAssetForListingDraft(composer);
-  const uploadMatchesProject =
+  const structuredListingProject = saasNormalizeListingProjectIdentity(composer.listing_project_identity);
+  const structuredUploadProject = saasNormalizeListingProjectIdentity(upload?.listing_project_identity);
+  const rawUploadProject = upload?.listing_project_identity && typeof upload.listing_project_identity === "object" ? upload.listing_project_identity : {};
+  const uploadHasProjectBinding = Boolean(
+    String(upload?.listing_project_key || "").trim() ||
+      [rawUploadProject.key, rawUploadProject.source_report_id, rawUploadProject.source_id, rawUploadProject.candidate_id].some((value) =>
+        String(value || "").trim(),
+      ),
+  );
+  const standaloneUploadMatches = Boolean(
     upload &&
-    (!upload.listing_project_key ||
-      !listingProject.key ||
-      upload.listing_project_key === listingProject.key ||
-      upload.listing_project_key === state.activeMediaDraft);
+      state.mediaTaskEntry === "single" &&
+      config.entry === "single" &&
+      !listingProject.key &&
+      !structuredListingProject &&
+      !uploadHasProjectBinding,
+  );
+  const uploadMatchesProject =
+    standaloneUploadMatches ||
+    (Boolean(upload && listingProject.key && upload.listing_project_key === listingProject.key) &&
+      (!structuredListingProject ||
+        Boolean(
+          structuredUploadProject &&
+          structuredUploadProject.key === structuredListingProject.key &&
+          structuredUploadProject.source_report_id === structuredListingProject.source_report_id &&
+          structuredUploadProject.candidate_id === structuredListingProject.candidate_id,
+        )));
   const sourceAssetId = uploadMatchesProject ? upload.asset_id || "" : reportSourceAsset?.asset_id || "";
   const sourceImageSha256 = uploadMatchesProject ? upload.sha256 || "" : reportSourceAsset?.sha256 || "";
   const referenceImages = [config.referenceImageUrl]
@@ -15854,9 +15962,16 @@ function currentMediaStudioProductFacts(config = {}) {
   ].filter(Boolean);
   return {
     product: productName,
+    listing_project_identity: listingProject.key
+      ? {
+          key: listingProject.key,
+          source_report_id: listingProject.source_report_id || listingProject.source_id || "",
+          candidate_id: listingProject.candidate_id || "",
+        }
+      : null,
     listing_project_key: listingProject.key,
-    listing_draft_id: listingProject.key || state.activeMediaDraft || "",
-    listing_source_id: listingProject.source_id,
+    listing_draft_id: listingProject.key || "",
+    listing_source_id: listingProject.source_report_id || listingProject.source_id || "",
     selected_candidate_id: listingProject.candidate_id,
     marketplace: store?.marketplace || "EBAY_US",
     source: config.entry === "single" ? "merchant_upload_or_local_image" : "listing_or_ai_ceo_workflow",
@@ -15982,6 +16097,7 @@ function buildSaasMediaAssetJobPayload(sourceText, config = {}) {
   const videoBudgetByDuration = { 6: 900, 10: 1500 };
   const idempotencySource = JSON.stringify({
     store_id: store?.store_id || "",
+    listing_project_identity: productFacts.listing_project_identity || null,
     listing_project_key: productFacts.listing_project_key || "",
     source_asset_id: String(productFacts.source_asset_id || "").trim(),
     source_image_sha256: String(productFacts.source_image_sha256 || "").trim().toLowerCase(),
@@ -17359,6 +17475,60 @@ function sanitizeSaasPacketSnapshot(packet = {}) {
 
 function restoreSaasListingComposerDraftFromBackendReports() {
   const factReports = (state.saasReports || []).filter((item) => item?.report_type === "merchant.product_facts");
+  const packetValues = (packet = {}) => ({
+    ...(packet.derived_listing_suggestions && typeof packet.derived_listing_suggestions === "object" ? packet.derived_listing_suggestions : {}),
+    ...(packet.source_confirmed_facts && typeof packet.source_confirmed_facts === "object" ? packet.source_confirmed_facts : {}),
+    ...(packet.merchant_confirmed_facts && typeof packet.merchant_confirmed_facts === "object" ? packet.merchant_confirmed_facts : {}),
+  });
+  const factReportMatchesDraft = (item, draft) => {
+    const body = item?.report && typeof item.report === "object" ? item.report : {};
+    const incomingPacket =
+      body.merchant_product_fact_packet && typeof body.merchant_product_fact_packet === "object"
+        ? body.merchant_product_fact_packet
+        : {};
+    const currentPacket =
+      draft?.merchant_product_fact_packet && typeof draft.merchant_product_fact_packet === "object"
+        ? draft.merchant_product_fact_packet
+        : {};
+    const currentIdentity = saasNormalizeListingProjectIdentity(draft?.listing_project_identity);
+    const incomingIdentity = saasNormalizeListingProjectIdentity(body.listing_project_identity);
+    if (currentIdentity && incomingIdentity) {
+      if (currentIdentity.key !== incomingIdentity.key) return false;
+      if (currentIdentity.source_report_id !== incomingIdentity.source_report_id) return false;
+      if (currentIdentity.candidate_id !== incomingIdentity.candidate_id) return false;
+      return true;
+    }
+    const currentLegacyKey = publicRuntimeText(draft?.listing_project_key || "").trim();
+    const incomingLegacyKey = publicRuntimeText(
+      body.listing_project_key || incomingPacket.listing_project_key || incomingPacket.listing_draft_id || "",
+    ).trim();
+    if (currentLegacyKey && incomingLegacyKey && currentLegacyKey === incomingLegacyKey) return true;
+    const currentValues = packetValues(currentPacket);
+    const incomingValues = packetValues(incomingPacket);
+    const stableKeys = ["supplier_item_number", "source_url"];
+    if (
+      stableKeys.some(
+        (key) =>
+          currentValues[key] &&
+          incomingValues[key] &&
+          String(currentValues[key]).trim().toLowerCase() === String(incomingValues[key]).trim().toLowerCase(),
+      )
+    ) return true;
+    if (currentIdentity || incomingIdentity) return false;
+    const currentProductKey = saasMarketCandidateMatchKey(currentPacket.product_name || draft?.product || draft?.title || "");
+    const incomingProductKey = saasMarketCandidateMatchKey(incomingPacket.product_name || body.product || "");
+    if (!currentProductKey || currentProductKey !== incomingProductKey) return false;
+    const matchingLegacyNames = factReports.filter((candidate) => {
+      const candidateBody = candidate?.report && typeof candidate.report === "object" ? candidate.report : {};
+      if (saasNormalizeListingProjectIdentity(candidateBody.listing_project_identity)) return false;
+      const candidatePacket =
+        candidateBody.merchant_product_fact_packet && typeof candidateBody.merchant_product_fact_packet === "object"
+          ? candidateBody.merchant_product_fact_packet
+          : {};
+      return saasMarketCandidateMatchKey(candidatePacket.product_name || candidateBody.product || "") === currentProductKey;
+    });
+    return matchingLegacyNames.length === 1;
+  };
   if (state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object") {
     if (saasListingDraftHasConcreteProduct(state.saasListingComposerDraft)) {
       const currentDraft = state.saasListingComposerDraft;
@@ -17366,43 +17536,14 @@ function restoreSaasListingComposerDraftFromBackendReports() {
         currentDraft.merchant_product_fact_packet && typeof currentDraft.merchant_product_fact_packet === "object"
           ? currentDraft.merchant_product_fact_packet
           : {};
-      const packetValues = (packet = {}) => ({
-        ...(packet.derived_listing_suggestions && typeof packet.derived_listing_suggestions === "object" ? packet.derived_listing_suggestions : {}),
-        ...(packet.source_confirmed_facts && typeof packet.source_confirmed_facts === "object" ? packet.source_confirmed_facts : {}),
-        ...(packet.merchant_confirmed_facts && typeof packet.merchant_confirmed_facts === "object" ? packet.merchant_confirmed_facts : {}),
-      });
-      const currentValues = packetValues(currentPacket);
-      const matchingFactReport = factReports.find((item) => {
-        const body = item?.report && typeof item.report === "object" ? item.report : {};
-        const incomingPacket =
-          body.merchant_product_fact_packet && typeof body.merchant_product_fact_packet === "object"
-            ? body.merchant_product_fact_packet
-            : {};
-        const incomingValues = packetValues(incomingPacket);
-        const stableKeys = ["supplier_item_number", "source_url"];
-        if (
-          stableKeys.some(
-            (key) =>
-              currentValues[key] &&
-              incomingValues[key] &&
-              String(currentValues[key]).trim().toLowerCase() === String(incomingValues[key]).trim().toLowerCase(),
-          )
-        ) {
-          return true;
-        }
-        const currentProductKey = saasMarketCandidateMatchKey(currentPacket.product_name || currentDraft.product || currentDraft.title || "");
-        const incomingProductKey = saasMarketCandidateMatchKey(incomingPacket.product_name || body.product || "");
-        return Boolean(
-          currentProductKey &&
-          incomingProductKey &&
-          (currentProductKey === incomingProductKey ||
-            (Math.min(currentProductKey.length, incomingProductKey.length) >= 6 &&
-              (currentProductKey.includes(incomingProductKey) || incomingProductKey.includes(currentProductKey)))),
-        );
-      });
+      const matchingFactReport = factReports.find((item) => factReportMatchesDraft(item, currentDraft));
       if (matchingFactReport) {
         const body = matchingFactReport.report && typeof matchingFactReport.report === "object" ? matchingFactReport.report : {};
         const incomingPacket = body.merchant_product_fact_packet || {};
+        const exactIdentityMatch = Boolean(
+          saasNormalizeListingProjectIdentity(currentDraft.listing_project_identity) &&
+          saasNormalizeListingProjectIdentity(body.listing_project_identity),
+        );
         const mergeUnique = (items = [], keyForItem = (item) => JSON.stringify(item)) => {
           const seen = new Set();
           return items.filter((item) => {
@@ -17415,18 +17556,15 @@ function restoreSaasListingComposerDraftFromBackendReports() {
         const mergedPacket = {
           ...currentPacket,
           ...incomingPacket,
-          source_confirmed_facts: {
-            ...(currentPacket.source_confirmed_facts || {}),
-            ...(incomingPacket.source_confirmed_facts || {}),
-          },
-          merchant_confirmed_facts: {
-            ...(incomingPacket.merchant_confirmed_facts || {}),
-            ...(currentPacket.merchant_confirmed_facts || {}),
-          },
-          derived_listing_suggestions: {
-            ...(currentPacket.derived_listing_suggestions || {}),
-            ...(incomingPacket.derived_listing_suggestions || {}),
-          },
+          source_confirmed_facts: exactIdentityMatch
+            ? { ...(incomingPacket.source_confirmed_facts || {}) }
+            : { ...(currentPacket.source_confirmed_facts || {}), ...(incomingPacket.source_confirmed_facts || {}) },
+          merchant_confirmed_facts: exactIdentityMatch
+            ? { ...(incomingPacket.merchant_confirmed_facts || {}) }
+            : { ...(currentPacket.merchant_confirmed_facts || {}), ...(incomingPacket.merchant_confirmed_facts || {}) },
+          derived_listing_suggestions: exactIdentityMatch
+            ? { ...(incomingPacket.derived_listing_suggestions || {}) }
+            : { ...(currentPacket.derived_listing_suggestions || {}), ...(incomingPacket.derived_listing_suggestions || {}) },
           listing_copy: {
             ...(currentPacket.listing_copy || {}),
             ...(incomingPacket.listing_copy || {}),
@@ -17439,13 +17577,24 @@ function restoreSaasListingComposerDraftFromBackendReports() {
             [...(incomingPacket.fact_conflicts || []), ...(currentPacket.fact_conflicts || [])],
             (item) => `${String(item?.field || "")}:${JSON.stringify(item?.values || [])}`,
           ),
-          unknown_facts: mergeUnique([...(incomingPacket.unknown_facts || []), ...(currentPacket.unknown_facts || [])], (item) => String(item || "")),
+          unknown_facts: exactIdentityMatch
+            ? [...(incomingPacket.unknown_facts || [])]
+            : mergeUnique([...(incomingPacket.unknown_facts || []), ...(currentPacket.unknown_facts || [])], (item) => String(item || "")),
           source_records: mergeUnique(
             [...(incomingPacket.source_records || []), ...(currentPacket.source_records || [])],
             (item) => String(item?.asset_id || item?.url || item?.sha256 || JSON.stringify(item || {})),
           ),
-          blocked_by: mergeUnique([...(incomingPacket.blocked_by || []), ...(currentPacket.blocked_by || [])], (item) => String(item || "")),
+          blocked_by: exactIdentityMatch
+            ? [...(incomingPacket.blocked_by || [])]
+            : mergeUnique([...(incomingPacket.blocked_by || []), ...(currentPacket.blocked_by || [])], (item) => String(item || "")),
         };
+        if (exactIdentityMatch) {
+          mergedPacket.unknown_facts.forEach((key) => {
+            delete mergedPacket.source_confirmed_facts[key];
+            delete mergedPacket.merchant_confirmed_facts[key];
+            delete mergedPacket.derived_listing_suggestions[key];
+          });
+        }
         state.saasListingComposerDraft = {
           ...applySaasMerchantProductFactPacketToDraft(currentDraft, mergedPacket),
           source_product_fact_report_id: String(matchingFactReport.report_id || ""),
@@ -17466,11 +17615,7 @@ function restoreSaasListingComposerDraftFromBackendReports() {
   if (!restored || !saasListingDraftHasConcreteProduct(restored)) return null;
   const identity = saasCurrentListingProjectIdentity(restored);
   const restoredWithIdentity = { ...restored, listing_project_key: identity.key };
-  const restoredProductKey = saasMarketCandidateMatchKey(restoredWithIdentity.product || restoredWithIdentity.title || "");
-  const factReport = factReports.find((item) => {
-    const body = item?.report && typeof item.report === "object" ? item.report : {};
-    return saasMarketCandidateMatchKey(body.product || body.merchant_product_fact_packet?.product_name || "") === restoredProductKey;
-  });
+  const factReport = factReports.find((item) => factReportMatchesDraft(item, restoredWithIdentity));
   const factBody = factReport?.report && typeof factReport.report === "object" ? factReport.report : {};
   state.saasListingComposerDraft = applySaasMerchantProductFactPacketToDraft(
     restoredWithIdentity,
@@ -17568,7 +17713,15 @@ function applySaasAiCeoProductFactPacket(packet = null, merchantText = "", repor
   state.saasListingComposerInput = merchantText;
   state.saasListingSourceMode = "ai_ceo_product_vision";
   const identity = saasCurrentListingProjectIdentity(draft);
-  if (identity?.key) state.activeMediaDraft = identity.key;
+  if (identity?.key) {
+    draft.listing_project_key = identity.key;
+    draft.listing_project_identity = {
+      key: identity.key,
+      source_report_id: identity.source_report_id || identity.source_id || "",
+      candidate_id: identity.candidate_id || "",
+    };
+    state.activeMediaDraft = identity.key;
+  }
   if (report && typeof report === "object") {
     state.saasReports = [report, ...(state.saasReports || []).filter((item) => item.report_id !== report.report_id)];
   }
@@ -17726,6 +17879,14 @@ function sanitizeSaasListingComposerDraftSnapshot(draft = null) {
     : null;
   const fields = draft.fields && typeof draft.fields === "object" ? draft.fields : {};
   const identity = saasCurrentListingProjectIdentity(draft);
+  const structuredIdentity =
+    draft.listing_project_identity && typeof draft.listing_project_identity === "object" && identity.key
+      ? {
+          key: identity.key,
+          source_report_id: identity.source_report_id || identity.source_id || "",
+          candidate_id: identity.candidate_id || "",
+        }
+      : null;
   return {
     ...pickSaasSnapshotFields(draft, [
       "source_type",
@@ -17740,6 +17901,7 @@ function sanitizeSaasListingComposerDraftSnapshot(draft = null) {
       "created_at",
     ]),
     listing_project_key: identity.key || publicRuntimeText(draft.listing_project_key || "").slice(0, 120),
+    listing_project_identity: structuredIdentity,
     selected_product_candidate: selected
       ? pickSaasSnapshotFields(selected, ["candidate_id", "name", "score", "price_band", "selected", "source_type", "source_label"])
       : null,
@@ -32722,14 +32884,29 @@ async function saveSaasMerchantProductFacts() {
   }
   try {
     state.saasListingProductFactSaveStatus = "saving";
+    const listingProject = saasCurrentListingProjectIdentity(draft);
+    const listingProjectIdentity = listingProject.key
+      ? {
+          key: listingProject.key,
+          source_report_id: listingProject.source_report_id || listingProject.source_id || "",
+          candidate_id: listingProject.candidate_id || "",
+        }
+      : null;
     const response = await saasFetch(`/stores/${encodeURIComponent(store.store_id)}/product-facts`, {
       method: "POST",
       body: JSON.stringify({
+        listing_project_identity: listingProjectIdentity,
         merchant_product_fact_packet: sanitizeSaasMerchantProductFactPacketSnapshot(packet),
       }),
     });
     if (response.merchant_product_fact_packet) {
-      draft.merchant_product_fact_packet = response.merchant_product_fact_packet;
+      const serverIdentity = saasNormalizeListingProjectIdentity(response.listing_project_identity);
+      const restoredDraft = applySaasMerchantProductFactPacketToDraft(draft, response.merchant_product_fact_packet);
+      if (serverIdentity) {
+        restoredDraft.listing_project_key = serverIdentity.key;
+        restoredDraft.listing_project_identity = serverIdentity;
+      }
+      state.saasListingComposerDraft = restoredDraft;
     }
     if (response.task) state.saasTasks = [response.task, ...(state.saasTasks || []).filter((item) => item.task_id !== response.task.task_id)];
     if (response.report) state.saasReports = [response.report, ...(state.saasReports || []).filter((item) => item.report_id !== response.report.report_id)];
