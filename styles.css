@@ -38664,6 +38664,49 @@ body.saas-public-mvp .saas-service-simple-workspace article.is-empty {
   background: #f8fbfa;
 }
 
+body.saas-public-mvp .saas-activity-simple-grid article.is-green {
+  border-color: rgba(8, 118, 110, 0.22);
+  background: #eef9f5;
+}
+
+body.saas-public-mvp .saas-activity-simple-grid article.is-amber {
+  border-color: rgba(214, 142, 43, 0.28);
+  background: #fff8ed;
+}
+
+body.saas-public-mvp .saas-execution-record-meta {
+  display: grid;
+  gap: 5px;
+  margin: 2px 0;
+}
+
+body.saas-public-mvp .saas-execution-record-meta div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-execution-record-meta dt,
+body.saas-public-mvp .saas-execution-record-meta dd {
+  margin: 0;
+  color: #52645f;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+body.saas-public-mvp .saas-execution-record-meta dt {
+  color: #788783;
+}
+
+body.saas-public-mvp .saas-execution-record-next {
+  display: grid;
+  gap: 3px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(15, 45, 40, 0.08);
+}
+
 body.saas-public-mvp .saas-service-simple-workspace article.is-green,
 body.saas-public-mvp .saas-core-module-diagnostics-grid article.is-green {
   border-color: rgba(8, 118, 110, 0.22);

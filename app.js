@@ -41746,6 +41746,167 @@ function renderWorkflow() {
   renderProjectPickers();
 }
 
+function saasExecutionActionLabel(actionType = "") {
+  const labels = {
+    publish_listing: "正式发布 eBay",
+    save_ebay_listing_draft: "保存 eBay 未发布草稿",
+    save_ebay_draft: "保存 eBay 未发布草稿",
+    generate_media_asset: "生成商品素材",
+    generate_listing: "生成 Listing 草稿",
+  };
+  return labels[String(actionType || "").trim()] || "执行任务";
+}
+
+function saasExecutionOfferIdFromSteps(steps = []) {
+  for (const step of Array.isArray(steps) ? [...steps].reverse() : []) {
+    const path = String(step?.path || "");
+    const match = path.match(/\/offer\/([^/?]+)\/publish(?:[/?]|$)/i);
+    if (!match?.[1]) continue;
+    try {
+      return decodeURIComponent(match[1]);
+    } catch (_error) {
+      return match[1];
+    }
+  }
+  return "";
+}
+
+function saasMerchantExecutionRecordViewModel(record = null) {
+  if (!record || typeof record !== "object") return null;
+  const result = record.result && typeof record.result === "object" ? record.result : {};
+  const audit = result.audit && typeof result.audit === "object" ? result.audit : {};
+  const platform = result.platform_result && typeof result.platform_result === "object"
+    ? result.platform_result
+    : audit.platform_result && typeof audit.platform_result === "object"
+      ? audit.platform_result
+      : {};
+  const real = audit.real_execution && typeof audit.real_execution === "object" ? audit.real_execution : {};
+  const steps = Array.isArray(result.steps) ? result.steps : [];
+  const platformError = saasLatestExecutionPlatformError(record) || {};
+  const confirmationId = publicRuntimeText(record.confirmation_id || result.confirmation_id || audit.confirmation_id || "").trim();
+  const confirmation = (state.saasConfirmations || []).find(
+    (item) => publicRuntimeText(item?.confirmation_id || "").trim() === confirmationId,
+  ) || {};
+  const item = confirmation.item && typeof confirmation.item === "object" ? confirmation.item : {};
+  const existingDraft = item.existing_ebay_draft && typeof item.existing_ebay_draft === "object"
+    ? item.existing_ebay_draft
+    : {};
+  const publishPayload = item.publish_payload && typeof item.publish_payload === "object" ? item.publish_payload : {};
+  const listing = publishPayload.listing && typeof publishPayload.listing === "object" ? publishPayload.listing : {};
+  const executionId = publicRuntimeText(record.execution_id || result.execution_id || "").trim();
+  const actionType = publicRuntimeText(record.action_type || result.action_type || audit.action_type || "").trim();
+  const status = publicRuntimeText(record.status || result.status || "").trim();
+  const offerId = publicRuntimeText(
+    platform.offer_id || platform.offerId || existingDraft.offer_id || saasExecutionOfferIdFromSteps(steps),
+  ).trim();
+  const sku = publicRuntimeText(platform.sku || existingDraft.sku || listing.sku || "").trim();
+  const listingId = publicRuntimeText(platform.listing_id || platform.listingId || "").trim();
+  const errorText = [platformError.code, platformError.message, platformError.long_message]
+    .map((value) => String(value || "").toLowerCase())
+    .join(" ");
+  const accountRestricted =
+    String(platformError.error_id || "") === "25019" ||
+    errorText.includes("seller_account_restricted") ||
+    errorText.includes("account is temporarily restricted") ||
+    errorText.includes("seller account is restricted");
+  const publishedToEbay = Boolean(
+    status === "published_to_ebay" || result.status === "published_to_ebay" || real.published_to_ebay === true,
+  );
+  const savedDraft = status === "saved_to_ebay_draft" || result.status === "saved_to_ebay_draft";
+  const blocked = !publishedToEbay && (
+    status.startsWith("blocked") ||
+    String(result.status || "").startsWith("blocked") ||
+    steps.some((step) => step?.status === "http_error")
+  );
+  let statusLabel = "执行记录已保存";
+  let summary = "捷境已保留本次操作结果，可以据此继续处理。";
+  let nextAction = "根据当前结果继续下一步。";
+  let tone = "neutral";
+  if (publishedToEbay) {
+    statusLabel = "已正式发布到 eBay";
+    summary = listingId ? `eBay 已创建公开 Listing ${listingId}。` : "eBay 已确认公开发布。";
+    nextAction = "到 eBay 商品页核对公开状态，并在捷境继续查看发布后复盘。";
+    tone = "green";
+  } else if (savedDraft) {
+    statusLabel = "已保存为 eBay 未发布草稿";
+    summary = "Offer 已写入 eBay，但没有创建公开 Listing。";
+    nextAction = "资料核对无误后，从捷境生成正式发布确认单。";
+    tone = "neutral";
+  } else if (accountRestricted) {
+    statusLabel = "eBay 账号暂时受限，未发布";
+    summary = "eBay 拒绝了本次正式发布；Offer 仍为未公开状态，捷境没有重复提交。";
+    nextAction = "请在 eBay 站内信按要求完成身份资料核验；限制解除后回到捷境重新生成确认单。";
+    tone = "amber";
+  } else if (blocked) {
+    statusLabel = "eBay 未接受，本次未发布";
+    summary = "捷境已保存平台拒绝证据，没有把失败显示成发布成功。";
+    nextAction = "先按错误提示修复平台或商品资料，再重新生成确认单。";
+    tone = "amber";
+  }
+  return {
+    executionId,
+    confirmationId,
+    actionType,
+    actionLabel: saasExecutionActionLabel(actionType),
+    status,
+    statusLabel,
+    summary,
+    nextAction,
+    offerId,
+    sku,
+    listingId,
+    publishedToEbay,
+    recoveryKind: accountRestricted ? "ebay_account_restricted" : blocked ? "platform_rejected" : "",
+    publicState: publishedToEbay ? "已公开" : "未公开",
+    tone,
+    createdAt: record.created_at || result.created_at || "",
+  };
+}
+
+function renderSaasActivityExecutionRecords() {
+  const records = (state.saasExecutionResults || [])
+    .map((record) => saasMerchantExecutionRecordViewModel(record))
+    .filter(Boolean)
+    .slice(0, 8);
+  return `
+    <section class="saas-activity-simple-list saas-execution-record-list" aria-label="最近执行记录">
+      <div class="saas-activity-simple-head">
+        <div>
+          <span>最近执行记录</span>
+          <strong>${records.length ? "捷境真实调用与写入结果" : "还没有执行记录"}</strong>
+          <p>这里显示当前账号的执行、确认和平台结果；失败不会冒充成功，也不会展示密钥或平台凭证。</p>
+        </div>
+      </div>
+      <div class="saas-activity-simple-grid saas-execution-record-grid">
+        ${
+          records.length
+            ? records
+                .map(
+                  (record) => `
+                    <article class="${record.tone === "amber" ? "is-amber" : record.tone === "green" ? "is-green" : ""}">
+                      <span>${escapeHtml(record.actionLabel)} · ${escapeHtml(saasTimestampLabel(record.createdAt))}</span>
+                      <strong>${escapeHtml(record.statusLabel)}</strong>
+                      <p>${escapeHtml(record.summary)}</p>
+                      <dl class="saas-execution-record-meta">
+                        <div><dt>公开状态</dt><dd>${escapeHtml(record.publicState)}</dd></div>
+                        ${record.offerId ? `<div><dt>Offer</dt><dd>${escapeHtml(record.offerId)}</dd></div>` : ""}
+                        ${record.sku ? `<div><dt>SKU</dt><dd>${escapeHtml(record.sku)}</dd></div>` : ""}
+                        ${record.listingId ? `<div><dt>Listing</dt><dd>${escapeHtml(record.listingId)}</dd></div>` : ""}
+                        ${record.executionId ? `<div><dt>执行记录</dt><dd>${escapeHtml(record.executionId)}</dd></div>` : ""}
+                        ${record.confirmationId ? `<div><dt>确认单</dt><dd>${escapeHtml(record.confirmationId)}</dd></div>` : ""}
+                      </dl>
+                      <p class="saas-execution-record-next"><b>下一步</b>${escapeHtml(record.nextAction)}</p>
+                    </article>
+                  `,
+                )
+                .join("")
+            : `<article class="is-empty"><span>等待运行</span><strong>执行后会自动留下记录</strong><p>保存草稿、正式发布和平台拒绝都会按当前账号写入这里。</p></article>`
+        }
+      </div>
+    </section>
+  `;
+}
+
 function renderSaasActivityCenter(view) {
   if (!view) return;
   const ctx = saasMerchantWorkbenchContext();
@@ -41789,6 +41950,8 @@ function renderSaasActivityCenter(view) {
         ${renderSaasListingFactoryReportCard(marketReport, "市场报告")}
         ${renderSaasListingFactoryReportCard(listingReport, "Listing 草稿")}
       </section>
+
+      ${renderSaasActivityExecutionRecords()}
 
       <section class="saas-activity-simple-list" aria-label="AI CEO 全部报告">
         <div class="saas-activity-simple-head">
