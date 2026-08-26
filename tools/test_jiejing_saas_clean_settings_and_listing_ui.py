@@ -213,6 +213,169 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
         start = app_js.index(start_marker)
         return app_js[start:app_js.index(end_marker, start)]
 
+    legacy_product_label_source = scoped_body(
+        "function isLegacySampleProductLabel",
+        "function activeMediaDraftProfileForDisplay",
+    )
+    legacy_product_label_contract = f"""
+{legacy_product_label_source}
+const legitimateProducts = [
+  "incense",
+  "香炉",
+  "倒流香",
+  "Backflow Incense",
+  "Incense Burner",
+  "Zen Incense",
+  "禅意佛手托莲花倒流香炉",
+  "Zen Buddha Hand Lotus Backflow Incense Burner",
+  "Handmade Ceramic Incense Burner for Home Decor",
+];
+for (const label of legitimateProducts) {{
+  if (isLegacySampleProductLabel(label)) {{
+    throw new Error(`legitimate merchant product was hidden: ${{label}}`);
+  }}
+}}
+const historicalSamples = [
+  "jj-backflow-incense-debug-full",
+  "listing-jj-backflow-incense-debug-min",
+  "JJ-DRAFT-PROOF-20260815-05",
+  "assets/backflow-incense-hero.webp",
+  "source-backflow-incense-burner",
+];
+for (const label of historicalSamples) {{
+  if (!isLegacySampleProductLabel(label)) {{
+    throw new Error(`known historical sample was shown: ${{label}}`);
+  }}
+}}
+"""
+    legacy_product_label_result = subprocess.run(
+        ["node", "-e", legacy_product_label_contract],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if legacy_product_label_result.returncode != 0:
+        raise AssertionError(
+            "Listing/media product labels must reject only known historical samples: "
+            f"{legacy_product_label_result.stderr.strip()}"
+        )
+
+    legacy_media_key_source = scoped_body(
+        "function isLegacySampleMediaDraftKey",
+        "function isLegacySampleProductLabel",
+    )
+    legacy_media_key_contract = f"""
+{legacy_media_key_source}
+for (const key of ["incense", "backflow-incense", "zen-incense"]) {{
+  if (!isLegacySampleMediaDraftKey(key)) {{
+    throw new Error(`exact historical media key was accepted: ${{key}}`);
+  }}
+}}
+for (const key of [
+  " Incense ",
+  "INCENSE",
+  "Backflow Incense",
+  "backflow-incense-burner",
+  "禅意佛手托莲花倒流香炉",
+]) {{
+  if (isLegacySampleMediaDraftKey(key)) {{
+    throw new Error(`non-exact media key was hidden: ${{key}}`);
+  }}
+}}
+"""
+    legacy_media_key_result = subprocess.run(
+        ["node", "-e", legacy_media_key_contract],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if legacy_media_key_result.returncode != 0:
+        raise AssertionError(
+            "Legacy media draft keys must retain their raw exact-match boundary: "
+            f"{legacy_media_key_result.stderr.strip()}"
+        )
+
+    confirmation_execution_source = scoped_body(
+        "function saasLatestExecutionResult",
+        "function saasLatestPublishConfirmation",
+    )
+    confirmation_execution_contract = f"""
+const state = {{
+  saasExecutionResults: [
+    {{
+      execution_id: "exec-old-confirmation",
+      confirmation_id: "confirm-old",
+      action_type: "publish_listing",
+      result: {{ action_type: "publish_listing" }},
+    }},
+    {{
+      execution_id: "exec-result-confirmation",
+      action_type: "publish_listing",
+      result: {{
+        action_type: "publish_listing",
+        confirmation_id: "confirm-result",
+      }},
+    }},
+    {{
+      execution_id: "exec-audit-confirmation",
+      action_type: "publish_listing",
+      result: {{
+        action_type: "publish_listing",
+        audit: {{ confirmation_id: "confirm-audit" }},
+      }},
+    }},
+    {{
+      execution_id: "exec-intent-confirmation",
+      action_type: "publish_listing",
+      result: {{
+        action_type: "publish_listing",
+        audit: {{ execution_intent: {{ confirmation_id: "confirm-intent" }} }},
+      }},
+    }},
+  ],
+}};
+{confirmation_execution_source}
+const missingNew = saasExecutionResultForConfirmation("confirm-new", "publish_listing");
+if (missingNew !== null) {{
+  throw new Error("new confirmation borrowed an older confirmation execution");
+}}
+const matchedOld = saasExecutionResultForConfirmation("confirm-old", "publish_listing");
+if (!matchedOld || matchedOld.execution_id !== "exec-old-confirmation") {{
+  throw new Error("old confirmation did not resolve its own execution");
+}}
+for (const [confirmationId, executionId] of [
+  ["confirm-result", "exec-result-confirmation"],
+  ["confirm-audit", "exec-audit-confirmation"],
+  ["confirm-intent", "exec-intent-confirmation"],
+]) {{
+  const matched = saasExecutionResultForConfirmation(confirmationId, "publish_listing");
+  if (!matched || matched.execution_id !== executionId) {{
+    throw new Error(`confirmation binding was missed: ${{confirmationId}}`);
+  }}
+}}
+const latestFallback = saasExecutionResultForConfirmation("", "publish_listing");
+if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") {{
+  throw new Error("empty confirmation id lost latest execution fallback");
+}}
+"""
+    confirmation_execution_result = subprocess.run(
+        ["node", "-e", confirmation_execution_contract],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if confirmation_execution_result.returncode != 0:
+        raise AssertionError(
+            "Confirmation execution receipts must fail closed for a non-empty unmatched id: "
+            f"{confirmation_execution_result.stderr.strip()}"
+        )
+
     credential_copy_surfaces = [
         ("eBay sync status", scoped_body("function renderSaasEbaySyncStatusPanel", "function renderSaasLiveSnapshotPanel")),
         ("Listing entry", scoped_body("function renderSaasProductListingCenter", "function renderProductListingCenter")),

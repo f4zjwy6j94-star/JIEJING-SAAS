@@ -6878,7 +6878,14 @@ function isLegacySampleMediaDraftKey(key) {
 }
 
 function isLegacySampleProductLabel(value) {
-  return /倒流香|香炉|backflow\s+incense|incense\s+burner|zen\s+incense/i.test(String(value || ""));
+  const normalized = String(value || "").trim().toLowerCase();
+  return [
+    "jj-backflow-incense-debug-full",
+    "jj-backflow-incense-debug-min",
+    "jj-draft-proof-20260815-05",
+    "assets/backflow-incense-",
+    "source-backflow-incense-burner",
+  ].some((marker) => normalized.includes(marker));
 }
 
 function activeMediaDraftProfileForDisplay() {
@@ -22380,7 +22387,7 @@ function saasExecutionResultForConfirmation(confirmationId = "", actionType = "p
       intent.confirmation_id === targetId
     );
   });
-  return matched || saasLatestExecutionResult(actionType);
+  return matched || null;
 }
 
 function saasLatestPublishConfirmation(confirmationId = "") {
