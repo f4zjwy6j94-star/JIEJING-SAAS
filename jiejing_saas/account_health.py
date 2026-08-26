@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 
@@ -46,7 +47,11 @@ def build_account_health_snapshot(
     finances = _packet_section_data(packet, "finances")
     connections = repository.list_connections(company_id=company_id, store_id=store_id)
     execution_results = repository.list_execution_results(company_id=company_id, limit=80)
-    recent_platform_errors = _recent_platform_error_summaries(execution_results)
+    latest_packet_created_at = str(latest_packet.get("created_at") or packet.get("created_at") or "")
+    recent_platform_errors = _recent_platform_error_summaries(
+        execution_results,
+        since=latest_packet_created_at,
+    )
 
     raw_status = _first_text(
         store_profile.get("seller_account_status"),
@@ -107,7 +112,7 @@ def build_account_health_snapshot(
         selling_limits=selling_limits,
     )
     return {
-        "contract_version": "2026-08-02-account-health-seller-onboarding-v2",
+        "contract_version": "2026-08-26-account-health-provider-rejection-v3",
         "platform": "ebay",
         "company_id": company_id,
         "store_id": store_id,
@@ -125,6 +130,7 @@ def build_account_health_snapshot(
             status,
             has_store_profile=has_store_profile,
             business_policies_present=business_policies_present,
+            recent_platform_errors=recent_platform_errors,
         ),
         "account_health": account_health_for_publish,
         "evidence_package": {
@@ -157,7 +163,11 @@ def build_account_health_snapshot(
             "allowed_incident_actions": ALLOWED_INCIDENT_ACTIONS,
             "confirmation_center_still_required_when_clear": True,
         },
-        "next_actions": _next_actions(status, business_policies_present=business_policies_present),
+        "next_actions": _next_actions(
+            status,
+            business_policies_present=business_policies_present,
+            recent_platform_errors=recent_platform_errors,
+        ),
         "secret_exposed": False,
     }
 
@@ -233,7 +243,13 @@ def _classify_status(
             payout_status,
             " ".join(restrictions),
             str(_safe_public_value(selling_limits)),
-            " ".join(str(item.get("code") or item.get("message") or "") for item in recent_platform_errors),
+            " ".join(
+                " ".join(
+                    str(value or "")
+                    for value in (item.get("error_id"), item.get("code"), item.get("message"))
+                )
+                for item in recent_platform_errors
+            ),
         ]
     ).strip().lower().replace("_", " ")
     if not has_store_profile:
@@ -256,6 +272,7 @@ def _classify_status(
             "unverified",
             "policy violation",
             "verification required",
+            "25019",
         )
     ):
         return "restricted"
@@ -332,26 +349,46 @@ def _business_policy_statuses(policies: dict[str, Any]) -> dict[str, bool]:
     }
 
 
-def _recent_platform_error_summaries(execution_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _recent_platform_error_summaries(
+    execution_results: list[dict[str, Any]],
+    *,
+    since: str = "",
+) -> list[dict[str, Any]]:
     summaries: list[dict[str, Any]] = []
     for record in execution_results:
+        created_at = str(record.get("created_at") or "")
+        if since and created_at and not _is_after(created_at, since):
+            continue
         result = record.get("result") if isinstance(record.get("result"), dict) else {}
         for error in _walk_platform_errors(result):
-            code = str(error.get("code") or error.get("errorId") or error.get("category") or "").strip()
+            error_id = str(error.get("error_id") or error.get("errorId") or "").strip()
+            code = str(error.get("code") or error_id or error.get("category") or "").strip()
             message = str(error.get("message") or error.get("longMessage") or error.get("detail") or "").strip()
-            if not code and not message:
+            if not error_id and not code and not message:
                 continue
             summaries.append(
                 {
                     "action_type": record.get("action_type") or result.get("action_type") or "",
                     "status": record.get("status") or result.get("status") or "",
+                    "error_id": error_id[:80],
                     "code": code[:80],
                     "message": message[:240],
-                    "created_at": record.get("created_at") or "",
+                    "created_at": created_at,
                 }
             )
             break
     return summaries
+
+
+def _is_after(candidate: str, baseline: str) -> bool:
+    """Keep an execution incident only until a newer official packet supersedes it."""
+
+    try:
+        candidate_at = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+        baseline_at = datetime.fromisoformat(baseline.replace("Z", "+00:00"))
+        return candidate_at > baseline_at
+    except (TypeError, ValueError):
+        return True
 
 
 def _walk_platform_errors(value: Any) -> list[dict[str, Any]]:
@@ -443,7 +480,13 @@ def _status_severity(status: str) -> str:
     return "red"
 
 
-def _merchant_summary(status: str, *, has_store_profile: bool, business_policies_present: bool) -> str:
+def _merchant_summary(
+    status: str,
+    *,
+    has_store_profile: bool,
+    business_policies_present: bool,
+    recent_platform_errors: list[dict[str, Any]] | None = None,
+) -> str:
     if status == "registration_incomplete":
         return "eBay 授权和安全凭证可以正常，但卖家注册尚未完成；无需重新授权，先在 eBay 完成身份、地址和收款验证。"
     if status == "normal":
@@ -454,10 +497,17 @@ def _merchant_summary(status: str, *, has_store_profile: bool, business_policies
         return "账号存在需要关注的信号；发布前必须复核额度、政策警告和近期平台错误。"
     if not has_store_profile:
         return "当前没有可追溯的 eBay 账号健康快照；上线前默认进入事故模式，阻止真实写入。"
+    if status == "restricted" and _has_ebay_verification_restriction(recent_platform_errors or []):
+        return "eBay 拒绝了最近一次正式发布并暂时限制账号；Offer 仍未公开，捷境已暂停后续真实写入。"
     return "账号存在冻结、受限、付款冻结或额度风险；系统进入事故模式，只允许诊断、证据包和只读同步。"
 
 
-def _next_actions(status: str, *, business_policies_present: bool) -> list[str]:
+def _next_actions(
+    status: str,
+    *,
+    business_policies_present: bool,
+    recent_platform_errors: list[dict[str, Any]] | None = None,
+) -> list[str]:
     if status == "registration_incomplete":
         return [
             "在 eBay 官方页面完成 eBay 卖家注册，包括身份、注册地址和收款验证；无需重新授权。",
@@ -479,11 +529,21 @@ def _next_actions(status: str, *, business_policies_present: bool) -> list[str]:
             "复核 seller limits、policy warnings、业务政策和最近 eBay 拒绝记录。",
             "降低测试发布价格/数量，必要时先跑只读同步和证据包。",
         ]
+    if status == "restricted" and _has_ebay_verification_restriction(recent_platform_errors or []):
+        return [
+            "在 eBay 站内信打开官方核验通知，并按要求提交一份有效且未修改的证明文件，完成资料核验；无需重新授权。",
+            "等待 eBay 解除限制后回到捷境刷新账号状态；旧 Offer、Listing 草稿和素材无需重建。",
+            "账号恢复后重新生成正式发布确认单，并再次获得动作时确认后再提交一次。",
+        ]
     return [
         "暂停真实发布、改价、库存、退款、广告、政策和敏感客服承诺。",
         "运行只读同步并导出账号证据包，区分 eBay 原因、人工操作和捷境动作。",
         "账号恢复或换新账号后，再重新同步 packet 并跑发布体检。",
     ]
+
+
+def _has_ebay_verification_restriction(errors: list[dict[str, Any]]) -> bool:
+    return any(str(item.get("error_id") or "").strip() == "25019" for item in errors if isinstance(item, dict))
 
 
 def _onboarding_stage(*, status: str, business_policies_present: bool) -> str:

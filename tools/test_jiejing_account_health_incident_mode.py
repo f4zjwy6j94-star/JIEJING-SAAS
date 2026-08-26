@@ -142,6 +142,73 @@ def _create_store_with_packet(
     return {"company_id": company_id, "user_id": user_id, "store": store}
 
 
+class _RestrictedExecutionRepository:
+    """Minimal repository proving an exact provider rejection overrides a stale clear packet."""
+
+    def __init__(self, *, packet_created_at: str = "2026-08-26T03:00:00+00:00") -> None:
+        self.packet_created_at = packet_created_at
+
+    def get_store_for_company(self, *, company_id: str, store_id: str) -> dict:
+        return {"store_id": store_id, "store_name": "restricted-execution-store", "marketplace": "EBAY_US"}
+
+    def list_platform_data_packets(self, **_kwargs: object) -> list[dict]:
+        return [
+            {
+                "packet_id": "packet_before_provider_rejection",
+                "source_mode": "official_api",
+                "created_at": self.packet_created_at,
+                "packet": {
+                    "source_label": "official_api",
+                    "sections": [
+                        {
+                            "key": "store_profile",
+                            "data": {
+                                "seller_account_status": "registration_completed",
+                                "selling_limits": {"used": 1, "limit": 35},
+                            },
+                        },
+                        {
+                            "key": "account_business_policies",
+                            "data": {
+                                "fulfillment_policy_id": "fulfillment-policy",
+                                "payment_policy_id": "payment-policy",
+                                "return_policy_id": "return-policy",
+                            },
+                        },
+                    ],
+                },
+            }
+        ]
+
+    def list_connections(self, **_kwargs: object) -> list[dict]:
+        return [{"connection_id": "connection_restricted", "status": "publish_authorized", "connection_type": "oauth"}]
+
+    def list_execution_results(self, **_kwargs: object) -> list[dict]:
+        return [
+            {
+                "action_type": "publish_listing",
+                "status": "blocked_platform_error",
+                "created_at": "2026-08-26T04:08:00+00:00",
+                "result": {
+                    "status": "blocked_platform_error",
+                    "steps": [
+                        {
+                            "step": "publish_existing_offer",
+                            "status": "http_error",
+                            "http_status": 400,
+                            "platform_error": {
+                                "error_id": 25019,
+                                "code": "platform_error",
+                                "message": "An error has occurred.",
+                            },
+                        }
+                    ],
+                    "audit": {"real_execution": {"published_to_ebay": False}},
+                },
+            }
+        ]
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     db_path = OUT / "account-health.sqlite"
@@ -165,6 +232,31 @@ def main() -> int:
     )
     if healthy_preflight.get("status") != "ready_for_platform_adapter":
         return fail(f"healthy account should allow publish preflight to continue: {healthy_preflight}")
+
+    restricted_after_publish = build_account_health_snapshot(
+        _RestrictedExecutionRepository(),
+        company_id="company_restricted_execution",
+        store_id="store_restricted_execution",
+    )
+    if restricted_after_publish.get("status") != "restricted" or restricted_after_publish.get("incident_mode") is not True:
+        return fail(f"eBay provider error 25019 must override an older clear packet: {restricted_after_publish}")
+    if restricted_after_publish.get("onboarding_stage") != "account_review_required":
+        return fail(f"restricted execution must stop the onboarding publish route: {restricted_after_publish}")
+    restricted_actions = " ".join(restricted_after_publish.get("next_actions") or [])
+    for required in ("eBay 站内信", "资料核验", "无需重新授权"):
+        if required not in restricted_actions:
+            return fail(f"25019 recovery guidance should contain {required!r}: {restricted_after_publish}")
+    restricted_errors = (restricted_after_publish.get("evidence_package") or {}).get("recent_platform_errors") or []
+    if not restricted_errors or str(restricted_errors[0].get("error_id") or "") != "25019":
+        return fail(f"merchant-safe account health evidence must preserve error_id 25019: {restricted_after_publish}")
+
+    recovered_after_new_packet = build_account_health_snapshot(
+        _RestrictedExecutionRepository(packet_created_at="2026-08-26T05:00:00+00:00"),
+        company_id="company_recovered_execution",
+        store_id="store_recovered_execution",
+    )
+    if recovered_after_new_packet.get("status") != "normal" or recovered_after_new_packet.get("incident_mode") is not False:
+        return fail(f"a newer clear official packet must retire an older provider rejection: {recovered_after_new_packet}")
 
     frozen_ctx = _create_store_with_packet(repo, status="suspended", store_name="frozen-store")
     frozen = build_account_health_snapshot(
