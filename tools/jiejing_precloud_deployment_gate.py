@@ -174,6 +174,10 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("secret_scan", [sys.executable, "tools/jiejing_secret_scan.py"]),
     ("github_actions_deploy_guardrails", [sys.executable, "tools/test_jiejing_github_actions_deploy_guardrails.py"]),
     ("cls_probe_auto_refresh_guardrails", [sys.executable, "tools/test_jiejing_cls_probe_auto_refresh_guardrails.py"]),
+    (
+        "production_evidence_auto_refresh_guardrails",
+        [sys.executable, "tools/test_jiejing_production_evidence_auto_refresh_guardrails.py"],
+    ),
     ("controlled_media_proof_workflow", [sys.executable, "tools/test_jiejing_controlled_media_proof_workflow.py"]),
     ("github_runner_doctor_guardrails", [sys.executable, "tools/test_jiejing_github_runner_doctor_guardrails.py"]),
     ("github_runner_maintenance_guardrails", [sys.executable, "tools/test_jiejing_github_runner_maintenance_guardrails.py"]),

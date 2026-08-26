@@ -34,6 +34,9 @@ FILES=(
   "deploy/staging-vault-init-unseal.sh"
   "deploy/github-actions/jiejing-runner-doctor.sh"
   "deploy/github-actions/jiejing-cls-probe-auto-refresh.sh"
+  "deploy/jiejing-production-evidence-auto-refresh.sh"
+  "deploy/systemd/jiejing-production-evidence-refresh.service"
+  "deploy/systemd/jiejing-production-evidence-refresh.timer"
   "tools/jiejing_cls_public_readiness_contract.py"
   "deploy/github-actions/jiejing-staging-deploy.sh"
   "deploy/github-actions/jiejing-staging-rollback.sh"
@@ -77,6 +80,8 @@ FILES=(
   "docs/JIEJING_SECURITY_BEST_PRACTICES_AUDIT_20260810.md"
   "docs/JIEJING_GITHUB_SELF_HOSTED_RUNNER_DEPLOY_RUNBOOK_20260622.md"
   "docs/JIEJING_PRODUCTION_DEPLOY_RUNBOOK_20260823.md"
+  "docs/superpowers/specs/2026-08-26-production-evidence-auto-refresh-design.md"
+  "docs/superpowers/plans/2026-08-26-production-evidence-auto-refresh-implementation-plan.md"
   "docs/JIEJING_GITHUB_CI_STATUS_20260617.md"
   "docs/JIEJING_FRONTEND_SPLIT_STATUS_20260617.md"
   "docs/JIEJING_NEW_EBAY_ACCOUNT_LOW_RISK_RUNBOOK_20260617.md"
@@ -301,6 +306,7 @@ FILES=(
   "tools/test_jiejing_github_actions_deploy_guardrails.py"
   "tools/test_jiejing_github_runner_doctor_guardrails.py"
   "tools/test_jiejing_cls_probe_auto_refresh_guardrails.py"
+  "tools/test_jiejing_production_evidence_auto_refresh_guardrails.py"
   "tools/jiejing_precloud_deployment_gate.py"
   "tools/test_jiejing_current_state_guard.py"
   "tools/test_jiejing_external_launch_blocker_gate.py"
@@ -778,6 +784,7 @@ python3 -m py_compile \
   tools/test_jiejing_version_bound_release_evidence.py
 
 bash -n deploy/github-actions/jiejing-cls-probe-auto-refresh.sh
+bash -n deploy/jiejing-production-evidence-auto-refresh.sh
 
 NODE_BIN="${JIEJING_NODE_BIN:-node}"
 "$NODE_BIN" --check app.js

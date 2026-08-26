@@ -87,6 +87,7 @@ jobs:
           python tools/test_jiejing_agents_md_guardrails.py
           python tools/test_jiejing_github_actions_deploy_guardrails.py
           python tools/test_jiejing_github_runner_doctor_guardrails.py
+          python tools/test_jiejing_production_evidence_auto_refresh_guardrails.py
 
       - name: Frontend contract regressions
         run: |

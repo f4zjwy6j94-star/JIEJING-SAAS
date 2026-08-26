@@ -25,6 +25,15 @@ DEFAULT_KEY = Path.home() / ".ssh" / "jiejing_production_hk_ed25519"
 DEFAULT_KNOWN_HOSTS = Path.home() / ".ssh" / "known_hosts"
 EXPECTED_CONFIRM = "deploy app.jiejing.shop production"
 ALLOWED_SCOPE = "public_staging_patch_whitelist_v1"
+PRODUCTION_REMOTE_APPLY_TIMEOUT_SECONDS = 3600
+PHASE3_REQUIRED_BUNDLE_FILES = {
+    "deploy/jiejing-production-evidence-auto-refresh.sh",
+    "deploy/systemd/jiejing-production-evidence-refresh.service",
+    "deploy/systemd/jiejing-production-evidence-refresh.timer",
+    "tools/test_jiejing_production_evidence_auto_refresh_guardrails.py",
+    "docs/superpowers/specs/2026-08-26-production-evidence-auto-refresh-design.md",
+    "docs/superpowers/plans/2026-08-26-production-evidence-auto-refresh-implementation-plan.md",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -107,9 +116,14 @@ def main() -> int:
             f"rm -rf -- {shlex.quote(remote_dir)}",
         ]
     )
+    remote_timeout = (
+        PRODUCTION_REMOTE_APPLY_TIMEOUT_SECONDS
+        if args.mode == "apply"
+        else max(args.timeout * 20, 1200)
+    )
     completed = run(
         ssh_base(args) + [f"bash -lc {shlex.quote(remote_script)}"],
-        timeout=max(args.timeout * 20, 1200),
+        timeout=remote_timeout,
     )
     print(
         json.dumps(
@@ -144,7 +158,7 @@ def validate_zip(path: Path) -> None:
             "jiejing_saas/migrations/002_media_credit_buckets_postgres.sql",
             "jiejing_saas/migrations/003_runtime_schema_reconciliation_postgres.sql",
             "tools/jiejing_secret_scan.py",
-        }
+        } | PHASE3_REQUIRED_BUNDLE_FILES
         missing = sorted(required.difference(names))
         if missing:
             raise ValueError("missing_required:" + ",".join(missing))
