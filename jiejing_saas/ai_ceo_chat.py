@@ -1035,6 +1035,7 @@ def run_ai_ceo_chat(
             model_latency_ms += _elapsed_ms(repair_started_at)
 
     contract_projection_used = False
+    context_correction_used = False
     if not answer_quality.get("accepted"):
         if _looks_like_market_evidence_followup(message=safe_message, route=route):
             projected_answer = _project_market_evidence_followup_answer(safe_message)
@@ -1057,6 +1058,34 @@ def run_ai_ceo_chat(
                 answer = projected_answer
                 answer_quality = projected_quality
                 contract_projection_used = True
+
+    active_listing_consistency_codes = {
+        "existing_sku_reported_missing",
+        "existing_media_reported_missing",
+        "existing_media_rights_reported_blocked",
+        "existing_unpublished_offer_reported_missing",
+    }
+    if not answer_quality.get("accepted") and active_listing_consistency_codes.intersection(
+        str(item) for item in (answer_quality.get("blocked_by") or [])
+    ):
+        model_answer_blocked_by = [str(item) for item in (answer_quality.get("blocked_by") or [])]
+        corrected_answer = _active_listing_consistency_fallback(prompt_context)
+        corrected_quality = validate_ai_ceo_answer_quality(
+            message=safe_message,
+            route=route,
+            answer=corrected_answer,
+            source_records=source_records,
+            context=prompt_context,
+        )
+        if corrected_quality.get("accepted"):
+            answer = corrected_answer
+            answer_quality = {
+                **corrected_quality,
+                "quality_gate": "active_listing_context_correction_v1",
+                "context_correction_used": True,
+                "model_answer_blocked_by": model_answer_blocked_by,
+            }
+            context_correction_used = True
 
     if not answer_quality.get("accepted"):
         return {
@@ -1106,9 +1135,16 @@ def run_ai_ceo_chat(
         }
 
     model_mode = str((result or {}).get("model_mode") or "")
-    status = "model_answered" if model_mode.startswith("live_") else "model_answered_non_live"
+    status = (
+        "model_answered_with_context_correction"
+        if context_correction_used
+        else "model_answered"
+        if model_mode.startswith("live_")
+        else "model_answered_non_live"
+    )
     return {
         "status": status,
+        "blocked_by": answer_quality.get("blocked_by") or [],
         "answer": answer,
         "answer_quality": {
             **answer_quality,
@@ -1128,6 +1164,7 @@ def run_ai_ceo_chat(
             route=route,
             realtime_kind=realtime_kind,
             **_default_web_context_performance_kwargs(default_web_search),
+            fallback_answer_used=context_correction_used,
         ),
         **route_meta,
         "frontend_gets_model_api_key": False,

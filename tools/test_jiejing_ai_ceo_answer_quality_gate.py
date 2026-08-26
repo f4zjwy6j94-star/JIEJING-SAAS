@@ -273,7 +273,12 @@ def main() -> None:
         model_client=stubborn_contradictory_model,
         active_listing_context=active_listing_context,
     )
-    assert rejected_second_pass["status"] == "model_answer_rejected", rejected_second_pass
+    assert rejected_second_pass["status"] == "model_answered_with_context_correction", rejected_second_pass
+    assert rejected_second_pass["blocked_by"] == [], rejected_second_pass
+    assert rejected_second_pass["answer_quality"]["accepted"] is True, rejected_second_pass
+    assert rejected_second_pass["answer_quality"]["context_correction_used"] is True, rejected_second_pass
+    assert "existing_sku_reported_missing" in rejected_second_pass["answer_quality"]["model_answer_blocked_by"], rejected_second_pass
+    assert "existing_unpublished_offer_reported_missing" in rejected_second_pass["answer_quality"]["model_answer_blocked_by"], rejected_second_pass
     assert "SKU JJ-INCENSE-JC2023041300002-01 已存在" in rejected_second_pass["answer"], rejected_second_pass
     assert "Offer 245675556011 已保存" in rejected_second_pass["answer"], rejected_second_pass
     assert "不会创建第二个 Offer" in rejected_second_pass["answer"], rejected_second_pass

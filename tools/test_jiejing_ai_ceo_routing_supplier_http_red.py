@@ -1377,10 +1377,11 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
                     active_context,
                     request_chat,
                     "let capturedBody = null;",
-                    "const saasFetchNdjsonWithTimeout = async (_path, options) => { capturedBody = JSON.parse(options.body); return {}; };",
+                    "let capturedTimeout = 0;",
+                    "const saasFetchNdjsonWithTimeout = async (_path, options, timeoutMs) => { capturedBody = JSON.parse(options.body); capturedTimeout = timeoutMs; return {}; };",
                     "(async () => {",
                     "  await requestSaasAiCeoChat({ store_id: 'store-unit', text: '继续当前 SKU 和 Offer 做第二遍验收', route: 'listing', intent: 'listing', summary: '', title: '' });",
-                    "  console.log(JSON.stringify(capturedBody));",
+                    "  console.log(JSON.stringify({ ...capturedBody, capturedTimeout }));",
                     "})().catch((error) => { console.error(error); process.exit(1); });",
                 ]
             )
@@ -1396,6 +1397,7 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
         self.assertEqual("245675556011", snapshot.get("ebay_draft", {}).get("offer_id"))
         self.assertIs(snapshot.get("ebay_draft", {}).get("public_listing_created"), False)
         self.assertEqual("restricted", snapshot.get("account_health", {}).get("status"))
+        self.assertEqual(180000, result.get("capturedTimeout"))
         serialized = json.dumps(snapshot, ensure_ascii=False)
         self.assertNotIn("MUST_NOT_LEAK", serialized)
         self.assertNotIn("private.example", serialized)

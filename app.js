@@ -25597,6 +25597,9 @@ async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = 
   }
   try {
     const supplierFactPayload = supplierFactsForSaasAiCeoCommand(current);
+    const activeListingContext =
+      typeof saasAiCeoActiveListingContext === "function" ? saasAiCeoActiveListingContext() : null;
+    const requiresWorkflowCompletionBudget = activeListingContext?.contract_version === "active_listing_context_v1";
     return await saasFetchNdjsonWithTimeout(
       `/stores/${encodeURIComponent(current.store_id)}/merchant-ceo/chat?stream=1&fresh=${Date.now()}`,
       {
@@ -25618,12 +25621,12 @@ async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = 
           client_now: new Date().toISOString(),
           client_timezone: Intl?.DateTimeFormat?.().resolvedOptions?.().timeZone || "",
           source_asset_ids: safeSourceAssetIds,
-          active_listing_context: typeof saasAiCeoActiveListingContext === "function" ? saasAiCeoActiveListingContext() : null,
+          active_listing_context: activeListingContext,
           real_platform_writes_enabled: isSaasRealPlatformWritesEnabled(),
           ...supplierFactPayload,
         }),
       },
-      safeSourceAssetIds.length ? 180000 : 60000,
+      safeSourceAssetIds.length || requiresWorkflowCompletionBudget ? 180000 : 60000,
       hooks,
     );
   } catch (error) {
@@ -48587,6 +48590,7 @@ function saasAiCeoTurnStatusLabel(latest = {}) {
   if (latest.status === "capability_status_answered") return "连接状态";
   if (latest.status === "realtime_search_answered" || latest.status === "realtime_search_answered_without_model") return "实时搜索";
   if (latest.status === "source_backed_market_report_draft") return "联网草稿";
+  if (latest.status === "model_answered_with_context_correction") return "已按当前项目状态校正";
   if (latest.status === "external_data_source_required") return "需要实时数据源";
   if (latest.route === "general_chat") return "直接回答";
   if (latest.route === "ebay_workflow") return "已进入经营任务";
