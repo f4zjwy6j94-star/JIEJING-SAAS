@@ -108,6 +108,31 @@ for (const required of [
 ]) {{
   if (!markup.includes(required)) throw new Error(`controlled publish handoff missing: ${{required}}`);
 }}
+const controlledCard = {{
+  confirmation_id: "confirm_controlled_recovery",
+  company_id: "company-current",
+  store_id: "store-current",
+  action_type: "publish_listing",
+  status: "external_execution_processing_manual_reconcile",
+  item: {{
+    source: "merchant_existing_ebay_draft_publish_intake",
+    controlled_existing_draft_publish: true,
+    existing_ebay_draft: {{
+      offer_id: "245675556011",
+      sku: "JJ-INCENSE-JC2023041300002-01",
+      source_execution_id: "exec_receipt_test",
+    }},
+    publish_payload: {{ listing: {{ sku: "JJ-INCENSE-JC2023041300002-01" }} }},
+    secret_exposed: false,
+  }},
+}};
+state.saasConfirmations = [controlledCard];
+state.saasListingComposerDraft = {{ fields: {{}}, publish_prefill: {{}}, merchant_product_fact_packet: {{}} }};
+const controlledReceipt = saasControlledExistingDraftPublishReceipt(controlledCard);
+if (!controlledReceipt || controlledReceipt.offerId !== "245675556011") {{
+  throw new Error("controlled publish recovery must survive missing save confirmation and inactive Listing project");
+}}
+if (controlledReceipt.executionId !== "exec_receipt_test") throw new Error("controlled recovery execution binding missing");
 """
     result = subprocess.run(
         ["node", "-e", script],

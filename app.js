@@ -19094,7 +19094,7 @@ function isSaasUniqueCurrentControlledExistingDraftPublishConfirmation(card = {}
   const item = card?.item && typeof card.item === "object" ? card.item : {};
   const draft = item.existing_ebay_draft && typeof item.existing_ebay_draft === "object" ? item.existing_ebay_draft : {};
   const payload = item.publish_payload && typeof item.publish_payload === "object" ? item.publish_payload : {};
-  const receipt = saasCurrentUnpublishedDraftReceipt();
+  const receipt = saasControlledExistingDraftPublishReceipt(card);
   const confirmationId = String(card?.confirmation_id || "").trim();
   if (!(
     companyId &&
@@ -19129,7 +19129,7 @@ function isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(ca
   const item = card?.item && typeof card.item === "object" ? card.item : {};
   const draft = item.existing_ebay_draft && typeof item.existing_ebay_draft === "object" ? item.existing_ebay_draft : {};
   const payload = item.publish_payload && typeof item.publish_payload === "object" ? item.publish_payload : {};
-  const receipt = saasCurrentUnpublishedDraftReceipt();
+  const receipt = saasControlledExistingDraftPublishReceipt(card);
   const confirmationId = String(card?.confirmation_id || "").trim();
   if (!(
     companyId &&
@@ -22270,6 +22270,38 @@ function saasCurrentUnpublishedDraftReceipt(draft = state.saasListingComposerDra
     ...receipt,
     confirmationId: String(confirmation.confirmation_id),
     executionId: String(execution?.execution_id || ""),
+  };
+}
+
+function saasControlledExistingDraftPublishReceipt(card = {}) {
+  const item = card?.item && typeof card.item === "object" ? card.item : {};
+  const draft = item.existing_ebay_draft && typeof item.existing_ebay_draft === "object"
+    ? item.existing_ebay_draft
+    : {};
+  const offerId = String(draft.offer_id || "").trim();
+  const sku = String(draft.sku || "").trim();
+  const executionId = String(draft.source_execution_id || "").trim();
+  if (!offerId || !sku || !executionId) return null;
+
+  const current = saasCurrentUnpublishedDraftReceipt();
+  if (
+    current &&
+    current.offerId === offerId &&
+    current.sku === sku &&
+    current.executionId === executionId
+  ) {
+    return current;
+  }
+
+  const execution = (state.saasExecutionResults || []).find(
+    (record) => String(record?.execution_id || "").trim() === executionId,
+  );
+  const receipt = saasUnpublishedDraftReceiptViewModel(execution);
+  if (!receipt || receipt.offerId !== offerId || receipt.sku !== sku) return null;
+  return {
+    ...receipt,
+    confirmationId: String(execution?.confirmation_id || ""),
+    executionId,
   };
 }
 
