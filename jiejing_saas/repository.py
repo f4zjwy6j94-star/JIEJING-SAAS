@@ -6705,6 +6705,93 @@ class SaaSRepository:
             **({"external_execution_claim_binding": claim_binding} if claim_binding else {}),
         }
 
+    def retire_external_execution_after_verified_noop(
+        self,
+        *,
+        company_id: str,
+        confirmation_id: str,
+        user_id: str,
+        action_type: str,
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Retire an uncertain confirmation only after a read-only no-op proof.
+
+        This never retries the provider action.  It makes the consumed
+        confirmation non-executable so a later attempt must receive a fresh
+        merchant confirmation.
+        """
+
+        if not (
+            isinstance(evidence, dict)
+            and evidence.get("provider_read_only") is True
+            and evidence.get("external_state_unchanged") is True
+            and evidence.get("automatic_retry_allowed") is False
+            and evidence.get("secret_exposed") is False
+        ):
+            raise ValueError("verified_external_noop_evidence_required")
+        self.initialize()
+        with self._connect() as conn:
+            if self.database_engine != "postgres":
+                conn.execute("begin immediate")
+            lock_suffix = " for update" if self.database_engine == "postgres" else ""
+            row = conn.execute(
+                f"select * from confirmations where company_id = ? and confirmation_id = ?{lock_suffix}",
+                (company_id, confirmation_id),
+            ).fetchone()
+            if not row:
+                raise KeyError("confirmation not found")
+            confirmation = self._confirmation_row_to_dict(row)
+            if not (
+                str(confirmation.get("status") or "") == EXTERNAL_EXECUTION_PROCESSING_STATUS
+                and str(confirmation.get("action_type") or "") == str(action_type or "")
+            ):
+                raise ConfirmationDecisionConflict("external_execution_reconciliation_conflict")
+            execution = conn.execute(
+                "select execution_id from execution_results where confirmation_id = ? limit 1",
+                (confirmation_id,),
+            ).fetchone()
+            if execution:
+                raise ConfirmationDecisionConflict("external_execution_already_recorded")
+            transitioned = conn.execute(
+                """
+                update confirmations set status = 'needs_revision'
+                where company_id = ? and confirmation_id = ? and status = ?
+                """,
+                (company_id, confirmation_id, EXTERNAL_EXECUTION_PROCESSING_STATUS),
+            ).rowcount
+            if transitioned != 1:
+                raise ConfirmationDecisionConflict("external_execution_reconciliation_conflict")
+            _transition_confirmation_task_status(
+                conn,
+                company_id=company_id,
+                task_id=confirmation.get("task_id"),
+                status="needs_revision",
+                expected_statuses={"manual_reconcile_required"},
+            )
+            self._insert_audit(
+                conn,
+                company_id=company_id,
+                store_id=confirmation.get("store_id"),
+                user_id=user_id,
+                actor_type="system",
+                action_type="external_execution.reconciled_verified_noop",
+                target_type="confirmation",
+                target_id=confirmation_id,
+                summary="A read-only provider check proved no external change; the consumed confirmation was retired.",
+                details={
+                    "action_type": action_type,
+                    "status": "needs_revision",
+                    "fresh_confirmation_required": True,
+                    "automatic_retry_allowed": False,
+                    "provider_read_only": True,
+                    "external_state_unchanged": True,
+                    "offer_id": str(evidence.get("offer_id") or ""),
+                    "sku": str(evidence.get("sku") or ""),
+                    "secret_exposed": False,
+                },
+            )
+        return self.get_confirmation(company_id=company_id, confirmation_id=confirmation_id) or {}
+
     def claim_ebay_inventory_location_execution(
         self,
         *,

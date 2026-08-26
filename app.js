@@ -31125,7 +31125,13 @@ async function recoverSaasPublishState(confirmationId = "") {
     state.saasLastPublishReadiness = payload.publish_readiness || state.saasLastPublishReadiness || null;
     await refreshSaasState({ silent: true });
     const recovery = payload.publish_recovery || {};
-    showActionToast(recovery.safe_to_retry_publish ? "eBay 未发现已发布 offer，可回到预检后重试。" : "已核对 eBay 平台状态：禁止盲目重试，按恢复建议处理。");
+    showActionToast(
+      payload.fresh_confirmation_required === true && recovery.safe_to_request_fresh_confirmation === true
+        ? "eBay 官方核对确认原 Offer 仍未发布；旧确认单已封存，请重新生成一次正式发布确认单。"
+        : recovery.safe_to_retry_publish
+          ? "eBay 未发现任何既有发布状态，可回到预检后申请重新确认。"
+          : "已核对 eBay 平台状态：禁止盲目重试，按恢复建议处理。",
+    );
   } catch (error) {
     state.saasError = `发布恢复核对失败：${error.message}`;
     renderSaasBackendPanel();

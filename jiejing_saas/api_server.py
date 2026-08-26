@@ -9351,6 +9351,46 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                     "secret_exposed": False,
                 },
             )
+            fresh_confirmation_required = False
+            controlled_item = confirmation.get("item") if isinstance(confirmation.get("item"), dict) else {}
+            controlled_draft = (
+                controlled_item.get("existing_ebay_draft")
+                if isinstance(controlled_item.get("existing_ebay_draft"), dict)
+                else {}
+            )
+            exact_unpublished = (
+                publish_recovery.get("exact_unpublished_offer")
+                if isinstance(publish_recovery.get("exact_unpublished_offer"), dict)
+                else {}
+            )
+            if (
+                _is_controlled_existing_draft_publish_confirmation(confirmation)
+                and str(confirmation.get("status") or "") == EXTERNAL_EXECUTION_PROCESSING_STATUS
+                and publish_recovery.get("safe_to_request_fresh_confirmation") is True
+                and publish_recovery.get("safe_to_retry_publish") is False
+                and str(publish_recovery.get("recommended_action") or "")
+                == "request_fresh_exact_offer_confirmation"
+                and not (publish_recovery.get("published_offer") or {})
+                and str(exact_unpublished.get("offer_id") or "")
+                == str(controlled_draft.get("offer_id") or "")
+                and str(publish_recovery.get("sku") or "") == str(controlled_draft.get("sku") or "")
+                and publish_recovery.get("secret_exposed") is False
+            ):
+                confirmation = self.repository.retire_external_execution_after_verified_noop(
+                    company_id=identity["company_id"],
+                    confirmation_id=confirmation["confirmation_id"],
+                    user_id=identity["user_id"],
+                    action_type="publish_listing",
+                    evidence={
+                        "provider_read_only": True,
+                        "external_state_unchanged": True,
+                        "automatic_retry_allowed": False,
+                        "offer_id": exact_unpublished.get("offer_id"),
+                        "sku": publish_recovery.get("sku"),
+                        "secret_exposed": False,
+                    },
+                )
+                fresh_confirmation_required = True
             recent_confirmations = [
                 item
                 for item in self.repository.list_confirmations(company_id=identity["company_id"], limit=100)
@@ -9366,6 +9406,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         recent_confirmations=recent_confirmations,
                     ),
                     "confirmation": confirmation,
+                    "fresh_confirmation_required": fresh_confirmation_required,
+                    "automatic_retry_allowed": False,
                     "real_platform_writes_enabled": self.settings.effective_real_platform_writes_enabled,
                 },
                 status=HTTPStatus.CREATED,
@@ -9695,7 +9737,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "preflight": boundary_result.get("audit", {}).get("preflight") if isinstance(boundary_result.get("audit"), dict) else {},
                         "marketplace_id": str(store.get("marketplace") or "EBAY_US"),
                     }
-                    if confirmation["action_type"] != "save_ebay_listing_draft":
+                    if (
+                        confirmation["action_type"] != "save_ebay_listing_draft"
+                        and not controlled_existing_draft_publish_live
+                    ):
                         adapter_kwargs.update(
                             {
                                 "connections": self.repository.list_connections(

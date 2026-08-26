@@ -1612,6 +1612,7 @@ class EbayWriteHttpAdapter:
 
         payload = getattr(request, "payload", {}) if isinstance(getattr(request, "payload", {}), dict) else {}
         listing = payload.get("listing") if isinstance(payload.get("listing"), dict) else {}
+        draft = payload.get("existing_ebay_draft") if isinstance(payload.get("existing_ebay_draft"), dict) else {}
         sku = str(listing.get("sku") or "").strip()
         if not sku:
             return _recovery_result("blocked_missing_sku", sku="", checks=[], safe_to_retry=False)
@@ -1652,6 +1653,20 @@ class EbayWriteHttpAdapter:
         offers_json = offers_result.get("json") if isinstance(offers_result.get("json"), dict) else {}
         offers = offers_json.get("offers") if isinstance(offers_json.get("offers"), list) else []
         published = _published_offer(offers)
+        expected_offer_id = str(draft.get("offer_id") or "").strip()
+        unpublished = [
+            candidate
+            for raw in offers
+            if (candidate := _unpublished_offer([raw], marketplace_id=marketplace_id))
+        ]
+        exact_unpublished = next(
+            (
+                candidate
+                for candidate in unpublished
+                if expected_offer_id and str(candidate.get("offer_id") or "") == expected_offer_id
+            ),
+            {},
+        )
         checks = [
             _step_summary("inspect_inventory_item", item_path, item_result),
             _step_summary("inspect_offers_by_sku", offers_path, offers_result),
@@ -1660,8 +1675,17 @@ class EbayWriteHttpAdapter:
         has_offers = bool(offers)
         has_published_offer = bool(published)
         safe_to_retry = not inventory_found and not has_offers
+        safe_to_request_fresh_confirmation = bool(
+            inventory_found
+            and not has_published_offer
+            and len(offers) == 1
+            and len(unpublished) == 1
+            and exact_unpublished
+        )
         if has_published_offer:
             recommended_action = "backfill_execution_record"
+        elif safe_to_request_fresh_confirmation:
+            recommended_action = "request_fresh_exact_offer_confirmation"
         elif has_offers:
             recommended_action = "manual_review_existing_offer"
         elif safe_to_retry:
@@ -1675,7 +1699,9 @@ class EbayWriteHttpAdapter:
             "inventory_item_found": inventory_found,
             "offer_count": len(offers),
             "published_offer": published,
+            "exact_unpublished_offer": exact_unpublished,
             "safe_to_retry_publish": safe_to_retry,
+            "safe_to_request_fresh_confirmation": safe_to_request_fresh_confirmation,
             "recommended_action": recommended_action,
             "checks": checks,
             "cleanup_plan": _cleanup_plan(sku=sku, published_offer=published, offer_count=len(offers), inventory_found=inventory_found),

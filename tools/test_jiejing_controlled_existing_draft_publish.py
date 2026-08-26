@@ -355,6 +355,45 @@ def main() -> int:
     if any(method == "POST" and url.endswith("/publish") for method, url in mismatch_calls):
         return fail(f"offer mismatch must not call publishOffer: {mismatch_calls}")
 
+    recovery_calls: list[tuple[str, str]] = []
+
+    def recovery_transport(http_request: Request, timeout: float) -> tuple[int, dict[str, str], bytes]:
+        del timeout
+        recovery_calls.append((http_request.get_method(), http_request.full_url))
+        if http_request.full_url.startswith("https://vault.test/"):
+            return 200, {"content-type": "application/json"}, json.dumps(
+                {"data": {"data": {"refresh_token": "TEST_REFRESH_TOKEN"}}}
+            ).encode()
+        if http_request.full_url.endswith("/identity/v1/oauth2/token"):
+            return 200, {"content-type": "application/json"}, json.dumps(
+                {"access_token": "TEST_ACCESS_TOKEN", "expires_in": 7200}
+            ).encode()
+        if "/inventory_item/" in http_request.full_url:
+            return 200, {"content-type": "application/json"}, json.dumps({"sku": SKU}).encode()
+        if "/offer?sku=" in http_request.full_url:
+            return 200, {"content-type": "application/json"}, json.dumps(
+                {"offers": [{"offerId": OFFER_ID, "marketplaceId": "EBAY_US", "status": "UNPUBLISHED"}]}
+            ).encode()
+        return 500, {"content-type": "application/json"}, b"{}"
+
+    boundary = credential_boundary()
+    recovery = EbayWriteHttpAdapter(settings, transport=recovery_transport).inspect_publish_state(
+        request=request,
+        connections=[boundary["connection"]],
+        secret_refs=[boundary["secret_reference"]],
+        marketplace_id="EBAY_US",
+    )
+    if not (
+        recovery.get("status") == "publish_state_checked"
+        and recovery.get("exact_unpublished_offer", {}).get("offer_id") == OFFER_ID
+        and recovery.get("safe_to_request_fresh_confirmation") is True
+        and recovery.get("safe_to_retry_publish") is False
+        and recovery.get("recommended_action") == "request_fresh_exact_offer_confirmation"
+    ):
+        return fail(f"exact unpublished Offer recovery must permit only a fresh confirmation: {recovery}")
+    if any(method != "GET" for method, url in recovery_calls if url.startswith("https://api.ebay.com/sell/inventory/")):
+        return fail(f"exact Offer recovery must remain read-only: {recovery_calls}")
+
     print("PASS jiejing_controlled_existing_draft_publish")
     return 0
 
