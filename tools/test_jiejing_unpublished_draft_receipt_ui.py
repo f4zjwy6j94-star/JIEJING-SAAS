@@ -166,6 +166,15 @@ function isSaasUniqueCurrentControlledExistingDraftPublishConfirmation(card) {{
     isSaasControlledExistingDraftPublishConfirmation(card)
   );
 }}
+function isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(card) {{
+  return Boolean(
+    card?.confirmation_id === "confirm-controlled-reconcile" &&
+    card?.company_id === "company-current" &&
+    card?.store_id === "store-current" &&
+    card?.status === "external_execution_processing_manual_reconcile" &&
+    isSaasControlledExistingDraftPublishConfirmation(card)
+  );
+}}
 {display_source}
 const cards = [
   {{
@@ -176,6 +185,16 @@ const cards = [
     status: "pending",
     action_type: "publish_listing",
     created_at: "2026-08-25T20:31:31Z",
+    item: {{ source: "merchant_existing_ebay_draft_publish_intake", controlled_existing_draft_publish: true }},
+  }},
+  {{
+    confirmation_id: "confirm-controlled-reconcile",
+    company_id: "company-current",
+    store_id: "store-current",
+    task_id: "task-controlled-publish-reconcile",
+    status: "external_execution_processing_manual_reconcile",
+    action_type: "publish_listing",
+    created_at: "2026-08-26T01:09:07Z",
     item: {{ source: "merchant_existing_ebay_draft_publish_intake", controlled_existing_draft_publish: true }},
   }},
   {{
@@ -196,6 +215,9 @@ if (!visible.some((card) => card.confirmation_id === "confirm-controlled")) {{
 }}
 if (visible.filter((card) => card.confirmation_id === "confirm-controlled").length !== 1) {{
   throw new Error("controlled publish confirmation must be displayed exactly once");
+}}
+if (visible.filter((card) => card.confirmation_id === "confirm-controlled-reconcile").length !== 1) {{
+  throw new Error("manual-reconcile controlled publish must stay visible exactly once");
 }}
 """
     display_result = subprocess.run(
@@ -295,6 +317,8 @@ for (const forbidden of ["private.example.test", "token", "secret"]) {{
         raise AssertionError("controlled publish merchant brief must disclose the immediate external write")
     if "saasControlledExistingDraftPublishDetailMarkup(card)" not in app_js:
         raise AssertionError("decision center does not render the exact controlled publish parameter summary")
+    if "只读核对原 Offer 状态" not in app_js:
+        raise AssertionError("manual-reconcile controlled publish must expose a read-only recovery action")
 
 
 if __name__ == "__main__":

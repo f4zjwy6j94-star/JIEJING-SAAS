@@ -19123,6 +19123,39 @@ function isSaasUniqueCurrentControlledExistingDraftPublishConfirmation(card = {}
   return active.length === 1 && String(active[0]?.confirmation_id || "").trim() === confirmationId;
 }
 
+function isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(card = {}, cards = state.saasConfirmations || []) {
+  const companyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
+  const storeId = String(activeSaasStore()?.store_id || "").trim();
+  const item = card?.item && typeof card.item === "object" ? card.item : {};
+  const draft = item.existing_ebay_draft && typeof item.existing_ebay_draft === "object" ? item.existing_ebay_draft : {};
+  const payload = item.publish_payload && typeof item.publish_payload === "object" ? item.publish_payload : {};
+  const receipt = saasCurrentUnpublishedDraftReceipt();
+  const confirmationId = String(card?.confirmation_id || "").trim();
+  if (!(
+    companyId &&
+    storeId &&
+    confirmationId &&
+    String(card?.company_id || "").trim() === companyId &&
+    String(card?.store_id || "").trim() === storeId &&
+    String(card?.status || "") === "external_execution_processing_manual_reconcile" &&
+    isSaasControlledExistingDraftPublishConfirmation(card) &&
+    receipt &&
+    String(draft.offer_id || "").trim() === receipt.offerId &&
+    String(draft.sku || "").trim() === receipt.sku &&
+    String(draft.source_execution_id || "").trim() === receipt.executionId &&
+    String(payload.listing?.sku || "").trim() === receipt.sku &&
+    item.secret_exposed === false
+  )) return false;
+  const matches = (Array.isArray(cards) ? cards : []).filter(
+    (candidate) =>
+      String(candidate?.company_id || "").trim() === companyId &&
+      String(candidate?.store_id || "").trim() === storeId &&
+      String(candidate?.status || "") === "external_execution_processing_manual_reconcile" &&
+      isSaasControlledExistingDraftPublishConfirmation(candidate),
+  );
+  return matches.length === 1 && String(matches[0]?.confirmation_id || "").trim() === confirmationId;
+}
+
 async function verifySaasInventoryLocationConfirmations(confirmations = []) {
   const verified = new WeakSet();
   for (const card of Array.isArray(confirmations) ? confirmations : []) {
@@ -20451,6 +20484,13 @@ function saasConfirmationsForDisplay(confirmations = []) {
         isSaasUniqueCurrentControlledExistingDraftPublishConfirmation(card, confirmations),
     )
     .sort((a, b) => saasTimestampMillis(b.created_at || b.updated_at) - saasTimestampMillis(a.created_at || a.updated_at));
+  const currentStoreControlledPublishRecoveries = confirmations
+    .filter(
+      (card) =>
+        isUniqueConfirmation(card) &&
+        isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(card, confirmations),
+    )
+    .sort((a, b) => saasTimestampMillis(b.created_at || b.updated_at) - saasTimestampMillis(a.created_at || a.updated_at));
   const protectedIds = new Set(
     [
       ...currentStoreOauth,
@@ -20458,6 +20498,7 @@ function saasConfirmationsForDisplay(confirmations = []) {
       ...currentStoreDraftSaves,
       ...currentStoreInventoryLocations,
       ...currentStoreControlledPublishes,
+      ...currentStoreControlledPublishRecoveries,
     ]
       .map((card) => String(card?.confirmation_id || "").trim()),
   );
@@ -20467,6 +20508,7 @@ function saasConfirmationsForDisplay(confirmations = []) {
     ...currentStoreDraftSaves,
     ...currentStoreInventoryLocations,
     ...currentStoreControlledPublishes,
+    ...currentStoreControlledPublishRecoveries,
     ...dedupeSaasConfirmations(ordinarySource).filter((card) => {
       const confirmationId = String(card?.confirmation_id || "").trim();
       return (
@@ -23181,6 +23223,12 @@ function renderSaasConfirmPanel() {
                                    <button class="primary-action" type="button" data-saas-action="approve-confirmation" ${saasConfirmationActionAttributes(card)}>${escapeHtml(saasConfirmationApproveButtonLabel(card))}</button>`
                             }
                           </div>`
+                        : status === "external_execution_processing_manual_reconcile" &&
+                            isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(card, allCards)
+                          ? `<div class="runtime-confirm-actions">
+                              <small>上次执行结果不确定，必须先读取 eBay 官方状态；不会自动重试。</small>
+                              <button class="primary-action" type="button" data-saas-action="recover-publish" data-saas-confirmation="${escapeHtml(card.confirmation_id)}">只读核对原 Offer 状态</button>
+                            </div>`
                         : `<div class="runtime-confirm-actions">
                             <small>决策：${escapeHtml(card.decision_note || saasWorkbenchStatusLabel(status))}</small>
                           </div>`
