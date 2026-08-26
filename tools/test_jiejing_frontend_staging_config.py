@@ -34,11 +34,14 @@ def main() -> int:
         return fail("frontend must not use document.write for report export or public rendering")
     if "onclick=" in index_html:
         return fail("public homepage must bind actions in script instead of inline event handlers")
-    frontend_asset_version = "20260824-ai-ceo-listing-continuity-v1"
     app_html_app_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", app_html)
+    app_html_style_versions = re.findall(r"\./styles\.css\?v=([A-Za-z0-9._-]+)", app_html)
     if len(app_html_app_versions) != 1:
         return fail("workbench entry must contain exactly one current app.js cache version")
+    if len(app_html_style_versions) != 1:
+        return fail("workbench entry must contain exactly one current styles.css cache version")
     app_js_asset_version = app_html_app_versions[0]
+    frontend_asset_version = app_html_style_versions[0]
     for expected_asset in [
         f"./app.js?v={app_js_asset_version}",
         f"./styles.css?v={frontend_asset_version}",

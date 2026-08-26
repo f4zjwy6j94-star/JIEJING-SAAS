@@ -10,10 +10,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_JS = ROOT / "app.js"
+APP_HTML = ROOT / "app.html"
 
 
 def main() -> None:
     app_js = APP_JS.read_text(encoding="utf-8")
+    app_html = APP_HTML.read_text(encoding="utf-8")
+    if 'class="nav-item" data-view="activity"' not in app_html or "运行记录" not in app_html:
+        raise AssertionError("Public merchant navigation must expose the account-scoped execution record page")
     start_marker = "function saasExecutionActionLabel"
     end_marker = "function renderSaasActivityCenter"
     if start_marker not in app_js or end_marker not in app_js:

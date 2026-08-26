@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static checks for the Jiejing 7-module shell and media restore path."""
+"""Static checks for the Jiejing merchant shell and media restore path."""
 
 from __future__ import annotations
 
@@ -31,10 +31,10 @@ def main() -> int:
     nav_end = app_html.index("</nav>", nav_start)
     nav_html = app_html[nav_start:nav_end]
     nav_views = re.findall(r'data-view="([^"]+)"', nav_html)
-    expected_nav_views = ["cockpit", "product", "bulk", "media", "confirm", "service", "connect"]
+    expected_nav_views = ["cockpit", "product", "bulk", "media", "confirm", "service", "activity", "connect"]
     if nav_views != expected_nav_views:
-        return fail(f"left navigation should expose exactly 7 MVP modules: {nav_views}")
-    for removed_view in ["workflow", "activity", "report"]:
+        return fail(f"left navigation should expose the merchant workflow plus account-scoped run records: {nav_views}")
+    for removed_view in ["workflow", "report"]:
         if f'data-view="{removed_view}"' in nav_html:
             return fail(f"left navigation must not expose retired module: {removed_view}")
     for retained_view in ["view-workflow", "view-activity"]:
