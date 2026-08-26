@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -58,6 +59,9 @@ def main() -> int:
         if marker not in env_example:
             return fail(f"Tencent env example must preserve blocked passive-monitoring defaults: {marker.strip()}")
     OUT.mkdir(parents=True, exist_ok=True)
+    cos_probe_contract_error = _test_verified_cos_probe_cli()
+    if cos_probe_contract_error:
+        return fail(cos_probe_contract_error)
     env_path = OUT / "tencent-managed.env"
     env_path.write_text(
         "\n".join(
@@ -1000,6 +1004,169 @@ def _status_result(env_path: Path) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
     )
+
+
+def _test_verified_cos_probe_cli() -> str:
+    private_markers = (
+        "PRIVATE_BUCKET_SHOULD_NOT_PRINT",
+        "PRIVATE_COS_SECRET_ID_SHOULD_NOT_PRINT",
+        "PRIVATE_COS_SECRET_KEY_SHOULD_NOT_PRINT",
+        "PRIVATE_PROVIDER_DETAIL_SHOULD_NOT_PRINT",
+    )
+    original_values = {
+        "JIEJING_COS_BACKUP_ENABLED": "true",
+        "JIEJING_COS_REGION": "test-region",
+        "JIEJING_COS_BUCKET": private_markers[0],
+        "JIEJING_COS_PREFIX": "jiejing/production/backups",
+        "JIEJING_TENCENT_SECRET_ID": private_markers[1],
+        "JIEJING_TENCENT_SECRET_KEY": private_markers[2],
+        "JIEJING_COS_BACKUP_LAST_SUCCESS_AT": "2026-08-01T00:00:00+00:00",
+        "JIEJING_UNRELATED_RUNTIME_FLAG": "preserve-me",
+    }
+    original_text = "\n".join(f"{key}={value}" for key, value in original_values.items()) + "\n"
+    fake_sdk_source = '''
+import os
+
+
+class CosConfig:
+    def __init__(self, **_kwargs):
+        pass
+
+
+class _Body:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def get_raw_stream(self):
+        return self
+
+    def read(self):
+        return self._payload
+
+
+class CosS3Client:
+    def __init__(self, _config):
+        self.payload = b""
+        self.behavior = os.environ.get("JIEJING_TEST_COS_BEHAVIOR", "success")
+
+    def put_object(self, **kwargs):
+        if self.behavior == "provider_exception":
+            raise RuntimeError("PRIVATE_PROVIDER_DETAIL_SHOULD_NOT_PRINT")
+        self.payload = kwargs["Body"]
+        return {"ETag": "synthetic"}
+
+    def get_object(self, **_kwargs):
+        payload = b"tampered" if self.behavior == "hash_mismatch" else self.payload
+        return {"Body": _Body(payload)}
+
+    def delete_object(self, **_kwargs):
+        if self.behavior == "delete_failure":
+            raise RuntimeError("PRIVATE_PROVIDER_DETAIL_SHOULD_NOT_PRINT")
+        return {"status": "deleted"}
+'''.lstrip()
+
+    with tempfile.TemporaryDirectory(prefix="jiejing-cos-verified-cli-") as temp_dir_text:
+        temp_dir = Path(temp_dir_text)
+        fake_sdk_dir = temp_dir / "fake-sdk"
+        fake_sdk_dir.mkdir()
+        (fake_sdk_dir / "qcloud_cos.py").write_text(fake_sdk_source, encoding="utf-8")
+        env_path = temp_dir / "jiejing-saas.production.env"
+        process_env = os.environ.copy()
+        process_env["PYTHONPATH"] = str(fake_sdk_dir) + os.pathsep + process_env.get("PYTHONPATH", "")
+
+        for behavior in ("hash_mismatch", "delete_failure", "provider_exception"):
+            env_path.write_text(original_text, encoding="utf-8")
+            if os.name != "nt":
+                env_path.chmod(0o600)
+            process_env["JIEJING_TEST_COS_BEHAVIOR"] = behavior
+            blocked = subprocess.run(
+                [
+                    sys.executable,
+                    str(TOOL),
+                    "--env-file",
+                    str(env_path),
+                    "--verify-cos-backup-probe",
+                    "--apply",
+                ],
+                cwd=ROOT,
+                env=process_env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if blocked.returncode != 2:
+                return f"{behavior} COS probe must fail closed: {blocked.stdout} {blocked.stderr}"
+            if env_path.read_text(encoding="utf-8") != original_text:
+                return f"{behavior} COS probe must not modify private env evidence"
+            try:
+                blocked_result = json.loads(blocked.stdout)
+            except json.JSONDecodeError:
+                return f"{behavior} COS probe must emit one value-free JSON result: {blocked.stdout}"
+            if (
+                blocked_result.get("status") != "blocked"
+                or blocked_result.get("verification_evidence_recorded") is not False
+                or blocked_result.get("secret_exposed") is not False
+            ):
+                return f"{behavior} COS probe returned an unsafe blocked contract: {blocked_result}"
+            combined = blocked.stdout + blocked.stderr
+            if any(marker in combined for marker in private_markers):
+                return f"{behavior} COS probe exposed a private value"
+
+        env_path.write_text(original_text, encoding="utf-8")
+        if os.name != "nt":
+            env_path.chmod(0o600)
+        process_env["JIEJING_TEST_COS_BEHAVIOR"] = "success"
+        verified = subprocess.run(
+            [
+                sys.executable,
+                str(TOOL),
+                "--env-file",
+                str(env_path),
+                "--verify-cos-backup-probe",
+                "--apply",
+            ],
+            cwd=ROOT,
+            env=process_env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if verified.returncode != 0:
+            return f"verified COS probe must succeed: {verified.stdout} {verified.stderr}"
+        try:
+            verified_result = json.loads(verified.stdout)
+        except json.JSONDecodeError:
+            return f"verified COS probe must emit one value-free JSON result: {verified.stdout}"
+        if (
+            verified_result.get("status") != "verified"
+            or verified_result.get("probe_verified") is not True
+            or verified_result.get("verification_evidence_recorded") is not True
+            or verified_result.get("secret_exposed") is not False
+        ):
+            return f"verified COS probe returned an incomplete success contract: {verified_result}"
+        combined = verified.stdout + verified.stderr
+        if any(marker in combined for marker in private_markers):
+            return "verified COS probe exposed a private value"
+
+        updated_values = {
+            line.split("=", 1)[0]: line.split("=", 1)[1]
+            for line in env_path.read_text(encoding="utf-8").splitlines()
+            if "=" in line
+        }
+        changed_keys = {
+            key for key, value in updated_values.items() if original_values.get(key) != value
+        }
+        if changed_keys != {"JIEJING_COS_BACKUP_LAST_SUCCESS_AT"}:
+            return f"verified COS probe must update exactly one evidence key: {sorted(changed_keys)}"
+        try:
+            recorded_at = datetime.fromisoformat(updated_values["JIEJING_COS_BACKUP_LAST_SUCCESS_AT"])
+        except (KeyError, ValueError):
+            return "verified COS probe must record its valid success timestamp"
+        if recorded_at.tzinfo is None or recorded_at.utcoffset() is None:
+            return "verified COS probe timestamp must be timezone-aware"
+        if os.name != "nt" and env_path.stat().st_mode & 0o077:
+            return "verified COS probe must preserve private env mode 0600"
+    return ""
 
 
 if __name__ == "__main__":

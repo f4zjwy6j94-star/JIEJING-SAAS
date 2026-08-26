@@ -30,6 +30,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from jiejing_saas.cos_backup_probe import (  # noqa: E402
+    CONTRACT_VERSION as COS_BACKUP_PROBE_CONTRACT_VERSION,
+    execute_cos_backup_probe,
+)
 from jiejing_saas.operations_metering import (  # noqa: E402
     PROVIDER_MONITOR_AGGREGATE_KEYS,
     PROVIDER_MONITOR_CONTRACT_VERSION,
@@ -137,6 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     existing, lines = _read_env_file(env_file)
 
     provider_control_modes = (
+        args.verify_cos_backup_probe,
         args.provider_index_status,
         args.dry_run_provider_index,
         args.apply_provider_index,
@@ -148,6 +153,9 @@ def main(argv: list[str] | None = None) -> int:
     if sum(bool(value) for value in provider_control_modes) > 1:
         print(json.dumps({"status": "blocked", "blockers": ["select_one_provider_control_mode"], "secret_exposed": False}))
         return 2
+
+    if args.verify_cos_backup_probe:
+        return _run_cos_backup_probe_cli(args=args, env_file=env_file, existing=existing, lines=lines)
 
     if args.verify_provider_cls_probe:
         return _run_provider_probe_cli(args=args, env_file=env_file, existing=existing, lines=lines)
@@ -269,6 +277,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--provider-alarm-notice-id-env",
         help="Read an existing CLS notice-route identifier from a process env var without printing it.",
+    )
+    parser.add_argument(
+        "--verify-cos-backup-probe",
+        action="store_true",
+        help="Explicitly upload, read back, hash-check and delete one synthetic COS object before recording evidence.",
     )
     parser.add_argument(
         "--verify-provider-cls-probe",
@@ -1514,6 +1527,109 @@ def _run_provider_probe_cli(
         result["verification_evidence_recorded"] = False
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("status") == "verified" else 2
+
+
+def _run_cos_backup_probe_cli(
+    *,
+    args: argparse.Namespace,
+    env_file: Path,
+    existing: dict[str, str],
+    lines: list[str],
+) -> int:
+    if not args.apply:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "blockers": ["cos_backup_probe_apply_confirmation_missing"],
+                    "probe_verified": False,
+                    "verification_evidence_recorded": False,
+                    "secret_exposed": False,
+                }
+            )
+        )
+        return 2
+    try:
+        result = execute_cos_backup_probe(env=existing)
+    except Exception:
+        result = {}
+    success_at = str(result.get("success_at") or "").strip()
+    try:
+        parsed_success_at = datetime.fromisoformat(success_at.replace("Z", "+00:00"))
+    except ValueError:
+        parsed_success_at = None
+    expected_keys = {
+        "status",
+        "contract_version",
+        "probe",
+        "synthetic_data_only",
+        "server_side_encryption_requested",
+        "payload_bytes",
+        "sha256_match",
+        "object_deleted",
+        "success_at",
+        "blockers",
+        "error_type",
+        "secret_exposed",
+    }
+    verified = bool(
+        set(result) == expected_keys
+        and result.get("status") == "verified"
+        and result.get("contract_version") == COS_BACKUP_PROBE_CONTRACT_VERSION
+        and result.get("probe") is True
+        and result.get("synthetic_data_only") is True
+        and result.get("server_side_encryption_requested") is True
+        and type(result.get("payload_bytes")) is int
+        and result.get("payload_bytes", 0) > 0
+        and result.get("sha256_match") is True
+        and result.get("object_deleted") is True
+        and parsed_success_at is not None
+        and parsed_success_at.tzinfo is not None
+        and parsed_success_at.utcoffset() is not None
+        and result.get("blockers") == []
+        and result.get("error_type") is None
+        and result.get("secret_exposed") is False
+    )
+    if not verified:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "blockers": ["cos_backup_probe_contract_rejected"],
+                    "probe_verified": False,
+                    "verification_evidence_recorded": False,
+                    "secret_exposed": False,
+                }
+            )
+        )
+        return 2
+    try:
+        _write_env_file(env_file, lines, {"JIEJING_COS_BACKUP_LAST_SUCCESS_AT": success_at})
+    except Exception:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "blockers": ["cos_backup_probe_evidence_write_failed"],
+                    "probe_verified": True,
+                    "verification_evidence_recorded": False,
+                    "secret_exposed": False,
+                }
+            )
+        )
+        return 2
+    print(
+        json.dumps(
+            {
+                "status": "verified",
+                "contract_version": COS_BACKUP_PROBE_CONTRACT_VERSION,
+                "probe_verified": True,
+                "verification_evidence_recorded": True,
+                "secret_exposed": False,
+            }
+        )
+    )
+    return 0
 
 
 def _now_iso() -> str:
