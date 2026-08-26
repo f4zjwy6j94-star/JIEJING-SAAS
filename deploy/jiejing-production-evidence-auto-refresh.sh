@@ -189,6 +189,7 @@ ready = (
     and operational.get("database", {}).get("status") == "ready"
     and operational.get("queue", {}).get("status") == "ready"
     and operational.get("worker", {}).get("status") == "ready"
+    and operational.get("worker", {}).get("ready") is True
     and operational.get("secret_exposed") is False
 )
 raise SystemExit(0 if ready else 2)

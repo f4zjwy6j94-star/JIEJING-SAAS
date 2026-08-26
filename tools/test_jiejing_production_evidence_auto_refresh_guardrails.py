@@ -157,10 +157,10 @@ def run_runtime_image_fixture(
             drift_worker_environment=0
             unhealthy_api=0
             stopped_worker=0
-            worker_operational_unhealthy=0
+            deep_health_payload='{{}}'
 
-            public_deep_health_ready() {{
-              [[ "$worker_operational_unhealthy" == 0 ]]
+            curl() {{
+              printf '%s\n' "$deep_health_payload"
             }}
 
             docker() {{
@@ -318,18 +318,33 @@ def run_runtime_image_fixture(
             wait_for_api_health() {{ return 0; }}
             wait_for_worker_health() {{ return 0; }}
 
-            worker_operational_unhealthy=1
-            set +e
-            unhealthy_output="$(
-              capture_and_validate_runtime_images
-              run_refresh_phases
-            )"
-            unhealthy_rc=$?
-            set -e
-            [[ "$unhealthy_rc" -ne 0 ]]
-            [[ "$unhealthy_output" == *"JIEJING_PRODUCTION_EVIDENCE_REFRESH_BLOCKER=runtime_worker_operational_unhealthy"* ]]
-            [[ ! -e "$fixture_root/side-effects" ]]
-            worker_operational_unhealthy=0
+            assert_worker_operational_health_rejected() {{
+              deep_health_payload="$1"
+              rm -f "$fixture_root/side-effects" "$fixture_root/probe-images"
+              set +e
+              unhealthy_output="$(
+                capture_and_validate_runtime_images
+                run_refresh_phases
+              )"
+              unhealthy_rc=$?
+              set -e
+              [[ "$unhealthy_rc" -ne 0 ]]
+              [[ "$unhealthy_output" == *"JIEJING_PRODUCTION_EVIDENCE_REFRESH_BLOCKER=runtime_worker_operational_unhealthy"* ]]
+              [[ ! -e "$fixture_root/side-effects" ]]
+            }}
+
+            assert_worker_operational_health_rejected \
+              '{{"operational_health":{{"status":"ready","database":{{"status":"ready"}},"queue":{{"status":"ready"}},"worker":{{"status":"ready","ready":false}},"secret_exposed":false}}}}'
+            assert_worker_operational_health_rejected \
+              '{{"operational_health":{{"status":"ready","database":{{"status":"ready"}},"queue":{{"status":"ready"}},"worker":{{"status":"ready"}},"secret_exposed":false}}}}'
+            assert_worker_operational_health_rejected \
+              '{{"operational_health":{{"status":"ready","database":{{"status":"ready"}},"queue":{{"status":"ready"}},"worker":{{"status":"ready","ready":"true"}},"secret_exposed":false}}}}'
+            assert_worker_operational_health_rejected \
+              '{{"operational_health":{{"status":"ready","database":{{"status":"ready"}},"queue":{{"status":"ready"}},"worker":{{"status":"ready","ready":1}},"secret_exposed":false}}}}'
+            assert_worker_operational_health_rejected \
+              '{{"operational_health":{{"status":"ready","database":{{"status":"ready"}},"queue":{{"status":"ready"}},"worker":{{"status":"ready","ready":null}},"secret_exposed":false}}}}'
+
+            deep_health_payload='{{"operational_health":{{"status":"ready","database":{{"status":"ready"}},"queue":{{"status":"ready"}},"worker":{{"status":"ready","ready":true}},"secret_exposed":false}}}}'
 
             capture_and_validate_runtime_images
             [[ "$runtime_api_image_id" == "$api_image" ]]
