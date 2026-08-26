@@ -25,6 +25,7 @@ EVIDENCE_REFRESH_TIMER_PATH="/etc/systemd/system/jiejing-production-evidence-ref
 EVIDENCE_REFRESH_SERVICE="jiejing-production-evidence-refresh.service"
 EVIDENCE_REFRESH_TIMER="jiejing-production-evidence-refresh.timer"
 mutation_started=0
+active_switched=0
 current_stage="preflight"
 deploy_lock_held=0
 maintenance_lock_held=0
@@ -99,6 +100,140 @@ raise SystemExit(0 if service == expected_service and timer == expected_timer el
 PY
 }
 
+resolve_manifest_private_dir() {
+  local release="$1" label_environment_file="$2" manifest count manifest_private resolved_private resolved_environment private_parent
+  manifest="$release/JIEJING_PRODUCTION_RELEASE_MANIFEST.txt"
+  [[ -f "$manifest" && ! -L "$manifest" ]] || return 1
+  count="$(awk -F= '$1 == "PRIVATE_DIR" {count += 1} END {print count + 0}' "$manifest" 2>/dev/null || true)"
+  [[ "$count" == "1" ]] || return 1
+  manifest_private="$(awk -F= '$1 == "PRIVATE_DIR" {print substr($0, index($0, "=") + 1)}' "$manifest" 2>/dev/null || true)"
+  [[ "$manifest_private" == /* && "$manifest_private" != *$'\n'* && "$manifest_private" != *$'\r'* ]] || return 1
+  resolved_private="$(readlink -f -- "$manifest_private" 2>/dev/null || true)"
+  [[ "$resolved_private" == "$manifest_private" && -d "$resolved_private" && ! -L "$resolved_private" ]] || return 1
+  if [[ "$resolved_private" != "$PRODUCTION_ROOT/private" ]]; then
+    [[ "$(basename -- "$resolved_private")" == "private" ]] || return 1
+    private_parent="$(dirname -- "$resolved_private")"
+    [[ "$(dirname -- "$private_parent")" == "$RELEASE_ROOT" ]] || return 1
+  fi
+  resolved_environment="$(readlink -f -- "$label_environment_file" 2>/dev/null || true)"
+  [[ "$resolved_environment" == "$label_environment_file" ]] || return 1
+  [[ "$resolved_environment" == "$resolved_private/production-compose.env" ]] || return 1
+  [[ -f "$resolved_environment" && ! -L "$resolved_environment" ]] || return 1
+  [[ -f "$resolved_private/jiejing-saas.production.env" && ! -L "$resolved_private/jiejing-saas.production.env" ]] || return 1
+  [[ "$(readlink -f -- "$resolved_private/jiejing-saas.production.env" 2>/dev/null || true)" == "$resolved_private/jiejing-saas.production.env" ]] || return 1
+  private_dir="$resolved_private"
+  COMPOSE_ENV="$resolved_environment"
+  APP_ENV="$resolved_private/jiejing-saas.production.env"
+}
+
+private_env_permissions_ready() {
+  local directory_metadata compose_metadata app_metadata
+  directory_metadata="$(stat -c '%U:%G %a' -- "$private_dir" 2>/dev/null || true)"
+  compose_metadata="$(stat -c '%U:%G %a' -- "$COMPOSE_ENV" 2>/dev/null || true)"
+  app_metadata="$(stat -c '%U:%G %a' -- "$APP_ENV" 2>/dev/null || true)"
+  [[ "$directory_metadata" == "root:root 700" ]] \
+    && [[ "$compose_metadata" == "root:root 600" ]] \
+    && [[ "$app_metadata" == "root:root 600" ]]
+}
+
+assess_private_env_normalization() {
+  if private_env_permissions_ready; then
+    private_env_normalization_required=0
+  else
+    private_env_normalization_required=1
+  fi
+  printf 'PRIVATE_ENV_NORMALIZATION_REQUIRED=%s\n' "$private_env_normalization_required"
+  printf 'PRIVATE_ENV_NORMALIZATION_PLANNED=%s\n' "$private_env_normalization_required"
+}
+
+normalize_private_env_permissions() {
+  python3 - "$private_dir" "$COMPOSE_ENV" "$APP_ENV" <<'PY'
+from __future__ import annotations
+
+import os
+import stat
+import sys
+
+
+private_dir, compose_env, app_env = sys.argv[1:]
+expected = {
+    compose_env: 0o600,
+    app_env: 0o600,
+}
+directory_fd = -1
+file_fds: list[int] = []
+snapshots: list[tuple[int, int, int, int]] = []
+mutation_started = False
+
+
+def restore() -> bool:
+    restored = True
+    for fd, uid, gid, mode in reversed(snapshots):
+        try:
+            os.fchown(fd, uid, gid)
+            os.fchmod(fd, mode)
+        except OSError:
+            restored = False
+    return restored
+
+
+try:
+    directory_fd = os.open(private_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    directory_stat = os.fstat(directory_fd)
+    if not stat.S_ISDIR(directory_stat.st_mode) or directory_stat.st_mode & 0o022:
+        raise OSError("unsafe_private_directory")
+    snapshots.append((directory_fd, directory_stat.st_uid, directory_stat.st_gid, stat.S_IMODE(directory_stat.st_mode)))
+    for path, target_mode in expected.items():
+        name = os.path.basename(path)
+        if os.path.dirname(path) != private_dir or name not in {"production-compose.env", "jiejing-saas.production.env"}:
+            raise OSError("unsafe_private_file_path")
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+        file_fds.append(fd)
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_mode & 0o077:
+            raise OSError("unsafe_private_file")
+        snapshots.append((fd, metadata.st_uid, metadata.st_gid, stat.S_IMODE(metadata.st_mode)))
+    mutation_started = True
+    os.fchown(directory_fd, 0, 0)
+    os.fchmod(directory_fd, 0o700)
+    for fd, _uid, _gid, _mode in snapshots[1:]:
+        os.fchown(fd, 0, 0)
+        os.fchmod(fd, 0o600)
+    normalized_directory = os.fstat(directory_fd)
+    if (normalized_directory.st_uid, normalized_directory.st_gid, stat.S_IMODE(normalized_directory.st_mode)) != (0, 0, 0o700):
+        raise OSError("private_directory_normalization_failed")
+    for fd in file_fds:
+        normalized_file = os.fstat(fd)
+        if (
+            normalized_file.st_uid,
+            normalized_file.st_gid,
+            stat.S_IMODE(normalized_file.st_mode),
+            normalized_file.st_nlink,
+        ) != (0, 0, 0o600, 1):
+            raise OSError("private_file_normalization_failed")
+except OSError:
+    if mutation_started:
+        if restore():
+            print("PRIVATE_ENV_NORMALIZATION_ROLLED_BACK=1", file=sys.stderr)
+        else:
+            print("PRIVATE_ENV_NORMALIZATION_ROLLBACK_INCOMPLETE=1", file=sys.stderr)
+    raise SystemExit(1)
+finally:
+    for fd in reversed(file_fds):
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    if directory_fd >= 0:
+        try:
+            os.close(directory_fd)
+        except OSError:
+            pass
+PY
+  resolve_manifest_private_dir "$previous_release" "$environment_file" \
+    && private_env_permissions_ready
+}
+
 require_flock() {
   command -v flock >/dev/null 2>&1 || refuse "REFUSE_FLOCK_UNAVAILABLE=1" 32
 }
@@ -153,6 +288,22 @@ release_deploy_lock() {
     exec 8>&-
     deploy_lock_held=0
   fi
+}
+
+acquire_maintenance_lock_for_rollback() {
+  if [[ "$maintenance_lock_held" == "1" ]]; then
+    return 0
+  fi
+  command -v flock >/dev/null 2>&1 || return 1
+  if ! exec 9>"$MAINTENANCE_LOCK"; then
+    return 1
+  fi
+  if flock -w 60 9; then
+    maintenance_lock_held=1
+    return 0
+  fi
+  exec 9>&-
+  return 1
 }
 
 create_dry_run_candidate() {
@@ -261,15 +412,12 @@ esac
 previous_release="$(dirname -- "$active_app")"
 
 environment_file="$(docker inspect deploy-jiejing-saas-1 --format '{{ index .Config.Labels "com.docker.compose.project.environment_file" }}' 2>/dev/null || true)"
-private_dir="$(dirname -- "$environment_file")"
-private_dir="$(readlink -f -- "$private_dir" 2>/dev/null || true)"
-case "$private_dir" in
-  "$PRODUCTION_ROOT/private"|"$RELEASE_ROOT"/*/private) ;;
-  *) refuse "REFUSE_PRIVATE_DIR_OUTSIDE_ROOT=$private_dir" 25 ;;
-esac
-[[ -f "$private_dir/production-compose.env" && ! -L "$private_dir/production-compose.env" ]] || refuse "REFUSE_PRIVATE_COMPOSE_ENV_MISSING=1" 26
-[[ -f "$private_dir/jiejing-saas.production.env" && ! -L "$private_dir/jiejing-saas.production.env" ]] || refuse "REFUSE_PRIVATE_APP_ENV_MISSING=1" 27
+resolve_manifest_private_dir "$previous_release" "$environment_file" \
+  || refuse "REFUSE_PRIVATE_MANIFEST_CONTRACT=1" 25
 [[ -f "$private_dir/jiejing-vault-token.d/jiejing-vault-token" && ! -L "$private_dir/jiejing-vault-token.d/jiejing-vault-token" ]] || refuse "REFUSE_PRIVATE_VAULT_TOKEN_MISSING=1" 28
+private_env_normalization_required=0
+assess_private_env_normalization
+private_env_normalization_applied=0
 
 short_sha="${SOURCE_SHA:0:12}"
 if [[ "$DRY_RUN" == "1" ]]; then
@@ -363,6 +511,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   printf '%s\n' "CANDIDATE_RELEASE_PERSISTED=0"
   printf 'PREVIOUS_RELEASE=%s\n' "$previous_release"
   printf '%s\n' "ACTIVE_SWITCHED=0"
+  printf '%s\n' "PRIVATE_ENV_NORMALIZATION_APPLIED=0"
   exit 0
 fi
 
@@ -426,6 +575,102 @@ build_candidate_images_with_retry() {
     fi
   done
   return 1
+}
+
+capture_previous_runtime_images() {
+  previous_api_image_id="$(docker inspect deploy-jiejing-saas-1 --format '{{.Image}}' 2>/dev/null || true)"
+  previous_worker_image_id="$(docker inspect deploy-jiejing-worker-1 --format '{{.Image}}' 2>/dev/null || true)"
+  previous_api_image_ref="$(docker inspect deploy-jiejing-saas-1 --format '{{.Config.Image}}' 2>/dev/null || true)"
+  previous_worker_image_ref="$(docker inspect deploy-jiejing-worker-1 --format '{{.Config.Image}}' 2>/dev/null || true)"
+  [[ "$previous_api_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  [[ "$previous_worker_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  [[ "$previous_api_image_ref" =~ ^deploy-jiejing-saas(:latest)?$ ]] || return 1
+  [[ "$previous_worker_image_ref" =~ ^deploy-jiejing-worker(:latest)?$ ]] || return 1
+  docker image inspect "$previous_api_image_id" >/dev/null 2>&1 || return 1
+  docker image inspect "$previous_worker_image_id" >/dev/null 2>&1 || return 1
+  verify_runtime_labels_and_health "$active_app" "$previous_api_image_id" "$previous_worker_image_id"
+}
+
+verify_runtime_labels_and_health() {
+  local expected_app="$1" expected_api_image="$2" expected_worker_image="$3"
+  local api_image worker_image api_state api_health worker_state api_config worker_config api_workdir worker_workdir api_env worker_env
+  api_image="$(docker inspect deploy-jiejing-saas-1 --format '{{.Image}}' 2>/dev/null || true)"
+  worker_image="$(docker inspect deploy-jiejing-worker-1 --format '{{.Image}}' 2>/dev/null || true)"
+  api_state="$(docker inspect deploy-jiejing-saas-1 --format '{{.State.Status}}' 2>/dev/null || true)"
+  api_health="$(docker inspect deploy-jiejing-saas-1 --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || true)"
+  worker_state="$(docker inspect deploy-jiejing-worker-1 --format '{{.State.Status}}' 2>/dev/null || true)"
+  api_config="$(docker inspect deploy-jiejing-saas-1 --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' 2>/dev/null || true)"
+  worker_config="$(docker inspect deploy-jiejing-worker-1 --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' 2>/dev/null || true)"
+  api_workdir="$(docker inspect deploy-jiejing-saas-1 --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' 2>/dev/null || true)"
+  worker_workdir="$(docker inspect deploy-jiejing-worker-1 --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' 2>/dev/null || true)"
+  api_env="$(docker inspect deploy-jiejing-saas-1 --format '{{ index .Config.Labels "com.docker.compose.project.environment_file" }}' 2>/dev/null || true)"
+  worker_env="$(docker inspect deploy-jiejing-worker-1 --format '{{ index .Config.Labels "com.docker.compose.project.environment_file" }}' 2>/dev/null || true)"
+  [[ "$api_image" == "$expected_api_image" && "$worker_image" == "$expected_worker_image" ]] || return 1
+  [[ "$api_state" == "running" && "$api_health" == "healthy" && "$worker_state" == "running" ]] || return 1
+  [[ "$(readlink -f -- "$api_config" 2>/dev/null || true)" == "$expected_app/deploy/docker-compose.production-pilot.yml" ]] || return 1
+  [[ "$(readlink -f -- "$worker_config" 2>/dev/null || true)" == "$expected_app/deploy/docker-compose.production-pilot.yml" ]] || return 1
+  [[ "$(readlink -f -- "$api_workdir" 2>/dev/null || true)" == "$expected_app/deploy" ]] || return 1
+  [[ "$(readlink -f -- "$worker_workdir" 2>/dev/null || true)" == "$expected_app/deploy" ]] || return 1
+  [[ "$api_env" == "$environment_file" && "$worker_env" == "$environment_file" ]] || return 1
+}
+
+verify_candidate_runtime_image_coherence() {
+  local api_image worker_image
+  api_image="$(docker inspect deploy-jiejing-saas-1 --format '{{.Image}}' 2>/dev/null || true)"
+  worker_image="$(docker inspect deploy-jiejing-worker-1 --format '{{.Image}}' 2>/dev/null || true)"
+  [[ "$api_image" =~ ^sha256:[0-9a-f]{64}$ && "$api_image" == "$worker_image" ]] || return 1
+  verify_runtime_labels_and_health "$candidate_app" "$api_image" "$worker_image" || return 1
+  candidate_runtime_image_id="$api_image"
+  printf '%s\n' "CANDIDATE_RUNTIME_IMAGE_COHERENCE=verified"
+}
+
+atomic_replace_active_link() {
+  local target="$1" expected_current="$2" current temporary resolved_target
+  current="$(readlink -f -- "$ACTIVE_LINK" 2>/dev/null || true)"
+  [[ "$current" == "$expected_current" ]] || return 1
+  resolved_target="$(readlink -f -- "$target" 2>/dev/null || true)"
+  [[ "$resolved_target" == "$target" && -d "$target" ]] || return 1
+  temporary="${ACTIVE_LINK}.jiejing-new.$$"
+  [[ ! -e "$temporary" && ! -L "$temporary" ]] || return 1
+  ln -s -- "$target" "$temporary" || return 1
+  if [[ "$(readlink -f -- "$temporary" 2>/dev/null || true)" != "$target" ]]; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+  mv -Tf -- "$temporary" "$ACTIVE_LINK" || {
+    rm -f -- "$temporary"
+    return 1
+  }
+  [[ -L "$ACTIVE_LINK" && "$(readlink -f -- "$ACTIVE_LINK" 2>/dev/null || true)" == "$target" ]]
+}
+
+verify_previous_runtime_restored() {
+  verify_runtime_labels_and_health "$active_app" "$previous_api_image_id" "$previous_worker_image_id"
+}
+
+rollback_application_release() {
+  local rollback_rc=0 current_active
+  docker image tag "$previous_api_image_id" "$previous_api_image_ref" || rollback_rc=1
+  docker image tag "$previous_worker_image_id" "$previous_worker_image_ref" || rollback_rc=1
+  "${previous_compose[@]}" up -d --no-build --no-deps --force-recreate jiejing-saas || rollback_rc=1
+  wait_container_healthy deploy-jiejing-saas-1 60 || rollback_rc=1
+  "${previous_compose[@]}" up -d --no-build --no-deps --force-recreate jiejing-worker || rollback_rc=1
+  wait_container_healthy deploy-jiejing-worker-1 30 || rollback_rc=1
+  "${previous_compose[@]}" up -d --no-deps --force-recreate jiejing-frontend || rollback_rc=1
+  "${previous_compose[@]}" up -d --no-deps --force-recreate jiejing-edge || rollback_rc=1
+  wait_container_healthy deploy-jiejing-frontend-1 30 || rollback_rc=1
+  wait_container_healthy deploy-jiejing-edge-1 30 || rollback_rc=1
+  current_active="$(readlink -f -- "$ACTIVE_LINK" 2>/dev/null || true)"
+  if [[ "$current_active" == "$candidate_app" ]]; then
+    atomic_replace_active_link "$active_app" "$candidate_app" || rollback_rc=1
+  else
+    [[ "$current_active" == "$active_app" ]] || rollback_rc=1
+  fi
+  verify_previous_runtime_restored || rollback_rc=1
+  wait_public_json "/health" 45 || rollback_rc=1
+  wait_public_json "/health/deep" 45 || rollback_rc=1
+  wait_public_json "/readiness/product-saas" 45 || rollback_rc=1
+  [[ "$rollback_rc" == "0" ]]
 }
 
 unit_backup_dir="$release_dir/evidence-refresh-unit-backup"
@@ -619,7 +864,7 @@ start_and_verify_evidence_refresh_timer() {
 }
 
 fail_unit_transaction() {
-  local original_rc="${1:-1}" restore_rc=0 activity_restore_rc=0
+  local original_rc="${1:-1}" lock_rc=0 restore_rc=0 app_restore_rc=0 activity_restore_rc=0
   if [[ "$unit_transaction_failure_in_progress" == "1" ]]; then
     exit "$original_rc"
   fi
@@ -629,18 +874,35 @@ fail_unit_transaction() {
   trap - EXIT
   set +e
   printf 'JIEJING_PRODUCTION_UNIT_TRANSACTION_FAILED_STAGE=%s\n' "$current_stage" >&2
-  restore_evidence_refresh_units
-  restore_rc=$?
+  acquire_maintenance_lock_for_rollback
+  lock_rc=$?
+  if [[ "$lock_rc" == "0" ]]; then
+    restore_evidence_refresh_units
+    restore_rc=$?
+    rollback_application_release
+    app_restore_rc=$?
+  else
+    restore_rc=1
+    app_restore_rc=1
+  fi
   release_maintenance_lock
-  if [[ "$restore_rc" == "0" ]]; then
+  if [[ "$restore_rc" == "0" && "$app_restore_rc" == "0" ]]; then
     restore_evidence_refresh_timer_activity
     activity_restore_rc=$?
+  else
+    activity_restore_rc=1
   fi
   release_deploy_lock
-  printf '%s\n' "TIMER_INSTALL_ROLLED_BACK=1" >&2
-  printf '%s\n' "APPLICATION_RELEASE_RETAINED=1" >&2
-  if [[ "$restore_rc" != "0" || "$activity_restore_rc" != "0" ]]; then
+  if [[ "$lock_rc" == "0" && "$restore_rc" == "0" ]]; then
+    printf '%s\n' "TIMER_INSTALL_ROLLED_BACK=1" >&2
+  fi
+  if [[ "$app_restore_rc" == "0" ]]; then
+    printf '%s\n' "APPLICATION_RELEASE_RETAINED=0" >&2
+    printf '%s\n' "JIEJING_PRODUCTION_ROLLBACK_APPLIED=1" >&2
+  fi
+  if [[ "$lock_rc" != "0" || "$restore_rc" != "0" || "$app_restore_rc" != "0" || "$activity_restore_rc" != "0" ]]; then
     printf '%s\n' "TIMER_INSTALL_ROLLBACK_INCOMPLETE=1" >&2
+    printf '%s\n' "JIEJING_PRODUCTION_ROLLBACK_INCOMPLETE=1" >&2
   fi
   trap - HUP INT TERM
   exit "$original_rc"
@@ -680,19 +942,22 @@ disarm_unit_transaction_traps() {
 }
 
 rollback_on_error() {
-  local code=$?
+  local code=$? rollback_rc=0
   trap - ERR
+  disarm_unit_transaction_traps
   set +e
   printf 'JIEJING_PRODUCTION_DEPLOY_FAILED_STAGE=%s\n' "$current_stage" >&2
   if [[ "$mutation_started" == "1" ]]; then
-    "${previous_compose[@]}" build jiejing-saas jiejing-worker
-    "${previous_compose[@]}" up -d --no-deps jiejing-saas
-    wait_container_healthy deploy-jiejing-saas-1 60
-    "${previous_compose[@]}" up -d --no-deps jiejing-worker
-    "${previous_compose[@]}" up -d --no-deps --force-recreate jiejing-frontend
-    "${previous_compose[@]}" up -d --no-deps --force-recreate jiejing-edge
-    ln -sfnT "$active_app" "$ACTIVE_LINK"
-    printf '%s\n' "JIEJING_PRODUCTION_ROLLBACK_APPLIED=1" >&2
+    if acquire_maintenance_lock_for_rollback; then
+      rollback_application_release || rollback_rc=1
+    else
+      rollback_rc=1
+    fi
+    if [[ "$rollback_rc" == "0" ]]; then
+      printf '%s\n' "JIEJING_PRODUCTION_ROLLBACK_APPLIED=1" >&2
+    else
+      printf '%s\n' "JIEJING_PRODUCTION_ROLLBACK_INCOMPLETE=1" >&2
+    fi
   else
     printf '%s\n' "JIEJING_PRODUCTION_ROLLBACK_NOT_REQUIRED=1" >&2
   fi
@@ -702,15 +967,27 @@ rollback_on_error() {
 }
 trap rollback_on_error ERR
 
+current_stage="normalize_private_env_permissions"
+if [[ "$private_env_normalization_required" == "1" ]]; then
+  normalize_private_env_permissions
+  private_env_normalization_applied=1
+fi
+printf 'PRIVATE_ENV_NORMALIZATION_APPLIED=%s\n' "$private_env_normalization_applied"
+
+current_stage="capture_previous_runtime_images"
+capture_previous_runtime_images
+
 current_stage="build_candidate_images"
-build_candidate_images_with_retry
 mutation_started=1
+build_candidate_images_with_retry
 current_stage="start_candidate_api"
 "${candidate_compose[@]}" up -d --no-deps jiejing-saas
 wait_container_healthy deploy-jiejing-saas-1 60
 current_stage="start_candidate_worker"
 "${candidate_compose[@]}" up -d --no-deps jiejing-worker
 wait_container_healthy deploy-jiejing-worker-1 30
+current_stage="verify_candidate_runtime_image_coherence"
+verify_candidate_runtime_image_coherence
 current_stage="start_candidate_frontend"
 "${candidate_compose[@]}" up -d --no-deps --force-recreate jiejing-frontend
 current_stage="start_candidate_edge"
@@ -724,12 +1001,11 @@ wait_public_json "/health/deep" 45
 current_stage="verify_public_product_readiness"
 wait_public_json "/readiness/product-saas" 45
 current_stage="activate_release"
-ln -sfnT "$candidate_app" "$ACTIVE_LINK"
-mutation_started=0
-trap - ERR
+arm_unit_transaction_traps
+atomic_replace_active_link "$candidate_app" "$active_app"
+active_switched=1
 
 current_stage="install_evidence_refresh_units"
-arm_unit_transaction_traps
 unit_rc=0
 install_evidence_refresh_units || unit_rc=$?
 if [[ "$unit_rc" != "0" ]]; then
@@ -756,9 +1032,13 @@ if [[ "$unit_rc" != "0" ]]; then
 fi
 printf '%s\n' "TIMER_INSTALL_APPLIED=1"
 disarm_unit_transaction_traps
+mutation_started=0
+trap - ERR
 release_deploy_lock
 
 printf '%s\n' "JIEJING_PRODUCTION_DEPLOY_APPLIED=1"
+printf '%s\n' "CANDIDATE_RELEASE_PERSISTED=1"
+printf '%s\n' "ACTIVE_SWITCHED=1"
 printf 'SOURCE_COMMIT=%s\n' "$SOURCE_SHA"
 printf 'RELEASE_DIR=%s\n' "$release_dir"
 printf 'PREVIOUS_RELEASE=%s\n' "$previous_release"

@@ -34,6 +34,13 @@ PHASE3_REQUIRED_BUNDLE_FILES = {
     "docs/superpowers/specs/2026-08-26-production-evidence-auto-refresh-design.md",
     "docs/superpowers/plans/2026-08-26-production-evidence-auto-refresh-implementation-plan.md",
 }
+REMOTE_BOOLEAN_CONTRACT = {
+    "CANDIDATE_RELEASE_PERSISTED": "candidate_release_persisted",
+    "ACTIVE_SWITCHED": "active_switched",
+    "PRIVATE_ENV_NORMALIZATION_REQUIRED": "private_env_normalization_required",
+    "PRIVATE_ENV_NORMALIZATION_PLANNED": "private_env_normalization_planned",
+    "PRIVATE_ENV_NORMALIZATION_APPLIED": "private_env_normalization_applied",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -125,6 +132,11 @@ def main() -> int:
         ssh_base(args) + [f"bash -lc {shlex.quote(remote_script)}"],
         timeout=remote_timeout,
     )
+    try:
+        remote_contract = parse_remote_stdout_contract(completed.stdout, args.mode, source_sha)
+    except ValueError as exc:
+        reason = "dry_run_receipt_invalid" if args.mode == "dry_run" else "apply_receipt_invalid"
+        return fail(f"{reason}: {exc}")
     print(
         json.dumps(
             {
@@ -134,6 +146,7 @@ def main() -> int:
                 "source_sha": source_sha,
                 "bundle_sha256": bundle_sha256,
                 "manifest_sha256": manifest_sha256,
+                **remote_contract,
                 "stdout_tail": completed.stdout[-5000:],
                 "stderr_tail": completed.stderr[-2000:],
                 "secret_exposed": False,
@@ -143,6 +156,48 @@ def main() -> int:
         )
     )
     return 0
+
+
+def parse_remote_stdout_contract(output: str, mode: str, expected_source_sha: str) -> dict[str, bool]:
+    lines = [line.strip() for line in output.splitlines()]
+
+    def exact_receipt_value(key: str) -> str:
+        prefix = key + "="
+        values = [line[len(prefix) :] for line in lines if line.startswith(prefix)]
+        if len(values) != 1:
+            raise ValueError(f"receipt_count:{key}:{len(values)}")
+        return values[0]
+
+    mode_marker = "JIEJING_PRODUCTION_DEPLOY_DRY_RUN" if mode == "dry_run" else "JIEJING_PRODUCTION_DEPLOY_APPLIED"
+    if exact_receipt_value(mode_marker) != "1":
+        raise ValueError(f"receipt_value:{mode_marker}")
+    if exact_receipt_value("SOURCE_COMMIT") != expected_source_sha:
+        raise ValueError("source_commit_mismatch")
+    observed: dict[str, bool] = {}
+    for raw_line in lines:
+        key, separator, raw_value = raw_line.partition("=")
+        if not separator or key not in REMOTE_BOOLEAN_CONTRACT:
+            continue
+        field = REMOTE_BOOLEAN_CONTRACT[key]
+        if field in observed:
+            raise ValueError(f"duplicate:{key}")
+        if raw_value not in {"0", "1"}:
+            raise ValueError(f"invalid_boolean:{key}")
+        observed[field] = raw_value == "1"
+    missing = sorted(set(REMOTE_BOOLEAN_CONTRACT.values()).difference(observed))
+    if missing:
+        raise ValueError("missing:" + ",".join(missing))
+    expected_persistence = mode == "apply"
+    if observed["candidate_release_persisted"] is not expected_persistence:
+        raise ValueError("candidate_persistence_mismatch")
+    if observed["active_switched"] is not expected_persistence:
+        raise ValueError("active_switch_mismatch")
+    if observed["private_env_normalization_planned"] is not observed["private_env_normalization_required"]:
+        raise ValueError("normalization_plan_mismatch")
+    expected_applied = mode == "apply" and observed["private_env_normalization_required"]
+    if observed["private_env_normalization_applied"] is not expected_applied:
+        raise ValueError("normalization_apply_mismatch")
+    return observed
 
 
 def validate_zip(path: Path) -> None:

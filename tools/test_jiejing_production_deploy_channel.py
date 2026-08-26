@@ -96,6 +96,296 @@ def validate_required_bundle_files() -> list[str]:
     return failures
 
 
+def validate_remote_stdout_contract() -> list[str]:
+    module = load_deploy_module()
+    failures: list[str] = []
+    source_sha = "a" * 40
+    dry_output = "\n".join(
+        [
+            "JIEJING_PRODUCTION_DEPLOY_DRY_RUN=1",
+            f"SOURCE_COMMIT={source_sha}",
+            "CANDIDATE_RELEASE_PERSISTED=0",
+            "ACTIVE_SWITCHED=0",
+            "PRIVATE_ENV_NORMALIZATION_REQUIRED=1",
+            "PRIVATE_ENV_NORMALIZATION_PLANNED=1",
+            "PRIVATE_ENV_NORMALIZATION_APPLIED=0",
+        ]
+    )
+    try:
+        parsed = module.parse_remote_stdout_contract(dry_output, "dry_run", source_sha)
+    except (AttributeError, TypeError, ValueError) as exc:
+        return [f"dry-run stdout contract unavailable:{exc}"]
+    expected = {
+        "candidate_release_persisted": False,
+        "active_switched": False,
+        "private_env_normalization_required": True,
+        "private_env_normalization_planned": True,
+        "private_env_normalization_applied": False,
+    }
+    if parsed != expected:
+        failures.append(f"dry-run stdout contract parsed incorrectly:{parsed}")
+    for broken in (
+        dry_output.replace("JIEJING_PRODUCTION_DEPLOY_DRY_RUN=1\n", ""),
+        dry_output + "\nJIEJING_PRODUCTION_DEPLOY_DRY_RUN=1",
+        dry_output.replace(f"SOURCE_COMMIT={source_sha}", f"SOURCE_COMMIT={'b' * 40}"),
+        dry_output.replace("ACTIVE_SWITCHED=0\n", ""),
+        dry_output + "\nACTIVE_SWITCHED=1",
+        dry_output.replace("PRIVATE_ENV_NORMALIZATION_REQUIRED=1", "PRIVATE_ENV_NORMALIZATION_REQUIRED=secret-value"),
+    ):
+        try:
+            module.parse_remote_stdout_contract(broken, "dry_run", source_sha)
+        except ValueError:
+            continue
+        failures.append("unsafe or incomplete dry-run stdout contract was accepted")
+    apply_output = (
+        dry_output
+        .replace("JIEJING_PRODUCTION_DEPLOY_DRY_RUN=1", "JIEJING_PRODUCTION_DEPLOY_APPLIED=1")
+        .replace("CANDIDATE_RELEASE_PERSISTED=0", "CANDIDATE_RELEASE_PERSISTED=1")
+        .replace("ACTIVE_SWITCHED=0", "ACTIVE_SWITCHED=1")
+        .replace("PRIVATE_ENV_NORMALIZATION_APPLIED=0", "PRIVATE_ENV_NORMALIZATION_APPLIED=1")
+    )
+    try:
+        parsed_apply = module.parse_remote_stdout_contract(apply_output, "apply", source_sha)
+    except ValueError as exc:
+        failures.append(f"valid apply stdout contract rejected:{exc}")
+    else:
+        if not (
+            parsed_apply["candidate_release_persisted"]
+            and parsed_apply["active_switched"]
+            and parsed_apply["private_env_normalization_applied"]
+        ):
+            failures.append(f"apply stdout contract parsed incorrectly:{parsed_apply}")
+    try:
+        module.parse_remote_stdout_contract(
+            apply_output.replace("JIEJING_PRODUCTION_DEPLOY_APPLIED=1\n", ""),
+            "apply",
+            source_sha,
+        )
+    except ValueError:
+        pass
+    else:
+        failures.append("apply stdout contract without exact apply receipt was accepted")
+    return failures
+
+
+def validate_private_env_runtime_fixture(apply: str) -> list[str]:
+    if shutil.which("bash") is None:
+        return []
+    try:
+        functions = extract_bash_functions(
+            apply,
+            (
+                "resolve_manifest_private_dir",
+                "private_env_permissions_ready",
+                "assess_private_env_normalization",
+            ),
+        )
+    except ValueError as exc:
+        return [f"private env normalization functions unavailable:{exc}"]
+    failures: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="private-env-fixture-", dir=ROOT) as temp_dir:
+        temp = Path(temp_dir)
+        relative_temp = temp.relative_to(ROOT).as_posix()
+        fixture = f"""#!/usr/bin/env bash
+set -euo pipefail
+{functions}
+TEST_ROOT="$PWD/{relative_temp}"
+PRODUCTION_ROOT="$TEST_ROOT/production"
+RELEASE_ROOT="$PRODUCTION_ROOT/releases"
+previous_release="$RELEASE_ROOT/current"
+private_dir="$RELEASE_ROOT/private-owner/private"
+COMPOSE_ENV="$private_dir/production-compose.env"
+APP_ENV="$private_dir/jiejing-saas.production.env"
+mkdir -p "$previous_release" "$private_dir"
+printf 'SECRET_SENTINEL_COMPOSE' >"$COMPOSE_ENV"
+printf 'SECRET_SENTINEL_APP' >"$APP_ENV"
+printf 'PRIVATE_DIR=%s\n' "$private_dir" >"$previous_release/JIEJING_PRODUCTION_RELEASE_MANIFEST.txt"
+environment_file="$COMPOSE_ENV"
+resolve_manifest_private_dir "$previous_release" "$environment_file"
+[[ "$private_dir" == "$RELEASE_ROOT/private-owner/private" ]]
+
+ln -s "$RELEASE_ROOT/private-owner/private" "$RELEASE_ROOT/symlink-private"
+printf 'PRIVATE_DIR=%s\n' "$RELEASE_ROOT/symlink-private" >"$previous_release/JIEJING_PRODUCTION_RELEASE_MANIFEST.txt"
+set +e
+resolve_manifest_private_dir "$previous_release" "$environment_file" >/dev/null 2>&1
+symlink_rc=$?
+set -e
+[[ "$symlink_rc" != "0" ]]
+
+outside="$TEST_ROOT/outside/private"
+mkdir -p "$outside"
+printf 'PRIVATE_DIR=%s\n' "$outside" >"$previous_release/JIEJING_PRODUCTION_RELEASE_MANIFEST.txt"
+set +e
+resolve_manifest_private_dir "$previous_release" "$environment_file" >/dev/null 2>&1
+outside_rc=$?
+set -e
+[[ "$outside_rc" != "0" ]]
+
+nested="$RELEASE_ROOT/nested/extra/private"
+mkdir -p "$nested"
+printf 'SECRET_SENTINEL_COMPOSE' >"$nested/production-compose.env"
+printf 'SECRET_SENTINEL_APP' >"$nested/jiejing-saas.production.env"
+printf 'PRIVATE_DIR=%s\n' "$nested" >"$previous_release/JIEJING_PRODUCTION_RELEASE_MANIFEST.txt"
+set +e
+resolve_manifest_private_dir "$previous_release" "$nested/production-compose.env" >/dev/null 2>&1
+nested_rc=$?
+set -e
+[[ "$nested_rc" != "0" ]]
+
+printf 'PRIVATE_DIR=%s\nPRIVATE_DIR=%s\n' "$RELEASE_ROOT/private-owner/private" "$RELEASE_ROOT/private-owner/private" >"$previous_release/JIEJING_PRODUCTION_RELEASE_MANIFEST.txt"
+set +e
+resolve_manifest_private_dir "$previous_release" "$environment_file" >/dev/null 2>&1
+duplicate_rc=$?
+set -e
+[[ "$duplicate_rc" != "0" ]]
+
+printf 'PRIVATE_DIR=%s\n' "$RELEASE_ROOT/private-owner/private" >"$previous_release/JIEJING_PRODUCTION_RELEASE_MANIFEST.txt"
+resolve_manifest_private_dir "$previous_release" "$environment_file"
+FAKE_PRIVATE_OWNER=ubuntu:ubuntu
+stat() {{
+  if [[ "$*" == *"$private_dir"* ]]; then
+    case "$*" in
+      *production-compose.env*|*jiejing-saas.production.env*) printf '%s\n' "$FAKE_PRIVATE_OWNER 600" ;;
+      *) printf '%s\n' "$FAKE_PRIVATE_OWNER 700" ;;
+    esac
+    return 0
+  fi
+  command stat "$@"
+}}
+private_env_normalization_required=0
+assess_private_env_normalization >"$TEST_ROOT/assessment.out"
+output="$(<"$TEST_ROOT/assessment.out")"
+[[ "$private_env_normalization_required" == "1" ]]
+[[ "$output" == *"PRIVATE_ENV_NORMALIZATION_REQUIRED=1"* ]]
+[[ "$output" == *"PRIVATE_ENV_NORMALIZATION_PLANNED=1"* ]]
+[[ "$output" != *"SECRET_SENTINEL"* ]]
+FAKE_PRIVATE_OWNER=root:root
+private_env_normalization_required=1
+assess_private_env_normalization >"$TEST_ROOT/assessment.out"
+output="$(<"$TEST_ROOT/assessment.out")"
+[[ "$private_env_normalization_required" == "0" ]]
+[[ "$output" == *"PRIVATE_ENV_NORMALIZATION_REQUIRED=0"* ]]
+[[ "$output" == *"PRIVATE_ENV_NORMALIZATION_PLANNED=0"* ]]
+printf '%s\n' PRIVATE_ENV_FIXTURE_PASS
+"""
+        result = run_bash_fixture(fixture, temp, "private-env-runtime.sh")
+        if result.returncode != 0 or "PRIVATE_ENV_FIXTURE_PASS" not in result.stdout:
+            failures.append(
+                "private env runtime fixture failed rc="
+                + str(result.returncode)
+                + " stdout="
+                + result.stdout[-1000:]
+                + " stderr="
+                + result.stderr[-1000:]
+            )
+    return failures
+
+
+def validate_application_rollback_runtime_fixture(apply: str) -> list[str]:
+    if shutil.which("bash") is None:
+        return []
+    try:
+        functions = extract_bash_functions(
+            apply,
+            (
+                "verify_runtime_labels_and_health",
+                "verify_candidate_runtime_image_coherence",
+                "atomic_replace_active_link",
+                "verify_previous_runtime_restored",
+                "rollback_application_release",
+            ),
+        )
+    except ValueError as exc:
+        return [f"application rollback functions unavailable:{exc}"]
+    failures: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="application-rollback-fixture-", dir=ROOT) as temp_dir:
+        temp = Path(temp_dir)
+        relative_temp = temp.relative_to(ROOT).as_posix()
+        fixture = f"""#!/usr/bin/env bash
+set -euo pipefail
+{functions}
+TEST_ROOT="$PWD/{relative_temp}"
+active_app="$TEST_ROOT/old/app"
+candidate_app="$TEST_ROOT/new/app"
+ACTIVE_LINK="$TEST_ROOT/active"
+environment_file="$TEST_ROOT/private/production-compose.env"
+mkdir -p "$active_app/deploy" "$candidate_app/deploy" "$(dirname "$environment_file")"
+touch "$active_app/deploy/docker-compose.production-pilot.yml"
+touch "$candidate_app/deploy/docker-compose.production-pilot.yml" "$environment_file"
+ln -s "$candidate_app" "$ACTIVE_LINK"
+old_api="sha256:$(printf 'a%.0s' {{1..64}})"
+old_worker="sha256:$(printf 'b%.0s' {{1..64}})"
+new_image="sha256:$(printf 'c%.0s' {{1..64}})"
+other_new="sha256:$(printf 'd%.0s' {{1..64}})"
+previous_api_image_id="$old_api"
+previous_worker_image_id="$old_worker"
+previous_api_image_ref=deploy-jiejing-saas
+previous_worker_image_ref=deploy-jiejing-worker
+CURRENT_API_ID="$new_image"
+CURRENT_WORKER_ID="$other_new"
+CURRENT_APP="$candidate_app"
+docker() {{
+  if [[ "${{1:-}} ${{2:-}}" == "image tag" ]]; then return 0; fi
+  if [[ "${{1:-}} ${{2:-}}" == "image inspect" ]]; then return 0; fi
+  [[ "${{1:-}}" == inspect ]] || return 2
+  local container="${{2:-}}" format="${{4:-}}" image ref
+  if [[ "$container" == deploy-jiejing-saas-1 ]]; then
+    image="$CURRENT_API_ID"; ref=deploy-jiejing-saas
+  else
+    image="$CURRENT_WORKER_ID"; ref=deploy-jiejing-worker
+  fi
+  case "$format" in
+    '{{{{.Image}}}}') printf '%s\n' "$image" ;;
+    '{{{{.Config.Image}}}}') printf '%s\n' "$ref" ;;
+    '{{{{.State.Status}}}}') printf '%s\n' running ;;
+    '{{{{if .State.Health}}}}{{{{.State.Health.Status}}}}{{{{else}}}}none{{{{end}}}}') printf '%s\n' healthy ;;
+    *config_files*) printf '%s\n' "$CURRENT_APP/deploy/docker-compose.production-pilot.yml" ;;
+    *working_dir*) printf '%s\n' "$CURRENT_APP/deploy" ;;
+    *environment_file*) printf '%s\n' "$environment_file" ;;
+    *) return 3 ;;
+  esac
+}}
+fake_previous_compose() {{
+  local service="${{@: -1}}"
+  case "$service" in
+    jiejing-saas) CURRENT_API_ID="$old_api" ;;
+    jiejing-worker) CURRENT_WORKER_ID="$old_worker" ;;
+  esac
+  CURRENT_APP="$active_app"
+}}
+previous_compose=(fake_previous_compose)
+wait_container_healthy() {{ return 0; }}
+wait_public_json() {{ return 0; }}
+
+set +e
+verify_candidate_runtime_image_coherence >/dev/null
+mismatch_rc=$?
+set -e
+[[ "$mismatch_rc" != "0" ]]
+CURRENT_WORKER_ID="$new_image"
+verify_candidate_runtime_image_coherence >"$TEST_ROOT/coherence.out"
+coherence_output="$(<"$TEST_ROOT/coherence.out")"
+[[ "$candidate_runtime_image_id" == "$new_image" ]]
+[[ "$coherence_output" == CANDIDATE_RUNTIME_IMAGE_COHERENCE=verified ]]
+rollback_application_release
+[[ "$(readlink -f -- "$ACTIVE_LINK")" == "$active_app" ]]
+[[ "$CURRENT_API_ID" == "$old_api" && "$CURRENT_WORKER_ID" == "$old_worker" ]]
+verify_previous_runtime_restored
+printf '%s\n' APPLICATION_ROLLBACK_FIXTURE_PASS
+"""
+        result = run_bash_fixture(fixture, temp, "application-rollback-runtime.sh")
+        if result.returncode != 0 or "APPLICATION_ROLLBACK_FIXTURE_PASS" not in result.stdout:
+            failures.append(
+                "application rollback runtime fixture failed rc="
+                + str(result.returncode)
+                + " stdout="
+                + result.stdout[-1000:]
+                + " stderr="
+                + result.stderr[-1000:]
+            )
+    return failures
+
+
 def extract_bash_functions(source: str, names: tuple[str, ...]) -> str:
     matches = list(re.finditer(r"(?m)^([a-zA-Z_][a-zA-Z0-9_]*)\(\) \{\n", source))
     by_name = {match.group(1): match for match in matches}
@@ -557,6 +847,8 @@ systemctl() {{
 }}
 release_maintenance_lock() {{ printf '%s\n' RELEASE_MAINTENANCE; }}
 release_deploy_lock() {{ printf '%s\n' RELEASE_DEPLOY; }}
+acquire_maintenance_lock_for_rollback() {{ maintenance_lock_held=1; printf '%s\n' ACQUIRE_ROLLBACK_MAINTENANCE; }}
+rollback_application_release() {{ printf '%s\n' APPLICATION_ROLLBACK; return 0; }}
 arm_unit_transaction_traps
 kill -TERM $$
 printf '%s\n' SHOULD_NOT_REACH
@@ -567,13 +859,15 @@ printf '%s\n' SHOULD_NOT_REACH
             failures.append(f"TERM fixture wrong rc:{result.returncode}")
         for marker in (
             "TIMER_INSTALL_ROLLED_BACK=1",
-            "APPLICATION_RELEASE_RETAINED=1",
+            "APPLICATION_RELEASE_RETAINED=0",
+            "JIEJING_PRODUCTION_ROLLBACK_APPLIED=1",
+            "APPLICATION_ROLLBACK",
             "RELEASE_MAINTENANCE",
             "RELEASE_DEPLOY",
         ):
             if marker not in combined:
                 failures.append(f"TERM fixture missing:{marker}")
-        if "JIEJING_PRODUCTION_ROLLBACK_APPLIED=1" in combined or "SHOULD_NOT_REACH" in combined:
+        if "SHOULD_NOT_REACH" in combined:
             failures.append("TERM fixture crossed the application rollback/success boundary")
         interrupt_root = temp / "interrupt"
         for name in ("wrapper", "service", "timer"):
@@ -589,18 +883,49 @@ printf '%s\n' SHOULD_NOT_REACH
             failures.append(f"EXIT fixture wrong rc:{result.returncode}")
         for marker in (
             "TIMER_INSTALL_ROLLED_BACK=1",
-            "APPLICATION_RELEASE_RETAINED=1",
+            "APPLICATION_RELEASE_RETAINED=0",
+            "JIEJING_PRODUCTION_ROLLBACK_APPLIED=1",
+            "APPLICATION_ROLLBACK",
             "RELEASE_MAINTENANCE",
             "RELEASE_DEPLOY",
         ):
             if marker not in combined:
                 failures.append(f"EXIT fixture missing:{marker}")
-        if "JIEJING_PRODUCTION_ROLLBACK_APPLIED=1" in combined:
-            failures.append("EXIT fixture crossed the application rollback boundary")
         exit_root = temp / "unexpected-exit"
         for name in ("wrapper", "service", "timer"):
             if (exit_root / name).exists():
                 failures.append(f"EXIT fixture left first-install target:{name}")
+
+        lock_failure = (
+            interrupt.replace(
+                f"{relative_temp}/interrupt", f"{relative_temp}/lock-failure"
+            )
+            .replace(
+                "arm_unit_transaction_traps\nkill -TERM $$",
+                "acquire_maintenance_lock_for_rollback() { echo ACQUIRE_ROLLBACK_MAINTENANCE_FAILED; return 1; }\n"
+                "restore_evidence_refresh_units() { echo UNIT_RESTORE_CALLED; return 0; }\n"
+                "restore_evidence_refresh_timer_activity() { echo TIMER_ACTIVITY_CALLED; return 0; }\n"
+                "rollback_application_release() { echo APPLICATION_ROLLBACK_CALLED; return 0; }\n"
+                "arm_unit_transaction_traps\nkill -TERM $$",
+            )
+        )
+        result = run_bash_fixture(lock_failure, temp, "lock-failure-fixture.sh")
+        combined = result.stdout + result.stderr
+        if result.returncode != 143:
+            failures.append(f"rollback lock-failure fixture wrong rc:{result.returncode}")
+        for forbidden_marker in (
+            "UNIT_RESTORE_CALLED",
+            "TIMER_ACTIVITY_CALLED",
+            "APPLICATION_ROLLBACK_CALLED",
+            "TIMER_INSTALL_ROLLED_BACK=1",
+            "JIEJING_PRODUCTION_ROLLBACK_APPLIED=1",
+        ):
+            if forbidden_marker in combined:
+                failures.append(
+                    f"rollback proceeded without maintenance lock:{forbidden_marker}"
+                )
+        if "JIEJING_PRODUCTION_ROLLBACK_INCOMPLETE=1" not in combined:
+            failures.append("rollback lock failure was not reported as incomplete")
     return failures
 
 
@@ -649,7 +974,7 @@ def main() -> int:
         "REFUSE_INVALID_PRODUCTION_DRY_RUN",
         "REFUSE_PATCH_DIR_OUTSIDE_TMP",
         "REFUSE_ACTIVE_RELEASE_OUTSIDE_ROOT",
-        "REFUSE_PRIVATE_DIR_OUTSIDE_ROOT",
+        "REFUSE_PRIVATE_MANIFEST_CONTRACT=1",
         "com.docker.compose.project.environment_file",
         "JIEJING_PRODUCTION_PRIVATE_DIR",
         "docker compose",
@@ -675,7 +1000,6 @@ def main() -> int:
         "JIEJING_PRODUCTION_DEPLOY_FAILED_STAGE=",
         "build_candidate_images_with_retry",
         "JIEJING_PRODUCTION_BUILD_RETRY=",
-        "ln -sfn",
         "trap rollback_on_error ERR",
         "chmod -R go-w",
         "JIEJING_PRODUCTION_RELEASE_MANIFEST.txt",
@@ -692,7 +1016,7 @@ def main() -> int:
         "TIMER_INSTALL_APPLIED=1",
         "TIMER_FIRST_ONESHOT_VERIFIED=1",
         "TIMER_INSTALL_ROLLED_BACK=1",
-        "APPLICATION_RELEASE_RETAINED=1",
+        "APPLICATION_RELEASE_RETAINED=0",
         "InvocationID",
         "ExecMainStatus",
         "JIEJING_PRODUCTION_EVIDENCE_REFRESH_STATUS=success",
@@ -720,6 +1044,15 @@ def main() -> int:
         "arm_dry_run_cleanup_traps",
         "REFUSE_DRY_RUN_CANDIDATE_UNTRUSTED=1",
         "CANDIDATE_RELEASE_PERSISTED=0",
+        "PRIVATE_ENV_NORMALIZATION_REQUIRED=",
+        "PRIVATE_ENV_NORMALIZATION_PLANNED=",
+        "PRIVATE_ENV_NORMALIZATION_APPLIED=0",
+        "normalize_private_env_permissions",
+        "capture_previous_runtime_images",
+        "verify_candidate_runtime_image_coherence",
+        "atomic_replace_active_link",
+        "rollback_application_release",
+        "CANDIDATE_RUNTIME_IMAGE_COHERENCE=verified",
     ]
     required_compose = [
         "${JIEJING_PRODUCTION_PRIVATE_DIR:-../../private}/jiejing-saas.production.env",
@@ -753,7 +1086,7 @@ def main() -> int:
         "/run/lock/jiejing-production-maintenance.lock",
         "`dry_run` 不获取任何锁",
         "TIMER_INSTALL_ROLLED_BACK=1",
-        "APPLICATION_RELEASE_RETAINED=1",
+        "APPLICATION_RELEASE_RETAINED=0",
         "InvocationID",
         "NextElapseUSecRealtime",
         "DropInPaths",
@@ -782,6 +1115,16 @@ def main() -> int:
     bundle_failures = validate_required_bundle_files()
     if bundle_failures:
         return fail("; ".join(bundle_failures))
+    stdout_contract_failures = validate_remote_stdout_contract()
+    if stdout_contract_failures:
+        return fail("; ".join(stdout_contract_failures))
+    private_env_failures = validate_private_env_runtime_fixture(apply)
+    if private_env_failures:
+        return fail("; ".join(private_env_failures))
+
+    application_rollback_failures = validate_application_rollback_runtime_fixture(apply)
+    if application_rollback_failures:
+        return fail("; ".join(application_rollback_failures))
 
     deploy_module = load_deploy_module()
     timeout_budget = getattr(deploy_module, "PRODUCTION_REMOTE_APPLY_TIMEOUT_SECONDS", 0)
@@ -850,25 +1193,54 @@ def main() -> int:
         return fail("dry-run must exit before container or active-link mutation")
     if "systemctl" in apply[:dry_run_end] or "journalctl" in apply[:dry_run_end]:
         return fail("dry-run preflight invokes systemd instead of remaining read-only")
+    private_resolve = apply.index(
+        'resolve_manifest_private_dir "$previous_release" "$environment_file"',
+        docker_live_read,
+    )
+    private_assess = apply.index("assess_private_env_normalization", private_resolve)
+    dry_run_block = apply[dry_run_exit:dry_run_end]
+    if 'PRIVATE_ENV_NORMALIZATION_APPLIED=0' not in apply[private_assess:dry_run_end]:
+        return fail("dry-run does not expose private env normalization state")
+
+    normalize_function = apply[
+        apply.index("normalize_private_env_permissions()") : apply.index(
+            "require_flock()"
+        )
+    ]
+    for marker in (
+        "O_NOFOLLOW",
+        "os.fstat",
+        "os.fchown",
+        "os.fchmod",
+        "st_nlink != 1",
+        "PRIVATE_ENV_NORMALIZATION_ROLLED_BACK=1",
+    ):
+        if marker not in normalize_function:
+            return fail(f"private env normalization is not fd-safe:{marker}")
+    normalize_call = apply.index("normalize_private_env_permissions", dry_run_end)
+    if not dry_run_end < normalize_call < build_stage:
+        return fail("apply must normalize exact private env targets before image build and active switch")
 
     unit_install = apply.index('current_stage="install_evidence_refresh_units"')
     active_switch = apply.index('current_stage="activate_release"')
-    disable_app_rollback = apply.index("trap - ERR", active_switch)
+    arm_full_rollback = apply.index("arm_unit_transaction_traps", active_switch)
     install_call = apply.index("install_evidence_refresh_units", unit_install)
     release_maintenance = apply.index("release_maintenance_lock", install_call)
     start_oneshot = apply.index("verify_first_evidence_refresh_oneshot", release_maintenance)
     verify_invocation = apply.index("TIMER_FIRST_ONESHOT_VERIFIED=1", start_oneshot)
     start_timer = apply.index("start_and_verify_evidence_refresh_timer", verify_invocation)
-    release_deploy = apply.index("release_deploy_lock", start_timer)
+    disable_app_rollback = apply.index("trap - ERR", start_timer)
+    release_deploy = apply.index("release_deploy_lock", disable_app_rollback)
     if not (
         active_switch
-        < disable_app_rollback
+        < arm_full_rollback
         < unit_install
         < install_call
         < release_maintenance
         < start_oneshot
         < verify_invocation
         < start_timer
+        < disable_app_rollback
         < release_deploy
     ):
         return fail("unit transaction or lock release order is unsafe")
@@ -904,7 +1276,6 @@ def main() -> int:
     if "grep -Fxc 'SECRET_EXPOSED=false'" not in oneshot_function:
         return fail("first oneshot does not require the value-free safety marker exactly once")
 
-    dry_run_block = apply[dry_run_exit:dry_run_end]
     forbidden_dry_run = ["systemctl", "journalctl", "flock", "evidence-auto-refresh.sh"]
     present_dry_run = [marker for marker in forbidden_dry_run if marker in dry_run_block]
     if present_dry_run:
@@ -942,8 +1313,9 @@ def main() -> int:
     if not recursion_guard_end < ignore_secondary_signals < set_failure_guard:
         return fail("unit rollback must ignore secondary signals immediately after recursion guard")
     restore_files = failed_transaction.index("restore_evidence_refresh_units")
+    rollback_application = failed_transaction.index("rollback_application_release", restore_files)
     release_failed_maintenance = failed_transaction.index(
-        "release_maintenance_lock", restore_files
+        "release_maintenance_lock", rollback_application
     )
     restore_activity = failed_transaction.index(
         "restore_evidence_refresh_timer_activity", release_failed_maintenance
@@ -951,6 +1323,7 @@ def main() -> int:
     release_failed_deploy = failed_transaction.index("release_deploy_lock", restore_activity)
     if not (
         restore_files
+        < rollback_application
         < release_failed_maintenance
         < restore_activity
         < release_failed_deploy
@@ -982,8 +1355,43 @@ def main() -> int:
 
     build_call = apply.index("build_candidate_images_with_retry", build_stage)
     mutation_start = apply.index("mutation_started=1", build_stage)
-    if build_call > mutation_start:
-        return fail("candidate images must finish building before rollback-requiring service mutation starts")
+    if mutation_start > build_call:
+        return fail("candidate build must retain old-image rollback eligibility")
+
+    capture_stage = apply.index('current_stage="capture_previous_runtime_images"', dry_run_end)
+    capture_images = apply.index("capture_previous_runtime_images", capture_stage + 1)
+    start_candidate_api = apply.index('current_stage="start_candidate_api"', build_stage)
+    start_candidate_worker = apply.index('current_stage="start_candidate_worker"', start_candidate_api)
+    verify_images = apply.index("verify_candidate_runtime_image_coherence", start_candidate_worker)
+    if not normalize_call < capture_images < build_call < start_candidate_api < start_candidate_worker < verify_images < active_switch:
+        return fail("runtime image snapshot/coherence ordering is unsafe")
+    atomic_link_function = apply[
+        apply.index("atomic_replace_active_link()") : apply.index(
+            "rollback_application_release()"
+        )
+    ]
+    for marker in ('readlink -f', 'ln -s --', 'mv -Tf --', 'expected_current'):
+        if marker not in atomic_link_function:
+            return fail(f"active link replacement is not atomic/verified:{marker}")
+    if 'ln -sfnT "$candidate_app" "$ACTIVE_LINK"' in apply:
+        return fail("candidate activation still uses a non-transactional symlink replacement")
+    app_rollback = apply[
+        apply.index("rollback_application_release()") : apply.index(
+            "rollback_on_error()"
+        )
+    ]
+    for marker in (
+        "previous_api_image_id",
+        "previous_worker_image_id",
+        "docker image tag",
+        "verify_previous_runtime_restored",
+        'atomic_replace_active_link "$active_app" "$candidate_app"',
+        'wait_public_json "/health"',
+        'wait_public_json "/health/deep"',
+        'wait_public_json "/readiness/product-saas"',
+    ):
+        if marker not in app_rollback:
+            return fail(f"application rollback does not restore exact old runtime:{marker}")
 
     forbidden = [
         "StrictHostKeyChecking=no",
