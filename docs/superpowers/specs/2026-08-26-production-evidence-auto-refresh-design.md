@@ -35,8 +35,7 @@
 
 timer 使用：
 
-- `OnBootSec=15min`；
-- `OnUnitActiveSec=12h`；
+- `OnCalendar=*-*-* 00,12:17:00`，每天两次、间隔 12 小时；
 - 小范围随机延迟，避免与部署或云端整点任务重叠；
 - persistent 模式，主机错过执行窗口后会补跑；
 - 单实例锁，禁止两轮重叠。
