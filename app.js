@@ -47069,6 +47069,7 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       intro: "管理捷境登录账号、eBay 店铺连接和账号健康。",
       panels: [
         renderSaasMerchantOnboardingPanel(),
+        renderSaasAccountHealthPanel(),
         renderSaasSettingsAccountAccessPanel(),
         renderSaasBrowserSessionsPanel(),
         renderSaasSettingsPlatformPanel(ctx),

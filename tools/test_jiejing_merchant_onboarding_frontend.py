@@ -109,6 +109,12 @@ def main() -> int:
     if "innerHTML = merchantOnboarding" in app_text:
         return fail("backend onboarding values must not be inserted as unescaped HTML")
 
+    account_tab_start = app_text.index('id: "account",', app_text.index("function saasSettingsTabDefinitions"))
+    account_tab_end = app_text.index('id: "model",', account_tab_start)
+    account_tab = app_text[account_tab_start:account_tab_end]
+    if "renderSaasAccountHealthPanel()" not in account_tab:
+        return fail("account settings must render the detailed account-health incident and recovery guidance")
+
     print("PASS jiejing_merchant_onboarding_frontend")
     return 0
 
