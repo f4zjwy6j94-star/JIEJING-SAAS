@@ -210,6 +210,18 @@ def main() -> None:
     assert "existing_media_reported_missing" in contradictory_quality["blocked_by"], contradictory_quality
     assert "existing_unpublished_offer_reported_missing" in contradictory_quality["blocked_by"], contradictory_quality
 
+    restored_media_contradiction = (
+        "当前素材：未生成新的捷境商品图。现有 AssetManifest 中不含可发布的商品主图。"
+    )
+    restored_media_quality = validate_ai_ceo_answer_quality(
+        message=second_pass_message,
+        route="ebay_workflow",
+        answer=restored_media_contradiction,
+        context=second_pass_context,
+    )
+    assert restored_media_quality["accepted"] is False, restored_media_quality
+    assert "existing_media_reported_missing" in restored_media_quality["blocked_by"], restored_media_quality
+
     accurate_second_pass = (
         "第二遍检查已读取当前项目：SKU JJ-INCENSE-JC2023041300002-01 已存在；"
         "AssetManifest 有 1 个可用于 Listing 草稿的已审核素材；"

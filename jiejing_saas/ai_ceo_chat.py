@@ -3884,13 +3884,13 @@ def _active_listing_answer_contradictions(*, answer: str, context: dict[str, Any
     eligible_count = _safe_int(media.get("listing_eligible_asset_count") or 0)
     media_claims = list(
         re.finditer(
-            r"(?:素材|图片|asset\s*manifest)[^。；;\n]{0,40}(?:尚未生成|没有生成|未生成|不存在|没有素材|为\s*0)",
+            r"(?:素材|图片|asset\s*manifest)[^。；;\n]{0,50}(?:尚未生成|没有生成|未生成|不存在|没有素材|为\s*0|不含[^。；;\n]{0,12}可(?:发布|用)|无可(?:发布|用))",
             text,
             flags=re.IGNORECASE,
         )
     )
     if max(manifest_count, eligible_count) > 0 and any(
-        not re.search(r"(?:不是|并非|不属于|不再是)[^。；;\n]{0,12}(?:未生成|不存在|没有素材|为\s*0)", match.group(0))
+        not re.search(r"(?:不是|并非|不属于|不再是)[^。；;\n]{0,12}(?:未生成|不存在|没有素材|为\s*0|不含|无可)", match.group(0))
         for match in media_claims
     ):
         blockers.append("existing_media_reported_missing")

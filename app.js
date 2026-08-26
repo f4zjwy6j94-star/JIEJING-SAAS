@@ -25458,6 +25458,23 @@ function saasAiCeoActiveListingContext() {
   const listingAssets = saasMediaManifestAssetsForListing(mediaJob).filter((asset) =>
     ["approved_for_listing_draft", "merchant_review_confirmed"].includes(String(asset?.listing_use_status || asset?.review_status || "")),
   );
+  const mediaWriteback = saasListingMediaWritebackForDraft(draft);
+  const writebackAssetCount = Math.max(
+    0,
+    Number(mediaWriteback?.asset_count || 0) || 0,
+    Array.isArray(mediaWriteback?.assets) ? mediaWriteback.assets.length : 0,
+    Array.isArray(mediaWriteback?.asset_urls) ? mediaWriteback.asset_urls.length : 0,
+    Array.isArray(mediaWriteback?.image_urls) ? mediaWriteback.image_urls.length : 0,
+  );
+  const writebackListingReady = Boolean(mediaWriteback) && saasListingMediaWritebackRightsReady(draft);
+  const writebackEligibleAssetCount = writebackListingReady ? writebackAssetCount : 0;
+  const mediaReviewStatuses = [
+    ...manifestCards.map((card) => card?.reviewStatus || ""),
+    mediaWriteback?.status || "",
+    mediaWriteback?.review_status || "",
+    mediaWriteback?.rights_status || "",
+    mediaWriteback?.listing_use_status || "",
+  ];
   const receipt = saasCurrentUnpublishedDraftReceipt(draft);
   const health = state.saasAccountHealth && typeof state.saasAccountHealth === "object" ? state.saasAccountHealth : {};
   return {
@@ -25477,10 +25494,10 @@ function saasAiCeoActiveListingContext() {
       missing_fact_keys: missingFactKeys,
     },
     media: {
-      media_job_id: String(mediaJob?.media_job_id || "").slice(0, 120),
-      asset_manifest_count: manifestCards.length,
-      listing_eligible_asset_count: listingAssets.length,
-      review_statuses: [...new Set(manifestCards.map((card) => publicRuntimeText(card?.reviewStatus || "").slice(0, 80)).filter(Boolean))].slice(0, 8),
+      media_job_id: String(mediaJob?.media_job_id || mediaWriteback?.media_job_id || "").slice(0, 120),
+      asset_manifest_count: Math.max(manifestCards.length, writebackAssetCount),
+      listing_eligible_asset_count: Math.max(listingAssets.length, writebackEligibleAssetCount),
+      review_statuses: [...new Set(mediaReviewStatuses.map((status) => publicRuntimeText(status).slice(0, 80)).filter(Boolean))].slice(0, 8),
     },
     ebay_draft: receipt ? {
       offer_id: String(receipt.offerId || "").slice(0, 120),
