@@ -157,7 +157,7 @@ if (controlledReceipt.executionId !== "exec_receipt_test") throw new Error("cont
         if marker not in app_js:
             raise AssertionError(f"Listing receipt does not expose the controlled publish handoff: {marker}")
 
-    display_start = app_js.index("function saasConfirmationsForDisplay")
+    display_start = app_js.index("function saasConfirmationMatchesActiveListingContext")
     display_end = app_js.index("function saasConfirmationCanonicalKey", display_start)
     display_source = app_js[display_start:display_end]
     display_script = f"""
@@ -168,6 +168,10 @@ globalThis.state = {{
 }};
 function saasLatestProductWorkflowTask() {{ return {{ task_id: "task-old-workflow" }}; }}
 function activeSaasStore() {{ return {{ store_id: "store-current" }}; }}
+function saasCurrentListingProjectIdentity() {{ return {{ key: "project-incense", product: "禅意佛手托莲花倒流香炉", source_report_id: "report-incense", candidate_id: "candidate-incense" }}; }}
+function saasListingDraftAuthoritativeSku() {{ return "JJ-INCENSE-JC2023041300002-01"; }}
+function saasCurrentUnpublishedDraftReceipt() {{ return {{ offerId: "245675556011", sku: "JJ-INCENSE-JC2023041300002-01" }}; }}
+function saasNormalizeListingProjectIdentity(value) {{ return value && value.key ? {{ key: value.key, source_report_id: value.source_report_id || "", candidate_id: value.candidate_id || "" }} : null; }}
 function dedupeSaasConfirmations(cards) {{ return [...cards]; }}
 function saasTimestampMillis(value) {{ return Date.parse(value || 0) || 0; }}
 function isSaasExactReadOnlyOAuthConfirmation() {{ return false; }}
@@ -210,7 +214,7 @@ const cards = [
     status: "pending",
     action_type: "publish_listing",
     created_at: "2026-08-25T20:31:31Z",
-    item: {{ source: "merchant_existing_ebay_draft_publish_intake", controlled_existing_draft_publish: true }},
+    item: {{ source: "merchant_existing_ebay_draft_publish_intake", controlled_existing_draft_publish: true, listing_project_identity: {{ key: "project-incense", source_report_id: "report-incense", candidate_id: "candidate-incense" }}, existing_ebay_draft: {{ offer_id: "245675556011", sku: "JJ-INCENSE-JC2023041300002-01" }} }},
   }},
   {{
     confirmation_id: "confirm-controlled-reconcile",
@@ -220,7 +224,7 @@ const cards = [
     status: "external_execution_processing_manual_reconcile",
     action_type: "publish_listing",
     created_at: "2026-08-26T01:09:07Z",
-    item: {{ source: "merchant_existing_ebay_draft_publish_intake", controlled_existing_draft_publish: true }},
+    item: {{ source: "merchant_existing_ebay_draft_publish_intake", controlled_existing_draft_publish: true, listing_project_identity: {{ key: "project-incense", source_report_id: "report-incense", candidate_id: "candidate-incense" }}, existing_ebay_draft: {{ offer_id: "245675556011", sku: "JJ-INCENSE-JC2023041300002-01" }} }},
   }},
   {{
     confirmation_id: "confirm-old-generic",
@@ -243,6 +247,9 @@ if (visible.filter((card) => card.confirmation_id === "confirm-controlled").leng
 }}
 if (visible.filter((card) => card.confirmation_id === "confirm-controlled-reconcile").length !== 1) {{
   throw new Error("manual-reconcile controlled publish must stay visible exactly once");
+}}
+if (visible.some((card) => card.confirmation_id === "confirm-old-generic")) {{
+  throw new Error("old unbound product confirmation leaked into the active Listing project");
 }}
 """
     display_result = subprocess.run(

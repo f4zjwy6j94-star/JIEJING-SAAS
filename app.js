@@ -20584,11 +20584,44 @@ function saasReportsForDisplay(reports = []) {
   return [...latest, ...reports.filter((record) => !seen.has(record.report_id))];
 }
 
+function saasConfirmationMatchesActiveListingContext(card = {}) {
+  const activeIdentity = saasCurrentListingProjectIdentity();
+  const activeSku = String(saasListingDraftAuthoritativeSku() || "").trim();
+  const activeReceipt = saasCurrentUnpublishedDraftReceipt();
+  const activeOfferId = String(activeReceipt?.offerId || "").trim();
+  if (!activeIdentity?.key && !activeSku && !activeOfferId) return true;
+  const item = card?.item && typeof card.item === "object" ? card.item : {};
+  const publishPayload = item.publish_payload && typeof item.publish_payload === "object" ? item.publish_payload : {};
+  const listing = publishPayload.listing && typeof publishPayload.listing === "object" ? publishPayload.listing : {};
+  const existingDraft = item.existing_ebay_draft && typeof item.existing_ebay_draft === "object" ? item.existing_ebay_draft : {};
+  const cardIdentity = saasNormalizeListingProjectIdentity(
+    item.listing_project_identity || listing.listing_project_identity || card.listing_project_identity,
+  );
+  const identityMatches = Boolean(
+    activeIdentity?.key &&
+    cardIdentity &&
+    cardIdentity.key === activeIdentity.key &&
+    cardIdentity.source_report_id === String(activeIdentity.source_report_id || activeIdentity.source_id || "") &&
+    cardIdentity.candidate_id === String(activeIdentity.candidate_id || ""),
+  );
+  if (identityMatches) return true;
+  const cardSkus = [listing.sku, existingDraft.sku, item.sku, card.sku]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  const cardOfferIds = [existingDraft.offer_id, item.offer_id, card.offer_id]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  if (activeOfferId && cardOfferIds.includes(activeOfferId)) return true;
+  return Boolean(activeSku && cardSkus.includes(activeSku));
+}
+
 function saasConfirmationsForDisplay(confirmations = []) {
   confirmations = Array.isArray(confirmations) ? confirmations : [];
   const latestTask = saasLatestProductWorkflowTask();
   const latest = latestTask?.task_id ? confirmations.filter((card) => card.task_id === latestTask.task_id) : confirmations;
-  const ordinarySource = latest.length ? latest : confirmations;
+  const ordinarySource = (latest.length ? latest : confirmations).filter((card) =>
+    saasConfirmationMatchesActiveListingContext(card),
+  );
   const currentCompanyId = String(state.saasCompany?.company_id || state.saasIdentity?.company_id || "").trim();
   const currentStoreId = String(activeSaasStore()?.store_id || "").trim();
   const confirmationIdCounts = (confirmations || []).reduce((counts, card) => {
@@ -20635,7 +20668,8 @@ function saasConfirmationsForDisplay(confirmations = []) {
       (card) =>
         ["pending", "approved"].includes(String(card?.status || "")) &&
         isUniqueConfirmation(card) &&
-        isSaasExactUnpublishedDraftSaveConfirmation(card, currentCompanyId, currentStoreId),
+        isSaasExactUnpublishedDraftSaveConfirmation(card, currentCompanyId, currentStoreId) &&
+        saasConfirmationMatchesActiveListingContext(card),
     )
     .sort((a, b) => saasTimestampMillis(b.created_at || b.updated_at) - saasTimestampMillis(a.created_at || a.updated_at));
   const currentStoreInventoryLocations = confirmations
@@ -20651,14 +20685,16 @@ function saasConfirmationsForDisplay(confirmations = []) {
       (card) =>
         ["pending", "approved"].includes(String(card?.status || "")) &&
         isUniqueConfirmation(card) &&
-        isSaasUniqueCurrentControlledExistingDraftPublishConfirmation(card, confirmations),
+        isSaasUniqueCurrentControlledExistingDraftPublishConfirmation(card, confirmations) &&
+        saasConfirmationMatchesActiveListingContext(card),
     )
     .sort((a, b) => saasTimestampMillis(b.created_at || b.updated_at) - saasTimestampMillis(a.created_at || a.updated_at));
   const currentStoreControlledPublishRecoveries = confirmations
     .filter(
       (card) =>
         isUniqueConfirmation(card) &&
-        isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(card, confirmations),
+        isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(card, confirmations) &&
+        saasConfirmationMatchesActiveListingContext(card),
     )
     .sort((a, b) => saasTimestampMillis(b.created_at || b.updated_at) - saasTimestampMillis(a.created_at || a.updated_at));
   const protectedIds = new Set(
@@ -22557,9 +22593,9 @@ function saasLatestPublishConfirmation(confirmationId = "") {
   if (confirmationId) return confirmations.find((item) => item.confirmation_id === confirmationId) || null;
   const publishConfirmations = confirmations.filter((item) => item.action_type === "publish_listing");
   const currentProject = saasCurrentListingProjectIdentity();
-  const requireCurrentProject = state.view === "product" && Boolean(currentProject.key);
+  const requireCurrentProject = Boolean(currentProject.key);
   if (!requireCurrentProject) return publishConfirmations[0] || null;
-  return publishConfirmations.find((item) => saasPublishConfirmationMatchesListingProject(item, currentProject)) || null;
+  return publishConfirmations.find((item) => saasConfirmationMatchesActiveListingContext(item)) || null;
 }
 
 function saasPublishConfirmationMatchesListingProject(card = {}, currentProject = saasCurrentListingProjectIdentity()) {
@@ -22581,7 +22617,7 @@ function saasCurrentPublishConfirmationEvidence() {
     : null;
   if (!evidence) return null;
   const currentProject = saasCurrentListingProjectIdentity();
-  if (state.view !== "product" || !currentProject.key) return evidence;
+  if (!currentProject.key) return evidence;
   return evidence.listing_project_key === currentProject.key ? evidence : null;
 }
 
@@ -23326,9 +23362,10 @@ function renderSaasConfirmPanel() {
   const approved = cards.filter((card) => card.status === "approved");
   const blocked = cards.filter((card) => ["rejected", "failed", "cancelled"].includes(card.status));
   const visible = saasDecisionCenterVisibleConfirmations(cards, allCards);
-  const allPendingCount = allCards.filter((card) => card.status === "pending").length;
+  const allPendingCount = cards.filter((card) => card.status === "pending").length;
   const latestTask = saasLatestProductWorkflowTask();
-  const productLabel = saasWorkflowProductLabel(latestTask) || saasModelValueProductLabel();
+  const currentProject = saasCurrentListingProjectIdentity();
+  const productLabel = currentProject.product || saasListingDraftAuthoritativeSku() || saasWorkflowProductLabel(latestTask) || saasModelValueProductLabel();
   const realWritesEnabled = state.saasEbayWriteAdapter?.real_platform_writes_enabled === true;
   panel.innerHTML = `
     <section class="saas-readable-page-head saas-confirm-readable-head" aria-label="决策中心说明">
@@ -25383,6 +25420,85 @@ function saasAiCeoPendingSourceAssetIds(attachments = state.saasAiCeoPendingAtta
     .slice(0, 8);
 }
 
+function saasAiCeoActiveListingContext() {
+  const draft = state.saasListingComposerDraft && typeof state.saasListingComposerDraft === "object"
+    ? state.saasListingComposerDraft
+    : {};
+  const identity = saasCurrentListingProjectIdentity(draft);
+  if (!identity?.key) return null;
+  const packet = draft.merchant_product_fact_packet && typeof draft.merchant_product_fact_packet === "object"
+    ? draft.merchant_product_fact_packet
+    : {};
+  const sourceFacts = packet.source_confirmed_facts && typeof packet.source_confirmed_facts === "object" ? packet.source_confirmed_facts : {};
+  const merchantFacts = packet.merchant_confirmed_facts && typeof packet.merchant_confirmed_facts === "object" ? packet.merchant_confirmed_facts : {};
+  const derivedFacts = packet.derived_listing_suggestions && typeof packet.derived_listing_suggestions === "object" ? packet.derived_listing_suggestions : {};
+  const factAllowlist = [
+    "product_name", "sku", "supplier_item_number", "material", "brand", "mpn", "condition",
+    "net_weight_g", "package_weight_g", "package_length_cm", "package_width_cm", "package_height_cm",
+    "length_cm", "width_cm", "height_cm", "unit_cost", "selling_price", "quantity",
+    "handling_time_days", "country_of_origin", "item_location", "packaging",
+  ];
+  const knownFacts = {};
+  factAllowlist.forEach((key) => {
+    const value = merchantFacts[key] ?? sourceFacts[key] ?? derivedFacts[key];
+    if (typeof value === "boolean") {
+      knownFacts[key] = value;
+      return;
+    }
+    const text = publicRuntimeText(value).trim().slice(0, 240);
+    if (text) knownFacts[key] = text;
+  });
+  const missingFactKeys = [...new Set((Array.isArray(packet.unknown_facts) ? packet.unknown_facts : [])
+    .map((key) => String(key || "").trim())
+    .filter((key) => factAllowlist.includes(key)))]
+    .slice(0, 24);
+  missingFactKeys.forEach((key) => delete knownFacts[key]);
+  const mediaJob = latestSaasMediaAssetJobWithManifest({ requireCurrentProject: true });
+  const manifestCards = saasMediaManifestAssetCards(mediaJob);
+  const listingAssets = saasMediaManifestAssetsForListing(mediaJob).filter((asset) =>
+    ["approved_for_listing_draft", "merchant_review_confirmed"].includes(String(asset?.listing_use_status || asset?.review_status || "")),
+  );
+  const receipt = saasCurrentUnpublishedDraftReceipt(draft);
+  const health = state.saasAccountHealth && typeof state.saasAccountHealth === "object" ? state.saasAccountHealth : {};
+  return {
+    contract_version: "active_listing_context_v1",
+    source: "authenticated_current_listing_snapshot",
+    listing_project_identity: {
+      key: String(identity.key || "").slice(0, 160),
+      source_report_id: String(identity.source_report_id || identity.source_id || "").slice(0, 160),
+      candidate_id: String(identity.candidate_id || "").slice(0, 120),
+    },
+    product_name: publicRuntimeText(identity.product || draft.product || draft.title || draft.fields?.title || "").slice(0, 120),
+    listing: {
+      sku: saasListingDraftAuthoritativeSku(draft).slice(0, 120),
+      title: publicRuntimeText(draft.title || draft.fields?.title || "").slice(0, 180),
+      known_facts: knownFacts,
+      known_fact_keys: Object.keys(knownFacts),
+      missing_fact_keys: missingFactKeys,
+    },
+    media: {
+      media_job_id: String(mediaJob?.media_job_id || "").slice(0, 120),
+      asset_manifest_count: manifestCards.length,
+      listing_eligible_asset_count: listingAssets.length,
+      review_statuses: [...new Set(manifestCards.map((card) => publicRuntimeText(card?.reviewStatus || "").slice(0, 80)).filter(Boolean))].slice(0, 8),
+    },
+    ebay_draft: receipt ? {
+      offer_id: String(receipt.offerId || "").slice(0, 120),
+      sku: String(receipt.sku || "").slice(0, 120),
+      offer_status: String(receipt.offerStatus || receipt.status || "UNPUBLISHED").toUpperCase().slice(0, 40),
+      execution_id: String(receipt.executionId || "").slice(0, 160),
+      confirmation_id: String(receipt.confirmationId || "").slice(0, 160),
+      public_listing_created: false,
+    } : {},
+    account_health: {
+      status: publicRuntimeText(health.status || "unknown").toLowerCase().slice(0, 40),
+      severity: publicRuntimeText(health.severity || "").toLowerCase().slice(0, 20),
+      onboarding_stage: publicRuntimeText(health.onboarding_stage || "").toLowerCase().slice(0, 80),
+    },
+    secret_exposed: false,
+  };
+}
+
 async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = {}, sourceAssetIds = []) {
   const current = normalizeSaasCeoCommand(command);
   const safeSourceAssetIds = (Array.isArray(sourceAssetIds) ? sourceAssetIds : [])
@@ -25428,6 +25544,7 @@ async function requestSaasAiCeoChat(command = state.saasLastCeoCommand, hooks = 
           client_now: new Date().toISOString(),
           client_timezone: Intl?.DateTimeFormat?.().resolvedOptions?.().timeZone || "",
           source_asset_ids: safeSourceAssetIds,
+          active_listing_context: typeof saasAiCeoActiveListingContext === "function" ? saasAiCeoActiveListingContext() : null,
           real_platform_writes_enabled: isSaasRealPlatformWritesEnabled(),
           ...supplierFactPayload,
         }),

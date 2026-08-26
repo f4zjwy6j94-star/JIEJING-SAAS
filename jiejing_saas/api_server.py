@@ -7987,6 +7987,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                             if product_vision_fact_packet
                             else None
                         ),
+                        active_listing_context=body.get("active_listing_context"),
                         model_resolution={
                             key: value
                             for key, value in model_secret_resolution.items()

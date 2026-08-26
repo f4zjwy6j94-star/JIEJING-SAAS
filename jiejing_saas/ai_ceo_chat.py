@@ -314,7 +314,12 @@ def _ai_ceo_turn_entities(message: str) -> list[str]:
     for markers, symbol in aliases:
         if any(marker in lowered for marker in markers):
             entities.append(symbol)
-    for token in re.findall(r"(?<![A-Za-z0-9])\$?([A-Z]{1,5})(?![A-Za-z0-9])", safe_message):
+    for match in re.finditer(r"(?<![A-Za-z0-9])\$?([A-Z]{1,5})(?![A-Za-z0-9])", safe_message):
+        token = match.group(1)
+        suffix = safe_message[match.end() : match.end() + 1]
+        prefix = safe_message[max(0, match.start() - 1) : match.start()]
+        if suffix in {"-", "_"} or prefix in {"-", "_"}:
+            continue
         symbol = token.upper()
         if symbol not in _AI_CEO_NON_TICKER_TOKENS and symbol not in entities:
             entities.append(symbol)
@@ -365,6 +370,98 @@ def _public_ai_ceo_turn_plan(plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def normalize_ai_ceo_active_listing_context(value: Any) -> dict[str, Any]:
+    """Allowlist the authenticated browser's current, already-loaded Listing snapshot."""
+
+    raw = value if isinstance(value, dict) else {}
+    if raw.get("contract_version") != "active_listing_context_v1":
+        return {}
+
+    def clean(value: Any, *, limit: int, identifier: bool = False) -> str:
+        text = _safe_text(value, limit=limit)
+        if (
+            not text
+            or "[redacted]" in text
+            or "[model_key_redacted]" in text
+            or (identifier and not re.fullmatch(r"[A-Za-z0-9._:-]+", text))
+        ):
+            return ""
+        return text
+
+    raw_identity = raw.get("listing_project_identity") if isinstance(raw.get("listing_project_identity"), dict) else {}
+    identity = {
+        "key": clean(raw_identity.get("key"), limit=160, identifier=True),
+        "source_report_id": clean(raw_identity.get("source_report_id"), limit=160, identifier=True),
+        "candidate_id": clean(raw_identity.get("candidate_id"), limit=120, identifier=True),
+    }
+    if not identity["key"]:
+        return {}
+    fact_allowlist = {
+        "product_name", "sku", "supplier_item_number", "material", "brand", "mpn", "condition",
+        "net_weight_g", "package_weight_g", "package_length_cm", "package_width_cm", "package_height_cm",
+        "length_cm", "width_cm", "height_cm", "unit_cost", "selling_price", "quantity",
+        "handling_time_days", "country_of_origin", "item_location", "packaging",
+    }
+    raw_listing = raw.get("listing") if isinstance(raw.get("listing"), dict) else {}
+    raw_known = raw_listing.get("known_facts") if isinstance(raw_listing.get("known_facts"), dict) else {}
+    known_facts = {
+        key: cleaned
+        for key, raw_value in raw_known.items()
+        if key in fact_allowlist and (cleaned := clean(raw_value, limit=240))
+    }
+    missing_fact_keys = [
+        key for key in raw_listing.get("missing_fact_keys", [])[:24]
+        if isinstance(key, str) and key in fact_allowlist
+    ] if isinstance(raw_listing.get("missing_fact_keys"), list) else []
+    for key in missing_fact_keys:
+        known_facts.pop(key, None)
+    raw_media = raw.get("media") if isinstance(raw.get("media"), dict) else {}
+    review_statuses = [
+        cleaned for item in raw_media.get("review_statuses", [])[:8]
+        if (cleaned := clean(item, limit=80, identifier=True))
+    ] if isinstance(raw_media.get("review_statuses"), list) else []
+    raw_draft = raw.get("ebay_draft") if isinstance(raw.get("ebay_draft"), dict) else {}
+    offer_status = clean(raw_draft.get("offer_status"), limit=40, identifier=True).upper()
+    offer_id = clean(raw_draft.get("offer_id"), limit=120, identifier=True) if offer_status == "UNPUBLISHED" else ""
+    raw_health = raw.get("account_health") if isinstance(raw.get("account_health"), dict) else {}
+    status = clean(raw_health.get("status"), limit=40, identifier=True).lower()
+    severity = clean(raw_health.get("severity"), limit=20, identifier=True).lower()
+    onboarding_stage = clean(raw_health.get("onboarding_stage"), limit=80, identifier=True).lower()
+    return {
+        "contract_version": "active_listing_context_v1",
+        "source": "authenticated_current_listing_snapshot",
+        "listing_project_identity": identity,
+        "product_name": clean(raw.get("product_name"), limit=120),
+        "listing": {
+            "sku": clean(raw_listing.get("sku"), limit=120, identifier=True),
+            "title": clean(raw_listing.get("title"), limit=180),
+            "known_facts": known_facts,
+            "known_fact_keys": sorted(known_facts),
+            "missing_fact_keys": list(dict.fromkeys(missing_fact_keys)),
+        },
+        "media": {
+            "media_job_id": clean(raw_media.get("media_job_id"), limit=120, identifier=True),
+            "asset_manifest_count": max(0, min(_safe_int(raw_media.get("asset_manifest_count") or 0), 100)),
+            "listing_eligible_asset_count": max(0, min(_safe_int(raw_media.get("listing_eligible_asset_count") or 0), 100)),
+            "review_statuses": list(dict.fromkeys(review_statuses)),
+        },
+        "ebay_draft": {
+            "offer_id": offer_id,
+            "sku": clean(raw_draft.get("sku"), limit=120, identifier=True) if offer_id else "",
+            "offer_status": offer_status if offer_id else "",
+            "execution_id": clean(raw_draft.get("execution_id"), limit=160, identifier=True) if offer_id else "",
+            "confirmation_id": clean(raw_draft.get("confirmation_id"), limit=160, identifier=True) if offer_id else "",
+            "public_listing_created": False if offer_id and raw_draft.get("public_listing_created") is False else None,
+        },
+        "account_health": {
+            "status": status if status in {"normal", "attention", "registration_incomplete", "restricted", "suspended", "payout_hold", "quota_limited", "unknown"} else "unknown",
+            "severity": severity if severity in {"green", "amber", "red"} else "",
+            "onboarding_stage": onboarding_stage,
+        },
+        "secret_exposed": False,
+    }
+
+
 def run_ai_ceo_chat(
     *,
     repository: Any,
@@ -380,6 +477,7 @@ def run_ai_ceo_chat(
     model_resolution: dict[str, Any] | None = None,
     turn_plan: dict[str, Any] | None = None,
     product_intake_context: dict[str, Any] | None = None,
+    active_listing_context: dict[str, Any] | None = None,
     on_stage: Callable[[str], None] | None = None,
     on_text_delta: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
@@ -414,6 +512,7 @@ def run_ai_ceo_chat(
         **context,
         "working_state": authoritative_turn_plan.get("working_state") or {},
         "merchant_product_intake": product_intake_context if isinstance(product_intake_context, dict) else {},
+        "active_listing_context": normalize_ai_ceo_active_listing_context(active_listing_context),
         "secret_exposed": False,
     }
     model_context = _public_model_context(None, model_client, model_resolution)
@@ -870,7 +969,19 @@ def run_ai_ceo_chat(
     if not answer_quality.get("accepted") and _env_enabled("JIEJING_AI_CEO_MODEL_REPAIR_RETRY_ENABLED", default=True):
         repair_started_at = time.monotonic()
         try:
+            active_listing_consistency_failed = any(
+                item in {
+                    "existing_sku_reported_missing",
+                    "existing_media_reported_missing",
+                    "existing_unpublished_offer_reported_missing",
+                }
+                for item in (answer_quality.get("blocked_by") or [])
+            )
             repair_scope_instruction = (
+                "本轮必须逐项读取 active_listing_context：已有 SKU、AssetManifest 素材和 UNPUBLISHED Offer 必须原样承认；"
+                "只把 missing_fact_keys 里的字段列为缺口，不得新建重复 SKU 或 Offer。"
+                if active_listing_consistency_failed
+                else
                 "本轮是既有市场报告的成交证据补证：必须吸收 merchant_message 中的新数字、Item ID 和相对赢家，"
                 "不得重放旧候选卡；明确这不是供应商或可发布证明，并进入供应商事实核验。"
                 if _looks_like_market_evidence_followup(message=safe_message, route=route)
@@ -942,10 +1053,21 @@ def run_ai_ceo_chat(
         return {
             "status": "model_answer_rejected",
             "blocked_by": answer_quality.get("blocked_by") or ["model_answer_not_grounded_to_request"],
-            "answer": _model_answer_rejected_fallback(
-                message=safe_message,
-                source_records=source_records,
-                blocked_by=answer_quality.get("blocked_by") or [],
+            "answer": (
+                _active_listing_consistency_fallback(prompt_context)
+                if any(
+                    item in {
+                        "existing_sku_reported_missing",
+                        "existing_media_reported_missing",
+                        "existing_unpublished_offer_reported_missing",
+                    }
+                    for item in (answer_quality.get("blocked_by") or [])
+                )
+                else _model_answer_rejected_fallback(
+                    message=safe_message,
+                    source_records=source_records,
+                    blocked_by=answer_quality.get("blocked_by") or [],
+                )
             ),
             "answer_quality": {
                 **answer_quality,
@@ -1324,6 +1446,9 @@ def build_ai_ceo_chat_prompts(
         "回答要像产品级 SaaS 工作台里的 AI CEO：清楚、具体、可执行，不空泛。"
         "如果 current_context.merchant_product_intake 存在，它是后端视觉层从商家本轮图片提取的来源证据："
         "可以据此整理待核对 Listing，但不得把来源识别写成商家已确认；冲突必须保留，净重不得写成包装重量，商品产地不得写成实际发货地。"
+        "如果 current_context.active_listing_context 存在，它是当前捷境 Listing 项目的权威快照："
+        "已列出的 SKU、AssetManifest 数量、未发布 Offer 和账号状态不得回答为缺失；missing_fact_keys 才是尚待补充的商品事实。"
+        "同一项目复盘不得新建重复 SKU、重复 Offer 或把已保存的 UNPUBLISHED Offer 说成未保存。"
     )
     if route == AI_CEO_ROUTE_GENERAL:
         system_prompt += " 当前路由是普通咨询：像 DeepSeek 一样直接回答，不创建经营任务，不写长期经营记忆。"
@@ -1374,6 +1499,7 @@ def build_ai_ceo_chat_prompts(
             "把 current_context.store 的连接布尔值视为权威状态；不要从 store_name 猜测是否授权。",
             "严格遵守 merchant_message 的阶段边界；商家暂缓 Listing 时只做选品，不扩展到 Listing 字段。",
             "商品事实必须来自 merchant_message、current_context 或明确 source_records；未知参数写待核，不得补写成事实。",
+            "active_listing_context 是当前项目权威状态；不得把其中已有的 SKU、素材或未发布 Offer 回答为缺失。",
             "merchant_product_intake 中的 source_confirmed_facts 是带来源的图片提取结果，不等于商家确认；fact_conflicts 不得自行二选一。",
             "有 selection_contract 时逐项执行；excluded_candidate_names 中的旧候选不得再次成为候选商品。",
             "selection_contract 要求候选证据入口时，每个候选分别给 eBay US 搜索链接或真实 Item ID；搜索入口不等于成交证据，拿不到具体成交证据时逐项写‘成交证据不足’。",
@@ -3468,7 +3594,12 @@ def _without_negated_high_risk_actions(text: str) -> str:
     follow-up still reaches the confirmation route.
     """
 
-    safe_text = str(text or "")
+    safe_text = re.sub(
+        r"(?:真实|正式|公开)?\s*(?:发布|上架|刊登)前\s*(?:预检|检查|体检|核对|准备)",
+        "发布前检查",
+        str(text or ""),
+        flags=re.IGNORECASE,
+    )
     action_terms = (
         r"发布|上架|刊登|publish|list it|改价|调整价格|改库存|调整库存|退款|退钱|refund|"
         r"付款|采购付款|打款|投广告|开广告|修改政策|承诺买家|保证送达|下架|结束\s*listing|"
@@ -3551,6 +3682,15 @@ def _looks_like_ebay_workflow(text: str) -> bool:
         "recommend",
         "research",
         "analyze",
+        "继续",
+        "沿用",
+        "接着",
+        "承接",
+        "复用",
+        "复核",
+        "核对",
+        "检查",
+        "验收",
     )
     workflow_markers = (
         "ebay",
@@ -3691,6 +3831,86 @@ def _classify_model_failure(exc: Exception) -> tuple[str, str]:
     return "model_provider_error", "AI 服务这次没有返回可展示内容。"
 
 
+def _active_listing_consistency_fallback(context: dict[str, Any]) -> str:
+    active = context.get("active_listing_context") if isinstance(context.get("active_listing_context"), dict) else {}
+    listing = active.get("listing") if isinstance(active.get("listing"), dict) else {}
+    media = active.get("media") if isinstance(active.get("media"), dict) else {}
+    draft = active.get("ebay_draft") if isinstance(active.get("ebay_draft"), dict) else {}
+    health = active.get("account_health") if isinstance(active.get("account_health"), dict) else {}
+    product = _safe_text(active.get("product_name") or "当前商品", limit=120)
+    sku = _safe_text(listing.get("sku") or "", limit=120)
+    offer_id = _safe_text(draft.get("offer_id") or "", limit=120)
+    offer_status = _safe_text(draft.get("offer_status") or "", limit=40).upper()
+    manifest_count = max(0, _safe_int(media.get("asset_manifest_count") or 0))
+    eligible_count = max(0, _safe_int(media.get("listing_eligible_asset_count") or 0))
+    missing = [
+        _safe_text(item, limit=80)
+        for item in (listing.get("missing_fact_keys") if isinstance(listing.get("missing_fact_keys"), list) else [])[:12]
+        if _safe_text(item, limit=80)
+    ]
+    lines = [f"当前项目状态已按捷境记录校正：{product}。"]
+    if sku:
+        lines.append(f"SKU {sku} 已存在，不是缺失项。")
+    if manifest_count:
+        lines.append(f"AssetManifest 已有 {manifest_count} 个素材，其中 {eligible_count} 个当前标记为可用于 Listing 草稿。")
+    if offer_id and offer_status == "UNPUBLISHED":
+        lines.append(f"eBay Offer {offer_id} 已保存，状态为 UNPUBLISHED，尚未公开发布；不会创建第二个 Offer。")
+    if missing:
+        lines.append(f"仍待补的商品事实：{'、'.join(missing)}。")
+    status = _safe_text(health.get("status") or "", limit=40).lower()
+    if status in {"restricted", "suspended", "payout_hold", "quota_limited"}:
+        lines.append("当前 eBay 账号状态仍阻断真实发布；流程停在只读预检和资料核验，不会重试 OAuth 或真实写入。")
+    lines.append("模型原回复与当前项目记录冲突，系统已拒绝该回复并保留审计记录。")
+    return "\n".join(lines)
+
+
+def _active_listing_answer_contradictions(*, answer: str, context: dict[str, Any]) -> list[str]:
+    active = context.get("active_listing_context") if isinstance(context.get("active_listing_context"), dict) else {}
+    listing = active.get("listing") if isinstance(active.get("listing"), dict) else {}
+    media = active.get("media") if isinstance(active.get("media"), dict) else {}
+    draft = active.get("ebay_draft") if isinstance(active.get("ebay_draft"), dict) else {}
+    text = _safe_text(answer, limit=12000)
+    blockers: list[str] = []
+    sku = _safe_text(listing.get("sku") or "", limit=120)
+    sku_claims = list(
+        re.finditer(r"sku[^。；;\n]{0,32}(?:未指定|未填写|缺失|没有|待补|阻断)", text, flags=re.IGNORECASE)
+    )
+    if sku and any(
+        not re.search(r"(?:不是|并非|不属于|不再是)[^。；;\n]{0,12}(?:缺失|未指定|未填写|待补|阻断)", match.group(0))
+        for match in sku_claims
+    ):
+        blockers.append("existing_sku_reported_missing")
+    manifest_count = _safe_int(media.get("asset_manifest_count") or 0)
+    eligible_count = _safe_int(media.get("listing_eligible_asset_count") or 0)
+    media_claims = list(
+        re.finditer(
+            r"(?:素材|图片|asset\s*manifest)[^。；;\n]{0,40}(?:尚未生成|没有生成|未生成|不存在|没有素材|为\s*0)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    if max(manifest_count, eligible_count) > 0 and any(
+        not re.search(r"(?:不是|并非|不属于|不再是)[^。；;\n]{0,12}(?:未生成|不存在|没有素材|为\s*0)", match.group(0))
+        for match in media_claims
+    ):
+        blockers.append("existing_media_reported_missing")
+    offer_id = _safe_text(draft.get("offer_id") or "", limit=120)
+    offer_status = _safe_text(draft.get("offer_status") or "", limit=40).upper()
+    offer_claims = list(
+        re.finditer(
+            r"(?:offer|草稿)[^。；;\n]{0,40}(?:没有保存|未保存|不存在|尚未创建|没有草稿|未创建)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    if offer_id and offer_status == "UNPUBLISHED" and any(
+        not re.search(r"(?:不是|并非|不属于|不再是)[^。；;\n]{0,12}(?:未保存|不存在|未创建|没有草稿)", match.group(0))
+        for match in offer_claims
+    ):
+        blockers.append("existing_unpublished_offer_reported_missing")
+    return list(dict.fromkeys(blockers))
+
+
 def validate_ai_ceo_answer_quality(
     *,
     message: str,
@@ -3701,6 +3921,14 @@ def validate_ai_ceo_answer_quality(
 ) -> dict[str, Any]:
     """Reject workflow answers that cannot become the merchant's requested work item."""
 
+    active_listing_blockers = _active_listing_answer_contradictions(answer=answer, context=context or {})
+    if active_listing_blockers:
+        return {
+            "accepted": False,
+            "quality_gate": "active_listing_state_consistency_v1",
+            "blocked_by": active_listing_blockers,
+            "secret_exposed": False,
+        }
     source_quality = _platform_rule_answer_quality(
         message=message,
         route=route,

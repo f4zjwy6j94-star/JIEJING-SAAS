@@ -23,6 +23,7 @@ from jiejing_saas.ai_ceo_chat import (  # noqa: E402
     _should_retry_initial_model_failure,
     _realtime_search_query,
     build_ai_ceo_chat_context,
+    normalize_ai_ceo_active_listing_context,
     run_ai_ceo_chat,
     validate_ai_ceo_answer_quality,
 )
@@ -138,6 +139,116 @@ def main() -> None:
     assert context["store"]["connection_authorized"] is True, context
     assert context["store"]["draft_save_authorized"] is True, context
     assert "等待" not in context["store"]["store_name"], context
+
+    second_pass_message = (
+        "第二遍真实闭环验收：继续当前禅意佛手托莲花倒流香炉项目，"
+        "沿用现有 SKU JJ-INCENSE-JC2023041300002-01 和未发布 Offer 245675556011；"
+        "重新核对 Listing 字段、素材和正式发布前预检，不要创建重复 Offer。"
+    )
+    second_pass_plan = __import__("jiejing_saas.ai_ceo_chat", fromlist=["build_ai_ceo_turn_plan"]).build_ai_ceo_turn_plan(
+        second_pass_message
+    )
+    assert second_pass_plan["route"] == "ebay_workflow", second_pass_plan
+    assert second_pass_plan["workflow_target"] in {"listing_draft", "ebay_operation"}, second_pass_plan
+    assert "JJ" not in second_pass_plan["entities"], second_pass_plan
+
+    active_listing_context = {
+        "contract_version": "active_listing_context_v1",
+        "source": "authenticated_current_listing_snapshot",
+        "listing_project_identity": {
+            "key": "incense-project",
+            "source_report_id": "report-incense",
+            "candidate_id": "candidate-incense",
+        },
+        "product_name": "禅意佛手托莲花倒流香炉",
+        "listing": {
+            "sku": "JJ-INCENSE-JC2023041300002-01",
+            "title": "Zen Hand Lotus Backflow Incense Burner",
+            "known_fact_keys": ["sku", "net_weight_g", "dimensions_cm"],
+            "missing_fact_keys": ["package_weight_g", "selling_price"],
+        },
+        "media": {
+            "asset_manifest_count": 1,
+            "listing_eligible_asset_count": 1,
+            "review_statuses": ["merchant_review_confirmed"],
+        },
+        "ebay_draft": {
+            "offer_id": "245675556011",
+            "sku": "JJ-INCENSE-JC2023041300002-01",
+            "offer_status": "UNPUBLISHED",
+            "public_listing_created": False,
+        },
+        "account_health": {"status": "restricted", "onboarding_stage": "account_review_required"},
+        "secret_exposed": False,
+    }
+    normalized_active_listing = normalize_ai_ceo_active_listing_context(
+        {
+            **active_listing_context,
+            "access_token": "MUST_NOT_LEAK",
+            "listing": {
+                **active_listing_context["listing"],
+                "known_facts": {"material": "resin", "api_key": "MUST_NOT_LEAK"},
+            },
+            "ebay_draft": {**active_listing_context["ebay_draft"], "refresh_token": "MUST_NOT_LEAK"},
+        }
+    )
+    assert normalized_active_listing["listing"]["known_facts"] == {"material": "resin"}, normalized_active_listing
+    assert "MUST_NOT_LEAK" not in str(normalized_active_listing), normalized_active_listing
+    second_pass_context = {**context, "active_listing_context": active_listing_context}
+    contradictory_second_pass = (
+        "第二遍检查完成。SKU 仍未指定，因此当前被 SKU 阻断。素材工坊尚未生成新图。"
+        "eBay 草稿也还没有保存。"
+    )
+    contradictory_quality = validate_ai_ceo_answer_quality(
+        message=second_pass_message,
+        route="ebay_workflow",
+        answer=contradictory_second_pass,
+        context=second_pass_context,
+    )
+    assert contradictory_quality["accepted"] is False, contradictory_quality
+    assert "existing_sku_reported_missing" in contradictory_quality["blocked_by"], contradictory_quality
+    assert "existing_media_reported_missing" in contradictory_quality["blocked_by"], contradictory_quality
+    assert "existing_unpublished_offer_reported_missing" in contradictory_quality["blocked_by"], contradictory_quality
+
+    accurate_second_pass = (
+        "第二遍检查已读取当前项目：SKU JJ-INCENSE-JC2023041300002-01 已存在；"
+        "AssetManifest 有 1 个可用于 Listing 草稿的已审核素材；"
+        "Offer 245675556011 仍为 UNPUBLISHED。当前账号受限，先停在只读预检，不创建重复 Offer。"
+    )
+    accurate_quality = validate_ai_ceo_answer_quality(
+        message=second_pass_message,
+        route="ebay_workflow",
+        answer=accurate_second_pass,
+        context=second_pass_context,
+    )
+    assert accurate_quality["accepted"] is True, accurate_quality
+
+    negated_missing_claims = (
+        "SKU 不是缺失项；素材并非未生成；Offer 不是未保存，而是已处于 UNPUBLISHED 状态。"
+    )
+    negated_quality = validate_ai_ceo_answer_quality(
+        message=second_pass_message,
+        route="ebay_workflow",
+        answer=negated_missing_claims,
+        context=second_pass_context,
+    )
+    assert negated_quality["accepted"] is True, negated_quality
+
+    stubborn_contradictory_model = SequenceModel([contradictory_second_pass, contradictory_second_pass])
+    rejected_second_pass = run_ai_ceo_chat(
+        repository=MinimalRepository(),
+        company_id="company_quality",
+        store_id="store_quality",
+        user_id="user_quality",
+        message=second_pass_message,
+        model_client=stubborn_contradictory_model,
+        active_listing_context=active_listing_context,
+    )
+    assert rejected_second_pass["status"] == "model_answer_rejected", rejected_second_pass
+    assert "SKU JJ-INCENSE-JC2023041300002-01 已存在" in rejected_second_pass["answer"], rejected_second_pass
+    assert "Offer 245675556011 已保存" in rejected_second_pass["answer"], rejected_second_pass
+    assert "不会创建第二个 Offer" in rejected_second_pass["answer"], rejected_second_pass
+    assert rejected_second_pass["answer_quality"]["repair_retry_count"] == 1, rejected_second_pass
 
     strict_message = (
         "请给我三个轻小件、不带电的 eBay 选品方向。现在没有供应商、实物和商品参数，"

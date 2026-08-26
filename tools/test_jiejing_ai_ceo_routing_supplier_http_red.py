@@ -355,6 +355,30 @@ def run_supplier_http_cases() -> dict[str, Any]:
                             "supplier_facts_verified": verified,
                             "client_now": "2026-08-23T20:00:00+08:00",
                             "client_timezone": "Asia/Shanghai",
+                            "active_listing_context": {
+                                "contract_version": "active_listing_context_v1",
+                                "listing_project_identity": {
+                                    "key": "project-current-http",
+                                    "source_report_id": "report-current-http",
+                                    "candidate_id": "candidate-current-http",
+                                },
+                                "product_name": "Current HTTP Product",
+                                "listing": {
+                                    "sku": "JJ-CURRENT-HTTP-01",
+                                    "known_facts": {"material": "resin", "api_key": "MUST_NOT_LEAK"},
+                                    "missing_fact_keys": ["selling_price"],
+                                },
+                                "media": {"asset_manifest_count": 1, "listing_eligible_asset_count": 1},
+                                "ebay_draft": {
+                                    "offer_id": "245675556011",
+                                    "sku": "JJ-CURRENT-HTTP-01",
+                                    "offer_status": "UNPUBLISHED",
+                                    "public_listing_created": False,
+                                    "refresh_token": "MUST_NOT_LEAK",
+                                },
+                                "account_health": {"status": "restricted", "severity": "red"},
+                                "access_token": "MUST_NOT_LEAK",
+                            } if label == "verified" else None,
                         },
                         token=token,
                     )
@@ -508,6 +532,13 @@ class AiCeoSupplierFactsHttpRedTests(unittest.TestCase):
                         self.assertIn("merchant_product_source_required", report.get("blocked_by") or [])
                 serialized = json.dumps(payload, ensure_ascii=False)
                 self.assertNotIn("MODEL_FORGED", serialized)
+                self.assertNotIn("MUST_NOT_LEAK", serialized)
+                if label == "verified":
+                    active = ((payload.get("ai_ceo_chat") or {}).get("context") or {}).get("active_listing_context") or {}
+                    self.assertEqual("project-current-http", (active.get("listing_project_identity") or {}).get("key"))
+                    self.assertEqual("JJ-CURRENT-HTTP-01", (active.get("listing") or {}).get("sku"))
+                    self.assertEqual(1, (active.get("media") or {}).get("asset_manifest_count"))
+                    self.assertEqual("245675556011", (active.get("ebay_draft") or {}).get("offer_id"))
 
         self.assertEqual(201, fixture["product_fact_status"])
         product_payload = fixture["product_fact_payload"]
@@ -1311,6 +1342,80 @@ class AiCeoSupplierFactsFrontendRedTests(unittest.TestCase):
             )
         )
         self.assertEqual([60000, 180000], result.get("capturedTimeouts"))
+
+    def test_chat_request_carries_only_the_active_listing_snapshot(self) -> None:
+        active_context = function_body(APP_JS, "saasAiCeoActiveListingContext")
+        request_chat = function_body(APP_JS, "requestSaasAiCeoChat")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const state = {",
+                    "  saasAiCeoSupplierFactAttestation: null,",
+                    "  saasListingComposerDraft: {",
+                    "    product: '禅意佛手托莲花倒流香炉', title: 'Zen Hand Lotus Backflow Incense Burner',",
+                    "    listing_project_identity: { key: 'project-incense', source_report_id: 'report-incense', candidate_id: 'candidate-incense' },",
+                    "    merchant_product_fact_packet: { source_confirmed_facts: { net_weight_g: '451', source_url: 'https://supplier.example/item' }, merchant_confirmed_facts: { sku: 'JJ-INCENSE-01' }, unknown_facts: ['package_weight_g', 'selling_price'] }",
+                    "  },",
+                    "  saasAccountHealth: { status: 'restricted', severity: 'red', onboarding_stage: 'account_review_required', access_token: 'MUST_NOT_LEAK' }",
+                    "};",
+                    "const normalizeSaasCeoCommand = (value) => value;",
+                    "const hasSaasProtectedSessionCandidate = () => true;",
+                    "const sanitizeSaasCeoCommandSourceText = (value) => String(value || '');",
+                    "const saasAiCeoConversationHistoryForRequest = () => [];",
+                    "const isSaasRealPlatformWritesEnabled = () => false;",
+                    "const supplierFactsForSaasAiCeoCommand = () => ({});",
+                    "const saasCurrentListingProjectIdentity = () => ({ key: 'project-incense', product: '禅意佛手托莲花倒流香炉', source_report_id: 'report-incense', candidate_id: 'candidate-incense' });",
+                    "const saasListingDraftAuthoritativeSku = () => 'JJ-INCENSE-01';",
+                    "const latestSaasMediaAssetJobWithManifest = () => ({ media_job_id: 'media-incense', status: 'approved_for_listing' });",
+                    "const saasMediaManifestAssetCards = () => [{ reviewStatus: 'merchant_review_confirmed' }];",
+                    "const saasMediaManifestAssetsForListing = () => [{ listing_use_status: 'approved_for_listing_draft', review_status: 'merchant_review_confirmed', url: 'https://private.example/asset.jpg' }];",
+                    "const saasCurrentUnpublishedDraftReceipt = () => ({ offerId: '245675556011', sku: 'JJ-INCENSE-01', executionId: 'exec-incense', confirmationId: 'confirm-incense', status: 'UNPUBLISHED' });",
+                    "const publicRuntimeText = (value = '') => String(value || '');",
+                    active_context,
+                    request_chat,
+                    "let capturedBody = null;",
+                    "const saasFetchNdjsonWithTimeout = async (_path, options) => { capturedBody = JSON.parse(options.body); return {}; };",
+                    "(async () => {",
+                    "  await requestSaasAiCeoChat({ store_id: 'store-unit', text: '继续当前 SKU 和 Offer 做第二遍验收', route: 'listing', intent: 'listing', summary: '', title: '' });",
+                    "  console.log(JSON.stringify(capturedBody));",
+                    "})().catch((error) => { console.error(error); process.exit(1); });",
+                ]
+            )
+        )
+        snapshot = result.get("active_listing_context") or {}
+        self.assertEqual("active_listing_context_v1", snapshot.get("contract_version"))
+        self.assertEqual("project-incense", snapshot.get("listing_project_identity", {}).get("key"))
+        self.assertEqual("JJ-INCENSE-01", snapshot.get("listing", {}).get("sku"))
+        self.assertEqual(1, snapshot.get("media", {}).get("asset_manifest_count"))
+        self.assertEqual(1, snapshot.get("media", {}).get("listing_eligible_asset_count"))
+        self.assertEqual("245675556011", snapshot.get("ebay_draft", {}).get("offer_id"))
+        self.assertIs(snapshot.get("ebay_draft", {}).get("public_listing_created"), False)
+        self.assertEqual("restricted", snapshot.get("account_health", {}).get("status"))
+        serialized = json.dumps(snapshot, ensure_ascii=False)
+        self.assertNotIn("MUST_NOT_LEAK", serialized)
+        self.assertNotIn("private.example", serialized)
+
+    def test_decision_center_rejects_stale_product_confirmations_for_active_listing(self) -> None:
+        matcher = function_body(APP_JS, "saasConfirmationMatchesActiveListingContext")
+        result = run_node_json(
+            "\n".join(
+                [
+                    "const state = {};",
+                    "const saasCurrentListingProjectIdentity = () => ({ key: 'project-incense', product: '禅意佛手托莲花倒流香炉', source_report_id: 'report-incense', candidate_id: 'candidate-incense' });",
+                    "const saasListingDraftAuthoritativeSku = () => 'JJ-INCENSE-01';",
+                    "const saasCurrentUnpublishedDraftReceipt = () => ({ offerId: '245675556011', sku: 'JJ-INCENSE-01' });",
+                    "const saasNormalizeListingProjectIdentity = (value) => value && value.key ? value : null;",
+                    matcher,
+                    "const current = { confirmation_id: 'confirm-current', action_type: 'publish_listing', item: { listing_project_identity: { key: 'project-incense', source_report_id: 'report-incense', candidate_id: 'candidate-incense' }, existing_ebay_draft: { offer_id: '245675556011', sku: 'JJ-INCENSE-01' } } };",
+                    "const stale = { confirmation_id: 'confirm-stale', action_type: 'change_price', task_id: 'old-task', item: { product_name: '旧手机壳', publish_payload: { listing: { sku: 'OLD-CASE-01' } } } };",
+                    "const unbound = { confirmation_id: 'confirm-unbound', action_type: 'change_store_policy', task_id: 'old-policy-task', item: {} };",
+                    "console.log(JSON.stringify({ current: saasConfirmationMatchesActiveListingContext(current), stale: saasConfirmationMatchesActiveListingContext(stale), unbound: saasConfirmationMatchesActiveListingContext(unbound) }));",
+                ]
+            )
+        )
+        self.assertIs(result.get("current"), True)
+        self.assertIs(result.get("stale"), False)
+        self.assertIs(result.get("unbound"), False)
 
     def test_manual_form_confirmation_is_the_only_frontend_source_of_verified_payload(self) -> None:
         build_intake = function_body(APP_JS, "buildSaasAiCeoSupplierFactIntake")
