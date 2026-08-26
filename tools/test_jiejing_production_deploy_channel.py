@@ -127,6 +127,7 @@ def validate_remote_stdout_contract() -> list[str]:
     for broken in (
         dry_output.replace("JIEJING_PRODUCTION_DEPLOY_DRY_RUN=1\n", ""),
         dry_output + "\nJIEJING_PRODUCTION_DEPLOY_DRY_RUN=1",
+        dry_output + "\nJIEJING_PRODUCTION_DEPLOY_APPLIED=1",
         dry_output.replace(f"SOURCE_COMMIT={source_sha}", f"SOURCE_COMMIT={'b' * 40}"),
         dry_output.replace("ACTIVE_SWITCHED=0\n", ""),
         dry_output + "\nACTIVE_SWITCHED=1",
@@ -165,6 +166,16 @@ def validate_remote_stdout_contract() -> list[str]:
         pass
     else:
         failures.append("apply stdout contract without exact apply receipt was accepted")
+    try:
+        module.parse_remote_stdout_contract(
+            apply_output + "\nJIEJING_PRODUCTION_DEPLOY_DRY_RUN=1",
+            "apply",
+            source_sha,
+        )
+    except ValueError:
+        pass
+    else:
+        failures.append("apply stdout contract with conflicting dry-run receipt was accepted")
     return failures
 
 
@@ -377,6 +388,78 @@ printf '%s\n' APPLICATION_ROLLBACK_FIXTURE_PASS
         if result.returncode != 0 or "APPLICATION_ROLLBACK_FIXTURE_PASS" not in result.stdout:
             failures.append(
                 "application rollback runtime fixture failed rc="
+                + str(result.returncode)
+                + " stdout="
+                + result.stdout[-1000:]
+                + " stderr="
+                + result.stderr[-1000:]
+            )
+    return failures
+
+
+def validate_finalization_lock_runtime_fixture(apply: str) -> list[str]:
+    if shutil.which("bash") is None:
+        return []
+    try:
+        function = extract_bash_functions(
+            apply, ("finalize_evidence_refresh_transaction",)
+        )
+    except ValueError as exc:
+        return [f"evidence refresh finalization function unavailable:{exc}"]
+    failures: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="finalization-lock-fixture-", dir=ROOT) as temp_dir:
+        temp = Path(temp_dir)
+        relative_temp = temp.relative_to(ROOT).as_posix()
+        fixture = f"""#!/usr/bin/env bash
+set -euo pipefail
+{function}
+TEST_ROOT="$PWD/{relative_temp}"
+CALL_LOG="$TEST_ROOT/calls.log"
+deploy_lock_held=1
+maintenance_lock_held=0
+current_stage=fixture
+FAIL_ACQUIRE=0
+acquire_maintenance_lock() {{
+  [[ "$deploy_lock_held" == "1" && "$maintenance_lock_held" == "0" ]]
+  if [[ "$FAIL_ACQUIRE" == "1" ]]; then
+    printf '%s\n' ACQUIRE_MAINTENANCE_FAILED >>"$CALL_LOG"
+    return 1
+  fi
+  printf '%s\n' ACQUIRE_MAINTENANCE >>"$CALL_LOG"
+  maintenance_lock_held=1
+}}
+verify_candidate_runtime_image_coherence() {{
+  [[ "$deploy_lock_held" == "1" && "$maintenance_lock_held" == "1" ]]
+  printf '%s\n' VERIFY_COHERENCE >>"$CALL_LOG"
+}}
+start_and_verify_evidence_refresh_timer() {{
+  [[ "$deploy_lock_held" == "1" && "$maintenance_lock_held" == "1" ]]
+  printf '%s\n' VERIFY_TIMER >>"$CALL_LOG"
+}}
+release_maintenance_lock() {{
+  [[ "$deploy_lock_held" == "1" && "$maintenance_lock_held" == "1" ]]
+  printf '%s\n' RELEASE_MAINTENANCE >>"$CALL_LOG"
+  maintenance_lock_held=0
+}}
+finalize_evidence_refresh_transaction
+[[ "$maintenance_lock_held" == "0" && "$deploy_lock_held" == "1" ]]
+printf '%s\n' ACQUIRE_MAINTENANCE VERIFY_COHERENCE VERIFY_TIMER RELEASE_MAINTENANCE >"$TEST_ROOT/expected.log"
+cmp -s "$TEST_ROOT/expected.log" "$CALL_LOG"
+: >"$CALL_LOG"
+FAIL_ACQUIRE=1
+set +e
+finalize_evidence_refresh_transaction
+failure_rc=$?
+set -e
+[[ "$failure_rc" != "0" && "$maintenance_lock_held" == "0" ]]
+printf '%s\n' ACQUIRE_MAINTENANCE_FAILED >"$TEST_ROOT/expected-failure.log"
+cmp -s "$TEST_ROOT/expected-failure.log" "$CALL_LOG"
+printf '%s\n' FINALIZATION_LOCK_FIXTURE_PASS
+"""
+        result = run_bash_fixture(fixture, temp, "finalization-lock-runtime.sh")
+        if result.returncode != 0 or "FINALIZATION_LOCK_FIXTURE_PASS" not in result.stdout:
+            failures.append(
+                "evidence refresh finalization lock fixture failed rc="
                 + str(result.returncode)
                 + " stdout="
                 + result.stdout[-1000:]
@@ -1052,6 +1135,7 @@ def main() -> int:
         "verify_candidate_runtime_image_coherence",
         "atomic_replace_active_link",
         "rollback_application_release",
+        "finalize_evidence_refresh_transaction",
         "CANDIDATE_RUNTIME_IMAGE_COHERENCE=verified",
     ]
     required_compose = [
@@ -1125,6 +1209,10 @@ def main() -> int:
     application_rollback_failures = validate_application_rollback_runtime_fixture(apply)
     if application_rollback_failures:
         return fail("; ".join(application_rollback_failures))
+
+    finalization_lock_failures = validate_finalization_lock_runtime_fixture(apply)
+    if finalization_lock_failures:
+        return fail("; ".join(finalization_lock_failures))
 
     deploy_module = load_deploy_module()
     timeout_budget = getattr(deploy_module, "PRODUCTION_REMOTE_APPLY_TIMEOUT_SECONDS", 0)
@@ -1228,7 +1316,8 @@ def main() -> int:
     release_maintenance = apply.index("release_maintenance_lock", install_call)
     start_oneshot = apply.index("verify_first_evidence_refresh_oneshot", release_maintenance)
     verify_invocation = apply.index("TIMER_FIRST_ONESHOT_VERIFIED=1", start_oneshot)
-    start_timer = apply.index("start_and_verify_evidence_refresh_timer", verify_invocation)
+    finalize_transaction = apply.index("finalize_evidence_refresh_transaction", verify_invocation)
+    start_timer = apply.index("TIMER_INSTALL_APPLIED=1", finalize_transaction)
     disable_app_rollback = apply.index("trap - ERR", start_timer)
     release_deploy = apply.index("release_deploy_lock", disable_app_rollback)
     if not (
@@ -1239,11 +1328,30 @@ def main() -> int:
         < release_maintenance
         < start_oneshot
         < verify_invocation
+        < finalize_transaction
         < start_timer
         < disable_app_rollback
         < release_deploy
     ):
         return fail("unit transaction or lock release order is unsafe")
+
+    finalization_function = apply[
+        apply.index("finalize_evidence_refresh_transaction()") : apply.index(
+            "fail_unit_transaction()"
+        )
+    ]
+    final_acquire = finalization_function.index("acquire_maintenance_lock")
+    final_coherence = finalization_function.index(
+        "verify_candidate_runtime_image_coherence", final_acquire
+    )
+    final_timer = finalization_function.index(
+        "start_and_verify_evidence_refresh_timer", final_coherence
+    )
+    final_release = finalization_function.index(
+        "release_maintenance_lock", final_timer
+    )
+    if not final_acquire < final_coherence < final_timer < final_release:
+        return fail("final timer/coherence commit is not maintenance-lock protected")
 
     install_function = apply[
         apply.index("install_evidence_refresh_units()") : apply.index(

@@ -161,16 +161,23 @@ def main() -> int:
 def parse_remote_stdout_contract(output: str, mode: str, expected_source_sha: str) -> dict[str, bool]:
     lines = [line.strip() for line in output.splitlines()]
 
-    def exact_receipt_value(key: str) -> str:
+    def receipt_values(key: str) -> list[str]:
         prefix = key + "="
-        values = [line[len(prefix) :] for line in lines if line.startswith(prefix)]
+        return [line[len(prefix) :] for line in lines if line.startswith(prefix)]
+
+    def exact_receipt_value(key: str) -> str:
+        values = receipt_values(key)
         if len(values) != 1:
             raise ValueError(f"receipt_count:{key}:{len(values)}")
         return values[0]
 
     mode_marker = "JIEJING_PRODUCTION_DEPLOY_DRY_RUN" if mode == "dry_run" else "JIEJING_PRODUCTION_DEPLOY_APPLIED"
+    opposite_marker = "JIEJING_PRODUCTION_DEPLOY_APPLIED" if mode == "dry_run" else "JIEJING_PRODUCTION_DEPLOY_DRY_RUN"
     if exact_receipt_value(mode_marker) != "1":
         raise ValueError(f"receipt_value:{mode_marker}")
+    opposite_values = receipt_values(opposite_marker)
+    if opposite_values:
+        raise ValueError(f"receipt_count:{opposite_marker}:{len(opposite_values)}")
     if exact_receipt_value("SOURCE_COMMIT") != expected_source_sha:
         raise ValueError("source_commit_mismatch")
     observed: dict[str, bool] = {}

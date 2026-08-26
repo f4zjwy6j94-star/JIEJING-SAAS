@@ -863,6 +863,16 @@ start_and_verify_evidence_refresh_timer() {
   esac
 }
 
+finalize_evidence_refresh_transaction() {
+  current_stage="reacquire_maintenance_for_finalization"
+  acquire_maintenance_lock || return 1
+  current_stage="verify_final_runtime_image_coherence"
+  verify_candidate_runtime_image_coherence || return 1
+  current_stage="start_evidence_refresh_timer"
+  start_and_verify_evidence_refresh_timer || return 1
+  release_maintenance_lock || return 1
+}
+
 fail_unit_transaction() {
   local original_rc="${1:-1}" lock_rc=0 restore_rc=0 app_restore_rc=0 activity_restore_rc=0
   if [[ "$unit_transaction_failure_in_progress" == "1" ]]; then
@@ -1024,11 +1034,10 @@ if [[ "$unit_rc" != "0" ]]; then
 fi
 printf '%s\n' "TIMER_FIRST_ONESHOT_VERIFIED=1"
 
-current_stage="start_evidence_refresh_timer"
-unit_rc=0
-start_and_verify_evidence_refresh_timer || unit_rc=$?
-if [[ "$unit_rc" != "0" ]]; then
-  fail_unit_transaction "$unit_rc"
+finalization_rc=0
+finalize_evidence_refresh_transaction || finalization_rc=$?
+if [[ "$finalization_rc" != "0" ]]; then
+  fail_unit_transaction "$finalization_rc"
 fi
 printf '%s\n' "TIMER_INSTALL_APPLIED=1"
 disarm_unit_transaction_traps
