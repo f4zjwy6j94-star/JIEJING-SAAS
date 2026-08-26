@@ -81,6 +81,7 @@ EXTERNAL_EXECUTION_PROCESSING_STATUS = "external_execution_processing_manual_rec
 CONFIRMATION_MANAGED_TASK_TYPES = frozenset(
     {
         "ebay_draft_save_intake",
+        "existing_ebay_draft_publish_intake",
         "publish_confirmation_intake",
         "ebay_inventory_location_setup",
     }
@@ -6556,17 +6557,22 @@ class SaaSRepository:
                 confirmation_status = str(row["confirmation_status"] or "")
                 if current_status not in eligible_statuses or not confirmation_status:
                     continue
-                if bool(row["has_execution"]):
+                expected_status = {
+                    "rejected": "rejected",
+                    "needs_revision": "needs_revision",
+                    "executed": "completed",
+                    EXTERNAL_EXECUTION_PROCESSING_STATUS: "manual_reconcile_required",
+                }.get(confirmation_status, "")
+                if not expected_status and bool(row["has_execution"]):
+                    # A durable execution row alone does not prove success. A
+                    # terminal confirmation such as needs_revision records the
+                    # verified provider outcome and must win over its presence.
                     expected_status = "completed"
-                else:
+                elif not expected_status:
                     expected_status = {
                         "pending": "waiting_confirmation",
                         "approved": "approved_waiting_execution",
-                        "rejected": "rejected",
-                        "needs_revision": "needs_revision",
-                        "executed": "completed",
                         "external_execution_claimed_prewrite": "approved_waiting_execution",
-                        EXTERNAL_EXECUTION_PROCESSING_STATUS: "manual_reconcile_required",
                     }.get(confirmation_status, "")
                 if not expected_status or expected_status == current_status:
                     continue
@@ -6802,7 +6808,7 @@ class SaaSRepository:
                 company_id=company_id,
                 task_id=confirmation.get("task_id"),
                 status="needs_revision",
-                expected_statuses={"manual_reconcile_required"},
+                expected_statuses={"manual_reconcile_required", "execution_blocked"},
             )
             self._insert_audit(
                 conn,

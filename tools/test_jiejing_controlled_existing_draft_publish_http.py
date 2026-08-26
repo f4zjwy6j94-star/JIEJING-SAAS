@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -44,6 +45,30 @@ def _post(base_url: str, path: str, payload: dict[str, Any], token: str) -> tupl
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
         return int(exc.code), json.loads(raw) if raw else {}
+
+
+def _get(base_url: str, path: str, token: str) -> tuple[int, dict[str, Any]]:
+    request = urllib.request.Request(
+        f"{base_url}{path}",
+        headers={"Authorization": f"Bearer {token}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return int(response.status), json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        return int(exc.code), json.loads(raw) if raw else {}
+
+
+def _task_status(base_url: str, token: str, task_id: str) -> str:
+    status, body = _get(base_url, "/tasks?limit=100", token)
+    if status != 200:
+        raise AssertionError(f"task list failed while checking controlled publish state: {status} {body}")
+    task = next((item for item in body.get("tasks") or [] if item.get("task_id") == task_id), None)
+    if not task:
+        raise AssertionError(f"controlled publish task is missing from the merchant task list: {task_id}")
+    return str(task.get("status") or "")
 
 
 def _publish_payload() -> dict[str, Any]:
@@ -353,6 +378,8 @@ def main() -> int:
             )
             if approval_status != 201 or (approval.get("confirmation") or {}).get("status") != "approved":
                 raise AssertionError(f"exact controlled approval failed: {approval_status} {approval}")
+            if _task_status(base_url, token, confirmation["task_id"]) != "approved_waiting_execution":
+                raise AssertionError("approved existing-draft publish task must leave queued state")
             preflight_status, preflight = _post(
                 base_url,
                 f"/confirmations/{confirmation_id}/preflight",
@@ -389,6 +416,8 @@ def main() -> int:
                 and FakeExactPublishAdapter.recovery_call_count == 1
             ):
                 raise AssertionError(f"verified exact unpublished Offer must retire the uncertain confirmation: {recovery_status} {recovery}")
+            if _task_status(base_url, token, confirmation["task_id"]) != "needs_revision":
+                raise AssertionError("verified no-op recovery must retire the controlled publish task for revision")
             replacement_status, replacement = _post(base_url, intake_path, intake_body, token)
             replacement_confirmation = replacement.get("confirmation") or {}
             replacement_id = str(replacement_confirmation.get("confirmation_id") or "")
@@ -441,6 +470,33 @@ def main() -> int:
                     "official proof that a rejected publish created no Listing must retire the consumed confirmation: "
                     f"{recorded_recovery_status} {recorded_recovery}"
                 )
+            if _task_status(base_url, token, replacement_confirmation["task_id"]) != "needs_revision":
+                raise AssertionError("recorded provider rejection must leave the controlled publish task ready for revision")
+            with sqlite3.connect(root / "saas.sqlite") as conn:
+                conn.execute(
+                    "update tasks set status = 'queued' where task_id = ?",
+                    (replacement_confirmation["task_id"],),
+                )
+            stale_failed_publish = repository.reconcile_confirmation_managed_tasks(
+                apply=False,
+                company_id=company_id,
+            )
+            failed_publish_change = next(
+                (
+                    item
+                    for item in stale_failed_publish.get("changes") or []
+                    if item.get("task_id") == replacement_confirmation["task_id"]
+                ),
+                None,
+            )
+            if not failed_publish_change or failed_publish_change.get("to_status") != "needs_revision":
+                raise AssertionError(
+                    "reconciliation must not mistake a recorded provider rejection for a completed publish: "
+                    f"{stale_failed_publish}"
+                )
+            repository.reconcile_confirmation_managed_tasks(apply=True, company_id=company_id)
+            if _task_status(base_url, token, replacement_confirmation["task_id"]) != "needs_revision":
+                raise AssertionError("reconciliation must restore failed controlled publish tasks for revision")
             final_intake_status, final_intake = _post(base_url, intake_path, intake_body, token)
             final_confirmation = final_intake.get("confirmation") or {}
             final_confirmation_id = str(final_confirmation.get("confirmation_id") or "")
@@ -483,6 +539,8 @@ def main() -> int:
             stored_final_confirmation = repository.get_confirmation(company_id=company_id, confirmation_id=final_confirmation_id) or {}
             if stored_final_confirmation.get("status") != "executed":
                 raise AssertionError(f"successful public publish must close its confirmation: {stored_final_confirmation}")
+            if _task_status(base_url, token, final_confirmation["task_id"]) != "completed":
+                raise AssertionError("successful controlled publish must complete its merchant task")
             repeat_status, _repeat = _post(
                 base_url,
                 f"/confirmations/{final_confirmation_id}/execute",
