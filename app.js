@@ -23127,6 +23127,21 @@ function renderSaasPublishCommandSummaryPanel() {
   `;
 }
 
+function saasDecisionCenterVisibleConfirmations(cards = [], allCards = cards) {
+  const safeCards = Array.isArray(cards) ? cards : [];
+  const safeAllCards = Array.isArray(allCards) ? allCards : safeCards;
+  const recoveries = safeCards.filter((card) =>
+    isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(card, safeAllCards),
+  );
+  const recoveryIds = new Set(recoveries.map((card) => String(card?.confirmation_id || "").trim()));
+  const pending = safeCards.filter((card) => String(card?.status || "") === "pending");
+  const ordinary = pending.length ? pending : safeCards;
+  return [
+    ...recoveries,
+    ...ordinary.filter((card) => !recoveryIds.has(String(card?.confirmation_id || "").trim())),
+  ].slice(0, 8);
+}
+
 function renderSaasConfirmPanel() {
   const anchor = document.querySelector("#confirmGrid");
   if (!anchor) return;
@@ -23141,7 +23156,7 @@ function renderSaasConfirmPanel() {
   const pending = cards.filter((card) => card.status === "pending");
   const approved = cards.filter((card) => card.status === "approved");
   const blocked = cards.filter((card) => ["rejected", "failed", "cancelled"].includes(card.status));
-  const visible = (pending.length ? pending : cards).slice(0, 8);
+  const visible = saasDecisionCenterVisibleConfirmations(cards, allCards);
   const allPendingCount = allCards.filter((card) => card.status === "pending").length;
   const latestTask = saasLatestProductWorkflowTask();
   const productLabel = saasWorkflowProductLabel(latestTask) || saasModelValueProductLabel();

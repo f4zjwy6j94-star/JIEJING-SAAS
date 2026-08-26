@@ -53,6 +53,8 @@ def main() -> int:
         return fail("frontend entry files must not retain the pre-cross-view publish-recovery cache version")
     if "./app.js?v=20260826-controlled-publish-recovery-v6" in index_html + app_html:
         return fail("frontend entry files must not retain the execution-cache-dependent recovery version")
+    if "./app.js?v=20260826-readonly-publish-recovery-v7" in index_html + app_html:
+        return fail("frontend entry files must not retain the pending-only decision-center recovery version")
     index_html_app_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", index_html)
     if index_html_app_versions != [app_js_asset_version, app_js_asset_version]:
         return fail("public entry prefetch and lazy preload must both use the current app.js cache version")

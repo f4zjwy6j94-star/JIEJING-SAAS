@@ -303,6 +303,45 @@ if (!isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(card, 
     if predicate_result.returncode != 0:
         raise AssertionError(predicate_result.stderr.strip() or "manual reconciliation predicate failed")
 
+    visibility_marker = "function saasDecisionCenterVisibleConfirmations"
+    if visibility_marker not in app_js:
+        raise AssertionError("decision center must prioritize manual publish reconciliation alongside pending cards")
+    visibility_start = app_js.index(visibility_marker)
+    visibility_end = app_js.index("function renderSaasConfirmPanel", visibility_start)
+    visibility_source = app_js[visibility_start:visibility_end]
+    visibility_script = f"""
+function isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(card) {{
+  return card?.status === "external_execution_processing_manual_reconcile";
+}}
+{visibility_source}
+const pending = Array.from({{ length: 7 }}, (_, index) => ({{
+  confirmation_id: `confirm-pending-${{index}}`,
+  status: "pending",
+}}));
+const recovery = {{
+  confirmation_id: "confirm-controlled-reconcile",
+  status: "external_execution_processing_manual_reconcile",
+}};
+const visible = saasDecisionCenterVisibleConfirmations([...pending, recovery], [...pending, recovery]);
+if (visible.length !== 8) throw new Error("decision center visibility limit changed");
+if (visible[0]?.confirmation_id !== "confirm-controlled-reconcile") {{
+  throw new Error("manual publish reconciliation was hidden behind ordinary pending cards");
+}}
+if (visible.filter((card) => card.confirmation_id === "confirm-controlled-reconcile").length !== 1) {{
+  throw new Error("manual publish reconciliation must appear exactly once");
+}}
+"""
+    visibility_result = subprocess.run(
+        ["node", "-e", visibility_script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if visibility_result.returncode != 0:
+        raise AssertionError(visibility_result.stderr.strip() or "decision center recovery visibility failed")
+
     detail_marker = "function saasControlledExistingDraftPublishDetailMarkup"
     if detail_marker not in app_js:
         raise AssertionError("controlled publish confirmation must render exact merchant-reviewable parameters")
