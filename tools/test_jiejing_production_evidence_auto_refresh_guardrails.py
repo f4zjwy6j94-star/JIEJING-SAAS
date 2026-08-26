@@ -157,6 +157,11 @@ def run_runtime_image_fixture(
             drift_worker_environment=0
             unhealthy_api=0
             stopped_worker=0
+            worker_operational_unhealthy=0
+
+            public_deep_health_ready() {{
+              [[ "$worker_operational_unhealthy" == 0 ]]
+            }}
 
             docker() {{
               if [[ "${{1:-}}" == ps ]]; then
@@ -270,6 +275,7 @@ def run_runtime_image_fixture(
               if [[ "${{1:-}}" == compose ]]; then
                 local service="${{@: -1}}"
                 if [[ "$*" == *" up "* ]]; then
+                  printf 'compose-up:%s\n' "$service" >>"$fixture_root/side-effects"
                   if [[ "$service" == jiejing-saas ]]; then
                     api_container=api-new
                   else
@@ -287,6 +293,7 @@ def run_runtime_image_fixture(
                 fi
               fi
               if [[ "${{1:-}}" == run ]]; then
+                printf '%s\n' probe >>"$fixture_root/side-effects"
                 if [[ " $* " == *" $api_image "* ]]; then
                   printf '%s\n' api >>"$fixture_root/probe-images"
                 elif [[ " $* " == *" $worker_image "* ]]; then
@@ -300,10 +307,6 @@ def run_runtime_image_fixture(
               return 2
             }}
 
-            capture_and_validate_runtime_images
-            [[ "$runtime_api_image_id" == "$api_image" ]]
-            [[ "$runtime_worker_image_id" == "$worker_image" ]]
-            [[ "$runtime_api_image_id" != "$runtime_worker_image_id" ]]
             private_dir="$(dirname "$environment_file")"
             APP_ENV="$fixture_root/private/jiejing-saas.production.env"
             touch "$APP_ENV"
@@ -311,12 +314,30 @@ def run_runtime_image_fixture(
             json_contract_verified() {{ return 0; }}
             trusted_private_file() {{ return 0; }}
             evidence_excluded_env_digest() {{ printf '%s\n' digest; }}
-            run_cos_probe
-            run_cls_probe
-            [[ "$(<"$fixture_root/probe-images")" == $'api\napi' ]]
             COMPOSE_ARGS=()
             wait_for_api_health() {{ return 0; }}
             wait_for_worker_health() {{ return 0; }}
+
+            worker_operational_unhealthy=1
+            set +e
+            unhealthy_output="$(
+              capture_and_validate_runtime_images
+              run_refresh_phases
+            )"
+            unhealthy_rc=$?
+            set -e
+            [[ "$unhealthy_rc" -ne 0 ]]
+            [[ "$unhealthy_output" == *"JIEJING_PRODUCTION_EVIDENCE_REFRESH_BLOCKER=runtime_worker_operational_unhealthy"* ]]
+            [[ ! -e "$fixture_root/side-effects" ]]
+            worker_operational_unhealthy=0
+
+            capture_and_validate_runtime_images
+            [[ "$runtime_api_image_id" == "$api_image" ]]
+            [[ "$runtime_worker_image_id" == "$worker_image" ]]
+            [[ "$runtime_api_image_id" != "$runtime_worker_image_id" ]]
+            run_cos_probe
+            run_cls_probe
+            [[ "$(<"$fixture_root/probe-images")" == $'api\napi' ]]
             recreate_api
             verify_recreated_api
             recreate_worker

@@ -344,6 +344,8 @@ capture_and_validate_runtime_images() {
     || fail_closed "worker_image_reference_drift"
   [[ "$runtime_worker_state" == "running" ]] \
     || fail_closed "runtime_worker_image_untrusted"
+  public_deep_health_ready \
+    || fail_closed "runtime_worker_operational_unhealthy"
 
   environment_file="$runtime_api_environment_file"
 }
