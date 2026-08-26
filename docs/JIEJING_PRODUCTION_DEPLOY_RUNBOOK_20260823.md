@@ -59,6 +59,8 @@ python tools/jiejing_production_deploy.py `
 
 维护锁释放后，部署手工启动一次 oneshot，并以本次 `InvocationID` 对应 journal 中的 `JIEJING_PRODUCTION_EVIDENCE_REFRESH_STATUS=success`、service `Result=success`、`ExecMainStatus=0` 为真实成功条件。随后才启动 timer，并确认 enabled、active 且 `NextElapseUSecRealtime` 有值。
 
+oneshot 会分别捕获当前 SaaS API 与 Worker 的实际 image ID；两个 ID 可以不同，但必须各自为可检查的 `sha256`，且各自的 image reference、Compose project/service/config/workdir/environment-file label 和运行状态都与 active release 精确一致。COS、CLS 和探针工具存在性检查明确只运行在已验证的 API 镜像中；后续强制重建 API 只能恢复原 API ID，重建 Worker 只能恢复原 Worker ID，任一缺失、漂移或交叉交换都会 fail-closed。
+
 安装后必须确认 service 与 timer 的实际属性都严格返回单行 `DropInPaths=`；缺少该属性或返回任何路径都会 fail-closed，拒绝来自 `/etc`、`/run` 或 `/usr/lib` 的旧 drop-in 覆盖固定 `ExecStart` 与沙箱合同。生产 apply 的 SSH 客户端超时预算固定为 `3600` 秒，以覆盖最长 20 分钟 oneshot、应用健康等待与镜像构建余量。
 
 apply 会在构建前从当前 release manifest 唯一解析 `PRIVATE_DIR`，与运行容器的 environment-file label 交叉验证，并只通过 `O_NOFOLLOW` 文件描述符把该目录规范为 `root:root 0700`、两个 env 文件规范为 `root:root 0600`；不会读取或输出文件内容。SaaS 与 Worker 会分别保存构建后实际 image ID；两个 ID 可以不同，但候选启动和最终收口都必须逐服务匹配各自已保存的 ID、Compose labels、workdir、environment-file 和健康状态。

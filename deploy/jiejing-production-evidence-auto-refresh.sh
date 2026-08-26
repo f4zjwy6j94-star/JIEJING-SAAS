@@ -276,11 +276,83 @@ approved_image_reference_matches() {
   [[ "$resolved_image_id" == "$approved_image_id" ]]
 }
 
+capture_and_validate_runtime_images() {
+  mapfile -t api_containers < <(
+    docker ps \
+      --filter 'label=com.docker.compose.project=deploy' \
+      --filter 'label=com.docker.compose.service=jiejing-saas' \
+      --format '{{.ID}}'
+  )
+  [[ "${#api_containers[@]}" -eq 1 ]] || fail_closed "runtime_api_container_not_unique"
+  approved_api_container_id="${api_containers[0]}"
+
+  runtime_api_project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$approved_api_container_id" 2>/dev/null || true)"
+  runtime_api_service="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$approved_api_container_id" 2>/dev/null || true)"
+  runtime_api_config_files="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' "$approved_api_container_id" 2>/dev/null || true)"
+  runtime_api_project_dir="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$approved_api_container_id" 2>/dev/null || true)"
+  runtime_api_environment_file="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.environment_file" }}' "$approved_api_container_id" 2>/dev/null || true)"
+  runtime_api_image_id="$(docker inspect --format '{{.Image}}' "$approved_api_container_id" 2>/dev/null || true)"
+  runtime_api_image_ref="$(docker inspect --format '{{.Config.Image}}' "$approved_api_container_id" 2>/dev/null || true)"
+  runtime_api_state="$(docker inspect --format '{{.State.Status}}' "$approved_api_container_id" 2>/dev/null || true)"
+  runtime_api_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$approved_api_container_id" 2>/dev/null || true)"
+
+  [[ "$runtime_api_project" == "deploy" && "$runtime_api_service" == "jiejing-saas" ]] \
+    || fail_closed "runtime_compose_label_mismatch"
+  canonical_path_equals "$runtime_api_config_files" "$runtime_compose" \
+    || fail_closed "runtime_compose_label_mismatch"
+  canonical_path_equals "$runtime_api_project_dir" "$active_app/deploy" \
+    || fail_closed "runtime_compose_label_mismatch"
+  [[ "$runtime_api_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || fail_closed "runtime_api_image_untrusted"
+  docker image inspect "$runtime_api_image_id" >/dev/null 2>&1 \
+    || fail_closed "runtime_api_image_untrusted"
+  approved_image_reference_matches "$runtime_api_image_ref" "$runtime_api_image_id" \
+    || fail_closed "api_image_reference_drift"
+  [[ "$runtime_api_state" == "running" && "$runtime_api_health" == "healthy" ]] \
+    || fail_closed "runtime_api_container_unhealthy"
+
+  mapfile -t worker_containers < <(
+    docker ps \
+      --filter 'label=com.docker.compose.project=deploy' \
+      --filter 'label=com.docker.compose.service=jiejing-worker' \
+      --format '{{.ID}}'
+  )
+  [[ "${#worker_containers[@]}" -eq 1 ]] || fail_closed "runtime_worker_container_not_unique"
+  approved_worker_container_id="${worker_containers[0]}"
+  runtime_worker_project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$approved_worker_container_id" 2>/dev/null || true)"
+  runtime_worker_service="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$approved_worker_container_id" 2>/dev/null || true)"
+  runtime_worker_config_files="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' "$approved_worker_container_id" 2>/dev/null || true)"
+  runtime_worker_project_dir="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$approved_worker_container_id" 2>/dev/null || true)"
+  runtime_worker_environment_file="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.environment_file" }}' "$approved_worker_container_id" 2>/dev/null || true)"
+  runtime_worker_image_id="$(docker inspect --format '{{.Image}}' "$approved_worker_container_id" 2>/dev/null || true)"
+  runtime_worker_image_ref="$(docker inspect --format '{{.Config.Image}}' "$approved_worker_container_id" 2>/dev/null || true)"
+  runtime_worker_state="$(docker inspect --format '{{.State.Status}}' "$approved_worker_container_id" 2>/dev/null || true)"
+
+  [[ "$runtime_worker_project" == "deploy" && "$runtime_worker_service" == "jiejing-worker" ]] \
+    || fail_closed "runtime_worker_compose_label_mismatch"
+  canonical_path_equals "$runtime_worker_config_files" "$runtime_compose" \
+    || fail_closed "runtime_worker_compose_label_mismatch"
+  canonical_path_equals "$runtime_worker_project_dir" "$active_app/deploy" \
+    || fail_closed "runtime_worker_compose_label_mismatch"
+  [[ "$runtime_worker_environment_file" == "$runtime_api_environment_file" ]] \
+    || fail_closed "runtime_environment_label_mismatch"
+  [[ "$runtime_worker_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || fail_closed "runtime_worker_image_untrusted"
+  docker image inspect "$runtime_worker_image_id" >/dev/null 2>&1 \
+    || fail_closed "runtime_worker_image_untrusted"
+  approved_image_reference_matches "$runtime_worker_image_ref" "$runtime_worker_image_id" \
+    || fail_closed "worker_image_reference_drift"
+  [[ "$runtime_worker_state" == "running" ]] \
+    || fail_closed "runtime_worker_image_untrusted"
+
+  environment_file="$runtime_api_environment_file"
+}
+
 run_cos_probe() {
   local cos_output env_digest_after
   cos_output="$(docker run --rm --network bridge \
     --mount "type=bind,src=$private_dir,dst=/private" \
-    -w /app "$runtime_image_id" python tools/jiejing_configure_tencent_runtime_env.py \
+    -w /app "$runtime_api_image_id" python tools/jiejing_configure_tencent_runtime_env.py \
     --env-file /private/jiejing-saas.production.env \
     --verify-cos-backup-probe --apply 2>/dev/null)" || {
     LAST_BLOCKER="cos_probe_failed"
@@ -311,7 +383,7 @@ run_cls_probe() {
   local cls_output env_digest_after
   cls_output="$(docker run --rm --network bridge \
     --mount "type=bind,src=$private_dir,dst=/private" \
-    -w /app "$runtime_image_id" python tools/jiejing_configure_tencent_runtime_env.py \
+    -w /app "$runtime_api_image_id" python tools/jiejing_configure_tencent_runtime_env.py \
     --env-file /private/jiejing-saas.production.env \
     --verify-provider-cls-probe --apply 2>/dev/null)" || {
     LAST_BLOCKER="cls_probe_failed"
@@ -339,7 +411,7 @@ run_cls_probe() {
 }
 
 recreate_api() {
-  if ! approved_image_reference_matches "$runtime_api_image_ref" "$runtime_image_id"; then
+  if ! approved_image_reference_matches "$runtime_api_image_ref" "$runtime_api_image_id"; then
     LAST_BLOCKER="api_image_reference_drift"
     return 2
   fi
@@ -359,14 +431,14 @@ verify_recreated_api() {
   new_api_container_id="$(docker compose "${COMPOSE_ARGS[@]}" ps -q jiejing-saas 2>/dev/null || true)"
   new_api_image_id="$(docker inspect --format '{{.Image}}' "$new_api_container_id" 2>/dev/null || true)"
   if ! [[ "$new_api_container_id" != "$approved_api_container_id" ]] \
-    || ! [[ "$new_api_image_id" == "$runtime_image_id" ]]; then
+    || ! [[ "$new_api_image_id" == "$runtime_api_image_id" ]]; then
     LAST_BLOCKER="api_identity_mismatch"
     return 2
   fi
 }
 
 recreate_worker() {
-  if ! approved_image_reference_matches "$runtime_worker_image_ref" "$runtime_image_id"; then
+  if ! approved_image_reference_matches "$runtime_worker_image_ref" "$runtime_worker_image_id"; then
     LAST_BLOCKER="worker_image_reference_drift"
     return 2
   fi
@@ -386,7 +458,7 @@ verify_recreated_worker() {
   new_worker_container_id="$(docker compose "${COMPOSE_ARGS[@]}" ps -q jiejing-worker 2>/dev/null || true)"
   new_worker_image_id="$(docker inspect --format '{{.Image}}' "$new_worker_container_id" 2>/dev/null || true)"
   if ! [[ "$new_worker_container_id" != "$approved_worker_container_id" ]] \
-    || ! [[ "$new_worker_image_id" == "$runtime_image_id" ]]; then
+    || ! [[ "$new_worker_image_id" == "$runtime_worker_image_id" ]]; then
     LAST_BLOCKER="worker_identity_mismatch"
     return 2
   fi
@@ -450,53 +522,7 @@ esac
 runtime_compose="$active_app/deploy/$COMPOSE_NAME"
 [[ -f "$runtime_compose" && ! -L "$runtime_compose" ]] || fail_closed "runtime_compose_untrusted"
 
-mapfile -t api_containers < <(
-  docker ps \
-    --filter 'label=com.docker.compose.project=deploy' \
-    --filter 'label=com.docker.compose.service=jiejing-saas' \
-    --format '{{.ID}}'
-)
-[[ "${#api_containers[@]}" -eq 1 ]] || fail_closed "runtime_api_container_not_unique"
-api_container_id="${api_containers[0]}"
-approved_api_container_id="$api_container_id"
-
-runtime_project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$api_container_id" 2>/dev/null || true)"
-runtime_service="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$api_container_id" 2>/dev/null || true)"
-runtime_config_files="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' "$api_container_id" 2>/dev/null || true)"
-runtime_project_dir="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$api_container_id" 2>/dev/null || true)"
-environment_file="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.environment_file" }}' "$api_container_id" 2>/dev/null || true)"
-runtime_image_id="$(docker inspect --format '{{.Image}}' "$api_container_id" 2>/dev/null || true)"
-runtime_api_image_ref="$(docker inspect --format '{{.Config.Image}}' "$api_container_id" 2>/dev/null || true)"
-runtime_state="$(docker inspect --format '{{.State.Status}}' "$api_container_id" 2>/dev/null || true)"
-runtime_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$api_container_id" 2>/dev/null || true)"
-
-[[ "$runtime_project" == "deploy" && "$runtime_service" == "jiejing-saas" ]] \
-  || fail_closed "runtime_compose_label_mismatch"
-canonical_path_equals "$runtime_config_files" "$runtime_compose" \
-  || fail_closed "runtime_compose_label_mismatch"
-canonical_path_equals "$runtime_project_dir" "$active_app/deploy" \
-  || fail_closed "runtime_compose_label_mismatch"
-[[ "$runtime_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || fail_closed "runtime_image_untrusted"
-[[ "$runtime_state" == "running" && "$runtime_health" == "healthy" ]] \
-  || fail_closed "runtime_api_container_unhealthy"
-
-mapfile -t worker_containers < <(
-  docker ps \
-    --filter 'label=com.docker.compose.project=deploy' \
-    --filter 'label=com.docker.compose.service=jiejing-worker' \
-    --format '{{.ID}}'
-)
-[[ "${#worker_containers[@]}" -eq 1 ]] || fail_closed "runtime_worker_container_not_unique"
-approved_worker_container_id="${worker_containers[0]}"
-runtime_worker_image_id="$(docker inspect --format '{{.Image}}' "$approved_worker_container_id" 2>/dev/null || true)"
-runtime_worker_image_ref="$(docker inspect --format '{{.Config.Image}}' "$approved_worker_container_id" 2>/dev/null || true)"
-runtime_worker_state="$(docker inspect --format '{{.State.Status}}' "$approved_worker_container_id" 2>/dev/null || true)"
-[[ "$runtime_worker_image_id" == "$runtime_image_id" && "$runtime_worker_state" == "running" ]] \
-  || fail_closed "runtime_worker_image_untrusted"
-approved_image_reference_matches "$runtime_api_image_ref" "$runtime_image_id" \
-  || fail_closed "api_image_reference_drift"
-approved_image_reference_matches "$runtime_worker_image_ref" "$runtime_image_id" \
-  || fail_closed "worker_image_reference_drift"
+capture_and_validate_runtime_images
 
 environment_file_label="$environment_file"
 environment_file="$(readlink -f -- "$environment_file_label" 2>/dev/null || true)"
@@ -523,7 +549,7 @@ export JIEJING_PRODUCTION_PRIVATE_DIR="$private_dir"
 COMPOSE_ARGS=(--project-name deploy --env-file "$COMPOSE_ENV" -f "$runtime_compose")
 LAST_BLOCKER=""
 
-docker run --rm -w /app "$runtime_image_id" python -c \
+docker run --rm -w /app "$runtime_api_image_id" python -c \
   "from pathlib import Path; import sys; sys.exit(0 if Path('tools/jiejing_configure_tencent_runtime_env.py').is_file() else 2)" \
   >/dev/null 2>&1 || fail_closed "runtime_probe_tool_missing"
 printf '%s\n' "LIVE_RELEASE_GUARD_STATUS=ready"

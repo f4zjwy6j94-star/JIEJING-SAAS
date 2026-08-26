@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
+import tempfile
 import textwrap
 
 
@@ -115,6 +117,288 @@ def run_executable_fixture(bash: str) -> subprocess.CompletedProcess[bytes]:
     )
 
 
+def run_runtime_image_fixture(
+    bash: str, script: str
+) -> subprocess.CompletedProcess[bytes]:
+    with tempfile.TemporaryDirectory(prefix=".evidence-image-fixture-", dir=ROOT) as temp:
+        script_path = Path(temp) / "wrapper.sh"
+        script_path.write_bytes(script.encode("utf-8"))
+        source_path = script_path.relative_to(ROOT).as_posix()
+        fixture = textwrap.dedent(
+            rf'''
+            set -euo pipefail
+            source {shlex.quote(source_path)}
+
+            fixture_root="$(mktemp -d)"
+            trap 'test -n "$fixture_root" && rm -r -- "$fixture_root"' EXIT
+            active_app="$fixture_root/releases/release-a/app"
+            runtime_compose="$active_app/deploy/docker-compose.production-pilot.yml"
+            environment_file="$fixture_root/private/production-compose.env"
+            mkdir -p "$active_app/deploy" "$(dirname "$environment_file")"
+            touch "$runtime_compose" "$environment_file"
+
+            api_image="sha256:$(printf 'a%.0s' {{1..64}})"
+            worker_image="sha256:$(printf 'b%.0s' {{1..64}})"
+            api_ref=deploy-jiejing-saas
+            worker_ref=deploy-jiejing-worker
+            api_container=api-old
+            worker_container=worker-old
+            missing_api_image=0
+            missing_worker_image=0
+            api_ref_drift=0
+            worker_ref_drift=0
+            swap_captured_images=0
+            swap_recreated_api=0
+            swap_recreated_worker=0
+            drift_api_label=0
+            drift_worker_label=0
+            drift_worker_config=0
+            drift_worker_workdir=0
+            drift_worker_environment=0
+            unhealthy_api=0
+            stopped_worker=0
+
+            docker() {{
+              if [[ "${{1:-}}" == ps ]]; then
+                if [[ "$*" == *jiejing-saas* ]]; then
+                  printf '%s\n' "$api_container"
+                else
+                  printf '%s\n' "$worker_container"
+                fi
+                return 0
+              fi
+              if [[ "${{1:-}} ${{2:-}}" == "image inspect" ]]; then
+                local format="${{4:-}}" ref="${{5:-${{3:-}}}}" resolved=""
+                case "$ref" in
+                  "$api_ref")
+                    if [[ "$api_ref_drift" == 1 ]]; then resolved="$worker_image"; else resolved="$api_image"; fi
+                    ;;
+                  "$worker_ref")
+                    if [[ "$worker_ref_drift" == 1 ]]; then resolved="$api_image"; else resolved="$worker_image"; fi
+                    ;;
+                  "$api_image") resolved="$api_image" ;;
+                  "$worker_image") resolved="$worker_image" ;;
+                  *) return 1 ;;
+                esac
+                [[ "${{3:-}}" == --format ]] && printf '%s\n' "$resolved"
+                return 0
+              fi
+              if [[ "${{1:-}}" == inspect && "${{2:-}}" == --format ]]; then
+                local format="${{3:-}}" container="${{4:-}}" service image ref
+                if [[ "$container" == "$api_container" ]]; then
+                  service=jiejing-saas; image="$api_image"; ref="$api_ref"
+                elif [[ "$container" == "$worker_container" ]]; then
+                  service=jiejing-worker; image="$worker_image"; ref="$worker_ref"
+                else
+                  return 1
+                fi
+                if [[ "$swap_captured_images" == 1 ]]; then
+                  if [[ "$service" == jiejing-saas ]]; then image="$worker_image"; else image="$api_image"; fi
+                fi
+                if [[ "$service" == jiejing-saas && "$container" == api-new && "$swap_recreated_api" == 1 ]]; then
+                  image="$worker_image"
+                fi
+                if [[ "$service" == jiejing-worker \
+                  && "$container" == worker-new \
+                  && "$swap_recreated_worker" == 1 ]]; then
+                  image="$api_image"
+                fi
+                case "$format" in
+                  *compose.project\"*)
+                    if [[ "$service" == jiejing-saas && "$drift_api_label" == 1 ]]; then
+                      printf '%s\n' other
+                    else
+                      printf '%s\n' deploy
+                    fi
+                    ;;
+                  *compose.service\"*)
+                    if [[ "$service" == jiejing-worker && "$drift_worker_label" == 1 ]]; then
+                      printf '%s\n' jiejing-saas
+                    else
+                      printf '%s\n' "$service"
+                    fi
+                    ;;
+                  *project.config_files*)
+                    if [[ "$service" == jiejing-worker && "$drift_worker_config" == 1 ]]; then
+                      printf '%s\n' "$fixture_root/wrong-compose.yml"
+                    else
+                      printf '%s\n' "$runtime_compose"
+                    fi
+                    ;;
+                  *project.working_dir*)
+                    if [[ "$service" == jiejing-worker && "$drift_worker_workdir" == 1 ]]; then
+                      printf '%s\n' "$fixture_root/wrong-workdir"
+                    else
+                      printf '%s\n' "$active_app/deploy"
+                    fi
+                    ;;
+                  *project.environment_file*)
+                    if [[ "$service" == jiejing-worker && "$drift_worker_environment" == 1 ]]; then
+                      printf '%s\n' "$fixture_root/private/wrong.env"
+                    else
+                      printf '%s\n' "$environment_file"
+                    fi
+                    ;;
+                  '{{{{.Image}}}}')
+                    if [[ "$service" == jiejing-saas && "$missing_api_image" == 1 ]]; then
+                      printf '\n'
+                    elif [[ "$service" == jiejing-worker && "$missing_worker_image" == 1 ]]; then
+                      printf '\n'
+                    else
+                      printf '%s\n' "$image"
+                    fi
+                    ;;
+                  '{{{{.Config.Image}}}}') printf '%s\n' "$ref" ;;
+                  '{{{{.State.Status}}}}')
+                    if [[ "$service" == jiejing-worker && "$stopped_worker" == 1 ]]; then
+                      printf '%s\n' exited
+                    else
+                      printf '%s\n' running
+                    fi
+                    ;;
+                  *State.Health*)
+                    if [[ "$service" == jiejing-saas && "$unhealthy_api" == 1 ]]; then
+                      printf '%s\n' unhealthy
+                    else
+                      printf '%s\n' healthy
+                    fi
+                    ;;
+                  *) return 2 ;;
+                esac
+                return 0
+              fi
+              if [[ "${{1:-}}" == compose ]]; then
+                local service="${{@: -1}}"
+                if [[ "$*" == *" up "* ]]; then
+                  if [[ "$service" == jiejing-saas ]]; then
+                    api_container=api-new
+                  else
+                    worker_container=worker-new
+                  fi
+                  return 0
+                fi
+                if [[ "$*" == *" ps -q "* ]]; then
+                  if [[ "$service" == jiejing-saas ]]; then
+                    printf '%s\n' "$api_container"
+                  else
+                    printf '%s\n' "$worker_container"
+                  fi
+                  return 0
+                fi
+              fi
+              if [[ "${{1:-}}" == run ]]; then
+                if [[ " $* " == *" $api_image "* ]]; then
+                  printf '%s\n' api >>"$fixture_root/probe-images"
+                elif [[ " $* " == *" $worker_image "* ]]; then
+                  printf '%s\n' worker >>"$fixture_root/probe-images"
+                else
+                  return 3
+                fi
+                printf '%s\n' '{{}}'
+                return 0
+              fi
+              return 2
+            }}
+
+            capture_and_validate_runtime_images
+            [[ "$runtime_api_image_id" == "$api_image" ]]
+            [[ "$runtime_worker_image_id" == "$worker_image" ]]
+            [[ "$runtime_api_image_id" != "$runtime_worker_image_id" ]]
+            private_dir="$(dirname "$environment_file")"
+            APP_ENV="$fixture_root/private/jiejing-saas.production.env"
+            touch "$APP_ENV"
+            env_digest_before=digest
+            json_contract_verified() {{ return 0; }}
+            trusted_private_file() {{ return 0; }}
+            evidence_excluded_env_digest() {{ printf '%s\n' digest; }}
+            run_cos_probe
+            run_cls_probe
+            [[ "$(<"$fixture_root/probe-images")" == $'api\napi' ]]
+            COMPOSE_ARGS=()
+            wait_for_api_health() {{ return 0; }}
+            wait_for_worker_health() {{ return 0; }}
+            recreate_api
+            verify_recreated_api
+            recreate_worker
+            verify_recreated_worker
+
+            assert_capture_fails() {{
+              set +e
+              (capture_and_validate_runtime_images) >/dev/null 2>&1
+              local rc=$?
+              set -e
+              [[ "$rc" -ne 0 ]]
+            }}
+
+            api_container=api-old
+            worker_container=worker-old
+            missing_api_image=1
+            assert_capture_fails
+            missing_api_image=0
+            missing_worker_image=1
+            assert_capture_fails
+            missing_worker_image=0
+            api_ref_drift=1
+            assert_capture_fails
+            api_ref_drift=0
+            worker_ref_drift=1
+            assert_capture_fails
+            worker_ref_drift=0
+            swap_captured_images=1
+            assert_capture_fails
+            swap_captured_images=0
+            drift_api_label=1
+            assert_capture_fails
+            drift_api_label=0
+            drift_worker_label=1
+            assert_capture_fails
+            drift_worker_label=0
+            drift_worker_config=1
+            assert_capture_fails
+            drift_worker_config=0
+            drift_worker_workdir=1
+            assert_capture_fails
+            drift_worker_workdir=0
+            drift_worker_environment=1
+            assert_capture_fails
+            drift_worker_environment=0
+            unhealthy_api=1
+            assert_capture_fails
+            unhealthy_api=0
+            stopped_worker=1
+            assert_capture_fails
+            stopped_worker=0
+
+            capture_and_validate_runtime_images
+            COMPOSE_ARGS=()
+            recreate_api
+            swap_recreated_api=1
+            set +e
+            verify_recreated_api >/dev/null 2>&1
+            swapped_api_rc=$?
+            set -e
+            [[ "$swapped_api_rc" -ne 0 ]]
+            swap_recreated_api=0
+            recreate_worker
+            swap_recreated_worker=1
+            set +e
+            verify_recreated_worker >/dev/null 2>&1
+            swapped_worker_rc=$?
+            set -e
+            [[ "$swapped_worker_rc" -ne 0 ]]
+            printf '%s\n' RUNTIME_IMAGE_FIXTURE_PASS
+            '''
+        )
+        return subprocess.run(
+            [bash, "-s"],
+            cwd=ROOT,
+            input=fixture.encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+
 def main() -> int:
     required = (SCRIPT, SERVICE, TIMER)
     if any(not path.is_file() for path in required):
@@ -182,8 +466,16 @@ def main() -> int:
         'environment_file_label="$environment_file"',
         '[[ "$environment_file_label" == "$environment_file" ]]',
         "{{.Image}}",
-        'canonical_path_equals "$runtime_config_files" "$runtime_compose"',
-        'canonical_path_equals "$runtime_project_dir" "$active_app/deploy"',
+        'canonical_path_equals "$runtime_api_config_files" "$runtime_compose"',
+        'canonical_path_equals "$runtime_api_project_dir" "$active_app/deploy"',
+        'capture_and_validate_runtime_images',
+        '[[ "$runtime_api_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]',
+        '[[ "$runtime_worker_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]',
+        'docker image inspect "$runtime_api_image_id"',
+        'docker image inspect "$runtime_worker_image_id"',
+        'canonical_path_equals "$runtime_worker_config_files" "$runtime_compose"',
+        'canonical_path_equals "$runtime_worker_project_dir" "$active_app/deploy"',
+        '[[ "$runtime_worker_environment_file" == "$runtime_api_environment_file" ]]',
         '[[ "$environment_file" == "$private_dir/production-compose.env" ]]',
         'APP_ENV="$private_dir/jiejing-saas.production.env"',
         'trusted_private_directory "$private_dir"',
@@ -201,7 +493,7 @@ def main() -> int:
         '[[ "$env_digest_after" != "$env_digest_before" ]]',
         'LIVE_RELEASE_GUARD_STATUS=ready',
         'docker run --rm --network bridge',
-        '"$runtime_image_id" python tools/jiejing_configure_tencent_runtime_env.py',
+        '"$runtime_api_image_id" python tools/jiejing_configure_tencent_runtime_env.py',
         "--verify-cos-backup-probe --apply",
         'payload.get("status") == "verified"',
         'payload.get("probe_verified") is True',
@@ -218,11 +510,11 @@ def main() -> int:
         'COMPOSE_ARGS=(--project-name deploy --env-file "$COMPOSE_ENV" -f "$runtime_compose")',
         'docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps --force-recreate jiejing-saas',
         '[[ "$new_api_container_id" != "$approved_api_container_id" ]]',
-        '[[ "$new_api_image_id" == "$runtime_image_id" ]]',
+        '[[ "$new_api_image_id" == "$runtime_api_image_id" ]]',
         'API_RELOAD_STATUS=ready',
         'docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps --force-recreate jiejing-worker',
         '[[ "$new_worker_container_id" != "$approved_worker_container_id" ]]',
-        '[[ "$new_worker_image_id" == "$runtime_image_id" ]]',
+        '[[ "$new_worker_image_id" == "$runtime_worker_image_id" ]]',
         'WORKER_RELOAD_STATUS=ready',
         'PUBLIC_BASE_URL="https://app.jiejing.shop"',
         '"$PUBLIC_BASE_URL/health"',
@@ -250,6 +542,9 @@ def main() -> int:
         "unexpected_arguments",
         "active_release_untrusted",
         "runtime_api_container_not_unique",
+        "runtime_api_image_untrusted",
+        "runtime_worker_image_untrusted",
+        "runtime_worker_compose_label_mismatch",
         "runtime_compose_label_mismatch",
         "private_env_permissions_untrusted",
         "cos_probe_failed",
@@ -311,6 +606,7 @@ def main() -> int:
         "TAVILY",
         "FAL_",
         "--record-cos-probe-now",
+        '"$runtime_image_id"',
         "force-recreate jiejing-vault",
         "force-recreate jiejing-frontend",
         "force-recreate jiejing-edge",
@@ -323,6 +619,10 @@ def main() -> int:
         return fail("captured provider output must fail closed on invalid JSON without being logged")
     if 'echo "$cos_output"' in script or 'echo "$cls_output"' in script:
         return fail("raw provider output must never be emitted")
+    if script.count('-w /app "$runtime_api_image_id" python') != 3:
+        return fail("COS, CLS and probe-tool checks must use the captured API image")
+    if '-w /app "$runtime_worker_image_id" python' in script:
+        return fail("provider probe tooling must not depend on the Worker image")
 
     bash = shutil.which("bash")
     if bash:
@@ -340,6 +640,25 @@ def main() -> int:
             fixture_error = fixture.stderr.decode("utf-8", errors="replace").splitlines()
             detail = fixture_error[-1][:200] if fixture_error else f"exit_{fixture.returncode}"
             return fail("production evidence refresh executable failure fixture must pass: " + detail)
+        runtime_fixture = run_runtime_image_fixture(bash, script)
+        if runtime_fixture.returncode != 0:
+            runtime_error = runtime_fixture.stderr.decode("utf-8", errors="replace").splitlines()
+            detail = runtime_error[-1][:200] if runtime_error else f"exit_{runtime_fixture.returncode}"
+            return fail("production evidence refresh dual-image fixture must pass: " + detail)
+        if b"RUNTIME_IMAGE_FIXTURE_PASS" not in runtime_fixture.stdout:
+            return fail("production evidence refresh dual-image fixture did not reach completion")
+        for identity_check in (
+            '    || ! [[ "$new_api_image_id" == "$runtime_api_image_id" ]]; then',
+            '    || ! [[ "$new_worker_image_id" == "$runtime_worker_image_id" ]]; then',
+        ):
+            if script.count(identity_check) != 1:
+                return fail("recreated service image check must be unique: " + identity_check.strip())
+            mutated_script = script.replace(identity_check, "    || false; then", 1)
+            mutation_fixture = run_runtime_image_fixture(bash, mutated_script)
+            if mutation_fixture.returncode == 0:
+                return fail("dual-image fixture did not detect deleted image check: " + identity_check.strip())
+            if b"COS_PROBE_STATUS=verified" not in mutation_fixture.stdout:
+                return fail("dual-image mutation fixture failed before exercising runtime behavior")
 
     print("PASS jiejing_production_evidence_auto_refresh_guardrails")
     return 0
