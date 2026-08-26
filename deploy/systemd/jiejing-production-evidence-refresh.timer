@@ -1,0 +1,12 @@
+[Unit]
+Description=Schedule Jiejing production reliability evidence refresh
+
+[Timer]
+OnCalendar=*-*-* 00,12:17:00
+RandomizedDelaySec=9m
+Persistent=true
+AccuracySec=1m
+Unit=jiejing-production-evidence-refresh.service
+
+[Install]
+WantedBy=timers.target
