@@ -49,6 +49,8 @@ def main() -> int:
         return fail("both public and workbench entry files must reference the current app.js cache version")
     if "./app.js?v=20260825-owner-media-testing-v3" in index_html + app_html:
         return fail("frontend entry files must not retain the pre-vision-report-recovery app.js cache version")
+    if "./app.js?v=20260826-controlled-existing-draft-publish-v5" in index_html + app_html:
+        return fail("frontend entry files must not retain the pre-cross-view publish-recovery cache version")
     index_html_app_versions = re.findall(r"\./app\.js\?v=([A-Za-z0-9._-]+)", index_html)
     if index_html_app_versions != [app_js_asset_version, app_js_asset_version]:
         return fail("public entry prefetch and lazy preload must both use the current app.js cache version")
