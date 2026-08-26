@@ -256,6 +256,53 @@ if (visible.filter((card) => card.confirmation_id === "confirm-controlled-reconc
     if display_result.returncode != 0:
         raise AssertionError(display_result.stderr.strip() or "controlled publish confirmation display behavior failed")
 
+    predicate_start = app_js.index("function isSaasControlledExistingDraftPublishConfirmation")
+    predicate_end = app_js.index("async function verifySaasInventoryLocationConfirmations", predicate_start)
+    predicate_source = app_js[predicate_start:predicate_end]
+    predicate_script = f"""
+globalThis.state = {{
+  saasCompany: {{ company_id: "company-current" }},
+  saasIdentity: {{ company_id: "company-current" }},
+  saasConfirmations: [],
+  saasExecutionResults: [],
+}};
+function activeSaasStore() {{ return {{ store_id: "store-current" }}; }}
+function saasControlledExistingDraftPublishReceipt() {{ return null; }}
+{predicate_source}
+const card = {{
+  confirmation_id: "confirm-controlled-reconcile",
+  company_id: "company-current",
+  store_id: "store-current",
+  action_type: "publish_listing",
+  status: "external_execution_processing_manual_reconcile",
+  item: {{
+    source: "merchant_existing_ebay_draft_publish_intake",
+    controlled_existing_draft_publish: true,
+    existing_ebay_draft: {{
+      offer_id: "245675556011",
+      sku: "JJ-INCENSE-JC2023041300002-01",
+      source_execution_id: "exec_receipt_test",
+    }},
+    publish_payload: {{ listing: {{ sku: "JJ-INCENSE-JC2023041300002-01" }} }},
+    secret_exposed: false,
+  }},
+}};
+state.saasConfirmations = [card];
+if (!isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(card, [card])) {{
+  throw new Error("read-only manual reconciliation must remain visible without a frontend execution cache");
+}}
+"""
+    predicate_result = subprocess.run(
+        ["node", "-e", predicate_script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if predicate_result.returncode != 0:
+        raise AssertionError(predicate_result.stderr.strip() or "manual reconciliation predicate failed")
+
     detail_marker = "function saasControlledExistingDraftPublishDetailMarkup"
     if detail_marker not in app_js:
         raise AssertionError("controlled publish confirmation must render exact merchant-reviewable parameters")

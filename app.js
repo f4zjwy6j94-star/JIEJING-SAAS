@@ -19129,7 +19129,9 @@ function isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(ca
   const item = card?.item && typeof card.item === "object" ? card.item : {};
   const draft = item.existing_ebay_draft && typeof item.existing_ebay_draft === "object" ? item.existing_ebay_draft : {};
   const payload = item.publish_payload && typeof item.publish_payload === "object" ? item.publish_payload : {};
-  const receipt = saasControlledExistingDraftPublishReceipt(card);
+  const offerId = String(draft.offer_id || "").trim();
+  const sku = String(draft.sku || "").trim();
+  const sourceExecutionId = String(draft.source_execution_id || "").trim();
   const confirmationId = String(card?.confirmation_id || "").trim();
   if (!(
     companyId &&
@@ -19139,11 +19141,10 @@ function isSaasExactManualReconcileControlledExistingDraftPublishConfirmation(ca
     String(card?.store_id || "").trim() === storeId &&
     String(card?.status || "") === "external_execution_processing_manual_reconcile" &&
     isSaasControlledExistingDraftPublishConfirmation(card) &&
-    receipt &&
-    String(draft.offer_id || "").trim() === receipt.offerId &&
-    String(draft.sku || "").trim() === receipt.sku &&
-    String(draft.source_execution_id || "").trim() === receipt.executionId &&
-    String(payload.listing?.sku || "").trim() === receipt.sku &&
+    offerId &&
+    sku &&
+    sourceExecutionId &&
+    String(payload.listing?.sku || "").trim() === sku &&
     item.secret_exposed === false
   )) return false;
   const matches = (Array.isArray(cards) ? cards : []).filter(
