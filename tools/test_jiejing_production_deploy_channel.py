@@ -299,6 +299,14 @@ def validate_application_rollback_runtime_fixture(apply: str) -> list[str]:
         functions = extract_bash_functions(
             apply,
             (
+                "build_candidate_images_with_retry",
+                "image_ref_id",
+                "remove_image_ref_if_present",
+                "discard_prior_rollback_hold_backups",
+                "prepare_prior_rollback_hold_backups",
+                "restore_prior_rollback_image_holds",
+                "capture_previous_runtime_images",
+                "capture_candidate_runtime_images",
                 "verify_runtime_labels_and_health",
                 "verify_candidate_runtime_image_coherence",
                 "atomic_replace_active_link",
@@ -323,65 +331,228 @@ environment_file="$TEST_ROOT/private/production-compose.env"
 mkdir -p "$active_app/deploy" "$candidate_app/deploy" "$(dirname "$environment_file")"
 touch "$active_app/deploy/docker-compose.production-pilot.yml"
 touch "$candidate_app/deploy/docker-compose.production-pilot.yml" "$environment_file"
-ln -s "$candidate_app" "$ACTIVE_LINK"
+ln -s "$active_app" "$ACTIVE_LINK"
 old_api="sha256:$(printf 'a%.0s' {{1..64}})"
 old_worker="sha256:$(printf 'b%.0s' {{1..64}})"
-new_image="sha256:$(printf 'c%.0s' {{1..64}})"
-other_new="sha256:$(printf 'd%.0s' {{1..64}})"
-previous_api_image_id="$old_api"
-previous_worker_image_id="$old_worker"
-previous_api_image_ref=deploy-jiejing-saas
-previous_worker_image_ref=deploy-jiejing-worker
-CURRENT_API_ID="$new_image"
-CURRENT_WORKER_ID="$other_new"
-CURRENT_APP="$candidate_app"
-docker() {{
-  if [[ "${{1:-}} ${{2:-}}" == "image tag" ]]; then return 0; fi
-  if [[ "${{1:-}} ${{2:-}}" == "image inspect" ]]; then return 0; fi
-  [[ "${{1:-}}" == inspect ]] || return 2
-  local container="${{2:-}}" format="${{4:-}}" image ref
-  if [[ "$container" == deploy-jiejing-saas-1 ]]; then
-    image="$CURRENT_API_ID"; ref=deploy-jiejing-saas
-  else
-    image="$CURRENT_WORKER_ID"; ref=deploy-jiejing-worker
+new_api="sha256:$(printf 'c%.0s' {{1..64}})"
+new_worker="sha256:$(printf 'd%.0s' {{1..64}})"
+manual_api="sha256:$(printf 'e%.0s' {{1..64}})"
+manual_worker="sha256:$(printf 'f%.0s' {{1..64}})"
+ROLLBACK_API_HOLD_REF=jiejing-production-rollback-api:previous
+ROLLBACK_WORKER_HOLD_REF=jiejing-production-rollback-worker:previous
+ROLLBACK_API_HOLD_BACKUP_REF=jiejing-production-rollback-api:capture-backup
+ROLLBACK_WORKER_HOLD_BACKUP_REF=jiejing-production-rollback-worker:capture-backup
+declare -A IMAGE_EXISTS REF_TO_ID CONTAINER_IMAGE CONTAINER_APP
+FAIL_HOLD_REF=""
+FAIL_BUILD=0
+BUILD_CALLS=0
+REQUIRE_HOLD_SOURCE=0
+
+resolve_image() {{
+  local source="$1"
+  if [[ "${{IMAGE_EXISTS[$source]:-0}}" == "1" ]]; then
+    printf '%s\n' "$source"
+    return 0
   fi
+  local id="${{REF_TO_ID[$source]:-}}"
+  [[ -n "$id" && "${{IMAGE_EXISTS[$id]:-0}}" == "1" ]] || return 1
+  printf '%s\n' "$id"
+}}
+
+garbage_collect_images() {{
+  local id ref container referenced
+  for id in "${{!IMAGE_EXISTS[@]}}"; do
+    referenced=0
+    for ref in "${{!REF_TO_ID[@]}}"; do
+      [[ "${{REF_TO_ID[$ref]}}" == "$id" ]] && referenced=1
+    done
+    for container in "${{!CONTAINER_IMAGE[@]}}"; do
+      [[ "${{CONTAINER_IMAGE[$container]}}" == "$id" ]] && referenced=1
+    done
+    [[ "$referenced" == "1" ]] || unset 'IMAGE_EXISTS[$id]'
+  done
+}}
+
+reset_store() {{
+  IMAGE_EXISTS=([$old_api]=1 [$old_worker]=1)
+  REF_TO_ID=([deploy-jiejing-saas]="$old_api" [deploy-jiejing-worker]="$old_worker")
+  CONTAINER_IMAGE=([deploy-jiejing-saas-1]="$old_api" [deploy-jiejing-worker-1]="$old_worker")
+  CONTAINER_APP=([deploy-jiejing-saas-1]="$active_app" [deploy-jiejing-worker-1]="$active_app")
+  FAIL_HOLD_REF=""
+  FAIL_BUILD=0
+  BUILD_CALLS=0
+  REQUIRE_HOLD_SOURCE=0
+  previous_api_image_id=""
+  previous_worker_image_id=""
+  previous_api_image_ref=""
+  previous_worker_image_ref=""
+  candidate_api_image_id=""
+  candidate_worker_image_id=""
+}}
+
+docker() {{
+  if [[ "${{1:-}} ${{2:-}}" == "image inspect" ]]; then
+    local id
+    id="$(resolve_image "${{3:-}}")" || return 1
+    if [[ "${{4:-}}" == "--format" ]]; then printf '%s\n' "$id"; fi
+    return 0
+  fi
+  if [[ "${{1:-}} ${{2:-}}" == "image tag" ]]; then
+    local source="${{3:-}}" id destination="${{4:-}}"
+    [[ "$destination" != "$FAIL_HOLD_REF" ]] || return 9
+    if [[ "$REQUIRE_HOLD_SOURCE" == "1" \
+      && ( "$source" == "$old_api" || "$source" == "$old_worker" ) ]]; then
+      return 8
+    fi
+    id="$(resolve_image "$source")" || return 1
+    REF_TO_ID[$destination]="$id"
+    garbage_collect_images
+    return 0
+  fi
+  if [[ "${{1:-}} ${{2:-}}" == "image rm" ]]; then
+    unset 'REF_TO_ID[${{3:-}}]'
+    garbage_collect_images
+    return 0
+  fi
+  [[ "${{1:-}}" == inspect ]] || return 2
+  local container="${{2:-}}" format="${{4:-}}" image ref app
+  image="${{CONTAINER_IMAGE[$container]:-}}"
+  app="${{CONTAINER_APP[$container]:-}}"
+  [[ -n "$image" && "${{IMAGE_EXISTS[$image]:-0}}" == "1" ]] || return 1
+  if [[ "$container" == deploy-jiejing-saas-1 ]]; then ref=deploy-jiejing-saas; else ref=deploy-jiejing-worker; fi
   case "$format" in
     '{{{{.Image}}}}') printf '%s\n' "$image" ;;
     '{{{{.Config.Image}}}}') printf '%s\n' "$ref" ;;
     '{{{{.State.Status}}}}') printf '%s\n' running ;;
     '{{{{if .State.Health}}}}{{{{.State.Health.Status}}}}{{{{else}}}}none{{{{end}}}}') printf '%s\n' healthy ;;
-    *config_files*) printf '%s\n' "$CURRENT_APP/deploy/docker-compose.production-pilot.yml" ;;
-    *working_dir*) printf '%s\n' "$CURRENT_APP/deploy" ;;
+    *config_files*) printf '%s\n' "$app/deploy/docker-compose.production-pilot.yml" ;;
+    *working_dir*) printf '%s\n' "$app/deploy" ;;
     *environment_file*) printf '%s\n' "$environment_file" ;;
     *) return 3 ;;
   esac
 }}
+
+fake_candidate_compose() {{
+  local action="${{1:-}}" service="${{@: -1}}" id
+  if [[ "$action" == build ]]; then
+    BUILD_CALLS=$((BUILD_CALLS + 1))
+    IMAGE_EXISTS[$new_api]=1
+    REF_TO_ID[deploy-jiejing-saas]="$new_api"
+    if [[ "$FAIL_BUILD" == "1" ]]; then return 7; fi
+    IMAGE_EXISTS[$new_worker]=1
+    REF_TO_ID[deploy-jiejing-worker]="$new_worker"
+    return 0
+  fi
+  [[ "$action" == up ]] || return 2
+  id="$(resolve_image "deploy-${{service}}")" || return 1
+  CONTAINER_IMAGE["deploy-${{service}}-1"]="$id"
+  CONTAINER_APP["deploy-${{service}}-1"]="$candidate_app"
+  garbage_collect_images
+}}
+
 fake_previous_compose() {{
   local service="${{@: -1}}"
+  local id
   case "$service" in
-    jiejing-saas) CURRENT_API_ID="$old_api" ;;
-    jiejing-worker) CURRENT_WORKER_ID="$old_worker" ;;
+    jiejing-saas) id="$(resolve_image deploy-jiejing-saas)" ;;
+    jiejing-worker) id="$(resolve_image deploy-jiejing-worker)" ;;
+    *) return 0 ;;
   esac
-  CURRENT_APP="$active_app"
+  CONTAINER_IMAGE["deploy-${{service}}-1"]="$id"
+  CONTAINER_APP["deploy-${{service}}-1"]="$active_app"
+  garbage_collect_images
 }}
+candidate_compose=(fake_candidate_compose)
 previous_compose=(fake_previous_compose)
 wait_container_healthy() {{ return 0; }}
 wait_public_json() {{ return 0; }}
 
-set +e
-verify_candidate_runtime_image_coherence >/dev/null
-mismatch_rc=$?
-set -e
-[[ "$mismatch_rc" != "0" ]]
-CURRENT_WORKER_ID="$new_image"
+# Happy path: service-specific candidate images are valid, while fixed holds
+# keep both different previous images restorable after live tags/containers move.
+reset_store
+capture_previous_runtime_images
+[[ "${{REF_TO_ID[$ROLLBACK_API_HOLD_REF]:-}}" == "$old_api" ]]
+[[ "${{REF_TO_ID[$ROLLBACK_WORKER_HOLD_REF]:-}}" == "$old_worker" ]]
+build_candidate_images_with_retry
+capture_candidate_runtime_images
+[[ "$candidate_api_image_id" == "$new_api" && "$candidate_worker_image_id" == "$new_worker" ]]
+[[ "$candidate_api_image_id" != "$candidate_worker_image_id" ]]
+fake_candidate_compose up -d --no-deps jiejing-saas
+fake_candidate_compose up -d --no-deps jiejing-worker
 verify_candidate_runtime_image_coherence >"$TEST_ROOT/coherence.out"
 coherence_output="$(<"$TEST_ROOT/coherence.out")"
-[[ "$candidate_runtime_image_id" == "$new_image" ]]
 [[ "$coherence_output" == CANDIDATE_RUNTIME_IMAGE_COHERENCE=verified ]]
+REQUIRE_HOLD_SOURCE=1
 rollback_application_release
 [[ "$(readlink -f -- "$ACTIVE_LINK")" == "$active_app" ]]
-[[ "$CURRENT_API_ID" == "$old_api" && "$CURRENT_WORKER_ID" == "$old_worker" ]]
+[[ "${{CONTAINER_IMAGE[deploy-jiejing-saas-1]}}" == "$old_api" ]]
+[[ "${{CONTAINER_IMAGE[deploy-jiejing-worker-1]}}" == "$old_worker" ]]
 verify_previous_runtime_restored
+
+# A partially-created hold pair must be undone before any build/container work.
+reset_store
+FAIL_HOLD_REF="$ROLLBACK_WORKER_HOLD_REF"
+set +e
+capture_previous_runtime_images
+hold_failure_rc=$?
+set -e
+[[ "$hold_failure_rc" != "0" && "$BUILD_CALLS" == "0" ]]
+[[ -z "${{REF_TO_ID[$ROLLBACK_API_HOLD_REF]:-}}" && -z "${{REF_TO_ID[$ROLLBACK_WORKER_HOLD_REF]:-}}" ]]
+[[ "${{CONTAINER_IMAGE[deploy-jiejing-saas-1]}}" == "$old_api" ]]
+[[ "${{CONTAINER_IMAGE[deploy-jiejing-worker-1]}}" == "$old_worker" ]]
+
+# Updating an existing manual rollback pair must also be all-or-nothing. The
+# fake store immediately collects an overwritten, otherwise-unreferenced hold.
+reset_store
+IMAGE_EXISTS[$manual_api]=1
+IMAGE_EXISTS[$manual_worker]=1
+REF_TO_ID[$ROLLBACK_API_HOLD_REF]="$manual_api"
+REF_TO_ID[$ROLLBACK_WORKER_HOLD_REF]="$manual_worker"
+FAIL_HOLD_REF="$ROLLBACK_WORKER_HOLD_REF"
+set +e
+capture_previous_runtime_images
+existing_hold_failure_rc=$?
+set -e
+[[ "$existing_hold_failure_rc" != "0" ]]
+[[ "${{REF_TO_ID[$ROLLBACK_API_HOLD_REF]:-}}" == "$manual_api" ]]
+[[ "${{REF_TO_ID[$ROLLBACK_WORKER_HOLD_REF]:-}}" == "$manual_worker" ]]
+[[ "${{IMAGE_EXISTS[$manual_api]:-0}}" == "1" && "${{IMAGE_EXISTS[$manual_worker]:-0}}" == "1" ]]
+
+# A partial build failure remains exactly recoverable through the holds.
+reset_store
+capture_previous_runtime_images
+FAIL_BUILD=1
+set +e
+build_candidate_images_with_retry
+partial_build_rc=$?
+set -e
+[[ "$partial_build_rc" != "0" ]]
+rollback_application_release
+verify_previous_runtime_restored
+
+# Mutation guard: deleting either hold makes the simulated image store collect
+# that old image when candidate containers replace the last live references.
+for missing_hold in "$ROLLBACK_API_HOLD_REF" "$ROLLBACK_WORKER_HOLD_REF"; do
+  reset_store
+  capture_previous_runtime_images
+  unset 'REF_TO_ID[$missing_hold]'
+  build_candidate_images_with_retry
+  capture_candidate_runtime_images
+  fake_candidate_compose up -d --no-deps jiejing-saas
+  fake_candidate_compose up -d --no-deps jiejing-worker
+  before_failed_rollback_api="${{CONTAINER_IMAGE[deploy-jiejing-saas-1]}}"
+  before_failed_rollback_worker="${{CONTAINER_IMAGE[deploy-jiejing-worker-1]}}"
+  set +e
+  rollback_application_release
+  missing_hold_rc=$?
+  set -e
+  [[ "$missing_hold_rc" != "0" ]]
+  [[ "${{CONTAINER_IMAGE[deploy-jiejing-saas-1]}}" == "$before_failed_rollback_api" ]]
+  [[ "${{CONTAINER_IMAGE[deploy-jiejing-worker-1]}}" == "$before_failed_rollback_worker" ]]
+  [[ "${{CONTAINER_APP[deploy-jiejing-saas-1]}}" == "$candidate_app" ]]
+  [[ "${{CONTAINER_APP[deploy-jiejing-worker-1]}}" == "$candidate_app" ]]
+done
+
 printf '%s\n' APPLICATION_ROLLBACK_FIXTURE_PASS
 """
         result = run_bash_fixture(fixture, temp, "application-rollback-runtime.sh")
@@ -1132,10 +1303,14 @@ def main() -> int:
         "PRIVATE_ENV_NORMALIZATION_APPLIED=0",
         "normalize_private_env_permissions",
         "capture_previous_runtime_images",
+        "capture_candidate_runtime_images",
         "verify_candidate_runtime_image_coherence",
         "atomic_replace_active_link",
         "rollback_application_release",
         "finalize_evidence_refresh_transaction",
+        'ROLLBACK_API_HOLD_REF="jiejing-production-rollback-api:previous"',
+        'ROLLBACK_WORKER_HOLD_REF="jiejing-production-rollback-worker:previous"',
+        "ROLLBACK_IMAGE_HOLDS_VERIFIED=1",
         "CANDIDATE_RUNTIME_IMAGE_COHERENCE=verified",
     ]
     required_compose = [
@@ -1176,6 +1351,9 @@ def main() -> int:
         "DropInPaths",
         "3600",
         "SIGKILL",
+        "jiejing-production-rollback-api:previous",
+        "jiejing-production-rollback-worker:previous",
+        "禁止 image prune",
     ]
 
     missing: list[str] = []
@@ -1209,6 +1387,16 @@ def main() -> int:
     application_rollback_failures = validate_application_rollback_runtime_fixture(apply)
     if application_rollback_failures:
         return fail("; ".join(application_rollback_failures))
+
+    for hold_pin in (
+        'docker image tag "$previous_api_image_id" "$ROLLBACK_API_HOLD_REF" || hold_rc=1',
+        'docker image tag "$previous_worker_image_id" "$ROLLBACK_WORKER_HOLD_REF" || hold_rc=1',
+    ):
+        if apply.count(hold_pin) != 1:
+            return fail("rollback image hold pin is not uniquely mutation-testable:" + hold_pin)
+        mutated = apply.replace(hold_pin, ": # hold pin mutation", 1)
+        if not validate_application_rollback_runtime_fixture(mutated):
+            return fail("stateful image store did not detect deleted hold pin:" + hold_pin)
 
     finalization_lock_failures = validate_finalization_lock_runtime_fixture(apply)
     if finalization_lock_failures:
@@ -1468,10 +1656,26 @@ def main() -> int:
 
     capture_stage = apply.index('current_stage="capture_previous_runtime_images"', dry_run_end)
     capture_images = apply.index("capture_previous_runtime_images", capture_stage + 1)
+    capture_candidate_stage = apply.index(
+        'current_stage="capture_candidate_runtime_images"', build_stage
+    )
+    capture_candidate_images = apply.index(
+        "capture_candidate_runtime_images", capture_candidate_stage + 1
+    )
     start_candidate_api = apply.index('current_stage="start_candidate_api"', build_stage)
     start_candidate_worker = apply.index('current_stage="start_candidate_worker"', start_candidate_api)
     verify_images = apply.index("verify_candidate_runtime_image_coherence", start_candidate_worker)
-    if not normalize_call < capture_images < build_call < start_candidate_api < start_candidate_worker < verify_images < active_switch:
+    if not (
+        normalize_call
+        < capture_images
+        < build_call
+        < capture_candidate_stage
+        < capture_candidate_images
+        < start_candidate_api
+        < start_candidate_worker
+        < verify_images
+        < active_switch
+    ):
         return fail("runtime image snapshot/coherence ordering is unsafe")
     atomic_link_function = apply[
         apply.index("atomic_replace_active_link()") : apply.index(
@@ -1492,6 +1696,8 @@ def main() -> int:
         "previous_api_image_id",
         "previous_worker_image_id",
         "docker image tag",
+        'docker image tag "$ROLLBACK_API_HOLD_REF" "$previous_api_image_ref"',
+        'docker image tag "$ROLLBACK_WORKER_HOLD_REF" "$previous_worker_image_ref"',
         "verify_previous_runtime_restored",
         'atomic_replace_active_link "$active_app" "$candidate_app"',
         'wait_public_json "/health"',
@@ -1500,12 +1706,23 @@ def main() -> int:
     ):
         if marker not in app_rollback:
             return fail(f"application rollback does not restore exact old runtime:{marker}")
+    bare_api_restore = (
+        'docker image tag "$previous_api_image_id" "$previous_api_image_ref"'
+    )
+    bare_worker_restore = (
+        'docker image tag "$previous_worker_image_id" "$previous_worker_image_ref"'
+    )
+    if bare_api_restore in app_rollback or bare_worker_restore in app_rollback:
+        return fail("application rollback still depends on unpinned bare image IDs")
 
     forbidden = [
         "StrictHostKeyChecking=no",
         "systemctl enable --now",
         "docker compose down -v",
         "docker volume rm",
+        "docker image prune",
+        "docker builder prune",
+        "docker system prune",
         "DROP DATABASE",
         "JIEJING_EBAY_ACCESS_TOKEN",
         "JIEJING_EBAY_REFRESH_TOKEN",

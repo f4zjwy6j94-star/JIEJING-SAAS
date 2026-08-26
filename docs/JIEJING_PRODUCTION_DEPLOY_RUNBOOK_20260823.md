@@ -61,8 +61,8 @@ python tools/jiejing_production_deploy.py `
 
 安装后必须确认 service 与 timer 的实际属性都严格返回单行 `DropInPaths=`；缺少该属性或返回任何路径都会 fail-closed，拒绝来自 `/etc`、`/run` 或 `/usr/lib` 的旧 drop-in 覆盖固定 `ExecStart` 与沙箱合同。生产 apply 的 SSH 客户端超时预算固定为 `3600` 秒，以覆盖最长 20 分钟 oneshot、应用健康等待与镜像构建余量。
 
-apply 会在构建前从当前 release manifest 唯一解析 `PRIVATE_DIR`，与运行容器的 environment-file label 交叉验证，并只通过 `O_NOFOLLOW` 文件描述符把该目录规范为 `root:root 0700`、两个 env 文件规范为 `root:root 0600`；不会读取或输出文件内容。SaaS 与 Worker 候选容器还必须使用同一个实际 image ID。
+apply 会在构建前从当前 release manifest 唯一解析 `PRIVATE_DIR`，与运行容器的 environment-file label 交叉验证，并只通过 `O_NOFOLLOW` 文件描述符把该目录规范为 `root:root 0700`、两个 env 文件规范为 `root:root 0600`；不会读取或输出文件内容。SaaS 与 Worker 会分别保存构建后实际 image ID；两个 ID 可以不同，但候选启动和最终收口都必须逐服务匹配各自已保存的 ID、Compose labels、workdir、environment-file 和健康状态。
 
-若 wrapper/unit 安装、首次 oneshot 或 timer 验收失败，部署会同时恢复三个 root 文件、原 timer 状态、旧 active release 和部署前捕获的 SaaS/Worker 精确 image ID。失败输出包含 `TIMER_INSTALL_ROLLED_BACK=1`、`APPLICATION_RELEASE_RETAINED=0` 和 `JIEJING_PRODUCTION_ROLLBACK_APPLIED=1`；只有完整验证旧容器 image、labels 与健康状态后才允许报告回滚成功。
+构建前，当前 SaaS 与 Worker image ID 会分别固定到 root 控制的 `jiejing-production-rollback-api:previous` 和 `jiejing-production-rollback-worker:previous`；固定、回读或半创建恢复失败都会在 build、容器、active link 和 unit 变更前停止。这两个 hold refs 至少保留到完整成功或完整回滚，并作为最近一版人工回滚证据；部署路径禁止 image prune。若 wrapper/unit 安装、首次 oneshot 或 timer 验收失败，部署会从 hold refs 恢复 live image refs，同时恢复三个 root 文件、原 timer 状态和旧 active release。失败输出包含 `TIMER_INSTALL_ROLLED_BACK=1`、`APPLICATION_RELEASE_RETAINED=0` 和 `JIEJING_PRODUCTION_ROLLBACK_APPLIED=1`；只有完整验证旧双 image ID、容器 labels 与健康状态后才允许报告回滚成功。
 
 unit 事务期间的 `HUP`、`INT`、`TERM` 和异常 `EXIT` 会进入同一独立回滚；回滚时忽略二次可捕获信号，避免递归。`SIGKILL` 和整机断电无法被 shell 捕获，因此部署后仍必须按本节 markers、root 文件和 timer 状态完成验收。

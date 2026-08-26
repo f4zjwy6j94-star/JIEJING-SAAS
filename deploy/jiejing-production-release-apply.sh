@@ -24,6 +24,10 @@ EVIDENCE_REFRESH_SERVICE_PATH="/etc/systemd/system/jiejing-production-evidence-r
 EVIDENCE_REFRESH_TIMER_PATH="/etc/systemd/system/jiejing-production-evidence-refresh.timer"
 EVIDENCE_REFRESH_SERVICE="jiejing-production-evidence-refresh.service"
 EVIDENCE_REFRESH_TIMER="jiejing-production-evidence-refresh.timer"
+ROLLBACK_API_HOLD_REF="jiejing-production-rollback-api:previous"
+ROLLBACK_WORKER_HOLD_REF="jiejing-production-rollback-worker:previous"
+ROLLBACK_API_HOLD_BACKUP_REF="jiejing-production-rollback-api:capture-backup"
+ROLLBACK_WORKER_HOLD_BACKUP_REF="jiejing-production-rollback-worker:capture-backup"
 mutation_started=0
 active_switched=0
 current_stage="preflight"
@@ -33,6 +37,13 @@ unit_transaction_active=0
 unit_transaction_failure_in_progress=0
 dry_run_candidate=""
 dry_run_cleanup_active=0
+previous_api_hold_image_id=""
+previous_worker_hold_image_id=""
+previous_api_hold_existed=0
+previous_worker_hold_existed=0
+rollback_image_holds_ready=0
+candidate_api_image_id=""
+candidate_worker_image_id=""
 
 refuse() {
   printf '%s\n' "$1" >&2
@@ -577,7 +588,94 @@ build_candidate_images_with_retry() {
   return 1
 }
 
+image_ref_id() {
+  docker image inspect "$1" --format '{{.Id}}' 2>/dev/null || true
+}
+
+remove_image_ref_if_present() {
+  local ref="$1"
+  if [[ -n "$(image_ref_id "$ref")" ]]; then
+    docker image rm "$ref" >/dev/null 2>&1 || return 1
+  fi
+  [[ -z "$(image_ref_id "$ref")" ]]
+}
+
+discard_prior_rollback_hold_backups() {
+  local discard_rc=0
+  remove_image_ref_if_present "$ROLLBACK_API_HOLD_BACKUP_REF" || discard_rc=1
+  remove_image_ref_if_present "$ROLLBACK_WORKER_HOLD_BACKUP_REF" || discard_rc=1
+  [[ "$discard_rc" == "0" ]]
+}
+
+prepare_prior_rollback_hold_backups() {
+  local backup_rc=0
+  discard_prior_rollback_hold_backups || return 1
+  if [[ "$previous_api_hold_existed" == "1" ]]; then
+    docker image tag "$previous_api_hold_image_id" "$ROLLBACK_API_HOLD_BACKUP_REF" || backup_rc=1
+  fi
+  if [[ "$backup_rc" == "0" && "$previous_worker_hold_existed" == "1" ]]; then
+    docker image tag "$previous_worker_hold_image_id" "$ROLLBACK_WORKER_HOLD_BACKUP_REF" || backup_rc=1
+  fi
+  if [[ "$backup_rc" == "0" && "$previous_api_hold_existed" == "1" ]]; then
+    [[ "$(image_ref_id "$ROLLBACK_API_HOLD_BACKUP_REF")" == "$previous_api_hold_image_id" ]] || backup_rc=1
+  fi
+  if [[ "$backup_rc" == "0" && "$previous_worker_hold_existed" == "1" ]]; then
+    [[ "$(image_ref_id "$ROLLBACK_WORKER_HOLD_BACKUP_REF")" == "$previous_worker_hold_image_id" ]] || backup_rc=1
+  fi
+  if [[ "$backup_rc" != "0" ]]; then
+    discard_prior_rollback_hold_backups || true
+    return 1
+  fi
+}
+
+restore_prior_rollback_image_holds() {
+  local rollback_rc=0 current
+  if [[ "$previous_api_hold_existed" == "1" ]]; then
+    current="$(image_ref_id "$ROLLBACK_API_HOLD_REF")"
+    if [[ "$current" != "$previous_api_hold_image_id" ]]; then
+      if [[ "$(image_ref_id "$ROLLBACK_API_HOLD_BACKUP_REF")" == "$previous_api_hold_image_id" ]]; then
+        docker image tag "$ROLLBACK_API_HOLD_BACKUP_REF" "$ROLLBACK_API_HOLD_REF" || rollback_rc=1
+      else
+        rollback_rc=1
+      fi
+    fi
+  else
+    current="$(image_ref_id "$ROLLBACK_API_HOLD_REF")"
+    if [[ -n "$current" ]]; then
+      docker image rm "$ROLLBACK_API_HOLD_REF" >/dev/null 2>&1 || rollback_rc=1
+    fi
+  fi
+  if [[ "$previous_worker_hold_existed" == "1" ]]; then
+    current="$(image_ref_id "$ROLLBACK_WORKER_HOLD_REF")"
+    if [[ "$current" != "$previous_worker_hold_image_id" ]]; then
+      if [[ "$(image_ref_id "$ROLLBACK_WORKER_HOLD_BACKUP_REF")" == "$previous_worker_hold_image_id" ]]; then
+        docker image tag "$ROLLBACK_WORKER_HOLD_BACKUP_REF" "$ROLLBACK_WORKER_HOLD_REF" || rollback_rc=1
+      else
+        rollback_rc=1
+      fi
+    fi
+  else
+    current="$(image_ref_id "$ROLLBACK_WORKER_HOLD_REF")"
+    if [[ -n "$current" ]]; then
+      docker image rm "$ROLLBACK_WORKER_HOLD_REF" >/dev/null 2>&1 || rollback_rc=1
+    fi
+  fi
+  if [[ "$previous_api_hold_existed" == "1" ]]; then
+    [[ "$(image_ref_id "$ROLLBACK_API_HOLD_REF")" == "$previous_api_hold_image_id" ]] || rollback_rc=1
+  else
+    [[ -z "$(image_ref_id "$ROLLBACK_API_HOLD_REF")" ]] || rollback_rc=1
+  fi
+  if [[ "$previous_worker_hold_existed" == "1" ]]; then
+    [[ "$(image_ref_id "$ROLLBACK_WORKER_HOLD_REF")" == "$previous_worker_hold_image_id" ]] || rollback_rc=1
+  else
+    [[ -z "$(image_ref_id "$ROLLBACK_WORKER_HOLD_REF")" ]] || rollback_rc=1
+  fi
+  discard_prior_rollback_hold_backups || rollback_rc=1
+  [[ "$rollback_rc" == "0" ]]
+}
+
 capture_previous_runtime_images() {
+  local hold_rc=0
   previous_api_image_id="$(docker inspect deploy-jiejing-saas-1 --format '{{.Image}}' 2>/dev/null || true)"
   previous_worker_image_id="$(docker inspect deploy-jiejing-worker-1 --format '{{.Image}}' 2>/dev/null || true)"
   previous_api_image_ref="$(docker inspect deploy-jiejing-saas-1 --format '{{.Config.Image}}' 2>/dev/null || true)"
@@ -588,7 +686,47 @@ capture_previous_runtime_images() {
   [[ "$previous_worker_image_ref" =~ ^deploy-jiejing-worker(:latest)?$ ]] || return 1
   docker image inspect "$previous_api_image_id" >/dev/null 2>&1 || return 1
   docker image inspect "$previous_worker_image_id" >/dev/null 2>&1 || return 1
-  verify_runtime_labels_and_health "$active_app" "$previous_api_image_id" "$previous_worker_image_id"
+  verify_runtime_labels_and_health "$active_app" "$previous_api_image_id" "$previous_worker_image_id" || return 1
+
+  previous_api_hold_image_id="$(image_ref_id "$ROLLBACK_API_HOLD_REF")"
+  previous_worker_hold_image_id="$(image_ref_id "$ROLLBACK_WORKER_HOLD_REF")"
+  previous_api_hold_existed=0
+  previous_worker_hold_existed=0
+  if [[ -n "$previous_api_hold_image_id" ]]; then
+    [[ "$previous_api_hold_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+    previous_api_hold_existed=1
+  fi
+  if [[ -n "$previous_worker_hold_image_id" ]]; then
+    [[ "$previous_worker_hold_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+    previous_worker_hold_existed=1
+  fi
+
+  rollback_image_holds_ready=0
+  prepare_prior_rollback_hold_backups || return 1
+  docker image tag "$previous_api_image_id" "$ROLLBACK_API_HOLD_REF" || hold_rc=1
+  if [[ "$hold_rc" == "0" ]]; then
+    docker image tag "$previous_worker_image_id" "$ROLLBACK_WORKER_HOLD_REF" || hold_rc=1
+  fi
+  if [[ "$hold_rc" == "0" ]]; then
+    [[ "$(image_ref_id "$ROLLBACK_API_HOLD_REF")" == "$previous_api_image_id" ]] || hold_rc=1
+    [[ "$(image_ref_id "$ROLLBACK_WORKER_HOLD_REF")" == "$previous_worker_image_id" ]] || hold_rc=1
+  fi
+  if [[ "$hold_rc" != "0" ]]; then
+    restore_prior_rollback_image_holds || printf '%s\n' "REFUSE_ROLLBACK_IMAGE_HOLD_RESTORE_FAILED=1" >&2
+    return 1
+  fi
+  discard_prior_rollback_hold_backups || true
+  rollback_image_holds_ready=1
+  printf '%s\n' "ROLLBACK_IMAGE_HOLDS_VERIFIED=1"
+}
+
+capture_candidate_runtime_images() {
+  candidate_api_image_id="$(image_ref_id "$previous_api_image_ref")"
+  candidate_worker_image_id="$(image_ref_id "$previous_worker_image_ref")"
+  [[ "$candidate_api_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  [[ "$candidate_worker_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  docker image inspect "$candidate_api_image_id" >/dev/null 2>&1 || return 1
+  docker image inspect "$candidate_worker_image_id" >/dev/null 2>&1 || return 1
 }
 
 verify_runtime_labels_and_health() {
@@ -618,9 +756,8 @@ verify_candidate_runtime_image_coherence() {
   local api_image worker_image
   api_image="$(docker inspect deploy-jiejing-saas-1 --format '{{.Image}}' 2>/dev/null || true)"
   worker_image="$(docker inspect deploy-jiejing-worker-1 --format '{{.Image}}' 2>/dev/null || true)"
-  [[ "$api_image" =~ ^sha256:[0-9a-f]{64}$ && "$api_image" == "$worker_image" ]] || return 1
-  verify_runtime_labels_and_health "$candidate_app" "$api_image" "$worker_image" || return 1
-  candidate_runtime_image_id="$api_image"
+  [[ "$api_image" == "$candidate_api_image_id" && "$worker_image" == "$candidate_worker_image_id" ]] || return 1
+  verify_runtime_labels_and_health "$candidate_app" "$candidate_api_image_id" "$candidate_worker_image_id" || return 1
   printf '%s\n' "CANDIDATE_RUNTIME_IMAGE_COHERENCE=verified"
 }
 
@@ -650,8 +787,16 @@ verify_previous_runtime_restored() {
 
 rollback_application_release() {
   local rollback_rc=0 current_active
-  docker image tag "$previous_api_image_id" "$previous_api_image_ref" || rollback_rc=1
-  docker image tag "$previous_worker_image_id" "$previous_worker_image_ref" || rollback_rc=1
+  [[ "$rollback_image_holds_ready" == "1" ]] || rollback_rc=1
+  [[ "$(image_ref_id "$ROLLBACK_API_HOLD_REF")" == "$previous_api_image_id" ]] || rollback_rc=1
+  [[ "$(image_ref_id "$ROLLBACK_WORKER_HOLD_REF")" == "$previous_worker_image_id" ]] || rollback_rc=1
+  if [[ "$rollback_rc" == "0" ]]; then
+    docker image tag "$ROLLBACK_API_HOLD_REF" "$previous_api_image_ref" || rollback_rc=1
+    docker image tag "$ROLLBACK_WORKER_HOLD_REF" "$previous_worker_image_ref" || rollback_rc=1
+  fi
+  [[ "$(image_ref_id "$previous_api_image_ref")" == "$previous_api_image_id" ]] || rollback_rc=1
+  [[ "$(image_ref_id "$previous_worker_image_ref")" == "$previous_worker_image_id" ]] || rollback_rc=1
+  [[ "$rollback_rc" == "0" ]] || return 1
   "${previous_compose[@]}" up -d --no-build --no-deps --force-recreate jiejing-saas || rollback_rc=1
   wait_container_healthy deploy-jiejing-saas-1 60 || rollback_rc=1
   "${previous_compose[@]}" up -d --no-build --no-deps --force-recreate jiejing-worker || rollback_rc=1
@@ -990,6 +1135,8 @@ capture_previous_runtime_images
 current_stage="build_candidate_images"
 mutation_started=1
 build_candidate_images_with_retry
+current_stage="capture_candidate_runtime_images"
+capture_candidate_runtime_images
 current_stage="start_candidate_api"
 "${candidate_compose[@]}" up -d --no-deps jiejing-saas
 wait_container_healthy deploy-jiejing-saas-1 60
