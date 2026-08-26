@@ -263,6 +263,30 @@ if (visible.some((card) => card.confirmation_id === "confirm-old-generic")) {{
     if display_result.returncode != 0:
         raise AssertionError(display_result.stderr.strip() or "controlled publish confirmation display behavior failed")
 
+    headline_start = app_js.index("function saasDecisionCenterHeadline")
+    headline_end = app_js.index("function renderSaasConfirmPanel", headline_start)
+    headline_source = app_js[headline_start:headline_end]
+    headline_script = f"""
+function publicRuntimeText(value = "") {{ return String(value || ""); }}
+{headline_source}
+if (saasDecisionCenterHeadline("禅意佛手托莲花倒流香炉", 0) !== "当前没有待你确认的动作") {{
+  throw new Error("zero pending confirmations must not claim that an action needs confirmation");
+}}
+if (saasDecisionCenterHeadline("禅意佛手托莲花倒流香炉", 2) !== "禅意佛手托莲花倒流香炉 有 2 个待确认动作") {{
+  throw new Error("pending headline must include the exact active product and count");
+}}
+"""
+    headline_result = subprocess.run(
+        ["node", "-e", headline_script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if headline_result.returncode != 0:
+        raise AssertionError(headline_result.stderr.strip() or "decision-center headline behavior failed")
+
     predicate_start = app_js.index("function isSaasControlledExistingDraftPublishConfirmation")
     predicate_end = app_js.index("async function verifySaasInventoryLocationConfirmations", predicate_start)
     predicate_source = app_js[predicate_start:predicate_end]

@@ -23387,6 +23387,13 @@ function saasDecisionCenterVisibleConfirmations(cards = [], allCards = cards) {
   ].slice(0, 8);
 }
 
+function saasDecisionCenterHeadline(productLabel = "", pendingCount = 0) {
+  const count = Math.max(0, Number(pendingCount || 0) || 0);
+  if (!count) return "当前没有待你确认的动作";
+  const product = publicRuntimeText(productLabel || "当前项目").trim() || "当前项目";
+  return `${product} 有 ${count} 个待确认动作`;
+}
+
 function renderSaasConfirmPanel() {
   const anchor = document.querySelector("#confirmGrid");
   if (!anchor) return;
@@ -23429,7 +23436,7 @@ function renderSaasConfirmPanel() {
     <div class="runtime-confirm-head saas-confirm-simple-head">
       <div>
         <span class="pill ${state.saasConnected ? "green" : "neutral"}">决策中心</span>
-        <strong>${cards.length ? `${escapeHtml(productLabel)} 有需要确认的动作` : "还没有要你处理的事"}</strong>
+        <strong>${escapeHtml(saasDecisionCenterHeadline(productLabel, allPendingCount))}</strong>
         <p>这里只做三种选择：同意、稍后、回去补资料。其他记录和复盘放在设置里，不打扰当前任务。</p>
       </div>
       <button class="secondary-action" type="button" data-saas-action="refresh">刷新待办</button>
