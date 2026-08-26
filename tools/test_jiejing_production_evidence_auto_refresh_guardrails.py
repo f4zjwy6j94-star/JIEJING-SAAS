@@ -3,12 +3,15 @@
 
 from __future__ import annotations
 
+import copy
+import json
 from pathlib import Path
 import shlex
 import shutil
 import subprocess
 import tempfile
 import textwrap
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -115,6 +118,219 @@ def run_executable_fixture(bash: str) -> subprocess.CompletedProcess[bytes]:
         stderr=subprocess.PIPE,
         check=False,
     )
+
+
+def run_public_readiness_json_fixture(bash: str, serialized_payload: str) -> subprocess.CompletedProcess[bytes]:
+    fixture = textwrap.dedent(
+        f'''
+        set -euo pipefail
+        source deploy/jiejing-production-evidence-auto-refresh.sh
+        PUBLIC_BASE_URL=https://public-readiness.fixture.invalid
+        curl() {{
+          printf '%s\\n' {shlex.quote(serialized_payload)}
+        }}
+        public_readiness_ready
+        '''
+    )
+    return subprocess.run(
+        [bash, "-s"],
+        cwd=ROOT,
+        input=fixture.encode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
+def run_public_readiness_fixture(bash: str, payload: dict[str, object]) -> subprocess.CompletedProcess[bytes]:
+    return run_public_readiness_json_fixture(
+        bash,
+        json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+    )
+
+
+def current_public_readiness_payload() -> dict[str, object]:
+    return {
+        "readiness": {
+            "service": "jiejing-saas-backend",
+            "readiness_version": "2026-05-15-product-saas",
+            "public_contract_version": "2026-07-15-public-readiness-current-ebay-evidence",
+            "detail_scope": "public_summary",
+            "internal_detail_required": True,
+            "authenticated_summary": False,
+            "environment": "production",
+            "production_ready": False,
+            "beta_ready": True,
+            "can_accept_real_customers": False,
+            "real_platform_writes_enabled": False,
+            "requested_real_platform_writes": False,
+            "blocker_count": 0,
+            "warning_count": 1,
+            "items": [
+                {
+                    "key": "billing_quota",
+                    "label": "Billing and quota",
+                    "status": "private_beta_ready_paid_launch_pending",
+                    "severity": "warning",
+                    "detail": "Public charging remains closed.",
+                    "next_action": "Complete the controlled payment gate.",
+                }
+            ],
+            "product_evidence": {
+                "latest_ebay_packet_status": "packet_cached_sanitized",
+                "latest_ebay_packet_source_mode": "official_api",
+                "latest_ebay_packet_present_resource_keys": [
+                    "store_profile",
+                    "account_business_policies",
+                    "inventory_and_offers",
+                    "orders_and_fulfillment",
+                    "finances",
+                    "taxonomy_listing_metadata",
+                ],
+                "latest_ebay_packet_missing_resource_keys": [],
+                "latest_ebay_packet_current_connection": True,
+                "historical_ebay_packet_present": False,
+                "ebay_token_refresh_success_count": 2,
+                "secret_exposed": False,
+            },
+            "provider_status": {
+                "billing": {
+                    "provider": "wechat_pay_native",
+                    "checkout_mode": "native_qr",
+                    "billing_mode": "one_time_30_day_plan",
+                    "provider_configured": True,
+                    "payment_path_status": "refund_controls_pending",
+                    "mainland_payment_ready_for_owner_approval": False,
+                    "billing_ready_for_private_beta": True,
+                    "billing_ready_for_paid_launch": False,
+                    "configured_component_count": 9,
+                    "required_component_count": 9,
+                    "verified_paid_order_count": 1,
+                    "quota_enforcement_enabled": True,
+                    "paid_launch_blocker_count": 1,
+                    "next_paid_launch_blocker": "merchant_payment_refund_not_ready",
+                    "merchant_launch_path": {
+                        "contract_version": "2026-07-27-merchant-mainland-payment-path-v1",
+                        "current_stage": "refund_controls_pending",
+                        "current_charge_status": "no_real_charge_now",
+                        "public_paid_launch_allowed": False,
+                        "charge_now_allowed": False,
+                        "triggers_real_charge": False,
+                        "backend_confirmation_required_before_entitlement": True,
+                        "frontend_can_grant_entitlement": False,
+                        "frontend_can_grant_quota": False,
+                        "quota_grant_source": "backend_subscription_state",
+                        "secret_exposed": False,
+                    },
+                    "domestic_payment": {
+                        "provider": "wechat_pay_native",
+                        "checkout_mode": "native_qr",
+                        "billing_mode": "one_time_30_day_plan",
+                        "status": "refund_controls_pending",
+                        "configured_component_count": 9,
+                        "required_component_count": 9,
+                        "verified_paid_order_count": 1,
+                        "public_charging_allowed": False,
+                        "charge_now_allowed": False,
+                        "triggers_real_charge": False,
+                        "triggers_real_refund": False,
+                        "calls_external_payment_api": False,
+                        "frontend_gets_payment_secret": False,
+                        "secret_exposed": False,
+                    },
+                    "public_charging_allowed": False,
+                    "charge_now_allowed": False,
+                    "triggers_real_charge": False,
+                    "triggers_real_refund": False,
+                    "calls_external_payment_api": False,
+                    "real_platform_writes_enabled": False,
+                    "frontend_gets_payment_secret": False,
+                    "frontend_can_grant_quota": False,
+                    "secret_exposed": False,
+                },
+                "model_value": {
+                    "status": "ready",
+                    "ready": True,
+                    "live_model_report_types": ["listing.package", "market.report"],
+                    "blocker_count": 0,
+                    "secret_exposed": False,
+                },
+                "ai_ceo_platform_model": {
+                    "enabled": True,
+                    "configured": True,
+                    "status": "ready",
+                    "provider": "deepseek",
+                    "model": "deepseek-v4-flash",
+                    "trial_request_limit": 20,
+                    "trial_duration_days": 7,
+                    "trial_quota_scope": "account_trial_window",
+                    "usage_owner": "jiejing_platform_trial",
+                    "quota_checked_by_backend": True,
+                    "hard_stop_on_exhaustion": True,
+                    "exhaustion_blocker": "platform_default_model_trial_exhausted",
+                    "merchant_byok_preferred": True,
+                    "merchant_byok_not_counted_against_platform_trial": True,
+                    "byok_bypasses_platform_trial": True,
+                    "customer_visible_next_action": "save_account_ai_or_upgrade_plan",
+                    "operator_cost_monitoring_required": True,
+                    "frontend_can_grant_quota": False,
+                    "frontend_gets_model_api_key": False,
+                    "runtime_gets_model_api_key": False,
+                    "secret_exposed": False,
+                },
+                "public_search": {
+                    "provider": "tavily",
+                    "configured": True,
+                    "endpoint_host": "api.tavily.com",
+                    "credential_present": True,
+                    "ai_ceo_realtime_search_enabled": True,
+                    "builtin_public_web_fallback_enabled": True,
+                    "builtin_stock_quote_fallback_enabled": True,
+                    "frontend_gets_search_api_key": False,
+                    "runtime_gets_search_api_key": False,
+                    "secret_exposed": False,
+                },
+                "media_generation": {
+                    "contract_version": "2026-07-05-media-generation-readiness",
+                    "configured": True,
+                    "status": "live_generation_ready_waiting_asset_review",
+                    "live_generation_enabled": True,
+                    "live_image_generation_enabled": True,
+                    "live_video_generation_enabled": True,
+                    "live_provider_calls_allowed": True,
+                    "asset_manifest_required": True,
+                    "asset_review_required": True,
+                    "fact_review_required": True,
+                    "human_review_required_before_listing": True,
+                    "cost_guard_required": True,
+                    "spend_now_allowed": False,
+                    "listing_use_requires_review": True,
+                    "customer_visible_summary": "Assets remain review-gated.",
+                    "next_action": "Review assets before listing use.",
+                    "frontend_gets_media_api_key": False,
+                    "runtime_gets_raw_secret": False,
+                    "reports_get_raw_provider_response": False,
+                    "raw_provider_response_stored": False,
+                    "secret_exposed": False,
+                },
+            },
+            "operational_health": {
+                "status": "ready",
+                "detail_scope": "summary_only",
+                "secret_exposed": False,
+            },
+            "secret_exposed": False,
+        }
+    }
+
+
+def mutated_public_readiness(path: tuple[str | int, ...], value: object) -> dict[str, object]:
+    payload = current_public_readiness_payload()
+    cursor: Any = payload
+    for segment in path[:-1]:
+        cursor = cursor[segment]
+    cursor[path[-1]] = value
+    return payload
 
 
 def run_runtime_image_fixture(
@@ -556,9 +772,30 @@ def main() -> int:
         '"$PUBLIC_BASE_URL/health"',
         '"$PUBLIC_BASE_URL/health/deep"',
         '"$PUBLIC_BASE_URL/readiness/product-saas"',
-        'backup.get("backup_ready_for_paid_launch") is True',
+        "object_pairs_hook=unique_object",
+        "set(payload) != PUBLIC_ROOT_FIELDS",
+        "set(readiness) != READINESS_PUBLIC_FIELDS",
+        "set(item) != ITEM_PUBLIC_FIELDS",
+        "set(providers) != PROVIDER_PUBLIC_FIELDS",
+        "set(provider_value) != PROVIDER_SUBFIELDS[provider_key]",
+        "has_unapproved_sensitive_field(payload)",
+        'readiness.get("public_contract_version") == "2026-07-15-public-readiness-current-ebay-evidence"',
+        'readiness.get("detail_scope") == "public_summary"',
+        'readiness.get("internal_detail_required") is True',
+        'readiness.get("environment") == "production"',
+        'type(blocker_count) is int',
+        'blocker_count == len(blockers) == 0',
+        'type(warning_count) is int',
+        'warning_count == len(warnings)',
+        'set(item_by_key) == {"billing_quota"}',
         '"backup_restore" not in item_by_key',
         '"monitoring_alerting" not in item_by_key',
+        '"private_beta_ready_paid_launch_pending"',
+        '"mainland_payment_ready_for_owner_approval"',
+        '"backup" not in providers',
+        'billing.get("billing_ready_for_private_beta") is True',
+        'billing.get("billing_ready_for_paid_launch") is False',
+        'billing.get("quota_enforcement_enabled") is True',
         'billing.get("public_charging_allowed") is False',
         'readiness.get("real_platform_writes_enabled") is False',
         'readiness.get("secret_exposed") is False',
@@ -676,6 +913,423 @@ def main() -> int:
             fixture_error = fixture.stderr.decode("utf-8", errors="replace").splitlines()
             detail = fixture_error[-1][:200] if fixture_error else f"exit_{fixture.returncode}"
             return fail("production evidence refresh executable failure fixture must pass: " + detail)
+        readiness_fixture = run_public_readiness_fixture(bash, current_public_readiness_payload())
+        if readiness_fixture.returncode != 0:
+            return fail(
+                "current public readiness summary without internal backup details must pass: "
+                f"exit_{readiness_fixture.returncode}"
+            )
+        owner_approval_payload = current_public_readiness_payload()
+        owner_approval_payload["readiness"]["items"][0][  # type: ignore[index]
+            "status"
+        ] = "mainland_payment_ready_for_owner_approval"
+        owner_approval_payload["readiness"]["provider_status"]["billing"][  # type: ignore[index]
+            "mainland_payment_ready_for_owner_approval"
+        ] = True
+        owner_approval_payload["readiness"]["provider_status"]["billing"][  # type: ignore[index]
+            "payment_path_status"
+        ] = "controlled_acceptance_proven_public_charging_closed"
+        owner_approval_payload["readiness"]["provider_status"]["billing"][  # type: ignore[index]
+            "next_paid_launch_blocker"
+        ] = "merchant_payment_public_cutover_not_approved"
+        owner_approval_payload["readiness"]["provider_status"]["billing"]["merchant_launch_path"][  # type: ignore[index]
+            "current_stage"
+        ] = "controlled_acceptance_proven_public_charging_closed"
+        owner_approval_payload["readiness"]["provider_status"]["billing"]["domestic_payment"][  # type: ignore[index]
+            "status"
+        ] = "controlled_acceptance_proven"
+        owner_approval_fixture = run_public_readiness_fixture(bash, owner_approval_payload)
+        if owner_approval_fixture.returncode != 0:
+            return fail(
+                "safe owner-approval billing warning must pass: "
+                f"exit_{owner_approval_fixture.returncode}"
+            )
+        private_status_owner_marker_payload = mutated_public_readiness(
+            ("readiness", "provider_status", "billing", "mainland_payment_ready_for_owner_approval"),
+            True,
+        )
+        private_status_owner_marker_fixture = run_public_readiness_fixture(
+            bash, private_status_owner_marker_payload
+        )
+        if private_status_owner_marker_fixture.returncode == 0:
+            return fail("private-beta billing status must require owner-approval marker false")
+        owner_status_private_marker_payload = copy.deepcopy(owner_approval_payload)
+        owner_status_private_marker_payload["readiness"]["provider_status"]["billing"][  # type: ignore[index]
+            "mainland_payment_ready_for_owner_approval"
+        ] = False
+        owner_status_private_marker_fixture = run_public_readiness_fixture(
+            bash, owner_status_private_marker_payload
+        )
+        if owner_status_private_marker_fixture.returncode == 0:
+            return fail("owner-approval billing status must require owner-approval marker true")
+        backend_safety_warning_payload = current_public_readiness_payload()
+        backend_safety_billing = backend_safety_warning_payload["readiness"]["provider_status"][  # type: ignore[index]
+            "billing"
+        ]
+        backend_safety_billing["payment_path_status"] = "backend_safety_controls_in_progress"  # type: ignore[index]
+        backend_safety_billing["next_paid_launch_blocker"] = (  # type: ignore[index]
+            "merchant_payment_backend_safety_controls_incomplete"
+        )
+        backend_safety_billing["merchant_launch_path"][  # type: ignore[index]
+            "current_stage"
+        ] = "backend_safety_controls_in_progress"
+        backend_safety_billing["domestic_payment"][  # type: ignore[index]
+            "status"
+        ] = "backend_safety_controls_in_progress"
+        backend_safety_warning_fixture = run_public_readiness_fixture(
+            bash, backend_safety_warning_payload
+        )
+        if backend_safety_warning_fixture.returncode == 0:
+            return fail("private-beta billing warning must reject backend safety incomplete stage")
+        for invalid_verified_count in (0, -1, 1.5, True, "1"):
+            invalid_owner_count_payload = copy.deepcopy(owner_approval_payload)
+            invalid_owner_count_payload["readiness"]["provider_status"]["billing"][  # type: ignore[index]
+                "verified_paid_order_count"
+            ] = invalid_verified_count
+            invalid_owner_count_payload["readiness"]["provider_status"]["billing"]["domestic_payment"][  # type: ignore[index]
+                "verified_paid_order_count"
+            ] = invalid_verified_count
+            invalid_owner_count_fixture = run_public_readiness_fixture(
+                bash, invalid_owner_count_payload
+            )
+            if invalid_owner_count_fixture.returncode == 0:
+                return fail("owner-approval status requires strict positive verified order count")
+        mismatched_owner_count_payload = copy.deepcopy(owner_approval_payload)
+        mismatched_owner_count_payload["readiness"]["provider_status"]["billing"]["domestic_payment"][  # type: ignore[index]
+            "verified_paid_order_count"
+        ] = 2
+        mismatched_owner_count_fixture = run_public_readiness_fixture(
+            bash, mismatched_owner_count_payload
+        )
+        if mismatched_owner_count_fixture.returncode == 0:
+            return fail("owner-approval verified order counts must match across billing summaries")
+        repeated_key_json = json.dumps(
+            current_public_readiness_payload(), ensure_ascii=True, separators=(",", ":")
+        ).replace('"blocker_count":0', '"blocker_count":0,"blocker_count":0', 1)
+        repeated_key_fixture = run_public_readiness_json_fixture(bash, repeated_key_json)
+        if repeated_key_fixture.returncode == 0:
+            return fail("public readiness JSON must reject repeated object keys")
+        for field, invalid_value in (
+            ("public_contract_version", "stale-contract"),
+            ("detail_scope", "internal_detail"),
+            ("internal_detail_required", False),
+            ("environment", "staging"),
+        ):
+            invalid_payload = current_public_readiness_payload()
+            invalid_payload["readiness"][field] = invalid_value  # type: ignore[index]
+            invalid_fixture = run_public_readiness_fixture(bash, invalid_payload)
+            if invalid_fixture.returncode == 0:
+                return fail(f"public readiness must reject invalid {field}")
+        blocker_item_payload = current_public_readiness_payload()
+        blocker_item_payload["readiness"]["items"].append(  # type: ignore[index,union-attr]
+            {"key": "unexpected_blocker", "status": "blocked", "severity": "blocker"}
+        )
+        false_blocker_count_payload = current_public_readiness_payload()
+        false_blocker_count_payload["readiness"]["blocker_count"] = False  # type: ignore[index]
+        wrong_warning_count_payload = current_public_readiness_payload()
+        wrong_warning_count_payload["readiness"]["warning_count"] = 0  # type: ignore[index]
+        boolean_warning_count_payload = current_public_readiness_payload()
+        boolean_warning_count_payload["readiness"]["warning_count"] = True  # type: ignore[index]
+        negative_blocker_count_payload = current_public_readiness_payload()
+        negative_blocker_count_payload["readiness"]["blocker_count"] = -1  # type: ignore[index]
+        negative_warning_count_payload = current_public_readiness_payload()
+        negative_warning_count_payload["readiness"]["warning_count"] = -1  # type: ignore[index]
+        fraction_blocker_count_payload = current_public_readiness_payload()
+        fraction_blocker_count_payload["readiness"]["blocker_count"] = 0.0  # type: ignore[index]
+        fraction_warning_count_payload = current_public_readiness_payload()
+        fraction_warning_count_payload["readiness"]["warning_count"] = 1.0  # type: ignore[index]
+        for label, invalid_payload in (
+            ("blocker item with zero count", blocker_item_payload),
+            ("boolean blocker count", false_blocker_count_payload),
+            ("warning count mismatch", wrong_warning_count_payload),
+            ("boolean warning count", boolean_warning_count_payload),
+            ("negative blocker count", negative_blocker_count_payload),
+            ("negative warning count", negative_warning_count_payload),
+            ("fractional blocker count", fraction_blocker_count_payload),
+            ("fractional warning count", fraction_warning_count_payload),
+        ):
+            invalid_fixture = run_public_readiness_fixture(bash, invalid_payload)
+            if invalid_fixture.returncode == 0:
+                return fail(f"public readiness must reject {label}")
+        non_list_items_payload = current_public_readiness_payload()
+        non_list_items_payload["readiness"]["items"] = "not-a-list"  # type: ignore[index]
+        duplicate_item_payload = current_public_readiness_payload()
+        duplicate_item_payload["readiness"]["items"].append(  # type: ignore[index,union-attr]
+            {
+                "key": "billing_quota",
+                "status": "private_beta_ready_paid_launch_pending",
+                "severity": "warning",
+            }
+        )
+        duplicate_item_payload["readiness"]["warning_count"] = 2  # type: ignore[index]
+        unknown_severity_payload = current_public_readiness_payload()
+        unknown_severity_payload["readiness"]["items"][0]["severity"] = "notice"  # type: ignore[index]
+        unknown_severity_payload["readiness"]["warning_count"] = 0  # type: ignore[index]
+        for label, invalid_payload in (
+            ("non-list items", non_list_items_payload),
+            ("duplicate item key", duplicate_item_payload),
+            ("unknown item severity", unknown_severity_payload),
+        ):
+            invalid_fixture = run_public_readiness_fixture(bash, invalid_payload)
+            if invalid_fixture.returncode == 0:
+                return fail(f"public readiness must reject {label}")
+        for forbidden_key in ("backup_restore", "monitoring_alerting"):
+            invalid_payload = current_public_readiness_payload()
+            invalid_payload["readiness"]["items"].append(  # type: ignore[index,union-attr]
+                {"key": forbidden_key, "status": "blocked", "severity": "warning"}
+            )
+            invalid_payload["readiness"]["warning_count"] = 2  # type: ignore[index]
+            invalid_fixture = run_public_readiness_fixture(bash, invalid_payload)
+            if invalid_fixture.returncode == 0:
+                return fail(f"public readiness must reject internal item {forbidden_key}")
+        unknown_warning_payload = current_public_readiness_payload()
+        unknown_warning_payload["readiness"]["items"].append(  # type: ignore[index,union-attr]
+            {"key": "unknown_public_warning", "status": "pending", "severity": "warning"}
+        )
+        unknown_warning_payload["readiness"]["warning_count"] = 2  # type: ignore[index]
+        unknown_warning_fixture = run_public_readiness_fixture(bash, unknown_warning_payload)
+        if unknown_warning_fixture.returncode == 0:
+            return fail("fixed public readiness contract must reject unknown warnings")
+        extra_root_payload = current_public_readiness_payload()
+        extra_root_payload["internal_debug"] = {"status": "must-not-be-public"}
+        extra_readiness_payload = current_public_readiness_payload()
+        extra_readiness_payload["readiness"]["internal_state"] = "must-not-be-public"  # type: ignore[index]
+        nested_secret_payload = current_public_readiness_payload()
+        nested_secret_payload["readiness"]["readiness_version"] = {  # type: ignore[index]
+            "raw_secret": "must-not-be-public"
+        }
+        unknown_provider_payload = current_public_readiness_payload()
+        unknown_provider_payload["readiness"]["provider_status"]["unknown_provider"] = {}  # type: ignore[index]
+        raw_token_payload = current_public_readiness_payload()
+        raw_token_payload["readiness"]["provider_status"]["billing"][  # type: ignore[index]
+            "raw_token"
+        ] = "must-not-be-public"
+        unknown_provider_field_payload = current_public_readiness_payload()
+        unknown_provider_field_payload["readiness"]["provider_status"]["billing"][  # type: ignore[index]
+            "future_public_field"
+        ] = False
+        item_secret_payload = current_public_readiness_payload()
+        item_secret_payload["readiness"]["items"][0]["raw_secret"] = "must-not-be-public"  # type: ignore[index]
+        for label, invalid_payload in (
+            ("unknown response field", extra_root_payload),
+            ("unknown readiness internal field", extra_readiness_payload),
+            ("nested raw secret field", nested_secret_payload),
+            ("unknown provider", unknown_provider_payload),
+            ("provider raw token field", raw_token_payload),
+            ("unknown provider subfield", unknown_provider_field_payload),
+            ("item raw secret field", item_secret_payload),
+        ):
+            invalid_fixture = run_public_readiness_fixture(bash, invalid_payload)
+            if invalid_fixture.returncode == 0:
+                return fail(f"fixed public readiness schema must reject {label}")
+        search_runtime_key_payload = current_public_readiness_payload()
+        search_runtime_key_payload["readiness"]["provider_status"]["public_search"][  # type: ignore[index]
+            "runtime_gets_search_api_key"
+        ] = "LEAK"
+        search_runtime_key_fixture = run_public_readiness_fixture(bash, search_runtime_key_payload)
+        if search_runtime_key_fixture.returncode == 0:
+            return fail("public search runtime API key exposure must fail closed")
+        readiness_service_object_payload = current_public_readiness_payload()
+        readiness_service_object_payload["readiness"]["service"] = {  # type: ignore[index]
+            "unknown_debug_schema": "x"
+        }
+        model_status_object_payload = current_public_readiness_payload()
+        model_status_object_payload["readiness"]["provider_status"]["model_value"][  # type: ignore[index]
+            "status"
+        ] = {"unknown_debug_schema": "x"}
+        packet_status_object_payload = current_public_readiness_payload()
+        packet_status_object_payload["readiness"]["product_evidence"][  # type: ignore[index]
+            "latest_ebay_packet_status"
+        ] = {"unknown_debug_schema": "x"}
+        for label, invalid_payload in (
+            ("object-valued readiness service", readiness_service_object_payload),
+            ("object-valued model status", model_status_object_payload),
+            ("object-valued packet status", packet_status_object_payload),
+        ):
+            invalid_fixture = run_public_readiness_fixture(bash, invalid_payload)
+            if invalid_fixture.returncode == 0:
+                return fail(f"public readiness leaf schema must reject {label}")
+        false_safety_paths = (
+            ("readiness", "authenticated_summary"),
+            ("readiness", "product_evidence", "secret_exposed"),
+            ("readiness", "operational_health", "secret_exposed"),
+            ("readiness", "provider_status", "model_value", "secret_exposed"),
+            ("readiness", "provider_status", "ai_ceo_platform_model", "frontend_can_grant_quota"),
+            ("readiness", "provider_status", "ai_ceo_platform_model", "frontend_gets_model_api_key"),
+            ("readiness", "provider_status", "ai_ceo_platform_model", "runtime_gets_model_api_key"),
+            ("readiness", "provider_status", "ai_ceo_platform_model", "secret_exposed"),
+            ("readiness", "provider_status", "public_search", "frontend_gets_search_api_key"),
+            ("readiness", "provider_status", "public_search", "runtime_gets_search_api_key"),
+            ("readiness", "provider_status", "public_search", "secret_exposed"),
+            ("readiness", "provider_status", "media_generation", "spend_now_allowed"),
+            ("readiness", "provider_status", "media_generation", "frontend_gets_media_api_key"),
+            ("readiness", "provider_status", "media_generation", "runtime_gets_raw_secret"),
+            ("readiness", "provider_status", "media_generation", "reports_get_raw_provider_response"),
+            ("readiness", "provider_status", "media_generation", "raw_provider_response_stored"),
+            ("readiness", "provider_status", "media_generation", "secret_exposed"),
+            ("readiness", "provider_status", "billing", "calls_external_payment_api"),
+            ("readiness", "provider_status", "billing", "frontend_gets_payment_secret"),
+            ("readiness", "provider_status", "billing", "frontend_can_grant_quota"),
+            ("readiness", "provider_status", "billing", "merchant_launch_path", "public_paid_launch_allowed"),
+            ("readiness", "provider_status", "billing", "merchant_launch_path", "charge_now_allowed"),
+            ("readiness", "provider_status", "billing", "merchant_launch_path", "triggers_real_charge"),
+            ("readiness", "provider_status", "billing", "merchant_launch_path", "frontend_can_grant_entitlement"),
+            ("readiness", "provider_status", "billing", "merchant_launch_path", "frontend_can_grant_quota"),
+            ("readiness", "provider_status", "billing", "merchant_launch_path", "secret_exposed"),
+            ("readiness", "provider_status", "billing", "domestic_payment", "public_charging_allowed"),
+            ("readiness", "provider_status", "billing", "domestic_payment", "charge_now_allowed"),
+            ("readiness", "provider_status", "billing", "domestic_payment", "triggers_real_charge"),
+            ("readiness", "provider_status", "billing", "domestic_payment", "triggers_real_refund"),
+            ("readiness", "provider_status", "billing", "domestic_payment", "calls_external_payment_api"),
+            ("readiness", "provider_status", "billing", "domestic_payment", "frontend_gets_payment_secret"),
+            ("readiness", "provider_status", "billing", "domestic_payment", "secret_exposed"),
+        )
+        for path in false_safety_paths:
+            invalid_fixture = run_public_readiness_fixture(
+                bash, mutated_public_readiness(path, True)
+            )
+            if invalid_fixture.returncode == 0:
+                return fail("public readiness safety field must remain strict false: " + ".".join(path))
+        true_readiness_paths = (
+            ("readiness", "product_evidence", "latest_ebay_packet_current_connection"),
+            ("readiness", "provider_status", "model_value", "ready"),
+            ("readiness", "provider_status", "ai_ceo_platform_model", "configured"),
+            ("readiness", "provider_status", "public_search", "credential_present"),
+            ("readiness", "provider_status", "media_generation", "configured"),
+            ("readiness", "provider_status", "billing", "provider_configured"),
+            ("readiness", "provider_status", "billing", "merchant_launch_path", "backend_confirmation_required_before_entitlement"),
+        )
+        for path in true_readiness_paths:
+            invalid_fixture = run_public_readiness_fixture(
+                bash, mutated_public_readiness(path, "true")
+            )
+            if invalid_fixture.returncode == 0:
+                return fail("public readiness true marker must be strict bool: " + ".".join(path))
+        for invalid_count in (-1, True, 1.5):
+            invalid_fixture = run_public_readiness_fixture(
+                bash,
+                mutated_public_readiness(
+                    ("readiness", "product_evidence", "ebay_token_refresh_success_count"),
+                    invalid_count,
+                ),
+            )
+            if invalid_fixture.returncode == 0:
+                return fail("eBay refresh count must be a strict nonnegative integer")
+        leaf_quality_cases = (
+            (
+                "invalid eBay packet source enum",
+                ("readiness", "product_evidence", "latest_ebay_packet_source_mode"),
+                "unknown_source",
+            ),
+            (
+                "string historical packet marker",
+                ("readiness", "product_evidence", "historical_ebay_packet_present"),
+                "false",
+            ),
+            (
+                "string product secret marker",
+                ("readiness", "product_evidence", "secret_exposed"),
+                "false",
+            ),
+            (
+                "boolean model blocker count",
+                ("readiness", "provider_status", "model_value", "blocker_count"),
+                False,
+            ),
+            (
+                "unknown platform model provider",
+                ("readiness", "provider_status", "ai_ceo_platform_model", "provider"),
+                "unknown_model_provider",
+            ),
+            (
+                "unknown media readiness status",
+                ("readiness", "provider_status", "media_generation", "status"),
+                "unknown",
+            ),
+            (
+                "string billing public charging marker",
+                ("readiness", "provider_status", "billing", "public_charging_allowed"),
+                "false",
+            ),
+            (
+                "string launch public paid marker",
+                ("readiness", "provider_status", "billing", "merchant_launch_path", "public_paid_launch_allowed"),
+                "false",
+            ),
+            (
+                "string domestic public charging marker",
+                ("readiness", "provider_status", "billing", "domestic_payment", "public_charging_allowed"),
+                "false",
+            ),
+            (
+                "unknown operational status",
+                ("readiness", "operational_health", "status"),
+                "unknown",
+            ),
+        )
+        for label, path, invalid_value in leaf_quality_cases:
+            invalid_fixture = run_public_readiness_fixture(
+                bash, mutated_public_readiness(path, invalid_value)
+            )
+            if invalid_fixture.returncode == 0:
+                return fail(f"public readiness leaf contract must reject {label}")
+        internal_backup_payload = current_public_readiness_payload()
+        internal_backup_payload["readiness"]["provider_status"]["backup"] = {  # type: ignore[index]
+            "backup_ready_for_paid_launch": True,
+            "internal_evidence": "must-not-be-public",
+        }
+        internal_backup_fixture = run_public_readiness_fixture(bash, internal_backup_payload)
+        if internal_backup_fixture.returncode == 0:
+            return fail("public readiness must reject exposed internal backup provider details")
+        billing_private_beta_payload = current_public_readiness_payload()
+        billing_private_beta_payload["readiness"]["provider_status"]["billing"][  # type: ignore[index]
+            "billing_ready_for_private_beta"
+        ] = False
+        billing_paid_launch_payload = current_public_readiness_payload()
+        billing_paid_launch_payload["readiness"]["provider_status"]["billing"][  # type: ignore[index]
+            "billing_ready_for_paid_launch"
+        ] = True
+        billing_quota_payload = current_public_readiness_payload()
+        billing_quota_payload["readiness"]["provider_status"]["billing"][  # type: ignore[index]
+            "quota_enforcement_enabled"
+        ] = False
+        billing_item_payload = current_public_readiness_payload()
+        billing_item_payload["readiness"]["items"][0]["status"] = "ready"  # type: ignore[index]
+        for label, invalid_payload in (
+            ("billing private beta not ready", billing_private_beta_payload),
+            ("billing paid launch unexpectedly ready", billing_paid_launch_payload),
+            ("billing quota enforcement disabled", billing_quota_payload),
+            ("billing warning status drift", billing_item_payload),
+        ):
+            invalid_fixture = run_public_readiness_fixture(bash, invalid_payload)
+            if invalid_fixture.returncode == 0:
+                return fail(f"public readiness must reject {label}")
+        for field, unsafe_value in (
+            ("production_ready", True),
+            ("beta_ready", False),
+            ("can_accept_real_customers", True),
+            ("real_platform_writes_enabled", True),
+            ("requested_real_platform_writes", True),
+            ("secret_exposed", True),
+        ):
+            invalid_payload = current_public_readiness_payload()
+            invalid_payload["readiness"][field] = unsafe_value  # type: ignore[index]
+            invalid_fixture = run_public_readiness_fixture(bash, invalid_payload)
+            if invalid_fixture.returncode == 0:
+                return fail(f"public readiness must reject unsafe {field}")
+        for field in (
+            "public_charging_allowed",
+            "charge_now_allowed",
+            "triggers_real_charge",
+            "triggers_real_refund",
+            "real_platform_writes_enabled",
+            "secret_exposed",
+        ):
+            invalid_payload = current_public_readiness_payload()
+            invalid_payload["readiness"]["provider_status"]["billing"][field] = True  # type: ignore[index]
+            invalid_fixture = run_public_readiness_fixture(bash, invalid_payload)
+            if invalid_fixture.returncode == 0:
+                return fail(f"public readiness must reject unsafe billing {field}")
         runtime_fixture = run_runtime_image_fixture(bash, script)
         if runtime_fixture.returncode != 0:
             runtime_error = runtime_fixture.stderr.decode("utf-8", errors="replace").splitlines()

@@ -204,37 +204,527 @@ public_readiness_ready() {
 import json
 import sys
 
+def unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate_json_object_key")
+        value[key] = item
+    return value
+
 try:
-    payload = json.load(sys.stdin)
-except (json.JSONDecodeError, OSError, UnicodeError):
+    payload = json.load(sys.stdin, object_pairs_hook=unique_object)
+except (json.JSONDecodeError, OSError, UnicodeError, ValueError):
+    raise SystemExit(2)
+PUBLIC_ROOT_FIELDS = {"readiness"}
+READINESS_PUBLIC_FIELDS = {
+    "service", "readiness_version", "public_contract_version", "detail_scope",
+    "internal_detail_required", "authenticated_summary", "environment",
+    "production_ready", "beta_ready", "can_accept_real_customers",
+    "real_platform_writes_enabled", "requested_real_platform_writes",
+    "blocker_count", "warning_count", "items", "product_evidence",
+    "provider_status", "operational_health", "secret_exposed",
+}
+ITEM_PUBLIC_FIELDS = {"key", "label", "status", "severity", "detail", "next_action"}
+PROVIDER_PUBLIC_FIELDS = {
+    "billing", "model_value", "ai_ceo_platform_model", "public_search", "media_generation",
+}
+PROVIDER_SUBFIELDS = {
+    "billing": {
+        "provider", "checkout_mode", "billing_mode", "provider_configured",
+        "payment_path_status", "mainland_payment_ready_for_owner_approval",
+        "billing_ready_for_private_beta", "billing_ready_for_paid_launch",
+        "configured_component_count", "required_component_count", "verified_paid_order_count",
+        "quota_enforcement_enabled", "paid_launch_blocker_count", "next_paid_launch_blocker",
+        "merchant_launch_path", "domestic_payment", "public_charging_allowed",
+        "charge_now_allowed", "triggers_real_charge", "triggers_real_refund",
+        "calls_external_payment_api", "real_platform_writes_enabled",
+        "frontend_gets_payment_secret", "frontend_can_grant_quota", "secret_exposed",
+    },
+    "model_value": {"status", "ready", "live_model_report_types", "blocker_count", "secret_exposed"},
+    "ai_ceo_platform_model": {
+        "enabled", "configured", "status", "provider", "model", "trial_request_limit",
+        "trial_duration_days", "trial_quota_scope", "usage_owner", "quota_checked_by_backend",
+        "hard_stop_on_exhaustion", "exhaustion_blocker", "merchant_byok_preferred",
+        "merchant_byok_not_counted_against_platform_trial", "byok_bypasses_platform_trial",
+        "customer_visible_next_action", "operator_cost_monitoring_required",
+        "frontend_can_grant_quota", "frontend_gets_model_api_key",
+        "runtime_gets_model_api_key", "secret_exposed",
+    },
+    "public_search": {
+        "provider", "configured", "endpoint_host", "credential_present",
+        "ai_ceo_realtime_search_enabled", "builtin_public_web_fallback_enabled",
+        "builtin_stock_quote_fallback_enabled", "frontend_gets_search_api_key",
+        "runtime_gets_search_api_key", "secret_exposed",
+    },
+    "media_generation": {
+        "contract_version", "configured", "status", "live_generation_enabled",
+        "live_image_generation_enabled", "live_video_generation_enabled",
+        "live_provider_calls_allowed", "asset_manifest_required", "asset_review_required",
+        "fact_review_required", "human_review_required_before_listing", "cost_guard_required",
+        "spend_now_allowed", "listing_use_requires_review", "customer_visible_summary",
+        "next_action", "frontend_gets_media_api_key", "runtime_gets_raw_secret",
+        "reports_get_raw_provider_response", "raw_provider_response_stored", "secret_exposed",
+    },
+}
+BILLING_NESTED_SUBFIELDS = {
+    "merchant_launch_path": {
+        "contract_version", "current_stage", "current_charge_status",
+        "public_paid_launch_allowed", "charge_now_allowed", "triggers_real_charge",
+        "backend_confirmation_required_before_entitlement", "frontend_can_grant_entitlement",
+        "frontend_can_grant_quota", "quota_grant_source", "secret_exposed",
+    },
+    "domestic_payment": {
+        "provider", "checkout_mode", "billing_mode", "status", "configured_component_count",
+        "required_component_count", "verified_paid_order_count", "public_charging_allowed",
+        "charge_now_allowed", "triggers_real_charge", "triggers_real_refund",
+        "calls_external_payment_api", "frontend_gets_payment_secret", "secret_exposed",
+    },
+}
+PRODUCT_EVIDENCE_PUBLIC_FIELDS = {
+    "latest_ebay_packet_status", "latest_ebay_packet_source_mode",
+    "latest_ebay_packet_present_resource_keys", "latest_ebay_packet_missing_resource_keys",
+    "latest_ebay_packet_current_connection", "historical_ebay_packet_present",
+    "ebay_token_refresh_success_count", "secret_exposed",
+}
+OPERATIONAL_HEALTH_PUBLIC_FIELDS = {"status", "detail_scope", "secret_exposed"}
+APPROVED_SENSITIVE_PUBLIC_FIELDS = {
+    "internal_detail_required", "credential_present", "ebay_token_refresh_success_count",
+    "frontend_gets_payment_secret", "frontend_gets_model_api_key",
+    "runtime_gets_model_api_key", "frontend_gets_search_api_key",
+    "runtime_gets_search_api_key", "frontend_gets_media_api_key",
+    "runtime_gets_raw_secret", "reports_get_raw_provider_response",
+    "raw_provider_response_stored", "secret_exposed",
+}
+
+def has_unapproved_sensitive_field(value):
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            lowered = key.lower()
+            sensitive = any(
+                marker in lowered
+                for marker in ("secret", "token", "credential", "password", "api_key", "internal", "raw_")
+            )
+            if sensitive and key not in APPROVED_SENSITIVE_PUBLIC_FIELDS:
+                return True
+            if has_unapproved_sensitive_field(nested):
+                return True
+    elif isinstance(value, list):
+        return any(has_unapproved_sensitive_field(item) for item in value)
+    return False
+
+if not isinstance(payload, dict) or set(payload) != PUBLIC_ROOT_FIELDS:
     raise SystemExit(2)
 readiness = payload.get("readiness") or {}
-items = readiness.get("items") or []
-if any(not isinstance(item, dict) for item in items):
+if not isinstance(readiness, dict) or set(readiness) != READINESS_PUBLIC_FIELDS:
     raise SystemExit(2)
-item_by_key = {item.get("key"): item for item in items}
+if has_unapproved_sensitive_field(payload):
+    raise SystemExit(2)
+items = readiness.get("items") or []
+if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+    raise SystemExit(2)
+item_by_key = {}
+for item in items:
+    if set(item) != ITEM_PUBLIC_FIELDS:
+        raise SystemExit(2)
+    key = item.get("key")
+    if not isinstance(key, str) or not key or key in item_by_key:
+        raise SystemExit(2)
+    if item.get("severity") not in {"blocker", "warning"}:
+        raise SystemExit(2)
+    item_by_key[key] = item
+blockers = [item for item in items if item.get("severity") == "blocker"]
+warnings = [item for item in items if item.get("severity") == "warning"]
+blocker_count = readiness.get("blocker_count")
+warning_count = readiness.get("warning_count")
 providers = readiness.get("provider_status") or {}
-backup = providers.get("backup") or {}
+if not isinstance(providers, dict) or set(providers) != PROVIDER_PUBLIC_FIELDS:
+    raise SystemExit(2)
+for provider_key, provider_value in providers.items():
+    if not isinstance(provider_value, dict) or set(provider_value) != PROVIDER_SUBFIELDS[provider_key]:
+        raise SystemExit(2)
 billing = providers.get("billing") or {}
+model_value = providers.get("model_value") or {}
+platform_model = providers.get("ai_ceo_platform_model") or {}
+public_search = providers.get("public_search") or {}
+media_generation = providers.get("media_generation") or {}
+for nested_key, allowed_fields in BILLING_NESTED_SUBFIELDS.items():
+    if nested_key in billing:
+        nested_value = billing.get(nested_key)
+        if not isinstance(nested_value, dict) or set(nested_value) != allowed_fields:
+            raise SystemExit(2)
+product_evidence = readiness.get("product_evidence")
+if product_evidence is not None and (
+    not isinstance(product_evidence, dict)
+    or set(product_evidence) != PRODUCT_EVIDENCE_PUBLIC_FIELDS
+):
+    raise SystemExit(2)
+operational_health = readiness.get("operational_health")
+if operational_health is not None and (
+    not isinstance(operational_health, dict)
+    or set(operational_health) != OPERATIONAL_HEALTH_PUBLIC_FIELDS
+):
+    raise SystemExit(2)
+billing_item = item_by_key.get("billing_quota") or {}
+launch_path = billing.get("merchant_launch_path") or {}
+domestic_payment = billing.get("domestic_payment") or {}
+
+def strict_nonnegative_int(value):
+    return type(value) is int and value >= 0
+
+def strict_text(value, *, allowed=None, limit=1024):
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= limit
+        and (allowed is None or value in allowed)
+    )
+
+def strict_string_set(value, expected):
+    return (
+        isinstance(value, list)
+        and all(isinstance(item, str) for item in value)
+        and len(value) == len(set(value))
+        and set(value) == expected
+    )
+
+def exact_boolean_fields(value, expectations):
+    return all(value.get(field) is expected for field, expected in expectations.items())
+
+payment_status_contracts = {
+    "provider_connection_in_progress": (
+        "provider_connection_in_progress",
+        "merchant_payment_provider_connection_not_ready",
+        False,
+        False,
+    ),
+    "provider_activation_pending": (
+        "provider_activation_pending",
+        "merchant_payment_provider_runtime_activation_pending",
+        False,
+        True,
+    ),
+    "production_environment_pending": (
+        "production_environment_pending",
+        "merchant_payment_production_environment_required",
+        False,
+        True,
+    ),
+    "refund_controls_pending": (
+        "refund_controls_pending",
+        "merchant_payment_refund_not_ready",
+        False,
+        True,
+    ),
+    "controlled_acceptance_pending": (
+        "controlled_acceptance_pending",
+        "merchant_payment_controlled_acceptance_not_proven",
+        False,
+        True,
+    ),
+    "controlled_acceptance_proven_public_charging_closed": (
+        "controlled_acceptance_proven",
+        "merchant_payment_public_cutover_not_approved",
+        True,
+        True,
+    ),
+}
+private_beta_payment_statuses = {
+    "provider_connection_in_progress", "provider_activation_pending",
+    "production_environment_pending", "refund_controls_pending",
+    "controlled_acceptance_pending",
+}
+payment_contract = payment_status_contracts.get(billing.get("payment_path_status"))
+expected_ebay_resource_keys = {
+    "store_profile", "account_business_policies", "inventory_and_offers",
+    "orders_and_fulfillment", "finances", "taxonomy_listing_metadata",
+}
+top_level_contract_ready = (
+    readiness.get("readiness_version") == "2026-05-15-product-saas"
+    and readiness.get("authenticated_summary") is False
+)
+item_contract_ready = (
+    billing_item.get("key") == "billing_quota"
+    and billing_item.get("label") == "Billing and quota"
+    and billing_item.get("severity") == "warning"
+    and strict_text(billing_item.get("detail"))
+    and strict_text(billing_item.get("next_action"))
+)
+product_evidence_ready = (
+    product_evidence.get("latest_ebay_packet_status") == "packet_cached_sanitized"
+    and product_evidence.get("latest_ebay_packet_source_mode") == "official_api"
+    and strict_string_set(
+        product_evidence.get("latest_ebay_packet_present_resource_keys"),
+        expected_ebay_resource_keys,
+    )
+    and product_evidence.get("latest_ebay_packet_missing_resource_keys") == []
+    and product_evidence.get("latest_ebay_packet_current_connection") is True
+    and type(product_evidence.get("historical_ebay_packet_present")) is bool
+    and strict_nonnegative_int(product_evidence.get("ebay_token_refresh_success_count"))
+    and product_evidence.get("secret_exposed") is False
+)
+operational_health_ready = (
+    operational_health.get("status") == "ready"
+    and operational_health.get("detail_scope") == "summary_only"
+    and operational_health.get("secret_exposed") is False
+)
+model_value_ready = (
+    model_value.get("status") == "ready"
+    and model_value.get("ready") is True
+    and strict_string_set(
+        model_value.get("live_model_report_types"),
+        {"listing.package", "market.report"},
+    )
+    and type(model_value.get("blocker_count")) is int
+    and model_value.get("blocker_count") == 0
+    and model_value.get("secret_exposed") is False
+)
+platform_model_ready = (
+    platform_model.get("status") == "ready"
+    and strict_text(
+        platform_model.get("provider"),
+        allowed={
+            "openai", "deepseek", "openrouter", "qwen_dashscope", "moonshot",
+            "anthropic", "google_gemini", "tencent_hunyuan",
+        },
+        limit=64,
+    )
+    and strict_text(platform_model.get("model"), limit=160)
+    and platform_model.get("trial_request_limit") == 20
+    and type(platform_model.get("trial_request_limit")) is int
+    and platform_model.get("trial_duration_days") == 7
+    and type(platform_model.get("trial_duration_days")) is int
+    and platform_model.get("trial_quota_scope") == "account_trial_window"
+    and platform_model.get("usage_owner") == "jiejing_platform_trial"
+    and platform_model.get("exhaustion_blocker") == "platform_default_model_trial_exhausted"
+    and platform_model.get("customer_visible_next_action") == "save_account_ai_or_upgrade_plan"
+    and exact_boolean_fields(
+        platform_model,
+        {
+            "enabled": True,
+            "configured": True,
+            "quota_checked_by_backend": True,
+            "hard_stop_on_exhaustion": True,
+            "merchant_byok_preferred": True,
+            "merchant_byok_not_counted_against_platform_trial": True,
+            "byok_bypasses_platform_trial": True,
+            "operator_cost_monitoring_required": True,
+            "frontend_can_grant_quota": False,
+            "frontend_gets_model_api_key": False,
+            "runtime_gets_model_api_key": False,
+            "secret_exposed": False,
+        },
+    )
+)
+public_search_ready = (
+    public_search.get("provider") == "tavily"
+    and public_search.get("endpoint_host") == "api.tavily.com"
+    and exact_boolean_fields(
+        public_search,
+        {
+            "configured": True,
+            "credential_present": True,
+            "ai_ceo_realtime_search_enabled": True,
+            "builtin_public_web_fallback_enabled": True,
+            "builtin_stock_quote_fallback_enabled": True,
+            "frontend_gets_search_api_key": False,
+            "runtime_gets_search_api_key": False,
+            "secret_exposed": False,
+        },
+    )
+)
+media_generation_ready = (
+    media_generation.get("contract_version") == "2026-07-05-media-generation-readiness"
+    and media_generation.get("status") == "live_generation_ready_waiting_asset_review"
+    and strict_text(media_generation.get("customer_visible_summary"))
+    and strict_text(media_generation.get("next_action"))
+    and exact_boolean_fields(
+        media_generation,
+        {
+            "configured": True,
+            "live_generation_enabled": True,
+            "live_image_generation_enabled": True,
+            "live_video_generation_enabled": True,
+            "live_provider_calls_allowed": True,
+            "asset_manifest_required": True,
+            "asset_review_required": True,
+            "fact_review_required": True,
+            "human_review_required_before_listing": True,
+            "cost_guard_required": True,
+            "spend_now_allowed": False,
+            "listing_use_requires_review": True,
+            "frontend_gets_media_api_key": False,
+            "runtime_gets_raw_secret": False,
+            "reports_get_raw_provider_response": False,
+            "raw_provider_response_stored": False,
+            "secret_exposed": False,
+        },
+    )
+)
+billing_counts_ready = (
+    strict_nonnegative_int(billing.get("configured_component_count"))
+    and billing.get("configured_component_count") == 9
+    and strict_nonnegative_int(billing.get("required_component_count"))
+    and billing.get("required_component_count") == 9
+    and strict_nonnegative_int(billing.get("verified_paid_order_count"))
+    and type(billing.get("paid_launch_blocker_count")) is int
+    and billing.get("paid_launch_blocker_count") == 1
+    and domestic_payment.get("configured_component_count") == billing.get("configured_component_count")
+    and type(domestic_payment.get("configured_component_count")) is int
+    and domestic_payment.get("required_component_count") == billing.get("required_component_count")
+    and type(domestic_payment.get("required_component_count")) is int
+    and domestic_payment.get("verified_paid_order_count") == billing.get("verified_paid_order_count")
+    and type(domestic_payment.get("verified_paid_order_count")) is int
+)
+billing_status_ready = (
+    payment_contract is not None
+    and billing.get("provider") == "wechat_pay_native"
+    and billing.get("checkout_mode") == "native_qr"
+    and billing.get("billing_mode") == "one_time_30_day_plan"
+    and billing.get("provider_configured") is payment_contract[3]
+    and domestic_payment.get("provider") == "wechat_pay_native"
+    and domestic_payment.get("checkout_mode") == "native_qr"
+    and domestic_payment.get("billing_mode") == "one_time_30_day_plan"
+    and domestic_payment.get("status") == payment_contract[0]
+    and billing.get("next_paid_launch_blocker") == payment_contract[1]
+    and billing.get("mainland_payment_ready_for_owner_approval") is payment_contract[2]
+    and (
+        (
+            launch_path.get("contract_version") == "2026-07-27-merchant-mainland-payment-path-v1"
+            and launch_path.get("current_stage") == billing.get("payment_path_status")
+        )
+        or (
+            billing_item.get("status") == "private_beta_ready_paid_launch_pending"
+            and launch_path.get("contract_version") == "2026-07-03-merchant-billing-launch-path-v1"
+            and launch_path.get("current_stage") == "invited_beta_no_real_charge"
+        )
+    )
+    and launch_path.get("current_charge_status") == "no_real_charge_now"
+    and launch_path.get("quota_grant_source") == "backend_subscription_state"
+)
+billing_safety_ready = (
+    exact_boolean_fields(
+        billing,
+        {
+            "billing_ready_for_private_beta": True,
+            "billing_ready_for_paid_launch": False,
+            "quota_enforcement_enabled": True,
+            "public_charging_allowed": False,
+            "charge_now_allowed": False,
+            "triggers_real_charge": False,
+            "triggers_real_refund": False,
+            "calls_external_payment_api": False,
+            "real_platform_writes_enabled": False,
+            "frontend_gets_payment_secret": False,
+            "frontend_can_grant_quota": False,
+            "secret_exposed": False,
+        },
+    )
+    and exact_boolean_fields(
+        launch_path,
+        {
+            "public_paid_launch_allowed": False,
+            "charge_now_allowed": False,
+            "triggers_real_charge": False,
+            "backend_confirmation_required_before_entitlement": True,
+            "frontend_can_grant_entitlement": False,
+            "frontend_can_grant_quota": False,
+            "secret_exposed": False,
+        },
+    )
+    and exact_boolean_fields(
+        domestic_payment,
+        {
+            "public_charging_allowed": False,
+            "charge_now_allowed": False,
+            "triggers_real_charge": False,
+            "triggers_real_refund": False,
+            "calls_external_payment_api": False,
+            "frontend_gets_payment_secret": False,
+            "secret_exposed": False,
+        },
+    )
+)
+item_payment_projection_ready = (
+    (
+        billing_item.get("status") == "private_beta_ready_paid_launch_pending"
+        and billing.get("payment_path_status") in private_beta_payment_statuses
+    )
+    or (
+        billing_item.get("status") == "mainland_payment_ready_for_owner_approval"
+        and billing.get("payment_path_status")
+        == "controlled_acceptance_proven_public_charging_closed"
+    )
+)
+owner_verified_order_ready = (
+    billing_item.get("status") != "mainland_payment_ready_for_owner_approval"
+    or (
+        type(billing.get("verified_paid_order_count")) is int
+        and billing.get("verified_paid_order_count") > 0
+        and type(domestic_payment.get("verified_paid_order_count")) is int
+        and domestic_payment.get("verified_paid_order_count")
+        == billing.get("verified_paid_order_count")
+    )
+)
 ready = (
-    readiness.get("blocker_count") == 0
+    readiness.get("service") == "jiejing-saas-backend"
+    and readiness.get("public_contract_version") == "2026-07-15-public-readiness-current-ebay-evidence"
+    and readiness.get("detail_scope") == "public_summary"
+    and readiness.get("internal_detail_required") is True
+    and readiness.get("environment") == "production"
+    and type(blocker_count) is int
+    and blocker_count == len(blockers) == 0
+    and type(warning_count) is int
+    and warning_count == len(warnings)
+    and set(item_by_key) == {"billing_quota"}
     and readiness.get("beta_ready") is True
     and readiness.get("production_ready") is False
     and readiness.get("can_accept_real_customers") is False
     and readiness.get("real_platform_writes_enabled") is False
     and readiness.get("requested_real_platform_writes") is False
     and readiness.get("secret_exposed") is False
-    and backup.get("backup_ready_for_paid_launch") is True
-    and backup.get("blockers") == []
-    and backup.get("secret_exposed") is False
+    and product_evidence.get("latest_ebay_packet_status") == "packet_cached_sanitized"
+    and model_value.get("status") == "ready"
     and "backup_restore" not in item_by_key
     and "monitoring_alerting" not in item_by_key
+    and billing_item.get("status") in {
+        "private_beta_ready_paid_launch_pending",
+        "mainland_payment_ready_for_owner_approval",
+    }
+    and (
+        (
+            billing_item.get("status") == "private_beta_ready_paid_launch_pending"
+            and billing.get("mainland_payment_ready_for_owner_approval") is False
+        )
+        or (
+            billing_item.get("status") == "mainland_payment_ready_for_owner_approval"
+            and billing.get("mainland_payment_ready_for_owner_approval") is True
+        )
+    )
+    and billing_item.get("severity") == "warning"
+    and "backup" not in providers
+    and billing.get("billing_ready_for_private_beta") is True
+    and billing.get("billing_ready_for_paid_launch") is False
+    and billing.get("quota_enforcement_enabled") is True
+    and public_search.get("runtime_gets_search_api_key") is False
     and billing.get("public_charging_allowed") is False
     and billing.get("charge_now_allowed") is False
     and billing.get("triggers_real_charge") is False
     and billing.get("triggers_real_refund") is False
     and billing.get("real_platform_writes_enabled") is False
     and billing.get("secret_exposed") is False
+    and top_level_contract_ready
+    and item_contract_ready
+    and product_evidence_ready
+    and operational_health_ready
+    and model_value_ready
+    and platform_model_ready
+    and public_search_ready
+    and media_generation_ready
+    and billing_counts_ready
+    and billing_status_ready
+    and billing_safety_ready
+    and item_payment_projection_ready
+    and owner_verified_order_ready
 )
 raise SystemExit(0 if ready else 2)
 ' <<<"$body" >/dev/null 2>&1
