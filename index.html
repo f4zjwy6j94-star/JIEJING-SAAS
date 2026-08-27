@@ -14,8 +14,8 @@
     <meta name="twitter:title" content="捷境 · eBay AI CEO 自动化工作台" />
     <meta name="twitter:description" content="eBay-first AI CEO SaaS：成果可追踪，高风险动作可确认。" />
     <link rel="prefetch" href="./app.html?start=app&view=cockpit" as="document" />
-    <link rel="prefetch" href="./app.js?v=20260828-merchant-project-status-af986de72d71" as="script" />
-    <link rel="prefetch" href="./styles.css?v=20260828-merchant-project-status-b175654e0ed5" as="style" />
+    <link rel="prefetch" href="./app.js?v=20260828-merchant-workflow-maturity-c4a05fd81890" as="script" />
+    <link rel="prefetch" href="./styles.css?v=20260828-merchant-workflow-maturity-0ad18de142aa" as="style" />
     <title>捷境 · eBay AI CEO 自动化工作台</title>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
     <style>
@@ -788,6 +788,74 @@
       .hero-ops-board article.is-active span {
         background: var(--ink);
         color: var(--paper);
+      }
+
+      .command-room.hero-draft-summary {
+        display: grid;
+        min-height: 0;
+        align-content: start;
+        gap: 26px;
+        padding: 42px;
+        background: var(--paper);
+        transform: none;
+        will-change: auto;
+      }
+
+      .hero-draft-summary-head {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        gap: 10px;
+        padding-bottom: 26px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .hero-draft-summary-head > span,
+      .hero-draft-summary-list article > span {
+        color: var(--teal-deep);
+        font-size: 12px;
+        font-weight: 900;
+        letter-spacing: 0.08em;
+      }
+
+      .hero-draft-summary-head strong {
+        max-width: 16em;
+        font-size: clamp(24px, 2.6vw, 38px);
+        line-height: 1.22;
+      }
+
+      .hero-draft-summary-head p,
+      .hero-draft-summary-list small {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .hero-draft-summary-list {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        gap: 12px;
+      }
+
+      .hero-draft-summary-list article {
+        display: grid;
+        grid-template-columns: 76px minmax(0, 1fr);
+        gap: 5px 16px;
+        align-items: start;
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        background: rgba(255, 255, 255, 0.72);
+      }
+
+      .hero-draft-summary-list article > span {
+        grid-row: 1 / span 2;
+      }
+
+      .hero-draft-summary-list article strong,
+      .hero-draft-summary-list article small {
+        min-width: 0;
       }
 
       @media (max-width: 1536px) {
@@ -3237,11 +3305,8 @@
       }
 
       .reveal {
-        opacity: 0;
-        transform: translateY(18px);
-        transition:
-          opacity 0.58s var(--ease),
-          transform 0.58s var(--ease);
+        opacity: 1;
+        transform: none;
       }
 
       .reveal.is-visible {
@@ -4000,7 +4065,7 @@
         </p>
         <div class="hero-actions">
           <button class="button" type="button" id="heroLogin" data-home-primary-cta="merchant_first_draft_v1">免费生成第一条草稿</button>
-          <button class="button-ghost" type="button" id="heroWorkbenchLogin">注册 / 登录工作台</button>
+          <button class="button-text" type="button" id="heroWorkbenchLogin">注册 / 登录工作台</button>
           <a class="button-text" href="#paths">了解商家起点</a>
         </div>
         <div class="proof-row" aria-label="产品信任边界">
@@ -4027,63 +4092,29 @@
         </div>
       </section>
 
-      <aside class="command-room" aria-label="AI CEO 调度工作模块">
-        <canvas class="signal-canvas" id="signalCanvas" aria-hidden="true"></canvas>
-        <svg class="flow-line" viewBox="0 0 640 660" aria-hidden="true">
-          <path d="M320 330 C210 170 160 135 120 110" />
-          <path d="M320 330 C430 170 480 135 520 110" />
-          <path d="M320 330 C170 330 140 310 110 300" />
-          <path d="M320 330 C470 330 500 310 530 300" />
-          <path d="M320 330 C210 500 170 520 130 560" />
-          <path d="M320 330 C430 500 470 520 510 560" />
-        </svg>
-        <div class="ceo-core">
-          <div>
-            <strong>AI CEO</strong>
-            <span>接目标 · 排队列 · 留记录 · 等确认</span>
-          </div>
+      <aside class="command-room hero-draft-summary" data-home-draft-summary="merchant_first_draft_summary_v1" aria-label="第一条草稿摘要">
+        <div class="hero-draft-summary-head">
+          <span>第一条草稿</span>
+          <strong>提交资料后，捷境把结果整理成一张可核对清单。</strong>
+          <p>不使用固定商品样例；实际内容只来自商家提交的图片、链接和规格。</p>
         </div>
-        <div class="hero-ops-board" aria-label="AI CEO 运营证据链">
-          <article class="is-active" data-home-proof="goal">
-            <span>01</span>
-            <strong>接收目标</strong>
-            <small>一句话进入经营流</small>
+        <div class="hero-draft-summary-list">
+          <article>
+            <span>已整理</span>
+            <strong>标题、属性、描述结构</strong>
+            <small>每项标明来自商家资料还是 AI 建议。</small>
           </article>
-          <article data-home-proof="route">
-            <span>02</span>
-            <strong>资料整理</strong>
-            <small>资料、报告、记录</small>
+          <article>
+            <span>待补</span>
+            <strong>缺失的尺寸、成本与图片权利</strong>
+            <small>不知道的事实保留为空，不替商家编造。</small>
           </article>
-          <article data-home-proof="confirm">
-            <span>03</span>
-            <strong>确认执行</strong>
-            <small>高风险动作先停住</small>
+          <article>
+            <span>下一步</span>
+            <strong>核对草稿，再决定是否连接店铺</strong>
+            <small>正式发布、收费、退款和平台写入仍需确认。</small>
           </article>
         </div>
-        <article class="role-node node-market">
-          <strong>市场与货源</strong>
-          <span>查需求、竞品、价格带、退货风险和供货可行性。</span>
-        </article>
-        <article class="role-node node-listing">
-          <strong>Listing 草稿</strong>
-          <span>生成标题、描述、商品参数、类目和上架资料。</span>
-        </article>
-        <article class="role-node node-media">
-          <strong>素材工坊</strong>
-          <span>规划主图、场景图、详情页和商品视频脚本。</span>
-        </article>
-        <article class="role-node node-ads">
-          <strong>广告费用</strong>
-          <span>只读费用和表现，预算变更先确认。</span>
-        </article>
-        <article class="role-node node-service">
-          <strong>客服物流</strong>
-          <span>客服草稿、售后、tracking 和时效风险。</span>
-        </article>
-        <article class="role-node node-finance">
-          <strong>财务风控</strong>
-          <span>把成交费、广告费、订阅费、物流和退款预留算清楚。</span>
-        </article>
       </aside>
     </header>
 
@@ -4193,7 +4224,13 @@
           </p>
         </div>
         <div class="path-grid" aria-label="开始方式">
-          <button class="path-card is-active" type="button" data-path="opened" data-plan="single">
+          <button class="path-card is-active" type="button" data-path="trial" data-plan="free">
+            <span class="pill amber">先体验</span>
+            <strong>免费体验</strong>
+            <span class="price">¥0 / 7 天</span>
+            <p>20 次捷境托管 AI 对话和 1 条未发布草稿；不绑卡、不自动续费。</p>
+          </button>
+          <button class="path-card" type="button" data-path="opened" data-plan="single">
             <span class="pill green">单店经营</span>
             <strong>有店铺</strong>
             <span class="price">¥99 / 30 天</span>
@@ -4205,327 +4242,12 @@
             <span class="price">¥199 / 30 天</span>
             <p>3 个店铺、5 个席位、每月 500 个经营任务；含 3,000 素材点。</p>
           </button>
-          <button class="path-card" type="button" data-path="trial" data-plan="free">
-            <span class="pill amber">先体验</span>
-            <strong>免费体验</strong>
-            <span class="price">¥0 / 7 天</span>
-            <p>20 次捷境托管 AI 对话和 1 条未发布草稿；不绑卡、不自动续费。</p>
-          </button>
         </div>
         <div class="hero-actions">
           <button class="button-ghost" type="button" id="choosePlan">登录后到套餐与付款</button>
         </div>
       </section>
 
-      <template id="retired-public-home-sections" aria-hidden="true">
-      <section class="section reveal" id="merchant-guide" hidden>
-        <div class="guide-app-topbar">
-          <div class="guide-app-identity">
-            <a class="brand" href="#top" aria-label="捷境 JIEJING">
-              <span class="jj-logo-mark" aria-hidden="true"></span>
-              <span class="brand-copy"><strong>捷境</strong><small>JIEJING AI CEO</small></span>
-            </a>
-            <span class="pill green">登录后向导</span>
-          </div>
-          <button class="button-text" type="button" id="guideExitToHome">返回官网</button>
-        </div>
-        <div class="section-head">
-          <div>
-            <p class="eyebrow" id="merchantGuideEyebrow">身份专属向导</p>
-            <h2 id="merchantGuideTitle">先让 AI 知道边界，后面工作流才会稳。</h2>
-          </div>
-          <p class="section-note" id="merchantGuideNote">
-            这一步只在登录并选完身份后出现。系统会按 eBay 实际经营顺序给出推荐路线：先接账号资料和业务边界，再整理货源履约、Listing 素材、费用利润、客服售后和确认权限；暂时不想连接的数据来源，后面也能在设置里补接。
-          </p>
-        </div>
-        <div class="guide-phase-strip" id="guidePhaseStrip" aria-label="向导流程阶段"></div>
-        <div class="merchant-guide-grid">
-          <section class="panel guide-panel">
-            <p class="eyebrow" id="guideStepLabel">第 1/5 步</p>
-            <h3 id="guideTitle">你准备用哪种履约方式？</h3>
-            <p id="guideBody">履约方式会影响承诺时效、运费、退货、利润和账号风险。新手不确定时，先选最接近当前能力的方案，后面可以在设置里修改。</p>
-            <article class="guide-current-default" id="guideCurrentDefault" aria-label="系统推荐默认选项"></article>
-            <div class="guide-step-notes" id="guideStepNotes" aria-label="当前步骤说明"></div>
-            <div class="guide-choice-grid" id="guideChoices" aria-label="自动化边界选项"></div>
-            <div class="hero-actions">
-              <button class="button-ghost" type="button" id="guideBack">上一步</button>
-              <button class="button-ghost" type="button" id="guideNext">下一步</button>
-              <button class="button-text" type="button" id="guideSkipToWorkspace">保存并进入工作舱</button>
-            </div>
-          </section>
-          <aside class="panel guide-summary">
-            <p class="eyebrow">向导步骤 · 可点击跳转</p>
-            <article class="guide-default-route" id="guideDefaultRoute" aria-label="推荐默认路线"></article>
-            <div id="guideSummary"></div>
-            <article class="guide-summary-next">
-              <strong>完成向导后进入工作舱</strong>
-              <span>AI CEO 会按这些边界推进当前主线。跳过的 eBay、货源、费用和物流接口，后面在「设置与账户」继续补接。</span>
-            </article>
-          </aside>
-        </div>
-      </section>
-
-      <section class="section reveal public-ceo-workbench" id="ai-ceo-workbench-technical" hidden aria-hidden="true">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">AI CEO 工作台</p>
-            <h2>AI CEO 接收商家目标，按来源记录和确认边界推进。</h2>
-          </div>
-          <p class="section-note">
-            AI CEO 工作台读取 eBay 店铺资料、商家来源记录和 AI 连接状态，生成报告、Listing、素材任务和确认项；真实发布、付款、退款、广告、改价、库存、政策和敏感客服承诺必须由商家确认。
-          </p>
-        </div>
-
-        <div class="ceo-saas-shell">
-          <section class="panel ceo-saas-main" aria-label="AI CEO 工作台真实链路">
-            <div class="permission-strip">
-              <div>
-                <strong id="workspaceScopeTitle">当前可执行范围：市场调研、Listing 草稿、素材 brief、客服事实表、经营报告</strong>
-                <span id="workspaceScopeBody">AI CEO 只读取整理后的店铺资料和来源记录；发布、付款、退款、广告、改价、库存、政策和敏感买家承诺默认进入决策中心。</span>
-              </div>
-              <span class="pill green" id="workspaceModePill">真实 SaaS 边界</span>
-            </div>
-
-            <article class="ceo-saas-command">
-              <span>商家指令</span>
-              <strong>“帮我把这条商品线跑一轮市场报告、Listing、素材和确认清单。”</strong>
-              <p>AI CEO 先接单，不直接写平台。它会把这句话变成可追溯任务：来源记录、Market Report、Listing Package、素材工坊、客服学习、财务履约和决策中心。</p>
-              <div class="ceo-saas-input">
-                <input type="text" value="输入商品、链接、图片、订单问题或经营目标" aria-label="AI CEO 指令示例" readonly />
-                <button class="button-ghost" type="button" id="publicWorkbenchEnter">进入真实工作台</button>
-              </div>
-            </article>
-
-            <div class="ceo-saas-flow" aria-label="AI CEO 工作闭环">
-              <article><span>1</span><strong>接收指令</strong><small>商家只说目标，系统记录来源和账号空间。</small></article>
-              <article><span>2</span><strong>读取证据</strong><small>eBay 店铺资料、来源记录、商家记忆、AI 连接状态。</small></article>
-              <article><span>3</span><strong>分发模块</strong><small>Listing、批量、素材、客服订单和财务履约。</small></article>
-              <article><span>4</span><strong>等待确认</strong><small>高风险动作停在决策中心，不自动越权。</small></article>
-              <article><span>5</span><strong>复盘记录</strong><small>报告、来源、确认、执行结果和记忆回写。</small></article>
-            </div>
-
-            <div class="ceo-saas-source-grid" aria-label="工作台模块">
-              <article class="ceo-saas-source">
-                <span>AI CEO</span>
-                <strong>Codex-like 对话入口</strong>
-                <p>商家布置目标，AI CEO 接单、拆任务、显示下一步，而不是让商家管理一堆 agent。</p>
-              </article>
-              <article class="ceo-saas-source">
-                <span>Listing</span>
-                <strong>Market Report + Listing Package</strong>
-                <p>生成 eBay 字段、标题、描述、类目、政策、价格风险和发布前缺口。</p>
-              </article>
-              <article class="ceo-saas-source">
-                <span>素材工坊</span>
-                <strong>流程导入 + 独立生成</strong>
-                <p>从 Listing 或批量质检导入素材 brief，也允许外部来源图独立生成素材草稿。</p>
-              </article>
-              <article class="ceo-saas-source">
-                <span>批量铺货</span>
-                <strong>批量前质检</strong>
-                <p>先筛来源、字段、利润、履约、图片授权和风险，再分批进入草稿。</p>
-              </article>
-              <article class="ceo-saas-source">
-                <span>客服与订单</span>
-                <strong>事实表和草稿</strong>
-                <p>基于官方订单、Listing、政策和商家记忆起草回复，高风险承诺回到确认。</p>
-              </article>
-              <article class="ceo-saas-source ceo-saas-boundary">
-                <span>决策中心</span>
-                <strong>真实动作确认边界</strong>
-                <p>真实发布、付款、退款、广告、库存、改价、政策和敏感客服承诺必须人工确认。</p>
-              </article>
-            </div>
-          </section>
-
-          <aside class="ceo-saas-side" aria-label="商家信任边界">
-            <article class="panel ceo-saas-evidence">
-              <span>商家看到的边界</span>
-              <strong>真实账号数据只在登录后的账号空间显示</strong>
-              <small>官网只展示产品能力和边界；真正的店铺资料、AI 连接和买家信息只在登录后的账号空间与后台安全边界处理。</small>
-            </article>
-            <div class="ceo-saas-evidence-grid">
-              <article class="ceo-saas-evidence">
-                <span>eBay-first</span>
-                <strong>先把 eBay 做深</strong>
-                <small>店铺、Listing、订单、费用、政策、类目和履约先整理成可用资料。</small>
-              </article>
-              <article class="ceo-saas-evidence">
-                <span>AI 连接</span>
-                <strong>商家凭证后端保存</strong>
-                <small>商家配置一次，前端不保存、不回显原始凭证。</small>
-              </article>
-              <article class="ceo-saas-evidence">
-                <span>来源记录</span>
-                <strong>每个结论都有依据</strong>
-                <small>官方资料、商家补充、公开来源、模型推理必须区分。</small>
-              </article>
-              <article class="ceo-saas-evidence ceo-saas-boundary">
-                <span>确认中心</span>
-                <strong>高风险动作不自动执行</strong>
-                <small>发布、付款、退款、广告、改价、库存和敏感承诺都停住。</small>
-              </article>
-            </div>
-            <article class="panel ceo-saas-evidence">
-              <span>登录后看到什么</span>
-              <strong>真实账号状态、资料覆盖、报告、确认项、AI 可用状态和操作记录</strong>
-              <small>如果没有真实数据，工作台显示缺口和下一步，不用无来源商品填满页面。</small>
-              <div class="hero-actions">
-                <button class="button-ghost" type="button" id="workspaceLogin">登录进入工作台</button>
-                <a class="button-ghost" href="#paths">先看商家起点</a>
-              </div>
-            </article>
-          </aside>
-        </div>
-      </section>
-
-      <section class="section reveal public-ceo-workbench" id="ai-ceo-workbench" hidden aria-hidden="true">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">AI CEO 工作台</p>
-            <h2>从批量选品到素材和 Listing，商家只看证据、缺口和确认项。</h2>
-          </div>
-          <p class="section-note">
-            这里展示草稿会包含哪些内容，不预置任何店铺商品。商家提交自己的资料后，AI CEO 才会整理标题、属性、描述、利润参考、资料缺口和风险疑点；真实发布、采购付款、广告预算、改价、库存、退款和敏感客服承诺仍必须由商家确认。
-          </p>
-        </div>
-        <div class="dashboard-slice public-workbench-showcase">
-          <section class="panel chat-panel">
-            <article class="report-card">
-              <div class="report-head">
-                <div>
-                  <strong>批量选品与 eBay 首测候选</strong>
-                  <span>AI CEO 先把一批轻小件收纳用品按需求稳定性、利润空间、履约难度、素材可重做性和 IP 风险分层；没有补齐来源与确认项的商品不会进入发布。</span>
-                </div>
-                <span class="pill green">批量选品</span>
-              </div>
-              <div class="product-rank">
-                <div class="rank-row is-picked">
-                  <em>#1</em>
-                  <div><strong>标题建议</strong><small>根据商家提交的商品资料整理关键词、规格和可读性，待商家核对。</small></div>
-                  <span class="score-pill">待核对</span>
-                  <span class="score-pill">有依据</span>
-                </div>
-                <div class="rank-row">
-                  <em>#2</em>
-                  <div><strong>属性缺口</strong><small>缺少尺寸、材质、包装或履约资料时明确列出，不替商家猜测。</small></div>
-                  <span class="score-pill">待补充</span>
-                  <span class="score-pill">不编造</span>
-                </div>
-                <div class="rank-row">
-                  <em>#3</em>
-                  <div><strong>利润参考</strong><small>使用商家提供的采购、物流和平台费用估算，并标明尚未确认的成本。</small></div>
-                  <span class="score-pill">仅供参考</span>
-                  <span class="score-pill">待确认</span>
-                </div>
-                <div class="rank-row">
-                  <em>4-10</em>
-                  <div><strong>风险与下一步</strong><small>标记品牌词、Logo、资料来源和平台规则疑点，并说明需要商家确认什么。</small></div>
-                  <span class="score-pill">初筛</span>
-                  <span class="score-pill">商家核对</span>
-                </div>
-              </div>
-              <div class="compliance-strip" aria-label="侵权风险初筛">
-                <article><span>品牌词</span><strong>不使用未经授权品牌名</strong></article>
-                <article><span>图片来源</span><strong>供应商图需授权或重制</strong></article>
-                <article><span>外观/IP</span><strong>排查角色、Logo、同款风险</strong></article>
-                <article><span>平台禁词</span><strong>避免功效和夸大承诺</strong></article>
-              </div>
-            </article>
-            <div class="bubble">
-              商家：这是我的商品图片和货源链接。请先整理商品资料、来源缺口和风险疑点，再生成一份可以核对的 eBay 草稿。
-              <figure class="chat-attachment">
-                <div class="asset-placeholder" aria-hidden="true"><span>商品图片</span></div>
-                <figcaption>商品资料已收到。系统会先检查字段缺口、图片来源、实物一致性和 eBay 刊登要求。</figcaption>
-              </figure>
-            </div>
-            <div class="bubble ai">
-              AI CEO：可以。我会先整理商品事实、来源和字段缺口，再进行侵权风险初筛并生成可核对的草稿。风险初筛不等于平台或法律审核通过；发布、广告预算、最终售价、库存和采购付款会暂停等待商家确认。
-            </div>
-            <article class="report-card">
-              <div class="report-head">
-                <div>
-                  <strong>商品草稿结构预览</strong>
-                  <span>商家提交资料后，工作台会展示 Listing 字段、素材建议、来源缺口和待确认事项。下一步只推进到未发布草稿，不自动发布。</span>
-                </div>
-                <span class="pill green">待商家确认</span>
-              </div>
-              <div class="asset-board">
-                <article class="asset-card has-image">
-                  <div class="asset-placeholder" aria-hidden="true"><span>主图位置</span></div>
-                  <div class="asset-copy">
-                    <strong>高转化主图</strong>
-                    <span>完整套装铺开，强调件数、颜色和收纳价值。</span>
-                  </div>
-                </article>
-                <article class="asset-card has-image">
-                  <div class="asset-placeholder" aria-hidden="true"><span>场景图位置</span></div>
-                  <div class="asset-copy">
-                    <strong>旅行场景图</strong>
-                    <span>打开行李箱直接看到省空间和出行秩序。</span>
-                  </div>
-                </article>
-                <article class="asset-card has-image">
-                  <div class="asset-placeholder" aria-hidden="true"><span>细节图位置</span></div>
-                  <div class="asset-copy">
-                    <strong>卖点细节图</strong>
-                    <span>材质、拉链、网面和手柄细节更有质感。</span>
-                  </div>
-                </article>
-                <article class="asset-card has-image detail-card">
-                  <div class="asset-placeholder" aria-hidden="true"><span>详情图位置</span></div>
-                  <div class="asset-copy">
-                    <strong>详情页图</strong>
-                    <span>把套装、装箱、细节和清单组合成详情页视觉。</span>
-                  </div>
-                </article>
-              </div>
-              <div class="video-preview-card">
-                <div class="video-thumb">
-                  <div class="asset-placeholder" aria-hidden="true"><span>视频封面位置</span></div>
-                  <span class="video-play" aria-hidden="true"></span>
-                </div>
-                <div class="video-copy">
-                  <strong>10 秒短视频封面</strong>
-                  <span>先用封面图展示视频方向：痛点、压缩、分类、装箱和卖点收口。正式发布前仍需确认素材来源和实物一致性。</span>
-                </div>
-              </div>
-              <div class="video-strip" aria-label="10 秒视频分镜">
-                <span>0-2s<br />痛点</span>
-                <span>2-4s<br />压缩</span>
-                <span>4-6s<br />分类</span>
-                <span>6-8s<br />装箱</span>
-                <span>8-10s<br />卖点收口</span>
-              </div>
-            </article>
-            <form class="task-input" id="ceoTaskForm">
-              <textarea id="ceoTaskInput" aria-label="任务输入">这是我的商品图片和货源链接。请整理商品资料和缺口，进行侵权风险初筛，并生成一份待我核对的 eBay 草稿。</textarea>
-              <button class="button-ghost" type="submit">发送</button>
-            </form>
-            <div class="ai-response" id="ceoTaskResponse" aria-live="polite"></div>
-          </section>
-          <aside class="work-stack">
-            <article class="panel work-card is-high">
-              <div><strong>批量选品模块</strong><span>根据商家给的图片、链接、采购价和店铺阶段，筛出适合 eBay 首测的候选商品。</span></div>
-              <span class="pill green">完成</span>
-            </article>
-            <article class="panel work-card is-high">
-              <div><strong>侵权风险初筛</strong><span>提示品牌词、Logo、角色图案、供应商图片授权、同款外观和平台禁词疑点，仍需商家核对。</span></div>
-              <span class="pill green">完成</span>
-            </article>
-            <article class="panel work-card is-high">
-              <div><strong>素材工坊模块</strong><span>流程导入或外部独立上传都能生成自有产品图、卖点图、详情页和 10 秒视频分镜。</span></div>
-              <span class="pill amber" id="assetStatus">等上传图</span>
-            </article>
-            <article class="panel work-card">
-              <div><strong>决策中心</strong><span>供应商授权、素材一致性、平台禁售词、真实发布、采购付款和广告预算仍需商家确认。</span></div>
-              <span class="pill red" id="riskStatus">需确认</span>
-            </article>
-          </aside>
-        </div>
-      </section>
-
-      </template>
 
       <section class="section reveal" id="pricing" data-home-section="faq">
         <div class="section-head">
@@ -4638,7 +4360,7 @@
 
     <script src="./assets/jiejing-first-party-analytics.js?v=20260715-owner-traffic-analytics-v104"></script>
     <script>
-      const JIEJING_SITE_VERSION = "20260828-merchant-project-status-b175654e0ed5";
+      const JIEJING_SITE_VERSION = "20260828-merchant-workflow-maturity-0ad18de142aa";
 
       (function routeOfficialEntryToApp() {
         const params = new URLSearchParams(window.location.search);
@@ -4652,8 +4374,8 @@
       function warmWorkspaceAssets() {
         const assets = [
           ["prefetch", "./app.html?start=app&view=workflow", "document"],
-          ["preload", "./app.js?v=20260828-merchant-project-status-af986de72d71", "script"],
-          ["preload", "./styles.css?v=20260828-merchant-project-status-b175654e0ed5", "style"],
+          ["preload", "./app.js?v=20260828-merchant-workflow-maturity-c4a05fd81890", "script"],
+          ["preload", "./styles.css?v=20260828-merchant-workflow-maturity-0ad18de142aa", "style"],
         ];
         assets.forEach(([rel, href, as]) => {
           if (document.querySelector(`link[href="${href}"]`)) return;
@@ -5448,8 +5170,8 @@
       let entrySellerRegistrationOpened = false;
       let entrySellerRegistrationReturnPrompt = false;
 
-      let activePath = "opened";
-      let activePlan = "single";
+      let activePath = "trial";
+      let activePlan = "free";
       let activeGuideStep = 0;
       let entryLoggedIn = false;
       let hasEnteredGuide = false;
@@ -6381,7 +6103,7 @@
         if (entryLoggedIn) showEntryModes();
         else showEntryLogin();
         if (mode === "plan" && !entryLoggedIn) {
-          document.querySelector("#nextStepBody").textContent = "订阅方案已保存。先登录，再选择商家身份进入对应向导。";
+          document.querySelector("#nextStepBody").textContent = "订阅方案已保存。登录后直接进入对应工作台，套餐、店铺和 AI 设置都可以稍后在设置中心补充。";
         }
         modal.classList.add("is-open");
         modal.setAttribute("aria-hidden", "false");
@@ -6419,16 +6141,12 @@
         const data = pathData[key] || pathData.opened;
         hasEnteredGuide = true;
         activeGuideStep = 0;
-        if (key === "trial") {
-          showToast("正在打开免费体验的空白工作台；不会绑卡或自动扣费。");
-          void finishGuideAndOpenWorkspace("draft_only");
-          return;
-        }
-        renderGuide();
-        syncWorkspaceContext();
-        enterOnboardingMode();
-        scheduleEntryMerchantOnboardingSave();
-        showToast(`已进入「${data.eyebrow}」专属向导。这里是登录后的独立向导，完成后再进入 AI CEO 工作舱。`);
+        showToast(
+          key === "trial"
+            ? "正在打开免费体验的空白工作台；不会绑卡或自动扣费。"
+            : `正在打开「${data.eyebrow}」工作台；店铺与经营资料可以在设置中心继续补充。`,
+        );
+        void finishGuideAndOpenWorkspace("draft_only");
       }
 
       function renderGuide() {
@@ -6575,7 +6293,7 @@
       });
 
       document.querySelector("#startPath")?.addEventListener("click", () => {
-        showToast("登录或注册后，先选择身份并完成向导。");
+        showToast("登录或注册后，选择适合当前店铺规模的入口即可开始。");
         openNextStepModal("path");
       });
 
@@ -6702,8 +6420,8 @@
         { passive: true },
       );
 
-      setPath("opened");
-      setPlan("single");
+      setPath("trial");
+      setPlan("free");
       renderGuide();
       updatePageProgress();
       setupHomeIntentStrip();

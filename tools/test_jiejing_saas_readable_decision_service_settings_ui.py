@@ -33,7 +33,10 @@ def main() -> None:
     app_js = APP_JS.read_text(encoding="utf-8")
     styles = STYLES.read_text(encoding="utf-8")
 
-    activity_scope = function_scope(app_js, "renderSaasActivityCenter")
+    activity_scope = (
+        function_scope(app_js, "renderSaasHistoricalProjectArchive")
+        + function_scope(app_js, "renderSaasActivityCenter")
+    )
     confirm_scope = function_scope(app_js, "renderSaasConfirmPanel")
     service_scope = function_scope(app_js, "renderSaasServiceCenter")
     settings_scope = (
@@ -54,11 +57,12 @@ def main() -> None:
     )
 
     for marker in [
-        "AI CEO 已经产出的经营报告",
-        "授权、来源、模型连接和发布复盘已经归到设置",
-        "汇报页保留市场结论",
+        "默认只显示当前项目的报告、确认和平台结果",
+        "当前项目报告",
+        "报告按账号和商品项目隔离",
         "saas-activity-simple-list",
-        "没有报告时不展示旧演示记录",
+        "不借用其他商品或旧演示记录",
+        "历史项目归档",
     ]:
         require(activity_scope, marker, "AI CEO report center simplified surface")
 

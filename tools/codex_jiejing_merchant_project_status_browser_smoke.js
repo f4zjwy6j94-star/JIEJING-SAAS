@@ -296,6 +296,11 @@ async function main() {
 
   await page.reload({ waitUntil: "domcontentloaded", timeout: 60000 });
   await page.waitForSelector('#view-cockpit.is-active [data-merchant-project-status="merchant_project_status_v1"]', { timeout: 60000 });
+  await page.waitForFunction(
+    () => typeof state !== "undefined" && state.saasLoading === false && state.saasProtectedStateReady === true,
+    null,
+    { timeout: 60000 },
+  );
   const afterReload = await page.evaluate((expectedProjectId) => {
     const url = new URL(window.location.href);
     const strip = document.querySelector('#view-cockpit.is-active [data-merchant-project-status="merchant_project_status_v1"]');
@@ -306,14 +311,60 @@ async function main() {
     };
   }, projectId);
 
+  const responsiveResults = [];
+  for (const viewport of [
+    { name: "desktop", width: 1440, height: 1000 },
+    { name: "tablet", width: 1024, height: 900 },
+    { name: "mobile", width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    for (const view of ["product", "confirm", "activity"]) {
+      await page.evaluate((nextView) => setView(nextView), view);
+      await page.waitForSelector(`#view-${view}.is-active [data-merchant-project-status="merchant_project_status_v1"]`, {
+        timeout: 20000,
+      });
+      responsiveResults.push(
+        await page.evaluate(
+          ({ viewport, view }) => {
+            const root = document.documentElement;
+            const activeView = document.querySelector(`#view-${view}.is-active`);
+            const strip = activeView?.querySelector('[data-merchant-project-status="merchant_project_status_v1"]');
+            return {
+              viewport: viewport.name,
+              view,
+              strip_present: Boolean(strip),
+              horizontal_overflow: Math.max(0, root.scrollWidth - root.clientWidth),
+              active_view_overflow: activeView ? Math.max(0, activeView.scrollWidth - activeView.clientWidth) : -1,
+              fake_later_action_count: activeView
+                ? Array.from(activeView.querySelectorAll("button")).filter((button) => button.textContent.trim() === "稍后处理").length
+                : -1,
+            };
+          },
+          { viewport, view },
+        ),
+      );
+    }
+  }
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.evaluate(() => setView("product"));
+  await page.waitForSelector('#view-product.is-active [data-merchant-project-status="merchant_project_status_v1"]', { timeout: 20000 });
   await page.screenshot({ path: path.join("output", "browser-smoke", "merchant-project-status-phase4.png"), fullPage: true });
   await browser.close();
 
   const viewChecksPass = Object.values(viewResults).every(
     (item) => item.strip_present && item.stage_count === 8 && item.current_count === 1 && item.project_match,
   );
+  const responsiveChecksPass = responsiveResults.every(
+    (item) =>
+      item.strip_present &&
+      item.horizontal_overflow === 0 &&
+      item.active_view_overflow === 0 &&
+      item.fake_later_action_count === 0,
+  );
   const ok =
     viewChecksPass &&
+    responsiveChecksPass &&
     afterReload.strip_present &&
     afterReload.project_match &&
     statusRequests.some((item) => item.status === 200 && item.url.includes(encodeURIComponent(projectId))) &&
@@ -327,6 +378,7 @@ async function main() {
     initial_diagnostic: initialDiagnostic,
     view_results: viewResults,
     after_reload: afterReload,
+    responsive_results: responsiveResults,
     status_requests: statusRequests,
     page_errors: pageErrors,
     bad_responses: badResponses,

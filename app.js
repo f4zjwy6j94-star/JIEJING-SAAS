@@ -7622,7 +7622,7 @@ function renderSaasPublishReadinessStrip(formValues = {}) {
     ["物流履约", [formValues.quantity, formValues.item_location, formValues.package_weight_g || formValues.package_length_cm]],
   ];
   return `
-    <div class="saas-publish-readiness-strip" aria-label="上架资料完成度">
+    <div class="saas-publish-readiness-strip" aria-label="上架资料填写状态">
       ${groups.map(([label, checks]) => {
         const done = checks.filter(Boolean).length;
         const total = checks.length;
@@ -7630,8 +7630,8 @@ function renderSaasPublishReadinessStrip(formValues = {}) {
         return `
           <article class="is-${tone}">
             <span>${escapeHtml(label)}</span>
-            <strong>${done}/${total}</strong>
-            <small>${done >= total ? "已有线索" : "待补全"}</small>
+            <strong>${done >= total ? "已填写" : "待补"}</strong>
+            <small>${done >= total ? "可继续核对" : "展开表单补充"}</small>
           </article>
         `;
       }).join("")}
@@ -8924,7 +8924,6 @@ function renderSaasMerchantProductFactField(packet = {}, definition = []) {
 function renderSaasMerchantProductFactsModule(draft = state.saasListingComposerDraft) {
   if (!draft) return "";
   const packet = saasMerchantProductFactPacket(draft);
-  const readiness = packet.listing_readiness || {};
   const missingLabels = saasMerchantProductFactDefinitions()
     .flatMap((group) => group.fields)
     .filter(([key]) => packet.unknown_facts.includes(key))
@@ -8938,8 +8937,8 @@ function renderSaasMerchantProductFactsModule(draft = state.saasListingComposerD
           <p>材质、成本、库存、发货和图片权利以你的真实资料为准。保存后 JIEJING 会继续生成和体检 Listing，不用去 eBay 手工填写。</p>
         </div>
         <div class="saas-product-facts-score">
-          <b>${escapeHtml(String(readiness.completion_percent || 0))}%</b>
-          <small>${missingLabels.length ? `还差 ${missingLabels.length} 项` : "商品事实已补齐"}</small>
+          <b>${missingLabels.length ? "待补" : "已填写"}</b>
+          <small>${missingLabels.length ? "仍有商品资料待确认" : "商品事实已补齐"}</small>
         </div>
       </div>
       <div class="saas-product-fact-legend" aria-label="字段来源说明">
@@ -9331,11 +9330,11 @@ function renderSaasListingEbayFieldCoveragePanel(draft = state.saasListingCompos
   const coverage = saasListingEbayFieldCoverage(draft, ctx);
   const scoreTone = coverage.score >= 80 ? "green" : coverage.score >= 45 ? "amber" : "red";
   return `
-    <section class="saas-listing-ebay-field-coverage is-${escapeHtml(scoreTone)}" data-listing-ebay-field-coverage="ebay_listing_field_coverage_v1" aria-label="eBay 上架字段完成度">
+    <section class="saas-listing-ebay-field-coverage is-${escapeHtml(scoreTone)}" data-listing-ebay-field-coverage="ebay_listing_field_coverage_v1" aria-label="eBay 上架字段核对">
       <div class="saas-listing-ebay-field-head">
         <div>
-          <span>eBay 字段完成度</span>
-          <strong>${coverage.score}% · ${coverage.done}/${coverage.total} 项已有线索</strong>
+          <span>eBay 字段核对</span>
+          <strong>${coverage.done >= coverage.total ? "已填写" : "待补资料"}</strong>
           <p>AI CEO 调研报告会先转成 eBay Inventory / Offer 字段包。缺字段会继续问你补齐；未通过体检不会写入 eBay。</p>
         </div>
         <em>${coverage.sourceContract ? "字段包已导入" : "草稿字段"}</em>
@@ -9346,7 +9345,7 @@ function renderSaasListingEbayFieldCoveragePanel(draft = state.saasListingCompos
             (group) => `
               <article class="is-${escapeHtml(group.tone)}">
                 <span>${escapeHtml(group.label)}</span>
-                <strong>${escapeHtml(group.done)}/${escapeHtml(group.total)}</strong>
+                <strong>${group.done >= group.total ? "已填写" : "待补资料"}</strong>
                 <p>${escapeHtml(group.title)}</p>
                 <small>${group.missing.length ? `待补：${group.missing.map((item) => item.label).join("、")}` : "这一组已有基础线索"}</small>
               </article>
@@ -9764,7 +9763,7 @@ function renderSaasListingNextActionPanel(draft = state.saasListingComposerDraft
     {
       step: "02",
       title: "补齐发布资料",
-      value: localSummary.red ? `${localSummary.red} 项必须先补` : `${coverage.score}% 字段已有线索`,
+      value: localSummary.red ? "待补资料" : "已填写，等待核对",
       tone: localSummary.red ? "red" : coverage.score >= 70 ? "green" : "amber",
     },
     {
@@ -9917,7 +9916,7 @@ function renderSaasListingAdvancedWorkDetails(
     <details class="saas-listing-advanced-details" data-listing-advanced-checks="listing_advanced_checks_collapsed_v1">
       <summary>
         <span>eBay 字段检查和发布体检</span>
-        <small>${escapeHtml(coverage.score)}% 字段线索 · ${escapeHtml(localSummary.red || 0)} 项需补；展开后查看明细</small>
+        <small>${localSummary.red ? "待补资料" : "已填写"}；展开后查看字段明细</small>
       </summary>
       <div class="saas-listing-advanced-body">
         <section class="saas-listing-advanced-summary" aria-label="Listing 高级检查摘要">
@@ -18914,29 +18913,31 @@ function renderSaasConfirmationMerchantBrief(card = {}, cardProduct = "") {
   `;
 }
 
+const SAAS_MERCHANT_CONFIRMATION_ACTION_LABELS = Object.freeze({
+  ebay_oauth_scope_change: "eBay 授权范围变更",
+  create_ebay_inventory_location: "创建 eBay 库存位置",
+  save_ebay_listing_draft: "保存未发布 eBay 草稿",
+  publish_listing: "正式发布",
+  bulk_publish_listing: "批量正式发布",
+  revise_listing: "修改 Listing",
+  change_price: "修改商品价格",
+  change_inventory: "修改商品库存",
+  open_ad_campaign: "创建广告活动",
+  change_ad_budget: "调整广告预算",
+  refund: "退款",
+  partial_refund: "部分退款",
+  procurement_payment: "采购付款",
+  purchase_order: "创建采购订单",
+  cleanup_test_listing: "清理测试 Listing",
+  change_shipping_policy: "修改物流政策",
+  change_payment_policy: "修改付款政策",
+  change_return_policy: "修改退货政策",
+  sensitive_customer_reply: "发送敏感客服回复",
+  ebay_read_only_sync: "eBay 官方只读同步",
+});
+
 function saasWorkbenchActionLabel(action = "") {
-  return (
-    {
-      procurement_payment: "采购付款",
-      policy_edit: "店铺政策",
-      publish_listing: "真实发布",
-      cleanup_test_listing: "测试 Listing 清理",
-      create_ebay_inventory_location: "创建 eBay 库存位置",
-      change_price: "改价",
-      change_inventory: "改库存",
-      ad_budget: "广告预算",
-      refund: "退款",
-      partial_refund: "部分退款",
-      sensitive_buyer_commitment: "敏感客服承诺",
-      oauth_scope_change: "授权范围变更",
-      ebay_read_only_sync: "eBay 官方只读同步",
-      buyer_message_send: "发送买家消息",
-      store_subscription: "店铺订阅",
-    }[action] ||
-    runtimeTaskTitle(action) ||
-    action ||
-    "确认项"
-  );
+  return SAAS_MERCHANT_CONFIRMATION_ACTION_LABELS[String(action || "").trim()] || "需要确认的操作";
 }
 
 function saasConfirmationApproveButtonLabel(card = {}) {
@@ -18947,12 +18948,34 @@ function saasConfirmationApproveButtonLabel(card = {}) {
   if (actionType === "create_ebay_inventory_location") {
     return "同意创建这个库存位置";
   }
+  if (actionType === "save_ebay_listing_draft") {
+    return "确认保存未发布 eBay 草稿";
+  }
   if (actionType === "publish_listing" && isSaasControlledExistingDraftPublishConfirmation(card)) {
     return "确认并正式发布这个 Offer";
   }
   if (actionType === "publish_listing" && isSaasRealPlatformWritesEnabled()) {
     return "同意，继续发布体检";
   }
+  const labels = {
+    bulk_publish_listing: "确认批量正式发布",
+    revise_listing: "确认修改这条 Listing",
+    change_price: "确认修改商品价格",
+    change_inventory: "确认修改商品库存",
+    open_ad_campaign: "确认创建广告活动",
+    change_ad_budget: "确认调整广告预算",
+    refund: "确认退款",
+    partial_refund: "确认部分退款",
+    procurement_payment: "确认采购付款",
+    purchase_order: "确认创建采购订单",
+    cleanup_test_listing: "确认清理测试 Listing",
+    change_shipping_policy: "确认修改物流政策",
+    change_payment_policy: "确认修改付款政策",
+    change_return_policy: "确认修改退货政策",
+    sensitive_customer_reply: "确认发送这条客服回复",
+    ebay_oauth_scope_change: "确认变更 eBay 授权范围",
+  };
+  if (labels[actionType]) return labels[actionType];
   return "同意，进入下一步";
 }
 
@@ -20324,7 +20347,6 @@ function renderSaasConfirmPanel() {
                     ${
                       status === "pending"
                         ? `<div class="runtime-confirm-actions">
-                            <button class="secondary-action" type="button" data-saas-action="refresh">稍后处理</button>
                             ${
                               isSaasReadOnlyOAuthSensitiveConfirmation(card) || isSaasInventoryLocationSensitiveConfirmation(card)
                                 ? (
@@ -25869,7 +25891,7 @@ function renderSaasMerchantProjectStatusStrip(snapshot = state.saasMerchantProje
         <span>${blockerActive ? "当前阻断" : "下一步"}</span>
         <strong>${escapeHtml(blockerActive ? blocker.title || "需要处理" : nextAction.label || "继续当前项目")}</strong>
         <p>${escapeHtml(blockerActive ? blocker.detail || "" : "所有页面都按同一后端项目状态继续。")}</p>
-        <button class="primary-action compact-action" type="button" data-global-flow-view="${escapeHtml(nextAction.view || "product")}">${escapeHtml(nextAction.label || "继续")}</button>
+        <button class="secondary-action compact-action" type="button" data-global-flow-view="${escapeHtml(nextAction.view || "product")}">${escapeHtml(nextAction.label || "继续")}</button>
       </div>
     </section>
   `;
@@ -36567,6 +36589,9 @@ function saasMerchantExecutionRecordViewModel(record = null) {
     (item) => publicRuntimeText(item?.confirmation_id || "").trim() === confirmationId,
   ) || {};
   const item = confirmation.item && typeof confirmation.item === "object" ? confirmation.item : {};
+  const projectIdentity = saasNormalizeListingProjectIdentity(
+    item.listing_project_identity || confirmation.listing_project_identity,
+  );
   const existingDraft = item.existing_ebay_draft && typeof item.existing_ebay_draft === "object"
     ? item.existing_ebay_draft
     : {};
@@ -36625,6 +36650,7 @@ function saasMerchantExecutionRecordViewModel(record = null) {
   return {
     executionId,
     confirmationId,
+    projectId: projectIdentity?.key || "",
     actionType,
     actionLabel: saasExecutionActionLabel(actionType),
     status,
@@ -36642,8 +36668,8 @@ function saasMerchantExecutionRecordViewModel(record = null) {
   };
 }
 
-function renderSaasActivityExecutionRecords() {
-  const records = (state.saasExecutionResults || [])
+function renderSaasActivityExecutionRecords(sourceRecords = state.saasExecutionResults || []) {
+  const records = (Array.isArray(sourceRecords) ? sourceRecords : [])
     .map((record) => saasMerchantExecutionRecordViewModel(record))
     .filter(Boolean)
     .slice(0, 8);
@@ -36686,31 +36712,104 @@ function renderSaasActivityExecutionRecords() {
   `;
 }
 
+function saasActivityReportProjectIdentity(record = {}) {
+  const payload = record.report && typeof record.report === "object" ? record.report : {};
+  const candidates = [
+    record.listing_project_identity,
+    payload.listing_project_identity,
+    payload.merchant_product_fact_packet?.listing_project_identity,
+    payload.sections?.listing_project_identity,
+  ];
+  for (const candidate of candidates) {
+    const identity = saasNormalizeListingProjectIdentity(candidate);
+    if (identity?.key) return identity;
+  }
+  return null;
+}
+
+function saasActivityReportMatchesCurrentProject(record = {}, projectId = saasCurrentMerchantProjectId()) {
+  const currentProjectId = String(projectId || "").trim();
+  if (!currentProjectId) return false;
+  const identity = saasActivityReportProjectIdentity(record);
+  if (identity?.key) return identity.key === currentProjectId;
+  const sourceReportId = String(
+    state.saasMerchantProjectStatus?.project?.listing_project_identity?.source_report_id || "",
+  ).trim();
+  return Boolean(sourceReportId && String(record.report_id || "").trim() === sourceReportId);
+}
+
+function saasActivityExecutionMatchesCurrentProject(record = {}, projectId = saasCurrentMerchantProjectId()) {
+  const currentProjectId = String(projectId || "").trim();
+  if (!currentProjectId) return false;
+  return saasMerchantExecutionRecordViewModel(record)?.projectId === currentProjectId;
+}
+
+function renderSaasHistoricalProjectArchive(reports = [], executions = []) {
+  const reportRows = Array.isArray(reports) ? reports : [];
+  const executionRows = Array.isArray(executions) ? executions : [];
+  if (!reportRows.length && !executionRows.length) return "";
+  return `
+    <details class="saas-activity-history-archive" data-activity-history="historical_projects_archive_v1">
+      <summary><span>历史项目归档</span><small>${reportRows.length} 条报告 · ${executionRows.length} 条执行记录</small></summary>
+      <div class="saas-activity-simple-grid">
+        ${reportRows
+          .slice(0, 12)
+          .map(
+            (record) => `<article><span>${escapeHtml(saasReportTypeLabel(record.report_type))}</span><strong>${escapeHtml(record.title || saasReportTypeLabel(record.report_type))}</strong><p>${escapeHtml(saasReportSummary(record))}</p></article>`,
+          )
+          .join("")}
+        ${executionRows
+          .slice(0, 12)
+          .map((record) => saasMerchantExecutionRecordViewModel(record))
+          .filter(Boolean)
+          .map(
+            (record) => `<article><span>${escapeHtml(record.actionLabel)}</span><strong>${escapeHtml(record.statusLabel)}</strong><p>${escapeHtml(record.summary)}</p></article>`,
+          )
+          .join("")}
+      </div>
+    </details>
+  `;
+}
+
 function renderSaasActivityCenter(view) {
   if (!view) return;
   const ctx = saasMerchantWorkbenchContext();
-  const reports = saasReportsForDisplay(state.saasReports || []);
-  const confirmations = state.saasConfirmations || [];
+  const projectId = saasCurrentMerchantProjectId();
+  const projectLabel =
+    state.saasMerchantProjectStatus?.project?.product_name ||
+    state.saasMerchantProjectStatus?.project?.sku ||
+    "当前商品项目";
+  const allReports = saasReportsForDisplay(state.saasReports || []);
+  const reports = allReports.filter((record) => saasActivityReportMatchesCurrentProject(record, projectId));
+  const historicalReports = allReports.filter((record) => !saasActivityReportMatchesCurrentProject(record, projectId));
+  const allExecutions = Array.isArray(state.saasExecutionResults) ? state.saasExecutionResults : [];
+  const executions = allExecutions.filter((record) => saasActivityExecutionMatchesCurrentProject(record, projectId));
+  const historicalExecutions = allExecutions.filter((record) => !saasActivityExecutionMatchesCurrentProject(record, projectId));
+  const confirmations = saasConfirmationsForDisplay(state.saasConfirmations || []);
   const pendingConfirmations = confirmations.filter((item) => item.status === "pending");
-  const marketReport = latestSaasReportByTypes(["ai_ceo.market_research", "market.report", "market.data_packet"]);
-  const listingReport = latestSaasReportByTypes(["listing.package", "product.listing"]);
+  const marketReport = reports.find((record) =>
+    ["ai_ceo.market_research", "market.report", "market.data_packet"].includes(record.report_type || ""),
+  ) || null;
+  const listingReport = reports.find((record) =>
+    ["listing.package", "product.listing"].includes(record.report_type || ""),
+  ) || null;
   const canGenerateReport = state.saasConnected && ctx.hasPacket && isSaasModelConfigured();
   view.innerHTML = jiejingTrustedTemplate("activity.report_center")`
     <section class="panel full product-manager-module saas-real-activity-center" aria-label="真实 AI CEO 汇报">
       <header class="product-manager-header saas-real-listing-header">
         <div>
-          <p class="eyebrow">AI CEO 汇报</p>
-          <h2>AI CEO 已经产出的经营报告</h2>
-          <p class="section-note">授权、来源、模型连接和发布复盘已经归到设置。汇报页保留市场结论、Listing 草稿、确认记录和可继续的经营动作。</p>
+          <p class="eyebrow">工作记录</p>
+          <h2>${projectId ? `${escapeHtml(projectLabel)}的工作记录` : "先打开一个商品项目"}</h2>
+          <p class="section-note">默认只显示当前项目的报告、确认和平台结果。其他商品放在历史项目归档，不参与当前项目判断。</p>
         </div>
         <span class="pill ${reports.length ? "green" : "amber"}">${reports.length ? `${reports.length} 条报告` : "等待报告"}</span>
       </header>
 
       <section class="saas-readable-page-head saas-activity-readable-head" aria-label="AI CEO 汇报说明">
         <div>
-          <span>AI CEO 汇报</span>
-          <strong>${reports.length ? "报告已经进入工作记录" : "还没有可展示的真实报告"}</strong>
-          <p>${reports.length ? "继续看报告结论、确认项和下一步动作。" : "先到设置补齐 eBay 同步和 AI 连接，再回到 AI CEO 对话或 Listing 生成报告。"}</p>
+          <span>当前项目</span>
+          <strong>${reports.length ? "报告已经进入当前项目" : projectId ? "当前项目还没有报告" : "还没有选择商品项目"}</strong>
+          <p>${reports.length ? "继续看报告结论、确认项和下一步动作。" : projectId ? "回到 AI CEO 或 Listing 继续当前项目。" : "先从 AI CEO 或 Listing 打开一个商品项目。"}</p>
         </div>
         <div class="saas-page-next-action">
           <b>${pendingConfirmations.length ? `${pendingConfirmations.length} 个确认项` : canGenerateReport ? "可以生成报告" : "去设置补连接"}</b>
@@ -36730,14 +36829,14 @@ function renderSaasActivityCenter(view) {
         ${renderSaasListingFactoryReportCard(listingReport, "Listing 草稿")}
       </section>
 
-      ${renderSaasActivityExecutionRecords()}
+      ${renderSaasActivityExecutionRecords(executions)}
 
-      <section class="saas-activity-simple-list" aria-label="AI CEO 全部报告">
+      <section class="saas-activity-simple-list" aria-label="当前项目报告">
         <div class="saas-activity-simple-head">
           <div>
-            <span>全部报告</span>
-            <strong>${reports.length ? "当前账号的工作记录" : "还没有真实模型报告"}</strong>
-            <p>报告生成后按账号隔离写回；没有报告时不展示旧演示记录。</p>
+            <span>当前项目报告</span>
+            <strong>${reports.length ? "当前商品的工作记录" : "还没有当前项目报告"}</strong>
+            <p>报告按账号和商品项目隔离；没有当前项目报告时不借用其他商品或旧演示记录。</p>
           </div>
         </div>
         <div class="saas-activity-simple-grid">
@@ -36759,6 +36858,7 @@ function renderSaasActivityCenter(view) {
           }
         </div>
       </section>
+      ${renderSaasHistoricalProjectArchive(historicalReports, historicalExecutions)}
     </section>
   `;
 }

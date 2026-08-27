@@ -210,14 +210,14 @@ def main() -> int:
     if "width: 50px;" not in styles_css or "height: 50px;" not in styles_css or 'center / 118% no-repeat' not in styles_css:
         return fail("SaaS brand mark must stay enlarged and centered with the JIEJING app icon")
     for homepage_intent_marker in [
-        'data-home-intent-strip="homepage_ai_ceo_intents_v1"',
-        'data-home-intent="listing"',
-        'data-home-intent="bulk"',
-        'data-home-intent="service"',
-        'data-home-proof="goal"',
-        "function setHomeIntent",
-        "function setupHomeIntentStrip",
-        "setupHomeIntentStrip();",
+        'data-home-primary-cta="merchant_first_draft_v1"',
+        'data-home-draft-summary="merchant_first_draft_summary_v1"',
+        'data-home-section="outcome"',
+        'data-home-section="workflow"',
+        'data-home-section="trust"',
+        'data-home-section="plans"',
+        'data-home-section="faq"',
+        "免费生成第一条草稿",
     ]:
         if homepage_intent_marker not in index_html:
             return fail(f"public homepage AI CEO intent entry missing marker: {homepage_intent_marker}")
