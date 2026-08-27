@@ -26,7 +26,7 @@ def main() -> int:
     module_js = MODULE.read_text(encoding="utf-8")
     module_marker = "./assets/jiejing-settings-panels.js?v=20260822-public-commercial-release-v105"
     billing_panel_start = module_js.index("function renderBillingProviderPanel")
-    billing_panel_end = module_js.index("function _renderBillingTestRehearsal")
+    billing_panel_end = module_js.index("\n  function ", billing_panel_start + 1)
     merchant_billing_panel = module_js[billing_panel_start:billing_panel_end]
     if module_marker in app_html:
         return fail("app.html must not eagerly load the settings-only module")
@@ -65,11 +65,10 @@ def main() -> int:
         "页面不展示任何支付密钥",
         "当前仅展示试用和订阅说明",
         "merchant_billing_copy_public_safe_v1",
-        "_renderBillingTestRehearsal",
-        "_renderSubscriptionQuotaShutdownClosure",
-        "_renderBillingDomainCutoverRehearsal",
-        "_renderBillingDomainCutoverStage",
-        "_renderBillingLiveCutoverStep",
+    ]:
+        if marker not in module_js:
+            return fail(f"merchant settings module missing marker: {marker}")
+    for marker in [
         "renderCommercialLaunchActionPlanPanel",
         "renderEdgeCutoverReadinessPanel",
         "saas-edge-cutover-readiness",
@@ -127,11 +126,10 @@ def main() -> int:
         "charge_now_allowed",
         "platform_write_now_allowed",
         "生产队列与深度健康",
-        "订阅与付款",
         "正式上线行动清单",
     ]:
-        if marker not in module_js:
-            return fail(f"settings module missing marker: {marker}")
+        if marker in module_js:
+            return fail(f"merchant settings module contains internal marker: {marker}")
     for marker in [
         "billing live cutover",
         "stripe_billing_live_cutover_matrix",
@@ -160,9 +158,10 @@ def main() -> int:
     ]:
         if marker in merchant_billing_panel:
             return fail(f"merchant billing panel exposes internal marker: {marker}")
+    if "window.JiejingSettingsPanels?.renderBillingProviderPanel" not in app_js:
+        return fail("app.js must continue to delegate merchant billing to its merchant settings module")
     for marker in [
         "window.JiejingSettingsPanels?.renderQueueHealthPanel",
-        "window.JiejingSettingsPanels?.renderBillingProviderPanel",
         "window.JiejingSettingsPanels?.renderCommercialLaunchActionPlanPanel",
         "window.JiejingSettingsPanels?.renderEdgeCutoverReadinessPanel",
         "saasEdgeCutoverPreflight",
@@ -176,8 +175,8 @@ def main() -> int:
         "paid_launch_approval_packet: state.saasPaidLaunchApprovalPacket || null",
         "refreshLaunchGate = true",
     ]:
-        if marker not in app_js:
-            return fail(f"app.js wrapper should delegate to settings module: {marker}")
+        if marker in app_js:
+            return fail(f"merchant app must not delegate to internal settings control: {marker}")
     for retired in (
         "/owner/billing-domain-cutover-rehearsal",
         "/commercial/billing-domain-cutover-rehearsal",

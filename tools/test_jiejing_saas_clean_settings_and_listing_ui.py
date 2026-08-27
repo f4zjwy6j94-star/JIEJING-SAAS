@@ -912,6 +912,10 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     settings_def_start = app_js.index("function saasSettingsTabDefinitions")
     settings_def_end = app_js.index("function renderSaasSettingsCleanLayout", settings_def_start)
     settings_def_body = app_js[settings_def_start:settings_def_end]
+    tab_labels = re.findall(r'\n\s*label:\s*"([^"]+)"', settings_def_body)
+    expected_tab_labels = ["账号与店铺", "AI 与素材", "店铺数据", "团队权限", "套餐与付款"]
+    if tab_labels != expected_tab_labels:
+        raise AssertionError(f"Merchant Settings must expose exactly five merchant tabs: {tab_labels}")
     for required_marker in [
         "renderSaasSettingsAccountAccessPanel()",
         "renderSaasSettingsPlatformPanel(ctx)",
@@ -920,25 +924,37 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
         "renderSaasSettingsDataPanel(ctx)",
         "renderSaasMerchantPermissionPanel()",
         "renderSaasMerchantBillingPlainSummaryPanel(ctx)",
-        "renderSaasBillingTransitionPathPanel(ctx)",
-        "renderSaasBillingDomainCutoverReviewPanel(ctx)",
-        "renderSaasBillingPaidLaunchBlockersPanel(ctx)",
         "renderSaasMerchantBillingCustomerTrustPanel(ctx)",
-        "renderSaasManualBetaPaymentOrderPanel()",
         "renderSaasMerchantPricingModelPanel(ctx)",
         "renderSaasMerchantBillingContinuityPanel(ctx)",
+        "renderSaasMerchantSecurityBoundaryPanel()",
+    ]:
+        require(settings_def_body, required_marker, "settings five merchant tabs keep their merchant controls")
+    for forbidden_marker in [
+        'id: "general"',
+        'id: "owner_ops"',
+        "saasOwnerLaunchCanView()",
+        "renderSaasOwnerLaunchControlPanel()",
+        "renderSaasOwnerOperationsOverviewPanel()",
+        "renderSaasBillingTransitionPathPanel(ctx)",
+        "renderSaasManualBetaPaymentOrderPanel()",
+        "renderSaasBillingDomainCutoverReviewPanel(ctx)",
+        "renderSaasBillingPaidLaunchBlockersPanel(ctx)",
         "renderSaasMerchantBillingIncidentRunbookPanel(ctx)",
+        "renderSaasMerchantFormalPaymentOpeningChecklistPanel(ctx)",
+        "renderSaasPublicSecurityStatusPanel()",
+        "renderSaasEdgeCutoverReadinessPanel()",
+        "renderSaasQueueHealthPanel()",
+        "renderSaasCommercialLaunchGatePanel()",
         "主理人高级区",
         "正式收费和公网安全",
         "运行可靠性",
         "主理人上线排查",
-        "renderSaasMerchantSecurityBoundaryPanel()",
     ]:
-        require(settings_def_body, required_marker, "settings ordinary tabs stay focused while owner area keeps advanced controls")
+        if forbidden_marker in settings_def_body:
+            raise AssertionError(f"Merchant Settings must not contain internal owner control: {forbidden_marker}")
     billing_tab_start = settings_def_body.index('id: "billing"')
-    owner_tab_start = settings_def_body.index('id: "owner_ops"', billing_tab_start)
-    billing_tab_body = settings_def_body[billing_tab_start:owner_tab_start]
-    owner_ops_body = settings_def_body[owner_tab_start:]
+    billing_tab_body = settings_def_body[billing_tab_start:]
     for required_marker in [
         'title: "计费与安全说明"',
         'badge: "按需查看"',
@@ -952,15 +968,6 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     ]:
         if forbidden_marker in billing_tab_body:
             raise AssertionError(f"Ordinary merchant billing tab must not render internal payment operation panel: {forbidden_marker}")
-    for required_marker in [
-        "renderSaasBillingTransitionPathPanel(ctx)",
-        "renderSaasManualBetaPaymentOrderPanel()",
-        "renderSaasBillingDomainCutoverReviewPanel(ctx)",
-        "renderSaasBillingPaidLaunchBlockersPanel(ctx)",
-        "renderSaasMerchantBillingIncidentRunbookPanel(ctx)",
-        "renderSaasMerchantFormalPaymentOpeningChecklistPanel(ctx)",
-    ]:
-        require(owner_ops_body, required_marker, "internal owner ops keeps launch and billing operation controls")
     for forbidden_marker in [
         "renderSaasMainlandPaymentStrategyPanel()",
         "renderSaasBillingProviderPanel()",
@@ -968,86 +975,6 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     ]:
         if forbidden_marker in settings_def_body:
             raise AssertionError(f"Merchant settings must not render internal payment strategy: {forbidden_marker}")
-    for required_marker in [
-        "mainland_payment_strategy_v1",
-        "manual_confirmation_not_paid_launch_ready",
-        "domestic_wallets_primary_for_mainland_users",
-        "stripe_paypal_cross_border_fallback",
-        "worldfirst_payoneer_settlement_not_checkout",
-        "formal_payment_collection_architecture_v1",
-        "mainland_domain_icp_plan_v1",
-        "merchant_entity_payment_readiness_v1",
-        "merchant_payment_application_packet_v1",
-        "formal_payment_application_requires_service_privacy_refund_support",
-        "payment_review_documents_no_identity_files_in_frontend",
-        "payment_callback_url_review_ready_marker",
-        "payment_review_customer_brief_v1",
-        "payment_review_terms_privacy_refund_links_visible",
-        "payment_review_refund_support_public_pages_visible",
-        "payment_review_support_contact_pending_until_owner_configures",
-        "base_subscription_usage_platform_fee_boundary_visible",
-        "individual_business_first_then_company_if_scale_requires",
-        "formal_payment_requires_merchant_entity_and_subject_alignment",
-        "invited_beta_manual_confirmation_only",
-        "invited_beta_payment_reference_not_public_checkout",
-        "formal_payment_requires_merchant_order_signed_callback_and_quota_audit",
-        "manual_beta_payment_order_v1",
-        "manual_beta_payment_artifact_not_in_repo",
-        "manual_beta_owner_confirm_required",
-        "manual_beta_confirmation_grants_30d_starter",
-        "manual_beta_to_merchant_payment_transition_v1",
-        "manual_beta_owner_confirmation_before_entitlement",
-        "formal_payment_signed_webhook_or_order_query_before_auto_entitlement",
-        "quota_grant_not_frontend_driven",
-        "static_qr_never_paid_launch_provider",
-        "billing_provider_rehearsal_control_room_v1",
-        "billing/provider-rehearsal",
-        "backend_order_query_or_signed_webhook_before_entitlement",
-        "browser_cannot_grant_quota",
-        "no_real_checkout_no_external_api_no_charge",
-        "mainland_payment_cutover_v2",
-        "wechat_pay_native_cutover",
-        "no_charge_launch_rehearsal",
-        "payment_provider_secret_boundary=backend_env_or_vault_only",
-        "signed_wechat_callback_or_authenticated_query_before_entitlement",
-        "rollback_secret_scan_readiness_browser_smoke_required",
-        "ready_for_paid_launch=false",
-        "public_charging_allowed=false",
-        "paid_launch_cutover_blockers_control_room_v1",
-        "wechat_pay_native_cutover",
-        "no_charge_launch_rehearsal",
-        "signed_wechat_callback_or_authenticated_query_before_entitlement",
-        "owner_live_cutover_required_before_public_charge",
-        "invited_beta_manual_confirmation_not_paid_launch_provider",
-    ]:
-        require(app_js, required_marker, "mainland payment public safety markers")
-    for required_style_marker in [
-        ".saas-billing-transition-path",
-        ".saas-billing-transition-flow",
-        ".saas-billing-transition-grants",
-        ".saas-billing-transition-status",
-        ".saas-billing-provider-rehearsal",
-        ".saas-billing-provider-rehearsal-grid",
-        ".saas-billing-provider-rehearsal-result",
-        ".saas-billing-provider-rehearsal-actions",
-        ".saas-billing-domain-review",
-        ".saas-billing-domain-url-grid",
-        ".saas-billing-domain-stage-list",
-        ".saas-billing-domain-evidence",
-        ".saas-billing-domain-actions",
-        ".saas-paid-cutover-blockers",
-        ".saas-paid-cutover-phase-grid",
-        ".saas-paid-cutover-matrix",
-        ".saas-paid-cutover-blocker-list",
-        ".saas-mainland-payment-entity",
-        "grid-template-columns: minmax(230px, 1.45fr) repeat(5, minmax(0, 1fr))",
-        ".saas-mainland-payment-application",
-        "grid-template-columns: minmax(230px, 1.35fr) repeat(3, minmax(0, 1fr))",
-        ".saas-mainland-payment-review-brief",
-        "grid-template-columns: minmax(230px, 1.45fr) repeat(4, minmax(0, 1fr))",
-        ".saas-mainland-payment-review-links",
-    ]:
-        require(styles, required_style_marker, "mainland payment entity readiness layout")
     for removed_marker in [
         "/auth/qr-login/status",
         "qr-login-placeholder",
@@ -1057,7 +984,7 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     ]:
         if removed_marker in app_js or removed_marker in index_html:
             raise AssertionError(f"QR login should not be exposed in the current login path: {removed_marker}")
-    ordinary_settings_body = settings_def_body[: settings_def_body.index("if (saasOwnerLaunchCanView())")]
+    ordinary_settings_body = settings_def_body
     for redundant_marker in [
         "renderSaasSettingsAccountFocusPanel(ctx)",
         "renderSaasSettingsModelFocusPanel(ctx)",
@@ -1097,22 +1024,20 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     require(render_connect_body, '"settings.legacy_connect_status"', "settings legacy status trusted label")
     if "connectStatusEl.innerHTML" in render_connect_body:
         raise AssertionError("Settings legacy connection status must not use raw innerHTML")
-    require(app_js, 'canViewPlatformInternal\n        ? optionalSaasFetchFast("/owner/launch-control"', "owner launch control should not be fetched for ordinary merchants")
-    require(app_js, 'Promise.resolve({ owner_launch_control: null, skipped: "owner_admin_only" })', "owner launch control public-page quiet skip")
-    require(app_js, 'canViewPlatformInternal\n        ? optionalSaasFetchFast(`/security/staging-gate?store_id=${encodeURIComponent(store.store_id)}`', "staging security gate should not be fetched for ordinary merchants")
-    require(app_js, 'Promise.resolve({ staging_security_gate: null, skipped: "platform_internal_admin_only" })', "staging security gate public-page quiet skip")
-    require(app_js, 'canViewPlatformInternal\n        ? optionalSaasFetchFast("/billing/payment-options"', "payment strategy should not be fetched for ordinary merchants")
-    require(app_js, 'Promise.resolve({ payment_options: null, skipped: "owner_admin_only_payment_options" })', "payment strategy public-page quiet skip")
-    require(app_js, "function saasCanViewPlatformInternalFromPermissions", "platform-internal fetch gate should use current permissions")
-    require(app_js, "const canViewPlatformInternal = saasCanViewPlatformInternalFromPermissions(corePermissions);", "platform-internal fetches should use current permissions gate")
-    require(app_js, "state.saasOwnerLaunchControl = canViewPlatformInternal ? ownerLaunchControl.owner_launch_control || state.saasOwnerLaunchControl || null : null;", "ordinary merchant refresh should clear stale owner launch control")
-    for protected_fetch in [
-        'canViewPlatformInternal ? optionalSaasFetchFast("/vault/status"',
-        'canViewPlatformInternal ? optionalSaasFetchFast("/database/plan"',
-        'canViewPlatformInternal ? optionalSaasFetchFast("/queue/plan"',
-        '? optionalSaasFetchFast("/provider-job-contracts"',
+    for internal_fetch_marker in [
+        "function saasCanViewPlatformInternalFromPermissions",
+        "const canViewPlatformInternal = saasCanViewPlatformInternalFromPermissions(corePermissions);",
+        "/owner/launch-control",
+        "/security/staging-gate",
+        "/billing/payment-options",
+        "/vault/status",
+        "/database/plan",
+        "/backup/plan",
+        "/queue/plan",
+        "/provider-job-contracts",
     ]:
-        require(app_js, protected_fetch, f"ordinary merchants should not fetch {protected_fetch}")
+        if internal_fetch_marker in app_js:
+            raise AssertionError(f"Merchant app must not contain role-hidden internal fetch code: {internal_fetch_marker}")
     require(app_js, "function merchantSafeSaasBillingPlan", "ordinary merchant billing state sanitizer")
     require(app_js, "delete safePlan.payment_strategy;", "ordinary merchant billing plan must drop internal payment strategy")
     require(app_js, "delete safePlan.billing_live_cutover_matrix;", "ordinary merchant billing plan must drop internal live cutover matrix")
