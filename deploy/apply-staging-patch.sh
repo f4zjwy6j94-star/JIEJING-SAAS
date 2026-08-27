@@ -120,6 +120,7 @@ FILES=(
   "assets/jiejing-logo-lockup.svg"
   "assets/jiejing-logo-mark.svg"
   "assets/jiejing-first-party-analytics.js"
+  "assets/jiejing-ops-panels.js"
   "assets/jiejing-settings-panels.js"
   "jiejing_saas/__init__.py"
   "jiejing_saas/account_health.py"

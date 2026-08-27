@@ -20,38 +20,83 @@ pilot.jiejing.shop {
 	@blockedInternalPath {
 		path /.git* /.github* /deploy* /tools* /docs* /tests* /jiejing_saas* /jiejing_runtime* /schemas* /output* /private*
 	}
-	handle @blockedInternalPath {
-		respond "Not found" 404
+
+	@blockedMerchantInternalApi {
+		path /owner /owner/* /vault /vault/* /database /database/* /backup /backup/* /queue /queue/*
+	}
+
+	@blockedMerchantInternalNamespace {
+		path /infrastructure /infrastructure/* /readiness /readiness/* /domain /domain/* /monitoring /monitoring/* /billing /billing/* /commercial /commercial/* /security /security/*
+	}
+
+	@blockedOpsAsset {
+		path /ops.html /ops.js /ops.css /assets/jiejing-ops-panels.js
 	}
 
 	@blockedInternalFile {
 		path_regexp blockedInternalFile .*\.(env|pem|key|sqlite|db|py|pyc|md|ya?ml|toml|ini|log|bak|zip|tar|gz|ps1|sh|conf)$
 	}
-	handle @blockedInternalFile {
-		respond "Not found" 404
+	@api path /health /health/deep /readiness/product-saas /billing/plans /billing/usage /billing/media-credits /billing/checkout-contract /billing/domestic/contract /billing/domestic/orders /billing/manual-beta/orders /billing/webhook /billing/domestic/wechat-pay/notify /billing/domestic/wechat-pay/refund-notify /monitoring/cls/callback /schema /schema/chain /platforms /platforms/* /product-feedback /product-feedback/* /auth/* /analytics/* /me /companies* /permissions/* /team/* /stores* /connections* /secret-refs* /model/* /post-publish/* /independence/* /controlled-bridges /controlled-bridges/* /ebay-read-only/* /ebay-oauth/* /ebay-write/* /execution/* /oauth/* /data-packets /data-packets/* /ip-risk-screening /ip-risk-screening/* /merchant-memory /merchant-memory/* /merchant-onboarding/* /ai-ceo/* /tasks* /queue-jobs* /media-asset-jobs* /media-source-assets /media-source-assets/* /reports* /confirmations* /execution-results* /audit-logs* /workers/* /webhooks/*
+
+	@dynamicMerchantBilling {
+		path_regexp merchantDomesticOrder ^/billing/domestic/orders/[^/]+(?:/(?:checkout|close|query|refund-request))?$
 	}
 
-	@api path /health /health/deep /operational-health /schema /schema/chain /platforms /platforms/* /infrastructure /infrastructure/drivers /infrastructure/* /product-feedback /product-feedback/* /readiness /readiness/* /auth/* /analytics/* /me /companies* /permissions/* /team/* /owner /owner/* /stores* /connections* /secret-refs* /vault/* /database/* /domain/* /queue/* /backup/* /monitoring/* /billing /billing/* /model/* /commercial/* /post-publish/* /provider-job-contracts /independence/* /controlled-bridges /controlled-bridges/* /security/* /ebay-read-only/* /ebay-oauth/* /ebay-write/* /execution/* /oauth/* /data-packets /data-packets/* /ip-risk-screening /ip-risk-screening/* /merchant-memory /merchant-memory/* /merchant-onboarding/* /ai-ceo/* /tasks* /queue-jobs* /media-asset-jobs* /media-source-assets /media-source-assets/* /reports* /confirmations* /execution-results* /audit-logs* /workers/* /webhooks/*
-	header @api X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
-	reverse_proxy @api jiejing-saas:8788 {
-		# AI CEO uses NDJSON streaming. Disable proxy response buffering so the
-		# first safe model fragment reaches the browser as soon as it is emitted.
-		flush_interval -1
-		header_down -X-Frame-Options
-		header_down -X-Content-Type-Options
-		header_down -Referrer-Policy
-		header_down -Permissions-Policy
-		header_down -X-Robots-Tag
+	@dynamicMerchantBetaConfirm {
+		path_regexp merchantBetaConfirm ^/billing/manual-beta/orders/[^/]+/confirm$
 	}
 
 	@privateUi path /app.html
-	header @privateUi X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
 
-	reverse_proxy jiejing-frontend:80 {
-		header_down -X-Frame-Options
-		header_down -X-Content-Type-Options
-		header_down -Referrer-Policy
-		header_down -Permissions-Policy
-		header_down -X-Robots-Tag
+	# Literal route order is the security boundary: positive API matchers run
+	# before the namespace deny, and everything else reaches only the frontend.
+	route {
+		respond @blockedInternalPath "Not found" 404
+		respond @blockedInternalFile "Not found" 404
+		respond @blockedOpsAsset "Not found" 404
+		respond @blockedMerchantInternalApi "Not found" 404
+
+		header @api X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
+		reverse_proxy @api jiejing-saas:8788 {
+			# AI CEO uses NDJSON streaming. Disable proxy response buffering so the
+			# first safe model fragment reaches the browser as soon as it is emitted.
+			flush_interval -1
+			header_down -X-Frame-Options
+			header_down -X-Content-Type-Options
+			header_down -Referrer-Policy
+			header_down -Permissions-Policy
+			header_down -X-Robots-Tag
+		}
+
+		header @dynamicMerchantBilling X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
+		reverse_proxy @dynamicMerchantBilling jiejing-saas:8788 {
+			flush_interval -1
+			header_down -X-Frame-Options
+			header_down -X-Content-Type-Options
+			header_down -Referrer-Policy
+			header_down -Permissions-Policy
+			header_down -X-Robots-Tag
+		}
+
+		header @dynamicMerchantBetaConfirm X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
+		reverse_proxy @dynamicMerchantBetaConfirm jiejing-saas:8788 {
+			flush_interval -1
+			header_down -X-Frame-Options
+			header_down -X-Content-Type-Options
+			header_down -Referrer-Policy
+			header_down -Permissions-Policy
+			header_down -X-Robots-Tag
+		}
+
+		respond @blockedMerchantInternalNamespace "Not found" 404
+
+		header @privateUi X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
+		reverse_proxy jiejing-frontend:80 {
+			header_down -X-Frame-Options
+			header_down -X-Content-Type-Options
+			header_down -Referrer-Policy
+			header_down -Permissions-Policy
+			header_down -X-Robots-Tag
+		}
 	}
 }

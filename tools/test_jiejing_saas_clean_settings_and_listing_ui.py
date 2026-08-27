@@ -63,7 +63,8 @@ def main() -> None:
     require(app_js, '"confirmation.center"', "confirmation center trusted template label")
     require(app_js, '"listing.product_center"', "Listing daily surface trusted sink label")
     require(app_js, '"settings.clean_layout"', "settings trusted sink label")
-    require(app_js, '"settings.legacy_connect_status"', "legacy settings status trusted sink label")
+    if '"settings.legacy_connect_status"' in app_js:
+        raise AssertionError("merchant app must physically remove the legacy Settings status sink")
     if "|on[a-z]+\\s*=" in app_js:
         raise AssertionError("trusted HTML guard must not match ordinary words ending in on")
     require(app_html, "店铺连接、AI 连接和经营资料会按账号空间显示状态，缺少资料会提示补齐", "merchant-facing login credential copy")
@@ -201,7 +202,7 @@ if (!malformedRejected) throw new Error("malformed session response was accepted
         "敏感凭证只在后端安全保存",
         "不接触原始平台凭证",
         "不包含敏感凭证、买家敏感信息或平台账号资料",
-        "店铺连接续期证明仍为 0",
+        "未连接时不会继续保存或发布",
         "账号自己的 AI 连接只在后端安全保存",
         "不保存敏感凭证、网页登录状态、买家敏感信息或平台写入资料",
         "页面只显示连接状态，执行层不读取原始凭证",
@@ -732,7 +733,8 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     require(app_js, "商品、订单、政策、费用等来源可追溯", "settings status merchant-facing data copy")
     require(app_js, "店铺数据、来源记录和同步缺口", "settings data panel merchant-facing title")
     require(app_js, "什么时候需要打开设置", "settings usage-rule section")
-    require(app_js, "主理人高级区", "settings workflow compact boundary")
+    if "主理人高级区" in app_js:
+        return fail("merchant app must not contain the owner-only advanced settings surface")
     require(app_js, "登录、eBay 店铺连接和安全边界", "account settings uses merchant-facing connection copy")
     require(app_js, "官方连接返回地址", "account settings avoids callback wording")
     require(app_js, "权限围绕捷境确认中心设计", "governance settings uses Jiejing-owned permission copy")
@@ -843,7 +845,7 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
         if internal_marker in rendered_confirm_body:
             raise AssertionError(f"Rendered decision center should remain a simple confirmation surface: {internal_marker}")
     settings_map_start = app_js.index("function renderSaasSettingsReadableMap")
-    settings_map_end = app_js.index("function renderSaasBillingProviderPanel", settings_map_start)
+    settings_map_end = app_js.index("function saasSettingsTabDefinitions", settings_map_start)
     settings_map_body = app_js[settings_map_start:settings_map_end]
     for internal_marker in [
         "packet",
@@ -898,7 +900,7 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
         if internal_marker in permission_panel_body:
             raise AssertionError(f"Permission settings panel should stay Jiejing-owned: {internal_marker}")
     one_glance_start = app_js.index("function saasSettingsOneGlanceRows")
-    one_glance_end = app_js.index("function renderSaasBillingProviderPanel", one_glance_start)
+    one_glance_end = app_js.index("function saasSettingsTabDefinitions", one_glance_start)
     one_glance_body = app_js[one_glance_start:one_glance_end]
     for required_marker in [
         "function renderSaasSettingsOneGlanceStrip",
@@ -906,7 +908,7 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
         "本页重点",
         "先看状态，再处理需要补齐的项目",
         "普通聊天不进长期经营记忆",
-        "只给主理人管理员",
+        "不让所有人共用老板权限",
     ]:
         require(one_glance_body, required_marker, "settings child pages have one-glance merchant summary")
     settings_def_start = app_js.index("function saasSettingsTabDefinitions")
@@ -1006,9 +1008,12 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     settings_layout_start = app_js.index("function renderSaasSettingsCleanLayout")
     settings_layout_end = app_js.index("function renderSaasConnectCenter", settings_layout_start)
     settings_layout_body = app_js[settings_layout_start:settings_layout_end]
-    require(settings_layout_body, 'activeTab.id === "general"', "settings overview-only map guard")
-    require(settings_layout_body, 'isOverview ? renderSaasSettingsReadableMap(activeTab.id) : ""', "settings child pages skip redundant map")
-    require(settings_layout_body, 'isOverview ? renderSaasSettingsOneGlanceStrip(activeTab.id) : ""', "settings one-glance summary stays overview-only")
+    require(settings_layout_body, "|| tabs[0]", "settings defaults to the first real merchant tab")
+    require(settings_layout_body, "state.saasSettingsTab = activeTab.id", "settings keeps the selected five-tab destination")
+    require(settings_layout_body, "${renderSaasSettingsReadableMap(activeTab.id)}", "settings readable overview stays above every merchant tab")
+    require(settings_layout_body, "${renderSaasSettingsOneGlanceStrip(activeTab.id)}", "settings one-glance summary stays above every merchant tab")
+    if 'activeTab.id === "general"' in settings_layout_body or 'id: "general"' in settings_layout_body:
+        raise AssertionError("Settings must not restore a sixth general tab")
     settings_connect_start = app_js.index("function renderSaasConnectCenter")
     settings_connect_end = app_js.index("function renderConnect", settings_connect_start)
     settings_connect_body = app_js[settings_connect_start:settings_connect_end]
@@ -1021,9 +1026,8 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     render_connect_start = app_js.index("function renderConnect")
     render_connect_end = app_js.index("function riskText", render_connect_start)
     render_connect_body = app_js[render_connect_start:render_connect_end]
-    require(render_connect_body, '"settings.legacy_connect_status"', "settings legacy status trusted label")
-    if "connectStatusEl.innerHTML" in render_connect_body:
-        raise AssertionError("Settings legacy connection status must not use raw innerHTML")
+    if '"settings.legacy_connect_status"' in render_connect_body or "connectStatusEl.innerHTML" in render_connect_body:
+        raise AssertionError("Settings must not retain the legacy connection-status renderer")
     for internal_fetch_marker in [
         "function saasCanViewPlatformInternalFromPermissions",
         "const canViewPlatformInternal = saasCanViewPlatformInternalFromPermissions(corePermissions);",
@@ -1043,125 +1047,59 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     require(app_js, "delete safePlan.billing_live_cutover_matrix;", "ordinary merchant billing plan must drop internal live cutover matrix")
     require(app_js, "delete safePlan.billing_live_cutover_summary;", "ordinary merchant billing plan must drop internal live cutover summary")
     require(app_js, "state.saasBillingPlan = merchantSafeSaasBillingPlan(rawBillingPlan);", "billing plan must be sanitized before ordinary UI state")
+    merchant_billing_source = app_js + index_html + app_html + styles
     for billing_model_marker in [
-        "基础订阅保留工作台",
-        "AI 用量和素材生成单独核算",
-        "subscription_ai_media_platform_v1",
-        "saas-merchant-pricing-split",
-        "用量计费路线",
+        "function renderSaasMerchantBillingPlainSummaryPanel",
         "套餐权益、商家模型、素材点和平台成本清楚可查",
-        "eBay 费用、广告费、物流和退款不是捷境代扣",
-        "高成本联网任务",
-        "付款前显示套餐、金额、30 天期限和用量边界",
-        "订阅和用量总览",
+        "¥0 / ¥99 / ¥199",
         "付费套餐包含当期生图素材点",
-        "当前是否扣费",
-        "套餐决定店铺数、席位数、经营任务和批量上限",
-        "DeepSeek、OpenAI 等文本模型由商家账号连接并直接承担模型费用",
-        "merchant_billing_plain_summary_v1",
-        "subscription_metering_clarity_v2",
-        "billing_now_no_real_charge",
-        "base_subscription_is_feature_fee=true",
+        "套餐点用完后再购买",
+        "function renderSaasMerchantMediaCreditsPanel",
         "merchant_media_points_v2",
-        "platform_cost_not_collected_by_jiejing=true",
-        "订阅开通路径",
-        "试用先提交申请，正式付款开放后走安全支付页",
-        "merchant_subscription_request_path_v1",
-        "merchant_beta_request_no_real_charge",
-        "merchant_request_requires_service_confirmation",
-        "formal_checkout_uses_hosted_payment_page",
-        "entitlement_grant_requires_billing_state",
-        "试用订阅申请已生成",
-        "订阅开通说明",
-        "微信扫码、到账确认、权益开通和自主续购",
-        "微信扫码付款可用",
-        "商家主动微信扫码",
-        "后端验签确认后开通",
-        "到期后由商家自主续购",
-        "浏览器不保存支付资料",
-        "merchant_subscription_activation_path_v2",
-        "quota_grant_not_frontend_driven",
-        "static_qr_never_paid_launch_provider",
-        "订阅和额度生效方式",
-        "主动扫码付款，系统确认后开通",
-        "每次购买 30 天",
+        "素材点余额",
+        "失败、超时或门禁未通过会返还",
+        "function renderSaasMerchantDomesticPaymentPanel",
+        "微信扫码付款",
+        "付款、取消和退款状态会保留在当前账号",
+        "申请退款",
+        'refund_review_requested: "退款审核中"',
+        "function renderSaasMerchantBillingEntitlementPathPanel",
         "系统确认到账后开通",
-        "到期后由商家自主续购",
+        "只以微信支付签名回调或安全查单结果为准，浏览器不能自行开通权益",
         "支付资料不进入浏览器",
-        "账单恢复不重连店铺或 AI",
-        "只停高成本任务",
-        "merchant_billing_launch_path_v1",
-        "payment_page_mode=",
-        "backend_confirmation_required_before_entitlement=true",
         "frontend_cannot_grant_entitlement_or_quota",
-        "billing_recovery_does_not_require_reconnecting_store_or_ai=true",
-        "试用订阅申请",
-        "申请开通基础套餐，确认后显示可用期限",
-        "merchant_beta_subscription_request_v2",
-        "当前阶段",
-        "试用模式，不真实扣费",
-        "高成本用量",
-        "操作记录和账号设置继续保留",
-        "不需要重复连接店铺，也不需要重填 AI 连接",
-        "当前计费状态",
-        "先看能不能继续用，再看哪些费用另算",
-        "费用四分法",
-        "平台经营成本",
-        "eBay、物流、广告和退款由商家平台账户结算",
-        "试用模式，不真实扣费",
-        "merchant_visible_billing_status_v1",
-        "merchant_subscription_shutdown_closure_v2",
-        "billing_never_deletes_audit_records",
-        "billing_blocks_metered_work_only",
-        "no_repeat_oauth_for_billing_recovery",
-        "no_model_key_reentry_for_billing_recovery",
-        "merchant_billing_incident_runbook_v1",
-        "wechat_order_expired",
-        "wechat_callback_delayed",
-        "payment_mode=",
-        "refund_dispute_webhook_sets_payment_attention",
-        "refund_or_dispute_cannot_be_frontend_executed",
-        "payment_failed_cancel_blocks_metered_work",
-        "quota_shutdown_keeps_history_visible",
-        "browser_cannot_grant_or_restore_entitlement",
-        "merchant_billing_customer_trust_packet_v2",
-        "wechat_native_qr_payment_boundary",
-        "merchant_confirmed_one_time_30_day_renewal",
-        "payment_record_is_not_tax_invoice",
-        "invoice_request_requires_paid_order_and_service_review",
+        "function renderSaasMerchantBillingCustomerTrustPanel",
+        "付款前看清价格、期限、记录、发票和退款方式",
+        "订单记录不等同税务发票",
+        "退款申请进入审核",
         "billing_support_refund_links_visible",
         "entitlement_recovery_does_not_repeat_ebay_oauth",
-        "正式支付接入前演练",
-        "先证明后端查单 / 签名回调，再允许订阅和额度生效",
-        "data-saas-action=\"billing-provider-rehearsal\"",
-        "data-billing-provider-action=\"payment_failed\"",
-        "backend_order_query_or_signed_webhook_before_entitlement",
-        "browser_cannot_grant_quota",
-        "no_real_checkout_no_external_api_no_charge",
-        "mainland_payment_cutover_v2",
-        "wechat_pay_native_cutover",
-        "no_charge_launch_rehearsal",
-        "payment_provider_secret_boundary=backend_env_or_vault_only",
-        "signed_wechat_callback_or_authenticated_query_before_entitlement",
-        "rollback_secret_scan_readiness_browser_smoke_required",
-        "public_paid_launch_allowed=false",
-        "creates_checkout_session=false",
-        "calls_stripe_api=false",
-        "triggers_real_charge=false",
-        "paid_launch_cutover_blockers_control_room_v1",
-        "wechat_pay_native_cutover",
-        "no_charge_launch_rehearsal",
-        "signed_wechat_callback_or_authenticated_query_before_entitlement",
-        "owner_live_cutover_required_before_public_charge",
-        "repeat_ebay_oauth_allowed=false",
+        "function renderSaasMerchantBillingContinuityPanel",
+        "只停高成本任务",
+        "历史报告、确认记录、操作记录和账号设置继续保留",
+        "function renderSaasMerchantSecurityBoundaryPanel",
+        "敏感凭证不进入浏览器",
         "frontend_gets_payment_secret=false",
-        "openCurrentPublicHomepage",
+        "secret_exposed=false",
     ]:
-        require(app_js + index_html + app_html + styles, billing_model_marker, "settings billing model and homepage return copy")
+        require(merchant_billing_source, billing_model_marker, "merchant billing, order, refund, media-credit, and safety contract")
+    merchant_runtime_source = app_js + index_html + app_html
+    for internal_billing_marker in [
+        'data-saas-action="billing-provider-rehearsal"',
+        "/billing/provider-rehearsal",
+        "正式支付接入前演练",
+        "mainland_payment_cutover_v2",
+        "no_charge_launch_rehearsal",
+        "paid_launch_cutover_blockers_control_room_v1",
+        "owner_live_cutover_required_before_public_charge",
+        "public_paid_launch_allowed=",
+    ]:
+        if internal_billing_marker in merchant_runtime_source:
+            raise AssertionError(f"Merchant billing surface must not contain internal acceptance/launch control: {internal_billing_marker}")
     ordinary_billing_checks = [
-        ("function renderSaasMerchantBillingPlainSummaryPanel", "function renderSaasBillingTransitionPathPanel"),
-        ("function renderSaasMerchantBillingContinuityPanel", "function renderSaasMerchantBillingIncidentRunbookPanel"),
-        ("function renderSaasMerchantSecurityBoundaryPanel", "function renderSaasBillingProviderPanel"),
+        ("function renderSaasMerchantBillingPlainSummaryPanel", "function renderSaasMerchantSubscriptionActivationPanel"),
+        ("function renderSaasMerchantBillingContinuityPanel", "function renderLegacySaasMerchantBillingCustomerTrustPanel"),
+        ("function renderSaasMerchantSecurityBoundaryPanel", "function safeSaasBrowserSessionsForDisplay"),
     ]
     for start_marker, end_marker in ordinary_billing_checks:
         start = app_js.index(start_marker)
@@ -1180,8 +1118,8 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
         ]:
             if forbidden_marker in ordinary_billing_body:
                 raise AssertionError(f"Ordinary merchant billing copy should not expose internal wording: {forbidden_marker}")
-    transition_start = app_js.index("function renderSaasBillingTransitionPathPanel")
-    transition_body = app_js[transition_start:app_js.index("function renderSaasBillingProviderRehearsalPanel", transition_start)]
+    transition_start = app_js.index("function renderSaasMerchantBillingEntitlementPathPanel")
+    transition_body = app_js[transition_start:app_js.index("function renderSaasMerchantBillingContinuityPanel", transition_start)]
     for forbidden_marker in [
         "quota 只停",
         "不重复授权 / 不重填模型 key",

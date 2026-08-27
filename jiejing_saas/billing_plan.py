@@ -464,7 +464,7 @@ def _build_billing_test_rehearsal_summary(
                 signed_webhook_or_order_query_required=True,
                 frontend_can_grant_entitlement=False,
             ),
-            "next_action": "Use POST /billing/provider-rehearsal to prove checkout, backend proof, entitlement and quota in one no-charge path.",
+            "next_action": "Use POST /owner/billing/provider-rehearsal from the operations console to prove checkout, backend proof, entitlement and quota in one no-charge path.",
         },
         {
             "key": "quota_hard_stop_rehearsal",

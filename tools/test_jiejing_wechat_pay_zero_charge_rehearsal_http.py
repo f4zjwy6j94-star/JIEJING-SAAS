@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -25,6 +26,10 @@ from jiejing_saas.billing_wechat_pay_rehearsal import (  # noqa: E402
 from jiejing_saas.api_server import SaaSBackendHandler  # noqa: E402
 
 
+OPS_HOST = "ops.jiejing.shop"
+ADMIN_EMAILS = "wechat-rehearsal-a@example.test,wechat-rehearsal-b@example.test"
+
+
 def fail(message: str) -> int:
     print(f"FAIL {message}")
     return 1
@@ -37,6 +42,8 @@ def main() -> int:
     ) as temp_dir:
         root = Path(temp_dir)
         port = _free_port()
+        env = os.environ.copy()
+        env["JIEJING_INTERNAL_ADMIN_EMAILS"] = ADMIN_EMAILS
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -57,19 +64,21 @@ def main() -> int:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=env,
         )
         try:
             base_url = f"http://127.0.0.1:{port}"
             if not _wait_for_health(base_url):
                 return fail("backend did not become healthy")
-            route = f"{base_url}/billing/wechat-pay/zero-charge-rehearsal"
+            route = f"{base_url}/owner/billing/wechat-pay/zero-charge-rehearsal"
             if not SaaSBackendHandler._is_expensive_api_rate_limited_path(
-                "billing/wechat-pay/zero-charge-rehearsal"
+                "owner/billing/wechat-pay/zero-charge-rehearsal"
             ):
                 return fail("WeChat rehearsal must use the existing global/IP high-cost limiter")
             unauth_status, unauth = _post_expect_error(
                 route,
                 {"exact_confirmation": WECHAT_PAY_ZERO_CHARGE_REHEARSAL_CONFIRMATION},
+                host=OPS_HOST,
             )
             if unauth_status != 401:
                 return fail(f"unauthenticated rehearsal must return 401: {unauth_status}, {unauth}")
@@ -99,6 +108,7 @@ def main() -> int:
                 route,
                 {"exact_confirmation": "RUN SOMETHING ELSE"},
                 token=token_b,
+                host=OPS_HOST,
             )
             wrong_report = (
                 wrong.get("wechat_pay_zero_charge_rehearsal")
@@ -122,6 +132,7 @@ def main() -> int:
                     "certificate_path": sentinel,
                 },
                 token=token_a,
+                host=OPS_HOST,
             ).get("wechat_pay_zero_charge_rehearsal", {})
             if not isinstance(ready, dict) or ready.get("status") != "ready" or ready.get("evidence_recorded") is not True:
                 return fail(f"authenticated exact-phrase rehearsal did not complete: {ready}")
@@ -132,6 +143,7 @@ def main() -> int:
                 route,
                 {"exact_confirmation": WECHAT_PAY_ZERO_CHARGE_REHEARSAL_CONFIRMATION},
                 token=token_a,
+                host=OPS_HOST,
             ).get("wechat_pay_zero_charge_rehearsal", {})
             if not isinstance(second, dict) or second.get("status") != "ready":
                 return fail(f"second company-scoped rehearsal should remain within the hourly limit: {second}")
@@ -140,6 +152,7 @@ def main() -> int:
                 route,
                 {"exact_confirmation": WECHAT_PAY_ZERO_CHARGE_REHEARSAL_CONFIRMATION},
                 token=token_a,
+                host=OPS_HOST,
             )
             if third_status != 429:
                 return fail(f"third company rehearsal in one hour must return 429: {third_status}, {third}")
@@ -196,11 +209,11 @@ def _wait_for_health(base_url: str) -> bool:
     return False
 
 
-def _post(url: str, payload: dict[str, Any], *, token: str = "") -> dict[str, Any]:
+def _post(url: str, payload: dict[str, Any], *, token: str = "", host: str = "") -> dict[str, Any]:
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers=_headers(token),
+        headers=_headers(token, host=host),
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=60) as response:
@@ -212,9 +225,10 @@ def _post_expect_error(
     payload: dict[str, Any],
     *,
     token: str = "",
+    host: str = "",
 ) -> tuple[int, dict[str, Any]]:
     try:
-        return 200, _post(url, payload, token=token)
+        return 200, _post(url, payload, token=token, host=host)
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
@@ -225,10 +239,12 @@ def _get(url: str, *, token: str = "") -> dict[str, Any]:
         return json.loads(response.read().decode("utf-8"))
 
 
-def _headers(token: str) -> dict[str, str]:
+def _headers(token: str, *, host: str = "") -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    if host:
+        headers["Host"] = host
     return headers
 
 

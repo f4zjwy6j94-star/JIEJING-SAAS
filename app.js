@@ -135,7 +135,7 @@ const state = {
   saasLastPublishConfirmationEvidence: null,
   saasPreTestCheck: null,
   saasAuditLogs: [],
-  saasReadiness: null,
+  saasServiceHealth: null,
   saasSecurityGate: null,
   saasRateLimitStatus: null,
   saasBackupPlan: null,
@@ -151,9 +151,7 @@ const state = {
   saasWechatPayZeroChargeRehearsal: null,
   saasManualBetaPaymentOrders: [],
   saasBillingDomainCutoverRehearsal: null,
-  saasPaidLaunchApprovalPacket: null,
   saasOperationsOverview: null,
-  saasOwnerLaunchControl: null,
   saasModelValueGate: null,
   saasModelProviderCatalog: null,
   saasModelSettings: null,
@@ -244,7 +242,6 @@ const state = {
   runtimeCapabilities: null,
   runtimeModelStatus: null,
   runtimeProviderStatus: null,
-  runtimeProviderJobContracts: null,
   runtimeAgentJobSpecs: null,
   runtimeProgressScorecard: null,
   runtimeValidationSummary: null,
@@ -7874,10 +7871,9 @@ function renderSaasMediaAssetJobsPanel(ctx = saasMerchantWorkbenchContext()) {
 
 function renderSaasMediaGenerationReadinessPanel() {
   const mediaState = saasMediaGenerationState();
-  const status = saasReadinessProviderStatus("media_generation");
   const imageReady = mediaState.liveReady === true;
   const videoReady = mediaState.videoReady === true;
-  const providerCallEnabled = mediaState.liveReady === true && status.live_provider_calls_allowed === true;
+  const providerCallEnabled = mediaState.liveReady === true;
   const imageCopy = imageReady ? "图片可真实生成，结果先审核" : "图片先生成需求、脚本和素材清单";
   const videoCopy = videoReady ? "视频可进入真实生成，完成后先审核" : "视频先生成脚本、分镜和封面需求";
   const spendCopy = providerCallEnabled
@@ -10409,7 +10405,7 @@ function saasFirstOrderLaunchRows(ctx = saasMerchantWorkbenchContext()) {
   const greenCount = Number(traffic.green_count || 0);
   const execution = saasLatestExecutionResult("publish_listing");
   const productFormReady = Boolean(document.querySelector("#saasPublishIntakeForm"));
-  const refreshProof = Number(state.saasReadiness?.product_evidence?.ebay_token_refresh_success_count || 0);
+  const connectionReady = Boolean(ctx.connection && isSaasAuthorizedConnectionStatus(ctx.connection.status));
   const publishConfirmationStatus = confirmation?.status || state.saasLastPublishConfirmationEvidence?.confirmation_status || "";
   const rows = [
     {
@@ -10503,7 +10499,7 @@ function saasFirstOrderLaunchRows(ctx = saasMerchantWorkbenchContext()) {
     redCount,
     yellowCount,
     greenCount,
-    refreshProof,
+    connectionReady,
     readyCount: rows.filter((row) => row.status === "ready").length,
     confirmation,
   };
@@ -10545,10 +10541,10 @@ function renderSaasFirstOrderLaunchLoopPanel(ctx = saasMerchantWorkbenchContext(
           <strong>${firstOrder.readyCount}/${firstOrder.rows.length}</strong>
           <small>${blockedCount ? `${blockedCount} 个硬阻断` : "按证据推进"}</small>
         </article>
-        <article class="${firstOrder.refreshProof > 0 ? "is-green" : "is-red"}">
-          <span>店铺连接续期证明</span>
-          <strong>${firstOrder.refreshProof}</strong>
-          <small>为 0 时不能假装正式发布就绪</small>
+        <article class="${firstOrder.connectionReady ? "is-green" : "is-red"}">
+          <span>店铺连接</span>
+          <strong>${firstOrder.connectionReady ? "已连接" : "待连接"}</strong>
+          <small>${firstOrder.connectionReady ? "可继续读取当前店铺资料" : "未连接时不会继续保存或发布"}</small>
         </article>
         <article class="is-${escapeHtml(firstOrder.redCount ? "red" : firstOrder.yellowCount ? "amber" : firstOrder.greenCount ? "green" : "amber")}">
           <span>发布体检</span>
@@ -16969,7 +16965,6 @@ function renderRuntimeBridgePanel() {
   const modelStatus = state.runtimeModelStatus || {};
   const providerStatus = state.runtimeProviderStatus?.providers || {};
   const providerCount = Object.keys(providerStatus).length || 0;
-  const providerJobCount = state.runtimeProviderJobContracts?.contract_count || 0;
   const agentJobRoleCount = state.runtimeAgentJobSpecs?.role_count || 0;
   const merchantProfile = buildRuntimeMerchantProfile();
   const validationSummary = state.runtimeValidationSummary || {};
@@ -17008,7 +17003,6 @@ function renderRuntimeBridgePanel() {
       <article><span>SaaS 快照</span><strong>${saasSimulationPercent}%</strong><small>Runtime 输出已整理成前端可读模块</small></article>
       <article><span>自研 Agent</span><strong>${ownedAgentRoleCount}/7</strong><small>${ownedAgentExecutionCount} 段结果带自研执行标记</small></article>
       <article><span>外部能力</span><strong>${providerCount}</strong><small>后端只返回状态，不把密钥给浏览器</small></article>
-      <article><span>任务通道</span><strong>${providerJobCount || "-"}</strong><small>搜索 / eBay / 1688 / 物流 / 媒体 / 模型统一排队</small></article>
       <article><span>Job Specs</span><strong>${agentJobRoleCount}/7</strong><small>Owned Agent role instructions loaded</small></article>
     </div>
     <div class="runtime-progress-scorecard">
@@ -18466,7 +18460,6 @@ function resetSaasProtectedWorkbenchState() {
   state.saasCommercialLaunchGateStoreId = "";
   state.saasEbayRefreshProofStatus = null;
   state.saasEbayRefreshProofStatusStoreId = "";
-  state.saasEdgeCutoverPreflight = null;
   state.saasDataPackets = [];
   state.saasQueuePlan = null;
   state.saasQueueAdapters = null;
@@ -26208,97 +26201,7 @@ async function copySaasSourceRecordsSnapshot() {
   }
 }
 
-function saasReadinessServiceIncident(readiness = state.saasReadiness || {}) {
-  if (!readiness || typeof readiness !== "object") return null;
-  const items = Array.isArray(readiness.items) ? readiness.items : [];
-  const databaseItem = items.find((item) => {
-    const key = String(item?.key || "");
-    const status = String(item?.status || "");
-    return key === "database_reachability" || status.includes("database_unavailable");
-  });
-  const degraded =
-    readiness.degraded === true ||
-    readiness.status === "degraded" ||
-    readiness.degraded_reason === "database_unavailable" ||
-    Boolean(databaseItem);
-  if (!degraded) return null;
-  return {
-    item: databaseItem || null,
-    blockerCount: Math.max(1, Number(readiness.blocker_count || 0)),
-    reason: readiness.degraded_reason || databaseItem?.status || "service_unavailable",
-  };
-}
-
-function saasReadinessMerchantStatus(readiness = state.saasReadiness || {}) {
-  const incident = saasReadinessServiceIncident(readiness);
-  if (incident) {
-    return {
-      incident,
-      tone: "red",
-      label: "系统维护",
-      title: "平台连接正在恢复",
-      detail: "店铺数据、AI 报告和确认中心暂时不能保证完整刷新。已经保存的数据不会被清空；发布、付款、退款、广告和改价仍然保持停止。",
-      next: "稍后刷新状态；不要重复授权店铺，也不要重新填写 AI 连接信息。",
-    };
-  }
-  if (readiness.production_ready === true && readiness.can_accept_real_customers === true) {
-    return {
-      tone: "green",
-      label: "正式可用",
-      title: "正式上线门槛已通过",
-      detail: "真实发布、付款、退款、广告和敏感客服承诺仍会进入确认中心。",
-      next: "继续按确认中心处理高风险动作。",
-    };
-  }
-  if (readiness.beta_ready === true) {
-    return {
-      tone: "amber",
-      label: "内测可用",
-      title: "可以继续内测，还不能公开收费上线",
-      detail: "工作台可继续验证，但正式收款、新 eBay 账号验证和生产级外部配置还未完成。",
-      next: "继续打磨工作流；正式收费前先完成外部配置和无真实扣费演练。",
-    };
-  }
-  return {
-    tone: "amber",
-    label: "待完成",
-    title: "上线条件还没完全满足",
-    detail: `${Number(readiness.blocker_count || 0)} 个阻断，${Number(readiness.warning_count || 0)} 个提醒。`,
-    next: "先处理红项，再继续正式上线演练。",
-  };
-}
-
-function renderSaasReadinessIncidentStrip(readiness = state.saasReadiness || {}) {
-  const status = saasReadinessMerchantStatus(readiness);
-  if (!status.incident) return "";
-  return `
-    <div class="saas-readiness-strip saas-service-incident-strip" data-saas-readiness-incident="database">
-      <article class="is-red">
-        <span>${escapeHtml(status.label)}</span>
-        <strong>${escapeHtml(status.title)}</strong>
-        <small>${escapeHtml(status.detail)}</small>
-      </article>
-      <article>
-        <span>下一步</span>
-        <strong>先恢复连接</strong>
-        <small>${escapeHtml(status.next)}</small>
-      </article>
-    </div>
-  `;
-}
-
 function saasMerchantNextAction(ctx = saasMerchantWorkbenchContext()) {
-  const readinessStatus = saasReadinessMerchantStatus(state.saasReadiness || {});
-  if (readinessStatus.incident) {
-    return {
-      tone: readinessStatus.tone,
-      label: readinessStatus.label,
-      title: readinessStatus.title,
-      body: readinessStatus.detail,
-      primaryAction: "refresh",
-      primaryLabel: "刷新状态",
-    };
-  }
   if (hasSaasAccountReadInProgress()) {
     return {
       tone: "green",
@@ -26369,38 +26272,32 @@ function saasMerchantNextAction(ctx = saasMerchantWorkbenchContext()) {
   };
 }
 
-function saasCockpitLaunchGateSummary() {
-  const readiness = state.saasReadiness || {};
-  const readinessStatus = saasReadinessMerchantStatus(readiness);
-  if (readinessStatus.incident) {
-    return {
-      tone: readinessStatus.tone,
-      label: readinessStatus.label,
-      title: readinessStatus.title,
-      detail: readinessStatus.detail,
-    };
-  }
-  if (readiness.production_ready === true && readiness.can_accept_real_customers === true) {
-    return {
-      tone: "green",
-      label: "正式上线门槛",
-      title: "生产门槛已通过",
-      detail: "仍需按确认中心处理真实发布、付款、退款、广告和敏感客服承诺。",
-    };
-  }
-  if (readiness.beta_ready === true) {
+function saasCockpitDraftAvailabilitySummary() {
+  const store = activeSaasStore();
+  const connection = latestSaasConnection();
+  const connected = Boolean(connection && isSaasAuthorizedConnectionStatus(connection.status));
+  const draftAuthorized = Boolean(store && isSaasEbayUnpublishedDraftAuthorized(store));
+  if (!connected) {
     return {
       tone: "amber",
-      label: readinessStatus.label,
-      title: readinessStatus.title,
-      detail: readinessStatus.detail,
+      label: "eBay 草稿",
+      title: "先连接店铺",
+      detail: "连接后才能核对未发布草稿权限；不会因此自动公开发布。",
+    };
+  }
+  if (!draftAuthorized) {
+    return {
+      tone: "amber",
+      label: "eBay 草稿",
+      title: "未发布草稿权限待开通",
+      detail: "只开通保存未发布草稿所需权限；公开发布仍需单独预检和确认。",
     };
   }
   return {
-    tone: readinessStatus.tone,
-    label: readinessStatus.label,
-    title: readinessStatus.title,
-    detail: readinessStatus.detail,
+    tone: "green",
+    label: "eBay 草稿",
+    title: "未发布草稿可保存",
+    detail: "Listing 资料通过检查后可保存为未发布 Offer；公开发布仍需单独确认。",
   };
 }
 
@@ -26442,12 +26339,10 @@ function saasCockpitAccountHealthSummary() {
 }
 
 function saasCockpitPulseItems(ctx = saasMerchantWorkbenchContext()) {
-  const readiness = state.saasReadiness || {};
-  const evidence = readiness.product_evidence || {};
-  const launch = saasCockpitLaunchGateSummary();
+  const draftAvailability = saasCockpitDraftAvailabilitySummary();
   const account = saasCockpitAccountHealthSummary();
   const publish = saasCockpitPublishSummary();
-  const packetId = ctx.latestPacket?.packet_id || evidence.latest_ebay_packet_id || "waiting";
+  const packetId = ctx.latestPacket?.packet_id || "waiting";
   const modelReady = isSaasModelConfigured();
   return [
     {
@@ -26470,7 +26365,7 @@ function saasCockpitPulseItems(ctx = saasMerchantWorkbenchContext()) {
       detail: `${ctx.confirmations.length} 条确认记录；高风险动作不绕过人工确认。`,
     },
     publish,
-    launch,
+    draftAvailability,
   ];
 }
 
@@ -26534,12 +26429,9 @@ function saasCockpitWorkstreamLanes(ctx = saasMerchantWorkbenchContext()) {
 }
 
 function saasCockpitRiskQueue(ctx = saasMerchantWorkbenchContext(), next = saasMerchantNextAction(ctx)) {
-  const readiness = state.saasReadiness || {};
-  const evidence = readiness.product_evidence || {};
   const publish = saasCockpitPublishSummary();
   const account = saasCockpitAccountHealthSummary();
-  const launch = saasCockpitLaunchGateSummary();
-  const refreshProof = Number(evidence.ebay_token_refresh_success_count || 0);
+  const draftAvailability = saasCockpitDraftAvailabilitySummary();
   const risks = [
     {
       tone: next.tone,
@@ -26563,11 +26455,11 @@ function saasCockpitRiskQueue(ctx = saasMerchantWorkbenchContext(), next = saasM
       actionLabel: "看账号健康",
     },
     {
-      tone: launch.tone,
-      title: launch.title,
-      detail: refreshProof > 0 ? launch.detail : `${launch.detail}；店铺连接续期证明仍为 0。`,
+      tone: draftAvailability.tone,
+      title: draftAvailability.title,
+      detail: draftAvailability.detail,
       action: "open-connect",
-      actionLabel: "看上线门槛",
+      actionLabel: "查看草稿权限",
     },
   ];
   return risks;
@@ -27687,59 +27579,6 @@ function renderSaasMerchantProviderHubPanel(ctx = saasMerchantWorkbenchContext()
   `;
 }
 
-function renderSaasCommercialLaunchGatePanel() {
-  if (window.JiejingSettingsPanels?.renderCommercialLaunchActionPlanPanel) {
-    return window.JiejingSettingsPanels.renderCommercialLaunchActionPlanPanel(state);
-  }
-  const launchGate = state.saasCommercialLaunchGate || {};
-  const groups = Array.isArray(launchGate.groups) ? launchGate.groups : [];
-  const required = [
-    ["billing_quota", "正式收费系统", "Stripe/Paddle、真实 plan、quota、webhook、欠费停用、发票和用量计费。"],
-    ["stable_domain_tls", "稳定域名和上线基础设施", "正式域名、DNS/TLS、OAuth callback、CORS、隐私政策、服务条款和部署硬化。"],
-    ["publish_safety_system", "发布安全系统", "发布体检报告覆盖类目、item specifics、图片、VeRO/IP、禁售词、GPSR、policy、额度、费用和利润。"],
-    ["store_sync_visibility", "真实店铺同步可视化", "店铺名、商品/offer/订单/policy 数、最后同步时间和官方 packet ID。"],
-    ["post_publish_cockpit", "发布后驾驶舱", "1 小时、24 小时、7 天复盘曝光、点击、收藏、售出、费用、利润和客服风险。"],
-    ["final_commercial_smoke", "最终商业 smoke", "注册、登录、连 eBay、生成 packet、跑报告、进确认中心、真实执行和审计回流。"],
-  ];
-  const byKey = new Map(groups.map((item) => [item.key, item]));
-  return `
-    <section class="saas-merchant-evidence-panel saas-commercial-launch-panel" aria-label="正式上线缺口">
-      <div class="saas-merchant-path-head">
-        <div>
-          <span>正式上线缺口</span>
-          <strong>${launchGate.paid_commercial_launch_ready ? "付费公开上线门禁通过" : "当前仍不是可公开收费上线状态"}</strong>
-          <p>这里不堆技术日志，只看完整流程和后续公开收费前会不会卡住。没有真实 evidence 的项保持阻断。</p>
-        </div>
-        <em>${groups.filter((item) => item.status === "ready").length}/${groups.length || required.length} ready</em>
-      </div>
-      <div class="saas-commercial-launch-grid">
-        ${required
-          .map(([key, title, detail]) => {
-            const item = byKey.get(key) || {};
-            const ready = item.status === "ready";
-            const next = item.next_action || detail;
-            return `
-              <article class="${ready ? "is-green" : "is-amber"}">
-                <span>${escapeHtml(title)}</span>
-                <strong>${ready ? "已具备证据" : "仍需补齐"}</strong>
-                <p>${escapeHtml(next)}</p>
-                <small>${escapeHtml(key)}</small>
-              </article>
-            `;
-          })
-          .join("")}
-      </div>
-    </section>
-  `;
-}
-
-function renderSaasEdgeCutoverReadinessPanel() {
-  if (window.JiejingSettingsPanels?.renderEdgeCutoverReadinessPanel) {
-    return window.JiejingSettingsPanels.renderEdgeCutoverReadinessPanel(state);
-  }
-  return "";
-}
-
 function renderSaasMerchantTruthPanel() {
   const ctx = saasMerchantWorkbenchContext();
   const next = saasMerchantNextAction(ctx);
@@ -27789,11 +27628,6 @@ function renderSaasMerchantTruthPanel() {
 }
 
 function renderSaasMerchantEvidencePanel(ctx = saasMerchantWorkbenchContext()) {
-  const modelGate = state.saasModelValueGate || {};
-  const modelEvidence = modelGate.evidence && typeof modelGate.evidence === "object" ? modelGate.evidence : {};
-  const launchGate = state.saasCommercialLaunchGate || {};
-  const backupPlan = state.saasBackupPlan || {};
-  const realWritesEnabled = isSaasRealPlatformWritesEnabled();
   const resourceRows = saasEbayPacketResourceRows(ctx.packetBody);
   const byKey = new Map(resourceRows.map((row) => [row.key, row]));
   const resourceTiles = saasEbayCoreResourceKeys.map((key) => {
@@ -27806,58 +27640,56 @@ function renderSaasMerchantEvidencePanel(ctx = saasMerchantWorkbenchContext()) {
       detail: row?.detail || row?.summary || (status === "present" ? "店铺资料资源已可用" : "等待店铺资料证据"),
     };
   });
-  const packetId =
-    ctx.latestPacket?.packet_id ||
-    (state.saasReadiness?.product_evidence || {}).latest_ebay_packet_id ||
-    "等待店铺资料";
-  const liveTypes = new Set(modelEvidence.live_model_report_types || []);
-  const modelBlockers = Array.isArray(modelGate.blockers) ? modelGate.blockers : [];
-  const backupBlockers = Array.isArray(backupPlan.blockers) ? backupPlan.blockers : [];
-  const paidReady = Boolean(launchGate.paid_commercial_launch_ready);
+  const packetId = ctx.latestPacket?.packet_id || "等待店铺资料";
+  const reportTypes = new Set((ctx.reports || []).map((item) => String(item?.report_type || "")));
+  const modelState = saasPrimaryTextAiState();
+  const mediaState = saasMediaGenerationState();
+  const draftState = saasCockpitDraftAvailabilitySummary();
+  const publishState = saasCockpitPublishSummary();
   return `
     <section class="saas-merchant-evidence-panel" aria-label="真实证据面板">
       <div class="saas-merchant-path-head">
         <div>
-          <span>真实证据</span>
-          <strong>店铺资料、模型价值和生产边界</strong>
-          <p>这里展示当前工作台能证明什么，以及还不能对外收费承诺什么。</p>
+          <span>当前业务状态</span>
+          <strong>店铺资料、AI 输出、素材和 eBay 草稿</strong>
+          <p>这里只显示当前账号可以继续的业务步骤。平台上线、部署和内部验收状态不进入商家工作台。</p>
         </div>
       </div>
       <div class="saas-merchant-evidence-grid">
         <article class="${ctx.official ? "is-green" : "is-amber"}">
-          <span>source_mode</span>
+          <span>店铺资料</span>
           <strong>${escapeHtml(saasMerchantSourceLabel(ctx.sourceMode || "waiting"))}</strong>
-          <small>${escapeHtml(ctx.sourceLabel)}</small>
+          <small>${escapeHtml(ctx.sourceLabel)} · ${ctx.presentCount}/${ctx.coverageTotal || 6} 类资源</small>
         </article>
         <article class="${ctx.hasPacket ? "is-green" : "is-amber"}">
-          <span>packet_id</span>
+          <span>资料记录</span>
           <strong>${escapeHtml(packetId)}</strong>
-          <small>Runtime / Agents 只读整理后的店铺资料，不接触 token。</small>
+          <small>AI CEO 只读取整理后的店铺资料，不接触平台敏感凭证。</small>
         </article>
-        <article class="${liveTypes.has("market.report") ? "is-green" : "is-amber"}">
-          <span>Market Report</span>
-          <strong>${liveTypes.has("market.report") ? "live proven" : "待模型证明"}</strong>
-          <small>${modelBlockers.includes("model_provider_not_configured") ? "AI 连接未配置" : `${modelEvidence.report_count_sampled || 0} 条报告证据`}</small>
+        <article class="is-${escapeHtml(modelState.tone)}">
+          <span>文字分析</span>
+          <strong>${escapeHtml(modelState.title)}</strong>
+          <small>${escapeHtml(modelState.detail)}</small>
         </article>
-        <article class="${liveTypes.has("listing.package") ? "is-green" : "is-amber"}">
-          <span>Listing Package</span>
-          <strong>${liveTypes.has("listing.package") ? "live proven" : "待模型证明"}</strong>
-          <small>${modelBlockers.length ? modelBlockers.slice(0, 2).join(" / ") : "可进入商家抽样复核"}</small>
+        <article class="${reportTypes.has("listing.package") || reportTypes.has("product.listing") ? "is-green" : "is-amber"}">
+          <span>Listing 草稿</span>
+          <strong>${reportTypes.has("listing.package") || reportTypes.has("product.listing") ? "已有生成记录" : "等待生成"}</strong>
+          <small>商品事实不足时保持待补资料，不由 AI 猜测。</small>
         </article>
-        <article class="${realWritesEnabled ? "is-amber" : "is-green"}">
-          <span>真实写入</span>
-          <strong>${escapeHtml(saasRealPlatformWriteLabel())}</strong>
-          <small>${escapeHtml(realWritesEnabled ? "后端写入已开启；发布、改价、退款、广告预算、政策修改仍必须进确认中心。" : "确认后也只记录受控交接，不会写入 eBay。")}</small>
+        <article class="is-${escapeHtml(mediaState.tone)}">
+          <span>商品素材</span>
+          <strong>${escapeHtml(mediaState.title)}</strong>
+          <small>${escapeHtml(mediaState.detail)}</small>
         </article>
-        <article class="${backupBlockers.length ? "is-amber" : "is-green"}">
-          <span>备份恢复</span>
-          <strong>${backupBlockers.length ? "待演练" : "已配置"}</strong>
-          <small>${backupBlockers.length ? backupBlockers.slice(0, 2).join(" / ") : "进入 paid launch gate"}</small>
+        <article class="is-${escapeHtml(draftState.tone)}">
+          <span>${escapeHtml(draftState.label)}</span>
+          <strong>${escapeHtml(draftState.title)}</strong>
+          <small>${escapeHtml(draftState.detail)}</small>
         </article>
-        <article class="${paidReady ? "is-green" : "is-amber"}">
-          <span>paid launch</span>
-          <strong>${paidReady ? "ready" : "blocked"}</strong>
-          <small>${Array.isArray(launchGate.blockers) && launchGate.blockers.length ? launchGate.blockers.slice(0, 2).join(" / ") : "等待正式发布门禁"}</small>
+        <article class="is-${escapeHtml(publishState.tone)}">
+          <span>${escapeHtml(publishState.label)}</span>
+          <strong>${escapeHtml(publishState.title)}</strong>
+          <small>${escapeHtml(publishState.detail)}</small>
         </article>
       </div>
       <div class="saas-merchant-resource-strip" aria-label="六类 eBay 官方资源">
@@ -27934,20 +27766,14 @@ function isSaasModelConfigured() {
   return isSaasMerchantModelConfigured() || isSaasPlatformTrialModelAvailable();
 }
 
-function saasReadinessProviderStatus(statusKey) {
-  const readiness = state.saasReadiness && typeof state.saasReadiness === "object" ? state.saasReadiness : {};
-  const providerStatus = readiness.provider_status && typeof readiness.provider_status === "object" ? readiness.provider_status : {};
-  const directStatus = readiness[statusKey] && typeof readiness[statusKey] === "object" ? readiness[statusKey] : {};
-  return providerStatus[statusKey] && typeof providerStatus[statusKey] === "object" ? providerStatus[statusKey] : directStatus;
-}
-
 function saasPlatformTrialModelState() {
-  const status = saasReadinessProviderStatus("ai_ceo_platform_model");
   const settings = state.saasModelSettings && typeof state.saasModelSettings === "object" ? state.saasModelSettings : {};
   const quota = settings.platform_trial_quota && typeof settings.platform_trial_quota === "object" ? settings.platform_trial_quota : {};
+  const modelGate = state.saasModelValueGate && typeof state.saasModelValueGate === "object" ? state.saasModelValueGate : {};
+  const status = modelGate.platform_default_model && typeof modelGate.platform_default_model === "object" ? modelGate.platform_default_model : {};
   const merchantModelConfigured = isSaasMerchantModelConfigured();
-  const enabled = status.enabled === true;
-  const configured = status.configured === true;
+  const enabled = Boolean(quota.contract_version || status.enabled === true || status.configured === true);
+  const configured = status.configured === true && quota.platform_trial_activated !== false;
   const trialLimit = Math.max(0, Number(quota.trial_limit || quota.monthly_limit || status.trial_request_limit || status.trial_monthly_limit || 0));
   const trialDurationDays = Math.max(0, Number(quota.trial_duration_days || status.trial_duration_days || 7));
   const used = Math.max(0, Number(quota.used || 0));
@@ -28017,11 +27843,11 @@ function saasPlatformTrialModelState() {
 }
 
 function saasPublicSearchState() {
-  const status = saasReadinessProviderStatus("public_search");
+  const handoff = state.saasLastPublicSearchHandoff && typeof state.saasLastPublicSearchHandoff === "object" ? state.saasLastPublicSearchHandoff : {};
   const observedInConversation = [state.saasAiCeoLatestTurn, ...(Array.isArray(state.saasAiCeoThread) ? state.saasAiCeoThread.slice(-10) : [])]
     .filter(Boolean)
     .some((turn) => normalizeSaasAiCeoSourceRecords(turn?.source_records || []).length > 0);
-  const configured = status.configured === true || status.ai_ceo_realtime_search_enabled === true || observedInConversation;
+  const configured = observedInConversation || Number(handoff.result_count || 0) > 0 || ["ready", "completed", "success"].includes(String(handoff.status || "").toLowerCase());
   return {
     configured,
     tone: configured ? "green" : "amber",
@@ -28033,16 +27859,11 @@ function saasPublicSearchState() {
 }
 
 function saasMediaGenerationState() {
-  const status = saasReadinessProviderStatus("media_generation");
-  const configured = status.configured === true;
   const latestManifestJob = latestSaasMediaAssetJobWithManifest();
   const liveImageObserved = Boolean(latestManifestJob && latestManifestJob.live_provider_called === true);
-  const liveReady =
-    status.live_image_generation_enabled === true ||
-    status.live_provider_calls_allowed === true ||
-    (status.live_generation_enabled === true && configured) ||
-    liveImageObserved;
-  const videoReady = status.live_video_generation_enabled === true;
+  const configured = Boolean(latestManifestJob || (state.saasMediaAssetJobs || []).length);
+  const liveReady = liveImageObserved;
+  const videoReady = Boolean(latestManifestJob && latestManifestJob.resource_type === "video" && liveImageObserved);
   if (liveReady) {
     return {
       configured: true,
@@ -28920,20 +28741,16 @@ function renderSaasWorkbenchTruthPanel() {
   const latestSync = getLatestSaasEbaySyncSummary();
   const latestPacket = getLatestSaasDataPacketRecord(latestSync);
   const packetBody = saasResolvedDataPacketBody(latestPacket, latestSync);
-  const readiness = state.saasReadiness || {};
-  const evidence = readiness.product_evidence && typeof readiness.product_evidence === "object" ? readiness.product_evidence : {};
-  const evidencePresent = Array.isArray(evidence.latest_ebay_packet_present_resource_keys) ? evidence.latest_ebay_packet_present_resource_keys : [];
-  const evidenceMissing = Array.isArray(evidence.latest_ebay_packet_missing_resource_keys) ? evidence.latest_ebay_packet_missing_resource_keys : [];
-  const present = Array.isArray(packetBody.present_resource_keys) && packetBody.present_resource_keys.length ? packetBody.present_resource_keys : evidencePresent;
-  const missing = Array.isArray(packetBody.missing_resource_keys) ? packetBody.missing_resource_keys : evidenceMissing;
-  const packetId = latestPacket?.packet_id || evidence.latest_ebay_packet_id || "等待登录读取";
-  const sourceMode = packetBody.source_label || latestPacket?.source_mode || evidence.latest_ebay_packet_source_mode || "waiting";
-  const reportCount = state.saasReports.length || Number(evidence.report_count || 0);
-  const confirmationCount = state.saasConfirmations.length || Number(evidence.confirmation_count || 0);
+  const present = Array.isArray(packetBody.present_resource_keys) ? packetBody.present_resource_keys : [];
+  const missing = Array.isArray(packetBody.missing_resource_keys) ? packetBody.missing_resource_keys : [];
+  const packetId = latestPacket?.packet_id || "等待登录读取";
+  const sourceMode = packetBody.source_label || latestPacket?.source_mode || "waiting";
+  const reportCount = state.saasReports.length;
+  const confirmationCount = state.saasConfirmations.length;
   const connection = latestSaasConnection();
   const store = activeSaasStore();
   const displayName = saasStoreDisplayName(store, connection);
-  const official = sourceMode === "official_api" || evidence.latest_ebay_packet_source_mode === "official_api";
+  const official = sourceMode === "official_api";
   const realBinding = saasRealBackendBindingStatus();
   const statusTitle = state.saasConnected
     ? realBinding.readyCount === realBinding.totalCount
@@ -28942,7 +28759,7 @@ function renderSaasWorkbenchTruthPanel() {
     : "先登录，再读取真实工作台结果";
   const statusCopy = state.saasConnected
     ? "首页、同步面板、店铺资料、AI CEO 报告和确认中心会以捷境后端返回结果为准；AI CEO 只拿整理后的店铺资料。"
-    : "当前页面不会自动创建匿名账号。登录或注册后，前端会读取店铺、eBay 只读同步、店铺资料、AI CEO 报告和确认中心；公开 readiness 只展示无密钥证据。";
+    : "当前页面不会自动创建匿名账号。登录或注册后，前端会读取店铺、eBay 只读同步、店铺资料、AI CEO 报告和确认中心。";
   return `
     <article class="saas-workbench-truth-panel ${state.saasConnected ? "is-connected" : "needs-login"}">
       <div class="saas-workbench-truth-head">
@@ -28961,7 +28778,6 @@ function renderSaasWorkbenchTruthPanel() {
           ? ""
           : renderSaasLoginCard({ compact: true })
       }
-      ${renderSaasReadinessIncidentStrip(readiness)}
       <div class="saas-workbench-truth-grid">
         <article>
           <span>店铺授权</span>
@@ -29013,327 +28829,6 @@ function renderSaasBackendPanel() {
   }
   panel.innerHTML = renderSaasMerchantWorkbenchPanel();
   return;
-  const connectedTone = state.saasConnected ? "green" : "neutral";
-  const store = state.saasStores[0] || null;
-  const pendingConfirmations = state.saasConfirmations.filter((item) => item.status === "pending").length;
-  const readiness = state.saasReadiness || {};
-  const readinessTone = readiness.production_ready ? "green" : readiness.beta_ready ? "amber" : "neutral";
-  const readinessText = readiness.production_ready ? "生产可上线" : readiness.beta_ready ? "内测可继续" : "未达上线";
-  const securityGate = state.saasSecurityGate || {};
-  const securityReady = securityGate.controlled_staging_test_ready === true;
-  const securityTone = securityReady ? "green" : securityGate.status === "blocked" ? "red" : "amber";
-  const securityText = securityReady ? "受控测试可跑" : securityGate.status ? "测试门禁未过" : "等待检查";
-  const stepSummary = summarizeSaasSteps(state.saasTaskSteps || []);
-  const queueWaiting = (state.saasQueueJobs || []).filter((item) => item.status === "queued").length;
-  const queueRunning = (state.saasQueueJobs || []).filter((item) => item.status === "running").length;
-  const failedOrCancelledJob = (state.saasQueueJobs || []).find((item) => ["failed", "cancelled"].includes(item.status));
-  const vaultMode = state.saasVaultStatus?.secret_ref_only ? "引用模式" : state.saasVaultStatus?.can_store_raw_secret ? "Vault 已接" : "待接 Vault";
-  const databasePlan = state.saasDatabasePlan || {};
-  const databaseShapeReady = databasePlan.staging_migration_shape_ready ? "迁移形态已就绪" : "迁移形态待补齐";
-  const databaseBlockers = Array.isArray(databasePlan.production_blockers) ? databasePlan.production_blockers : [];
-  const queuePlan = state.saasQueuePlan || {};
-  const queueShapeReady = queuePlan.local_queue_shape_ready ? "本地队列形态已就绪" : "队列形态待补齐";
-  const databaseAdapterCount = state.saasDatabaseAdapters?.available_adapters?.length || 0;
-  const queueAdapterCount = state.saasQueueAdapters?.available_adapters?.length || 0;
-  const providerJobCount = state.saasProviderJobContracts?.contract_count || 0;
-  const providerPlan = state.saasProviderJobPlan || {};
-  const providerPlanReady = Number(providerPlan.ready_to_queue_count || 0);
-  const providerPlanBlocked = Number(providerPlan.blocked_count || 0);
-  const publicSearchHandoff = state.saasLastPublicSearchHandoff || {};
-  const publicSearchStatus = publicSearchHandoff.status || "not_attached";
-  const realBackendBinding = saasRealBackendBindingStatus();
-  const publicSearchCount = Number(publicSearchHandoff.result_count || 0);
-  const publicSearchMode = publicSearchHandoff.source_mode || "pending";
-  const secretGrantPlan = state.saasSecretGrantPlan || {};
-  const secretGrantReady = Number(secretGrantPlan.grant_contract_ready_count || 0);
-  const secretGrantBlocked = Number(secretGrantPlan.blocked_count || 0);
-  const independence = state.saasIndependence || {};
-  const independentText = independence[runtimeIndependentFromLegacyKey] ? "已独立" : "依赖未关";
-  const independenceBlocks = Number(independence.blocking_count || 0);
-  const vaultOperationCount = state.saasVaultAdapters?.operations?.length || 0;
-  const vaultClientStatus = state.saasVaultClient?.status || "pending";
-  const vaultClientOperationCount = state.saasVaultClient?.operations?.length || 0;
-  const ebayFieldContractCount = state.saasEbayFieldContracts?.resource_count || state.saasEbayFieldContracts?.resources?.length || 0;
-  const ebayRouteCount = state.saasEbayLiveAdapter?.route_count || state.saasEbayLiveAdapter?.routes?.length || 0;
-  const ebayLivePlanStatus = state.saasEbayLiveReadPlan?.status || "pending";
-  const ebayLivePlanRouteCount = state.saasEbayLiveReadPlan?.route_request_count || 0;
-  const ebayLivePlanBlocked = Array.isArray(state.saasEbayLiveReadPlan?.blocked_by) ? state.saasEbayLiveReadPlan.blocked_by.length : 0;
-  const ebayLiveLabel = state.saasEbayLiveAdapter?.enabled ? "真实只读已开" : "真实只读未开";
-  const ebayHttpClientStatus = state.saasEbayHttpClient?.status || "pending";
-  const ebayHttpDryRunRequestCount = state.saasEbayHttpDryRun?.request_count || 0;
-  const ebayHttpDryRunLive = state.saasEbayHttpDryRun?.live_request_performed ? "live" : "dry-run";
-  const liveEbaySync = getLatestSaasEbaySyncSummary();
-  const ebayCredentialPreflight = state.saasEbayCredentialPreflight || state.saasEbaySync?.credential_preflight || null;
-  const ebayCredentialStatus = ebayCredentialPreflight?.status || "not_checked";
-  const ebayCredentialTokenMode = ebayCredentialPreflight?.token_mode || "not_ready";
-  const ebayCredentialBlocked = Array.isArray(ebayCredentialPreflight?.blocked_by) ? ebayCredentialPreflight.blocked_by.length : 0;
-  const ebayCredentialNextStep = ebayCredentialPreflight?.merchant_next_step || "先做 eBay 只读凭证预检，再决定能不能读取真实店铺数据。";
-  const ebaySyncStatus =
-    state.saasEbaySync?.status ||
-    liveEbaySync?.sync?.sync_status ||
-    liveEbaySync?.sync?.status ||
-    liveEbaySync?.task?.status ||
-    liveEbaySync?.data_packet?.status ||
-    "not_started";
-  const ebaySyncBlocked = Array.isArray(state.saasEbaySync?.blocked_by) ? state.saasEbaySync.blocked_by.length : 0;
-  const ebaySyncNextStep = state.saasEbaySync?.merchant_next_step || "连接 eBay 只读授权后，点击同步店铺数据。";
-  const latestDataPacket = (state.saasDataPackets || [])[0] || null;
-  const latestPacketBody = latestDataPacket?.packet || {};
-  const latestPacketSource = latestPacketBody.source_label || latestDataPacket?.source_mode || "not_cached";
-  const latestPacketPresent = Array.isArray(latestPacketBody.present_resource_keys) ? latestPacketBody.present_resource_keys.length : 0;
-  const latestPacketMissing = Array.isArray(latestPacketBody.missing_resource_keys) ? latestPacketBody.missing_resource_keys.length : Number(latestPacketBody.source_gap_count || 0);
-  const liveEbayReadResult = liveEbaySync.live_read_result || {};
-  const ebayRouteRows = saasEbayRouteRows(liveEbayReadResult, state.saasEbayLiveReadPlan || {});
-  const ebayLiveRequestCount = Number(liveEbayReadResult.request_count || 0);
-  const ebayLiveResourceCount = Number(liveEbayReadResult.resource_count || 0);
-  const latestPacketResourceRows = saasEbayPacketResourceRows(latestPacketBody);
-  const ebayWriteActionCount = state.saasEbayWriteAdapter?.actions?.length || 0;
-  const ebayWriteBlocked = Array.isArray(state.saasEbayWriteAdapter?.blocked_by) ? state.saasEbayWriteAdapter.blocked_by.length : 0;
-  const latestOauth = latestSaasOAuthRequest();
-  const latestConnection = latestSaasConnection();
-  const displayName = saasStoreDisplayName(store, latestConnection);
-  const latestSecretRef = latestSaasSecretRef();
-  const latestPreflight =
-    (state.saasPreflightResults || [])[0] ||
-    (state.saasExecutionResults || [])[0]?.result?.audit?.preflight ||
-    null;
-  const preflightStatus = latestPreflight?.status || "-";
-  const preflightMissing = Array.isArray(latestPreflight?.missing_fields) ? latestPreflight.missing_fields.length : 0;
-  const saasApiHost = apiBaseHostLabel(state.saasApiBase);
-  const runtimeApiHost = apiBaseHostLabel(state.runtimeApiBase);
-  const authModeText = state.saasDemoBootstrapEnabled ? "local operator bootstrap" : "public session required";
-  panel.innerHTML = `
-    <div class="runtime-bridge-copy">
-      <span class="pill ${connectedTone}">${state.saasConnected ? "SaaS 后端已连接" : "SaaS 后端未连接"}</span>
-      <div>
-        <strong>正式 SaaS 后端链路</strong>
-        <p>前端不再直接碰密钥、数据库、eBay 或执行器。登录、店铺、任务、报告、确认和审计先进入 SaaS 后端；后端再把低风险任务交给 Runtime。</p>
-        ${state.saasError ? `<small>${escapeHtml(productizeJiejingProductCopy(state.saasError))}</small>` : ""}
-      </div>
-    </div>
-    ${
-      !state.saasConnected && !state.saasDemoBootstrapEnabled
-        ? `<div class="saas-readiness-strip">
-            <article>
-              <span>Public auth gate</span>
-              <strong>Session required</strong>
-              <small>当前公网页面不会自动创建匿名账号。请使用真实登录/注册路径；运营测试入口只用于内部验证。</small>
-            </article>
-          </div>`
-        : ""
-    }
-    ${
-      !state.saasConnected
-        ? renderSaasLoginCard()
-        : ""
-    }
-    ${renderSaasLiveSnapshotPanel()}
-    ${renderSaasEbaySyncStatusPanel()}
-    <div class="runtime-bridge-metrics saas-backend-metrics">
-      <article><span>API Base</span><strong>${escapeHtml(saasApiHost)}</strong><small>Runtime: ${escapeHtml(runtimeApiHost)}. Configure by meta, window.JIEJING_CONFIG, query, or localStorage.</small></article>
-      <article><span>真实 API 来源</span><strong>${realBackendBinding.readyCount}/${realBackendBinding.totalCount}</strong><small>${escapeHtml(realBackendBinding.endpoints.map((item) => `${item.path}:${item.ready ? "已读取" : "等待"}`).join(" · "))}</small></article>
-      <article><span>Auth Mode</span><strong>${escapeHtml(productizeJiejingProductCopy(authModeText))}</strong><small>${state.saasDemoBootstrapEnabled ? "Only for local/operator validation; disable on public merchant pages." : "No anonymous account creation on public origin."}</small></article>
-      <article><span>账号</span><strong>${state.saasUser ? "1" : "0"}</strong><small>${escapeHtml(state.saasUser?.email || "等待本地登录")}</small></article>
-      <article><span>店铺</span><strong>${state.saasStores.length}</strong><small>${escapeHtml(store ? displayName : "等待创建 eBay 工作区")}</small></article>
-      <article><span>连接</span><strong>${state.saasConnections.length}</strong><small>只显示托管状态，不暴露 token</small></article>
-      <article><span>测试安全总闸</span><strong class="pill ${securityTone}">${escapeHtml(securityText)}</strong><small>${Number(securityGate.blocker_count || 0)} 个阻断，${Number(securityGate.warning_count || 0)} 个提醒；不等于生产级 SaaS 安全</small></article>
-      <article><span>密钥边界</span><strong>${escapeHtml(vaultMode)}</strong><small>后端托管</small></article>
-      <article><span>密钥合同</span><strong>${vaultOperationCount || "-"}</strong><small>解析、轮换、吊销和审计；不把密钥交给前端/Runtime</small></article>
-      <article><span>Vault Client</span><strong>${escapeHtml(vaultClientStatus)}</strong><small>${vaultClientOperationCount || "-"} 个后端操作；前端和 Runtime 不拿原始密钥</small></article>
-      <article><span>数据库</span><strong>${escapeHtml(databaseShapeReady)}</strong><small>${databaseBlockers.length ? `${databaseBlockers.length} 个生产阻断` : "表、迁移和索引已检查"}</small></article>
-      <article><span>DB Adapter</span><strong>${databaseAdapterCount || "-"}</strong><small>SQLite 仅本地，正式走 Postgres/MySQL</small></article>
-      <article><span>OAuth</span><strong>${state.saasOauthRequests.length}</strong><small>只读授权计划，token 不进前端</small></article>
-      <article><span>OAuth Status</span><strong>${escapeHtml(saasProductStatusText(latestOauth?.status || "not_started"))}</strong><small>${escapeHtml(saasProductStatusText(latestOauth?.marketplace_id || latestOauth?.authorization_url_status || "waiting for seller consent"))}</small></article>
-      <article><span>托管凭证</span><strong>${state.saasSecretRefs.length || "-"}</strong><small>${escapeHtml(saasProductStatusText(latestSecretRef?.status || latestSecretRef?.purpose || "waiting for Vault callback storage"))}</small></article>
-      <article><span>Connection</span><strong>${escapeHtml(saasProductStatusText(latestConnection?.status || "not_connected"))}</strong><small>${escapeHtml(saasProductStatusText(latestConnection?.connection_type || "OAuth read-only connection pending"))}</small></article>
-      <article><span>任务</span><strong>${state.saasTasks.length}</strong><small>由后端建任务并入队</small></article>
-      <article><span>队列</span><strong>${queueWaiting + queueRunning}</strong><small>${queueWaiting} 个排队，${queueRunning} 个执行中 · ${escapeHtml(queueShapeReady)}</small></article>
-      <article><span>Queue Adapter</span><strong>${queueAdapterCount || "-"}</strong><small>本地 worker、Redis、腾讯云队列、阿里云队列</small></article>
-      <article><span>外部任务</span><strong>${providerJobCount || "-"}</strong><small>搜索 / eBay / 1688 / 物流 / 素材 / 模型统一走后端队列</small></article>
-      <article><span>Public Search</span><strong>${escapeHtml(publicSearchStatus)}</strong><small>${publicSearchCount} source records · ${escapeHtml(publicSearchMode)}</small></article>
-      <article><span>任务预检</span><strong>${providerPlanReady}/${Number(providerPlan.provider_step_count || 0) || "-"}</strong><small>${providerPlanBlocked} 个缺资料或待接真实适配器</small></article>
-      <article><span>密钥授权</span><strong>${secretGrantReady}/${Number(secretGrantPlan.grant_request_count || 0) || "-"}</strong><small>${secretGrantBlocked} 个缺授权；任务级授权不返回原始密钥</small></article>
-      <article><span>独立 Runtime</span><strong>${escapeHtml(independentText)}</strong><small>${independenceBlocks} 个生产阻断；默认不调用内部执行底座适配器</small></article>
-      <article><span>eBay 只读</span><strong>${ebayFieldContractCount || "-"}</strong><small>${escapeHtml(ebayLiveLabel)} · ${ebayRouteCount || 0} 条 route 合同</small></article>
-      <article><span>eBay HTTP</span><strong>${escapeHtml(saasProductStatusText(ebayHttpClientStatus))}</strong><small>GET-only 合同；当前只做 dry-run，不撞真实接口</small></article>
-      <article><span>只读请求</span><strong>${ebayHttpDryRunRequestCount || "-"}</strong><small>${escapeHtml(ebayHttpDryRunLive)}；Authorization 已脱敏</small></article>
-      <article><span>eBay 凭证预检</span><strong>${escapeHtml(saasProductStatusText(ebayCredentialStatus))}</strong><small>${ebayCredentialBlocked ? `${ebayCredentialBlocked} 个阻断：${escapeHtml(ebayCredentialNextStep)}` : `token 模式：${escapeHtml(saasProductStatusText(ebayCredentialTokenMode))}`}</small></article>
-      <article><span>eBay 同步</span><strong>${escapeHtml(saasProductStatusText(ebaySyncStatus))}</strong><small>${ebaySyncBlocked ? `${ebaySyncBlocked} 个阻断：${escapeHtml(ebaySyncNextStep)}` : escapeHtml(ebaySyncNextStep)}</small></article>
-      <article><span>数据包</span><strong>${state.saasDataPackets.length || "-"}</strong><small>${latestDataPacket ? `${escapeHtml(latestPacketSource)} · ${latestPacketPresent} 个资源可用，${latestPacketMissing} 个缺口` : "等待 eBay 只读同步或手动样本包"}</small></article>
-      <article><span>eBay 写入</span><strong>${ebayWriteActionCount || "-"}</strong><small>${ebayWriteBlocked} 个上线阻断；确认+预检后才进适配器</small></article>
-      <article><span>步骤</span><strong>${stepSummary.done}/${stepSummary.total}</strong><small>${stepSummary.waiting} 个等待，${stepSummary.failed} 个失败</small></article>
-      <article><span>报告</span><strong>${state.saasReports.length}</strong><small>Runtime 输出写回 SaaS 数据库</small></article>
-      <article><span>确认</span><strong>${pendingConfirmations}</strong><small>发布、付款、退款等高风险动作停在这里</small></article>
-      <article><span>发布前检查</span><strong>${escapeHtml(preflightStatus)}</strong><small>${latestPreflight ? `${preflightMissing} 项发布资料缺口` : "确认后先检查，不直接执行"}</small></article>
-      <article><span>审计</span><strong>${state.saasAuditLogs.length}</strong><small>每一步留痕</small></article>
-      <article><span>上线检查</span><strong class="pill ${readinessTone}">${readinessText}</strong><small>${Number(readiness.blocker_count || 0)} 个阻断，${Number(readiness.warning_count || 0)} 个提醒</small></article>
-    </div>
-    ${
-      state.saasSecurityGate
-        ? `<div class="saas-readiness-strip">
-            ${(state.saasSecurityGate.checks || [])
-              .filter((item) => item.status !== "ready")
-              .slice(0, 5)
-              .map(
-                (item) => `
-                  <article>
-                    <span>${escapeHtml(item.label || item.key || "安全检查")}</span>
-                    <strong>${escapeHtml(saasProductStatusText(item.status || "pending"))}</strong>
-                    <small>${escapeHtml(item.detail || "")}</small>
-                  </article>
-                `,
-              )
-              .join("") || `
-                <article>
-                  <span>受控测试边界</span>
-                  <strong>已通过</strong>
-                  <small>账号隔离、密钥边界、真实写入状态可见、模拟数据清理已过门禁。</small>
-                </article>
-              `}
-          </div>`
-        : ""
-    }
-    ${
-      state.saasEbayLiveReadPlan
-        ? `<div class="saas-readiness-strip">
-            <article>
-              <span>只读执行计划</span>
-              <strong>${escapeHtml(ebayLivePlanStatus)}</strong>
-              <small>${ebayLivePlanRouteCount || 0} 条 eBay 只读请求合同；${ebayLivePlanBlocked} 个上线阻断；后端取 token，不给前端或 Runtime。</small>
-            </article>
-            <article>
-              <span>数据交接</span>
-              <strong>${state.saasEbayLiveReadPlan?.data_packet_handoff?.runtime_gets_sanitized_packet_only ? "只交清洗包" : "待确认"}</strong>
-              <small>真实读取后只把标准化数据包交给市场、刊登、客服、财务和确认中心。</small>
-            </article>
-          </div>`
-        : ""
-    }
-    ${
-      latestDataPacket
-        ? `<div class="saas-readiness-strip">
-            <article>
-              <span>最新 eBay 店铺资料</span>
-              <strong>${escapeHtml(latestDataPacket.status || latestPacketBody.status || "cached")}</strong>
-              <small>${escapeHtml(latestDataPacket.packet_id || "")} · ${escapeHtml(latestPacketSource)} · Runtime 只读取清洗后的数据。</small>
-            </article>
-            <article>
-              <span>Runtime 输入</span>
-              <strong>${latestPacketBody.ready_for_runtime ? "已可交接" : "待补齐"}</strong>
-              <small>${latestPacketPresent} 个资源进入市场、刊登、客服、财务和确认上下文；${escapeHtml(saasRealPlatformWriteDetail())}</small>
-            </article>
-          </div>`
-        : ""
-    }
-    ${
-      latestPacketResourceRows.length
-        ? `<div class="saas-route-strip" aria-label="Latest eBay packet coverage">
-            ${latestPacketResourceRows
-              .slice(0, 8)
-              .map(
-                (resource) => `
-                  <article class="${escapeHtml(resource.status || "planned")}">
-                    <span>${escapeHtml(resource.label)}</span>
-                    <strong>${escapeHtml(resource.summary || resource.status || "packet")}</strong>
-                    <small>${escapeHtml(resource.detail || "sanitized packet section")}</small>
-                  </article>
-                `,
-              )
-              .join("")}
-          </div>`
-        : ""
-    }
-    ${
-      ebayRouteRows.length
-        ? `<div class="saas-route-strip" aria-label="Official eBay read route health">
-            <article class="${ebayLiveRequestCount ? "ok" : "planned"}">
-              <span>Official read</span>
-              <strong>${ebayLiveRequestCount || ebayRouteRows.length} GET</strong>
-              <small>${ebayLiveResourceCount || latestPacketPresent || 0} resources from backend-only eBay read path</small>
-            </article>
-            ${ebayRouteRows
-              .slice(0, 8)
-              .map(
-                (route) => `
-                  <article class="${escapeHtml(route.status || "planned")}">
-                    <span>${escapeHtml(route.label)}</span>
-                    <strong>${escapeHtml(saasProductStatusText(route.summary || route.status || "route"))}</strong>
-                    <small>${escapeHtml(route.detail || "waiting for sync")}</small>
-                  </article>
-                `,
-              )
-              .join("")}
-          </div>`
-        : ""
-    }
-    ${
-      state.saasReadiness
-        ? `<div class="saas-readiness-strip">
-            ${(state.saasReadiness.items || [])
-              .filter((item) => item.status !== "ready")
-              .slice(0, 4)
-              .map(
-                (item) => `
-                  <article>
-                    <span>${escapeHtml(item.label || item.key || "检查项")}</span>
-                    <strong>${escapeHtml(item.status || "pending")}</strong>
-                    <small>${escapeHtml(item.detail || "")}</small>
-                  </article>
-                `,
-              )
-              .join("")}
-          </div>`
-        : ""
-    }
-    ${
-      state.saasQueueJobs.length
-        ? `<div class="saas-queue-strip" aria-label="SaaS 队列状态">
-            ${state.saasQueueJobs
-              .slice(0, 5)
-              .map(
-                (job) => `
-                  <article class="${escapeHtml(job.status || "queued")}">
-                    <span>${escapeHtml(saasQueueStatusLabel(job.status))}</span>
-                    <strong>${escapeHtml(job.job?.kind || "runtime_product_workflow")}</strong>
-                    <small>尝试 ${Number(job.attempts || 0)} / ${Number(job.max_attempts || 0)} · ${escapeHtml(job.job?.retry_of ? "重试任务" : "原始任务")}</small>
-                  </article>
-                `,
-              )
-              .join("")}
-          </div>`
-        : ""
-    }
-    ${
-      state.saasTaskSteps.length
-        ? `<div class="saas-step-strip">
-            ${state.saasTaskSteps
-              .slice(0, 11)
-              .map(
-                (step) => `
-                  <article class="${escapeHtml(step.status || "queued")}">
-                    <span>${Number(step.step_order || 0)}</span>
-                    <strong>${escapeHtml(step.merchant_label || step.task_type || "步骤")}</strong>
-                    <small>${escapeHtml(saasStepStatusLabel(step.status))}</small>
-                  </article>
-                `,
-              )
-              .join("")}
-          </div>`
-        : ""
-    }
-    ${renderSaasAiCeoOutputPanel()}
-    <div class="runtime-bridge-actions">
-      ${latestSaasOAuthAuthorizationUrl() ? `<a class="secondary-action" href="${escapeHtml(latestSaasOAuthAuthorizationUrl())}" target="_blank" rel="noopener noreferrer">打开 eBay 官方授权页</a>` : ""}
-      <button class="primary-action" type="button" data-saas-action="run-workflow" ${state.saasLoading ? "disabled" : ""}>通过 SaaS 后端跑一单</button>
-      <button class="secondary-action" type="button" data-saas-action="run-next-job" ${state.saasLoading || !queueWaiting ? "disabled" : ""}>处理下一个队列</button>
-      <button class="secondary-action" type="button" data-saas-action="retry-latest-job" ${state.saasLoading || !failedOrCancelledJob ? "disabled" : ""}>重试最近失败</button>
-      <button class="secondary-action" type="button" data-saas-action="plan-ebay-oauth" ${!hasSaasProtectedSessionCandidate() ? "disabled" : ""}>检查 eBay 只读授权</button>
-      <button class="secondary-action" type="button" data-saas-action="plan-ebay-draft-oauth" ${!hasSaasProtectedSessionCandidate() ? "disabled" : ""}>开通 eBay 未公开草稿权限</button>
-      <button class="secondary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !store ? "disabled" : ""}>同步 eBay 只读数据</button>
-      <button class="secondary-action" type="button" data-saas-action="refresh" ${state.saasLoading ? "disabled" : ""}>刷新后端状态</button>
-      <button class="secondary-action" type="button" data-saas-action="approve-first" ${pendingConfirmations ? "" : "disabled"}>确认第一条并交给执行服务</button>
-    </div>
-  `;
 }
 
 async function refreshSaasEbayDiagnostics(options = {}) {
@@ -29365,7 +28860,6 @@ async function refreshSaasEbayDiagnostics(options = {}) {
 
 function merchantSafeSaasBillingPlan(plan) {
   if (!plan || typeof plan !== "object") return null;
-  if (saasOwnerLaunchCanView()) return plan;
   const safePlan = { ...plan };
   delete safePlan.payment_strategy;
   delete safePlan.billing_live_cutover_matrix;
@@ -29428,13 +28922,8 @@ function merchantSafeSaasOAuthRequests(records) {
   return (Array.isArray(records) ? records : []).map(merchantSafeSaasOAuthRequest).filter(Boolean);
 }
 
-function saasCanViewPlatformInternalFromPermissions(payload) {
-  if (!payload || typeof payload !== "object") return false;
-  return payload.platform_internal_admin === true;
-}
-
 async function refreshSaasState(options = {}) {
-  const { silent = false, refreshLaunchGate = true } = options;
+  const { silent = false } = options;
   const refreshGeneration = ++saasStateRefreshGeneration;
   const isCurrentRefresh = () => refreshGeneration === saasStateRefreshGeneration;
   const canFetchProtectedState = hasSaasProtectedSessionCandidate();
@@ -29462,15 +28951,13 @@ async function refreshSaasState(options = {}) {
   }
   try {
     if (!canFetchProtectedState) {
-      await saasFetch("/health");
+      const healthPayload = await saasFetch("/health");
       if (!isCurrentRefresh()) return;
-      const readinessPayload = await saasFetch("/readiness/product-saas");
-      if (!isCurrentRefresh()) return;
-      state.saasReadiness = readinessPayload.readiness || null;
+      state.saasServiceHealth = healthPayload && typeof healthPayload === "object" ? healthPayload : null;
       resetSaasProtectedWorkbenchState();
       state.saasError = "";
       state.saasLastPublicRefreshSkippedProtectedFetch = true;
-      if (!silent) showActionToast("请先登录捷境账号；当前只刷新公开 readiness，不读取受保护店铺数据。");
+      if (!silent) showActionToast("请先登录捷境账号；当前只检查服务连接，不读取受保护店铺数据。");
       return;
     }
     const store = await ensureSaasDemoStoreAndConnection();
@@ -29496,7 +28983,7 @@ async function refreshSaasState(options = {}) {
       coreTasks,
       coreConfirmations,
       coreBrowserSessions,
-      coreReadiness,
+      coreServiceHealth,
     ] = await Promise.all([
       saasFetch("/me"),
       saasFetch("/permissions/me"),
@@ -29520,7 +29007,7 @@ async function refreshSaasState(options = {}) {
       saasFetch("/tasks?limit=20"),
       saasFetch("/confirmations?limit=40"),
       optionalSaasFetchFast("/auth/sessions", { sessions: [] }, 10000),
-      optionalSaasFetchFast("/readiness/product-saas", { readiness: state.saasReadiness || null }, 10000),
+      optionalSaasFetchFast("/health", state.saasServiceHealth || { status: "unknown" }, 10000),
     ]);
     if (!isCurrentRefresh()) return;
     state.saasIdentity = coreMe.identity || null;
@@ -29550,7 +29037,7 @@ async function refreshSaasState(options = {}) {
     if (!isCurrentRefresh()) return;
     state.saasConfirmations = coreLiveConfirmations;
     state.saasConfirmationsLiveLoaded = true;
-    state.saasReadiness = coreReadiness.readiness || state.saasReadiness || null;
+    state.saasServiceHealth = coreServiceHealth && typeof coreServiceHealth === "object" ? coreServiceHealth : state.saasServiceHealth;
     state.saasProtectedStateFromCache = false;
     state.saasProtectedStateCachedAt = "";
     const activeCeoCommandAtCoreApply = shouldPreserveActiveCeoState ? normalizeSaasCeoCommand(state.saasLastCeoCommand) : null;
@@ -29598,44 +29085,26 @@ async function refreshSaasState(options = {}) {
     renderStoreContext();
     setView(activeSaasRefreshView("cockpit"), { preserveFlowKey: true });
     state.saasLastCeoCommandHydratePromise = hydrateSaasCeoCommandFromBackend(store.store_id);
-    const canViewPlatformInternal = saasCanViewPlatformInternalFromPermissions(corePermissions);
     const [
       me,
       permissions,
       stores,
       connections,
-      securityGate,
-      ownerLaunchControl,
       secretRefs,
-      vault,
-      vaultAdapters,
-      vaultClient,
-      databasePlan,
-      databaseAdapters,
-      databaseInventory,
-      backupPlan,
       billingPlan,
       billingUsage,
       billingCheckout,
       domesticBillingContract,
       domesticBillingOrders,
-      paymentOptions,
       manualBetaPaymentOrders,
-      edgeCutoverPreflight,
-      paidLaunchApprovalPacket,
       modelValueGate,
       modelProviderCatalog,
       modelSettings,
-      commercialLaunchGate,
       postPublishCockpit,
       dataPackets,
       accountHealth,
       merchantOnboarding,
       ipRiskScreening,
-      queuePlan,
-      queueAdapters,
-      operationalHealth,
-      providerJobContracts,
       independenceStatus,
       ebayFieldContracts,
       ebayLiveAdapter,
@@ -29645,7 +29114,6 @@ async function refreshSaasState(options = {}) {
       tasks,
       queueJobs,
       mediaAssetJobs,
-      queueHealth,
       reports,
       confirmations,
       merchantMemory,
@@ -29657,41 +29125,16 @@ async function refreshSaasState(options = {}) {
       Promise.resolve(corePermissions),
       Promise.resolve(coreStores),
       Promise.resolve(coreConnections),
-      canViewPlatformInternal
-        ? optionalSaasFetchFast(`/security/staging-gate?store_id=${encodeURIComponent(store.store_id)}`, { staging_security_gate: null }, 10000)
-        : Promise.resolve({ staging_security_gate: null, skipped: "platform_internal_admin_only" }),
-      canViewPlatformInternal
-        ? optionalSaasFetchFast("/owner/launch-control", { owner_launch_control: state.saasOwnerLaunchControl || null }, 15000)
-        : Promise.resolve({ owner_launch_control: null, skipped: "owner_admin_only" }),
       optionalSaasFetchFast(`/secret-refs?store_id=${encodeURIComponent(store.store_id)}`, { secret_refs: [] }),
-      canViewPlatformInternal ? optionalSaasFetchFast("/vault/status", { vault: null }) : Promise.resolve({ vault: null, skipped: "platform_internal_admin_only" }),
-      canViewPlatformInternal ? optionalSaasFetchFast("/vault/adapters", { vault_adapters: null }) : Promise.resolve({ vault_adapters: null, skipped: "platform_internal_admin_only" }),
-      canViewPlatformInternal ? optionalSaasFetchFast("/vault/client-contract", { vault_client: null }) : Promise.resolve({ vault_client: null, skipped: "platform_internal_admin_only" }),
-      canViewPlatformInternal ? optionalSaasFetchFast("/database/plan", { database_plan: null }) : Promise.resolve({ database_plan: null, skipped: "platform_internal_admin_only" }),
-      canViewPlatformInternal ? optionalSaasFetchFast("/database/adapters", { database_adapters: null }) : Promise.resolve({ database_adapters: null, skipped: "platform_internal_admin_only" }),
-      canViewPlatformInternal ? optionalSaasFetchFast("/database/inventory", { database_inventory: null }) : Promise.resolve({ database_inventory: null, skipped: "platform_internal_admin_only" }),
-      canViewPlatformInternal ? optionalSaasFetchFast("/backup/plan", { backup_plan: null }) : Promise.resolve({ backup_plan: null, skipped: "platform_internal_admin_only" }),
       optionalSaasFetchFast("/billing/plans", { billing_plan: null }),
       optionalSaasFetchFast("/billing/usage", { billing_usage: null }),
       optionalSaasFetchFast("/billing/checkout-contract", { billing_checkout: null }),
       optionalSaasFetchFast("/billing/domestic/contract", { domestic_billing: null }),
       optionalSaasFetchFast("/billing/domestic/orders", { domestic_billing_orders: [] }),
-      canViewPlatformInternal
-        ? optionalSaasFetchFast("/billing/payment-options", { payment_options: null })
-        : Promise.resolve({ payment_options: null, skipped: "owner_admin_only_payment_options" }),
       optionalSaasFetchFast("/billing/manual-beta/orders", { manual_beta_payment_orders: [] }),
-      canViewPlatformInternal
-        ? optionalSaasFetchFast("/owner/edge-cutover-preflight", { edge_cutover_preflight: state.saasEdgeCutoverPreflight || null }, 15000)
-        : Promise.resolve({ edge_cutover_preflight: null, skipped: "owner_admin_only_edge_cutover" }),
-      canViewPlatformInternal
-        ? optionalSaasFetchFast("/owner/paid-launch-approval-packet", { paid_launch_approval_packet: state.saasPaidLaunchApprovalPacket || null }, 20000)
-        : Promise.resolve({ paid_launch_approval_packet: null, skipped: "owner_admin_only_paid_launch_packet" }),
       optionalSaasFetchFast("/model/value-gate", { model_value_gate: null }),
       optionalSaasFetchFast("/model/providers/catalog", { model_provider_catalog: null }),
       optionalSaasFetchFast(`/stores/${encodeURIComponent(store.store_id)}/model/settings`, { model_settings: state.saasModelSettings || null }, 10000),
-      refreshLaunchGate
-        ? optionalSaasFetchFast(`/commercial/launch-gate?store_id=${encodeURIComponent(store.store_id)}`, { commercial_launch_gate: state.saasCommercialLaunchGate || null }, 20000)
-        : Promise.resolve({ commercial_launch_gate: state.saasCommercialLaunchGate || null }),
       optionalSaasFetchFast("/post-publish/cockpit", { post_publish_cockpit: state.saasPostPublishCockpit || null }, 12000),
       optionalSaasFetchFast(`/data-packets?platform=ebay&limit=5`, { data_packets: state.saasDataPackets || [] }, 12000),
       optionalSaasFetchFast(`/stores/${encodeURIComponent(store.store_id)}/account-health`, {
@@ -29709,12 +29152,6 @@ async function refreshSaasState(options = {}) {
           secret_exposed: false,
         },
       }),
-      canViewPlatformInternal ? optionalSaasFetchFast("/queue/plan", { queue_plan: null }) : Promise.resolve({ queue_plan: null, skipped: "platform_internal_admin_only" }),
-      canViewPlatformInternal ? optionalSaasFetchFast("/queue/adapters", { queue_adapters: null }) : Promise.resolve({ queue_adapters: null, skipped: "platform_internal_admin_only" }),
-      optionalSaasFetchFast("/health/deep", { operational_health: null }),
-      canViewPlatformInternal
-        ? optionalSaasFetchFast("/provider-job-contracts", { provider_job_contracts: null })
-        : Promise.resolve({ provider_job_contracts: null, skipped: "platform_internal_admin_only" }),
       optionalSaasFetchFast("/independence/status", { independence: null }),
       optionalSaasFetchFast("/ebay-read-only/field-contracts", { ebay_read_only_field_contracts: null }),
       optionalSaasFetchFast("/ebay-read-only/live-adapter/status", { ebay_live_read_adapter: null }),
@@ -29724,7 +29161,6 @@ async function refreshSaasState(options = {}) {
       Promise.resolve(coreTasks),
       optionalSaasFetchFast("/queue-jobs?limit=20", { queue_jobs: [] }),
       optionalSaasFetchFast(`/stores/${encodeURIComponent(store.store_id)}/media-asset-jobs?limit=8`, { media_asset_jobs: [] }, 10000),
-      optionalSaasFetchFast("/queue/health", { queue_health: null }),
       saasFetch("/reports?limit=24"),
       Promise.resolve(coreConfirmations),
       optionalSaasFetchFast(`/merchant-memory?store_id=${encodeURIComponent(store.store_id)}&limit=30`, {
@@ -29773,51 +29209,17 @@ async function refreshSaasState(options = {}) {
       recordSaasCeoCommandSourceRecord(state.saasLastCeoCommand);
     }
     state.saasConnections = connections.connections || [];
-    state.saasSecurityGate = securityGate.staging_security_gate || null;
-    state.saasOwnerLaunchControl = canViewPlatformInternal ? ownerLaunchControl.owner_launch_control || state.saasOwnerLaunchControl || null : null;
-    if (canViewPlatformInternal) {
-      const rateLimitStatus = await optionalSaasFetchFast("/security/rate-limit/status", { rate_limit_status: state.saasRateLimitStatus || null }, 10000);
-      if (!isCurrentRefresh()) return;
-      state.saasRateLimitStatus = rateLimitStatus.rate_limit_status || state.saasRateLimitStatus || null;
-      const operationsOverview = await optionalSaasFetchFast(
-        "/owner/operations-overview",
-        { operations_overview: state.saasOperationsOverview || null },
-        10000,
-      );
-      if (!isCurrentRefresh()) return;
-      state.saasOperationsOverview = operationsOverview.operations_overview || state.saasOperationsOverview || null;
-    } else {
-      state.saasRateLimitStatus = null;
-      state.saasOperationsOverview = null;
-    }
     state.saasSecretRefs = secretRefs.secret_refs || [];
-    state.saasVaultStatus = canViewPlatformInternal ? vault.vault || null : null;
-    state.saasVaultAdapters = canViewPlatformInternal ? vaultAdapters.vault_adapters || null : null;
-    state.saasVaultClient = canViewPlatformInternal ? vaultClient.vault_client || null : null;
-    state.saasDatabasePlan = canViewPlatformInternal ? databasePlan.database_plan || null : null;
-    state.saasDatabaseAdapters = canViewPlatformInternal ? databaseAdapters.database_adapters || null : null;
-    state.saasDatabaseInventory = canViewPlatformInternal ? databaseInventory.database_inventory || null : null;
-    state.saasBackupPlan = canViewPlatformInternal ? backupPlan.backup_plan || null : null;
     const rawBillingPlan = billingPlan.billing_plan || null;
     state.saasBillingPlan = merchantSafeSaasBillingPlan(rawBillingPlan);
     state.saasBillingUsage = billingUsage.billing_usage || null;
     state.saasBillingCheckout = billingCheckout.billing_checkout || null;
     state.saasDomesticBillingContract = domesticBillingContract.domestic_billing || null;
     state.saasDomesticBillingOrders = domesticBillingOrders.domestic_billing_orders || [];
-    state.saasPaymentOptions = canViewPlatformInternal ? paymentOptions.payment_options || rawBillingPlan?.payment_strategy || null : null;
     state.saasManualBetaPaymentOrders = manualBetaPaymentOrders.manual_beta_payment_orders || [];
-    state.saasBillingDomainCutoverRehearsal = canViewPlatformInternal
-      ? state.saasOwnerLaunchControl?.mainland_payment_cutover || null
-      : null;
-    state.saasEdgeCutoverPreflight = canViewPlatformInternal ? edgeCutoverPreflight.edge_cutover_preflight || state.saasEdgeCutoverPreflight || null : null;
-    state.saasPaidLaunchApprovalPacket = canViewPlatformInternal ? paidLaunchApprovalPacket.paid_launch_approval_packet || null : null;
     state.saasModelValueGate = modelValueGate.model_value_gate || null;
     state.saasModelProviderCatalog = modelProviderCatalog.model_provider_catalog || null;
     state.saasModelSettings = modelSettings.model_settings || null;
-    if (refreshLaunchGate) {
-      state.saasCommercialLaunchGate = commercialLaunchGate.commercial_launch_gate || null;
-      state.saasCommercialLaunchGateStoreId = state.saasCommercialLaunchGate ? String(store.store_id || "") : "";
-    }
     state.saasPostPublishCockpit = postPublishCockpit.post_publish_cockpit || state.saasPostPublishCockpit || null;
     state.saasDataPackets = dataPackets.data_packets || [];
     state.saasAccountHealth = accountHealth.account_health || state.saasAccountHealth || null;
@@ -29846,10 +29248,6 @@ async function refreshSaasState(options = {}) {
       if (!isCurrentRefresh()) return;
       state.saasIpRiskScreening = refreshedIpRisk.ip_risk_screening || state.saasIpRiskScreening;
     }
-    state.saasQueuePlan = canViewPlatformInternal ? queuePlan.queue_plan || null : null;
-    state.saasQueueAdapters = canViewPlatformInternal ? queueAdapters.queue_adapters || null : null;
-    state.saasOperationalHealth = operationalHealth.operational_health || state.saasReadiness?.operational_health || null;
-    state.saasProviderJobContracts = canViewPlatformInternal ? providerJobContracts.provider_job_contracts || null : null;
     state.saasIndependence = independenceStatus.independence || null;
     state.saasEbayFieldContracts = ebayFieldContracts.ebay_read_only_field_contracts || null;
     state.saasEbayLiveAdapter = ebayLiveAdapter.ebay_live_read_adapter || null;
@@ -29862,7 +29260,6 @@ async function refreshSaasState(options = {}) {
         ?.input?.public_search_provider_handoff || state.saasLastPublicSearchHandoff;
     state.saasQueueJobs = queueJobs.queue_jobs || [];
     state.saasMediaAssetJobs = mediaAssetJobs.media_asset_jobs || [];
-    state.saasQueueHealth = queueHealth.queue_health || null;
     state.saasReports = reports.reports || [];
     restoreSaasListingComposerDraftFromBackendReports();
     const liveConfirmations = confirmations.confirmations || [];
@@ -29923,10 +29320,6 @@ async function refreshSaasState(options = {}) {
       state.saasConnected = Boolean(state.saasToken || state.saasUser || state.saasIdentity);
       state.saasProtectedStateReady = hasSaasProtectedBackendState();
       state.saasError = `工作台部分状态读取失败：${error.message}`;
-      if (!state.saasReadiness) {
-        await refreshSaasPublicReadiness({ render: false });
-        if (!isCurrentRefresh()) return;
-      }
       if (!silent) showActionToast("工作台已保持登录；部分状态读取失败，请刷新重试。");
       return;
     }
@@ -29950,8 +29343,6 @@ async function refreshSaasState(options = {}) {
     state.saasEbayRefreshProofStatus = null;
     state.saasEbayRefreshProofStatusStoreId = "";
     state.saasPostPublishCockpit = null;
-    state.saasOwnerLaunchControl = null;
-    state.saasEdgeCutoverPreflight = null;
     state.saasDataPackets = [];
     state.saasIpRiskScreening = null;
     state.saasQueueAdapters = null;
@@ -29974,10 +29365,6 @@ async function refreshSaasState(options = {}) {
     state.saasOauthRequests = [];
     state.saasError = `工作台后端暂时不可用，或需要重新登录：${error.message}`;
     state.saasMediaAssetJobs = [];
-    if (!state.saasReadiness) {
-      await refreshSaasPublicReadiness({ render: false });
-      if (!isCurrentRefresh()) return;
-    }
     if (!silent) showActionToast("工作台后端未连接：请登录后读取真实店铺结果。");
   } finally {
     if (!isCurrentRefresh()) return;
@@ -29988,42 +29375,6 @@ async function refreshSaasState(options = {}) {
     renderStoreContext();
     setView(activeSaasRefreshView("cockpit"), { preserveFlowKey: true });
     if (state.saasProtectedStateReady) state.saasStartupRequestedView = "";
-  }
-}
-
-async function refreshSaasOwnerLaunchControl(options = {}) {
-  const { silent = false } = options;
-  if (!hasSaasProtectedSessionCandidate()) {
-    if (!silent) showActionToast("请先登录捷境账号，再刷新主理人上线控制台。");
-    return null;
-  }
-  const payload = await optionalSaasFetchFast("/owner/launch-control", { owner_launch_control: state.saasOwnerLaunchControl || null }, 15000);
-  state.saasOwnerLaunchControl = payload.owner_launch_control || state.saasOwnerLaunchControl || null;
-  renderSaasBackendPanel();
-  renderGlobalLoopWorkbench();
-  renderStoreContext();
-  setView(state.view || "connect", { preserveFlowKey: true });
-  if (!silent && state.saasOwnerLaunchControl) {
-    showActionToast("主理人上线控制台已刷新；没有触发 eBay OAuth、Stripe Checkout 或真实平台写入。");
-  }
-  return state.saasOwnerLaunchControl;
-}
-
-async function reconcileSaasOwnerReliabilityAlerts() {
-  if (!requireSaasProtectedSessionForAction()) return;
-  try {
-    const payload = await saasFetch("/owner/operations-reliability-alerts/reconcile", {
-      method: "POST",
-      body: JSON.stringify({}),
-    });
-    state.saasOperationsOverview = payload.operations_overview || state.saasOperationsOverview || null;
-    renderSaasBackendPanel();
-    renderGlobalLoopWorkbench();
-    renderStoreContext();
-    setView(state.view || "connect", { preserveFlowKey: true });
-    showActionToast("告警状态已评估；仅更新内部值班记录，没有触发支付、eBay 或供应商动作。");
-  } catch (error) {
-    showActionToast(`告警状态评估失败：${String(error.message || error)}`);
   }
 }
 
@@ -30762,52 +30113,6 @@ function prepareSaasProductFeedbackScopeAfterIdentity() {
   renderWorkflowFeedbackWidget();
   if (!migration.storage_failed) void flushSaasProductFeedbackOutbox({ scope, trigger: "identity" });
   return true;
-}
-
-async function acknowledgeSaasOwnerReliabilityAlert(button) {
-  if (!requireSaasProtectedSessionForAction()) return;
-  const scope = String(button?.dataset?.reliabilityScope || "");
-  const actionKey = String(button?.dataset?.reliabilityAction || "");
-  try {
-    const payload = await saasFetch("/owner/operations-reliability-alerts/acknowledge", {
-      method: "POST",
-      body: JSON.stringify({ scope, action_key: actionKey }),
-    });
-    state.saasOperationsOverview = payload.operations_overview || state.saasOperationsOverview || null;
-    renderSaasBackendPanel();
-    renderGlobalLoopWorkbench();
-    renderStoreContext();
-    setView(state.view || "connect", { preserveFlowKey: true });
-    showActionToast("内部处理进度已记录；没有触发任何商家侧或外部平台动作。");
-  } catch (error) {
-    showActionToast(`处理进度没有保存：${String(error.message || error)}`);
-  }
-}
-
-function maybeRefreshSaasOwnerLaunchControlForActiveTab() {
-  if (state.saasSettingsTab !== "launch") return;
-  if (!saasOwnerLaunchCanView()) return;
-  if (state.saasOwnerLaunchControl) return;
-  refreshSaasOwnerLaunchControl({ silent: true });
-}
-
-async function refreshSaasPublicReadiness(options = {}) {
-  const { render = true } = options;
-  try {
-    const readinessPayload = await saasFetch("/readiness/product-saas");
-    state.saasReadiness = readinessPayload.readiness || state.saasReadiness || null;
-  } catch (error) {
-    if (!state.saasReadiness) {
-      state.saasError = state.saasError || `SaaS readiness unavailable: ${error.message}`;
-    }
-  } finally {
-    syncSaasPublicMvpMode();
-    if (render) {
-      renderSaasBackendPanel();
-      renderGlobalLoopWorkbench();
-      if (state.view === "cockpit") renderSaasCockpitRealWorkbench();
-    }
-  }
 }
 
 function applySaasReportsToActivities() {
@@ -34033,7 +33338,7 @@ async function startSaasListingBackendWorkflow() {
     state.saasLastWorkflowTaskId = taskId || state.saasLastWorkflowTaskId;
     if (payload.public_search_market_handoff) state.saasLastPublicSearchHandoff = payload.public_search_market_handoff;
     if (payload.worker_result) applySaasWorkerPayload(payload.worker_result);
-    await refreshSaasState({ silent: true, refreshLaunchGate: false });
+    await refreshSaasState({ silent: true });
     const generatedListingReport = (state.saasReports || []).find(
       (record) => record.task_id === taskId && ["listing.package", "product.listing"].includes(record.report_type || ""),
     );
@@ -34111,173 +33416,6 @@ function runSaasPreTestFormCheck() {
   showActionToast(hasRed ? "试跑体检已完成：红项阻断真实发布，先补资料。" : "试跑体检已完成：可以生成发布确认单。");
 }
 
-async function runSaasBillingTestEvent(button) {
-  const action = String(button?.dataset?.billingTestAction || "activate").trim().toLowerCase();
-  const planKey = String(
-    button?.dataset?.billingPlanKey ||
-      state.saasBillingUsage?.subscription?.plan_key ||
-      state.saasBillingPlan?.default_plan_key ||
-      "operator",
-  )
-    .trim()
-    .toLowerCase();
-  state.saasLoading = true;
-  renderSaasConnectCenter(document.querySelector("#view-connect"));
-  try {
-    const payload = await saasFetch("/billing/test-event", {
-      method: "POST",
-      body: JSON.stringify({ action, plan_key: planKey }),
-    });
-    state.saasBillingTestEvent = {
-      ...(payload.billing_test_event || {}),
-      ui_applied_at: new Date().toISOString(),
-    };
-    await refreshSaasState({ silent: true, refreshLaunchGate: false });
-    renderSaasConnectCenter(document.querySelector("#view-connect"));
-    showActionToast("测试计费事件已走完后端权益和 quota 管线；没有真实扣费。");
-  } catch (error) {
-    state.saasBillingTestEvent = {
-      ok: false,
-      status: "blocked",
-      action,
-      plan_key: planKey,
-      message: String(error.message || error),
-      ui_applied_at: new Date().toISOString(),
-      creates_real_checkout_session: false,
-      calls_stripe_api: false,
-      triggers_real_charge: false,
-      charge_now_allowed: false,
-      frontend_gets_payment_secret: false,
-      secret_exposed: false,
-    };
-    renderSaasConnectCenter(document.querySelector("#view-connect"));
-    showActionToast("测试计费事件没有执行成功；没有真实扣费。");
-  } finally {
-    state.saasLoading = false;
-    renderSaasConnectCenter(document.querySelector("#view-connect"));
-  }
-}
-
-function merchantSafeWechatZeroChargeRehearsal(value) {
-  const source = value && typeof value === "object" ? value : {};
-  const allowedReasons = new Set(["", "isolated_rehearsal_check_failed", "isolated_rehearsal_internal_failure", "deployment_build_artifact_unavailable"]);
-  return {
-    contract_version:
-      source.contract_version === "2026-08-11-wechat-pay-zero-charge-rehearsal-v1"
-        ? source.contract_version
-        : "",
-    mode: source.mode === "isolated_fake_transport_zero_charge" ? source.mode : "",
-    status: source.status === "ready" ? "ready" : "blocked",
-    reason: allowedReasons.has(source.reason) ? source.reason : "unrecognized_rehearsal_result",
-    evidence_recorded: source.evidence_recorded === true,
-    ready_for_owner_review: source.ready_for_owner_review === true,
-    fake_transport_call_count: Number.isSafeInteger(source.fake_transport_call_count)
-      ? Math.max(0, Math.min(source.fake_transport_call_count, 20))
-      : 0,
-    creates_real_order: source.creates_real_order === true,
-    calls_external_api: source.calls_external_api === true,
-    calls_external_payment_api: source.calls_external_payment_api === true,
-    triggers_real_charge: source.triggers_real_charge === true,
-    triggers_real_refund: source.triggers_real_refund === true,
-    charge_allowed: source.charge_allowed === true,
-    public_charging_allowed: source.public_charging_allowed === true,
-    secret_exposed: source.secret_exposed === true,
-  };
-}
-
-function saasCanRunWechatZeroChargeRehearsal() {
-  const role = String(state.saasTeamMember?.role || "").trim().toLowerCase();
-  const permissions = Array.isArray(state.saasPermissions) ? state.saasPermissions : [];
-  return role === "owner" && permissions.includes("manage_billing");
-}
-
-async function runSaasWechatZeroChargeRehearsal() {
-  if (!saasCanRunWechatZeroChargeRehearsal()) {
-    showActionToast("只有当前 Owner 且具备账单管理权限时才能运行零扣费演练。");
-    return;
-  }
-  if (saasWechatZeroChargeRehearsalAttempted) {
-    showActionToast("本页已经发起过一次零扣费演练；系统不会自动重试。");
-    return;
-  }
-  saasWechatZeroChargeRehearsalAttempted = true;
-  state.saasLoading = true;
-  renderSaasConnectCenter(document.querySelector("#view-connect"));
-  try {
-    const payload = await saasFetch("/billing/wechat-pay/zero-charge-rehearsal", {
-      method: "POST",
-      body: JSON.stringify({ exact_confirmation: "RUN WECHAT ZERO CHARGE REHEARSAL" }),
-    });
-    const result = merchantSafeWechatZeroChargeRehearsal(payload.wechat_pay_zero_charge_rehearsal);
-    state.saasWechatPayZeroChargeRehearsal = result;
-    await refreshSaasState({ silent: true, refreshLaunchGate: true });
-    showActionToast(
-      result.status === "ready" && result.evidence_recorded
-        ? "微信零扣费演练已完成并写入审计；没有创建真实订单、调用微信、扣款或退款。"
-        : "零扣费演练未形成有效证据；没有创建真实订单、调用微信、扣款或退款，也不会自动重试。",
-    );
-  } catch (_error) {
-    state.saasWechatPayZeroChargeRehearsal = merchantSafeWechatZeroChargeRehearsal({
-      status: "blocked",
-      reason: "isolated_rehearsal_internal_failure",
-    });
-    showActionToast("零扣费演练请求未完成；没有创建真实订单、调用微信、扣款或退款，也不会自动重试。");
-  } finally {
-    state.saasLoading = false;
-    renderSaasConnectCenter(document.querySelector("#view-connect"));
-  }
-}
-
-async function runSaasBillingProviderRehearsal(button) {
-  const action = String(button?.dataset?.billingProviderAction || "activate").trim().toLowerCase();
-  const planKey = String(
-    button?.dataset?.billingPlanKey ||
-      state.saasBillingUsage?.subscription?.plan_key ||
-      state.saasBillingPlan?.default_plan_key ||
-      "starter",
-  )
-    .trim()
-    .toLowerCase();
-  state.saasLoading = true;
-  renderSaasConnectCenter(document.querySelector("#view-connect"));
-  try {
-    const payload = await saasFetch("/billing/provider-rehearsal", {
-      method: "POST",
-      body: JSON.stringify({ action, plan_key: planKey }),
-    });
-    const result = payload.billing_provider_rehearsal || {};
-    state.saasBillingProviderRehearsal = {
-      ...result,
-      ui_applied_at: new Date().toISOString(),
-    };
-    await refreshSaasState({ silent: true, refreshLaunchGate: false });
-    renderSaasConnectCenter(document.querySelector("#view-connect"));
-    showActionToast("正式支付演练已走完后端查单/签名证明、订阅事件和 quota 管线；没有真实扣费。");
-  } catch (error) {
-    state.saasBillingProviderRehearsal = {
-      ok: false,
-      status: "billing_provider_rehearsal_blocked",
-      action,
-      plan_key: planKey,
-      message: String(error.message || error),
-      ready_for_paid_launch: false,
-      public_charging_allowed: false,
-      creates_real_checkout_session: false,
-      calls_external_payment_api: false,
-      triggers_real_charge: false,
-      charge_now_allowed: false,
-      frontend_gets_payment_secret: false,
-      secret_exposed: false,
-      ui_applied_at: new Date().toISOString(),
-    };
-    renderSaasConnectCenter(document.querySelector("#view-connect"));
-    showActionToast("正式支付演练仍有阻塞；没有创建真实支付、没有扣费。");
-  } finally {
-    state.saasLoading = false;
-    renderSaasConnectCenter(document.querySelector("#view-connect"));
-  }
-}
-
 function renderSaasBillingActionSurfaces() {
   renderSaasConnectCenter(document.querySelector("#view-connect"));
   renderSaasBackendPanel();
@@ -34294,7 +33432,7 @@ async function runSaasManualBetaCreateOrder(button) {
     });
     const order = payload.manual_beta_payment_order || {};
     state.saasManualBetaPaymentOrders = [order, ...(state.saasManualBetaPaymentOrders || []).filter((item) => item?.order_id !== order.order_id)];
-    await refreshSaasState({ silent: true, refreshLaunchGate: false });
+    await refreshSaasState({ silent: true });
     showActionToast("试用订阅申请已生成：确认后会显示可用期限和额度状态。");
   } catch (error) {
     showActionToast(`试用订阅申请没有提交成功：${String(error.message || error)}`);
@@ -34318,7 +33456,7 @@ async function runSaasManualBetaConfirmOrder(button) {
       body: JSON.stringify({ received_amount_cny: 99 }),
     });
     const confirmation = payload.manual_beta_payment_confirmation || {};
-    await refreshSaasState({ silent: true, refreshLaunchGate: false });
+    await refreshSaasState({ silent: true });
     showActionToast(
       confirmation.status === "manual_beta_payment_already_confirmed"
         ? "这张内测付款单已经确认过，权益状态已刷新。"
@@ -34446,7 +33584,7 @@ async function runSaasDomesticBillingQueryOrder(button, options = {}) {
       const purchaseType = String(result.purchase_type || previousCheckout?.purchase_type || matchedOrder?.purchase_type || "subscription");
       stopSaasDomesticBillingPoll();
       state.saasDomesticBillingCheckout = null;
-      await refreshSaasState({ silent: true, refreshLaunchGate: false });
+      await refreshSaasState({ silent: true });
       renderSaasBillingActionSurfaces();
       showActionToast(purchaseType === "media_points" ? "付款已确认，素材点已经到账。" : "付款已确认，所选软件套餐已经开通。");
       return false;
@@ -34454,7 +33592,7 @@ async function runSaasDomesticBillingQueryOrder(button, options = {}) {
     if (result.status === "closed" || result.status === "payment_not_completed" || result.provider_query_required === false) {
       stopSaasDomesticBillingPoll();
       state.saasDomesticBillingCheckout = null;
-      await refreshSaasState({ silent: true, refreshLaunchGate: false });
+      await refreshSaasState({ silent: true });
       renderSaasBillingActionSurfaces();
       if (!options.silent) showActionToast("这张订单已结束，没有发生扣款。");
       return false;
@@ -34476,7 +33614,7 @@ async function runSaasDomesticBillingCloseOrder(button) {
     await saasFetch(`/billing/domestic/orders/${encodeURIComponent(orderId)}/close`, { method: "POST", body: "{}" });
     stopSaasDomesticBillingPoll();
     state.saasDomesticBillingCheckout = null;
-    await refreshSaasState({ silent: true, refreshLaunchGate: false });
+    await refreshSaasState({ silent: true });
     showActionToast("本次未付款订单已取消，没有发生扣款。");
   } catch (error) {
     showActionToast(`订单没有取消成功：${String(error.message || error)}`);
@@ -34501,7 +33639,7 @@ async function runSaasDomesticBillingRefundRequest(button) {
       method: "POST",
       body: JSON.stringify({ reason }),
     });
-    await refreshSaasState({ silent: true, refreshLaunchGate: false });
+    await refreshSaasState({ silent: true });
     showActionToast("退款申请已提交，客服审核后会更新处理结果。");
   } catch (error) {
     showActionToast(`退款申请没有提交成功：${String(error.message || error)}`);
@@ -34528,10 +33666,6 @@ function handleSaasAction(button) {
   if (action === "open-public-home") {
     closeAccountMenu();
     openCurrentPublicHomepage();
-    return;
-  }
-  if (action === "refresh-owner-launch-control") {
-    refreshSaasOwnerLaunchControl();
     return;
   }
   if (action === "open-connect") {
@@ -34616,10 +33750,6 @@ function handleSaasAction(button) {
     showActionToast("已打开 eBay 官方商业政策页。补齐付款、配送和退货政策后再更新只读资料。");
     return;
   }
-  if (action === "copy-saas-status") {
-    copySaasStatusSummary();
-    return;
-  }
   if (action === "copy-ebay-return-url") {
     copySaasEbayCallbackUrl();
     return;
@@ -34642,23 +33772,6 @@ function handleSaasAction(button) {
     "verify-model-connection",
     "run-model-value-rehearsal",
     "refresh-merchant-memory",
-    "download-account-snapshot",
-    "copy-owner-review-packet",
-    "download-owner-review-packet",
-    "copy-launch-rehearsal-audit",
-    "download-launch-rehearsal-audit",
-    "copy-release-history",
-    "download-release-history",
-    "copy-continuity-handoff",
-    "download-continuity-handoff",
-    "copy-cutover-decision-checklist",
-    "download-cutover-decision-checklist",
-    "copy-final-launch-rehearsal-record",
-    "download-final-launch-rehearsal-record",
-    "copy-owner-paid-launch-dossier",
-    "download-owner-paid-launch-dossier",
-    "copy-prelaunch-acceptance-report",
-    "download-prelaunch-acceptance-report",
     "save-source-record",
     "clear-source-records",
     "copy-source-records",
@@ -34677,9 +33790,6 @@ function handleSaasAction(button) {
     "revise-confirmation",
     "recover-publish",
     "create-cleanup-plan",
-    "billing-test-event",
-    "billing-provider-rehearsal",
-    "wechat-zero-charge-rehearsal",
     "manual-beta-create-order",
     "manual-beta-confirm-order",
     "domestic-billing-create-order",
@@ -34688,18 +33798,8 @@ function handleSaasAction(button) {
     "domestic-billing-close-order",
     "domestic-billing-refund-request",
     "media-credit-purchase",
-    "reconcile-owner-reliability-alerts",
-    "acknowledge-owner-reliability-alert",
   ]);
   if (protectedActions.has(action) && !requireSaasProtectedSessionForAction()) return;
-  if (action === "reconcile-owner-reliability-alerts") {
-    reconcileSaasOwnerReliabilityAlerts();
-    return;
-  }
-  if (action === "acknowledge-owner-reliability-alert") {
-    acknowledgeSaasOwnerReliabilityAlert(button);
-    return;
-  }
   if (action === "media-credit-purchase") {
     runSaasDomesticBillingCreateOrder({
       dataset: { domesticPlanKey: button.dataset.mediaCreditPackKey || "" },
@@ -34778,74 +33878,6 @@ function handleSaasAction(button) {
     refreshSaasMerchantMemoryFromWorkbench();
     return;
   }
-  if (action === "download-account-snapshot") {
-    downloadSaasAccountSnapshot();
-    return;
-  }
-  if (action === "copy-owner-review-packet") {
-    copySaasOwnerReviewPacket();
-    return;
-  }
-  if (action === "download-owner-review-packet") {
-    downloadSaasOwnerReviewPacket();
-    return;
-  }
-  if (action === "copy-launch-rehearsal-audit") {
-    copySaasLaunchRehearsalAudit();
-    return;
-  }
-  if (action === "download-launch-rehearsal-audit") {
-    downloadSaasLaunchRehearsalAudit();
-    return;
-  }
-  if (action === "copy-release-history") {
-    copySaasReleaseHistory();
-    return;
-  }
-  if (action === "download-release-history") {
-    downloadSaasReleaseHistory();
-    return;
-  }
-  if (action === "copy-continuity-handoff") {
-    copySaasContinuityHandoff();
-    return;
-  }
-  if (action === "download-continuity-handoff") {
-    downloadSaasContinuityHandoff();
-    return;
-  }
-  if (action === "copy-cutover-decision-checklist") {
-    copySaasCutoverDecisionChecklist();
-    return;
-  }
-  if (action === "download-cutover-decision-checklist") {
-    downloadSaasCutoverDecisionChecklist();
-    return;
-  }
-  if (action === "copy-final-launch-rehearsal-record") {
-    copySaasFinalLaunchRehearsalRecord();
-    return;
-  }
-  if (action === "download-final-launch-rehearsal-record") {
-    downloadSaasFinalLaunchRehearsalRecord();
-    return;
-  }
-  if (action === "copy-owner-paid-launch-dossier") {
-    copySaasOwnerPaidLaunchDossier();
-    return;
-  }
-  if (action === "download-owner-paid-launch-dossier") {
-    downloadSaasOwnerPaidLaunchDossier();
-    return;
-  }
-  if (action === "copy-prelaunch-acceptance-report") {
-    copySaasPrelaunchAcceptanceReport();
-    return;
-  }
-  if (action === "download-prelaunch-acceptance-report") {
-    downloadSaasPrelaunchAcceptanceReport();
-    return;
-  }
   if (action === "save-source-record") {
     addManualSaasSourceRecordFromSettings();
     return;
@@ -34891,18 +33923,6 @@ function handleSaasAction(button) {
     createSaasTestListingCleanupPlan(button.dataset.saasConfirmation || "");
     return;
   }
-  if (action === "billing-test-event") {
-    runSaasBillingTestEvent(button);
-    return;
-  }
-  if (action === "billing-provider-rehearsal") {
-    runSaasBillingProviderRehearsal(button);
-    return;
-  }
-  if (action === "wechat-zero-charge-rehearsal") {
-    runSaasWechatZeroChargeRehearsal();
-    return;
-  }
   if (action === "manual-beta-create-order") {
     runSaasManualBetaCreateOrder(button);
     return;
@@ -34946,7 +33966,6 @@ async function refreshRuntimeState(options = {}) {
     state.runtimeCapabilities = null;
     state.runtimeModelStatus = null;
     state.runtimeProviderStatus = null;
-    state.runtimeProviderJobContracts = null;
     state.runtimeAgentJobSpecs = null;
     state.runtimeProgressScorecard = null;
     state.runtimeValidationSummary = null;
@@ -34964,14 +33983,13 @@ async function refreshRuntimeState(options = {}) {
   renderRuntimeConfirmPanel();
   try {
     await runtimeFetch("/health");
-    const [toolsPayload, runsPayload, knowledgePayload, capabilitiesPayload, modelPayload, providerPayload, providerJobPayload, agentJobPayload, progressPayload] = await Promise.all([
+    const [toolsPayload, runsPayload, knowledgePayload, capabilitiesPayload, modelPayload, providerPayload, agentJobPayload, progressPayload] = await Promise.all([
       runtimeFetch("/tools"),
       runtimeFetch("/runs"),
       runtimeFetch("/knowledge"),
       runtimeFetch("/capabilities"),
       runtimeFetch("/model-status"),
       runtimeFetch("/provider-status"),
-      runtimeFetch("/provider-job-contracts"),
       runtimeFetch("/agent-job-specs"),
       runtimeFetch("/progress-scorecard"),
     ]);
@@ -34981,7 +33999,6 @@ async function refreshRuntimeState(options = {}) {
     state.runtimeCapabilities = capabilitiesPayload.capability_profile || null;
     state.runtimeModelStatus = modelPayload.model_status || null;
     state.runtimeProviderStatus = providerPayload || null;
-    state.runtimeProviderJobContracts = providerJobPayload.provider_job_contracts || null;
     state.runtimeAgentJobSpecs = agentJobPayload.agent_job_specs || null;
     state.runtimeProgressScorecard = progressPayload.progress_scorecard || null;
     state.runtimeRuns = runsPayload.runs || [];
@@ -35021,7 +34038,6 @@ async function refreshRuntimeState(options = {}) {
     state.runtimeCapabilities = null;
     state.runtimeModelStatus = null;
     state.runtimeProviderStatus = null;
-    state.runtimeProviderJobContracts = null;
     state.runtimeAgentJobSpecs = null;
     state.runtimeProgressScorecard = null;
     state.runtimeValidationSummary = null;
@@ -37689,18 +36705,16 @@ function saasDomesticBillingStatusLabel(status) {
 function renderSaasMerchantMediaCreditsPanel() {
   const usage = state.saasBillingUsage && typeof state.saasBillingUsage === "object" ? state.saasBillingUsage : {};
   const mediaCredits = usage.media_credits && typeof usage.media_credits === "object" ? usage.media_credits : {};
-  const account = mediaCredits.account && typeof mediaCredits.account === "object" ? mediaCredits.account : {};
   const purchase = mediaCredits.purchase && typeof mediaCredits.purchase === "object" ? mediaCredits.purchase : {};
   const packs = Array.isArray(mediaCredits.packs) ? mediaCredits.packs : [];
-  const recent = Array.isArray(mediaCredits.recent_activity) ? mediaCredits.recent_activity.slice(0, 5) : [];
-  const available = Number(account.available_points || 0);
-  const included = Number(account.included_points || 0);
-  const purchased = Number(account.purchased_points || 0);
-  const ownerTesting = Number(account.owner_testing_points || 0);
-  const reserved = Number(account.reserved_points || 0);
-  const spent = Number(account.lifetime_spent_points || 0);
-  const includedExpiryLabel = saasDomesticBillingDateLabel(account.included_expires_at);
-  const ownerTestingExpiryLabel = saasDomesticBillingDateLabel(account.owner_testing_expires_at);
+  const recent = [];
+  const available = Number(mediaCredits.available_points || mediaCredits.total_points || 0);
+  const included = Number(mediaCredits.included_points || 0);
+  const purchased = Number(mediaCredits.purchased_points || 0);
+  const promotional = Number(mediaCredits.promotional_points || 0);
+  const reserved = 0;
+  const spent = 0;
+  const includedExpiryLabel = "";
   const purchaseOpen = purchase.purchase_enabled === true && purchase.status === "available";
   const operationLabels = {
     grant: "入账",
@@ -37723,7 +36737,7 @@ function renderSaasMerchantMediaCreditsPanel() {
         <div>
           <span>素材点</span>
           <strong>素材点余额 ${available.toLocaleString("zh-CN")}</strong>
-          <p>当前素材点用于图片生成：套餐、已购买和内部测试额度分别记账。生成前预估，完成后按实际结算；图片按成功张数扣点，失败、超时或门禁未通过会返还。视频点数计价尚未开放。</p>
+          <p>当前素材点用于图片生成：套餐内、已购买和活动赠送额度分开计算。生成前预估，完成后按实际结算；失败、超时或门禁未通过会返还。</p>
         </div>
         <em>${purchaseOpen ? "可购买" : "购买入口准备中"}</em>
       </div>
@@ -37731,7 +36745,7 @@ function renderSaasMerchantMediaCreditsPanel() {
         <article class="is-green">
           <span>可用</span>
           <strong>${available.toLocaleString("zh-CN")}</strong>
-          <small>套餐、已购买与内部测试额度合计</small>
+          <small>套餐内、已购买与活动赠送额度合计</small>
         </article>
         <article class="is-green">
           <span>套餐内</span>
@@ -37743,11 +36757,11 @@ function renderSaasMerchantMediaCreditsPanel() {
           <strong>${purchased.toLocaleString("zh-CN")}</strong>
           <small>套餐点用完后使用 · 不随套餐到期</small>
         </article>
-        ${ownerTesting > 0
+        ${promotional > 0
           ? `<article class="is-green">
-              <span>内部测试额度</span>
-              <strong>${ownerTesting.toLocaleString("zh-CN")}</strong>
-              <small>${ownerTestingExpiryLabel ? `${escapeHtml(ownerTestingExpiryLabel)} 到期` : "仅限项目所有者验收使用"}</small>
+              <span>活动赠送</span>
+              <strong>${promotional.toLocaleString("zh-CN")}</strong>
+              <small>由商家权益明确发放</small>
             </article>`
           : ""}
         <article class="${reserved ? "is-amber" : "is-green"}">
@@ -38171,1160 +37185,6 @@ function renderSaasMerchantBillingEntitlementPathPanel(ctx = saasMerchantWorkben
   `;
 }
 
-function renderSaasBillingTransitionPathPanel(ctx = saasMerchantWorkbenchContext()) {
-  const billing = saasMerchantBillingGuardrailState();
-  const domesticBilling = saasMerchantDomesticBillingState();
-  const hasExternalProvider = domesticBilling.online || Boolean(billing.provider.external_paid_provider_configured);
-  const manualBetaMode = Boolean(
-    billing.provider.manual_beta_private_provider_configured ||
-      billing.subscription?.provider === "manual_beta" ||
-      state.saasManualBetaPaymentOrders?.length,
-  );
-  const quotaReady = Boolean(billing.quotaEnforcementEnabled);
-  const pathRows = domesticBilling.configuredPath
-    ? [
-        {
-          label: "现在",
-          title: domesticBilling.online ? "微信扫码付款可用" : "公开付款开关仍关闭",
-          detail: domesticBilling.online ? "商家主动创建订单后才生成微信付款二维码。" : "链路已配置，但不会向商家生成可付款二维码。",
-          tone: domesticBilling.online ? "green" : "amber",
-        },
-        {
-          label: "付款",
-          title: "商家主动微信扫码",
-          detail: "每次购买 30 天，不输入银行卡，不会自动续费或自动扣款。",
-          tone: domesticBilling.online ? "green" : "amber",
-        },
-        {
-          label: "到账",
-          title: "后端验签确认后开通",
-          detail: "只以微信支付签名回调或安全查单结果为准，浏览器不能自行发放权益。",
-          tone: billing.entitlementActive ? "green" : "amber",
-        },
-        {
-          label: "续购",
-          title: "到期后由商家自主续购",
-          detail: "再次购买前重新确认价格和期限，不设置自动扣款。",
-          tone: "green",
-        },
-      ]
-    : [
-        {
-          label: "现在",
-          title: "当前不会自动扣费",
-          detail: "页面只显示订阅状态和套餐说明；在线付款入口未开放前，不会主动向商家扣款。",
-          tone: manualBetaMode ? "green" : "amber",
-        },
-        {
-          label: "开通",
-          title: "按客服指引开通订阅",
-          detail: "付款或试用资格确认后，系统更新基础订阅和套餐额度；页面只展示结果，不展示后台处理细节。",
-          tone: manualBetaMode || hasExternalProvider ? "green" : "amber",
-        },
-        {
-          label: "以后",
-          title: "在线付款由已接入的支付方式完成",
-          detail: "正式开放在线付款后，捷境只根据后端确认的支付结果开通套餐和额度。",
-          tone: hasExternalProvider ? "green" : "amber",
-        },
-        {
-          label: "额度",
-          title: "订阅状态驱动发放和停用",
-          detail: "开通、续费、取消、付款失败和退款争议按系统账单状态处理；额度只停高成本任务，历史资料和确认记录保留。",
-          tone: quotaReady ? "green" : "amber",
-        },
-      ];
-  const grantRows = [
-    ["订阅开通", "后台确认后生效", "付款或试用资格确认后写入订阅状态和套餐额度。"],
-    ["用量发放", "按套餐额度更新", "AI、联网报告和素材生成只按套餐额度或实际用量消耗。"],
-    ["安全边界", "浏览器不保存支付资料", "页面不保存卡号、证件、银行卡或支付密钥。"],
-  ];
-  const statusRows = [
-    ["当前状态", domesticBilling.online ? "微信扫码付款可用" : hasExternalProvider ? "在线付款已接入" : manualBetaMode ? "试用订阅可用" : "暂不自动扣费", domesticBilling.online ? "订单到账并由后端确认后开通 30 天权益。" : hasExternalProvider ? "付款成功后按账单状态开通权益。" : "当前不会自动扣款，订阅开通需按页面或客服提示完成。"],
-    ["付费开放", domesticBilling.online ? "单次购买 30 天" : hasExternalProvider ? "可按套餐付款" : "逐步开放", domesticBilling.online ? "商家每次主动扫码购买，不会自动续费。" : hasExternalProvider ? "商家可从订阅页进入付款流程。" : "在线付款入口开放前，页面只显示订阅说明和可用额度。"],
-    ["恢复边界", "不重复连接店铺 / 不重填 AI 连接", "账单恢复只处理订阅状态，不要求商家重新连接店铺或重新输入 AI 连接。"],
-  ];
-  return `
-    <section class="saas-settings-card saas-billing-transition-path" data-billing-transition="merchant_subscription_activation_path_v2" aria-label="订阅开通说明">
-      <div class="saas-settings-card-head">
-        <div>
-          <span>订阅开通说明</span>
-          <strong>${escapeHtml(domesticBilling.configuredPath ? "微信扫码、到账确认、权益开通和自主续购" : "先看当前是否扣费，再看订阅和额度怎么生效")}</strong>
-          <p>${escapeHtml(domesticBilling.configuredPath ? "商家主动创建订单并扫码；系统确认到账后开通 30 天权益，到期后由商家决定是否再次购买。" : "商家只需要知道当前会不会自动扣费、如何开通套餐、额度什么时候生效。支付接入细节不会出现在这里。")}</p>
-        </div>
-        <em>${escapeHtml(hasExternalProvider ? "在线付款可用" : manualBetaMode ? "试用订阅可用" : "暂未自动扣费")}</em>
-      </div>
-      <div class="saas-billing-transition-flow">
-        ${pathRows
-          .map(
-            (row) => `
-              <article class="is-${escapeHtml(row.tone)}">
-                <span>${escapeHtml(row.label)}</span>
-                <strong>${escapeHtml(row.title)}</strong>
-                <small>${escapeHtml(row.detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-billing-transition-grants" aria-label="权益发放依据">
-        ${grantRows
-          .map(
-            ([label, title, detail]) => `
-              <article>
-                <span>${escapeHtml(label)}</span>
-                <strong>${escapeHtml(title)}</strong>
-                <small>${escapeHtml(detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-billing-transition-status" aria-label="当前上线判断">
-        ${statusRows
-          .map(
-            ([label, title, detail]) => `
-              <article>
-                <span>${escapeHtml(label)}</span>
-                <strong>${escapeHtml(title)}</strong>
-                <small>${escapeHtml(detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-billing-transition-safety" hidden aria-hidden="true">
-        <span>manual_beta_to_merchant_payment_transition_v1</span>
-        <span>manual_beta_owner_confirmation_before_entitlement</span>
-        <span>formal_payment_signed_webhook_or_order_query_before_auto_entitlement</span>
-        <span>quota_grant_not_frontend_driven</span>
-        <span>static_qr_never_paid_launch_provider</span>
-        <span>no_repeat_oauth_for_billing_recovery</span>
-        <span>no_model_key_reentry_for_billing_recovery</span>
-        <span>payment_mode=${escapeHtml(domesticBilling.configuredPath ? "wechat_native_qr" : "external_provider")}</span>
-        <span>renewal_mode=${escapeHtml(domesticBilling.configuredPath ? "merchant_confirmed_one_time_30_day" : "provider_subscription")}</span>
-        <span>triggers_real_charge=false</span>
-        <span>frontend_gets_payment_secret=false</span>
-        <span>secret_exposed=false</span>
-        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
-      </div>
-    </section>
-  `;
-}
-
-function renderSaasWechatZeroChargeRehearsalPanel(ctx = saasMerchantWorkbenchContext()) {
-  if (!saasCanRunWechatZeroChargeRehearsal()) return "";
-  const result =
-    state.saasWechatPayZeroChargeRehearsal && typeof state.saasWechatPayZeroChargeRehearsal === "object"
-      ? state.saasWechatPayZeroChargeRehearsal
-      : {};
-  const completed = result.status === "ready" && result.evidence_recorded === true;
-  const unsafe = [
-    result.creates_real_order,
-    result.calls_external_api,
-    result.calls_external_payment_api,
-    result.triggers_real_charge,
-    result.triggers_real_refund,
-    result.charge_allowed,
-    result.public_charging_allowed,
-    result.secret_exposed,
-  ].some((value) => value === true);
-  const statusLabel = completed && !unsafe
-    ? "证据已记录"
-    : saasWechatZeroChargeRehearsalAttempted
-      ? state.saasLoading
-        ? "演练进行中"
-        : "本页已停止"
-      : "等待 Owner 发起";
-  const buttonLabel = completed ? "本页已完成" : saasWechatZeroChargeRehearsalAttempted ? "本页不再重试" : "运行一次隔离演练";
-  const disabled = state.saasLoading || saasWechatZeroChargeRehearsalAttempted ? "disabled" : "";
-  return `
-    <section class="saas-settings-card saas-billing-provider-rehearsal" data-wechat-zero-charge-rehearsal="wechat_pay_zero_charge_control_room_v1" aria-label="微信支付零扣费上线证据">
-      <div class="saas-settings-card-head">
-        <div>
-          <span>微信支付上线前证据</span>
-          <strong>只运行隔离假支付方，不接触真实订单和资金</strong>
-          <p>仅当前 Owner 且具备账单管理权限时可运行一次。后端会在临时隔离数据库里验证 Native 下单合同、签名回调、权益生效、退款确认和账务恢复；不会调用微信 API，不会生成可付款二维码，也不会改变当前账号的套餐或额度。</p>
-        </div>
-        <em>${escapeHtml(statusLabel)}</em>
-      </div>
-      <div class="saas-billing-provider-rehearsal-result">
-        <article class="${completed && !unsafe ? "is-green" : result.status ? "is-amber" : "is-neutral"}">
-          <span>审计证据</span>
-          <strong>${escapeHtml(completed && !unsafe ? "当前部署构建已完成零扣费演练" : "尚未形成当前部署的有效证据")}</strong>
-          <small>${escapeHtml(
-            completed && !unsafe
-              ? `隔离假传输调用 ${Number(result.fake_transport_call_count || 0)} 次；真实支付调用、订单、扣款、退款和密钥暴露均为 0。`
-              : "该动作不会开放公开收费，也不会把浏览器结果当作支付成功。",
-          )}</small>
-        </article>
-      </div>
-      <div class="saas-billing-provider-rehearsal-actions" aria-label="微信零扣费演练动作">
-        <button class="secondary-action compact-action" type="button" data-saas-action="wechat-zero-charge-rehearsal" ${disabled}>
-          <strong>${escapeHtml(buttonLabel)}</strong>
-          <small>一次性、无外联、无订单、无扣款、无退款</small>
-        </button>
-      </div>
-      <div class="saas-billing-provider-rehearsal-safety" hidden aria-hidden="true">
-        <span>wechat_pay_zero_charge_control_room_v1</span>
-        <span>owner_and_manage_billing_only</span>
-        <span>isolated_fake_transport_zero_charge</span>
-        <span>creates_real_order=false</span>
-        <span>calls_external_payment_api=false</span>
-        <span>triggers_real_charge=false</span>
-        <span>triggers_real_refund=false</span>
-        <span>changes_subscription_or_quota=false</span>
-        <span>public_charging_allowed=false</span>
-        <span>secret_exposed=false</span>
-        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
-      </div>
-    </section>
-  `;
-}
-
-function renderSaasBillingProviderRehearsalPanel(ctx = saasMerchantWorkbenchContext()) {
-  const billing = saasMerchantBillingGuardrailState();
-  const summary =
-    state.saasBillingPlan?.billing_test_rehearsal_summary && typeof state.saasBillingPlan.billing_test_rehearsal_summary === "object"
-      ? state.saasBillingPlan.billing_test_rehearsal_summary
-      : {};
-  const latest = billing.providerRehearsal || {};
-  const latestCheckout = latest.checkout && typeof latest.checkout === "object" ? latest.checkout : {};
-  const latestProof = latest.provider_proof && typeof latest.provider_proof === "object" ? latest.provider_proof : {};
-  const latestEvent = latest.billing_event && typeof latest.billing_event === "object" ? latest.billing_event : {};
-  const latestQuota = latest.quota_guardrail && typeof latest.quota_guardrail === "object" ? latest.quota_guardrail : {};
-  const stepsByKey = Object.fromEntries(
-    (Array.isArray(summary.steps) ? summary.steps : [])
-      .filter((item) => item && typeof item === "object")
-      .map((item) => [String(item.key || ""), item]),
-  );
-  const stepReady = (key) => stepsByKey[key]?.status === "ready";
-  const checkoutReady = Boolean(latestCheckout.session_id_present || stepReady("test_checkout_session"));
-  const backendProofReady = Boolean(
-    latestProof.signed_webhook_or_order_query_verified ||
-      latestProof.verified ||
-      stepReady("test_provider_order_query_or_signed_webhook") ||
-      stepReady("backend_order_query_or_signed_webhook_proof"),
-  );
-  const subscriptionReady = Boolean(latestEvent.status === "billing_test_event_applied" || latest.status === "billing_provider_rehearsal_completed");
-  const quotaReady = Boolean(latestQuota.ok || billing.quotaEnforcementEnabled || stepReady("quota_shutdown_closure") || stepReady("quota_guardrail_evaluated"));
-  const resultHasRun = Boolean(Object.keys(latest).length);
-  const statusLabel = resultHasRun
-    ? latest.ok
-      ? "后端演练已完成"
-      : "后端演练仍阻塞"
-    : billing.testProviderReady
-      ? "等待演练"
-      : "等待账单状态";
-  const statusDetail = resultHasRun
-    ? latest.message ||
-      `action=${latest.action || "unknown"} / plan=${latest.plan_key || billing.planKey || "starter"} / paid_launch=${Boolean(latest.ready_for_paid_launch)}`
-    : "这不是公开收费开关；它只证明未来正式收款接入前，服务端可以先验证支付结果，再更新订阅和额度。";
-  const proofRows = [
-    {
-      label: "01",
-      title: "测试 provider 与套餐目录",
-      detail: billing.testProviderReady ? "当前是无扣费 test provider，可以演练订阅生命周期。" : "未进入 test provider 演练模式，不能假装可收费上线。",
-      tone: billing.testProviderReady ? "green" : "amber",
-    },
-    {
-      label: "02",
-      title: "后端查单 / 签名回调先于权益",
-      detail: backendProofReady
-        ? "已证明由后端订单查询或签名回调确认 provider 状态，浏览器不能提交权益。"
-        : "正式支付切换前必须先有后端 proof，不能由前端按钮直接发额度。",
-      tone: backendProofReady ? "green" : "amber",
-    },
-    {
-      label: "03",
-      title: "订阅事件写入审计",
-      detail: subscriptionReady ? "演练事件已落到订阅状态和审计链路。" : "等待演练 activate / invoice_paid / payment_failed / cancel。",
-      tone: subscriptionReady ? "green" : "amber",
-    },
-    {
-      label: "04",
-      title: "Quota hard-stop",
-      detail: quotaReady ? "欠费或取消会阻断高成本任务，不删除历史资料。" : "正式收费前仍要保持 quota 发放和停用证据。",
-      tone: quotaReady ? "green" : "amber",
-    },
-  ];
-  const resultRows = [
-    ["最近动作", latest.action || "not_run", latest.status || statusLabel],
-    ["证明来源", backendProofReady ? "后端 proof" : "等待后端证明", latestProof.proof_source ? "provider 结果只由后端写入" : "签名回调或主动查单通过后才发权益"],
-    ["高成本任务", latestQuota.blocked ? "已停用" : latestQuota.allowed ? "可执行" : "等待状态", latestQuota.reason || "quota 只按后端订阅状态判断"],
-  ];
-  const actions = [
-    ["activate", "开通权益", "模拟 paid/active 后恢复额度"],
-    ["invoice_paid", "续费成功", "模拟账单已付，不触发扣费"],
-    ["payment_failed", "付款失败", "验证高成本任务停用"],
-    ["cancel", "取消订阅", "验证取消后的 quota hard-stop"],
-  ];
-  const disabled = !billing.testProviderReady || state.saasLoading ? "disabled" : "";
-  return `
-    <section class="saas-settings-card saas-billing-provider-rehearsal" data-billing-provider-rehearsal="billing_provider_rehearsal_control_room_v1" aria-label="正式支付 provider 无扣费演练">
-      <div class="saas-settings-card-head">
-        <div>
-          <span>正式支付接入前演练</span>
-          <strong>先证明后端查单 / 签名回调，再允许订阅和额度生效</strong>
-          <p>这张卡只跑无扣费演练：不创建真实支付单、不调用外部支付 API、不收银行卡、不触发真实扣费。它把人工核对过渡到正式收款时最容易出错的“权益发放依据”放到台前。</p>
-        </div>
-        <em>${escapeHtml(statusLabel)}</em>
-      </div>
-      <div class="saas-billing-provider-rehearsal-grid">
-        ${proofRows
-          .map(
-            (row) => `
-              <article class="is-${escapeHtml(row.tone)}">
-                <span>${escapeHtml(row.label)}</span>
-                <strong>${escapeHtml(row.title)}</strong>
-                <small>${escapeHtml(row.detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-billing-provider-rehearsal-result">
-        <article class="${latest.ok ? "is-green" : resultHasRun ? "is-amber" : "is-neutral"}">
-          <span>最近一次结果</span>
-          <strong>${escapeHtml(statusLabel)}</strong>
-          <small>${escapeHtml(statusDetail)}</small>
-        </article>
-        ${resultRows
-          .map(
-            ([label, title, detail]) => `
-              <article>
-                <span>${escapeHtml(label)}</span>
-                <strong>${escapeHtml(title)}</strong>
-                <small>${escapeHtml(detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-billing-provider-rehearsal-actions" aria-label="无扣费 provider 演练动作">
-        ${actions
-          .map(
-            ([action, label, detail]) => `
-              <button class="secondary-action compact-action" type="button" data-saas-action="billing-provider-rehearsal" data-billing-provider-action="${escapeHtml(action)}" data-billing-plan-key="${escapeHtml(billing.planKey || "starter")}" ${disabled}>
-                <strong>${escapeHtml(label)}</strong>
-                <small>${escapeHtml(detail)}</small>
-              </button>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-billing-provider-rehearsal-safety" hidden aria-hidden="true">
-        <span>billing_provider_rehearsal_control_room_v1</span>
-        <span>billing/provider-rehearsal</span>
-        <span>data-billing-provider-action="payment_failed"</span>
-        <span>backend_order_query_or_signed_webhook_before_entitlement</span>
-        <span>browser_cannot_grant_quota</span>
-        <span>no_real_checkout_no_external_api_no_charge</span>
-        <span>ready_for_paid_launch=false</span>
-        <span>public_charging_allowed=false</span>
-        <span>creates_real_checkout_session=false</span>
-        <span>calls_external_payment_api=false</span>
-        <span>triggers_real_charge=false</span>
-        <span>charge_now_allowed=false</span>
-        <span>frontend_gets_payment_secret=false</span>
-        <span>secret_exposed=false</span>
-        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
-      </div>
-    </section>
-  `;
-}
-
-function saasPaidLaunchBlockerCopy(key = "") {
-  const labels = {
-    wechat_pay_native_cutover: ["微信 Native 正式通道", "补齐商户配置、签名支付/退款回调、后端鉴权查单和受控验收。"],
-    no_charge_launch_rehearsal: ["零扣款上线演练", "完成隔离演练、回滚、readiness、浏览器 smoke 和 secret scan。"],
-    payment_merchant_entity_not_ready: ["准备商户主体", "正式收款需要结算主体、服务说明、客服和退款入口。"],
-    mainland_payment_icp_subject_not_ready: ["对齐域名和主体", "国内支付审核常看域名、备案和商户主体一致性。"],
-    domestic_payment_provider_not_ready: ["开通微信商户通道", "公开收费必须使用可签约、可回调、可对账的微信商户通道。"],
-    domestic_payment_provider_not_selected: ["选择微信 Native", "人工收款不能作为公开收费入口。"],
-    domestic_payment_adapter_not_enabled: ["接入后端订单适配器", "浏览器不能直接开通权益，必须由后端创建订单。"],
-    domestic_signed_webhook_not_configured: ["配置签名回调或后端鉴权查单", "只有签名回调或后端鉴权查单通过后才发放权益和额度。"],
-    domestic_live_cutover_not_approved: ["主理人批准 live cutover", "真实收款不能由代码部署自动打开。"],
-    manual_qr_collection_not_paid_launch_ready: ["人工收款仅限内测", "人工收款只可人工对账，不能自动续费、停用和发票审计。"],
-    paid_launch_owner_approval_required: ["等待主理人最终评审", "即使技术证据齐全，真实收费也必须由主理人确认后才能打开。"],
-    final_commercial_smoke_not_verified: ["完成最终商业 smoke", "在收费开关保持关闭时验证注册、支付回调、readiness 和回滚路径。"],
-  };
-  return labels[key] || ["待补生产证据", "未知或畸形阻断项不会直接显示；请从后端安全证据包重新核对。"];
-}
-
-function saasPaidCutoverMatrixCopy(item = {}) {
-  const key = String(item.key || "");
-  const labels = {
-    wechat_pay_native_cutover: ["微信 Native 正式通道", "商户配置、签名回调或后端鉴权查单、受控付款和退款边界必须同时成立。"],
-    no_charge_launch_rehearsal: ["零扣款上线演练", "只在隔离环境验证订单、回调、权益、回滚和安全门禁，不调用真实支付接口。"],
-  };
-  if (labels[key]) return labels[key];
-  return ["未识别的切换证据", "未知或重复证据会按阻断处理，不会自动进入收费评审。"];
-}
-
-function renderSaasBillingPaidLaunchBlockersPanel(ctx = saasMerchantWorkbenchContext()) {
-  const review = saasBillingDomainCutoverReviewState();
-  const matrixRows = review.sections;
-  const blockedMatrix = matrixRows.filter((item) => item.status !== "ready");
-  const blockerKeys = Array.isArray(review.summary.blocked_keys)
-    ? review.summary.blocked_keys.filter((key) => typeof key === "string").slice(0, 4)
-    : [];
-  const visibleBlockers = blockerKeys.length ? blockerKeys : blockedMatrix.map((item) => item.key);
-  const ownerReviewReady = review.readyForOwnerApproval;
-  const phaseRows = [
-    {
-      label: "Provider",
-      title: "微信 Native",
-      detail: "大陆正式收款只认微信商户后端配置，不使用人工二维码作为公开收费入口。",
-      tone: review.sectionByKey.wechat_pay_native_cutover?.status === "ready" ? "green" : "amber",
-    },
-    {
-      label: "Payment proof",
-      title: "签名回调或后端鉴权查单",
-      detail: "支付状态必须由后端官方证据确认，浏览器不能自行发放权益。",
-      tone: review.sectionByKey.wechat_pay_native_cutover?.status === "ready" ? "green" : "amber",
-    },
-    {
-      label: "Release proof",
-      title: "零扣款、回滚与 smoke",
-      detail: "收费前必须在零扣款模式完成 readiness、浏览器、secret scan 和回滚证据。",
-      tone: review.sectionByKey.no_charge_launch_rehearsal?.status === "ready" ? "green" : "amber",
-    },
-    {
-      label: "Owner",
-      title: ownerReviewReady ? "可进入主理人评审" : "继续阻塞公开收费",
-      detail: "真实收费开关只能在证据齐全后由主理人批准，不随代码部署自动开启。",
-      tone: ownerReviewReady ? "green" : "red",
-    },
-  ];
-  const statusLabel = ownerReviewReady ? "可准备评审" : "公开收费仍阻塞";
-  return `
-    <section class="saas-settings-card saas-paid-cutover-blockers" data-paid-cutover-blockers="paid_launch_cutover_blockers_control_room_v1" aria-label="公开收费 cutover 阻断项">
-      <div class="saas-settings-card-head">
-        <div>
-          <span>公开收费 cutover 清单</span>
-          <strong>微信 Native 正式通道与零扣款上线演练缺一不可</strong>
-          <p>这张卡只使用大陆微信支付证据：当前可以继续内测和零扣款演练，但真实客户扣费必须等签名回调或后端鉴权查单、退款边界、回滚证据和主理人批准全部齐备。</p>
-        </div>
-        <em>${escapeHtml(statusLabel)}</em>
-      </div>
-      <div class="saas-paid-cutover-phase-grid">
-        ${phaseRows
-          .map(
-            (row) => `
-              <article class="is-${escapeHtml(row.tone)}">
-                <span>${escapeHtml(row.label)}</span>
-                <strong>${escapeHtml(row.title)}</strong>
-                <small>${escapeHtml(row.detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-paid-cutover-matrix" aria-label="mainland payment cutover matrix">
-        ${matrixRows
-          .map((item) => {
-            const [matrixTitle, matrixDetail] = saasPaidCutoverMatrixCopy(item);
-            return `
-              <article class="${item.status === "ready" ? "is-green" : "is-amber"}">
-                <span>${escapeHtml(item.status === "ready" ? "ready" : "blocked")}</span>
-                <strong>${escapeHtml(matrixTitle)}</strong>
-                <small>${escapeHtml(matrixDetail)}</small>
-              </article>
-            `;
-          })
-          .join("")}
-      </div>
-      <div class="saas-paid-cutover-blocker-list" aria-label="paid launch blockers">
-        ${(visibleBlockers.length ? visibleBlockers : ["paid_launch_owner_approval_required"])
-          .map((key) => {
-            const [title, detail] = saasPaidLaunchBlockerCopy(key);
-            return `
-              <article>
-                <span>阻断项</span>
-                <strong>${escapeHtml(title)}</strong>
-                <small>${escapeHtml(detail)}</small>
-              </article>
-            `;
-          })
-          .join("")}
-      </div>
-      <div class="saas-paid-cutover-actions">
-        <button class="secondary-action compact-action" type="button" data-saas-action="refresh">刷新账单证据</button>
-        <button class="secondary-action compact-action" type="button" data-global-flow-view="confirm">查看确认中心</button>
-      </div>
-      <div class="saas-paid-cutover-safety" hidden aria-hidden="true">
-        <span>paid_launch_cutover_blockers_control_room_v1</span>
-        <span>mainland_payment_cutover_v2</span>
-        <span>wechat_pay_native_cutover</span>
-        <span>no_charge_launch_rehearsal</span>
-        <span>signed_wechat_callback_or_authenticated_query_before_entitlement</span>
-        <span>owner_live_cutover_required_before_public_charge</span>
-        <span>invited_beta_manual_confirmation_not_paid_launch_provider</span>
-        <span>ready_for_owner_approval=${Boolean(ownerReviewReady)}</span>
-        <span>charge_now_allowed=false</span>
-        <span>triggers_real_charge=false</span>
-        <span>triggers_real_refund=false</span>
-        <span>calls_external_payment_api=false</span>
-        <span>triggers_real_platform_write=false</span>
-        <span>frontend_gets_payment_secret=false</span>
-        <span>secret_exposed=false</span>
-        <span>next_blocker=${escapeHtml(visibleBlockers[0] || "owner_review")}</span>
-        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
-      </div>
-    </section>
-  `;
-}
-
-function saasBillingDomainCutoverReviewState() {
-  const cutover =
-    state.saasBillingDomainCutoverRehearsal && typeof state.saasBillingDomainCutoverRehearsal === "object"
-      ? state.saasBillingDomainCutoverRehearsal
-      : {};
-  const summary = cutover.summary && typeof cutover.summary === "object" ? cutover.summary : {};
-  const expectedKeys = ["wechat_pay_native_cutover", "no_charge_launch_rehearsal"];
-  const safetyKeys = [
-    "public_paid_launch_allowed",
-    "charge_now_allowed",
-    "calls_external_payment_api",
-    "triggers_real_charge",
-    "triggers_real_refund",
-    "triggers_ebay_oauth",
-    "triggers_real_platform_write",
-    "frontend_gets_payment_secret",
-    "secret_exposed",
-  ];
-  const rawSections = Array.isArray(cutover.sections) ? cutover.sections : [];
-  const normalizedSections = expectedKeys.map((key) => {
-    const matches = rawSections.filter((item) => item && typeof item === "object" && String(item.key || "") === key);
-    const source = matches.length === 1 ? matches[0] : {};
-    const blockedByValid = Array.isArray(source.blocked_by) && source.blocked_by.every((item) => typeof item === "string" && item);
-    const statusValid = ["ready", "blocked"].includes(source.status);
-    const safetyValid = safetyKeys.every((safetyKey) => source[safetyKey] === false);
-    const readyValid = source.status !== "ready" || (Array.isArray(source.blocked_by) && source.blocked_by.length === 0);
-    return {
-      key,
-      status: matches.length === 1 && statusValid && source.status === "ready" ? "ready" : "blocked",
-      valid: matches.length === 1 && blockedByValid && statusValid && safetyValid && readyValid,
-    };
-  });
-  const preliminaryReadyCount = normalizedSections.filter((item) => item.status === "ready").length;
-  const expectedBlockedKeys = normalizedSections.filter((item) => item.status !== "ready").map((item) => item.key);
-  const summaryBlockedKeys = Array.isArray(summary.blocked_keys) ? summary.blocked_keys : [];
-  const summaryValid =
-    summary.provider === "wechat_pay_native" &&
-    summary.ready_count === preliminaryReadyCount &&
-    summary.total_count === 2 &&
-    summary.blocked_count === 2 - preliminaryReadyCount &&
-    summaryBlockedKeys.length === expectedBlockedKeys.length &&
-    summaryBlockedKeys.every((key, index) => key === expectedBlockedKeys[index]) &&
-    summary.next_step === (expectedBlockedKeys[0] || "");
-  const contractValid =
-    cutover.contract_version === "2026-08-21-mainland-payment-cutover-v2" &&
-    cutover.provider === "wechat_pay_native" &&
-    rawSections.length === 2 &&
-    expectedKeys.every((key) => rawSections.filter((item) => item && typeof item === "object" && item.key === key).length === 1) &&
-    normalizedSections.every((item) => item.valid) &&
-    safetyKeys.every((key) => cutover[key] === false) &&
-    summaryValid &&
-    cutover.status === (preliminaryReadyCount === 2 ? "ready_for_owner_approval" : "blocked");
-  const sections = normalizedSections.map((item) => ({ key: item.key, status: contractValid ? item.status : "blocked" }));
-  const sectionByKey = Object.fromEntries(sections.map((item) => [item.key, item]));
-  const readyCount = sections.filter((item) => item.status === "ready").length;
-  const totalCount = 2;
-  const blockedCount = totalCount - readyCount;
-  const readyForOwnerApproval = contractValid && cutover.status === "ready_for_owner_approval" && readyCount === totalCount;
-  return {
-    cutover,
-    summary,
-    sections,
-    sectionByKey,
-    contractValid,
-    readyCount,
-    totalCount,
-    blockedCount,
-    readyForOwnerApproval,
-    statusLabel: readyForOwnerApproval
-      ? "可交主理人复核，不会自动收费"
-      : blockedCount
-        ? "微信正式切换证据仍未齐"
-        : "等待微信切换证据",
-  };
-}
-
-function renderSaasBillingDomainCutoverReviewPanel(ctx = saasMerchantWorkbenchContext()) {
-  const review = saasBillingDomainCutoverReviewState();
-  const stageTone = (key) => (review.sectionByKey[key]?.status === "ready" ? "green" : "amber");
-  const boundaryRows = [
-    {
-      label: "支付入口",
-      title: "微信 Native 二维码",
-      detail: "二维码由后端按订单生成；本页不创建订单，也不读取商户密钥。",
-      tone: stageTone("wechat_pay_native_cutover"),
-    },
-    {
-      label: "回调边界",
-      title: "签名支付 / 退款回调",
-      detail: "只有后端验签成功的支付或退款结果可以改变订单与权益。",
-      tone: stageTone("wechat_pay_native_cutover"),
-    },
-    {
-      label: "查单边界",
-      title: "后端鉴权查单",
-      detail: "历史页面状态不能发放额度；必须以签名回调或后端官方查单为准。",
-      tone: stageTone("wechat_pay_native_cutover"),
-    },
-    {
-      label: "上线门禁",
-      title: "零扣款演练与回滚证据",
-      detail: "正式收费前必须完成零扣款、secret scan、readiness、浏览器 smoke 和回滚证据。",
-      tone: stageTone("no_charge_launch_rehearsal"),
-    },
-  ];
-  const stageRows = [
-    {
-      key: "wechat_pay_native_cutover",
-      label: "微信正式通道",
-      title: "商户配置、支付/退款验签、查单和受控验收",
-      detail: "必须由后端证明 9 项配置、官方查单、支付回调和退款边界；浏览器不能自行认定付款。",
-    },
-    {
-      key: "no_charge_launch_rehearsal",
-      label: "零扣款上线演练",
-      title: "隔离演练、回滚、readiness、浏览器 smoke",
-      detail: "所有步骤只产生无值证据；不下单、不扣款、不退款，也不触发 eBay OAuth。",
-    },
-  ];
-  const evidenceRows = [
-    ["证据状态", `${review.readyCount}/${review.totalCount} ready`, review.readyForOwnerApproval ? "等待主理人最终书面复核。" : "继续补齐被阻断的微信或零扣款证据。"],
-    ["Provider", "wechat_pay_native", "商户凭证只允许在后端 Vault 边界内处理。"],
-    ["计费模型", "一次支付 · 30 天权益", "只有后端验签或鉴权查单可以激活权益。"],
-    ["当前动作", "只读核对", "公开收费、立即扣款、退款和平台写入全部保持关闭。"],
-  ];
-  const flags = [
-    `contract_valid=${Boolean(review.contractValid)}`,
-    `public_paid_launch_allowed=${Boolean(review.cutover.public_paid_launch_allowed)}`,
-    `charge_now_allowed=${Boolean(review.cutover.charge_now_allowed)}`,
-    `calls_external_payment_api=${Boolean(review.cutover.calls_external_payment_api)}`,
-    `triggers_real_charge=${Boolean(review.cutover.triggers_real_charge)}`,
-    `triggers_real_refund=${Boolean(review.cutover.triggers_real_refund)}`,
-    `triggers_ebay_oauth=${Boolean(review.cutover.triggers_ebay_oauth)}`,
-    `triggers_real_platform_write=${Boolean(review.cutover.triggers_real_platform_write)}`,
-    `secret_exposed=${Boolean(review.cutover.secret_exposed)}`,
-  ];
-  return `
-    <section class="saas-settings-card saas-billing-domain-review" data-billing-domain-cutover-review="mainland_payment_cutover_v2" aria-label="微信支付正式切换证据">
-      <div class="saas-settings-card-head">
-        <div>
-          <span>微信支付正式切换</span>
-          <strong>微信 Native、签名回调、后端查单和零扣款回滚证据必须同时成立</strong>
-          <p>这里只读核对大陆正式收款链路，不创建支付单、不触发真实扣费或退款，也不重新打开 eBay 授权。</p>
-        </div>
-        <em>${escapeHtml(review.statusLabel)}</em>
-      </div>
-      <div class="saas-billing-domain-url-grid" aria-label="微信支付安全边界">
-        ${boundaryRows
-          .map(
-            (row) => `
-              <article class="is-${escapeHtml(row.tone)}">
-                <span>${escapeHtml(row.label)}</span>
-                <strong>${escapeHtml(row.title)}</strong>
-                <small>${escapeHtml(row.detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-billing-domain-stage-list" aria-label="正式支付切换证据阶段">
-        ${stageRows
-          .map(
-            (row) => `
-              <article class="is-${escapeHtml(stageTone(row.key))}">
-                <span>${escapeHtml(row.label)}</span>
-                <strong>${escapeHtml(row.title)}</strong>
-                <small>${escapeHtml(row.detail)}</small>
-                <small>${review.sectionByKey[row.key]?.status === "ready" ? "证据已闭合" : "证据未齐，保持收费关闭"}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-billing-domain-evidence" aria-label="支付切换演练摘要">
-        ${evidenceRows
-          .map(
-            ([label, title, detail]) => `
-              <article>
-                <span>${escapeHtml(label)}</span>
-                <strong>${escapeHtml(title)}</strong>
-                <small>${escapeHtml(detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-billing-domain-actions">
-        <button class="secondary-action compact-action" type="button" data-saas-action="refresh">刷新支付演练证据</button>
-        <button class="secondary-action compact-action" type="button" data-global-flow-view="confirm">查看确认中心</button>
-      </div>
-      <div class="saas-billing-domain-safety" hidden aria-hidden="true">
-        <span>mainland_payment_cutover_v2</span>
-        <span>wechat_pay_native_cutover</span>
-        <span>no_charge_launch_rehearsal</span>
-        <span>payment_provider_secret_boundary=backend_env_or_vault_only</span>
-        <span>signed_wechat_callback_or_authenticated_query_before_entitlement</span>
-        <span>rollback_secret_scan_readiness_browser_smoke_required</span>
-        <span>public_paid_launch_allowed=false</span>
-        <span>charge_now_allowed=false</span>
-        <span>calls_external_payment_api=false</span>
-        <span>triggers_real_charge=false</span>
-        <span>triggers_real_refund=false</span>
-        <span>triggers_ebay_oauth=false</span>
-        <span>triggers_real_platform_write=false</span>
-        <span>frontend_gets_payment_secret=false</span>
-        <span>secret_exposed=false</span>
-        <span>public_paid_launch_allowed=${Boolean(review.cutover.public_paid_launch_allowed)}</span>
-        <span>charge_now_allowed=${Boolean(review.cutover.charge_now_allowed)}</span>
-        <span>calls_external_payment_api=${Boolean(review.cutover.calls_external_payment_api)}</span>
-        <span>triggers_real_charge=${Boolean(review.cutover.triggers_real_charge)}</span>
-        <span>triggers_real_refund=${Boolean(review.cutover.triggers_real_refund)}</span>
-        <span>triggers_ebay_oauth=${Boolean(review.cutover.triggers_ebay_oauth)}</span>
-        <span>triggers_real_platform_write=${Boolean(review.cutover.triggers_real_platform_write)}</span>
-        <span>secret_exposed=${Boolean(review.cutover.secret_exposed)}</span>
-        <span>${escapeHtml(flags.join(" / "))}</span>
-        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
-      </div>
-    </section>
-  `;
-}
-
-function saasMainlandPaymentStrategyState() {
-  const strategy = state.saasPaymentOptions || state.saasBillingPlan?.payment_strategy || {};
-  const lanes = Array.isArray(strategy.domestic_payment_lanes) ? strategy.domestic_payment_lanes : [];
-  const selected = lanes.find((lane) => lane.selected) || null;
-  const blockers = Array.isArray(strategy.paid_launch_blockers) ? strategy.paid_launch_blockers : [];
-  return {
-    strategy,
-    lanes,
-    selected,
-    blockers,
-    paidLaunchReady: strategy.paid_launch_ready === true,
-    manualQrPrivateOnly: strategy.manual_qr_collection?.private_beta_only !== false,
-    targetRegion: strategy.target_customer_region || "mainland_china",
-  };
-}
-
-function renderSaasMainlandPaymentStrategyPanel() {
-  const payment = saasMainlandPaymentStrategyState();
-  const stageLabel = payment.paidLaunchReady ? "正式收款可演练" : "等待正式收款通道";
-  const selectedLabel = payment.selected?.label || "还未选择正式通道";
-  const routeCards = [
-    {
-      label: "优先",
-      title: "正式收款通道",
-      detail: "公开收费必须接入可签约、可回调、可对账的商户通道，付款成功后由支付平台或服务端查单确认。",
-      tone: "green",
-    },
-    {
-      label: "可选",
-      title: "跨境订阅通道",
-      detail: "适合海外银行卡、跨境订阅和全球客户，前提是商户身份、SaaS 场景审核、接口和服务端确认都通过。",
-      tone: "green",
-    },
-    {
-      label: "补充",
-      title: "平台回款账户",
-      detail: "用于电商平台资金回收或跨境结算时要和官网订阅付款分开，不作为捷境订阅付款的唯一依据。",
-      tone: "amber",
-    },
-    {
-      label: "不做正式入口",
-      title: "人工收款",
-      detail: "只可用于小范围内测核对，不能作为公开自动订阅入口；没有自动续费、欠费停用、退款和发票闭环。",
-      tone: "red",
-    },
-  ];
-  const plainRows = [
-    ["现在该做什么", selectedLabel, payment.blockers.length ? `阻断：${payment.blockers.slice(0, 3).join(" / ")}` : "等待正式通道上线前检查。"],
-    ["为什么不能用人工收款正式上线", "SaaS 要自动识别谁付了哪个套餐", "人工核对会导致丢账、错账、无法自动续费和无法自动停用额度。"],
-    ["平台回款账户定位", "更像收款结汇和平台资金回收账户", "可用于电商平台资金回收，不是捷境官网订阅付款的主入口。"],
-  ];
-  const formal = payment.strategy.formal_collection_architecture || {};
-  const domainPlan = payment.strategy.domain_and_icp_plan || {};
-  const entity = payment.strategy.merchant_entity_readiness || {};
-  const applicationPacket = payment.strategy.merchant_application_packet || {};
-  const reviewBrief = applicationPacket.customer_review_brief || {};
-  const formalSteps = Array.isArray(formal.steps) ? formal.steps : [];
-  const visibleFormalSteps = formalSteps.slice(0, 4);
-  const formalStepTone = (status) => (status === "ready" ? "green" : status === "designed" ? "amber" : "red");
-  const entityChecklist = Array.isArray(entity.checklist) ? entity.checklist : [];
-  const entityTone = (status) => (status === "ready" ? "green" : status === "designed" || status === "in_progress" ? "amber" : "red");
-  const applicationChecklist = Array.isArray(applicationPacket.checklist) ? applicationPacket.checklist : [];
-  const applicationTone = (status) => (status === "ready" ? "green" : status === "designed" || status === "in_progress" ? "amber" : "red");
-  const reviewSupport = reviewBrief.refund_and_support || {};
-  const reviewUrls = applicationPacket.review_urls || {};
-  const reviewCards = [
-    ["服务内容", "eBay AI CEO 工作台", "AI CEO 帮商家整理市场、Listing、素材、客服草稿和确认记录；真实高风险动作仍由商家确认。"],
-    ["费用边界", "基础订阅和高成本用量分开", "eBay 成交费、广告费、物流费和退款由商家平台账户结算，不是捷境代扣。"],
-    ["退款与客服", reviewSupport.support_contact_status === "ready" ? "客服入口已准备" : "客服入口待补齐", "支付审核前需要公开客服或投诉入口；退款和争议按订单、订阅和系统记录处理。"],
-    ["数据安全", "证件和密钥不进前端", "商户私钥、证书、支付平台密钥、身份证件和结算账户只在安全服务或外部支付平台边界处理。"],
-  ];
-  const reviewLinks = [
-    ["服务条款", reviewUrls.terms || "./terms.html"],
-    ["隐私说明", reviewUrls.privacy || "./privacy.html"],
-    ["退款政策", reviewUrls.refund_policy || "./refund-policy.html"],
-    ["客服入口", reviewUrls.support || "./support.html"],
-    ["风险披露", reviewUrls.risk_disclosure || "./risk-disclosure.html"],
-  ];
-  const domainRows = [
-    ["现阶段", "当前入口继续用于内测和全球访问", "这里不承诺公开收费；正式收款前要先完成商户主体、域名、回调和审核资料。"],
-    ["后续", "准备可审核的正式商户主体", "正式接入商户支付时，再让支付主体、域名/子域名、回调地址和审核材料保持一致。"],
-    ["不冲突", "只是多一步主体和域名规划", "当前域名继续服务产品体验；后续支付子域名和商户审核材料要单独对齐。"],
-  ];
-  return `
-    <section class="saas-settings-card saas-mainland-payment-strategy" data-payment-strategy="mainland_payment_strategy_v1" aria-label="正式收款接入策略">
-      <div class="saas-settings-card-head">
-        <div>
-          <span>正式收款接入</span>
-          <strong>公开收费先走可对账、可回调、可审计的商户通道</strong>
-          <p>捷境当前只适合继续内测和无扣费演练；公开收费前必须完成正式商户通道、签名通知、订单核对、退款客服和额度生命周期。</p>
-        </div>
-        <em>${escapeHtml(stageLabel)}</em>
-      </div>
-      <div class="saas-mainland-payment-routes">
-        ${routeCards
-          .map(
-            (item) => `
-              <article class="is-${escapeHtml(item.tone)}">
-                <span>${escapeHtml(item.label)}</span>
-                <strong>${escapeHtml(item.title)}</strong>
-                <small>${escapeHtml(item.detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-mainland-payment-plain">
-        ${plainRows
-          .map(
-            ([label, title, detail]) => `
-              <article>
-                <span>${escapeHtml(label)}</span>
-                <strong>${escapeHtml(title)}</strong>
-                <small>${escapeHtml(detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-mainland-payment-formal" data-payment-architecture="formal_payment_collection_architecture_v1" aria-label="正式收款架构">
-        <div>
-          <span>正式上架架构</span>
-          <strong>人工收款只做内测核对，正式收款走商户订单和支付平台确认</strong>
-          <small>捷境会先生成订单，再交给已签约支付通道；支付成功必须由支付平台通知或服务端查单确认，然后才更新订阅、额度、发票和系统记录。</small>
-        </div>
-        ${visibleFormalSteps
-          .map(
-            (step) => `
-              <article class="is-${escapeHtml(formalStepTone(step.status))}">
-                <span>${escapeHtml(step.label || step.key || "步骤")}</span>
-                <strong>${escapeHtml(step.status === "ready" ? "已具备" : step.status === "designed" ? "已设计" : "待补齐")}</strong>
-                <small>${escapeHtml(step.reason || "")}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-mainland-payment-domain" data-payment-domain-icp="mainland_domain_icp_plan_v1" aria-label="域名、备案和主体计划">
-        ${domainRows
-          .map(
-            ([label, title, detail]) => `
-              <article>
-                <span>${escapeHtml(label)}</span>
-                <strong>${escapeHtml(title)}</strong>
-                <small>${escapeHtml(detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-mainland-payment-entity" data-payment-entity-readiness="merchant_entity_payment_readiness_v1" aria-label="主体和商户资料准备">
-        <div>
-          <span>商户资料</span>
-          <strong>正式收款需要可审核的商户主体和公开服务资料</strong>
-          <small>先把营业执照、经营者实名、结算账户、服务协议、隐私政策、客服电话和支付回调域名准备齐；真正自动开通套餐，仍必须等正式商户号和签名回调接入。</small>
-        </div>
-        ${entityChecklist
-          .slice(0, 5)
-          .map(
-            (item) => `
-              <article class="is-${escapeHtml(entityTone(item.status))}">
-                <span>${escapeHtml(item.label || item.key || "资料")}</span>
-                <strong>${escapeHtml(item.status === "ready" ? "已具备" : item.status === "in_progress" ? "办理中" : item.status === "designed" ? "已设计" : "待补齐")}</strong>
-                <small>${escapeHtml(item.why || "")}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-mainland-payment-application" data-payment-application-packet="merchant_payment_application_packet_v1" aria-label="正式收款申请资料包">
-        <div>
-          <span>申请资料包</span>
-          <strong>资料齐备后，再申请正式支付通道</strong>
-          <small>这里只整理支付机构常见审核材料。捷境只展示准备状态，不在前端保存证件、银行卡、商户密钥或回调密钥。</small>
-        </div>
-        ${applicationChecklist
-          .slice(0, 6)
-          .map(
-            (item) => `
-              <article class="is-${escapeHtml(applicationTone(item.status))}">
-                <span>${escapeHtml(item.label || item.key || "资料")}</span>
-                <strong>${escapeHtml(item.status === "ready" ? "已具备" : item.status === "in_progress" ? "准备中" : item.status === "designed" ? "已规划" : "待补齐")}</strong>
-                <small>${escapeHtml(item.review_use || "")}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-mainland-payment-review-brief" data-payment-review-brief="payment_review_customer_brief_v1" aria-label="支付审核说明">
-        <div>
-          <span>审核说明</span>
-          <strong>支付机构和真实商家要先看懂这几件事</strong>
-          <small>这不是新增复杂功能，而是把服务内容、收费边界、退款客服和数据安全说明集中放好，方便后续正式支付审核。</small>
-          <div class="saas-mainland-payment-review-links" aria-label="审核页面链接">
-            ${reviewLinks
-              .map(
-                ([label, href]) => `
-                  <a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>
-                `,
-              )
-              .join("")}
-          </div>
-        </div>
-        ${reviewCards
-          .map(
-            ([label, title, detail]) => `
-              <article>
-                <span>${escapeHtml(label)}</span>
-                <strong>${escapeHtml(title)}</strong>
-                <small>${escapeHtml(detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-mainland-payment-safety" hidden aria-hidden="true">
-        <span>mainland_payment_strategy_v1</span>
-        <span>formal_payment_collection_architecture_v1</span>
-        <span>mainland_domain_icp_plan_v1</span>
-        <span>merchant_entity_payment_readiness_v1</span>
-        <span>merchant_payment_application_packet_v1</span>
-        <span>formal_payment_application_requires_service_privacy_refund_support</span>
-        <span>payment_review_documents_no_identity_files_in_frontend</span>
-        <span>payment_callback_url_review_ready_marker</span>
-        <span>payment_review_customer_brief_v1</span>
-        <span>payment_review_terms_privacy_refund_links_visible</span>
-        <span>payment_review_refund_support_public_pages_visible</span>
-        <span>payment_review_support_contact_pending_until_owner_configures</span>
-        <span>base_subscription_usage_platform_fee_boundary_visible</span>
-        <span>individual_business_first_then_company_if_scale_requires</span>
-        <span>formal_payment_requires_merchant_entity_and_subject_alignment</span>
-        <span>invited_beta_manual_confirmation_only</span>
-        <span>domestic_wallets_primary_for_mainland_users</span>
-        <span>stripe_paypal_cross_border_fallback</span>
-        <span>worldfirst_payoneer_settlement_not_checkout</span>
-        <span>manual_confirmation_not_paid_launch_ready</span>
-        <span>invited_beta_payment_reference_not_public_checkout</span>
-        <span>formal_payment_requires_merchant_order_signed_callback_and_quota_audit</span>
-        <span>future_mainland_company_conflict=${Boolean(domainPlan.future_mainland_company_conflict)}</span>
-        <span>triggers_real_charge=false</span>
-        <span>frontend_gets_payment_secret=false</span>
-        <span>secret_exposed=false</span>
-      </div>
-    </section>
-  `;
-}
-
-function renderSaasManualBetaPaymentOrderPanel() {
-  const orders = Array.isArray(state.saasManualBetaPaymentOrders) ? state.saasManualBetaPaymentOrders : [];
-  const latestPending = orders.find((item) => item?.status === "pending_manual_payment_confirmation") || null;
-  const latestOrder = latestPending || orders[0] || null;
-  const canConfirm = saasOwnerLaunchCanView();
-  const orderRows = orders.slice(0, 3);
-  const statusLabel = latestPending ? "等待确认开通" : latestOrder?.status === "confirmed_manual_receipt" ? "试用订阅已开通" : "可申请开通";
-  const orderSummary = latestOrder
-    ? [
-        ["订阅", `¥${latestOrder.amount_cny || 99} / ${latestOrder.duration_days || 30} 天`, "基础试用套餐"],
-        ["申请编号", latestOrder.payment_note || "生成后显示", "联系客服时可提供这个编号"],
-        ["状态", statusLabel, latestOrder.active_until ? `可用至 ${String(latestOrder.active_until).slice(0, 10)}` : "确认后开通"],
-      ]
-    : [
-        ["订阅", "¥99 / 30 天", "基础试用套餐"],
-        ["申请编号", "生成后显示", "联系客服时可提供这个编号"],
-        ["状态", "待申请", "生成申请单不会自动扣款"],
-      ];
-  return `
-    <section class="saas-settings-card saas-manual-beta-payment" data-manual-beta-payment="merchant_beta_subscription_request_v2" aria-label="试用订阅申请">
-      <div class="saas-settings-card-head">
-        <div>
-          <span>试用订阅申请</span>
-          <strong>申请开通基础套餐，确认后显示可用期限</strong>
-          <p>在线付款入口未开放前，这里只生成订阅申请记录。确认开通后，商家会看到套餐状态、可用期限和额度变化；页面不会自动扣款。</p>
-        </div>
-        <em>${escapeHtml(statusLabel)}</em>
-      </div>
-      <div class="saas-manual-beta-payment-grid">
-        ${orderSummary
-          .map(
-            ([label, title, detail]) => `
-              <article>
-                <span>${escapeHtml(label)}</span>
-                <strong>${escapeHtml(title)}</strong>
-                <small>${escapeHtml(detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-manual-beta-payment-actions">
-        <button class="primary-action compact-action" type="button" data-saas-action="manual-beta-create-order" data-manual-beta-plan-key="starter" ${state.saasLoading ? "disabled" : ""}>申请开通基础试用套餐</button>
-        ${
-          canConfirm && latestPending
-            ? `<button class="secondary-action compact-action" type="button" data-saas-action="manual-beta-confirm-order" data-manual-beta-order-id="${escapeHtml(latestPending.order_id || "")}" ${state.saasLoading ? "disabled" : ""}>确认开通试用订阅</button>`
-            : ""
-        }
-      </div>
-      <div class="saas-manual-beta-payment-orders">
-        ${
-          orderRows.length
-            ? orderRows
-                .map(
-                  (order) => `
-                    <article class="${order.status === "confirmed_manual_receipt" ? "is-green" : "is-amber"}">
-                      <span>${escapeHtml(order.status === "confirmed_manual_receipt" ? "已开通" : "待确认")}</span>
-                      <strong>${escapeHtml(order.payment_note || order.order_id || "试用订阅申请")}</strong>
-                      <small>${escapeHtml(order.status === "confirmed_manual_receipt" ? `基础套餐已开通至 ${String(order.active_until || "").slice(0, 10) || "30 天后"}` : "确认前不会自动扣费或开通权益。")}</small>
-                    </article>
-                  `,
-                )
-                .join("")
-            : `<article class="is-amber"><span>还没有申请</span><strong>先申请开通试用订阅</strong><small>申请不会自动扣费；确认后才会更新套餐和额度。</small></article>`
-        }
-      </div>
-      <div class="saas-manual-beta-payment-note">
-        <strong>商家需要知道</strong>
-        <p>当前不会在浏览器里保存支付资料，也不会自动扣款。订阅确认后，只影响套餐权益和高成本用量额度，不会触发 eBay 发布、退款、广告或采购付款。</p>
-      </div>
-      <div class="saas-manual-beta-payment-safety" hidden aria-hidden="true">
-        <span>manual_beta_payment_order_v1</span>
-        <span>manual_beta_payment_artifact_not_in_repo</span>
-        <span>manual_beta_owner_confirm_required</span>
-        <span>manual_beta_confirmation_grants_30d_starter</span>
-        <span>invited_beta_payment_reference_not_public_checkout</span>
-        <span>can_be_paid_public_launch_provider=false</span>
-        <span>triggers_real_charge=false</span>
-        <span>frontend_gets_payment_secret=false</span>
-        <span>secret_exposed=false</span>
-      </div>
-    </section>
-  `;
-}
-
-function renderSaasMerchantFormalPaymentOpeningChecklistPanel(ctx = saasMerchantWorkbenchContext()) {
-  const billing = saasMerchantBillingGuardrailState();
-  const domesticBilling = saasMerchantDomesticBillingState();
-  const hasExternalProvider = domesticBilling.online || Boolean(billing.provider.external_paid_provider_configured);
-  const stateLabel = domesticBilling.online ? "微信扫码付款可用" : hasExternalProvider ? "在线付款可用" : billing.entitlementActive ? "试用已开通" : "当前不自动扣费";
-  const stateDetail = domesticBilling.online
-    ? "商家主动创建订单并微信扫码；捷境只在后端确认到账后开通 30 天权益。"
-    : hasExternalProvider
-    ? "正式付款由已接入的支付方式完成；捷境只接收支付结果和订阅状态。"
-    : "现在只展示套餐、试用和额度规则；不会自动扣费，也不会保存付款资料。";
-  const checklist = [
-    {
-      label: "付款前",
-      title: "先看清价格、期限、续购和额度边界",
-      detail: "付款按钮开放前，商家必须能看到套餐价格、30 天期限、续购规则，以及 AI/素材用量是否另算。",
-      tone: "green",
-    },
-    {
-      label: "付款页",
-      title: domesticBilling.configuredPath ? "商家主动微信扫码" : "付款由已接入的支付方式完成",
-      detail: domesticBilling.configuredPath ? "捷境页面只展示本次订单二维码、订单状态和客服入口，不保存支付密钥。" : "支付资料和付款凭证由支付平台处理；捷境页面只展示入口、订单状态和客服入口。",
-      tone: hasExternalProvider ? "green" : "amber",
-    },
-    {
-      label: "开通",
-      title: "支付结果确认后才开通权益",
-      detail: "只有支付平台通知、系统查单或客服确认试用后，才会开通订阅、恢复用量或停用高成本任务。",
-      tone: billing.entitlementActive ? "green" : "amber",
-    },
-    {
-      label: "恢复",
-      title: "账单恢复不要求重新连接店铺或重新填写 AI 连接",
-      detail: "账单异常只影响继续产生费用的模型、联网报告和素材生成；店铺授权、AI 连接、历史记录继续保留。",
-      tone: "green",
-    },
-  ];
-  const stateRows = [
-    ["现在状态", stateLabel, stateDetail],
-    ["订阅管理", domesticBilling.configuredPath ? "到期自主续购" : "未来提供自助管理入口", domesticBilling.configuredPath ? "商家可查看订单、30 天有效期、再次购买、发票申请、退款政策和客服入口。" : "商家可查看续费、取消、付款失败处理、发票、退款政策和客服入口。"],
-    ["额度发放", "以后端订阅状态为准", "前端不能自己发放权益或额度，也不能绕过账单状态继续跑高成本任务。"],
-  ];
-  return `
-    <section class="saas-settings-card saas-formal-payment-opening-checklist" data-payment-opening-checklist="merchant_formal_payment_opening_checklist_v1" aria-label="付款开通前检查">
-      <div class="saas-settings-card-head">
-        <div>
-          <span>付款开通前检查</span>
-          <strong>先把价格、付款、有效期和额度规则说清楚，再开放正式支付</strong>
-          <p>这块不展示内部支付配置。正式收费开放前，页面必须先说明价格、30 天期限、续购、客服、退款、额度和支付安全边界。</p>
-        </div>
-        <em>${escapeHtml(stateLabel)}</em>
-      </div>
-      <div class="saas-formal-payment-open-grid">
-        ${checklist
-          .map(
-            (item) => `
-              <article class="is-${escapeHtml(item.tone)}">
-                <span>${escapeHtml(item.label)}</span>
-                <strong>${escapeHtml(item.title)}</strong>
-                <small>${escapeHtml(item.detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-formal-payment-state-grid" aria-label="付款和额度状态">
-        ${stateRows
-          .map(
-            ([label, title, detail]) => `
-              <article>
-                <span>${escapeHtml(label)}</span>
-                <strong>${escapeHtml(title)}</strong>
-                <small>${escapeHtml(detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-formal-payment-opening-safety" hidden aria-hidden="true">
-        <span>merchant_formal_payment_opening_checklist_v1</span>
-        <span>payment_mode=${escapeHtml(domesticBilling.configuredPath ? "wechat_native_qr" : "external_provider")}</span>
-        <span>renewal_mode=${escapeHtml(domesticBilling.configuredPath ? "merchant_confirmed_one_time_30_day" : "provider_subscription")}</span>
-        <span>signed_webhook_or_order_query_before_entitlement</span>
-        <span>price_terms_visible_before_checkout</span>
-        <span>provider_confirmed_payment_boundary</span>
-        <span>frontend_cannot_grant_entitlement_or_quota</span>
-        <span>no_repeat_ebay_oauth_for_billing_recovery</span>
-        <span>no_model_key_reentry_for_billing_recovery</span>
-        <span>creates_checkout_session=false</span>
-        <span>triggers_real_charge=false</span>
-        <span>frontend_gets_payment_secret=false</span>
-        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
-      </div>
-    </section>
-  `;
-}
-
 function renderSaasMerchantBillingContinuityPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
   const status = billing.blocksNow
@@ -39393,121 +37253,6 @@ function renderSaasMerchantBillingContinuityPanel(ctx = saasMerchantWorkbenchCon
         <span>no_model_key_reentry_for_billing_recovery</span>
         <span>triggers_real_charge=false</span>
         <span>frontend_gets_payment_secret=false</span>
-        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
-      </div>
-    </section>
-  `;
-}
-
-function renderSaasMerchantBillingIncidentRunbookPanel(ctx = saasMerchantWorkbenchContext()) {
-  const billing = saasMerchantBillingGuardrailState();
-  const domesticBilling = saasMerchantDomesticBillingState();
-  const runbook = billing.incidentRunbook && typeof billing.incidentRunbook === "object" ? billing.incidentRunbook : {};
-  const cards = Array.isArray(runbook.cards) ? runbook.cards.filter(Boolean) : [];
-  const fallbackCards = [
-    {
-      key: "customer_portal_change",
-      title: "Customer Portal 变更",
-      status: billing.portal.ready ? "ready" : "blocked",
-      trigger: "商家自助升级、降级、取消或修改付款方式",
-      visible_result: "必须等 provider 签名 webhook 回写后，才更新订阅和 quota。",
-      operator_action: "核对 provider 事件、账单状态和审计，不让前端保存支付资料。",
-    },
-    {
-      key: "payment_failed",
-      title: "付款失败",
-      status: billing.quotaEnforcementEnabled ? "ready" : "blocked",
-      trigger: "invoice.payment_failed / 欠费",
-      visible_result: "高成本任务 hard-stop，历史报告、确认中心和审计继续可见。",
-      operator_action: "提醒商家更新付款方式；不要求重复 eBay 授权或重新填写 AI 连接信息。",
-    },
-    {
-      key: "refund_or_dispute",
-      title: "退款 / 争议",
-      status: "blocked",
-      trigger: "provider signed refund or dispute webhook",
-      visible_result: "进入 payment attention，暂停 metered work，等待主理人/财务处理。",
-      operator_action: "真实退款和争议只在支付 provider 后台处理，捷境只记录状态和审计。",
-    },
-  ];
-  const domesticCards = [
-    {
-      key: "wechat_order_expired",
-      status: "ready",
-      title: "二维码过期 / 未付款",
-      visible_result: "订单保持未付款或关闭，不开通权益。",
-      operator_action: "商家需要时重新创建订单；不要复用已过期二维码。",
-    },
-    {
-      key: "wechat_callback_delayed",
-      status: "ready",
-      title: "回调延迟",
-      visible_result: "前端继续显示处理中，不自行判定已付款。",
-      operator_action: "后端用商户订单号安全查单，确认后再开通权益。",
-    },
-    {
-      key: "refund_or_dispute",
-      status: "ready",
-      title: "退款 / 争议",
-      visible_result: "先进入审核，暂停新的高成本任务，历史资料继续保留。",
-      operator_action: "只由后端调用支付平台退款并记录审计，前端不能直接退款。",
-    },
-  ];
-  const visibleCards = domesticBilling.configuredPath ? domesticCards : cards.length ? cards : fallbackCards;
-  const readyText = domesticBilling.configuredPath ? `${domesticCards.length}/${domesticCards.length} 已定义` : `${Number(runbook.ready_count || 0)}/${Number(runbook.total_count || visibleCards.length)} ready`;
-  const status = domesticBilling.configuredPath ? "微信支付异常链路" : runbook.blocked_count ? "仍需 live 证据" : "处理链路已闭合";
-  const copy = {
-    customer_portal_change: ["自助订阅变更", "Customer Portal 只负责 provider 侧变更；捷境等签名 webhook 后更新权益。"],
-    payment_failed: ["付款失败", "欠费会进入 payment attention，高成本任务暂停，历史资料不删除。"],
-    subscription_cancelled: ["订阅取消", "取消后 entitlement inactive；恢复必须走 provider 或内部管理员确认。"],
-    refund_or_dispute: ["退款 / 争议", "真实退款、拒付和争议不在前端执行，只由 provider 后台和审计记录处理。"],
-    quota_hard_stop: ["额度强停", "后端 quota 判断阻断 metered work，前端不能绕过。"],
-    wechat_order_expired: ["二维码过期 / 未付款", "未确认到账就不开通权益；商家可重新创建订单。"],
-    wechat_callback_delayed: ["回调延迟", "保持处理中，并由后端安全查单确认最终状态。"],
-  };
-  return `
-    <section class="saas-settings-card saas-merchant-billing-incident-runbook" data-billing-incident-runbook="merchant_billing_incident_runbook_v1" aria-label="账单异常处理">
-      <div class="saas-settings-card-head">
-        <div>
-          <span>账单异常处理</span>
-          <strong>${escapeHtml(domesticBilling.configuredPath ? "未付款、回调延迟、退款和争议都由后端确认" : "订阅变更、欠费、取消、退款和争议都要先有后端证据")}</strong>
-          <p>${escapeHtml(domesticBilling.configuredPath ? "微信支付只在签名回调或安全查单确认后开通权益；未付款、超时、退款和争议都不能由浏览器直接改变账单或权益。" : "正式收费后的权益发放、停用、退款和争议状态必须来自签名 webhook、后端查单或主理人确认，不能由浏览器直接发放或恢复。")}</p>
-        </div>
-        <em>${escapeHtml(`${status} · ${readyText}`)}</em>
-      </div>
-      <div class="saas-merchant-billing-incident-grid">
-        ${visibleCards
-          .map((item) => {
-            const [title, detail] = copy[item.key] || [item.title || item.key || "账单状态", item.visible_result || ""];
-            const tone = item.status === "ready" ? "green" : item.key === "refund_or_dispute" ? "red" : "amber";
-            return `
-              <article class="is-${escapeHtml(tone)}">
-                <span>${escapeHtml(item.status || "blocked")}</span>
-                <strong>${escapeHtml(title)}</strong>
-                <small>${escapeHtml(detail || item.visible_result || "")}</small>
-                <small>${escapeHtml(item.operator_action || "等待后端证据和主理人处理。")}</small>
-              </article>
-            `;
-          })
-          .join("")}
-      </div>
-      <div class="saas-merchant-billing-incident-note">
-        <strong>运营边界</strong>
-        <p>${escapeHtml(domesticBilling.configuredPath ? "退款、争议和发票问题不在捷境前端直接执行。捷境只接收微信支付签名结果、更新权益状态并保留审计；真实退款仍需审核。" : "退款、争议、付款方式和发票问题不在捷境前端执行。捷境只接收支付平台签名结果、更新订阅和额度状态并保留审计。")}</p>
-      </div>
-      <div class="saas-merchant-billing-incident-safety" hidden aria-hidden="true">
-        <span>merchant_billing_incident_runbook_v1</span>
-        <span>payment_mode=${escapeHtml(domesticBilling.configuredPath ? "wechat_native_qr" : "external_provider")}</span>
-        <span>refund_dispute_webhook_sets_payment_attention</span>
-        <span>refund_or_dispute_cannot_be_frontend_executed</span>
-        <span>payment_failed_cancel_blocks_metered_work</span>
-        <span>quota_shutdown_keeps_history_visible</span>
-        <span>browser_cannot_grant_or_restore_entitlement</span>
-        <span>charge_now_allowed=${escapeHtml(String(domesticBilling.online))}</span>
-        <span>triggers_real_charge=false</span>
-        <span>frontend_gets_payment_secret=false</span>
-        <span>repeat_ebay_oauth_allowed=false</span>
-        <span>secret_exposed=false</span>
         <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
       </div>
     </section>
@@ -39675,165 +37420,6 @@ function renderSaasMerchantBillingCustomerTrustPanel(ctx = saasMerchantWorkbench
         <span>frontend_gets_payment_secret=false</span>
         <span>secret_exposed=false</span>
         <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
-      </div>
-    </section>
-  `;
-}
-
-function renderSaasMerchantBillingGuardrailPanel(ctx = saasMerchantWorkbenchContext()) {
-  const billing = saasMerchantBillingGuardrailState();
-  const blockedUnits = (billing.blockedUnits.length
-    ? billing.blockedUnits
-    : ["ai_ceo_task", "provider_job", "model_report_assist"]).map((unit) => {
-      const labels = {
-        ai_ceo_task: "AI CEO 高成本任务",
-        provider_job: "联网和外部服务任务",
-        model_report_assist: "长报告生成",
-        media_generation: "图片和视频生成",
-      };
-      return labels[unit] || String(unit || "").replace(/_/g, " ");
-    });
-  const safeActions = [
-    ["查看历史和确认中心", "报告、操作记录、确认单继续可读"],
-    ["修复账单或额度", "通过订阅页面或人工协助恢复，不在前端收密钥"],
-    ["保留数据", "欠费/取消只停高成本任务，不删除店铺数据"],
-    ["人工确认", "真实付款、发布、退款和广告仍进决策中心"],
-  ];
-  const safetyFlags = [
-    "no_real_charge_rehearsal_ui_v2",
-    "latest_no_charge_billing_event",
-    "subscription_quota_shutdown_state",
-    "billing_subscription_not_active",
-    `blocks_metered_work_when_inactive=${Boolean(billing.blocksInactive)}`,
-    "creates_checkout_session=false",
-    "creates_real_checkout_session=false",
-    "calls_stripe_api=false",
-    "triggers_real_charge=false",
-    "charge_now_allowed=false",
-    "frontend_gets_payment_secret=false",
-    "owner_approval_required_for_reenable=true",
-  ];
-  const rehearsalDisabled = !billing.testProviderReady || state.saasLoading ? "disabled" : "";
-  const rehearsalActions = [
-    ["activate", "测试开通权益", "模拟订阅 active，验证额度恢复"],
-    ["invoice_paid", "测试账单已付", "模拟 invoice paid，不调用 Stripe"],
-    ["payment_failed", "测试付款失败", "模拟欠费，验证高成本任务停用"],
-    ["cancel", "测试取消订阅", "模拟取消，验证 quota hard-stop"],
-  ];
-  const latestEvent = billing.latestTestEvent || {};
-  const latestEventShape = latestEvent.event && typeof latestEvent.event === "object" ? latestEvent.event : {};
-  const rehearsalSummary = billing.testProviderReady
-    ? billing.rehearsalStage === "empty_usage"
-      ? "等待后端账单用量证据；可以先刷新用量，不会创建真实扣费。"
-      : billing.rehearsalStage === "not_rehearsed"
-        ? "还没有跑过测试订阅事件；先点“测试开通权益”，再点“付款失败/取消”验证停用。"
-        : billing.blocksNow || billing.paymentAttentionRequired
-          ? "当前演练处于欠费/取消类状态，高成本任务应该被后端阻断。"
-          : "当前测试权益可用；可继续演练付款失败和取消后的停用闭环。"
-    : "当前不是测试计费模式；正式收费切换前不会在这里创建真实付款或扣费。";
-  return `
-    <section class="saas-settings-card saas-merchant-billing-guardrail is-${escapeHtml(billing.tone)}" aria-label="商家订阅和额度保护">
-      <div class="saas-settings-card-head">
-        <div>
-          <span>订阅与额度保护</span>
-          <strong>${escapeHtml(billing.label)}</strong>
-          <p>这里给商家解释“为什么某些 AI CEO 高成本任务会暂停”。欠费、取消或额度耗尽时，系统只停联网、模型、素材生成等计费任务；历史报告、确认中心、操作记录和账号设置仍然可用。</p>
-        </div>
-        <em>${escapeHtml(billing.subscriptionStatus)}</em>
-      </div>
-      <div class="saas-merchant-billing-guardrail-grid">
-        <article class="${billing.entitlementActive ? "is-green" : billing.blocksNow ? "is-red" : "is-amber"}">
-          <span>当前权益</span>
-          <strong>${escapeHtml(billing.entitlementActive ? "active" : billing.subscriptionStatus)}</strong>
-          <small>${escapeHtml(billing.note)}</small>
-        </article>
-        <article class="${billing.quotaEnforcementEnabled ? "is-green" : "is-amber"}">
-          <span>额度保护</span>
-          <strong>${billing.quotaEnforcementEnabled ? "已启用" : "待启用"}</strong>
-          <small>超量或欠费时只暂停高成本任务。</small>
-        </article>
-        <article class="${billing.paymentAttentionRequired ? "is-red" : "is-green"}">
-          <span>付款状态</span>
-          <strong>${billing.paymentAttentionRequired ? "需要处理" : "正常"}</strong>
-          <small>${billing.paymentAttentionRequired ? "处理订阅或额度后再恢复高成本任务。" : "当前没有需要商家处理的付款提醒。"}</small>
-        </article>
-        <article class="${billing.provider.test_billing_provider_configured || billing.provider.external_paid_provider_configured ? "is-green" : "is-amber"}">
-          <span>计费模式</span>
-          <strong>${billing.provider.external_paid_provider_configured ? "正式收款已接入" : billing.provider.test_billing_provider_configured ? "无扣费演练" : "待接正式收款"}</strong>
-          <small>${billing.provider.test_billing_provider_configured ? "当前只验证订阅状态和额度停用，不真实扣费。" : "正式收费前需要接入收款服务。"}</small>
-        </article>
-      </div>
-      <div class="saas-merchant-billing-guardrail-lanes">
-        <div>
-          <span>高成本任务暂停</span>
-          ${blockedUnits
-            .map(
-              (unit) => `
-                <article class="${billing.blocksNow ? "is-red" : "is-amber"}">
-                  <strong>${escapeHtml(unit)}</strong>
-                  <small>如果权益无效或额度不足，后端会暂停这类任务，不能从前端绕过。</small>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-        <div>
-          <span>仍可继续使用</span>
-          ${safeActions
-            .map(
-              ([title, detail]) => `
-                <article class="is-green">
-                  <strong>${escapeHtml(title)}</strong>
-                  <small>${escapeHtml(detail)}</small>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-      </div>
-      <div class="saas-merchant-billing-rehearsal" aria-label="no-charge billing rehearsal controls">
-        <article class="${billing.testProviderReady ? "is-green" : "is-amber"}">
-          <div>
-            <span>无扣费演练</span>
-            <strong>${billing.testProviderReady ? "可无扣费演练" : "等待演练模式"}</strong>
-            <small>${escapeHtml(rehearsalSummary)}</small>
-            <small>不会创建真实付款，不调用正式收款接口，不触发扣费。</small>
-          </div>
-          <em>${escapeHtml(billing.rehearsalStage)}</em>
-        </article>
-        <article class="${latestEvent.ok === false ? "is-amber" : Object.keys(latestEvent).length ? "is-green" : "is-amber"}">
-          <div>
-            <span>最近一次演练</span>
-            <strong>${escapeHtml(billing.latestTestStatus)}</strong>
-            <small>${escapeHtml(latestEvent.action ? `动作：${latestEvent.action}` : "还没有演练记录")} / ${escapeHtml(latestEventShape.plan_key || latestEvent.plan_key || billing.planKey)}</small>
-            <small>${escapeHtml(latestEvent.message || "演练结果会写入后端订阅权益和审计；不会收集银行卡，不会触发真实扣费。")}</small>
-          </div>
-          <em>${Object.keys(latestEvent).length ? "latest" : "not-run"}</em>
-        </article>
-        <div class="saas-merchant-billing-rehearsal-actions" aria-label="no-charge subscription lifecycle actions">
-          ${rehearsalActions
-            .map(
-              ([action, label, detail]) => `
-                <button class="secondary-action compact-action" type="button" data-saas-action="billing-test-event" data-billing-test-action="${escapeHtml(action)}" data-billing-plan-key="${escapeHtml(billing.planKey || "operator")}" ${rehearsalDisabled}>
-                  <strong>${escapeHtml(label)}</strong>
-                  <small>${escapeHtml(detail)}</small>
-                </button>
-              `,
-            )
-            .join("")}
-        </div>
-      </div>
-      <div class="saas-merchant-billing-guardrail-actions">
-        <button class="secondary-action compact-action" type="button" data-saas-action="refresh">刷新用量</button>
-        <button class="secondary-action compact-action" type="button" data-global-flow-view="product">去 Listing 继续</button>
-        <button class="primary-action compact-action" type="button" data-global-flow-view="confirm">查看确认中心</button>
-      </div>
-      <div class="saas-merchant-billing-guardrail-safety" aria-label="billing safety flags" hidden aria-hidden="true">
-        ${safetyFlags.map((flag) => `<span>${escapeHtml(flag)}</span>`).join("")}
-        <span>store=${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</span>
-        <span>plan=${escapeHtml(billing.planKey)}</span>
-        <span>checkout_ready=${Boolean(billing.checkoutSessions.ready)}</span>
-        <span>portal_ready=${Boolean(billing.portal.ready)}</span>
       </div>
     </section>
   `;
@@ -43039,7 +40625,7 @@ function renderSourceIntakePanel() {
     ai_search:
       state.sourceHandoffStatus === "sent"
         ? "候选 A 已送入产品刊登。产品经理已经接收采购价、发货地、规格缺口和货源图用途，下一步在产品刊登里继续看 eBay 刊登资料、素材需求、利润履约和发布前校验。"
-        : 
+        :
       state.sourceSearchStatus === "done"
         ? "已模拟完成：AI 找到 2 个 1688 候选，优先推荐候选 A。下一步需要确认重量、包装尺寸、是否支持无票据代发，再送去产品刊登。"
         : "当前建议：先让 AI 根据市场报告找 1688 候选，再由你确认供应商；确认后才生成采购单和刊登资料。",
@@ -43335,992 +40921,6 @@ function renderConnectionStateBoard() {
   `;
 }
 
-function productDataModelSnapshot() {
-  const store = activeSaasStore();
-  const connection = latestSaasConnection();
-  const latestSync = getLatestSaasEbaySyncSummary();
-  const latestPacket = getLatestSaasDataPacketRecord(latestSync);
-  const packetBody = saasResolvedDataPacketBody(latestPacket, latestSync);
-  const present = Array.isArray(packetBody.present_resource_keys) ? packetBody.present_resource_keys : [];
-  const missing = Array.isArray(packetBody.missing_resource_keys) ? packetBody.missing_resource_keys : [];
-  return {
-    product: "JIEJING AI CEO eBay SaaS",
-    mode: "product_staging",
-    store: {
-      name: saasStoreDisplayName(store, connection) || "waiting_for_store_selection",
-      marketplace: store?.marketplace || "EBAY_US",
-      connection_status: connection?.status || "not_connected",
-      read_only_authorized: Boolean(connection?.read_only_authorized || isSaasAuthorizedConnectionStatus(connection?.status)),
-    },
-    ebay_read_only_sync: {
-      status: saasEbaySyncStatusText(saasEbaySyncOverallStatus(latestSync, latestPacket, packetBody)),
-      source: packetBody.source_label || latestPacket?.source_mode || "waiting",
-      present_resources: present,
-      missing_resources: missing,
-      official_api: packetBody.source_label === "official_api" || latestPacket?.source_mode === "official_api",
-    },
-    backend_records: {
-      tasks: state.saasTasks.length,
-      reports: state.saasReports.length,
-      confirmations: state.saasConfirmations.length,
-      audit_logs: state.saasAuditLogs.length,
-    },
-    execution_boundary: {
-      real_ebay_writes_enabled: state.saasEbayWriteAdapter?.real_platform_writes_enabled === true,
-      runtime_gets_sanitized_packet_only: true,
-      high_risk_actions_require_confirmation: true,
-    },
-  };
-}
-
-function saasFoundationStatusRows(ctx = saasMerchantWorkbenchContext()) {
-  const activeSecret = saasActiveModelSecretRef();
-  const modelReady = Boolean(state.saasModelSettings?.configured || activeSecret?.secret_ref);
-  const roles = saasMerchantRoleRows();
-  const auditCount = state.saasAuditLogs.length;
-  const pendingCount = ctx.pendingConfirmations.length;
-  const launchGate = state.saasCommercialLaunchGate || {};
-  const readiness = state.saasReadiness || {};
-  const backupPlan = state.saasBackupPlan || {};
-  const databasePlan = state.saasDatabasePlan || {};
-  const packetTitle = ctx.hasPacket ? "店铺资料可用" : "等待店铺资料";
-  const launchBlockers = Array.isArray(launchGate.blockers) ? launchGate.blockers : [];
-  const backupBlockers = Array.isArray(backupPlan.blockers) ? backupPlan.blockers : [];
-  const textAiState = saasPrimaryTextAiState();
-  return [
-    {
-      key: "workspace",
-      label: "账号空间",
-      title: state.saasConnected ? "账号空间已读取" : "等待登录",
-      detail: `${saasAccountDisplayName()} / ${state.saasTeamMember?.role || "owner"}`,
-      done: Boolean(state.saasToken || state.saasUser),
-      actionLabel: "右上角账号菜单",
-    },
-    {
-      key: "team",
-      label: "团队权限",
-      title: `${roles.length || 0} 个岗位角色`,
-      detail: "owner/admin/operator/media/support/finance/viewer，高风险确认按权限拦截。",
-      done: Boolean(roles.length),
-      actionLabel: "查看团队权限",
-    },
-    {
-      key: "integrations",
-      label: "集成健康",
-      title: ctx.connection ? "eBay 连接记录已读取" : "等待 eBay 只读授权",
-      detail: "只读授权、业务政策、费用、货源和物流集中在设置页。",
-      done: Boolean(ctx.connection),
-      actionLabel: "检查只读授权",
-      saasAction: "plan-ebay-oauth",
-    },
-    {
-      key: "packet",
-      label: "店铺资料",
-      title: packetTitle,
-      detail: `${ctx.presentCount}/${ctx.coverageTotal} 类资源 / ${ctx.sourceLabel}`,
-      done: Boolean(ctx.hasPacket),
-      actionLabel: "同步 eBay 数据",
-      saasAction: "sync-ebay-readonly",
-    },
-    {
-      key: "model",
-      label: "AI 连接",
-      title: textAiState.title,
-      detail: textAiState.detail,
-      done: textAiState.configured,
-      actionLabel: "保存 AI 连接",
-      saasAction: "save-model-api-key",
-    },
-    {
-      key: "confirmation",
-      label: "确认中心",
-      title: pendingCount ? `${pendingCount} 个待确认` : "确认中心已接住高风险动作",
-      detail: "发布、付款、退款、改价、广告、政策和敏感承诺不自动执行。",
-      done: true,
-      caution: pendingCount > 0,
-      actionLabel: "打开确认中心",
-      saasAction: "open-confirm",
-    },
-    {
-      key: "audit",
-      label: "审计记录",
-      title: `${auditCount} 条审计记录`,
-      detail: "账号、任务、确认、执行结果要可追溯，方便客服和开发定位。",
-      done: auditCount > 0,
-      actionLabel: "导出诊断快照",
-      saasAction: "download-account-snapshot",
-    },
-    {
-      key: "security",
-      label: "安全边界",
-      title: `真实写入${saasRealPlatformWriteLabel()}`,
-      detail: `${saasRealPlatformWriteDetail()} 测试会话关闭、密钥边界、租户隔离、店铺资料边界保留。`,
-      done: true,
-      caution: isSaasRealPlatformWritesEnabled(),
-      actionLabel: "复制当前状态",
-      saasAction: "copy-saas-status",
-    },
-    {
-      key: "launch",
-      label: "上线门禁",
-      title: launchGate.paid_commercial_launch_ready ? "付费门禁通过" : "付费上线仍阻断",
-      detail: launchBlockers.length ? launchBlockers.slice(0, 2).join(" / ") : readiness.production_ready ? "生产 ready" : "仍是受控 staging",
-      done: Boolean(launchGate.paid_commercial_launch_ready),
-      caution: true,
-      actionLabel: "刷新门禁",
-      saasAction: "refresh",
-    },
-    {
-      key: "ops",
-      label: "运维底座",
-      title: backupPlan.status || (databasePlan.staging_migration_shape_ready ? "迁移形态已就绪" : "生产运维待补"),
-      detail: backupBlockers.length ? backupBlockers.slice(0, 2).join(" / ") : "托管 DB、备份恢复、监控告警、稳定域名是生产级缺口。",
-      done: Boolean(backupPlan.status && !backupBlockers.length),
-      actionLabel: "刷新状态",
-      saasAction: "refresh",
-    },
-  ];
-}
-
-function renderSaasOperatingSystemPanel(ctx = saasMerchantWorkbenchContext()) {
-  const rows = saasFoundationStatusRows(ctx);
-  const doneCount = rows.filter((row) => row.done && !row.caution).length;
-  const coreCount = rows.length;
-  const activeSecret = saasActiveModelSecretRef();
-  const launchGate = state.saasCommercialLaunchGate || {};
-  const modelReady = Boolean(state.saasModelSettings?.configured || activeSecret?.secret_ref);
-  const cards = [
-    {
-      label: "账号空间",
-      value: state.saasConnected ? "已登录" : "待登录",
-      detail: saasAccountDisplayName(),
-      tone: state.saasConnected ? "is-green" : "is-amber",
-    },
-    {
-      label: "官方数据",
-      value: ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal}` : "待同步",
-      detail: ctx.sourceLabel,
-      tone: ctx.hasPacket ? "is-green" : "is-amber",
-    },
-    {
-      label: "模型与记忆",
-      value: modelReady ? "已连接" : "待保存",
-      detail: modelReady ? "安全连接可用" : "商家自带 AI 连接",
-      tone: modelReady ? "is-green" : "is-amber",
-    },
-    {
-      label: "上线门禁",
-      value: launchGate.paid_commercial_launch_ready ? "ready" : "blocked",
-      detail: "当前仍是受控 staging",
-      tone: launchGate.paid_commercial_launch_ready ? "is-green" : "is-amber",
-    },
-  ];
-  return `
-    <section class="saas-merchant-evidence-panel saas-operating-system-panel" aria-label="SaaS 基础能力中枢">
-      <div class="saas-merchant-path-head">
-        <div>
-          <span>SaaS 基础能力中枢</span>
-          <strong>把成熟 SaaS 的账号、权限、集成、审计和上线门禁落到捷境自己的 eBay-first 工作台</strong>
-          <p>这里不是再堆演示页，而是集中显示真实账号空间、官方只读数据包、AI 连接、确认中心、安全边界和生产级缺口。当前可以做受控 staging 测试，不能冒充生产级 SaaS 安全。</p>
-        </div>
-        <em>${doneCount}/${coreCount} stable</em>
-      </div>
-      <div class="saas-foundation-score-grid">
-        ${cards
-          .map(
-            (card) => `
-              <article class="${card.tone}">
-                <span>${escapeHtml(card.label)}</span>
-                <strong>${escapeHtml(card.value)}</strong>
-                <small>${escapeHtml(card.detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-foundation-grid">
-        ${rows
-          .map((row) => {
-            const tone = row.done ? (row.caution ? "is-caution" : "is-done") : "is-waiting";
-            const actionAttrs = row.saasAction ? `data-saas-action="${escapeHtml(row.saasAction)}"` : "disabled";
-            return `
-              <article class="saas-foundation-card ${tone}">
-                <span>${escapeHtml(row.label)}</span>
-                <strong>${escapeHtml(row.title)}</strong>
-                <p>${escapeHtml(row.detail)}</p>
-                <button class="secondary-action compact-action" type="button" ${actionAttrs}>${escapeHtml(row.actionLabel)}</button>
-              </article>
-            `;
-          })
-          .join("")}
-      </div>
-      <div class="saas-foundation-actions">
-        <button class="secondary-action" type="button" data-saas-action="download-account-snapshot">导出无密钥账号快照</button>
-        <button class="secondary-action" type="button" data-saas-action="copy-saas-status">复制当前安全状态</button>
-        <button class="primary-action" type="button" data-saas-action="run-model-value-rehearsal" ${state.saasLoading || !state.saasConnected ? "disabled" : ""}>跑 Market Report + Listing Package</button>
-      </div>
-    </section>
-  `;
-}
-
-function sanitizedSaasAccountSnapshot() {
-  const ctx = saasMerchantWorkbenchContext();
-  const base = productDataModelSnapshot();
-  const activeSecret = saasActiveModelSecretRef();
-  const costLedger = saasCostLedgerSummary();
-  const skillPacks = saasEbaySkillPackRows(ctx);
-  return {
-    generated_at: new Date().toISOString(),
-    ...base,
-    account: {
-      account_display_name: saasAccountDisplayName(),
-      email: state.saasUser?.email || "",
-      role: state.saasTeamMember?.role || "owner",
-      permissions: Array.isArray(state.saasPermissions) ? state.saasPermissions : [],
-      session_token_present: Boolean(state.saasToken),
-    },
-    model: {
-      configured: Boolean(state.saasModelSettings?.configured || activeSecret?.secret_ref),
-      active_ai_service: activeSecret?.provider_key || state.saasModelSettings?.active_provider || "",
-      secure_reference_present: Boolean(activeSecret?.secret_ref),
-      raw_key_exposed: false,
-    },
-    confirmation_center: {
-      total: state.saasConfirmations.length,
-      pending: ctx.pendingConfirmations.length,
-    },
-    audit: {
-      audit_log_count: state.saasAuditLogs.length,
-    },
-    source_records: {
-      total: saasCollectedSourceRecords(ctx).length,
-      manual: (state.saasSourceRecords || []).length,
-      browser_control_enabled: false,
-      source_record_only: true,
-    },
-    ebay_skill_packs: {
-      total: skillPacks.length,
-      ready: skillPacks.filter((item) => item.ready).length,
-      generic_agent_marketplace_enabled: false,
-    },
-    merchant_feedback: {
-      total: (state.saasMerchantFeedback || []).length,
-      memory_loop_enabled: true,
-      secret_exposed: false,
-    },
-    cost_ledger: {
-      ai_service: costLedger.providerLabel,
-      report_count: costLedger.reportCount,
-      queue_job_count: costLedger.jobCount,
-      failed_job_count: costLedger.failedJobs,
-      estimated_tokens: costLedger.tokenEstimate,
-      value_proof_ready: costLedger.valueProofReady,
-    },
-    gates: {
-      readiness: state.saasReadiness || null,
-      security_gate: state.saasSecurityGate || null,
-      commercial_launch_gate: state.saasCommercialLaunchGate || null,
-      backup_plan: state.saasBackupPlan || null,
-    },
-    secret_exposed: false,
-    real_platform_writes_enabled: isSaasRealPlatformWritesEnabled(),
-  };
-}
-
-function downloadSaasAccountSnapshot() {
-  const snapshot = sanitizedSaasAccountSnapshot();
-  const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `jiejing-account-snapshot-${Date.now()}.json`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
-  showActionToast("已导出无密钥账号诊断快照。");
-}
-
-function buildSaasOwnerReviewPacketDownloadPayload() {
-  if (!saasOwnerLaunchCanView()) return null;
-  const control = state.saasOwnerLaunchControl && typeof state.saasOwnerLaunchControl === "object" ? state.saasOwnerLaunchControl : {};
-  const ownerReview = control.owner_review_packet && typeof control.owner_review_packet === "object" ? control.owner_review_packet : null;
-  if (!ownerReview) return null;
-  return {
-    generated_at: new Date().toISOString(),
-    app_base_url: window.location.origin,
-    owner_review_packet: ownerReview,
-    boundary: {
-      platform_internal_admin_only: true,
-      customer_visible: false,
-      exports_database: false,
-      exports_raw_secret: false,
-      includes_raw_tokens: false,
-      includes_payment_secret: false,
-      calls_stripe_api: false,
-      creates_checkout_session: false,
-      triggers_real_charge: false,
-      triggers_ebay_oauth: false,
-      triggers_real_platform_write: false,
-      frontend_gets_secret: false,
-      secret_exposed: false,
-    },
-  };
-}
-
-function buildSaasLaunchRehearsalAuditDownloadPayload() {
-  if (!saasOwnerLaunchCanView()) return null;
-  const control = state.saasOwnerLaunchControl && typeof state.saasOwnerLaunchControl === "object" ? state.saasOwnerLaunchControl : {};
-  const launchAudit =
-    control.launch_rehearsal_audit_packet && typeof control.launch_rehearsal_audit_packet === "object"
-      ? control.launch_rehearsal_audit_packet
-      : null;
-  if (!launchAudit) return null;
-  return {
-    generated_at: new Date().toISOString(),
-    app_base_url: window.location.origin,
-    launch_rehearsal_audit_packet: launchAudit,
-    boundary: {
-      platform_internal_admin_only: true,
-      customer_visible: false,
-      exports_database: false,
-      exports_raw_secret: false,
-      includes_raw_tokens: false,
-      includes_payment_secret: false,
-      calls_stripe_api: false,
-      creates_checkout_session: false,
-      triggers_real_charge: false,
-      charge_now_allowed: false,
-      triggers_ebay_oauth: false,
-      repeat_ebay_oauth_allowed: false,
-      triggers_real_platform_write: false,
-      platform_write_now_allowed: false,
-      frontend_gets_secret: false,
-      secret_exposed: false,
-    },
-  };
-}
-
-function buildSaasReleaseHistoryDownloadPayload() {
-  if (!saasOwnerLaunchCanView()) return null;
-  const control = state.saasOwnerLaunchControl && typeof state.saasOwnerLaunchControl === "object" ? state.saasOwnerLaunchControl : {};
-  const releaseHistory = control.release_history && typeof control.release_history === "object" ? control.release_history : null;
-  if (!releaseHistory) return null;
-  return {
-    generated_at: new Date().toISOString(),
-    app_base_url: window.location.origin,
-    release_history: releaseHistory,
-    boundary: {
-      platform_internal_admin_only: true,
-      customer_visible: false,
-      exports_database: false,
-      exports_raw_secret: false,
-      includes_raw_tokens: false,
-      includes_payment_secret: false,
-      reads_env_secret_values: false,
-      calls_stripe_api: false,
-      creates_checkout_session: false,
-      triggers_real_charge: false,
-      charge_now_allowed: false,
-      triggers_ebay_oauth: false,
-      repeat_ebay_oauth_allowed: false,
-      triggers_real_platform_write: false,
-      platform_write_now_allowed: false,
-      frontend_gets_secret: false,
-      secret_exposed: false,
-    },
-  };
-}
-
-function buildSaasContinuityHandoffDownloadPayload() {
-  if (!saasOwnerLaunchCanView()) return null;
-  const control = state.saasOwnerLaunchControl && typeof state.saasOwnerLaunchControl === "object" ? state.saasOwnerLaunchControl : {};
-  const handoff = control.continuity_handoff_digest && typeof control.continuity_handoff_digest === "object" ? control.continuity_handoff_digest : null;
-  if (!handoff) return null;
-  return {
-    generated_at: new Date().toISOString(),
-    app_base_url: window.location.origin,
-    continuity_handoff_digest: handoff,
-    boundary: {
-      platform_internal_admin_only: true,
-      customer_visible: false,
-      exports_database: false,
-      exports_raw_secret: false,
-      includes_raw_tokens: false,
-      includes_payment_secret: false,
-      reads_env_secret_values: false,
-      calls_stripe_api: false,
-      creates_checkout_session: false,
-      triggers_real_charge: false,
-      charge_now_allowed: false,
-      triggers_ebay_oauth: false,
-      repeat_ebay_oauth_allowed: false,
-      triggers_real_platform_write: false,
-      platform_write_now_allowed: false,
-      frontend_gets_secret: false,
-      secret_exposed: false,
-    },
-  };
-}
-
-function buildSaasCutoverDecisionChecklistDownloadPayload() {
-  if (!saasOwnerLaunchCanView()) return null;
-  const control = state.saasOwnerLaunchControl && typeof state.saasOwnerLaunchControl === "object" ? state.saasOwnerLaunchControl : {};
-  const checklist =
-    control.cutover_decision_checklist && typeof control.cutover_decision_checklist === "object"
-      ? control.cutover_decision_checklist
-      : null;
-  if (!checklist) return null;
-  return {
-    generated_at: new Date().toISOString(),
-    app_base_url: window.location.origin,
-    cutover_decision_checklist: checklist,
-    boundary: {
-      platform_internal_admin_only: true,
-      customer_visible: false,
-      exports_database: false,
-      exports_raw_secret: false,
-      includes_raw_tokens: false,
-      includes_payment_secret: false,
-      reads_env_secret_values: false,
-      calls_stripe_api: false,
-      creates_checkout_session: false,
-      triggers_real_charge: false,
-      charge_now_allowed: false,
-      triggers_ebay_oauth: false,
-      repeat_ebay_oauth_allowed: false,
-      triggers_real_platform_write: false,
-      platform_write_now_allowed: false,
-      frontend_gets_secret: false,
-      frontend_gets_payment_secret: false,
-      frontend_gets_ebay_token: false,
-      secret_exposed: false,
-    },
-  };
-}
-
-function buildSaasFinalLaunchRehearsalRecordDownloadPayload() {
-  if (!saasOwnerLaunchCanView()) return null;
-  const control = state.saasOwnerLaunchControl && typeof state.saasOwnerLaunchControl === "object" ? state.saasOwnerLaunchControl : {};
-  const record =
-    control.final_launch_rehearsal_execution_record && typeof control.final_launch_rehearsal_execution_record === "object"
-      ? control.final_launch_rehearsal_execution_record
-      : null;
-  if (!record) return null;
-  return {
-    generated_at: new Date().toISOString(),
-    app_base_url: window.location.origin,
-    final_launch_rehearsal_execution_record: record,
-    boundary: {
-      platform_internal_admin_only: true,
-      customer_visible: false,
-      exports_database: false,
-      exports_raw_secret: false,
-      includes_raw_tokens: false,
-      includes_payment_secret: false,
-      reads_env_secret_values: false,
-      calls_stripe_api: false,
-      creates_checkout_session: false,
-      triggers_real_charge: false,
-      charge_now_allowed: false,
-      triggers_ebay_oauth: false,
-      repeat_ebay_oauth_allowed: false,
-      triggers_real_platform_write: false,
-      platform_write_now_allowed: false,
-      frontend_gets_secret: false,
-      frontend_gets_payment_secret: false,
-      frontend_gets_ebay_token: false,
-      secret_exposed: false,
-    },
-  };
-}
-
-function buildSaasOwnerPaidLaunchDossierDownloadPayload() {
-  if (!saasOwnerLaunchCanView()) return null;
-  const control = state.saasOwnerLaunchControl && typeof state.saasOwnerLaunchControl === "object" ? state.saasOwnerLaunchControl : {};
-  const dossier =
-    control.owner_paid_launch_approval_dossier && typeof control.owner_paid_launch_approval_dossier === "object"
-      ? control.owner_paid_launch_approval_dossier
-      : null;
-  if (!dossier) return null;
-  return {
-    generated_at: new Date().toISOString(),
-    app_base_url: window.location.origin,
-    owner_paid_launch_approval_dossier: dossier,
-    boundary: {
-      platform_internal_admin_only: true,
-      customer_visible: false,
-      ordinary_merchant_visible: false,
-      merchant_surface_safe: true,
-      exports_database: false,
-      exports_raw_secret: false,
-      includes_raw_tokens: false,
-      includes_payment_secret: false,
-      reads_env_secret_values: false,
-      calls_stripe_api: false,
-      creates_checkout_session: false,
-      triggers_real_charge: false,
-      charge_now_allowed: false,
-      triggers_ebay_oauth: false,
-      repeat_ebay_oauth_allowed: false,
-      triggers_real_platform_write: false,
-      platform_write_now_allowed: false,
-      frontend_gets_secret: false,
-      frontend_gets_payment_secret: false,
-      frontend_gets_ebay_token: false,
-      secret_exposed: false,
-    },
-  };
-}
-
-function buildSaasPrelaunchAcceptanceReportDownloadPayload() {
-  if (!saasOwnerLaunchCanView()) return null;
-  const control = state.saasOwnerLaunchControl && typeof state.saasOwnerLaunchControl === "object" ? state.saasOwnerLaunchControl : {};
-  const report =
-    control.prelaunch_acceptance_report && typeof control.prelaunch_acceptance_report === "object"
-      ? control.prelaunch_acceptance_report
-      : null;
-  if (!report) return null;
-  return {
-    generated_at: new Date().toISOString(),
-    app_base_url: window.location.origin,
-    prelaunch_acceptance_report: report,
-    report_markdown: report.report_markdown || "",
-    boundary: {
-      platform_internal_admin_only: true,
-      customer_visible: false,
-      exports_database: false,
-      exports_raw_secret: false,
-      includes_raw_tokens: false,
-      includes_payment_secret: false,
-      reads_env_secret_values: false,
-      calls_stripe_api: false,
-      creates_checkout_session: false,
-      triggers_real_charge: false,
-      charge_now_allowed: false,
-      triggers_ebay_oauth: false,
-      repeat_ebay_oauth_allowed: false,
-      triggers_real_platform_write: false,
-      platform_write_now_allowed: false,
-      frontend_gets_secret: false,
-      frontend_gets_payment_secret: false,
-      frontend_gets_ebay_token: false,
-      secret_exposed: false,
-    },
-  };
-}
-
-async function copySaasOwnerReviewPacket() {
-  const payload = buildSaasOwnerReviewPacketDownloadPayload();
-  if (!payload) {
-    showActionToast("Owner review packet is available only to the internal admin account.");
-    return;
-  }
-  const text = JSON.stringify(payload, null, 2);
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.setAttribute("readonly", "readonly");
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      textarea.remove();
-    }
-    showActionToast("Owner review packet copied. It excludes raw secrets, tokens, payment keys and database exports.");
-  } catch (error) {
-    console.warn("copySaasOwnerReviewPacket failed", error);
-    showActionToast("Copy failed. Use the owner review packet download instead.");
-  }
-}
-
-function downloadSaasOwnerReviewPacket() {
-  const payload = buildSaasOwnerReviewPacketDownloadPayload();
-  if (!payload) {
-    showActionToast("Owner review packet is available only to the internal admin account.");
-    return;
-  }
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `jiejing-owner-review-packet-${Date.now()}.json`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
-  showActionToast("Owner review packet downloaded. No database export, raw secret, token, payment key, OAuth or charge action was triggered.");
-}
-
-async function copySaasLaunchRehearsalAudit() {
-  const payload = buildSaasLaunchRehearsalAuditDownloadPayload();
-  if (!payload) {
-    showActionToast("Launch rehearsal audit is available only to the internal admin account.");
-    return;
-  }
-  const text = JSON.stringify(payload, null, 2);
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.setAttribute("readonly", "readonly");
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      textarea.remove();
-    }
-    showActionToast("Launch rehearsal audit copied. It is read-only and excludes database exports, raw secrets, tokens and payment keys.");
-  } catch (error) {
-    console.warn("copySaasLaunchRehearsalAudit failed", error);
-    showActionToast("Copy failed. Use the launch rehearsal audit download instead.");
-  }
-}
-
-function downloadSaasLaunchRehearsalAudit() {
-  const payload = buildSaasLaunchRehearsalAuditDownloadPayload();
-  if (!payload) {
-    showActionToast("Launch rehearsal audit is available only to the internal admin account.");
-    return;
-  }
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `jiejing-launch-rehearsal-audit-${Date.now()}.json`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
-  showActionToast("Launch rehearsal audit downloaded. No checkout, charge, OAuth, platform write, database export or secret exposure was triggered.");
-}
-
-async function copySaasReleaseHistory() {
-  const payload = buildSaasReleaseHistoryDownloadPayload();
-  if (!payload) {
-    showActionToast("Release history is available only to the internal admin account.");
-    return;
-  }
-  const text = JSON.stringify(payload, null, 2);
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.setAttribute("readonly", "readonly");
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      textarea.remove();
-    }
-    showActionToast("Release history copied. It contains artifact metadata and rollback pointers only.");
-  } catch (error) {
-    console.warn("copySaasReleaseHistory failed", error);
-    showActionToast("Copy failed. Use the release history download instead.");
-  }
-}
-
-function downloadSaasReleaseHistory() {
-  const payload = buildSaasReleaseHistoryDownloadPayload();
-  if (!payload) {
-    showActionToast("Release history is available only to the internal admin account.");
-    return;
-  }
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `jiejing-release-history-${Date.now()}.json`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
-  showActionToast("Release history downloaded. No database export, secret read, charge, OAuth or platform write was triggered.");
-}
-
-async function copySaasContinuityHandoff() {
-  const payload = buildSaasContinuityHandoffDownloadPayload();
-  if (!payload) {
-    showActionToast("Continuity handoff is available only to the internal admin account.");
-    return;
-  }
-  const text = JSON.stringify(payload, null, 2);
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.setAttribute("readonly", "readonly");
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      textarea.remove();
-    }
-    showActionToast("Continuity handoff copied. It excludes raw secrets, tokens, payment keys and database exports.");
-  } catch (error) {
-    console.warn("copySaasContinuityHandoff failed", error);
-    showActionToast("Copy failed. Use the continuity handoff download instead.");
-  }
-}
-
-function downloadSaasContinuityHandoff() {
-  const payload = buildSaasContinuityHandoffDownloadPayload();
-  if (!payload) {
-    showActionToast("Continuity handoff is available only to the internal admin account.");
-    return;
-  }
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `jiejing-continuity-handoff-${Date.now()}.json`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
-  showActionToast("Continuity handoff downloaded. No database export, secret read, charge, OAuth or platform write was triggered.");
-}
-
-async function copySaasCutoverDecisionChecklist() {
-  const payload = buildSaasCutoverDecisionChecklistDownloadPayload();
-  if (!payload) {
-    showActionToast("Cutover checklist is available only to the internal admin account.");
-    return;
-  }
-  const text = JSON.stringify(payload, null, 2);
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.setAttribute("readonly", "readonly");
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      textarea.remove();
-    }
-    showActionToast("Cutover checklist copied. It separates internal work from founder external-console work and excludes secrets.");
-  } catch (error) {
-    console.warn("copySaasCutoverDecisionChecklist failed", error);
-    showActionToast("Copy failed. Use the cutover checklist download instead.");
-  }
-}
-
-function downloadSaasCutoverDecisionChecklist() {
-  const payload = buildSaasCutoverDecisionChecklistDownloadPayload();
-  if (!payload) {
-    showActionToast("Cutover checklist is available only to the internal admin account.");
-    return;
-  }
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `jiejing-cutover-decision-checklist-${Date.now()}.json`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
-  showActionToast("Cutover checklist downloaded. No database export, secret read, charge, OAuth or platform write was triggered.");
-}
-
-async function copySaasFinalLaunchRehearsalRecord() {
-  const payload = buildSaasFinalLaunchRehearsalRecordDownloadPayload();
-  if (!payload) {
-    showActionToast("Final launch rehearsal record is available only to the internal admin account.");
-    return;
-  }
-  const text = JSON.stringify(payload, null, 2);
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.setAttribute("readonly", "readonly");
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      textarea.remove();
-    }
-    showActionToast("Final rehearsal record copied. It is read-only and excludes secrets, tokens, payment keys, checkout, charge, OAuth and platform writes.");
-  } catch (error) {
-    console.warn("copySaasFinalLaunchRehearsalRecord failed", error);
-    showActionToast("Copy failed. Use the final rehearsal record download instead.");
-  }
-}
-
-function downloadSaasFinalLaunchRehearsalRecord() {
-  const payload = buildSaasFinalLaunchRehearsalRecordDownloadPayload();
-  if (!payload) {
-    showActionToast("Final launch rehearsal record is available only to the internal admin account.");
-    return;
-  }
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `jiejing-final-launch-rehearsal-record-${Date.now()}.json`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
-  showActionToast("Final rehearsal record downloaded. No database export, secret read, charge, OAuth or platform write was triggered.");
-}
-
-async function copySaasOwnerPaidLaunchDossier() {
-  const payload = buildSaasOwnerPaidLaunchDossierDownloadPayload();
-  if (!payload) {
-    showActionToast("Owner paid launch dossier is available only to the internal admin account.");
-    return;
-  }
-  const text = JSON.stringify(payload, null, 2);
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.setAttribute("readonly", "readonly");
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      textarea.remove();
-    }
-    showActionToast("Owner paid launch dossier copied. It is internal only and excludes secrets, tokens, payment keys, checkout, charge, OAuth and platform writes.");
-  } catch (error) {
-    console.warn("copySaasOwnerPaidLaunchDossier failed", error);
-    showActionToast("Copy failed. Use the owner paid launch dossier download instead.");
-  }
-}
-
-function downloadSaasOwnerPaidLaunchDossier() {
-  const payload = buildSaasOwnerPaidLaunchDossierDownloadPayload();
-  if (!payload) {
-    showActionToast("Owner paid launch dossier is available only to the internal admin account.");
-    return;
-  }
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `jiejing-owner-paid-launch-dossier-${Date.now()}.json`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
-  showActionToast("Owner paid launch dossier downloaded. No database export, secret read, charge, OAuth or platform write was triggered.");
-}
-
-async function copySaasPrelaunchAcceptanceReport() {
-  const payload = buildSaasPrelaunchAcceptanceReportDownloadPayload();
-  if (!payload) {
-    showActionToast("Prelaunch acceptance report is available only to the internal admin account.");
-    return;
-  }
-  const text = payload.report_markdown || JSON.stringify(payload, null, 2);
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.setAttribute("readonly", "readonly");
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      textarea.remove();
-    }
-    showActionToast("Prelaunch acceptance report copied as Markdown. It keeps paid launch blocked and excludes secrets, tokens, payment keys, checkout, charge, OAuth and platform writes.");
-  } catch (error) {
-    console.warn("copySaasPrelaunchAcceptanceReport failed", error);
-    showActionToast("Copy failed. Use the prelaunch acceptance report download instead.");
-  }
-}
-
-function downloadSaasPrelaunchAcceptanceReport() {
-  const payload = buildSaasPrelaunchAcceptanceReportDownloadPayload();
-  if (!payload) {
-    showActionToast("Prelaunch acceptance report is available only to the internal admin account.");
-    return;
-  }
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `jiejing-prelaunch-acceptance-report-${Date.now()}.json`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
-  showActionToast("Prelaunch acceptance report downloaded. No database export, secret read, charge, OAuth or platform write was triggered.");
-}
-
-async function copySaasStatusSummary() {
-  const snapshot = sanitizedSaasAccountSnapshot();
-  const launchGate = snapshot.gates.commercial_launch_gate || {};
-  const lines = [
-    "JIEJING SaaS status",
-    `account=${snapshot.account.account_display_name}`,
-    `store=${snapshot.store.name}`,
-    `ebay_status=${snapshot.store.connection_status}`,
-    `packet_source=${snapshot.ebay_read_only_sync.source}`,
-    `present_resources=${snapshot.ebay_read_only_sync.present_resources.length}`,
-    `model_configured=${snapshot.model.configured}`,
-    `ebay_skill_packs_ready=${snapshot.ebay_skill_packs.ready}/${snapshot.ebay_skill_packs.total}`,
-    `source_records=${snapshot.source_records.total}`,
-    `merchant_feedback=${snapshot.merchant_feedback.total}`,
-    `estimated_tokens=${snapshot.cost_ledger.estimated_tokens}`,
-    `value_proof_ready=${snapshot.cost_ledger.value_proof_ready}`,
-    `pending_confirmations=${snapshot.confirmation_center.pending}`,
-    `real_platform_writes_enabled=${snapshot.real_platform_writes_enabled}`,
-    `paid_launch_ready=${Boolean(launchGate.paid_commercial_launch_ready)}`,
-    "secret_exposed=false",
-  ];
-  const text = lines.join("\n");
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.setAttribute("readonly", "readonly");
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      textarea.remove();
-    }
-    showActionToast("已复制当前安全和上线状态。");
-  } catch (error) {
-    console.warn("copySaasStatusSummary failed", error);
-    showActionToast("复制失败，请从账号快照查看当前状态。");
-  }
-}
-
 async function copySaasEbayCallbackUrl() {
   const callbackUrl = currentSaasEbayCallbackUrl();
   try {
@@ -44343,91 +40943,6 @@ async function copySaasEbayCallbackUrl() {
     showActionToast("复制失败，请手动复制设置页里的官方连接返回地址。");
   }
 }
-
-function renderSaasSettingsControlRoom(ctx = saasMerchantWorkbenchContext(), options = {}) {
-  const activeSecret = saasActiveModelSecretRef();
-  const modelReady = Boolean(state.saasModelSettings?.configured || activeSecret?.secret_ref);
-  const realWritesEnabled = isSaasRealPlatformWritesEnabled();
-  const packetId = ctx.latestPacket?.packet_id || ctx.latestPacket?.id || "";
-  const connectionStatus = ctx.connection?.status || ctx.store?.connection_status || ctx.store?.status || "";
-  const launchGate = state.saasCommercialLaunchGate || {};
-  const launchBlockers = Array.isArray(launchGate.blockers) ? launchGate.blockers : [];
-  const pendingCount = ctx.pendingConfirmations.length;
-  const cards = [
-    {
-      label: "登录状态",
-      value: state.saasConnected ? "已恢复" : "待登录",
-      detail: state.saasConnected ? saasAccountDisplayName() : "只需要账号密码登录",
-      tone: state.saasConnected ? "is-green" : "is-amber",
-    },
-    {
-      label: "eBay 授权",
-      value: saasStoreStatusLabel(connectionStatus || "not_connected"),
-      detail: ctx.connection ? saasStoreDisplayName(ctx.store, ctx.connection) : "不重复打开授权链接",
-      tone: isSaasAuthorizedConnectionStatus(connectionStatus) ? "is-green" : "is-amber",
-    },
-    {
-      label: "店铺资料",
-      value: ctx.hasPacket ? `${ctx.presentCount}/${ctx.coverageTotal}` : "待同步",
-      detail: packetId || ctx.sourceLabel,
-      tone: ctx.hasPacket && ctx.missingKeys.length === 0 ? "is-green" : "is-amber",
-    },
-    {
-      label: "AI 连接",
-      value: modelReady ? "已连接" : "待保存",
-      detail: modelReady ? "页面不显示原始凭证" : "保存后只显示可用状态",
-      tone: modelReady ? "is-green" : "is-amber",
-    },
-    {
-      label: "决策边界",
-      value: pendingCount ? `${pendingCount} 待确认` : "已接住",
-      detail: "发布、改价、退款、广告、付款必须确认",
-      tone: pendingCount ? "is-amber" : "is-green",
-    },
-    {
-      label: "真实写入",
-      value: saasRealPlatformWriteLabel(),
-      detail: realWritesEnabled ? "启用但仍走决策中心" : "确认后只记录交接",
-      tone: realWritesEnabled ? "is-amber" : "is-green",
-    },
-    {
-      label: "上线门禁",
-      value: launchGate.paid_commercial_launch_ready ? "ready" : "blocked",
-      detail: launchBlockers[0] || "当前仍是受控 staging",
-      tone: launchGate.paid_commercial_launch_ready ? "is-green" : "is-amber",
-    },
-  ];
-  return `
-    <section class="saas-settings-control-room" aria-label="设置总览">
-      <div class="saas-settings-control-head">
-        <div>
-          <span>设置总览</span>
-          <strong>先看真实状态，再进入高级配置</strong>
-          <p>这里集中显示登录恢复、eBay 授权、店铺资料、AI 连接、确认中心和上线门禁。没有真实数据时显示缺口，不用旧模拟商品填工作台。</p>
-        </div>
-        <div class="saas-settings-control-actions">
-          <button class="secondary-action" type="button" data-saas-action="refresh" ${state.saasLoading ? "disabled" : ""}>刷新状态</button>
-          <button class="secondary-action" type="button" data-saas-action="copy-saas-status">复制状态</button>
-          <button class="primary-action" type="button" data-saas-action="open-confirm">打开决策中心</button>
-        </div>
-      </div>
-      <div class="saas-settings-control-grid">
-        ${cards
-          .map(
-            (card) => `
-              <article class="${card.tone}">
-                <span>${escapeHtml(card.label)}</span>
-                <strong>${escapeHtml(card.value)}</strong>
-                <small>${escapeHtml(card.detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-    </section>
-  `;
-}
-
 function renderSaasSettingsSectionGroup({ title = "", detail = "", badge = "", open = false, panels = [] } = {}) {
   return `
     <details class="saas-settings-section-group" ${open ? "open" : ""}>
@@ -44663,84 +41178,6 @@ function renderSaasMerchantOnboardingPanel(options = {}) {
         <span>triggers_real_charge=false</span>
         <span>automatic_oauth=false</span>
         <span>secret_exposed=false</span>
-      </div>
-    </section>
-  `;
-}
-
-function renderSaasNewEbayAccountOnboardingPanel() {
-  const launchGate = state.saasCommercialLaunchGate && typeof state.saasCommercialLaunchGate === "object" ? state.saasCommercialLaunchGate : {};
-  const runbook = Array.isArray(launchGate.new_ebay_account_smoke_runbook) ? launchGate.new_ebay_account_smoke_runbook : [];
-  const byKey = new Map(runbook.map((item) => [item?.key, item]));
-  const phaseKeys = [
-    "clean_new_account_declared",
-    "new_account_oauth_authorization_gate",
-    "official_packet_account_health_snapshot",
-    "new_product_duplicate_guard",
-    "publish_health_confirmation_gate",
-    "controlled_real_publish_probe",
-    "post_publish_cockpit_cleanup_gate",
-  ];
-  const rows = phaseKeys.map((key) => {
-    const item = byKey.get(key) || {};
-    const status = item.status || "blocked";
-    return {
-      key,
-      title: item.title || key,
-      status,
-      tone: status === "ready" ? "green" : key === "new_account_oauth_authorization_gate" ? "red" : "amber",
-      detail: item.next_action || item.evidence_summary || "waiting_for_clean_new_account_evidence",
-      confirmation: item.confirmation_center_required === true,
-    };
-  });
-  const readyCount = rows.filter((row) => row.status === "ready").length;
-  return `
-    <section class="saas-settings-card saas-new-ebay-onboarding-panel" aria-label="新 eBay 账号低风险接入">
-      <div class="saas-settings-card-head">
-        <div>
-          <span>新 eBay 账号低风险接入</span>
-          <strong>${readyCount}/${rows.length} ready · old frozen account forbidden</strong>
-          <p>这里是接入前驾驶舱，不会打开 OAuth。只有你明确说使用全新的 eBay 账号开始测试后，才进入后端 OAuth、官方只读同步、账号健康、全新商品体检、确认中心、真实发布和清理闭环。</p>
-        </div>
-      </div>
-      <div class="saas-settings-status-list">
-        <article class="is-red">
-          <span>旧账号边界</span>
-          <strong>reuse_forbidden</strong>
-          <small>old_frozen_account_reuse_allowed=false / repeat_oauth_allowed=false / no_old_sku_images_listing_report</small>
-        </article>
-        <article class="is-green">
-          <span>当前页面动作</span>
-          <strong>no_oauth_started</strong>
-          <small>triggers_ebay_oauth=false / triggers_real_platform_write=false / secret_exposed=false</small>
-        </article>
-        <article class="is-amber">
-          <span>外部准备</span>
-          <strong>new_account_and_assets</strong>
-          <small>需要全新 eBay 账号、全新真实测试商品、全新 SKU、全新图片素材。</small>
-        </article>
-      </div>
-      <div class="saas-settings-row-list saas-new-ebay-onboarding-steps">
-        ${rows
-          .map(
-            (row) => `
-              <article class="is-${escapeHtml(row.tone)}">
-                <div>
-                  <span>${escapeHtml(row.key)}</span>
-                  <strong>${escapeHtml(row.title)}</strong>
-                  <small>${escapeHtml(row.detail)}</small>
-                  <small>confirmation_center_required=${Boolean(row.confirmation)} / no_direct_write=true</small>
-                </div>
-                <em>${escapeHtml(row.status)}</em>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-backend-preflight-actions">
-        <button class="secondary-action" type="button" data-saas-action="refresh" ${state.saasLoading ? "disabled" : ""}>刷新状态</button>
-        <button class="primary-action" type="button" data-saas-action="open-confirm">打开确认中心</button>
-        <small>注意：本面板没有 eBay 授权按钮，避免对旧冻结账号重复授权。</small>
       </div>
     </section>
   `;
@@ -45348,1663 +41785,6 @@ function renderSaasSettingsBillingFocusPanel(ctx = saasMerchantWorkbenchContext(
   });
 }
 
-function renderSaasQueueHealthPanel() {
-  const health = state.saasQueueHealth && typeof state.saasQueueHealth === "object" ? state.saasQueueHealth : {};
-  const counts = health.counts && typeof health.counts === "object" ? health.counts : {};
-  const status = String(health.status || "waiting");
-  const attention = status === "attention_required" || Number(counts.dead_letter || 0) > 0 || Number(health.stale_running_count || 0) > 0;
-  const provider = String(health.queue_provider || state.saasQueuePlan?.provider || "local_worker");
-  return `
-    <section class="saas-settings-card">
-      <div class="saas-settings-card-head">
-        <div>
-          <span>生产队列</span>
-          <strong>${attention ? "队列需要处理" : "队列健康可见"}</strong>
-          <p>正式上线不能只靠本地 worker。这里显示任务队列、worker heartbeat、超时恢复和死信队列，失败任务必须能被看见、恢复或重试。</p>
-        </div>
-      </div>
-      <div class="saas-settings-status-list">
-        <article class="${attention ? "is-amber" : "is-green"}">
-          <span>队列状态</span>
-          <strong>${escapeHtml(status)}</strong>
-          <small>${escapeHtml(provider)} / heartbeat ${health.worker_heartbeat_required ? "required" : "waiting"}</small>
-        </article>
-        <article class="${Number(health.stale_running_count || 0) ? "is-amber" : "is-green"}">
-          <span>超时运行</span>
-          <strong>${Number(health.stale_running_count || 0)}</strong>
-          <small>${Number(health.stale_after_seconds || 900)} 秒未 heartbeat 进入恢复检查</small>
-        </article>
-        <article class="${Number(counts.dead_letter || 0) ? "is-amber" : "is-green"}">
-          <span>死信队列</span>
-          <strong>${Number(counts.dead_letter || 0)}</strong>
-          <small>${health.dead_letter_visible ? "失败可见，不能静默丢任务" : "等待后端返回死信状态"}</small>
-        </article>
-        <article>
-          <span>任务分布</span>
-          <strong>${Number(counts.queued || 0)} / ${Number(counts.running || 0)}</strong>
-          <small>queued / running / failed ${Number(counts.failed || 0)}</small>
-        </article>
-      </div>
-    </section>
-  `;
-}
-
-function renderSaasQueueHealthPanel() {
-  if (window.JiejingSettingsPanels?.renderQueueHealthPanel) {
-    return window.JiejingSettingsPanels.renderQueueHealthPanel(state);
-  }
-  const operational = state.saasOperationalHealth && typeof state.saasOperationalHealth === "object" ? state.saasOperationalHealth : {};
-  const queue = operational.queue_runtime && typeof operational.queue_runtime === "object" ? operational.queue_runtime : state.saasQueueHealth || {};
-  const database = operational.database_live_probe && typeof operational.database_live_probe === "object" ? operational.database_live_probe : {};
-  const worker = operational.worker_runtime && typeof operational.worker_runtime === "object" ? operational.worker_runtime : {};
-  const counts = queue.counts && typeof queue.counts === "object" ? queue.counts : {};
-  const status = String(operational.status || queue.status || "waiting");
-  const deadLetter = Number(counts.dead_letter || 0);
-  const staleRunning = Number(queue.stale_running_count || 0);
-  const attention = status === "blocked" || status === "attention_required" || deadLetter > 0 || staleRunning > 0;
-  const databaseReady = String(database.status || "") === "ready";
-  const workerAttention = String(worker.status || "") !== "ready" && Object.keys(worker).length > 0;
-  const restartCount = worker.restart_count === null || worker.restart_count === undefined ? "未接入" : String(worker.restart_count);
-  return `
-    <section class="saas-settings-card">
-      <div class="saas-settings-card-head">
-        <div>
-          <span>生产队列与深度健康</span>
-          <strong>${attention ? "需要处理运行风险" : "运行状态可见"}</strong>
-          <p>上线前必须能看见数据库探针、worker heartbeat、超时恢复和死信队列。失败任务不能藏在日志里，必须能恢复、重试或进入确认后的清理流程。</p>
-        </div>
-      </div>
-      <div class="saas-settings-status-list">
-        <article class="${attention ? "is-amber" : "is-green"}">
-          <span>整体状态</span>
-          <strong>${escapeHtml(status)}</strong>
-          <small>${escapeHtml((operational.blockers || []).slice(0, 2).join(" / ") || (operational.warnings || []).slice(0, 2).join(" / ") || "无阻断项")}</small>
-        </article>
-        <article class="${databaseReady ? "is-green" : "is-amber"}">
-          <span>数据库 live probe</span>
-          <strong>${databaseReady ? "通过" : "待检查"}</strong>
-          <small>${escapeHtml(database.engine || state.saasDatabasePlan?.selected_adapter || "unknown")} · ${escapeHtml(database.probe?.status || database.probe || "waiting")}</small>
-        </article>
-        <article class="${staleRunning ? "is-amber" : "is-green"}">
-          <span>超时运行</span>
-          <strong>${staleRunning}</strong>
-          <small>${Number(queue.stale_after_seconds || 900)} 秒未 heartbeat 进入恢复检查</small>
-        </article>
-        <article class="${deadLetter ? "is-amber" : "is-green"}">
-          <span>死信队列</span>
-          <strong>${deadLetter}</strong>
-          <small>${queue.dead_letter_visible ? "失败可见，不能静默丢任务" : "等待后端返回死信状态"}</small>
-        </article>
-        <article class="${workerAttention ? "is-amber" : "is-green"}">
-          <span>Worker heartbeat</span>
-          <strong>${escapeHtml(worker.heartbeat_status || "waiting")}</strong>
-          <small>${escapeHtml(worker.latest_job_heartbeat_at || worker.env_heartbeat_at || "当前无运行任务 heartbeat")}</small>
-        </article>
-        <article class="${worker.restart_count_status === "attention_required" ? "is-amber" : "is-green"}">
-          <span>Worker restart count</span>
-          <strong>${escapeHtml(restartCount)}</strong>
-          <small>${escapeHtml(worker.restart_count_source || "not_connected")} · 阈值 ${Number(worker.restart_count_warning_threshold || 5)}</small>
-        </article>
-        <article>
-          <span>任务分布</span>
-          <strong>${Number(counts.queued || 0)} / ${Number(counts.running || 0)}</strong>
-          <small>queued / running / failed ${Number(counts.failed || 0)}</small>
-        </article>
-      </div>
-    </section>
-  `;
-}
-
-function renderSaasSettingsSecurityPanel(ctx = saasMerchantWorkbenchContext(), options = {}) {
-  const securityGate = state.saasSecurityGate || {};
-  const securityGateReady = options.securityGateReady === true;
-  return `
-    <section class="saas-settings-card">
-      <div class="saas-settings-card-head">
-        <div>
-          <span>上线门禁</span>
-          <strong>${securityGateReady ? "受控 staging 可测" : "生产门禁未完成"}</strong>
-          <p>这里给管理员看真实写入、备份、监控、账单和生产发布前检查，不挤到日常工作页面。</p>
-        </div>
-      </div>
-      <div class="saas-settings-status-list">
-        <article>
-          <span>真实写入</span>
-          <strong>${escapeHtml(saasRealPlatformWriteLabel())}</strong>
-          <small>${escapeHtml(saasRealPlatformWriteDetail())}</small>
-        </article>
-        <article>
-          <span>阻断项</span>
-          <strong>${Number(securityGate.blocker_count || 0)}</strong>
-          <small>${escapeHtml(securityGate.status || "等待检查")}</small>
-        </article>
-        <article>
-          <span>提醒项</span>
-          <strong>${Number(securityGate.warning_count || 0)}</strong>
-          <small>正式上线前继续处理。</small>
-        </article>
-      </div>
-    </section>
-  `;
-}
-
-function saasOwnerLaunchCanView() {
-  const control = state.saasOwnerLaunchControl && typeof state.saasOwnerLaunchControl === "object" ? state.saasOwnerLaunchControl : null;
-  return control?.audience === "platform_internal_admin" && control?.customer_visible === false;
-}
-
-function saasOwnerLaunchToneClass(value) {
-  const normalized = String(value || "").toLowerCase();
-  if (normalized === "green" || normalized === "ready") return "is-green";
-  if (normalized === "amber" || normalized === "attention_required" || normalized.includes("beta")) return "is-amber";
-  return "is-red";
-}
-
-function renderSaasOwnerOperationsOverviewPanel() {
-  if (!saasOwnerLaunchCanView()) return "";
-  const overview = state.saasOperationsOverview && typeof state.saasOperationsOverview === "object" ? state.saasOperationsOverview : null;
-  if (!overview) {
-    return `
-      <section class="saas-settings-card" aria-label="平台内部经营数据">
-        <div class="saas-settings-card-head">
-          <div><span>平台内部经营数据</span><strong>正在读取真实汇总</strong><p>仅内部管理员可见，不进入商家工作流。</p></div>
-        </div>
-      </section>
-    `;
-  }
-  const accounts = overview.accounts && typeof overview.accounts === "object" ? overview.accounts : {};
-  const subscriptions = Array.isArray(overview.subscriptions) ? overview.subscriptions : [];
-  const payments = Array.isArray(overview.domestic_payments) ? overview.domestic_payments : [];
-  const media = overview.media_points && typeof overview.media_points === "object" ? overview.media_points : {};
-  const traffic = overview.traffic_analytics && typeof overview.traffic_analytics === "object" ? overview.traffic_analytics : {};
-  const performance = overview.performance_analytics && typeof overview.performance_analytics === "object" ? overview.performance_analytics : {};
-  const pagePerformance = performance.page_load && typeof performance.page_load === "object" ? performance.page_load : {};
-  const pagePerformanceP75 = pagePerformance.p75 && typeof pagePerformance.p75 === "object" ? pagePerformance.p75 : {};
-  const settingsPerformance = performance.settings_module && typeof performance.settings_module === "object" ? performance.settings_module : {};
-  const settingsPerformanceP75 =
-    settingsPerformance.p75 && typeof settingsPerformance.p75 === "object" ? settingsPerformance.p75 : {};
-  const modelCost = overview.model_cost_analytics && typeof overview.model_cost_analytics === "object" ? overview.model_cost_analytics : {};
-  const providerCost = overview.provider_cost_analytics && typeof overview.provider_cost_analytics === "object" ? overview.provider_cost_analytics : {};
-  const providerReliability =
-    overview.provider_reliability_analytics && typeof overview.provider_reliability_analytics === "object"
-      ? overview.provider_reliability_analytics
-      : {};
-  const modelReliability = providerReliability.model && typeof providerReliability.model === "object" ? providerReliability.model : {};
-  const searchReliability =
-    providerReliability.public_search && typeof providerReliability.public_search === "object" ? providerReliability.public_search : {};
-  const mediaReliability =
-    providerReliability.media_generation && typeof providerReliability.media_generation === "object"
-      ? providerReliability.media_generation
-      : {};
-  const paymentReliability =
-    providerReliability.payment && typeof providerReliability.payment === "object" ? providerReliability.payment : {};
-  const reliabilityAlerts =
-    providerReliability.alerts && typeof providerReliability.alerts === "object" ? providerReliability.alerts : {};
-  const reliabilityAlertItems = Array.isArray(reliabilityAlerts.items) ? reliabilityAlerts.items : [];
-  const reliabilityLifecycle =
-    providerReliability.lifecycle && typeof providerReliability.lifecycle === "object" ? providerReliability.lifecycle : {};
-  const reliabilityLifecycleStates = Array.isArray(reliabilityLifecycle.states) ? reliabilityLifecycle.states : [];
-  const reliabilityLifecycleEvents = Array.isArray(reliabilityLifecycle.events) ? reliabilityLifecycle.events.slice(0, 4) : [];
-  const activeReliabilityStates = reliabilityLifecycleStates.filter((item) =>
-    ["pending", "open", "recovering"].includes(String(item?.lifecycle_status || "")),
-  );
-  const reliabilityAlertFor = (scope) =>
-    reliabilityAlertItems.find((item) => String(item?.scope || "") === scope) || {};
-  const unitEconomics = overview.unit_economics && typeof overview.unit_economics === "object" ? overview.unit_economics : {};
-  const dataQuality = overview.data_quality && typeof overview.data_quality === "object" ? overview.data_quality : {};
-  const period = overview.period && typeof overview.period === "object" ? overview.period : {};
-  const activeSubscriptions = subscriptions
-    .filter((item) => ["active", "trialing"].includes(String(item?.status || "").toLowerCase()))
-    .reduce((total, item) => total + Number(item?.count || 0), 0);
-  const paidPayments = payments.filter((item) => ["paid", "success", "succeeded"].includes(String(item?.status || "").toLowerCase()));
-  const paidOrderCount = Number(unitEconomics.paid_order_count ?? paidPayments.reduce((total, item) => total + Number(item?.count || 0), 0));
-  const paidAmountMinor = Number(unitEconomics.paid_revenue_minor ?? paidPayments.reduce((total, item) => total + Number(item?.amount_minor || 0), 0));
-  const trafficReady = ["instrumented", "ready_no_events"].includes(String(traffic.status || ""));
-  const trafficTrend = Array.isArray(traffic.daily_trend) ? traffic.daily_trend.slice(-14) : [];
-  const trafficPages = Array.isArray(traffic.page_breakdown) ? traffic.page_breakdown.slice(0, 6) : [];
-  const safeTrafficCount = (value) => Math.max(0, Number(value || 0));
-  const trafficTrendPeak = Math.max(1, ...trafficTrend.map((item) => safeTrafficCount(item?.page_views)));
-  const trafficBarWidth = (value, peak = trafficTrendPeak) =>
-    Math.min(100, Math.max(3, Math.round((safeTrafficCount(value) / Math.max(1, peak)) * 100)));
-  const trafficPageLabel = (pageKey) =>
-    ({ landing: "官网首页", pricing: "套餐", register: "注册", login: "登录", workbench: "商家工作台" })[
-      String(pageKey || "")
-    ] || "其他页面";
-  const performanceReady = String(performance.status || "") === "instrumented";
-  const pageLcpP75 = Number(pagePerformanceP75.lcp_ms || 0);
-  const settingsLoadP75 = Number(settingsPerformanceP75.duration_ms || 0);
-  const modelCostReady = ["metered", "ready_no_usage"].includes(String(modelCost.status || ""));
-  const providerCostReady = ["metered", "ready_no_usage"].includes(String(providerCost.status || ""));
-  const reliabilityStatusTone = (status) => {
-    const normalized = String(status || "");
-    if (normalized === "critical") return "is-red";
-    if (normalized === "healthy") return "is-green";
-    return "is-amber";
-  };
-  const reliabilityStatusCopy = (status) => {
-    const normalized = String(status || "");
-    if (normalized === "critical") return "需要立即处理";
-    if (normalized === "attention") return "需要关注";
-    if (normalized === "healthy") return "运行正常";
-    return "继续采样";
-  };
-  const reliabilityTone = (scope) => reliabilityStatusTone(reliabilityAlertFor(scope).status);
-  const reliabilityP75 = (item) => {
-    const value = Number(item?.p75_duration_ms || 0);
-    return value > 0 ? `${escapeHtml(String(value))} ms` : "待采样";
-  };
-  const reliabilityDetail = (item, scope) => {
-    const alert = reliabilityAlertFor(scope);
-    const base = `请求 ${escapeHtml(String(item?.request_count || 0))} · 失败 ${escapeHtml(String(item?.failure_count || 0))} · 超时 ${escapeHtml(String(item?.timeout_count || 0))}`;
-    if (String(alert.status || "") === "insufficient_data") return `${base} · 样本不足，继续采样`;
-    return `${base} · 失败率 ${escapeHtml(String(alert.failure_rate_percent || 0))}% · 超时率 ${escapeHtml(String(alert.timeout_rate_percent || 0))}%`;
-  };
-  const reliabilityScopeCopy = (scope) =>
-    ({ model: "模型响应", public_search: "联网搜索", media_generation: "素材生成", payment: "支付链路" })[
-      String(scope || "")
-    ] || "未知链路";
-  const reliabilityLifecycleCopy = (status) =>
-    ({ pending: "待二次确认", open: "处理中", recovering: "恢复观察", healthy: "已恢复" })[String(status || "")] || "未评估";
-  const reliabilityActionCopy = (action) =>
-    ({ investigating: "排查中", mitigation_in_progress: "修复中", monitoring: "观察中" })[String(action || "")] || "尚未确认";
-  const reliabilityTransitionCopy = (transition) =>
-    ({ opened: "告警开启", escalated: "严重度升级", acknowledged: "处理进度更新", recovered: "确认恢复" })[
-      String(transition || "")
-    ] || "状态更新";
-  const marginReady = String(unitEconomics.status || "") === "ready" && unitEconomics.contribution_margin_minor !== null;
-  const currentMeteringReady = String(unitEconomics.current_metering_health || "") === "ready";
-  const currentUnmeteredTasks = Number(unitEconomics.current_unmetered_model_tasks || 0);
-  const legacyUnmeteredTasks = Number(unitEconomics.legacy_unmetered_model_tasks || 0);
-  const meteringHealthCopy = currentMeteringReady ? "当前计量正常" : `当前仍有 ${escapeHtml(String(currentUnmeteredTasks))} 条未计量`;
-  const modelCostGapCopy = currentUnmeteredTasks
-    ? `当前未计量 ${escapeHtml(String(currentUnmeteredTasks))} 条 · 未知素材 ${escapeHtml(String(unitEconomics.unknown_provider_cost_records || 0))}`
-    : legacyUnmeteredTasks
-      ? `${escapeHtml(String(legacyUnmeteredTasks))} 条历史对话成本不可追溯 · 未知素材 ${escapeHtml(String(unitEconomics.unknown_provider_cost_records || 0))}`
-      : `未知模型 ${escapeHtml(String(unitEconomics.unknown_model_cost_records || 0))} · 未知素材 ${escapeHtml(String(unitEconomics.unknown_provider_cost_records || 0))}`;
-  const cny = (minor) => `¥${(Number(minor || 0) / 100).toFixed(2)}`;
-  return `
-    <section class="saas-settings-card saas-owner-operations-overview" aria-label="平台内部经营数据">
-      <div class="saas-settings-card-head">
-        <div>
-          <span>平台内部经营数据</span>
-          <strong>获客、收入、模型用量和素材成本真实汇总</strong>
-          <p>近 ${escapeHtml(String(period.days || 30))} 天口径。真实成本、配置估算和未知成本分开显示；成本不全时不计算虚假毛利。</p>
-        </div>
-        <em>内部管理员</em>
-      </div>
-      <div class="saas-owner-ops-grid">
-        <article class="is-green"><span>真实商户账号</span><strong>${escapeHtml(String(accounts.registered_users || 0))}</strong><small>${escapeHtml(String(accounts.merchant_companies || 0))} 个商家公司 · ${escapeHtml(String(accounts.connected_stores || 0))} 家已授权店铺</small></article>
-        <article class="${activeSubscriptions ? "is-green" : "is-amber"}"><span>有效订阅</span><strong>${escapeHtml(String(activeSubscriptions))}</strong><small>按 active / trialing 后端状态汇总</small></article>
-        <article class="${paidOrderCount ? "is-green" : "is-amber"}"><span>已付订单</span><strong>${escapeHtml(String(paidOrderCount))}</strong><small>实收 ¥${escapeHtml((paidAmountMinor / 100).toFixed(2))}</small></article>
-        <article class="is-green"><span>素材点</span><strong>${escapeHtml(String(media.balance_points || 0))}</strong><small>累计消耗 ${escapeHtml(String(media.lifetime_spent_points || 0))} · 预留 ${escapeHtml(String(media.reserved_points || 0))}</small></article>
-        <article class="${trafficReady ? "is-green" : "is-amber"}"><span>网站访问</span><strong>${trafficReady ? escapeHtml(String(traffic.visitors || 0)) : "未接入"}</strong><small>${trafficReady ? `会话 ${escapeHtml(String(traffic.sessions || 0))} · 浏览 ${escapeHtml(String(traffic.page_views || 0))}` : "第一方统计尚未形成数据"}</small></article>
-        <article class="${trafficReady ? "is-green" : "is-amber"}"><span>注册转化</span><strong>${trafficReady ? `${escapeHtml(String(traffic.visitor_to_signup_percent || 0))}%` : "待计量"}</strong><small>完成注册 ${escapeHtml(String(traffic.signup_completed || 0))} · 不采集原始 IP</small></article>
-        <article class="${performanceReady && pageLcpP75 > 0 && pageLcpP75 <= 2500 ? "is-green" : "is-amber"}"><span>首屏体验 P75</span><strong>${pageLcpP75 > 0 ? `${escapeHtml(String(pageLcpP75))} ms` : "待采样"}</strong><small>样本 ${escapeHtml(String(pagePerformance.sample_count || 0))} · 不采集网址、设备指纹或对话内容</small></article>
-        <article class="${performanceReady && Number(settingsPerformance.error_count || 0) === 0 ? "is-green" : "is-amber"}"><span>设置模块 P75</span><strong>${settingsLoadP75 > 0 ? `${escapeHtml(String(settingsLoadP75))} ms` : "待采样"}</strong><small>成功 ${escapeHtml(String(settingsPerformance.success_count || 0))} · 失败 ${escapeHtml(String(settingsPerformance.error_count || 0))}</small></article>
-        <article class="${reliabilityStatusTone(reliabilityAlerts.status)}"><span>可靠性告警</span><strong>${reliabilityStatusCopy(reliabilityAlerts.status)}</strong><small>严重 ${escapeHtml(String(reliabilityAlerts.critical_count || 0))} · 关注 ${escapeHtml(String(reliabilityAlerts.attention_count || 0))} · 至少 5 次请求后判级</small></article>
-        <article class="${reliabilityTone("model")}"><span>模型响应 P75</span><strong>${reliabilityP75(modelReliability)}</strong><small>${reliabilityDetail(modelReliability, "model")}</small></article>
-        <article class="${reliabilityTone("public_search")}"><span>联网搜索 P75</span><strong>${reliabilityP75(searchReliability)}</strong><small>${reliabilityDetail(searchReliability, "public_search")} · 查询内容不入账</small></article>
-        <article class="${reliabilityTone("media_generation")}"><span>素材生成 P75</span><strong>${reliabilityP75(mediaReliability)}</strong><small>${reliabilityDetail(mediaReliability, "media_generation")} · 供应商中立</small></article>
-        <article class="${reliabilityTone("payment")}"><span>支付链路 P75</span><strong>${reliabilityP75(paymentReliability)}</strong><small>${reliabilityDetail(paymentReliability, "payment")} · 不记录支付响应或凭证</small></article>
-        <article class="${modelCostReady && currentMeteringReady ? "is-green" : "is-amber"}"><span>模型用量</span><strong>${escapeHtml(String(modelCost.platform_trial_tokens || 0))}</strong><small>${meteringHealthCopy} · 平台试用成本 ${cny(modelCost.platform_cost_minor)} · 商家 BYOK ${escapeHtml(String(modelCost.merchant_byok_tokens || 0))} tokens</small></article>
-        <article class="${providerCostReady ? "is-green" : "is-amber"}"><span>素材供应成本</span><strong>${cny(providerCost.media_cost_minor)}</strong><small>供应商中立汇总 · 不向商家暴露底层服务商</small></article>
-        <article class="${marginReady ? "is-green" : "is-amber"}"><span>贡献毛利</span><strong>${marginReady ? cny(unitEconomics.contribution_margin_minor) : "待补成本"}</strong><small>${marginReady ? `实收 ${cny(unitEconomics.paid_revenue_minor)}` : modelCostGapCopy}</small></article>
-      </div>
-      <div class="saas-owner-traffic-detail">
-        <section class="saas-owner-traffic-trend" aria-label="访问趋势">
-          <div class="saas-owner-traffic-head">
-            <div><span>访问趋势</span><strong>最近 14 天</strong></div>
-            <small>自动化验收浏览不计入</small>
-          </div>
-          <div class="saas-owner-traffic-bars">
-            ${
-              trafficTrend.length
-                ? trafficTrend
-                    .map(
-                      (item) => `
-                        <article>
-                          <span>${escapeHtml(String(item?.day || "").slice(5))}</span>
-                          <div><i style="width:${trafficBarWidth(item?.page_views)}%"></i></div>
-                          <strong>${escapeHtml(String(safeTrafficCount(item?.visitors)))} 人 · ${escapeHtml(String(safeTrafficCount(item?.page_views)))} 次</strong>
-                        </article>
-                      `,
-                    )
-                    .join("")
-                : `<p>统计已经接入，等待真实访问形成趋势。</p>`
-            }
-          </div>
-        </section>
-        <section class="saas-owner-traffic-pages" aria-label="页面与转化">
-          <div class="saas-owner-traffic-head">
-            <div><span>页面与转化</span><strong>近 ${escapeHtml(String(period.days || 30))} 天</strong></div>
-            <small>只保留聚合数量</small>
-          </div>
-          <div class="saas-owner-traffic-page-list">
-            ${
-              trafficPages.length
-                ? trafficPages
-                    .map(
-                      (item) => `
-                        <article>
-                          <div><strong>${escapeHtml(trafficPageLabel(item?.page_key))}</strong><span>${escapeHtml(String(safeTrafficCount(item?.visitors)))} 位访客</span></div>
-                          <small>浏览 ${escapeHtml(String(safeTrafficCount(item?.page_views)))} · 套餐 ${escapeHtml(String(safeTrafficCount(item?.pricing_views)))} · 注册 ${escapeHtml(String(safeTrafficCount(item?.signup_completed)))} </small>
-                        </article>
-                      `,
-                    )
-                    .join("")
-                : `<p>暂无页面访问数据。</p>`
-            }
-          </div>
-        </section>
-      </div>
-      <div class="saas-owner-reliability-duty" aria-label="平台内部可靠性值班">
-        <div class="saas-owner-reliability-duty-head">
-          <div>
-            <span>内部可靠性值班</span>
-            <strong>告警需连续两次异常才开启，连续两次健康才恢复</strong>
-            <p>开启 ${escapeHtml(String(reliabilityLifecycle.open_count || 0))} · 待确认 ${escapeHtml(String(reliabilityLifecycle.pending_count || 0))} · 恢复观察 ${escapeHtml(String(reliabilityLifecycle.recovering_count || 0))}</p>
-          </div>
-          <button class="secondary-action" type="button" data-saas-action="reconcile-owner-reliability-alerts">评估当前告警</button>
-        </div>
-        <div class="saas-owner-reliability-duty-list">
-          ${
-            activeReliabilityStates.length
-              ? activeReliabilityStates
-                  .map(
-                    (item) => `
-                      <article class="${reliabilityStatusTone(item.severity)}">
-                        <div><strong>${escapeHtml(reliabilityScopeCopy(item.scope))}</strong><span>${escapeHtml(reliabilityLifecycleCopy(item.lifecycle_status))} · ${escapeHtml(reliabilityActionCopy(item.acknowledgement_action))}</span></div>
-                        <div class="saas-owner-reliability-actions">
-                          <button type="button" data-saas-action="acknowledge-owner-reliability-alert" data-reliability-scope="${escapeHtml(String(item.scope || ""))}" data-reliability-action="investigating">开始排查</button>
-                          <button type="button" data-saas-action="acknowledge-owner-reliability-alert" data-reliability-scope="${escapeHtml(String(item.scope || ""))}" data-reliability-action="mitigation_in_progress">处理中</button>
-                          <button type="button" data-saas-action="acknowledge-owner-reliability-alert" data-reliability-scope="${escapeHtml(String(item.scope || ""))}" data-reliability-action="monitoring">观察中</button>
-                        </div>
-                      </article>
-                    `,
-                  )
-                  .join("")
-              : `<p class="saas-owner-reliability-empty">当前没有需要值班处理的告警。点击评估只会更新内部状态，不会调用外部平台。</p>`
-          }
-        </div>
-        ${
-          reliabilityLifecycleEvents.length
-            ? `<div class="saas-owner-reliability-events"><span>最近状态记录</span>${reliabilityLifecycleEvents
-                .map(
-                  (item) => `<small>${escapeHtml(reliabilityScopeCopy(item.scope))} · ${escapeHtml(reliabilityTransitionCopy(item.transition_key))} · ${escapeHtml(String(item.created_at || ""))}</small>`,
-                )
-                .join("")}</div>`
-            : ""
-        }
-      </div>
-      <p class="saas-owner-internal-marker">统计口径已排除 ${escapeHtml(String(dataQuality.synthetic_test_accounts_excluded || 0))} 个演练账号、${escapeHtml(String(dataQuality.test_subscriptions_excluded || 0))} 条测试订阅和 ${escapeHtml(String(dataQuality.acceptance_orders_excluded || 0))} 笔支付验收单。</p>
-      <p class="saas-owner-internal-marker">platform_internal_admin_only · merchant_navigation_visible=false · secret_exposed=false</p>
-    </section>
-  `;
-}
-
-function renderSaasOwnerLaunchControlPanel() {
-  if (!saasOwnerLaunchCanView()) return "";
-  const control = state.saasOwnerLaunchControl && typeof state.saasOwnerLaunchControl === "object" ? state.saasOwnerLaunchControl : null;
-  if (!control) {
-    return `
-      <section class="saas-settings-card saas-owner-launch-control" aria-label="owner launch control loading">
-        <div class="saas-owner-launch-head">
-          <div>
-            <span>主理人上线控制台</span>
-            <strong>等待后端证据</strong>
-          <p>platform internal admin only. 这里只显示捷境平台内部上线证据，不给普通商家展示，也不触发 eBay OAuth、真实支付或真实平台写入。</p>
-          </div>
-          <button class="secondary-action" type="button" data-saas-action="refresh-owner-launch-control">刷新</button>
-        </div>
-      </section>
-    `;
-  }
-  const summary = control.summary && typeof control.summary === "object" ? control.summary : {};
-  const evidence = control.evidence && typeof control.evidence === "object" ? control.evidence : {};
-  const safety = control.safety && typeof control.safety === "object" ? control.safety : {};
-  const ownerReview = control.owner_review_packet && typeof control.owner_review_packet === "object" ? control.owner_review_packet : {};
-  const ownerReviewSummary = ownerReview.summary && typeof ownerReview.summary === "object" ? ownerReview.summary : {};
-  const ownerReviewSafety = ownerReview.safety && typeof ownerReview.safety === "object" ? ownerReview.safety : {};
-  const ownerReviewItems = Array.isArray(ownerReview.review_items) ? ownerReview.review_items : [];
-  const launchAudit =
-    control.launch_rehearsal_audit_packet && typeof control.launch_rehearsal_audit_packet === "object"
-      ? control.launch_rehearsal_audit_packet
-      : {};
-  const launchAuditSummary = launchAudit.summary && typeof launchAudit.summary === "object" ? launchAudit.summary : {};
-  const launchAuditSafety = launchAudit.safety && typeof launchAudit.safety === "object" ? launchAudit.safety : {};
-  const launchAuditChecks = Array.isArray(launchAudit.checks) ? launchAudit.checks : [];
-  const releaseHistory = control.release_history && typeof control.release_history === "object" ? control.release_history : {};
-  const releaseHistorySummary = releaseHistory.summary && typeof releaseHistory.summary === "object" ? releaseHistory.summary : {};
-  const releaseHistorySafety = releaseHistory.safety && typeof releaseHistory.safety === "object" ? releaseHistory.safety : {};
-  const releaseHistoryRecords = Array.isArray(releaseHistory.records) ? releaseHistory.records : [];
-  const releaseHistoryChecks = Array.isArray(releaseHistory.release_checks) ? releaseHistory.release_checks : [];
-  const rollbackPoints = Array.isArray(releaseHistory.rollback_points) ? releaseHistory.rollback_points : [];
-  const handoffDigest =
-    control.continuity_handoff_digest && typeof control.continuity_handoff_digest === "object" ? control.continuity_handoff_digest : {};
-  const handoffSummary = handoffDigest.summary && typeof handoffDigest.summary === "object" ? handoffDigest.summary : {};
-  const handoffSafety = handoffDigest.safety && typeof handoffDigest.safety === "object" ? handoffDigest.safety : {};
-  const handoffState = Array.isArray(handoffDigest.current_state) ? handoffDigest.current_state : [];
-  const handoffInternalActions = Array.isArray(handoffDigest.next_internal_actions) ? handoffDigest.next_internal_actions : [];
-  const handoffExternalActions = Array.isArray(handoffDigest.next_external_actions) ? handoffDigest.next_external_actions : [];
-  const handoffDoNotDo = Array.isArray(handoffDigest.do_not_do) ? handoffDigest.do_not_do : [];
-  const cutoverChecklist =
-    control.cutover_decision_checklist && typeof control.cutover_decision_checklist === "object" ? control.cutover_decision_checklist : {};
-  const cutoverSummary =
-    cutoverChecklist.summary && typeof cutoverChecklist.summary === "object" ? cutoverChecklist.summary : {};
-  const cutoverSafety =
-    cutoverChecklist.safety && typeof cutoverChecklist.safety === "object" ? cutoverChecklist.safety : {};
-  const cutoverPhases = Array.isArray(cutoverChecklist.phase_checklist) ? cutoverChecklist.phase_checklist : [];
-  const cutoverFounderActions = Array.isArray(cutoverChecklist.founder_external_actions) ? cutoverChecklist.founder_external_actions : [];
-  const cutoverInternalActions = Array.isArray(cutoverChecklist.codex_internal_actions) ? cutoverChecklist.codex_internal_actions : [];
-  const cutoverForbiddenActions = Array.isArray(cutoverChecklist.forbidden_actions) ? cutoverChecklist.forbidden_actions : [];
-  const finalRehearsalRecord =
-    control.final_launch_rehearsal_execution_record && typeof control.final_launch_rehearsal_execution_record === "object"
-      ? control.final_launch_rehearsal_execution_record
-      : {};
-  const finalRehearsalSummary =
-    finalRehearsalRecord.summary && typeof finalRehearsalRecord.summary === "object" ? finalRehearsalRecord.summary : {};
-  const finalRehearsalSafety =
-    finalRehearsalRecord.safety && typeof finalRehearsalRecord.safety === "object" ? finalRehearsalRecord.safety : {};
-  const finalRehearsalSteps = Array.isArray(finalRehearsalRecord.execution_steps) ? finalRehearsalRecord.execution_steps : [];
-  const finalRehearsalExternalActions = Array.isArray(finalRehearsalRecord.remaining_external_blockers)
-    ? finalRehearsalRecord.remaining_external_blockers
-    : [];
-  const finalRehearsalInternalActions = Array.isArray(finalRehearsalRecord.remaining_internal_actions)
-    ? finalRehearsalRecord.remaining_internal_actions
-    : [];
-  const finalRehearsalRollbackControls = Array.isArray(finalRehearsalRecord.rollback_controls) ? finalRehearsalRecord.rollback_controls : [];
-  const prelaunchReport =
-    control.prelaunch_acceptance_report && typeof control.prelaunch_acceptance_report === "object" ? control.prelaunch_acceptance_report : {};
-  const prelaunchReportSummary =
-    prelaunchReport.summary && typeof prelaunchReport.summary === "object" ? prelaunchReport.summary : {};
-  const prelaunchReportSafety =
-    prelaunchReport.safety && typeof prelaunchReport.safety === "object" ? prelaunchReport.safety : {};
-  const prelaunchReportItems = Array.isArray(prelaunchReport.report_items) ? prelaunchReport.report_items : [];
-  const prelaunchFounderActions = Array.isArray(prelaunchReport.founder_required_actions) ? prelaunchReport.founder_required_actions : [];
-  const prelaunchCodexActions = Array.isArray(prelaunchReport.codex_continue_actions) ? prelaunchReport.codex_continue_actions : [];
-  const prelaunchDecision =
-    prelaunchReport.decision_record && typeof prelaunchReport.decision_record === "object" ? prelaunchReport.decision_record : {};
-  const ownerPaidLaunchDossier =
-    control.owner_paid_launch_approval_dossier && typeof control.owner_paid_launch_approval_dossier === "object"
-      ? control.owner_paid_launch_approval_dossier
-      : {};
-  const ownerPaidLaunchDossierSummary =
-    ownerPaidLaunchDossier.summary && typeof ownerPaidLaunchDossier.summary === "object" ? ownerPaidLaunchDossier.summary : {};
-  const ownerPaidLaunchDossierSafety =
-    ownerPaidLaunchDossier.safety && typeof ownerPaidLaunchDossier.safety === "object" ? ownerPaidLaunchDossier.safety : {};
-  const ownerPaidLaunchDossierSections = Array.isArray(ownerPaidLaunchDossier.sections) ? ownerPaidLaunchDossier.sections : [];
-  const ownerPaidLaunchNoChargeItems = Array.isArray(ownerPaidLaunchDossier.no_charge_evidence_items)
-    ? ownerPaidLaunchDossier.no_charge_evidence_items
-    : [];
-  const ownerPaidLaunchExternalActions = Array.isArray(ownerPaidLaunchDossier.remaining_external_blockers)
-    ? ownerPaidLaunchDossier.remaining_external_blockers
-    : [];
-  const ownerPaidLaunchInternalActions = Array.isArray(ownerPaidLaunchDossier.remaining_internal_actions)
-    ? ownerPaidLaunchDossier.remaining_internal_actions
-    : [];
-  const warRoom = control.war_room && typeof control.war_room === "object" ? control.war_room : {};
-  const warSections = Array.isArray(warRoom.sections) ? warRoom.sections : [];
-  const feasibility = control.feasibility_review && typeof control.feasibility_review === "object" ? control.feasibility_review : {};
-  const feasibilitySummary = feasibility.summary && typeof feasibility.summary === "object" ? feasibility.summary : {};
-  const feasibilityExperts = Array.isArray(feasibility.expert_reviews) ? feasibility.expert_reviews : [];
-  const feasibilityRisks = Array.isArray(feasibility.top_risks) ? feasibility.top_risks : [];
-  const feasibilityActions = Array.isArray(feasibility.next_7_day_actions) ? feasibility.next_7_day_actions : [];
-  const feasibilitySafety = feasibility.safety && typeof feasibility.safety === "object" ? feasibility.safety : {};
-  const ops = control.operations_observability && typeof control.operations_observability === "object" ? control.operations_observability : {};
-  const opsSummary = ops.summary && typeof ops.summary === "object" ? ops.summary : {};
-  const opsCards = Array.isArray(ops.cards) ? ops.cards : [];
-  const resilience = control.resilience_war_room && typeof control.resilience_war_room === "object" ? control.resilience_war_room : {};
-  const resilienceSummary = resilience.summary && typeof resilience.summary === "object" ? resilience.summary : {};
-  const resilienceCards = Array.isArray(resilience.cards) ? resilience.cards : [];
-  const subscriptionShutdown =
-    control.subscription_shutdown_control && typeof control.subscription_shutdown_control === "object" ? control.subscription_shutdown_control : {};
-  const subscriptionShutdownSummary =
-    subscriptionShutdown.summary && typeof subscriptionShutdown.summary === "object" ? subscriptionShutdown.summary : {};
-  const subscriptionShutdownCards = Array.isArray(subscriptionShutdown.cards) ? subscriptionShutdown.cards : [];
-  const testData = control.test_data_governance && typeof control.test_data_governance === "object" ? control.test_data_governance : {};
-  const testCounts = testData.counts && typeof testData.counts === "object" ? testData.counts : {};
-  const fixedProgress =
-    control.fixed_launch_progress && typeof control.fixed_launch_progress === "object" ? control.fixed_launch_progress : {};
-  const fixedProgressCategories = Array.isArray(fixedProgress.categories) ? fixedProgress.categories : [];
-  const fixedProgressActions = Array.isArray(fixedProgress.remaining_actions) ? fixedProgress.remaining_actions : [];
-  const fixedProgressNext =
-    fixedProgress.next_autonomous_action && typeof fixedProgress.next_autonomous_action === "object"
-      ? fixedProgress.next_autonomous_action
-      : null;
-  const merchantValidation =
-    control.merchant_workflow_validation && typeof control.merchant_workflow_validation === "object"
-      ? control.merchant_workflow_validation
-      : {};
-  const ownerPilotValidation =
-    control.owner_pilot_workflow_validation && typeof control.owner_pilot_workflow_validation === "object"
-      ? control.owner_pilot_workflow_validation
-      : {};
-  const lanes = Array.isArray(control.lanes) ? control.lanes : [];
-  const external = Array.isArray(control.external_blockers) ? control.external_blockers : [];
-  const internal = Array.isArray(control.internal_work_queue) ? control.internal_work_queue : [];
-  const safetyMarkers = [
-    `owner_admin_only=${Boolean(safety.owner_admin_only)}`,
-    `platform_internal_admin_only=${Boolean(safety.platform_internal_admin_only)}`,
-    `not_customer_visible=${Boolean(safety.not_customer_visible)}`,
-    control.charge_now_allowed ? "charge_now_allowed=true" : "charge_now_allowed=false",
-    control.platform_write_now_allowed ? "platform_write_now_allowed=true" : "platform_write_now_allowed=false",
-    control.repeat_ebay_oauth_allowed ? "repeat_ebay_oauth_allowed=true" : "repeat_ebay_oauth_allowed=false",
-    `owner_review_packet_v1=${ownerReview.contract_version === "2026-06-20-owner-review-packet-v1"}`,
-    `launch_rehearsal_audit_v1=${launchAudit.contract_version === "2026-06-20-launch-rehearsal-audit-v1"}`,
-    `owner_release_history_v1=${releaseHistory.contract_version === "2026-06-20-owner-release-history-v1"}`,
-    `continuity_handoff_v1=${handoffDigest.contract_version === "2026-06-20-owner-continuity-handoff-v1"}`,
-    `cutover_decision_checklist_v1=${cutoverChecklist.contract_version === "2026-06-20-cutover-decision-checklist-v1"}`,
-    `final_launch_rehearsal_execution_record_v1=${finalRehearsalRecord.contract_version === "2026-06-21-final-launch-rehearsal-execution-record-v1"}`,
-    `owner_paid_launch_approval_dossier_v1=${ownerPaidLaunchDossier.contract_version === "2026-07-02-owner-paid-launch-approval-dossier-v1"}`,
-    `prelaunch_acceptance_report_v1=${prelaunchReport.contract_version === "2026-06-21-prelaunch-acceptance-report-v1"}`,
-    `expert_feasibility_review_v1=${feasibility.contract_version === "2026-07-01-expert-feasibility-review-v1"}`,
-    control.secret_exposed ? "secret_exposed=true" : "secret_exposed=false",
-  ];
-  const summaryRows = [
-    ["beta_ready", summary.beta_ready ? "true" : "false", summary.beta_ready ? "green" : "amber"],
-    ["production_ready", summary.production_ready ? "true" : "false", summary.production_ready ? "green" : "red"],
-    ["real_customers", summary.can_accept_real_customers ? "true" : "false", summary.can_accept_real_customers ? "green" : "red"],
-    ["warnings", String(summary.warning_count ?? 0), Number(summary.warning_count || 0) ? "amber" : "green"],
-    ["official_packet", summary.latest_official_ebay_packet_id || "missing", summary.latest_official_ebay_packet_id ? "green" : "amber"],
-    ["refresh proof", String(summary.ebay_token_refresh_success_count ?? 0), Number(summary.ebay_token_refresh_success_count || 0) > 0 ? "green" : "red"],
-    ["billing", summary.billing_provider || "not_selected", summary.billing_ready_for_paid_launch ? "green" : "amber"],
-    [
-      "shutdown",
-      `${summary.subscription_shutdown_ready_count || 0}/${summary.subscription_shutdown_total_count || 0}`,
-      summary.subscription_shutdown_ready ? "green" : "amber",
-    ],
-    ["edge", `${summary.edge_ready_count || 0}/${summary.edge_total_count || 0}`, summary.stable_domain_ready ? "green" : "amber"],
-    ["worker", summary.worker_heartbeat_status || "unknown", summary.worker_heartbeat_status === "ready" ? "green" : "amber"],
-    ["test_data", String(summary.test_data_candidate_count ?? 0), Number(summary.test_data_candidate_count || 0) ? "amber" : "green"],
-  ];
-  return `
-    <section class="saas-settings-card saas-owner-launch-control" aria-label="owner launch control">
-      <div class="saas-owner-launch-head">
-        <div>
-          <span>主理人上线控制台</span>
-          <strong>${escapeHtml(saasProductStatusText(control.status || "blocked"))}</strong>
-          <p>platform internal admin only · 内部上线证据聚合。它只读后端 readiness、域名/WAF、计费、eBay 证明和队列状态；不扣费、不写 eBay、不重复 OAuth、不暴露密钥。</p>
-        </div>
-        <div class="saas-owner-launch-head-actions">
-          <button class="secondary-action" type="button" data-saas-action="refresh-owner-launch-control">刷新</button>
-          <button class="secondary-action" type="button" data-saas-action="copy-owner-review-packet">Copy review packet</button>
-          <button class="secondary-action" type="button" data-saas-action="download-owner-review-packet">Download review packet</button>
-          <button class="secondary-action" type="button" data-saas-action="copy-launch-rehearsal-audit">Copy rehearsal audit</button>
-          <button class="secondary-action" type="button" data-saas-action="download-launch-rehearsal-audit">Download rehearsal audit</button>
-          <button class="secondary-action" type="button" data-saas-action="copy-release-history">Copy release history</button>
-          <button class="secondary-action" type="button" data-saas-action="download-release-history">Download release history</button>
-          <button class="secondary-action" type="button" data-saas-action="copy-continuity-handoff">Copy handoff</button>
-          <button class="secondary-action" type="button" data-saas-action="download-continuity-handoff">Download handoff</button>
-          <button class="secondary-action" type="button" data-saas-action="copy-cutover-decision-checklist">Copy cutover checklist</button>
-          <button class="secondary-action" type="button" data-saas-action="download-cutover-decision-checklist">Download cutover checklist</button>
-          <button class="secondary-action" type="button" data-saas-action="copy-final-launch-rehearsal-record">Copy final rehearsal</button>
-          <button class="secondary-action" type="button" data-saas-action="download-final-launch-rehearsal-record">Download final rehearsal</button>
-          <button class="secondary-action" type="button" data-saas-action="copy-owner-paid-launch-dossier">Copy paid launch dossier</button>
-          <button class="secondary-action" type="button" data-saas-action="download-owner-paid-launch-dossier">Download paid launch dossier</button>
-          <button class="secondary-action" type="button" data-saas-action="copy-prelaunch-acceptance-report">Copy prelaunch report</button>
-          <button class="secondary-action" type="button" data-saas-action="download-prelaunch-acceptance-report">Download prelaunch report</button>
-          <span class="saas-owner-launch-pill ${saasOwnerLaunchToneClass(control.status)}">${escapeHtml(control.mode || "read_only")}</span>
-        </div>
-      </div>
-      <div class="saas-owner-fixed-progress" aria-label="fixed public launch progress">
-        <div class="saas-owner-fixed-progress-head">
-          <div>
-            <span>固定正式上线准备度</span>
-            <strong>${escapeHtml(String(fixedProgress.score_percent ?? 0))}%</strong>
-          </div>
-          <p>固定 100 分口径 · 同一证据得到同一分数 · 新增待办不会扩张分母。公开收费仍以最终批准为准。</p>
-        </div>
-        <div class="saas-owner-fixed-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${escapeHtml(String(fixedProgress.score_percent ?? 0))}">
-          <span style="width: ${Math.max(0, Math.min(100, Number(fixedProgress.score_percent || 0)))}%"></span>
-        </div>
-        <div class="saas-owner-fixed-progress-grid">
-          ${fixedProgressCategories
-            .map(
-              (item) => `
-                <article class="${saasOwnerLaunchToneClass(item.status === "ready" ? "green" : item.earned_points ? "amber" : "red")}">
-                  <span>${escapeHtml(item.label || item.key || "category")}</span>
-                  <strong>${escapeHtml(`${item.earned_points ?? 0}/${item.total_points ?? 0}`)}</strong>
-                  <small>${escapeHtml(item.status || "pending")}</small>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-        <div class="saas-owner-fixed-progress-next">
-          <span>我会自动继续</span>
-          <strong>${escapeHtml(fixedProgressNext?.label || "当前内部自动队列已清空")}</strong>
-          <small>${escapeHtml(fixedProgressNext?.next_action || "等待外部条件或双方确认，不会擅自触发真实收费、OAuth 或平台写入。")}</small>
-        </div>
-        <div class="saas-owner-fixed-progress-next" data-owner-pilot-validation="owner_pilot_workflow_validation_v1">
-          <span>单主理人上线验收</span>
-          <strong>${escapeHtml(`${ownerPilotValidation.validated_path_count || 0}/${ownerPilotValidation.required_path_count || 1} 条完整路径`)}</strong>
-          <small>${escapeHtml(ownerPilotValidation.next_action || "使用你的真实账号完成一次 AI CEO、经营任务、报告和明确的安全确认决定。")}</small>
-        </div>
-        <div class="saas-owner-fixed-progress-next" data-owner-merchant-validation="real_merchant_workflow_validation_v1">
-          <span>未来规模化验证</span>
-          <strong>${escapeHtml(`${merchantValidation.validated_merchant_count || 0}/${merchantValidation.required_merchant_count || 3} 个商家 · ${merchantValidation.validated_path_count || 0}/${merchantValidation.required_path_count || 20} 条完整路径`)}</strong>
-          <small>${escapeHtml(`${merchantValidation.next_action || "等待未来真实商家规模化验证。"} 该项不阻挡你的单账号私测上线，也不会被单主理人验收冒充。`)}</small>
-        </div>
-        <div class="saas-owner-fixed-progress-queue">
-          ${fixedProgressActions
-            .slice(0, 8)
-            .map(
-              (item) => `
-                <article>
-                  <span>${escapeHtml(item.executor || "pending")}</span>
-                  <strong>${escapeHtml(item.label || item.key || "remaining_action")}</strong>
-                  <small>${escapeHtml(`剩余 ${item.points || 0} 分 · ${item.next_action || "等待证据"}`)}</small>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-        <p class="saas-owner-fixed-progress-contract">${escapeHtml(fixedProgress.contract_version || "fixed_progress_pending")} · customer_visible=false · public_paid_launch_allowed=${escapeHtml(String(Boolean(fixedProgress.public_paid_launch_allowed)))}</p>
-      </div>
-      <div class="saas-owner-launch-summary">
-        ${summaryRows
-          .map(
-            ([label, value, tone]) => `
-              <article class="${saasOwnerLaunchToneClass(tone)}">
-                <span>${escapeHtml(label)}</span>
-                <strong>${escapeHtml(value)}</strong>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-owner-launch-safety" aria-label="owner launch safety flags">
-        ${safetyMarkers.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
-      </div>
-      <div class="saas-owner-feasibility-review" aria-label="expert feasibility review">
-        <div class="saas-owner-war-room-head">
-          <div>
-            <span>expert_feasibility_review_v1</span>
-            <strong>${escapeHtml(feasibility.status || "feasibility_pending")}</strong>
-          </div>
-          <small>${escapeHtml(`private_beta=${Boolean(feasibilitySummary.feasible_for_private_beta)} / paid_public=${Boolean(feasibilitySummary.feasible_for_paid_public_launch)} / next=${feasibilitySummary.next_step || "refresh_owner_control"}`)}</small>
-        </div>
-        <p class="saas-owner-feasibility-note">internal only · 产品/市场、支付、架构运维、安全合规和 AI 价值五个专家视角的只读核查。它只汇总证据和阻塞项，不扣款、不创建 Checkout、不跑 OAuth、不写 eBay、不导出 secret。</p>
-        <div class="saas-owner-feasibility-grid">
-          ${(feasibilityExperts.length ? feasibilityExperts : [{ label: "Feasibility review pending", status: "attention_required", verdict: "Refresh /owner/launch-control.", next_actions: ["Refresh owner launch control."] }])
-            .map((item) => {
-              const nextActions = Array.isArray(item.next_actions) ? item.next_actions.filter(Boolean) : [];
-              const blockers = Array.isArray(item.blockers) ? item.blockers.filter(Boolean) : [];
-              return `
-                <article class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
-                  <div>
-                    <span>${escapeHtml(item.label || item.key || "expert")}</span>
-                    <strong>${escapeHtml(item.status || "unknown")}</strong>
-                  </div>
-                  <p>${escapeHtml(item.verdict || "")}</p>
-                  <small>${escapeHtml((blockers[0] || nextActions[0] || "Keep evidence current.").toString())}</small>
-                </article>
-              `;
-            })
-            .join("")}
-        </div>
-        <div class="saas-owner-feasibility-actions">
-          <div>
-            <span>Top risks</span>
-            ${(feasibilityRisks.length ? feasibilityRisks : ["no_top_risk_recorded"])
-              .slice(0, 6)
-              .map((item) => `<b>${escapeHtml(item)}</b>`)
-              .join("")}
-          </div>
-          <div>
-            <span>Next 7 days</span>
-            ${(feasibilityActions.length ? feasibilityActions : ["Keep smoke verification current."])
-              .slice(0, 4)
-              .map((item) => `<b>${escapeHtml(item)}</b>`)
-              .join("")}
-          </div>
-        </div>
-        <div class="saas-owner-launch-safety" aria-label="expert feasibility review safety flags">
-          ${[
-            `customer_visible=${Boolean(feasibility.customer_visible)}`,
-            `public_charging_allowed=${Boolean(feasibilitySafety.public_charging_allowed)}`,
-            `creates_checkout_session=${Boolean(feasibilitySafety.creates_checkout_session)}`,
-            `calls_stripe_api=${Boolean(feasibilitySafety.calls_stripe_api)}`,
-            `triggers_real_charge=${Boolean(feasibilitySafety.triggers_real_charge)}`,
-            `charge_now_allowed=${Boolean(feasibilitySafety.charge_now_allowed)}`,
-            `triggers_ebay_oauth=${Boolean(feasibilitySafety.triggers_ebay_oauth)}`,
-            `repeat_ebay_oauth_allowed=${Boolean(feasibilitySafety.repeat_ebay_oauth_allowed)}`,
-            `triggers_real_platform_write=${Boolean(feasibilitySafety.triggers_real_platform_write)}`,
-            `platform_write_now_allowed=${Boolean(feasibilitySafety.platform_write_now_allowed)}`,
-            `frontend_gets_payment_secret=${Boolean(feasibilitySafety.frontend_gets_payment_secret)}`,
-            `frontend_gets_ebay_token=${Boolean(feasibilitySafety.frontend_gets_ebay_token)}`,
-            `exports_raw_secret=${Boolean(feasibilitySafety.exports_raw_secret)}`,
-            `exports_database=${Boolean(feasibilitySafety.exports_database)}`,
-            `secret_exposed=${Boolean(feasibility.secret_exposed)}`,
-          ]
-            .map((item) => `<span>${escapeHtml(item)}</span>`)
-            .join("")}
-        </div>
-      </div>
-      <div class="saas-owner-cutover-checklist" aria-label="owner cutover decision checklist">
-        <div class="saas-owner-war-room-head">
-          <div>
-            <span>cutover_decision_checklist_v1</span>
-            <strong>${escapeHtml(cutoverChecklist.status || "blocked_for_paid_public_launch")}</strong>
-          </div>
-          <small>${escapeHtml(`next=${cutoverSummary.recommended_next_step || "continue_internal_hardening"} / external=${cutoverSummary.external_blocker_count ?? 0} / internal=${cutoverSummary.pending_internal_count ?? 0}`)}</small>
-        </div>
-        <p class="saas-owner-cutover-note">internal admin decision checklist. It separates what Codex/platform ops can continue from founder external-console work, and it keeps live charge, eBay OAuth, platform write and secret export disabled.</p>
-        <div class="saas-owner-cutover-grid">
-          ${(cutoverPhases.length ? cutoverPhases : [{ label: "Cutover checklist pending", status: "attention_required", evidence_summary: "Refresh /owner/launch-control.", next_action: "Refresh owner launch control.", owner: "platform_ops" }])
-            .map(
-              (item) => `
-                <article class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
-                  <div>
-                    <span>${escapeHtml(item.label || item.key || "cutover_phase")}</span>
-                    <strong>${escapeHtml(item.status || "unknown")}</strong>
-                  </div>
-                  <p>${escapeHtml(item.evidence_summary || "")}</p>
-                  <small>${escapeHtml(item.next_action || "")}</small>
-                  <em>${escapeHtml(`${item.owner || "platform_ops"} / external_console=${Boolean(item.external_console_required)}`)}</em>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-        <div class="saas-owner-cutover-actions">
-          <div>
-            <span>Codex/platform ops can continue</span>
-            ${(cutoverInternalActions.length ? cutoverInternalActions : [{ label: "Internal action queue clear", status: "ready", next_action: "Continue routine smoke and release evidence.", source: "internal_work_queue" }])
-              .slice(0, 5)
-              .map((item) => `<article class="${saasOwnerLaunchToneClass(item.tone || item.status)}"><strong>${escapeHtml(item.label || item.key || "internal")}</strong><small>${escapeHtml(item.next_action || item.evidence_summary || "")}</small></article>`)
-              .join("")}
-          </div>
-          <div>
-            <span>Founder external-console work</span>
-            ${(cutoverFounderActions.length ? cutoverFounderActions : [{ label: "External blockers cleared", status: "ready", next_action: "Prepare final no-real-charge rehearsal.", source: "external_blocker" }])
-              .slice(0, 5)
-              .map((item) => `<article class="${saasOwnerLaunchToneClass(item.tone || item.status)}"><strong>${escapeHtml(item.label || item.key || "external")}</strong><small>${escapeHtml(item.next_action || item.evidence_summary || "")}</small></article>`)
-              .join("")}
-          </div>
-        </div>
-        <div class="saas-owner-continuity-no-go" aria-label="owner cutover forbidden actions">
-          ${(cutoverForbiddenActions.length ? cutoverForbiddenActions : ["Do not create live charge, OAuth, platform write or secret export from this checklist."])
-            .slice(0, 6)
-            .map((item) => `<span>${escapeHtml(item)}</span>`)
-            .join("")}
-        </div>
-        <div class="saas-owner-launch-safety" aria-label="cutover decision checklist safety flags">
-          ${[
-            `customer_visible=${Boolean(cutoverChecklist.customer_visible)}`,
-            `download_allowed_for_internal_admin=${Boolean(cutoverChecklist.download_allowed_for_internal_admin || cutoverSafety.download_allowed_for_internal_admin)}`,
-            `exports_database=${Boolean(cutoverChecklist.exports_database)}`,
-            `exports_raw_secret=${Boolean(cutoverChecklist.exports_raw_secret)}`,
-            `includes_raw_tokens=${Boolean(cutoverChecklist.includes_raw_tokens)}`,
-            `includes_payment_secret=${Boolean(cutoverChecklist.includes_payment_secret)}`,
-            `reads_env_secret_values=${Boolean(cutoverChecklist.reads_env_secret_values)}`,
-            `calls_stripe_api=${Boolean(cutoverChecklist.calls_stripe_api)}`,
-            `creates_checkout_session=${Boolean(cutoverChecklist.creates_checkout_session)}`,
-            `triggers_real_charge=${Boolean(cutoverChecklist.triggers_real_charge)}`,
-            `charge_now_allowed=${Boolean(cutoverChecklist.charge_now_allowed)}`,
-            `triggers_ebay_oauth=${Boolean(cutoverChecklist.triggers_ebay_oauth)}`,
-            `repeat_ebay_oauth_allowed=${Boolean(cutoverChecklist.repeat_ebay_oauth_allowed)}`,
-            `triggers_real_platform_write=${Boolean(cutoverChecklist.triggers_real_platform_write)}`,
-            `platform_write_now_allowed=${Boolean(cutoverChecklist.platform_write_now_allowed)}`,
-            `frontend_gets_secret=${Boolean(cutoverChecklist.frontend_gets_secret)}`,
-            `frontend_gets_payment_secret=${Boolean(cutoverChecklist.frontend_gets_payment_secret)}`,
-            `frontend_gets_ebay_token=${Boolean(cutoverChecklist.frontend_gets_ebay_token)}`,
-            `secret_exposed=${Boolean(cutoverChecklist.secret_exposed)}`,
-          ]
-            .map((item) => `<span>${escapeHtml(item)}</span>`)
-            .join("")}
-        </div>
-      </div>
-      <div class="saas-owner-final-rehearsal-record" aria-label="final launch rehearsal execution record">
-        <div class="saas-owner-war-room-head">
-          <div>
-            <span>final_launch_rehearsal_execution_record_v1</span>
-            <strong>${escapeHtml(finalRehearsalRecord.status || "blocked_for_external_prerequisites")}</strong>
-          </div>
-          <small>${escapeHtml(`ready=${finalRehearsalSummary.ready_count ?? 0}/${finalRehearsalSummary.step_count ?? 0} / blocked=${finalRehearsalSummary.blocked_count ?? 0} / attention=${finalRehearsalSummary.attention_count ?? 0}`)}</small>
-        </div>
-        <p class="saas-owner-final-rehearsal-note">internal admin final rehearsal record. It is an evidence checklist and export only: no live checkout, no real charge, no eBay OAuth, no platform write, no database export, no raw secret and no token exposure.</p>
-        <div class="saas-owner-final-rehearsal-grid">
-          ${(finalRehearsalSteps.length ? finalRehearsalSteps : [{ label: "Final rehearsal record pending", status: "attention_required", evidence_summary: "Refresh /owner/launch-control.", next_action: "Refresh owner launch control.", source_endpoint: "/owner/launch-control" }])
-            .map(
-              (item) => `
-                <article class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
-                  <div>
-                    <span>${escapeHtml(item.label || item.key || "final_rehearsal_step")}</span>
-                    <strong>${escapeHtml(item.status || "unknown")}</strong>
-                  </div>
-                  <p>${escapeHtml(item.evidence_summary || "")}</p>
-                  <small>${escapeHtml(item.next_action || "")}</small>
-                  <em>${escapeHtml(item.source_endpoint || "")}</em>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-        <div class="saas-owner-final-rehearsal-actions">
-          <div>
-            <span>Remaining internal actions</span>
-            ${(finalRehearsalInternalActions.length ? finalRehearsalInternalActions : [{ label: "Internal evidence queue clear", status: "ready", next_action: "Continue routine smoke, secret scan and release evidence.", source: "internal_work_queue" }])
-              .slice(0, 5)
-              .map((item) => `<article class="${saasOwnerLaunchToneClass(item.tone || item.status)}"><strong>${escapeHtml(item.label || item.key || "internal")}</strong><small>${escapeHtml(item.next_action || item.evidence_summary || "")}</small></article>`)
-              .join("")}
-          </div>
-          <div>
-            <span>Remaining external blockers</span>
-            ${(finalRehearsalExternalActions.length ? finalRehearsalExternalActions : [{ label: "External blockers cleared", status: "ready", next_action: "Prepare final no-real-charge rehearsal.", source: "external_blocker" }])
-              .slice(0, 5)
-              .map((item) => `<article class="${saasOwnerLaunchToneClass(item.tone || item.status)}"><strong>${escapeHtml(item.label || item.key || "external")}</strong><small>${escapeHtml(item.next_action || item.evidence_summary || "")}</small></article>`)
-              .join("")}
-          </div>
-          <div>
-            <span>Rollback controls</span>
-            ${(finalRehearsalRollbackControls.length ? finalRehearsalRollbackControls : [{ label: "Rollback evidence pending", status: "attention_required", next_action: "Create a staging patch backup and bundle manifest before final rehearsal.", key: "rollback_pending" }])
-              .slice(0, 5)
-              .map((item) => `<article class="${saasOwnerLaunchToneClass(item.tone || item.status)}"><strong>${escapeHtml(item.label || item.key || "rollback")}</strong><small>${escapeHtml(item.evidence_summary || item.next_action || "")}</small></article>`)
-              .join("")}
-          </div>
-        </div>
-        <div class="saas-owner-launch-safety" aria-label="final launch rehearsal execution record safety flags">
-          ${[
-            `customer_visible=${Boolean(finalRehearsalRecord.customer_visible)}`,
-            `download_allowed_for_internal_admin=${Boolean(finalRehearsalRecord.download_allowed_for_internal_admin || finalRehearsalSafety.download_allowed_for_internal_admin)}`,
-            `exports_database=${Boolean(finalRehearsalRecord.exports_database)}`,
-            `exports_raw_secret=${Boolean(finalRehearsalRecord.exports_raw_secret)}`,
-            `includes_raw_tokens=${Boolean(finalRehearsalRecord.includes_raw_tokens)}`,
-            `includes_payment_secret=${Boolean(finalRehearsalRecord.includes_payment_secret)}`,
-            `reads_env_secret_values=${Boolean(finalRehearsalRecord.reads_env_secret_values)}`,
-            `calls_stripe_api=${Boolean(finalRehearsalRecord.calls_stripe_api)}`,
-            `creates_checkout_session=${Boolean(finalRehearsalRecord.creates_checkout_session)}`,
-            `triggers_real_charge=${Boolean(finalRehearsalRecord.triggers_real_charge)}`,
-            `charge_now_allowed=${Boolean(finalRehearsalRecord.charge_now_allowed)}`,
-            `triggers_ebay_oauth=${Boolean(finalRehearsalRecord.triggers_ebay_oauth)}`,
-            `repeat_ebay_oauth_allowed=${Boolean(finalRehearsalRecord.repeat_ebay_oauth_allowed)}`,
-            `triggers_real_platform_write=${Boolean(finalRehearsalRecord.triggers_real_platform_write)}`,
-            `platform_write_now_allowed=${Boolean(finalRehearsalRecord.platform_write_now_allowed)}`,
-            `frontend_gets_secret=${Boolean(finalRehearsalRecord.frontend_gets_secret)}`,
-            `frontend_gets_payment_secret=${Boolean(finalRehearsalRecord.frontend_gets_payment_secret)}`,
-            `frontend_gets_ebay_token=${Boolean(finalRehearsalRecord.frontend_gets_ebay_token)}`,
-            `secret_exposed=${Boolean(finalRehearsalRecord.secret_exposed)}`,
-          ]
-            .map((item) => `<span>${escapeHtml(item)}</span>`)
-            .join("")}
-        </div>
-      </div>
-      <div class="saas-owner-paid-launch-dossier" aria-label="owner paid launch approval dossier">
-        <div class="saas-owner-war-room-head">
-          <div>
-            <span>owner_paid_launch_approval_dossier_v1</span>
-            <strong>${escapeHtml(ownerPaidLaunchDossier.status || "blocked")}</strong>
-          </div>
-          <small>${escapeHtml(`score=${ownerPaidLaunchDossierSummary.readiness_score_percent ?? 0}% / ready=${ownerPaidLaunchDossierSummary.ready_count ?? 0}/${ownerPaidLaunchDossierSummary.section_count ?? 0} / blocked=${ownerPaidLaunchDossierSummary.blocked_count ?? 0}`)}</small>
-        </div>
-        <p class="saas-owner-paid-launch-dossier-note">internal admin approval material only. It combines readiness, billing provider, no-charge evidence, clean eBay refresh proof and rollback state; it stays hidden from ordinary merchant accounts and never creates Checkout, charges, OAuth or platform writes.</p>
-        <div class="saas-owner-paid-launch-dossier-decision">
-          <article class="${saasOwnerLaunchToneClass(ownerPaidLaunchDossier.status || "blocked")}">
-            <span>Decision</span>
-            <strong>${escapeHtml(ownerPaidLaunchDossierSummary.decision || "do_not_enable_paid_public_launch_yet")}</strong>
-            <p>${escapeHtml(`next=${ownerPaidLaunchDossierSummary.next_step || "keep_public_paid_launch_blocked"}`)}</p>
-          </article>
-          <article class="${ownerPaidLaunchDossierSummary.no_charge_evidence_packet_status === "ready" ? "is-green" : "is-red"}">
-            <span>No-charge evidence</span>
-            <strong>${escapeHtml(ownerPaidLaunchDossierSummary.no_charge_evidence_packet_status || "missing")}</strong>
-            <p>${escapeHtml(`ready=${ownerPaidLaunchDossierSummary.no_charge_evidence_ready_count ?? 0}/${ownerPaidLaunchDossierSummary.no_charge_evidence_total_count ?? 0}`)}</p>
-          </article>
-          <article class="${Number(ownerPaidLaunchDossierSummary.ebay_token_refresh_success_count || 0) > 0 ? "is-green" : "is-red"}">
-            <span>eBay refresh proof</span>
-            <strong>${escapeHtml(String(ownerPaidLaunchDossierSummary.ebay_token_refresh_success_count ?? 0))}</strong>
-            <p>${escapeHtml(`repeat_oauth_allowed=${Boolean(ownerPaidLaunchDossierSummary.repeat_ebay_oauth_allowed)}`)}</p>
-          </article>
-        </div>
-        <div class="saas-owner-paid-launch-dossier-grid">
-          ${(ownerPaidLaunchDossierSections.length ? ownerPaidLaunchDossierSections : [{ label: "Paid launch dossier pending", status: "attention_required", evidence_summary: "Refresh /owner/launch-control.", next_action: "Refresh owner launch control.", source_endpoint: "/owner/launch-control" }])
-            .map(
-              (item) => `
-                <article class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
-                  <div>
-                    <span>${escapeHtml(item.label || item.key || "approval_dossier_section")}</span>
-                    <strong>${escapeHtml(item.status || "unknown")}</strong>
-                  </div>
-                  <p>${escapeHtml(item.evidence_summary || "")}</p>
-                  <small>${escapeHtml(item.next_action || "")}</small>
-                  <em>${escapeHtml(item.source_endpoint || "")}</em>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-        <div class="saas-owner-paid-launch-evidence-grid">
-          ${(ownerPaidLaunchNoChargeItems.length ? ownerPaidLaunchNoChargeItems : [{ title: "No-charge evidence pending", status: "blocked", key: "no_charge_pending", evidence_summary: "Refresh /owner/launch-control." }])
-            .map(
-              (item) => `
-                <article class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
-                  <span>${escapeHtml(item.key || "evidence")}</span>
-                  <strong>${escapeHtml(item.status || "unknown")}</strong>
-                  <p>${escapeHtml(item.title || "")}</p>
-                  <small>${escapeHtml(item.evidence_summary || "")}</small>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-        <div class="saas-owner-paid-launch-dossier-actions">
-          <div>
-            <span>Owner external blockers</span>
-            ${(ownerPaidLaunchExternalActions.length ? ownerPaidLaunchExternalActions : [{ label: "External blockers clear", status: "ready", next_action: "Prepare owner cutover review.", source: "external_blocker" }])
-              .slice(0, 5)
-              .map((item) => `<article class="${saasOwnerLaunchToneClass(item.tone || item.status)}"><strong>${escapeHtml(item.label || item.key || "external")}</strong><small>${escapeHtml(item.next_action || item.evidence_summary || "")}</small></article>`)
-              .join("")}
-          </div>
-          <div>
-            <span>Internal evidence actions</span>
-            ${(ownerPaidLaunchInternalActions.length ? ownerPaidLaunchInternalActions : [{ label: "Internal evidence queue clear", status: "ready", next_action: "Keep no-charge smoke, secret scan and readiness evidence current.", source: "internal_work_queue" }])
-              .slice(0, 5)
-              .map((item) => `<article class="${saasOwnerLaunchToneClass(item.tone || item.status)}"><strong>${escapeHtml(item.label || item.key || "internal")}</strong><small>${escapeHtml(item.next_action || item.evidence_summary || "")}</small></article>`)
-              .join("")}
-          </div>
-        </div>
-        <div class="saas-owner-launch-safety" aria-label="owner paid launch approval dossier safety flags">
-          ${[
-            `customer_visible=${Boolean(ownerPaidLaunchDossier.customer_visible)}`,
-            `ordinary_merchant_visible=${Boolean(ownerPaidLaunchDossier.ordinary_merchant_visible || ownerPaidLaunchDossierSafety.ordinary_merchant_visible)}`,
-            `merchant_surface_safe=${Boolean(ownerPaidLaunchDossier.merchant_surface_safe || ownerPaidLaunchDossierSafety.merchant_surface_safe)}`,
-            `download_allowed_for_internal_admin=${Boolean(ownerPaidLaunchDossier.download_allowed_for_internal_admin || ownerPaidLaunchDossierSafety.download_allowed_for_internal_admin)}`,
-            `exports_database=${Boolean(ownerPaidLaunchDossier.exports_database)}`,
-            `exports_raw_secret=${Boolean(ownerPaidLaunchDossier.exports_raw_secret)}`,
-            `includes_raw_tokens=${Boolean(ownerPaidLaunchDossier.includes_raw_tokens)}`,
-            `includes_payment_secret=${Boolean(ownerPaidLaunchDossier.includes_payment_secret)}`,
-            `reads_env_secret_values=${Boolean(ownerPaidLaunchDossier.reads_env_secret_values)}`,
-            `calls_stripe_api=${Boolean(ownerPaidLaunchDossier.calls_stripe_api)}`,
-            `creates_checkout_session=${Boolean(ownerPaidLaunchDossier.creates_checkout_session)}`,
-            `triggers_real_charge=${Boolean(ownerPaidLaunchDossier.triggers_real_charge)}`,
-            `charge_now_allowed=${Boolean(ownerPaidLaunchDossier.charge_now_allowed)}`,
-            `triggers_ebay_oauth=${Boolean(ownerPaidLaunchDossier.triggers_ebay_oauth)}`,
-            `repeat_ebay_oauth_allowed=${Boolean(ownerPaidLaunchDossier.repeat_ebay_oauth_allowed)}`,
-            `triggers_real_platform_write=${Boolean(ownerPaidLaunchDossier.triggers_real_platform_write)}`,
-            `platform_write_now_allowed=${Boolean(ownerPaidLaunchDossier.platform_write_now_allowed)}`,
-            `frontend_gets_secret=${Boolean(ownerPaidLaunchDossier.frontend_gets_secret)}`,
-            `frontend_gets_payment_secret=${Boolean(ownerPaidLaunchDossier.frontend_gets_payment_secret)}`,
-            `frontend_gets_ebay_token=${Boolean(ownerPaidLaunchDossier.frontend_gets_ebay_token)}`,
-            `secret_exposed=${Boolean(ownerPaidLaunchDossier.secret_exposed)}`,
-          ]
-            .map((item) => `<span>${escapeHtml(item)}</span>`)
-            .join("")}
-        </div>
-      </div>
-      <div class="saas-owner-prelaunch-report" aria-label="prelaunch acceptance report">
-        <div class="saas-owner-war-room-head">
-          <div>
-            <span>prelaunch_acceptance_report_v1</span>
-            <strong>${escapeHtml(prelaunchDecision.decision_label || prelaunchReportSummary.decision || "Do not launch paid public SaaS yet")}</strong>
-          </div>
-          <small>${escapeHtml(`score=${prelaunchReportSummary.readiness_score_percent ?? 0}% / ready=${prelaunchReportSummary.ready_count ?? 0}/${prelaunchReportSummary.report_item_count ?? 0} / blocked=${prelaunchReportSummary.blocked_count ?? 0}`)}</small>
-        </div>
-        <p class="saas-owner-prelaunch-note">internal admin one-click report. It turns current backend evidence into a launch acceptance report and keeps the decision conservative: public paid launch stays blocked until live billing and clean eBay refresh proof are attached.</p>
-        <div class="saas-owner-prelaunch-decision">
-          <article class="${saasOwnerLaunchToneClass(prelaunchReport.status || "blocked")}">
-            <span>Decision</span>
-            <strong>${escapeHtml(prelaunchReportSummary.decision || "do_not_launch_paid_public_yet")}</strong>
-            <p>${escapeHtml(prelaunchDecision.next_safe_step || "Continue internal no-real-charge rehearsal evidence.")}</p>
-          </article>
-          <article class="${prelaunchReportSummary.public_paid_launch_allowed ? "is-green" : "is-red"}">
-            <span>Paid public launch</span>
-            <strong>${escapeHtml(String(Boolean(prelaunchReportSummary.public_paid_launch_allowed)))}</strong>
-            <p>${escapeHtml(`charge_now_allowed=${Boolean(prelaunchReportSummary.charge_now_allowed)} / platform_write_now_allowed=${Boolean(prelaunchReportSummary.platform_write_now_allowed)}`)}</p>
-          </article>
-          <article class="${prelaunchReportSummary.beta_ready ? "is-green" : "is-amber"}">
-            <span>Private beta</span>
-            <strong>${escapeHtml(String(Boolean(prelaunchReportSummary.beta_ready)))}</strong>
-            <p>${escapeHtml(`production_ready=${Boolean(prelaunchReportSummary.production_ready)} / real_customers=${Boolean(prelaunchReportSummary.can_accept_real_customers)}`)}</p>
-          </article>
-        </div>
-        <div class="saas-owner-prelaunch-grid">
-          ${(prelaunchReportItems.length ? prelaunchReportItems : [{ label: "Prelaunch report pending", status: "attention_required", evidence_summary: "Refresh /owner/launch-control.", next_action: "Refresh owner launch control." }])
-            .map(
-              (item) => `
-                <article class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
-                  <div>
-                    <span>${escapeHtml(item.label || item.key || "prelaunch_check")}</span>
-                    <strong>${escapeHtml(item.status || "unknown")}</strong>
-                  </div>
-                  <p>${escapeHtml(item.evidence_summary || "")}</p>
-                  <small>${escapeHtml(item.next_action || "")}</small>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-        <div class="saas-owner-prelaunch-actions">
-          <div>
-            <span>Founder required actions</span>
-            ${(prelaunchFounderActions.length ? prelaunchFounderActions : [{ label: "No external blocker recorded", status: "ready", next_action: "Continue internal evidence only.", source: "external_blocker" }])
-              .slice(0, 5)
-              .map((item) => `<article class="${saasOwnerLaunchToneClass(item.tone || item.status)}"><strong>${escapeHtml(item.label || item.key || "founder")}</strong><small>${escapeHtml(item.next_action || item.evidence_summary || "")}</small></article>`)
-              .join("")}
-          </div>
-          <div>
-            <span>Codex/platform actions</span>
-            ${(prelaunchCodexActions.length ? prelaunchCodexActions : [{ label: "Routine verification", status: "ready", next_action: "Keep smoke, secret scan and release evidence current.", source: "internal_work_queue" }])
-              .slice(0, 5)
-              .map((item) => `<article class="${saasOwnerLaunchToneClass(item.tone || item.status)}"><strong>${escapeHtml(item.label || item.key || "internal")}</strong><small>${escapeHtml(item.next_action || item.evidence_summary || "")}</small></article>`)
-              .join("")}
-          </div>
-        </div>
-        <div class="saas-owner-launch-safety" aria-label="prelaunch acceptance report safety flags">
-          ${[
-            `customer_visible=${Boolean(prelaunchReport.customer_visible)}`,
-            `download_allowed_for_internal_admin=${Boolean(prelaunchReport.download_allowed_for_internal_admin || prelaunchReportSafety.download_allowed_for_internal_admin)}`,
-            `exports_database=${Boolean(prelaunchReport.exports_database)}`,
-            `exports_raw_secret=${Boolean(prelaunchReport.exports_raw_secret)}`,
-            `includes_raw_tokens=${Boolean(prelaunchReport.includes_raw_tokens)}`,
-            `includes_payment_secret=${Boolean(prelaunchReport.includes_payment_secret)}`,
-            `reads_env_secret_values=${Boolean(prelaunchReport.reads_env_secret_values)}`,
-            `calls_stripe_api=${Boolean(prelaunchReport.calls_stripe_api)}`,
-            `creates_checkout_session=${Boolean(prelaunchReport.creates_checkout_session)}`,
-            `triggers_real_charge=${Boolean(prelaunchReport.triggers_real_charge)}`,
-            `charge_now_allowed=${Boolean(prelaunchReport.charge_now_allowed)}`,
-            `triggers_ebay_oauth=${Boolean(prelaunchReport.triggers_ebay_oauth)}`,
-            `repeat_ebay_oauth_allowed=${Boolean(prelaunchReport.repeat_ebay_oauth_allowed)}`,
-            `triggers_real_platform_write=${Boolean(prelaunchReport.triggers_real_platform_write)}`,
-            `platform_write_now_allowed=${Boolean(prelaunchReport.platform_write_now_allowed)}`,
-            `frontend_gets_secret=${Boolean(prelaunchReport.frontend_gets_secret)}`,
-            `frontend_gets_payment_secret=${Boolean(prelaunchReport.frontend_gets_payment_secret)}`,
-            `frontend_gets_ebay_token=${Boolean(prelaunchReport.frontend_gets_ebay_token)}`,
-            `secret_exposed=${Boolean(prelaunchReport.secret_exposed)}`,
-          ]
-            .map((item) => `<span>${escapeHtml(item)}</span>`)
-            .join("")}
-        </div>
-      </div>
-      <div class="saas-owner-review-packet" aria-label="owner review packet">
-        <div class="saas-owner-war-room-head">
-          <div>
-            <span>owner_review_packet_v1</span>
-            <strong>${escapeHtml(ownerReview.status || "blocked")}</strong>
-          </div>
-          <small>${escapeHtml(`ready=${ownerReviewSummary.ready_count ?? 0}/${ownerReviewSummary.review_item_count ?? 0} / blocked=${ownerReviewSummary.blocked_count ?? 0}`)}</small>
-        </div>
-        <p class="saas-owner-review-note">internal admin export only. This packet is sanitized and read-only: no database export, no raw secret, no token, no payment key, no Stripe call, no eBay OAuth, and no platform write.</p>
-        <div class="saas-owner-review-grid">
-          ${(ownerReviewItems.length ? ownerReviewItems : [{ label: "Owner review packet pending", status: "attention_required", evidence_summary: "Refresh /owner/launch-control.", next_action: "Refresh owner launch control.", source_endpoint: "/owner/launch-control" }])
-            .map(
-              (item) => `
-                <article class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
-                  <div>
-                    <span>${escapeHtml(item.label || item.key || "owner_review")}</span>
-                    <strong>${escapeHtml(item.status || "unknown")}</strong>
-                  </div>
-                  <p>${escapeHtml(item.evidence_summary || "")}</p>
-                  <small>${escapeHtml(item.next_action || "")}</small>
-                  <em>${escapeHtml(item.source_endpoint || "")}</em>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-        <div class="saas-owner-launch-safety" aria-label="owner review packet safety flags">
-          ${[
-            `customer_visible=${Boolean(ownerReview.customer_visible)}`,
-            `download_allowed_for_internal_admin=${Boolean(ownerReview.download_allowed_for_internal_admin || ownerReviewSafety.download_allowed_for_internal_admin)}`,
-            `exports_database=${Boolean(ownerReview.exports_database)}`,
-            `exports_raw_secret=${Boolean(ownerReview.exports_raw_secret)}`,
-            `includes_raw_tokens=${Boolean(ownerReview.includes_raw_tokens)}`,
-            `includes_payment_secret=${Boolean(ownerReview.includes_payment_secret)}`,
-            `calls_stripe_api=${Boolean(ownerReview.calls_stripe_api)}`,
-            `creates_checkout_session=${Boolean(ownerReview.creates_checkout_session)}`,
-            `triggers_real_charge=${Boolean(ownerReview.triggers_real_charge)}`,
-            `triggers_ebay_oauth=${Boolean(ownerReview.triggers_ebay_oauth)}`,
-            `triggers_real_platform_write=${Boolean(ownerReview.triggers_real_platform_write)}`,
-            `frontend_gets_secret=${Boolean(ownerReview.frontend_gets_secret)}`,
-            `secret_exposed=${Boolean(ownerReview.secret_exposed)}`,
-          ]
-            .map((item) => `<span>${escapeHtml(item)}</span>`)
-            .join("")}
-        </div>
-      </div>
-      <div class="saas-owner-launch-audit" aria-label="launch rehearsal audit">
-        <div class="saas-owner-war-room-head">
-          <div>
-            <span>launch_rehearsal_audit_v1</span>
-            <strong>${escapeHtml(launchAudit.status || "blocked")}</strong>
-          </div>
-          <small>${escapeHtml(`ready=${launchAuditSummary.ready_count ?? 0}/${launchAuditSummary.check_count ?? 0} / blocked=${launchAuditSummary.blocked_count ?? 0}`)}</small>
-        </div>
-        <p class="saas-owner-launch-audit-note">internal admin rehearsal record only. It records health, readiness, secret-scan, browser smoke, billing rehearsal, edge/WAF snapshot and rollback evidence without exporting database rows or triggering charge, OAuth or platform write.</p>
-        <div class="saas-owner-launch-audit-grid">
-          ${(launchAuditChecks.length ? launchAuditChecks : [{ label: "Launch rehearsal audit pending", status: "attention_required", evidence_summary: "Refresh /owner/launch-control.", next_action: "Refresh owner launch control.", source_endpoint: "/owner/launch-control" }])
-            .map(
-              (item) => `
-                <article class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
-                  <div>
-                    <span>${escapeHtml(item.label || item.key || "launch_audit")}</span>
-                    <strong>${escapeHtml(item.status || "unknown")}</strong>
-                  </div>
-                  <p>${escapeHtml(item.evidence_summary || "")}</p>
-                  <small>${escapeHtml(item.next_action || "")}</small>
-                  <em>${escapeHtml(item.source_endpoint || "")}</em>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-        <div class="saas-owner-launch-safety" aria-label="launch rehearsal audit safety flags">
-          ${[
-            `customer_visible=${Boolean(launchAudit.customer_visible)}`,
-            `download_allowed_for_internal_admin=${Boolean(launchAudit.download_allowed_for_internal_admin || launchAuditSafety.download_allowed_for_internal_admin)}`,
-            `exports_database=${Boolean(launchAudit.exports_database)}`,
-            `exports_raw_secret=${Boolean(launchAudit.exports_raw_secret)}`,
-            `includes_raw_tokens=${Boolean(launchAudit.includes_raw_tokens)}`,
-            `includes_payment_secret=${Boolean(launchAudit.includes_payment_secret)}`,
-            `calls_stripe_api=${Boolean(launchAudit.calls_stripe_api)}`,
-            `creates_checkout_session=${Boolean(launchAudit.creates_checkout_session)}`,
-            `triggers_real_charge=${Boolean(launchAudit.triggers_real_charge)}`,
-            `charge_now_allowed=${Boolean(launchAudit.charge_now_allowed)}`,
-            `triggers_ebay_oauth=${Boolean(launchAudit.triggers_ebay_oauth)}`,
-            `repeat_ebay_oauth_allowed=${Boolean(launchAudit.repeat_ebay_oauth_allowed)}`,
-            `triggers_real_platform_write=${Boolean(launchAudit.triggers_real_platform_write)}`,
-            `platform_write_now_allowed=${Boolean(launchAudit.platform_write_now_allowed)}`,
-            `frontend_gets_secret=${Boolean(launchAudit.frontend_gets_secret)}`,
-            `secret_exposed=${Boolean(launchAudit.secret_exposed)}`,
-          ]
-            .map((item) => `<span>${escapeHtml(item)}</span>`)
-            .join("")}
-        </div>
-      </div>
-      <div class="saas-owner-release-history" aria-label="owner release history">
-        <div class="saas-owner-war-room-head">
-          <div>
-            <span>owner_release_history_v1</span>
-            <strong>${escapeHtml(releaseHistory.status || "no_local_release_artifacts")}</strong>
-          </div>
-          <small>${escapeHtml(`bundles=${releaseHistorySummary.bundle_record_count ?? 0} / rollback=${releaseHistorySummary.rollback_point_count ?? 0} / asset=${releaseHistorySummary.current_frontend_asset_version || "missing"}`)}</small>
-        </div>
-        <p class="saas-owner-release-history-note">internal admin release ledger. It lists local bundle manifests, SHA256, frontend asset version, rollback backup pointers and launch checks; it does not export merchant data, database rows, raw secrets or tokens.</p>
-        <div class="saas-owner-release-history-grid">
-          ${(releaseHistoryRecords.length ? releaseHistoryRecords : [{ zip_file: "No local bundle manifest", zip_sha256: "", created_at: "", file_count: 0, bundle: "public_staging" }])
-            .slice(0, 4)
-            .map(
-              (item) => `
-                <article>
-                  <span>${escapeHtml(item.bundle || "public_staging")}</span>
-                  <strong>${escapeHtml(item.zip_file || "bundle_manifest_missing")}</strong>
-                  <p>${escapeHtml(item.zip_sha256 || "sha256_missing")}</p>
-                  <small>${escapeHtml(`${item.created_at || "time_missing"} / files=${item.file_count ?? 0}`)}</small>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-        <div class="saas-owner-release-check-grid">
-          ${(releaseHistoryChecks.length ? releaseHistoryChecks : [{ label: "Release history check pending", status: "attention_required", evidence_summary: "Refresh /owner/launch-control.", next_action: "Refresh owner launch control." }])
-            .map(
-              (item) => `
-                <article class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
-                  <div>
-                    <span>${escapeHtml(item.label || item.key || "release_check")}</span>
-                    <strong>${escapeHtml(item.status || "unknown")}</strong>
-                  </div>
-                  <p>${escapeHtml(item.evidence_summary || "")}</p>
-                  <small>${escapeHtml(item.next_action || "")}</small>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-        <div class="saas-owner-release-rollback-list" aria-label="owner release rollback points">
-          ${(rollbackPoints.length ? rollbackPoints : [{ label: "No rollback backup pointer found", backup_dir_name: "missing", rollback_scope: "application_bundle_and_runtime_config_only" }])
-            .slice(0, 4)
-            .map(
-              (item) => `
-                <span>
-                  <b>${escapeHtml(item.backup_dir_name || item.key || "rollback_missing")}</b>
-                  <em>${escapeHtml(item.rollback_scope || "application_bundle_and_runtime_config_only")}</em>
-                </span>
-              `,
-            )
-            .join("")}
-        </div>
-        <div class="saas-owner-launch-safety" aria-label="owner release history safety flags">
-          ${[
-            `customer_visible=${Boolean(releaseHistory.customer_visible)}`,
-            `download_allowed_for_internal_admin=${Boolean(releaseHistory.download_allowed_for_internal_admin || releaseHistorySafety.download_allowed_for_internal_admin)}`,
-            `exports_database=${Boolean(releaseHistory.exports_database)}`,
-            `exports_raw_secret=${Boolean(releaseHistory.exports_raw_secret)}`,
-            `includes_raw_tokens=${Boolean(releaseHistory.includes_raw_tokens)}`,
-            `includes_payment_secret=${Boolean(releaseHistory.includes_payment_secret)}`,
-            `reads_env_secret_values=${Boolean(releaseHistory.reads_env_secret_values)}`,
-            `calls_stripe_api=${Boolean(releaseHistory.calls_stripe_api)}`,
-            `creates_checkout_session=${Boolean(releaseHistory.creates_checkout_session)}`,
-            `triggers_real_charge=${Boolean(releaseHistory.triggers_real_charge)}`,
-            `charge_now_allowed=${Boolean(releaseHistory.charge_now_allowed)}`,
-            `triggers_ebay_oauth=${Boolean(releaseHistory.triggers_ebay_oauth)}`,
-            `triggers_real_platform_write=${Boolean(releaseHistory.triggers_real_platform_write)}`,
-            `secret_exposed=${Boolean(releaseHistory.secret_exposed)}`,
-          ]
-            .map((item) => `<span>${escapeHtml(item)}</span>`)
-            .join("")}
-        </div>
-      </div>
-      <div class="saas-owner-continuity-handoff" aria-label="owner continuity handoff">
-        <div class="saas-owner-war-room-head">
-          <div>
-            <span>continuity_handoff_v1</span>
-            <strong>${escapeHtml(handoffDigest.status || "blocked_for_public_launch")}</strong>
-          </div>
-          <small>${escapeHtml(`state=${handoffSummary.current_state_count ?? 0} / internal=${handoffSummary.pending_internal_action_count ?? 0} / external=${handoffSummary.external_blocker_count ?? 0}`)}</small>
-        </div>
-        <p class="saas-owner-continuity-note">internal admin handoff only. It gives the next operator the current state, proof links, no-go rules, and next actions without exporting database rows, raw secrets, tokens, payment keys, Checkout sessions, OAuth, or platform writes.</p>
-        <div class="saas-owner-continuity-grid">
-          ${(handoffState.length ? handoffState : [{ label: "Continuity state pending", status: "attention_required", evidence_summary: "Refresh /owner/launch-control.", next_action: "Refresh owner launch control." }])
-            .map(
-              (item) => `
-                <article class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
-                  <div>
-                    <span>${escapeHtml(item.label || item.key || "state")}</span>
-                    <strong>${escapeHtml(item.status || "unknown")}</strong>
-                  </div>
-                  <p>${escapeHtml(item.evidence_summary || "")}</p>
-                  <small>${escapeHtml(item.next_action || "")}</small>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-        <div class="saas-owner-continuity-actions">
-          <div>
-            <span>Internal next actions</span>
-            ${(handoffInternalActions.length ? handoffInternalActions : [{ label: "No internal action queued", status: "ready", next_action: "Continue smoke verification." }])
-              .slice(0, 4)
-              .map((item) => `<article class="${saasOwnerLaunchToneClass(item.tone || item.status)}"><strong>${escapeHtml(item.label || item.key || "internal")}</strong><small>${escapeHtml(item.next_action || "")}</small></article>`)
-              .join("")}
-          </div>
-          <div>
-            <span>Owner / external actions</span>
-            ${(handoffExternalActions.length ? handoffExternalActions : [{ label: "External blocker cleared", status: "ready", next_action: "Continue internal hardening." }])
-              .slice(0, 4)
-              .map((item) => `<article class="${saasOwnerLaunchToneClass(item.tone || item.status)}"><strong>${escapeHtml(item.label || item.key || "external")}</strong><small>${escapeHtml(item.next_action || "")}</small></article>`)
-              .join("")}
-          </div>
-        </div>
-        <div class="saas-owner-continuity-no-go" aria-label="owner continuity no go rules">
-          ${(handoffDoNotDo.length ? handoffDoNotDo : ["Do not perform real charge, OAuth, platform write or secret export from this panel."])
-            .slice(0, 6)
-            .map((item) => `<span>${escapeHtml(item)}</span>`)
-            .join("")}
-        </div>
-        <div class="saas-owner-launch-safety" aria-label="owner continuity handoff safety flags">
-          ${[
-            `customer_visible=${Boolean(handoffDigest.customer_visible)}`,
-            `download_allowed_for_internal_admin=${Boolean(handoffDigest.download_allowed_for_internal_admin || handoffSafety.download_allowed_for_internal_admin)}`,
-            `exports_database=${Boolean(handoffDigest.exports_database)}`,
-            `exports_raw_secret=${Boolean(handoffDigest.exports_raw_secret)}`,
-            `includes_raw_tokens=${Boolean(handoffDigest.includes_raw_tokens)}`,
-            `includes_payment_secret=${Boolean(handoffDigest.includes_payment_secret)}`,
-            `reads_env_secret_values=${Boolean(handoffDigest.reads_env_secret_values)}`,
-            `calls_stripe_api=${Boolean(handoffDigest.calls_stripe_api)}`,
-            `creates_checkout_session=${Boolean(handoffDigest.creates_checkout_session)}`,
-            `triggers_real_charge=${Boolean(handoffDigest.triggers_real_charge)}`,
-            `charge_now_allowed=${Boolean(handoffDigest.charge_now_allowed)}`,
-            `triggers_ebay_oauth=${Boolean(handoffDigest.triggers_ebay_oauth)}`,
-            `repeat_ebay_oauth_allowed=${Boolean(handoffDigest.repeat_ebay_oauth_allowed)}`,
-            `triggers_real_platform_write=${Boolean(handoffDigest.triggers_real_platform_write)}`,
-            `platform_write_now_allowed=${Boolean(handoffDigest.platform_write_now_allowed)}`,
-            `frontend_gets_secret=${Boolean(handoffDigest.frontend_gets_secret)}`,
-            `secret_exposed=${Boolean(handoffDigest.secret_exposed)}`,
-          ]
-            .map((item) => `<span>${escapeHtml(item)}</span>`)
-            .join("")}
-        </div>
-      </div>
-      <div class="saas-owner-war-room" aria-label="owner war room v3">
-        <div class="saas-owner-war-room-head">
-          <div>
-            <span>owner_war_room_v3</span>
-            <strong>${escapeHtml(warRoom.status || "public_launch_blocked")}</strong>
-          </div>
-          <small>customer_visible=false / charge_now_allowed=false / platform_write_now_allowed=false</small>
-        </div>
-        <div class="saas-owner-war-room-grid">
-          ${(warSections.length ? warSections : [{ label: "War room evidence pending", status: "attention_required", evidence_summary: "Refresh backend evidence.", next_action: "Run /owner/launch-control again." }])
-            .map(
-              (item) => `
-                <article class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
-                  <span>${escapeHtml(item.label || item.key || "war_room")}</span>
-                  <strong>${escapeHtml(item.status || "unknown")}</strong>
-                  <p>${escapeHtml(item.evidence_summary || "")}</p>
-                  <small>${escapeHtml(item.next_action || "")}</small>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-      </div>
-      <div class="saas-owner-ops-observability" aria-label="owner operations observability">
-        <div class="saas-owner-war-room-head">
-          <div>
-            <span>operations_observability_v1</span>
-            <strong>${escapeHtml(ops.status || "attention_required")}</strong>
-          </div>
-          <small>${escapeHtml(`ready=${opsSummary.ready_count ?? 0}/${opsSummary.card_count ?? 0} / attention=${opsSummary.attention_count ?? 0}`)}</small>
-        </div>
-        <p class="saas-owner-ops-note">internal only · 只读聚合 health、backup、billing、post-publish、test-data 和高成本 API 保护证据；不扣款、不写 eBay、不跑 OAuth、不暴露密钥。</p>
-        <div class="saas-owner-ops-grid">
-          ${(opsCards.length ? opsCards : [{ label: "Operations evidence pending", status: "attention_required", evidence_summary: "Refresh /owner/launch-control.", next_action: "Refresh owner launch control.", source_endpoint: "/owner/launch-control" }])
-            .map(
-              (item) => `
-                <article class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
-                  <div>
-                    <span>${escapeHtml(item.label || item.key || "ops")}</span>
-                    <strong>${escapeHtml(item.status || "unknown")}</strong>
-                  </div>
-                  <p>${escapeHtml(item.evidence_summary || item.detail || "")}</p>
-                  <small>${escapeHtml(item.next_action || "")}</small>
-                  <em>${escapeHtml(item.source_endpoint || "")}</em>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-        <div class="saas-owner-launch-safety" aria-label="operations observability safety flags">
-          ${[
-            `customer_visible=${Boolean(ops.customer_visible)}`,
-            `calls_stripe_api=${Boolean(ops.safety?.calls_stripe_api)}`,
-            `creates_checkout_session=${Boolean(ops.safety?.creates_checkout_session)}`,
-            `triggers_real_charge=${Boolean(ops.safety?.triggers_real_charge)}`,
-            `triggers_ebay_oauth=${Boolean(ops.safety?.triggers_ebay_oauth)}`,
-            `triggers_real_platform_write=${Boolean(ops.safety?.triggers_real_platform_write)}`,
-            `secret_exposed=${Boolean(ops.secret_exposed)}`,
-          ]
-            .map((item) => `<span>${escapeHtml(item)}</span>`)
-            .join("")}
-        </div>
-      </div>
-      <div class="saas-owner-resilience-war-room" aria-label="owner resilience war room">
-        <div class="saas-owner-war-room-head">
-          <div>
-            <span>resilience_war_room_v1</span>
-            <strong>${escapeHtml(resilience.status || "attention_required")}</strong>
-          </div>
-          <small>${escapeHtml(`ready=${resilienceSummary.ready_count ?? 0}/${resilienceSummary.card_count ?? 0} / attention=${resilienceSummary.attention_count ?? 0}`)}</small>
-        </div>
-        <p class="saas-owner-resilience-note">internal only · 备份恢复、事故 runbook、告警路由、队列/计费/eBay 事故模式的只读证据；不导出数据库、不导出密钥、不扣款、不写 eBay。</p>
-        <div class="saas-owner-resilience-grid">
-          ${(resilienceCards.length ? resilienceCards : [{ label: "Resilience evidence pending", status: "attention_required", evidence_summary: "Refresh /owner/launch-control.", next_action: "Refresh owner launch control.", source_endpoint: "/owner/launch-control" }])
-            .map(
-              (item) => `
-                <article class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
-                  <div>
-                    <span>${escapeHtml(item.label || item.key || "resilience")}</span>
-                    <strong>${escapeHtml(item.status || "unknown")}</strong>
-                  </div>
-                  <p>${escapeHtml(item.evidence_summary || item.detail || "")}</p>
-                  <small>${escapeHtml(item.next_action || "")}</small>
-                  <em>${escapeHtml(item.source_endpoint || "")}</em>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-        <div class="saas-owner-launch-safety" aria-label="resilience war room safety flags">
-          ${[
-            `customer_visible=${Boolean(resilience.customer_visible)}`,
-            `exports_database=${Boolean(resilience.safety?.exports_database)}`,
-            `exports_raw_secret=${Boolean(resilience.safety?.exports_raw_secret)}`,
-            `calls_stripe_api=${Boolean(resilience.safety?.calls_stripe_api)}`,
-            `creates_checkout_session=${Boolean(resilience.safety?.creates_checkout_session)}`,
-            `triggers_real_charge=${Boolean(resilience.safety?.triggers_real_charge)}`,
-            `triggers_ebay_oauth=${Boolean(resilience.safety?.triggers_ebay_oauth)}`,
-            `triggers_real_platform_write=${Boolean(resilience.safety?.triggers_real_platform_write)}`,
-            `secret_exposed=${Boolean(resilience.secret_exposed)}`,
-          ]
-            .map((item) => `<span>${escapeHtml(item)}</span>`)
-            .join("")}
-        </div>
-      </div>
-      <div class="saas-owner-subscription-shutdown" aria-label="owner subscription shutdown control">
-        <div class="saas-owner-war-room-head">
-          <div>
-            <span>subscription_shutdown_control_v1</span>
-            <strong>${escapeHtml(subscriptionShutdown.status || "attention_required")}</strong>
-          </div>
-          <small>${escapeHtml(`ready=${subscriptionShutdownSummary.ready_count ?? 0}/${subscriptionShutdownSummary.card_count ?? 0} / next=${subscriptionShutdownSummary.next_step || "none"}`)}</small>
-        </div>
-        <p class="saas-owner-subscription-shutdown-note">internal only · 欠费、取消、invoice paid、portal 变更和 quota hard-stop 的上线闭环证据；不创建 Checkout、不调用 Stripe、不扣款、不写 eBay。</p>
-        <div class="saas-owner-subscription-shutdown-grid">
-          ${(subscriptionShutdownCards.length ? subscriptionShutdownCards : [{ label: "Subscription shutdown evidence pending", status: "attention_required", evidence_summary: "Refresh /owner/launch-control.", next_action: "Refresh owner launch control.", source_endpoint: "/owner/launch-control" }])
-            .map(
-              (item) => `
-                <article class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
-                  <div>
-                    <span>${escapeHtml(item.label || item.key || "subscription_shutdown")}</span>
-                    <strong>${escapeHtml(item.status || "unknown")}</strong>
-                  </div>
-                  <p>${escapeHtml(item.evidence_summary || item.detail || "")}</p>
-                  <small>${escapeHtml(item.next_action || "")}</small>
-                  <em>${escapeHtml(item.source_endpoint || "")}</em>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-        <div class="saas-owner-launch-safety" aria-label="subscription shutdown safety flags">
-          ${[
-            `customer_visible=${Boolean(subscriptionShutdown.customer_visible)}`,
-            `public_charging_allowed=${Boolean(subscriptionShutdown.safety?.public_charging_allowed)}`,
-            `calls_stripe_api=${Boolean(subscriptionShutdown.safety?.calls_stripe_api)}`,
-            `creates_checkout_session=${Boolean(subscriptionShutdown.safety?.creates_checkout_session)}`,
-            `triggers_real_charge=${Boolean(subscriptionShutdown.safety?.triggers_real_charge)}`,
-            `charge_now_allowed=${Boolean(subscriptionShutdown.safety?.charge_now_allowed)}`,
-            `triggers_ebay_oauth=${Boolean(subscriptionShutdown.safety?.triggers_ebay_oauth)}`,
-            `triggers_real_platform_write=${Boolean(subscriptionShutdown.safety?.triggers_real_platform_write)}`,
-            `frontend_gets_payment_secret=${Boolean(subscriptionShutdown.safety?.frontend_gets_payment_secret)}`,
-            `frontend_gets_api_key=${Boolean(subscriptionShutdown.safety?.frontend_gets_api_key)}`,
-            `secret_exposed=${Boolean(subscriptionShutdown.secret_exposed)}`,
-          ]
-            .map((item) => `<span>${escapeHtml(item)}</span>`)
-            .join("")}
-        </div>
-      </div>
-      <div class="saas-owner-test-data" aria-label="owner test data governance">
-        <div>
-          <span>test_data_governance</span>
-          <strong>${escapeHtml(testData.status || "unknown")}</strong>
-          <p>${escapeHtml(testData.next_action || "Smoke records are reported only; automatic deletion is disabled.")}</p>
-        </div>
-        <div class="saas-owner-test-data-grid">
-          ${[
-            ["scope", testData.scope || "current_company_only"],
-            ["candidates", String(testData.candidate_count ?? 0)],
-            ["smoke_stores", String(testCounts.smoke_stores ?? 0)],
-            ["billing_test_events", String(testCounts.billing_test_events ?? 0)],
-            ["cleanup_confirmations", String(testCounts.cleanup_confirmations ?? 0)],
-            ["delete_now_allowed", String(Boolean(testData.cleanup_policy?.delete_now_allowed))],
-          ]
-            .map(
-              ([label, value]) => `
-                <article>
-                  <span>${escapeHtml(label)}</span>
-                  <strong>${escapeHtml(value)}</strong>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-      </div>
-      <div class="saas-owner-launch-lanes">
-        ${lanes
-          .map(
-            (lane) => `
-              <article class="${saasOwnerLaunchToneClass(lane.tone || lane.status)}">
-                <div>
-                  <span>${escapeHtml(lane.label || lane.key || "lane")}</span>
-                  <strong>${escapeHtml(lane.status || "unknown")}</strong>
-                </div>
-                <p>${escapeHtml(lane.evidence_summary || "")}</p>
-                <small>${escapeHtml(lane.next_action || "")}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-owner-launch-queues">
-        <article>
-          <strong>需要你外部介入</strong>
-          ${(external.length ? external : [{ label: "No external blockers returned", status: "ready", next_action: "Keep monitoring." }])
-            .slice(0, 6)
-            .map(
-              (item) => `
-                <div class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
-                  <span>${escapeHtml(item.label || item.key || "external")}</span>
-                  <em>${escapeHtml(item.status || "unknown")}</em>
-                  <small>${escapeHtml(item.next_action || item.evidence_summary || "")}</small>
-                </div>
-              `,
-            )
-            .join("")}
-        </article>
-        <article>
-          <strong>我方内部继续推进</strong>
-          ${(internal.length ? internal : [{ label: "No internal queue returned", status: "pending", detail: "Refresh backend state." }])
-            .slice(0, 7)
-            .map(
-              (item) => `
-                <div class="${saasOwnerLaunchToneClass(item.tone || item.status)}">
-                  <span>${escapeHtml(item.label || item.key || "internal")}</span>
-                  <em>${escapeHtml(item.status || "unknown")}</em>
-                  <small>${escapeHtml(item.detail || item.verification || "")}</small>
-                </div>
-              `,
-            )
-            .join("")}
-        </article>
-      </div>
-      <div class="saas-owner-launch-evidence">
-        <span>evidence_version=${escapeHtml(control.contract_version || "")}</span>
-        <span>selected_store=${escapeHtml(evidence.selected_store_id || "none")}</span>
-        <span>paid_packet=${escapeHtml(evidence.paid_launch_packet?.status || "unknown")}</span>
-        <span>edge_next=${escapeHtml(evidence.edge?.next_step || "none")}</span>
-      </div>
-    </section>
-  `;
-}
-
-function renderSaasPublicSecurityStatusPanel() {
-  if (window.JiejingSettingsPanels?.renderPublicSecurityStatusPanel) {
-    return window.JiejingSettingsPanels.renderPublicSecurityStatusPanel(state);
-  }
-  if (!saasOwnerLaunchCanView()) return "";
-  const rateLimit = state.saasRateLimitStatus && typeof state.saasRateLimitStatus === "object" ? state.saasRateLimitStatus : {};
-  const authLimit = rateLimit.auth_rate_limit && typeof rateLimit.auth_rate_limit === "object" ? rateLimit.auth_rate_limit : {};
-  const expensiveLimit =
-    rateLimit.expensive_api_rate_limit && typeof rateLimit.expensive_api_rate_limit === "object" ? rateLimit.expensive_api_rate_limit : {};
-  const edge = state.saasEdgeCutoverPreflight && typeof state.saasEdgeCutoverPreflight === "object" ? state.saasEdgeCutoverPreflight : {};
-  const waf = edge.waf_edge && typeof edge.waf_edge === "object" ? edge.waf_edge : {};
-  const origin = edge.origin_lock && typeof edge.origin_lock === "object" ? edge.origin_lock : {};
-  const callbacks = edge.callback_cutover && typeof edge.callback_cutover === "object" ? edge.callback_cutover : {};
-  const protectedPrefixes = Array.isArray(expensiveLimit.protected_prefixes) ? expensiveLimit.protected_prefixes : [];
-  const protectedExact = Array.isArray(expensiveLimit.protected_exact_paths) ? expensiveLimit.protected_exact_paths : [];
-  const routeEvidence = Array.isArray(expensiveLimit.route_group_evidence) ? expensiveLimit.route_group_evidence : [];
-  const activeBuckets = Array.isArray(expensiveLimit.active_bucket_summary) ? expensiveLimit.active_bucket_summary : [];
-  const protectedApiPreview = [...protectedPrefixes.slice(0, 8), ...protectedExact.slice(0, 4)].join(" / ") || "waiting_for_backend_status";
-  const routeEvidencePreview = routeEvidence.map((item) => item.route_group).filter(Boolean).slice(0, 8).join(" / ") || protectedApiPreview;
-  const activeBucketPreview = activeBuckets.length
-    ? activeBuckets.map((item) => `${item.method}:${item.route_group}:${item.active_request_count}`).slice(0, 4).join(" / ")
-    : "no active high-cost buckets";
-  const cloudflareFreeReady = waf.cloudflare_free_baseline_ready === true;
-  const botReady = waf.bot_protection_enabled === true && waf.ai_crawler_control_enabled === true && waf.turnstile_or_managed_challenge_enabled === true;
-  const rows = [
-    {
-      label: "noindex / robots",
-      value: "code_ready",
-      detail: "robots.txt disallow all; API and edge responses send X-Robots-Tag noindex/noarchive; this is not a data-security boundary.",
-      tone: "green",
-    },
-    {
-      label: "source maps",
-      value: "blocked",
-      detail: "public nginx blocks .map requests with 404 so casual source-map scraping does not expose bundled internals.",
-      tone: "green",
-    },
-    {
-      label: "Cloudflare free baseline",
-      value: cloudflareFreeReady ? "verified_by_env" : "needs_console_evidence",
-      detail: `provider=${waf.provider || "waiting"} / dns_proxied=${Boolean(waf.dns_proxied)} / managed_rules_paid=${Boolean(waf.managed_waf_rules_enabled)}`,
-      tone: cloudflareFreeReady ? "green" : "amber",
-    },
-    {
-      label: "Bot / AI crawler controls",
-      value: botReady ? "enabled" : "needs_verification",
-      detail: `bot=${Boolean(waf.bot_protection_enabled)} / ai_crawler=${Boolean(waf.ai_crawler_control_enabled)} / challenge=${Boolean(waf.turnstile_or_managed_challenge_enabled)}`,
-      tone: botReady ? "green" : "amber",
-    },
-    {
-      label: "Auth endpoint rate limit",
-      value: authLimit.enabled ? `${authLimit.max_per_ip || "?"}/${authLimit.window_seconds || "?"}s` : "waiting",
-      detail: Array.isArray(authLimit.protected_paths) ? authLimit.protected_paths.join(" / ") : "auth/login / auth/register / auth/demo-session",
-      tone: authLimit.enabled ? "green" : "amber",
-    },
-    {
-      label: "High-cost API rate limit",
-      value: expensiveLimit.enabled ? `${expensiveLimit.max_per_ip_per_route_group || "?"}/${expensiveLimit.window_seconds || "?"}s` : "waiting",
-      detail: routeEvidencePreview,
-      tone: expensiveLimit.enabled ? "green" : "amber",
-    },
-    {
-      label: "Active high-cost buckets",
-      value: String(activeBuckets.length || 0),
-      detail: activeBucketPreview,
-      tone: activeBuckets.some((item) => Number(item.saturated_client_bucket_count || 0) > 0) ? "amber" : "green",
-    },
-    {
-      label: "Origin direct access",
-      value: origin.ready ? "locked" : "needs_probe",
-      detail: `edge_only=${Boolean(origin.http_https_edge_only)} / direct_ip_blocked=${Boolean(origin.direct_origin_ip_blocked)} / ssh_operator_only=${Boolean(origin.ssh_operator_only)}`,
-      tone: origin.ready ? "green" : "amber",
-    },
-    {
-      label: "Callback allowlist",
-      value: callbacks.ready ? "stable_domain_ready" : "not_final",
-      detail: "eBay and Stripe callbacks are not anti-scrape controls, but they must stay on stable HTTPS and bypass bot challenges safely.",
-      tone: callbacks.ready ? "green" : "amber",
-    },
-  ];
-  return `
-    <section class="saas-settings-card saas-owner-public-security-status" aria-label="公网安全状态">
-      <div class="saas-settings-card-head">
-        <div>
-          <span>公网安全状态</span>
-          <strong>平台内部安全审计 · 防爬、限流和边缘证据</strong>
-          <p>这个区域只对平台管理员开放，用来核对 noindex、接口限流、高成本 API 保护、Cloudflare 免费规则证据和源站直连风险。普通商家不会看到这些工程排查项。</p>
-        </div>
-      </div>
-      <div class="saas-settings-status-list">
-        ${rows
-          .map(
-            (row) => `
-              <article class="is-${escapeHtml(row.tone)}">
-                <span>${escapeHtml(row.label)}</span>
-                <strong>${escapeHtml(row.value)}</strong>
-                <small>${escapeHtml(row.detail)}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="saas-settings-row-list">
-        <article class="${cloudflareFreeReady && expensiveLimit.enabled ? "is-green" : "is-amber"}">
-          <div>
-            <span>security_surface_contract</span>
-            <strong>${cloudflareFreeReady && expensiveLimit.enabled ? "free_baseline_operational" : "needs_final_edge_evidence"}</strong>
-            <small>not_customer_visible=true / platform_internal_admin_only=true / real_secret_boundary=backend_vault</small>
-            <small>protects_data_boundary=true / prevents_complete_copy=false / makes_scraping_costly=true</small>
-          </div>
-          <em>security</em>
-        </article>
-      </div>
-    </section>
-  `;
-}
-
 function renderSaasCoreModuleDiagnosticsPanel(ctx = saasMerchantWorkbenchContext()) {
   const reports = saasReportsForDisplay(state.saasReports || []);
   const confirmations = state.saasConfirmations || [];
@@ -47188,11 +41968,6 @@ function saasSettingsOneGlanceRows(activeTabId = "general") {
       ["软件套餐", "¥0 / ¥99 / ¥199", "公开方案按免费体验、单店和多店铺选择；更大团队单独评估，付费套餐单次购买 30 天。"],
       ["模型与素材", "BYOK / 素材点", "商家模型由商家承担；图片和视频使用素材点，失败任务返还预占点数。"],
     ],
-    owner_ops: [
-      ["内部可见", "只给主理人管理员", "普通商家不会看到上线、WAF、队列和门禁排查。"],
-      ["上线检查", "域名、WAF、Billing、队列", "正式上线前在这里集中排查。"],
-      ["不干扰商家", "高级项不进工作流", "经营页继续保持简单。"],
-    ],
   };
   return rowsByTab[activeTabId] || rowsByTab.general;
 }
@@ -47364,88 +42139,8 @@ async function revokeOtherSaasBrowserSessions(button) {
   }
 }
 
-function renderSaasBillingProviderPanel() {
-  if (window.JiejingSettingsPanels?.renderBillingProviderPanel) {
-    return window.JiejingSettingsPanels.renderBillingProviderPanel(state);
-  }
-  const plan = state.saasBillingPlan && typeof state.saasBillingPlan === "object" ? state.saasBillingPlan : {};
-  const usage = state.saasBillingUsage && typeof state.saasBillingUsage === "object" ? state.saasBillingUsage : {};
-  const checkout = state.saasBillingCheckout && typeof state.saasBillingCheckout === "object" ? state.saasBillingCheckout : {};
-  const provider = plan.provider && typeof plan.provider === "object" ? plan.provider : {};
-  const quota = plan.quota_contract && typeof plan.quota_contract === "object" ? plan.quota_contract : {};
-  const checkoutSession = checkout.checkout_sessions && typeof checkout.checkout_sessions === "object" ? checkout.checkout_sessions : {};
-  const portal = checkout.customer_portal && typeof checkout.customer_portal === "object" ? checkout.customer_portal : {};
-  const subscription = usage.subscription && typeof usage.subscription === "object" ? usage.subscription : {};
-  const blockers = Array.isArray(plan.paid_launch_blockers) ? plan.paid_launch_blockers : Array.isArray(plan.blockers) ? plan.blockers : [];
-  const paidReady = Boolean(plan.billing_ready_for_paid_launch);
-  const privateBetaReady = Boolean(plan.billing_ready_for_private_beta);
-  return `
-    <section class="saas-settings-card">
-      <div class="saas-settings-card-head">
-        <div>
-          <span>正式计费</span>
-          <strong>${paidReady ? "付费订阅可上线" : privateBetaReady ? "内测计费可用，公开收费未完成" : "公开收费仍阻断"}</strong>
-          <p>捷境按订阅和用量运营：Checkout 负责开通订阅，Customer Portal 负责自助管理，Webhook 回写权益，quota 负责欠费或超量停用。</p>
-        </div>
-      </div>
-      <div class="saas-settings-status-list">
-        <article class="${provider.external_paid_provider_configured ? "is-green" : "is-amber"}">
-          <span>Billing provider</span>
-          <strong>${escapeHtml(provider.selected || "not_selected")}</strong>
-          <small>${provider.external_paid_provider_configured ? "外部付费 provider 已选择" : "manual_seed 只能用于私测，不能公开收费"}</small>
-        </article>
-        <article class="${checkoutSession.ready ? "is-green" : "is-amber"}">
-          <span>Checkout</span>
-          <strong>${checkoutSession.ready ? "ready" : "blocked"}</strong>
-          <small>Stripe subscription Checkout · 前端不接触 API key</small>
-        </article>
-        <article class="${portal.ready ? "is-green" : "is-amber"}">
-          <span>Customer Portal</span>
-          <strong>${portal.ready ? "ready" : "blocked"}</strong>
-          <small>升级、降级、取消、付款方式更新走 Stripe Portal</small>
-        </article>
-        <article class="${provider.webhook_configured ? "is-green" : "is-amber"}">
-          <span>Webhook</span>
-          <strong>${provider.webhook_configured ? "signed" : "missing"}</strong>
-          <small>订阅变更、续费、失败付款必须签名验证后回写权益</small>
-        </article>
-        <article class="${quota.enabled ? "is-green" : "is-amber"}">
-          <span>Quota</span>
-          <strong>${quota.enabled ? "enforced" : "off"}</strong>
-          <small>店铺数、AI CEO 任务、调研/素材/模型用量都要可见并可硬停</small>
-        </article>
-        <article class="${subscription.entitlement_active ? "is-green" : "is-amber"}">
-          <span>当前权益</span>
-          <strong>${escapeHtml(subscription.status || "subscription_missing")}</strong>
-          <small>${subscription.entitlement_active ? "当前公司权益有效" : escapeHtml(subscription.block_reason || "等待付费订阅")}</small>
-        </article>
-        <article class="${blockers.length ? "is-amber" : "is-green"}">
-          <span>上线阻断</span>
-          <strong>${blockers.length}</strong>
-          <small>${escapeHtml(blockers.slice(0, 3).join(" / ") || "无计费阻断")}</small>
-        </article>
-      </div>
-    </section>
-  `;
-}
-
 function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), options = {}) {
   const tabs = [
-    {
-      id: "general",
-      label: "总览",
-      detail: "当前状态",
-      title: "设置总览",
-      intro: "查看当前状态和常用设置入口；商品处理继续回到工作台完成。",
-      panels: [
-        renderSaasSettingsSectionGroup({
-          title: "当前状态详情",
-          detail: "查看登录、店铺、AI、数据和高风险动作的当前状态。",
-          badge: "可选",
-          panels: [renderSaasSettingsGeneralPanel(ctx)],
-        }),
-      ],
-    },
     {
       id: "account",
       label: "账号与店铺",
@@ -47501,7 +42196,6 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
         renderSaasMerchantBillingPlainSummaryPanel(ctx),
         renderSaasMerchantMediaCreditsPanel(),
         renderSaasMerchantDomesticPaymentPanel(ctx),
-        renderSaasWechatZeroChargeRehearsalPanel(ctx),
         renderSaasSettingsSectionGroup({
           title: "计费与安全说明",
           detail: "需要了解额度发放、续费停用、退款客服和凭证安全时再展开。",
@@ -47517,63 +42211,6 @@ function saasSettingsTabDefinitions(ctx = saasMerchantWorkbenchContext(), option
       ],
     },
   ];
-  if (saasOwnerLaunchCanView()) {
-    tabs.push({
-      id: "owner_ops",
-      label: "主理人高级",
-      detail: "上线 / 运行",
-      title: "主理人高级区",
-      intro: "只给内部管理员看，用于上线、WAF、队列、发布体检和生产门禁排查。",
-      panels: [
-        renderSaasOwnerLaunchControlPanel(),
-        renderSaasOwnerOperationsOverviewPanel(),
-        renderSaasSettingsSectionGroup({
-          title: "正式收费和公网安全",
-          detail: "微信 Native、WAF、Bot、限流、稳定域名和回调域名只给上线前检查使用。",
-          badge: "内部",
-          open: true,
-          panels: [
-            renderSaasBillingTransitionPathPanel(ctx),
-            renderSaasMerchantFormalPaymentOpeningChecklistPanel(ctx),
-            renderSaasManualBetaPaymentOrderPanel(),
-            renderSaasBillingDomainCutoverReviewPanel(ctx),
-            renderSaasBillingPaidLaunchBlockersPanel(ctx),
-            renderSaasMerchantBillingIncidentRunbookPanel(ctx),
-            renderSaasSettingsSecurityPanel(ctx, options),
-            renderSaasPublicSecurityStatusPanel(),
-            renderSaasEdgeCutoverReadinessPanel(),
-          ],
-        }),
-        renderSaasSettingsSectionGroup({
-          title: "运行可靠性",
-          detail: "队列、备份、生产门禁和 provider 状态属于上线检查，不给普通工作流增加负担。",
-          badge: "运行",
-          panels: [renderSaasQueueHealthPanel(), renderSaasCommercialLaunchGatePanel(), renderSaasMerchantProviderHubPanel(ctx)],
-        }),
-        renderSaasSettingsSectionGroup({
-          title: "主理人上线排查",
-          detail: "流程诊断、Listing 发布体检和发布后复盘集中在这里，不进入普通商家设置。",
-          badge: "排查",
-          panels: [
-            renderSaasCoreModuleDiagnosticsPanel(ctx),
-            renderSaasListingStoreSyncOverview(ctx),
-            renderSaasListingSyncedProductsPanel(ctx),
-            renderSaasListingIpReadinessPanel(ctx),
-            renderSaasPublishHealthReportPanel(ctx, saasPreTestCheckRows(ctx, null), { compact: true }),
-            renderSaasSevenStepLaunchGuidePanel(ctx, { compact: true }),
-            renderSaasPostPublishCockpitPanel({ showWhenEmpty: true }),
-            renderSaasPublishFlowReviewPanel(),
-            renderSaasPublishCommandSummaryPanel(),
-            renderSaasLatestPublishResultPanel(),
-            renderSaasMerchantSetupGuidePanel(ctx),
-            renderSaasOperatingWorkbenchPanel(ctx),
-            renderSaasMerchantWorkflowTemplatePanel(ctx),
-            renderSaasEbaySkillPackCenter(ctx),
-          ],
-        }),
-      ],
-    });
-  }
   return tabs;
 }
 
@@ -47581,7 +42218,6 @@ function renderSaasSettingsCleanLayout(ctx = saasMerchantWorkbenchContext(), opt
   const tabs = saasSettingsTabDefinitions(ctx, options);
   const activeTab = tabs.find((tab) => tab.id === state.saasSettingsTab) || tabs[0];
   state.saasSettingsTab = activeTab.id;
-  const isOverview = activeTab.id === "general";
   return `
     <section class="panel full saas-settings-clean-shell" aria-label="设置">
       <aside class="saas-settings-clean-nav" aria-label="设置分类">
@@ -47605,8 +42241,8 @@ function renderSaasSettingsCleanLayout(ctx = saasMerchantWorkbenchContext(), opt
           <h2>${escapeHtml(activeTab.title)}</h2>
           <p>${escapeHtml(activeTab.intro || "设置只处理连接、安全、来源、AI、权限和订阅安全。日常经营仍回到工作台。")}</p>
         </header>
-        ${isOverview ? renderSaasSettingsOneGlanceStrip(activeTab.id) : ""}
-        ${isOverview ? renderSaasSettingsReadableMap(activeTab.id) : ""}
+        ${renderSaasSettingsOneGlanceStrip(activeTab.id)}
+        ${renderSaasSettingsReadableMap(activeTab.id)}
         <div class="saas-settings-clean-panels">
           ${activeTab.panels.filter(Boolean).join("")}
         </div>
@@ -47618,234 +42254,27 @@ function renderSaasSettingsCleanLayout(ctx = saasMerchantWorkbenchContext(), opt
 function renderSaasConnectCenter(view) {
   if (!view) return;
   const ctx = saasMerchantWorkbenchContext();
-  const hasSessionCandidate = hasSaasProtectedSessionCandidate();
-  const securityGate = state.saasSecurityGate || {};
-  const securityGateReady = securityGate.controlled_staging_test_ready === true;
-  const latestOauth = latestSaasOAuthRequest();
-  const oauthUrl = latestSaasOAuthAuthorizationUrl();
-  const oauthRequest = latestOauth?.request && typeof latestOauth.request === "object" ? latestOauth.request : {};
-  const oauthMissingConfig = Array.isArray(oauthRequest.missing_config) ? oauthRequest.missing_config : [];
-  const expectedCallbackUrl = currentSaasEbayCallbackUrl();
   const ebayConnectionStatus = ctx.connection?.status || ctx.store?.connection_status || ctx.store?.status || "";
   const ebayAuthorized = isSaasAuthorizedConnectionStatus(ebayConnectionStatus);
   const ebayDraftAuthorized = isSaasEbayUnpublishedDraftAuthorized(ctx.store);
-  const realWritesEnabled = isSaasRealPlatformWritesEnabled();
   setJiejingTrustedHtml(
     view,
-    trustedJiejingHtml(renderSaasSettingsCleanLayout(ctx, { ebayAuthorized, ebayDraftAuthorized, securityGateReady }), "settings.clean_layout"),
+    trustedJiejingHtml(renderSaasSettingsCleanLayout(ctx, { ebayAuthorized, ebayDraftAuthorized }), "settings.clean_layout"),
   );
   bindSaasBrowserSessionControls(view);
   return;
-  view.innerHTML = `
-    <section class="panel full product-manager-module saas-real-settings-center" aria-label="真实账号和安全设置">
-      <header class="product-manager-header saas-real-listing-header">
-        <div>
-          <p class="eyebrow">设置 · 真实状态</p>
-          <h2>账号隔离、eBay 只读授权、AI 连接和确认边界</h2>
-          <p class="section-note">这里显示当前测试所需的安全边界；真实写入按后端状态显示，但所有高风险动作仍必须先过决策中心。旧模拟商品、样例任务和演示店铺不会作为设置数据出现。</p>
-        </div>
-        <span class="pill ${securityGateReady ? "green" : "amber"}">${securityGateReady ? "受控测试可跑" : "等待门禁"}</span>
-      </header>
-
-      <section class="saas-workbench-truth-panel is-connected">
-        <div class="saas-workbench-truth-head">
-          <div>
-            <span class="pill ${state.saasConnected ? "green" : "amber"}">${state.saasConnected ? "账号空间已读取" : hasSessionCandidate ? "正在读取账号" : "需要登录"}</span>
-            <strong>商家账户信息按登录账号读取，店铺名等 eBay 授权后再显示</strong>
-            <p>浏览器只保留登录状态；eBay 连接和 AI 连接的敏感凭证只在后端安全保存，不回显给浏览器，也不交给执行层。</p>
-          </div>
-          <div class="saas-workbench-truth-actions">
-            <button class="secondary-action" type="button" data-saas-action="refresh" ${state.saasLoading ? "disabled" : ""}>刷新真实状态</button>
-            <button class="primary-action" type="button" data-saas-action="plan-ebay-oauth" ${!hasSessionCandidate || ebayAuthorized ? "disabled" : ""}>${ebayAuthorized ? "只读授权已完成" : "检查只读授权"}</button>
-            <button class="secondary-action" type="button" data-saas-action="plan-ebay-draft-oauth" ${!hasSessionCandidate || !ebayAuthorized || ebayDraftAuthorized ? "disabled" : ""}>${ebayDraftAuthorized ? "未公开草稿权限已开通" : "开通未公开草稿权限"}</button>
-          </div>
-        </div>
-        ${
-          ebayAuthorized
-            ? `<div class="saas-oauth-next-step is-ready">
-                <div>
-                  <span>eBay 授权状态已恢复</span>
-                  <strong>${escapeHtml(saasStoreStatusLabel(ebayConnectionStatus))}，不需要重新打开授权链接</strong>
-                  <small>捷境会继续使用后端安全保存的连接状态和店铺资料；浏览器不会保存或回显平台敏感凭证。</small>
-                  <div class="saas-oauth-callback-note">
-                    <span>当前官方连接返回地址</span>
-                    <code>${escapeHtml(expectedCallbackUrl)}</code>
-                    <button class="secondary-action" type="button" data-saas-action="copy-ebay-return-url">复制返回地址</button>
-                    <small>仅在连接配置失效或更换域名时才需要重新检查。</small>
-                  </div>
-                </div>
-              </div>`
-            : oauthUrl
-            ? `<div class="saas-oauth-next-step is-ready">
-                <div>
-                  <span>eBay 官方授权链接已生成</span>
-                  <strong>下一步去 eBay 登录并确认只读授权</strong>
-                  <small>捷境只申请经营分析需要的只读范围；发布、改价、付款、退款和广告仍保持关闭。</small>
-                  <div class="saas-oauth-callback-note">
-                    <span>官方连接返回地址应保持一致</span>
-                    <code>${escapeHtml(expectedCallbackUrl)}</code>
-                    <button class="secondary-action" type="button" data-saas-action="copy-ebay-return-url">复制返回地址</button>
-                    <small>如果官方连接后回到其他旧域名，请联系客服协助处理连接配置。</small>
-                  </div>
-                </div>
-                <a class="primary-action" href="${escapeHtml(oauthUrl)}" target="_blank" rel="noreferrer noopener">打开 eBay 官方授权</a>
-              </div>`
-            : latestOauth?.status === "blocked_missing_oauth_config"
-              ? `<div class="saas-oauth-next-step is-blocked">
-                  <div>
-                    <span>eBay 授权链接未生成</span>
-                    <strong>后端 OAuth 配置还缺项</strong>
-                    <small>${escapeHtml(oauthMissingConfig.length ? oauthMissingConfig.join(" / ") : "JIEJING_EBAY_CLIENT_ID / JIEJING_EBAY_RU_NAME")}</small>
-                  </div>
-                </div>`
-              : ""
-        }
-        <div class="saas-workbench-truth-grid">
-          <article>
-            <span>捷境账号</span>
-            <strong>${escapeHtml(saasAccountDisplayName())}</strong>
-            <small>这是登录账号/公司名，不当作 eBay 店铺名。</small>
-          </article>
-          <article class="${ctx.connection ? "is-green" : "is-amber"}">
-            <span>eBay 授权</span>
-            <strong>${escapeHtml(saasStoreStatusLabel(ctx.connection?.status || ctx.store?.status || "not_connected"))}</strong>
-            <small>${escapeHtml(saasStoreDisplayName(ctx.store, ctx.connection))}</small>
-          </article>
-          <article class="${ctx.official ? "is-green" : "is-amber"}">
-            <span>店铺资料</span>
-            <strong>${ctx.presentCount}/${ctx.coverageTotal}</strong>
-            <small>${escapeHtml(ctx.sourceLabel)}</small>
-          </article>
-          <article class="is-${escapeHtml(saasPrimaryTextAiState().tone)}">
-            <span>AI 连接</span>
-            <strong>${escapeHtml(saasPrimaryTextAiState().title)}</strong>
-            <small>${escapeHtml(saasPrimaryTextAiState().detail)}</small>
-          </article>
-          <article class="${realWritesEnabled ? "is-amber" : "is-green"}">
-            <span>真实写入</span>
-            <strong>${escapeHtml(saasRealPlatformWriteLabel())}</strong>
-            <small>${escapeHtml(realWritesEnabled ? "启用但必须经决策中心、预检和审计。" : "确认后也只记录受控交接。")}</small>
-          </article>
-        </div>
-      </section>
-
-      <div class="saas-settings-stack">
-        ${renderSaasSettingsControlRoom(ctx, { ebayAuthorized, ebayDraftAuthorized, securityGateReady })}
-        ${renderSaasSettingsSectionGroup({
-          title: "日常状态",
-          detail: "登录、eBay 授权、店铺资料、AI 连接和确认中心放在第一屏。",
-          badge: "核心",
-          open: true,
-          panels: [renderSaasOperatingSystemPanel(ctx), renderSaasMerchantSetupGuidePanel(ctx)],
-        })}
-        ${renderSaasSettingsSectionGroup({
-          title: "工作流配置",
-          detail: "商家路径、执行模板和 eBay-first 能力包保留在这里。",
-          badge: "工作流",
-          panels: [renderSaasMerchantOperatingPath(ctx), renderSaasOperatingWorkbenchPanel(ctx), renderSaasMerchantWorkflowTemplatePanel(ctx), renderSaasEbaySkillPackCenter(ctx)],
-        })}
-        ${renderSaasSettingsSectionGroup({
-          title: "来源与模型",
-          detail: "来源记录、可信度、AI 连接和成本账本统一归档。",
-          badge: "AI",
-          panels: [
-            renderSaasMerchantProviderHubPanel(ctx),
-            renderSaasSourceRecordCollectorPanel(ctx),
-            renderSaasSourceCredibilityPanel(ctx),
-            renderSaasMerchantModelProviderPanel(ctx),
-            renderSaasCostAndRunLedgerPanel(),
-          ],
-        })}
-        ${renderSaasSettingsSectionGroup({
-          title: "团队、记忆与风险",
-          detail: "权限、IP 风险、商家记忆和学习回流不再挤在主状态区。",
-          badge: "治理",
-          panels: [renderSaasMerchantPermissionPanel(), renderSaasMerchantIpRiskPanel(), renderSaasMerchantMemoryPanel()],
-        })}
-        <section class="saas-merchant-evidence-panel">
-          <div class="saas-merchant-path-head">
-            <div>
-              <span>安全门禁</span>
-              <strong>${securityGateReady ? "受控 staging 可测" : "生产级安全仍未完成"}</strong>
-              <p>当前能做真实测试，但不能对外宣称生产级 SaaS 安全。正式生产还需要托管数据库、密钥服务、监控告警、备份恢复和稳定域名。</p>
-            </div>
-            <em>${Number(securityGate.blocker_count || 0)} blocker</em>
-          </div>
-          <div class="saas-merchant-evidence-grid">
-            <article class="is-green"><span>租户</span><strong>按账号隔离</strong><small>前端以登录会话读取当前账号数据。</small></article>
-            <article class="is-green"><span>密钥边界</span><strong>后端保存</strong><small>密钥不进入报告和执行层。</small></article>
-            <article class="${realWritesEnabled ? "is-amber" : "is-green"}"><span>写入</span><strong>${escapeHtml(saasRealPlatformWriteLabel())}</strong><small>${escapeHtml(realWritesEnabled ? "后端写入已开；确认中心仍是硬边界。" : "真实平台写入未开启。")}</small></article>
-          </div>
-        </section>
-      </div>
-    </section>
-  `;
 }
 
 function renderConnect() {
-  if (isSaasPublicMvpMode()) {
-    renderSaasConnectCenter(document.querySelector("#view-connect"));
-    if (state.view === "connect" && !window.JiejingSettingsPanels) {
-      ensureJiejingSettingsPanelsLoaded()
-        .then(() => {
-          if (state.view === "connect") renderConnect();
-        })
-        .catch(() => {});
-    }
-    return;
+  renderSaasConnectCenter(document.querySelector("#view-connect"));
+  if (state.view === "connect" && !window.JiejingSettingsPanels) {
+    ensureJiejingSettingsPanelsLoaded()
+      .then(() => {
+        if (state.view === "connect") renderConnect();
+      })
+      .catch(() => {});
   }
-  const connectStatusEl = document.querySelector("#connectStatus");
-  const dataModelPreviewEl = document.querySelector("#dataModelPreview");
-  if (!connectStatusEl || !dataModelPreviewEl) return;
-  renderConnectionStateBoard();
-  renderPlatformConnectors();
-  renderMarketSourceHealth();
-  renderEbayPolicyOrchestration();
-  renderEbayFeeCenter();
-  renderSourceIntakePanel();
-  renderLaunchGapBoard();
-  const securityGate = state.saasSecurityGate || {};
-  const securityGateReady = securityGate.controlled_staging_test_ready === true;
-  const securityGateRow = [
-    "测试安全总闸",
-    securityGateReady ? "受控测试可跑" : securityGate.status ? "门禁未过" : "等待检查",
-    securityGateReady
-      ? `账号隔离、密钥边界、真实写入状态可见、模拟数据清理已过当前测试门禁；${saasRealPlatformWriteDetail()} 这仍不等于生产级 SaaS 安全。`
-      : `${Number(securityGate.blocker_count || 0)} 个阻断，${Number(securityGate.warning_count || 0)} 个提醒；保存 AI 连接和读取店铺资料后会刷新。`,
-    securityGateReady ? "green" : securityGate.status === "blocked" ? "red" : "amber",
-  ];
-  const statusRows = [
-    securityGateRow,
-    ...renderPublishCapabilityRows(),
-    ...apiStatus.map(([name, status, detail]) => [
-      productizeJiejingProductCopy(name),
-      productizeJiejingProductCopy(status),
-      productizeJiejingProductCopy(detail),
-      productizeJiejingProductCopy(status).includes("待") ? "amber" : "neutral",
-    ]),
-  ];
-  setJiejingTrustedHtml(
-    connectStatusEl,
-    trustedJiejingHtml(
-      statusRows
-    .map(
-      ([name, status, detail, tone]) => `
-        <article class="status-row">
-          <div>
-            <strong>${escapeHtml(productizeJiejingProductCopy(name))}</strong>
-            <p>${escapeHtml(productizeJiejingProductCopy(detail))}</p>
-          </div>
-          <span class="pill ${tone || (productizeJiejingProductCopy(status).includes("待") ? "amber" : "neutral")}">${escapeHtml(productizeJiejingProductCopy(status))}</span>
-        </article>
-      `,
-    )
-        .join(""),
-      "settings.legacy_connect_status",
-    ),
-  );
-  dataModelPreviewEl.textContent = JSON.stringify(productDataModelSnapshot(), null, 2);
 }
-
 function riskText(value) {
   return {
     conservative: "保守，多提醒，多确认",
@@ -49534,7 +43963,6 @@ function bindEvents() {
       event.preventDefault();
       state.saasSettingsTab = settingsTabButton.dataset.saasSettingsTab || "general";
       renderSaasConnectCenter(document.querySelector("#view-connect"));
-      maybeRefreshSaasOwnerLaunchControlForActiveTab();
       return;
     }
     const settingsMapButton = event.target.closest("[data-saas-settings-map-tab]");
@@ -49542,7 +43970,6 @@ function bindEvents() {
       event.preventDefault();
       state.saasSettingsTab = settingsMapButton.dataset.saasSettingsMapTab || "general";
       renderSaasConnectCenter(document.querySelector("#view-connect"));
-      maybeRefreshSaasOwnerLaunchControlForActiveTab();
       return;
     }
     const listingCandidateButton = event.target.closest("[data-saas-listing-candidate-id]");
@@ -49832,7 +44259,6 @@ function bindEvents() {
       event.preventDefault();
       state.saasSettingsTab = settingsTabButton.dataset.saasSettingsTab || "general";
       renderSaasConnectCenter(document.querySelector("#view-connect"));
-      maybeRefreshSaasOwnerLaunchControlForActiveTab();
       return;
     }
     const settingsMapButton = event.target.closest("[data-saas-settings-map-tab]");
@@ -49840,7 +44266,6 @@ function bindEvents() {
       event.preventDefault();
       state.saasSettingsTab = settingsMapButton.dataset.saasSettingsMapTab || "general";
       renderSaasConnectCenter(document.querySelector("#view-connect"));
-      maybeRefreshSaasOwnerLaunchControlForActiveTab();
       return;
     }
     const sourceMode = event.target.closest("[data-source-intake]");
@@ -50909,7 +45334,6 @@ function init() {
   syncDnaInputs();
   applyStartupRoute();
   renderWorkflowFeedbackWidget();
-  refreshSaasPublicReadiness({ render: true });
   refreshSaasState({ silent: true });
   refreshRuntimeState({ silent: true });
   startSaasAiCeoCrossDeviceSync();

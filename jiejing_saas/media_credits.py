@@ -569,6 +569,61 @@ def build_media_credit_summary(repository: SaaSRepository, *, company_id: str, l
     }
 
 
+def build_merchant_media_credit_summary(
+    repository: SaaSRepository,
+    *,
+    company_id: str,
+    limit: int = 30,
+) -> dict[str, Any]:
+    """Return a merchant-safe media-points summary from positive allowlists.
+
+    Controlled acceptance and owner-testing buckets are operational evidence,
+    not merchant entitlement.  The merchant contract therefore derives its
+    total only from plan, purchase and explicitly merchant-facing promotional
+    buckets and never reads or returns the internal ledger.
+    """
+
+    del limit  # Kept for a stable caller interface; merchant summaries do not expose ledger rows.
+    account = repository.get_media_credit_account(company_id=company_id)
+
+    def safe_points(key: str) -> int:
+        value = account.get(key)
+        return value if type(value) is int and value >= 0 else 0
+
+    included_points = safe_points("included_points")
+    purchased_points = safe_points("purchased_points")
+    promotional_points = safe_points("promotional_points")
+    available_points = included_points + purchased_points + promotional_points
+
+    purchase_requested = media_credit_purchase_enabled()
+    from .billing_wechat_pay import build_wechat_pay_native_contract
+
+    payment_contract = build_wechat_pay_native_contract()
+    payment_ready = payment_contract.get("charge_now_allowed") is True
+    purchase_enabled = purchase_requested and payment_ready
+    return {
+        "contract_version": "2026-08-27-merchant-media-points-v1",
+        "display_name": "素材点",
+        "total_points": available_points,
+        "available_points": available_points,
+        "included_points": included_points,
+        "purchased_points": purchased_points,
+        "promotional_points": promotional_points,
+        "packs": [dict(item) for item in MEDIA_CREDIT_PACKS],
+        "purchase": {
+            "status": "available" if purchase_enabled else "not_open",
+            "purchase_enabled": purchase_enabled,
+            "backend_payment_confirmation_required": True,
+            "frontend_can_grant_points": False,
+            "triggers_real_charge": False,
+            "charge_now_allowed": purchase_enabled,
+        },
+        "provider_neutral": True,
+        "merchant_visible": True,
+        "secret_exposed": False,
+    }
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name, "true" if default else "false").strip().lower()
     return raw in {"1", "true", "yes", "on"}

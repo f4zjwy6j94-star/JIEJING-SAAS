@@ -13,6 +13,7 @@ const STATIC_FILES = new Set([
   "ops.html",
   "ops.css",
   "ops.js",
+  "assets/jiejing-ops-panels.js",
   "assets/jiejing-logo-mark.svg",
   "assets/jiejing-app-icon.svg",
 ]);

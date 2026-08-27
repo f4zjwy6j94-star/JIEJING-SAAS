@@ -21,6 +21,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+OPS_HOST = "ops.jiejing.shop"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -705,6 +706,7 @@ def _test_http_merchant_tracer() -> str:
                     f"{base_url}/owner/product-feedback/{route}",
                     method="POST",
                     body={"feedback_id": feedback_id},
+                    host=OPS_HOST,
                 )
                 if unauth_owner_status != 401:
                     return f"unauthenticated owner feedback {route} must return 401, got {unauth_owner_status}"
@@ -713,20 +715,44 @@ def _test_http_merchant_tracer() -> str:
                     method="POST",
                     token=token,
                     body={"feedback_id": feedback_id},
+                    host=OPS_HOST,
                 )
                 if merchant_owner_status != 403:
                     return f"ordinary merchant owner feedback {route} must return 403: {merchant_owner_status} {merchant_owner}"
-            operations_status, _ = _request_json(f"{base_url}/owner/operations/feedback", token=token)
+            operations_status, _ = _request_json(
+                f"{base_url}/owner/operations/feedback",
+                token=token,
+                host=OPS_HOST,
+            )
             if operations_status != 403:
                 return f"ordinary merchant feedback operations detail must return 403, got {operations_status}"
 
             admin = _register(base_url, "feedback-http-admin@example.test")
             admin_token = str(admin.get("token") or "")
+            app_host_status, _ = _request_json(
+                f"{base_url}/owner/product-feedback/review",
+                method="POST",
+                token=admin_token,
+                body={"feedback_id": feedback_id},
+                host="app.jiejing.shop",
+            )
+            localhost_status, _ = _request_json(
+                f"{base_url}/owner/product-feedback/review",
+                method="POST",
+                token=admin_token,
+                body={"feedback_id": feedback_id},
+            )
+            if app_host_status != 403 or localhost_status != 403:
+                return (
+                    "internal admin escaped the operations host boundary for feedback: "
+                    f"app={app_host_status}, local={localhost_status}"
+                )
             invalid_owner_status, _ = _request_json(
                 f"{base_url}/owner/product-feedback/review",
                 method="POST",
                 token=admin_token,
                 body={"feedback_id": feedback_id, "target_status": "resolved"},
+                host=OPS_HOST,
             )
             if invalid_owner_status != 400:
                 return f"owner feedback action must reject browser-selected status fields, got {invalid_owner_status}"
@@ -735,6 +761,7 @@ def _test_http_merchant_tracer() -> str:
                 method="POST",
                 token=admin_token,
                 body={"feedback_id": feedback_id},
+                host=OPS_HOST,
             )
             if skipped_status != 409:
                 return f"owner feedback action must reject open-to-resolved state skipping, got {skipped_status}"
@@ -743,6 +770,7 @@ def _test_http_merchant_tracer() -> str:
                 method="POST",
                 token=admin_token,
                 body={"feedback_id": feedback_id},
+                host=OPS_HOST,
             )
             reviewed_receipt = reviewed.get("product_feedback") if isinstance(reviewed.get("product_feedback"), dict) else {}
             if review_status != 200 or reviewed_receipt.get("status") != "reviewing":
@@ -752,6 +780,7 @@ def _test_http_merchant_tracer() -> str:
                 method="POST",
                 token=admin_token,
                 body={"feedback_id": feedback_id},
+                host=OPS_HOST,
             )
             if repeated_review_status != 409:
                 return f"repeated feedback review must return 409, got {repeated_review_status}"
@@ -760,6 +789,7 @@ def _test_http_merchant_tracer() -> str:
                 method="POST",
                 token=admin_token,
                 body={"feedback_id": feedback_id},
+                host=OPS_HOST,
             )
             resolved_receipt = resolved.get("product_feedback") if isinstance(resolved.get("product_feedback"), dict) else {}
             if resolve_status != 200 or resolved_receipt.get("status") != "resolved":
@@ -769,6 +799,7 @@ def _test_http_merchant_tracer() -> str:
                 method="POST",
                 token=admin_token,
                 body={"feedback_id": "feedback_unknown"},
+                host=OPS_HOST,
             )
             if unknown_status != 404:
                 return f"unknown feedback owner action must return 404, got {unknown_status}"
@@ -1176,6 +1207,10 @@ def _test_product_feedback_persistence_failures_return_503() -> str:
 
         @staticmethod
         def _require_platform_internal_admin(_: dict[str, object], __: str) -> bool:
+            return True
+
+        @staticmethod
+        def _require_operations_console_request(_: str) -> bool:
             return True
 
         def _handle_service_dependency_exception(self, exc: Exception) -> bool:
@@ -1606,6 +1641,7 @@ def _request_json(
     token: str = "",
     body: dict[str, object] | None = None,
     ip: str = "203.0.113.10",
+    host: str = "",
 ) -> tuple[int, dict[str, object]]:
     headers = {
         "Accept": "application/json",
@@ -1615,6 +1651,9 @@ def _request_json(
     data = None
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    if host:
+        headers["Host"] = host
+        headers["X-Forwarded-Proto"] = "https"
     if body is not None:
         headers["Content-Type"] = "application/json"
         data = json.dumps(body).encode("utf-8")

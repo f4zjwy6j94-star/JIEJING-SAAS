@@ -48,11 +48,10 @@ def main() -> int:
         "按已付款订单人工受理",
         'data-global-flow-view="service"',
         "merchant_billing_customer_trust_packet_v2",
-        "payment_mode=",
         "wechat_native_qr",
         "merchant_confirmed_one_time_30_day",
-        "微信扫码、到账确认、权益开通和自主续购",
-        "后端验签确认后开通",
+        "微信付款由商家主动发起，到账后系统开通权益",
+        "只以微信支付签名回调或安全查单结果为准，浏览器不能自行开通权益",
         "免费体验有 7 天和 20 次捷境托管 AI",
         "qr_image_data_url",
         '"idempotency-key"',
@@ -87,6 +86,9 @@ def main() -> int:
         if marker not in app:
             print(f"FAIL app.js missing merchant billing marker: {marker}")
             return 1
+    if "payment_mode=" in app:
+        print("FAIL app.js exposes internal billing activity field: payment_mode=")
+        return 1
     for marker in required_styles:
         if marker not in styles:
             print(f"FAIL styles.css missing merchant billing marker: {marker}")
@@ -100,21 +102,26 @@ def main() -> int:
             print(f"FAIL merchant billing panel exposes internal/provider detail: {marker}")
             return 1
     trust_start = app.index("function renderSaasMerchantBillingCustomerTrustPanel")
-    trust_end = app.index("\nfunction renderSaasMerchantBillingGuardrailPanel", trust_start)
+    trust_end = app.index("\nfunction renderSaasMerchantPricingModelPanel", trust_start)
     trust_renderer = app[trust_start:trust_end]
     for marker in ["Customer Portal", "Stripe", "托管支付边界", "跳转到安全支付页", "项已准备"]:
         if marker in trust_renderer:
             print(f"FAIL merchant billing trust panel contains stale provider copy: {marker}")
             return 1
     for marker in [
-        "微信扫码付款可用",
-        "到期自主续购",
-        "merchant_confirmed_one_time_30_day",
-        "正式公开收费已开放",
-        "eBay 公开发布仍保持关闭",
+        "付款状态",
+        "在线付款开放",
+        "商家主动创建订单并微信扫码；到账后由后端更新套餐权益。",
+        "由商家主动操作",
+        "付款、退款和套餐变更都会先显示订单与结果。",
+        "页面不展示任何支付密钥。",
     ]:
         if marker not in settings_panels:
             print(f"FAIL settings billing panel missing WeChat Pay marker: {marker}")
+            return 1
+    for marker in ["merchant_confirmed_one_time_30_day", "正式公开收费已开放", "eBay 公开发布仍保持关闭"]:
+        if marker in settings_panels:
+            print(f"FAIL settings billing panel exposes internal launch marker: {marker}")
             return 1
     for marker in ["¥99/月", "¥199/月", "¥299/月"]:
         if marker in app:
@@ -131,7 +138,8 @@ def main() -> int:
             print(f"FAIL {name} exposes replaceable media provider name")
             return 1
     for marker in ["开发者数据平台", "平台收入总览", "全站访问明细"]:
-        merchant_tabs = app[app.index("function saasSettingsTabDefinitions"):app.index("if (saasOwnerLaunchCanView())", app.index("function saasSettingsTabDefinitions"))]
+        merchant_tabs_start = app.index("function saasSettingsTabDefinitions")
+        merchant_tabs = app[merchant_tabs_start:app.index("function renderSaasSettingsCleanLayout", merchant_tabs_start)]
         if marker in merchant_tabs:
             print(f"FAIL merchant settings expose internal operations marker: {marker}")
             return 1

@@ -158,8 +158,15 @@ def main() -> int:
     ]:
         if marker in merchant_billing_panel:
             return fail(f"merchant billing panel exposes internal marker: {marker}")
-    if "window.JiejingSettingsPanels?.renderBillingProviderPanel" not in app_js:
-        return fail("app.js must continue to delegate merchant billing to its merchant settings module")
+    if "window.JiejingSettingsPanels?.renderBillingProviderPanel" in app_js:
+        return fail("merchant app must not retain the retired provider/readiness billing fallback")
+    for marker in (
+        "renderSaasMerchantBillingPlainSummaryPanel(ctx)",
+        "renderSaasMerchantMediaCreditsPanel()",
+        "renderSaasMerchantDomesticPaymentPanel(ctx)",
+    ):
+        if marker not in app_js:
+            return fail(f"merchant Settings lost its normal billing surface: {marker}")
     for marker in [
         "window.JiejingSettingsPanels?.renderQueueHealthPanel",
         "window.JiejingSettingsPanels?.renderCommercialLaunchActionPlanPanel",

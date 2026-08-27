@@ -2076,7 +2076,7 @@ def _build_paid_launch_cutover_checklist(
             ],
             verification=[
                 "/billing/payment-options",
-                "POST /billing/wechat-pay/zero-charge-rehearsal",
+                "POST /owner/billing/wechat-pay/zero-charge-rehearsal",
                 "tools/test_jiejing_wechat_pay_zero_charge_rehearsal.py",
             ],
             external_resource_required=True,
@@ -2276,7 +2276,7 @@ def _build_wechat_domain_cutover_runbook(
             ),
             environment_keys=[],
             verification=[
-                "POST /billing/wechat-pay/zero-charge-rehearsal",
+                "POST /owner/billing/wechat-pay/zero-charge-rehearsal",
                 "tools/test_jiejing_wechat_pay_zero_charge_rehearsal.py",
             ],
             docs=[],

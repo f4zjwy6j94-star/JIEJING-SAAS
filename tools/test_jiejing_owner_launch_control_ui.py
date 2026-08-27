@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 
@@ -36,6 +37,8 @@ def main() -> int:
     deploy = (ROOT / "deploy" / "apply-staging-patch.sh").read_text(encoding="utf-8")
 
     merchant_bundle = "\n".join((app_html, app_js, merchant_panels))
+    if "maybeRefreshSaasOwnerLaunchControlForActiveTab" in app_js:
+        return fail("merchant app contains a dangling owner launch-control refresh call")
     for marker in (
         "/owner/launch-control",
         "renderSaasOwnerLaunchControlPanel",
@@ -85,22 +88,8 @@ def main() -> int:
     if "window.JiejingOpsPanels" not in ops_js or "renderOwnerLaunchControlPanel" not in ops_js:
         return fail("ops.js must invoke the exported launch-control renderer")
 
-    for marker in (
-        "secret_exposed",
-        "charge_now_allowed",
-        "platform_write_now_allowed",
-        "repeat_ebay_oauth_allowed",
-        "frontend_gets_payment_secret",
-        "frontend_gets_api_key",
-        "exports_database",
-        "exports_raw_secret",
-        "owner_review_packet_v1",
-        "launch_rehearsal_audit_v1",
-        "owner_release_history_v1",
-        "continuity_handoff_v1",
-    ):
-        if marker not in ops_bundle:
-            return fail(f"ops launch control is missing safety/evidence field: {marker}")
+    if "<div hidden" in ops_panels or " hidden>" in ops_panels:
+        return fail("ops panels must not carry hidden keyword markers to satisfy tests")
 
     for action in (
         "refresh-owner-launch-control",
@@ -112,6 +101,14 @@ def main() -> int:
         "download-release-history",
         "copy-continuity-handoff",
         "download-continuity-handoff",
+        "copy-cutover-decision-checklist",
+        "download-cutover-decision-checklist",
+        "copy-final-launch-rehearsal-record",
+        "download-final-launch-rehearsal-record",
+        "copy-owner-paid-launch-dossier",
+        "download-owner-paid-launch-dossier",
+        "copy-prelaunch-acceptance-report",
+        "download-prelaunch-acceptance-report",
     ):
         if action not in ops_bundle:
             return fail(f"ops launch control is missing safe operator action: {action}")
@@ -126,6 +123,14 @@ def main() -> int:
         "function downloadSaasReleaseHistory",
         "function copySaasContinuityHandoff",
         "function downloadSaasContinuityHandoff",
+        "function copySaasCutoverDecisionChecklist",
+        "function downloadSaasCutoverDecisionChecklist",
+        "function copySaasFinalLaunchRehearsalRecord",
+        "function downloadSaasFinalLaunchRehearsalRecord",
+        "function copySaasOwnerPaidLaunchDossier",
+        "function downloadSaasOwnerPaidLaunchDossier",
+        "function copySaasPrelaunchAcceptanceReport",
+        "function downloadSaasPrelaunchAcceptanceReport",
     ):
         if handler not in ops_bundle:
             return fail(f"ops launch control is missing migrated action handler: {handler}")
@@ -139,6 +144,14 @@ def main() -> int:
         "download-release-history",
         "copy-continuity-handoff",
         "download-continuity-handoff",
+        "copy-cutover-decision-checklist",
+        "download-cutover-decision-checklist",
+        "copy-final-launch-rehearsal-record",
+        "download-final-launch-rehearsal-record",
+        "copy-owner-paid-launch-dossier",
+        "download-owner-paid-launch-dossier",
+        "copy-prelaunch-acceptance-report",
+        "download-prelaunch-acceptance-report",
     ):
         if f'if (action === "{action}")' not in ops_bundle:
             return fail(f"ops launch control action is not registered: {action}")
@@ -148,6 +161,10 @@ def main() -> int:
         "buildSaasLaunchRehearsalAuditDownloadPayload",
         "buildSaasReleaseHistoryDownloadPayload",
         "buildSaasContinuityHandoffDownloadPayload",
+        "buildSaasCutoverDecisionChecklistDownloadPayload",
+        "buildSaasFinalLaunchRehearsalRecordDownloadPayload",
+        "buildSaasOwnerPaidLaunchDossierDownloadPayload",
+        "buildSaasPrelaunchAcceptanceReportDownloadPayload",
     )
     for builder in export_builders:
         scope = function_scope(ops_bundle, builder)
@@ -169,6 +186,112 @@ def main() -> int:
         ):
             if forbidden.lower() in scope.lower():
                 return fail(f"ops launch control export is not allowlisted ({builder}): {forbidden}")
+
+    authoritative_artifact_mappings = (
+        ("copySaasLaunchRehearsalAudit", "launch_rehearsal_audit_packet"),
+        ("downloadSaasLaunchRehearsalAudit", "launch_rehearsal_audit_packet"),
+        ("copySaasReleaseHistory", "release_history"),
+        ("downloadSaasReleaseHistory", "release_history"),
+        ("copySaasContinuityHandoff", "continuity_handoff_digest"),
+        ("downloadSaasContinuityHandoff", "continuity_handoff_digest"),
+    )
+    for handler, artifact_key in authoritative_artifact_mappings:
+        scope = function_scope(ops_js, handler)
+        if f'ownerLaunchArtifact("{artifact_key}")' not in scope:
+            return fail(f"ops export handler does not use authoritative payload key: {handler} -> {artifact_key}")
+
+    runtime_contract = r"""
+global.window = {};
+require(process.argv[1]);
+const panels = window.JiejingOpsPanels;
+const secretSentinel = "DO_NOT_RENDER_THIS_SECRET";
+const control = {
+  status: "attention",
+  next_action: "核对八类上线证据",
+  secret_exposed: false,
+  access_token: secretSentinel,
+  owner_review_packet: { status: "review_ready", generated_at: "2026-08-28T00:00:00Z", client_secret: secretSentinel },
+  launch_rehearsal_audit_packet: { status: "audit_ready", generated_at: "2026-08-28T00:01:00Z", api_key: secretSentinel },
+  release_history: { status: "history_ready", updated_at: "2026-08-28T00:02:00Z", refresh_token: secretSentinel },
+  continuity_handoff_digest: { status: "handoff_ready", updated_at: "2026-08-28T00:03:00Z", password: secretSentinel },
+  cutover_decision_checklist: { status: "cutover_ready", generated_at: "2026-08-28T00:04:00Z", summary: { recommended_next_step: "review" }, token: secretSentinel },
+  final_launch_rehearsal_execution_record: { status: "rehearsal_ready", generated_at: "2026-08-28T00:05:00Z", summary: { decision: "hold" }, secret: secretSentinel },
+  owner_paid_launch_approval_dossier: { status: "dossier_ready", generated_at: "2026-08-28T00:06:00Z", summary: { decision: "hold", readiness_score_percent: 75 }, private_key: secretSentinel },
+  prelaunch_acceptance_report: { status: "acceptance_ready", generated_at: "2026-08-28T00:07:00Z", summary: { decision: "hold", readiness_score_percent: 80 }, webhook_secret: secretSentinel },
+};
+const evidence = [
+  ["owner-review-packet", panels.buildSaasOwnerReviewPacketDownloadPayload, control.owner_review_packet],
+  ["launch-rehearsal-audit", panels.buildSaasLaunchRehearsalAuditDownloadPayload, control.launch_rehearsal_audit_packet],
+  ["release-history", panels.buildSaasReleaseHistoryDownloadPayload, control.release_history],
+  ["continuity-handoff", panels.buildSaasContinuityHandoffDownloadPayload, control.continuity_handoff_digest],
+  ["cutover-decision-checklist", panels.buildSaasCutoverDecisionChecklistDownloadPayload, control.cutover_decision_checklist],
+  ["final-launch-rehearsal-record", panels.buildSaasFinalLaunchRehearsalRecordDownloadPayload, control.final_launch_rehearsal_execution_record],
+  ["owner-paid-launch-dossier", panels.buildSaasOwnerPaidLaunchDossierDownloadPayload, control.owner_paid_launch_approval_dossier],
+  ["prelaunch-acceptance-report", panels.buildSaasPrelaunchAcceptanceReportDownloadPayload, control.prelaunch_acceptance_report],
+];
+const launchHtml = panels.renderOwnerLaunchControlPanel(control);
+if (launchHtml.includes("<div hidden") || launchHtml.includes(secretSentinel)) {
+  throw new Error("launch renderer emitted a hidden marker or secret field");
+}
+for (const [key, builder, source] of evidence) {
+  if (!launchHtml.includes(`data-evidence-kind="${key}"`)) {
+    throw new Error(`launch renderer omitted visible evidence card: ${key}`);
+  }
+  for (const action of [`copy-${key}`, `download-${key}`]) {
+    if (!launchHtml.includes(`data-ops-action="${action}"`)) throw new Error(`launch renderer omitted action: ${action}`);
+  }
+  const payload = builder(source);
+  const serialized = JSON.stringify(payload);
+  if (!payload || payload.status === "unknown" || !(payload.generated_at || payload.updated_at) || payload.secret_exposed !== false) {
+    throw new Error(`authoritative artifact produced empty export: ${serialized}`);
+  }
+  if (serialized.includes(secretSentinel)) throw new Error(`export leaked a secret field: ${key}`);
+}
+const paymentHtml = panels.renderPaymentAcceptancePanel({
+  testEvent: { status: "ready", reason: "recorded", api_key: secretSentinel },
+  provider: { status: "ready", reason: "recorded", client_secret: secretSentinel },
+  wechat: { status: "ready", reason: "recorded", refresh_token: secretSentinel },
+});
+for (const action of ["billing-test-event", "billing-provider-rehearsal", "wechat-zero-charge-rehearsal"]) {
+  const matches = paymentHtml.match(new RegExp(`data-ops-action="${action}"`, "g")) || [];
+  if (matches.length !== 1) throw new Error(`payment renderer action count mismatch: ${action}=${matches.length}`);
+}
+if (paymentHtml.includes("<div hidden") || paymentHtml.includes(secretSentinel)) throw new Error("payment renderer emitted a hidden marker or secret field");
+"""
+    runtime = subprocess.run(
+        ["node", "-e", runtime_contract, str(ops_panels_path)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if runtime.returncode != 0:
+        return fail(f"ops authoritative artifact runtime contract failed: {runtime.stderr.strip()}")
+
+    payment_scope = function_scope(ops_panels, "renderPaymentAcceptancePanel")
+    for action in ("billing-test-event", "billing-provider-rehearsal", "wechat-zero-charge-rehearsal"):
+        if f'data-ops-action="{action}"' not in payment_scope:
+            return fail(f"ops payment acceptance is missing exact action: {action}")
+        if f'if (action === "{action}")' not in ops_js:
+            return fail(f"ops payment acceptance action is not registered: {action}")
+    for route in (
+        "/owner/billing/test-event",
+        "/owner/billing/provider-rehearsal",
+        "/owner/billing/wechat-pay/zero-charge-rehearsal",
+    ):
+        if route not in ops_js:
+            return fail(f"ops payment acceptance route is missing: {route}")
+    payment_runtime_scope = "\n".join(
+        function_scope(ops_js, name)
+        for name in (
+            "runSaasBillingTestEvent",
+            "runSaasBillingProviderRehearsal",
+            "runSaasWechatZeroChargeRehearsal",
+        )
+    )
+    for forbidden in ("localStorage", "sessionStorage", "window.location", "location.href", "window.open"):
+        if forbidden in payment_runtime_scope:
+            return fail(f"ops payment acceptance must not persist or redirect: {forbidden}")
 
     renderer_start = ops_panels.find("function renderOwnerLaunchControlPanel")
     renderer_end = ops_panels.find("\n  function ", renderer_start + 1)

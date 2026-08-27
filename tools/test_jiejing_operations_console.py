@@ -31,6 +31,7 @@ ADMIN_EMAIL = "ops-owner@jiejing-shop.cn"
 MERCHANT_EMAIL = "ordinary-merchant@jiejing-shop.cn"
 SYNTHETIC_EMAIL = "synthetic-feedback@jiejing-shop.cn"
 PASSWORD = "operations-console-test-password"
+OPS_HOST = "ops.jiejing.shop"
 
 
 def fail(message: str) -> int:
@@ -206,13 +207,13 @@ def main() -> int:
         if shared_feedback.get("status") != "open":
             return fail(f"shared-company feedback was not created: {shared_feedback}")
 
-        unauthenticated = _get_json(f"{base}/owner/operations-overview")
+        unauthenticated = _get_json(f"{base}/owner/operations-overview", host=OPS_HOST)
         if unauthenticated["status"] != 401:
             return fail(f"unauthenticated overview should be 401: {unauthenticated}")
 
-        merchant_overview = _get_json(f"{base}/owner/operations-overview", token=merchant_token)
+        merchant_overview = _get_json(f"{base}/owner/operations-overview", token=merchant_token, host=OPS_HOST)
         merchant_details = [
-            _get_json(f"{base}/owner/operations/{section}", token=merchant_token)
+            _get_json(f"{base}/owner/operations/{section}", token=merchant_token, host=OPS_HOST)
             for section in ("traffic", "merchants", "transactions", "costs", "workflows", "audit", "feedback")
         ]
         if merchant_overview["status"] != 403 or any(item["status"] != 403 for item in merchant_details):
@@ -221,15 +222,35 @@ def main() -> int:
         merchant_ops_login = _post_json(
             f"{base}/owner/auth/login",
             {"email": MERCHANT_EMAIL, "password": PASSWORD},
-            host="ops.jiejing.shop",
+            host=OPS_HOST,
         )
         if merchant_ops_login["status"] != 403 or merchant_ops_login["headers"].get("set-cookie"):
             return fail(f"ordinary merchant received an operations session: {merchant_ops_login}")
 
+        admin_app_login = _post_json(
+            f"{base}/owner/auth/login",
+            {"email": ADMIN_EMAIL, "password": PASSWORD},
+            host="app.jiejing.shop",
+        )
+        admin_local_login = _post_json(
+            f"{base}/owner/auth/login",
+            {"email": ADMIN_EMAIL, "password": PASSWORD},
+        )
+        if (
+            admin_app_login["status"] != 403
+            or admin_local_login["status"] != 403
+            or admin_app_login["headers"].get("set-cookie")
+            or admin_local_login["headers"].get("set-cookie")
+        ):
+            return fail(
+                "operations login did not fail closed outside ops host: "
+                f"app={admin_app_login}, local={admin_local_login}"
+            )
+
         admin_ops_login = _post_json(
             f"{base}/owner/auth/login",
             {"email": ADMIN_EMAIL, "password": PASSWORD},
-            host="ops.jiejing.shop",
+            host=OPS_HOST,
         )
         admin_login_body = admin_ops_login["body"]
         admin_cookie = str(admin_ops_login["headers"].get("set-cookie") or "")
@@ -240,7 +261,22 @@ def main() -> int:
         if "HttpOnly" not in admin_cookie or "SameSite=Strict" not in admin_cookie:
             return fail(f"operations session cookie is not strict and HttpOnly: {admin_cookie}")
 
-        overview_response = _get_json(f"{base}/owner/operations-overview?period_days=7", token=admin_token)
+        app_host_overview = _get_json(
+            f"{base}/owner/operations-overview?period_days=7",
+            token=admin_token,
+            host="app.jiejing.shop",
+        )
+        localhost_overview = _get_json(f"{base}/owner/operations-overview?period_days=7", token=admin_token)
+        if app_host_overview["status"] != 403 or localhost_overview["status"] != 403:
+            return fail(
+                f"internal admin escaped the operations host boundary: app={app_host_overview}, local={localhost_overview}"
+            )
+
+        overview_response = _get_json(
+            f"{base}/owner/operations-overview?period_days=7",
+            token=admin_token,
+            host=OPS_HOST,
+        )
         if overview_response["status"] != 200:
             return fail(f"internal overview failed: {overview_response}")
         overview = overview_response["body"].get("operations_overview") or {}
@@ -260,14 +296,22 @@ def main() -> int:
             return fail(f"oldest open feedback age is missing: {feedback_summary}")
         if overview.get("data_quality", {}).get("synthetic_test_feedback_excluded") != 1:
             return fail(f"synthetic feedback exclusion is not explicit: {overview.get('data_quality')}")
-        clamped_overview = _get_json(f"{base}/owner/operations-overview?period_days=999999", token=admin_token)
+        clamped_overview = _get_json(
+            f"{base}/owner/operations-overview?period_days=999999",
+            token=admin_token,
+            host=OPS_HOST,
+        )
         if clamped_overview["body"].get("operations_overview", {}).get("period", {}).get("days") != 366:
             return fail(f"overview period upper bound failed: {clamped_overview}")
 
         with ThreadPoolExecutor(max_workers=8) as executor:
             concurrent_results = list(
                 executor.map(
-                    lambda _: _get_json(f"{base}/owner/operations-overview?period_days=30", token=admin_token),
+                    lambda _: _get_json(
+                        f"{base}/owner/operations-overview?period_days=30",
+                        token=admin_token,
+                        host=OPS_HOST,
+                    ),
                     range(16),
                 )
             )
@@ -279,6 +323,7 @@ def main() -> int:
             response = _get_json(
                 f"{base}/owner/operations/{section}?period_days=7&limit=1&cursor=not-a-valid-cursor",
                 token=admin_token,
+                host=OPS_HOST,
             )
             if response["status"] != 200:
                 return fail(f"{section} detail failed: {response}")
@@ -292,6 +337,7 @@ def main() -> int:
         feedback_detail_response = _get_json(
             f"{base}/owner/operations/feedback?period_days=7&status=open&module=workflow&limit=1",
             token=admin_token,
+            host=OPS_HOST,
         )
         feedback_detail = feedback_detail_response["body"].get("operations_detail") or {}
         feedback_items = feedback_detail.get("items") or []
@@ -335,6 +381,7 @@ def main() -> int:
         departed_member_detail = _get_json(
             f"{base}/owner/operations/feedback?period_days=7&status=open&module=service&limit=10",
             token=admin_token,
+            host=OPS_HOST,
         )
         departed_items = departed_member_detail["body"].get("operations_detail", {}).get("items") or []
         if departed_member_detail["status"] != 200 or len(departed_items) != 1:
@@ -381,6 +428,7 @@ def main() -> int:
         capped_filtered = _get_json(
             f"{base}/owner/operations/feedback?period_days=7&status=open&module=workflow&limit=10",
             token=admin_token,
+            host=OPS_HOST,
         )
         capped_filtered_detail = capped_filtered["body"].get("operations_detail", {})
         capped_filtered_items = capped_filtered_detail.get("items") or []
@@ -394,6 +442,7 @@ def main() -> int:
         capped_unfiltered = _get_json(
             f"{base}/owner/operations/feedback?period_days=7&limit=1",
             token=admin_token,
+            host=OPS_HOST,
         )
         if capped_unfiltered["body"].get("operations_detail", {}).get("data_window_capped") is not True:
             return fail(f"feedback detail cap semantics did not report a capped matching window: {capped_unfiltered}")
@@ -405,12 +454,13 @@ def main() -> int:
             if forbidden in serialized_details:
                 return fail(f"operations detail exposed forbidden field: {forbidden}")
 
-        invalid = _get_json(f"{base}/owner/operations/not-a-section", token=admin_token)
+        invalid = _get_json(f"{base}/owner/operations/not-a-section", token=admin_token, host=OPS_HOST)
         if invalid["status"] != 400:
             return fail(f"invalid detail section should be 400: {invalid}")
         extreme = _get_json(
             f"{base}/owner/operations/merchants?period_days=-999&limit=9999&cursor=djE6OTk5OTk5",
             token=admin_token,
+            host=OPS_HOST,
         )
         extreme_detail = extreme["body"].get("operations_detail") or {}
         if extreme["status"] != 200 or extreme_detail.get("period", {}).get("days") != 1 or len(extreme_detail.get("items") or []) > 100:
@@ -418,7 +468,11 @@ def main() -> int:
         malicious_query = urllib.parse.urlencode(
             {"status": "' OR 1=1 --", "plan": "<script>alert(1)</script>", "limit": "100"}
         )
-        malicious = _get_json(f"{base}/owner/operations/merchants?{malicious_query}", token=admin_token)
+        malicious = _get_json(
+            f"{base}/owner/operations/merchants?{malicious_query}",
+            token=admin_token,
+            host=OPS_HOST,
+        )
         if malicious["status"] != 200 or malicious["body"].get("operations_detail", {}).get("secret_exposed") is not False:
             return fail(f"malicious filter input crossed the operations boundary: {malicious}")
 
@@ -439,9 +493,14 @@ def main() -> int:
         caddy_systemd = (ROOT / "deploy" / "Caddyfile.public-staging.systemd").read_text(encoding="utf-8")
         if "noindex,nofollow" not in ops_html or "/owner/auth/login" not in ops_js:
             return fail("operations frontend security markers are missing")
-        cache_version = "20260822-ops-session-ttft-v4"
-        if ops_html.count(cache_version) != 2:
-            return fail("operations asset cache version is not exact for CSS and JS")
+        cache_version = "20260827-merchant-surface-ops-isolation-v1"
+        expected_versioned_assets = (
+            f"ops.css?v={cache_version}",
+            f"assets/jiejing-ops-panels.js?v={cache_version}",
+            f"ops.js?v={cache_version}",
+        )
+        if any(asset not in ops_html for asset in expected_versioned_assets) or ops_html.count(cache_version) != 3:
+            return fail("operations asset cache version must match exactly across CSS and both JS bundles")
         for marker in (
             'data-view="feedback">产品反馈',
             "经营数据只读，反馈处理只更新内部状态",
@@ -552,10 +611,13 @@ def _post_json(url: str, body: dict[str, Any], *, token: str = "", host: str = "
     return _open_json(request)
 
 
-def _get_json(url: str, *, token: str = "") -> dict[str, Any]:
+def _get_json(url: str, *, token: str = "", host: str = "") -> dict[str, Any]:
     headers = {"accept": "application/json"}
     if token:
         headers["authorization"] = f"Bearer {token}"
+    if host:
+        headers["host"] = host
+        headers["x-forwarded-proto"] = "https"
     return _open_json(urllib.request.Request(url, headers=headers, method="GET"))
 
 

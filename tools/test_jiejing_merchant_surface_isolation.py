@@ -86,6 +86,7 @@ def main() -> int:
 
     merchant_sources = {"app.html": app_html, "app.js": app_js, "jiejing-settings-panels.js": merchant_module}
     forbidden_merchant_markers = (
+        "/readiness/product-saas",
         "/owner/launch-control",
         "/owner/edge-cutover-preflight",
         "/owner/paid-launch-approval-packet",
@@ -110,17 +111,54 @@ def main() -> int:
             if marker in source:
                 failures.append(f"{filename} physically contains internal marker: {marker}")
 
-    billing_scope = _scope(api_server, 'if path == "billing/plans":', 'if path == "billing/payment-options":')
-    if "_is_platform_internal_admin" in billing_scope:
-        failures.append("/billing/plans changes merchant response by platform-internal role")
-    if "plan = self._merchant_safe_billing_plan(plan)" not in billing_scope:
-        failures.append("/billing/plans does not always apply the merchant-safe projection")
+    # Merchant availability must come from the concrete account, billing, media,
+    # draft and publish projections.  Global production readiness is an ops
+    # concern even when the logged-in browser belongs to an internal admin.
+    for marker in (
+        "function refreshSaasPublicReadiness",
+        "function saasReadinessMerchantStatus",
+        "function renderSaasReadinessIncidentStrip",
+        ".production_ready",
+        ".can_accept_real_customers",
+        ".beta_ready",
+    ):
+        if marker in app_js:
+            failures.append(f"app.js consumes global production readiness: {marker}")
 
     frontend_projection = _scope(
         app_js,
         "function merchantSafeSaasBillingPlan",
         "function merchantSafeSaasOAuthRequest",
     )
+    merchant_runtime_without_projection = app_js.replace(frontend_projection, "")
+    for marker in (
+        "paid_launch",
+        "billing_ready_for_private_beta",
+        "function renderSaasBillingProviderPanel",
+        "function renderSaasNewEbayAccountOnboardingPanel",
+        "old_frozen_account_reuse_allowed=false",
+        "no_oauth_started",
+        "Stripe subscription Checkout",
+        "Billing provider",
+        "正式上线门槛",
+        "生产级安全仍未完成",
+    ):
+        if marker in merchant_runtime_without_projection:
+            failures.append(f"app.js physically contains internal launch/acceptance template: {marker}")
+
+    backend_panel_scope = _scope(app_js, "function renderSaasBackendPanel", "async function refreshSaasEbayDiagnostics")
+    if "return;\n  const connectedTone" in backend_panel_scope:
+        failures.append("renderSaasBackendPanel keeps unreachable legacy backend/readiness DOM after return")
+    connect_center_scope = _scope(app_js, "function renderSaasConnectCenter", "function renderConnect")
+    if "return;\n  view.innerHTML" in connect_center_scope:
+        failures.append("renderSaasConnectCenter keeps unreachable legacy Settings DOM after return")
+
+    billing_scope = _scope(api_server, 'if path == "billing/plans":', 'if path == "billing/payment-options":')
+    if "_is_platform_internal_admin" in billing_scope:
+        failures.append("/billing/plans changes merchant response by platform-internal role")
+    if "plan = self._merchant_safe_billing_plan(plan)" not in billing_scope:
+        failures.append("/billing/plans does not always apply the merchant-safe projection")
+
     if "saasOwnerLaunchCanView" in frontend_projection:
         failures.append("merchant billing projection bypasses sanitization for an internal admin")
 

@@ -97,6 +97,7 @@ from .media_asset_pipeline import (
     missing_media_product_fact_keys,
 )
 from .media_credits import (
+    build_merchant_media_credit_summary,
     build_media_credit_summary,
     controlled_media_acceptance_company_allowed,
     controlled_media_acceptance_enabled,
@@ -242,8 +243,9 @@ EXPENSIVE_API_RATE_LIMIT_PREFIXES = (
 EXPENSIVE_API_RATE_LIMIT_EXACT_PATHS = {
     "billing/checkout-session",
     "billing/customer-portal",
-    "billing/test-event",
-    "billing/wechat-pay/zero-charge-rehearsal",
+    "owner/billing/test-event",
+    "owner/billing/provider-rehearsal",
+    "owner/billing/wechat-pay/zero-charge-rehearsal",
 }
 SESSION_COOKIE_NAME = "jiejing_saas_session"
 REFRESH_COOKIE_NAME = "jiejing_saas_refresh"
@@ -2284,10 +2286,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         if path in {"readiness", "readiness/product-saas"}:
             readiness = build_product_readiness_or_degraded(self.settings, self.repository)
             identity = self._optional_identity()
-            if not self.settings.is_production_like or self._can_view_internal_diagnostics(identity):
-                self._send_json({"readiness": readiness})
-            else:
-                self._send_json({"readiness": self._public_readiness_summary(readiness, authenticated=identity is not None)})
+            # This is a merchant/public endpoint on every host and in every
+            # environment. Internal-admin identity must never widen its
+            # response; full operational evidence belongs behind exact
+            # owner/ops routes guarded by both Host and role.
+            self._send_json(
+                {
+                    "readiness": self._public_readiness_summary(
+                        readiness,
+                        authenticated=identity is not None,
+                    )
+                }
+            )
             return
 
         if path in {"health/deep", "operational-health"}:
@@ -2463,8 +2473,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "owner/launch-control":
-            if not self._is_platform_internal_admin(identity):
-                self._send_error(HTTPStatus.FORBIDDEN, "owner launch control is platform-internal admin only")
+            if not self._require_operations_console_request("owner launch control"):
+                return
+            if not self._require_platform_internal_admin(identity, "owner launch control"):
                 return
             store_id = query.get("store_id", [None])[0]
             if store_id:
@@ -2485,8 +2496,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "owner/production-release-gate":
-            if not self._is_platform_internal_admin(identity):
-                self._send_error(HTTPStatus.FORBIDDEN, "production release gate is platform-internal admin only")
+            if not self._require_operations_console_request("production release gate"):
+                return
+            if not self._require_platform_internal_admin(identity, "production release gate"):
                 return
             store_id = query.get("store_id", [None])[0]
             if store_id and not self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id):
@@ -2505,29 +2517,39 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "owner/production-evidence-ledger":
-            if not self._is_platform_internal_admin(identity):
-                self._send_error(HTTPStatus.FORBIDDEN, "production evidence ledger is platform-internal admin only")
+            if not self._require_operations_console_request("production evidence ledger"):
+                return
+            if not self._require_platform_internal_admin(identity, "production evidence ledger"):
                 return
             self._send_json({"production_evidence_ledger": build_production_evidence_ledger(self.settings, self.repository)})
             return
 
         if path in {"owner/billing-domain-cutover-rehearsal", "commercial/billing-domain-cutover-rehearsal"}:
-            if not self._is_platform_internal_admin(identity):
-                self._send_error(HTTPStatus.FORBIDDEN, "billing domain cutover rehearsal is platform-internal admin only")
+            if path.startswith("owner/") and not self._require_operations_console_request(
+                "billing domain cutover rehearsal"
+            ):
+                return
+            if not self._require_platform_internal_admin(identity, "billing domain cutover rehearsal"):
                 return
             self._send_error(HTTPStatus.GONE, "legacy_stripe_billing_cutover_retired")
             return
 
         if path in {"owner/billing-provider-evidence-register", "commercial/billing-provider-evidence-register"}:
-            if not self._is_platform_internal_admin(identity):
-                self._send_error(HTTPStatus.FORBIDDEN, "billing provider evidence register is platform-internal admin only")
+            if path.startswith("owner/") and not self._require_operations_console_request(
+                "billing provider evidence register"
+            ):
+                return
+            if not self._require_platform_internal_admin(identity, "billing provider evidence register"):
                 return
             self._send_error(HTTPStatus.GONE, "legacy_stripe_billing_evidence_retired")
             return
 
         if path in {"owner/paid-launch-approval-packet", "commercial/paid-launch-approval-packet"}:
-            if not self._is_platform_internal_admin(identity):
-                self._send_error(HTTPStatus.FORBIDDEN, "paid launch approval packet is platform-internal admin only")
+            if path.startswith("owner/") and not self._require_operations_console_request(
+                "paid launch approval packet"
+            ):
+                return
+            if not self._require_platform_internal_admin(identity, "paid launch approval packet"):
                 return
             store_id = query.get("store_id", [None])[0]
             if store_id and not self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id):
@@ -2546,8 +2568,9 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path in {"owner/edge-cutover-preflight", "domain/edge-cutover-preflight"}:
-            if not self._is_platform_internal_admin(identity):
-                self._send_error(HTTPStatus.FORBIDDEN, "edge cutover preflight is platform-internal admin only")
+            if path.startswith("owner/") and not self._require_operations_console_request("edge cutover preflight"):
+                return
+            if not self._require_platform_internal_admin(identity, "edge cutover preflight"):
                 return
             self._send_json({"edge_cutover_preflight": build_edge_cutover_preflight(self.settings)})
             return
@@ -2620,8 +2643,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         if path == "billing/plans":
             plan = build_billing_plan(self.settings, self.repository)
-            if not self._is_platform_internal_admin(identity):
-                plan = self._merchant_safe_billing_plan(plan)
+            plan = self._merchant_safe_billing_plan(plan)
             self._send_json({"billing_plan": plan})
             return
 
@@ -2637,6 +2659,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "owner/operations-overview":
+            if not self._require_operations_console_request("operations overview"):
+                return
             if not self._require_platform_internal_admin(identity, "operations overview"):
                 return
             try:
@@ -2649,6 +2673,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if len(parts) == 3 and parts[0] == "owner" and parts[1] == "operations":
+            if not self._require_operations_console_request("operations detail"):
+                return
             if not self._require_platform_internal_admin(identity, "operations detail"):
                 return
             try:
@@ -2741,7 +2767,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         if path == "billing/media-credits":
             self._send_json(
                 {
-                    "media_credits": build_media_credit_summary(
+                    "media_credits": build_merchant_media_credit_summary(
                         self.repository,
                         company_id=identity["company_id"],
                         limit=_query_limit(query, default=30, maximum=100) or 30,
@@ -3448,6 +3474,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "owner/auth/login":
+            if not self._require_operations_console_request("operations console login"):
+                return
             body = self._read_json_body()
             if not self._check_auth_rate_limit("auth/login", body):
                 return
@@ -3464,8 +3492,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 "company_id": user["default_company_id"],
                 "email": user["email"],
             }
-            if not self._is_platform_internal_admin(preflight_identity):
-                self._send_error(HTTPStatus.FORBIDDEN, "operations console is platform-internal admin only")
+            if not self._require_platform_internal_admin(preflight_identity, "operations console"):
                 return
             token, refresh_token, _browser_session = self._issue_browser_session(
                 user_id=user["user_id"],
@@ -3896,6 +3923,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path in {"owner/product-feedback/review", "owner/product-feedback/resolve"}:
+            if not self._require_operations_console_request("product feedback operation"):
+                return
             if not self._require_platform_internal_admin(identity, "product feedback operation"):
                 return
             body = self._read_json_body()
@@ -3963,6 +3992,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "owner/operations-reliability-alerts/reconcile":
+            if not self._require_operations_console_request("operations reliability alerts"):
+                return
             if not self._require_platform_internal_admin(identity, "operations reliability alerts"):
                 return
             monitoring_snapshot = self.repository.provider_monitoring_snapshot(
@@ -3992,6 +4023,8 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             return
 
         if path == "owner/operations-reliability-alerts/acknowledge":
+            if not self._require_operations_console_request("operations reliability alerts"):
+                return
             if not self._require_platform_internal_admin(identity, "operations reliability alerts"):
                 return
             body = self._read_json_body()
@@ -4270,8 +4303,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if path == "billing/test-event":
-            if not self._require_permission(identity, "manage_billing"):
+        if path == "owner/billing/test-event":
+            if not self._require_operations_console_request("billing test event"):
+                return
+            if not self._require_platform_internal_admin(identity, "billing test event"):
                 return
             body = self._read_json_body()
             result = apply_test_billing_event(
@@ -4287,8 +4322,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if path == "billing/provider-rehearsal":
-            if not self._require_permission(identity, "manage_billing"):
+        if path == "owner/billing/provider-rehearsal":
+            if not self._require_operations_console_request("billing provider rehearsal"):
+                return
+            if not self._require_platform_internal_admin(identity, "billing provider rehearsal"):
                 return
             body = self._read_json_body()
             result = run_billing_provider_rehearsal(
@@ -4340,8 +4377,10 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if path == "billing/wechat-pay/zero-charge-rehearsal":
-            if not self._require_permission(identity, "manage_billing"):
+        if path == "owner/billing/wechat-pay/zero-charge-rehearsal":
+            if not self._require_operations_console_request("WeChat zero-charge rehearsal"):
+                return
+            if not self._require_platform_internal_admin(identity, "WeChat zero-charge rehearsal"):
                 return
             if not self._check_wechat_zero_charge_rehearsal_rate_limit(identity):
                 return
@@ -10266,8 +10305,20 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         return host.endswith(".trycloudflare.com")
 
     def _operations_console_cookie_context(self) -> bool:
+        return self._is_operations_console_request()
+
+    def _is_operations_console_request(self) -> bool:
         host = str(self.headers.get("host") or "").split(":", 1)[0].strip().lower()
-        return host == "ops.jiejing.shop" or host.startswith("ops.") and host.endswith(".jiejing.shop")
+        # The operations console is a single security boundary, not a wildcard
+        # tenant surface. Tests that call the backend directly must send this
+        # exact Host header as an explicit fixture.
+        return host == "ops.jiejing.shop"
+
+    def _require_operations_console_request(self, label: str = "operations console endpoint") -> bool:
+        if self._is_operations_console_request():
+            return True
+        self._send_error(HTTPStatus.FORBIDDEN, f"{label} is only available from the operations console")
+        return False
 
     def _check_auth_rate_limit(self, action: str, body: dict[str, Any]) -> bool:
         client_ip = self._client_ip_for_rate_limit()
@@ -10933,12 +10984,13 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             ("post-publish", "post-publish cockpit evidence and cleanup boundary", ["GET /post-publish/cockpit"]),
             (
                 "billing",
-                "checkout, portal, billing test events and manual beta payment orders",
+                "merchant checkout and manual beta payment orders; rehearsals stay in ops",
                 [
                     "POST /billing/checkout-session",
-                    "POST /billing/test-event",
                     "POST /billing/manual-beta/orders",
-                    "POST /billing/wechat-pay/zero-charge-rehearsal",
+                    "POST /owner/billing/test-event",
+                    "POST /owner/billing/provider-rehearsal",
+                    "POST /owner/billing/wechat-pay/zero-charge-rehearsal",
                 ],
             ),
             (
@@ -11104,8 +11156,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
         quota = plan.get("quota_contract") if isinstance(plan.get("quota_contract"), dict) else {}
         return {
             "contract_version": _safe_bounded_text(plan.get("contract_version"), 128),
-            "billing_ready_for_private_beta": plan.get("billing_ready_for_private_beta") is True,
-            "billing_ready_for_paid_launch": public_checkout_active,
             "provider": {
                 "provider": "wechat_pay_native",
                 "checkout_mode": "native_qr",
@@ -11136,23 +11186,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 ),
             },
             "mainland_payment": mainland_payment,
-            "merchant_launch_path": _merchant_safe_launch_path(
-                plan.get("merchant_launch_path"),
-                mainland_payment=mainland_payment,
-                quota_enabled=quota.get("enabled") is True,
-                public_checkout_active=public_checkout_active,
-            ),
-            "paid_launch_blockers": [] if public_checkout_active else [mainland_payment["next_blocker"]],
-            "billing_test_rehearsal_summary": _merchant_safe_rehearsal_summary(
-                plan.get("billing_test_rehearsal_summary")
-            ),
-            "subscription_quota_shutdown_closure": _merchant_safe_shutdown_summary(
-                plan.get("subscription_quota_shutdown_closure")
-            ),
-            "billing_incident_runbook": _merchant_safe_incident_runbook(plan.get("billing_incident_runbook")),
-            "customer_billing_trust_packet": _merchant_safe_trust_packet(
-                plan.get("customer_billing_trust_packet")
-            ),
             "confirmation_boundary": {
                 "billing_changes_need_owner_or_admin": True,
                 "real_platform_writes_not_included_in_any_current_plan": True,
@@ -11168,7 +11201,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             "frontend_can_grant_entitlement": False,
             "frontend_can_grant_quota": False,
             "customer_visible": True,
-            "internal_launch_evidence_visible": False,
             "secret_exposed": False,
         }
 

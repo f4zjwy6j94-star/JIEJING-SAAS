@@ -430,12 +430,14 @@ def main() -> int:
         "/health/deep",
         "/schema/chain",
         "/platforms",
-        "/infrastructure/drivers",
+        "/readiness/product-saas",
+        "/billing/plans",
+        "/billing/media-credits",
+        "/monitoring/cls/callback",
         "/product-feedback",
         "/analytics/*",
         "/companies*",
         "/permissions/*",
-        "/security/*",
         "/data-packets",
         "/data-packets/*",
         "/ip-risk-screening",
@@ -454,13 +456,43 @@ def main() -> int:
     api_matcher_line = next((line.strip() for line in caddy.splitlines() if line.strip().startswith("@api path ")), "")
     api_patterns = api_matcher_line.split()[2:]
     backend_routes = _backend_route_samples(API_SERVER.read_text(encoding="utf-8"))
+    merchant_blocked_prefixes = (
+        "/owner",
+        "/vault",
+        "/database",
+        "/backup",
+        "/queue",
+        "/infrastructure",
+        "/readiness",
+        "/domain",
+        "/monitoring",
+        "/billing",
+        "/commercial",
+        "/security",
+    )
+    merchant_internal_exact_routes = {"/operational-health", "/provider-job-contracts"}
+    merchant_blocked_routes = {
+        route
+        for route in backend_routes
+        if route in merchant_internal_exact_routes
+        or (
+            any(route == prefix or route.startswith(f"{prefix}/") for prefix in merchant_blocked_prefixes)
+            and not any(fnmatch.fnmatchcase(route, pattern) for pattern in api_patterns)
+        )
+    }
+    for prefix in merchant_blocked_prefixes:
+        if prefix in api_patterns or f"{prefix}/*" in api_patterns:
+            return fail(f"production merchant API matcher must not proxy internal prefix: {prefix}")
+    if not merchant_blocked_routes:
+        return fail("production proxy contract did not discover any internal backend routes to keep blocked")
     uncovered_routes = sorted(
         route
         for route in backend_routes
+        if route not in merchant_blocked_routes
         if not any(fnmatch.fnmatchcase(route, pattern) for pattern in api_patterns)
     )
     if uncovered_routes:
-        return fail(f"production edge must route every backend HTTP surface to the API: {uncovered_routes}")
+        return fail(f"production edge must route every merchant-safe backend HTTP surface to the API: {uncovered_routes}")
     if "/health/startup" in api_patterns:
         return fail("internal dependency startup probe must not be exposed by the public edge")
     if "./robots.production.txt:/usr/share/nginx/html/robots.txt:ro" not in compose:

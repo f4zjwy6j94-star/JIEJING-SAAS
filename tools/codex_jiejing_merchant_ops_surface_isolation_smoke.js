@@ -245,6 +245,24 @@ function staticFixtureContract() {
     if (proxyBlocks.length) failures.push(`merchant nginx host still proxies /${route}/ in a route matcher`);
   }
   const opsLocations = opsServer ? nginxLocationBlocks(opsServer.full) : [];
+  for (const route of [
+    "/ops.css",
+    "/ops.js",
+    "/assets/jiejing-logo-mark.svg",
+    "/assets/jiejing-app-icon.svg",
+    "/assets/jiejing-ops-panels.js",
+  ]) {
+    const exactStatic = opsLocations.filter((block) => {
+      const normalized = block.header.replace(/\s+/g, " ").trim();
+      return normalized === `location = ${route}` &&
+        block.body.includes("$request_method !~ ^(?:GET|HEAD)$") &&
+        block.body.includes("try_files $uri =404");
+    });
+    if (exactStatic.length !== 1) failures.push(`ops static allowlist is not exact GET/HEAD-only for ${route}`);
+  }
+  if (opsLocations.some((block) => block.header.includes("assets/jiejing-(?:"))) {
+    failures.push("ops nginx host still uses a regex static allowlist");
+  }
   const launchAllowlist = opsLocations.filter(
     (block) => block.header.replace(/\s+/g, " ").trim() === "location = /owner/launch-control" && block.body.includes("proxy_pass"),
   );
@@ -266,6 +284,46 @@ function staticFixtureContract() {
   });
   if (unsafeOpsOwnerProxies.length) {
     failures.push("ops nginx host has a prefix/generic proxy that can bypass the exact owner allowlist")
+  }
+
+  const internalCapableNamespaces = ["infrastructure", "readiness", "domain", "monitoring", "billing", "commercial", "security"];
+  const merchantSafeExactRoutes = [
+    "/health",
+    "/health/deep",
+    "/readiness/product-saas",
+    "/billing/plans",
+    "/billing/usage",
+    "/billing/media-credits",
+    "/billing/checkout-contract",
+    "/billing/domestic/contract",
+    "/billing/domestic/orders",
+    "/billing/manual-beta/orders",
+    "/billing/webhook",
+    "/billing/domestic/wechat-pay/notify",
+    "/billing/domestic/wechat-pay/refund-notify",
+    "/monitoring/cls/callback",
+  ];
+  const merchantSafePositiveProxies = appLocations.filter((block) =>
+    block.body.includes("proxy_pass") && block.header.includes("^/") && block.header.includes(")$") &&
+      merchantSafeExactRoutes.every((route) => block.header.includes(route.slice(1))));
+  if (merchantSafePositiveProxies.length !== 1) {
+    failures.push("merchant-safe APIs need one anchored positive allowlist proxy");
+  }
+  const namespaceDefaultDeny = appLocations.filter((block) =>
+    internalCapableNamespaces.every((root) => block.header.includes(root)) &&
+      /\breturn\s+404\b/.test(block.body) && !block.body.includes("proxy_pass"));
+  if (namespaceDefaultDeny.length !== 1) {
+    failures.push("merchant nginx needs one default-404 matcher for all internal-capable namespaces");
+  }
+  for (const block of appLocations.filter((item) => item.body.includes("proxy_pass"))) {
+    const normalized = block.header.replace(/\s+/g, " ").trim();
+    if (normalized.startsWith("location = ")) continue;
+    if (!normalized.includes("(?:/|$)")) continue;
+    for (const root of internalCapableNamespaces) {
+      if (new RegExp(`(?:\\(|\\|)${root}(?:\\||\\))`).test(normalized)) {
+        failures.push(`merchant nginx broad proxy still includes /${root}/*`);
+      }
+    }
   }
 
   const caddySites = caddySiteBlocks(
@@ -293,6 +351,24 @@ function staticFixtureContract() {
       }
     }
   }
+  const caddyApiScope = matcherScopes.get("api") || matcherScopes.get("merchantApi") || "";
+  for (const root of internalCapableNamespaces) {
+    if (new RegExp(`/${root}(?:/\\*|\\s|$)`).test(caddyApiScope)) {
+      failures.push(`production app Caddy broad proxy still includes /${root}/*`);
+    }
+  }
+  for (const route of merchantSafeExactRoutes) {
+    if (!caddyApiScope.includes(route)) failures.push(`production app Caddy is missing exact merchant-safe route ${route}`);
+  }
+  const caddyNamespaceDeny = [...matcherScopes.entries()].filter(([name, scope]) =>
+    internalCapableNamespaces.every((root) => scope.includes(`/${root}/*`)) &&
+      caddyMatcherRejects(merchantCaddy ? merchantCaddy.full : "", name));
+  if (caddyNamespaceDeny.length !== 1) {
+    failures.push("production app Caddy needs one default-404 matcher for internal-capable namespaces");
+  }
+  const blockedOpsAsset = [...matcherScopes.entries()].filter(([name, scope]) =>
+    scope.includes("/assets/jiejing-ops-panels.js") && caddyMatcherRejects(merchantCaddy ? merchantCaddy.full : "", name));
+  if (blockedOpsAsset.length !== 1) failures.push("production app Caddy must 404 the ops-only panels bundle");
 
   return {
     ok: failures.length === 0,
