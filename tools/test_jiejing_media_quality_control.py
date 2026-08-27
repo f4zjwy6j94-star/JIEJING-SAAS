@@ -36,7 +36,7 @@ def main() -> int:
 
     required_html = (
         'id="mediaGenerationTierSelect"',
-        "快速样图 · 20 点/张",
+        "草稿图 · 20 点/张",
         "标准图（推荐） · 80 点/张",
         "高清图（最终候选） · 250 点/张",
         'id="mediaGenerationPointQuote"',
@@ -88,10 +88,10 @@ def main() -> int:
     if "是否含香粒" in active_media_sync:
         raise AssertionError("active media project must not inherit incense-demo facts")
     if (
-        'optionalSaasFetchFast("/readiness/product-saas"' not in app_js
-        or "state.saasReadiness = coreReadiness.readiness" not in app_js
+        'optionalSaasFetchFast("/media/capabilities"' not in app_js
+        or "state.saasMediaCapabilities = mediaCapabilities.media_capabilities" not in app_js
     ):
-        raise AssertionError("authenticated refresh must hydrate media readiness before rendering the workshop")
+        raise AssertionError("authenticated refresh must hydrate media capabilities before rendering the workshop")
 
     adapter = MediaGenerationAdapter()
     grounded = MediaGenerationConfig(

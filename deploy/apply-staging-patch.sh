@@ -125,6 +125,7 @@ FILES=(
   "jiejing_saas/__init__.py"
   "jiejing_saas/account_health.py"
   "jiejing_saas/merchant_onboarding.py"
+  "jiejing_saas/merchant_project_status.py"
   "jiejing_saas/backup_plan.py"
   "jiejing_saas/cos_backup_probe.py"
   "jiejing_saas/billing_checkout.py"

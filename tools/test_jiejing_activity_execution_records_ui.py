@@ -57,6 +57,7 @@ def main() -> None:
         "action_type": "publish_listing",
         "status": "needs_revision",
         "item": {
+            "listing_project_identity": {"key": "project-incense-current"},
             "controlled_existing_draft_publish": True,
             "existing_ebay_draft": {
                 "offer_id": "245675556011",
@@ -73,6 +74,10 @@ globalThis.state = {{
 }};
 function escapeHtml(value) {{ return String(value ?? ""); }}
 function publicRuntimeText(value) {{ return String(value ?? ""); }}
+function saasNormalizeListingProjectIdentity(value) {{
+  if (!value || typeof value !== "object" || !String(value.key || "").trim()) return null;
+  return {{ key: String(value.key).trim(), source_report_id: String(value.source_report_id || ""), candidate_id: String(value.candidate_id || "") }};
+}}
 function saasTimestampLabel(value) {{ return value ? "08/26 11:50" : "-"; }}
 function saasLatestExecutionPlatformError(record) {{
   const steps = Array.isArray(record?.result?.steps) ? record.result.steps : [];
@@ -86,6 +91,7 @@ const model = saasMerchantExecutionRecordViewModel(state.saasExecutionResults[0]
 if (!model) throw new Error("blocked eBay execution model missing");
 if (model.offerId !== "245675556011") throw new Error("Offer ID was not recovered from approved confirmation/step");
 if (model.sku !== "JJ-INCENSE-JC2023041300002-01") throw new Error("SKU was not recovered from approved confirmation");
+if (model.projectId !== "project-incense-current") throw new Error("current project identity was not preserved on the execution record");
 if (model.publishedToEbay !== false) throw new Error("provider rejection was mislabeled as published");
 if (model.recoveryKind !== "ebay_account_restricted") throw new Error("25019 restriction was not classified for merchant");
 const markup = renderSaasActivityExecutionRecords();
@@ -115,7 +121,7 @@ for (const forbidden of ["access_token", "refresh_token", "signedUrl"]) {{
         if required_copy not in source:
             raise AssertionError(f"merchant execution recovery copy missing: {required_copy}")
     activity_source = app_js[app_js.index(end_marker) : app_js.index("function renderActivities", app_js.index(end_marker))]
-    if "renderSaasActivityExecutionRecords()" not in activity_source:
+    if "renderSaasActivityExecutionRecords(executions)" not in activity_source:
         raise AssertionError("AI CEO activity page does not render account-scoped execution records")
     print("PASS Jiejing activity shows safe merchant-facing eBay execution records")
 

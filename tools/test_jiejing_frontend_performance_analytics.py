@@ -17,6 +17,7 @@ from jiejing_saas.operations_metering import sanitize_analytics_event  # noqa: E
 def main() -> int:
     analytics_js = (ROOT / "assets" / "jiejing-first-party-analytics.js").read_text(encoding="utf-8")
     app_js = (ROOT / "app.js").read_text(encoding="utf-8")
+    ops_js = (ROOT / "ops.js").read_text(encoding="utf-8")
     repository = (ROOT / "jiejing_saas" / "repository.py").read_text(encoding="utf-8")
 
     for marker in (
@@ -48,11 +49,15 @@ def main() -> int:
         'recordPerformance("success")',
         'recordPerformance("error")',
         "markAppShellReady",
+    ):
+        assert marker in app_js, marker
+
+    for marker in (
         "performance_analytics",
         "首屏体验 P75",
         "设置模块 P75",
     ):
-        assert marker in app_js, marker
+        assert marker in ops_js, marker
 
     clean = sanitize_analytics_event(
         {

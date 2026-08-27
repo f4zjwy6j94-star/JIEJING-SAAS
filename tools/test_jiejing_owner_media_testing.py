@@ -136,10 +136,10 @@ class OwnerMediaTestingContractTest(unittest.TestCase):
         self.assertNotIn("--ttl", completed.stdout)
         self.assertNotIn("--source", completed.stdout)
 
-    def test_settings_labels_owner_points_without_calling_them_purchased(self) -> None:
+    def test_private_owner_allowance_is_not_exposed_in_merchant_settings(self) -> None:
         frontend = (ROOT / "app.js").read_text(encoding="utf-8")
-        self.assertIn("account.owner_testing_points", frontend)
-        self.assertIn("内部测试额度", frontend)
+        self.assertNotIn("account.owner_testing_points", frontend)
+        self.assertNotIn("内部测试额度", frontend)
 
     def test_generic_media_reserve_cannot_consume_private_owner_allowance(self) -> None:
         safe_env = {

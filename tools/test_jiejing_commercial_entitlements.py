@@ -74,11 +74,11 @@ def main() -> int:
         return fail("backend media fingerprint must canonicalize reference-image order and internal preflight markers")
 
     plan_rows = {item["key"]: item for item in PLAN_CATALOG}
-    if list(plan_rows) != ["free", "starter", "operator", "team"]:
-        return fail(f"plan catalog should expose exactly four ordered plans: {list(plan_rows)}")
-    expected_prices = {"free": 0, "starter": 9900, "operator": 19900, "team": 29900}
-    expected_durations = {"free": 7, "starter": 30, "operator": 30, "team": 30}
-    expected_media_points = {"free": 0, "starter": 1000, "operator": 3000, "team": 0}
+    if list(plan_rows) != ["free", "starter", "operator"]:
+        return fail(f"plan catalog should expose exactly three ordered merchant plans: {list(plan_rows)}")
+    expected_prices = {"free": 0, "starter": 9900, "operator": 19900}
+    expected_durations = {"free": 7, "starter": 30, "operator": 30}
+    expected_media_points = {"free": 0, "starter": 1000, "operator": 3000}
     for key, amount_minor in expected_prices.items():
         if (
             plan_rows[key].get("amount_minor") != amount_minor

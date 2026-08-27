@@ -471,6 +471,9 @@
 
   function renderTraffic(detail) {
     const summary = detail.summary || {};
+    const performance = detail.performance || {};
+    const pageP75 = performance.page_load?.p75 || {};
+    const settingsP75 = performance.settings_module?.p75 || {};
     const headers = [
       { key: "page_key", label: "页面" },
       { key: "visitors", label: "访客", number: true, render: (r) => formatNumber(r.visitors) },
@@ -478,7 +481,7 @@
       { key: "page_views", label: "浏览", number: true, render: (r) => formatNumber(r.page_views) },
       { key: "signup_completed", label: "完成注册", number: true, render: (r) => formatNumber(r.signup_completed) },
     ];
-    return `<div class="ops-metrics">${metric("访客", formatNumber(summary.visitors), `${state.period} 天`)}${metric("会话", formatNumber(summary.sessions), "随机会话标识去重")}${metric("页面浏览", formatNumber(summary.page_views), "不存完整 URL")}${metric("访问转注册", `${Number(summary.visitor_to_signup_percent || 0).toFixed(1)}%`, "完成注册访客 / 访客")}</div>${detailPanel("页面表现", "只展示允许列表页面的聚合数据。", "", table(headers, detail.items || []), detail)}`;
+    return `<div class="ops-metrics">${metric("访客", formatNumber(summary.visitors), `${state.period} 天`)}${metric("会话", formatNumber(summary.sessions), "随机会话标识去重")}${metric("页面浏览", formatNumber(summary.page_views), "不存完整 URL")}${metric("访问转注册", `${Number(summary.visitor_to_signup_percent || 0).toFixed(1)}%`, "完成注册访客 / 访客")}${metric("首屏体验 P75", pageP75.lcp_ms == null ? "暂无样本" : `${formatNumber(pageP75.lcp_ms)} ms`, `${formatNumber(performance.page_load?.sample_count)} 个匿名样本`)}${metric("设置模块 P75", settingsP75.duration_ms == null ? "暂无样本" : `${formatNumber(settingsP75.duration_ms)} ms`, `${formatNumber(performance.settings_module?.sample_count)} 个匿名样本`)}</div>${detailPanel("页面表现", "只展示允许列表页面的聚合数据。", "", table(headers, detail.items || []), detail)}`;
   }
 
   function renderMerchants(detail) {

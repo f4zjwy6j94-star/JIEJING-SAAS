@@ -621,8 +621,8 @@ def main() -> int:
     if expired_snapshot.get("cost_total_minor") != 0 or expired_snapshot.get("cost_coverage_complete") is not True:
         return fail(f"24-hour cost window did not expire cleanly: {expired_snapshot}")
 
-    frontend = (ROOT / "app.js").read_text(encoding="utf-8")
-    for marker in ("访问趋势", "页面与转化", "saas-owner-traffic-trend", "saas-owner-traffic-pages"):
+    frontend = (ROOT / "ops.js").read_text(encoding="utf-8")
+    for marker in ("访客趋势", "页面表现", "ops-trend", "ops-table-wrap"):
         if marker not in frontend:
             return fail(f"owner traffic analytics UI marker is missing: {marker}")
 
@@ -644,40 +644,22 @@ def main() -> int:
             return fail(f"reliability duty endpoint is missing the no-external-action boundary: {owner_route}")
 
     app_js = (ROOT / "app.js").read_text(encoding="utf-8")
+    ops_js = (ROOT / "ops.js").read_text(encoding="utf-8")
     for marker in (
-        "saasOperationsOverview",
-        '"/owner/operations-overview"',
-        "function renderSaasOwnerOperationsOverviewPanel",
-        "renderSaasOwnerOperationsOverviewPanel(),",
-        "家已授权店铺",
-        "笔支付验收单",
-        "merchant_navigation_visible=false",
-        "当前计量正常",
-        "历史对话成本不可追溯",
-        "模型响应 P75",
-        "联网搜索 P75",
-        "素材生成 P75",
-        "可靠性告警",
-        "样本不足，继续采样",
-        "至少 5 次请求后判级",
-        "providerReliability.alerts",
-        "providerReliability.lifecycle",
-        "paymentReliability",
-        'reliabilityTone("payment")',
-        'reliabilityDetail(paymentReliability, "payment")',
-        "function reconcileSaasOwnerReliabilityAlerts",
-        "function acknowledgeSaasOwnerReliabilityAlert",
-        "内部可靠性值班",
-        "评估当前告警",
-        "没有触发支付、eBay 或供应商动作",
+        "function renderOverview",
+        "function renderReliability",
+        "owner/operations-overview?period_days=",
+        "待处理告警",
+        "系统可靠性",
+        "页面性能样本",
+        "供应商中性指标",
+        "不记录原始错误、查询或回复",
     ):
-        if marker not in app_js:
+        if marker not in ops_js:
             return fail(f"internal operations frontend is missing marker: {marker}")
-    owner_tab_start = app_js.index('id: "owner_ops"')
-    owner_tab_end = app_js.index("tabs.push", owner_tab_start + 20) if "tabs.push" in app_js[owner_tab_start + 20 :] else len(app_js)
-    owner_tab = app_js[owner_tab_start:owner_tab_end]
-    if "renderSaasOwnerOperationsOverviewPanel()," not in owner_tab:
-        return fail("operations overview is not confined to the internal owner tab")
+    for forbidden in ("/owner/operations-overview", "renderSaasOwnerOperationsOverviewPanel", 'id: "owner_ops"'):
+        if forbidden in app_js:
+            return fail(f"merchant workbench still exposes internal operations marker: {forbidden}")
 
     print("PASS jiejing_platform_operations_overview")
     return 0

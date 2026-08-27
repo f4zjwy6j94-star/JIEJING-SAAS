@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -493,13 +494,11 @@ def main() -> int:
         caddy_systemd = (ROOT / "deploy" / "Caddyfile.public-staging.systemd").read_text(encoding="utf-8")
         if "noindex,nofollow" not in ops_html or "/owner/auth/login" not in ops_js:
             return fail("operations frontend security markers are missing")
-        cache_version = "20260827-merchant-surface-ops-isolation-v1"
-        expected_versioned_assets = (
-            f"ops.css?v={cache_version}",
-            f"assets/jiejing-ops-panels.js?v={cache_version}",
-            f"ops.js?v={cache_version}",
+        cache_versions = re.findall(
+            r'(?:ops\.css|assets/jiejing-ops-panels\.js|ops\.js)\?v=([^"\s]+)',
+            ops_html,
         )
-        if any(asset not in ops_html for asset in expected_versioned_assets) or ops_html.count(cache_version) != 3:
+        if len(cache_versions) != 3 or len(set(cache_versions)) != 1:
             return fail("operations asset cache version must match exactly across CSS and both JS bundles")
         for marker in (
             'data-view="feedback">产品反馈',

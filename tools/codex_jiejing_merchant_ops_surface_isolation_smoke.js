@@ -13,6 +13,7 @@ const path = require("path");
 const root = path.resolve(__dirname, "..");
 const merchantFixtureBase = String(process.env.JIEJING_MERCHANT_FIXTURE_BASE || "").trim();
 const opsFixtureBase = String(process.env.JIEJING_OPS_FIXTURE_BASE || "").trim();
+const localStaticRoot = String(process.env.JIEJING_LOCAL_STATIC_ROOT || "").trim();
 
 const roleMatrix = Object.freeze([
   { surface: "app", role: "merchant", internalUi: false, internalRequests: false },
@@ -44,6 +45,55 @@ function read(relativePath, { optional = false } = {}) {
   const absolute = path.join(root, relativePath);
   if (optional && !fs.existsSync(absolute)) return "";
   return fs.readFileSync(absolute, "utf8");
+}
+
+function localFixtureFile(requestUrl, surface) {
+  if (!localStaticRoot) return "";
+  const parsed = new URL(requestUrl);
+  let pathname = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+  if (surface === "ops" && !pathname) pathname = "ops.html";
+  if (surface === "app" && !pathname) pathname = "app.html";
+  const allowed =
+    surface === "ops"
+      ? ["ops.html", "ops.css", "ops.js", "assets/jiejing-logo-mark.svg", "assets/jiejing-app-icon.svg", "assets/jiejing-ops-panels.js"]
+      : ["app.html", "app.js", "styles.css", "assets/jiejing-logo-mark.svg", "assets/jiejing-app-icon.svg", "assets/jiejing-settings-panels.js", "assets/jiejing-first-party-analytics.js"];
+  if (!allowed.includes(pathname)) return "";
+  const candidate = path.resolve(localStaticRoot, pathname);
+  const relative = path.relative(localStaticRoot, candidate);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return "";
+  return candidate;
+}
+
+function localFixtureContentType(filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === ".html") return "text/html; charset=utf-8";
+  if (extension === ".css") return "text/css; charset=utf-8";
+  if (extension === ".js") return "text/javascript; charset=utf-8";
+  if (extension === ".svg") return "image/svg+xml";
+  return "application/octet-stream";
+}
+
+async function createLocalMerchantSeed(merchantBase) {
+  if (!localStaticRoot) return null;
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const email = `codex-surface-isolation-${suffix}@local.invalid`;
+  const response = await fetch(`${merchantBase}/auth/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      email,
+      password: `Codex-surface-isolation-${suffix}`,
+      company_name: "Codex Surface Isolation",
+    }),
+  });
+  if (!response.ok) throw new Error(`local merchant fixture registration failed: ${response.status}`);
+  const payload = await response.json();
+  return {
+    token: payload.token,
+    email,
+    userId: payload.user?.user_id || "",
+    companyId: payload.company?.company_id || payload.user?.default_company_id || "",
+  };
 }
 
 function sourceWindow(source, startMarker, endMarker) {
@@ -397,6 +447,7 @@ function validatedFixtureOrigin(raw, label) {
 async function browserFixtureContract() {
   const merchantBase = validatedFixtureOrigin(merchantFixtureBase, "merchant fixture");
   const opsBase = validatedFixtureOrigin(opsFixtureBase, "ops fixture");
+  const merchantSeed = await createLocalMerchantSeed(merchantBase);
   const playwrightPath = path.join(root, "output", "codex-playwright-deps", "node_modules", "playwright-core");
   if (!fs.existsSync(playwrightPath)) throw new Error("explicit browser fixture requested but playwright-core is unavailable");
   const { chromium } = require(playwrightPath);
@@ -413,15 +464,119 @@ async function browserFixtureContract() {
         viewport: { width: 1366, height: 900 },
         extraHTTPHeaders: { "x-jiejing-fixture-role": matrixItem.role },
       });
+      if (merchantSeed && matrixItem.surface === "app") {
+        const parsedMerchantBase = new URL(merchantBase);
+        await context.addCookies([
+          {
+            name: "jiejing_saas_session",
+            value: merchantSeed.token,
+            domain: parsedMerchantBase.hostname,
+            path: "/",
+            httpOnly: true,
+            secure: parsedMerchantBase.protocol === "https:",
+            sameSite: "Lax",
+          },
+        ]);
+        await context.addInitScript(
+          (seed) => {
+            const accountKey = String(seed.userId || seed.email).toLowerCase();
+            localStorage.setItem("jiejing_saas_api_base", seed.base);
+            localStorage.setItem("jiejing_saas_backend_session_hint", "1");
+            localStorage.setItem("jiejing_saas_session_hint", "1");
+            localStorage.setItem("jiejing_saas_last_account", accountKey);
+            localStorage.setItem(`jiejing_saas_onboarding_done:${accountKey}`, "1");
+            localStorage.setItem(
+              "jiejing_saas_known_accounts",
+              JSON.stringify([
+                {
+                  account_key: accountKey,
+                  user_id: seed.userId,
+                  email: seed.email,
+                  company_id: seed.companyId,
+                  display_name: "Codex Surface Isolation",
+                  last_seen: new Date().toISOString(),
+                },
+              ]),
+            );
+            window.__JIEJING_FORCE_PUBLIC_MVP__ = true;
+          },
+          { ...merchantSeed, base: merchantBase },
+        );
+      }
+      if (localStaticRoot) {
+        await context.route(`${base}/**`, async (route) => {
+          const requestUrl = route.request().url();
+          const pathname = safePathname(requestUrl);
+          if (matrixItem.surface === "ops" && pathname === "/permissions/me") {
+            await route.fulfill({
+              status: 200,
+              contentType: "application/json; charset=utf-8",
+              body: JSON.stringify({
+                platform_internal_admin: matrixItem.role === "internal_admin",
+                role: matrixItem.role === "internal_admin" ? "admin" : "merchant",
+                secret_exposed: false,
+              }),
+            });
+            return;
+          }
+          if (matrixItem.surface === "ops" && pathname === "/owner/operations-overview") {
+            await route.fulfill({
+              status: matrixItem.role === "internal_admin" ? 200 : 403,
+              contentType: "application/json; charset=utf-8",
+              body: JSON.stringify({ operations_overview: { secret_exposed: false } }),
+            });
+            return;
+          }
+          if (pathname === "/owner/launch-control") {
+            const status = matrixItem.surface === "app" ? 404 : matrixItem.role === "internal_admin" ? 200 : 403;
+            await route.fulfill({
+              status,
+              contentType: "application/json; charset=utf-8",
+              body: JSON.stringify(status === 200 ? { launch_control: {} } : { error: status === 404 ? "not_found" : "forbidden" }),
+            });
+            return;
+          }
+          const filePath = localFixtureFile(requestUrl, matrixItem.surface);
+          if (filePath && fs.existsSync(filePath)) {
+            await route.fulfill({
+              status: 200,
+              contentType: localFixtureContentType(filePath),
+              headers: { "cache-control": "no-store" },
+              body: fs.readFileSync(filePath),
+            });
+            return;
+          }
+          if (matrixItem.surface === "ops") {
+            await route.fulfill({ status: 200, contentType: "application/json; charset=utf-8", body: "{}" });
+            return;
+          }
+          await route.continue();
+        });
+      }
       const page = await context.newPage();
       const requestedPaths = [];
       page.on("request", (request) => requestedPaths.push(safePathname(request.url())));
       const response = await page.goto(
         matrixItem.surface === "app" ? `${base}/app.html?start=app&view=connect` : `${base}/`,
-        { waitUntil: "networkidle", timeout: 45000 },
+        { waitUntil: "domcontentloaded", timeout: 45000 },
       );
+      if (matrixItem.surface === "app" && merchantSeed) {
+        await page.waitForFunction(
+          () => typeof setView === "function" && typeof state !== "undefined" && state.saasProtectedStateReady === true,
+          null,
+          { timeout: 45000 },
+        );
+        await page.evaluate(() => setView("connect"));
+        await page.waitForSelector("[data-saas-settings-tab]", { timeout: 45000 });
+      } else if (matrixItem.surface === "ops" && localStaticRoot) {
+        await page.waitForSelector(
+          matrixItem.role === "internal_admin" ? "#ops-app:not([hidden])" : "#ops-denied:not([hidden])",
+          { timeout: 45000 },
+        );
+      }
       const bodyText = await page.locator("body").innerText();
       const internalRequests = requestedPaths.filter(isInternalPath);
+      const missingInternalUiMarkers = internalUiMarkers.slice(2).filter((marker) => !bodyText.includes(marker));
       const directInternalStatus = await page.evaluate(async () => {
         const result = await fetch("/owner/launch-control", { cache: "no-store" });
         return result.status;
@@ -453,6 +608,7 @@ async function browserFixtureContract() {
         ok,
         internal_request_count: internalRequests.length,
         direct_internal_status: directInternalStatus,
+        missing_internal_ui_markers: matrixItem.surface === "ops" && matrixItem.role === "internal_admin" ? missingInternalUiMarkers : [],
       });
       await context.close();
     }
