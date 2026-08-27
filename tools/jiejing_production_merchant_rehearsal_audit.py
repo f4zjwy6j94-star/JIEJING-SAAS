@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 from typing import Any, Iterable
 
+from jiejing_saas.merchant_project_status import build_merchant_project_status
 from jiejing_saas.repository import SaaSRepository
 
 
@@ -75,6 +76,21 @@ def project_ids(payload: Any) -> list[str]:
     return values
 
 
+def project_identities(payload: Any) -> list[dict[str, str]]:
+    identities: list[dict[str, str]] = []
+    for key, value in walk(payload):
+        if key != "listing_project_identity" or not isinstance(value, dict):
+            continue
+        identity = {
+            "key": str(value.get("key") or "").strip(),
+            "source_report_id": str(value.get("source_report_id") or value.get("source_id") or "").strip(),
+            "candidate_id": str(value.get("candidate_id") or "").strip(),
+        }
+        if identity["key"] and identity not in identities:
+            identities.append(identity)
+    return identities
+
+
 def platform_errors(payload: Any) -> list[dict[str, Any]]:
     errors: list[dict[str, Any]] = []
     for key, value in walk(payload):
@@ -103,6 +119,37 @@ def marker_clause(columns: list[str]) -> tuple[str, list[str]]:
 
 def row_dict(row: Any) -> dict[str, Any]:
     return dict(row) if row is not None else {}
+
+
+class SnapshotRepository:
+    """In-memory repository view so project status derivation stays read-only."""
+
+    def __init__(self, *, tasks, reports, confirmations, executions, media):
+        self.tasks = tasks
+        self.reports = reports
+        self.confirmations = confirmations
+        self.executions = executions
+        self.media = media
+
+    def list_tasks(self, *, company_id, store_id=None, limit=None):
+        del company_id, store_id, limit
+        return self.tasks
+
+    def list_reports(self, *, company_id, task_id=None, limit=None):
+        del company_id, limit
+        return [item for item in self.reports if not task_id or item.get("task_id") == task_id]
+
+    def list_confirmations(self, *, company_id, status=None, limit=None):
+        del company_id, limit
+        return [item for item in self.confirmations if not status or item.get("status") == status]
+
+    def list_execution_results(self, *, company_id, limit=None):
+        del company_id, limit
+        return self.executions
+
+    def list_media_asset_jobs(self, *, company_id, store_id=None, status=None, limit=100):
+        del company_id, store_id, limit
+        return [item for item in self.media if not status or item.get("status") == status]
 
 
 def main() -> int:
@@ -244,6 +291,40 @@ def main() -> int:
             tuple([company_id, args.confirmation_id, *audit_marker_params]),
         ).fetchall()
 
+        snapshot_task_rows = conn.execute(
+            "select * from tasks where company_id = ? and store_id = ? order by created_at desc limit 500",
+            (company_id, store_id),
+        ).fetchall()
+        snapshot_report_rows = conn.execute(
+            """
+            select r.* from reports r join tasks t on t.task_id = r.task_id
+            where t.company_id = ? and t.store_id = ? order by r.created_at desc limit 500
+            """,
+            (company_id, store_id),
+        ).fetchall()
+        snapshot_confirmation_rows = conn.execute(
+            """
+            select * from confirmations where company_id = ? and store_id = ?
+            order by created_at desc limit 500
+            """,
+            (company_id, store_id),
+        ).fetchall()
+        snapshot_execution_rows = conn.execute(
+            """
+            select e.* from execution_results e
+            join confirmations c on c.confirmation_id = e.confirmation_id
+            where c.company_id = ? and c.store_id = ? order by e.created_at desc limit 500
+            """,
+            (company_id, store_id),
+        ).fetchall()
+        snapshot_media_rows = conn.execute(
+            """
+            select * from media_asset_jobs where company_id = ? and store_id = ?
+            order by created_at desc limit 200
+            """,
+            (company_id, store_id),
+        ).fetchall()
+
     task_summaries = []
     for row in related_tasks:
         item = row_dict(row)
@@ -265,6 +346,12 @@ def main() -> int:
     for row in reports:
         item = row_dict(row)
         payload = load_json(item.get("report_json"))
+        fact_packet = first_value(payload, {"merchant_product_fact_packet"})
+        fact_packet = fact_packet if isinstance(fact_packet, dict) else {}
+        confirmed_facts = fact_packet.get("merchant_confirmed_facts")
+        confirmed_facts = confirmed_facts if isinstance(confirmed_facts, dict) else {}
+        source_facts = fact_packet.get("source_confirmed_facts")
+        source_facts = source_facts if isinstance(source_facts, dict) else {}
         report_summaries.append(
             {
                 "report_id": item.get("report_id"),
@@ -275,6 +362,11 @@ def main() -> int:
                 "sku": first_value(payload, {"sku"}),
                 "offer_id": first_value(payload, {"offer_id"}),
                 "project_ids": project_ids(payload),
+                "project_identities": project_identities(payload),
+                "unknown_facts": fact_packet.get("unknown_facts") if isinstance(fact_packet.get("unknown_facts"), list) else [],
+                "blocked_by": fact_packet.get("blocked_by") if isinstance(fact_packet.get("blocked_by"), list) else [],
+                "confirmed_fact_keys": sorted(str(key) for key in confirmed_facts),
+                "source_fact_keys": sorted(str(key) for key in source_facts),
             }
         )
 
@@ -311,6 +403,7 @@ def main() -> int:
                 "provider": first_value(payload, {"provider"}),
                 "sku": first_value(payload, {"sku"}),
                 "project_ids": project_ids(payload),
+                "project_identities": project_identities(payload),
                 "output_count": len(outputs) if isinstance(outputs, list) else None,
                 "listing_use_status": first_value(payload, {"listing_use_status", "review_status"}),
                 "concept_only": first_value(payload, {"concept_only"}),
@@ -322,6 +415,35 @@ def main() -> int:
         credit_account["available_points"] = int(credit_account.get("balance_points") or 0) - int(
             credit_account.get("reserved_points") or 0
         )
+
+    project_id_values = project_ids(confirmation_json)
+    if not project_id_values:
+        for item in media_summaries:
+            project_id_values.extend(item.get("project_ids") or [])
+    current_project_id = next(iter(dict.fromkeys(project_id_values)), "")
+    has_account_restriction = any(
+        str(error.get("error_id") or "") == "25019"
+        for execution in execution_summaries
+        for error in execution.get("platform_errors") or []
+    )
+    snapshot_repository = SnapshotRepository(
+        tasks=[repository._task_row_to_dict(row) for row in snapshot_task_rows],
+        reports=[repository._report_row_to_dict(row) for row in snapshot_report_rows],
+        confirmations=[repository._confirmation_row_to_dict(row) for row in snapshot_confirmation_rows],
+        executions=[repository._execution_row_to_dict(row) for row in snapshot_execution_rows],
+        media=[repository._media_asset_job_row_to_dict(row) for row in snapshot_media_rows],
+    )
+    project_status = build_merchant_project_status(
+        repository=snapshot_repository,
+        company_id=company_id,
+        store_id=store_id,
+        project_id=current_project_id,
+        account_health=(
+            {"status": "restricted", "onboarding_stage": "account_review_required"}
+            if has_account_restriction
+            else {"status": "normal"}
+        ),
+    )
 
     result = {
         "ok": True,
@@ -358,6 +480,7 @@ def main() -> int:
             ],
         },
         "media_jobs": media_summaries,
+        "merchant_project_status": project_status,
         "model_usage": row_dict(model_usage),
         "provider_cost": row_dict(provider_cost),
         "media_credit_account": credit_account,

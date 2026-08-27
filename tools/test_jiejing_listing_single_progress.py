@@ -164,6 +164,14 @@ def media_job() -> dict[str, Any]:
     }
 
 
+def legacy_keyed_media_job(*, status: str = "approved_for_listing") -> dict[str, Any]:
+    item = media_job()
+    item["media_job_id"] = "media-incense-legacy-key"
+    item["status"] = status
+    item["job"] = {"listing_project_key": IDENTITY["key"]}
+    return item
+
+
 def draft_confirmation(identity: dict[str, str] = IDENTITY) -> dict[str, Any]:
     return {
         "confirmation_id": "confirm-incense-draft",
@@ -281,6 +289,17 @@ def main() -> None:
     assert facts_blocked["blocker"]["key"] == "product_facts_missing"
     assert facts_blocked["next_action"]["action"] == "complete_product_facts"
 
+    legacy_media_ready = build(
+        FixtureRepository(
+            tasks=[task()],
+            reports=[market_report(), fact_report(), listing_report()],
+            media=[legacy_keyed_media_job()],
+        )
+    )
+    assert_single_progress(legacy_media_ready)
+    assert legacy_media_ready["stages"][3]["status"] == "completed"
+    assert legacy_media_ready["current_stage"] == "ebay_draft"
+
     draft_saved = build(
         FixtureRepository(
             tasks=[task()],
@@ -315,6 +334,24 @@ def main() -> None:
     assert rework_approved["stages"][3]["status"] == "completed"
     assert rework_approved["current_stage"] == "publish"
     assert rework_approved["blocker"]["key"] != "media_review_or_generation_failed"
+
+    downstream_draft_closes_stale_prerequisites = build(
+        FixtureRepository(
+            tasks=[task()],
+            reports=[market_report(), fact_report(unknown=["package_weight_g", "selling_price"]), listing_report()],
+            media=[legacy_keyed_media_job(status="needs_rework")],
+            confirmations=[draft_confirmation()],
+            executions=[draft_execution()],
+        )
+    )
+    assert_single_progress(downstream_draft_closes_stale_prerequisites)
+    assert downstream_draft_closes_stale_prerequisites["current_stage"] == "publish"
+    assert all(
+        stage["status"] == "completed"
+        for stage in downstream_draft_closes_stale_prerequisites["stages"][:6]
+    )
+    assert downstream_draft_closes_stale_prerequisites["blocker"]["key"] != "product_facts_missing"
+    assert downstream_draft_closes_stale_prerequisites["blocker"]["key"] != "media_review_or_generation_failed"
 
     restricted = build(
         FixtureRepository(

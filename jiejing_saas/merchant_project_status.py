@@ -168,7 +168,8 @@ def build_merchant_project_status(
     draft_ready = draft_execution is not None
     publish_ready = publish_execution is not None
 
-    if draft_ready:
+    downstream_platform_ready = draft_ready or publish_ready
+    if downstream_platform_ready:
         platform = _platform_result(draft_execution)
         offer_id = _safe_identifier(platform.get("offer_id"), limit=80) or offer_id
         sku = _safe_identifier(platform.get("sku"), limit=100) or sku
@@ -188,6 +189,13 @@ def build_merchant_project_status(
         "publish": "completed" if publish_ready else "waiting",
         "records": "completed" if publish_ready else "waiting",
     }
+    if draft_ready:
+        # A project-bound, successfully saved eBay draft is stronger evidence
+        # than stale prerequisite snapshots created earlier in the workflow.
+        # Preserve those snapshots in audit history, but keep merchant progress
+        # monotonic after the platform has accepted the unpublished Offer.
+        for completed_stage in ("intake", "research", "facts", "media", "listing", "ebay_draft"):
+            stage_statuses[completed_stage] = "completed"
 
     blocker = _blocker("none", "当前没有新增阻断", "按下一步继续。")
     current_stage = _first_incomplete_stage(stage_statuses)
@@ -222,7 +230,7 @@ def build_merchant_project_status(
         )
         next_action = _next_action("open_listing_project", "打开商品项目", "product")
         overall_status = "blocked"
-    elif latest_fact_report and (unknown_facts or fact_blockers):
+    elif not downstream_platform_ready and latest_fact_report and (unknown_facts or fact_blockers):
         current_stage = "facts"
         blocker = _blocker(
             "product_facts_missing",
@@ -231,7 +239,7 @@ def build_merchant_project_status(
         )
         next_action = _next_action("complete_product_facts", "补齐商品资料", "product")
         overall_status = "blocked"
-    elif media_failed:
+    elif not downstream_platform_ready and media_failed:
         current_stage = "media"
         blocker = _blocker(
             "media_review_or_generation_failed",
@@ -261,8 +269,24 @@ def build_merchant_project_status(
     stage_details = {
         "intake": "商品项目已锁定" if matching_tasks else "等待商品项目记录",
         "research": "市场调研已归档" if research_ready else "等待市场调研",
-        "facts": "商品事实已补齐" if facts_ready else f"{len(unknown_facts) or len(fact_blockers)} 项待补" if latest_fact_report else "等待商品事实",
-        "media": "素材已通过商家审核" if media_ready else "当前素材需要处理" if media_failed else "等待素材生成与审核",
+        "facts": (
+            "商品事实已补齐"
+            if facts_ready
+            else "未发布草稿已保存，早期事实快照保留在记录中"
+            if downstream_platform_ready
+            else f"{len(unknown_facts) or len(fact_blockers)} 项待补"
+            if latest_fact_report
+            else "等待商品事实"
+        ),
+        "media": (
+            "素材已通过商家审核"
+            if media_ready
+            else "未发布草稿已保存，早期素材版本保留在记录中"
+            if downstream_platform_ready
+            else "当前素材需要处理"
+            if media_failed
+            else "等待素材生成与审核"
+        ),
         "listing": "Listing 草稿已形成" if listing_ready else "等待 Listing 草稿",
         "ebay_draft": f"未发布 Offer {offer_id} 已保存" if draft_ready and offer_id else "等待保存未发布草稿",
         "publish": f"eBay Listing {listing_id} 已发布" if publish_ready and listing_id else "等待正式发布",
@@ -356,6 +380,20 @@ def _artifact_identity(item: Any) -> dict[str, str]:
         identity = _normalize_identity(candidate)
         if identity:
             return identity
+    legacy_keys = [
+        item.get("listing_project_key"),
+        _nested(item, "input", "listing_project_key"),
+        _nested(item, "output", "listing_project_key"),
+        _nested(item, "report", "listing_project_key"),
+        _nested(item, "item", "listing_project_key"),
+        _nested(item, "job", "listing_project_key"),
+        _nested(item, "job", "job_spec", "listing_project_key"),
+        _nested(item, "job", "job_spec", "inputs", "product_facts", "listing_project_key"),
+    ]
+    for candidate in legacy_keys:
+        key = _safe_identifier(candidate, limit=160)
+        if key:
+            return {"key": key, "source_report_id": "", "candidate_id": ""}
     return {}
 
 
@@ -389,7 +427,7 @@ def _identity_matches(identity: dict[str, str], canonical: dict[str, str]) -> bo
     if not identity or identity.get("key") != canonical.get("key"):
         return False
     return all(
-        not canonical.get(field) or identity.get(field) == canonical.get(field)
+        not canonical.get(field) or not identity.get(field) or identity.get(field) == canonical.get(field)
         for field in ("source_report_id", "candidate_id")
     )
 
