@@ -30799,6 +30799,127 @@ body.saas-public-mvp .saas-listing-v2-field textarea {
   resize: vertical;
 }
 
+body.saas-public-mvp .saas-merchant-project-status-strip {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.85fr) minmax(360px, 1.5fr) minmax(220px, 0.9fr);
+  gap: 16px;
+  align-items: center;
+  margin: 0 0 16px;
+  padding: 16px;
+  border: 1px solid #d9e5df;
+  border-left: 4px solid #6f8f85;
+  border-radius: 10px;
+  background: #fffefa;
+  box-shadow: 0 10px 28px rgba(15, 44, 38, 0.05);
+}
+
+body.saas-public-mvp .saas-merchant-project-status-strip.is-green {
+  border-left-color: #188175;
+}
+
+body.saas-public-mvp .saas-merchant-project-status-strip.is-amber {
+  border-left-color: #bd7a19;
+}
+
+body.saas-public-mvp .saas-merchant-project-status-main,
+body.saas-public-mvp .saas-merchant-project-decision {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+body.saas-public-mvp .saas-merchant-project-status-main {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+}
+
+body.saas-public-mvp .saas-merchant-project-status-main strong,
+body.saas-public-mvp .saas-merchant-project-decision strong {
+  color: #10231f;
+  font-size: 15px;
+}
+
+body.saas-public-mvp .saas-merchant-project-status-main p,
+body.saas-public-mvp .saas-merchant-project-decision p {
+  margin: 0;
+  color: #65726e;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+body.saas-public-mvp .saas-merchant-project-stages {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+body.saas-public-mvp .saas-merchant-project-stages li {
+  min-width: 0;
+  padding: 7px 4px;
+  border: 1px solid #e5ebe7;
+  border-radius: 7px;
+  color: #78837f;
+  background: #f8faf8;
+  text-align: center;
+  font-size: 11px;
+}
+
+body.saas-public-mvp .saas-merchant-project-stages li.is-completed {
+  border-color: #bcd8ce;
+  color: #176c62;
+  background: #f0f8f4;
+}
+
+body.saas-public-mvp .saas-merchant-project-stages li.is-current {
+  outline: 2px solid rgba(24, 129, 117, 0.22);
+  outline-offset: 1px;
+  font-weight: 700;
+}
+
+body.saas-public-mvp .saas-merchant-project-stages li.is-blocked {
+  border-color: #e2c59c;
+  color: #8a5915;
+  background: #fff8ed;
+}
+
+body.saas-public-mvp .saas-merchant-project-decision > span {
+  color: #65726e;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+body.saas-public-mvp .saas-merchant-project-decision .primary-action {
+  justify-self: start;
+}
+
+@media (max-width: 1050px) {
+  body.saas-public-mvp .saas-merchant-project-status-strip {
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 0.75fr);
+  }
+
+  body.saas-public-mvp .saas-merchant-project-stages {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
+@media (max-width: 700px) {
+  body.saas-public-mvp .saas-merchant-project-status-strip {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    padding: 13px;
+  }
+
+  body.saas-public-mvp .saas-merchant-project-stages {
+    grid-column: auto;
+    grid-row: auto;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
 /* AI CEO merchant product image intake. */
 body.saas-public-mvp[data-view="cockpit"] .saas-ai-ceo-attachment-input {
   position: fixed;

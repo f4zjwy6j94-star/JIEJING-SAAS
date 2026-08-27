@@ -664,6 +664,50 @@ def main() -> int:
         if not store_id:
             return fail("store creation should return store_id")
 
+        missing_project_status, _ = fetch_json_expect_error(
+            f"{base_url}/stores/{store_id}/merchant-project-status",
+            token=token,
+        )
+        if missing_project_status != 400:
+            return fail("merchant project status must require an opaque project_id")
+        project_snapshot = fetch_json(
+            f"{base_url}/stores/{store_id}/merchant-project-status?project_id=project-empty-contract",
+            token=token,
+        ).get("merchant_project_status", {})
+        if project_snapshot.get("snapshot_version") != "merchant_project_status_v1":
+            return fail("merchant project status endpoint must return the versioned merchant snapshot")
+        if project_snapshot.get("blocker", {}).get("key") != "project_evidence_missing":
+            return fail("unknown project must stay honestly blocked instead of borrowing global evidence")
+        if sum(1 for item in project_snapshot.get("stages", []) if item.get("is_current")) != 1:
+            return fail("merchant project status must expose exactly one current stage")
+        if project_snapshot.get("secret_exposed") is not False:
+            return fail("merchant project status must keep secrets behind the backend boundary")
+
+        isolation_owner = post_json(
+            f"{base_url}/auth/register",
+            {
+                "email": "merchant-project-isolation@example.com",
+                "password": "local-test-password",
+                "company_name": "Merchant Project Isolation Company",
+            },
+        )
+        other_company_store = post_json(
+            f"{base_url}/stores",
+            {
+                "platform": "ebay",
+                "store_name": "operator-private-store",
+                "marketplace": "EBAY_US",
+                "stage": "store_opened",
+            },
+            token=isolation_owner["token"],
+        ).get("store", {})
+        cross_tenant_status, _ = fetch_json_expect_error(
+            f"{base_url}/stores/{other_company_store.get('store_id')}/merchant-project-status?project_id=project-cross-tenant",
+            token=token,
+        )
+        if cross_tenant_status != 404:
+            return fail("merchant project status must reject stores from another company")
+
         source_plan = post_json(
             f"{base_url}/stores/{store_id}/platforms/1688/connection-plan",
             {"connection_mode": "link_import"},

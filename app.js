@@ -170,6 +170,7 @@ const state = {
   saasOperationalHealth: null,
   saasProviderJobContracts: null,
   saasMediaCapabilities: null,
+  saasMerchantProjectStatus: null,
   saasVaultAdapters: null,
   saasVaultClient: null,
   saasEbayFieldContracts: null,
@@ -14863,6 +14864,10 @@ function buildSaasProtectedStateSnapshot() {
     },
     account_health: state.saasAccountHealth || null,
     merchant_onboarding: state.saasMerchantOnboarding || null,
+    merchant_project_status:
+      state.saasMerchantProjectStatus?.snapshot_version === "merchant_project_status_v1"
+        ? state.saasMerchantProjectStatus
+        : null,
     last_ceo_command: state.saasLastCeoCommand || null,
   };
 }
@@ -14945,6 +14950,10 @@ function hydrateSaasProtectedStateFromCache() {
     state.saasModelSettings = snapshot.model_settings || state.saasModelSettings || null;
     state.saasAccountHealth = snapshot.account_health || state.saasAccountHealth || null;
     state.saasMerchantOnboarding = snapshot.merchant_onboarding || state.saasMerchantOnboarding || null;
+    state.saasMerchantProjectStatus =
+      snapshot.merchant_project_status?.snapshot_version === "merchant_project_status_v1"
+        ? snapshot.merchant_project_status
+        : null;
     state.saasLastCeoCommand = null;
     state.saasAiCeoThread = [];
     state.saasAiCeoVisibleTurnLimit = 12;
@@ -15275,6 +15284,7 @@ function resetSaasProtectedWorkbenchState() {
   state.saasQueueHealth = null;
   state.saasProviderJobContracts = null;
   state.saasMediaCapabilities = null;
+  state.saasMerchantProjectStatus = null;
   state.saasPreflightResults = [];
   state.saasLastPublishReadiness = null;
   state.saasLastPublishRecovery = null;
@@ -25777,6 +25787,103 @@ function merchantSafeSaasOAuthRequests(records) {
   return (Array.isArray(records) ? records : []).map(merchantSafeSaasOAuthRequest).filter(Boolean);
 }
 
+function saasMerchantProjectRouteId() {
+  try {
+    const value = String(new URLSearchParams(window.location.search).get("project") || "").trim();
+    return /^[A-Za-z0-9._:-]{1,160}$/.test(value) ? value : "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function saasCurrentMerchantProjectId() {
+  const draftIdentity = saasCurrentListingProjectIdentity(state.saasListingComposerDraft);
+  const draftProjectId = String(draftIdentity?.key || "").trim();
+  if (/^[A-Za-z0-9._:-]{1,160}$/.test(draftProjectId)) return draftProjectId;
+  const routeProjectId = saasMerchantProjectRouteId();
+  if (routeProjectId) return routeProjectId;
+  const snapshotProjectId = String(state.saasMerchantProjectStatus?.project?.project_id || "").trim();
+  return /^[A-Za-z0-9._:-]{1,160}$/.test(snapshotProjectId) ? snapshotProjectId : "";
+}
+
+async function refreshSaasMerchantProjectStatus(options = {}) {
+  const store = options.store || activeSaasStore();
+  const projectId = String(options.projectId || saasCurrentMerchantProjectId() || "").trim();
+  if (!store?.store_id || !/^[A-Za-z0-9._:-]{1,160}$/.test(projectId)) {
+    state.saasMerchantProjectStatus = null;
+    return null;
+  }
+  const payload = await optionalSaasFetchFast(
+    `/stores/${encodeURIComponent(store.store_id)}/merchant-project-status?project_id=${encodeURIComponent(projectId)}`,
+    { merchant_project_status: null },
+    10000,
+  );
+  const snapshot = payload?.merchant_project_status;
+  state.saasMerchantProjectStatus = snapshot?.snapshot_version === "merchant_project_status_v1" ? snapshot : null;
+  return state.saasMerchantProjectStatus;
+}
+
+function syncSaasProjectRoute(view = state.view || "cockpit") {
+  if (!isSaasPublicMvpMode() || !isProtectedSaasAppRoute()) return false;
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("start", "app");
+    url.searchParams.set("view", normalizeSaasProtectedView(view));
+    const projectId = saasCurrentMerchantProjectId();
+    if (projectId) url.searchParams.set("project", projectId);
+    else url.searchParams.delete("project");
+    window.history.replaceState(window.history.state, "", url.toString());
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function renderSaasMerchantProjectStatusStrip(snapshot = state.saasMerchantProjectStatus) {
+  if (!snapshot || snapshot.snapshot_version !== "merchant_project_status_v1") return "";
+  const stages = Array.isArray(snapshot.stages) ? snapshot.stages : [];
+  const current = stages.find((stage) => stage?.is_current) || stages.find((stage) => stage?.key === snapshot.current_stage) || {};
+  const blocker = snapshot.blocker && typeof snapshot.blocker === "object" ? snapshot.blocker : {};
+  const nextAction = snapshot.next_action && typeof snapshot.next_action === "object" ? snapshot.next_action : {};
+  const project = snapshot.project && typeof snapshot.project === "object" ? snapshot.project : {};
+  const blockerActive = String(blocker.key || "none") !== "none";
+  const tone = snapshot.overall_status === "published" ? "green" : blockerActive ? "amber" : "neutral";
+  const projectLabel = project.product_name || project.sku || "当前商品项目";
+  return `
+    <section class="saas-merchant-project-status-strip is-${escapeHtml(tone)}" data-merchant-project-status="merchant_project_status_v1" aria-label="当前商品项目进度">
+      <div class="saas-merchant-project-status-main">
+        <span class="pill ${escapeHtml(tone)}">${escapeHtml(current.label || "资料")}</span>
+        <div>
+          <strong>${escapeHtml(projectLabel)}</strong>
+          <p>${escapeHtml(current.detail || "等待当前项目证据")}</p>
+        </div>
+      </div>
+      <ol class="saas-merchant-project-stages" aria-label="八步项目进度">
+        ${stages
+          .map(
+            (stage) => `<li class="is-${escapeHtml(stage.status || "waiting")} ${stage.is_current ? "is-current" : ""}"><span>${escapeHtml(stage.label || stage.key || "")}</span></li>`,
+          )
+          .join("")}
+      </ol>
+      <div class="saas-merchant-project-decision">
+        <span>${blockerActive ? "当前阻断" : "下一步"}</span>
+        <strong>${escapeHtml(blockerActive ? blocker.title || "需要处理" : nextAction.label || "继续当前项目")}</strong>
+        <p>${escapeHtml(blockerActive ? blocker.detail || "" : "所有页面都按同一后端项目状态继续。")}</p>
+        <button class="primary-action compact-action" type="button" data-global-flow-view="${escapeHtml(nextAction.view || "product")}">${escapeHtml(nextAction.label || "继续")}</button>
+      </div>
+    </section>
+  `;
+}
+
+function mountSaasMerchantProjectStatusStrip(viewId = state.view || "") {
+  if (!isSaasPublicMvpMode() || !["cockpit", "product", "media", "confirm", "activity"].includes(viewId)) return;
+  const view = document.querySelector(`#view-${viewId}`);
+  if (!view) return;
+  view.querySelectorAll(":scope > .saas-merchant-project-status-strip").forEach((node) => node.remove());
+  const markup = renderSaasMerchantProjectStatusStrip();
+  if (markup) insertJiejingTrustedHtml(view, "afterbegin", trustedJiejingHtml(markup, "merchant.project_status"));
+}
+
 async function refreshSaasState(options = {}) {
   const { silent = false } = options;
   const refreshGeneration = ++saasStateRefreshGeneration;
@@ -26123,6 +26230,8 @@ async function refreshSaasState(options = {}) {
     state.saasMerchantMemory = merchantMemory.merchant_memory || [];
     state.saasExecutionResults = executions.execution_results || state.saasExecutionResults || [];
     state.saasAuditLogs = audit.audit_logs || state.saasAuditLogs || [];
+    await refreshSaasMerchantProjectStatus({ store: refreshedActiveStore || store });
+    if (!isCurrentRefresh()) return;
     state.saasProtectedStateReady = true;
     state.saasProtectedStateFromCache = false;
     state.saasProtectedStateCachedAt = "";
@@ -26192,6 +26301,7 @@ async function refreshSaasState(options = {}) {
     state.saasProviderJobContracts = null;
     state.saasLastPublicSearchHandoff = null;
     state.saasMediaCapabilities = null;
+    state.saasMerchantProjectStatus = null;
     state.saasPreflightResults = [];
     state.saasEbayFieldContracts = null;
     state.saasEbayLiveAdapter = null;
@@ -32856,6 +32966,7 @@ function setView(nextView, options = {}) {
   if (!options.preserveFlowKey) state.activeFlowKey = "";
   state.view = nextView;
   state.pageState = "normal";
+  syncSaasProjectRoute(nextView);
   document.body.dataset.view = nextView;
   document.documentElement.dataset.view = nextView;
   views.forEach((view) => view.classList.toggle("is-active", view.id === `view-${nextView}`));
@@ -32891,6 +33002,7 @@ function setView(nextView, options = {}) {
     }
   }
   if (nextView === "connect") renderConnect();
+  mountSaasMerchantProjectStatusStrip(nextView);
   updateOverlay();
   renderWorkflowFeedbackWidget();
 }

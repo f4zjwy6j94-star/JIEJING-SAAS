@@ -139,6 +139,7 @@ from .product_vision import (
     fal_product_vision_client_from_env,
     product_vision_prompt_context,
 )
+from .merchant_project_status import build_merchant_project_status
 from .operational_health import build_operational_health
 from .owner_launch_control import build_owner_launch_control
 from .platform_model_status import platform_default_serving_model, platform_model_for_tier
@@ -3013,6 +3014,34 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         self.repository,
                         company_id=identity["company_id"],
                         store_id=store_id,
+                    )
+                }
+            )
+            return
+
+        if len(parts) == 3 and parts[0] == "stores" and parts[2] == "merchant-project-status":
+            store_id = parts[1]
+            store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=store_id)
+            if not store:
+                self._send_error(HTTPStatus.NOT_FOUND, "store not found or not accessible")
+                return
+            project_id = str(query.get("project_id", [""])[0] or "").strip()
+            if not project_id:
+                self._send_error(HTTPStatus.BAD_REQUEST, "project_id is required")
+                return
+            account_health = build_account_health_snapshot(
+                self.repository,
+                company_id=identity["company_id"],
+                store_id=store_id,
+            )
+            self._send_json(
+                {
+                    "merchant_project_status": build_merchant_project_status(
+                        repository=self.repository,
+                        company_id=identity["company_id"],
+                        store_id=store_id,
+                        project_id=project_id,
+                        account_health=account_health,
                     )
                 }
             )
