@@ -9413,7 +9413,16 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 confirmed_at=confirmation["decided_at"] if confirmation["status"] == "approved" else None,
                 idempotency_key=str(body.get("idempotency_key") or ""),
             )
-            preflight = ExecutionService(demo_mode=True).preflight(execution_request)
+            general_preflight = ExecutionService(demo_mode=True).preflight(execution_request)
+            controlled_existing_draft_publish = _is_controlled_existing_draft_publish_confirmation(confirmation)
+            preflight = (
+                _controlled_existing_draft_publish_preflight(
+                    execution_request,
+                    require_confirmation=confirmation["status"] == "approved",
+                )
+                if controlled_existing_draft_publish
+                else general_preflight
+            )
             store = self.repository.get_store_for_company(company_id=identity["company_id"], store_id=confirmation["store_id"]) or {}
             publish_recovery = self.ebay_write_adapter_factory(self.settings).inspect_publish_state(
                 request=execution_request,
@@ -9451,7 +9460,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 else {}
             )
             if (
-                _is_controlled_existing_draft_publish_confirmation(confirmation)
+                controlled_existing_draft_publish
                 and str(confirmation.get("status") or "") == EXTERNAL_EXECUTION_PROCESSING_STATUS
                 and publish_recovery.get("safe_to_request_fresh_confirmation") is True
                 and publish_recovery.get("safe_to_retry_publish") is False
@@ -9486,11 +9495,18 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             self._send_json(
                 {
                     "publish_recovery": publish_recovery,
-                    "publish_readiness": build_publish_readiness(
-                        payload,
-                        preflight=preflight,
-                        latest_execution_results=latest_execution_results,
-                        recent_confirmations=recent_confirmations,
+                    "publish_readiness": (
+                        _controlled_existing_draft_publish_readiness(
+                            preflight=preflight,
+                            general_preflight=general_preflight,
+                        )
+                        if controlled_existing_draft_publish
+                        else build_publish_readiness(
+                            payload,
+                            preflight=preflight,
+                            latest_execution_results=latest_execution_results,
+                            recent_confirmations=recent_confirmations,
+                        )
                     ),
                     "confirmation": confirmation,
                     "fresh_confirmation_required": fresh_confirmation_required,

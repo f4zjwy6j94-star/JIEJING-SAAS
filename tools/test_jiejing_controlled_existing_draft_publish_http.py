@@ -413,6 +413,8 @@ def main() -> int:
                 and recovery.get("fresh_confirmation_required") is True
                 and recovery.get("publish_recovery", {}).get("safe_to_request_fresh_confirmation") is True
                 and recovery.get("confirmation", {}).get("status") == "needs_revision"
+                and recovery.get("publish_readiness", {}).get("status") == "ready_for_confirmation"
+                and recovery.get("publish_readiness", {}).get("ready_for_confirmation") is True
                 and FakeExactPublishAdapter.recovery_call_count == 1
             ):
                 raise AssertionError(f"verified exact unpublished Offer must retire the uncertain confirmation: {recovery_status} {recovery}")
@@ -465,6 +467,8 @@ def main() -> int:
                 and recorded_recovery.get("fresh_confirmation_required") is True
                 and recorded_recovery.get("publish_recovery", {}).get("safe_to_request_fresh_confirmation") is True
                 and recorded_recovery.get("confirmation", {}).get("status") == "needs_revision"
+                and recorded_recovery.get("publish_readiness", {}).get("status") == "ready_for_confirmation"
+                and recorded_recovery.get("publish_readiness", {}).get("ready_for_confirmation") is True
             ):
                 raise AssertionError(
                     "official proof that a rejected publish created no Listing must retire the consumed confirmation: "
