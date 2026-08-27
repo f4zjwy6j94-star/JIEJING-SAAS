@@ -377,6 +377,38 @@ def main() -> int:
     if env_path.read_text(encoding="utf-8") != before_unconfirmed_alarm_apply:
         return fail("unconfirmed provider alarm apply must not modify the private env")
 
+    before_unconfirmed_alarm_verification = env_path.read_text(encoding="utf-8")
+    unconfirmed_alarm_verification = subprocess.run(
+        [
+            sys.executable,
+            str(TOOL),
+            "--env-file",
+            str(env_path),
+            "--verify-provider-alarms",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if unconfirmed_alarm_verification.returncode == 0:
+        return fail("provider alarm verification evidence write must require --apply")
+    try:
+        unconfirmed_verification_payload = json.loads(unconfirmed_alarm_verification.stdout)
+    except json.JSONDecodeError:
+        return fail("unconfirmed provider alarm verification must return a safe structured blocker")
+    if unconfirmed_verification_payload != {
+        "status": "blocked",
+        "blockers": ["provider_alarm_verification_apply_confirmation_missing"],
+        "secret_exposed": False,
+    }:
+        return fail(
+            "unconfirmed provider alarm verification returned an unsafe blocker: "
+            f"{unconfirmed_verification_payload}"
+        )
+    if env_path.read_text(encoding="utf-8") != before_unconfirmed_alarm_verification:
+        return fail("unconfirmed provider alarm verification must not modify the private env")
+
     before_unconfirmed_index_apply = env_path.read_text(encoding="utf-8")
     unconfirmed_index_apply = subprocess.run(
         [

@@ -72,6 +72,8 @@ EVIDENCE_FIELDS = {
     "JIEJING_CLS_LIVE_PROBE_LAST_AT",
     "JIEJING_CLS_INGESTION_LIVE_PROBE_PASSED",
     "JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT",
+    "JIEJING_PROVIDER_LATENCY_ALARM_VERIFIED_AT",
+    "JIEJING_PROVIDER_COST_ALARM_VERIFIED_AT",
 }
 
 path = Path(sys.argv[1])
@@ -142,6 +144,62 @@ elif contract == "cls":
         and payload.get("event_field_count") == 12
         and payload.get("event_allowlist_exact") is True
         and payload.get("notification_test_sent") is False
+        and payload.get("resource_ids_exposed") is False
+    )
+elif contract == "alarm":
+    index = payload.get("index") or {}
+    alarms = payload.get("alarms") or []
+    verified = (
+        common
+        and set(payload) == {
+            "status",
+            "mode",
+            "index",
+            "alarms",
+            "blockers",
+            "cloud_write_performed",
+            "alarm_readback_verified",
+            "notification_test_sent",
+            "index_modified",
+            "resource_ids_exposed",
+            "secret_exposed",
+            "verification_evidence_recorded",
+        }
+        and payload.get("mode") == "verify"
+        and set(index) == {
+            "ready",
+            "enabled",
+            "fulltext_enabled",
+            "required_key_count",
+            "configured_required_key_count",
+            "missing_keys",
+            "modified",
+        }
+        and index.get("ready") is True
+        and index.get("enabled") is True
+        and type(index.get("fulltext_enabled")) is bool
+        and type(index.get("required_key_count")) is int
+        and index.get("required_key_count") > 0
+        and index.get("configured_required_key_count") == index.get("required_key_count")
+        and index.get("missing_keys") == []
+        and index.get("modified") is False
+        and isinstance(alarms, list)
+        and len(alarms) == 2
+        and {item.get("key") for item in alarms if isinstance(item, dict)} == {"latency", "cost"}
+        and all(
+            set(item) == {"key", "action", "match_count", "readback_ready", "drift_field_count"}
+            and item.get("action") == "noop"
+            and item.get("match_count") == 1
+            and item.get("readback_ready") is True
+            and item.get("drift_field_count") == 0
+            for item in alarms
+            if isinstance(item, dict)
+        )
+        and payload.get("blockers") == []
+        and payload.get("cloud_write_performed") is False
+        and payload.get("alarm_readback_verified") is True
+        and payload.get("notification_test_sent") is False
+        and payload.get("index_modified") is False
         and payload.get("resource_ids_exposed") is False
     )
 else:
@@ -888,7 +946,35 @@ run_cos_probe() {
 }
 
 run_cls_probe() {
-  local cls_output env_digest_after
+  local alarm_output cls_output env_digest_after
+  alarm_output="$(docker run --rm --network bridge \
+    --mount "type=bind,src=$private_dir,dst=/private" \
+    -w /app "$runtime_api_image_id" python tools/jiejing_configure_tencent_runtime_env.py \
+    --env-file /private/jiejing-saas.production.env \
+    --verify-provider-alarms --apply 2>/dev/null)" || {
+    LAST_BLOCKER="provider_alarm_readback_failed"
+    return 2
+  }
+  if ! json_contract_verified alarm <<<"$alarm_output" >/dev/null 2>&1; then
+    unset alarm_output
+    LAST_BLOCKER="provider_alarm_readback_contract_rejected"
+    return 2
+  fi
+  unset alarm_output
+  if ! trusted_private_file "$APP_ENV"; then
+    LAST_BLOCKER="private_env_permissions_untrusted"
+    return 2
+  fi
+  env_digest_after="$(evidence_excluded_env_digest "$APP_ENV")" || {
+    LAST_BLOCKER="private_env_digest_failed"
+    return 2
+  }
+  if [[ "$env_digest_after" != "$env_digest_before" ]]; then
+    LAST_BLOCKER="environment_drift_detected"
+    return 2
+  fi
+  printf '%s\n' "PROVIDER_ALARM_STATUS=verified"
+
   cls_output="$(docker run --rm --network bridge \
     --mount "type=bind,src=$private_dir,dst=/private" \
     -w /app "$runtime_api_image_id" python tools/jiejing_configure_tencent_runtime_env.py \

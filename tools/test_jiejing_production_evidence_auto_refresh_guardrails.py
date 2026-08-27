@@ -598,7 +598,7 @@ def run_runtime_image_fixture(
             [[ "$runtime_api_image_id" != "$runtime_worker_image_id" ]]
             run_cos_probe
             run_cls_probe
-            [[ "$(<"$fixture_root/probe-images")" == $'api\napi' ]]
+            [[ "$(<"$fixture_root/probe-images")" == $'api\napi\napi' ]]
             recreate_api
             verify_recreated_api
             recreate_worker
@@ -770,6 +770,8 @@ def main() -> int:
         '"JIEJING_CLS_LIVE_PROBE_LAST_AT"',
         '"JIEJING_CLS_INGESTION_LIVE_PROBE_PASSED"',
         '"JIEJING_CLS_INGESTION_LIVE_PROBE_LAST_AT"',
+        '"JIEJING_PROVIDER_LATENCY_ALARM_VERIFIED_AT"',
+        '"JIEJING_PROVIDER_COST_ALARM_VERIFIED_AT"',
         'env_digest_before="$(evidence_excluded_env_digest "$APP_ENV")"',
         'env_digest_after="$(evidence_excluded_env_digest "$APP_ENV")"',
         '[[ "$env_digest_after" != "$env_digest_before" ]]',
@@ -781,6 +783,10 @@ def main() -> int:
         'payload.get("probe_verified") is True',
         'payload.get("verification_evidence_recorded") is True',
         'COS_PROBE_STATUS=verified',
+        "--verify-provider-alarms --apply",
+        'payload.get("alarm_readback_verified") is True',
+        'payload.get("cloud_write_performed") is False',
+        'PROVIDER_ALARM_STATUS=verified',
         "--verify-provider-cls-probe --apply",
         'payload.get("probe_uploaded") is True',
         'payload.get("probe_searchable") is True',
@@ -876,6 +882,16 @@ def main() -> int:
         < refresh_flow.index("reload_api_then_worker")
     ):
         return fail("COS, CLS and reload phases must be strictly ordered")
+    cls_flow = script[
+        script.index("run_cls_probe() {") : script.index(
+            "\n}\n\nrecreate_api", script.index("run_cls_probe() {")
+        )
+    ]
+    if not (
+        cls_flow.index("--verify-provider-alarms --apply")
+        < cls_flow.index("--verify-provider-cls-probe --apply")
+    ):
+        return fail("live provider alarm readback must precede the synthetic CLS probe")
     reload_flow = script[
         script.index("reload_api_then_worker() {") : script.index(
             "\n}\n\nrun_refresh_phases", script.index("reload_api_then_worker() {")
@@ -909,6 +925,7 @@ def main() -> int:
         "TAVILY",
         "FAL_",
         "--record-cos-probe-now",
+        "--apply-provider-alarms",
         '"$runtime_image_id"',
         "force-recreate jiejing-vault",
         "force-recreate jiejing-frontend",
@@ -922,8 +939,8 @@ def main() -> int:
         return fail("captured provider output must fail closed on invalid JSON without being logged")
     if 'echo "$cos_output"' in script or 'echo "$cls_output"' in script:
         return fail("raw provider output must never be emitted")
-    if script.count('-w /app "$runtime_api_image_id" python') != 3:
-        return fail("COS, CLS and probe-tool checks must use the captured API image")
+    if script.count('-w /app "$runtime_api_image_id" python') != 4:
+        return fail("COS, alarm, CLS and probe-tool checks must use the captured API image")
     if '-w /app "$runtime_worker_image_id" python' in script:
         return fail("provider probe tooling must not depend on the Worker image")
 

@@ -146,6 +146,7 @@ def main(argv: list[str] | None = None) -> int:
         args.dry_run_provider_index,
         args.apply_provider_index,
         args.provider_alarm_status,
+        args.verify_provider_alarms,
         args.dry_run_provider_alarms,
         args.apply_provider_alarms,
         args.verify_provider_cls_probe,
@@ -163,7 +164,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.provider_index_status or args.dry_run_provider_index or args.apply_provider_index:
         return _run_provider_index_cli(args=args, existing=existing)
 
-    if args.provider_alarm_status or args.dry_run_provider_alarms or args.apply_provider_alarms:
+    if (
+        args.provider_alarm_status
+        or args.verify_provider_alarms
+        or args.dry_run_provider_alarms
+        or args.apply_provider_alarms
+    ):
         return _run_provider_alarm_cli(args=args, env_file=env_file, existing=existing, lines=lines)
 
     if args.record_cls_ingestion_probe_now and not (
@@ -263,6 +269,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--provider-alarm-status",
         action="store_true",
         help="Read the provider alarm/index contract without changing cloud or env state.",
+    )
+    parser.add_argument(
+        "--verify-provider-alarms",
+        action="store_true",
+        help=(
+            "Read back the exact provider alarm/index contract without cloud writes and, with --apply, "
+            "record only the two verification timestamps."
+        ),
     )
     parser.add_argument(
         "--dry-run-provider-alarms",
@@ -1300,12 +1314,28 @@ def _run_provider_alarm_cli(
     existing: dict[str, str],
     lines: list[str],
 ) -> int:
-    selected = [args.provider_alarm_status, args.dry_run_provider_alarms, args.apply_provider_alarms]
+    selected = [
+        args.provider_alarm_status,
+        args.verify_provider_alarms,
+        args.dry_run_provider_alarms,
+        args.apply_provider_alarms,
+    ]
     if sum(bool(value) for value in selected) != 1:
         print(json.dumps({"status": "blocked", "blockers": ["select_one_provider_alarm_mode"], "secret_exposed": False}))
         return 2
     if args.apply_provider_alarms and not args.apply:
         print(json.dumps({"status": "blocked", "blockers": ["provider_alarm_apply_confirmation_missing"], "secret_exposed": False}))
+        return 2
+    if args.verify_provider_alarms and not args.apply:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "blockers": ["provider_alarm_verification_apply_confirmation_missing"],
+                    "secret_exposed": False,
+                }
+            )
+        )
         return 2
     mode = "apply" if args.apply_provider_alarms else ("dry_run" if args.dry_run_provider_alarms else "status")
     control = _provider_control_values(existing)
@@ -1334,7 +1364,9 @@ def _run_provider_alarm_cli(
     except Exception:
         print(json.dumps({"status": "blocked", "mode": mode, "blockers": ["provider_alarm_operator_failed"], "secret_exposed": False}))
         return 2
-    updates = provider_alarm_verification_updates(result) if mode == "apply" else {}
+    if args.verify_provider_alarms:
+        result["mode"] = "verify"
+    updates = provider_alarm_verification_updates(result) if (mode == "apply" or args.verify_provider_alarms) else {}
     if updates:
         _write_env_file(env_file, lines, updates)
         result["verification_evidence_recorded"] = True
