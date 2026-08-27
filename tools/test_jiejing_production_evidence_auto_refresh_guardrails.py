@@ -149,6 +149,36 @@ def run_public_readiness_fixture(bash: str, payload: dict[str, object]) -> subpr
     )
 
 
+def run_public_readiness_wait_fixture(bash: str, *, becomes_ready: bool) -> subprocess.CompletedProcess[bytes]:
+    terminal_status = "return 0" if becomes_ready else "return 1"
+    fixture = textwrap.dedent(
+        f'''
+        set -euo pipefail
+        source deploy/jiejing-production-evidence-auto-refresh.sh
+        PUBLIC_READINESS_MAX_ATTEMPTS=4
+        PUBLIC_READINESS_RETRY_SECONDS=0
+        attempts=0
+        public_readiness_ready() {{
+          attempts=$((attempts + 1))
+          if [[ "$attempts" -ge 3 ]]; then
+            {terminal_status}
+          fi
+          return 1
+        }}
+        wait_for_public_readiness
+        [[ "$attempts" -eq 3 ]]
+        '''
+    )
+    return subprocess.run(
+        [bash, "-s"],
+        cwd=ROOT,
+        input=fixture.encode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
 def current_public_readiness_payload() -> dict[str, object]:
     return {
         "readiness": {
@@ -919,6 +949,12 @@ def main() -> int:
                 "current public readiness summary without internal backup details must pass: "
                 f"exit_{readiness_fixture.returncode}"
             )
+        delayed_readiness_fixture = run_public_readiness_wait_fixture(bash, becomes_ready=True)
+        if delayed_readiness_fixture.returncode != 0:
+            return fail("public readiness wait must tolerate bounded asynchronous evidence convergence")
+        never_ready_fixture = run_public_readiness_wait_fixture(bash, becomes_ready=False)
+        if never_ready_fixture.returncode == 0:
+            return fail("public readiness wait must fail closed after its bounded attempts")
         owner_approval_payload = current_public_readiness_payload()
         owner_approval_payload["readiness"]["items"][0][  # type: ignore[index]
             "status"

@@ -7,6 +7,8 @@ RELEASE_ROOT="$PRODUCTION_ROOT/releases"
 COMPOSE_NAME="docker-compose.production-pilot.yml"
 LOCK_FILE="/run/lock/jiejing-production-maintenance.lock"
 PUBLIC_BASE_URL="https://app.jiejing.shop"
+PUBLIC_READINESS_MAX_ATTEMPTS=60
+PUBLIC_READINESS_RETRY_SECONDS=2
 
 fail_closed() {
   printf '%s\n' "JIEJING_PRODUCTION_EVIDENCE_REFRESH_STATUS=blocked"
@@ -730,6 +732,19 @@ raise SystemExit(0 if ready else 2)
 ' <<<"$body" >/dev/null 2>&1
 }
 
+wait_for_public_readiness() {
+  local attempt
+  for attempt in $(seq 1 "$PUBLIC_READINESS_MAX_ATTEMPTS"); do
+    if public_readiness_ready; then
+      return 0
+    fi
+    if [[ "$attempt" -lt "$PUBLIC_READINESS_MAX_ATTEMPTS" ]]; then
+      sleep "$PUBLIC_READINESS_RETRY_SECONDS"
+    fi
+  done
+  return 1
+}
+
 wait_for_api_health() {
   local container_id state health attempt
   for attempt in $(seq 1 60); do
@@ -1049,7 +1064,7 @@ printf '%s\n' "LIVE_RELEASE_GUARD_STATUS=ready"
 
 run_refresh_phases || fail_closed "${LAST_BLOCKER:-refresh_phase_failed}"
 
-public_readiness_ready || fail_closed "public_readiness_contract_failed"
+wait_for_public_readiness || fail_closed "public_readiness_contract_failed"
 printf '%s\n' "READINESS_STATUS=verified"
 printf '%s\n' "JIEJING_PRODUCTION_EVIDENCE_REFRESH_STATUS=success"
 }
