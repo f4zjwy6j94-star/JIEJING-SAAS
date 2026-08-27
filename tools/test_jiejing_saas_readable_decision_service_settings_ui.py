@@ -51,7 +51,6 @@ def main() -> None:
         + function_scope(app_js, "renderSaasSettingsCleanLayout")
         + function_scope(app_js, "saasSettingsTabDefinitions")
         + function_scope(app_js, "renderSaasCoreModuleDiagnosticsPanel")
-        + function_scope(app_js, "renderSaasQueueHealthPanel")
     )
 
     for marker in [
@@ -101,7 +100,7 @@ def main() -> None:
         "店铺数据",
         "AI 与素材",
         "团队权限",
-        "订阅与安全",
+        "套餐与付款",
         "什么时候需要打开设置",
         "只显示商家需要知道的设置",
         "不展示技术排查和部署细节",
@@ -109,23 +108,26 @@ def main() -> None:
         "AI 边界",
         "数据边界",
         "权限边界",
-        "主理人高级区",
         "隐私和安全边界",
-        "主理人上线排查",
-        "运行可靠性",
         "data-saas-settings-map-tab",
-        "生产队列",
-        "worker heartbeat",
-        "dead_letter",
-        "stale_running_count",
         "凭证安全",
         "保存后不回显",
         "不造假",
         "不用旧商品旧素材冒充",
         "普通聊天不进长期经营记忆",
-        "只给主理人管理员",
     ]:
         require(settings_scope, marker, "settings readable map")
+
+    for forbidden in [
+        "主理人高级区",
+        "主理人上线排查",
+        "生产队列",
+        "worker heartbeat",
+        "dead_letter",
+        "stale_running_count",
+    ]:
+        if forbidden in settings_scope:
+            raise AssertionError(f"merchant settings still contains operations-only marker: {forbidden}")
 
     for style_marker in [
         "saas-readable-page-head",

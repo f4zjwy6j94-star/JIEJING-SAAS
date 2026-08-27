@@ -134,6 +134,7 @@ from .media_source_assets import MAX_MEDIA_SOURCE_BYTES, MediaSourceAssetError, 
 from .product_vision import (
     MAX_AI_CEO_SOURCE_IMAGES,
     ProductVisionError,
+    build_product_vision_capability_status,
     build_product_vision_fact_packet,
     fal_product_vision_client_from_env,
     product_vision_prompt_context,
@@ -2309,18 +2310,6 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                 self._send_json({"operational_health": self._public_operational_health_summary(operational_health, authenticated=identity is not None)})
             return
 
-        if path == "independence/status":
-            self._send_json(
-                {
-                    "independence": build_independence_status(
-                        settings=self.settings,
-                        repository=self.repository,
-                        project_root=Path(__file__).resolve().parents[1],
-                    )
-                }
-            )
-            return
-
         if path == "platforms":
             self._send_json({"platform_registry": registry_summary()})
             return
@@ -2401,6 +2390,33 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
 
         identity = self._require_auth()
         if identity is None:
+            return
+
+        if path == "media/capabilities":
+            self._send_json(
+                {
+                    "media_capabilities": {
+                        "product_image_recognition": build_product_vision_capability_status(),
+                        "secret_exposed": False,
+                    }
+                }
+            )
+            return
+
+        if path == "independence/status":
+            if not self._require_operations_console_request("independence status"):
+                return
+            if not self._require_platform_internal_admin(identity, "independence status"):
+                return
+            self._send_json(
+                {
+                    "independence": build_independence_status(
+                        settings=self.settings,
+                        repository=self.repository,
+                        project_root=Path(__file__).resolve().parents[1],
+                    )
+                }
+            )
             return
 
         if path == "product-feedback":
@@ -3395,24 +3411,15 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
                         "secret_exposed": False,
                     }
                 else:
-                    try:
-                        billing_trial = apply_test_billing_event(
-                            self.repository,
-                            company_id=user["default_company_id"],
-                            user_id=user["user_id"],
-                            plan_key=requested_plan,
-                            action="activate",
-                        )
-                    except Exception as exc:  # pragma: no cover - defensive onboarding guardrail
-                        billing_trial = {
-                            "ok": False,
-                            "status": "billing_trial_activation_skipped",
-                            "reason": str(exc.__class__.__name__),
-                            "creates_real_checkout_session": False,
-                            "calls_stripe_api": False,
-                            "triggers_real_charge": False,
-                            "secret_exposed": False,
-                        }
+                    billing_trial = {
+                        "ok": False,
+                        "status": "paid_plan_checkout_required",
+                        "plan_key": requested_plan,
+                        "creates_real_checkout_session": False,
+                        "calls_stripe_api": False,
+                        "triggers_real_charge": False,
+                        "secret_exposed": False,
+                    }
                 challenge_verification = verify_registration_challenge(
                     body.get("trial_activation_challenge")
                     if isinstance(body.get("trial_activation_challenge"), dict)

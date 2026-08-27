@@ -86,7 +86,7 @@ def main() -> int:
     for marker in [
         "¥0 / 7 天",
         "20 次捷境托管 AI",
-        "不绑卡、不自动扣费",
+        "不绑卡、不自动续费",
         'const publicPathKeys = ["opened", "multi", "trial"]',
         'target.searchParams.set("settings", "billing")',
         'target.searchParams.set("plan", activePlan)',
@@ -116,8 +116,8 @@ def main() -> int:
     billing_plan = (ROOT / "jiejing_saas" / "billing_plan.py").read_text(encoding="utf-8")
     for marker in [
         '"label": "免费体验",\n        "intended_user": "first-time merchant validating one safe operating workflow",\n        "amount_minor": 0,\n        "currency": "CNY",\n        "duration_days": 7,',
-        '"label": "单店版"',
-        '"label": "多店铺版"',
+        '"label": "有店铺"',
+        '"label": "多店铺"',
         '"amount_minor": 9900',
         '"amount_minor": 19900',
     ]:

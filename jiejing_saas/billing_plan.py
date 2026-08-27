@@ -23,7 +23,7 @@ PLAN_CATALOG = [
         "duration_days": 7,
         "workspace_quota": 1,
         "team_member_quota": 1,
-        "monthly_task_quota": 10,
+        "monthly_task_quota": 20,
         "connected_store_quota": 1,
         "provider_job_quota": 30,
         "batch_row_quota": 0,
@@ -33,7 +33,7 @@ PLAN_CATALOG = [
     },
     {
         "key": "starter",
-        "label": "单店版",
+        "label": "有店铺",
         "intended_user": "single-store merchant running a complete listing workflow",
         "amount_minor": 9900,
         "currency": "CNY",
@@ -50,7 +50,7 @@ PLAN_CATALOG = [
     },
     {
         "key": "operator",
-        "label": "多店铺版",
+        "label": "多店铺",
         "intended_user": "growing merchant reusing workflows across several stores",
         "amount_minor": 19900,
         "currency": "CNY",
@@ -65,10 +65,15 @@ PLAN_CATALOG = [
         "media_points_included": 3000,
         "includes_real_platform_writes": False,
     },
-    {
+]
+
+# Retired plans stay readable for existing subscriptions and historical orders,
+# but never re-enter the merchant acquisition catalog or a new checkout path.
+LEGACY_PLAN_CATALOG = {
+    "team": {
         "key": "team",
         "label": "团队版",
-        "intended_user": "multi-store team requiring roles, approvals and audit",
+        "intended_user": "existing team-plan merchants only",
         "amount_minor": 29900,
         "currency": "CNY",
         "duration_days": 30,
@@ -81,8 +86,8 @@ PLAN_CATALOG = [
         "store_access_mode": "team_controlled",
         "media_points_included": 0,
         "includes_real_platform_writes": False,
-    },
-]
+    }
+}
 
 
 QUOTA_ACTION_UNITS = {
@@ -230,7 +235,7 @@ def build_billing_plan(settings: SaaSSettings, repository: SaaSRepository) -> di
             "merchant_visible_usage_required": True,
             "merchant_byok_chat_not_counted_as_workflow_task": True,
             "media_generation_uses_separate_media_points": True,
-            "media_points_are_not_bundled_with_subscription": True,
+            "media_points_are_not_bundled_with_subscription": False,
             "cost_control_required_before_live_media_or_large_model_batches": True,
         },
         "add_on_catalog": [
@@ -437,7 +442,7 @@ def _build_billing_test_rehearsal_summary(
             "key": "test_plan_catalog_available",
             "status": "ready" if plans_published and not provider_contract.get("missing_plan_ids") else "blocked",
             "evidence_summary": _compact_billing_evidence(plans_published=plans_published, missing_plan_ids=provider_contract.get("missing_plan_ids") or []),
-            "next_action": "Publish Starter/Operator/Team plan catalog for the rehearsal provider.",
+            "next_action": "Publish the current Starter and Operator plan catalog for the rehearsal provider.",
         },
         {
             "key": "test_checkout_and_portal_contract",
@@ -1036,22 +1041,21 @@ def _build_billing_live_cutover_matrix(
         _billing_live_cutover_step(
             "stripe_live_price_catalog",
             "Live product and Price catalog",
-            plans_published and all(bool(plan_ids.get(key)) for key in ("starter", "operator", "team")) and all(_env_bool(name) for name in live_object_flags),
+            plans_published and all(bool(plan_ids.get(key)) for key in ("starter", "operator")) and all(_env_bool(name) for name in live_object_flags),
             owner="commercial_ops",
             category="price_catalog",
             evidence_summary=_compact_billing_evidence(
                 plans_published=plans_published,
                 starter_price=bool(plan_ids.get("starter")),
                 operator_price=bool(plan_ids.get("operator")),
-                team_price=bool(plan_ids.get("team")),
+                legacy_team_price_optional=bool(plan_ids.get("team")),
                 live_objects_verified=all(_env_bool(name) for name in live_object_flags),
             ),
-            next_action="Publish live Starter/Operator/Team Price IDs and verify they are not sandbox/test objects before public charging.",
+            next_action="Publish live Starter and Operator Price IDs and verify they are not sandbox/test objects before public charging.",
             environment_keys=[
                 "JIEJING_BILLING_PLANS_PUBLISHED",
                 "JIEJING_STRIPE_PRICE_STARTER_ID",
                 "JIEJING_STRIPE_PRICE_OPERATOR_ID",
-                "JIEJING_STRIPE_PRICE_TEAM_ID",
                 *live_object_flags,
             ],
             verification=["/billing/plans", "Stripe live Products and Prices"],
@@ -1420,9 +1424,10 @@ def _plan_catalog_with_provider_ids() -> list[dict[str, Any]]:
 
 
 def _selected_plan_key(*, subscription: dict[str, Any] | None = None, entitlement_active: bool = False) -> str:
+    entitlement_plan_keys = {item["key"] for item in PLAN_CATALOG} | set(LEGACY_PLAN_CATALOG)
     if entitlement_active and subscription:
         value = str(subscription.get("plan_key") or "").strip().lower()
-        if value in {item["key"] for item in PLAN_CATALOG}:
+        if value in entitlement_plan_keys:
             return value
     value = os.environ.get("JIEJING_DEFAULT_PLAN_KEY", "free").strip().lower() or "free"
     return value if value in {item["key"] for item in PLAN_CATALOG} else "free"
@@ -1430,6 +1435,13 @@ def _selected_plan_key(*, subscription: dict[str, Any] | None = None, entitlemen
 
 def _plan_by_key(plan_key: str) -> dict[str, Any]:
     plans = {item["key"]: item for item in _plan_catalog_with_provider_ids()}
+    provider_plan_ids = billing_plan_ids()
+    plans.update(
+        {
+            key: {**plan, "provider_plan_id": provider_plan_ids.get(key, "")}
+            for key, plan in LEGACY_PLAN_CATALOG.items()
+        }
+    )
     return plans.get(plan_key) or plans["free"]
 
 

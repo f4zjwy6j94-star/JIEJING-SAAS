@@ -14,7 +14,7 @@
     <meta name="twitter:title" content="捷境 · eBay AI CEO 自动化工作台" />
     <meta name="twitter:description" content="eBay-first AI CEO SaaS：成果可追踪，高风险动作可确认。" />
     <link rel="prefetch" href="./app.html?start=app&view=cockpit" as="document" />
-    <link rel="prefetch" href="./app.js?v=20260827-decision-zero-pending-afe0186965c7" as="script" />
+    <link rel="prefetch" href="./app.js?v=20260828-merchant-maturity-phase3-11bda577a66a" as="script" />
     <link rel="prefetch" href="./styles.css?v=20260826-account-health-incident-projection-v2" as="style" />
     <title>捷境 · eBay AI CEO 自动化工作台</title>
     <link rel="icon" href="./assets/jiejing-app-icon.svg?v=20260630-jeway-soft-black-gold-v1" type="image/svg+xml" />
@@ -4005,7 +4005,7 @@
         </div>
         <div class="proof-row" aria-label="产品信任边界">
           <span class="pill green">7 天免费体验</span>
-          <span class="pill">不绑卡、不自动扣费</span>
+          <span class="pill">不绑卡、不自动续费</span>
           <span class="pill">关键动作由商家确认</span>
         </div>
         <div class="hero-intent-strip" data-home-intent-strip="homepage_ai_ceo_intents_v1" aria-label="从一个经营目标开始">
@@ -4189,7 +4189,7 @@
             <h2>按店铺规模开始，也可以先免费体验。</h2>
           </div>
           <p class="section-note">
-            已经有 eBay 店铺的商家按单店或多店铺进入；还想先确认是否适合，可以用 7 天免费体验完成 20 次 AI 对话和一条未发布 Listing 草稿。免费体验不绑卡、不自动扣费。
+            已经有 eBay 店铺的商家按有店铺或多店铺进入；还想先确认是否适合，可以用 7 天免费体验完成 20 次 AI 对话和一条未发布 Listing 草稿。免费体验不绑卡、不自动续费。
           </p>
         </div>
         <div class="path-grid" aria-label="开始方式">
@@ -4209,7 +4209,7 @@
             <span class="pill amber">先体验</span>
             <strong>免费体验</strong>
             <span class="price">¥0 / 7 天</span>
-            <p>20 次捷境托管 AI 对话和 1 条未发布草稿；不绑卡、不自动扣费。</p>
+            <p>20 次捷境托管 AI 对话和 1 条未发布草稿；不绑卡、不自动续费。</p>
           </button>
         </div>
         <div class="hero-actions">
@@ -4652,7 +4652,7 @@
       function warmWorkspaceAssets() {
         const assets = [
           ["prefetch", "./app.html?start=app&view=workflow", "document"],
-          ["preload", "./app.js?v=20260827-decision-zero-pending-afe0186965c7", "script"],
+          ["preload", "./app.js?v=20260828-merchant-maturity-phase3-11bda577a66a", "script"],
           ["preload", "./styles.css?v=20260826-account-health-incident-projection-v2", "style"],
         ];
         assets.forEach(([rel, href, as]) => {
@@ -4684,7 +4684,7 @@
           eyebrow: "03 / 商家核对后继续",
           title: "确认商品事实，再决定连接店铺或保留未发布草稿。",
           body:
-            "免费体验默认不发布、不绑卡、不自动扣费。正式发布、改价、库存、退款和广告预算等关键动作必须由商家确认。",
+            "免费体验默认不发布、不绑卡、不自动续费。正式发布、改价、库存、退款和广告预算等关键动作必须由商家确认。",
           roles: ["商家核对", "保留草稿", "连接店铺", "关键动作确认"],
         },
       };
@@ -4746,13 +4746,13 @@
           eyebrow: "免费体验",
           title: "先用 7 天和 20 次 AI 对话验证捷境是否适合你的店铺。",
           body:
-            "注册并完成安全验证后开启 7 天体验。可以连接 1 个店铺的只读资料、完成 20 次捷境托管 AI 对话，并保存 1 条未发布 Listing 草稿；不绑卡、不自动扣费，也不会自动发布。",
+            "注册并完成安全验证后开启 7 天体验。可以连接 1 个店铺的只读资料、完成 20 次捷境托管 AI 对话，并保存 1 条未发布 Listing 草稿；不绑卡、不自动续费，也不会自动发布。",
           steps: [
             ["01", "注册并完成安全验证", "不绑卡"],
             ["02", "连接 1 个店铺只读资料", "不写平台"],
             ["03", "使用 20 次 AI 对话", "后端计量"],
             ["04", "生成 1 条 Listing 草稿", "未发布"],
-            ["05", "到期后自主决定是否升级", "不自动扣费"],
+            ["05", "到期后自主决定是否升级", "不自动续费"],
           ],
         },
       };
@@ -4760,7 +4760,7 @@
       const planData = {
         free: {
           title: "免费体验",
-          desc: "注册并完成安全验证后可体验 7 天，包含 20 次捷境托管 AI 对话；不绑卡、不自动扣费。",
+          desc: "注册并完成安全验证后可体验 7 天，包含 20 次捷境托管 AI 对话；不绑卡、不自动续费。",
           items: [
             "1 个账号空间 · 1 个席位 · 1 个店铺只读连接",
             "7 天内最多 20 次捷境托管 AI 对话",
@@ -4770,7 +4770,7 @@
           ],
         },
         single: {
-          title: "单店版",
+          title: "有店铺",
           desc: "¥99 单次购买 30 天，不会自动续费；覆盖 1 个店铺的 AI CEO、Listing、素材工坊、客服订单和确认中心，含 1,000 素材点。",
           items: [
             "1 个 eBay 店铺工作台",
@@ -4782,7 +4782,7 @@
           ],
         },
         multi: {
-          title: "多店铺版",
+          title: "多店铺",
           desc: "¥199 单次购买 30 天，不会自动续费；适合同时管理多个 eBay 店铺或多条商品线，含 3,000 素材点。",
           items: [
             "多店铺/多项目工作台",
@@ -5416,7 +5416,7 @@
         contract: "merchant_blank_trial_entry_v1",
         eyebrow: "7 天免费体验",
         title: "直接进入空白工作台，生成第一条未发布草稿。",
-        note: "免费体验不要求先连接店铺。进入工作台后上传商品图片、货源链接或文字说明；捷境只生成待核对草稿，不绑卡、不自动扣费，也不会自动发布。",
+        note: "免费体验不要求先连接店铺。进入工作台后上传商品图片、货源链接或文字说明；捷境只生成待核对草稿，不绑卡、不自动续费，也不会自动发布。",
         answers: {
           trialStart: "直接进入空白工作台",
         },
@@ -5428,7 +5428,7 @@
             body: "空白工作台不会预置商品。商家提交自己的资料后，捷境再整理标题、属性、描述、利润参考和风险疑点。",
             ai: "AI 先生成未发布草稿并列出资料缺口。",
             human: "商家核对商品事实后，再决定是否连接店铺或继续使用。",
-            save: "免费体验不绑卡、不自动扣费；真实发布仍需商家确认。",
+            save: "免费体验不绑卡、不自动续费；真实发布仍需商家确认。",
             options: [
               ["直接进入空白工作台", "先生成第一条未发布草稿，不要求连接店铺。", "推荐"],
             ],
@@ -6149,7 +6149,7 @@
         document.querySelector("#nextStepTitle").textContent = "进入捷境账号。";
         document.querySelector("#nextStepBody").textContent =
           activePlan === "free"
-            ? "你选择的是免费体验。登录或注册并完成商家向导后直接开始 7 天体验，不绑卡、不自动扣费。"
+            ? "你选择的是免费体验。登录或注册并完成商家向导后直接开始 7 天体验，不绑卡、不自动续费。"
             : `你选择的是${planData[activePlan]?.title || "付费套餐"}。登录或注册并完成商家向导后，系统会打开工作台里的“套餐与付款”，再由你确认微信支付。`;
         window.setTimeout(() => document.querySelector("#entryLoginSubmit")?.focus(), 0);
       }

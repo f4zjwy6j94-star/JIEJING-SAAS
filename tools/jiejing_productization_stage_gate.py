@@ -507,8 +507,8 @@ def _stage_4_checks(*, app_js: str) -> list[dict[str, Any]]:
         ),
         _check("frontend_reads_database_queue_contracts", "Frontend reads database and queue production contracts from backend.", '"/database/adapters"' in app_js and '"/queue/adapters"' in app_js),
         _check("frontend_reads_provider_job_contracts", "Frontend reads SaaS provider job contracts for search, eBay, sourcing, logistics, media and model jobs.", '"/provider-job-contracts"' in app_js and "saasProviderJobContracts" in app_js),
-        _check("frontend_reads_provider_job_plan", "Frontend reads task-level provider job preflight plan.", "provider-job-plan" in app_js and "saasProviderJobPlan" in app_js),
-        _check("frontend_reads_secret_grant_plan", "Frontend reads task-level secret grant plan without receiving raw secrets.", "secret-grant-plan" in app_js and "saasSecretGrantPlan" in app_js and "密钥授权" in app_js),
+        _check("merchant_frontend_excludes_provider_job_plan", "Merchant frontend leaves task-level provider job preflight in operations.", "provider-job-plan" not in app_js and "saasProviderJobPlan" not in app_js),
+        _check("merchant_frontend_excludes_secret_grant_plan", "Merchant frontend leaves secret grant plans in operations.", "secret-grant-plan" not in app_js and "saasSecretGrantPlan" not in app_js),
         _check("frontend_api_base_configurable", "Frontend API base can be configured for staging without hardcoded localhost.", "resolveJiejingApiBase" in app_js and "window.JIEJING_CONFIG" in app_js and "jiejing_saas_api_base" in app_js and "jiejing-saas-api-base" in app_js),
         _check(
             "frontend_public_auth_gate",
@@ -520,7 +520,7 @@ def _stage_4_checks(*, app_js: str) -> list[dict[str, Any]]:
             and "OAuth Status" in app_js
             and ("Secret Ref" in app_js or "secret_ref" in app_js),
         ),
-        _check("frontend_reads_independence_status", "Frontend reads the independent Jiejing Runtime status so Hermes cannot silently become the default path.", '"/independence/status"' in app_js and "saasIndependence" in app_js and "独立 Runtime" in app_js),
+        _check("merchant_frontend_reads_safe_media_capabilities", "Merchant frontend reads only the minimal media capability projection and leaves independence diagnostics in operations.", '"/media/capabilities"' in app_js and '"/independence/status"' not in app_js and "saasIndependence" not in app_js),
         _check("frontend_reads_vault_contract", "Frontend reads Vault/KMS adapter and client contracts without seeing raw secrets.", '"/vault/adapters"' in app_js and '"/vault/client-contract"' in app_js and "saasVaultAdapters" in app_js and "saasVaultClient" in app_js),
         _check("frontend_reads_ebay_read_contract", "Frontend reads eBay read-only field contracts, live-adapter status, live-read execution plan, credential preflight, HTTP dry-run contract and product-level sync entry.", '"/ebay-read-only/field-contracts"' in app_js and '"/ebay-read-only/live-adapter/status"' in app_js and "ebay-read-only/live-read-plan" in app_js and '"/ebay-read-only/http-client/status"' in app_js and "http-client-dry-run" in app_js and "credential-preflight" in app_js and "saasEbayCredentialPreflight" in app_js and "ebay-read-only/sync" in app_js and "sync-ebay-readonly" in app_js and "saasEbayLiveReadPlan" in app_js and "saasEbayHttpDryRun" in app_js),
         _check("frontend_displays_ebay_live_packet_route_health", "Frontend displays the latest official eBay packet coverage and route-level GET health from backend task outputs.", "getLatestSaasEbaySyncSummary" in app_js and "saasEbayRouteRows" in app_js and "saasEbayPacketResourceRows" in app_js and "saas-route-strip" in app_js and "Official eBay read route health" in app_js),

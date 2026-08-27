@@ -30,19 +30,13 @@ DOMESTIC_PLAN_TERMS: dict[str, dict[str, Any]] = {
         "amount_minor": 9900,
         "currency": "CNY",
         "duration_days": 30,
-        "display_name": "捷境基础版 30 天",
+        "display_name": "捷境有店铺 30 天",
     },
     "operator": {
         "amount_minor": 19900,
         "currency": "CNY",
         "duration_days": 30,
-        "display_name": "捷境运营版 30 天",
-    },
-    "team": {
-        "amount_minor": 29900,
-        "currency": "CNY",
-        "duration_days": 30,
-        "display_name": "捷境团队版 30 天",
+        "display_name": "捷境多店铺 30 天",
     },
 }
 CONTROLLED_WECHAT_PAY_ACCEPTANCE_APPROVAL = "I_APPROVE_ONE_CNY_REAL_WECHAT_PAY_ORDER"
@@ -353,7 +347,7 @@ def _open_domestic_billing_checkout(
             "purchase_type": purchase_type,
             "media_points": media_points,
             "expires_at": order.get("expires_at"),
-            "display_name": str(order_payload.get("display_name") or "捷境基础版 30 天"),
+            "display_name": str(order_payload.get("display_name") or "捷境套餐 30 天"),
             "duplicate_request": True,
             "calls_external_payment_api": False,
             "triggers_real_charge": False,
@@ -398,7 +392,7 @@ def _open_domestic_billing_checkout(
         "purchase_type": purchase_type,
         "media_points": media_points,
         "expires_at": order.get("expires_at"),
-        "display_name": str(order_payload.get("display_name") or "捷境基础版 30 天"),
+        "display_name": str(order_payload.get("display_name") or "捷境套餐 30 天"),
         "duplicate_request": False,
         "calls_external_payment_api": True,
         "triggers_real_charge": False,
@@ -413,7 +407,7 @@ def merchant_domestic_billing_order(order: dict[str, Any], *, include_checkout: 
     payload = order.get("order") if isinstance(order.get("order"), dict) else {}
     status = str(order.get("status") or "").strip()
     checkout_expired = _is_checkout_expired(order.get("expires_at"))
-    display_name = str(order.get("display_name") or payload.get("display_name") or "捷境基础版 30 天").strip()
+    display_name = str(order.get("display_name") or payload.get("display_name") or "捷境套餐 30 天").strip()
     purchase_type = str(order.get("purchase_type") or payload.get("purchase_type") or "subscription").strip().lower()
     safe = {
         "ok": order.get("ok") is True or bool(order.get("order_id")),

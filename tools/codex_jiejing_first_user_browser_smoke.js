@@ -54,17 +54,6 @@ async function registerAccount(label, { createStore = false } = {}) {
   const company = registered.json.company || {};
   let store = null;
   if (createStore) {
-    const activatedBilling = await api("/billing/test-event", {
-      token,
-      method: "POST",
-      body: {
-        plan_key: "operator",
-        action: "activate",
-      },
-    });
-    if (!activatedBilling.ok) {
-      throw new Error(`billing test activation ${label} failed: ${activatedBilling.status}`);
-    }
     const created = await api("/stores", {
       token,
       method: "POST",
@@ -323,7 +312,7 @@ async function main() {
     storageForAccount(noStore, { allAccounts: [noStore], onboardingDone: false, includeStore: false }),
   );
   const noStorePage = await noStoreContext.newPage();
-  noStorePage.on("pageerror", (error) => pageErrors.push(String(error.message || error).slice(0, 400)));
+  noStorePage.on("pageerror", (error) => pageErrors.push(String(error.stack || error.message || error).slice(0, 1200)));
   noStorePage.on("requestfailed", recordRequestFailure);
   noStorePage.on("response", (response) => {
     if (response.url().startsWith(base) && response.status() >= 500) badResponses.push({ url: response.url(), status: response.status() });
@@ -332,15 +321,31 @@ async function main() {
     waitUntil: "domcontentloaded",
     timeout: 90000,
   });
-  await noStorePage.waitForFunction(
-    () => {
-      const onboarding = document.querySelector("#onboardingShell");
-      const app = document.querySelector("#appShell");
-      return Boolean(onboarding && !onboarding.classList.contains("is-hidden") && app?.classList.contains("is-hidden"));
-    },
-    null,
-    { timeout: 60000 },
-  );
+  try {
+    await noStorePage.waitForFunction(
+      () => {
+        const onboarding = document.querySelector("#onboardingShell");
+        const app = document.querySelector("#appShell");
+        return Boolean(onboarding && !onboarding.classList.contains("is-hidden") && app?.classList.contains("is-hidden"));
+      },
+      null,
+      { timeout: 20000 },
+    );
+  } catch (error) {
+    const state = await noStorePage.evaluate(() => ({
+      url: window.location.href,
+      htmlClass: document.documentElement.className,
+      onboardingClass: document.querySelector("#onboardingShell")?.className || "missing",
+      appClass: document.querySelector("#appShell")?.className || "missing",
+      entryClass: document.querySelector("#entryShell")?.className || "missing",
+      visibleText: (document.body.innerText || "").slice(0, 600),
+    }));
+    throw new Error(
+      `no-store onboarding state missing: ${JSON.stringify(state)}; ` +
+        `pageErrors=${JSON.stringify(pageErrors)} requestFailures=${JSON.stringify(requestFailures)} ` +
+        `badResponses=${JSON.stringify(badResponses)}; ${error.message}`,
+    );
+  }
   const onboardedQueryDidNotBypassOnboarding = await noStorePage.evaluate(() => {
     const onboarding = document.querySelector("#onboardingShell");
     const app = document.querySelector("#appShell");
@@ -378,16 +383,23 @@ async function main() {
   });
   await waitForAppReady(accountAPage);
   const accountAShowsOwnChat = await accountAPage.evaluate((sentinel) => document.body.innerText.includes(sentinel), accountASentinel);
-  const accountAMarketImportFindsAccountScopedThread = await accountAPage.evaluate((sentinel) => {
+  const accountAMarketImportProbe = await accountAPage.evaluate((sentinel) => {
     const accountTurns = typeof window.loadSaasAiCeoAccountThreads === "function" ? window.loadSaasAiCeoAccountThreads() : [];
     const importTurn = typeof window.latestSaasAiCeoMarketResearchTurn === "function" ? window.latestSaasAiCeoMarketResearchTurn() : null;
     const importState = typeof window.saasAiCeoMarketResearchImportState === "function" ? window.saasAiCeoMarketResearchImportState() : null;
-    return Boolean(
-      accountTurns.some((turn) => String(turn.assistant_text || "").includes(sentinel)) &&
-        String(importTurn?.assistant_text || "").includes(sentinel) &&
-        String(importState?.turn?.assistant_text || "").includes(sentinel),
-    );
+    return {
+      accountTurnFound: accountTurns.some((turn) => String(turn.assistant_text || "").includes(sentinel)),
+      importTurnFound: String(importTurn?.assistant_text || "").includes(sentinel),
+      importStateTurnFound: String(importState?.turn?.assistant_text || "").includes(sentinel),
+      importReason: String(importState?.reason || ""),
+      skippedReason: String(importState?.skipped?.reason || ""),
+    };
   }, accountAMarketResearchSentinel);
+  const accountALocalMarketChatCannotBypassBackendReport =
+    accountAMarketImportProbe.accountTurnFound &&
+    !accountAMarketImportProbe.importTurnFound &&
+    !accountAMarketImportProbe.importStateTurnFound &&
+    accountAMarketImportProbe.importReason === "backend_report_required";
   const accountALocalStorage = await readStorage(accountAPage);
   await accountAPage.screenshot({ path: path.join(outDir, "account-a-chat.png"), fullPage: true }).catch(() => {});
   await accountAContext.close();
@@ -522,7 +534,7 @@ async function main() {
       onboarded_query_did_not_bypass_onboarding: onboardedQueryDidNotBypassOnboarding,
       first_day_path_strip_present: firstDayPathStripPresent,
       account_a_shows_own_chat: accountAShowsOwnChat,
-      account_a_market_import_finds_account_scoped_thread: accountAMarketImportFindsAccountScopedThread,
+      account_a_local_market_chat_cannot_bypass_backend_report: accountALocalMarketChatCannotBypassBackendReport,
       account_b_did_not_show_account_a_chat: accountBDidNotShowAccountAChat,
       account_b_scoped_local_cache_clean: accountBScopedLocalCacheClean,
       model_402_route_intercepted: model402OrSafeBlockObserved,
@@ -540,6 +552,7 @@ async function main() {
       status: modelReplyProbe.status,
       route_intercept_count: model402RouteInterceptCount,
     },
+    market_import_probe: accountAMarketImportProbe,
     pageErrors,
     requestFailures,
     ignoredRequestFailures,

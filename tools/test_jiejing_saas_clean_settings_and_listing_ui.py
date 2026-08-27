@@ -740,7 +740,11 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
     require(app_js, "权限围绕捷境确认中心设计", "governance settings uses Jiejing-owned permission copy")
     require(app_js, "AI 与素材", "merchant-friendly model settings title")
     require(app_js, "账号 AI 已连接", "model settings uses merchant-facing AI connection copy")
-    require(app_js, "AI CEO 当前可使用捷境试用额度", "platform trial stays distinct from merchant account AI")
+    require(app_js, "文字分析", "model settings exposes text analysis capability")
+    require(app_js, "图片识别", "model settings exposes image recognition capability")
+    require(app_js, "联网搜索", "model settings exposes public search capability")
+    require(app_js, "图片生成", "model settings exposes image generation capability")
+    require(app_js, "不支持图片的模型不会被要求猜图", "model settings explains the text and vision boundary")
     require(app_js, ': !configured\n      ? "暂未开放"', "unavailable platform trial never shows a usable quota")
     require(app_js, "账号 AI 或捷境试用 AI", "merchant setup guide accepts account AI or platform trial AI")
     require(app_js, "优先用账号自己的 AI；没有账号 AI 时使用捷境试用 AI 的有限额度", "model value proof request uses BYOK first then trial AI")
@@ -1052,7 +1056,7 @@ if (!latestFallback || latestFallback.execution_id !== "exec-old-confirmation") 
         "function renderSaasMerchantBillingPlainSummaryPanel",
         "套餐权益、商家模型、素材点和平台成本清楚可查",
         "¥0 / ¥99 / ¥199",
-        "付费套餐包含当期生图素材点",
+        "套餐已包含素材点；用完后才需要加购",
         "套餐点用完后再购买",
         "function renderSaasMerchantMediaCreditsPanel",
         "merchant_media_points_v2",

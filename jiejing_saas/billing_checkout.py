@@ -21,7 +21,7 @@ from .repository import SaaSRepository
 
 
 STRIPE_API_VERSION = "2026-06-24.dahlia"
-PLAN_KEYS = {"starter", "operator", "team"}
+PLAN_KEYS = {"starter", "operator"}
 LOCAL_RETURN_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 

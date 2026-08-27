@@ -73,8 +73,8 @@ const state = {
   wizardStep: 0,
   preselectedFromLanding: false,
   entryPreviewStage: "trial",
-  activeStore: "us-main",
-  activeProject: "backflow-incense",
+  activeStore: "",
+  activeProject: "",
   activeRule: "profit",
   activeConversation: 0,
   activeLogistics: 0,
@@ -90,8 +90,8 @@ const state = {
   saasMediaSourceUpload: null,
   saasAiCeoPendingAttachments: [],
   saasAiCeoAttachmentUploading: false,
-  activeListingDraft: "incense",
-  activeCockpitMarketDraft: "incense",
+  activeListingDraft: "",
+  activeCockpitMarketDraft: "",
   marketReportMode: "single",
   activeMediaDraft: "",
   activityFilter: "all",
@@ -118,7 +118,6 @@ const state = {
   saasVaultStatus: null,
   saasOauthRequests: [],
   saasTasks: [],
-  saasQueueJobs: [],
   saasMediaAssetJobs: [],
   saasMediaScriptDraft: null,
   saasActiveMediaPreviewKey: "",
@@ -170,9 +169,7 @@ const state = {
   saasQueueHealth: null,
   saasOperationalHealth: null,
   saasProviderJobContracts: null,
-  saasProviderJobPlan: null,
-  saasSecretGrantPlan: null,
-  saasIndependence: null,
+  saasMediaCapabilities: null,
   saasVaultAdapters: null,
   saasVaultClient: null,
   saasEbayFieldContracts: null,
@@ -615,931 +612,20 @@ function normalizeJiejingApiBase(value) {
   return raw.replace(/\/+$/, "");
 }
 
-const stores = [
-  {
-    id: "us-main",
-    name: "US 主店",
-    market: "eBay US",
-    status: "待授权",
-    mode: "单店接入",
-  },
-  {
-    id: "uk-test",
-    name: "UK 测试店",
-    market: "eBay UK",
-    status: "待授权",
-    mode: "准备接入",
-  },
-  {
-    id: "au-second",
-    name: "AU 二店",
-    market: "eBay AU",
-    status: "规则待复制",
-    mode: "多店铺预留",
-  },
-];
+const stores = [];
 
-const tasks = [
-  {
-    title: "确认倒流香炉素材包",
-    detail: "AI 已从商品图生成主图、详情页、烟雾场景和短视频脚本，缺尺寸/重量/材质/香粒说明。",
-    status: "待确认",
-    risk: "中",
-  },
-  {
-    title: "确认倒流香炉烟雾场景方案",
-    detail: "AI 已生成主图、细节图、场景图和 10 秒视频脚本，需要你确认是否继续。",
-    status: "待确认",
-    risk: "中",
-  },
-  {
-    title: "决定便携首饰盒是否立项",
-    detail: "市场判断发现搜索稳定但同质化高，需要你决定是否继续调研。",
-    status: "需判断",
-    risk: "中",
-  },
-  {
-    title: "物流延迟回复需人工接管",
-    detail: "买家询问发货状态，AI 已起草回复，但涉及时效承诺，不能自动发送。",
-    status: "需审核",
-    risk: "高",
-  },
-  {
-    title: "复核 eBay 订阅费和广告费",
-    detail: "利润测算发现必须纳入 Store subscription、AD_FEE 和刊登/成交费用。",
-    status: "需授权",
-    risk: "中",
-  },
-];
+const tasks = [];
 
-const agents = [
-  ["市场调研记录", "正在判断倒流香炉在 eBay 的搜索需求、关键词、价格带、竞品图片风格和评论痛点。", 92],
-  ["1688 货源核验记录", "已按 1688 供货模式整理采购价、规格、库存、发货地、代发能力和需要向供应商确认的问题。", 76],
-  ["素材生成记录", "已基于 1688 货源图生成白底主图、茶室/家居场景图、详情页长图、短视频脚本和视频分镜。", 88],
-  ["Listing 草稿记录", "正在把调研结论和素材需求转成 eBay 标题、类目、商品参数、描述结构和图片顺序。", 68],
-  ["利润履约记录", "等待真实重量、包装尺寸、采购价和物流方式后，合并平台费、物流费、退货预留和利润底线。", 54],
-  ["客服学习记录", "先读取商品档案、物流承诺和售后边界，生成低风险回复；退款、补偿和明确承诺仍需确认。", 82],
-  ["风险扫描记录", "检查禁售词、夸大功效、素材真实性、香粒说明、授权边界和高风险执行动作。", 71],
-];
+const agents = [];
 
-const productListingDrafts = [
-  {
-    id: "incense",
-    titleCn: "倒流香炉",
-    titleEn: "Backflow Incense Burner",
-    thumb: "assets/backflow-incense-generated-main.webp",
-    score: 68,
-    status: "草稿中",
-    badge: "素材已生成",
-    risk: "中风险",
-    readiness: 68,
-    sku: "JJ-BFI-001",
-    title: "Backflow Incense Burner Waterfall Smoke Holder Zen Home Decor Gift",
-    subtitle: "Zen waterfall smoke decor gift, cones not included",
-    category: "Home Decor / Incense Burners",
-    categoryNote: "类目编号待 eBay 正式校验",
-    condition: "New",
-    format: "Fixed Price",
-    duration: "Good Til Cancelled",
-    price: "US $22.99",
-    quantity: "20",
-    market: "eBay US",
-    conclusion: "可以进入小批测试，但不建议直接铺量。",
-    report: {
-      buyer: "家居氛围、冥想空间、桌面摆件、礼品购买人群。",
-      priceBand: "US $18.99-29.99，建议先用 US $22.99 测试点击和收藏。",
-      competitor: "竞品主图多强调烟雾效果，差评集中在尺寸偏小、烟雾不明显、是否含香粒说不清。",
-      opportunity: "用真实尺寸图、配件说明和更清晰的场景图降低误解。",
-    },
-    specifics: [
-      ["Brand", "Unbranded", "无品牌时使用，若供应商有品牌需授权"],
-      ["Type", "Backflow Incense Burner", "类目字段，待 aspects 校验"],
-      ["Material", "Ceramic / Resin style finish", "材质必须向供应商确认"],
-      ["Color", "Bronze / Brown", "按实物色差确认"],
-      ["Style", "Zen / Oriental-inspired Home Decor", "避免宗教功效承诺"],
-      ["Room", "Living Room, Study, Office", "场景词用于买家理解"],
-      ["MPN", "Does Not Apply", "无厂家编号时使用"],
-      ["UPC", "Does Not Apply", "按类目规则校验"],
-      ["Included", "Incense burner only", "是否含香粒必须确认"],
-      ["Features", "Waterfall smoke effect, decorative holder", "只描述效果，不写疗愈"],
-    ],
-    description: [
-      "Add a calm decorative accent to a tea table, study, office, or living room with this backflow incense burner.",
-      "Designed for backflow incense cones and a waterfall-style smoke effect. Suitable for desk, shelf, tea room, and gift scenes.",
-      "Incense cones are not included unless confirmed by the supplier. Size, weight, material, and color require final confirmation before publishing.",
-    ],
-    media: [
-      ["主图", "白底主图、烟雾效果主视觉", "已生成"],
-      ["场景图", "茶室、家居书桌、礼品氛围", "已生成"],
-      ["详情页", "参数、使用提醒、是否含香粒", "已生成"],
-      ["视频", "30 秒英语字幕脚本和分镜", "待确认"],
-    ],
-    policy: {
-      fulfillment: "国际标准物流 · 3 个工作日处理",
-      payment: "eBay Managed Payments · 固定价建议立即付款",
-      returns: "30 天退货草稿 · 按原因区分责任",
-      weight: "650 g 估算",
-      dimensions: "26 x 20 x 14 cm 估算",
-      location: "China / route pending",
-    },
-    missing: ["真实长宽高", "包装重量", "材质", "是否含香粒", "发货地", "防碎包装"],
-    supplierQuestions: ["请确认裸机尺寸和包装后尺寸", "是否含倒流香粒", "材质是陶瓷还是树脂", "破损是否补发"],
-    next: "补供应商资料后进入利润测算，再送确认中心。",
-  },
-  {
-    id: "compression",
-    titleCn: "旅行压缩收纳袋",
-    titleEn: "Travel Compression Packing Bags",
-    thumb: "assets/travel-compression-main-v2.png",
-    score: 74,
-    status: "可推进",
-    badge: "字段待补",
-    risk: "低风险",
-    readiness: 74,
-    sku: "JJ-TCB-002",
-    title: "Travel Compression Packing Bags Space Saver Organizer Set for Suitcase",
-    subtitle: "Lightweight luggage organizer bags for travel packing",
-    category: "Travel Accessories / Packing Organizers",
-    categoryNote: "需确认 eBay US 精确 categoryId",
-    condition: "New",
-    format: "Fixed Price",
-    duration: "Good Til Cancelled",
-    price: "US $18.99",
-    quantity: "30",
-    market: "eBay US",
-    conclusion: "适合做基础测试，卖点清楚，履约风险低。",
-    report: {
-      buyer: "旅行、留学、短租搬家、家庭衣物收纳用户。",
-      priceBand: "US $12.99-24.99，套装数量决定价格感知。",
-      competitor: "同类商品大量使用容量对比图，差评集中在拉链、厚度、是否真能压缩。",
-      opportunity: "用实拍容量对比、拉链细节和尺寸表降低退货。",
-    },
-    specifics: [
-      ["Brand", "Unbranded", "无品牌草稿"],
-      ["Type", "Compression Packing Bag", "按类目校验"],
-      ["Material", "Nylon / Polyester", "待供应商确认克重"],
-      ["Color", "Beige / Gray set", "按实际套装颜色"],
-      ["Number of Items", "6 pcs", "套装数量待确认"],
-      ["Features", "Lightweight, reusable", "不夸大压缩比例"],
-      ["MPN", "Does Not Apply", "无厂家编号时使用"],
-      ["UPC", "Does Not Apply", "按类目规则校验"],
-      ["Size", "Mixed sizes", "尺寸表待补"],
-      ["Care", "Wipe clean", "按材质确认"],
-    ],
-    description: [
-      "Organize clothing and travel essentials with lightweight compression packing bags for suitcase and closet use.",
-      "The draft emphasizes space saving, category organization, and easy packing without promising unrealistic compression results.",
-      "Final listing needs exact bag count, dimensions, material thickness, zipper type, and package weight.",
-    ],
-    media: [
-      ["主图", "套装展开白底图", "已生成"],
-      ["场景图", "行李箱收纳前后对比", "待生成"],
-      ["详情页", "容量、尺寸、材质、拉链细节", "待生成"],
-      ["视频", "10 秒装箱演示", "可生成"],
-    ],
-    policy: {
-      fulfillment: "轻小件标准物流 · 2-3 个工作日处理",
-      payment: "eBay Managed Payments · 立即付款",
-      returns: "30 天退货 · 未使用可退",
-      weight: "420 g 估算",
-      dimensions: "30 x 22 x 5 cm 估算",
-      location: "China / supplier direct",
-    },
-    missing: ["套装数量", "每个袋子尺寸", "材质厚度", "拉链材质", "包装重量"],
-    supplierQuestions: ["请提供 6 件套每个尺寸", "压缩方式是否无需真空泵", "拉链是否可重复拉合", "是否支持单个 OPP 包装"],
-    next: "进入素材工坊生成容量对比图和详情页。",
-  },
-  {
-    id: "jewelry",
-    titleCn: "便携首饰盒",
-    titleEn: "Travel Jewelry Organizer Case",
-    thumb: "assets/jewelry-case-main.png",
-    score: 71,
-    status: "可推进",
-    badge: "低风险",
-    risk: "低风险",
-    readiness: 71,
-    sku: "JJ-TJC-003",
-    title: "Travel Jewelry Organizer Case Small Earring Ring Storage Box for Women",
-    subtitle: "Compact jewelry box for rings, earrings and necklace travel storage",
-    category: "Jewelry Boxes & Organizers",
-    categoryNote: "类目 specifics 需校验材质和适用对象",
-    condition: "New",
-    format: "Fixed Price",
-    duration: "Good Til Cancelled",
-    price: "US $14.99",
-    quantity: "40",
-    market: "eBay US",
-    conclusion: "适合做常规低风险测试，但需要差异化图片。",
-    report: {
-      buyer: "旅行、礼物、自用收纳、大学宿舍和小空间收纳用户。",
-      priceBand: "US $9.99-18.99，颜色和材质影响转化。",
-      competitor: "竞品高度同质化，差评集中在尺寸小、拉链、内衬异味和颜色偏差。",
-      opportunity: "用尺寸对比、内部结构图和礼品场景增强购买理由。",
-    },
-    specifics: [
-      ["Brand", "Unbranded", "无品牌草稿"],
-      ["Type", "Jewelry Organizer Case", "按类目校验"],
-      ["Material", "PU leather / velvet lining", "待供应商确认"],
-      ["Color", "Pink / Beige / Black", "多色可做变体"],
-      ["Department", "Women", "可按站点规则调整"],
-      ["Features", "Portable, zip closure", "真实结构确认后使用"],
-      ["MPN", "Does Not Apply", "无厂家编号时使用"],
-      ["UPC", "Does Not Apply", "按类目规则校验"],
-      ["Size", "Small", "尺寸表待补"],
-      ["Closure", "Zipper", "按实物确认"],
-    ],
-    description: [
-      "Compact travel jewelry organizer for rings, earrings, necklaces, and small accessories.",
-      "A structured inner layout helps separate jewelry during travel, daily storage, and gift use.",
-      "Final draft needs real dimensions, inner layout photos, color options, and material confirmation.",
-    ],
-    media: [
-      ["主图", "打开状态白底图", "已生成"],
-      ["场景图", "旅行箱、梳妆台、礼品场景", "已生成"],
-      ["详情页", "内部格位、尺寸、颜色", "已生成"],
-      ["视频", "开合展示 10 秒", "脚本已生成"],
-    ],
-    policy: {
-      fulfillment: "轻小件标准物流 · 2 个工作日处理",
-      payment: "eBay Managed Payments · 立即付款",
-      returns: "30 天退货 · 未使用可退",
-      weight: "180 g 估算",
-      dimensions: "12 x 12 x 6 cm 估算",
-      location: "China / supplier direct",
-    },
-    missing: ["实物尺寸", "内衬材质", "颜色 SKU", "拉链材质", "包装方式"],
-    supplierQuestions: ["请提供打开和闭合照片", "PU 是否有异味说明", "可选颜色和最小起订量", "单品包装是否适合跨境运输"],
-    next: "生成多色变体草稿和内部结构图。",
-  },
-  {
-    id: "candle",
-    titleCn: "香薰蜡烛套装",
-    titleEn: "Scented Candle Gift Set",
-    thumb: "assets/candle-set-main.png",
-    score: 63,
-    status: "待补资料",
-    badge: "包装待确认",
-    risk: "中风险",
-    readiness: 63,
-    sku: "JJ-SCG-004",
-    title: "Scented Candle Gift Set Decorative Jar Candles for Home Relaxing Decor",
-    subtitle: "Gift-ready candle set for home decor, scent details pending",
-    category: "Candles & Home Fragrance",
-    categoryNote: "需校验蜡烛、香薰和危险品运输边界",
-    condition: "New",
-    format: "Fixed Price",
-    duration: "Good Til Cancelled",
-    price: "US $24.99",
-    quantity: "15",
-    market: "eBay US",
-    conclusion: "可以保留在测试池，但必须先解决运输、破损和香型信息。",
-    report: {
-      buyer: "家居氛围、礼品、节日装饰、放松场景用户。",
-      priceBand: "US $18.99-34.99，礼盒包装和香型决定溢价。",
-      competitor: "竞品强调礼盒和香型，差评集中在破损、香味弱、尺寸小、运输融化。",
-      opportunity: "若供应商能提供防碎包装和清晰香型，可进入小批量。",
-    },
-    specifics: [
-      ["Brand", "Unbranded", "无品牌草稿"],
-      ["Type", "Scented Candle Set", "按类目校验"],
-      ["Material", "Soy wax / glass jar", "待供应商确认"],
-      ["Color", "Mixed", "按礼盒颜色确认"],
-      ["Scent", "Assorted", "必须提供具体香型"],
-      ["Shape", "Jar", "按实物确认"],
-      ["MPN", "Does Not Apply", "无厂家编号时使用"],
-      ["UPC", "Does Not Apply", "按类目规则校验"],
-      ["Burning Time", "Pending", "不能乱填"],
-      ["Package", "Gift box", "包装抗摔待确认"],
-    ],
-    description: [
-      "Decorative scented candle gift set draft for home decor and gift scenes.",
-      "Listing must avoid overclaiming therapeutic or medical effects. Scent, burn time, jar size, and packaging need supplier confirmation.",
-      "Shipping route must be checked before testing because candles and glass jars can create fulfillment and breakage risk.",
-    ],
-    media: [
-      ["主图", "礼盒和蜡烛组合白底图", "已生成"],
-      ["场景图", "客厅、浴室、礼品场景", "已生成"],
-      ["详情页", "香型、燃烧时间、包装", "已生成"],
-      ["视频", "开箱和点燃氛围", "脚本已生成"],
-    ],
-    policy: {
-      fulfillment: "易碎品路线待确认 · 3 个工作日处理",
-      payment: "eBay Managed Payments · 立即付款",
-      returns: "30 天退货草稿 · 破损场景单独处理",
-      weight: "900 g 估算",
-      dimensions: "22 x 18 x 10 cm 估算",
-      location: "China / route pending",
-    },
-    missing: ["香型", "燃烧时间", "玻璃厚度", "防碎包装", "运输限制", "融化风险"],
-    supplierQuestions: ["是否可提供防碎包装跌落测试", "每个蜡烛净重和燃烧时间", "夏季运输是否会融化", "香型英文名称和成分说明"],
-    next: "先补包装和运输资料，暂不进入发布确认。",
-  },
-  {
-    id: "cable",
-    titleCn: "桌面理线夹",
-    titleEn: "Desk Cable Organizer Clips",
-    thumb: "assets/cable-organizer.svg",
-    score: 69,
-    status: "可推进",
-    badge: "低客诉",
-    risk: "低风险",
-    readiness: 69,
-    sku: "JJ-DCC-005",
-    title: "Adhesive Cable Clips Desk Cord Organizer Wire Holder Set for Office",
-    subtitle: "Self-adhesive cord holders for desk, nightstand and office cables",
-    category: "Cable Management / Cord Organizers",
-    categoryNote: "需确认是否归入 Home Office 或 Electronics Accessories",
-    condition: "New",
-    format: "Fixed Price",
-    duration: "Good Til Cancelled",
-    price: "US $9.99",
-    quantity: "60",
-    market: "eBay US",
-    conclusion: "适合低价轻小件测试，核心是胶力和数量说清楚。",
-    report: {
-      buyer: "桌面整理、办公室、床头充电线、学生宿舍用户。",
-      priceBand: "US $6.99-12.99，数量、颜色和胶力影响点击。",
-      competitor: "竞品多用前后对比图，差评集中在粘不牢、尺寸不匹配、数量不清。",
-      opportunity: "用应用场景图和胶面提醒，降低误解和售后。",
-    },
-    specifics: [
-      ["Brand", "Unbranded", "无品牌草稿"],
-      ["Type", "Cable Clip", "按类目校验"],
-      ["Material", "Silicone / ABS", "待供应商确认"],
-      ["Color", "Black / White", "可做变体"],
-      ["Mounting", "Self-adhesive", "胶面类型待确认"],
-      ["Number in Pack", "20 pcs", "数量待确认"],
-      ["MPN", "Does Not Apply", "无厂家编号时使用"],
-      ["UPC", "Does Not Apply", "按类目规则校验"],
-      ["Room", "Office, Bedroom", "场景词"],
-      ["Features", "Reusable cable routing", "不承诺永久粘贴"],
-    ],
-    description: [
-      "Self-adhesive cable clips help route charging cables, USB cords, and small wires around desks, nightstands, and work areas.",
-      "Draft emphasizes simple cable organization and clean placement while clearly explaining surface preparation and adhesive limitations.",
-      "Final listing needs pack quantity, clip size, cable diameter range, material, and adhesive surface guidance.",
-    ],
-    media: [
-      ["主图", "20 件套白底排布", "已生成"],
-      ["场景图", "桌面前后对比", "已生成"],
-      ["详情页", "尺寸、适用线径、安装步骤", "已生成"],
-      ["视频", "贴装和走线 10 秒", "脚本已生成"],
-    ],
-    policy: {
-      fulfillment: "轻小件标准物流 · 2 个工作日处理",
-      payment: "eBay Managed Payments · 立即付款",
-      returns: "30 天退货 · 未使用可退",
-      weight: "120 g 估算",
-      dimensions: "14 x 10 x 2 cm 估算",
-      location: "China / supplier direct",
-    },
-    missing: ["数量", "单个尺寸", "适用线径", "材质", "胶面类型", "颜色 SKU"],
-    supplierQuestions: ["请确认每包数量", "适合线径范围是多少", "胶面是否适合木桌/玻璃/墙面", "是否有黑白两色库存"],
-    next: "可直接进入产品刊登草稿和素材工坊。",
-  },
-];
+const productListingDrafts = [];
 
-const bulkHandoffDraftIds = [
-  "bulk-sink-mat",
-  "bulk-litter-scoop",
-  "bulk-fridge-clip",
-  "bulk-toothbrush-case",
-  "bulk-car-hook",
-];
+const bulkHandoffDraftIds = [];
 
-const bulkListingDraftCatalog = [
-  {
-    id: "bulk-sink-mat",
-    titleCn: "硅胶水槽沥水垫",
-    titleEn: "Silicone Sink Drying Mat",
-    sku: "JJ-BULK-SDM-001",
-    title: "Silicone Sink Drying Mat Foldable Kitchen Counter Drainer Pad",
-    subtitle: "Flexible kitchen drying mat for sink and countertop use",
-    thumb: "assets/bulk-sink-mat.svg",
-    gallery: [
-      ["主图草稿", "assets/bulk-sink-mat.svg", "白底主图方向，突出可折叠和沥水结构"],
-      ["厨房场景", "assets/bulk-sink-mat.svg", "水槽边、餐具沥水、台面保护场景"],
-      ["尺寸图", "assets/bulk-sink-mat.svg", "待补真实尺寸和厚度"],
-      ["详情页", "assets/bulk-sink-mat.svg", "材质、耐温、清洗方式和适配水槽"],
-    ],
-    score: 77,
-    readiness: 76,
-    status: "批量接力",
-    badge: "低风险",
-    risk: "低风险",
-    market: "eBay US",
-    marketplaceId: "EBAY_US",
-    category: "Kitchen Storage & Organization / Sink Accessories",
-    categoryId: "待 eBay 类目校验",
-    merchantLocationKey: "CN_SUPPLIER_DIRECT",
-    condition: "New",
-    format: "Fixed Price",
-    duration: "Good Til Cancelled",
-    price: "US $16.99",
-    quantity: "25",
-    conclusion: "适合进入小批量测试，轻小件、非易碎、不带电；核心风险是尺寸、材质和耐温口径不能写错。",
-    report: [
-      ["买家画像", "厨房收纳、租房、小户型和台面整理用户。最关心水槽是否适配、是否好清洗、是否防滑。"],
-      ["价格带", "US $12.99-22.99；尺寸、厚度、是否可折叠和耐温说明影响价格感知。"],
-      ["竞品痛点", "差评集中在尺寸不合适、垫子太薄、排水不明显、卷边和清洗后变形。"],
-      ["差异化机会", "用尺寸图、水槽适配图、材质厚度和清洗方式说明降低误解。"],
-      ["利润口径", "轻小件可测；必须确认包装重量和折叠后尺寸，避免运费吃掉利润。"],
-      ["发布建议", "先做一款通用尺寸，不做多规格铺量；确认耐温后再考虑厨房热锅垫卖点。"],
-    ],
-    specifics: [
-      ["Brand", "Unbranded", "无品牌草稿"],
-      ["Type", "Sink Drying Mat", "按类目校验"],
-      ["Material", "Silicone", "必须向供应商确认是否食品接触级"],
-      ["Color", "Gray / Black", "按实际库存确认"],
-      ["Features", "Foldable, non-slip", "不夸大承重和耐高温"],
-      ["Room", "Kitchen", "使用场景"],
-      ["MPN", "Does Not Apply", "无厂家编号时使用"],
-      ["UPC", "Does Not Apply", "按类目规则校验"],
-      ["Size", "Pending", "真实尺寸待补"],
-      ["Care", "Hand wash / wipe clean", "清洗方式待确认"],
-    ],
-    description: [
-      "A flexible silicone drying mat draft for kitchen sink and countertop organization.",
-      "The listing should emphasize drying, countertop protection, and easy cleaning without exaggerating heat resistance or load bearing.",
-      "Final publishing needs real dimensions, material grade, thickness, package weight, and compatible sink width.",
-    ],
-    policies: {
-      fulfillment: "轻小件标准物流 · 2 个工作日处理",
-      payment: "eBay Managed Payments · 立即付款",
-      returns: "30 天退货 · 未使用可退",
-      weight: "260 g 估算",
-      dimensions: "28 x 10 x 4 cm 估算",
-      itemLocation: "China / supplier direct",
-    },
-    mediaPlan: [
-      ["主图", "白底主图、折叠状态和沥水结构", "待生成"],
-      ["场景图", "水槽边餐具沥水、台面保护", "待生成"],
-      ["详情页", "尺寸、厚度、材质、清洗方式", "待生成"],
-      ["视频", "6-10 秒铺开、沥水和收纳演示", "脚本待生成"],
-    ],
-    missing: ["真实尺寸", "材质等级", "厚度", "包装重量", "耐温范围", "适配水槽宽度"],
-    supplierQuestions: [
-      "请提供展开尺寸、折叠尺寸、厚度和单个包装重量。",
-      "材质是否为硅胶？是否可接触餐具？是否有检测资料？",
-      "最高耐温范围是多少？是否可以写耐热卖点？",
-      "是否支持灰色、黑色等颜色，库存是否稳定？",
-    ],
-    next: "进入素材工坊生成厨房场景图和尺寸说明，再做利润测算；不补耐温和尺寸前不发布。",
-  },
-  {
-    id: "bulk-litter-scoop",
-    titleCn: "猫砂铲收纳架",
-    titleEn: "Cat Litter Scoop Holder",
-    sku: "JJ-BULK-CSH-002",
-    title: "Cat Litter Scoop Holder Wall Mounted Pet Cleaning Storage Rack",
-    subtitle: "Pet litter scoop organizer holder for clean storage",
-    thumb: "assets/bulk-litter-scoop.svg",
-    gallery: [
-      ["主图草稿", "assets/bulk-litter-scoop.svg", "展示收纳架主体和安装方式"],
-      ["宠物场景", "assets/bulk-litter-scoop.svg", "猫砂盆旁边的清洁收纳场景"],
-      ["安装图", "assets/bulk-litter-scoop.svg", "免打孔/挂墙方式待确认"],
-      ["详情页", "assets/bulk-litter-scoop.svg", "适配铲子尺寸、承重和清洁方式"],
-    ],
-    score: 74,
-    readiness: 72,
-    status: "批量接力",
-    badge: "需核配件",
-    risk: "低风险",
-    market: "eBay US",
-    marketplaceId: "EBAY_US",
-    category: "Cat Supplies / Litter Accessories",
-    categoryId: "待 eBay 类目校验",
-    merchantLocationKey: "CN_SUPPLIER_DIRECT",
-    condition: "New",
-    format: "Fixed Price",
-    duration: "Good Til Cancelled",
-    price: "US $13.99",
-    quantity: "30",
-    conclusion: "可以进入测试，但必须说清是否包含猫砂铲、安装方式和适配尺寸，避免买家误解。",
-    report: [
-      ["买家画像", "养猫家庭、租房养宠用户、猫砂盆清洁收纳用户。最关心是否卫生、是否牢固、是否含铲。"],
-      ["价格带", "US $9.99-18.99；是否含猫砂铲、是否免打孔和材质影响价格。"],
-      ["竞品痛点", "差评集中在不含铲但图片误导、粘胶不牢、铲子放不进去、塑料薄。"],
-      ["差异化机会", "把“holder only / with scoop”写清楚，做适配尺寸图和安装步骤图。"],
-      ["利润口径", "轻小件，售后风险低；若含铲，包裹尺寸和成本会变化。"],
-      ["发布建议", "先做 holder only 草稿，确认供应商是否可做含铲套装后再建变体。"],
-    ],
-    specifics: [
-      ["Brand", "Unbranded", "无品牌草稿"],
-      ["Type", "Litter Scoop Holder", "按类目校验"],
-      ["Material", "Plastic", "待供应商确认"],
-      ["Color", "White / Gray", "按库存确认"],
-      ["Mounting", "Adhesive / Wall mounted", "安装方式待确认"],
-      ["Features", "Space saving", "不夸大承重"],
-      ["MPN", "Does Not Apply", "无厂家编号时使用"],
-      ["UPC", "Does Not Apply", "按类目规则校验"],
-      ["Included", "Holder only", "是否含铲必须确认"],
-      ["Pet Type", "Cat", "使用场景"],
-    ],
-    description: [
-      "A compact cat litter scoop holder draft for keeping pet cleaning tools organized near the litter box.",
-      "The listing must clearly state whether the scoop is included and what mounting method is used.",
-      "Final publishing needs holder dimensions, compatible scoop size, mounting type, material, and package weight.",
-    ],
-    policies: {
-      fulfillment: "轻小件标准物流 · 2 个工作日处理",
-      payment: "eBay Managed Payments · 立即付款",
-      returns: "30 天退货 · 未使用可退",
-      weight: "160 g 估算",
-      dimensions: "18 x 12 x 5 cm 估算",
-      itemLocation: "China / supplier direct",
-    },
-    mediaPlan: [
-      ["主图", "收纳架主体、是否含铲说明", "待生成"],
-      ["场景图", "猫砂盆旁清洁收纳场景", "待生成"],
-      ["详情页", "安装方式、适配尺寸、清洗方式", "待生成"],
-      ["视频", "安装和放入猫砂铲演示", "脚本待生成"],
-    ],
-    missing: ["是否含猫砂铲", "适配铲子尺寸", "安装方式", "材质", "包装重量", "承重说明"],
-    supplierQuestions: [
-      "请确认商品是否包含猫砂铲，还是只有收纳架。",
-      "适配的猫砂铲最大宽度和手柄厚度是多少？",
-      "安装方式是粘胶、挂钩还是螺丝？是否提供配件？",
-      "塑料材质、单个重量和包装尺寸是多少？",
-    ],
-    next: "先确认是否含铲和安装方式，再生成主图与详情页；含铲和不含铲不能混写。",
-  },
-  {
-    id: "bulk-fridge-clip",
-    titleCn: "冰箱门侧收纳夹",
-    titleEn: "Fridge Door Side Storage Clip",
-    sku: "JJ-BULK-FDC-003",
-    title: "Fridge Door Side Storage Clip Kitchen Organizer Holder for Bags",
-    subtitle: "Small refrigerator side clip for kitchen bag and packet storage",
-    thumb: "assets/bulk-fridge-clip.svg",
-    gallery: [
-      ["主图草稿", "assets/bulk-fridge-clip.svg", "展示夹子形态和套装数量"],
-      ["厨房场景", "assets/bulk-fridge-clip.svg", "冰箱门侧、厨房袋装收纳场景"],
-      ["尺寸图", "assets/bulk-fridge-clip.svg", "夹持厚度和承重待确认"],
-      ["详情页", "assets/bulk-fridge-clip.svg", "适配位置、材质和套装数量"],
-    ],
-    score: 72,
-    readiness: 70,
-    status: "批量接力",
-    badge: "尺寸待补",
-    risk: "低风险",
-    market: "eBay US",
-    marketplaceId: "EBAY_US",
-    category: "Kitchen Storage & Organization",
-    categoryId: "待 eBay 类目校验",
-    merchantLocationKey: "CN_SUPPLIER_DIRECT",
-    condition: "New",
-    format: "Fixed Price",
-    duration: "Good Til Cancelled",
-    price: "US $11.99",
-    quantity: "40",
-    conclusion: "适合做低价小件测试，重点是说清夹持厚度、套装数量和承重，不要让买家误以为适配所有冰箱。",
-    report: [
-      ["买家画像", "厨房整理、冰箱收纳、小户型家庭用户。最关心能夹哪里、能放多重、会不会刮伤。"],
-      ["价格带", "US $7.99-14.99；套装数量和材质决定性价比。"],
-      ["竞品痛点", "差评集中在夹不牢、尺寸不适配、承重夸大、收到数量不清楚。"],
-      ["差异化机会", "用夹持厚度图、安装位置图和承重保守说明降低售后。"],
-      ["利润口径", "低客单但轻小件，适合批量测试；广告预算要保守。"],
-      ["发布建议", "先做 4 件套或 6 件套，不做过多颜色变体。"],
-    ],
-    specifics: [
-      ["Brand", "Unbranded", "无品牌草稿"],
-      ["Type", "Storage Clip", "按类目校验"],
-      ["Material", "Plastic", "待确认"],
-      ["Color", "White / Clear", "按库存确认"],
-      ["Number in Pack", "4 pcs", "套装数量待确认"],
-      ["Mounting", "Clip-on", "不写免打孔万能适配"],
-      ["MPN", "Does Not Apply", "无厂家编号时使用"],
-      ["UPC", "Does Not Apply", "按类目规则校验"],
-      ["Room", "Kitchen", "使用场景"],
-      ["Features", "Space saving", "承重需保守"],
-    ],
-    description: [
-      "A small clip-on kitchen organizer draft for refrigerator door side or cabinet edge storage.",
-      "The listing should clearly show compatible thickness, pack quantity, and conservative load limits.",
-      "Final publishing needs pack count, clip size, material, compatible edge thickness, and package weight.",
-    ],
-    policies: {
-      fulfillment: "轻小件标准物流 · 2 个工作日处理",
-      payment: "eBay Managed Payments · 立即付款",
-      returns: "30 天退货 · 未使用可退",
-      weight: "110 g 估算",
-      dimensions: "12 x 10 x 3 cm 估算",
-      itemLocation: "China / supplier direct",
-    },
-    mediaPlan: [
-      ["主图", "套装白底图和数量说明", "待生成"],
-      ["场景图", "冰箱门侧袋装收纳", "待生成"],
-      ["详情页", "夹持厚度、承重、适配位置", "待生成"],
-      ["视频", "夹上、放袋、取下演示", "脚本待生成"],
-    ],
-    missing: ["套装数量", "夹持厚度", "承重", "材质", "包装重量", "适配位置"],
-    supplierQuestions: [
-      "请确认每套几个、单个尺寸和包装重量。",
-      "最大夹持厚度是多少？适合冰箱门、柜门还是桌边？",
-      "建议承重是多少？是否会刮伤表面？",
-      "是否支持透明、白色等颜色库存？",
-    ],
-    next: "补齐夹持厚度和数量后进入素材工坊；承重没有确认前不写强承诺。",
-  },
-  {
-    id: "bulk-toothbrush-case",
-    titleCn: "浴室牙刷旅行盒",
-    titleEn: "Travel Toothbrush Case",
-    sku: "JJ-BULK-TTC-004",
-    title: "Travel Toothbrush Case Portable Bathroom Toothbrush Holder Box",
-    subtitle: "Portable toothbrush holder for bathroom and travel storage",
-    thumb: "assets/bulk-toothbrush-case.svg",
-    gallery: [
-      ["主图草稿", "assets/bulk-toothbrush-case.svg", "展示盒体、开合和颜色"],
-      ["旅行场景", "assets/bulk-toothbrush-case.svg", "洗漱包、浴室台面、旅行收纳"],
-      ["尺寸图", "assets/bulk-toothbrush-case.svg", "适配牙刷长度和内径待确认"],
-      ["详情页", "assets/bulk-toothbrush-case.svg", "材质、通风孔、清洗方式"],
-    ],
-    score: 71,
-    readiness: 69,
-    status: "批量接力",
-    badge: "功效词需控",
-    risk: "低风险",
-    market: "eBay US",
-    marketplaceId: "EBAY_US",
-    category: "Travel Accessories / Toiletry Storage",
-    categoryId: "待 eBay 类目校验",
-    merchantLocationKey: "CN_SUPPLIER_DIRECT",
-    condition: "New",
-    format: "Fixed Price",
-    duration: "Good Til Cancelled",
-    price: "US $9.99",
-    quantity: "50",
-    conclusion: "适合低风险轻小件测试，但不能写抗菌、消毒等无法证明的功能，重点展示便携和通风。",
-    report: [
-      ["买家画像", "旅行、露营、宿舍、健身房和家庭备用洗漱用户。最关心卫生感、尺寸和是否容易清洗。"],
-      ["价格带", "US $6.99-12.99；多色套装和材质感影响点击。"],
-      ["竞品痛点", "差评集中在牙刷放不下、盒子松、塑料异味、颜色与图片不一致。"],
-      ["差异化机会", "用适配长度图、通风孔细节和旅行场景图讲清楚，不碰抗菌功效。"],
-      ["利润口径", "客单低，建议套装化测试；广告花费必须严格控制。"],
-      ["发布建议", "先做 2 件套或 4 件套，确认颜色库存后再建变体。"],
-    ],
-    specifics: [
-      ["Brand", "Unbranded", "无品牌草稿"],
-      ["Type", "Toothbrush Case", "按类目校验"],
-      ["Material", "PP Plastic", "待确认"],
-      ["Color", "Mixed", "按库存确认"],
-      ["Number in Pack", "2 pcs", "套装数量待确认"],
-      ["Features", "Portable, vented", "不能写抗菌除菌"],
-      ["MPN", "Does Not Apply", "无厂家编号时使用"],
-      ["UPC", "Does Not Apply", "按类目规则校验"],
-      ["Size", "Pending", "适配牙刷长度待补"],
-      ["Care", "Rinse clean", "按材质确认"],
-    ],
-    description: [
-      "A portable toothbrush holder draft for travel, gym bag, dorm, and bathroom storage.",
-      "The listing should focus on portability, easy storage, and ventilation without claiming antibacterial or sterilizing effects.",
-      "Final publishing needs exact size, material, pack quantity, color set, and package weight.",
-    ],
-    policies: {
-      fulfillment: "轻小件标准物流 · 2 个工作日处理",
-      payment: "eBay Managed Payments · 立即付款",
-      returns: "30 天退货 · 未使用可退",
-      weight: "95 g 估算",
-      dimensions: "22 x 6 x 4 cm 估算",
-      itemLocation: "China / supplier direct",
-    },
-    mediaPlan: [
-      ["主图", "开合白底图和套装数量", "待生成"],
-      ["场景图", "浴室、旅行洗漱包、健身房", "待生成"],
-      ["详情页", "尺寸、通风孔、材质、颜色", "待生成"],
-      ["视频", "放入牙刷和收纳演示", "脚本待生成"],
-    ],
-    missing: ["适配牙刷长度", "套装数量", "材质", "颜色组合", "包装重量", "是否有通风孔"],
-    supplierQuestions: [
-      "请确认盒子内长、内宽、适配牙刷最大长度。",
-      "每套几个？颜色是否固定还是随机？",
-      "材质是否为 PP？是否有异味处理？",
-      "是否有通风孔？是否可以水洗？",
-    ],
-    next: "先确认尺寸和套装数量，再生成旅行场景图和详情页；抗菌相关词不写。",
-  },
-  {
-    id: "bulk-car-hook",
-    titleCn: "车载挂钩收纳扣",
-    titleEn: "Car Seat Headrest Hooks",
-    sku: "JJ-BULK-CSH-005",
-    title: "Car Seat Headrest Hooks Purse Grocery Bag Hanger Organizer Set",
-    subtitle: "Back seat storage hooks for bags, purse and groceries",
-    thumb: "assets/bulk-car-hook.svg",
-    gallery: [
-      ["主图草稿", "assets/bulk-car-hook.svg", "展示挂钩套装和颜色"],
-      ["车内场景", "assets/bulk-car-hook.svg", "座椅头枕、购物袋、手提包场景"],
-      ["尺寸图", "assets/bulk-car-hook.svg", "适配杆径和承重待确认"],
-      ["详情页", "assets/bulk-car-hook.svg", "安装方式、适配范围、承重说明"],
-    ],
-    score: 73,
-    readiness: 71,
-    status: "批量接力",
-    badge: "适配待确认",
-    risk: "低风险",
-    market: "eBay US",
-    marketplaceId: "EBAY_US",
-    category: "Car Interior Accessories / Storage",
-    categoryId: "待 eBay 类目校验",
-    merchantLocationKey: "CN_SUPPLIER_DIRECT",
-    condition: "New",
-    format: "Fixed Price",
-    duration: "Good Til Cancelled",
-    price: "US $12.99",
-    quantity: "35",
-    conclusion: "适合小批量测试，买家痛点明确；必须确认承重、适配头枕杆直径和是否会影响座椅安全。",
-    report: [
-      ["买家画像", "通勤、家庭用车、网约车、带娃出行和购物收纳用户。最关心是否牢固、是否通用、是否划伤。"],
-      ["价格带", "US $8.99-16.99；套装数量、旋转结构和承重说明影响转化。"],
-      ["竞品痛点", "差评集中在不适配某些头枕、挂重物变形、塑料感强、收到数量不清楚。"],
-      ["差异化机会", "用安装步骤图、适配杆径图和保守承重说明降低售后。"],
-      ["利润口径", "轻小件，适合先测；若承重数据不清，不进入大规模铺货。"],
-      ["发布建议", "先做 2 件套或 4 件套 Fixed Price，避免写“适配所有车型”。"],
-    ],
-    specifics: [
-      ["Brand", "Unbranded", "无品牌草稿"],
-      ["Type", "Headrest Hook", "按类目校验"],
-      ["Material", "ABS Plastic", "待确认"],
-      ["Color", "Black", "按库存确认"],
-      ["Placement on Vehicle", "Seat Headrest", "适配范围待确认"],
-      ["Number in Pack", "2 pcs", "套装数量待确认"],
-      ["MPN", "Does Not Apply", "无厂家编号时使用"],
-      ["UPC", "Does Not Apply", "按类目规则校验"],
-      ["Features", "Bag hanger", "承重需保守"],
-      ["Fitment", "Universal draft", "真实发布前需改成适配说明"],
-    ],
-    description: [
-      "A car seat headrest hook draft for hanging purses, grocery bags, small shopping bags, or daily carry items.",
-      "The listing should explain installation and compatible headrest rod range without claiming universal fit for all vehicles.",
-      "Final publishing needs material, pack quantity, rod diameter range, conservative load limit, and package weight.",
-    ],
-    policies: {
-      fulfillment: "轻小件标准物流 · 2 个工作日处理",
-      payment: "eBay Managed Payments · 立即付款",
-      returns: "30 天退货 · 未使用可退",
-      weight: "140 g 估算",
-      dimensions: "14 x 9 x 4 cm 估算",
-      itemLocation: "China / supplier direct",
-    },
-    mediaPlan: [
-      ["主图", "套装白底图和颜色展示", "待生成"],
-      ["场景图", "车内座椅、购物袋、手提包", "待生成"],
-      ["详情页", "安装步骤、适配杆径、承重", "待生成"],
-      ["视频", "安装和挂袋演示", "脚本待生成"],
-    ],
-    missing: ["套装数量", "头枕杆适配范围", "承重", "材质", "包装重量", "是否旋转"],
-    supplierQuestions: [
-      "请确认每套几个、单个尺寸和包装重量。",
-      "适配的头枕杆直径范围是多少？是否适配固定式头枕？",
-      "建议承重是多少？是否支持旋转？",
-      "材质是 ABS 还是其他塑料？是否有黑色稳定库存？",
-    ],
-    next: "先确认适配范围和承重，再生成车内场景图；不能写适配所有车型。",
-  },
-];
+const bulkListingDraftCatalog = [];
 
-const incenseAssetImages = {
-  hero: "assets/backflow-incense-burner-hero.webp",
-  alt: "assets/backflow-incense-burner-alt.webp",
-  generatedMain: "assets/backflow-incense-generated-main.webp",
-  generatedScene: "assets/backflow-incense-generated-scene.webp",
-  lifestyleHome: "assets/backflow-incense-generated-scene.webp",
-  lifestyleTea: "assets/backflow-incense-generated-scene.webp",
-  detailCloseup: "assets/backflow-incense-generated-detail.webp",
-  sizeChart: "assets/backflow-incense-generated-detail.webp",
-  generatedDetail: "assets/backflow-incense-generated-detail.webp",
-  presenter: "assets/backflow-incense-video-cover.webp",
-  captionScript: "",
-  videoCover: "assets/backflow-incense-video-cover.webp",
-  videoFile: "assets/ai-generated-incense-host-video.webm",
-  videoFrames: [
-    "assets/backflow-incense-video-cover.webp",
-    "assets/backflow-incense-generated-scene.webp",
-    "assets/backflow-incense-generated-detail.webp",
-    "assets/backflow-incense-generated-detail.webp",
-  ],
-};
-
-const mediaDraftAssetProfiles = {
-  incense: {
-    name: "倒流香炉",
-    source: incenseAssetImages.hero,
-    images: {
-      main: incenseAssetImages.generatedMain,
-      scene: incenseAssetImages.lifestyleTea,
-      sceneHome: incenseAssetImages.lifestyleHome,
-      closeup: incenseAssetImages.detailCloseup,
-      size: incenseAssetImages.sizeChart,
-      detail: incenseAssetImages.generatedDetail,
-      video: incenseAssetImages.videoCover,
-    },
-    cardTitles: {
-      main: "主图候选图",
-      scene: "茶室氛围图",
-      sceneHome: "家居书桌图",
-      closeup: "鸟枝 / 花纹 / 底座",
-      size: "待填真实尺寸",
-      detail: "卖点长图",
-      video: "产品短视频脚本",
-    },
-    checklist: ["确认实物颜色、孔位、底座和烟道结构一致。", "补齐尺寸、重量、材质和是否含香粒。", "删除无法证明的疗愈、净化、助眠等卖点。"],
-  },
-  compression: {
-    name: "旅行压缩收纳袋",
-    source: "assets/travel-compression-source.png",
-    images: {
-      main: "assets/travel-compression-main-v2.png",
-      scene: "assets/travel-compression-scene-v2.png",
-      sceneHome: "assets/travel-compression-feature-v2.png",
-      closeup: "assets/travel-compression-feature.png",
-      size: "assets/travel-compression-detail-v2.png",
-      detail: "assets/travel-compression-detail-v2.png",
-      video: "assets/travel-compression-video-cover.png",
-    },
-    cardTitles: {
-      main: "套装白底主图",
-      scene: "行李箱收纳场景",
-      sceneHome: "容量对比图",
-      closeup: "拉链 / 材质 / 细节",
-      size: "尺寸与容量图",
-      detail: "详情页长图",
-      video: "短视频封面与脚本",
-    },
-    checklist: ["确认套装数量、每个袋子的尺寸和容量。", "材质厚度、拉链结构和压缩方式不能夸大。", "场景图不要暗示行李箱、衣物等道具随货。"],
-  },
-  jewelry: {
-    name: "便携首饰盒",
-    source: "assets/jewelry-case-main.png",
-    images: {
-      main: "assets/jewelry-case-main.png",
-      scene: "assets/jewelry-case-scene.png",
-      sceneHome: "assets/jewelry-case-gift.png",
-      closeup: "assets/jewelry-case-closeup.png",
-      size: "assets/jewelry-case-size.png",
-      detail: "assets/jewelry-case-detail-page.png",
-      video: "assets/jewelry-case-video-cover.png",
-    },
-    cardTitles: {
-      main: "便携首饰盒主图",
-      scene: "旅行梳妆场景",
-      sceneHome: "礼品包装方向",
-      closeup: "内部结构细节",
-      size: "尺寸与分区图",
-      detail: "详情页结构",
-      video: "开合展示脚本",
-    },
-    checklist: ["确认尺寸、材质、闭合方式和内部分区。", "不要让首饰、戒指或项链被误认为随盒赠送。", "礼品图要说明商品主体是收纳盒。"],
-  },
-  candle: {
-    name: "香薰蜡烛套装",
-    source: "assets/candle-set-main.png",
-    images: {
-      main: "assets/candle-set-main.png",
-      scene: "assets/candle-set-scene.png",
-      sceneHome: "assets/candle-set-scent.png",
-      closeup: "assets/candle-set-closeup.png",
-      size: "assets/candle-set-size.png",
-      detail: "assets/candle-set-detail-page.png",
-      video: "assets/candle-set-video-cover.png",
-    },
-    cardTitles: {
-      main: "套装白底主图",
-      scene: "家居氛围图",
-      sceneHome: "香型视觉图",
-      closeup: "蜡面 / 杯体 / 包装",
-      size: "容量与克重图",
-      detail: "详情页与安全提醒",
-      video: "点燃前后脚本",
-    },
-    checklist: ["确认香型、克重、燃烧时长和包装数量。", "涉及明火、液体、香精和物流限制时必须风控。", "不要写不可证明的疗愈或助眠功效。"],
-  },
-  cable: {
-    name: "桌面理线夹",
-    source: "assets/cable-organizer.svg",
-    images: {
-      main: "assets/cable-organizer.svg",
-      scene: "assets/cable-organizer-scene.png",
-      sceneHome: "assets/cable-organizer-install.png",
-      closeup: "assets/cable-organizer.svg",
-      size: "assets/cable-organizer-size.png",
-      detail: "assets/cable-organizer-detail-page.png",
-      video: "assets/cable-organizer-video-cover.png",
-    },
-    cardTitles: {
-      main: "套装白底主图",
-      scene: "桌面使用场景",
-      sceneHome: "安装步骤图",
-      closeup: "胶面与线槽细节",
-      size: "线径适配图",
-      detail: "详情页长图",
-      video: "安装演示脚本",
-    },
-    checklist: ["确认数量、颜色、线径和胶面类型。", "适用表面和承重承诺不能夸大。", "安装步骤图要提醒清洁表面和等待粘贴稳定。"],
-  },
-};
+const incenseAssetImages = {};
+const mediaDraftAssetProfiles = {};
 
 function escapeHtml(value) {
   return String(value)
@@ -1619,398 +705,7 @@ function jiejingTrustedTemplate(source = "dynamic_template") {
   };
 }
 
-const listingDraftCatalog = [
-  {
-    id: "incense",
-    titleCn: "倒流香炉",
-    titleEn: "Backflow Incense Burner",
-    sku: "JJ-BFI-001",
-    title: "Backflow Incense Burner Waterfall Smoke Holder Zen Home Decor Gift",
-    subtitle: "Zen waterfall smoke decor gift, cones not included",
-    thumb: "assets/backflow-incense-generated-main.webp",
-    gallery: [
-      ["白底主图", "assets/backflow-incense-generated-main.webp", "首图候选，突出器型和烟雾效果"],
-      ["茶室场景", "assets/backflow-incense-generated-scene.webp", "用于氛围展示，不替代真实规格"],
-      ["详情长图", "assets/backflow-incense-generated-detail.webp", "包含卖点、参数和使用提醒"],
-      ["视频封面", "assets/backflow-incense-video-cover.webp", "30 秒产品短视频草稿封面"],
-    ],
-    score: 68,
-    readiness: 68,
-    status: "草稿中",
-    badge: "素材已生成",
-    risk: "中风险",
-    market: "eBay US",
-    marketplaceId: "EBAY_US",
-    category: "Home Decor / Incense Burners",
-    categoryId: "待 eBay 类目校验",
-    merchantLocationKey: "CN_WAREHOUSE_01",
-    condition: "New",
-    format: "Fixed Price",
-    duration: "Good Til Cancelled",
-    price: "US $22.99",
-    quantity: "20",
-    conclusion: "可以进入小批测试，不建议直接铺量；先验证点击、收藏、真实利润和破损率。",
-    report: [
-      ["买家画像", "家居氛围买家、茶室/书房摆件买家、礼品买家。最关心画面氛围、尺寸、是否含香粒、到手完整度。"],
-      ["价格带", "主测 US $18.99-29.99；建议首发 US $22.99，保留后续优惠空间。"],
-      ["竞品痛点", "同款较多；差评集中在尺寸偏小、烟雾效果不明显、是否含香粒说不清、易碎包装不足。"],
-      ["差异化机会", "用真实尺寸图、包装说明、是否含香粒说明和更干净的场景图降低误解。"],
-      ["利润口径", "采购价、包装重量、物流方式未确认前只做草稿；低于利润底线自动停住。"],
-      ["发布建议", "补齐供应商资料后送利润测算，再一次性确认价格、库存、物流政策和发布。"],
-    ],
-    specifics: [
-      ["Brand", "Unbranded", "无品牌时使用；若供应商有品牌必须确认授权"],
-      ["Type", "Backflow Incense Burner", "按类目字段校验"],
-      ["Material", "Ceramic / Resin style finish", "当前草稿，必须向供应商确认"],
-      ["Color", "Bronze / Brown", "按实物色差确认"],
-      ["Style", "Zen / Oriental-inspired Home Decor", "只写装饰风格，不写功效"],
-      ["Room", "Living Room, Study, Office", "用于买家理解使用场景"],
-      ["MPN", "Does Not Apply", "无厂家编号时使用"],
-      ["UPC", "Does Not Apply", "按类目规则校验"],
-      ["Included", "Incense burner only", "是否含香粒必须确认"],
-      ["Features", "Waterfall smoke effect, decorative holder", "描述效果，不写疗愈/助眠"],
-    ],
-    description: [
-      "Add a calm decorative accent to a tea table, study, office, or living room with this backflow incense burner.",
-      "Designed for backflow incense cones and a waterfall-style smoke effect. Suitable for desk, shelf, tea room, and gift scenes.",
-      "Incense cones are not included unless confirmed by the supplier. Size, weight, material, and package dimensions require final confirmation before publishing.",
-    ],
-    policies: {
-      fulfillment: "国际标准物流 · 3 个工作日处理",
-      payment: "eBay Managed Payments · 固定价立即付款",
-      returns: "30 天退货草稿 · 按退货原因区分责任",
-      weight: "650 g 估算",
-      dimensions: "26 x 20 x 14 cm 估算",
-      itemLocation: "China / route pending",
-    },
-    mediaPlan: [
-      ["主图", "白底主图、烟雾效果主视觉", "已生成"],
-      ["场景图", "茶室、家居书桌、礼品氛围", "已生成"],
-      ["详情页", "参数、使用提醒、是否含香粒", "已生成"],
-      ["视频", "30 秒英文字幕脚本和分镜", "待确认"],
-    ],
-    missing: ["真实长宽高", "包装重量", "材质", "是否含香粒", "发货地", "防碎包装"],
-    supplierQuestions: [
-      "请确认裸机尺寸、包装后尺寸和包装重量。",
-      "是否包含倒流香粒？如果包含，每套数量是多少？",
-      "材质是陶瓷、树脂还是混合材质？是否易碎？",
-      "破损是否支持补发？供应商能否提供防碎包装？",
-    ],
-    next: "先补供应商资料，再进入利润测算和确认中心；没有补齐前不发布、不采购。",
-  },
-  {
-    id: "compression",
-    titleCn: "旅行压缩收纳袋",
-    titleEn: "Travel Compression Packing Bags",
-    sku: "JJ-TCB-002",
-    title: "Travel Compression Packing Bags Space Saver Organizer Set for Suitcase",
-    subtitle: "Lightweight luggage organizer bags for travel packing",
-    thumb: "assets/travel-compression-main-v2.png",
-    gallery: [
-      ["套装主图", "assets/travel-compression-main-v2.png", "展示套装数量和颜色"],
-      ["行李箱场景", "assets/travel-compression-scene-v2.png", "展示收纳前后对比"],
-      ["详情页", "assets/travel-compression-detail-v2.png", "展示尺寸、拉链和材质"],
-      ["视频封面", "assets/travel-compression-video-cover.png", "装箱演示短视频封面"],
-    ],
-    score: 74,
-    readiness: 74,
-    status: "可推进",
-    badge: "低风险",
-    risk: "低风险",
-    market: "eBay US",
-    marketplaceId: "EBAY_US",
-    category: "Travel Accessories / Packing Organizers",
-    categoryId: "待 eBay 类目校验",
-    merchantLocationKey: "CN_SUPPLIER_DIRECT",
-    condition: "New",
-    format: "Fixed Price",
-    duration: "Good Til Cancelled",
-    price: "US $18.99",
-    quantity: "30",
-    conclusion: "适合做基础测试，卖点清楚、履约风险低；要避免夸大压缩效果。",
-    report: [
-      ["买家画像", "旅行、留学、短租搬家、家庭衣物收纳用户。最关心容量、耐用、拉链是否顺滑。"],
-      ["价格带", "US $12.99-24.99；套装数量、尺寸和材质厚度决定价格感知。"],
-      ["竞品痛点", "差评集中在拉链断裂、袋体太薄、尺寸不清、压缩效果不如预期。"],
-      ["差异化机会", "用真实容量对比、拉链细节、尺寸表和材质厚度说明建立信任。"],
-      ["利润口径", "轻小件适合先走标准物流；需确认套装重量和单个包装体积。"],
-      ["发布建议", "先生成容量对比图和详情页，再按 6 件套做 Fixed Price 测试。"],
-    ],
-    specifics: [
-      ["Brand", "Unbranded", "无品牌草稿"],
-      ["Type", "Compression Packing Bag", "按类目校验"],
-      ["Material", "Nylon / Polyester", "待供应商确认克重"],
-      ["Color", "Beige / Gray set", "按实际套装颜色"],
-      ["Number of Items", "6 pcs", "套装数量待确认"],
-      ["Features", "Lightweight, reusable", "不夸大压缩比例"],
-      ["MPN", "Does Not Apply", "无厂家编号时使用"],
-      ["UPC", "Does Not Apply", "按类目规则校验"],
-      ["Size", "Mixed sizes", "尺寸表待补"],
-      ["Care", "Wipe clean", "按材质确认"],
-    ],
-    description: [
-      "Organize clothing and travel essentials with lightweight compression packing bags for suitcase and closet use.",
-      "The draft emphasizes space saving, category organization, and easy packing without promising unrealistic compression results.",
-      "Final listing needs exact bag count, dimensions, material thickness, zipper type, and package weight.",
-    ],
-    policies: {
-      fulfillment: "轻小件标准物流 · 2-3 个工作日处理",
-      payment: "eBay Managed Payments · 立即付款",
-      returns: "30 天退货 · 未使用可退",
-      weight: "420 g 估算",
-      dimensions: "30 x 22 x 5 cm 估算",
-      itemLocation: "China / supplier direct",
-    },
-    mediaPlan: [
-      ["主图", "套装展开白底图", "已生成"],
-      ["场景图", "行李箱收纳前后对比", "已生成"],
-      ["详情页", "容量、尺寸、材质、拉链细节", "已生成"],
-      ["视频", "10 秒装箱演示", "可生成"],
-    ],
-    missing: ["套装数量", "每个袋子尺寸", "材质厚度", "拉链材质", "包装重量"],
-    supplierQuestions: [
-      "请提供每个袋子的准确尺寸和套装数量。",
-      "压缩方式是否需要真空泵？是否只是拉链压缩？",
-      "拉链是否可重复拉合？质保或破损补发规则是什么？",
-      "是否支持单个 OPP 包装和条码贴标？",
-    ],
-    next: "进入素材工坊生成容量对比图和详情页，再做利润测算。",
-  },
-  {
-    id: "jewelry",
-    titleCn: "便携首饰盒",
-    titleEn: "Travel Jewelry Organizer Case",
-    sku: "JJ-TJC-003",
-    title: "Travel Jewelry Organizer Case Small Earring Ring Storage Box for Women",
-    subtitle: "Compact jewelry box for rings earrings and necklaces",
-    thumb: "assets/jewelry-case-main.png",
-    gallery: [
-      ["主图草稿", "assets/jewelry-case-main.png", "统一白底主图预览"],
-      ["内部结构", "assets/jewelry-case-closeup.png", "展示耳环、戒指、项链分区"],
-      ["礼品场景", "assets/jewelry-case-gift.png", "礼品和旅行场景方向"],
-      ["视频封面", "assets/jewelry-case-video-cover.png", "开合展示短视频封面"],
-    ],
-    score: 71,
-    readiness: 71,
-    status: "可推进",
-    badge: "素材已生成",
-    risk: "低风险",
-    market: "eBay US",
-    marketplaceId: "EBAY_US",
-    category: "Jewelry Boxes & Organizers",
-    categoryId: "待 eBay 类目校验",
-    merchantLocationKey: "CN_SUPPLIER_DIRECT",
-    condition: "New",
-    format: "Fixed Price",
-    duration: "Good Til Cancelled",
-    price: "US $14.99",
-    quantity: "40",
-    conclusion: "适合低风险常规测试，但同质化高，图片必须强调内部结构和礼品感。",
-    report: [
-      ["买家画像", "旅行收纳、礼品、自用首饰整理、宿舍小空间用户。"],
-      ["价格带", "US $9.99-18.99；颜色、材质和礼品感影响转化。"],
-      ["竞品痛点", "尺寸太小、拉链不顺、内衬异味、颜色偏差和空间不够。"],
-      ["差异化机会", "用手持尺寸对比、内部结构图、颜色真实对比和礼品场景提高可信度。"],
-      ["利润口径", "轻小件可测，但低价竞争强，建议首批限制广告预算。"],
-      ["发布建议", "先做 3 色变体方案；如果供应商支持多色，再转变体刊登。"],
-    ],
-    specifics: [
-      ["Brand", "Unbranded", "无品牌草稿"],
-      ["Type", "Jewelry Organizer Case", "按类目校验"],
-      ["Material", "PU Leather / Velvet lining", "待确认"],
-      ["Color", "Pink / Beige / Black", "若多色需转变体"],
-      ["Features", "Portable, zip closure", "不要写防盗防水"],
-      ["Suitable For", "Rings, earrings, necklaces", "按内部结构确认"],
-      ["MPN", "Does Not Apply", "无厂家编号时使用"],
-      ["UPC", "Does Not Apply", "按类目规则校验"],
-      ["Closure", "Zipper", "待确认"],
-      ["Size", "Small", "需填准确尺寸"],
-    ],
-    description: [
-      "A compact jewelry organizer case for travel, daily storage, and gift use.",
-      "The layout can hold small rings, earrings, necklaces, and bracelets depending on the internal divider design.",
-      "Exact dimensions, material, colors, and internal layout must be confirmed before publishing.",
-    ],
-    policies: {
-      fulfillment: "轻小件标准物流 · 2 个工作日处理",
-      payment: "eBay Managed Payments · 立即付款",
-      returns: "30 天退货 · 未使用可退",
-      weight: "180 g 估算",
-      dimensions: "12 x 12 x 6 cm 估算",
-      itemLocation: "China / supplier direct",
-    },
-    mediaPlan: [
-      ["主图", "白底开合展示", "已生成"],
-      ["场景图", "旅行包、梳妆台、礼品场景", "已生成"],
-      ["详情页", "内部格位、尺寸、颜色", "已生成"],
-      ["视频", "开合和容量展示", "脚本已生成"],
-    ],
-    missing: ["准确尺寸", "内衬材质", "可选颜色", "是否多色同价", "包装方式"],
-    supplierQuestions: [
-      "请提供准确长宽高、重量和内部格位照片。",
-      "外层和内衬材质分别是什么？是否有异味处理？",
-      "支持哪些颜色？多色是否同价同库存？",
-      "是否可以提供独立包装，适合作为礼品吗？",
-    ],
-    next: "确认颜色和内部结构后，决定做单品还是变体刊登。",
-  },
-  {
-    id: "candle",
-    titleCn: "香薰蜡烛套装",
-    titleEn: "Scented Candle Gift Set",
-    sku: "JJ-SCG-004",
-    title: "Scented Candle Gift Set Home Fragrance Decorative Candles for Relaxing Decor",
-    subtitle: "Gift ready candle set with home fragrance scents",
-    thumb: "assets/candle-set-main.png",
-    gallery: [
-      ["主图草稿", "assets/candle-set-main.png", "套装白底主图预览"],
-      ["礼品场景", "assets/candle-set-scene.png", "礼盒和家居氛围"],
-      ["详情页", "assets/candle-set-detail-page.png", "香型、容量、燃烧注意"],
-      ["视频封面", "assets/candle-set-video-cover.png", "点燃和礼盒展示"],
-    ],
-    score: 63,
-    readiness: 63,
-    status: "待补资料",
-    badge: "履约待核",
-    risk: "中风险",
-    market: "eBay US",
-    marketplaceId: "EBAY_US",
-    category: "Candles & Home Fragrance",
-    categoryId: "待 eBay 类目校验",
-    merchantLocationKey: "CN_WAREHOUSE_01",
-    condition: "New",
-    format: "Fixed Price",
-    duration: "Good Til Cancelled",
-    price: "US $19.99",
-    quantity: "15",
-    conclusion: "有礼品属性，但液体/蜡类、破损、气味描述和物流限制需要先确认。",
-    report: [
-      ["买家画像", "家居氛围、礼品、浴室放松和季节装饰买家。"],
-      ["价格带", "US $15.99-34.99；礼盒质感和数量决定价格。"],
-      ["竞品痛点", "气味与描述不符、破损、燃烧时间夸大、包装廉价。"],
-      ["差异化机会", "真实香型说明、礼盒展示、容量标注和安全提醒能降低纠纷。"],
-      ["利润口径", "重量和破损率决定是否值得做；不建议一开始大批铺货。"],
-      ["发布建议", "先向供应商确认物流限制和包装，再决定是否继续。"],
-    ],
-    specifics: [
-      ["Brand", "Unbranded", "无品牌草稿"],
-      ["Type", "Scented Candle Set", "按类目校验"],
-      ["Material", "Soy wax / paraffin wax", "必须确认"],
-      ["Scent", "Mixed scents", "不能乱写香型"],
-      ["Number in Pack", "4", "待确认"],
-      ["Features", "Gift set", "不写疗愈/医疗效果"],
-      ["MPN", "Does Not Apply", "无厂家编号时使用"],
-      ["UPC", "Does Not Apply", "按类目规则校验"],
-      ["Burning Time", "Supplier confirmed only", "不得估算夸大"],
-      ["Container", "Glass / tin", "待确认"],
-    ],
-    description: [
-      "A scented candle gift set for home decoration, gift giving, and daily atmosphere.",
-      "The draft avoids medical, sleep, anxiety, or therapy claims and focuses on decorative and gift use.",
-      "Scent, wax type, net weight, burning time, packaging, and shipping restrictions must be confirmed before publishing.",
-    ],
-    policies: {
-      fulfillment: "易碎/液体相关限制待核 · 3 个工作日处理",
-      payment: "eBay Managed Payments · 立即付款",
-      returns: "30 天退货草稿 · 开封使用后限制需确认",
-      weight: "900 g 估算",
-      dimensions: "24 x 18 x 8 cm 估算",
-      itemLocation: "China / route pending",
-    },
-    mediaPlan: [
-      ["主图", "礼盒和数量清晰展示", "已生成"],
-      ["场景图", "卧室、浴室、礼品场景", "已生成"],
-      ["详情页", "香型、容量、燃烧安全", "已生成"],
-      ["视频", "礼盒打开和点燃氛围", "脚本已生成"],
-    ],
-    missing: ["香型", "蜡材质", "净含量", "燃烧时间", "是否玻璃易碎", "物流限制"],
-    supplierQuestions: [
-      "每个蜡烛净含量是多少？蜡材质是什么？",
-      "香型名称和实际气味描述能否提供？",
-      "外壳是玻璃、铁盒还是陶瓷？破损如何处理？",
-      "跨境物流是否接受该产品？是否有液体/易燃限制？",
-    ],
-    next: "先做履约和平台限制核查，确认能发再进入素材生成。",
-  },
-  {
-    id: "cable",
-    titleCn: "桌面理线夹",
-    titleEn: "Desk Cable Organizer Clips",
-    sku: "JJ-DCO-005",
-    title: "Desk Cable Organizer Clips Self Adhesive Cord Holder Wire Management Set",
-    subtitle: "Simple cable clips for desk nightstand and office wires",
-    thumb: "assets/cable-organizer.svg",
-    gallery: [
-      ["主图草稿", "assets/cable-organizer.svg", "多枚套装白底图"],
-      ["桌面场景", "assets/cable-organizer-scene.png", "办公桌收纳前后对比"],
-      ["详情页", "assets/cable-organizer-detail-page.png", "尺寸、粘胶和线径说明"],
-      ["视频封面", "assets/cable-organizer-video-cover.png", "安装演示短视频"],
-    ],
-    score: 69,
-    readiness: 69,
-    status: "可推进",
-    badge: "低客单",
-    risk: "低风险",
-    market: "eBay US",
-    marketplaceId: "EBAY_US",
-    category: "Cable Management",
-    categoryId: "待 eBay 类目校验",
-    merchantLocationKey: "CN_SUPPLIER_DIRECT",
-    condition: "New",
-    format: "Fixed Price",
-    duration: "Good Til Cancelled",
-    price: "US $9.99",
-    quantity: "60",
-    conclusion: "适合作为轻小件测试品，但客单低，要控制运费和广告成本。",
-    report: [
-      ["买家画像", "办公桌整理、电脑配件、租房和学生用户。"],
-      ["价格带", "US $5.99-12.99；套装数量和粘胶质量影响转化。"],
-      ["竞品痛点", "粘不牢、尺寸太小、不适配粗线、拆除留胶。"],
-      ["差异化机会", "给出线径适配、安装步骤、清洁表面提醒和数量清单。"],
-      ["利润口径", "低价轻小件，需要走低运费路线；广告预算必须保守。"],
-      ["发布建议", "可先做 20/40 件套变体，避免单件客单过低。"],
-    ],
-    specifics: [
-      ["Brand", "Unbranded", "无品牌草稿"],
-      ["Type", "Cable Organizer Clip", "按类目校验"],
-      ["Material", "Silicone / Plastic", "待供应商确认"],
-      ["Color", "Black / White", "若多色需转变体"],
-      ["Number in Pack", "20 pcs", "待确认"],
-      ["Mounting", "Self-adhesive", "粘胶材质待确认"],
-      ["MPN", "Does Not Apply", "无厂家编号时使用"],
-      ["UPC", "Does Not Apply", "按类目规则校验"],
-      ["Suitable For", "Charging cable, USB cable", "按线径确认"],
-      ["Features", "Desktop cable management", "不夸大承重"],
-    ],
-    description: [
-      "Keep charging cables and desk wires organized with self-adhesive cable organizer clips.",
-      "Designed for desk, nightstand, office, and cable routing use. Clean and dry the surface before attaching.",
-      "Final listing needs pack count, material, adhesive type, compatible cable diameter, and package weight.",
-    ],
-    policies: {
-      fulfillment: "轻小件经济物流 · 2 个工作日处理",
-      payment: "eBay Managed Payments · 立即付款",
-      returns: "30 天退货 · 未使用可退",
-      weight: "120 g 估算",
-      dimensions: "16 x 10 x 3 cm 估算",
-      itemLocation: "China / supplier direct",
-    },
-    mediaPlan: [
-      ["主图", "套装数量和颜色展示", "已生成"],
-      ["场景图", "桌面线缆前后对比", "已生成"],
-      ["详情页", "线径、粘胶、安装步骤", "已生成"],
-      ["视频", "10 秒安装演示", "脚本已生成"],
-    ],
-    missing: ["每包数量", "单个尺寸", "材质", "粘胶类型", "适配线径", "包装重量"],
-    supplierQuestions: [
-      "每包数量是多少？是否支持 20/40 件套？",
-      "单个理线夹尺寸和适配线径范围是多少？",
-      "粘胶类型是什么？是否适合木桌、玻璃、金属表面？",
-      "拆除是否容易留胶？是否有安装说明图？",
-    ],
-    next: "确认套装数量和线径后，可作为低风险轻小件进入测试批次。",
-  },
-];
+const listingDraftCatalog = [];
 
 const cockpitListingDraftCatalog = listingDraftCatalog.slice();
 
@@ -2034,124 +729,6 @@ function detachBulkHandoffDrafts() {
   if (bulkIds.has(state.activeListingDraft)) state.activeListingDraft = "incense";
   if (bulkIds.has(state.activeMediaDraft)) state.activeMediaDraft = "incense";
 }
-
-Object.assign(mediaDraftAssetProfiles, {
-  "bulk-sink-mat": {
-    name: "硅胶水槽沥水垫",
-    source: "assets/bulk-sink-mat.svg",
-    images: {
-      main: "assets/bulk-sink-mat.svg",
-      scene: "assets/bulk-sink-mat.svg",
-      sceneHome: "assets/bulk-sink-mat.svg",
-      closeup: "assets/bulk-sink-mat.svg",
-      size: "assets/bulk-sink-mat.svg",
-      detail: "assets/bulk-sink-mat.svg",
-      video: "assets/bulk-sink-mat.svg",
-    },
-    cardTitles: {
-      main: "厨房白底主图",
-      scene: "水槽边使用场景",
-      sceneHome: "台面保护场景",
-      closeup: "沥水结构细节",
-      size: "适配尺寸图",
-      detail: "详情页长图",
-      video: "厨房演示视频",
-    },
-    checklist: ["确认真实尺寸、厚度和包装重量。", "确认材质等级和耐温范围。", "不要夸大承重、耐高温或食品接触认证。"],
-  },
-  "bulk-litter-scoop": {
-    name: "猫砂铲收纳架",
-    source: "assets/bulk-litter-scoop.svg",
-    images: {
-      main: "assets/bulk-litter-scoop.svg",
-      scene: "assets/bulk-litter-scoop.svg",
-      sceneHome: "assets/bulk-litter-scoop.svg",
-      closeup: "assets/bulk-litter-scoop.svg",
-      size: "assets/bulk-litter-scoop.svg",
-      detail: "assets/bulk-litter-scoop.svg",
-      video: "assets/bulk-litter-scoop.svg",
-    },
-    cardTitles: {
-      main: "收纳架白底主图",
-      scene: "猫砂盆旁场景",
-      sceneHome: "宠物清洁收纳场景",
-      closeup: "安装结构细节",
-      size: "适配猫砂铲尺寸",
-      detail: "详情页长图",
-      video: "安装演示视频",
-    },
-    checklist: ["确认是否包含猫砂铲。", "确认安装方式和适配尺寸。", "图片必须清楚说明 holder only 或 with scoop。"],
-  },
-  "bulk-fridge-clip": {
-    name: "冰箱门侧收纳夹",
-    source: "assets/bulk-fridge-clip.svg",
-    images: {
-      main: "assets/bulk-fridge-clip.svg",
-      scene: "assets/bulk-fridge-clip.svg",
-      sceneHome: "assets/bulk-fridge-clip.svg",
-      closeup: "assets/bulk-fridge-clip.svg",
-      size: "assets/bulk-fridge-clip.svg",
-      detail: "assets/bulk-fridge-clip.svg",
-      video: "assets/bulk-fridge-clip.svg",
-    },
-    cardTitles: {
-      main: "套装白底主图",
-      scene: "冰箱侧边收纳场景",
-      sceneHome: "厨房袋装收纳场景",
-      closeup: "夹口细节",
-      size: "夹持厚度说明",
-      detail: "详情页长图",
-      video: "安装使用视频",
-    },
-    checklist: ["确认套装数量和夹持厚度。", "承重说明必须保守。", "不要写适配所有冰箱或所有柜门。"],
-  },
-  "bulk-toothbrush-case": {
-    name: "浴室牙刷旅行盒",
-    source: "assets/bulk-toothbrush-case.svg",
-    images: {
-      main: "assets/bulk-toothbrush-case.svg",
-      scene: "assets/bulk-toothbrush-case.svg",
-      sceneHome: "assets/bulk-toothbrush-case.svg",
-      closeup: "assets/bulk-toothbrush-case.svg",
-      size: "assets/bulk-toothbrush-case.svg",
-      detail: "assets/bulk-toothbrush-case.svg",
-      video: "assets/bulk-toothbrush-case.svg",
-    },
-    cardTitles: {
-      main: "开合白底主图",
-      scene: "旅行洗漱场景",
-      sceneHome: "浴室台面场景",
-      closeup: "通风孔和盒体细节",
-      size: "适配牙刷尺寸图",
-      detail: "详情页长图",
-      video: "收纳演示视频",
-    },
-    checklist: ["确认内长和适配牙刷长度。", "确认套装数量和颜色组合。", "不要写抗菌、除菌或消毒功效。"],
-  },
-  "bulk-car-hook": {
-    name: "车载挂钩收纳扣",
-    source: "assets/bulk-car-hook.svg",
-    images: {
-      main: "assets/bulk-car-hook.svg",
-      scene: "assets/bulk-car-hook.svg",
-      sceneHome: "assets/bulk-car-hook.svg",
-      closeup: "assets/bulk-car-hook.svg",
-      size: "assets/bulk-car-hook.svg",
-      detail: "assets/bulk-car-hook.svg",
-      video: "assets/bulk-car-hook.svg",
-    },
-    cardTitles: {
-      main: "车载挂钩白底主图",
-      scene: "车内使用场景",
-      sceneHome: "购物袋收纳场景",
-      closeup: "挂钩结构细节",
-      size: "头枕杆适配图",
-      detail: "详情页长图",
-      video: "车内安装视频",
-    },
-    checklist: ["确认适配头枕杆范围。", "确认套装数量和承重。", "不能写适配所有车型。"],
-  },
-});
 
 const operatingModules = [
   {
@@ -2651,1280 +1228,18 @@ const workflow = [
   ["项目状态", "图片视频素材、采购价和履约信息待补齐后进入确认中心", "current"],
 ];
 
-const listingProjects = [
-  {
-    id: "backflow-incense",
-    storeId: "us-main",
-    title: "倒流香炉",
-    keyword: "backflow incense burner",
-    status: "素材生成中",
-    progress: 46,
-    risk: "中风险",
-    brief: "新店样例：从一张商品/货源图开始，生成平台素材包、详情页草稿和短视频脚本，再进确认中心。",
-    steps: [
-      ["项目状态", "素材工坊正在准备图片包和短视频脚本，尺寸、重量、材质、香粒安全说明和发布动作进入确认中心", "current"],
-    ],
-  },
-  {
-    id: "zen-incense",
-    storeId: "us-main",
-    title: "陶瓷香插",
-    keyword: "ceramic incense holder",
-    status: "素材待确认",
-    progress: 60,
-    risk: "中风险",
-    brief: "家居香薰摆件方向，当前重点是图片/视频素材和履约承诺。",
-    steps: workflow,
-  },
-  {
-    id: "jewelry-case",
-    storeId: "us-main",
-    title: "便携首饰盒",
-    keyword: "travel jewelry case",
-    status: "市场调研中",
-    progress: 28,
-    risk: "中风险",
-    brief: "适合先调研价格带、搜索词和同质化风险，再决定是否生成 Listing。",
-    steps: [
-      ["项目状态", "同质化较高，先确认差异化素材、供货价和履约方式", "current"],
-    ],
-  },
-  {
-    id: "drawer-organizer",
-    storeId: "uk-test",
-    title: "竹制抽屉收纳盒",
-    keyword: "bamboo drawer organizer",
-    status: "待店铺授权",
-    progress: 12,
-    risk: "低风险",
-    brief: "适合 UK 测试店，但该店铺还未授权，当前只能用待同步资料调研。",
-    steps: [
-      ["项目状态", "店铺授权未完成，当前只做低置信度调研和素材草稿", "current"],
-    ],
-  },
-];
+const listingProjects = [];
+const workflowProjectMeta = {};
+const backflowMarketReport = {};
+const backflowProductReport = {};
+const backflowRiskReport = {};
 
-const workflowProjectMeta = {
-  "backflow-incense": {
-    queueLabel: "倒流香炉全链路演示：从货源图推进到发布前确认",
-    automationLevel: "演示全权限 · 全链路可看",
-    apiState: "eBay / 1688 / 物流模拟接入",
-    confirmNeed: "真实发布、采购付款、退款、广告、买家承诺",
-    stageTitle: "倒流香炉项目推进板",
-    nextRisk: "需确认",
-    nextTitle: "先补齐真实规格，再让素材和 Listing 继续往前走",
-    nextCopy:
-      "演示状态会把市场判断、货源核验、英文 Listing、素材工坊、利润履约、客服学习和确认中心全部展开。现在不能替商家猜尺寸、重量、材质或香粒安全说明，这些会影响 eBay 刊登资料、运费、退货和买家预期。",
-    boundary:
-      "演示中图片草稿、标题草稿、FAQ、费用测算、1688 采购路径和客服话术都会完整展示；真实发布、改价、广告、采购付款和买家强承诺仍进入确认中心。",
-    primaryView: "confirm",
-    primaryLabel: "去确认资料与发布边界",
-    primaryToast: "已打开待我确认：先处理倒流香炉的资料缺口和发布边界。",
-    checklist: [
-      "补齐包裹重量、长宽高、材质和包装清单。",
-      "确认是否含香粒，以及香粒安全说明怎么写。",
-      "预览素材包后，再决定哪些图片可进入 Listing。",
-      "发布、价格、库存、广告预算、采购付款和客服强承诺不自动执行。",
-    ],
-    stages: [
-      {
-        title: "机会判断",
-        status: "done",
-        summary: "已判断为可谨慎测试的家居礼品方向。",
-        output: "价格带、买家关注点、差评风险和搜索词已整理。",
-        missing: "暂无关键缺口。",
-        next: "进入上架资料和素材生成。",
-      },
-      {
-        title: "货源与履约",
-        status: "current",
-        summary: "采购价、发货方式和退货承诺还要按真实情况确认。",
-        output: "已按国内中转/供应商直发两种口径做保守测算。",
-        missing: "重量、尺寸、材质、是否含香粒。",
-        next: "补齐后更新费用和 handling time。",
-      },
-      {
-        title: "上架资料",
-        status: "done",
-        summary: "Title、Subtitle、商品参数 和描述结构已有草稿。",
-        output: "标题、类目方向、描述 HTML、FAQ 和图片需求已生成。",
-        missing: "真实规格会替换临时参数。",
-        next: "等待素材包和参数确认后合并。",
-      },
-      {
-        title: "素材工坊",
-        status: "current",
-        summary: "正在把商品图扩展为主图、场景图、详情图和短视频脚本。",
-        output: "白底主图、茶室场景、尺寸说明、详情页和视频封面草稿。",
-        missing: "最终可用图片需要商家判断是否和实物一致。",
-        next: "通过的素材回写到 Listing 草稿。",
-      },
-      {
-        title: "费用利润",
-        status: "wait",
-        summary: "利润测算等待真实重量和物流口径。",
-        output: "已保留平台费、物流、采购价、退货预留四项口径。",
-        missing: "实际包裹重量和发货方式。",
-        next: "低于利润底线时自动暂停。",
-      },
-      {
-        title: "客服售后",
-        status: "wait",
-        summary: "客服需要先学习商品档案，不能直接自动回复。",
-        output: "FAQ 框架、不能承诺的话、退货边界已准备。",
-        missing: "产品档案和物流承诺确认。",
-        next: "确认后生成低风险客服草稿。",
-      },
-      {
-        title: "确认中心",
-        status: "blocked",
-        summary: "真实发布、价格、库存、广告和买家承诺必须由商家确认。",
-        output: "已生成待确认清单。",
-        missing: "商家确认。",
-        next: "确认后才可保存草稿或进入发布准备。",
-      },
-    ],
-  },
-  "zen-incense": {
-    queueLabel: "陶瓷香插全链路演示：素材、易碎履约和客服话术一起看",
-    automationLevel: "演示全权限 · 全链路可看",
-    apiState: "eBay / 货源 / 物流模拟接入",
-    confirmNeed: "素材真实性、包装重量、物流承诺、发布动作",
-    stageTitle: "陶瓷香插项目推进板",
-    nextRisk: "中风险",
-    nextTitle: "先确认图片和视频是否夸大实物效果",
-    nextCopy:
-      "这个项目会完整展示调研、图片视频、Listing、利润、易碎品履约和客服话术。真正风险在图片效果、实物尺寸和运输破损；AI 可以继续出图和写 Listing，但不能替你承诺烟雾效果和到货时效。",
-    boundary:
-      "演示中素材、Listing、利润和客服草稿都会自动展开；使用真实商品图、发布、价格、采购付款和退货政策仍需确认。",
-    primaryView: "activity",
-    primaryLabel: "查看素材与上架汇报",
-    primaryToast: "已打开 AI 汇报：查看陶瓷香插的素材与上架汇报。",
-    checklist: [
-      "先抽检主图、场景图和细节图是否与实物一致。",
-      "确认包装重量和易碎品处理方式。",
-      "把客服 FAQ 建好后再处理买家咨询。",
-    ],
-    stages: [
-      {
-        title: "机会判断",
-        status: "done",
-        summary: "家居香薰摆件方向可做小批量测试。",
-        output: "价格带、关键词和竞品问题已整理。",
-        missing: "暂无。",
-        next: "继续素材和 Listing。",
-      },
-      {
-        title: "货源与履约",
-        status: "current",
-        summary: "陶瓷易碎，履约承诺要比普通小件更保守。",
-        output: "已标记包装、破损和退货风险。",
-        missing: "包装重量、外箱尺寸、破损处理方式。",
-        next: "确认后更新利润测算。",
-      },
-      {
-        title: "上架资料",
-        status: "done",
-        summary: "Listing 字段草稿已生成。",
-        output: "标题、五点卖点、描述结构和图片顺序。",
-        missing: "真实规格。",
-        next: "等待素材确认。",
-      },
-      {
-        title: "素材工坊",
-        status: "current",
-        summary: "主图、场景图和视频脚本等待抽检。",
-        output: "已生成可预览素材草稿。",
-        missing: "商家判断是否贴近实物。",
-        next: "通过后进入确认中心。",
-      },
-      {
-        title: "费用利润",
-        status: "wait",
-        summary: "等待真实重量后复算。",
-        output: "利润模型已建。",
-        missing: "重量和物流方式。",
-        next: "复算后决定是否继续。",
-      },
-      {
-        title: "客服售后",
-        status: "wait",
-        summary: "客服档案待补齐。",
-        output: "已准备保守回复边界。",
-        missing: "商品档案。",
-        next: "学习后再生成话术。",
-      },
-      {
-        title: "确认中心",
-        status: "wait",
-        summary: "素材、发布和物流承诺待确认。",
-        output: "确认项已预留。",
-        missing: "商家抽检。",
-        next: "抽检后提交。",
-      },
-    ],
-  },
-  "jewelry-case": {
-    queueLabel: "首饰收纳盒全链路演示：竞品、价格、图片和批量草稿一起看",
-    automationLevel: "演示全权限 · 全链路可看",
-    apiState: "eBay / 1688 / 表格货源模拟接入",
-    confirmNeed: "价格带、包装重量、采购方式、批量发布",
-    stageTitle: "便携首饰盒项目推进板",
-    nextRisk: "需判断",
-    nextTitle: "先判断是否值得继续，不要为了铺货而铺货",
-    nextCopy:
-      "首饰盒类目供给多、图片相似度高。演示会把竞品拆解、差评点、价格带、差异化素材、Listing 草稿和批量筛选一起展开，再决定是否进入发布准备。",
-    boundary:
-      "演示中会展示完整调研、素材、Listing 和批量草稿；真实发布、采购付款、价格和库存仍不自动执行。",
-    primaryView: "activity",
-    primaryLabel: "查看市场判断汇报",
-    primaryToast: "已打开 AI 汇报：先看便携首饰盒的市场判断。",
-    checklist: [
-      "确认是否有独特尺寸、材质、颜色或旅行场景。",
-      "核对采购价和体积重量是否还能留下利润。",
-      "如果没有差异化，先暂停，不进入批量铺货。",
-    ],
-    stages: [
-      {
-        title: "机会判断",
-        status: "current",
-        summary: "正在判断这个品是否值得继续。",
-        output: "已整理同质化、价格带和用户关注点。",
-        missing: "差异化卖点和真实采购价。",
-        next: "先出做/不做建议。",
-      },
-      {
-        title: "货源与履约",
-        status: "wait",
-        summary: "等待采购价、尺寸和重量。",
-        output: "已标记低客单价物流压力。",
-        missing: "采购价、包裹重量。",
-        next: "补齐后测算。",
-      },
-      {
-        title: "上架资料",
-        status: "wait",
-        summary: "暂不生成完整 Listing。",
-        output: "只保留关键词和类目方向。",
-        missing: "立项结论。",
-        next: "通过后生成。",
-      },
-      {
-        title: "素材工坊",
-        status: "wait",
-        summary: "素材生成等待差异化方向。",
-        output: "已列出旅行、抽屉、礼品三种图像方向。",
-        missing: "选择主推场景。",
-        next: "确认后再出图。",
-      },
-      {
-        title: "费用利润",
-        status: "wait",
-        summary: "没有采购价不能判断。",
-        output: "利润模型待输入。",
-        missing: "采购价和重量。",
-        next: "补齐后继续。",
-      },
-      {
-        title: "客服售后",
-        status: "wait",
-        summary: "暂不生成客服档案。",
-        output: "等待商品定稿。",
-        missing: "商品参数。",
-        next: "定稿后学习。",
-      },
-      {
-        title: "确认中心",
-        status: "wait",
-        summary: "当前只需要确认是否继续。",
-        output: "无发布确认。",
-        missing: "立项判断。",
-        next: "决定继续或暂停。",
-      },
-    ],
-  },
-  "drawer-organizer": {
-    queueLabel: "抽屉分隔架全链路演示：从 eBay 机会到货源匹配、素材刊登和确认上传",
-    automationLevel: "演示全权限 · 铺货试跑可看",
-    apiState: "eBay / 表格 / 物流模拟接入",
-    confirmNeed: "首批 SKU、价格、库存、采购付款、发布节奏",
-    stageTitle: "竹制抽屉收纳盒项目推进板",
-    nextRisk: "低风险",
-    nextTitle: "先接入店铺上下文，再决定是否推进",
-    nextCopy:
-      "这个品本身风险不高，适合演示批量铺货：AI 先从 eBay 机会判断开始，再匹配 1688 或供应商货源，生成素材和刊登草稿，最后只把首批 SKU、价格、库存和发布节奏交给商家确认。",
-    boundary:
-      "演示中会展示批量导入、筛选、草稿、物流测算和确认边界；当前不读取真实店铺，不写入 eBay。",
-    primaryView: "connect",
-    primaryLabel: "去设置接口与店铺授权",
-    primaryToast: "已打开连接账号：先补 eBay 只读授权或资料导入。",
-    checklist: [
-      "选择 eBay 官方只读授权，或先导入样本体验。",
-      "确认 UK 店铺的付款、发货、退货政策。",
-      "补充目标站点、币种和 item location。",
-    ],
-    stages: [
-      {
-        title: "机会判断",
-        status: "wait",
-        summary: "只能做低置信度判断。",
-        output: "已记录可调研方向。",
-        missing: "店铺上下文。",
-        next: "授权后继续。",
-      },
-      {
-        title: "货源与履约",
-        status: "wait",
-        summary: "等待店铺和履约规则。",
-        output: "暂无真实口径。",
-        missing: "发货地、退货地址、物流方式。",
-        next: "授权后配置。",
-      },
-      {
-        title: "上架资料",
-        status: "wait",
-        summary: "不生成完整发布包。",
-        output: "仅保留草稿框架。",
-        missing: "店铺政策和类目字段。",
-        next: "授权后补齐。",
-      },
-      {
-        title: "素材工坊",
-        status: "wait",
-        summary: "可做概念图，不作为发布素材。",
-        output: "等待商品图。",
-        missing: "真实商品图和规格。",
-        next: "补图后生成。",
-      },
-      {
-        title: "费用利润",
-        status: "blocked",
-        summary: "费用口径缺失。",
-        output: "无法判断真实利润。",
-        missing: "eBay 费用、物流、采购价。",
-        next: "接入后复算。",
-      },
-      {
-        title: "客服售后",
-        status: "wait",
-        summary: "客服档案暂不生成。",
-        output: "暂无。",
-        missing: "Listing 和产品档案。",
-        next: "项目定稿后生成。",
-      },
-      {
-        title: "确认中心",
-        status: "blocked",
-        summary: "当前确认项是授权方式。",
-        output: "只读授权入口在设置里。",
-        missing: "商家选择。",
-        next: "先去设置。",
-      },
-    ],
-  },
-};
-
-const backflowMarketReport = {
-  type: "market",
-  label: "市场判断汇报",
-  note: "参考资料口径：公开搜索、参考竞品和平台字段预估。真实店铺接入后会替换为可追溯数据。",
-  summary: [
-    ["立项判断", "谨慎继续，先做中价位家居礼品方向"],
-    ["主推切口", "禅意家居摆件 + 可视化倒流烟雾效果"],
-    ["建议价格", "单件 US$24.90 / 套装 US$34.90 / 礼盒 US$44.90"],
-    ["下一步", "补尺寸、重量、材质、是否含香粒，再进入 Listing 草稿确认"],
-  ],
-  boards: [
-    {
-      title: "市场调研",
-      items: [
-        "需求：香薰、禅意家居、礼品摆件是稳定长尾，不属于短期爆品。",
-        "搜索关注：用户会搜 backflow incense burner、waterfall incense holder、zen decor。",
-        "竞品分布：低价同质化多，中价位靠场景图、套装和礼品感拉开差异。",
-        "可切入空间：先做“好看、讲清尺寸、烟雾效果可信”的中价位款，不拼最低价。",
-      ],
-    },
-    {
-      title: "竞品分析",
-      items: [
-        "标题结构通常是核心词 + 场景词 + 风格词 + 材质词，很多标题堆词但缺少可信说明。",
-        "价格带集中在 US$15-39，低价款差评多集中在尺寸小、烟雾效果弱、包装破损。",
-        "卖点表达偏“relax / zen / home decor”，高风险词如 healing、cure、religious blessing 要避开。",
-        "评论方向说明用户最在意实物大小、烟雾是否顺畅、是否含香粒、包装是否适合送礼。",
-      ],
-    },
-    {
-      title: "用户关注点提炼",
-      items: [
-        "为什么买：家居装饰、冥想氛围、礼物、拍照好看、烟雾视觉效果。",
-        "为什么不买：怕实物太小、怕烟雾不像图、怕香粒味道刺鼻、怕运输破损。",
-        "最关心：尺寸、材质、是否含香粒、使用方式、清洁方式、烟雾效果真实性。",
-        "最担心：图片过度美化、到货破损、没有说明书、退货麻烦。",
-      ],
-    },
-    {
-      title: "搜索与流量方向",
-      items: [
-        "核心词：backflow incense burner / waterfall incense burner / incense holder。",
-        "场景词：zen decor / meditation room / yoga room / home decor / gift。",
-        "用户语言：不要只写“Oriental Style”，要用买家能搜索的 room decor、gift、waterfall smoke effect。",
-        "流量策略：先用长尾词拿低竞争曝光，再用场景图提高点击。",
-      ],
-    },
-    {
-      title: "产品立项初判",
-      items: [
-        "建议做，但只建议小批量测试，不建议一开始压库存。",
-        "依据：视觉卖点明显，适合素材放大；但低价竞品多，必须靠可信素材和清晰参数提升转化。",
-        "风险：烟雾效果、尺寸落差、包装破损和功效词，是当前最需要控制的四个坑。",
-      ],
-    },
-  ],
-  sections: [
-    {
-      title: "1. 品类概述",
-      body:
-        "倒流香炉属于 eBay 家居香薰/装饰摆件长尾品类，市场不是爆发型，但需求稳定；参考资料池显示相关 Listing 数量充足，成交信号集中在中低客单价区间，需求主要来自家居氛围、礼品和短视频视觉种草。",
-      metrics: [
-        ["样本池", "1,200+ 条相关 Listing 样本"],
-        ["需求强度", "中等偏上，稳定长尾"],
-        ["需求来源", "家居装饰、礼品、冥想氛围"],
-      ],
-    },
-    {
-      title: "2. 用户画像",
-      cards: [
-        ["家居氛围买家", "买来放客厅、书桌、茶室，关注好不好看、是否显高级。"],
-        ["礼品买家", "买来送朋友或节日礼物，关注包装、破损率和是否有说明。"],
-        ["香薰/冥想用户", "关注烟雾效果、使用方式、香粒是否随附，但不能承诺疗效。"],
-        ["内容拍摄用户", "关注图片和视频表现，容易被场景图和短视频种草。"],
-      ],
-    },
-    {
-      title: "3. eBay 价格带",
-      table: {
-        headers: ["价格带", "样本占比", "典型 Listing", "判断"],
-        rows: [
-          ["US$8.99-14.99", "22%", "小号香插/无礼盒/低价图", "竞争激烈，容易亏在物流和破损。"],
-          ["US$15.00-24.99", "38%", "普通倒流香炉/单件装", "可作为基础款，但必须讲清尺寸和是否含香粒。"],
-          ["US$25.00-39.99", "29%", "造型款/场景图/带配件", "建议主攻区间，有空间做素材和套装差异。"],
-          ["US$40.00-69.99", "11%", "礼盒套装/大尺寸/多配件", "可做高配 SKU，但先验证包装和破损率。"],
-        ],
-      },
-    },
-    {
-      title: "4. 竞品拆解 Top5",
-      table: {
-        headers: ["竞品方向", "标题结构", "价格", "成交信号", "差评与痛点"],
-        rows: [
-          ["瀑布烟雾款", "Backflow Incense Burner + Waterfall + Home Decor", "US$18.99", "中", "烟雾不连续、实物比图小。"],
-          ["禅意陶瓷款", "Ceramic Incense Holder + Zen Decor + Gift", "US$24.99", "中高", "包装简单、没有尺寸对比。"],
-          ["礼盒套装款", "Incense Burner Set + Cones + Gift Box", "US$34.99", "中", "香粒味道评价分化，退货风险高。"],
-          ["低价树枝造型", "Incense Burner Holder + Office Decor", "US$13.99", "高曝光", "材质廉价、破损、烟雾效果弱。"],
-          ["大尺寸摆件", "Large Backflow Burner + Meditation Room Decor", "US$49.99", "低中", "运费高、买家担心太重或到货慢。"],
-        ],
-      },
-    },
-    {
-      title: "5. 差异化空间",
-      table: {
-        headers: ["竞品痛点", "我们的方案"],
-        rows: [
-          ["实物大小不清楚", "增加尺寸图、手掌/桌面比例图、包装尺寸说明。"],
-          ["烟雾效果被怀疑造假", "素材标注“效果预览/真实拍摄来源”，视频里展示点燃到倒流全过程。"],
-          ["包装破损", "Listing 明确泡沫/纸盒/外箱包装，确认供应商包装后再承诺。"],
-          ["不会使用", "详情页加入 4 步使用图：放置、点燃、等待、清洁。"],
-          ["礼品感不足", "做礼盒 SKU，标题和图片突出 gift / home decor，不承诺宗教或疗愈功效。"],
-        ],
-      },
-    },
-    {
-      title: "6. 定价策略",
-      table: {
-        headers: ["SKU", "建议售价", "成本口径", "预计毛利"],
-        rows: [
-          ["基础单件", "US$24.90", "采购+包装 US$7.60，平台费 US$3.60，广告预留 US$2.50，国际物流 US$6.80", "US$4.40"],
-          ["香粒套装", "US$34.90", "采购+包装 US$11.80，平台费 US$5.05，广告预留 US$3.50，国际物流 US$7.60", "US$6.95"],
-          ["礼盒套装", "US$44.90", "采购+包装 US$16.20，平台费 US$6.50，广告预留 US$4.50，国际物流 US$9.20", "US$8.50"],
-        ],
-      },
-      items: [
-        "先上基础单件和套装两档，不要一次铺太多 SKU。",
-        "如果真实包装重量超过 650g，US$24.90 基础款需要重新测算。",
-        "广告预算先按每单 US$2.50-4.50 预留，不能只看采购价。",
-      ],
-    },
-    {
-      title: "7. 风险评估",
-      table: {
-        headers: ["风险项", "风险说明", "处理建议"],
-        rows: [
-          ["品类风险", "香薰相关文案容易写成疗愈、净化、宗教功效。", "删除 cure、healing、blessing 等无法证明的词。"],
-          ["竞争风险", "低价竞品多，单纯拼价格没有优势。", "靠尺寸说明、场景图、视频和套装做差异。"],
-          ["物流风险", "陶瓷/树枝造型易破损，包装重量影响利润。", "先确认包装方式和重量，再设 handling time。"],
-          ["售后风险", "买家可能因烟雾效果、尺寸小、香粒味道退货。", "详情页提前说明使用条件、尺寸和是否含香粒。"],
-          ["法规风险", "香粒成分、燃烧安全、儿童误用需要谨慎。", "不承诺治疗；增加安全提醒和使用边界。"],
-          ["素材风险", "AI 场景图可能和实物不一致。", "发布前必须确认实物一致性，必要时标注效果预览。"],
-        ],
-      },
-    },
-    {
-      title: "8. 结论与下一步",
-      body:
-        "结论：可以卖，但不要当成爆品重仓。建议先卖倒流香炉中价位单件和香粒套装，基础款 US$24.90 起，套装 US$34.90 起；先补齐尺寸、重量、材质、是否含香粒、包装清单和供应商授权，再生成正式上架资料包并送确认中心。",
-      items: [
-        "下一步 1：让商家补尺寸、包装重量、材质、是否含香粒。",
-        "下一步 2：素材生成补齐白底图、场景图、尺寸图、详情页长图和 30 秒短视频脚本。",
-        "下一步 3：利润测算按真实成本重算售价，低于安全毛利就暂停。",
-        "下一步 4：风险校验删除功效词，确认素材是否符合实物。",
-      ],
-    },
-  ],
-};
-
-const backflowProductReport = {
-  type: "product",
-  label: "上架资料汇报",
-  note:
-    "AI CEO 把市场判断结论转成 eBay 可上架资料包。这里是演示字段，真实发布前会调用 eBay 类目接口、店铺业务政策和商家实测参数复核。",
-  summary: [
-    ["资料包状态", "可进入草稿，但缺实测尺寸/重量"],
-    ["eBay 类目", "20552 · Home Fragrances"],
-    ["建议售价", "US$24.90 基础款 / US$34.90 套装"],
-    ["必须确认", "包裹重量、包装尺寸、物流模板和是否含香粒"],
-  ],
-  boards: [
-    {
-      title: "产品价值提炼",
-      items: [
-        "第一眼让买家看到：东方枝鸟造型 + 倒流烟雾视觉效果 + 家居摆件感。",
-        "最适合强调：home decor、gift、waterfall smoke effect、ceramic/metal look，避免疗愈和宗教功效。",
-        "购买理由：好看、适合茶室/书桌/客厅、适合作礼物、视频效果有记忆点。",
-        "不夸大：不写治愈、净化、助眠、祝福、开运等无法证明承诺。",
-      ],
-    },
-    {
-      title: "标题与描述结构设计",
-      items: [
-        "标题先放核心搜索词 Backflow Incense Burner，再放差异化词 Waterfall Smoke / Zen Home Decor。",
-        "描述按场景、材质、使用方式、包装清单、注意事项、FAQ 展开，读起来像卖家说明，不像关键词堆砌。",
-        "标题控制在 80 字符内；Subtitle 控制在 55 字符内，只强调最大卖点。",
-      ],
-    },
-    {
-      title: "图片需求",
-      items: [
-        "主图：白底、产品完整露出、不可带夸张文字和不真实烟雾。",
-        "副图顺序：场景图、烟雾效果图、尺寸对比、细节材质、包装清单、使用步骤、注意事项。",
-        "不能缺：尺寸图、是否含香粒说明、包装清单、实物颜色说明。",
-      ],
-    },
-    {
-      title: "视频需求",
-      items: [
-        "目标：15-30 秒展示烟雾倒流效果、造型细节和使用场景。",
-        "开头 3 秒直接展示烟雾效果；中段展示摆放、点燃、细节；结尾展示尺寸/包装提醒。",
-        "视频字幕不能写疗愈、净化、助眠、宗教功效。",
-      ],
-    },
-    {
-      title: "上架资料包",
-      items: [
-        "输出：Title、Subtitle、Category ID、Condition、Format、Price、Quantity、商品参数。",
-        "补齐：12 张图片需求、视频需求、HTML Description、包裹重量、尺寸、发货城市、三类 店铺业务政策 ID。",
-        "发布前：进入确认中心，不自动发布、不自动扣费、不自动改 店铺业务政策。",
-      ],
-    },
-    {
-      title: "模板沉淀",
-      items: [
-        "沉淀标题模板：核心词 + 场景词 + 差异化词 + 材质/用途。",
-        "沉淀描述模板：卖点、参数、使用方式、包装清单、FAQ、注意事项。",
-        "沉淀素材模板：白底主图、场景图、尺寸图、细节图、包装图、视频脚本、上架清单。",
-      ],
-    },
-  ],
-  sections: [
-    {
-      title: "1. eBay 上架字段包",
-      table: {
-        headers: ["字段", "当前建议值", "状态", "说明"],
-        rows: [
-          [
-            "Title",
-            "Backflow Incense Burner Waterfall Smoke Holder Zen Home Decor Gift",
-            "可用",
-            "约 68 字符，含核心关键词 + 差异化词，仍需按 eBay 标题规则复核。",
-          ],
-          [
-            "Subtitle",
-            "Waterfall Smoke Effect for Tea Room & Home Decor",
-            "可用",
-            "约 50 字符，强调最大卖点。",
-          ],
-          [
-            "Category ID",
-            "20552 · Home Fragrances",
-            "待 API 复核",
-            "公开 eBay 类目页显示同类商品在 Home Fragrances；正式发布前用 eBay 类目接口 复核。",
-          ],
-          ["Condition", "New", "可用", "新品类默认 New；如样品/瑕疵/二手必须改。"],
-          ["Format", "Fixed Price", "可用", "新店路径默认一口价，不做拍卖。"],
-          ["Price", "US$24.90 / US$34.90 / US$44.90", "待 AI CEO/商家确认", "沿用市场判断定价，需按真实重量重算利润。"],
-          ["Quantity", "50", "可用", "初始默认 50，真实库存或代发能力不足时降低。"],
-          [
-            "商品参数",
-            "Brand: 待确认; Type: 待确认; Material: 待确认; Color: 待确认; Pieces: 待确认; UPC: 待确认; MPN: 待确认",
-            "待补资料",
-            "Brand/Type/Material/Color/Pieces/UPC/MPN 必须全填，材质颜色不能猜。",
-          ],
-          ["Picture 1-12", "12 张图需求已拆解", "待素材生成/确认", "白底主图、场景、尺寸对比、细节、包装都要有。"],
-          ["Video", "15-30 秒短视频", "待素材确认", "展示烟雾效果、细节、场景和使用提醒。"],
-          ["Description", "HTML 卖点 + 参数 + FAQ", "已出结构", "发布前替换真实尺寸、材质、包装清单。"],
-          ["Package weight", "待测量，临时按 650g 测算", "待确认", "必须精确到克；影响运费和利润。"],
-          ["Package dimensions", "待测量，临时按 22×18×12 cm", "待确认", "必须长×宽×高，单位厘米。"],
-          ["Handling time", "1-3 days", "待履约确认", "供应商代发不稳定时改 3-5 或 5-7 天。"],
-          ["Item Location", "Guangzhou, China", "待市场/履约确认", "从供应商发货地和市场建议获取。"],
-          ["Shipping policy", "店铺默认物流规则", "待引用", "引用已确认的店铺物流模板，不在上架资料处新建。"],
-          ["Payment policy", "店铺默认支付规则", "待引用", "引用已确认的店铺支付模板。"],
-          ["Return policy", "店铺默认退货规则", "待引用", "引用已确认的店铺退货模板。"],
-        ],
-      },
-    },
-    {
-      title: "2. 标题与 Subtitle",
-      body:
-        "标题要同时满足搜索和可读性：先放核心词 Backflow Incense Burner，再放 Waterfall Smoke、Zen Home Decor、Gift 等差异化词。Subtitle 只讲最大卖点，不重复标题，不写夸大功效。",
-      items: [
-        "Title 备选 A：Backflow Incense Burner Waterfall Smoke Holder Zen Home Decor Gift",
-        "Title 备选 B：Oriental Backflow Incense Burner Waterfall Smoke Zen Home Decor",
-        "Subtitle：Waterfall Smoke Effect for Tea Room & Home Decor",
-        "禁用词：healing、cure、sleep aid、religious blessing、purify negative energy。",
-      ],
-    },
-    {
-      title: "3. 商品参数 必填方案",
-      table: {
-        headers: ["Specific", "建议填写", "确认点"],
-        rows: [
-          ["Brand", "Unbranded", "如供应商有品牌授权再改。"],
-          ["Type", "Backflow Incense Burner", "核心类目字段。"],
-          ["Material", "Ceramic / Resin / Alloy 待确认", "不能看图猜，必须问供应商或实测。"],
-          ["Color", "Bronze / Brown / Black 待确认", "按真实商品颜色填写。"],
-          ["Pieces", "1", "如果含香粒/垫片/盒子，需要写清数量。"],
-          ["UPC", "Does not apply", "没有 UPC 时填写平台允许值。"],
-          ["MPN", "Does not apply", "没有 MPN 时填写平台允许值。"],
-        ],
-      },
-    },
-    {
-      title: "4. 12 张图片需求",
-      table: {
-        headers: ["序号", "图片类型", "画面要求"],
-        rows: [
-          ["1", "白底主图", "产品完整露出，背景干净，不加大段文字。"],
-          ["2", "茶室场景图", "放在茶桌/木桌，突出氛围和比例。"],
-          ["3", "客厅场景图", "作为家居摆件展示，不夸大尺寸。"],
-          ["4", "烟雾效果图", "展示真实或标注为效果预览的倒流烟雾。"],
-          ["5", "尺寸对比图", "标长宽高，最好加手掌/桌面比例。"],
-          ["6", "细节图", "展示枝鸟、花纹、托盘、底座质感。"],
-          ["7", "材质图", "展示陶瓷/树脂/金属质感，但需真实。"],
-          ["8", "使用步骤图", "放置、点燃、等待倒流、清洁。"],
-          ["9", "包装清单图", "香炉、香粒、说明书、包装盒是否包含要写清。"],
-          ["10", "安全提醒图", "明火、儿童宠物、通风、清洁。"],
-          ["11", "礼品场景图", "礼盒/节日/送礼感，如果无礼盒不要伪造。"],
-          ["12", "多语言卖点图", "英文优先，后续可扩展西语/德语。"],
-        ],
-      },
-    },
-    {
-      title: "5. 视频需求",
-      table: {
-        headers: ["时间", "画面", "字幕重点"],
-        rows: [
-          ["0-3s", "直接展示烟雾倒流", "A calm waterfall smoke effect for your desk or tea corner."],
-          ["3-8s", "放置香粒、点燃、等待", "Show how it works, do not overpromise the result."],
-          ["8-15s", "枝鸟细节、托盘、材质", "Highlight design details and home decor value."],
-          ["15-23s", "茶室/客厅/书桌场景", "Use cases: tea room, living room shelf, meditation corner."],
-          ["23-30s", "尺寸、包装、是否含香粒提醒", "Check size, material, package contents before purchase."],
-        ],
-      },
-      items: [
-        "视频目标：让买家理解烟雾效果和使用场景。",
-        "视频底线：不承诺疗愈、净化、助眠、宗教祝福。",
-        "视频来源：AI 草稿可用于预览，正式发布前确认实拍或标注效果预览。",
-      ],
-    },
-    {
-      title: "6. Description HTML 结构",
-      body:
-        "<section><h2>Oriental Style Backflow Incense Burner</h2><p>A decorative incense holder designed for a calm tea room, desk or living room shelf.</p><h3>Highlights</h3><ul><li>Waterfall smoke visual effect when used with compatible backflow cones.</li><li>Branch, bird and flower detail for a zen-inspired home decor look.</li><li>Suitable for desk, tea corner, shelf and gift display.</li></ul><h3>Specifications</h3><p>Material, size, package weight and contents will be confirmed before publishing.</p><h3>FAQ</h3><p>Are cones included? Please check package contents. Does it create smoke by itself? No, it must be used with compatible backflow incense cones.</p></section>",
-      items: [
-        "HTML 中保留卖点、参数、FAQ 和安全提醒。",
-        "缺失字段用确认中心拦住，不让 AI 乱填。",
-        "描述语言要像真实卖家说明，不像广告夸大稿。",
-      ],
-    },
-    {
-      title: "7. 上架清单与确认点",
-      items: [
-        "AI CEO 给出价格建议，商家确认 US$24.90 / US$34.90 / US$44.90 是否采用。",
-        "商家确认包裹重量精确到克、包装尺寸长宽高厘米。",
-        "履约检查确认 Item Location、handling time 和物流模板 ID。",
-        "利润测算用真实重量、采购价、广告预留和平台费用重算利润。",
-        "风险校验确认素材无盗图、无疗愈/宗教功效、无实物不符。",
-      ],
-    },
-    {
-      title: "8. 模板沉淀",
-      table: {
-        headers: ["模板", "结构"],
-        rows: [
-          ["标题模板", "[核心词] + [效果/场景词] + [风格词] + [用途]"],
-          ["描述模板", "短介绍 + Highlights + Specifications + Package Includes + FAQ + Safety Notes"],
-          ["图片需求模板", "白底主图 + 场景 + 尺寸 + 细节 + 包装 + 使用步骤 + 安全提醒"],
-          ["视频模板", "3 秒钩子 + 使用过程 + 细节展示 + 场景展示 + 购买前提醒"],
-          ["上架清单模板", "Title/SubTitle/Category/Specs/Price/Policy/Weight/Dimensions/Media/Confirm"],
-        ],
-      },
-    },
-  ],
-};
-
-const backflowRiskReport = {
-  type: "risk",
-  label: "风险校验汇报",
-  note:
-    "风险校验不是只扫禁词，而是按 eBay 平台规则把准入、知识产权、搜索、素材、商品安全、履约、售后和账号动作分层拦截。当前为演示审查，真实发布前会重新读取最新政策与店铺违规记录。",
-  summary: [
-    ["风控结论", "暂不建议直接发布，整改后可送确认中心"],
-    ["风险等级", "中高风险：素材真实性 + 参数缺失 + 履约承诺"],
-    ["必须拦截", "功效词、盗图/未授权图、虚假发货地、未确认包裹参数"],
-    ["可继续", "允许继续生成草稿和素材预览，不允许真实发布"],
-  ],
-  boards: [
-    {
-      title: "平台准入",
-      items: [
-        "倒流香炉本体可作为家居香薰/摆件方向继续，但不得触碰禁售、召回、危险品或当地法规限制。",
-        "若随附香粒/香料，需要补成分、燃烧安全、进口限制和运输限制，不能只按摆件处理。",
-        "正式版发布前要跑 eBay prohibited/restricted、product safety 和目标站点规则复核。",
-      ],
-    },
-    {
-      title: "知识产权 / VeRO",
-      items: [
-        "不可使用供应商、竞品、品牌方图片，除非有授权；AI 生成图也要确认不复制品牌/IP/角色造型。",
-        "标题和描述不写未经授权的品牌名、设计师名、影视/游戏/宗教/IP 名称。",
-        "使用“Oriental style / Zen decor”只能作为风格词，不能暗示真实品牌、产地或认证。",
-      ],
-    },
-    {
-      title: "搜索与标题合规",
-      items: [
-        "标题关键词必须只描述真实商品；不能堆无关热词、竞品品牌、问号式引流词或多个不相干商品。",
-        "Category ID、Title、商品参数 和 Description 必须互相一致。",
-        "不使用 healing、cure、sleep aid、purify negative energy 等无法证明或容易误导的功效词。",
-      ],
-    },
-    {
-      title: "素材真实性",
-      items: [
-        "主图不能有徽章、Logo、水印、版权声明等图形覆盖；烟雾效果图要说明真实拍摄或效果预览。",
-        "尺寸图必须来自实测，不能由 AI 按图片估算。",
-        "视频和详情页不能让买家误以为香粒、礼盒或配件一定包含，除非包装清单已确认。",
-      ],
-    },
-    {
-      title: "履约与发货地",
-      items: [
-        "Item Location 必须是实际发货城市，tracking 起点应与 listing 的发货地一致。",
-        "Handling time 不可比供应商真实处理能力更激进；代发不稳定时从 3-5 或 5-7 天开始。",
-        "Shipping/Payment/Return policy 只能引用已确认模板，不能由上架资料或素材生成流程自动改。",
-      ],
-    },
-    {
-      title: "售后与账号表现",
-      items: [
-        "INAD 风险来自：尺寸偏差、烟雾效果不符、香粒是否包含、包装破损、材质不一致。",
-        "退货政策、包装清单和安全提醒要写清，降低“收到不符合描述”概率。",
-        "发布、改价、改政策、承诺到货、退款补偿都必须进入确认中心。",
-      ],
-    },
-  ],
-  sections: [
-    {
-      title: "1. 风控结论",
-      table: {
-        headers: ["检查项", "结论", "处理动作"],
-        rows: [
-          ["是否允许继续", "允许继续做草稿", "可继续生成 Listing、素材和 PDF 汇报。"],
-          ["是否允许发布", "不允许直接发布", "缺尺寸、重量、材质、是否含香粒、图片授权和发货地。"],
-          ["风险等级", "中高", "先整改红线，再送确认中心。"],
-          ["主要风险", "实物不符 / 素材版权 / 功效词 / 物流承诺", "四类都未清零前不触发真实刊登。"],
-        ],
-      },
-    },
-    {
-      title: "2. eBay 政策检查矩阵",
-      table: {
-        headers: ["政策面", "eBay 实际要求", "当前倒流香炉判断", "处理"],
-        rows: [
-          [
-            "Prohibited / Restricted",
-            "部分商品会因当地法规、安全或平台规则被限制或禁止。",
-            "香炉本体可继续；若含香粒/香料，需要补成分和目标市场限制。",
-            "随附香粒先标为待确认，不自动写 included。",
-          ],
-          [
-            "Product Safety",
-            "召回、违法销售、危险或不安全商品不允许；描述中应提供清晰安全信息。",
-            "涉及明火、烟雾和儿童宠物误用风险。",
-            "详情页加入通风、远离儿童宠物、明火和清洁说明。",
-          ],
-          [
-            "Intellectual Property / VeRO",
-            "侵权商品或侵权 listing 内容不允许；文本、图片、品牌使用都要合法。",
-            "供应商图和 AI 生成图授权状态未确认。",
-            "发布前要求图片授权或自有图片；删除品牌/IP/角色词。",
-          ],
-          [
-            "Search Manipulation",
-            "不能用与商品无关的关键词或误导买家的标题/描述。",
-            "Zen、Oriental、waterfall 可用；healing、cure、religious blessing 不用。",
-            "输出禁用词和替代表达。",
-          ],
-          [
-            "Item Description",
-            "描述、标题、Condition、商品参数、类目和图片视频必须准确一致。",
-            "材质、颜色、尺寸、是否含香粒仍缺失。",
-            "缺字段进入确认中心，不让 AI 猜。",
-          ],
-          [
-            "Item Location",
-            "发货地必须准确，listing 各处一致，tracking 起点要匹配。",
-            "临时填 Guangzhou, China，需供应商确认。",
-            "未确认前不允许写 US local / fast domestic shipping。",
-          ],
-          [
-            "Picture / Video",
-            "至少一张图；建议高清；不要加影响搜索的图形、Logo、版权声明或水印。",
-            "AI 场景图可做预览，但必须防止实物误导。",
-            "主图保真；效果图标注预览或替换实拍。",
-          ],
-        ],
-      },
-    },
-    {
-      title: "3. 标题、关键词、类目红线",
-      table: {
-        headers: ["位置", "允许", "禁止", "当前处理"],
-        rows: [
-          ["Title", "Backflow Incense Burner / Waterfall Smoke / Zen Home Decor", "healing、cure、sleep aid、religious blessing、品牌名蹭流量", "保留核心词，删除功效词。"],
-          ["Subtitle", "Waterfall Smoke Effect for Tea Room & Home Decor", "Best healing energy / purify home / magic effect", "只写视觉效果和使用场景。"],
-          ["Category", "20552 · Home Fragrances 待 eBay 类目接口 复核", "错放到宗教用品、古董、医疗或不相关类目", "上架资料可填草稿，风险校验标记待复核。"],
-          ["商品参数", "Brand/Type/Material/Color/Pieces/UPC/MPN 准确填写", "材质、颜色、数量靠 AI 猜", "未确认字段全部待补。"],
-        ],
-      },
-    },
-    {
-      title: "4. 素材、图片、视频风控",
-      table: {
-        headers: ["素材", "风险", "要求"],
-        rows: [
-          ["白底主图", "图上文字、水印、Logo、版权声明影响搜索或合规", "产品完整露出，不加营销字，不偷竞品图。"],
-          ["烟雾效果图", "AI 生成烟雾可能和实物效果不一致", "标注效果预览，或替换为真实拍摄。"],
-          ["尺寸图", "尺寸估算导致 INAD", "必须用实测厘米数据。"],
-          ["详情页长图", "写入疗愈、净化、宗教功效", "只写装饰、场景、使用方式、安全提醒。"],
-          ["短视频脚本", "承诺功效或误导包含配件", "开头展示效果，中段讲使用，结尾提醒尺寸/包装清单。"],
-          ["供应商图", "授权不明或盗图", "确认供应商授权；优先用商家自有图/AI 草稿转实拍确认。"],
-        ],
-      },
-    },
-    {
-      title: "5. 商品安全与法规提醒",
-      items: [
-        "倒流香炉涉及明火和烟雾，详情页必须提示通风、远离儿童宠物、远离易燃物、使用后冷却再清洁。",
-        "如果包含香粒/香料，要补成分、数量、气味、过敏提醒、目标国进口和运输限制；没有确认前不能写 cones included。",
-        "不写医疗、心理、宗教或能量净化效果；只能写 decorative、home decor、calm atmosphere 这类低风险表达。",
-        "如果供应商无法提供材质和包装信息，风控建议暂停真实发布，只保留素材草稿。",
-      ],
-    },
-    {
-      title: "6. 履约、发货地和 店铺业务政策 风险",
-      table: {
-        headers: ["字段", "风险", "风控建议"],
-        rows: [
-          ["Item Location", "写美国本地但实际中国发货会触发发货地误导风险", "按真实发货城市填写，例如 Guangzhou, China。"],
-          ["Handling time", "1-3 天可能比代发能力更激进", "供应商未验证时用 3-5 或 5-7 天保守模板。"],
-          ["Shipping policy", "模板承诺过快或不支持该重量", "引用店铺物流模板前，先用真实重量测算。"],
-          ["Return policy", "陶瓷破损、香味争议导致退货", "退货政策写清状态和包装要求，保留人工审核。"],
-          ["Tracking", "tracking 起点和 item location 不一致", "履约检查必须核对 tracking 起点。"],
-        ],
-      },
-    },
-    {
-      title: "7. 禁用词与替代表达",
-      table: {
-        headers: ["不要写", "原因", "替代表达"],
-        rows: [
-          ["healing / cure / sleep aid", "医疗或疗效暗示，无法证明", "calm home decor / relaxing visual accent"],
-          ["purify negative energy", "功效和宗教/玄学承诺", "adds a decorative smoke effect"],
-          ["religious blessing / sacred", "宗教功效或敏感表达", "zen-inspired style / tea room decor"],
-          ["authentic antique / handmade", "若无证明，容易误导", "oriental style / handcrafted look"],
-          ["includes cones", "是否含香粒未确认", "check package contents before purchase"],
-          ["US warehouse / fast domestic shipping", "实际发货地未确认", "ships from confirmed item location"],
-        ],
-      },
-    },
-    {
-      title: "8. 发布前红线清单",
-      items: [
-        "没有实测尺寸、重量、包装尺寸：不发布。",
-        "没有供应商图片授权或自有图片：不发布。",
-        "材质、颜色、是否含香粒不确定：不发布。",
-        "Item Location 与 tracking 起点不一致：不发布。",
-        "标题/描述/视频包含疗愈、净化、助眠、宗教功效：不发布。",
-        "Shipping、Payment、Return policy 未引用确认模板：不发布。",
-        "只能在确认中心由商家确认后，AI CEO 才能进入模拟发布预览。",
-      ],
-    },
-  ],
-};
-
-const activities = [
-  {
-    projectId: "backflow-incense",
-    role: "AI CEO",
-    title: "闭环执行规程：已拆成 10 段小任务",
-    action:
-      "AI CEO 不再把“找品、全网调研、刊登、出图、客服、财务、确认”一次性丢给某个岗位，而是先建数据包，再按岗位短任务推进。",
-    sources: [
-      "SaaS 流程：商家目标 -> AI CEO -> 市场 -> 货源/财务预审 -> 产品刊登 -> 素材 -> 客服学习 -> 财务复核 -> CEO 确认包",
-      "内部执行层经验：市场经理长任务曾超时，拆小后可恢复",
-      "页面规则：红灯不发布，黄灯只做草稿，绿灯才进入发布前确认",
-      "确认边界：真实发布、采购付款、退款、广告预算、客服强承诺仍由商家确认",
-    ],
-    result:
-      "当前闭环已按产品流程固化：每段任务都有输入、输出、状态和失败处理。后续真实 SaaS 后端要把这些变成队列任务，并把超时、重试、降级报告显示给商家。",
-    status: "已完成",
-    confidence: "90%",
-    report: {
-      summary: [
-        ["任务颗粒", "10 段小任务"],
-        ["超时处理", "重试 / 拆小 / 降级报告"],
-        ["数据口径", "先资料，后报告"],
-        ["发布闸口", "红黄绿状态"],
-      ],
-      boards: [
-        {
-          title: "每段任务必须交付什么",
-          items: [
-            "市场经理：来源状态、用户画像、价格带、竞品痛点、是否继续。",
-            "产品经理：eBay 标题、类目、商品参数、价格库存、描述、图片需求、待补资料。",
-            "素材工坊：主图、场景图、详情页、尺寸图、视频脚本和可用性说明。",
-            "客服：商品档案、FAQ、自动回复范围、退款/补偿/差评/纠纷人工接管红线。",
-            "财务履约：采购价、运费、平台费、订阅费、退货预留、利润底线和发布建议。",
-          ],
-        },
-        {
-          title: "失败时不能装作成功",
-          items: [
-            "eBay 或搜索失败：报告标记为初筛，不能进入发布确认。",
-            "货源资料缺失：继续做草稿，但发布按钮锁住。",
-            "财务红灯：AI 可以解释原因和给替代品方向，不能诱导发布。",
-            "客服未学习产品档案：只能生成保守草稿，不能自动发送。",
-          ],
-        },
-      ],
-      sections: [
-        {
-          title: "SaaS 页面如何承接",
-          items: [
-            "首页顶部展示商家能看懂的主线和当前卡点；AI 汇报里展开完整分段。",
-            "AI 汇报沉淀每段报告，不把 PDF 当成唯一入口。",
-            "产品刊登显示发布前缺口。",
-            "确认中心只处理资金、发布、退款、广告和客服强承诺。",
-          ],
-        },
-      ],
-    },
-  },
-  {
-    projectId: "backflow-incense",
-    role: "市场判断",
-    title: "倒流香炉 eBay 市场资料汇报",
-    action:
-      "围绕倒流香炉在 eBay US 的需求、搜索词、竞品分布、价格带、用户关注点、差异化空间、定价和风险做完整判断，给 AI CEO 决定是否继续推进 Listing。",
-    sources: [
-      "eBay US 公开搜索样本：backflow incense burner / waterfall incense burner / zen decor",
-      "eBay Seller Hub / Product Research（正式版需只读授权）",
-      "同类 Listing 标题、价格、主图和评论痛点样本",
-      "Google Trends / Google Shopping 公开趋势参考",
-      "商家上传的倒流香炉商品图和素材方向",
-      "店铺自动化规则：新手起步、资料自动推进、核心经营动作确认",
-      "风险词库：疗愈功效、宗教承诺、品牌/IP、禁售提示",
-    ],
-    result:
-      "建议谨慎继续：先做中价位单件和香粒套装，不重仓，不拼最低价。发布前必须补尺寸、重量、材质、是否含香粒、包装清单和供应商授权；文案避开疗愈/宗教功效承诺。",
-    status: "已完成",
-    confidence: "82%",
-    report: backflowMarketReport,
-  },
-  {
-    projectId: "backflow-incense",
-    role: "素材生成",
-    title: "从商品图生成素材包",
-    action: "读取上传的倒流香炉图片，拆出白底主图、烟雾效果场景图、细节图、详情页长图、多语言卖点图和短视频脚本需求。",
-    sources: [
-      "商家上传/货源图片：倒流香炉",
-      "目标平台：eBay 素材尺寸",
-      "目标语言：英语优先，后续可扩展西语/德语",
-      "商品字段缺口：尺寸、重量、材质、是否含香粒、包装清单",
-      "风控规则：不得夸大疗愈/宗教功效，不得伪造烟雾真实效果或盗用品牌图",
-    ],
-    result: "建议先生成白底主图、倒流烟雾场景图、细节材质图、尺寸说明图和 30 秒短视频脚本；发布前需要商家确认尺寸、材质、是否含香粒和烟雾效果是否为真实拍摄或效果预览。",
-    status: "进行中",
-    confidence: "74%",
-  },
-  {
-    projectId: "backflow-incense",
-    role: "上架资料",
-    title: "生成倒流香炉 eBay 上架资料包",
-    action:
-      "把市场判断、素材需求和店铺规则转成 eBay 上架资料包：标题、Subtitle、类目、价格、库存、商品参数、图片视频需求、HTML 描述、包裹参数和 店铺业务政策 引用。",
-    sources: [
-      "市场判断汇报：倒流香炉 eBay 市场资料汇报",
-      "eBay 类目参考：Home Fragrances · 20552（正式版由 eBay 类目接口 复核）",
-      "关键词：backflow incense burner / waterfall incense burner / zen home decor",
-      "素材生成输出：白底主图、场景图、尺寸图、详情页和短视频脚本需求",
-      "店铺规则：新店起步、资料自动推进、核心经营动作确认",
-      "店铺默认模板：物流、付款、退货三类规则",
-    ],
-    result:
-      "已生成可预览的 eBay 上架资料包，但 Category ID、材质、颜色、包裹重量、包装尺寸、Item Location 和三类 店铺业务政策 ID 必须在确认中心复核后才能发布。",
-    status: "待补资料",
-    confidence: "76%",
-    report: backflowProductReport,
-  },
-  {
-    projectId: "backflow-incense",
-    role: "风险校验",
-    title: "检查倒流香炉平台合规与账号风险",
-    action:
-      "按 eBay 平台实际规则检查准入、VeRO/知识产权、搜索标题、图片视频、商品安全、Item Location、店铺业务政策、退货售后和真实发布权限。",
-    sources: [
-      "eBay Prohibited and Restricted Items 政策",
-      "eBay Product Safety 政策",
-      "eBay VeRO / Intellectual Property 政策",
-      "eBay Search Manipulation 政策",
-      "eBay Item Description / Item Location / Picture 政策",
-      "上架资料包：Title、Category、Specs、Pictures、Video、Policies",
-      "素材草稿：白底图、烟雾效果图、场景图、详情页和短视频脚本",
-      "商家规则：新店默认保守，发布、改价、承诺和退款进入确认中心",
-    ],
-    result:
-      "暂不建议直接发布。允许继续做草稿和素材预览，但必须先清零 6 条红线：实测尺寸/重量、图片授权、材质颜色、是否含香粒、真实发货地、功效词和 店铺业务政策 模板。",
-    status: "待确认",
-    confidence: "78%",
-    report: backflowRiskReport,
-  },
-  {
-    projectId: "zen-incense",
-    role: "市场判断",
-    title: "整理陶瓷香插市场资料",
-    action: "查询陶瓷香插同类商品的价格带、标题关键词、成交信号和类目风险，判断是否值得继续生成 Listing。",
-    sources: [
-      "eBay 搜索结果页关键词：zen incense burner",
-      "eBay Seller Hub / Product Research（Terapeak）",
-      "第三方选品数据（需授权或公开数据）",
-      "Google Trends / Google Shopping 公开趋势",
-      "同类 Listing 标题与价格区间",
-      "店铺当前自动化规则：利润底线 15%",
-      "风险词库：宗教夸大、品牌/IP、禁售提示",
-    ],
-    result: "需求稳定，建议继续；文案避免夸大疗效和宗教承诺，价格需覆盖供应商代发时效风险。",
-    status: "已完成",
-    confidence: "82%",
-  },
-  {
-    role: "上架资料",
-    title: "生成标题、描述和 商品参数",
-    action: "把商品想法转成 eBay 可用的标题、五点卖点、长描述、规格字段和上架清单。",
-    sources: [
-      "商品关键词：incense burner / aromatherapy holder / home decor",
-      "eBay 商品参数 字段模板",
-      "平台热词和竞品标题结构",
-      "平台标题长度限制",
-      "商家客服口吻：温和专业",
-    ],
-    result: "已生成草稿，但需要你确认标题是否准确、是否过度承诺。",
-    status: "待确认",
-    confidence: "76%",
-  },
-  {
-    role: "素材生成",
-    title: "规划图片和视频素材",
-    action: "生成主图、细节图、场景图、尺寸图需求，并生成 10 秒展示视频脚本。",
-    sources: [
-      "eBay 图片要求",
-      "同类商品主图构图",
-      "供应商图片素材（需商家授权确认）",
-      "AI 生成图提示词方案",
-      "商品材质与尺寸字段",
-      "风控规则：禁止盗用品牌图、禁止夸大效果",
-    ],
-    result: "建议先用 AI 生成场景图方案，再用商家实拍替换主图；视频脚本需人工确认。",
-    status: "进行中",
-    confidence: "68%",
-  },
-  {
-    role: "利润测算",
-    title: "计算最低安全售价",
-    action: "把采购价、运费、平台费、广告预留和汇率放入利润公式。",
-    sources: [
-      "供应商代发成本估算",
-      "商家手动导入成本数据",
-      "eBay 费用估算：成交费、刊登费、订阅费分摊、广告费",
-      "SpeedPAK 运费估算",
-      "自动化规则：最低利润率 15%",
-    ],
-    result: "保守利润约 18.6%，暂时高于红线；若广告费或店铺订阅分摊上升，需要重新确认售价。",
-    status: "已完成",
-    confidence: "88%",
-  },
-  {
-    role: "风险校验",
-    title: "扫描政策和素材风险",
-    action: "检查禁售词、VeRO、夸大宣传、素材版权和履约承诺风险。",
-    sources: [
-      "eBay 禁售/限制售规则摘要",
-      "VeRO 品牌词示例风险列表",
-      "Listing 文案草稿",
-      "图片视频素材需求",
-      "平台账号风险规则和商家历史确认记录",
-    ],
-    result: "未发现明确禁售词；素材和时效承诺仍需人工确认。",
-    status: "待确认",
-    confidence: "73%",
-  },
-  {
-    projectId: "jewelry-case",
-    role: "市场判断",
-    title: "整理便携首饰盒市场资料",
-    action: "比较 travel jewelry case 的价格带、主图风格、收纳规格和同质化风险，判断是否值得进入 Listing 草稿。",
-    sources: [
-      "eBay 搜索关键词：travel jewelry case",
-      "同类商品标题结构和价格区间",
-      "Google Trends 旅行收纳相关趋势",
-      "竞品主图风格：拉链、分格、便携场景",
-      "自动化规则：利润底线 15%",
-    ],
-    result: "搜索稳定，但同质化高；建议先寻找材质、颜色组合或套装差异点，再进入 Listing 草稿。",
-    status: "进行中",
-    confidence: "64%",
-  },
-  {
-    projectId: "drawer-organizer",
-    role: "店铺连接",
-    title: "等待 UK 测试店授权",
-    action: "检查该项目所属店铺的连接状态，当前只能使用待同步资料，不能读取真实店铺表现。",
-    sources: [
-      "店铺连接状态：UK 测试店待授权",
-      "eBay 官方授权待连接状态",
-      "自动化规则：多店铺预留模式",
-    ],
-    result: "建议先完成店铺授权或复制 US 主店规则模板，否则只能做低置信度调研。",
-    status: "待确认",
-    confidence: "52%",
-  },
-];
+const activities = [];
 
 let activeEvidenceIndex = 0;
 let actionToastTimer = null;
 
-const confirmations = [
-  {
-    id: "incense_media_truth",
-    title: "倒流香炉素材是否符合实物",
-    risk: "medium",
-    label: "中风险",
-    reason: "AI 生成的烟雾效果图、家居场景图和短视频脚本会影响买家判断，必须确认材质、颜色、尺寸和倒流效果没有偏差。",
-    evidence: "已生成：白底主图、茶室场景图、家居场景图、细节图、尺寸图、详情页长图和英语短视频脚本；尺寸、重量和是否含香粒仍缺失。",
-    suggestion: "先通过“继续做草稿”，但不要用于正式发布；等真实尺寸、颜色、材质、香粒说明和烟雾效果来源确认后再作为正式素材。",
-    defaultAction: "默认继续生成草稿，不发布。",
-  },
-  {
-    id: "incense_missing_info",
-    title: "是否补充尺寸、重量和香粒说明",
-    risk: "high",
-    label: "高风险",
-    reason: "尺寸、重量、材质、是否含香粒和发货方式会影响 Listing 字段、运费、履约承诺和退货风险，AI 不能替商家乱填。",
-    evidence: "AI 建议：新店先用保守履约；缺失单件尺寸、包装重量、包装尺寸、香粒是否随附、退货地址。",
-    suggestion: "先不要发布。补齐尺寸、包装重量、供货价、发货地、是否含香粒和退货地址后，再让 AI 重新算利润和运费。",
-    defaultAction: "默认先补资料。",
-  },
-  {
-    id: "publish_listing",
-    title: "是否允许模拟发布 Listing",
-    risk: "high",
-    label: "高风险",
-    reason: "真实发布会影响 eBay 账号，v0.1 仅允许模拟。",
-    evidence: "利润 18.6%；风控未发现禁售词；账号已恢复为可继续验证状态。",
-    suggestion: "只允许模拟发布预览，不要触发真实刊登；真实发布前仍要复核账号额度、费用、素材真实性和店铺政策。",
-    defaultAction: "默认只预览，不触发真实刊登。",
-  },
-  {
-    id: "media_assets",
-    title: "是否通过图片/视频素材方案",
-    risk: "medium",
-    label: "中风险",
-    reason: "图片和视频会直接影响转化，也可能触发版权、夸大宣传或实物不符风险。",
-    evidence: "主图1张、场景图3张、细节图1张、尺寸图1张、详情页长图1张；短视频脚本和分镜待审核。",
-    suggestion: "先通过素材方向，要求 AI 标注“效果预览”，并删除无法证明的疗愈、净化、助眠、宗教功效等卖点。",
-    defaultAction: "默认通过方向，保留审核。",
-  },
-  {
-    id: "shipping_promise",
-    title: "是否承诺 5 天 handling time",
-    risk: "medium",
-    label: "中风险",
-    reason: "供应商代发稳定性不完全可控，时效承诺过短会伤害店铺表现。",
-    evidence: "供应链建议 5-7 天；保守规则要求人工确认。",
-    suggestion: "不要承诺 5 天，先用 7-10 天保守 handling time，等供应商连续履约稳定后再缩短。",
-    defaultAction: "默认选保守时效。",
-  },
-  {
-    id: "ai_permission",
-    title: "客服消息是否由你确认后再发送",
-    risk: "high",
-    label: "高风险",
-    reason: "客服会影响差评、纠纷、退款和到货承诺，不能让 AI 直接替你发出去。",
-    evidence: "当前默认：AI 可以写草稿和整理上下文；客服发送、退款、补偿、差评处理和明确到货承诺都要你确认。",
-    suggestion: "保持“AI 写草稿，你点发送”。普通问题可以快速确认，退款、补偿、差评和时效承诺必须看清楚再发。",
-    defaultAction: "默认客服消息确认后发送。",
-  },
-  {
-    id: "fees_readonly",
-    title: "是否授权只读 eBay 费用账单",
-    risk: "medium",
-    label: "中风险",
-    reason: "财务费用属于敏感数据，但不读取就无法准确计算订阅费、广告费和真实利润。",
-    evidence: "仅读取 Account / Finances 数据；不修改订阅、不创建广告、不扣费。",
-    suggestion: "如果准备真实店铺接入，建议只读授权费用数据；如果只是体验，可以先手动填写成本。",
-    defaultAction: "默认先手动，准备好再只读授权。",
-  },
-  {
-    id: "ad_budget_change",
-    title: "是否允许创建或调整广告预算",
-    risk: "high",
-    label: "高风险",
-    reason: "广告会产生真实费用，AI 只能生成建议；创建广告、调预算、暂停广告必须由你确认。",
-    evidence: "当前模式为只读广告表现；Promoted Listings 动作未授权。",
-    suggestion: "暂不开启广告执行权限。先让 AI 生成广告建议和预算上限，实际创建和调预算由商家确认。",
-    defaultAction: "默认只读，不投放。",
-  },
-];
+const confirmations = [];
 
 const confirmationDefaultRules = {
   incense_media_truth: {
@@ -3971,119 +1286,8 @@ const confirmationDefaultRules = {
 
 state.savedDecisionDefaults = loadSavedDecisionDefaults();
 
-const conversations = [
-  {
-    title: "物流延迟咨询",
-    order: "27-0914",
-    buyerName: "M. Carter",
-    intent: "催发货",
-    channel: "eBay Messages",
-    risk: "需确认",
-    buyer: "Hi, why has my item not shipped yet?",
-    draft:
-      "Hi, thanks for your message. We are checking the shipping status now and will update you as soon as possible. I am sorry for the wait.",
-    boundary: "不能承诺具体到达日；先核对供应商揽收和 tracking。",
-  },
-  {
-    title: "规格确认",
-    order: "未下单",
-    buyerName: "A. Wilson",
-    intent: "售前规格",
-    channel: "eBay Messages",
-    risk: "可自动",
-    buyer: "Does it come with incense cones, and what size is it?",
-    draft:
-      "Hi, the incense burner size is listed in the 商品参数. I will also confirm whether incense cones are included before you place the order.",
-    boundary: "尺寸和是否含香粒必须来自实测或供应商确认。",
-  },
-  {
-    title: "退款倾向",
-    order: "27-0798",
-    buyerName: "L. Brown",
-    intent: "退款风险",
-    channel: "eBay Messages",
-    risk: "需确认",
-    buyer: "If it arrives late I want a refund.",
-    draft:
-      "Hi, I understand your concern. I will check the expected delivery window first, then we can review the best solution together.",
-    boundary: "退款、补偿、重发和到货承诺必须进入确认中心。",
-  },
-];
-
-const logisticsItems = [
-  {
-    order: "27-0914",
-    buyer: "M. Carter",
-    status: "待上传 tracking",
-    tracking: "待上传",
-    promise: "建议承诺 5-7 天，不要承诺 3 天内到货",
-    risk: "需确认",
-  },
-  {
-    order: "27-0881",
-    buyer: "A. Wilson",
-    status: "供应商代发待揽收",
-    tracking: "YT2605018841",
-    promise: "AI 建议先解释处理中，不承诺具体到达日",
-    risk: "中风险",
-  },
-  {
-    order: "27-0852",
-    buyer: "J. Smith",
-    status: "已发货",
-    tracking: "9400 1000 0000 8520",
-    promise: "可自动回复 tracking 已更新",
-    risk: "可自动",
-  },
-  {
-    order: "27-0798",
-    buyer: "L. Brown",
-    status: "派送失败",
-    tracking: "1Z66R798",
-    promise: "先核对地址，不承诺重新派送时间",
-    risk: "需确认",
-  },
-  {
-    order: "27-0773",
-    buyer: "C. Davis",
-    status: "已付款待发货",
-    tracking: "待上传",
-    promise: "快到 handling time，建议优先处理",
-    risk: "中风险",
-  },
-  {
-    order: "27-0744",
-    buyer: "R. Miller",
-    status: "买家催单",
-    tracking: "EV93744002CN",
-    promise: "先同步物流节点，避免承诺具体到货日",
-    risk: "需确认",
-  },
-  {
-    order: "27-0719",
-    buyer: "S. Johnson",
-    status: "退货请求中",
-    tracking: "9400 1000 0000 7190",
-    promise: "退货原因需要人工判断，不自动退款",
-    risk: "需确认",
-  },
-  {
-    order: "27-0686",
-    buyer: "D. Moore",
-    status: "已妥投",
-    tracking: "YT2605068600",
-    promise: "可自动回复已妥投并附 tracking",
-    risk: "可自动",
-  },
-  {
-    order: "27-0642",
-    buyer: "H. Taylor",
-    status: "物流长时间未更新",
-    tracking: "EV93064211CN",
-    promise: "建议先查承运商状态，再给买家保守回复",
-    risk: "中风险",
-  },
-];
+const conversations = [];
+const logisticsItems = [];
 
 const apiStatus = [
   ["账号状态", "已恢复", "真实发布前仍做一次额度、费用和政策预检"],
@@ -4278,36 +1482,6 @@ const ebayPolicyOrchestration = [
   },
 ];
 
-const mockData = {
-  merchant: "northvalesource",
-  source: "待同步资料",
-  activePlatform: "eBay",
-  connectors: {
-    ebay: "mock_ready",
-    ebayOrders: "planned_orders",
-    ebayFees: "planned_finances",
-    ebayAds: "planned_marketing",
-    ebayAccount: "planned_account",
-  },
-  permissions: {
-    readData: "merchant_authorization_required",
-    readStoreSubscription: "account_api_readonly_required",
-    readBillingAndAdFees: "finances_api_readonly_required",
-    readAdCampaigns: "marketing_api_readonly_required",
-    createOrChangeAds: "human_confirm_required",
-    publishListing: "human_confirm_required",
-    refundOrPriceChange: "human_confirm_required",
-    customerPromise: "draft_first",
-  },
-  ebayCostModel: {
-    storeSubscription: "EBAY_STORE_SUBSCRIPTION_FEE",
-    advertising: "AD_FEE / promoted_listing_fee",
-    listingAndTransaction: ["insertion_fee", "final_value_fee", "international_fee"],
-    profitFormula:
-      "sale_price - product_cost - shipping - ebay_fees - ad_fee - store_subscription_share - return_reserve",
-  },
-};
-
 const landingProfiles = [
   {
     value: "trial",
@@ -4345,7 +1519,7 @@ const planDetails = {
   free: {
     title: "免费体验",
     price: "¥0 / 7 天",
-    desc: "适合先验证捷境价值的商家。注册并完成安全验证后体验 7 天，包含 20 次捷境托管 AI 对话；不绑卡、不自动扣费。",
+    desc: "适合先验证捷境价值的商家。注册并完成安全验证后体验 7 天，包含 20 次捷境托管 AI 对话；不绑卡、不自动续费。",
     cta: "免费开始体验",
     items: [
       "1 个账号空间 · 1 个席位 · 1 个店铺只读连接",
@@ -4356,9 +1530,9 @@ const planDetails = {
     ],
   },
   starter: {
-    title: "单店版",
+    title: "有店铺",
     price: "¥99 / 30 天",
-    desc: "适合单店起步。单次购买 30 天软件使用权，不会自动续费；含 1,000 素材点，先用套餐内点数，用完后再按需购买。",
+    desc: "适合已有 1 个店铺的商家。单次购买 30 天，不会自动续费；套餐含 1,000 素材点，用完后再按需加购。",
     cta: "登录后选择方案",
     items: [
       "1 个店铺 · 2 个席位 · 100 个经营任务",
@@ -4369,9 +1543,9 @@ const planDetails = {
     ],
   },
   operator: {
-    title: "多店铺版",
+    title: "多店铺",
     price: "¥199 / 30 天",
-    desc: "适合已进入稳定经营期的商家。支持多店铺、多项目和更大批量；含 3,000 素材点，先用套餐内点数。",
+    desc: "适合同时经营多个店铺的商家。单次购买 30 天，不会自动续费；套餐含 3,000 素材点，用完后再按需加购。",
     cta: "登录后选择方案",
     items: [
       "3 个店铺 · 5 个席位 · 500 个经营任务",
@@ -4379,19 +1553,6 @@ const planDetails = {
       "店铺级流程模板、确认规则、履约方式和利润底线",
       "跨店复用模板，同时保留每个店铺的例外规则",
       "含 3,000 素材点；套餐内点数当期有效，用完后可按需购买",
-    ],
-  },
-  team: {
-    title: "团队版",
-    price: "¥299 / 30 天",
-    desc: "适合需要团队协作、权限分层和高吞吐工作流的成熟商家。高风险动作仍由有权限的人确认，不因套餐升级而越权执行。",
-    cta: "登录后选择方案",
-    items: [
-      "5 个店铺 · 5 个席位 · 1500 个经营任务",
-      "单次批量最多 1000 行，支持角色权限、操作审计和优先任务",
-      "按金额、店铺、品类和动作类型设置确认规则",
-      "更完整的来源记录、费用复盘和跨店协作",
-      "商家自带模型；素材点单独结算，失败任务自动返还预占点数",
     ],
   },
 };
@@ -4535,12 +1696,12 @@ const manualActionDetails = {
   },
   source_order_rules: {
     title: "采购确认规则",
-    intro: "同样是 1688 货源，不同商家履约路径不一样：有的订单由供应商直发买家，有的订单先走国内中转验品、打包，再交给橙联等跨境物流。捷境必须先把路径分清楚，再决定能自动到哪一步。",
+    intro: "捷境负责整理商品事实、Listing 和发布前缺口，不代商家采购或付款。商家自行决定供应商和履约路径，再把真实结果回填到商品项目。",
     items: [
-      "直发买家：eBay 订单地址写入 1688 采购单前必须确认，避免地址、电话、隐私和平台规则风险。",
-      "国内中转：可自动生成采购单草稿到商家默认收货地址，但付款金额、数量、规格和供应商仍需确认。",
-      "只筛货不采购：适合前期，只生成 eBay 草稿、供应商提问清单和利润测算。",
-      "以后可设置默认：同一供应商、同一金额以下、同一收货路径可减少重复确认，但首次必须由商家配置。",
+      "无货源商家：AI CEO 提供选品建议，商家找到真实货源后再导入链接、图片和规格。",
+      "有货源商家：直接上传已有商品资料，捷境整理成可核对的 eBay Listing。",
+      "采购、付款、地址写入和供应商承诺由商家在货源平台自行处理。",
+      "商品资料不足时保留为被事实阻断的草稿，不编造供应商、成本或履约能力。",
     ],
     actions: [
       {
@@ -4694,164 +1855,7 @@ const sellerFlowDetails = {
   },
 };
 
-const cockpitProfiles = {
-  newbie: {
-    missionEyebrow: "今日主线",
-    missionTitle: "商家给 AI CEO 下指令，捷境按岗位推进",
-    missionBody: "上传图片、链接或输入文字目标后，AI CEO 先拆任务，再推进市场调研、批量选品、IP 防侵权、Listing、素材、客服学习、财务统计和复盘；涉及发布、付款、退款、广告预算和买家承诺时，再交给你确认。",
-    progress: [
-      ["AI CEO 指令", "done"],
-      ["市场/IP", "done"],
-      ["Listing/素材", "current"],
-      ["客服/财务", ""],
-      ["确认复盘", ""],
-    ],
-    board: [
-      ["已完成", "市场和素材方向", "已识别关键词、主图方向、场景图、详情页和短视频脚本需求。"],
-      ["正在做", "Listing 草稿 + 利润测算", "标题、描述、商品参数、费用和物流承诺正在合并。"],
-      ["需要你补", "尺寸、重量、材质、是否含香粒", "这些信息会影响运费、利润、退货、平台字段和买家预期，AI 不能乱填。"],
-      ["下一站", "确认中心", "只把资金相关、刊登发布、退款补偿、广告投放、买家消息发送或明确承诺交给你确认。"],
-    ],
-    priority: {
-      eyebrow: "AI CEO 今日判断",
-      title: "今天优先处理 3 个动作",
-      note: "首页保留会影响推进的动作。普通整理、草稿和汇报会继续生成。",
-      pill: "今日主线",
-      cards: [
-        ["1 · 先做产品刊登", "倒流香炉从图片做到草稿", "AI 会先判断、写草稿、做素材、算利润；你只补不能乱猜的真实资料。", "进入产品刊登", "open-optimization", "primary-action", true],
-        ["2 · 再看 AI 汇报", "直接看结论和依据", "市场、素材、Listing、利润和风险会整理成汇报，不需要先导出 PDF。", "看 AI 汇报", "open-baseline", "secondary-action", false],
-        ["3 · 只确认关键动作", "发布、付款、退款、广告、客服承诺", "这些才需要你点头；其他草稿和整理让 AI 自动推进。", "看待我确认", "confirm-info", "secondary-action", false],
-      ],
-    },
-    chat: [
-      ["AI CEO", "可以。我们先把“倒流香炉”当成一个候选品来跑，不急着上架。我会先判断 eBay 上有没有需求、价格带是否合理、竞品怎么展示、差评集中在哪里，再看 1688 供货和海外履约有没有明显风险。", "ai"],
-      ["我", "我刚看到一款倒流香炉，感觉画面感挺强，想先试试看。我的货源一般从 1688 找，再走供应商发货或中转履约。你先帮我看看，这个品放到 eBay 上有没有必要继续做。", "user"],
-      ["AI CEO", "我会按“先调研、再看货源、再出素材”的顺序推进。第一步先看 eBay 搜索词、价格带、竞品主图、评论痛点和合规风险；如果你已经在 1688 找到相近货源图，可以继续发给我，我再生成主图、详情页、场景图和 Listing 草稿。", "ai"],
-      ["我", "我找到了一张接近的 1688 货源图。你先按这张图重做主图、详情页和场景图，顺便把尺寸、重量、材质、是否配香粒这些要问供应商的问题列出来。", "user"],
-      ["我", "", "user", {
-        image: "assets/backflow-incense-burner-hero.webp",
-        label: "货源图附件",
-        title: "倒流香炉原图",
-        openLabel: "点击查看原图",
-      }],
-      ["AI CEO", "收到。我会把它推进成一个发布前项目：先生成白底主图、茶室/家居场景图、详情页长图和视频脚本；同时把尺寸、重量、材质、香粒说明、采购价和发货方式留作确认项。没有确认前，不会进入发布或采购。", "ai"],
-    ],
-    input: "我找到了 1688 倒流香炉货源图，请生成主图、详情页和场景图",
-    hint: "文字入口用于描述要处理的商品、链接、订单或经营目标；AI CEO 会先拆成任务，再进入人工确认边界。",
-    progressMetric: ["60%", "3 个商品项目"],
-  },
-  store_opened: {
-    missionEyebrow: "已有店铺首页",
-    missionTitle: "先把店铺资料接进来，AI 才能少问你",
-    missionBody: "你不用重学开店。先用 eBay 只读授权或资料导入，让 AI CEO 读取 Listing、订单、费用和业务政策；它会整理重复工作，不会自动改价、发布、退款或投广告。",
-    progress: [
-      ["确认站点", "done"],
-      ["只读接入", "current"],
-      ["资料归档", ""],
-      ["自动化队列", ""],
-      ["确认执行", ""],
-    ],
-    board: [
-      ["先接什么", "Seller Hub / Listing / 订单 / 费用", "优先只读读取上下文；没有授权时先用 CSV、截图或样本手动导入。"],
-      ["先整理什么", "商品、订单、费用和业务政策", "把 Listing 完整度、业务政策、费用、广告、履约和账号表现整理成可追踪资料。"],
-      ["AI 能做", "生成自动化队列", "把商品资料、客服草稿、费用核算、素材任务、履约检查拆成可确认项目。"],
-      ["你来确认", "发布、改价、广告、退款、授权", "这些动作仍进确认中心；普通资料整理和报告生成不反复打断你。"],
-    ],
-    priority: {
-      eyebrow: "AI CEO 店铺接入建议",
-      title: "先连接资料，再省掉重复工作",
-      note: "接入后先只读、先整理、先出草稿；真正影响钱和账号的动作才让你点头。",
-      pill: "接入优先",
-      cards: [
-        ["1 · 先连接账号", "只读授权或手动导入样本", "先让系统看得见 Listing、订单、费用和业务政策；不开放发布、改价和退款写入。", "连接账号", "connect-store", "primary-action", true],
-        ["2 · 看 AI 汇报", "Listing、费用、客服、履约先归档", "AI 先整理出哪里重复、哪里缺资料、哪里要你确认。", "看 AI 汇报", "open-baseline", "secondary-action", false],
-        ["3 · 产品刊登", "从一个项目开始省流程", "先跑通单品，再把同类流程设成默认。", "进入产品刊登", "open-optimization", "secondary-action", false],
-      ],
-    },
-    chat: [
-      ["AI CEO", "我会先把你的 eBay 店铺作为数据对象接进来。第一步确认站点、Seller Hub、业务政策、Listing、订单、费用和广告数据怎么读取。"],
-      ["我", "我已经有店铺了，先把重复操作整理出来，能自动化的先做草稿。", "user"],
-      ["AI CEO", "可以。捷境会先做只读接入或资料导入，整理 Listing、费用、客服、履约和账号风险，把能省事的流程做成自动化队列。发布、改价、广告预算、退款和授权仍然要你确认。", "ai"],
-    ],
-    input: "我已经有 eBay 店铺，先接入店铺并整理自动化任务队列",
-    hint: "已有店铺建议先用只读接入。捷境会省掉重复整理和草稿工作；真实写入、改价、发布、广告预算和退款不会自动执行。",
-    progressMetric: ["接入中", "自动化队列"],
-  },
-  has_orders: {
-    missionEyebrow: "自动客服首页",
-    missionTitle: "普通买家消息让 AI 回，麻烦问题你接管",
-    missionBody: "已有订单时，先别看复杂后台。AI CEO 会把买家消息、订单、tracking、退款风险和利润放在一起；普通问题自动回复，退款、补偿、差评、纠纷和明确承诺停下来让你接管。",
-    progress: [
-      ["订单读取", "done"],
-      ["消息归类", "current"],
-      ["物流异常", ""],
-      ["退款风险", ""],
-      ["确认中心", ""],
-    ],
-    board: [
-      ["先接什么", "订单、买家消息、tracking", "把客服和物流状态合并，减少在多个后台之间来回查找。"],
-      ["先看什么", "待发货和异常件", "先处理会影响账号表现、退款和差评的订单。"],
-      ["AI 能做", "草稿回复和风险排序", "普通咨询出草稿；退款、补偿、重发和承诺变更进确认中心。"],
-      ["你来确认", "退款、赔付、重发、承诺", "这些动作影响钱和账号，不让 AI 自动决定。"],
-    ],
-    priority: {
-      eyebrow: "AI CEO 订单建议",
-      title: "先让 AI 接住客服和物流",
-      note: "普通问题可先生成回复；高风险售后会停住，优先处理影响账号表现和资金的事项。",
-      pill: "订单优先",
-      cards: [
-        ["1 · 开启自动客服", "普通问题先让 AI 接待", "物流查询、尺寸材质、已妥投说明可以自动处理。", "看自动客服", "open-service", "primary-action", true],
-        ["2 · 人工接管麻烦问题", "退款、补偿、差评、纠纷", "这些会影响钱和账号，AI 会停下来让你决定。", "看自动客服", "open-service", "secondary-action", false],
-        ["3 · 看订单汇报", "别漏发、别乱承诺", "物流异常、低利润和售后风险会汇总成 AI 汇报。", "看 AI 汇报", "open-baseline", "secondary-action", false],
-      ],
-    },
-    chat: [
-      ["AI CEO", "你已经有订单了，我会先把客服、物流、退款和利润放在一张处理视图里。营销先放后面，今天先避免漏发、乱承诺和低利润订单失控。", "ai"],
-      ["我", "先看今天哪些订单和买家消息最急。", "user"],
-      ["AI CEO", "我会按待发货、tracking 异常、买家催单、退款风险和利润风险排序。普通回复先给草稿；退款、重发、补偿和承诺变更进确认中心。", "ai"],
-    ],
-    input: "先看今天哪些订单、买家消息和物流异常最急",
-    hint: "订单阶段默认不自动退款、不自动承诺补偿、不自动改物流政策。",
-    progressMetric: ["待处理", "订单/客服项目"],
-  },
-  multi_store: {
-    missionEyebrow: "多店铺首页",
-    missionTitle: "店铺多时，先别急着铺货，先分清谁管什么",
-    missionBody: "多店铺最怕数据混、权限乱、利润算不清。AI CEO 先建立店铺清单、人员权限、费用口径和确认边界，再按 eBay 机会做批量铺货和复盘。",
-    progress: [
-      ["店铺清单", "done"],
-      ["权限矩阵", "current"],
-      ["费用口径", ""],
-      ["跨店总览", ""],
-      ["确认边界", ""],
-    ],
-    board: [
-      ["先接什么", "多店铺 / 多站点 / 团队角色", "区分负责人、客服和财务能看什么、能确认什么。"],
-      ["先看什么", "店铺状态和费用口径", "按店铺拆订阅费、刊登费、成交费、广告费、物流和退款预留。"],
-      ["AI 能做", "跨店汇总和货源初筛", "筛出可试卖商品、低利润商品和账号风险店铺。"],
-      ["你来确认", "跨店刊登、预算、退款、客服", "涉及资金、刊登、退款、广告和客服发送的动作集中进确认中心。"],
-    ],
-    priority: {
-      eyebrow: "AI CEO 多店铺建议",
-      title: "先统一规则，再做测试草稿",
-      note: "不是一键乱铺货，而是先把权限、费用、风险和确认边界整理好，再让 AI CEO 扩量。",
-      pill: "规则优先",
-      cards: [
-        ["1 · 先连接店铺", "每个店铺站点、负责人、状态", "先避免店铺数据混在一起，后续汇报才可信。", "连接账号", "connect-store", "primary-action", true],
-        ["2 · 设置谁能点头", "谁能确认发布、退款和预算", "团队权限不清楚时，AI 只能做草稿，不能推进关键动作。", "看默认规则", "connect-store", "secondary-action", false],
-        ["3 · 批量铺货", "先筛少量，不乱铺", "先筛出少量可测商品草稿，确认后再送产品刊登和素材工坊。", "进入批量铺货", "open-bulk", "secondary-action", false],
-      ],
-    },
-    chat: [
-      ["AI CEO", "多店铺阶段我不会先推一堆商品。第一步是分清店铺、站点、负责人、费用口径和确认权限，否则铺货越快风险越大。", "ai"],
-      ["我", "我有多个店铺，想把权限、费用和铺货流程统一起来。", "user"],
-      ["AI CEO", "我会先生成店铺清单、团队权限矩阵和费用口径，再把货源初筛限制在小批量试卖。跨店发布、预算、退款和权限变更都会先停下来。", "ai"],
-    ],
-    input: "我有多个店铺，先整理权限、费用口径和小批量铺货规则",
-    hint: "多店铺阶段先管权限和费用，不先做大规模发布。",
-    progressMetric: ["规则中", "多店铺接入"],
-  },
-};
+const cockpitProfiles = {};
 
 const views = Array.from(document.querySelectorAll(".view"));
 const preservedInitialViewMarkup = new Map(views.map((view) => [view.id.replace(/^view-/, ""), view.innerHTML]));
@@ -4893,116 +1897,20 @@ function restorePreservedViewMarkup(viewId, requiredSelector = "") {
 
 const generatedAssetPreviews = {
   main: {
-    role: "倒流香炉生成结果",
-    title: "AI 生成主图 · 倒流香炉",
-    intro: "已根据你发的倒流香炉货源图重新生成主图，不是裁切原图。发布前仍要核对实物一致性。",
-    meta: "发布前检查",
-    image: incenseAssetImages.generatedMain,
-    secondaryImage: incenseAssetImages.hero,
-    visualClass: "asset-render-main",
-    checklist: [
-      "确认实物颜色、孔位、底座和烟道结构一致。",
-      "补齐尺寸、重量、材质，避免只靠图片判断。",
-      "如果香粒不随货，标题和图片都不能让买家误会。",
-    ],
-    script: "",
-  },
-  scene: {
-    role: "倒流香炉生成结果",
-    title: "AI 生成场景图 · 茶室氛围",
-    intro: "基于你给的商品方向重新生成茶室场景图。场景增强只服务转化，不写不可证明功效。",
-    meta: "场景使用边界",
-    image: incenseAssetImages.lifestyleTea,
-    secondaryImage: incenseAssetImages.alt,
-    visualClass: "asset-render-scene",
-    checklist: [
-      "场景只展示摆放氛围，不承诺实际空间效果。",
-      "烟雾路径是视觉参考，必须和真实燃烧效果保持一致。",
-      "背景道具不能抢走主体，也不能暗示套装包含额外物品。",
-    ],
-    script: "",
-  },
-  sceneHome: {
-    role: "倒流香炉生成结果",
-    title: "AI 生成场景图 · 家居书桌",
-    intro: "补充一张更亮的家居书桌场景图，用来展示摆放位置、光线和家居装饰感。",
-    meta: "场景使用边界",
-    image: incenseAssetImages.lifestyleHome,
-    secondaryImage: incenseAssetImages.generatedScene,
-    visualClass: "asset-render-scene",
-    checklist: [
-      "场景图不能暗示商品包含书本、植物、茶具等道具。",
-      "烟雾路径是视觉参考，必须和真实倒流效果保持一致。",
-      "正式发布前需要核对供应商图片和 AI 生成素材的授权边界。",
-    ],
-    script: "",
-  },
-  size: {
-    role: "倒流香炉生成结果",
-    title: "AI 生成尺寸图 · 待填真实数据",
-    intro: "生成了尺寸图版式，但具体长宽高、重量和包装尺寸必须由商家实测后写入，不能让 AI 猜。",
-    meta: "尺寸真实性检查",
-    image: incenseAssetImages.sizeChart,
-    secondaryImage: incenseAssetImages.hero,
-    visualClass: "asset-render-smoke",
-    checklist: [
-      "尺寸数字必须来自真实测量，不能由 AI 猜。",
-      "细节图可展示结构和材质，但不能暗示套装包含额外物品。",
-      "删除夸张词：healing、purify、sleep aid、religious effect。",
-    ],
-    script: "",
-  },
-  closeup: {
-    role: "倒流香炉生成结果",
-    title: "AI 生成细节图 · 鸟枝与底座",
-    intro: "新增细节特写图，用来展示鸟、树枝、花纹、香粒托和底座边缘，不再只靠一张大场景图。",
-    meta: "细节真实性检查",
-    image: incenseAssetImages.detailCloseup,
-    secondaryImage: incenseAssetImages.generatedMain,
+    role: "素材待接入",
+    title: "还没有当前商品素材",
+    intro: "先上传商品图片、货源链接或保存商品资料，捷境会在真实素材清单返回后显示可审核结果。",
+    meta: "等待真实素材",
+    image: "assets/jiejing-app-icon.svg",
+    secondaryImage: "assets/jiejing-app-icon.svg",
     visualClass: "asset-render-detail",
-    checklist: [
-      "细节图展示结构和材质质感，但不能改变真实纹理或做成不同款式。",
-      "香粒是否随货必须在标题、图片和包装清单里一致。",
-      "不要把装饰风格写成可证明的疗愈、净化或助眠功效。",
-    ],
+    video: "",
+    captionScript: "",
+    frames: [],
+    checklist: ["确认商品事实", "确认图片使用权", "确认素材与实物一致"],
     script: "",
-  },
-  detail: {
-    role: "倒流香炉生成结果",
-    title: "AI 生成详情页 · 卖点与参数",
-    intro: "把你的商品图拆成主视觉、卖点图、尺寸图、使用步骤和注意事项，回写到 Listing 草稿。",
-    meta: "详情页信息缺口",
-    image: incenseAssetImages.generatedDetail,
-    secondaryImage: incenseAssetImages.alt,
-    visualClass: "asset-render-detail",
-    checklist: [
-      "尺寸图需要真实测量数据，不用估算值。",
-      "包装清单必须明确是否包含香粒、垫片或收纳盒。",
-      "安全提醒写清通风、明火、儿童宠物和清洁注意事项。",
-    ],
-    script: "",
-  },
-  video: {
-    role: "倒流香炉视频草稿",
-    title: "AI 生成产品短视频脚本 · 分镜预览",
-    intro: "已经生成一套产品展示短视频脚本和分镜草稿，包含商品展示、场景切换、细节镜头、详情页画面和字幕节奏。",
-    meta: "短视频脚本",
-    image: incenseAssetImages.videoCover,
-    secondaryImage: incenseAssetImages.lifestyleTea,
-    video: incenseAssetImages.videoFile,
-    captionScript: incenseAssetImages.captionScript,
-    frames: incenseAssetImages.videoFrames,
-    visualClass: "asset-render-video",
-    checklist: [
-      "视频脚本已标注英文字幕节奏，发布前仍要核对真实商品和授权。",
-      "字幕不写疗愈、净化、助眠、宗教功效。",
-      "尺寸、材质、包装清单和是否含香粒不能由视频替商家确认。",
-    ],
-    script:
-      "0-4s: Meet the Oriental style backflow incense burner.\n4-8s: Place a backflow cone on the holder, then show the smoke flowing gently down into the basin.\n8-12s: Highlight the branch, bird and flower details as a calm home accent.\n12-16s: Remind buyers to check exact size, material, package contents and whether cones are included.\n16-25s: End with desk, tea corner and living room shelf use cases, without making healing or religious claims.",
   },
 };
-
 const listingCategoryProfiles = {
   incense: {
     categorySource: "eBay 类目接口 · 待按 eBay US 类目树确认",
@@ -5274,8 +2182,8 @@ const jiejingProductCopyReplacements = [
   [/ebay_read_only_connection/g, "eBay 只读连接"],
   [/ebay_refresh_token_secret_ref/g, "eBay 授权凭证已托管"],
   [/oauth_connection/g, "官方只读连接"],
-  [legacyExecutionPairPattern, "捷境内部执行底座"],
-  [legacyExecutionBrandPattern, "内部执行底座"],
+  [legacyExecutionPairPattern, "捷境系统"],
+  [legacyExecutionBrandPattern, "捷境系统"],
   [/Demo bootstrap/gi, "operator bootstrap"],
   [/demo bootstrap/gi, "operator bootstrap"],
   [/saasDemoBootstrapEnabled/g, "operatorBootstrapEnabled"],
@@ -5322,53 +2230,7 @@ function showActionToast(text) {
   }, 2600);
 }
 
-const cockpitMarketProfiles = {
-  incense: {
-    overview: ["品类概述", "家居香薰摆件，视觉吸引力强，但同款多，不能直接铺量。", "需求：中等稳定；趋势：礼品、茶室、桌面氛围类素材更容易被点开。", "竞争：中高密度，低价同款多，靠图片可信度和规格清晰度拉开。"],
-    metrics: [["搜索关注", "中等偏稳", "backflow / waterfall / zen decor 组合词更准确"], ["价格主带", "US $18.99-29.99", "首测建议 US $22.99 左右"], ["竞品密度", "中高", "同款多，低价款会压缩利润"], ["继续条件", "利润达标 + 破损率可控", "重量、包装和是否含香粒必须确认"]],
-    personas: [["家居氛围买家", "茶室、书房、办公室摆件用户，最在意画面氛围、尺寸和烟雾效果。"], ["礼品场景买家", "节日、乔迁、禅意礼品需求，关注包装、到手完整度、是否含香粒。"]],
-    priceBands: [["US $9.99-14.99", "约 28%", "低价白牌，利润薄，差评集中在小和碎。"], ["US $15.99-24.99", "约 44%", "主测试带，适合单品和基础包装。"], ["US $25.99-39.99", "约 21%", "需要礼品包装、套装或更强场景图支撑。"], ["US $40+", "约 7%", "多为套装或更大器型，不适合首测。"]],
-    competitors: [["瀑布烟雾香炉白牌", "US $12.99-18.99", "低价多，差评集中在烟雾效果弱。"], ["禅意茶室摆件套装", "US $24.99-34.99", "图片好但规格常写不清。"], ["陶瓷/树脂香炉", "US $18.99-29.99", "材质表达混乱，容易被买家质疑。"], ["礼品包装款", "US $29.99+", "需要包装图和清单，否则溢价站不住。"], ["海外仓同款", "US $22.99-39.99", "时效强，但价格更高。"]],
-    risks: ["尺寸偏小导致预期落差", "香粒是否包含说不清", "烟雾效果被夸大", "易碎包装和补发规则不清", "材质、重量、发货地影响运费和退货"],
-    decision: "建议小批测试，不建议直接铺量。先补供应商资料、生成高质量素材，再做利润和履约测算。",
-  },
-  compression: {
-    overview: ["品类概述", "旅行压缩收纳袋属于轻小件收纳用品，卖点清楚，履约风险相对低。", "需求：旅行、留学、搬家、家庭收纳稳定存在；趋势：容量对比和真实装箱场景影响点击。", "竞争：中等，低价同款多，但差评给了差异化空间。"],
-    metrics: [["搜索关注", "稳定", "packing bags / compression organizer / suitcase organizer"], ["价格主带", "US $12.99-24.99", "套装数量和尺寸表决定价格感"], ["竞品密度", "中等", "比香炉低，素材和尺寸说明更关键"], ["继续条件", "套装数量准确", "尺寸、材质厚度、拉链质量必须确认"]],
-    personas: [["旅行收纳买家", "出差、旅行、留学用户，关注是否省空间、是否耐用、是否方便分类。"], ["家庭整理买家", "衣柜、短租搬家、季节衣物收纳用户，关注容量、材质和套装数量。"]],
-    priceBands: [["US $6.99-11.99", "约 20%", "小套装或低质款，容易被价格战拖住。"], ["US $12.99-18.99", "约 46%", "主测试带，适合 4-6 件套。"], ["US $19.99-29.99", "约 27%", "需要清楚容量对比、材质和更完整套装。"], ["US $30+", "约 7%", "偏品牌或大套装，不适合未验证时直接切入。"]],
-    competitors: [["6 件套压缩袋", "US $13.99-18.99", "差评集中在袋体薄、拉链断。"], ["行李箱收纳套装", "US $16.99-24.99", "图片多但尺寸表不清。"], ["真空压缩袋", "US $19.99-29.99", "买家容易混淆是否需要泵。"], ["旅行衣物分类袋", "US $9.99-16.99", "不强调压缩，转化靠颜色和套装。"], ["品牌收纳袋", "US $25.99+", "质量背书强，白牌要靠真实图。"]],
-    risks: ["压缩效果夸大导致差评", "拉链质量不稳", "尺寸和套装数量说不清", "材质厚度影响退货", "包装重量影响利润"],
-    decision: "可以优先测试。先做容量对比图、尺寸表和拉链细节，再进入产品刊登和利润测算。",
-  },
-  jewelry: {
-    overview: ["品类概述", "便携首饰盒是低风险轻小件，但同质化高，需要靠内部结构和礼品感取胜。", "需求：旅行、礼品、自用收纳长期存在；趋势：开合细节、手持尺寸和颜色真实度影响转化。", "竞争：中高，同款多，图片和变体策略决定能否跑起来。"],
-    metrics: [["搜索关注", "中等", "travel jewelry organizer / ring earring case"], ["价格主带", "US $9.99-18.99", "首测建议 US $14.99 左右"], ["竞品密度", "中高", "颜色款多，容易陷入同质化"], ["继续条件", "内部结构清楚", "颜色、尺寸、内衬和包装必须确认"]],
-    personas: [["旅行女性买家", "短途旅行、通勤、宿舍收纳用户，关注小巧、分类、开合顺滑。"], ["礼品买家", "生日、节日、小礼物场景，关注颜色、包装和质感。"]],
-    priceBands: [["US $5.99-9.99", "约 24%", "低价小盒，利润空间有限。"], ["US $10.99-14.99", "约 41%", "主测试带，适合单色单品。"], ["US $15.99-22.99", "约 28%", "需要多色、礼品感或更好材质。"], ["US $23+", "约 7%", "偏品牌或大容量款。"]],
-    competitors: [["小号 PU 首饰盒", "US $8.99-12.99", "差评集中在太小和异味。"], ["旅行耳环戒指盒", "US $11.99-16.99", "内部结构图不清。"], ["礼品风首饰盒", "US $14.99-22.99", "包装和颜色图决定点击。"], ["多色变体款", "US $9.99-18.99", "库存和颜色差异管理复杂。"], ["大容量收纳盒", "US $20+", "发货体积和成本更高。"]],
-    risks: ["尺寸太小引起退货", "内衬材质和异味问题", "颜色偏差", "拉链或搭扣质量", "多色变体库存不准"],
-    decision: "适合常规小单测试。先确认尺寸、颜色和内部结构，再决定单品刊登还是多色变体刊登。",
-  },
-  candle: {
-    overview: ["品类概述", "香薰蜡烛套装有礼品属性，但气味、易碎和物流限制比普通轻小件更复杂。", "需求：家居氛围、礼品、季节装饰稳定；趋势：礼盒质感和香型真实说明影响购买。", "竞争：中高，不能靠夸大香味或放松功效。"],
-    metrics: [["搜索关注", "中等", "scented candle gift set / home fragrance"], ["价格主带", "US $15.99-34.99", "礼盒数量和净含量决定价格"], ["竞品密度", "中高", "礼品图多，但差评也集中"], ["继续条件", "物流可发", "蜡材质、香型、净含量和包装必须确认"]],
-    personas: [["家居氛围买家", "卧室、浴室、客厅氛围用户，关注香型、外观和安全提醒。"], ["礼品买家", "节日、生日、乔迁礼品，关注礼盒、包装和到手完整度。"]],
-    priceBands: [["US $9.99-15.99", "约 18%", "小套装或单杯，利润和包装压力大。"], ["US $16.99-24.99", "约 39%", "基础礼盒测试带。"], ["US $25.99-39.99", "约 34%", "需要礼盒、香型清晰和高质量图。"], ["US $40+", "约 9%", "品牌或大套装，首测风险高。"]],
-    competitors: [["4 件套香薰蜡烛", "US $17.99-24.99", "差评在香味弱和尺寸小。"], ["礼盒蜡烛套装", "US $24.99-34.99", "包装破损投诉较多。"], ["玻璃杯蜡烛", "US $18.99-29.99", "易碎和重量风险明显。"], ["季节主题蜡烛", "US $16.99-32.99", "季节性强，滞销风险高。"], ["品牌香氛礼盒", "US $35+", "品牌和图片优势明显。"]],
-    risks: ["物流是否接受蜡烛/香氛类", "玻璃或外壳破损", "香型描述与实物不符", "燃烧时间夸大", "退货政策需要更谨慎"],
-    decision: "暂不建议直接发布。先核查物流限制、易碎包装和香型资料，确认可发后再做素材。",
-  },
-  cable: {
-    overview: ["品类概述", "桌面理线夹是低客单轻小件，需求明确但利润薄，适合作为流程自动化测试品。", "需求：办公桌、床头、电脑配件收纳稳定；趋势：安装步骤和线径适配说明影响转化。", "竞争：高密度，必须控制广告和运费。"],
-    metrics: [["搜索关注", "稳定", "cable organizer clips / cord holder / wire management"], ["价格主带", "US $5.99-12.99", "套装数量决定客单价"], ["竞品密度", "高", "同质化极强，靠数量和安装图区分"], ["继续条件", "低运费路线", "粘胶、线径、数量和包装重量必须确认"]],
-    personas: [["办公整理买家", "办公桌、电脑、充电线用户，关注粘得牢、线不乱、安装简单。"], ["租房学生买家", "低预算、桌面/床头使用，关注价格、数量和是否留胶。"]],
-    priceBands: [["US $3.99-5.99", "约 16%", "极低价，利润和物流空间差。"], ["US $6.99-9.99", "约 48%", "主测试带，适合 20 件套。"], ["US $10.99-14.99", "约 29%", "需要更多数量或更好粘胶。"], ["US $15+", "约 7%", "套装大或品牌款。"]],
-    competitors: [["20 件理线夹", "US $6.99-9.99", "差评集中在粘不牢。"], ["硅胶线夹套装", "US $8.99-12.99", "线径适配说不清。"], ["透明/黑白多色线夹", "US $7.99-13.99", "颜色和数量容易混乱。"], ["桌面电线管理套装", "US $12.99-19.99", "包含扎带和线槽，客单更高。"], ["品牌收纳配件", "US $14.99+", "信任高但价格高。"]],
-    risks: ["粘胶不牢导致差评", "线径不适配", "拆除留胶", "低客单广告吃利润", "套装数量或颜色发错"],
-    decision: "可以作为低风险轻小件测试，但要保守广告，优先做套装数量、线径和安装步骤图。",
-  },
-};
+const cockpitMarketProfiles = {};
 
 function cockpitMarketProfile(draft) {
   if (isSaasPublicMvpMode() && (!draft || isLegacySampleMediaDraftKey(draft.id))) return null;
@@ -5486,51 +2348,8 @@ const batchPreferenceConflicts = {
   battery_allowed: ["no_battery"],
 };
 
-const ceoBatchCandidatePool = [
-  ["旅行压缩收纳袋", "收纳旅行", 74, "轻小件，售后主要在尺寸和拉链口径。"],
-  ["便携首饰盒", "旅行礼品", 71, "低风险，适合礼品和收纳场景。"],
-  ["桌面理线夹", "办公整理", 69, "轻小件，客单低但售后少。"],
-  ["硅胶锅铲架", "厨房收纳", 76, "小件、非易碎、不带电，适合做场景图。"],
-  ["旅行洗漱包", "旅行收纳", 73, "客单中等，尺寸和防水口径要说清。"],
-  ["衣柜分隔收纳盒", "家居收纳", 72, "视觉好做，需确认尺寸和承重。"],
-  ["宠物毛发清理刷", "宠物清洁", 70, "需求明确，需避免夸大清洁效果。"],
-  ["可折叠购物袋", "日用环保", 68, "轻小件，差异化靠材质和容量图。"],
-  ["桌面耳机挂架", "办公配件", 75, "客单可做，需确认承重和安装方式。"],
-  ["冰箱磁吸收纳盒", "厨房收纳", 67, "需确认磁力和承重，先谨慎测。"],
-  ["车载纸巾盒", "汽车内饰", 71, "售后少，注意车型通用口径。"],
-  ["鞋盒收纳标签夹", "家居整理", 66, "低客单，适合批量测试但广告要保守。"],
-  ["化妆刷收纳筒", "美妆收纳", 72, "场景图好做，材质和尺寸需确认。"],
-  ["门后挂钩", "家居收纳", 73, "不带电，需确认承重和门缝适配。"],
-  ["儿童玩具收纳袋", "家庭收纳", 69, "需避开儿童安全夸大和材质风险。"],
-  ["旅行证件收纳包", "旅行配件", 74, "高实用，需确认 RFID 等功能不能乱写。"],
-  ["厨房水槽过滤网", "厨房耗材", 65, "低客单，适合测试但利润薄。"],
-  ["抽屉分隔板", "家居整理", 72, "尺寸图关键，售后风险可控。"],
-  ["瑜伽垫背带", "运动配件", 68, "轻小件，需确认承重和适配尺寸。"],
-  ["沙发遥控器收纳袋", "家居收纳", 70, "场景清晰，材质和安装方式要说清。"],
-];
-
-const bulkCandidatePool = [
-  ["硅胶水槽沥水垫", "厨房收纳", 77, "轻小件、非易碎、不带电；需要确认尺寸、材质和防滑结构。"],
-  ["猫砂铲收纳架", "宠物用品", 74, "需求明确，售后少；要确认是否含铲、安装方式和适配尺寸。"],
-  ["冰箱门侧收纳夹", "厨房整理", 72, "小件低破损，适合场景图；要确认夹持厚度和承重。"],
-  ["浴室牙刷旅行盒", "旅行洗漱", 71, "轻小件、规格简单；要避免夸大抗菌功能。"],
-  ["硅胶锅盖防溢垫", "厨房小工具", 70, "视觉演示强，需确认耐温范围和食品接触材质。"],
-  ["宠物慢食碗垫", "宠物喂食", 69, "场景清楚，需确认材质、尺寸和清洁方式。"],
-  ["车载挂钩收纳扣", "汽车收纳", 73, "低售后小件；要确认承重、适配车型和安装方式。"],
-  ["门缝防尘密封条", "家居维护", 68, "需求稳定，但尺寸和安装说明必须清楚。"],
-  ["鞋带免系扣套装", "鞋类配件", 70, "轻小件、可多色套装；需确认适配鞋带类型和数量。"],
-  ["厨房量勺磁吸套装", "厨房工具", 72, "适合礼品图和详情页；需确认材质、刻度和清洗方式。"],
-  ["窗帘绑带磁扣", "家居软装", 71, "无需打孔，场景明确；需确认磁力和适用窗帘厚度。"],
-  ["植物标签插牌", "园艺用品", 67, "低风险轻小件；利润薄，需要套装数量和材质明确。"],
-  ["可折叠购物车挂钩", "日用配件", 69, "小件实用，需确认承重、材质和挂扣尺寸。"],
-  ["衣架防滑硅胶套", "家居收纳", 68, "低客单但售后少；适合批量测试套装。"],
-  ["洗衣机排水管固定夹", "家电配件", 66, "需求明确但规格敏感；必须确认管径适配。"],
-  ["便携药片分装盒", "旅行收纳", 64, "需求稳定，但要避开医疗功效和儿童安全夸大。"],
-  ["书桌夹式杯架", "办公配件", 72, "客单价可做，需确认夹距、承重和杯径范围。"],
-  ["浴室免打孔挂架", "浴室收纳", 70, "场景强，但胶面和承重说明要保守。"],
-  ["宠物毛巾挂扣", "宠物清洁", 65, "轻小件，需验证搜索量和差异化空间。"],
-  ["钥匙收纳磁吸板", "玄关收纳", 69, "视觉好做，需确认磁力、安装方式和承重。"],
-];
+const ceoBatchCandidatePool = [];
+const bulkCandidatePool = [];
 
 function renderBatchPreferenceButtons() {
   return Object.entries(batchPreferenceLabels)
@@ -8208,24 +5027,26 @@ function publishFlowStatusForDraft(draft) {
 }
 
 function sourceFactsCompletedForDraft(draft) {
-  const flow = state.publishFlow || {};
-  const manualSourceReady = state.sourceManualStatus === "saved" && manualSourceMissingItems().length === 0;
-  return (
-    flow.demoFactsCompleted === true ||
-    state.supplierFactsStatus === "saved" ||
-    manualSourceReady ||
-    state.sourceHandoffStatus === "sent"
-  );
+  const facts = productFactsForDraft(draft);
+  const requiredKeys = [
+    "source_link",
+    "purchase_price",
+    "source_location",
+    "product_dimensions",
+    "package_dimensions",
+    "package_weight",
+    "material",
+    "included",
+  ];
+  return requiredKeys.every((key) => isFilledOperationalValue(facts[key]));
 }
 
 function taxonomyCheckedForDraft(draft) {
-  const flow = state.publishFlow || {};
-  return flow.demoFactsCompleted === true || state.taxonomyStatus === "checked";
+  return state.taxonomyStatus === "checked";
 }
 
 function ebayPoliciesReadyForDraft(draft) {
-  const flow = state.publishFlow || {};
-  return flow.demoFactsCompleted === true || state.ebayPolicyStatus === "ready";
+  return state.ebayPolicyStatus === "ready";
 }
 
 function missingItemsForDraft(draft) {
@@ -8236,8 +5057,15 @@ function missingItemsForDraft(draft) {
 }
 
 function publishGateForDraft(draft) {
-  const flow = state.publishFlow || {};
-  const demoFactsCompleted = flow.draftId === draft.id && flow.demoFactsCompleted === true;
+  if (!draft) {
+    return {
+      locked: true,
+      blockers: ["还没有可校验的商品草稿"],
+      reportLevel: "资料缺口",
+      sourceHealth: "等待真实商品资料",
+      demoFactsCompleted: false,
+    };
+  }
   const missing = missingItemsForDraft(draft);
   const blockers = [];
   if (!sourceFactsCompletedForDraft(draft) && missing.length) {
@@ -8252,13 +5080,13 @@ function publishGateForDraft(draft) {
   const reportLevel = blockers.length ? "数据增强报告" : "发布前报告";
   const sourceHealth = missing.length
     ? "可做刊登草稿，不能真实发布"
-    : "教程资料已齐，真实发布仍要后端校验";
+    : "商品资料已齐，真实发布仍要后端校验";
   return {
     locked: blockers.length > 0,
     blockers,
     reportLevel,
     sourceHealth,
-    demoFactsCompleted,
+    demoFactsCompleted: false,
   };
 }
 
@@ -8281,60 +5109,14 @@ function publishActionHint(draft) {
   return "发布动作从这里发起：先生成确认单，再到确认中心点头。";
 }
 
-function demoSupplierFactsForDraft(draft) {
-  const presets = {
-    incense: {
-      source_link: "https://detail.1688.com/offer/source-backflow-incense-burner",
-      purchase_price: "¥7.80 - ¥12.60",
-      moq: "1 件可发，建议先测 5-10 件",
-      product_dimensions: "约 16 x 13 x 9 cm",
-      package_dimensions: "约 21 x 18 x 14 cm",
-      package_weight: "约 620 g",
-      material: "陶瓷 / 树脂需二次确认；按供应商最终回复写入",
-      included: "默认不含倒流香粒；如含香粒必须单独写清数量",
-      source_location: "福建 / 广东候选供应商，发货地以实际下单页为准",
-      fulfillment_route: "供应商直发或国内中转后走 SpeedPAK / 橙联",
-      quality_checks: "确认防碎包装、破损补发、是否无票据代发、是否能提供实拍图",
-      category_candidate: "Home & Garden > Home Decor > Incense Holders",
-      policy_note: "套用店铺默认物流 / 支付 / 退货模板；易碎包装和退货责任单独确认",
-    },
-    compression: {
-      source_link: "https://detail.1688.com/offer/source-compression-packing-bags",
-      purchase_price: "¥8.50 - ¥15.80",
-      moq: "1 件可发，6 件套优先",
-      product_dimensions: "S/M/L 多尺寸，需供应商给准确尺码表",
-      package_dimensions: "约 30 x 22 x 5 cm",
-      package_weight: "约 420 g",
-      material: "尼龙 / 涤纶复合材质，厚度待确认",
-      included: "确认套装数量、颜色和是否含收纳袋",
-      source_location: "浙江 / 广东候选供应商",
-      fulfillment_route: "轻小件优先供应商直发；首批可国内中转抽检",
-      quality_checks: "确认拉链耐用、压缩方式、容量口径和是否夸大效果",
-      category_candidate: "Travel Accessories > Packing Organizers",
-      policy_note: "套用店铺默认政策；尺寸误解和未使用退货边界单独说明",
-    },
-  };
-  return {
-    source_link: "https://detail.1688.com/offer/source-item",
-    purchase_price: "¥6.80 - ¥16.80",
-    moq: "1 件可发，首批小量测试",
-    product_dimensions: "待供应商确认",
-    package_dimensions: "待供应商确认",
-    package_weight: "待供应商确认",
-    material: "按供应商最终回复写入",
-    included: "是否含配件需确认",
-    source_location: "中国大陆候选供应商",
-    fulfillment_route: "供应商直发 / 国内中转二选一",
-    quality_checks: "确认包装、破损、补发、无票据代发和图片真实性",
-    category_candidate: draft.category || "待 eBay 类目校验",
-    policy_note: "套用店铺默认三类政策，商品差异单独确认",
-    ...(presets[draft.id] || {}),
-    ...(state.manualProductFacts?.[draft.id] || {}),
-  };
+function productFactsForDraft(draft) {
+  if (!draft?.id) return {};
+  const saved = state.manualProductFacts?.[draft.id];
+  return saved && typeof saved === "object" ? saved : {};
 }
 
 function productReadinessFields(draft) {
-  const facts = demoSupplierFactsForDraft(draft);
+  const facts = productFactsForDraft(draft);
   return [
     ["source_link", "货源链接", facts.source_link],
     ["purchase_price", "采购价", facts.purchase_price],
@@ -8521,18 +5303,19 @@ function sourceFactsFromManualInput(draft, facts = state.manualSourceFacts || {}
         ? "供应商不支持直发，建议国内中转后再走橙联 / SpeedPAK"
         : "待确认供应商是否支持无票据代发";
   return {
-    source_link: facts.source_link || "https://detail.1688.com/offer/...",
-    purchase_price: facts.purchase_price || "待填写",
-    moq: facts.moq || "待填写",
-    source_location: facts.source_location || "待填写",
-    package_weight: facts.package_weight || "待供应商确认",
-    package_dimensions: facts.package_dimensions || "待供应商确认",
-    material: facts.material || "按供应商最终回复写入",
-    included: demoSupplierFactsForDraft(draft).included,
+    source_link: facts.source_link || "",
+    purchase_price: facts.purchase_price || "",
+    moq: facts.moq || "",
+    source_location: facts.source_location || "",
+    product_dimensions: facts.product_dimensions || "",
+    package_weight: facts.package_weight || "",
+    package_dimensions: facts.package_dimensions || "",
+    material: facts.material || "",
+    included: facts.included || "",
     fulfillment_route: dropshipText,
-    quality_checks: "确认包装、破损补发、无票据代发、图片真实性和是否能按买家地址履约",
-    category_candidate: demoSupplierFactsForDraft(draft).category_candidate,
-    policy_note: demoSupplierFactsForDraft(draft).policy_note,
+    quality_checks: facts.quality_checks || "",
+    category_candidate: facts.category_candidate || "",
+    policy_note: facts.policy_note || "",
   };
 }
 
@@ -8542,7 +5325,7 @@ function collectProductReadinessFacts(draft) {
     fields[input.dataset.productReadinessField] = input.value.trim();
   });
   return {
-    ...demoSupplierFactsForDraft(draft),
+    ...productFactsForDraft(draft),
     ...fields,
     saved_at: formatDecisionTime(new Date()),
   };
@@ -8560,7 +5343,7 @@ function renderProductReadinessIntake(draft) {
         <div>
           <span>补资料接力</span>
           <strong>填一次，系统继续生成发布确认单</strong>
-          <p>这里模拟正式 SaaS 的处理方式：商家不接 1688 API 时，就把货源链接、采购价、重量、尺寸、材质和发货地填在这里；保存后系统自动回到刊登校验和确认中心。</p>
+          <p>把真实货源链接、采购价、重量、尺寸、材质和发货地填在这里。保存后捷境只记录已填写事实；类目和店铺政策必须用 eBay 官方数据另行校验。</p>
         </div>
         <em>${factsReady ? "货源资料已保存" : "等待补齐货源资料"}</em>
       </div>
@@ -8584,20 +5367,20 @@ function renderProductReadinessIntake(draft) {
         <aside class="product-readiness-side">
           <article class="${taxonomyReady ? "is-ready" : ""}">
             <span>02 eBay 类目字段</span>
-            <strong>${taxonomyReady ? "演示已校验" : "待系统校验"}</strong>
+            <strong>${taxonomyReady ? "系统已校验" : "待系统校验"}</strong>
             <p>白话说：系统要确认这个商品放到哪个 eBay 类目，并拿到这个类目必须填的材质、颜色、尺寸、配件等参数。</p>
-            <input type="text" data-product-readiness-field="category_candidate" value="${escapeHtml(demoSupplierFactsForDraft(draft).category_candidate)}" aria-label="类目候选">
+            <input type="text" data-product-readiness-field="category_candidate" value="${escapeHtml(productFactsForDraft(draft).category_candidate || "")}" aria-label="类目候选">
           </article>
           <article class="${policyReady ? "is-ready" : ""}">
             <span>03 店铺三类政策</span>
             <strong>${policyReady ? "已套用默认模板" : "待读取或确认"}</strong>
             <p>物流、支付、退货属于店铺默认规则。正式版从 eBay 授权读取；商品只补重量、发货地、退货边界这些差异。</p>
-            <input type="text" data-product-readiness-field="policy_note" value="${escapeHtml(demoSupplierFactsForDraft(draft).policy_note)}" aria-label="店铺三类政策说明">
+            <input type="text" data-product-readiness-field="policy_note" value="${escapeHtml(productFactsForDraft(draft).policy_note || "")}" aria-label="店铺三类政策说明">
           </article>
         </aside>
       </div>
       <div class="product-readiness-intake-actions">
-        <button class="primary-action" type="button" data-product-action="save-readiness">保存并生成发布确认单</button>
+        <button class="primary-action" type="button" data-product-action="save-readiness">保存商品资料</button>
         <button class="secondary-action" type="button" data-product-action="taxonomy">只校验类目字段</button>
         <button class="secondary-action" type="button" data-product-action="policy">查看三类政策来源</button>
       </div>
@@ -9195,7 +5978,7 @@ function renderSaasListingStoreSyncOverview(ctx = saasMerchantWorkbenchContext()
         <div>
           <span>eBay 店铺同步</span>
           <strong>${escapeHtml(storeName)}</strong>
-          <p>防侵权筛查只基于当前店铺资料、新发布表单和商家来源记录。缺标题、品牌、图片、类目或 offer 时，捷境只给缺口，不冒充全店扫描。</p>
+          <p>筛查只基于当前店铺资料、新发布表单和商家来源记录。缺标题、品牌、图片、类目或 offer 时，捷境只给缺口，不冒充全店扫描。侵权风险初筛，仍需商家核对。</p>
         </div>
         <button class="primary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !state.saasConnected ? "disabled" : ""}>同步 eBay 商品</button>
       </div>
@@ -9292,7 +6075,7 @@ function renderSaasListingIpReadinessPanel(ctx = saasMerchantWorkbenchContext())
         <div>
           <span>IP / VeRO 防侵权体检</span>
           <strong>先看输入是否够，再谈筛查结论</strong>
-          <p>标题、描述、品牌、图片、类目、Item specifics、库存和 offer 是发布体检的基础。资料缺失时，页面必须明确标红缺口，不能用旧商品或模型猜测补齐。</p>
+          <p>标题、描述、品牌、图片、类目、Item specifics、库存和 offer 是发布体检的基础。资料缺失时，页面必须明确标红缺口，不能用旧商品或模型猜测补齐。侵权风险初筛，仍需商家核对。</p>
         </div>
         <button class="secondary-action" type="button" data-saas-action="sync-ebay-readonly" ${state.saasLoading || !state.saasConnected ? "disabled" : ""}>补同步商品资料</button>
       </div>
@@ -13904,7 +10687,7 @@ function renderProductListingCenter() {
         ${draft.supplierQuestions.map((question, index) => `<article><strong>${String(index + 1).padStart(2, "0")}</strong><p>${escapeHtml(question)}</p></article>`).join("")}
       </div>
       <div class="product-blocker-actions">
-        <button class="primary-action" type="button" data-product-action="save-readiness">保存并生成发布确认单</button>
+        <button class="primary-action" type="button" data-product-action="save-readiness">保存商品资料</button>
         <button class="secondary-action" type="button" data-product-action="taxonomy">自动校验 eBay 类目字段</button>
         <button class="secondary-action" type="button" data-product-action="policy">查看店铺三类政策</button>
       </div>
@@ -13914,9 +10697,10 @@ function renderProductListingCenter() {
 
 function upsertActivity(id, item) {
   const existingIndex = activities.findIndex((activity) => activity.id === id);
+  const activeProject = getActiveProject();
   const nextItem = {
     id,
-    projectId: getActiveProject().id,
+    projectId: item.projectId || activeProject?.id || state.activeProject || "",
     ...item,
   };
   if (existingIndex >= 0) {
@@ -14386,46 +11170,52 @@ async function syncProductReadinessToRuntime(draft, facts) {
 }
 
 function saveProductReadinessFacts(draft = activeListingDraft()) {
+  if (!draft) {
+    setProductInlineFeedback("还没有可保存的商品草稿。请先上传商品图片、货源链接或填写真实规格。");
+    showActionToast("请先导入真实商品资料。");
+    return;
+  }
   const facts = collectProductReadinessFacts(draft);
   state.manualProductFacts = {
     ...state.manualProductFacts,
     [draft.id]: facts,
   };
-  state.supplierFactsStatus = "saved";
+  state.supplierFactsStatus = sourceFactsCompletedForDraft(draft) ? "saved" : "partial";
   state.sourceManualStatus = "saved";
-  state.taxonomyStatus = "checked";
-  state.ebayPolicyStatus = "ready";
+  const gate = publishGateForDraft(draft);
   state.publishFlow = {
-    status: "pending",
+    status: gate.locked ? "blocked" : "pending",
     draftId: draft.id,
     simulatedItemId: "",
     listingUrl: "",
     confirmedAt: "",
     demoFactsCompleted: false,
   };
-  state.confirmFilter = "immediate";
+  if (!gate.locked) state.confirmFilter = "immediate";
   upsertActivity(`product-readiness-${draft.id}`, {
     role: "发布前资料",
-    title: `${draft.titleCn} 发布前资料已补齐`,
-    action: "商家在产品刊登里补齐货源资料后，系统自动完成演示类目校验、套用店铺默认三类政策，并生成发布确认单。",
+    title: `${draft.titleCn} 商品资料已保存`,
+    action: "商家在产品刊登里保存了商品事实；捷境不会据此伪造 eBay 类目校验或店铺政策状态。",
     sources: [
       `货源链接：${facts.source_link}`,
       `采购价：${facts.purchase_price}`,
       `尺寸重量：${facts.product_dimensions} / ${facts.package_dimensions} / ${facts.package_weight}`,
       `材质与配件：${facts.material} / ${facts.included}`,
       `三类政策：${facts.policy_note}`,
-      "执行边界：仍不自动真实发布、不自动采购、不自动付款",
+      "执行边界：保存资料不等于完成类目、政策或发布校验",
     ],
-    result: `${draft.titleCn} 已从“发布前缺口”进入“等待确认”。下一步在确认中心确认模拟发布；正式版会由后端重新读取 eBay 类目和政策后再执行。`,
-    status: "已完成",
-    confidence: "88%",
+    result: gate.locked
+      ? `${draft.titleCn} 仍被 ${gate.blockers.length} 项真实缺口阻断；补齐后才生成发布确认单。`
+      : `${draft.titleCn} 已满足当前校验，可以进入发布确认。`,
+    status: gate.locked ? "待补资料" : "已完成",
+    confidence: gate.locked ? "待核对" : "已核对",
     report: {
       summary: [
         ["商品", draft.titleCn],
         ["采购价", facts.purchase_price],
         ["包装重量", facts.package_weight],
         ["类目候选", facts.category_candidate],
-        ["下一步", "确认中心"],
+        ["下一步", gate.locked ? "补齐真实缺口" : "确认中心"],
       ],
       boards: [
         {
@@ -14444,14 +11234,20 @@ function saveProductReadinessFacts(draft = activeListingDraft()) {
       ],
     },
   });
-  setView("confirm");
   renderProductListingCenter();
-  renderConfirmations();
   renderActivities();
   renderGlobalFlowBar();
-  addAiMessage(`已保存「${draft.titleCn}」的货源资料，并把类目字段和三类店铺政策按演示口径补齐。现在已生成发布确认单；真实版到这一步仍会重新校验 eBay 官方类目、店铺政策和操作权限。`);
   syncProductReadinessToRuntime(draft, facts);
-  showActionToast("资料已保存：已生成发布确认单，下一步到确认中心点头。");
+  if (gate.locked) {
+    setProductInlineFeedback(`商品资料已保存，但仍需处理：${gate.blockers.join("；")}。`);
+    addAiMessage(`已保存「${draft.titleCn}」的商品资料。系统没有把未验证的类目或店铺政策标成完成；当前仍需补齐发布前缺口。`);
+    showActionToast("商品资料已保存；仍有发布前缺口。");
+    return;
+  }
+  setView("confirm");
+  renderConfirmations();
+  addAiMessage(`已保存「${draft.titleCn}」的真实商品资料，并完成当前发布前校验。现在已生成发布确认单；真实发布仍需动作时确认。`);
+  showActionToast("资料已保存：已生成发布确认单。");
 }
 
 function globalFlowViewKey(view = state.view) {
@@ -14901,6 +11697,19 @@ function renderServiceKnowledgePanel() {
   const panel = document.querySelector("#serviceKnowledgePanel");
   if (!panel) return;
   const draft = getPublishDraft();
+  if (!draft) {
+    panel.innerHTML = `
+      <div class="service-knowledge-head">
+        <div>
+          <p class="eyebrow">客服商品档案</p>
+          <h2>还没有可学习的商品资料</h2>
+          <p>先上传商品图片、粘贴货源链接或填写真实规格。商品资料确认后，捷境会把可核对的事实交给客服使用。</p>
+        </div>
+        <span class="pill neutral">等待商品资料</span>
+      </div>
+    `;
+    return;
+  }
   const published = state.publishFlow.status === "published";
   panel.innerHTML = `
     <div class="service-knowledge-head">
@@ -15398,7 +12207,7 @@ function syncMediaRequirementSummary() {
   const config = readMediaGenerationConfig();
   const imageCount = Math.max(1, Number.parseInt(String(config.count || "1"), 10) || 1);
   const unitPoints = mediaPointsByGenerationTier[config.generationTierKey] || mediaPointsByGenerationTier.standard;
-  const tierLabel = config.generationTierKey === "draft" ? "快速样图" : config.generationTierKey === "high_quality" ? "高清图" : "标准图";
+  const tierLabel = config.generationTierKey === "draft" ? "草稿图" : config.generationTierKey === "high_quality" ? "高清图" : "标准图";
   setText("#mediaOutputStatus", `${config.count} · ${config.template}`);
   setText("#mediaOutputNote", `${config.platform} / ${config.size} / ${config.scene}`);
   setText("#mediaChoiceType", config.template);
@@ -15409,7 +12218,7 @@ function syncMediaRequirementSummary() {
   setText(
     "#mediaGenerationTierNote",
     config.generationTierKey === "draft"
-      ? "快速样图用于确认构图和场景方向，不建议直接作为最终刊登素材"
+      ? "草稿图用于确认构图和场景方向，不建议直接作为最终刊登素材"
       : config.generationTierKey === "high_quality"
         ? "高清图适合已经确认方向的最终候选，耗时和点数会高于标准图"
         : "标准图适合大多数商品；先确认方向，再决定是否生成高清候选",
@@ -16601,7 +13410,6 @@ function runtimeMerchantAdvice(item = {}) {
       "finance.review": ["利润复核还缺字段", "需要售价、采购、平台费、物流、店铺订阅分摊、退货预留和下一步动作。", "回产品刊登补费用"],
       "confirmation.package": ["确认边界还不清楚", "系统必须知道哪些能自动做、哪些按默认规则、哪些每次确认、哪些直接禁止。", "查看确认中心"],
       "ceo.final_report": ["CEO 汇总还不能交付", "最终汇总要说清当前状态、来源健康度、报告是否齐、发布锁和下一步最小动作。", "回 AI 汇报"],
-      "owner.review": ["主理人复盘还缺内容", "需要记录 Runtime、SaaS、内部执行底座的发现和下一步优化项，方便后续继续接。", "回 AI 汇报"],
     };
     const [title, detail, next] = map[taskType] || ["报告还不能接下一步", "这份报告缺少系统可读取的固定栏目，补齐后才能继续推进。", "查看详情"];
     return {
@@ -16768,7 +13576,6 @@ function runtimeTaskTitle(taskType = "") {
     "finance.review": "财务与履约复核",
     "confirmation.package": "确认中心高风险事项",
     "ceo.final_report": "AI CEO 闭环汇总",
-    "owner.review": "主理人复盘记录",
   }[taskType] || taskType || "Runtime 任务";
 }
 
@@ -16789,8 +13596,8 @@ function runtimeSectionTitle(key = "") {
 function publicRuntimeText(value = "") {
   return productizeJiejingProductCopy(
     String(value || "")
-    .replace(legacyExecutionPairPattern, "捷境内部执行底座")
-    .replace(legacyExecutionBrandPattern, "内部执行底座")
+    .replace(legacyExecutionPairPattern, "捷境系统")
+    .replace(legacyExecutionBrandPattern, "捷境系统")
     .replace(legacyExecutionBrandLowerPattern, "internal-runtime")
     .replace(/patch_work\/internal-runtime-skills/gi, "内部技能包")
     .replace(/patch_work\/[^\\s`'"]+/gi, "内部资料")
@@ -16876,9 +13683,10 @@ function runtimeResultReport(result) {
 
 function upsertRuntimeActivity(id, item) {
   const existingIndex = activities.findIndex((activity) => activity.id === id);
+  const activeProject = getActiveProject();
   const nextItem = {
     id,
-    projectId: getActiveProject().id,
+    projectId: item.projectId || activeProject?.id || state.activeProject || "",
     ...item,
   };
   if (existingIndex >= 0) {
@@ -16894,6 +13702,7 @@ function upsertRuntimeActivity(id, item) {
 function applyRuntimeResultsToActivities() {
   if (!Array.isArray(state.runtimeResults) || !state.runtimeResults.length) return;
   state.runtimeResults.forEach((result) => {
+    if (String(result?.task_type || "") === "owner.review") return;
     const sources = (result.source_records || []).map((source) => publicRuntimeText(source.title || source.source_type || "Runtime source"));
     const missingCount = (result.missing_inputs || []).length;
     const confirmationCount = (result.confirmation_items || []).length;
@@ -18465,9 +15274,7 @@ function resetSaasProtectedWorkbenchState() {
   state.saasQueueAdapters = null;
   state.saasQueueHealth = null;
   state.saasProviderJobContracts = null;
-  state.saasProviderJobPlan = null;
-  state.saasSecretGrantPlan = null;
-  state.saasIndependence = null;
+  state.saasMediaCapabilities = null;
   state.saasPreflightResults = [];
   state.saasLastPublishReadiness = null;
   state.saasLastPublishRecovery = null;
@@ -18485,7 +15292,6 @@ function resetSaasProtectedWorkbenchState() {
   state.saasEbayReadOnlyOAuthFlow = null;
   state.saasTasks = [];
   state.saasTaskSteps = [];
-  state.saasQueueJobs = [];
   state.saasMediaAssetJobs = [];
   state.saasQueueHealth = null;
   state.saasReports = [];
@@ -20420,7 +17226,6 @@ function saasReportTypeLabel(type = "") {
       "customer.learn_product": "客服学习",
       "finance.review": "财务复核",
       "confirmation.package": "确认中心包",
-      "owner.review": "老板复核",
       "ceo.final_report": "AI CEO 总结",
     }[type] ||
     runtimeTaskTitle(type) ||
@@ -20569,12 +17374,13 @@ function saasIsEnglishHeavyMerchantText(value = "") {
 }
 
 function saasReportsForDisplay(reports = []) {
+  const merchantReports = reports.filter((record) => String(record?.report_type || record?.report?.task_type || "") !== "owner.review");
   const latestTask = saasLatestProductWorkflowTask();
-  if (!latestTask?.task_id) return reports;
-  const latest = reports.filter((record) => record.task_id === latestTask.task_id);
-  if (!latest.length) return reports;
+  if (!latestTask?.task_id) return merchantReports;
+  const latest = merchantReports.filter((record) => record.task_id === latestTask.task_id);
+  if (!latest.length) return merchantReports;
   const seen = new Set(latest.map((record) => record.report_id));
-  return [...latest, ...reports.filter((record) => !seen.has(record.report_id))];
+  return [...latest, ...merchantReports.filter((record) => !seen.has(record.report_id))];
 }
 
 function saasActiveListingConfirmationScope(confirmations = state.saasConfirmations || []) {
@@ -21060,7 +17866,7 @@ function saasCurrentAccountSummary() {
   const displayName = hasAccountSession
     ? stateDisplayName || knownAccount?.display_name || knownAccount?.email || "捷境账号"
     : "未登录";
-  const role = state.saasTeamMember?.role || (hasAccountSession ? "owner" : "未登录");
+  const role = hasAccountSession ? saasMerchantRoleLabel(state.saasTeamMember?.role || "owner") : "未登录";
   const modelStatus = isSaasModelConfigured() ? "AI 连接已可用" : "AI 连接待保存";
   const writeStatus =
     state.saasEbayWriteAdapter?.real_platform_writes_enabled === true ? "真实动作已开启" : "当前不做真实动作";
@@ -21633,7 +18439,6 @@ function saasWorkbenchPrimaryReports(reports = []) {
     "ceo.intake",
     "market.data_packet",
     "source.match",
-    "owner.review",
   ];
   const byType = new Map();
   displayReports.forEach((record) => {
@@ -26707,7 +23512,7 @@ function saasMerchantSetupGuideItems(ctx = saasMerchantWorkbenchContext()) {
     {
       label: "06",
       title: "检查确认中心和团队权限",
-      detail: `${ctx.pendingConfirmations.length} 个待确认 / 当前角色 ${state.saasTeamMember?.role || "owner"}`,
+      detail: `${ctx.pendingConfirmations.length} 个待确认 / 当前角色 ${saasMerchantRoleLabel(state.saasTeamMember?.role || "owner")}`,
       done: Boolean(state.saasTeamMember || ctx.confirmations.length || ctx.pendingConfirmations.length === 0),
       action: "决策队列",
       view: "confirm",
@@ -26763,20 +23568,41 @@ function saasPermissionLabel(permission = "") {
   }[permission] || permission;
 }
 
+function saasMerchantRoleDisplayCode(role = "") {
+  const normalized = String(role || "").trim().toLowerCase();
+  if (normalized === "platform_internal_admin") return "admin";
+  return ["owner", "admin", "operator", "media", "support", "finance", "viewer"].includes(normalized) ? normalized : "viewer";
+}
+
+function saasMerchantRoleLabel(role = "") {
+  return {
+    owner: "负责人",
+    admin: "管理员",
+    operator: "运营",
+    media: "素材",
+    support: "客服",
+    finance: "财务",
+    viewer: "只读",
+  }[saasMerchantRoleDisplayCode(role)];
+}
+
 function saasMerchantRoleRows() {
   const fallback = [
-    { role: "owner", label: "Owner", permissions: ["manage_team", "manage_store", "manage_connections", "create_task", "view_report", "approve_high_risk", "execute_confirmed_action", "view_audit", "manage_billing"] },
-    { role: "admin", label: "Admin", permissions: ["manage_store", "manage_connections", "create_task", "view_report", "approve_high_risk", "execute_confirmed_action", "view_audit"] },
-    { role: "operator", label: "Operator", permissions: ["create_task", "view_report", "execute_confirmed_action"] },
-    { role: "media", label: "Media", permissions: ["create_task", "view_report"] },
-    { role: "support", label: "Support", permissions: ["create_task", "view_report"] },
-    { role: "finance", label: "Finance", permissions: ["view_report", "view_audit", "manage_billing"] },
-    { role: "viewer", label: "Viewer", permissions: ["view_report"] },
+    { role: "owner", label: "负责人", permissions: ["manage_team", "manage_store", "manage_connections", "create_task", "view_report", "approve_high_risk", "execute_confirmed_action", "view_audit", "manage_billing"] },
+    { role: "admin", label: "管理员", permissions: ["manage_store", "manage_connections", "create_task", "view_report", "approve_high_risk", "execute_confirmed_action", "view_audit"] },
+    { role: "operator", label: "运营", permissions: ["create_task", "view_report", "execute_confirmed_action"] },
+    { role: "media", label: "素材", permissions: ["create_task", "view_report"] },
+    { role: "support", label: "客服", permissions: ["create_task", "view_report"] },
+    { role: "finance", label: "财务", permissions: ["view_report", "view_audit", "manage_billing"] },
+    { role: "viewer", label: "只读", permissions: ["view_report"] },
   ];
   const backendRows = Array.isArray(state.saasRoles) ? state.saasRoles : [];
   const merged = new Map(fallback.map((role) => [role.role, role]));
   backendRows.forEach((role) => merged.set(role.role, { ...merged.get(role.role), ...role }));
-  return fallback.map((role) => merged.get(role.role)).filter(Boolean);
+  return fallback
+    .map((role) => merged.get(role.role))
+    .filter(Boolean)
+    .map((role) => ({ ...role, label: saasMerchantRoleLabel(role.role) }));
 }
 
 function saasRoleBusinessNote(role = "") {
@@ -26788,7 +23614,7 @@ function saasRoleBusinessNote(role = "") {
     support: "客服岗位，负责消息草稿和售后整理，不直接承诺退款、补偿或到货日期。",
     finance: "财务岗位，负责费用、利润、账单和审计查看，不改店铺连接。",
     viewer: "只读查看，适合老板助理、外部顾问或临时复盘。",
-  }[role] || "按岗位分配权限，避免所有人都拿老板权限。";
+  }[saasMerchantRoleDisplayCode(role)] || "按岗位分配权限，避免所有人都拿老板权限。";
 }
 
 function saasMerchantWorkflowTemplateRoles(ctx = saasMerchantWorkbenchContext()) {
@@ -27461,15 +24287,22 @@ function renderSaasSourceRecordCollectorPanel(ctx = saasMerchantWorkbenchContext
 function renderSaasMerchantPermissionPanel() {
   const roles = saasMerchantRoleRows();
   const currentRole = state.saasTeamMember?.role || "owner";
-  const currentRoleRow = roles.find((role) => role.role === currentRole) || roles[0] || { role: currentRole, label: currentRole, permissions: [] };
-  const otherRoles = roles.filter((role) => role.role !== currentRole);
+  const currentRoleDisplayCode = saasMerchantRoleDisplayCode(currentRole);
+  const currentRoleDefaults = roles.find((role) => role.role === currentRoleDisplayCode) || roles[roles.length - 1] || { role: "viewer", permissions: [] };
+  const currentRoleRow = {
+    ...currentRoleDefaults,
+    role: currentRole,
+    label: saasMerchantRoleLabel(currentRole),
+    permissions: Array.isArray(state.saasPermissions) && state.saasPermissions.length ? state.saasPermissions : currentRoleDefaults.permissions,
+  };
+  const otherRoles = roles.filter((role) => role.role !== currentRoleDisplayCode);
   const renderRoleCard = (role, { current = false } = {}) => {
     const permissions = Array.isArray(role.permissions) ? role.permissions : [];
     const canApprove = permissions.includes("approve_high_risk");
     return `
-      <article class="${current ? "is-current" : ""} ${canApprove ? "can-approve" : ""}">
+      <article class="${current ? "is-current" : ""} ${canApprove ? "can-approve" : ""}" data-role-code="${escapeHtml(role.role)}">
         <div>
-          <span>${escapeHtml(role.label || role.role)}</span>
+          <span>${escapeHtml(saasMerchantRoleLabel(role.role))}</span>
           <strong>${canApprove ? "可批准高风险" : "不能批准高风险"}</strong>
         </div>
         <p>${escapeHtml(saasRoleBusinessNote(role.role))}</p>
@@ -27509,10 +24342,8 @@ function renderSaasMerchantPermissionPanel() {
 
 function renderSaasMerchantProviderHubPanel(ctx = saasMerchantWorkbenchContext()) {
   const modelProviders = saasModelProviderRows();
-  const providerContracts = state.saasProviderJobContracts || {};
-  const providerPlan = state.saasProviderJobPlan || {};
-  const readyCount = Number(providerPlan.ready_to_queue_count || 0);
-  const stepCount = Number(providerPlan.provider_step_count || providerContracts.contract_count || 0);
+  const readyCount = modelProviders.filter((item) => item?.configured || item?.ready).length;
+  const stepCount = modelProviders.length;
   const mediaProvider = saasMediaProviderBoundary();
   const providerItems = [
     {
@@ -27894,6 +24725,39 @@ function saasMediaGenerationState() {
   };
 }
 
+function saasImageRecognitionState() {
+  const visionTasks = (state.saasTasks || []).filter((task) => String(task?.task_type || "") === "ai_ceo_product_vision");
+  const completed = visionTasks.some((task) => ["completed", "succeeded", "success"].includes(String(task?.status || "").toLowerCase()));
+  const failed = visionTasks.some((task) => ["failed", "blocked"].includes(String(task?.status || "").toLowerCase()));
+  const providerConnected = state.saasMediaCapabilities?.product_image_recognition?.configured === true;
+  if (completed) {
+    return {
+      tone: "green",
+      title: "图片识别已验证",
+      detail: "支持视觉的服务已经从商家图片提取过商品事实；冲突和缺失字段仍会要求商家核对。",
+    };
+  }
+  if (providerConnected) {
+    return {
+      tone: "green",
+      title: "图片识别服务已连接",
+      detail: "上传商品图片后，视觉服务先提取可见事实，再交给 AI CEO 整理，不让文本模型猜图。",
+    };
+  }
+  if (failed) {
+    return {
+      tone: "amber",
+      title: "最近一次识别未完成",
+      detail: "图片仍会保留为商家来源，系统不会编造识别结果；服务恢复后可从当前步骤重试。",
+    };
+  }
+  return {
+    tone: "amber",
+    title: "等待图片识别记录",
+    detail: "上传商品图片后才会验证视觉服务；在此之前不会把文本 AI 写成已经会看图。",
+  };
+}
+
 function saasPrimaryTextAiState() {
   const active = saasActiveModelSecretRef();
   const platformTrial = saasPlatformTrialModelState();
@@ -28029,21 +24893,11 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
   const merchantModelConfigured = isSaasMerchantModelConfigured();
   const modelAvailable = isSaasModelConfigured();
   const platformTrial = saasPlatformTrialModelState();
+  const textAiState = saasPrimaryTextAiState();
+  const visionState = saasImageRecognitionState();
   const searchState = saasPublicSearchState();
+  const mediaState = saasMediaGenerationState();
   const connectionAttempt = saasModelConnectionAttemptState();
-  const activeProviderLabel = active?.provider_label || selectedProvider.label || activeProvider;
-  const activeModelLabel = active?.model || state.saasModelSettings?.active_model || selectedProvider.default_model || "等待选择模型";
-  const activeScope = active?.scope || state.saasModelSettings?.active_scope || "";
-  const activeScopeLabel =
-    activeScope === "account"
-      ? "跟随当前账号"
-      : activeScope === "company"
-        ? "公司默认连接"
-        : activeScope === "platform"
-          ? "捷境托管连接"
-          : activeScope === "store"
-            ? "当前店铺连接"
-            : "账号连接";
   return `
     <section class="saas-merchant-evidence-panel saas-model-provider-panel" aria-label="AI 连接">
       <div class="saas-merchant-path-head">
@@ -28053,28 +24907,29 @@ function renderSaasMerchantModelProviderPanel(ctx = saasMerchantWorkbenchContext
           <p>保存商家自己的 DeepSeek 或 OpenAI 连接后，AI CEO 对话、市场报告和 Listing 文案都优先使用它；不会消耗捷境试用额度。图片和视频仍由素材工坊生成并审核。</p>
         </div>
       </div>
-      <div class="saas-merchant-evidence-grid">
-        <article class="is-${merchantModelConfigured ? "green" : "amber"}">
-          <span>当前账号 AI</span>
-          <strong>${escapeHtml(merchantModelConfigured ? activeProviderLabel : "尚未连接")}</strong>
-          <small>${escapeHtml(merchantModelConfigured ? `${activeModelLabel} / ${activeScopeLabel} / 页面不显示原始连接信息` : platformTrial.configured ? "AI CEO 当前可使用捷境试用额度；保存账号 AI 后会自动优先使用商家的连接。" : "保存 DeepSeek 或 OpenAI 后，AI CEO 会跟随当前账号。")}</small>
+      <div class="saas-merchant-evidence-grid" data-ai-media-capability-grid="merchant_ai_media_capabilities_v1">
+        <article class="is-${escapeHtml(textAiState.tone)}" data-ai-media-capability="text_analysis">
+          <span>文字分析</span>
+          <strong>${escapeHtml(textAiState.title || textAiState.value)}</strong>
+          <small>${escapeHtml(textAiState.detail)}</small>
         </article>
-        <article class="is-${escapeHtml(platformTrial.tone)}">
-          <span>${escapeHtml(platformTrial.quotaCardLabel)}</span>
-          <strong>${escapeHtml(platformTrial.quotaLabel)}</strong>
-          <small>${escapeHtml(platformTrial.guardrailDetail)}</small>
+        <article class="is-${escapeHtml(visionState.tone)}" data-ai-media-capability="image_recognition">
+          <span>图片识别</span>
+          <strong>${escapeHtml(visionState.title)}</strong>
+          <small>${escapeHtml(visionState.detail)}</small>
         </article>
-        <article class="is-${escapeHtml(searchState.tone)}">
+        <article class="is-${escapeHtml(searchState.tone)}" data-ai-media-capability="web_search">
           <span>联网搜索</span>
           <strong>${escapeHtml(searchState.title)}</strong>
           <small>${escapeHtml(searchState.detail)}</small>
         </article>
-        <article class="is-amber">
-          <span>图片/视频素材</span>
-          <strong>素材工坊资产</strong>
-          <small>主图、详情页图、视频封面和视频脚本生成后进入素材审核。</small>
+        <article class="is-${escapeHtml(mediaState.tone)}" data-ai-media-capability="image_generation">
+          <span>图片生成</span>
+          <strong>${escapeHtml(mediaState.title)}</strong>
+          <small>${escapeHtml(mediaState.detail)}</small>
         </article>
       </div>
+      <p class="saas-settings-capability-boundary">不支持图片的模型不会被要求猜图，图片先由支持视觉的服务提取事实，再交给 AI CEO 分析与填写 Listing。</p>
       <div class="saas-model-connection-progress is-${escapeHtml(connectionAttempt.tone)}" data-model-connection-state="${escapeHtml(connectionAttempt.state)}">
         <div>
           <span>当前账号 AI</span>
@@ -28245,7 +25100,7 @@ function saasCostLedgerSummary() {
   const active = saasActiveModelSecretRef();
   const mediaProvider = saasMediaProviderBoundary();
   const reports = state.saasReports || [];
-  const jobs = state.saasQueueJobs || [];
+  const jobs = state.saasTasks || [];
   const liveTypes = new Set((state.saasModelValueGate?.evidence || {}).live_model_report_types || []);
   const successfulReports = reports.filter((record) => !/failed|error|cancel/i.test(String(record.status || ""))).length;
   const failedJobs = jobs.filter((job) => /failed|cancelled|error/i.test(String(job.status || ""))).length;
@@ -28367,7 +25222,7 @@ function renderSaasMerchantIpRiskPanel() {
         <div>
           <span>IP / Logo / 品牌词体检</span>
           <strong>先用 eBay 店铺资料筛一遍侵权疑点</strong>
-          <p>这一版读取已同步的标题、描述、类目字段、item specifics 和图片 URL/文件名；真实 Logo 图像识别和商标库核验后续再接入。</p>
+          <p>这一版读取已同步的标题、描述、类目字段、item specifics 和图片 URL/文件名；真实 Logo 图像识别和商标库核验后续再接入。侵权风险初筛，仍需商家核对。</p>
         </div>
       </div>
       <div class="saas-merchant-evidence-grid">
@@ -28436,7 +25291,7 @@ function saasIpRiskStatusLabel(status = "") {
       needs_rights_review: "需要复核",
       blocked_missing_listing_content: "资料不足",
       ready_with_coverage_gaps: "可用但有缺口",
-      ready_no_hits: "未命中风险词",
+      ready_no_hits: "侵权风险初筛，仍需商家核对",
       blocked_missing_packet: "等待店铺资料",
       waiting_for_screening: "等待体检",
       waiting_for_product_data: "等待商品资料",
@@ -29105,14 +25960,13 @@ async function refreshSaasState(options = {}) {
       accountHealth,
       merchantOnboarding,
       ipRiskScreening,
-      independenceStatus,
+      mediaCapabilities,
       ebayFieldContracts,
       ebayLiveAdapter,
       ebayHttpClient,
       ebayWriteAdapter,
       oauthRequests,
       tasks,
-      queueJobs,
       mediaAssetJobs,
       reports,
       confirmations,
@@ -29152,14 +26006,13 @@ async function refreshSaasState(options = {}) {
           secret_exposed: false,
         },
       }),
-      optionalSaasFetchFast("/independence/status", { independence: null }),
+      optionalSaasFetchFast("/media/capabilities", { media_capabilities: null }),
       optionalSaasFetchFast("/ebay-read-only/field-contracts", { ebay_read_only_field_contracts: null }),
       optionalSaasFetchFast("/ebay-read-only/live-adapter/status", { ebay_live_read_adapter: null }),
       optionalSaasFetchFast("/ebay-read-only/http-client/status", { ebay_http_client: null }),
       optionalSaasFetchFast("/ebay-write/adapter/status", { ebay_write_adapter: null }),
       optionalSaasFetchFast(`/oauth/requests?store_id=${encodeURIComponent(store.store_id)}`, { oauth_requests: [] }),
       Promise.resolve(coreTasks),
-      optionalSaasFetchFast("/queue-jobs?limit=20", { queue_jobs: [] }),
       optionalSaasFetchFast(`/stores/${encodeURIComponent(store.store_id)}/media-asset-jobs?limit=8`, { media_asset_jobs: [] }, 10000),
       saasFetch("/reports?limit=24"),
       Promise.resolve(coreConfirmations),
@@ -29248,7 +26101,7 @@ async function refreshSaasState(options = {}) {
       if (!isCurrentRefresh()) return;
       state.saasIpRiskScreening = refreshedIpRisk.ip_risk_screening || state.saasIpRiskScreening;
     }
-    state.saasIndependence = independenceStatus.independence || null;
+    state.saasMediaCapabilities = mediaCapabilities.media_capabilities || null;
     state.saasEbayFieldContracts = ebayFieldContracts.ebay_read_only_field_contracts || null;
     state.saasEbayLiveAdapter = ebayLiveAdapter.ebay_live_read_adapter || null;
     state.saasEbayHttpClient = ebayHttpClient.ebay_http_client || null;
@@ -29258,7 +26111,6 @@ async function refreshSaasState(options = {}) {
     state.saasLastPublicSearchHandoff =
       (state.saasTasks || []).find((task) => task && typeof task === "object" && task.task_type === "product_workflow" && task.input?.public_search_provider_handoff)
         ?.input?.public_search_provider_handoff || state.saasLastPublicSearchHandoff;
-    state.saasQueueJobs = queueJobs.queue_jobs || [];
     state.saasMediaAssetJobs = mediaAssetJobs.media_asset_jobs || [];
     state.saasReports = reports.reports || [];
     restoreSaasListingComposerDraftFromBackendReports();
@@ -29292,16 +26144,8 @@ async function refreshSaasState(options = {}) {
       const stepsPayload = await saasFetch(`/tasks/${encodeURIComponent(latestTaskId)}/steps`);
       if (!isCurrentRefresh()) return;
       state.saasTaskSteps = stepsPayload.steps || [];
-      const providerPlanPayload = await saasFetch(`/tasks/${encodeURIComponent(latestTaskId)}/provider-job-plan`);
-      if (!isCurrentRefresh()) return;
-      state.saasProviderJobPlan = providerPlanPayload.provider_job_plan || null;
-      const secretGrantPayload = await saasFetch(`/tasks/${encodeURIComponent(latestTaskId)}/secret-grant-plan`);
-      if (!isCurrentRefresh()) return;
-      state.saasSecretGrantPlan = secretGrantPayload.secret_grant_plan || null;
     } else {
       state.saasTaskSteps = [];
-      state.saasProviderJobPlan = null;
-      state.saasSecretGrantPlan = null;
     }
     applySaasReportsToActivities();
     applySaasDataPacketsToActivities();
@@ -29329,7 +26173,6 @@ async function refreshSaasState(options = {}) {
     state.saasPermissions = [];
     state.saasRoles = [];
     state.saasTaskSteps = [];
-    state.saasQueueJobs = [];
     state.saasSecretRefs = [];
     state.saasVaultStatus = null;
     state.saasVaultAdapters = null;
@@ -29347,10 +26190,8 @@ async function refreshSaasState(options = {}) {
     state.saasIpRiskScreening = null;
     state.saasQueueAdapters = null;
     state.saasProviderJobContracts = null;
-    state.saasProviderJobPlan = null;
-    state.saasSecretGrantPlan = null;
     state.saasLastPublicSearchHandoff = null;
-    state.saasIndependence = null;
+    state.saasMediaCapabilities = null;
     state.saasPreflightResults = [];
     state.saasEbayFieldContracts = null;
     state.saasEbayLiveAdapter = null;
@@ -30119,6 +26960,7 @@ function applySaasReportsToActivities() {
   (state.saasReports || []).forEach((record) => {
     const report = record.report || {};
     const type = record.report_type || report.task_type || "saas.report";
+    if (type === "owner.review") return;
     const sourceRecords = Array.isArray(report.source_records) ? report.source_records : [];
     const sourceLabels = sourceRecords
       .map((source) => publicRuntimeText(`${source.title || source.source_type || source.url || "source"}${source.source_type ? ` / ${source.source_type}` : ""}`))
@@ -30177,16 +27019,6 @@ function saasStepStatusLabel(status = "") {
   }[status] || status || "未知";
 }
 
-function saasQueueStatusLabel(status = "") {
-  return {
-    queued: "等待 worker",
-    running: "worker 执行中",
-    completed: "已完成",
-    failed: "失败可重试",
-    cancelled: "已取消",
-  }[status] || status || "未知";
-}
-
 function applySaasWorkerPayload(workerPayload = {}) {
   if (workerPayload.steps) state.saasTaskSteps = workerPayload.steps;
   if (workerPayload.task?.task_id) state.saasLastWorkflowTaskId = workerPayload.task.task_id;
@@ -30233,7 +27065,7 @@ async function createSaasProductWorkflowFromBackend(options = {}) {
           "Run the formal JIEJING SaaS backend flow from AI CEO intake to market report, listing package, asset brief, customer learning, finance review, confirmation center, and execution-service boundary.",
         title: `AI CEO 工作流：${workflowProduct.slice(0, 80)}`,
         stage: state.dna?.merchantStage || "store_opened",
-        source_mode: "manual_or_1688",
+        source_mode: "merchant_product_facts",
         attach_latest_platform_data_packet: true,
         attach_public_search_market_signal: true,
         merchant_profile: buildRuntimeMerchantProfile(),
@@ -30250,18 +27082,10 @@ async function createSaasProductWorkflowFromBackend(options = {}) {
     state.saasLastWorkflowTaskId = payload.task?.task_id || "";
     state.saasTaskSteps = payload.steps || [];
     state.saasLastPublicSearchHandoff = payload.public_search_market_handoff || state.saasLastPublicSearchHandoff;
-    showActionToast("任务已进入 SaaS 队列，本地 worker 正在认领执行。");
-    const workerPayload = await saasFetch("/workers/run-next", {
-      method: "POST",
-      body: JSON.stringify({ job_id: payload.queue_job?.job_id || "" }),
-    });
-    if (workerPayload.status === "failed") {
-      throw new Error(workerPayload.error || "local worker failed");
-    }
-    applySaasWorkerPayload(workerPayload);
+    showActionToast("任务已提交；后台会继续处理，不需要在商家页面操作运行队列。");
     await refreshSaasState({ silent: true });
     await refreshRuntimeState({ silent: true });
-    showActionToast("已通过 SaaS 队列 worker 跑通一单：任务、报告、确认和审计已写入后端数据库。");
+    showActionToast("任务状态已刷新；报告和确认项会在完成后回到当前商品项目。");
     return true;
   } catch (error) {
     state.saasError = `SaaS 后端工作流失败：${error.message}`;
@@ -31136,70 +27960,6 @@ async function registerSaasBackendSession(button = null) {
     renderSaasBackendPanel();
     renderGlobalLoopWorkbench();
     if (state.view === "activity") renderActivities();
-  }
-}
-
-async function runNextSaasQueueJob() {
-  const queuedJob = (state.saasQueueJobs || []).find((item) => item.status === "queued");
-  if (!queuedJob) {
-    showActionToast("当前没有等待处理的 SaaS 队列任务。");
-    return;
-  }
-  state.saasLoading = true;
-  state.saasError = "";
-  renderSaasBackendPanel();
-  try {
-    const workerPayload = await saasFetch("/workers/run-next", {
-      method: "POST",
-      body: JSON.stringify({ job_id: queuedJob.job_id }),
-    });
-    if (workerPayload.status === "failed") {
-      throw new Error(workerPayload.error || "local worker failed");
-    }
-    applySaasWorkerPayload(workerPayload);
-    await refreshSaasState({ silent: true });
-    await refreshRuntimeState({ silent: true });
-    showActionToast("队列任务已由 worker 处理完成，报告和确认项已写回。");
-  } catch (error) {
-    state.saasError = `SaaS 队列执行失败：${error.message}`;
-    showActionToast("SaaS 队列执行失败，已停住等待处理。");
-  } finally {
-    state.saasLoading = false;
-    renderSaasBackendPanel();
-  }
-}
-
-async function retryLatestSaasQueueJob() {
-  const failedJob = (state.saasQueueJobs || []).find((item) => ["failed", "cancelled"].includes(item.status));
-  if (!failedJob) {
-    showActionToast("当前没有失败或取消的队列任务可重试。");
-    return;
-  }
-  state.saasLoading = true;
-  state.saasError = "";
-  renderSaasBackendPanel();
-  try {
-    const retryPayload = await saasFetch(`/queue-jobs/${encodeURIComponent(failedJob.job_id)}/retry`, {
-      method: "POST",
-      body: JSON.stringify({ reason: "front_end_retry" }),
-    });
-    const workerPayload = await saasFetch("/workers/run-next", {
-      method: "POST",
-      body: JSON.stringify({ job_id: retryPayload.queue_job?.job_id || "" }),
-    });
-    if (workerPayload.status === "failed") {
-      throw new Error(workerPayload.error || "local worker failed again");
-    }
-    applySaasWorkerPayload(workerPayload);
-    await refreshSaasState({ silent: true });
-    await refreshRuntimeState({ silent: true });
-    showActionToast("最近失败任务已重新入队并处理完成。");
-  } catch (error) {
-    state.saasError = `SaaS 队列重试失败：${error.message}`;
-    showActionToast("SaaS 队列重试失败，已记录。");
-  } finally {
-    state.saasLoading = false;
-    renderSaasBackendPanel();
   }
 }
 
@@ -33838,14 +30598,6 @@ function handleSaasAction(button) {
     reconcileSaasInventoryLocation();
     return;
   }
-  if (action === "run-next-job") {
-    runNextSaasQueueJob();
-    return;
-  }
-  if (action === "retry-latest-job") {
-    retryLatestSaasQueueJob();
-    return;
-  }
   if (action === "plan-ebay-oauth") {
     planSaasEbayReadOnlyOAuth();
     return;
@@ -34366,82 +31118,6 @@ function renderTaskSplitStatusBoard(project = getActiveProject()) {
         .join("")}
     </div>
   `;
-}
-
-function readinessScoreItems() {
-  return [
-    {
-      label: "官网主页",
-      score: 92,
-      status: "可演示",
-      body: "介绍、价值边界、AI CEO 演示和订阅入口已经统一；不把内部执行底座摊给商家。",
-    },
-    {
-      label: "注册与身份向导",
-      score: 90,
-      status: "可演示",
-      body: "四类商家路径、API/资料/权限边界已经能接到工作台；后续再补真实授权帮助和失败兜底。",
-    },
-    {
-      label: "AI CEO 工作台",
-      score: 92,
-      status: "可演示",
-      body: "首页只保留对话、后台进度和市场报告；商品主线与倒流香炉样例已经稳定。",
-    },
-    {
-      label: "刊登 / 素材 / 批量",
-      score: 91,
-      status: "可演示",
-      body: "能从市场报告接到 eBay 草稿、素材需求、批量候选和待补资料；真实版需接动态类目字段。",
-    },
-    {
-      label: "AI 汇报 / 待我确认",
-      score: 93,
-      status: "可演示",
-      body: "报告、任务拆分、发布前缺口和确认边界已经闭合；高风险动作不会被伪装成自动执行。",
-    },
-    {
-      label: "执行底座对齐",
-      score: 91,
-      status: "演示对齐",
-      body: "页面流程已按 AI CEO 分段执行、岗位报告、失败反馈和确认中心来组织；后续继续用真实跑单校验。",
-    },
-  ];
-}
-
-function readinessAuditItems() {
-  return [
-    {
-      status: "通过",
-      label: "官网到向导",
-      body: "公开页只讲价值和演示，登录或注册后先选商家身份，再进入对应向导，完成后才进入工作舱。",
-    },
-    {
-      status: "通过",
-      label: "工作流主线",
-      body: "AI CEO 接目标后，按市场报告、刊登资料、素材生成、批量铺货、汇报、确认、客服和账号设置串起来。",
-    },
-    {
-      status: "需后端",
-      label: "真实 eBay 发布",
-      body: "页面已拦住真实发布；正式版必须由系统执行服务调用 eBay，并写入审计日志，不能由前端或 AI 直接发布。",
-    },
-    {
-      status: "需 API",
-      label: "类目动态字段",
-      body: "演示字段已经够看；真实发布前必须按 eBay 类目接口校验 required / recommended Item Specifics。",
-    },
-    {
-      status: "需授权",
-      label: "物流/支付/退货政策",
-      body: "演示版使用默认模板；正式版要读取店铺业务政策，商品有特殊物流或退货差异时再送确认中心。",
-    },
-    {
-      status: "需队列",
-      label: "后台执行稳定性",
-      body: "界面已经按分段任务设计；正式 SaaS 要用任务队列、超时重试、失败反馈，避免一个岗位吃完整链路导致卡住。",
-    },
-  ];
 }
 
 function renderReadinessScoreBoard() {
@@ -36481,7 +33157,8 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
   const billing = saasMerchantBillingGuardrailState();
   const domesticBilling = saasMerchantDomesticBillingState();
   const currentPlan = billing.usage?.plan && typeof billing.usage.plan === "object" ? billing.usage.plan : {};
-  const currentPlanLabel = currentPlan.label || "免费版";
+  const currentPlanKey = String(currentPlan.key || billing.planKey || "free").toLowerCase();
+  const currentPlanLabel = currentPlanKey === "free" ? "免费体验" : currentPlanKey === "operator" || currentPlanKey === "team" ? "多店铺" : "有店铺";
   const currentPlanPrice = Number(currentPlan.amount_minor || 0) > 0 ? `¥${Math.round(Number(currentPlan.amount_minor) / 100)} / 30 天` : "¥0";
   const hasExternalProvider = domesticBilling.online || Boolean(billing.provider.external_paid_provider_configured);
   const isTestMode = Boolean(billing.provider.test_billing_provider_configured);
@@ -36501,7 +33178,7 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
     {
       label: "软件套餐",
       title: `${currentPlanLabel} · ${currentPlanPrice}`,
-      detail: "套餐决定店铺数、席位数、经营任务和批量上限；单店版含 1,000 素材点，多店铺版含 3,000 素材点。",
+      detail: "有店铺含 1,000 素材点，多店铺含 3,000 素材点；套餐点用完后再加购。",
       tone: "green",
     },
     {
@@ -36513,7 +33190,7 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
     {
       label: "图片生成",
       title: "使用素材点",
-      detail: "生成前显示预计点数：快速样图 20 点/张、标准图 80 点/张、高清图 250 点/张；套餐点优先，按成功张数结算，失败返还。",
+      detail: "生成前显示预计点数：草稿图 20 点/张、标准图 80 点/张、高清图 250 点/张；套餐点优先，按成功张数结算，失败返还。",
       tone: "amber",
     },
     {
@@ -36529,7 +33206,7 @@ function renderSaasMerchantBillingPlainSummaryPanel(ctx = saasMerchantWorkbenchC
         <div>
           <span>订阅和用量总览</span>
           <strong>套餐权益、商家模型、素材点和平台成本清楚可查</strong>
-          <p>付费套餐包含当期生图素材点；点数用完后才需加购。文本模型由商家自带，电商平台经营成本仍由商家在对应平台结算。</p>
+          <p>套餐已包含素材点；用完后才需要加购。固定加购为 1,000 点 / ¥10、5,000 点 / ¥50、10,000 点 / ¥100。文本模型由商家自带，电商平台经营成本仍由商家在对应平台结算。</p>
         </div>
         <em>${escapeHtml(stageLabel)}</em>
       </div>
@@ -36868,6 +33545,12 @@ function saasDomesticBillingDateLabel(value) {
   return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(parsed);
 }
 
+function normalizeSubscriptionPlanKey(planKey) {
+  const normalized = String(planKey || "").trim().toLowerCase();
+  if (normalized === "team") return "team";
+  return normalizePlanKey(normalized);
+}
+
 function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchContext()) {
   const billing = saasMerchantBillingGuardrailState();
   const domesticBilling = saasMerchantDomesticBillingState();
@@ -36875,11 +33558,12 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
   const subscription = state.saasBillingUsage?.subscription && typeof state.saasBillingUsage.subscription === "object"
     ? state.saasBillingUsage.subscription
     : {};
-  const subscriptionPlanKey = normalizePlanKey(subscription.plan_key || "");
+  const subscriptionPlanKey = normalizeSubscriptionPlanKey(subscription.plan_key || "");
+  const legacyTeamEntitlement = subscriptionPlanKey === "team";
   const selectedCheckoutPlanKey = ["starter", "operator"].includes(normalizePlanKey(state.selectedPlan))
     ? normalizePlanKey(state.selectedPlan)
     : "starter";
-  const checkoutPlanKey = billing.entitlementActive && ["starter", "operator", "team"].includes(subscriptionPlanKey)
+  const checkoutPlanKey = billing.entitlementActive && ["starter", "operator"].includes(subscriptionPlanKey)
     ? subscriptionPlanKey
     : selectedCheckoutPlanKey;
   const checkoutPlan = planDetails[checkoutPlanKey] || planDetails.starter;
@@ -36896,7 +33580,7 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
     ? state.saasDomesticBillingCheckout
     : null;
   const status = entitlementActive
-    ? "套餐可用"
+    ? legacyTeamEntitlement ? "历史套餐可用" : "套餐可用"
     : checkout || pendingPayment
       ? "等待微信付款"
       : pendingTrial
@@ -36908,7 +33592,7 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
   const actionLabel = entitlementActive ? "套餐已开通" : pendingTrial ? "试用申请已提交" : "申请免费试用";
   const rows = [
     ["当前状态", status, online ? (entitlementActive ? `当前套餐有效期至 ${activeUntilLabel}。` : "微信扫码付款，到账后自动开通套餐和额度。") : "当前不会自动扣款，也不会生成可付款二维码。"],
-    [checkoutPlan.title, checkoutPlan.price, "单次购买 30 天，不会自动续费；再次购买前会重新确认。"],
+    [legacyTeamEntitlement ? "历史团队套餐" : checkoutPlan.title, legacyTeamEntitlement ? "继续保留现有权益" : checkoutPlan.price, legacyTeamEntitlement ? "历史权益不会被降级；续购时需要明确选择当前公开套餐。" : "单次购买 30 天，不会自动续费；再次购买前会重新确认。"],
     ["生效时间", online ? "付款成功后自动开通" : "试用资格确认后开通", online ? "系统只以微信支付签名回调或安全查单结果为准。" : "当前不会创建付款二维码，也不会自动扣费。"],
   ];
   const orderMarkup = paymentOrders.slice(0, 5).map((order) => {
@@ -36925,7 +33609,7 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
       <article class="is-${orderStatus === "paid" ? "green" : orderStatus === "pending_payment" ? "amber" : "neutral"}">
         <div>
           <span>${escapeHtml(statusLabel)}</span>
-          <strong>${escapeHtml(order.display_name || "捷境基础版 30 天")}</strong>
+          <strong>${escapeHtml(order.display_name || "捷境有店铺 30 天")}</strong>
           <small>¥${escapeHtml(amount)} · ${escapeHtml(time || "刚刚更新")}</small>
           <small>订单号：${escapeHtml(order.order_id || "待生成")}</small>
           ${order.payment_record_available ? `<small>支付记录已保存；订单记录不等同税务发票。</small>` : ""}
@@ -36962,14 +33646,14 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
         <div class="saas-subscription-plan-choices" aria-label="选择要开通的软件套餐">
           <div class="saas-subscription-plan-choice-head">
             <strong>选择要开通的软件套餐</strong>
-            <small>套餐只包含捷境软件使用权，商家模型和素材点分开结算。</small>
+            <small>有店铺和多店铺均已包含对应素材点；用完后再加购，商家自带模型费用另行承担。</small>
           </div>
           <div class="saas-subscription-plan-choice-grid">
             <button class="${checkoutPlanKey === "starter" ? "is-selected" : ""}" type="button" data-saas-action="domestic-billing-select-plan" data-domestic-plan-key="starter" aria-pressed="${checkoutPlanKey === "starter"}">
-              <span>基础版</span><strong>¥99 / 30 天</strong><small>1 店铺 · 2 席位 · 100 个经营任务</small>
+              <span>有店铺</span><strong>¥99 / 30 天</strong><small>1 个店铺 · 2 个席位 · 100 个经营任务 · 含 1,000 素材点</small>
             </button>
             <button class="${checkoutPlanKey === "operator" ? "is-selected" : ""}" type="button" data-saas-action="domestic-billing-select-plan" data-domestic-plan-key="operator" aria-pressed="${checkoutPlanKey === "operator"}">
-              <span>运营版</span><strong>¥199 / 30 天</strong><small>3 店铺 · 5 席位 · 500 个经营任务</small>
+              <span>多店铺</span><strong>¥199 / 30 天</strong><small>3 个店铺 · 5 个席位 · 500 个经营任务 · 含 3,000 素材点</small>
             </button>
           </div>
         </div>
@@ -36999,6 +33683,18 @@ function renderSaasMerchantDomesticPaymentPanel(ctx = saasMerchantWorkbenchConte
               ${pendingPayment.can_continue_payment ? `<button class="primary-action compact-action" type="button" data-saas-action="domestic-billing-continue-order" data-domestic-order-id="${escapeHtml(pendingPayment.order_id || "")}">继续上一笔付款</button>` : ""}
               <button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-query-order" data-domestic-order-id="${escapeHtml(pendingPayment.order_id || "")}">刷新付款状态</button>
               ${pendingPayment.can_close ? `<button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-close-order" data-domestic-order-id="${escapeHtml(pendingPayment.order_id || "")}">取消本次付款</button>` : ""}
+            </div>
+          </div>
+        </div>
+      ` : online && entitlementActive && legacyTeamEntitlement && !checkout ? `
+        <div class="saas-domestic-checkout saas-domestic-renewal" data-subscription-renewal="legacy_team_explicit_migration_v1">
+          <div class="saas-domestic-checkout-copy">
+            <span>历史团队套餐有效期</span>
+            <strong>${escapeHtml(activeUntilLabel)}</strong>
+            <p>现有权益继续保留，不会静默降级。再次购买时请明确选择“有店铺”或“多店铺”，系统不会把历史套餐自动映射成 99 元套餐。</p>
+            <div class="saas-domestic-order-actions">
+              <button class="secondary-action compact-action" type="button" data-saas-action="domestic-billing-create-order" data-domestic-plan-key="starter" ${state.saasLoading ? "disabled" : ""}>选择有店铺 · ¥99</button>
+              <button class="primary-action compact-action" type="button" data-saas-action="domestic-billing-create-order" data-domestic-plan-key="operator" ${state.saasLoading ? "disabled" : ""}>选择多店铺 · ¥199</button>
             </div>
           </div>
         </div>
@@ -37430,9 +34126,9 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
   const domesticBilling = saasMerchantDomesticBillingState();
   const billingModeLabel = domesticBilling.online ? "微信扫码付款" : billing.provider.external_paid_provider_configured ? "在线付款已接入" : "试用模式";
   const splitRows = [
-    ["01", "软件套餐", "¥0 / ¥99 / ¥199", "免费体验不含生图点数；单店版含 1,000 素材点，多店铺版含 3,000 素材点。付费套餐单次购买 30 天。"],
+    ["01", "软件套餐", "¥0 / ¥99 / ¥199", "免费体验不含生图点数；有店铺含 1,000 素材点，多店铺含 3,000 素材点。付费套餐单次购买 30 天。"],
     ["02", "商家自带模型", "费用由商家承担", "普通问答、Listing 文案、联网总结和长报告使用商家账号绑定的模型，不消耗素材点。"],
-    ["03", "图片生成", "使用素材点", "快速样图、标准图和高清图分别按 20、80、250 点/张预估；套餐内点数优先，失败自动返还。视频点数计价尚未开放。"],
+    ["03", "图片生成", "使用素材点", "草稿图、标准图和高清图分别按 20、80、250 点/张预估；套餐内点数优先，失败自动返还。视频点数计价尚未开放。"],
     ["04", "平台经营成本", "捷境不代扣", "eBay 成交费、广告费、物流、退款和店铺订阅只进入利润测算与确认中心。"],
   ];
   const usageRouteRows = [
@@ -37444,7 +34140,7 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
     {
       label: "软件套餐",
       title: "三个公开方案按业务规模选择",
-      detail: "免费体验不赠送生图点数；单店版含 1,000 素材点，多店铺版含 3,000 素材点。套餐点用完后再购买。",
+      detail: "免费体验不赠送生图点数；有店铺含 1,000 素材点，多店铺含 3,000 素材点。套餐点用完后再购买。",
       tone: "green",
     },
     {
@@ -37456,7 +34152,7 @@ function renderSaasMerchantPricingModelPanel(ctx = saasMerchantWorkbenchContext(
     {
       label: "生图",
       title: "按素材点结算",
-      detail: "快速样图 20 点/张、标准图 80 点/张、高清图 250 点/张；按成功图片结算，失败返还。视频点数计价尚未开放。",
+      detail: "草稿图 20 点/张、标准图 80 点/张、高清图 250 点/张；按成功图片结算，失败返还。视频点数计价尚未开放。",
       tone: "amber",
     },
     {
@@ -40146,35 +36842,36 @@ function renderPermissionPolicy() {
 }
 
 function logisticsStage(item) {
-  if (item.status.includes("派送失败")) {
+  const status = String(item?.status || "");
+  if (status.includes("派送失败")) {
     return {
       lane: "派送异常",
       due: "买家已催促",
       action: "先核对地址和承运商异常；退款、重发或补偿必须送确认中心。",
     };
   }
-  if (item.status.includes("退货")) {
+  if (status.includes("退货")) {
     return {
       lane: "退货中",
       due: "今日处理",
       action: "整理退货原因、订单利润和责任边界，不自动退款。",
     };
   }
-  if (item.status.includes("待上传") || item.status.includes("待发货")) {
+  if (status.includes("待上传") || status.includes("待发货")) {
     return {
       lane: "待发货",
       due: "剩余 18 小时",
       action: "核对供应商或仓库是否已发货、是否已生成运单；不清楚时先保守回复。",
     };
   }
-  if (item.status.includes("催单") || item.status.includes("未更新")) {
+  if (status.includes("催单") || status.includes("未更新")) {
     return {
       lane: "物流异常",
       due: "优先跟进",
       action: "先查承运商节点，再给买家保守说明，不承诺具体到达日。",
     };
   }
-  if (item.status.includes("已发货") || item.status.includes("妥投")) {
+  if (status.includes("已发货") || status.includes("妥投")) {
     return {
       lane: "正常",
       due: "可自动",
@@ -40622,19 +37319,10 @@ function renderEbayFeeCenter() {
 function renderSourceIntakePanel() {
   const feedback = document.querySelector("#sourceIntakeFeedback");
   const modeCopy = {
-    ai_search:
-      state.sourceHandoffStatus === "sent"
-        ? "候选 A 已送入产品刊登。产品经理已经接收采购价、发货地、规格缺口和货源图用途，下一步在产品刊登里继续看 eBay 刊登资料、素材需求、利润履约和发布前校验。"
-        :
-      state.sourceSearchStatus === "done"
-        ? "已模拟完成：AI 找到 2 个 1688 候选，优先推荐候选 A。下一步需要确认重量、包装尺寸、是否支持无票据代发，再送去产品刊登。"
-        : "当前建议：先让 AI 根据市场报告找 1688 候选，再由你确认供应商；确认后才生成采购单和刊登资料。",
+    ai_search: "AI CEO 可以先给出选品建议，但捷境不提供或核验供应商。找到真实货源后，请上传链接、图片和规格，再生成可核对的 Listing。",
     manual:
       manualSourceFeedbackText(),
-    api:
-      state.sourceApiStatus === "opened"
-        ? "已打开货源接口说明。正式版先只读读取商品、价格、库存和规格；采购下单、付款和地址写入仍然走确认中心。"
-        : "当前建议：长期采购再绑定货源接口。先只读读取商品、价格、库存和规格；采购下单、付款和地址写入仍然走确认中心。",
+    api: "可从真实货源链接、图片或规格表导入商品资料；采购和付款仍由商家在货源平台处理。",
   };
   document.querySelectorAll("[data-source-intake]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.sourceIntake === state.sourceIntakeMode);
@@ -40648,7 +37336,7 @@ function renderSourceIntakePanel() {
   const sourceSendButton = document.querySelector('[data-source-action="send_source_to_product"]');
   if (sourceSendButton) {
     const isSent = state.sourceHandoffStatus === "sent";
-    sourceSendButton.textContent = isSent ? "查看产品刊登草稿" : "确认候选 A，送去刊登";
+    sourceSendButton.textContent = isSent ? "查看已导入商品" : "导入真实商品资料";
     sourceSendButton.classList.toggle("is-confirmed", isSent);
   }
 }
@@ -40669,82 +37357,33 @@ function focusSourceIntakeMode(mode, options = {}) {
   }
 }
 
-function recordSourceHandoffActivity(draft) {
-  upsertActivity("source-candidate-a-to-product", {
-    projectId: state.activeProject,
-    role: "货源资料",
-    title: "候选 A 已送入产品刊登",
-    action:
-      "AI 根据市场判断匹配 1688 候选货源，商家确认候选 A 后，系统把采购价、发货地、规格缺口和素材来源同步给产品经理。",
-    sources: [
-      "市场报告：倒流香炉可进入小批测试，不建议直接铺量",
-      "货源候选 A：采购价 7.80 元起，1 件可发，浙江发货",
-      "待补资料：包装重量、包装尺寸、材质细节、是否含香粒、是否支持无票据代发",
-      "执行边界：不自动采购、不自动付款、不自动发布 eBay",
-    ],
-    result: `产品经理已接收「${draft.titleCn}」并生成 eBay 发布前草稿；素材工坊可继续生成主图、场景图、详情页和视频脚本。`,
-    status: "已完成",
-    confidence: "82%",
-    report: {
-      summary: [
-        ["接力商品", draft.titleCn],
-        ["货源候选", "候选 A"],
-        ["采购价", "7.80 元起"],
-        ["下一步", "产品刊登草稿"],
-      ],
-      boards: [
-        {
-          title: "已带入产品刊登的信息",
-          items: ["货源图用途", "采购价区间", "发货地", "规格缺口", "供应商待问问题"],
-        },
-        {
-          title: "不会自动执行的动作",
-          items: ["真实采购付款", "写入买家地址", "发布 eBay Listing", "修改价格库存", "修改店铺政策"],
-        },
-      ],
-    },
-  });
-}
-
 function handleSourceIntakeAction(action) {
   if (action === "run_ai_search") {
-    state.sourceSearchStatus = "done";
     focusSourceIntakeMode("ai_search", { shouldScroll: false });
-    showActionToast("AI 找货源模拟完成：已按价格、供应商、规格、履约和风险生成候选 A/B。");
+    showActionToast("请让 AI CEO 先给出选品建议；找到真实货源后再导入商品资料。");
     return;
   }
   if (action === "send_source_to_product") {
-    state.sourceSearchStatus = "done";
-    state.sourceHandoffStatus = "sent";
-    state.sourceHandoffDraft = "incense";
-    state.activeListingDraft = "incense";
-    state.activeMediaDraft = "incense";
-    state.activeCockpitMarketDraft = "incense";
-    state.activeFlowKey = "product";
-    const draft = state.publishFlow.status === "blocked" ? getPublishDraft() : activeListingDraft();
-    recordSourceHandoffActivity(draft);
-    setView("product", { preserveFlowKey: true });
-    renderProductListingCenter();
-    setProductInlineFeedback(
-      "候选 A 已接入产品刊登：产品经理已经生成 eBay 标题、类目、商品参数、价格库存、业务政策映射、素材需求和待补资料。下一步先看这份草稿，再决定是否送素材工坊或进入确认中心。",
-    );
-    window.requestAnimationFrame(() => {
-      document.querySelector("#view-product .product-manager-header")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      document.querySelector('[data-product-section="report"]')?.classList.add("is-focus");
-    });
-    showActionToast("候选 A 已送入产品刊登：现在可以查看完整 eBay 草稿和待补资料。");
+    focusSourceIntakeMode("manual", { shouldScroll: true });
+    showActionToast("请粘贴真实货源链接或填写商品规格；捷境不会生成虚构供应商候选。");
     return;
   }
   if (action === "save_manual_source") {
     const facts = collectManualSourceFacts();
     const missing = manualSourceMissingLabels(facts);
     const draft = activeListingDraft();
+    if (!draft) {
+      state.manualSourceFacts = facts;
+      focusSourceIntakeMode("manual", { shouldScroll: false });
+      showActionToast("商品资料已暂存；请先创建或导入商品项目。");
+      return;
+    }
     state.manualSourceFacts = facts;
     const supplierFactAttestation = confirmManualSourceFactsForAiCeo(facts);
     state.manualProductFacts = {
       ...state.manualProductFacts,
       [draft.id]: {
-        ...demoSupplierFactsForDraft(draft),
+        ...productFactsForDraft(draft),
         ...sourceFactsFromManualInput(draft, facts),
       },
     };
@@ -40754,9 +37393,6 @@ function handleSourceIntakeAction(action) {
       : supplierFactAttestation.supplier_facts_verified
         ? "verified"
         : "saved";
-    if (!missing.length) {
-      state.taxonomyStatus = "checked";
-    }
     focusSourceIntakeMode("manual", { shouldScroll: false });
     if (state.publishFlow.status === "blocked") {
       const publishDraft = getPublishDraft();
@@ -40766,20 +37402,10 @@ function handleSourceIntakeAction(action) {
         showActionToast(`已记录手动资料；还缺 ${missing.join("、")}。`);
         return;
       }
-      state.publishFlow = {
-        status: "pending",
-        draftId: publishDraft.id,
-        simulatedItemId: "",
-        listingUrl: "",
-        confirmedAt: "",
-        demoFactsCompleted: false,
-      };
-      state.confirmFilter = "immediate";
-      setView("confirm");
-      renderConfirmations();
-      renderGlobalFlowBar();
-      addAiMessage(`已保存「${publishDraft.titleCn}」的手动货源资料。系统已自动完成演示类目校验，并套用店铺默认三类政策；现在可以进入发布确认。`);
-      showActionToast("手动资料已保存：已回到发布确认。");
+      renderProductListingCenter();
+      setProductInlineFeedback("手动商品资料已保存；eBay 类目和店铺政策仍需官方数据校验，校验完成后才会生成发布确认单。");
+      addAiMessage(`已保存「${publishDraft.titleCn}」的手动商品资料。系统没有把未验证的类目或店铺政策标记为完成。`);
+      showActionToast("商品资料已保存；等待类目与政策校验。");
       return;
     }
     renderProductListingCenter();
@@ -41726,8 +38352,8 @@ function renderSaasSettingsGovernanceFocusPanel() {
     rows: [
       {
         label: "当前角色",
-        title: saasMerchantRoleRows().find((role) => role.role === currentRole)?.label || currentRole,
-        detail: "默认 owner 可以管理确认边界，其他岗位按权限矩阵执行。",
+        title: saasMerchantRoleLabel(currentRole),
+        detail: "默认负责人可以管理确认边界，其他岗位按权限矩阵执行。",
         tone: "green",
       },
       {
@@ -41965,7 +38591,7 @@ function saasSettingsOneGlanceRows(activeTabId = "general") {
     ],
     billing: [
       ["当前阶段", domesticBilling.online ? "微信扫码付款可用" : "试用模式，不自动扣费", domesticBilling.online ? "单次购买 30 天，到账后自动开通；不会自动续费。" : "在线付款开放前不会生成付款二维码。"],
-      ["软件套餐", "¥0 / ¥99 / ¥199", "公开方案按免费体验、单店和多店铺选择；更大团队单独评估，付费套餐单次购买 30 天。"],
+      ["软件套餐", "¥0 / ¥99 / ¥199", "公开方案仅按免费体验、有店铺和多店铺选择；付费套餐单次购买 30 天。"],
       ["模型与素材", "BYOK / 素材点", "商家模型由商家承担；图片和视频使用素材点，失败任务返还预占点数。"],
     ],
   };
@@ -44356,10 +40982,9 @@ function bindEvents() {
         return;
       }
       if (action === "taxonomy") {
-        state.taxonomyStatus = "checked";
         renderProductListingCenter();
-        setProductInlineFeedback("eBay 类目字段已按演示推荐完成校验。真实版会调用 eBay 类目接口返回准确类目和必填参数。");
-        showActionToast("类目字段已完成演示校验。");
+        setProductInlineFeedback("类目校验必须使用 eBay 官方类目数据。当前没有官方校验结果，因此不会标记为已完成。");
+        showActionToast("等待 eBay 官方类目校验结果。");
         return;
       }
       if (action === "policy") {

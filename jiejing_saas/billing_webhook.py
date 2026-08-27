@@ -18,6 +18,7 @@ from typing import Any, Mapping
 SUPPORTED_BILLING_PROVIDERS = {"stripe", "paddle", "lemon_squeezy"}
 TEST_BILLING_PROVIDERS = {"stripe_test_mock"}
 PRIVATE_BETA_BILLING_PROVIDERS = {"manual_beta"}
+CURRENT_PURCHASABLE_PLAN_KEYS = ("starter", "operator")
 
 
 def build_billing_provider_contract() -> dict[str, Any]:
@@ -30,7 +31,7 @@ def build_billing_provider_contract() -> dict[str, Any]:
     api_key_configured = bool(_api_key(provider)) if external_provider else False
     webhook_endpoint_configured = bool(os.environ.get("JIEJING_BILLING_WEBHOOK_URL", "").strip())
     webhook_configured = webhook_secret_configured and webhook_endpoint_configured if external_provider else test_provider or private_beta_provider
-    missing_plan_ids = [key for key, value in plan_ids.items() if not value]
+    missing_plan_ids = [key for key in CURRENT_PURCHASABLE_PLAN_KEYS if not plan_ids.get(key)]
     blockers: list[str] = []
     if not external_provider and not test_provider and not private_beta_provider:
         blockers.append("external_paid_subscription_provider_not_configured")
@@ -60,6 +61,8 @@ def build_billing_provider_contract() -> dict[str, Any]:
         "webhook_endpoint_configured": webhook_endpoint_configured,
         "webhook_configured": webhook_configured,
         "plan_ids": {key: bool(value) for key, value in plan_ids.items()},
+        "required_plan_ids": {key: bool(plan_ids.get(key)) for key in CURRENT_PURCHASABLE_PLAN_KEYS},
+        "legacy_plan_ids_optional": {"team": bool(plan_ids.get("team"))},
         "missing_plan_ids": missing_plan_ids,
         "paid_provider_ready": external_provider and api_key_configured and webhook_configured and not missing_plan_ids,
         "calls_external_payment_api": external_provider,

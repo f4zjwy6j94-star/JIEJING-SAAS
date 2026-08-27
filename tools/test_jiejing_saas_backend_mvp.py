@@ -213,25 +213,17 @@ def main() -> int:
             return fail(f"merchant billing-plan sanitizer exposes internal launch key {internal_launch_key}")
     if merchant_safe_plan.get("customer_visible") is not True:
         return fail("merchant billing-plan sanitizer must preserve customer_visible=true")
-    if merchant_safe_plan.get("internal_launch_evidence_visible") is not False:
-        return fail("merchant billing-plan sanitizer must preserve internal_launch_evidence_visible=false")
+    if "internal_launch_evidence_visible" in merchant_safe_plan:
+        return fail("merchant billing-plan sanitizer must omit internal launch evidence fields")
     if merchant_safe_plan.get("secret_exposed") is not False:
         return fail("merchant billing-plan sanitizer must preserve secret_exposed=false")
     expected_top_level = {
         "contract_version",
-        "billing_ready_for_private_beta",
-        "billing_ready_for_paid_launch",
         "provider",
         "plan_catalog",
         "add_on_catalog",
         "quota_contract",
         "mainland_payment",
-        "merchant_launch_path",
-        "paid_launch_blockers",
-        "billing_test_rehearsal_summary",
-        "subscription_quota_shutdown_closure",
-        "billing_incident_runbook",
-        "customer_billing_trust_packet",
         "confirmation_boundary",
         "public_charging_allowed",
         "charge_now_allowed",
@@ -243,7 +235,6 @@ def main() -> int:
         "frontend_can_grant_entitlement",
         "frontend_can_grant_quota",
         "customer_visible",
-        "internal_launch_evidence_visible",
         "secret_exposed",
     }
     if set(merchant_safe_plan) != expected_top_level:
@@ -490,57 +481,35 @@ def main() -> int:
             return fail("local MVP readiness must not claim production ready")
         if readiness_body.get("real_platform_writes_enabled") is not False:
             return fail("readiness must not enable real writes")
+        if readiness_body.get("detail_scope") != "public_summary" or readiness_body.get("internal_detail_required") is not True:
+            return fail(f"merchant readiness must stay a public summary: {readiness_body}")
         readiness_keys = {item.get("key") for item in readiness_body.get("items", [])}
         for required_key in {
-            "team_permission_boundary",
             "database",
-            "database_adapter_contract",
-            "database_migration_plan",
             "queue",
-            "queue_adapter_contract",
-            "queue_worker_plan",
             "infrastructure_drivers",
             "monitoring_alerting",
             "backup_restore",
             "billing_quota",
-            "model_value_proof",
-            "vault",
-            "vault_adapter_contract",
-            "platform_registry",
-            "ebay_account_deletion_notifications",
-            "ebay_token_refresh",
-            "ebay_read_only_adapter",
-            "ebay_live_read_adapter",
-            "platform_data_packets",
-            "provider_job_runner",
-            "independent_runtime",
-            "controlled_bridges",
-            "execution_service",
         }:
             if required_key not in readiness_keys:
-                return fail(f"readiness missing product-grade gate: {required_key}")
-        controlled_bridge_status = readiness_body.get("provider_status", {}).get("controlled_bridges", {})
-        if controlled_bridge_status.get("formal_bridge_count") != 5:
-            return fail("controlled bridge readiness should expose five formal bridges")
-        if controlled_bridge_status.get("hermes_legacy_bridge_can_be_production_dependency") is not False:
-            return fail("Hermes legacy bridge must not be a production dependency")
-        platform_status = readiness_body.get("provider_status", {}).get("platform_registry", {})
-        if "ebay" not in platform_status.get("platform_keys", []) or "1688" not in platform_status.get("platform_keys", []):
-            return fail("platform registry readiness should expose eBay and 1688")
-        independence = fetch_json(f"{base_url}/independence/status").get("independence", {})
-        if independence.get("runtime_independent_from_hermes") is not True:
-            return fail("Jiejing SaaS should default to independent Runtime, not Hermes")
-        if independence.get("hermes_adapters_allowed") is not False:
-            return fail("Hermes adapters must be disabled by default")
-        if independence.get("issue_count") != 7:
-            return fail("independence status should track the seven productization gaps")
-        issue_by_key = {item.get("key"): item for item in independence.get("issue_cards", [])}
-        if issue_by_key.get("owned_agents", {}).get("status") != "independent_runtime_ready":
-            return fail("owned agents should be marked independent when Hermes adapters are disabled")
-        if not all(item.get("exists") for item in independence.get("deployment_files", [])):
-            return fail("independent deployment skeleton files should exist")
-        if independence.get("secret_exposed") is not False or "TOKEN" in json.dumps(independence, ensure_ascii=False):
-            return fail("independence status must not expose raw secrets")
+                return fail(
+                    f"readiness missing product-grade gate: {required_key}; "
+                    f"status={readiness_body.get('status')} degraded={readiness_body.get('degraded')} "
+                    f"reason={readiness_body.get('degraded_reason')} error={readiness_body.get('database_error_type')} "
+                    f"keys={sorted(readiness_keys)}"
+                )
+        if len(readiness_body.get("items", [])) > 8 or any(
+            item.get("severity") not in {"warning", "blocker"} for item in readiness_body.get("items", [])
+        ):
+            return fail("merchant readiness must expose only a bounded blocker/warning summary")
+        if any(
+            key in readiness_body.get("provider_status", {}) for key in {"controlled_bridges", "platform_registry", "backup"}
+        ):
+            return fail("merchant readiness must keep internal operational packets on the ops surface")
+        independence_status, _ = fetch_json_expect_error(f"{base_url}/independence/status")
+        if independence_status != 401:
+            return fail("internal independence status must require authentication")
 
         platforms = fetch_json(f"{base_url}/platforms")
         registry = platforms.get("platform_registry", {})
@@ -627,6 +596,20 @@ def main() -> int:
             return fail("registered user should be owner of default company")
         if "manage_team" not in owner_permissions.get("permissions", []) or "approve_high_risk" not in owner_permissions.get("permissions", []):
             return fail("owner permissions should include team management and high-risk approval")
+        media_capabilities = fetch_json(f"{base_url}/media/capabilities", token=token).get("media_capabilities", {})
+        image_recognition = media_capabilities.get("product_image_recognition", {})
+        if not isinstance(image_recognition.get("configured"), bool):
+            return fail("merchant media capabilities must expose a boolean image-recognition state")
+        if image_recognition.get("status") not in {"ready", "not_configured"}:
+            return fail("merchant media capabilities must expose a bounded status")
+        if image_recognition.get("secret_exposed") is not False or "credential" in json.dumps(media_capabilities).lower():
+            return fail("merchant media capabilities must not expose provider credentials")
+        independence_status, independence_error = fetch_json_expect_error(
+            f"{base_url}/independence/status",
+            token=token,
+        )
+        if independence_status != 403:
+            return fail(f"merchant app host must not expose internal independence status: {independence_error}")
         owner_members = fetch_json(f"{base_url}/team/members", token=token).get("team_members", [])
         if len(owner_members) != 1 or owner_members[0].get("role") != "owner":
             return fail("new company should start with one owner team member")
@@ -724,14 +707,15 @@ def main() -> int:
             if protected_status != 403:
                 return fail(f"ordinary merchant must not access platform-internal endpoint {protected_endpoint}: {protected_body}")
         billing_plan = fetch_json(f"{base_url}/billing/plans", token=token).get("billing_plan", {})
-        if billing_plan.get("billing_ready_for_paid_launch") is not False:
+        if billing_plan.get("public_charging_allowed") is not False:
             return fail("billing plan must not claim paid-launch readiness in local MVP")
-        plan_keys = {item.get("key") for item in billing_plan.get("plan_catalog", [])}
-        if not {"starter", "operator", "team"}.issubset(plan_keys):
-            return fail("billing plan should expose starter/operator/team plans")
+        plan_catalog = billing_plan.get("plan_catalog", [])
+        plan_keys = [item.get("key") for item in plan_catalog]
+        if plan_keys != ["free", "starter", "operator"]:
+            return fail(f"billing plan should expose only the approved merchant catalog: {plan_catalog}")
         if billing_plan.get("quota_contract", {}).get("merchant_visible_usage_required") is not True:
             return fail("billing plan should require merchant-visible usage")
-        if billing_plan.get("customer_visible") is not True or billing_plan.get("internal_launch_evidence_visible") is not False:
+        if billing_plan.get("customer_visible") is not True or "internal_launch_evidence_visible" in billing_plan:
             return fail("ordinary merchant billing plan should be the customer-visible safe payload")
         if "payment_strategy" in billing_plan or "billing_live_cutover_matrix" in billing_plan or "billing_live_cutover_summary" in billing_plan:
             return fail("ordinary merchant billing plan must not expose internal payment strategy or live cutover evidence")

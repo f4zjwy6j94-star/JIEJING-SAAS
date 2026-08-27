@@ -252,8 +252,8 @@ def main() -> int:
     for expected_runtime_brand in [
         r'[/\bJingjing\b/g, "JIEJING"]',
         r'[/\bJiejing\b/g, "JIEJING"]',
-        "JIEJING AI CEO eBay SaaS",
-        "JIEJING SaaS status",
+        "JIEJING AI CEO",
+        "JIEJING Listing",
     ]:
         if expected_runtime_brand not in app_js:
             return fail(f"runtime UI missing uppercase JIEJING brand guard: {expected_runtime_brand}")
@@ -532,10 +532,9 @@ def main() -> int:
         "defaultJiejingDemoBootstrapEnabled",
         "saasDemoBootstrapEnabled",
         "当前公网页面需要已有捷境账号会话",
-        "Public auth gate",
         "/secret-refs?store_id=",
-        "OAuth Status",
-        "托管凭证",
+        "eBay 官方授权",
+        "敏感凭证不进入浏览器",
         'optionalSaasFetchFast(`/data-packets?platform=ebay&limit=5`',
         "function getLatestSaasDataPacketRecord",
         "function saasKnownStoreCandidates",
@@ -578,10 +577,6 @@ def main() -> int:
         "saas-publish-command-summary",
         "confirmation_required_no_direct_write",
         "register-session",
-        "product_evidence",
-        "latest_ebay_packet_id",
-        "refreshSaasPublicReadiness",
-        "refreshSaasPublicReadiness({ render: true })",
         "hasSaasProtectedSessionCandidate",
         "shouldAttachSaasBearerToken",
         "purgeLegacySaasStoredBearerToken",
@@ -600,7 +595,7 @@ def main() -> int:
         "route_health",
         "currentSaasEbayCallbackUrl",
         "copy-ebay-return-url",
-        "官方连接返回地址应保持一致",
+        "官方连接返回地址",
         'productFeedbackOutbox: "jiejing_saas_product_feedback_outbox_v1"',
         'productFeedbackReceipts: "jiejing_saas_product_feedback_receipts_v1"',
         'productFeedbackMigration: "jiejing_saas_product_feedback_migration_v1"',
@@ -611,7 +606,7 @@ def main() -> int:
     ]:
         if marker not in app_js + app_html:
             return fail(f"missing frontend staging config marker: {marker}")
-    for endpoint in ["/model/value-gate", "/commercial/launch-gate", "/backup/plan"]:
+    for endpoint in ["/model/value-gate"]:
         if (
             f'saasFetch("{endpoint}")' not in app_js + app_html
             and f'optionalSaasFetch("{endpoint}"' not in app_js + app_html
@@ -619,8 +614,6 @@ def main() -> int:
             and f'optionalSaasFetchFast(`{endpoint}?' not in app_js + app_html
         ):
             return fail(f"missing frontend staging config marker: {endpoint} fetch")
-    if 'if (!hasSaasProtectedSessionCandidate()) {\n    refreshSaasPublicReadiness({ render: true });' in app_js:
-        return fail("logged-in merchants must also receive current public provider readiness")
     for marker in [
         "cursorGlow",
         "signalCanvas",
@@ -686,10 +679,9 @@ def main() -> int:
     for billing_guardrail_marker in [
         "function renderSaasMerchantPricingModelPanel",
         "saas-merchant-pricing-model",
-        "免费体验不含生图点数；单店版含 1,000 素材点，多店铺版含 3,000 素材点",
+        "免费体验不含生图点数；有店铺含 1,000 素材点，多店铺含 3,000 素材点",
         "subscription_ai_media_platform_v1",
         "saas-merchant-pricing-split",
-        "用量计费路线",
         "¥99 / 30 天",
         "¥0 / ¥99 / ¥199",
         "商家自带模型",
@@ -700,107 +692,26 @@ def main() -> int:
         "merchant_billing_plain_summary_v1",
         "订阅和用量总览",
         "套餐权益、商家模型、素材点和平台成本清楚可查",
-        "单店版含 1,000 素材点，多店铺版含 3,000 素材点",
+        "套餐已包含素材点；用完后才需要加购",
+        "有店铺含 1,000 素材点，多店铺含 3,000 素材点",
         "不消耗素材点",
         "生成前显示预计点数",
-        "billing_now_no_real_charge",
-        "base_subscription_is_feature_fee=true",
-        "ai_media_usage_has_plan_allowance=true",
-        "purchased_media_points_separate=true",
-        "platform_cost_not_collected_by_jiejing=true",
-        "saas-merchant-billing-current",
-        "当前计费状态",
-        "先看能不能继续用，再看哪些费用另算",
-        "不真实扣费",
-        "merchant_visible_billing_status_v1",
-        "subscription_metering_clarity_v2",
-        "renderSaasMerchantBillingGuardrailPanel",
-        "saasMerchantBillingGuardrailState",
-        "saasMerchantBillingStatusPill",
-        "saas-merchant-billing-guardrail",
-        "subscription_quota_shutdown_state",
-        "billing_subscription_not_active",
-        "blocks_metered_work_when_inactive",
-        "creates_checkout_session=false",
-        "charge_now_allowed=false",
-        "frontend_gets_payment_secret=false",
         "高成本任务暂停",
-        "查看历史和确认中心",
-        "no_real_charge_rehearsal_ui_v2",
-        "latest_no_charge_billing_event",
-        "saas-merchant-billing-rehearsal",
-        "saas-merchant-billing-rehearsal-actions",
-        'data-billing-test-action="${escapeHtml(action)}"',
-        '["activate",',
-        '["invoice_paid",',
-        '["payment_failed",',
-        '["cancel",',
-        "creates_real_checkout_session=false",
-        "calls_stripe_api=false",
-        "triggers_real_charge=false",
-        "function renderSaasBillingDomainCutoverReviewPanel",
-        "mainland_payment_cutover_v2",
-        "wechat_pay_native_cutover",
-        "no_charge_launch_rehearsal",
-        "微信 Native 二维码",
-        "签名支付 / 退款回调",
-        "后端鉴权查单",
-        "零扣款演练与回滚证据",
-        "payment_provider_secret_boundary=backend_env_or_vault_only",
-        "rollback_secret_scan_readiness_browser_smoke_required",
-        "public_paid_launch_allowed=false",
-        "owner_approval_required_for_reenable=true",
-        'version: "2026-07-12-listing-media-restore-v3"',
-        "statusPills.push(saasMerchantBillingStatusPill())",
+        "仍可看历史和确认中心",
+        "微信扫码付款",
+        "敏感凭证不进入浏览器",
     ]:
         if billing_guardrail_marker not in app_js + app_html + styles_css:
             return fail(f"missing merchant billing guardrail marker: {billing_guardrail_marker}")
-    cutover_start = app_js.index("function saasBillingDomainCutoverReviewState")
-    cutover_end = app_js.index("function saasMainlandPaymentStrategyState", cutover_start)
-    cutover_body = app_js[cutover_start:cutover_end]
-    for legacy_mainland_marker in (
-        "Stripe",
-        "Checkout",
-        "Customer Portal",
-        "Price ID",
-        "stripe_",
-        "subscription_records",
-        "webhook_event_records",
+    for internal_billing_marker in (
+        "no_charge_launch_rehearsal",
+        "saas-merchant-billing-rehearsal-actions",
+        "renderSaasBillingDomainCutoverReviewPanel",
+        "saasBillingDomainCutoverReviewState",
+        "saasPaidLaunchBlockerCopy",
     ):
-        if legacy_mainland_marker in cutover_body:
-            return fail(f"mainland payment cutover card still exposes retired Stripe truth: {legacy_mainland_marker}")
-    blocker_start = app_js.index("function saasPaidLaunchBlockerCopy")
-    blocker_end = app_js.index("function saasBillingDomainCutoverReviewState", blocker_start)
-    blocker_body = app_js[blocker_start:blocker_end]
-    for required_mainland_marker in (
-        "微信 Native 正式通道",
-        "零扣款上线演练",
-        "签名回调或后端鉴权查单",
-        "mainland_payment_cutover_v2",
-    ):
-        if required_mainland_marker not in blocker_body:
-            return fail(f"paid launch blocker card missing canonical mainland marker: {required_mainland_marker}")
-    for legacy_mainland_marker in (
-        "Stripe",
-        "Checkout",
-        "Customer Portal",
-        "Price ID",
-        "stripe_",
-        "subscription Checkout",
-    ):
-        if legacy_mainland_marker in blocker_body:
-            return fail(f"paid launch blocker card still exposes retired Stripe truth: {legacy_mainland_marker}")
-    settings_tabs_start = app_js.index("function saasSettingsTabDefinitions")
-    owner_tabs_start = app_js.index('if (saasOwnerLaunchCanView())', settings_tabs_start)
-    owner_tabs_end = app_js.index("return tabs;", owner_tabs_start)
-    owner_tabs_body = app_js[owner_tabs_start:owner_tabs_end]
-    for retired_panel in (
-        "renderSaasBillingProviderPanel()",
-        "renderSaasBillingProviderRehearsalPanel(ctx)",
-        "Stripe live、WAF",
-    ):
-        if retired_panel in owner_tabs_body:
-            return fail(f"owner control room still renders retired Stripe launch truth: {retired_panel}")
+        if internal_billing_marker in app_js + app_html:
+            return fail(f"merchant runtime still contains an internal billing control: {internal_billing_marker}")
     snapshot_start = app_js.index("function buildSaasProtectedStateSnapshot")
     snapshot_end = app_js.index("function saveSaasProtectedStateSnapshot", snapshot_start)
     snapshot_body = app_js[snapshot_start:snapshot_end]
@@ -841,7 +752,7 @@ def main() -> int:
         if app_entry_marker not in app_html:
             return fail(f"legacy app.html marketing entry must redirect to current public homepage: {app_entry_marker}")
     refresh_start = app_js.index("async function refreshSaasState")
-    refresh_end = app_js.index("async function refreshSaasPublicReadiness", refresh_start)
+    refresh_end = app_js.index("function clearSaasProductFeedbackLiveIdentity", refresh_start)
     refresh_body = app_js[refresh_start:refresh_end]
     if "const canFetchProtectedState = hasSaasProtectedSessionCandidate();" not in refresh_body:
         return fail("refreshSaasState must check for a real session or explicit operator bootstrap before protected reads")
@@ -876,8 +787,6 @@ def main() -> int:
         return fail("frontend eBay OAuth scopes must include sell.finances for the first read-only packet")
     if "saasLatestOAuthUrl" not in app_js or "打开 eBay 官方授权页" not in app_js or 'target="_blank"' not in app_js:
         return fail("frontend should retain a clickable eBay authorization URL")
-    if "API Base" not in app_js:
-        return fail("frontend should surface configured API bases in the SaaS backend panel")
     if '["blocked", "pending", "published"].includes(state.publishFlow.status) &&\n    shouldShowLegacyDemoControls()' not in app_js:
         return fail("legacy publish confirmation card must be hidden from real SaaS merchant mode")
     if "if (blockLegacyDemoPublishAction()) return;" not in app_js:
@@ -907,19 +816,19 @@ def main() -> int:
     ]:
         if advanced_panel in workbench_body or advanced_panel in public_mvp_body:
             return fail(f"merchant workbench should keep advanced/settings panel out of the daily MVP path: {advanced_panel}")
-    settings_start = app_js.index("function renderSaasConnectCenter")
-    settings_end = app_js.index("function renderConnect", settings_start)
+    settings_start = app_js.index("function saasSettingsTabDefinitions")
+    settings_end = app_js.index("function renderSaasSettingsCleanLayout", settings_start)
     settings_body = app_js[settings_start:settings_end]
     for settings_panel in [
         "renderSaasMerchantModelProviderPanel(ctx)",
-        "renderSaasCostAndRunLedgerPanel()",
         "renderSaasMerchantPermissionPanel()",
-        "renderSaasMerchantIpRiskPanel()",
-        "renderSaasMerchantMemoryPanel()",
-        "renderSaasMerchantProviderHubPanel(ctx)",
+        "renderSaasSettingsDataPanel(ctx)",
+        "renderSaasMerchantBillingPlainSummaryPanel(ctx)",
+        "renderSaasMerchantMediaCreditsPanel()",
+        "renderSaasMerchantDomesticPaymentPanel(ctx)",
     ]:
         if settings_panel not in settings_body:
-            return fail(f"settings center must retain advanced SaaS configuration panel: {settings_panel}")
+            return fail(f"settings center must retain the merchant configuration panel: {settings_panel}")
     runtime_start = app_js.index("async function refreshRuntimeState")
     runtime_end = app_js.index("async function createRuntimeRunFromSaas", runtime_start)
     runtime_body = app_js[runtime_start:runtime_end]

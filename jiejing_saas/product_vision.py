@@ -147,6 +147,23 @@ def fal_product_vision_client_from_env() -> FalProductVisionClient:
     )
 
 
+def build_product_vision_capability_status() -> dict[str, Any]:
+    """Return merchant-safe availability without exposing provider configuration."""
+
+    client = fal_product_vision_client_from_env()
+    configured = bool(str(client.credential or "").strip())
+    return {
+        "contract_version": "jiejing_product_image_recognition_capability_v1",
+        "configured": configured,
+        "status": "ready" if configured else "not_configured",
+        "max_source_images": MAX_AI_CEO_SOURCE_IMAGES,
+        "extracts_visible_facts_only": True,
+        "merchant_review_required": True,
+        "frontend_gets_provider_key": False,
+        "secret_exposed": False,
+    }
+
+
 def build_product_vision_fact_packet(
     *,
     analysis: dict[str, Any],
