@@ -297,6 +297,25 @@ def main() -> None:
     assert draft_saved["stages"][5]["status"] == "completed"
     assert draft_saved["stages"][6]["status"] == "waiting"
 
+    historical_failed_media = media_job()
+    historical_failed_media["media_job_id"] = "media-incense-v1"
+    historical_failed_media["status"] = "needs_rework"
+    historical_failed_media["created_at"] = "2026-08-27T01:02:10Z"
+    historical_failed_media["updated_at"] = "2026-08-27T01:02:20Z"
+    rework_approved = build(
+        FixtureRepository(
+            tasks=[task()],
+            reports=[market_report(), fact_report(), listing_report()],
+            media=[historical_failed_media, media_job()],
+            confirmations=[draft_confirmation()],
+            executions=[draft_execution()],
+        )
+    )
+    assert_single_progress(rework_approved)
+    assert rework_approved["stages"][3]["status"] == "completed"
+    assert rework_approved["current_stage"] == "publish"
+    assert rework_approved["blocker"]["key"] != "media_review_or_generation_failed"
+
     restricted = build(
         FixtureRepository(
             tasks=[task()],

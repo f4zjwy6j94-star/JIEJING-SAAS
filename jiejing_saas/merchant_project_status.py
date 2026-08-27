@@ -153,7 +153,12 @@ def build_merchant_project_status(
     ) or any(str(item.get("report_id") or "") == canonical_identity.get("source_report_id") for item in reports)
     facts_ready = bool(latest_fact_report and not unknown_facts and not fact_blockers)
     media_ready = any(_media_job_approved(item) for item in matching_media)
-    media_failed = any(str(item.get("status") or "").lower() in FAILED_MEDIA_STATUSES for item in matching_media)
+    # A successful reviewed rework is the terminal evidence for this stage.
+    # Historical failed versions remain visible in the audit trail, but must
+    # not permanently re-block a project after a later asset is approved.
+    media_failed = not media_ready and any(
+        str(item.get("status") or "").lower() in FAILED_MEDIA_STATUSES for item in matching_media
+    )
     listing_ready = any(
         str(item.get("report_type") or "") in {"listing.package", "product.listing"}
         for item in matching_reports

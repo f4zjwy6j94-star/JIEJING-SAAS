@@ -71,6 +71,8 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("ai_ceo_listing_import_target", [sys.executable, "tools/test_jiejing_ai_ceo_listing_import_target.py"]),
     ("ai_settings_tenant_scope", [sys.executable, "tools/test_jiejing_ai_settings_tenant_scope.py"]),
     ("listing_progressive_disclosure", [sys.executable, "tools/test_jiejing_listing_progressive_disclosure.py"]),
+    ("listing_single_progress", [sys.executable, "tools/test_jiejing_listing_single_progress.py"]),
+    ("merchant_project_status_browser", ["node", "tools/codex_jiejing_merchant_project_status_browser_smoke.js"]),
     ("media_version_rework_ui", [sys.executable, "tools/test_jiejing_media_version_rework_ui.py"]),
     ("media_quality_control", [sys.executable, "tools/test_jiejing_media_quality_control.py"]),
     ("media_live_provider_gate", [sys.executable, "tools/test_jiejing_media_live_provider_gate.py"]),
