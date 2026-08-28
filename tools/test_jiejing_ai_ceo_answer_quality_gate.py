@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 
 from jiejing_saas.ai_ceo_chat import (  # noqa: E402
     _classify_external_realtime_request,
+    _explicit_new_listing_project_request,
     _looks_like_product_selection_request,
     _looks_like_platform_rule_request,
     _model_answer_rejected_fallback,
@@ -284,6 +285,35 @@ def main() -> None:
     assert "不会创建第二个 Offer" in rejected_second_pass["answer"], rejected_second_pass
     assert "Listing 草稿使用权已确认" in rejected_second_pass["answer"], rejected_second_pass
     assert rejected_second_pass["answer_quality"]["repair_retry_count"] == 1, rejected_second_pass
+
+    new_project_message = (
+        "请新建一个独立商品项目，不复用当前香炉项目。为本轮模拟演练创建新的内部 Listing 草稿，"
+        "但不要保存 eBay 草稿、不要公开发布，也不要改动当前 Offer。"
+    )
+    new_project_answer = (
+        "已创建独立模拟商品项目：无品牌便携缝纫线轴固定夹。"
+        "新的捷境内部 Listing 草稿已生成；本项目的 SKU 尚未指定，素材尚未生成，图片使用权待补，"
+        "eBay 草稿尚未创建，当前香炉项目和 Offer 保持不变。"
+    )
+    new_project_model = SequenceModel([new_project_answer, new_project_answer])
+    isolated_new_project = run_ai_ceo_chat(
+        repository=MinimalRepository(),
+        company_id="company_quality",
+        store_id="store_quality",
+        user_id="user_quality",
+        message=new_project_message,
+        model_client=new_project_model,
+        active_listing_context=active_listing_context,
+    )
+    assert isolated_new_project["status"] == "model_answered", isolated_new_project
+    assert isolated_new_project["answer"] == new_project_answer, isolated_new_project
+    assert isolated_new_project["answer_quality"]["accepted"] is True, isolated_new_project
+    assert isolated_new_project["answer_quality"].get("context_correction_used") is not True, isolated_new_project
+    assert _explicit_new_listing_project_request(new_project_message) is True
+    assert _explicit_new_listing_project_request("请创建一个全新的 Listing 项目。") is True
+    assert _explicit_new_listing_project_request("请另起一个独立商品项目。") is True
+    assert _explicit_new_listing_project_request("继续当前项目，不得新建重复商品项目或 Offer。") is False
+    assert _explicit_new_listing_project_request("继续当前项目，禁止创建全新 Listing 项目。") is False
 
     strict_message = (
         "请给我三个轻小件、不带电的 eBay 选品方向。现在没有供应商、实物和商品参数，"

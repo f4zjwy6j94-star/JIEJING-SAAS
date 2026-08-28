@@ -32,6 +32,16 @@ def main() -> None:
     assert _ai_ceo_listing_project_identity_for_turn(request, route="confirmation_required") == IDENTITY
     assert _ai_ceo_listing_project_identity_for_turn(request, route="general_chat") == {}
     assert _ai_ceo_listing_project_identity_for_turn(
+        request,
+        route="ebay_workflow",
+        message="请新建一个独立商品项目，不复用当前香炉项目。",
+    ) == {}
+    assert _ai_ceo_listing_project_identity_for_turn(
+        request,
+        route="ebay_workflow",
+        message="继续当前香炉项目，不得新建重复商品项目或 Offer。",
+    ) == IDENTITY
+    assert _ai_ceo_listing_project_identity_for_turn(
         {"active_listing_context": {"contract_version": "wrong", "listing_project_identity": IDENTITY}},
         route="ebay_workflow",
     ) == {}

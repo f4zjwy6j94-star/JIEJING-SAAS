@@ -31,6 +31,7 @@ from .account_health import (
     merge_account_health_into_payload,
 )
 from .ai_ceo_chat import (
+    _explicit_new_listing_project_request,
     ai_ceo_route_metadata,
     build_ai_ceo_turn_plan,
     run_ai_ceo_chat,
@@ -406,10 +407,17 @@ def build_ai_ceo_pre_model_attempt_input(
     }
 
 
-def _ai_ceo_listing_project_identity_for_turn(body: Any, *, route: str) -> dict[str, str]:
+def _ai_ceo_listing_project_identity_for_turn(
+    body: Any,
+    *,
+    route: str,
+    message: str = "",
+) -> dict[str, str]:
     """Bind only Jiejing workflow turns to the authenticated current Listing project."""
 
     if route not in {"ebay_workflow", "confirmation_required"} or not isinstance(body, dict):
+        return {}
+    if _explicit_new_listing_project_request(message):
         return {}
     context = body.get("active_listing_context")
     if not isinstance(context, dict) or context.get("contract_version") != "active_listing_context_v1":
@@ -7471,6 +7479,7 @@ class SaaSBackendHandler(BaseHTTPRequestHandler):
             listing_project_identity = _ai_ceo_listing_project_identity_for_turn(
                 body,
                 route=str(route_meta.get("route") or ""),
+                message=message,
             )
             supplier_fact_attestation = normalize_ai_ceo_supplier_fact_attestation(
                 supplier_facts=body.get("supplier_facts"),

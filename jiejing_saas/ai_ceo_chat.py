@@ -1498,6 +1498,8 @@ def build_ai_ceo_chat_prompts(
         "media.rights_confirmed_for_listing_draft=true 表示现有素材已确认可用于 Listing 草稿，不得再把图片发布权写成阻断；"
         "商品事实、实物一致性和平台规则复核是另一层发布前检查，不能与素材权利混为一谈。"
         "同一项目复盘不得新建重复 SKU、重复 Offer 或把已保存的 UNPUBLISHED Offer 说成未保存。"
+        "如果 merchant_message 明确要求新建一个独立商品项目，active_listing_context 只用于保护旧项目不被覆盖；"
+        "新项目不得被强制复用旧项目的 SKU、素材或 Offer，也不得因为新项目尚未写入 eBay 而回退成旧项目。"
     )
     if route == AI_CEO_ROUTE_GENERAL:
         system_prompt += " 当前路由是普通咨询：像 DeepSeek 一样直接回答，不创建经营任务，不写长期经营记忆。"
@@ -1548,7 +1550,7 @@ def build_ai_ceo_chat_prompts(
             "把 current_context.store 的连接布尔值视为权威状态；不要从 store_name 猜测是否授权。",
             "严格遵守 merchant_message 的阶段边界；商家暂缓 Listing 时只做选品，不扩展到 Listing 字段。",
             "商品事实必须来自 merchant_message、current_context 或明确 source_records；未知参数写待核，不得补写成事实。",
-            "active_listing_context 是当前项目权威状态；不得把其中已有的 SKU、素材或未发布 Offer 回答为缺失。",
+            "active_listing_context 是当前项目权威状态；不得把其中已有的 SKU、素材或未发布 Offer 回答为缺失。商家明确要求独立新项目时，它仅作为不可覆盖的历史项目边界。",
             "active_listing_context.media 中已确认的 Listing 草稿图片权利不得回答为阻断；商品事实和实物一致性复核要单独说明。",
             "merchant_product_intake 中的 source_confirmed_facts 是带来源的图片提取结果，不等于商家确认；fact_conflicts 不得自行二选一。",
             "有 selection_contract 时逐项执行；excluded_candidate_names 中的旧候选不得再次成为候选商品。",
@@ -3993,7 +3995,11 @@ def validate_ai_ceo_answer_quality(
 ) -> dict[str, Any]:
     """Reject workflow answers that cannot become the merchant's requested work item."""
 
-    active_listing_blockers = _active_listing_answer_contradictions(answer=answer, context=context or {})
+    active_listing_blockers = (
+        []
+        if _explicit_new_listing_project_request(message)
+        else _active_listing_answer_contradictions(answer=answer, context=context or {})
+    )
     if active_listing_blockers:
         return {
             "accepted": False,
@@ -4408,6 +4414,43 @@ def _looks_like_explicit_listing_intake(message: str) -> bool:
         )
     )
     return external_write_deferred
+
+
+def _explicit_new_listing_project_request(message: str) -> bool:
+    """Return true only when the merchant positively asks for a separate project.
+
+    Active Listing consistency protects the current project.  It must not make
+    a brand-new project inherit the current project's SKU, media, or Offer.
+    Negated phrases such as ``不得新建重复项目`` are deliberately excluded.
+    """
+
+    text = _normalized_text(message)
+    if not text:
+        return False
+    positive_patterns = (
+        r"(?:新建|创建|另建|另起|开启|启动).{0,14}(?:独立|全新|新的).{0,10}(?:商品|listing).{0,8}(?:项目|草稿)",
+        r"(?:新建|创建|另建|另起).{0,10}(?:商品|listing).{0,8}(?:项目|草稿).{0,24}(?:不复用|不要复用|独立于|区别于)",
+        r"(?:独立|全新|新的).{0,10}(?:商品|listing).{0,8}(?:项目|草稿).{0,12}(?:新建|创建|另建|另起)",
+    )
+    negative_action = re.compile(
+        r"(?:不|不要|不得|禁止|严禁|无需|不用|避免)\s*(?:再|重复)?\s*(?:新建|创建|另建|另起|开启|启动)",
+        flags=re.IGNORECASE,
+    )
+    for pattern in positive_patterns:
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            clause_start = max(
+                text.rfind("。", 0, match.start()),
+                text.rfind("；", 0, match.start()),
+                text.rfind(";", 0, match.start()),
+                text.rfind("！", 0, match.start()),
+                text.rfind("!", 0, match.start()),
+                text.rfind("？", 0, match.start()),
+                text.rfind("?", 0, match.start()),
+            )
+            clause_prefix = text[clause_start + 1 : match.end()]
+            if not negative_action.search(clause_prefix):
+                return True
+    return False
 
 
 def _selection_response_contract(
